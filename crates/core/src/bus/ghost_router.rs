@@ -23,7 +23,7 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::astar::ghost_astar;
-use crate::bus::balancer::{splitter_for_belt, stamp_family_balancer};
+use crate::bus::balancer::{balancer_origin_x, splitter_for_belt, stamp_family_balancer};
 use crate::bus::lane_planner::{BusLane, LaneFamily, MACHINE_ENTITIES};
 use crate::bus::output_merger::merge_output_rows;
 use crate::bus::trunk_renderer::{is_intermediate, render_path, trunk_segments};
@@ -530,7 +530,16 @@ pub fn route_bus_ghost(
                     let templates = crate::bus::balancer_library::balancer_templates();
                     let (n, m) = (fam.shape.0 as u32, fam.shape.1 as u32);
                     if let Some(template) = templates.get(&(n, m)) {
-                        let origin_x = fam.lane_xs.iter().copied().min().unwrap_or(x);
+                        // Must match the origin used by stamp_family_balancer
+                        // (see balancer::balancer_origin_x). Feeder goals
+                        // are template.input_tiles offsets added to this
+                        // origin; if it diverges from the stamper's origin
+                        // the feeder belts aim at the wrong tiles.
+                        let origin_x = if fam.lane_xs.is_empty() {
+                            x
+                        } else {
+                            balancer_origin_x(&fam.lane_xs, template.output_tiles)
+                        };
                         let origin_y = fam.balancer_y_start;
                         let mut inputs: Vec<(i32, i32)> = template.input_tiles.to_vec();
                         inputs.sort_by_key(|t| t.0);

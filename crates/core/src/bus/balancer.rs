@@ -42,6 +42,55 @@ pub(crate) fn underground_for_belt(belt: &str) -> &'static str {
         .unwrap_or("underground-belt")
 }
 
+/// Compute the stamp origin_x so the template's output belts land
+/// exactly on `lane_xs`.
+///
+/// Several balancer templates in `balancer_library` have their leftmost
+/// output at an x-offset > 0 (e.g. T_5_6's outputs start at x-offset 1
+/// because the leftmost column of the template carries no output). The
+/// previous origin choice `min(lane_xs)` assumed outputs start at
+/// offset 0 — which worked for most templates but silently stamped the
+/// outputs one or more columns east of the continuation trunks for any
+/// asymmetric template. Symptom: orphan balancer-output belts sitting
+/// in the column range *beyond* `lane_xs`, and missing outputs in the
+/// column range that was supposed to get them. Downstream the iron-ore
+/// tap (or any other flow that expected the trunk range to be
+/// continuous) would mix items with the orphan belt.
+///
+/// Shifting origin by `-output_tiles[0].0` aligns the leftmost output
+/// with `lane_xs[0]`. Because every template's `output_tiles` is sorted
+/// and contiguous in x (and `lane_xs` is sorted at
+/// `lane_planner::plan_bus_lanes` and required to be contiguous),
+/// aligning the leftmost pair aligns all of them.
+///
+/// The `debug_assert!`s are cheap invariant checks — they exist so
+/// that if a future template violates "sorted, contiguous output
+/// columns" the panic points at this helper rather than producing a
+/// silent misalignment.
+///
+/// Inputs are A*-bridged by `ghost_router.rs`'s feeder specs, so they
+/// adapt to whatever x the shifted origin places them at; no separate
+/// input alignment is required here.
+pub(crate) fn balancer_origin_x(lane_xs: &[i32], output_tiles: &[(i32, i32)]) -> i32 {
+    debug_assert!(!lane_xs.is_empty(), "balancer_origin_x: lane_xs empty");
+    debug_assert!(!output_tiles.is_empty(), "balancer_origin_x: output_tiles empty");
+    debug_assert!(
+        lane_xs.windows(2).all(|w| w[0] <= w[1]),
+        "balancer_origin_x: lane_xs not sorted: {lane_xs:?}"
+    );
+    debug_assert!(
+        output_tiles.windows(2).all(|w| w[0].0 <= w[1].0),
+        "balancer_origin_x: output_tiles not sorted by x: {output_tiles:?}"
+    );
+    debug_assert!(
+        output_tiles
+            .windows(2)
+            .all(|w| w[1].0 == w[0].0 + 1 || w[1].0 == w[0].0),
+        "balancer_origin_x: output_tiles x-coords not contiguous: {output_tiles:?}"
+    );
+    lane_xs[0] - output_tiles[0].0
+}
+
 /// Stamp a balancer template at the family's origin position.
 ///
 /// Template entity tiles are offset by the family's stamp origin
@@ -70,7 +119,7 @@ pub(crate) fn stamp_family_balancer(
 
     if let Some(template) = templates.get(&template_key) {
         // Direct template match.
-        let origin_x = *family.lane_xs.iter().min().unwrap();
+        let origin_x = balancer_origin_x(&family.lane_xs, template.output_tiles);
         let origin_y = family.balancer_y_start;
 
         let mut entities = template.stamp(
@@ -105,7 +154,7 @@ pub(crate) fn stamp_family_balancer(
                 if lane_chunk.is_empty() {
                     continue;
                 }
-                let sub_origin_x = *lane_chunk.iter().min().unwrap();
+                let sub_origin_x = balancer_origin_x(lane_chunk, sub_template.output_tiles);
                 let sub_origin_y = family.balancer_y_start;
 
                 let mut ents = sub_template.stamp(
@@ -151,8 +200,40 @@ mod tests {
         // Verify that the stamped entities have the correct origin and item
         for e in &entities {
             assert_eq!(e.carries, Some("iron-plate".to_string()));
-            assert!(e.x >= 1);  // origin_x should be >= 1 (min of lane_xs)
             assert!(e.y >= 10); // origin_y should be >= 10
+        }
+    }
+
+    /// Every template in the library must place its outputs at
+    /// exactly `lane_xs` after origin adjustment. Before the
+    /// `balancer_origin_x` fix, templates whose `output_tiles` started
+    /// at x-offset > 0 (e.g. T_5_6 at offset 1) stamped outputs
+    /// shifted east of `lane_xs`, producing orphan belts at the east
+    /// edge and missing outputs at the west.
+    ///
+    /// Pure invariant check: for each template, pick an arbitrary
+    /// contiguous `lane_xs`, compute `balancer_origin_x`, and assert
+    /// that applying that origin to the template's `output_tiles`
+    /// produces exactly `lane_xs`. No actual stamping needed — this
+    /// pins the alignment contract independent of entity-type details
+    /// (splitters vs belts on the output row).
+    #[test]
+    fn test_template_outputs_align_with_lane_xs() {
+        use crate::bus::balancer_library::balancer_templates;
+
+        let templates = balancer_templates();
+        for (&(n, m), template) in templates.iter() {
+            let lane_xs: Vec<i32> = (100..100 + m as i32).collect();
+            let origin_x = balancer_origin_x(&lane_xs, template.output_tiles);
+            let actual: Vec<i32> = template
+                .output_tiles
+                .iter()
+                .map(|(dx, _)| origin_x + dx)
+                .collect();
+            assert_eq!(
+                actual, lane_xs,
+                "template ({n},{m}): outputs {actual:?} should equal lane_xs {lane_xs:?} after origin shift"
+            );
         }
     }
 }
