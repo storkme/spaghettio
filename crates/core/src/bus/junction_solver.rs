@@ -1584,7 +1584,7 @@ fn junction_boundaries_to_snapshots(
             SpecOrigin::Participating => "participating".to_string(),
             SpecOrigin::Encountered => "encountered".to_string(),
         };
-        let entry_feeder = find_external_feeder((sc.entry.x, sc.entry.y), placed);
+        let entry_feeder = find_external_feeder((sc.entry.x, sc.entry.y), placed, &sc.item);
         out.push(BoundarySnapshot {
             x: sc.entry.x,
             y: sc.entry.y,
@@ -1611,12 +1611,23 @@ fn junction_boundaries_to_snapshots(
     out
 }
 
+/// Same item-filter rationale as `physical_feeder_hit` in
+/// junction_sat_strategy: without matching on `carries`, an adjacent
+/// belt of a different item reports as the feeder and the debug dump
+/// shows a misleading "feeder" string (e.g. iron-ore tap approach belt
+/// cited as the feeder for a copper-cable trunk whose real upstream
+/// column is two tiles away). Cosmetic for display, but the confusion
+/// it causes during debugging is worth eliminating.
 fn find_external_feeder(
     tile: (i32, i32),
     placed: &[PlacedEntity],
+    item: &str,
 ) -> Option<ExternalFeederSnapshot> {
     for e in placed {
         if is_ug_belt(&e.name) && e.io_type.as_deref() == Some("input") {
+            continue;
+        }
+        if e.carries.as_deref() != Some(item) {
             continue;
         }
         let emits = is_surface_belt(&e.name)

@@ -187,17 +187,34 @@ fn find_external_feeder(
 
 
 /// Find a Permanent entity (splitter / belt / UG-out) whose output lands
-/// on `tile`. Returns the *specific* feeder tile and direction.
+/// on `tile` AND carries `item`. Returns the *specific* feeder tile and
+/// direction.
+///
+/// The item filter matters: physically, a belt carrying item B that
+/// outputs onto a tile carrying item A *does* geometrically drop items
+/// (and in Factorio would produce a mixed belt). But for boundary
+/// derivation we only care about feeders that are part of the same
+/// item's flow graph. Without this filter, `topology_boundaries` creates
+/// phantom boundaries labelled with the in-bbox entity's item while the
+/// physical feeder carries a different item — SAT then tries to route
+/// a flow that has no real source, and the walker vetoes every solution
+/// because the "source" belts are in a different item's graph. Any
+/// genuine cross-item belt facing is a ghost-routing bug upstream; the
+/// fix there belongs in the router, not here.
 ///
 /// For splitters, returns the one of the two tiles that physically emits
 /// onto `tile` (the tile from which `tile = feeder_tile + dir_delta(dir)`).
 fn physical_feeder_hit(
     tile: (i32, i32),
     placed_entities: &[PlacedEntity],
+    item: &str,
 ) -> Option<FeederHit> {
     for e in placed_entities {
         // UG-ins consume; they don't emit onto the surface.
         if is_ug_belt(&e.name) && e.io_type.as_deref() == Some("input") {
+            continue;
+        }
+        if e.carries.as_deref() != Some(item) {
             continue;
         }
         let emits = is_surface_belt(&e.name)
@@ -313,7 +330,7 @@ fn topology_boundaries(
             // else: target is FREE, both SAT-routable → no boundary.
 
             // -- Input check: does anything feed this tile from outside/FIXED? --
-            if let Some(hit) = physical_feeder_hit((tx, ty), placed_entities) {
+            if let Some(hit) = physical_feeder_hit((tx, ty), placed_entities, item) {
                 if !bbox.contains(hit.entity_tile.0, hit.entity_tile.1) {
                     // Feeder outside bbox: perimeter IN.
                     boundaries.push(ZoneBoundary {
@@ -1066,6 +1083,57 @@ mod tests {
                 && b.item == "copper-cable"
                 && !b.interior),
             "missing perimeter OUT (5,19) East copper-cable"
+        );
+    }
+
+    /// Regression: `physical_feeder_hit` must ignore adjacent belts that
+    /// carry a different item. Before the filter, an east-bound iron-ore
+    /// belt at (5,10) inside the bbox with a south-facing *copper-plate*
+    /// belt at (5,9) outside the bbox produced a phantom
+    /// `iron-ore IN at (5,10) South` boundary (item copied from the
+    /// in-bbox tile). The SAT walker would then veto every solution
+    /// because the tap's real approach from the west had no place in
+    /// the iron-ore flow graph. Observed in the ac-5/from-ore layout at
+    /// seed (10,136) — see the trace with break_segment=tap:iron-ore:4:136
+    /// in the fixture notes of ac_seed_10_136 if you need to reproduce.
+    #[test]
+    fn test_topology_boundaries_filters_cross_item_feeder() {
+        // Bbox: x:4-6, y:10-10 (3x1).
+        // Inside: belt→iron-ore at (4..6, 10).
+        // External east feeder for tap: belt→iron-ore at (3,10).
+        // External south "feeder" at (5,9) carrying copper-plate — this
+        // physically drops onto (5,10) but must NOT create an iron-ore
+        // IN boundary.
+        let bbox = Rect { x: 4, y: 10, w: 3, h: 1 };
+        let placed = vec![
+            make_surface_belt(3, 10, EntityDirection::East, "iron-ore"), // west approach
+            make_surface_belt(5, 9, EntityDirection::South, "copper-plate"), // cross-item
+            make_surface_belt(4, 10, EntityDirection::East, "iron-ore"),
+            make_surface_belt(5, 10, EntityDirection::East, "iron-ore"),
+            make_surface_belt(6, 10, EntityDirection::East, "iron-ore"),
+        ];
+        let forbidden: FxHashSet<(i32, i32)> = FxHashSet::default();
+
+        let bounds = topology_boundaries(&placed, &bbox, &forbidden);
+
+        let ins: Vec<_> = bounds.iter().filter(|b| b.is_input).collect();
+        let outs: Vec<_> = bounds.iter().filter(|b| !b.is_input).collect();
+
+        // Exactly one IN (west feeder, iron-ore, East) and one OUT
+        // (east exit, iron-ore, East). No phantom iron-ore IN from the
+        // copper-plate belt at (5,9).
+        assert_eq!(ins.len(), 1, "IN boundaries (expected 1 iron-ore): {ins:#?}");
+        assert_eq!(outs.len(), 1, "OUT boundaries (expected 1): {outs:#?}");
+        assert!(
+            ins.iter().any(|b| (b.x, b.y) == (4, 10)
+                && b.direction == EntityDirection::East
+                && b.item == "iron-ore"),
+            "missing perimeter IN (4,10) East iron-ore"
+        );
+        assert!(
+            !ins.iter().any(|b| (b.x, b.y) == (5, 10)
+                && b.direction == EntityDirection::South),
+            "phantom south-IN boundary at (5,10) should be filtered by item mismatch"
         );
     }
 }
