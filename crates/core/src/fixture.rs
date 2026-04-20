@@ -51,11 +51,19 @@ pub struct FixtureBoundary {
 #[derive(Debug, Deserialize)]
 pub struct FixtureExpected {
     pub mode: String,
-    /// Optional quality bar for the `solve` mode: the test fails if
-    /// the solver's `solution_cost` exceeds this. Absent on legacy
-    /// fixtures — they only get the mode-based check.
+    /// Hard anti-regression ceiling for `solve` mode: the test fails
+    /// if the solver's `solution_cost` exceeds this. Ratcheted down
+    /// as the solver improves — bump in the same PR that earns the
+    /// improvement. Absent on legacy fixtures, which only get the
+    /// mode-based check.
     #[serde(default)]
     pub max_cost: Option<u32>,
+    /// Aspirational target — the known-achievable cost (hand-painted
+    /// reference or proved bound). Not enforced. Reported as
+    /// "gap: N" in the harness output so headroom is visible on
+    /// every run. Only moves when the reference is itself revised.
+    #[serde(default)]
+    pub optimal_cost: Option<u32>,
 }
 
 pub fn parse_direction(dir: &str) -> EntityDirection {

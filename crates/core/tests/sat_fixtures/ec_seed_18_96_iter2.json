@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "name": "ec_seed_18_96_iter2",
+  "notes": "electronic-circuit @ rate=15 from ores. 10x5 zone at seed (18,96) where a copper-cable trunk runs east through y=96 and 7 iron-plate lanes drop south from y=94. 6 of those iron-plate lanes tunnel under the copper-cable belt via UG pairs (y=95 IN → y=97 OUT) and exit south at y=98; the 7th (x=24) peels off east to the side-exit at (25,95). Hand-painted best-known solution has cost exactly 85 (25 belts + 6 UG-in + 6 UG-out). The current SAT solver finds a feasible solution but at higher cost, so this fixture acts as a regression benchmark — improving the solver should bring its cost down to ≤85.",
+  "source_url": "http://localhost:5173/?item=electronic-circuit&rate=15&machine=assembling-machine-1&in=iron-ore%2Ccopper-ore&belt=transport-belt",
+  "seed": [18, 96],
+  "bbox": { "x": 16, "y": 94, "w": 10, "h": 5 },
+  "forbidden": [],
+  "belt_tier": "transport-belt",
+  "max_reach": 4,
+  "boundaries": [
+    { "x": 18, "y": 94, "dir": "South", "item": "iron-plate", "in": true },
+    { "x": 18, "y": 98, "dir": "South", "item": "iron-plate", "in": false },
+    { "x": 19, "y": 94, "dir": "South", "item": "iron-plate", "in": true },
+    { "x": 19, "y": 98, "dir": "South", "item": "iron-plate", "in": false },
+    { "x": 20, "y": 94, "dir": "South", "item": "iron-plate", "in": true },
+    { "x": 20, "y": 98, "dir": "South", "item": "iron-plate", "in": false },
+    { "x": 21, "y": 94, "dir": "South", "item": "iron-plate", "in": true },
+    { "x": 21, "y": 98, "dir": "South", "item": "iron-plate", "in": false },
+    { "x": 22, "y": 94, "dir": "South", "item": "iron-plate", "in": true },
+    { "x": 22, "y": 98, "dir": "South", "item": "iron-plate", "in": false },
+    { "x": 23, "y": 94, "dir": "South", "item": "iron-plate", "in": true },
+    { "x": 23, "y": 98, "dir": "South", "item": "iron-plate", "in": false },
+    { "x": 24, "y": 94, "dir": "South", "item": "iron-plate", "in": true },
+    { "x": 16, "y": 96, "dir": "East",  "item": "copper-cable", "in": true },
+    { "x": 25, "y": 96, "dir": "East",  "item": "copper-cable", "in": false },
+    { "x": 25, "y": 95, "dir": "East",  "item": "iron-plate",  "in": false }
+  ],
+  "expected": {
+    "mode": "solve",
+    "max_cost": 97,
+    "optimal_cost": 85
+  },
+  "context": {
+    "ghost_paths": [
+      {
+        "item": "tap",
+        "spec_key": "tap:copper-cable:12:96",
+        "tiles": [[12,96],[13,96],[14,96],[15,96],[16,96],[17,96],[18,96],[19,96],[20,96],[21,96],[22,96],[23,96],[24,96],[25,96],[26,96]]
+      },
+      {
+        "item": "tap",
+        "spec_key": "tap:iron-plate:24:95",
+        "tiles": [[24,95],[25,95],[26,95]]
+      }
+    ],
+    "painted_reference_cost": 85
+  }
+}

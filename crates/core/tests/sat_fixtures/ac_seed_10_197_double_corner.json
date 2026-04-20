@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "name": "ac_seed_10_197_double_corner",
+  "notes": "advanced-circuit @ rate=5 from ores. 3x3 zone at seed (10,197). Two orthogonal trunks cross at (10,197): copper-cable running south (trunk) and electronic-circuit running east (tap). At the NE corner (11,196), a copper-cable side-tap leaves east — corner turn with BOTH South IN (from above) and East OUT (to the right). Expected to solve after the corner-turn encoding fix (commit on ec_seed_18_104_corner_turn). If it's still UNSAT, the fix doesn't cover this shape and we need to dig in.",
+  "source_url": "http://localhost:5173/?item=advanced-circuit&rate=5&machine=assembling-machine-3&in=coal%2Cwater%2Ccrude-oil%2Ciron-ore%2Ccopper-ore&belt=transport-belt",
+  "seed": [10, 197],
+  "bbox": { "x": 9, "y": 196, "w": 3, "h": 3 },
+  "forbidden": [],
+  "belt_tier": "transport-belt",
+  "max_reach": 4,
+  "boundaries": [
+    { "x": 10, "y": 196, "dir": "South", "item": "copper-cable",       "in": true  },
+    { "x": 10, "y": 198, "dir": "South", "item": "copper-cable",       "in": false },
+    { "x": 9,  "y": 197, "dir": "East",  "item": "electronic-circuit", "in": true  },
+    { "x": 11, "y": 197, "dir": "East",  "item": "electronic-circuit", "in": false },
+    { "x": 11, "y": 196, "dir": "South", "item": "copper-cable",       "in": true  },
+    { "x": 11, "y": 196, "dir": "East",  "item": "copper-cable",       "in": false }
+  ],
+  "expected": {
+    "mode": "solve",
+    "max_cost": 14,
+    "optimal_cost": 14
+  }
+}

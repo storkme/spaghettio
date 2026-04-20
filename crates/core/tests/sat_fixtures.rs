@@ -90,12 +90,20 @@ fn sat_fixtures() {
                             continue;
                         }
                     }
+                    let gap_note = match fixture.expected.optimal_cost {
+                        Some(opt) if actual_cost > opt => {
+                            format!(" / optimal {opt} / gap {}", actual_cost - opt)
+                        }
+                        Some(opt) => format!(" / optimal {opt} / gap 0"),
+                        None => String::new(),
+                    };
                     eprintln!(
-                        "  PASS  {} ({}) — solved with {} entities, cost {}",
+                        "  PASS  {} ({}) — solved with {} entities, cost {}{}",
                         fixture.name,
                         filename,
                         entities.len(),
-                        actual_cost
+                        actual_cost,
+                        gap_note,
                     );
                     passed += 1;
                 }

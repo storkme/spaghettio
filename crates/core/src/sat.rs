@@ -1125,22 +1125,122 @@ impl CrossingEncoder {
         }
     }
 
+    /// Dispatch the right encoder for all boundaries that share a tile.
+    ///
+    /// - Single boundary: falls through to the existing perimeter / interior
+    ///   arms unchanged.
+    /// - Two perimeter boundaries, one IN + one OUT: corner turn (or a
+    ///   degenerate straight-through on a thin zone). Encoded as one belt
+    ///   facing the OUT side's direction; see `encode_corner_boundary`.
+    /// - Anything else (2× IN, 2× OUT, interior + perimeter mix, 3+):
+    ///   falls back to per-boundary encoding. These configurations are
+    ///   malformed and will typically go UNSAT — behavior unchanged.
+    fn encode_tile_boundaries(
+        &self,
+        cnf: &mut Cnf,
+        zone: &CrossingZone,
+        bs: &[&ZoneBoundary],
+        lx: u32,
+        ly: u32,
+        boundary_tiles: &mut std::collections::HashSet<(u32, u32)>,
+    ) {
+        if bs.len() == 2 {
+            let (b1, b2) = (bs[0], bs[1]);
+            if b1.is_input != b2.is_input
+                && !is_interior_boundary(b1, zone)
+                && !is_interior_boundary(b2, zone)
+            {
+                let (in_b, out_b) = if b1.is_input { (b1, b2) } else { (b2, b1) };
+                self.encode_corner_boundary(cnf, in_b, out_b, lx, ly, boundary_tiles);
+                return;
+            }
+        }
+
+        for b in bs {
+            if is_interior_boundary(b, zone) {
+                self.encode_interior_boundary(cnf, b, lx, ly, boundary_tiles);
+            } else {
+                self.encode_perimeter_boundary(cnf, b, lx, ly, boundary_tiles);
+            }
+        }
+    }
+
+    /// Corner arm: one tile carries both an IN and an OUT perimeter
+    /// boundary. The tile is a single surface belt facing the OUT side's
+    /// direction, carrying the (shared) item. Sourcing comes from the IN
+    /// side's external feeder, so we drop the OUT side's "direct upstream
+    /// must feed" clause that `encode_perimeter_boundary` would emit. The
+    /// IN side's anti-loop (no in-grid neighbor may output back into this
+    /// tile) is retained — without it SAT can route a neighbor's flow
+    /// into the corner and call it sourced.
+    fn encode_corner_boundary(
+        &self,
+        cnf: &mut Cnf,
+        in_b: &ZoneBoundary,
+        out_b: &ZoneBoundary,
+        lx: u32,
+        ly: u32,
+        boundary_tiles: &mut std::collections::HashSet<(u32, u32)>,
+    ) {
+        boundary_tiles.insert((lx, ly));
+        let t = self.tiles[self.idx(lx, ly)];
+        let d_out = entity_dir_to_idx(out_b.direction);
+
+        // Corner turns are always surface belts; a UG entrance or exit
+        // has a single axis and can't curve.
+        cnf.add(&[t.is_belt.positive()]);
+        cnf.add(&[t.is_ug_in.negative()]);
+        cnf.add(&[t.is_ug_out.negative()]);
+
+        // Output direction comes from the OUT side.
+        cnf.add(&[t.out_dir[d_out].positive()]);
+
+        // Items must agree. Pin from in_b; if out_b differs, its
+        // fix_item_bits contradicts and SAT correctly returns UNSAT.
+        self.fix_item_bits(cnf, &t, &in_b.item);
+        if in_b.item != out_b.item {
+            self.fix_item_bits(cnf, &t, &out_b.item);
+        }
+
+        // Anti-loop: no in-grid neighbor may output at this tile. The
+        // external feeder on the IN side is out of bounds and thus
+        // already excluded.
+        for &fd in &ALL_DIRS {
+            let (fdx, fdy) = dir_delta(fd);
+            let px = lx as i32 - fdx;
+            let py = ly as i32 - fdy;
+            if self.in_bounds(px, py) {
+                let p = self.tiles[self.idx(px as u32, py as u32)];
+                cnf.add(&[p.is_belt.negative(), p.out_dir[fd].negative()]);
+                cnf.add(&[p.is_ug_out.negative(), p.out_dir[fd].negative()]);
+            }
+        }
+    }
+
     fn encode_boundaries(&self, cnf: &mut Cnf, zone: &CrossingZone) {
         // Track which local tiles have boundary conditions.
         let mut boundary_tiles = std::collections::HashSet::new();
 
+        // Group boundaries by tile. A single tile can legitimately carry
+        // both an IN and an OUT entry when flow enters along one axis and
+        // exits along another (corner turn on a zone corner tile — e.g.
+        // South IN + East OUT at the NE corner). Encoding each boundary
+        // independently would clash on `out_dir` (AMO) and on the OUT
+        // side's "direct upstream must feed" clause. Detect the pair and
+        // encode it holistically.
+        let mut by_tile: std::collections::HashMap<(u32, u32), Vec<&ZoneBoundary>> =
+            std::collections::HashMap::new();
         for b in &zone.boundaries {
             let lx = (b.x - zone.x) as u32;
             let ly = (b.y - zone.y) as u32;
             if lx >= self.width || ly >= self.height {
                 continue;
             }
+            by_tile.entry((lx, ly)).or_default().push(b);
+        }
 
-            if is_interior_boundary(b, zone) {
-                self.encode_interior_boundary(cnf, b, lx, ly, &mut boundary_tiles);
-            } else {
-                self.encode_perimeter_boundary(cnf, b, lx, ly, &mut boundary_tiles);
-            }
+        for (&(lx, ly), bs) in &by_tile {
+            self.encode_tile_boundaries(cnf, zone, bs, lx, ly, &mut boundary_tiles);
         }
 
         // Non-boundary edge tiles: block output toward off-grid.

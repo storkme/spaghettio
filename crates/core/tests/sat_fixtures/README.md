@@ -46,7 +46,9 @@ cargo test --manifest-path crates/core/Cargo.toml --test sat_fixtures
     }
   ],
   "expected": {
-    "mode": "solve"                    // see below
+    "mode": "solve",                   // see below
+    "max_cost": 97,                    // optional hard anti-regression ceiling
+    "optimal_cost": 85                 // optional aspiration — reported as gap
   },
   "context": {                         // optional — informational only in v1
     "ghost_paths": [
@@ -67,6 +69,31 @@ cargo test --manifest-path crates/core/Cargo.toml --test sat_fixtures
 When in doubt, use `"solve"` for zones you expect to work and `"no_solve"` for
 minimal configurations you know cannot be satisfied (e.g. a zone with
 contradictory boundaries).
+
+### `max_cost` vs `optimal_cost`
+
+Each fixture carries two independent quality signals, both optional:
+
+| Field | Semantics | Failure mode |
+|-------|-----------|--------------|
+| `max_cost` | **Hard anti-regression ceiling.** The solver's current best — don't let it get worse. | Test **fails** if `solution_cost > max_cost`. |
+| `optimal_cost` | **Aspirational target.** The known-achievable cost (hand-painted reference or proved bound). | Never fails. Reported as `gap: N` in the harness output. |
+
+The reporter prints both when present, e.g.:
+
+```
+PASS  ec_seed_18_96_iter2 — solved with 37 entities, cost 97 / optimal 85 / gap 12
+```
+
+So every run tells you how much headroom remains. Three hard rules:
+
+1. **Correctness is binary**: `mode: solve` must return a solution; `mode: no_solve` must return UNSAT. No soft gate here.
+2. **`max_cost` is a ratchet**: when you improve the solver, bump `max_cost` down to the new number in the same PR. Never move it *up* except with a clearly-justified reason (e.g. trading one bug fix for a benign cost increase elsewhere).
+3. **`optimal_cost` only moves if the reference itself is wrong**: it represents a human-proved target. Don't edit it to match what the solver happens to produce; edit it only when you discover a strictly better hand-painted (or mathematically-derived) solution.
+
+For a fixture where the solver already achieves the optimum, set
+`max_cost == optimal_cost`. The gap line reads `gap 0` and a regression
+in either direction is caught by `max_cost`.
 
 ### `context` field
 

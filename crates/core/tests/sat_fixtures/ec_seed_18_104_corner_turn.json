@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "name": "ec_seed_18_104_corner_turn",
+  "notes": "electronic-circuit @ rate=15 from ores. Captured from the growth loop's idx=5 attempt (first 3-tile-tall region) at seed (18,104). 5 iron-plate trunks cross east-flowing copper-cable tap, and a 6th trunk at x=23 corner-turns east out of the zone at (23,103) — same tile has BOTH a South IN boundary (feeder from (23,102) South) AND an East OUT boundary, forcing a belt curve. Previously UNSAT because `encode_perimeter_boundary` ran once per boundary and clashed on `out_dir` (AMO) and the OUT side's upstream-source clause. Fixed by grouping boundaries per tile and dispatching corner-turn tiles to `encode_corner_boundary`, which pins the tile as a surface belt facing d_out with the IN side's external feeder implicitly sourcing it. Optimal cost is 58: 5 trunk UG-in (25) + 5 trunk UG-out (25) + 7 tap belts (7) + 1 corner belt (1). max_cost guards against regression.",
+  "source_url": "http://localhost:5173/?item=electronic-circuit&rate=15&machine=assembling-machine-1&in=iron-ore%2Ccopper-ore&belt=transport-belt",
+  "seed": [18, 104],
+  "bbox": { "x": 17, "y": 103, "w": 7, "h": 3 },
+  "forbidden": [],
+  "belt_tier": "transport-belt",
+  "max_reach": 4,
+  "boundaries": [
+    { "x": 18, "y": 103, "dir": "South", "item": "iron-plate",   "in": true },
+    { "x": 18, "y": 105, "dir": "South", "item": "iron-plate",   "in": false },
+    { "x": 19, "y": 103, "dir": "South", "item": "iron-plate",   "in": true },
+    { "x": 19, "y": 105, "dir": "South", "item": "iron-plate",   "in": false },
+    { "x": 20, "y": 103, "dir": "South", "item": "iron-plate",   "in": true },
+    { "x": 20, "y": 105, "dir": "South", "item": "iron-plate",   "in": false },
+    { "x": 21, "y": 103, "dir": "South", "item": "iron-plate",   "in": true },
+    { "x": 21, "y": 105, "dir": "South", "item": "iron-plate",   "in": false },
+    { "x": 22, "y": 103, "dir": "South", "item": "iron-plate",   "in": true },
+    { "x": 22, "y": 105, "dir": "South", "item": "iron-plate",   "in": false },
+    { "x": 17, "y": 104, "dir": "East",  "item": "copper-cable", "in": true },
+    { "x": 23, "y": 104, "dir": "East",  "item": "copper-cable", "in": false },
+    { "x": 23, "y": 103, "dir": "South", "item": "iron-plate",   "in": true },
+    { "x": 23, "y": 103, "dir": "East",  "item": "iron-plate",   "in": false }
+  ],
+  "expected": {
+    "mode": "solve",
+    "max_cost": 58,
+    "optimal_cost": 58
+  }
+}
