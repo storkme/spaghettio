@@ -30,6 +30,7 @@ import { createInspector } from "./ui/inspector";
 import { createSnapshotMode } from "./ui/snapshotMode";
 import { createStepThrough } from "./ui/stepThrough";
 import { attachBusyOverlay } from "./ui/busyOverlay";
+import { createLegendPanel, type LegendPanelControls, type LegendPanelState } from "./ui/legendPanel";
 import { renderLayoutPhaseAnimated, type PhaseAnimationHandle } from "./renderer/phaseAnimation";
 import { createStreamingRenderer, type StreamingRendererHandle } from "./renderer/streamingRenderer";
 
@@ -102,6 +103,24 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
   // --- Modules ---
   const overlayControls = createOverlayPanel(container);
   const { debugCb, colorCb, stepCb, valCb, regionsCb, soloRegionsCb, ghostTilesCb } = overlayControls;
+
+  const overlayLegend: LegendPanelControls = createLegendPanel(container);
+
+  function getLegendState(): LegendPanelState {
+    return {
+      hasLayout: !!lastLayout,
+      debugMode: debugCb.checked,
+      hasTrace: !!(lastLayout?.trace?.length),
+      stepThrough: stepCb.checked,
+      validation: valCb.checked,
+      ghostTiles: ghostTilesCb.checked,
+      satZones: regionsCb.checked,
+    };
+  }
+
+  function updateLegend(): void {
+    overlayLegend.update(getLegendState());
+  }
 
   const inspector = createInspector(container);
 
@@ -475,6 +494,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       drawGraph(viewport, null);
       viewport.moveCenter(WORLD_SIZE / 2, WORLD_SIZE / 2);
       legendEl.style.display = "none";
+      updateLegend();
       issuesDialog.setVisible(false);
       issuesDialog.populate([], false, false);
       sidebarCtrl?.updateValidation([], panToTile);
@@ -659,6 +679,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     updateValidationOverlay();
     updateRegionOverlay();
     updateGhostTilesOverlay();
+    updateLegend();
     const w = layout.width ?? 0;
     const h = layout.height ?? 0;
     if (w > 0 && h > 0) {
@@ -762,8 +783,12 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       updateValidationOverlay();
       updateRegionOverlay();
       updateGhostTilesOverlay();
+      updateLegend();
     });
-    ghostTilesCb.addEventListener("change", updateGhostTilesOverlay);
+    ghostTilesCb.addEventListener("change", () => {
+      updateGhostTilesOverlay();
+      updateLegend();
+    });
     colorCb.addEventListener("change", () => {
       setItemColoring(colorCb.checked);
       if (!colorCb.checked) {
@@ -775,9 +800,16 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     stepCb.addEventListener("change", () => {
       stepThrough.reset();
       updateTraceOverlay();
+      updateLegend();
     });
-    valCb.addEventListener("change", updateValidationOverlay);
-    regionsCb.addEventListener("change", updateRegionOverlay);
+    valCb.addEventListener("change", () => {
+      updateValidationOverlay();
+      updateLegend();
+    });
+    regionsCb.addEventListener("change", () => {
+      updateRegionOverlay();
+      updateLegend();
+    });
 
     soloRegionsCb.addEventListener("change", () => {
       if (soloRegionsCb.checked) {
