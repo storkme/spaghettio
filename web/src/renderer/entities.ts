@@ -275,32 +275,40 @@ const TILE_RADIUS = 3;
 const BELT_BODY = 0x3a3a3a;
 const BELT_BORDER = 0x555555;
 
+/** Visible belt occupies 90% of the tile, centred — leaves a thin gutter
+ * on either side so the bus reads as discrete lanes rather than a
+ * seamless solid. `BELT_INSET` is the per-side gap in px. */
+const BELT_SCALE = 0.9;
+const BELT_INSET = (TILE_PX * (1 - BELT_SCALE)) / 2;
+const BELT_SIZE = TILE_PX * BELT_SCALE;
+
 function drawBelt(entity: PlacedEntity, turn: BeltTurn | null): Graphics {
   const g = new Graphics();
   const s = TILE_PX;
+  const bs = BELT_SIZE;
   const [, chev] = BELT_COLORS[entity.name] ?? [0xa89030, 0xe0d070];
   const laneColor = itemColor(entity.carries);
 
   if (turn) {
     drawBeltCorner(g, s, chev, entity.direction, turn, laneColor);
   } else {
-    // Dark belt body with subtle border
-    g.rect(0, 0, s, s).fill(BELT_BODY);
+    // Dark belt body with subtle border, inset so a gutter frames every tile.
+    g.rect(BELT_INSET, BELT_INSET, bs, bs).fill(BELT_BODY);
     g.setStrokeStyle({ width: 1, color: BELT_BORDER, alignment: 0 });
-    g.rect(0, 0, s, s).stroke();
+    g.rect(BELT_INSET, BELT_INSET, bs, bs).stroke();
 
     const rg = new Graphics();
     rg.x = s / 2;
     rg.y = s / 2;
     rg.rotation = dirAngle(entity.direction);
 
-    // Lane stripes: left lane = left half, right lane = right half
-    rg.rect(-s / 2, -s / 2, s / 2 - 1, s).fill({ color: laneColor, alpha: 0.45 });
-    rg.rect(1, -s / 2, s / 2 - 1, s).fill({ color: laneColor, alpha: 0.45 });
-    // Dark center divider
-    rg.rect(-1, -s / 2, 2, s).fill(0x0a0a0a);
+    // Lane stripes: left lane = left half, right lane = right half.
+    rg.rect(-bs / 2, -bs / 2, bs / 2 - 1, bs).fill({ color: laneColor, alpha: 0.45 });
+    rg.rect(1, -bs / 2, bs / 2 - 1, bs).fill({ color: laneColor, alpha: 0.45 });
+    // Dark centre divider
+    rg.rect(-1, -bs / 2, 2, bs).fill(0x0a0a0a);
 
-    addBeltChevrons(rg, s, chev);
+    addBeltChevrons(rg, bs, chev);
     g.addChild(rg);
   }
 
@@ -320,6 +328,7 @@ function drawBeltCorner(
   cg.x = s / 2;
   cg.y = s / 2;
   cg.rotation = dirAngle(direction);
+  cg.scale.set(BELT_SCALE); // match straight-belt 90%-centred footprint
 
   const r = s / 2;
   const sign = turn.turn === "cw" ? 1 : -1;
@@ -402,49 +411,55 @@ function addBeltChevrons(g: Graphics, s: number, chevColor: number): void {
 function drawUndergroundBelt(entity: PlacedEntity): Graphics {
   const g = new Graphics();
   const s = TILE_PX;
-  const [base, chev] = BELT_COLORS[entity.name] ?? [0xa89030, 0xe0d070];
+  const [, chev] = BELT_COLORS[entity.name] ?? [0xa89030, 0xe0d070];
   const isInput = entity.io_type === "input";
   const half = s / 2;
 
   // In local coords (rotation=0 = North): flow direction = -y.
   // Input UG:  items flow in (-y), tunnel goes in flow direction. Open mouth at +y.
   // Output UG: items emerge in flow direction (-y), tunnel comes from +y. Open mouth at -y.
-  const tunnelY = isInput ? -half : 0;   // underground half (very dark)
-  const surfaceY = isInput ? 0 : -half;  // open/surface half (belt-coloured)
-
-  g.rect(0, 0, s, s).fill(BELT_BODY);
-  g.setStrokeStyle({ width: 1, color: BELT_BORDER, alignment: 0 });
-  g.rect(0, 0, s, s).stroke();
+  // `surfaceSign` = +1 if the open mouth faces +y (input), -1 if it faces -y (output).
+  const surfaceSign = isInput ? 1 : -1;
 
   const m = new Graphics();
   m.x = half;
   m.y = half;
   m.rotation = dirAngle(entity.direction);
 
-  // Underground half — near-black to read as "buried"
-  m.rect(-half, tunnelY, s, half).fill(0x181818);
+  // Surface half: a trapezoid, wide at the open mouth (matches belt width)
+  // and narrow where it meets the buried half. Communicates "items funnel
+  // into/out of the ground" without a heavy frame around the tunnel.
+  const laneC = itemColor(entity.carries);
+  const mouthHalf = BELT_SIZE / 2;            // matches surface-belt 90% width
+  const throatHalf = s * 0.25;                // ~half the tile width at the divider
+  const mouthY = surfaceSign * half;
+  const throatY = 0;
+  m.moveTo(-mouthHalf, mouthY)
+    .lineTo( mouthHalf, mouthY)
+    .lineTo( throatHalf, throatY)
+    .lineTo(-throatHalf, throatY)
+    .closePath()
+    .fill({ color: laneC, alpha: 0.7 });
+  m.setStrokeStyle({ width: 1, color: BELT_BORDER, alpha: 0.8 });
+  m.moveTo(-mouthHalf, mouthY)
+    .lineTo(-throatHalf, throatY)
+    .lineTo( throatHalf, throatY)
+    .lineTo( mouthHalf, mouthY)
+    .stroke();
 
-  // Surface half — item colour so it reads as a belt connection
-  m.rect(-half, surfaceY, s, half).fill({ color: itemColor(entity.carries), alpha: 0.7 });
-
-  // Dividing line between the two halves
-  m.setStrokeStyle({ width: 1, color: 0x505050 });
-  m.moveTo(-half, 0).lineTo(half, 0).stroke();
-
-  // Filled triangle arrow pointing in flow direction (-y), centered on tile.
-  // Large enough to be unambiguous at 32 px.
-  const arrW = s * 0.52;
-  const arrH = s * 0.36;
-  m.moveTo(0, -arrH / 2)
-    .lineTo( arrW / 2,  arrH / 2)
-    .lineTo(-arrW / 2,  arrH / 2)
+  // Flow-direction triangle, centred on the tile. Sits on the surface side
+  // so it points *out* of the ground for outputs and *into* the ground for
+  // inputs — reads as motion, not a labelled arrow.
+  const arrW = s * 0.38;
+  const arrH = s * 0.3;
+  const arrCy = surfaceSign * s * 0.22;
+  const arrTipY = arrCy - arrH / 2; // tip always toward -y (flow)
+  const arrBaseY = arrCy + arrH / 2;
+  m.moveTo(0, arrTipY)
+    .lineTo(arrW / 2, arrBaseY)
+    .lineTo(-arrW / 2, arrBaseY)
     .closePath()
     .fill(chev);
-
-  // Bright edge stripe at the open mouth to mark where surface belt connects
-  const stripeH = Math.max(2, s * 0.08);
-  const stripeY = isInput ? half - stripeH : -half;
-  m.rect(-half, stripeY, s, stripeH).fill(base);
 
   g.addChild(m);
   return g;
@@ -862,10 +877,12 @@ export function renderLayout(
           for (let i = 1; i < dist; i++) {
             const tx = (x + dx * i) * TILE_PX;
             const ty = (y + dy * i) * TILE_PX;
+            // Width matches the UG-mouth "throat" (~50% tile) so the
+            // tunnel reads as a continuous pipe through the pair.
             if (isHoriz) {
-              tg.rect(tx, ty + TILE_PX * 0.2, TILE_PX, TILE_PX * 0.6).fill({ color: base, alpha: 0.3 });
+              tg.rect(tx, ty + TILE_PX * 0.25, TILE_PX, TILE_PX * 0.5).fill({ color: base, alpha: 0.25 });
             } else {
-              tg.rect(tx + TILE_PX * 0.2, ty, TILE_PX * 0.6, TILE_PX).fill({ color: base, alpha: 0.3 });
+              tg.rect(tx + TILE_PX * 0.25, ty, TILE_PX * 0.5, TILE_PX).fill({ color: base, alpha: 0.25 });
             }
           }
           container.addChild(tg);

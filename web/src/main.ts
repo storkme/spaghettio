@@ -1,5 +1,4 @@
-import { Container } from "pixi.js";
-import type { Graphics } from "pixi.js";
+import { Container, Graphics } from "pixi.js";
 import { createApp, WORLD_SIZE } from "./renderer/app";
 import { drawGrid } from "./renderer/grid";
 import { drawGraph } from "./renderer/graph";
@@ -27,6 +26,7 @@ import * as debugState from "./state/debugState";
 import { createOverlayPanel } from "./ui/overlayPanel";
 import { createIssuesDialog } from "./ui/issuesDialog";
 import { createInspector } from "./ui/inspector";
+import { buildTileContext } from "./ui/tileContext";
 import { createSnapshotMode } from "./ui/snapshotMode";
 import { createStepThrough } from "./ui/stepThrough";
 import { attachBusyOverlay } from "./ui/busyOverlay";
@@ -181,6 +181,19 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
   // SAT-zone detail overlay sits above the entity layer so the bbox,
   // boundary bars, and item icons always read on top of the belts.
   viewport.addChild(satZoneOverlay.layer);
+  // Pin-highlight ring — drawn on top of everything so the user can
+  // always see which tile the detail panel is describing.
+  const pinHighlight = new Graphics();
+  pinHighlight.label = "pin-highlight";
+  viewport.addChild(pinHighlight);
+  inspector.onPinChange((tile) => {
+    pinHighlight.clear();
+    if (!tile) return;
+    const px = tile.x * TILE_PX;
+    const py = tile.y * TILE_PX;
+    pinHighlight.setStrokeStyle({ width: 2, color: 0x80c8ff, alpha: 0.95 });
+    pinHighlight.rect(px - 2, py - 2, TILE_PX + 4, TILE_PX + 4).stroke();
+  });
   viewport.moveCenter(WORLD_SIZE / 2, WORLD_SIZE / 2);
 
   // Click-to-inspect removed; pass no-op to renderLayout.
@@ -489,6 +502,8 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     onClear: () => {
       snapshotMode.clear();
       entityLayer.removeChildren();
+      inspector.clearPin();
+      inspector.setTileContext(null);
       lastLayout = null;
       cachedValidationIssues = null;
       drawGraph(viewport, null);
@@ -535,10 +550,21 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
   // already selected, a click outside its bbox deselects it — matches
   // the "selected thing dims everything else" UX convention.
   app.canvas.addEventListener("pointerdown", (e) => {
-    if (!regionsCb.checked) return;
     if (e.button !== 0 || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return;
     const rect = app.canvas.getBoundingClientRect();
     const world = viewport.toWorld(e.clientX - rect.left, e.clientY - rect.top);
+    const tx = Math.floor(world.x / TILE_PX);
+    const ty = Math.floor(world.y / TILE_PX);
+
+    if (!regionsCb.checked) {
+      // Debug regions off — a bare canvas click pins the tile under
+      // the cursor so the inspector freezes on its detail.
+      const entity = hoveredEntity && hoveredEntity.x === tx && hoveredEntity.y === ty
+        ? hoveredEntity : null;
+      inspector.pinTile(entity, tx, ty);
+      return;
+    }
+
     const jc = junctionHitTest?.(world.x, world.y) ?? null;
     if (jc) {
       junctionDebugger.open(jc, lastLayout?.trace);
@@ -567,6 +593,21 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       const cx = (it.region.x + it.region.width / 2) * TILE_PX;
       const cy = (it.region.y + it.region.height / 2) * TILE_PX;
       viewport.moveCenter(cx, cy);
+      // Fall through — also pin the clicked tile so the inspector can
+      // describe it in detail. Panning alone doesn't give the user any
+      // detail; the combination is what they came for.
+    }
+
+    // Fell through every overlay — pin the tile so the inspector
+    // keeps showing its full detail. Click on an already-pinned tile
+    // to unpin.
+    const current = inspector.getPinnedTile();
+    if (current && current.x === tx && current.y === ty) {
+      inspector.clearPin();
+    } else {
+      const entity = hoveredEntity && hoveredEntity.x === tx && hoveredEntity.y === ty
+        ? hoveredEntity : null;
+      inspector.pinTile(entity, tx, ty);
     }
   });
 
@@ -673,6 +714,8 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       }
     }
     inspector.setHighlightController(ctrl);
+    inspector.setTileContext(buildTileContext(layout.trace));
+    inspector.clearPin();
     selectionCtrl = createSelectionController(app.canvas, viewport, entityLayer, layout, onSelectionChange);
     buildLegend(layout);
     updateTraceOverlay();

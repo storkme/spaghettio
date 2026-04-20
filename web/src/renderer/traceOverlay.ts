@@ -10,8 +10,6 @@ type LanesPlanned = Extract<TraceEvent, { phase: "LanesPlanned" }>;
 export type PhaseSnapshot = Extract<TraceEvent, { phase: "PhaseSnapshot" }>;
 export type PhaseComplete = Extract<TraceEvent, { phase: "PhaseComplete" }>;
 type RouteFailureEvent = Extract<TraceEvent, { phase: "RouteFailure" }>;
-type LaneConsolidatedEvent = Extract<TraceEvent, { phase: "LaneConsolidated" }>;
-type RowSplitEvent = Extract<TraceEvent, { phase: "RowSplit" }>;
 type LaneOrderOptimizedEvent = Extract<TraceEvent, { phase: "LaneOrderOptimized" }>;
 type GhostSpecRoutedEvent = Extract<TraceEvent, { phase: "GhostSpecRouted" }>;
 type GhostSpecFailedEvent = Extract<TraceEvent, { phase: "GhostSpecFailed" }>;
@@ -149,55 +147,17 @@ export function renderTraceOverlay(
     layer.addChild(g);
   }
 
-  // --- Lane consolidation badges (from LaneConsolidated) ---
-  const badgeStyle = new TextStyle({ fontSize: 10, fill: "#ffaa44", fontFamily: "monospace", fontWeight: "bold" });
-  for (const evt of events) {
-    if (evt.phase !== "LaneConsolidated") continue;
-    const d = (evt as LaneConsolidatedEvent).data;
-    let laneX = -1;
-    if (lanesEvent) {
-      const match = lanesEvent.data.lanes.find(l => l.item === d.item);
-      if (match) laneX = match.x;
-    }
-    if (laneX < 0) continue;
-    const badge = new Text({ text: `\u00F7${d.n_trunk_lanes}`, style: badgeStyle });
-    badge.x = laneX * TILE_PX + TILE_PX / 2 - badge.width / 2;
-    badge.y = 2;
-    badge.eventMode = "static";
-    badge.on("pointerenter", () => onHover(`${d.item}: ${d.consumer_count} consumers share ${d.n_trunk_lanes} lane(s) @ ${d.rate_per_lane.toFixed(1)}/s each`));
-    badge.on("pointerleave", () => onHover(null));
-    layer.addChild(badge);
-  }
-
-  // --- Row split indicators (from RowSplit) ---
-  const splitStyle = new TextStyle({ fontSize: 10, fill: "#ffcc44", fontFamily: "monospace", fontWeight: "bold" });
-  for (const evt of events) {
-    if (evt.phase !== "RowSplit") continue;
-    const d = (evt as RowSplitEvent).data;
-    let splitY = -1;
-    if (rowsEvent) {
-      const matching = rowsEvent.data.rows.filter(r => r.recipe === d.recipe);
-      if (matching.length > 0) {
-        splitY = matching.reduce((a, b) => a.y_end > b.y_end ? a : b).y_end;
-      }
-    }
-    if (splitY < 0) continue;
-    const label = new Text({ text: `\u2295${d.split_into}`, style: splitStyle });
-    label.x = 4;
-    label.y = splitY * TILE_PX - label.height - 1;
-    label.eventMode = "static";
-    label.on("pointerenter", () => onHover(`${d.recipe}: split ${d.original_count}\u2192${d.split_into} rows \u2014 ${d.reason}`));
-    label.on("pointerleave", () => onHover(null));
-    layer.addChild(label);
-  }
+  // Lane-consolidation (÷n) and row-split (⊕n) badges used to live at
+  // the top of each lane/row column. They were clutter in the junction
+  // view; the same information is available on hover via the lane/row
+  // rectangles' pointerenter handlers above.
 
   const summaryStyle = new TextStyle({ fontSize: 10, fill: "#aaa", fontFamily: "monospace" });
 
   // --- Ghost routing paths (from GhostSpecRouted) ---
-  const ghostPalette = [
-    0x569cd6, 0xd0a040, 0x6ac080, 0xc06090, 0x70b0e0,
-    0xb080d0, 0xe07050, 0x60c0c0, 0xd0d060, 0x80b060,
-  ];
+  // Small cycled palette — the colour just needs to differ from its
+  // immediate neighbours; exact identity is confirmed via inspector.
+  const ghostPalette = GHOST_PALETTE;
   let ghostPathIdx = 0;
   for (const evt of events) {
     if (evt.phase !== "GhostSpecRouted") continue;
@@ -214,16 +174,9 @@ export function renderTraceOverlay(
       }
       g.stroke();
     }
-    // Crossing tiles as yellow diamonds
-    if (d.crossing_tiles) {
-      for (const [cx, cy] of d.crossing_tiles) {
-        const px = cx * TILE_PX + TILE_PX / 2;
-        const py = cy * TILE_PX + TILE_PX / 2;
-        const ds = TILE_PX * 0.25;
-        g.moveTo(px, py - ds).lineTo(px + ds, py).lineTo(px, py + ds).lineTo(px - ds, py).closePath()
-          .fill({ color: 0xffdd00, alpha: 0.85 });
-      }
-    }
+    // Crossing tiles are surfaced via the orange multi-item heatmap in
+    // `renderGhostRoutingOverlay` (the authoritative signal); per-spec
+    // yellow diamonds here were a duplicate layer and have been removed.
     g.eventMode = "static";
     g.on("pointerenter", () => onHover(`Ghost path: ${d.spec_key} len=${d.path_len} crossings=${d.crossings} turns=${d.turns}`));
     g.on("pointerleave", () => onHover(null));
@@ -296,10 +249,14 @@ export function renderTraceOverlay(
 type GhostClusterSolvedEvent = Extract<TraceEvent, { phase: "GhostClusterSolved" }>;
 type GhostClusterFailedEvent = Extract<TraceEvent, { phase: "GhostClusterFailed" }>;
 
+// Small cycled palette — four easy-to-discriminate hues. The job of the
+// colour is just "different from its neighbours"; exact identity is
+// confirmed via hover/pin in the inspector.
 const GHOST_PALETTE = [
-  0x569cd6, 0xd0a040, 0x6ac080, 0xc06090, 0x70b0e0,
-  0xb080d0, 0xe07050, 0x60c0c0, 0xd0d060, 0x80b060,
-  0xe0a060, 0x60a0d0, 0xd060a0, 0xa0d060, 0x9060d0,
+  0x569cd6, // cool blue
+  0x6ac080, // muted green
+  0xd0a040, // warm ochre
+  0xb080d0, // dusty purple
 ];
 
 /** Deterministic color assignment by item name. */
@@ -373,54 +330,19 @@ export function renderGhostRoutingOverlay(
   }
   layer.addChild(heatG);
 
-  // --- Axis occupancy (Phase-1 instrumentation) ---
-  // Red square = same-axis conflict (>=2 N/S OR >=2 E/W specs at this tile).
-  // Blue dot   = perpendicular crossing (>=1 N/S AND >=1 E/W spec at this tile).
-  // A tile can be both — render both layers; the hover hit-rect covers either.
+  // Axis occupancy (V/H counts per tile) used to paint red squares and
+  // blue dots across the whole zone. That was the biggest single source
+  // of visual noise in the junction-debug view. The raw counts are now
+  // surfaced per-tile via the inspector (see `ui/tileContext.ts`), so
+  // the canvas keeps only the orange multi-item heatmap. The summary
+  // line below still reports aggregate counts.
   const axisEvent = events.find(
     (e): e is Extract<TraceEvent, { phase: "GhostAxisOccupancy" }> =>
       e.phase === "GhostAxisOccupancy",
   );
-  let axisSummary = "";
-  if (axisEvent) {
-    const axisG = new Graphics();
-    const dotG = new Graphics();
-    for (const tile of axisEvent.data.tiles) {
-      const sameAxis = tile.vert_count >= 2 || tile.horiz_count >= 2;
-      const perp = tile.vert_count >= 1 && tile.horiz_count >= 1;
-      if (sameAxis) {
-        const maxSame = Math.max(tile.vert_count, tile.horiz_count);
-        const alpha = Math.min(0.25 + maxSame * 0.15, 0.85);
-        axisG.rect(tile.x * TILE_PX, tile.y * TILE_PX, TILE_PX, TILE_PX)
-          .fill({ color: 0xff2222, alpha });
-      }
-      if (perp) {
-        dotG.circle(tile.x * TILE_PX + TILE_PX / 2, tile.y * TILE_PX + TILE_PX / 2, TILE_PX * 0.22)
-          .fill({ color: 0x3399ff, alpha: 0.9 })
-          .stroke({ width: 1, color: 0x0a2a55, alpha: 0.9 });
-      }
-    }
-    // Hit-rect layer (separate so dots and squares don't fight for hover hits).
-    const hitLayer = new Container();
-    for (const tile of axisEvent.data.tiles) {
-      const hit = new Graphics();
-      hit.rect(tile.x * TILE_PX, tile.y * TILE_PX, TILE_PX, TILE_PX)
-        .fill({ color: 0xffffff, alpha: 0.001 });
-      hit.eventMode = "static";
-      const tags =
-        (tile.vert_count >= 2 || tile.horiz_count >= 2 ? " [same-axis]" : "") +
-        (tile.vert_count >= 1 && tile.horiz_count >= 1 ? " [perpendicular]" : "");
-      const label = `Axis (${tile.x},${tile.y}): V=${tile.vert_count} H=${tile.horiz_count}${tags}`;
-      hit.on("pointerenter", () => onHover(label));
-      hit.on("pointerleave", () => onHover(null));
-      hitLayer.addChild(hit);
-    }
-    layer.addChild(axisG);
-    layer.addChild(dotG);
-    layer.addChild(hitLayer);
-
-    axisSummary = ` | axis: ${axisEvent.data.same_axis_conflict_count} same, ${axisEvent.data.perpendicular_crossing_count} perp`;
-  }
+  const axisSummary = axisEvent
+    ? ` | axis: ${axisEvent.data.same_axis_conflict_count} same, ${axisEvent.data.perpendicular_crossing_count} perp`
+    : "";
 
   // --- Cluster zones ---
   for (const evt of events) {
@@ -443,13 +365,6 @@ export function renderGhostRoutingOverlay(
     zg.on("pointerenter", () => onHover(label));
     zg.on("pointerleave", () => onHover(null));
     layer.addChild(zg);
-
-    // Zone dimension label
-    const zoneStyle = new TextStyle({ fontSize: 9, fill: isFailed ? "#ff8888" : "#88ccff", fontFamily: "monospace" });
-    const zoneText = new Text({ text: `#${d.cluster_id} ${d.zone_w}×${d.zone_h}`, style: zoneStyle });
-    zoneText.x = d.zone_x * TILE_PX + 2;
-    zoneText.y = d.zone_y * TILE_PX + 2;
-    layer.addChild(zoneText);
   }
 
   // --- Routed paths ---
