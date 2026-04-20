@@ -493,14 +493,21 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
   }
 
   app.canvas.addEventListener("pointermove", (e) => {
-    if (hoveredEntity) return;
     const rect = app.canvas.getBoundingClientRect();
     const sx = e.clientX - rect.left;
     const sy = e.clientY - rect.top;
     const world = viewport.toWorld(sx, sy);
     const tx = Math.floor(world.x / TILE_PX);
     const ty = Math.floor(world.y / TILE_PX);
-    inspector.onHover(null, tx, ty);
+    // Cursor tile is tracked regardless of what's under the cursor so
+    // the coord line stays visible even when a lane/row/ghost overlay
+    // has installed a tooltip override.
+    inspector.setCursorTile(tx, ty);
+    if (!hoveredEntity) inspector.onHover(null, tx, ty);
+  });
+
+  app.canvas.addEventListener("pointerleave", () => {
+    inspector.setCursorTile(null);
   });
 
   // Click handling for SAT regions + junction zones. Junction click

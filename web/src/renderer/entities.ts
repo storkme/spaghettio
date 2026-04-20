@@ -790,6 +790,11 @@ export function renderLayout(
   onHover?: (entity: PlacedEntity | null) => void,
   onSelect?: (entity: PlacedEntity | null) => void,
   onEntityRendered?: (entity: PlacedEntity, graphics: Graphics[]) => void,
+  /** Extra entities that are NOT drawn but DO participate in `detectBeltTurn`
+   * as perpendicular-feeder candidates. Used by the SAT editor to feed
+   * zone-boundary feeders into turn detection without actually rendering
+   * them. Leave unset outside the editor. */
+  turnFeederHints?: PlacedEntity[],
 ): HighlightController {
   container.removeChildren();
 
@@ -801,6 +806,15 @@ export function renderLayout(
     if (SPLITTER_ENTITIES.has(e.name)) {
       const [dx, dy] = splitterCompanionOffset(e.direction);
       tileMap.set(`${(e.x ?? 0) + dx},${(e.y ?? 0) + dy}`, e);
+    }
+  }
+  // Phantom feeders: boundary-derived external belts that `detectBeltTurn`
+  // inspects but we never draw. Added after real entities so we never
+  // overwrite a painted tile with a hint.
+  if (turnFeederHints) {
+    for (const h of turnFeederHints) {
+      const k = `${h.x ?? 0},${h.y ?? 0}`;
+      if (!tileMap.has(k)) tileMap.set(k, h);
     }
   }
 

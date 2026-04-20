@@ -91,6 +91,10 @@ interface BoundaryEntry {
   y: number;
   item: string;
   isInput: boolean;
+  /** Flow direction across this boundary. For an IN boundary with
+   * `dir = South`, items enter the tile from the north — the external
+   * feeder lives one tile north and faces South. */
+  dir: EntityDirection;
 }
 
 interface ZoneCtx {
@@ -202,18 +206,63 @@ export function createSatEditor(opts: SatEditorOptions): SatEditorControls {
 
   // ----- PIXI render -------------------------------------------------------
 
+  /** Build phantom feeder entities from the zone's IN boundaries so the
+   * renderer's `detectBeltTurn` can see "items arrive from direction D"
+   * context and render corner tiles as curves. These entities are never
+   * drawn — they only participate in turn detection via
+   * `renderLayout`'s `turnFeederHints` parameter. */
+  function turnFeederHints(): PlacedEntity[] {
+    if (!zone) return [];
+    const beltName = BELT_NAMES[zone.beltTier] ?? "transport-belt";
+    const hints: PlacedEntity[] = [];
+    for (const b of zone.boundaries) {
+      if (!b.isInput) continue;
+      const [dx, dy] = DIR_DELTA[b.dir];
+      hints.push({
+        name: beltName,
+        x: b.x - dx,
+        y: b.y - dy,
+        direction: b.dir,
+        carries: b.item,
+      } as PlacedEntity);
+    }
+    return hints;
+  }
+
   function rerender(): void {
+    const hints = turnFeederHints();
     if (paintedLayer) {
-      renderLayout({ entities: painted, width: 0, height: 0 }, paintedLayer);
+      renderLayout(
+        { entities: painted, width: 0, height: 0 },
+        paintedLayer,
+        undefined,
+        undefined,
+        undefined,
+        hints,
+      );
     }
     if (ghostLayer) {
-      renderLayout({ entities: ghost, width: 0, height: 0 }, ghostLayer);
+      renderLayout(
+        { entities: ghost, width: 0, height: 0 },
+        ghostLayer,
+        undefined,
+        undefined,
+        undefined,
+        hints,
+      );
     }
   }
 
   function rerenderPreview(entities: PaintedEntity[], invalid: boolean): void {
     if (!previewLayer) return;
-    renderLayout({ entities, width: 0, height: 0 }, previewLayer);
+    renderLayout(
+      { entities, width: 0, height: 0 },
+      previewLayer,
+      undefined,
+      undefined,
+      undefined,
+      turnFeederHints(),
+    );
     previewLayer.alpha = invalid ? 0.5 : 0.45;
     previewLayer.tint = invalid ? 0xff5555 : 0xffffff;
   }
@@ -844,6 +893,7 @@ export function createSatEditor(opts: SatEditorOptions): SatEditorControls {
       y: b.y,
       item: b.item,
       isInput: b.is_input,
+      dir: b.direction as EntityDirection,
     }));
     zone = {
       bbox: { x: it.bbox.x, y: it.bbox.y, w: it.bbox.w, h: it.bbox.h },
