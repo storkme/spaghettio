@@ -1410,12 +1410,27 @@ pub fn route_bus_ghost(
     // valid 1-tile cluster. Clustering prevents the old failure mode
     // where N identical adjacent crossings each grew a 9×9 zone
     // independently, overlapped heavily, and corrupted one another.
-    let clusters = cluster_adjacent_crossings(&crossing_set, &routed_paths);
+    // Cluster only the crossings the corridor template didn't resolve.
+    // Mixing handled tiles into clusters was a silent bug under the
+    // Manhattan-2 rule: a cluster could span a resolved run (e.g.
+    // plastic-bar 25-26) plus an unresolved one (e.g. iron-plate 21-23)
+    // via a shared horizontal spec, and the `any(is_handled)` check
+    // below would then discard the whole cluster — leaving the
+    // unresolved crossings unsolved with no error.
+    let unhandled_crossings: FxHashSet<(i32, i32)> = crossing_set
+        .iter()
+        .filter(|t| !corridor_handled.contains(t))
+        .copied()
+        .collect();
+    let clusters = cluster_adjacent_crossings(&unhandled_crossings, &routed_paths);
 
     for cluster in &clusters {
-        if cluster.iter().any(|t| corridor_handled.contains(t)) {
-            continue;
-        }
+        // Cluster is already guaranteed unhandled by the filter above;
+        // keep the check as a cheap invariant in debug builds.
+        debug_assert!(
+            !cluster.iter().any(|t| corridor_handled.contains(t)),
+            "cluster contains a corridor-handled tile despite pre-cluster filter"
+        );
         // classify_crossing gates on "exactly two specs with a valid
         // direction at the tile" — require it of every cluster member.
         // If any member is degenerate the whole cluster defers to
@@ -1439,6 +1454,38 @@ pub fn route_bus_ghost(
             .map(|(key, _)| key.as_str())
             .collect();
 
+        // Pending crossings for the DeferredExit check: the subset of
+        // `crossing_set` whose cluster hasn't committed yet. Excluding
+        // `corridor_handled` avoids false deferrals when a zone's exit
+        // lands on a tile that was already solved by a prior cluster —
+        // that tile now has a committed entity, it's not a pending
+        // collision anymore.
+        let pending_crossings: FxHashSet<(i32, i32)> = crossing_set
+            .iter()
+            .filter(|t| !corridor_handled.contains(t))
+            .copied()
+            .collect();
+
+        // Optional capture: dump a region-solver fixture on this
+        // invocation. Gated by `FUCKTORIO_DUMP_REGION_FIXTURE=<dir>`;
+        // narrowable with `FUCKTORIO_DUMP_REGION_FIXTURE_SEED="x,y"` to
+        // match a specific cluster seed. Off by default, zero-cost when
+        // unset. See `crates/core/tests/region_fixtures/README.md`.
+        #[cfg(not(target_arch = "wasm32"))]
+        dump_region_fixture(
+            cluster.as_slice(),
+            &keys_at_tile,
+            &routed_paths,
+            &hard,
+            &junction_hard,
+            &unreleasable_obstacles,
+            &spec_belt_tiers,
+            &spec_items,
+            &spec_exit_dirs,
+            &entities,
+            &pending_crossings,
+        );
+
         let Some(sol) = junction_solver::solve_crossing(
             cluster.as_slice(),
             &keys_at_tile,
@@ -1451,7 +1498,7 @@ pub fn route_bus_ghost(
             &spec_exit_dirs,
             &entities,
             &strategies,
-            &crossing_set,
+            &pending_crossings,
         ) else {
             for &t in cluster {
                 remaining_crossings.insert(t);
@@ -1897,8 +1944,26 @@ fn cluster_adjacent_crossings(
         }
         x
     }
+    // Merge any two crossings within Manhattan distance 2 that share at
+    // least one spec. The outer loop visits every tile, so we only need
+    // to emit half the offsets — the other half is covered by symmetry
+    // (e.g. (−1, 0) from tile B is (1, 0) from tile A).
+    //
+    // Why Manhattan 2, not strict orthogonal adjacency: in dense junction
+    // regions (e.g. advanced-circuit's output-merger taps) crossings are
+    // often 2 tiles apart along a shared spec path. Strict |dx|+|dy|=1
+    // left them as separate clusters, forcing the region solver's growth
+    // loop to stitch them back together one tile at a time — which blew
+    // through MAX_REGION_TILES before a solution could emerge. Manhattan 2
+    // captures these near-misses while the shared-spec gate (below) keeps
+    // unrelated crossings apart.
+    const OFFSETS: &[(i32, i32)] = &[
+        (1, 0), (0, 1),       // Manhattan 1 orthogonal
+        (2, 0), (0, 2),       // Manhattan 2 orthogonal
+        (1, 1), (1, -1),      // Manhattan 2 diagonals
+    ];
     for (i, &(x, y)) in tiles.iter().enumerate() {
-        for &(dx, dy) in &[(1, 0), (0, 1)] {
+        for &(dx, dy) in OFFSETS {
             let Some(&j) = index_of.get(&(x + dx, y + dy)) else {
                 continue;
             };
@@ -2430,7 +2495,16 @@ fn belt_name_for_tier(tier: BeltTier) -> &'static str {
 /// crossing tile. Ignores region growth entirely — the underlying
 /// template operates on a fixed 3-tile footprint. Real growth-aware
 /// strategies will land alongside this one.
-struct PerpendicularTemplateStrategy;
+pub(crate) struct PerpendicularTemplateStrategy;
+
+/// Construct a boxed `PerpendicularTemplateStrategy`. Exposed for the
+/// fixture-replay helper in `crate::fixture` so it can build the same
+/// strategy slice production uses without this type becoming part of the
+/// crate's public surface.
+pub(crate) fn perpendicular_template_strategy(
+) -> Box<dyn crate::bus::junction_solver::JunctionStrategy> {
+    Box::new(PerpendicularTemplateStrategy)
+}
 
 impl JunctionStrategy for PerpendicularTemplateStrategy {
     fn name(&self) -> &'static str {
@@ -2482,6 +2556,163 @@ impl JunctionStrategy for PerpendicularTemplateStrategy {
             strategy_name: self.name(),
             participating: ctx.region.participating.clone(),
         })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Region-solver fixture capture (debug-only)
+// ---------------------------------------------------------------------------
+//
+// Writes a `RegionFixture` JSON for each `solve_crossing` call when the
+// `FUCKTORIO_DUMP_REGION_FIXTURE` env var names a directory. Optional
+// `FUCKTORIO_DUMP_REGION_FIXTURE_SEED="x,y"` restricts capture to
+// clusters containing that seed. Off by default; the probe returns
+// immediately when the env var is unset.
+//
+// The captured JSON has `expected.mode = "solve"` as a placeholder —
+// the dev promoting a capture to a committed fixture sets the correct
+// mode and `max_cost` by hand, matching the sat-fixture workflow.
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::too_many_arguments)]
+fn dump_region_fixture(
+    seeds: &[(i32, i32)],
+    initial_specs: &[&str],
+    routed_paths: &FxHashMap<String, Vec<(i32, i32)>>,
+    hard_obstacles: &FxHashSet<(i32, i32)>,
+    strict_obstacles: &FxHashSet<(i32, i32)>,
+    unreleasable_obstacles: &FxHashSet<(i32, i32)>,
+    spec_belt_tiers: &FxHashMap<String, BeltTier>,
+    spec_items: &FxHashMap<String, String>,
+    spec_exit_dirs: &FxHashMap<String, EntityDirection>,
+    placed_entities: &[PlacedEntity],
+    pending_crossings: &FxHashSet<(i32, i32)>,
+) {
+    let Ok(dir) = std::env::var("FUCKTORIO_DUMP_REGION_FIXTURE") else {
+        return;
+    };
+    if dir.is_empty() {
+        return;
+    }
+
+    // Optional seed filter: only dump clusters whose seeds include the
+    // requested tile. Useful when a layout produces dozens of clusters
+    // and you want just one.
+    if let Ok(seed_str) = std::env::var("FUCKTORIO_DUMP_REGION_FIXTURE_SEED") {
+        let parts: Vec<&str> = seed_str.split(',').collect();
+        if parts.len() != 2 {
+            eprintln!(
+                "FUCKTORIO_DUMP_REGION_FIXTURE_SEED: expected \"x,y\", got {:?}",
+                seed_str
+            );
+            return;
+        }
+        let Ok(sx) = parts[0].trim().parse::<i32>() else { return; };
+        let Ok(sy) = parts[1].trim().parse::<i32>() else { return; };
+        if !seeds.contains(&(sx, sy)) {
+            return;
+        }
+    }
+
+    // Everything captured in the fixture is filtered to a generous
+    // radius around the cluster's tiles. Far-away obstacles / belts /
+    // paths can't influence solve_crossing's outcome (it only reads
+    // tiles inside its growing region + perimeter); dumping them would
+    // bloat fixtures by orders of magnitude with no test value.
+    //
+    // Radius 20 is wider than any realistic growth bbox (cap is 64
+    // tiles area, e.g. 8×8) so participating spec paths and their UG
+    // pair mates stay in the shadow view.
+    const RADIUS: i32 = 20;
+    let (min_sx, min_sy, max_sx, max_sy) = seeds.iter().fold(
+        (i32::MAX, i32::MAX, i32::MIN, i32::MIN),
+        |(lx, ly, hx, hy), &(x, y)| (lx.min(x), ly.min(y), hx.max(x), hy.max(y)),
+    );
+    let in_radius =
+        |x: i32, y: i32| -> bool {
+            x >= min_sx - RADIUS
+                && x <= max_sx + RADIUS
+                && y >= min_sy - RADIUS
+                && y <= max_sy + RADIUS
+        };
+
+    // Keep routed_paths whose tile sequence touches the radius window —
+    // those are the specs the region solver might interact with. Keeping
+    // the full path (not just the in-radius portion) so frontier tracking
+    // in solve_crossing sees the same sequence it would in production.
+    let kept_keys: std::collections::BTreeSet<String> = routed_paths
+        .iter()
+        .filter(|(_, path)| path.iter().any(|&(x, y)| in_radius(x, y)))
+        .map(|(k, _)| k.clone())
+        .collect();
+
+    let filter_xy = |v: &FxHashSet<(i32, i32)>| -> Vec<(i32, i32)> {
+        let mut out: Vec<(i32, i32)> = v
+            .iter()
+            .filter(|&&(x, y)| in_radius(x, y))
+            .copied()
+            .collect();
+        out.sort_unstable_by_key(|&(x, y)| (y, x));
+        out
+    };
+
+    use std::collections::BTreeMap;
+    let fixture = crate::fixture::RegionFixture {
+        version: 1,
+        name: format!("seed_{}_{}", seeds[0].0, seeds[0].1),
+        notes: String::from(
+            "Captured via FUCKTORIO_DUMP_REGION_FIXTURE. Review expected.mode before committing.",
+        ),
+        source_url: None,
+        seeds: seeds.to_vec(),
+        initial_specs: initial_specs.iter().map(|s| s.to_string()).collect(),
+        routed_paths: routed_paths
+            .iter()
+            .filter(|(k, _)| kept_keys.contains(k.as_str()))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect::<BTreeMap<_, _>>(),
+        hard_obstacles: filter_xy(hard_obstacles),
+        strict_obstacles: filter_xy(strict_obstacles),
+        unreleasable_obstacles: filter_xy(unreleasable_obstacles),
+        spec_belt_tiers: spec_belt_tiers
+            .iter()
+            .filter(|(k, _)| kept_keys.contains(k.as_str()))
+            .map(|(k, &v)| (k.clone(), v))
+            .collect::<BTreeMap<_, _>>(),
+        spec_items: spec_items
+            .iter()
+            .filter(|(k, _)| kept_keys.contains(k.as_str()))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect::<BTreeMap<_, _>>(),
+        spec_exit_dirs: spec_exit_dirs
+            .iter()
+            .filter(|(k, _)| kept_keys.contains(k.as_str()))
+            .map(|(k, &v)| (k.clone(), v))
+            .collect::<BTreeMap<_, _>>(),
+        placed_entities: placed_entities
+            .iter()
+            .filter(|e| in_radius(e.x, e.y))
+            .cloned()
+            .collect(),
+        pending_crossings: filter_xy(pending_crossings),
+        expected: crate::fixture::RegionExpected {
+            mode: "solve".to_string(),
+            max_cost: None,
+            optimal_cost: None,
+        },
+    };
+
+    let path = format!("{}/seed_{}_{}.json", dir, seeds[0].0, seeds[0].1);
+    match serde_json::to_string_pretty(&fixture) {
+        Ok(json) => {
+            if let Err(e) = std::fs::write(&path, json) {
+                eprintln!("dump_region_fixture: failed to write {}: {e}", path);
+            } else {
+                eprintln!("dump_region_fixture: wrote {}", path);
+            }
+        }
+        Err(e) => {
+            eprintln!("dump_region_fixture: serialization failed: {e}");
+        }
     }
 }
 
@@ -2570,10 +2801,10 @@ mod cluster_adjacent_crossings_tests {
     }
 
     #[test]
-    fn non_adjacent_sharing_spec_stay_separate() {
+    fn manhattan_3_sharing_spec_stays_separate() {
         // Two crossings that share a spec (a tap running across both)
-        // but are NOT 4-adjacent — must NOT merge. 4-connectivity is
-        // the conservative requirement.
+        // but are 3 tiles apart. Manhattan 2 rule caps the merge radius,
+        // so they stay as separate clusters.
         let cs = crossings(&[(5, 5), (8, 5)]);
         let rp = paths(&[
             ("tap:iron-plate", &[(5, 5), (6, 5), (7, 5), (8, 5)]),
@@ -2585,12 +2816,47 @@ mod cluster_adjacent_crossings_tests {
     }
 
     #[test]
-    fn diagonal_adjacency_does_not_merge() {
-        // 8-connected neighbours that are NOT 4-connected must stay
-        // separate.
+    fn manhattan_2_straight_sharing_spec_merges() {
+        // Two crossings 2 tiles apart along a shared spec's path. The
+        // real-world motivator: at (21,161) in advanced-circuit the cable
+        // ret touches crossings at (23,161) and (25,161) with a clean
+        // belt between them — these should cluster into one zone.
+        let cs = crossings(&[(5, 5), (7, 5)]);
+        let rp = paths(&[
+            ("ret:shared", &[(5, 5), (6, 5), (7, 5)]),
+            ("trunk:a", &[(5, 4), (5, 5), (5, 6)]),
+            ("trunk:b", &[(7, 4), (7, 5), (7, 6)]),
+        ]);
+        let clusters = cluster_adjacent_crossings(&cs, &rp);
+        assert_eq!(clusters.len(), 1);
+        assert_eq!(clusters[0], vec![(5, 5), (7, 5)]);
+    }
+
+    #[test]
+    fn diagonal_adjacency_sharing_spec_merges() {
+        // Manhattan-2 diagonals also merge when they share a spec.
+        // Matches the (23,161)/(21,163) vertical neighbourhood that
+        // motivated relaxing from strict orthogonal adjacency.
         let cs = crossings(&[(5, 5), (6, 6)]);
         let rp = paths(&[
             ("tap:x", &[(5, 5), (6, 6)]),
+            ("trunk:a", &[(5, 4), (5, 5), (5, 6)]),
+            ("trunk:b", &[(6, 5), (6, 6), (6, 7)]),
+        ]);
+        let clusters = cluster_adjacent_crossings(&cs, &rp);
+        assert_eq!(clusters.len(), 1);
+    }
+
+    #[test]
+    fn manhattan_2_without_shared_spec_stays_separate() {
+        // Bounded relaxation: Manhattan 2 *without* a shared spec must
+        // still not merge — the shared-spec gate is the safety net.
+        let cs = crossings(&[(5, 5), (7, 5)]);
+        let rp = paths(&[
+            ("tap:a", &[(5, 5)]),
+            ("tap:b", &[(7, 5)]),
+            ("trunk:x", &[(5, 4), (5, 5), (5, 6)]),
+            ("trunk:y", &[(7, 4), (7, 5), (7, 6)]),
         ]);
         let clusters = cluster_adjacent_crossings(&cs, &rp);
         assert_eq!(clusters.len(), 2);

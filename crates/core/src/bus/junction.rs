@@ -23,6 +23,7 @@
 //!   area; strategies can assume any tile in `bbox \ forbidden` is free.
 
 use rustc_hash::FxHashSet;
+use serde::{Deserialize, Serialize};
 
 use crate::models::{LayoutRegion, PortIo, PortPoint, RegionKind, RegionPort};
 
@@ -47,7 +48,7 @@ impl Rect {
 /// `(item, belt_tier)`.
 ///
 /// Mirrors the existing `belt_entity_for_rate` tiering in `common.rs`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum BeltTier {
     /// `transport-belt` — 15 items/s per lane
     Yellow,

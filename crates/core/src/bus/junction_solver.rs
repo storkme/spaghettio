@@ -94,9 +94,9 @@ impl GrowingRegion {
     /// the bbox are silently skipped.
     ///
     /// `seeds` must be non-empty. `initial_tile` is set to `seeds[0]`
-    /// for trace-event and `all_crossings` deferred-exit purposes —
+    /// for trace-event and `pending_crossings` deferred-exit purposes —
     /// cluster members other than the first are still recognized via
-    /// `all_crossings` lookups, which don't require the seed to be the
+    /// `pending_crossings` lookups, which don't require the seed to be the
     /// representative tile.
     pub fn from_crossings(
         seeds: &[(i32, i32)],
@@ -919,7 +919,7 @@ pub trait JunctionStrategy {
 /// `None` if every strategy failed within the growth budget.
 ///
 /// `seeds` must be non-empty. The first seed is used as the
-/// representative tile for trace events and the `all_crossings`
+/// representative tile for trace events and the `pending_crossings`
 /// deferred-exit check; other seeds are included in the initial
 /// bbox but do not receive special treatment.
 #[allow(clippy::too_many_arguments)]
@@ -935,11 +935,16 @@ pub fn solve_crossing(
     spec_exit_dirs: &FxHashMap<String, EntityDirection>,
     placed_entities: &[crate::models::PlacedEntity],
     strategies: &[&dyn JunctionStrategy],
-    // All crossing tiles in the layout. Used to detect when a spec's
-    // frontier exit lands on another unresolved crossing — in that case
-    // the zone defers (grows one more step) so the solution exits beyond
-    // all consecutive crossings rather than stopping mid-run.
-    all_crossings: &FxHashSet<(i32, i32)>,
+    // Crossing tiles that haven't been solved yet. Used to detect when
+    // a spec's frontier exit lands on a *pending* crossing — in that
+    // case the zone defers (grows one more step) so the solution exits
+    // beyond all consecutive crossings rather than stopping mid-run.
+    //
+    // Important: this must exclude tiles belonging to clusters that
+    // already committed their solutions. A solved crossing's tiles have
+    // real entities; treating them as still-pending causes spurious
+    // deferrals for zones whose exits happen to land on them.
+    pending_crossings: &FxHashSet<(i32, i32)>,
 ) -> Option<JunctionSolution> {
     assert!(!seeds.is_empty(), "solve_crossing: seeds must be non-empty");
     let initial_tile = seeds[0];
@@ -989,6 +994,7 @@ pub fn solve_crossing(
     }
 
     let protected_balancer_tiles = build_protected_balancer_tiles(placed_entities);
+    let cluster_seeds: FxHashSet<(i32, i32)> = seeds.iter().copied().collect();
     let solve_ctx = SolveCtx {
         initial_tile,
         routed_paths,
@@ -1000,7 +1006,8 @@ pub fn solve_crossing(
         unreleasable_obstacles,
         placed_entities,
         strategies,
-        all_crossings,
+        pending_crossings,
+        cluster_seeds: &cluster_seeds,
         protected_balancer_tiles: &protected_balancer_tiles,
     };
 
@@ -1181,7 +1188,12 @@ struct SolveCtx<'a> {
     unreleasable_obstacles: &'a FxHashSet<(i32, i32)>,
     placed_entities: &'a [crate::models::PlacedEntity],
     strategies: &'a [&'a dyn JunctionStrategy],
-    all_crossings: &'a FxHashSet<(i32, i32)>,
+    pending_crossings: &'a FxHashSet<(i32, i32)>,
+    /// All crossing tiles that seed *this* cluster. The DeferredExit
+    /// check must exclude these — a spec's exit landing on one of our
+    /// own seeds is not an unresolved external crossing, it's a tile we
+    /// are in the middle of solving.
+    cluster_seeds: &'a FxHashSet<(i32, i32)>,
     protected_balancer_tiles: &'a FxHashSet<(i32, i32)>,
 }
 
@@ -1326,12 +1338,12 @@ fn try_solve_on_region(
         };
 
         // Deferred-exit: a participating spec's frontier exits on
-        // another unresolved crossing. Skip this attempt so the
-        // growth loop can push the frontier past all consecutive
-        // crossings before committing.
+        // another unresolved crossing belonging to a DIFFERENT cluster.
+        // Skip this attempt so the growth loop can push the frontier
+        // past all consecutive crossings before committing.
         let exits_at_crossing = strategy_ctx.junction.specs.iter().any(|s| {
             let exit = (s.exit.x, s.exit.y);
-            exit != ctx.initial_tile && ctx.all_crossings.contains(&exit)
+            should_defer_on_exit(exit, ctx.pending_crossings, ctx.cluster_seeds)
         });
         if exits_at_crossing {
             trace::emit(TraceEvent::JunctionStrategyAttempt {
@@ -1358,20 +1370,28 @@ fn try_solve_on_region(
             .routed_paths
             .iter()
             .filter_map(|(seg, tiles)| {
-                if tiles.iter().any(|&t| near_bbox(bbox, t)) {
-                    let item = ctx.spec_items.get(seg).map(|s| s.as_str()).unwrap_or("");
-                    Some(AffectedPath {
-                        segment_id: seg.as_str(),
-                        tiles: tiles.as_slice(),
-                        item,
-                    })
-                } else {
-                    None
-                }
+                let trimmed = trim_path_near_bbox(tiles, bbox)?;
+                let item = ctx.spec_items.get(seg).map(|s| s.as_str()).unwrap_or("");
+                Some(AffectedPath {
+                    segment_id: seg.as_str(),
+                    tiles: trimmed,
+                    item,
+                })
             })
             .collect();
         let shadow = ShadowView::build(ctx.placed_entities, &released, &sol.entities);
         if let WalkResult::Broken { breaks } = walk_affected(&affected, &shadow) {
+            dump_walker_veto(
+                ctx,
+                &region.bbox,
+                iter,
+                &variant_tag,
+                strategy.name(),
+                &sol.entities,
+                &affected,
+                &shadow,
+                &breaks,
+            );
             let detail = if let Some(first) = breaks.first() {
                 trace::emit(TraceEvent::RegionWalkerVeto {
                     tile_x: ctx.initial_tile.0,
@@ -1458,6 +1478,232 @@ fn near_bbox(bbox: Rect, (x, y): (i32, i32)) -> bool {
     let max_x = bbox.x + bbox.w as i32; // inclusive upper bound with +1 perimeter
     let max_y = bbox.y + bbox.h as i32;
     x >= min_x && x <= max_x && y >= min_y && y <= max_y
+}
+
+/// Should the strategy defer because `exit` lands on an unresolved
+/// crossing belonging to a *different* cluster?
+///
+/// True iff `exit` is in `pending_crossings` AND NOT in `cluster_seeds`.
+/// Excluding the current cluster's own seeds is critical — a spec's
+/// frontier exit landing on one of our seeds means it's landing on a
+/// tile we are in the middle of solving, not an external crossing to
+/// coordinate with.
+fn should_defer_on_exit(
+    exit: (i32, i32),
+    pending_crossings: &FxHashSet<(i32, i32)>,
+    cluster_seeds: &FxHashSet<(i32, i32)>,
+) -> bool {
+    !cluster_seeds.contains(&exit) && pending_crossings.contains(&exit)
+}
+
+/// Trim a routed path down to the contiguous bbox-adjacent span.
+///
+/// Why trim: the walker's job is to confirm SAT's proposed placement
+/// doesn't break the path's transit *through the current zone*. If the
+/// path crosses other unresolved zones elsewhere in the bus (e.g. a
+/// plastic-bar trunk sits on the path further along, waiting for its own
+/// SAT pass), BFS from `path.first()` to `path.last()` hits that foreign
+/// belt, fails, and the walker blames SAT — a false positive.
+///
+/// The returned slice spans `[first_near ..= last_near]` — no runway on
+/// either side. Runway padding sounds safe but actively backfires: if
+/// the path is about to enter another unresolved crossing, the padded
+/// tail pulls a foreign belt into the walker's *target*, making end
+/// unreachable regardless of what SAT emitted inside the bbox. Starting
+/// at the first near_bbox tile is fine because `near_bbox` already
+/// includes a 1-tile perimeter around the bbox — BFS has the zone-edge
+/// tile it needs as an anchor.
+///
+/// Returns `None` if the path has no tile near the bbox.
+fn trim_path_near_bbox(tiles: &[(i32, i32)], bbox: Rect) -> Option<&[(i32, i32)]> {
+    let first = tiles.iter().position(|&t| near_bbox(bbox, t))?;
+    let last = tiles.iter().rposition(|&t| near_bbox(bbox, t))?;
+    Some(&tiles[first..=last])
+}
+
+// ---------------------------------------------------------------------------
+// Walker-veto debug dump
+// ---------------------------------------------------------------------------
+
+/// Print the exact input the walker was given when it vetoes a SAT
+/// solution. Enabled by setting `FUCKTORIO_DUMP_WALKER_VETO=1` (optionally
+/// `=seed:10,197` to filter by seed, or `=tile:11,196` to filter by
+/// break tile). Off by default — adds nothing to the trace when
+/// disabled.
+///
+/// This is a debug-only path; on wasm32 the env var is unreadable so it
+/// becomes a no-op.
+#[allow(clippy::too_many_arguments)]
+fn dump_walker_veto(
+    ctx: &SolveCtx,
+    bbox: &Rect,
+    iter: usize,
+    variant: &str,
+    strategy: &str,
+    proposed: &[PlacedEntity],
+    affected: &[AffectedPath<'_>],
+    shadow: &crate::bus::region_walker::ShadowView,
+    breaks: &[crate::bus::region_walker::WalkBreak],
+) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (ctx, bbox, iter, variant, strategy, proposed, affected, shadow, breaks);
+        return;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let filter = match std::env::var("FUCKTORIO_DUMP_WALKER_VETO") {
+            Ok(v) if !v.is_empty() && v != "0" => v,
+            _ => return,
+        };
+        // Optional filters: "seed:X,Y" or "tile:X,Y". Any other non-empty
+        // value enables unfiltered dumping.
+        let (want_seed, want_tile) = parse_dump_filter(&filter);
+        if let Some((sx, sy)) = want_seed {
+            if (ctx.initial_tile.0, ctx.initial_tile.1) != (sx, sy) {
+                return;
+            }
+        }
+        if let Some((tx, ty)) = want_tile {
+            if !breaks.iter().any(|b| b.tile == (tx, ty)) {
+                return;
+            }
+        }
+
+        eprintln!();
+        eprintln!("=== walker veto dump ===");
+        eprintln!(
+            "  seed=({},{})  iter={}  variant={:?}  strategy={}",
+            ctx.initial_tile.0, ctx.initial_tile.1, iter, variant, strategy
+        );
+        eprintln!(
+            "  bbox=(x={}, y={}, w={}, h={})",
+            bbox.x, bbox.y, bbox.w, bbox.h
+        );
+
+        eprintln!("  proposed entities ({}):", proposed.len());
+        for e in proposed {
+            eprintln!(
+                "    ({:>3},{:>3}) {} dir={:?} carries={:?} io={:?}",
+                e.x, e.y, e.name, e.direction, e.carries, e.io_type
+            );
+        }
+
+        eprintln!("  affected paths ({}):", affected.len());
+        for p in affected {
+            let head: Vec<_> = p.tiles.iter().take(3).copied().collect();
+            let tail: Vec<_> = p.tiles.iter().rev().take(3).rev().copied().collect();
+            eprintln!(
+                "    seg={:<40} item={:<20} len={:>3} head={:?} tail={:?}",
+                p.segment_id, p.item, p.tiles.len(), head, tail
+            );
+        }
+
+        eprintln!("  breaks ({}):", breaks.len());
+        for b in breaks {
+            eprintln!(
+                "    segment={} first_bad=({},{}) reason={:?}",
+                b.segment_id, b.tile.0, b.tile.1, b.reason
+            );
+        }
+
+        // Shadow window around each break tile: ±2 tiles, just the
+        // entities that exist in the shadow view.
+        for b in breaks {
+            eprintln!(
+                "  shadow window around break ({},{}):",
+                b.tile.0, b.tile.1
+            );
+            for dy in -2..=2 {
+                for dx in -2..=2 {
+                    let t = (b.tile.0 + dx, b.tile.1 + dy);
+                    if let Some(e) = shadow.get(t) {
+                        eprintln!(
+                            "    ({:>3},{:>3}) {} dir={:?} carries={:?} io={:?} seg={:?}",
+                            e.x, e.y, e.name, e.direction, e.carries, e.io_type, e.segment_id
+                        );
+                    }
+                }
+            }
+        }
+
+        // For each broken path, walk every path tile and show its
+        // shadow state. The first tile where the shadow entity either
+        // (a) is missing, (b) carries a different item, or (c) faces a
+        // direction that doesn't step toward the next path tile is the
+        // real culprit.
+        for b in breaks {
+            let Some(p) = affected.iter().find(|p| p.segment_id == b.segment_id) else {
+                continue;
+            };
+            eprintln!(
+                "  path tile walk for {} (len={}):",
+                p.segment_id, p.tiles.len()
+            );
+            for (i, &t) in p.tiles.iter().enumerate() {
+                let next = p.tiles.get(i + 1).copied();
+                match shadow.get(t) {
+                    None => {
+                        eprintln!(
+                            "    [{:>3}] ({:>3},{:>3}) <MISSING from shadow> next={:?}",
+                            i, t.0, t.1, next
+                        );
+                    }
+                    Some(e) => {
+                        let item_ok = e.carries.as_deref() == Some(p.item);
+                        let step_ok = if let Some(n) = next {
+                            let (dx, dy) = match e.direction {
+                                EntityDirection::North => (0, -1),
+                                EntityDirection::East => (1, 0),
+                                EntityDirection::South => (0, 1),
+                                EntityDirection::West => (-1, 0),
+                            };
+                            (t.0 + dx, t.1 + dy) == n
+                        } else {
+                            true
+                        };
+                        let flags = format!(
+                            "item_ok={} step_ok={}",
+                            if item_ok { "Y" } else { "N" },
+                            if step_ok { "Y" } else { "N" },
+                        );
+                        eprintln!(
+                            "    [{:>3}] ({:>3},{:>3}) {} dir={:?} carries={:?} seg={:?} {}",
+                            i, t.0, t.1, e.name, e.direction, e.carries, e.segment_id, flags
+                        );
+                    }
+                }
+            }
+        }
+        eprintln!("=== end walker veto dump ===");
+        eprintln!();
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_dump_filter(v: &str) -> (Option<(i32, i32)>, Option<(i32, i32)>) {
+    let mut seed = None;
+    let mut tile = None;
+    for part in v.split(';') {
+        if let Some(rest) = part.strip_prefix("seed:") {
+            if let Some((sx, sy)) = parse_pair(rest) {
+                seed = Some((sx, sy));
+            }
+        } else if let Some(rest) = part.strip_prefix("tile:") {
+            if let Some((tx, ty)) = parse_pair(rest) {
+                tile = Some((tx, ty));
+            }
+        }
+    }
+    (seed, tile)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_pair(s: &str) -> Option<(i32, i32)> {
+    let (a, b) = s.split_once(',')?;
+    let a = a.trim().parse().ok()?;
+    let b = b.trim().parse().ok()?;
+    Some((a, b))
 }
 
 // ---------------------------------------------------------------------------
@@ -1653,4 +1899,238 @@ fn find_external_feeder(
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bus::region_walker::{walk_affected, AffectedPath, ShadowView, WalkResult};
+    use crate::models::PlacedEntity;
+
+    fn belt(x: i32, y: i32, dir: EntityDirection, item: &str) -> PlacedEntity {
+        PlacedEntity {
+            name: "transport-belt".into(),
+            x,
+            y,
+            direction: dir,
+            carries: Some(item.into()),
+            ..Default::default()
+        }
+    }
+
+    /// Regression: `DeferredExit` was firing against the cluster's OWN
+    /// seeds. At seed (25,196) with cluster seeds [(25,196), (25,197)],
+    /// plastic-bar trunk's frontier exit landed on (25,197) — which is
+    /// a seed of *this* cluster, not an external crossing — but defer
+    /// fired anyway because the check only excluded `seeds[0]`.
+    ///
+    /// Fix: exclude all cluster seeds, not just the first.
+    #[test]
+    fn should_not_defer_on_own_cluster_seed() {
+        let pending: FxHashSet<(i32, i32)> = [(25, 196), (25, 197), (40, 100)]
+            .into_iter()
+            .collect();
+        let seeds: FxHashSet<(i32, i32)> = [(25, 196), (25, 197)].into_iter().collect();
+        assert!(
+            !should_defer_on_exit((25, 197), &pending, &seeds),
+            "exit on our own seed must not defer"
+        );
+        assert!(
+            !should_defer_on_exit((25, 196), &pending, &seeds),
+            "exit on our initial seed must not defer"
+        );
+    }
+
+    #[test]
+    fn should_defer_on_external_pending_crossing() {
+        let pending: FxHashSet<(i32, i32)> = [(25, 196), (40, 100)].into_iter().collect();
+        let seeds: FxHashSet<(i32, i32)> = [(25, 196)].into_iter().collect();
+        assert!(
+            should_defer_on_exit((40, 100), &pending, &seeds),
+            "exit on a pending crossing in a different cluster must defer"
+        );
+    }
+
+    #[test]
+    fn should_not_defer_on_non_crossing_tile() {
+        let pending: FxHashSet<(i32, i32)> = [(25, 196)].into_iter().collect();
+        let seeds: FxHashSet<(i32, i32)> = [(25, 196)].into_iter().collect();
+        assert!(
+            !should_defer_on_exit((99, 99), &pending, &seeds),
+            "exit on a non-crossing tile must not defer"
+        );
+    }
+
+    #[test]
+    fn trim_path_keeps_bbox_span_only() {
+        // Path runs east across 20 tiles; bbox covers x=10..=12. Trim
+        // should return exactly the near_bbox span (bbox + 1-tile
+        // perimeter), no runway on either side.
+        let tiles: Vec<(i32, i32)> = (0..20).map(|x| (x, 5)).collect();
+        let bbox = Rect { x: 10, y: 5, w: 3, h: 1 };
+        let trimmed = trim_path_near_bbox(&tiles, bbox).expect("in-range path");
+        // near_bbox covers x:9..=13 (bbox + 1-tile perimeter).
+        assert_eq!(trimmed.first(), Some(&(9, 5)));
+        assert_eq!(trimmed.last(), Some(&(13, 5)));
+    }
+
+    #[test]
+    fn trim_path_returns_none_when_far_from_bbox() {
+        let tiles: Vec<(i32, i32)> = (0..5).map(|x| (x, 5)).collect();
+        let bbox = Rect { x: 100, y: 100, w: 3, h: 3 };
+        assert!(trim_path_near_bbox(&tiles, bbox).is_none());
+    }
+
+    #[test]
+    fn trim_path_clamps_to_path_bounds() {
+        // Path is only 3 tiles long; bbox covers the whole thing.
+        let tiles = vec![(10, 5), (11, 5), (12, 5)];
+        let bbox = Rect { x: 10, y: 5, w: 3, h: 1 };
+        let trimmed = trim_path_near_bbox(&tiles, bbox).expect("overlapping");
+        assert_eq!(trimmed.first(), Some(&(10, 5)));
+        assert_eq!(trimmed.last(), Some(&(12, 5)));
+    }
+
+    /// Regression for the walker false-positive at advanced-circuit @5/s
+    /// from ores, seed (22,143):
+    ///
+    /// SAT proposed a correct UG tunnel for iron-ore at (21,143)→(23,143)
+    /// with iron-plate crossing at (22,143) on the surface. One tile past
+    /// the zone, at (25,143), sat an unresolved plastic-bar crossing —
+    /// a different trunk that will be SAT-solved later. Earlier trim
+    /// logic padded the tail by 2 tiles, so the trimmed path ended at
+    /// (26,143) in plastic-bar territory. The walker's target tile
+    /// carried the wrong item, so BFS reported Unreachable no matter
+    /// what SAT proposed inside the bbox.
+    ///
+    /// Fix: no tail padding — target is the last bbox-adjacent tile.
+    #[test]
+    fn trim_targets_last_bbox_tile_not_foreign_neighbour() {
+        // Iron-ore tap runs east through row 143. SAT zone is a 3x4 at
+        // (21,141), its east perimeter sits at x=24. One tile further
+        // east, at (25,143), an unresolved plastic-bar crossing has
+        // stamped a south-flowing belt onto the path. The walker must
+        // trim the path so its target is (24,143) (in-zone perimeter,
+        // carrying iron-ore) — not (25,143) or (26,143) which were the
+        // runway that pulled plastic-bar into view.
+        let existing: Vec<PlacedEntity> = [
+            belt(18, 143, EntityDirection::East, "iron-ore"),
+            belt(19, 143, EntityDirection::East, "iron-ore"),
+            belt(20, 143, EntityDirection::East, "iron-ore"),
+            belt(21, 143, EntityDirection::East, "iron-ore"),
+            belt(22, 143, EntityDirection::East, "iron-ore"),
+            belt(23, 143, EntityDirection::East, "iron-ore"),
+            belt(24, 143, EntityDirection::East, "iron-ore"),
+            // Foreign belt from another unresolved crossing.
+            belt(25, 143, EntityDirection::South, "plastic-bar"),
+            belt(26, 143, EntityDirection::South, "plastic-bar"),
+        ]
+        .into();
+
+        // SAT's proposal inside the 3x4 bbox — valid and complete.
+        let proposed = vec![
+            belt(21, 143, EntityDirection::East, "iron-ore"),
+            belt(22, 143, EntityDirection::East, "iron-ore"),
+            belt(23, 143, EntityDirection::East, "iron-ore"),
+        ];
+        let released: FxHashSet<(i32, i32)> =
+            proposed.iter().map(|e| (e.x, e.y)).collect();
+        let shadow = ShadowView::build(&existing, &released, &proposed);
+
+        // Full routed path, (18,143) through (26,143).
+        let full_path: Vec<(i32, i32)> = (18..=26).map(|x| (x, 143)).collect();
+        let bbox = Rect { x: 21, y: 141, w: 3, h: 4 };
+
+        let trimmed = trim_path_near_bbox(&full_path, bbox).expect("overlaps bbox");
+        // near_bbox covers x:20..=24 for this bbox — trim must end at
+        // (24,143), not extend into (25,143)/(26,143).
+        assert_eq!(trimmed.last(), Some(&(24, 143)));
+
+        let affected = AffectedPath {
+            segment_id: "tap:iron-ore",
+            tiles: trimmed,
+            item: "iron-ore",
+        };
+        assert!(
+            matches!(
+                walk_affected(&[affected], &shadow),
+                WalkResult::Passed
+            ),
+            "trimmed walker must accept SAT's local solution — the foreign belt at (25,143) is a different zone's problem"
+        );
+    }
+
+    /// Regression for the walker false-positive at advanced-circuit @5/s
+    /// from ores, seed (10,197):
+    ///
+    /// Walker was vetoing every SAT candidate at one crossing because
+    /// the tap's routed_path extended east into *another* unresolved
+    /// crossing (a plastic-bar trunk south-bound, 14 tiles away). BFS
+    /// couldn't cross the alien belt and blamed the local SAT.
+    ///
+    /// The fix: trim the path to a local window around the SAT bbox
+    /// before passing to the walker. The foreign belt is no longer on
+    /// the trimmed path, so the walker verifies only SAT's local
+    /// behaviour.
+    #[test]
+    fn trim_avoids_false_positive_from_foreign_belt_down_the_path() {
+        // Zone is a 1×1 at (10,5). SAT is solving a trunk tile that
+        // sits *adjacent* to the circuit tap (not on it) — tap runs
+        // east along y=6, bbox is at y=5. The tap remains untouched by
+        // the SAT proposal; it passes near the bbox perimeter but not
+        // through it.
+        //
+        // A plastic-bar south belt sits at (18,6), which the circuit
+        // tap's full path must cross 8 tiles east of the bbox. That
+        // tile represents an unresolved foreign crossing the tap will
+        // need to SAT-route in a later pass. If the walker checks the
+        // tap's full path it will stall at (18,6) and blame the local
+        // SAT — exactly the failure mode `trim_path_near_bbox` fixes.
+        let mut existing: Vec<PlacedEntity> = (0..21)
+            .filter(|x| *x != 18)
+            .map(|x| belt(x, 6, EntityDirection::East, "circuit"))
+            .collect();
+        existing.push(belt(18, 6, EntityDirection::South, "plastic-bar"));
+
+        // SAT proposal: single belt at (10,5), untouched row y=6.
+        let proposed = vec![belt(10, 5, EntityDirection::South, "cable")];
+        let released: FxHashSet<(i32, i32)> =
+            proposed.iter().map(|e| (e.x, e.y)).collect();
+        let shadow = ShadowView::build(&existing, &released, &proposed);
+
+        // The circuit tap's full routed path, from (0,6) to (20,6).
+        let full_path: Vec<(i32, i32)> = (0..21).map(|x| (x, 6)).collect();
+        let bbox = Rect { x: 10, y: 5, w: 1, h: 1 };
+
+        // Without trim: walker sees the entire path, BFS stalls at
+        // (18,6)'s plastic-bar belt, reports Unreachable.
+        let full_affected = AffectedPath {
+            segment_id: "tap:circuit",
+            tiles: &full_path,
+            item: "circuit",
+        };
+        assert!(
+            matches!(
+                walk_affected(&[full_affected], &shadow),
+                WalkResult::Broken { .. }
+            ),
+            "control: untrimmed walker must fail so the trim regression is meaningful"
+        );
+
+        // With trim: walker sees only the local window and the foreign
+        // belt is no longer on the path.
+        let trimmed = trim_path_near_bbox(&full_path, bbox).expect("overlaps bbox");
+        let trimmed_affected = AffectedPath {
+            segment_id: "tap:circuit",
+            tiles: trimmed,
+            item: "circuit",
+        };
+        assert!(
+            matches!(
+                walk_affected(&[trimmed_affected], &shadow),
+                WalkResult::Passed
+            ),
+            "trim must drop the foreign belt, allowing the walker to pass"
+        );
+    }
 }

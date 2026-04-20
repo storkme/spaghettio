@@ -134,6 +134,7 @@ Layout bugs are easy to get wrong — zero validation errors can mean the check 
 | Snapshot format | `crates/core/src/snapshot.rs` + [`docs/layout-snapshot-debugger.md`](docs/layout-snapshot-debugger.md) |
 | Belt lane physics | [`docs/factorio-mechanics.md`](docs/factorio-mechanics.md) |
 | Ghost pipeline contracts | [`docs/ghost-pipeline-contracts.md`](docs/ghost-pipeline-contracts.md) |
+| Walker-veto debugging | [`docs/walker-veto-debugging.md`](docs/walker-veto-debugging.md) |
 | Build commands | [`docs/build-systems.md`](docs/build-systems.md) |
 | Full source file list | [`docs/file-reference.md`](docs/file-reference.md) |
 
