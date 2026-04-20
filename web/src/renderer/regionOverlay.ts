@@ -1,7 +1,7 @@
-import { Container, Graphics, Text, TextStyle } from "pixi.js";
+import { Container, Graphics } from "pixi.js";
 import { TILE_PX, itemColor } from "./entities";
 import type { LayoutResult, LayoutRegion, EntityDirection, RegionKind, RegionPort, TraceEvent } from "../engine";
-import { classifyRegion, kindColor, classColor, classLabel, type RegionClassification } from "./regionClassify";
+import { classifyRegion, kindColor, classColor, type RegionClassification } from "./regionClassify";
 
 type GhostSpecRoutedEvent = Extract<TraceEvent, { phase: "GhostSpecRouted" }>;
 
@@ -102,20 +102,6 @@ interface LayoutRegionWithPorts {
 
 const INPUT_COLOR = 0x50c050;  // green
 const OUTPUT_COLOR = 0xd04040; // red
-
-const LABEL_STYLE = new TextStyle({
-  fontFamily: "monospace",
-  fontSize: 10,
-  fill: 0xffffff,
-  dropShadow: { color: 0x000000, distance: 1, blur: 2, alpha: 0.8 },
-});
-
-const PORT_LABEL_STYLE = new TextStyle({
-  fontFamily: "monospace",
-  fontSize: 9,
-  fill: 0xffffff,
-  dropShadow: { color: 0x000000, distance: 1, blur: 2, alpha: 0.9 },
-});
 
 // ---------------------------------------------------------------------------
 // Arrow drawing helper
@@ -230,16 +216,6 @@ function pairRegionPorts(
   return pairs;
 }
 
-/** Pick a label "side" for a port based on its flow direction. */
-function portEdgeHint(port: RegionPort): "N" | "S" | "E" | "W" {
-  switch (port.point.direction) {
-    case "North": return "N";
-    case "South": return "S";
-    case "East":  return "E";
-    case "West":  return "W";
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -295,13 +271,9 @@ export function renderRegionOverlayDetailed(layout: LayoutResult, events?: reado
     rect.setStrokeStyle({ width: 2, color: strokeColor, alpha: 0.85 });
     rect.rect(rx, ry, rw, rh).stroke();
     layer.addChild(rect);
-
-    // Dimension + class label at top-left corner
-    const labelText = `${region.width}×${region.height}  ${classLabel(classification.cls)}`;
-    const label = new Text({ text: labelText, style: LABEL_STYLE });
-    label.x = rx + 3;
-    label.y = ry + 2;
-    layer.addChild(label);
+    // The "4×1 no-ports" corner label used to sit here. Region dimensions
+    // are self-evident from the bbox; the class is available on the
+    // `classification.cls` field if a future panel wants to show it.
 
     // Boundary ports — draw input→output dashed connectors first so the
     // port markers and arrows sit on top.
@@ -335,31 +307,10 @@ export function renderRegionOverlayDetailed(layout: LayoutResult, events?: reado
       drawArrow(ag, px, py, port.point.direction, arrowColor);
       layer.addChild(ag);
 
-      const ioTag = port.io === "Input" ? "IN" : "OUT";
-      const itemAbbr = port.item ? port.item.slice(0, 3) : "?";
-      const portLabel = new Text({
-        text: `${itemAbbr} ${ioTag}`,
-        style: PORT_LABEL_STYLE,
-      });
-      switch (portEdgeHint(port)) {
-        case "N":
-          portLabel.x = px - portLabel.width / 2;
-          portLabel.y = py - TILE_PX * 0.9;
-          break;
-        case "S":
-          portLabel.x = px - portLabel.width / 2;
-          portLabel.y = py + TILE_PX * 0.5;
-          break;
-        case "W":
-          portLabel.x = px - TILE_PX * 1.2;
-          portLabel.y = py - 5;
-          break;
-        case "E":
-          portLabel.x = px + TILE_PX * 0.5;
-          portLabel.y = py - 5;
-          break;
-      }
-      layer.addChild(portLabel);
+      // The "ele IN" / "ele OUT" per-port text labels used to sit around
+      // each marker. They overlapped whenever a region had >1 port on the
+      // same edge. Port identity (item + IO) is now available via hover
+      // in the inspector.
     }
   }
 
