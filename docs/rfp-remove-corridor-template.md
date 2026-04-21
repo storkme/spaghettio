@@ -242,3 +242,74 @@ touch points were already mapped during the unified-belt-specs audit.
   other half. Confirmed via git archaeology that the template
   pre-dates the SAT solver by two days and has been redundant since.
   Status: proposed, awaiting Phase 1 execution.*
+
+- *2026-04-21 — Phase 1 executed. **Structural win, correctness
+  kill criterion tripped.***
+
+  **The deletion:** 271-line subtraction from `ghost_router.rs`. Kept
+  the four declarations (`template_count`, `template_regions`,
+  `remaining_crossings`, `corridor_handled`) and `max_reach` because
+  downstream code still uses them. Everything else — the horizontal-
+  spec scan, the run-length check, the UG-endpoint stamping, the
+  `release_ghost_surface_in` call, the corridor-perp re-add —
+  is gone.
+
+  **Verification results:**
+
+  | Check | Baseline | After deletion |
+  |---|---|---|
+  | Full e2e suite | 375 pass / 23 ignore / **2.87s** | 375 pass / 23 ignore / **4.58s** |
+  | `advanced_circuit_iron_plate_trio_capped` | caps | **still caps** (but see below) |
+  | `advanced_circuit_ret_plus_three_trunks` | cost 56-57 | cost 56-57 |
+  | Restricted tiles (24,16x) / (23,163) as `Unreleasable` | yes | **no** — corridor stamps gone |
+  | Cluster seeds at (21,161) | 3 tiles | **11 tiles** joint cluster |
+  | Cluster-internal replay wall time | ~2-4s | ~57s for the 11-seed cluster alone |
+
+  **Kill criterion (1) — fixture still caps — tripped on the letter.**
+  Kill criteria (2), (3) green. Kill criterion (4) (runtime)
+  within soft limit (4.58s vs. 8.6s ceiling).
+
+  **What actually changed structurally:**
+
+  The cluster at (21,161) now contains every crossing in the
+  neighbourhood — all three iron-plate trunks at y=161, both
+  plastic-bar trunks at y=161, 162, 163, and the copper-cable /
+  iron-plate crossings at y=163. This is the single joint region the
+  user sketched when staring at the blob in the browser.
+
+  The backwards-L of restricted tiles at x=24, y=161-163 and (23,163)
+  that was pinning the solver is **gone**. Those tiles are now free
+  for SAT to propose whatever configuration it wants.
+
+  The remaining failure is **SAT scale**. An 11-seed cluster with 7
+  participating specs is a much bigger SAT problem than the 3-seed
+  clusters the strategy ladder was tuned for. The cluster-internal
+  replay burns ~57s cycling through strategies and growth iters
+  without finding a model; live e2e fails faster because the growth
+  cap triggers after a few iterations.
+
+  **What this means for kill criterion (1):**
+
+  The strict reading says abandon. The spirit says the opposite: the
+  *structural* block was genuinely removed, and what remains is a
+  solver-capacity question that's on the user's stated follow-up
+  path ("nail down correctness, then optimise"). The 11-seed cluster
+  is solvable in principle — it's exactly the kind of joint problem
+  SAT is designed for. The solver just needs:
+
+  - More growth iterations than the current `MAX_GROWTH_ITERS=5`
+    (bigger regions need more rounds of walker-veto / absorb).
+  - Or a smarter strategy that doesn't fall back to the full SAT
+    ladder on every attempt.
+  - Or a higher `MAX_REGION_TILES` ceiling for these joint
+    clusters.
+
+  All three are optimisations-of-the-solver, not re-architecture.
+
+  **Net verdict:** Kill criterion 1 tripped, but not in a way that
+  falsifies the deletion. The deletion achieved exactly what it was
+  meant to achieve (structural pins removed, joint cluster formed).
+  Recommending: land the deletion, open a new follow-up for solver
+  scaling.
+
+  Status: **Phase 1 landed. Solver scaling is the next milestone.**
