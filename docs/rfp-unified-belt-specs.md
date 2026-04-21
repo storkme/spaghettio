@@ -286,3 +286,74 @@ Remove obsolete helpers, unused spec-type predicates, dead
      fixture. If it's not bent, we'll add a waypoint hint.
 
   Ready to start Phase 1.*
+
+- *2026-04-21 — Phase 1 implemented as a post-routing unification pass
+  in `ghost_router.rs` (66-line diff, well under the 800-LOC scope
+  ceiling). Single-tap lanes now present to the junction solver as
+  unified `flow:{item}:{x}` specs with bent paths that include both
+  the trunk column and the east-going tap run.*
+
+  **Verification:**
+
+  - Full e2e suite: **375 passed, 23 ignored** — no regressions.
+  - Region-fixture harness: both committed fixtures pass (`iron_plate_trio_capped`
+    still correctly-capped against its frozen replay; `ret_plus_three_trunks`
+    still solves cleanly).
+  - Live capture from the motivating URL shows 14 of 15 solid lanes now
+    unified (1 multi-tap lane correctly skipped per Phase 1 scope).
+
+  **But the capped fixture still caps in the live layout.** Probed via
+  a throwaway `_debug_p1_unified.json` fixture captured post-unification
+  with `expected.mode = "solve"`: result is `None (capped)`. Kill
+  criterion (1) is tripped on the letter, but the failure mode has
+  changed in a revealing way:
+
+  | Failure mode | Before Phase 1 | After Phase 1 |
+  |---|---|---|
+  | Iterations that triggered item-conflict-check | many | none |
+  | Iterations that reached SAT + walker | few | all |
+  | Walker veto break tiles | clustered on `(23,162)`, `(24,161)` (handoff pin) | clustered on `(23,157)` / `(23,158)` / `(23,160)` (path-start BFS) |
+
+  The old pin was the trunk+tap handoff claiming `(23,161)` as
+  iron-plate-south from both sides while the ret claimed it as
+  ec-west. That conflict is **gone** — the unified `flow:iron-plate:23`
+  spec holds the full bent path with no handoff, so the item-conflict
+  check no longer fires on this tile.
+
+  The new blocker is downstream: the walker trims each affected path
+  to `near_bbox` (`region_walker.rs:~180`), and for the tap portion of
+  the unified flow the trimmed path ends at `(25, 162)`. That tile is
+  a plastic-bar trunk belt in the shadow — because the corridor
+  template earlier stamped an iron-plate UG pair `(24,162)→(27,162)`
+  that tunnels *under* the plastic-bar. Iron-plate emerges at
+  `(27, 162)`, but `(27, 162)` is outside `near_bbox` so it isn't in
+  the trimmed path. The walker's BFS cannot reach `(25, 162)` in the
+  iron-plate belt graph (iron-plate isn't there — it's underground),
+  and the veto fires.
+
+  So **the path data is stale with respect to the corridor template's
+  interventions**. Unification removed the spec-level pin; the
+  remaining blocker is the corridor-template-vs-model coherence
+  problem we've now hit from three different angles (Phase 2 of the
+  veto-directed-growth RFP, the analysis of restricted tiles in the
+  browser, and now this).
+
+  **Honest assessment:**
+
+  - Phase 1 delivered on its direct goal (solver sees unified flows,
+    item-conflict pin removed).
+  - It did not solve the fixture, because the stale-path issue is
+    orthogonal and exists independently of the spec decomposition.
+  - Strictly per kill criterion (1), A1 should be abandoned.
+  - In spirit, the unification is a genuine improvement that should be
+    retained even if the RFP doesn't fully discharge its motivating
+    fixture — the item-conflict elimination will help *other* tight
+    clusters where the handoff pin was the sole blocker.
+
+  Phases 2-4 (multi-tap, returns, cleanup) are still valid follow-up
+  work but don't affect the capped fixture directly.
+
+  Status: **Phase 1 landed; motivating fixture not solved**. Pause for
+  user direction before either (a) pivoting to the corridor-template
+  coherence problem as a new RFP, (b) proceeding with Phase 2-4, or
+  (c) reverting Phase 1 per strict kill-criterion reading.

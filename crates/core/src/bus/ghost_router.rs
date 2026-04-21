@@ -1326,7 +1326,7 @@ pub fn route_bus_ghost(
         .iter()
         .map(|s| (s.key.clone(), s.item.clone()))
         .collect();
-    let spec_exit_dirs: FxHashMap<String, EntityDirection> = specs
+    let mut spec_exit_dirs: FxHashMap<String, EntityDirection> = specs
         .iter()
         .filter_map(|s| s.exit_dir.map(|d| (s.key.clone(), d)))
         .collect();
@@ -1347,6 +1347,70 @@ pub fn route_bus_ghost(
                 .unwrap_or(BeltTier::Yellow),
         );
     }
+
+    // -------------------------------------------------------------------------
+    // Phase 1 of `docs/rfp-unified-belt-specs.md`: unify single-tap
+    // trunk+tap flows into one `flow:{item}:{x}` entry in routed_paths
+    // and the three spec_* maps. Presents the junction solver with a
+    // single coherent flow rather than two specs that pin the handoff
+    // tile from both sides (the root cause of
+    // `advanced_circuit_iron_plate_trio_capped`). Multi-tap lanes stay
+    // decomposed — Phase 2 covers them via per-splitter-branch specs.
+    //
+    // Materialisation already ran (line 794-ish) using the original
+    // trunk/tap keys, so entity stamping is unaffected. The corridor
+    // template also already ran and sees the decomposed view; only the
+    // cluster-formation + junction-solve phase downstream sees the
+    // unified keys.
+    for lane in lanes {
+        if lane.is_fluid || lane.tap_off_ys.len() != 1 {
+            continue;
+        }
+        let x = lane.x;
+        let tap_y = lane.tap_off_ys[0];
+        let trunk_key = format!("trunk:{}:{}", lane.item, x);
+        let tap_key = format!("tap:{}:{}:{}", lane.item, x, tap_y);
+
+        let Some(trunk_path) = routed_paths.get(&trunk_key).cloned() else {
+            continue;
+        };
+        let Some(tap_path) = routed_paths.get(&tap_key).cloned() else {
+            continue;
+        };
+
+        // Trunk ends at (x, tap_y-1) because tap_y is in the trunk's
+        // skip_ys; tap starts at (x, tap_y) because single-tap sets
+        // is_last=true which forces start_x=x. The two sequences are
+        // adjacent with no overlap, so direct concatenation produces
+        // the full bent-belt path.
+        let mut unified_path = trunk_path;
+        unified_path.extend(tap_path);
+
+        let unified_key = format!("flow:{}:{}", lane.item, x);
+        routed_paths.insert(unified_key.clone(), unified_path);
+        routed_paths.remove(&trunk_key);
+        routed_paths.remove(&tap_key);
+
+        let tier = spec_belt_tiers
+            .remove(&tap_key)
+            .or_else(|| spec_belt_tiers.remove(&trunk_key))
+            .unwrap_or(BeltTier::Yellow);
+        spec_belt_tiers.remove(&trunk_key);
+        spec_belt_tiers.insert(unified_key.clone(), tier);
+
+        spec_items.remove(&trunk_key);
+        spec_items.remove(&tap_key);
+        spec_items.insert(unified_key.clone(), lane.item.clone());
+
+        // exit_dir propagates from the tap (east at the bus-edge
+        // terminus) since that's where the unified flow exits the
+        // region. The trunk had no exit_dir of its own.
+        if let Some(dir) = spec_exit_dirs.remove(&tap_key) {
+            spec_exit_dirs.insert(unified_key, dir);
+        }
+        spec_exit_dirs.remove(&trunk_key);
+    }
+
     // Build the obstacle set seen by junction strategies. The narrow
     // `hard` set only covers row-template machines and fluid lanes;
     // SAT (and any future strategy) needs the full picture so it
