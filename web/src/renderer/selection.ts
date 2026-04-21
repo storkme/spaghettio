@@ -92,6 +92,10 @@ export function createSelectionController(
 
   const onDown = (e: PointerEvent) => {
     if (e.button !== 0 || !e.shiftKey) return;
+    const w = toWorld(e.clientX, e.clientY);
+    const tx = Math.floor(w.x / TILE_PX);
+    const ty = Math.floor(w.y / TILE_PX);
+    if (!tileMap.has(`${tx},${ty}`)) return;
     dragStart = { sx: e.clientX, sy: e.clientY };
     isDragging = false;
   };
@@ -116,12 +120,14 @@ export function createSelectionController(
       selected = collectEntities(e.clientX, e.clientY);
       redrawBorders(selected);
       onSelectionChange(selected);
-    } else {
-      // Plain click — clear selection (entity click events still fire normally)
+    } else if (dragStart !== null) {
+      // Shift was held but drag threshold not reached — Shift+click on empty
+      // space. Clear selection; entity clicks are handled by their own handlers.
       selected = [];
       borderG.clear();
       onSelectionChange([]);
     }
+    // Plain click/drag with no Shift: pure navigation — leave selection alone.
     dragStart = null;
     isDragging = false;
   };
