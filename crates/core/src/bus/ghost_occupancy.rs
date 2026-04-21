@@ -213,6 +213,7 @@ impl Occupancy {
 
     /// True if the tile holds a "permanent" claim (anything other than a
     /// `GhostSurface`). Templates and SAT must not stamp over these.
+    #[allow(dead_code)] // API surface; last caller was the corridor template pre-pass
     pub fn is_permanent(&self, tile: (i32, i32)) -> bool {
         self.claims.get(&tile).is_some_and(|c| c.is_permanent())
     }
@@ -357,6 +358,7 @@ impl Occupancy {
     /// Used by SAT before claiming tiles for its own solution.
     ///
     /// Returns the number of claims released.
+    #[allow(dead_code)] // API surface; last caller was the corridor template pre-pass
     pub fn release_ghost_surface_in(&mut self, zone: &Rect) -> usize {
         let to_remove: Vec<(i32, i32)> = self
             .claims
