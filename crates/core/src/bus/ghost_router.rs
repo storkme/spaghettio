@@ -1568,6 +1568,16 @@ pub fn route_bus_ghost(
                 Some(crate::bus::ghost_occupancy::Claim::Permanent { .. })
             );
         }
+        if seg.starts_with("balancer:") {
+            // Keep only if Occupancy still holds a Permanent claim.
+            // A junction crossing template that stamped over a simple
+            // balancer belt releases its Permanent claim; drop the
+            // stale entity so it doesn't overlap the crossing entity.
+            return matches!(
+                occ_claim,
+                Some(crate::bus::ghost_occupancy::Claim::Permanent { .. })
+            );
+        }
         true
     });
 
