@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::models::SolverResult;
-use crate::bus::lane_order::optimize_lane_order;
+use crate::bus::lane_order::{active_range, optimize_lane_order};
 use crate::bus::placer::RowSpan;
 
 const LANE_CAPACITY_TABLE: &[(&str, f64)] = &[
@@ -304,10 +304,8 @@ pub fn plan_bus_lanes(
     // Optimize lane left-to-right ordering
     lanes = optimize_lane_order(&lanes, row_spans);
 
-    // Assign x-columns with 1-tile spacing
-    for (i, lane) in lanes.iter_mut().enumerate() {
-        lane.x = (i + 1) as i32;
-    }
+    // Assign x-columns, sharing columns between lanes with non-overlapping y-ranges.
+    pack_lane_columns(&mut lanes, row_spans);
 
     // Fill in lane_xs on each family
     for (fid, fam) in families.iter_mut().enumerate() {
@@ -629,13 +627,90 @@ fn find_tap_off_ys(lane: &BusLane, row_spans: &[RowSpan]) -> Vec<i32> {
     tap_ys
 }
 
+/// Assign x-columns to lanes by bin-packing non-overlapping y-ranges into
+/// shared columns. Replaces the old sequential `lane.x = (i+1)` loop.
+///
+/// Family lanes (same `family_id`) must occupy contiguous columns; they are
+/// assigned as a block. Solo lanes are packed greedily into the lowest
+/// available column whose existing tenants don't overlap in y.
+fn pack_lane_columns(lanes: &mut [BusLane], row_spans: &[RowSpan]) {
+    // col_occ[x-1] → committed (y_lo, y_hi) intervals for column x.
+    let mut col_occ: Vec<Vec<(i32, i32)>> = Vec::new();
+
+    fn ensure(col_occ: &mut Vec<Vec<(i32, i32)>>, x: i32) {
+        while col_occ.len() < x as usize {
+            col_occ.push(Vec::new());
+        }
+    }
+    fn conflicts(slots: &[(i32, i32)], lo: i32, hi: i32) -> bool {
+        slots.iter().any(|&(a, b)| lo <= b && a <= hi)
+    }
+    // Effective y-range: union of active_range and family_balancer_range.
+    fn eff(lane: &BusLane, row_spans: &[RowSpan]) -> (i32, i32) {
+        let (lo, hi) = active_range(lane, row_spans);
+        if let Some((flo, fhi)) = lane.family_balancer_range {
+            (lo.min(flo), hi.max(fhi))
+        } else {
+            (lo, hi)
+        }
+    }
+
+    let mut i = 0;
+    while i < lanes.len() {
+        if let Some(fid) = lanes[i].family_id {
+            // Collect the contiguous family block (optimizer guarantees adjacency).
+            let block_start = i;
+            while i < lanes.len() && lanes[i].family_id == Some(fid) {
+                i += 1;
+            }
+            let m = i - block_start;
+
+            // Combined y-range across all family members.
+            let (y_lo, y_hi) = (block_start..i).fold((i32::MAX, i32::MIN), |(lo, hi), k| {
+                let (a, b) = eff(&lanes[k], row_spans);
+                (lo.min(a), hi.max(b))
+            });
+
+            // Find first x where m consecutive columns are all free.
+            let base = 'find: {
+                let mut x = 1i32;
+                loop {
+                    ensure(&mut col_occ, x + m as i32 - 1);
+                    if (0..m as i32).all(|d| !conflicts(&col_occ[(x + d - 1) as usize], y_lo, y_hi)) {
+                        break 'find x;
+                    }
+                    x += 1;
+                }
+            };
+
+            for k in 0..m {
+                let cx = base + k as i32;
+                lanes[block_start + k].x = cx;
+                ensure(&mut col_occ, cx);
+                col_occ[(cx - 1) as usize].push((y_lo, y_hi));
+            }
+        } else {
+            let (y_lo, y_hi) = eff(&lanes[i], row_spans);
+            let x = {
+                let mut x = 1i32;
+                loop {
+                    ensure(&mut col_occ, x);
+                    if !conflicts(&col_occ[(x - 1) as usize], y_lo, y_hi) {
+                        break x;
+                    }
+                    x += 1;
+                }
+            };
+            lanes[i].x = x;
+            col_occ[(x - 1) as usize].push((y_lo, y_hi));
+            i += 1;
+        }
+    }
+}
+
 /// Return the total bus width needed for the given lanes.
 pub fn bus_width_for_lanes(lanes: &[BusLane]) -> i32 {
-    if lanes.is_empty() {
-        2
-    } else {
-        (lanes.len() + 2) as i32
-    }
+    lanes.iter().map(|l| l.x).max().map_or(2, |max_x| max_x + 2)
 }
 
 
@@ -684,6 +759,7 @@ mod tests {
     fn test_bus_width_for_lanes_single() {
         let lane = BusLane {
             item: "iron-ore".to_string(),
+            x: 1,
             ..Default::default()
         };
         assert_eq!(bus_width_for_lanes(&[lane]), 3);
@@ -692,9 +768,9 @@ mod tests {
     #[test]
     fn test_bus_width_for_lanes_three() {
         let lanes = vec![
-            BusLane { item: "iron-ore".to_string(), ..Default::default() },
-            BusLane { item: "copper-ore".to_string(), ..Default::default() },
-            BusLane { item: "coal".to_string(), ..Default::default() },
+            BusLane { item: "iron-ore".to_string(), x: 1, ..Default::default() },
+            BusLane { item: "copper-ore".to_string(), x: 2, ..Default::default() },
+            BusLane { item: "coal".to_string(), x: 3, ..Default::default() },
         ];
         assert_eq!(bus_width_for_lanes(&lanes), 5);
     }

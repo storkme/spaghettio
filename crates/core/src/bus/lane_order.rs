@@ -10,37 +10,39 @@ use rustc_hash::FxHashMap;
 use crate::bus::lane_planner::BusLane;
 use crate::bus::placer::RowSpan;
 
+/// The y-range a lane is active over: from the earliest producer output or
+/// source_y down to the deepest tap-off or producer output.
+pub(crate) fn active_range(lane: &BusLane, row_spans: &[RowSpan]) -> (i32, i32) {
+    let all_p = lane.all_producers();
+    if !all_p.is_empty() && !lane.consumer_rows.is_empty() {
+        let start = all_p.iter()
+            .map(|&p| row_spans[p].output_belt_y)
+            .min()
+            .unwrap();
+        let end = if !lane.tap_off_ys.is_empty() {
+            lane.tap_off_ys.iter().copied().max().unwrap()
+        } else {
+            start
+        };
+        (start, end)
+    } else if !lane.tap_off_ys.is_empty() {
+        let end = lane.tap_off_ys.iter().copied().max().unwrap();
+        (lane.source_y, end)
+    } else {
+        let end = all_p.iter()
+            .map(|&p| row_spans[p].output_belt_y)
+            .max()
+            .unwrap_or(lane.source_y);
+        (lane.source_y, end)
+    }
+}
+
 /// Score a proposed lane ordering: the number of tap-off rays that have
 /// to cross other lanes' active ranges. Lower is better. Also penalises
 /// family-template input landing columns that overlap lanes to the right
 /// of the family block, pushing family blocks rightmost.
 pub(crate) fn score_lane_ordering(ordered: &[BusLane], row_spans: &[RowSpan]) -> usize {
     let mut score = 0;
-
-    fn active_range(lane: &BusLane, row_spans: &[RowSpan]) -> (i32, i32) {
-        let all_p = lane.all_producers();
-        if !all_p.is_empty() && !lane.consumer_rows.is_empty() {
-            let start = all_p.iter()
-                .map(|&p| row_spans[p].output_belt_y)
-                .min()
-                .unwrap();
-            let end = if !lane.tap_off_ys.is_empty() {
-                lane.tap_off_ys.iter().copied().max().unwrap()
-            } else {
-                start
-            };
-            (start, end)
-        } else if !lane.tap_off_ys.is_empty() {
-            let end = lane.tap_off_ys.iter().copied().max().unwrap();
-            (lane.source_y, end)
-        } else {
-            let end = all_p.iter()
-                .map(|&p| row_spans[p].output_belt_y)
-                .max()
-                .unwrap_or(lane.source_y);
-            (lane.source_y, end)
-        }
-    }
 
     let ranges: Vec<(i32, i32)> = ordered.iter().map(|ln| active_range(ln, row_spans)).collect();
 
