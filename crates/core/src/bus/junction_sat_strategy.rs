@@ -778,7 +778,15 @@ fn next_downstream(
             // UG-in: scan forward up to max_reach tiles to find the paired UG-out.
             let (dx, dy) = dir_delta(e.direction);
             let mut results = Vec::new();
-            for dist in 1..=max_reach as i32 {
+            // Scan up to `max_reach + 1` tiles away — the SAT encoder
+            // allows a UG pair to span `max_reach + 1` positions apart
+            // (up to `max_reach` consecutive hidden-middle tiles; see
+            // `sat.rs::encode_underground`'s max-reach clause). Scanning
+            // only `max_reach` misses the paired endpoint when SAT picks
+            // a maximum-span UG, which silently prunes the whole spec's
+            // placement and manifests as "SAT solved but one item is
+            // missing from the final model."
+            for dist in 1..=(max_reach as i32 + 1) {
                 let nx = e.x + dx * dist;
                 let ny = e.y + dy * dist;
                 if let Some(&ni) = by_tile.get(&(nx, ny)) {
@@ -811,7 +819,15 @@ fn next_upstream(
             // UG-out: scan backward to find the paired UG-in.
             let (dx, dy) = dir_delta(opposite(e.direction));
             let mut results = Vec::new();
-            for dist in 1..=max_reach as i32 {
+            // Scan up to `max_reach + 1` tiles away — the SAT encoder
+            // allows a UG pair to span `max_reach + 1` positions apart
+            // (up to `max_reach` consecutive hidden-middle tiles; see
+            // `sat.rs::encode_underground`'s max-reach clause). Scanning
+            // only `max_reach` misses the paired endpoint when SAT picks
+            // a maximum-span UG, which silently prunes the whole spec's
+            // placement and manifests as "SAT solved but one item is
+            // missing from the final model."
+            for dist in 1..=(max_reach as i32 + 1) {
                 let nx = e.x + dx * dist;
                 let ny = e.y + dy * dist;
                 if let Some(&ni) = by_tile.get(&(nx, ny)) {
