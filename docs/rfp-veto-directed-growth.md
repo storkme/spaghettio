@@ -201,4 +201,103 @@ behaviour; can land separately from the correctness change.
 
 ## Decision log
 
-- *2026-04-21 — RFP drafted. Spike not yet run. Status: proposed.*
+- *2026-04-21 — RFP drafted. Status: proposed.*
+- *2026-04-21 — Phase 0 spike run on `advanced_circuit_iron_plate_trio_capped`.*
+
+  **Findings:**
+
+  1. **63/63 breaks are `Unreachable`.** Zero `MissingEntity`, zero
+     `ItemMismatch`. The other `BreakReason` variants are unreached code
+     paths for this fixture.
+
+  2. **`WalkBreak.tile` is the BFS start, not the BFS dead-end.**
+     `region_walker.rs:198-211` reports the first path tile where the
+     shadow carries the expected item; if BFS from there fails to reach
+     the path endpoint, it's returned as-is. So the tile is "where we
+     tried to start walking," not "where we ran out of road." Example
+     from iter 0: `ret:electronic-circuit:2:161` has path
+     `(25,161) → (24,161) → (23,161) → (22,161) → (21,161) → (20,161)`;
+     BFS starts at `(24,161)` (first path tile carrying ec), reaches
+     only `{(24,161), (27,161)}` in the ec belt graph, reports
+     `first_bad=(24,161)` — which is both start *and* dead-end in this
+     case by coincidence. Other cases differ: `tap:iron-plate:23:162`
+     reports `first_bad=(23,162)` (start), but the actual reachability
+     gap is at path tile `(25,162)` (plastic-bar blocks the tap's
+     endpoint).
+
+  3. **The existing diagnostic path-tile-walk flags hidden-middle UG
+     tiles as `item_ok=N`** (e.g. plastic-bar tile inside a
+     corridor UG tunnel), which is *not* a real break — the walker's
+     BFS crosses UG hidden-middles correctly. So the dump's
+     "FIRST BAD" line isn't a usable signal without filtering.
+
+  4. **However:** of 14 unique `(segment, first_bad)` pairs, **13 sit
+     outside the initial bbox `(21..24, 161)`**. Only `(24,161)` is
+     inside. This means `WalkBreak.tile` *alone* is a useful growth
+     direction most of the time — naively absorbing it grows the bbox
+     toward the paths that are failing, even without extracting the
+     BFS frontier.
+
+  **Revised plan:** Phase 1 (walker plumbing for BFS dead-end) is
+  **downgraded from required to optional**. Simplest testable change
+  is Phase 2 with just `WalkBreak.tile` absorption, falling back to
+  uniform growth when no new tiles would be added (covers the
+  `(24,161)` case without oscillation). If Phase 2 lands green, skip
+  Phase 1 entirely. If it caps specifically on `WalkBreak.tile`-already-
+  in-bbox cases, come back and add the frontier extraction.
+
+  Kill criterion (4) "Spike signal quality fails" is **not tripped** —
+  the signal is usable. Proceeding to Phase 2.
+
+- *2026-04-21 — Phase 2 implemented and measured. Kill criterion (1) tripped.*
+
+  **Implementation:** `TryOutcome::Continue` now carries the union of
+  walker break tiles accumulated across all vetoed strategies in the
+  iter. The outer loop unions them across primary + 4 variants, then
+  calls `compute_absorb_deltas` to pick the **single closest** outlier
+  and grow `expand_bbox` just enough to include it. Uniform `+1` is
+  retained as fallback when no tile sits outside the bbox. First
+  implementation used "enclose every target" — it overshot `MAX_REGION_TILES`
+  immediately (77-tile bbox at iter 5), so was swapped for one-at-a-time
+  absorption.
+
+  **Result on the capped fixture:**
+
+  | Config | Outcome |
+  |---|---|
+  | Default caps (64 tiles, 5 iters) | Still caps at iter 5, 70 tiles, `tile_cap` |
+  | Diagnostic (128 tiles, 10 iters) | Still caps at iter 10, 144 tiles, `tile_cap` |
+  | Diagnostic (512 tiles, 20 iters) | Still caps at iter 10, 144 tiles, `bbox_expand_failed` — balancer protection halted growth |
+
+  Growth kept finding new veto tiles at the expanding perimeter and
+  kept absorbing them. The region reached 12×12 with no converging
+  solution, then hit a balancer wall. **Raising the tile cap does not
+  rescue this fixture.** Theory "the right tiles are reachable via
+  smarter growth within current tile budget" is **falsified**.
+
+  **Why:** two reinforcing factors.
+
+  1. `WalkBreak.tile` being BFS-start (not dead-end) means absorbing
+     it sometimes grows in the wrong direction. Phase 0 predicted this
+     mattered for 1 of 14 cases, but compounded across 10+ iters the
+     misdirected growth matters more than predicted.
+
+  2. The paired `advanced_circuit_ret_plus_three_trunks` cluster
+     already committed 101 `unreleasable_obstacles` into this cluster's
+     context — most notably the corridor-template's
+     `(24,161)→(27,161)` electronic-circuit UG. No matter how big the
+     region grows, that UG's placement is fixed. SAT cannot propose
+     a longer ec UG that would actually unblock the trunk crossings.
+
+  **Regressions:** none. Full e2e suite (375 passed) and paired
+  passing fixture (cost 56, unchanged modulo cheaper-candidate noise)
+  all green.
+
+  **Decision:** RFP **abandoned** as the route to solving the capped
+  fixture. The Phase 2 code is retained because it is cheap, correct,
+  and a mild improvement to growth targeting for all clusters — it
+  just isn't sufficient for this class of cluster. Follow-up work
+  must target the corridor-template vs cluster-solver ordering
+  problem identified in factor (2). File a new RFP for that.
+
+  Status: **abandoned, Phase 2 code retained**.

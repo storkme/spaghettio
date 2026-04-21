@@ -1022,12 +1022,19 @@ pub fn solve_crossing(
         // Variants run sequentially (SAT on these zones is low-ms) and
         // order is fixed so the trace is deterministic.
         let mut candidates: Vec<(u32, JunctionSolution, String)> = Vec::new();
+        // Union of walker break tiles across every strategy × variant
+        // on this iter. Drives veto-directed growth when no candidate
+        // is accepted. See `docs/rfp-veto-directed-growth.md`.
+        let mut veto_tiles: FxHashSet<(i32, i32)> = FxHashSet::default();
 
-        if let TryOutcome::Solved(sol) =
-            try_solve_on_region(&region, iter, None, &solve_ctx)
-        {
-            let c = crate::bus::junction_cost::solution_cost(&sol.entities);
-            candidates.push((c, sol, String::new()));
+        match try_solve_on_region(&region, iter, None, &solve_ctx) {
+            TryOutcome::Solved(sol) => {
+                let c = crate::bus::junction_cost::solution_cost(&sol.entities);
+                candidates.push((c, sol, String::new()));
+            }
+            TryOutcome::Continue { veto_tiles: vt } => {
+                veto_tiles.extend(vt);
+            }
         }
 
         if region.tile_count() >= MAX_REGION_TILES {
@@ -1068,11 +1075,14 @@ pub fn solve_crossing(
             if variant.tile_count() > MAX_REGION_TILES {
                 continue;
             }
-            if let TryOutcome::Solved(sol) =
-                try_solve_on_region(&variant, iter, Some(label), &solve_ctx)
-            {
-                let c = crate::bus::junction_cost::solution_cost(&sol.entities);
-                candidates.push((c, sol, (*label).to_string()));
+            match try_solve_on_region(&variant, iter, Some(label), &solve_ctx) {
+                TryOutcome::Solved(sol) => {
+                    let c = crate::bus::junction_cost::solution_cost(&sol.entities);
+                    candidates.push((c, sol, (*label).to_string()));
+                }
+                TryOutcome::Continue { veto_tiles: vt } => {
+                    veto_tiles.extend(vt);
+                }
             }
         }
 
@@ -1085,21 +1095,39 @@ pub fn solve_crossing(
             return Some(best);
         }
 
-        // Fallback: uniform +1 on all sides. Absorbs perpendicular
-        // trunks/taps the one-side variants wouldn't have seen. When
-        // none of the single-side variants solve, we need joint
-        // decisions across the wider region.
-        if !region.expand_bbox(
-            1,
-            1,
-            1,
-            1,
-            routed_paths,
-            hard_obstacles,
-            strict_obstacles,
-            placed_entities,
-            solve_ctx.protected_balancer_tiles,
-        ) {
+        // Veto-directed growth: if the walker flagged tiles outside the
+        // current bbox, expand the bbox just enough to cover them. The
+        // first time we ran a fixture through this, ~13 of 14 distinct
+        // break tiles sat outside the bbox, so this is almost always
+        // productive. When every flagged tile is already inside (or no
+        // strategy invoked the walker at all — SAT unsat with no
+        // breaks) we fall back to uniform +1 so the region still makes
+        // forward progress.
+        let grew = match compute_absorb_deltas(&region.bbox, &veto_tiles) {
+            Some((left, top, right, bottom)) => region.expand_bbox(
+                left,
+                top,
+                right,
+                bottom,
+                routed_paths,
+                hard_obstacles,
+                strict_obstacles,
+                placed_entities,
+                solve_ctx.protected_balancer_tiles,
+            ),
+            None => region.expand_bbox(
+                1,
+                1,
+                1,
+                1,
+                routed_paths,
+                hard_obstacles,
+                strict_obstacles,
+                placed_entities,
+                solve_ctx.protected_balancer_tiles,
+            ),
+        };
+        if !grew {
             trace::emit(TraceEvent::JunctionGrowthCapped {
                 tile_x: initial_tile.0,
                 tile_y: initial_tile.1,
@@ -1131,6 +1159,65 @@ const SINGLE_SIDE_VARIANTS: &[(&str, (i32, i32, i32, i32))] = &[
     ("variant-east", (0, 0, 1, 0)),
     ("variant-south", (0, 0, 0, 1)),
 ];
+
+/// Compute the `(left, top, right, bottom)` deltas needed for
+/// `expand_bbox` to absorb the **single closest** target outside the
+/// bbox. Returns `None` when every target is already inside `bbox` —
+/// the caller then falls back to uniform growth.
+///
+/// We pick one target at a time (Chebyshev-closest tile breaks ties by
+/// `(y, x)` lexicographic) instead of enclosing all of them: naive
+/// "enclose all" pulls the bbox wide in every direction a veto tile
+/// ever appeared, blowing past `MAX_REGION_TILES` well before the
+/// region reaches a satisfiable shape. One-at-a-time growth lets each
+/// iteration re-run the walker on the new region, which often removes
+/// several other far-flung veto tiles from consideration (the flagged
+/// specs get different BFS outcomes once a new tile absorbs their
+/// immediate blocker).
+fn compute_absorb_deltas(
+    bbox: &Rect,
+    targets: &FxHashSet<(i32, i32)>,
+) -> Option<(i32, i32, i32, i32)> {
+    if targets.is_empty() {
+        return None;
+    }
+    let min_x = bbox.x;
+    let max_x = bbox.x + bbox.w as i32 - 1;
+    let min_y = bbox.y;
+    let max_y = bbox.y + bbox.h as i32 - 1;
+
+    // Chebyshev distance from bbox edge; tiles inside have distance 0.
+    let distance = |(x, y): (i32, i32)| -> i32 {
+        let dx = if x < min_x {
+            min_x - x
+        } else if x > max_x {
+            x - max_x
+        } else {
+            0
+        };
+        let dy = if y < min_y {
+            min_y - y
+        } else if y > max_y {
+            y - max_y
+        } else {
+            0
+        };
+        dx.max(dy)
+    };
+
+    let closest = targets
+        .iter()
+        .copied()
+        .filter(|&t| distance(t) > 0)
+        .min_by_key(|&t| (distance(t), t.1, t.0))?;
+
+    let (x, y) = closest;
+    let left = if x < min_x { min_x - x } else { 0 };
+    let right = if x > max_x { x - max_x } else { 0 };
+    let top = if y < min_y { min_y - y } else { 0 };
+    let bottom = if y > max_y { y - max_y } else { 0 };
+    Some((left, top, right, bottom))
+}
 
 /// Pop the cheapest `JunctionSolution` from `candidates` (if any),
 /// emit the terminal trace events for the winner, and return it. On
@@ -1200,7 +1287,13 @@ struct SolveCtx<'a> {
 /// Outcome of one strategy attempt on a given region state.
 enum TryOutcome {
     Solved(JunctionSolution),
-    Continue,
+    /// No strategy produced an accepted solution. `veto_tiles` contains
+    /// the union of walker break tiles (and/or item-conflict tiles)
+    /// collected across all strategies tried on this region. Empty when
+    /// every strategy was skipped/unsat with no walker involvement.
+    /// Used by `solve_crossing` to direct the next bbox expansion
+    /// toward the tiles the walker actually cared about.
+    Continue { veto_tiles: Vec<(i32, i32)> },
 }
 
 /// Scan the boundary list for a tile that carries more than one
@@ -1289,6 +1382,12 @@ fn try_solve_on_region(
         encountered: region.encountered.clone(),
     });
 
+    // Collected across every strategy attempt on this (iter, variant).
+    // Forms the growth signal if no strategy succeeds. Ordered for
+    // determinism, but the caller unions them with the other variants'
+    // sets and order is lost there — so we don't rely on it.
+    let mut veto_tiles: Vec<(i32, i32)> = Vec::new();
+
     if let Some((cx, cy, items)) = conflict {
         trace::emit(TraceEvent::JunctionStrategyAttempt {
             seed_x: ctx.initial_tile.0,
@@ -1300,7 +1399,11 @@ fn try_solve_on_region(
             detail: format!("({cx},{cy}) carries [{}]", items.join(", ")),
             elapsed_us: 0,
         });
-        return TryOutcome::Continue;
+        // Growth-signal: the conflict tile itself. Absorbing it pushes
+        // the conflict into the bbox interior where SAT can route UGs
+        // around it.
+        veto_tiles.push((cx, cy));
+        return TryOutcome::Continue { veto_tiles };
     }
 
     let strategy_ctx = JunctionStrategyContext {
@@ -1421,6 +1524,10 @@ fn try_solve_on_region(
                 detail,
                 elapsed_us,
             });
+            // Growth signal: remember every tile the walker flagged.
+            // The outer loop unions these across strategies and
+            // variants to pick the next expansion direction.
+            veto_tiles.extend(breaks.iter().map(|b| b.tile));
             continue;
         }
 
@@ -1450,7 +1557,7 @@ fn try_solve_on_region(
         return TryOutcome::Solved(sol);
     }
 
-    TryOutcome::Continue
+    TryOutcome::Continue { veto_tiles }
 }
 
 /// Every tile inside `bbox` (inclusive on the min side, exclusive on the
