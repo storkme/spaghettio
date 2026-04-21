@@ -54,24 +54,6 @@ function lineSwatch(hex: string, widthPx = 3, alpha = 1): HTMLElement {
   return wrap;
 }
 
-/** Diamond swatch — matches the crossing-tile diamonds on canvas. */
-function diamondSwatch(hex: string, alpha = 1): HTMLElement {
-  const wrap = document.createElement("span");
-  wrap.style.cssText = "display:inline-block;width:12px;height:12px;flex-shrink:0;position:relative;vertical-align:middle";
-  const d = document.createElement("span");
-  d.style.cssText = [
-    "position:absolute",
-    "top:50%",
-    "left:50%",
-    "width:9px",
-    "height:9px",
-    `background:${hex}`,
-    `opacity:${alpha}`,
-    "transform:translate(-50%,-50%) rotate(45deg)",
-  ].join(";");
-  wrap.appendChild(d);
-  return wrap;
-}
 
 /** Cross (✕) swatch — matches failure markers on canvas. */
 function crossSwatch(hex: string): HTMLElement {
@@ -130,20 +112,20 @@ function circleSwatch(hex: string, alpha = 0.5): HTMLElement {
 }
 
 // ---------------------------------------------------------------------------
-// Ghost-path palette swatch: a small coloured line strip showing 3 of the
-// cycling palette colours so the user knows paths are individually coloured.
+// Ghost-path palette swatch: a small coloured line strip showing the first 4
+// cycling palette colours from GHOST_PALETTE in traceOverlay.ts.
 // ---------------------------------------------------------------------------
 
 function ghostPaletteSwatch(): HTMLElement {
-  // First 3 colors from the ghostPalette constant in traceOverlay.ts
-  const COLORS = ["#569cd6", "#d0a040", "#6ac080"];
+  // Must match GHOST_PALETTE order in traceOverlay.ts
+  const COLORS = ["#569cd6", "#6ac080", "#d0a040", "#b080d0"];
   const wrap = document.createElement("span");
-  wrap.style.cssText = "display:inline-block;width:22px;height:12px;flex-shrink:0;position:relative;vertical-align:middle;overflow:hidden;border-radius:1px";
+  wrap.style.cssText = "display:inline-block;width:24px;height:12px;flex-shrink:0;position:relative;vertical-align:middle;overflow:hidden;border-radius:1px";
   COLORS.forEach((c, i) => {
     const strip = document.createElement("span");
     strip.style.cssText = [
       "position:absolute",
-      `left:${i * 7}px`,
+      `left:${i * 6}px`,
       "top:4px",
       "width:5px",
       "height:4px",
@@ -291,37 +273,37 @@ export function createLegendPanel(container: HTMLElement): LegendPanelControls {
       // they also appear in the ghost routing overlay when debug is on.
       // Show when debug is on and there's trace data, regardless of step-through.
       if (state.stepThrough) {
-        entries.push({ swatch: ghostPaletteSwatch(), label: "Ghost path (per-spec colour)" });
-        entries.push({ swatch: diamondSwatch("#ffdd00", 0.85), label: "Crossing: two specs collide (SAT)" });
+        entries.push({ swatch: ghostPaletteSwatch(), label: "Ghost path (per-item colour)" });
+        entries.push({ swatch: colorSwatch("#ff6600", 0.5), label: "Crossing: shared tiles (heatmap)" });
         entries.push({ swatch: crossSwatch("#ff3333"), label: "Route / ghost spec failed" });
         // Cluster zones in step-through mode (from renderTraceOverlay)
         entries.push({ swatch: rectOutlineSwatch("#44aaff", 0.08, 0.6), label: "Cluster zone: SAT solved" });
         entries.push({ swatch: rectOutlineSwatch("#ff4444", 0.15, 0.9), label: "Cluster zone: SAT failed" });
         // Lane columns and row boundaries (always in trace overlay when trace present)
-        entries.push({ swatch: colorSwatch("#44ff88", 0.3), label: "Bus lane (solid item)" });
-        entries.push({ swatch: colorSwatch("#44aaff", 0.3), label: "Bus lane (fluid item)" });
-        entries.push({ swatch: lineSwatch("#6a8a5a", 1, 0.45), label: "Row boundary" });
-        entries.push({ swatch: rectOutlineSwatch("#aa44ff", 0.2, 0.5), label: "Balancer block" });
+        entries.push({ swatch: colorSwatch("#44ff88", 0.04), label: "Bus lane (solid item)" });
+        entries.push({ swatch: colorSwatch("#44aaff", 0.04), label: "Bus lane (fluid item)" });
+        entries.push({ swatch: lineSwatch("#6a8a5a", 1, 0.3), label: "Row boundary" });
+        entries.push({ swatch: rectOutlineSwatch("#aa44ff", 0.05, 0.4), label: "Balancer block" });
         entries.push({ swatch: lineSwatch("#88ff44", 2, 0.5), label: "Tap-off path" });
-        entries.push({ swatch: rectOutlineSwatch("#ffcc44", 0.2, 0.5), label: "Output merger block" });
+        entries.push({ swatch: rectOutlineSwatch("#ffcc44", 0.05, 0.4), label: "Output merger block" });
       }
 
       // Ghost-tile ambient fill
       if (state.ghostTiles) {
-        entries.push({ swatch: colorSwatch("#40d0e0", 0.4), label: "Ghost router footprint" });
+        entries.push({ swatch: colorSwatch("#40d0e0", 0.18), label: "Ghost router footprint" });
       }
 
       // Validation circles
       if (state.validation) {
-        entries.push({ swatch: circleSwatch("#ff4444", 0.5), label: "Validation error" });
-        entries.push({ swatch: circleSwatch("#ffaa00", 0.5), label: "Validation warning" });
+        entries.push({ swatch: circleSwatch("#ff4444", 0.35), label: "Validation error" });
+        entries.push({ swatch: circleSwatch("#ffaa00", 0.35), label: "Validation warning" });
       }
 
       // SAT / Junction zones
       if (state.satZones) {
-        entries.push({ swatch: rectOutlineSwatch("#3aa04a", 0.12, 0.85), label: "Junction zone: solved" });
-        entries.push({ swatch: rectOutlineSwatch("#d4a03a", 0.12, 0.85), label: "Junction zone: capped" });
-        entries.push({ swatch: rectOutlineSwatch("#c04040", 0.12, 0.85), label: "Junction zone: open (unsolved)" });
+        entries.push({ swatch: rectOutlineSwatch("#3aa04a", 0.14, 0.85), label: "Junction zone: solved" });
+        entries.push({ swatch: rectOutlineSwatch("#d4a03a", 0.14, 0.85), label: "Junction zone: capped" });
+        entries.push({ swatch: rectOutlineSwatch("#c04040", 0.14, 0.85), label: "Junction zone: open (unsolved)" });
       }
     }
 
