@@ -117,13 +117,10 @@ pub(crate) fn max_machines_for_belt(
 /// (B10). The usable output capacity is therefore the full belt throughput
 /// (2 × per-lane). Factor of 2 converts per-lane capacity to total belt capacity.
 ///
-/// **Input limit** (`in_lane_cap / rate`, no multiplier — conservative):
-/// The trunk tap-off sideloads into the row's input belt (B8), filling only the
-/// near lane. Although inserters pick from both lanes (I6), only one lane has
-/// items, so the effective input capacity is a single lane's worth. This is
-/// conservative: a future improvement could feed the input belt straight (B7)
-/// to utilise both lanes and double the input limit, but that requires a
-/// different tap-off geometry.
+/// **Input limit** (`in_lane_cap / rate * 2.0`):
+/// The trunk tap-off runs at the same y as the row's input belt and connects
+/// to its west end (B7 straight feed), so both lanes carry items. Factor of 2
+/// converts per-lane capacity to full belt throughput, matching the output side.
 pub(crate) fn max_machines_for_belt_both_lanes(
     spec: &MachineSpec,
     belt_name: &str,
@@ -140,7 +137,7 @@ pub(crate) fn max_machines_for_belt_both_lanes(
     }
     for inp in &spec.inputs {
         if !inp.is_fluid && inp.rate > 0.0 {
-            max_m = max_m.min((in_lane_cap / inp.rate).floor());
+            max_m = max_m.min((in_lane_cap / inp.rate).floor() * 2.0);
         }
     }
 
@@ -951,12 +948,12 @@ mod tests {
     #[test]
     fn test_max_machines_both_lanes_red_belt() {
         // Output (both lanes): floor(15.0 / 1.0) * 2 = 30
-        // Input (single lane, max_belt_tier=None → blue cap 22.5): floor(22.5 / 1.0) = 22
-        // Input is the bottleneck → 22
+        // Input (both lanes, max_belt_tier=None → blue cap 22.5): floor(22.5 / 1.0) * 2 = 44
+        // Output is the bottleneck → 30
         let spec = iron_plate_spec();
         assert_eq!(
             max_machines_for_belt_both_lanes(&spec, "fast-transport-belt", None),
-            22
+            30
         );
     }
 
@@ -1090,10 +1087,9 @@ mod tests {
     fn place_rows_split_when_exceeds_belt_capacity() {
         // 20 iron-plate machines at rate=1.0/each → total 20/s output.
         // Yellow belt lane cap = 7.5/s.
-        // Output uses both lanes (lane-split): floor(7.5/1.0)*2 = 14 max.
-        // Input is sideloaded (single lane): floor(7.5/1.0) = 7 max.
-        // Input is the bottleneck → max_per_row = 7.
-        // 20 machines → ceil(20/7) = 3 rows.
+        // Output (both lanes): floor(7.5/1.0)*2 = 14 max.
+        // Input (both lanes, straight feed): floor(7.5/1.0)*2 = 14 max.
+        // max_per_row = 14. 20 machines → ceil(20/14) = 2 rows.
         let spec = MachineSpec {
             entity: "assembling-machine-2".to_string(),
             recipe: "iron-plate".to_string(),
@@ -1120,8 +1116,8 @@ mod tests {
             None,
             None,
         );
-        // 20 machines, max_per_row=7 → ceil(20/7) = 3 rows
-        assert_eq!(spans.len(), 3, "Expected 3 rows due to input belt lane capacity");
+        // 20 machines, max_per_row=14 → ceil(20/14) = 2 rows
+        assert_eq!(spans.len(), 2, "Expected 2 rows due to belt lane capacity");
         let total: usize = spans.iter().map(|s| s.machine_count).sum();
         assert_eq!(total, 20);
     }
