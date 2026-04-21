@@ -1,6 +1,6 @@
 import { Container, Graphics } from "pixi.js";
 import { createApp, WORLD_SIZE } from "./renderer/app";
-import { drawGrid } from "./renderer/grid";
+import { drawGrid, updateGrid } from "./renderer/grid";
 import { drawGraph } from "./renderer/graph";
 import { initEntityIcons, renderLayout, setItemColoring, itemColor, TILE_PX } from "./renderer/entities";
 import { createSelectionController, type SelectionController } from "./renderer/selection";
@@ -93,7 +93,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
   container.style.display = "";
 
   const { app, viewport } = await createApp(container);
-  drawGrid(viewport);
+  const gridGfx = drawGrid(viewport);
   drawGraph(viewport, null);
 
   attachBusyOverlay(container);
@@ -635,12 +635,25 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
   }
 
   function startStreaming(): (evt: TraceEvent) => void {
-    // Cancel any prior streaming render before starting a fresh one. The
-    // entity layer has already been cleared by renderGraph just before this
-    // call; the new handle attaches fresh sub-layers.
     streamingHandle?.cancel();
+    // Remove the dependency graph — it sits on top of entityLayer in viewport's
+    // child order, so it would hide streaming entities. Switch to entity view now.
+    drawGraph(viewport, null);
     streamingHandle = createStreamingRenderer(entityLayer, app, onHover, onSelect);
-    return (evt) => streamingHandle?.onEvent(evt);
+    let viewportFitted = false;
+    return (evt) => {
+      // On the first PhaseSnapshot, pan+zoom to frame the layout so streaming
+      // entities are visible. Subsequent snaps don't re-pan (user may have moved).
+      if (!viewportFitted && (evt as { phase?: string }).phase === "PhaseSnapshot") {
+        const d = (evt as { phase: string; data: { width: number; height: number } }).data;
+        if (d.width > 0 && d.height > 0) {
+          viewport.fit(true, d.width * TILE_PX * 1.15, d.height * TILE_PX * 1.25);
+          viewport.moveCenter(d.width * TILE_PX / 2, d.height * TILE_PX / 2);
+          viewportFitted = true;
+        }
+      }
+      streamingHandle?.onEvent(evt);
+    };
   }
 
   function buildLegend(layout: LayoutResult): void {
@@ -690,15 +703,14 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       : null;
 
     if (streamingHandle && streamedCtrl) {
-      // Streaming already drew entities into entityLayer's sub-layers.
-      // Snap any in-flight fades + overlays to their final state; keep the
-      // streaming graphics as the authoritative render.
+      // Streaming drew entities progressively during layout. Snap any in-flight
+      // fades to final state and keep the streaming graphics as authoritative.
       streamingHandle.finish();
       streamingHandle = null;
       ctrl = streamedCtrl;
     } else {
-      // Non-streaming path: corpus, parsed blueprints, or fallback if the
-      // streaming handle somehow never saw a PhaseSnapshot.
+      // Non-streaming path: corpus, parsed blueprints, or fast layouts where
+      // all snapshots arrived before any streaming frame could commit.
       streamingHandle?.cancel();
       streamingHandle = null;
       const traceEvents = Array.isArray(layout.trace) ? layout.trace : [];
@@ -725,6 +737,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     updateLegend();
     const w = layout.width ?? 0;
     const h = layout.height ?? 0;
+    updateGrid(gridGfx, w + 2, h + 2);
     if (w > 0 && h > 0) {
       const pxW = w * 32;
       const pxH = h * 32;
