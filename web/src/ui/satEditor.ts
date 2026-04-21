@@ -16,7 +16,8 @@
 // Wired in `main.ts` via `JunctionDebuggerOptions.onEditRequested`.
 
 import type { Container as PixiContainer } from "pixi.js";
-import { Container } from "pixi.js";
+import { Container, Sprite, Assets } from "pixi.js";
+import type { Texture } from "pixi.js";
 import type { Viewport } from "pixi-viewport";
 import type { Engine, PlacedEntity, EntityDirection } from "../engine";
 import { renderLayout, TILE_PX } from "../renderer/entities";
@@ -148,6 +149,11 @@ export function createSatEditor(opts: SatEditorOptions): SatEditorControls {
   let paintedLayer: PixiContainer | null = null;
   let ghostLayer: PixiContainer | null = null;
   let previewLayer: PixiContainer | null = null;
+  // Item icon overlay — stamps a small icon of each tile's carries
+  // value on top of the painted belt/UG, so the user can see at a
+  // glance what's been inferred. Sits above paintedLayer and
+  // ghostLayer, below the SAT zone overlay.
+  let itemIconLayer: PixiContainer | null = null;
 
   // ----- DOM (mounted in inline panel on enter) ----------------------------
   let toolbarEl: HTMLDivElement | null = null;
@@ -189,6 +195,79 @@ export function createSatEditor(opts: SatEditorOptions): SatEditorControls {
     if (!zone || zone.items.length === 0) return null;
     const idx = Math.max(0, Math.min(itemIndex, zone.items.length - 1));
     return zone.items[idx] ?? null;
+  }
+
+  /**
+   * Look one tile upstream of `(x, y)` along its flow direction. If the
+   * feeder tile holds a painted belt/UG-out flowing into `(x, y)`, or a
+   * zone IN-boundary flowing into it, return the item there. Otherwise
+   * return null.
+   *
+   * Used when placing belts/UGs so the user doesn't have to pick an
+   * item — the tile inherits whatever its upstream is carrying.
+   */
+  function inferUpstreamItem(x: number, y: number, dir: EntityDirection): string | null {
+    if (!zone) return null;
+    const [dx, dy] = DIR_DELTA[dir];
+    const ux = x - dx;
+    const uy = y - dy;
+    // Painted entity upstream that flows INTO this tile?
+    const up = paintedAt(ux, uy);
+    if (up) {
+      const upDir = (up as PaintedEntity).direction;
+      // Belt facing us, or UG output facing us (output is a surface
+      // belt pointing its direction). Either way the item transits
+      // forward into (x, y).
+      if (upDir === dir && (BELT_NAMES[up.name] === up.name || up.io_type === "output")) {
+        return up.carries ?? null;
+      }
+    }
+    // Zone IN-boundary on (x, y) itself — items enter the region
+    // from outside and the boundary names the item. `dir` must
+    // match the boundary's flow direction so we don't pick up a
+    // perpendicular boundary that happens to land here.
+    const b = zone.boundaries.find(
+      (b) => b.x === x && b.y === y && b.isInput && b.dir === dir,
+    );
+    if (b) return b.item;
+    return null;
+  }
+
+  /**
+   * Best-guess item for a planned run starting at `first` flowing in
+   * `firstDir`. Checks upstream first, then falls back to the user's
+   * manually-cycled `currentItem()` so the toolbar still works for
+   * bootstrap cases (isolated belt on an empty tile).
+   */
+  function inferRunItem(
+    first: { x: number; y: number },
+    firstDir: EntityDirection,
+  ): string | null {
+    return inferUpstreamItem(first.x, first.y, firstDir) ?? currentItem();
+  }
+
+  /**
+   * For a UG-out placed at `(x, y)` facing `dir`, walk back along the
+   * opposite direction up to `max_reach+1` tiles looking for a paired
+   * UG-in of matching direction. Returns its item if found.
+   */
+  function inferPairedUgInItem(
+    t: { x: number; y: number },
+    dir: EntityDirection,
+  ): string | null {
+    if (!zone) return null;
+    const [dx, dy] = DIR_DELTA[dir];
+    for (let i = 1; i <= zone.maxReach + 1; i++) {
+      const px = t.x - dx * i;
+      const py = t.y - dy * i;
+      const at = paintedAt(px, py);
+      if (!at) continue;
+      if ((at as PaintedEntity).io_type === "input"
+        && (at as PaintedEntity).direction === dir) {
+        return at.carries ?? null;
+      }
+    }
+    return null;
   }
 
   function pushUndo(): void {
@@ -250,6 +329,36 @@ export function createSatEditor(opts: SatEditorOptions): SatEditorControls {
         undefined,
         hints,
       );
+    }
+    renderItemIcons();
+  }
+
+  /**
+   * Stamp a small item-icon sprite on every painted belt/UG tile that
+   * has a `carries` value. Gives the user a visual read of which item
+   * each tile is inferred to carry — the main answer to "did item
+   * inference pick the right thing?".
+   *
+   * Painted-only — ghost entities don't get icons, to keep the ghost
+   * layer visually distinct as "solver's suggestion, not yours."
+   */
+  function renderItemIcons(): void {
+    if (!itemIconLayer) return;
+    itemIconLayer.removeChildren();
+    for (const e of painted) {
+      const item = e.carries;
+      if (!item) continue;
+      const url = `${import.meta.env.BASE_URL}icons/${item}.png`;
+      const tex = Assets.get<Texture>(url);
+      if (!tex) continue;
+      const sprite = new Sprite(tex);
+      const size = TILE_PX * 0.55;
+      sprite.width = size;
+      sprite.height = size;
+      sprite.x = e.x * TILE_PX + (TILE_PX - size) / 2;
+      sprite.y = e.y * TILE_PX + (TILE_PX - size) / 2;
+      sprite.alpha = 0.85;
+      itemIconLayer.addChild(sprite);
     }
   }
 
@@ -472,7 +581,13 @@ export function createSatEditor(opts: SatEditorOptions): SatEditorControls {
     if (!isFree(first) || !isFree(last)) return null;
 
     const entities: PaintedEntity[] = [];
-    const item = currentItem();
+    // Infer the run's item from what's feeding path[0]. Fall back to
+    // the toolbar's currentItem() when there's no upstream context
+    // (brand-new belt started on an empty tile).
+    const firstDirForInfer = path.length > 1
+      ? (dirBetween(path[0], path[1]) ?? brushDir)
+      : brushDir;
+    const item = inferRunItem(path[0], firstDirForInfer);
 
     let i = 0;
     while (i < path.length) {
@@ -614,10 +729,18 @@ export function createSatEditor(opts: SatEditorOptions): SatEditorControls {
     if (tool === "ug-in" || tool === "ug-out") {
       // Single-tile placement for UG-in/out — useful when planning a
       // hand-placed spine. Drag UG-in alone is rarely what users mean.
+      //
+      // Item inference: a UG-in inherits from whatever's feeding it
+      // upstream (same as a belt). A UG-out inherits from its paired
+      // UG-in within max_reach along the flow direction; if no pair
+      // is present yet, fall back to upstream-adjacent then toolbar.
+      const inferredItem = tool === "ug-in"
+        ? inferUpstreamItem(t.x, t.y, brushDir) ?? currentItem()
+        : inferPairedUgInItem(t, brushDir) ?? inferUpstreamItem(t.x, t.y, brushDir) ?? currentItem();
       const e =
         tool === "ug-in"
-          ? makeUg(t, brushDir, "input", currentItem())
-          : makeUg(t, brushDir, "output", currentItem());
+          ? makeUg(t, brushDir, "input", inferredItem)
+          : makeUg(t, brushDir, "output", inferredItem);
       const next = painted.filter((p) => !(p.x === t.x && p.y === t.y)).concat(e);
       setPainted(next, true);
       ev.stopPropagation();
@@ -923,8 +1046,10 @@ export function createSatEditor(opts: SatEditorOptions): SatEditorControls {
     ghostLayer = new Container();
     ghostLayer.alpha = 0.55;
     previewLayer = new Container();
+    itemIconLayer = new Container();
     viewport.addChild(paintedLayer);
     viewport.addChild(ghostLayer);
+    viewport.addChild(itemIconLayer);
     viewport.addChild(previewLayer);
     // Bring the SAT overlay back to the top.
     viewport.setChildIndex(satZoneOverlayLayer, viewport.children.length - 1);
@@ -978,6 +1103,11 @@ export function createSatEditor(opts: SatEditorOptions): SatEditorControls {
       viewport.removeChild(previewLayer);
       previewLayer.destroy({ children: true });
       previewLayer = null;
+    }
+    if (itemIconLayer) {
+      viewport.removeChild(itemIconLayer);
+      itemIconLayer.destroy({ children: true });
+      itemIconLayer = null;
     }
     if (toolbarEl) {
       toolbarEl.remove();
