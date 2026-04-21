@@ -231,3 +231,58 @@ Remove obsolete helpers, unused spec-type predicates, dead
   as the root cause. User selected A1 over A2 for long-term
   pipeline cleanliness.
   Status: proposed, awaiting Phase 0 audit.*
+
+- *2026-04-21 — Phase 0 scope audit complete. **Go.***
+
+  **Touch points by file** (grep + manual review):
+
+  | File | Current LOC | Est. diff | What changes |
+  |---|---|---|---|
+  | `bus/ghost_router.rs` | 2864 | ~150-250 | `BeltSpec` struct; spec emission at `lane_planner.rs:394-614`-adjacent block; 7× `starts_with("trunk:")` / 3× `starts_with("tap:")` prefix checks; routed_paths key format; unit tests at line 2700+ using `"trunk:X"`/`"tap:X"` mock keys |
+  | `bus/ghost_occupancy.rs` | 714 | ~10-30 | 2× prefix checks at lines 429-430; docstring at line 401 re: coarse segment_ids |
+  | `bus/trunk_renderer.rs` | 224 | **~0** | `render_path` already handles bent paths naturally — walks tile-pairs, emits belts with direction derived per-step from (dx, dy). A south→east corner falls out for free. |
+  | `bus/region_walker.rs` | 744 | ~15 | Unit-test mock segment_ids use `trunk:`/`tap:` prefixes; production code reads `segment_id` without checking prefix |
+  | `validate/belt_flow.rs` | 3789 | ~0-5 | Reads `segment_id` in 2 places; doesn't match on prefix |
+  | `tests/e2e.rs` | — | ~10 | Diagnostic tests reference `ret:`/`feeder:`/`tap:` in comments + one format!; no assertions on spec key format |
+  | `astar.rs` | — | ~0 | `ghost_astar` routes start→goal; bent paths emerge naturally from the cost model. No waypoint support needed. |
+
+  **Total Phase 1 diff estimate: ~200-350 LOC across 3-4 files.** Well
+  under the 800-LOC kill criterion (2); comfortable margin for surprises.
+
+  **Key enabler — A* needs no changes.** `ghost_astar(start, goal, ...)`
+  naturally produces a south-then-east bent path when that's cheapest,
+  because the cost function prefers straight runs and obstacles shape the
+  solution. Calling it with `start = (23, lane_top)`, `goal = (last_tap_x, tap_y)`
+  gives us the bent belt without any waypoint-hint plumbing. If A* picks
+  a different path shape than we want, we can add hints later — but the
+  audit suggests this won't be necessary for the single-tap case.
+
+  **Key enabler — `render_path` needs no changes.** It already renders
+  belts with per-step direction; a bent path renders correctly by
+  construction. This removes the biggest risk from the trunk-renderer
+  touchpoint.
+
+  **Scope-limiter for Phase 1.** Apply unification *only* when
+  `lane.tap_off_ys.len() == 1` (single-tap, the common case and the one
+  that matters for the capped fixture). Multi-tap lanes keep the
+  current decomposed emission untouched. This isolates the Phase 1
+  blast radius and defers the multi-tap splitter-branch modelling
+  (Phase 2) entirely.
+
+  **Risks identified:**
+  1. **Segment-id semantics.** `ghost_occupancy.rs` treats tiles with
+     `seg.starts_with("trunk:")` specially ("coarse segment id, shared
+     across whole trunk"). Under unified specs the prefix becomes
+     `"flow:iron-plate:23"` or similar. The audit confirms the
+     check is a *class membership* test, not a literal-string
+     comparison, so updating the match list is sufficient. ~5 LOC.
+  2. **Snapshot drift.** Placed-entity `segment_id` strings appear in
+     `.fls` snapshots. No test asserts on literal segment_id strings,
+     but dumped snapshots may differ across the change. Not a
+     correctness issue; regenerate snapshots post-land if needed.
+  3. **A*'s bent-path behaviour.** Assumed but not proven. First
+     implementation step (spike, pre-commit) is to invoke A* from
+     trunk_top to tap_end and inspect the returned path for our
+     fixture. If it's not bent, we'll add a waypoint hint.
+
+  Ready to start Phase 1.*
