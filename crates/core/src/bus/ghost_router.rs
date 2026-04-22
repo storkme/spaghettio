@@ -670,8 +670,29 @@ pub fn route_bus_ghost(
         .partition(|e| is_belt_like(&e.name));
     let mut permanent_inits = row_non_belts;
     permanent_inits.extend(entities.iter().cloned());
+    // Drop fluid-reservation tiles that ended up as empty tunnel-through
+    // space before handing `hard` to `Occupancy`. Those tiles must remain
+    // placeable for belts that route over the PTG tunnel (per F7). The
+    // non-empty reservation tiles are already represented by the UG-in /
+    // UG-out / pipe entities in `permanent_inits`.
+    let occupied_for_occ: FxHashSet<(i32, i32)> = row_entities
+        .iter()
+        .chain(entities.iter())
+        .flat_map(|e| {
+            if MACHINE_ENTITIES.contains(&e.name.as_str()) {
+                machine_tiles(e.x, e.y, machine_size(&e.name))
+            } else {
+                vec![(e.x, e.y)]
+            }
+        })
+        .collect();
+    let occupancy_hard: FxHashSet<(i32, i32)> = hard
+        .iter()
+        .filter(|t| !fluid_reservations.contains(t) || occupied_for_occ.contains(t))
+        .copied()
+        .collect();
     let mut occupancy = crate::bus::ghost_occupancy::Occupancy::new(
-        hard.clone(),
+        occupancy_hard,
         row_belts,
         permanent_inits,
     );
@@ -679,6 +700,12 @@ pub fn route_bus_ghost(
     #[cfg(debug_assertions)]
     {
         for &tile in &hard {
+            // Reservation-only tiles (empty tunnel-through space on a fluid
+            // trunk) were intentionally excluded from `occupancy_hard` so
+            // belts can route over the PTG tunnel.
+            if fluid_reservations.contains(&tile) && !occupied_for_occ.contains(&tile) {
+                continue;
+            }
             debug_assert!(
                 occupancy.is_claimed(tile),
                 "occupancy refactor: hard tile {:?} not claimed in parallel Occupancy",
@@ -935,6 +962,11 @@ pub fn route_bus_ghost(
     // resulting belt×pipe intersection). `astar_hard` excludes pipe tiles
     // from the obstacle set while `hard` keeps them for internal stamping
     // guards (step 3.6 self-protection, junction solver invariants, etc.).
+    //
+    // Also excluded: fluid_reservations tiles that were reserved in step 1.5
+    // but ended up as empty tunnel-through tiles (between a UG-in and UG-out
+    // on the fluid trunk). Belts can cross over PTG tunnels per F7, so these
+    // empty reserved tiles must not block A* routing.
     const PIPE_NAMES: &[&str] = &["pipe", "pipe-to-ground"];
     let pipe_tiles: FxHashSet<(i32, i32)> = row_entities
         .iter()
@@ -942,9 +974,22 @@ pub fn route_bus_ghost(
         .filter(|e| PIPE_NAMES.contains(&e.name.as_str()))
         .map(|e| (e.x, e.y))
         .collect();
+    let occupied_tiles: FxHashSet<(i32, i32)> = row_entities
+        .iter()
+        .chain(entities.iter())
+        .flat_map(|e| {
+            if MACHINE_ENTITIES.contains(&e.name.as_str()) {
+                let sz = machine_size(&e.name);
+                machine_tiles(e.x, e.y, sz)
+            } else {
+                vec![(e.x, e.y)]
+            }
+        })
+        .collect();
     let astar_hard: FxHashSet<(i32, i32)> = hard
         .iter()
         .filter(|t| !pipe_tiles.contains(t))
+        .filter(|t| !fluid_reservations.contains(t) || occupied_tiles.contains(t))
         .copied()
         .collect();
 
@@ -1212,9 +1257,14 @@ pub fn route_bus_ghost(
             let surviving_ents: Vec<PlacedEntity> = path_ents
                 .into_iter()
                 .filter(|e| {
+                    // Use `astar_hard` so belts can survive at pipe tiles
+                    // (soft obstacles) and at reserved-but-empty fluid-column
+                    // tiles (the tunnel-through area between a UG-in and
+                    // UG-out on a fluid trunk — belts can cross over PTG
+                    // tunnels per F7).
                     !pre_ghost_belts.contains(&(e.x, e.y))
                         && !ghost_item_at.contains_key(&(e.x, e.y))
-                        && !hard.contains(&(e.x, e.y))
+                        && !astar_hard.contains(&(e.x, e.y))
                 })
                 .collect();
             // Stream the materialised entities so a live renderer can

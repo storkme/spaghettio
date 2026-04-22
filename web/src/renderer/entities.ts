@@ -1068,6 +1068,13 @@ export function renderLayout(
         const ex = entity.x ?? 0;
         const ey = entity.y ?? 0;
         for (const [dx, dy, bit] of [[0, -1, CONN_N], [1, 0, CONN_E], [0, 1, CONN_S], [-1, 0, CONN_W]] as [number, number, number][]) {
+          // The top edge of the layout represents the external fluid source —
+          // a pipe at y=0 visually connects "upward" as if fed from above, so
+          // it renders as a straight pipe rather than a dead-end stub.
+          if (dy === -1 && ey + dy < 0) {
+            pipeConn |= bit;
+            continue;
+          }
           const key = `${ex + dx},${ey + dy}`;
           const nb = tileMap.get(key);
           if ((nb && PIPE_ENTITIES.has(nb.name)) || machineTileSet.has(key)) pipeConn |= bit;
