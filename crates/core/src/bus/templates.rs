@@ -2029,6 +2029,92 @@ mod tests {
         assert_eq!(ri.direction, EntityDirection::South);
     }
 
+    #[test]
+    fn fluid_dual_input_row_trim_chemical_plant() {
+        // chemical-plant: port_dx=0 → long_dx=1, reg_dx=2.
+        // Belt 1 (far, y+2) picked by long-hand at mx+1 → trim = msz-1-1 = 1.
+        // Belt 2 (close, y+3) picked by regular at mx+2 → trim = 0.
+        // Output (west-flow, y+9) drop at mx+1 → trim = 1.
+        let (entities, _, _, _) = fluid_dual_input_row(
+            "some-solid-recipe",
+            "chemical-plant",
+            3,
+            2,
+            0,
+            10, // x_offset so last_mx = 13
+            ("input1", "input2"),
+            "fluid",
+            "output",
+            false,
+            ("transport-belt", "transport-belt"),
+            "transport-belt",
+            false, // west-flow output
+        );
+        // Machine 0 (mx=10) keeps all 3 tiles on every belt row.
+        for dx in 0..3_i32 {
+            assert!(entities.iter().any(|e| e.x == 10 + dx && e.y == 2),
+                "belt 1 tile at (10+{dx}, 2) should exist on non-last machine");
+            assert!(entities.iter().any(|e| e.x == 10 + dx && e.y == 3),
+                "belt 2 tile at (10+{dx}, 3) should exist on non-last machine");
+            assert!(entities.iter().any(|e| e.x == 10 + dx && e.y == 9),
+                "output tile at (10+{dx}, 9) should exist on non-last machine");
+        }
+        // Machine 1 (last, mx=13): belt 1 trimmed at mx+2.
+        assert!(entities.iter().any(|e| e.x == 13 && e.y == 2));
+        assert!(entities.iter().any(|e| e.x == 14 && e.y == 2));
+        assert!(entities.iter().find(|e| e.x == 15 && e.y == 2).is_none(),
+            "belt 1 tile at (15, 2) should be trimmed (east of long-hand pickup at mx+1)");
+        // Belt 2: regular at mx+2=15 → no trim, all 3 tiles remain.
+        for dx in 0..3_i32 {
+            assert!(entities.iter().any(|e| e.x == 13 + dx && e.y == 3),
+                "belt 2 tile at (13+{dx}, 3) should survive (no trim for reg_dx=2)");
+        }
+        // Output west-flow: drop at mx+1=14, tile at mx+2=15 is orphan.
+        assert!(entities.iter().any(|e| e.x == 13 && e.y == 9));
+        assert!(entities.iter().any(|e| e.x == 14 && e.y == 9));
+        assert!(entities.iter().find(|e| e.x == 15 && e.y == 9).is_none(),
+            "output tile at (15, 9) should be trimmed (west-flow, east of drop)");
+    }
+
+    #[test]
+    fn fluid_dual_input_row_trim_assembling_machine() {
+        // assembling-machine-3: port_dx=1 → long_dx=2, reg_dx=0.
+        // Belt 1 (far, y+2) picked by long-hand at mx+2 → trim = 0.
+        // Belt 2 (close, y+3) picked by regular at mx+0 → trim = msz-1-0 = 2.
+        // Output (west-flow, y+9) drop at mx+1 → trim = 1.
+        let (entities, _, _, _) = fluid_dual_input_row(
+            "some-recipe",
+            "assembling-machine-3",
+            3,
+            2,
+            0,
+            10,
+            ("input1", "input2"),
+            "fluid",
+            "output",
+            false,
+            ("transport-belt", "transport-belt"),
+            "transport-belt",
+            false,
+        );
+        // Non-last machine (mx=10) keeps all tiles.
+        for dx in 0..3_i32 {
+            assert!(entities.iter().any(|e| e.x == 10 + dx && e.y == 3),
+                "belt 2 tile at (10+{dx}, 3) should exist on non-last machine");
+        }
+        // Last machine (mx=13): belt 1 all 3 tiles (no trim).
+        for dx in 0..3_i32 {
+            assert!(entities.iter().any(|e| e.x == 13 + dx && e.y == 2),
+                "belt 1 tile at (13+{dx}, 2) should survive (no trim for long_dx=2)");
+        }
+        // Belt 2: only x=13 survives — reg inserter at mx+0=13 makes 14,15 orphan.
+        assert!(entities.iter().any(|e| e.x == 13 && e.y == 3));
+        assert!(entities.iter().find(|e| e.x == 14 && e.y == 3).is_none(),
+            "belt 2 at (14, 3) should be trimmed (reg_dx=0, trim=2)");
+        assert!(entities.iter().find(|e| e.x == 15 && e.y == 3).is_none(),
+            "belt 2 at (15, 3) should be trimmed (reg_dx=0, trim=2)");
+    }
+
     // ---- fluid_only_row ----
 
     // basic-oil-processing: 1 fluid input (crude-oil → input box 2, dx=3),

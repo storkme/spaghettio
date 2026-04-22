@@ -21,17 +21,8 @@ type PhaseCompleteEvent = Extract<TraceEvent, { phase: "PhaseComplete" }>;
 type PhaseSnapshotEvent = Extract<TraceEvent, { phase: "PhaseSnapshot" }>;
 
 function shortName(name: string): string {
-  const known: Record<string, string> = {
-    place_rows:      "rows",
-    plan_bus_lanes:  "lanes",
-    route_bus_ghost: "ghost",
-    stamp_balancers: "bal",
-    place_poles:     "poles",
-    output_merger:   "merge",
-    trunk_renderer:  "trunk",
-    lane_order:      "order",
-  };
-  if (known[name]) return known[name];
+  // Emitted PhaseComplete names (rows_placed, lanes_planned, poles_placed,
+  // bus_routed) all shorten cleanly to their first word.
   const first = name.split("_")[0];
   return first.length > 6 ? first.slice(0, 5) + "…" : first;
 }
