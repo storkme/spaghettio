@@ -38,7 +38,7 @@ y = my - 1           [UG pipe OUT]            ← adjacent to fluid B's port
 y = my             ▓▓▓ machine top ▓▓▓
 ```
 
-The load-bearing trick is `UG–pipe–UG` on each trunk row: the only surface-pipe tile per trunk row is at the T-drop for that fluid's column. The flanking tiles use pipe-to-ground, so adjacent trunk rows can stack without their pipes touching and merging.
+The load-bearing trick is `UG–pipe–UG` on each trunk row: the only surface-pipe tile per trunk row is at the T-drop for that fluid's column. The flanking tiles use pipe-to-ground, so adjacent trunk rows can stack without their pipes touching and merging. The flank UGs are oriented horizontally (east-west); the drop UGs between trunk rows are oriented vertically (north-south). Per [F5a](factorio-mechanics.md#fluids--pipes), a PTG's two perpendicular sides have no surface connection, so a horizontal flank and a vertical drop meeting edge-to-edge do not cross-contaminate.
 
 ### Code shape
 

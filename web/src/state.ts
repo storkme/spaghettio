@@ -6,6 +6,8 @@ export interface FormState {
   inputs: string[];
   /** Max belt tier override, e.g. "transport-belt". null = auto. */
   belt: string | null;
+  /** User-added inputs beyond the DEFAULT_INPUTS list. */
+  customInputs: string[];
 }
 
 /** Full list of input pills rendered in the sidebar. */
@@ -46,8 +48,10 @@ export function readUrlState(): FormState {
   const inParam = params.get("in");
   const inputs = inParam ? inParam.split(",").filter((s) => s.length > 0) : DEFAULT_CHECKED_INPUTS;
   const belt = params.get("belt");
+  const ciParam = params.get("ci");
+  const customInputs = ciParam ? ciParam.split(",").filter((s) => s.length > 0) : [];
 
-  return { item, rate, machine, inputs, belt };
+  return { item, rate, machine, inputs, belt, customInputs };
 }
 
 export function writeUrlState(state: Omit<FormState, "machine"> & { machine: string }): void {
@@ -57,7 +61,8 @@ export function writeUrlState(state: Omit<FormState, "machine"> & { machine: str
     state.machine === DEFAULT_MACHINE &&
     state.inputs.length === DEFAULT_CHECKED_INPUTS.length &&
     state.inputs.every((v, i) => v === DEFAULT_CHECKED_INPUTS[i]) &&
-    !state.belt;
+    !state.belt &&
+    state.customInputs.length === 0;
 
   if (isDefault) {
     history.replaceState(null, "", window.location.pathname);
@@ -70,5 +75,6 @@ export function writeUrlState(state: Omit<FormState, "machine"> & { machine: str
   params.set("machine", state.machine);
   params.set("in", state.inputs.join(","));
   if (state.belt) params.set("belt", state.belt);
+  if (state.customInputs.length > 0) params.set("ci", state.customInputs.join(","));
   history.replaceState(null, "", "?" + params.toString());
 }

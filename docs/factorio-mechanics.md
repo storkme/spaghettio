@@ -126,6 +126,7 @@ Formal rules the layout engine must satisfy. Statements are numbered per section
 - **F3.** A pipe network may carry only **one fluid type**. Mixing fluids in one network is an error. *(Different fluid networks MUST be physically isolated -- no shared tiles, no adjacency.)*
 - **F4.** **Pipe-to-ground** occupies 1x1 and has a facing direction. It connects underground to the nearest pipe-to-ground of opposite facing on the same axis, within a max distance (vanilla: 10 tiles).
 - **F5.** Pipe-to-ground has a surface connection on the side opposite to its facing direction, and an underground connection in the facing direction. The surface side connects to adjacent pipes normally.
+- **F5a.** A pipe-to-ground's two sides **perpendicular** to its facing direction have **no** surface connection. Pipes or other pipe-to-grounds adjacent on those sides do not merge with the PTG's fluid network. *(This is the load-bearing rule for stacked multi-fluid trunk rows — an east-west-oriented UG adjacent to a north-south-oriented UG shares a "closed" edge on both sides, so their fluid networks stay isolated even when the tiles touch.)*
 - **F6.** Pipes and belts on the same tile are **not** possible (both occupy the full tile), but pipes and belts on adjacent tiles do not interfere. *(Pipes and belts can run in parallel on neighboring columns.)*
 - **F7.** Pipe-to-ground pairs allow fluid lines to cross under belt lines without interference (analogous to U4 for belts).
 

@@ -2,7 +2,7 @@ import { Container, Graphics } from "pixi.js";
 import { createApp, WORLD_SIZE } from "./renderer/app";
 import { drawGrid, updateGrid } from "./renderer/grid";
 import { drawGraph } from "./renderer/graph";
-import { initEntityIcons, renderLayout, setItemColoring, itemColor, TILE_PX } from "./renderer/entities";
+import { initEntityIcons, preloadCarriesIcons, renderLayout, setItemColoring, itemColor, TILE_PX } from "./renderer/entities";
 import { createSelectionController, type SelectionController } from "./renderer/selection";
 import { renderSidebar } from "./ui/sidebar";
 import { initCorpusPanel } from "./ui/corpus";
@@ -47,6 +47,12 @@ async function main(): Promise<void> {
   await initEngine();
   const engine = getEngine();
   await initEntityIcons(MACHINE_SLUGS);
+  // Preload item icons for belt/pipe carries overlays and machine recipe panels.
+  // Raw inputs (ores, fluids) aren't in allProducibleItems so we add them explicitly.
+  await preloadCarriesIcons([
+    ...engine.allProducibleItems(),
+    "crude-oil", "water", "iron-ore", "copper-ore", "coal", "stone", "uranium-ore",
+  ]);
 
   const appRoot = document.getElementById("app")!;
   const hash = window.location.hash;
@@ -219,7 +225,9 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
 
   let traceOverlayLayer: Container | null = null;
   let snapshotActive = false;
-  let prevSnapshotEntities: Set<string> | null = null;
+  let prevSnapshotEntityList: PlacedEntity[] = [];
+  let seekAnimHandle: { cancel(): void } | null = null;
+  let prevPhaseIndexForAnim = -1;
 
   function entityKey(e: PlacedEntity): string {
     return `${e.x},${e.y},${e.name},${e.recipe ?? ""}`;
@@ -250,6 +258,67 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     reset(): void {},
   };
 
+  /* Stagger-fade entities that are new in `nextList` relative to `prevList`.
+   * Only called on consecutive forward phase steps (N → N+1).
+   * Backward steps and jumps stay instant. */
+  function runSeekAnimation(
+    prevList: PlacedEntity[],
+    nextList: PlacedEntity[],
+    gfxMap: Map<string, Graphics[]>,
+  ): { cancel(): void } {
+    const prevKeys = new Set(prevList.map(entityKey));
+    const added = nextList
+      .filter(e => !prevKeys.has(entityKey(e)))
+      .sort((a, b) => {
+        const dy = (a.y ?? 0) - (b.y ?? 0);
+        return dy !== 0 ? dy : (a.x ?? 0) - (b.x ?? 0);
+      });
+
+    if (added.length === 0) return { cancel() {} };
+
+    const SEEK_FADE_MS = 160;
+    const stagger = Math.min(7, 450 / added.length);
+    const t0 = performance.now();
+    let pointer = 0;
+    let done = false;
+
+    const reveals = added
+      .map((e, i) => ({ gfx: gfxMap.get(entityKey(e)) ?? [], startMs: t0 + i * stagger }))
+      .filter(r => r.gfx.length > 0);
+
+    for (const r of reveals) for (const g of r.gfx) g.alpha = 0;
+
+    const tick = (): void => {
+      if (done) return;
+      const now = performance.now();
+      for (let i = pointer; i < reveals.length; i++) {
+        const r = reveals[i];
+        if (r.startMs > now) break;
+        const t = Math.min(1, (now - r.startMs) / SEEK_FADE_MS);
+        for (const g of r.gfx) g.alpha = t;
+      }
+      while (pointer < reveals.length &&
+             performance.now() - reveals[pointer].startMs >= SEEK_FADE_MS) {
+        for (const g of reveals[pointer].gfx) g.alpha = 1;
+        pointer++;
+      }
+      if (pointer >= reveals.length) {
+        done = true;
+        app.ticker.remove(tick);
+      }
+    };
+
+    app.ticker.add(tick);
+    return {
+      cancel() {
+        if (done) return;
+        done = true;
+        app.ticker.remove(tick);
+        for (const r of reveals) for (const g of r.gfx) g.alpha = 1;
+      },
+    };
+  }
+
   function updateTraceOverlay(): void {
     if (traceOverlayLayer) {
       entityLayer.removeChild(traceOverlayLayer);
@@ -264,40 +333,35 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       : null;
 
     if (snapshot) {
-      // Step-through is about to replace entities wholesale; stop any
-      // in-progress phase/streaming animation so its ticker doesn't write
-      // alphas on about-to-be-destroyed graphics.
+      seekAnimHandle?.cancel();
+      seekAnimHandle = null;
       phaseAnimHandle?.cancel();
       phaseAnimHandle = null;
       streamingHandle?.cancel();
       streamingHandle = null;
       timelineScrubber.reset();
       snapshotActive = true;
+
+      const gfxMap = new Map<string, Graphics[]>();
       const ctrl = renderLayout(
         { ...lastLayout!, entities: snapshot.entities, width: snapshot.width, height: snapshot.height },
         entityLayer, onHover, onSelect,
+        (entity, gfx) => { gfxMap.set(entityKey(entity), gfx); },
       );
       inspector.setHighlightController(ctrl);
-      const newKeys = new Set(snapshot.entities.map(entityKey));
-      const prev = prevSnapshotEntities;
-      if (prev) {
-        const added = snapshot.entities.filter(e => !prev.has(entityKey(e)));
-        const addedPositions = new Set(added.map(e => `${e.x},${e.y}`));
-        for (const child of entityLayer.children) {
-          if (!("tint" in child) || addedPositions.size === 0) continue;
-          const g = child as { x: number; y: number; tint: number };
-          const tx = Math.round(g.x / TILE_PX);
-          const ty = Math.round(g.y / TILE_PX);
-          if (addedPositions.has(`${tx},${ty}`)) {
-            g.tint = 0x44ff88;
-            setTimeout(() => { g.tint = 0xffffff; }, 1000);
-          }
-        }
+
+      // Animate only consecutive forward steps (N → N+1); jumps and backward stays instant.
+      if (phaseIndex === prevPhaseIndexForAnim + 1 && prevSnapshotEntityList.length > 0) {
+        seekAnimHandle = runSeekAnimation(prevSnapshotEntityList, snapshot.entities, gfxMap);
       }
-      prevSnapshotEntities = newKeys;
+      prevPhaseIndexForAnim = phaseIndex;
+      prevSnapshotEntityList = snapshot.entities.slice();
     } else if (snapshotActive) {
+      seekAnimHandle?.cancel();
+      seekAnimHandle = null;
       snapshotActive = false;
-      prevSnapshotEntities = null;
+      prevSnapshotEntityList = [];
+      prevPhaseIndexForAnim = -1;
       if (lastLayout) {
         const ctrl = renderLayout(lastLayout, entityLayer, onHover, onSelect);
         inspector.setHighlightController(ctrl);
@@ -707,7 +771,10 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     logLayoutStats(layout);
     stepThrough.reset();
     snapshotActive = false;
-    prevSnapshotEntities = null;
+    prevSnapshotEntityList = [];
+    prevPhaseIndexForAnim = -1;
+    seekAnimHandle?.cancel();
+    seekAnimHandle = null;
     if (selectionCtrl) { selectionCtrl.destroy(); selectionCtrl = null; }
     phaseAnimHandle?.cancel();
     phaseAnimHandle = null;
