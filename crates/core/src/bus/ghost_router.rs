@@ -475,6 +475,13 @@ pub fn route_bus_ghost(
         // Horizontal branches: one per (row, port_y) pair. Multiple machines
         // in the same row share the same port_y; we stamp to the leftmost px
         // and let the row template's own pipe line propagate east.
+        //
+        // If the template placed a UG direction=West carrying this fluid at
+        // (min_px - 1, py), that's the multi-fluid stacked-T left flank ready
+        // to be a UG partner. Emit a single east-facing UG at (x+1, py) and
+        // leave the intermediate tiles empty — the tunnel carries fluid across
+        // without surface pipes that could cross-merge with foreign trunks on
+        // adjacent rows. Otherwise fall back to continuous surface pipes.
         let mut branch_targets: Vec<(i32, i32)> = Vec::new();
         for &(_ri, px, py) in &lane.fluid_port_positions {
             branch_targets.push((px, py));
@@ -487,23 +494,54 @@ pub fn route_bus_ghost(
             by_py.entry(py).and_modify(|min_px| { if px < *min_px { *min_px = px; } }).or_insert(px);
         }
         for (py, min_px) in by_py {
-            for bx in (x + 1)..min_px {
-                let tile = (bx, py);
-                if hard.contains(&tile) || existing_belts.contains(&tile) {
-                    // Blocked — we don't UG horizontal branches yet. Leave a
-                    // gap and let validation flag the break.
-                    continue;
+            // Check if the template placed a UG partner at (min_px - 1, py).
+            let partner_tile = (min_px - 1, py);
+            let has_ug_partner = row_entities.iter().any(|e| {
+                e.x == partner_tile.0
+                    && e.y == partner_tile.1
+                    && e.name == "pipe-to-ground"
+                    && e.direction == EntityDirection::West
+                    && e.carries.as_deref() == Some(lane.item.as_str())
+            });
+
+            if has_ug_partner && min_px - (x + 1) <= 10 {
+                // Multi-fluid template: emit one UG at (x+1, py) direction=East,
+                // partnered with the template's left flank UG. Reach cap 10 per F4.
+                let ug_tile = (x + 1, py);
+                if !(hard.contains(&ug_tile) || existing_belts.contains(&ug_tile)) {
+                    entities.push(PlacedEntity {
+                        name: "pipe-to-ground".to_string(),
+                        x: x + 1,
+                        y: py,
+                        direction: EntityDirection::East,
+                        io_type: Some("input".to_string()),
+                        carries: Some(lane.item.clone()),
+                        segment_id: trunk_seg_id.clone(),
+                        ..Default::default()
+                    });
+                    existing_belts.insert(ug_tile);
+                    hard.insert(ug_tile);
                 }
-                entities.push(PlacedEntity {
-                    name: "pipe".to_string(),
-                    x: bx,
-                    y: py,
-                    carries: Some(lane.item.clone()),
-                    segment_id: trunk_seg_id.clone(),
-                    ..Default::default()
-                });
-                existing_belts.insert(tile);
-                hard.insert(tile);
+            } else {
+                // Single-fluid path: continuous surface pipes from (x+1, py)
+                // to (min_px - 1, py). Connects to the template's continuous
+                // pipe row starting at min_px.
+                for bx in (x + 1)..min_px {
+                    let tile = (bx, py);
+                    if hard.contains(&tile) || existing_belts.contains(&tile) {
+                        continue;
+                    }
+                    entities.push(PlacedEntity {
+                        name: "pipe".to_string(),
+                        x: bx,
+                        y: py,
+                        carries: Some(lane.item.clone()),
+                        segment_id: trunk_seg_id.clone(),
+                        ..Default::default()
+                    });
+                    existing_belts.insert(tile);
+                    hard.insert(tile);
+                }
             }
         }
     }
