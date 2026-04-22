@@ -128,11 +128,16 @@ pub fn route_bus_ghost(
 
     // Reserve fluid lane tiles as hard obstacles (same logic as pole placer
     // in layout.rs: fluid lanes reserve the column from source_y to last tap_y).
+    // Tracked in `fluid_reservations` too so the step-3.6 trunk emitter can
+    // distinguish its own reservations from real obstacles (e.g. neighbouring
+    // solid lanes' splitter secondary tiles) when deciding where to UG-bridge.
+    let mut fluid_reservations: FxHashSet<(i32, i32)> = FxHashSet::default();
     for lane in lanes {
         if lane.is_fluid {
             let end_y = lane.tap_off_ys.iter().copied().max().unwrap_or(lane.source_y);
             for y in lane.source_y..=end_y {
                 hard.insert((lane.x, y));
+                fluid_reservations.insert((lane.x, y));
             }
         }
     }
@@ -184,6 +189,12 @@ pub fn route_bus_ghost(
                 hard.insert((x, tap_y - 1));
                 hard.insert((x + 1, tap_y - 1));
                 hard.insert((x, tap_y));
+                // If the secondary tile lands in a fluid lane's column, the
+                // fluid trunk emitter must know to UG-bridge past it instead
+                // of stamping a pipe on top of the splitter. Drop the tile
+                // from `fluid_reservations` so the step-3.6 check sees it as
+                // foreign-claimed.
+                fluid_reservations.remove(&(x + 1, tap_y - 1));
                 existing_belts.insert((x, tap_y - 1));
                 existing_belts.insert((x, tap_y));
                 pre_ghost_belts.insert((x, tap_y - 1));
@@ -213,6 +224,7 @@ pub fn route_bus_ghost(
             } else {
                 hard.insert((ent.x, ent.y));
             }
+            fluid_reservations.remove(&(ent.x, ent.y));
             // Splitters occupy two tiles. Without this the second tile
             // would be invisible to the obstacle set — it wouldn't be
             // classified as a splitter body by the junction solver's
@@ -222,6 +234,7 @@ pub fn route_bus_ghost(
             if crate::common::is_splitter(&ent.name) {
                 let (sx, sy) = crate::common::splitter_second_tile(ent);
                 hard.insert((sx, sy));
+                fluid_reservations.remove(&(sx, sy));
             }
         }
         entities.extend(balancer_ents);
@@ -342,6 +355,157 @@ pub fn route_bus_ghost(
     // Sort each synth path so tiles are ordered top-to-bottom (ascending y).
     for path in trunk_synth_paths.values_mut() {
         path.sort_by_key(|&(_, y)| y);
+    }
+
+    // -------------------------------------------------------------------------
+    // Step 3.6: Stamp fluid trunks + horizontal branches to port rows.
+    //
+    // For each fluid lane, stamp a vertical column of `"pipe"` at lane.x from
+    // source_y to the last port y. Where the column is blocked by another
+    // lane's splitter/balancer/machine (typical collision: a solid lane's
+    // splitter secondary tile landing in the first fluid lane's column), use
+    // a pipe-to-ground pair to tunnel under the obstacle run so trunk
+    // connectivity holds.
+    //
+    // Then, for each consumer/producer port row, stamp a horizontal pipe run
+    // from (lane.x + 1, port_y) east until it meets the row template's pipe
+    // line (at row.x_offset for the leftmost machine). `optimize_lane_order`
+    // places fluid lanes east of solids, so horizontal branches don't have
+    // to cross foreign solid trunks — straight surface pipes suffice.
+    // -------------------------------------------------------------------------
+    for lane in lanes {
+        if !lane.is_fluid {
+            continue;
+        }
+        let x = lane.x;
+        let trunk_seg_id = Some(format!("trunk:{}", lane.item));
+
+        // End y = furthest port y; source_y may already be tightened to just
+        // above the topmost port by the planner.
+        let mut end_y = lane.source_y;
+        for &(_ri, _px, py) in &lane.fluid_port_positions {
+            end_y = end_y.max(py);
+        }
+        for &(_ri, _px, py) in &lane.fluid_output_port_positions {
+            end_y = end_y.max(py);
+        }
+        let start_y = lane.source_y;
+
+        // A tile is "blocked" from the trunk's perspective if it's claimed by
+        // *someone else* — another lane's splitter/balancer, a row entity, a
+        // machine, etc. Our own step-1.5 self-reservation doesn't count: those
+        // tiles are where WE are supposed to stamp pipes.
+        let reservations = &fluid_reservations;
+        let is_blocked = |y: i32, existing_belts: &FxHashSet<(i32, i32)>, hard: &FxHashSet<(i32, i32)>| -> bool {
+            let tile = (x, y);
+            existing_belts.contains(&tile)
+                || (hard.contains(&tile) && !reservations.contains(&tile))
+        };
+        let mut y = start_y;
+        while y <= end_y {
+            if !is_blocked(y, &existing_belts, &hard) {
+                entities.push(PlacedEntity {
+                    name: "pipe".to_string(),
+                    x,
+                    y,
+                    carries: Some(lane.item.clone()),
+                    segment_id: trunk_seg_id.clone(),
+                    ..Default::default()
+                });
+                existing_belts.insert((x, y));
+                hard.insert((x, y));
+                y += 1;
+            } else {
+                let block_start = y;
+                while y <= end_y && is_blocked(y, &existing_belts, &hard) {
+                    y += 1;
+                }
+                let block_end = y - 1;
+                // Need UG-in ABOVE block_start and UG-out BELOW block_end.
+                let ug_in_y = block_start - 1;
+                let ug_out_y = block_end + 1;
+                if ug_in_y < start_y || ug_out_y > end_y {
+                    // Blocked run hits the edge of our trunk range — no room
+                    // for a UG pair. Leave a gap; validation will flag the
+                    // connectivity break.
+                    continue;
+                }
+                if is_blocked(ug_in_y, &existing_belts, &hard)
+                    || is_blocked(ug_out_y, &existing_belts, &hard)
+                {
+                    // Can't place UG endpoints on blocked tiles.
+                    continue;
+                }
+                // Replace the surface pipe we already stamped at ug_in_y
+                // (from a prior iteration) with a UG-in. Simplest: pop the
+                // last-stamped surface pipe if it matches, then push the UG.
+                if let Some(last) = entities.last() {
+                    if last.name == "pipe" && last.x == x && last.y == ug_in_y {
+                        entities.pop();
+                    }
+                }
+                entities.push(PlacedEntity {
+                    name: "pipe-to-ground".to_string(),
+                    x,
+                    y: ug_in_y,
+                    direction: EntityDirection::South,
+                    io_type: Some("input".to_string()),
+                    carries: Some(lane.item.clone()),
+                    segment_id: trunk_seg_id.clone(),
+                    ..Default::default()
+                });
+                existing_belts.insert((x, ug_in_y));
+                hard.insert((x, ug_in_y));
+                entities.push(PlacedEntity {
+                    name: "pipe-to-ground".to_string(),
+                    x,
+                    y: ug_out_y,
+                    direction: EntityDirection::North,
+                    io_type: Some("output".to_string()),
+                    carries: Some(lane.item.clone()),
+                    segment_id: trunk_seg_id.clone(),
+                    ..Default::default()
+                });
+                existing_belts.insert((x, ug_out_y));
+                hard.insert((x, ug_out_y));
+                y = ug_out_y + 1;
+            }
+        }
+
+        // Horizontal branches: one per (row, port_y) pair. Multiple machines
+        // in the same row share the same port_y; we stamp to the leftmost px
+        // and let the row template's own pipe line propagate east.
+        let mut branch_targets: Vec<(i32, i32)> = Vec::new();
+        for &(_ri, px, py) in &lane.fluid_port_positions {
+            branch_targets.push((px, py));
+        }
+        for &(_ri, px, py) in &lane.fluid_output_port_positions {
+            branch_targets.push((px, py));
+        }
+        let mut by_py: FxHashMap<i32, i32> = FxHashMap::default();
+        for (px, py) in branch_targets {
+            by_py.entry(py).and_modify(|min_px| { if px < *min_px { *min_px = px; } }).or_insert(px);
+        }
+        for (py, min_px) in by_py {
+            for bx in (x + 1)..min_px {
+                let tile = (bx, py);
+                if hard.contains(&tile) || existing_belts.contains(&tile) {
+                    // Blocked — we don't UG horizontal branches yet. Leave a
+                    // gap and let validation flag the break.
+                    continue;
+                }
+                entities.push(PlacedEntity {
+                    name: "pipe".to_string(),
+                    x: bx,
+                    y: py,
+                    carries: Some(lane.item.clone()),
+                    segment_id: trunk_seg_id.clone(),
+                    ..Default::default()
+                });
+                existing_belts.insert(tile);
+                hard.insert(tile);
+            }
+        }
     }
 
     // -------------------------------------------------------------------------
