@@ -31,9 +31,13 @@ import { TILE_PX } from "./entities";
 import type { JunctionSelectionState } from "../ui/junctionDebugger";
 import type { BoundarySnapshot } from "../wasm-pkg/fucktorio_wasm.js";
 
-const BBOX_OUTLINE = 0xffd060;
-const BBOX_FILL = 0xffd060;
-const BBOX_FILL_ALPHA = 0.08;
+// Match the unselected junction-zone palette (see junctionZoneOverlay.ts).
+const OUTCOME_COLOR: Record<string, number> = {
+  Solved: 0x3aa04a, // green
+  Capped: 0xd4a03a, // amber
+  Open: 0xc04040,   // red
+};
+const BBOX_FILL_ALPHA = 0.04;
 
 const FORBIDDEN_HATCH = 0x8a4040;
 const FORBIDDEN_HATCH_ALPHA = 0.55;
@@ -100,13 +104,14 @@ export function createSatZoneOverlay(): SatZoneOverlayHandle {
     if (!state) return;
     const { cluster, iter } = state;
     const b = iter.bbox;
+    const bboxColor = OUTCOME_COLOR[cluster.outcome.kind] ?? OUTCOME_COLOR.Open;
 
     // Faint tint + outline. Drawn as two separate rects so the stroke
     // alignment doesn't chew into the fill area.
     const tint = new Graphics();
     tint
       .rect(b.x * TILE_PX, b.y * TILE_PX, b.w * TILE_PX, b.h * TILE_PX)
-      .fill({ color: BBOX_FILL, alpha: BBOX_FILL_ALPHA });
+      .fill({ color: bboxColor, alpha: BBOX_FILL_ALPHA });
     layer.addChild(tint);
 
     const outline = drawDashedRect(
@@ -118,7 +123,7 @@ export function createSatZoneOverlay(): SatZoneOverlayHandle {
         dashLen: TILE_PX * 0.45,
         gapLen: TILE_PX * 0.25,
         width: 3,
-        color: BBOX_OUTLINE,
+        color: bboxColor,
         alpha: 0.95,
       },
     );

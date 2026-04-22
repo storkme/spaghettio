@@ -128,11 +128,16 @@ pub fn route_bus_ghost(
 
     // Reserve fluid lane tiles as hard obstacles (same logic as pole placer
     // in layout.rs: fluid lanes reserve the column from source_y to last tap_y).
+    // Tracked in `fluid_reservations` too so the step-3.6 trunk emitter can
+    // distinguish its own reservations from real obstacles (e.g. neighbouring
+    // solid lanes' splitter secondary tiles) when deciding where to UG-bridge.
+    let mut fluid_reservations: FxHashSet<(i32, i32)> = FxHashSet::default();
     for lane in lanes {
         if lane.is_fluid {
             let end_y = lane.tap_off_ys.iter().copied().max().unwrap_or(lane.source_y);
             for y in lane.source_y..=end_y {
                 hard.insert((lane.x, y));
+                fluid_reservations.insert((lane.x, y));
             }
         }
     }
@@ -184,6 +189,12 @@ pub fn route_bus_ghost(
                 hard.insert((x, tap_y - 1));
                 hard.insert((x + 1, tap_y - 1));
                 hard.insert((x, tap_y));
+                // If the secondary tile lands in a fluid lane's column, the
+                // fluid trunk emitter must know to UG-bridge past it instead
+                // of stamping a pipe on top of the splitter. Drop the tile
+                // from `fluid_reservations` so the step-3.6 check sees it as
+                // foreign-claimed.
+                fluid_reservations.remove(&(x + 1, tap_y - 1));
                 existing_belts.insert((x, tap_y - 1));
                 existing_belts.insert((x, tap_y));
                 pre_ghost_belts.insert((x, tap_y - 1));
@@ -213,6 +224,7 @@ pub fn route_bus_ghost(
             } else {
                 hard.insert((ent.x, ent.y));
             }
+            fluid_reservations.remove(&(ent.x, ent.y));
             // Splitters occupy two tiles. Without this the second tile
             // would be invisible to the obstacle set — it wouldn't be
             // classified as a splitter body by the junction solver's
@@ -222,6 +234,7 @@ pub fn route_bus_ghost(
             if crate::common::is_splitter(&ent.name) {
                 let (sx, sy) = crate::common::splitter_second_tile(ent);
                 hard.insert((sx, sy));
+                fluid_reservations.remove(&(sx, sy));
             }
         }
         entities.extend(balancer_ents);
@@ -342,6 +355,303 @@ pub fn route_bus_ghost(
     // Sort each synth path so tiles are ordered top-to-bottom (ascending y).
     for path in trunk_synth_paths.values_mut() {
         path.sort_by_key(|&(_, y)| y);
+    }
+
+    // -------------------------------------------------------------------------
+    // Step 3.6: Stamp fluid trunks + horizontal branches to port rows.
+    //
+    // For each fluid lane, stamp a vertical column of `"pipe"` at lane.x from
+    // source_y to the last port y. Where the column is blocked by another
+    // lane's splitter/balancer/machine (typical collision: a solid lane's
+    // splitter secondary tile landing in the first fluid lane's column), use
+    // a pipe-to-ground pair to tunnel under the obstacle run so trunk
+    // connectivity holds.
+    //
+    // Then, for each consumer/producer port row, stamp a horizontal pipe run
+    // from (lane.x + 1, port_y) east until it meets the row template's pipe
+    // line (at row.x_offset for the leftmost machine). `optimize_lane_order`
+    // places fluid lanes east of solids, so horizontal branches don't have
+    // to cross foreign solid trunks — straight surface pipes suffice.
+    // -------------------------------------------------------------------------
+    // Max distance between a UG-in and its partner UG-out (per F4, vanilla).
+    const FLUID_UG_MAX_DISTANCE: i32 = 10;
+    // Max spacing between surface pipes on a fluid trunk. A UG pair spans
+    // at most `FLUID_UG_MAX_DISTANCE` tiles of trunk; between two surface
+    // pipes we need room for the pair plus the surface tiles themselves,
+    // so maximum surface-to-surface spacing is `max_distance + 1` (e.g.
+    // pipe@y=0, UG-in@y=1, UG-out@y=10, pipe@y=11 fits for distance 10).
+    const FLUID_TRUNK_SURFACE_SPACING: i32 = FLUID_UG_MAX_DISTANCE + 1;
+
+    for lane in lanes {
+        if !lane.is_fluid {
+            continue;
+        }
+        let x = lane.x;
+        let trunk_seg_id = Some(format!("trunk:{}", lane.item));
+
+        let mut end_y = lane.source_y;
+        for &(_ri, _px, py) in &lane.fluid_port_positions {
+            end_y = end_y.max(py);
+        }
+        for &(_ri, _px, py) in &lane.fluid_output_port_positions {
+            end_y = end_y.max(py);
+        }
+        let start_y = lane.source_y;
+
+        // Fluid trunks surface at every "anchor" row: start_y (top entry),
+        // every tap_y, end_y, and breathing points every
+        // FLUID_TRUNK_SURFACE_SPACING tiles. Between anchors, UG pairs fill
+        // the gap (for gap ≥3); short gaps just use a straight surface-pipe
+        // chain. This keeps the trunk surface-sparse in the long stretches
+        // between taps while still giving the top-of-layout tile a concrete
+        // entity so blueprint users have something to connect their external
+        // pipe to.
+        //
+        // Adjacent fluid lanes stay isolated where UGs are present (F5a:
+        // east/west faces closed). Where two adjacent lanes BOTH have surface
+        // pipes at the same y (e.g. both tap at y=1), the row templates are
+        // expected to stagger tap ys so only one lane surfaces on any given
+        // row (multi-fluid template stacks tap rows one per fluid).
+        let mut tap_ys: Vec<i32> = Vec::new();
+        for &(_ri, _px, py) in &lane.fluid_port_positions {
+            tap_ys.push(py);
+        }
+        for &(_ri, _px, py) in &lane.fluid_output_port_positions {
+            tap_ys.push(py);
+        }
+
+        let mut anchors: Vec<i32> = vec![start_y];
+        anchors.extend(tap_ys.iter().copied());
+        anchors.push(end_y);
+        anchors.sort_unstable();
+        anchors.dedup();
+
+        // Insert breathing anchors so no gap exceeds the max-reach-plus-one
+        // spacing (UG pair plus two surface-pipe ends fits `max_distance + 1`
+        // tiles of trunk).
+        let mut refined: Vec<i32> = Vec::new();
+        for &sp in &anchors {
+            if let Some(&prev) = refined.last() {
+                let mut cur = prev;
+                while sp - cur > FLUID_TRUNK_SURFACE_SPACING {
+                    cur += FLUID_TRUNK_SURFACE_SPACING;
+                    refined.push(cur);
+                }
+            }
+            refined.push(sp);
+        }
+
+        let reservations = &fluid_reservations;
+        let is_blocked = |y: i32, existing_belts: &FxHashSet<(i32, i32)>, hard: &FxHashSet<(i32, i32)>| -> bool {
+            let tile = (x, y);
+            existing_belts.contains(&tile)
+                || (hard.contains(&tile) && !reservations.contains(&tile))
+        };
+
+        // The entry tile (start_y) gets a UG-in when the gap to the next
+        // anchor is ≥ 2, so an adjacent fluid lane's surface pipes don't
+        // cross-merge with our trunk at the entry row. When the first tap
+        // is directly adjacent (gap ≤ 1), we fall back to a surface pipe
+        // (UG pair can't fit, per user's short-trunk entry preference).
+        let entry_is_ug = refined.len() >= 2 && refined[1] - refined[0] >= 2;
+
+        for (idx, &sp) in refined.iter().enumerate() {
+            if is_blocked(sp, &existing_belts, &hard) {
+                continue;
+            }
+            if idx == 0 && entry_is_ug {
+                entities.push(PlacedEntity {
+                    name: "pipe-to-ground".to_string(),
+                    x,
+                    y: sp,
+                    direction: EntityDirection::South,
+                    io_type: Some("input".to_string()),
+                    carries: Some(lane.item.clone()),
+                    segment_id: trunk_seg_id.clone(),
+                    ..Default::default()
+                });
+            } else {
+                entities.push(PlacedEntity {
+                    name: "pipe".to_string(),
+                    x,
+                    y: sp,
+                    carries: Some(lane.item.clone()),
+                    segment_id: trunk_seg_id.clone(),
+                    ..Default::default()
+                });
+            }
+            existing_belts.insert((x, sp));
+            hard.insert((x, sp));
+        }
+
+        // Fill the gaps between consecutive anchors.
+        for (idx, pair) in refined.windows(2).enumerate() {
+            let (y0, y1) = (pair[0], pair[1]);
+            let gap = y1 - y0;
+            if gap <= 1 {
+                continue;
+            }
+            let first_pair = idx == 0;
+            if gap == 2 {
+                if first_pair && entry_is_ug {
+                    // UG-in already at y0; partner UG-out at y0+1 completes
+                    // the pair (tunnel distance 1, valid).
+                    let ug_out_y = y0 + 1;
+                    if !is_blocked(ug_out_y, &existing_belts, &hard) {
+                        entities.push(PlacedEntity {
+                            name: "pipe-to-ground".to_string(),
+                            x,
+                            y: ug_out_y,
+                            direction: EntityDirection::North,
+                            io_type: Some("output".to_string()),
+                            carries: Some(lane.item.clone()),
+                            segment_id: trunk_seg_id.clone(),
+                            ..Default::default()
+                        });
+                        existing_belts.insert((x, ug_out_y));
+                        hard.insert((x, ug_out_y));
+                    }
+                } else {
+                    // Surface pipe middle.
+                    let mid = y0 + 1;
+                    if !is_blocked(mid, &existing_belts, &hard) {
+                        entities.push(PlacedEntity {
+                            name: "pipe".to_string(),
+                            x,
+                            y: mid,
+                            carries: Some(lane.item.clone()),
+                            segment_id: trunk_seg_id.clone(),
+                            ..Default::default()
+                        });
+                        existing_belts.insert((x, mid));
+                        hard.insert((x, mid));
+                    }
+                }
+                continue;
+            }
+            // gap ≥ 3. UG-in/UG-out pair inside the gap. If the first anchor
+            // is a UG-in entry (y0 == start_y), its partner UG-out lives at
+            // `first_surface - 1` so fluid exits adjacent to the next tap.
+            let ug_in_y = if first_pair && entry_is_ug { y0 } else { y0 + 1 };
+            let ug_out_y = y1 - 1;
+            if first_pair && entry_is_ug {
+                // UG-in already emitted at y0; just emit UG-out.
+                if !is_blocked(ug_out_y, &existing_belts, &hard) {
+                    entities.push(PlacedEntity {
+                        name: "pipe-to-ground".to_string(),
+                        x,
+                        y: ug_out_y,
+                        direction: EntityDirection::North,
+                        io_type: Some("output".to_string()),
+                        carries: Some(lane.item.clone()),
+                        segment_id: trunk_seg_id.clone(),
+                        ..Default::default()
+                    });
+                    existing_belts.insert((x, ug_out_y));
+                    hard.insert((x, ug_out_y));
+                }
+            } else if !is_blocked(ug_in_y, &existing_belts, &hard)
+                && !is_blocked(ug_out_y, &existing_belts, &hard)
+            {
+                entities.push(PlacedEntity {
+                    name: "pipe-to-ground".to_string(),
+                    x,
+                    y: ug_in_y,
+                    direction: EntityDirection::South,
+                    io_type: Some("input".to_string()),
+                    carries: Some(lane.item.clone()),
+                    segment_id: trunk_seg_id.clone(),
+                    ..Default::default()
+                });
+                existing_belts.insert((x, ug_in_y));
+                hard.insert((x, ug_in_y));
+                entities.push(PlacedEntity {
+                    name: "pipe-to-ground".to_string(),
+                    x,
+                    y: ug_out_y,
+                    direction: EntityDirection::North,
+                    io_type: Some("output".to_string()),
+                    carries: Some(lane.item.clone()),
+                    segment_id: trunk_seg_id.clone(),
+                    ..Default::default()
+                });
+                existing_belts.insert((x, ug_out_y));
+                hard.insert((x, ug_out_y));
+            }
+        }
+
+        // Horizontal branches: one per (row, port_y) pair. Multiple machines
+        // in the same row share the same port_y; we stamp to the leftmost px
+        // and let the row template's own pipe line propagate east.
+        //
+        // If the template placed a UG direction=West carrying this fluid at
+        // (min_px - 1, py), that's the multi-fluid stacked-T left flank ready
+        // to be a UG partner. Emit a single east-facing UG at (x+1, py) and
+        // leave the intermediate tiles empty — the tunnel carries fluid across
+        // without surface pipes that could cross-merge with foreign trunks on
+        // adjacent rows. Otherwise fall back to continuous surface pipes.
+        let mut branch_targets: Vec<(i32, i32)> = Vec::new();
+        for &(_ri, px, py) in &lane.fluid_port_positions {
+            branch_targets.push((px, py));
+        }
+        for &(_ri, px, py) in &lane.fluid_output_port_positions {
+            branch_targets.push((px, py));
+        }
+        let mut by_py: FxHashMap<i32, i32> = FxHashMap::default();
+        for (px, py) in branch_targets {
+            by_py.entry(py).and_modify(|min_px| { if px < *min_px { *min_px = px; } }).or_insert(px);
+        }
+        for (py, min_px) in by_py {
+            // Check if the template placed a UG partner at (min_px - 1, py).
+            let partner_tile = (min_px - 1, py);
+            let has_ug_partner = row_entities.iter().any(|e| {
+                e.x == partner_tile.0
+                    && e.y == partner_tile.1
+                    && e.name == "pipe-to-ground"
+                    && e.direction == EntityDirection::West
+                    && e.carries.as_deref() == Some(lane.item.as_str())
+            });
+
+            if has_ug_partner && min_px - (x + 1) <= 10 {
+                // Multi-fluid template: emit one UG at (x+1, py) direction=East,
+                // partnered with the template's left flank UG. Reach cap 10 per F4.
+                let ug_tile = (x + 1, py);
+                if !(hard.contains(&ug_tile) || existing_belts.contains(&ug_tile)) {
+                    entities.push(PlacedEntity {
+                        name: "pipe-to-ground".to_string(),
+                        x: x + 1,
+                        y: py,
+                        direction: EntityDirection::East,
+                        io_type: Some("input".to_string()),
+                        carries: Some(lane.item.clone()),
+                        segment_id: trunk_seg_id.clone(),
+                        ..Default::default()
+                    });
+                    existing_belts.insert(ug_tile);
+                    hard.insert(ug_tile);
+                }
+            } else {
+                // Single-fluid path: continuous surface pipes from (x+1, py)
+                // to (min_px - 1, py). Connects to the template's continuous
+                // pipe row starting at min_px.
+                for bx in (x + 1)..min_px {
+                    let tile = (bx, py);
+                    if hard.contains(&tile) || existing_belts.contains(&tile) {
+                        continue;
+                    }
+                    entities.push(PlacedEntity {
+                        name: "pipe".to_string(),
+                        x: bx,
+                        y: py,
+                        carries: Some(lane.item.clone()),
+                        segment_id: trunk_seg_id.clone(),
+                        ..Default::default()
+                    });
+                    existing_belts.insert(tile);
+                    hard.insert(tile);
+                }
+            }
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -620,6 +930,24 @@ pub fn route_bus_ghost(
     // Snapshot pre-routing state so each iteration starts from the same place.
     let pre_routing_existing_belts = existing_belts.clone();
 
+    // Pipe tiles are "soft" obstacles: A* may route belts through them (the
+    // tile shows up as a crossing, and the junction solver handles the
+    // resulting belt×pipe intersection). `astar_hard` excludes pipe tiles
+    // from the obstacle set while `hard` keeps them for internal stamping
+    // guards (step 3.6 self-protection, junction solver invariants, etc.).
+    const PIPE_NAMES: &[&str] = &["pipe", "pipe-to-ground"];
+    let pipe_tiles: FxHashSet<(i32, i32)> = row_entities
+        .iter()
+        .chain(entities.iter())
+        .filter(|e| PIPE_NAMES.contains(&e.name.as_str()))
+        .map(|e| (e.x, e.y))
+        .collect();
+    let astar_hard: FxHashSet<(i32, i32)> = hard
+        .iter()
+        .filter(|t| !pipe_tiles.contains(t))
+        .copied()
+        .collect();
+
     const MAX_NEGOTIATION_ITERATIONS: u32 = 8;
     // History penalty: accumulated across iterations on tiles that had
     // same-axis conflicts in previous iterations.
@@ -650,14 +978,27 @@ pub fn route_bus_ghost(
             match ghost_astar(
                 spec.start,
                 spec.goal,
-                &hard,
+                &astar_hard,
                 &iter_existing,
                 width,
                 height,
                 TURN_PENALTY,
                 &iter_cost_grid,
             ) {
-                Some((path, _crossings)) => {
+                Some((path, crossings)) => {
+                    // Stream the per-spec route so the browser overlay can
+                    // watch negotiation happen instead of seeing everything
+                    // flash in at the end of routing. Path tiles + crossings
+                    // computed above are the same shape the final post-
+                    // negotiation `GhostSpecRouted` event carries.
+                    trace::emit(trace::TraceEvent::GhostSpecRouted {
+                        spec_key: spec.key.clone(),
+                        path_len: path.len(),
+                        crossings: crossings.len(),
+                        turns: count_turns(&path),
+                        tiles: path.clone(),
+                        crossing_tiles: crossings.clone(),
+                    });
                     // Incrementally bump the present cost for tiles used by
                     // this spec, in the spec's axis at each tile. Subsequent
                     // specs in this iteration will pay the bumped cost.
@@ -876,6 +1217,21 @@ pub fn route_bus_ghost(
                         && !hard.contains(&(e.x, e.y))
                 })
                 .collect();
+            // Stream the materialised entities so a live renderer can
+            // swap its per-tile ghost-belt placeholders for the real
+            // turn-aware / UG-aware shapes. Fires once per spec after
+            // `GhostSpecRouted` for the same spec.
+            //
+            // Emitted AFTER the survivors filter so the streaming UI
+            // never commits a feeder-belt at a tile already owned by
+            // a balancer/row/permanent pre-stamp. Emitting unfiltered
+            // path_ents here used to leave West-facing feeder ghosts
+            // rendered over South-facing balancer tiles — same final
+            // layout entity, wrong visual.
+            trace::emit(trace::TraceEvent::GhostSpecCommitted {
+                spec_key: spec.key.clone(),
+                entities: surviving_ents.clone(),
+            });
             for ent in &surviving_ents {
                 occupancy
                     .place(ent.clone(), claim_kind)
@@ -1205,7 +1561,11 @@ pub fn route_bus_ghost(
         .filter(|t| !corridor_handled.contains(t))
         .copied()
         .collect();
-    let clusters = cluster_adjacent_crossings(&unhandled_crossings, &routed_paths);
+    let clusters = cluster_adjacent_crossings(
+        &unhandled_crossings,
+        &routed_paths,
+        &spec_belt_tiers,
+    );
 
     for cluster in &clusters {
         // Cluster is already guaranteed unhandled by the filter above;
@@ -1435,6 +1795,7 @@ pub fn route_bus_ghost(
             participating_count: participating_keys.len(),
             released_count,
         });
+        let mut committed_entities: Vec<crate::models::PlacedEntity> = Vec::new();
         for ent in sol.entities {
             let tile = (ent.x, ent.y);
             if occupancy.is_hard_obstacle(tile) {
@@ -1465,8 +1826,22 @@ pub fn route_bus_ghost(
                         tile.0, tile.1, err
                     );
                 });
+            committed_entities.push(ent.clone());
             entities.push(ent);
         }
+        // Stream the solved cluster's entities + the spec keys whose
+        // ghost-routed belts inside the footprint were just invalidated.
+        // A live renderer uses this to fade out per-tile ghost belts in
+        // the zone and fade in the real SAT output.
+        trace::emit(trace::TraceEvent::JunctionCommitted {
+            cluster_id: template_count,
+            zone_x: footprint.x,
+            zone_y: footprint.y,
+            zone_w: footprint.w,
+            zone_h: footprint.h,
+            entities: committed_entities,
+            participating: participating_keys.iter().map(|s| s.to_string()).collect(),
+        });
         // Sync-gap assertion. Any ghost entity for a participating spec
         // that still holds a GhostSurface claim inside the footprint is
         // a leak — `releasable_ghost_tiles` should have covered every
@@ -1693,15 +2068,30 @@ fn is_horizontal(d: EntityDirection) -> bool {
 }
 
 /// Group crossing tiles into clusters. Two tiles belong to the same
-/// cluster iff they are 4-connected neighbours AND their spec-key sets
-/// (derived from `routed_paths`) intersect. The shared-spec gate
-/// prevents merging unrelated crossings that happen to be adjacent.
+/// cluster iff they share at least one routed spec AND either
+///   (a) they are within Manhattan-2 of each other, OR
+///   (b) they sit within UG-reach (`max_reach + 1` tiles for the spec's
+///       belt tier) along a shared spec's path.
+///
+/// The UG-reach rule (b) guards against the "adjacent committed UG"
+/// failure mode: when cluster A is solved first and stamps a UG pair on
+/// a shared spec, a later cluster B within reach of that UG cannot solve
+/// without disturbing it — the walker correctly vetoes every SAT output
+/// because the UG-pair invariant breaks. Merging A and B into one
+/// cluster lets SAT see both ends of the shared spec together and place
+/// a single coherent UG layout.
+///
+/// A `HULL_BUDGET` gate stops pathological chains (e.g. N evenly-spaced
+/// crossings each within reach of the next) from fusing into one zone
+/// that would exceed `MAX_REGION_TILES`. When the guardrail trips, the
+/// chain falls back to separate clusters — same worst case as today.
 ///
 /// Deterministic output: each cluster is sorted `(y, x)` internally,
 /// and the outer Vec is sorted by its first tile.
 fn cluster_adjacent_crossings(
     crossing_set: &FxHashSet<(i32, i32)>,
     routed_paths: &FxHashMap<String, Vec<(i32, i32)>>,
+    spec_belt_tiers: &FxHashMap<String, BeltTier>,
 ) -> Vec<Vec<(i32, i32)>> {
     if crossing_set.is_empty() {
         return Vec::new();
@@ -1768,6 +2158,92 @@ fn cluster_adjacent_crossings(
             if ri != rj {
                 parent[ri] = rj;
             }
+        }
+    }
+
+    // Second pass: within-UG-reach along a shared spec's path, gated
+    // to **single-crossing rescue** — only merges when at least one of
+    // the two parties is currently a single-crossing cluster. This is
+    // the specific failure mode we fix: an isolated crossing wedged
+    // next to a multi-crossing cluster whose earlier solve committed a
+    // UG pair in the isolate's growth envelope. Multi-on-multi merges
+    // are regressive (they fuse clusters that would otherwise solve
+    // independently into super-zones the solver hasn't been tuned for),
+    // so we skip them.
+    //
+    // The HULL_BUDGET cap is still honoured: even a single-to-many
+    // rescue won't proceed if the merged hull can't fit growth.
+    const HULL_BUDGET: usize = 48;
+
+    // Cluster sizes from the union-find state after the Manhattan-2
+    // pass. Kept current as unions happen in this second pass so the
+    // "single-crossing" gate sees the right size.
+    let mut cluster_size = vec![0usize; tiles.len()];
+    for i in 0..tiles.len() {
+        let r = find(&mut parent, i);
+        cluster_size[r] += 1;
+    }
+
+    for (key, path) in routed_paths {
+        // Crossings that lie on this spec's path, in path order.
+        let mut on_path: Vec<(usize, usize)> = Vec::new();
+        for (idx, t) in path.iter().enumerate() {
+            if let Some(&i) = index_of.get(t) {
+                on_path.push((i, idx));
+            }
+        }
+        if on_path.len() < 2 {
+            continue;
+        }
+        let tier = spec_belt_tiers
+            .get(key.as_str())
+            .copied()
+            .unwrap_or(BeltTier::Yellow);
+        let max_reach = ug_max_reach(belt_name_for_tier(tier)) as usize;
+        // UG-pair span = max_reach + 1 positions (max_reach hidden-
+        // middle tiles). See `sat.rs::encode_underground` and memory
+        // `project_prune_first_suspect`.
+        let reach_threshold = max_reach + 1;
+        for w in on_path.windows(2) {
+            let (i, p_i) = w[0];
+            let (j, p_j) = w[1];
+            if p_j - p_i > reach_threshold {
+                continue;
+            }
+            let ri = find(&mut parent, i);
+            let rj = find(&mut parent, j);
+            if ri == rj {
+                continue;
+            }
+            // Single-crossing rescue gate: at least one party must be
+            // a lone-crossing cluster. Skip multi-to-multi merges —
+            // they regress clusters that solve fine independently.
+            if cluster_size[ri] != 1 && cluster_size[rj] != 1 {
+                continue;
+            }
+            // Compute hull of the proposed merged cluster. O(n) per
+            // check; n = total crossings in the layout (small, <~100
+            // in practice).
+            let (mut min_x, mut min_y) = (i32::MAX, i32::MAX);
+            let (mut max_x, mut max_y) = (i32::MIN, i32::MIN);
+            for (k, &(tx, ty)) in tiles.iter().enumerate() {
+                let rk = find(&mut parent, k);
+                if rk == ri || rk == rj {
+                    min_x = min_x.min(tx);
+                    max_x = max_x.max(tx);
+                    min_y = min_y.min(ty);
+                    max_y = max_y.max(ty);
+                }
+            }
+            let hull = ((max_x - min_x + 1) as usize)
+                * ((max_y - min_y + 1) as usize);
+            if hull > HULL_BUDGET {
+                continue;
+            }
+            let merged_size = cluster_size[ri] + cluster_size[rj];
+            parent[ri] = rj;
+            cluster_size[rj] = merged_size;
+            cluster_size[ri] = 0;
         }
     }
 
@@ -2491,6 +2967,7 @@ fn dump_region_fixture(
             mode: "solve".to_string(),
             max_cost: None,
             optimal_cost: None,
+            required_entities: Vec::new(),
         },
     };
 
@@ -2539,18 +3016,24 @@ mod cluster_adjacent_crossings_tests {
         tiles.iter().copied().collect()
     }
 
+    fn no_tiers() -> FxHashMap<String, BeltTier> {
+        // All tests assume yellow belts; empty map makes
+        // `cluster_adjacent_crossings` fall back to Yellow per spec.
+        FxHashMap::default()
+    }
+
     #[test]
     fn empty_input_returns_empty() {
         let cs = FxHashSet::default();
         let rp = FxHashMap::default();
-        assert!(cluster_adjacent_crossings(&cs, &rp).is_empty());
+        assert!(cluster_adjacent_crossings(&cs, &rp, &no_tiers()).is_empty());
     }
 
     #[test]
     fn single_tile_becomes_single_cluster() {
         let cs = crossings(&[(5, 5)]);
         let rp = paths(&[("tap:iron-plate", &[(5, 5)])]);
-        let clusters = cluster_adjacent_crossings(&cs, &rp);
+        let clusters = cluster_adjacent_crossings(&cs, &rp, &no_tiers());
         assert_eq!(clusters, vec![vec![(5, 5)]]);
     }
 
@@ -2569,7 +3052,7 @@ mod cluster_adjacent_crossings_tests {
             ("trunk:copper-cable:16", &[(16, 89), (16, 90), (16, 91)]),
             ("trunk:copper-cable:17", &[(17, 89), (17, 90), (17, 91)]),
         ]);
-        let clusters = cluster_adjacent_crossings(&cs, &rp);
+        let clusters = cluster_adjacent_crossings(&cs, &rp, &no_tiers());
         assert_eq!(clusters.len(), 1);
         assert_eq!(
             clusters[0],
@@ -2588,24 +3071,47 @@ mod cluster_adjacent_crossings_tests {
             ("tap:c", &[(11, 10)]),
             ("trunk:d", &[(11, 9), (11, 10), (11, 11)]),
         ]);
-        let clusters = cluster_adjacent_crossings(&cs, &rp);
+        let clusters = cluster_adjacent_crossings(&cs, &rp, &no_tiers());
         assert_eq!(clusters.len(), 2);
         assert_eq!(clusters, vec![vec![(10, 10)], vec![(11, 10)]]);
     }
 
     #[test]
-    fn manhattan_3_sharing_spec_stays_separate() {
-        // Two crossings that share a spec (a tap running across both)
-        // but are 3 tiles apart. Manhattan 2 rule caps the merge radius,
-        // so they stay as separate clusters.
+    fn manhattan_3_sharing_spec_merges_via_ug_reach() {
+        // Two crossings 3 tiles apart along a shared spec. Outside
+        // Manhattan-2 but inside yellow UG-reach (5), so the UG-reach
+        // pass merges them. Guards the failure mode at advanced-circuit
+        // (22,143)+(25,142), where the earlier cluster stamps a UG pair
+        // whose mate sits in the later cluster's expansion envelope —
+        // forcing a walker veto on every SAT output until growth caps.
         let cs = crossings(&[(5, 5), (8, 5)]);
         let rp = paths(&[
             ("tap:iron-plate", &[(5, 5), (6, 5), (7, 5), (8, 5)]),
             ("trunk:a", &[(5, 4), (5, 5), (5, 6)]),
             ("trunk:b", &[(8, 4), (8, 5), (8, 6)]),
         ]);
-        let clusters = cluster_adjacent_crossings(&cs, &rp);
-        assert_eq!(clusters.len(), 2);
+        let clusters = cluster_adjacent_crossings(&cs, &rp, &no_tiers());
+        assert_eq!(clusters.len(), 1);
+    }
+
+    #[test]
+    fn ug_reach_merge_respects_hull_budget() {
+        // Long chain of crossings 4 tiles apart along a shared spec.
+        // Each consecutive pair is within UG-reach, so naive transitive
+        // union-find would fuse them all — but once the running hull
+        // would exceed HULL_BUDGET=48 tiles the guardrail must stop
+        // merging. 20 crossings × 4 tile spacing → hull 77×1 = 77 tiles,
+        // well over the cap, so we must end up with >1 cluster.
+        let tiles: Vec<(i32, i32)> = (0..20).map(|k| (k * 4, 5)).collect();
+        let cs = crossings(&tiles);
+        let path: Vec<(i32, i32)> = (0..=20 * 4).map(|x| (x, 5)).collect();
+        let rp = paths(&[("tap:shared", path.as_slice())]);
+        let clusters = cluster_adjacent_crossings(&cs, &rp, &no_tiers());
+        assert!(
+            clusters.len() > 1,
+            "expected hull-budget to split the chain; got {} cluster(s)",
+            clusters.len()
+        );
     }
 
     #[test]
@@ -2620,7 +3126,7 @@ mod cluster_adjacent_crossings_tests {
             ("trunk:a", &[(5, 4), (5, 5), (5, 6)]),
             ("trunk:b", &[(7, 4), (7, 5), (7, 6)]),
         ]);
-        let clusters = cluster_adjacent_crossings(&cs, &rp);
+        let clusters = cluster_adjacent_crossings(&cs, &rp, &no_tiers());
         assert_eq!(clusters.len(), 1);
         assert_eq!(clusters[0], vec![(5, 5), (7, 5)]);
     }
@@ -2636,7 +3142,7 @@ mod cluster_adjacent_crossings_tests {
             ("trunk:a", &[(5, 4), (5, 5), (5, 6)]),
             ("trunk:b", &[(6, 5), (6, 6), (6, 7)]),
         ]);
-        let clusters = cluster_adjacent_crossings(&cs, &rp);
+        let clusters = cluster_adjacent_crossings(&cs, &rp, &no_tiers());
         assert_eq!(clusters.len(), 1);
     }
 
@@ -2651,7 +3157,7 @@ mod cluster_adjacent_crossings_tests {
             ("trunk:x", &[(5, 4), (5, 5), (5, 6)]),
             ("trunk:y", &[(7, 4), (7, 5), (7, 6)]),
         ]);
-        let clusters = cluster_adjacent_crossings(&cs, &rp);
+        let clusters = cluster_adjacent_crossings(&cs, &rp, &no_tiers());
         assert_eq!(clusters.len(), 2);
     }
 }

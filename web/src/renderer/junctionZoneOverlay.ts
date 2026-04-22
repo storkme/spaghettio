@@ -110,8 +110,11 @@ export function renderJunctionZoneOverlay(
 function pillText(cluster: JunctionCluster): string {
   const n = cluster.iterations.length;
   switch (cluster.outcome.kind) {
-    case "Solved":
-      return `Solved @ iter ${cluster.outcome.growthIter} · ${n} iter${n === 1 ? "" : "s"}`;
+    case "Solved": {
+      const vetoes = cluster.iterations.filter((it) => it.veto !== null).length;
+      const suffix = vetoes > 0 ? ` · ${vetoes} veto${vetoes === 1 ? "" : "es"}` : "";
+      return `Solved @ iter ${cluster.outcome.growthIter} · ${n} iter${n === 1 ? "" : "s"}${suffix}`;
+    }
     case "Capped":
       return `Capped · ${cluster.outcome.iters} iter${cluster.outcome.iters === 1 ? "" : "s"}`;
     case "Open":

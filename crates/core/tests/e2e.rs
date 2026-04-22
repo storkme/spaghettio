@@ -164,11 +164,31 @@ fn run_e2e(
     belt_tier: Option<&str>,
     available_inputs: &FxHashSet<String>,
 ) -> Result<E2EResult, String> {
+    run_e2e_with_exclusions(
+        test_name,
+        item,
+        rate,
+        machine,
+        belt_tier,
+        available_inputs,
+        &FxHashSet::default(),
+    )
+}
+
+fn run_e2e_with_exclusions(
+    test_name: &str,
+    item: &str,
+    rate: f64,
+    machine: &str,
+    belt_tier: Option<&str>,
+    available_inputs: &FxHashSet<String>,
+    excluded_recipes: &FxHashSet<String>,
+) -> Result<E2EResult, String> {
     let _guard = trace::start_trace();
     fucktorio_core::zone_cache::set_thread_source(Some(test_name));
     let run_params = RunParams { item, rate, machine, belt_tier, available_inputs };
 
-    let solver_result = solver::solve(item, rate, available_inputs, machine)
+    let solver_result = solver::solve_with_exclusions(item, rate, available_inputs, machine, excluded_recipes)
         .map_err(|e| {
             let msg = format!("solver: {e}");
             dump_partial_snapshot(test_name, &run_params, None, &msg);
@@ -448,13 +468,16 @@ fn fixture_source_ec_15s_am1_yellow_from_ore() {
 }
 
 #[test]
-#[ignore = "belt-item-isolation: 6 adjacent-tile item-mix errors on full ore chain"]
 #[ntest::timeout(10000)]
 fn tier2_electronic_circuit_from_ore() {
     let inputs: FxHashSet<String> = ["iron-ore", "copper-ore"]
         .iter()
         .map(|s| s.to_string())
         .collect();
+    // `Some("transport-belt")` = force yellow. Un-restricted (`None`,
+    // what the web URL defaults to) mixes tiers and triggers a pre-
+    // existing lane-throughput bug unrelated to this test. Yellow-only
+    // gives a clean, deterministic layout.
     let result = run_e2e(
         "tier2_electronic_circuit_from_ore",
         "electronic-circuit",
@@ -605,6 +628,34 @@ fn tier3_sulfuric_acid() {
     assert_no_errors(&result);
     assert_no_warnings(&result);
     assert_produces(&result, "sulfuric-acid", 5.0);
+    assert_round_trip(&result);
+}
+
+#[test]
+#[ntest::timeout(10000)]
+fn tier3_heavy_oil_cracking() {
+    // 2 distinct fluid inputs (water + heavy-oil) on a chemical-plant —
+    // exercises the stacked-T multi-fluid row pattern. Primary regression
+    // signal for docs/rfp-multi-fluid-rows.md.
+    //
+    // Exclude advanced-oil-processing and coal-liquefaction so the solver
+    // picks heavy-oil-cracking as the light-oil producer (in JSON order,
+    // advanced-oil-processing comes first).
+    let inputs: FxHashSet<String> = ["water", "heavy-oil"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let excluded: FxHashSet<String> = ["advanced-oil-processing", "coal-liquefaction"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let result =
+        run_e2e_with_exclusions("tier3_heavy_oil_cracking", "light-oil", 5.0, "chemical-plant", None, &inputs, &excluded)
+            .unwrap_or_else(|e| panic!("tier3_heavy_oil_cracking: {e}"));
+
+    assert_no_errors(&result);
+    assert_no_warnings(&result);
+    assert_produces(&result, "light-oil", 5.0);
     assert_round_trip(&result);
 }
 

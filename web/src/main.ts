@@ -28,11 +28,12 @@ import { createIssuesDialog } from "./ui/issuesDialog";
 import { createInspector } from "./ui/inspector";
 import { buildTileContext } from "./ui/tileContext";
 import { createSnapshotMode } from "./ui/snapshotMode";
-import { createStepThrough } from "./ui/stepThrough";
-import { attachBusyOverlay } from "./ui/busyOverlay";
 import { createLegendPanel, type LegendPanelControls, type LegendPanelState } from "./ui/legendPanel";
 import { renderLayoutPhaseAnimated, type PhaseAnimationHandle } from "./renderer/phaseAnimation";
 import { createStreamingRenderer, type StreamingRendererHandle } from "./renderer/streamingRenderer";
+import { createTimelineScrubber, type TimelineScrubberHandle } from "./ui/timelineScrubber";
+import "./ui/timelineScrubber.css";
+import { logLayoutStats } from "./ui/layoutTimingLog";
 
 const MACHINE_SLUGS = [
   "assembling-machine-1", "assembling-machine-2", "assembling-machine-3",
@@ -102,13 +103,14 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
   const gridGfx = drawGrid(viewport);
   drawGraph(viewport, null);
 
-  attachBusyOverlay(container);
-
   debugState.create();
 
   // --- Modules ---
   const overlayControls = createOverlayPanel(container);
-  const { debugCb, colorCb, stepCb, valCb, regionsCb, soloRegionsCb, ghostTilesCb } = overlayControls;
+  const { debugCb, colorCb, valCb, regionsCb, soloRegionsCb, ghostTilesCb } = overlayControls;
+  // Sync the item-coloring flag with the persisted checkbox state so
+  // a user who turned colours off stays off across reloads.
+  setItemColoring(colorCb.checked);
 
   const overlayLegend: LegendPanelControls = createLegendPanel(container);
 
@@ -117,7 +119,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       hasLayout: !!lastLayout,
       debugMode: debugCb.checked,
       hasTrace: !!(lastLayout?.trace?.length),
-      stepThrough: stepCb.checked,
+      stepThrough: false,
       validation: valCb.checked,
       ghostTiles: ghostTilesCb.checked,
       satZones: regionsCb.checked,
@@ -246,34 +248,15 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     return null;
   }
 
-  const stepThrough = createStepThrough(container, {
-    getLayout: () => lastLayout,
-    isEnabled: () => debugCb.checked && stepCb.checked,
-    isModalBlocking: () => junctionDebugger.isOpen(),
-    onPhaseChange: () => updateTraceOverlay(),
-    onJumpToFailure: (fromX, fromY) => {
-      const targetX = fromX * TILE_PX + TILE_PX / 2;
-      const targetY = fromY * TILE_PX + TILE_PX / 2;
-      viewport.moveCenter(targetX, targetY);
-      if (traceOverlayLayer) {
-        const marker = traceOverlayLayer.children.find(c =>
-          c.label === "RouteFailure" &&
-          Math.abs(c.x - targetX) < 1 && Math.abs(c.y - targetY) < 1,
-        );
-        if (marker) {
-          let pulses = 0;
-          const interval = setInterval(() => {
-            marker.alpha = marker.alpha < 0.5 ? 1.0 : 0.3;
-            pulses++;
-            if (pulses >= 6) {
-              marker.alpha = 1.0;
-              clearInterval(interval);
-            }
-          }, 100);
-        }
-      }
-    },
-  });
+  // The step-through bar was superseded by the timeline scrubber.
+  // Keep a stub here so `updateTraceOverlay` and friends can still
+  // call into it without a DOM or visible UI. `getPhaseIndex()` always
+  // returning -1 disables the trace-snapshot codepath.
+  const stepThrough = {
+    update(): void {},
+    getPhaseIndex(): number { return -1; },
+    reset(): void {},
+  };
 
   /* Stagger-fade entities that are new in `nextList` relative to `prevList`.
    * Only called on consecutive forward phase steps (N → N+1).
@@ -344,7 +327,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     }
 
     const phaseIndex = stepThrough.getPhaseIndex();
-    const wantSnapshot = debugCb.checked && stepCb.checked && phaseIndex >= 0 && !!lastLayout?.trace;
+    const wantSnapshot = debugCb.checked && phaseIndex >= 0 && !!lastLayout?.trace;
     const snapshot = wantSnapshot
       ? getSnapshotForPhase(lastLayout!.trace as TraceEvent[], phaseIndex)
       : null;
@@ -356,6 +339,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       phaseAnimHandle = null;
       streamingHandle?.cancel();
       streamingHandle = null;
+      timelineScrubber.reset();
       snapshotActive = true;
 
       const gfxMap = new Map<string, Graphics[]>();
@@ -384,7 +368,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       }
     }
 
-    if (!debugCb.checked || !stepCb.checked || !lastLayout?.trace?.length) {
+    if (!debugCb.checked || !lastLayout?.trace?.length) {
       stepThrough.update();
       return;
     }
@@ -505,7 +489,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     if (!debugCb.checked || !regionsCb?.checked || !lastLayout) return;
 
     if (lastLayout.regions && lastLayout.regions.length > 0) {
-      const detailed = renderRegionOverlayDetailed(lastLayout, lastLayout.trace);
+      const detailed = renderRegionOverlayDetailed(lastLayout);
       regionOverlayLayer = detailed.layer;
       regionHitTest = detailed.hitTest;
       entityLayer.addChild(regionOverlayLayer);
@@ -553,6 +537,14 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
   let selectionCtrl: SelectionController | null = null;
   let phaseAnimHandle: PhaseAnimationHandle | null = null;
   let streamingHandle: StreamingRendererHandle | null = null;
+
+  // Floating timeline scrubber above the canvas. During live streaming
+  // it shows milestone chips and a progress fill; after streaming it
+  // becomes a draggable seekbar that drives streamingHandle.seekTo().
+  const timelineScrubber: TimelineScrubberHandle = createTimelineScrubber(
+    container,
+    (virtualMs) => streamingHandle?.seekTo(virtualMs),
+  );
 
   const snapshotMode = createSnapshotMode({
     sidebarEl: document.getElementById("sidebar"),
@@ -613,7 +605,26 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
   // takes precedence: it opens the step-through modal. When a zone is
   // already selected, a click outside its bbox deselects it — matches
   // the "selected thing dims everything else" UX convention.
+  //
+  // Drag-vs-click discrimination: record pointer-down position, only
+  // treat pointerup as a click if the pointer hasn't moved beyond
+  // CLICK_DRAG_THRESHOLD_PX. Otherwise the user was panning the
+  // viewport and shouldn't pin a tile.
+  const CLICK_DRAG_THRESHOLD_PX = 4;
+  let downState: { x: number; y: number; shifted: boolean } | null = null;
   app.canvas.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) {
+      downState = null;
+      return;
+    }
+    downState = { x: e.clientX, y: e.clientY, shifted: false };
+  });
+  app.canvas.addEventListener("pointerup", (e) => {
+    if (!downState) return;
+    const dx = e.clientX - downState.x;
+    const dy = e.clientY - downState.y;
+    downState = null;
+    if (Math.hypot(dx, dy) > CLICK_DRAG_THRESHOLD_PX) return; // it was a drag
     if (e.button !== 0 || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return;
     const rect = app.canvas.getBoundingClientRect();
     const world = viewport.toWorld(e.clientX - rect.left, e.clientY - rect.top);
@@ -622,9 +633,12 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
 
     if (!regionsCb.checked) {
       // Debug regions off — a bare canvas click pins the tile under
-      // the cursor so the inspector freezes on its detail.
+      // the cursor so the inspector freezes on its detail. Empty tiles
+      // aren't pinnable: clicking one passes through without affecting
+      // any current pin.
       const entity = hoveredEntity && hoveredEntity.x === tx && hoveredEntity.y === ty
         ? hoveredEntity : null;
+      if (!entity) return;
       inspector.pinTile(entity, tx, ty);
       return;
     }
@@ -664,13 +678,15 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
 
     // Fell through every overlay — pin the tile so the inspector
     // keeps showing its full detail. Click on an already-pinned tile
-    // to unpin.
+    // to unpin. Empty tiles are not pinnable: a click on one leaves
+    // the current pin (if any) alone.
     const current = inspector.getPinnedTile();
     if (current && current.x === tx && current.y === ty) {
       inspector.clearPin();
     } else {
       const entity = hoveredEntity && hoveredEntity.x === tx && hoveredEntity.y === ty
         ? hoveredEntity : null;
+      if (!entity) return;
       inspector.pinTile(entity, tx, ty);
     }
   });
@@ -690,6 +706,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     phaseAnimHandle = null;
     streamingHandle?.cancel();
     streamingHandle = null;
+    timelineScrubber.reset();
     entityLayer.removeChildren();
     drawGraph(viewport, result);
     legendEl.style.display = "none";
@@ -700,6 +717,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
 
   function startStreaming(): (evt: TraceEvent) => void {
     streamingHandle?.cancel();
+    timelineScrubber.reset();
     // Remove the dependency graph — it sits on top of entityLayer in viewport's
     // child order, so it would hide streaming entities. Switch to entity view now.
     drawGraph(viewport, null);
@@ -716,7 +734,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
           viewportFitted = true;
         }
       }
-      streamingHandle?.onEvent(evt);
+      streamingHandle?.onEvent(evt, (m) => timelineScrubber.noteMilestone(m.id));
     };
   }
 
@@ -750,6 +768,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
   function renderLayoutOnCanvas(layout: LayoutResult): void {
     lastLayout = layout;
     (window as unknown as { __layout?: LayoutResult }).__layout = layout;
+    logLayoutStats(layout);
     stepThrough.reset();
     snapshotActive = false;
     prevSnapshotEntityList = [];
@@ -765,21 +784,24 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     drawGraph(viewport, null);
 
     let ctrl;
-    const streamedCtrl = streamingHandle?.hasCommittedEntities()
-      ? streamingHandle.getHighlightController()
-      : null;
 
-    if (streamingHandle && streamedCtrl) {
-      // Streaming drew entities progressively during layout. Snap any in-flight
-      // fades to final state and keep the streaming graphics as authoritative.
-      streamingHandle.finish();
-      streamingHandle = null;
-      ctrl = streamedCtrl;
+    if (streamingHandle?.hasCommittedEntities()) {
+      // Streaming drew transient previews during layout. Hand off to
+      // the authoritative `renderLayout` — this destroys the transient
+      // graphics, draws `layout.entities`, and returns the real
+      // HighlightController. Keep `streamingHandle` alive so the
+      // scrubber's `onSeek` callback can drive `seekTo()`.
+      ctrl = streamingHandle.finish(layout);
+      timelineScrubber.arm(
+        streamingHandle.getTimeRange(),
+        streamingHandle.getMilestones(),
+      );
     } else {
       // Non-streaming path: corpus, parsed blueprints, or fast layouts where
       // all snapshots arrived before any streaming frame could commit.
       streamingHandle?.cancel();
       streamingHandle = null;
+      timelineScrubber.reset();
       const traceEvents = Array.isArray(layout.trace) ? layout.trace : [];
       const hasSnapshots = traceEvents.some(
         (e) => (e as { phase?: string }).phase === "PhaseSnapshot",
@@ -916,14 +938,10 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       setItemColoring(colorCb.checked);
       if (!colorCb.checked) {
         legendEl.style.display = "none";
-      } else if (lastLayout) {
+      }
+      if (lastLayout) {
         renderLayoutOnCanvas(lastLayout);
       }
-    });
-    stepCb.addEventListener("change", () => {
-      stepThrough.reset();
-      updateTraceOverlay();
-      updateLegend();
     });
     valCb.addEventListener("change", () => {
       updateValidationOverlay();

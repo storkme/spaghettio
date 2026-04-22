@@ -6,7 +6,6 @@ export interface OverlayPanelControls {
   setDebugEnabled(on: boolean): void;
   debugCb: HTMLInputElement;
   colorCb: HTMLInputElement;
-  stepCb: HTMLInputElement;
   valCb: HTMLInputElement;
   regionsCb: HTMLInputElement;
   soloRegionsCb: HTMLInputElement;
@@ -35,13 +34,12 @@ export function createOverlayPanel(container: HTMLElement): OverlayPanelControls
 
   const state = debugState.get();
   const debugCb = makeToggle(panel, "Debug", state.master);
-  const colorCb = makeToggle(panel, "Item colours", false);
+  const colorCb = makeToggle(panel, "Item colours", state.itemColors);
 
   const subPanel = document.createElement("div");
   subPanel.className = "overlay-sub-panel";
   subPanel.style.display = state.master ? "flex" : "none";
 
-  const stepCb = makeToggle(subPanel, "Step-through", state.stepThrough);
   const valCb = makeToggle(subPanel, "Validation", state.validation);
   const regionsCb = makeToggle(subPanel, "SAT Zones", state.satZones);
   const ghostTilesCb = makeToggle(subPanel, "Ghost tiles", state.ghostTiles);
@@ -66,6 +64,9 @@ export function createOverlayPanel(container: HTMLElement): OverlayPanelControls
   ghostTilesCb.addEventListener("change", () => {
     debugState.set({ ghostTiles: ghostTilesCb.checked });
   });
+  colorCb.addEventListener("change", () => {
+    debugState.set({ itemColors: colorCb.checked });
+  });
 
   return {
     setDebugEnabled(on: boolean): void {
@@ -75,7 +76,6 @@ export function createOverlayPanel(container: HTMLElement): OverlayPanelControls
     },
     debugCb,
     colorCb,
-    stepCb,
     valCb,
     regionsCb,
     soloRegionsCb,

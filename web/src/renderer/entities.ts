@@ -63,9 +63,16 @@ const PIPE_TO_GROUND_COLOR = 0x3a6090;
 const POLE_COLOR = 0xc0a030;
 const POLE_BG = 0x2a2510;
 
-// Item-to-color mapping for visual debugging
+// Item-to-color mapping for visual debugging.
+//
+// Raw palette below is more saturated than we want on-canvas — items
+// should read as "tinted grey", not "bold colour", so belts tile into
+// a readable backdrop instead of competing with overlays and chevrons.
+// At module load each entry is pushed toward perceptual grey by
+// `ITEM_SATURATION`; tweak that knob to dial the whole palette up/down.
+const ITEM_SATURATION = 0.35;
 
-const ITEM_PALETTE: Record<string, number> = {
+const ITEM_PALETTE_RAW: Record<string, number> = {
   "iron-plate": 0x9a9a9a,
   "copper-plate": 0xd07840,
   "iron-gear-wheel": 0x707070,
@@ -88,6 +95,23 @@ const ITEM_PALETTE: Record<string, number> = {
   "sulfuric-acid": 0xb0b030,
   "lubricant": 0x60b060,
 };
+
+/** Blend a hex colour toward its Rec.709 luma grey. factor=1 keeps the
+ *  colour as-is; factor=0 collapses to pure grey. */
+function desaturate(hex: number, factor: number): number {
+  const r = (hex >> 16) & 0xff;
+  const g = (hex >> 8) & 0xff;
+  const b = hex & 0xff;
+  const y = 0.21 * r + 0.72 * g + 0.07 * b;
+  const nr = Math.round(y + (r - y) * factor);
+  const ng = Math.round(y + (g - y) * factor);
+  const nb = Math.round(y + (b - y) * factor);
+  return (nr << 16) | (ng << 8) | nb;
+}
+
+const ITEM_PALETTE: Record<string, number> = Object.fromEntries(
+  Object.entries(ITEM_PALETTE_RAW).map(([k, v]) => [k, desaturate(v, ITEM_SATURATION)]),
+);
 
 function hslToHex(h: number, s: number, l: number): number {
   const a = s * Math.min(l, 1 - l);
@@ -134,7 +158,7 @@ export function itemColor(item: string | undefined): number {
   let h = 0;
   for (let i = 0; i < item.length; i++) h = (((h << 5) - h) + item.charCodeAt(i)) | 0;
   const hue = (Math.abs(h) % 30) * 12;
-  return hslToHex(hue / 360, 0.55, 0.48);
+  return hslToHex(hue / 360, 0.2, 0.48);
 }
 
 // [width, height] in tiles for multi-tile entities
@@ -282,7 +306,7 @@ const BELT_SCALE = 0.9;
 const BELT_INSET = (TILE_PX * (1 - BELT_SCALE)) / 2;
 const BELT_SIZE = TILE_PX * BELT_SCALE;
 
-function drawBelt(entity: PlacedEntity, turn: BeltTurn | null): Graphics {
+export function drawBelt(entity: PlacedEntity, turn: BeltTurn | null): Graphics {
   const g = new Graphics();
   const s = TILE_PX;
   const bs = BELT_SIZE;
@@ -579,15 +603,18 @@ function drawPipe(entity: PlacedEntity, connections: number): Graphics {
       // Straight E-W
       g.moveTo(0, cy).lineTo(s, cy).stroke();
     } else if (count === 2) {
-      // Corner — smooth quadratic curve through the tile interior
+      // Corner — smooth quadratic curve bulging toward the tile centre
+      // (convex w.r.t. the bend's diagonal). Controlling at the outer
+      // corner used to make the curve hug the outer edge, reading as a
+      // backwards "concave" bend.
       if (hasN && hasE) {
-        g.moveTo(cx, 0).quadraticCurveTo(s, 0, s, cy).stroke();
+        g.moveTo(cx, 0).quadraticCurveTo(cx, cy, s, cy).stroke();
       } else if (hasE && hasS) {
-        g.moveTo(s, cy).quadraticCurveTo(s, s, cx, s).stroke();
+        g.moveTo(s, cy).quadraticCurveTo(cx, cy, cx, s).stroke();
       } else if (hasS && hasW) {
-        g.moveTo(cx, s).quadraticCurveTo(0, s, 0, cy).stroke();
+        g.moveTo(cx, s).quadraticCurveTo(cx, cy, 0, cy).stroke();
       } else { // W+N
-        g.moveTo(0, cy).quadraticCurveTo(0, 0, cx, 0).stroke();
+        g.moveTo(0, cy).quadraticCurveTo(cx, cy, cx, 0).stroke();
       }
     } else if (count === 3) {
       // T-junction: straight through the two opposite + stub for the third
@@ -801,6 +828,125 @@ export interface HighlightController {
   clearHighlight(): void;
   /** Get the item chain key for an entity (its `carries` value, or recipe for machines). */
   chainKey(entity: PlacedEntity): string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Per-entity draw primitives (exported so streaming renderers can commit
+// individual entities without re-rendering the full layout).
+// ---------------------------------------------------------------------------
+
+/** Context for `drawEntityGraphic` — carries the lookups the belt / pipe
+ *  renderers need. `tileMap` is used by `detectBeltTurn` (belts) and
+ *  pipe-connection detection; `machineTileSet` is used by pipe-connection
+ *  detection (pipes adjacent to machines render as connected). Both may
+ *  be sparse — entries missing from the map degrade to reasonable
+ *  defaults (straight belt, disconnected pipe). */
+export interface DrawContext {
+  tileMap: Map<string, PlacedEntity>;
+  machineTileSet: Set<string>;
+}
+
+/** Create an empty `DrawContext`. Streaming renderers populate this as
+ *  entities are committed. */
+export function createDrawContext(): DrawContext {
+  return { tileMap: new Map(), machineTileSet: new Set() };
+}
+
+/** Update a `DrawContext` to include `entity`. Call before drawing its
+ *  neighbours (belt turn detection / pipe connections read from the
+ *  context). Idempotent. */
+export function addEntityToDrawContext(entity: PlacedEntity, ctx: DrawContext): void {
+  const x = entity.x ?? 0;
+  const y = entity.y ?? 0;
+  ctx.tileMap.set(`${x},${y}`, entity);
+  if (SPLITTER_ENTITIES.has(entity.name)) {
+    const [dx, dy] = splitterCompanionOffset(entity.direction);
+    ctx.tileMap.set(`${x + dx},${y + dy}`, entity);
+  }
+  if (MACHINE_ENTITIES.has(entity.name)) {
+    const [w, h] = MACHINE_SIZES[entity.name] ?? [1, 1];
+    for (let dy = 0; dy < h; dy++) {
+      for (let dx = 0; dx < w; dx++) {
+        ctx.machineTileSet.add(`${x + dx},${y + dy}`);
+      }
+    }
+  }
+}
+
+/** Draw a single entity. Mirrors the dispatch block inside
+ *  `renderLayout` — kept in sync by having `renderLayout` call through
+ *  this helper. Sets the Graphics' `x`/`y` so callers can just addChild.
+ *  Returns the Graphics (single; no entity has multiple top-level
+ *  graphics). */
+export function drawEntityGraphic(entity: PlacedEntity, ctx: DrawContext): Graphics {
+  let g: Graphics;
+  if (BELT_ENTITIES.has(entity.name)) {
+    g = drawBelt(entity, detectBeltTurn(entity, ctx.tileMap));
+  } else if (UG_BELT_ENTITIES.has(entity.name)) {
+    g = drawUndergroundBelt(entity);
+  } else if (SPLITTER_ENTITIES.has(entity.name)) {
+    g = drawSplitter(entity);
+  } else if (INSERTER_ENTITIES.has(entity.name)) {
+    g = drawInserter(entity);
+  } else if (PIPE_ENTITIES.has(entity.name)) {
+    let pipeConn = 0;
+    if (entity.name === "pipe") {
+      const ex = entity.x ?? 0;
+      const ey = entity.y ?? 0;
+      for (const [dx, dy, bit] of [[0, -1, CONN_N], [1, 0, CONN_E], [0, 1, CONN_S], [-1, 0, CONN_W]] as [number, number, number][]) {
+        const key = `${ex + dx},${ey + dy}`;
+        const nb = ctx.tileMap.get(key);
+        if ((nb && PIPE_ENTITIES.has(nb.name)) || ctx.machineTileSet.has(key)) pipeConn |= bit;
+      }
+    }
+    g = drawPipe(entity, pipeConn);
+  } else if (POLE_ENTITIES.has(entity.name)) {
+    g = drawPole();
+  } else if (MACHINE_ENTITIES.has(entity.name)) {
+    g = drawMachine(entity);
+  } else {
+    g = drawGenericEntity();
+  }
+  g.x = (entity.x ?? 0) * TILE_PX;
+  g.y = (entity.y ?? 0) * TILE_PX;
+  return g;
+}
+
+/** Draw an UG tunnel stripe between a paired UG input and output.
+ *  Returns a single Graphics for the stripe (or null if the pair
+ *  doesn't form a valid tunnel — not same item, not same direction,
+ *  etc.). Scans forward from `input` up to `maxReach` tiles looking
+ *  for the paired output. */
+export function drawUgTunnelStripe(
+  input: PlacedEntity,
+  ugEntityMap: Map<string, PlacedEntity>,
+  maxReach = 8,
+): Graphics | null {
+  if (!UG_BELT_ENTITIES.has(input.name) || input.io_type !== "input") return null;
+  const [dx, dy] = dirVec(input.direction);
+  const x = input.x ?? 0;
+  const y = input.y ?? 0;
+  for (let dist = 1; dist <= maxReach; dist++) {
+    const te = ugEntityMap.get(`${x + dx * dist},${y + dy * dist}`);
+    if (!te) continue;
+    if (UG_BELT_ENTITIES.has(te.name) && te.name === input.name && te.direction === input.direction && te.io_type === "input") return null;
+    if (UG_BELT_ENTITIES.has(te.name) && te.name === input.name && te.direction === input.direction && te.io_type === "output") {
+      const [base] = BELT_COLORS[input.name] ?? [0xa89030, 0xe0d070];
+      const tg = new Graphics();
+      const isHoriz = Math.abs(dx) > 0;
+      for (let i = 1; i < dist; i++) {
+        const tx = (x + dx * i) * TILE_PX;
+        const ty = (y + dy * i) * TILE_PX;
+        if (isHoriz) {
+          tg.rect(tx, ty + TILE_PX * 0.25, TILE_PX, TILE_PX * 0.5).fill({ color: base, alpha: 0.25 });
+        } else {
+          tg.rect(tx + TILE_PX * 0.25, ty, TILE_PX * 0.5, TILE_PX).fill({ color: base, alpha: 0.25 });
+        }
+      }
+      return tg;
+    }
+  }
+  return null;
 }
 
 // Main renderer

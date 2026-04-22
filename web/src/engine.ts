@@ -110,6 +110,18 @@ export async function initEngine(): Promise<void> {
     if ("streamEvents" in e.data) {
       // Partial batch of events during a streaming call — forward to listener,
       // keep pending open until the final response arrives.
+      if ((globalThis as { __TRACE_LOGS?: boolean }).__TRACE_LOGS === true) {
+        const counts: Record<string, number> = {};
+        for (const evt of e.data.streamEvents) {
+          const p2 = (evt as { phase?: string }).phase ?? "?";
+          counts[p2] = (counts[p2] ?? 0) + 1;
+        }
+        // eslint-disable-next-line no-console
+        console.log(
+          `[main  t=${performance.now().toFixed(0)}ms] arrived ${e.data.streamEvents.length}:`,
+          counts,
+        );
+      }
       if (p.onEvent) {
         for (const evt of e.data.streamEvents) p.onEvent(evt as TraceEvent);
       }
@@ -210,11 +222,14 @@ async function buildLayoutStreaming(
       },
       onEvent,
     });
+    const traceLogs =
+      (globalThis as { __TRACE_LOGS?: boolean }).__TRACE_LOGS === true;
     worker!.postMessage({
       id,
       method: "layoutStreaming",
       result,
       maxBeltTier: maxBeltTier ?? null,
+      traceLogs,
     });
   });
 }

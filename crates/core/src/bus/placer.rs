@@ -249,6 +249,11 @@ pub enum RowKind {
     TripleInput,
     /// Oil refinery (fluid-only row).
     OilRefinery,
+    /// 2+ distinct fluid inputs on a small (<5×5) machine, no solid input.
+    /// Uses stacked-T pattern with UG-pipe-UG isolation flanks. Covers
+    /// heavy-oil-cracking, light-oil-cracking, sulfur. See
+    /// `docs/rfp-multi-fluid-rows.md`.
+    FluidMultiInput,
 }
 
 impl RowKind {
@@ -261,6 +266,9 @@ impl RowKind {
             RowKind::FluidInput => 9,
             RowKind::TripleInput => 9,
             RowKind::OilRefinery => 7,
+            // For 2 fluids + msz=3 + output (inserter+belt OR pipe row):
+            // 2 trunk rows + 1 drop ext + 1 UG-out + 3 machine + 2 output = 9
+            RowKind::FluidMultiInput => 9,
         }
     }
 }
@@ -273,6 +281,12 @@ fn row_kind(spec: &MachineSpec) -> RowKind {
     // Large machines (5×5) with only fluid inputs use the dedicated fluid-only template.
     if solid_inputs == 0 && fluid_inputs > 0 && machine_size(&spec.entity) >= 5 {
         return RowKind::OilRefinery;
+    }
+
+    // Small machines (<5×5) with 0 solid + ≥2 fluid inputs use the stacked-T
+    // multi-fluid template. Covers heavy-oil-cracking, light-oil-cracking, sulfur.
+    if solid_inputs == 0 && fluid_inputs >= 2 && machine_size(&spec.entity) < 5 {
+        return RowKind::FluidMultiInput;
     }
 
     let has_fluid_dual_solid = solid_inputs == 2 && fluid_inputs == 1;
@@ -515,6 +529,46 @@ pub(crate) fn build_one_row(
             );
             let input_ys = vec![y_cursor, y_cursor + 1, y_cursor + 3 + msz as i32 + 2];
             let out_y = y_cursor + 3 + msz as i32 + 1;
+            (ents, rh, input_ys, out_y)
+        }
+        RowKind::FluidMultiInput => {
+            // Chemical-plant fluid input port dxs: [0, 2] per the fluid-box
+            // data in recipes.json. The 2 fluid inputs from the solver are
+            // assigned to these ports in order.
+            let msz = machine_size(&spec.entity);
+            let port_dxs: &[i32] = &[0, 2];
+            let in_port_assignments: Vec<(i32, &str)> = port_dxs
+                .iter()
+                .zip(fluid_inputs.iter())
+                .map(|(&dx, f)| (dx, f.item.as_str()))
+                .collect();
+            // Same for fluid outputs (sulfur has none, heavy/light-oil-cracking
+            // has 1 — which goes to dx=1 centered on machine).
+            let out_port_assignments: Vec<(i32, &str)> = fluid_outputs
+                .iter()
+                .map(|f| (1i32, f.item.as_str()))
+                .collect();
+            let solid_out = solid_outputs.first().map(|f| f.item.as_str());
+            let (ents, rh, in_port_pipes, out_port_pipes) = templates::fluid_multi_input_row(
+                &spec.recipe,
+                &spec.entity,
+                msz,
+                count,
+                y_cursor,
+                bus_width,
+                &in_port_assignments,
+                solid_out,
+                &out_port_assignments,
+                Some(out_belt),
+                output_east,
+            );
+            fluid_port_ys = in_port_pipes.iter().map(|&(_, _, py)| py).collect();
+            fluid_port_ys.sort_unstable();
+            fluid_port_ys.dedup();
+            fluid_port_pipes = in_port_pipes;
+            fluid_output_port_pipes = out_port_pipes;
+            let input_ys = vec![];
+            let out_y = y_cursor + rh - 1;
             (ents, rh, input_ys, out_y)
         }
         RowKind::DualInput => {
@@ -1332,6 +1386,44 @@ mod tests {
             }],
         };
         assert_eq!(row_kind(&spec), RowKind::OilRefinery);
+    }
+
+    #[test]
+    fn heavy_oil_cracking_is_fluid_multi_input() {
+        let spec = MachineSpec {
+            entity: "chemical-plant".to_string(),
+            recipe: "heavy-oil-cracking".to_string(),
+            count: 1.0,
+            inputs: vec![
+                ItemFlow { item: "water".to_string(), rate: 30.0, is_fluid: true },
+                ItemFlow { item: "heavy-oil".to_string(), rate: 40.0, is_fluid: true },
+            ],
+            outputs: vec![ItemFlow {
+                item: "light-oil".to_string(),
+                rate: 30.0,
+                is_fluid: true,
+            }],
+        };
+        assert_eq!(row_kind(&spec), RowKind::FluidMultiInput);
+    }
+
+    #[test]
+    fn sulfur_is_fluid_multi_input() {
+        let spec = MachineSpec {
+            entity: "chemical-plant".to_string(),
+            recipe: "sulfur".to_string(),
+            count: 1.0,
+            inputs: vec![
+                ItemFlow { item: "water".to_string(), rate: 30.0, is_fluid: true },
+                ItemFlow { item: "petroleum-gas".to_string(), rate: 30.0, is_fluid: true },
+            ],
+            outputs: vec![ItemFlow {
+                item: "sulfur".to_string(),
+                rate: 2.0,
+                is_fluid: false,
+            }],
+        };
+        assert_eq!(row_kind(&spec), RowKind::FluidMultiInput);
     }
 
     #[test]

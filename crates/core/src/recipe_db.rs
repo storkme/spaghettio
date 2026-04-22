@@ -13,6 +13,23 @@ const DEFAULT_ENERGY: f64 = 0.5;
 /// Recipe categories that should never be used for production chains.
 const EXCLUDED_CATEGORIES: &[&str] = &["recycling", "crushing", "recycling-or-hand-crafting"];
 
+/// Recipes that should never be used to *produce* an ingredient, even though
+/// they technically list one as a product. Barrel-emptying recipes
+/// (`empty-X-barrel`) produce a fluid + empty barrel, but only by consuming a
+/// pre-filled barrel — treating them as fluid producers makes the solver
+/// recurse through the whole barrel chain (steel-plate → barrel → fill →
+/// empty) for any recipe that needs the fluid. Callers who actually want to
+/// empty barrels should target the filled-barrel item directly.
+fn is_excluded_recipe(recipe: &Recipe) -> bool {
+    if EXCLUDED_CATEGORIES.contains(&recipe.category.as_str()) {
+        return true;
+    }
+    if recipe.name.starts_with("empty-") && recipe.name.ends_with("-barrel") {
+        return true;
+    }
+    false
+}
+
 fn default_ingredient_type() -> String {
     "item".to_string()
 }
@@ -115,7 +132,7 @@ pub fn find_recipe_for_item_excluding(
     // Prefer name-matched recipe (canonical, avoids bioplastic→plastic-bar etc.)
     if !excluded.contains(item) {
         if let Some(recipe) = db().recipes.get(item) {
-            if !EXCLUDED_CATEGORIES.contains(&recipe.category.as_str())
+            if !is_excluded_recipe(recipe)
                 && recipe.products.iter().any(|p| p.name == item)
             {
                 return Some(recipe);
@@ -127,7 +144,7 @@ pub fn find_recipe_for_item_excluding(
         if excluded.contains(name) {
             continue;
         }
-        if EXCLUDED_CATEGORIES.contains(&recipe.category.as_str()) {
+        if is_excluded_recipe(recipe) {
             continue;
         }
         if recipe.products.iter().any(|p| p.name == item) {
@@ -165,7 +182,7 @@ pub fn all_producible_items() -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut seen: rustc_hash::FxHashSet<&str> = rustc_hash::FxHashSet::default();
     for recipe in db().recipes.values() {
-        if EXCLUDED_CATEGORIES.contains(&recipe.category.as_str()) {
+        if is_excluded_recipe(recipe) {
             continue;
         }
         for p in &recipe.products {

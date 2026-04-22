@@ -97,26 +97,54 @@ self.onmessage = async (e: MessageEvent<Request>) => {
         break;
       case "layoutStreaming": {
         const id = req.id;
-        // Batch events before postMessage. The layout engine can emit
-        // thousands of trace events per run; one postMessage per event
-        // would saturate the main thread's event-loop with structured-
-        // clone overhead. 64 events per batch keeps message count ~50×
-        // lower without perceptibly delaying the visual stream.
-        const BATCH_SIZE = 64;
+        // Batch events before postMessage. One postMessage per event
+        // would over-saturate the main thread with structured-clone
+        // overhead; batches amortise that cost. But too-large batches
+        // hide the stream entirely: during junction solving the engine
+        // emits ~10 events/sec, so BATCH_SIZE=64 would never auto-flush
+        // during the 5-6s junction phase and every mid-run event would
+        // land at the end. 8 keeps per-message overhead reasonable
+        // while still flushing every ~800ms during slow phases.
+        const BATCH_SIZE = 8;
+        const TRACE_LOGS = (req as { traceLogs?: boolean }).traceLogs === true;
+        const t0 = performance.now();
         let batch: unknown[] = [];
+        let totalEmitted = 0;
+        let totalFlushed = 0;
         const flushBatch = (): void => {
           if (batch.length === 0) return;
+          totalFlushed += batch.length;
+          if (TRACE_LOGS) {
+            // Breakdown by phase so we can see *what* is streaming.
+            const counts: Record<string, number> = {};
+            for (const e of batch) {
+              const p = (e as { phase?: string }).phase ?? "?";
+              counts[p] = (counts[p] ?? 0) + 1;
+            }
+            // eslint-disable-next-line no-console
+            console.log(
+              `[worker t+${(performance.now() - t0).toFixed(0)}ms] flush ${batch.length} (total ${totalFlushed}):`,
+              counts,
+            );
+          }
           (self as unknown as Worker).postMessage({ id, streamEvents: batch });
           batch = [];
         };
         const emit = (evt: unknown): void => {
           batch.push(evt);
+          totalEmitted++;
           if (batch.length >= BATCH_SIZE) flushBatch();
         };
         try {
           result = layout_streaming(req.result, req.maxBeltTier ?? undefined, emit);
         } finally {
           flushBatch();
+          if (TRACE_LOGS) {
+            // eslint-disable-next-line no-console
+            console.log(
+              `[worker t+${(performance.now() - t0).toFixed(0)}ms] layout_streaming done. emitted=${totalEmitted} flushed=${totalFlushed}`,
+            );
+          }
         }
         break;
       }
