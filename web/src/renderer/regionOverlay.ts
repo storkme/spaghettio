@@ -177,7 +177,8 @@ export function renderRegionOverlayDetailed(layout: LayoutResult): RegionOverlay
     });
 
     const rect = new Graphics();
-    rect.rect(rx, ry, rw, rh).fill({ color: fillColor, alpha: 0.14 });
+    const fillAlpha = region.kind === "crossing_zone" ? 0.06 : 0.14;
+    rect.rect(rx, ry, rw, rh).fill({ color: fillColor, alpha: fillAlpha });
     // Thin dark outer edge for contrast against light belts
     rect.setStrokeStyle({ width: 1, color: 0x000000, alpha: 0.55 });
     rect.rect(rx - 1, ry - 1, rw + 2, rh + 2).stroke();

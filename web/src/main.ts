@@ -569,9 +569,12 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
 
     if (!regionsCb.checked) {
       // Debug regions off — a bare canvas click pins the tile under
-      // the cursor so the inspector freezes on its detail.
+      // the cursor so the inspector freezes on its detail. Empty tiles
+      // aren't pinnable: clicking one passes through without affecting
+      // any current pin.
       const entity = hoveredEntity && hoveredEntity.x === tx && hoveredEntity.y === ty
         ? hoveredEntity : null;
+      if (!entity) return;
       inspector.pinTile(entity, tx, ty);
       return;
     }
@@ -611,13 +614,15 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
 
     // Fell through every overlay — pin the tile so the inspector
     // keeps showing its full detail. Click on an already-pinned tile
-    // to unpin.
+    // to unpin. Empty tiles are not pinnable: a click on one leaves
+    // the current pin (if any) alone.
     const current = inspector.getPinnedTile();
     if (current && current.x === tx && current.y === ty) {
       inspector.clearPin();
     } else {
       const entity = hoveredEntity && hoveredEntity.x === tx && hoveredEntity.y === ty
         ? hoveredEntity : null;
+      if (!entity) return;
       inspector.pinTile(entity, tx, ty);
     }
   });

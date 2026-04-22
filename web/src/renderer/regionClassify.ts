@@ -194,7 +194,7 @@ export function kindColor(kind: RegionKind): number {
   switch (kind) {
     case "corridor_template":  return 0x3d7bb5; // blue — T2 corridor
     case "junction_template":  return 0x4aa66f; // green — T1 perpendicular
-    case "crossing_zone":      return 0xd08040; // orange — non-ghost SAT solved
+    case "crossing_zone":      return 0x3aa04a; // green — non-ghost SAT solved
     case "unresolved":         return 0xd04040; // red — junction solver work needed
   }
 }

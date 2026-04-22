@@ -603,15 +603,18 @@ function drawPipe(entity: PlacedEntity, connections: number): Graphics {
       // Straight E-W
       g.moveTo(0, cy).lineTo(s, cy).stroke();
     } else if (count === 2) {
-      // Corner — smooth quadratic curve through the tile interior
+      // Corner — smooth quadratic curve bulging toward the tile centre
+      // (convex w.r.t. the bend's diagonal). Controlling at the outer
+      // corner used to make the curve hug the outer edge, reading as a
+      // backwards "concave" bend.
       if (hasN && hasE) {
-        g.moveTo(cx, 0).quadraticCurveTo(s, 0, s, cy).stroke();
+        g.moveTo(cx, 0).quadraticCurveTo(cx, cy, s, cy).stroke();
       } else if (hasE && hasS) {
-        g.moveTo(s, cy).quadraticCurveTo(s, s, cx, s).stroke();
+        g.moveTo(s, cy).quadraticCurveTo(cx, cy, cx, s).stroke();
       } else if (hasS && hasW) {
-        g.moveTo(cx, s).quadraticCurveTo(0, s, 0, cy).stroke();
+        g.moveTo(cx, s).quadraticCurveTo(cx, cy, 0, cy).stroke();
       } else { // W+N
-        g.moveTo(0, cy).quadraticCurveTo(0, 0, cx, 0).stroke();
+        g.moveTo(0, cy).quadraticCurveTo(cx, cy, cx, 0).stroke();
       }
     } else if (count === 3) {
       // T-junction: straight through the two opposite + stub for the third
