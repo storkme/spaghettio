@@ -597,6 +597,34 @@ pub enum TraceEvent {
         total: usize,
         kept: usize,
     },
+
+    // Emitted by the final ghost-router render pass once a spec's path
+    // has been materialised into belt/UG entities. Carries the full
+    // entity list so a streaming renderer can swap its per-tile "ghost
+    // belt" placeholders for the real rendered entities (with correct
+    // turns, UG pairs, etc.). Fires once per spec, after
+    // `GhostSpecRouted` for that spec.
+    GhostSpecCommitted {
+        spec_key: String,
+        entities: Vec<PlacedEntity>,
+    },
+
+    // Emitted by the ghost-router's junction-solver loop after a
+    // cluster's SAT solution has been stamped into the layout. Carries
+    // the entities the solver placed inside the zone + the spec keys
+    // whose prior ghost-routed belts inside the zone are now
+    // invalidated (participating). A streaming renderer uses this to
+    // fade out the ghost belts inside the footprint and fade in the
+    // real SAT-placed entities.
+    JunctionCommitted {
+        cluster_id: usize,
+        zone_x: i32,
+        zone_y: i32,
+        zone_w: u32,
+        zone_h: u32,
+        entities: Vec<PlacedEntity>,
+        participating: Vec<String>,
+    },
 }
 
 // ---------------------------------------------------------------------------

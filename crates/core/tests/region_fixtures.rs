@@ -14,8 +14,41 @@
 //!
 //! All fixture failures are accumulated and reported together at the end.
 
-use fucktorio_core::fixture::{replay_region_fixture, RegionFixture};
+use fucktorio_core::fixture::{replay_region_fixture, RegionFixture, RequiredEntity};
+use fucktorio_core::models::PlacedEntity;
 use std::path::Path;
+
+/// Return human-readable descriptions of every `required` entity that
+/// the solver *failed* to include. Empty result = everything required
+/// was present.
+fn find_missing_required(
+    required: &[RequiredEntity],
+    entities: &[PlacedEntity],
+) -> Vec<String> {
+    required
+        .iter()
+        .filter(|req| {
+            !entities.iter().any(|e| {
+                e.x == req.x
+                    && e.y == req.y
+                    && e.carries.as_deref() == Some(req.carries.as_str())
+                    && req.name.as_deref().is_none_or(|n| e.name == n)
+                    && req.direction.is_none_or(|d| e.direction == d)
+            })
+        })
+        .map(|req| {
+            let name = req.name.as_deref().unwrap_or("*");
+            let dir = req
+                .direction
+                .map(|d| format!("{:?}", d))
+                .unwrap_or_else(|| "*".to_string());
+            format!(
+                "({},{}) {} dir={} carries={}",
+                req.x, req.y, name, dir, req.carries
+            )
+        })
+        .collect()
+}
 
 #[test]
 fn region_fixtures() {
@@ -96,6 +129,21 @@ fn region_fixtures() {
                             ));
                             continue;
                         }
+                    }
+                    let missing = find_missing_required(
+                        &fixture.expected.required_entities,
+                        &result.entities,
+                    );
+                    if !missing.is_empty() {
+                        failures.push(format!(
+                            "{} ({}): solution missing {} required entit{}:\n  {}",
+                            fixture.name,
+                            filename,
+                            missing.len(),
+                            if missing.len() == 1 { "y" } else { "ies" },
+                            missing.join("\n  "),
+                        ));
+                        continue;
                     }
                     let gap_note = match fixture.expected.optimal_cost {
                         Some(opt) if cost > opt => {

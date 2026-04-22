@@ -131,6 +131,27 @@ pub struct RegionExpected {
     /// Aspirational target. Reported as "gap: N" by the harness.
     #[serde(default)]
     pub optimal_cost: Option<u32>,
+    /// Entities that MUST appear in the solution. Each entry matches by
+    /// `(x, y, carries)` — `name` and `direction` are asserted when set,
+    /// ignored when empty/None. Use this to guard against missing-input
+    /// bugs where the solver produces a cheap but broken layout that
+    /// fails to re-stamp a required flow entity.
+    #[serde(default)]
+    pub required_entities: Vec<RequiredEntity>,
+}
+
+/// Fingerprint for asserting a placed entity survived the solve. Only
+/// `x`, `y`, `carries` are required for a match; `name` and `direction`
+/// tighten the assertion when provided.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RequiredEntity {
+    pub x: i32,
+    pub y: i32,
+    pub carries: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub direction: Option<EntityDirection>,
 }
 
 /// Result of replaying a `RegionFixture` through `solve_crossing`.

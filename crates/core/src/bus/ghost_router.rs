@@ -657,7 +657,20 @@ pub fn route_bus_ghost(
                 TURN_PENALTY,
                 &iter_cost_grid,
             ) {
-                Some((path, _crossings)) => {
+                Some((path, crossings)) => {
+                    // Stream the per-spec route so the browser overlay can
+                    // watch negotiation happen instead of seeing everything
+                    // flash in at the end of routing. Path tiles + crossings
+                    // computed above are the same shape the final post-
+                    // negotiation `GhostSpecRouted` event carries.
+                    trace::emit(trace::TraceEvent::GhostSpecRouted {
+                        spec_key: spec.key.clone(),
+                        path_len: path.len(),
+                        crossings: crossings.len(),
+                        turns: count_turns(&path),
+                        tiles: path.clone(),
+                        crossing_tiles: crossings.clone(),
+                    });
                     // Incrementally bump the present cost for tiles used by
                     // this spec, in the spec's axis at each tile. Subsequent
                     // specs in this iteration will pay the bumped cost.
@@ -876,6 +889,21 @@ pub fn route_bus_ghost(
                         && !hard.contains(&(e.x, e.y))
                 })
                 .collect();
+            // Stream the materialised entities so a live renderer can
+            // swap its per-tile ghost-belt placeholders for the real
+            // turn-aware / UG-aware shapes. Fires once per spec after
+            // `GhostSpecRouted` for the same spec.
+            //
+            // Emitted AFTER the survivors filter so the streaming UI
+            // never commits a feeder-belt at a tile already owned by
+            // a balancer/row/permanent pre-stamp. Emitting unfiltered
+            // path_ents here used to leave West-facing feeder ghosts
+            // rendered over South-facing balancer tiles — same final
+            // layout entity, wrong visual.
+            trace::emit(trace::TraceEvent::GhostSpecCommitted {
+                spec_key: spec.key.clone(),
+                entities: surviving_ents.clone(),
+            });
             for ent in &surviving_ents {
                 occupancy
                     .place(ent.clone(), claim_kind)
@@ -1205,7 +1233,11 @@ pub fn route_bus_ghost(
         .filter(|t| !corridor_handled.contains(t))
         .copied()
         .collect();
-    let clusters = cluster_adjacent_crossings(&unhandled_crossings, &routed_paths);
+    let clusters = cluster_adjacent_crossings(
+        &unhandled_crossings,
+        &routed_paths,
+        &spec_belt_tiers,
+    );
 
     for cluster in &clusters {
         // Cluster is already guaranteed unhandled by the filter above;
@@ -1435,6 +1467,7 @@ pub fn route_bus_ghost(
             participating_count: participating_keys.len(),
             released_count,
         });
+        let mut committed_entities: Vec<crate::models::PlacedEntity> = Vec::new();
         for ent in sol.entities {
             let tile = (ent.x, ent.y);
             if occupancy.is_hard_obstacle(tile) {
@@ -1465,8 +1498,22 @@ pub fn route_bus_ghost(
                         tile.0, tile.1, err
                     );
                 });
+            committed_entities.push(ent.clone());
             entities.push(ent);
         }
+        // Stream the solved cluster's entities + the spec keys whose
+        // ghost-routed belts inside the footprint were just invalidated.
+        // A live renderer uses this to fade out per-tile ghost belts in
+        // the zone and fade in the real SAT output.
+        trace::emit(trace::TraceEvent::JunctionCommitted {
+            cluster_id: template_count,
+            zone_x: footprint.x,
+            zone_y: footprint.y,
+            zone_w: footprint.w,
+            zone_h: footprint.h,
+            entities: committed_entities,
+            participating: participating_keys.iter().map(|s| s.to_string()).collect(),
+        });
         // Sync-gap assertion. Any ghost entity for a participating spec
         // that still holds a GhostSurface claim inside the footprint is
         // a leak — `releasable_ghost_tiles` should have covered every
@@ -1693,15 +1740,30 @@ fn is_horizontal(d: EntityDirection) -> bool {
 }
 
 /// Group crossing tiles into clusters. Two tiles belong to the same
-/// cluster iff they are 4-connected neighbours AND their spec-key sets
-/// (derived from `routed_paths`) intersect. The shared-spec gate
-/// prevents merging unrelated crossings that happen to be adjacent.
+/// cluster iff they share at least one routed spec AND either
+///   (a) they are within Manhattan-2 of each other, OR
+///   (b) they sit within UG-reach (`max_reach + 1` tiles for the spec's
+///       belt tier) along a shared spec's path.
+///
+/// The UG-reach rule (b) guards against the "adjacent committed UG"
+/// failure mode: when cluster A is solved first and stamps a UG pair on
+/// a shared spec, a later cluster B within reach of that UG cannot solve
+/// without disturbing it — the walker correctly vetoes every SAT output
+/// because the UG-pair invariant breaks. Merging A and B into one
+/// cluster lets SAT see both ends of the shared spec together and place
+/// a single coherent UG layout.
+///
+/// A `HULL_BUDGET` gate stops pathological chains (e.g. N evenly-spaced
+/// crossings each within reach of the next) from fusing into one zone
+/// that would exceed `MAX_REGION_TILES`. When the guardrail trips, the
+/// chain falls back to separate clusters — same worst case as today.
 ///
 /// Deterministic output: each cluster is sorted `(y, x)` internally,
 /// and the outer Vec is sorted by its first tile.
 fn cluster_adjacent_crossings(
     crossing_set: &FxHashSet<(i32, i32)>,
     routed_paths: &FxHashMap<String, Vec<(i32, i32)>>,
+    spec_belt_tiers: &FxHashMap<String, BeltTier>,
 ) -> Vec<Vec<(i32, i32)>> {
     if crossing_set.is_empty() {
         return Vec::new();
@@ -1768,6 +1830,92 @@ fn cluster_adjacent_crossings(
             if ri != rj {
                 parent[ri] = rj;
             }
+        }
+    }
+
+    // Second pass: within-UG-reach along a shared spec's path, gated
+    // to **single-crossing rescue** — only merges when at least one of
+    // the two parties is currently a single-crossing cluster. This is
+    // the specific failure mode we fix: an isolated crossing wedged
+    // next to a multi-crossing cluster whose earlier solve committed a
+    // UG pair in the isolate's growth envelope. Multi-on-multi merges
+    // are regressive (they fuse clusters that would otherwise solve
+    // independently into super-zones the solver hasn't been tuned for),
+    // so we skip them.
+    //
+    // The HULL_BUDGET cap is still honoured: even a single-to-many
+    // rescue won't proceed if the merged hull can't fit growth.
+    const HULL_BUDGET: usize = 48;
+
+    // Cluster sizes from the union-find state after the Manhattan-2
+    // pass. Kept current as unions happen in this second pass so the
+    // "single-crossing" gate sees the right size.
+    let mut cluster_size = vec![0usize; tiles.len()];
+    for i in 0..tiles.len() {
+        let r = find(&mut parent, i);
+        cluster_size[r] += 1;
+    }
+
+    for (key, path) in routed_paths {
+        // Crossings that lie on this spec's path, in path order.
+        let mut on_path: Vec<(usize, usize)> = Vec::new();
+        for (idx, t) in path.iter().enumerate() {
+            if let Some(&i) = index_of.get(t) {
+                on_path.push((i, idx));
+            }
+        }
+        if on_path.len() < 2 {
+            continue;
+        }
+        let tier = spec_belt_tiers
+            .get(key.as_str())
+            .copied()
+            .unwrap_or(BeltTier::Yellow);
+        let max_reach = ug_max_reach(belt_name_for_tier(tier)) as usize;
+        // UG-pair span = max_reach + 1 positions (max_reach hidden-
+        // middle tiles). See `sat.rs::encode_underground` and memory
+        // `project_prune_first_suspect`.
+        let reach_threshold = max_reach + 1;
+        for w in on_path.windows(2) {
+            let (i, p_i) = w[0];
+            let (j, p_j) = w[1];
+            if p_j - p_i > reach_threshold {
+                continue;
+            }
+            let ri = find(&mut parent, i);
+            let rj = find(&mut parent, j);
+            if ri == rj {
+                continue;
+            }
+            // Single-crossing rescue gate: at least one party must be
+            // a lone-crossing cluster. Skip multi-to-multi merges —
+            // they regress clusters that solve fine independently.
+            if cluster_size[ri] != 1 && cluster_size[rj] != 1 {
+                continue;
+            }
+            // Compute hull of the proposed merged cluster. O(n) per
+            // check; n = total crossings in the layout (small, <~100
+            // in practice).
+            let (mut min_x, mut min_y) = (i32::MAX, i32::MAX);
+            let (mut max_x, mut max_y) = (i32::MIN, i32::MIN);
+            for (k, &(tx, ty)) in tiles.iter().enumerate() {
+                let rk = find(&mut parent, k);
+                if rk == ri || rk == rj {
+                    min_x = min_x.min(tx);
+                    max_x = max_x.max(tx);
+                    min_y = min_y.min(ty);
+                    max_y = max_y.max(ty);
+                }
+            }
+            let hull = ((max_x - min_x + 1) as usize)
+                * ((max_y - min_y + 1) as usize);
+            if hull > HULL_BUDGET {
+                continue;
+            }
+            let merged_size = cluster_size[ri] + cluster_size[rj];
+            parent[ri] = rj;
+            cluster_size[rj] = merged_size;
+            cluster_size[ri] = 0;
         }
     }
 
@@ -2491,6 +2639,7 @@ fn dump_region_fixture(
             mode: "solve".to_string(),
             max_cost: None,
             optimal_cost: None,
+            required_entities: Vec::new(),
         },
     };
 
@@ -2539,18 +2688,24 @@ mod cluster_adjacent_crossings_tests {
         tiles.iter().copied().collect()
     }
 
+    fn no_tiers() -> FxHashMap<String, BeltTier> {
+        // All tests assume yellow belts; empty map makes
+        // `cluster_adjacent_crossings` fall back to Yellow per spec.
+        FxHashMap::default()
+    }
+
     #[test]
     fn empty_input_returns_empty() {
         let cs = FxHashSet::default();
         let rp = FxHashMap::default();
-        assert!(cluster_adjacent_crossings(&cs, &rp).is_empty());
+        assert!(cluster_adjacent_crossings(&cs, &rp, &no_tiers()).is_empty());
     }
 
     #[test]
     fn single_tile_becomes_single_cluster() {
         let cs = crossings(&[(5, 5)]);
         let rp = paths(&[("tap:iron-plate", &[(5, 5)])]);
-        let clusters = cluster_adjacent_crossings(&cs, &rp);
+        let clusters = cluster_adjacent_crossings(&cs, &rp, &no_tiers());
         assert_eq!(clusters, vec![vec![(5, 5)]]);
     }
 
@@ -2569,7 +2724,7 @@ mod cluster_adjacent_crossings_tests {
             ("trunk:copper-cable:16", &[(16, 89), (16, 90), (16, 91)]),
             ("trunk:copper-cable:17", &[(17, 89), (17, 90), (17, 91)]),
         ]);
-        let clusters = cluster_adjacent_crossings(&cs, &rp);
+        let clusters = cluster_adjacent_crossings(&cs, &rp, &no_tiers());
         assert_eq!(clusters.len(), 1);
         assert_eq!(
             clusters[0],
@@ -2588,24 +2743,47 @@ mod cluster_adjacent_crossings_tests {
             ("tap:c", &[(11, 10)]),
             ("trunk:d", &[(11, 9), (11, 10), (11, 11)]),
         ]);
-        let clusters = cluster_adjacent_crossings(&cs, &rp);
+        let clusters = cluster_adjacent_crossings(&cs, &rp, &no_tiers());
         assert_eq!(clusters.len(), 2);
         assert_eq!(clusters, vec![vec![(10, 10)], vec![(11, 10)]]);
     }
 
     #[test]
-    fn manhattan_3_sharing_spec_stays_separate() {
-        // Two crossings that share a spec (a tap running across both)
-        // but are 3 tiles apart. Manhattan 2 rule caps the merge radius,
-        // so they stay as separate clusters.
+    fn manhattan_3_sharing_spec_merges_via_ug_reach() {
+        // Two crossings 3 tiles apart along a shared spec. Outside
+        // Manhattan-2 but inside yellow UG-reach (5), so the UG-reach
+        // pass merges them. Guards the failure mode at advanced-circuit
+        // (22,143)+(25,142), where the earlier cluster stamps a UG pair
+        // whose mate sits in the later cluster's expansion envelope —
+        // forcing a walker veto on every SAT output until growth caps.
         let cs = crossings(&[(5, 5), (8, 5)]);
         let rp = paths(&[
             ("tap:iron-plate", &[(5, 5), (6, 5), (7, 5), (8, 5)]),
             ("trunk:a", &[(5, 4), (5, 5), (5, 6)]),
             ("trunk:b", &[(8, 4), (8, 5), (8, 6)]),
         ]);
-        let clusters = cluster_adjacent_crossings(&cs, &rp);
-        assert_eq!(clusters.len(), 2);
+        let clusters = cluster_adjacent_crossings(&cs, &rp, &no_tiers());
+        assert_eq!(clusters.len(), 1);
+    }
+
+    #[test]
+    fn ug_reach_merge_respects_hull_budget() {
+        // Long chain of crossings 4 tiles apart along a shared spec.
+        // Each consecutive pair is within UG-reach, so naive transitive
+        // union-find would fuse them all — but once the running hull
+        // would exceed HULL_BUDGET=48 tiles the guardrail must stop
+        // merging. 20 crossings × 4 tile spacing → hull 77×1 = 77 tiles,
+        // well over the cap, so we must end up with >1 cluster.
+        let tiles: Vec<(i32, i32)> = (0..20).map(|k| (k * 4, 5)).collect();
+        let cs = crossings(&tiles);
+        let path: Vec<(i32, i32)> = (0..=20 * 4).map(|x| (x, 5)).collect();
+        let rp = paths(&[("tap:shared", path.as_slice())]);
+        let clusters = cluster_adjacent_crossings(&cs, &rp, &no_tiers());
+        assert!(
+            clusters.len() > 1,
+            "expected hull-budget to split the chain; got {} cluster(s)",
+            clusters.len()
+        );
     }
 
     #[test]
@@ -2620,7 +2798,7 @@ mod cluster_adjacent_crossings_tests {
             ("trunk:a", &[(5, 4), (5, 5), (5, 6)]),
             ("trunk:b", &[(7, 4), (7, 5), (7, 6)]),
         ]);
-        let clusters = cluster_adjacent_crossings(&cs, &rp);
+        let clusters = cluster_adjacent_crossings(&cs, &rp, &no_tiers());
         assert_eq!(clusters.len(), 1);
         assert_eq!(clusters[0], vec![(5, 5), (7, 5)]);
     }
@@ -2636,7 +2814,7 @@ mod cluster_adjacent_crossings_tests {
             ("trunk:a", &[(5, 4), (5, 5), (5, 6)]),
             ("trunk:b", &[(6, 5), (6, 6), (6, 7)]),
         ]);
-        let clusters = cluster_adjacent_crossings(&cs, &rp);
+        let clusters = cluster_adjacent_crossings(&cs, &rp, &no_tiers());
         assert_eq!(clusters.len(), 1);
     }
 
@@ -2651,7 +2829,7 @@ mod cluster_adjacent_crossings_tests {
             ("trunk:x", &[(5, 4), (5, 5), (5, 6)]),
             ("trunk:y", &[(7, 4), (7, 5), (7, 6)]),
         ]);
-        let clusters = cluster_adjacent_crossings(&cs, &rp);
+        let clusters = cluster_adjacent_crossings(&cs, &rp, &no_tiers());
         assert_eq!(clusters.len(), 2);
     }
 }

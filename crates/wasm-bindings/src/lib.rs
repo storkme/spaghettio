@@ -69,15 +69,30 @@ pub fn layout_traced(solver_result: SolverResult, max_belt_tier: Option<String>)
 /// the streaming JS callback. The full event set remains collected in
 /// `LayoutResult.trace` for post-hoc consumption.
 ///
-/// v1 streams only `PhaseSnapshot` — enough for the renderer to progressively
-/// commit entities as phases complete. Per-event overlays (SAT pulses, ghost
-/// paths, etc.) are deferred to a follow-up using a shared-Graphics
-/// draw-per-frame pattern; the naive "Graphics per event" approach saturated
-/// Pixi's render tree on large layouts. Widening the filter is a one-line
-/// change here when the renderer is ready.
+/// Streamed today:
+/// - `PhaseSnapshot`: drives phase-to-phase entity fade-ins.
+/// - `GhostSpecRouted`: per-spec routed path — feeds the live ghost-path
+///   overlay during negotiation. Negotiation is fast (<20 ms in practice)
+///   so most of these fire in a burst near the start.
+/// - `GhostClusterSolved` / `JunctionSolved` / `SatInvocation`: give the
+///   junction-solver phase something visible. SAT zone solving dominates
+///   the 5-6 s wait on hard layouts, and without streaming these, the
+///   overlay goes silent for that whole window.
+///
+/// The overlay renderer uses a single shared `Graphics` redrawn per frame,
+/// so event count doesn't blow up Pixi's tree.
 fn streamable(evt: &fucktorio_core::trace::TraceEvent) -> bool {
     use fucktorio_core::trace::TraceEvent as T;
-    matches!(evt, T::PhaseSnapshot { .. })
+    matches!(
+        evt,
+        T::PhaseSnapshot { .. }
+            | T::GhostSpecRouted { .. }
+            | T::GhostSpecCommitted { .. }
+            | T::GhostClusterSolved { .. }
+            | T::JunctionCommitted { .. }
+            | T::JunctionSolved { .. }
+            | T::SatInvocation { .. }
+    )
 }
 
 /// Streaming variant — invokes `emit` synchronously for every filtered trace

@@ -1575,18 +1575,14 @@ pub fn solve_crossing_zone_with_stats(
     let variables = encoder.total_vars;
     let clauses = cnf.count;
 
-    #[cfg(not(target_arch = "wasm32"))]
-    let start = std::time::Instant::now();
+    let start = web_time::Instant::now();
 
     let mut solver = Solver::new();
     solver.add_formula(&cnf.formula);
 
     let sat_result = solver.solve();
 
-    #[cfg(not(target_arch = "wasm32"))]
     let solve_time_us = start.elapsed().as_micros() as u64;
-    #[cfg(target_arch = "wasm32")]
-    let solve_time_us = 0u64;
 
     let stats = CrossingZoneStats {
         variables,
@@ -1651,18 +1647,14 @@ pub fn solve_crossing_zone_with_cost_cap(
     let variables = aux_counter;
     let clauses = cnf.count;
 
-    #[cfg(not(target_arch = "wasm32"))]
-    let start = std::time::Instant::now();
+    let start = web_time::Instant::now();
 
     let mut solver = Solver::new();
     solver.add_formula(&cnf.formula);
 
     let sat_result = solver.solve();
 
-    #[cfg(not(target_arch = "wasm32"))]
     let solve_time_us = start.elapsed().as_micros() as u64;
-    #[cfg(target_arch = "wasm32")]
-    let solve_time_us = 0u64;
 
     let stats = CrossingZoneStats {
         variables,
@@ -1736,8 +1728,7 @@ pub fn solve_crossing_zone_with_pins(
         }
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    let start = std::time::Instant::now();
+    let start = web_time::Instant::now();
 
     let mut solver = Solver::new();
     solver.add_formula(&cnf.formula);
@@ -1745,10 +1736,7 @@ pub fn solve_crossing_zone_with_pins(
 
     let sat_result = solver.solve();
 
-    #[cfg(not(target_arch = "wasm32"))]
     let solve_time_us = start.elapsed().as_micros() as u64;
-    #[cfg(target_arch = "wasm32")]
-    let solve_time_us = 0u64;
 
     let stats = CrossingZoneStats {
         variables,
@@ -2342,7 +2330,7 @@ mod tests {
     ) -> Option<CrossingZoneSolution> {
         let zone = band_zone(width, height, n_trunks, n_horizontals);
         let n_ports = zone.boundaries.len();
-        let t = std::time::Instant::now();
+        let t = web_time::Instant::now();
         let result = solve_crossing_zone(&zone, 4, "transport-belt");
         let elapsed = t.elapsed();
         match result {

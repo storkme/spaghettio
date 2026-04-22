@@ -5,6 +5,7 @@ export interface DebugState {
   satZones: boolean;
   soloRegions: boolean;
   ghostTiles: boolean;
+  itemColors: boolean;
 }
 
 type Subscriber = (state: DebugState) => void;
@@ -16,6 +17,7 @@ let state: DebugState = {
   satZones: false,
   soloRegions: false,
   ghostTiles: false,
+  itemColors: true,
 };
 
 const subs: Subscriber[] = [];
@@ -25,11 +27,13 @@ export function create(): void {
   const fromStorage = localStorage.getItem("fk-debug") === "1";
   const satFromStorage = localStorage.getItem("fk-sat-zones") === "1";
   const ghostFromStorage = localStorage.getItem("fk-ghost-tiles") === "1";
+  const itemColorsStored = localStorage.getItem("fk-item-colors");
   state = {
     ...state,
     master: fromParam || fromStorage,
     satZones: satFromStorage,
     ghostTiles: ghostFromStorage,
+    itemColors: itemColorsStored === null ? true : itemColorsStored === "1",
   };
 }
 
@@ -47,6 +51,9 @@ export function set(patch: Partial<DebugState>): void {
   }
   if ("ghostTiles" in patch) {
     localStorage.setItem("fk-ghost-tiles", patch.ghostTiles ? "1" : "0");
+  }
+  if ("itemColors" in patch) {
+    localStorage.setItem("fk-item-colors", patch.itemColors ? "1" : "0");
   }
   for (const cb of subs) cb(state);
 }

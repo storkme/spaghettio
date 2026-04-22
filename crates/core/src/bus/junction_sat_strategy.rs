@@ -23,7 +23,7 @@
 
 use rustc_hash::FxHashSet;
 
-use crate::bus::junction::{BeltTier, Rect};
+use crate::bus::junction::{BeltTier, Rect, SpecCrossing};
 use crate::bus::junction_solver::{JunctionSolution, JunctionStrategy, JunctionStrategyContext};
 use crate::common::{is_splitter, is_surface_belt, is_ug_belt, splitter_second_tile, ug_max_reach};
 use crate::models::{EntityDirection, PlacedEntity};
@@ -185,6 +185,62 @@ fn find_external_feeder(
     None
 }
 
+
+/// Resolve the (x, y, direction) at which to synthesize a perimeter IN
+/// boundary for a participating spec whose topology-based IN was
+/// missed. Returns the tile of the chain head (the first upstream tile
+/// with no in-bbox belt feeder) and the flow direction of the belt at
+/// that tile.
+///
+/// Strategy: start at the spec's entry tile. Repeatedly find the belt
+/// that physically feeds the current tile (`physical_feeder_hit`, which
+/// inspects all 4 neighbours — crucial at turn/join tiles where the
+/// feeder is perpendicular to the local path direction). If the feeder
+/// is inside the bbox, advance to it. Stop when the feeder is outside
+/// the bbox (use feeder's direction) or no feeder exists (chain head;
+/// use the current tile's belt direction). Cycle-safe via visited set.
+///
+/// Why not just use `spec.entry.direction`: at segment joins (e.g. a
+/// `ret:*` merging into a `flow:*`), the flow spec's path-derived
+/// direction is a DEPARTURE direction at the join tile, while the
+/// actual upstream flow arrives from a perpendicular direction. SAT
+/// needs the IN direction to match the feeder's flow direction.
+fn resolve_chain_head(
+    sc: &SpecCrossing,
+    placed_entities: &[PlacedEntity],
+    bbox: &Rect,
+) -> (i32, i32, EntityDirection) {
+    let mut cur = (sc.entry.x, sc.entry.y);
+    let mut cur_dir = sc.entry.direction;
+    let mut visited: FxHashSet<(i32, i32)> = FxHashSet::default();
+    loop {
+        if !visited.insert(cur) {
+            return (cur.0, cur.1, cur_dir);
+        }
+        // Pick up the direction of the in-place belt at `cur`, if any —
+        // `sc.entry.direction` is a path-derived approximation.
+        if let Some(e) = placed_entities.iter().find(|e| {
+            e.x == cur.0
+                && e.y == cur.1
+                && e.carries.as_deref() == Some(sc.item.as_str())
+                && (is_surface_belt(&e.name) || is_ug_belt(&e.name))
+        }) {
+            cur_dir = e.direction;
+        }
+        let Some(hit) = physical_feeder_hit(cur, placed_entities, &sc.item) else {
+            // No belt feeder anywhere — chain head.
+            return (cur.0, cur.1, cur_dir);
+        };
+        if !bbox.contains(hit.entity_tile.0, hit.entity_tile.1) {
+            // Feeder is outside the bbox — emit perimeter IN at `cur`
+            // with the feeder's flow direction.
+            return (cur.0, cur.1, hit.entity_direction);
+        }
+        // Feeder is another FREE in-bbox belt. Walk to it.
+        cur = hit.entity_tile;
+        cur_dir = hit.entity_direction;
+    }
+}
 
 /// Find a Permanent entity (splitter / belt / UG-out) whose output lands
 /// on `tile` AND carries `item`. Returns the *specific* feeder tile and
@@ -478,12 +534,58 @@ impl JunctionStrategy for SatStrategy {
         // (anything in forbidden), and emit boundaries wherever flow crosses
         // between FREE and outside/FIXED. No dedup needed — each boundary
         // position is unique by construction.
-        let boundaries = topology_boundaries(
+        let mut boundaries = topology_boundaries(
             ctx.placed_entities,
             &ctx.junction.bbox,
             &ctx.junction.forbidden,
         );
-        let origins: Vec<String> = boundaries.iter().map(|_| "topology".to_string()).collect();
+        let mut origins: Vec<String> = boundaries
+            .iter()
+            .map(|_| "topology".to_string())
+            .collect();
+
+        // Chain-head augmentation: every participating spec contracts to
+        // route one item into the zone at `entry`. The topology walk only
+        // emits an IN when a *belt* feeds the tile — it misses the case
+        // where the chain's first in-bbox belt is fed by an inserter from
+        // a machine output (no belt upstream). Without this fix, SAT
+        // receives no input constraint for the spec, solves the zone
+        // however it likes, and silently drops the item's flow entirely.
+        // The walker doesn't catch this either because it only checks
+        // continuity of already-stamped paths, not missing ones.
+        //
+        // For each participating spec, if no IN boundary was emitted for
+        // its item anywhere in the zone, synthesize one at the true flow
+        // source. The source is found by following the spec's path
+        // upstream of its entry until a tile with an actual belt feeder
+        // is found, or until a tile with no feeder is reached (the chain
+        // head — typically inserter-fed from a machine output).
+        for sc in ctx.junction.specs.iter() {
+            let has_in_for_item = boundaries
+                .iter()
+                .any(|b| b.is_input && b.item == sc.item);
+            if has_in_for_item {
+                continue;
+            }
+            // Find a concrete entity at the entry tile (or walk upstream
+            // to find one) and use its direction as the IN direction.
+            // Using `entry.direction` directly is wrong at spec joins —
+            // the copper-cable trunk at (3,7) has entry dir South (path
+            // departure) but the real flow arrives West from (4,7) via a
+            // ret segment. Without a direction that matches the feeder,
+            // SAT routes incorrectly or UNSATs.
+            let (in_x, in_y, in_dir) =
+                resolve_chain_head(sc, ctx.placed_entities, &ctx.junction.bbox);
+            boundaries.push(ZoneBoundary {
+                x: in_x,
+                y: in_y,
+                direction: in_dir,
+                item: sc.item.clone(),
+                is_input: true,
+                interior: false,
+            });
+            origins.push("spec-chain-head".to_string());
+        }
 
         let forced_empty: Vec<(i32, i32)> =
             ctx.junction.forbidden.iter().copied().collect();
@@ -575,13 +677,11 @@ impl JunctionStrategy for SatStrategy {
         // budget runs out, or iter limit. Descent operates on RAW
         // SAT output so the cap we compute lines up with what the
         // encoder sees; pruning happens once at the end.
-        #[cfg(not(target_arch = "wasm32"))]
-        let deadline = std::time::Instant::now()
+        let deadline = web_time::Instant::now()
             + std::time::Duration::from_millis(self.constraints.cost_descent_budget_ms as u64);
 
         for descent_iter in 0..self.constraints.cost_descent_max_iters {
-            #[cfg(not(target_arch = "wasm32"))]
-            if std::time::Instant::now() >= deadline {
+            if web_time::Instant::now() >= deadline {
                 break;
             }
             let Some(cap) = best_cost.checked_sub(1) else {

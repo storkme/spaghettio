@@ -51,8 +51,7 @@ pub fn build_bus_layout(
     // so we know the real bus width and any balancer blocks that need
     // vertical gaps between producer rows.
     let temp_bw = estimate_bus_width(solver_result);
-    #[cfg(not(target_arch = "wasm32"))]
-    let t_place1 = std::time::Instant::now();
+    let t_place1 = web_time::Instant::now();
     let (row_entities_1, row_spans_1, _row_width_1, _total_height_1) = place_rows(
         &solver_result.machines,
         &solver_result.dependency_order,
@@ -62,15 +61,12 @@ pub fn build_bus_layout(
         Some(&final_output_items),
         None,
     );
-    #[cfg(not(target_arch = "wasm32"))]
     crate::trace::emit(crate::trace::TraceEvent::PhaseTime {
         phase: "place_rows_1".to_string(),
         duration_ms: t_place1.elapsed().as_millis() as u64,
     });
-    #[cfg(not(target_arch = "wasm32"))]
-    let t_plan1 = std::time::Instant::now();
+    let t_plan1 = web_time::Instant::now();
     let (lanes_1, families_1) = plan_bus_lanes(solver_result, &row_spans_1, max_belt_tier)?;
-    #[cfg(not(target_arch = "wasm32"))]
     crate::trace::emit(crate::trace::TraceEvent::PhaseTime {
         phase: "plan_bus_lanes_1".to_string(),
         duration_ms: t_plan1.elapsed().as_millis() as u64,
@@ -84,8 +80,7 @@ pub fn build_bus_layout(
         if actual_bw == temp_bw && extra_gaps.is_empty() {
             (row_entities_1, row_spans_1, _row_width_1, _total_height_1, lanes_1, families_1)
         } else {
-            #[cfg(not(target_arch = "wasm32"))]
-            let t_place2 = std::time::Instant::now();
+            let t_place2 = web_time::Instant::now();
             let (re, rs, rw, th) = place_rows(
                 &solver_result.machines,
                 &solver_result.dependency_order,
@@ -95,15 +90,12 @@ pub fn build_bus_layout(
                 Some(&final_output_items),
                 Some(&extra_gaps),
             );
-            #[cfg(not(target_arch = "wasm32"))]
             crate::trace::emit(crate::trace::TraceEvent::PhaseTime {
                 phase: "place_rows_2".to_string(),
                 duration_ms: t_place2.elapsed().as_millis() as u64,
             });
-            #[cfg(not(target_arch = "wasm32"))]
-            let t_plan2 = std::time::Instant::now();
+            let t_plan2 = web_time::Instant::now();
             let (nl, nf) = plan_bus_lanes(solver_result, &rs, max_belt_tier)?;
-            #[cfg(not(target_arch = "wasm32"))]
             crate::trace::emit(crate::trace::TraceEvent::PhaseTime {
                 phase: "plan_bus_lanes_2".to_string(),
                 duration_ms: t_plan2.elapsed().as_millis() as u64,
@@ -230,8 +222,7 @@ pub fn build_bus_layout(
     // Route all connecting belts via the ghost routing pipeline.
     // See `docs/ghost-pipeline-contracts.md` for the phase-by-phase
     // contract and `ghost_router.rs` for the implementation.
-    #[cfg(not(target_arch = "wasm32"))]
-    let t_ghost = std::time::Instant::now();
+    let t_ghost = web_time::Instant::now();
     let ghost_result = crate::bus::ghost_router::route_bus_ghost(
         &lanes,
         &row_spans,
@@ -247,7 +238,6 @@ pub fn build_bus_layout(
     let merge_max_x = ghost_result.merge_max_x;
     let regions = ghost_result.regions;
     let ghost_warnings = ghost_result.warnings;
-    #[cfg(not(target_arch = "wasm32"))]
     crate::trace::emit(crate::trace::TraceEvent::PhaseTime {
         phase: "ghost_routing".to_string(),
         duration_ms: t_ghost.elapsed().as_millis() as u64,

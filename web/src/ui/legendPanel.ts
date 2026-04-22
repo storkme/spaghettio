@@ -207,7 +207,7 @@ export function createLegendPanel(container: HTMLElement): LegendPanelControls {
   const panel = document.createElement("div");
   panel.style.cssText = [
     "position:absolute",
-    "top:8px",
+    "bottom:8px",
     "left:8px",
     "background:rgba(0,0,0,0.62)",
     "color:#bbb",

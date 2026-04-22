@@ -1419,13 +1419,9 @@ fn try_solve_on_region(
     };
 
     for strategy in ctx.strategies {
-        #[cfg(not(target_arch = "wasm32"))]
-        let strategy_started = std::time::Instant::now();
+        let strategy_started = web_time::Instant::now();
         let result = strategy.try_solve(&strategy_ctx);
-        #[cfg(not(target_arch = "wasm32"))]
         let elapsed_us = strategy_started.elapsed().as_micros() as u64;
-        #[cfg(target_arch = "wasm32")]
-        let elapsed_us = 0u64;
         let Some(sol) = result else {
             trace::emit(TraceEvent::JunctionStrategyAttempt {
                 seed_x: ctx.initial_tile.0,
