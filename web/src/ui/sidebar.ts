@@ -91,6 +91,200 @@ function appendFlows(
 const FLUID_ITEMS = new Set(["water", "crude-oil", "petroleum-gas", "light-oil", "heavy-oil", "sulfuric-acid", "lubricant", "steam"]);
 
 // ---------------------------------------------------------------------------
+// Rich item picker
+// ---------------------------------------------------------------------------
+
+const RECENT_ITEMS_KEY = "fucktorio-recent-items";
+const RECENT_MAX = 5;
+
+function getRecentItems(): string[] {
+  try {
+    const raw = localStorage.getItem(RECENT_ITEMS_KEY);
+    return raw ? (JSON.parse(raw) as string[]) : [];
+  } catch { return []; }
+}
+
+function pushRecentItem(slug: string): void {
+  const recent = getRecentItems().filter((r) => r !== slug);
+  recent.unshift(slug);
+  if (recent.length > RECENT_MAX) recent.length = RECENT_MAX;
+  try { localStorage.setItem(RECENT_ITEMS_KEY, JSON.stringify(recent)); } catch { /* quota */ }
+}
+
+function makeItemPicker(
+  allItems: string[],
+  initial: string,
+  onChange: (item: string) => void,
+): { el: HTMLDivElement; getValue(): string; setValue(item: string): void; setInvalid(v: boolean): void } {
+  let selectedItem = initial;
+  let isOpen = false;
+  let highlightedEl: HTMLElement | null = null;
+
+  const container = document.createElement("div");
+  container.className = "sb-item-picker";
+
+  const valueEl = document.createElement("div");
+  valueEl.className = "sb-picker-value";
+
+  const arrowEl = document.createElement("span");
+  arrowEl.className = "sb-picker-arrow";
+  arrowEl.textContent = "▾";
+
+  container.appendChild(valueEl);
+  container.appendChild(arrowEl);
+
+  const dropdown = document.createElement("div");
+  dropdown.className = "sb-picker-dropdown";
+  dropdown.style.display = "none";
+  container.appendChild(dropdown);
+
+  const searchInput = document.createElement("input");
+  searchInput.type = "text";
+  searchInput.className = "sb-picker-search";
+  searchInput.placeholder = "Search items…";
+  dropdown.appendChild(searchInput);
+
+  const listEl = document.createElement("div");
+  listEl.className = "sb-picker-list";
+  dropdown.appendChild(listEl);
+
+  function updateValueDisplay(): void {
+    valueEl.innerHTML = "";
+    if (selectedItem) {
+      valueEl.appendChild(itemIcon(selectedItem, 14));
+      const txt = document.createElement("span");
+      txt.textContent = niceName(selectedItem);
+      valueEl.appendChild(txt);
+    } else {
+      const placeholder = document.createElement("span");
+      placeholder.className = "sb-picker-placeholder";
+      placeholder.textContent = "Select item…";
+      valueEl.appendChild(placeholder);
+    }
+  }
+
+  function makeListItem(slug: string): HTMLElement {
+    const el = document.createElement("div");
+    el.className = "sb-picker-item" + (slug === selectedItem ? " selected" : "");
+    el.dataset.slug = slug;
+    el.appendChild(itemIcon(slug, 14));
+    const lbl = document.createElement("span");
+    lbl.textContent = niceName(slug);
+    el.appendChild(lbl);
+    el.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      selectItem(slug);
+    });
+    return el;
+  }
+
+  function renderList(query: string): void {
+    listEl.innerHTML = "";
+    highlightedEl = null;
+    const q = query.trim().toLowerCase();
+    const filtered = q
+      ? allItems.filter((s) => s.includes(q) || niceName(s).toLowerCase().includes(q))
+      : allItems;
+
+    if (!q) {
+      const recent = getRecentItems().filter((r) => allItems.includes(r));
+      if (recent.length > 0) {
+        const label = document.createElement("div");
+        label.className = "sb-picker-section-label";
+        label.textContent = "Recent";
+        listEl.appendChild(label);
+        for (const slug of recent) listEl.appendChild(makeListItem(slug));
+        const divider = document.createElement("div");
+        divider.className = "sb-picker-divider";
+        listEl.appendChild(divider);
+      }
+    }
+
+    for (const slug of filtered) listEl.appendChild(makeListItem(slug));
+
+    if (!q && selectedItem) {
+      const sel = listEl.querySelector<HTMLElement>(`[data-slug="${selectedItem}"]`);
+      if (sel) sel.scrollIntoView({ block: "nearest" });
+    }
+  }
+
+  function selectItem(slug: string): void {
+    selectedItem = slug;
+    pushRecentItem(slug);
+    container.classList.remove("item-invalid");
+    updateValueDisplay();
+    closeDropdown();
+    onChange(slug);
+  }
+
+  function openDropdown(): void {
+    isOpen = true;
+    container.classList.add("open");
+    dropdown.style.display = "";
+    arrowEl.textContent = "▴";
+    searchInput.value = "";
+    renderList("");
+    requestAnimationFrame(() => searchInput.focus());
+  }
+
+  function closeDropdown(): void {
+    isOpen = false;
+    container.classList.remove("open");
+    dropdown.style.display = "none";
+    arrowEl.textContent = "▾";
+    highlightedEl = null;
+  }
+
+  function moveFocus(dir: 1 | -1): void {
+    const items = listEl.querySelectorAll<HTMLElement>(".sb-picker-item");
+    if (!items.length) return;
+    const arr = Array.from(items);
+    let idx = highlightedEl ? arr.indexOf(highlightedEl) : -1;
+    idx = Math.max(0, Math.min(arr.length - 1, idx + dir));
+    highlightedEl?.classList.remove("highlighted");
+    highlightedEl = arr[idx];
+    highlightedEl.classList.add("highlighted");
+    highlightedEl.scrollIntoView({ block: "nearest" });
+  }
+
+  container.addEventListener("mousedown", (e) => {
+    if (dropdown.contains(e.target as Node)) return;
+    e.preventDefault();
+    if (isOpen) closeDropdown(); else openDropdown();
+  });
+
+  searchInput.addEventListener("input", () => renderList(searchInput.value));
+
+  searchInput.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); moveFocus(1); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); moveFocus(-1); }
+    else if (e.key === "Enter") {
+      if (highlightedEl?.dataset.slug) selectItem(highlightedEl.dataset.slug);
+    } else if (e.key === "Escape") {
+      closeDropdown();
+    }
+  });
+
+  document.addEventListener("mousedown", (e) => {
+    if (isOpen && !container.contains(e.target as Node)) closeDropdown();
+  });
+
+  updateValueDisplay();
+
+  return {
+    el: container,
+    getValue: () => selectedItem,
+    setValue(slug: string) {
+      selectedItem = slug;
+      updateValueDisplay();
+    },
+    setInvalid(v: boolean) {
+      container.classList.toggle("item-invalid", v);
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Exports
 // ---------------------------------------------------------------------------
 
@@ -108,6 +302,7 @@ export interface SidebarParams {
   rate: number;
   machine?: string;
   inputs?: string[];
+  customInputs?: string[];
   belt?: string | null;
 }
 
@@ -133,16 +328,8 @@ export function renderSidebar(
     "Target",
   );
 
-  const datalist = document.createElement("datalist");
-  datalist.id = "fucktorio-items-datalist";
   const allItems = engine.allProducibleItems();
   const itemSet = new Set(allItems);
-  allItems.forEach((item) => {
-    const opt = document.createElement("option");
-    opt.value = item;
-    datalist.appendChild(opt);
-  });
-  targetBody.appendChild(datalist);
 
   function makeField(label: string, control: HTMLElement): HTMLDivElement {
     const row = document.createElement("div");
@@ -157,20 +344,18 @@ export function renderSidebar(
     return row;
   }
 
-  // Item (full-width, no label prefix — the section header is "Target")
-  const itemInput = document.createElement("input");
-  itemInput.type = "text";
-  itemInput.className = "sb-input";
-  itemInput.setAttribute("list", "fucktorio-items-datalist");
-  itemInput.autocomplete = "off";
-  itemInput.placeholder = "Search item…";
-  targetBody.appendChild(itemInput);
+  // Item — rich picker
+  const picker = makeItemPicker(allItems, "", () => scheduleAutoSolve());
+  picker.el.style.cssText = "margin-bottom:6px";
+  targetBody.appendChild(picker.el);
 
-  // Machine
+  // Assembler tier (only assembling-machine-1/2/3 — specialized machines are auto-picked per recipe)
   const machineSelect = document.createElement("select");
   machineSelect.className = "sb-select";
-  engine.allProducerMachines().forEach((m) => machineSelect.appendChild(makeOption(m, "assembling-machine-3")));
-  targetBody.appendChild(makeField("Machine", machineSelect));
+  ["assembling-machine-1", "assembling-machine-2", "assembling-machine-3"].forEach(
+    (m) => machineSelect.appendChild(makeOption(m, "assembling-machine-3")),
+  );
+  targetBody.appendChild(makeField("Assembler", machineSelect));
 
   // Belt tier (Auto / Yellow / Red / Blue) — moved up from the former Layout section
   const beltSelect = document.createElement("select");
@@ -227,7 +412,7 @@ export function renderSidebar(
 
     const checkSpan = document.createElement("span");
     checkSpan.className = "sb-tag-check";
-    checkSpan.textContent = "\u2713";
+    checkSpan.textContent = "✓";
 
     const cb = document.createElement("input");
     cb.type = "checkbox";
@@ -240,7 +425,6 @@ export function renderSidebar(
     tag.appendChild(document.createTextNode(niceName(inp)));
     tag.appendChild(cb);
 
-    // Toggle active class on check/uncheck
     cb.addEventListener("change", () => {
       tag.classList.toggle("active", cb.checked);
     });
@@ -248,6 +432,71 @@ export function renderSidebar(
     tagsWrap.appendChild(tag);
   });
   inputsBody.appendChild(tagsWrap);
+
+  // Custom inputs — user-added items beyond DEFAULT_INPUTS
+  let customInputs: string[] = [];
+
+  const customTagsWrap = document.createElement("div");
+  customTagsWrap.className = "sb-tags sb-custom-tags";
+  inputsBody.appendChild(customTagsWrap);
+
+  // Datalist for custom-input search field (excludes DEFAULT_INPUTS)
+  const customInputDatalist = document.createElement("datalist");
+  customInputDatalist.id = "fucktorio-custom-inputs-datalist";
+  const defaultInputSet = new Set(DEFAULT_INPUTS);
+  allItems.filter((it) => !defaultInputSet.has(it)).forEach((it) => {
+    const opt = document.createElement("option");
+    opt.value = it;
+    customInputDatalist.appendChild(opt);
+  });
+  inputsBody.appendChild(customInputDatalist);
+
+  const customInputField = document.createElement("input");
+  customInputField.type = "text";
+  customInputField.className = "sb-input sb-custom-input-field";
+  customInputField.setAttribute("list", "fucktorio-custom-inputs-datalist");
+  customInputField.autocomplete = "off";
+  customInputField.placeholder = "+ add input…";
+  inputsBody.appendChild(customInputField);
+
+  function renderCustomTag(item: string): void {
+    const tag = document.createElement("div");
+    tag.className = `sb-tag sb-custom-tag active${FLUID_ITEMS.has(item) ? " fluid" : ""}`;
+    tag.dataset.item = item;
+    tag.appendChild(itemIcon(item, 14));
+    tag.appendChild(document.createTextNode(niceName(item)));
+    const removeBtn = document.createElement("span");
+    removeBtn.className = "sb-tag-remove";
+    removeBtn.textContent = "×";
+    removeBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      customInputs = customInputs.filter((x) => x !== item);
+      tag.remove();
+      scheduleAutoSolve();
+    });
+    tag.appendChild(removeBtn);
+    customTagsWrap.appendChild(tag);
+  }
+
+  function tryAddCustomInput(raw: string): void {
+    const val = raw.trim();
+    if (!val || !itemSet.has(val)) return;
+    if (defaultInputSet.has(val) || customInputs.includes(val)) return;
+    customInputs.push(val);
+    renderCustomTag(val);
+    customInputField.value = "";
+    scheduleAutoSolve();
+  }
+
+  customInputField.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") tryAddCustomInput(customInputField.value);
+  });
+
+  customInputField.addEventListener("change", () => {
+    // datalist selection fires a change event
+    tryAddCustomInput(customInputField.value);
+  });
+
   inner.appendChild(inputsSection);
 
   // ==================== SOLVER ====================
@@ -290,17 +539,26 @@ export function renderSidebar(
 
   // ==================== State init ====================
   const urlState = readUrlState();
-  itemInput.value = urlState.item;
+  picker.setValue(urlState.item);
   rateInput.value = String(urlState.rate);
-  machineSelect.value =
-    urlState.machine ?? engine.defaultMachineForItem(urlState.item, "assembling-machine-3");
+  // Only accept assembling-machine-1/2/3 from URL; anything else (legacy specialized machines) → AM3
+  const ASSEMBLER_TIERS = new Set(["assembling-machine-1", "assembling-machine-2", "assembling-machine-3"]);
+  machineSelect.value = (urlState.machine && ASSEMBLER_TIERS.has(urlState.machine))
+    ? urlState.machine
+    : "assembling-machine-3";
   checkboxes.forEach((cb, name) => {
     cb.checked = urlState.inputs.includes(name);
-    // Sync tag pill active state
     const tag = cb.closest(".sb-tag") as HTMLLabelElement;
     if (tag) tag.classList.toggle("active", cb.checked);
   });
   if (urlState.belt) beltSelect.value = urlState.belt;
+  // Restore custom inputs from URL
+  for (const item of urlState.customInputs) {
+    if (itemSet.has(item) && !defaultInputSet.has(item) && !customInputs.includes(item)) {
+      customInputs.push(item);
+      renderCustomTag(item);
+    }
+  }
 
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   let previousItem = urlState.item;
@@ -315,28 +573,23 @@ export function renderSidebar(
   }
 
   async function runSolve(): Promise<void> {
-    const targetItem = itemInput.value.trim();
+    const targetItem = picker.getValue();
     const targetRate = parseFloat(rateInput.value);
     const machineEntity = machineSelect.value;
-    const availableInputs = DEFAULT_INPUTS.filter((inp) => checkboxes.get(inp)?.checked);
+    const checkedDefaults = DEFAULT_INPUTS.filter((inp) => checkboxes.get(inp)?.checked);
+    const availableInputs = [...checkedDefaults, ...customInputs];
 
     if (!itemSet.has(targetItem)) {
-      itemInput.classList.add("item-invalid");
+      picker.setInvalid(true);
       return;
     }
-    itemInput.classList.remove("item-invalid");
+    picker.setInvalid(false);
 
     if (isNaN(targetRate) || targetRate <= 0) return;
 
     if (targetItem !== previousItem) {
       const suggestedMachine = engine.defaultMachineForItem(targetItem, machineEntity);
-      const machineOpts = machineSelect.options;
-      for (let i = 0; i < machineOpts.length; i++) {
-        if (machineOpts[i].value === suggestedMachine) {
-          machineSelect.selectedIndex = i;
-          break;
-        }
-      }
+      if (ASSEMBLER_TIERS.has(suggestedMachine)) machineSelect.value = suggestedMachine;
       previousItem = targetItem;
     }
 
@@ -344,8 +597,9 @@ export function renderSidebar(
       item: targetItem,
       rate: targetRate,
       machine: machineSelect.value,
-      inputs: availableInputs,
+      inputs: checkedDefaults,
       belt: beltSelect.value || null,
+      customInputs,
     });
 
     const gen = ++solveGeneration;
@@ -395,7 +649,7 @@ export function renderSidebar(
       for (const w of layout.warnings) {
         const wDiv = document.createElement("div");
         wDiv.className = "sb-warning";
-        wDiv.textContent = `\u26A0 ${w}`;
+        wDiv.textContent = `⚠ ${w}`;
         resultContainer.appendChild(wDiv);
       }
       blueprintSection.style.display = "none";
@@ -409,13 +663,12 @@ export function renderSidebar(
 
   copyBtn.addEventListener("click", async () => {
     if (!currentLayout) return;
-    const bp = await engine.exportBlueprint(currentLayout, itemInput.value.trim());
+    const bp = await engine.exportBlueprint(currentLayout, picker.getValue());
     await navigator.clipboard.writeText(bp);
     copyStatus.textContent = "Copied!";
     setTimeout(() => { copyStatus.textContent = ""; }, 2000);
   });
 
-  itemInput.addEventListener("input", scheduleAutoSolve);
   rateInput.addEventListener("input", scheduleAutoSolve);
   machineSelect.addEventListener("change", scheduleAutoSolve);
   beltSelect.addEventListener("change", scheduleAutoSolve);
@@ -425,18 +678,18 @@ export function renderSidebar(
 
   return {
     getParams() {
-      const item = itemInput.value.trim();
+      const item = picker.getValue();
       const rate = parseFloat(rateInput.value);
       if (!item || isNaN(rate) || rate <= 0) return null;
       return { item, rate };
     },
     setParams(params, opts) {
-      itemInput.value = params.item;
+      picker.setValue(params.item);
       rateInput.value = String(params.rate);
-      if (params.machine) {
+      if (params.machine && ASSEMBLER_TIERS.has(params.machine)) {
         machineSelect.value = params.machine;
       } else {
-        machineSelect.value = engine.defaultMachineForItem(params.item, "assembling-machine-3");
+        machineSelect.value = "assembling-machine-3";
       }
       if (params.inputs) {
         checkboxes.forEach((cb, name) => {
@@ -449,6 +702,15 @@ export function renderSidebar(
         beltSelect.value = params.belt;
       } else {
         beltSelect.value = "";
+      }
+      // Restore custom inputs
+      customTagsWrap.innerHTML = "";
+      customInputs = [];
+      for (const item of (params.customInputs ?? [])) {
+        if (itemSet.has(item) && !defaultInputSet.has(item) && !customInputs.includes(item)) {
+          customInputs.push(item);
+          renderCustomTag(item);
+        }
       }
       previousItem = params.item;
       if (!opts?.skipAutoSolve) {
@@ -511,7 +773,7 @@ export function renderSidebar(
 
         const chevron = document.createElement("span");
         chevron.className = "sb-val-group-chevron";
-        chevron.textContent = "\u25be"; // down triangle (open)
+        chevron.textContent = "▾"; // down triangle (open)
         header.appendChild(chevron);
 
         const body = document.createElement("div");
@@ -521,7 +783,7 @@ export function renderSidebar(
         header.addEventListener("click", () => {
           const collapsed = body.style.display === "none";
           body.style.display = collapsed ? "" : "none";
-          chevron.textContent = collapsed ? "\u25be" : "\u25b8";
+          chevron.textContent = collapsed ? "▾" : "▸";
         });
 
         for (const issue of groupIssues) {
@@ -533,9 +795,7 @@ export function renderSidebar(
           if (hasPos) {
             row.addEventListener("click", (e) => {
               e.stopPropagation();
-              // Toggle pin style
               const wasPinned = row.classList.contains("pinned");
-              // Unpin all rows in this panel
               valBody.querySelectorAll(".sb-val-issue.pinned").forEach(el => el.classList.remove("pinned"));
               if (!wasPinned) {
                 row.classList.add("pinned");
@@ -606,7 +866,7 @@ function renderResult(container: HTMLElement, result: SolverResult): void {
     header.appendChild(nameSpan);
     const countSpan = document.createElement("span");
     countSpan.className = "sb-machine-group-count";
-    countSpan.textContent = `\u00d7${totalCount}`;
+    countSpan.textContent = `×${totalCount}`;
     header.appendChild(countSpan);
     groupEl.appendChild(header);
 
@@ -617,13 +877,13 @@ function renderResult(container: HTMLElement, result: SolverResult): void {
       const recipeRow = document.createElement("div");
       recipeRow.className = "sb-machine-flow";
       recipeRow.style.cssText = "color:#6b7280;margin-bottom:2px";
-      recipeRow.appendChild(document.createTextNode("\u2192 "));
+      recipeRow.appendChild(document.createTextNode("→ "));
       recipeRow.appendChild(itemIcon(machine.recipe, 13));
       recipeRow.appendChild(document.createTextNode(niceName(machine.recipe)));
       body.appendChild(recipeRow);
 
-      appendFlows(body, machine.inputs, "flow-in", "\u25b6 ");
-      appendFlows(body, machine.outputs, "flow-out", "\u25c0 ");
+      appendFlows(body, machine.inputs, "flow-in", "▶ ");
+      appendFlows(body, machine.outputs, "flow-out", "◀ ");
     }
 
     groupEl.appendChild(body);
@@ -669,7 +929,7 @@ function renderResult(container: HTMLElement, result: SolverResult): void {
         row.appendChild(document.createTextNode(`${flow.rate.toFixed(1)}/s`));
         const warn = document.createElement("span");
         warn.className = "sb-belt-overflow";
-        warn.textContent = "\u26a0 overflow";
+        warn.textContent = "⚠ overflow";
         row.appendChild(warn);
       }
       container.appendChild(row);
