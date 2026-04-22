@@ -48,6 +48,17 @@ fn machine_xs(x_offset: i32, machine_count: usize, pitch: i32, lane_split: bool)
     positions
 }
 
+/// Number of tiles to drop from the east end of the last machine's belt stamp.
+///
+/// A belt tile is "orphan" when it sits east of every inserter that picks from
+/// (east-flow input) or drops onto (west-flow output) the belt: items never
+/// flow through it, so it has no functional role. Skipping these tiles frees
+/// corridor for the ghost router. `last_adjacency_dx` is the rightmost `dx`
+/// of an inserter adjacency on the belt for one machine.
+fn east_tail_skip(msz: i32, last_adjacency_dx: i32) -> i32 {
+    (msz - 1 - last_adjacency_dx).max(0)
+}
+
 /// Generate the 6-entity sideload bridge between two machine groups.
 ///
 /// `output_row_dy` is the output belt's offset from `y_offset`
@@ -221,10 +232,22 @@ pub fn single_input_row(
     let lane_split = lane_split && machine_count >= 2;
     let mxs = machine_xs(x_offset, machine_count, pitch, lane_split);
     let g1 = if lane_split { machine_count / 2 } else { machine_count };
+    let last_mx = *mxs.last().expect("machine_count >= 1");
+
+    // Input belt: east-flow, inserter picks at mx+1 → last_adjacency_dx=1.
+    // West-flow output belt: inserter drops at mx+1 → last_adjacency_dx=1.
+    // East-flow output belt: tiles east of the drop carry items to the merger,
+    // so no tail trim.
+    let in_tail = east_tail_skip(msz, 1);
+    let out_tail = if output_east { 0 } else { east_tail_skip(msz, 1) };
 
     for &mx in &mxs {
+        let is_last = mx == last_mx;
+        let in_stop = if is_last { msz - in_tail } else { msz };
+        let out_stop = if is_last { msz - out_tail } else { msz };
+
         // Input belt (machine_size tiles wide, continuous with adjacent machines)
-        for dx in 0..msz {
+        for dx in 0..in_stop {
             entities.push(PlacedEntity {
                 name: input_belt.to_string(),
                 x: mx + dx,
@@ -273,7 +296,7 @@ pub fn single_input_row(
         // Output belt (machine_size tiles wide)
         let out_belt_y = y_offset + 2 + msz + 1;
         let out_dir = output_dir(output_east);
-        for dx in 0..msz {
+        for dx in 0..out_stop {
             entities.push(PlacedEntity {
                 name: output_belt.to_string(),
                 x: mx + dx,
@@ -355,10 +378,24 @@ pub fn dual_input_row(
     let lane_split = lane_split && machine_count >= 2;
     let mxs = machine_xs(x_offset, machine_count, pitch, lane_split);
     let g1 = if lane_split { machine_count / 2 } else { machine_count };
+    let last_mx = *mxs.last().expect("machine_count >= 1");
+
+    // Belt 1 (far): long-handed inserter picks at mx → dx=0, trim = msz-1.
+    // Belt 2 (close): regular inserter picks at mx+2 → dx=2, trim = 0 for msz=3.
+    // West-flow output belt: drop at mx+1 → dx=1, trim = 1 for msz=3.
+    // East-flow output belt: no trim (tiles east of drop flow to merger).
+    let in1_tail = east_tail_skip(msz, 0);
+    let in2_tail = east_tail_skip(msz, 2);
+    let out_tail = if output_east { 0 } else { east_tail_skip(msz, 1) };
 
     for &mx in &mxs {
+        let is_last = mx == last_mx;
+        let in1_stop = if is_last { msz - in1_tail } else { msz };
+        let in2_stop = if is_last { msz - in2_tail } else { msz };
+        let out_stop = if is_last { msz - out_tail } else { msz };
+
         // Input belt 1 -- far belt
-        for dx in 0..msz {
+        for dx in 0..in1_stop {
             entities.push(PlacedEntity {
                 name: belt1.to_string(),
                 x: mx + dx,
@@ -371,7 +408,7 @@ pub fn dual_input_row(
         }
 
         // Input belt 2 -- close belt
-        for dx in 0..msz {
+        for dx in 0..in2_stop {
             entities.push(PlacedEntity {
                 name: belt2.to_string(),
                 x: mx + dx,
@@ -431,7 +468,7 @@ pub fn dual_input_row(
         // Output belt
         let out_belt_y = y_offset + 3 + msz + 1;
         let out_dir = output_dir(output_east);
-        for dx in 0..msz {
+        for dx in 0..out_stop {
             entities.push(PlacedEntity {
                 name: output_belt.to_string(),
                 x: mx + dx,
@@ -520,11 +557,24 @@ pub fn triple_input_row(
     let inserter_out_seg = Some(format!("row:{recipe}:inserter-out"));
     let belt_out_seg = Some(format!("row:{recipe}:belt-out"));
 
+    // Belt 1 (far, long-hand at mx): trim msz-1.
+    // Belts 2 and 3 (regular at mx+2 / long-hand at mx+2 picking from south): trim 0 for msz=3.
+    // West-flow output: trim 1 for msz=3; east-flow output: no trim.
+    let in1_tail = east_tail_skip(msz, 0);
+    let in2_tail = east_tail_skip(msz, 2);
+    let in3_tail = east_tail_skip(msz, 2);
+    let out_tail = if output_east { 0 } else { east_tail_skip(msz, 1) };
+
     for i in 0..machine_count {
         let mx = x_offset + i as i32 * pitch;
+        let is_last = i == machine_count - 1;
+        let in1_stop = if is_last { msz - in1_tail } else { msz };
+        let in2_stop = if is_last { msz - in2_tail } else { msz };
+        let in3_stop = if is_last { msz - in3_tail } else { msz };
+        let out_stop = if is_last { msz - out_tail } else { msz };
 
         // Input belt 1 -- far belt (long-handed range)
-        for dx in 0..msz {
+        for dx in 0..in1_stop {
             entities.push(PlacedEntity {
                 name: belt1.to_string(),
                 x: mx + dx,
@@ -537,7 +587,7 @@ pub fn triple_input_row(
         }
 
         // Input belt 2 -- close belt (regular inserter range)
-        for dx in 0..msz {
+        for dx in 0..in2_stop {
             entities.push(PlacedEntity {
                 name: belt2.to_string(),
                 x: mx + dx,
@@ -608,7 +658,7 @@ pub fn triple_input_row(
         // Output belt
         let out_belt_y = y_offset + 3 + msz + 1;
         let out_dir = output_dir(output_east);
-        for dx in 0..msz {
+        for dx in 0..out_stop {
             entities.push(PlacedEntity {
                 name: output_belt.to_string(),
                 x: mx + dx,
@@ -622,7 +672,7 @@ pub fn triple_input_row(
 
         // Input belt 3 -- south-side belt (long-handed range from ins_y)
         let belt3_y = y_offset + 3 + msz + 2;
-        for dx in 0..msz {
+        for dx in 0..in3_stop {
             entities.push(PlacedEntity {
                 name: belt3.to_string(),
                 x: mx + dx,
@@ -698,6 +748,10 @@ pub fn fluid_input_row(
     let inserter_out_seg = Some(format!("row:{recipe}:inserter-out"));
     let belt_out_seg = Some(format!("row:{recipe}:belt-out"));
 
+    // Solid input belt pickup at mx+1, west-flow output drop at mx+1 → trim 1 tile each.
+    let in_tail = east_tail_skip(msz, 1);
+    let out_tail = if output_east { 0 } else { east_tail_skip(msz, 1) };
+
     if machine_entity == "chemical-plant" {
         // Simple single-fluid pattern: continuous east-west pipe line at y+0,
         // a dedicated UG-in row at y+1, the solid belt at y+2, and UG-out +
@@ -721,6 +775,9 @@ pub fn fluid_input_row(
 
         for i in 0..machine_count {
             let mx = x_offset + i as i32 * pitch;
+            let is_last = i == machine_count - 1;
+            let in_stop = if is_last { msz - in_tail } else { msz };
+            let out_stop = if is_last { msz - out_tail } else { msz };
 
             // y+0: continuous east-west pipe line spanning the machine's
             // full width. Adjacent machines' pipes abut so the whole row
@@ -751,7 +808,7 @@ pub fn fluid_input_row(
             });
 
             // y+2: solid input belt (msz tiles wide)
-            for dx in 0..msz {
+            for dx in 0..in_stop {
                 entities.push(PlacedEntity {
                     name: input_belt.to_string(),
                     x: mx + dx,
@@ -809,7 +866,7 @@ pub fn fluid_input_row(
             });
 
             // Output belt
-            for dx in 0..msz {
+            for dx in 0..out_stop {
                 entities.push(PlacedEntity {
                     name: output_belt.to_string(),
                     x: mx + dx,
@@ -842,9 +899,12 @@ pub fn fluid_input_row(
 
         for i in 0..machine_count {
             let mx = x_offset + i as i32 * pitch;
+            let is_last = i == machine_count - 1;
+            let in_stop = if is_last { msz - in_tail } else { msz };
+            let out_stop = if is_last { msz - out_tail } else { msz };
 
             // Solid input belt (machine_size tiles wide)
-            for dx in 0..msz {
+            for dx in 0..in_stop {
                 entities.push(PlacedEntity {
                     name: input_belt.to_string(),
                     x: mx + dx,
@@ -906,7 +966,7 @@ pub fn fluid_input_row(
 
             // Output belt
             let out_belt_y = y_offset + 2 + msz + 1;
-            for dx in 0..msz {
+            for dx in 0..out_stop {
                 entities.push(PlacedEntity {
                     name: output_belt.to_string(),
                     x: mx + dx,
@@ -1002,8 +1062,23 @@ pub fn fluid_dual_input_row(
 
     let mut fluid_output_port_pipes: Vec<(String, i32, i32)> = Vec::new();
 
+    // Inserter placement branches on port_dx:
+    //   port_dx=0 (chemical-plant): long_x=mx+1, reg_x=mx+2.
+    //   port_dx=1 (assembling-machine-2/3): long_x=mx+2, reg_x=mx.
+    // Belt 1 (far, y+2) is picked by the long-handed inserter; belt 2 (close,
+    // y+3) by the regular inserter.
+    let (long_dx, reg_dx) = if port_dx == 1 { (2, 0) } else { (1, 2) };
+    let in1_tail = east_tail_skip(msz, long_dx);
+    let in2_tail = east_tail_skip(msz, reg_dx);
+    // Solid output (output_is_fluid=false) has its drop at mx+1 → trim 1 for msz=3 west-flow.
+    let out_tail = if output_east { 0 } else { east_tail_skip(msz, 1) };
+
     for i in 0..machine_count {
         let mx = x_offset + i as i32 * pitch;
+        let is_last = i == machine_count - 1;
+        let in1_stop = if is_last { msz - in1_tail } else { msz };
+        let in2_stop = if is_last { msz - in2_tail } else { msz };
+        let out_stop = if is_last { msz - out_tail } else { msz };
 
         // Vertical PTG pair: input at y+1 tunnels SOUTH to output at y+4
         entities.push(PlacedEntity {
@@ -1028,7 +1103,7 @@ pub fn fluid_dual_input_row(
         });
 
         // Solid input belts (machine_size tiles wide each)
-        for dx in 0..msz {
+        for dx in 0..in1_stop {
             entities.push(PlacedEntity {
                 name: belt1.to_string(),
                 x: mx + dx,
@@ -1038,6 +1113,8 @@ pub fn fluid_dual_input_row(
                 segment_id: belt_in1_seg.clone(),
                 ..Default::default()
             });
+        }
+        for dx in 0..in2_stop {
             entities.push(PlacedEntity {
                 name: belt2.to_string(),
                 x: mx + dx,
@@ -1053,11 +1130,8 @@ pub fn fluid_dual_input_row(
         // port_dx == 0 (chemical-plant): PTG at mx+0, inserters at mx+1 (long) and mx+2 (regular).
         // port_dx == 1 (assembling-machine-2/3): PTG at mx+1, so move the
         //   long-handed inserter to mx+2 and the regular inserter to mx+0.
-        let (long_x, reg_x) = if port_dx == 1 {
-            (mx + 2, mx)
-        } else {
-            (mx + 1, mx + 2)
-        };
+        let long_x = mx + long_dx;
+        let reg_x = mx + reg_dx;
 
         entities.push(PlacedEntity {
             name: "long-handed-inserter".to_string(),
@@ -1120,7 +1194,7 @@ pub fn fluid_dual_input_row(
                 ..Default::default()
             });
             let out_dir = output_dir(output_east);
-            for dx in 0..msz {
+            for dx in 0..out_stop {
                 entities.push(PlacedEntity {
                     name: output_belt.to_string(),
                     x: mx + dx,
@@ -1309,7 +1383,10 @@ mod tests {
 
     #[test]
     fn single_input_row_basic_entity_count() {
-        // 2 machines: 2*(3+1+1+1+3) = 2*9 = 18 entities (no lane split).
+        // 2 machines, west-flow output, no lane split. Machine 1 gets the full
+        // 9 entities (3 input + 1 inserter + 1 machine + 1 out inserter + 3 output).
+        // Machine 2 (last) drops one input belt tile (east-tail orphan at mx+2)
+        // and one output belt tile (west-flow orphan at mx+2): 7 entities.
         let (entities, height) = single_input_row(
             "iron-gear-wheel",
             "assembling-machine-3",
@@ -1325,8 +1402,7 @@ mod tests {
             false,
         );
         assert_eq!(height, 7);
-        // 2 machines × (3 input belts + 1 inserter + 1 machine + 1 output inserter + 3 output belts)
-        assert_eq!(entities.len(), 2 * 9);
+        assert_eq!(entities.len(), 9 + 7);
     }
 
     #[test]
@@ -1346,12 +1422,14 @@ mod tests {
             false,
         );
 
-        // Input belts at y=0, x=0,1,2 facing EAST
-        for dx in 0..3_i32 {
+        // Input belts at y=0: x=0,1 (x=2 is orphan east-tail, trimmed).
+        for dx in 0..2_i32 {
             let e = assert_entity(&entities, dx, 0, "transport-belt");
             assert_eq!(e.direction, EntityDirection::East);
             assert_eq!(e.carries.as_deref(), Some("iron-plate"));
         }
+        assert!(entities.iter().find(|e| e.x == 2 && e.y == 0).is_none(),
+            "input belt at (2, 0) should be trimmed (east of inserter pickup)");
 
         // Inserter at (1, 1) facing SOUTH
         let ins = assert_entity(&entities, 1, 1, "inserter");
@@ -1368,12 +1446,14 @@ mod tests {
         assert_eq!(out_ins.direction, EntityDirection::South);
         assert_eq!(out_ins.carries.as_deref(), Some("iron-gear-wheel"));
 
-        // Output belts at y=6, x=0,1,2 facing WEST
-        for dx in 0..3_i32 {
+        // Output belts at y=6: x=0,1 (x=2 is orphan east-tail for west-flow output).
+        for dx in 0..2_i32 {
             let e = assert_entity(&entities, dx, 6, "transport-belt");
             assert_eq!(e.direction, EntityDirection::West);
             assert_eq!(e.carries.as_deref(), Some("iron-gear-wheel"));
         }
+        assert!(entities.iter().find(|e| e.x == 2 && e.y == 6).is_none(),
+            "output belt at (2, 6) should be trimmed");
     }
 
     #[test]
@@ -1523,14 +1603,16 @@ mod tests {
         );
         assert_eq!(height, 8);
 
-        // Input belt 1 (far, y=0): copper-cable, EAST
-        for dx in 0..3_i32 {
-            let e = assert_entity(&entities, dx, 0, "transport-belt");
-            assert_eq!(e.direction, EntityDirection::East);
-            assert_eq!(e.carries.as_deref(), Some("copper-cable"));
-        }
+        // Input belt 1 (far, y=0): only x=0 survives — long-handed inserter
+        // picks at mx, so both x=1 and x=2 are east-tail orphans.
+        let e = assert_entity(&entities, 0, 0, "transport-belt");
+        assert_eq!(e.direction, EntityDirection::East);
+        assert_eq!(e.carries.as_deref(), Some("copper-cable"));
+        assert!(entities.iter().find(|e| e.x == 1 && e.y == 0).is_none());
+        assert!(entities.iter().find(|e| e.x == 2 && e.y == 0).is_none());
 
-        // Input belt 2 (close, y=1): iron-plate, EAST
+        // Input belt 2 (close, y=1): regular inserter picks at mx+2, so all 3
+        // tiles remain (trim = 0 for msz=3).
         for dx in 0..3_i32 {
             let e = assert_entity(&entities, dx, 1, "transport-belt");
             assert_eq!(e.direction, EntityDirection::East);
@@ -1554,11 +1636,12 @@ mod tests {
         let oi = assert_entity(&entities, 1, 6, "inserter");
         assert_eq!(oi.direction, EntityDirection::South);
 
-        // Output belts at y=7
-        for dx in 0..3_i32 {
+        // Output belts at y=7: x=0,1 (x=2 is trimmed, west-flow tail past drop).
+        for dx in 0..2_i32 {
             let e = assert_entity(&entities, dx, 7, "transport-belt");
             assert_eq!(e.direction, EntityDirection::West);
         }
+        assert!(entities.iter().find(|e| e.x == 2 && e.y == 7).is_none());
     }
 
     #[test]
@@ -1603,6 +1686,64 @@ mod tests {
         assert_eq!(b3.direction, EntityDirection::West);
     }
 
+    #[test]
+    fn tail_orphans_trimmed_dual_input_row() {
+        // Regression: belts east of the last inserter pickup/drop must not be
+        // stamped. Dual-input row at mx=10, msz=3: long-handed picks at mx=10,
+        // regular at mx+2=12, output drop at mx+1=11.
+        let (entities, _) = dual_input_row(
+            "electronic-circuit",
+            "assembling-machine-3",
+            3,
+            1,
+            0,   // y_offset
+            10,  // x_offset
+            ("copper-cable", "iron-plate"),
+            "electronic-circuit",
+            ("transport-belt", "transport-belt"),
+            "transport-belt",
+            false,
+            false, // west-flow output
+        );
+        // Belt 1 (y=0) — only x=10 survives; x=11 and x=12 are orphan tail.
+        assert!(entities.iter().any(|e| e.x == 10 && e.y == 0 && e.carries.as_deref() == Some("copper-cable")));
+        assert!(entities.iter().find(|e| e.x == 11 && e.y == 0).is_none());
+        assert!(entities.iter().find(|e| e.x == 12 && e.y == 0).is_none());
+        // Belt 2 (y=1) — regular picks at mx+2=12, no trim.
+        for dx in 0..3_i32 {
+            assert!(entities.iter().any(|e| e.x == 10 + dx && e.y == 1 && e.carries.as_deref() == Some("iron-plate")));
+        }
+        // Output belt (y=7, west-flow) — drop at mx+1=11, x=12 trimmed.
+        assert!(entities.iter().any(|e| e.x == 10 && e.y == 7));
+        assert!(entities.iter().any(|e| e.x == 11 && e.y == 7));
+        assert!(entities.iter().find(|e| e.x == 12 && e.y == 7).is_none());
+    }
+
+    #[test]
+    fn east_flow_output_tail_preserved_dual_input_row() {
+        // When output flows EAST, tiles east of the drop are on the path to
+        // the output merger — they must NOT be trimmed.
+        let (entities, _) = dual_input_row(
+            "electronic-circuit",
+            "assembling-machine-3",
+            3,
+            1,
+            0,
+            10,
+            ("copper-cable", "iron-plate"),
+            "electronic-circuit",
+            ("transport-belt", "transport-belt"),
+            "transport-belt",
+            false,
+            true, // east-flow output
+        );
+        // Output belt at y=7, x=10,11,12 — all three preserved.
+        for dx in 0..3_i32 {
+            let e = assert_entity(&entities, 10 + dx, 7, "transport-belt");
+            assert_eq!(e.direction, EntityDirection::East);
+        }
+    }
+
     // ---- triple_input_row ----
 
     #[test]
@@ -1622,12 +1763,12 @@ mod tests {
         );
         assert_eq!(height, 9);
 
-        // Input belt 1 at y=0 (copper-cable)
-        for dx in 0..3_i32 {
-            let e = assert_entity(&entities, dx, 0, "transport-belt");
-            assert_eq!(e.carries.as_deref(), Some("copper-cable"));
-        }
-        // Input belt 2 at y=1 (plastic-bar)
+        // Input belt 1 at y=0 (copper-cable): only x=0 — long-handed picks at mx.
+        let e = assert_entity(&entities, 0, 0, "transport-belt");
+        assert_eq!(e.carries.as_deref(), Some("copper-cable"));
+        assert!(entities.iter().find(|e| e.x == 1 && e.y == 0).is_none());
+        assert!(entities.iter().find(|e| e.x == 2 && e.y == 0).is_none());
+        // Input belt 2 at y=1 (plastic-bar): regular picks at mx+2, all 3 tiles.
         for dx in 0..3_i32 {
             let e = assert_entity(&entities, dx, 1, "transport-belt");
             assert_eq!(e.carries.as_deref(), Some("plastic-bar"));
@@ -1647,12 +1788,13 @@ mod tests {
         let lh3 = assert_entity(&entities, 2, 6, "long-handed-inserter");
         assert_eq!(lh3.direction, EntityDirection::North);
         assert_eq!(lh3.carries.as_deref(), Some("iron-plate"));
-        // Output belt at y=7
-        for dx in 0..3_i32 {
+        // Output belt at y=7: west-flow, x=0,1 (x=2 is trimmed).
+        for dx in 0..2_i32 {
             let e = assert_entity(&entities, dx, 7, "transport-belt");
             assert_eq!(e.direction, EntityDirection::West);
         }
-        // Input belt 3 at y=8 (iron-plate)
+        assert!(entities.iter().find(|e| e.x == 2 && e.y == 7).is_none());
+        // Input belt 3 at y=8 (iron-plate): long-handed picks at mx+2, all 3 tiles.
         for dx in 0..3_i32 {
             let e = assert_entity(&entities, dx, 8, "transport-belt");
             assert_eq!(e.carries.as_deref(), Some("iron-plate"));
