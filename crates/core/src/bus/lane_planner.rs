@@ -258,19 +258,11 @@ pub fn plan_bus_lanes(
         }
     }
 
-    // Tighten fluid-external source_y
-    for lane in &mut lanes {
-        if !lane.is_fluid || lane.producer_row.is_some() {
-            continue;
-        }
-        let mut port_ys: Vec<i32> = lane.tap_off_ys.clone();
-        port_ys.extend(lane.fluid_port_positions.iter().map(|(_, _, py)| *py));
-        port_ys.extend(lane.fluid_output_port_positions.iter().map(|(_, _, py)| *py));
-        if !port_ys.is_empty() {
-            let min_y = *port_ys.iter().min().unwrap();
-            lane.source_y = (min_y - 1).max(0);
-        }
-    }
+    // Fluid externals enter at the top (source_y = 0) and their vertical
+    // trunks are underground by default, so no tightening is needed. Former
+    // logic here pulled source_y down to just above the first tap to avoid
+    // collisions with adjacent fluid trunks — now handled by F5a isolation
+    // on UG trunks in ghost_router step 3.6.
 
     // Compute lane balancer positions for intermediate solid lanes
     for lane in &mut lanes {

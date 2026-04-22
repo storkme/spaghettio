@@ -398,19 +398,20 @@ pub fn route_bus_ghost(
         }
         let start_y = lane.source_y;
 
-        // Fluid trunks are underground by default: surface pipes appear only
-        // at tap-off ys (where a horizontal branch joins) and at "breathing"
-        // intervals forced by F4's max-reach cap. Between surface pipes, UG
-        // pairs carry the fluid. The entry at `start_y` is a UG-in facing
-        // south (surface on the north face, connecting to an external pipe
-        // placed above the bus) unless the first tap is within 1 tile of
-        // start_y, in which case we just use a surface pipe at the tap (entry
-        // is the tap's north face).
+        // Fluid trunks surface at every "anchor" row: start_y (top entry),
+        // every tap_y, end_y, and breathing points every
+        // FLUID_TRUNK_SURFACE_SPACING tiles. Between anchors, UG pairs fill
+        // the gap (for gap ≥3); short gaps just use a straight surface-pipe
+        // chain. This keeps the trunk surface-sparse in the long stretches
+        // between taps while still giving the top-of-layout tile a concrete
+        // entity so blueprint users have something to connect their external
+        // pipe to.
         //
-        // Adjacent fluid lanes (e.g. water at x=1, heavy-oil at x=2) stay
-        // isolated because the east/west faces of all trunk entities are
-        // either UG perpendicular-side (no surface per F5a) or no-surface at
-        // all — no cross-fluid merging.
+        // Adjacent fluid lanes stay isolated where UGs are present (F5a:
+        // east/west faces closed). Where two adjacent lanes BOTH have surface
+        // pipes at the same y (e.g. both tap at y=1), the row templates are
+        // expected to stagger tap ys so only one lane surfaces on any given
+        // row (multi-fluid template stacks tap rows one per fluid).
         let mut tap_ys: Vec<i32> = Vec::new();
         for &(_ri, _px, py) in &lane.fluid_port_positions {
             tap_ys.push(py);
@@ -418,31 +419,26 @@ pub fn route_bus_ghost(
         for &(_ri, _px, py) in &lane.fluid_output_port_positions {
             tap_ys.push(py);
         }
-        tap_ys.sort_unstable();
-        tap_ys.dedup();
 
-        // Surface points are the tap ys plus end_y (which is usually the last
-        // tap already). We do *not* include start_y unless it's also a tap —
-        // the entry uses a UG-in so the top-of-layout tile is underground.
-        let mut surface_points: Vec<i32> = tap_ys.clone();
-        if !surface_points.contains(&end_y) {
-            surface_points.push(end_y);
-        }
-        surface_points.sort_unstable();
-        surface_points.dedup();
+        let mut anchors: Vec<i32> = vec![start_y];
+        anchors.extend(tap_ys.iter().copied());
+        anchors.push(end_y);
+        anchors.sort_unstable();
+        anchors.dedup();
 
-        // Insert breathing surface pipes so no gap between consecutive surface
-        // points (including from the entry at start_y) exceeds the spacing
-        // limit.
+        // Insert breathing anchors so no gap exceeds the max-reach-plus-one
+        // spacing (UG pair plus two surface-pipe ends fits `max_distance + 1`
+        // tiles of trunk).
         let mut refined: Vec<i32> = Vec::new();
-        let mut prev = start_y;
-        for &sp in &surface_points {
-            while sp - prev > FLUID_TRUNK_SURFACE_SPACING {
-                prev += FLUID_TRUNK_SURFACE_SPACING;
-                refined.push(prev);
+        for &sp in &anchors {
+            if let Some(&prev) = refined.last() {
+                let mut cur = prev;
+                while sp - cur > FLUID_TRUNK_SURFACE_SPACING {
+                    cur += FLUID_TRUNK_SURFACE_SPACING;
+                    refined.push(cur);
+                }
             }
             refined.push(sp);
-            prev = sp;
         }
 
         let reservations = &fluid_reservations;
@@ -452,65 +448,94 @@ pub fn route_bus_ghost(
                 || (hard.contains(&tile) && !reservations.contains(&tile))
         };
 
-        // Emit entry segment from start_y to the first surface point.
-        let first_surface = match refined.first() {
-            Some(&p) => p,
-            None => continue,
-        };
-        let entry_gap = first_surface - start_y;
-        match entry_gap {
-            n if n <= 1 => {
-                // Entry = first tap. Just stamp the surface pipe; external
-                // connection comes in via the tap's north face.
+        // The entry tile (start_y) gets a UG-in when the gap to the next
+        // anchor is ≥ 2, so an adjacent fluid lane's surface pipes don't
+        // cross-merge with our trunk at the entry row. When the first tap
+        // is directly adjacent (gap ≤ 1), we fall back to a surface pipe
+        // (UG pair can't fit, per user's short-trunk entry preference).
+        let entry_is_ug = refined.len() >= 2 && refined[1] - refined[0] >= 2;
+
+        for (idx, &sp) in refined.iter().enumerate() {
+            if is_blocked(sp, &existing_belts, &hard) {
+                continue;
             }
-            2 => {
-                // UG-in at start_y, UG-out at start_y+1, pipe at first_surface.
-                if !is_blocked(start_y, &existing_belts, &hard) {
-                    entities.push(PlacedEntity {
-                        name: "pipe-to-ground".to_string(),
-                        x,
-                        y: start_y,
-                        direction: EntityDirection::South,
-                        io_type: Some("input".to_string()),
-                        carries: Some(lane.item.clone()),
-                        segment_id: trunk_seg_id.clone(),
-                        ..Default::default()
-                    });
-                    existing_belts.insert((x, start_y));
-                    hard.insert((x, start_y));
-                }
-                if !is_blocked(start_y + 1, &existing_belts, &hard) {
-                    entities.push(PlacedEntity {
-                        name: "pipe-to-ground".to_string(),
-                        x,
-                        y: start_y + 1,
-                        direction: EntityDirection::North,
-                        io_type: Some("output".to_string()),
-                        carries: Some(lane.item.clone()),
-                        segment_id: trunk_seg_id.clone(),
-                        ..Default::default()
-                    });
-                    existing_belts.insert((x, start_y + 1));
-                    hard.insert((x, start_y + 1));
-                }
+            if idx == 0 && entry_is_ug {
+                entities.push(PlacedEntity {
+                    name: "pipe-to-ground".to_string(),
+                    x,
+                    y: sp,
+                    direction: EntityDirection::South,
+                    io_type: Some("input".to_string()),
+                    carries: Some(lane.item.clone()),
+                    segment_id: trunk_seg_id.clone(),
+                    ..Default::default()
+                });
+            } else {
+                entities.push(PlacedEntity {
+                    name: "pipe".to_string(),
+                    x,
+                    y: sp,
+                    carries: Some(lane.item.clone()),
+                    segment_id: trunk_seg_id.clone(),
+                    ..Default::default()
+                });
             }
-            _ => {
-                // Long entry: UG-in at start_y, UG-out at first_surface - 1.
-                if !is_blocked(start_y, &existing_belts, &hard) {
-                    entities.push(PlacedEntity {
-                        name: "pipe-to-ground".to_string(),
-                        x,
-                        y: start_y,
-                        direction: EntityDirection::South,
-                        io_type: Some("input".to_string()),
-                        carries: Some(lane.item.clone()),
-                        segment_id: trunk_seg_id.clone(),
-                        ..Default::default()
-                    });
-                    existing_belts.insert((x, start_y));
-                    hard.insert((x, start_y));
+            existing_belts.insert((x, sp));
+            hard.insert((x, sp));
+        }
+
+        // Fill the gaps between consecutive anchors.
+        for (idx, pair) in refined.windows(2).enumerate() {
+            let (y0, y1) = (pair[0], pair[1]);
+            let gap = y1 - y0;
+            if gap <= 1 {
+                continue;
+            }
+            let first_pair = idx == 0;
+            if gap == 2 {
+                if first_pair && entry_is_ug {
+                    // UG-in already at y0; partner UG-out at y0+1 completes
+                    // the pair (tunnel distance 1, valid).
+                    let ug_out_y = y0 + 1;
+                    if !is_blocked(ug_out_y, &existing_belts, &hard) {
+                        entities.push(PlacedEntity {
+                            name: "pipe-to-ground".to_string(),
+                            x,
+                            y: ug_out_y,
+                            direction: EntityDirection::North,
+                            io_type: Some("output".to_string()),
+                            carries: Some(lane.item.clone()),
+                            segment_id: trunk_seg_id.clone(),
+                            ..Default::default()
+                        });
+                        existing_belts.insert((x, ug_out_y));
+                        hard.insert((x, ug_out_y));
+                    }
+                } else {
+                    // Surface pipe middle.
+                    let mid = y0 + 1;
+                    if !is_blocked(mid, &existing_belts, &hard) {
+                        entities.push(PlacedEntity {
+                            name: "pipe".to_string(),
+                            x,
+                            y: mid,
+                            carries: Some(lane.item.clone()),
+                            segment_id: trunk_seg_id.clone(),
+                            ..Default::default()
+                        });
+                        existing_belts.insert((x, mid));
+                        hard.insert((x, mid));
+                    }
                 }
-                let ug_out_y = first_surface - 1;
+                continue;
+            }
+            // gap ≥ 3. UG-in/UG-out pair inside the gap. If the first anchor
+            // is a UG-in entry (y0 == start_y), its partner UG-out lives at
+            // `first_surface - 1` so fluid exits adjacent to the next tap.
+            let ug_in_y = if first_pair && entry_is_ug { y0 } else { y0 + 1 };
+            let ug_out_y = y1 - 1;
+            if first_pair && entry_is_ug {
+                // UG-in already emitted at y0; just emit UG-out.
                 if !is_blocked(ug_out_y, &existing_belts, &hard) {
                     entities.push(PlacedEntity {
                         name: "pipe-to-ground".to_string(),
@@ -525,81 +550,34 @@ pub fn route_bus_ghost(
                     existing_belts.insert((x, ug_out_y));
                     hard.insert((x, ug_out_y));
                 }
-            }
-        }
-
-        // Emit surface pipe at each refined surface point (skip if blocked).
-        for &sp in &refined {
-            if is_blocked(sp, &existing_belts, &hard) {
-                continue;
-            }
-            entities.push(PlacedEntity {
-                name: "pipe".to_string(),
-                x,
-                y: sp,
-                carries: Some(lane.item.clone()),
-                segment_id: trunk_seg_id.clone(),
-                ..Default::default()
-            });
-            existing_belts.insert((x, sp));
-            hard.insert((x, sp));
-        }
-
-        // Fill gaps between consecutive surface points with UG pairs (or a
-        // single surface pipe for 2-tile gaps).
-        for pair in refined.windows(2) {
-            let (y0, y1) = (pair[0], pair[1]);
-            let gap = y1 - y0;
-            if gap <= 1 {
-                continue;
-            }
-            if gap == 2 {
-                let mid = y0 + 1;
-                if !is_blocked(mid, &existing_belts, &hard) {
-                    entities.push(PlacedEntity {
-                        name: "pipe".to_string(),
-                        x,
-                        y: mid,
-                        carries: Some(lane.item.clone()),
-                        segment_id: trunk_seg_id.clone(),
-                        ..Default::default()
-                    });
-                    existing_belts.insert((x, mid));
-                    hard.insert((x, mid));
-                }
-                continue;
-            }
-            let ug_in_y = y0 + 1;
-            let ug_out_y = y1 - 1;
-            if is_blocked(ug_in_y, &existing_belts, &hard)
-                || is_blocked(ug_out_y, &existing_belts, &hard)
+            } else if !is_blocked(ug_in_y, &existing_belts, &hard)
+                && !is_blocked(ug_out_y, &existing_belts, &hard)
             {
-                continue;
+                entities.push(PlacedEntity {
+                    name: "pipe-to-ground".to_string(),
+                    x,
+                    y: ug_in_y,
+                    direction: EntityDirection::South,
+                    io_type: Some("input".to_string()),
+                    carries: Some(lane.item.clone()),
+                    segment_id: trunk_seg_id.clone(),
+                    ..Default::default()
+                });
+                existing_belts.insert((x, ug_in_y));
+                hard.insert((x, ug_in_y));
+                entities.push(PlacedEntity {
+                    name: "pipe-to-ground".to_string(),
+                    x,
+                    y: ug_out_y,
+                    direction: EntityDirection::North,
+                    io_type: Some("output".to_string()),
+                    carries: Some(lane.item.clone()),
+                    segment_id: trunk_seg_id.clone(),
+                    ..Default::default()
+                });
+                existing_belts.insert((x, ug_out_y));
+                hard.insert((x, ug_out_y));
             }
-            entities.push(PlacedEntity {
-                name: "pipe-to-ground".to_string(),
-                x,
-                y: ug_in_y,
-                direction: EntityDirection::South,
-                io_type: Some("input".to_string()),
-                carries: Some(lane.item.clone()),
-                segment_id: trunk_seg_id.clone(),
-                ..Default::default()
-            });
-            existing_belts.insert((x, ug_in_y));
-            hard.insert((x, ug_in_y));
-            entities.push(PlacedEntity {
-                name: "pipe-to-ground".to_string(),
-                x,
-                y: ug_out_y,
-                direction: EntityDirection::North,
-                io_type: Some("output".to_string()),
-                carries: Some(lane.item.clone()),
-                segment_id: trunk_seg_id.clone(),
-                ..Default::default()
-            });
-            existing_belts.insert((x, ug_out_y));
-            hard.insert((x, ug_out_y));
         }
 
         // Horizontal branches: one per (row, port_y) pair. Multiple machines
