@@ -4,15 +4,9 @@ import "./stepThrough.css";
 
 export interface StepThroughDeps {
   getLayout(): LayoutResult | null;
-  /** True when the master Debug toggle AND the Step-through sub-toggle are on. */
   isEnabled(): boolean;
-  /** Called when the user advances/rewinds the phase; main.ts re-runs the trace overlay. */
   onPhaseChange(): void;
-  /** Called when the user clicks the failure badge; main.ts pans + pulses the marker. */
   onJumpToFailure(fromX: number, fromY: number): void;
-  /** Optional: junction debugger modal open-state. When it's open, the
-   * global ←/→ step-through keyboard shortcuts are suppressed so the
-   * modal can drive iteration stepping instead. */
   isModalBlocking?: () => boolean;
 }
 
@@ -22,81 +16,208 @@ export interface StepThroughControls {
   reset(): void;
 }
 
+type PhaseTimeEvent     = Extract<TraceEvent, { phase: "PhaseTime" }>;
+type PhaseCompleteEvent = Extract<TraceEvent, { phase: "PhaseComplete" }>;
+type PhaseSnapshotEvent = Extract<TraceEvent, { phase: "PhaseSnapshot" }>;
+
+function shortName(name: string): string {
+  const known: Record<string, string> = {
+    place_rows:      "rows",
+    plan_bus_lanes:  "lanes",
+    route_bus_ghost: "ghost",
+    stamp_balancers: "bal",
+    place_poles:     "poles",
+    output_merger:   "merge",
+    trunk_renderer:  "trunk",
+    lane_order:      "order",
+  };
+  if (known[name]) return known[name];
+  const first = name.split("_")[0];
+  return first.length > 6 ? first.slice(0, 5) + "…" : first;
+}
+
 export function createStepThrough(
   container: HTMLElement,
   deps: StepThroughDeps,
 ): StepThroughControls {
   let phaseIndex = -1;
 
+  /* ── Shell ─────────────────────────────────────────────────────── */
   const bar = document.createElement("div");
   bar.className = "step-through-bar";
+
   const prevBtn = document.createElement("button");
   prevBtn.className = "step-through-btn";
-  prevBtn.textContent = "\u25C0";
-  const phaseLabel = document.createElement("span");
-  phaseLabel.className = "step-through-label";
-  phaseLabel.textContent = "all";
+  prevBtn.textContent = "◀";
+  prevBtn.title = "Previous phase (←)";
+
+  const trackWrap = document.createElement("div");
+  trackWrap.className = "st-track-wrap";
+
   const nextBtn = document.createElement("button");
   nextBtn.className = "step-through-btn";
-  nextBtn.textContent = "\u25B6";
+  nextBtn.textContent = "▶";
+  nextBtn.title = "Next phase (→)";
+
   const failBtn = document.createElement("button");
   failBtn.className = "step-through-fail";
-  bar.appendChild(prevBtn);
-  bar.appendChild(phaseLabel);
-  bar.appendChild(nextBtn);
-  bar.appendChild(failBtn);
+
+  bar.append(prevBtn, trackWrap, nextBtn, failBtn);
   container.appendChild(bar);
 
+  const tooltip = document.createElement("div");
+  tooltip.className = "st-tooltip";
+  document.body.appendChild(tooltip);
+
+  /* ── Track builder ──────────────────────────────────────────────── */
+  function buildTrack(
+    trace: TraceEvent[],
+    phases: { name: string; eventIndex: number }[],
+  ): void {
+    trackWrap.innerHTML = "";
+    if (phases.length === 0) return;
+
+    /* Which phases have a PhaseSnapshot (entity-level detail). */
+    const snapshotPhases = new Set<string>();
+    for (const evt of trace) {
+      if (evt.phase === "PhaseSnapshot") {
+        snapshotPhases.add((evt as PhaseSnapshotEvent).data.phase);
+      }
+    }
+
+    /* Cumulative ms at each event index. O(n). */
+    let runningMs = 0;
+    const cumMs = new Array<number>(trace.length);
+    for (let i = 0; i < trace.length; i++) {
+      if (trace[i].phase === "PhaseTime") {
+        runningMs += (trace[i] as PhaseTimeEvent).data.duration_ms;
+      }
+      cumMs[i] = runningMs;
+    }
+    const totalMs = runningMs;
+
+    const phaseUpTo  = phases.map(p => cumMs[p.eventIndex] ?? 0);
+    const phaseDelta = phases.map((_, i) =>
+      i === 0 ? phaseUpTo[0] : phaseUpTo[i] - phaseUpTo[i - 1],
+    );
+
+    function entityCountForPhase(name: string): number {
+      for (const evt of trace) {
+        if (evt.phase === "PhaseComplete" &&
+            (evt as PhaseCompleteEvent).data.phase === name) {
+          return (evt as PhaseCompleteEvent).data.entity_count;
+        }
+      }
+      return 0;
+    }
+
+    const totalEntities = phases.length > 0
+      ? entityCountForPhase(phases[phases.length - 1].name)
+      : 0;
+
+    const slots = document.createElement("div");
+    slots.className = "st-slots";
+
+    /* "all" anchor — leftmost slot, always clickable. */
+    const allSlot = document.createElement("div");
+    allSlot.className = "st-slot st-all" + (phaseIndex === -1 ? " active" : "");
+
+    const allTick = document.createElement("div");
+    allTick.className = "st-tick";
+
+    const allLabel = document.createElement("div");
+    allLabel.className = "st-label";
+    allLabel.textContent = "all";
+
+    allSlot.append(allTick, allLabel);
+
+    function showTooltip(el: HTMLElement, text: string): void {
+      tooltip.textContent = text;
+      tooltip.style.display = "block";
+      const r = el.getBoundingClientRect();
+      tooltip.style.left = (r.left + r.width / 2) + "px";
+      tooltip.style.top  = (r.top - 34) + "px";
+    }
+
+    allSlot.addEventListener("mouseenter", () =>
+      showTooltip(allSlot, `all phases — ${totalEntities} entities, ${totalMs.toFixed(0)}ms total`),
+    );
+    allSlot.addEventListener("mouseleave", () => { tooltip.style.display = "none"; });
+    allSlot.addEventListener("click", () => { phaseIndex = -1; deps.onPhaseChange(); });
+
+    slots.appendChild(allSlot);
+
+    /* One slot per phase. */
+    for (let i = 0; i < phases.length; i++) {
+      const ph = phases[i];
+      const isActive    = i === phaseIndex;
+      const hasSnapshot = snapshotPhases.has(ph.name);
+      const deltaMs     = phaseDelta[i];
+      const entities    = entityCountForPhase(ph.name);
+
+      const slot = document.createElement("div");
+      slot.className = "st-slot"
+        + (isActive    ? " active" : "")
+        + (!hasSnapshot ? " st-dim" : "");
+
+      const tick = document.createElement("div");
+      tick.className = "st-tick";
+
+      const labelEl = document.createElement("div");
+      labelEl.className = "st-label";
+      labelEl.textContent = shortName(ph.name);
+
+      slot.append(tick, labelEl);
+
+      const tipText = hasSnapshot
+        ? `${ph.name} — ${entities} entities, +${deltaMs.toFixed(0)}ms (${phaseUpTo[i].toFixed(0)}ms total)`
+        : `${ph.name} — trace events only, +${deltaMs.toFixed(0)}ms (no entity snapshot)`;
+
+      slot.addEventListener("mouseenter", () => showTooltip(slot, tipText));
+      slot.addEventListener("mouseleave", () => { tooltip.style.display = "none"; });
+      slot.addEventListener("click", () => { phaseIndex = i; deps.onPhaseChange(); });
+
+      slots.appendChild(slot);
+    }
+
+    trackWrap.appendChild(slots);
+  }
+
+  /* ── Public update ──────────────────────────────────────────────── */
   function update(): void {
     const layout = deps.getLayout();
     if (!deps.isEnabled() || !layout?.trace?.length) {
       bar.style.display = "none";
-      failBtn.style.display = "none";
       return;
     }
-    const trace = layout.trace as TraceEvent[];
+    const trace  = layout.trace as TraceEvent[];
     const phases = getTracePhases(trace);
     if (phases.length === 0) {
       bar.style.display = "none";
-      failBtn.style.display = "none";
       return;
     }
     bar.style.display = "flex";
 
-    const timeEvents = trace.filter(e => e.phase === "PhaseTime") as Extract<TraceEvent, { phase: "PhaseTime" }>[];
-    const completeEvents = trace.filter(e => e.phase === "PhaseComplete") as Extract<TraceEvent, { phase: "PhaseComplete" }>[];
-
-    if (phaseIndex < 0) {
-      const totalMs = timeEvents.reduce((s, t) => s + t.data.duration_ms, 0);
-      const totalEntities = completeEvents.length > 0 ? completeEvents[completeEvents.length - 1].data.entity_count : 0;
-      phaseLabel.textContent = `all (${phases.length}) — ${totalEntities} entities, ${totalMs}ms`;
-    } else {
-      const phaseEndIdx = phases[phaseIndex].eventIndex;
-      let elapsedMs = 0;
-      for (const t of timeEvents) {
-        const tIdx = trace.indexOf(t as TraceEvent);
-        if (tIdx <= phaseEndIdx) elapsedMs += t.data.duration_ms;
-      }
-      const entityCount = completeEvents.find(c => c.data.phase === phases[phaseIndex].name)?.data.entity_count ?? 0;
-      phaseLabel.textContent = `${phases[phaseIndex].name} — ${entityCount} entities, ${elapsedMs}ms`;
-    }
-    prevBtn.disabled = phaseIndex <= 0 && phaseIndex !== -1;
-    nextBtn.disabled = phaseIndex >= phases.length - 1;
+    buildTrack(trace, phases);
 
     const failCount = trace.filter(e => e.phase === "RouteFailure").length;
-    if (failCount > 0) {
-      failBtn.textContent = `\u26A0 ${failCount}`;
-      failBtn.style.display = "inline-block";
-    } else {
-      failBtn.style.display = "none";
-    }
+    failBtn.textContent = `⚠ ${failCount}`;
+    failBtn.style.display = failCount > 0 ? "inline-block" : "none";
+
+    /* ◀ is disabled only at "all" — nothing comes before it.
+     * At phase 0, ◀ returns to "all". ▶ is disabled at the last phase. */
+    prevBtn.disabled = phaseIndex === -1;
+    nextBtn.disabled = phaseIndex >= phases.length - 1;
   }
 
+  /* ── Navigation ─────────────────────────────────────────────────── */
   function stepPrev(): void {
+    if (phaseIndex === -1) return; // already at "all", button is disabled
     const layout = deps.getLayout();
     const phases = getTracePhases((layout?.trace ?? []) as TraceEvent[]);
-    if (phaseIndex === -1) phaseIndex = phases.length - 1;
-    else if (phaseIndex > 0) phaseIndex--;
+    if (phases.length === 0) return;
+    if (phaseIndex > 0) phaseIndex--;
+    else phaseIndex = -1; // phase 0 → "all"
     deps.onPhaseChange();
   }
 
@@ -110,7 +231,9 @@ export function createStepThrough(
   function jumpToFailure(): void {
     const layout = deps.getLayout();
     if (!layout?.trace) return;
-    const failures = (layout.trace as TraceEvent[]).filter(e => e.phase === "RouteFailure") as Extract<TraceEvent, { phase: "RouteFailure" }>[];
+    const failures = (layout.trace as TraceEvent[]).filter(
+      e => e.phase === "RouteFailure",
+    ) as Extract<TraceEvent, { phase: "RouteFailure" }>[];
     if (failures.length === 0) return;
     const first = failures[0].data;
     deps.onJumpToFailure(first.from_x, first.from_y);

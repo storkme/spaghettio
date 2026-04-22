@@ -784,6 +784,12 @@ export async function initEntityIcons(slugs: string[]): Promise<void> {
   await Promise.allSettled(urls.map((url) => Assets.load(url)));
 }
 
+/** Preload item-icon PNGs for all slugs that may appear as belt/pipe carries values. */
+export async function preloadCarriesIcons(slugs: string[]): Promise<void> {
+  const base = import.meta.env.BASE_URL;
+  await Promise.allSettled(slugs.map((s) => Assets.load(`${base}icons/${s}.png`)));
+}
+
 // Chain highlight controller returned by renderLayout
 
 export interface HighlightController {
@@ -954,6 +960,40 @@ export function renderLayout(
     allGraphics.push(g);
 
     container.addChild(g);
+
+    // Carries-item icon overlaid on belts and pipes.
+    // Sprite is a child of g so it inherits g.alpha (participates in highlight dimming).
+    if (entity.carries) {
+      const ex = entity.x ?? 0;
+      const ey = entity.y ?? 0;
+      let showIcon = false;
+      if (BELT_ENTITIES.has(entity.name)) {
+        const [dx, dy] = dirVec(entity.direction);
+        const up   = tileMap.get(`${ex - dx},${ey - dy}`);
+        const down = tileMap.get(`${ex + dx},${ey + dy}`);
+        const isStart = !up   || up.carries   !== entity.carries;
+        const isEnd   = !down || down.carries !== entity.carries;
+        showIcon = isStart || isEnd || (ex + ey) % 5 === 0;
+      } else if (UG_BELT_ENTITIES.has(entity.name)) {
+        showIcon = true; // always show on both UG endpoints
+      } else if (PIPE_ENTITIES.has(entity.name)) {
+        showIcon = (ex + ey) % 5 === 0;
+      }
+      if (showIcon) {
+        const iconTex = Assets.get<Texture>(`${import.meta.env.BASE_URL}icons/${entity.carries}.png`);
+        if (iconTex) {
+          const ICON_SZ = 11;
+          const ico = new Sprite(iconTex);
+          ico.width = ICON_SZ;
+          ico.height = ICON_SZ;
+          ico.x = (TILE_PX - ICON_SZ) / 2;
+          ico.y = (TILE_PX - ICON_SZ) / 2;
+          ico.alpha = 0.9;
+          ico.eventMode = "none";
+          g.addChild(ico);
+        }
+      }
+    }
 
     onEntityRendered?.(entity, [g]);
   }
