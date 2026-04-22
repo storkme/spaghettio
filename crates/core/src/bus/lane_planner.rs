@@ -157,24 +157,20 @@ pub fn plan_bus_lanes(
         }
     }
 
-    // External inputs (solid AND fluid).
-    let mut fluid_source_y = 0;
+    // External inputs (solid AND fluid). Both enter from the top of the bus
+    // (source_y = 0). Fluid lanes are isolated from each other via underground
+    // pipe-to-ground pairs in their vertical trunks, so they don't need
+    // staggered entry points — their trunks only surface at tap-offs and
+    // at max-reach intervals (see `ghost_router` step 3.6).
     for ext in &solver_result.external_inputs {
         if seen_items.contains(&ext.item) {
             continue;
         }
         let consumers = item_to_consumers.get(&ext.item).cloned().unwrap_or_default();
         if !consumers.is_empty() {
-            let src_y = if ext.is_fluid {
-                let ys = fluid_source_y;
-                fluid_source_y += 1;
-                ys
-            } else {
-                0
-            };
             lanes.push(BusLane::new(
                 ext.item.clone(),
-                src_y,
+                0,
                 consumers,
                 None,
                 ext.rate,
@@ -304,18 +300,11 @@ pub fn plan_bus_lanes(
     // Optimize lane left-to-right ordering
     lanes = optimize_lane_order(&lanes, row_spans);
 
-    // Assign x-columns. Consecutive fluid lanes need a 1-tile buffer between
-    // their columns to prevent their vertical trunk pipes from being adjacent
-    // (which would cross-merge via F2/F3). Solid↔solid and solid↔fluid are fine.
-    let mut next_x: i32 = 1;
-    let mut prev_is_fluid = false;
-    for lane in lanes.iter_mut() {
-        if prev_is_fluid && lane.is_fluid {
-            next_x += 1; // insert buffer tile
-        }
-        lane.x = next_x;
-        next_x += 1;
-        prev_is_fluid = lane.is_fluid;
+    // Assign x-columns with 1-tile spacing. Adjacent fluid lanes are fine
+    // because their vertical trunks are underground-by-default (UG pairs) —
+    // see `ghost_router` step 3.6.
+    for (i, lane) in lanes.iter_mut().enumerate() {
+        lane.x = (i + 1) as i32;
     }
 
     // Fill in lane_xs on each family
@@ -639,23 +628,12 @@ fn find_tap_off_ys(lane: &BusLane, row_spans: &[RowSpan]) -> Vec<i32> {
 }
 
 /// Return the total bus width needed for the given lanes.
-///
-/// Each lane takes 1 column; a 1-tile buffer is inserted between each pair of
-/// consecutive fluid lanes (same logic as in `plan_bus_lanes`) to keep their
-/// vertical trunks from cross-merging.
 pub fn bus_width_for_lanes(lanes: &[BusLane]) -> i32 {
     if lanes.is_empty() {
-        return 2;
+        2
+    } else {
+        (lanes.len() + 2) as i32
     }
-    let mut extra_fluid_buffer = 0;
-    let mut prev_is_fluid = false;
-    for ln in lanes {
-        if prev_is_fluid && ln.is_fluid {
-            extra_fluid_buffer += 1;
-        }
-        prev_is_fluid = ln.is_fluid;
-    }
-    (lanes.len() as i32) + 2 + extra_fluid_buffer
 }
 
 
