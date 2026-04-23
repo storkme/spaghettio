@@ -282,6 +282,34 @@ def repeat_stats(invocs: list[dict]) -> None:
     print()
 
 
+def filter_invocs(
+    invocs: list[dict],
+    min_solve_us: int,
+    min_area: int,
+    min_boundaries: int,
+) -> list[dict]:
+    """Keep only calls that look interesting. Filters are AND-ed."""
+    out = []
+    for i in invocs:
+        if i["solve_time_us"] < min_solve_us:
+            continue
+        if i["zone_w"] * i["zone_h"] < min_area:
+            continue
+        if len(i.get("boundaries", [])) < min_boundaries:
+            continue
+        out.append(i)
+    return out
+
+
+def filter_descents(descents: list[dict], kept: set[tuple]) -> list[dict]:
+    """Keep descent events whose parent invocation survived filtering."""
+
+    def key(e: dict) -> tuple:
+        return (e["_file"], e["seed_x"], e["seed_y"], e["iter"], e["variant"])
+
+    return [d for d in descents if key(d) in kept]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -289,6 +317,25 @@ def main() -> int:
         type=Path,
         default=DEFAULT_DIR,
         help=f"Directory of .fls files (default: {DEFAULT_DIR})",
+    )
+    parser.add_argument(
+        "--min-solve-us",
+        type=int,
+        default=0,
+        help="Only include SAT calls with solve_time_us >= this. Use to "
+             "focus on the painful tail and ignore sub-millisecond trivia.",
+    )
+    parser.add_argument(
+        "--min-area",
+        type=int,
+        default=0,
+        help="Only include SAT calls with zone_w * zone_h >= this.",
+    )
+    parser.add_argument(
+        "--min-boundaries",
+        type=int,
+        default=0,
+        help="Only include SAT calls with >= this many boundaries.",
     )
     args = parser.parse_args()
 
@@ -302,6 +349,26 @@ def main() -> int:
     if not invocs and not descents:
         print(f"no SAT events in {args.dir}")
         return 1
+
+    raw_count = len(invocs)
+    if args.min_solve_us or args.min_area or args.min_boundaries:
+
+        def invoc_key(e: dict) -> tuple:
+            return (e["_file"], e["seed_x"], e["seed_y"], e["iter"], e["variant"])
+
+        invocs = filter_invocs(
+            invocs, args.min_solve_us, args.min_area, args.min_boundaries
+        )
+        descents = filter_descents(descents, {invoc_key(i) for i in invocs})
+        print(
+            f"Filters applied: min_solve_us={args.min_solve_us} "
+            f"min_area={args.min_area} min_boundaries={args.min_boundaries}  ->  "
+            f"{len(invocs)}/{raw_count} SAT calls survive"
+        )
+        print()
+        if not invocs:
+            print("nothing to analyze after filtering.")
+            return 0
 
     per_call_stats(invocs)
     descent_stats(invocs, descents)
