@@ -540,6 +540,11 @@ pub enum TraceEvent {
         cap: u32,
         satisfied: bool,
         solve_time_us: u64,
+        /// New best cost when this descent step improved on the prior
+        /// best. `None` on UNSAT or the safety-bail branch (SAT but cost
+        /// didn't drop). Lets analyzers measure descent deltas and
+        /// detect stalls without re-computing cost.
+        cost_after: Option<u32>,
     },
 
     SatInvocation {
@@ -562,6 +567,11 @@ pub enum TraceEvent {
         clauses: u32,
         solve_time_us: u64,
         entities_raw: usize,
+        /// Cost of the raw SAT solution, before the cost-descent loop
+        /// tightens it. `None` when `satisfied=false`. Analyzers
+        /// compare against the final `cost_after` of the last
+        /// improving `SatCostDescent` event to measure descent savings.
+        initial_cost: Option<u32>,
         /// Entities SAT produced, captured before `prune_dangling_sat_entities`.
         /// Empty when `satisfied=false`. Lets the junction debugger render
         /// the candidate layout — especially useful on walker veto, where

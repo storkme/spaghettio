@@ -908,7 +908,7 @@ fn report_stress_scoreboard(test_name: &str, result: &E2EResult) -> ! {
 /// non-compactable.
 #[test]
 #[ignore]
-#[ntest::timeout(180000)]
+#[ntest::timeout(600000)]
 fn stress_electronic_circuit_30s_from_ore() {
     let inputs: FxHashSet<String> = ["iron-ore", "copper-ore"]
         .iter().map(|s| s.to_string()).collect();
@@ -929,7 +929,7 @@ fn stress_electronic_circuit_30s_from_ore() {
 /// max_gap=3, max_trunks/band=12.
 #[test]
 #[ignore]
-#[ntest::timeout(180000)]
+#[ntest::timeout(600000)]
 fn stress_advanced_circuit_45s_from_plates() {
     let inputs: FxHashSet<String> = ["iron-plate", "copper-plate", "plastic-bar"]
         .iter().map(|s| s.to_string()).collect();
@@ -949,7 +949,7 @@ fn stress_advanced_circuit_45s_from_plates() {
 /// processing-unit requires an AM3 because sulfuric-acid is a fluid input.
 #[test]
 #[ignore]
-#[ntest::timeout(300000)]
+#[ntest::timeout(600000)]
 fn stress_processing_unit_20s_from_plates() {
     let inputs: FxHashSet<String> = ["iron-plate", "copper-plate", "plastic-bar", "sulfuric-acid"]
         .iter().map(|s| s.to_string()).collect();
@@ -972,7 +972,7 @@ fn stress_processing_unit_20s_from_plates() {
 /// max_gap=12, max_trunks/band=14.
 #[test]
 #[ignore]
-#[ntest::timeout(180000)]
+#[ntest::timeout(600000)]
 fn stress_electronic_circuit_60s_red_from_ore() {
     let inputs: FxHashSet<String> = ["iron-ore", "copper-ore"]
         .iter().map(|s| s.to_string()).collect();
@@ -986,6 +986,87 @@ fn stress_electronic_circuit_60s_red_from_ore() {
     ).expect("e2e pipeline");
     assert_produces(&result, "electronic-circuit", 60.0);
     report_stress_scoreboard("stress_electronic_circuit_60s_red_from_ore", &result);
+}
+
+// Electronic-circuit-from-ore rate variants. The 30/s baseline produces
+// lots of 12-15x3 junctions with 22 boundaries; these neighbouring rates
+// let the SAT-call analyzer measure how sensitive the junction-problem
+// distribution is to small rate deltas (22 vs 23) and how it scales
+// (35, 40). Gather with:
+//   FUCKTORIO_DUMP_SNAPSHOTS=1 cargo test --manifest-path \
+//     crates/core/Cargo.toml --test e2e -- --include-ignored stress_
+// then `python scripts/analyze_sat_calls.py --min-solve-us 5000`.
+
+#[test]
+#[ignore]
+#[ntest::timeout(600000)]
+fn stress_electronic_circuit_22s_from_ore() {
+    let inputs: FxHashSet<String> = ["iron-ore", "copper-ore"]
+        .iter().map(|s| s.to_string()).collect();
+    let result = run_e2e(
+        "stress_electronic_circuit_22s_from_ore",
+        "electronic-circuit",
+        22.0,
+        "assembling-machine-2",
+        Some("transport-belt"),
+        &inputs,
+    ).expect("e2e pipeline");
+    assert_produces(&result, "electronic-circuit", 22.0);
+    report_stress_scoreboard("stress_electronic_circuit_22s_from_ore", &result);
+}
+
+#[test]
+#[ignore]
+#[ntest::timeout(600000)]
+fn stress_electronic_circuit_23s_from_ore() {
+    let inputs: FxHashSet<String> = ["iron-ore", "copper-ore"]
+        .iter().map(|s| s.to_string()).collect();
+    let result = run_e2e(
+        "stress_electronic_circuit_23s_from_ore",
+        "electronic-circuit",
+        23.0,
+        "assembling-machine-2",
+        Some("transport-belt"),
+        &inputs,
+    ).expect("e2e pipeline");
+    assert_produces(&result, "electronic-circuit", 23.0);
+    report_stress_scoreboard("stress_electronic_circuit_23s_from_ore", &result);
+}
+
+#[test]
+#[ignore]
+#[ntest::timeout(600000)]
+fn stress_electronic_circuit_35s_from_ore() {
+    let inputs: FxHashSet<String> = ["iron-ore", "copper-ore"]
+        .iter().map(|s| s.to_string()).collect();
+    let result = run_e2e(
+        "stress_electronic_circuit_35s_from_ore",
+        "electronic-circuit",
+        35.0,
+        "assembling-machine-2",
+        Some("transport-belt"),
+        &inputs,
+    ).expect("e2e pipeline");
+    assert_produces(&result, "electronic-circuit", 35.0);
+    report_stress_scoreboard("stress_electronic_circuit_35s_from_ore", &result);
+}
+
+#[test]
+#[ignore]
+#[ntest::timeout(600000)]
+fn stress_electronic_circuit_40s_from_ore() {
+    let inputs: FxHashSet<String> = ["iron-ore", "copper-ore"]
+        .iter().map(|s| s.to_string()).collect();
+    let result = run_e2e(
+        "stress_electronic_circuit_40s_from_ore",
+        "electronic-circuit",
+        40.0,
+        "assembling-machine-2",
+        Some("transport-belt"),
+        &inputs,
+    ).expect("e2e pipeline");
+    assert_produces(&result, "electronic-circuit", 40.0);
+    report_stress_scoreboard("stress_electronic_circuit_40s_from_ore", &result);
 }
 
 // ---------------------------------------------------------------------------

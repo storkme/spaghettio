@@ -649,6 +649,9 @@ impl JunctionStrategy for SatStrategy {
                     .collect()
             })
             .unwrap_or_default();
+        let initial_cost = entities_opt
+            .as_ref()
+            .map(|es| crate::bus::junction_cost::solution_cost(es));
         trace::emit(TraceEvent::SatInvocation {
             seed_x,
             seed_y,
@@ -667,10 +670,12 @@ impl JunctionStrategy for SatStrategy {
             clauses: stats.clauses,
             solve_time_us: stats.solve_time_us,
             entities_raw,
+            initial_cost,
             proposed_entities,
         });
         let mut best = entities_opt?;
-        let mut best_cost = crate::bus::junction_cost::solution_cost(&best);
+        let mut best_cost =
+            initial_cost.expect("entities_opt is Some here, so initial_cost is Some");
 
         // Cost descent: re-solve with a tighter cost cap until either
         // UNSAT (current best is optimal at this cap), wall-clock
@@ -695,6 +700,13 @@ impl JunctionStrategy for SatStrategy {
                 Some(cap),
             );
             let next_sat = next_opt.is_some();
+            let next_cost = next_opt
+                .as_ref()
+                .map(|es| crate::bus::junction_cost::solution_cost(es));
+            let cost_after = match next_cost {
+                Some(c) if c < best_cost => Some(c),
+                _ => None,
+            };
             trace::emit(TraceEvent::SatCostDescent {
                 seed_x,
                 seed_y,
@@ -704,21 +716,20 @@ impl JunctionStrategy for SatStrategy {
                 cap,
                 satisfied: next_sat,
                 solve_time_us: next_stats.solve_time_us,
+                cost_after,
             });
-            match next_opt {
-                Some(ents) => {
-                    let c = crate::bus::junction_cost::solution_cost(&ents);
-                    if c < best_cost {
-                        best = ents;
-                        best_cost = c;
-                    } else {
-                        // Encoder said SAT but cost didn't drop — safety
-                        // bail. Shouldn't happen if weights are in sync
-                        // with `junction_cost::solution_cost`.
-                        break;
-                    }
+            match (next_opt, next_cost) {
+                (Some(ents), Some(c)) if c < best_cost => {
+                    best = ents;
+                    best_cost = c;
                 }
-                None => break,
+                (Some(_), _) => {
+                    // Encoder said SAT but cost didn't drop — safety
+                    // bail. Shouldn't happen if weights are in sync
+                    // with `junction_cost::solution_cost`.
+                    break;
+                }
+                (None, _) => break,
             }
         }
 
