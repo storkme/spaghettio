@@ -35,7 +35,7 @@
  * hover-highlighting one — belt-network traces light up on hover,
  * matching non-streaming rendering paths.
  *
- * See `docs/rfp-streaming-reconciliation.md` for the full rationale.
+ * See `docs/archive/rfp-streaming-reconciliation.md` for the full rationale.
  */
 
 import type { Application, Container, Graphics } from "pixi.js";

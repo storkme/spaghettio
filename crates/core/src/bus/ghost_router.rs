@@ -1413,7 +1413,7 @@ pub fn route_bus_ghost(
     // because the corridor-template pre-pass was removed; all
     // crossings now flow through the junction-solver cluster loop
     // below, which increments this counter for each solved cluster.
-    // See `docs/rfp-remove-corridor-template.md` for the rationale.
+    // See `docs/archive/rfp-remove-corridor-template.md` for the rationale.
     let mut template_count: usize = 0;
     let mut template_regions: Vec<LayoutRegion> = Vec::new();
     let mut remaining_crossings: FxHashSet<(i32, i32)> = FxHashSet::default();

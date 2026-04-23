@@ -579,7 +579,6 @@ fn tier2_electronic_circuit_splitter_stamp_regression() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "ghost-mode: routing fails on plastic-bar feeder paths"]
 #[ntest::timeout(10000)]
 fn tier3_plastic_bar() {
     let inputs: FxHashSet<String> = ["petroleum-gas", "coal"]
@@ -636,7 +635,7 @@ fn tier3_sulfuric_acid() {
 fn tier3_heavy_oil_cracking() {
     // 2 distinct fluid inputs (water + heavy-oil) on a chemical-plant —
     // exercises the stacked-T multi-fluid row pattern. Primary regression
-    // signal for docs/rfp-multi-fluid-rows.md.
+    // signal for docs/archive/rfp-multi-fluid-rows.md.
     //
     // Exclude advanced-oil-processing and coal-liquefaction so the solver
     // picks heavy-oil-cracking as the light-oil producer (in JSON order,

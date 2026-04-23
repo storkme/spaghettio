@@ -252,7 +252,7 @@ pub enum RowKind {
     /// 2+ distinct fluid inputs on a small (<5×5) machine, no solid input.
     /// Uses stacked-T pattern with UG-pipe-UG isolation flanks. Covers
     /// heavy-oil-cracking, light-oil-cracking, sulfur. See
-    /// `docs/rfp-multi-fluid-rows.md`.
+    /// `docs/archive/rfp-multi-fluid-rows.md`.
     FluidMultiInput,
 }
 
