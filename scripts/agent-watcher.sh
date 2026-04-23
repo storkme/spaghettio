@@ -29,12 +29,36 @@ on_signal() {
 trap on_signal TERM INT
 
 # ---------------------------------------------------------------------------
-# Initial clone (once per container lifetime)
+# Workspace setup — clone if cold, otherwise reuse the persisted volume.
+# Volume is /tmp/workspace (a named Docker volume in production); contents
+# survive container recreation, which is the whole point of warm caches.
 # ---------------------------------------------------------------------------
-rm -rf "$WORKSPACE"
-echo "cloning ${REPO} into ${WORKSPACE}..."
-gh repo clone "$REPO" "$WORKSPACE" -- --quiet
-cd "$WORKSPACE"
+if [ -d "$WORKSPACE/.git" ]; then
+    echo "reusing existing workspace at ${WORKSPACE}"
+    cd "$WORKSPACE"
+    # make sure we're tracking the right repo (defensive — catches cases
+    # where the volume was populated by another repo earlier).
+    actual_remote="$(git remote get-url origin 2>/dev/null || echo '')"
+    expected_remote="https://github.com/${REPO}.git"
+    if [ -n "$actual_remote" ] && [ "$actual_remote" != "$expected_remote" ]; then
+        echo "workspace has remote ${actual_remote}, expected ${expected_remote}"
+        echo "wiping and re-cloning."
+        cd /
+        rm -rf "$WORKSPACE"/*  "$WORKSPACE"/.[!.]* 2>/dev/null || true
+        gh repo clone "$REPO" "$WORKSPACE" -- --quiet
+        cd "$WORKSPACE"
+    else
+        git fetch origin --quiet
+    fi
+else
+    # First boot, or someone wiped the volume.
+    # We can't `rm -rf $WORKSPACE` because it's the volume mountpoint;
+    # clear contents instead.
+    rm -rf "$WORKSPACE"/*  "$WORKSPACE"/.[!.]* 2>/dev/null || true
+    echo "cloning ${REPO} into ${WORKSPACE}..."
+    gh repo clone "$REPO" "$WORKSPACE" -- --quiet
+    cd "$WORKSPACE"
+fi
 
 # Pre-push hook: refuse main/master.
 HOOK=.git/hooks/pre-push

@@ -38,7 +38,10 @@ have_llama=0
 
 if [ -d /mnt/pi-ro ]; then
     mkdir -p "$HOME/.pi"
-    cp -a /mnt/pi-ro/. "$HOME/.pi/"
+    # -n (no-clobber): image-baked files in ~/.pi (e.g. installed extensions
+    # listed in settings.json) win. Host mount only fills in what the image
+    # doesn't already have — typically auth.json / credentials.
+    cp -an /mnt/pi-ro/. "$HOME/.pi/"
     chmod -R u+w "$HOME/.pi"
     # auth.json is user-only by design (0600); keep that after the copy.
     [ -f "$HOME/.pi/agent/auth.json" ] && chmod 600 "$HOME/.pi/agent/auth.json"
@@ -47,7 +50,7 @@ fi
 
 if [ -n "${LLAMA_MODEL:-}" ]; then
     : "${LLAMA_PORT:=8080}"
-    : "${LLAMA_CONTEXT:=32768}"
+    : "${LLAMA_CONTEXT:=65536}"
     : "${LLAMA_MAX_TOKENS:=8192}"
     export LLAMA_PORT LLAMA_MODEL LLAMA_CONTEXT LLAMA_MAX_TOKENS
     mkdir -p "$HOME/.pi/agent"
