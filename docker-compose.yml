@@ -1,11 +1,18 @@
+# Agent runs do NOT use compose. Use ./scripts/run-agent.sh for that.
+#
+# This file exists solely for the 'dev' workflow: drop into a bash shell
+# inside the image to poke at the toolchain, rerun cargo/npm, inspect the
+# copied ~/.claude, etc. The dev shell clones the repo on entry.
 services:
-  claude-agent:
+  dev:
     build: .
+    image: fucktorio-agent:latest
     volumes:
-      - .:/workspace                          # project code
-      - ~/.claude:/home/node/.claude:ro         # claude.ai auth token
-      - ~/.config/gh:/home/node/.config/gh:ro  # GitHub CLI token
-    working_dir: /workspace
+      - ${HOME}/.claude:/mnt/claude-ro:ro
+    environment:
+      GH_TOKEN: ${GH_TOKEN:-}
+      AGENT_NAME: dev-shell
+      ISSUE: "0"
     stdin_open: true
     tty: true
-    command: claude --dangerously-skip-permissions
+    command: bash
