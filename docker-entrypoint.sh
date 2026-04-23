@@ -27,15 +27,18 @@ if [ ! -f "$AGENT_FILE" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Claude credentials: copy the read-only host mount into a writable per-container
-# snapshot so concurrent containers don't stomp on each other's session state.
+# Pi credentials: copy the read-only host mount into a writable per-container
+# snapshot so concurrent containers don't stomp on each other's auth.json
+# (pi auto-refreshes OAuth tokens there).
 # ---------------------------------------------------------------------------
-if [ -d /mnt/claude-ro ]; then
-    mkdir -p "$HOME/.claude"
-    cp -a /mnt/claude-ro/. "$HOME/.claude/"
-    chmod -R u+w "$HOME/.claude"
+if [ -d /mnt/pi-ro ]; then
+    mkdir -p "$HOME/.pi"
+    cp -a /mnt/pi-ro/. "$HOME/.pi/"
+    chmod -R u+w "$HOME/.pi"
+    # auth.json is user-only by design (0600); keep that after the copy.
+    [ -f "$HOME/.pi/agent/auth.json" ] && chmod 600 "$HOME/.pi/agent/auth.json"
 else
-    echo "warning: /mnt/claude-ro not mounted; Claude will prompt for auth" >&2
+    echo "warning: /mnt/pi-ro not mounted; pi will need ANTHROPIC_API_KEY or /login" >&2
 fi
 
 # ---------------------------------------------------------------------------

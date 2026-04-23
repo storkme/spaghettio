@@ -4,7 +4,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       git gh jq less procps sudo curl ca-certificates \
   && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g @anthropic-ai/claude-code@latest
+RUN npm install -g @mariozechner/pi-coding-agent
 
 RUN echo "node ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/node
 

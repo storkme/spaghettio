@@ -1,9 +1,9 @@
 # Agent container
 
-A disposable Docker image that runs a Claude Code agent against one GitHub
-issue. Phase 1: the human picks the issue and watches the run; the container
-exits when Claude's session ends. Orchestration (watching for new issues,
-sequencing multiple tasks) is deliberately out of scope for now.
+A disposable Docker image that runs a [pi](https://pi.dev/) coding agent
+against one GitHub issue. Phase 1: the human picks the issue and watches the
+run; the container exits when pi's session ends. Orchestration (watching for
+new issues, sequencing multiple tasks) is deliberately out of scope for now.
 
 ## Build
 
@@ -23,7 +23,7 @@ export GH_TOKEN=ghp_...                       # fine-grained PAT, see below
 ./scripts/run-agent.sh --list                 # show available agents
 ```
 
-The launcher streams the Claude transcript straight to your terminal. Ctrl-C
+The launcher streams the pi transcript straight to your terminal. Ctrl-C
 aborts the container (`--rm` cleans up).
 
 ## Required environment
@@ -34,8 +34,12 @@ aborts the container (`--rm` cleans up).
 | `AGENT_NAME` | passed by launcher | Matches a file under `scripts/agents/`. |
 | `ISSUE` | passed by launcher | Positive integer; the issue number to work on. |
 
-`~/.claude` must exist on the host (run `claude` once to authenticate).
-The launcher refuses to start without it.
+`~/.pi` must exist on the host (run `pi` once and `/login`, or set
+`ANTHROPIC_API_KEY` in your shell). The launcher refuses to start without it.
+
+pi stores OAuth tokens at `~/.pi/agent/auth.json` and auto-refreshes them;
+the entrypoint copies the whole `~/.pi` tree into a writable per-container
+snapshot so concurrent containers don't stomp on each other's refreshed token.
 
 ## Recommended `GH_TOKEN` scopes
 
@@ -72,17 +76,18 @@ each container uses exactly the personality it was built with.
 ## Security properties
 
 - **No credentials in the image.** `GH_TOKEN` comes in via env at run time;
-  `~/.claude` is bind-mounted read-only and copied into a writable
+  `~/.pi` is bind-mounted read-only and copied into a writable
   container-private snapshot by the entrypoint.
-- **Blast radius = container + token scopes.** `claude --dangerously-skip-permissions`
-  runs inside a non-root user, inside a disposable container, with no host
-  mounts beyond the read-only creds source. Worst-case misbehaviour is bounded
-  by `GH_TOKEN`'s permissions on the target repo.
+- **Blast radius = container + token scopes.** pi has no permission gate —
+  its four tools (`read`, `write`, `edit`, `bash`) execute freely. They run
+  inside a non-root user, inside a disposable container, with no host mounts
+  beyond the read-only creds source, so worst-case misbehaviour is bounded by
+  the container filesystem plus `GH_TOKEN`'s permissions on the target repo.
 - **Client-side no-push-to-main.** The orchestrator installs a pre-push hook
   that refuses pushes to `main` / `master` even if the agent's prompt
   discipline slips.
-- **Per-container Claude session.** Concurrent containers get independent
-  writable copies of `~/.claude`; their session state cannot collide.
+- **Per-container pi session.** Concurrent containers get independent writable
+  copies of `~/.pi`; their OAuth refresh writes cannot collide.
 
 ## Debug shell
 
@@ -91,16 +96,16 @@ docker compose run --rm dev
 ```
 
 Drops into bash inside the image. Useful for checking tool versions, inspecting
-the copied `~/.claude`, or rerunning the orchestrator by hand with different
-env vars. Does not invoke the orchestrator automatically.
+the copied `~/.pi`, or rerunning the orchestrator by hand with different env
+vars. Does not invoke the orchestrator automatically.
 
 ## Phase 1 limits
 
 - One issue per container invocation. The container does not discover or claim
   issues; the caller names one.
 - No parallel-safety mechanisms beyond "each container has an independent
-  filesystem and an independent `~/.claude` snapshot". Two containers pointed
-  at the same issue will both try to work on it — don't do that.
+  filesystem and an independent `~/.pi` snapshot". Two containers pointed at
+  the same issue will both try to work on it — don't do that.
 - No automatic PR verification, no success/failure labelling, no status
   comments on the issue. The human inspects the result via `gh pr list`.
 - CI uses Node 20; the image uses Node 24 to match the maintainer's local

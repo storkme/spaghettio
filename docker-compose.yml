@@ -2,13 +2,13 @@
 #
 # This file exists solely for the 'dev' workflow: drop into a bash shell
 # inside the image to poke at the toolchain, rerun cargo/npm, inspect the
-# copied ~/.claude, etc. The dev shell clones the repo on entry.
+# copied ~/.pi, etc. The dev shell clones the repo on entry.
 services:
   dev:
     build: .
     image: fucktorio-agent:latest
     volumes:
-      - ${HOME}/.claude:/mnt/claude-ro:ro
+      - ${HOME}/.pi:/mnt/pi-ro:ro
     environment:
       GH_TOKEN: ${GH_TOKEN:-}
       AGENT_NAME: dev-shell

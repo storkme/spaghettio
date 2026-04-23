@@ -2,12 +2,12 @@
 set -euo pipefail
 
 # Invoked by docker-entrypoint.sh. AGENT_NAME, ISSUE, GH_TOKEN have already been
-# validated; Claude credentials have been copied into a writable $HOME/.claude;
+# validated; Pi credentials have been copied into a writable $HOME/.pi;
 # git identity and credential helper are configured.
 
 REPO="${REPO:-storkme/fucktorio}"
 WORKSPACE="/tmp/workspace"
-LOG="/tmp/claude.log"
+LOG="/tmp/agent.log"
 BRANCH="agent/${AGENT_NAME}/issue-${ISSUE}"
 
 # ---------------------------------------------------------------------------
@@ -66,19 +66,19 @@ ${PERSONAL_PROMPT}
 EOF
 
 # ---------------------------------------------------------------------------
-# Launch Claude
+# Launch pi
 # ---------------------------------------------------------------------------
-echo "launching claude..."
+echo "launching pi..."
 echo "prompt length: $(printf '%s' "$BASE_PROMPT" | wc -c) chars"
 echo "---"
 
 set +e
-claude --dangerously-skip-permissions -p "$BASE_PROMPT" 2>&1 | tee "$LOG"
+pi -p "$BASE_PROMPT" 2>&1 | tee "$LOG"
 rc=${PIPESTATUS[0]}
 set -e
 
 echo "---"
-echo "claude exited rc=${rc}"
+echo "pi exited rc=${rc}"
 echo "log saved to ${LOG}"
 
 exit "$rc"

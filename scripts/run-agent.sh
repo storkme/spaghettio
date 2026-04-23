@@ -74,9 +74,10 @@ if [ -z "${GH_TOKEN:-}" ]; then
     exit 64
 fi
 
-if [ -z "${HOME:-}" ] || [ ! -d "${HOME}/.claude" ]; then
-    echo "error: ~/.claude not found on host — Claude is not logged in here." >&2
-    echo "       run 'claude' once on the host to authenticate, then retry." >&2
+if [ -z "${HOME:-}" ] || [ ! -d "${HOME}/.pi" ]; then
+    echo "error: ~/.pi not found on host — pi is not logged in here." >&2
+    echo "       run 'pi' once on the host and use /login, or set ANTHROPIC_API_KEY;" >&2
+    echo "       then retry." >&2
     exit 64
 fi
 
@@ -95,7 +96,7 @@ echo
 
 exec docker run --rm -it \
     --name "$container" \
-    -v "${HOME}/.claude:/mnt/claude-ro:ro" \
+    -v "${HOME}/.pi:/mnt/pi-ro:ro" \
     -e GH_TOKEN="$GH_TOKEN" \
     -e AGENT_NAME="$NAME" \
     -e ISSUE="$ISSUE" \
