@@ -24,6 +24,7 @@ For the live pipeline reference see:
 | `rfp-junction-solver.md` | Partially implemented — T1 perpendicular template + SAT fallback wired; T2/T3 pending. |
 | `rfp-region-routing.md` | Partially implemented — framework + tier 1 in place; tier 2/3 pending. |
 | `sat-band-investigation.md` | Investigation notes explaining why SAT bands failed. |
+| `lane-column-packing-investigation.md` | Rejected — PR #160's bus-width packer; crossing resolution would need to be rewritten before column-sharing is safe. |
 | `spaghetti-roadmap.md` | Original spaghetti-router roadmap from before the pivot to bus/ghost routing. |
 | `port-plan.md` | Original Python → Rust port plan. |
 | `port-status.md` | Per-unit Python → Rust port status at the time the port wrapped up. |
