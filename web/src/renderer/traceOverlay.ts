@@ -10,7 +10,6 @@ type LanesPlanned = Extract<TraceEvent, { phase: "LanesPlanned" }>;
 export type PhaseSnapshot = Extract<TraceEvent, { phase: "PhaseSnapshot" }>;
 export type PhaseComplete = Extract<TraceEvent, { phase: "PhaseComplete" }>;
 type RouteFailureEvent = Extract<TraceEvent, { phase: "RouteFailure" }>;
-type LaneOrderOptimizedEvent = Extract<TraceEvent, { phase: "LaneOrderOptimized" }>;
 type GhostSpecRoutedEvent = Extract<TraceEvent, { phase: "GhostSpecRouted" }>;
 type GhostSpecFailedEvent = Extract<TraceEvent, { phase: "GhostSpecFailed" }>;
 type GhostRoutingCompleteEvent = Extract<TraceEvent, { phase: "GhostRoutingComplete" }>;
@@ -152,8 +151,6 @@ export function renderTraceOverlay(
   // view; the same information is available on hover via the lane/row
   // rectangles' pointerenter handlers above.
 
-  const summaryStyle = new TextStyle({ fontSize: 10, fill: "#aaa", fontFamily: "monospace" });
-
   // --- Ghost routing paths (from GhostSpecRouted) ---
   // Small cycled palette — the colour just needs to differ from its
   // immediate neighbours; exact identity is confirmed via inspector.
@@ -220,25 +217,6 @@ export function renderTraceOverlay(
     g.on("pointerleave", () => onHover(null));
     layer.addChild(g);
   }
-
-  // --- Ghost routing summary (from GhostRoutingComplete) ---
-  const ghostComplete = events.find((e): e is GhostRoutingCompleteEvent => e.phase === "GhostRoutingComplete");
-  if (ghostComplete) {
-    const d = ghostComplete.data;
-    const info = `Ghost: ${d.entity_count} entities, ${d.cluster_count} clusters (max ${d.max_cluster_tiles} tiles), ${d.unroutable_count} unroutable`;
-    const summaryGhost = new Text({ text: info, style: summaryStyle });
-    summaryGhost.x = 4;
-    summaryGhost.y = -28;
-    layer.addChild(summaryGhost);
-  }
-  const phaseNames = events.map(e => e.phase);
-  const uniquePhases = [...new Set(phaseNames)];
-  const laneOrder = events.find((e): e is LaneOrderOptimizedEvent => e.phase === "LaneOrderOptimized");
-  const crossingSuffix = laneOrder ? ` | lane order: ${laneOrder.data.crossing_score} crossings` : "";
-  const summaryText = new Text({ text: `Trace: ${uniquePhases.join(" → ")}${crossingSuffix}`, style: summaryStyle });
-  summaryText.x = 4;
-  summaryText.y = -16;
-  layer.addChild(summaryText);
 
   container.addChild(layer);
   return layer;

@@ -58,8 +58,9 @@ const INSERTER_COLORS: Record<string, number> = {
   "long-handed-inserter": 0xd04040,
 };
 
-const PIPE_COLOR = 0x4a7ab5;
-const PIPE_TO_GROUND_COLOR = 0x3a6090;
+const PIPE_COLOR = 0x8a8a8a;
+const PIPE_TO_GROUND_COLOR = 0x6a6a6a;
+const PIPE_BG = 0x1f1f1f;
 const POLE_COLOR = 0xc0a030;
 const POLE_BG = 0x2a2510;
 
@@ -558,13 +559,38 @@ function drawInserter(entity: PlacedEntity): Graphics {
 // Pipe connection bitmask: N=1, E=2, S=4, W=8
 const CONN_N = 1, CONN_E = 2, CONN_S = 4, CONN_W = 8;
 
+/** Returns the surface-side unit vector of a pipe-to-ground entity.
+ *  `direction` is the tunnel direction; the visible surface mouth is
+ *  always opposite, matching `drawPipe`'s stub rendering. `io_type` is
+ *  our internal pair-routing label — it doesn't affect which side is
+ *  the surface. */
+function ptgSurfaceDelta(entity: PlacedEntity): [number, number] {
+  const [dx, dy] = dirVec(entity.direction);
+  return [-dx, -dy];
+}
+
+/** Whether a regular pipe at (px,py) should connect to neighbour `nb`
+ *  reached via offset (dx,dy). Pipes connect to all adjacent pipes, but
+ *  only on a pipe-to-ground's surface side — not on its tunnel side.
+ *  `(dx, dy)` is the offset from the pipe to the neighbour tile. */
+function pipeConnectsToNeighbour(nb: PlacedEntity, dx: number, dy: number): boolean {
+  if (nb.name === "pipe") return true;
+  if (nb.name === "pipe-to-ground") {
+    // Pipe is on PTG's surface side iff the offset from PTG back to
+    // pipe (= -(dx,dy)) equals the PTG's surface delta.
+    const [sx, sy] = ptgSurfaceDelta(nb);
+    return -dx === sx && -dy === sy;
+  }
+  return false;
+}
+
 function drawPipe(entity: PlacedEntity, connections: number): Graphics {
   const g = new Graphics();
   const s = TILE_PX - 1;
   const isGround = entity.name === "pipe-to-ground";
   const pipeColor = isGround ? PIPE_TO_GROUND_COLOR : PIPE_COLOR;
 
-  g.roundRect(0, 0, s, s, TILE_RADIUS).fill(0x1a2a3a);
+  g.roundRect(0, 0, s, s, TILE_RADIUS).fill(PIPE_BG);
 
   const cx = s / 2;
   const cy = s / 2;
@@ -576,7 +602,7 @@ function drawPipe(entity: PlacedEntity, connections: number): Graphics {
     const [dx, dy] = dirVec(entity.direction);
     g.moveTo(cx, cy).lineTo(cx - dx * s / 2, cy - dy * s / 2).stroke();
     g.circle(cx, cy, pipeWidth * 0.4).fill(pipeColor);
-    g.circle(cx, cy, pipeWidth * 0.25).fill(0x0a1520);
+    g.circle(cx, cy, pipeWidth * 0.25).fill(PIPE_BG);
   } else if (connections === 0) {
     // Isolated pipe: just a center dot
     g.circle(cx, cy, pipeWidth * 0.4).fill(pipeColor);
@@ -896,7 +922,7 @@ export function drawEntityGraphic(entity: PlacedEntity, ctx: DrawContext): Graph
       for (const [dx, dy, bit] of [[0, -1, CONN_N], [1, 0, CONN_E], [0, 1, CONN_S], [-1, 0, CONN_W]] as [number, number, number][]) {
         const key = `${ex + dx},${ey + dy}`;
         const nb = ctx.tileMap.get(key);
-        if ((nb && PIPE_ENTITIES.has(nb.name)) || ctx.machineTileSet.has(key)) pipeConn |= bit;
+        if ((nb && pipeConnectsToNeighbour(nb, dx, dy)) || ctx.machineTileSet.has(key)) pipeConn |= bit;
       }
     }
     g = drawPipe(entity, pipeConn);
@@ -1044,6 +1070,52 @@ export function renderLayout(
     }
   }
 
+  // Draw pipe-to-ground tunnel dashes between paired entities — same
+  // idea as the UG belt stripe but dashed, to signal underground fluid
+  // continuity beneath surface entities.
+  {
+    const ptgMap = new Map<string, PlacedEntity>();
+    for (const e of layout.entities) {
+      if (e.name === "pipe-to-ground") {
+        ptgMap.set(`${e.x ?? 0},${e.y ?? 0}`, e);
+      }
+    }
+    const MAX_PTG = 10;
+    for (const e of layout.entities) {
+      if (e.name !== "pipe-to-ground" || e.io_type !== "input") continue;
+      const [dx, dy] = dirVec(e.direction);
+      const x = e.x ?? 0;
+      const y = e.y ?? 0;
+      for (let dist = 2; dist <= MAX_PTG; dist++) {
+        const te = ptgMap.get(`${x + dx * dist},${y + dy * dist}`);
+        if (!te) continue;
+        const [tdx, tdy] = dirVec(te.direction);
+        // Pair = opposite-direction output on the same axis.
+        if (te.io_type !== "output" || tdx !== -dx || tdy !== -dy) break;
+        const tg = new Graphics();
+        tg.setStrokeStyle({ width: 2, color: PIPE_COLOR, alpha: 0.55, cap: "round" });
+        // Start just past input's tile edge in tunnel direction; end
+        // just before output's tile edge. Leaves the PTG stubs as the
+        // visible mouths.
+        const x0 = (x + 0.5 + dx * 0.5) * TILE_PX;
+        const y0 = (y + 0.5 + dy * 0.5) * TILE_PX;
+        const totalPx = (dist - 1) * TILE_PX;
+        const dash = 5;
+        const gap = 3;
+        let drawn = 0;
+        while (drawn < totalPx) {
+          const segEnd = Math.min(drawn + dash, totalPx);
+          tg.moveTo(x0 + dx * drawn, y0 + dy * drawn)
+            .lineTo(x0 + dx * segEnd, y0 + dy * segEnd)
+            .stroke();
+          drawn = segEnd + gap;
+        }
+        container.addChild(tg);
+        break;
+      }
+    }
+  }
+
   // Index: item name → list of Graphics in that chain
   const itemIndex = new Map<string, Graphics[]>();
   const allGraphics: Graphics[] = [];
@@ -1077,7 +1149,7 @@ export function renderLayout(
           }
           const key = `${ex + dx},${ey + dy}`;
           const nb = tileMap.get(key);
-          if ((nb && PIPE_ENTITIES.has(nb.name)) || machineTileSet.has(key)) pipeConn |= bit;
+          if ((nb && pipeConnectsToNeighbour(nb, dx, dy)) || machineTileSet.has(key)) pipeConn |= bit;
         }
       }
       g = drawPipe(entity, pipeConn);
@@ -1135,13 +1207,19 @@ export function renderLayout(
       if (showIcon) {
         const iconTex = Assets.get<Texture>(`${import.meta.env.BASE_URL}icons/${entity.carries}.png`);
         if (iconTex) {
-          const ICON_SZ = 11;
+          const ICON_SZ = 14;
+          const bgR = ICON_SZ * 0.7;
+          const bg = new Graphics();
+          bg.circle(TILE_PX / 2, TILE_PX / 2, bgR).fill({ color: 0x202020, alpha: 0.5 });
+          bg.eventMode = "none";
+          g.addChild(bg);
+
           const ico = new Sprite(iconTex);
           ico.width = ICON_SZ;
           ico.height = ICON_SZ;
           ico.x = (TILE_PX - ICON_SZ) / 2;
           ico.y = (TILE_PX - ICON_SZ) / 2;
-          ico.alpha = 0.9;
+          ico.alpha = 0.95;
           ico.eventMode = "none";
           g.addChild(ico);
         }
