@@ -11,6 +11,7 @@ Usage:
   ./scripts/run-watcher.sh <agent-name>              Start a long-running watcher
   ./scripts/run-watcher.sh --logs <agent-name>       docker logs -f the watcher
   ./scripts/run-watcher.sh --stop <agent-name>       Send SIGTERM and wait for clean exit
+  ./scripts/run-watcher.sh --reset <agent-name>      Stop container AND wipe its volumes
   ./scripts/run-watcher.sh --list                    Show available agent names
   ./scripts/run-watcher.sh --status                  Show running watchers
 
@@ -25,11 +26,20 @@ Environment:
 
   LLAMA_PORT        (optional)  Port the Windows llama-server listens on
                                 (default: 8080).
-  LLAMA_CONTEXT     (optional)  Context window in tokens (default: 32768).
+  LLAMA_CONTEXT     (optional)  Context window in tokens (default: 65536).
+                                Your llama-server must have been started with
+                                at least this many tokens of context (-c flag).
   LLAMA_MAX_TOKENS  (optional)  Per-response cap (default: 8192).
   POLL_INTERVAL     (optional)  Seconds between issue-queue polls (default: 60).
 
   FUCKTORIO_AGENT_IMAGE (optional, default: fucktorio-agent:latest)
+
+Volumes:
+  Each watcher owns two named Docker volumes:
+    fucktorio-workspace-<agent>  (/tmp/workspace — git clone, target/ cache)
+    fucktorio-cargo-<agent>      (~/.cargo/registry — downloaded crates)
+  These survive container recreation and image rebuilds. Use --reset to wipe
+  them when you want a clean start.
 
 Windows-side prerequisites (one-time):
   - Run llama-server bound to 0.0.0.0:<LLAMA_PORT> (not 127.0.0.1).
@@ -43,6 +53,7 @@ Examples:
   ./scripts/run-watcher.sh misia
   ./scripts/run-watcher.sh --logs misia
   ./scripts/run-watcher.sh --stop misia
+  ./scripts/run-watcher.sh --reset misia
 EOF
 }
 
@@ -68,8 +79,44 @@ status() {
     fi
 }
 
-container_name_for() {
-    echo "fucktorio-watcher-$1"
+container_name_for() { echo "fucktorio-watcher-$1"; }
+workspace_volume_for() { echo "fucktorio-workspace-$1"; }
+cargo_volume_for() { echo "fucktorio-cargo-$1"; }
+
+reset_agent() {
+    local name="$1"
+    local container; container="$(container_name_for "$name")"
+    local ws_vol; ws_vol="$(workspace_volume_for "$name")"
+    local cg_vol; cg_vol="$(cargo_volume_for "$name")"
+
+    echo "This will:"
+    echo "  1. Stop ${container} (if running)"
+    echo "  2. Remove the container"
+    echo "  3. Delete volume ${ws_vol} (workspace + target cache)"
+    echo "  4. Delete volume ${cg_vol} (cargo registry)"
+    echo
+    read -rp "Proceed? [y/N] " reply
+    case "$reply" in
+        y|Y|yes|YES) ;;
+        *) echo "aborted."; exit 0 ;;
+    esac
+
+    if docker ps --format '{{.Names}}' | grep -qx "$container"; then
+        echo "stopping ${container}..."
+        docker stop --timeout 30 "$container" >/dev/null
+    fi
+    if docker ps -a --format '{{.Names}}' | grep -qx "$container"; then
+        docker rm "$container" >/dev/null
+    fi
+    for vol in "$ws_vol" "$cg_vol"; do
+        if docker volume ls --format '{{.Name}}' | grep -qx "$vol"; then
+            docker volume rm "$vol" >/dev/null
+            echo "removed volume ${vol}"
+        else
+            echo "volume ${vol} did not exist"
+        fi
+    done
+    echo "reset complete. next launch will cold-clone and cold-compile."
 }
 
 case "${1:-}" in
@@ -98,6 +145,11 @@ case "${1:-}" in
         fi
         echo "sending SIGTERM to ${container} (timeout 30s)..."
         docker stop --timeout 30 "$container"
+        exit 0
+        ;;
+    --reset)
+        [ -n "${2:-}" ] || { echo "error: --reset needs an agent name" >&2; exit 64; }
+        reset_agent "$2"
         exit 0
         ;;
 esac
@@ -133,6 +185,8 @@ if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
 fi
 
 CONTAINER="$(container_name_for "$NAME")"
+WS_VOL="$(workspace_volume_for "$NAME")"
+CG_VOL="$(cargo_volume_for "$NAME")"
 
 # Double-start guard — one watcher per agent name.
 if docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; then
@@ -160,12 +214,14 @@ docker run -d \
     --name "$CONTAINER" \
     --restart unless-stopped \
     --add-host="llama-host:${WIN_HOST}" \
+    -v "${WS_VOL}:/tmp/workspace" \
+    -v "${CG_VOL}:/home/node/.cargo/registry" \
     -e GH_TOKEN="$GH_TOKEN" \
     -e AGENT_NAME="$NAME" \
     -e AGENT_READY_LABEL="${AGENT_READY_LABEL:-${NAME}-ready}" \
     -e LLAMA_PORT="${LLAMA_PORT:-8080}" \
     -e LLAMA_MODEL="$LLAMA_MODEL" \
-    -e LLAMA_CONTEXT="${LLAMA_CONTEXT:-32768}" \
+    -e LLAMA_CONTEXT="${LLAMA_CONTEXT:-65536}" \
     -e LLAMA_MAX_TOKENS="${LLAMA_MAX_TOKENS:-8192}" \
     -e POLL_INTERVAL="${POLL_INTERVAL:-60}" \
     "$IMAGE" agent-watcher.sh >/dev/null
