@@ -1,7 +1,7 @@
 FROM node:24
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      git gh jq less procps sudo curl ca-certificates \
+      git gh jq less procps sudo curl ca-certificates gettext-base \
   && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 RUN npm install -g @mariozechner/pi-coding-agent
@@ -19,8 +19,12 @@ RUN curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
 COPY --chown=node:node docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 COPY --chown=node:node scripts/agent-runner.sh /usr/local/bin/agent-runner.sh
+COPY --chown=node:node scripts/agent-watcher.sh /usr/local/bin/agent-watcher.sh
 COPY --chown=node:node scripts/agents/ /usr/local/share/agents/
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/agent-runner.sh
+COPY --chown=node:node scripts/pi/models.json.tmpl /usr/local/share/pi/models.json.tmpl
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
+             /usr/local/bin/agent-runner.sh \
+             /usr/local/bin/agent-watcher.sh
 
 WORKDIR /home/node
 

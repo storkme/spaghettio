@@ -1,14 +1,25 @@
 #!/bin/bash
 set -euo pipefail
 
-# Invoked by docker-entrypoint.sh. AGENT_NAME, ISSUE, GH_TOKEN have already been
-# validated; Pi credentials have been copied into a writable $HOME/.pi;
+# Invoked by docker-entrypoint.sh. AGENT_NAME and GH_TOKEN have already been
+# validated; backend (either ~/.pi OAuth or llama.cpp models.json) is in place;
 # git identity and credential helper are configured.
+
+if [ -z "${ISSUE:-}" ]; then
+    echo "error: agent-runner.sh requires ISSUE env var (use agent-watcher.sh for watcher mode)" >&2
+    exit 64
+fi
 
 REPO="${REPO:-storkme/fucktorio}"
 WORKSPACE="/tmp/workspace"
 LOG="/tmp/agent.log"
 BRANCH="agent/${AGENT_NAME}/issue-${ISSUE}"
+
+# pi backend selection: if LLAMA_MODEL is set, route through the llama provider.
+PI_BACKEND_ARGS=()
+if [ -n "${LLAMA_MODEL:-}" ]; then
+    PI_BACKEND_ARGS=(--provider llama --model "$LLAMA_MODEL")
+fi
 
 # ---------------------------------------------------------------------------
 # Fresh clone
@@ -73,7 +84,7 @@ echo "prompt length: $(printf '%s' "$BASE_PROMPT" | wc -c) chars"
 echo "---"
 
 set +e
-pi -p "$BASE_PROMPT" 2>&1 | tee "$LOG"
+pi "${PI_BACKEND_ARGS[@]}" --no-session -p "$BASE_PROMPT" 2>&1 | tee "$LOG"
 rc=${PIPESTATUS[0]}
 set -e
 

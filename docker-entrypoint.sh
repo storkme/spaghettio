@@ -7,14 +7,16 @@ set -euo pipefail
 missing=()
 [ -n "${GH_TOKEN:-}" ] || missing+=("GH_TOKEN")
 [ -n "${AGENT_NAME:-}" ] || missing+=("AGENT_NAME")
-[ -n "${ISSUE:-}" ] || missing+=("ISSUE")
 
 if [ "${#missing[@]}" -gt 0 ]; then
     echo "error: missing required env var(s): ${missing[*]}" >&2
     echo "" >&2
     echo "  GH_TOKEN    fine-grained PAT scoped to the target repo" >&2
     echo "  AGENT_NAME  personality name; must match a file in /usr/local/share/agents/" >&2
-    echo "  ISSUE       GitHub issue number this container should work on" >&2
+    echo "" >&2
+    echo "One-shot (agent-runner.sh) additionally requires ISSUE; watcher mode" >&2
+    echo "(agent-watcher.sh) picks ISSUEs dynamically and additionally requires" >&2
+    echo "LLAMA_MODEL (or a mounted /mnt/pi-ro for the OAuth path)." >&2
     exit 64
 fi
 
@@ -27,18 +29,38 @@ if [ ! -f "$AGENT_FILE" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Pi credentials: copy the read-only host mount into a writable per-container
-# snapshot so concurrent containers don't stomp on each other's auth.json
-# (pi auto-refreshes OAuth tokens there).
+# Backend wire-up. Two paths — exactly one must be satisfied:
+#   (a) /mnt/pi-ro mounted        → pi uses its bundled providers (e.g. Anthropic OAuth).
+#   (b) LLAMA_MODEL env set       → render a llama.cpp provider config into ~/.pi/agent/models.json.
 # ---------------------------------------------------------------------------
+have_oauth=0
+have_llama=0
+
 if [ -d /mnt/pi-ro ]; then
     mkdir -p "$HOME/.pi"
     cp -a /mnt/pi-ro/. "$HOME/.pi/"
     chmod -R u+w "$HOME/.pi"
     # auth.json is user-only by design (0600); keep that after the copy.
     [ -f "$HOME/.pi/agent/auth.json" ] && chmod 600 "$HOME/.pi/agent/auth.json"
-else
-    echo "warning: /mnt/pi-ro not mounted; pi will need ANTHROPIC_API_KEY or /login" >&2
+    have_oauth=1
+fi
+
+if [ -n "${LLAMA_MODEL:-}" ]; then
+    : "${LLAMA_PORT:=8080}"
+    : "${LLAMA_CONTEXT:=32768}"
+    : "${LLAMA_MAX_TOKENS:=8192}"
+    export LLAMA_PORT LLAMA_MODEL LLAMA_CONTEXT LLAMA_MAX_TOKENS
+    mkdir -p "$HOME/.pi/agent"
+    envsubst < /usr/local/share/pi/models.json.tmpl > "$HOME/.pi/agent/models.json"
+    chmod 600 "$HOME/.pi/agent/models.json"
+    have_llama=1
+fi
+
+if [ $have_oauth -eq 0 ] && [ $have_llama -eq 0 ]; then
+    echo "error: no backend configured." >&2
+    echo "       either bind-mount ~/.pi to /mnt/pi-ro (OAuth/API-key path)," >&2
+    echo "       or set LLAMA_MODEL (local llama.cpp path)." >&2
+    exit 64
 fi
 
 # ---------------------------------------------------------------------------
@@ -62,9 +84,21 @@ else
     gh_user="(unauthenticated)"
 fi
 
+# ---------------------------------------------------------------------------
+# Banner
+# ---------------------------------------------------------------------------
 echo "---"
 echo "agent:   ${AGENT_NAME}  (identity: ${agent_cap} Bot <${AGENT_NAME}@fucktorio.local>)"
-echo "issue:   #${ISSUE}"
+if [ -n "${ISSUE:-}" ]; then
+    echo "mode:    one-shot (issue #${ISSUE})"
+else
+    echo "mode:    watcher (label: ${AGENT_READY_LABEL:-${AGENT_NAME}-ready}, poll: ${POLL_INTERVAL:-60}s)"
+fi
+if [ $have_llama -eq 1 ]; then
+    echo "backend: llama.cpp  (model=${LLAMA_MODEL}, host=llama-host:${LLAMA_PORT})"
+else
+    echo "backend: pi OAuth/API key via ~/.pi"
+fi
 echo "gh user: ${gh_user}"
 echo "---"
 
