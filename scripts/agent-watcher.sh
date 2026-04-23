@@ -29,6 +29,17 @@ on_signal() {
 trap on_signal TERM INT
 
 # ---------------------------------------------------------------------------
+# First-run volume ownership fix. Docker named volumes come up owned by root
+# on their first mount; our `node` user can't write to /tmp/workspace or
+# ~/.cargo/registry until we chown the mount points. Non-recursive is enough —
+# once the top-level dir is node-owned, all future writes are node-owned too.
+# The chown persists in the volume's metadata, so subsequent container
+# starts see an already-node-owned dir and the chown is a no-op.
+# ---------------------------------------------------------------------------
+sudo chown "$(id -u):$(id -g)" "$WORKSPACE" 2>/dev/null || true
+sudo chown "$(id -u):$(id -g)" "$HOME/.cargo/registry" 2>/dev/null || true
+
+# ---------------------------------------------------------------------------
 # Workspace setup — clone if cold, otherwise reuse the persisted volume.
 # Volume is /tmp/workspace (a named Docker volume in production); contents
 # survive container recreation, which is the whole point of warm caches.
