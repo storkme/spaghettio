@@ -706,7 +706,7 @@ pub fn triple_input_row(
 /// machines share one fluid, so there's no isolation concern) and the bus
 /// router just has to extend it west/east until it hits the fluid trunk
 /// column. Multi-fluid-per-side rows need the richer UG-pipe-UG isolation
-/// pattern; see `docs/rfp-multi-fluid-rows.md` for that.
+/// pattern; see `docs/archive/rfp-multi-fluid-rows.md` for that.
 ///
 /// For other machines (assembling-machine-2/3 with fluid): uses a regular pipe
 /// at the port position:
@@ -1243,7 +1243,7 @@ pub fn fluid_dual_input_row(
 /// When a side has ≥2 distinct fluids, we fall back to per-port isolated
 /// pipes — a continuous row would merge them and violate F3 (fluid isolation).
 /// The proper multi-fluid pattern is the stacked-T design (see
-/// `docs/rfp-multi-fluid-rows.md`); until that lands, these rows will not
+/// `docs/archive/rfp-multi-fluid-rows.md`); until that lands, these rows will not
 /// connect to the bus.
 ///
 /// Returns `(entities, row_height, fluid_input_port_pipes, fluid_output_port_pipes)`.
@@ -1368,7 +1368,7 @@ pub fn fluid_only_row(
 }
 
 /// Multi-fluid input row: machines that consume ≥2 distinct fluids on the
-/// same face. Uses the stacked-T pattern from `docs/rfp-multi-fluid-rows.md`
+/// same face. Uses the stacked-T pattern from `docs/archive/rfp-multi-fluid-rows.md`
 /// with UG-pipe-UG isolation flanks.
 ///
 /// Currently handles **2 fluid inputs on a 3×3 chemical-plant** with no solid

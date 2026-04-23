@@ -1024,7 +1024,7 @@ pub fn solve_crossing(
         let mut candidates: Vec<(u32, JunctionSolution, String)> = Vec::new();
         // Union of walker break tiles across every strategy × variant
         // on this iter. Drives veto-directed growth when no candidate
-        // is accepted. See `docs/rfp-veto-directed-growth.md`.
+        // is accepted. See `docs/archive/rfp-veto-directed-growth.md`.
         let mut veto_tiles: FxHashSet<(i32, i32)> = FxHashSet::default();
 
         match try_solve_on_region(&region, iter, None, &solve_ctx) {
