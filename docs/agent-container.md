@@ -163,6 +163,7 @@ Pre-installed pi extensions (registered in the image-baked `~/.pi/settings.json`
 - `lsp-pi` — LSP integration (goto-def, references, diagnostics via the two language servers above).
 - `@sherif-fanous/pi-rtk` — wraps pi's `bash` tool so heavy commands route through `rtk` and come back trimmed.
 - `pi-subagents` — adds delegation-to-subagent capability that upstream pi deliberately omits.
+- `@the-forge-flow/gh-pi` — GitHub-focused tooling for pi (adds to whatever `gh` already provides).
 
 The entrypoint's host-mount copy uses `cp -an` so a bind-mounted `~/.pi` from the host can't clobber these image-baked settings. Host wins only for paths the image doesn't already have (typically `auth.json`).
 

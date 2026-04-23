@@ -39,7 +39,8 @@ RUN cargo install --git https://github.com/rtk-ai/rtk --locked
 # register and enable.
 RUN pi install npm:lsp-pi \
  && pi install npm:@sherif-fanous/pi-rtk \
- && pi install npm:pi-subagents
+ && pi install npm:pi-subagents \
+ && pi install npm:@the-forge-flow/gh-pi
 
 COPY --chown=node:node docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 COPY --chown=node:node scripts/agent-runner.sh /usr/local/bin/agent-runner.sh
