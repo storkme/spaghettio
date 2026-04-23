@@ -26,9 +26,11 @@ Environment:
 
   LLAMA_PORT        (optional)  Port the Windows llama-server listens on
                                 (default: 8080).
-  LLAMA_CONTEXT     (optional)  Context window in tokens (default: 65536).
+  LLAMA_CONTEXT     (optional)  Context window in tokens (default: 32768).
                                 Your llama-server must have been started with
                                 at least this many tokens of context (-c flag).
+                                Scales llama.cpp's KV-cache linearly with RAM;
+                                drop to 16384 or 8192 if the machine is tight.
   LLAMA_MAX_TOKENS  (optional)  Per-response cap (default: 8192).
   POLL_INTERVAL     (optional)  Seconds between issue-queue polls (default: 60).
 
@@ -221,7 +223,7 @@ docker run -d \
     -e AGENT_READY_LABEL="${AGENT_READY_LABEL:-${NAME}-ready}" \
     -e LLAMA_PORT="${LLAMA_PORT:-8080}" \
     -e LLAMA_MODEL="$LLAMA_MODEL" \
-    -e LLAMA_CONTEXT="${LLAMA_CONTEXT:-65536}" \
+    -e LLAMA_CONTEXT="${LLAMA_CONTEXT:-32768}" \
     -e LLAMA_MAX_TOKENS="${LLAMA_MAX_TOKENS:-8192}" \
     -e POLL_INTERVAL="${POLL_INTERVAL:-60}" \
     "$IMAGE" agent-watcher.sh >/dev/null

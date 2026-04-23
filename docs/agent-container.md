@@ -140,7 +140,7 @@ The launcher auto-detects the WSL-to-Windows gateway via
 | `ISSUE` | one-shot only | — | Positive integer; ignored by the watcher. |
 | `LLAMA_MODEL` | llama backend | — | Model id from `/v1/models` on the server. |
 | `LLAMA_PORT` | no | `8080` | Windows-side llama-server port. |
-| `LLAMA_CONTEXT` | no | `65536` | Context window (tokens). Your llama-server must have been started with at least this much context (`-c` flag). |
+| `LLAMA_CONTEXT` | no | `32768` | Context window (tokens). Your llama-server must have been started with at least this much context (`-c` flag). Scales llama.cpp's KV-cache linearly with RAM — drop to 16384 or 8192 on a tight machine. |
 | `LLAMA_MAX_TOKENS` | no | `8192` | Per-response cap. |
 | `AGENT_READY_LABEL` | no | `${AGENT_NAME}-ready` | Label the watcher polls on. |
 | `POLL_INTERVAL` | no | `60` | Seconds between queue polls. |

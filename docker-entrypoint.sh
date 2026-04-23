@@ -50,7 +50,7 @@ fi
 
 if [ -n "${LLAMA_MODEL:-}" ]; then
     : "${LLAMA_PORT:=8080}"
-    : "${LLAMA_CONTEXT:=65536}"
+    : "${LLAMA_CONTEXT:=32768}"
     : "${LLAMA_MAX_TOKENS:=8192}"
     export LLAMA_PORT LLAMA_MODEL LLAMA_CONTEXT LLAMA_MAX_TOKENS
     mkdir -p "$HOME/.pi/agent"
