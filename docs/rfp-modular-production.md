@@ -6,10 +6,13 @@
 
 ## Current status
 
-- **Phase**: Draft / brainstorming complete.
-- **Flag state**: both features gated behind off-by-default flags;
-  current behavior is the no-flags path.
-- **Last update**: 2026-04-24 — initial draft from brainstorm.
+- **Phase**: Draft / brainstorming complete, design revised once.
+- **Strategy state**: selectable via `LayoutStrategy` enum;
+  `Pooled` (today's path) is default. `PartitionedPerConsumer` and
+  `PartitionedDecomposed` are first-class peer strategies, not
+  opt-in degradations of the default.
+- **Last update**: 2026-04-24 — revisions from second-pass review
+  (see Decision log).
 
 ## Summary
 
@@ -17,7 +20,7 @@ The current layout engine pools each intermediate item into one shared
 bus lane family and stamps a single balancer at the producer row
 output. This caps the widest producible intermediate at 8 lanes
 (the largest template in `balancer_library.rs`). We propose two
-*optional, composable* strategies, layered behind feature flags:
+*composable* strategies, exposed as selectable layout modes:
 
 1. **Demand-partitioning (outer)** — split a high-demand intermediate
    into one producer module per consumer, sized to that consumer's
@@ -29,9 +32,13 @@ output. This caps the widest producible intermediate at 8 lanes
    expand going up-tree), shard *that* module into ⌈widest / 8⌉
    sibling subtrees, each producing a proportional share.
 
-Both flags default to off. The existing pooled/balancer-stamped path
-stays the baseline until one or both strategies earn the right to
-become default via the kill-criteria checks below.
+Both are exposed as peer variants of a `LayoutStrategy` enum (see
+Design). `Pooled` is the default because it's the current baseline,
+not because it's inherently preferred — the point of this RFP is
+that **different recipes and different user preferences deserve
+different layout shapes**, and modular production gives us a second
+and third shape to offer. The strategy the user selects is the
+strategy we produce; we don't silently upgrade or downgrade.
 
 ## Motivation
 
@@ -59,13 +66,28 @@ cable." This is a real semantic shift in `lane_planner.rs` /
 
 ### Load-bearing assumption
 
-Partitioning works without a pool-balancer because belts are wildly
+Partitioning works without a pool-balancer because belts are
 over-provisioned relative to machine consumption (yellow belt =
 15/s; a single assembler consumes 1–2/s of most ingredients).
 Per-machine timing jitter produces mild lane-to-lane variance in the
-producer's output, but the over-provisioning absorbs it. This
-assumption breaks for speed-module-3'd rows on marginal lanes —
-document it, and watch for it in verification.
+producer's output, but the over-provisioning absorbs it *as long as
+per-lane utilization stays well below saturation*.
+
+**Concrete numeric threshold**: if the proposed partition would put
+any lane above **75% of belt tier capacity** (e.g. >11.25/s on a
+yellow belt, >22.5/s on red, >33.75/s on blue), we assume variance
+will cause starvation. This shows up with speed-module-3'd
+producers, tight partitions where integer belt rounding leaves
+little headroom, or deep chains where intermediate demand is tight
+against belt capacity. The partitioner treats 75% as a hard ceiling:
+if a proposed partition can't stay under it, the partitioner emits
+`TraceEvent::PartitionRejectedByUtilization` and the strategy falls
+back — but because strategy is user-selected rather than
+auto-chosen, "fallback" here means **producing an invalid layout
+with a loud warning**, not silently switching to `Pooled`. The user
+picked `PartitionedPerConsumer`; if the case can't satisfy that
+shape under the utilization rule, that's diagnostic output they need
+to see, not a quiet downgrade.
 
 ## Design
 
@@ -73,9 +95,20 @@ document it, and watch for it in verification.
 
 ```rust
 // crates/core/src/bus/layout.rs
+pub enum LayoutStrategy {
+    /// Current behavior: one shared lane family per item, single
+    /// balancer at the producer row. Capped at 8 lanes.
+    Pooled,
+    /// Phase 1: one lane family per consuming recipe-row, sized to
+    /// that consumer's exact demand, no pool-balancer.
+    PartitionedPerConsumer,
+    /// Phase 2: PartitionedPerConsumer plus subtree sharding when a
+    /// single module's widest upstream recipe still exceeds 8 lanes.
+    PartitionedDecomposed,
+}
+
 pub struct LayoutOptions {
-    pub demand_partition: bool,     // Feature flag — outer pass
-    pub subtree_decompose: bool,    // Feature flag — inner pass
+    pub strategy: LayoutStrategy,   // default: LayoutStrategy::Pooled
     // ... existing options merged in
 }
 
@@ -86,27 +119,49 @@ pub fn build_bus_layout(
 ) -> LayoutResult;
 ```
 
-Both flags default to `false`. With both off, the pipeline is
-byte-identical to today (enforced by a flag-off regression snapshot
-on every e2e test).
+`LayoutStrategy::default() == Pooled`. With the default selected the
+pipeline is byte-identical to today (enforced by a regression
+snapshot on every e2e test).
 
-WASM bindings (`crates/wasm-bindings/src/lib.rs`) expose the flags as
-optional params on `layout()`. The web app (`web/src/ui/sidebar.ts`)
-adds two debug toggles; URL state (`?partition=1&decompose=1`) makes
-links reproduce the experimental mode.
+WASM bindings (`crates/wasm-bindings/src/lib.rs`) expose `strategy`
+as an optional string param on `layout()`. The web app
+(`web/src/ui/sidebar.ts`) gets a strategy dropdown; URL state
+(`?strategy=partitioned-per-consumer`) makes links reproduce the
+selected mode.
+
+### Why an enum, not two booleans
+
+Two key reasons:
+
+1. **Invalid combinations don't exist.** `subtree_decompose=true`
+   with `demand_partition=false` was meaningless; the enum doesn't
+   let you express it.
+2. **Future strategies slot in cleanly.** The `escargio` RFP
+   (folded / spiral layouts) will add `PartitionedFolded` and
+   similar as new variants rather than orthogonal booleans that
+   cartesian-product into sixteen combinations, most of which don't
+   make sense.
+
+The cost is a modest refactor in Phase 0 scaffolding.
 
 ### Phase 0 — shared scaffolding (no behavior change)
 
-The scaffolding both features need is: **the lane planner must be
-able to represent multiple same-item families**. Today
-`LaneFamily` is implicitly one-per-item; downstream code (lane-order
-optimiser, balancer stamper, tap-off router) assumes this.
+The scaffolding the partitioning strategies need is: **the lane
+planner must be able to represent multiple same-item families**.
+Today `LaneFamily` is implicitly one-per-item; downstream code
+(lane-order optimiser, balancer stamper, tap-off router) assumes
+this.
 
-Touch list:
+Phase 0 is split into two independently reviewable sub-phases to
+keep each PR small and reviewable:
 
+**Phase 0a — core scaffolding (~400 LOC):**
+
+- Add `LayoutStrategy` enum + `LayoutOptions.strategy` field.
 - `crates/core/src/bus/lane_planner.rs` — make `LaneFamily`
   identity include a `module_id: u32` alongside the item name. One
-  `module_id=0` per item in the baseline = today's behavior.
+  `module_id=0` per item in the `Pooled` baseline = today's
+  behavior.
 - `crates/core/src/bus/lane_order.rs` — key the exact-search on the
   `(item, module_id)` tuple. The ≤7-family cutoff applies to the
   tuple count, not the item count.
@@ -116,32 +171,82 @@ Touch list:
   tuple; consumer→module mapping defaults to "consumer of item X
   taps the single `(X, 0)` family."
 
-Flag-off behavior must be identical. All 9 non-ignored e2e tests
-stay green with zero snapshot drift.
+**Phase 0b — surface wiring (~200 LOC):**
+
+- Expose `strategy` on WASM bindings (no-op when `Pooled`).
+- Web app strategy dropdown, URL state.
+- Threaded through call sites (examples, tests).
+
+`Pooled`-strategy behavior must be byte-identical to today's.
+All 9 non-ignored e2e tests stay green with zero snapshot drift.
 
 ### Phase 1 — demand-partitioning (outer pass)
 
-When `demand_partition = true`:
+When `strategy == PartitionedPerConsumer` (or
+`PartitionedDecomposed`):
 
-1. For each intermediate item with multiple consumers, allocate one
-   `LaneFamily` per consumer. Each family's lane count is sized to
-   the consumer's exact demand (rounded up to the nearest belt).
-2. Consumer→module mapping is 1:1 (no tap decision — each consumer
+#### Consumer definition
+
+A **consumer** is *one consuming recipe-row*, not one consuming
+machine and not one consuming item. If `advanced-circuit` has
+assemblers split across two rows because of throughput (standard
+`placer.rs` row-splitting for rate), each row is a separate
+consumer. Eight assemblers on a single row count as one consumer.
+This keeps the partition count bounded by recipe-row count (small)
+rather than machine count (potentially large), which is the right
+granularity to make `LaneFamily` splitting meaningful.
+
+#### Algorithm
+
+1. For each intermediate item with K ≥ 1 consuming recipe-rows,
+   allocate K `LaneFamily` instances, one per consumer. Each
+   family's lane count is sized to that consumer's exact demand,
+   rounded up to the nearest belt.
+2. Before allocating, the partitioner checks the utilization
+   threshold (75%, see *Load-bearing assumption*). If any proposed
+   family would violate it, emit
+   `TraceEvent::PartitionRejectedByUtilization` and produce an
+   invalid layout with a loud warning — **do not silently fall back
+   to `Pooled`**, because strategy is user-selected.
+3. Consumer→module mapping is 1:1 (no tap decision — each consumer
    owns its module).
-3. The producer row for item X is split into K sibling rows, one per
-   consumer, each sized to that consumer's demand. Shared upstream
-   ingredients feed all K rows via a simple tee/split (not a
-   balancer — ⌈K / 8⌉ wide, typically 2–3).
-4. No pool-balancer is stamped. If K > 1, no single-family balancer
+4. The producer row for item X is split into K sibling rows, one per
+   consumer, each sized to that consumer's demand.
+5. No pool-balancer is stamped. If K > 1, no single-family balancer
    needs to be wider than the widest single consumer's lane count.
 
-The producer-side belt math:
+#### The shared-upstream distribution — not "just a tee"
 
-- Shared upstream ingredient feeds K rows. The split is `K`
-  outputs, which we emit as a splitter tree. For K ≤ 8 (the common
-  case) this is a single library template.
-- If K > 8, the ingredient's own demand-partitioning recurses
-  naturally: treat the K rows as K consumers.
+Shared upstream ingredients feed all K producer-rows. A symmetric
+K-way splitter tree is *approximately* equal-share only if the tree
+is balanced and the belt compression stays sub-saturation; a
+naive tee is measurably asymmetric on early branches under load.
+Call this what it is: a **small-scale balancer** (K-to-K where K
+≤ 8 in the common case), reusing `balancer_library.rs` templates
+rather than inventing a new splitter-tree primitive. The "no
+pool-balancer" property of Phase 1 is accurate at the *output* of
+the producer module — there's no giant stamped balancer consolidating
+item X from all producers. But the *input* side of a multi-row
+producer still needs a balanced distributor of its shared
+ingredients. This is a smaller balancer (K ≤ 8) and reuses existing
+templates, so it's not an open problem — but the RFP shouldn't
+pretend it isn't there.
+
+If K > 8 on the input distributor, the ingredient's own
+demand-partitioning recurses naturally: treat the K producer-rows
+as K consumers of the ingredient, and the distributor disappears
+into per-consumer lane families one level up. Recursion depth is
+bounded by the recipe dependency depth (≤ ~10 for anything we'll
+see in practice, including processing-unit chains).
+
+#### Fluids
+
+Fluids (petroleum gas, sulfuric acid, lubricant, etc.) stay pooled
+under `PartitionedPerConsumer` and `PartitionedDecomposed`. Pipe
+networks merge freely, there's no per-lane identity to partition
+against, and the whole premise ("one belt lane per consumer")
+doesn't apply. Partitioning only touches solid-item lane families.
+This is an explicit non-goal, not a deferred TODO.
 
 ### Phase 2 — subtree decomposition (inner pass)
 
@@ -164,9 +269,17 @@ widest recipe forces a 2-shard split (6+6), proportional allocation
 produces a 7-from-(6+6) tap that's ugly. This is the case where
 hierarchical balancer composition would win over decomposition.
 
-**Decision**: don't solve it in Phase 2. Log the event
-(`TraceEvent::LumpyShardTap`) so we can count how often it occurs
-in the real corpus, then decide later whether to tackle it.
+**Decision**: don't solve it in Phase 2 proper, but *prototype one
+hierarchical composition during Phase 1* so we have working code to
+pivot to if K2-2 fires. The prototype can be a single hand-authored
+12→12 = 8→8 + 8→8 + inter-mixer template applied to the
+`advanced_circuit` copper-cable case. That de-risks the
+"if decomposition produces too many lumpy taps, we'll just switch
+to hierarchical composition" fallback by making it an actual
+available fallback rather than a hypothetical one. Log the
+`TraceEvent::LumpyShardTap` event from Phase 2 code as planned;
+the prototype lives alongside it, guarded by a separate strategy
+variant (`HierarchicalComposed` — unexposed user-facing for now).
 
 ### Rejected alternatives
 
@@ -183,45 +296,82 @@ in the real corpus, then decide later whether to tackle it.
 ## Kill criteria
 
 Explicit, observable, falsifiable. Act on these, don't rationalize
-around them.
+around them. Kill criteria are correctness- and bounds-focused; they
+do **not** include "strategy X produces more entities than strategy
+Y on case Z" because that's a tradeoff the user opted into, not a
+bug. See *Observables* below for the tradeoff data we report but
+don't gate on.
 
 **Phase 0 (scaffolding):**
 
 - **K0-1**: If any of the 9 non-ignored e2e tests snapshot-drifts
-  with both flags off after Phase 0 lands, the multi-family
+  with `strategy: Pooled` after Phase 0 lands, the multi-family
   abstraction is not clean — abandon and rethink the types.
-- **K0-2**: If the scaffolding needs > ~400 LOC of new code (not
-  counting tests) just to preserve current behavior, the
+- **K0-2**: If Phase 0a scaffolding needs > ~400 LOC of new code
+  (not counting tests) just to preserve current behavior, the
   `module_id` keying is in the wrong place — likely needs to be
-  deeper in `placer.rs` instead of the planner.
+  deeper in `placer.rs` instead of the planner. Phase 0b (UI +
+  WASM wiring) budget is ~200 LOC.
 
 **Phase 1 (partitioning):**
 
-- **K1-1**: If enabling `demand_partition` on a tier2 case that
-  *doesn't need it* (e.g. `tier2_electronic_circuit_from_ore`)
-  produces a layout with > 1.5× the entity count of the flag-off
-  baseline, the partitioning waste is too steep — reconsider the
-  "one module per consumer" rule.
-- **K1-2**: If a consumer row still emits belt-flow validator
-  warnings (starved inserters) with `demand_partition=true` on a
-  correctly-sized partition and balanced external inputs, the
-  "belts are over-provisioned so variance doesn't matter"
-  assumption is false — we need balancers back, possibly scoped per
-  module.
-- **K1-3**: If the flag combination doesn't produce a valid layout
-  for the target failing case (`advanced_circuit` at a rate that
-  currently trips the 8-lane ceiling) within 2 weeks of Phase 1
-  work, the approach isn't unblocking the motivating problem —
+- **K1-1** (correctness on motivating case): If
+  `PartitionedPerConsumer` doesn't produce a **validator-clean**
+  layout for the target failing case (`advanced_circuit` at a rate
+  that currently trips the 8-lane ceiling) within 2 weeks of Phase
+  1 work, the approach isn't unblocking the motivating problem —
   reassess rather than push further.
+- **K1-2** (load-bearing assumption holds): If a consumer row
+  emits belt-flow validator warnings (starved inserters) under
+  `PartitionedPerConsumer` on a correctly-sized partition with
+  balanced external inputs *and* the partitioner's 75%-utilization
+  gate is satisfied, the "belts over-provisioned" assumption is
+  wrong — we need balancers back, scoped per module.
+- **K1-3** (utilization gate is rare-firing): If
+  `TraceEvent::PartitionRejectedByUtilization` fires on > 20% of
+  the stress corpus at default rates, the 75% threshold is too
+  aggressive and is blocking reasonable cases; retune or treat
+  partition-utilization as a per-case concern.
+- **K1-4** (inert on uninvolved cases): If `PartitionedPerConsumer`
+  doesn't produce an **entity-equivalent** layout to `Pooled` on
+  cases with no multi-consumer intermediates (iron-gear-wheel,
+  anything with K=1 for every intermediate), the partitioning code
+  is doing something it shouldn't when it has nothing to do.
+  "Entity-equivalent" = same validator result, same density score,
+  same entity-type counts (not necessarily byte-equal since
+  module_id≠0 paths will traverse different code). K1-4 replaces
+  the previous "<1.5× entity count" kill criterion with a sharper
+  inertness test.
 
 **Phase 2 (decomposition):**
 
-- **K2-1**: If Phase 2 needs > ~300 LOC outside the Phase-0
-  scaffolding, the split between outer/inner passes is wrong.
-- **K2-2**: If `TraceEvent::LumpyShardTap` fires on >30% of the
-  stress corpus runs with decomposition enabled, lumpiness is the
-  common case, not the edge — pivot to hierarchical composition
-  instead of shipping decomposition.
+- **K2-1** (LOC budget): If Phase 2 needs > ~300 LOC outside the
+  Phase-0 scaffolding, the split between outer/inner passes is
+  wrong.
+- **K2-2** (lumpiness common vs rare): If
+  `TraceEvent::LumpyShardTap` fires on > 30% of the stress corpus
+  runs under `PartitionedDecomposed`, lumpiness is the common case
+  not the edge — pivot to the `HierarchicalComposed` prototype (see
+  Phase 1) rather than shipping decomposition as the standard
+  inner-pass strategy.
+
+## Observables (reported, not gated)
+
+These are numbers we want to watch because they describe the
+tradeoff between strategies, not because we want to prevent the
+tradeoff. They're reported per-run in the e2e scoreboards.
+
+- **Entity count per strategy, per tier test.** Expected:
+  `Pooled` ≤ `PartitionedPerConsumer` ≤ `PartitionedDecomposed` on
+  shallow cases (more strategies = more infrastructure); inverted
+  on deep cases that would otherwise fail under `Pooled`.
+- **Density per strategy, per tier test** (1:1 and tight-bbox).
+  The density metric added in the preceding work on this branch
+  picks up the layout-shape tradeoff directly.
+- **`PartitionRejectedByUtilization` events per case.** Feeds K1-3.
+- **`LumpyShardTap` events per case.** Feeds K2-2.
+- **Max family width per case.** Confirms the "no balancer wider
+  than the largest consumer" property holds.
 
 ## Verification plan
 
@@ -229,35 +379,59 @@ Follow the
 [verification protocol](../CLAUDE.md#verification-protocol-for-layout-engine-changes).
 Specifics:
 
-1. **Flag-off regression**: every e2e test asserts snapshot equality
-   with the pre-RFP baseline. Non-negotiable for Phase 0 landing.
-2. **Flag-on golden cases**: add `tier3_advanced_circuit_partitioned`
-   and `tier4_advanced_circuit_decomposed` e2e tests using a rate
-   that requires >8 cable lanes. Assert zero validator warnings.
-3. **Browser verification**: load
-   `?item=advanced-circuit&rate=<high>&partition=1` and
-   eyeball the layout per CLAUDE.md verification protocol. A zero-
-   warning layout that visibly has disconnected belts is a
+1. **Pooled-strategy regression**: every e2e test asserts snapshot
+   equality under `strategy: Pooled` with the pre-RFP baseline.
+   Non-negotiable for Phase 0 landing (gated by K0-1).
+2. **Strategy inertness on uninvolved cases**: for every tier test
+   where every intermediate has K=1 consumer (iron-gear-wheel, any
+   single-consumer chain), assert that `Pooled` and
+   `PartitionedPerConsumer` produce layouts with the **same
+   validator result, same density score, and same entity-type
+   count breakdown**. This is the K1-4 gate — the sharpest
+   available test that the partitioning code path doesn't do
+   anything when it has nothing to do.
+3. **Strategy-on golden cases**: add
+   `tier3_advanced_circuit_partitioned` and
+   `tier4_advanced_circuit_decomposed` e2e tests at rates that
+   require >8 cable lanes. Assert zero validator warnings.
+4. **Per-strategy tier sweep**: for every existing tier test, run
+   under all three strategies and dump entity count + density
+   scores into the scoreboard. These feed the *Observables*
+   section, not kill criteria — we report the tradeoff, not gate
+   on it.
+5. **Browser verification**: load
+   `?item=advanced-circuit&rate=<high>&strategy=partitioned-per-consumer`
+   and eyeball the layout per CLAUDE.md verification protocol. A
+   zero-warning layout that visibly has disconnected belts is a
    validator blind spot, not a success.
-4. **Trace signals**: confirm
-   `ModulePartitioned{item, modules}`, `ShardSplit{item, shards}`,
-   and `LumpyShardTap{item, consumer}` events fire as expected.
-   Absent trace events = the code path isn't exercising.
-5. **Entity-count diff**: for each tier2/tier3 regression case,
-   compare flag-off vs flag-on entity counts. K1-1 requires this
-   stays under 1.5× on cases that don't need partitioning.
+6. **Trace signals**: confirm `ModulePartitioned{item, modules}`,
+   `ShardSplit{item, shards}`, `LumpyShardTap{item, consumer}`,
+   and `PartitionRejectedByUtilization{item, lane_util}` events
+   fire as expected. Absent trace events = the code path isn't
+   exercising.
 
 ## Phasing
 
-Three independently landable PRs:
+Four independently landable PRs:
 
-- **PR 1 — Phase 0 scaffolding**: multi-family-per-item in the lane
-  planner, with `module_id=0` baseline preserving current behavior.
-  Both flags exist in `LayoutOptions` but are unused code paths.
-- **PR 2 — Phase 1 partitioning**: `demand_partition` flag wired
-  through. Tests for flag-on path. Browser toggle + URL state.
-- **PR 3 — Phase 2 decomposition**: `subtree_decompose` flag wired
-  through. Lumpy-tap trace event. Tests for flag-on path.
+- **PR 1 — Phase 0a core scaffolding**: multi-family-per-item in
+  the lane planner, with `module_id=0` per item under
+  `strategy: Pooled` preserving current behavior. `LayoutStrategy`
+  enum + `LayoutOptions.strategy` field added but only `Pooled`
+  arm is reachable.
+- **PR 2 — Phase 0b surface wiring**: WASM binding for
+  `strategy`, web app dropdown, URL state, threaded through call
+  sites. Still no behavior change (non-`Pooled` arms still
+  unreachable or panic!).
+- **PR 3 — Phase 1 partitioning**: `PartitionedPerConsumer` arm
+  wired through. Shared-upstream balancer for multi-row producers.
+  Utilization gate. Fluids-stay-pooled carve-out. Tests for
+  strategy-on path. **Includes** hand-authored `HierarchicalComposed`
+  prototype for the 12→12 case, guarded behind the unexposed
+  variant.
+- **PR 4 — Phase 2 decomposition**: `PartitionedDecomposed` arm
+  wired through. Lumpy-tap trace event. Tests for strategy-on
+  path.
 
 Each PR must pass all kill criteria for its phase before the next
 PR starts.
@@ -266,51 +440,72 @@ PR starts.
 
 Living checklist — update as work progresses.
 
-### Phase 0 — shared scaffolding
+### Phase 0a — core scaffolding
 
-- [ ] Add `LayoutOptions` struct to `crates/core/src/bus/layout.rs`
-      with both flags defaulting to `false`
+- [ ] Add `LayoutStrategy` enum + `LayoutOptions` struct to
+      `crates/core/src/bus/layout.rs` (default `Pooled`)
 - [ ] Thread `LayoutOptions` through `build_bus_layout` call sites
-      (core, wasm-bindings, examples, tests)
+      (core, examples, tests)
 - [ ] Extend `LaneFamily` identity to include `module_id: u32`
-- [ ] Update `lane_order.rs` exact-search to key on `(item, module_id)`
+- [ ] Update `lane_order.rs` exact-search to key on
+      `(item, module_id)`
 - [ ] Update `stamp_family_balancer` to accept the tuple
 - [ ] Update tap-off routing in `templates.rs` for tuple lookup
 - [ ] Add consumer→module mapping defaulting to `(item, 0)`
-- [ ] Verify all 9 e2e tests pass with zero snapshot drift (K0-1)
-- [ ] Verify LOC budget (K0-2)
-- [ ] Expose flags on WASM bindings (no-op when false)
+- [ ] Non-`Pooled` strategy arms panic with "not yet implemented"
+- [ ] Verify all 9 e2e tests pass with zero snapshot drift under
+      `Pooled` (K0-1)
+- [ ] Verify Phase 0a LOC budget ≤ 400 (K0-2)
+
+### Phase 0b — surface wiring
+
+- [ ] Expose `strategy` on WASM bindings
+- [ ] Strategy dropdown in `web/src/ui/sidebar.ts`
+- [ ] URL state: `?strategy=...`
+- [ ] Verify Phase 0b LOC budget ≤ 200
 
 ### Phase 1 — demand-partitioning
 
-- [ ] Add `ModulePartitioned` trace event
+- [ ] Add `ModulePartitioned`,
+      `PartitionRejectedByUtilization` trace events
 - [ ] Implement outer-pass partitioning in `lane_planner.rs`
+      under `strategy == PartitionedPerConsumer`
+- [ ] Wire in 75%-utilization gate; emit rejection event rather
+      than silently fall back
 - [ ] Implement producer-row splitting in `placer.rs`
-- [ ] Implement shared-ingredient tee splitter (≤ 8-wide)
+- [ ] Implement shared-upstream balancer (reuses
+      `balancer_library.rs`, not a new splitter-tree primitive)
+- [ ] Fluids-stay-pooled carve-out in `lane_planner.rs`
+- [ ] **Hand-authored `HierarchicalComposed` prototype** for
+      12→12 = 8→8 + 8→8 + mixer on the `advanced_circuit` copper
+      case; strategy variant is unexposed to UI for now
 - [ ] Add `tier3_advanced_circuit_partitioned` e2e test
-- [ ] Browser UI toggle in `web/src/ui/sidebar.ts`
-- [ ] URL state: `?partition=1`
-- [ ] Verify K1-1 on tier2 cases
-- [ ] Verify K1-2 on tier3 partitioned case
-- [ ] Verify K1-3 on motivating failure case
+- [ ] Per-tier strategy sweep in scoreboards (all 3 strategies ×
+      all tier tests)
+- [ ] Verify K1-1 on motivating failure case
+- [ ] Verify K1-2 on stress corpus
+- [ ] Verify K1-3 utilization gate rate ≤ 20%
+- [ ] Verify K1-4 inertness on single-consumer cases
 
 ### Phase 2 — subtree decomposition
 
 - [ ] Add `ShardSplit` and `LumpyShardTap` trace events
 - [ ] Implement widest-recipe walker
 - [ ] Implement proportional shard allocator
-- [ ] Wire into `demand_partition` outer pass
+- [ ] Wire into `PartitionedDecomposed` outer pass
 - [ ] Add `tier4_advanced_circuit_decomposed` e2e test
-- [ ] Browser URL state: `?decompose=1`
 - [ ] Verify K2-1 LOC budget
 - [ ] Verify K2-2 lumpy-tap rate on stress corpus
+- [ ] If K2-2 fires: promote `HierarchicalComposed` prototype to
+      exposed user-facing variant; archive `PartitionedDecomposed`
 
-### Rollout (post-both-phases)
+### Rollout (post-all-phases)
 
-- [ ] Run full stress corpus with both flags on; compare
-      scoreboards to baseline
-- [ ] Decide per kill criteria: flip defaults, keep as opt-in, or
-      archive this RFP
+- [ ] Run full stress corpus under all strategies; publish
+      per-strategy scoreboards so users can see the tradeoffs
+- [ ] Decide per kill criteria: promote strategies to tier test
+      coverage, keep as opt-in, or archive specific strategy
+      variants
 
 ## Decision log
 
@@ -324,3 +519,55 @@ prevents "why did we drop this?" amnesia.
   (c) "belts over-provisioned" is the load-bearing assumption
   behind dropping the pool-balancer. Both features to land as
   off-by-default flags to keep the current path as baseline.*
+
+- *2026-04-24 (revision pass) — Second-pass review against the draft
+  above produced the following changes:*
+  - *Replaced the two-boolean option surface with a
+    `LayoutStrategy` enum. Motivated by (a) avoiding invalid
+    combinations (`decompose && !partition`), and (b) future
+    strategies (escargio `Folded`) composing cleanly without a
+    cartesian product of flags.*
+  - *Reframed the strategy model: `Pooled`,
+    `PartitionedPerConsumer`, and `PartitionedDecomposed` are
+    **peer citizens**, not degradations or upgrades of a default.
+    The layout engine respects what the user selected; no silent
+    auto-downgrade when a strategy can't satisfy a case — instead
+    produce an invalid layout with a loud diagnostic so the user
+    knows the shape they picked doesn't fit. Rationale: different
+    recipes and different users prefer different shapes, and
+    silently picking the "safe" one hides that tradeoff.*
+  - *Defined "consumer" explicitly as one consuming recipe-row,
+    not one consuming machine or one consuming item. Under-defined
+    in the original draft.*
+  - *Made the "belts over-provisioned" assumption numeric: 75% of
+    belt tier capacity is the utilization ceiling. A dedicated
+    trace event reports violations, which seeds K1-3.*
+  - *Reshaped K1-1 from "entity count < 1.5× on irrelevant cases"
+    to K1-4 "entity-equivalent layout on single-consumer cases".
+    Entity count per strategy becomes an **observable** (reported
+    in scoreboards) not a kill criterion, because the entire point
+    of offering multiple strategies is that users see the
+    tradeoff.*
+  - *Honest about the shared-upstream distributor: it's a
+    small-scale balancer reusing `balancer_library.rs`, not a
+    "simple tee". The "no pool-balancer" claim applies at the
+    output side, not the input side.*
+  - *Fluids explicitly out of scope for partitioning (pipe
+    networks merge freely, no per-lane identity to partition).*
+  - *Added the `HierarchicalComposed` prototype to Phase 1 to
+    de-risk the K2-2 fallback: if decomposition produces too many
+    lumpy taps, we pivot to a strategy that already exists in
+    working code rather than a hypothetical one.*
+  - *Split Phase 0 into 0a (core, ≤400 LOC) and 0b (surface
+    wiring, ≤200 LOC) for reviewability. Previous single budget
+    of 400 LOC was optimistic given the WASM-and-UI-threading
+    costs.*
+  - *Added K1-4 inertness test + snapshot-equality-on-irrelevant-
+    cases verification step. Sharpest available "new code path
+    does nothing when it should do nothing" check.*
+  - *Noted that escargio (folded layouts, separate upcoming RFP)
+    will slot in as additional `LayoutStrategy` variants on top of
+    this scaffolding. The `module_id` keying in Phase 0a should
+    not bake in any row-orientation assumption; a row's
+    `(item, module_id)` identity is orthogonal to its spatial
+    orientation.*
