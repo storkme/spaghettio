@@ -107,16 +107,19 @@ pub enum LayoutStrategy {
     PartitionedDecomposed,
 }
 
+// New struct. Today's signature is
+// `build_bus_layout(solver_result, max_belt_tier)`; the existing
+// `max_belt_tier` arg folds in here, and future per-call options
+// (e.g. escargio's fold parameters) attach as additional fields.
 pub struct LayoutOptions {
     pub strategy: LayoutStrategy,   // default: LayoutStrategy::Pooled
-    // ... existing options merged in
+    pub max_belt_tier: Option<String>,
 }
 
 pub fn build_bus_layout(
     solver: &SolverResult,
-    belt_tier: BeltTier,
     opts: LayoutOptions,
-) -> LayoutResult;
+) -> Result<LayoutResult, String>;
 ```
 
 `LayoutStrategy::default() == Pooled`. With the default selected the
@@ -214,6 +217,12 @@ granularity to make `LaneFamily` splitting meaningful.
    consumer, each sized to that consumer's demand.
 5. No pool-balancer is stamped. If K > 1, no single-family balancer
    needs to be wider than the widest single consumer's lane count.
+6. The K producer-rows allocated in step 4 are themselves K
+   consumers of every shared upstream ingredient. Step 1 applies
+   recursively up-tree: an ingredient with K' = K consuming
+   producer-rows for item X gets K' lane families of its own. This
+   is what bounds the input distributor's width; see *The
+   shared-upstream distribution* below for the K' > 8 case.
 
 #### The shared-upstream distribution — not "just a tee"
 
@@ -250,8 +259,9 @@ This is an explicit non-goal, not a deferred TODO.
 
 ### Phase 2 — subtree decomposition (inner pass)
 
-When `subtree_decompose = true` (requires `demand_partition = true`
-for the outer framing — they compose, not alternate):
+When `strategy == PartitionedDecomposed`, the outer pass runs
+exactly as `PartitionedPerConsumer` (Phase 1), then the inner pass
+runs over each resulting module:
 
 For each partitioned module, walk the upstream subtree. If any
 recipe's required belt count exceeds 8, shard the whole *module*
@@ -310,17 +320,22 @@ don't gate on.
 - **K0-2**: If Phase 0a scaffolding needs > ~400 LOC of new code
   (not counting tests) just to preserve current behavior, the
   `module_id` keying is in the wrong place — likely needs to be
-  deeper in `placer.rs` instead of the planner. Phase 0b (UI +
-  WASM wiring) budget is ~200 LOC.
+  deeper in `placer.rs` instead of the planner.
+- **K0-3**: If Phase 0b (UI + WASM wiring) needs > ~200 LOC of new
+  code, the strategy plumbing is leaking through too many call
+  sites — `LayoutOptions` is the wrong shape or the WASM binding
+  is exposing internals it shouldn't.
 
 **Phase 1 (partitioning):**
 
-- **K1-1** (correctness on motivating case): If
-  `PartitionedPerConsumer` doesn't produce a **validator-clean**
-  layout for the target failing case (`advanced_circuit` at a rate
-  that currently trips the 8-lane ceiling) within 2 weeks of Phase
-  1 work, the approach isn't unblocking the motivating problem —
-  reassess rather than push further.
+- **K1-1** (correctness on motivating case): Once the
+  `PartitionedPerConsumer` code path is wired and the partitioner's
+  75%-utilization gate is satisfied for the smallest valid
+  partition, the target failing case (`advanced_circuit` at a rate
+  that currently trips the 8-lane ceiling) must produce a
+  **validator-clean** layout. If validator warnings remain on the
+  smallest gate-passing partition, the approach isn't unblocking
+  the motivating problem — reassess rather than push further.
 - **K1-2** (load-bearing assumption holds): If a consumer row
   emits belt-flow validator warnings (starved inserters) under
   `PartitionedPerConsumer` on a correctly-sized partition with
@@ -409,6 +424,14 @@ Specifics:
    and `PartitionRejectedByUtilization{item, lane_util}` events
    fire as expected. Absent trace events = the code path isn't
    exercising.
+7. **`HierarchicalComposed` prototype smoke test**: even though
+   the variant is unexposed in the UI, exercise it via a single
+   `#[ignore]`-able e2e test (or a `#[cfg(test)]`-only entry
+   point) that runs the hand-authored 12→12 = 8→8 + 8→8 + mixer
+   on the `advanced_circuit` copper-cable case. Assert zero
+   validator warnings. The point of the prototype is to be a
+   real, exercised fallback for K2-2 — an unexercised prototype
+   doesn't de-risk anything.
 
 ## Phasing
 
@@ -479,6 +502,9 @@ Living checklist — update as work progresses.
 - [ ] **Hand-authored `HierarchicalComposed` prototype** for
       12→12 = 8→8 + 8→8 + mixer on the `advanced_circuit` copper
       case; strategy variant is unexposed to UI for now
+- [ ] Smoke test for the `HierarchicalComposed` prototype
+      (validator-clean assertion on the 12→12 case) — gates the
+      "real fallback for K2-2" claim
 - [ ] Add `tier3_advanced_circuit_partitioned` e2e test
 - [ ] Per-tier strategy sweep in scoreboards (all 3 strategies ×
       all tier tests)
@@ -571,3 +597,26 @@ prevents "why did we drop this?" amnesia.
     not bake in any row-orientation assumption; a row's
     `(item, module_id)` identity is orthogonal to its spatial
     orientation.*
+
+- *2026-04-24 (review pass) — Third pass against the revised draft.
+  Fixes:*
+  - *Phase 2 section still referenced the pre-revision booleans
+    (`subtree_decompose = true` / `demand_partition = true`).
+    Rewritten in `LayoutStrategy` terms.*
+  - *Code-block `LayoutOptions` was implied to extend an existing
+    struct; clarified that it is new and absorbs today's
+    `max_belt_tier` arg. Function signature corrected to
+    `Result<LayoutResult, String>`.*
+  - *Added K0-3 to gate Phase 0b's ≤200 LOC budget (the task
+    tracker checkbox previously had no kill criterion behind it).*
+  - *Reframed K1-1 from a wall-clock criterion ("within 2 weeks")
+    to a behavioural one (validator warnings on the smallest
+    gate-passing partition). Time-based kill criteria are hard
+    to act on consistently.*
+  - *Made the up-tree recursion of the partitioning algorithm
+    explicit as step 6, instead of leaving it to be inferred from
+    the shared-upstream prose.*
+  - *Added verification step 7 + a task-tracker checkbox for a
+    smoke test of the `HierarchicalComposed` prototype. The
+    prototype's job is to be a real, exercised fallback for
+    K2-2 — an unexercised one doesn't de-risk anything.*
