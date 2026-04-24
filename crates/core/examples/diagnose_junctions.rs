@@ -364,7 +364,7 @@ fn run_case(label: &str, recipe: &str, rate: f64, machine: &str, inputs: &[&str]
             }
         }
         for (item, ys) in &mut rows_by_item {
-            let mut unique: Vec<i32> = ys.iter().copied().collect();
+            let mut unique: Vec<i32> = ys.to_vec();
             unique.sort_unstable();
             unique.dedup();
             println!("  row:{} ys: {:?}", item, unique);

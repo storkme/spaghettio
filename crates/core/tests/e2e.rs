@@ -16,6 +16,7 @@ use fucktorio_core::analysis::{self, BlueprintAnalysis};
 use fucktorio_core::blueprint;
 use fucktorio_core::blueprint_parser;
 use fucktorio_core::bus::layout;
+use fucktorio_core::density;
 use fucktorio_core::models::{LayoutResult, SolverResult};
 use fucktorio_core::snapshot::{
     LayoutSnapshot, SnapshotContext, SnapshotParams, SnapshotSource,
@@ -222,6 +223,29 @@ fn run_e2e_with_exclusions(
     // Drain trace events into the result so callers (and dump_snapshot below)
     // can read them without the RAII guard wiping them on drop.
     let trace_events = trace::drain_events();
+
+    // Layout size + density (1:1 square) report — mirrors the
+    // `Layout: N entities, WxH` style already used in diagnostic/stress tests,
+    // and prints for every tier test so the pack-efficiency distribution is
+    // visible at a glance with `--nocapture`.
+    let density_score = density::score_density(&layout, (1, 1));
+    eprintln!(
+        "Layout: {} entities, {}x{}; density: {:.1}% ({}x{} rect, {} filled / {} total tiles)",
+        layout.entities.len(),
+        layout.width,
+        layout.height,
+        density_score.density * 100.0,
+        density_score.rect_width,
+        density_score.rect_height,
+        density_score.filled_tiles,
+        density_score.rect_area,
+    );
+    if density_score.filled_exceeds_rect {
+        eprintln!(
+            "  WARNING: filled tiles ({}) exceeds rect area ({}) — entity footprints overlap",
+            density_score.filled_tiles, density_score.rect_area,
+        );
+    }
 
     let result = E2EResult {
         solver_result,
