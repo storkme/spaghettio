@@ -157,7 +157,7 @@ EOF
     echo "launching pi (prompt=$(printf '%s' "$BASE_PROMPT" | wc -c) chars)..."
 
     set +e
-    pi "${PI_BACKEND_ARGS[@]}" --no-session -p "$BASE_PROMPT" 2>&1 | tee "$LOG"
+    pi "${PI_BACKEND_ARGS[@]}" --mode json --no-session -p "$BASE_PROMPT" 2>&1 | tee "$LOG"
     rc=${PIPESTATUS[0]}
     set -e
 
