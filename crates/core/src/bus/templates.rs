@@ -734,6 +734,7 @@ pub fn fluid_input_row(
     output_item: &str,
     input_belt: &str,
     output_belt: &str,
+    lane_split: bool,
     output_east: bool,
 ) -> (Vec<PlacedEntity>, i32, Vec<(String, i32, i32)>) {
     let msz = machine_size as i32;
@@ -751,6 +752,16 @@ pub fn fluid_input_row(
     // Solid input belt pickup at mx+1, west-flow output drop at mx+1 → trim 1 tile each.
     let in_tail = east_tail_skip(msz, 1);
     let out_tail = if output_east { 0 } else { east_tail_skip(msz, 1) };
+
+    // Lane-split: machines go in two groups with a LANE_SPLIT_GAP between them.
+    // The sideload bridge in the gap flips some output onto the near lane so
+    // both output-belt lanes run at ~full throughput. Currently wired up for
+    // chemical-plant only (the common plastic-bar / light-oil-cracking / etc.
+    // case); the AM2+-with-fluid path below still uses single-group layout.
+    let lane_split = lane_split && machine_count >= 2 && machine_entity == "chemical-plant";
+    let mxs = machine_xs(x_offset, machine_count, pitch, lane_split);
+    let g1 = if lane_split { machine_count / 2 } else { machine_count };
+    let last_mx = *mxs.last().expect("machine_count >= 1");
 
     if machine_entity == "chemical-plant" {
         // Simple single-fluid pattern: continuous east-west pipe line at y+0,
@@ -773,9 +784,8 @@ pub fn fluid_input_row(
         let out_belt_y = machine_y + msz + 1;
         let out_dir = output_dir(output_east);
 
-        for i in 0..machine_count {
-            let mx = x_offset + i as i32 * pitch;
-            let is_last = i == machine_count - 1;
+        for &mx in &mxs {
+            let is_last = mx == last_mx;
             let in_stop = if is_last { msz - in_tail } else { msz };
             let out_stop = if is_last { msz - out_tail } else { msz };
 
@@ -883,6 +893,50 @@ pub fn fluid_input_row(
             // can connect its horizontal branch to any x between mx and
             // mx+msz-1; we pick port_x for consistency with the UG column.
             fluid_port_pipes.push((fluid_item.to_string(), mx + port_dx, y_offset));
+        }
+
+        // Lane-split gap: between group-1 and group-2 machines. Fill the
+        // `LANE_SPLIT_GAP` (3) tiles with:
+        //   y+0: continuous pipe so the fluid network stays unbroken between
+        //        the two groups (no UG needed — surface pipes are enough over
+        //        a 3-tile gap).
+        //   y+2: continuous solid input belt (EAST) so items from group 1's
+        //        input tap-off flow across into group 2.
+        //   y+7 / y+8: `sideload_bridge` — lifts a chunk of group-1 output
+        //        from the west-flowing output belt up to a 3-tile sidetrack
+        //        and drops it back on the opposite lane so the output belt
+        //        runs fully-loaded on both lanes.
+        if lane_split {
+            let gap_start_x = x_offset + g1 as i32 * pitch;
+            for dx in 0..LANE_SPLIT_GAP {
+                entities.push(PlacedEntity {
+                    name: "pipe".to_string(),
+                    x: gap_start_x + dx,
+                    y: y_offset,
+                    carries: Some(fluid_item.to_string()),
+                    segment_id: fluid_in_seg.clone(),
+                    ..Default::default()
+                });
+                entities.push(PlacedEntity {
+                    name: input_belt.to_string(),
+                    x: gap_start_x + dx,
+                    y: belt_y,
+                    direction: EntityDirection::East,
+                    carries: Some(solid_item.to_string()),
+                    segment_id: belt_in_seg.clone(),
+                    ..Default::default()
+                });
+            }
+            // Output belt row offset from y_offset: out_belt_y - y_offset.
+            let output_row_dy = out_belt_y - y_offset;
+            entities.extend(sideload_bridge(
+                gap_start_x,
+                y_offset,
+                output_row_dy,
+                output_belt,
+                output_item,
+                output_east,
+            ));
         }
 
         (entities, row_height, fluid_port_pipes)
@@ -2384,6 +2438,7 @@ mod tests {
             "plastic-bar",
             "transport-belt",
             "transport-belt",
+            false, // lane_split
             false,
         );
         assert_eq!(height, 9); // msz + 6 = 3 + 6
@@ -2467,6 +2522,7 @@ mod tests {
             "plastic-bar",
             "transport-belt",
             "transport-belt",
+            false, // lane_split
             false,
         );
         use crate::bus::placer::RowKind;
@@ -2489,6 +2545,7 @@ mod tests {
             "plastic-bar",
             "transport-belt",
             "transport-belt",
+            false, // lane_split
             false,
         );
         // T-junction pipe at (10, 5) — trunk row
@@ -2524,6 +2581,7 @@ mod tests {
             "output-item",
             "transport-belt",
             "transport-belt",
+            false, // lane_split
             false,
         );
         // Non-T-shape path uses old 7-tile height (msz+4)

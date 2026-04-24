@@ -308,12 +308,18 @@ fn row_kind(spec: &MachineSpec) -> RowKind {
 
 /// Whether lane splitting is applicable to a spec/count combination.
 ///
-/// Only SingleInput and DualInput rows support lane splitting.
+/// SingleInput, DualInput, and FluidInput (chemical-plant) rows support
+/// lane splitting today. TripleInput / FluidDualInput / FluidMultiInput
+/// row templates don't emit a `sideload_bridge` yet, so the placer keeps
+/// them at single-lane throughput.
 fn can_lane_split(spec: &MachineSpec, count: usize) -> bool {
     if count < 2 {
         return false;
     }
-    matches!(row_kind(spec), RowKind::SingleInput | RowKind::DualInput)
+    let kind = row_kind(spec);
+    let fluid_input_lane_split_supported =
+        matches!(kind, RowKind::FluidInput) && spec.entity == "chemical-plant";
+    matches!(kind, RowKind::SingleInput | RowKind::DualInput) || fluid_input_lane_split_supported
 }
 
 /// Build one row of machines. Returns (entities, span, row_width).
@@ -465,6 +471,7 @@ pub(crate) fn build_one_row(
                 output_item,
                 in_belt,
                 out_belt,
+                lane_split,
                 output_east,
             );
             fluid_port_ys = port_pipes.first().map(|&(_, _, py)| vec![py]).unwrap_or_default();
@@ -733,8 +740,19 @@ pub fn place_rows(
         let output_rate = first_solid_output_rate * total_count as f64;
         let has_fluid = spec.inputs.iter().any(|f| f.is_fluid);
 
-        // Fluid rows and triple-solid rows don't support lane splitting — use single-lane math
-        let max_per_row = if has_fluid || solid_inputs_count >= 3 {
+        // Row kinds whose templates do NOT emit a `sideload_bridge` stay
+        // on single-lane output math. FluidInput on chemical-plant DOES
+        // have a bridge (see `fluid_input_row`), so it joins the dual-lane
+        // branch; other fluid row shapes (FluidDualInput, FluidMultiInput,
+        // AM2-with-fluid FluidInput path) and triple-solid rows stay
+        // single-lane until their templates grow bridges.
+        let kind = row_kind(spec);
+        let has_bridge_template = matches!(kind, RowKind::SingleInput | RowKind::DualInput)
+            || (matches!(kind, RowKind::FluidInput) && spec.entity == "chemical-plant");
+        let single_lane = !has_bridge_template;
+        let _ = has_fluid;
+        let _ = solid_inputs_count;
+        let max_per_row = if single_lane {
             let ob = belt_entity_for_rate(output_rate * 2.0, max_belt_tier);
             max_machines_for_belt(spec, ob, max_belt_tier)
         } else {
@@ -1496,7 +1514,11 @@ mod tests {
     }
 
     #[test]
-    fn lane_split_does_not_apply_to_fluid_rows() {
+    fn lane_split_applies_to_chemical_plant_fluid_rows() {
+        // Chemical-plant fluid rows DO support lane splitting — the template
+        // emits a `sideload_bridge` between two machine groups, matching the
+        // SingleInput / DualInput row pattern. See the Phase-2 tier4 fix
+        // landed to remove the artificial single-lane cap on plastic-bar.
         let spec = MachineSpec {
             entity: "chemical-plant".to_string(),
             recipe: "plastic-bar".to_string(),
@@ -1518,6 +1540,24 @@ mod tests {
                 rate: 2.0,
                 is_fluid: false,
             }],
+        };
+        assert!(can_lane_split(&spec, 3));
+    }
+
+    #[test]
+    fn lane_split_still_blocked_for_am2_with_fluid() {
+        // AM2+-with-fluid still uses the single-group path in
+        // `fluid_input_row`, so `can_lane_split` should keep it single-lane
+        // until that template sprouts a bridge too.
+        let spec = MachineSpec {
+            entity: "assembling-machine-2".to_string(),
+            recipe: "example".to_string(),
+            count: 3.0,
+            inputs: vec![
+                ItemFlow { item: "widget".to_string(), rate: 1.0, is_fluid: false },
+                ItemFlow { item: "lubricant".to_string(), rate: 2.0, is_fluid: true },
+            ],
+            outputs: vec![ItemFlow { item: "thing".to_string(), rate: 2.0, is_fluid: false }],
         };
         assert!(!can_lane_split(&spec, 3));
     }
