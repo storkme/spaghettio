@@ -862,24 +862,38 @@ pub fn fluid_input_row(
 
     // Lane-split: machines go in two groups with a LANE_SPLIT_GAP between them.
     // The sideload bridge in the gap flips some output onto the near lane so
-    // both output-belt lanes run at ~full throughput. Currently wired up for
-    // chemical-plant only (the common plastic-bar / light-oil-cracking / etc.
-    // case); the AM2+-with-fluid path below still uses single-group layout.
-    let lane_split = lane_split && machine_count >= 2 && machine_entity == "chemical-plant";
+    // both output-belt lanes run at ~full throughput.
+    let lane_split = lane_split && machine_count >= 2;
     let mxs = machine_xs(x_offset, machine_count, pitch, lane_split);
     let g1 = if lane_split { machine_count / 2 } else { machine_count };
     let last_mx = *mxs.last().expect("machine_count >= 1");
 
-    if machine_entity == "chemical-plant" {
-        // Simple single-fluid pattern: continuous east-west pipe line at y+0,
-        // a dedicated UG-in row at y+1, the solid belt at y+2, and UG-out +
-        // inserter at y+3 adjacent to the machine port.
+    // Inserter column: must be distinct from the fluid-port column
+    // (`port_dx`) so pipe and inserter never share a tile. chemical-plant
+    // has `port_dx == 0` so the inserter sits at `mx + 1`; AM2/AM3 have
+    // `port_dx == 1` so the inserter sits at `mx + 0`.
+    let inserter_dx: i32 = if port_dx == 0 { 1 } else { 0 };
+    // `in_tail` captures the current hard-coded assumption that the solid
+    // belt is picked at `mx + 1`. Post-unification the actual pickup
+    // column is `mx + inserter_dx`, so recompute the trim to match.
+    let _ = in_tail;
+    let in_tail = east_tail_skip(msz, inserter_dx);
+
+    {
+        // Unified T-junction pattern (formerly chemical-plant-only):
+        // continuous east-west pipe line at y+0, a dedicated UG-in row at
+        // y+1, the solid belt at y+2, and UG-out + inserter at y+3 adjacent
+        // to the machine port. The same layout works for both chemical-
+        // plant (`port_dx == 0`, inserter at `mx + 1`) and AM2/AM3
+        // (`port_dx == 1`, inserter at `mx + 0`): the UG pair gives
+        // machine-to-machine fluid connectivity via the y+0 header pipe
+        // regardless of which column the fluid port sits on.
         //
         //   y+0: pipe row (msz tiles per machine, continuous across the row).
         //         Bus router extends this line west/east to the fluid trunk.
         //   y+1: UG pipe IN (SOUTH) at (port_x, y+1); rest of row empty.
         //   y+2: solid belt (crosses above the UG tunnel)
-        //   y+3: UG pipe OUT (NORTH) at (port_x, y+3) + inserter at (mx+1)
+        //   y+3: UG pipe OUT (NORTH) at (port_x, y+3) + inserter at (mx+inserter_dx)
         //   y+4..y+6: machine (3×3)
         //   y+7: output inserter
         //   y+8: output belt
@@ -948,11 +962,10 @@ pub fn fluid_input_row(
                 segment_id: fluid_in_seg.clone(),
                 ..Default::default()
             });
-            // Inserter column: not at the UG pipe column (port_dx=0 for chemical-plant)
-            // so place at mx+1 (center of machine).
+            // Inserter column: distinct from the fluid UG at `port_dx`.
             entities.push(PlacedEntity {
                 name: "inserter".to_string(),
-                x: mx + 1,
+                x: mx + inserter_dx,
                 y: interface_y,
                 direction: EntityDirection::South,
                 carries: Some(solid_item.to_string()),
@@ -1032,120 +1045,6 @@ pub fn fluid_input_row(
                 output_item,
                 output_east,
             );
-        }
-
-        (entities, row_height, fluid_port_pipes)
-    } else {
-        // Non-chemical-plant machines (assembling-machine-2/3 with a fluid
-        // ingredient): use a regular pipe adjacent to the machine's fluid port.
-        //   y+0: solid belt
-        //   y+1: pipe at (mx+port_dx) + inserter at (mx+inserter_dx)
-        //   y+2..y+2+msz-1: machine
-        //   y+2+msz: output inserter
-        //   y+2+msz+1: output belt
-        //
-        // `inserter_dx` avoids the `port_dx` column so the pipe and the
-        // inserter don't collide. For AM2/AM3 (`port_dx == 1`) we sit the
-        // inserter at `mx+2`; earlier code hard-coded `mx+1`, which
-        // collided with the fluid-port pipe for these entities. The solid
-        // input belt's east-tail trim tracks `inserter_dx` so the last
-        // machine's belt still ends at the pickup column.
-        //
-        // **Multi-machine AM2+fluid is still broken** — each machine's
-        // pipe at `(mx + port_dx, y+1)` sits in isolation (the adjacent
-        // column is the inserter), and `fluid_port_pipes` only reports
-        // `i == 0`, so the bus router only taps one pipe. Machines
-        // 1..n-1 end up fluid-starved. Fixing multi-machine delivery is
-        // a separate change (either a UG-pipe pair tunnelling under the
-        // inserter column, or re-layout onto the chemical-plant-style
-        // continuous-pipe pattern). Until then, `can_lane_split` keeps
-        // AM2+fluid single-group, which also avoids compounding the
-        // multi-machine issue with a wider gap.
-        let inserter_dx = if port_dx == 1 { 2 } else { 1 };
-        let am2_in_tail = east_tail_skip(msz, inserter_dx);
-        let row_height = msz + 4;
-        let out_dir = output_dir(output_east);
-
-        for i in 0..machine_count {
-            let mx = x_offset + i as i32 * pitch;
-            let is_last = i == machine_count - 1;
-            let in_stop = if is_last { msz - am2_in_tail } else { msz };
-            let out_stop = if is_last { msz - out_tail } else { msz };
-
-            // Solid input belt (machine_size tiles wide)
-            for dx in 0..in_stop {
-                entities.push(PlacedEntity {
-                    name: input_belt.to_string(),
-                    x: mx + dx,
-                    y: y_offset,
-                    direction: EntityDirection::East,
-                    carries: Some(solid_item.to_string()),
-                    segment_id: belt_in_seg.clone(),
-                    ..Default::default()
-                });
-            }
-
-            // y+1: inserter for solid (off the fluid-port column)
-            entities.push(PlacedEntity {
-                name: "inserter".to_string(),
-                x: mx + inserter_dx,
-                y: y_offset + 1,
-                direction: EntityDirection::South,
-                carries: Some(solid_item.to_string()),
-                segment_id: inserter_in_seg.clone(),
-                ..Default::default()
-            });
-
-            // Regular pipe at the fluid port position (distinct tile from the inserter)
-            entities.push(PlacedEntity {
-                name: "pipe".to_string(),
-                x: mx + port_dx,
-                y: y_offset + 1,
-                carries: Some(fluid_item.to_string()),
-                segment_id: fluid_in_seg.clone(),
-                ..Default::default()
-            });
-
-            if i == 0 {
-                fluid_port_pipes.push((fluid_item.to_string(), mx + port_dx, y_offset + 1));
-            }
-
-            // Machine
-            entities.push(PlacedEntity {
-                name: machine_entity.to_string(),
-                x: mx,
-                y: y_offset + 2,
-                direction: EntityDirection::North,
-                recipe: Some(recipe.to_string()),
-                segment_id: machine_seg.clone(),
-                ..Default::default()
-            });
-
-            // Output inserter
-            let out_ins_y = y_offset + 2 + msz;
-            entities.push(PlacedEntity {
-                name: "inserter".to_string(),
-                x: mx + 1,
-                y: out_ins_y,
-                direction: EntityDirection::South,
-                carries: Some(output_item.to_string()),
-                segment_id: inserter_out_seg.clone(),
-                ..Default::default()
-            });
-
-            // Output belt
-            let out_belt_y = y_offset + 2 + msz + 1;
-            for dx in 0..out_stop {
-                entities.push(PlacedEntity {
-                    name: output_belt.to_string(),
-                    x: mx + dx,
-                    y: out_belt_y,
-                    direction: out_dir,
-                    carries: Some(output_item.to_string()),
-                    segment_id: belt_out_seg.clone(),
-                    ..Default::default()
-                });
-            }
         }
 
         (entities, row_height, fluid_port_pipes)
@@ -2759,8 +2658,12 @@ mod tests {
 
     #[test]
     fn fluid_input_row_assembling_machine() {
-        // assembling-machine-2 uses the non-T-shape path: regular pipe at port position
-        // port_dx=1 for assembling-machine-2
+        // AM2 uses the same T-junction pattern as chemical-plant now —
+        // continuous pipe header at y+0, UG-in at y+1, solid belt at y+2,
+        // UG-out + inserter at y+3. The only difference is
+        // `port_dx == 1` (vs `port_dx == 0` for chemical-plant), so the
+        // UG pair sits at the centre column and the inserter at
+        // `mx + 0` (the first non-port column).
         let (entities, height, fluid_port_pipes) = fluid_input_row(
             "some-recipe",
             "assembling-machine-2",
@@ -2776,35 +2679,49 @@ mod tests {
             false, // lane_split
             false,
         );
-        // Non-T-shape path uses old 7-tile height (msz+4)
-        assert_eq!(height, 7);
-        // fluid_port_pipes reports the pipe tile at y+1
-        assert_eq!(fluid_port_pipes, vec![("fluid-item".to_string(), 1, 1)]);
+        // Unified T-junction height: msz + 6 = 9.
+        assert_eq!(height, 9);
+        // fluid_port_pipes reports a tile on the y+0 header row.
+        assert_eq!(fluid_port_pipes, vec![("fluid-item".to_string(), 1, 0)]);
 
-        // Pipe at (0+1, 1) = (1, 1) — the machine's fluid port adjacency.
-        let pipes: Vec<_> = entities
-            .iter()
-            .filter(|e| e.x == 1 && e.y == 1 && e.name == "pipe")
-            .collect();
-        assert_eq!(pipes.len(), 1, "Expected a pipe at (1, 1)");
-        assert_eq!(pipes[0].carries.as_deref(), Some("fluid-item"));
+        // Continuous pipe row at y=0 spanning the full machine width.
+        for x in 0..3_i32 {
+            let pipe = assert_entity(&entities, x, 0, "pipe");
+            assert_eq!(pipe.carries.as_deref(), Some("fluid-item"));
+        }
 
-        // Inserter lands on a distinct tile — `port_dx = 1` for AM2/AM3,
-        // so the inserter goes to `mx + 2 = (2, 1)` (not `mx + 1`, which
-        // would collide with the fluid-port pipe above).
-        let ins = assert_entity(&entities, 2, 1, "inserter");
+        // UG-in South at (mx + port_dx = 1, y = 1) — tunnels under the
+        // solid belt to reach the machine's fluid port.
+        let ug_in = assert_entity(&entities, 1, 1, "pipe-to-ground");
+        assert_eq!(ug_in.direction, EntityDirection::South);
+        assert_eq!(ug_in.io_type.as_deref(), Some("input"));
+
+        // UG-out North at (1, 3) — surface on south side, adjacent to
+        // the machine's top-centre fluid port at (1, 4).
+        let ug_out = assert_entity(&entities, 1, 3, "pipe-to-ground");
+        assert_eq!(ug_out.direction, EntityDirection::North);
+        assert_eq!(ug_out.io_type.as_deref(), Some("output"));
+
+        // Input inserter at (mx + 0, y + 3) — `inserter_dx = 0` because
+        // `port_dx = 1`. South-facing: picks from solid belt at y+2,
+        // drops into machine at y+4.
+        let ins = assert_entity(&entities, 0, 3, "inserter");
         assert_eq!(ins.direction, EntityDirection::South);
         assert_eq!(ins.carries.as_deref(), Some("solid-item"));
 
-        // Sanity: exactly one entity per y+1 tile — no overlap between
-        // pipe and inserter on any column.
-        for x in 0..3_i32 {
-            let here: Vec<_> = entities.iter().filter(|e| e.x == x && e.y == 1).collect();
-            assert!(
-                here.len() <= 1,
-                "multiple entities at (y+1 = 1, x={x}): {:?}",
-                here.iter().map(|e| e.name.as_str()).collect::<Vec<_>>()
-            );
+        // Machine occupies rows 4..=6. Ports column is 1; top face is y=4.
+        assert_entity(&entities, 0, 4, "assembling-machine-2");
+
+        // Sanity: no entity overlap on y+1 or y+3 for x in 0..3.
+        for y in [1_i32, 3] {
+            for x in 0..3_i32 {
+                let here: Vec<_> = entities.iter().filter(|e| e.x == x && e.y == y).collect();
+                assert!(
+                    here.len() <= 1,
+                    "multiple entities at ({x}, {y}): {:?}",
+                    here.iter().map(|e| e.name.as_str()).collect::<Vec<_>>()
+                );
+            }
         }
     }
 

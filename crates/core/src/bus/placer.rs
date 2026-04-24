@@ -319,21 +319,19 @@ fn can_lane_split(spec: &MachineSpec, count: usize) -> bool {
         return false;
     }
     let kind = row_kind(spec);
-    let fluid_input_lane_split_supported =
-        matches!(kind, RowKind::FluidInput) && spec.entity == "chemical-plant";
-    let output_is_fluid = spec
-        .outputs
-        .iter()
-        .all(|f| f.is_fluid) && !spec.outputs.is_empty();
+    let output_is_fluid =
+        spec.outputs.iter().all(|f| f.is_fluid) && !spec.outputs.is_empty();
     let fluid_dual_input_lane_split_supported =
         matches!(kind, RowKind::FluidDualInput) && !output_is_fluid;
     let fluid_multi_input_lane_split_supported =
         matches!(kind, RowKind::FluidMultiInput) && !output_is_fluid;
     matches!(
         kind,
-        RowKind::SingleInput | RowKind::DualInput | RowKind::TripleInput
-    ) || fluid_input_lane_split_supported
-        || fluid_dual_input_lane_split_supported
+        RowKind::SingleInput
+            | RowKind::DualInput
+            | RowKind::TripleInput
+            | RowKind::FluidInput,
+    ) || fluid_dual_input_lane_split_supported
         || fluid_multi_input_lane_split_supported
 }
 
@@ -1568,10 +1566,12 @@ mod tests {
     }
 
     #[test]
-    fn lane_split_still_blocked_for_am2_with_fluid() {
-        // AM2+-with-fluid still uses the single-group path in
-        // `fluid_input_row`, so `can_lane_split` should keep it single-lane
-        // until that template sprouts a bridge too.
+    fn lane_split_applies_to_am2_with_fluid() {
+        // AM2/AM3 with a fluid input now uses the same unified T-junction
+        // row template as chemical-plant, so it gains lane-split support
+        // too. The template parameterises `port_dx` (1 for AM2/AM3 vs 0
+        // for chemical-plant) so the UG pair lands on the correct column
+        // and the inserter sits on a free column.
         let spec = MachineSpec {
             entity: "assembling-machine-2".to_string(),
             recipe: "example".to_string(),
@@ -1582,6 +1582,6 @@ mod tests {
             ],
             outputs: vec![ItemFlow { item: "thing".to_string(), rate: 2.0, is_fluid: false }],
         };
-        assert!(!can_lane_split(&spec, 3));
+        assert!(can_lane_split(&spec, 3));
     }
 }
