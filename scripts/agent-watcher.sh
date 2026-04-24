@@ -14,6 +14,8 @@ set -euo pipefail
 
 REPO="${REPO:-storkme/fucktorio}"
 WORKSPACE="/tmp/workspace"
+MEM_DIR="/tmp/agent-memory"
+MEM_BRANCH="agent-memory/${AGENT_NAME}"
 AGENT_READY_LABEL="${AGENT_READY_LABEL:-${AGENT_NAME}-ready}"
 POLL_INTERVAL="${POLL_INTERVAL:-60}"
 STATE_FILE="/var/lib/agent/state.json"
@@ -86,6 +88,77 @@ EOF
 chmod +x "$HOOK"
 
 PERSONAL_PROMPT="$(cat "/usr/local/share/agents/${AGENT_NAME}.md")"
+
+# ---------------------------------------------------------------------------
+# Agent memory — a separate clone at $MEM_DIR tracking an orphan branch
+# (agent-memory/<agent-name>) where the agent writes per-issue notes. The
+# watcher clones/inits it at container start; commits and pushes after each
+# pickup if the agent changed anything in /tmp/agent-memory/issue-<N>/.
+# ---------------------------------------------------------------------------
+setup_memory_dir() {
+    if git -C "$WORKSPACE" ls-remote --exit-code origin \
+        "refs/heads/${MEM_BRANCH}" >/dev/null 2>&1; then
+        echo "using existing memory branch: ${MEM_BRANCH}"
+        rm -rf "$MEM_DIR"
+        git clone --depth 20 --single-branch --branch "$MEM_BRANCH" \
+            "https://github.com/${REPO}.git" "$MEM_DIR" --quiet
+    else
+        echo "initializing new memory branch: ${MEM_BRANCH}"
+        rm -rf "$MEM_DIR"
+        mkdir -p "$MEM_DIR"
+        cd "$MEM_DIR"
+        git init --quiet --initial-branch="$MEM_BRANCH"
+        git remote add origin "https://github.com/${REPO}.git"
+        cat > README.md <<EOF
+# Agent memory: ${AGENT_NAME}
+
+This orphan branch is a durable store of ${AGENT_NAME}'s working memory
+across issues. Each \`issue-<N>/\` subdirectory holds markdown notes the
+agent wrote while working on issue #N. Never merged to main.
+
+Inspect with:
+\`\`\`
+git fetch origin ${MEM_BRANCH}
+git checkout ${MEM_BRANCH}
+\`\`\`
+EOF
+        git add README.md
+        git commit --quiet -m "init agent memory"
+        git push --quiet origin "HEAD:${MEM_BRANCH}"
+        cd "$WORKSPACE"
+    fi
+}
+
+# Commit and push anything the agent changed under /tmp/agent-memory/issue-<N>/.
+# No-op if nothing changed. Best-effort push — a single failure is logged but
+# doesn't block the watcher.
+commit_memory() {
+    local num="$1"
+    local issue_mem_dir="${MEM_DIR}/issue-${num}"
+    if [ ! -d "$issue_mem_dir" ]; then
+        return 0
+    fi
+    (
+        cd "$MEM_DIR"
+        git add "issue-${num}/" 2>/dev/null || true
+        if ! git diff --cached --quiet 2>/dev/null; then
+            git commit --quiet -m "memory: issue #${num} (${AGENT_NAME})"
+            if ! git push --quiet origin "$MEM_BRANCH" 2>&1; then
+                echo "warning: memory push failed; re-sync on next pickup"
+                # Try to reconcile: fetch + rebase + push once more
+                git fetch origin "$MEM_BRANCH" --quiet 2>/dev/null || true
+                git rebase "origin/${MEM_BRANCH}" --quiet 2>/dev/null \
+                    || git rebase --abort 2>/dev/null || true
+                git push --quiet origin "$MEM_BRANCH" 2>/dev/null \
+                    || echo "warning: memory still not pushed; will retry next pickup"
+            else
+                echo "memory committed + pushed for issue #${num}"
+            fi
+        fi
+    )
+}
+
+setup_memory_dir
 
 # ---------------------------------------------------------------------------
 # State helpers
@@ -241,6 +314,10 @@ while :; do
     gh issue edit "$num" --repo "$REPO" \
         --remove-label "$AGENT_READY_LABEL" >/dev/null || true
 
+    # Ensure the per-issue memory dir exists (possibly populated from prior passes).
+    ISSUE_MEM_DIR="${MEM_DIR}/issue-${num}"
+    mkdir -p "$ISSUE_MEM_DIR"
+
     read -r -d '' BASE_PROMPT <<EOF || true
 You are ${AGENT_NAME}, working on GitHub issue #${num} in this repo.
 
@@ -249,6 +326,21 @@ Start with: gh issue view ${num}
 last pass, the human is probably asking you to refine, correct, or extend
 your previous work — read the thread carefully before deciding your
 approach.)
+
+**Working memory** for this issue lives at:
+    ${ISSUE_MEM_DIR}
+
+If that directory has files, they are notes from your past self — read them
+BEFORE you do anything else. You may have partially understood the issue
+before, tried approaches that didn't work, or formed a plan worth continuing.
+When you finish this pass, update (or create) files in that directory so a
+future pass picks up where you left off. Suggested files:
+  understanding.md  — what the issue is actually asking, any constraints
+  progress.md       — what has been attempted, what worked / didn't, next steps
+Feel free to add more files if useful (notes.md, open-questions.md, etc).
+The watcher commits and pushes this directory to a separate 'agent-memory'
+branch after you exit — don't commit it yourself and don't put it in the
+main workspace.
 
 Investigate the issue and decide what terminal state fits the task:
 
@@ -273,8 +365,23 @@ investigation, or a list of findings:
   5. Exit. Do NOT open a PR. Do NOT commit planning documents to the repo
      unless the issue explicitly asks for a documentation file.
 
+**Question / discussion tasks** — the issue (or a comment on it) asks a
+question, requests an explanation, or invites your opinion without asking
+for code changes or sub-issues:
+  1. Read the full comment thread AND the relevant code to form a substantive
+     answer. Prior comments may include earlier exchanges with you; account
+     for them — your comments start with '${NO_TRIGGER_SENTINEL}' so you can
+     recognise them.
+  2. Post a comment on the issue with your answer, starting the body with
+     '${NO_TRIGGER_SENTINEL}' on its own first line.
+  3. Add label 'agent-done' via
+     \`gh issue edit ${num} --add-label agent-done\`.
+  4. Exit. Do NOT open a PR. Do NOT file sub-issues.
+
 If the shape of the task is genuinely ambiguous, prefer issues over docs
-(they are easier to iterate on than files committed to main).
+(they are easier to iterate on than files committed to main). Questions
+that accompany a code-change ask should get a reply comment AND the code
+change — they're not mutually exclusive.
 
 If you decide the issue cannot or should not be solved at all, comment on
 the issue explaining why and exit — do not leave uncommitted work behind.
@@ -301,6 +408,9 @@ EOF
     set -e
 
     echo "pi exited rc=${rc}"
+
+    # Commit and push any memory the agent wrote for this issue.
+    commit_memory "$num"
 
     # Ground-truth outcome:
     #   - if a PR on this branch exists → code-change success (agent-done)
