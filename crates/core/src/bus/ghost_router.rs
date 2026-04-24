@@ -1678,20 +1678,43 @@ pub fn route_bus_ghost(
     );
 
     for cluster in &clusters {
-        // Cluster is already guaranteed unhandled by the filter above;
-        // keep the check as a cheap invariant in debug builds.
-        debug_assert!(
-            !cluster.iter().any(|t| corridor_handled.contains(t)),
-            "cluster contains a corridor-handled tile despite pre-cluster filter"
-        );
+        // `corridor_handled` grows during this loop — a prior cluster's
+        // SAT footprint may have absorbed tiles that belong to this
+        // cluster (the unhandled_crossings filter above runs once,
+        // before any solve). Skip if any tile is now handled to avoid
+        // double-stamping. (Previously a debug_assert that held only
+        // because the classify_crossing gate filtered out the
+        // single-spec clusters that now make this case observable.)
+        if cluster.iter().any(|t| corridor_handled.contains(t)) {
+            continue;
+        }
         // classify_crossing gates on "exactly two specs with a valid
-        // direction at the tile" — require it of every cluster member.
-        // If any member is degenerate the whole cluster defers to
-        // unresolved, matching today's per-tile conservatism.
-        if cluster.iter().any(|&t| {
-            classify_crossing(t, &routed_paths, &specs, &spec_items, &spec_belt_tiers)
-                .is_none()
-        }) {
+        // direction at the tile". For belt×belt that's the right shape.
+        // For belt×forbidden-tile (canonical case: a belt routed through
+        // a fluid-trunk pipe via the soft-pipe astar_hard policy), only
+        // one spec is in routed_paths — but the growth loop + SAT can
+        // still solve it, because pipes are auto-forbidden in
+        // refresh_forbidden and SAT supports UG bypasses.
+        //
+        // Defer to unresolved only when classify_crossing AND the
+        // 1-spec-on-forbidden-tile shape both miss. This preserves the
+        // original conservatism for genuinely degenerate clusters while
+        // letting pipe×belt (and any future single-spec bypass case)
+        // reach the solver.
+        let any_undecidable = cluster.iter().any(|&t| {
+            if classify_crossing(t, &routed_paths, &specs, &spec_items, &spec_belt_tiers).is_some() {
+                return false;
+            }
+            let spec_count_at_tile = routed_paths
+                .values()
+                .filter(|path| path.contains(&t))
+                .count();
+            let tile_is_forbidden = entities.iter().any(|e| {
+                (e.x, e.y) == t && crate::common::tile_is_forbidden_kind(&e.name)
+            });
+            !(spec_count_at_tile >= 1 && tile_is_forbidden)
+        });
+        if any_undecidable {
             for &t in cluster {
                 remaining_crossings.insert(t);
             }
