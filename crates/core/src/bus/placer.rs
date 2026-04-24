@@ -308,10 +308,12 @@ fn row_kind(spec: &MachineSpec) -> RowKind {
 
 /// Whether lane splitting is applicable to a spec/count combination.
 ///
-/// SingleInput, DualInput, and FluidInput (chemical-plant) rows support
-/// lane splitting today. TripleInput / FluidDualInput / FluidMultiInput
-/// row templates don't emit a `sideload_bridge` yet, so the placer keeps
-/// them at single-lane throughput.
+/// SingleInput, DualInput, TripleInput, chemical-plant FluidInput, and
+/// solid-output FluidDualInput rows all emit a `sideload_bridge` today.
+/// FluidMultiInput, the AM2+-with-fluid branch of FluidInput, and
+/// fluid-output FluidDualInput don't — they stay single lane until their
+/// templates grow bridges (or in the fluid-output case, until there's
+/// an analogous fluid-merging pattern to sideload).
 fn can_lane_split(spec: &MachineSpec, count: usize) -> bool {
     if count < 2 {
         return false;
@@ -319,7 +321,17 @@ fn can_lane_split(spec: &MachineSpec, count: usize) -> bool {
     let kind = row_kind(spec);
     let fluid_input_lane_split_supported =
         matches!(kind, RowKind::FluidInput) && spec.entity == "chemical-plant";
-    matches!(kind, RowKind::SingleInput | RowKind::DualInput) || fluid_input_lane_split_supported
+    let output_is_fluid = spec
+        .outputs
+        .iter()
+        .all(|f| f.is_fluid) && !spec.outputs.is_empty();
+    let fluid_dual_input_lane_split_supported =
+        matches!(kind, RowKind::FluidDualInput) && !output_is_fluid;
+    matches!(
+        kind,
+        RowKind::SingleInput | RowKind::DualInput | RowKind::TripleInput
+    ) || fluid_input_lane_split_supported
+        || fluid_dual_input_lane_split_supported
 }
 
 /// Build one row of machines. Returns (entities, span, row_width).
@@ -442,6 +454,7 @@ pub(crate) fn build_one_row(
                 output_is_fluid,
                 (in_belt1, in_belt2),
                 out_belt,
+                lane_split,
                 output_east,
             );
             let machine_y = y_cursor + 5;
@@ -532,6 +545,7 @@ pub(crate) fn build_one_row(
                 output_item,
                 (in_belt1, in_belt2, in_belt3),
                 out_belt,
+                lane_split,
                 output_east,
             );
             let input_ys = vec![y_cursor, y_cursor + 1, y_cursor + 3 + msz as i32 + 2];
@@ -747,8 +761,12 @@ pub fn place_rows(
         // AM2-with-fluid FluidInput path) and triple-solid rows stay
         // single-lane until their templates grow bridges.
         let kind = row_kind(spec);
-        let has_bridge_template = matches!(kind, RowKind::SingleInput | RowKind::DualInput)
-            || (matches!(kind, RowKind::FluidInput) && spec.entity == "chemical-plant");
+        let output_is_fluid = spec.outputs.iter().all(|f| f.is_fluid) && !spec.outputs.is_empty();
+        let has_bridge_template = matches!(
+            kind,
+            RowKind::SingleInput | RowKind::DualInput | RowKind::TripleInput
+        ) || (matches!(kind, RowKind::FluidInput) && spec.entity == "chemical-plant")
+            || (matches!(kind, RowKind::FluidDualInput) && !output_is_fluid);
         let single_lane = !has_bridge_template;
         let _ = has_fluid;
         let _ = solid_inputs_count;

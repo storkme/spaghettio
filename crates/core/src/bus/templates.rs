@@ -190,6 +190,60 @@ fn sideload_bridge(
     }
 }
 
+/// Description of one row that must be continued across a lane-split
+/// gap. Templates pass a slice of these to `stamp_lane_split_gap`
+/// describing every input belt / pipe header that cross-cuts the row.
+pub(crate) struct GapRow<'a> {
+    /// Row offset from `y_offset`.
+    pub dy: i32,
+    /// Entity name: `"transport-belt"` (any tier), `"pipe"`, etc.
+    pub name: &'a str,
+    /// Facing direction. Ignored for pipes (leave as `North` or any).
+    pub direction: EntityDirection,
+    /// Item/fluid carried.
+    pub item: &'a str,
+    /// Segment id for per-row provenance tracking.
+    pub segment_id: Option<String>,
+}
+
+/// Stamp the `LANE_SPLIT_GAP` cross-row continuation tiles + the
+/// sideload bridge at `output_row_dy`. Shared across every
+/// lane-splitting row template so the gap geometry stays in one place.
+/// Each template just declares *which* rows cross-cut its gap (input
+/// belts, pipe headers) and hands them in `rows`.
+pub(crate) fn stamp_lane_split_gap(
+    entities: &mut Vec<PlacedEntity>,
+    gap_start_x: i32,
+    y_offset: i32,
+    rows: &[GapRow<'_>],
+    output_row_dy: i32,
+    output_belt: &str,
+    output_item: &str,
+    output_east: bool,
+) {
+    for dx in 0..LANE_SPLIT_GAP {
+        for row in rows {
+            entities.push(PlacedEntity {
+                name: row.name.to_string(),
+                x: gap_start_x + dx,
+                y: y_offset + row.dy,
+                direction: row.direction,
+                carries: Some(row.item.to_string()),
+                segment_id: row.segment_id.clone(),
+                ..Default::default()
+            });
+        }
+    }
+    entities.extend(sideload_bridge(
+        gap_start_x,
+        y_offset,
+        output_row_dy,
+        output_belt,
+        output_item,
+        output_east,
+    ));
+}
+
 /// Row for a recipe with 1 solid input.
 ///
 /// Layout per machine (`msz`-tile horizontal pitch, no gaps):
@@ -311,20 +365,22 @@ pub fn single_input_row(
 
     if lane_split {
         let gap_start_x = x_offset + g1 as i32 * pitch;
-        // Input belt tiles through the gap (keep items flowing to group2)
-        for dx in 0..LANE_SPLIT_GAP {
-            entities.push(PlacedEntity {
-                name: input_belt.to_string(),
-                x: gap_start_x + dx,
-                y: y_offset,
+        stamp_lane_split_gap(
+            &mut entities,
+            gap_start_x,
+            y_offset,
+            &[GapRow {
+                dy: 0,
+                name: input_belt,
                 direction: EntityDirection::East,
-                carries: Some(input_item.to_string()),
+                item: input_item,
                 segment_id: belt_in_seg.clone(),
-                ..Default::default()
-            });
-        }
-        // Sideload bridge (output_row_dy = 2 + msz + 1)
-        entities.extend(sideload_bridge(gap_start_x, y_offset, 2 + msz + 1, output_belt, output_item, output_east));
+            }],
+            2 + msz + 1, // output_row_dy
+            output_belt,
+            output_item,
+            output_east,
+        );
     }
 
     (entities, row_height)
@@ -483,29 +539,31 @@ pub fn dual_input_row(
 
     if lane_split {
         let gap_start_x = x_offset + g1 as i32 * pitch;
-        // Input belt tiles through the gap for both input belts
-        for dx in 0..LANE_SPLIT_GAP {
-            entities.push(PlacedEntity {
-                name: belt1.to_string(),
-                x: gap_start_x + dx,
-                y: y_offset,
-                direction: EntityDirection::East,
-                carries: Some(input1.to_string()),
-                segment_id: belt_in1_seg.clone(),
-                ..Default::default()
-            });
-            entities.push(PlacedEntity {
-                name: belt2.to_string(),
-                x: gap_start_x + dx,
-                y: y_offset + 1,
-                direction: EntityDirection::East,
-                carries: Some(input2.to_string()),
-                segment_id: belt_in2_seg.clone(),
-                ..Default::default()
-            });
-        }
-        // Sideload bridge (output_row_dy = 3 + msz + 1)
-        entities.extend(sideload_bridge(gap_start_x, y_offset, 3 + msz + 1, output_belt, output_item, output_east));
+        stamp_lane_split_gap(
+            &mut entities,
+            gap_start_x,
+            y_offset,
+            &[
+                GapRow {
+                    dy: 0,
+                    name: belt1,
+                    direction: EntityDirection::East,
+                    item: input1,
+                    segment_id: belt_in1_seg.clone(),
+                },
+                GapRow {
+                    dy: 1,
+                    name: belt2,
+                    direction: EntityDirection::East,
+                    item: input2,
+                    segment_id: belt_in2_seg.clone(),
+                },
+            ],
+            3 + msz + 1, // output_row_dy
+            output_belt,
+            output_item,
+            output_east,
+        );
     }
 
     (entities, row_height)
@@ -524,7 +582,10 @@ pub fn dual_input_row(
 ///   y+3+msz+2 : input belt 3 (EAST) -- delivered from south side
 /// ```
 ///
-/// Lane splitting is not supported for 3-input rows.
+/// When `lane_split=true` (and `machine_count >= 2`), machines are
+/// split into two groups with a sideload bridge between them so the
+/// output belt uses both lanes. The gap continues all three input
+/// belts (y+0, y+1, y+8) so items still reach the second group.
 ///
 /// Returns `(entities, row_height)`.
 pub fn triple_input_row(
@@ -538,6 +599,7 @@ pub fn triple_input_row(
     output_item: &str,
     input_belts: (&str, &str, &str),
     output_belt: &str,
+    lane_split: bool,
     output_east: bool,
 ) -> (Vec<PlacedEntity>, i32) {
     let msz = machine_size as i32;
@@ -565,9 +627,13 @@ pub fn triple_input_row(
     let in3_tail = east_tail_skip(msz, 2);
     let out_tail = if output_east { 0 } else { east_tail_skip(msz, 1) };
 
-    for i in 0..machine_count {
-        let mx = x_offset + i as i32 * pitch;
-        let is_last = i == machine_count - 1;
+    let lane_split = lane_split && machine_count >= 2;
+    let mxs = machine_xs(x_offset, machine_count, pitch, lane_split);
+    let g1 = if lane_split { machine_count / 2 } else { machine_count };
+    let last_mx = *mxs.last().expect("machine_count >= 1");
+
+    for &mx in &mxs {
+        let is_last = mx == last_mx;
         let in1_stop = if is_last { msz - in1_tail } else { msz };
         let in2_stop = if is_last { msz - in2_tail } else { msz };
         let in3_stop = if is_last { msz - in3_tail } else { msz };
@@ -683,6 +749,47 @@ pub fn triple_input_row(
                 ..Default::default()
             });
         }
+    }
+
+    // Lane-split gap: continue all three input belts across the gap and
+    // emit the sideload bridge at the output row. The two inserters at
+    // y+(3+msz) (output + input3 long-hand) don't land in gap columns
+    // because there are no machines there, so bridge_y is free.
+    if lane_split {
+        let gap_start_x = x_offset + g1 as i32 * pitch;
+        let belt3_dy = 3 + msz + 2;
+        stamp_lane_split_gap(
+            &mut entities,
+            gap_start_x,
+            y_offset,
+            &[
+                GapRow {
+                    dy: 0,
+                    name: belt1,
+                    direction: EntityDirection::East,
+                    item: input1,
+                    segment_id: belt_in1_seg.clone(),
+                },
+                GapRow {
+                    dy: 1,
+                    name: belt2,
+                    direction: EntityDirection::East,
+                    item: input2,
+                    segment_id: belt_in2_seg.clone(),
+                },
+                GapRow {
+                    dy: belt3_dy,
+                    name: belt3,
+                    direction: EntityDirection::East,
+                    item: input3,
+                    segment_id: belt_in3_seg.clone(),
+                },
+            ],
+            3 + msz + 1, // output_row_dy
+            output_belt,
+            output_item,
+            output_east,
+        );
     }
 
     (entities, row_height)
@@ -895,48 +1002,36 @@ pub fn fluid_input_row(
             fluid_port_pipes.push((fluid_item.to_string(), mx + port_dx, y_offset));
         }
 
-        // Lane-split gap: between group-1 and group-2 machines. Fill the
-        // `LANE_SPLIT_GAP` (3) tiles with:
-        //   y+0: continuous pipe so the fluid network stays unbroken between
-        //        the two groups (no UG needed — surface pipes are enough over
-        //        a 3-tile gap).
-        //   y+2: continuous solid input belt (EAST) so items from group 1's
-        //        input tap-off flow across into group 2.
-        //   y+7 / y+8: `sideload_bridge` — lifts a chunk of group-1 output
-        //        from the west-flowing output belt up to a 3-tile sidetrack
-        //        and drops it back on the opposite lane so the output belt
-        //        runs fully-loaded on both lanes.
+        // Lane-split gap: continue the y+0 pipe header + y+2 solid input
+        // belt across the `LANE_SPLIT_GAP` tiles so fluid + solid reach
+        // group 2, then emit the sideload bridge at y+7 / y+8.
         if lane_split {
             let gap_start_x = x_offset + g1 as i32 * pitch;
-            for dx in 0..LANE_SPLIT_GAP {
-                entities.push(PlacedEntity {
-                    name: "pipe".to_string(),
-                    x: gap_start_x + dx,
-                    y: y_offset,
-                    carries: Some(fluid_item.to_string()),
-                    segment_id: fluid_in_seg.clone(),
-                    ..Default::default()
-                });
-                entities.push(PlacedEntity {
-                    name: input_belt.to_string(),
-                    x: gap_start_x + dx,
-                    y: belt_y,
-                    direction: EntityDirection::East,
-                    carries: Some(solid_item.to_string()),
-                    segment_id: belt_in_seg.clone(),
-                    ..Default::default()
-                });
-            }
-            // Output belt row offset from y_offset: out_belt_y - y_offset.
-            let output_row_dy = out_belt_y - y_offset;
-            entities.extend(sideload_bridge(
+            stamp_lane_split_gap(
+                &mut entities,
                 gap_start_x,
                 y_offset,
-                output_row_dy,
+                &[
+                    GapRow {
+                        dy: 0,
+                        name: "pipe",
+                        direction: EntityDirection::North,
+                        item: fluid_item,
+                        segment_id: fluid_in_seg.clone(),
+                    },
+                    GapRow {
+                        dy: belt_y - y_offset,
+                        name: input_belt,
+                        direction: EntityDirection::East,
+                        item: solid_item,
+                        segment_id: belt_in_seg.clone(),
+                    },
+                ],
+                out_belt_y - y_offset,
                 output_belt,
                 output_item,
                 output_east,
-            ));
+            );
         }
 
         (entities, row_height, fluid_port_pipes)
@@ -1070,6 +1165,7 @@ pub fn fluid_dual_input_row(
     output_is_fluid: bool,
     input_belts: (&str, &str),
     output_belt: &str,
+    lane_split: bool,
     output_east: bool,
 ) -> (Vec<PlacedEntity>, i32, Vec<(String, i32, i32)>, Vec<(String, i32, i32)>) {
     let msz = machine_size as i32;
@@ -1100,8 +1196,18 @@ pub fn fluid_dual_input_row(
     let machine_y = y_offset + 5;
     let output_y = y_offset + 5 + msz;
 
-    // Horizontal fluid header chain: spans x_offset .. last machine's mx+(msz-1)
-    let last_mx = x_offset + (machine_count as i32 - 1) * pitch;
+    // Lane-split only makes sense when the output belt is actually a belt
+    // (not a fluid pipe row). Fluid outputs go through the y+msz+5 pipe
+    // row, which doesn't benefit from `sideload_bridge`.
+    let lane_split = lane_split && machine_count >= 2 && !output_is_fluid;
+    let mxs = machine_xs(x_offset, machine_count, pitch, lane_split);
+    let g1 = if lane_split { machine_count / 2 } else { machine_count };
+    let last_mx = *mxs.last().expect("machine_count >= 1");
+
+    // Horizontal fluid header chain: spans x_offset .. last machine's mx+(msz-1).
+    // With lane_split, `last_mx` already accounts for the `LANE_SPLIT_GAP`
+    // offset on group 2, so this loop naturally fills the gap tiles with
+    // continuous pipe — keeping the fluid network unbroken.
     let header_end_x = last_mx + msz - 1;
     for x in x_offset..=header_end_x {
         entities.push(PlacedEntity {
@@ -1127,9 +1233,8 @@ pub fn fluid_dual_input_row(
     // Solid output (output_is_fluid=false) has its drop at mx+1 → trim 1 for msz=3 west-flow.
     let out_tail = if output_east { 0 } else { east_tail_skip(msz, 1) };
 
-    for i in 0..machine_count {
-        let mx = x_offset + i as i32 * pitch;
-        let is_last = i == machine_count - 1;
+    for &mx in &mxs {
+        let is_last = mx == last_mx;
         let in1_stop = if is_last { msz - in1_tail } else { msz };
         let in2_stop = if is_last { msz - in2_tail } else { msz };
         let out_stop = if is_last { msz - out_tail } else { msz };
@@ -1260,6 +1365,41 @@ pub fn fluid_dual_input_row(
                 });
             }
         }
+    }
+
+    // Lane-split gap: y+0 pipe header already extended naturally via the
+    // `header_end_x` loop above. Continue both solid belts (y+2, y+3)
+    // through the gap and emit the sideload bridge at the solid output
+    // belt (y+5+msz+1). Only runs when output_is_fluid=false (guarded
+    // by `lane_split` itself).
+    if lane_split {
+        let gap_start_x = x_offset + g1 as i32 * pitch;
+        let output_row_dy = 5 + msz + 1;
+        stamp_lane_split_gap(
+            &mut entities,
+            gap_start_x,
+            y_offset,
+            &[
+                GapRow {
+                    dy: belt1_y - y_offset,
+                    name: belt1,
+                    direction: EntityDirection::East,
+                    item: input1,
+                    segment_id: belt_in1_seg.clone(),
+                },
+                GapRow {
+                    dy: belt2_y - y_offset,
+                    name: belt2,
+                    direction: EntityDirection::East,
+                    item: input2,
+                    segment_id: belt_in2_seg.clone(),
+                },
+            ],
+            output_row_dy,
+            output_belt,
+            output_item,
+            output_east,
+        );
     }
 
     let fluid_input_port_pipes = vec![(fluid_item.to_string(), x_offset, header_y)];
@@ -2372,6 +2512,7 @@ mod tests {
             "advanced-circuit",
             ("transport-belt", "transport-belt", "transport-belt"),
             "transport-belt",
+            false, // lane_split
             false,
         );
         assert_eq!(height, 9);
@@ -2615,6 +2756,7 @@ mod tests {
             false, // output_is_fluid = false
             ("transport-belt", "transport-belt"),
             "transport-belt",
+            false, // lane_split
             false,
         );
         assert_eq!(height, 10);
@@ -2678,6 +2820,7 @@ mod tests {
             true, // output_is_fluid = true
             ("transport-belt", "transport-belt"),
             "transport-belt",
+            false, // lane_split
             false,
         );
         assert_eq!(height, 10);
@@ -2710,6 +2853,7 @@ mod tests {
             false,
             ("transport-belt", "transport-belt"),
             "transport-belt",
+            false, // lane_split
             false,
         );
         // long-handed inserter at (2, 4), regular at (0, 4)
@@ -2738,6 +2882,7 @@ mod tests {
             false,
             ("transport-belt", "transport-belt"),
             "transport-belt",
+            false, // lane_split
             false, // west-flow output
         );
         // Machine 0 (mx=10) keeps all 3 tiles on every belt row.
@@ -2785,6 +2930,7 @@ mod tests {
             false,
             ("transport-belt", "transport-belt"),
             "transport-belt",
+            false, // lane_split
             false,
         );
         // Non-last machine (mx=10) keeps all tiles.
