@@ -596,7 +596,7 @@ fn tier3_plastic_bar() {
 }
 
 #[test]
-#[ignore = "ghost-mode: routing fails on plastic-bar feeder paths from crude oil"]
+#[ignore = "power coverage on oil-refinery rows: refineries spaced too far for medium-electric-pole reach. Pipe×belt routing now works (was the previous ignore reason — fixed by relaxing the classify_crossing pre-cluster gate)."]
 #[ntest::timeout(10000)]
 fn tier3_plastic_bar_from_crude() {
     let inputs: FxHashSet<String> = ["crude-oil", "coal"]
@@ -943,6 +943,48 @@ fn stress_advanced_circuit_45s_from_plates() {
     ).expect("e2e pipeline");
     assert_produces(&result, "advanced-circuit", 45.0);
     report_stress_scoreboard("stress_advanced_circuit_45s_from_plates", &result);
+}
+
+/// User's processing-unit @ 1/s repro for the pipe×belt severance bug.
+/// AM2 + sulfuric-acid input. The cluster forms (the `classify_crossing`
+/// pre-cluster gate was relaxed in Phase 1 to allow single-spec
+/// crossings on forbidden tiles) and reaches `solve_crossing`, but SAT
+/// produces degenerate "do nothing" proposals — its encoder doesn't
+/// constrain single-spec continuity, so the trivial "leave existing
+/// belts in place" model satisfies all boundary constraints without
+/// actually bridging the pipe. The walker correctly vetoes.
+///
+/// Phase 2 will need either SAT-encoder single-spec continuity, a
+/// dedicated single-spec bridge strategy, or layout-time pipe-placement
+/// avoidance. Un-ignore once any of those lands.
+#[test]
+#[ignore = "Phase 2: SAT encoder doesn't enforce single-spec continuity, can't bridge belt over forbidden pipe tile (see RFP doc)"]
+#[ntest::timeout(60000)]
+fn pipe_belt_processing_unit_1s_routes() {
+    let inputs: FxHashSet<String> = ["iron-plate", "copper-plate", "plastic-bar", "sulfuric-acid"]
+        .iter().map(|s| s.to_string()).collect();
+    let result = run_e2e(
+        "pipe_belt_processing_unit_1s_routes",
+        "processing-unit",
+        1.0,
+        "assembling-machine-2",
+        None,
+        &inputs,
+    ).expect("e2e pipeline");
+    // The bug surfaces as belt-dead-end errors at pipe column tiles where
+    // the belt is dropped by the survivor filter and no UG bypass is
+    // stamped. Phase 2 must drive these to zero.
+    let belt_errs: Vec<_> = result.issues.iter()
+        .filter(|i| matches!(i.severity, fucktorio_core::validate::Severity::Error)
+            && i.category.contains("belt"))
+        .collect();
+    assert!(
+        belt_errs.is_empty(),
+        "Expected 0 belt errors, got {}: {:?}",
+        belt_errs.len(),
+        belt_errs.iter().take(3).map(|i| &i.message).collect::<Vec<_>>()
+    );
+    assert_produces(&result, "processing-unit", 1.0);
 }
 
 /// Baseline (pre-Phase 1): warnings=?, zones_solved=?, zones_skipped=?.
