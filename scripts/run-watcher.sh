@@ -11,7 +11,8 @@ Usage:
   ./scripts/run-watcher.sh <agent-name>              Start a long-running watcher
   ./scripts/run-watcher.sh --logs <agent-name>       docker logs -f the watcher
   ./scripts/run-watcher.sh --stop <agent-name>       Send SIGTERM and wait for clean exit
-  ./scripts/run-watcher.sh --reset <agent-name>      Stop container AND wipe its volumes
+  ./scripts/run-watcher.sh --reset <agent-name>      Stop container AND wipe ALL its volumes
+  ./scripts/run-watcher.sh --state <agent-name>      Dump the comment-tracking state.json
   ./scripts/run-watcher.sh --list                    Show available agent names
   ./scripts/run-watcher.sh --status                  Show running watchers
 
@@ -35,11 +36,12 @@ Environment:
   FUCKTORIO_AGENT_IMAGE (optional, default: fucktorio-agent:latest)
 
 Volumes:
-  Each watcher owns two named Docker volumes:
+  Each watcher owns three named Docker volumes:
     fucktorio-workspace-<agent>  (/tmp/workspace — git clone, target/ cache)
     fucktorio-cargo-<agent>      (~/.cargo/registry — downloaded crates)
+    fucktorio-state-<agent>      (/var/lib/agent — comment-tracking state.json)
   These survive container recreation and image rebuilds. Use --reset to wipe
-  them when you want a clean start.
+  all three when you want a completely clean start.
 
 Windows-side prerequisites (one-time):
   - Run llama-server bound to 0.0.0.0:<LLAMA_PORT> (not 127.0.0.1).
@@ -82,18 +84,21 @@ status() {
 container_name_for() { echo "fucktorio-watcher-$1"; }
 workspace_volume_for() { echo "fucktorio-workspace-$1"; }
 cargo_volume_for() { echo "fucktorio-cargo-$1"; }
+state_volume_for() { echo "fucktorio-state-$1"; }
 
 reset_agent() {
     local name="$1"
     local container; container="$(container_name_for "$name")"
     local ws_vol; ws_vol="$(workspace_volume_for "$name")"
     local cg_vol; cg_vol="$(cargo_volume_for "$name")"
+    local st_vol; st_vol="$(state_volume_for "$name")"
 
     echo "This will:"
     echo "  1. Stop ${container} (if running)"
     echo "  2. Remove the container"
     echo "  3. Delete volume ${ws_vol} (workspace + target cache)"
     echo "  4. Delete volume ${cg_vol} (cargo registry)"
+    echo "  5. Delete volume ${st_vol} (comment-tracking state)"
     echo
     read -rp "Proceed? [y/N] " reply
     case "$reply" in
@@ -108,7 +113,7 @@ reset_agent() {
     if docker ps -a --format '{{.Names}}' | grep -qx "$container"; then
         docker rm "$container" >/dev/null
     fi
-    for vol in "$ws_vol" "$cg_vol"; do
+    for vol in "$ws_vol" "$cg_vol" "$st_vol"; do
         if docker volume ls --format '{{.Name}}' | grep -qx "$vol"; then
             docker volume rm "$vol" >/dev/null
             echo "removed volume ${vol}"
@@ -116,7 +121,17 @@ reset_agent() {
             echo "volume ${vol} did not exist"
         fi
     done
-    echo "reset complete. next launch will cold-clone and cold-compile."
+    echo "reset complete. next launch will cold-clone, cold-compile, and start with an empty comment-state."
+}
+
+state_dump() {
+    local name="$1"
+    local container; container="$(container_name_for "$name")"
+    if ! docker ps --format '{{.Names}}' | grep -qx "$container"; then
+        echo "error: ${container} is not running. --state needs a running watcher." >&2
+        exit 1
+    fi
+    docker exec "$container" cat /var/lib/agent/state.json
 }
 
 case "${1:-}" in
@@ -150,6 +165,11 @@ case "${1:-}" in
     --reset)
         [ -n "${2:-}" ] || { echo "error: --reset needs an agent name" >&2; exit 64; }
         reset_agent "$2"
+        exit 0
+        ;;
+    --state)
+        [ -n "${2:-}" ] || { echo "error: --state needs an agent name" >&2; exit 64; }
+        state_dump "$2"
         exit 0
         ;;
 esac
@@ -187,6 +207,7 @@ fi
 CONTAINER="$(container_name_for "$NAME")"
 WS_VOL="$(workspace_volume_for "$NAME")"
 CG_VOL="$(cargo_volume_for "$NAME")"
+ST_VOL="$(state_volume_for "$NAME")"
 
 # Double-start guard — one watcher per agent name.
 if docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; then
@@ -216,6 +237,7 @@ docker run -d \
     --add-host="llama-host:${WIN_HOST}" \
     -v "${WS_VOL}:/tmp/workspace" \
     -v "${CG_VOL}:/home/node/.cargo/registry" \
+    -v "${ST_VOL}:/var/lib/agent" \
     -e GH_TOKEN="$GH_TOKEN" \
     -e AGENT_NAME="$NAME" \
     -e AGENT_READY_LABEL="${AGENT_READY_LABEL:-${NAME}-ready}" \

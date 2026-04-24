@@ -60,8 +60,9 @@ export GH_TOKEN=ghp_... LLAMA_MODEL=qwen2.5-coder-32b-instruct
 ./scripts/run-watcher.sh misia                # start the misia watcher
 ./scripts/run-watcher.sh --logs misia         # docker logs -f
 ./scripts/run-watcher.sh --stop misia         # SIGTERM, waits 30s
+./scripts/run-watcher.sh --state misia        # dump comment-tracking state.json
 ./scripts/run-watcher.sh --status             # list running watchers
-./scripts/run-watcher.sh --reset misia        # stop + wipe workspace + cargo caches
+./scripts/run-watcher.sh --reset misia        # stop + wipe ALL volumes
 ```
 
 The watcher:
@@ -81,18 +82,19 @@ The watcher:
 
 ### Workspace persistence
 
-Two named Docker volumes per watcher:
+Three named Docker volumes per watcher:
 
 | Volume | Mount point | Contents |
 |--------|-------------|----------|
 | `fucktorio-workspace-<agent>` | `/tmp/workspace` | Git clone, `target/` build cache |
 | `fucktorio-cargo-<agent>` | `~/.cargo/registry` | Downloaded crates |
+| `fucktorio-state-<agent>` | `/var/lib/agent` | `state.json` — per-issue/PR last-seen comment timestamps (see [Conversing with the agent](#conversing-with-the-agent)) |
 
 Host reboot: volumes survive, Docker auto-restarts the container (`--restart unless-stopped`), container picks up mid-idle (or mid-issue if it was working — without resume semantics; see [Limits](#limits)).
 
 Image rebuild: volumes survive. A fresh container on the new image reuses the old workspace — `git fetch` catches up to whatever landed on main.
 
-Clean start: `--reset <agent>` prompts, stops the container, removes both volumes. Next launch cold-clones and cold-compiles.
+Clean start: `--reset <agent>` prompts, stops the container, removes all three volumes. Next launch cold-clones, cold-compiles, and starts comment-tracking from zero.
 
 **One watcher per agent name.** The launcher refuses to start a second
 watcher with the same name; use `--logs` or `--stop` instead. If you want
@@ -103,12 +105,55 @@ and run one `run-watcher.sh` per name.
 
 | Label | Meaning |
 |-------|---------|
-| `<agent-name>-ready` | Issue is queued for this agent. Watcher claims it. |
-| `agent-done` | Watcher opened a PR for this issue. |
-| `agent-failed` | pi returned without opening a PR; a log-tail comment is attached. |
+| `<agent-name>-ready` | Issue is queued for this agent. Watcher claims it. Added by you, or by the watcher's scan phase when it detects a new human comment on a touched issue/PR. |
+| `agent-done` | Watcher opened a PR for this issue, OR the agent self-labelled after completing a research/sub-issues task. |
+| `agent-failed` | pi returned without opening a PR and without self-labelling `agent-done`; a log-tail comment is attached. |
 
 You create the `<agent-name>-ready` label once per agent. The watcher creates
 `agent-done` and `agent-failed` on demand.
+
+### Conversing with the agent
+
+After the watcher has worked on an issue (whether it finished as `agent-done`
+or `agent-failed`), you can continue the conversation simply by **commenting
+on the issue or on the PR the agent opened**. The watcher's scan phase runs
+once per poll cycle and detects new human comments:
+
+1. Scan finds a new comment authored after the last-seen timestamp for that
+   issue/PR.
+2. Scan re-queues the issue by adding `<agent-name>-ready` (and reopens the
+   issue if it had been closed).
+3. The next pickup phase picks up the re-queued issue.
+4. Pickup's continuation-aware checkout sees that
+   `agent/<agent-name>/issue-<N>` already exists on origin and checks it out
+   — the agent adds commits to its existing PR rather than opening a new one.
+5. The agent reads the full comment thread via `gh issue view` and responds
+   to whatever you asked.
+
+**Comment hygiene.** The watcher filters out any comment whose body starts
+with the literal HTML comment `<!-- agent-no-trigger -->` on its own first
+line. This prevents the agent from re-triggering on its own writing (the
+watcher's own auto-comments and all agent-authored comments include this
+marker). Your own comments should **not** include this marker — you want
+them to trigger the watcher.
+
+**State file.** `state.json` on the `fucktorio-state-<agent>` volume
+tracks per-issue and per-PR last-seen comment timestamps. Dump it with
+`./scripts/run-watcher.sh --state <agent>`. Shape:
+
+```json
+{
+  "version": 1,
+  "issues": { "174": "2026-04-24T10:15:00Z" },
+  "prs":    { "176": "2026-04-24T10:15:00Z" }
+}
+```
+
+**Rate limits.** The scan phase issues roughly one `gh` call per touched
+issue (plus one per touched PR) per poll cycle. A fine-grained GitHub PAT
+has a 5000-requests-per-hour budget — comfortable up to ~80 touched issues
+at a 60s poll interval. Reduce `POLL_INTERVAL` further only if you have
+few touched issues.
 
 ### Windows-side prerequisites (llama.cpp backend)
 

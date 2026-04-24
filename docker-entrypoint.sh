@@ -67,6 +67,19 @@ if [ $have_oauth -eq 0 ] && [ $have_llama -eq 0 ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Watcher state dir. Named volume fucktorio-state-<agent> mounts at
+# /var/lib/agent and holds state.json (tracks last-seen comment ids per
+# issue/PR so the scan phase can detect new human comments). Root-owned on
+# first mount — chown it, then bootstrap an empty state.json if missing.
+# ---------------------------------------------------------------------------
+if [ -d /var/lib/agent ]; then
+    sudo chown "$(id -u):$(id -g)" /var/lib/agent 2>/dev/null || true
+    if [ ! -f /var/lib/agent/state.json ]; then
+        echo '{"version": 1, "issues": {}, "prs": {}}' > /var/lib/agent/state.json
+    fi
+fi
+
+# ---------------------------------------------------------------------------
 # GitHub auth: gh picks up GH_TOKEN automatically. Teach git to use it for
 # HTTPS pushes.
 # ---------------------------------------------------------------------------
