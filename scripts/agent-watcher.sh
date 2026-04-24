@@ -407,9 +407,12 @@ EOF
 
     echo "launching pi (prompt=$(printf '%s' "$BASE_PROMPT" | wc -c) chars)..."
 
+    # Output goes to the per-issue log only — keeps `docker logs` readable
+    # (just the watcher's own status lines, not pi's JSON event stream).
+    # The trace is still archived into the memory branch by commit_memory.
     set +e
-    pi "${PI_BACKEND_ARGS[@]}" --mode json --no-session -p "$BASE_PROMPT" 2>&1 | tee "$LOG"
-    rc=${PIPESTATUS[0]}
+    pi "${PI_BACKEND_ARGS[@]}" --mode json --no-session -p "$BASE_PROMPT" > "$LOG" 2>&1
+    rc=$?
     set -e
 
     echo "pi exited rc=${rc}"
