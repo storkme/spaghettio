@@ -409,7 +409,20 @@ EOF
 
     echo "pi exited rc=${rc}"
 
-    # Commit and push any memory the agent wrote for this issue.
+    # Archive the JSON event stream into the memory branch alongside the
+    # agent's hand-written notes. gzip keeps branch growth manageable; the
+    # traces/ subdir keeps issue-<N>/ readable for humans (just
+    # understanding.md / progress.md at the top level).
+    if [ -s "$LOG" ]; then
+        mkdir -p "${ISSUE_MEM_DIR}/traces"
+        ts="$(date -u +%Y-%m-%dT%H-%M-%SZ)"
+        gzip -c "$LOG" > "${ISSUE_MEM_DIR}/traces/conversation-${ts}.jsonl.gz" \
+            && echo "archived trace to issue-${num}/traces/conversation-${ts}.jsonl.gz" \
+            || echo "warning: failed to archive trace for issue #${num}"
+    fi
+
+    # Commit and push any memory the agent wrote for this issue (plus the
+    # trace archive above).
     commit_memory "$num"
 
     # Ground-truth outcome:

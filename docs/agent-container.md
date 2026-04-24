@@ -186,7 +186,26 @@ git fetch origin agent-memory/misia
 git checkout agent-memory/misia    # from a throwaway clone or worktree
 ls                                  # issue-174/, issue-182/, ...
 cat issue-174/understanding.md
+zcat issue-174/traces/conversation-*.jsonl.gz | jq .   # full pi event stream
 ```
+
+**Layout under each `issue-<N>/`:**
+
+```
+issue-174/
+  understanding.md     # the agent's working understanding of the issue
+  progress.md          # log of attempts, findings, what's next
+  traces/
+    conversation-<UTC timestamp>.jsonl.gz   # one per pickup; full pi --mode json stream
+```
+
+The agent writes the markdown files; the watcher archives the trace gzipped
+after each pickup. Traces are useful for post-hoc analysis (which tool calls
+happened, where compaction kicked in, exactly what the model said). Be aware
+they include every byte the agent's tools read — for a public repo the
+memory branch is also public, so anything pi reads via `bash`/`read` ends up
+public too. For this project the realistic blast radius is low (no
+credentials in the codebase), but it's worth knowing.
 
 **Manually edit memory** (rare — useful if the agent has formed a wrong
 understanding you want to correct before the next pass):
