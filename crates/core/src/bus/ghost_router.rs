@@ -654,6 +654,31 @@ pub fn route_bus_ghost(
         }
     }
 
+    // Fluid-trunk tile bookkeeping: step 3.6 pushes `pipe` / `pipe-to-ground`
+    // entities into `entities` and marks their tiles in `existing_belts` and
+    // `hard`, but never registers them in `trunk_tile_items`. Downstream the
+    // survivor filter (`!ghost_item_at.contains_key`) and the crossings
+    // filter both consult `ghost_item_at`, which is seeded from
+    // `trunk_tile_items` at the start of the routing loop — so without this
+    // catch-up pass, A* routes belts straight across fluid-trunk pipe
+    // columns, the survivor filter fails to drop them, and `Occupancy::place`
+    // panics on the `Permanent` claim at the pipe tile. Register every
+    // pipe / PTG tile whose `segment_id` is `trunk:*` so both the filter and
+    // `all_ghost_crossings` see it as a foreign-item crossing and hand it to
+    // the junction solver.
+    for ent in &entities {
+        let seg = ent.segment_id.as_deref().unwrap_or("");
+        if !seg.starts_with("trunk:") {
+            continue;
+        }
+        if ent.name != "pipe" && ent.name != "pipe-to-ground" {
+            continue;
+        }
+        if let Some(item) = &ent.carries {
+            trunk_tile_items.insert((ent.x, ent.y), item.clone());
+        }
+    }
+
     // -------------------------------------------------------------------------
     // Occupancy refactor (Steps 2-3.5): construct the parallel `Occupancy` from
     // the inputs to steps 1-3 of this function. Step 3 of the rollout uses it
