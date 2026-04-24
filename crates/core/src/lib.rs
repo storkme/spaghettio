@@ -16,6 +16,7 @@ pub mod blueprint;
 pub mod blueprint_parser;
 pub mod bus;
 pub mod common;
+pub mod density;
 pub mod fixture;
 pub mod models;
 pub mod recipe_db;
