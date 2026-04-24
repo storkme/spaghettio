@@ -49,6 +49,8 @@ fn bus_boundary_pair(x: i32, y: i32, item: &str) -> [ZoneBoundary; 2] {
             item: item.into(),
             is_input: true,
             interior: false,
+            belt_tier: None,
+            channel_id: 0,
         },
         ZoneBoundary {
             x,
@@ -57,6 +59,8 @@ fn bus_boundary_pair(x: i32, y: i32, item: &str) -> [ZoneBoundary; 2] {
             item: item.into(),
             is_input: false,
             interior: false,
+            belt_tier: None,
+            channel_id: 0,
         },
     ]
 }
@@ -93,18 +97,26 @@ fn fixture_seed_14_88() -> CrossingZone {
     boundaries.push(ZoneBoundary {
         x: 18, y: 87, direction: EntityDirection::South,
         item: "iron-plate".into(), is_input: true, interior: false,
+        belt_tier: None,
+        channel_id: 0,
     });
     boundaries.push(ZoneBoundary {
         x: 18, y: 87, direction: EntityDirection::East,
         item: "iron-plate".into(), is_input: false, interior: false,
+        belt_tier: None,
+        channel_id: 0,
     });
     boundaries.push(ZoneBoundary {
         x: 18, y: 87, direction: EntityDirection::South,
         item: "copper-cable".into(), is_input: true, interior: false,
+        belt_tier: None,
+        channel_id: 0,
     });
     boundaries.push(ZoneBoundary {
         x: 18, y: 87, direction: EntityDirection::South,
         item: "copper-cable".into(), is_input: false, interior: false,
+        belt_tier: None,
+        channel_id: 0,
     });
     CrossingZone {
         x: 18, y: 87, width: 8, height: 1,
@@ -142,18 +154,26 @@ fn fixture_seed_14_96() -> CrossingZone {
     boundaries.push(ZoneBoundary {
         x: 18, y: 95, direction: EntityDirection::South,
         item: "copper-cable".into(), is_input: true, interior: false,
+        belt_tier: None,
+        channel_id: 0,
     });
     boundaries.push(ZoneBoundary {
         x: 18, y: 95, direction: EntityDirection::South,
         item: "copper-cable".into(), is_input: false, interior: false,
+        belt_tier: None,
+        channel_id: 0,
     });
     boundaries.push(ZoneBoundary {
         x: 18, y: 95, direction: EntityDirection::South,
         item: "iron-plate".into(), is_input: true, interior: false,
+        belt_tier: None,
+        channel_id: 0,
     });
     boundaries.push(ZoneBoundary {
         x: 18, y: 95, direction: EntityDirection::East,
         item: "iron-plate".into(), is_input: false, interior: false,
+        belt_tier: None,
+        channel_id: 0,
     });
     CrossingZone {
         x: 18, y: 95, width: 7, height: 1,
@@ -190,18 +210,26 @@ fn fixture_seed_14_104() -> CrossingZone {
     boundaries.push(ZoneBoundary {
         x: 18, y: 103, direction: EntityDirection::South,
         item: "iron-plate".into(), is_input: true, interior: false,
+        belt_tier: None,
+        channel_id: 0,
     });
     boundaries.push(ZoneBoundary {
         x: 18, y: 103, direction: EntityDirection::East,
         item: "iron-plate".into(), is_input: false, interior: false,
+        belt_tier: None,
+        channel_id: 0,
     });
     boundaries.push(ZoneBoundary {
         x: 18, y: 103, direction: EntityDirection::South,
         item: "copper-cable".into(), is_input: true, interior: false,
+        belt_tier: None,
+        channel_id: 0,
     });
     boundaries.push(ZoneBoundary {
         x: 18, y: 103, direction: EntityDirection::South,
         item: "copper-cable".into(), is_input: false, interior: false,
+        belt_tier: None,
+        channel_id: 0,
     });
     CrossingZone {
         x: 18, y: 103, width: 6, height: 1,

@@ -162,12 +162,16 @@ impl Junction {
                 io: PortIo::Input,
                 item: Some(spec.item.clone()),
                 interior: false,
+                belt_tier: Some(spec.belt_tier.belt_name().to_string()),
+                channel_id: 0,
             });
             ports.push(RegionPort {
                 point: spec.exit,
                 io: PortIo::Output,
                 item: Some(spec.item.clone()),
                 interior: false,
+                belt_tier: Some(spec.belt_tier.belt_name().to_string()),
+                channel_id: 0,
             });
         }
         LayoutRegion {

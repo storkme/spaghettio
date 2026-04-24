@@ -83,6 +83,8 @@ fn pin_on_forbidden_tile_rejects() {
                 item: "iron-plate".into(),
                 is_input: true,
                 interior: false,
+                belt_tier: None,
+                channel_id: 0,
             },
             ZoneBoundary {
                 x: 2,
@@ -91,6 +93,8 @@ fn pin_on_forbidden_tile_rejects() {
                 item: "iron-plate".into(),
                 is_input: false,
                 interior: false,
+                belt_tier: None,
+                channel_id: 0,
             },
         ],
         forced_empty: vec![(1, 0)],

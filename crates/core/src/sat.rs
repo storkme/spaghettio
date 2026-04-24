@@ -11,6 +11,38 @@
 use crate::models::{EntityDirection, PlacedEntity};
 use varisat::{CnfFormula, ExtendFormula, Lit, Solver, Var};
 
+/// Per-channel metadata derived from a zone's boundaries. Indexed by
+/// `channel_id`. `tier` is `None` when the boundary's `belt_tier` is
+/// unknown — the solve-time entity stamper falls back to the zone's
+/// default tier for those channels.
+#[derive(Debug, Clone, Default)]
+pub struct ChannelInfo {
+    pub item: String,
+    pub tier: Option<String>,
+}
+
+/// Build a `channel_id → ChannelInfo` table from a boundary list.
+/// Boundaries with the same `channel_id` are assumed to agree on
+/// `(item, belt_tier)` — that's the invariant `assign_channels`
+/// guarantees. Missing channel ids (if any) get default entries.
+pub fn channel_info_from_boundaries(boundaries: &[ZoneBoundary]) -> Vec<ChannelInfo> {
+    let n = boundaries
+        .iter()
+        .map(|b| b.channel_id)
+        .max()
+        .map(|m| m + 1)
+        .unwrap_or(0) as usize;
+    let mut info = vec![ChannelInfo::default(); n];
+    for b in boundaries {
+        let slot = &mut info[b.channel_id as usize];
+        if slot.item.is_empty() {
+            slot.item = b.item.clone();
+            slot.tier = b.belt_tier.clone();
+        }
+    }
+    info
+}
+
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -60,6 +92,26 @@ pub struct ZoneBoundary {
     /// treated as perimeter — and SAT will return UNSAT, forcing the
     /// region to grow.
     pub interior: bool,
+    /// Tier (surface-belt entity name, e.g. `"fast-transport-belt"`) of
+    /// the external entity this boundary connects to, if known.
+    /// Metadata only — SAT encoding reads `channel_id`, not this field.
+    /// The solve-time entity stamping consults it (via the
+    /// `channel_id → belt_tier` table) to pick belt/UG entity names.
+    ///
+    /// `None` → unknown, fall back to the zone's default tier.
+    pub belt_tier: Option<String>,
+    /// Channel id — the actual SAT-level identity of this boundary's
+    /// flow. Boundaries that share `(item, belt_tier)` share a
+    /// `channel_id`; different tiers of the same item get different
+    /// ids. SAT tile state is keyed on `channel_id`, not on item
+    /// strings, so same-topology-different-item zones become the same
+    /// SAT problem.
+    ///
+    /// Populated by `junction_sat_strategy::topology_boundaries` after
+    /// collecting boundaries. Defaults to 0 in test construction —
+    /// real assignment happens in a dedicated pass before the boundary
+    /// list reaches the encoder.
+    pub channel_id: u32,
 }
 
 /// Result of solving a crossing zone.
@@ -192,18 +244,19 @@ struct CrossingEncoder {
     width: u32,
     height: u32,
     n_item_bits: u32,
-    item_names: Vec<String>,
+    #[allow(dead_code)]
+    n_channels: u32,
     tiles: Vec<TileVars>,
     total_vars: u32,
 }
 
 impl CrossingEncoder {
-    fn new(width: u32, height: u32, item_names: Vec<String>) -> Self {
-        let n_items = item_names.len().max(1);
-        let n_item_bits = if n_items <= 1 {
+    fn new(width: u32, height: u32, n_channels: u32) -> Self {
+        let n_ch = (n_channels as usize).max(1);
+        let n_item_bits = if n_ch <= 1 {
             0
         } else {
-            ((n_items as f64).log2().ceil() as u32).max(1)
+            ((n_ch as f64).log2().ceil() as u32).max(1)
         };
 
         // 3 type + 4 dir + 4 underground + 3 * n_item_bits (surface + ug_h + ug_v)
@@ -251,7 +304,7 @@ impl CrossingEncoder {
             width,
             height,
             n_item_bits,
-            item_names,
+            n_channels,
             tiles,
             total_vars: next as u32,
         }
@@ -356,7 +409,12 @@ impl CrossingEncoder {
     /// the solution. `Some(0)` hard-forbids UG (surface-only). `Some(k)`
     /// allows at most `k` UG corridors. `None` = unlimited. Callers use
     /// this to cost-shape the solver toward simpler layouts.
-    fn encode(&self, zone: &CrossingZone, max_ug_reach: u32, max_ug_ins: Option<u32>) -> Cnf {
+    fn encode(
+        &self,
+        zone: &CrossingZone,
+        channel_reaches: &[u32],
+        max_ug_ins: Option<u32>,
+    ) -> Cnf {
         // Interior-output sinks: forced_empty tiles that act as flow exits
         // for the zone (an output ZoneBoundary points at them). Items
         // entering these tiles are consumed by an external Permanent
@@ -390,7 +448,7 @@ impl CrossingEncoder {
         self.encode_type_constraints(&mut cnf);
         self.encode_direction_constraints(&mut cnf);
         self.encode_adjacency(&mut cnf, &interior_output_sinks);
-        self.encode_underground(&mut cnf, max_ug_reach);
+        self.encode_underground(&mut cnf, channel_reaches);
         self.encode_single_incoming(&mut cnf);
         if self.n_item_bits > 0 {
             self.encode_item_transport(&mut cnf);
@@ -632,7 +690,27 @@ impl CrossingEncoder {
 
     // -- Underground belt pairing and propagation ---------------------------
 
-    fn encode_underground(&self, cnf: &mut Cnf, max_reach: u32) {
+    /// Emit the underground-pairing / max-reach clauses.
+    ///
+    /// `channel_reaches[c]` is the UG-reach cap for channel `c`.
+    /// - If all channels share a reach, the encoding collapses to the
+    ///   original single-global-reach form.
+    /// - Mixed reaches: we cap at the global max (so ANY UG run of
+    ///   length `max+1` is forbidden), then add tighter per-channel
+    ///   clauses that forbid runs of length `reach[c]+1` for channels
+    ///   whose reach is below the global max.
+    ///
+    /// A per-channel clause at position `(x, y)`, direction `d`, channel
+    /// `c`, run length `L`:
+    ///   NOT (underground[d]_0 AND … AND underground[d]_{L-1}
+    ///        AND ug_item_axis_bits_i encode c for i in 0..L)
+    /// which becomes a single disjunction of literals — one
+    /// `underground[d]_i.negative()` per tile plus the literals that
+    /// encode "this tile does NOT carry channel c" across channel bits.
+    fn encode_underground(&self, cnf: &mut Cnf, channel_reaches: &[u32]) {
+        // Global max — used for the coarse run-length clause so even a
+        // single-channel mix with a blown-up reach can't slip through.
+        let max_reach: u32 = channel_reaches.iter().copied().max().unwrap_or(0);
         for y in 0..self.height {
             for x in 0..self.width {
                 let t = self.tiles[self.idx(x, y)];
@@ -756,6 +834,56 @@ impl CrossingEncoder {
                     }
                     if clause.len() == (max_reach + 1) as usize {
                         cnf.add(&clause);
+                    }
+                }
+            }
+        }
+
+        // Per-channel tightening: for each channel whose reach is
+        // strictly less than the global max, forbid any run of
+        // `reach[c]+1` consecutive underground[d] tiles that all carry
+        // channel c. Skip when n_item_bits == 0 (single-channel zones —
+        // the global clause is already at reach[0]).
+        let nb = self.n_item_bits as usize;
+        if nb == 0 {
+            return;
+        }
+        for (c, &reach_c) in channel_reaches.iter().enumerate() {
+            if reach_c >= max_reach {
+                continue; // global clause already enforces this.
+            }
+            let run_len = (reach_c as i32) + 1;
+            for &d in &ALL_DIRS {
+                let (dx, dy) = dir_delta(d);
+                for y in 0..self.height as i32 {
+                    for x in 0..self.width as i32 {
+                        let mut clause = Vec::new();
+                        let mut valid = true;
+                        for i in 0..run_len {
+                            let cx = x + dx * i;
+                            let cy = y + dy * i;
+                            if !self.in_bounds(cx, cy) {
+                                valid = false;
+                                break;
+                            }
+                            let t = self.tiles[self.idx(cx as u32, cy as u32)];
+                            // Either this tile isn't carrying underground[d]…
+                            clause.push(t.underground[d].negative());
+                            // …or one of its channel bits disagrees with
+                            // c's binary encoding.
+                            let ug_bits = Self::ug_channel(&t, d);
+                            for (bit, ug_bit) in ug_bits.iter().enumerate().take(nb) {
+                                let want_one = (c >> bit) & 1 == 1;
+                                clause.push(if want_one {
+                                    ug_bit.negative()
+                                } else {
+                                    ug_bit.positive()
+                                });
+                            }
+                        }
+                        if valid {
+                            cnf.add(&clause);
+                        }
                     }
                 }
             }
@@ -1017,7 +1145,7 @@ impl CrossingEncoder {
         }
 
         // Fix item bits on the boundary tile.
-        self.fix_item_bits(cnf, &t, &b.item);
+        self.fix_channel_bits(cnf, &t, b.channel_id);
     }
 
     /// Interior arm: the boundary tile is in `forced_empty`, so there is no
@@ -1072,7 +1200,7 @@ impl CrossingEncoder {
         let n = self.tiles[self.idx(nx, ny)];
 
         // Fix item bits on the neighbor.
-        self.fix_item_bits(cnf, &n, &b.item);
+        self.fix_channel_bits(cnf, &n, b.channel_id);
 
         if b.is_input {
             // Neighbor receives flow from the boundary tile. It must be a
@@ -1108,15 +1236,13 @@ impl CrossingEncoder {
         }
     }
 
-    /// Apply item-bit constraints so the given tile carries `item`.
-    fn fix_item_bits(&self, cnf: &mut Cnf, t: &TileVars, item: &str) {
-        let item_idx = self
-            .item_names
-            .iter()
-            .position(|n| *n == item)
-            .unwrap_or(0);
+    /// Apply item-bit constraints so the given tile carries the flow
+    /// for `channel_id`. Replaces the old `fix_item_bits(item: &str)`
+    /// lookup — SAT state is keyed on channel id, not on item string.
+    fn fix_channel_bits(&self, cnf: &mut Cnf, t: &TileVars, channel_id: u32) {
+        let idx = channel_id as usize;
         for bit in 0..self.n_item_bits as usize {
-            let val = (item_idx >> bit) & 1;
+            let val = (idx >> bit) & 1;
             if val == 1 {
                 cnf.add(&[t.item_bits[bit].positive()]);
             } else {
@@ -1195,11 +1321,14 @@ impl CrossingEncoder {
         // Output direction comes from the OUT side.
         cnf.add(&[t.out_dir[d_out].positive()]);
 
-        // Items must agree. Pin from in_b; if out_b differs, its
-        // fix_item_bits contradicts and SAT correctly returns UNSAT.
-        self.fix_item_bits(cnf, &t, &in_b.item);
-        if in_b.item != out_b.item {
-            self.fix_item_bits(cnf, &t, &out_b.item);
+        // Channels must agree. Pin from in_b; if out_b is a different
+        // channel, its fix_channel_bits contradicts and SAT correctly
+        // returns UNSAT. (Same-item-different-tier IN/OUT now land in
+        // different channels, which SAT rejects — the tier pairing we
+        // want.)
+        self.fix_channel_bits(cnf, &t, in_b.channel_id);
+        if in_b.channel_id != out_b.channel_id {
+            self.fix_channel_bits(cnf, &t, out_b.channel_id);
         }
 
         // Anti-loop: no in-grid neighbor may output at this tile. The
@@ -1419,19 +1548,31 @@ impl CrossingEncoder {
         out.push(type_var.positive());
         out.push(t.out_dir[entity_dir_to_idx(pin.direction)].positive());
 
-        // Binary-encoded item bits. The encoder's exclusivity clauses
+        // Binary-encoded channel bits. The encoder's exclusivity clauses
         // force the bits not pinned here to flip naturally; we pin both
-        // 0s and 1s so the assumption uniquely identifies the carried
-        // item.
+        // 0s and 1s so the assumption uniquely identifies the channel.
+        //
+        // Pins carry an item string (`pin.carries`), not a channel id —
+        // they come from the editor UI which doesn't know about
+        // channels. Resolve by finding the first boundary whose `item`
+        // matches. Same-item-different-tier zones are ambiguous here;
+        // for now the pin lands on whichever tier appears first in the
+        // boundary list. (Fixture editor doesn't hit this case.)
         if self.n_item_bits > 0 {
             let Some(item_name) = pin.carries.as_deref() else {
                 return false;
             };
-            let Some(item_idx) = self.item_names.iter().position(|n| n == item_name) else {
+            let Some(channel_id) = zone
+                .boundaries
+                .iter()
+                .find(|b| b.item == item_name)
+                .map(|b| b.channel_id)
+            else {
                 return false;
             };
+            let idx = channel_id as usize;
             for b in 0..self.n_item_bits as usize {
-                if (item_idx >> b) & 1 == 1 {
+                if (idx >> b) & 1 == 1 {
                     out.push(t.item_bits[b].positive());
                 } else {
                     out.push(t.item_bits[b].negative());
@@ -1442,11 +1583,17 @@ impl CrossingEncoder {
         true
     }
 
+    /// Decode the SAT model into placed entities. Each tile's
+    /// `channel_bits` map to an index into `channel_info`; the
+    /// channel's `tier` (falling back to `default_belt_tier` when
+    /// `None`) determines the belt/UG entity name, and the channel's
+    /// `item` becomes the tile's `carries`.
     fn extract_solution(
         &self,
         model: &[Lit],
         zone: &CrossingZone,
-        belt_tier: &str,
+        default_belt_tier: &str,
+        channel_info: &[ChannelInfo],
     ) -> Vec<PlacedEntity> {
         let model_set: std::collections::HashSet<Lit> = model.iter().copied().collect();
         let is_true = |v: Var| model_set.contains(&v.positive());
@@ -1471,30 +1618,37 @@ impl CrossingEncoder {
                     .copied()
                     .unwrap_or(DIR_S);
 
-                let item_idx = if self.n_item_bits > 0 {
+                let channel_idx = if self.n_item_bits > 0 {
                     let mut idx = 0usize;
                     for bit in 0..self.n_item_bits as usize {
                         if is_true(t.item_bits[bit]) {
                             idx |= 1 << bit;
                         }
                     }
-                    idx.min(self.item_names.len().saturating_sub(1))
+                    idx.min(channel_info.len().saturating_sub(1))
                 } else {
                     0
                 };
 
-                let item_name = self.item_names.get(item_idx).cloned();
+                let (item_name, tile_tier_owned) = channel_info
+                    .get(channel_idx)
+                    .map(|ci| {
+                        let tier = ci.tier.clone().unwrap_or_else(|| default_belt_tier.to_string());
+                        (Some(ci.item.clone()), tier)
+                    })
+                    .unwrap_or((None, default_belt_tier.to_string()));
+                let tile_tier = tile_tier_owned.as_str();
 
                 let (entity_name, io_type) = if belt {
-                    (belt_tier.to_string(), None)
+                    (tile_tier.to_string(), None)
                 } else if ug_in {
                     (
-                        ug_name_for_tier(belt_tier).to_string(),
+                        ug_name_for_tier(tile_tier).to_string(),
                         Some("input".to_string()),
                     )
                 } else {
                     (
-                        ug_name_for_tier(belt_tier).to_string(),
+                        ug_name_for_tier(tile_tier).to_string(),
                         Some("output".to_string()),
                     )
                 };
@@ -1519,7 +1673,10 @@ impl CrossingEncoder {
     }
 }
 
-fn ug_name_for_tier(belt_tier: &str) -> &str {
+/// Surface-belt tier → matching underground-belt entity name.
+/// Public so the post-solve retype pass in `bus/junction_sat_strategy.rs`
+/// can derive the UG name from a boundary's surface-belt tier.
+pub fn ug_name_for_tier(belt_tier: &str) -> &str {
     match belt_tier {
         "fast-transport-belt" => "fast-underground-belt",
         "express-transport-belt" => "express-underground-belt",
@@ -1562,15 +1719,33 @@ pub fn solve_crossing_zone_with_stats(
     belt_tier: &str,
     max_ug_ins: Option<u32>,
 ) -> (Option<Vec<PlacedEntity>>, CrossingZoneStats) {
-    let item_names: Vec<String> = {
-        let mut names: Vec<String> = zone.boundaries.iter().map(|b| b.item.clone()).collect();
-        names.sort();
-        names.dedup();
-        names
-    };
+    let channel_info = channel_info_from_boundaries(&zone.boundaries);
+    let n_channels = channel_info.len() as u32;
+    let channel_reaches: Vec<u32> = vec![max_ug_reach; n_channels.max(1) as usize];
+    solve_crossing_zone_per_channel(zone, &channel_reaches, belt_tier, max_ug_ins)
+}
 
-    let encoder = CrossingEncoder::new(zone.width, zone.height, item_names);
-    let cnf = encoder.encode(zone, max_ug_reach, max_ug_ins);
+/// Per-channel-reach variant of `solve_crossing_zone_with_stats`.
+/// `channel_reaches[c]` caps the UG run length for channel `c`; the
+/// encoder enforces per-channel tightening so a yellow flow in a
+/// mixed-tier zone can't occupy a longer UG than yellow's physical
+/// reach. Used by the `sat-native` strategy rung to solve at
+/// per-channel tier-correct reaches.
+///
+/// Channel info (item + tier per channel) is derived from the zone's
+/// boundaries — same `assign_channels` output the caller used to build
+/// `channel_reaches`.
+pub fn solve_crossing_zone_per_channel(
+    zone: &CrossingZone,
+    channel_reaches: &[u32],
+    default_belt_tier: &str,
+    max_ug_ins: Option<u32>,
+) -> (Option<Vec<PlacedEntity>>, CrossingZoneStats) {
+    let channel_info = channel_info_from_boundaries(&zone.boundaries);
+    let n_channels = channel_info.len() as u32;
+
+    let encoder = CrossingEncoder::new(zone.width, zone.height, n_channels);
+    let cnf = encoder.encode(zone, channel_reaches, max_ug_ins);
 
     let variables = encoder.total_vars;
     let clauses = cnf.count;
@@ -1600,7 +1775,7 @@ pub fn solve_crossing_zone_with_stats(
     }
 
     let model: Vec<Lit> = solver.model().unwrap_or_default().to_vec();
-    let entities = encoder.extract_solution(&model, zone, belt_tier);
+    let entities = encoder.extract_solution(&model, zone, default_belt_tier, &channel_info);
 
     (Some(entities), stats)
 }
@@ -1627,19 +1802,43 @@ pub fn solve_crossing_zone_with_cost_cap(
     max_ug_ins: Option<u32>,
     cost_cap: Option<u32>,
 ) -> (Option<Vec<PlacedEntity>>, CrossingZoneStats) {
+    let channel_info = channel_info_from_boundaries(&zone.boundaries);
+    let n_channels = channel_info.len() as u32;
+    let channel_reaches: Vec<u32> = vec![max_ug_reach; n_channels.max(1) as usize];
+    solve_crossing_zone_per_channel_with_cost_cap(
+        zone,
+        &channel_reaches,
+        belt_tier,
+        max_ug_ins,
+        cost_cap,
+    )
+}
+
+/// Per-channel-reach variant of `solve_crossing_zone_with_cost_cap`.
+/// Used by the cost-descent loop in `SatStrategy` so descent iterations
+/// run under the same per-channel reach constraints as the initial
+/// solve.
+pub fn solve_crossing_zone_per_channel_with_cost_cap(
+    zone: &CrossingZone,
+    channel_reaches: &[u32],
+    default_belt_tier: &str,
+    max_ug_ins: Option<u32>,
+    cost_cap: Option<u32>,
+) -> (Option<Vec<PlacedEntity>>, CrossingZoneStats) {
     let Some(cap) = cost_cap else {
-        return solve_crossing_zone_with_stats(zone, max_ug_reach, belt_tier, max_ug_ins);
+        return solve_crossing_zone_per_channel(
+            zone,
+            channel_reaches,
+            default_belt_tier,
+            max_ug_ins,
+        );
     };
 
-    let item_names: Vec<String> = {
-        let mut names: Vec<String> = zone.boundaries.iter().map(|b| b.item.clone()).collect();
-        names.sort();
-        names.dedup();
-        names
-    };
+    let channel_info = channel_info_from_boundaries(&zone.boundaries);
+    let n_channels = channel_info.len() as u32;
 
-    let encoder = CrossingEncoder::new(zone.width, zone.height, item_names);
-    let mut cnf = encoder.encode(zone, max_ug_reach, max_ug_ins);
+    let encoder = CrossingEncoder::new(zone.width, zone.height, n_channels);
+    let mut cnf = encoder.encode(zone, channel_reaches, max_ug_ins);
 
     let mut aux_counter = encoder.total_vars;
     encoder.encode_cost_cap(&mut cnf, cap, &mut aux_counter);
@@ -1672,7 +1871,7 @@ pub fn solve_crossing_zone_with_cost_cap(
     }
 
     let model: Vec<Lit> = solver.model().unwrap_or_default().to_vec();
-    let entities = encoder.extract_solution(&model, zone, belt_tier);
+    let entities = encoder.extract_solution(&model, zone, default_belt_tier, &channel_info);
 
     (Some(entities), stats)
 }
@@ -1699,15 +1898,12 @@ pub fn solve_crossing_zone_with_pins(
     belt_tier: &str,
     max_ug_ins: Option<u32>,
 ) -> (Option<Vec<PlacedEntity>>, CrossingZoneStats) {
-    let item_names: Vec<String> = {
-        let mut names: Vec<String> = zone.boundaries.iter().map(|b| b.item.clone()).collect();
-        names.sort();
-        names.dedup();
-        names
-    };
+    let channel_info = channel_info_from_boundaries(&zone.boundaries);
+    let n_channels = channel_info.len() as u32;
 
-    let encoder = CrossingEncoder::new(zone.width, zone.height, item_names);
-    let cnf = encoder.encode(zone, max_ug_reach, max_ug_ins);
+    let encoder = CrossingEncoder::new(zone.width, zone.height, n_channels);
+    let channel_reaches: Vec<u32> = vec![max_ug_reach; n_channels.max(1) as usize];
+    let cnf = encoder.encode(zone, &channel_reaches, max_ug_ins);
 
     let variables = encoder.total_vars;
     let clauses = cnf.count;
@@ -1754,7 +1950,7 @@ pub fn solve_crossing_zone_with_pins(
     }
 
     let model: Vec<Lit> = solver.model().unwrap_or_default().to_vec();
-    let entities = encoder.extract_solution(&model, zone, belt_tier);
+    let entities = encoder.extract_solution(&model, zone, belt_tier, &channel_info);
 
     (Some(entities), stats)
 }
@@ -1785,6 +1981,8 @@ mod tests {
                     item: "iron-plate".into(),
                     is_input: true,
                     interior: false,
+                    belt_tier: None,
+                    channel_id: 0,
                 },
                 // Trunk out (bottom)
                 ZoneBoundary {
@@ -1794,6 +1992,8 @@ mod tests {
                     item: "iron-plate".into(),
                     is_input: false,
                     interior: false,
+                    belt_tier: None,
+                    channel_id: 0,
                 },
                 // Tap-off in (left)
                 ZoneBoundary {
@@ -1803,6 +2003,8 @@ mod tests {
                     item: "copper-plate".into(),
                     is_input: true,
                     interior: false,
+                    belt_tier: None,
+                    channel_id: 0,
                 },
                 // Tap-off out (right)
                 ZoneBoundary {
@@ -1812,6 +2014,8 @@ mod tests {
                     item: "copper-plate".into(),
                     is_input: false,
                     interior: false,
+                    belt_tier: None,
+                    channel_id: 0,
                 },
             ],
             forced_empty: vec![],
@@ -1906,6 +2110,8 @@ mod tests {
                     item: "iron-plate".into(),
                     is_input: true,
                     interior: false,
+                    belt_tier: None,
+                    channel_id: 0,
                 },
                 ZoneBoundary {
                     x: 12,
@@ -1914,6 +2120,8 @@ mod tests {
                     item: "iron-plate".into(),
                     is_input: false,
                     interior: false,
+                    belt_tier: None,
+                    channel_id: 0,
                 },
                 ZoneBoundary {
                     x: 10,
@@ -1922,6 +2130,8 @@ mod tests {
                     item: "copper-plate".into(),
                     is_input: true,
                     interior: false,
+                    belt_tier: None,
+                    channel_id: 0,
                 },
                 ZoneBoundary {
                     x: 14,
@@ -1930,6 +2140,8 @@ mod tests {
                     item: "copper-plate".into(),
                     is_input: false,
                     interior: false,
+                    belt_tier: None,
+                    channel_id: 0,
                 },
             ],
             forced_empty: vec![],
@@ -1967,6 +2179,8 @@ mod tests {
                     item: "iron-plate".into(),
                     is_input: true,
                     interior: false,
+                    belt_tier: None,
+                    channel_id: 0,
                 },
                 ZoneBoundary {
                     x: 0,
@@ -1975,6 +2189,8 @@ mod tests {
                     item: "copper-plate".into(),
                     is_input: true,
                     interior: false,
+                    belt_tier: None,
+                    channel_id: 0,
                 },
             ],
             forced_empty: vec![],
@@ -2012,6 +2228,8 @@ mod tests {
                 item: item.clone(),
                 is_input: true,
                 interior: false,
+                belt_tier: None,
+                channel_id: 0,
             });
             boundaries.push(ZoneBoundary {
                 x: trunk_x,
@@ -2020,6 +2238,8 @@ mod tests {
                 item,
                 is_input: false,
                 interior: false,
+                belt_tier: None,
+                channel_id: 0,
             });
         }
 
@@ -2033,6 +2253,8 @@ mod tests {
                 item: item.clone(),
                 is_input: true,
                 interior: false,
+                belt_tier: None,
+                channel_id: 0,
             });
             boundaries.push(ZoneBoundary {
                 x: (width - 1) as i32,
@@ -2041,6 +2263,8 @@ mod tests {
                 item,
                 is_input: false,
                 interior: false,
+                belt_tier: None,
+                channel_id: 0,
             });
         }
 
@@ -2455,6 +2679,8 @@ mod tests {
                     item: "copper-plate".into(),
                     is_input: true,
                     interior: false,
+                    belt_tier: None,
+                    channel_id: 0,
                 },
                 // IN2: copper-cable enters right column y=7, flowing West into grid
                 ZoneBoundary {
@@ -2464,6 +2690,8 @@ mod tests {
                     item: "copper-cable".into(),
                     is_input: true,
                     interior: false,
+                    belt_tier: None,
+                    channel_id: 0,
                 },
                 // OUT1: copper-plate exits right column y=8, flowing East
                 ZoneBoundary {
@@ -2473,6 +2701,8 @@ mod tests {
                     item: "copper-plate".into(),
                     is_input: false,
                     interior: false,
+                    belt_tier: None,
+                    channel_id: 0,
                 },
                 // OUT2: copper-cable exits bottom row x=4, flowing South
                 ZoneBoundary {
@@ -2482,6 +2712,8 @@ mod tests {
                     item: "copper-cable".into(),
                     is_input: false,
                     interior: false,
+                    belt_tier: None,
+                    channel_id: 0,
                 },
             ],
             forced_empty: vec![],
@@ -2566,6 +2798,8 @@ mod tests {
                     item: "iron-plate".into(),
                     is_input: true,
                     interior: false,
+                    belt_tier: None,
+                    channel_id: 0,
                 },
                 ZoneBoundary {
                     x: 5, y: 10,
@@ -2573,6 +2807,8 @@ mod tests {
                     item: "iron-plate".into(),
                     is_input: false,
                     interior: false,
+                    belt_tier: None,
+                    channel_id: 0,
                 },
                 ZoneBoundary {
                     x: 3, y: 9,
@@ -2580,6 +2816,8 @@ mod tests {
                     item: "copper-cable".into(),
                     is_input: true,
                     interior: false,
+                    belt_tier: None,
+                    channel_id: 0,
                 },
                 ZoneBoundary {
                     x: 3, y: 12,
@@ -2587,6 +2825,8 @@ mod tests {
                     item: "copper-cable".into(),
                     is_input: false,
                     interior: false,
+                    belt_tier: None,
+                    channel_id: 0,
                 },
                 ZoneBoundary {
                     x: 4, y: 9,
@@ -2594,6 +2834,8 @@ mod tests {
                     item: "copper-cable".into(),
                     is_input: true,
                     interior: false,
+                    belt_tier: None,
+                    channel_id: 0,
                 },
                 ZoneBoundary {
                     x: 5, y: 11,
@@ -2601,6 +2843,8 @@ mod tests {
                     item: "copper-cable".into(),
                     is_input: false,
                     interior: false,
+                    belt_tier: None,
+                    channel_id: 0,
                 },
             ],
             forced_empty: vec![],
@@ -2697,6 +2941,8 @@ mod tests {
                     item: "iron-plate".into(),
                     is_input: true,
                     interior: true,
+                    belt_tier: None,
+                    channel_id: 0,
                 },
                 ZoneBoundary {
                     x: 2,
@@ -2705,6 +2951,8 @@ mod tests {
                     item: "iron-plate".into(),
                     is_input: false,
                     interior: false,
+                    belt_tier: None,
+                    channel_id: 0,
                 },
             ],
             forced_empty: vec![(0, 0)],
@@ -2750,6 +2998,8 @@ mod tests {
                     item: "iron-plate".into(),
                     is_input: true,
                     interior: false,
+                    belt_tier: None,
+                    channel_id: 0,
                 },
                 ZoneBoundary {
                     x: 2,
@@ -2758,6 +3008,8 @@ mod tests {
                     item: "iron-plate".into(),
                     is_input: false,
                     interior: true,
+                    belt_tier: None,
+                    channel_id: 0,
                 },
             ],
             forced_empty: vec![(2, 1)],
@@ -2797,6 +3049,8 @@ mod tests {
                     item: "iron-plate".into(),
                     is_input: true,
                     interior: true,
+                    belt_tier: None,
+                    channel_id: 0,
                 },
                 ZoneBoundary {
                     x: 2,
@@ -2805,6 +3059,8 @@ mod tests {
                     item: "iron-plate".into(),
                     is_input: false,
                     interior: true,
+                    belt_tier: None,
+                    channel_id: 0,
                 },
             ],
             forced_empty: vec![(0, 0), (2, 0)],
@@ -2842,6 +3098,8 @@ mod tests {
                     item: "iron-plate".into(),
                     is_input: true,
                     interior: true,
+                    belt_tier: None,
+                    channel_id: 0,
                 },
                 ZoneBoundary {
                     x: 2,
@@ -2850,6 +3108,8 @@ mod tests {
                     item: "iron-plate".into(),
                     is_input: false,
                     interior: false,
+                    belt_tier: None,
+                    channel_id: 0,
                 },
             ],
             forced_empty: vec![(0, 0), (1, 0)],

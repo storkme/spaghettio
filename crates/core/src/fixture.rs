@@ -283,6 +283,8 @@ pub fn build_zone(fixture: &Fixture) -> CrossingZone {
             item: b.item.clone(),
             is_input: b.is_input,
             interior: b.interior,
+            belt_tier: None,
+            channel_id: 0,
         })
         .collect();
 

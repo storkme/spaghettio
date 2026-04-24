@@ -12,7 +12,7 @@ import {
   decodeSnapshot,
 } from "./ui/snapshotLoader";
 import { initEngine, getEngine } from "./engine";
-import type { SolverResult, LayoutResult, PlacedEntity, ValidationIssue } from "./engine";
+import type { SolverResult, LayoutResult, PlacedEntity, ValidationIssue, SatImprovement } from "./engine";
 import { renderTraceOverlay, getTracePhases, eventsUpToPhase, type TraceEvent, type PhaseSnapshot } from "./renderer/traceOverlay";
 import { renderValidationOverlay } from "./renderer/validationOverlay";
 import { renderRegionOverlayDetailed, type RegionOverlayItem } from "./renderer/regionOverlay";
@@ -30,7 +30,7 @@ import { buildTileContext } from "./ui/tileContext";
 import { createSnapshotMode } from "./ui/snapshotMode";
 import { createLegendPanel, type LegendPanelControls, type LegendPanelState } from "./ui/legendPanel";
 import { renderLayoutPhaseAnimated, type PhaseAnimationHandle } from "./renderer/phaseAnimation";
-import { startImprovementAnimation, type ImprovementAnimationHandle } from "./renderer/improvementAnimation";
+import { spawnRegionFlash } from "./renderer/improvementAnimation";
 import { createStreamingRenderer, type StreamingRendererHandle } from "./renderer/streamingRenderer";
 import { createTimelineScrubber, type TimelineScrubberHandle } from "./ui/timelineScrubber";
 import "./ui/timelineScrubber.css";
@@ -534,29 +534,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
   annotationHint.textContent = "Ctrl+C to copy JSON";
   annotationBar.appendChild(annotationHint);
 
-  // --- Region improvement row (shown when selection covers a SAT zone) ---
-  const improveRow = document.createElement("div");
-  improveRow.style.cssText = "margin-top:6px;border-top:1px solid #2a2a2a;padding-top:6px;display:none";
-  annotationBar.appendChild(improveRow);
-
-  const improveStatus = document.createElement("div");
-  improveStatus.style.cssText = "color:#40c0e0;margin-bottom:4px;font-size:11px";
-  improveRow.appendChild(improveStatus);
-
-  const improveBtn = document.createElement("button");
-  improveBtn.textContent = "Improve region";
-  improveBtn.style.cssText = "background:#1a2a2a;color:#e0e0e0;border:1px solid #40c0e0;border-radius:2px;padding:4px 10px;font:11px monospace;cursor:pointer;margin-right:4px";
-  improveRow.appendChild(improveBtn);
-
-  const improveCancelBtn = document.createElement("button");
-  improveCancelBtn.textContent = "Stop";
-  improveCancelBtn.style.cssText = "background:#2a1a1a;color:#e0e0e0;border:1px solid #c04040;border-radius:2px;padding:4px 10px;font:11px monospace;cursor:pointer;display:none";
-  improveRow.appendChild(improveCancelBtn);
-
-  // Resolved per selection change. null => no SAT zone under selection.
-  let improveTargetRegionId: number | null = null;
-  let improveInFlight = false;
-  let improveAnim: ImprovementAnimationHandle | null = null;
+  let optimizeInFlight = false;
 
   let lastLayout: LayoutResult | null = null;
   let selectionCtrl: SelectionController | null = null;
@@ -602,119 +580,47 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     if (entities.length === 0) {
       annotationBar.style.display = "none";
       annotationNote.value = "";
-      improveRow.style.display = "none";
-      improveTargetRegionId = null;
     } else {
       annotationCount.textContent = `${entities.length} entit${entities.length === 1 ? "y" : "ies"} selected`;
       annotationBar.style.display = "block";
-      updateImproveRowForSelection(entities);
     }
   }
 
-  /** Find the SAT zone that best matches the current selection (if any). */
-  function findMatchingSatZone(entities: PlacedEntity[]): { regionId: number; cost: number } | null {
-    if (!lastLayout || !lastLayout.regions) return null;
-    const hitCounts = new Map<number, number>();
-    for (const e of entities) {
-      const ex = e.x ?? 0;
-      const ey = e.y ?? 0;
-      for (const r of lastLayout.regions) {
-        if (r.kind !== "crossing_zone") continue;
-        if (r.id === undefined) continue;
-        if (ex >= r.x && ex < r.x + r.width && ey >= r.y && ey < r.y + r.height) {
-          hitCounts.set(r.id, (hitCounts.get(r.id) ?? 0) + 1);
-        }
-      }
-    }
-    if (hitCounts.size === 0) return null;
-    let bestId = -1;
-    let bestHits = 0;
-    for (const [id, n] of hitCounts) {
-      if (n > bestHits) {
-        bestHits = n;
-        bestId = id;
-      }
-    }
-    const r = lastLayout.regions.find((rr) => rr.id === bestId);
-    if (!r) return null;
-    // Starting cost = sum over entities currently in the zone.
-    let cost = 0;
-    for (const e of lastLayout.entities) {
-      const ex = e.x ?? 0;
-      const ey = e.y ?? 0;
-      if (ex >= r.x && ex < r.x + r.width && ey >= r.y && ey < r.y + r.height) {
-        if (e.name === "transport-belt" || e.name === "fast-transport-belt" || e.name === "express-transport-belt") {
-          cost += 1;
-        } else if (
-          (e.name === "underground-belt" || e.name === "fast-underground-belt" || e.name === "express-underground-belt")
-          && (e.io_type === "input" || e.io_type === "output")
-        ) {
-          cost += 5;
-        }
-      }
-    }
-    return { regionId: bestId, cost };
-  }
+  /**
+   * Round-robin "optimize every SAT zone" pass. Runs automatically
+   * after a layout lands — one improvement attempt per zone per round,
+   * stops when a full round yields zero wins. Visible UI is just the
+   * status line + a cancel button; no start button. Cancellation
+   * respawns the worker (see `cancelInFlight`).
+   */
+  /**
+   * Auto-optimize pass with a decoupled animation queue.
+   *
+   * The solver streams every `SatImprovement` event into `queue`.
+   * A rAF drain loop pulls one event at a time and only then applies
+   * the entity splice + spawns a flash. Pacing is adaptive: consecutive
+   * improvements to the same region get a growing delay so a busy
+   * junction's improvements don't blur together, while switches to
+   * fresh regions dequeue quickly.
+   *
+   * No status UI, no cancel button — if the user triggers a new solve,
+   * the worker is superseded and the queue is abandoned.
+   */
+  async function runAutoOptimize(targetLayout: LayoutResult): Promise<void> {
+    if (optimizeInFlight) return;
+    const hasSatZones = (targetLayout.regions ?? []).some(
+      (r) => (r as { kind?: string }).kind === "crossing_zone",
+    );
+    if (!hasSatZones) return;
 
-  function updateImproveRowForSelection(entities: PlacedEntity[]): void {
-    if (improveInFlight) return; // don't trample the in-progress status text
-    const match = findMatchingSatZone(entities);
-    if (!match) {
-      improveRow.style.display = "none";
-      improveTargetRegionId = null;
-      return;
-    }
-    improveTargetRegionId = match.regionId;
-    improveStatus.textContent = `SAT zone #${match.regionId} \u2014 cost ${match.cost}`;
-    improveBtn.disabled = false;
-    improveBtn.style.opacity = "1";
-    improveCancelBtn.style.display = "none";
-    improveRow.style.display = "block";
-  }
+    optimizeInFlight = true;
 
-  async function onImproveClick(): Promise<void> {
-    if (improveTargetRegionId === null || !lastLayout || improveInFlight) return;
-    const regionId = improveTargetRegionId;
-    const region = lastLayout.regions?.find((r) => r.id === regionId);
-    if (!region) {
-      console.warn("[improve] region not found", { regionId, regions: lastLayout.regions });
-      return;
-    }
-    console.log("[improve] starting", {
-      regionId,
-      bbox: { x: region.x, y: region.y, w: region.width, h: region.height },
-      ports: region.ports?.length,
-      forcedEmpty: region.forced_empty?.length,
-      beltTier: region.belt_tier,
-      maxUgReach: region.max_ug_reach,
-    });
-
-    improveInFlight = true;
-    improveBtn.disabled = true;
-    improveBtn.style.opacity = "0.5";
-    improveCancelBtn.style.display = "inline-block";
-
-    const costHistory: number[] = [];
-    const initialCost = (findMatchingSatZone(selectionCtrl?.getSelected() ?? []) ?? { cost: 0 }).cost;
-    costHistory.push(initialCost);
-    improveStatus.textContent = `Improving \u2026 cost ${initialCost}`;
-
-    // Mid-loop `renderLayout` calls `entityLayer.removeChildren()`, which
-    // wipes the selection controller's dragRect/border graphics. Tear
-    // down the selection controller up-front so it doesn't get out of
-    // sync; we'll recreate it after we finish.
+    // Tear down selection so renderLayout's removeChildren doesn't
+    // orphan its overlays as we restamp tiles during the drain.
     if (selectionCtrl) {
       selectionCtrl.destroy();
       selectionCtrl = null;
     }
-
-    improveAnim?.stop();
-    improveAnim = startImprovementAnimation(app, viewport, {
-      x: region.x,
-      y: region.y,
-      w: region.width,
-      h: region.height,
-    });
 
     const isBeltOrUg = (name: string): boolean =>
       name === "transport-belt" ||
@@ -724,60 +630,114 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       name === "fast-underground-belt" ||
       name === "express-underground-belt";
 
+    type QueuedImp = { imp: SatImprovement };
+    const queue: QueuedImp[] = [];
+
+    // Dequeue pacing. Base gap between any two dequeues; each
+    // consecutive dequeue on the same region adds a slowdown so you can
+    // actually see each cheaper state land. Different region → reset.
+    const BASE_GAP_MS = 130;
+    const SAME_REGION_STEP_MS = 90;
+    const SAME_REGION_MAX_MS = 520;
+
+    let lastDequeueAt = 0;
+    let lastRegionId = -1;
+    let sameRegionRun = 0;
+    let solverDone = false;
+    let cancelled = false;
+    let rafId: number | null = null;
+
+    const applyImprovement = (imp: SatImprovement): void => {
+      if (!lastLayout) return;
+      const x0 = imp.zone_x;
+      const y0 = imp.zone_y;
+      const x1 = x0 + imp.zone_w;
+      const y1 = y0 + imp.zone_h;
+      const inBbox = (e: PlacedEntity): boolean => {
+        const ex = e.x ?? 0;
+        const ey = e.y ?? 0;
+        return ex >= x0 && ex < x1 && ey >= y0 && ey < y1;
+      };
+      lastLayout.entities = lastLayout.entities
+        .filter((e) => !(inBbox(e) && isBeltOrUg(e.name)))
+        .concat(imp.entities);
+      spawnRegionFlash(app, viewport, {
+        x: x0,
+        y: y0,
+        w: imp.zone_w,
+        h: imp.zone_h,
+      });
+      renderLayout(lastLayout, entityLayer, undefined, undefined);
+    };
+
+    const drainDone = (): boolean => solverDone && queue.length === 0;
+
+    const drainTick = (nowMs: number): void => {
+      if (cancelled) return;
+      while (queue.length > 0) {
+        const head = queue[0];
+        const sameRegion = head.imp.region_id === lastRegionId;
+        const penalty = sameRegion
+          ? Math.min(SAME_REGION_MAX_MS, sameRegionRun * SAME_REGION_STEP_MS)
+          : 0;
+        const requiredGap = BASE_GAP_MS + penalty;
+        if (nowMs - lastDequeueAt < requiredGap) break;
+        queue.shift();
+        applyImprovement(head.imp);
+        if (sameRegion) sameRegionRun += 1;
+        else {
+          sameRegionRun = 1;
+          lastRegionId = head.imp.region_id;
+        }
+        lastDequeueAt = nowMs;
+        // One dequeue per frame keeps the flashes visually paced even
+        // when the queue is long.
+        break;
+      }
+      if (drainDone()) {
+        rafId = null;
+        return;
+      }
+      rafId = requestAnimationFrame(drainTick);
+    };
+
+    rafId = requestAnimationFrame(drainTick);
+
     try {
-      const finalLayout = await engine.improveRegion(
-        lastLayout,
-        regionId,
-        10_000,
-        (imp) => {
-          if (!lastLayout) return;
-          const x0 = imp.zone_x;
-          const y0 = imp.zone_y;
-          const x1 = x0 + imp.zone_w;
-          const y1 = y0 + imp.zone_h;
-          const inBbox = (e: PlacedEntity): boolean => {
-            const ex = e.x ?? 0;
-            const ey = e.y ?? 0;
-            return ex >= x0 && ex < x1 && ey >= y0 && ey < y1;
-          };
-          lastLayout.entities = lastLayout.entities
-            .filter((e) => !(inBbox(e) && isBeltOrUg(e.name)))
-            .concat(imp.entities);
-          if (imp.iter > 0) {
-            costHistory.push(imp.cost);
-            improveAnim?.flash();
-          }
-          improveStatus.textContent = `Improving \u2026 ${costHistory.join(" \u2192 ")}`;
-          console.log("[improve] event", {
-            iter: imp.iter,
-            cost: imp.cost,
-            entities: imp.entities.length,
-            solveUs: imp.solve_time_us,
-          });
-          renderLayout(lastLayout, entityLayer, undefined, undefined);
+      const finalLayout = await engine.optimizeAllRegions(targetLayout, {
+        perRegionBudgetMs: 800,
+        onImprovement: (imp) => {
+          // iter=0 is the initial "snapshot" event (no cost drop and
+          // the entities are just a pruned view of what's already
+          // rendered — skipping avoids a subtle "half a factory"
+          // regression if Rust/main-pipeline pruning diverge).
+          if (imp.iter === 0) return;
+          queue.push({ imp });
         },
-      );
+      });
+      solverDone = true;
+      // Wait for the drain loop to finish animating the last items.
+      await new Promise<void>((resolve) => {
+        const waitForDrain = (): void => {
+          if (queue.length === 0) resolve();
+          else requestAnimationFrame(waitForDrain);
+        };
+        waitForDrain();
+      });
       lastLayout = finalLayout;
       (window as unknown as { __layout?: LayoutResult }).__layout = finalLayout;
-      const opt = costHistory.length > 1 ? "" : " (already optimal)";
-      improveStatus.textContent = `Done \u2014 ${costHistory.join(" \u2192 ")}${opt}`;
-      console.log("[improve] done", { history: costHistory, optimal: costHistory.length <= 1 });
-      // Final redraw with the committed layout — but do NOT call
-      // renderLayoutOnCanvas, which re-fits the viewport and hides the
-      // annotation bar.
+      // Final authoritative redraw with the committed layout.
       renderLayout(finalLayout, entityLayer, undefined, undefined);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      improveStatus.textContent = `Improve failed: ${msg}`;
-      console.error("[improve] failed", err);
+      if (!msg.includes("superseded")) {
+        console.error("[auto-optimize] failed", err);
+      }
     } finally {
-      improveInFlight = false;
-      improveBtn.disabled = false;
-      improveBtn.style.opacity = "1";
-      improveCancelBtn.style.display = "none";
-      improveAnim?.stop();
-      improveAnim = null;
-      // Recreate the selection controller so the user can select again.
+      cancelled = true;
+      solverDone = true;
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      optimizeInFlight = false;
       if (lastLayout) {
         selectionCtrl = createSelectionController(
           app.canvas,
@@ -787,20 +747,8 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
           onSelectionChange,
         );
       }
-      // Keep the annotation bar + improve row visible with the final status.
-      annotationBar.style.display = "block";
     }
   }
-
-  improveBtn.addEventListener("click", () => {
-    void onImproveClick();
-  });
-
-  improveCancelBtn.addEventListener("click", () => {
-    // Cancelling a long WASM op means respawning the worker. The
-    // promise from improveRegion rejects with "Engine superseded".
-    void import("./engine").then(({ cancelInFlight }) => cancelInFlight());
-  });
 
   app.canvas.addEventListener("pointermove", (e) => {
     const rect = app.canvas.getBoundingClientRect();
@@ -1055,6 +1003,15 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     if (soloRegionsActive) {
       entityLayer.alpha = 0.12;
     }
+
+    // Auto-optimize: kick off the round-robin pass after the initial
+    // render has been painted. rAF gives PixiJS one tick to commit the
+    // entity graphics before we start mutating them. Guarded against
+    // re-entry inside `runAutoOptimize`, so repeated calls (e.g.
+    // mid-pass re-render) are benign.
+    requestAnimationFrame(() => {
+      if (lastLayout === layout) void runAutoOptimize(layout);
+    });
   }
 
   // Ctrl+C / Ctrl+O keyboard shortcuts

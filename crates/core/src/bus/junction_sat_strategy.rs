@@ -11,8 +11,8 @@
 //! The mapping is mechanical:
 //!
 //! - `Junction.bbox`          → `CrossingZone { x, y, width, height }`
-//! - `SpecCrossing.entry`     → `ZoneBoundary { ..., is_input: true }`
-//! - `SpecCrossing.exit`      → `ZoneBoundary { ..., is_input: false }`
+//! - `SpecCrossing.entry`     → `ZoneBoundary { ..., is_input: true, belt_tier: None, channel_id: 0 }`
+//! - `SpecCrossing.exit`      → `ZoneBoundary { ..., is_input: false, belt_tier: None, channel_id: 0 }`
 //! - `Junction.forbidden`     → `CrossingZone.forced_empty`
 //!
 //! Belt tier + UG max reach are picked from the dominant (highest-rank)
@@ -27,9 +27,7 @@ use crate::bus::junction::{BeltTier, Rect, SpecCrossing};
 use crate::bus::junction_solver::{JunctionSolution, JunctionStrategy, JunctionStrategyContext};
 use crate::common::{is_splitter, is_surface_belt, is_ug_belt, splitter_second_tile, ug_max_reach};
 use crate::models::{EntityDirection, PlacedEntity};
-use crate::sat::{
-    solve_crossing_zone_with_cost_cap, solve_crossing_zone_with_stats, CrossingZone, ZoneBoundary,
-};
+use crate::sat::{CrossingZone, ZoneBoundary};
 use crate::trace::{self, BoundarySnapshot, ExternalFeederSnapshot, SatProposedEntity, TraceEvent};
 
 /// A feeder/consumer tile candidate found adjacent to a spec entry/exit.
@@ -39,6 +37,55 @@ struct FeederHit {
     entity_tile: (i32, i32),
     /// The Permanent entity's facing direction.
     entity_direction: EntityDirection,
+    /// The Permanent entity's name — used by `topology_boundaries` to
+    /// stamp the per-boundary `belt_tier` metadata.
+    entity_name: String,
+}
+
+/// Canonical surface-belt name for an entity's tier — `"transport-belt"`
+/// / `"fast-transport-belt"` / `"express-transport-belt"`. Accepts belts,
+/// undergrounds and splitters. Returns `None` only for entities that
+/// aren't in the belt family (shouldn't happen at boundary construction
+/// sites, where the entity is always a belt/UG/splitter).
+fn tier_name_for(entity_name: &str) -> Option<String> {
+    BeltTier::from_name(entity_name).map(|t| t.belt_name().to_string())
+}
+
+/// Name of the entity occupying `tile`, if any. Splitters occupy two
+/// tiles and will match on either. Used by `topology_boundaries` to
+/// look up the external receiver at an OUT boundary so its tier gets
+/// recorded on the boundary instead of the in-zone entity's tier.
+fn entity_name_at(placed_entities: &[PlacedEntity], tile: (i32, i32)) -> Option<String> {
+    for e in placed_entities {
+        if (e.x, e.y) == tile {
+            return Some(e.name.clone());
+        }
+        if is_splitter(&e.name) {
+            let (sx, sy) = splitter_second_tile(e);
+            if (sx, sy) == tile {
+                return Some(e.name.clone());
+            }
+        }
+    }
+    None
+}
+
+/// How to pick per-channel UG-reach caps when solving a zone.
+///
+/// **Native** — each channel's reach equals its declared belt tier
+/// (yellow=5, red=7, blue=9). Forces SAT to pick UG pairs that fit
+/// the tier of the external flow, so the solve-time entity names are
+/// automatically correct — no post-pass retyping needed. Fails on
+/// zones that genuinely need longer-than-native UG spans to route.
+///
+/// **Relaxed** — every channel uses the zone's max-tier reach, same
+/// as the pre-refactor behaviour. More flexible (any channel can use
+/// blue's 9-tile UG) but loses per-tier correctness: a yellow flow
+/// routed through a 9-tile UG gets stamped as blue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReachMode {
+    Native,
+    Relaxed,
 }
 
 /// Knobs the outer loop tunes when asking SAT to solve a junction.
@@ -67,6 +114,9 @@ pub struct SatConstraints {
     /// iterations. Prevents pathological zones from blocking the
     /// solver for too long.
     pub cost_descent_budget_ms: u32,
+    /// Whether to use per-channel native reaches (tight) or the
+    /// zone's max tier reach (loose) for UG pairing.
+    pub reach_mode: ReachMode,
 }
 
 impl SatConstraints {
@@ -76,6 +126,7 @@ impl SatConstraints {
             max_ug_ins: None,
             cost_descent_max_iters: 4,
             cost_descent_budget_ms: 50,
+            reach_mode: ReachMode::Relaxed,
         }
     }
 
@@ -85,6 +136,7 @@ impl SatConstraints {
             max_ug_ins: Some(0),
             cost_descent_max_iters: 4,
             cost_descent_budget_ms: 50,
+            reach_mode: ReachMode::Relaxed,
         }
     }
 
@@ -94,6 +146,32 @@ impl SatConstraints {
             max_ug_ins: Some(n),
             cost_descent_max_iters: 4,
             cost_descent_budget_ms: 50,
+            reach_mode: ReachMode::Relaxed,
+        }
+    }
+
+    /// Same as `max_ug_ins(n)` but with per-channel native reach — each
+    /// UG pair's run length is bounded by the channel's declared tier.
+    /// The native-reach rungs run before the relaxed ladder so mixed-
+    /// tier zones get tier-correct UG lengths when possible.
+    pub const fn max_ug_ins_native(n: u32) -> Self {
+        Self {
+            max_ug_ins: Some(n),
+            cost_descent_max_iters: 4,
+            cost_descent_budget_ms: 50,
+            reach_mode: ReachMode::Native,
+        }
+    }
+
+    /// Unrestricted UG budget with per-channel native reach. Final
+    /// native-mode fallback before the ladder falls through to the
+    /// relaxed-reach rungs.
+    pub const fn unrestricted_native() -> Self {
+        Self {
+            max_ug_ins: None,
+            cost_descent_max_iters: 4,
+            cost_descent_budget_ms: 50,
+            reach_mode: ReachMode::Native,
         }
     }
 }
@@ -286,18 +364,21 @@ fn physical_feeder_hit(
                 return Some(FeederHit {
                     entity_tile: (e.x, e.y),
                     entity_direction: e.direction,
+                    entity_name: e.name.clone(),
                 });
             }
             if (sx + dx, sy + dy) == tile {
                 return Some(FeederHit {
                     entity_tile: (sx, sy),
                     entity_direction: e.direction,
+                    entity_name: e.name.clone(),
                 });
             }
         } else if (e.x + dx, e.y + dy) == tile {
             return Some(FeederHit {
                 entity_tile: (e.x, e.y),
                 entity_direction: e.direction,
+                entity_name: e.name.clone(),
             });
         }
     }
@@ -362,6 +443,16 @@ fn topology_boundaries(
             let (dx, dy) = dir_delta(e.direction);
             let target = (tx + dx, ty + dy);
 
+            // For OUT boundaries we want the EXTERNAL receiver's tier —
+            // the entity sitting at `target` on the far side of the
+            // boundary — not the in-zone entity `e`'s tier. Fall back to
+            // `e`'s tier if nothing's there yet (rare: should only
+            // happen if ghost-routing hasn't finalised the downstream
+            // trunk, which shouldn't occur by the time SAT runs).
+            let external_tier = entity_name_at(placed_entities, target)
+                .as_deref()
+                .and_then(tier_name_for)
+                .or_else(|| tier_name_for(&e.name));
             if !bbox.contains(target.0, target.1) {
                 // Target outside bbox: perimeter OUT.
                 boundaries.push(ZoneBoundary {
@@ -371,6 +462,8 @@ fn topology_boundaries(
                     item: item.to_string(),
                     is_input: false,
                     interior: false,
+                    belt_tier: external_tier,
+                    channel_id: 0,
                 });
             } else if forbidden.contains(&target) {
                 // Target is FIXED: interior OUT at the FIXED tile.
@@ -381,12 +474,15 @@ fn topology_boundaries(
                     item: item.to_string(),
                     is_input: false,
                     interior: true,
+                    belt_tier: external_tier,
+                    channel_id: 0,
                 });
             }
             // else: target is FREE, both SAT-routable → no boundary.
 
             // -- Input check: does anything feed this tile from outside/FIXED? --
             if let Some(hit) = physical_feeder_hit((tx, ty), placed_entities, item) {
+                let feeder_belt_tier = tier_name_for(&hit.entity_name);
                 if !bbox.contains(hit.entity_tile.0, hit.entity_tile.1) {
                     // Feeder outside bbox: perimeter IN.
                     boundaries.push(ZoneBoundary {
@@ -396,6 +492,8 @@ fn topology_boundaries(
                         item: item.to_string(),
                         is_input: true,
                         interior: false,
+                        belt_tier: feeder_belt_tier,
+                        channel_id: 0,
                     });
                 } else if forbidden.contains(&hit.entity_tile) {
                     // Feeder is FIXED: interior IN at the FIXED tile.
@@ -406,6 +504,8 @@ fn topology_boundaries(
                         item: item.to_string(),
                         is_input: true,
                         interior: true,
+                        belt_tier: feeder_belt_tier,
+                        channel_id: 0,
                     });
                 }
                 // else: feeder is FREE → no boundary.
@@ -463,6 +563,8 @@ fn topology_boundaries(
                         item: item.to_string(),
                         is_input: false, // splitter input-side = zone OUT
                         interior: true,
+                        belt_tier: tier_name_for(&e.name),
+                        channel_id: 0,
                     });
                 }
             }
@@ -490,12 +592,52 @@ fn topology_boundaries(
                     item: item.to_string(),
                     is_input: true, // splitter output-side = zone IN
                     interior: true,
+                    belt_tier: tier_name_for(&e.name),
+                    channel_id: 0,
                 });
             }
         }
     }
 
     boundaries
+}
+
+/// Assign `channel_id` to every boundary in `boundaries`.
+///
+/// Boundaries that share `(item, belt_tier)` get the same channel id.
+/// Different tiers of the same item get different ids — that's what
+/// enforces tier-aware pairing at the SAT level (boundaries in
+/// different channels can't route into each other's flows).
+///
+/// Returns a `channel_id → (item, belt_tier)` table, indexed by
+/// channel id. The encoder needs the tier per channel for UG-reach
+/// constraints; the entity stamper needs the item + tier to write
+/// `carries` and `name` on each placed entity.
+///
+/// Deterministic: buckets are sorted by `(item, tier)` so the same
+/// boundary set always produces the same assignment.
+pub(crate) fn assign_channels(
+    boundaries: &mut [ZoneBoundary],
+) -> Vec<(String, Option<String>)> {
+    use std::collections::BTreeMap;
+
+    // BTreeMap for deterministic iteration order.
+    let mut bucket_ids: BTreeMap<(String, Option<String>), u32> = BTreeMap::new();
+    for b in boundaries.iter() {
+        let key = (b.item.clone(), b.belt_tier.clone());
+        let next = bucket_ids.len() as u32;
+        bucket_ids.entry(key).or_insert(next);
+    }
+    for b in boundaries.iter_mut() {
+        let key = (b.item.clone(), b.belt_tier.clone());
+        b.channel_id = bucket_ids[&key];
+    }
+    // Invert the map into a Vec indexed by channel_id.
+    let mut table = vec![(String::new(), None); bucket_ids.len()];
+    for (key, id) in bucket_ids {
+        table[id as usize] = key;
+    }
+    table
 }
 
 
@@ -583,9 +725,39 @@ impl JunctionStrategy for SatStrategy {
                 item: sc.item.clone(),
                 is_input: true,
                 interior: false,
+                belt_tier: Some(sc.belt_tier.belt_name().to_string()),
+                channel_id: 0,
             });
             origins.push("spec-chain-head".to_string());
         }
+
+        // Assign channel ids now that the boundary set is final. Buckets
+        // by (item, belt_tier); ids are deterministic. `channel_table[i]`
+        // gives `(item, belt_tier)` for channel id `i` — used below to
+        // compute per-channel UG reaches under `ReachMode::Native`.
+        let channel_table = assign_channels(&mut boundaries);
+
+        // Per-channel UG reaches. Native mode: each channel's reach
+        // derives from its declared belt tier (fall back to the zone's
+        // dominant tier when a channel's tier is unknown). Relaxed
+        // mode: every channel shares the dominant tier's reach —
+        // matches pre-refactor behaviour. Native is tried first in the
+        // ladder (see `ghost_router.rs`) so mixed-tier zones get
+        // tier-correct UG lengths when feasible, then falls through to
+        // relaxed for zones that genuinely can't route under tight
+        // reach.
+        let channel_reaches: Vec<u32> = match self.constraints.reach_mode {
+            ReachMode::Native => channel_table
+                .iter()
+                .map(|(_, tier)| {
+                    tier.as_deref()
+                        .and_then(BeltTier::from_name)
+                        .map(|t| ug_max_reach(t.belt_name()))
+                        .unwrap_or(max_reach)
+                })
+                .collect(),
+            ReachMode::Relaxed => vec![max_reach; channel_table.len().max(1)],
+        };
 
         let forced_empty: Vec<(i32, i32)> =
             ctx.junction.forbidden.iter().copied().collect();
@@ -610,6 +782,8 @@ impl JunctionStrategy for SatStrategy {
                     spec_key: String::new(),
                     origin: origin.clone(),
                     external_feeder: feeder,
+                    belt_tier: b.belt_tier.clone(),
+                    channel_id: b.channel_id,
                 }
             })
             .collect();
@@ -626,9 +800,9 @@ impl JunctionStrategy for SatStrategy {
         let (seed_x, seed_y) = ctx.region.initial_tile;
         let iter = ctx.growth_iter;
 
-        let (entities_opt, stats) = solve_crossing_zone_with_stats(
+        let (entities_opt, stats) = crate::sat::solve_crossing_zone_per_channel(
             &zone,
-            max_reach,
+            &channel_reaches,
             belt_name,
             self.constraints.max_ug_ins,
         );
@@ -692,13 +866,14 @@ impl JunctionStrategy for SatStrategy {
             let Some(cap) = best_cost.checked_sub(1) else {
                 break; // cost already zero — nothing to tighten
             };
-            let (next_opt, next_stats) = solve_crossing_zone_with_cost_cap(
-                &zone,
-                max_reach,
-                belt_name,
-                self.constraints.max_ug_ins,
-                Some(cap),
-            );
+            let (next_opt, next_stats) =
+                crate::sat::solve_crossing_zone_per_channel_with_cost_cap(
+                    &zone,
+                    &channel_reaches,
+                    belt_name,
+                    self.constraints.max_ug_ins,
+                    Some(cap),
+                );
             let next_sat = next_opt.is_some();
             let next_cost = next_opt
                 .as_ref()
@@ -1015,8 +1190,8 @@ mod tests {
             make_belt(1, 1, EntityDirection::East, "iron-plate"), // orphan
         ];
         let boundaries = vec![
-            ZoneBoundary { x: 0, y: 0, direction: EntityDirection::East, item: "iron-plate".into(), is_input: true, interior: false },
-            ZoneBoundary { x: 2, y: 0, direction: EntityDirection::East, item: "iron-plate".into(), is_input: false, interior: false },
+            ZoneBoundary { x: 0, y: 0, direction: EntityDirection::East, item: "iron-plate".into(), is_input: true, interior: false, belt_tier: None, channel_id: 0 },
+            ZoneBoundary { x: 2, y: 0, direction: EntityDirection::East, item: "iron-plate".into(), is_input: false, interior: false, belt_tier: None, channel_id: 0 },
         ];
         let result = prune_dangling_sat_entities(entities, &boundaries, 4, 0, 0);
         assert_eq!(result.len(), 3, "orphan at (1,1) should be pruned");
@@ -1031,8 +1206,8 @@ mod tests {
             make_belt(1, 0, EntityDirection::East, "copper-plate"),
         ];
         let boundaries = vec![
-            ZoneBoundary { x: 0, y: 0, direction: EntityDirection::East, item: "copper-plate".into(), is_input: true, interior: false },
-            ZoneBoundary { x: 1, y: 0, direction: EntityDirection::East, item: "copper-plate".into(), is_input: false, interior: false },
+            ZoneBoundary { x: 0, y: 0, direction: EntityDirection::East, item: "copper-plate".into(), is_input: true, interior: false, belt_tier: None, channel_id: 0 },
+            ZoneBoundary { x: 1, y: 0, direction: EntityDirection::East, item: "copper-plate".into(), is_input: false, interior: false, belt_tier: None, channel_id: 0 },
         ];
         let result = prune_dangling_sat_entities(entities, &boundaries, 4, 0, 0);
         assert_eq!(result.len(), 2, "full path should be untouched");
@@ -1087,6 +1262,8 @@ mod tests {
                 item: "copper-cable".into(),
                 is_input: true,
                 interior: true,
+                belt_tier: None,
+                channel_id: 0,
             },
             ZoneBoundary {
                 x: 3, y: 12,
@@ -1094,6 +1271,8 @@ mod tests {
                 item: "copper-cable".into(),
                 is_input: false,
                 interior: false,
+                belt_tier: None,
+                channel_id: 0,
             },
             ZoneBoundary {
                 x: 2, y: 9,
@@ -1101,6 +1280,8 @@ mod tests {
                 item: "iron-plate".into(),
                 is_input: true,
                 interior: true,
+                belt_tier: None,
+                channel_id: 0,
             },
             ZoneBoundary {
                 x: 5, y: 10,
@@ -1108,6 +1289,8 @@ mod tests {
                 item: "iron-plate".into(),
                 is_input: false,
                 interior: false,
+                belt_tier: None,
+                channel_id: 0,
             },
         ];
 
@@ -1269,4 +1452,5 @@ mod tests {
             "phantom south-IN boundary at (5,10) should be filtered by item mismatch"
         );
     }
+
 }

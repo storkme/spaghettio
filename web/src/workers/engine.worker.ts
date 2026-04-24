@@ -49,6 +49,7 @@ type Request =
       layout: LayoutResult;
       regionId: number;
       budgetMs: number;
+      maxIters: number;
     };
 
 let ready: Promise<void> | null = null;
@@ -186,7 +187,13 @@ self.onmessage = async (e: MessageEvent<Request>) => {
           if (batch.length >= BATCH_SIZE) flushBatch();
         };
         try {
-          result = improve_region_streaming(req.layout, req.regionId, req.budgetMs, emit);
+          result = improve_region_streaming(
+            req.layout,
+            req.regionId,
+            req.budgetMs,
+            req.maxIters,
+            emit,
+          );
         } finally {
           flushBatch();
         }

@@ -154,6 +154,19 @@ pub struct RegionPort {
     /// spec faithfully when re-solving.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub interior: bool,
+    /// Tier (surface-belt entity name, e.g. `"fast-transport-belt"`) of
+    /// the external entity this port connects to, if known. Mirrors
+    /// `ZoneBoundary::belt_tier` so the interactive improve pass can
+    /// reconstruct per-boundary tiers when re-solving. Optional for
+    /// backwards compatibility with older serialized layouts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub belt_tier: Option<String>,
+    /// Channel id — matches `ZoneBoundary::channel_id`. Ports that
+    /// share a `channel_id` route on the same SAT-level flow. Carried
+    /// through the serialized layout so the interactive improve pass
+    /// reconstructs the same channel assignment the original solve used.
+    #[serde(default)]
+    pub channel_id: u32,
 }
 
 /// Origin/purpose of a `LayoutRegion`. Replaces the historical stringly-typed

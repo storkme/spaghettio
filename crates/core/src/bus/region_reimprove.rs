@@ -144,6 +144,8 @@ pub fn rebuild_zone_from_region(region: &LayoutRegion) -> Option<(CrossingZone, 
             item: p.item.clone().unwrap_or_default(),
             is_input: matches!(p.io, PortIo::Input),
             interior: p.interior,
+            belt_tier: p.belt_tier.clone(),
+            channel_id: p.channel_id,
         })
         .collect();
 

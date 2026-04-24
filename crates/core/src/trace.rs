@@ -728,6 +728,21 @@ pub struct BoundarySnapshot {
     /// external feeder — SAT will assume native (opposite(direction))
     /// arrival.
     pub external_feeder: Option<ExternalFeederSnapshot>,
+    /// Surface-belt-tier name (`"transport-belt"` /
+    /// `"fast-transport-belt"` / `"express-transport-belt"`) of the
+    /// external entity this boundary connects to, if known. Mirrors
+    /// `ZoneBoundary::belt_tier`. Used by solve-time entity stamping to
+    /// pick the right belt/UG entity name for this channel. `None`
+    /// means "unknown — use the zone's default tier."
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub belt_tier: Option<String>,
+    /// Channel id — matches `ZoneBoundary::channel_id`. Boundaries that
+    /// share a channel_id route on the same SAT flow. Inputs and
+    /// outputs of the same channel are the IN/OUT pair the encoder
+    /// will connect. Surfaced in debug JSON to make tier-based pairings
+    /// visually obvious.
+    #[serde(default)]
+    pub channel_id: u32,
 }
 
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]

@@ -139,11 +139,16 @@ pub fn layout_streaming(
 ///
 /// `budget_ms` — wall-clock budget for the descent loop. Clamped to
 /// 100..=60_000 ms server-side; typical UI call passes ~10_000.
+///
+/// `max_iters` — cap on descent steps. 0 is treated as "unbounded"
+/// (1024). The round-robin "Optimize all" driver passes 1 to get
+/// "emit initial snapshot, attempt one cap-probe, return" semantics.
 #[wasm_bindgen]
 pub fn improve_region_streaming(
     mut layout_result: LayoutResult,
     region_id: u32,
     budget_ms: u32,
+    max_iters: u32,
     emit: &js_sys::Function,
 ) -> Result<LayoutResult, JsError> {
     use fucktorio_core::bus::region_reimprove::{
@@ -191,6 +196,7 @@ pub fn improve_region_streaming(
     let zw = zone.width;
     let zh = zone.height;
     let mut iter: u32 = 0;
+    let iter_cap = if max_iters == 0 { 1024 } else { max_iters };
     let (final_raw, _stop) = descend(
         &zone,
         &belt_tier,
@@ -198,8 +204,7 @@ pub fn improve_region_streaming(
         None,
         initial,
         deadline,
-        // Generous iter cap — the deadline is the real stop condition.
-        1024,
+        iter_cap,
         |imp| {
             let pruned =
                 prune_dangling(imp.entities.to_vec(), &boundaries, max_ug_reach, zx, zy);
@@ -222,7 +227,8 @@ pub fn improve_region_streaming(
     );
 
     // Splice the pruned final result back into the layout. Drop every
-    // belt/UG inside the zone bbox, then push the new set.
+    // belt/UG inside the zone bbox, then push the new set. SAT stamps
+    // per-channel tiers at solve time so no post-pass retype needed.
     let pruned_final = prune_dangling(final_raw, &boundaries, max_ug_reach, zx, zy);
     layout_result
         .entities

@@ -1950,6 +1950,7 @@ fn junction_boundaries_to_snapshots(
             SpecOrigin::Encountered => "encountered".to_string(),
         };
         let entry_feeder = find_external_feeder((sc.entry.x, sc.entry.y), placed, &sc.item);
+        let spec_tier = Some(sc.belt_tier.belt_name().to_string());
         out.push(BoundarySnapshot {
             x: sc.entry.x,
             y: sc.entry.y,
@@ -1960,6 +1961,12 @@ fn junction_boundaries_to_snapshots(
             spec_key: key.clone(),
             origin: origin.clone(),
             external_feeder: entry_feeder,
+            belt_tier: spec_tier.clone(),
+            // Spec-level snapshot happens before SAT's channel
+            // assignment. Debug consumers that want the final
+            // channel_id should look at the SAT strategy's
+            // BoundarySnapshot instead.
+            channel_id: 0,
         });
         out.push(BoundarySnapshot {
             x: sc.exit.x,
@@ -1971,6 +1978,8 @@ fn junction_boundaries_to_snapshots(
             spec_key: key,
             origin,
             external_feeder: None,
+            belt_tier: spec_tier,
+            channel_id: 0,
         });
     }
     out

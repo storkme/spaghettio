@@ -300,12 +300,17 @@ export interface SatImprovement {
  *
  * `budgetMs` — wall-clock cap, clamped to [100, 60_000] server-side.
  * Typical UI call passes 10_000.
+ *
+ * `maxIters` — cap on descent steps. 0 means "unbounded" (server side
+ * falls back to 1024). The round-robin `optimizeAllRegions` driver
+ * passes 1 so each visit takes at most one improvement step.
  */
 async function improveRegion(
   layoutIn: LayoutResult,
   regionId: number,
   budgetMs: number,
   onImprovement: (imp: SatImprovement) => void,
+  maxIters: number = 0,
 ): Promise<LayoutResult> {
   if (activeStreamingId !== null) {
     await supersedeWorker();
@@ -339,8 +344,69 @@ async function improveRegion(
       layout: layoutIn,
       regionId,
       budgetMs,
+      maxIters,
     });
   });
+}
+
+/**
+ * Callbacks for `optimizeAllRegions`. Each is optional.
+ *
+ * - `onImprovement(imp)` — fires on every `SatImprovement` event
+ *   streamed by `descend`. `imp.iter === 0` carries the region's
+ *   starting entities (not a cost drop); filter to `iter > 0` for real
+ *   improvements. Use this to feed an animation queue.
+ */
+export interface OptimizeAllOpts {
+  perRegionBudgetMs: number;
+  onImprovement?: (imp: SatImprovement) => void;
+}
+
+/**
+ * Round-robin "Optimize all" over every `CrossingZone` region. Each
+ * visit is exactly one SAT probe (`max_iters=1`) — that keeps any
+ * single call bounded, since varisat can't be interrupted mid-solve and
+ * tight cost caps can take tens of seconds on hard instances. Regions
+ * that produce no improvement this round drop out; rounds stop when
+ * the set is empty or a full pass yields zero improvements. The UI
+ * paces the visual updates via its own queue, so the caller sees the
+ * event stream but nothing round-specific.
+ *
+ * Returns the final `LayoutResult`. Rejects with "Engine superseded"
+ * if cancelled via `cancelInFlight`.
+ */
+async function optimizeAllRegions(
+  layoutIn: LayoutResult,
+  opts: OptimizeAllOpts,
+): Promise<LayoutResult> {
+  let current = layoutIn;
+  const active = new Set<number>(
+    (current.regions ?? [])
+      .filter((r) => (r as { kind?: string }).kind === "crossing_zone")
+      .map((r) => (r as { id: number }).id),
+  );
+  while (active.size > 0) {
+    let improvedThisRound = 0;
+    const visitOrder = [...active].sort((a, b) => a - b);
+    for (const regionId of visitOrder) {
+      if (!active.has(regionId)) continue;
+      let sawImprovement = false;
+      current = await improveRegion(
+        current,
+        regionId,
+        opts.perRegionBudgetMs,
+        (imp) => {
+          if (imp.iter > 0) sawImprovement = true;
+          opts.onImprovement?.(imp);
+        },
+        1,
+      );
+      if (sawImprovement) improvedThisRound += 1;
+      else active.delete(regionId);
+    }
+    if (improvedThisRound === 0) break;
+  }
+  return current;
 }
 
 /** Cancel any in-flight improveRegion / layoutStreaming by respawning the worker. */
@@ -362,6 +428,7 @@ export type Engine = {
   validateLayout: typeof validateLayout;
   solveFixture: typeof solveFixture;
   improveRegion: typeof improveRegion;
+  optimizeAllRegions: typeof optimizeAllRegions;
 };
 
 export function getEngine(): Engine {
@@ -377,5 +444,6 @@ export function getEngine(): Engine {
     validateLayout,
     solveFixture,
     improveRegion,
+    optimizeAllRegions,
   };
 }

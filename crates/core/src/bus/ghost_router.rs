@@ -1639,20 +1639,46 @@ pub fn route_bus_ghost(
         crate::bus::junction_sat_strategy::SatConstraints::max_ug_ins(2),
     );
     let sat_full = SatStrategy::unrestricted();
+    // Native-reach rungs: each channel's UG reach equals its declared
+    // belt tier. Tried before the relaxed ladder so mixed-tier zones
+    // get tier-correct UG pair lengths when feasible. If every native
+    // rung returns UNSAT (the zone genuinely needs longer-than-native
+    // UGs), falls through to the relaxed rungs which stamp all UGs at
+    // the zone's max tier.
+    let sat_1ug_native = SatStrategy::with(
+        "sat-1ug-native",
+        crate::bus::junction_sat_strategy::SatConstraints::max_ug_ins_native(1),
+    );
+    let sat_2ug_native = SatStrategy::with(
+        "sat-2ug-native",
+        crate::bus::junction_sat_strategy::SatConstraints::max_ug_ins_native(2),
+    );
+    let sat_full_native = SatStrategy::with(
+        "sat-native",
+        crate::bus::junction_sat_strategy::SatConstraints::unrestricted_native(),
+    );
     // Strategy order = priority. Walker vetoes bad proposals from any
     // of them; escalation happens naturally by falling through to the
     // next strategy in the list.
     //   1. cheap templates (fixed footprint, no search)
-    //   2. surface-only SAT — simplest layout, no UG at all
-    //   3-4. SAT with an increasing UG budget — the solver has to
-    //        justify each corridor by infeasibility at the previous
-    //        cap, so it won't spend UG pairs on items that surface
-    //        could route (e.g. a straight iron trunk next to a genuine
-    //        copper-cable crossing).
-    //   5. SAT unrestricted — final fallback for layouts that need
-    //      more than 2 UG corridors in one junction.
-    let strategies: [&dyn JunctionStrategy; 5] =
-        [&perp_strategy, &sat_surface, &sat_1ug, &sat_2ug, &sat_full];
+    //   2. surface-only SAT — simplest layout, no UG at all. Reach
+    //      doesn't apply so we don't need a -native variant here.
+    //   3-5. SAT with increasing UG budget at NATIVE reach — prefer
+    //        tier-correct UG lengths; the solver has to justify each
+    //        corridor by infeasibility at the previous cap.
+    //   6-8. SAT with increasing UG budget at RELAXED reach (zone's
+    //        max tier). Fallback for zones that genuinely can't route
+    //        under tight per-tier reach.
+    let strategies: [&dyn JunctionStrategy; 8] = [
+        &perp_strategy,
+        &sat_surface,
+        &sat_1ug_native,
+        &sat_2ug_native,
+        &sat_full_native,
+        &sat_1ug,
+        &sat_2ug,
+        &sat_full,
+    ];
 
     // Group adjacent crossings that share a spec into a single cluster
     // and solve each cluster jointly. A single crossing is still a
@@ -1833,6 +1859,8 @@ pub fn route_bus_ghost(
                         },
                         item: Some(b.item.clone()),
                         interior: b.interior,
+                        belt_tier: b.belt_tier.clone(),
+                        channel_id: b.channel_id,
                     })
                     .collect();
                 LayoutRegion {
