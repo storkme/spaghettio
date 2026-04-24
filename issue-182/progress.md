@@ -4,9 +4,9 @@
 1. Investigated the code (regionOverlay.ts, regionClassify.ts, models.rs)
 2. Posted explanatory comment on the issue
 3. User asked to delete the markers (comment: "can we raise a PR to delete them?")
-4. Implemented code change: removed all port markers from regionOverlay.ts (-162 lines)
-5. Pushed commit and opened PR #183
+4. Initial PR #183 removed ALL port markers (circles, arrows, dashed connectors)
+5. User refined: "just delete the circles, keep everything else, make arrows transparent"
+6. Updated PR #183: circles removed, arrows kept at 35% alpha, dashed connectors kept
 
 ## Next steps
-- Monitor PR #183 for review comments
-- Add `agent-done` label once PR is merged or approved
+- Wait for PR #183 to be reviewed/merged
