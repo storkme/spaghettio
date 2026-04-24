@@ -273,6 +273,83 @@ export function parseBlueprint(bpString: string): Promise<LayoutResult> {
   return call<LayoutResult>({ method: "parseBlueprint", bp: bpString });
 }
 
+/**
+ * One improvement step streamed out of the solver during `improveRegion`.
+ * Mirrors `TraceEvent::SatImprovement` in Rust — the `region_id`,
+ * `zone_x/y/w/h`, `cost`, `iter`, `solve_time_us` and pruned `entities`
+ * for this descent step.
+ */
+export interface SatImprovement {
+  region_id: number;
+  zone_x: number;
+  zone_y: number;
+  zone_w: number;
+  zone_h: number;
+  cost: number;
+  iter: number;
+  solve_time_us: number;
+  entities: PlacedEntity[];
+}
+
+/**
+ * Run a long cost-descent pass on a single SAT crossing zone. The
+ * promise resolves with the final `LayoutResult` (with the zone's
+ * entities replaced by the best layout found). `onImprovement` fires
+ * once per strictly-cheaper solve, including the initial snapshot at
+ * `iter=0`, so the UI can animate the descent.
+ *
+ * `budgetMs` — wall-clock cap, clamped to [100, 60_000] server-side.
+ * Typical UI call passes 10_000.
+ */
+async function improveRegion(
+  layoutIn: LayoutResult,
+  regionId: number,
+  budgetMs: number,
+  onImprovement: (imp: SatImprovement) => void,
+): Promise<LayoutResult> {
+  if (activeStreamingId !== null) {
+    await supersedeWorker();
+  }
+  if (!worker) throw new Error("Engine not initialized");
+  const id = ++nextId;
+  activeStreamingId = id;
+  onActive(+1);
+  return new Promise<LayoutResult>((resolve, reject) => {
+    pending.set(id, {
+      resolve: (v) => {
+        onActive(-1);
+        if (activeStreamingId === id) activeStreamingId = null;
+        resolve(v as LayoutResult);
+      },
+      reject: (e) => {
+        onActive(-1);
+        if (activeStreamingId === id) activeStreamingId = null;
+        reject(e);
+      },
+      onEvent: (evt) => {
+        const anyEvt = evt as unknown as { phase?: string; data?: SatImprovement };
+        if (anyEvt.phase === "SatImprovement" && anyEvt.data) {
+          onImprovement(anyEvt.data);
+        }
+      },
+    });
+    worker!.postMessage({
+      id,
+      method: "improveRegionStreaming",
+      layout: layoutIn,
+      regionId,
+      budgetMs,
+    });
+  });
+}
+
+/** Cancel any in-flight improveRegion / layoutStreaming by respawning the worker. */
+export async function cancelInFlight(): Promise<void> {
+  if (activeStreamingId !== null) {
+    await supersedeWorker();
+  }
+}
+
 export type Engine = {
   solve: typeof solve;
   allProducibleItems: typeof allProducibleItems;
@@ -284,6 +361,7 @@ export type Engine = {
   defaultMachineForItem: typeof defaultMachineForItem;
   validateLayout: typeof validateLayout;
   solveFixture: typeof solveFixture;
+  improveRegion: typeof improveRegion;
 };
 
 export function getEngine(): Engine {
@@ -298,5 +376,6 @@ export function getEngine(): Engine {
     defaultMachineForItem,
     validateLayout,
     solveFixture,
+    improveRegion,
   };
 }

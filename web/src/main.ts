@@ -30,6 +30,7 @@ import { buildTileContext } from "./ui/tileContext";
 import { createSnapshotMode } from "./ui/snapshotMode";
 import { createLegendPanel, type LegendPanelControls, type LegendPanelState } from "./ui/legendPanel";
 import { renderLayoutPhaseAnimated, type PhaseAnimationHandle } from "./renderer/phaseAnimation";
+import { startImprovementAnimation, type ImprovementAnimationHandle } from "./renderer/improvementAnimation";
 import { createStreamingRenderer, type StreamingRendererHandle } from "./renderer/streamingRenderer";
 import { createTimelineScrubber, type TimelineScrubberHandle } from "./ui/timelineScrubber";
 import "./ui/timelineScrubber.css";
@@ -533,6 +534,30 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
   annotationHint.textContent = "Ctrl+C to copy JSON";
   annotationBar.appendChild(annotationHint);
 
+  // --- Region improvement row (shown when selection covers a SAT zone) ---
+  const improveRow = document.createElement("div");
+  improveRow.style.cssText = "margin-top:6px;border-top:1px solid #2a2a2a;padding-top:6px;display:none";
+  annotationBar.appendChild(improveRow);
+
+  const improveStatus = document.createElement("div");
+  improveStatus.style.cssText = "color:#40c0e0;margin-bottom:4px;font-size:11px";
+  improveRow.appendChild(improveStatus);
+
+  const improveBtn = document.createElement("button");
+  improveBtn.textContent = "Improve region";
+  improveBtn.style.cssText = "background:#1a2a2a;color:#e0e0e0;border:1px solid #40c0e0;border-radius:2px;padding:4px 10px;font:11px monospace;cursor:pointer;margin-right:4px";
+  improveRow.appendChild(improveBtn);
+
+  const improveCancelBtn = document.createElement("button");
+  improveCancelBtn.textContent = "Stop";
+  improveCancelBtn.style.cssText = "background:#2a1a1a;color:#e0e0e0;border:1px solid #c04040;border-radius:2px;padding:4px 10px;font:11px monospace;cursor:pointer;display:none";
+  improveRow.appendChild(improveCancelBtn);
+
+  // Resolved per selection change. null => no SAT zone under selection.
+  let improveTargetRegionId: number | null = null;
+  let improveInFlight = false;
+  let improveAnim: ImprovementAnimationHandle | null = null;
+
   let lastLayout: LayoutResult | null = null;
   let selectionCtrl: SelectionController | null = null;
   let phaseAnimHandle: PhaseAnimationHandle | null = null;
@@ -577,11 +602,205 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     if (entities.length === 0) {
       annotationBar.style.display = "none";
       annotationNote.value = "";
+      improveRow.style.display = "none";
+      improveTargetRegionId = null;
     } else {
       annotationCount.textContent = `${entities.length} entit${entities.length === 1 ? "y" : "ies"} selected`;
       annotationBar.style.display = "block";
+      updateImproveRowForSelection(entities);
     }
   }
+
+  /** Find the SAT zone that best matches the current selection (if any). */
+  function findMatchingSatZone(entities: PlacedEntity[]): { regionId: number; cost: number } | null {
+    if (!lastLayout || !lastLayout.regions) return null;
+    const hitCounts = new Map<number, number>();
+    for (const e of entities) {
+      const ex = e.x ?? 0;
+      const ey = e.y ?? 0;
+      for (const r of lastLayout.regions) {
+        if (r.kind !== "crossing_zone") continue;
+        if (r.id === undefined) continue;
+        if (ex >= r.x && ex < r.x + r.width && ey >= r.y && ey < r.y + r.height) {
+          hitCounts.set(r.id, (hitCounts.get(r.id) ?? 0) + 1);
+        }
+      }
+    }
+    if (hitCounts.size === 0) return null;
+    let bestId = -1;
+    let bestHits = 0;
+    for (const [id, n] of hitCounts) {
+      if (n > bestHits) {
+        bestHits = n;
+        bestId = id;
+      }
+    }
+    const r = lastLayout.regions.find((rr) => rr.id === bestId);
+    if (!r) return null;
+    // Starting cost = sum over entities currently in the zone.
+    let cost = 0;
+    for (const e of lastLayout.entities) {
+      const ex = e.x ?? 0;
+      const ey = e.y ?? 0;
+      if (ex >= r.x && ex < r.x + r.width && ey >= r.y && ey < r.y + r.height) {
+        if (e.name === "transport-belt" || e.name === "fast-transport-belt" || e.name === "express-transport-belt") {
+          cost += 1;
+        } else if (
+          (e.name === "underground-belt" || e.name === "fast-underground-belt" || e.name === "express-underground-belt")
+          && (e.io_type === "input" || e.io_type === "output")
+        ) {
+          cost += 5;
+        }
+      }
+    }
+    return { regionId: bestId, cost };
+  }
+
+  function updateImproveRowForSelection(entities: PlacedEntity[]): void {
+    if (improveInFlight) return; // don't trample the in-progress status text
+    const match = findMatchingSatZone(entities);
+    if (!match) {
+      improveRow.style.display = "none";
+      improveTargetRegionId = null;
+      return;
+    }
+    improveTargetRegionId = match.regionId;
+    improveStatus.textContent = `SAT zone #${match.regionId} \u2014 cost ${match.cost}`;
+    improveBtn.disabled = false;
+    improveBtn.style.opacity = "1";
+    improveCancelBtn.style.display = "none";
+    improveRow.style.display = "block";
+  }
+
+  async function onImproveClick(): Promise<void> {
+    if (improveTargetRegionId === null || !lastLayout || improveInFlight) return;
+    const regionId = improveTargetRegionId;
+    const region = lastLayout.regions?.find((r) => r.id === regionId);
+    if (!region) {
+      console.warn("[improve] region not found", { regionId, regions: lastLayout.regions });
+      return;
+    }
+    console.log("[improve] starting", {
+      regionId,
+      bbox: { x: region.x, y: region.y, w: region.width, h: region.height },
+      ports: region.ports?.length,
+      forcedEmpty: region.forced_empty?.length,
+      beltTier: region.belt_tier,
+      maxUgReach: region.max_ug_reach,
+    });
+
+    improveInFlight = true;
+    improveBtn.disabled = true;
+    improveBtn.style.opacity = "0.5";
+    improveCancelBtn.style.display = "inline-block";
+
+    const costHistory: number[] = [];
+    const initialCost = (findMatchingSatZone(selectionCtrl?.getSelected() ?? []) ?? { cost: 0 }).cost;
+    costHistory.push(initialCost);
+    improveStatus.textContent = `Improving \u2026 cost ${initialCost}`;
+
+    // Mid-loop `renderLayout` calls `entityLayer.removeChildren()`, which
+    // wipes the selection controller's dragRect/border graphics. Tear
+    // down the selection controller up-front so it doesn't get out of
+    // sync; we'll recreate it after we finish.
+    if (selectionCtrl) {
+      selectionCtrl.destroy();
+      selectionCtrl = null;
+    }
+
+    improveAnim?.stop();
+    improveAnim = startImprovementAnimation(app, viewport, {
+      x: region.x,
+      y: region.y,
+      w: region.width,
+      h: region.height,
+    });
+
+    const isBeltOrUg = (name: string): boolean =>
+      name === "transport-belt" ||
+      name === "fast-transport-belt" ||
+      name === "express-transport-belt" ||
+      name === "underground-belt" ||
+      name === "fast-underground-belt" ||
+      name === "express-underground-belt";
+
+    try {
+      const finalLayout = await engine.improveRegion(
+        lastLayout,
+        regionId,
+        10_000,
+        (imp) => {
+          if (!lastLayout) return;
+          const x0 = imp.zone_x;
+          const y0 = imp.zone_y;
+          const x1 = x0 + imp.zone_w;
+          const y1 = y0 + imp.zone_h;
+          const inBbox = (e: PlacedEntity): boolean => {
+            const ex = e.x ?? 0;
+            const ey = e.y ?? 0;
+            return ex >= x0 && ex < x1 && ey >= y0 && ey < y1;
+          };
+          lastLayout.entities = lastLayout.entities
+            .filter((e) => !(inBbox(e) && isBeltOrUg(e.name)))
+            .concat(imp.entities);
+          if (imp.iter > 0) {
+            costHistory.push(imp.cost);
+            improveAnim?.flash();
+          }
+          improveStatus.textContent = `Improving \u2026 ${costHistory.join(" \u2192 ")}`;
+          console.log("[improve] event", {
+            iter: imp.iter,
+            cost: imp.cost,
+            entities: imp.entities.length,
+            solveUs: imp.solve_time_us,
+          });
+          renderLayout(lastLayout, entityLayer, undefined, undefined);
+        },
+      );
+      lastLayout = finalLayout;
+      (window as unknown as { __layout?: LayoutResult }).__layout = finalLayout;
+      const opt = costHistory.length > 1 ? "" : " (already optimal)";
+      improveStatus.textContent = `Done \u2014 ${costHistory.join(" \u2192 ")}${opt}`;
+      console.log("[improve] done", { history: costHistory, optimal: costHistory.length <= 1 });
+      // Final redraw with the committed layout — but do NOT call
+      // renderLayoutOnCanvas, which re-fits the viewport and hides the
+      // annotation bar.
+      renderLayout(finalLayout, entityLayer, undefined, undefined);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      improveStatus.textContent = `Improve failed: ${msg}`;
+      console.error("[improve] failed", err);
+    } finally {
+      improveInFlight = false;
+      improveBtn.disabled = false;
+      improveBtn.style.opacity = "1";
+      improveCancelBtn.style.display = "none";
+      improveAnim?.stop();
+      improveAnim = null;
+      // Recreate the selection controller so the user can select again.
+      if (lastLayout) {
+        selectionCtrl = createSelectionController(
+          app.canvas,
+          viewport,
+          entityLayer,
+          lastLayout,
+          onSelectionChange,
+        );
+      }
+      // Keep the annotation bar + improve row visible with the final status.
+      annotationBar.style.display = "block";
+    }
+  }
+
+  improveBtn.addEventListener("click", () => {
+    void onImproveClick();
+  });
+
+  improveCancelBtn.addEventListener("click", () => {
+    // Cancelling a long WASM op means respawning the worker. The
+    // promise from improveRegion rejects with "Engine superseded".
+    void import("./engine").then(({ cancelInFlight }) => cancelInFlight());
+  });
 
   app.canvas.addEventListener("pointermove", (e) => {
     const rect = app.canvas.getBoundingClientRect();

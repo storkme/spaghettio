@@ -236,7 +236,10 @@ pub fn build_bus_layout(
     let bus_entities = ghost_result.entities;
     let max_y = ghost_result.max_y;
     let merge_max_x = ghost_result.merge_max_x;
-    let regions = ghost_result.regions;
+    let mut regions = ghost_result.regions;
+    for (idx, region) in regions.iter_mut().enumerate() {
+        region.id = idx as u32;
+    }
     let ghost_warnings = ghost_result.warnings;
     crate::trace::emit(crate::trace::TraceEvent::PhaseTime {
         phase: "ghost_routing".to_string(),

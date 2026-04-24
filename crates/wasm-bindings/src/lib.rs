@@ -92,6 +92,7 @@ fn streamable(evt: &fucktorio_core::trace::TraceEvent) -> bool {
             | T::JunctionCommitted { .. }
             | T::JunctionSolved { .. }
             | T::SatInvocation { .. }
+            | T::SatImprovement { .. }
     )
 }
 
@@ -122,6 +123,125 @@ pub fn layout_streaming(
         on_event,
     )
     .map_err(|e| JsError::new(&e))
+}
+
+/// Interactive cost-descent pass for a single SAT crossing zone.
+///
+/// Finds the region in `layout_result.regions` by `region_id`, rebuilds
+/// the `CrossingZone` from its stored ports + metadata, and runs a
+/// long-running cost-descent loop. Every time a strictly-cheaper
+/// layout is found, `emit` fires with a `SatImprovement` trace event
+/// carrying the new entity list and cost — the frontend animates these.
+///
+/// Returns the `LayoutResult` with the zone's tiles replaced by the
+/// final best entities, so blueprint export and subsequent renders
+/// reflect the improvement.
+///
+/// `budget_ms` — wall-clock budget for the descent loop. Clamped to
+/// 100..=60_000 ms server-side; typical UI call passes ~10_000.
+#[wasm_bindgen]
+pub fn improve_region_streaming(
+    mut layout_result: LayoutResult,
+    region_id: u32,
+    budget_ms: u32,
+    emit: &js_sys::Function,
+) -> Result<LayoutResult, JsError> {
+    use fucktorio_core::bus::region_reimprove::{
+        deadline_in, descend, prune_dangling, rebuild_zone_from_region,
+    };
+    use fucktorio_core::models::RegionKind;
+
+    let region = layout_result
+        .regions
+        .iter()
+        .find(|r| r.id == region_id && r.kind == RegionKind::CrossingZone)
+        .ok_or_else(|| JsError::new(&format!("no CrossingZone region with id {region_id}")))?
+        .clone();
+
+    let (zone, belt_tier, max_ug_reach) = rebuild_zone_from_region(&region).ok_or_else(|| {
+        JsError::new("region missing SAT zone metadata (belt_tier / max_ug_reach)")
+    })?;
+
+    // Extract the zone's current entities (the starting point for
+    // descent) from the layout. Every belt/UG inside the bbox is fair
+    // game; anything else stays where it is.
+    let x0 = zone.x;
+    let y0 = zone.y;
+    let x1 = x0 + zone.width as i32;
+    let y1 = y0 + zone.height as i32;
+    let in_bbox = |e: &PlacedEntity| e.x >= x0 && e.x < x1 && e.y >= y0 && e.y < y1;
+    let initial: Vec<PlacedEntity> = layout_result
+        .entities
+        .iter()
+        .filter(|e| in_bbox(e) && is_belt_or_ug(&e.name))
+        .cloned()
+        .collect();
+
+    if initial.is_empty() {
+        return Err(JsError::new("no belt/UG entities found inside the zone"));
+    }
+
+    let budget_ms = budget_ms.clamp(100, 60_000) as u64;
+    let deadline = deadline_in(budget_ms);
+
+    let emit = emit.clone();
+    let boundaries = zone.boundaries.clone();
+    let zx = zone.x;
+    let zy = zone.y;
+    let zw = zone.width;
+    let zh = zone.height;
+    let mut iter: u32 = 0;
+    let (final_raw, _stop) = descend(
+        &zone,
+        &belt_tier,
+        max_ug_reach,
+        None,
+        initial,
+        deadline,
+        // Generous iter cap — the deadline is the real stop condition.
+        1024,
+        |imp| {
+            let pruned =
+                prune_dangling(imp.entities.to_vec(), &boundaries, max_ug_reach, zx, zy);
+            let evt = fucktorio_core::trace::TraceEvent::SatImprovement {
+                region_id,
+                zone_x: zx,
+                zone_y: zy,
+                zone_w: zw,
+                zone_h: zh,
+                cost: imp.cost,
+                iter,
+                solve_time_us: imp.solve_time_us,
+                entities: pruned,
+            };
+            if let Ok(js_evt) = serde_wasm_bindgen::to_value(&evt) {
+                let _ = emit.call1(&JsValue::NULL, &js_evt);
+            }
+            iter += 1;
+        },
+    );
+
+    // Splice the pruned final result back into the layout. Drop every
+    // belt/UG inside the zone bbox, then push the new set.
+    let pruned_final = prune_dangling(final_raw, &boundaries, max_ug_reach, zx, zy);
+    layout_result
+        .entities
+        .retain(|e| !(in_bbox(e) && is_belt_or_ug(&e.name)));
+    layout_result.entities.extend(pruned_final);
+
+    Ok(layout_result)
+}
+
+fn is_belt_or_ug(name: &str) -> bool {
+    matches!(
+        name,
+        "transport-belt"
+            | "fast-transport-belt"
+            | "express-transport-belt"
+            | "underground-belt"
+            | "fast-underground-belt"
+            | "express-underground-belt"
+    )
 }
 
 #[wasm_bindgen]

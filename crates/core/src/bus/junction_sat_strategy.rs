@@ -751,6 +751,12 @@ impl JunctionStrategy for SatStrategy {
             },
             strategy_name: self.name(),
             participating: ctx.region.participating.clone(),
+            sat_zone: Some(crate::bus::junction_solver::SatZoneSnapshot {
+                boundaries: boundaries.clone(),
+                forced_empty: zone.forced_empty.clone(),
+                belt_tier: belt_name.to_string(),
+                max_ug_reach: max_reach,
+            }),
         })
     }
 }
@@ -781,7 +787,7 @@ fn opposite(dir: EntityDirection) -> EntityDirection {
 /// tile the encoder's interior arm actually constrains. For an interior
 /// input the neighbor is `boundary + dir_delta(direction)`; for an
 /// interior output it's `boundary + dir_delta(opposite(direction))`.
-fn prune_dangling_sat_entities(
+pub(crate) fn prune_dangling_sat_entities(
     entities: Vec<PlacedEntity>,
     boundaries: &[ZoneBoundary],
     max_reach: u32,

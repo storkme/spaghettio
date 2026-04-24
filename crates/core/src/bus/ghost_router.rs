@@ -808,7 +808,16 @@ pub fn route_bus_ghost(
                 if start_x < goal_x {
                     continue;
                 }
-                let ret_key = format!("ret:{}:{}:{}", lane.item, x, out_y);
+                // Phase 3 of `docs/rfp-unified-belt-specs.md`: ret specs are
+                // already one-spec-per-physical-belt (there is no spec
+                // handoff internal to a return path), so "unification" is
+                // cosmetic — rename the key to the unified `flow:` prefix
+                // so downstream naming is consistent. The `:ret:` infix
+                // preserves debuggability (we can still tell at a glance
+                // this is a return) and keeps the key unambiguous vs the
+                // trunk+last-tap `flow:{item}:{x}` keys (different field
+                // count).
+                let ret_key = format!("flow:{}:{}:ret:{}", lane.item, x, out_y);
                 specs.push(BeltSpec {
                     key: ret_key,
                     start: (start_x, out_y),
@@ -838,7 +847,16 @@ pub fn route_bus_ghost(
                 if start_x < goal_x {
                     continue;
                 }
-                let ret_key = format!("ret:{}:{}:{}", lane.item, x, out_y);
+                // Phase 3 of `docs/rfp-unified-belt-specs.md`: ret specs are
+                // already one-spec-per-physical-belt (there is no spec
+                // handoff internal to a return path), so "unification" is
+                // cosmetic — rename the key to the unified `flow:` prefix
+                // so downstream naming is consistent. The `:ret:` infix
+                // preserves debuggability (we can still tell at a glance
+                // this is a return) and keeps the key unambiguous vs the
+                // trunk+last-tap `flow:{item}:{x}` keys (different field
+                // count).
+                let ret_key = format!("flow:{}:{}:ret:{}", lane.item, x, out_y);
                 specs.push(BeltSpec {
                     key: ret_key,
                     start: (start_x, out_y),
@@ -1217,11 +1235,11 @@ pub fn route_bus_ghost(
             } else {
                 EntityDirection::West
             };
-            let spec_seg_id = if spec.key.starts_with("trunk:") {
-                Some(format!("trunk:{}", spec.item))
-            } else {
-                Some(format!("ghost:{}", spec.key))
-            };
+            // All specs materialised here are tap/ret/feeder flows — trunks
+            // are stamped directly by step 3.5 and never reach A*. Post-
+            // Phases 1-3 of `rfp-unified-belt-specs.md`, no spec key has a
+            // `trunk:` prefix, so the segment id is always `ghost:...`.
+            let spec_seg_id = Some(format!("ghost:{}", spec.key));
             let path_ents = render_path(
                 &path,
                 &spec.item,
@@ -1249,11 +1267,11 @@ pub fn route_bus_ghost(
             // `astar.rs:658`). Dropping those entities prevents
             // entity-overlap validator errors on fluid-lane
             // reservations and machine anchors.
-            let claim_kind = if spec.key.starts_with("trunk:") {
-                crate::bus::ghost_occupancy::ClaimKindTag::Permanent
-            } else {
-                crate::bus::ghost_occupancy::ClaimKindTag::GhostSurface
-            };
+            // All materialised specs are horizontals/returns/feeders (see
+            // comment at `spec_seg_id` above); post-Phases 1-3, none of them
+            // are `trunk:*`. Claim kind is always `GhostSurface` — templates
+            // and SAT may replace these tiles.
+            let claim_kind = crate::bus::ghost_occupancy::ClaimKindTag::GhostSurface;
             let surviving_ents: Vec<PlacedEntity> = path_ents
                 .into_iter()
                 .filter(|e| {
@@ -1474,13 +1492,22 @@ pub fn route_bus_ghost(
     }
 
     // -------------------------------------------------------------------------
-    // Phase 1 of `docs/rfp-unified-belt-specs.md`: unify single-tap
-    // trunk+tap flows into one `flow:{item}:{x}` entry in routed_paths
-    // and the three spec_* maps. Presents the junction solver with a
-    // single coherent flow rather than two specs that pin the handoff
-    // tile from both sides (the root cause of
-    // `advanced_circuit_iron_plate_trio_capped`). Multi-tap lanes stay
-    // decomposed — Phase 2 covers them via per-splitter-branch specs.
+    // Phases 1+2 of `docs/rfp-unified-belt-specs.md`: unify trunk+last-tap
+    // flows into one `flow:{item}:{x}` entry in routed_paths and the three
+    // spec_* maps. Presents the junction solver with a single coherent
+    // flow rather than two specs that pin the handoff tile from both
+    // sides — the root cause of `advanced_circuit_iron_plate_trio_capped`
+    // and all single-pin variants.
+    //
+    // Phase 1 (landed 2026-04-21) handled `tap_off_ys.len() == 1`. Phase 2
+    // extends the same post-routing pass to multi-tap lanes: the trunk
+    // column and the *last* tap are fused (they already form one continuous
+    // bent belt), while non-last taps keep their standalone `tap:` specs
+    // because each is its own physical belt fed by a splitter output.
+    // Internal gaps in the trunk path (at non-last tap rows and their
+    // splitter rows) are preserved in the unified Vec; `direction_at`
+    // handles jumps correctly (same-axis steps still derive the right
+    // flow direction from non-adjacent indices).
     //
     // Materialisation already ran (line 794-ish) using the original
     // trunk/tap keys, so entity stamping is unaffected. The corridor
@@ -1488,49 +1515,57 @@ pub fn route_bus_ghost(
     // cluster-formation + junction-solve phase downstream sees the
     // unified keys.
     for lane in lanes {
-        if lane.is_fluid || lane.tap_off_ys.len() != 1 {
+        if lane.is_fluid || lane.tap_off_ys.is_empty() {
             continue;
         }
         let x = lane.x;
-        let tap_y = lane.tap_off_ys[0];
+        let last_tap_y = lane
+            .tap_off_ys
+            .iter()
+            .copied()
+            .max()
+            .expect("tap_off_ys non-empty by guard above");
         let trunk_key = format!("trunk:{}:{}", lane.item, x);
-        let tap_key = format!("tap:{}:{}:{}", lane.item, x, tap_y);
+        let last_tap_key = format!("tap:{}:{}:{}", lane.item, x, last_tap_y);
 
         let Some(trunk_path) = routed_paths.get(&trunk_key).cloned() else {
             continue;
         };
-        let Some(tap_path) = routed_paths.get(&tap_key).cloned() else {
+        let Some(last_tap_path) = routed_paths.get(&last_tap_key).cloned() else {
             continue;
         };
 
-        // Trunk ends at (x, tap_y-1) because tap_y is in the trunk's
-        // skip_ys; tap starts at (x, tap_y) because single-tap sets
-        // is_last=true which forces start_x=x. The two sequences are
-        // adjacent with no overlap, so direct concatenation produces
-        // the full bent-belt path.
+        // Trunk ends at (x, last_tap_y - 1) (last_tap_y is in skip_ys).
+        // Last tap starts at (x, last_tap_y) because `is_last = true`
+        // forces start_x = x. The two sequences are adjacent with no
+        // overlap, so direct concatenation produces a bent-belt path
+        // that carries the item from the trunk top all the way to the
+        // last consumer. Non-last taps are *separate* physical belts
+        // fed by splitter east-outputs — they stay as their own `tap:`
+        // specs and are NOT folded in here.
         let mut unified_path = trunk_path;
-        unified_path.extend(tap_path);
+        unified_path.extend(last_tap_path);
 
         let unified_key = format!("flow:{}:{}", lane.item, x);
         routed_paths.insert(unified_key.clone(), unified_path);
         routed_paths.remove(&trunk_key);
-        routed_paths.remove(&tap_key);
+        routed_paths.remove(&last_tap_key);
 
         let tier = spec_belt_tiers
-            .remove(&tap_key)
+            .remove(&last_tap_key)
             .or_else(|| spec_belt_tiers.remove(&trunk_key))
             .unwrap_or(BeltTier::Yellow);
         spec_belt_tiers.remove(&trunk_key);
         spec_belt_tiers.insert(unified_key.clone(), tier);
 
         spec_items.remove(&trunk_key);
-        spec_items.remove(&tap_key);
+        spec_items.remove(&last_tap_key);
         spec_items.insert(unified_key.clone(), lane.item.clone());
 
-        // exit_dir propagates from the tap (east at the bus-edge
+        // exit_dir propagates from the last tap (east at the bus-edge
         // terminus) since that's where the unified flow exits the
         // region. The trunk had no exit_dir of its own.
-        if let Some(dir) = spec_exit_dirs.remove(&tap_key) {
+        if let Some(dir) = spec_exit_dirs.remove(&last_tap_key) {
             spec_exit_dirs.insert(unified_key, dir);
         }
         spec_exit_dirs.remove(&trunk_key);
@@ -1731,13 +1766,52 @@ pub fn route_bus_ghost(
             clauses: 0,
             solve_time_us: 0,
         });
-        template_regions.push(LayoutRegion {
-            kind: crate::models::RegionKind::JunctionTemplate,
-            x: footprint.x,
-            y: footprint.y,
-            width: footprint.w as i32,
-            height: footprint.h as i32,
-            ports: Vec::new(),
+        template_regions.push(match &sol.sat_zone {
+            Some(snap) => {
+                use crate::models::{PortIo, PortPoint, RegionKind, RegionPort};
+                let ports: Vec<RegionPort> = snap
+                    .boundaries
+                    .iter()
+                    .map(|b| RegionPort {
+                        point: PortPoint {
+                            x: b.x,
+                            y: b.y,
+                            direction: b.direction,
+                        },
+                        io: if b.is_input {
+                            PortIo::Input
+                        } else {
+                            PortIo::Output
+                        },
+                        item: Some(b.item.clone()),
+                        interior: b.interior,
+                    })
+                    .collect();
+                LayoutRegion {
+                    id: 0,
+                    kind: RegionKind::CrossingZone,
+                    x: footprint.x,
+                    y: footprint.y,
+                    width: footprint.w as i32,
+                    height: footprint.h as i32,
+                    ports,
+                    forced_empty: snap.forced_empty.clone(),
+                    belt_tier: Some(snap.belt_tier.clone()),
+                    max_ug_reach: Some(snap.max_ug_reach),
+                }
+            }
+            None => LayoutRegion {
+                id: 0,
+                kind: crate::models::RegionKind::JunctionTemplate,
+                x: footprint.x,
+                y: footprint.y,
+                width: footprint.w as i32,
+                height: footprint.h as i32,
+                ports: Vec::new(),
+                forced_empty: Vec::new(),
+                belt_tier: None,
+                max_ug_reach: None,
+            },
         });
 
         let release_rect = crate::bus::ghost_occupancy::Rect {
@@ -2874,6 +2948,7 @@ impl JunctionStrategy for PerpendicularTemplateStrategy {
             },
             strategy_name: self.name(),
             participating: ctx.region.participating.clone(),
+            sat_zone: None,
         })
     }
 }

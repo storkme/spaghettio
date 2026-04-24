@@ -102,6 +102,12 @@ impl Claim {
 /// installed once at construction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ClaimKindTag {
+    /// Load-bearing claim — set by `Occupancy::new` (for row/trunk
+    /// inits) or by the unit-test harness, never by `place()` in
+    /// production. Post-Phases 1-3 of `rfp-unified-belt-specs.md`
+    /// every A*-routed spec gets `GhostSurface`; trunks are
+    /// installed directly via `permanent_inits`.
+    #[allow(dead_code)]
     Permanent,
     GhostSurface,
     Template,

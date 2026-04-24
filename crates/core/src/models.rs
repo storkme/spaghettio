@@ -149,6 +149,11 @@ pub struct RegionPort {
     /// Item carried through this port.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub item: Option<String>,
+    /// True iff this port sits on a Permanent entity's tile inside the
+    /// bbox (see `ZoneBoundary::interior`). Needed to rebuild the zone
+    /// spec faithfully when re-solving.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub interior: bool,
 }
 
 /// Origin/purpose of a `LayoutRegion`. Replaces the historical stringly-typed
@@ -174,6 +179,11 @@ pub enum RegionKind {
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LayoutRegion {
+    /// Stable per-layout id. Assigned sequentially when regions are
+    /// emitted. Serialised so the frontend can address a specific region
+    /// across worker boundaries (e.g. "improve this region").
+    #[serde(default)]
+    pub id: u32,
     pub kind: RegionKind,
     pub x: i32,
     pub y: i32,
@@ -183,6 +193,19 @@ pub struct LayoutRegion {
     /// flow direction, io (input/output), and item.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ports: Vec<RegionPort>,
+    /// Tiles inside the bbox that must remain free of surface entities
+    /// (tap-off passages). Populated for `CrossingZone` regions so the
+    /// zone spec can be rebuilt for a re-solve; empty otherwise.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub forced_empty: Vec<(i32, i32)>,
+    /// Belt tier used when the zone was solved (e.g. `"transport-belt"`).
+    /// Populated for `CrossingZone` regions only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub belt_tier: Option<String>,
+    /// Underground-belt maximum reach that was used when the zone was
+    /// solved. Populated for `CrossingZone` regions only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_ug_reach: Option<u32>,
 }
 
 /// Everything the layout engine produces — no rate data.

@@ -600,6 +600,33 @@ pub enum TraceEvent {
         cost_grid_size: u32,
     },
 
+    /// Emitted by `region_reimprove::descend` once per strictly-cheaper
+    /// layout found during an interactive improve-region pass. The
+    /// frontend uses these to animate the zone morphing toward an
+    /// optimal layout. Not emitted by the in-layout descent (which uses
+    /// `SatCostDescent` for its per-iteration trace).
+    SatImprovement {
+        /// `LayoutRegion.id` of the zone being improved.
+        region_id: u32,
+        /// Absolute bbox of the zone — redundant with the LayoutRegion
+        /// but convenient for frontend consumers that don't want to
+        /// re-look-up the region on every event.
+        zone_x: i32,
+        zone_y: i32,
+        zone_w: u32,
+        zone_h: u32,
+        /// Total belt+UG cost of `entities` under `junction_cost::solution_cost`.
+        cost: u32,
+        /// Descent iteration — 0 means the initial (pre-descent) snapshot.
+        iter: u32,
+        /// Microseconds spent in the solver for this iteration. 0 for
+        /// the initial snapshot.
+        solve_time_us: u64,
+        /// Full entity list for the zone at this descent step. Replaces
+        /// whatever was at these tiles before.
+        entities: Vec<PlacedEntity>,
+    },
+
     // SAT solution pruned of dangling (unreachable / dead-end) belt entities.
     SatPruned {
         zone_x: i32,

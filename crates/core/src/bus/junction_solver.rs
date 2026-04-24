@@ -857,6 +857,22 @@ pub struct JunctionSolution {
     /// Empty for strategies whose footprint is narrow enough that residue
     /// can't form (e.g. the perpendicular 1×3 template).
     pub participating: Vec<String>,
+    /// Snapshot of the SAT-zone spec when the strategy was `SatStrategy`.
+    /// Populated so the ghost router can label the emitted `LayoutRegion`
+    /// as `RegionKind::CrossingZone` and persist the boundaries / forced
+    /// tiles / belt tier / max UG reach — everything needed to rebuild
+    /// the zone for an interactive re-solve. `None` for non-SAT strategies.
+    pub sat_zone: Option<SatZoneSnapshot>,
+}
+
+/// Serialisable snapshot of a SAT-solved crossing zone. Lives on
+/// `JunctionSolution` so the ghost router can lower it into a
+/// `LayoutRegion` without reaching back into `crate::sat`.
+pub struct SatZoneSnapshot {
+    pub boundaries: Vec<crate::sat::ZoneBoundary>,
+    pub forced_empty: Vec<(i32, i32)>,
+    pub belt_tier: String,
+    pub max_ug_reach: u32,
 }
 
 /// Context passed to every strategy call. A struct so fields can be

@@ -6,6 +6,7 @@ import wasmInit, {
   all_producer_machines,
   default_machine_for_item,
   export_blueprint,
+  improve_region_streaming,
   layout,
   layout_traced,
   layout_streaming,
@@ -41,7 +42,14 @@ type Request =
       solverResult: SolverResult | null;
     }
   | { id: number; method: "parseBlueprint"; bp: string }
-  | { id: number; method: "solveFixture"; fixtureJson: string; pinsJson: string };
+  | { id: number; method: "solveFixture"; fixtureJson: string; pinsJson: string }
+  | {
+      id: number;
+      method: "improveRegionStreaming";
+      layout: LayoutResult;
+      regionId: number;
+      budgetMs: number;
+    };
 
 let ready: Promise<void> | null = null;
 
@@ -160,6 +168,30 @@ self.onmessage = async (e: MessageEvent<Request>) => {
       case "solveFixture":
         result = solve_fixture(req.fixtureJson, req.pinsJson);
         break;
+      case "improveRegionStreaming": {
+        // Streams SatImprovement events through the same batched channel
+        // as layout_streaming. Each event carries the pruned entity list
+        // for the zone at that descent step and the raw cost — the
+        // frontend animates diffs against the previous event.
+        const id = req.id;
+        const BATCH_SIZE = 1;
+        let batch: unknown[] = [];
+        const flushBatch = (): void => {
+          if (batch.length === 0) return;
+          (self as unknown as Worker).postMessage({ id, streamEvents: batch });
+          batch = [];
+        };
+        const emit = (evt: unknown): void => {
+          batch.push(evt);
+          if (batch.length >= BATCH_SIZE) flushBatch();
+        };
+        try {
+          result = improve_region_streaming(req.layout, req.regionId, req.budgetMs, emit);
+        } finally {
+          flushBatch();
+        }
+        break;
+      }
     }
     post(req.id, true, result);
   } catch (err) {

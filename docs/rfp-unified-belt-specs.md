@@ -356,4 +356,82 @@ Remove obsolete helpers, unused spec-type predicates, dead
   Status: **Phase 1 landed; motivating fixture not solved**. Pause for
   user direction before either (a) pivoting to the corridor-template
   coherence problem as a new RFP, (b) proceeding with Phase 2-4, or
-  (c) reverting Phase 1 per strict kill-criterion reading.
+  (c) reverting Phase 1 per strict kill-criterion reading.*
+
+- *2026-04-24 — User hit a new variant of the pin on
+  `http://localhost:5173/?item=advanced-circuit&rate=2.1&machine=assembling-machine-1&in=iron-plate,copper-plate,steel-plate,stone,coal,water,crude-oil,iron-ore,copper-ore&belt=transport-belt`:
+  `find_item_conflict` repeatedly vetoed a zone at (3,56) where
+  `trunk:iron-plate:3` (multi-tap, so Phase 1 skipped it) exited South
+  and `ret:electronic-circuit:2:56` exited West. Chose option (b):
+  proceed with Phase 2-4.*
+
+  **Phase 2 — multi-tap unification.** Extended the Phase 1 post-routing
+  pass to cover `tap_off_ys.len() >= 1` (was `== 1`). For multi-tap lanes
+  the trunk column and the *last* tap fuse into `flow:{item}:{x}`; non-
+  last taps are kept as standalone `tap:` specs because each is a
+  physically independent belt fed by a splitter east-output (no spec
+  handoff pin to remove). Internal gaps in the trunk path at non-last
+  tap / splitter rows are preserved in the unified Vec; `direction_at`
+  derives the correct flow direction from non-adjacent indices
+  (same-axis step). Diff: ~10 LOC in `ghost_router.rs`.
+
+  **Phase 3 — return-flow naming.** `ret:` specs were already one
+  spec per physical belt — there is no handoff internal to a return
+  path — so Phase 3 is naming cleanup, not structural unification.
+  Renamed the emission key `ret:{item}:{x}:{y}` →
+  `flow:{item}:{x}:ret:{y}`. Field count (4 vs 2) keeps it
+  unambiguous vs trunk+tap unified keys; the `:ret:` infix preserves
+  debuggability. No downstream code branches on `ret:` prefix (grep
+  confirmed), so the rename is a pure string swap. Diff: ~10 LOC.
+
+  **Phase 4 — dead-code removal.** After Phases 1-3 no spec key in
+  the A*-routed `specs` vec has a `trunk:` prefix (trunks are stamped
+  directly by step 3.5 of `route_bus_ghost`, never pushed to `specs`).
+  The `spec.key.starts_with("trunk:")` branches at the materialisation
+  loop (`ghost_router.rs:1220`, `:1252`) were dead. Collapsed both
+  branches to their always-taken arm (`ghost:{key}` segment id,
+  `GhostSurface` claim kind). Tagged `ClaimKindTag::Permanent` with
+  `#[allow(dead_code)]` + a comment explaining it's test-only; prod
+  permanent claims flow through `permanent_inits` in `Occupancy::new`,
+  not `place()`. Diff: ~20 LOC.
+
+  **Verification:**
+
+  - Full e2e: **391 passed, 21 ignored** — no regressions vs Phase 1.
+  - Region-fixture harness: committed fixtures all pass.
+  - Motivating user URL (`advanced-circuit @ 2.1 AM1 yellow-belt, full
+    inputs incl. iron-plate,copper-plate,steel-plate`): **0 validation
+    errors**, 5 pre-existing power warnings (oil-refinery coverage,
+    unrelated to this RFP).
+  - `advanced_circuit_iron_plate_trio_capped` fixture still expects
+    `mode: "capped"` and continues to hit that — but the replay uses
+    pre-captured `routed_paths`, so Phases 1-3 don't apply to the
+    replay. To re-evaluate whether the rate=5/AM3 full-pipeline path
+    now solves, the fixture would need recapturing; out of scope for
+    this RFP since live rate=5/AM3 from-ore hits a separate pre-existing
+    panic at `feeder:plastic-bar:18:18` (unrelated, unchanged by this
+    work).
+  - Clippy clean; WASM build clean (unchanged interface).
+
+  **End state vs original design.** The design section proposed a new
+  `BeltSpec { path, source, sink, key: "iron-plate:23" }` type with
+  `BoundaryKind::SplitterInput / SplitterOutput` for explicit
+  splitter boundaries. The landed implementation is materially
+  simpler: keep the existing `BeltSpec { key, start, goal, ... }`
+  type; do unification as a lightweight post-routing pass that
+  concatenates `routed_paths` entries and rewrites the three `spec_*`
+  maps. The cosmetic differences (no explicit `BoundaryKind` enum,
+  `flow:` string prefix instead of no prefix) don't cost us anything:
+  the junction solver sees coherent flows either way, and no
+  downstream code branches on the spec-key prefix. If a future
+  feature needs an explicit BoundaryKind it can be added then.
+
+  **Non-last `tap:` keys.** Non-last tap specs still use the
+  `tap:{item}:{x}:{y}` key format. Each is a physically independent
+  belt fed by a splitter's east-output; there is no pin issue to
+  remove. Renaming purely for consistency would touch spec emission
+  at `ghost_router.rs:771` and the two-map Phase 1+2 lookup, and
+  risks regressing the already-working multi-tap layouts — deferred
+  as a no-value-add change.
+
+  Status: **landed.**

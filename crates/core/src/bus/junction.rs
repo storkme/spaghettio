@@ -161,20 +161,26 @@ impl Junction {
                 point: spec.entry,
                 io: PortIo::Input,
                 item: Some(spec.item.clone()),
+                interior: false,
             });
             ports.push(RegionPort {
                 point: spec.exit,
                 io: PortIo::Output,
                 item: Some(spec.item.clone()),
+                interior: false,
             });
         }
         LayoutRegion {
+            id: 0,
             kind,
             x: self.bbox.x,
             y: self.bbox.y,
             width: self.bbox.w as i32,
             height: self.bbox.h as i32,
             ports,
+            forced_empty: Vec::new(),
+            belt_tier: None,
+            max_ug_reach: None,
         }
     }
 }

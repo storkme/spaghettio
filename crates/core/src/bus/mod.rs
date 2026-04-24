@@ -32,6 +32,7 @@ pub(crate) mod junction;
 pub mod junction_cost;
 pub(crate) mod junction_sat_strategy;
 pub(crate) mod junction_solver;
+pub mod region_reimprove;
 pub(crate) mod region_walker;
 pub(crate) mod lane_order;
 pub mod lane_planner;
