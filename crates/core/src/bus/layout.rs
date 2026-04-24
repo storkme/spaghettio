@@ -14,6 +14,42 @@ use crate::bus::lane_planner::{
 };
 use crate::bus::placer::{place_rows, RowSpan};
 
+/// Layout strategy. Selects the shape of the bus the engine produces.
+/// See `docs/rfp-modular-production.md` for the rationale.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum LayoutStrategy {
+    /// One shared lane family per item, single balancer at the producer
+    /// row. Capped at 8 lanes per item.
+    #[default]
+    Pooled,
+    /// One lane family per consuming recipe-row, sized to that
+    /// consumer's exact demand, no pool-balancer. Phase 1 (RFP).
+    PartitionedPerConsumer,
+    /// `PartitionedPerConsumer` plus subtree sharding when a single
+    /// module's widest upstream recipe still exceeds 8 lanes. Phase 2.
+    PartitionedDecomposed,
+}
+
+/// Per-call options for `build_bus_layout`. New struct; absorbs the
+/// previous `max_belt_tier` parameter so future per-call options
+/// (strategy, escargio fold parameters, …) attach as additional fields.
+#[derive(Clone, Debug, Default)]
+pub struct LayoutOptions {
+    pub strategy: LayoutStrategy,
+    pub max_belt_tier: Option<String>,
+}
+
+impl LayoutOptions {
+    /// Convenience: keep today's call shape working for tests / examples
+    /// that only care about the belt tier.
+    pub fn from_belt_tier(max_belt_tier: Option<&str>) -> Self {
+        Self {
+            strategy: LayoutStrategy::default(),
+            max_belt_tier: max_belt_tier.map(|s| s.to_string()),
+        }
+    }
+}
+
 /// Convert a SolverResult into a bus-style LayoutResult.
 ///
 /// Returns a LayoutResult with:
@@ -22,8 +58,18 @@ use crate::bus::placer::{place_rows, RowSpan};
 /// - height: maximum y dimension used
 pub fn build_bus_layout(
     solver_result: &SolverResult,
-    max_belt_tier: Option<&str>,
+    opts: LayoutOptions,
 ) -> Result<LayoutResult, String> {
+    match opts.strategy {
+        LayoutStrategy::Pooled => {}
+        LayoutStrategy::PartitionedPerConsumer => {
+            unimplemented!("PartitionedPerConsumer strategy is wired in Phase 1 (rfp-modular-production)");
+        }
+        LayoutStrategy::PartitionedDecomposed => {
+            unimplemented!("PartitionedDecomposed strategy is wired in Phase 2 (rfp-modular-production)");
+        }
+    }
+    let max_belt_tier = opts.max_belt_tier.as_deref();
     // Final product items get EAST-flowing output belts (merge at right side)
     let final_output_items: FxHashSet<String> = solver_result
         .external_outputs
@@ -337,10 +383,10 @@ pub fn build_bus_layout(
 /// them in `LayoutResult.trace`. Zero overhead when using the non-traced entry point.
 pub fn build_bus_layout_traced(
     solver_result: &SolverResult,
-    max_belt_tier: Option<&str>,
+    opts: LayoutOptions,
 ) -> Result<LayoutResult, String> {
     let _guard = crate::trace::start_trace();
-    let mut result = build_bus_layout(solver_result, max_belt_tier)?;
+    let mut result = build_bus_layout(solver_result, opts)?;
     result.trace = Some(crate::trace::drain_events());
     Ok(result)
 }
@@ -350,12 +396,12 @@ pub fn build_bus_layout_traced(
 /// the web app to render pipeline progress live while the engine runs.
 pub fn build_bus_layout_streaming(
     solver_result: &SolverResult,
-    max_belt_tier: Option<&str>,
+    opts: LayoutOptions,
     mut on_event: Box<dyn FnMut(&crate::trace::TraceEvent)>,
 ) -> Result<LayoutResult, String> {
     let _collector_guard = crate::trace::start_trace();
     let _sink_guard = crate::trace::set_sink(Box::new(move |evt| on_event(evt)));
-    let mut result = build_bus_layout(solver_result, max_belt_tier)?;
+    let mut result = build_bus_layout(solver_result, opts)?;
     result.trace = Some(crate::trace::drain_events());
     Ok(result)
 }

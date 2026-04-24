@@ -3,7 +3,7 @@
 //! Usage: cargo run -p fucktorio_core --example dump_layout [recipe] [rate]
 //! Default: iron-gear-wheel 10.0
 
-use fucktorio_core::bus::layout::build_bus_layout;
+use fucktorio_core::bus::layout::{build_bus_layout, LayoutOptions};
 use fucktorio_core::models::LayoutResult;
 use fucktorio_core::solver;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -34,7 +34,7 @@ fn main() {
     }
     println!();
 
-    let layout = match build_bus_layout(&solver_result, None) {
+    let layout = match build_bus_layout(&solver_result, LayoutOptions::default()) {
         Ok(l) => l,
         Err(e) => {
             eprintln!("layout failed: {}", e);

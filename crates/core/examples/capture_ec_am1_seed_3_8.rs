@@ -12,7 +12,7 @@
 //!     cargo run --manifest-path crates/core/Cargo.toml \
 //!     --example capture_ec_am1_seed_3_8 --release
 
-use fucktorio_core::bus::layout::build_bus_layout;
+use fucktorio_core::bus::layout::{build_bus_layout, LayoutOptions};
 use fucktorio_core::solver;
 use rustc_hash::FxHashSet;
 
@@ -39,7 +39,7 @@ fn main() {
                 std::process::exit(1);
             });
 
-    let layout = build_bus_layout(&solver_result, None)
+    let layout = build_bus_layout(&solver_result, LayoutOptions::default())
         .unwrap_or_else(|e| {
             eprintln!("layout failed: {e}");
             std::process::exit(1);

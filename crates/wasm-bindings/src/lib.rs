@@ -12,7 +12,7 @@ use fucktorio_core::models::{LayoutResult, PlacedEntity, SolverResult};
 use fucktorio_core::validate::{self, LayoutStyle, ValidationIssue};
 use fucktorio_core::{
     blueprint, blueprint_parser, bus::junction_cost::solution_cost,
-    bus::layout::build_bus_layout, fixture as fixture_mod, recipe_db, sat, solver,
+    bus::layout::{build_bus_layout, LayoutOptions}, fixture as fixture_mod, recipe_db, sat, solver,
 };
 use rustc_hash::FxHashSet;
 use serde::Serialize;
@@ -52,7 +52,8 @@ pub fn default_machine_for_item(item: &str, fallback: &str) -> String {
 
 #[wasm_bindgen]
 pub fn layout(solver_result: SolverResult, max_belt_tier: Option<String>) -> Result<LayoutResult, JsError> {
-    build_bus_layout(&solver_result, max_belt_tier.as_deref()).map_err(|e| JsError::new(&e))
+    build_bus_layout(&solver_result, LayoutOptions::from_belt_tier(max_belt_tier.as_deref()))
+        .map_err(|e| JsError::new(&e))
 }
 
 /// Traced variant of `layout()`. Returns the same `LayoutResult` plus
@@ -61,8 +62,11 @@ pub fn layout(solver_result: SolverResult, max_belt_tier: Option<String>) -> Res
 /// deleted; both `layout()` and `layout_traced()` go through it.
 #[wasm_bindgen]
 pub fn layout_traced(solver_result: SolverResult, max_belt_tier: Option<String>) -> Result<LayoutResult, JsError> {
-    fucktorio_core::bus::layout::build_bus_layout_traced(&solver_result, max_belt_tier.as_deref())
-        .map_err(|e| JsError::new(&e))
+    fucktorio_core::bus::layout::build_bus_layout_traced(
+        &solver_result,
+        LayoutOptions::from_belt_tier(max_belt_tier.as_deref()),
+    )
+    .map_err(|e| JsError::new(&e))
 }
 
 /// Filter predicate — determines which TraceEvent variants are forwarded to
@@ -119,7 +123,7 @@ pub fn layout_streaming(
     });
     fucktorio_core::bus::layout::build_bus_layout_streaming(
         &solver_result,
-        max_belt_tier.as_deref(),
+        LayoutOptions::from_belt_tier(max_belt_tier.as_deref()),
         on_event,
     )
     .map_err(|e| JsError::new(&e))
