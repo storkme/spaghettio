@@ -106,7 +106,7 @@ and run one `run-watcher.sh` per name.
 | Label | Meaning |
 |-------|---------|
 | `<agent-name>-ready` | Issue is queued for this agent. Watcher claims it. Added by you, or by the watcher's scan phase when it detects a new human comment on a touched issue/PR. |
-| `agent-done` | Watcher opened a PR for this issue, OR the agent self-labelled after completing a research/sub-issues task. |
+| `agent-done` | Watcher opened a PR for this issue, OR the agent self-labelled after completing a research/sub-issues task, OR the agent self-labelled after answering a question. |
 | `agent-failed` | pi returned without opening a PR and without self-labelling `agent-done`; a log-tail comment is attached. |
 
 You create the `<agent-name>-ready` label once per agent. The watcher creates
@@ -154,6 +154,61 @@ issue (plus one per touched PR) per poll cycle. A fine-grained GitHub PAT
 has a 5000-requests-per-hour budget — comfortable up to ~80 touched issues
 at a 60s poll interval. Reduce `POLL_INTERVAL` further only if you have
 few touched issues.
+
+### Terminal states an agent can pick
+
+The base prompt the watcher hands to pi describes three possible "done"
+shapes. The agent picks whichever fits the task:
+
+| Shape | Terminal state | Typical task |
+|-------|---------------|--------------|
+| Code change | Open/update a PR that says `Closes #N` | "Fix the off-by-one in `foo.rs`" |
+| Research / audit | File sub-issues + comment with links + self-label `agent-done` | "Audit the web app for UX smells and create an issue per finding" |
+| Question / discussion | Reply with a comment + self-label `agent-done` | "Why does the ghost router use negotiated congestion instead of straight A\*?" |
+
+Mixing is allowed when natural — a code-change task that includes a
+question should get both the PR and the answer comment.
+
+### Agent memory
+
+Each agent has an orphan branch `agent-memory/<agent-name>` on the
+repository. Each subdirectory `issue-<N>/` under it is the agent's scratch
+space while working on issue #N — `understanding.md`, `progress.md`, and
+whatever other markdown the agent finds useful. The watcher auto-clones the
+memory branch on startup, mounts it as `/tmp/agent-memory/` inside the
+container, surfaces the per-issue subdirectory to the agent via the base
+prompt, and commits + pushes anything the agent wrote after pi exits.
+
+**Inspect what the agent has been thinking:**
+
+```sh
+git fetch origin agent-memory/misia
+git checkout agent-memory/misia    # from a throwaway clone or worktree
+ls                                  # issue-174/, issue-182/, ...
+cat issue-174/understanding.md
+```
+
+**Manually edit memory** (rare — useful if the agent has formed a wrong
+understanding you want to correct before the next pass):
+
+```sh
+git checkout agent-memory/misia
+# edit issue-<N>/understanding.md
+git commit -am "human: correcting misia's notes on #N"
+git push
+```
+
+Then re-queue the issue (label it `misia-ready`); the next pickup will see
+your edits and build on them.
+
+**Key properties:**
+- Orphan branch — shares no history with `main`, never merged.
+- One branch per agent, covering all issues that agent has touched.
+- Never deleted by `--reset` (the reset wipes the memory clone in the
+  container, but the remote branch is untouched — next container startup
+  re-clones it).
+- Not pushed if the agent didn't write anything to `issue-<N>/` during a
+  pickup.
 
 ### Windows-side prerequisites (llama.cpp backend)
 
