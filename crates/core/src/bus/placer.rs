@@ -327,11 +327,14 @@ fn can_lane_split(spec: &MachineSpec, count: usize) -> bool {
         .all(|f| f.is_fluid) && !spec.outputs.is_empty();
     let fluid_dual_input_lane_split_supported =
         matches!(kind, RowKind::FluidDualInput) && !output_is_fluid;
+    let fluid_multi_input_lane_split_supported =
+        matches!(kind, RowKind::FluidMultiInput) && !output_is_fluid;
     matches!(
         kind,
         RowKind::SingleInput | RowKind::DualInput | RowKind::TripleInput
     ) || fluid_input_lane_split_supported
         || fluid_dual_input_lane_split_supported
+        || fluid_multi_input_lane_split_supported
 }
 
 /// Build one row of machines. Returns (entities, span, row_width).
@@ -581,6 +584,7 @@ pub(crate) fn build_one_row(
                 solid_out,
                 &out_port_assignments,
                 Some(out_belt),
+                lane_split,
                 output_east,
             );
             fluid_port_ys = in_port_pipes.iter().map(|&(_, _, py)| py).collect();
@@ -766,7 +770,8 @@ pub fn place_rows(
             kind,
             RowKind::SingleInput | RowKind::DualInput | RowKind::TripleInput
         ) || (matches!(kind, RowKind::FluidInput) && spec.entity == "chemical-plant")
-            || (matches!(kind, RowKind::FluidDualInput) && !output_is_fluid);
+            || (matches!(kind, RowKind::FluidDualInput) && !output_is_fluid)
+            || (matches!(kind, RowKind::FluidMultiInput) && !output_is_fluid);
         let single_lane = !has_bridge_template;
         let _ = has_fluid;
         let _ = solid_inputs_count;

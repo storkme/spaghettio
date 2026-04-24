@@ -1043,6 +1043,25 @@ pub fn fluid_input_row(
         //   y+2..y+2+msz-1: machine
         //   y+2+msz: output inserter
         //   y+2+msz+1: output belt
+        //
+        // **This branch is not wired into `lane_split` yet** — two
+        // pre-existing issues need sorting first:
+        //
+        //   1. Entity overlap when `port_dx == 1` (AM2/AM3). The inserter
+        //      is stamped at `(mx + 1, y+1)` while the pipe is stamped at
+        //      `(mx + port_dx, y+1) == (mx + 1, y+1)` — same tile. The
+        //      per-machine loop below pushes both into `entities`; real
+        //      placements would need them on distinct tiles.
+        //   2. `fluid_port_pipes` only reports machine `i == 0`, so the
+        //      bus router only taps one per-row point. Multi-machine AM2
+        //      rows are fluid-starved on machines 1..n-1 because their
+        //      pipes are at (mx+1, y+1), (mx+1+pitch, y+1), … — not
+        //      adjacent and with no horizontal connector between them.
+        //
+        // Once those are fixed, adding `lane_split` here is the same
+        // pattern as the chemical-plant branch above: gap-fill the y+0
+        // solid belt, sideload-bridge at y+msz+3 (the output belt row).
+        // Tracked in the tier4 follow-ups list.
         let row_height = msz + 4;
         let out_dir = output_dir(output_east);
 
@@ -1904,6 +1923,7 @@ pub fn fluid_multi_input_row(
     solid_output_item: Option<&str>,
     fluid_outputs: &[(i32, &str)],    // (port_dx, item) for fluid output(s)
     output_belt: Option<&str>,
+    lane_split: bool,
     output_east: bool,
 ) -> (Vec<PlacedEntity>, i32, Vec<(String, i32, i32)>, Vec<(String, i32, i32)>) {
     assert!(fluid_inputs.len() >= 2, "fluid_multi_input_row requires ≥2 fluid inputs");
@@ -1979,9 +1999,20 @@ pub fn fluid_multi_input_row(
     let inserter_out_seg = Some(format!("row:{recipe}:inserter-out"));
     let belt_out_seg = Some(format!("row:{recipe}:belt-out"));
 
-    for i in 0..machine_count {
-        let mx = x_offset + i as i32 * pitch;
+    // Lane-split only applies to solid-output recipes (the fluid-output path
+    // has no belt to sideload onto). The `LANE_SPLIT_GAP` (3) between groups
+    // widens each fluid's per-machine trunk-row UG pair from its original
+    // adjacent layout (distance 1) to distance `pitch + LANE_SPLIT_GAP - 2
+    // = 4`, well under `FLUID_UG_MAX_DISTANCE` (10) — so the fluid trunks
+    // tunnel across the gap with no additional gap-filling entities on the
+    // trunk rows. The drop-UG / UG-out / machine rows have no inter-machine
+    // entities, so the gap stays empty there too. The bridge goes on the
+    // output belt row.
+    let lane_split = lane_split && machine_count >= 2 && solid_output_item.is_some();
+    let mxs = machine_xs(x_offset, machine_count, pitch, lane_split);
+    let g1 = if lane_split { machine_count / 2 } else { machine_count };
 
+    for &mx in &mxs {
         // Stamp each fluid's T-drop + trunk flanks + drop UG.
         //
         // Fluid index `fi` in `fluid_inputs`. fi=0 is innermost (closest to
@@ -2115,6 +2146,25 @@ pub fn fluid_multi_input_row(
                 }
             }
         }
+    }
+
+    // Lane-split bridge on the solid output belt. Trunk rows need no
+    // gap-filler because each fluid's per-machine UG pair naturally
+    // tunnels across the widened gap (pitch + LANE_SPLIT_GAP − 2 = 4
+    // tiles between endpoints, well under the 10-tile max).
+    if lane_split {
+        let gap_start_x = x_offset + g1 as i32 * pitch;
+        let belt_name = output_belt.unwrap_or("transport-belt");
+        let solid_out = solid_output_item.expect("lane_split guard ensures solid output");
+        let output_row_dy = output_first_idx + 1; // inserter at output_first_idx, belt one below
+        entities.extend(sideload_bridge(
+            gap_start_x,
+            y_offset,
+            output_row_dy,
+            belt_name,
+            solid_out,
+            output_east,
+        ));
     }
 
     (entities, row_height, fluid_input_port_pipes, fluid_output_port_pipes)
@@ -3185,6 +3235,7 @@ mod tests {
             None,
             &[(1, "light-oil")],
             None,
+            false, // lane_split
             true,
         );
 
@@ -3260,6 +3311,7 @@ mod tests {
             Some("sulfur"),
             &[],
             Some("transport-belt"),
+            false, // lane_split
             false, // westward output
         );
 
@@ -3296,6 +3348,7 @@ mod tests {
             None,
             &[(1, "light-oil")],
             None,
+            false, // lane_split
             true,
         );
 
@@ -3330,6 +3383,7 @@ mod tests {
             None,
             &[(1, "sulfuric-acid")],
             None,
+            false, // lane_split
             true,
         );
 
@@ -3342,6 +3396,7 @@ mod tests {
             None,
             &[(1, "sulfuric-acid")],
             None,
+            false, // lane_split
             true,
         );
         assert_eq!(
@@ -3399,6 +3454,7 @@ mod tests {
             None,
             &[(1, "light-oil")],
             None,
+            false, // lane_split
             true,
         );
 
@@ -3414,5 +3470,61 @@ mod tests {
 
         // 4 port tap points (2 fluids × 2 machines)
         assert_eq!(in_ports.len(), 4);
+    }
+
+    #[test]
+    fn fluid_multi_input_lane_split_solid_output() {
+        // Sulfur: 2 fluids in (water dx=0, petroleum-gas dx=2), solid output.
+        // With lane_split and 2 machines, group 1 has machine at mx=0, group 2
+        // at mx = 3 + LANE_SPLIT_GAP = 6. Each fluid's trunk-row UG pair
+        // naturally tunnels across the gap (distance 4, well under the
+        // 10-tile fluid UG max). The sideload bridge goes on the output belt
+        // row. No gap-filling pipes on trunk rows (tunnels handle it).
+        let (entities, _, _, _) = fluid_multi_input_row(
+            "sulfur",
+            "chemical-plant",
+            3, 2, 0, 0,
+            &[(0, "water"), (2, "petroleum-gas")],
+            Some("sulfur"),
+            &[],
+            Some("transport-belt"),
+            true,  // lane_split
+            false, // west-flow output
+        );
+
+        // Machine positions: group 1 at x=0, group 2 at x=6.
+        assert_entity(&entities, 0, 4, "chemical-plant");
+        assert_entity(&entities, 6, 4, "chemical-plant");
+
+        // Trunk-row UGs at the two edges of the gap. Machine 0's east
+        // UG-in for water (port_dx=0) at (1, 1); machine 1's west UG-out
+        // for water at (5, 1). Distance 4 tiles — within max_reach.
+        let water_east = assert_entity(&entities, 1, 1, "pipe-to-ground");
+        assert_eq!(water_east.direction, EntityDirection::East);
+        assert_eq!(water_east.carries.as_deref(), Some("water"));
+        let water_west = assert_entity(&entities, 5, 1, "pipe-to-ground");
+        assert_eq!(water_west.direction, EntityDirection::West);
+        assert_eq!(water_west.carries.as_deref(), Some("water"));
+
+        // No trunk-row surface pipes in the gap columns (2..=4) at y=1 —
+        // the UG tunnel covers it.
+        for x in 2..=4 {
+            assert!(
+                entities.iter().find(|e| e.x == x && e.y == 1 && e.name == "pipe").is_none(),
+                "expected no surface pipe at ({x}, 1) in the gap — the UG pair tunnels through"
+            );
+        }
+
+        // Sideload bridge at y=7 (output inserter row) / y=8 (output belt).
+        // `sideload_bridge` emits 6 entities in the 3-tile gap; for
+        // west-flow output the bridge row has the expected south/west/west
+        // direction pattern at (gap_start_x, y=7).
+        let gap_start_x = 3;
+        assert_entity(&entities, gap_start_x, 7, "transport-belt");
+        assert_entity(&entities, gap_start_x + 1, 7, "transport-belt");
+        assert_entity(&entities, gap_start_x + 2, 7, "transport-belt");
+        assert_entity(&entities, gap_start_x, 8, "transport-belt");
+        assert_entity(&entities, gap_start_x + 1, 8, "transport-belt");
+        assert_entity(&entities, gap_start_x + 2, 8, "transport-belt");
     }
 }
