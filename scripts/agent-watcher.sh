@@ -273,8 +273,13 @@ checkout_task_branch() {
         echo "continuing existing branch ${branch}"
         git checkout -B "$branch" "origin/${branch}" --quiet
     else
+        # -B (not -b): create-or-reset. Tolerates a leftover local branch
+        # from a previous run that committed but never pushed (e.g. a
+        # failed task) or whose remote was deleted (e.g. PR merged with
+        # GitHub auto-delete on). Either way, the right behaviour for
+        # "no branch on remote" is: start fresh from main.
         echo "fresh branch ${branch}"
-        git checkout -b "$branch" --quiet
+        git checkout -B "$branch" --quiet
     fi
 }
 
