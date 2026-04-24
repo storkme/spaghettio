@@ -13,17 +13,10 @@ interface LayoutRegionWithPorts {
 }
 
 // ---------------------------------------------------------------------------
-// Zone colours — sourced from regionClassify (kind / class-based palettes).
-// Each region is drawn with its kind as fill and class as outline, so you
-// can see both channels at once.
+// Arrow drawing helper (transparent — circles removed per #182)
 // ---------------------------------------------------------------------------
 
-const INPUT_COLOR = 0x50c050;  // green
-const OUTPUT_COLOR = 0xd04040; // red
-
-// ---------------------------------------------------------------------------
-// Arrow drawing helper
-// ---------------------------------------------------------------------------
+const ARROW_ALPHA = 0.35;
 
 /** Draw a directional arrow at (cx, cy) in pixel coords. */
 function drawArrow(
@@ -34,14 +27,14 @@ function drawArrow(
   color: number,
 ): void {
   const size = TILE_PX * 0.45;
-  g.setStrokeStyle({ width: 3, color, alpha: 0.95 });
+  g.setStrokeStyle({ width: 3, color, alpha: ARROW_ALPHA });
 
   // Direction vectors
   let dx = 0, dy = -1; // default North
   switch (direction) {
     case "East":  dx = 1;  dy = 0; break;
     case "South": dx = 0;  dy = 1; break;
-    case "West":  dx = -1; dy = 0; break;
+    case "West": dx = -1; dy = 0; break;
   }
 
   const tipX = cx + dx * size;
@@ -191,7 +184,8 @@ export function renderRegionOverlayDetailed(layout: LayoutResult): RegionOverlay
     // `classification.cls` field if a future panel wants to show it.
 
     // Boundary ports — draw input→output dashed connectors first so the
-    // port markers and arrows sit on top.
+    // arrows sit on top. Circles removed per #182 — only arrows + dashed
+    // item-colored connectors remain (arrows made transparent).
     const ports = region.ports ?? [];
     const pairs = pairRegionPorts(ports);
     for (const { item, inPort, outPort } of pairs) {
@@ -212,20 +206,12 @@ export function renderRegionOverlayDetailed(layout: LayoutResult): RegionOverlay
       const px = wx * TILE_PX + TILE_PX / 2;
       const py = wy * TILE_PX + TILE_PX / 2;
 
-      const portColor = port.io === "Input" ? INPUT_COLOR : OUTPUT_COLOR;
-      const pg = new Graphics();
-      pg.circle(px, py, TILE_PX * 0.3).fill({ color: portColor, alpha: 0.8 });
-      layer.addChild(pg);
-
+      // Circles removed — arrows only (transparent per #182).
+      // Port identity (item + IO) is available via hover in the inspector.
       const ag = new Graphics();
-      const arrowColor = port.item ? itemColor(port.item) : portColor;
+      const arrowColor = port.item ? itemColor(port.item) : 0x888888;
       drawArrow(ag, px, py, port.point.direction, arrowColor);
       layer.addChild(ag);
-
-      // The "ele IN" / "ele OUT" per-port text labels used to sit around
-      // each marker. They overlapped whenever a region had >1 port on the
-      // same edge. Port identity (item + IO) is now available via hover
-      // in the inspector.
     }
   }
 
