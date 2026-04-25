@@ -76,7 +76,9 @@ The watcher:
    `misia-ready`), reset the workspace to `origin/main`, branch to
    `agent/<name>/issue-<n>`, run pi, check for the resulting PR, relabel the
    issue `agent-done` (PR opened) or `agent-failed` (no PR, log tail
-   commented on the issue). Sleep `POLL_INTERVAL` seconds if no candidate.
+   commented on the issue). If the issue queue is empty, fall through to a
+   PR review pickup (see [PR review queue](#pr-review-queue)). Sleep
+   `POLL_INTERVAL` seconds if neither produces work.
 3. SIGTERM (`docker stop`, `./run-watcher.sh --stop`) finishes the current
    iteration and exits cleanly within ~30s.
 
@@ -108,9 +110,41 @@ and run one `run-watcher.sh` per name.
 | `<agent-name>-ready` | Issue is queued for this agent. Watcher claims it. Added by you, or by the watcher's scan phase when it detects a new human comment on a touched issue/PR. |
 | `agent-done` | Watcher opened a PR for this issue, OR the agent self-labelled after completing a research/sub-issues task, OR the agent self-labelled after answering a question. |
 | `agent-failed` | pi returned without opening a PR and without self-labelling `agent-done`; a log-tail comment is attached. |
+| `agent-reviewed` | The watcher reviewed this PR at its current head SHA. See [PR review queue](#pr-review-queue). |
 
 You create the `<agent-name>-ready` label once per agent. The watcher creates
-`agent-done` and `agent-failed` on demand.
+`agent-done`, `agent-failed`, and `agent-reviewed` on demand.
+
+### PR review queue
+
+When the issue queue is empty on a poll cycle, the watcher falls through to a
+**PR review pickup**: it picks one open, non-draft PR that does **not** carry
+the `agent-reviewed` label and runs pi against it in review-only mode. The
+agent reads the diff, posts one structured review comment, and labels the PR
+`agent-reviewed`. New commits clear the label (via the
+`.github/workflows/clear-agent-reviewed.yml` workflow on
+`pull_request: synchronize`), so the next poll re-reviews the new SHA
+naturally.
+
+**Skipped PRs:**
+- Drafts (work-in-progress, not ready for review).
+- PRs whose head branch starts with `agent/<agent-name>/` — those are the
+  agent's own PRs; reviewing them would be a self-affirmation loop.
+- Already-labelled PRs (until a push clears the label).
+
+**Review-mode constraints.** A stricter pre-push hook is installed for the
+duration of a review pickup that refuses **all** pushes, so the agent cannot
+modify the PR even if its prompt discipline slips. The review prompt also
+forbids any file edits, commits, merges, or close/reopen actions — the only
+side effects allowed are one PR comment and the `agent-reviewed` label.
+
+**Failure mode.** If pi exits without applying `agent-reviewed`, the watcher
+labels the PR itself and posts a log-tail comment so we don't re-review the
+same SHA on the next poll.
+
+**Issue work has priority.** Reviews only run when no `<agent-name>-ready`
+issue is queued. A busy issue queue blocks reviews until it drains. This is
+deliberate — reviews are best-effort, issue work is opt-in.
 
 ### Conversing with the agent
 
