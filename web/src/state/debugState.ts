@@ -1,7 +1,6 @@
 export interface DebugState {
   master: boolean;
   stepThrough: boolean;
-  validation: boolean;
   satZones: boolean;
   soloRegions: boolean;
   ghostTiles: boolean;
@@ -13,7 +12,6 @@ type Subscriber = (state: DebugState) => void;
 let state: DebugState = {
   master: false,
   stepThrough: true,
-  validation: false,
   satZones: false,
   soloRegions: false,
   ghostTiles: false,

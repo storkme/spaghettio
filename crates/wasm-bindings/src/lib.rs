@@ -363,9 +363,17 @@ pub fn validate_layout(
     layout_result: LayoutResult,
     solver_result: Option<SolverResult>,
     layout_style: Option<LayoutStyle>,
-) -> Result<Vec<ValidationIssue>, JsError> {
+) -> Vec<ValidationIssue> {
     let style = layout_style.unwrap_or_default();
     let solver_ref: Option<&SolverResult> = solver_result.as_ref();
-    validate::validate(&layout_result, solver_ref, style)
-        .map_err(|e| JsError::new(&e.to_string()))
+    // Always return the full issue list to the web UI. The native
+    // `validate::validate` returns `Err(ValidationError)` when any
+    // error-severity issues exist (Python parity), but the error path
+    // discards the structured issue list. The UI needs the issues
+    // themselves to render borders + the badge (#209), so we unwrap
+    // the error case back into the same `Vec<ValidationIssue>`.
+    match validate::validate(&layout_result, solver_ref, style) {
+        Ok(issues) => issues,
+        Err(err) => err.issues,
+    }
 }

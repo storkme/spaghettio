@@ -35,6 +35,7 @@ import { spawnRegionFlash } from "./renderer/improvementAnimation";
 import { createStreamingRenderer, type StreamingRendererHandle } from "./renderer/streamingRenderer";
 import { createTimelineScrubber, type TimelineScrubberHandle } from "./ui/timelineScrubber";
 import "./ui/timelineScrubber.css";
+import "./ui/validationBadge.css";
 import { attachBusyOverlay } from "./ui/busyOverlay";
 import { logLayoutStats } from "./ui/layoutTimingLog";
 
@@ -115,7 +116,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
 
   // --- Modules ---
   const overlayControls = createOverlayPanel(container);
-  const { debugCb, colorCb, valCb, regionsCb, soloRegionsCb, ghostTilesCb } = overlayControls;
+  const { debugCb, colorCb, regionsCb, soloRegionsCb, ghostTilesCb } = overlayControls;
   // Sync the item-coloring flag with the persisted checkbox state so
   // a user who turned colours off stays off across reloads.
   setItemColoring(colorCb.checked);
@@ -137,7 +138,6 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       debugMode: debugCb.checked,
       hasTrace: !!(lastLayout?.trace?.length),
       stepThrough: false,
-      validation: valCb.checked,
       ghostTiles: ghostTilesCb.checked,
       satZones: regionsCb.checked,
     };
@@ -151,8 +151,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
 
   const issuesDialog = createIssuesDialog(container, app, viewport);
   issuesDialog.setOnValClose(() => {
-    valCb.checked = false;
-    updateValidationOverlay();
+    issuesDialog.setVisible(false);
   });
 
   // Detailed PIXI overlay for the selected SAT zone. Added to the
@@ -305,7 +304,6 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
   let soloRegionsActive = false;
   let soloSavedState: {
     colorChecked: boolean;
-    valChecked: boolean;
     regionsChecked: boolean;
     entityAlpha: number;
   } | null = null;
@@ -496,6 +494,34 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
   let cachedValidationIssues: ValidationIssue[] | null = null;
   let validationInFlightFor: LayoutResult | null = null;
 
+  // Top-left static badge that surfaces the issue count whenever a layout
+  // has validation problems. No click handler yet (#209 deferred). Hidden
+  // when there are no issues.
+  const validationBadge = document.createElement("div");
+  validationBadge.className = "validation-badge";
+  validationBadge.style.display = "none";
+  container.appendChild(validationBadge);
+
+  function updateValidationBadge(issues: ValidationIssue[] | null): void {
+    if (!issues || issues.length === 0) {
+      validationBadge.style.display = "none";
+      return;
+    }
+    const errors = issues.filter((i) => i.severity === "Error").length;
+    const warnings = issues.length - errors;
+    let label: string;
+    if (errors > 0 && warnings > 0) {
+      label = `⚠ ${errors} error${errors > 1 ? "s" : ""}, ${warnings} warning${warnings > 1 ? "s" : ""}`;
+    } else if (errors > 0) {
+      label = `⚠ ${errors} error${errors > 1 ? "s" : ""}`;
+    } else {
+      label = `⚠ ${warnings} warning${warnings > 1 ? "s" : ""}`;
+    }
+    validationBadge.textContent = label;
+    validationBadge.classList.toggle("has-errors", errors > 0);
+    validationBadge.style.display = "block";
+  }
+
   let regionOverlayLayer: Container | null = null;
   let regionHitTest: ((wx: number, wy: number) => RegionOverlayItem | null) | null = null;
   let junctionOverlayLayer: Container | null = null;
@@ -516,9 +542,9 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     issuesDialog.clearPulse();
     issuesDialog.setCircleMap(valCircleMap);
 
-    // If we don't have cached issues yet for the current layout, kick off a
-    // validate in the worker and re-render when it lands. Guard against stale
-    // results by checking lastLayout identity when the promise resolves.
+    // Always run validation when a layout is finalised. The visuals are
+    // no longer gated on the Debug toggle (#209) — issues are surfaced as
+    // border outlines + a top-left badge whenever they exist.
     if (lastLayout && !cachedValidationIssues && validationInFlightFor !== lastLayout) {
       const target = lastLayout;
       validationInFlightFor = target;
@@ -539,14 +565,10 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     }
 
     sidebarCtrl?.updateValidation(cachedValidationIssues ?? [], panToTile);
+    updateValidationBadge(cachedValidationIssues);
 
-    if (!debugCb.checked || !valCb.checked || !lastLayout) {
-      issuesDialog.populate(cachedValidationIssues ?? [], debugCb.checked, valCb.checked);
-      requestRender();
-      return;
-    }
-    if (!cachedValidationIssues || cachedValidationIssues.length === 0) {
-      issuesDialog.populate([], debugCb.checked, valCb.checked);
+    if (!lastLayout || !cachedValidationIssues || cachedValidationIssues.length === 0) {
+      issuesDialog.populate(cachedValidationIssues ?? [], debugCb.checked);
       requestRender();
       return;
     }
@@ -560,7 +582,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     valOverlayLayer = result.layer;
     valCircleMap = result.circleMap;
     issuesDialog.setCircleMap(valCircleMap);
-    issuesDialog.populate(cachedValidationIssues, debugCb.checked, valCb.checked);
+    issuesDialog.populate(cachedValidationIssues, debugCb.checked);
     requestRender();
   }
 
@@ -679,7 +701,6 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     updateValidationOverlay,
     panToTile,
     onDebugEnable: () => overlayControls.setDebugEnabled(true),
-    onValEnable: () => { valCb.checked = true; },
     onClear: () => {
       snapshotMode.clear();
       entityLayer.removeChildren();
@@ -693,7 +714,8 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       legendEl.style.display = "none";
       updateLegend();
       issuesDialog.setVisible(false);
-      issuesDialog.populate([], false, false);
+      issuesDialog.populate([], false);
+      updateValidationBadge(null);
       sidebarCtrl?.updateValidation([], panToTile);
       junctionDebugger.close();
     },
@@ -1342,10 +1364,6 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
         renderLayoutOnCanvas(lastLayout);
       }
     });
-    valCb.addEventListener("change", () => {
-      updateValidationOverlay();
-      updateLegend();
-    });
     regionsCb.addEventListener("change", () => {
       updateRegionOverlay();
       updateLegend();
@@ -1357,7 +1375,6 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
         soloRegionsActive = true;
         soloSavedState = {
           colorChecked: colorCb.checked,
-          valChecked: valCb.checked,
           regionsChecked: regionsCb.checked,
           entityAlpha: entityLayer.alpha,
         };
@@ -1371,10 +1388,6 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
           setItemColoring(false);
           if (lastLayout) renderLayoutOnCanvas(lastLayout);
         }
-        if (valCb.checked) {
-          valCb.checked = false;
-          updateValidationOverlay();
-        }
 
         entityLayer.alpha = 0.12;
         updateRegionOverlay();
@@ -1387,10 +1400,6 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
           if (regionsCb.checked !== soloSavedState.regionsChecked) {
             regionsCb.checked = soloSavedState.regionsChecked;
             updateRegionOverlay();
-          }
-          if (valCb.checked !== soloSavedState.valChecked) {
-            valCb.checked = soloSavedState.valChecked;
-            updateValidationOverlay();
           }
           if (colorCb.checked !== soloSavedState.colorChecked) {
             colorCb.checked = soloSavedState.colorChecked;

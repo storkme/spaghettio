@@ -9,7 +9,6 @@ export interface SnapshotModeDeps {
   updateValidationOverlay(): void;
   panToTile(x: number, y: number): void;
   onDebugEnable(): void;
-  onValEnable(): void;
   onClear(): void;
 }
 
@@ -40,9 +39,6 @@ export function createSnapshotMode(deps: SnapshotModeDeps): SnapshotModeControls
 
     if (snapshot.trace.events.length > 0 || snapshot.validation.issues.length > 0) {
       deps.onDebugEnable();
-    }
-    if (snapshot.validation.issues.length > 0) {
-      deps.onValEnable();
     }
 
     deps.renderLayoutOnCanvas(layout);
