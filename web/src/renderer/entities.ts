@@ -398,7 +398,7 @@ function drawBeltCorner(
   // 2 chevrons projected onto the arc: tip sits on the centreline, arms splay
   // to outer/inner radii along an angular offset BEHIND the tip (opposite flow).
   const chSize = s * 0.22;
-  const lineW = Math.max(1, s * 0.1);
+  const lineW = Math.max(1, s * 0.07);
   const chevR = s * 0.5;
   const dA = chSize / chevR;
   const rOuter = chevR + chSize;
@@ -424,7 +424,7 @@ function drawBeltCorner(
 /** 2 direction chevrons stacked along the flow axis (local -y). */
 function addBeltChevrons(g: Graphics, s: number, chevColor: number): void {
   const chevSize = s * 0.22;
-  g.setStrokeStyle({ width: Math.max(1, s * 0.1), color: chevColor, cap: "round", join: "round" });
+  g.setStrokeStyle({ width: Math.max(1, s * 0.07), color: chevColor, cap: "round", join: "round" });
   for (const oy of [-s * 0.22, s * 0.22]) {
     g.moveTo(-chevSize, oy + chevSize * 0.5)
       .lineTo(0, oy - chevSize * 0.5)

@@ -517,8 +517,8 @@ export function commitEntityAsParticle(
   let iconParticle: Particle | undefined;
   if (entity.carries && !MACHINE_ENTITIES.has(entity.name)) {
     const iconTex = getItemIconTexture(entity.carries);
-    // Center a 14 px icon on the tile.
-    const iconSize = TILE_PX * 0.5;
+    // Centre the carries icon on the tile.
+    const iconSize = TILE_PX * 0.35;
     const iconOffset = (TILE_PX - iconSize) / 2;
     iconParticle = new Particle({
       texture: iconTex,
