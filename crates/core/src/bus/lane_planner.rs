@@ -43,6 +43,12 @@ pub(crate) const MACHINE_ENTITIES: &[&str] = &[
 pub struct BusLane {
     /// Item (or fluid) name this lane carries.
     pub item: String,
+    /// Module index within the item: `0` under `LayoutStrategy::Pooled`
+    /// (one lane family per item — today's behaviour). Phase 1 of
+    /// `rfp-modular-production` distinguishes multiple
+    /// `(item, module_id)` lanes per item under
+    /// `PartitionedPerConsumer`.
+    pub module_id: u32,
     /// Column (x-coordinate) assigned to this lane in the layout.
     pub x: i32,
     /// Y-coordinate where items enter this lane (0 for external inputs, or the
@@ -86,6 +92,7 @@ impl BusLane {
     ) -> Self {
         Self {
             item,
+            module_id: 0,
             x: 0,
             source_y,
             consumer_rows,
@@ -152,26 +159,35 @@ pub fn plan_bus_lanes(
     max_belt_tier: Option<&str>,
 ) -> Result<(Vec<BusLane>, Vec<LaneFamily>), String> {
     let mut lanes: Vec<BusLane> = Vec::new();
-    let mut seen_items: FxHashSet<String> = FxHashSet::default();
+    // Keyed by `(item, module_id)`. `module_id == 0` under Pooled and
+    // for non-partitioned items; > 0 distinguishes per-consumer modules
+    // when `LayoutStrategy::PartitionedPerConsumer` is in use.
+    let mut seen_keys: FxHashSet<(String, u32)> = FxHashSet::default();
 
-    // Build item_to_consumers map
-    let mut item_to_consumers: FxHashMap<String, Vec<usize>> = FxHashMap::default();
+    // Build item_to_consumers map, keyed by `(item, module_id)`. Each
+    // input's `module_id` already came from the partitioner (`0` under
+    // Pooled). Multi-consumer items partitioned by Phase 1 land in
+    // distinct `(item, k)` buckets here.
+    let mut item_to_consumers: FxHashMap<(String, u32), Vec<usize>> = FxHashMap::default();
     for (idx, rs) in row_spans.iter().enumerate() {
         for inp in &rs.spec.inputs {
-            item_to_consumers.entry(inp.item.clone()).or_default().push(idx);
+            item_to_consumers
+                .entry((inp.item.clone(), inp.module_id))
+                .or_default()
+                .push(idx);
         }
     }
 
-    // External inputs (solid AND fluid). Both enter from the top of the bus
-    // (source_y = 0). Fluid lanes are isolated from each other via underground
-    // pipe-to-ground pairs in their vertical trunks, so they don't need
-    // staggered entry points — their trunks only surface at tap-offs and
-    // at max-reach intervals (see `ghost_router` step 3.6).
+    // External inputs. Items entering from outside the system are
+    // implicitly module_id 0 (no upstream producer to tag them
+    // otherwise). Both solid and fluid enter at the top of the bus
+    // (source_y = 0).
     for ext in &solver_result.external_inputs {
-        if seen_items.contains(&ext.item) {
+        let key = (ext.item.clone(), 0u32);
+        if seen_keys.contains(&key) {
             continue;
         }
-        let consumers = item_to_consumers.get(&ext.item).cloned().unwrap_or_default();
+        let consumers = item_to_consumers.get(&key).cloned().unwrap_or_default();
         if !consumers.is_empty() {
             lanes.push(BusLane::new(
                 ext.item.clone(),
@@ -181,41 +197,41 @@ pub fn plan_bus_lanes(
                 ext.rate,
                 ext.is_fluid,
             ));
-            seen_items.insert(ext.item.clone());
+            seen_keys.insert(key);
         }
     }
 
-    // Intermediate items (solid AND fluid). `item_to_producers` is iterated
-    // below in lane-push order, which determines bus column assignment — so
-    // it must be a `BTreeMap` for deterministic, cross-platform iteration.
-    // The other two are lookup-only, but kept as `BTreeMap` for consistency
-    // and future-proofing: the cost is trivial at this size and the rule
-    // "iterate → BTreeMap" is easier to apply blanket than to audit per use.
-    let mut item_to_producers: BTreeMap<String, Vec<usize>> = BTreeMap::new();
-    let mut item_to_rate: BTreeMap<String, f64> = BTreeMap::new();
-    let mut item_is_fluid: BTreeMap<String, bool> = BTreeMap::new();
+    // Intermediate items (solid AND fluid). Producers are keyed by
+    // `(item, module_id)` so the partitioner's K modules of the same
+    // item end up as K distinct lanes.
+    let mut item_to_producers: BTreeMap<(String, u32), Vec<usize>> = BTreeMap::new();
+    let mut item_to_rate: BTreeMap<(String, u32), f64> = BTreeMap::new();
+    let mut item_is_fluid: BTreeMap<(String, u32), bool> = BTreeMap::new();
 
     for (idx, rs) in row_spans.iter().enumerate() {
         for out in &rs.spec.outputs {
-            item_to_producers.entry(out.item.clone()).or_default().push(idx);
-            *item_to_rate.entry(out.item.clone()).or_insert(0.0) += out.rate * rs.machine_count as f64;
-            item_is_fluid.insert(out.item.clone(), out.is_fluid);
+            let key = (out.item.clone(), out.module_id);
+            item_to_producers.entry(key.clone()).or_default().push(idx);
+            *item_to_rate.entry(key.clone()).or_insert(0.0) += out.rate * rs.machine_count as f64;
+            item_is_fluid.insert(key, out.is_fluid);
         }
     }
 
-    for (item, producer_rows) in item_to_producers.iter() {
-        if seen_items.contains(item) {
+    for (key, producer_rows) in item_to_producers.iter() {
+        if seen_keys.contains(key) {
             continue;
         }
-        let consumers = item_to_consumers.get(item).cloned().unwrap_or_default();
+        let consumers = item_to_consumers.get(key).cloned().unwrap_or_default();
         if consumers.is_empty() {
             continue;
         }
         let first_producer = producer_rows[0];
-        let rate = item_to_rate.get(item).copied().unwrap_or(0.0);
-        let is_fluid = item_is_fluid.get(item).copied().unwrap_or(false);
+        let rate = item_to_rate.get(key).copied().unwrap_or(0.0);
+        let is_fluid = item_is_fluid.get(key).copied().unwrap_or(false);
+        let (item, module_id) = key.clone();
         lanes.push(BusLane {
-            item: item.clone(),
+            item,
+            module_id,
             x: 0,
             source_y: row_spans[first_producer].output_belt_y,
             consumer_rows: consumers,
@@ -225,7 +241,7 @@ pub fn plan_bus_lanes(
             extra_producer_rows: producer_rows[1..].to_vec(),
             ..Default::default()
         });
-        seen_items.insert(item.clone());
+        seen_keys.insert(key.clone());
     }
 
     // Split lanes that exceed max belt tier capacity
@@ -384,6 +400,7 @@ impl Default for BusLane {
     fn default() -> Self {
         Self {
             item: String::new(),
+            module_id: 0,
             x: 0,
             source_y: 0,
             consumer_rows: Vec::new(),
@@ -535,7 +552,12 @@ fn split_overflowing_lanes(
 
             families.push(LaneFamily {
                 item: lane.item.clone(),
-                module_id: 0,
+                // Inherit the parent lane's module_id so the split
+                // family stays inside its module's identity. Under
+                // Pooled this is always 0; under PartitionedPerConsumer
+                // it preserves the (item, module_id) keying that the
+                // top of `plan_bus_lanes` relies on.
+                module_id: lane.module_id,
                 shape,
                 producer_rows: all_producer_rows.to_vec(),
                 lane_xs: Vec::new(),
@@ -557,6 +579,7 @@ fn split_overflowing_lanes(
             if let Some(fid) = family_id {
                 result.push(BusLane {
                     item: lane.item.clone(),
+                    module_id: lane.module_id,
                     x: 0,
                     source_y: family_source_y.unwrap_or(0),
                     consumer_rows: consumers,
@@ -583,6 +606,7 @@ fn split_overflowing_lanes(
 
             result.push(BusLane {
                 item: lane.item.clone(),
+                module_id: lane.module_id,
                 x: 0,
                 source_y: split_source_y,
                 consumer_rows: consumers,
@@ -660,6 +684,7 @@ mod tests {
                 outputs,
             },
             machine_count,
+            module_id: 0,
             input_belt_y,
             output_belt_y: y_start + 2,
             row_width: 10,
@@ -708,8 +733,8 @@ mod tests {
         let row_span = make_test_row_span(
             "iron-plate",
             0,
-            vec![ItemFlow { item: "iron-ore".to_string(), rate: 1.0, is_fluid: false }],
-            vec![ItemFlow { item: "iron-plate".to_string(), rate: 1.0, is_fluid: false }],
+            vec![ItemFlow { item: "iron-ore".to_string(), rate: 1.0, is_fluid: false, module_id: 0 }],
+            vec![ItemFlow { item: "iron-plate".to_string(), rate: 1.0, is_fluid: false, module_id: 0 }],
             1,
             vec![1],
         );
@@ -725,11 +750,11 @@ mod tests {
                 entity: "assembling-machine-3".to_string(),
                 recipe: "iron-gear-wheel".to_string(),
                 count: 1.0,
-                inputs: vec![ItemFlow { item: "iron-plate".to_string(), rate: 2.0, is_fluid: false }],
-                outputs: vec![ItemFlow { item: "iron-gear-wheel".to_string(), rate: 1.0, is_fluid: false }],
+                inputs: vec![ItemFlow { item: "iron-plate".to_string(), rate: 2.0, is_fluid: false, module_id: 0 }],
+                outputs: vec![ItemFlow { item: "iron-gear-wheel".to_string(), rate: 1.0, is_fluid: false, module_id: 0 }],
             }],
-            external_inputs: vec![ItemFlow { item: "iron-plate".to_string(), rate: 2.0, is_fluid: false }],
-            external_outputs: vec![ItemFlow { item: "iron-gear-wheel".to_string(), rate: 1.0, is_fluid: false }],
+            external_inputs: vec![ItemFlow { item: "iron-plate".to_string(), rate: 2.0, is_fluid: false, module_id: 0 }],
+            external_outputs: vec![ItemFlow { item: "iron-gear-wheel".to_string(), rate: 1.0, is_fluid: false, module_id: 0 }],
             dependency_order: vec!["iron-gear-wheel".to_string()],
         }
     }
@@ -741,16 +766,16 @@ mod tests {
                 recipe: "plastic-bar".to_string(),
                 count: 1.0,
                 inputs: vec![
-                    ItemFlow { item: "coal".to_string(), rate: 1.5, is_fluid: false },
-                    ItemFlow { item: "petroleum-gas".to_string(), rate: 2.0, is_fluid: true },
+                    ItemFlow { item: "coal".to_string(), rate: 1.5, is_fluid: false, module_id: 0 },
+                    ItemFlow { item: "petroleum-gas".to_string(), rate: 2.0, is_fluid: true, module_id: 0 },
                 ],
-                outputs: vec![ItemFlow { item: "plastic-bar".to_string(), rate: 2.0, is_fluid: false }],
+                outputs: vec![ItemFlow { item: "plastic-bar".to_string(), rate: 2.0, is_fluid: false, module_id: 0 }],
             }],
             external_inputs: vec![
-                ItemFlow { item: "coal".to_string(), rate: 1.5, is_fluid: false },
-                ItemFlow { item: "petroleum-gas".to_string(), rate: 2.0, is_fluid: true },
+                ItemFlow { item: "coal".to_string(), rate: 1.5, is_fluid: false, module_id: 0 },
+                ItemFlow { item: "petroleum-gas".to_string(), rate: 2.0, is_fluid: true, module_id: 0 },
             ],
-            external_outputs: vec![ItemFlow { item: "plastic-bar".to_string(), rate: 2.0, is_fluid: false }],
+            external_outputs: vec![ItemFlow { item: "plastic-bar".to_string(), rate: 2.0, is_fluid: false, module_id: 0 }],
             dependency_order: vec!["plastic-bar".to_string()],
         }
     }
@@ -763,8 +788,8 @@ mod tests {
         let row_span = make_test_row_span(
             "iron-gear-wheel",
             5,
-            vec![ItemFlow { item: "iron-plate".to_string(), rate: 2.0, is_fluid: false }],
-            vec![ItemFlow { item: "iron-gear-wheel".to_string(), rate: 1.0, is_fluid: false }],
+            vec![ItemFlow { item: "iron-plate".to_string(), rate: 2.0, is_fluid: false, module_id: 0 }],
+            vec![ItemFlow { item: "iron-gear-wheel".to_string(), rate: 1.0, is_fluid: false, module_id: 0 }],
             1,
             vec![6],  // input belt at y=6
         );
@@ -789,8 +814,8 @@ mod tests {
         let row_span = make_test_row_span(
             "iron-gear-wheel",
             5,
-            vec![ItemFlow { item: "iron-plate".to_string(), rate: 2.0, is_fluid: false }],
-            vec![ItemFlow { item: "iron-gear-wheel".to_string(), rate: 1.0, is_fluid: false }],
+            vec![ItemFlow { item: "iron-plate".to_string(), rate: 2.0, is_fluid: false, module_id: 0 }],
+            vec![ItemFlow { item: "iron-gear-wheel".to_string(), rate: 1.0, is_fluid: false, module_id: 0 }],
             1,
             vec![6],
         );
@@ -812,10 +837,10 @@ mod tests {
             "plastic-bar",
             5,
             vec![
-                ItemFlow { item: "coal".to_string(), rate: 1.5, is_fluid: false },
-                ItemFlow { item: "petroleum-gas".to_string(), rate: 2.0, is_fluid: true },
+                ItemFlow { item: "coal".to_string(), rate: 1.5, is_fluid: false, module_id: 0 },
+                ItemFlow { item: "petroleum-gas".to_string(), rate: 2.0, is_fluid: true, module_id: 0 },
             ],
-            vec![ItemFlow { item: "plastic-bar".to_string(), rate: 2.0, is_fluid: false }],
+            vec![ItemFlow { item: "plastic-bar".to_string(), rate: 2.0, is_fluid: false, module_id: 0 }],
             1,
             vec![6, 7],  // two input belt y positions
         );
@@ -848,10 +873,10 @@ mod tests {
             "plastic-bar",
             5,
             vec![
-                ItemFlow { item: "coal".to_string(), rate: 1.5, is_fluid: false },
-                ItemFlow { item: "petroleum-gas".to_string(), rate: 2.0, is_fluid: true },
+                ItemFlow { item: "coal".to_string(), rate: 1.5, is_fluid: false, module_id: 0 },
+                ItemFlow { item: "petroleum-gas".to_string(), rate: 2.0, is_fluid: true, module_id: 0 },
             ],
-            vec![ItemFlow { item: "plastic-bar".to_string(), rate: 2.0, is_fluid: false }],
+            vec![ItemFlow { item: "plastic-bar".to_string(), rate: 2.0, is_fluid: false, module_id: 0 }],
             1,
             vec![6, 7],
         );
@@ -882,8 +907,8 @@ mod tests {
         let row_span = make_test_row_span(
             "iron-gear-wheel",
             5,
-            vec![ItemFlow { item: "iron-plate".to_string(), rate: 2.0, is_fluid: false }],
-            vec![ItemFlow { item: "iron-gear-wheel".to_string(), rate: 1.0, is_fluid: false }],
+            vec![ItemFlow { item: "iron-plate".to_string(), rate: 2.0, is_fluid: false, module_id: 0 }],
+            vec![ItemFlow { item: "iron-gear-wheel".to_string(), rate: 1.0, is_fluid: false, module_id: 0 }],
             1,
             vec![6],
         );
@@ -924,6 +949,7 @@ mod tests {
                 y_end: (i * 5 + 3) as i32,
                 spec: m.clone(),
                 machine_count: m.count.ceil() as usize,
+                module_id: 0,
                 input_belt_y,
                 output_belt_y: (i * 5 + 2) as i32,
                 row_width: 10,

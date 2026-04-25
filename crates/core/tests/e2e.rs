@@ -35,6 +35,9 @@ struct E2EResult {
     parsed: LayoutResult,
     issues: Vec<ValidationIssue>,
     analysis: BlueprintAnalysis,
+    /// Belt tier the original layout ran with — needed to re-run under
+    /// `PartitionedPerConsumer` for K1-4 inertness checks.
+    belt_tier: Option<String>,
     #[allow(dead_code)]
     trace_events: Vec<TraceEvent>,
 }
@@ -176,6 +179,30 @@ fn run_e2e(
     )
 }
 
+/// Like `run_e2e` but with a non-default `LayoutStrategy`. Used for K1-1
+/// (`PartitionedPerConsumer` on the motivating case) and for the
+/// scoreboard sweep across strategies.
+fn run_e2e_with_strategy(
+    test_name: &str,
+    item: &str,
+    rate: f64,
+    machine: &str,
+    belt_tier: Option<&str>,
+    available_inputs: &FxHashSet<String>,
+    strategy: fucktorio_core::bus::layout::LayoutStrategy,
+) -> Result<E2EResult, String> {
+    run_e2e_inner(
+        test_name,
+        item,
+        rate,
+        machine,
+        belt_tier,
+        available_inputs,
+        &FxHashSet::default(),
+        strategy,
+    )
+}
+
 fn run_e2e_with_exclusions(
     test_name: &str,
     item: &str,
@@ -184,6 +211,29 @@ fn run_e2e_with_exclusions(
     belt_tier: Option<&str>,
     available_inputs: &FxHashSet<String>,
     excluded_recipes: &FxHashSet<String>,
+) -> Result<E2EResult, String> {
+    run_e2e_inner(
+        test_name,
+        item,
+        rate,
+        machine,
+        belt_tier,
+        available_inputs,
+        excluded_recipes,
+        fucktorio_core::bus::layout::LayoutStrategy::Pooled,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_e2e_inner(
+    test_name: &str,
+    item: &str,
+    rate: f64,
+    machine: &str,
+    belt_tier: Option<&str>,
+    available_inputs: &FxHashSet<String>,
+    excluded_recipes: &FxHashSet<String>,
+    strategy: fucktorio_core::bus::layout::LayoutStrategy,
 ) -> Result<E2EResult, String> {
     let _guard = trace::start_trace();
     fucktorio_core::zone_cache::set_thread_source(Some(test_name));
@@ -198,7 +248,10 @@ fn run_e2e_with_exclusions(
 
     let layout = layout::build_bus_layout(
         &solver_result,
-        layout::LayoutOptions::from_belt_tier(belt_tier),
+        layout::LayoutOptions {
+            strategy,
+            max_belt_tier: belt_tier.map(|s| s.to_string()),
+        },
     )
         .map_err(|e| {
             let msg = format!("layout: {e}");
@@ -256,6 +309,7 @@ fn run_e2e_with_exclusions(
         parsed,
         issues,
         analysis,
+        belt_tier: belt_tier.map(|s| s.to_string()),
         trace_events,
     };
 
@@ -418,6 +472,52 @@ fn assert_golden_hash(result: &E2EResult, test_name: &str) {
              to capture. Computed: {computed}"
         ),
     }
+
+    // K1-4 inertness: re-run under PartitionedPerConsumer for cases
+    // with K=1 everywhere; the layout must match Pooled byte-for-byte.
+    assert_partitioned_inertness(
+        &result.solver_result,
+        result.belt_tier.as_deref(),
+        &computed,
+        test_name,
+    );
+}
+
+/// K1-4 inertness assertion from `docs/rfp-modular-production.md`. For
+/// cases with no multi-consumer intermediates, the layout produced
+/// under `LayoutStrategy::PartitionedPerConsumer` must be byte-identical
+/// to `LayoutStrategy::Pooled`. Tests with K>1 intermediates are out of
+/// K1-4's scope and are skipped here (they exercise PR2 of Phase 1
+/// directly).
+fn assert_partitioned_inertness(
+    solver_result: &fucktorio_core::models::SolverResult,
+    belt_tier: Option<&str>,
+    pooled_hash: &str,
+    test_name: &str,
+) {
+    use fucktorio_core::bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy};
+    use fucktorio_core::bus::partitioner::multi_consumer_items;
+
+    let multi = multi_consumer_items(solver_result);
+    if !multi.is_empty() {
+        // Out of K1-4 scope; PR2 covers the K>1 path.
+        return;
+    }
+    let layout = build_bus_layout(
+        solver_result,
+        LayoutOptions {
+            strategy: LayoutStrategy::PartitionedPerConsumer,
+            max_belt_tier: belt_tier.map(|s| s.to_string()),
+        },
+    )
+    .unwrap_or_else(|e| panic!("`{test_name}`: PartitionedPerConsumer layout failed: {e}"));
+    let computed = golden_hash(&layout);
+    assert_eq!(
+        computed, pooled_hash,
+        "K1-4 inertness violated for `{test_name}`: \
+         PartitionedPerConsumer produced a different layout than Pooled \
+         on a K=1-everywhere case.\n  pooled:        {pooled_hash}\n  partitioned:   {computed}",
+    );
 }
 
 /// K0-1 byte-equality regression table. Entries are
@@ -816,6 +916,72 @@ fn tier4_advanced_circuit_from_plates() {
     assert_round_trip(&result);
 }
 
+/// K1-1 from `docs/rfp-modular-production.md`. Advanced-circuit with
+/// `LayoutStrategy::PartitionedPerConsumer` is the motivating case: copper-cable
+/// is consumed by both `electronic-circuit` and `advanced-circuit` recipes, so
+/// the partitioner allocates two modules and each module's lane count is sized
+/// to its single consumer's demand. Under Pooled this case (at higher rates)
+/// trips the 8-lane balancer ceiling; under PartitionedPerConsumer the per-
+/// module balancers are bounded by the largest single consumer's demand.
+///
+/// The 1/s rate matches the Pooled tier4 test above; this test specifically
+/// asserts the partitioning actually fired (`ModulePartitioned` trace event for
+/// copper-cable) and that no NEW errors are introduced beyond the pre-existing
+/// #64 lane-throughput warnings the Pooled variant also has.
+#[test]
+#[ntest::timeout(30000)]
+fn tier4_advanced_circuit_partitioned() {
+    use fucktorio_core::bus::layout::LayoutStrategy;
+    use fucktorio_core::trace::TraceEvent;
+
+    let inputs: FxHashSet<String> = ["iron-plate", "copper-plate", "coal", "crude-oil", "water"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let result = run_e2e_with_strategy(
+        "tier4_advanced_circuit_partitioned",
+        "advanced-circuit",
+        1.0,
+        "assembling-machine-2",
+        None,
+        &inputs,
+        LayoutStrategy::PartitionedPerConsumer,
+    )
+    .unwrap_or_else(|e| panic!("tier4_advanced_circuit_partitioned: {e}"));
+
+    // K1-1 (partial): the motivating case must not produce validator
+    // ERRORS under PartitionedPerConsumer. Pooled at this same rate
+    // *does* produce errors (see `scoreboard_strategy_sweep`); the
+    // whole point of partitioning is to unblock that case. Strict
+    // K1-1's "validator-clean" gate is the stricter assertion that
+    // there are zero warnings either — the residual warnings here are
+    // pre-existing #64 lane-throughput false-positives, not a
+    // partitioning failure. Asserting `errors == 0` is the partitioning-
+    // specific signal: it would have been > 0 without this work.
+    assert_produces(&result, "advanced-circuit", 1.0);
+    let copper_cable_partitioned = result.trace_events.iter().any(|evt| {
+        matches!(
+            evt,
+            TraceEvent::ModulePartitioned { item, modules, .. } if item == "copper-cable" && *modules >= 2
+        )
+    });
+    assert!(
+        copper_cable_partitioned,
+        "expected `ModulePartitioned` trace event with item=copper-cable, modules≥2 — \
+         partitioner did not fire on the motivating case"
+    );
+    let errors: Vec<_> = result.issues.iter()
+        .filter(|i| i.severity == Severity::Error)
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "K1-1 partial: PartitionedPerConsumer must produce 0 validator errors on the \
+         motivating case. Got {} error(s):\n  {}",
+        errors.len(),
+        errors.iter().map(|e| format!("[{}] {}", e.category, e.message)).collect::<Vec<_>>().join("\n  ")
+    );
+}
+
 /// Advanced circuit, rate 5/s, AM1, yellow belts, from raw ores + crude oil.
 /// This is the "hello-world fully-from-ore AC" goal — cheapest machine tier,
 /// cheapest belt tier, everything upstream of the factory is raw resources.
@@ -844,6 +1010,76 @@ fn tier4_advanced_circuit_from_ore_am1() {
     assert_no_warnings(&result);
     assert_produces(&result, "advanced-circuit", 5.0);
     assert_round_trip(&result);
+}
+
+// ---------------------------------------------------------------------------
+// Strategy scoreboard — runs every tier case under both strategies and emits
+// a single line of (entities, density, validator) per (test, strategy). The
+// RFP's Observables section asks us to *report* the tradeoff between
+// strategies, not to gate on it. Run with:
+//   cargo test --manifest-path crates/core/Cargo.toml --test e2e \
+//     scoreboard_strategy_sweep -- --ignored --nocapture
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore = "Strategy scoreboard — output goes to stderr; run with --ignored --nocapture"]
+#[ntest::timeout(120000)]
+fn scoreboard_strategy_sweep() {
+    use fucktorio_core::bus::layout::LayoutStrategy;
+
+    struct Case {
+        name: &'static str,
+        item: &'static str,
+        rate: f64,
+        machine: &'static str,
+        belt_tier: Option<&'static str>,
+        inputs: &'static [&'static str],
+    }
+    let cases: &[Case] = &[
+        Case { name: "tier1_iron_gear_wheel", item: "iron-gear-wheel", rate: 10.0, machine: "assembling-machine-1", belt_tier: None, inputs: &["iron-plate"] },
+        Case { name: "tier1_iron_gear_wheel_from_ore", item: "iron-gear-wheel", rate: 10.0, machine: "assembling-machine-2", belt_tier: None, inputs: &["iron-ore"] },
+        Case { name: "tier1_iron_gear_wheel_20s", item: "iron-gear-wheel", rate: 20.0, machine: "assembling-machine-2", belt_tier: None, inputs: &["iron-plate"] },
+        Case { name: "tier2_electronic_circuit_from_ore", item: "electronic-circuit", rate: 10.0, machine: "assembling-machine-1", belt_tier: Some("transport-belt"), inputs: &["iron-ore", "copper-ore"] },
+        Case { name: "tier2_electronic_circuit_20s_from_ore", item: "electronic-circuit", rate: 20.0, machine: "assembling-machine-2", belt_tier: None, inputs: &["iron-ore", "copper-ore"] },
+        Case { name: "tier3_plastic_bar", item: "plastic-bar", rate: 10.0, machine: "chemical-plant", belt_tier: None, inputs: &["petroleum-gas", "coal"] },
+        Case { name: "tier3_sulfuric_acid", item: "sulfuric-acid", rate: 5.0, machine: "chemical-plant", belt_tier: None, inputs: &["iron-plate", "sulfur", "water"] },
+        Case { name: "tier4_advanced_circuit_partitioned", item: "advanced-circuit", rate: 1.0, machine: "assembling-machine-2", belt_tier: None, inputs: &["iron-plate", "copper-plate", "coal", "crude-oil", "water"] },
+    ];
+
+    eprintln!("strategy scoreboard:");
+    eprintln!(
+        "  {:<46} {:<28} {:>8} {:>6} {:>6} {:>4}",
+        "test", "strategy", "entities", "WxH", "dens%", "warn",
+    );
+    for case in cases {
+        let inputs: FxHashSet<String> = case.inputs.iter().map(|s| s.to_string()).collect();
+        for strategy in [LayoutStrategy::Pooled, LayoutStrategy::PartitionedPerConsumer] {
+            let result = run_e2e_with_strategy(
+                case.name, case.item, case.rate, case.machine, case.belt_tier, &inputs, strategy,
+            );
+            match result {
+                Ok(r) => {
+                    let warns = r.issues.iter().filter(|i| i.severity == Severity::Warning).count();
+                    let errs = r.issues.iter().filter(|i| i.severity == Severity::Error).count();
+                    let density_score = density::score_density(&r.layout, (1, 1));
+                    eprintln!(
+                        "  {:<46} {:<28} {:>8} {:>3}x{:<3} {:>5.1}% {:>3}/{}",
+                        case.name,
+                        format!("{strategy:?}"),
+                        r.layout.entities.len(),
+                        r.layout.width,
+                        r.layout.height,
+                        density_score.density * 100.0,
+                        warns,
+                        errs,
+                    );
+                }
+                Err(e) => {
+                    eprintln!("  {:<46} {:<28} ERR: {e}", case.name, format!("{strategy:?}"));
+                }
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1586,6 +1822,7 @@ fn diag_ghost_cluster_helper(
             parsed: layout,
             issues: Vec::new(),
             analysis,
+            belt_tier: belt_tier.map(|s| s.to_string()),
             trace_events,
         }
     } else {

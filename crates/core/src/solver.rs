@@ -29,6 +29,7 @@ impl SolveState {
                 item: item.to_string(),
                 rate,
                 is_fluid,
+                module_id: 0,
             });
         }
     }
@@ -89,6 +90,7 @@ pub fn solve_with_exclusions(
             item: target_item.to_string(),
             rate: target_rate,
             is_fluid: false,
+            module_id: 0,
         }],
         dependency_order: state.dependency_order,
     })
@@ -156,6 +158,7 @@ fn resolve(
             item: ing.name.clone(),
             rate: ing.amount * crafts_per_sec,
             is_fluid: ing.type_ == "fluid",
+            module_id: 0,
         })
         .collect();
 
@@ -166,6 +169,7 @@ fn resolve(
             item: prod.name.clone(),
             rate: prod.amount * prod.probability * crafts_per_sec,
             is_fluid: prod.type_ == "fluid",
+            module_id: 0,
         })
         .collect();
 
