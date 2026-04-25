@@ -33,6 +33,12 @@ pub struct RowSpan {
     pub y_end: i32, // exclusive
     pub spec: MachineSpec,
     pub machine_count: usize,
+    /// Module index this producer row belongs to. `0` under
+    /// `LayoutStrategy::Pooled` and for non-partitioned items;
+    /// `> 0` when the partitioner has split a producer into K sibling
+    /// rows. Read by `lane_planner` to key on `(item, module_id)`.
+    /// See `docs/rfp-modular-production.md`.
+    pub module_id: u32,
     pub input_belt_y: Vec<i32>,
     pub output_belt_y: i32,
     pub row_width: i32,
@@ -692,11 +698,21 @@ pub(crate) fn build_one_row(
         )
     };
 
+    // Inherit module_id from the spec's primary solid output. Under
+    // Pooled this is always 0; under PartitionedPerConsumer the
+    // partitioner has tagged the spec's outputs with the module index.
+    let module_id = spec
+        .outputs
+        .iter()
+        .find(|o| !o.is_fluid)
+        .map(|o| o.module_id)
+        .unwrap_or(0);
     let span = RowSpan {
         y_start: y_cursor,
         y_end: y_cursor + row_h,
         spec: spec.clone(),
         machine_count: count,
+        module_id,
         input_belt_y: input_belt_ys,
         output_belt_y,
         row_width,

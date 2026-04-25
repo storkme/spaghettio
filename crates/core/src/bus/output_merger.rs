@@ -190,6 +190,7 @@ mod tests {
                 outputs,
             },
             machine_count,
+            module_id: 0,
             input_belt_y,
             output_belt_y: y_start + 2,
             row_width: 10,

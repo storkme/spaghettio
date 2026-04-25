@@ -60,37 +60,33 @@ pub fn build_bus_layout(
     solver_result: &SolverResult,
     opts: LayoutOptions,
 ) -> Result<LayoutResult, String> {
-    // Strategy dispatch. The partitioning strategies are introduced in
-    // PR2 of Phase 1; PR1 (this commit) handles the no-op cases:
-    //   - `Pooled`: today's behaviour.
-    //   - `PartitionedPerConsumer` with K=1 everywhere: equivalent to
-    //     `Pooled`, returns the same layout. K1-4 inertness is checked
-    //     by the e2e harness.
-    //   - `PartitionedPerConsumer` with K>1 anywhere: panics with a
-    //     clear message until PR2 of Phase 1 wires the partitioner.
-    //   - `PartitionedDecomposed`: Phase 2.
-    match opts.strategy {
-        LayoutStrategy::Pooled => {}
+    let max_belt_tier = opts.max_belt_tier.as_deref();
+    // Strategy dispatch. Pooled passes through unchanged. The
+    // partitioning strategies run `plan_partitioning` + `apply_partition_plan`
+    // up-front and the rest of the pipeline picks up the per-`(item,
+    // module_id)` flow tagging via `ItemFlow.module_id`. Empty plan
+    // (K=1 everywhere) → byte-identical to `Pooled`.
+    let owned_solver_result;
+    let solver_result: &SolverResult = match opts.strategy {
+        LayoutStrategy::Pooled => solver_result,
         LayoutStrategy::PartitionedPerConsumer => {
-            let multi = crate::bus::partitioner::multi_consumer_items(solver_result);
-            if !multi.is_empty() {
-                unimplemented!(
-                    "PartitionedPerConsumer with multi-consumer items {:?} requires \
-                     PR2 of Phase 1 (rfp-modular-production). Items with K=1 consumer \
-                     fall through to Pooled-equivalent behaviour today.",
-                    multi
-                );
+            let plan = crate::bus::partitioner::plan_partitioning(
+                solver_result,
+                opts.strategy,
+                max_belt_tier,
+            );
+            if plan.is_empty() {
+                solver_result
+            } else {
+                owned_solver_result =
+                    crate::bus::partitioner::apply_partition_plan(solver_result, &plan);
+                &owned_solver_result
             }
-            // K=1 everywhere → continue through the Pooled pipeline. The
-            // resulting layout is byte-identical to `Pooled` because no
-            // partitioning is required (and `module_id` defaults to 0
-            // everywhere).
         }
         LayoutStrategy::PartitionedDecomposed => {
             unimplemented!("PartitionedDecomposed strategy is wired in Phase 2 (rfp-modular-production)");
         }
-    }
-    let max_belt_tier = opts.max_belt_tier.as_deref();
+    };
     // Final product items get EAST-flowing output belts (merge at right side)
     let final_output_items: FxHashSet<String> = solver_result
         .external_outputs
