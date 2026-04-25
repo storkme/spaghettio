@@ -1687,20 +1687,57 @@ pub fn fluid_only_row(
             // Even when the recipe uses only one input port (e.g. dx=3 for
             // basic-oil-processing's crude-oil), the extra pipe tiles touch
             // inactive fluid boxes which Factorio simply ignores.
+            //
+            // For 5×5 oil-refinery rows the continuous strip leaves no free
+            // tile at `input_y` for power poles — the only y where a
+            // medium-electric-pole reaches the machine center. Bridge the
+            // strip with a 1-tile UG pair at dx=1 and dx=3 (the two
+            // physical fluid input port positions per `fluid_ports`),
+            // leaving dx=2 free for `place_poles` to drop a pole that
+            // covers each refinery's center. dx=0 and dx=4 stay as regular
+            // pipes so adjacent machines' strips connect on the surface.
             if let Some(&(_, item)) = fluid_inputs.first() {
                 let seg = Some(format!("row:{recipe}:belt-in:{item}"));
+                let gap_dx: Option<i32> = if msz == 5 && machine_entity == "oil-refinery" {
+                    Some(2)
+                } else {
+                    None
+                };
                 for dx in 0..msz {
+                    if Some(dx) == gap_dx {
+                        continue;
+                    }
+                    let (name, direction, io_type) = if Some(dx + 1) == gap_dx {
+                        ("pipe-to-ground", EntityDirection::East, Some("input".to_string()))
+                    } else if Some(dx - 1) == gap_dx {
+                        ("pipe-to-ground", EntityDirection::West, Some("output".to_string()))
+                    } else {
+                        ("pipe", EntityDirection::North, None)
+                    };
                     entities.push(PlacedEntity {
-                        name: "pipe".to_string(),
+                        name: name.to_string(),
                         x: mx + dx,
                         y: input_y,
+                        direction,
+                        io_type,
                         carries: Some(item.to_string()),
                         segment_id: seg.clone(),
                         ..Default::default()
                     });
                 }
-                for &(dx, port_item) in fluid_inputs {
-                    fluid_input_port_pipes.push((port_item.to_string(), mx + dx, input_y));
+                if gap_dx == Some(2) {
+                    // Report only dx=1 (the leftmost UG-bridge port) so the
+                    // pole-tap reservation around the lane→port path
+                    // (`hi - 1` in `layout.rs`) doesn't claim the dx=2 gap
+                    // tile before `place_poles` runs. The dx=3 port is
+                    // still a `pipe-to-ground` so the validator sees an
+                    // adjacent pipe at both physical input ports, and
+                    // fluid reaches it via the underground tunnel.
+                    fluid_input_port_pipes.push((item.to_string(), mx + 1, input_y));
+                } else {
+                    for &(dx, port_item) in fluid_inputs {
+                        fluid_input_port_pipes.push((port_item.to_string(), mx + dx, input_y));
+                    }
                 }
             }
         } else {
@@ -2954,17 +2991,25 @@ mod tests {
             &[(0, "petroleum-gas")],
         );
         assert_eq!(height, 7);
-        // 1 input pipe + 1 machine + 1 output pipe
+        // 1 reported input port (the dx=1 UG-bridge entry) + 1 output pipe
         assert_eq!(fluid_in.len(), 1);
         assert_eq!(fluid_out.len(), 1);
-        // Input pipe at dx=3 → (3, 0)
-        assert_eq!(fluid_in[0], ("crude-oil".to_string(), 3, 0));
+        // Input port reported at dx=1 (the leftmost UG-bridge entry).
+        assert_eq!(fluid_in[0], ("crude-oil".to_string(), 1, 0));
         // Output pipe at dx=0 → (0, 6)
         assert_eq!(fluid_out[0], ("petroleum-gas".to_string(), 0, 6));
 
-        // Input pipe at (3, 0)
-        let in_pipe = assert_entity(&entities, 3, 0, "pipe");
-        assert_eq!(in_pipe.carries.as_deref(), Some("crude-oil"));
+        // Input row uses the pole-gap UG bridge: pipe, UG-in, GAP, UG-out, pipe.
+        let in_pipe_left = assert_entity(&entities, 0, 0, "pipe");
+        assert_eq!(in_pipe_left.carries.as_deref(), Some("crude-oil"));
+        let in_ug_left = assert_entity(&entities, 1, 0, "pipe-to-ground");
+        assert_eq!(in_ug_left.direction, EntityDirection::East);
+        assert_eq!(in_ug_left.io_type.as_deref(), Some("input"));
+        let in_ug_right = assert_entity(&entities, 3, 0, "pipe-to-ground");
+        assert_eq!(in_ug_right.direction, EntityDirection::West);
+        assert_eq!(in_ug_right.io_type.as_deref(), Some("output"));
+        // dx=2 left empty for `place_poles` to drop a medium-electric-pole.
+        assert!(!entities.iter().any(|e| e.x == 2 && e.y == 0));
 
         // Refinery at (0, 1) NORTH mirrored
         let refinery = assert_entity(&entities, 0, 1, "oil-refinery");
@@ -2990,14 +3035,14 @@ mod tests {
             &[(3, "crude-oil")],
             &[(0, "petroleum-gas")],
         );
-        // 2 machines × 1 input pipe + 2 machines × 1 output pipe
+        // 2 machines × 1 reported input port (dx=1) + 2 machines × 1 output pipe
         assert_eq!(fluid_in.len(), 2);
         assert_eq!(fluid_out.len(), 2);
 
         // Second refinery at x=5 (pitch=5)
         assert_entity(&entities, 5, 1, "oil-refinery");
-        // Second machine: input pipe at mx=5, dx=3 → (8, 0)
-        assert_eq!(fluid_in[1], ("crude-oil".to_string(), 8, 0));
+        // Second machine: input port reported at mx=5, dx=1 → (6, 0)
+        assert_eq!(fluid_in[1], ("crude-oil".to_string(), 6, 0));
         // Second machine: output pipe at mx=5, dx=0 → (5, 6)
         assert_eq!(fluid_out[1], ("petroleum-gas".to_string(), 5, 6));
     }

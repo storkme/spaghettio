@@ -620,7 +620,6 @@ fn tier3_plastic_bar() {
 }
 
 #[test]
-#[ignore = "power coverage on oil-refinery rows: refineries spaced too far for medium-electric-pole reach. Pipe×belt routing now works (was the previous ignore reason — fixed by relaxing the classify_crossing pre-cluster gate)."]
 #[ntest::timeout(10000)]
 fn tier3_plastic_bar_from_crude() {
     let inputs: FxHashSet<String> = ["crude-oil", "coal"]
