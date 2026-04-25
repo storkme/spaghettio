@@ -2891,3 +2891,110 @@ fn diag_sat_zone_histogram() {
         "SAT zone histogram: total_records={total_records}, distinct_signatures={distinct}; top-10: {top10_str}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// SAT total-time profile — verifies whether SAT actually dominates layout cost
+// ---------------------------------------------------------------------------
+
+/// Run the full default stress + tier corpus in-process and tally:
+///   - total wall-clock per test
+///   - total SAT solve time per test (sum of SatInvocation.solve_time_us)
+///   - SAT call count and satisfied count
+///
+/// Confirms (or refutes) the hypothesis that SAT solving dominates layout cost.
+///
+/// Run with:
+///   cargo test --manifest-path crates/core/Cargo.toml --release --test e2e -- \
+///       --ignored diag_sat_total_time --exact --nocapture
+#[test]
+#[ignore]
+fn diag_sat_total_time() {
+    struct Case {
+        name: &'static str,
+        item: &'static str,
+        rate: f64,
+        machine: &'static str,
+        belt: Option<&'static str>,
+        from_ore: bool,
+    }
+    let cases = [
+        Case { name: "tier1_iron_gear_wheel", item: "iron-gear-wheel", rate: 1.0, machine: "assembling-machine-1", belt: None, from_ore: false },
+        Case { name: "tier1_iron_gear_wheel_20s", item: "iron-gear-wheel", rate: 20.0, machine: "assembling-machine-1", belt: None, from_ore: false },
+        Case { name: "tier1_iron_gear_wheel_from_ore", item: "iron-gear-wheel", rate: 1.0, machine: "assembling-machine-1", belt: None, from_ore: true },
+        Case { name: "tier2_electronic_circuit_from_ore", item: "electronic-circuit", rate: 1.0, machine: "assembling-machine-1", belt: None, from_ore: true },
+        Case { name: "tier2_electronic_circuit_20s_from_ore", item: "electronic-circuit", rate: 20.0, machine: "assembling-machine-1", belt: None, from_ore: true },
+        Case { name: "stress_electronic_circuit_22s_from_ore", item: "electronic-circuit", rate: 22.0, machine: "assembling-machine-1", belt: None, from_ore: true },
+        Case { name: "stress_electronic_circuit_30s_from_ore", item: "electronic-circuit", rate: 30.0, machine: "assembling-machine-1", belt: None, from_ore: true },
+        Case { name: "stress_electronic_circuit_40s_from_ore", item: "electronic-circuit", rate: 40.0, machine: "assembling-machine-1", belt: None, from_ore: true },
+        Case { name: "stress_electronic_circuit_60s_red_from_ore", item: "electronic-circuit", rate: 60.0, machine: "assembling-machine-1", belt: Some("fast-transport-belt"), from_ore: true },
+        Case { name: "tier3_plastic_bar", item: "plastic-bar", rate: 1.0, machine: "assembling-machine-1", belt: None, from_ore: false },
+        Case { name: "tier3_plastic_bar_from_crude", item: "plastic-bar", rate: 1.0, machine: "assembling-machine-1", belt: None, from_ore: false },
+    ];
+
+    let mut total_wall_us: u128 = 0;
+    let mut total_sat_us: u64 = 0;
+    let mut total_calls: u64 = 0;
+    let mut total_sat_solved: u64 = 0;
+
+    eprintln!();
+    eprintln!("{:<55} {:>10} {:>10} {:>8} {:>8} {:>6}", "test", "wall_ms", "sat_ms", "sat%", "calls", "ok");
+    eprintln!("{}", "-".repeat(105));
+
+    for c in &cases {
+        let mut available_inputs = FxHashSet::default();
+        if c.from_ore {
+            available_inputs.insert("iron-ore".to_string());
+            available_inputs.insert("copper-ore".to_string());
+        }
+        if c.item == "plastic-bar" && c.name == "tier3_plastic_bar_from_crude" {
+            available_inputs.insert("crude-oil".to_string());
+        }
+
+        let start = Instant::now();
+        let result = match run_e2e(c.name, c.item, c.rate, c.machine, c.belt, &available_inputs) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("{:<55} ERROR: {}", c.name, e);
+                continue;
+            }
+        };
+        let wall_us = start.elapsed().as_micros();
+
+        let mut sat_us: u64 = 0;
+        let mut sat_calls: u64 = 0;
+        let mut sat_solved: u64 = 0;
+        for ev in &result.trace_events {
+            if let TraceEvent::SatInvocation { solve_time_us, satisfied, .. } = ev {
+                sat_us += solve_time_us;
+                sat_calls += 1;
+                if *satisfied { sat_solved += 1; }
+            }
+        }
+
+        let pct = if wall_us > 0 { (sat_us as f64 / 1000.0) / (wall_us as f64 / 1000.0) * 100.0 } else { 0.0 };
+        eprintln!("{:<55} {:>10.1} {:>10.1} {:>7.1}% {:>8} {:>6}",
+            c.name, wall_us as f64 / 1000.0, sat_us as f64 / 1000.0, pct, sat_calls, sat_solved);
+
+        total_wall_us += wall_us;
+        total_sat_us += sat_us;
+        total_calls += sat_calls;
+        total_sat_solved += sat_solved;
+    }
+
+    let total_pct = if total_wall_us > 0 {
+        (total_sat_us as f64 / 1000.0) / (total_wall_us as f64 / 1000.0) * 100.0
+    } else { 0.0 };
+
+    eprintln!("{}", "-".repeat(105));
+    eprintln!("{:<55} {:>10.1} {:>10.1} {:>7.1}% {:>8} {:>6}",
+        "TOTAL", total_wall_us as f64 / 1000.0, total_sat_us as f64 / 1000.0, total_pct, total_calls, total_sat_solved);
+
+    panic!(
+        "SAT total-time profile: wall={:.1}ms sat={:.1}ms ({:.1}%) calls={} solved={}",
+        total_wall_us as f64 / 1000.0,
+        total_sat_us as f64 / 1000.0,
+        total_pct,
+        total_calls,
+        total_sat_solved
+    );
+}
