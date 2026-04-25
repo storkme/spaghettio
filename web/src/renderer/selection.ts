@@ -2,6 +2,7 @@ import { Container, Graphics } from "pixi.js";
 import type { Viewport } from "pixi-viewport";
 import type { PlacedEntity, LayoutResult } from "../engine";
 import { TILE_PX, MACHINE_SIZES, SPLITTER_ENTITIES } from "./entities";
+import { requestRender } from "./app";
 
 /** Tile footprint [w, h] for an entity. Mirrors the rendered bounding
  *  box: machines from MACHINE_SIZES, splitters 2×1 / 1×2 by direction,
@@ -69,6 +70,7 @@ export function createSelectionController(
     dragRectG.rect(minX, minY, w, h).fill({ color: SEL_COLOR, alpha: 0.18 });
     dragRectG.setStrokeStyle({ width: 1, color: SEL_COLOR, alpha: 0.8 });
     dragRectG.rect(minX, minY, w, h).stroke();
+    requestRender();
   }
 
   function redrawBorders(entities: PlacedEntity[]): void {
@@ -127,6 +129,7 @@ export function createSelectionController(
       selected = collectEntities(e.clientX, e.clientY);
       redrawBorders(selected);
       onSelectionChange(selected);
+      requestRender();
     } else if (dragStart !== null) {
       // Shift was held but drag threshold not reached — Shift+click.
       // Only clear selection when clicking on an entity; clicking empty
@@ -138,6 +141,7 @@ export function createSelectionController(
         selected = [];
         borderG.clear();
         onSelectionChange([]);
+        requestRender();
       }
     }
     // Plain click/drag with no Shift: pure navigation — leave selection alone.
@@ -150,6 +154,7 @@ export function createSelectionController(
     dragRectG.clear();
     borderG.clear();
     onSelectionChange([]);
+    requestRender();
   }
 
   // Right-click on canvas → clear selection. Always suppress the browser
