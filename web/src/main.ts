@@ -119,6 +119,15 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
   // a user who turned colours off stays off across reloads.
   setItemColoring(colorCb.checked);
 
+  // Sync __ANIM_LOGS with the debug checkbox. The flag is read by the
+  // particle-layout animate helpers (Phase 1b+) and by streamingRenderer.ts
+  // animation call sites. Mirrors the __TRACE_LOGS pattern.
+  const syncAnimLogs = (): void => {
+    (globalThis as { __ANIM_LOGS?: boolean }).__ANIM_LOGS = debugCb.checked;
+  };
+  debugCb.addEventListener("change", syncAnimLogs);
+  syncAnimLogs();
+
   const overlayLegend: LegendPanelControls = createLegendPanel(container);
 
   function getLegendState(): LegendPanelState {
