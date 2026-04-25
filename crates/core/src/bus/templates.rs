@@ -1873,26 +1873,40 @@ pub fn fluid_multi_input_row(
     let pitch = msz;
     let n = fluid_inputs.len() as i32;
 
-    // Adjacent-port collision: when two fluids' `port_dx` values differ by
-    // exactly 1, the outer fluid's drop UG at `(col_t_outer, y_offset+1)`
-    // lands on the inner fluid's flank UG at `(col_t_inner ± 1, y_offset+1)`.
-    // Insert a 1-tile empty gap between the outer trunk and everything
-    // below so the outer drop UG sits in the gap row instead of on a flank.
+    // Always-gap=1 for n≥2 fluids. Two structural reasons:
     //
-    // Only N=2 is handled. N≥3 with any adjacent-port pair needs cumulative
-    // gap accounting plus re-routing the outer fluid's drop tunnel through
-    // the intervening trunk rows — a separate fix pending.
-    let gap: i32 = if n == 2 && (fluid_inputs[1].0 - fluid_inputs[0].0).abs() == 1 {
+    // 1. Adjacent-port collision: when two fluids' `port_dx` values differ
+    //    by exactly 1, the outer fluid's drop UG at `(col_t_outer,
+    //    y_offset+1)` lands on the inner fluid's flank UG at
+    //    `(col_t_inner ± 1, y_offset+1)`. The gap row gives the outer
+    //    drop UG somewhere to sit that isn't a flank.
+    //
+    // 2. Bus-router lane adjacency: when the outer fluid's bus column is
+    //    adjacent to the inner fluid's bus column (outer.x = inner.x + 1),
+    //    the bus router places the inner fluid's branch UG-East at
+    //    (inner.x + 1, inner_trunk_y) — i.e. inside the outer fluid's
+    //    column. Without a gap row above the inner trunk, the outer
+    //    fluid has no clear tile in its column to bridge from its own
+    //    tap row down to its UG-S input. Inserting a gap gives the
+    //    outer fluid a clear bridging tile at (outer.x, y_offset + 1).
+    //
+    // We can't predict bus column adjacency at template-emission time
+    // (lane_order runs after row placement), so we always pay the
+    // 1-tile cost. The existing N≥3 path with adjacent port_dx still
+    // needs cumulative gap accounting; that case is unreachable for
+    // currently tested recipes.
+    let gap: i32 = if n >= 2 {
         1
-    } else if n > 2
+    } else {
+        0
+    };
+    if n > 2
         && fluid_inputs
             .windows(2)
             .any(|w| (w[1].0 - w[0].0).abs() == 1)
     {
         todo!("3+ fluid inputs with adjacent port_dx — separate fix pending");
-    } else {
-        0
-    };
+    }
 
     // Row layout (offsets from y_offset), with gap=1 case noted inline:
     //   0              : outermost trunk (fluid_inputs[n-1])
@@ -3220,14 +3234,15 @@ mod tests {
             true,
         );
 
-        // Row layout for N=2, msz=3, fluid output:
+        // Row layout for N=2, msz=3, fluid output, with always-gap=1:
         //   y=0: fluid 1 (heavy-oil) trunk at cols 1, 2, 3
-        //   y=1: fluid 0 (water) trunk at cols -1, 0, 1 + fluid 1 drop at col 2
-        //   y=2: fluid 0 drop UG at col 0
-        //   y=3: UG-out at cols 0 and 2
-        //   y=4..6: machine
-        //   y=7: output pipe row
-        assert_eq!(row_height, 8, "expected row height 8 for pure-fluid 2-input 3×3");
+        //   y=1: gap row (empty in our column; reserved for outer fluid bridging)
+        //   y=2: fluid 0 (water) trunk at cols -1, 0, 1 + fluid 1 drop at col 2
+        //   y=3: fluid 0 drop UG at col 0
+        //   y=4: UG-out at cols 0 and 2
+        //   y=5..7: machine
+        //   y=8: output pipe row
+        assert_eq!(row_height, 9, "expected row height 9 for pure-fluid 2-input 3×3 with gap=1");
 
         // Fluid 1 (heavy-oil, outermost) trunk at y=0, T-drop at col 2
         let left_flank_b = assert_entity(&entities, 1, 0, "pipe-to-ground");
@@ -3238,47 +3253,47 @@ mod tests {
         let right_flank_b = assert_entity(&entities, 3, 0, "pipe-to-ground");
         assert_eq!(right_flank_b.direction, EntityDirection::East);
 
-        // Fluid 0 (water, innermost) trunk at y=1, T-drop at col 0
-        let left_flank_a = assert_entity(&entities, -1, 1, "pipe-to-ground");
+        // Fluid 0 (water, innermost) trunk at y=2 (was y=1 pre-gap), T-drop at col 0
+        let left_flank_a = assert_entity(&entities, -1, 2, "pipe-to-ground");
         assert_eq!(left_flank_a.direction, EntityDirection::West);
         assert_eq!(left_flank_a.carries.as_deref(), Some("water"));
-        let t_drop_a = assert_entity(&entities, 0, 1, "pipe");
+        let t_drop_a = assert_entity(&entities, 0, 2, "pipe");
         assert_eq!(t_drop_a.carries.as_deref(), Some("water"));
-        let right_flank_a = assert_entity(&entities, 1, 1, "pipe-to-ground");
+        let right_flank_a = assert_entity(&entities, 1, 2, "pipe-to-ground");
         assert_eq!(right_flank_a.direction, EntityDirection::East);
 
-        // Fluid 1 drop UG at (col_B=2, y=1) direction=SOUTH
+        // Fluid 1 drop UG at (col_B=2, y=1) direction=SOUTH (in gap row).
         let drop_b = assert_entity(&entities, 2, 1, "pipe-to-ground");
         assert_eq!(drop_b.direction, EntityDirection::South);
         assert_eq!(drop_b.carries.as_deref(), Some("heavy-oil"));
 
-        // Fluid 0 drop UG at (col_A=0, y=2) direction=SOUTH
-        let drop_a = assert_entity(&entities, 0, 2, "pipe-to-ground");
+        // Fluid 0 drop UG at (col_A=0, y=3) direction=SOUTH
+        let drop_a = assert_entity(&entities, 0, 3, "pipe-to-ground");
         assert_eq!(drop_a.direction, EntityDirection::South);
         assert_eq!(drop_a.carries.as_deref(), Some("water"));
 
-        // UG-outs at y=3, facing NORTH
-        let ug_out_a = assert_entity(&entities, 0, 3, "pipe-to-ground");
+        // UG-outs at y=4, facing NORTH
+        let ug_out_a = assert_entity(&entities, 0, 4, "pipe-to-ground");
         assert_eq!(ug_out_a.direction, EntityDirection::North);
         assert_eq!(ug_out_a.carries.as_deref(), Some("water"));
-        let ug_out_b = assert_entity(&entities, 2, 3, "pipe-to-ground");
+        let ug_out_b = assert_entity(&entities, 2, 4, "pipe-to-ground");
         assert_eq!(ug_out_b.direction, EntityDirection::North);
         assert_eq!(ug_out_b.carries.as_deref(), Some("heavy-oil"));
 
-        // Machine at y=4
-        let m = assert_entity(&entities, 0, 4, "chemical-plant");
+        // Machine at y=5
+        let m = assert_entity(&entities, 0, 5, "chemical-plant");
         assert_eq!(m.recipe.as_deref(), Some("heavy-oil-cracking"));
 
-        // Output pipe row at y=7
+        // Output pipe row at y=8
         for dx in 0..3 {
-            let p = assert_entity(&entities, dx, 7, "pipe");
+            let p = assert_entity(&entities, dx, 8, "pipe");
             assert_eq!(p.carries.as_deref(), Some("light-oil"));
         }
 
         // Port tap points reported correctly
-        assert!(in_ports.contains(&("water".to_string(), 0, 1)));
+        assert!(in_ports.contains(&("water".to_string(), 0, 2)));
         assert!(in_ports.contains(&("heavy-oil".to_string(), 2, 0)));
-        assert_eq!(out_ports, vec![("light-oil".to_string(), 1, 7)]);
+        assert_eq!(out_ports, vec![("light-oil".to_string(), 1, 8)]);
     }
 
     #[test]
@@ -3296,17 +3311,18 @@ mod tests {
             false, // westward output
         );
 
-        // Row height = 9 (one extra for inserter + belt vs pipe row)
-        assert_eq!(row_height, 9);
+        // Row height = 10 with always-gap=1 (one extra for inserter + belt
+        // vs pipe row, on top of the +1 gap row).
+        assert_eq!(row_height, 10);
 
-        // Output inserter at (mx+1=1, y=7), facing South
-        let ins = assert_entity(&entities, 1, 7, "inserter");
+        // Output inserter at (mx+1=1, y=8), facing South
+        let ins = assert_entity(&entities, 1, 8, "inserter");
         assert_eq!(ins.direction, EntityDirection::South);
         assert_eq!(ins.carries.as_deref(), Some("sulfur"));
 
-        // Output belt at y=8, direction West (output_east=false)
+        // Output belt at y=9, direction West (output_east=false)
         for dx in 0..3 {
-            let b = assert_entity(&entities, dx, 8, "transport-belt");
+            let b = assert_entity(&entities, dx, 9, "transport-belt");
             assert_eq!(b.direction, EntityDirection::West);
             assert_eq!(b.carries.as_deref(), Some("sulfur"));
         }
@@ -3333,19 +3349,21 @@ mod tests {
             true,
         );
 
-        // Fluid 0 right flank at (1, 1) — east-west
-        let right_flank = entities.iter().find(|e| e.x == 1 && e.y == 1 && e.name == "pipe-to-ground").expect("right flank UG exists");
+        // With always-gap=1, water (fi=0, inner) trunk_y=2; its right flank
+        // is at (col_t+1, 2) = (1, 2). Heavy-oil (fi=1, outer) trunk_y=0;
+        // its drop UG sits in the gap row at (col_t, trunk_y+1) = (2, 1).
+        // The flank and drop UG are no longer at the same y, so the
+        // perpendicular-edge isolation case from gap=0 doesn't arise.
+        let right_flank = entities.iter().find(|e| e.x == 1 && e.y == 2 && e.name == "pipe-to-ground").expect("right flank UG exists");
         assert!(matches!(right_flank.direction, EntityDirection::East | EntityDirection::West));
         assert_eq!(right_flank.carries.as_deref(), Some("water"));
 
-        // Fluid 1 drop UG at (2, 1) — north-south
+        // Heavy-oil drop UG at (2, 1) — north-south, sits in gap row.
         let drop_b = entities.iter().find(|e| e.x == 2 && e.y == 1 && e.name == "pipe-to-ground").expect("fluid 1 drop UG exists");
         assert!(matches!(drop_b.direction, EntityDirection::North | EntityDirection::South));
         assert_eq!(drop_b.carries.as_deref(), Some("heavy-oil"));
 
-        // The two must be adjacent (|dx|=1, same y) and carry different fluids
-        assert_eq!((drop_b.x - right_flank.x).abs(), 1);
-        assert_eq!(drop_b.y, right_flank.y);
+        // Different fluids carried.
         assert_ne!(drop_b.carries, right_flank.carries);
     }
 
@@ -3354,8 +3372,13 @@ mod tests {
         // Sulfuric-acid-on-assembling-machine-3 shape: two fluid inputs
         // whose port_dx values differ by exactly 1 (petgas=1, water=2).
         // Without the gap, fluid 1's drop UG lands on fluid 0's left-flank
-        // UG at the same tile — an object collision. The fix inserts a
-        // 1-row gap between the outer trunk and everything below.
+        // UG at the same tile — an object collision.
+        //
+        // The gap=1 mechanism now applies always for n≥2 fluids (also
+        // serving the bus-router lane-adjacency case), so adjacent-port
+        // and non-adjacent-port layouts share the same height. This test
+        // verifies the previously-colliding adjacent-port shape no longer
+        // overlaps and matches the always-on baseline.
         let (entities, row_height_adj, _, _) = fluid_multi_input_row(
             "sulfuric-acid",
             "assembling-machine-3",
@@ -3368,7 +3391,7 @@ mod tests {
             true,
         );
 
-        // Baseline layout (ports 2 apart, no gap) to compare row_height.
+        // Baseline layout (ports 2 apart) — same row_height under always-gap=1.
         let (_, row_height_base, _, _) = fluid_multi_input_row(
             "sulfuric-acid",
             "assembling-machine-3",
@@ -3381,8 +3404,8 @@ mod tests {
             true,
         );
         assert_eq!(
-            row_height_adj, row_height_base + 1,
-            "adjacent-port layout should be exactly 1 row taller than the non-colliding baseline"
+            row_height_adj, row_height_base,
+            "adjacent-port and non-adjacent-port layouts should match under always-gap=1"
         );
 
         // No two entities share a tile.
@@ -3439,14 +3462,15 @@ mod tests {
             true,
         );
 
-        // Second machine at mx=3. Its T-drop pipes should be at (3, 1) water and (5, 0) heavy-oil.
-        let water_b = assert_entity(&entities, 3, 1, "pipe");
+        // Second machine at mx=3. Its T-drop pipes should be at (3, 2) water (was y=1 pre-gap)
+        // and (5, 0) heavy-oil (outermost trunk, unchanged).
+        let water_b = assert_entity(&entities, 3, 2, "pipe");
         assert_eq!(water_b.carries.as_deref(), Some("water"));
         let ho_b = assert_entity(&entities, 5, 0, "pipe");
         assert_eq!(ho_b.carries.as_deref(), Some("heavy-oil"));
 
-        // Second machine present
-        let m2 = assert_entity(&entities, 3, 4, "chemical-plant");
+        // Second machine present at y=5 (was y=4 pre-gap)
+        let m2 = assert_entity(&entities, 3, 5, "chemical-plant");
         assert_eq!(m2.recipe.as_deref(), Some("heavy-oil-cracking"));
 
         // 4 port tap points (2 fluids × 2 machines)
@@ -3473,39 +3497,37 @@ mod tests {
             false, // west-flow output
         );
 
-        // Machine positions: group 1 at x=0, group 2 at x=6.
-        assert_entity(&entities, 0, 4, "chemical-plant");
-        assert_entity(&entities, 6, 4, "chemical-plant");
+        // Machine positions: group 1 at x=0, group 2 at x=6, machines at y=5 (was y=4 pre-gap).
+        assert_entity(&entities, 0, 5, "chemical-plant");
+        assert_entity(&entities, 6, 5, "chemical-plant");
 
-        // Trunk-row UGs at the two edges of the gap. Machine 0's east
-        // UG-in for water (port_dx=0) at (1, 1); machine 1's west UG-out
-        // for water at (5, 1). Distance 4 tiles — within max_reach.
-        let water_east = assert_entity(&entities, 1, 1, "pipe-to-ground");
+        // Water (innermost) trunk row shifts from y=1 to y=2 with always-gap=1.
+        // Machine 0's east UG-in for water (port_dx=0) at (1, 2); machine 1's
+        // west UG-out for water at (5, 2). Distance 4 tiles — within max_reach.
+        let water_east = assert_entity(&entities, 1, 2, "pipe-to-ground");
         assert_eq!(water_east.direction, EntityDirection::East);
         assert_eq!(water_east.carries.as_deref(), Some("water"));
-        let water_west = assert_entity(&entities, 5, 1, "pipe-to-ground");
+        let water_west = assert_entity(&entities, 5, 2, "pipe-to-ground");
         assert_eq!(water_west.direction, EntityDirection::West);
         assert_eq!(water_west.carries.as_deref(), Some("water"));
 
-        // No trunk-row surface pipes in the gap columns (2..=4) at y=1 —
+        // No trunk-row surface pipes in the gap columns (2..=4) at y=2 —
         // the UG tunnel covers it.
         for x in 2..=4 {
             assert!(
-                entities.iter().find(|e| e.x == x && e.y == 1 && e.name == "pipe").is_none(),
-                "expected no surface pipe at ({x}, 1) in the gap — the UG pair tunnels through"
+                entities.iter().find(|e| e.x == x && e.y == 2 && e.name == "pipe").is_none(),
+                "expected no surface pipe at ({x}, 2) in the gap — the UG pair tunnels through"
             );
         }
 
-        // Sideload bridge at y=7 (output inserter row) / y=8 (output belt).
-        // `sideload_bridge` emits 6 entities in the 3-tile gap; for
-        // west-flow output the bridge row has the expected south/west/west
-        // direction pattern at (gap_start_x, y=7).
+        // Sideload bridge at y=8 (output inserter row) / y=9 (output belt),
+        // shifted down by 1 from pre-gap layout.
         let gap_start_x = 3;
-        assert_entity(&entities, gap_start_x, 7, "transport-belt");
-        assert_entity(&entities, gap_start_x + 1, 7, "transport-belt");
-        assert_entity(&entities, gap_start_x + 2, 7, "transport-belt");
         assert_entity(&entities, gap_start_x, 8, "transport-belt");
         assert_entity(&entities, gap_start_x + 1, 8, "transport-belt");
         assert_entity(&entities, gap_start_x + 2, 8, "transport-belt");
+        assert_entity(&entities, gap_start_x, 9, "transport-belt");
+        assert_entity(&entities, gap_start_x + 1, 9, "transport-belt");
+        assert_entity(&entities, gap_start_x + 2, 9, "transport-belt");
     }
 }

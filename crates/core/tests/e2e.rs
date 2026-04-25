@@ -532,7 +532,7 @@ const GOLDEN_HASHES: &[(&str, &str)] = &[
     ("tier2_electronic_circuit_splitter_stamp_regression", "1240c095aece437a4e9268580028625e7521e29e4f5015712dfed2f693c46e9e"),
     ("tier3_plastic_bar", "6985e6c920c10e4f20ec4c7b18bbb0cde98a6a8c030787e85a3f8ab3618e70fb"),
     ("tier3_sulfuric_acid", "091765fa6a50b4438137e0500e32eb8378ed22224f9b58843070cb70d6561bcd"),
-    ("tier3_heavy_oil_cracking", "9b7e04e97a65d99c6f001a8e6f67eaf69d348e56417093788cfd19369adb9cd1"),
+    ("tier3_heavy_oil_cracking", "e035b72e76cff247546b12ff47e264b8f9ae44e8cf9969107e45aad4690e1980"),
 ];
 
 fn assert_round_trip(result: &E2EResult) {
