@@ -320,6 +320,7 @@ fn run_e2e_inner(
     }
 
     fucktorio_core::zone_cache::set_thread_source(None);
+    fucktorio_core::zone_cache::flush();
     Ok(result)
 }
 

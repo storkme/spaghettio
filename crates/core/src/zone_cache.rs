@@ -84,12 +84,32 @@ pub struct ZoneStats {
 }
 use std::cell::RefCell;
 use std::io::Write as _;
+use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // Thread-local source tag so parallel tests each carry their own label
 // without stomping on each other via a process-global env var.
 thread_local! {
     static ZONE_SOURCE: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// Per-zone record buffered between flushes. Stored serialised because
+/// `serde_json::Value` would balloon memory and we already need the line
+/// bytes for the eventual write.
+struct PendingRecord {
+    /// One full JSONL line including trailing `\n`. Pre-encoded so the flush
+    /// path is just byte writes.
+    line: Vec<u8>,
+}
+
+/// Process-global record buffer. Records are appended via `record_zone` and
+/// drained by `flush`. Keeping the lock contention to a brief
+/// `Vec::push` of a pre-encoded line means parallel tests don't serialise
+/// on the recorder.
+static BUFFER: OnceLock<Mutex<Vec<PendingRecord>>> = OnceLock::new();
+
+fn buffer() -> &'static Mutex<Vec<PendingRecord>> {
+    BUFFER.get_or_init(|| Mutex::new(Vec::new()))
 }
 
 /// Set the per-thread zone source tag. Call this at the start of a test body.
@@ -317,8 +337,11 @@ pub fn canonical_signature(
     candidates.into_iter().min().unwrap_or_default()
 }
 
-/// Append one zone record to the cache JSONL file. Silently no-ops on any
-/// I/O error — telemetry, not correctness.
+/// Buffer one zone record for later flush. Encodes the JSONL line eagerly
+/// so the lock-held critical section is just a `Vec::push`. Silently no-ops
+/// on serialisation error — this is telemetry, not correctness.
+///
+/// Use `flush` (or `flush_on_drop`) to write the buffered records to disk.
 pub fn record_zone(
     zone: &CrossingZone,
     channel_reaches: &[u32],
@@ -349,22 +372,65 @@ pub fn record_zone(
         "source": effective_source,
     });
 
-    let mut line = serde_json::to_string(&record).unwrap_or_default();
+    let Ok(mut line) = serde_json::to_string(&record) else { return };
     line.push('\n');
 
-    let path = resolve_cache_path();
+    if let Ok(mut buf) = buffer().lock() {
+        buf.push(PendingRecord { line: line.into_bytes() });
+    }
+}
 
+/// Flush the buffered records to disk.
+///
+/// Each record is written in a single `write_all` call against an `O_APPEND`
+/// file. Lines are kept short (well under the 4 KiB POSIX `PIPE_BUF`
+/// guarantee) so concurrent processes appending to the same file produce
+/// interleaved-but-intact lines, never torn ones.
+///
+/// Silently no-ops on any I/O error — losing telemetry is preferable to
+/// failing the calling test or CLI invocation.
+///
+/// Safe to call any number of times; only the records buffered since the
+/// previous call are written.
+pub fn flush() {
+    let pending: Vec<PendingRecord> = match buffer().lock() {
+        Ok(mut buf) => std::mem::take(&mut *buf),
+        Err(_) => return,
+    };
+    if pending.is_empty() {
+        return;
+    }
+
+    let path = resolve_cache_path();
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
 
-    if let Ok(mut f) = std::fs::OpenOptions::new()
+    let Ok(mut f) = std::fs::OpenOptions::new()
         .append(true)
         .create(true)
         .open(&path)
-    {
-        let _ = f.write_all(line.as_bytes());
+    else {
+        // Couldn't open — drop the buffer rather than retry-spinning. The
+        // records are already lost from the in-memory buffer (we drained
+        // it); accept that. A retry path would risk unbounded growth if
+        // the disk is permanently unwritable.
+        return;
+    };
+
+    for record in &pending {
+        // O_APPEND + single write_all per line: kernel guarantees the
+        // append is atomic for buffers up to PIPE_BUF (4 KiB on Linux).
+        // Our lines are typically 200-400 bytes, so this is safe even
+        // with concurrent writers from other processes.
+        let _ = f.write_all(&record.line);
     }
+}
+
+/// Number of records currently buffered, awaiting flush. Useful for sizing
+/// diagnostics ("how much will the next flush write?").
+pub fn pending_count() -> usize {
+    buffer().lock().map(|b| b.len()).unwrap_or(0)
 }
 
 #[cfg(test)]
