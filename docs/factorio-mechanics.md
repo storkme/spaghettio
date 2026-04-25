@@ -83,16 +83,19 @@ Formal rules the layout engine must satisfy. Statements are numbered per section
 - **I5.** Inserters interact with belt lanes: an inserter dropping onto a belt places items on the **near lane** (the lane closest to the inserter). Geometrically, "near lane" is determined by the dot product of the inserter's approach vector and the belt's perpendicular: positive → right lane, negative → left lane.
 - **I6.** **Pickup from belts**: an inserter picking from a belt grabs items from **both lanes**, not just the near lane. It alternates between lanes based on item availability. The effective pickup rate is limited by the total belt throughput (both lanes combined), not a single lane. *(This means a fully loaded belt delivers its full throughput to the inserter, regardless of lane distribution.)*
 - **I7.** Inserters can pick from / drop into machines, belts, chests, and other entities that have item slots.
-- **I8.** Inserter throughput (approximate, chest-to-chest at default stack size):
+- **I8.** Inserter throughput (approximate, chest-to-chest at default stack size, no research):
 
-  | Type | Items/swing | Swings/s | Throughput |
-  |------|------------|----------|------------|
-  | Regular inserter | 1 | ~0.83 | ~0.83/s |
-  | Long-handed inserter | 1 | ~1.2 | ~1.2/s |
-  | Fast inserter | 1 | ~2.31 | ~2.31/s |
-  | Stack inserter (stack 12) | 12 | ~2.31 | ~27.7/s |
+  | Type | Reach | Items/swing | Swings/s | Throughput |
+  |------|-------|------------|----------|------------|
+  | Regular inserter (`inserter`) | 1 | 1 | ~0.84 | **~0.84/s** |
+  | Long-handed inserter (`long-handed-inserter`) | **2** | 1 | ~1.2 | **~1.2/s** |
+  | Fast inserter (`fast-inserter`) | 1 | 1 | ~2.4 | ~2.31/s (extension delay shaves it) |
+  | Stack inserter (`stack-inserter`, vanilla 2.0+) | 1 | 5 (base, +4 built-in bonus) | ~2.4 | ~12/s base, up to 27.7/s researched |
+  | Bulk inserter (`bulk-inserter`, was 1.x "stack inserter") | 1 | 1 (scales with research, max 12) | ~2.4 | 2.4/s base, up to 27.7/s researched |
 
-  Actual throughput varies with pickup/drop distance and belt speed. Multiple inserters may be needed to saturate a belt lane (7.5/s yellow → need ~9 regular inserters or ~4 fast inserters per lane).
+  Throughputs derived from `rotation_speed` × 60 × items_per_swing. Long-handed is **faster** than regular per cycle (rotation_speed 0.02 vs 0.014); the "long arm = slow" intuition is wrong. Actual throughput varies with pickup/drop distance and belt speed. Multiple inserters may be needed to saturate a belt lane (7.5/s yellow → need ~9 regular or ~4 fast per lane).
+
+- **I8a.** **Reach is asymmetric across variants.** Only `long-handed-inserter` is reach-2 in vanilla 2.0. There is **no** long-handed equivalent of `fast-inserter`, `stack-inserter`, or `bulk-inserter` — all of those are reach-1 only. A reach-2 slot (e.g. the far side of a 2-input belt row) is therefore capped at **~1.2 items/s base** (long-handed). Layout consequence: in a 2-input row, the higher-rate input must go in the near slot if its per-machine demand exceeds 1.2/s, since the far slot can only deploy long-handed inserters.
 
 - **I9.** **Stack inserter**: picks/drops multiple items per swing (stack size depends on research, max 12). Higher throughput than regular inserters. *(Relevant for high-throughput designs.)*
 - **I10.** An inserter dropping into a machine will only insert items that the machine's current recipe accepts. *(No explicit filter needed for recipe-locked machines.)*

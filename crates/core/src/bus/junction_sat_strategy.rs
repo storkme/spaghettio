@@ -419,6 +419,13 @@ fn topology_boundaries(
 
     // Phase 1: Walk every entity whose tile is inside bbox and FREE.
     for e in placed_entities {
+        // Pipes / pipe-to-grounds are obstacles, never SAT-routable.
+        // Skip them defensively even if a future change places a pipe
+        // at a non-forbidden tile — SAT has no notion of fluid flow,
+        // so emitting a fluid boundary would always trigger UNSAT.
+        if matches!(e.name.as_str(), "pipe" | "pipe-to-ground") {
+            continue;
+        }
         // Determine all tiles this entity occupies (1 for most, 2 for splitters).
         let entity_tiles: Vec<(i32, i32)> = if is_splitter(&e.name) {
             let (sx, sy) = splitter_second_tile(e);
@@ -657,14 +664,14 @@ impl JunctionStrategy for SatStrategy {
         if ctx.junction.specs.is_empty() {
             return None;
         }
-        // SAT's encoder treats every spec as a belt — it has no notion
-        // of a fixed-surface pipe that must not be routed over. If the
-        // junction carries any pipe-kind spec, defer to higher-level
-        // strategies (`bridge_belt_over_pipe` in the perpendicular
-        // template, or an Unresolved region) rather than emitting a
-        // SAT model that would stamp belts on top of the pipe.
-        // Pipe-aware SAT is Phase 3 in `docs/rfp-pipe-belt-junctions.md`.
-        if ctx.junction.specs.iter().any(|s| s.kind == SpecKind::Pipe) {
+        // Pipe specs are pure obstacles, not items the SAT needs to
+        // route. Their tiles are already in `ctx.junction.forbidden`
+        // (so `forced_empty` keeps SAT from stamping belts on them),
+        // and `topology_boundaries` skips entities at forbidden tiles
+        // — so a pipe contributes nothing to the boundary set we send
+        // to SAT. We only need at least one belt spec to have something
+        // to solve.
+        if !ctx.junction.specs.iter().any(|s| s.kind == SpecKind::Belt) {
             return None;
         }
 
@@ -713,6 +720,12 @@ impl JunctionStrategy for SatStrategy {
         // is found, or until a tile with no feeder is reached (the chain
         // head — typically inserter-fed from a machine output).
         for sc in ctx.junction.specs.iter() {
+            // Pipe specs are obstacles, not flows. Skip them — their
+            // tiles are forbidden surface, but they don't need a
+            // synthesised IN boundary (the SAT can't model fluid flow).
+            if sc.kind == SpecKind::Pipe {
+                continue;
+            }
             let has_in_for_item = boundaries
                 .iter()
                 .any(|b| b.is_input && b.item == sc.item);

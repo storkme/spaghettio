@@ -289,7 +289,7 @@ function makeItemPicker(
 
 export interface SidebarCallbacks {
   renderGraph: (result: SolverResult | null) => void;
-  renderLayout: (layout: LayoutResult) => void;
+  renderLayout: (layout: LayoutResult, solverResult: SolverResult) => void;
   /** Begin a new streaming layout render. Returns the per-event callback that
    *  sidebar passes into `engine.buildLayoutStreaming`. Cancels any prior
    *  streaming render first. */
@@ -386,6 +386,23 @@ export function renderSidebar(
     strategySelect.appendChild(opt);
   });
   targetBody.appendChild(makeField("Strategy", strategySelect));
+
+  // Row layout. See `docs/rfp-horizontal-trunks.md`. Default is the
+  // existing vertical-split behaviour; horizontal-stack is being
+  // developed under that RFP and currently only handles dual-input
+  // solid recipes (other row kinds fall back to vertical-split).
+  const rowLayoutSelect = document.createElement("select");
+  rowLayoutSelect.className = "sb-select";
+  ([
+    ["Vertical split (today)", ""],
+    ["Horizontal stack (RFP)", "horizontal-stack"],
+  ] as const).forEach(([label, value]) => {
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = label;
+    rowLayoutSelect.appendChild(opt);
+  });
+  targetBody.appendChild(makeField("Row layout", rowLayoutSelect));
 
   // Rate (numeric with /s suffix)
   const rateRow = document.createElement("div");
@@ -567,6 +584,7 @@ export function renderSidebar(
   });
   if (urlState.belt) beltSelect.value = urlState.belt;
   if (urlState.strategy) strategySelect.value = urlState.strategy;
+  if (urlState.rowLayout) rowLayoutSelect.value = urlState.rowLayout;
   // Restore custom inputs from URL
   for (const item of urlState.customInputs) {
     if (itemSet.has(item) && !defaultInputSet.has(item) && !customInputs.includes(item)) {
@@ -615,6 +633,7 @@ export function renderSidebar(
       inputs: checkedDefaults,
       belt: beltSelect.value || null,
       strategy: strategySelect.value || null,
+      rowLayout: rowLayoutSelect.value || null,
       customInputs,
     });
 
@@ -647,8 +666,9 @@ export function renderSidebar(
     try {
       const maxTier = beltSelect.value || undefined;
       const strategy = strategySelect.value || undefined;
+      const rowLayout = rowLayoutSelect.value || undefined;
       const onEvent = callbacks.startStreaming();
-      layout = await engine.buildLayoutStreaming(result, maxTier, strategy, onEvent);
+      layout = await engine.buildLayoutStreaming(result, maxTier, strategy, rowLayout, onEvent);
     } catch (err) {
       if (gen !== solveGeneration) return;
       const errDiv = document.createElement("div");
@@ -661,7 +681,7 @@ export function renderSidebar(
 
     currentLayout = layout;
     setRecipeFlows(result.machines);
-    callbacks.renderLayout(layout);
+    callbacks.renderLayout(layout, result);
     // Layout-level warnings (missing balancer templates, unresolved
     // ghost-router crossings) now surface in the Validation panel below
     // — kept off the result container so there's a single source of truth.
@@ -680,6 +700,7 @@ export function renderSidebar(
   machineSelect.addEventListener("change", scheduleAutoSolve);
   beltSelect.addEventListener("change", scheduleAutoSolve);
   strategySelect.addEventListener("change", scheduleAutoSolve);
+  rowLayoutSelect.addEventListener("change", scheduleAutoSolve);
   checkboxes.forEach((cb) => cb.addEventListener("change", scheduleAutoSolve));
 
   runSolve().catch((err) => console.error("runSolve failed:", err));

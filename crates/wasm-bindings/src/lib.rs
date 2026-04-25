@@ -12,23 +12,32 @@ use fucktorio_core::models::{LayoutResult, PlacedEntity, SolverResult};
 use fucktorio_core::validate::{self, LayoutStyle, ValidationIssue};
 use fucktorio_core::{
     blueprint, blueprint_parser, bus::junction_cost::solution_cost,
-    bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy},
+    bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy, RowLayout},
     fixture as fixture_mod, recipe_db, sat, solver,
 };
 use rustc_hash::FxHashSet;
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
-/// Build `LayoutOptions` from the optional belt-tier and strategy strings
-/// passed in across the WASM boundary. The TS engine layer validates URL
-/// params, so unknown strategy strings fall back to `Pooled` silently.
-fn layout_options(max_belt_tier: Option<String>, strategy: Option<String>) -> LayoutOptions {
+/// Build `LayoutOptions` from the optional belt-tier, strategy, and
+/// row-layout strings passed in across the WASM boundary. The TS engine
+/// layer validates URL params, so unknown values fall back to defaults
+/// silently.
+fn layout_options(
+    max_belt_tier: Option<String>,
+    strategy: Option<String>,
+    row_layout: Option<String>,
+) -> LayoutOptions {
     let strategy = match strategy.as_deref() {
         Some("partitioned-per-consumer") => LayoutStrategy::PartitionedPerConsumer,
         Some("partitioned-decomposed") => LayoutStrategy::PartitionedDecomposed,
         _ => LayoutStrategy::Pooled,
     };
-    LayoutOptions { strategy, max_belt_tier }
+    let row_layout = match row_layout.as_deref() {
+        Some("horizontal-stack") => RowLayout::HorizontalStack,
+        _ => RowLayout::VerticalSplit,
+    };
+    LayoutOptions { strategy, max_belt_tier, row_layout }
 }
 
 #[wasm_bindgen]
@@ -68,8 +77,9 @@ pub fn layout(
     solver_result: SolverResult,
     max_belt_tier: Option<String>,
     strategy: Option<String>,
+    row_layout: Option<String>,
 ) -> Result<LayoutResult, JsError> {
-    build_bus_layout(&solver_result, layout_options(max_belt_tier, strategy))
+    build_bus_layout(&solver_result, layout_options(max_belt_tier, strategy, row_layout))
         .map_err(|e| JsError::new(&e))
 }
 
@@ -82,10 +92,11 @@ pub fn layout_traced(
     solver_result: SolverResult,
     max_belt_tier: Option<String>,
     strategy: Option<String>,
+    row_layout: Option<String>,
 ) -> Result<LayoutResult, JsError> {
     fucktorio_core::bus::layout::build_bus_layout_traced(
         &solver_result,
-        layout_options(max_belt_tier, strategy),
+        layout_options(max_belt_tier, strategy, row_layout),
     )
     .map_err(|e| JsError::new(&e))
 }
@@ -140,6 +151,7 @@ pub fn layout_streaming(
     solver_result: SolverResult,
     max_belt_tier: Option<String>,
     strategy: Option<String>,
+    row_layout: Option<String>,
     emit: &js_sys::Function,
 ) -> Result<LayoutResult, JsError> {
     let emit = emit.clone();
@@ -153,7 +165,7 @@ pub fn layout_streaming(
     });
     fucktorio_core::bus::layout::build_bus_layout_streaming(
         &solver_result,
-        layout_options(max_belt_tier, strategy),
+        layout_options(max_belt_tier, strategy, row_layout),
         on_event,
     )
     .map_err(|e| JsError::new(&e))

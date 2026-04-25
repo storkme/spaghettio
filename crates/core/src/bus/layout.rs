@@ -30,6 +30,21 @@ pub enum LayoutStrategy {
     PartitionedDecomposed,
 }
 
+/// Per-recipe row geometry. See `docs/rfp-horizontal-trunks.md`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum RowLayout {
+    /// Today's behaviour: input-bottlenecked recipes split vertically
+    /// into many short rows reconciled by an N→M balancer family.
+    #[default]
+    VerticalSplit,
+    /// One long row with K stacked input belts at the top, each
+    /// terminating in a south-axis dive that feeds a sub-row block of
+    /// machines. Output is a single full-capacity east-flowing belt.
+    /// Phase 1: dual-input solid recipes only; other row kinds fall
+    /// back to `VerticalSplit` silently.
+    HorizontalStack,
+}
+
 /// Per-call options for `build_bus_layout`. New struct; absorbs the
 /// previous `max_belt_tier` parameter so future per-call options
 /// (strategy, escargio fold parameters, …) attach as additional fields.
@@ -37,6 +52,7 @@ pub enum LayoutStrategy {
 pub struct LayoutOptions {
     pub strategy: LayoutStrategy,
     pub max_belt_tier: Option<String>,
+    pub row_layout: RowLayout,
 }
 
 impl LayoutOptions {
@@ -46,6 +62,7 @@ impl LayoutOptions {
         Self {
             strategy: LayoutStrategy::default(),
             max_belt_tier: max_belt_tier.map(|s| s.to_string()),
+            row_layout: RowLayout::default(),
         }
     }
 }
@@ -123,6 +140,7 @@ pub fn build_bus_layout(
         max_belt_tier,
         Some(&final_output_items),
         None,
+        opts.row_layout,
     );
     crate::trace::emit(crate::trace::TraceEvent::PhaseTime {
         phase: "place_rows_1".to_string(),
@@ -152,6 +170,7 @@ pub fn build_bus_layout(
                 max_belt_tier,
                 Some(&final_output_items),
                 Some(&extra_gaps),
+                opts.row_layout,
             );
             crate::trace::emit(crate::trace::TraceEvent::PhaseTime {
                 phase: "place_rows_2".to_string(),

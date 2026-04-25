@@ -562,7 +562,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       const target = lastLayout;
       validationInFlightFor = target;
       engine
-        .validateLayout(target, null)
+        .validateLayout(target, lastSolverResult)
         .then((issues) => {
           if (lastLayout !== target) return; // superseded
           cachedValidationIssues = issues;
@@ -1159,8 +1159,9 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     };
   }
 
-  function renderLayoutOnCanvas(layout: LayoutResult): void {
+  function renderLayoutOnCanvas(layout: LayoutResult, solverResult?: SolverResult): void {
     lastLayout = layout;
+    if (solverResult) lastSolverResult = solverResult;
     rebuildTileEntityMap(layout);
     (window as unknown as { __layout?: LayoutResult }).__layout = layout;
     logLayoutStats(layout);

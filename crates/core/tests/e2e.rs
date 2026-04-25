@@ -251,6 +251,7 @@ fn run_e2e_inner(
         layout::LayoutOptions {
             strategy,
             max_belt_tier: belt_tier.map(|s| s.to_string()),
+            ..Default::default()
         },
     )
         .map_err(|e| {
@@ -508,6 +509,7 @@ fn assert_partitioned_inertness(
         LayoutOptions {
             strategy: LayoutStrategy::PartitionedPerConsumer,
             max_belt_tier: belt_tier.map(|s| s.to_string()),
+            ..Default::default()
         },
     )
     .unwrap_or_else(|e| panic!("`{test_name}`: PartitionedPerConsumer layout failed: {e}"));
@@ -1517,6 +1519,80 @@ fn stress_advanced_circuit_partitioned_5s_from_plates() {
             // behavior, not a violation. See doc-comment above.
             max_partition_rejections: 1,
         },
+    );
+}
+
+/// User's processing-unit @ 2/s URL config (vertical-split, AM2, fast belts).
+/// Tracks the validator-error baseline so regressions in the fluid-trunk
+/// router, output-merger, or balancer-stamp logic surface immediately. The
+/// counts here are *current* not target — they should shrink as fixes land.
+///
+/// Categories at baseline (2026-04-26):
+///   - fluid-network (7): trunk entry UG-IN orphans across crude-oil,
+///     petroleum-gas, sulfuric-acid. Caused by gap-fill placing a fresh
+///     UG pair inside the gap rather than completing the entry's pair —
+///     see `bus/ghost_router.rs` Step 3.6.
+///   - belt-item-isolation (8): adjacent belts of different items feeding
+///     into each other. Sideload mismatch in vertical-split row borders.
+///   - belt-dead-end (2): output belts at the layout's east edge that
+///     don't reach the merger.
+#[test]
+#[ntest::timeout(120000)]
+fn processing_unit_2s_am2_fast_belts_validation_baseline() {
+    let inputs: FxHashSet<String> = [
+        "iron-plate", "copper-plate", "steel-plate", "stone", "coal",
+        "water", "crude-oil", "iron-ore", "copper-ore",
+    ].iter().map(|s| s.to_string()).collect();
+    let result = run_e2e(
+        "processing_unit_2s_am2_fast_belts_validation_baseline",
+        "processing-unit",
+        2.0,
+        "assembling-machine-2",
+        Some("fast-transport-belt"),
+        &inputs,
+    ).expect("e2e pipeline");
+
+    let mut by_cat: std::collections::BTreeMap<String, usize> = Default::default();
+    for i in &result.issues {
+        if matches!(i.severity, fucktorio_core::validate::Severity::Error) {
+            *by_cat.entry(i.category.clone()).or_default() += 1;
+        }
+    }
+
+    // Baseline upper bounds — should shrink as fixes land. To reduce a
+    // bound, run the test, observe the new count, and tighten here.
+    let baseline = [
+        ("fluid-network", 7usize),
+        ("belt-item-isolation", 9),
+        ("belt-dead-end", 2),
+    ];
+    let mut regressed = Vec::new();
+    for &(cat, max_allowed) in &baseline {
+        let actual = by_cat.get(cat).copied().unwrap_or(0);
+        if actual > max_allowed {
+            regressed.push(format!("{cat}: {actual} (max {max_allowed})"));
+        }
+    }
+    assert!(
+        regressed.is_empty(),
+        "Regression — categories grew above baseline:\n  {}\nFull category counts: {:?}",
+        regressed.join("\n  "),
+        by_cat,
+    );
+
+    // Surface unexpected new categories so we notice when a different
+    // class of error starts appearing (e.g. inserter-related once the
+    // fluid_only_recipes wiring lands a regression).
+    let known: std::collections::HashSet<&str> = baseline.iter().map(|(c, _)| *c).collect();
+    let unexpected: Vec<String> = by_cat
+        .iter()
+        .filter(|(cat, count)| !known.contains(cat.as_str()) && **count > 0)
+        .map(|(cat, count)| format!("{cat}: {count}"))
+        .collect();
+    assert!(
+        unexpected.is_empty(),
+        "Unexpected error categories appeared: {}",
+        unexpected.join(", "),
     );
 }
 

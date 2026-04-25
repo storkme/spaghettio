@@ -569,6 +569,341 @@ pub fn dual_input_row(
     (entities, row_height)
 }
 
+/// HorizontalStack variant of `dual_input_row` — see
+/// `docs/rfp-horizontal-trunks.md`. One long row with `k_trunks`
+/// stacked east-flowing input₀ trunks on top, a single continuous
+/// input₁ belt, and machines packed into `block_size`-sized blocks
+/// with a 1-tile gap between blocks for trunk dives + low-demand
+/// E-axis UG cross.
+///
+/// Y layout (msz=3 example, K=2):
+/// ```text
+///   y+0..y+K-1 : K stacked east-flowing trunks of input₀ (high-demand)
+///   y+K        : input₁ continuous east-flowing belt (low-demand,
+///                E-axis UG cross at each block boundary)
+///   y+K+1      : input₀ current-feed east-flowing belt (per-block
+///                segments, fed by trunk dives)
+///   y+K+2      : inserter row (long-handed picks input₁ at y+K,
+///                regular/stack picks input₀ at y+K+1)
+///   y+K+3..y+K+5 : 3×3 machine
+///   y+K+6      : output inserter row
+///   y+K+7      : output belt
+/// ```
+///
+/// Phase 1 first cut: emits the row geometry without trunk-dive
+/// connectivity — the K trunks and current-feed are disconnected
+/// surface belts. The validator will flag the missing item source on
+/// current-feed; the dive geometry will be added in subsequent
+/// iterations once the visible row shape has been validated.
+#[allow(clippy::too_many_arguments)]
+pub fn dual_input_row_horizontal(
+    recipe: &str,
+    machine_entity: &str,
+    machine_size: u32,
+    machine_count: usize,
+    y_offset: i32,
+    x_offset: i32,
+    input_items: (&str, &str),
+    output_item: &str,
+    input_belts: (&str, &str),
+    output_belt: &str,
+    k_trunks: usize,
+    block_size: usize,
+    output_east: bool,
+) -> (Vec<PlacedEntity>, i32) {
+    let msz = machine_size as i32;
+    let pitch = msz;
+    let k = k_trunks.max(1) as i32;
+    let block_size = block_size.max(1);
+    let mut entities = Vec::new();
+
+    let (input0, input1) = input_items;
+    let (belt0, belt1) = input_belts;
+    let trunk_seg = Some(format!("row:{recipe}:trunk:{input0}"));
+    let belt1_seg = Some(format!("row:{recipe}:belt-in:{input1}"));
+    let cf_seg = Some(format!("row:{recipe}:current-feed:{input0}"));
+    let dive_seg = Some(format!("row:{recipe}:trunk-dive:{input0}"));
+    let inserter_in0_seg = Some(format!("row:{recipe}:inserter-in:{input0}"));
+    let inserter_in1_seg = Some(format!("row:{recipe}:inserter-in:{input1}"));
+    let machine_seg = Some(format!("row:{recipe}:machine"));
+    let inserter_out_seg = Some(format!("row:{recipe}:inserter-out"));
+    let belt_out_seg = Some(format!("row:{recipe}:belt-out"));
+
+    // Block layout: each block is `block_size` machines wide; a 1-tile
+    // dive column precedes each block (including block 0). Trunk b
+    // dives at `dive_xs[b]`, then block b's machines start at
+    // `dive_xs[b] + 1` and span `block_size * msz` tiles.
+    //
+    // The leftmost dive sits at `x_offset + 1` (NOT `x_offset`) so the
+    // iron-plate row's east-axis UG cross around it — UG INPUT at
+    // `dive - 1`, UG OUTPUT at `dive + 1` — has both endpoints inside
+    // the row template's iteration range. Without this offset the UG
+    // INPUT would land at `x_offset - 1` (bus area, outside the
+    // template), leaving the UG OUTPUT orphaned and the bus router's
+    // straight iron-plate delivery sideloading onto the dive's
+    // south-belt at `(x_offset, y+K)`.
+    let n_blocks = machine_count.div_ceil(block_size);
+    let dive_xs: Vec<i32> = (0..n_blocks)
+        .map(|b| x_offset + 1 + (b as i32) * (block_size as i32 * pitch + 1))
+        .collect();
+    let mut machine_xs: Vec<i32> = Vec::with_capacity(machine_count);
+    for (b, &dive_x) in dive_xs.iter().enumerate() {
+        let block_count = if b == n_blocks - 1 {
+            machine_count - b * block_size
+        } else {
+            block_size
+        };
+        for m in 0..block_count {
+            machine_xs.push(dive_x + 1 + (m as i32) * pitch);
+        }
+    }
+    let row_west_x = x_offset;
+    let row_east_x_excl = machine_xs.last().copied().unwrap_or(x_offset) + pitch;
+
+    // Y row indices.
+    let trunk_y = |k_idx: i32| y_offset + k_idx;
+    let belt1_y = y_offset + k;
+    let cf_y = y_offset + k + 1;
+    let inserter_in_y = y_offset + k + 2;
+    let machine_y = y_offset + k + 3;
+    let inserter_out_y = y_offset + k + 3 + msz;
+    let out_belt_y = y_offset + k + 3 + msz + 1;
+    let row_height = k + 8;
+
+    let belt1_ug = ug_belt_name(belt1);
+
+    let is_dive_col = |x: i32| dive_xs.contains(&x);
+
+    // Lane assignment to trunk rows. We REVERSE the natural order so
+    // the trunk closest to iron-plate (y+K-1) is lane 0 and dives at
+    // the leftmost column. Each subsequent lane is one row higher and
+    // dives one column further east. This means a trunk's dive only
+    // ever has to bridge iron-plate — the trunks BELOW it have already
+    // dove west (rows are empty), and the trunks ABOVE it are at
+    // shallower rows that the dive's south-belts never touch.
+    let lane_trunk_row = |b: usize| y_offset + (k - 1 - b as i32);
+
+    // K stacked east-flowing trunks. Lane b's trunk lives at row
+    // lane_trunk_row(b) from row_west_x up to dive_xs[b]; past that
+    // column it's gone (the items have dove south). At intermediate
+    // dive columns of *deeper* lanes (b' < b) the trunk continues
+    // surface-east — those dives' south-belts are at rows below this
+    // trunk, no entity conflict.
+    for (b, &trunk_end_x) in dive_xs.iter().enumerate().take(k_trunks) {
+        let trunk_row = lane_trunk_row(b);
+        for x in row_west_x..trunk_end_x {
+            entities.push(PlacedEntity {
+                name: belt0.to_string(),
+                x,
+                y: trunk_row,
+                direction: EntityDirection::East,
+                carries: Some(input0.to_string()),
+                segment_id: trunk_seg.clone(),
+                ..Default::default()
+            });
+        }
+    }
+
+    // Iron-plate (low-demand input₁) continuous belt at y+K, with
+    // east-axis UG crosses at each dive column.
+    for x in row_west_x..row_east_x_excl {
+        if is_dive_col(x) {
+            continue;
+        }
+        let is_ug_input = dive_xs.iter().any(|&dx| x == dx - 1);
+        let is_ug_output = dive_xs.iter().any(|&dx| x == dx + 1);
+        let ent = if is_ug_input {
+            PlacedEntity {
+                name: belt1_ug.to_string(),
+                x,
+                y: belt1_y,
+                direction: EntityDirection::East,
+                carries: Some(input1.to_string()),
+                segment_id: belt1_seg.clone(),
+                io_type: Some("input".to_string()),
+                ..Default::default()
+            }
+        } else if is_ug_output {
+            PlacedEntity {
+                name: belt1_ug.to_string(),
+                x,
+                y: belt1_y,
+                direction: EntityDirection::East,
+                carries: Some(input1.to_string()),
+                segment_id: belt1_seg.clone(),
+                io_type: Some("output".to_string()),
+                ..Default::default()
+            }
+        } else {
+            PlacedEntity {
+                name: belt1.to_string(),
+                x,
+                y: belt1_y,
+                direction: EntityDirection::East,
+                carries: Some(input1.to_string()),
+                segment_id: belt1_seg.clone(),
+                ..Default::default()
+            }
+        };
+        entities.push(ent);
+    }
+
+    // Trunk dives. Lane b dives at column dive_xs[b], starting at its
+    // trunk row `lane_trunk_row(b)` (= y+K-1-b) and descending through
+    // any rows of deeper lanes (already empty — those lanes dove west)
+    // plus iron-plate at y+K, landing on current-feed at y+K+1 via a
+    // south→east corner.
+    //   (dx, lane_trunk_row(b))           : SOUTH belt corner.
+    //   (dx, lane_trunk_row(b)+1..y+K)    : SOUTH belts.
+    //   (dx, y+K+1)                       : EAST belt corner — start of
+    //                                       current-feed segment b.
+    // Per B11 the south→east turn preserves both lanes, so the trunk's
+    // full belt capacity feeds straight into current-feed.
+    let _ = trunk_y;
+    for (b, &dx) in dive_xs.iter().enumerate() {
+        let trunk_row = lane_trunk_row(b);
+        // South corner at the trunk's row.
+        entities.push(PlacedEntity {
+            name: belt0.to_string(),
+            x: dx,
+            y: trunk_row,
+            direction: EntityDirection::South,
+            carries: Some(input0.to_string()),
+            segment_id: dive_seg.clone(),
+            ..Default::default()
+        });
+        // South belts down to (and including) iron-plate row.
+        for y in (trunk_row + 1)..=(y_offset + k) {
+            entities.push(PlacedEntity {
+                name: belt0.to_string(),
+                x: dx,
+                y,
+                direction: EntityDirection::South,
+                carries: Some(input0.to_string()),
+                segment_id: dive_seg.clone(),
+                ..Default::default()
+            });
+        }
+        // East corner at current-feed row — first tile of segment b.
+        entities.push(PlacedEntity {
+            name: belt0.to_string(),
+            x: dx,
+            y: cf_y,
+            direction: EntityDirection::East,
+            carries: Some(input0.to_string()),
+            segment_id: cf_seg.clone(),
+            ..Default::default()
+        });
+    }
+
+    // Current-feed segments per block. The east-corner above stamps
+    // (dive_xs[b], cf_y); fill the rest of segment b only out to the
+    // last machine's near-inserter column. Stopping at that column
+    // (instead of continuing into the gap before the next dive)
+    // prevents a straight-feed merge into the next dive's east-corner,
+    // which would otherwise demote that corner's input from B7
+    // straight-feed to B8 sideload (near lane only).
+    for (b, &dx) in dive_xs.iter().enumerate() {
+        let block_count = if b + 1 == n_blocks {
+            machine_count - b * block_size
+        } else {
+            block_size
+        };
+        // Near-inserter (regular) sits at machine_x for each machine
+        // (post-swap). The last current-feed tile we need is the column
+        // of the last machine in this block.
+        let last_machine_col = dx + 1 + (block_count as i32 - 1) * pitch;
+        for x in (dx + 1)..=last_machine_col {
+            entities.push(PlacedEntity {
+                name: belt0.to_string(),
+                x,
+                y: cf_y,
+                direction: EntityDirection::East,
+                carries: Some(input0.to_string()),
+                segment_id: cf_seg.clone(),
+                ..Default::default()
+            });
+        }
+    }
+
+    // Inserters, machines, output inserters per machine.
+    //
+    // Inserter columns are SWAPPED relative to vertical-split's
+    // `dual_input_row`: in horizontal-stack the high-demand input₀
+    // sits on the near (current-feed) row at y+K+1 and the low-demand
+    // input₁ sits on the far row at y+K. So the regular reach-1
+    // inserter goes at machine_x (near, picks input₀) and the
+    // long-handed reach-2 inserter goes at machine_x+2 (far, picks
+    // input₁). This also keeps current-feed from needing to extend
+    // past the last machine's column (see segment loop above).
+    for &mx in &machine_xs {
+        // Regular inserter at mx — reaches y+K+1 (current-feed, distance 1).
+        entities.push(PlacedEntity {
+            name: "inserter".to_string(),
+            x: mx,
+            y: inserter_in_y,
+            direction: EntityDirection::South,
+            carries: Some(input0.to_string()),
+            segment_id: inserter_in0_seg.clone(),
+            ..Default::default()
+        });
+        // Long-handed inserter at mx+2 — reaches y+K (iron-plate, distance 2).
+        entities.push(PlacedEntity {
+            name: "long-handed-inserter".to_string(),
+            x: mx + 2,
+            y: inserter_in_y,
+            direction: EntityDirection::South,
+            carries: Some(input1.to_string()),
+            segment_id: inserter_in1_seg.clone(),
+            ..Default::default()
+        });
+        entities.push(PlacedEntity {
+            name: machine_entity.to_string(),
+            x: mx,
+            y: machine_y,
+            direction: EntityDirection::North,
+            recipe: Some(recipe.to_string()),
+            segment_id: machine_seg.clone(),
+            ..Default::default()
+        });
+        entities.push(PlacedEntity {
+            name: "inserter".to_string(),
+            x: mx + 1,
+            y: inserter_out_y,
+            direction: EntityDirection::South,
+            carries: Some(output_item.to_string()),
+            segment_id: inserter_out_seg.clone(),
+            ..Default::default()
+        });
+    }
+
+    // Output belt — single continuous east- (or west-) flowing belt
+    // across the whole row, including dive columns.
+    let out_dir = output_dir(output_east);
+    for x in row_west_x..row_east_x_excl {
+        entities.push(PlacedEntity {
+            name: output_belt.to_string(),
+            x,
+            y: out_belt_y,
+            direction: out_dir,
+            carries: Some(output_item.to_string()),
+            segment_id: belt_out_seg.clone(),
+            ..Default::default()
+        });
+    }
+
+    (entities, row_height)
+}
+
+/// Map a transport-belt entity name to the matching underground-belt name.
+fn ug_belt_name(belt: &str) -> &str {
+    match belt {
+        "fast-transport-belt" => "fast-underground-belt",
+        "express-transport-belt" => "express-underground-belt",
+        _ => "underground-belt",
+    }
+}
+
 /// Row for a recipe with 3 solid inputs.
 ///
 /// Layout per machine (`msz`-tile horizontal pitch, no gaps):

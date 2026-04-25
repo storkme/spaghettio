@@ -4,6 +4,7 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use crate::bus::layout::RowLayout;
 use crate::common::{belt_entity_for_rate, lane_capacity, machine_size, BELT_TIERS};
 use crate::models::{EntityDirection, MachineSpec, PlacedEntity, SolverResult};
 
@@ -25,6 +26,17 @@ fn effective_in_lane_cap(max_belt_tier: Option<&str>) -> f64 {
 
 /// Gap added between the two lane-split groups of machines (in tiles).
 pub const LANE_SPLIT_GAP: i32 = 3;
+
+/// Per-row metadata for `RowLayout::HorizontalStack` rows. Recorded by the
+/// placer and consumed by `lane_planner` to allocate K input₀ trunks.
+#[derive(Debug, Clone)]
+pub struct HorizontalStackInfo {
+    /// The high-demand item that gets `trunk_ys.len()` stacked trunks.
+    pub input0_item: String,
+    /// Y-coordinates of each input₀ trunk (top of the row), one entry
+    /// per trunk. Tap-offs from the bus arrive at these ys.
+    pub trunk_ys: Vec<i32>,
+}
 
 /// Where a row sits in the layout and what it contains.
 #[derive(Debug, Clone)]
@@ -57,6 +69,10 @@ pub struct RowSpan {
     /// Rightmost x coordinate of the output belt run. For eastward rows,
     /// items exit the row at `output_belt_x_max + 1`.
     pub output_belt_x_max: i32,
+    /// `Some(_)` when this row uses `RowLayout::HorizontalStack`. The
+    /// lane planner reads this to allocate K trunk lanes for the
+    /// row's high-demand input. See `docs/rfp-horizontal-trunks.md`.
+    pub horizontal_stack: Option<HorizontalStackInfo>,
 }
 
 /// Maximum machines in one row before output or input exceeds belt lane capacity.
@@ -351,6 +367,7 @@ pub(crate) fn build_one_row(
     y_cursor: i32,
     max_belt_tier: Option<&str>,
     output_east: bool,
+    row_layout: RowLayout,
 ) -> (Vec<PlacedEntity>, RowSpan, i32) {
     use crate::bus::templates;
 
@@ -378,6 +395,7 @@ pub(crate) fn build_one_row(
     let mut fluid_port_ys: Vec<i32> = vec![];
     let mut fluid_port_pipes: Vec<(String, i32, i32)> = vec![];
     let mut fluid_output_port_pipes: Vec<(String, i32, i32)> = vec![];
+    let mut horizontal_stack: Option<HorizontalStackInfo> = None;
 
     let (row_ents, row_h, input_belt_ys, output_belt_y) = match &kind {
         RowKind::OilRefinery => {
@@ -601,34 +619,119 @@ pub(crate) fn build_one_row(
             (ents, rh, input_ys, out_y)
         }
         RowKind::DualInput => {
-            let item0 = solid_inputs.first().map(|f| f.item.as_str()).unwrap_or("");
-            let item1 = solid_inputs.get(1).map(|f| f.item.as_str()).unwrap_or("");
-            let in_belt1 = belt_entity_for_rate(
-                solid_inputs.first().map(|f| f.rate * count as f64 * 2.0).unwrap_or(0.0),
-                max_belt_tier,
-            );
-            let in_belt2 = belt_entity_for_rate(
-                solid_inputs.get(1).map(|f| f.rate * count as f64 * 2.0).unwrap_or(0.0),
-                max_belt_tier,
-            );
             let msz = machine_size(&spec.entity);
-            let (ents, rh) = templates::dual_input_row(
-                &spec.recipe,
-                &spec.entity,
-                msz,
-                count,
-                y_cursor,
-                bus_width,
-                (item0, item1),
-                output_item,
-                (in_belt1, in_belt2),
-                out_belt,
-                lane_split,
-                output_east,
-            );
-            let input_ys = vec![y_cursor, y_cursor + 1];
-            let out_y = y_cursor + rh - 1;
-            (ents, rh, input_ys, out_y)
+            if matches!(row_layout, RowLayout::HorizontalStack) {
+                // Re-rank inputs by per-machine demand so input₀ is the
+                // high-demand item (the one that gets K stacked trunks).
+                let mut ranked: Vec<&&crate::models::ItemFlow> = solid_inputs.iter().collect();
+                ranked.sort_by(|a, b| b.rate.partial_cmp(&a.rate).unwrap_or(std::cmp::Ordering::Equal));
+                let item0 = ranked.first().map(|f| f.item.as_str()).unwrap_or("");
+                let item1 = ranked.get(1).map(|f| f.item.as_str()).unwrap_or("");
+                let item0_per_machine = ranked.first().map(|f| f.rate).unwrap_or(0.0);
+                let item1_per_machine = ranked.get(1).map(|f| f.rate).unwrap_or(0.0);
+                // Block size: how many machines a single full belt
+                // (both lanes) can feed at this per-machine rate. Trunk
+                // count: one trunk per block, since each trunk sources
+                // one block. The rate-based formula
+                // `ceil(total_rate / belt_cap)` undercounts when
+                // `block_size`'s floor() leaves spare belt capacity per
+                // block (e.g. 6 machines × 4.5/s = 27/s on a 30/s belt
+                // → 3/s wasted per block).
+                let in_lane_cap = effective_in_lane_cap(max_belt_tier);
+                let belt_cap = in_lane_cap * 2.0;
+                let block_size = if item0_per_machine > 0.0 {
+                    ((belt_cap / item0_per_machine).floor() as usize).max(1)
+                } else {
+                    count
+                };
+                let k_trunks = count.div_ceil(block_size).max(1);
+                let in_belt1 = belt_entity_for_rate(belt_cap, max_belt_tier);
+                let in_belt2 = belt_entity_for_rate(item1_per_machine * count as f64 * 2.0, max_belt_tier);
+                crate::trace::emit(crate::trace::TraceEvent::RowLayoutSelected {
+                    recipe: spec.recipe.clone(),
+                    kind: "HorizontalStack".to_string(),
+                    k_trunks,
+                    block_size,
+                });
+                // Trunk-y ordering is REVERSED: lane 0 taps the trunk
+                // closest to iron-plate (y_cursor + k_trunks - 1) and
+                // dives at the leftmost dive column. Subsequent lanes
+                // are above. This minimises E-UG crossings — every dive
+                // only has to bridge iron-plate, since the trunks
+                // *below* the diving trunk have already dove west and
+                // the trunks *above* don't share rows with the dive's
+                // south-belt path.
+                horizontal_stack = Some(HorizontalStackInfo {
+                    input0_item: item0.to_string(),
+                    trunk_ys: (0..k_trunks as i32)
+                        .rev()
+                        .map(|k| y_cursor + k)
+                        .collect(),
+                });
+                let (ents, rh) = templates::dual_input_row_horizontal(
+                    &spec.recipe,
+                    &spec.entity,
+                    msz,
+                    count,
+                    y_cursor,
+                    bus_width,
+                    (item0, item1),
+                    output_item,
+                    (in_belt1, in_belt2),
+                    out_belt,
+                    k_trunks,
+                    block_size,
+                    output_east,
+                );
+                // Map each spec.solid_input (natural order) to its tap-off
+                // y position. High-demand (item0) sits on trunk 0 at y+0;
+                // low-demand (item1) sits on the iron-plate row at y+K.
+                // The lane planner currently allocates 1 lane per item, so
+                // only trunk 0 is fed; K-1 stacked trunks remain empty
+                // until the lane-planner work in `task #16` lands K-lane
+                // allocation for HorizontalStack rows.
+                let high_demand_item = item0.to_string();
+                let input_ys: Vec<i32> = solid_inputs
+                    .iter()
+                    .map(|f| {
+                        if f.item == high_demand_item {
+                            y_cursor
+                        } else {
+                            y_cursor + k_trunks as i32
+                        }
+                    })
+                    .collect();
+                let out_y = y_cursor + rh - 1;
+                (ents, rh, input_ys, out_y)
+            } else {
+                let item0 = solid_inputs.first().map(|f| f.item.as_str()).unwrap_or("");
+                let item1 = solid_inputs.get(1).map(|f| f.item.as_str()).unwrap_or("");
+                let in_belt1 = belt_entity_for_rate(
+                    solid_inputs.first().map(|f| f.rate * count as f64 * 2.0).unwrap_or(0.0),
+                    max_belt_tier,
+                );
+                let in_belt2 = belt_entity_for_rate(
+                    solid_inputs.get(1).map(|f| f.rate * count as f64 * 2.0).unwrap_or(0.0),
+                    max_belt_tier,
+                );
+                let (ents, rh) = templates::dual_input_row(
+                    &spec.recipe,
+                    &spec.entity,
+                    msz,
+                    count,
+                    y_cursor,
+                    bus_width,
+                    (item0, item1),
+                    output_item,
+                    (in_belt1, in_belt2),
+                    out_belt,
+                    lane_split,
+                    output_east,
+                );
+                let input_ys = vec![y_cursor, y_cursor + 1];
+                let out_y = y_cursor + rh - 1;
+                (ents, rh, input_ys, out_y)
+            }
         }
     };
 
@@ -722,6 +825,7 @@ pub(crate) fn build_one_row(
         output_east,
         output_belt_x_min,
         output_belt_x_max,
+        horizontal_stack,
     };
 
     (row_ents, span, row_width)
@@ -744,6 +848,7 @@ pub fn place_rows(
     max_belt_tier: Option<&str>,
     final_output_items: Option<&FxHashSet<String>>,
     extra_gap_after_row: Option<&FxHashMap<usize, i32>>,
+    row_layout: RowLayout,
 ) -> (Vec<PlacedEntity>, Vec<RowSpan>, i32, i32) {
     let mut entities: Vec<PlacedEntity> = Vec::new();
     let mut row_spans: Vec<RowSpan> = Vec::new();
@@ -802,8 +907,19 @@ pub fn place_rows(
             .iter()
             .any(|o| !o.is_fluid && final_items.contains(o.item.as_str()));
 
+        // HorizontalStack mode keeps every dual-input solid recipe in a
+        // single long row; vertical splitting would defeat the strategy.
+        // Other row kinds (single-input, fluid, triple-input) fall back
+        // to vertical splitting.
+        let force_single_row = matches!(row_layout, RowLayout::HorizontalStack)
+            && matches!(kind, RowKind::DualInput);
+
         // Split into evenly-sized chunks
-        let n_rows = ((total_count as f64) / (max_per_row as f64)).ceil() as usize;
+        let n_rows = if force_single_row {
+            1
+        } else {
+            ((total_count as f64) / (max_per_row as f64)).ceil() as usize
+        };
         if n_rows > 1 {
             crate::trace::emit(crate::trace::TraceEvent::RowSplit {
                 recipe: spec.recipe.clone(),
@@ -817,7 +933,7 @@ pub fn place_rows(
         for ri in 0..n_rows {
             let chunk = ((remaining as f64) / (n_rows - ri) as f64).ceil() as usize;
             let (row_ents, span, width) =
-                build_one_row(spec, chunk, bus_width, y_cursor, max_belt_tier, is_final);
+                build_one_row(spec, chunk, bus_width, y_cursor, max_belt_tier, is_final, row_layout);
             let row_idx = row_spans.len();
             max_width = max_width.max(width);
             let y_end = span.y_end;
@@ -851,6 +967,7 @@ pub fn place_rows_from_result(
     max_belt_tier: Option<&str>,
     final_output_items: Option<&FxHashSet<String>>,
     extra_gap_after_row: Option<&FxHashMap<usize, i32>>,
+    row_layout: RowLayout,
 ) -> (Vec<PlacedEntity>, Vec<RowSpan>, i32, i32) {
     place_rows(
         &result.machines,
@@ -860,6 +977,7 @@ pub fn place_rows_from_result(
         max_belt_tier,
         final_output_items,
         extra_gap_after_row,
+        row_layout,
     )
 }
 
@@ -1137,7 +1255,7 @@ mod tests {
     fn place_rows_single_recipe_no_split() {
         let machines = vec![iron_plate_spec()];
         let dep_order = vec!["iron-plate".to_string()];
-        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, None, None);
+        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, None, None, RowLayout::default());
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].machine_count, 1);
         assert_eq!(spans[0].spec.recipe, "iron-plate");
@@ -1147,7 +1265,7 @@ mod tests {
     fn place_rows_two_recipes_ordered() {
         let machines = vec![iron_gear_spec(), iron_plate_spec()];
         let dep_order = vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()];
-        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, None, None);
+        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, None, None, RowLayout::default());
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0].spec.recipe, "iron-plate");
         assert_eq!(spans[1].spec.recipe, "iron-gear-wheel");
@@ -1158,7 +1276,7 @@ mod tests {
         // Second recipe starts at y_end_of_first + 2 (gap)
         let machines = vec![iron_plate_spec(), iron_gear_spec()];
         let dep_order = vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()];
-        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, None, None);
+        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, None, None, RowLayout::default());
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[1].y_start, spans[0].y_end + 2);
     }
@@ -1167,7 +1285,7 @@ mod tests {
     fn place_rows_y_offset() {
         let machines = vec![iron_plate_spec()];
         let dep_order = vec!["iron-plate".to_string()];
-        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 5, None, None, None);
+        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 5, None, None, None, RowLayout::default());
         assert_eq!(spans[0].y_start, 5);
     }
 
@@ -1186,6 +1304,7 @@ mod tests {
             None,
             None,
             None,
+            RowLayout::default(),
         );
 
         // 4 distinct recipes → 4 rows (no splitting for these small counts)
@@ -1245,6 +1364,7 @@ mod tests {
             Some("transport-belt"),
             None,
             None,
+            RowLayout::default(),
         );
         // 20 machines, max_per_row=14 → ceil(20/14) = 2 rows
         assert_eq!(spans.len(), 2, "Expected 2 rows due to belt lane capacity");
@@ -1305,6 +1425,7 @@ mod tests {
             Some("transport-belt"),
             None,
             None,
+            RowLayout::default(),
         );
 
         let gear_rows: Vec<_> = spans
@@ -1324,7 +1445,7 @@ mod tests {
         let machines = vec![iron_plate_spec(), iron_gear_spec()];
         let dep_order = vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()];
         let (_, spans, _, total_height) =
-            place_rows(&machines, &dep_order, 5, 0, None, None, None);
+            place_rows(&machines, &dep_order, 5, 0, None, None, None, RowLayout::default());
 
         // Every span should have y_end > y_start
         for span in &spans {
@@ -1352,7 +1473,7 @@ mod tests {
         let dep_order = vec!["iron-plate".to_string()];
         let bus_width = 10;
         let (_, spans, max_width, _) =
-            place_rows(&machines, &dep_order, bus_width, 0, None, None, None);
+            place_rows(&machines, &dep_order, bus_width, 0, None, None, None, RowLayout::default());
 
         assert!(
             spans[0].row_width >= bus_width,
@@ -1377,8 +1498,9 @@ mod tests {
             None,
             None,
             Some(&extra_gaps),
+            RowLayout::default(),
         );
-        let (_, spans_no_gap, _, _) = place_rows(&machines, &dep_order, 0, 0, None, None, None);
+        let (_, spans_no_gap, _, _) = place_rows(&machines, &dep_order, 0, 0, None, None, None, RowLayout::default());
 
         // Second row should start 5 tiles later with gap
         assert_eq!(

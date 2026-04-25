@@ -9,12 +9,18 @@ export interface FormState {
   /** Layout strategy ("partitioned-per-consumer" | "partitioned-decomposed").
    * null = pooled (today's default). See `docs/rfp-modular-production.md`. */
   strategy: string | null;
+  /** Row layout ("horizontal-stack"). null = vertical-split (today's default).
+   * See `docs/rfp-horizontal-trunks.md`. */
+  rowLayout: string | null;
   /** User-added inputs beyond the DEFAULT_INPUTS list. */
   customInputs: string[];
 }
 
 /** Strategy values accepted on the URL and in `FormState.strategy`. */
 export const KNOWN_STRATEGIES = ["partitioned-per-consumer", "partitioned-decomposed"] as const;
+
+/** Row-layout values accepted on the URL and in `FormState.rowLayout`. */
+export const KNOWN_ROW_LAYOUTS = ["horizontal-stack"] as const;
 
 /** Full list of input pills rendered in the sidebar. */
 export const DEFAULT_INPUTS: string[] = [
@@ -56,10 +62,12 @@ export function readUrlState(): FormState {
   const belt = params.get("belt");
   const rawStrategy = params.get("strategy");
   const strategy = rawStrategy && (KNOWN_STRATEGIES as readonly string[]).includes(rawStrategy) ? rawStrategy : null;
+  const rawRowLayout = params.get("row_layout");
+  const rowLayout = rawRowLayout && (KNOWN_ROW_LAYOUTS as readonly string[]).includes(rawRowLayout) ? rawRowLayout : null;
   const ciParam = params.get("ci");
   const customInputs = ciParam ? ciParam.split(",").filter((s) => s.length > 0) : [];
 
-  return { item, rate, machine, inputs, belt, strategy, customInputs };
+  return { item, rate, machine, inputs, belt, strategy, rowLayout, customInputs };
 }
 
 export function writeUrlState(state: Omit<FormState, "machine"> & { machine: string }): void {
@@ -71,6 +79,7 @@ export function writeUrlState(state: Omit<FormState, "machine"> & { machine: str
     state.inputs.every((v, i) => v === DEFAULT_CHECKED_INPUTS[i]) &&
     !state.belt &&
     !state.strategy &&
+    !state.rowLayout &&
     state.customInputs.length === 0;
 
   if (isDefault) {
@@ -85,6 +94,7 @@ export function writeUrlState(state: Omit<FormState, "machine"> & { machine: str
   params.set("in", state.inputs.join(","));
   if (state.belt) params.set("belt", state.belt);
   if (state.strategy) params.set("strategy", state.strategy);
+  if (state.rowLayout) params.set("row_layout", state.rowLayout);
   if (state.customInputs.length > 0) params.set("ci", state.customInputs.join(","));
   history.replaceState(null, "", "?" + params.toString());
 }

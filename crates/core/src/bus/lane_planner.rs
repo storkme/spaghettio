@@ -79,6 +79,11 @@ pub struct BusLane {
     /// `(y_start, y_end)` inclusive — the full vertical range occupied by a
     /// balancer family block. Trunk segments inside this range are skipped.
     pub family_balancer_range: Option<(i32, i32)>,
+    /// `Some(idx)` when this lane is the `idx`-th of K stacked trunks
+    /// for a `RowLayout::HorizontalStack` consumer. The lane taps off
+    /// at the consumer row's `horizontal_stack.trunk_ys[idx]`. `None`
+    /// for lanes not feeding HS consumers.
+    pub hs_trunk_idx: Option<usize>,
 }
 
 impl BusLane {
@@ -106,6 +111,7 @@ impl BusLane {
             fluid_port_positions: Vec::new(),
             fluid_output_port_positions: Vec::new(),
             family_balancer_range: None,
+            hs_trunk_idx: None,
         }
     }
 
@@ -415,6 +421,7 @@ impl Default for BusLane {
             fluid_port_positions: Vec::new(),
             fluid_output_port_positions: Vec::new(),
             family_balancer_range: None,
+            hs_trunk_idx: None,
         }
     }
 }
@@ -486,15 +493,44 @@ fn split_overflowing_lanes(
         let n_producers = all_producer_rows.len();
         let is_collector = lane.consumer_rows.is_empty();
 
+        // HorizontalStack consumer detection. For each consumer row,
+        // compute how many trunks this item needs into that row:
+        //   * HS row where this item is the row's input₀ → K trunks
+        //     (one per stacked input₀ trunk in the HS layout).
+        //   * Anything else → 1 trunk.
+        // Build a flat list of `(consumer_row, Option<hs_trunk_idx>)`
+        // entries — one entry per required trunk slot — so each split
+        // lane can be assigned a specific consumer + trunk index.
+        let consumer_trunk_assignments: Vec<(usize, Option<usize>)> = lane
+            .consumer_rows
+            .iter()
+            .flat_map(|&ri| {
+                let cr = &row_spans[ri];
+                let hs_k = cr
+                    .horizontal_stack
+                    .as_ref()
+                    .filter(|hs| hs.input0_item == lane.item)
+                    .map(|hs| hs.trunk_ys.len());
+                match hs_k {
+                    Some(k) => (0..k).map(|t| (ri, Some(t))).collect::<Vec<_>>(),
+                    None => vec![(ri, None)],
+                }
+            })
+            .collect();
+        let any_hs = consumer_trunk_assignments
+            .iter()
+            .any(|(_, t)| t.is_some());
+
         // Consumer-side trunk count: each consumer row needs exactly one
         // trunk to feed it (the existing `route_intermediate_lane` only
         // honors `tap_off_ys[0]`, so multiple consumers in one trunk is
         // a non-starter). For collector lanes (no consumers) keep the
-        // capacity-derived count.
+        // capacity-derived count. HS rows want K trunks for their
+        // input₀, expanding the trunk count beyond `consumer_rows.len()`.
         let consumer_trunk_count = if is_collector {
             n_splits
         } else {
-            lane.consumer_rows.len()
+            consumer_trunk_assignments.len()
         };
 
         // Clamp the trunk count to the consumer-side bottleneck. Without
@@ -508,7 +544,10 @@ fn split_overflowing_lanes(
         let clamp_to_consumers =
             !is_external_input && !is_collector && n_splits > consumer_trunk_count;
 
-        let effective_n_splits = if clamp_to_consumers {
+        let effective_n_splits = if any_hs {
+            // HS consumer(s) want a fixed total trunk count.
+            consumer_trunk_count
+        } else if clamp_to_consumers {
             // Sanity: with M trunks each capped at full-belt rate, the
             // total rate must fit. Today's corpus (up to processing-unit
             // @ 2/s express belt) stays inside this envelope — panic
@@ -538,10 +577,25 @@ fn split_overflowing_lanes(
             n_splits: effective_n_splits,
         });
 
-        // Distribute consumer rows round-robin across the effective trunks.
+        // Distribute consumer rows across the effective trunks. With HS
+        // consumers, each split serves exactly one (consumer, trunk_idx)
+        // pair from `consumer_trunk_assignments`. Otherwise round-robin
+        // over distinct consumer rows.
         let mut consumers_per_split: Vec<Vec<usize>> = vec![Vec::new(); effective_n_splits];
-        for (i, &ri) in lane.consumer_rows.iter().enumerate() {
-            consumers_per_split[i % effective_n_splits].push(ri);
+        let mut hs_idx_per_split: Vec<Option<usize>> = vec![None; effective_n_splits];
+        if any_hs {
+            for (i, &(ri, hs_idx)) in consumer_trunk_assignments
+                .iter()
+                .enumerate()
+                .take(effective_n_splits)
+            {
+                consumers_per_split[i].push(ri);
+                hs_idx_per_split[i] = hs_idx;
+            }
+        } else {
+            for (i, &ri) in lane.consumer_rows.iter().enumerate() {
+                consumers_per_split[i % effective_n_splits].push(ri);
+            }
         }
 
         // Distribute producer rows by rate. With a balancer family every
@@ -625,10 +679,13 @@ fn split_overflowing_lanes(
         // Create split lanes
         for si in 0..effective_n_splits {
             let consumers = consumers_per_split[si].clone();
-            if consumers.is_empty() && !is_collector && si > 0 {
+            // HS lanes are always retained — every required trunk slot
+            // needs its own BusLane.
+            if !any_hs && consumers.is_empty() && !is_collector && si > 0 {
                 continue;  // skip empty splits
             }
             let split_rate = lane.rate / effective_n_splits as f64;
+            let hs_trunk_idx = hs_idx_per_split[si];
 
             if let Some(fid) = family_id {
                 result.push(BusLane {
@@ -641,6 +698,7 @@ fn split_overflowing_lanes(
                     rate: split_rate,
                     is_fluid: false,
                     family_id: Some(fid),
+                    hs_trunk_idx,
                     ..Default::default()
                 });
                 continue;
@@ -668,6 +726,7 @@ fn split_overflowing_lanes(
                 rate: split_rate,
                 is_fluid: false,
                 extra_producer_rows: extra_prods,
+                hs_trunk_idx,
                 ..Default::default()
             });
         }
@@ -679,6 +738,18 @@ fn split_overflowing_lanes(
 /// Find y-coordinates where this lane taps off into consumer rows.
 fn find_tap_off_ys(lane: &BusLane, row_spans: &[RowSpan]) -> Vec<i32> {
     let mut tap_ys: Vec<i32> = Vec::new();
+
+    // HS input₀ lanes tap off at the consumer row's
+    // `horizontal_stack.trunk_ys[trunk_idx]`. The lane's single consumer
+    // is the HS row by construction (see `split_overflowing_lanes`).
+    if let (Some(idx), Some(&ri)) = (lane.hs_trunk_idx, lane.consumer_rows.first()) {
+        if let Some(hs) = row_spans[ri].horizontal_stack.as_ref() {
+            if let Some(&y) = hs.trunk_ys.get(idx) {
+                tap_ys.push(y);
+                return tap_ys;
+            }
+        }
+    }
 
     for &ri in &lane.consumer_rows {
         let rs = &row_spans[ri];
@@ -748,6 +819,7 @@ mod tests {
             output_east: true,
             output_belt_x_min: 0,
             output_belt_x_max: 9,
+            horizontal_stack: None,
         }
     }
 
@@ -1013,6 +1085,7 @@ mod tests {
                 output_east: true,
                 output_belt_x_min: 0,
                 output_belt_x_max: 9,
+                horizontal_stack: None,
             }
         }).collect();
 

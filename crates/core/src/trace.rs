@@ -93,6 +93,19 @@ pub enum TraceEvent {
         split_into: usize,
         reason: String,
     },
+    /// Records which row-layout variant the placer picked for a given
+    /// recipe row. Fires once per row when the placer decides between
+    /// `VerticalSplit` (today's default) and `HorizontalStack`. See
+    /// `docs/rfp-horizontal-trunks.md` §Verification.
+    RowLayoutSelected {
+        recipe: String,
+        kind: String,
+        /// Number of stacked input₀ trunks for `HorizontalStack`; `1` for
+        /// `VerticalSplit` (one input belt per input).
+        k_trunks: usize,
+        /// Machines per sub-row block. `0` for `VerticalSplit`.
+        block_size: usize,
+    },
 
     // Phase 2: Lane Planning
     LanesPlanned {
