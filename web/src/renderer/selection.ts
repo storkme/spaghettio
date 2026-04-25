@@ -1,7 +1,17 @@
 import { Container, Graphics } from "pixi.js";
 import type { Viewport } from "pixi-viewport";
 import type { PlacedEntity, LayoutResult } from "../engine";
-import { TILE_PX } from "./entities";
+import { TILE_PX, MACHINE_SIZES, SPLITTER_ENTITIES } from "./entities";
+
+/** Tile footprint [w, h] for an entity. Mirrors the rendered bounding
+ *  box: machines from MACHINE_SIZES, splitters 2×1 / 1×2 by direction,
+ *  everything else (belts, pipes, inserters, small poles, ugs) 1×1. */
+function entityFootprint(e: PlacedEntity): [number, number] {
+  if (SPLITTER_ENTITIES.has(e.name)) {
+    return e.direction === "East" || e.direction === "West" ? [1, 2] : [2, 1];
+  }
+  return MACHINE_SIZES[e.name] ?? [1, 1];
+}
 
 const SEL_COLOR = 0x00e0a0;
 
@@ -66,9 +76,10 @@ export function createSelectionController(
     if (entities.length === 0) return;
     borderG.setStrokeStyle({ width: 1.5, color: SEL_COLOR, alpha: 0.9 });
     for (const e of entities) {
+      const [tw, th] = entityFootprint(e);
       const px = (e.x ?? 0) * TILE_PX + 1;
       const py = (e.y ?? 0) * TILE_PX + 1;
-      borderG.rect(px, py, TILE_PX - 2, TILE_PX - 2).stroke();
+      borderG.rect(px, py, tw * TILE_PX - 2, th * TILE_PX - 2).stroke();
     }
   }
 
