@@ -21,30 +21,44 @@ const MIN_DURATION_MS_FOR_SCRUB = 200;
 
 /** Ordered list of every milestone the streaming renderer can produce.
  *  We render chips for all of them in live mode; if a layout doesn't
- *  produce one (e.g. no junctions), that chip stays un-reached. */
+ *  produce one (e.g. no junctions), that chip stays un-reached.
+ *
+ *  `optimizing` is special — it's not driven by the trace stream but by
+ *  the post-stream auto-optimize pass, so its chip is hidden until
+ *  `markOptimizeState()` is called. */
 const MILESTONE_ORDER: MilestoneId[] = [
   "machines",
   "ghost_routes",
   "committed_routes",
   "junctions",
   "poles",
+  "optimizing",
 ];
 
 const MILESTONE_LABELS: Record<MilestoneId, string> = {
   machines: "Machines",
-  ghost_routes: "Ghost Routes",
-  committed_routes: "Committed Routes",
-  junctions: "Junctions",
-  poles: "Poles",
+  ghost_routes: "Belt routes",
+  committed_routes: "Belts placed",
+  junctions: "Crossings",
+  poles: "Power poles",
+  optimizing: "Optimizing",
 };
 
 export interface TimelineScrubberHandle {
   /** Live mode: mark this milestone as reached. Advances progress. */
-  noteMilestone(id: MilestoneId): void;
+  /** Live mode: mark this milestone as reached. Advances the progress
+   *  fill proportionally to `currentRange` (virtual-ms time-weighted),
+   *  not the milestone count. */
+  noteMilestone(milestone: Milestone, currentRange: { firstMs: number; lastMs: number }): void;
   /** Flip to scrub mode. `range` is the [firstMs, lastMs] virtual window;
    *  `milestones` is the list of milestones with their absolute virtual-ms
    *  timestamps. Milestones get positioned proportionally along the bar. */
   arm(range: { firstMs: number; lastMs: number }, milestones: Milestone[]): void;
+  /** Show / update the post-stream "Optimizing" chip:
+   *    - "active": chip pulses (auto-optimize in progress)
+   *    - "done":   chip becomes reached (optimize finished)
+   *    - "idle":   chip hidden (no optimize ran or layout reset) */
+  markOptimizeState(state: "active" | "done" | "idle"): void;
   /** Go back to empty-live state, hide the bar. */
   reset(): void;
   destroy(): void;
@@ -86,6 +100,11 @@ export function createTimelineScrubber(
     chip.className = "ts-chip";
     chip.dataset["milestone"] = id;
     chip.textContent = MILESTONE_LABELS[id];
+    // Optimizing chip is hidden until the auto-optimize pass actually
+    // runs (signalled by `markOptimizeState`). Without this, live mode
+    // would show 6 evenly-spaced chips even when the layout has no SAT
+    // zones and optimize will be skipped.
+    if (id === "optimizing") chip.style.display = "none";
     chipsRow.appendChild(chip);
     chips.set(id, chip);
   }
@@ -109,14 +128,20 @@ export function createTimelineScrubber(
     activeChipId = id;
   }
 
-  function noteMilestone(id: MilestoneId): void {
+  function noteMilestone(milestone: Milestone, currentRange: { firstMs: number; lastMs: number }): void {
     if (armed) return; // ignore during scrub mode — bar is user-controlled
+    const id = milestone.id;
     reached.add(id);
     chips.get(id)?.classList.add("ts-chip--reached");
     setActiveChip(id);
-    // Progress fill: fraction of MILESTONE_ORDER reached.
-    const idx = MILESTONE_ORDER.indexOf(id);
-    setFillToFraction((idx + 1) / MILESTONE_ORDER.length);
+    // Progress fill: where this milestone sits in the current virtual-ms
+    // range. Long phases (e.g. junction solving) get more of the bar than
+    // short ones (e.g. row placement), instead of every chip getting an
+    // even 1/Nth slice. `lastMs` keeps growing as new events arrive, so
+    // earlier milestones' fractions settle as the stream progresses.
+    const span = Math.max(1, currentRange.lastMs - currentRange.firstMs);
+    const frac = (milestone.virtualMs - currentRange.firstMs) / span;
+    setFillToFraction(Math.min(1, Math.max(0, frac)));
     root.classList.add("ts-visible");
   }
 
@@ -266,7 +291,11 @@ export function createTimelineScrubber(
       .map((id) => {
         const el = chips.get(id);
         if (!el || el.style.display === "none") return null;
-        const originalFrac = milestoneByFrac.find((m) => m.id === id)?.frac ?? 0;
+        // `optimizing` isn't in milestoneByFrac (no virtual-ms timestamp);
+        // it always sits at the right edge of the bar.
+        const originalFrac = id === "optimizing"
+          ? 1.0
+          : milestoneByFrac.find((m) => m.id === id)?.frac ?? 0;
         return { el, originalFrac };
       })
       .filter((x): x is { el: HTMLDivElement; originalFrac: number } => x !== null);
@@ -300,12 +329,39 @@ export function createTimelineScrubber(
     // Restore chips to even-spaced live-mode layout.
     chipsRow.style.justifyContent = "space-between";
     chipsRow.style.position = "";
-    for (const chip of chips.values()) {
+    for (const [id, chip] of chips) {
       chip.style.position = "";
       chip.style.transform = "";
       chip.style.left = "";
-      chip.style.display = "";
-      chip.classList.remove("ts-chip--reached", "ts-chip--active");
+      // Optimizing stays hidden until auto-optimize actually runs.
+      chip.style.display = id === "optimizing" ? "none" : "";
+      chip.classList.remove("ts-chip--reached", "ts-chip--active", "ts-chip--in-progress");
+    }
+  }
+
+  function markOptimizeState(state: "active" | "done" | "idle"): void {
+    const chip = chips.get("optimizing");
+    if (!chip) return;
+    chip.classList.remove("ts-chip--in-progress", "ts-chip--reached");
+    if (state === "idle") {
+      chip.style.display = "none";
+      return;
+    }
+    chip.style.display = "";
+    // Always show the bar — covers the rare case where the stream was
+    // too short to arm and reset() hid everything, but optimize still
+    // runs and we want the user to see *something*.
+    root.classList.add("ts-visible");
+    if (armed) {
+      chip.style.position = "absolute";
+      chip.style.transform = "translateX(-50%)";
+      chip.style.left = "100%";
+      requestAnimationFrame(resolveChipCollisions);
+    }
+    if (state === "active") {
+      chip.classList.add("ts-chip--in-progress");
+    } else if (state === "done") {
+      chip.classList.add("ts-chip--reached");
     }
   }
 
@@ -316,5 +372,5 @@ export function createTimelineScrubber(
     root.remove();
   }
 
-  return { noteMilestone, arm, reset, destroy };
+  return { noteMilestone, arm, markOptimizeState, reset, destroy };
 }

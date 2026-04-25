@@ -163,11 +163,11 @@ export type MilestoneId =
   | "ghost_routes"
   | "committed_routes"
   | "junctions"
-  | "poles";
+  | "poles"
+  | "optimizing";
 
 export interface Milestone {
   id: MilestoneId;
-  label: string;
   /** Absolute virtual ms when this milestone's trigger event first arrived. */
   virtualMs: number;
 }
@@ -195,14 +195,6 @@ export interface StreamingRendererHandle {
   /** Milestones recorded so far, sorted by virtualMs. */
   getMilestones(): Milestone[];
 }
-
-const MILESTONE_LABELS: Record<MilestoneId, string> = {
-  machines: "Machines",
-  ghost_routes: "Ghost Routes",
-  committed_routes: "Committed Routes",
-  junctions: "Junctions",
-  poles: "Poles",
-};
 
 // ---------------------------------------------------------------------------
 // Main factory
@@ -274,7 +266,7 @@ export function createStreamingRenderer(
     // the chip at the first one is misleading.
     const existing = milestones.get(id);
     const isNew = !existing;
-    const m: Milestone = { id, label: MILESTONE_LABELS[id], virtualMs: at };
+    const m: Milestone = { id, virtualMs: at };
     milestones.set(id, m);
     // Only fire the live-mode callback once, the first time we see
     // this milestone — so the scrubber's progress bar advances one
