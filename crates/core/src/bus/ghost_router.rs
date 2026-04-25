@@ -415,13 +415,43 @@ pub fn route_bus_ghost(
     // pipe@y=0, UG-in@y=1, UG-out@y=10, pipe@y=11 fits for distance 10).
     const FLUID_TRUNK_SURFACE_SPACING: i32 = FLUID_UG_MAX_DISTANCE + 1;
 
+    // Per-lane tap_ys (consumer + producer port rows). Used both by each
+    // lane's own anchor list AND for cross-lane "foreign tap" avoidance:
+    // a breathing anchor for lane A at y=K becomes a surface pipe at
+    // (A.x, K), which surface-merges with adjacent lane B's branch tile
+    // at (A.x ± 1, K) if B has a tap there. Sliding A's breathing anchor
+    // off K eliminates the conflict.
+    let mut lane_tap_ys: Vec<FxHashSet<i32>> = Vec::with_capacity(lanes.len());
     for lane in lanes {
+        let mut taps = FxHashSet::default();
+        if lane.is_fluid {
+            for &(_ri, _px, py) in &lane.fluid_port_positions {
+                taps.insert(py);
+            }
+            for &(_ri, _px, py) in &lane.fluid_output_port_positions {
+                taps.insert(py);
+            }
+        }
+        lane_tap_ys.push(taps);
+    }
+
+    for (lane_idx, lane) in lanes.iter().enumerate() {
         if !lane.is_fluid {
             continue;
         }
         let lane_start = entities.len();
         let x = lane.x;
         let trunk_seg_id = Some(format!("trunk:{}", lane.item));
+
+        // Foreign taps: union of all OTHER fluid lanes' tap_ys. We avoid
+        // landing breathing anchors on these rows.
+        let mut foreign_tap_ys: FxHashSet<i32> = FxHashSet::default();
+        for (other_idx, other_taps) in lane_tap_ys.iter().enumerate() {
+            if other_idx == lane_idx {
+                continue;
+            }
+            foreign_tap_ys.extend(other_taps.iter().copied());
+        }
 
         let mut end_y = lane.source_y;
         for &(_ri, _px, py) in &lane.fluid_port_positions {
@@ -460,16 +490,46 @@ pub fn route_bus_ghost(
         anchors.sort_unstable();
         anchors.dedup();
 
+        // A breathing surface anchor at our column X, y=K is unsafe when:
+        //   - K itself is a foreign tap row → our surface pipe shares a
+        //     tile with the foreign branch (collision).
+        //   - K+1 or K-1 is a foreign tap row → our surface pipe connects
+        //     vertically to the foreign branch pipe in the row above/below
+        //     and surface-merges (cross-fluid contamination).
+        // Build the "unsafe" set once.
+        let mut breathing_unsafe: FxHashSet<i32> = FxHashSet::default();
+        for &ft in &foreign_tap_ys {
+            breathing_unsafe.insert(ft);
+            breathing_unsafe.insert(ft + 1);
+            breathing_unsafe.insert(ft - 1);
+        }
+
         // Insert breathing anchors so no gap exceeds the max-reach-plus-one
         // spacing (UG pair plus two surface-pipe ends fits `max_distance + 1`
-        // tiles of trunk).
+        // tiles of trunk). Slide each candidate backward to escape the
+        // breathing_unsafe set (forward would exceed the UG max distance
+        // from the previous anchor).
         let mut refined: Vec<i32> = Vec::new();
         for &sp in &anchors {
             if let Some(&prev) = refined.last() {
                 let mut cur = prev;
                 while sp - cur > FLUID_TRUNK_SURFACE_SPACING {
-                    cur += FLUID_TRUNK_SURFACE_SPACING;
-                    refined.push(cur);
+                    let default = cur + FLUID_TRUNK_SURFACE_SPACING;
+                    let mut chosen = default;
+                    if breathing_unsafe.contains(&default) {
+                        for delta in 1..FLUID_TRUNK_SURFACE_SPACING {
+                            let cand = default - delta;
+                            if cand <= cur {
+                                break;
+                            }
+                            if !breathing_unsafe.contains(&cand) {
+                                chosen = cand;
+                                break;
+                            }
+                        }
+                    }
+                    refined.push(chosen);
+                    cur = chosen;
                 }
             }
             refined.push(sp);
@@ -482,12 +542,19 @@ pub fn route_bus_ghost(
                 || (hard.contains(&tile) && !reservations.contains(&tile))
         };
 
-        // The entry tile (start_y) gets a UG-in when the gap to the next
-        // anchor is ≥ 2, so an adjacent fluid lane's surface pipes don't
-        // cross-merge with our trunk at the entry row. When the first tap
-        // is directly adjacent (gap ≤ 1), we fall back to a surface pipe
-        // (UG pair can't fit, per user's short-trunk entry preference).
-        let entry_is_ug = refined.len() >= 2 && refined[1] - refined[0] >= 2;
+        // The entry tile (refined[0]) gets a UG-in when the gap to the next
+        // anchor is ≥ 2 and the entry is not itself a tap row. The UG-in
+        // protects against adjacent fluid lanes' surface pipes cross-merging
+        // with our trunk at the entry row. But when refined[0] is a tap_y
+        // (a producer/consumer port row that needs a horizontal branch
+        // attached on its east side), we must emit a surface pipe there —
+        // a perpendicular UG-S input has no surface side facing east, so the
+        // branch would not connect (per F5a). The gap-fill logic then emits
+        // the UG-S input one tile south automatically.
+        let tap_set: FxHashSet<i32> = tap_ys.iter().copied().collect();
+        let entry_is_ug = refined.len() >= 2
+            && refined[1] - refined[0] >= 2
+            && !tap_set.contains(&refined[0]);
 
         for (idx, &sp) in refined.iter().enumerate() {
             if is_blocked(sp, &existing_belts, &hard) {
@@ -544,6 +611,16 @@ pub fn route_bus_ghost(
                         });
                         existing_belts.insert((x, ug_out_y));
                         hard.insert((x, ug_out_y));
+                    } else {
+                        crate::trace::emit(crate::trace::TraceEvent::FluidTrunkBreak {
+                            item: lane.item.clone(),
+                            trunk_x: x,
+                            y_start: y0,
+                            y_end: y1,
+                            reason: format!(
+                                "gap=2 entry UG-out tile ({x},{ug_out_y}) blocked"
+                            ),
+                        });
                     }
                 } else {
                     // Surface pipe middle.
@@ -559,71 +636,176 @@ pub fn route_bus_ghost(
                         });
                         existing_belts.insert((x, mid));
                         hard.insert((x, mid));
+                    } else {
+                        crate::trace::emit(crate::trace::TraceEvent::FluidTrunkBreak {
+                            item: lane.item.clone(),
+                            trunk_x: x,
+                            y_start: y0,
+                            y_end: y1,
+                            reason: format!(
+                                "gap=2 surface tile ({x},{mid}) blocked"
+                            ),
+                        });
                     }
                 }
                 continue;
             }
-            // gap ≥ 3. UG-in/UG-out pair inside the gap. If the first anchor
-            // is a UG-in entry (y0 == start_y), its partner UG-out lives at
-            // `first_surface - 1` so fluid exits adjacent to the next tap.
-            let ug_in_y = if first_pair && entry_is_ug { y0 } else { y0 + 1 };
-            let ug_out_y = y1 - 1;
-            if first_pair && entry_is_ug {
-                // UG-in already emitted at y0; just emit UG-out.
-                if !is_blocked(ug_out_y, &existing_belts, &hard) {
-                    entities.push(PlacedEntity {
-                        name: "pipe-to-ground".to_string(),
-                        x,
-                        y: ug_out_y,
-                        direction: EntityDirection::North,
-                        io_type: Some("output".to_string()),
-                        carries: Some(lane.item.clone()),
-                        segment_id: trunk_seg_id.clone(),
-                        ..Default::default()
-                    });
-                    existing_belts.insert((x, ug_out_y));
-                    hard.insert((x, ug_out_y));
+
+            // gap ≥ 3. UG-in/UG-out pair inside the gap. The default positions
+            // are y0+1 (just below the upper anchor) and y1-1 (just above the
+            // lower anchor). When those tiles are blocked, slide inward — the
+            // pair just needs *some* unblocked y in (y0, y1) for each end and
+            // distance ≤ FLUID_UG_MAX_DISTANCE between them. If no valid pair
+            // is found, emit a FluidTrunkBreak trace event so the
+            // `fluid-network` validator's downstream error is paired with a
+            // root-cause signal.
+            // Picking a UG endpoint y: prefer ys that are unblocked AND
+            // both the endpoint tile and its mouth tile are not in a
+            // foreign tap row. The mouth tile is at y-1 for UG-S input
+            // (mouth NORTH per F5) and y+1 for UG-N output (mouth SOUTH).
+            // If no such y exists in the candidate range, fall back to
+            // the first unblocked y — the validator will surface any
+            // resulting cross-fluid merge.
+            let pick_endpoint_y = |
+                range: &[i32],
+                mouth_offset: i32,
+                existing_belts: &FxHashSet<(i32, i32)>,
+                hard: &FxHashSet<(i32, i32)>,
+            | -> Option<i32> {
+                let mut fallback: Option<i32> = None;
+                for &cand in range {
+                    if is_blocked(cand, existing_belts, hard) {
+                        continue;
+                    }
+                    let endpoint_clear = !foreign_tap_ys.contains(&cand);
+                    let mouth_clear = !foreign_tap_ys.contains(&(cand + mouth_offset));
+                    if endpoint_clear && mouth_clear {
+                        return Some(cand);
+                    }
+                    if fallback.is_none() {
+                        fallback = Some(cand);
+                    }
                 }
-            } else if !is_blocked(ug_in_y, &existing_belts, &hard)
-                && !is_blocked(ug_out_y, &existing_belts, &hard)
-            {
-                entities.push(PlacedEntity {
-                    name: "pipe-to-ground".to_string(),
-                    x,
-                    y: ug_in_y,
-                    direction: EntityDirection::South,
-                    io_type: Some("input".to_string()),
-                    carries: Some(lane.item.clone()),
-                    segment_id: trunk_seg_id.clone(),
-                    ..Default::default()
-                });
-                existing_belts.insert((x, ug_in_y));
-                hard.insert((x, ug_in_y));
-                entities.push(PlacedEntity {
-                    name: "pipe-to-ground".to_string(),
-                    x,
-                    y: ug_out_y,
-                    direction: EntityDirection::North,
-                    io_type: Some("output".to_string()),
-                    carries: Some(lane.item.clone()),
-                    segment_id: trunk_seg_id.clone(),
-                    ..Default::default()
-                });
-                existing_belts.insert((x, ug_out_y));
-                hard.insert((x, ug_out_y));
+                fallback
+            };
+
+            if first_pair && entry_is_ug {
+                // UG-in already emitted at y0; slide UG-out from y1-1 upward
+                // until unblocked or distance exhausted. Mouth offset = +1
+                // because UG-N output's mouth is on the SOUTH side.
+                let candidates: Vec<i32> = ((y0 + 1)..=(y1 - 1))
+                    .rev()
+                    .filter(|c| c - y0 - 1 <= FLUID_UG_MAX_DISTANCE)
+                    .collect();
+                let ug_out_y = pick_endpoint_y(&candidates, 1, &existing_belts, &hard);
+                match ug_out_y {
+                    Some(out_y) => {
+                        entities.push(PlacedEntity {
+                            name: "pipe-to-ground".to_string(),
+                            x,
+                            y: out_y,
+                            direction: EntityDirection::North,
+                            io_type: Some("output".to_string()),
+                            carries: Some(lane.item.clone()),
+                            segment_id: trunk_seg_id.clone(),
+                            ..Default::default()
+                        });
+                        existing_belts.insert((x, out_y));
+                        hard.insert((x, out_y));
+                    }
+                    None => {
+                        crate::trace::emit(crate::trace::TraceEvent::FluidTrunkBreak {
+                            item: lane.item.clone(),
+                            trunk_x: x,
+                            y_start: y0,
+                            y_end: y1,
+                            reason: "entry UG-out tile blocked across the entire gap"
+                                .to_string(),
+                        });
+                    }
+                }
+            } else {
+                // UG-S input: mouth offset = -1 (mouth NORTH per F5).
+                // UG-N output: mouth offset = +1 (mouth SOUTH per F5).
+                let in_candidates: Vec<i32> = ((y0 + 1)..=(y1 - 1)).collect();
+                let ug_in_y = pick_endpoint_y(&in_candidates, -1, &existing_belts, &hard);
+                let ug_out_y = if let Some(in_y) = ug_in_y {
+                    let out_candidates: Vec<i32> = ((in_y + 1)..=(y1 - 1))
+                        .rev()
+                        .filter(|c| c - in_y - 1 <= FLUID_UG_MAX_DISTANCE)
+                        .collect();
+                    pick_endpoint_y(&out_candidates, 1, &existing_belts, &hard)
+                } else {
+                    None
+                };
+                match (ug_in_y, ug_out_y) {
+                    (Some(in_y), Some(out_y)) => {
+                        entities.push(PlacedEntity {
+                            name: "pipe-to-ground".to_string(),
+                            x,
+                            y: in_y,
+                            direction: EntityDirection::South,
+                            io_type: Some("input".to_string()),
+                            carries: Some(lane.item.clone()),
+                            segment_id: trunk_seg_id.clone(),
+                            ..Default::default()
+                        });
+                        existing_belts.insert((x, in_y));
+                        hard.insert((x, in_y));
+                        entities.push(PlacedEntity {
+                            name: "pipe-to-ground".to_string(),
+                            x,
+                            y: out_y,
+                            direction: EntityDirection::North,
+                            io_type: Some("output".to_string()),
+                            carries: Some(lane.item.clone()),
+                            segment_id: trunk_seg_id.clone(),
+                            ..Default::default()
+                        });
+                        existing_belts.insert((x, out_y));
+                        hard.insert((x, out_y));
+                    }
+                    _ => {
+                        crate::trace::emit(crate::trace::TraceEvent::FluidTrunkBreak {
+                            item: lane.item.clone(),
+                            trunk_x: x,
+                            y_start: y0,
+                            y_end: y1,
+                            reason: "no unblocked UG-in/UG-out positions within max reach"
+                                .to_string(),
+                        });
+                    }
+                }
             }
         }
+    }
 
-        // Horizontal branches: one per (row, port_y) pair. Multiple machines
-        // in the same row share the same port_y; we stamp to the leftmost px
-        // and let the row template's own pipe line propagate east.
-        //
-        // If the template placed a UG direction=West carrying this fluid at
-        // (min_px - 1, py), that's the multi-fluid stacked-T left flank ready
-        // to be a UG partner. Emit a single east-facing UG at (x+1, py) and
-        // leave the intermediate tiles empty — the tunnel carries fluid across
-        // without surface pipes that could cross-merge with foreign trunks on
-        // adjacent rows. Otherwise fall back to continuous surface pipes.
+    // Step 3.7: Horizontal branches per fluid lane.
+    //
+    // Emitted in a SECOND pass over fluid lanes so every lane's trunk
+    // endpoints are already in `existing_belts` by the time any branch
+    // chooses tiles. Without this two-pass split, an early lane's branch
+    // could land on a tile a later lane's trunk endpoint will need —
+    // forcing the later trunk's UG to slide and the slid UG's mouth to
+    // surface-merge with the early branch (cross-fluid contamination).
+    //
+    // For each (row, port_y) pair, multiple machines share `port_y`; we
+    // stamp to the leftmost px and let the row template's own pipe line
+    // propagate east.
+    //
+    // If the template placed a UG direction=West carrying this fluid at
+    // (min_px - 1, py), that's the multi-fluid stacked-T left flank ready
+    // to be a UG partner. Emit a single east-facing UG at (x+1, py) and
+    // leave the intermediate tiles empty — the tunnel carries fluid across
+    // without surface pipes that could cross-merge with foreign trunks on
+    // adjacent rows. Otherwise fall back to continuous surface pipes.
+    for lane in lanes {
+        if !lane.is_fluid {
+            continue;
+        }
+        let x = lane.x;
+        let trunk_seg_id = Some(format!("trunk:{}", lane.item));
+
         let mut branch_targets: Vec<(i32, i32)> = Vec::new();
         for &(_ri, px, py) in &lane.fluid_port_positions {
             branch_targets.push((px, py));
@@ -646,11 +828,22 @@ pub fn route_bus_ghost(
                     && e.carries.as_deref() == Some(lane.item.as_str())
             });
 
+            // A branch tile is blocked iff it holds an actual emitted entity
+            // OR it's a non-fluid hard obstacle (machine, pole, splitter
+            // stamp). Foreign fluid lanes' column reservations
+            // (`fluid_reservations`) cover tunnel-interior tiles — placing
+            // a perpendicular pipe there is safe per F5a (no surface merge
+            // with the foreign trunk's UG endpoints), and after pass 1 the
+            // foreign trunk's actual endpoint tiles are already in
+            // `existing_belts` and properly excluded.
+
             if has_ug_partner && min_px - (x + 1) <= 10 {
                 // Multi-fluid template: emit one UG at (x+1, py) direction=East,
                 // partnered with the template's left flank UG. Reach cap 10 per F4.
                 let ug_tile = (x + 1, py);
-                if !(hard.contains(&ug_tile) || existing_belts.contains(&ug_tile)) {
+                let blocked = existing_belts.contains(&ug_tile)
+                    || (hard.contains(&ug_tile) && !fluid_reservations.contains(&ug_tile));
+                if !blocked {
                     entities.push(PlacedEntity {
                         name: "pipe-to-ground".to_string(),
                         x: x + 1,
@@ -670,7 +863,9 @@ pub fn route_bus_ghost(
                 // pipe row starting at min_px.
                 for bx in (x + 1)..min_px {
                     let tile = (bx, py);
-                    if hard.contains(&tile) || existing_belts.contains(&tile) {
+                    let blocked = existing_belts.contains(&tile)
+                        || (hard.contains(&tile) && !fluid_reservations.contains(&tile));
+                    if blocked {
                         continue;
                     }
                     entities.push(PlacedEntity {

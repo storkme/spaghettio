@@ -310,6 +310,19 @@ pub enum TraceEvent {
         colliding_tap_y: i32,
     },
 
+    // Fluid trunk gap-fill failed: the UG-in/UG-out pair needed to bridge
+    // a gap between two anchors couldn't be placed because the candidate
+    // tiles were blocked. The trunk will have a physical break here; the
+    // `fluid-network` validator will surface it as a hard error. Emitted
+    // by `route_bus_ghost` step 3.6 fluid-trunk emission.
+    FluidTrunkBreak {
+        item: String,
+        trunk_x: i32,
+        y_start: i32,
+        y_end: i32,
+        reason: String,
+    },
+
     // `build_bus_layout` is retrying place_rows → plan_bus_lanes → route_bus
     // after seeing dropped bridges from the previous attempt. `attempt` is
     // the retry number (1 = first retry, so second overall attempt).
