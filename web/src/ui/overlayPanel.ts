@@ -9,6 +9,7 @@ export interface OverlayPanelControls {
   regionsCb: HTMLInputElement;
   soloRegionsCb: HTMLInputElement;
   ghostTilesCb: HTMLInputElement;
+  traceOverlayCb: HTMLInputElement;
 }
 
 function makeToggle(parent: HTMLElement, label: string, checked = false): HTMLInputElement {
@@ -41,6 +42,7 @@ export function createOverlayPanel(container: HTMLElement): OverlayPanelControls
 
   const regionsCb = makeToggle(subPanel, "SAT Zones", state.satZones);
   const ghostTilesCb = makeToggle(subPanel, "Ghost tiles", state.ghostTiles);
+  const traceOverlayCb = makeToggle(subPanel, "Trace overlay", state.traceOverlay);
   const soloRegionsCb = makeToggle(subPanel, "Solo regions", state.soloRegions);
   panel.appendChild(subPanel);
 
@@ -62,6 +64,9 @@ export function createOverlayPanel(container: HTMLElement): OverlayPanelControls
   ghostTilesCb.addEventListener("change", () => {
     debugState.set({ ghostTiles: ghostTilesCb.checked });
   });
+  traceOverlayCb.addEventListener("change", () => {
+    debugState.set({ traceOverlay: traceOverlayCb.checked });
+  });
   colorCb.addEventListener("change", () => {
     debugState.set({ itemColors: colorCb.checked });
   });
@@ -77,5 +82,6 @@ export function createOverlayPanel(container: HTMLElement): OverlayPanelControls
     regionsCb,
     soloRegionsCb,
     ghostTilesCb,
+    traceOverlayCb,
   };
 }
