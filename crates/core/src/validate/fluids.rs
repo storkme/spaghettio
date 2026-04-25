@@ -210,10 +210,18 @@ pub fn check_pipe_isolation(layout_result: &LayoutResult) -> Vec<ValidationIssue
 
 /// Find pipe-to-ground pairs: returns a bidirectional map `pos_a ↔ pos_b`.
 ///
-/// PTG pairs must face each other along the same axis:
-/// input faces East ↔ output faces West (same y), or
-/// input faces South ↔ output faces North (same x).
+/// Mirrors Factorio's pairing semantics (per F4): an input pairs with the
+/// **nearest unpaired output** on the same axis whose direction is opposite,
+/// within the max underground distance (vanilla pipe-to-ground: 10 tiles
+/// gap between input and output, so a max axis distance of 11 between the
+/// two entities). Iteration-order matching would cascade incorrect pairs
+/// when entities are emitted out of y-order (e.g. junction-solver pipes
+/// added after the main trunk emission).
 fn find_ptg_pairs(layout_result: &LayoutResult) -> FxHashMap<(i32, i32), (i32, i32)> {
+    // Per F4: vanilla pipe-to-ground has max underground distance of 10
+    // tiles (gap), so the entity-to-entity distance cap is 11.
+    const MAX_PIPE_PTG_DISTANCE: i32 = 11;
+
     // Collect inputs and outputs separately
     let mut inputs: Vec<&PlacedEntity> = Vec::new();
     let mut outputs: Vec<&PlacedEntity> = Vec::new();
@@ -229,30 +237,56 @@ fn find_ptg_pairs(layout_result: &LayoutResult) -> FxHashMap<(i32, i32), (i32, i
         }
     }
 
-    let mut pairs: FxHashMap<(i32, i32), (i32, i32)> = FxHashMap::default();
+    // Sort inputs by position so iteration order is deterministic and matches
+    // Factorio's "input pairs with the nearest output along its facing
+    // direction" semantics — for a row of aligned inputs and outputs, scanning
+    // inputs in spatial order means the closest output is always still
+    // available when its natural partner reaches the front of the queue.
+    inputs.sort_by_key(|e| (e.x, e.y));
 
-    // For each input, find the nearest output that faces back toward it on the same axis.
-    let mut remaining: Vec<&PlacedEntity> = outputs;
+    let mut pairs: FxHashMap<(i32, i32), (i32, i32)> = FxHashMap::default();
+    let mut taken: FxHashSet<(i32, i32)> = FxHashSet::default();
 
     for inp in &inputs {
         let expected_dir = opposite_direction(inp.direction);
-        let matched_idx = remaining.iter().position(|out| {
+        // Find the unpaired output along inp's direction at the smallest distance.
+        let mut best: Option<(usize, i32)> = None;
+        for (idx, out) in outputs.iter().enumerate() {
+            if taken.contains(&(out.x, out.y)) {
+                continue;
+            }
             if out.direction != expected_dir {
-                return false;
+                continue;
             }
-            match inp.direction {
-                EntityDirection::East => out.y == inp.y && out.x > inp.x,
-                EntityDirection::West => out.y == inp.y && out.x < inp.x,
-                EntityDirection::South => out.x == inp.x && out.y > inp.y,
-                EntityDirection::North => out.x == inp.x && out.y < inp.y,
+            let dist = match inp.direction {
+                EntityDirection::East => {
+                    if out.y == inp.y && out.x > inp.x { Some(out.x - inp.x) } else { None }
+                }
+                EntityDirection::West => {
+                    if out.y == inp.y && out.x < inp.x { Some(inp.x - out.x) } else { None }
+                }
+                EntityDirection::South => {
+                    if out.x == inp.x && out.y > inp.y { Some(out.y - inp.y) } else { None }
+                }
+                EntityDirection::North => {
+                    if out.x == inp.x && out.y < inp.y { Some(inp.y - out.y) } else { None }
+                }
+            };
+            let Some(d) = dist else { continue };
+            if d > MAX_PIPE_PTG_DISTANCE {
+                continue;
             }
-        });
-        if let Some(idx) = matched_idx {
-            let out = remaining.remove(idx);
+            if best.is_none_or(|(_, bd)| d < bd) {
+                best = Some((idx, d));
+            }
+        }
+        if let Some((idx, _)) = best {
+            let out = outputs[idx];
             let a = (inp.x, inp.y);
             let b = (out.x, out.y);
             pairs.insert(a, b);
             pairs.insert(b, a);
+            taken.insert(b);
         }
     }
 
