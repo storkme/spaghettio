@@ -568,12 +568,14 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
           cachedValidationIssues = issues;
           validationInFlightFor = null;
           updateValidationOverlay();
+          tryRunAutoOptimize(target);
         })
         .catch(() => {
           if (lastLayout !== target) return;
           cachedValidationIssues = [];
           validationInFlightFor = null;
           updateValidationOverlay();
+          tryRunAutoOptimize(target);
         });
     }
 
@@ -1239,12 +1241,29 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
 
     // Auto-optimize: kick off the round-robin pass after the initial
     // render has been painted. rAF gives PixiJS one tick to commit the
-    // entity graphics before we start mutating them. Guarded against
-    // re-entry inside `runAutoOptimize`, so repeated calls (e.g.
-    // mid-pass re-render) are benign.
+    // entity graphics before we start mutating them. Whichever finishes
+    // last (rAF or async validation in updateValidationOverlay) ends up
+    // calling tryRunAutoOptimize; the validation gate inside it skips
+    // the optimize pass when the layout has any errors / warnings — no
+    // point optimising a broken layout.
     requestAnimationFrame(() => {
-      if (lastLayout === layout) void runAutoOptimize(layout);
+      if (lastLayout === layout) tryRunAutoOptimize(layout);
     });
+  }
+
+  /** Run the SAT auto-optimize pass only when validation has completed
+   *  for `layout` and reports no issues (validator output + layout-level
+   *  warnings via `buildLayoutIssues`). If validation hasn't landed yet,
+   *  this is a no-op — the validation completion handler retriggers
+   *  this function. `runAutoOptimize` further guards against double-run
+   *  via `optimizeInFlight`. */
+  function tryRunAutoOptimize(layout: LayoutResult): void {
+    if (lastLayout !== layout) return;
+    if (validationInFlightFor === layout) return;
+    if (cachedValidationIssues === null) return;
+    const allIssues = [...cachedValidationIssues, ...buildLayoutIssues(layout)];
+    if (allIssues.length > 0) return;
+    void runAutoOptimize(layout);
   }
 
   // Ctrl+C / Ctrl+O keyboard shortcuts
