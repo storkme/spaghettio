@@ -1,4 +1,4 @@
-import { Application } from "pixi.js";
+import { Application, UPDATE_PRIORITY } from "pixi.js";
 import { Viewport } from "pixi-viewport";
 
 export const WORLD_SIZE = 3200;
@@ -63,6 +63,14 @@ export async function createApp(container: HTMLElement): Promise<AppContext> {
     autoStart: false,
     sharedTicker: false,
   });
+
+  // `autoStart: true` would have wired this for us; we have to do it
+  // ourselves. Without it, the ticker runs custom ticks (alpha animations,
+  // viewport plugin updates) but never paints — so during streaming layout
+  // commit and per-feature animations the scene mutates invisibly. LOW
+  // priority puts the render after every other tick, so each tick's state
+  // changes show up in the same frame.
+  app.ticker.add(() => app.render(), null, UPDATE_PRIORITY.LOW);
 
   container.appendChild(app.canvas);
 
