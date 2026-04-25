@@ -118,6 +118,14 @@ fn streamable(evt: &fucktorio_core::trace::TraceEvent) -> bool {
             | T::JunctionSolved { .. }
             | T::SatInvocation { .. }
             | T::SatImprovement { .. }
+            // Stream siblings of metadata-only stamp events. Without these,
+            // bus trunks, balancers, output mergers, and poles surface only
+            // via the bus_routed / poles_placed PhaseSnapshot safety nets
+            // and slam onto the canvas all at once at the end of layout.
+            | T::TrunkBeltCommitted { .. }
+            | T::BalancerCommitted { .. }
+            | T::OutputMergerCommitted { .. }
+            | T::PolesCommitted { .. }
     )
 }
 

@@ -158,6 +158,26 @@ pub enum TraceEvent {
         y_end: i32,
         template_found: bool,
     },
+    /// Stream sibling of `BalancerStamped` — carries the actual entity batch
+    /// so the live renderer can reveal a balancer cascade progressively
+    /// instead of dumping it via the `bus_routed` safety net at the end.
+    BalancerCommitted {
+        item: String,
+        shape: (usize, usize),
+        entities: Vec<PlacedEntity>,
+    },
+    /// One emission per per-lane stamp pass during Steps 2 (tap-off
+    /// splitters and continue-belts), 3.5 (solid trunk segments), and 3.6
+    /// (fluid trunks). `is_fluid` distinguishes the source step but the
+    /// renderer treats them uniformly. Each lane therefore emits two events
+    /// for solid lanes (Step 2 and Step 3.5) and one event for fluid lanes
+    /// (Step 3.6).
+    TrunkBeltCommitted {
+        item: String,
+        lane_x: i32,
+        is_fluid: bool,
+        entities: Vec<PlacedEntity>,
+    },
     LaneRouted {
         item: String,
         x: i32,
@@ -180,6 +200,13 @@ pub enum TraceEvent {
         rows: Vec<usize>,
         merge_y: i32,
     },
+    /// Stream sibling of `OutputMerged` — carries the merger entity batch
+    /// (belts + splitters with `merger:{item}` segment id) so the live
+    /// renderer can reveal them progressively.
+    OutputMergerCommitted {
+        item: String,
+        entities: Vec<PlacedEntity>,
+    },
     MergerBlockPlaced {
         item: String,
         lanes: usize,
@@ -191,6 +218,11 @@ pub enum TraceEvent {
     PolesPlaced {
         count: usize,
         strategy: String,
+    },
+    /// Stream sibling of `PolesPlaced` — carries the pole entity batch so
+    /// the live renderer can reveal them progressively.
+    PolesCommitted {
+        entities: Vec<PlacedEntity>,
     },
 
     // Phase boundary markers
