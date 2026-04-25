@@ -477,24 +477,78 @@ fn split_overflowing_lanes(
             continue;
         }
 
+        // Pre-compute the consumer/producer shape so we can decide whether
+        // to clamp the trunk count to the consumer-side bottleneck and
+        // optionally insert a balancer family. The balancer feeds full
+        // belts (both lanes), so when one is present we only need M =
+        // consumer-count trunks instead of M = producer-count.
+        let all_producer_rows = lane.all_producers();
+        let n_producers = all_producer_rows.len();
+        let is_collector = lane.consumer_rows.is_empty();
+
+        // Consumer-side trunk count: each consumer row needs exactly one
+        // trunk to feed it (the existing `route_intermediate_lane` only
+        // honors `tap_off_ys[0]`, so multiple consumers in one trunk is
+        // a non-starter). For collector lanes (no consumers) keep the
+        // capacity-derived count.
+        let consumer_trunk_count = if is_collector {
+            n_splits
+        } else {
+            lane.consumer_rows.len()
+        };
+
+        // Clamp the trunk count to the consumer-side bottleneck. Without
+        // this, a per-lane-cap-driven `n_splits` greater than the
+        // consumer count produced empty-consumer splits whose producers
+        // were silently dropped (`continue` below). Each kept trunk now
+        // runs at full-belt capacity, which only works if a balancer
+        // family is stamped; without one, multiple producers fan-in via
+        // `ret:` sideloads and the trunk's per-lane cap still applies.
+        let full_belt_cap = max_lane_cap * 2.0;
+        let clamp_to_consumers =
+            !is_external_input && !is_collector && n_splits > consumer_trunk_count;
+
+        let effective_n_splits = if clamp_to_consumers {
+            // Sanity: with M trunks each capped at full-belt rate, the
+            // total rate must fit. Today's corpus (up to processing-unit
+            // @ 2/s express belt) stays inside this envelope — panic
+            // with a clear message rather than silently mis-routing
+            // when a future case overruns.
+            if lane.rate > (consumer_trunk_count as f64) * full_belt_cap {
+                todo!(
+                    "lane_planner: consumer-clamped fan-in for item {item} needs total_rate \
+                     {rate}/s <= {m} consumer trunks * full-belt-cap {cap}/s = {limit}/s; \
+                     not reachable in current corpus, extend with multi-stage balancer if hit",
+                    item = lane.item,
+                    rate = lane.rate,
+                    m = consumer_trunk_count,
+                    cap = full_belt_cap,
+                    limit = (consumer_trunk_count as f64) * full_belt_cap,
+                );
+            }
+            consumer_trunk_count
+        } else {
+            n_splits
+        };
+
         crate::trace::emit(crate::trace::TraceEvent::LaneSplit {
             item: lane.item.clone(),
             rate: lane.rate,
             max_lane_cap,
-            n_splits,
+            n_splits: effective_n_splits,
         });
 
-        // Distribute consumer rows round-robin
-        let mut consumers_per_split: Vec<Vec<usize>> = vec![Vec::new(); n_splits];
+        // Distribute consumer rows round-robin across the effective trunks.
+        let mut consumers_per_split: Vec<Vec<usize>> = vec![Vec::new(); effective_n_splits];
         for (i, &ri) in lane.consumer_rows.iter().enumerate() {
-            consumers_per_split[i % n_splits].push(ri);
+            consumers_per_split[i % effective_n_splits].push(ri);
         }
 
-        // Distribute producer rows by rate
-        let all_producer_rows = lane.all_producers();
-
-        let mut producers_per_split: Vec<Vec<usize>> = vec![Vec::new(); n_splits];
-        let mut split_prod_rate: Vec<f64> = vec![0.0; n_splits];
+        // Distribute producer rows by rate. With a balancer family every
+        // producer feeds the family rather than a specific trunk, but we
+        // still build this to satisfy the non-family path below.
+        let mut producers_per_split: Vec<Vec<usize>> = vec![Vec::new(); effective_n_splits];
+        let mut split_prod_rate: Vec<f64> = vec![0.0; effective_n_splits];
 
         for &pri in &all_producer_rows {
             let rs = &row_spans[pri];
@@ -511,34 +565,33 @@ fn split_overflowing_lanes(
             split_prod_rate[target] += prod_rate;
         }
 
-        let is_collector = lane.consumer_rows.is_empty();
-
-        // Detect N-to-M balancer requirement
+        // Re-derive `n_lanes_with_consumers` against the effective shape.
+        // With `clamp_to_consumers` set, every effective trunk has exactly
+        // one consumer (M = consumer count). Without the clamp this falls
+        // back to the original count that drove the legacy fan-out family.
         let n_lanes_with_consumers = if is_collector {
-            n_splits
+            effective_n_splits
         } else {
             consumers_per_split.iter().filter(|c| !c.is_empty()).count()
         };
-        let n_producers = all_producer_rows.len();
 
         let mut family_id: Option<usize> = None;
         let mut family_source_y: Option<i32> = None;
 
-        // Create a family balancer for any multi-lane case where the
-        // number of producers is <= the number of lanes. The original
-        // condition (`n_producers < n_lanes`) only handled fan-out
-        // (1→N, 2→3, etc). It missed the parallel case (e.g. 2→2),
-        // which tried to route each producer to its own trunk via a
-        // `ret:` sideload — but inner lanes get boxed in by adjacent
-        // trunks and there's no clean tile for the sideload to land
-        // on. Always using a family for multi-lane puts a balancer
-        // block between the producers and the trunks, which handles
-        // the merge cleanly. The `n_producers > n_lanes` (fan-in)
-        // path is left unchanged for now.
-        if n_producers >= 1
-            && n_lanes_with_consumers >= 2
-            && n_producers <= n_lanes_with_consumers
-        {
+        // Stamp an N-to-M balancer for multi-trunk intermediate lanes.
+        // The balancer absorbs N producers and feeds M trunks evenly so
+        // every trunk runs at full-belt capacity.
+        //   - Fan-out (N <= M): the original case (1→N, 2→3, etc.).
+        //   - Parallel (N == M): added in a previous fix; without a
+        //     family the inner trunks have no clean tile for `ret:`
+        //     sideloads to land on.
+        //   - Fan-in (N > M): new — when the unsplit lane wanted more
+        //     trunks than consumers (`clamp_to_consumers`), we pinned
+        //     M to the consumer count, so the family now lives at
+        //     shape (N, consumer_count). Without the family, the
+        //     producers in empty-consumer splits were silently dropped
+        //     (producing belt-dead-end errors downstream).
+        if n_producers >= 1 && n_lanes_with_consumers >= 2 {
             let shape = (n_producers, n_lanes_with_consumers);
             family_id = Some(families.len());
 
@@ -570,12 +623,12 @@ fn split_overflowing_lanes(
         }
 
         // Create split lanes
-        for si in 0..n_splits {
+        for si in 0..effective_n_splits {
             let consumers = consumers_per_split[si].clone();
             if consumers.is_empty() && !is_collector && si > 0 {
                 continue;  // skip empty splits
             }
-            let split_rate = lane.rate / n_splits as f64;
+            let split_rate = lane.rate / effective_n_splits as f64;
 
             if let Some(fid) = family_id {
                 result.push(BusLane {
