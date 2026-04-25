@@ -2998,3 +2998,138 @@ fn diag_sat_total_time() {
         total_sat_solved
     );
 }
+
+// ---------------------------------------------------------------------------
+// Corpus sweep — populate sat-zones.jsonl with many layout variations
+// ---------------------------------------------------------------------------
+
+/// Sweep a matrix of recipe × rate × belt-tier × input-mode combinations to
+/// stress-populate the SAT zone cache. Each successful layout writes records
+/// via the wired-up `record_zone` call; layouts that error out are skipped
+/// silently so a single broken combo doesn't kill the run.
+///
+/// Tally: layouts attempted, layouts succeeded, total SAT calls.
+///
+/// Run with:
+///   cargo test --manifest-path crates/core/Cargo.toml --release --test e2e -- \
+///       --ignored diag_corpus_sweep --exact --nocapture
+///
+/// Then read the dedup picture with:
+///   cargo test --manifest-path crates/core/Cargo.toml --release --test e2e -- \
+///       --ignored diag_sat_zone_histogram --exact --nocapture
+#[test]
+#[ignore]
+fn diag_corpus_sweep() {
+    struct Combo {
+        item: &'static str,
+        rate: f64,
+        belt: Option<&'static str>,
+        from_ore: bool,
+        // For plastic-bar: also try from_crude
+        from_crude: bool,
+    }
+
+    let mut combos: Vec<Combo> = Vec::new();
+
+    // iron-gear-wheel — tier1, simple recipe
+    for &rate in &[1.0, 2.0, 3.0, 5.0, 7.5, 10.0, 15.0, 20.0, 30.0] {
+        for from_ore in [false, true] {
+            for belt in [None, Some("fast-transport-belt")] {
+                combos.push(Combo { item: "iron-gear-wheel", rate, belt, from_ore, from_crude: false });
+            }
+        }
+    }
+
+    // copper-cable — tier1, simple
+    for &rate in &[1.0, 5.0, 10.0, 20.0, 30.0] {
+        for from_ore in [false, true] {
+            for belt in [None, Some("fast-transport-belt")] {
+                combos.push(Combo { item: "copper-cable", rate, belt, from_ore, from_crude: false });
+            }
+        }
+    }
+
+    // transport-belt — needs gear-wheel
+    for &rate in &[1.0, 5.0, 10.0] {
+        for from_ore in [false, true] {
+            combos.push(Combo { item: "transport-belt", rate, belt: None, from_ore, from_crude: false });
+        }
+    }
+
+    // electronic-circuit — tier2, two recipes deep
+    for &rate in &[1.0, 2.5, 5.0, 7.5, 10.0, 15.0, 20.0, 22.0, 25.0, 30.0, 40.0, 50.0] {
+        for from_ore in [false, true] {
+            for belt in [None, Some("fast-transport-belt")] {
+                combos.push(Combo { item: "electronic-circuit", rate, belt, from_ore, from_crude: false });
+            }
+        }
+    }
+
+    // plastic-bar — tier3, fluid+solid
+    for &rate in &[1.0, 2.0, 5.0] {
+        combos.push(Combo { item: "plastic-bar", rate, belt: None, from_ore: false, from_crude: false });
+        combos.push(Combo { item: "plastic-bar", rate, belt: None, from_ore: false, from_crude: true });
+    }
+
+    // sulfuric-acid — tier3, fluid output
+    for &rate in &[1.0, 2.0, 5.0] {
+        combos.push(Combo { item: "sulfuric-acid", rate, belt: None, from_ore: false, from_crude: false });
+    }
+
+    eprintln!("\n=== diag_corpus_sweep: {} combinations ===", combos.len());
+
+    let sweep_start = Instant::now();
+    let mut attempted = 0usize;
+    let mut succeeded = 0usize;
+    let mut total_sat_calls: u64 = 0;
+    let mut total_sat_us: u64 = 0;
+
+    for c in &combos {
+        attempted += 1;
+        let mut available_inputs = FxHashSet::default();
+        if c.from_ore {
+            available_inputs.insert("iron-ore".to_string());
+            available_inputs.insert("copper-ore".to_string());
+        }
+        if c.from_crude {
+            available_inputs.insert("crude-oil".to_string());
+        }
+
+        let test_name = format!(
+            "sweep_{}_{:.1}s_{}{}",
+            c.item.replace('-', "_"),
+            c.rate,
+            c.belt.map(|b| if b == "fast-transport-belt" { "red" } else { "yel" }).unwrap_or("auto"),
+            if c.from_ore { "_ore" } else if c.from_crude { "_crude" } else { "" },
+        );
+
+        match run_e2e(&test_name, c.item, c.rate, "assembling-machine-1", c.belt, &available_inputs) {
+            Ok(result) => {
+                succeeded += 1;
+                for ev in &result.trace_events {
+                    if let TraceEvent::SatInvocation { solve_time_us, .. } = ev {
+                        total_sat_calls += 1;
+                        total_sat_us += solve_time_us;
+                    }
+                }
+            }
+            Err(_) => {
+                // Skip silently — broken combos shouldn't kill the sweep.
+            }
+        }
+    }
+
+    let elapsed_ms = sweep_start.elapsed().as_millis();
+    eprintln!(
+        "\nSweep done in {:.1}s: {}/{} combos succeeded, {} SAT calls, {:.1}ms total SAT",
+        elapsed_ms as f64 / 1000.0,
+        succeeded,
+        attempted,
+        total_sat_calls,
+        total_sat_us as f64 / 1000.0,
+    );
+    eprintln!("\nNow run: cargo test --release --test e2e -- --ignored diag_sat_zone_histogram --exact --nocapture");
+
+    // Don't panic — we want the cache populated and the summary printed.
+    // No assertion; this is purely a data-gathering diag.
+}
