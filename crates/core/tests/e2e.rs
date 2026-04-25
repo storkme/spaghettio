@@ -916,24 +916,38 @@ fn run_timed_validators(lr: &LayoutResult, sr: &SolverResult) {
 // ---------------------------------------------------------------------------
 // Stress corpus (Phase 0 of the SAT junction solver plan).
 //
-// These tests are benchmarks, not regressions. They exercise layout regimes
-// where the current crossing-zone solver breaks down — many lanes, many
-// N→M balancers, wide trunk groups, red-belt UG reach. Each test always
-// fails with a scoreboard `panic!` that lists:
+// These tests exercise layout regimes where the current crossing-zone solver
+// breaks down — many lanes, many N→M balancers, wide trunk groups, red-belt
+// UG reach. Each test prints a scoreboard listing:
 //   - warnings grouped by category
 //   - zones solved / zones skipped (from CrossingZoneSolved/Skipped trace)
 //   - dropped-bridge count
 // so successive phases of the generalized junction solver can be measured
 // against the baseline recorded in each test's comment header.
 //
-// Run with:
-//   cargo test --manifest-path crates/core/Cargo.toml --test e2e -- \
-//       --ignored --nocapture stress_
+// Pass/fail is gated by a `StressBaseline`: errors and warnings must each be
+// ≤ a recorded ceiling. Some tests carry `max_errors > 0` because the regimes
+// they exercise produce known residual errors today — the corpus's job is to
+// detect *regression*, not to assert today's layouts are bug-free. Strict
+// improvements (fewer errors / warnings) must tighten the baseline downward.
 // ---------------------------------------------------------------------------
 
-/// Tally warnings by category and pull zone-solve counts from the trace.
-/// Always panics — these tests are measurement, not pass/fail.
-fn report_stress_scoreboard(test_name: &str, result: &E2EResult) -> ! {
+/// Pass/fail expectations for a stress test. The reporter still prints the
+/// full scoreboard for measurement; this struct turns the test pass/fail.
+///
+/// Both fields are *ceilings*, not exact matches. When a layout-engine
+/// improvement drops a count, tighten the baseline rather than leaving slack.
+/// Setting `max_errors > 0` codifies a known bug — the comment header above
+/// each test should explain what regime the residual errors belong to.
+struct StressBaseline {
+    max_errors: usize,
+    max_warnings: usize,
+}
+
+/// Tally warnings + trace metrics, print the scoreboard, then assert against
+/// the recorded baseline. Errors and warnings must each be ≤ their recorded
+/// ceiling.
+fn check_stress_scoreboard(test_name: &str, result: &E2EResult, baseline: StressBaseline) {
     let mut by_category: std::collections::BTreeMap<&str, usize> = Default::default();
     for w in result.issues.iter().filter(|i| i.severity == Severity::Warning) {
         *by_category.entry(w.category.as_str()).or_default() += 1;
@@ -1027,7 +1041,27 @@ fn report_stress_scoreboard(test_name: &str, result: &E2EResult) -> ! {
             msg.push_str(&format!("  {cat}: {count}\n"));
         }
     }
-    panic!("{msg}");
+    eprintln!("{msg}");
+
+    let errors = result
+        .issues
+        .iter()
+        .filter(|i| i.severity == Severity::Error)
+        .count();
+    assert!(
+        errors <= baseline.max_errors,
+        "{test_name}: validator errors regressed: got {errors}, baseline allows ≤ {}. \
+         If this is an intentional change, update the baseline (and tighten when fewer \
+         errors result).",
+        baseline.max_errors,
+    );
+    assert!(
+        total_warnings <= baseline.max_warnings,
+        "{test_name}: warnings regressed: got {total_warnings}, baseline allows ≤ {}. \
+         If this is an intentional change, update the baseline (and tighten when fewer \
+         warnings result).",
+        baseline.max_warnings,
+    );
 }
 
 /// Baseline (Phase 1, 2026-04-11): entities=11232, warnings=0, zones_solved=19,
@@ -1036,7 +1070,6 @@ fn report_stress_scoreboard(test_name: &str, result: &E2EResult) -> ! {
 /// inflated by balancer reflow — Phase 2 must mark balancer-touching bands as
 /// non-compactable.
 #[test]
-#[ignore]
 #[ntest::timeout(600000)]
 fn stress_electronic_circuit_30s_from_ore() {
     let inputs: FxHashSet<String> = ["iron-ore", "copper-ore"]
@@ -1050,14 +1083,20 @@ fn stress_electronic_circuit_30s_from_ore() {
         &inputs,
     ).expect("e2e pipeline");
     assert_produces(&result, "electronic-circuit", 30.0);
-    report_stress_scoreboard("stress_electronic_circuit_30s_from_ore", &result);
+    check_stress_scoreboard(
+        "stress_electronic_circuit_30s_from_ore",
+        &result,
+        StressBaseline { max_errors: 10, max_warnings: 0 },
+    );
 }
 
 /// Baseline (Phase 1, 2026-04-11): entities=13131, warnings=0, zones_solved=28,
 /// bands=2 (2 crossing, 0 non-crossing), total_gap_tiles=5, mean_gap=2.50,
-/// max_gap=3, max_trunks/band=12.
+/// max_gap=3, max_trunks/band=12. Exceeds the 600s ntest timeout on current
+/// pipeline — runs only via `--ignored`. Bake a tighter timeout once the slow
+/// path is profiled and reduced.
 #[test]
-#[ignore]
+#[ignore = "exceeds 600s ntest::timeout on current pipeline; opt in with --ignored"]
 #[ntest::timeout(600000)]
 fn stress_advanced_circuit_45s_from_plates() {
     let inputs: FxHashSet<String> = ["iron-plate", "copper-plate", "plastic-bar"]
@@ -1071,7 +1110,11 @@ fn stress_advanced_circuit_45s_from_plates() {
         &inputs,
     ).expect("e2e pipeline");
     assert_produces(&result, "advanced-circuit", 45.0);
-    report_stress_scoreboard("stress_advanced_circuit_45s_from_plates", &result);
+    check_stress_scoreboard(
+        "stress_advanced_circuit_45s_from_plates",
+        &result,
+        StressBaseline { max_errors: usize::MAX, max_warnings: usize::MAX },
+    );
 }
 
 /// User's processing-unit @ 1/s repro for the pipe×belt severance bug.
@@ -1118,8 +1161,12 @@ fn pipe_belt_processing_unit_1s_routes() {
 
 /// Baseline (pre-Phase 1): warnings=?, zones_solved=?, zones_skipped=?.
 /// processing-unit requires an AM3 because sulfuric-acid is a fluid input.
+/// Solver + layout alone exceed 15 min on the current pipeline (see the
+/// neighbouring `diag_ghost_cluster_stress_processing_unit_20s` comment),
+/// so it can't fit inside the 600s ntest timeout. Runs only via `--ignored`;
+/// `max_warnings` left permissive until a clean baseline is established.
 #[test]
-#[ignore]
+#[ignore = "solver + layout exceed 600s ntest::timeout for processing-unit @ 20/s AM3; opt in with --ignored"]
 #[ntest::timeout(600000)]
 fn stress_processing_unit_20s_from_plates() {
     let inputs: FxHashSet<String> = ["iron-plate", "copper-plate", "plastic-bar", "sulfuric-acid"]
@@ -1133,7 +1180,11 @@ fn stress_processing_unit_20s_from_plates() {
         &inputs,
     ).expect("e2e pipeline");
     assert_produces(&result, "processing-unit", 20.0);
-    report_stress_scoreboard("stress_processing_unit_20s_from_plates", &result);
+    check_stress_scoreboard(
+        "stress_processing_unit_20s_from_plates",
+        &result,
+        StressBaseline { max_errors: usize::MAX, max_warnings: usize::MAX },
+    );
 }
 
 
@@ -1142,7 +1193,6 @@ fn stress_processing_unit_20s_from_plates() {
 /// bands=3 (1 crossing, 2 non-crossing), total_gap_tiles=22, mean_gap=7.33,
 /// max_gap=12, max_trunks/band=14.
 #[test]
-#[ignore]
 #[ntest::timeout(600000)]
 fn stress_electronic_circuit_60s_red_from_ore() {
     let inputs: FxHashSet<String> = ["iron-ore", "copper-ore"]
@@ -1156,7 +1206,11 @@ fn stress_electronic_circuit_60s_red_from_ore() {
         &inputs,
     ).expect("e2e pipeline");
     assert_produces(&result, "electronic-circuit", 60.0);
-    report_stress_scoreboard("stress_electronic_circuit_60s_red_from_ore", &result);
+    check_stress_scoreboard(
+        "stress_electronic_circuit_60s_red_from_ore",
+        &result,
+        StressBaseline { max_errors: 1, max_warnings: 0 },
+    );
 }
 
 // Electronic-circuit-from-ore rate variants. The 30/s baseline produces
@@ -1169,7 +1223,6 @@ fn stress_electronic_circuit_60s_red_from_ore() {
 // then `python scripts/analyze_sat_calls.py --min-solve-us 5000`.
 
 #[test]
-#[ignore]
 #[ntest::timeout(600000)]
 fn stress_electronic_circuit_22s_from_ore() {
     let inputs: FxHashSet<String> = ["iron-ore", "copper-ore"]
@@ -1183,11 +1236,14 @@ fn stress_electronic_circuit_22s_from_ore() {
         &inputs,
     ).expect("e2e pipeline");
     assert_produces(&result, "electronic-circuit", 22.0);
-    report_stress_scoreboard("stress_electronic_circuit_22s_from_ore", &result);
+    check_stress_scoreboard(
+        "stress_electronic_circuit_22s_from_ore",
+        &result,
+        StressBaseline { max_errors: 0, max_warnings: 1 },
+    );
 }
 
 #[test]
-#[ignore]
 #[ntest::timeout(600000)]
 fn stress_electronic_circuit_23s_from_ore() {
     let inputs: FxHashSet<String> = ["iron-ore", "copper-ore"]
@@ -1201,11 +1257,14 @@ fn stress_electronic_circuit_23s_from_ore() {
         &inputs,
     ).expect("e2e pipeline");
     assert_produces(&result, "electronic-circuit", 23.0);
-    report_stress_scoreboard("stress_electronic_circuit_23s_from_ore", &result);
+    check_stress_scoreboard(
+        "stress_electronic_circuit_23s_from_ore",
+        &result,
+        StressBaseline { max_errors: 0, max_warnings: 1 },
+    );
 }
 
 #[test]
-#[ignore]
 #[ntest::timeout(600000)]
 fn stress_electronic_circuit_35s_from_ore() {
     let inputs: FxHashSet<String> = ["iron-ore", "copper-ore"]
@@ -1219,11 +1278,14 @@ fn stress_electronic_circuit_35s_from_ore() {
         &inputs,
     ).expect("e2e pipeline");
     assert_produces(&result, "electronic-circuit", 35.0);
-    report_stress_scoreboard("stress_electronic_circuit_35s_from_ore", &result);
+    check_stress_scoreboard(
+        "stress_electronic_circuit_35s_from_ore",
+        &result,
+        StressBaseline { max_errors: 16, max_warnings: 0 },
+    );
 }
 
 #[test]
-#[ignore]
 #[ntest::timeout(600000)]
 fn stress_electronic_circuit_40s_from_ore() {
     let inputs: FxHashSet<String> = ["iron-ore", "copper-ore"]
@@ -1237,7 +1299,11 @@ fn stress_electronic_circuit_40s_from_ore() {
         &inputs,
     ).expect("e2e pipeline");
     assert_produces(&result, "electronic-circuit", 40.0);
-    report_stress_scoreboard("stress_electronic_circuit_40s_from_ore", &result);
+    check_stress_scoreboard(
+        "stress_electronic_circuit_40s_from_ore",
+        &result,
+        StressBaseline { max_errors: 47, max_warnings: 0 },
+    );
 }
 
 // ---------------------------------------------------------------------------
