@@ -861,11 +861,13 @@ mod tests {
                 item: "iron-ore".to_string(),
                 rate: 1.0,
                 is_fluid: false,
+                module_id: 0,
             }],
             outputs: vec![ItemFlow {
                 item: "iron-plate".to_string(),
                 rate: 1.0,
                 is_fluid: false,
+                module_id: 0,
             }],
         }
     }
@@ -879,11 +881,13 @@ mod tests {
                 item: "iron-plate".to_string(),
                 rate: 2.0,
                 is_fluid: false,
+                module_id: 0,
             }],
             outputs: vec![ItemFlow {
                 item: "iron-gear-wheel".to_string(),
                 rate: 1.0,
                 is_fluid: false,
+                module_id: 0,
             }],
         }
     }
@@ -903,17 +907,20 @@ mod tests {
                             item: "iron-plate".to_string(),
                             rate: 1.0,
                             is_fluid: false,
+                            module_id: 0,
                         },
                         ItemFlow {
                             item: "copper-cable".to_string(),
                             rate: 3.0,
                             is_fluid: false,
+                            module_id: 0,
                         },
                     ],
                     outputs: vec![ItemFlow {
                         item: "electronic-circuit".to_string(),
                         rate: 1.5,
                         is_fluid: false,
+                        module_id: 0,
                     }],
                 },
                 MachineSpec {
@@ -924,11 +931,13 @@ mod tests {
                         item: "copper-plate".to_string(),
                         rate: 1.5,
                         is_fluid: false,
+                        module_id: 0,
                     }],
                     outputs: vec![ItemFlow {
                         item: "copper-cable".to_string(),
                         rate: 3.0,
                         is_fluid: false,
+                        module_id: 0,
                     }],
                 },
                 MachineSpec {
@@ -939,11 +948,13 @@ mod tests {
                         item: "iron-ore".to_string(),
                         rate: 1.0,
                         is_fluid: false,
+                        module_id: 0,
                     }],
                     outputs: vec![ItemFlow {
                         item: "iron-plate".to_string(),
                         rate: 1.0,
                         is_fluid: false,
+                        module_id: 0,
                     }],
                 },
                 MachineSpec {
@@ -954,11 +965,13 @@ mod tests {
                         item: "copper-ore".to_string(),
                         rate: 2.0,
                         is_fluid: false,
+                        module_id: 0,
                     }],
                     outputs: vec![ItemFlow {
                         item: "copper-plate".to_string(),
                         rate: 2.0,
                         is_fluid: false,
+                        module_id: 0,
                     }],
                 },
             ],
@@ -967,17 +980,20 @@ mod tests {
                     item: "iron-ore".to_string(),
                     rate: 1.0,
                     is_fluid: false,
+                    module_id: 0,
                 },
                 ItemFlow {
                     item: "copper-ore".to_string(),
                     rate: 2.0,
                     is_fluid: false,
+                    module_id: 0,
                 },
             ],
             external_outputs: vec![ItemFlow {
                 item: "electronic-circuit".to_string(),
                 rate: 1.5,
                 is_fluid: false,
+                module_id: 0,
             }],
             dependency_order: vec![
                 "iron-plate".to_string(),
@@ -1019,6 +1035,7 @@ mod tests {
                 item: "heavy-item".to_string(),
                 rate: 100.0,
                 is_fluid: false,
+                module_id: 0,
             }],
         };
         assert_eq!(max_machines_for_belt(&spec, "transport-belt", None), 1);
@@ -1074,6 +1091,7 @@ mod tests {
                 item: "item-a".to_string(),
                 rate: 1.0,
                 is_fluid: false,
+                module_id: 0,
             }],
         };
         let spec_b = MachineSpec {
@@ -1085,6 +1103,7 @@ mod tests {
                 item: "item-b".to_string(),
                 rate: 1.0,
                 is_fluid: false,
+                module_id: 0,
             }],
         };
         let machines = vec![spec_a, spec_b];
@@ -1191,11 +1210,13 @@ mod tests {
                 item: "iron-ore".to_string(),
                 rate: 1.0,
                 is_fluid: false,
+                module_id: 0,
             }],
             outputs: vec![ItemFlow {
                 item: "iron-plate".to_string(),
                 rate: 1.0,
                 is_fluid: false,
+                module_id: 0,
             }],
         };
         let machines = vec![spec];
@@ -1231,11 +1252,13 @@ mod tests {
                 item: "iron-plate".to_string(),
                 rate: 1.0,
                 is_fluid: false,
+                module_id: 0,
             }],
             outputs: vec![ItemFlow {
                 item: "iron-gear-wheel".to_string(),
                 rate: 0.5,
                 is_fluid: false,
+                module_id: 0,
             }],
         };
         // iron-plate spec (producer)
@@ -1247,11 +1270,13 @@ mod tests {
                 item: "iron-ore".to_string(),
                 rate: 1.0,
                 is_fluid: false,
+                module_id: 0,
             }],
             outputs: vec![ItemFlow {
                 item: "iron-plate".to_string(),
                 rate: 1.0,
                 is_fluid: false,
+                module_id: 0,
             }],
         };
         let machines = vec![spec, plate_spec];
@@ -1364,17 +1389,20 @@ mod tests {
                     item: "iron-plate".to_string(),
                     rate: 1.0,
                     is_fluid: false,
+                    module_id: 0,
                 },
                 ItemFlow {
                     item: "copper-cable".to_string(),
                     rate: 3.0,
                     is_fluid: false,
+                    module_id: 0,
                 },
             ],
             outputs: vec![ItemFlow {
                 item: "electronic-circuit".to_string(),
                 rate: 1.0,
                 is_fluid: false,
+                module_id: 0,
             }],
         };
         assert_eq!(row_kind(&spec), RowKind::DualInput);
@@ -1391,17 +1419,20 @@ mod tests {
                     item: "coal".to_string(),
                     rate: 1.0,
                     is_fluid: false,
+                    module_id: 0,
                 },
                 ItemFlow {
                     item: "petroleum-gas".to_string(),
                     rate: 2.0,
                     is_fluid: true,
+                    module_id: 0,
                 },
             ],
             outputs: vec![ItemFlow {
                 item: "plastic-bar".to_string(),
                 rate: 2.0,
                 is_fluid: false,
+                module_id: 0,
             }],
         };
         assert_eq!(row_kind(&spec), RowKind::FluidInput);
@@ -1417,11 +1448,13 @@ mod tests {
                 item: "crude-oil".to_string(),
                 rate: 10.0,
                 is_fluid: true,
+                module_id: 0,
             }],
             outputs: vec![ItemFlow {
                 item: "petroleum-gas".to_string(),
                 rate: 4.5,
                 is_fluid: true,
+                module_id: 0,
             }],
         };
         assert_eq!(row_kind(&spec), RowKind::OilRefinery);
@@ -1434,13 +1467,14 @@ mod tests {
             recipe: "heavy-oil-cracking".to_string(),
             count: 1.0,
             inputs: vec![
-                ItemFlow { item: "water".to_string(), rate: 30.0, is_fluid: true },
-                ItemFlow { item: "heavy-oil".to_string(), rate: 40.0, is_fluid: true },
+                ItemFlow { item: "water".to_string(), rate: 30.0, is_fluid: true, module_id: 0 },
+                ItemFlow { item: "heavy-oil".to_string(), rate: 40.0, is_fluid: true, module_id: 0 },
             ],
             outputs: vec![ItemFlow {
                 item: "light-oil".to_string(),
                 rate: 30.0,
                 is_fluid: true,
+                module_id: 0,
             }],
         };
         assert_eq!(row_kind(&spec), RowKind::FluidMultiInput);
@@ -1453,13 +1487,14 @@ mod tests {
             recipe: "sulfur".to_string(),
             count: 1.0,
             inputs: vec![
-                ItemFlow { item: "water".to_string(), rate: 30.0, is_fluid: true },
-                ItemFlow { item: "petroleum-gas".to_string(), rate: 30.0, is_fluid: true },
+                ItemFlow { item: "water".to_string(), rate: 30.0, is_fluid: true, module_id: 0 },
+                ItemFlow { item: "petroleum-gas".to_string(), rate: 30.0, is_fluid: true, module_id: 0 },
             ],
             outputs: vec![ItemFlow {
                 item: "sulfur".to_string(),
                 rate: 2.0,
                 is_fluid: false,
+                module_id: 0,
             }],
         };
         assert_eq!(row_kind(&spec), RowKind::FluidMultiInput);
@@ -1476,11 +1511,13 @@ mod tests {
                 item: "iron-ore".to_string(),
                 rate: 10.0,
                 is_fluid: true,
+                module_id: 0,
             }],
             outputs: vec![ItemFlow {
                 item: "molten-iron".to_string(),
                 rate: 5.0,
                 is_fluid: true,
+                module_id: 0,
             }],
         };
         assert_eq!(row_kind(&spec), RowKind::OilRefinery);
@@ -1497,11 +1534,13 @@ mod tests {
                 item: "iron-ore".to_string(),
                 rate: 10.0,
                 is_fluid: false,
+                module_id: 0,
             }],
             outputs: vec![ItemFlow {
                 item: "iron-plate".to_string(),
                 rate: 10.0,
                 is_fluid: false,
+                module_id: 0,
             }],
         };
         assert_eq!(row_kind(&spec), RowKind::SingleInput);
@@ -1518,17 +1557,20 @@ mod tests {
                     item: "iron-plate".to_string(),
                     rate: 1.0,
                     is_fluid: false,
+                    module_id: 0,
                 },
                 ItemFlow {
                     item: "copper-cable".to_string(),
                     rate: 3.0,
                     is_fluid: false,
+                    module_id: 0,
                 },
             ],
             outputs: vec![ItemFlow {
                 item: "electronic-circuit".to_string(),
                 rate: 1.0,
                 is_fluid: false,
+                module_id: 0,
             }],
         };
         assert!(can_lane_split(&spec, 3));
@@ -1549,17 +1591,20 @@ mod tests {
                     item: "coal".to_string(),
                     rate: 1.0,
                     is_fluid: false,
+                    module_id: 0,
                 },
                 ItemFlow {
                     item: "petroleum-gas".to_string(),
                     rate: 2.0,
                     is_fluid: true,
+                    module_id: 0,
                 },
             ],
             outputs: vec![ItemFlow {
                 item: "plastic-bar".to_string(),
                 rate: 2.0,
                 is_fluid: false,
+                module_id: 0,
             }],
         };
         assert!(can_lane_split(&spec, 3));
@@ -1577,10 +1622,10 @@ mod tests {
             recipe: "example".to_string(),
             count: 3.0,
             inputs: vec![
-                ItemFlow { item: "widget".to_string(), rate: 1.0, is_fluid: false },
-                ItemFlow { item: "lubricant".to_string(), rate: 2.0, is_fluid: true },
+                ItemFlow { item: "widget".to_string(), rate: 1.0, is_fluid: false, module_id: 0 },
+                ItemFlow { item: "lubricant".to_string(), rate: 2.0, is_fluid: true, module_id: 0 },
             ],
-            outputs: vec![ItemFlow { item: "thing".to_string(), rate: 2.0, is_fluid: false }],
+            outputs: vec![ItemFlow { item: "thing".to_string(), rate: 2.0, is_fluid: false, module_id: 0 }],
         };
         assert!(can_lane_split(&spec, 3));
     }

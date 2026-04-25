@@ -708,8 +708,8 @@ mod tests {
         let row_span = make_test_row_span(
             "iron-plate",
             0,
-            vec![ItemFlow { item: "iron-ore".to_string(), rate: 1.0, is_fluid: false }],
-            vec![ItemFlow { item: "iron-plate".to_string(), rate: 1.0, is_fluid: false }],
+            vec![ItemFlow { item: "iron-ore".to_string(), rate: 1.0, is_fluid: false, module_id: 0 }],
+            vec![ItemFlow { item: "iron-plate".to_string(), rate: 1.0, is_fluid: false, module_id: 0 }],
             1,
             vec![1],
         );
@@ -725,11 +725,11 @@ mod tests {
                 entity: "assembling-machine-3".to_string(),
                 recipe: "iron-gear-wheel".to_string(),
                 count: 1.0,
-                inputs: vec![ItemFlow { item: "iron-plate".to_string(), rate: 2.0, is_fluid: false }],
-                outputs: vec![ItemFlow { item: "iron-gear-wheel".to_string(), rate: 1.0, is_fluid: false }],
+                inputs: vec![ItemFlow { item: "iron-plate".to_string(), rate: 2.0, is_fluid: false, module_id: 0 }],
+                outputs: vec![ItemFlow { item: "iron-gear-wheel".to_string(), rate: 1.0, is_fluid: false, module_id: 0 }],
             }],
-            external_inputs: vec![ItemFlow { item: "iron-plate".to_string(), rate: 2.0, is_fluid: false }],
-            external_outputs: vec![ItemFlow { item: "iron-gear-wheel".to_string(), rate: 1.0, is_fluid: false }],
+            external_inputs: vec![ItemFlow { item: "iron-plate".to_string(), rate: 2.0, is_fluid: false, module_id: 0 }],
+            external_outputs: vec![ItemFlow { item: "iron-gear-wheel".to_string(), rate: 1.0, is_fluid: false, module_id: 0 }],
             dependency_order: vec!["iron-gear-wheel".to_string()],
         }
     }
@@ -741,16 +741,16 @@ mod tests {
                 recipe: "plastic-bar".to_string(),
                 count: 1.0,
                 inputs: vec![
-                    ItemFlow { item: "coal".to_string(), rate: 1.5, is_fluid: false },
-                    ItemFlow { item: "petroleum-gas".to_string(), rate: 2.0, is_fluid: true },
+                    ItemFlow { item: "coal".to_string(), rate: 1.5, is_fluid: false, module_id: 0 },
+                    ItemFlow { item: "petroleum-gas".to_string(), rate: 2.0, is_fluid: true, module_id: 0 },
                 ],
-                outputs: vec![ItemFlow { item: "plastic-bar".to_string(), rate: 2.0, is_fluid: false }],
+                outputs: vec![ItemFlow { item: "plastic-bar".to_string(), rate: 2.0, is_fluid: false, module_id: 0 }],
             }],
             external_inputs: vec![
-                ItemFlow { item: "coal".to_string(), rate: 1.5, is_fluid: false },
-                ItemFlow { item: "petroleum-gas".to_string(), rate: 2.0, is_fluid: true },
+                ItemFlow { item: "coal".to_string(), rate: 1.5, is_fluid: false, module_id: 0 },
+                ItemFlow { item: "petroleum-gas".to_string(), rate: 2.0, is_fluid: true, module_id: 0 },
             ],
-            external_outputs: vec![ItemFlow { item: "plastic-bar".to_string(), rate: 2.0, is_fluid: false }],
+            external_outputs: vec![ItemFlow { item: "plastic-bar".to_string(), rate: 2.0, is_fluid: false, module_id: 0 }],
             dependency_order: vec!["plastic-bar".to_string()],
         }
     }
@@ -763,8 +763,8 @@ mod tests {
         let row_span = make_test_row_span(
             "iron-gear-wheel",
             5,
-            vec![ItemFlow { item: "iron-plate".to_string(), rate: 2.0, is_fluid: false }],
-            vec![ItemFlow { item: "iron-gear-wheel".to_string(), rate: 1.0, is_fluid: false }],
+            vec![ItemFlow { item: "iron-plate".to_string(), rate: 2.0, is_fluid: false, module_id: 0 }],
+            vec![ItemFlow { item: "iron-gear-wheel".to_string(), rate: 1.0, is_fluid: false, module_id: 0 }],
             1,
             vec![6],  // input belt at y=6
         );
@@ -789,8 +789,8 @@ mod tests {
         let row_span = make_test_row_span(
             "iron-gear-wheel",
             5,
-            vec![ItemFlow { item: "iron-plate".to_string(), rate: 2.0, is_fluid: false }],
-            vec![ItemFlow { item: "iron-gear-wheel".to_string(), rate: 1.0, is_fluid: false }],
+            vec![ItemFlow { item: "iron-plate".to_string(), rate: 2.0, is_fluid: false, module_id: 0 }],
+            vec![ItemFlow { item: "iron-gear-wheel".to_string(), rate: 1.0, is_fluid: false, module_id: 0 }],
             1,
             vec![6],
         );
@@ -812,10 +812,10 @@ mod tests {
             "plastic-bar",
             5,
             vec![
-                ItemFlow { item: "coal".to_string(), rate: 1.5, is_fluid: false },
-                ItemFlow { item: "petroleum-gas".to_string(), rate: 2.0, is_fluid: true },
+                ItemFlow { item: "coal".to_string(), rate: 1.5, is_fluid: false, module_id: 0 },
+                ItemFlow { item: "petroleum-gas".to_string(), rate: 2.0, is_fluid: true, module_id: 0 },
             ],
-            vec![ItemFlow { item: "plastic-bar".to_string(), rate: 2.0, is_fluid: false }],
+            vec![ItemFlow { item: "plastic-bar".to_string(), rate: 2.0, is_fluid: false, module_id: 0 }],
             1,
             vec![6, 7],  // two input belt y positions
         );
@@ -848,10 +848,10 @@ mod tests {
             "plastic-bar",
             5,
             vec![
-                ItemFlow { item: "coal".to_string(), rate: 1.5, is_fluid: false },
-                ItemFlow { item: "petroleum-gas".to_string(), rate: 2.0, is_fluid: true },
+                ItemFlow { item: "coal".to_string(), rate: 1.5, is_fluid: false, module_id: 0 },
+                ItemFlow { item: "petroleum-gas".to_string(), rate: 2.0, is_fluid: true, module_id: 0 },
             ],
-            vec![ItemFlow { item: "plastic-bar".to_string(), rate: 2.0, is_fluid: false }],
+            vec![ItemFlow { item: "plastic-bar".to_string(), rate: 2.0, is_fluid: false, module_id: 0 }],
             1,
             vec![6, 7],
         );
@@ -882,8 +882,8 @@ mod tests {
         let row_span = make_test_row_span(
             "iron-gear-wheel",
             5,
-            vec![ItemFlow { item: "iron-plate".to_string(), rate: 2.0, is_fluid: false }],
-            vec![ItemFlow { item: "iron-gear-wheel".to_string(), rate: 1.0, is_fluid: false }],
+            vec![ItemFlow { item: "iron-plate".to_string(), rate: 2.0, is_fluid: false, module_id: 0 }],
+            vec![ItemFlow { item: "iron-gear-wheel".to_string(), rate: 1.0, is_fluid: false, module_id: 0 }],
             1,
             vec![6],
         );

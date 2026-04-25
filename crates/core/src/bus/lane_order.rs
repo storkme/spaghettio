@@ -266,7 +266,7 @@ mod tests {
             make_test_row_span(
                 "iron-plate",
                 0,
-                vec![ItemFlow { item: "iron-ore".to_string(), rate: 1.0, is_fluid: false }],
+                vec![ItemFlow { item: "iron-ore".to_string(), rate: 1.0, is_fluid: false, module_id: 0 }],
                 vec![],
                 1,
                 vec![1],
@@ -274,7 +274,7 @@ mod tests {
             make_test_row_span(
                 "copper-plate",
                 4,
-                vec![ItemFlow { item: "copper-ore".to_string(), rate: 1.0, is_fluid: false }],
+                vec![ItemFlow { item: "copper-ore".to_string(), rate: 1.0, is_fluid: false, module_id: 0 }],
                 vec![],
                 1,
                 vec![5],
@@ -311,7 +311,7 @@ mod tests {
             make_test_row_span(
                 "iron-plate",
                 8,
-                vec![ItemFlow { item: "iron-ore".to_string(), rate: 1.0, is_fluid: false }],
+                vec![ItemFlow { item: "iron-ore".to_string(), rate: 1.0, is_fluid: false, module_id: 0 }],
                 vec![],
                 1,
                 vec![10],
@@ -319,7 +319,7 @@ mod tests {
             make_test_row_span(
                 "copper-plate",
                 4,
-                vec![ItemFlow { item: "copper-ore".to_string(), rate: 1.0, is_fluid: false }],
+                vec![ItemFlow { item: "copper-ore".to_string(), rate: 1.0, is_fluid: false, module_id: 0 }],
                 vec![],
                 1,
                 vec![5],

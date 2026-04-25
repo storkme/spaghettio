@@ -35,6 +35,9 @@ struct E2EResult {
     parsed: LayoutResult,
     issues: Vec<ValidationIssue>,
     analysis: BlueprintAnalysis,
+    /// Belt tier the original layout ran with — needed to re-run under
+    /// `PartitionedPerConsumer` for K1-4 inertness checks.
+    belt_tier: Option<String>,
     #[allow(dead_code)]
     trace_events: Vec<TraceEvent>,
 }
@@ -256,6 +259,7 @@ fn run_e2e_with_exclusions(
         parsed,
         issues,
         analysis,
+        belt_tier: belt_tier.map(|s| s.to_string()),
         trace_events,
     };
 
@@ -418,6 +422,52 @@ fn assert_golden_hash(result: &E2EResult, test_name: &str) {
              to capture. Computed: {computed}"
         ),
     }
+
+    // K1-4 inertness: re-run under PartitionedPerConsumer for cases
+    // with K=1 everywhere; the layout must match Pooled byte-for-byte.
+    assert_partitioned_inertness(
+        &result.solver_result,
+        result.belt_tier.as_deref(),
+        &computed,
+        test_name,
+    );
+}
+
+/// K1-4 inertness assertion from `docs/rfp-modular-production.md`. For
+/// cases with no multi-consumer intermediates, the layout produced
+/// under `LayoutStrategy::PartitionedPerConsumer` must be byte-identical
+/// to `LayoutStrategy::Pooled`. Tests with K>1 intermediates are out of
+/// K1-4's scope and are skipped here (they exercise PR2 of Phase 1
+/// directly).
+fn assert_partitioned_inertness(
+    solver_result: &fucktorio_core::models::SolverResult,
+    belt_tier: Option<&str>,
+    pooled_hash: &str,
+    test_name: &str,
+) {
+    use fucktorio_core::bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy};
+    use fucktorio_core::bus::partitioner::multi_consumer_items;
+
+    let multi = multi_consumer_items(solver_result);
+    if !multi.is_empty() {
+        // Out of K1-4 scope; PR2 covers the K>1 path.
+        return;
+    }
+    let layout = build_bus_layout(
+        solver_result,
+        LayoutOptions {
+            strategy: LayoutStrategy::PartitionedPerConsumer,
+            max_belt_tier: belt_tier.map(|s| s.to_string()),
+        },
+    )
+    .unwrap_or_else(|e| panic!("`{test_name}`: PartitionedPerConsumer layout failed: {e}"));
+    let computed = golden_hash(&layout);
+    assert_eq!(
+        computed, pooled_hash,
+        "K1-4 inertness violated for `{test_name}`: \
+         PartitionedPerConsumer produced a different layout than Pooled \
+         on a K=1-everywhere case.\n  pooled:        {pooled_hash}\n  partitioned:   {computed}",
+    );
 }
 
 /// K0-1 byte-equality regression table. Entries are
@@ -1586,6 +1636,7 @@ fn diag_ghost_cluster_helper(
             parsed: layout,
             issues: Vec::new(),
             analysis,
+            belt_tier: belt_tier.map(|s| s.to_string()),
             trace_events,
         }
     } else {

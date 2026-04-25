@@ -208,7 +208,7 @@ mod tests {
             "iron-plate",
             0,
             vec![],
-            vec![ItemFlow { item: "iron-plate".to_string(), rate: 10.0, is_fluid: false }],
+            vec![ItemFlow { item: "iron-plate".to_string(), rate: 10.0, is_fluid: false, module_id: 0 }],
             1,
             vec![],
         );
@@ -227,7 +227,7 @@ mod tests {
             "iron-plate",
             0,
             vec![],
-            vec![ItemFlow { item: "iron-plate".to_string(), rate: 10.0, is_fluid: false }],
+            vec![ItemFlow { item: "iron-plate".to_string(), rate: 10.0, is_fluid: false, module_id: 0 }],
             1,
             vec![],
         );
@@ -235,7 +235,7 @@ mod tests {
             "iron-plate",
             0,
             vec![],
-            vec![ItemFlow { item: "iron-plate".to_string(), rate: 10.0, is_fluid: false }],
+            vec![ItemFlow { item: "iron-plate".to_string(), rate: 10.0, is_fluid: false, module_id: 0 }],
             1,
             vec![],
         );
@@ -257,7 +257,7 @@ mod tests {
                 "iron-gear-wheel",
                 0,
                 vec![],
-                vec![ItemFlow { item: "iron-gear-wheel".to_string(), rate: 5.0, is_fluid: false }],
+                vec![ItemFlow { item: "iron-gear-wheel".to_string(), rate: 5.0, is_fluid: false, module_id: 0 }],
                 2,
                 vec![],
             );
@@ -270,7 +270,7 @@ mod tests {
                 "iron-gear-wheel",
                 5,
                 vec![],
-                vec![ItemFlow { item: "iron-gear-wheel".to_string(), rate: 5.0, is_fluid: false }],
+                vec![ItemFlow { item: "iron-gear-wheel".to_string(), rate: 5.0, is_fluid: false, module_id: 0 }],
                 2,
                 vec![],
             );
@@ -316,7 +316,7 @@ mod tests {
             "electronic-circuit",
             0,
             vec![],
-            vec![ItemFlow { item: "electronic-circuit".to_string(), rate: 5.0, is_fluid: false }],
+            vec![ItemFlow { item: "electronic-circuit".to_string(), rate: 5.0, is_fluid: false, module_id: 0 }],
             1,
             vec![],
         );
@@ -324,7 +324,7 @@ mod tests {
             "electronic-circuit",
             5,
             vec![],
-            vec![ItemFlow { item: "electronic-circuit".to_string(), rate: 5.0, is_fluid: false }],
+            vec![ItemFlow { item: "electronic-circuit".to_string(), rate: 5.0, is_fluid: false, module_id: 0 }],
             1,
             vec![],
         );
