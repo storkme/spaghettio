@@ -1,6 +1,5 @@
-import type { Application } from "pixi.js";
+import { Graphics, type Application } from "pixi.js";
 import type { Viewport } from "pixi-viewport";
-import type { Graphics } from "pixi.js";
 import { VALIDATION_BORDER_ALPHA } from "../renderer/validationOverlay";
 import { TILE_PX } from "../renderer/entities";
 import { beginAnimating, endAnimating, requestRender } from "../renderer/app";
@@ -81,7 +80,11 @@ export function createIssuesDialog(
   }
 
   let circleMap: Map<string, Graphics[]> = new Map();
-  let activePulse: { markers: Graphics[]; tickerFn: () => void } | null = null;
+  let activePulse: {
+    markers: Graphics[];
+    ring: Graphics;
+    tickerFn: () => void;
+  } | null = null;
   let pinnedRow: HTMLDivElement | null = null;
   let onValCloseCb: (() => void) | null = null;
 
@@ -89,30 +92,55 @@ export function createIssuesDialog(
     if (activePulse) {
       for (const m of activePulse.markers) m.alpha = VALIDATION_BORDER_ALPHA;
       app.ticker.remove(activePulse.tickerFn);
+      activePulse.ring.destroy();
       endAnimating();
       activePulse = null;
       requestRender();
     }
   }
 
-  function pulseCircle(key: string): void {
+  /** Pulse the validation border + spawn an expanding ring radiating
+   *  out from the tile to draw the eye, even far off-screen mid-pan. */
+  function pulseCircle(key: string, tileX: number, tileY: number): void {
     clearPulse();
     const markers = circleMap.get(key);
     if (!markers || markers.length === 0) return;
+
+    const cx = tileX * TILE_PX + TILE_PX / 2;
+    const cy = tileY * TILE_PX + TILE_PX / 2;
+    const ring = new Graphics();
+    viewport.addChild(ring);
+
+    const RING_PERIOD_MS = 900; // one expand cycle
+    const RING_MAX_R = TILE_PX * 4;
+    const BLINK_PERIOD_MS = 220;
     let elapsed = 0;
-    let on = true;
+    let blinkElapsed = 0;
+    let blinkOn = true;
+
     const tickerFn = (): void => {
-      elapsed += app.ticker.deltaMS;
-      if (elapsed >= 150) {
-        elapsed -= 150;
-        on = !on;
-        const alpha = on ? 1.0 : VALIDATION_BORDER_ALPHA;
+      const dt = app.ticker.deltaMS;
+      elapsed += dt;
+      blinkElapsed += dt;
+
+      // Border blink (fast)
+      if (blinkElapsed >= BLINK_PERIOD_MS) {
+        blinkElapsed -= BLINK_PERIOD_MS;
+        blinkOn = !blinkOn;
+        const alpha = blinkOn ? 1.0 : VALIDATION_BORDER_ALPHA;
         for (const m of markers) m.alpha = alpha;
       }
+
+      // Expanding ring (slow). Loops a few times then settles.
+      const phase = (elapsed % RING_PERIOD_MS) / RING_PERIOD_MS;
+      const r = phase * RING_MAX_R;
+      const ringAlpha = (1 - phase) * 0.7;
+      ring.clear();
+      ring.circle(cx, cy, r).stroke({ width: 3, color: 0xff4444, alpha: ringAlpha });
     };
     app.ticker.add(tickerFn);
     beginAnimating();
-    activePulse = { markers, tickerFn };
+    activePulse = { markers, ring, tickerFn };
   }
 
   function unpinRow(): void {
@@ -175,15 +203,8 @@ export function createIssuesDialog(
       if (issue.x != null && issue.y != null) {
         row.classList.add("has-pos");
         const key = `${issue.x},${issue.y}`;
-        row.addEventListener("mouseenter", () => {
-          if (pinnedRow === row) return;
-          viewport.moveCenter(issue.x! * TILE_PX + TILE_PX / 2, issue.y! * TILE_PX + TILE_PX / 2);
-          pulseCircle(key);
-        });
-        row.addEventListener("mouseleave", () => {
-          if (pinnedRow === row) return;
-          clearPulse();
-        });
+        const ix = issue.x;
+        const iy = issue.y;
         row.addEventListener("click", (e) => {
           e.stopPropagation();
           if (pinnedRow === row) {
@@ -192,8 +213,21 @@ export function createIssuesDialog(
             unpinRow();
             pinnedRow = row;
             row.style.background = "rgba(255,255,255,0.08)";
-            viewport.moveCenter(issue.x! * TILE_PX + TILE_PX / 2, issue.y! * TILE_PX + TILE_PX / 2);
-            pulseCircle(key);
+            // Smoothly animate the viewport centre to the issue tile.
+            // pixi-viewport's snap plugin runs as part of the viewport
+            // ticker, so requestRender handles redraws automatically.
+            viewport.snap(ix * TILE_PX + TILE_PX / 2, iy * TILE_PX + TILE_PX / 2, {
+              time: 450,
+              ease: "easeInOutQuad",
+              removeOnComplete: true,
+              removeOnInterrupt: true,
+              forceStart: true,
+            });
+            beginAnimating();
+            // Stop animating once snap finishes; pixi-viewport doesn't
+            // notify us, so we just set a timeout matching the snap.
+            window.setTimeout(() => endAnimating(), 480);
+            pulseCircle(key, ix, iy);
           }
         });
       }
