@@ -5,6 +5,7 @@
 import { Graphics, type Application } from "pixi.js";
 import type { Viewport } from "pixi-viewport";
 import { TILE_PX } from "./entities";
+import { beginAnimating, endAnimating } from "./app";
 
 const FLASH_COLOR = 0x40c0e0;
 
@@ -29,6 +30,7 @@ export function spawnRegionFlash(
     if (remaining <= 0) {
       app.ticker.remove(tick);
       flashG.destroy();
+      endAnimating();
       return;
     }
     flashG.clear();
@@ -37,4 +39,5 @@ export function spawnRegionFlash(
       .fill({ color: FLASH_COLOR, alpha: 0.55 * remaining });
   };
   app.ticker.add(tick);
+  beginAnimating();
 }
