@@ -103,6 +103,11 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
 
   const { app, viewport, requestRender, beginAnimating, endAnimating } = await createApp(container);
   const gridGfx = drawGrid(viewport);
+  // Tracks whether the grid has been animated in. Once revealed it stays
+  // visible across subsequent layout loads — only the dimensions are
+  // updated. The fade is a "this is the canvas" signal, shown once per
+  // session.
+  let gridRevealed = false;
   drawGraph(viewport, null);
 
   debugState.create();
@@ -944,21 +949,104 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     drawGraph(viewport, null);
     streamingHandle = createStreamingRenderer(entityLayer, app, onHover, onSelect);
     let viewportFitted = false;
+    let gridReveal: ReturnType<typeof startGridReveal> | null = null;
     return (evt) => {
+      const phase = (evt as { phase?: string }).phase;
       // On the first PhaseSnapshot, pan+zoom to frame the layout so streaming
-      // entities are visible. Subsequent snaps don't re-pan (user may have moved).
-      if (!viewportFitted && (evt as { phase?: string }).phase === "PhaseSnapshot") {
+      // entities are visible, and start drawing the grid as the "canvas" the
+      // entities will be placed on. Subsequent PhaseSnapshots resize the grid
+      // (the bus phase grows the layout sideways and downward) but don't
+      // re-pan (user may have moved) and don't re-trigger the fade-in.
+      if (phase === "PhaseSnapshot") {
         const d = (evt as { phase: string; data: { width: number; height: number } }).data;
         if (d.width > 0 && d.height > 0) {
-          viewport.fit(true, d.width * TILE_PX * 1.15, d.height * TILE_PX * 1.25);
-          viewport.moveCenter(d.width * TILE_PX / 2, d.height * TILE_PX / 2);
-          viewportFitted = true;
+          if (!viewportFitted) {
+            viewport.fit(true, d.width * TILE_PX * 1.15, d.height * TILE_PX * 1.25);
+            viewport.moveCenter(d.width * TILE_PX / 2, d.height * TILE_PX / 2);
+            viewportFitted = true;
+          }
+          if (!gridReveal) {
+            gridReveal = startGridReveal(d.width + 2, d.height + 2);
+          } else {
+            gridReveal.resize(d.width + 2, d.height + 2);
+          }
+          // First-fade-in is owned by the gridReveal handle; subsequent
+          // layout loads skip the fade and just resize. The flag flips
+          // when the fade animation finishes.
         }
       }
       streamingHandle?.onEvent(evt, (m) => {
         if (!streamingHandle) return;
         timelineScrubber.noteMilestone(m, streamingHandle.getTimeRange());
       });
+    };
+  }
+
+  /** Reveal the grid as a top-to-bottom wipe. Returns a handle that can
+   *  resize the target dimensions mid-animation (the bus-routed phase grows
+   *  the layout). When the wipe completes, switches to imperative redraws
+   *  on resize so subsequent PhaseSnapshots are cheap. */
+  function startGridReveal(
+    initialW: number,
+    initialH: number,
+  ): { cancel(): void; resize(w: number, h: number): void } {
+    let w = initialW;
+    let h = initialH;
+    let done = false;
+
+    // Fast path: the grid was already revealed once in this session. Just
+    // redraw at the new size — no fade, no flicker.
+    if (gridRevealed) {
+      updateGrid(gridGfx, w, h);
+      requestRender();
+      done = true;
+      return {
+        cancel: () => {},
+        resize(newW, newH) {
+          updateGrid(gridGfx, newW, newH);
+          requestRender();
+        },
+      };
+    }
+
+    const FADE_MS = 250;
+    const start = performance.now();
+    gridGfx.alpha = 1;
+    updateGrid(gridGfx, w, h, 0);
+    const tick = (): void => {
+      if (done) return;
+      const t = Math.min(1, (performance.now() - start) / FADE_MS);
+      updateGrid(gridGfx, w, h, t);
+      requestRender();
+      if (t >= 1) {
+        done = true;
+        gridRevealed = true;
+        app.ticker.remove(tick);
+        endAnimating();
+      }
+    };
+    app.ticker.add(tick);
+    beginAnimating();
+    return {
+      cancel(): void {
+        if (done) return;
+        done = true;
+        gridRevealed = true;
+        app.ticker.remove(tick);
+        endAnimating();
+        updateGrid(gridGfx, w, h);
+        requestRender();
+      },
+      resize(newW: number, newH: number): void {
+        w = newW;
+        h = newH;
+        // While animating, the next tick redraws at the new size with the
+        // current reveal fraction. After completion, redraw fully.
+        if (done) {
+          updateGrid(gridGfx, w, h);
+          requestRender();
+        }
+      },
     };
   }
 
