@@ -100,6 +100,32 @@ pub enum TraceEvent {
         families: Vec<FamilyInfo>,
         bus_width: i32,
     },
+
+    // `LayoutStrategy::PartitionedPerConsumer` partitioned an item into
+    // `modules` distinct lane families (one per consuming recipe-row).
+    // Fires zero or one time per partitioned item; absent for items with
+    // K=1 consumer rows. See `docs/rfp-modular-production.md`.
+    ModulePartitioned {
+        item: String,
+        /// Number of `(item, module_id)` lane families allocated. Equal
+        /// to the consumer-row count for this item.
+        modules: u32,
+        /// Per-module lane count, parallel to module_id 0..modules.
+        lanes_per_module: Vec<usize>,
+    },
+
+    // The partitioner's 75%-utilization gate rejected a proposed
+    // partition. Layout is produced but invalid; surfaced as a loud
+    // warning so the user sees the strategy didn't fit, rather than a
+    // silent fall-back to Pooled.
+    PartitionRejectedByUtilization {
+        item: String,
+        module_id: u32,
+        /// Maximum per-lane utilization in [0.0, 1.0]. Above 0.75 trips
+        /// the gate.
+        lane_util: f64,
+        belt_tier: String,
+    },
     LaneSplit {
         item: String,
         rate: f64,

@@ -20,6 +20,13 @@ pub struct ItemFlow {
     pub item: String,
     pub rate: f64,
     pub is_fluid: bool,
+    /// Module index when partitioning strategies are in use. `0` under
+    /// `LayoutStrategy::Pooled` (one module per item — today's
+    /// behaviour). The solver always emits `0`; the lane planner /
+    /// placer rewrites this in Phase 1+ when partitioning multi-consumer
+    /// items. See `docs/rfp-modular-production.md`.
+    #[serde(default)]
+    pub module_id: u32,
 }
 
 /// One production step: which machine, which recipe, how many.

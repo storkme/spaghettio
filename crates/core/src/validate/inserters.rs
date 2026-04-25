@@ -159,11 +159,11 @@ mod tests {
     use crate::models::{EntityDirection, ItemFlow, MachineSpec, PlacedEntity, SolverResult};
 
     fn solid_flow(item: &str) -> ItemFlow {
-        ItemFlow { item: item.to_string(), rate: 1.0, is_fluid: false }
+        ItemFlow { item: item.to_string(), rate: 1.0, is_fluid: false, module_id: 0 }
     }
 
     fn fluid_flow(item: &str) -> ItemFlow {
-        ItemFlow { item: item.to_string(), rate: 1.0, is_fluid: true }
+        ItemFlow { item: item.to_string(), rate: 1.0, is_fluid: true, module_id: 0 }
     }
 
     // ── check_inserter_direction ─────────────────────────────────────────────
