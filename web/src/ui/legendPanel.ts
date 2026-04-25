@@ -182,6 +182,7 @@ export interface LegendPanelState {
   stepThrough: boolean;
   ghostTiles: boolean;
   satZones: boolean;
+  traceOverlay: boolean;
 }
 
 export function createLegendPanel(container: HTMLElement): LegendPanelControls {
@@ -272,7 +273,7 @@ export function createLegendPanel(container: HTMLElement): LegendPanelControls {
       // Ghost paths — step-through mode draws them via renderTraceOverlay;
       // they also appear in the ghost routing overlay when debug is on.
       // Show when debug is on and there's trace data, regardless of step-through.
-      if (state.stepThrough) {
+      if (state.stepThrough || state.traceOverlay) {
         entries.push({ swatch: ghostPaletteSwatch(), label: "Ghost path (per-spec colour)" });
         entries.push({ swatch: diamondSwatch("#ffdd00", 0.85), label: "Crossing: two specs collide (SAT)" });
         entries.push({ swatch: crossSwatch("#ff3333"), label: "Route / ghost spec failed" });

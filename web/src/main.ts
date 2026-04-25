@@ -116,7 +116,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
 
   // --- Modules ---
   const overlayControls = createOverlayPanel(container);
-  const { debugCb, colorCb, regionsCb, soloRegionsCb, ghostTilesCb } = overlayControls;
+  const { debugCb, colorCb, regionsCb, soloRegionsCb, ghostTilesCb, traceOverlayCb } = overlayControls;
   // Sync the item-coloring flag with the persisted checkbox state so
   // a user who turned colours off stays off across reloads.
   setItemColoring(colorCb.checked);
@@ -140,6 +140,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       stepThrough: false,
       ghostTiles: ghostTilesCb.checked,
       satZones: regionsCb.checked,
+      traceOverlay: traceOverlayCb.checked,
     };
   }
 
@@ -468,7 +469,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       }
     }
 
-    if (!debugCb.checked || !lastLayout?.trace?.length) {
+    if (!debugCb.checked || !traceOverlayCb.checked || !lastLayout?.trace?.length) {
       stepThrough.update();
       requestRender();
       return;
@@ -1353,6 +1354,10 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     });
     ghostTilesCb.addEventListener("change", () => {
       updateGhostTilesOverlay();
+      updateLegend();
+    });
+    traceOverlayCb.addEventListener("change", () => {
+      updateTraceOverlay();
       updateLegend();
     });
     colorCb.addEventListener("change", () => {
