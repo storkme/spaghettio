@@ -443,10 +443,10 @@ export function createInspector(container: HTMLElement): InspectorControls {
       ttGhostRow.append(label, icon, text);
     } else {
       ttGhostRow.textContent = "";
-      const warn = document.createElement("span");
-      warn.style.color = "#ffa060";
-      warn.textContent = `⚠ ${info.ghosts.length} ghosts crossing`;
-      ttGhostRow.appendChild(warn);
+      const info_ = document.createElement("span");
+      info_.style.color = "#8af";
+      info_.textContent = `${info.ghosts.length} ghosts crossing`;
+      ttGhostRow.appendChild(info_);
     }
     return true;
   }

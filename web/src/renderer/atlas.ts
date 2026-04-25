@@ -160,12 +160,20 @@ export function getMultiCellTexture(
     atlasRT = RenderTexture.create({ width: ATLAS_SIZE, height: ATLAS_SIZE });
   }
 
-  // Allocate enough consecutive slots to cover wCells columns. For simplicity,
-  // advance nextSlot by wCells * hCells (row-major, one row per hCells).
-  // This wastes slots when wCells > 1 on a partial row; acceptable for the
-  // bounded variant counts we expect (~21 machines + 12 splitters).
+  // Multi-cell sprites occupy a rectangular `wCells × hCells` region. The
+  // allocator must reserve every cell in that rectangle, not just a linear
+  // span — otherwise later 1×1 allocations wrap into the rows below and
+  // overwrite the bottom of the sprite (visible as belts/splitters/ghost
+  // entities bleeding through machine graphics, and entity ghosts behind
+  // item icons).
+  //
+  // Strategy: align horizontally to next row if `wCells` won't fit on the
+  // current row, stamp at the resulting (slotCol, slotRow), then jump
+  // `nextSlot` to the start of the row after the sprite's bottom edge.
+  // This wastes the cells to the right of the sprite on its occupied rows
+  // and any cells to the left of slotCol on rows below the first; the
+  // tradeoff is correctness for ~250 entries in a 4096-slot atlas.
   const col = nextSlot % ATLAS_COLS;
-  // Align to next row if not enough room on current row.
   const needAlign = col + wCells > ATLAS_COLS;
   if (needAlign) nextSlot += ATLAS_COLS - col;
 
@@ -173,7 +181,7 @@ export function getMultiCellTexture(
   const slotRow = Math.floor(nextSlot / ATLAS_COLS);
   const slotX = slotCol * CELL_PX;
   const slotY = slotRow * CELL_PX;
-  nextSlot += wCells * hCells;
+  nextSlot = (slotRow + hCells) * ATLAS_COLS;
 
   const wPx = wCells * CELL_PX;
   const hPx = hCells * CELL_PX;
