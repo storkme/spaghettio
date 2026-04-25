@@ -461,16 +461,20 @@ export function createStreamingRenderer(
     }
   }
 
-  function handleGhostSpecCommitted(data: {
-    spec_key: string;
-    entities: PlacedEntity[];
-  }): void {
+  /** Reveal a batch of entities with a NW→SE staggered fade-in. Used by
+   *  `GhostSpecCommitted` (per-spec ghost route commits) and the silent-stamp
+   *  stream events (`TrunkBeltCommitted`, `BalancerCommitted`,
+   *  `OutputMergerCommitted`, `PolesCommitted`) — all of which want the same
+   *  treatment: pre-populate the draw context for turn detection, then
+   *  commit each entity at a staggered timestamp. */
+  function commitEntitiesStaggered(entities: PlacedEntity[]): void {
+    if (entities.length === 0) return;
     const now = clock();
     // Populate draw ctx with every entity in this batch up-front so
     // turn detection sees sideload neighbours when rendering each belt.
-    for (const e of data.entities) addEntityToDrawContext(e, drawCtx);
+    for (const e of entities) addEntityToDrawContext(e, drawCtx);
     // Sort entities by their path position (approximately) via NW→SE.
-    const sorted = [...data.entities].sort((a, b) => {
+    const sorted = [...entities].sort((a, b) => {
       const dy = (a.y ?? 0) - (b.y ?? 0);
       if (dy !== 0) return dy;
       return (a.x ?? 0) - (b.x ?? 0);
@@ -484,6 +488,13 @@ export function createStreamingRenderer(
     // keep their ghost belt at ~50% alpha — the eye-candy feedback
     // "something still flows here". When a junction cluster covers
     // those tiles later, `handleJunctionCommitted` fades them out.
+  }
+
+  function handleGhostSpecCommitted(data: {
+    spec_key: string;
+    entities: PlacedEntity[];
+  }): void {
+    commitEntitiesStaggered(data.entities);
   }
 
   function handleJunctionCommitted(data: {
@@ -765,6 +776,15 @@ export function createStreamingRenderer(
           zone_w: number;
           zone_h: number;
         });
+        break;
+      // Stream-sibling events for entities that the engine previously stamped
+      // silently. They all carry an `entities` batch that we reveal with the
+      // same NW→SE stagger as `GhostSpecCommitted`.
+      case "TrunkBeltCommitted":
+      case "BalancerCommitted":
+      case "OutputMergerCommitted":
+      case "PolesCommitted":
+        commitEntitiesStaggered((evt.data as { entities: PlacedEntity[] }).entities);
         break;
       default:
         break;
