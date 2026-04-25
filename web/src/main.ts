@@ -3,6 +3,7 @@ import { createApp, WORLD_SIZE } from "./renderer/app";
 import { drawGrid, updateGrid } from "./renderer/grid";
 import { drawGraph } from "./renderer/graph";
 import { initEntityIcons, preloadCarriesIcons, renderLayout, setItemColoring, itemColor, TILE_PX, MACHINE_SIZES, SPLITTER_ENTITIES, splitterCompanionOffset, type HighlightController } from "./renderer/entities";
+import { createParticleScene, renderLayoutAsParticles } from "./renderer/particleLayout";
 import { createSelectionController, type SelectionController } from "./renderer/selection";
 import { renderSidebar } from "./ui/sidebar";
 import { initCorpusPanel } from "./ui/corpus";
@@ -202,6 +203,20 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
 
   setupSnapshotDropZone(container, (snap) => snapshotMode.load(snap));
 
+  /**
+   * Render a layout using particles for all entity types. Clears `entityLayer`,
+   * creates a fresh `ParticleScene`, attaches it, and commits all entities.
+   * Returns a particle-aware `HighlightController`.
+   *
+   * Used by: non-streaming path in `renderLayoutOnCanvas`, and `runAutoOptimize`.
+   */
+  function renderLayoutWithParticles(layout: LayoutResult): HighlightController {
+    entityLayer.removeChildren();
+    const scene = createParticleScene();
+    scene.attachTo(entityLayer);
+    return renderLayoutAsParticles(layout, scene);
+  }
+
   const entityLayer = new Container();
   // Cache the entity layer's GPU instruction buffer across frames. The static
   // bus layout (thousands of Graphics) doesn't change between renders, so
@@ -330,6 +345,13 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     reset(): void {},
   };
 
+  /** Animation log — gated on `window.__ANIM_LOGS`. */
+  const animLog = (phase: string, detail: Record<string, unknown>): void => {
+    if (!(globalThis as { __ANIM_LOGS?: boolean }).__ANIM_LOGS) return;
+    // eslint-disable-next-line no-console
+    console.log(`[anim t=${performance.now().toFixed(0)}ms] ${phase}`, detail);
+  };
+
   /* Stagger-fade entities that are new in `nextList` relative to `prevList`.
    * Only called on consecutive forward phase steps (N → N+1).
    * Backward steps and jumps stay instant. */
@@ -347,6 +369,8 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       });
 
     if (added.length === 0) return { cancel() {} };
+
+    animLog("seek_step", { added: added.length });
 
     const SEEK_FADE_MS = 160;
     const stagger = Math.min(7, 450 / added.length);
@@ -767,7 +791,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
         w: imp.zone_w,
         h: imp.zone_h,
       });
-      renderLayout(lastLayout, entityLayer, undefined, undefined);
+      renderLayoutWithParticles(lastLayout);
       requestRender();
     };
 
@@ -829,7 +853,8 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       rebuildTileEntityMap(finalLayout);
       (window as unknown as { __layout?: LayoutResult }).__layout = finalLayout;
       // Final authoritative redraw with the committed layout.
-      renderLayout(finalLayout, entityLayer, undefined, undefined);
+      const optCtrl = renderLayoutWithParticles(finalLayout);
+      inspector.setHighlightController(wrapHighlight(optCtrl));
       requestRender();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -1150,10 +1175,10 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
 
     if (streamingHandle?.hasCommittedEntities()) {
       // Streaming drew transient previews during layout. Hand off to
-      // the authoritative `renderLayout` — this destroys the transient
-      // graphics, draws `layout.entities`, and returns the real
-      // HighlightController. Keep `streamingHandle` alive so the
-      // scrubber's `onSeek` callback can drive `seekTo()`.
+      // Streaming drew entity particles during layout. `finish()` stops
+      // the live ticker and returns a particle-aware HighlightController.
+      // Keep `streamingHandle` alive so the scrubber's `onSeek` callback
+      // can drive `seekTo()`.
       ctrl = streamingHandle.finish(layout);
       timelineScrubber.arm(
         streamingHandle.getTimeRange(),
@@ -1174,7 +1199,8 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
         ctrl = out.controller;
         phaseAnimHandle = out.handle;
       } else {
-        ctrl = renderLayout(layout, entityLayer, onHover, onSelect);
+        // Use particle-based rendering for all non-streaming, non-animated paths.
+        ctrl = renderLayoutWithParticles(layout);
       }
     }
     inspector.setHighlightController(wrapHighlight(ctrl));
