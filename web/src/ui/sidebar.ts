@@ -2,7 +2,6 @@ import type { Engine, SolverResult, LayoutResult, ItemFlow, ValidationIssue, Tra
 import { readUrlState, writeUrlState, DEFAULT_INPUTS } from "../state.js";
 import { beltTierForRate, hexToCss } from "../renderer/colors.js";
 import { niceName, setRecipeFlows } from "../renderer/entities.js";
-import { renderDebugPanel } from "./debugPanel.js";
 import "./sidebar.css";
 
 // ---------------------------------------------------------------------------
@@ -306,16 +305,10 @@ export interface SidebarParams {
   belt?: string | null;
 }
 
-/** Callbacks the sidebar can use to read canvas overlay state. */
-export interface SidebarOptions {
-  getDebugMode?: () => boolean;
-}
-
 export function renderSidebar(
   el: HTMLElement,
   engine: Engine,
   callbacks: SidebarCallbacks,
-  options?: SidebarOptions,
 ): { getParams(): SidebarParams | null; setParams(params: SidebarParams, opts?: { skipAutoSolve?: boolean }): void; updateValidation(issues: ValidationIssue[], onPanToTile: (x: number, y: number) => void): void } {
   el.innerHTML = "";
 
@@ -679,9 +672,6 @@ export function renderSidebar(
       blueprintSection.style.display = "none";
     } else {
       blueprintSection.style.display = "flex";
-    }
-    if (layout.trace?.length && options?.getDebugMode?.()) {
-      resultContainer.appendChild(renderDebugPanel(layout.trace));
     }
   }
 
