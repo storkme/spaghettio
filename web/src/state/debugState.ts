@@ -5,6 +5,7 @@ export interface DebugState {
   soloRegions: boolean;
   ghostTiles: boolean;
   itemColors: boolean;
+  traceOverlay: boolean;
 }
 
 type Subscriber = (state: DebugState) => void;
@@ -16,6 +17,7 @@ let state: DebugState = {
   soloRegions: false,
   ghostTiles: false,
   itemColors: true,
+  traceOverlay: false,
 };
 
 const subs: Subscriber[] = [];
@@ -26,12 +28,14 @@ export function create(): void {
   const satFromStorage = localStorage.getItem("fk-sat-zones") === "1";
   const ghostFromStorage = localStorage.getItem("fk-ghost-tiles") === "1";
   const itemColorsStored = localStorage.getItem("fk-item-colors");
+  const traceOverlayStored = localStorage.getItem("fk-trace-overlay") === "1";
   state = {
     ...state,
     master: fromParam || fromStorage,
     satZones: satFromStorage,
     ghostTiles: ghostFromStorage,
     itemColors: itemColorsStored === null ? true : itemColorsStored === "1",
+    traceOverlay: traceOverlayStored,
   };
 }
 
@@ -52,6 +56,9 @@ export function set(patch: Partial<DebugState>): void {
   }
   if ("itemColors" in patch) {
     localStorage.setItem("fk-item-colors", patch.itemColors ? "1" : "0");
+  }
+  if ("traceOverlay" in patch) {
+    localStorage.setItem("fk-trace-overlay", patch.traceOverlay ? "1" : "0");
   }
   for (const cb of subs) cb(state);
 }

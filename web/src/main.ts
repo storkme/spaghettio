@@ -2,7 +2,7 @@ import { Container, Graphics } from "pixi.js";
 import { createApp, WORLD_SIZE } from "./renderer/app";
 import { drawGrid, updateGrid } from "./renderer/grid";
 import { drawGraph } from "./renderer/graph";
-import { initEntityIcons, preloadCarriesIcons, renderLayout, setItemColoring, itemColor, TILE_PX, MACHINE_SIZES, SPLITTER_ENTITIES, splitterCompanionOffset, type HighlightController } from "./renderer/entities";
+import { initEntityIcons, preloadCarriesIcons, renderLayout, setItemColoring, TILE_PX, MACHINE_SIZES, SPLITTER_ENTITIES, splitterCompanionOffset, type HighlightController } from "./renderer/entities";
 import { createParticleScene, renderLayoutAsParticles } from "./renderer/particleLayout";
 import { renderInputLabels } from "./renderer/inputLabels";
 import { createSelectionController, type SelectionController } from "./renderer/selection";
@@ -30,7 +30,6 @@ import { createIssuesDialog } from "./ui/issuesDialog";
 import { createInspector } from "./ui/inspector";
 import { buildTileContext } from "./ui/tileContext";
 import { createSnapshotMode } from "./ui/snapshotMode";
-import { createLegendPanel, type LegendPanelControls, type LegendPanelState } from "./ui/legendPanel";
 import { renderLayoutPhaseAnimated, type PhaseAnimationHandle } from "./renderer/phaseAnimation";
 import { spawnRegionFlash } from "./renderer/improvementAnimation";
 import { createStreamingRenderer, type StreamingRendererHandle } from "./renderer/streamingRenderer";
@@ -117,7 +116,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
 
   // --- Modules ---
   const overlayControls = createOverlayPanel(container);
-  const { debugCb, colorCb, regionsCb, soloRegionsCb, ghostTilesCb } = overlayControls;
+  const { debugCb, colorCb, regionsCb, soloRegionsCb, ghostTilesCb, traceOverlayCb } = overlayControls;
   // Sync the item-coloring flag with the persisted checkbox state so
   // a user who turned colours off stays off across reloads.
   setItemColoring(colorCb.checked);
@@ -130,23 +129,6 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
   };
   debugCb.addEventListener("change", syncAnimLogs);
   syncAnimLogs();
-
-  const overlayLegend: LegendPanelControls = createLegendPanel(container);
-
-  function getLegendState(): LegendPanelState {
-    return {
-      hasLayout: !!lastLayout,
-      debugMode: debugCb.checked,
-      hasTrace: !!(lastLayout?.trace?.length),
-      stepThrough: false,
-      ghostTiles: ghostTilesCb.checked,
-      satZones: regionsCb.checked,
-    };
-  }
-
-  function updateLegend(): void {
-    overlayLegend.update(getLegendState());
-  }
 
   const inspector = createInspector(container);
 
@@ -475,7 +457,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       }
     }
 
-    if (!debugCb.checked || !lastLayout?.trace?.length) {
+    if (!debugCb.checked || !traceOverlayCb.checked || !lastLayout?.trace?.length) {
       stepThrough.update();
       requestRender();
       return;
@@ -655,11 +637,6 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     requestRender();
   }
 
-  // --- Item color legend (bottom-left) ---
-  const legendEl = document.createElement("div");
-  legendEl.style.cssText = "position:absolute;bottom:8px;left:8px;background:rgba(0,0,0,0.6);color:#ccc;font:11px monospace;padding:4px 8px;border-radius:3px;pointer-events:none;z-index:10;display:none;max-height:300px;overflow-y:auto";
-  container.appendChild(legendEl);
-
   // --- Selection annotation bar ---
   const annotationBar = document.createElement("div");
   annotationBar.style.cssText = "position:absolute;bottom:34px;left:8px;background:rgba(0,0,0,0.8);color:#e0e0e0;font:11px monospace;padding:6px 8px;border-radius:3px;border:1px solid #00e0a0;z-index:10;display:none;min-width:200px";
@@ -725,8 +702,6 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       cachedValidationIssues = null;
       drawGraph(viewport, null);
       viewport.moveCenter(WORLD_SIZE / 2, WORLD_SIZE / 2);
-      legendEl.style.display = "none";
-      updateLegend();
       issuesDialog.setVisible(false);
       issuesDialog.populate([], false);
       updateValidationBadge(null);
@@ -1048,7 +1023,6 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     inputLabelsLayer.removeChildren();
     lastSolverResult = result;
     drawGraph(viewport, result);
-    legendEl.style.display = "none";
     if (!result) {
       viewport.moveCenter(WORLD_SIZE / 2, WORLD_SIZE / 2);
     }
@@ -1163,33 +1137,6 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     };
   }
 
-  function buildLegend(layout: LayoutResult): void {
-    legendEl.innerHTML = "";
-    const items = new Set<string>();
-    for (const e of layout.entities) {
-      if (e.carries) items.add(e.carries);
-    }
-    if (items.size === 0 || !colorCb.checked) {
-      legendEl.style.display = "none";
-      return;
-    }
-    const sorted = Array.from(items).sort();
-    for (const item of sorted) {
-      const row = document.createElement("div");
-      row.style.cssText = "display:flex;align-items:center;gap:5px;padding:1px 0";
-      const swatch = document.createElement("span");
-      const color = itemColor(item);
-      const hex = "#" + color.toString(16).padStart(6, "0");
-      swatch.style.cssText = `display:inline-block;width:12px;height:12px;background:${hex};border-radius:2px;flex-shrink:0`;
-      row.appendChild(swatch);
-      const label = document.createElement("span");
-      label.textContent = item;
-      row.appendChild(label);
-      legendEl.appendChild(row);
-    }
-    legendEl.style.display = "block";
-  }
-
   function renderLayoutOnCanvas(layout: LayoutResult): void {
     lastLayout = layout;
     rebuildTileEntityMap(layout);
@@ -1245,12 +1192,10 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     inspector.setTileContext(buildTileContext(layout.trace));
     inspector.clearPin();
     selectionCtrl = createSelectionController(app.canvas, viewport, entityLayer, layout, onSelectionChange);
-    buildLegend(layout);
     updateTraceOverlay();
     updateValidationOverlay();
     updateRegionOverlay();
     updateGhostTilesOverlay();
-    updateLegend();
     // External-input trunk labels (issue #196). Rebuilt on every layout
     // commit. Skips when there's no SolverResult — corpus / snapshot
     // load paths arrive without one and we don't fabricate labels there.
@@ -1361,8 +1306,6 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       renderGraph,
       renderLayout: renderLayoutOnCanvas,
       startStreaming,
-    }, {
-      getDebugMode: () => debugCb.checked,
     });
 
     // Wire overlay panel toggles
@@ -1372,24 +1315,21 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       updateValidationOverlay();
       updateRegionOverlay();
       updateGhostTilesOverlay();
-      updateLegend();
     });
     ghostTilesCb.addEventListener("change", () => {
       updateGhostTilesOverlay();
-      updateLegend();
+    });
+    traceOverlayCb.addEventListener("change", () => {
+      updateTraceOverlay();
     });
     colorCb.addEventListener("change", () => {
       setItemColoring(colorCb.checked);
-      if (!colorCb.checked) {
-        legendEl.style.display = "none";
-      }
       if (lastLayout) {
         renderLayoutOnCanvas(lastLayout);
       }
     });
     regionsCb.addEventListener("change", () => {
       updateRegionOverlay();
-      updateLegend();
     });
 
     soloRegionsCb.addEventListener("change", () => {
