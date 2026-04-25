@@ -1,27 +1,34 @@
-# Issue #186 Progress
+# Issue #186 Progress — COMPLETE
 
-## Completed
+## Status: Done
 
-- Investigated the full timeline view implementation:
-  - `web/src/ui/timelineScrubber.ts` — the scrubber component (live + scrub modes)
-  - `web/src/renderer/streamingRenderer.ts` — milestone firing + time tracking
-  - `web/src/renderer/traceOverlay.ts` — post-layout trace overlays
-  - `web/src/ui/busyOverlay.ts` — dead code spinner
-  - `web/src/main.ts` — integration point
-  - `crates/core/src/trace.rs` — Rust trace event definitions
-- Identified 4 concrete action items
-- Filed 4 sub-issues:
-  - #187: wire up busyOverlay
-  - #188: time-weighted progress fill
-  - #189: SAT auto-optimize timeline
-  - #190: better milestone labels
-- Added 'agent-done' label to #186
-- Commented on #186 with findings
+All investigation steps were completed by a prior pass. No further action needed.
 
-## Key findings summary
+### Completed by prior pass
 
-1. Timeline scrubber has two modes (live/scrub) driven by milestone events from streaming renderer
-2. Busy overlay module exists but is never imported — dead code
-3. Auto-optimize phase has zero progress indication
-4. Progress fill is uniform (20% per milestone) not time-weighted
-5. Labels are phase-names rather than user-friendly descriptions
+1. **Investigation** — full walkthrough of timeline view:
+   - `web/src/ui/timelineScrubber.ts` — scrubber component (live + scrub modes)
+   - `web/src/renderer/streamingRenderer.ts` — milestone firing + time tracking
+   - `web/src/renderer/traceOverlay.ts` — post-layout trace overlays
+   - `web/src/ui/busyOverlay.ts` — dead code spinner (never imported)
+   - `web/src/main.ts` — integration point + `runAutoOptimize`
+   - `crates/core/src/trace.rs` — Rust trace event definitions
+
+2. **Sub-issues filed** (all verified existing):
+   - [#187](https://github.com/storkme/fucktorio/issues/187) — improve timeline milestone labels
+   - [#188](https://github.com/storkme/fucktorio/issues/188) — time-weighted progress fill
+   - [#189](https://github.com/storkme/fucktorio/issues/189) — SAT auto-optimize timeline progress
+   - [#190](https://github.com/storkme/fucktorio/issues/190) — wire up busyOverlay spinner
+
+3. **Label `agent-done`** added to #186
+
+4. **Comment posted** on #186 summarizing findings with links to all sub-issues
+
+### Key findings
+
+| Finding | Sub-issue |
+|---------|-----------|
+| Milestone labels are opaque phase-names, not user-friendly descriptions | #187 |
+| Progress fill is uniform (20% each), not time-weighted | #188 |
+| SAT auto-optimize phase has zero progress indication | #189 |
+| `busyOverlay.ts` exists but is never imported — dead code | #190 |
