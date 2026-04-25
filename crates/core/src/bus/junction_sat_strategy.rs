@@ -816,6 +816,18 @@ impl JunctionStrategy for SatStrategy {
             belt_name,
             self.constraints.max_ug_ins,
         );
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::zone_cache::record_zone(
+            &zone,
+            &channel_reaches,
+            self.constraints.max_ug_ins,
+            crate::zone_cache::ZoneStats {
+                variables: stats.variables,
+                clauses: stats.clauses,
+                solve_time_us: stats.solve_time_us,
+            },
+            None,
+        );
         let satisfied = entities_opt.is_some();
         let entities_raw = entities_opt.as_ref().map(|e| e.len()).unwrap_or(0);
         let proposed_entities: Vec<SatProposedEntity> = entities_opt
