@@ -21,8 +21,11 @@
   pointer-events: auto;
 }
 
+/* TEMP: force-hide the timeline scrubber until its seekbar is fixed.
+ * Was `display: block;` — restore when the bar is wired up again.
+ * The state machine in main.ts still runs; this just keeps the UI off. */
 .timeline-scrubber.ts-visible {
-  display: block;
+  display: none;
 }
 
 .timeline-scrubber .ts-chips {
