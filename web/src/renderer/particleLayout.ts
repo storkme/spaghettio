@@ -90,22 +90,25 @@ interface ParticleEntry {
 
 /**
  * Top-level container for the particle-based render path.
- * Three `ParticleContainer`s:
- *   - entityContainer: entity textures (belts, pipes, machines, etc.)
- *   - ghostContainer:  ghost belt previews (z-order: above entities)
- *   - iconContainer:   item-icon textures (z-order: topmost)
+ * Four `ParticleContainer`s in z-order (bottom to top):
+ *   - beltContainer:    belts, pipes, inserters, splitters, UG belts, poles
+ *   - machineContainer: machines (rendered above belts so top-edge belt tiles
+ *                       don't bleed through machine bodies)
+ *   - ghostContainer:   ghost belt previews (z-order: above committed entities)
+ *   - iconContainer:    item-icon textures (z-order: topmost)
  * All use `dynamicProperties: { color: true }` so per-particle
  * alpha/tint mutations are cheap.
  */
 export interface ParticleScene {
-  entityContainer: ParticleContainer;
+  beltContainer: ParticleContainer;
+  machineContainer: ParticleContainer;
   ghostContainer: ParticleContainer;
   iconContainer: ParticleContainer;
   /** The layout this scene was built from (set by `renderLayoutAsParticles`). */
   layout: LayoutResult | null;
   /**
-   * Add the parent `ParticleContainer`s to `parent` in the right z-order
-   * (entities, ghosts, icons from bottom to top).
+   * Add the particle containers to `parent` in the correct z-order:
+   * belt → machine → ghost → icon.
    */
   attachTo(parent: Container): void;
   /**
@@ -130,29 +133,34 @@ function makeParticleContainer(): ParticleContainer {
 }
 
 export function createParticleScene(): ParticleScene {
-  const entityContainer = makeParticleContainer();
+  const beltContainer = makeParticleContainer();
+  const machineContainer = makeParticleContainer();
   const ghostContainer = makeParticleContainer();
   const iconContainer = makeParticleContainer();
 
   const scene: ParticleScene = {
-    entityContainer,
+    beltContainer,
+    machineContainer,
     ghostContainer,
     iconContainer,
     layout: null,
     attachTo(parent: Container): void {
-      parent.addChild(entityContainer);
+      parent.addChild(beltContainer);
+      parent.addChild(machineContainer);
       parent.addChild(ghostContainer);
       parent.addChild(iconContainer);
     },
     clear(): void {
-      entityContainer.removeParticles();
+      beltContainer.removeParticles();
+      machineContainer.removeParticles();
       ghostContainer.removeParticles();
       iconContainer.removeParticles();
       particleMap.clear();
     },
     count(): number {
       return (
-        entityContainer.particleChildren.length +
+        beltContainer.particleChildren.length +
+        machineContainer.particleChildren.length +
         ghostContainer.particleChildren.length +
         iconContainer.particleChildren.length
       );
@@ -471,7 +479,12 @@ export function commitEntityAsParticle(
     scaleX,
     scaleY,
   });
-  scene.entityContainer.addParticle(ep);
+  // Machines render above belts; everything else goes into beltContainer.
+  if (MACHINE_ENTITIES.has(entity.name)) {
+    scene.machineContainer.addParticle(ep);
+  } else {
+    scene.beltContainer.addParticle(ep);
+  }
 
   // --- Icon particle (if the entity carries an item, and isn't a machine) ---
   let iconParticle: Particle | undefined;
@@ -583,7 +596,12 @@ export function removeParticleAt(
 ): void {
   const entry = particleMap.get(key);
   if (!entry) return;
-  scene.entityContainer.removeParticle(entry.entity);
+  // Entity particle lives in machineContainer or beltContainer depending on type.
+  if (MACHINE_ENTITIES.has(entry.placedEntity.name)) {
+    scene.machineContainer.removeParticle(entry.entity);
+  } else {
+    scene.beltContainer.removeParticle(entry.entity);
+  }
   if (entry.icon) scene.iconContainer.removeParticle(entry.icon);
   particleMap.delete(key);
 }
@@ -671,8 +689,8 @@ export function renderLayoutAsParticles(
   let overlayParent: Container | null = null;
 
   function getOverlayParent(): Container | null {
-    // Reach the parent container via the entityContainer's parent.
-    return scene.entityContainer.parent as Container | null;
+    // Reach the parent container via the beltContainer's parent.
+    return scene.beltContainer.parent as Container | null;
   }
 
   function clearHighlightInternal(): void {
