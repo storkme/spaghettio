@@ -135,6 +135,63 @@ export function getEntityTexture(
 }
 
 /**
+ * Get-or-render a multi-cell texture for wide/tall entities (e.g. machines,
+ * splitters). Each unique `(key, wCells, hCells)` triple gets its own
+ * region in the atlas spanning `wCells * CELL_PX` × `hCells * CELL_PX` px.
+ *
+ * The render callback receives `(g, wPx, hPx)` — the pixel dimensions it
+ * should fill. The caller is responsible for drawing within those bounds.
+ */
+export function getMultiCellTexture(
+  key: string,
+  wCells: number,
+  hCells: number,
+  render: (g: Graphics, wPx: number, hPx: number) => void,
+): Texture {
+  const cached = cache.get(key);
+  if (cached) return cached;
+
+  if (!renderer) {
+    console.warn("[atlas] getMultiCellTexture called before initAtlas; returning blank texture");
+    return Texture.EMPTY;
+  }
+
+  if (!atlasRT) {
+    atlasRT = RenderTexture.create({ width: ATLAS_SIZE, height: ATLAS_SIZE });
+  }
+
+  // Allocate enough consecutive slots to cover wCells columns. For simplicity,
+  // advance nextSlot by wCells * hCells (row-major, one row per hCells).
+  // This wastes slots when wCells > 1 on a partial row; acceptable for the
+  // bounded variant counts we expect (~21 machines + 12 splitters).
+  const col = nextSlot % ATLAS_COLS;
+  // Align to next row if not enough room on current row.
+  const needAlign = col + wCells > ATLAS_COLS;
+  if (needAlign) nextSlot += ATLAS_COLS - col;
+
+  const slotCol = nextSlot % ATLAS_COLS;
+  const slotRow = Math.floor(nextSlot / ATLAS_COLS);
+  const slotX = slotCol * CELL_PX;
+  const slotY = slotRow * CELL_PX;
+  nextSlot += wCells * hCells;
+
+  const wPx = wCells * CELL_PX;
+  const hPx = hCells * CELL_PX;
+
+  const g = new Graphics();
+  render(g, wPx, hPx);
+
+  const transform = new Matrix(1, 0, 0, 1, slotX, slotY);
+  renderer.render({ container: g, target: atlasRT, transform, clear: false });
+  g.destroy({ children: true });
+
+  const frame = new Rectangle(slotX, slotY, wPx, hPx);
+  const tex = new Texture({ source: atlasRT.source, frame });
+  cache.set(key, tex);
+  return tex;
+}
+
+/**
  * Get-or-fetch an item-icon texture.
  *
  * If `icons/${itemSlug}.png` is in the Pixi asset cache (loaded by
@@ -200,16 +257,84 @@ export function warmAtlas(): void {
 }
 
 // ---------------------------------------------------------------------------
-// Internal helpers (used by particleLayout.ts)
+// Atlas key helpers — one per entity type. Format: `<type>:<...fields>`.
 // ---------------------------------------------------------------------------
 
 /**
  * Build the atlas key for a belt entity.
- * Covers all three tiers and all straight/turn variants.
- * Format: `belt:<name>:<direction>`.
+ * Format: `belt:<name>:<direction>:<turn>` where turn is "straight",
+ * "corner-cw", or "corner-ccw".
+ *
+ * The `turn` parameter defaults to "straight" for call sites that
+ * haven't detected turn info yet (e.g. Phase 1b pre-populate path).
  */
-export function beltAtlasKey(name: string, direction: string): string {
-  return `belt:${name}:${direction}`;
+export function beltAtlasKey(
+  name: string,
+  direction: string,
+  turn: "straight" | "corner-cw" | "corner-ccw" = "straight",
+): string {
+  return `belt:${name}:${direction}:${turn}`;
+}
+
+/**
+ * Atlas key for pipe entities. The 4-bit connection mask (N=1,E=2,S=4,W=8)
+ * uniquely identifies every connected variant. 16 variants total.
+ */
+export function pipeAtlasKey(connectionMask: number): string {
+  return `pipe:${connectionMask}`;
+}
+
+/**
+ * Atlas key for underground belt entities.
+ * Format: `ugbelt:<name>:<direction>:<io_type>`
+ */
+export function ugBeltAtlasKey(
+  name: string,
+  direction: string,
+  ioType: "input" | "output",
+): string {
+  return `ugbelt:${name}:${direction}:${ioType}`;
+}
+
+/**
+ * Atlas key for splitter entities.
+ * Format: `splitter:<name>:<direction>`
+ */
+export function splitterAtlasKey(name: string, direction: string): string {
+  return `splitter:${name}:${direction}`;
+}
+
+/**
+ * Atlas key for inserter entities.
+ * Format: `inserter:<name>:<direction>`
+ */
+export function inserterAtlasKey(name: string, direction: string): string {
+  return `inserter:${name}:${direction}`;
+}
+
+/**
+ * Atlas key for machine entities. One key per machine name
+ * (machines don't have directional variants in our renderer).
+ * Format: `machine:<name>`.
+ */
+export function machineAtlasKey(name: string): string {
+  return `machine:${name}`;
+}
+
+/**
+ * Atlas key for power pole entities.
+ * Format: `pole:<name>`
+ */
+export function poleAtlasKey(name: string): string {
+  return `pole:${name}`;
+}
+
+/**
+ * Atlas key for pipe-to-ground entities (directional stubs).
+ * Format: `ptg:<direction>`
+ */
+export function ptgAtlasKey(direction: string): string {
+  return `ptg:${direction}`;
 }
 
 // Re-export CELL_PX so particleLayout can size particles correctly.

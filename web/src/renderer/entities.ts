@@ -1,4 +1,4 @@
-import { Assets, Cache, Container, Graphics, Sprite, Text, TextStyle, Texture } from "pixi.js";
+import { Assets, Cache, Container, Graphics, Sprite, Texture } from "pixi.js";
 import type { LayoutResult, PlacedEntity, EntityDirection } from "../engine";
 import {
   buildBeltGraph,
@@ -198,16 +198,16 @@ export function niceName(slug: string): string {
 }
 
 // Entity-type sets derived from the lookup tables where possible
-const MACHINE_ENTITIES = new Set(Object.keys(MACHINE_SIZES));
-const INSERTER_ENTITIES = new Set(Object.keys(INSERTER_COLORS));
+export const MACHINE_ENTITIES = new Set(Object.keys(MACHINE_SIZES));
+export const INSERTER_ENTITIES = new Set(Object.keys(INSERTER_COLORS));
 // Derived from BELT_COLORS keys by tier prefix
 export const BELT_ENTITIES = new Set(
   Object.keys(BELT_COLORS).filter((k) => !k.includes("underground") && !k.includes("splitter"))
 );
-const UG_BELT_ENTITIES = new Set(Object.keys(BELT_COLORS).filter((k) => k.includes("underground")));
+export const UG_BELT_ENTITIES = new Set(Object.keys(BELT_COLORS).filter((k) => k.includes("underground")));
 export const SPLITTER_ENTITIES = new Set(Object.keys(BELT_COLORS).filter((k) => k.includes("splitter")));
-const PIPE_ENTITIES = new Set(["pipe", "pipe-to-ground"]);
-const POLE_ENTITIES = new Set(["medium-electric-pole", "small-electric-pole"]);
+export const PIPE_ENTITIES = new Set(["pipe", "pipe-to-ground"]);
+export const POLE_ENTITIES = new Set(["medium-electric-pole", "small-electric-pole"]);
 
 // Direction helpers
 
@@ -731,82 +731,8 @@ function drawMachine(entity: PlacedEntity): Graphics {
     }
   }
 
-  // Overlay panel: recipe name, rate, inputs/outputs
-  if (entity.recipe) {
-    const panelW = pw - 2;
-    const flows = recipeFlowMap.get(entity.recipe);
-    const inputCount = flows ? flows.inputs.length : 0;
-    const outputCount = flows ? flows.outputs.length : 0;
-    const flowLines = inputCount + outputCount;
-    const lineH = 12;
-    const headerH = 16;
-    const panelH = headerH + flowLines * lineH + 6;
-    const panelX = 1;
-    const panelY = ph - panelH;
-
-    // Semi-transparent dark background
-    g.roundRect(panelX, panelY, panelW, panelH, 3)
-      .fill({ color: 0x000000, alpha: 0.75 });
-
-    let cy = panelY + 3;
-    const iconSz = 14;
-
-    const dropShadow = { color: 0x000000, alpha: 1, blur: 2, distance: 0 };
-
-    // Header: recipe icon + nice name + rate — centred
-    const recipeIcon = tryGetTexture(`${import.meta.env.BASE_URL}icons/${entity.recipe}.png`);
-    const label = niceName(entity.recipe);
-    const rateStr = entity.rate != null ? ` ${entity.rate.toFixed(1)}/s` : "";
-    const headerStyle = new TextStyle({
-      fontSize: 9, fill: 0xffffff, fontWeight: "bold",
-      align: "center", dropShadow,
-    });
-    const headerText = new Text({ text: label + rateStr, style: headerStyle });
-    const totalHeaderW = (recipeIcon ? iconSz + 2 : 0) + headerText.width;
-    const headerStartX = panelX + (panelW - totalHeaderW) / 2;
-
-    if (recipeIcon) {
-      const icoSprite = new Sprite(recipeIcon);
-      icoSprite.width = iconSz;
-      icoSprite.height = iconSz;
-      icoSprite.x = headerStartX;
-      icoSprite.y = cy;
-      g.addChild(icoSprite);
-      headerText.x = headerStartX + iconSz + 2;
-    } else {
-      headerText.x = headerStartX;
-    }
-    headerText.y = cy;
-    g.addChild(headerText);
-    cy += headerH;
-
-    // Flow rows: icon + item name + rate — centred
-    const flowStyle = new TextStyle({ fontSize: 8, fill: 0xcccccc, dropShadow });
-    const renderFlow = (item: string, rate: number, prefix: string) => {
-      const fIcon = tryGetTexture(`${import.meta.env.BASE_URL}icons/${item}.png`);
-      const fText = new Text({ text: `${prefix}${niceName(item)} ${rate.toFixed(1)}/s`, style: flowStyle });
-      const fIconSz = 10;
-      const rowW = (fIcon ? fIconSz + 2 : 0) + fText.width;
-      const rx = panelX + (panelW - rowW) / 2;
-      if (fIcon) {
-        const fs = new Sprite(fIcon);
-        fs.width = fIconSz; fs.height = fIconSz;
-        fs.x = rx; fs.y = cy + 1;
-        g.addChild(fs);
-        fText.x = rx + fIconSz + 2;
-      } else {
-        fText.x = rx;
-      }
-      fText.y = cy;
-      g.addChild(fText);
-      cy += lineH;
-    };
-
-    if (flows) {
-      for (const inp of flows.inputs) renderFlow(inp.item, inp.rate, "\u25b6 ");
-      for (const out of flows.outputs) renderFlow(out.item, out.rate, "\u25c0 ");
-    }
-  }
+  // Recipe panel removed (Phase 2). Recipe info is conveyed by icons on
+  // inserters and pipes. A future hover-tooltip will show rates / recipe detail.
 
   return g;
 }
@@ -1195,45 +1121,9 @@ export function renderLayout(
 
     container.addChild(g);
 
-    // Carries-item icon overlaid on belts and pipes.
-    // Sprite is a child of g so it inherits g.alpha (participates in highlight dimming).
-    if (entity.carries) {
-      const ex = entity.x ?? 0;
-      const ey = entity.y ?? 0;
-      let showIcon = false;
-      if (BELT_ENTITIES.has(entity.name)) {
-        const [dx, dy] = dirVec(entity.direction);
-        const up   = tileMap.get(`${ex - dx},${ey - dy}`);
-        const down = tileMap.get(`${ex + dx},${ey + dy}`);
-        const isStart = !up   || up.carries   !== entity.carries;
-        const isEnd   = !down || down.carries !== entity.carries;
-        showIcon = isStart || isEnd || (ex + ey) % 5 === 0;
-      } else if (UG_BELT_ENTITIES.has(entity.name)) {
-        showIcon = true; // always show on both UG endpoints
-      } else if (PIPE_ENTITIES.has(entity.name)) {
-        showIcon = (ex + ey) % 5 === 0;
-      }
-      if (showIcon) {
-        const iconTex = tryGetTexture(`${import.meta.env.BASE_URL}icons/${entity.carries}.png`);
-        if (iconTex) {
-          const ICON_SZ = 14;
-          const bgR = ICON_SZ * 0.7;
-          const bg = new Graphics();
-          bg.circle(TILE_PX / 2, TILE_PX / 2, bgR).fill({ color: 0x202020, alpha: 0.5 });
-          bg.eventMode = "none";
-          g.addChild(bg);
-
-          const ico = new Sprite(iconTex);
-          ico.width = ICON_SZ;
-          ico.height = ICON_SZ;
-          ico.x = (TILE_PX - ICON_SZ) / 2;
-          ico.y = (TILE_PX - ICON_SZ) / 2;
-          ico.alpha = 0.95;
-          ico.eventMode = "none";
-          g.addChild(ico);
-        }
-      }
-    }
+    // Item icons are now rendered as a separate ParticleContainer layer by
+    // the particle-based rendering path (Phase 2). The old per-Graphics
+    // carries-icon overlay (with % 5 heuristic) is removed.
 
     onEntityRendered?.(entity, [g]);
   }
