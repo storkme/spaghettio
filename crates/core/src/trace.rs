@@ -880,6 +880,7 @@ pub struct LaneInfo {
     pub tap_off_ys: Vec<i32>,
     pub consumer_rows: Vec<usize>,
     pub producer_row: Option<usize>,
+    pub extra_producer_rows: Vec<usize>,
     pub family_id: Option<usize>,
 }
 

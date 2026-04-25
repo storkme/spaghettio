@@ -378,6 +378,7 @@ pub fn plan_bus_lanes(
             tap_off_ys: l.tap_off_ys.clone(),
             consumer_rows: l.consumer_rows.clone(),
             producer_row: l.producer_row,
+            extra_producer_rows: l.extra_producer_rows.clone(),
             family_id: l.family_id,
         }).collect(),
         families: families.iter().map(|f| crate::trace::FamilyInfo {
