@@ -778,6 +778,16 @@ pub fn route_bus_ghost(
                 }
             }
         }
+        // Stream the per-lane fluid-trunk batch so the live renderer can
+        // reveal trunks progressively. Branches emit separately in pass 2.
+        if entities.len() > lane_start {
+            crate::trace::emit(crate::trace::TraceEvent::TrunkBeltCommitted {
+                item: lane.item.clone(),
+                lane_x: lane.x,
+                is_fluid: true,
+                entities: entities[lane_start..].to_vec(),
+            });
+        }
     }
 
     // Step 3.7: Horizontal branches per fluid lane.
@@ -803,6 +813,7 @@ pub fn route_bus_ghost(
         if !lane.is_fluid {
             continue;
         }
+        let lane_start = entities.len();
         let x = lane.x;
         let trunk_seg_id = Some(format!("trunk:{}", lane.item));
 
