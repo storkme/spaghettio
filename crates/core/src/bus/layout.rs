@@ -60,16 +60,33 @@ pub fn build_bus_layout(
     solver_result: &SolverResult,
     opts: LayoutOptions,
 ) -> Result<LayoutResult, String> {
-    match opts.strategy {
-        LayoutStrategy::Pooled => {}
+    let max_belt_tier = opts.max_belt_tier.as_deref();
+    // Strategy dispatch. Pooled passes through unchanged. The
+    // partitioning strategies run `plan_partitioning` + `apply_partition_plan`
+    // up-front and the rest of the pipeline picks up the per-`(item,
+    // module_id)` flow tagging via `ItemFlow.module_id`. Empty plan
+    // (K=1 everywhere) → byte-identical to `Pooled`.
+    let owned_solver_result;
+    let solver_result: &SolverResult = match opts.strategy {
+        LayoutStrategy::Pooled => solver_result,
         LayoutStrategy::PartitionedPerConsumer => {
-            unimplemented!("PartitionedPerConsumer strategy is wired in Phase 1 (rfp-modular-production)");
+            let plan = crate::bus::partitioner::plan_partitioning(
+                solver_result,
+                opts.strategy,
+                max_belt_tier,
+            );
+            if plan.is_empty() {
+                solver_result
+            } else {
+                owned_solver_result =
+                    crate::bus::partitioner::apply_partition_plan(solver_result, &plan);
+                &owned_solver_result
+            }
         }
         LayoutStrategy::PartitionedDecomposed => {
             unimplemented!("PartitionedDecomposed strategy is wired in Phase 2 (rfp-modular-production)");
         }
-    }
-    let max_belt_tier = opts.max_belt_tier.as_deref();
+    };
     // Final product items get EAST-flowing output belts (merge at right side)
     let final_output_items: FxHashSet<String> = solver_result
         .external_outputs
