@@ -2,17 +2,19 @@
 
 ## Summary
 
-Replace the post-layout rendering of entity Graphics with a Pixi v8
-`ParticleContainer` filled with `Particle` instances that draw from a
-shared texture atlas. Each entity becomes a single quad; the whole bus
-renders in a handful of draw calls instead of hundreds. The streaming
-phase (where transient previews fade in as the engine routes) keeps
-its current Graphics-based rendering — that path is short-lived and
-not the bottleneck. At `streamingHandle.finish(layout)`, the scene
-swaps from Graphics to Particles.
+Replace entity rendering with a Pixi v8 `ParticleContainer` filled
+with `Particle` instances that draw from a shared texture atlas. Each
+entity becomes a single quad; the whole bus renders in a handful of
+draw calls instead of hundreds. **One render path**: streaming and
+settled use the same `ParticleContainer` from event 1 onward. Pan
+during long routings (e.g. 16 s of `processing-unit` ghost routing)
+is therefore as fast as pan after settle. `streamingHandle.finish()`
+no longer swaps anything — it just stops the live-phase ticker and
+freezes the particle alpha state.
 
 Expected outcome: per-frame render cost drops from ~30 ms to <10 ms on
-a 3000-entity layout, making pan/zoom feel native.
+a 3000-entity layout, making pan/zoom feel native, both during
+streaming and after.
 
 ## Motivation
 
@@ -44,34 +46,36 @@ frame at 60 Hz) we need to fundamentally cut the number of batches.
 
 ### High-level shape
 
-Two render paths, swapped at one well-defined moment:
+A single render path. Each streaming event adds particles to a shared
+`ParticleContainer`, and the same particles persist into the settled
+state. `finish()` is now a lifecycle marker, not a scene rebuild:
 
 ```
-[engine streams events] ─► streaming Graphics path  ─┐
-                                                     │ swap at
-                                                     ▼ finish(layout)
-                                          settled Particle path
-                                          [pan / zoom / hover]
+[engine streams events] ─► add particles to ParticleContainer ─┐
+                                                               │ finish() stops
+                                                               │ live ticker
+                                                               ▼
+                                       same ParticleContainer; pan/zoom/hover
+                                       cost identical to streaming-pan cost
 ```
 
-- **Streaming path** (existing, untouched) — entities reveal
-  progressively as the engine emits `TrunkBeltCommitted` /
-  `GhostSpecCommitted` / etc. Each entity is a Pixi `Graphics` added
-  to `committedLayer`. This phase is short (≤1.5 s of visible
-  reveal, even on a 17 s layout), and the user is busy watching the
-  reveal — not panning. Per-frame cost during streaming is not the
-  bottleneck.
+- Each streaming event handler (`TrunkBeltCommitted`,
+  `GhostSpecCommitted`, `JunctionCommitted`, etc.) constructs
+  `Particle`s and appends to the container.
+- `revealAt` timestamps go into `revealByEntityKey` exactly as today.
+  The live-phase ticker mutates `particle.alpha` based on
+  `(now − revealAt) / FADE_IN_MS`, identical animation behaviour.
+- Ghost-belt previews (`addGhostBelt`) add to a sibling
+  `ParticleContainer` with item-color tints and lower alpha; fading
+  out a ghost belt is `particle.alpha *= (1 − outT)` then
+  `removeParticle` when fully transparent.
+- At `finish()`, the live-phase ticker is removed; the
+  `ParticleContainer` and all its particles persist as the settled
+  scene. No `removeChildren` / rebuild step.
 
-- **Settled path** (new) — at `streamingHandle.finish(layout)`, walk
-  `layout.entities`, look up each entity's pre-rendered texture in
-  the atlas, create a `Particle` with `(x, y, texture, tint, alpha)`,
-  and add to a `ParticleContainer`. The Graphics-based
-  `committedLayer` is destroyed. Hover dim, item-color highlight, and
-  selection-overlay machinery talk to particles via direct property
-  mutation.
-
-The non-streaming path (corpus / parsed blueprints) goes straight to
-the settled path with no streaming intermediate.
+The non-streaming path (corpus / parsed blueprints) calls the same
+particle-creation helpers without going through the streaming event
+machinery.
 
 ### Atlas
 
@@ -111,6 +115,25 @@ Generated at runtime, lazily, on first need per `(entity, variant)`:
   (atlasX, atlasY)`). Each `Particle` references the atlas
   `Texture` with adjusted UVs. ~150 entries × ~150 LOC total atlas
   code.
+
+### Atlas readiness
+
+The atlas must be ready before the first streaming event arrives,
+because streaming events now produce particles directly. Two
+acceptable timings:
+
+- **Eager at engine init.** Pre-render every variant in the bounded
+  set (~150 textures) up-front, before `initEngine()` returns. Cost
+  measured ≈1 ms per `RenderTexture` blit, so ~150 ms total. Fits
+  inside the existing init wait without user-perceivable delay.
+- **Lazy on first miss.** Same `getEntityTexture` API, but the cache
+  populates on demand. First entity of a new variant triggers one
+  blit (~1 ms) before its particle is created. Distributed across
+  the streaming phase; per-event latency is negligible.
+
+Pick lazy initially — it has no startup cost and all variants
+typically appear within the first ~1 s of streaming anyway.
+Kill criterion #2 enforces the upper bound.
 
 ### Per-particle properties used
 
@@ -158,25 +181,102 @@ Currently drawn as a sub-Graphics + Sprite + Text per machine inside
 Recommend **(a)** initially, **(b)** if recipe-panel readability
 suffers at zoom levels where the bake is too low-res.
 
+### Scrubber compatibility
+
+The timeline scrubber's `seekTo(virtualMs)` mechanism in
+`web/src/renderer/streamingRenderer.ts:879-916` walks a `reveals`
+array of `{ graphic: Graphics, revealAt: number }`, computes alpha as
+a linear ramp over `FADE_IN_MS = 150ms` from `revealAt`, and writes
+`r.graphic.alpha`. That's the entire scrub-mode mutation surface.
+
+Under particles, the array becomes
+`{ particle: Particle, revealAt: number }` and the mutation is
+`r.particle.alpha`. With `dynamicProperties.color: true`, the
+per-particle alpha change uploads to GPU on the next render. **No
+conceptual change to scrub mode** — same loop, same source map
+(`revealByEntityKey`), different mutation target.
+
+The line `r.graphic.eventMode = alpha > 0.01 ? "static" : "none"` in
+`applyReveals` is already dead code post-PR #212 (entity-level
+`eventMode` is unconditionally `"none"` since hover went tile-based).
+Drop during the migration.
+
+### Debug-mode logging
+
+Animation timings are inherently hard to debug — fade-in onset,
+stagger spread, junction-zone reveal — so the migration adds an
+optional logging channel. Gated on the existing `debugCb` toggle in
+`main.ts`, surfaced to `streamingRenderer.ts` via a `globalThis`
+flag (mirroring the `__TRACE_LOGS` pattern already in
+`streamingRenderer.ts:734-739` and `engine.ts:113-123`):
+
+```ts
+// main.ts — sync the flag with debugCb on every change
+const syncAnimLogs = (): void => {
+  (globalThis as { __ANIM_LOGS?: boolean }).__ANIM_LOGS = debugCb.checked;
+};
+debugCb.addEventListener("change", syncAnimLogs);
+syncAnimLogs();
+
+// streamingRenderer.ts — single helper, called at every animation start
+const animLog = (phase: string, detail: Record<string, unknown>): void => {
+  if (!(globalThis as { __ANIM_LOGS?: boolean }).__ANIM_LOGS) return;
+  console.log(`[anim t=${clock().toFixed(0)}ms] ${phase}`, detail);
+};
+```
+
+Per-batch (not per-entity), at every animation-start call site:
+
+| Site | Phase tag | Detail to include |
+|---|---|---|
+| `handleRowsPlaced` | `rows_placed` | `{ count, stagger_ms, span_ms }` |
+| `handleGhostSpecRouted` | `ghost_routed` | `{ spec_key, item, tile_count, span_ms }` |
+| `handleGhostSpecCommitted` / silent-stamp variants | `committed` | `{ source: "spec" \| "trunk" \| "balancer" \| ..., count, span_ms }` |
+| `handleJunctionCommitted` | `junction` | `{ cluster_id, zone, count, span_ms }` |
+| `handleGhostClusterSolved` | `cluster_outline` | `{ cluster_id, zone, lifetime_ms, fade_ms }` |
+| `runSeekAnimation` (`main.ts`) | `seek_step` | `{ added_count, stagger_ms }` |
+
+Plus three scope-boundary logs: `streaming start`, `streaming finish`
+(with `{ entity_count, latest_fade_end_ms }`), and `scrub` (one log
+per drag, deduped by last virtualMs to avoid per-pixel spam).
+
+Phase-tag strings are literal so logs are grep-able. `span_ms`
+(= `count × stagger_ms`) tells the developer when the batch
+completes, which is the bit that's invisible without instrumentation.
+
 ### Code shape
 
 New: `web/src/renderer/atlas.ts` (~200 LOC) — texture cache,
 `getEntityTexture(entity, ctx)` returning `Texture` from atlas,
 on-miss renders + packs.
 
-New: `web/src/renderer/particleLayout.ts` (~250 LOC) — `renderLayoutAsParticles(layout, container) → ParticleHighlightController`,
-mirroring the existing `renderLayout` shape. Builds tileMap, creates
-particles, returns a controller with `highlightItem` /
-`highlightBeltNetwork` / `clearHighlight` / `chainKey`.
+New: `web/src/renderer/particleLayout.ts` (~250 LOC) — particle
+scene builder. Exposes:
 
-Modified: `web/src/main.ts` — non-streaming and `finish()` paths
-call `renderLayoutAsParticles` instead of `renderLayout`. Hover dim
-goes via the new controller.
+- `commitEntityAsParticle(entity, revealAt)` — used by
+  `streamingRenderer` event handlers and by the non-streaming path.
+  Looks up the texture in the atlas, constructs a `Particle`, adds
+  to the appropriate `ParticleContainer`, registers in
+  `revealByEntityKey`.
+- `addGhostParticle(x, y, direction, item, revealAt, specKey)` — for
+  ghost-belt previews; same shape but lower target alpha and
+  item-color tint.
+- `removeParticleAt(key)` — for fade-out completion.
+- `ParticleHighlightController` — `highlightItem` /
+  `highlightBeltNetwork` / `clearHighlight` / `chainKey`, walks
+  particles instead of Graphics.
 
-Modified: `web/src/renderer/streamingRenderer.ts` — `finish(layout)`
-swaps to particles.
+Modified: `web/src/renderer/streamingRenderer.ts` — every event
+handler routes through `commitEntityAsParticle`. The live-phase
+ticker mutates `particle.alpha` instead of `g.alpha`. `finish()` is
+reduced to "stop ticker, freeze state, return controller." `seekTo`
+walks particles in the same `reveals` shape as today.
 
-Unmodified: `entities.ts` `drawBelt`/`drawPipe`/etc. remain the
+Modified: `web/src/main.ts` — `__ANIM_LOGS` sync wired to
+`debugCb`. Non-streaming path calls the same particle helpers
+without going through streaming events.
+
+Unmodified: `entities.ts` `drawBelt` / `drawPipe` / etc. remain the
 source-of-truth pixel logic; the atlas calls them at texture-render
 time.
 
@@ -229,23 +329,32 @@ it requires homogenising to one type — particles.
 Each kill criterion is something I commit to acting on if it trips,
 not just a soft target.
 
-- **Prototype underperforms.** If a one-entity-type prototype (just
-  belts, replacing belt Graphics with belt Particles in the settled
-  path) doesn't show ≥2× per-frame render speedup on the
-  `processing-unit @ rate=2` URL, the approach doesn't deliver and we
-  abandon. Measurement: DevTools Performance recording during pan,
-  compare `executeInstructions` self-time before/after.
-- **Atlas-build cost regresses startup.** If the runtime atlas
-  generation takes >300 ms wall-clock for a typical layout
-  (measured from `finish(layout)` to first particle render), the
-  layout-→-interactive transition feels worse than today even if
-  steady-state pan is faster. We'd then need build-time atlas
-  generation, which is bigger scope; pivot.
+- **Prototype underperforms during streaming-pan.** If the Phase 1
+  prototype (trunks-as-particles) doesn't show ≥2× per-frame render
+  speedup **measured during the `ghost_routing` phase** on
+  `processing-unit @ rate=2`, the approach doesn't deliver and we
+  abandon. Streaming-pan is the more demanding test than settled-pan
+  (live ticker, more transient state); if Phase 1 doesn't move the
+  needle there, the architecture isn't right. Measurement: DevTools
+  Performance recording during pan mid-routing, compare
+  `executeInstructions` self-time before/after.
+- **Atlas-build cost regresses startup.** If lazy texture generation
+  collectively takes >300 ms wall-clock for a typical layout
+  (sum of all on-miss `RenderTexture` blits during the first
+  streaming second), interactive responsiveness regresses. Pivot to
+  eager atlas generation at engine init.
 - **Hover/highlight degrades.** If the per-particle alpha mutation
   for `highlightItem` on 3000 entities takes >5 ms (measured by
   DevTools Performance during a `highlightItem` call), the
   particle-iteration path is too slow vs Graphics. Pivot to a
   shader-uniform highlight scheme.
+- **Scrub-mode regresses.** If a scrub-mode rewind / forward step is
+  visibly less smooth than today's Graphics-based scrub on a
+  3000-entity layout (measured: drag the timeline scrubber from end
+  to start; framerate during drag must stay within 10% of pre-RFP
+  baseline), pivot — the per-particle alpha update path during scrub
+  is too slow. Most likely fix: throttle `applyReveals` to once per
+  rAF instead of once per `seekTo` call.
 - **Recipe label legibility drops noticeably.** If the baked-into-
   atlas approach (option a) makes recipe labels unreadable at the
   default zoom, we move panels to a separate non-particle layer
@@ -264,8 +373,11 @@ not just a soft target.
    table from the Motivation section. Land each phase only if it
    moves the numbers in the expected direction.
 3. **Browser eyeball checklist**:
-   - Layout commits at end of streaming, no visual flicker on the
-     Graphics→Particle swap.
+   - Streaming reveal animations look identical to today (fade-in
+     timings, NW→SE stagger, junction zone reveals, ghost belt
+     previews, cluster outline pulses).
+   - Layout transitions cleanly from "live ticker mutating alphas"
+     to "static settled scene" at `finish()` — no visual blip.
    - Hover dim looks identical to today.
    - Item-color highlight (`highlightItem`) preserves all current
      visual cues.
@@ -275,6 +387,11 @@ not just a soft target.
    - Multi-tile machines render at correct size, recipe labels
      readable.
    - Selection box and pin highlight unaffected.
+   - **Scrubber**: drag the timeline scrubber back and forth on a
+     settled layout. Entities fade in/out smoothly, milestones snap,
+     framerate stays smooth.
+   - **Debug logging**: tick the debug-mode checkbox, reload, watch
+     console — `[anim ...]` lines appear at every animation start.
 4. **Anti-test**: leave the page idle after layout settles. CPU
    should drop to near zero (already verified post-PR-#205, just
    confirm we haven't regressed).
@@ -284,44 +401,58 @@ not just a soft target.
 The work splits naturally into landable chunks. Each one is a PR
 that's good on its own; subsequent ones build on it.
 
-1. **Phase 1 — atlas plumbing.** Add `renderer/atlas.ts` with
-   `getEntityTexture` and lazy texture generation backed by a single
-   `RenderTexture`. No behavior change yet; atlas exists, nothing
-   uses it. Includes a smoke test that requesting a known belt
-   variant returns a valid texture.
+1. **Phase 1 — atlas plumbing + trunk particles.** Add
+   `renderer/atlas.ts` with `getEntityTexture` and lazy texture
+   generation backed by a single `RenderTexture`. Add
+   `renderer/particleLayout.ts` with `commitEntityAsParticle` for
+   trunk entities only (chosen because trunks already have streaming
+   events from PR #206 and are the highest-volume single entity type
+   on a typical bus). Trunk events route through the new path during
+   streaming; other entity types still hit the Graphics path. Hybrid
+   container layout: trunk `ParticleContainer` underneath the
+   Graphics-based `committedLayer`. Wire the `__ANIM_LOGS` flag in
+   `main.ts` so debug logging is ready for Phase 4. **Kill criterion
+   #1 lives here** — measure streaming-pan trace numbers before
+   merging Phase 2+.
 
-2. **Phase 2 — particle path for one entity type.** Implement
-   `renderLayoutAsParticles` for belts only; other entities still
-   render as Graphics. Wire `finish(layout)` to a hybrid render
-   (particles for belts, Graphics for everything else, in a parent
-   container). **Kill criterion #1 lives here** — measure trace
-   numbers before merging Phase 3+.
+2. **Phase 2 — extend particles to all entity types.** Replace each
+   remaining entity type's draw path with a particle path, in
+   priority order (highest count first): belts, pipes, machines,
+   inserters, splitters, UG belts, mergers, poles. `addGhostBelt`
+   moves to a sibling `ParticleContainer`. Recipe labels go into the
+   atlas (option a). At end of phase, `finish()` no longer
+   `removeChildren`+rebuilds — it just stops the live ticker.
+   **Kill criteria #2, #3, #4** evaluated here.
 
-3. **Phase 3 — extend to all entity types.** Pipes, inserters,
-   splitters, UG belts, machines. Recipe labels go into the atlas
-   (option a).
-
-4. **Phase 4 — wire highlight controller.** Replace
+3. **Phase 3 — wire highlight controller.** Replace
    `HighlightController` with a particle-aware version. Today's
-   alpha-walk pattern translates directly.
+   alpha-walk pattern translates directly. Drop the dead `eventMode`
+   line in `applyReveals`.
+
+4. **Phase 4 — debug-mode animation logging.** Add the `animLog`
+   helper and call it at all 6 sites in the table above plus the 3
+   scope-boundary logs. Small follow-up; could merge into Phase 1
+   if it stays trivial.
 
 5. **Phase 5 (optional follow-up)** — recipe labels as separate
-   layer (option b) if Phase 3 labels are unreadable.
+   layer (option b) if Phase 2 labels are unreadable.
 
 ## Out of scope
 
-- Animations during streaming (transient fade-ins). The streaming
-  path keeps its current Graphics implementation.
 - OffscreenCanvas. Separate RFP if main-thread cost is still an
   issue after this lands.
-- Build-time atlas generation. Runtime is sufficient unless kill
-  criterion #2 trips.
-- Scrub-mode / timeline scrubber rewinding. The scrub phase already
-  imperatively recomputes alphas from `revealByEntityKey` — that
-  logic translates from Graphics to Particles by changing where the
-  mutation lands.
+- Build-time atlas generation. Lazy runtime is sufficient unless
+  kill criterion #2 trips.
+- Cluster outline rectangles. They stay as Graphics — only ~9 of
+  them, drawn each frame from a shared `clusterOverlay` Graphics,
+  cheap and a poor fit for particles.
 
 ## Decision log
 
 - *2026-04-25 — Drafted. Awaiting human review before scheduling
   Phase 1.*
+- *2026-04-25 — Revised: streaming and settled paths unified under a
+  single `ParticleContainer`; added scrubber-compatibility section,
+  debug-mode logging section, atlas-readiness section, and a fifth
+  kill criterion for scrub-mode framerate. Cluster outlines moved to
+  out-of-scope explicitly.*
