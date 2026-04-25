@@ -11,6 +11,7 @@
 
 import {
   Container,
+  Graphics,
   Particle,
   ParticleContainer,
   Sprite,
@@ -47,6 +48,7 @@ import {
   MACHINE_ENTITIES,
   MACHINE_SIZES,
   itemColor,
+  getFluidPorts,
   type DrawContext,
   type HighlightController,
 } from "./entities";
@@ -128,14 +130,18 @@ interface ParticleEntry {
  */
 export interface ParticleScene {
   beltContainer: ParticleContainer;
+  /** Graphics layer between belts and machines: pipe-into-machine
+   *  extension stubs. Drawn under machine sprites so the machine art
+   *  occludes the inner end of the stub. */
+  pipeStubLayer: Container;
   machineContainer: ParticleContainer;
   ghostContainer: ParticleContainer;
   iconContainer: ParticleContainer;
   /** The layout this scene was built from (set by `renderLayoutAsParticles`). */
   layout: LayoutResult | null;
   /**
-   * Add the particle containers to `parent` in the correct z-order:
-   * belt → machine → ghost → icon.
+   * Add the containers to `parent` in the correct z-order:
+   * belt → pipeStub → machine → ghost → icon.
    */
   attachTo(parent: Container): void;
   /**
@@ -161,24 +167,28 @@ function makeParticleContainer(): ParticleContainer {
 
 export function createParticleScene(): ParticleScene {
   const beltContainer = makeParticleContainer();
+  const pipeStubLayer = new Container();
   const machineContainer = makeParticleContainer();
   const ghostContainer = makeParticleContainer();
   const iconContainer = makeParticleContainer();
 
   const scene: ParticleScene = {
     beltContainer,
+    pipeStubLayer,
     machineContainer,
     ghostContainer,
     iconContainer,
     layout: null,
     attachTo(parent: Container): void {
       parent.addChild(beltContainer);
+      parent.addChild(pipeStubLayer);
       parent.addChild(machineContainer);
       parent.addChild(ghostContainer);
       parent.addChild(iconContainer);
     },
     clear(): void {
       beltContainer.removeParticles();
+      pipeStubLayer.removeChildren();
       machineContainer.removeParticles();
       ghostContainer.removeParticles();
       iconContainer.removeParticles();
@@ -260,7 +270,9 @@ function detectBeltTurnVariant(
 
 /**
  * Compute the pipe connection mask for a regular pipe entity.
- * N=1, E=2, S=4, W=8. Looks at ctx.tileMap and ctx.machineTileSet.
+ * N=1, E=2, S=4, W=8. Looks at ctx.tileMap and ctx.machineByTile.
+ * Pipe-to-machine adjacency only counts as a connection when the pipe
+ * sits at a real fluid port for that machine.
  */
 function computePipeConnectionMask(entity: PlacedEntity, ctx: DrawContext): number {
   if (entity.name !== "pipe") return 0;
@@ -288,11 +300,77 @@ function computePipeConnectionMask(entity: PlacedEntity, ctx: DrawContext): numb
     if (dy === -1 && ey + dy < 0) { mask |= bit; continue; }
     const key = `${ex + dx},${ey + dy}`;
     const nb = ctx.tileMap.get(key);
-    if ((nb && pipeConnectsToNeighbour(nb, dx, dy)) || ctx.machineTileSet.has(key)) {
+    if (nb && pipeConnectsToNeighbour(nb, dx, dy)) {
+      mask |= bit;
+      continue;
+    }
+    const machine = ctx.machineByTile.get(key);
+    if (machine && pipeIsAtFluidPort(ex, ey, machine)) {
       mask |= bit;
     }
   }
   return mask;
+}
+
+/** True iff `(px, py)` is one of `machine`'s fluid ports. Inlined here
+ *  to keep particleLayout independent of the entities-internal helper. */
+function pipeIsAtFluidPort(px: number, py: number, machine: PlacedEntity): boolean {
+  const mx = machine.x ?? 0;
+  const my = machine.y ?? 0;
+  for (const [rx, ry] of getFluidPorts(machine)) {
+    if (mx + rx === px && my + ry === py) return true;
+  }
+  return false;
+}
+
+const PIPE_STUB_COLOR = 0x8a8a8a;
+
+/** Walk every pipe in the layout and, for each pipe that sits at a real
+ *  fluid port of an adjacent machine, draw a stub Graphics extending one
+ *  tile from the pipe's edge into the machine. The stub layer renders
+ *  under machine sprites so the machine art occludes the inner end —
+ *  visually the pipe "goes into" the machine.
+ *
+ *  The (pipe, machine) pair is naturally deduped: each port is exactly
+ *  one tile, and a pipe sits at at most one of a machine's ports, so
+ *  the inner loop emits at most one stub per (pipe, machine) pair. */
+function drawPipeStubsForLayout(
+  scene: ParticleScene,
+  layout: LayoutResult,
+  ctx: DrawContext,
+): void {
+  const layer = scene.pipeStubLayer;
+  layer.removeChildren();
+
+  const stubW = Math.max(2, (TILE_PX - 1) * 0.4);
+
+  for (const e of layout.entities) {
+    if (e.name !== "pipe") continue;
+    const ex = e.x ?? 0;
+    const ey = e.y ?? 0;
+
+    for (const [dx, dy] of [[0, -1], [1, 0], [0, 1], [-1, 0]] as [number, number][]) {
+      const key = `${ex + dx},${ey + dy}`;
+      const machine = ctx.machineByTile.get(key);
+      if (!machine) continue;
+      if (!pipeIsAtFluidPort(ex, ey, machine)) continue;
+
+      // Pipe centre in canvas coords; stub extends from centre 1.5 tiles
+      // into the machine direction (0.5 tiles to reach the pipe's tile
+      // edge, then 1 tile beyond into the machine).
+      const cx = ex * TILE_PX + TILE_PX / 2;
+      const cy = ey * TILE_PX + TILE_PX / 2;
+      const reach = TILE_PX * 1.5;
+      const tx = cx + dx * reach;
+      const ty = cy + dy * reach;
+
+      const g = new Graphics();
+      g.moveTo(cx, cy)
+        .lineTo(tx, ty)
+        .stroke({ width: stubW, color: PIPE_STUB_COLOR, cap: "round" });
+      layer.addChild(g);
+    }
+  }
 }
 
 /**
@@ -849,6 +927,9 @@ export function renderLayoutAsParticles(
   for (const e of layout.entities) {
     commitEntityAsParticle(scene, e, revealAt, ctx);
   }
+
+  // Pipe-to-machine extension stubs (drawn under machine sprites).
+  drawPipeStubsForLayout(scene, layout, ctx);
 
   // Set all particles to alpha=1 immediately.
   applyParticleReveals(scene, FADE_IN_MS + 1);

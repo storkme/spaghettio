@@ -799,21 +799,88 @@ export interface HighlightController {
 // individual entities without re-rendering the full layout).
 // ---------------------------------------------------------------------------
 
+/** Fluid port positions per machine, mirroring
+ *  `crates/core/src/validate/fluids.rs::fluid_ports`. Each tuple is
+ *  `[rel_x, rel_y, type, when]` where `(rel_x, rel_y)` is the pipe-side
+ *  tile relative to the machine's top-left, and `when` controls
+ *  oil-refinery's mirror-state-dependent ports. Coordinates are
+ *  *outside* the machine footprint — they're where a pipe sits to
+ *  actually connect. */
+type FluidPortDef = readonly [
+  rel_x: number,
+  rel_y: number,
+  type: "input" | "output",
+  when: "always" | "default" | "mirror",
+];
+
+const FLUID_PORTS: Record<string, readonly FluidPortDef[]> = {
+  "assembling-machine-2": [
+    [1, -1, "input", "always"],
+    [1, 3, "output", "always"],
+  ],
+  "assembling-machine-3": [
+    [1, -1, "input", "always"],
+    [1, 3, "output", "always"],
+  ],
+  "chemical-plant": [
+    [0, -1, "input", "always"],
+    [2, -1, "input", "always"],
+    [0, 3, "output", "always"],
+    [2, 3, "output", "always"],
+  ],
+  "oil-refinery": [
+    [1, 5, "input", "default"],
+    [3, 5, "input", "default"],
+    [0, -1, "output", "default"],
+    [2, -1, "output", "default"],
+    [4, -1, "output", "default"],
+    [1, -1, "input", "mirror"],
+    [3, -1, "input", "mirror"],
+    [0, 5, "output", "mirror"],
+    [2, 5, "output", "mirror"],
+    [4, 5, "output", "mirror"],
+  ],
+};
+
+/** Effective fluid ports for a machine, accounting for `mirror`. */
+export function getFluidPorts(machine: PlacedEntity): readonly FluidPortDef[] {
+  const all = FLUID_PORTS[machine.name];
+  if (!all) return [];
+  const mirror = machine.mirror ?? false;
+  return all.filter(([, , , when]) =>
+    when === "always" || (when === "default" && !mirror) || (when === "mirror" && mirror),
+  );
+}
+
+/** True if the pipe at world tile `(px, py)` sits at one of `machine`'s
+ *  fluid ports. Both input and output ports count — pipes don't
+ *  distinguish flow direction at the connection geometry, only at the
+ *  recipe level. */
+function pipeIsAtFluidPort(px: number, py: number, machine: PlacedEntity): boolean {
+  const mx = machine.x ?? 0;
+  const my = machine.y ?? 0;
+  for (const [rx, ry] of getFluidPorts(machine)) {
+    if (mx + rx === px && my + ry === py) return true;
+  }
+  return false;
+}
+
 /** Context for `drawEntityGraphic` — carries the lookups the belt / pipe
  *  renderers need. `tileMap` is used by `detectBeltTurn` (belts) and
- *  pipe-connection detection; `machineTileSet` is used by pipe-connection
- *  detection (pipes adjacent to machines render as connected). Both may
- *  be sparse — entries missing from the map degrade to reasonable
- *  defaults (straight belt, disconnected pipe). */
+ *  pipe-connection detection; `machineByTile` lets pipe-connection
+ *  detection look up the owning machine for a tile and validate the
+ *  pipe is at one of the machine's fluid ports (only input/output
+ *  port positions count as a connection — adjacency at any other
+ *  machine tile is not a real fluid link in Factorio). */
 export interface DrawContext {
   tileMap: Map<string, PlacedEntity>;
-  machineTileSet: Set<string>;
+  machineByTile: Map<string, PlacedEntity>;
 }
 
 /** Create an empty `DrawContext`. Streaming renderers populate this as
  *  entities are committed. */
 export function createDrawContext(): DrawContext {
-  return { tileMap: new Map(), machineTileSet: new Set() };
+  return { tileMap: new Map(), machineByTile: new Map() };
 }
 
 /** Update a `DrawContext` to include `entity`. Call before drawing its
@@ -831,7 +898,7 @@ export function addEntityToDrawContext(entity: PlacedEntity, ctx: DrawContext): 
     const [w, h] = MACHINE_SIZES[entity.name] ?? [1, 1];
     for (let dy = 0; dy < h; dy++) {
       for (let dx = 0; dx < w; dx++) {
-        ctx.machineTileSet.add(`${x + dx},${y + dy}`);
+        ctx.machineByTile.set(`${x + dx},${y + dy}`, entity);
       }
     }
   }
@@ -860,7 +927,19 @@ export function drawEntityGraphic(entity: PlacedEntity, ctx: DrawContext): Graph
       for (const [dx, dy, bit] of [[0, -1, CONN_N], [1, 0, CONN_E], [0, 1, CONN_S], [-1, 0, CONN_W]] as [number, number, number][]) {
         const key = `${ex + dx},${ey + dy}`;
         const nb = ctx.tileMap.get(key);
-        if ((nb && pipeConnectsToNeighbour(nb, dx, dy)) || ctx.machineTileSet.has(key)) pipeConn |= bit;
+        if (nb && pipeConnectsToNeighbour(nb, dx, dy)) {
+          pipeConn |= bit;
+          continue;
+        }
+        // Pipe-to-machine: only count as a connection if the pipe sits
+        // at one of this machine's dedicated fluid ports. Adjacency at
+        // a non-port tile (e.g., a pipe hugging a chemical-plant's
+        // mid-edge) is not a real fluid link in Factorio and shouldn't
+        // render as connected.
+        const machine = ctx.machineByTile.get(key);
+        if (machine && pipeIsAtFluidPort(ex, ey, machine)) {
+          pipeConn |= bit;
+        }
       }
     }
     g = drawPipe(entity, pipeConn);
@@ -951,8 +1030,10 @@ export function renderLayout(
     }
   }
 
-  // Build set of machine-occupied tiles for pipe connection detection.
-  const machineTileSet = new Set<string>();
+  // Build map of machine-occupied tiles → owning machine, for
+  // pipe-to-machine port-validity checks (pipes connect only at the
+  // machine's dedicated fluid ports, not any adjacent tile).
+  const machineByTile = new Map<string, PlacedEntity>();
   for (const e of layout.entities) {
     if (MACHINE_ENTITIES.has(e.name)) {
       const [w, h] = MACHINE_SIZES[e.name] ?? [1, 1];
@@ -960,7 +1041,7 @@ export function renderLayout(
       const ey = e.y ?? 0;
       for (let dy = 0; dy < h; dy++) {
         for (let dx = 0; dx < w; dx++) {
-          machineTileSet.add(`${ex + dx},${ey + dy}`);
+          machineByTile.set(`${ex + dx},${ey + dy}`, e);
         }
       }
     }
@@ -1089,7 +1170,12 @@ export function renderLayout(
           }
           const key = `${ex + dx},${ey + dy}`;
           const nb = tileMap.get(key);
-          if ((nb && pipeConnectsToNeighbour(nb, dx, dy)) || machineTileSet.has(key)) pipeConn |= bit;
+          if (nb && pipeConnectsToNeighbour(nb, dx, dy)) {
+            pipeConn |= bit;
+            continue;
+          }
+          const machine = machineByTile.get(key);
+          if (machine && pipeIsAtFluidPort(ex, ey, machine)) pipeConn |= bit;
         }
       }
       g = drawPipe(entity, pipeConn);
