@@ -27,8 +27,8 @@ export interface AppContext {
 
 // --- Module-scoped re-exports ---
 //
-// Per-feature ticker users (streamingRenderer, phaseAnimation, improvementAnimation,
-// issuesDialog) take `app: Application` rather than the full AppContext, but they
+// Per-feature ticker users (streamingRenderer, phaseAnimation, improvementAnimation)
+// take `app: Application` rather than the full AppContext, but they
 // still need to start/stop the ticker as part of their lifecycle. Rather than
 // thread the controls through every function signature, we expose them as
 // module-scoped functions populated by `createApp`. They are no-ops if invoked

@@ -662,17 +662,10 @@ export function renderSidebar(
     currentLayout = layout;
     setRecipeFlows(result.machines);
     callbacks.renderLayout(layout);
-    if (layout.warnings?.length) {
-      for (const w of layout.warnings) {
-        const wDiv = document.createElement("div");
-        wDiv.className = "sb-warning";
-        wDiv.textContent = `⚠ ${w}`;
-        resultContainer.appendChild(wDiv);
-      }
-      blueprintSection.style.display = "none";
-    } else {
-      blueprintSection.style.display = "flex";
-    }
+    // Layout-level warnings (missing balancer templates, unresolved
+    // ghost-router crossings) now surface in the Validation panel below
+    // — kept off the result container so there's a single source of truth.
+    blueprintSection.style.display = layout.warnings?.length ? "none" : "flex";
   }
 
   copyBtn.addEventListener("click", async () => {
@@ -764,12 +757,26 @@ export function renderSidebar(
       for (const [category, groupIssues] of groups) {
         const hasErrors = groupIssues.some(i => i.severity === "Error");
         const dotColor = hasErrors ? "#f44" : "#fa0";
+        const firstWithPos = groupIssues.find(i => i.x != null && i.y != null);
 
         const groupEl = document.createElement("div");
         groupEl.className = "sb-val-group";
 
         const header = document.createElement("div");
         header.className = "sb-val-group-header";
+
+        const chevron = document.createElement("span");
+        chevron.className = "sb-val-group-chevron";
+        chevron.textContent = "▾"; // down triangle (open)
+        // Chevron toggles collapse without panning. Click on the rest of
+        // the header pans to the first positional issue in the group.
+        chevron.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const collapsed = body.style.display === "none";
+          body.style.display = collapsed ? "" : "none";
+          chevron.textContent = collapsed ? "▾" : "▸";
+        });
+        header.appendChild(chevron);
 
         const dot = document.createElement("span");
         dot.className = "sb-val-group-dot";
@@ -786,28 +793,31 @@ export function renderSidebar(
         count.textContent = String(groupIssues.length);
         header.appendChild(count);
 
-        const chevron = document.createElement("span");
-        chevron.className = "sb-val-group-chevron";
-        chevron.textContent = "▾"; // down triangle (open)
-        header.appendChild(chevron);
-
         const body = document.createElement("div");
         body.className = "sb-val-group-body";
 
-        // Toggle collapse on header click
-        header.addEventListener("click", () => {
-          const collapsed = body.style.display === "none";
-          body.style.display = collapsed ? "" : "none";
-          chevron.textContent = collapsed ? "▾" : "▸";
-        });
+        if (firstWithPos) {
+          header.classList.add("clickable");
+          header.addEventListener("click", () => {
+            onPanToTile(firstWithPos.x!, firstWithPos.y!);
+          });
+        }
 
         for (const issue of groupIssues) {
           const row = document.createElement("div");
           const hasPos = issue.x != null && issue.y != null;
           row.className = "sb-val-issue" + (hasPos ? " clickable" : "");
-          row.textContent = issue.message;
-          if (!hasPos) row.style.opacity = "0.6";
+
+          const msg = document.createElement("span");
+          msg.className = "sb-val-issue-msg";
+          msg.textContent = issue.message;
+          row.appendChild(msg);
+
           if (hasPos) {
+            const coord = document.createElement("span");
+            coord.className = "sb-val-issue-coord";
+            coord.textContent = `${issue.x}, ${issue.y}`;
+            row.appendChild(coord);
             row.addEventListener("click", (e) => {
               e.stopPropagation();
               const wasPinned = row.classList.contains("pinned");
@@ -817,6 +827,8 @@ export function renderSidebar(
               }
               onPanToTile(issue.x!, issue.y!);
             });
+          } else {
+            row.style.opacity = "0.6";
           }
           body.appendChild(row);
         }
