@@ -4,6 +4,7 @@ import { drawGrid, updateGrid } from "./renderer/grid";
 import { drawGraph } from "./renderer/graph";
 import { initEntityIcons, preloadCarriesIcons, renderLayout, setItemColoring, TILE_PX, MACHINE_SIZES, SPLITTER_ENTITIES, splitterCompanionOffset, type HighlightController } from "./renderer/entities";
 import { createParticleScene, renderLayoutAsParticles } from "./renderer/particleLayout";
+import { renderInputLabels } from "./renderer/inputLabels";
 import { createSelectionController, type SelectionController } from "./renderer/selection";
 import { renderSidebar } from "./ui/sidebar";
 import { initCorpusPanel } from "./ui/corpus";
@@ -210,6 +211,12 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
   // Pixi events are no longer registered for hover (only click via onSelect).
   entityLayer.eventMode = "none";
   viewport.addChild(entityLayer);
+  // External-input trunk labels (issue #196). Sits above the entity layer
+  // so dimming the entities (solo regions, junction selection) doesn't
+  // make the labels unreadable. Rebuilt by `renderLayoutOnCanvas`.
+  const inputLabelsLayer = new Container();
+  inputLabelsLayer.eventMode = "none";
+  viewport.addChild(inputLabelsLayer);
   // SAT-zone detail overlay sits above the entity layer so the bbox,
   // boundary bars, and item icons always read on top of the belts.
   viewport.addChild(satZoneOverlay.layer);
@@ -653,6 +660,11 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
   let optimizeInFlight = false;
 
   let lastLayout: LayoutResult | null = null;
+  // Most recent solver result, captured by `renderGraph(result)`. Used
+  // by `renderLayoutOnCanvas` to drive the external-input trunk labels
+  // (issue #196) — those need both the layout (for trunk positions)
+  // and the solver result (for which items are external + their rates).
+  let lastSolverResult: SolverResult | null = null;
   let selectionCtrl: SelectionController | null = null;
   let phaseAnimHandle: PhaseAnimationHandle | null = null;
   let streamingHandle: StreamingRendererHandle | null = null;
@@ -681,9 +693,11 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     onClear: () => {
       snapshotMode.clear();
       entityLayer.removeChildren();
+      inputLabelsLayer.removeChildren();
       inspector.clearPin();
       inspector.setTileContext(null);
       lastLayout = null;
+      lastSolverResult = null;
       tileEntityMap = new Map();
       cachedValidationIssues = null;
       drawGraph(viewport, null);
@@ -1006,6 +1020,8 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     streamingHandle = null;
     timelineScrubber.reset();
     entityLayer.removeChildren();
+    inputLabelsLayer.removeChildren();
+    lastSolverResult = result;
     drawGraph(viewport, result);
     if (!result) {
       viewport.moveCenter(WORLD_SIZE / 2, WORLD_SIZE / 2);
@@ -1180,14 +1196,21 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     updateValidationOverlay();
     updateRegionOverlay();
     updateGhostTilesOverlay();
+    // External-input trunk labels (issue #196). Rebuilt on every layout
+    // commit. Skips when there's no SolverResult — corpus / snapshot
+    // load paths arrive without one and we don't fabricate labels there.
+    renderInputLabels(inputLabelsLayer, layout, lastSolverResult);
     const w = layout.width ?? 0;
     const h = layout.height ?? 0;
     updateGrid(gridGfx, w + 2, h + 2);
     if (w > 0 && h > 0) {
       const pxW = w * 32;
       const pxH = h * 32;
-      viewport.fit(true, pxW * 1.1, pxH * 1.2);
-      viewport.moveCenter(pxW / 2, pxH / 2);
+      // Headroom above the layout for the input-trunk labels
+      // (issue #196). The labels rise into negative world-y.
+      const labelHeadroomPx = 6 * 32;
+      viewport.fit(true, pxW * 1.1, (pxH + labelHeadroomPx) * 1.2);
+      viewport.moveCenter(pxW / 2, (pxH - labelHeadroomPx) / 2);
     }
     if (soloRegionsActive) {
       entityLayer.alpha = 0.12;
