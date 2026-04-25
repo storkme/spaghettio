@@ -543,3 +543,41 @@ that's good on its own; subsequent ones build on it.
   placeholder colored circle until real PNGs ship; ticketed
   separately. Tint-belt-by-item-color trick dropped — neutral belt
   textures, item identity is conveyed by the icon layer.*
+- *2026-04-25 — **Phase 1a landed in #215.** Atlas plumbing +
+  `particleLayout` skeleton + `__ANIM_LOGS` sync. No behavior
+  change.*
+- *2026-04-25 — **Phase 1b landed in #216.** `TrunkBeltCommitted`
+  routed through `commitEntityAsParticle`; hybrid scene with
+  particles for trunks underneath Graphics for everything else.*
+- *2026-04-25 — **Phase 2+3+4 landed in #218 (re-merged via #219
+  after a missed forward-merge).** Full particle migration: every
+  entity type as a particle, icons-on-every-conveyor-tile, recipe
+  panels removed, particle-aware `HighlightController`, debug-mode
+  animation logging at 6 sites + 3 scope boundaries.*
+- *2026-04-25 — **Kill criterion #1: PASSED with three orders of
+  magnitude margin.** Trace `Trace-20260425T175702.json.gz` (8.7 s
+  of streaming pan + hover on `processing-unit @ rate=2`) vs the
+  pre-migration baseline `Trace-20260425T135149.json.gz` (9.7 s,
+  same recipe):
+
+  | GL operation | Prior ms/s | Now ms/s | Ratio |
+  |---|---|---|---|
+  | `uniformMatrix3fv` | 124.2 | 0.3 | 474× |
+  | `drawElements` | 85.0 | 0.1 | 1212× |
+  | `bindVertexArray` | 68.9 | 0.2 | 377× |
+  | `useProgram` | 34.8 | 0.1 | 550× |
+  | `bindTexture` | 13.5 | 0.2 | 72× |
+  | `hitTestMoveRecursive` | 37.9 | 0.1 | 282× |
+
+  Main thread idle fraction went from 27% → 54%; longest task from
+  ~95-100 ms → 27 ms; sustained ~95 ms-class tasks every ~100 ms
+  → none. The render pipeline is no longer the bottleneck. RFP
+  goal achieved.*
+- *2026-04-25 — **Follow-ups identified post-merge:** (a) belt
+  particles render visibly on top of machine particles where the
+  engine puts input belts on the machine's top-tile — z-order fix
+  needed (split entity container into belt / machine sub-
+  containers). (b) belt + icon textures look fuzzy at canvas zoom
+  > 2× — bump `CELL_PX` from 64 to 128 (4× supersampling). Both
+  small follow-up PRs, not architectural concerns. RFP closes
+  here; future renderer optimisations get their own RFPs.*
