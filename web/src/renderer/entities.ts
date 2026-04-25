@@ -39,17 +39,19 @@ const MACHINE_COLORS: Record<string, number> = {
 };
 const DEFAULT_MACHINE_COLOR = 0x4a5a6a;
 
-// Belt / underground belt / splitter tier colors: [base, chevron]
+// Belt / underground belt / splitter tier colors: [base, chevron].
+// Chevron values are desaturated ~30% toward each tier's RGB mean so they
+// read as a quieter directional cue against the belt body.
 const BELT_COLORS: Record<string, [number, number]> = {
-  "transport-belt": [0xa89030, 0xe0d070],
-  "fast-transport-belt": [0xb03030, 0xff6060],
-  "express-transport-belt": [0x3070b0, 0x70b0f0],
-  "underground-belt": [0xa89030, 0xe0d070],
-  "fast-underground-belt": [0xb03030, 0xff6060],
-  "express-underground-belt": [0x3070b0, 0x70b0f0],
-  splitter: [0xa89030, 0xe0d070],
-  "fast-splitter": [0xb03030, 0xff6060],
-  "express-splitter": [0x3070b0, 0x70b0f0],
+  "transport-belt": [0xa89030, 0xd3c885],
+  "fast-transport-belt": [0xb03030, 0xde7070],
+  "express-transport-belt": [0x3070b0, 0x83b0dc],
+  "underground-belt": [0xa89030, 0xd3c885],
+  "fast-underground-belt": [0xb03030, 0xde7070],
+  "express-underground-belt": [0x3070b0, 0x83b0dc],
+  splitter: [0xa89030, 0xd3c885],
+  "fast-splitter": [0xb03030, 0xde7070],
+  "express-splitter": [0x3070b0, 0x83b0dc],
 };
 
 const INSERTER_COLORS: Record<string, number> = {
@@ -701,10 +703,11 @@ function drawMachine(entity: PlacedEntity): Graphics {
     }
   }
 
-  // Machine sprite — scaled 1.5x, centred on the tile footprint.
-  // Entity-frame sprites are designed so (0,0) = top-left of footprint at 1x.
-  // To scale 1.5x around the footprint centre, offset by -0.25 * footprint size.
-  const spriteScale = 1.5;
+  // Machine sprite — scaled to crop out the surrounding shadow / overhang
+  // padding so the visible machine body fills ~90% of its tile footprint
+  // (Factorio entity PNGs include shadow padding outside the footprint;
+  // higher spriteScale crops more of that and zooms into the body).
+  const spriteScale = 1.8;
   const frameTexture = tryGetTexture(`${import.meta.env.BASE_URL}entity-frames/${entity.name}.png`);
   if (frameTexture) {
     const sprite = new Sprite(frameTexture);

@@ -403,7 +403,7 @@ function getEntityAtlasTexture(entity: PlacedEntity, ctx: DrawContext): Texture 
       // Try entity-frame PNG first (same logic as entities.ts:drawMachine).
       const framePath = `${import.meta.env.BASE_URL}entity-frames/${entity.name}.png`;
       const frameTex: Texture | null = Cache.has(framePath) ? (Assets.get<Texture>(framePath) ?? null) : null;
-      const spriteScale = 1.5;
+      const spriteScale = 1.8;
       const scale = CELL_PX / ENTITY_FRAME_TILE_PX;
 
       if (frameTex) {
