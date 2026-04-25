@@ -2830,13 +2830,32 @@ fn diag_sat_zone_histogram() {
         let v: serde_json::Value = serde_json::from_str(line)
             .unwrap_or_else(|e| panic!("Bad JSON on line {}: {e}", lineno + 1));
 
-        let sig = v["signature"].as_str().unwrap_or("?").to_string();
-        let width = v["width"].as_u64().unwrap_or(0);
-        let height = v["height"].as_u64().unwrap_or(0);
-        let vars = v["variables"].as_u64().unwrap_or(0);
-        let clauses = v["clauses"].as_u64().unwrap_or(0);
-        let solve_us = v["solve_time_us"].as_u64().unwrap_or(0);
-        let source = v["source"].as_str().map(|s| s.to_string());
+        // Handle both schema versions: v0 used long keys
+        // (signature/width/height/variables/clauses/solve_time_us/source);
+        // v1 uses short keys (s/cw/ch/vars/cls/us/src). We just look for
+        // either, so the diag works against mixed-version logs.
+        let sig = v["s"].as_str()
+            .or_else(|| v["signature"].as_str())
+            .unwrap_or("?")
+            .to_string();
+        let width = v["cw"].as_u64()
+            .or_else(|| v["width"].as_u64())
+            .unwrap_or(0);
+        let height = v["ch"].as_u64()
+            .or_else(|| v["height"].as_u64())
+            .unwrap_or(0);
+        let vars = v["vars"].as_u64()
+            .or_else(|| v["variables"].as_u64())
+            .unwrap_or(0);
+        let clauses = v["cls"].as_u64()
+            .or_else(|| v["clauses"].as_u64())
+            .unwrap_or(0);
+        let solve_us = v["us"].as_u64()
+            .or_else(|| v["solve_time_us"].as_u64())
+            .unwrap_or(0);
+        let source = v["src"].as_str()
+            .or_else(|| v["source"].as_str())
+            .map(|s| s.to_string());
 
         total_records += 1;
         let bucket = buckets.entry(sig).or_insert(ZoneBucket {

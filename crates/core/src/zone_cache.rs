@@ -315,6 +315,132 @@ fn transform_entity_inverse(
     out
 }
 
+// ---------------------------------------------------------------------------
+// Compact entity encoding for the JSONL solution cache
+// ---------------------------------------------------------------------------
+
+/// Packed entity-kind: belt tier × (surface | UG-in | UG-out). Junction SAT
+/// only ever produces these 9 kinds, so a single small int per entity is
+/// enough to round-trip name + io_type.
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EntityKind {
+    BeltYellow = 0,
+    BeltRed = 1,
+    BeltBlue = 2,
+    UgInYellow = 3,
+    UgOutYellow = 4,
+    UgInRed = 5,
+    UgOutRed = 6,
+    UgInBlue = 7,
+    UgOutBlue = 8,
+}
+
+impl EntityKind {
+    fn from_entity(e: &PlacedEntity) -> Option<Self> {
+        let io = e.io_type.as_deref();
+        match (e.name.as_str(), io) {
+            ("transport-belt", None | Some("passthrough")) => Some(Self::BeltYellow),
+            ("fast-transport-belt", None | Some("passthrough")) => Some(Self::BeltRed),
+            ("express-transport-belt", None | Some("passthrough")) => Some(Self::BeltBlue),
+            ("underground-belt", Some("input")) => Some(Self::UgInYellow),
+            ("underground-belt", Some("output")) => Some(Self::UgOutYellow),
+            ("fast-underground-belt", Some("input")) => Some(Self::UgInRed),
+            ("fast-underground-belt", Some("output")) => Some(Self::UgOutRed),
+            ("express-underground-belt", Some("input")) => Some(Self::UgInBlue),
+            ("express-underground-belt", Some("output")) => Some(Self::UgOutBlue),
+            _ => None,
+        }
+    }
+
+    fn name_and_io(self) -> (&'static str, Option<&'static str>) {
+        match self {
+            Self::BeltYellow => ("transport-belt", None),
+            Self::BeltRed => ("fast-transport-belt", None),
+            Self::BeltBlue => ("express-transport-belt", None),
+            Self::UgInYellow => ("underground-belt", Some("input")),
+            Self::UgOutYellow => ("underground-belt", Some("output")),
+            Self::UgInRed => ("fast-underground-belt", Some("input")),
+            Self::UgOutRed => ("fast-underground-belt", Some("output")),
+            Self::UgInBlue => ("express-underground-belt", Some("input")),
+            Self::UgOutBlue => ("express-underground-belt", Some("output")),
+        }
+    }
+
+    fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            0 => Some(Self::BeltYellow),
+            1 => Some(Self::BeltRed),
+            2 => Some(Self::BeltBlue),
+            3 => Some(Self::UgInYellow),
+            4 => Some(Self::UgOutYellow),
+            5 => Some(Self::UgInRed),
+            6 => Some(Self::UgOutRed),
+            7 => Some(Self::UgInBlue),
+            8 => Some(Self::UgOutBlue),
+            _ => None,
+        }
+    }
+}
+
+fn dir_to_u8(d: EntityDirection) -> u8 {
+    match d {
+        EntityDirection::North => 0,
+        EntityDirection::East => 1,
+        EntityDirection::South => 2,
+        EntityDirection::West => 3,
+    }
+}
+
+fn dir_from_u8(v: u8) -> Option<EntityDirection> {
+    match v {
+        0 => Some(EntityDirection::North),
+        1 => Some(EntityDirection::East),
+        2 => Some(EntityDirection::South),
+        3 => Some(EntityDirection::West),
+        _ => None,
+    }
+}
+
+/// Encode a cache-bound entity into `[kind, x, y, dir, carries_idx]`.
+/// `carries_idx` is `-1` for `None`, else the canonical channel position
+/// parsed out of the `"chN"` token.
+///
+/// Returns `None` if the entity isn't a known belt/UG kind or has a `carries`
+/// that isn't a `chN` token — i.e. shouldn't have come out of `extract_solution`.
+fn entity_to_tuple(e: &PlacedEntity) -> Option<[i32; 5]> {
+    let kind = EntityKind::from_entity(e)? as i32;
+    let dir = dir_to_u8(e.direction) as i32;
+    let carries_idx = match e.carries.as_deref() {
+        None => -1,
+        Some(t) => t.strip_prefix("ch").and_then(|n| n.parse::<i32>().ok())?,
+    };
+    Some([kind, e.x, e.y, dir, carries_idx])
+}
+
+/// Decode `[kind, x, y, dir, carries_idx]` back into a `PlacedEntity`. The
+/// resulting entity has `segment_id: None` (filled in at lookup replay
+/// against the new zone's coords).
+fn entity_from_tuple(t: [i32; 5]) -> Option<PlacedEntity> {
+    let kind = EntityKind::from_u8(u8::try_from(t[0]).ok()?)?;
+    let (name, io) = kind.name_and_io();
+    let direction = dir_from_u8(u8::try_from(t[3]).ok()?)?;
+    let carries = if t[4] < 0 {
+        None
+    } else {
+        Some(format!("ch{}", t[4]))
+    };
+    Some(PlacedEntity {
+        name: name.to_string(),
+        x: t[1],
+        y: t[2],
+        direction,
+        io_type: io.map(str::to_string),
+        carries,
+        ..Default::default()
+    })
+}
+
 /// Format a (edge, offset) port endpoint as e.g. `N2` or `E0`.
 fn format_endpoint(edge: u8, offset: u32) -> String {
     let e = match edge {
@@ -641,10 +767,16 @@ fn lookup_table() -> &'static Mutex<std::collections::HashMap<String, CacheEntry
     })
 }
 
-/// Slurp the on-disk JSONL into the lookup map. Silently skips malformed or
-/// pre-cache-schema records (no `entities` field). Newer records win on
-/// duplicate keys (file is append-only, so later lines reflect later
-/// behaviour).
+/// Slurp the on-disk JSONL into the lookup map. Handles both schema
+/// versions:
+///
+/// * **`rv: 1`** — compact format: top-level keys `s`/`cw`/`ch`/`e`/`ci`,
+///   entities as `[kind, x, y, dir, carries_idx]` tuples.
+/// * **no `rv`** — legacy format: `signature`/`canon_w`/`canon_h`/`entities`
+///   (full PlacedEntity objects).
+///
+/// Newer rows win on duplicate keys (file is append-only, later lines reflect
+/// later behaviour).
 fn load_existing_jsonl(map: &mut std::collections::HashMap<String, CacheEntry>) {
     let path = resolve_cache_path();
     let Ok(contents) = std::fs::read_to_string(&path) else {
@@ -652,21 +784,47 @@ fn load_existing_jsonl(map: &mut std::collections::HashMap<String, CacheEntry>) 
     };
     for line in contents.lines() {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else { continue };
-        let Some(sig) = value["signature"].as_str() else { continue };
-        let Some(entities_v) = value.get("entities") else { continue };
-        let Ok(entities) = serde_json::from_value::<Vec<PlacedEntity>>(entities_v.clone()) else { continue };
-        let Some(items_v) = value.get("channel_items") else { continue };
-        let Ok(channel_items) = serde_json::from_value::<Vec<String>>(items_v.clone()) else { continue };
-        let canon_w = value["canon_w"].as_u64().unwrap_or(0) as u32;
-        let canon_h = value["canon_h"].as_u64().unwrap_or(0) as u32;
-        if canon_w == 0 || canon_h == 0 {
-            continue;
+        let entry_opt = if value.get("rv").and_then(|v| v.as_u64()) == Some(1) {
+            parse_v1_record(&value)
+        } else {
+            parse_v0_record(&value)
+        };
+        if let Some((sig, entry)) = entry_opt {
+            map.insert(sig, entry);
         }
-        map.insert(
-            sig.to_string(),
-            CacheEntry { entities, channel_items, canon_w, canon_h },
-        );
     }
+}
+
+/// Parse a v1 (compact) record. Returns `(signature, entry)` on success.
+fn parse_v1_record(value: &serde_json::Value) -> Option<(String, CacheEntry)> {
+    let sig = value["s"].as_str()?.to_string();
+    let canon_w = value["cw"].as_u64()? as u32;
+    let canon_h = value["ch"].as_u64()? as u32;
+    if canon_w == 0 || canon_h == 0 {
+        return None;
+    }
+    let channel_items: Vec<String> =
+        serde_json::from_value(value.get("ci")?.clone()).ok()?;
+    let tuples: Vec<[i32; 5]> = serde_json::from_value(value.get("e")?.clone()).ok()?;
+    let entities: Vec<PlacedEntity> = tuples
+        .into_iter()
+        .filter_map(entity_from_tuple)
+        .collect();
+    Some((sig, CacheEntry { entities, channel_items, canon_w, canon_h }))
+}
+
+/// Parse a v0 (legacy verbose) record. Returns `(signature, entry)` on success.
+fn parse_v0_record(value: &serde_json::Value) -> Option<(String, CacheEntry)> {
+    let sig = value["signature"].as_str()?.to_string();
+    let entities: Vec<PlacedEntity> = serde_json::from_value(value.get("entities")?.clone()).ok()?;
+    let channel_items: Vec<String> =
+        serde_json::from_value(value.get("channel_items")?.clone()).ok()?;
+    let canon_w = value["canon_w"].as_u64()? as u32;
+    let canon_h = value["canon_h"].as_u64()? as u32;
+    if canon_w == 0 || canon_h == 0 {
+        return None;
+    }
+    Some((sig, CacheEntry { entities, channel_items, canon_w, canon_h }))
 }
 
 /// Whether to consult the cache on lookup. Cache hits are gated behind an
@@ -786,7 +944,7 @@ pub fn record_zone_with_solution(
         );
     }
 
-    // JSONL line.
+    // JSONL line — v1 compact format.
     let thread_src = ZONE_SOURCE.with(|s| s.borrow().clone());
     let effective_source: Option<String> = thread_src
         .or_else(|| source.map(|s| s.to_string()))
@@ -797,19 +955,26 @@ pub fn record_zone_with_solution(
         .map(|d| d.as_secs())
         .unwrap_or(0);
 
+    // Pack entities as [kind, x, y, dir, carries_idx] tuples. Anything that
+    // doesn't encode (unknown name, broken carries token) is dropped — these
+    // shouldn't happen for SAT-produced entities.
+    let entity_tuples: Vec<[i32; 5]> = canonical_entities
+        .iter()
+        .filter_map(entity_to_tuple)
+        .collect();
+
     let record = serde_json::json!({
-        "ts": ts,
-        "signature": form.signature,
-        "width": zone.width,
-        "height": zone.height,
-        "canon_w": canon_w,
-        "canon_h": canon_h,
-        "variables": stats.variables,
-        "clauses": stats.clauses,
-        "solve_time_us": stats.solve_time_us,
-        "source": effective_source,
-        "entities": canonical_entities,
-        "channel_items": channel_items,
+        "rv": 1,
+        "t": ts,
+        "s": form.signature,
+        "cw": canon_w,
+        "ch": canon_h,
+        "vars": stats.variables,
+        "cls": stats.clauses,
+        "us": stats.solve_time_us,
+        "src": effective_source,
+        "e": entity_tuples,
+        "ci": channel_items,
     });
 
     let Ok(mut line) = serde_json::to_string(&record) else { return };
@@ -1053,5 +1218,56 @@ mod tests {
         let t = transform_entity(&e, 3, 3, 1, false);
         assert_eq!((t.x, t.y), (2, 1), "position mapping wrong");
         assert_eq!(t.direction, EntityDirection::East, "direction mapping wrong");
+    }
+
+    /// Every belt/UG kind round-trips through the compact tuple encoding.
+    #[test]
+    fn entity_tuple_roundtrip_all_kinds() {
+        let cases = [
+            ("transport-belt", None, EntityDirection::North),
+            ("fast-transport-belt", None, EntityDirection::East),
+            ("express-transport-belt", None, EntityDirection::South),
+            ("underground-belt", Some("input"), EntityDirection::West),
+            ("underground-belt", Some("output"), EntityDirection::North),
+            ("fast-underground-belt", Some("input"), EntityDirection::East),
+            ("fast-underground-belt", Some("output"), EntityDirection::South),
+            ("express-underground-belt", Some("input"), EntityDirection::West),
+            ("express-underground-belt", Some("output"), EntityDirection::North),
+        ];
+        for (name, io, dir) in cases {
+            let e = PlacedEntity {
+                name: name.to_string(),
+                x: 3,
+                y: 7,
+                direction: dir,
+                io_type: io.map(str::to_string),
+                carries: Some("ch2".to_string()),
+                ..Default::default()
+            };
+            let t = entity_to_tuple(&e).expect("encode");
+            let r = entity_from_tuple(t).expect("decode");
+            assert_eq!(r.name, e.name, "name mismatch for {name}");
+            assert_eq!(r.x, e.x);
+            assert_eq!(r.y, e.y);
+            assert_eq!(r.direction, e.direction);
+            assert_eq!(r.io_type, e.io_type, "io_type mismatch for {name}");
+            assert_eq!(r.carries, e.carries);
+        }
+    }
+
+    /// Carries `None` round-trips as `-1`.
+    #[test]
+    fn entity_tuple_carries_none() {
+        let e = PlacedEntity {
+            name: "transport-belt".to_string(),
+            x: 0, y: 0,
+            direction: EntityDirection::North,
+            carries: None,
+            ..Default::default()
+        };
+        let t = entity_to_tuple(&e).unwrap();
+        assert_eq!(t[4], -1);
+        let r = entity_from_tuple(t).unwrap();
+        assert_eq!(r.carries, None);
     }
 }
