@@ -26,7 +26,6 @@ import { createJunctionDebugger } from "./ui/junctionDebugger";
 import { createSatEditor } from "./ui/satEditor";
 import * as debugState from "./state/debugState";
 import { createOverlayPanel } from "./ui/overlayPanel";
-import { createIssuesDialog } from "./ui/issuesDialog";
 import { createInspector } from "./ui/inspector";
 import { buildTileContext } from "./ui/tileContext";
 import { createSnapshotMode } from "./ui/snapshotMode";
@@ -131,11 +130,6 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
   syncAnimLogs();
 
   const inspector = createInspector(container);
-
-  const issuesDialog = createIssuesDialog(container, app, viewport);
-  issuesDialog.setOnValClose(() => {
-    issuesDialog.setVisible(false);
-  });
 
   // Detailed PIXI overlay for the selected SAT zone. Added to the
   // viewport (not entityLayer) so the entityLayer-dim on select
@@ -479,7 +473,6 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
   }
 
   let valOverlayLayer: Container | null = null;
-  let valCircleMap: Map<string, Graphics[]> = new Map();
   let cachedValidationIssues: ValidationIssue[] | null = null;
   let validationInFlightFor: LayoutResult | null = null;
 
@@ -521,15 +514,46 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     viewport.moveCenter(x * TILE_PX + TILE_PX / 2, y * TILE_PX + TILE_PX / 2);
   }
 
+  // Synthesise validation rows from layout-level data (router warnings +
+  // unresolved-crossing regions) so they share a panel with the
+  // post-layout validator output. Each Unresolved region becomes one
+  // clickable row at the region's centre tile, grouped by carried item.
+  function buildLayoutIssues(layout: LayoutResult): ValidationIssue[] {
+    const out: ValidationIssue[] = [];
+    for (const region of layout.regions ?? []) {
+      if (region.kind !== "unresolved") continue;
+      const cx = region.x + Math.floor(region.width / 2);
+      const cy = region.y + Math.floor(region.height / 2);
+      const item = region.ports?.find((p) => p.item)?.item ?? "unknown";
+      out.push({
+        severity: "Warning",
+        category: `ghost-router · ${item}`,
+        message: `unresolved crossing at (${cx}, ${cy})`,
+        x: cx,
+        y: cy,
+      });
+    }
+    for (const w of layout.warnings ?? []) {
+      // The aggregate ghost-router crossing count is replaced by the
+      // per-region rows above — skip it so we don't double-report.
+      if (/^ghost router:.*unresolved crossings/i.test(w)) continue;
+      out.push({
+        severity: "Warning",
+        category: "layout",
+        message: w,
+        x: undefined,
+        y: undefined,
+      });
+    }
+    return out;
+  }
+
   function updateValidationOverlay(): void {
     if (valOverlayLayer) {
       entityLayer.removeChild(valOverlayLayer);
       valOverlayLayer.destroy();
       valOverlayLayer = null;
-      valCircleMap = new Map();
     }
-    issuesDialog.clearPulse();
-    issuesDialog.setCircleMap(valCircleMap);
 
     // Always run validation when a layout is finalised. The visuals are
     // no longer gated on the Debug toggle (#209) — issues are surfaced as
@@ -553,25 +577,23 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
         });
     }
 
-    sidebarCtrl?.updateValidation(cachedValidationIssues ?? [], panToTile);
-    updateValidationBadge(cachedValidationIssues);
+    const layoutIssues = lastLayout ? buildLayoutIssues(lastLayout) : [];
+    const allIssues = [...(cachedValidationIssues ?? []), ...layoutIssues];
+    sidebarCtrl?.updateValidation(allIssues, panToTile);
+    updateValidationBadge(allIssues);
 
-    if (!lastLayout || !cachedValidationIssues || cachedValidationIssues.length === 0) {
-      issuesDialog.populate(cachedValidationIssues ?? [], debugCb.checked);
+    if (!lastLayout || allIssues.length === 0) {
       requestRender();
       return;
     }
     const result = renderValidationOverlay(
-      cachedValidationIssues,
+      allIssues,
       entityLayer,
       (text) => {
         inspector.setTooltipOverride(text ? `<span style="color:#f44">VALIDATION</span> ${text}` : null);
       },
     );
     valOverlayLayer = result.layer;
-    valCircleMap = result.circleMap;
-    issuesDialog.setCircleMap(valCircleMap);
-    issuesDialog.populate(cachedValidationIssues, debugCb.checked);
     requestRender();
   }
 
@@ -702,8 +724,6 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       cachedValidationIssues = null;
       drawGraph(viewport, null);
       viewport.moveCenter(WORLD_SIZE / 2, WORLD_SIZE / 2);
-      issuesDialog.setVisible(false);
-      issuesDialog.populate([], false);
       updateValidationBadge(null);
       sidebarCtrl?.updateValidation([], panToTile);
       junctionDebugger.close();
