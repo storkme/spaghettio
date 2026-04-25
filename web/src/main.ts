@@ -187,6 +187,12 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
   setupSnapshotDropZone(container, (snap) => snapshotMode.load(snap));
 
   const entityLayer = new Container();
+  // Cache the entity layer's GPU instruction buffer across frames. The static
+  // bus layout (thousands of Graphics) doesn't change between renders, so
+  // re-walking the scene graph and rebuilding draw calls every frame is
+  // pure waste. Add/remove operations (renderLayout commit, overlay toggle)
+  // invalidate the group; transform / alpha changes on children don't.
+  entityLayer.isRenderGroup = true;
   viewport.addChild(entityLayer);
   // SAT-zone detail overlay sits above the entity layer so the bbox,
   // boundary bars, and item icons always read on top of the belts.
