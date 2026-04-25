@@ -6,9 +6,15 @@ export interface FormState {
   inputs: string[];
   /** Max belt tier override, e.g. "transport-belt". null = auto. */
   belt: string | null;
+  /** Layout strategy ("partitioned-per-consumer" | "partitioned-decomposed").
+   * null = pooled (today's default). See `docs/rfp-modular-production.md`. */
+  strategy: string | null;
   /** User-added inputs beyond the DEFAULT_INPUTS list. */
   customInputs: string[];
 }
+
+/** Strategy values accepted on the URL and in `FormState.strategy`. */
+export const KNOWN_STRATEGIES = ["partitioned-per-consumer", "partitioned-decomposed"] as const;
 
 /** Full list of input pills rendered in the sidebar. */
 export const DEFAULT_INPUTS: string[] = [
@@ -48,10 +54,12 @@ export function readUrlState(): FormState {
   const inParam = params.get("in");
   const inputs = inParam ? inParam.split(",").filter((s) => s.length > 0) : DEFAULT_CHECKED_INPUTS;
   const belt = params.get("belt");
+  const rawStrategy = params.get("strategy");
+  const strategy = rawStrategy && (KNOWN_STRATEGIES as readonly string[]).includes(rawStrategy) ? rawStrategy : null;
   const ciParam = params.get("ci");
   const customInputs = ciParam ? ciParam.split(",").filter((s) => s.length > 0) : [];
 
-  return { item, rate, machine, inputs, belt, customInputs };
+  return { item, rate, machine, inputs, belt, strategy, customInputs };
 }
 
 export function writeUrlState(state: Omit<FormState, "machine"> & { machine: string }): void {
@@ -62,6 +70,7 @@ export function writeUrlState(state: Omit<FormState, "machine"> & { machine: str
     state.inputs.length === DEFAULT_CHECKED_INPUTS.length &&
     state.inputs.every((v, i) => v === DEFAULT_CHECKED_INPUTS[i]) &&
     !state.belt &&
+    !state.strategy &&
     state.customInputs.length === 0;
 
   if (isDefault) {
@@ -75,6 +84,7 @@ export function writeUrlState(state: Omit<FormState, "machine"> & { machine: str
   params.set("machine", state.machine);
   params.set("in", state.inputs.join(","));
   if (state.belt) params.set("belt", state.belt);
+  if (state.strategy) params.set("strategy", state.strategy);
   if (state.customInputs.length > 0) params.set("ci", state.customInputs.join(","));
   history.replaceState(null, "", "?" + params.toString());
 }

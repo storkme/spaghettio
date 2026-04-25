@@ -24,7 +24,7 @@
 use std::collections::BTreeMap;
 use std::env;
 
-use fucktorio_core::bus::layout::build_bus_layout_traced;
+use fucktorio_core::bus::layout::{build_bus_layout_traced, LayoutOptions};
 use fucktorio_core::solver;
 use fucktorio_core::trace::{BoundarySnapshot, StampedNeighbor, TraceEvent};
 use rustc_hash::FxHashSet;
@@ -66,7 +66,7 @@ fn main() {
         }
     };
 
-    let layout = match build_bus_layout_traced(&solver_result, None) {
+    let layout = match build_bus_layout_traced(&solver_result, LayoutOptions::default()) {
         Ok(l) => l,
         Err(e) => {
             eprintln!("layout failed: {e}");

@@ -2,7 +2,7 @@
 //! pipeline and report validator error/warning counts. Used to verify
 //! the clustering change doesn't regress the AM3 layout.
 
-use fucktorio_core::bus::layout::build_bus_layout;
+use fucktorio_core::bus::layout::{build_bus_layout, LayoutOptions};
 use fucktorio_core::solver;
 use fucktorio_core::validate::{self, LayoutStyle, Severity};
 use rustc_hash::FxHashSet;
@@ -19,7 +19,7 @@ fn main() {
         solver::solve("advanced-circuit", 5.0, &inputs, "assembling-machine-3")
             .unwrap();
 
-    let layout = build_bus_layout(&solver_result, Some("transport-belt")).unwrap();
+    let layout = build_bus_layout(&solver_result, LayoutOptions::from_belt_tier(Some("transport-belt"))).unwrap();
 
     let issues = match validate::validate(&layout, Some(&solver_result), LayoutStyle::Bus) {
         Ok(v) => v,

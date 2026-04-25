@@ -196,7 +196,10 @@ fn run_e2e_with_exclusions(
             msg
         })?;
 
-    let layout = layout::build_bus_layout(&solver_result, belt_tier)
+    let layout = layout::build_bus_layout(
+        &solver_result,
+        layout::LayoutOptions::from_belt_tier(belt_tier),
+    )
         .map_err(|e| {
             let msg = format!("layout: {e}");
             dump_partial_snapshot(test_name, &run_params, Some(&solver_result), &msg);
@@ -341,6 +344,97 @@ fn assert_produces(result: &E2EResult, item: &str, min_rate: f64) {
     );
 }
 
+/// Compute a deterministic SHA-256 hash of `layout.entities` over the
+/// structural fields a Phase 0a refactor must preserve under
+/// `LayoutStrategy::Pooled`. Excludes `rate` (Option<f64>) and `items`
+/// (not yet structurally stable across the bus pipeline).
+fn golden_hash(layout: &fucktorio_core::models::LayoutResult) -> String {
+    use sha2::{Digest, Sha256};
+    let mut sorted: Vec<_> = layout.entities.iter().collect();
+    sorted.sort_by(|a, b| {
+        (
+            a.name.as_str(),
+            a.x,
+            a.y,
+            a.direction as u8,
+            a.recipe.as_deref().unwrap_or(""),
+            a.carries.as_deref().unwrap_or(""),
+            a.segment_id.as_deref().unwrap_or(""),
+        )
+            .cmp(&(
+                b.name.as_str(),
+                b.x,
+                b.y,
+                b.direction as u8,
+                b.recipe.as_deref().unwrap_or(""),
+                b.carries.as_deref().unwrap_or(""),
+                b.segment_id.as_deref().unwrap_or(""),
+            ))
+    });
+    let mut hasher = Sha256::new();
+    for e in sorted {
+        hasher.update(e.name.as_bytes());
+        hasher.update(b"\x1f");
+        hasher.update(e.x.to_le_bytes());
+        hasher.update(e.y.to_le_bytes());
+        hasher.update([e.direction as u8, e.mirror as u8]);
+        hasher.update(e.recipe.as_deref().unwrap_or("").as_bytes());
+        hasher.update(b"\x1f");
+        hasher.update(e.carries.as_deref().unwrap_or("").as_bytes());
+        hasher.update(b"\x1f");
+        hasher.update(e.segment_id.as_deref().unwrap_or("").as_bytes());
+        hasher.update(b"\x1e");
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+/// K0-1 regression gate from `docs/rfp-modular-production.md`. Asserts
+/// that the layout produced under `LayoutStrategy::Pooled` is
+/// byte-identical (over structural fields) to the committed baseline.
+/// To regenerate after an intentional layout change:
+/// `FUCKTORIO_GOLDEN_DUMP=1 cargo test --test e2e -- --nocapture`,
+/// then paste the printed hashes into `GOLDEN_HASHES`.
+fn assert_golden_hash(result: &E2EResult, test_name: &str) {
+    let computed = golden_hash(&result.layout);
+    if std::env::var("FUCKTORIO_GOLDEN_DUMP").is_ok() {
+        eprintln!("    (\"{test_name}\", \"{computed}\"),");
+        return;
+    }
+    let expected = GOLDEN_HASHES
+        .iter()
+        .find(|(name, _)| *name == test_name)
+        .map(|(_, hash)| *hash);
+    match expected {
+        Some(expected) if expected == computed => {}
+        Some(expected) => panic!(
+            "Golden hash mismatch for `{test_name}` (K0-1 regression).\n  \
+             expected: {expected}\n  computed: {computed}\n  \
+             If this is an intentional layout change, regenerate with \
+             FUCKTORIO_GOLDEN_DUMP=1."
+        ),
+        None => panic!(
+            "No golden hash registered for `{test_name}`. \
+             Run `FUCKTORIO_GOLDEN_DUMP=1 cargo test --test e2e -- --nocapture` \
+             to capture. Computed: {computed}"
+        ),
+    }
+}
+
+/// K0-1 byte-equality regression table. Entries are
+/// `(test_name, sha256_hex_of_entities)`. Captured under
+/// `LayoutStrategy::Pooled` on the pre-RFP baseline.
+const GOLDEN_HASHES: &[(&str, &str)] = &[
+    ("tier1_iron_gear_wheel", "c3ad3100d0d4a68befa8b6beb05f200ad25a60b41e89a98e490a61486a958ccd"),
+    ("tier1_iron_gear_wheel_from_ore", "3cd35e7f5cd6a06fb84df10f902b6726f9ce8c6f66d557989fada973c4eacb3b"),
+    ("tier1_iron_gear_wheel_20s", "cb9db5d05c01524432c2f4524e3e8eaa50b8957b8a764622fc9c59dfcc27fffd"),
+    ("tier2_electronic_circuit_from_ore", "b3fdf981f86d7794b0346424123a553436b04628a77d45fb01fc56f9cb2bf044"),
+    ("tier2_electronic_circuit_20s_from_ore", "6187078fcdbfebd265d1417c0b71650951fed4c3d2c216c29801fd5ee2917104"),
+    ("tier2_electronic_circuit_splitter_stamp_regression", "1240c095aece437a4e9268580028625e7521e29e4f5015712dfed2f693c46e9e"),
+    ("tier3_plastic_bar", "6985e6c920c10e4f20ec4c7b18bbb0cde98a6a8c030787e85a3f8ab3618e70fb"),
+    ("tier3_sulfuric_acid", "091765fa6a50b4438137e0500e32eb8378ed22224f9b58843070cb70d6561bcd"),
+    ("tier3_heavy_oil_cracking", "9b7e04e97a65d99c6f001a8e6f67eaf69d348e56417093788cfd19369adb9cd1"),
+];
+
 fn assert_round_trip(result: &E2EResult) {
     // Check entity count and per-entity position/direction/name.
     // Metadata like carries, segment_id, and rate are lost in the blueprint
@@ -401,6 +495,7 @@ fn tier1_iron_gear_wheel() {
     assert_no_warnings(&result);
     assert_produces(&result, "iron-gear-wheel", 10.0);
     assert_round_trip(&result);
+    assert_golden_hash(&result, "tier1_iron_gear_wheel");
 }
 
 #[test]
@@ -421,6 +516,7 @@ fn tier1_iron_gear_wheel_from_ore() {
     assert_no_warnings(&result);
     assert_produces(&result, "iron-gear-wheel", 10.0);
     assert_round_trip(&result);
+    assert_golden_hash(&result, "tier1_iron_gear_wheel_from_ore");
 }
 
 #[test]
@@ -434,6 +530,7 @@ fn tier1_iron_gear_wheel_20s() {
     assert_no_warnings(&result);
     assert_produces(&result, "iron-gear-wheel", 20.0);
     assert_round_trip(&result);
+    assert_golden_hash(&result, "tier1_iron_gear_wheel_20s");
 }
 
 // ---------------------------------------------------------------------------
@@ -518,6 +615,7 @@ fn tier2_electronic_circuit_from_ore() {
     assert_no_warnings_except(&result, &["power"]);
     assert_produces(&result, "electronic-circuit", 10.0);
     assert_round_trip(&result);
+    assert_golden_hash(&result, "tier2_electronic_circuit_from_ore");
 }
 
 #[test]
@@ -543,6 +641,7 @@ fn tier2_electronic_circuit_20s_from_ore() {
     assert_no_warnings_except(&result, &["power"]);
     assert_produces(&result, "electronic-circuit", 20.0);
     assert_round_trip(&result);
+    assert_golden_hash(&result, "tier2_electronic_circuit_20s_from_ore");
 }
 
 /// Regression test for the splitter-stamp sideload-into-UG-input bug that the
@@ -596,6 +695,7 @@ fn tier2_electronic_circuit_splitter_stamp_regression() {
     );
     // Ensure the layout can actually produce items (no solver/routing failure).
     assert_produces(&result, "electronic-circuit", 10.0);
+    assert_golden_hash(&result, "tier2_electronic_circuit_splitter_stamp_regression");
 }
 
 // ---------------------------------------------------------------------------
@@ -617,6 +717,7 @@ fn tier3_plastic_bar() {
     assert_no_warnings(&result);
     assert_produces(&result, "plastic-bar", 10.0);
     assert_round_trip(&result);
+    assert_golden_hash(&result, "tier3_plastic_bar");
 }
 
 #[test]
@@ -651,6 +752,7 @@ fn tier3_sulfuric_acid() {
     assert_no_warnings(&result);
     assert_produces(&result, "sulfuric-acid", 5.0);
     assert_round_trip(&result);
+    assert_golden_hash(&result, "tier3_sulfuric_acid");
 }
 
 #[test]
@@ -679,6 +781,7 @@ fn tier3_heavy_oil_cracking() {
     assert_no_warnings(&result);
     assert_produces(&result, "light-oil", 5.0);
     assert_round_trip(&result);
+    assert_golden_hash(&result, "tier3_heavy_oil_cracking");
 }
 
 // ---------------------------------------------------------------------------
@@ -752,7 +855,7 @@ fn diag_validator_timing_from_ore() {
     let inputs: FxHashSet<String> = ["iron-ore"].iter().map(|s| s.to_string()).collect();
     let sr = solver::solve("iron-gear-wheel", 10.0, &inputs, "assembling-machine-2")
         .unwrap_or_else(|e| panic!("solver (iron-gear-wheel from ore): {e}"));
-    let lr = layout::build_bus_layout(&sr, None)
+    let lr = layout::build_bus_layout(&sr, layout::LayoutOptions::default())
         .unwrap_or_else(|e| panic!("layout (iron-gear-wheel from ore): {e}"));
     eprintln!("=== iron-gear-wheel from ore ===");
     eprintln!("Layout: {} entities, {}x{}", lr.entities.len(), lr.width, lr.height);
@@ -762,7 +865,10 @@ fn diag_validator_timing_from_ore() {
     let inputs2: FxHashSet<String> = ["iron-ore", "copper-ore"].iter().map(|s| s.to_string()).collect();
     let sr2 = solver::solve("electronic-circuit", 10.0, &inputs2, "assembling-machine-1")
         .unwrap_or_else(|e| panic!("solver (electronic-circuit from ore): {e}"));
-    let lr2 = layout::build_bus_layout(&sr2, Some("transport-belt"))
+    let lr2 = layout::build_bus_layout(
+        &sr2,
+        layout::LayoutOptions::from_belt_tier(Some("transport-belt")),
+    )
         .unwrap_or_else(|e| panic!("layout (electronic-circuit from ore): {e}"));
     eprintln!("\n=== electronic-circuit from ore ===");
     eprintln!("Layout: {} entities, {}x{}", lr2.entities.len(), lr2.width, lr2.height);
@@ -1466,7 +1572,10 @@ fn diag_ghost_cluster_helper(
         let _guard = trace::start_trace();
         let solver_result = solver::solve(item, rate, inputs, machine)
             .unwrap_or_else(|e| panic!("{test_name}: solver: {e}"));
-        let layout = layout::build_bus_layout(&solver_result, belt_tier)
+        let layout = layout::build_bus_layout(
+            &solver_result,
+            layout::LayoutOptions::from_belt_tier(belt_tier),
+        )
             .unwrap_or_else(|e| panic!("{test_name}: layout: {e}"));
         let trace_events = trace::drain_events();
         let analysis = analysis::analyze(&layout);

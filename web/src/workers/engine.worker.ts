@@ -31,9 +31,9 @@ type Request =
       availableInputs: string[];
       machineEntity: string;
     }
-  | { id: number; method: "layout"; result: SolverResult; maxBeltTier: string | null }
-  | { id: number; method: "layoutTraced"; result: SolverResult; maxBeltTier: string | null }
-  | { id: number; method: "layoutStreaming"; result: SolverResult; maxBeltTier: string | null }
+  | { id: number; method: "layout"; result: SolverResult; maxBeltTier: string | null; strategy: string | null }
+  | { id: number; method: "layoutTraced"; result: SolverResult; maxBeltTier: string | null; strategy: string | null }
+  | { id: number; method: "layoutStreaming"; result: SolverResult; maxBeltTier: string | null; strategy: string | null }
   | { id: number; method: "exportBlueprint"; layout: LayoutResult; label: string }
   | {
       id: number;
@@ -99,10 +99,10 @@ self.onmessage = async (e: MessageEvent<Request>) => {
         result = solve(req.targetItem, req.targetRate, req.availableInputs, req.machineEntity);
         break;
       case "layout":
-        result = layout(req.result, req.maxBeltTier ?? undefined);
+        result = layout(req.result, req.maxBeltTier ?? undefined, req.strategy ?? undefined);
         break;
       case "layoutTraced":
-        result = layout_traced(req.result, req.maxBeltTier ?? undefined);
+        result = layout_traced(req.result, req.maxBeltTier ?? undefined, req.strategy ?? undefined);
         break;
       case "layoutStreaming": {
         const id = req.id;
@@ -145,7 +145,7 @@ self.onmessage = async (e: MessageEvent<Request>) => {
           if (batch.length >= BATCH_SIZE) flushBatch();
         };
         try {
-          result = layout_streaming(req.result, req.maxBeltTier ?? undefined, emit);
+          result = layout_streaming(req.result, req.maxBeltTier ?? undefined, req.strategy ?? undefined, emit);
         } finally {
           flushBatch();
           if (TRACE_LOGS) {

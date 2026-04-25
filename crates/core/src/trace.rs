@@ -817,6 +817,11 @@ pub struct LaneInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FamilyInfo {
     pub item: String,
+    /// `0` under `LayoutStrategy::Pooled`. Distinguishes multiple
+    /// `(item, module_id)` families per item under the partitioning
+    /// strategies — see `docs/rfp-modular-production.md`.
+    #[serde(default)]
+    pub module_id: u32,
     pub shape: (usize, usize),
     pub lane_xs: Vec<i32>,
     pub balancer_y_start: i32,

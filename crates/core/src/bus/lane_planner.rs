@@ -120,6 +120,11 @@ impl BusLane {
 pub struct LaneFamily {
     /// Item name shared by all lanes in this family.
     pub item: String,
+    /// Module index within the item: `0` under `LayoutStrategy::Pooled`
+    /// (one family per item). Phase 1 of `rfp-modular-production`
+    /// distinguishes multiple `(item, module_id)` families per item;
+    /// see the RFP for the partitioning algorithm.
+    pub module_id: u32,
     /// `(N producers, M lanes)` — the balancer shape.
     pub shape: (usize, usize),
     /// Row indices of the N producers feeding into this balancer.
@@ -361,6 +366,7 @@ pub fn plan_bus_lanes(
         }).collect(),
         families: families.iter().map(|f| crate::trace::FamilyInfo {
             item: f.item.clone(),
+            module_id: f.module_id,
             shape: f.shape,
             lane_xs: f.lane_xs.clone(),
             balancer_y_start: f.balancer_y_start,
@@ -529,6 +535,7 @@ fn split_overflowing_lanes(
 
             families.push(LaneFamily {
                 item: lane.item.clone(),
+                module_id: 0,
                 shape,
                 producer_rows: all_producer_rows.to_vec(),
                 lane_xs: Vec::new(),

@@ -91,6 +91,24 @@ pub(crate) fn balancer_origin_x(lane_xs: &[i32], output_tiles: &[(i32, i32)]) ->
     lane_xs[0] - output_tiles[0].0
 }
 
+/// Build the `segment_id` string for a stamped balancer.
+///
+/// Under `LayoutStrategy::Pooled` every family has `module_id == 0`,
+/// and the produced string is byte-identical to the pre-RFP format
+/// (`balancer:{item}:{n}x{m}` or `…:{group}` for decomposition). The
+/// `:mod{N}` suffix only appears when partitioning produced multiple
+/// modules per item — see `docs/rfp-modular-production.md`.
+fn format_segment_id(item: &str, module_id: u32, n: u32, m: u32, group: Option<usize>) -> String {
+    let mut s = format!("balancer:{item}:{n}x{m}");
+    if let Some(gi) = group {
+        s.push_str(&format!(":{gi}"));
+    }
+    if module_id != 0 {
+        s.push_str(&format!(":mod{module_id}"));
+    }
+    s
+}
+
 /// Stamp a balancer template at the family's origin position.
 ///
 /// Template entity tiles are offset by the family's stamp origin
@@ -126,7 +144,7 @@ pub(crate) fn stamp_family_balancer(
             origin_x, origin_y, belt_tier, splitter_name, ug_name,
             Some(&family.item),
         );
-        let seg_id = Some(format!("balancer:{}:{}x{}", family.item, n, m));
+        let seg_id = Some(format_segment_id(&family.item, family.module_id, n, m, None));
         for ent in &mut entities {
             ent.segment_id = seg_id.clone();
         }
@@ -161,7 +179,7 @@ pub(crate) fn stamp_family_balancer(
                     sub_origin_x, sub_origin_y, belt_tier, splitter_name, ug_name,
                     Some(&family.item),
                 );
-                let sub_seg = format!("balancer:{}:{}x{}:{}", family.item, sub_n, sub_m, gi);
+                let sub_seg = format_segment_id(&family.item, family.module_id, sub_n, sub_m, Some(gi));
                 for ent in &mut ents {
                     ent.segment_id = Some(sub_seg.clone());
                 }
@@ -184,6 +202,7 @@ mod tests {
     fn test_stamp_family_balancer() {
         let family = LaneFamily {
             item: "iron-plate".to_string(),
+            module_id: 0,
             shape: (1, 2),  // 1 producer, 2 lanes
             producer_rows: vec![0],
             lane_xs: vec![1, 2],
