@@ -12,11 +12,24 @@ use fucktorio_core::models::{LayoutResult, PlacedEntity, SolverResult};
 use fucktorio_core::validate::{self, LayoutStyle, ValidationIssue};
 use fucktorio_core::{
     blueprint, blueprint_parser, bus::junction_cost::solution_cost,
-    bus::layout::{build_bus_layout, LayoutOptions}, fixture as fixture_mod, recipe_db, sat, solver,
+    bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy},
+    fixture as fixture_mod, recipe_db, sat, solver,
 };
 use rustc_hash::FxHashSet;
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
+
+/// Build `LayoutOptions` from the optional belt-tier and strategy strings
+/// passed in across the WASM boundary. The TS engine layer validates URL
+/// params, so unknown strategy strings fall back to `Pooled` silently.
+fn layout_options(max_belt_tier: Option<String>, strategy: Option<String>) -> LayoutOptions {
+    let strategy = match strategy.as_deref() {
+        Some("partitioned-per-consumer") => LayoutStrategy::PartitionedPerConsumer,
+        Some("partitioned-decomposed") => LayoutStrategy::PartitionedDecomposed,
+        _ => LayoutStrategy::Pooled,
+    };
+    LayoutOptions { strategy, max_belt_tier }
+}
 
 #[wasm_bindgen]
 pub fn init() {
@@ -51,8 +64,12 @@ pub fn default_machine_for_item(item: &str, fallback: &str) -> String {
 }
 
 #[wasm_bindgen]
-pub fn layout(solver_result: SolverResult, max_belt_tier: Option<String>) -> Result<LayoutResult, JsError> {
-    build_bus_layout(&solver_result, LayoutOptions::from_belt_tier(max_belt_tier.as_deref()))
+pub fn layout(
+    solver_result: SolverResult,
+    max_belt_tier: Option<String>,
+    strategy: Option<String>,
+) -> Result<LayoutResult, JsError> {
+    build_bus_layout(&solver_result, layout_options(max_belt_tier, strategy))
         .map_err(|e| JsError::new(&e))
 }
 
@@ -61,10 +78,14 @@ pub fn layout(solver_result: SolverResult, max_belt_tier: Option<String>) -> Res
 /// routing is the only routing path — the legacy direct router was
 /// deleted; both `layout()` and `layout_traced()` go through it.
 #[wasm_bindgen]
-pub fn layout_traced(solver_result: SolverResult, max_belt_tier: Option<String>) -> Result<LayoutResult, JsError> {
+pub fn layout_traced(
+    solver_result: SolverResult,
+    max_belt_tier: Option<String>,
+    strategy: Option<String>,
+) -> Result<LayoutResult, JsError> {
     fucktorio_core::bus::layout::build_bus_layout_traced(
         &solver_result,
-        LayoutOptions::from_belt_tier(max_belt_tier.as_deref()),
+        layout_options(max_belt_tier, strategy),
     )
     .map_err(|e| JsError::new(&e))
 }
@@ -110,6 +131,7 @@ fn streamable(evt: &fucktorio_core::trace::TraceEvent) -> bool {
 pub fn layout_streaming(
     solver_result: SolverResult,
     max_belt_tier: Option<String>,
+    strategy: Option<String>,
     emit: &js_sys::Function,
 ) -> Result<LayoutResult, JsError> {
     let emit = emit.clone();
@@ -123,7 +145,7 @@ pub fn layout_streaming(
     });
     fucktorio_core::bus::layout::build_bus_layout_streaming(
         &solver_result,
-        LayoutOptions::from_belt_tier(max_belt_tier.as_deref()),
+        layout_options(max_belt_tier, strategy),
         on_event,
     )
     .map_err(|e| JsError::new(&e))

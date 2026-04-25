@@ -373,6 +373,27 @@ export function renderSidebar(
   });
   targetBody.appendChild(makeField("Belt", beltSelect));
 
+  // Layout strategy. Phase 0b of `rfp-modular-production` ships the
+  // dropdown; the partitioned variants are wired in Phase 1, so they are
+  // disabled here and a tooltip explains why.
+  const strategySelect = document.createElement("select");
+  strategySelect.className = "sb-select";
+  ([
+    ["Pooled (today)", "", false],
+    ["Partitioned per consumer", "partitioned-per-consumer", true],
+    ["Partitioned + decomposed", "partitioned-decomposed", true],
+  ] as const).forEach(([label, value, disabled]) => {
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = label;
+    if (disabled) {
+      opt.disabled = true;
+      opt.title = "Wired in Phase 1 of rfp-modular-production";
+    }
+    strategySelect.appendChild(opt);
+  });
+  targetBody.appendChild(makeField("Strategy", strategySelect));
+
   // Rate (numeric with /s suffix)
   const rateRow = document.createElement("div");
   rateRow.className = "sb-field";
@@ -552,6 +573,7 @@ export function renderSidebar(
     if (tag) tag.classList.toggle("active", cb.checked);
   });
   if (urlState.belt) beltSelect.value = urlState.belt;
+  if (urlState.strategy) strategySelect.value = urlState.strategy;
   // Restore custom inputs from URL
   for (const item of urlState.customInputs) {
     if (itemSet.has(item) && !defaultInputSet.has(item) && !customInputs.includes(item)) {
@@ -599,6 +621,7 @@ export function renderSidebar(
       machine: machineSelect.value,
       inputs: checkedDefaults,
       belt: beltSelect.value || null,
+      strategy: strategySelect.value || null,
       customInputs,
     });
 
@@ -630,8 +653,9 @@ export function renderSidebar(
     let layout: LayoutResult;
     try {
       const maxTier = beltSelect.value || undefined;
+      const strategy = strategySelect.value || undefined;
       const onEvent = callbacks.startStreaming();
-      layout = await engine.buildLayoutStreaming(result, maxTier, onEvent);
+      layout = await engine.buildLayoutStreaming(result, maxTier, strategy, onEvent);
     } catch (err) {
       if (gen !== solveGeneration) return;
       const errDiv = document.createElement("div");
@@ -672,6 +696,7 @@ export function renderSidebar(
   rateInput.addEventListener("input", scheduleAutoSolve);
   machineSelect.addEventListener("change", scheduleAutoSolve);
   beltSelect.addEventListener("change", scheduleAutoSolve);
+  strategySelect.addEventListener("change", scheduleAutoSolve);
   checkboxes.forEach((cb) => cb.addEventListener("change", scheduleAutoSolve));
 
   runSolve().catch((err) => console.error("runSolve failed:", err));
