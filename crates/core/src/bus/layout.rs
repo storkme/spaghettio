@@ -275,6 +275,14 @@ pub fn build_bus_layout(
             count: poles.len(),
             strategy: pole_strategy.to_string(),
         });
+        // Stream sibling of PolesPlaced — carries the pole entity batch so
+        // the live renderer can reveal them progressively instead of dumping
+        // them via the poles_placed PhaseSnapshot safety net.
+        if !poles.is_empty() {
+            crate::trace::emit(crate::trace::TraceEvent::PolesCommitted {
+                entities: poles.clone(),
+            });
+        }
         crate::trace::emit(crate::trace::TraceEvent::PhaseComplete {
             phase: "poles_placed".into(),
             entity_count: poles.len(),

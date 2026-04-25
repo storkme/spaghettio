@@ -150,6 +150,7 @@ pub fn route_bus_ghost(
             continue;
         }
 
+        let lane_start = entities.len();
         let x = lane.x;
         let belt_name = belt_entity_for_rate(lane.rate * 2.0, max_belt_tier);
         let trunk_seg_id = Some(format!("trunk:{}", lane.item));
@@ -201,6 +202,17 @@ pub fn route_bus_ghost(
                 pre_ghost_belts.insert((x, tap_y));
             }
         }
+
+        // Stream the per-lane tap-off batch so the live renderer can reveal
+        // it progressively instead of dumping it via the bus_routed safety net.
+        if entities.len() > lane_start {
+            crate::trace::emit(crate::trace::TraceEvent::TrunkBeltCommitted {
+                item: lane.item.clone(),
+                lane_x: lane.x,
+                is_fluid: false,
+                entities: entities[lane_start..].to_vec(),
+            });
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -236,6 +248,17 @@ pub fn route_bus_ghost(
                 hard.insert((sx, sy));
                 fluid_reservations.remove(&(sx, sy));
             }
+        }
+        // Stream sibling of BalancerStamped — carries the entity batch so
+        // the live renderer can reveal the cascade progressively. Emitted
+        // before extend() so the event clones the entity list once and the
+        // extend consumes the original.
+        if !balancer_ents.is_empty() {
+            crate::trace::emit(crate::trace::TraceEvent::BalancerCommitted {
+                item: fam.item.clone(),
+                shape: fam.shape,
+                entities: balancer_ents.clone(),
+            });
         }
         entities.extend(balancer_ents);
     }
@@ -278,6 +301,7 @@ pub fn route_bus_ghost(
         if lane.is_fluid {
             continue;
         }
+        let lane_start = entities.len();
         let x = lane.x;
         let belt_name = belt_entity_for_rate(lane.rate * 2.0, max_belt_tier);
         let trunk_seg_id = Some(format!("trunk:{}", lane.item));
@@ -351,6 +375,15 @@ pub fn route_bus_ghost(
                     .push(tile);
             }
         }
+        // Stream the per-lane trunk-segment batch.
+        if entities.len() > lane_start {
+            crate::trace::emit(crate::trace::TraceEvent::TrunkBeltCommitted {
+                item: lane.item.clone(),
+                lane_x: lane.x,
+                is_fluid: false,
+                entities: entities[lane_start..].to_vec(),
+            });
+        }
     }
     // Sort each synth path so tiles are ordered top-to-bottom (ascending y).
     for path in trunk_synth_paths.values_mut() {
@@ -386,6 +419,7 @@ pub fn route_bus_ghost(
         if !lane.is_fluid {
             continue;
         }
+        let lane_start = entities.len();
         let x = lane.x;
         let trunk_seg_id = Some(format!("trunk:{}", lane.item));
 
@@ -651,6 +685,15 @@ pub fn route_bus_ghost(
                     hard.insert(tile);
                 }
             }
+        }
+        // Stream the per-lane fluid-trunk batch.
+        if entities.len() > lane_start {
+            crate::trace::emit(crate::trace::TraceEvent::TrunkBeltCommitted {
+                item: lane.item.clone(),
+                lane_x: lane.x,
+                is_fluid: true,
+                entities: entities[lane_start..].to_vec(),
+            });
         }
     }
 
@@ -2182,6 +2225,14 @@ pub fn route_bus_ghost(
                 rows: output_rows.clone(),
                 merge_y: max_y,
             });
+            // Stream sibling of OutputMerged — carries the merger entity batch
+            // so the live renderer can reveal them progressively.
+            if !merge_ents.is_empty() {
+                crate::trace::emit(crate::trace::TraceEvent::OutputMergerCommitted {
+                    item: item.clone(),
+                    entities: merge_ents.clone(),
+                });
+            }
             entities.extend(merge_ents);
             max_y = max_y.max(merge_end_y);
             merge_max_x = merge_max_x.max(item_merge_x);
