@@ -53,6 +53,18 @@
   background: rgba(86, 156, 214, 0.25);
 }
 
+/* Pulsing chip for the post-stream auto-optimize phase. We can't show
+ * scrub-bar progress for it (no virtual-ms timestamps), so the chip
+ * itself signals "still working" until markOptimizeState("done"). */
+.timeline-scrubber .ts-chip--in-progress {
+  animation: ts-chip-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes ts-chip-pulse {
+  0%, 100% { color: #888; }
+  50% { color: #d4d4d4; }
+}
+
 /* Tick mark dropping into the track */
 .timeline-scrubber .ts-chip::after {
   content: "";

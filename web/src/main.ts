@@ -34,6 +34,7 @@ import { spawnRegionFlash } from "./renderer/improvementAnimation";
 import { createStreamingRenderer, type StreamingRendererHandle } from "./renderer/streamingRenderer";
 import { createTimelineScrubber, type TimelineScrubberHandle } from "./ui/timelineScrubber";
 import "./ui/timelineScrubber.css";
+import { attachBusyOverlay } from "./ui/busyOverlay";
 import { logLayoutStats } from "./ui/layoutTimingLog";
 
 const MACHINE_SLUGS = [
@@ -549,6 +550,11 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     (virtualMs) => streamingHandle?.seekTo(virtualMs),
   );
 
+  // Spinner that appears in the top-right while the WASM worker is
+  // busy. Covers the gap between "click solve" and the first trace
+  // event arriving (before the timeline scrubber has anything to show).
+  attachBusyOverlay(container);
+
   const snapshotMode = createSnapshotMode({
     sidebarEl: document.getElementById("sidebar"),
     getSidebarCtrl: () => sidebarCtrl,
@@ -614,6 +620,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     if (!hasSatZones) return;
 
     optimizeInFlight = true;
+    timelineScrubber.markOptimizeState("active");
 
     // Tear down selection so renderLayout's removeChildren doesn't
     // orphan its overlays as we restamp tiles during the drain.
@@ -738,6 +745,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       solverDone = true;
       if (rafId !== null) cancelAnimationFrame(rafId);
       optimizeInFlight = false;
+      timelineScrubber.markOptimizeState("done");
       if (lastLayout) {
         selectionCtrl = createSelectionController(
           app.canvas,
@@ -901,7 +909,10 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
           viewportFitted = true;
         }
       }
-      streamingHandle?.onEvent(evt, (m) => timelineScrubber.noteMilestone(m.id));
+      streamingHandle?.onEvent(evt, (m) => {
+        if (!streamingHandle) return;
+        timelineScrubber.noteMilestone(m, streamingHandle.getTimeRange());
+      });
     };
   }
 
