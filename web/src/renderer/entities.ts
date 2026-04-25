@@ -163,7 +163,7 @@ export function itemColor(item: string | undefined): number {
 }
 
 // [width, height] in tiles for multi-tile entities
-const MACHINE_SIZES: Record<string, [number, number]> = {
+export const MACHINE_SIZES: Record<string, [number, number]> = {
   "assembling-machine-1": [3, 3],
   "assembling-machine-2": [3, 3],
   "assembling-machine-3": [3, 3],
@@ -205,7 +205,7 @@ const BELT_ENTITIES = new Set(
   Object.keys(BELT_COLORS).filter((k) => !k.includes("underground") && !k.includes("splitter"))
 );
 const UG_BELT_ENTITIES = new Set(Object.keys(BELT_COLORS).filter((k) => k.includes("underground")));
-const SPLITTER_ENTITIES = new Set(Object.keys(BELT_COLORS).filter((k) => k.includes("splitter")));
+export const SPLITTER_ENTITIES = new Set(Object.keys(BELT_COLORS).filter((k) => k.includes("splitter")));
 const PIPE_ENTITIES = new Set(["pipe", "pipe-to-ground"]);
 const POLE_ENTITIES = new Set(["medium-electric-pole", "small-electric-pole"]);
 
@@ -230,7 +230,7 @@ function dirVec(dir?: EntityDirection): [number, number] {
 }
 
 /** Companion tile offset for a splitter's 2×1 footprint. */
-function splitterCompanionOffset(dir?: EntityDirection): [number, number] {
+export function splitterCompanionOffset(dir?: EntityDirection): [number, number] {
   switch (dir) {
     case "South":
     case "North":
@@ -989,7 +989,9 @@ export function drawUgTunnelStripe(
 export function renderLayout(
   layout: LayoutResult,
   container: Container,
-  onHover?: (entity: PlacedEntity | null) => void,
+  // onHover is accepted for call-site compatibility but no longer wired to
+  // per-entity Pixi events. Hover detection is now tile-based in main.ts.
+  _onHover?: (entity: PlacedEntity | null) => void,
   onSelect?: (entity: PlacedEntity | null) => void,
   onEntityRendered?: (entity: PlacedEntity, graphics: Graphics[]) => void,
   /** Extra entities that are NOT drawn but DO participate in `detectBeltTurn`
@@ -1173,14 +1175,12 @@ export function renderLayout(
     g.x = (entity.x ?? 0) * TILE_PX;
     g.y = (entity.y ?? 0) * TILE_PX;
 
-    // Make every entity interactive for hover + click
-    g.eventMode = "static";
-    g.cursor = "pointer";
-    if (onHover) {
-      g.on("pointerenter", () => onHover(entity));
-      g.on("pointerleave", () => onHover(null));
-    }
+    // Make every entity interactive for click; hover is handled via tile-lookup
+    // in the canvas pointermove handler (see main.ts) to avoid the per-frame
+    // scene-walk cost of per-entity Pixi pointer events.
     if (onSelect) {
+      g.eventMode = "static";
+      g.cursor = "pointer";
       g.on("click", () => onSelect(entity));
     }
 
