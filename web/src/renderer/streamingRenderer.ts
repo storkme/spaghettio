@@ -171,10 +171,11 @@ export function createStreamingRenderer(
   _onSelect?: (e: PlacedEntity | null) => void,
 ): StreamingRendererHandle {
   // Layer ordering (bottom-to-top):
-  //   0. particleScene.entityContainer — entity particles
-  //   1. particleScene.ghostContainer  — ghost belt previews
-  //   2. particleScene.iconContainer   — item icon particles
-  //   3. clusterOverlay                — SAT cluster outline pulses (Graphics, cheap)
+  //   0. particleScene.beltContainer    — belt/pipe/inserter/pole particles
+  //   1. particleScene.machineContainer — machine particles (above belts)
+  //   2. particleScene.ghostContainer   — ghost belt previews
+  //   3. particleScene.iconContainer    — item icon particles
+  //   4. clusterOverlay                 — SAT cluster outline pulses (Graphics, cheap)
   //
   // Particle containers attach first via `attachTo`; clusterOverlay is added after.
   const particleScene: ParticleScene = createParticleScene();
