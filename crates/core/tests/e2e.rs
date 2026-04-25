@@ -949,11 +949,15 @@ fn tier4_advanced_circuit_partitioned() {
     )
     .unwrap_or_else(|e| panic!("tier4_advanced_circuit_partitioned: {e}"));
 
-    // Sanity: layout produced and the recipe ran. Validator-cleanness is the
-    // K1-1 gate proper, but it shares the #64 lane-throughput warnings with
-    // the Pooled tier4 test (which is `#[ignore]`d for the same reason). Until
-    // those are resolved separately we assert: layout exists, partitioning
-    // fired for copper-cable, and the recipe produces at the target rate.
+    // K1-1 (partial): the motivating case must not produce validator
+    // ERRORS under PartitionedPerConsumer. Pooled at this same rate
+    // *does* produce errors (see `scoreboard_strategy_sweep`); the
+    // whole point of partitioning is to unblock that case. Strict
+    // K1-1's "validator-clean" gate is the stricter assertion that
+    // there are zero warnings either — the residual warnings here are
+    // pre-existing #64 lane-throughput false-positives, not a
+    // partitioning failure. Asserting `errors == 0` is the partitioning-
+    // specific signal: it would have been > 0 without this work.
     assert_produces(&result, "advanced-circuit", 1.0);
     let copper_cable_partitioned = result.trace_events.iter().any(|evt| {
         matches!(
@@ -965,6 +969,16 @@ fn tier4_advanced_circuit_partitioned() {
         copper_cable_partitioned,
         "expected `ModulePartitioned` trace event with item=copper-cable, modules≥2 — \
          partitioner did not fire on the motivating case"
+    );
+    let errors: Vec<_> = result.issues.iter()
+        .filter(|i| i.severity == Severity::Error)
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "K1-1 partial: PartitionedPerConsumer must produce 0 validator errors on the \
+         motivating case. Got {} error(s):\n  {}",
+        errors.len(),
+        errors.iter().map(|e| format!("[{}] {}", e.category, e.message)).collect::<Vec<_>>().join("\n  ")
     );
 }
 
@@ -996,6 +1010,76 @@ fn tier4_advanced_circuit_from_ore_am1() {
     assert_no_warnings(&result);
     assert_produces(&result, "advanced-circuit", 5.0);
     assert_round_trip(&result);
+}
+
+// ---------------------------------------------------------------------------
+// Strategy scoreboard — runs every tier case under both strategies and emits
+// a single line of (entities, density, validator) per (test, strategy). The
+// RFP's Observables section asks us to *report* the tradeoff between
+// strategies, not to gate on it. Run with:
+//   cargo test --manifest-path crates/core/Cargo.toml --test e2e \
+//     scoreboard_strategy_sweep -- --ignored --nocapture
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore = "Strategy scoreboard — output goes to stderr; run with --ignored --nocapture"]
+#[ntest::timeout(120000)]
+fn scoreboard_strategy_sweep() {
+    use fucktorio_core::bus::layout::LayoutStrategy;
+
+    struct Case {
+        name: &'static str,
+        item: &'static str,
+        rate: f64,
+        machine: &'static str,
+        belt_tier: Option<&'static str>,
+        inputs: &'static [&'static str],
+    }
+    let cases: &[Case] = &[
+        Case { name: "tier1_iron_gear_wheel", item: "iron-gear-wheel", rate: 10.0, machine: "assembling-machine-1", belt_tier: None, inputs: &["iron-plate"] },
+        Case { name: "tier1_iron_gear_wheel_from_ore", item: "iron-gear-wheel", rate: 10.0, machine: "assembling-machine-2", belt_tier: None, inputs: &["iron-ore"] },
+        Case { name: "tier1_iron_gear_wheel_20s", item: "iron-gear-wheel", rate: 20.0, machine: "assembling-machine-2", belt_tier: None, inputs: &["iron-plate"] },
+        Case { name: "tier2_electronic_circuit_from_ore", item: "electronic-circuit", rate: 10.0, machine: "assembling-machine-1", belt_tier: Some("transport-belt"), inputs: &["iron-ore", "copper-ore"] },
+        Case { name: "tier2_electronic_circuit_20s_from_ore", item: "electronic-circuit", rate: 20.0, machine: "assembling-machine-2", belt_tier: None, inputs: &["iron-ore", "copper-ore"] },
+        Case { name: "tier3_plastic_bar", item: "plastic-bar", rate: 10.0, machine: "chemical-plant", belt_tier: None, inputs: &["petroleum-gas", "coal"] },
+        Case { name: "tier3_sulfuric_acid", item: "sulfuric-acid", rate: 5.0, machine: "chemical-plant", belt_tier: None, inputs: &["iron-plate", "sulfur", "water"] },
+        Case { name: "tier4_advanced_circuit_partitioned", item: "advanced-circuit", rate: 1.0, machine: "assembling-machine-2", belt_tier: None, inputs: &["iron-plate", "copper-plate", "coal", "crude-oil", "water"] },
+    ];
+
+    eprintln!("strategy scoreboard:");
+    eprintln!(
+        "  {:<46} {:<28} {:>8} {:>6} {:>6} {:>4}",
+        "test", "strategy", "entities", "WxH", "dens%", "warn",
+    );
+    for case in cases {
+        let inputs: FxHashSet<String> = case.inputs.iter().map(|s| s.to_string()).collect();
+        for strategy in [LayoutStrategy::Pooled, LayoutStrategy::PartitionedPerConsumer] {
+            let result = run_e2e_with_strategy(
+                case.name, case.item, case.rate, case.machine, case.belt_tier, &inputs, strategy,
+            );
+            match result {
+                Ok(r) => {
+                    let warns = r.issues.iter().filter(|i| i.severity == Severity::Warning).count();
+                    let errs = r.issues.iter().filter(|i| i.severity == Severity::Error).count();
+                    let density_score = density::score_density(&r.layout, (1, 1));
+                    eprintln!(
+                        "  {:<46} {:<28} {:>8} {:>3}x{:<3} {:>5.1}% {:>3}/{}",
+                        case.name,
+                        format!("{strategy:?}"),
+                        r.layout.entities.len(),
+                        r.layout.width,
+                        r.layout.height,
+                        density_score.density * 100.0,
+                        warns,
+                        errs,
+                    );
+                }
+                Err(e) => {
+                    eprintln!("  {:<46} {:<28} ERR: {e}", case.name, format!("{strategy:?}"));
+                }
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
