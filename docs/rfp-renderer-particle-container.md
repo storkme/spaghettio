@@ -99,21 +99,29 @@ Generated at runtime, lazily, on first need per `(entity, variant)`:
   | PTG | direction | 4 |
   | Inserter | type × direction | 4 × 4 = 16 |
   | Machine | per-name | 21 (from `MACHINE_SLUGS`) |
+  | Item icon | per-item (see below) | ~80–120 |
 
-  Total upper bound: ~150 unique textures. Comfortably fits on one
+  Total upper bound: ~250 unique textures. Comfortably fits on one
   GPU texture (4096×4096 with 64 px tiles holds 4096 entries).
 
-- Item-color tinting (used today for belt body coloring per
-  `carries`) does **not** require pre-rendering each item × belt
-  combination. Pixi's `Particle.tint` is a per-particle multiplier
-  applied in shader; we render the belt texture white-on-black and
-  tint to the item color at draw time. Same for inserter colors.
+- Item-color tinting on belts (used today for belt body coloring per
+  `carries`) is **dropped** — item identity is conveyed by the icon
+  particle layer (see "Item icons on every belt / pipe / inserter"
+  below). Belt textures stay neutral; the tint slot is reserved for
+  hover-dim multipliers.
+
+- Item icons: one atlas entry per `(name, kind)` pair where `name` is
+  the item slug. Loaded from existing `icons/${slug}.png` PNGs
+  (cached via `Assets.load` in `preloadCarriesIcons`). Items without
+  icons (fluids, currently) use a generated placeholder texture
+  (colored circle from `itemColor(item)`). See "Item icons on every
+  belt / pipe / inserter" below.
 
 - Atlas packing: Pixi v8 has no first-party runtime atlas packer. We
   pre-allocate a single oversized `RenderTexture` and `blit` each
   variant into a deterministic grid slot (`textureKey →
   (atlasX, atlasY)`). Each `Particle` references the atlas
-  `Texture` with adjusted UVs. ~150 entries × ~150 LOC total atlas
+  `Texture` with adjusted UVs. ~250 entries × ~150 LOC total atlas
   code.
 
 ### Atlas readiness
@@ -166,20 +174,73 @@ next render. Identical UX, identical code shape.
 3×3 machines: pre-rendered texture is 3×TILE_PX wide; one particle
 per machine at the anchor tile. Same for splitters (1×2).
 
-### Recipe label panels
+### Item icons on every belt / pipe / inserter
 
-Currently drawn as a sub-Graphics + Sprite + Text per machine inside
-`drawMachine`. Two options:
+Today the carries-icon overlay only appears on every fifth belt tile
+(`(ex + ey) % 5 === 0` in `entities.ts:1201`) — a heuristic to avoid
+visual clutter when icons are drawn as separate Graphics children of
+each belt. With particles we can drop the heuristic entirely:
 
-- **(a)** Render the panel into the machine's atlas slot at a higher
-  resolution, accept that recipe info is baked into the texture and
-  doesn't reflow on machine click. Simple.
-- **(b)** Keep panels as a separate non-particle layer (Container of
-  Sprite/Text), one per visible machine. Smaller batched cost
-  because the panel layer renders after particles.
+> **Every belt, pipe, and inserter tile gets an item-icon particle
+> based on `entity.carries`.**
 
-Recommend **(a)** initially, **(b)** if recipe-panel readability
-suffers at zoom levels where the bake is too low-res.
+The icons live in their own `ParticleContainer` (so they batch
+independently of the belts/pipes underneath). Atlas adds one entry
+per item slug:
+
+```ts
+ParticleContainer "entities"  ← belt/pipe/inserter/machine textures
+ParticleContainer "icons"     ← item-icon textures
+```
+
+For each conveyor entity the renderer adds two particles: the entity
+particle (plain texture, no item color baked in) and an icon particle
+at the same tile center. The existing `Particle.tint` + `alpha`
+properties cover hover dim and item highlight on both.
+
+This collapses two heuristics in `entities.ts`:
+
+- The `% 5` icon-spacing rule (no longer needed — icons are cheap
+  particles, every tile gets one).
+- The "tint belt body by item color" trick (the icon texture conveys
+  item identity now; belt body stays neutral).
+
+#### Icons on inserters: the machine-input/output channel
+
+Per discussion, **machines themselves do not get icons or recipe
+panels**. The recipe label panel currently drawn inside `drawMachine`
+(`entities.ts:740-810`) is **removed entirely**. Recipe info is
+conveyed by:
+
+1. The icon on the machine's inserter, showing what's being delivered
+   in or extracted out.
+2. (Future, out of scope for this RFP) a richer hover tooltip on
+   machines showing rates, recipe, etc.
+
+Inserters are 1-tile entities adjacent to machines, with `direction`
+indicating which way they're pulling/pushing and `carries` set to
+the item they transport. Icon-on-inserter tells the user "this item
+flows through here," with the inserter's position relative to the
+machine implicitly conveying input vs output.
+
+Fluid machines (chemical plant, oil refinery, etc.) take fluid via
+adjacent pipes. Pipes already get per-tile icons under the rule
+above, so the same channel works.
+
+#### Fluid icon placeholders
+
+We don't have `icons/water.png` / `icons/crude-oil.png` / etc. yet.
+Two-stage:
+
+- **In this RFP**: `getItemIconTexture(item)` returns the cached
+  PNG via `Cache.has` if present, otherwise a generated placeholder
+  texture — a 14 px colored circle, where the colour comes from
+  `itemColor(item)` (which already has hardcoded fluid colors). Belts
+  carrying fluids show a recognisable colored dot.
+- **Out of scope, ticketed separately**: real fluid icons. Once they
+  exist, `preloadCarriesIcons` picks them up automatically and the
+  placeholder fallback stops firing. No code change needed at that
+  point.
 
 ### Scrubber compatibility
 
@@ -384,8 +445,13 @@ not just a soft target.
    - Belt-network highlight (`highlightBeltNetwork`) preserves
      dashed/solid distinction (this currently uses a Graphics
      overlay — that overlay can stay; only entity dim/light changes).
-   - Multi-tile machines render at correct size, recipe labels
-     readable.
+   - Multi-tile machines render at correct size. (Recipe label
+     panels are gone — recipe info now flows from the icon-on-
+     inserter / icon-on-pipe channel, with rate detail moving to a
+     future hover tooltip.)
+   - Every belt, pipe, and inserter shows its `carries` item icon at
+     tile center. Fluid pipes show the placeholder colored-circle
+     until real fluid icons land.
    - Selection box and pin highlight unaffected.
    - **Scrubber**: drag the timeline scrubber back and forth on a
      settled layout. Entities fade in/out smoothly, milestones snap,
@@ -415,14 +481,19 @@ that's good on its own; subsequent ones build on it.
    #1 lives here** — measure streaming-pan trace numbers before
    merging Phase 2+.
 
-2. **Phase 2 — extend particles to all entity types.** Replace each
-   remaining entity type's draw path with a particle path, in
-   priority order (highest count first): belts, pipes, machines,
-   inserters, splitters, UG belts, mergers, poles. `addGhostBelt`
-   moves to a sibling `ParticleContainer`. Recipe labels go into the
-   atlas (option a). At end of phase, `finish()` no longer
-   `removeChildren`+rebuilds — it just stops the live ticker.
-   **Kill criteria #2, #3, #4** evaluated here.
+2. **Phase 2 — extend particles to all entity types + add icons
+   layer.** Replace each remaining entity type's draw path with a
+   particle path, in priority order (highest count first): belts,
+   pipes, machines, inserters, splitters, UG belts, mergers, poles.
+   `addGhostBelt` moves to a sibling `ParticleContainer`. **Add the
+   icons `ParticleContainer`**: every belt / pipe / inserter that
+   has `carries` set gets an item-icon particle at tile center; the
+   `% 5` icon-spacing heuristic in `entities.ts` is removed.
+   Machines render without their recipe label panel — that code path
+   in `drawMachine` (`entities.ts:740-810`) is deleted; rate-detail
+   future work goes through hover tooltips. At end of phase,
+   `finish()` no longer `removeChildren`+rebuilds — it just stops
+   the live ticker. **Kill criteria #2, #3, #4** evaluated here.
 
 3. **Phase 3 — wire highlight controller.** Replace
    `HighlightController` with a particle-aware version. Today's
@@ -446,6 +517,12 @@ that's good on its own; subsequent ones build on it.
 - Cluster outline rectangles. They stay as Graphics — only ~9 of
   them, drawn each frame from a shared `clusterOverlay` Graphics,
   cheap and a poor fit for particles.
+- Real fluid icons (`icons/water.png`, `crude-oil.png`, etc.).
+  Tracked separately; placeholder colored circles via
+  `itemColor(item)` in the interim.
+- Hover tooltips with rate / recipe detail for machines. The recipe
+  label panel that currently overlays each machine is removed in
+  Phase 2; the richer hover-tooltip replacement is a follow-up.
 
 ## Decision log
 
@@ -456,3 +533,13 @@ that's good on its own; subsequent ones build on it.
   debug-mode logging section, atlas-readiness section, and a fifth
   kill criterion for scrub-mode framerate. Cluster outlines moved to
   out-of-scope explicitly.*
+- *2026-04-25 — Revised: icon-on-every-conveyor-tile design folded
+  in. Item icons render via a separate `ParticleContainer`, one
+  particle per belt / pipe / inserter tile. The `% 5` icon-spacing
+  heuristic in `entities.ts:1201` is removed. Machine recipe label
+  panels are removed entirely; recipe info flows through icon-on-
+  inserter (and pipe for fluid inputs/outputs), with rate detail
+  deferred to a future hover-tooltip enhancement. Fluid icons get a
+  placeholder colored circle until real PNGs ship; ticketed
+  separately. Tint-belt-by-item-color trick dropped — neutral belt
+  textures, item identity is conveyed by the icon layer.*
