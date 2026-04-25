@@ -227,20 +227,61 @@ Per
   `iron-gear-wheel`, `copper-cable`). Phases 2+ extend to other
   shapes.
 
+## Test strategy
+
+Both `RowLayout` variants must remain green throughout the
+multi-strategy phases. Tests parametrise as follows:
+
+- **Input-bottlenecked recipes.** Add explicit `_horizontal`
+  variants alongside the existing tests, each with its own
+  golden hash. Examples: `tier3_electronic_circuit_horizontal`,
+  `tier4_advanced_circuit_horizontal`,
+  `tier5_processing_unit_horizontal`.
+- **Non-input-bottlenecked recipes.** Where the recipe collapses
+  to a single row regardless of strategy (e.g.
+  `tier1_iron_gear_wheel @ 10/s`), a single golden suffices. Add
+  an explicit equivalence assertion: same product output,
+  semantically equivalent layout. The validator should agree.
+- **Coverage during default-switch (phase 4).** When the default
+  flips to `HorizontalStack`, the existing tests' golden hashes
+  regenerate en masse against the new default. Keep the
+  `_vertical` variants permanently — they guard against
+  accidental loss of vertical-split, which is still needed for
+  output-bottlenecked recipes and remains a valid alternative.
+
+The transition risk is real: doubling the corpus during phases 1-3
+and the big-bang regen at phase 4 are the visible costs the user
+is signing up for in exchange for layout-strategy flexibility.
+
 ## Phasing
 
 1. **Phase 1 — `RowLayout` plumbing + dual-input solid.** Add the
-   enum and option field. Default to `VerticalSplit`. Implement
-   `HorizontalStack` for `RowKind::DualInput` recipes only. UI
-   dropdown wired. Verify on tier3 EC. Land + add new goldens.
-   Kill criteria above apply at end of phase 1.
-2. **Phase 2 — single-input + triple-input solid recipes.**
+   enum and option field. **Default stays `VerticalSplit`** so
+   existing tests are untouched. Implement `HorizontalStack` for
+   `RowKind::DualInput` recipes only. UI dropdown wired. Add
+   new `_horizontal` test variants with their own goldens. Kill
+   criteria above apply at end of phase 1.
+2. **Phase 2 — single-input + triple-input solid recipes.** Same
+   structure: extend the strategy to more row kinds, add
+   `_horizontal` variants of the relevant tier tests.
 3. **Phase 3 — fluid-input + multi-fluid rows.** Significantly
    more complex because the fluid-trunk dive shares the row's
-   top space with solid-belt dives.
-4. **Phase 4 (later) — multi-strategy search.** Engine tries both
-   strategies, picks the better-scoring layout per some metric.
-   Separate RFP.
+   top space with solid-belt dives. By the end of phase 3,
+   horizontal-stack covers every row kind currently supported
+   by vertical-split.
+4. **Phase 4 — switch default to `HorizontalStack`.** Flip the
+   default in `LayoutOptions::default()`. Regenerate the
+   non-`_vertical` golden hashes en masse. The existing
+   tier1–tier3 tests now exercise the horizontal path; the
+   permanent `_vertical` variants keep guarding the legacy
+   strategy. Kill criterion at this phase: if regenerated layouts
+   show a measurable regression in entity-density or
+   bounding-box compared to the previous defaults across more
+   than 25% of the corpus, hold the switch.
+5. **Phase 5 (later, separate RFP) — multi-strategy search.**
+   Engine tries multiple strategies per recipe, picks the
+   better-scoring layout per some metric (compactness, belt
+   utilisation, aesthetic).
 
 ## Decision log
 
@@ -252,3 +293,7 @@ Per
   via E-axis UG so the two don't interfere); reframed as a
   coexisting alternative to vertical-split rather than a
   replacement; inserter-throughput math punted out of scope.*
+- *2026-04-25 — refined: horizontal-stack will become the default
+  in phase 4 once tested across all row kinds. Permanent
+  `_vertical` test variants guard the legacy strategy. Test
+  strategy section added.*
