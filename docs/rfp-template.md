@@ -1,8 +1,9 @@
 # RFP template
 
-Copy this file to `docs/rfp-<short-name>.md` for any non-trivial design
-work. The goal of an RFP is **shared understanding before code** and
-**a way to know when to stop** if the approach turns out to be wrong.
+Copy this file to `docs/rfp-<issue-number>-<short-name>.md` for any
+non-trivial design work. The goal of an RFP is **shared understanding
+before code** and **a way to know when to stop** if the approach turns
+out to be wrong.
 
 The dominant rework shape on this project is *exploration rework* — we
 build something, discover it doesn't pan out, and pivot. The
@@ -12,7 +13,29 @@ point where the evidence already says "this approach is wrong."
 
 Existing examples live in [`docs/archive/`](archive/) — read one or two
 before writing your own. Note that the archived ones predate this
-template, so they don't have kill criteria; the new ones must.
+template, so they don't have kill criteria or issue-number filenames;
+the new ones must.
+
+## Numbering and threading
+
+Before creating the RFP file, **open a GitHub issue** for the work.
+The issue's number is the RFP's number — a free, auto-linking
+identifier that threads the workstream across commits, branches, PRs,
+and comments.
+
+- File: `docs/rfp-<issue-number>-<short-name>.md` (e.g. `rfp-142-junction-solver.md`)
+- Branch: `rfp-<issue-number>-<short-name>`
+- Commits: include `(#<issue-number>)` so GitHub auto-links the workstream
+- PR title: prefix with `RFP #<issue-number>:`
+- The GitHub issue tracks live state — Open = active, Closed = landed
+  or abandoned. Close with a comment that records the reason (landed in
+  PR #N, or abandoned because kill criterion X tripped) so the *why* is
+  durable.
+
+`git log --grep="#142"` then walks the entire workstream for RFP 142.
+
+Pre-convention RFPs in `docs/archive/` are not backfilled — they
+predate the convention and live as-is.
 
 ---
 
