@@ -201,7 +201,7 @@ export function niceName(slug: string): string {
 const MACHINE_ENTITIES = new Set(Object.keys(MACHINE_SIZES));
 const INSERTER_ENTITIES = new Set(Object.keys(INSERTER_COLORS));
 // Derived from BELT_COLORS keys by tier prefix
-const BELT_ENTITIES = new Set(
+export const BELT_ENTITIES = new Set(
   Object.keys(BELT_COLORS).filter((k) => !k.includes("underground") && !k.includes("splitter"))
 );
 const UG_BELT_ENTITIES = new Set(Object.keys(BELT_COLORS).filter((k) => k.includes("underground")));

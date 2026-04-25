@@ -1,5 +1,6 @@
 import { Application, UPDATE_PRIORITY } from "pixi.js";
 import { Viewport } from "pixi-viewport";
+import { initAtlas } from "./atlas";
 
 export const WORLD_SIZE = 3200;
 
@@ -63,6 +64,9 @@ export async function createApp(container: HTMLElement): Promise<AppContext> {
     autoStart: false,
     sharedTicker: false,
   });
+  // Wire the atlas renderer so `getEntityTexture` can blit into the
+  // shared RenderTexture. Must be called before any layout starts streaming.
+  initAtlas(app.renderer);
 
   // `autoStart: true` would have wired this for us; we have to do it
   // ourselves. Without it, the ticker runs custom ticks (alpha animations,
