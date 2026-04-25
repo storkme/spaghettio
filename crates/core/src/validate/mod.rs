@@ -8,7 +8,9 @@ mod fluids;
 pub mod power;
 pub mod underground;
 
-pub use fluids::{check_fluid_port_connectivity, check_pipe_isolation};
+pub use fluids::{
+    check_fluid_network_connectivity, check_fluid_port_connectivity, check_pipe_isolation,
+};
 
 pub mod belt_structural;
 
@@ -151,6 +153,7 @@ pub fn validate(
         Box::new(|| inserters::check_inserter_direction(layout)),
         Box::new(|| check_pipe_isolation(layout)),
         Box::new(|| check_fluid_port_connectivity(layout, layout_style)),
+        Box::new(|| check_fluid_network_connectivity(layout)),
         Box::new(|| check_belt_connectivity(layout, solver)),
         Box::new(|| check_belt_flow_path(layout, solver, layout_style)),
         Box::new(|| belt_structural::check_entity_overlaps(layout)),

@@ -110,26 +110,16 @@ fn opposite_direction(dir: EntityDirection) -> EntityDirection {
 
 /// For a pipe-to-ground entity, return the single surface-side neighbour tile.
 ///
-/// Input PTGs expose their surface on the side *opposite* their flow direction
-/// (fluid enters from behind).  Output PTGs expose it on the *same* side as
-/// their flow direction (fluid exits ahead).
-fn ptg_surface_neighbour(
-    x: i32,
-    y: i32,
-    direction: EntityDirection,
-    io_type: Option<&str>,
-) -> (i32, i32) {
+/// Per F5 in `docs/factorio-mechanics.md`, every PTG has its surface
+/// connection on the side **opposite** its facing direction, regardless of the
+/// blueprint `type` (input/output) field — the type field does not affect
+/// surface placement in Factorio's actual fluid simulation.
+fn ptg_surface_neighbour(x: i32, y: i32, direction: EntityDirection) -> (i32, i32) {
     let (dx, dy) = match direction {
-        EntityDirection::North => (0i32, -1i32),
-        EntityDirection::East => (1, 0),
-        EntityDirection::South => (0, 1),
-        EntityDirection::West => (-1, 0),
-    };
-    // For inputs, the surface side is *behind* the flow → negate delta
-    let (dx, dy) = if io_type == Some("input") {
-        (-dx, -dy)
-    } else {
-        (dx, dy)
+        EntityDirection::North => (0i32, 1i32),  // surface SOUTH
+        EntityDirection::East => (-1, 0),         // surface WEST
+        EntityDirection::South => (0, -1),        // surface NORTH
+        EntityDirection::West => (1, 0),          // surface EAST
     };
     (x + dx, y + dy)
 }
@@ -140,19 +130,14 @@ fn ptg_surface_neighbour(
 /// networks.  Two pipes carrying different fluids must not be connected on
 /// the surface.
 pub fn check_pipe_isolation(layout_result: &LayoutResult) -> Vec<ValidationIssue> {
-    type PipeEntry<'a> = (Option<&'a str>, &'a str, EntityDirection, Option<&'a str>);
+    type PipeEntry<'a> = (Option<&'a str>, &'a str, EntityDirection);
     let mut pipe_map: FxHashMap<(i32, i32), PipeEntry<'_>> = FxHashMap::default();
 
     for e in &layout_result.entities {
         if PIPE_ENTITIES.contains(&e.name.as_str()) {
             pipe_map.insert(
                 (e.x, e.y),
-                (
-                    e.carries.as_deref(),
-                    e.name.as_str(),
-                    e.direction,
-                    e.io_type.as_deref(),
-                ),
+                (e.carries.as_deref(), e.name.as_str(), e.direction),
             );
         }
     }
@@ -161,7 +146,7 @@ pub fn check_pipe_isolation(layout_result: &LayoutResult) -> Vec<ValidationIssue
     // Canonical pairs prevent double-reporting the same edge.
     let mut checked: FxHashSet<((i32, i32), (i32, i32))> = FxHashSet::default();
 
-    for (&(px, py), &(carries, name, direction, io_type)) in &pipe_map {
+    for (&(px, py), &(carries, name, direction)) in &pipe_map {
         let carries = match carries {
             Some(c) => c,
             None => continue,
@@ -171,14 +156,14 @@ pub fn check_pipe_isolation(layout_result: &LayoutResult) -> Vec<ValidationIssue
         // side; regular pipes connect on all four sides.
         let ptg_nb;
         let neighbours: &[(i32, i32)] = if name == "pipe-to-ground" {
-            ptg_nb = [ptg_surface_neighbour(px, py, direction, io_type)];
+            ptg_nb = [ptg_surface_neighbour(px, py, direction)];
             &ptg_nb
         } else {
             &[(px + 1, py), (px - 1, py), (px, py + 1), (px, py - 1)]
         };
 
         for &nb in neighbours {
-            let Some(&(nb_carries, nb_name, nb_direction, nb_io)) = pipe_map.get(&nb) else {
+            let Some(&(nb_carries, nb_name, nb_direction)) = pipe_map.get(&nb) else {
                 continue;
             };
             let nb_carries = match nb_carries {
@@ -188,7 +173,7 @@ pub fn check_pipe_isolation(layout_result: &LayoutResult) -> Vec<ValidationIssue
 
             // If neighbour is a PTG, its surface side must face back at us
             if nb_name == "pipe-to-ground" {
-                let nb_surface = ptg_surface_neighbour(nb.0, nb.1, nb_direction, nb_io);
+                let nb_surface = ptg_surface_neighbour(nb.0, nb.1, nb_direction);
                 if nb_surface != (px, py) {
                     continue;
                 }
@@ -274,29 +259,90 @@ fn find_ptg_pairs(layout_result: &LayoutResult) -> FxHashMap<(i32, i32), (i32, i
     pairs
 }
 
-/// BFS flood-fill through adjacent pipe tiles from `start`.
+/// Per-tile info about a pipe entity for connectivity walks.
 ///
-/// Also traverses pipe-to-ground tunnel connections via `ptg_pairs`.
+/// `is_ptg` distinguishes pipe-to-ground (single surface side per F5/F5a) from
+/// regular pipes (4-way connections). For PTGs, `direction` is required; for
+/// regular pipes it's ignored.
+#[derive(Copy, Clone)]
+struct PipeInfo {
+    is_ptg: bool,
+    direction: EntityDirection,
+}
+
+fn build_pipe_info_map(
+    layout_result: &LayoutResult,
+) -> FxHashMap<(i32, i32), PipeInfo> {
+    layout_result
+        .entities
+        .iter()
+        .filter(|e| PIPE_ENTITIES.contains(&e.name.as_str()))
+        .map(|e| {
+            (
+                (e.x, e.y),
+                PipeInfo {
+                    is_ptg: e.name == "pipe-to-ground",
+                    direction: e.direction,
+                },
+            )
+        })
+        .collect()
+}
+
+/// BFS flood-fill through pipe tiles, honoring F5/F5a surface-side rules.
+///
+/// A regular pipe connects to all four neighbours that are themselves
+/// surface-compatible. A PTG connects only on its single surface side, and
+/// only if the neighbour at that tile is either a regular pipe or another PTG
+/// whose surface points back. Underground tunnel jumps are followed via
+/// `ptg_pairs`.
 fn bfs_pipe_reach(
     start: (i32, i32),
-    pipe_tiles: &FxHashSet<(i32, i32)>,
+    pipe_info: &FxHashMap<(i32, i32), PipeInfo>,
     ptg_pairs: &FxHashMap<(i32, i32), (i32, i32)>,
 ) -> FxHashSet<(i32, i32)> {
     let mut visited: FxHashSet<(i32, i32)> = FxHashSet::default();
     let mut queue: VecDeque<(i32, i32)> = VecDeque::new();
+    if !pipe_info.contains_key(&start) {
+        return visited;
+    }
     visited.insert(start);
     queue.push_back(start);
 
-    while let Some((x, y)) = queue.pop_front() {
-        // Adjacent tile connections
-        for (dx, dy) in DIRECTIONS {
-            let nb = (x + dx, y + dy);
-            if pipe_tiles.contains(&nb) && visited.insert(nb) {
-                queue.push_back(nb);
+    while let Some(pos) = queue.pop_front() {
+        let info = pipe_info[&pos];
+        let (x, y) = pos;
+
+        // Candidate surface neighbours: a PTG only exposes its single mouth
+        // tile; a regular pipe exposes all 4 sides.
+        let mut candidates: [(i32, i32); 4] = [(0, 0); 4];
+        let n = if info.is_ptg {
+            candidates[0] = ptg_surface_neighbour(x, y, info.direction);
+            1
+        } else {
+            for (i, (dx, dy)) in DIRECTIONS.iter().enumerate() {
+                candidates[i] = (x + dx, y + dy);
+            }
+            4
+        };
+
+        for nb in &candidates[..n] {
+            let Some(nb_info) = pipe_info.get(nb).copied() else {
+                continue;
+            };
+            // If the neighbour is a PTG, its mouth must point back at us.
+            if nb_info.is_ptg
+                && ptg_surface_neighbour(nb.0, nb.1, nb_info.direction) != pos
+            {
+                continue;
+            }
+            if visited.insert(*nb) {
+                queue.push_back(*nb);
             }
         }
-        // Pipe-to-ground tunnel jump
-        if let Some(&other) = ptg_pairs.get(&(x, y)) {
+
+        // Underground tunnel jump (independent of surface mouth orientation).
+        if let Some(&other) = ptg_pairs.get(&pos) {
             if visited.insert(other) {
                 queue.push_back(other);
             }
@@ -333,13 +379,10 @@ pub fn check_fluid_port_connectivity(
 ) -> Vec<ValidationIssue> {
     let mut issues = Vec::new();
 
-    // Build pipe tile set
-    let pipe_tiles: FxHashSet<(i32, i32)> = layout_result
-        .entities
-        .iter()
-        .filter(|e| PIPE_ENTITIES.contains(&e.name.as_str()))
-        .map(|e| (e.x, e.y))
-        .collect();
+    // Build pipe info map (tracks PTG vs regular pipe + direction for F5/F5a).
+    let pipe_info = build_pipe_info_map(layout_result);
+    // Plain tile set for membership-only checks (port adjacency, bus filter).
+    let pipe_tiles: FxHashSet<(i32, i32)> = pipe_info.keys().copied().collect();
 
     // Build PTG pair map for tunnel traversal
     let ptg_pairs = find_ptg_pairs(layout_result);
@@ -431,7 +474,7 @@ pub fn check_fluid_port_connectivity(
             } else if layout_style == LayoutStyle::Bus && !bus_pipes.is_empty() {
                 // Check at least one input pipe connects to the bus via BFS
                 let any_connected = input_pipe_positions.iter().any(|&pos| {
-                    !bfs_pipe_reach(pos, &pipe_tiles, &ptg_pairs)
+                    !bfs_pipe_reach(pos, &pipe_info, &ptg_pairs)
                         .is_disjoint(&bus_pipes)
                 });
                 if !any_connected {
@@ -464,6 +507,105 @@ pub fn check_fluid_port_connectivity(
                     ),
                     e.x,
                     e.y,
+                ));
+            }
+        }
+    }
+
+    issues
+}
+
+// ---------------------------------------------------------------------------
+// check_fluid_network_connectivity
+// ---------------------------------------------------------------------------
+
+/// Check that every pipe labeled as carrying a given fluid is connected to
+/// every other pipe carrying that fluid via real surface + tunnel paths
+/// (respecting F5/F5a).
+///
+/// Catches cases the older validators missed:
+/// - Perpendicular UG/pipe adjacency that the layout treats as connected but
+///   isn't (issue 1: a UG-S input on a tap row vs the horizontal branch one
+///   tile to its east).
+/// - Silent gap-fill skips that leave a physical break in a fluid trunk
+///   (e.g. a UG bridge skipped because an intermediate anchor was blocked,
+///   leaving two trunk segments labeled as the same fluid but disconnected).
+///
+/// One error is emitted per orphaned component, anchored at the
+/// lexicographically smallest tile of that component for stable output.
+pub fn check_fluid_network_connectivity(
+    layout_result: &LayoutResult,
+) -> Vec<ValidationIssue> {
+    let pipe_info = build_pipe_info_map(layout_result);
+    let ptg_pairs = find_ptg_pairs(layout_result);
+
+    // Group pipe tiles by carried fluid.
+    let mut by_fluid: FxHashMap<&str, Vec<(i32, i32)>> = FxHashMap::default();
+    for e in &layout_result.entities {
+        if !PIPE_ENTITIES.contains(&e.name.as_str()) {
+            continue;
+        }
+        let Some(carries) = e.carries.as_deref() else {
+            continue;
+        };
+        by_fluid.entry(carries).or_default().push((e.x, e.y));
+    }
+
+    let mut issues = Vec::new();
+
+    // Stable iteration for stable error ordering.
+    let mut fluids: Vec<(&str, Vec<(i32, i32)>)> = by_fluid.into_iter().collect();
+    fluids.sort_by_key(|(name, _)| *name);
+
+    for (fluid, mut tiles) in fluids {
+        if tiles.len() < 2 {
+            continue;
+        }
+        tiles.sort_unstable();
+        let tile_set: FxHashSet<(i32, i32)> = tiles.iter().copied().collect();
+
+        // Restrict the BFS to same-fluid tiles only — cross-fluid contamination
+        // is reported separately by `check_pipe_isolation`; here we just want
+        // to know whether all pipes carrying this fluid form one network.
+        let fluid_pipe_info: FxHashMap<(i32, i32), PipeInfo> = pipe_info
+            .iter()
+            .filter(|(p, _)| tile_set.contains(p))
+            .map(|(&p, &i)| (p, i))
+            .collect();
+        let fluid_ptg_pairs: FxHashMap<(i32, i32), (i32, i32)> = ptg_pairs
+            .iter()
+            .filter(|(a, b)| tile_set.contains(*a) && tile_set.contains(b))
+            .map(|(&a, &b)| (a, b))
+            .collect();
+
+        let mut visited: FxHashSet<(i32, i32)> = FxHashSet::default();
+        let mut components: Vec<FxHashSet<(i32, i32)>> = Vec::new();
+        for &start in &tiles {
+            if visited.contains(&start) {
+                continue;
+            }
+            let reached = bfs_pipe_reach(start, &fluid_pipe_info, &fluid_ptg_pairs);
+            visited.extend(reached.iter().copied());
+            components.push(reached);
+        }
+
+        if components.len() > 1 {
+            // Sort components by their representative tile for stable output.
+            let mut reps: Vec<(i32, i32)> = components
+                .iter()
+                .map(|c| c.iter().copied().min().unwrap_or((0, 0)))
+                .collect();
+            reps.sort_unstable();
+            let n_components = components.len();
+            for (x, y) in reps.iter().skip(1) {
+                issues.push(ValidationIssue::with_pos(
+                    Severity::Error,
+                    "fluid-network",
+                    format!(
+                        "{fluid} pipe network is split into {n_components} disconnected components; orphan tile at ({x},{y})"
+                    ),
+                    *x,
+                    *y,
                 ));
             }
         }
@@ -607,6 +749,33 @@ mod tests {
             pipe(4, 0, Some("crude-oil")),
             ptg(3, 0, EntityDirection::East, "input", Some("water")),
         ]);
+        assert!(check_pipe_isolation(&lr).is_empty());
+    }
+
+    #[test]
+    fn ptg_output_surface_opposite_direction() {
+        // Per F5: output PTG surface side is OPPOSITE its facing direction
+        // (same rule as input). Direction=North → surface SOUTH.
+        // PTG output dir=North at (0, 1) has its mouth at (0, 2).
+        // Pipe at (0, 2) carrying a different fluid → isolation error.
+        let lr = layout(vec![
+            ptg(0, 1, EntityDirection::North, "output", Some("water")),
+            pipe(0, 2, Some("crude-oil")),
+        ]);
+        let issues = check_pipe_isolation(&lr);
+        assert_eq!(issues.len(), 1, "expected isolation error from output mouth on south side");
+        assert_eq!(issues[0].category, "pipe-isolation");
+    }
+
+    #[test]
+    fn ptg_output_north_side_is_not_surface() {
+        // Output dir=North surface is SOUTH, NOT north.
+        // A pipe on the north side of an output dir=North PTG is NOT connected.
+        let lr = layout(vec![
+            pipe(0, 0, Some("crude-oil")),
+            ptg(0, 1, EntityDirection::North, "output", Some("water")),
+        ]);
+        // No surface connection between (0,0) and (0,1) → no isolation error
         assert!(check_pipe_isolation(&lr).is_empty());
     }
 
@@ -763,25 +932,141 @@ mod tests {
 
     // === bfs_pipe_reach ===
 
+    fn regular_pipes_at(positions: &[(i32, i32)]) -> FxHashMap<(i32, i32), PipeInfo> {
+        positions
+            .iter()
+            .map(|&p| {
+                (
+                    p,
+                    PipeInfo {
+                        is_ptg: false,
+                        direction: EntityDirection::North,
+                    },
+                )
+            })
+            .collect()
+    }
+
     #[test]
     fn bfs_reaches_adjacent_tiles() {
-        let tiles: FxHashSet<(i32, i32)> =
-            [(0, 0), (1, 0), (2, 0)].iter().copied().collect();
+        let info = regular_pipes_at(&[(0, 0), (1, 0), (2, 0)]);
         let ptg: FxHashMap<(i32, i32), (i32, i32)> = FxHashMap::default();
-        let reached = bfs_pipe_reach((0, 0), &tiles, &ptg);
+        let reached = bfs_pipe_reach((0, 0), &info, &ptg);
         assert!(reached.contains(&(0, 0)));
         assert!(reached.contains(&(2, 0)));
     }
 
     #[test]
     fn bfs_traverses_ptg_tunnel() {
-        let tiles: FxHashSet<(i32, i32)> =
-            [(0, 0), (1, 0), (5, 0), (6, 0)].iter().copied().collect();
+        // (0,0) regular pipe → (1,0) PTG (East input, surface (0,0)) →
+        // tunnel → (5,0) PTG (East output, surface (6,0)) → (6,0) regular pipe.
+        let mut info: FxHashMap<(i32, i32), PipeInfo> = FxHashMap::default();
+        info.insert((0, 0), PipeInfo { is_ptg: false, direction: EntityDirection::North });
+        info.insert((1, 0), PipeInfo { is_ptg: true, direction: EntityDirection::East });
+        info.insert((5, 0), PipeInfo { is_ptg: true, direction: EntityDirection::West });
+        info.insert((6, 0), PipeInfo { is_ptg: false, direction: EntityDirection::North });
         let mut ptg: FxHashMap<(i32, i32), (i32, i32)> = FxHashMap::default();
         ptg.insert((1, 0), (5, 0));
         ptg.insert((5, 0), (1, 0));
-        let reached = bfs_pipe_reach((0, 0), &tiles, &ptg);
+        let reached = bfs_pipe_reach((0, 0), &info, &ptg);
         assert!(reached.contains(&(6, 0)));
+    }
+
+    #[test]
+    fn bfs_perpendicular_to_ptg_not_reached() {
+        // PTG dir=South (mouth NORTH at (0, -1)).
+        // A regular pipe to the EAST of the PTG should NOT be reachable —
+        // perpendicular sides have no surface connection (F5a).
+        let mut info: FxHashMap<(i32, i32), PipeInfo> = FxHashMap::default();
+        info.insert((0, 0), PipeInfo { is_ptg: true, direction: EntityDirection::South });
+        info.insert((1, 0), PipeInfo { is_ptg: false, direction: EntityDirection::North });
+        let ptg: FxHashMap<(i32, i32), (i32, i32)> = FxHashMap::default();
+        let reached = bfs_pipe_reach((0, 0), &info, &ptg);
+        assert!(!reached.contains(&(1, 0)),
+            "perpendicular pipe should not be surface-reachable from PTG");
+    }
+
+    // === check_fluid_network_connectivity ===
+
+    #[test]
+    fn fluid_network_single_connected_ok() {
+        // Three pipes carrying water, all surface-adjacent → one network
+        let lr = layout(vec![
+            pipe(0, 0, Some("water")),
+            pipe(1, 0, Some("water")),
+            pipe(2, 0, Some("water")),
+        ]);
+        assert!(check_fluid_network_connectivity(&lr).is_empty());
+    }
+
+    #[test]
+    fn fluid_network_perpendicular_branch_to_ptg_orphan() {
+        // The issue 1 shape: UG-S input on a tap row, regular pipe to its
+        // east as a horizontal branch. Both labelled water but perpendicular,
+        // so they form two disconnected components.
+        let lr = layout(vec![
+            ptg(0, 1, EntityDirection::South, "input", Some("water")),
+            pipe(1, 1, Some("water")),
+        ]);
+        let issues = check_fluid_network_connectivity(&lr);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].category, "fluid-network");
+        assert_eq!(issues[0].severity, Severity::Error);
+    }
+
+    #[test]
+    fn fluid_network_gap_in_trunk_orphan() {
+        // Two trunk segments labelled the same fluid but separated by an
+        // empty tile — the silent-gap-fill case (bug 3) condensed.
+        let lr = layout(vec![
+            pipe(0, 0, Some("water")),
+            // gap at (0, 1)
+            pipe(0, 2, Some("water")),
+        ]);
+        let issues = check_fluid_network_connectivity(&lr);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].category, "fluid-network");
+    }
+
+    #[test]
+    fn fluid_network_through_ug_pair_ok() {
+        // Pipe → UG-S input → tunnel → UG-N output → pipe. All same fluid,
+        // all reachable as one component.
+        let lr = layout(vec![
+            pipe(0, 0, Some("water")),
+            ptg(0, 1, EntityDirection::South, "input", Some("water")),
+            // intervening tile (0, 2) skipped — UG tunnel
+            ptg(0, 3, EntityDirection::North, "output", Some("water")),
+            pipe(0, 4, Some("water")),
+        ]);
+        assert!(check_fluid_network_connectivity(&lr).is_empty(),
+            "UG-paired same-fluid network should be one component");
+    }
+
+    #[test]
+    fn fluid_network_different_fluids_independent() {
+        // Two separate fluids each in their own connected network → no error
+        let lr = layout(vec![
+            pipe(0, 0, Some("water")),
+            pipe(1, 0, Some("water")),
+            pipe(0, 5, Some("crude-oil")),
+            pipe(1, 5, Some("crude-oil")),
+        ]);
+        assert!(check_fluid_network_connectivity(&lr).is_empty());
+    }
+
+    #[test]
+    fn bfs_two_ptgs_facing_each_other_reach() {
+        // Two PTGs adjacent: (0,0) dir=East (mouth WEST at (-1,0))
+        // and (1,0) dir=West (mouth EAST at (2,0)). They are tile-adjacent
+        // but neither's mouth points at the other → no surface connection.
+        let mut info: FxHashMap<(i32, i32), PipeInfo> = FxHashMap::default();
+        info.insert((0, 0), PipeInfo { is_ptg: true, direction: EntityDirection::East });
+        info.insert((1, 0), PipeInfo { is_ptg: true, direction: EntityDirection::West });
+        let ptg: FxHashMap<(i32, i32), (i32, i32)> = FxHashMap::default();
+        let reached = bfs_pipe_reach((0, 0), &info, &ptg);
+        assert!(!reached.contains(&(1, 0)),
+            "PTGs whose mouths face away from each other don't surface-connect");
     }
 
     // === recipe_has_fluid_output ===
