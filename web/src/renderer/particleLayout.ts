@@ -11,14 +11,13 @@
 
 import {
   Container,
-  Graphics,
   Particle,
   ParticleContainer,
   Sprite,
   Assets,
   Cache,
 } from "pixi.js";
-import type { Texture } from "pixi.js";
+import type { Application, Ticker, Texture } from "pixi.js";
 import type { LayoutResult, PlacedEntity, EntityDirection } from "../engine";
 import {
   beltAtlasKey,
@@ -51,13 +50,8 @@ import {
   type DrawContext,
   type HighlightController,
 } from "./entities";
-import {
-  buildBeltGraph,
-  traceBeltNetwork,
-  findAdjacentInserters,
-  findAdjacentMachines,
-  drawBeltNetworkOverlay,
-} from "./beltGraph";
+import { buildConnectivityGraph, bfsDistances, type EntityKey } from "./connectivityGraph";
+import { beginAnimating, endAnimating, requestRender } from "./app";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -71,6 +65,39 @@ export const FADE_IN_MS = 150;
  * Must match `ENTITY_FRAME_TILE_PX` in entities.ts.
  */
 const ENTITY_FRAME_TILE_PX = 64;
+
+// ---------------------------------------------------------------------------
+// Highlight animation constants
+// ---------------------------------------------------------------------------
+
+/** Minimum alpha for dimmed-but-reachable entities (configurable). */
+const HIGHLIGHT_FLOOR = 0.2;
+
+/** Minimum effective max-distance so tiny graphs don't squash their gradient. */
+const HIGHLIGHT_MIN_EFFECTIVE_MAX = 5;
+
+/** Fade-in (raise alpha) duration in ms — sharp ease-out-cubic pop. */
+const HIGHLIGHT_FADE_IN_MS = 100;
+
+/** Fade-out (lower alpha) duration in ms — gentle linear fade. */
+const HIGHLIGHT_FADE_OUT_MS = 200;
+
+// ---------------------------------------------------------------------------
+// Highlight animation types
+// ---------------------------------------------------------------------------
+
+const easeOutCubic = (t: number): number => 1 - Math.pow(1 - t, 3);
+const easeLinear = (t: number): number => t;
+
+interface HighlightAnimation {
+  entityParticle: Particle;
+  iconParticle: Particle | undefined;
+  startAlpha: number;
+  targetAlpha: number;
+  startTime: number;
+  duration: number;
+  ease: (t: number) => number;
+}
 
 // ---------------------------------------------------------------------------
 // Internal types
@@ -639,6 +666,154 @@ export function* getParticleReveals(
 }
 
 // ---------------------------------------------------------------------------
+// Shared highlight animation engine
+// ---------------------------------------------------------------------------
+
+/**
+ * Creates a shared highlight animation engine that drives per-particle
+ * alpha transitions.  One instance is created per highlight controller
+ * and registers a single ticker callback while animations are active.
+ *
+ * @param ticker  The Pixi Application ticker (app.ticker).
+ */
+function createHighlightAnimator(ticker: Ticker) {
+  const animations = new Map<EntityKey, HighlightAnimation>();
+  let tickerActive = false;
+
+  function startTicker(): void {
+    if (tickerActive) return;
+    tickerActive = true;
+    ticker.add(tick);
+    beginAnimating();
+  }
+
+  function stopTicker(): void {
+    if (!tickerActive) return;
+    tickerActive = false;
+    ticker.remove(tick);
+    endAnimating();
+  }
+
+  function tick(): void {
+    const now = performance.now();
+    let anyActive = false;
+
+    for (const [key, anim] of animations) {
+      const elapsed = now - anim.startTime;
+      const t = Math.min(1, elapsed / anim.duration);
+      const eased = anim.ease(t);
+      const alpha = anim.startAlpha + (anim.targetAlpha - anim.startAlpha) * eased;
+
+      anim.entityParticle.alpha = alpha;
+      if (anim.iconParticle) anim.iconParticle.alpha = alpha;
+
+      if (t >= 1) {
+        animations.delete(key);
+      } else {
+        anyActive = true;
+      }
+    }
+
+    if (!anyActive) {
+      stopTicker();
+    }
+    requestRender();
+  }
+
+  /**
+   * Schedule a transition for one entity's particles.
+   * If a transition is already in flight, captures current interpolated alpha
+   * as the new start, then retargets to `targetAlpha`.
+   */
+  function animateTo(
+    key: EntityKey,
+    entityParticle: Particle,
+    iconParticle: Particle | undefined,
+    targetAlpha: number,
+  ): void {
+    const existing = animations.get(key);
+    const now = performance.now();
+
+    // Current actual alpha (interpolated if in-flight, otherwise the particle's value).
+    let currentAlpha: number;
+    if (existing) {
+      const elapsed = now - existing.startTime;
+      const t = Math.min(1, elapsed / existing.duration);
+      currentAlpha = existing.startAlpha + (existing.targetAlpha - existing.startAlpha) * existing.ease(t);
+    } else {
+      currentAlpha = entityParticle.alpha;
+    }
+
+    if (Math.abs(currentAlpha - targetAlpha) < 0.001) {
+      // Already at target — no animation needed.
+      animations.delete(key);
+      entityParticle.alpha = targetAlpha;
+      if (iconParticle) iconParticle.alpha = targetAlpha;
+      return;
+    }
+
+    const raising = targetAlpha > currentAlpha;
+    animations.set(key, {
+      entityParticle,
+      iconParticle,
+      startAlpha: currentAlpha,
+      targetAlpha,
+      startTime: now,
+      duration: raising ? HIGHLIGHT_FADE_IN_MS : HIGHLIGHT_FADE_OUT_MS,
+      ease: raising ? easeOutCubic : easeLinear,
+    });
+
+    startTicker();
+  }
+
+  /** Cancel all in-flight animations and set everything to `alpha`. */
+  function cancelAll(alpha: number): void {
+    animations.clear();
+    for (const entry of particleMap.values()) {
+      entry.entity.alpha = alpha;
+      if (entry.icon) entry.icon.alpha = alpha;
+    }
+    stopTicker();
+    requestRender();
+  }
+
+  /** Stop ticker and drop all state — call on controller destroy. */
+  function destroy(): void {
+    animations.clear();
+    stopTicker();
+  }
+
+  return { animateTo, cancelAll, destroy };
+}
+
+// ---------------------------------------------------------------------------
+// Shared per-entity alpha computation from BFS distances
+// ---------------------------------------------------------------------------
+
+function computeTargetAlphas(
+  distances: Map<EntityKey, number>,
+): Map<EntityKey, number> {
+  // Find actual max distance.
+  let actualMax = 0;
+  for (const d of distances.values()) {
+    if (d > actualMax) actualMax = d;
+  }
+  const effectiveMax = Math.max(actualMax, HIGHLIGHT_MIN_EFFECTIVE_MAX);
+
+  const targets = new Map<EntityKey, number>();
+  for (const [key, d] of distances) {
+    const alpha = HIGHLIGHT_FLOOR + (1 - HIGHLIGHT_FLOOR) * (1 - d / effectiveMax);
+    targets.set(key, alpha);
+  }
+  return targets;
+}
+
+/** Build entity key (tile-only, for connectivity graph lookup). */
+function tileEntityKey(e: PlacedEntity): EntityKey {
+  return `${e.x ?? 0},${e.y ?? 0}:${e.name}:${e.recipe ?? ""}`;
+}
+
+// ---------------------------------------------------------------------------
 // Non-streaming path: renderLayoutAsParticles
 // ---------------------------------------------------------------------------
 
@@ -656,6 +831,7 @@ export function* getParticleReveals(
 export function renderLayoutAsParticles(
   layout: LayoutResult,
   scene: ParticleScene,
+  app?: Application,
 ): HighlightController {
   // Clear any previous particles.
   scene.clear();
@@ -677,90 +853,55 @@ export function renderLayoutAsParticles(
   // Set all particles to alpha=1 immediately.
   applyParticleReveals(scene, FADE_IN_MS + 1);
 
-  // Build belt graph for highlight controller.
-  const beltGraph = buildBeltGraph(layout);
+  // Build connectivity graph for distance-based focus.
+  const connGraph = buildConnectivityGraph(layout);
 
-  // Belt network overlay Graphics — drawn on top when a network is highlighted.
-  // Persists between highlight calls; replaced on each new highlight.
-  let overlayGraphics: Graphics | null = null;
-
-  // The container that the scene is attached to — we need it for the overlay.
-  // Since attachTo is called separately, we hold a reference.
-  let overlayParent: Container | null = null;
-
-  function getOverlayParent(): Container | null {
-    // Reach the parent container via the beltContainer's parent.
-    return scene.beltContainer.parent as Container | null;
+  // If no app was provided (legacy call sites), fall back to non-animated behaviour.
+  if (!app) {
+    return createLegacyHighlightController();
   }
 
-  function clearHighlightInternal(): void {
-    if (overlayGraphics) {
-      const parent = overlayParent ?? getOverlayParent();
-      if (parent) parent.removeChild(overlayGraphics);
-      overlayGraphics.destroy();
-      overlayGraphics = null;
-    }
+  const animator = createHighlightAnimator(app.ticker);
+
+  function applyDistances(distances: Map<EntityKey, number>): void {
+    const targets = computeTargetAlphas(distances);
     for (const entry of particleMap.values()) {
-      entry.entity.alpha = 1;
-      if (entry.icon) entry.icon.alpha = 1;
+      const key = tileEntityKey(entry.placedEntity);
+      const target = targets.get(key) ?? HIGHLIGHT_FLOOR;
+      animator.animateTo(key, entry.entity, entry.icon, target);
     }
   }
 
   return {
     highlightItem(item: string | null): void {
-      clearHighlightInternal();
+      animator.cancelAll(1);
       if (!item) return;
       for (const entry of particleMap.values()) {
         const pe = entry.placedEntity;
         const chainKey = pe.carries ?? pe.recipe ?? null;
-        const dim = chainKey !== item;
-        const alpha = dim ? 0.15 : 1;
-        entry.entity.alpha = alpha;
-        if (entry.icon) entry.icon.alpha = alpha;
+        const target = chainKey === item ? 1 : 0.15;
+        const key = tileEntityKey(pe);
+        animator.animateTo(key, entry.entity, entry.icon, target);
       }
     },
 
     highlightBeltNetwork(entity: PlacedEntity | null): void {
-      clearHighlightInternal();
-      if (!entity) return;
-
-      const startKey = `${entity.x ?? 0},${entity.y ?? 0}`;
-      const anchor = beltGraph.tileToAnchor.get(startKey) ?? startKey;
-      if (!beltGraph.nodes.has(anchor)) return;
-
-      const { downstream, upstream } = traceBeltNetwork(anchor, beltGraph);
-      const allBelt = new Set([...downstream, ...upstream]);
-      const inserters = findAdjacentInserters(allBelt, beltGraph.entityMap);
-      const machines = findAdjacentMachines(inserters, beltGraph.entityMap);
-
-      for (const entry of particleMap.values()) {
-        const pe = entry.placedEntity;
-        const k = `${pe.x ?? 0},${pe.y ?? 0}`;
-        let alpha: number;
-        if (allBelt.has(k)) {
-          alpha = 0.5;
-        } else if (inserters.has(k)) {
-          alpha = 0.9;
-        } else if (machines.has(k)) {
-          alpha = 0.75;
-        } else {
-          alpha = 0.15;
-        }
-        entry.entity.alpha = alpha;
-        if (entry.icon) entry.icon.alpha = alpha;
+      if (!entity) {
+        animator.cancelAll(1);
+        return;
       }
-
-      const parent = getOverlayParent();
-      if (parent) {
-        overlayParent = parent;
-        overlayGraphics = new Graphics();
-        drawBeltNetworkOverlay(overlayGraphics, downstream, upstream, anchor, beltGraph);
-        parent.addChild(overlayGraphics);
-      }
+      const startKey = tileEntityKey(entity);
+      const distances = bfsDistances(connGraph, startKey);
+      applyDistances(distances);
     },
 
     clearHighlight(): void {
-      clearHighlightInternal();
+      // Animate everything back to 1.0 with the fade-out (linear) curve.
+      // animateTo picks the correct easing automatically (lowering alpha → linear).
+      for (const entry of particleMap.values()) {
+        const key = tileEntityKey(entry.placedEntity);
+        animator.animateTo(key, entry.entity, entry.icon, 1);
+      }
     },
 
     chainKey(entity: PlacedEntity): string | null {
@@ -770,30 +911,11 @@ export function renderLayoutAsParticles(
 }
 
 // ---------------------------------------------------------------------------
-// Particle-aware HighlightController (Phase 3)
+// Legacy (non-animated) fallback controller — used when no app is available
 // ---------------------------------------------------------------------------
 
-/**
- * Build a particle-aware `HighlightController` that walks the `particleMap`
- * instead of a `allGraphics` array.
- *
- * Used by `streamingRenderer.ts:finish()` after all entities are particles.
- * The belt network overlay (dashed/solid lines) remains a Graphics overlay
- * added to `overlayContainer` — separate from the entities.
- */
-export function createParticleHighlightController(
-  layout: LayoutResult,
-  overlayContainer: Container,
-): HighlightController {
-  const beltGraph = buildBeltGraph(layout);
-  let overlayGraphics: Graphics | null = null;
-
-  function clearHighlightInternal(): void {
-    if (overlayGraphics) {
-      overlayContainer.removeChild(overlayGraphics);
-      overlayGraphics.destroy();
-      overlayGraphics = null;
-    }
+function createLegacyHighlightController(): HighlightController {
+  function clearAll(): void {
     for (const entry of particleMap.values()) {
       entry.entity.alpha = 1;
       if (entry.icon) entry.icon.alpha = 1;
@@ -802,7 +924,7 @@ export function createParticleHighlightController(
 
   return {
     highlightItem(item: string | null): void {
-      clearHighlightInternal();
+      clearAll();
       if (!item) return;
       for (const entry of particleMap.values()) {
         const pe = entry.placedEntity;
@@ -812,43 +934,90 @@ export function createParticleHighlightController(
         if (entry.icon) entry.icon.alpha = alpha;
       }
     },
+    highlightBeltNetwork(): void {
+      // No-op in legacy mode (no app = no animation, and overlay is removed).
+    },
+    clearHighlight(): void {
+      clearAll();
+    },
+    chainKey(entity: PlacedEntity): string | null {
+      return entity.carries ?? entity.recipe ?? null;
+    },
+  };
+}
 
-    highlightBeltNetwork(entity: PlacedEntity | null): void {
-      clearHighlightInternal();
-      if (!entity) return;
+// ---------------------------------------------------------------------------
+// Particle-aware HighlightController (streaming path)
+// ---------------------------------------------------------------------------
 
-      const startKey = `${entity.x ?? 0},${entity.y ?? 0}`;
-      const anchor = beltGraph.tileToAnchor.get(startKey) ?? startKey;
-      if (!beltGraph.nodes.has(anchor)) return;
+/**
+ * Build a particle-aware `HighlightController` with distance-based focus
+ * dimming and smooth alpha animations.
+ *
+ * Used by `streamingRenderer.ts:finish()` after all entities are particles.
+ * The dashed/solid Graphics overlay is removed — distance-based dimming
+ * replaces it entirely.
+ *
+ * @param layout  The final layout (used to build the connectivity graph).
+ * @param app     The Pixi Application (provides the ticker for animation).
+ */
+export function createParticleHighlightController(
+  layout: LayoutResult,
+  app: Application,
+): HighlightController & { destroy(): void } {
+  const connGraph = buildConnectivityGraph(layout);
+  const animator = createHighlightAnimator(app.ticker);
 
-      const { downstream, upstream } = traceBeltNetwork(anchor, beltGraph);
-      const allBelt = new Set([...downstream, ...upstream]);
-      const inserters = findAdjacentInserters(allBelt, beltGraph.entityMap);
-      const machines = findAdjacentMachines(inserters, beltGraph.entityMap);
+  function applyDistanceFocus(entity: PlacedEntity): void {
+    const startKey = tileEntityKey(entity);
+    const distances = bfsDistances(connGraph, startKey);
+    const targets = computeTargetAlphas(distances);
 
+    for (const entry of particleMap.values()) {
+      const key = tileEntityKey(entry.placedEntity);
+      const target = targets.get(key) ?? HIGHLIGHT_FLOOR;
+      animator.animateTo(key, entry.entity, entry.icon, target);
+    }
+  }
+
+  return {
+    highlightItem(item: string | null): void {
+      animator.cancelAll(1);
+      if (!item) return;
       for (const entry of particleMap.values()) {
         const pe = entry.placedEntity;
-        const k = `${pe.x ?? 0},${pe.y ?? 0}`;
-        let alpha: number;
-        if (allBelt.has(k)) alpha = 0.5;
-        else if (inserters.has(k)) alpha = 0.9;
-        else if (machines.has(k)) alpha = 0.75;
-        else alpha = 0.15;
-        entry.entity.alpha = alpha;
-        if (entry.icon) entry.icon.alpha = alpha;
+        const chainKey = pe.carries ?? pe.recipe ?? null;
+        const target = chainKey === item ? 1 : 0.15;
+        entry.entity.alpha = target;
+        if (entry.icon) entry.icon.alpha = target;
       }
+    },
 
-      overlayGraphics = new Graphics();
-      drawBeltNetworkOverlay(overlayGraphics, downstream, upstream, anchor, beltGraph);
-      overlayContainer.addChild(overlayGraphics);
+    highlightBeltNetwork(entity: PlacedEntity | null): void {
+      if (!entity) {
+        // Animate back to full alpha.
+        for (const entry of particleMap.values()) {
+          const key = tileEntityKey(entry.placedEntity);
+          animator.animateTo(key, entry.entity, entry.icon, 1);
+        }
+        return;
+      }
+      applyDistanceFocus(entity);
     },
 
     clearHighlight(): void {
-      clearHighlightInternal();
+      for (const entry of particleMap.values()) {
+        const key = tileEntityKey(entry.placedEntity);
+        animator.animateTo(key, entry.entity, entry.icon, 1);
+      }
     },
 
     chainKey(entity: PlacedEntity): string | null {
       return entity.carries ?? entity.recipe ?? null;
+    },
+
+    destroy(): void {
+      animator.destroy();
     },
   };
 }
