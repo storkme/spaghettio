@@ -2,252 +2,253 @@
 
 ## Summary
 
-Today, when a recipe's per-machine input demand exceeds what a single
-input belt can carry (e.g. electronic-circuit needs 7.5/s copper-cable
-per machine, an express belt at 45/s feeds at most 6 machines), the
-placer **vertically splits** the recipe into multiple short rows. Each
-row gets its own input belts, its own output belt, and downstream the
-fragmented outputs are reassembled with N→M balancers and bus trunks.
+Add a second row-layout strategy alongside the existing vertical-split
+approach. When a recipe's per-machine input demand exceeds a single
+input belt's capacity, the existing layout engine **vertically
+partitions** the recipe into many short rows, then reassembles them
+downstream with N→M balancers and bus trunks. This RFP proposes a
+**horizontal layout** — one long row with K stacked input belts at
+the top, each ending its own east-flowing trunk that dives via
+underground belt to feed a dedicated machine block. Output is a
+single continuous east-flowing belt that runs at full belt capacity.
 
-This RFP proposes **horizontal partitioning** instead: keep the recipe
-on **one long row** but stack multiple input belts at the top of the
-row, each routed via underground belts into its dedicated machine
-block. Output is one continuous east-flowing belt that already runs at
-full belt capacity (lane-split bridge in the middle, as today). No
-return-belt routing back to the bus, no N→M balancer family, and no
-trunk-vs-consumer-count mismatch.
+The two strategies coexist as a per-call layout option (`RowLayout`
+enum: `VerticalSplit`, `HorizontalStack`). Vertical-split remains the
+default for backward compatibility. The user picks via a UI control.
+Long-term, this becomes one of several layout-strategy axes the
+engine can search across to optimise for compactness or aesthetics.
 
-The change is local to the row template + the lane planner's
-"row-splitting" decision. Bus routing, return-belt logic, and the
-balancer library remain unchanged for the cases where vertical
-splitting is still required (output-bottlenecked rows, recipes whose
-horizontal extent would exceed the layout budget).
+This RFP does **not** propose deprecating vertical-split — it has
+genuine strengths (works for output-bottlenecked rows, narrower row
+footprint at low rates, balancer-stamped output is well-tested) and
+will continue to be the default for many recipes. The two strategies
+solve the same problem with different geometric trade-offs.
 
 ## Motivation
 
-The concrete failing case today is `processing-unit @ 2/s`,
-URL `?item=processing-unit&rate=2&machine=assembling-machine-3&in=iron-plate,copper-plate,coal,water,crude-oil`:
+The concrete failing case that prompted this exploration was
+`processing-unit @ 2/s`,
+URL `?item=processing-unit&rate=2&machine=assembling-machine-3&in=iron-plate,copper-plate,coal,water,crude-oil`,
+where the lane planner was silently dropping a producer row whose
+output ended at (24, 113) — see PR #217 for the tactical fix. That
+fix improved the vertical-split path; this RFP introduces a different
+geometric approach that sidesteps the structural cause altogether.
 
-- electronic-circuit total rate ≈ 50/s.
-- `max_machines_per_row` for EC under express-belt cap is **6** (driven
-  by 7.5/s/machine copper-cable input × 6 = 45/s = full express belt).
-- Solver allocates 20 machines → placer splits into **4 rows of 5
-  machines** each.
-- Lane planner sees 4 producers, 2 consumers, total rate 50/s. With
-  the per-lane cap (22.5/s for express) it computes `n_splits = 3`,
-  exceeding consumer count, and `split_overflowing_lanes` skips the
-  third (consumer-empty) split — silently dropping producer row 10.
-- Symptom: the row at y=113 emits its output belt (5 tiles east-west)
-  but no return spec is generated, leaving the belt severed at (24,
-  113). The new `fluid-network`-style validator now flags this as a
-  "belt-dead-end" error.
+Beyond that one bug, the broader motivation is that vertical-split
+fragments rows whenever the input belt is the bottleneck (very common
+for high-demand intermediates like `electronic-circuit`,
+`copper-cable`, `iron-gear-wheel`). Each fragment needs its own input
+belts, output belt, return belt back to the bus, and a balancer block
+to reconcile producer count vs trunk count. That's a lot of
+machinery for a problem that disappears entirely if the row is laid
+out horizontally instead.
 
-A separate tactical fix (extend the balancer-family path to handle
-fan-in N>M cases) is in flight as a workaround. This RFP addresses
-the underlying architectural mismatch: **rows fragment when they
-shouldn't**, then we spend complexity stitching them back together.
-
-It also addresses a known under-utilisation: trunks fed by sideload
-return belts run at half-belt capacity (one lane only, per F5/B8). The
-horizontal-trunk pattern bypasses the return belts entirely — output
-goes directly onto a full belt that the bus consumes.
+The aesthetic motivation is more speculative: with two valid layouts
+for the same subchain, the engine eventually has the option to
+search across them and pick the result that's tighter, prettier, or
+fits better in a given footprint. This RFP doesn't build that
+search; it just unlocks it by establishing an alternative.
 
 ## Design
 
-### Row template (the new shape)
+### Row geometry
 
-Today, an N-input row template lays a fixed number of input belts at
-the top of the row. For `electronic-circuit` (DualInput row), that's
-roughly:
-
-```
-y+0 : input belt 1 (iron-plate, east-flow)
-y+1 : inserter row (drops onto machine input from belt at y+0)
-y+2 : input belt 2 (copper-cable)
-y+3 : inserter row
-y+4..y+6 : machine 3×3
-y+7 : output inserter row
-y+8 : output belt
-```
-
-The horizontal-trunk variant adds **K extra input belts** at the top
-of the row (where K is the number of machine blocks). For example, a
-24-machine EC row with 4 blocks of 6 machines each:
+For a recipe with N inputs, ranked by per-machine throughput
+demand from highest (input₀) to lowest (input_{N-1}):
 
 ```
-y+0 : copper-cable belt for block 4 (running east, dives to block 4)
-y+1 : copper-cable belt for block 3 (dives to block 3)
-y+2 : copper-cable belt for block 2 (dives to block 2)
-y+3 : copper-cable belt for block 1 (dives to block 1)
-y+4 : iron-plate belt (one belt suffices, ≤ 45/s)
-y+5 : inserter row for iron-plate
-y+6 : inserter row for copper-cable per-block
-y+7..y+9 : machines (block 1 starts at x_offset)
-y+10: output inserter row
-y+11: output belt (single, full lane-split capacity)
+y+0..y+(K-1) : K stacked east-flowing trunks of input₀, each ending
+                in a dive at its assigned sub-row boundary
+y+K..y+K+N-2 : input₁ … input_{N-1} continuous east-flowing belts
+                (low-demand inputs stay one-belt-each, no stacking)
+y+K+N-1      : "current-feed" belt for input₀ (immediately above
+                inserter row, fed by the trunk dives)
+y+K+N        : inserter row (mixed types — handwaved per the
+                "stack by throughput, near-slot only" rule)
+y+K+N+1..y+K+N+3 : machine 3×3
+y+K+N+4      : output inserter row
+y+K+N+5      : output belt (single, full lane-split capacity)
 ```
 
-The block layout repeats horizontally: each block has its own
-copper-cable input feeding only those 6 machines, but iron-plate (low
-demand) is shared across the whole row via one belt.
+The "near-slot is highest-throughput input₀" rule pins input₀ at
+y+K+N-1 (one tile from the machine), reachable by a stack/bulk
+inserter at reach 1. The other inputs sit further north and are
+reached by long-handed inserters.
 
-**The "dive" mechanism:** at the eastern end of belt N, a UG-belt
-input dives down past intervening belts and emerges at the inserter
-row for block N. Belts for further-east blocks pass over the UG
-tunnel (per U4). Underground reach (yellow 4 / red 6 / blue 8) limits
-how many belts can stack — at express tier, 8 stacked belts is the
-hard cap for a single dive depth.
+Per the inserter-throughput handwave (see "Out of scope" below), the
+exact inserter type per slot is the user's responsibility for now.
+The template emits one inserter per belt per machine; if throughput
+is insufficient at the user's research level, that's a layout-time
+research-level mismatch, not an engine bug.
 
-**Full-belt utilisation:** the dived belt feeds the inserter row
-straight (B7), filling both lanes. No sideload, no half-capacity.
+### Sub-row boundary
 
-### Lane planner
+Between sub-row N and sub-row N+1 (each block is `block_size`
+machines wide, where `block_size = floor(full_belt_capacity /
+per_machine_demand_input₀)`):
 
-`max_machines_per_row` becomes a soft hint rather than a hard cap.
-For each input that would otherwise force a split:
-
-1. Compute the per-belt demand: `machines × per_machine_rate`.
-2. Compute how many belts of that input the row needs:
-   `ceil(per_belt_demand / full_belt_capacity)`.
-3. Pick the input with the highest belt count (the "horizontally
-   constrained" input).
-4. Use that count as K, the number of stacked input belts at the top
-   of the row.
-
-If K=1, fall through to today's vertical-split behaviour.
-
-### Bus integration
-
-A horizontally-trunked row is a single producer with a single output
-belt. From the lane planner's perspective, it's exactly what we
-already model for an "intermediate with one producer". The K stacked
-input belts each tap off the bus separately — same as today's K=1
-case but with K parallel taps at sequential ys. No balancer family
-needed at the producer side.
-
-Output flow goes through:
-
-- Row template's lane-split bridge → both lanes of output belt
-  filled.
-- Existing tap-off splitters along the bus deliver to consumers.
-
-(Return-belt routing in `ghost_router.rs` for this row type may be
-**unnecessary** — the output belt can live on the bus directly via
-the same `output_merger` machinery used for final products. To
-investigate during phase 1.)
+- One of the K trunks (typically trunk N+1) dives via a **south-axis
+  UG pair** from y+? down to y+K+N-1, becoming the current-feed for
+  the next sub-row.
+- The low-demand belts at y+K..y+K+N-2 each go via **east-axis UG
+  pair** across the boundary. Surface tiles in the gap row are empty
+  on those rows, leaving room for the trunk dive without crossing.
+- Iron-plate UG (east-axis) and trunk-dive UG (south-axis) are on
+  perpendicular axes — they don't interfere underground (per F4/F7).
 
 ### Code touched
 
+- New: `crates/core/src/bus/layout.rs` — add `pub enum RowLayout {
+  VerticalSplit, HorizontalStack }` and a field on `LayoutOptions`.
+  Default is `VerticalSplit`.
 - `crates/core/src/bus/templates.rs` — new template variants for
-  horizontally-trunked single-input, dual-input, fluid-input rows.
-  Estimate: 1-2 new functions per row kind, ~200-400 LOC each.
-- `crates/core/src/bus/placer.rs` — change `max_per_row` decision to
-  return both a row-machine-count and a stack-depth K; drive
-  template selection from K.
-- `crates/core/src/bus/lane_planner.rs` — collapse K=1 horizontal
-  rows into the single-producer code path; update tap-off generation
-  for the K parallel input taps.
-- `crates/core/src/bus/ghost_router.rs` — verify K parallel taps
-  route correctly; possibly drop the return-belt path for K>1 rows.
-- `crates/core/tests/e2e.rs` — regenerate golden hashes for affected
-  tier3+ recipes (electronic-circuit-heavy ones first).
+  `HorizontalStack` for at least dual-input solid recipes (the most
+  common case). Triple-input and fluid-input variants in later
+  phases.
+- `crates/core/src/bus/placer.rs` — branch on `RowLayout`; for
+  `HorizontalStack`, skip vertical splitting and emit a single long
+  row with sub-row blocks.
+- `crates/core/src/bus/lane_planner.rs` — for `HorizontalStack`
+  rows, the K trunks each need a bus tap-off at the row's west end;
+  no balancer family needed (the row consumes its own outputs into
+  one consolidated belt).
+- `crates/core/src/bus/ghost_router.rs` — bus tap-offs deliver to
+  the K trunk entry points at y+0..y+(K-1). Within-row routing is
+  template-stamped, not router-routed (the structure is regular
+  enough).
+- `web/src/ui/sidebar.ts` — add a `RowLayout` dropdown (or
+  checkbox), persisted in URL state alongside `strategy` and `belt`.
+- `crates/core/tests/e2e.rs` — new tier3 / tier5 test cases with
+  `RowLayout::HorizontalStack` — separate goldens.
 
-### Trade-offs against alternatives
+### Trade-offs vs. vertical-split
 
-**Alt 1: balancer-family fan-in** (the in-flight tactical fix). Keeps
-the vertical-split architecture; uses N→M balancers from
-`balancer_library.rs` to merge fragmented producer outputs onto
-M=consumer-count trunks. Pros: small change, uses existing
-machinery. Cons: still wastes the second lane of intermediate
-trunks; doesn't reduce row count; the balancer block adds rows of
-height to the layout.
+| Property | Vertical-split (today) | Horizontal-stack (this RFP) |
+|---|---|---|
+| Row count | one per ~6 machines | one (regardless of size) |
+| Footprint shape | tall and narrow | short and wide |
+| Return belts | yes, routed via ghost-router | no (output belt fed directly) |
+| Balancer block | yes (N→M template) | no |
+| Tap-offs from bus | per output trunk | K per row (one per stacked trunk) |
+| Output capacity | bound by per-row output belt | always full belt by construction |
+| Output-bottlenecked recipes | works | doesn't help (output belt is the limit either way) |
+| UG tunnel reach pressure | low | moderate (sub-row gap dive paths) |
 
-**Alt 2: dual-sided returns**. Feed return belts onto the trunk from
-both sides (east AND west) so both lanes fill via two sideloads.
-Pros: doubles per-trunk capacity; localised change. Cons: only
-helps if there's space on both sides of the trunk; doesn't reduce
-total row count; adds routing complexity for the west-side feed.
+**This RFP is not a replacement.** Output-bottlenecked rows
+(uncommon at vanilla rates but real) still need vertical-split or
+some other approach. Vertical-split is also a more compact choice
+when the recipe is small enough to fit a single row.
 
-**Alt 3 (this RFP): horizontal trunks**. Rejects the premise that
-rows must split when input-bottlenecked. Pros: fewer rows, simpler
-bus, no return belts, no balancer block, output runs at full
-capacity by construction. Cons: more template work, wider rows,
-doesn't help output-bottlenecked recipes (rare for AM3).
+### Trade-offs vs. PR #217 (balancer-family fan-in)
 
-The tactical fix and this RFP are not mutually exclusive: the
-balancer-family fix is the **interim** while horizontal trunks are
-the **long-term direction**. Output-bottlenecked rows continue to
-need the balancer machinery.
+PR #217 fixes a correctness bug in vertical-split where producer
+rows could be silently dropped when `n_splits > consumer_count`.
+That fix is *necessary* regardless of this RFP — vertical-split
+needs to work correctly. Horizontal-stack just offers a different
+layout shape; it doesn't replace the balancer machinery.
 
 ## Kill criteria
 
 This RFP should be abandoned or rethought if any of the following
 trips:
 
-- *After implementing K-belt stacking for `electronic-circuit`, the
-  total tile area for `processing-unit @ 2/s` (entities × bounding
-  box) regresses by more than 15% relative to today's vertical-split
-  layout.* — the win must outweigh the wider rows.
+- *After landing phase 1 (dual-input solid recipes), the
+  `processing-unit @ 2/s` URL with `RowLayout::HorizontalStack`
+  produces a layout that is wider than 1.5× the equivalent
+  vertical-split layout's bounding box AND fewer than 50% of the
+  validator errors are resolved.* — would mean the new approach is
+  actively worse for this benchmark.
 
-- *After implementing dive UG routing, more than 10% of the K-belt
-  cases in the test corpus require dive depth > 8 (express UG max
-  reach).* — would mean the design has hidden constraints that
-  collapse the strategy to something else.
+- *After implementing the sub-row boundary template (the trunk dive
+  + low-demand UG cross), more than 10% of the test corpus requires
+  UG dive depth > 8 (express UG max reach).* — would mean the
+  geometry has hidden constraints we didn't account for.
 
-- *The K-belt template adds more than ~600 LOC to `templates.rs` per
-  row kind (single-input, dual-input, fluid-input).* — too much
-  surface for a single architectural improvement; reconsider whether
-  a more general row-builder abstraction is warranted first.
-
-- *After phase 1, the validator still reports `belt-dead-end` errors
-  on the `processing-unit @ 2/s` URL specifically attributable to
-  intermediate-row return routing.* — would mean the K=1 fall-through
-  is broken or the K>1 path didn't actually replace return belts.
+- *The `templates.rs` additions exceed ~600 LOC per row kind.* —
+  too much surface for one strategy variant; reconsider whether a
+  shared template-builder abstraction is warranted first.
 
 - *End-to-end runtime for `cargo test --manifest-path
-  crates/core/Cargo.toml` regresses by more than 1.5x on the existing
-  test corpus.* — the new code path is more complex than expected.
+  crates/core/Cargo.toml` regresses by more than 1.5× on the
+  existing test corpus.* — the new code path is more complex than
+  expected.
+
+- *After phase 1, the validator catches structural correctness bugs
+  in `RowLayout::HorizontalStack` layouts that don't appear in
+  `RowLayout::VerticalSplit` for the same recipe — and resolving
+  them requires changes outside templates / placer.* — would mean
+  the new strategy is leaking complexity into bus / ghost-router
+  / validator that we'd be paying for forever.
 
 ## Verification plan
 
 Per
 [CLAUDE.md verification protocol](../CLAUDE.md#verification-protocol-for-layout-engine-changes):
 
-1. **Full e2e suite green.** `cargo test --manifest-path
-   crates/core/Cargo.toml`. Golden hashes for tier2+ tests will
-   regenerate during phase 1; expected.
-2. **The processing-unit URL renders cleanly.** Open
+1. **Full e2e suite green for both `RowLayout` variants.** New
+   tier3 / tier5 tests with `RowLayout::HorizontalStack` get their
+   own golden hashes. Tests with `RowLayout::VerticalSplit`
+   (default) keep today's hashes.
+2. **The processing-unit URL renders cleanly with both
+   strategies.** Open
    `?item=processing-unit&rate=2&machine=assembling-machine-3&in=iron-plate,copper-plate,coal,water,crude-oil`
-   in the dev server, tick Debug → Validation, confirm zero
-   belt-dead-end errors and zero balancer-misroute errors.
-3. **Snapshot inspection on three sample layouts:**
-   - Tier3 `electronic-circuit` from ores at 5/s (existing test).
+   in the dev server, switch the new `RowLayout` dropdown to
+   `HorizontalStack`, confirm zero belt-dead-end errors and zero
+   balancer-related errors. Switch back to `VerticalSplit`,
+   confirm previous behaviour preserved.
+3. **Snapshot inspection on three sample layouts under each
+   strategy:**
+   - Tier3 `electronic-circuit` from ores at 5/s.
    - Tier4 `advanced-circuit` (which produces ec internally).
    - Tier5 `processing-unit` at 1/s and 2/s.
-4. **Trace events.** New `RowSplit` events should report `kind=
-   horizontal, k=N` for cases that would previously report
-   `split_into=N+1` vertical. No `RouteFailure`, no `BridgeDropped`
-   for horizontally-trunked items.
-5. **Visual sanity in browser.** The K input belts should be visibly
-   distinct (one per machine block), and items should be visibly
-   present on both lanes of the output belt.
+4. **Trace events.** New `RowLayoutSelected { recipe, kind }` event
+   per row, so the snapshot debugger can render strategy choice
+   per-row. Verify the event fires for every row and the kind is
+   consistent with the option flag.
+5. **Visual sanity in browser.** Switch strategies; the layout
+   should be visibly different (wider/shorter or
+   taller/narrower) but produce equivalent products at the
+   same rate.
+
+## Out of scope
+
+- **Inserter throughput math.** The "stack by throughput,
+  highest-demand nearest" rule is the only inserter-related
+  constraint encoded. Whether the user has the right inserter
+  research level to actually achieve a given throughput is the
+  user's problem; the engine just emits "the right number of
+  inserters of the natural type for that slot."
+- **Search / auto-selection across strategies.** The UI exposes a
+  manual choice. Future work could try multiple strategies per
+  recipe and pick the most compact / most aesthetic, but that's a
+  separate RFP.
+- **Triple-input and fluid-input recipes.** Phase 1 covers
+  dual-input solid only (e.g., `electronic-circuit`,
+  `iron-gear-wheel`, `copper-cable`). Phases 2+ extend to other
+  shapes.
 
 ## Phasing
 
-1. **Phase 1 — single dual-input recipe (electronic-circuit).** Add
-   the horizontal-trunk dual-input template variant. Update placer
-   to pick K for this recipe class. Verify on tier3 EC and tier5
-   processing-unit. Land + regenerate goldens. Kill criteria above
-   apply at end of phase 1.
-2. **Phase 2 — single-input + triple-input recipes.** Same machinery,
-   different templates.
-3. **Phase 3 — fluid-input + multi-fluid rows.** More complex
-   because the fluid-trunk dive shares the row's top space with
-   solid-belt dives; needs careful y-allocation.
-4. **Phase 4 — drop the return-belt path for K>1 rows** (optional).
-   Investigate whether `ghost_router.rs`'s ret-spec generation is
-   still needed for these rows; if not, simplify.
+1. **Phase 1 — `RowLayout` plumbing + dual-input solid.** Add the
+   enum and option field. Default to `VerticalSplit`. Implement
+   `HorizontalStack` for `RowKind::DualInput` recipes only. UI
+   dropdown wired. Verify on tier3 EC. Land + add new goldens.
+   Kill criteria above apply at end of phase 1.
+2. **Phase 2 — single-input + triple-input solid recipes.**
+3. **Phase 3 — fluid-input + multi-fluid rows.** Significantly
+   more complex because the fluid-trunk dive shares the row's
+   top space with solid-belt dives.
+4. **Phase 4 (later) — multi-strategy search.** Engine tries both
+   strategies, picks the better-scoring layout per some metric.
+   Separate RFP.
 
 ## Decision log
 
 - *2026-04-25 — proposed.*
+- *2026-04-25 — revised after design discussion: corrected
+  geometry (high-demand belts are the current-feed adjacent to
+  machine, low-demand stacked above; trunks at top dive via
+  S-axis UG to current-feed, low-demand crosses sub-row boundaries
+  via E-axis UG so the two don't interfere); reframed as a
+  coexisting alternative to vertical-split rather than a
+  replacement; inserter-throughput math punted out of scope.*
