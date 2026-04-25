@@ -3358,8 +3358,6 @@ fn bridge_belt_over_pipe(
         EntityDirection::East => (1, 0),
         EntityDirection::West => (-1, 0),
     };
-    let ug_in = (cx - dx, cy - dy);
-    let ug_out = (cx + dx, cy + dy);
 
     let bridge_axis_label: &'static str = match belt_dir {
         EntityDirection::North | EntityDirection::South => "vertical",
@@ -3375,20 +3373,139 @@ fn bridge_belt_over_pipe(
         None
     };
 
-    // Belt-side endpoint checks. The pipe tile itself is left alone —
-    // no stamp goes on it, so we don't consult the obstacle sets for
-    // `(cx, cy)`.
-    if hard_obstacles.contains(&ug_in) {
-        return reject("hard_obstacle_ug_in");
+    // Pipe-run discovery. The bridge must span every pipe touching the
+    // belt's axis at this row/column without surfacing between them, or
+    // a stranded pipe between two narrow bridges produces a dead-end.
+    // Adjacent fluid-trunk columns (crude-oil/water/petroleum-gas at
+    // x=26..28 in processing-unit @ 2/s) give the canonical multi-pipe
+    // case. Reservations and ghost belts BETWEEN pipes are swallowed
+    // into the run so the resulting UG tunnel passes beneath all of
+    // them; we only stop walking when no further pipe lies within
+    // `max_reach` tiles ahead.
+    let is_pipe_at = |t: (i32, i32)| -> bool {
+        placed_entities
+            .iter()
+            .any(|e| (e.x, e.y) == t && (e.name == "pipe" || e.name == "pipe-to-ground"))
+    };
+    // A tile is a "blocker" for UG-endpoint placement when it carries an
+    // unreleasable entity (machine, pole, row template, etc.) or a pipe.
+    // Releasable entities (ghost belts, trunks, tap-offs, prior junction
+    // outputs, simple balancers) at the tile are fine — they get released
+    // by the per-tile-template release pass before the new UG is stamped.
+    // Reservation-only tiles (in `hard` but with no actual entity) are
+    // allowed: nothing's actually there to conflict with.
+    let blocked_at = |t: (i32, i32)| -> bool {
+        placed_entities.iter().any(|e| {
+            if (e.x, e.y) != t {
+                return false;
+            }
+            if e.name == "pipe" || e.name == "pipe-to-ground" {
+                return true;
+            }
+            let seg = e.segment_id.as_deref().unwrap_or("");
+            !(seg.starts_with("ghost:")
+                || seg.starts_with("trunk:")
+                || seg.starts_with("tapoff:")
+                || seg.starts_with("junction:")
+                || seg.starts_with("corridor:")
+                || seg.starts_with("crossing:"))
+        })
+    };
+    // Non-pipe blocker check used by the walk: any unreleasable
+    // entity at the tile (machines, poles, row templates, splitters,
+    // multi-block balancers, etc.) that the bridge can NOT tunnel
+    // through. Pipes are NOT counted as blockers here — the walk
+    // EXTENDS through them, since the whole point of the bridge is to
+    // bury the belt under pipe runs. Releasable kinds (ghost belts,
+    // trunks, tap-offs, prior junctions) are also fine: they get
+    // released by the per-tile-template release pass.
+    let non_pipe_blocker_at = |t: (i32, i32)| -> bool {
+        placed_entities.iter().any(|e| {
+            if (e.x, e.y) != t {
+                return false;
+            }
+            if e.name == "pipe" || e.name == "pipe-to-ground" {
+                return false;
+            }
+            let seg = e.segment_id.as_deref().unwrap_or("");
+            !(seg.starts_with("ghost:")
+                || seg.starts_with("trunk:")
+                || seg.starts_with("tapoff:")
+                || seg.starts_with("junction:")
+                || seg.starts_with("corridor:")
+                || seg.starts_with("crossing:"))
+        })
+    };
+    let max_reach = ug_max_reach(belt_name) as i32;
+    // Walk along the axis from `start` in `(step_dx, step_dy)`, finding
+    // the FARTHEST pipe such that every gap between pipes can be
+    // jumped underground (i.e. no two pipes are more than `max_reach`
+    // tiles apart, and no blocker entity sits in the gap). Returns the
+    // last pipe in the run (or `start` if no pipes are reached).
+    let walk_run = |start: (i32, i32), step_dx: i32, step_dy: i32| -> (i32, i32) {
+        let mut last_pipe = start;
+        let mut cur = start;
+        loop {
+            // Lookahead: any pipe within `max_reach` tiles? Advance
+            // through pipes, ghost belts, reservations, and empty tiles.
+            // Stop on a non-pipe unreleasable entity — can't tunnel
+            // through it.
+            let mut found_pipe_ahead: Option<i32> = None;
+            for i in 1..=max_reach {
+                let probe = (cur.0 + step_dx * i, cur.1 + step_dy * i);
+                if is_pipe_at(probe) {
+                    found_pipe_ahead = Some(i);
+                    break;
+                }
+                if non_pipe_blocker_at(probe) {
+                    break;
+                }
+            }
+            match found_pipe_ahead {
+                Some(steps) => {
+                    cur = (cur.0 + step_dx * steps, cur.1 + step_dy * steps);
+                    last_pipe = cur;
+                }
+                None => return last_pipe,
+            }
+        }
+    };
+    // Backward = upstream (UG-IN side), forward = downstream (UG-OUT
+    // side). Walk in both directions so a pipe tile sandwiched between
+    // pipes is found regardless of which one was the seed.
+    let upstream_end = walk_run((cx, cy), -dx, -dy);
+    let downstream_end = walk_run((cx, cy), dx, dy);
+    let ug_in = (upstream_end.0 - dx, upstream_end.1 - dy);
+    let ug_out = (downstream_end.0 + dx, downstream_end.1 + dy);
+
+    // Underground span between UG-IN and UG-OUT: count of buried tiles.
+    // For a single-pipe bridge that's 1; for an N-pipe run it's the
+    // distance from upstream_end to downstream_end (inclusive of any
+    // ghost-belt/reservation gaps the walk swallowed). Reject if the
+    // span exceeds the belt tier's max reach.
+    let span = match belt_dir {
+        EntityDirection::North | EntityDirection::South => (ug_out.1 - ug_in.1).abs() - 1,
+        EntityDirection::East | EntityDirection::West => (ug_out.0 - ug_in.0).abs() - 1,
+    };
+    if span > max_reach {
+        return reject("pipe_run_exceeds_ug_reach");
     }
-    if unreleasable_obstacles.contains(&ug_in) {
-        return reject("unreleasable_obstacle_ug_in");
+
+    // Belt-side endpoint checks. The pipe tiles inside the run are
+    // left alone — no stamp goes on them, so we don't consult the
+    // obstacle sets for tiles inside the run.
+    //
+    // We use `blocked_at` (which inspects actual entities at the tile)
+    // rather than `hard_obstacles` because the narrow `hard` set
+    // includes fluid-trunk reservations — column tiles reserved for
+    // future fluid placement but with no actual entity. UG-IN/OUT can
+    // sit on a reserved-but-empty tile because the perpendicular fluid
+    // UG buried beneath does not interfere (per F4/F7).
+    if blocked_at(ug_in) {
+        return reject("blocked_ug_in");
     }
-    if hard_obstacles.contains(&ug_out) {
-        return reject("hard_obstacle_ug_out");
-    }
-    if unreleasable_obstacles.contains(&ug_out) {
-        return reject("unreleasable_obstacle_ug_out");
+    if blocked_at(ug_out) {
+        return reject("blocked_ug_out");
     }
     if any_spec_turns_at(ug_in, routed_paths) {
         return reject("turn_at_ug_in");
@@ -3396,6 +3513,12 @@ fn bridge_belt_over_pipe(
     if any_spec_turns_at(ug_out, routed_paths) {
         return reject("turn_at_ug_out");
     }
+    // The legacy `hard_obstacles` / `unreleasable_obstacles` params are
+    // retained on the signature for parity with `bridge_belt_over_pipe`'s
+    // siblings; the multi-pipe walk supersedes them by inspecting actual
+    // entities at each tile (`blocked_at`, `non_pipe_blocker_at`).
+    let _ = hard_obstacles;
+    let _ = unreleasable_obstacles;
 
     // Exclude the belt's own path key from the conflict check. Match by
     // item name in the key (e.g. `flow:iron-plate:21`, `tap:iron-plate:...`)
@@ -3424,31 +3547,22 @@ fn bridge_belt_over_pipe(
     let ug_name = ug_for_belt(belt_name);
     let seg = Some(format!("junction:{}:{},{}", belt_item, cx, cy));
 
-    // `release_for_pertile_template` clears `trunk:` Permanent claims in
-    // the release rect so templates can rebuild the bus. For belt×belt
-    // crossings that's fine — both trunks get re-stamped. For belt×pipe,
-    // the pipe stays fixed, so we need to re-emit it verbatim as part
-    // of the solve's entity list.
-    //
-    // Important: the post-route filter at the end of `route_bus_ghost`
-    // drops `trunk:*` entities whose Occupancy claim isn't `Permanent`.
-    // Our commit path places with `ClaimKindTag::Template`, so re-using
-    // the original `trunk:*` segment_id would get the pipe silently
-    // filtered out. Re-tag as `junction:{item}:{cx},{cy}` so it survives
-    // the filter — the stamp is still a pipe entity at the same tile,
-    // carrying the same fluid, which is all Factorio needs for fluid
-    // connectivity.
-    let Some(mut pipe_entity) = placed_entities
+    // Sanity: at least one pipe must actually exist at the seed tile,
+    // otherwise we have no business bridging here.
+    if !placed_entities
         .iter()
-        .find(|e| (e.x, e.y) == (cx, cy))
-        .cloned()
-    else {
+        .any(|e| (e.x, e.y) == (cx, cy))
+    {
         return reject("pipe_tile_missing");
-    };
-    pipe_entity.segment_id = seg.clone();
+    }
 
+    // Pipes themselves are NOT re-emitted: their Permanent claims survive
+    // the release pass (`release_for_pertile_template` skips pipe entities
+    // — see `bus/ghost_occupancy.rs`), and trying to stamp a Template
+    // entity over an existing Permanent tile would panic in the post-place
+    // loop. We only emit the belt-side UG endpoints; the underground
+    // tunnel passes beneath every pipe in the run untouched (per F4/U4).
     let entities = vec![
-        pipe_entity,
         PlacedEntity {
             name: ug_name.to_string(),
             x: ug_in.0,
@@ -3471,13 +3585,17 @@ fn bridge_belt_over_pipe(
         },
     ];
 
+    // Zone covers the full UG-IN..UG-OUT span (inclusive). For the
+    // single-pipe legacy case this is 3×1 / 1×3; for an N-pipe run it's
+    // (N+2)×1 / 1×(N+2). Width is along the belt's axis.
+    let (min_x, max_x) = (ug_in.0.min(ug_out.0), ug_in.0.max(ug_out.0));
+    let (min_y, max_y) = (ug_in.1.min(ug_out.1), ug_in.1.max(ug_out.1));
     let zone = ClusterZone {
-        x: cx.min(ug_in.0).min(ug_out.0),
-        y: cy.min(ug_in.1).min(ug_out.1),
-        w: ((cx - ug_in.0).abs().max((cx - ug_out.0).abs()) * 2 + 1) as u32,
-        h: ((cy - ug_in.1).abs().max((cy - ug_out.1).abs()) * 2 + 1) as u32,
+        x: min_x,
+        y: min_y,
+        w: (max_x - min_x + 1) as u32,
+        h: (max_y - min_y + 1) as u32,
     };
-
     Some((entities, zone))
 }
 
@@ -3542,14 +3660,13 @@ impl JunctionStrategy for PerpendicularTemplateStrategy {
             kind_a: sa.kind,
             kind_b: sb.kind,
         };
-        let (entities, zone) =
-            solve_perpendicular_template(
-                &info,
-                ctx.hard_obstacles,
-                ctx.unreleasable_obstacles,
-                ctx.routed_paths,
-                ctx.placed_entities,
-            )?;
+        let (entities, zone) = solve_perpendicular_template(
+            &info,
+            ctx.hard_obstacles,
+            ctx.unreleasable_obstacles,
+            ctx.routed_paths,
+            ctx.placed_entities,
+        )?;
         Some(JunctionSolution {
             entities,
             footprint: Rect {

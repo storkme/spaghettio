@@ -674,6 +674,38 @@ impl JunctionStrategy for SatStrategy {
         if !ctx.junction.specs.iter().any(|s| s.kind == SpecKind::Belt) {
             return None;
         }
+        // Belt-on-pipe avoidance: SAT's cost model (10 per UG pair vs
+        // 2 per belt-tile traversal) consistently prefers a 2-tile
+        // surface solution over `bridge_belt_over_pipe`'s UG bypass,
+        // even though the SAT solution silently overstamps the pipe
+        // tile (the boundary entity-list machinery doesn't faithfully
+        // honor `forced_empty` for tiles right next to UG-input
+        // boundaries — see ghost_router.rs:2308 panic). Defer any
+        // junction containing a pipe spec to the perpendicular
+        // template strategy, whose `bridge_belt_over_pipe` knows how
+        // to span multi-pipe runs without touching pipe tiles.
+        if ctx.junction.specs.iter().any(|s| s.kind == SpecKind::Pipe) {
+            return None;
+        }
+        // Belt-on-pipe avoidance, second backstop: even when the pipe
+        // spec was dropped from `participating` by `expand_bbox`'s
+        // strict_range filter (a 1-tile in-bbox presence collapses
+        // start==end and the pipe's frontier is silently dropped),
+        // there's still a pipe entity sitting on the surface inside
+        // the bbox. SAT's `forced_empty` mechanism is supposed to
+        // keep belts off it, but boundary-port handling and SAT's
+        // cost minimum sometimes route through the tile anyway,
+        // panicking the post-place loop with `AlreadyClaimed` over
+        // a Permanent pipe. Bail outright when ANY pipe entity sits
+        // inside the bbox — `bridge_belt_over_pipe` is the only
+        // strategy entitled to plan around pipes.
+        let bbox = &ctx.junction.bbox;
+        let any_pipe_in_bbox = ctx.placed_entities.iter().any(|e| {
+            bbox.contains(e.x, e.y) && (e.name == "pipe" || e.name == "pipe-to-ground")
+        });
+        if any_pipe_in_bbox {
+            return None;
+        }
 
         // Dominant belt tier across participating specs. If a junction
         // carries both yellow and red specs we use red (faster) so the

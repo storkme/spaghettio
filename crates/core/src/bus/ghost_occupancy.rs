@@ -426,10 +426,22 @@ impl Occupancy {
                         releasable_ghost_tiles.is_none_or(|set| set.contains(*tile))
                     }
                     Claim::Permanent { entity_idx } => {
-                        let seg = self
-                            .entities
-                            .get(*entity_idx)
-                            .and_then(|e| e.segment_id.as_deref());
+                        let entity = match self.entities.get(*entity_idx) {
+                            Some(e) => e,
+                            None => return false,
+                        };
+                        // Pipes are inviolable — fluid trunks have no
+                        // junction-solver-aware replacement, so releasing
+                        // them and letting a SAT solution stamp a belt
+                        // over the tile silently destroys fluid networks.
+                        // The `bridge_belt_over_pipe` template tunnels
+                        // belts UNDER pipes via UG (per U4); any path
+                        // that reaches release time AND lands on a pipe
+                        // tile is a strategy bug, not a license to clobber.
+                        if entity.name == "pipe" || entity.name == "pipe-to-ground" {
+                            return false;
+                        }
+                        let seg = entity.segment_id.as_deref();
                         let Some(seg) = seg else { return false; };
                         // Only release main-bus structure: trunk, tapoff,
                         // balancer. Everything else (row entities, poles,

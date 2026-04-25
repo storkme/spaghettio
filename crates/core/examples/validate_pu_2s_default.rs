@@ -24,17 +24,6 @@ fn main() {
         Err(e) => e.issues,
     };
 
-    // Dump column 26 (crude-oil trunk) top-of-bus to first refinery, so
-    // we can see exactly where the fluid network breaks.
-    println!("== Column 26 entities (y=0..30) ==");
-    for y in 0..30 {
-        for e in layout.entities.iter().filter(|e| e.x == 26 && e.y == y) {
-            println!("  ({}, {}) {} dir={:?} io={:?} carries={:?}",
-                e.x, e.y, e.name, e.direction, e.io_type, e.carries);
-        }
-    }
-    println!();
-
     let mut errs = 0;
     let mut warns = 0;
     let mut by_cat: BTreeMap<String, Vec<String>> = BTreeMap::new();

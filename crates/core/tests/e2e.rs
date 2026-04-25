@@ -1527,15 +1527,22 @@ fn stress_advanced_circuit_partitioned_5s_from_plates() {
 /// router, output-merger, or balancer-stamp logic surface immediately. The
 /// counts here are *current* not target — they should shrink as fixes land.
 ///
-/// Categories at baseline (2026-04-26):
-///   - fluid-network (7): trunk entry UG-IN orphans across crude-oil,
-///     petroleum-gas, sulfuric-acid. Caused by gap-fill placing a fresh
-///     UG pair inside the gap rather than completing the entry's pair —
-///     see `bus/ghost_router.rs` Step 3.6.
-///   - belt-item-isolation (8): adjacent belts of different items feeding
+/// Categories at baseline (2026-04-26 — multi-pipe bridge + merger
+/// off-by-one fixes):
+///   - fluid-network (0): pipe orphans gone. `bridge_belt_over_pipe`
+///     now spans contiguous pipe runs (with intervening ghost belts /
+///     reservations) on a single UG pair, and SAT bails outright when
+///     a pipe entity sits inside its bbox. See `bus/ghost_router.rs`
+///     `bridge_belt_over_pipe` and `bus/junction_sat_strategy.rs`.
+///   - belt-dead-end (0): the FluidDualInput placer arm was storing the
+///     OUTPUT-INSERTER row as `output_belt_y` instead of the actual
+///     belt-out row (one tile further south). The output merger picked
+///     up the wrong y and stamped its east-extension belts one row
+///     north of the row's belt-out, leaving every row's east edge
+///     unconnected. Fix in `bus/placer.rs` FluidDualInput arm: the
+///     stored y matches the template's belt-out tile.
+///   - belt-item-isolation (9): adjacent belts of different items feeding
 ///     into each other. Sideload mismatch in vertical-split row borders.
-///   - belt-dead-end (2): output belts at the layout's east edge that
-///     don't reach the merger.
 #[test]
 #[ntest::timeout(120000)]
 fn processing_unit_2s_am2_fast_belts_validation_baseline() {
@@ -1562,9 +1569,9 @@ fn processing_unit_2s_am2_fast_belts_validation_baseline() {
     // Baseline upper bounds — should shrink as fixes land. To reduce a
     // bound, run the test, observe the new count, and tighten here.
     let baseline = [
-        ("fluid-network", 7usize),
+        ("fluid-network", 0usize),
         ("belt-item-isolation", 9),
-        ("belt-dead-end", 2),
+        ("belt-dead-end", 0),
     ];
     let mut regressed = Vec::new();
     for &(cat, max_allowed) in &baseline {

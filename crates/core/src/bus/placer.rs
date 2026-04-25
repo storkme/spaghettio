@@ -488,7 +488,25 @@ pub(crate) fn build_one_row(
             fluid_port_pipes = in_port_pipes;
             fluid_output_port_pipes = out_port_pipes;
             let input_ys = vec![y_cursor + 2, y_cursor + 3];
-            let out_y = output_y;
+            // For solid output, `output_y` from the template is the
+            // OUTPUT INSERTER row; the actual output belt is one tile
+            // further south at `output_y + 1` (see `templates::
+            // fluid_dual_input_row` line 1599-1600 — inserter at
+            // output_y, belt at output_y+1). For fluid output, the
+            // template stamps a continuous pipe row at `output_y`
+            // itself, so no offset.
+            //
+            // Storing the inserter y here used to leak through to the
+            // output merger, which then placed its east-extension
+            // belts one tile north of the row's actual belt-out and
+            // produced belt-dead-end errors at every row's east edge
+            // (e.g. processing-unit @ 2/s row east edges at (75, 174)
+            // and (72, 184) before the fix).
+            let out_y = if output_is_fluid {
+                output_y
+            } else {
+                output_y + 1
+            };
             (ents, rh, input_ys, out_y)
         }
         RowKind::FluidInput => {
