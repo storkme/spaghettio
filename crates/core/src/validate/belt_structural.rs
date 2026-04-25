@@ -143,6 +143,18 @@ pub fn check_belt_loops(layout: &LayoutResult) -> Vec<ValidationIssue> {
         .map(|e| (e.x, e.y))
         .collect();
 
+    // UG-belt tunnels: when items hit a UG-input they jump to the paired
+    // UG-output and continue from (output + direction step). Walking
+    // surface-only treats UG-inputs as if items step to the next surface
+    // tile, which fabricates loops when an unrelated belt happens to be
+    // at the UG-input's "ahead" tile and chains back around. Build the
+    // pair map so the walker can jump.
+    let ug_pairs = build_ug_pairs(&layout.entities);
+    let ug_inputs: FxHashSet<(i32, i32)> = layout.entities.iter()
+        .filter(|e| is_ug_belt(&e.name) && e.io_type.as_deref() == Some("input"))
+        .map(|e| (e.x, e.y))
+        .collect();
+
     let mut issues = Vec::new();
     let mut confirmed: FxHashSet<(i32, i32)> = FxHashSet::default();
     let mut reported_loops: FxHashSet<Vec<(i32, i32)>> = FxHashSet::default();
@@ -159,6 +171,24 @@ pub fn check_belt_loops(layout: &LayoutResult) -> Vec<ValidationIssue> {
         while bdm.contains_key(&cur) && !visited_set.contains(&cur) {
             visited_set.insert(cur);
             visited_order.push(cur);
+            // If `cur` is a UG-input, jump the tunnel: items emerge at the
+            // paired UG-output, then step forward from there.
+            if ug_inputs.contains(&cur) {
+                if let Some(&peer) = ug_pairs.get(&cur) {
+                    if visited_set.contains(&peer) {
+                        cur = peer;
+                        break;
+                    }
+                    visited_set.insert(peer);
+                    visited_order.push(peer);
+                    let d = bdm.get(&peer).copied().unwrap_or(bdm[&cur]);
+                    let (dx, dy) = dir_to_vec(d);
+                    cur = (peer.0 + dx, peer.1 + dy);
+                    continue;
+                }
+                // Unpaired UG-input — items go nowhere; treat as walked-off.
+                break;
+            }
             let d = bdm[&cur];
             let (dx, dy) = dir_to_vec(d);
             cur = (cur.0 + dx, cur.1 + dy);
