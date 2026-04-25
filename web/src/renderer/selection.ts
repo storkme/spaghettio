@@ -145,24 +145,46 @@ export function createSelectionController(
     isDragging = false;
   };
 
+  function clearSelection(): void {
+    selected = [];
+    dragRectG.clear();
+    borderG.clear();
+    onSelectionChange([]);
+  }
+
+  // Right-click on canvas → clear selection. Always suppress the browser
+  // context menu inside the canvas regardless of selection state, so the
+  // canvas behaves consistently.
+  const onContextMenu = (e: MouseEvent) => {
+    e.preventDefault();
+    if (selected.length > 0) clearSelection();
+  };
+
+  // Escape clears selection. Only fire when there's actually something to
+  // clear so we don't shadow other Escape handlers (dialogs, pin, etc.).
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (e.key === "Escape" && selected.length > 0) {
+      clearSelection();
+    }
+  };
+
   canvas.addEventListener("pointerdown", onDown, { capture: true });
   canvas.addEventListener("pointermove", onMove, { capture: true });
   canvas.addEventListener("pointerup", onUp, { capture: true });
+  canvas.addEventListener("contextmenu", onContextMenu);
+  window.addEventListener("keydown", onKeyDown);
 
   return {
     destroy() {
       canvas.removeEventListener("pointerdown", onDown, { capture: true });
       canvas.removeEventListener("pointermove", onMove, { capture: true });
       canvas.removeEventListener("pointerup", onUp, { capture: true });
+      canvas.removeEventListener("contextmenu", onContextMenu);
+      window.removeEventListener("keydown", onKeyDown);
       dragRectG.destroy();
       borderG.destroy();
     },
-    clear() {
-      selected = [];
-      dragRectG.clear();
-      borderG.clear();
-      onSelectionChange([]);
-    },
+    clear: clearSelection,
     getSelected() {
       return [...selected];
     },
