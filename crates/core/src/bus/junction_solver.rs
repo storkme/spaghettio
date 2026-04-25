@@ -35,7 +35,7 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::bus::junction::{BeltTier, Junction, Rect, SpecCrossing, SpecOrigin};
+use crate::bus::junction::{BeltTier, Junction, Rect, SpecCrossing, SpecKind, SpecOrigin};
 use crate::bus::region_walker::{walk_affected, AffectedPath, ShadowView, WalkResult};
 use crate::common::{
     balancer_seg_is_simple, is_machine_entity, is_splitter, is_surface_belt, is_ug_belt,
@@ -548,6 +548,7 @@ impl GrowingRegion {
         spec_belt_tiers: &FxHashMap<String, BeltTier>,
         spec_items: &FxHashMap<String, String>,
         spec_exit_dirs: &FxHashMap<String, EntityDirection>,
+        spec_kinds: &FxHashMap<String, SpecKind>,
     ) -> Junction {
         let mut specs: Vec<SpecCrossing> = Vec::with_capacity(self.participating.len());
         for key in &self.participating {
@@ -588,12 +589,14 @@ impl GrowingRegion {
                 .get(key)
                 .copied()
                 .unwrap_or(BeltTier::Yellow);
+            let kind = spec_kinds.get(key).copied().unwrap_or(SpecKind::Belt);
             specs.push(SpecCrossing {
                 item,
                 belt_tier,
                 entry,
                 exit,
                 origin: SpecOrigin::Participating,
+                kind,
             });
         }
         // Encountered specs: paths that cross the bbox but didn't seed
@@ -631,6 +634,7 @@ impl GrowingRegion {
                 .get(key)
                 .copied()
                 .unwrap_or(BeltTier::Yellow);
+            let kind = spec_kinds.get(key).copied().unwrap_or(SpecKind::Belt);
             specs.push(SpecCrossing {
                 item,
                 belt_tier,
@@ -645,6 +649,7 @@ impl GrowingRegion {
                     direction: exit_dir,
                 },
                 origin: SpecOrigin::Encountered,
+                kind,
             });
         }
         Junction {
@@ -949,6 +954,7 @@ pub fn solve_crossing(
     spec_belt_tiers: &FxHashMap<String, BeltTier>,
     spec_items: &FxHashMap<String, String>,
     spec_exit_dirs: &FxHashMap<String, EntityDirection>,
+    spec_kinds: &FxHashMap<String, SpecKind>,
     placed_entities: &[crate::models::PlacedEntity],
     strategies: &[&dyn JunctionStrategy],
     // Crossing tiles that haven't been solved yet. Used to detect when
@@ -1017,6 +1023,7 @@ pub fn solve_crossing(
         spec_belt_tiers,
         spec_items,
         spec_exit_dirs,
+        spec_kinds,
         hard_obstacles,
         strict_obstacles,
         unreleasable_obstacles,
@@ -1286,6 +1293,7 @@ struct SolveCtx<'a> {
     spec_belt_tiers: &'a FxHashMap<String, BeltTier>,
     spec_items: &'a FxHashMap<String, String>,
     spec_exit_dirs: &'a FxHashMap<String, EntityDirection>,
+    spec_kinds: &'a FxHashMap<String, SpecKind>,
     hard_obstacles: &'a FxHashSet<(i32, i32)>,
     strict_obstacles: &'a FxHashSet<(i32, i32)>,
     unreleasable_obstacles: &'a FxHashSet<(i32, i32)>,
@@ -1322,10 +1330,22 @@ enum TryOutcome {
 /// iter/variant before we consider any strategy.
 fn find_item_conflict(
     boundaries: &[crate::trace::BoundarySnapshot],
+    pipe_items: &FxHashSet<String>,
 ) -> Option<(i32, i32, Vec<String>)> {
     use rustc_hash::FxHashMap;
+    // A belt×pipe crossing puts the belt's item and the pipe's fluid on
+    // the same boundary tile — structurally distinct items, but *not* a
+    // belt-on-belt conflict that growth can fix. The pipe is a fixed
+    // surface entity (`bridge_belt_over_pipe` handles the UG-bypass
+    // directly at the 1×1 region); treating it as a conflict makes the
+    // item-conflict fast-fail skip perp-template every time and grow
+    // the region into a multi-spec blob that SAT then guards against.
+    // Filter pipe items out before counting distinct items per tile.
     let mut by_tile: FxHashMap<(i32, i32), Vec<String>> = FxHashMap::default();
     for b in boundaries {
+        if pipe_items.contains(&b.item) {
+            continue;
+        }
         let items = by_tile.entry((b.x, b.y)).or_default();
         if !items.iter().any(|i| i == &b.item) {
             items.push(b.item.clone());
@@ -1358,6 +1378,7 @@ fn try_solve_on_region(
         ctx.spec_belt_tiers,
         ctx.spec_items,
         ctx.spec_exit_dirs,
+        ctx.spec_kinds,
     );
 
     let boundaries = junction_boundaries_to_snapshots(
@@ -1372,7 +1393,16 @@ fn try_solve_on_region(
     // SAT is provably UNSAT regardless of strategy. Skip every strategy
     // for this iter and let growth expand outward to put the conflict
     // in the interior (where SAT can route around it via UG tunnels).
-    let conflict = find_item_conflict(&boundaries);
+    // Exclude pipe-kind items — a fluid trunk sharing a boundary tile
+    // with a belt isn't an unroutable conflict; `bridge_belt_over_pipe`
+    // handles that shape.
+    let pipe_items: FxHashSet<String> = junction
+        .specs
+        .iter()
+        .filter(|s| s.kind == SpecKind::Pipe)
+        .map(|s| s.item.clone())
+        .collect();
+    let conflict = find_item_conflict(&boundaries, &pipe_items);
     let mut tiles: Vec<(i32, i32)> = region.tiles.iter().copied().collect();
     tiles.sort();
     let mut forbidden: Vec<(i32, i32)> = region.forbidden_tiles.iter().copied().collect();
@@ -1478,6 +1508,14 @@ fn try_solve_on_region(
         // SAT's proposed placements and reject if any routed path
         // breaks. Catches locally-valid SAT solutions that break a
         // perpendicular trunk.
+        //
+        // For affected paths, baseline-subtract pre-existing pipe-tile
+        // breaks so a belt×pipe bypass isn't vetoed by a pipe at a
+        // neighbour tile that's itself a pending crossing (the walker's
+        // trim_path_near_bbox range routinely includes neighbour pipe
+        // columns that a later belt×pipe solve will bridge on its own).
+        // Other pre-existing breaks aren't subtracted: a cluster is
+        // responsible for leaving every flow it touches connected.
         let bbox = region.bbox;
         let released: FxHashSet<(i32, i32)> =
             sol.entities.iter().map(|e| (e.x, e.y)).collect();
@@ -1494,8 +1532,40 @@ fn try_solve_on_region(
                 })
             })
             .collect();
+        // Belt flows crossing a pipe column are broken *in the routed
+        // path* at the pipe tile (the survivor filter dropped the belt
+        // there, leaving a gap). A neighbouring cluster's solve sees
+        // that pre-existing break when the walker's trim range runs
+        // through the pipe. Skip breaks on segments whose trimmed slice
+        // runs through at least one pipe-kind spec tile — those flows
+        // will be re-connected by the belt×pipe solve on that tile,
+        // not by the cluster we're currently verifying.
+        let pipe_tiles: FxHashSet<(i32, i32)> = ctx
+            .routed_paths
+            .iter()
+            .filter(|(seg, _)| {
+                matches!(
+                    ctx.spec_kinds.get(seg.as_str()),
+                    Some(SpecKind::Pipe)
+                )
+            })
+            .flat_map(|(_, tiles)| tiles.iter().copied())
+            .collect();
+        let pipe_crossing_segments: FxHashSet<&str> = affected
+            .iter()
+            .filter(|p| p.tiles.iter().any(|t| pipe_tiles.contains(t)))
+            .map(|p| p.segment_id)
+            .collect();
         let shadow = ShadowView::build(ctx.placed_entities, &released, &sol.entities);
-        if let WalkResult::Broken { breaks } = walk_affected(&affected, &shadow) {
+        if let WalkResult::Broken { breaks: all_breaks } = walk_affected(&affected, &shadow) {
+            let breaks: Vec<_> = all_breaks
+                .into_iter()
+                .filter(|b| !pipe_crossing_segments.contains(b.segment_id.as_str()))
+                .collect();
+            if breaks.is_empty() {
+                // Every reported break is on a segment crossing a pipe
+                // tile — owned by the belt×pipe solve, not this one.
+            } else {
             dump_walker_veto(
                 ctx,
                 &region.bbox,
@@ -1541,6 +1611,7 @@ fn try_solve_on_region(
             // variants to pick the next expansion direction.
             veto_tiles.extend(breaks.iter().map(|b| b.tile));
             continue;
+            }
         }
 
         trace::emit(TraceEvent::JunctionStrategyAttempt {

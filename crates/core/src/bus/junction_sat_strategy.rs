@@ -23,7 +23,7 @@
 
 use rustc_hash::FxHashSet;
 
-use crate::bus::junction::{BeltTier, Rect, SpecCrossing};
+use crate::bus::junction::{BeltTier, Rect, SpecCrossing, SpecKind};
 use crate::bus::junction_solver::{JunctionSolution, JunctionStrategy, JunctionStrategyContext};
 use crate::common::{is_splitter, is_surface_belt, is_ug_belt, splitter_second_tile, ug_max_reach};
 use crate::models::{EntityDirection, PlacedEntity};
@@ -655,6 +655,16 @@ impl JunctionStrategy for SatStrategy {
             return None;
         }
         if ctx.junction.specs.is_empty() {
+            return None;
+        }
+        // SAT's encoder treats every spec as a belt — it has no notion
+        // of a fixed-surface pipe that must not be routed over. If the
+        // junction carries any pipe-kind spec, defer to higher-level
+        // strategies (`bridge_belt_over_pipe` in the perpendicular
+        // template, or an Unresolved region) rather than emitting a
+        // SAT model that would stamp belts on top of the pipe.
+        // Pipe-aware SAT is Phase 3 in `docs/rfp-pipe-belt-junctions.md`.
+        if ctx.junction.specs.iter().any(|s| s.kind == SpecKind::Pipe) {
             return None;
         }
 

@@ -215,6 +215,12 @@ pub fn replay_region_fixture(fixture: &RegionFixture) -> RegionReplayResult {
         .iter()
         .map(|(k, &v)| (k.clone(), v))
         .collect();
+    // Fixtures predate pipe-belt junctions; no stored fixture has a
+    // pipe-kind spec. Default everything to Belt.
+    let spec_kinds: FxHashMap<String, crate::bus::junction::SpecKind> = spec_items
+        .keys()
+        .map(|k| (k.clone(), crate::bus::junction::SpecKind::Belt))
+        .collect();
 
     // Production strategies: same list as `ghost_router.rs:1382-1406`.
     // Kept inline instead of lifted to a pub helper because the list
@@ -247,6 +253,7 @@ pub fn replay_region_fixture(fixture: &RegionFixture) -> RegionReplayResult {
         &spec_belt_tiers,
         &spec_items,
         &spec_exit_dirs,
+        &spec_kinds,
         &fixture.placed_entities,
         &strategies,
         &pending_crossings,

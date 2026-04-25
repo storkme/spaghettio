@@ -1521,19 +1521,17 @@ fn stress_advanced_circuit_partitioned_5s_from_plates() {
 }
 
 /// User's processing-unit @ 1/s repro for the pipe×belt severance bug.
-/// AM2 + sulfuric-acid input. The cluster forms (the `classify_crossing`
-/// pre-cluster gate was relaxed in Phase 1 to allow single-spec
-/// crossings on forbidden tiles) and reaches `solve_crossing`, but SAT
-/// produces degenerate "do nothing" proposals — its encoder doesn't
-/// constrain single-spec continuity, so the trivial "leave existing
-/// belts in place" model satisfies all boundary constraints without
-/// actually bridging the pipe. The walker correctly vetoes.
-///
-/// Phase 2 will need either SAT-encoder single-spec continuity, a
-/// dedicated single-spec bridge strategy, or layout-time pipe-placement
-/// avoidance. Un-ignore once any of those lands.
+/// AM2 + sulfuric-acid input. Phase 2 landed `bridge_belt_over_pipe` +
+/// the fluid-trunk synth path plumbing, which drops the error count on
+/// this layout from 9 → 6 by solving isolated belt×pipe crossings. The
+/// remaining failures all involve a big belt×belt SAT cluster adjacent
+/// to a pipe column: the SAT solve stamps UG-outs on tiles the belt×pipe
+/// solve needs for its UG-ins, and the commit filter (rightly) refuses
+/// to overwrite them. Phase 3 (SAT pipe-awareness in multi-cluster
+/// zones) is required to drive this to zero — see
+/// `docs/rfp-pipe-belt-junctions.md`.
 #[test]
-#[ignore = "Phase 2: SAT encoder doesn't enforce single-spec continuity, can't bridge belt over forbidden pipe tile (see RFP doc)"]
+#[ignore = "Phase 3: belt×belt SAT cluster claims the tiles the adjacent belt×pipe bypass needs (see RFP doc)"]
 #[ntest::timeout(60000)]
 fn pipe_belt_processing_unit_1s_routes() {
     let inputs: FxHashSet<String> = ["iron-plate", "copper-plate", "plastic-bar", "sulfuric-acid"]

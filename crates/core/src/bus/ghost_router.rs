@@ -719,7 +719,22 @@ pub fn route_bus_ghost(
         }
         if let Some(item) = &ent.carries {
             trunk_tile_items.insert((ent.x, ent.y), item.clone());
+            // Also inject a synthetic fluid-trunk path so classify_crossing
+            // sees the pipe column as a second spec at belt×pipe crossing
+            // tiles. Key format mirrors the solid-trunk synth path format
+            // (`trunk:{item}:{x}`) — downstream lookups in spec_kinds
+            // branch on pipe-vs-belt, not on the key shape.
+            trunk_synth_paths
+                .entry(format!("trunk:{}:{}", item, ent.x))
+                .or_default()
+                .push((ent.x, ent.y));
         }
+    }
+    // Re-sort after the fluid catch-up: solid-lane tiles were already
+    // sorted, fluid-lane tiles need to be merged in.
+    for path in trunk_synth_paths.values_mut() {
+        path.sort_by_key(|&(_, y)| y);
+        path.dedup();
     }
 
     // -------------------------------------------------------------------------
@@ -1541,22 +1556,36 @@ pub fn route_bus_ghost(
         .iter()
         .filter_map(|s| s.exit_dir.map(|d| (s.key.clone(), d)))
         .collect();
+    // Parallel to spec_items / spec_belt_tiers. Distinguishes belt specs
+    // (default) from fluid-trunk synth paths so downstream templates can
+    // branch: a belt×pipe crossing must UG-bridge the belt without
+    // stamping anything on the pipe tile. See RFP `docs/rfp-pipe-belt-junctions.md`.
+    let mut spec_kinds: FxHashMap<String, crate::bus::junction::SpecKind> = specs
+        .iter()
+        .map(|s| (s.key.clone(), crate::bus::junction::SpecKind::Belt))
+        .collect();
     // Extend with synthetic trunk entries so classify_crossing can resolve
     // item name and belt tier for trunk keys found in routed_paths. Keys
     // match the per-column format used when populating `trunk_synth_paths`
     // ("trunk:{item}:{x}") so multi-lane items register distinct keys per
-    // column.
+    // column. Solid trunks get Belt kind, fluid trunks get Pipe.
     for lane in lanes {
-        if lane.is_fluid {
-            continue;
-        }
         let key = format!("trunk:{}:{}", lane.item, lane.x);
         spec_items.insert(key.clone(), lane.item.clone());
-        spec_belt_tiers.insert(
-            key,
-            BeltTier::from_name(belt_entity_for_rate(lane.rate * 2.0, max_belt_tier))
-                .unwrap_or(BeltTier::Yellow),
-        );
+        if lane.is_fluid {
+            // Fluid trunks: tier is irrelevant (pipes don't have a tier),
+            // but the map needs an entry so classify_crossing doesn't
+            // bail with `continue`. Yellow is a harmless default.
+            spec_belt_tiers.insert(key.clone(), BeltTier::Yellow);
+            spec_kinds.insert(key, crate::bus::junction::SpecKind::Pipe);
+        } else {
+            spec_belt_tiers.insert(
+                key.clone(),
+                BeltTier::from_name(belt_entity_for_rate(lane.rate * 2.0, max_belt_tier))
+                    .unwrap_or(BeltTier::Yellow),
+            );
+            spec_kinds.insert(key, crate::bus::junction::SpecKind::Belt);
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -1629,6 +1658,10 @@ pub fn route_bus_ghost(
         spec_items.remove(&trunk_key);
         spec_items.remove(&last_tap_key);
         spec_items.insert(unified_key.clone(), lane.item.clone());
+
+        spec_kinds.remove(&trunk_key);
+        spec_kinds.remove(&last_tap_key);
+        spec_kinds.insert(unified_key.clone(), crate::bus::junction::SpecKind::Belt);
 
         // exit_dir propagates from the last tap (east at the bus-edge
         // terminus) since that's where the unified flow exits the
@@ -1744,6 +1777,7 @@ pub fn route_bus_ghost(
         &unhandled_crossings,
         &routed_paths,
         &spec_belt_tiers,
+        &spec_kinds,
     );
 
     for cluster in &clusters {
@@ -1771,7 +1805,7 @@ pub fn route_bus_ghost(
         // letting pipe×belt (and any future single-spec bypass case)
         // reach the solver.
         let any_undecidable = cluster.iter().any(|&t| {
-            if classify_crossing(t, &routed_paths, &specs, &spec_items, &spec_belt_tiers).is_some() {
+            if classify_crossing(t, &routed_paths, &specs, &spec_items, &spec_belt_tiers, &spec_kinds).is_some() {
                 return false;
             }
             let spec_count_at_tile = routed_paths
@@ -1841,6 +1875,7 @@ pub fn route_bus_ghost(
             &spec_belt_tiers,
             &spec_items,
             &spec_exit_dirs,
+            &spec_kinds,
             &entities,
             &strategies,
             &pending_crossings,
@@ -2135,6 +2170,7 @@ pub fn route_bus_ghost(
         &specs,
         &spec_items,
         &spec_belt_tiers,
+        &spec_kinds,
         &ghost_item_at,
     );
 
@@ -2300,9 +2336,16 @@ struct CrossingInfo {
     /// The two specs that cross, with their direction at the crossing tile.
     spec_a: (String, EntityDirection), // (item, direction)
     spec_b: (String, EntityDirection),
-    /// Belt name for each spec (for entity construction).
+    /// Belt name for each spec (for entity construction). Unused when the
+    /// corresponding kind is `Pipe` — pipe specs are fixed in place and
+    /// don't get belt-family entities stamped.
     belt_a: &'static str,
     belt_b: &'static str,
+    /// Transport kind per spec. Belt×Belt crossings go through the
+    /// existing `try_bridge`; Belt×Pipe short-circuits to
+    /// `bridge_belt_over_pipe`, which never stamps over the pipe tile.
+    kind_a: crate::bus::junction::SpecKind,
+    kind_b: crate::bus::junction::SpecKind,
 }
 
 /// Check if two directions are perpendicular.
@@ -2343,7 +2386,9 @@ fn cluster_adjacent_crossings(
     crossing_set: &FxHashSet<(i32, i32)>,
     routed_paths: &FxHashMap<String, Vec<(i32, i32)>>,
     spec_belt_tiers: &FxHashMap<String, BeltTier>,
+    spec_kinds: &FxHashMap<String, crate::bus::junction::SpecKind>,
 ) -> Vec<Vec<(i32, i32)>> {
+    use crate::bus::junction::SpecKind;
     if crossing_set.is_empty() {
         return Vec::new();
     }
@@ -2358,10 +2403,35 @@ fn cluster_adjacent_crossings(
         .map(|(i, &t)| (t, i))
         .collect();
 
+    // Tiles that sit on a pipe-kind spec's path. These are belt×pipe
+    // crossings and MUST stay as singleton clusters — the perpendicular
+    // template's `bridge_belt_over_pipe` handles the 2-spec case directly.
+    // Merging them with belt×belt neighbours produces multi-spec clusters
+    // that neither the template (requires exactly 2 specs) nor SAT (guards
+    // against pipe-kind specs per Phase 3 in the RFP) can solve.
+    let mut pipe_tiles: FxHashSet<usize> = FxHashSet::default();
+    for (key, path) in routed_paths {
+        if !matches!(spec_kinds.get(key.as_str()), Some(SpecKind::Pipe)) {
+            continue;
+        }
+        for t in path {
+            if let Some(&i) = index_of.get(t) {
+                pipe_tiles.insert(i);
+            }
+        }
+    }
+
     // tile → set of spec keys whose path passes through it.
+    // Pipe-kind specs (fluid-trunk synth paths) are excluded: they're
+    // stationary carriers, not flows that need joint routing across
+    // crossings. Including them would merge every belt×pipe crossing
+    // sharing a pipe column into one giant multi-spec cluster.
     let mut tile_specs: Vec<FxHashSet<&str>> =
         vec![FxHashSet::default(); tiles.len()];
     for (key, path) in routed_paths {
+        if matches!(spec_kinds.get(key.as_str()), Some(SpecKind::Pipe)) {
+            continue;
+        }
         for t in path {
             if let Some(&i) = index_of.get(t) {
                 tile_specs[i].insert(key.as_str());
@@ -2397,10 +2467,18 @@ fn cluster_adjacent_crossings(
         (1, 1), (1, -1),      // Manhattan 2 diagonals
     ];
     for (i, &(x, y)) in tiles.iter().enumerate() {
+        // Belt×pipe crossings stay singleton — don't consider them as
+        // merge candidates from either side.
+        if pipe_tiles.contains(&i) {
+            continue;
+        }
         for &(dx, dy) in OFFSETS {
             let Some(&j) = index_of.get(&(x + dx, y + dy)) else {
                 continue;
             };
+            if pipe_tiles.contains(&j) {
+                continue;
+            }
             if tile_specs[i].is_disjoint(&tile_specs[j]) {
                 continue;
             }
@@ -2459,6 +2537,11 @@ fn cluster_adjacent_crossings(
             let (i, p_i) = w[0];
             let (j, p_j) = w[1];
             if p_j - p_i > reach_threshold {
+                continue;
+            }
+            // Belt×pipe crossings stay singleton; never pull them into
+            // or rescue them via UG-reach merges.
+            if pipe_tiles.contains(&i) || pipe_tiles.contains(&j) {
                 continue;
             }
             let ri = find(&mut parent, i);
@@ -2523,12 +2606,14 @@ fn classify_crossing(
     specs: &[BeltSpec],
     spec_items: &FxHashMap<String, String>,
     spec_belt_tiers: &FxHashMap<String, BeltTier>,
+    spec_kinds: &FxHashMap<String, crate::bus::junction::SpecKind>,
 ) -> Option<CrossingInfo> {
+    use crate::bus::junction::SpecKind;
     let (cx, cy) = tile;
 
     let spec_map: FxHashMap<&str, &BeltSpec> = specs.iter().map(|s| (s.key.as_str(), s)).collect();
-    // Each entry: (item, belt_name, direction)
-    let mut crossing_specs: Vec<(String, &'static str, EntityDirection)> = Vec::new();
+    // Each entry: (item, belt_name, direction, kind)
+    let mut crossing_specs: Vec<(String, &'static str, EntityDirection, SpecKind)> = Vec::new();
 
     for (key, path) in routed_paths {
         // Derive item and belt_name from BeltSpec when available; fall back
@@ -2544,6 +2629,7 @@ fn classify_crossing(
         } else {
             continue;
         };
+        let kind = spec_kinds.get(key.as_str()).copied().unwrap_or(SpecKind::Belt);
 
         for (i, &(px, py)) in path.iter().enumerate() {
             if px == cx && py == cy {
@@ -2560,7 +2646,7 @@ fn classify_crossing(
                 } else {
                     continue;
                 };
-                crossing_specs.push((item, belt_name, dir));
+                crossing_specs.push((item, belt_name, dir, kind));
                 break;
             }
         }
@@ -2569,8 +2655,8 @@ fn classify_crossing(
     if crossing_specs.len() != 2 {
         return None;
     }
-    let (ref item_a, belt_a, da) = crossing_specs[0];
-    let (ref item_b, belt_b, db) = crossing_specs[1];
+    let (ref item_a, belt_a, da, ka) = crossing_specs[0];
+    let (ref item_b, belt_b, db, kb) = crossing_specs[1];
 
     Some(CrossingInfo {
         tile,
@@ -2578,6 +2664,8 @@ fn classify_crossing(
         spec_b: (item_b.clone(), db),
         belt_a,
         belt_b,
+        kind_a: ka,
+        kind_b: kb,
     })
 }
 
@@ -2593,9 +2681,10 @@ fn emit_unresolved_junctions(
     specs: &[BeltSpec],
     spec_items: &FxHashMap<String, String>,
     spec_belt_tiers: &FxHashMap<String, BeltTier>,
+    spec_kinds: &FxHashMap<String, crate::bus::junction::SpecKind>,
     ghost_item_at: &FxHashMap<(i32, i32), String>,
 ) -> Vec<LayoutRegion> {
-    use crate::bus::junction::{Junction, Rect, SpecCrossing, SpecOrigin};
+    use crate::bus::junction::{Junction, Rect, SpecCrossing, SpecKind, SpecOrigin};
     use crate::models::{PortPoint, RegionKind};
 
     let _ = ghost_item_at;
@@ -2610,21 +2699,22 @@ fn emit_unresolved_junctions(
     for (tx, ty) in tiles {
         let bbox = Rect { x: tx, y: ty, w: 1, h: 1 };
         let junction_specs: Vec<SpecCrossing> =
-            classify_crossing((tx, ty), routed_paths, specs, spec_items, spec_belt_tiers)
+            classify_crossing((tx, ty), routed_paths, specs, spec_items, spec_belt_tiers, spec_kinds)
             .map(|info| {
                 // 1×1 bbox: entry and exit sit on the same tile; direction
                 // encodes the flow. The lowering in `Junction::to_layout_region`
                 // picks the correct edges from `(io, direction)`.
-                let make = |item: String, dir: EntityDirection, belt: &str| SpecCrossing {
+                let make = |item: String, dir: EntityDirection, belt: &str, kind: SpecKind| SpecCrossing {
                     item,
                     belt_tier: BeltTier::from_name(belt).unwrap_or(BeltTier::Yellow),
                     entry: PortPoint { x: tx, y: ty, direction: dir },
                     exit: PortPoint { x: tx, y: ty, direction: dir },
                     origin: SpecOrigin::Participating,
+                    kind,
                 };
                 vec![
-                    make(info.spec_a.0, info.spec_a.1, info.belt_a),
-                    make(info.spec_b.0, info.spec_b.1, info.belt_b),
+                    make(info.spec_a.0, info.spec_a.1, info.belt_a, info.kind_a),
+                    make(info.spec_b.0, info.spec_b.1, info.belt_b, info.kind_b),
                 ]
             })
             .unwrap_or_default();
@@ -2810,6 +2900,36 @@ fn solve_perpendicular_template(
     routed_paths: &FxHashMap<String, Vec<(i32, i32)>>,
     placed_entities: &[PlacedEntity],
 ) -> Option<(Vec<PlacedEntity>, ClusterZone)> {
+    use crate::bus::junction::SpecKind;
+    // Pipe×belt short-circuit. The pipe is a fixed-surface entity that
+    // belongs to a fluid-trunk column; the belt must UG-bypass it
+    // without anything getting stamped on the pipe tile itself. See
+    // `docs/rfp-pipe-belt-junctions.md` for the full story.
+    match (info.kind_a, info.kind_b) {
+        (SpecKind::Pipe, SpecKind::Pipe) => return None,
+        (SpecKind::Pipe, SpecKind::Belt) => {
+            return bridge_belt_over_pipe(
+                info,
+                /* pipe_is_a = */ true,
+                hard_obstacles,
+                unreleasable_obstacles,
+                routed_paths,
+                placed_entities,
+            );
+        }
+        (SpecKind::Belt, SpecKind::Pipe) => {
+            return bridge_belt_over_pipe(
+                info,
+                /* pipe_is_a = */ false,
+                hard_obstacles,
+                unreleasable_obstacles,
+                routed_paths,
+                placed_entities,
+            );
+        }
+        (SpecKind::Belt, SpecKind::Belt) => {}
+    }
+
     let perpendicular = is_perpendicular(info.spec_a.1, info.spec_b.1);
     if !perpendicular {
         // Same-direction crossings — single attempt, bridge spec_b arbitrarily.
@@ -2998,6 +3118,163 @@ fn try_bridge(
     Some((entities, zone))
 }
 
+/// UG-bridge a belt spec around a pipe spec at the crossing tile.
+///
+/// The pipe is a fixed-surface entity belonging to a fluid-trunk column —
+/// it stays put, and nothing gets stamped on `(cx, cy)`. The belt enters
+/// a UG-in on one side of the pipe and exits a UG-out on the other.
+/// Obstacle / turn / sideload checks on the UG endpoints mirror
+/// `try_bridge`'s belt-side handling.
+///
+/// `pipe_is_a` selects which entry in `CrossingInfo` is the pipe — the
+/// other is the belt we're bridging. Returns `None` if any belt-side UG
+/// endpoint is obstructed, turns, or receives a sideload; the caller
+/// falls through to the SAT strategies (which currently defer on
+/// pipe-kind specs via `SatStrategy`).
+fn bridge_belt_over_pipe(
+    info: &CrossingInfo,
+    pipe_is_a: bool,
+    hard_obstacles: &FxHashSet<(i32, i32)>,
+    unreleasable_obstacles: &FxHashSet<(i32, i32)>,
+    routed_paths: &FxHashMap<String, Vec<(i32, i32)>>,
+    placed_entities: &[PlacedEntity],
+) -> Option<(Vec<PlacedEntity>, ClusterZone)> {
+    let (cx, cy) = info.tile;
+    let (belt_item, belt_dir, belt_name) = if pipe_is_a {
+        (&info.spec_b.0, info.spec_b.1, info.belt_b)
+    } else {
+        (&info.spec_a.0, info.spec_a.1, info.belt_a)
+    };
+
+    let (dx, dy) = match belt_dir {
+        EntityDirection::North => (0, -1),
+        EntityDirection::South => (0, 1),
+        EntityDirection::East => (1, 0),
+        EntityDirection::West => (-1, 0),
+    };
+    let ug_in = (cx - dx, cy - dy);
+    let ug_out = (cx + dx, cy + dy);
+
+    let bridge_axis_label: &'static str = match belt_dir {
+        EntityDirection::North | EntityDirection::South => "vertical",
+        EntityDirection::East | EntityDirection::West => "horizontal",
+    };
+    let reject = |reason: &'static str| -> Option<(Vec<PlacedEntity>, ClusterZone)> {
+        trace::emit(trace::TraceEvent::JunctionTemplateRejected {
+            tile_x: cx,
+            tile_y: cy,
+            bridge_dir: bridge_axis_label.to_string(),
+            reason: reason.to_string(),
+        });
+        None
+    };
+
+    // Belt-side endpoint checks. The pipe tile itself is left alone —
+    // no stamp goes on it, so we don't consult the obstacle sets for
+    // `(cx, cy)`.
+    if hard_obstacles.contains(&ug_in) {
+        return reject("hard_obstacle_ug_in");
+    }
+    if unreleasable_obstacles.contains(&ug_in) {
+        return reject("unreleasable_obstacle_ug_in");
+    }
+    if hard_obstacles.contains(&ug_out) {
+        return reject("hard_obstacle_ug_out");
+    }
+    if unreleasable_obstacles.contains(&ug_out) {
+        return reject("unreleasable_obstacle_ug_out");
+    }
+    if any_spec_turns_at(ug_in, routed_paths) {
+        return reject("turn_at_ug_in");
+    }
+    if any_spec_turns_at(ug_out, routed_paths) {
+        return reject("turn_at_ug_out");
+    }
+
+    // Exclude the belt's own path key from the conflict check. Match by
+    // item name in the key (e.g. `flow:iron-plate:21`, `tap:iron-plate:...`)
+    // — the pipe's synth key (`trunk:sulfuric-acid:21`) won't match.
+    let belt_item_str = belt_item.as_str();
+    let bridge_key = routed_paths
+        .iter()
+        .find(|(k, path)| path.contains(&info.tile) && k.contains(belt_item_str))
+        .map(|(k, _)| k.as_str())
+        .unwrap_or("");
+    if let Some(sub) = ug_endpoint_conflicts(ug_in, belt_dir, bridge_key, routed_paths, placed_entities) {
+        return reject(match sub {
+            "axis_conflict" => "ug_in_axis_conflict",
+            "sideload" => "ug_in_sideload",
+            _ => "ug_in_conflict",
+        });
+    }
+    if let Some(sub) = ug_endpoint_conflicts(ug_out, belt_dir, bridge_key, routed_paths, placed_entities) {
+        return reject(match sub {
+            "axis_conflict" => "ug_out_axis_conflict",
+            "sideload" => "ug_out_sideload",
+            _ => "ug_out_conflict",
+        });
+    }
+
+    let ug_name = ug_for_belt(belt_name);
+    let seg = Some(format!("junction:{}:{},{}", belt_item, cx, cy));
+
+    // `release_for_pertile_template` clears `trunk:` Permanent claims in
+    // the release rect so templates can rebuild the bus. For belt×belt
+    // crossings that's fine — both trunks get re-stamped. For belt×pipe,
+    // the pipe stays fixed, so we need to re-emit it verbatim as part
+    // of the solve's entity list.
+    //
+    // Important: the post-route filter at the end of `route_bus_ghost`
+    // drops `trunk:*` entities whose Occupancy claim isn't `Permanent`.
+    // Our commit path places with `ClaimKindTag::Template`, so re-using
+    // the original `trunk:*` segment_id would get the pipe silently
+    // filtered out. Re-tag as `junction:{item}:{cx},{cy}` so it survives
+    // the filter — the stamp is still a pipe entity at the same tile,
+    // carrying the same fluid, which is all Factorio needs for fluid
+    // connectivity.
+    let Some(mut pipe_entity) = placed_entities
+        .iter()
+        .find(|e| (e.x, e.y) == (cx, cy))
+        .cloned()
+    else {
+        return reject("pipe_tile_missing");
+    };
+    pipe_entity.segment_id = seg.clone();
+
+    let entities = vec![
+        pipe_entity,
+        PlacedEntity {
+            name: ug_name.to_string(),
+            x: ug_in.0,
+            y: ug_in.1,
+            direction: belt_dir,
+            io_type: Some("input".to_string()),
+            carries: Some(belt_item.clone()),
+            segment_id: seg.clone(),
+            ..Default::default()
+        },
+        PlacedEntity {
+            name: ug_name.to_string(),
+            x: ug_out.0,
+            y: ug_out.1,
+            direction: belt_dir,
+            io_type: Some("output".to_string()),
+            carries: Some(belt_item.clone()),
+            segment_id: seg.clone(),
+            ..Default::default()
+        },
+    ];
+
+    let zone = ClusterZone {
+        x: cx.min(ug_in.0).min(ug_out.0),
+        y: cy.min(ug_in.1).min(ug_out.1),
+        w: ((cx - ug_in.0).abs().max((cx - ug_out.0).abs()) * 2 + 1) as u32,
+        h: ((cy - ug_in.1).abs().max((cy - ug_out.1).abs()) * 2 + 1) as u32,
+    };
+
+    Some((entities, zone))
+}
+
 /// Belt entity name for a junction-solver `BeltTier`. Matches the
 /// surface belt names that `BeltSpec::belt_name` holds.
 fn belt_name_for_tier(tier: BeltTier) -> &'static str {
@@ -3056,6 +3333,8 @@ impl JunctionStrategy for PerpendicularTemplateStrategy {
             spec_b: (sb.item.clone(), db),
             belt_a: belt_name_for_tier(sa.belt_tier),
             belt_b: belt_name_for_tier(sb.belt_tier),
+            kind_a: sa.kind,
+            kind_b: sb.kind,
         };
         let (entities, zone) =
             solve_perpendicular_template(
@@ -3274,18 +3553,24 @@ mod cluster_adjacent_crossings_tests {
         FxHashMap::default()
     }
 
+    fn no_kinds() -> FxHashMap<String, crate::bus::junction::SpecKind> {
+        // All unit tests model belt×belt clusters; empty map defaults
+        // to SpecKind::Belt for every key.
+        FxHashMap::default()
+    }
+
     #[test]
     fn empty_input_returns_empty() {
         let cs = FxHashSet::default();
         let rp = FxHashMap::default();
-        assert!(cluster_adjacent_crossings(&cs, &rp, &no_tiers()).is_empty());
+        assert!(cluster_adjacent_crossings(&cs, &rp, &no_tiers(), &no_kinds()).is_empty());
     }
 
     #[test]
     fn single_tile_becomes_single_cluster() {
         let cs = crossings(&[(5, 5)]);
         let rp = paths(&[("tap:iron-plate", &[(5, 5)])]);
-        let clusters = cluster_adjacent_crossings(&cs, &rp, &no_tiers());
+        let clusters = cluster_adjacent_crossings(&cs, &rp, &no_tiers(), &no_kinds());
         assert_eq!(clusters, vec![vec![(5, 5)]]);
     }
 
@@ -3304,7 +3589,7 @@ mod cluster_adjacent_crossings_tests {
             ("trunk:copper-cable:16", &[(16, 89), (16, 90), (16, 91)]),
             ("trunk:copper-cable:17", &[(17, 89), (17, 90), (17, 91)]),
         ]);
-        let clusters = cluster_adjacent_crossings(&cs, &rp, &no_tiers());
+        let clusters = cluster_adjacent_crossings(&cs, &rp, &no_tiers(), &no_kinds());
         assert_eq!(clusters.len(), 1);
         assert_eq!(
             clusters[0],
@@ -3323,7 +3608,7 @@ mod cluster_adjacent_crossings_tests {
             ("tap:c", &[(11, 10)]),
             ("trunk:d", &[(11, 9), (11, 10), (11, 11)]),
         ]);
-        let clusters = cluster_adjacent_crossings(&cs, &rp, &no_tiers());
+        let clusters = cluster_adjacent_crossings(&cs, &rp, &no_tiers(), &no_kinds());
         assert_eq!(clusters.len(), 2);
         assert_eq!(clusters, vec![vec![(10, 10)], vec![(11, 10)]]);
     }
@@ -3342,7 +3627,7 @@ mod cluster_adjacent_crossings_tests {
             ("trunk:a", &[(5, 4), (5, 5), (5, 6)]),
             ("trunk:b", &[(8, 4), (8, 5), (8, 6)]),
         ]);
-        let clusters = cluster_adjacent_crossings(&cs, &rp, &no_tiers());
+        let clusters = cluster_adjacent_crossings(&cs, &rp, &no_tiers(), &no_kinds());
         assert_eq!(clusters.len(), 1);
     }
 
@@ -3358,7 +3643,7 @@ mod cluster_adjacent_crossings_tests {
         let cs = crossings(&tiles);
         let path: Vec<(i32, i32)> = (0..=20 * 4).map(|x| (x, 5)).collect();
         let rp = paths(&[("tap:shared", path.as_slice())]);
-        let clusters = cluster_adjacent_crossings(&cs, &rp, &no_tiers());
+        let clusters = cluster_adjacent_crossings(&cs, &rp, &no_tiers(), &no_kinds());
         assert!(
             clusters.len() > 1,
             "expected hull-budget to split the chain; got {} cluster(s)",
@@ -3378,7 +3663,7 @@ mod cluster_adjacent_crossings_tests {
             ("trunk:a", &[(5, 4), (5, 5), (5, 6)]),
             ("trunk:b", &[(7, 4), (7, 5), (7, 6)]),
         ]);
-        let clusters = cluster_adjacent_crossings(&cs, &rp, &no_tiers());
+        let clusters = cluster_adjacent_crossings(&cs, &rp, &no_tiers(), &no_kinds());
         assert_eq!(clusters.len(), 1);
         assert_eq!(clusters[0], vec![(5, 5), (7, 5)]);
     }
@@ -3394,7 +3679,7 @@ mod cluster_adjacent_crossings_tests {
             ("trunk:a", &[(5, 4), (5, 5), (5, 6)]),
             ("trunk:b", &[(6, 5), (6, 6), (6, 7)]),
         ]);
-        let clusters = cluster_adjacent_crossings(&cs, &rp, &no_tiers());
+        let clusters = cluster_adjacent_crossings(&cs, &rp, &no_tiers(), &no_kinds());
         assert_eq!(clusters.len(), 1);
     }
 
@@ -3409,7 +3694,7 @@ mod cluster_adjacent_crossings_tests {
             ("trunk:x", &[(5, 4), (5, 5), (5, 6)]),
             ("trunk:y", &[(7, 4), (7, 5), (7, 6)]),
         ]);
-        let clusters = cluster_adjacent_crossings(&cs, &rp, &no_tiers());
+        let clusters = cluster_adjacent_crossings(&cs, &rp, &no_tiers(), &no_kinds());
         assert_eq!(clusters.len(), 2);
     }
 }

@@ -105,6 +105,17 @@ pub enum SpecOrigin {
     Encountered,
 }
 
+/// What kind of transport this spec represents. Belts and pipes both
+/// cross junction zones, but only belts get UG-bridged by the
+/// perpendicular template — pipe specs are "fixed surface" entities
+/// that the belt must route around.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SpecKind {
+    #[default]
+    Belt,
+    Pipe,
+}
+
 /// One spec crossing a junction. Exactly one entry + one exit per spec.
 #[derive(Debug, Clone)]
 pub struct SpecCrossing {
@@ -113,6 +124,7 @@ pub struct SpecCrossing {
     pub entry: PortPoint,
     pub exit: PortPoint,
     pub origin: SpecOrigin,
+    pub kind: SpecKind,
 }
 
 impl SpecCrossing {
