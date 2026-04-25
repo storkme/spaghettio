@@ -2,7 +2,7 @@ import { Container, Graphics } from "pixi.js";
 import { createApp, WORLD_SIZE } from "./renderer/app";
 import { drawGrid, updateGrid } from "./renderer/grid";
 import { drawGraph } from "./renderer/graph";
-import { initEntityIcons, preloadCarriesIcons, renderLayout, setItemColoring, itemColor, TILE_PX, type HighlightController } from "./renderer/entities";
+import { initEntityIcons, preloadCarriesIcons, renderLayout, setItemColoring, itemColor, TILE_PX, MACHINE_SIZES, SPLITTER_ENTITIES, splitterCompanionOffset, type HighlightController } from "./renderer/entities";
 import { createSelectionController, type SelectionController } from "./renderer/selection";
 import { renderSidebar } from "./ui/sidebar";
 import { initCorpusPanel } from "./ui/corpus";
@@ -200,6 +200,10 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
   // pure waste. Add/remove operations (renderLayout commit, overlay toggle)
   // invalidate the group; transform / alpha changes on children don't.
   entityLayer.isRenderGroup = true;
+  // Disable Pixi's recursive hit-testing on the entity layer. Hover detection
+  // is now done via tileEntityMap in the canvas pointermove handler; per-entity
+  // Pixi events are no longer registered for hover (only click via onSelect).
+  entityLayer.eventMode = "none";
   viewport.addChild(entityLayer);
   // SAT-zone detail overlay sits above the entity layer so the bbox,
   // boundary bars, and item icons always read on top of the belts.
@@ -228,6 +232,36 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
   function onHover(entity: PlacedEntity | null): void {
     hoveredEntity = entity;
     inspector.onHover(entity, entity?.x, entity?.y);
+  }
+
+  // Tile→entity map for canvas-level hover detection. Rebuilt whenever the
+  // layout changes (see rebuildTileEntityMap calls). Replaces per-entity Pixi
+  // pointer events to avoid the hitTestMoveRecursive scene-walk on every
+  // pointermove.
+  let tileEntityMap: Map<string, PlacedEntity> = new Map();
+
+  function rebuildTileEntityMap(layout: LayoutResult): void {
+    const m = new Map<string, PlacedEntity>();
+    for (const e of layout.entities) {
+      const x = e.x ?? 0;
+      const y = e.y ?? 0;
+      const sz = MACHINE_SIZES[e.name];
+      if (sz) {
+        const [w, h] = sz;
+        for (let dy = 0; dy < h; dy++) {
+          for (let dx = 0; dx < w; dx++) {
+            m.set(`${x + dx},${y + dy}`, e);
+          }
+        }
+      } else if (SPLITTER_ENTITIES.has(e.name)) {
+        m.set(`${x},${y}`, e);
+        const [cdx, cdy] = splitterCompanionOffset(e.direction);
+        m.set(`${x + cdx},${y + cdy}`, e);
+      } else {
+        m.set(`${x},${y}`, e);
+      }
+    }
+    tileEntityMap = m;
   }
 
   // Wraps a HighlightController so highlight changes (alpha mutations + the
@@ -619,6 +653,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       inspector.clearPin();
       inspector.setTileContext(null);
       lastLayout = null;
+      tileEntityMap = new Map();
       cachedValidationIssues = null;
       drawGraph(viewport, null);
       viewport.moveCenter(WORLD_SIZE / 2, WORLD_SIZE / 2);
@@ -782,6 +817,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
         waitForDrain();
       });
       lastLayout = finalLayout;
+      rebuildTileEntityMap(finalLayout);
       (window as unknown as { __layout?: LayoutResult }).__layout = finalLayout;
       // Final authoritative redraw with the committed layout.
       renderLayout(finalLayout, entityLayer, undefined, undefined);
@@ -820,11 +856,16 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     // the coord line stays visible even when a lane/row/ghost overlay
     // has installed a tooltip override.
     inspector.setCursorTile(tx, ty);
+    // Tile-based hover detection — replaces per-entity Pixi pointer events.
+    // Look up the entity at this tile and fire onHover only on change.
+    const found = tileEntityMap.get(`${tx},${ty}`) ?? null;
+    if (found !== hoveredEntity) onHover(found);
     if (!hoveredEntity) inspector.onHover(null, tx, ty);
   });
 
   app.canvas.addEventListener("pointerleave", () => {
     inspector.setCursorTile(null);
+    if (hoveredEntity) onHover(null);
   });
 
   // Click handling for SAT regions + junction zones. Junction click
@@ -1079,6 +1120,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
 
   function renderLayoutOnCanvas(layout: LayoutResult): void {
     lastLayout = layout;
+    rebuildTileEntityMap(layout);
     (window as unknown as { __layout?: LayoutResult }).__layout = layout;
     logLayoutStats(layout);
     stepThrough.reset();
