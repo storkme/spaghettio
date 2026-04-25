@@ -1126,6 +1126,16 @@ pub fn solve_crossing(
         // strategy invoked the walker at all — SAT unsat with no
         // breaks) we fall back to uniform +1 so the region still makes
         // forward progress.
+        //
+        // Cap-aware special case ("growth monster"): when uniform +1
+        // would push us past `MAX_REGION_TILES` AND the participating
+        // set has 1-vs-N spec asymmetry along an axis (canonical case:
+        // a horizontal return belt crossing N parallel vertical trunks
+        // — see docs/factorio-mechanics.md and the user's processing-
+        // unit @ 2/s case), grow only along the axis aligned with the
+        // lone spec's direction. Doubling tile count per uniform iter
+        // is what makes that case Cap with no SAT attempt at a smaller
+        // bbox; halving the growth lets at least one more iter run.
         let grew = match compute_absorb_deltas(&region.bbox, &veto_tiles) {
             Some((left, top, right, bottom)) => region.expand_bbox(
                 left,
@@ -1138,17 +1148,27 @@ pub fn solve_crossing(
                 placed_entities,
                 solve_ctx.protected_balancer_tiles,
             ),
-            None => region.expand_bbox(
-                1,
-                1,
-                1,
-                1,
-                routed_paths,
-                hard_obstacles,
-                strict_obstacles,
-                placed_entities,
-                solve_ctx.protected_balancer_tiles,
-            ),
+            None => {
+                let after_uniform =
+                    (region.bbox.w + 2) as usize * (region.bbox.h + 2) as usize;
+                let fallback = if after_uniform > MAX_REGION_TILES {
+                    asymmetric_axis_deltas(&region.participating, solve_ctx.spec_exit_dirs)
+                        .unwrap_or((1, 1, 1, 1))
+                } else {
+                    (1, 1, 1, 1)
+                };
+                region.expand_bbox(
+                    fallback.0,
+                    fallback.1,
+                    fallback.2,
+                    fallback.3,
+                    routed_paths,
+                    hard_obstacles,
+                    strict_obstacles,
+                    placed_entities,
+                    solve_ctx.protected_balancer_tiles,
+                )
+            }
         };
         if !grew {
             trace::emit(TraceEvent::JunctionGrowthCapped {
@@ -1182,6 +1202,44 @@ const SINGLE_SIDE_VARIANTS: &[(&str, (i32, i32, i32, i32))] = &[
     ("variant-east", (0, 0, 1, 0)),
     ("variant-south", (0, 0, 0, 1)),
 ];
+
+/// Detect the "growth monster" geometry — one spec on one axis vs N≥3
+/// parallel specs on the perpendicular axis — and return the axis-
+/// symmetric expansion that grows along the lone spec's direction.
+///
+/// For a horizontal-belt × N-vertical-trunks junction the lone belt
+/// extends along X; growing X (left+right) gives SAT room for an N-
+/// trunk-spanning UG bridge without doubling the tile count via Y
+/// growth that would just absorb more trunk path. Symmetric for the
+/// transposed case (1 vertical × N horizontals → grow Y).
+///
+/// Returns `None` when the participating set isn't 1-vs-N — the caller
+/// keeps the existing uniform-growth behavior. Specs with no entry-
+/// direction recorded in `spec_exit_dirs` are ignored (they can't be
+/// classified into an axis).
+fn asymmetric_axis_deltas(
+    participating: &[String],
+    spec_exit_dirs: &FxHashMap<String, EntityDirection>,
+) -> Option<(i32, i32, i32, i32)> {
+    let mut horiz = 0u32;
+    let mut vert = 0u32;
+    for key in participating {
+        match spec_exit_dirs.get(key) {
+            Some(EntityDirection::East) | Some(EntityDirection::West) => horiz += 1,
+            Some(EntityDirection::North) | Some(EntityDirection::South) => vert += 1,
+            _ => {}
+        }
+    }
+    // 1 horizontal + ≥3 vertical → grow X (left+right).
+    // 1 vertical + ≥3 horizontal → grow Y (top+bottom).
+    if horiz == 1 && vert >= 3 {
+        Some((1, 0, 1, 0))
+    } else if vert == 1 && horiz >= 3 {
+        Some((0, 1, 0, 1))
+    } else {
+        None
+    }
+}
 
 /// Compute the `(left, top, right, bottom)` deltas needed for
 /// `expand_bbox` to absorb the **single closest** target outside the

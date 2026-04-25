@@ -1570,7 +1570,7 @@ fn processing_unit_2s_am2_fast_belts_validation_baseline() {
     // bound, run the test, observe the new count, and tighten here.
     let baseline = [
         ("fluid-network", 0usize),
-        ("belt-item-isolation", 9),
+        ("belt-item-isolation", 8),
         ("belt-dead-end", 0),
     ];
     let mut regressed = Vec::new();
