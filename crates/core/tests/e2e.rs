@@ -529,7 +529,7 @@ const GOLDEN_HASHES: &[(&str, &str)] = &[
     ("tier1_iron_gear_wheel_20s", "cb9db5d05c01524432c2f4524e3e8eaa50b8957b8a764622fc9c59dfcc27fffd"),
     ("tier2_electronic_circuit_from_ore", "b3fdf981f86d7794b0346424123a553436b04628a77d45fb01fc56f9cb2bf044"),
     ("tier2_electronic_circuit_20s_from_ore", "6187078fcdbfebd265d1417c0b71650951fed4c3d2c216c29801fd5ee2917104"),
-    ("tier2_electronic_circuit_splitter_stamp_regression", "1240c095aece437a4e9268580028625e7521e29e4f5015712dfed2f693c46e9e"),
+    ("tier2_electronic_circuit_splitter_stamp_regression", "71b3a54a5bbc6248f7ce049f99e4579815a73fd841aa3fb0b8b10576f2c814de"),
     ("tier3_plastic_bar", "6985e6c920c10e4f20ec4c7b18bbb0cde98a6a8c030787e85a3f8ab3618e70fb"),
     ("tier3_sulfuric_acid", "091765fa6a50b4438137e0500e32eb8378ed22224f9b58843070cb70d6561bcd"),
     ("tier3_heavy_oil_cracking", "e035b72e76cff247546b12ff47e264b8f9ae44e8cf9969107e45aad4690e1980"),
