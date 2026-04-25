@@ -662,7 +662,7 @@ export function createStreamingRenderer(
       applyReveals(scrubVirtualMs);
 
       // Build particle-aware HighlightController from the final layout.
-      return createParticleHighlightController(layout, container);
+      return createParticleHighlightController(layout, app);
     },
 
     seekTo(virtualMs: number): void {

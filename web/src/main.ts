@@ -214,7 +214,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     entityLayer.removeChildren();
     const scene = createParticleScene();
     scene.attachTo(entityLayer);
-    return renderLayoutAsParticles(layout, scene);
+    return renderLayoutAsParticles(layout, scene, app);
   }
 
   const entityLayer = new Container();

@@ -1,5 +1,5 @@
 import type { PlacedEntity } from "../engine";
-import { niceName, getRecipeFlows, isBeltEntity, type HighlightController } from "../renderer/entities";
+import { niceName, getRecipeFlows, type HighlightController } from "../renderer/entities";
 import type { TileContext, TileInfo } from "./tileContext";
 
 export interface InspectorControls {
@@ -607,11 +607,7 @@ export function createInspector(container: HTMLElement): InspectorControls {
     tooltip.style.display = "block";
 
     if (hoveredEntity && highlightCtrl) {
-      if (isBeltEntity(hoveredEntity.name)) {
-        highlightCtrl.highlightBeltNetwork(hoveredEntity);
-      } else {
-        highlightCtrl.highlightItem(highlightCtrl.chainKey(hoveredEntity));
-      }
+      highlightCtrl.highlightBeltNetwork(hoveredEntity);
     } else if (highlightCtrl) {
       highlightCtrl.clearHighlight();
     }
