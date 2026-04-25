@@ -3,7 +3,7 @@
  *
  * One module-scoped RenderTexture is allocated lazily on the first
  * `getEntityTexture` call. Atlas slots are assigned on a simple
- * 64×64 grid; `nextSlot` walks left-to-right, top-to-bottom.
+ * 128×128 grid; `nextSlot` walks left-to-right, top-to-bottom.
  * ~250 unique entity variants fit comfortably in 4096×4096.
  *
  * Renderer access: `initAtlas(renderer)` must be called from `app.ts`
@@ -30,16 +30,16 @@ import { itemColor } from "./entities";
 
 /**
  * Atlas texture size in pixels.
- * 4096×4096 holds 4096 × (4096 / CELL_PX) = 4096 entries at 64 px cells.
+ * 4096×4096 holds (4096 / CELL_PX)² = 1024 entries at 128 px cells.
  * If the GPU cannot allocate at this size, halve to 2048×2048 and document.
  */
 const ATLAS_SIZE = 4096;
 
 /** Cell size in pixels — each entity variant occupies one cell. */
-const CELL_PX = 64;
+const CELL_PX = 128;
 
 /** Total columns of cells in the atlas. */
-const ATLAS_COLS = ATLAS_SIZE / CELL_PX; // 64
+const ATLAS_COLS = ATLAS_SIZE / CELL_PX; // 32
 
 /** Lazily allocated atlas RenderTexture. Null until first `getEntityTexture` call. */
 let atlasRT: RenderTexture | null = null;
