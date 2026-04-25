@@ -552,7 +552,12 @@ fn split_overflowing_lanes(
 
             families.push(LaneFamily {
                 item: lane.item.clone(),
-                module_id: 0,
+                // Inherit the parent lane's module_id so the split
+                // family stays inside its module's identity. Under
+                // Pooled this is always 0; under PartitionedPerConsumer
+                // it preserves the (item, module_id) keying that the
+                // top of `plan_bus_lanes` relies on.
+                module_id: lane.module_id,
                 shape,
                 producer_rows: all_producer_rows.to_vec(),
                 lane_xs: Vec::new(),
@@ -574,6 +579,7 @@ fn split_overflowing_lanes(
             if let Some(fid) = family_id {
                 result.push(BusLane {
                     item: lane.item.clone(),
+                    module_id: lane.module_id,
                     x: 0,
                     source_y: family_source_y.unwrap_or(0),
                     consumer_rows: consumers,
@@ -600,6 +606,7 @@ fn split_overflowing_lanes(
 
             result.push(BusLane {
                 item: lane.item.clone(),
+                module_id: lane.module_id,
                 x: 0,
                 source_y: split_source_y,
                 consumer_rows: consumers,

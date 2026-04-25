@@ -28,14 +28,18 @@ use rustc_hash::FxHashMap;
 use crate::models::{ItemFlow, MachineSpec, SolverResult};
 use crate::trace::{self, TraceEvent};
 
-/// Per-belt-tier per-lane capacity in items/s. Mirrors
-/// `LANE_CAPACITY_TABLE` in `lane_planner.rs`. Single source of truth
-/// is awkward today because the planner's table is private; the
-/// partitioner only needs the numeric ceilings.
+/// Per-belt-tier per-lane (belt-side) capacity in items/s. Mirrors
+/// `LANE_CAPACITY_TABLE` in `lane_planner.rs` — these are *per-side*
+/// rates, not full-belt rates. A yellow belt has two sides each
+/// carrying 7.5/s; the bus engine treats each `BusLane` as one
+/// side, so the partitioner must use the same per-side numbers
+/// when sizing modules. Single source of truth is awkward today
+/// because the planner's table is private; the partitioner only
+/// needs the numeric ceilings.
 const PER_LANE_CAPACITY: &[(&str, f64)] = &[
-    ("transport-belt", 15.0),
-    ("fast-transport-belt", 30.0),
-    ("express-transport-belt", 45.0),
+    ("transport-belt", 7.5),
+    ("fast-transport-belt", 15.0),
+    ("express-transport-belt", 22.5),
 ];
 
 /// The 75% over-provisioning ceiling from the RFP's "Load-bearing
@@ -44,11 +48,12 @@ const PER_LANE_CAPACITY: &[(&str, f64)] = &[
 /// partitioner refuses to allocate them.
 pub const UTILIZATION_CEILING: f64 = 0.75;
 
-/// Per-lane belt capacity for the chosen belt tier. Falls back to the
-/// fastest tier when `max_belt_tier` is `None` (matches the lane
-/// planner's behaviour).
+/// Per-lane (belt-side) capacity for the chosen belt tier. Falls back
+/// to the fastest tier when `max_belt_tier` is `None` (matches the
+/// lane planner's behaviour). Per-side, not full-belt: a yellow belt
+/// has two sides each carrying 7.5/s.
 pub fn lane_capacity(max_belt_tier: Option<&str>) -> f64 {
-    let default_cap = PER_LANE_CAPACITY.last().map(|(_, c)| *c).unwrap_or(15.0);
+    let default_cap = PER_LANE_CAPACITY.last().map(|(_, c)| *c).unwrap_or(22.5);
     match max_belt_tier {
         Some(tier) => PER_LANE_CAPACITY
             .iter()
@@ -122,8 +127,11 @@ pub struct ModuleAssignment {
     /// Lane count required by this module: `ceil(rate / per_lane_cap)`.
     /// Driven by `max_belt_tier`.
     pub lane_count: u32,
-    /// Saturation fraction relative to the 75% utilization ceiling.
-    /// `> 1.0` means the module busts the gate; the partitioner emits
+    /// Per-lane saturation fraction relative to the 75% utilization
+    /// ceiling: `(rate / lane_count) / (per_lane_cap * 0.75)`. The
+    /// rate is divided across `lane_count` belt-sides first, then
+    /// compared to the ceiling on a single side. `> 1.0` means at
+    /// least one side busts the gate; the partitioner emits
     /// `PartitionRejectedByUtilization` and produces an invalid
     /// layout. See K1-2 in the RFP.
     pub utilization: f64,
@@ -382,22 +390,23 @@ mod tests {
 
     #[test]
     fn lane_capacity_falls_back_to_fastest_tier() {
-        assert_eq!(lane_capacity(None), 45.0);
-        assert_eq!(lane_capacity(Some("transport-belt")), 15.0);
-        assert_eq!(lane_capacity(Some("fast-transport-belt")), 30.0);
-        assert_eq!(lane_capacity(Some("express-transport-belt")), 45.0);
+        // Per-side rates (matches `lane_planner::LANE_CAPACITY_TABLE`).
+        assert_eq!(lane_capacity(None), 22.5);
+        assert_eq!(lane_capacity(Some("transport-belt")), 7.5);
+        assert_eq!(lane_capacity(Some("fast-transport-belt")), 15.0);
+        assert_eq!(lane_capacity(Some("express-transport-belt")), 22.5);
         // Unknown tier → fastest.
-        assert_eq!(lane_capacity(Some("not-a-belt")), 45.0);
+        assert_eq!(lane_capacity(Some("not-a-belt")), 22.5);
     }
 
     #[test]
     fn utilization_ceiling_at_75_percent() {
-        // Yellow belt: 15/s × 0.75 = 11.25 ceiling.
-        assert!((lane_utilization(11.25, Some("transport-belt")) - 1.0).abs() < 1e-9);
+        // Yellow belt: 7.5/s per side × 0.75 = 5.625 ceiling.
+        assert!((lane_utilization(5.625, Some("transport-belt")) - 1.0).abs() < 1e-9);
         // Just over → > 1.0.
-        assert!(lane_utilization(11.30, Some("transport-belt")) > 1.0);
+        assert!(lane_utilization(5.7, Some("transport-belt")) > 1.0);
         // Just under → < 1.0.
-        assert!(lane_utilization(11.20, Some("transport-belt")) < 1.0);
+        assert!(lane_utilization(5.5, Some("transport-belt")) < 1.0);
     }
 
     fn flow(item: &str, rate: f64) -> ItemFlow {
