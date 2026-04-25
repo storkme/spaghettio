@@ -91,7 +91,15 @@ export async function createApp(container: HTMLElement): Promise<AppContext> {
   // --- Render-on-demand controls ---
 
   let pendingRender = false;
+  let activeAnimations = 0;
   const requestRenderImpl = (): void => {
+    // If the ticker is running, the auto-render hook above will paint this
+    // frame already — scheduling a microtask render on top of that just
+    // doubles the cost. During pan/drag/animations we get pointermove +
+    // viewport.on("moved") events firing at ~60Hz; without this guard, each
+    // one queues an extra full app.render() (≈30ms on a 3000-entity layout)
+    // on top of the ticker's own per-frame render.
+    if (activeAnimations > 0) return;
     if (pendingRender) return;
     pendingRender = true;
     queueMicrotask(() => {
@@ -100,7 +108,6 @@ export async function createApp(container: HTMLElement): Promise<AppContext> {
     });
   };
 
-  let activeAnimations = 0;
   const beginAnimatingImpl = (): void => {
     if (activeAnimations === 0) app.ticker.start();
     activeAnimations++;
