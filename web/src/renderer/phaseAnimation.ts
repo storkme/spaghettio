@@ -13,6 +13,7 @@
  */
 
 import type { Application, Container, Graphics } from "pixi.js";
+import { beginAnimating, endAnimating, requestRender } from "./app";
 import type { LayoutResult, PlacedEntity } from "../wasm-pkg/fucktorio_wasm";
 import { renderLayout, type HighlightController } from "./entities";
 
@@ -228,16 +229,24 @@ export function renderLayoutPhaseAnimated(
     if (pointer >= scheduled.length) {
       done = true;
       app.ticker.remove(tick);
+      endAnimating();
     }
   };
 
-  app.ticker.add(tick);
+  // Skip the ticker entirely if there's nothing to animate. Otherwise
+  // `beginAnimating` would be called without a matching `endAnimating`.
+  if (!done) {
+    app.ticker.add(tick);
+    beginAnimating();
+  }
 
   const handle: PhaseAnimationHandle = {
     cancel() {
       if (cancelled || done) return;
       cancelled = true;
       app.ticker.remove(tick);
+      endAnimating();
+      requestRender();
     },
     finish() {
       if (cancelled || done) return;
@@ -246,6 +255,8 @@ export function renderLayoutPhaseAnimated(
       }
       done = true;
       app.ticker.remove(tick);
+      endAnimating();
+      requestRender();
     },
     isDone() {
       return done || cancelled;

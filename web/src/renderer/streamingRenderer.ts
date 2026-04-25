@@ -54,6 +54,7 @@ import {
   type DrawContext,
   type HighlightController,
 } from "./entities";
+import { beginAnimating, endAnimating, requestRender } from "./app";
 
 // ---------------------------------------------------------------------------
 // Timings
@@ -709,6 +710,8 @@ export function createStreamingRenderer(
   };
 
   app.ticker.add(tick);
+  beginAnimating();
+  let tickerActive = true;
 
   // -------------------------------------------------------------------------
   // Event dispatcher
@@ -780,6 +783,7 @@ export function createStreamingRenderer(
       if (cancelled) return;
       cancelled = true;
       app.ticker.remove(tick);
+      if (tickerActive) { endAnimating(); tickerActive = false; }
       committedLayer.removeChildren();
       ghostLayer.removeChildren();
       clusterOverlay.clear();
@@ -788,11 +792,13 @@ export function createStreamingRenderer(
       transientByTile.clear();
       ghostClusters.length = 0;
       reveals = null;
+      requestRender();
     },
 
     finish(layout: LayoutResult): HighlightController {
       // Tear down the live-phase ticker — scrub alpha is now imperative.
       app.ticker.remove(tick);
+      if (tickerActive) { endAnimating(); tickerActive = false; }
 
       // `renderLayout` calls `container.removeChildren()` which wipes
       // committedLayer, ghostLayer, clusterOverlay, and every transient

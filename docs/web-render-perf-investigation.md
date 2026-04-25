@@ -147,6 +147,96 @@ it has work or call `app.render()` explicitly after each tick.
 
 This is a real architectural change — single PR, but with reach.
 
+#### Implementation plan
+
+Two abstractions in `web/src/renderer/app.ts`, exported both via the
+`AppContext` and as module-level functions (so per-feature ticker users
+can `import { beginAnimating, endAnimating } from "../renderer/app"`
+without changing function signatures):
+
+```ts
+// Coalesced one-shot render. Multiple calls in the same task collapse
+// into one. Use after one-shot scene mutations.
+export function requestRender(): void;
+
+// Refcounted ticker control. Use around sustained animations.
+export function beginAnimating(): void;
+export function endAnimating(): void;
+```
+
+Inside `createApp`, wire the viewport's events to keep the ticker open
+during interactions:
+
+| Event | Action |
+|---|---|
+| `moved`, `zoomed` | `requestRender()` |
+| `drag-start`, `pinch-start`, `snap-start`, `snap-zoom-start`, `bounce-x-start`, `bounce-y-start` | `beginAnimating()` |
+| `drag-end`, `pinch-end`, `snap-end`, `snap-zoom-end`, `bounce-x-end`, `bounce-y-end` | `endAnimating()` |
+| Window `resize` | `requestRender()` |
+
+Wheel emits `wheel-start` but no matching end; `moved`/`zoomed` cover
+the resulting motion.
+
+In `web/src/main.ts`, every code path that mutates the visible scene
+needs a `requestRender()` afterwards. The choke points:
+
+| Site | Why |
+|---|---|
+| End of `renderLayoutOnCanvas` (after overlay updates + `entityLayer.alpha` reset) | Initial layout commit |
+| Each `renderLayout(...)` call site (5 total) | Re-render with new entities |
+| End of `updateValidationOverlay`, `updateRegionOverlay`, `updateGhostTilesOverlay`, `updateTraceOverlay` (all return paths) | Overlay add/remove |
+| `junctionDebugger.onChange` callback (sets `entityLayer.alpha`) | SAT-zone dim toggle |
+| `inspector.onPinChange` (mutates `pinHighlight`) | Pin highlight |
+| `soloRegionsCb.addEventListener("change", ...)` both branches | Solo-region dim |
+| Wrap the `HighlightController` returned from every `renderLayout` so each method auto-`requestRender()`s | Hover dim path (called from `inspector.ts`) |
+
+Per-feature ticker users — convert each to call `beginAnimating()` when
+they `app.ticker.add(tick)` and `endAnimating()` when they
+`app.ticker.remove(tick)`:
+
+| File | Lifecycle notes |
+|---|---|
+| `web/src/renderer/streamingRenderer.ts` | tick added at start, removed in `cancel()` and `finish()`; track a local `tickerActive` boolean to avoid double-end |
+| `web/src/renderer/phaseAnimation.ts` | tick added at start, removed when complete or via `cancel()` / `finish()`; **early-return when `scheduled.length === 0` must skip `app.ticker.add` entirely**, otherwise the begin has no matching end |
+| `web/src/renderer/improvementAnimation.ts` | tick added on flash spawn, removed when faded out |
+| `web/src/ui/issuesDialog.ts` (pulse) | `pulseCircle` adds, `clearPulse` removes |
+
+Each removal path also needs a `requestRender()` so the final state is
+painted (e.g. fade-out finishing `alpha = 0` for the flash, alpha back to
+the resting value for pulse markers).
+
+#### Failure mode and verification
+
+The failure mode is "the canvas appears frozen until I move the mouse
+or pan." That happens when a mutation occurs but no `requestRender()`
+follows. Type-check, tests, and lint do not catch this. The only
+reliable verification is exercising every interaction at the dev server.
+
+Verification checklist for the PR:
+
+- Initial load: layout renders, sidebar populates, all overlays settle.
+- Pan / zoom / pinch: smooth motion during, no continued rendering
+  after motion settles.
+- Hover an entity: highlight appears immediately, dim applies to
+  others, clears immediately when mouse leaves.
+- Toggle each overlay (validation, regions, ghost tiles): each appears
+  and disappears immediately.
+- "Solo regions" mode: dim applies on enable, restores on disable.
+- Pin a tile via the inspector: highlight ring renders.
+- SAT zone selection: dim applies, edit mode dims further;
+  deselection restores both.
+- Streaming layout (load a fresh URL): transient previews + ghost
+  routes appear progressively, settle into final layout.
+- Phase animation (corpus / parsed blueprint): entities fade in
+  staggered.
+- Auto-optimize: region flashes during the optimize phase.
+- Validation pulse: clicking an issue in the panel pulses its marker.
+- Timeline scrub: drag the scrubber backwards/forwards through phases.
+
+**Anti-test: leave the page idle and watch DevTools Performance.** Main
+thread CPU should drop to near zero. If it doesn't, something is
+calling `beginAnimating()` without a matching `endAnimating()`.
+
 ### 2. Mark static layers as render groups (already landed)
 
 ```ts
