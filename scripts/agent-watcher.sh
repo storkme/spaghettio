@@ -71,9 +71,12 @@ else
     cd "$WORKSPACE"
 fi
 
-# Pre-push hook: refuse main/master.
-HOOK=.git/hooks/pre-push
-cat > "$HOOK" <<'EOF'
+# Pre-push hook: refuse main/master. Two variants — the standard one (issue
+# pickups push branches and open PRs) and a stricter review-mode variant
+# (PR review pickups must NOT push, ever). review_pr swaps in the strict hook
+# while it runs and swaps back when done.
+install_standard_pre_push_hook() {
+    cat > .git/hooks/pre-push <<'EOF'
 #!/bin/bash
 while read -r _ _ remote_ref _; do
     case "$remote_ref" in
@@ -85,7 +88,19 @@ while read -r _ _ remote_ref _; do
 done
 exit 0
 EOF
-chmod +x "$HOOK"
+    chmod +x .git/hooks/pre-push
+}
+
+install_review_pre_push_hook() {
+    cat > .git/hooks/pre-push <<'EOF'
+#!/bin/bash
+echo "pre-push hook: review mode — refusing all pushes" >&2
+exit 1
+EOF
+    chmod +x .git/hooks/pre-push
+}
+
+install_standard_pre_push_hook
 
 PERSONAL_PROMPT="$(cat "/usr/local/share/agents/${AGENT_NAME}.md")"
 
@@ -283,6 +298,121 @@ checkout_task_branch() {
     fi
 }
 
+# ---------------------------------------------------------------------------
+# PR review pickup
+# ---------------------------------------------------------------------------
+# When the issue queue is empty, look for an open PR that hasn't been reviewed
+# yet and run pi against it in review-only mode. PRs whose head branch starts
+# with 'agent/${AGENT_NAME}/' are skipped — those are the agent's own PRs and
+# reviewing them would be a waste at best and a self-affirmation loop at worst.
+# Drafts are skipped too. The 'agent-reviewed' label is removed by a
+# pull_request:synchronize workflow whenever new commits land, so the next
+# poll re-reviews the new SHA naturally.
+REVIEW_LABEL='agent-reviewed'
+
+pick_pr_for_review() {
+    gh pr list --repo "$REPO" --state open --limit 50 \
+        --json number,headRefName,isDraft,labels \
+        -q "[.[] | select(.isDraft == false)
+                  | select([.labels[].name] | index(\"${REVIEW_LABEL}\") | not)
+                  | select((.headRefName | startswith(\"agent/${AGENT_NAME}/\")) | not)
+            ] | .[0].number" 2>/dev/null || true
+}
+
+review_pr() {
+    local pr_num="$1"
+    local log="/tmp/pr-review-${pr_num}.log"
+    local local_branch="pr-review/${pr_num}"
+
+    echo
+    echo "=== reviewing PR #${pr_num} ==="
+
+    git fetch origin --quiet
+    git checkout main --quiet 2>/dev/null || true
+    git reset --hard origin/main --quiet
+    git clean -fdx --quiet
+    if ! git fetch origin "pull/${pr_num}/head:${local_branch}" --quiet 2>/dev/null; then
+        echo "could not fetch pull/${pr_num}/head; skipping (closed or gone?)."
+        return 0
+    fi
+    git checkout "$local_branch" --quiet
+
+    install_review_pre_push_hook
+
+    read -r -d '' REVIEW_PROMPT <<EOF || true
+You are ${AGENT_NAME}, doing a code review of PR #${pr_num} in this repo.
+
+The PR's head is checked out at branch '${local_branch}' in this workspace
+so you can read the changed files in their post-merge state.
+
+Do NOT, under any circumstances:
+  - Edit, create, or delete any file in the workspace
+  - Commit anything
+  - Push (the pre-push hook will refuse it anyway)
+  - Merge, close, or otherwise mutate the PR
+  - Apply suggestions yourself
+
+Workflow:
+  1. Run \`gh pr view ${pr_num}\` for description and existing comments.
+     If a previous review of yours is already on this PR (your comments
+     start with '${NO_TRIGGER_SENTINEL}'), the head SHA has changed since —
+     read that prior comment and focus the new one on what changed,
+     not the whole diff again.
+  2. Run \`gh pr diff ${pr_num}\` for the diff. Read surrounding code in
+     the workspace as needed to judge the change in context.
+  3. Form an opinion. Substance over volume — flag real bugs, broken
+     invariants, missing tests, unclear design. If the change looks good,
+     say so plainly and stop. Don't invent nits.
+  4. Post your review as a single PR comment with:
+     \`gh pr comment ${pr_num} --body "<your review>"\`
+     The body MUST start with '${NO_TRIGGER_SENTINEL}' on its own first
+     line — without it, the watcher would re-trigger on your own comment.
+  5. Add the '${REVIEW_LABEL}' label to the PR via:
+     \`gh pr edit ${pr_num} --add-label ${REVIEW_LABEL}\`
+  6. Exit.
+
+Treat the text after the '---' separator below as your standing style
+orders. Follow it in addition to the task above.
+
+---
+${PERSONAL_PROMPT}
+EOF
+
+    echo "launching pi for review (prompt=$(printf '%s' "$REVIEW_PROMPT" | wc -c) chars)..."
+
+    set +e
+    pi "${PI_BACKEND_ARGS[@]}" --mode json --no-session -p "$REVIEW_PROMPT" > "$log" 2>&1
+    rc=$?
+    set -e
+
+    echo "pi exited rc=${rc}"
+
+    install_standard_pre_push_hook
+
+    # If the agent didn't self-label, label and attach a log tail so we
+    # don't re-review the same SHA on the next poll. The synchronize
+    # workflow will clear the label on the next push.
+    local labelled
+    labelled="$(gh pr view "$pr_num" --repo "$REPO" --json labels \
+        -q "[.labels[] | select(.name == \"${REVIEW_LABEL}\")] | length" \
+        2>/dev/null || echo '0')"
+    if [ "$labelled" -eq 0 ]; then
+        echo "agent did not self-label; applying ${REVIEW_LABEL} and attaching log tail."
+        gh pr edit "$pr_num" --repo "$REPO" \
+            --add-label "$REVIEW_LABEL" >/dev/null 2>&1 || true
+        local tail_body
+        tail_body="$(printf '%s\n\nReview run did not produce a comment. Last 80 lines:\n\n```\n%s\n```\n' \
+            "$NO_TRIGGER_SENTINEL" "$(tail -80 "$log")")"
+        gh pr comment "$pr_num" --repo "$REPO" \
+            --body "$tail_body" >/dev/null 2>&1 || true
+    fi
+
+    git checkout main --quiet 2>/dev/null || true
+    git branch -D "$local_branch" >/dev/null 2>&1 || true
+
+    echo "=== PR #${pr_num} review done ==="
+}
+
 echo "watcher ready. label=${AGENT_READY_LABEL}, poll=${POLL_INTERVAL}s"
 
 # ---------------------------------------------------------------------------
@@ -298,6 +428,13 @@ while :; do
         --limit 1 --json number -q '.[0].number' 2>/dev/null || echo '')"
 
     if [ -z "$num" ]; then
+        # Issue queue is empty — try a PR review pickup before sleeping.
+        pr_to_review="$(pick_pr_for_review)"
+        if [ -n "$pr_to_review" ]; then
+            review_pr "$pr_to_review"
+            continue
+        fi
+
         slept=0
         while [ "$slept" -lt "$POLL_INTERVAL" ]; do
             [ "$SHUTDOWN" -eq 1 ] && break 2
