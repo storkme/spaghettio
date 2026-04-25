@@ -51,10 +51,18 @@ import {
   itemColor,
   renderLayout,
   TILE_PX,
+  BELT_ENTITIES,
   type DrawContext,
   type HighlightController,
 } from "./entities";
 import { beginAnimating, endAnimating, requestRender } from "./app";
+import {
+  createParticleScene,
+  commitEntityAsParticle,
+  applyParticleReveals,
+  getParticleReveals,
+  type ParticleScene,
+} from "./particleLayout";
 
 // ---------------------------------------------------------------------------
 // Timings
@@ -150,10 +158,12 @@ interface GhostCluster {
 // Scrub-phase state
 // ---------------------------------------------------------------------------
 
-interface Reveal {
-  graphic: Graphics;
-  revealAt: number;
-}
+/** Scrub-mode entry. Either a Graphics object (non-trunk entities rendered
+ *  by `renderLayout`) or a Particle (trunk entities rendered by the particle
+ *  path). Phase 2 will collapse this union once all entity types are particles. */
+type Reveal =
+  | { kind: "graphic"; graphic: Graphics; revealAt: number }
+  | { kind: "particle"; particle: import("pixi.js").Particle; iconParticle: import("pixi.js").Particle | undefined; revealAt: number };
 
 // ---------------------------------------------------------------------------
 // Public handle
@@ -208,7 +218,8 @@ export function createStreamingRenderer(
   onSelect?: (e: PlacedEntity | null) => void,
 ): StreamingRendererHandle {
   // Layer ordering (bottom-to-top) during live phase:
-  //   1. committedLayer — transient real-entity previews
+  //   0. particleScene  — ParticleContainers for trunk belts (entity + icon)
+  //   1. committedLayer — transient real-entity previews (non-trunk)
   //   2. ghostLayer     — transient ghost belts (faded over when
   //                       a committed preview arrives at the same tile)
   //   3. clusterOverlay — single Graphics for SAT cluster outline pulses
@@ -217,9 +228,18 @@ export function createStreamingRenderer(
   // committed lets the committed entity emerge from behind the fading
   // ghost, rather than flashing on top.
   //
-  // At `finish()`, `renderLayout` clears the container (removing all
-  // three of these) and draws the authoritative entities directly on
-  // `container`.
+  // Particles attach FIRST so they sit at the back of `container` — trunk
+  // belt particles render underneath Graphics-based machines, balancers, etc.
+  // `attachTo` appends entityContainer then iconContainer to `container`.
+  //
+  // At `finish()`, `renderLayout` clears the container (removing all Graphics
+  // layers including committed/ghost/cluster). We detach particle containers
+  // before this, then re-attach after, so trunk particles persist into scrub
+  // mode. Non-trunk entities are re-rendered as Graphics by `renderLayout`.
+  // TODO(Phase 2): once all entity types are particles, remove this detach/
+  // re-attach dance and make `finish()` a no-op scene rebuild.
+  const particleScene: ParticleScene = createParticleScene();
+  particleScene.attachTo(container);
   const committedLayer = new PixiContainer();
   const ghostLayer = new PixiContainer();
   const clusterOverlay = new PixiGraphics();
@@ -258,7 +278,18 @@ export function createStreamingRenderer(
   let pendingMilestoneCallback: ((m: Milestone) => void) | null = null;
 
   // Scrub-phase reveals. Populated by `finish()`; iterated by `seekTo`.
+  // Contains both Graphics (non-trunk) and Particle (trunk) entries.
   let reveals: Reveal[] | null = null;
+
+  // Tracks entity keys that were committed via the particle path so the
+  // `bus_routed` PhaseSnapshot safety net doesn't try to re-commit them
+  // as Graphics transients. Parallel to `transientByKey`.
+  const particleCommittedKeys = new Set<string>();
+
+  /** True if the entity was committed via either the Graphics or particle path. */
+  function isCommitted(k: string): boolean {
+    return transientByKey.has(k) || particleCommittedKeys.has(k);
+  }
 
   function noteMilestoneNow(id: MilestoneId, at: number): void {
     // Always record the LATEST occurrence so the chip marks where the
@@ -490,6 +521,41 @@ export function createStreamingRenderer(
     // those tiles later, `handleJunctionCommitted` fades them out.
   }
 
+  /** True if an entity is a solid (non-fluid) trunk belt.
+   *  Solid trunk belts are routed through the particle path in Phase 1b.
+   *  Fluid trunks (pipes) continue on the Graphics path until Phase 2. */
+  function isSolidTrunk(e: PlacedEntity): boolean {
+    return (
+      (e.segment_id?.startsWith("trunk:") ?? false) &&
+      BELT_ENTITIES.has(e.name)
+    );
+  }
+
+  /** Commit solid trunk belt entities as particles with the same NW→SE
+   *  stagger as `commitEntitiesStaggered`. Records keys in both
+   *  `revealByEntityKey` (for scrub timing) and `particleCommittedKeys`
+   *  (so the `bus_routed` safety net doesn't re-commit them as Graphics). */
+  function commitTrunkEntitiesAsParticles(entities: PlacedEntity[]): void {
+    if (entities.length === 0) return;
+    const now = clock();
+    const sorted = [...entities].sort((a, b) => {
+      const dy = (a.y ?? 0) - (b.y ?? 0);
+      if (dy !== 0) return dy;
+      return (a.x ?? 0) - (b.x ?? 0);
+    });
+    const s = stagger(sorted.length, COMMITTED_TILE_STAGGER_MAX_MS, COMMITTED_TILE_STAGGER_BUDGET_MS);
+    sorted.forEach((e, i) => {
+      const revealAt = now + i * s;
+      commitEntityAsParticle(particleScene, e, revealAt);
+      const k = entityKey(e);
+      // Record earliest reveal timestamp for scrub-mode alpha ramp.
+      if (!revealByEntityKey.has(k)) revealByEntityKey.set(k, revealAt);
+      // Mark as committed so safety nets skip re-committing as Graphics.
+      particleCommittedKeys.add(k);
+    });
+    touchTime(now + (sorted.length - 1) * s, true);
+  }
+
   function handleGhostSpecCommitted(data: {
     spec_key: string;
     entities: PlacedEntity[];
@@ -586,10 +652,12 @@ export function createStreamingRenderer(
     }
     if (data.phase === "bus_routed") {
       // Safety net: commit anything not yet seen. In the happy path
-      // every belt is already committed via GhostSpecCommitted or
-      // JunctionCommitted; this catches edge cases.
+      // every belt is already committed via GhostSpecCommitted,
+      // JunctionCommitted, or TrunkBeltCommitted (particle path).
+      // `isCommitted` checks both the Graphics transient map and the
+      // particle-committed set so trunk entities don't double-render.
       const now = clock();
-      const fresh = data.entities.filter((e) => !transientByKey.has(entityKey(e)));
+      const fresh = data.entities.filter((e) => !isCommitted(entityKey(e)));
       for (const e of fresh) addEntityToDrawContext(e, drawCtx);
       const s = stagger(fresh.length, COMMITTED_TILE_STAGGER_MAX_MS, COMMITTED_TILE_STAGGER_BUDGET_MS);
       fresh.forEach((e, i) => {
@@ -646,6 +714,9 @@ export function createStreamingRenderer(
   const tick = (): void => {
     if (cancelled) return;
     const now = clock();
+
+    // Particle reveals — trunk belt alphas driven by the particle path.
+    applyParticleReveals(particleScene, now);
 
     // Ghost belts.
     for (const [k, gb] of ghostBeltByTile.entries()) {
@@ -780,7 +851,18 @@ export function createStreamingRenderer(
       // Stream-sibling events for entities that the engine previously stamped
       // silently. They all carry an `entities` batch that we reveal with the
       // same NW→SE stagger as `GhostSpecCommitted`.
-      case "TrunkBeltCommitted":
+      case "TrunkBeltCommitted": {
+        const data = evt.data as { item: string; lane_x: number; is_fluid: boolean; entities: PlacedEntity[] };
+        if (data.is_fluid) {
+          // Fluid trunks (pipes) stay on the Graphics path until Phase 2
+          // extends the particle path to pipe entities.
+          commitEntitiesStaggered(data.entities);
+        } else {
+          // Solid trunks: route through the particle path (Phase 1b).
+          commitTrunkEntitiesAsParticles(data.entities);
+        }
+        break;
+      }
       case "BalancerCommitted":
       case "OutputMergerCommitted":
       case "PolesCommitted":
@@ -807,9 +889,11 @@ export function createStreamingRenderer(
       committedLayer.removeChildren();
       ghostLayer.removeChildren();
       clusterOverlay.clear();
+      particleScene.clear();
       ghostBeltByTile.clear();
       transientByKey.clear();
       transientByTile.clear();
+      particleCommittedKeys.clear();
       ghostClusters.length = 0;
       reveals = null;
       requestRender();
@@ -820,12 +904,41 @@ export function createStreamingRenderer(
       app.ticker.remove(tick);
       if (tickerActive) { endAnimating(); tickerActive = false; }
 
+      // Exclude solid trunk entities from the Graphics render pass.
+      // They're already rendered as particles and must not be double-rendered.
+      // Fluid trunks (pipes) are NOT excluded — they weren't routed through
+      // the particle path in Phase 1b and must render via Graphics as before.
+      // TODO(Phase 2): once all entity types are particles, drop this filter
+      // and make renderLayout a no-op scene rebuild.
+      const filteredLayout = {
+        ...layout,
+        entities: layout.entities.filter((e) => !isSolidTrunk(e)),
+      };
+
+      // Detach the particle containers from `container` before calling
+      // `renderLayout`, which calls `container.removeChildren()`. Without
+      // this, the particle containers and all their particles are destroyed,
+      // wiping the trunk belts we just streamed.
+      //
+      // Re-attach after renderLayout so they render on top of UG tunnel
+      // stripes (ambients) but under — wait, we actually want them below
+      // the Graphics entities (machines, balancers, etc.), so we re-insert
+      // at index 0. In practice the only Graphics children from `renderLayout`
+      // are the authoritative entities; z-order within `container` is:
+      //   0: entityContainer (trunk particles, below machines)
+      //   1: iconContainer   (trunk belt item icons)
+      //   2+: Graphics from renderLayout (machines, balancers, etc.)
+      // TODO(Phase 2): once particles cover all entity types this detach/re-
+      // attach dance goes away — `finish()` will just stop the ticker.
+      container.removeChild(particleScene.entityContainer);
+      container.removeChild(particleScene.iconContainer);
+
       // `renderLayout` calls `container.removeChildren()` which wipes
       // committedLayer, ghostLayer, clusterOverlay, and every transient
-      // graphic they hold. No manual cleanup needed.
+      // graphic they hold. No manual cleanup needed for the Graphics side.
       const entityGfxByKey = new Map<string, Graphics[]>();
       const controller = renderLayout(
-        layout,
+        filteredLayout,
         container,
         onHover,
         onSelect,
@@ -833,6 +946,11 @@ export function createStreamingRenderer(
           entityGfxByKey.set(entityKey(entity), gfx);
         },
       );
+
+      // Re-attach particle containers at the bottom of `container`'s display
+      // list so trunk particles sit beneath the Graphics-based machines.
+      container.addChildAt(particleScene.iconContainer, 0);
+      container.addChildAt(particleScene.entityContainer, 0);
 
       // Entity-owned graphics register their reveal timestamps. Fall
       // back to `firstMs` for any entity that never appeared in a
@@ -843,9 +961,16 @@ export function createStreamingRenderer(
       // elapsed time.
       const fallbackReveal = firstMs ?? 0;
       const list: Reveal[] = [];
+
+      // Particle reveals (solid trunk belts).
+      for (const { particle, iconParticle, revealAt } of getParticleReveals(particleScene)) {
+        list.push({ kind: "particle", particle, iconParticle, revealAt });
+      }
+
+      // Graphics reveals (all non-trunk entities from renderLayout).
       for (const [k, gfxArr] of entityGfxByKey) {
         const revealAt = revealByEntityKey.get(k) ?? fallbackReveal;
-        for (const g of gfxArr) list.push({ graphic: g, revealAt });
+        for (const g of gfxArr) list.push({ kind: "graphic", graphic: g, revealAt });
       }
 
       // Ambient graphics (UG tunnel stripes drawn directly on
@@ -858,10 +983,12 @@ export function createStreamingRenderer(
         for (const g of arr) entityOwned.add(g);
       }
       const ambientRevealAt = firstMs ?? 0;
+      // Skip the particle containers which are Container (not Graphics) children.
       for (const child of container.children) {
         const g = child as Graphics;
-        if (!entityOwned.has(g)) {
-          list.push({ graphic: g, revealAt: ambientRevealAt });
+        // Particle containers are not Graphics instances; skip them.
+        if (g instanceof PixiGraphics && !entityOwned.has(g)) {
+          list.push({ kind: "graphic", graphic: g, revealAt: ambientRevealAt });
         }
       }
 
@@ -909,9 +1036,17 @@ export function createStreamingRenderer(
         elapsed <= 0 ? 0 :
         elapsed >= FADE_IN_MS ? 1 :
         elapsed / FADE_IN_MS;
-      r.graphic.alpha = alpha;
-      // Don't let invisible entities capture hover during scrub.
-      r.graphic.eventMode = alpha > 0.01 ? "static" : "none";
+      if (r.kind === "particle") {
+        r.particle.alpha = alpha;
+        if (r.iconParticle) r.iconParticle.alpha = alpha;
+      } else {
+        r.graphic.alpha = alpha;
+        // Don't let invisible entities capture hover during scrub.
+        // (The `eventMode` line is dead code post-PR #212 — tile-based
+        //  hover made per-entity eventMode irrelevant. Kept here for the
+        //  Graphics path; Phase 3 will remove it when Graphics goes away.)
+        r.graphic.eventMode = alpha > 0.01 ? "static" : "none";
+      }
     }
   }
 }

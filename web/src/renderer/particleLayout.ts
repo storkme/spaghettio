@@ -230,3 +230,21 @@ export function applyParticleReveals(
     if (entry.icon) entry.icon.alpha = alpha;
   }
 }
+
+/**
+ * Iterate (particle, revealAt) pairs for scrub-mode integration.
+ *
+ * Yields one entry per entity (the entity particle). Icon particles share
+ * the same revealAt and are driven by the same alpha in `applyParticleReveals`,
+ * so scrub-mode only needs to touch the entity particle; the icon will be
+ * updated on the next live tick or via a separate `applyParticleReveals` call.
+ *
+ * Called by `streamingRenderer.ts:finish()` to build the `reveals` list.
+ */
+export function* getParticleReveals(
+  _scene: ParticleScene,
+): Iterable<{ particle: Particle; iconParticle: Particle | undefined; revealAt: number }> {
+  for (const entry of particleMap.values()) {
+    yield { particle: entry.entity, iconParticle: entry.icon, revealAt: entry.revealAt };
+  }
+}
