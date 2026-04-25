@@ -1,7 +1,7 @@
 import type { Application } from "pixi.js";
 import type { Viewport } from "pixi-viewport";
 import type { Graphics } from "pixi.js";
-import { VALIDATION_CIRCLE_ALPHA } from "../renderer/validationOverlay";
+import { VALIDATION_BORDER_ALPHA } from "../renderer/validationOverlay";
 import { TILE_PX } from "../renderer/entities";
 import { beginAnimating, endAnimating, requestRender } from "../renderer/app";
 import "./issuesDialog.css";
@@ -15,12 +15,11 @@ export interface ValidationIssueItem {
 }
 
 export interface IssuesDialogControls {
-  populate(issues: ValidationIssueItem[], debugOn: boolean, valOn: boolean): void;
+  populate(issues: ValidationIssueItem[], debugOn: boolean): void;
   setVisible(visible: boolean): void;
   setCircleMap(map: Map<string, Graphics[]>): void;
   clearPulse(): void;
   panel: HTMLElement;
-  valCbRef: { checked: boolean };
   onValClose: (() => void) | null;
   setOnValClose(cb: () => void): void;
 }
@@ -88,7 +87,7 @@ export function createIssuesDialog(
 
   function clearPulse(): void {
     if (activePulse) {
-      for (const m of activePulse.markers) m.alpha = VALIDATION_CIRCLE_ALPHA;
+      for (const m of activePulse.markers) m.alpha = VALIDATION_BORDER_ALPHA;
       app.ticker.remove(activePulse.tickerFn);
       endAnimating();
       activePulse = null;
@@ -107,7 +106,7 @@ export function createIssuesDialog(
       if (elapsed >= 150) {
         elapsed -= 150;
         on = !on;
-        const alpha = on ? 1.0 : 0.35;
+        const alpha = on ? 1.0 : VALIDATION_BORDER_ALPHA;
         for (const m of markers) m.alpha = alpha;
       }
     };
@@ -135,11 +134,11 @@ export function createIssuesDialog(
     if (pinnedRow && !issuesPanel.contains(e.target as Node)) unpinRow();
   });
 
-  function populate(issues: ValidationIssueItem[], debugOn: boolean, valOn: boolean): void {
+  function populate(issues: ValidationIssueItem[], debugOn: boolean): void {
     body.innerHTML = "";
     pinnedRow = null;
     clearPulse();
-    if (!debugOn || !valOn || issues.length === 0) {
+    if (!debugOn || issues.length === 0) {
       issuesPanel.style.display = "none";
       return;
     }
@@ -202,9 +201,6 @@ export function createIssuesDialog(
     }
   }
 
-  // Expose a mutable ref so main.ts can point valCb at the dialog close handler
-  const valCbRef = { checked: false };
-
   return {
     populate,
     setVisible(visible: boolean): void {
@@ -215,7 +211,6 @@ export function createIssuesDialog(
     },
     clearPulse,
     panel: issuesPanel,
-    valCbRef,
     onValClose: null,
     setOnValClose(cb: () => void): void {
       onValCloseCb = cb;

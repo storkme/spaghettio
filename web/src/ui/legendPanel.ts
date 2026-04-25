@@ -112,23 +112,6 @@ function rectOutlineSwatch(hex: string, fillAlpha = 0.12, strokeAlpha = 0.85): H
   return s;
 }
 
-/** Circle swatch — matches validation markers. */
-function circleSwatch(hex: string, alpha = 0.5): HTMLElement {
-  const s = document.createElement("span");
-  const [r, g, b] = hexToRgb(hex);
-  s.style.cssText = [
-    "display:inline-block",
-    "width:12px",
-    "height:12px",
-    "border-radius:50%",
-    "flex-shrink:0",
-    `background:rgba(${r},${g},${b},${alpha})`,
-    `border:1.5px solid rgba(${r},${g},${b},0.7)`,
-    "vertical-align:middle",
-  ].join(";");
-  return s;
-}
-
 // ---------------------------------------------------------------------------
 // Ghost-path palette swatch: a small coloured line strip showing 3 of the
 // cycling palette colours so the user knows paths are individually coloured.
@@ -197,7 +180,6 @@ export interface LegendPanelState {
   /** Trace events present (implies ghost paths / cluster zones may exist). */
   hasTrace: boolean;
   stepThrough: boolean;
-  validation: boolean;
   ghostTiles: boolean;
   satZones: boolean;
 }
@@ -311,11 +293,6 @@ export function createLegendPanel(container: HTMLElement): LegendPanelControls {
         entries.push({ swatch: colorSwatch("#40d0e0", 0.4), label: "Ghost router footprint" });
       }
 
-      // Validation circles
-      if (state.validation) {
-        entries.push({ swatch: circleSwatch("#ff4444", 0.5), label: "Validation error" });
-        entries.push({ swatch: circleSwatch("#ffaa00", 0.5), label: "Validation warning" });
-      }
 
       // SAT / Junction zones
       if (state.satZones) {

@@ -14,12 +14,14 @@ const COLORS: Record<string, number> = {
   Warning: 0xffaa00,
 };
 
-/** Alpha for the resting (non-pulsed) fill of validation circles. */
-export const VALIDATION_CIRCLE_ALPHA = 0.35;
+/** Resting alpha for the stroke around an issue tile. The pulse helper
+ *  in `issuesDialog.ts` blinks markers between this and 1.0 to draw the
+ *  eye after a row click in the issues dialog. */
+export const VALIDATION_BORDER_ALPHA = 0.85;
 
 export interface ValidationOverlayResult {
   layer: Container;
-  /** Map from "x,y" to all Graphics circles at that tile position. */
+  /** Map from "x,y" to all border Graphics at that tile position. */
   circleMap: Map<string, Graphics[]>;
 }
 
@@ -34,9 +36,10 @@ export function renderValidationOverlay(
     if (issue.x == null || issue.y == null) continue;
     const color = COLORS[issue.severity] ?? 0x44aaff;
     const g = new Graphics();
-    g.circle(issue.x * TILE_PX + TILE_PX / 2, issue.y * TILE_PX + TILE_PX / 2, TILE_PX * 0.4)
-      .fill({ color, alpha: VALIDATION_CIRCLE_ALPHA })
-      .stroke({ width: 1.5, color, alpha: 0.7 });
+    // Stroke-only rectangle around the tile. No fill — the entity
+    // underneath stays visible (issue #209 design constraint).
+    g.rect(issue.x * TILE_PX, issue.y * TILE_PX, TILE_PX, TILE_PX)
+      .stroke({ width: 2, color, alpha: VALIDATION_BORDER_ALPHA });
     g.eventMode = "static";
     g.on("pointerenter", () => onHover(`[${issue.severity}] ${issue.category}: ${issue.message}`));
     g.on("pointerleave", () => onHover(null));

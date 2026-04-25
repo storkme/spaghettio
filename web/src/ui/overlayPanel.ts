@@ -6,7 +6,6 @@ export interface OverlayPanelControls {
   setDebugEnabled(on: boolean): void;
   debugCb: HTMLInputElement;
   colorCb: HTMLInputElement;
-  valCb: HTMLInputElement;
   regionsCb: HTMLInputElement;
   soloRegionsCb: HTMLInputElement;
   ghostTilesCb: HTMLInputElement;
@@ -40,7 +39,6 @@ export function createOverlayPanel(container: HTMLElement): OverlayPanelControls
   subPanel.className = "overlay-sub-panel";
   subPanel.style.display = state.master ? "flex" : "none";
 
-  const valCb = makeToggle(subPanel, "Validation", state.validation);
   const regionsCb = makeToggle(subPanel, "SAT Zones", state.satZones);
   const ghostTilesCb = makeToggle(subPanel, "Ghost tiles", state.ghostTiles);
   const soloRegionsCb = makeToggle(subPanel, "Solo regions", state.soloRegions);
@@ -76,7 +74,6 @@ export function createOverlayPanel(container: HTMLElement): OverlayPanelControls
     },
     debugCb,
     colorCb,
-    valCb,
     regionsCb,
     soloRegionsCb,
     ghostTilesCb,
