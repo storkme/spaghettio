@@ -3,6 +3,7 @@ import type { Viewport } from "pixi-viewport";
 import type { Graphics } from "pixi.js";
 import { VALIDATION_CIRCLE_ALPHA } from "../renderer/validationOverlay";
 import { TILE_PX } from "../renderer/entities";
+import { beginAnimating, endAnimating, requestRender } from "../renderer/app";
 import "./issuesDialog.css";
 
 export interface ValidationIssueItem {
@@ -89,7 +90,9 @@ export function createIssuesDialog(
     if (activePulse) {
       for (const m of activePulse.markers) m.alpha = VALIDATION_CIRCLE_ALPHA;
       app.ticker.remove(activePulse.tickerFn);
+      endAnimating();
       activePulse = null;
+      requestRender();
     }
   }
 
@@ -109,6 +112,7 @@ export function createIssuesDialog(
       }
     };
     app.ticker.add(tickerFn);
+    beginAnimating();
     activePulse = { markers, tickerFn };
   }
 

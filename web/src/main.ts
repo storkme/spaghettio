@@ -2,7 +2,7 @@ import { Container, Graphics } from "pixi.js";
 import { createApp, WORLD_SIZE } from "./renderer/app";
 import { drawGrid, updateGrid } from "./renderer/grid";
 import { drawGraph } from "./renderer/graph";
-import { initEntityIcons, preloadCarriesIcons, renderLayout, setItemColoring, itemColor, TILE_PX } from "./renderer/entities";
+import { initEntityIcons, preloadCarriesIcons, renderLayout, setItemColoring, itemColor, TILE_PX, type HighlightController } from "./renderer/entities";
 import { createSelectionController, type SelectionController } from "./renderer/selection";
 import { renderSidebar } from "./ui/sidebar";
 import { initCorpusPanel } from "./ui/corpus";
@@ -101,7 +101,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
   if (sidebar) sidebar.style.display = "";
   container.style.display = "";
 
-  const { app, viewport } = await createApp(container);
+  const { app, viewport, requestRender, beginAnimating, endAnimating } = await createApp(container);
   const gridGfx = drawGrid(viewport);
   drawGraph(viewport, null);
 
@@ -164,10 +164,12 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
         // If the user deselects the zone while editing, exit cleanly.
         if (satEditor.isActive()) satEditor.exit();
       }
+      requestRender();
     },
     onEditRequested: (state) => {
       entityLayer.alpha = 0.2;
       satEditor.enter(state);
+      requestRender();
     },
   });
 
@@ -204,11 +206,13 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
   viewport.addChild(pinHighlight);
   inspector.onPinChange((tile) => {
     pinHighlight.clear();
-    if (!tile) return;
-    const px = tile.x * TILE_PX;
-    const py = tile.y * TILE_PX;
-    pinHighlight.setStrokeStyle({ width: 2, color: 0x80c8ff, alpha: 0.95 });
-    pinHighlight.rect(px - 2, py - 2, TILE_PX + 4, TILE_PX + 4).stroke();
+    if (tile) {
+      const px = tile.x * TILE_PX;
+      const py = tile.y * TILE_PX;
+      pinHighlight.setStrokeStyle({ width: 2, color: 0x80c8ff, alpha: 0.95 });
+      pinHighlight.rect(px - 2, py - 2, TILE_PX + 4, TILE_PX + 4).stroke();
+    }
+    requestRender();
   });
   viewport.moveCenter(WORLD_SIZE / 2, WORLD_SIZE / 2);
 
@@ -219,6 +223,18 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
   function onHover(entity: PlacedEntity | null): void {
     hoveredEntity = entity;
     inspector.onHover(entity, entity?.x, entity?.y);
+  }
+
+  // Wraps a HighlightController so highlight changes (alpha mutations + the
+  // overlay graphic) trigger render requests. Used at every renderLayout
+  // call site below — the returned controller is what we pass to inspector.
+  function wrapHighlight(ctrl: HighlightController): HighlightController {
+    return {
+      highlightItem: (item) => { ctrl.highlightItem(item); requestRender(); },
+      highlightBeltNetwork: (e) => { ctrl.highlightBeltNetwork(e); requestRender(); },
+      clearHighlight: () => { ctrl.clearHighlight(); requestRender(); },
+      chainKey: ctrl.chainKey,
+    };
   }
 
   // --- Sidebar toggles ---
@@ -313,16 +329,20 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       if (pointer >= reveals.length) {
         done = true;
         app.ticker.remove(tick);
+        endAnimating();
       }
     };
 
     app.ticker.add(tick);
+    beginAnimating();
     return {
       cancel() {
         if (done) return;
         done = true;
         app.ticker.remove(tick);
+        endAnimating();
         for (const r of reveals) for (const g of r.gfx) g.alpha = 1;
+        requestRender();
       },
     };
   }
@@ -356,7 +376,8 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
         entityLayer, onHover, onSelect,
         (entity, gfx) => { gfxMap.set(entityKey(entity), gfx); },
       );
-      inspector.setHighlightController(ctrl);
+      inspector.setHighlightController(wrapHighlight(ctrl));
+      requestRender();
 
       // Animate only consecutive forward steps (N → N+1); jumps and backward stays instant.
       if (phaseIndex === prevPhaseIndexForAnim + 1 && prevSnapshotEntityList.length > 0) {
@@ -372,12 +393,14 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       prevPhaseIndexForAnim = -1;
       if (lastLayout) {
         const ctrl = renderLayout(lastLayout, entityLayer, onHover, onSelect);
-        inspector.setHighlightController(ctrl);
+        inspector.setHighlightController(wrapHighlight(ctrl));
+        requestRender();
       }
     }
 
     if (!debugCb.checked || !lastLayout?.trace?.length) {
       stepThrough.update();
+      requestRender();
       return;
     }
     const events = phaseIndex < 0
@@ -393,6 +416,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       },
     );
     stepThrough.update();
+    requestRender();
   }
 
   let valOverlayLayer: Container | null = null;
@@ -446,10 +470,12 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
 
     if (!debugCb.checked || !valCb.checked || !lastLayout) {
       issuesDialog.populate(cachedValidationIssues ?? [], debugCb.checked, valCb.checked);
+      requestRender();
       return;
     }
     if (!cachedValidationIssues || cachedValidationIssues.length === 0) {
       issuesDialog.populate([], debugCb.checked, valCb.checked);
+      requestRender();
       return;
     }
     const result = renderValidationOverlay(
@@ -463,6 +489,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     valCircleMap = result.circleMap;
     issuesDialog.setCircleMap(valCircleMap);
     issuesDialog.populate(cachedValidationIssues, debugCb.checked, valCb.checked);
+    requestRender();
   }
 
   function updateGhostTilesOverlay(): void {
@@ -471,14 +498,21 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       ghostTilesLayer.destroy({ children: true });
       ghostTilesLayer = null;
     }
-    if (!debugCb.checked || !ghostTilesCb.checked || !lastLayout) return;
+    if (!debugCb.checked || !ghostTilesCb.checked || !lastLayout) {
+      requestRender();
+      return;
+    }
     const layer = renderGhostTilesOverlay(lastLayout.trace);
-    if (!layer) return;
+    if (!layer) {
+      requestRender();
+      return;
+    }
     ghostTilesLayer = layer;
     // Attach below the entity layer so belts/machines read on top of
     // the cyan wash. `addChildAt(layer, 0)` puts it at the bottom of
     // the viewport's z-order.
     viewport.addChildAt(ghostTilesLayer, 0);
+    requestRender();
   }
 
   function updateRegionOverlay(): void {
@@ -494,7 +528,10 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     }
     regionHitTest = null;
     junctionHitTest = null;
-    if (!debugCb.checked || !regionsCb?.checked || !lastLayout) return;
+    if (!debugCb.checked || !regionsCb?.checked || !lastLayout) {
+      requestRender();
+      return;
+    }
 
     if (lastLayout.regions && lastLayout.regions.length > 0) {
       const detailed = renderRegionOverlayDetailed(lastLayout);
@@ -514,6 +551,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
         entityLayer.addChild(junctionOverlayLayer);
       }
     }
+    requestRender();
   }
 
   // --- Item color legend (bottom-left) ---
@@ -681,6 +719,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
         h: imp.zone_h,
       });
       renderLayout(lastLayout, entityLayer, undefined, undefined);
+      requestRender();
     };
 
     const drainDone = (): boolean => solverDone && queue.length === 0;
@@ -741,6 +780,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       (window as unknown as { __layout?: LayoutResult }).__layout = finalLayout;
       // Final authoritative redraw with the committed layout.
       renderLayout(finalLayout, entityLayer, undefined, undefined);
+      requestRender();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (!msg.includes("superseded")) {
@@ -998,7 +1038,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
         ctrl = renderLayout(layout, entityLayer, onHover, onSelect);
       }
     }
-    inspector.setHighlightController(ctrl);
+    inspector.setHighlightController(wrapHighlight(ctrl));
     inspector.setTileContext(buildTileContext(layout.trace));
     inspector.clearPin();
     selectionCtrl = createSelectionController(app.canvas, viewport, entityLayer, layout, onSelectionChange);
@@ -1020,6 +1060,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     if (soloRegionsActive) {
       entityLayer.alpha = 0.12;
     }
+    requestRender();
 
     // Auto-optimize: kick off the round-robin pass after the initial
     // render has been painted. rAF gives PixiJS one tick to commit the
@@ -1146,6 +1187,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     });
 
     soloRegionsCb.addEventListener("change", () => {
+      const finish = (): void => requestRender();
       if (soloRegionsCb.checked) {
         soloRegionsActive = true;
         soloSavedState = {
@@ -1171,6 +1213,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
 
         entityLayer.alpha = 0.12;
         updateRegionOverlay();
+        finish();
       } else {
         soloRegionsActive = false;
         if (soloSavedState) {
@@ -1192,6 +1235,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
 
           soloSavedState = null;
         }
+        finish();
       }
     });
 
