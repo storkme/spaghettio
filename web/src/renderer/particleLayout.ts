@@ -193,6 +193,7 @@ export function createParticleScene(): ParticleScene {
       ghostContainer.removeParticles();
       iconContainer.removeParticles();
       particleMap.clear();
+      ghostByTile.clear();
     },
     count(): number {
       return (
@@ -690,6 +691,18 @@ export function removeGhostParticle(
   if (!entry) return;
   scene.ghostContainer.removeParticle(entry.particle);
   ghostByTile.delete(tk);
+}
+
+/**
+ * Drop every ghost belt particle from `scene` and clear the
+ * tile-keyed tracker. Call this once streaming finishes — any
+ * ghosts that weren't replaced by committed entities (because the
+ * router speculated a path it didn't end up using) would otherwise
+ * stay parked at alpha 0.5 forever.
+ */
+export function clearAllGhostParticles(scene: ParticleScene): void {
+  scene.ghostContainer.removeParticles();
+  ghostByTile.clear();
 }
 
 /**

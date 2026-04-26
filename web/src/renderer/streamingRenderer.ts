@@ -47,6 +47,7 @@ import {
   createParticleHighlightController,
   addGhostParticle,
   removeGhostParticle,
+  clearAllGhostParticles,
   entityKey,
   type ParticleScene,
 } from "./particleLayout";
@@ -619,6 +620,13 @@ export function createStreamingRenderer(
       // Stop live ticker — scrub alpha is now imperative via seekTo.
       app.ticker.remove(tick);
       if (tickerActive) { endAnimating(); tickerActive = false; }
+
+      // Drop any leftover ghost belts. The router speculates ghosts
+      // along candidate paths and committed entities replace ghosts
+      // tile-by-tile via removeGhostParticle, but a path the router
+      // abandons leaves orphan ghosts that would otherwise sit at
+      // alpha 0.5 on top of the committed scene. Wipe them now.
+      clearAllGhostParticles(particleScene);
 
       animLog("streaming_finish", {
         entity_count: particleScene.count(),
