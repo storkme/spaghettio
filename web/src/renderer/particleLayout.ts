@@ -725,6 +725,25 @@ export function removeParticleAt(
 }
 
 /**
+ * Walk every committed pipe particle and refresh its atlas texture
+ * against the (now-complete) draw context. Streaming commits a pipe
+ * with whatever neighbours are visible at the moment its phase fires,
+ * so a pipe whose neighbour appears in a later phase ends up with a
+ * stale, under-connected texture. The non-streaming path doesn't hit
+ * this — it stages the whole tileMap before committing — but the
+ * streaming finish() does, so it calls this once at finalisation.
+ */
+export function refreshPipeTextures(ctx: DrawContext): void {
+  for (const entry of particleMap.values()) {
+    if (entry.placedEntity.name !== "pipe") continue;
+    const tex = getEntityAtlasTexture(entry.placedEntity, ctx);
+    if (entry.entity.texture !== tex) {
+      entry.entity.texture = tex;
+    }
+  }
+}
+
+/**
  * Walk all registered particles and update alpha based on
  * `(now - revealAt) / FADE_IN_MS`. Mirrors `applyReveals` in
  * `streamingRenderer.ts`. Called from the live-phase ticker.

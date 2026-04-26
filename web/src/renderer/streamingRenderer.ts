@@ -49,6 +49,7 @@ import {
   removeGhostParticle,
   clearAllGhostParticles,
   entityKey,
+  refreshPipeTextures,
   type ParticleScene,
 } from "./particleLayout";
 
@@ -661,6 +662,14 @@ export function createStreamingRenderer(
           }
         }
       }
+
+      // Pipes committed in earlier phases see only the neighbours that
+      // existed at commit time, so a pipe whose west/east/etc. neighbour
+      // arrived in a later phase is left with an under-connected texture
+      // (visible cut-offs in mid-bus pipe runs). drawCtx is now the
+      // complete tileMap — re-resolve every pipe particle's texture
+      // against it. Cheap: 16 cached variants, identity-equal hits skip.
+      refreshPipeTextures(drawCtx);
 
       reveals = list;
       scrubMode = true;
