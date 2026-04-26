@@ -510,8 +510,19 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
   let junctionHitTest: ((wx: number, wy: number) => JunctionCluster | null) | null = null;
   let ghostTilesLayer: Container | null = null;
 
+  // Pan + (conditionally) zoom to a tile. When the viewport is fitted to
+  // a large layout the scale is well below 1 (one tile is ~a few pixels),
+  // so a bare moveCenter is sub-pixel and looks like nothing happened.
+  // Zoom in to PAN_TARGET_SCALE first when we're below it; if the user is
+  // already zoomed in further, leave their zoom alone.
+  const PAN_TARGET_SCALE = 1.0;
   function panToTile(x: number, y: number): void {
-    viewport.moveCenter(x * TILE_PX + TILE_PX / 2, y * TILE_PX + TILE_PX / 2);
+    const cx = x * TILE_PX + TILE_PX / 2;
+    const cy = y * TILE_PX + TILE_PX / 2;
+    if (viewport.scale.x < PAN_TARGET_SCALE) {
+      viewport.setZoom(PAN_TARGET_SCALE, false);
+    }
+    viewport.moveCenter(cx, cy);
   }
 
   // Synthesise validation rows from layout-level data (router warnings +
