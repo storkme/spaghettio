@@ -321,6 +321,7 @@ fn run_e2e_inner(
     }
 
     fucktorio_core::zone_cache::set_thread_source(None);
+    fucktorio_core::zone_cache::flush();
     Ok(result)
 }
 
@@ -2888,45 +2889,30 @@ fn diag_sat_zone_histogram() {
         sources: Vec<String>,
     }
 
-    // Resolve path the same way zone_cache::resolve_cache_path() does.
-    let path = if let Ok(p) = std::env::var("FUCKTORIO_ZONE_CACHE_PATH") {
-        std::path::PathBuf::from(p)
-    } else {
-        let base = std::env::var("XDG_CACHE_HOME")
-            .ok()
-            .filter(|s| !s.is_empty())
-            .map(std::path::PathBuf::from)
-            .or_else(|| {
-                std::env::var("HOME")
-                    .ok()
-                    .map(|h| std::path::PathBuf::from(h).join(".cache"))
-            })
-            .unwrap_or_else(|| std::path::PathBuf::from(".cache"));
-        base.join("fucktorio").join("sat-zones.jsonl")
-    };
-
-    let content = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("Cannot read {}: {e}", path.display()));
+    // Resolve binary cache path. Falls back to legacy .jsonl if .bin doesn't
+    // exist, so this diag still works against pre-binary log files.
+    let base = std::env::var("FUCKTORIO_ZONE_CACHE_PATH")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            let cache_base = std::env::var("XDG_CACHE_HOME")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .map(std::path::PathBuf::from)
+                .or_else(|| {
+                    std::env::var("HOME")
+                        .ok()
+                        .map(|h| std::path::PathBuf::from(h).join(".cache"))
+                })
+                .unwrap_or_else(|| std::path::PathBuf::from(".cache"));
+            cache_base.join("fucktorio").join("sat-zones.bin")
+        });
+    let bin_path = base.clone();
+    let jsonl_path = base.with_extension("jsonl");
 
     let mut buckets: HashMap<String, ZoneBucket> = HashMap::new();
     let mut total_records = 0usize;
 
-    for (lineno, line) in content.lines().enumerate() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let v: serde_json::Value = serde_json::from_str(line)
-            .unwrap_or_else(|e| panic!("Bad JSON on line {}: {e}", lineno + 1));
-
-        let sig = v["signature"].as_str().unwrap_or("?").to_string();
-        let width = v["width"].as_u64().unwrap_or(0);
-        let height = v["height"].as_u64().unwrap_or(0);
-        let vars = v["variables"].as_u64().unwrap_or(0);
-        let clauses = v["clauses"].as_u64().unwrap_or(0);
-        let solve_us = v["solve_time_us"].as_u64().unwrap_or(0);
-        let source = v["source"].as_str().map(|s| s.to_string());
-
+    let mut record_one = |sig: String, width: u64, height: u64, vars: u64, clauses: u64, solve_us: u64, source: Option<String>| {
         total_records += 1;
         let bucket = buckets.entry(sig).or_insert(ZoneBucket {
             count: 0,
@@ -2948,6 +2934,38 @@ fn diag_sat_zone_histogram() {
                 bucket.sources.push(s);
             }
         }
+    };
+
+    // Binary records.
+    if let Ok(bytes) = std::fs::read(&bin_path) {
+        for rec in fucktorio_core::zone_cache::parse_records(&bytes) {
+            record_one(
+                rec.signature, rec.canon_w as u64, rec.canon_h as u64,
+                rec.variables as u64, rec.clauses as u64, rec.solve_time_us,
+                rec.source,
+            );
+        }
+    }
+
+    // Legacy JSONL records — both v0 and v1 key sets.
+    if let Ok(content) = std::fs::read_to_string(&jsonl_path) {
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() { continue; }
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+            let sig = v["s"].as_str().or_else(|| v["signature"].as_str()).unwrap_or("?").to_string();
+            let width = v["cw"].as_u64().or_else(|| v["width"].as_u64()).unwrap_or(0);
+            let height = v["ch"].as_u64().or_else(|| v["height"].as_u64()).unwrap_or(0);
+            let vars = v["vars"].as_u64().or_else(|| v["variables"].as_u64()).unwrap_or(0);
+            let clauses = v["cls"].as_u64().or_else(|| v["clauses"].as_u64()).unwrap_or(0);
+            let solve_us = v["us"].as_u64().or_else(|| v["solve_time_us"].as_u64()).unwrap_or(0);
+            let source = v["src"].as_str().or_else(|| v["source"].as_str()).map(|s| s.to_string());
+            record_one(sig, width, height, vars, clauses, solve_us, source);
+        }
+    }
+
+    if total_records == 0 {
+        panic!("no records found at {} or {}", bin_path.display(), jsonl_path.display());
     }
 
     let distinct = buckets.len();
@@ -2980,4 +2998,246 @@ fn diag_sat_zone_histogram() {
     panic!(
         "SAT zone histogram: total_records={total_records}, distinct_signatures={distinct}; top-10: {top10_str}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// SAT total-time profile — verifies whether SAT actually dominates layout cost
+// ---------------------------------------------------------------------------
+
+/// Run the full default stress + tier corpus in-process and tally:
+///   - total wall-clock per test
+///   - total SAT solve time per test (sum of SatInvocation.solve_time_us)
+///   - SAT call count and satisfied count
+///
+/// Confirms (or refutes) the hypothesis that SAT solving dominates layout cost.
+///
+/// Run with:
+///   cargo test --manifest-path crates/core/Cargo.toml --release --test e2e -- \
+///       --ignored diag_sat_total_time --exact --nocapture
+#[test]
+#[ignore]
+fn diag_sat_total_time() {
+    struct Case {
+        name: &'static str,
+        item: &'static str,
+        rate: f64,
+        machine: &'static str,
+        belt: Option<&'static str>,
+        from_ore: bool,
+    }
+    let cases = [
+        Case { name: "tier1_iron_gear_wheel", item: "iron-gear-wheel", rate: 1.0, machine: "assembling-machine-1", belt: None, from_ore: false },
+        Case { name: "tier1_iron_gear_wheel_20s", item: "iron-gear-wheel", rate: 20.0, machine: "assembling-machine-1", belt: None, from_ore: false },
+        Case { name: "tier1_iron_gear_wheel_from_ore", item: "iron-gear-wheel", rate: 1.0, machine: "assembling-machine-1", belt: None, from_ore: true },
+        Case { name: "tier2_electronic_circuit_from_ore", item: "electronic-circuit", rate: 1.0, machine: "assembling-machine-1", belt: None, from_ore: true },
+        Case { name: "tier2_electronic_circuit_20s_from_ore", item: "electronic-circuit", rate: 20.0, machine: "assembling-machine-1", belt: None, from_ore: true },
+        Case { name: "stress_electronic_circuit_22s_from_ore", item: "electronic-circuit", rate: 22.0, machine: "assembling-machine-1", belt: None, from_ore: true },
+        Case { name: "stress_electronic_circuit_30s_from_ore", item: "electronic-circuit", rate: 30.0, machine: "assembling-machine-1", belt: None, from_ore: true },
+        Case { name: "stress_electronic_circuit_40s_from_ore", item: "electronic-circuit", rate: 40.0, machine: "assembling-machine-1", belt: None, from_ore: true },
+        Case { name: "stress_electronic_circuit_60s_red_from_ore", item: "electronic-circuit", rate: 60.0, machine: "assembling-machine-1", belt: Some("fast-transport-belt"), from_ore: true },
+        Case { name: "tier3_plastic_bar", item: "plastic-bar", rate: 1.0, machine: "assembling-machine-1", belt: None, from_ore: false },
+        Case { name: "tier3_plastic_bar_from_crude", item: "plastic-bar", rate: 1.0, machine: "assembling-machine-1", belt: None, from_ore: false },
+    ];
+
+    let mut total_wall_us: u128 = 0;
+    let mut total_sat_us: u64 = 0;
+    let mut total_calls: u64 = 0;
+    let mut total_sat_solved: u64 = 0;
+
+    eprintln!();
+    eprintln!("{:<55} {:>10} {:>10} {:>8} {:>8} {:>6}", "test", "wall_ms", "sat_ms", "sat%", "calls", "ok");
+    eprintln!("{}", "-".repeat(105));
+
+    for c in &cases {
+        let mut available_inputs = FxHashSet::default();
+        if c.from_ore {
+            available_inputs.insert("iron-ore".to_string());
+            available_inputs.insert("copper-ore".to_string());
+        }
+        if c.item == "plastic-bar" && c.name == "tier3_plastic_bar_from_crude" {
+            available_inputs.insert("crude-oil".to_string());
+        }
+
+        let start = Instant::now();
+        let result = match run_e2e(c.name, c.item, c.rate, c.machine, c.belt, &available_inputs) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("{:<55} ERROR: {}", c.name, e);
+                continue;
+            }
+        };
+        let wall_us = start.elapsed().as_micros();
+
+        let mut sat_us: u64 = 0;
+        let mut sat_calls: u64 = 0;
+        let mut sat_solved: u64 = 0;
+        for ev in &result.trace_events {
+            if let TraceEvent::SatInvocation { solve_time_us, satisfied, .. } = ev {
+                sat_us += solve_time_us;
+                sat_calls += 1;
+                if *satisfied { sat_solved += 1; }
+            }
+        }
+
+        let pct = if wall_us > 0 { (sat_us as f64 / 1000.0) / (wall_us as f64 / 1000.0) * 100.0 } else { 0.0 };
+        eprintln!("{:<55} {:>10.1} {:>10.1} {:>7.1}% {:>8} {:>6}",
+            c.name, wall_us as f64 / 1000.0, sat_us as f64 / 1000.0, pct, sat_calls, sat_solved);
+
+        total_wall_us += wall_us;
+        total_sat_us += sat_us;
+        total_calls += sat_calls;
+        total_sat_solved += sat_solved;
+    }
+
+    let total_pct = if total_wall_us > 0 {
+        (total_sat_us as f64 / 1000.0) / (total_wall_us as f64 / 1000.0) * 100.0
+    } else { 0.0 };
+
+    eprintln!("{}", "-".repeat(105));
+    eprintln!("{:<55} {:>10.1} {:>10.1} {:>7.1}% {:>8} {:>6}",
+        "TOTAL", total_wall_us as f64 / 1000.0, total_sat_us as f64 / 1000.0, total_pct, total_calls, total_sat_solved);
+
+    panic!(
+        "SAT total-time profile: wall={:.1}ms sat={:.1}ms ({:.1}%) calls={} solved={}",
+        total_wall_us as f64 / 1000.0,
+        total_sat_us as f64 / 1000.0,
+        total_pct,
+        total_calls,
+        total_sat_solved
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Corpus sweep — populate sat-zones.jsonl with many layout variations
+// ---------------------------------------------------------------------------
+
+/// Sweep a matrix of recipe × rate × belt-tier × input-mode combinations to
+/// stress-populate the SAT zone cache. Each successful layout writes records
+/// via the wired-up `record_zone` call; layouts that error out are skipped
+/// silently so a single broken combo doesn't kill the run.
+///
+/// Tally: layouts attempted, layouts succeeded, total SAT calls.
+///
+/// Run with:
+///   cargo test --manifest-path crates/core/Cargo.toml --release --test e2e -- \
+///       --ignored diag_corpus_sweep --exact --nocapture
+///
+/// Then read the dedup picture with:
+///   cargo test --manifest-path crates/core/Cargo.toml --release --test e2e -- \
+///       --ignored diag_sat_zone_histogram --exact --nocapture
+#[test]
+#[ignore]
+fn diag_corpus_sweep() {
+    struct Combo {
+        item: &'static str,
+        rate: f64,
+        belt: Option<&'static str>,
+        from_ore: bool,
+        // For plastic-bar: also try from_crude
+        from_crude: bool,
+    }
+
+    let mut combos: Vec<Combo> = Vec::new();
+
+    // iron-gear-wheel — tier1, simple recipe
+    for &rate in &[1.0, 2.0, 3.0, 5.0, 7.5, 10.0, 15.0, 20.0, 30.0] {
+        for from_ore in [false, true] {
+            for belt in [None, Some("fast-transport-belt")] {
+                combos.push(Combo { item: "iron-gear-wheel", rate, belt, from_ore, from_crude: false });
+            }
+        }
+    }
+
+    // copper-cable — tier1, simple
+    for &rate in &[1.0, 5.0, 10.0, 20.0, 30.0] {
+        for from_ore in [false, true] {
+            for belt in [None, Some("fast-transport-belt")] {
+                combos.push(Combo { item: "copper-cable", rate, belt, from_ore, from_crude: false });
+            }
+        }
+    }
+
+    // transport-belt — needs gear-wheel
+    for &rate in &[1.0, 5.0, 10.0] {
+        for from_ore in [false, true] {
+            combos.push(Combo { item: "transport-belt", rate, belt: None, from_ore, from_crude: false });
+        }
+    }
+
+    // electronic-circuit — tier2, two recipes deep
+    for &rate in &[1.0, 2.5, 5.0, 7.5, 10.0, 15.0, 20.0, 22.0, 25.0, 30.0, 40.0, 50.0] {
+        for from_ore in [false, true] {
+            for belt in [None, Some("fast-transport-belt")] {
+                combos.push(Combo { item: "electronic-circuit", rate, belt, from_ore, from_crude: false });
+            }
+        }
+    }
+
+    // plastic-bar — tier3, fluid+solid
+    for &rate in &[1.0, 2.0, 5.0] {
+        combos.push(Combo { item: "plastic-bar", rate, belt: None, from_ore: false, from_crude: false });
+        combos.push(Combo { item: "plastic-bar", rate, belt: None, from_ore: false, from_crude: true });
+    }
+
+    // sulfuric-acid — tier3, fluid output
+    for &rate in &[1.0, 2.0, 5.0] {
+        combos.push(Combo { item: "sulfuric-acid", rate, belt: None, from_ore: false, from_crude: false });
+    }
+
+    eprintln!("\n=== diag_corpus_sweep: {} combinations ===", combos.len());
+
+    let sweep_start = Instant::now();
+    let mut attempted = 0usize;
+    let mut succeeded = 0usize;
+    let mut total_sat_calls: u64 = 0;
+    let mut total_sat_us: u64 = 0;
+
+    for c in &combos {
+        attempted += 1;
+        let mut available_inputs = FxHashSet::default();
+        if c.from_ore {
+            available_inputs.insert("iron-ore".to_string());
+            available_inputs.insert("copper-ore".to_string());
+        }
+        if c.from_crude {
+            available_inputs.insert("crude-oil".to_string());
+        }
+
+        let test_name = format!(
+            "sweep_{}_{:.1}s_{}{}",
+            c.item.replace('-', "_"),
+            c.rate,
+            c.belt.map(|b| if b == "fast-transport-belt" { "red" } else { "yel" }).unwrap_or("auto"),
+            if c.from_ore { "_ore" } else if c.from_crude { "_crude" } else { "" },
+        );
+
+        match run_e2e(&test_name, c.item, c.rate, "assembling-machine-1", c.belt, &available_inputs) {
+            Ok(result) => {
+                succeeded += 1;
+                for ev in &result.trace_events {
+                    if let TraceEvent::SatInvocation { solve_time_us, .. } = ev {
+                        total_sat_calls += 1;
+                        total_sat_us += solve_time_us;
+                    }
+                }
+            }
+            Err(_) => {
+                // Skip silently — broken combos shouldn't kill the sweep.
+            }
+        }
+    }
+
+    let elapsed_ms = sweep_start.elapsed().as_millis();
+    eprintln!(
+        "\nSweep done in {:.1}s: {}/{} combos succeeded, {} SAT calls, {:.1}ms total SAT",
+        elapsed_ms as f64 / 1000.0,
+        succeeded,
+        attempted,
+        total_sat_calls,
+        total_sat_us as f64 / 1000.0,
+    );
+    eprintln!("\nNow run: cargo test --release --test e2e -- --ignored diag_sat_zone_histogram --exact --nocapture");
+
+    // Don't panic — we want the cache populated and the summary printed.
+    // No assertion; this is purely a data-gathering diag.
 }

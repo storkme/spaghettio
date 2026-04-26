@@ -855,6 +855,73 @@ impl JunctionStrategy for SatStrategy {
         let (seed_x, seed_y) = ctx.region.initial_tile;
         let iter = ctx.growth_iter;
 
+        // Try the solution cache first. On a hit, skip SAT + cost-descent
+        // entirely and reuse the previously-cached entities. WASM uses the
+        // pre-baked cache embedded at compile time; native loads from
+        // `~/.cache/fucktorio/sat-zones.bin`. Both honour
+        // `FUCKTORIO_USE_ZONE_CACHE=0` to disable on native.
+        let cached_hit: Option<Vec<crate::models::PlacedEntity>> =
+            crate::zone_cache::lookup_zone(&zone, &channel_reaches, self.constraints.max_ug_ins);
+
+        if let Some(cached_entities) = cached_hit {
+            let proposed_entities: Vec<SatProposedEntity> = cached_entities
+                .iter()
+                .map(|e| SatProposedEntity {
+                    x: e.x,
+                    y: e.y,
+                    name: e.name.clone(),
+                    direction: dir_label(e.direction),
+                    carries: e.carries.clone(),
+                    io_type: e.io_type.clone(),
+                })
+                .collect();
+            trace::emit(TraceEvent::SatInvocation {
+                seed_x,
+                seed_y,
+                iter,
+                variant: format!("{}+cached", ctx.growth_variant),
+                zone_x: zone.x,
+                zone_y: zone.y,
+                zone_w: zone.width,
+                zone_h: zone.height,
+                boundaries: boundary_snapshots.clone(),
+                forced_empty: forced_empty.clone(),
+                belt_tier: belt_name.to_string(),
+                max_reach,
+                satisfied: true,
+                variables: 0,
+                clauses: 0,
+                solve_time_us: 0,
+                entities_raw: cached_entities.len(),
+                initial_cost: Some(crate::bus::junction_cost::solution_cost(&cached_entities)),
+                proposed_entities,
+            });
+            let pruned = prune_dangling_sat_entities(
+                cached_entities,
+                &boundaries,
+                max_reach,
+                zone.x,
+                zone.y,
+            );
+            return Some(JunctionSolution {
+                entities: pruned,
+                footprint: Rect {
+                    x: zone.x,
+                    y: zone.y,
+                    w: zone.width,
+                    h: zone.height,
+                },
+                strategy_name: self.name(),
+                participating: ctx.region.participating.clone(),
+                sat_zone: Some(crate::bus::junction_solver::SatZoneSnapshot {
+                    boundaries: boundaries.clone(),
+                    forced_empty: zone.forced_empty.clone(),
+                    belt_tier: belt_name.to_string(),
+                    max_ug_reach: max_reach,
+                }),
+            });
+        }
+
         let (entities_opt, stats) = crate::sat::solve_crossing_zone_per_channel(
             &zone,
             &channel_reaches,
@@ -890,7 +957,7 @@ impl JunctionStrategy for SatStrategy {
             zone_y: zone.y,
             zone_w: zone.width,
             zone_h: zone.height,
-            boundaries: boundary_snapshots,
+            boundaries: boundary_snapshots.clone(),
             forced_empty,
             belt_tier: belt_name.to_string(),
             max_reach,
@@ -962,6 +1029,24 @@ impl JunctionStrategy for SatStrategy {
                 (None, _) => break,
             }
         }
+
+        // Record the post-descent SAT solution for future cache hits. Stored
+        // pre-prune so cache replay can run prune against the new zone's
+        // boundary context (prune is context-sensitive). WASM also records
+        // (in-memory only — no disk persistence there) so same-session
+        // repeats hit too.
+        crate::zone_cache::record_zone_with_solution(
+            &zone,
+            &channel_reaches,
+            self.constraints.max_ug_ins,
+            crate::zone_cache::ZoneStats {
+                variables: stats.variables,
+                clauses: stats.clauses,
+                solve_time_us: stats.solve_time_us,
+            },
+            &best,
+            None,
+        );
 
         let pruned = prune_dangling_sat_entities(
             best,
