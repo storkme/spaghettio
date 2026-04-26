@@ -668,8 +668,17 @@ export function createStreamingRenderer(
       // arrived in a later phase is left with an under-connected texture
       // (visible cut-offs in mid-bus pipe runs). drawCtx is now the
       // complete tileMap — re-resolve every pipe particle's texture
-      // against it. Cheap: 16 cached variants, identity-equal hits skip.
-      refreshPipeTextures(drawCtx);
+      // against it. The container's UV buffer is static (uvs:false), so
+      // refreshPipeTextures has to remove+re-add changed particles. The
+      // reveals list above was built from the pre-swap particle map, so
+      // patch any swapped references through.
+      const swaps = refreshPipeTextures(particleScene, drawCtx);
+      if (swaps.size > 0) {
+        for (const r of list) {
+          const swap = swaps.get(r.particle);
+          if (swap) r.particle = swap;
+        }
+      }
 
       reveals = list;
       scrubMode = true;

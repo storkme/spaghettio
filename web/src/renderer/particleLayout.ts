@@ -732,15 +732,46 @@ export function removeParticleAt(
  * stale, under-connected texture. The non-streaming path doesn't hit
  * this — it stages the whole tileMap before committing — but the
  * streaming finish() does, so it calls this once at finalisation.
+ *
+ * Implementation note: `beltContainer` is configured with
+ * `uvs: false` (see `makeParticleContainer`), so reassigning
+ * `particle.texture` is a silent no-op — the UV buffer is uploaded
+ * once at `addParticle` time and never refreshed. To actually swap
+ * the texture we have to remove the old particle and add a fresh
+ * one with the new texture, which forces the container to rebatch.
+ *
+ * Returns a Map<oldParticle, newParticle> for any pipe whose
+ * particle was replaced, so the caller can patch its scrub-mode
+ * reveals list (which holds particle references built before this
+ * runs).
  */
-export function refreshPipeTextures(ctx: DrawContext): void {
-  for (const entry of particleMap.values()) {
+export function refreshPipeTextures(
+  scene: ParticleScene,
+  ctx: DrawContext,
+): Map<Particle, Particle> {
+  const swaps = new Map<Particle, Particle>();
+  for (const [key, entry] of particleMap.entries()) {
     if (entry.placedEntity.name !== "pipe") continue;
-    const tex = getEntityAtlasTexture(entry.placedEntity, ctx);
-    if (entry.entity.texture !== tex) {
-      entry.entity.texture = tex;
-    }
+    const newTex = getEntityAtlasTexture(entry.placedEntity, ctx);
+    if (entry.entity.texture === newTex) continue;
+
+    const oldP = entry.entity;
+    const newP = new Particle({
+      texture: newTex,
+      x: oldP.x,
+      y: oldP.y,
+      alpha: oldP.alpha,
+      anchorX: oldP.anchorX,
+      anchorY: oldP.anchorY,
+      scaleX: oldP.scaleX,
+      scaleY: oldP.scaleY,
+    });
+    scene.beltContainer.removeParticle(oldP);
+    scene.beltContainer.addParticle(newP);
+    particleMap.set(key, { ...entry, entity: newP });
+    swaps.set(oldP, newP);
   }
+  return swaps;
 }
 
 /**
