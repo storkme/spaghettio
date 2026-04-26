@@ -811,14 +811,12 @@ impl JunctionStrategy for SatStrategy {
         let iter = ctx.growth_iter;
 
         // Try the solution cache first. On a hit, skip SAT + cost-descent
-        // entirely and reuse the previously-cached entities. The cache is
-        // gated behind FUCKTORIO_USE_ZONE_CACHE while we verify parity;
-        // recording (below) always runs.
-        #[cfg(not(target_arch = "wasm32"))]
+        // entirely and reuse the previously-cached entities. WASM uses the
+        // pre-baked cache embedded at compile time; native loads from
+        // `~/.cache/fucktorio/sat-zones.bin`. Both honour
+        // `FUCKTORIO_USE_ZONE_CACHE=0` to disable on native.
         let cached_hit: Option<Vec<crate::models::PlacedEntity>> =
             crate::zone_cache::lookup_zone(&zone, &channel_reaches, self.constraints.max_ug_ins);
-        #[cfg(target_arch = "wasm32")]
-        let cached_hit: Option<Vec<crate::models::PlacedEntity>> = None;
 
         if let Some(cached_entities) = cached_hit {
             let proposed_entities: Vec<SatProposedEntity> = cached_entities
@@ -989,8 +987,9 @@ impl JunctionStrategy for SatStrategy {
 
         // Record the post-descent SAT solution for future cache hits. Stored
         // pre-prune so cache replay can run prune against the new zone's
-        // boundary context (prune is context-sensitive).
-        #[cfg(not(target_arch = "wasm32"))]
+        // boundary context (prune is context-sensitive). WASM also records
+        // (in-memory only — no disk persistence there) so same-session
+        // repeats hit too.
         crate::zone_cache::record_zone_with_solution(
             &zone,
             &channel_reaches,
