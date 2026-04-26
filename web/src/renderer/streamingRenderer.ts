@@ -49,6 +49,7 @@ import {
   removeGhostParticle,
   clearAllGhostParticles,
   entityKey,
+  evictParticlesAtTile,
   refreshPipeTextures,
   type ParticleScene,
 } from "./particleLayout";
@@ -371,6 +372,21 @@ export function createStreamingRenderer(
       if (gc.clusterId === data.cluster_id) gc.cleared = true;
     }
 
+    // Evict every existing committed particle inside the zone before we
+    // commit SAT's replacements. Two failure modes the eviction prevents:
+    // (1) old belt has a different `name` than the SAT belt at the same
+    // tile (e.g. transport-belt → underground-belt) — different
+    // entityKey → both particles end up live, the old one shows
+    // through. (2) `name` matches but direction/carries differ —
+    // commitEntityAsParticle would silently skip the SAT entity due to
+    // its idempotency guard, leaving the pre-SAT belt visible.
+    for (let yi = data.zone_y; yi <= yMax; yi++) {
+      for (let xi = data.zone_x; xi <= xMax; xi++) {
+        const evicted = evictParticlesAtTile(particleScene, xi, yi);
+        for (const k of evicted) committedKeys.delete(k);
+      }
+    }
+
     const count = data.entities.length;
     const js = stagger(count, JUNCTION_TILE_STAGGER_MAX_MS, JUNCTION_TILE_STAGGER_BUDGET_MS);
     animLog("junction", { cluster_id: data.cluster_id, zone: `${data.zone_x},${data.zone_y}+${data.zone_w}x${data.zone_h}`, count, span_ms: count * js });
@@ -668,8 +684,17 @@ export function createStreamingRenderer(
       // arrived in a later phase is left with an under-connected texture
       // (visible cut-offs in mid-bus pipe runs). drawCtx is now the
       // complete tileMap — re-resolve every pipe particle's texture
-      // against it. Cheap: 16 cached variants, identity-equal hits skip.
-      refreshPipeTextures(drawCtx);
+      // against it. The container's UV buffer is static (uvs:false), so
+      // refreshPipeTextures has to remove+re-add changed particles. The
+      // reveals list above was built from the pre-swap particle map, so
+      // patch any swapped references through.
+      const swaps = refreshPipeTextures(particleScene, drawCtx);
+      if (swaps.size > 0) {
+        for (const r of list) {
+          const swap = swaps.get(r.particle);
+          if (swap) r.particle = swap;
+        }
+      }
 
       reveals = list;
       scrubMode = true;
