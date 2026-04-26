@@ -1568,9 +1568,16 @@ fn processing_unit_2s_am2_fast_belts_validation_baseline() {
 
     // Baseline upper bounds — should shrink as fixes land. To reduce a
     // bound, run the test, observe the new count, and tighten here.
+    //
+    // belt-item-isolation tracks at 9 on CI; locally the asymmetric-axis
+    // growth fallback (commit 8fd78ae) sometimes drops it to 8 by giving
+    // an extra electronic-circuit × advanced-circuit junction enough
+    // room to solve. The win depends on cluster-iteration order which
+    // varies with FxHashMap seeding across platforms, so the bound is
+    // 9 (a true upper bound, not the lucky local minimum).
     let baseline = [
         ("fluid-network", 0usize),
-        ("belt-item-isolation", 8),
+        ("belt-item-isolation", 9),
         ("belt-dead-end", 0),
     ];
     let mut regressed = Vec::new();
