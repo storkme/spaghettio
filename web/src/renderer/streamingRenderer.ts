@@ -49,6 +49,7 @@ import {
   removeGhostParticle,
   clearAllGhostParticles,
   entityKey,
+  evictParticlesAtTile,
   refreshPipeTextures,
   type ParticleScene,
 } from "./particleLayout";
@@ -369,6 +370,21 @@ export function createStreamingRenderer(
     // Also drop any clusterOverlay rectangle for this cluster.
     for (const gc of ghostClusters) {
       if (gc.clusterId === data.cluster_id) gc.cleared = true;
+    }
+
+    // Evict every existing committed particle inside the zone before we
+    // commit SAT's replacements. Two failure modes the eviction prevents:
+    // (1) old belt has a different `name` than the SAT belt at the same
+    // tile (e.g. transport-belt → underground-belt) — different
+    // entityKey → both particles end up live, the old one shows
+    // through. (2) `name` matches but direction/carries differ —
+    // commitEntityAsParticle would silently skip the SAT entity due to
+    // its idempotency guard, leaving the pre-SAT belt visible.
+    for (let yi = data.zone_y; yi <= yMax; yi++) {
+      for (let xi = data.zone_x; xi <= xMax; xi++) {
+        const evicted = evictParticlesAtTile(particleScene, xi, yi);
+        for (const k of evicted) committedKeys.delete(k);
+      }
     }
 
     const count = data.entities.length;

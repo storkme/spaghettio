@@ -725,6 +725,37 @@ export function removeParticleAt(
 }
 
 /**
+ * Drop every committed particle at tile `(x, y)`, regardless of name or
+ * recipe. Returns the entity-keys that were evicted so the caller can
+ * also clear them from any external "already committed" tracker (e.g.
+ * `committedKeys` in streamingRenderer.ts). Used by SAT-zone commit
+ * handling: the ghost router commits speculative belts before the SAT
+ * solver runs, and SAT can replace those tiles with belts that have a
+ * different `name` (transport-belt → underground-belt) — different
+ * `entityKey` → both particles end up coexisting unless the old ones
+ * are explicitly evicted first.
+ */
+export function evictParticlesAtTile(
+  scene: ParticleScene,
+  x: number,
+  y: number,
+): string[] {
+  const evicted: string[] = [];
+  for (const [key, entry] of particleMap.entries()) {
+    if (entry.placedEntity.x !== x || entry.placedEntity.y !== y) continue;
+    if (MACHINE_ENTITIES.has(entry.placedEntity.name)) {
+      scene.machineContainer.removeParticle(entry.entity);
+    } else {
+      scene.beltContainer.removeParticle(entry.entity);
+    }
+    if (entry.icon) scene.iconContainer.removeParticle(entry.icon);
+    particleMap.delete(key);
+    evicted.push(key);
+  }
+  return evicted;
+}
+
+/**
  * Walk every committed pipe particle and refresh its atlas texture
  * against the (now-complete) draw context. Streaming commits a pipe
  * with whatever neighbours are visible at the moment its phase fires,
