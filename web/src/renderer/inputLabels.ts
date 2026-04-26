@@ -24,10 +24,17 @@ const LABEL_HEADROOM_TILES = 6;
 // because the whole thing rotates so this becomes vertical spacing.
 const SEGMENT_GAP_PX = 6;
 
-// Font-size scaling: clamp(span * SCALE, MIN, MAX).
-const FONT_SCALE_PX_PER_TILE = 16;
-const FONT_MIN_PX = 14;
-const FONT_MAX_PX = 48;
+// Font-size scaling. Labels grow gently with trunk width so a 5-column
+// family reads slightly bigger than a single trunk, but stays in the same
+// visual register — wide spread (e.g. 14→48) made the layout confusing.
+const FONT_BASE_PX = 18;
+const FONT_PER_EXTRA_TILE_PX = 2;
+const FONT_MAX_PX = 26;
+
+// External input trunks always have `source_y = 0` (lane_planner.rs:198),
+// so their topmost trunk tile sits at the top of the layout. Anything with
+// a higher topY is an intermediate column — drop it.
+const INPUT_TRUNK_TOP_Y = 0;
 
 const NAME_ALPHA = 0.6;
 
@@ -89,7 +96,11 @@ function findInputTrunks(
   if (topByCol.size === 0) return [];
 
   // Sort columns left to right and merge contiguous runs sharing carries.
+  // Drop any column whose topmost trunk tile is below the layout's top row:
+  // intermediate trunks that happen to carry an external-input item show up
+  // here too, but they don't deserve an "input" label.
   const cols = Array.from(topByCol.entries())
+    .filter(([, info]) => info.y === INPUT_TRUNK_TOP_Y)
     .map(([x, info]) => ({ x, ...info }))
     .sort((a, b) => a.x - b.x);
 
@@ -153,9 +164,9 @@ function formatRate(rate: number): string {
  */
 function buildLabel(group: TrunkGroup): Container {
   const span = group.xMax - group.xMin + 1;
-  const fontSize = Math.max(
-    FONT_MIN_PX,
-    Math.min(FONT_MAX_PX, span * FONT_SCALE_PX_PER_TILE),
+  const fontSize = Math.min(
+    FONT_MAX_PX,
+    FONT_BASE_PX + (span - 1) * FONT_PER_EXTRA_TILE_PX,
   );
 
   const labelContainer = new Container();
