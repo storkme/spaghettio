@@ -175,8 +175,15 @@ pub(crate) fn order_specs<'a>(
     machines: &'a [MachineSpec],
     dependency_order: &[String],
 ) -> Vec<&'a MachineSpec> {
-    let recipe_to_spec: FxHashMap<&str, &MachineSpec> =
-        machines.iter().map(|m| (m.recipe.as_str(), m)).collect();
+    // Multiple specs may share the same recipe — Phase 2 of
+    // `rfp-modular-production` Cartesian-splits consumer specs across
+    // input shards, producing N entries per recipe. The HashMap value
+    // is therefore `Vec<&MachineSpec>` so we don't drop duplicates on
+    // the final lookup.
+    let mut recipe_to_specs: FxHashMap<&str, Vec<&MachineSpec>> = FxHashMap::default();
+    for m in machines {
+        recipe_to_specs.entry(m.recipe.as_str()).or_default().push(m);
+    }
 
     // item -> recipe that produces it
     let mut producer: FxHashMap<&str, &str> = FxHashMap::default();
@@ -252,7 +259,7 @@ pub(crate) fn order_specs<'a>(
 
     emitted
         .into_iter()
-        .filter_map(|r| recipe_to_spec.get(r).copied())
+        .flat_map(|r| recipe_to_specs.get(r).cloned().unwrap_or_default())
         .collect()
 }
 

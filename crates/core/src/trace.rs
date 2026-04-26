@@ -139,6 +139,39 @@ pub enum TraceEvent {
         lane_util: f64,
         belt_tier: String,
     },
+
+    // `LayoutStrategy::PartitionedDecomposed` sharded an oversized
+    // module into N sub-modules of ≤8 lanes each. Fires once per
+    // sharded module. K2-1 / K2-2 instrumentation per
+    // `docs/rfp-modular-production.md`.
+    ShardSplit {
+        item: String,
+        /// Recipe consuming from this module. For K=1 items not in
+        /// Phase 1's plan, the single consumer recipe.
+        consumer_recipe: String,
+        /// Pre-shard lane count (the value that exceeded 8 and
+        /// triggered the split).
+        original_lane_count: u32,
+        /// Number of shards the module was split into = ⌈original / 8⌉.
+        shards: u32,
+        /// Per-shard lane count, parallel to shard module_id 0..shards.
+        lanes_per_shard: Vec<usize>,
+    },
+
+    // Decomposition produced shards whose lane count doesn't tile
+    // cleanly with consumer demand (multi-consumer K2-2 case from the
+    // RFP). Fires when a consumer's tap from a shard is uneven —
+    // e.g. a 7-lane consumer tapping from a (6, 6) shard split.
+    // For single-consumer modules this never fires by construction
+    // (uniform demand divides cleanly).
+    LumpyShardTap {
+        item: String,
+        consumer_recipe: String,
+        /// Lanes the consumer needs from this specific shard.
+        consumer_lanes_in_shard: u32,
+        /// The shard's total lane width.
+        shard_lane_count: u32,
+    },
     LaneSplit {
         item: String,
         rate: f64,

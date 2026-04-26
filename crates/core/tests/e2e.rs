@@ -1523,6 +1523,73 @@ fn stress_advanced_circuit_partitioned_5s_from_plates() {
     );
 }
 
+/// **Phase 2 (PartitionedDecomposed) K1-1 case** from
+/// `docs/rfp-modular-production.md`. Electronic-circuit @ 30/s from ore on
+/// yellow belts: copper-cable demand is 90/s = 12 lanes (over the 8-lane
+/// cap), and copper-cable has a single consumer (EC) so Phase 1's
+/// per-consumer partitioning has nothing to do (K=1). Phase 2 shards
+/// copper-cable into 2 sub-modules of ≤8 lanes.
+///
+/// Probed on this branch (2026-04-26):
+/// - Pooled: 10 errors
+/// - PartitionedPerConsumer: 10 errors (K=1, Phase 1 has nothing to do)
+/// - **PartitionedDecomposed: 7 errors** (strict win over Pooled; ShardSplit fires)
+///
+/// The 7 residual errors are belt-dead-ends that surface from the
+/// downstream lane planner / ghost router when there are multiple
+/// MachineSpecs sharing the same recipe (Phase 2's Cartesian
+/// consumer-split exposes this regime). Separate follow-up — they're
+/// pre-existing engine assumptions, not partitioner bugs.
+///
+/// What this gates:
+///   - **K1-1 strict-improvement signal**: PartitionedDecomposed must
+///     produce strictly fewer errors than the Pooled baseline at this
+///     rate. If the gap closes (decomposition stops winning), Phase 2
+///     has regressed.
+///   - **ShardSplit fires** for copper-cable. Trace event presence
+///     confirms the algorithm path executed.
+#[test]
+#[ntest::timeout(600000)]
+fn stress_electronic_circuit_30s_decomposed() {
+    use fucktorio_core::bus::layout::LayoutStrategy;
+    use fucktorio_core::trace::TraceEvent;
+
+    let inputs: FxHashSet<String> = ["iron-ore", "copper-ore"]
+        .iter().map(|s| s.to_string()).collect();
+
+    let pooled = run_e2e_with_strategy(
+        "stress_electronic_circuit_30s_decomposed",
+        "electronic-circuit", 30.0, "assembling-machine-2",
+        Some("transport-belt"), &inputs, LayoutStrategy::Pooled,
+    )
+    .expect("Pooled e2e pipeline");
+    let decomposed = run_e2e_with_strategy(
+        "stress_electronic_circuit_30s_decomposed",
+        "electronic-circuit", 30.0, "assembling-machine-2",
+        Some("transport-belt"), &inputs, LayoutStrategy::PartitionedDecomposed,
+    )
+    .expect("PartitionedDecomposed e2e pipeline");
+    assert_produces(&decomposed, "electronic-circuit", 30.0);
+
+    let pooled_errors = pooled.issues.iter().filter(|i| i.severity == Severity::Error).count();
+    let decomposed_errors = decomposed.issues.iter().filter(|i| i.severity == Severity::Error).count();
+    assert!(
+        decomposed_errors < pooled_errors,
+        "Phase 2 K1-1 strict-improvement: PartitionedDecomposed must produce \
+         fewer errors than Pooled. Got pooled={pooled_errors}, decomposed={decomposed_errors}.",
+    );
+
+    // ShardSplit must fire — the algorithm path is what we're gating on.
+    let shard_split_events = decomposed.trace_events.iter().filter(|evt| {
+        matches!(evt, TraceEvent::ShardSplit { item, .. } if item == "copper-cable")
+    }).count();
+    assert!(
+        shard_split_events >= 1,
+        "expected at least one ShardSplit event for copper-cable; \
+         partitioner did not fire on the motivating case"
+    );
+}
+
 /// User's processing-unit @ 2/s URL config (vertical-split, AM2, fast belts).
 /// Tracks the validator-error baseline so regressions in the fluid-trunk
 /// router, output-merger, or balancer-stamp logic surface immediately. The

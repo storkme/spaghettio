@@ -23,7 +23,7 @@
 //! See K0-1, K1-1, K1-2, K1-3, K1-4 in the RFP for the gates this code
 //! upholds.
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::models::{ItemFlow, MachineSpec, SolverResult};
 use crate::trace::{self, TraceEvent};
@@ -284,7 +284,145 @@ pub fn plan_partitioning(
         });
     }
 
+    // Phase 2 decomposition pass. Under `PartitionedDecomposed`:
+    //   1. Sub-shard any existing module where lane_count > 8 into
+    //      ⌈lane_count/8⌉ sub-modules of proportional rate.
+    //   2. Add modules for K=1 items where total demand exceeds 8
+    //      lanes (Phase 1 ignores these because they have only one
+    //      consumer; Phase 2 shards them since they're the structural
+    //      growth blocker — one consumer demanding >8 lanes by itself).
+    if matches!(strategy, LayoutStrategy::PartitionedDecomposed) {
+        plan.modules = decompose_oversized_modules(plan.modules, cap);
+        decompose_single_consumer_items(&mut plan, &consumers_of, cap);
+    }
+
     plan
+}
+
+/// Phase 2 sub-pass: replace each `lane_count > 8` module with N
+/// proportional shards. Module IDs are reassigned to keep them dense
+/// per item (0..N for each item's modules combined). Emits
+/// `ShardSplit` traces.
+fn decompose_oversized_modules(
+    modules: Vec<ModuleAssignment>,
+    cap: f64,
+) -> Vec<ModuleAssignment> {
+    let mut by_item: FxHashMap<String, Vec<ModuleAssignment>> = FxHashMap::default();
+    for m in modules {
+        by_item.entry(m.item.clone()).or_default().push(m);
+    }
+    let mut out: Vec<ModuleAssignment> = Vec::new();
+    let mut item_keys: Vec<String> = by_item.keys().cloned().collect();
+    item_keys.sort();
+    for item in item_keys {
+        let item_modules = by_item.remove(&item).unwrap_or_default();
+        let mut next_module_id: u32 = 0;
+        for m in item_modules {
+            if m.lane_count <= 8 {
+                let mut keep = m;
+                keep.module_id = next_module_id;
+                next_module_id += 1;
+                out.push(keep);
+                continue;
+            }
+            let n_shards = m.lane_count.div_ceil(8) as usize;
+            let lanes_per_shard: Vec<usize> = (0..n_shards)
+                .map(|i| {
+                    let total = m.lane_count as usize;
+                    let base = total / n_shards;
+                    let rem = total % n_shards;
+                    if i < rem { base + 1 } else { base }
+                })
+                .collect();
+            trace::emit(TraceEvent::ShardSplit {
+                item: item.clone(),
+                consumer_recipe: m.consumer_recipe.clone(),
+                original_lane_count: m.lane_count,
+                shards: n_shards as u32,
+                lanes_per_shard: lanes_per_shard.clone(),
+            });
+            for &shard_lanes in &lanes_per_shard {
+                let shard_rate = m.rate * shard_lanes as f64 / m.lane_count as f64;
+                let per_lane_rate = shard_rate / shard_lanes as f64;
+                out.push(ModuleAssignment {
+                    item: item.clone(),
+                    module_id: next_module_id,
+                    consumer_recipe: m.consumer_recipe.clone(),
+                    rate: shard_rate,
+                    lane_count: shard_lanes as u32,
+                    utilization: per_lane_rate / (cap * UTILIZATION_CEILING),
+                });
+                next_module_id += 1;
+            }
+        }
+    }
+    out
+}
+
+/// Phase 2 sub-pass: shard K=1 items where demand exceeds 8 lanes.
+/// Phase 1 leaves these as Pooled-equivalent (no module); Phase 2
+/// shards them so no bus segment is ever wider than 8 lanes — the
+/// growth-blocker case `processing-unit @ 5/s ore red` exemplifies.
+fn decompose_single_consumer_items(
+    plan: &mut PartitionPlan,
+    consumers_of: &FxHashMap<String, Vec<(String, f64, bool)>>,
+    cap: f64,
+) {
+    // Items already in the plan from Phase 1 (multi-consumer); skip.
+    let already_planned: FxHashSet<String> =
+        plan.modules.iter().map(|m| m.item.clone()).collect();
+    let mut items: Vec<&String> = consumers_of.keys().collect();
+    items.sort();
+    for item in items {
+        if already_planned.contains(item) {
+            continue;
+        }
+        let consumers = &consumers_of[item];
+        if consumers.first().is_some_and(|(_, _, is_fluid)| *is_fluid) {
+            continue; // fluid carve-out
+        }
+        // K=1 only — by construction here (K≥2 would be in plan already).
+        let mut by_recipe: FxHashMap<String, f64> = FxHashMap::default();
+        for (recipe, rate, _) in consumers {
+            *by_recipe.entry(recipe.clone()).or_insert(0.0) += rate;
+        }
+        if by_recipe.len() != 1 {
+            continue;
+        }
+        let (recipe, rate) = by_recipe.into_iter().next().unwrap();
+        let lane_count = (rate / cap).ceil().max(1.0) as u32;
+        if lane_count <= 8 {
+            continue; // fits without sharding
+        }
+        let n_shards = lane_count.div_ceil(8) as usize;
+        let lanes_per_shard: Vec<usize> = (0..n_shards)
+            .map(|i| {
+                let total = lane_count as usize;
+                let base = total / n_shards;
+                let rem = total % n_shards;
+                if i < rem { base + 1 } else { base }
+            })
+            .collect();
+        trace::emit(TraceEvent::ShardSplit {
+            item: item.clone(),
+            consumer_recipe: recipe.clone(),
+            original_lane_count: lane_count,
+            shards: n_shards as u32,
+            lanes_per_shard: lanes_per_shard.clone(),
+        });
+        for (shard_id, &shard_lanes) in lanes_per_shard.iter().enumerate() {
+            let shard_rate = rate * shard_lanes as f64 / lane_count as f64;
+            let per_lane_rate = shard_rate / shard_lanes as f64;
+            plan.modules.push(ModuleAssignment {
+                item: item.clone(),
+                module_id: shard_id as u32,
+                consumer_recipe: recipe.clone(),
+                rate: shard_rate,
+                lane_count: shard_lanes as u32,
+                utilization: per_lane_rate / (cap * UTILIZATION_CEILING),
+            });
+        }
+    }
 }
 
 /// Apply a partition plan to a solver result, producing a transformed
@@ -302,69 +440,118 @@ pub fn apply_partition_plan(solver_result: &SolverResult, plan: &PartitionPlan) 
         return solver_result.clone();
     }
 
-    // Build a quick `(item, recipe) → module_id` index for consumer-side rewriting.
-    let mut consumer_module: FxHashMap<(String, String), u32> = FxHashMap::default();
+    // `(item, recipe) → list of module_ids` for consumer-side split.
+    // Multi-module entries arise from Phase 2 sharding (one consumer
+    // recipe served by multiple shards of the same item).
+    let mut consumer_modules: FxHashMap<(String, String), Vec<u32>> = FxHashMap::default();
     for m in &plan.modules {
-        consumer_module.insert((m.item.clone(), m.consumer_recipe.clone()), m.module_id);
+        consumer_modules
+            .entry((m.item.clone(), m.consumer_recipe.clone()))
+            .or_default()
+            .push(m.module_id);
     }
-    // And `(item) → list-of-modules` for producer-side splitting.
+    for ids in consumer_modules.values_mut() {
+        ids.sort();
+    }
+    // `item → list-of-modules` for producer-side splitting. Sorted by
+    // module_id for deterministic sibling order.
     let mut item_modules: FxHashMap<String, Vec<&ModuleAssignment>> = FxHashMap::default();
     for m in &plan.modules {
         item_modules.entry(m.item.clone()).or_default().push(m);
     }
+    for v in item_modules.values_mut() {
+        v.sort_by_key(|m| m.module_id);
+    }
 
     let mut new_machines: Vec<MachineSpec> = Vec::with_capacity(solver_result.machines.len());
     for spec in &solver_result.machines {
-        // Determine which output item, if any, gets partitioned. PR2
-        // assumes a single non-fluid product per recipe (the codebase's
-        // existing assumption); fluid by-products are unaffected.
+        // Determine which output item, if any, gets partitioned.
+        // Single non-fluid product per recipe (existing codebase
+        // assumption); fluid by-products are unaffected.
         let primary_solid_idx = spec
             .outputs
             .iter()
             .position(|o| !o.is_fluid && item_modules.contains_key(&o.item));
 
-        let modules = primary_solid_idx
+        let producer_modules = primary_solid_idx
             .and_then(|idx| item_modules.get(&spec.outputs[idx].item))
             .cloned()
             .unwrap_or_default();
 
-        if modules.len() < 2 {
-            // Not partitioned. Rewrite consumer-side input module_ids in place.
-            let mut new_spec = spec.clone();
-            for inp in &mut new_spec.inputs {
-                if let Some(&module_id) = consumer_module.get(&(inp.item.clone(), spec.recipe.clone())) {
-                    inp.module_id = module_id;
-                }
-            }
-            new_machines.push(new_spec);
-            continue;
-        }
+        // Producer-side: emit one sibling per module (multi-module
+        // happens for Phase 1 K≥2 partitions and Phase 2 shards alike).
+        let producer_siblings: Vec<MachineSpec> = if producer_modules.len() < 2 {
+            vec![spec.clone()]
+        } else {
+            let total_rate: f64 = producer_modules.iter().map(|m| m.rate).sum();
+            let n_modules = producer_modules.len();
+            producer_modules
+                .iter()
+                .map(|module| {
+                    let share = if total_rate > 0.0 {
+                        module.rate / total_rate
+                    } else {
+                        1.0 / n_modules as f64
+                    };
+                    let mut sibling = spec.clone();
+                    sibling.count = spec.count * share;
+                    for out in &mut sibling.outputs {
+                        out.module_id = module.module_id;
+                    }
+                    // Recursive partitioning is out of scope; upstream
+                    // ingredients consumed by the producer stay at
+                    // module_id=0.
+                    for inp in &mut sibling.inputs {
+                        inp.module_id = 0;
+                    }
+                    sibling
+                })
+                .collect()
+        };
 
-        // Partitioned. Split this spec into one sibling per module,
-        // proportional to module rate.
-        let total_rate: f64 = modules.iter().map(|m| m.rate).sum();
-        let n_modules = modules.len();
-        for module in modules {
-            let share = if total_rate > 0.0 { module.rate / total_rate } else { 1.0 / n_modules as f64 };
-            let mut sibling = spec.clone();
-            sibling.count = spec.count * share;
-            // Tag every output (the partitioned product + any fluid
-            // by-products) with this module_id so downstream identity
-            // is consistent.
-            for out in &mut sibling.outputs {
-                out.module_id = module.module_id;
-                // per-machine `out.rate` unchanged; the sibling's
-                // share comes from `count`.
+        // Consumer-side: for each producer sibling, build a Cartesian
+        // product of its inputs across each input's shards. Single-
+        // shard inputs collapse to length-1 in the product.
+        for mut sib in producer_siblings {
+            // Collect per-input module-id lists.
+            let input_shards: Vec<Vec<u32>> = sib
+                .inputs
+                .iter()
+                .map(|inp| {
+                    consumer_modules
+                        .get(&(inp.item.clone(), sib.recipe.clone()))
+                        .cloned()
+                        .unwrap_or_else(|| vec![inp.module_id])
+                })
+                .collect();
+            let cart_size: usize = input_shards.iter().map(|v| v.len()).product();
+            if cart_size <= 1 {
+                // No Cartesian split needed. Apply single-shard inputs.
+                for (i, inp) in sib.inputs.iter_mut().enumerate() {
+                    if let Some(id) = input_shards[i].first() {
+                        inp.module_id = *id;
+                    }
+                }
+                new_machines.push(sib);
+                continue;
             }
-            // Inputs get their module_id rewritten too — for the
-            // consumer-side lookup, but here it represents the
-            // producer's own consumption of upstream ingredients.
-            // Recursive partitioning (RFP step 6) is out of scope
-            // for PR2; upstream ingredients stay at module_id=0.
-            for inp in &mut sibling.inputs {
-                inp.module_id = 0;
+            // Cartesian split. cart_size sub-specs, each with
+            // count/cart_size and one specific (input_idx → module_id)
+            // assignment. Index unrolling: for cart_idx in 0..cart_size,
+            // input_i's shard index = (cart_idx / div_i) % len_i.
+            let count_per = sib.count / cart_size as f64;
+            for cart_idx in 0..cart_size {
+                let mut sub = sib.clone();
+                sub.count = count_per;
+                let mut div = 1usize;
+                for (i, ids) in input_shards.iter().enumerate() {
+                    let n = ids.len();
+                    let shard_idx = (cart_idx / div) % n;
+                    sub.inputs[i].module_id = ids[shard_idx];
+                    div *= n;
+                }
+                new_machines.push(sub);
             }
-            new_machines.push(sibling);
         }
     }
 
@@ -548,5 +735,109 @@ mod tests {
         let ac_spec = partitioned.machines.iter().find(|m| m.recipe == "advanced-circuit").unwrap();
         let cc_input = ac_spec.inputs.iter().find(|i| i.item == "copper-cable").unwrap();
         assert_eq!(cc_input.module_id, 0);
+    }
+
+    /// Phase 2: a K=1 item with > 8 lanes of demand gets sharded
+    /// under PartitionedDecomposed (skipped under PartitionedPerConsumer).
+    #[test]
+    fn phase2_shards_k1_oversized_item() {
+        // Single iron-gear-wheel consumer at high rate. iron-plate has K=1.
+        // 60 IGW/s × 2 plate = 120/s on yellow (cap 7.5) = 16 lanes (over 8 by 8).
+        let solver_result = SolverResult {
+            machines: vec![
+                machine("iron-gear-wheel", 60.0, vec![flow("iron-plate", 2.0)], vec![flow("iron-gear-wheel", 1.0)]),
+            ],
+            external_inputs: vec![flow("iron-plate", 120.0)],
+            external_outputs: vec![flow("iron-gear-wheel", 60.0)],
+            dependency_order: vec!["iron-gear-wheel".to_string()],
+        };
+        // Phase 1 (PartitionedPerConsumer): K=1 → empty plan.
+        let p1 = plan_partitioning(&solver_result, LayoutStrategy::PartitionedPerConsumer, Some("transport-belt"));
+        assert!(p1.is_empty(), "PartitionedPerConsumer should leave K=1 alone");
+
+        // Phase 2 (PartitionedDecomposed): K=1 with 16 lanes → shard into 2 of 8.
+        let p2 = plan_partitioning(&solver_result, LayoutStrategy::PartitionedDecomposed, Some("transport-belt"));
+        let plate_modules: Vec<_> = p2.modules.iter().filter(|m| m.item == "iron-plate").collect();
+        assert_eq!(plate_modules.len(), 2, "expected 2 shards for 16-lane K=1 item");
+        assert_eq!(plate_modules[0].lane_count, 8);
+        assert_eq!(plate_modules[1].lane_count, 8);
+        assert_eq!(plate_modules[0].consumer_recipe, "iron-gear-wheel");
+        assert_eq!(plate_modules[1].consumer_recipe, "iron-gear-wheel");
+        // Module IDs are 0 and 1 within iron-plate.
+        let mut ids: Vec<u32> = plate_modules.iter().map(|m| m.module_id).collect();
+        ids.sort();
+        assert_eq!(ids, vec![0, 1]);
+    }
+
+    /// Phase 2: a K≥2 item where one module is itself > 8 lanes gets
+    /// further sub-sharded (the core motivating case).
+    #[test]
+    fn phase2_subshards_oversized_module() {
+        // Two consumers of copper-cable; the EC consumer has very high
+        // demand (180/s = 24 lanes on yellow @ 7.5/s), AC moderate (30/s = 4 lanes).
+        let solver_result = SolverResult {
+            machines: vec![
+                machine("copper-cable", 100.0, vec![flow("copper-plate", 1.0)], vec![flow("copper-cable", 2.0)]),
+                machine("electronic-circuit", 60.0, vec![flow("copper-cable", 3.0), flow("iron-plate", 1.0)], vec![flow("electronic-circuit", 1.0)]),
+                machine("advanced-circuit", 7.5, vec![flow("copper-cable", 4.0), flow("electronic-circuit", 2.0)], vec![flow("advanced-circuit", 1.0)]),
+            ],
+            external_inputs: vec![flow("copper-plate", 100.0), flow("iron-plate", 60.0)],
+            external_outputs: vec![flow("advanced-circuit", 7.5)],
+            dependency_order: vec!["copper-cable".to_string(), "electronic-circuit".to_string(), "advanced-circuit".to_string()],
+        };
+        let plan = plan_partitioning(&solver_result, LayoutStrategy::PartitionedDecomposed, Some("transport-belt"));
+        let cu_modules: Vec<_> = plan.modules.iter().filter(|m| m.item == "copper-cable").collect();
+        // EC consumer demand: 60 × 3 = 180/s = 24 lanes → 3 shards of 8.
+        // AC consumer demand: 7.5 × 4 = 30/s = 4 lanes → 1 module (no shard).
+        // Total: 3 + 1 = 4 modules for copper-cable.
+        assert_eq!(cu_modules.len(), 4, "expected 3 EC shards + 1 AC = 4 cable modules; got {}", cu_modules.len());
+        let ec_shards: Vec<_> = cu_modules.iter().filter(|m| m.consumer_recipe == "electronic-circuit").collect();
+        let ac_modules: Vec<_> = cu_modules.iter().filter(|m| m.consumer_recipe == "advanced-circuit").collect();
+        assert_eq!(ec_shards.len(), 3, "EC should be 3 shards");
+        assert_eq!(ac_modules.len(), 1, "AC should stay as 1 module (4 lanes ≤ 8)");
+        // Each EC shard ≤ 8 lanes.
+        for s in &ec_shards {
+            assert!(s.lane_count <= 8, "EC shard lane_count = {} should be ≤ 8", s.lane_count);
+        }
+        // Module IDs unique within copper-cable.
+        let mut ids: Vec<u32> = cu_modules.iter().map(|m| m.module_id).collect();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), 4, "module IDs should be unique within an item");
+    }
+
+    /// `apply_partition_plan` Cartesian-splits a consumer when one of its
+    /// inputs is multi-shard.
+    #[test]
+    fn phase2_apply_plan_cartesian_splits_consumer() {
+        // Same shape as `phase2_subshards_oversized_module`. We expect EC's
+        // machinespec to split into 3 sub-specs (one per cable shard),
+        // each tapping a different module_id.
+        let solver_result = SolverResult {
+            machines: vec![
+                machine("copper-cable", 100.0, vec![flow("copper-plate", 1.0)], vec![flow("copper-cable", 2.0)]),
+                machine("electronic-circuit", 60.0, vec![flow("copper-cable", 3.0), flow("iron-plate", 1.0)], vec![flow("electronic-circuit", 1.0)]),
+                machine("advanced-circuit", 7.5, vec![flow("copper-cable", 4.0), flow("electronic-circuit", 2.0)], vec![flow("advanced-circuit", 1.0)]),
+            ],
+            external_inputs: vec![flow("copper-plate", 100.0), flow("iron-plate", 60.0)],
+            external_outputs: vec![flow("advanced-circuit", 7.5)],
+            dependency_order: vec![],
+        };
+        let plan = plan_partitioning(&solver_result, LayoutStrategy::PartitionedDecomposed, Some("transport-belt"));
+        let partitioned = apply_partition_plan(&solver_result, &plan);
+
+        // EC consumer should split into 3 sub-specs (one per cable shard).
+        // iron-plate is K=1 with 60/s = 8 lanes (right at cap, no shard).
+        let ec_specs: Vec<&MachineSpec> = partitioned.machines.iter().filter(|m| m.recipe == "electronic-circuit").collect();
+        assert_eq!(ec_specs.len(), 3, "EC should split into 3 (one per cable shard)");
+        let mut cable_ids: Vec<u32> = ec_specs.iter()
+            .map(|s| s.inputs.iter().find(|i| i.item == "copper-cable").unwrap().module_id)
+            .collect();
+        cable_ids.sort();
+        cable_ids.dedup();
+        assert_eq!(cable_ids.len(), 3, "EC sub-specs should each tap a different cable shard");
+        // Each EC sub-spec count = original / 3.
+        let total: f64 = ec_specs.iter().map(|s| s.count).sum();
+        assert!((total - 60.0).abs() < 1e-9, "EC total count should preserve");
     }
 }
