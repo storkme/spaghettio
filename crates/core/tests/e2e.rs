@@ -2799,64 +2799,30 @@ fn diag_sat_zone_histogram() {
         sources: Vec<String>,
     }
 
-    // Resolve path the same way zone_cache::resolve_cache_path() does.
-    let path = if let Ok(p) = std::env::var("FUCKTORIO_ZONE_CACHE_PATH") {
-        std::path::PathBuf::from(p)
-    } else {
-        let base = std::env::var("XDG_CACHE_HOME")
-            .ok()
-            .filter(|s| !s.is_empty())
-            .map(std::path::PathBuf::from)
-            .or_else(|| {
-                std::env::var("HOME")
-                    .ok()
-                    .map(|h| std::path::PathBuf::from(h).join(".cache"))
-            })
-            .unwrap_or_else(|| std::path::PathBuf::from(".cache"));
-        base.join("fucktorio").join("sat-zones.jsonl")
-    };
-
-    let content = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("Cannot read {}: {e}", path.display()));
+    // Resolve binary cache path. Falls back to legacy .jsonl if .bin doesn't
+    // exist, so this diag still works against pre-binary log files.
+    let base = std::env::var("FUCKTORIO_ZONE_CACHE_PATH")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            let cache_base = std::env::var("XDG_CACHE_HOME")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .map(std::path::PathBuf::from)
+                .or_else(|| {
+                    std::env::var("HOME")
+                        .ok()
+                        .map(|h| std::path::PathBuf::from(h).join(".cache"))
+                })
+                .unwrap_or_else(|| std::path::PathBuf::from(".cache"));
+            cache_base.join("fucktorio").join("sat-zones.bin")
+        });
+    let bin_path = base.clone();
+    let jsonl_path = base.with_extension("jsonl");
 
     let mut buckets: HashMap<String, ZoneBucket> = HashMap::new();
     let mut total_records = 0usize;
 
-    for (lineno, line) in content.lines().enumerate() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let v: serde_json::Value = serde_json::from_str(line)
-            .unwrap_or_else(|e| panic!("Bad JSON on line {}: {e}", lineno + 1));
-
-        // Handle both schema versions: v0 used long keys
-        // (signature/width/height/variables/clauses/solve_time_us/source);
-        // v1 uses short keys (s/cw/ch/vars/cls/us/src). We just look for
-        // either, so the diag works against mixed-version logs.
-        let sig = v["s"].as_str()
-            .or_else(|| v["signature"].as_str())
-            .unwrap_or("?")
-            .to_string();
-        let width = v["cw"].as_u64()
-            .or_else(|| v["width"].as_u64())
-            .unwrap_or(0);
-        let height = v["ch"].as_u64()
-            .or_else(|| v["height"].as_u64())
-            .unwrap_or(0);
-        let vars = v["vars"].as_u64()
-            .or_else(|| v["variables"].as_u64())
-            .unwrap_or(0);
-        let clauses = v["cls"].as_u64()
-            .or_else(|| v["clauses"].as_u64())
-            .unwrap_or(0);
-        let solve_us = v["us"].as_u64()
-            .or_else(|| v["solve_time_us"].as_u64())
-            .unwrap_or(0);
-        let source = v["src"].as_str()
-            .or_else(|| v["source"].as_str())
-            .map(|s| s.to_string());
-
+    let mut record_one = |sig: String, width: u64, height: u64, vars: u64, clauses: u64, solve_us: u64, source: Option<String>| {
         total_records += 1;
         let bucket = buckets.entry(sig).or_insert(ZoneBucket {
             count: 0,
@@ -2878,6 +2844,38 @@ fn diag_sat_zone_histogram() {
                 bucket.sources.push(s);
             }
         }
+    };
+
+    // Binary records.
+    if let Ok(bytes) = std::fs::read(&bin_path) {
+        for rec in fucktorio_core::zone_cache::parse_records(&bytes) {
+            record_one(
+                rec.signature, rec.canon_w as u64, rec.canon_h as u64,
+                rec.variables as u64, rec.clauses as u64, rec.solve_time_us,
+                rec.source,
+            );
+        }
+    }
+
+    // Legacy JSONL records — both v0 and v1 key sets.
+    if let Ok(content) = std::fs::read_to_string(&jsonl_path) {
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() { continue; }
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+            let sig = v["s"].as_str().or_else(|| v["signature"].as_str()).unwrap_or("?").to_string();
+            let width = v["cw"].as_u64().or_else(|| v["width"].as_u64()).unwrap_or(0);
+            let height = v["ch"].as_u64().or_else(|| v["height"].as_u64()).unwrap_or(0);
+            let vars = v["vars"].as_u64().or_else(|| v["variables"].as_u64()).unwrap_or(0);
+            let clauses = v["cls"].as_u64().or_else(|| v["clauses"].as_u64()).unwrap_or(0);
+            let solve_us = v["us"].as_u64().or_else(|| v["solve_time_us"].as_u64()).unwrap_or(0);
+            let source = v["src"].as_str().or_else(|| v["source"].as_str()).map(|s| s.to_string());
+            record_one(sig, width, height, vars, clauses, solve_us, source);
+        }
+    }
+
+    if total_records == 0 {
+        panic!("no records found at {} or {}", bin_path.display(), jsonl_path.display());
     }
 
     let distinct = buckets.len();

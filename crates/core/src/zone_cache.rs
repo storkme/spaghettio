@@ -95,12 +95,10 @@ thread_local! {
 }
 
 /// Per-zone record buffered between flushes. Stored serialised because
-/// `serde_json::Value` would balloon memory and we already need the line
-/// bytes for the eventual write.
+/// One pre-encoded binary record (length prefix + body), ready to write.
+/// Encoding eagerly keeps the lock-held critical section to a `Vec::push`.
 struct PendingRecord {
-    /// One full JSONL line including trailing `\n`. Pre-encoded so the flush
-    /// path is just byte writes.
-    line: Vec<u8>,
+    bytes: Vec<u8>,
 }
 
 /// Process-global record buffer. Records are appended via `record_zone` and
@@ -118,7 +116,9 @@ pub fn set_thread_source(source: Option<&str>) {
     ZONE_SOURCE.with(|s| *s.borrow_mut() = source.map(|s| s.to_string()));
 }
 
-/// Resolve the JSONL output path.
+/// Resolve the binary cache file path. Format suffix is `.bin` (binary
+/// records) — older `.jsonl` files in the same dir are still read at load
+/// time for backward compat, but new writes only go to `.bin`.
 fn resolve_cache_path() -> std::path::PathBuf {
     if let Ok(p) = std::env::var("FUCKTORIO_ZONE_CACHE_PATH") {
         return std::path::PathBuf::from(p);
@@ -133,7 +133,13 @@ fn resolve_cache_path() -> std::path::PathBuf {
                 .map(|h| std::path::PathBuf::from(h).join(".cache"))
         })
         .unwrap_or_else(|| std::path::PathBuf::from(".cache"));
-    base.join("fucktorio").join("sat-zones.jsonl")
+    base.join("fucktorio").join("sat-zones.bin")
+}
+
+/// Legacy JSONL path — read for backward compat, never written.
+fn resolve_legacy_jsonl_path() -> std::path::PathBuf {
+    let bin = resolve_cache_path();
+    bin.with_extension("jsonl")
 }
 
 // ---------------------------------------------------------------------------
@@ -441,6 +447,223 @@ fn entity_from_tuple(t: [i32; 5]) -> Option<PlacedEntity> {
     })
 }
 
+// ---------------------------------------------------------------------------
+// Binary record format (cache file `sat-zones.bin`)
+// ---------------------------------------------------------------------------
+//
+// File = sequence of records, each `u32 LE body_len | body[body_len]`.
+// Bodies are self-describing (start with `u8 version`) so future schema
+// changes can coexist in the same file. Strings are length-prefixed
+// `u16 LE len | utf8 bytes`. Entities are 5 bytes:
+// `[kind:u8, x:u8, y:u8, dir:u8, carries_idx:i8]`.
+//
+// Designed to be parseable from a `&[u8]` with no I/O, so the same loader
+// works for native (`std::fs::read`) and WASM (`include_bytes!`).
+
+/// Schema version of records emitted by this build. Bumped on incompatible
+/// payload changes; the decoder rejects unknown versions.
+const RECORD_VERSION: u8 = 1;
+
+/// Telemetry fields decoded from a record. Only `signature` and the
+/// cache-payload subset (entities, channel_items, canon_w/h) are needed for
+/// cache hits; the rest is for diag tools (histogram, dumps).
+#[derive(Debug, Clone)]
+pub struct DecodedRecord {
+    pub ts: u64,
+    pub signature: String,
+    pub source: Option<String>,
+    pub canon_w: u32,
+    pub canon_h: u32,
+    pub variables: u32,
+    pub clauses: u32,
+    pub solve_time_us: u64,
+    pub channel_items: Vec<String>,
+    pub entities: Vec<PlacedEntity>,
+}
+
+/// Append a length-prefixed `u16` UTF-8 string to `buf`. Strings longer than
+/// 65535 bytes are truncated — should never happen for our data (signatures
+/// are <200 bytes, item names <30 bytes).
+fn write_str(buf: &mut Vec<u8>, s: &str) {
+    let bytes = s.as_bytes();
+    let len = u16::try_from(bytes.len()).unwrap_or(u16::MAX);
+    buf.extend_from_slice(&len.to_le_bytes());
+    buf.extend_from_slice(&bytes[..len as usize]);
+}
+
+/// Read a length-prefixed `u16` UTF-8 string from `slice`, advancing the
+/// cursor. Returns `None` if the slice is too short or the bytes aren't UTF-8.
+fn read_str(cursor: &mut &[u8]) -> Option<String> {
+    if cursor.len() < 2 {
+        return None;
+    }
+    let len = u16::from_le_bytes([cursor[0], cursor[1]]) as usize;
+    *cursor = &cursor[2..];
+    if cursor.len() < len {
+        return None;
+    }
+    let s = std::str::from_utf8(&cursor[..len]).ok()?.to_string();
+    *cursor = &cursor[len..];
+    Some(s)
+}
+
+fn read_u8(cursor: &mut &[u8]) -> Option<u8> {
+    if cursor.is_empty() { return None; }
+    let v = cursor[0];
+    *cursor = &cursor[1..];
+    Some(v)
+}
+
+fn read_u16(cursor: &mut &[u8]) -> Option<u16> {
+    if cursor.len() < 2 { return None; }
+    let v = u16::from_le_bytes([cursor[0], cursor[1]]);
+    *cursor = &cursor[2..];
+    Some(v)
+}
+
+fn read_u32(cursor: &mut &[u8]) -> Option<u32> {
+    if cursor.len() < 4 { return None; }
+    let v = u32::from_le_bytes([cursor[0], cursor[1], cursor[2], cursor[3]]);
+    *cursor = &cursor[4..];
+    Some(v)
+}
+
+fn read_u64(cursor: &mut &[u8]) -> Option<u64> {
+    if cursor.len() < 8 { return None; }
+    let mut arr = [0u8; 8];
+    arr.copy_from_slice(&cursor[..8]);
+    *cursor = &cursor[8..];
+    Some(u64::from_le_bytes(arr))
+}
+
+/// Encode a complete record (length prefix + body) into `buf`.
+///
+/// Layout:
+/// ```text
+/// u32 LE body_len
+///   u8       version (=1)
+///   u64 LE   ts
+///   u32 LE   variables
+///   u32 LE   clauses
+///   u64 LE   solve_time_us
+///   u8       canon_w     (zone dims always ≤ 255)
+///   u8       canon_h
+///   u16+str  signature
+///   u16+str  source      (zero-length = None)
+///   u8       n_channels
+///   ×n       u16+str channel_items[i]
+///   u16 LE   n_entities
+///   ×n       [u8 kind, u8 x, u8 y, u8 dir, i8 carries_idx]
+/// ```
+pub fn encode_record(
+    buf: &mut Vec<u8>,
+    ts: u64,
+    signature: &str,
+    source: Option<&str>,
+    canon_w: u32,
+    canon_h: u32,
+    variables: u32,
+    clauses: u32,
+    solve_time_us: u64,
+    channel_items: &[String],
+    entities: &[[i32; 5]],
+) {
+    let mut body: Vec<u8> = Vec::with_capacity(64 + entities.len() * 5);
+    body.push(RECORD_VERSION);
+    body.extend_from_slice(&ts.to_le_bytes());
+    body.extend_from_slice(&variables.to_le_bytes());
+    body.extend_from_slice(&clauses.to_le_bytes());
+    body.extend_from_slice(&solve_time_us.to_le_bytes());
+    body.push(u8::try_from(canon_w).unwrap_or(u8::MAX));
+    body.push(u8::try_from(canon_h).unwrap_or(u8::MAX));
+    write_str(&mut body, signature);
+    write_str(&mut body, source.unwrap_or(""));
+    body.push(u8::try_from(channel_items.len()).unwrap_or(u8::MAX));
+    for it in channel_items {
+        write_str(&mut body, it);
+    }
+    let n_ent = u16::try_from(entities.len()).unwrap_or(u16::MAX);
+    body.extend_from_slice(&n_ent.to_le_bytes());
+    for t in entities.iter().take(n_ent as usize) {
+        body.push(u8::try_from(t[0]).unwrap_or(0));
+        body.push(u8::try_from(t[1]).unwrap_or(0));
+        body.push(u8::try_from(t[2]).unwrap_or(0));
+        body.push(u8::try_from(t[3]).unwrap_or(0));
+        body.push((t[4].clamp(-128, 127)) as i8 as u8);
+    }
+
+    let body_len = u32::try_from(body.len()).unwrap_or(u32::MAX);
+    buf.extend_from_slice(&body_len.to_le_bytes());
+    buf.extend_from_slice(&body);
+}
+
+/// Decode the next record from `bytes`, advancing the slice past it. Returns
+/// `None` on malformed input or unknown version.
+fn decode_record(bytes: &mut &[u8]) -> Option<DecodedRecord> {
+    let body_len = read_u32(bytes)? as usize;
+    if bytes.len() < body_len {
+        return None;
+    }
+    let mut body = &bytes[..body_len];
+    *bytes = &bytes[body_len..];
+
+    let version = read_u8(&mut body)?;
+    if version != RECORD_VERSION {
+        return None;
+    }
+    let ts = read_u64(&mut body)?;
+    let variables = read_u32(&mut body)?;
+    let clauses = read_u32(&mut body)?;
+    let solve_time_us = read_u64(&mut body)?;
+    let canon_w = read_u8(&mut body)? as u32;
+    let canon_h = read_u8(&mut body)? as u32;
+    let signature = read_str(&mut body)?;
+    let source_raw = read_str(&mut body)?;
+    let source = if source_raw.is_empty() { None } else { Some(source_raw) };
+
+    let n_channels = read_u8(&mut body)? as usize;
+    let mut channel_items = Vec::with_capacity(n_channels);
+    for _ in 0..n_channels {
+        channel_items.push(read_str(&mut body)?);
+    }
+    let n_entities = read_u16(&mut body)? as usize;
+    let mut entities = Vec::with_capacity(n_entities);
+    for _ in 0..n_entities {
+        if body.len() < 5 { return None; }
+        let kind = body[0];
+        let x = body[1] as i32;
+        let y = body[2] as i32;
+        let dir = body[3];
+        let carries_idx = body[4] as i8 as i32;
+        body = &body[5..];
+        let tuple = [kind as i32, x, y, dir as i32, carries_idx];
+        if let Some(e) = entity_from_tuple(tuple) {
+            entities.push(e);
+        }
+    }
+
+    Some(DecodedRecord {
+        ts, signature, source,
+        canon_w, canon_h,
+        variables, clauses, solve_time_us,
+        channel_items, entities,
+    })
+}
+
+/// Parse a complete byte slice as a sequence of records. Stops at the first
+/// malformed record (skipping the rest of the file). Pure-Rust, no I/O —
+/// safe to call from WASM with `include_bytes!()` of a pre-baked cache.
+pub fn parse_records(mut bytes: &[u8]) -> Vec<DecodedRecord> {
+    let mut out = Vec::new();
+    while !bytes.is_empty() {
+        match decode_record(&mut bytes) {
+            Some(rec) => out.push(rec),
+            None => break,
+        }
+    }
+    out
+}
+
 /// Format a (edge, offset) port endpoint as e.g. `N2` or `E0`.
 fn format_endpoint(edge: u8, offset: u32) -> String {
     let e = match edge {
@@ -635,49 +858,6 @@ pub fn canonicalise(
     }
 }
 
-/// Buffer one zone record for later flush. Encodes the JSONL line eagerly
-/// so the lock-held critical section is just a `Vec::push`. Silently no-ops
-/// on serialisation error — this is telemetry, not correctness.
-///
-/// Use `flush` (or `flush_on_drop`) to write the buffered records to disk.
-pub fn record_zone(
-    zone: &CrossingZone,
-    channel_reaches: &[u32],
-    max_ug_ins: Option<u32>,
-    stats: ZoneStats,
-    source: Option<&str>,
-) {
-    let thread_src = ZONE_SOURCE.with(|s| s.borrow().clone());
-    let effective_source: Option<String> = thread_src
-        .or_else(|| source.map(|s| s.to_string()))
-        .or_else(|| std::env::var("FUCKTORIO_ZONE_SOURCE").ok());
-
-    let signature = canonical_signature(zone, channel_reaches, max_ug_ins);
-
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-
-    let record = serde_json::json!({
-        "ts": ts,
-        "signature": signature,
-        "width": zone.width,
-        "height": zone.height,
-        "variables": stats.variables,
-        "clauses": stats.clauses,
-        "solve_time_us": stats.solve_time_us,
-        "source": effective_source,
-    });
-
-    let Ok(mut line) = serde_json::to_string(&record) else { return };
-    line.push('\n');
-
-    if let Ok(mut buf) = buffer().lock() {
-        buf.push(PendingRecord { line: line.into_bytes() });
-    }
-}
-
 /// Flush the buffered records to disk.
 ///
 /// Each record is written in a single `write_all` call against an `O_APPEND`
@@ -717,11 +897,12 @@ pub fn flush() {
     };
 
     for record in &pending {
-        // O_APPEND + single write_all per line: kernel guarantees the
+        // O_APPEND + single write_all per record: kernel guarantees the
         // append is atomic for buffers up to PIPE_BUF (4 KiB on Linux).
-        // Our lines are typically 200-400 bytes, so this is safe even
-        // with concurrent writers from other processes.
-        let _ = f.write_all(&record.line);
+        // Binary records are typically 100-300 bytes, well under the limit
+        // even for the largest zones, so concurrent writers from other
+        // processes get interleaved-but-intact records, never torn ones.
+        let _ = f.write_all(&record.bytes);
     }
 }
 
@@ -767,35 +948,44 @@ fn lookup_table() -> &'static Mutex<std::collections::HashMap<String, CacheEntry
     })
 }
 
-/// Slurp the on-disk JSONL into the lookup map. Handles both schema
-/// versions:
-///
-/// * **`rv: 1`** — compact format: top-level keys `s`/`cw`/`ch`/`e`/`ci`,
-///   entities as `[kind, x, y, dir, carries_idx]` tuples.
-/// * **no `rv`** — legacy format: `signature`/`canon_w`/`canon_h`/`entities`
-///   (full PlacedEntity objects).
-///
-/// Newer rows win on duplicate keys (file is append-only, later lines reflect
-/// later behaviour).
+/// Populate the lookup map from on-disk caches. Reads `sat-zones.bin`
+/// (the canonical format) plus any legacy `sat-zones.jsonl` next to it for
+/// backward compat — neither file is required. Binary records win when the
+/// same signature appears in both files.
 fn load_existing_jsonl(map: &mut std::collections::HashMap<String, CacheEntry>) {
-    let path = resolve_cache_path();
-    let Ok(contents) = std::fs::read_to_string(&path) else {
-        return;
-    };
-    for line in contents.lines() {
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else { continue };
-        let entry_opt = if value.get("rv").and_then(|v| v.as_u64()) == Some(1) {
-            parse_v1_record(&value)
-        } else {
-            parse_v0_record(&value)
-        };
-        if let Some((sig, entry)) = entry_opt {
-            map.insert(sig, entry);
+    // Legacy JSONL first so binary records overwrite any duplicate sigs.
+    let legacy = resolve_legacy_jsonl_path();
+    if let Ok(contents) = std::fs::read_to_string(&legacy) {
+        for line in contents.lines() {
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+            let entry_opt = if value.get("rv").and_then(|v| v.as_u64()) == Some(1) {
+                parse_v1_record(&value)
+            } else {
+                parse_v0_record(&value)
+            };
+            if let Some((sig, entry)) = entry_opt {
+                map.insert(sig, entry);
+            }
+        }
+    }
+
+    let bin = resolve_cache_path();
+    if let Ok(bytes) = std::fs::read(&bin) {
+        for rec in parse_records(&bytes) {
+            let entry = CacheEntry {
+                entities: rec.entities,
+                channel_items: rec.channel_items,
+                canon_w: rec.canon_w,
+                canon_h: rec.canon_h,
+            };
+            map.insert(rec.signature, entry);
         }
     }
 }
 
-/// Parse a v1 (compact) record. Returns `(signature, entry)` on success.
+/// Parse a v1 (compact JSONL) record. Returns `(signature, entry)` on
+/// success. Used only for legacy `.jsonl` reads — new writes go to the
+/// binary file.
 fn parse_v1_record(value: &serde_json::Value) -> Option<(String, CacheEntry)> {
     let sig = value["s"].as_str()?.to_string();
     let canon_w = value["cw"].as_u64()? as u32;
@@ -944,7 +1134,7 @@ pub fn record_zone_with_solution(
         );
     }
 
-    // JSONL line — v1 compact format.
+    // Encode the binary record into the buffer.
     let thread_src = ZONE_SOURCE.with(|s| s.borrow().clone());
     let effective_source: Option<String> = thread_src
         .or_else(|| source.map(|s| s.to_string()))
@@ -963,25 +1153,23 @@ pub fn record_zone_with_solution(
         .filter_map(entity_to_tuple)
         .collect();
 
-    let record = serde_json::json!({
-        "rv": 1,
-        "t": ts,
-        "s": form.signature,
-        "cw": canon_w,
-        "ch": canon_h,
-        "vars": stats.variables,
-        "cls": stats.clauses,
-        "us": stats.solve_time_us,
-        "src": effective_source,
-        "e": entity_tuples,
-        "ci": channel_items,
-    });
-
-    let Ok(mut line) = serde_json::to_string(&record) else { return };
-    line.push('\n');
+    let mut bytes: Vec<u8> = Vec::with_capacity(64 + entity_tuples.len() * 5);
+    encode_record(
+        &mut bytes,
+        ts,
+        &form.signature,
+        effective_source.as_deref(),
+        canon_w,
+        canon_h,
+        stats.variables,
+        stats.clauses,
+        stats.solve_time_us,
+        &channel_items,
+        &entity_tuples,
+    );
 
     if let Ok(mut buf) = buffer().lock() {
-        buf.push(PendingRecord { line: line.into_bytes() });
+        buf.push(PendingRecord { bytes });
     }
 }
 
@@ -1269,5 +1457,70 @@ mod tests {
         assert_eq!(t[4], -1);
         let r = entity_from_tuple(t).unwrap();
         assert_eq!(r.carries, None);
+    }
+
+    #[test]
+    fn binary_record_roundtrip() {
+        let entities: Vec<[i32; 5]> = vec![
+            [1, 10, 2, 3, 0],   // fast-belt at (10,2) west, ch0
+            [6, 8, 3, 2, 1],    // fast-UG-out at (8,3) south, ch1
+            [0, 0, 0, 0, -1],   // yellow belt at (0,0) north, no carries
+        ];
+        let channel_items = vec!["copper-plate".to_string(), "iron-plate".to_string()];
+
+        let mut buf = Vec::new();
+        encode_record(
+            &mut buf,
+            1234567890,
+            "11x4:E1+E2>N10+N3@6;N2+N9>S0+S1@6|F:|UG:2",
+            Some("test_source"),
+            11, 4,
+            616, 19428, 3152,
+            &channel_items,
+            &entities,
+        );
+
+        // Append a second record so we test multi-record parsing too.
+        encode_record(
+            &mut buf,
+            1234567891,
+            "1x2:N1>N1@6|F:|UG:0",
+            None,
+            1, 2,
+            22, 116, 47,
+            &["iron-ore".to_string()],
+            &[[1, 0, 1, 0, 0], [1, 0, 0, 0, 0]],
+        );
+
+        let recs = parse_records(&buf);
+        assert_eq!(recs.len(), 2, "should decode two records");
+
+        assert_eq!(recs[0].ts, 1234567890);
+        assert_eq!(recs[0].signature, "11x4:E1+E2>N10+N3@6;N2+N9>S0+S1@6|F:|UG:2");
+        assert_eq!(recs[0].source.as_deref(), Some("test_source"));
+        assert_eq!((recs[0].canon_w, recs[0].canon_h), (11, 4));
+        assert_eq!((recs[0].variables, recs[0].clauses, recs[0].solve_time_us), (616, 19428, 3152));
+        assert_eq!(recs[0].channel_items, vec!["copper-plate", "iron-plate"]);
+        assert_eq!(recs[0].entities.len(), 3);
+        assert_eq!(recs[0].entities[0].name, "fast-transport-belt");
+        assert_eq!(recs[0].entities[0].carries.as_deref(), Some("ch0"));
+        assert_eq!(recs[0].entities[1].name, "fast-underground-belt");
+        assert_eq!(recs[0].entities[1].io_type.as_deref(), Some("output"));
+        assert_eq!(recs[0].entities[2].carries, None);
+
+        assert_eq!(recs[1].source, None);
+        assert_eq!(recs[1].channel_items, vec!["iron-ore"]);
+        assert_eq!(recs[1].entities.len(), 2);
+    }
+
+    /// Truncated input should stop cleanly, returning whatever decoded fully.
+    #[test]
+    fn binary_truncated_input_safe() {
+        let mut buf = Vec::new();
+        encode_record(&mut buf, 1, "1x2:N0>N0@6|F:|UG:0", None, 1, 2, 0, 0, 0, &[], &[[1, 0, 0, 0, -1]]);
+        // Truncate mid-record.
+        buf.truncate(buf.len() - 5);
+        let recs = parse_records(&buf);
+        assert_eq!(recs.len(), 0, "truncated records should be skipped");
     }
 }
