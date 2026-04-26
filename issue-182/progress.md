@@ -7,6 +7,12 @@
 4. Initial PR #183 removed ALL port markers (circles, arrows, dashed connectors)
 5. User refined: "just delete the circles, keep everything else, make arrows transparent"
 6. Updated PR #183: circles removed, arrows kept at 35% alpha, dashed connectors kept
+7. PR created: https://github.com/storkme/fucktorio/pull/234
+8. Label 'agent-done' added to issue
 
-## Next steps
-- Wait for PR #183 to be reviewed/merged
+## PR
+https://github.com/storkme/fucktorio/pull/234 — "fix(web): remove boundary port markers from SAT zone overlay (#182)"
+
+## Code location
+- `web/src/renderer/regionOverlay.ts` — circles removed, arrows at 35% alpha, dashed connectors kept
+- Port identity (item + IO) still available via hover in the tile inspector
