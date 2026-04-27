@@ -11,9 +11,9 @@
 
 use crate::models::{EntityDirection, PlacedEntity};
 
-/// Gap between machine groups when lane-splitting output belts.
-/// 3 tiles: 1 for sideload target filler, 1 for through-belt filler,
-/// 1 for the NORTH lift from group 2.
+// Gap between machine groups when lane-splitting output belts.
+// 3 tiles: 1 for sideload target filler, 1 for through-belt filler,
+// 1 for the NORTH lift from group 2.
 // (LANE_SPLIT_GAP = 3 deleted in the inline-bridge unification —
 // machines now pack tight with the bridge stamped inline.)
 

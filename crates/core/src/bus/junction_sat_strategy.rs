@@ -860,8 +860,12 @@ impl JunctionStrategy for SatStrategy {
         // pre-baked cache embedded at compile time; native loads from
         // `~/.cache/fucktorio/sat-zones.bin`. Both honour
         // `FUCKTORIO_USE_ZONE_CACHE=0` to disable on native.
-        let cached_hit: Option<Vec<crate::models::PlacedEntity>> =
-            crate::zone_cache::lookup_zone(&zone, &channel_reaches, self.constraints.max_ug_ins);
+        let cached_hit: Option<Vec<crate::models::PlacedEntity>> = crate::zone_cache::lookup_zone(
+            &zone,
+            &channel_reaches,
+            self.constraints.max_ug_ins,
+            belt_name,
+        );
 
         if let Some(cached_entities) = cached_hit {
             let proposed_entities: Vec<SatProposedEntity> = cached_entities

@@ -711,6 +711,24 @@ pub enum TraceEvent {
         entities: Vec<PlacedEntity>,
     },
 
+    /// Emitted by `region_reimprove::descend` (via the WASM binding) when
+    /// a descent terminates with `StopReason::Optimal` — the cap-1 probe
+    /// returned UNSAT, so the current layout is provably the cheapest
+    /// solution for this zone. Carries the canonical signature plus a
+    /// single-record binary blob in the same format used by
+    /// `crates/core/data/sat-zones.bin`, so the frontend can persist the
+    /// result to localStorage and seed it back into the cache on next
+    /// boot via [`crate::zone_cache::install_prebaked`].
+    SatOptimumProven {
+        /// `LayoutRegion.id` of the zone whose descent just proved optimal.
+        region_id: u32,
+        /// Cache key for this zone (canonical, orientation-invariant).
+        signature: String,
+        /// Single-record binary blob — concatenable with other records
+        /// to form a full cache file.
+        record_bytes: Vec<u8>,
+    },
+
     // SAT solution pruned of dangling (unreachable / dead-end) belt entities.
     SatPruned {
         zone_x: i32,
