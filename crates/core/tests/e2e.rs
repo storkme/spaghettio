@@ -1632,14 +1632,17 @@ fn partition_strategy_scoreboard() {
             item: "processing-unit", rate: 2.0, machine: "assembling-machine-3",
             belt: Some("fast-transport-belt"),
             inputs: &["iron-ore", "copper-ore", "coal", "water", "crude-oil"],
-            expected: (14, 13, 13),
+            // The +1 vs prior baseline (13 → 14) is the new
+            // `unresolved-junction` error replacing two suppressed
+            // belt-item-isolation orphans — net more honest signal.
+            expected: (14, 14, 14),
         },
         Case {
             name: "AC@5/s plates yellow",
             item: "advanced-circuit", rate: 5.0, machine: "assembling-machine-2",
             belt: Some("transport-belt"),
             inputs: &["iron-plate", "copper-plate", "coal", "crude-oil", "water"],
-            expected: (6, 11, 11),
+            expected: (5, 10, 10),
         },
         // Expanded corpus (added 2026-04-27 from probe data). Documents
         // the regressions Phase 2 introduces at higher rates and on
@@ -1653,18 +1656,19 @@ fn partition_strategy_scoreboard() {
                 "iron-plate", "copper-plate", "steel-plate", "stone",
                 "coal", "water", "crude-oil",
             ],
-            // P1 wins small (38 → 30); P2 regresses sharply (38 → 86)
-            // from Cartesian-input blowup on copper-cable/iron-plate.
-            expected: (38, 30, 86),
+            // P1 wins small (38 → 30); P2 still regresses (38 → 83)
+            // — improved from 86 once orphan ghost-belt
+            // belt-item-isolations were suppressed.
+            expected: (38, 30, 83),
         },
         Case {
             name: "PU@3/s ore red",
             item: "processing-unit", rate: 3.0, machine: "assembling-machine-3",
             belt: Some("fast-transport-belt"),
             inputs: &["iron-ore", "copper-ore", "coal", "water", "crude-oil"],
-            // P2 regresses (16 → 21) — the 10-lane threshold escape
+            // P2 regresses (16 → 22) — the 10-lane threshold escape
             // hatch that saved PU@2/s no longer applies here.
-            expected: (17, 16, 21),
+            expected: (17, 16, 22),
         },
         Case {
             name: "PU@3/s plates yellow",
@@ -1674,14 +1678,17 @@ fn partition_strategy_scoreboard() {
                 "iron-plate", "copper-plate", "steel-plate", "stone",
                 "coal", "water", "crude-oil",
             ],
-            // Both P1 and P2 regress vs Pool. Yellow belt halves
-            // per-lane capacity, so almost everything trips
-            // SHARD_THRESHOLD_LANES; Cartesian splits compound.
-            expected: (68, 98, 140),
+            // P1=98 / P2=129. P2 improved from 140 once orphan ghost-
+            // belt belt-item-isolations were suppressed; the remaining
+            // gap is real layout failure (entity-overlap, dead-ends,
+            // unresolved-junctions) compounded by sharded consumer-row
+            // multiplication.
+            expected: (68, 98, 129),
         },
     ];
 
     let mut tighten: Vec<String> = Vec::new();
+    let mut regressions: Vec<String> = Vec::new();
     for case in CASES {
         let inputs: FxHashSet<String> = case.inputs.iter().map(|s| s.to_string()).collect();
         let pool = run_e2e_with_strategy(
@@ -1707,23 +1714,15 @@ fn partition_strategy_scoreboard() {
             p1_e, exp_p1,
             p2_e, exp_p2,
         );
-        assert!(
-            pool_e <= exp_pool,
-            "{}: Pool regressed — actual={pool_e} expected≤{exp_pool}",
-            case.name,
-        );
-        assert!(
-            p1_e <= exp_p1,
-            "{}: PartitionedPerConsumer regressed — actual={p1_e} expected≤{exp_p1}",
-            case.name,
-        );
-        assert!(
-            p2_e <= exp_p2,
-            "{}: PartitionedDecomposed regressed — actual={p2_e} expected≤{exp_p2}. \
-             Either the partitioner sharded a case that doesn't benefit, or a \
-             new layout-engine bug surfaced.",
-            case.name,
-        );
+        if pool_e > exp_pool {
+            regressions.push(format!("{}: Pool {pool_e} > {exp_pool}", case.name));
+        }
+        if p1_e > exp_p1 {
+            regressions.push(format!("{}: P1 {p1_e} > {exp_p1}", case.name));
+        }
+        if p2_e > exp_p2 {
+            regressions.push(format!("{}: P2 {p2_e} > {exp_p2}", case.name));
+        }
         if pool_e < exp_pool && exp_pool != usize::MAX {
             tighten.push(format!("{}: Pool {pool_e} < {exp_pool}", case.name));
         }
@@ -1739,6 +1738,10 @@ fn partition_strategy_scoreboard() {
         for line in &tighten {
             eprintln!("  - {line}");
         }
+    }
+    if !regressions.is_empty() {
+        let body = regressions.join("\n  - ");
+        panic!("partition_strategy_scoreboard regressions:\n  - {body}");
     }
 }
 
@@ -1799,6 +1802,10 @@ fn processing_unit_2s_am2_fast_belts_validation_baseline() {
         ("fluid-network", 0usize),
         ("belt-item-isolation", 9),
         ("belt-dead-end", 0),
+        // Junction solver gives up on 4 small clusters here — these
+        // were silently masquerading as belt-item-isolation orphans
+        // before the unresolved-junction check landed.
+        ("unresolved-junction", 4),
     ];
     let mut regressed = Vec::new();
     for &(cat, max_allowed) in &baseline {

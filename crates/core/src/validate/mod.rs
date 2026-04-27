@@ -17,8 +17,9 @@ pub mod belt_structural;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::models::{LayoutResult, SolverResult};
+use crate::models::{LayoutResult, RegionKind, SolverResult};
 use power::{check_pole_network_connectivity, check_power_coverage};
+use rustc_hash::FxHashSet;
 
 use belt_flow::{
     check_belt_connectivity, check_belt_flow_path,
@@ -124,6 +125,90 @@ fn format_issues(issues: &[ValidationIssue]) -> String {
         .join("\n")
 }
 
+/// Tile set covered by `RegionKind::Unresolved` regions in the layout.
+/// These come from clusters where the ghost-router junction solver
+/// gave up (`JunctionGrowthCapped`); the speculatively-routed ghost
+/// belts inside are orphans, not real layout features. Validators that
+/// flag belt-to-belt adjacency consult this set so they don't pile
+/// follow-on errors onto a single underlying junction failure.
+pub fn unresolved_region_tiles(layout: &LayoutResult) -> FxHashSet<(i32, i32)> {
+    let mut tiles: FxHashSet<(i32, i32)> = FxHashSet::default();
+    for r in &layout.regions {
+        if r.kind != RegionKind::Unresolved {
+            continue;
+        }
+        for dx in 0..r.width {
+            for dy in 0..r.height {
+                tiles.insert((r.x + dx, r.y + dy));
+            }
+        }
+    }
+    tiles
+}
+
+/// Emits one error per connected component of unresolved tiles. The
+/// ghost router emits an `Unresolved` region per individual tile, so a
+/// single failed junction often appears as a cluster of 1×1 regions —
+/// emitting one error per region inflated counts (a 10-tile failed
+/// crossing counted as 10 errors). This BFS-coalesces adjacent
+/// unresolved tiles so each underlying junction failure surfaces as
+/// one error. Region-tiles inside the cluster are still excluded from
+/// `belt-item-isolation` so orphan ghosts don't pile follow-on noise on
+/// top.
+pub fn check_unresolved_junctions(layout: &LayoutResult) -> Vec<ValidationIssue> {
+    let tiles = unresolved_region_tiles(layout);
+    if tiles.is_empty() {
+        return Vec::new();
+    }
+    let mut visited: FxHashSet<(i32, i32)> = FxHashSet::default();
+    let mut components: Vec<((i32, i32), usize)> = Vec::new();
+    for &start in &tiles {
+        if visited.contains(&start) {
+            continue;
+        }
+        let mut queue = vec![start];
+        let mut size = 0usize;
+        let mut anchor = start;
+        while let Some(t) = queue.pop() {
+            if !visited.insert(t) {
+                continue;
+            }
+            size += 1;
+            if t < anchor {
+                anchor = t;
+            }
+            for (dx, dy) in [(0, 1), (0, -1), (1, 0), (-1, 0)] {
+                let n = (t.0 + dx, t.1 + dy);
+                if tiles.contains(&n) && !visited.contains(&n) {
+                    queue.push(n);
+                }
+            }
+        }
+        components.push((anchor, size));
+    }
+    components.sort();
+    components
+        .into_iter()
+        .map(|((x, y), size)| {
+            ValidationIssue::with_pos(
+                Severity::Error,
+                "unresolved-junction",
+                format!(
+                    "Junction solver could not resolve a crossing near ({},{}) \
+                     covering {} tile{}. Orphan ghost belts in this cluster are \
+                     excluded from belt-adjacency checks.",
+                    x,
+                    y,
+                    size,
+                    if size == 1 { "" } else { "s" },
+                ),
+                x,
+                y,
+            )
+        })
+        .collect()
+}
+
 /// Run all functional validation checks on a layout.
 ///
 /// Returns a list of issues found.  Returns `Err(ValidationError)` if any
@@ -171,6 +256,7 @@ pub fn validate(
         Box::new(|| belt_structural::check_belt_dead_ends(layout)),
         Box::new(|| belt_structural::check_belt_loops(layout)),
         Box::new(|| belt_structural::check_belt_item_isolation(layout)),
+        Box::new(|| check_unresolved_junctions(layout)),
         Box::new(|| belt_structural::check_belt_inserter_conflict(layout)),
         Box::new(|| check_belt_flow_reachability(layout, solver, layout_style)),
         Box::new(|| belt_structural::check_lane_throughput(layout, solver)),
