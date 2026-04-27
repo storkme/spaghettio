@@ -1840,4 +1840,46 @@ mod tests {
         };
         assert!(can_lane_split(&spec, 3));
     }
+
+    /// Pre-fix bug: `recipe_to_spec: HashMap<recipe, &MachineSpec>` silently
+    /// dropped duplicate-recipe entries on insert (last-write-wins), and the
+    /// final `filter_map` lookup returned only the surviving one. Result: if a
+    /// strategy produced N siblings sharing a recipe (the partitioner does
+    /// this for items with multiple consumers), only one made it through
+    /// `order_specs` and the placer placed only that one's machines.
+    #[test]
+    fn order_specs_preserves_duplicate_recipes() {
+        let cable = MachineSpec {
+            entity: "assembling-machine-2".to_string(),
+            recipe: "copper-cable".to_string(),
+            count: 4.0,
+            inputs: vec![ItemFlow { item: "copper-plate".to_string(), rate: 1.0, is_fluid: false, module_id: 0 }],
+            outputs: vec![ItemFlow { item: "copper-cable".to_string(), rate: 2.0, is_fluid: false, module_id: 0 }],
+        };
+        let ec_a = MachineSpec {
+            entity: "assembling-machine-2".to_string(),
+            recipe: "electronic-circuit".to_string(),
+            count: 5.0,
+            inputs: vec![ItemFlow { item: "copper-cable".to_string(), rate: 3.0, is_fluid: false, module_id: 0 }],
+            outputs: vec![ItemFlow { item: "electronic-circuit".to_string(), rate: 1.0, is_fluid: false, module_id: 0 }],
+        };
+        let ec_b = MachineSpec {
+            entity: "assembling-machine-2".to_string(),
+            recipe: "electronic-circuit".to_string(),
+            count: 7.0,
+            inputs: vec![ItemFlow { item: "copper-cable".to_string(), rate: 3.0, is_fluid: false, module_id: 1 }],
+            outputs: vec![ItemFlow { item: "electronic-circuit".to_string(), rate: 1.0, is_fluid: false, module_id: 0 }],
+        };
+        let machines = vec![cable, ec_a, ec_b];
+        let dep_order: Vec<String> = vec!["copper-cable".into(), "electronic-circuit".into()];
+        let ordered = order_specs(&machines, &dep_order);
+
+        assert_eq!(ordered.len(), 3, "all input specs must be preserved through topo sort");
+        assert_eq!(ordered[0].recipe, "copper-cable");
+        assert_eq!(ordered[1].recipe, "electronic-circuit");
+        assert_eq!(ordered[2].recipe, "electronic-circuit");
+        let mut counts: Vec<usize> = ordered[1..3].iter().map(|s| s.count as usize).collect();
+        counts.sort();
+        assert_eq!(counts, vec![5, 7], "both EC siblings must appear with their original counts");
+    }
 }
