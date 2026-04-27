@@ -764,6 +764,57 @@ pub enum TraceEvent {
         entities: Vec<PlacedEntity>,
         participating: Vec<String>,
     },
+
+    // Eviction-strategy events. Eviction runs as a fallback after SAT
+    // returns UNSAT for every variant on this iteration. Each recipe
+    // selects one or more participating specs, routes them around or
+    // through the bbox via A*/geometric pre-pass, then re-invokes SAT
+    // on the reduced spec set.
+    EvictionAttempted {
+        seed_x: i32,
+        seed_y: i32,
+        iter: usize,
+        recipe: String,
+        candidate_spec_keys: Vec<String>,
+        region_tiles: usize,
+        boundary_count_before: usize,
+    },
+    EvictionRouteFailed {
+        seed_x: i32,
+        seed_y: i32,
+        recipe: String,
+        spec_key: String,
+        reason: String,
+        elapsed_us: u64,
+    },
+    EvictionSatFailed {
+        seed_x: i32,
+        seed_y: i32,
+        recipe: String,
+        evicted_spec_keys: Vec<String>,
+        elapsed_us: u64,
+    },
+    EvictionSucceeded {
+        seed_x: i32,
+        seed_y: i32,
+        iter: usize,
+        recipe: String,
+        evicted_spec_keys: Vec<String>,
+        boundary_count_after: usize,
+        sat_us: u64,
+        route_us: u64,
+        total_us: u64,
+        /// Per-evicted-spec metrics — Manhattan length of the evicted
+        /// route, turn count of the rendered path, item, belt tier name.
+        /// Captured for the recipe-grid pattern table.
+        metrics: Vec<EvictionSpecMetric>,
+    },
+    EvictionBudgetExhausted {
+        seed_x: i32,
+        seed_y: i32,
+        recipes_tried: usize,
+        total_us: u64,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -872,6 +923,24 @@ pub struct SatProposedEntity {
     pub carries: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub io_type: Option<String>,
+}
+
+/// Per-evicted-spec metric attached to `EvictionSucceeded`. Captures
+/// shape of the evicted route so the diagnostic sweep can ask "what
+/// kind of specs do we win on?".
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvictionSpecMetric {
+    pub spec_key: String,
+    pub item: String,
+    pub belt_tier: String,
+    /// Manhattan distance between the spec's entry tile and exit tile.
+    pub manhattan_len: u32,
+    /// Number of direction changes along the rendered route.
+    pub turn_count: u32,
+    /// Number of entities the route emitted.
+    pub entity_count: usize,
 }
 
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
