@@ -3151,3 +3151,169 @@ fn diag_corpus_sweep() {
     // Don't panic — we want the cache populated and the summary printed.
     // No assertion; this is purely a data-gathering diag.
 }
+
+// ---------------------------------------------------------------------------
+// Curated wide sweep — only commits records from clean (zero errors AND
+// zero warnings) layouts.
+// ---------------------------------------------------------------------------
+
+/// Wide recipe × rate × belt × input sweep with per-combo curation.
+///
+/// Defers `flush()`, runs the layout, validates; on success (zero errors AND
+/// zero warnings) commits the buffered records, otherwise discards them.
+/// Result is a curated cache containing only junctions from layouts the
+/// validator considers fully sound.
+///
+/// Run with cache disabled so SAT actually runs and produces records:
+///   FUCKTORIO_USE_ZONE_CACHE=0 cargo test --release --test e2e -- \
+///       --ignored diag_curated_sweep --exact --nocapture
+#[test]
+#[ignore]
+fn diag_curated_sweep() {
+    use std::time::Instant as I;
+
+    struct Combo {
+        item: &'static str,
+        rate: f64,
+        belt: Option<&'static str>,
+        from_ore: bool,
+        from_crude: bool,
+    }
+
+    // (item, min_rate, max_rate, supports_from_ore, supports_from_crude).
+    // Tighter ceilings on deeper recipes that hit timeouts at high rates.
+    let cases: &[(&'static str, f64, f64, bool, bool)] = &[
+        ("iron-gear-wheel",          0.5, 20.0, true,  false),
+        ("copper-cable",             0.5, 20.0, true,  false),
+        ("transport-belt",           0.5, 10.0, true,  false),
+        ("electronic-circuit",       0.5, 20.0, true,  false),
+        ("plastic-bar",              0.5, 5.0,  false, true ),
+        ("sulfuric-acid",            0.5, 5.0,  false, false),
+        ("automation-science-pack",  0.5, 10.0, true,  false),
+        ("logistic-science-pack",    0.5, 5.0,  true,  false),
+        ("military-science-pack",    0.5, 3.0,  true,  false),
+        ("chemical-science-pack",    0.5, 3.0,  false, true ),
+        ("advanced-circuit",         0.5, 5.0,  false, false),
+    ];
+
+    let mut combos: Vec<Combo> = Vec::new();
+    for (item, lo, hi, supports_ore, supports_crude) in cases {
+        let mut r = *lo;
+        while r <= *hi + 1e-9 {
+            for belt in [None, Some("fast-transport-belt")] {
+                combos.push(Combo { item, rate: r, belt, from_ore: false, from_crude: false });
+                if *supports_ore {
+                    combos.push(Combo { item, rate: r, belt, from_ore: true, from_crude: false });
+                }
+                if *supports_crude {
+                    combos.push(Combo { item, rate: r, belt, from_ore: false, from_crude: true });
+                }
+            }
+            r += 0.5;
+        }
+    }
+
+    eprintln!("\n=== diag_curated_sweep: {} combinations ===", combos.len());
+
+    fucktorio_core::zone_cache::defer_flush(true);
+
+    let sweep_start = I::now();
+    let mut attempted = 0usize;
+    let mut clean = 0usize;
+    let mut dirty = 0usize;
+    let mut failed = 0usize;
+    let mut records_committed: u64 = 0;
+    let mut records_discarded: u64 = 0;
+
+    // Per-recipe breakdown so we can see which recipes are bottlenecking
+    // the curation rate.
+    let mut by_recipe: std::collections::BTreeMap<&'static str, [usize; 3]> =
+        Default::default();  // [clean, dirty, failed]
+    // Per-issue-category tally on dirty combos — useful for spotting
+    // recurring engine-quality issues that block curation.
+    let mut warning_categories: std::collections::BTreeMap<String, usize> = Default::default();
+
+    for c in &combos {
+        attempted += 1;
+        let mut available_inputs = FxHashSet::default();
+        if c.from_ore {
+            available_inputs.insert("iron-ore".to_string());
+            available_inputs.insert("copper-ore".to_string());
+        }
+        if c.from_crude {
+            available_inputs.insert("crude-oil".to_string());
+        }
+
+        let test_name = format!(
+            "curated_{}_{:.1}s_{}{}",
+            c.item.replace('-', "_"),
+            c.rate,
+            c.belt.map(|b| if b == "fast-transport-belt" { "red" } else { "yel" }).unwrap_or("auto"),
+            if c.from_ore { "_ore" } else if c.from_crude { "_crude" } else { "" },
+        );
+
+        // Drop any leftover from a previous combo (defensive — should be empty).
+        fucktorio_core::zone_cache::discard_pending();
+
+        let result = run_e2e(&test_name, c.item, c.rate, "assembling-machine-1", c.belt, &available_inputs);
+
+        match result {
+            Ok(r) if r.issues.is_empty() => {
+                let pending = fucktorio_core::zone_cache::pending_count() as u64;
+                fucktorio_core::zone_cache::defer_flush(false);
+                fucktorio_core::zone_cache::flush();
+                fucktorio_core::zone_cache::defer_flush(true);
+                records_committed += pending;
+                clean += 1;
+                by_recipe.entry(c.item).or_default()[0] += 1;
+            }
+            Ok(r) => {
+                let dropped = fucktorio_core::zone_cache::discard_pending() as u64;
+                records_discarded += dropped;
+                dirty += 1;
+                by_recipe.entry(c.item).or_default()[1] += 1;
+                for issue in &r.issues {
+                    *warning_categories.entry(issue.category.clone()).or_default() += 1;
+                }
+            }
+            Err(_) => {
+                fucktorio_core::zone_cache::discard_pending();
+                failed += 1;
+                by_recipe.entry(c.item).or_default()[2] += 1;
+            }
+        }
+
+        if attempted.is_multiple_of(50) {
+            eprintln!(
+                "  ...{}/{} ({} clean, {} dirty, {} failed; {} records committed, {} discarded)",
+                attempted, combos.len(), clean, dirty, failed,
+                records_committed, records_discarded,
+            );
+        }
+    }
+
+    fucktorio_core::zone_cache::defer_flush(false);
+
+    let elapsed_s = sweep_start.elapsed().as_secs_f64();
+    eprintln!(
+        "\nCurated sweep done in {:.1}s: {}/{} attempted, {} clean, {} dirty, {} failed",
+        elapsed_s, attempted, combos.len(), clean, dirty, failed,
+    );
+    eprintln!(
+        "  records: {} committed, {} discarded",
+        records_committed, records_discarded,
+    );
+
+    eprintln!("\nPer-recipe breakdown:");
+    eprintln!("  {:<28} {:>6} {:>6} {:>6}", "recipe", "clean", "dirty", "failed");
+    for (recipe, counts) in &by_recipe {
+        eprintln!("  {:<28} {:>6} {:>6} {:>6}", recipe, counts[0], counts[1], counts[2]);
+    }
+
+    eprintln!("\nValidation issue categories on dirty combos:");
+    let mut cats: Vec<_> = warning_categories.iter().collect();
+    cats.sort_by(|a, b| b.1.cmp(a.1));
+    for (cat, count) in cats.iter().take(15) {
+        eprintln!("  {:<40} {:>6}", cat, count);
+    }
+}

@@ -99,6 +99,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 // without stomping on each other via a process-global env var.
 thread_local! {
     static ZONE_SOURCE: RefCell<Option<String>> = const { RefCell::new(None) };
+    /// Per-thread switch: when `true`, [`flush`] is a no-op so the buffer
+    /// keeps accumulating across multiple solves. Used by the curated sweep
+    /// diag to commit-or-discard at per-combo granularity.
+    static FLUSH_DEFERRED: RefCell<bool> = const { RefCell::new(false) };
 }
 
 /// Per-zone record buffered between flushes. Stored serialised because
@@ -123,6 +127,32 @@ fn buffer() -> &'static Mutex<Vec<PendingRecord>> {
 pub fn set_thread_source(source: Option<&str>) {
     ZONE_SOURCE.with(|s| *s.borrow_mut() = source.map(|s| s.to_string()));
 }
+
+/// Defer / undefer [`flush`] on this thread. While deferred, `flush()` is a
+/// no-op and the buffer keeps growing — call [`discard_pending`] to drop
+/// uncommitted records or clear the deferral first to flush them.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn defer_flush(deferred: bool) {
+    FLUSH_DEFERRED.with(|f| *f.borrow_mut() = deferred);
+}
+#[cfg(target_arch = "wasm32")]
+pub fn defer_flush(_: bool) {}
+
+/// Drop all currently-buffered records without writing them. Returns the
+/// number dropped. Companion to [`defer_flush`] for the curated sweep.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn discard_pending() -> usize {
+    match buffer().lock() {
+        Ok(mut buf) => {
+            let n = buf.len();
+            buf.clear();
+            n
+        }
+        Err(_) => 0,
+    }
+}
+#[cfg(target_arch = "wasm32")]
+pub fn discard_pending() -> usize { 0 }
 
 /// Resolve the binary cache file path. Format suffix is `.bin` (binary
 /// records) — older `.jsonl` files in the same dir are still read at load
@@ -885,6 +915,9 @@ pub fn canonicalise(
 /// populated there, so this never has anything to do.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn flush() {
+    if FLUSH_DEFERRED.with(|f| *f.borrow()) {
+        return;
+    }
     let pending: Vec<PendingRecord> = match buffer().lock() {
         Ok(mut buf) => std::mem::take(&mut *buf),
         Err(_) => return,
