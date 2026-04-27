@@ -1440,9 +1440,9 @@ fn stress_advanced_circuit_45s_from_plates() {
 ///
 /// What this gates:
 ///   - **K1-2**: warnings under `PartitionedPerConsumer` stay
-///     bounded (≤ 50 here, room for #64 jitter). If the count
-///     blows up while the gate isn't tripping more than expected,
-///     the "belts over-provisioned" assumption is failing.
+///     bounded (≤ 41 here — the deterministic baseline). If the
+///     count regresses while the gate isn't tripping more than
+///     expected, the "belts over-provisioned" assumption is failing.
 ///   - **K1-3 per-test**: rejection events stay at 1 (the EC
 ///     module's borderline rate). If we see > 1, the gate fired
 ///     for an additional module — investigate.
@@ -1450,7 +1450,8 @@ fn stress_advanced_circuit_45s_from_plates() {
 ///     3 errors to 0.
 ///
 /// Corpus-level K1-3 (≤ 20% of cases trip the gate at default
-/// rates) needs more K>1 cases over time; this test contributes one.
+/// rates) is contributed to by this test plus the 4/s and 7/s
+/// siblings below.
 ///
 /// Run with `cargo test --test e2e
 /// stress_advanced_circuit_partitioned_5s_from_plates -- --nocapture`.
@@ -1488,13 +1489,122 @@ fn stress_advanced_circuit_partitioned_5s_from_plates() {
         StressBaseline { max_errors: 3, max_warnings: 1 },
         PartitionedStressBaseline {
             max_errors_partitioned: 0,
-            // 41 warnings probed; 50 leaves slack for #64 jitter.
-            // Tighten when #64 (lane-throughput false-positives) is
-            // resolved separately.
-            max_warnings_partitioned: 50,
-            // 1 rejection: EC module hits 89% of per-side capacity
-            // on blue belt at AC=5/s. Documented as expected
-            // behavior, not a violation. See doc-comment above.
+            // The "41 deterministic" baseline this test was originally tightened
+            // to was an artefact of two now-fixed bugs: the partitioner sibling-
+            // spec dedup orphaned the AC module's copper-cable trunk
+            // (input-rate-delivery warnings) and the pole-repair Chebyshev/
+            // Euclidean mismatch left disconnected poles (power warnings). With
+            // both fixed, post-fix actual count is 0.
+            max_warnings_partitioned: 0,
+            // 1 rejection: EC module hits 89% of per-side capacity on blue belt
+            // at AC=5/s. Documented as expected behavior, not a violation.
+            max_partition_rejections: 1,
+        },
+    );
+}
+
+/// **K1-3 floor case** — advanced-circuit @ 4/s is just below the
+/// partitioner's 75% utilization gate, so no rejection events fire.
+/// Pairs with the 5/s and 7/s siblings to give a 3-point sweep.
+///
+/// Baselines (post sibling-spec + clean-slate-SAT + pole-Euclidean fixes):
+/// - Pooled: 0 warnings, 1 error.
+/// - PartitionedPerConsumer: 0 errors, 0 warnings, 0 rejection events.
+///
+/// What this gates beyond what 5/s already does:
+///   - **K1-3 floor**: confirms the gate doesn't fire spuriously at
+///     comfortable rates. If `max_partition_rejections > 0` here,
+///     the gate threshold is too aggressive.
+#[test]
+#[ntest::timeout(600000)]
+fn stress_advanced_circuit_partitioned_4s_from_plates() {
+    use fucktorio_core::bus::layout::LayoutStrategy;
+
+    let inputs: FxHashSet<String> = ["iron-plate", "copper-plate", "coal", "crude-oil", "water"]
+        .iter().map(|s| s.to_string()).collect();
+    let pooled = run_e2e_with_strategy(
+        "stress_advanced_circuit_partitioned_4s_from_plates",
+        "advanced-circuit",
+        4.0,
+        "assembling-machine-2",
+        None,
+        &inputs,
+        LayoutStrategy::Pooled,
+    ).expect("Pooled e2e pipeline");
+    let partitioned = run_e2e_with_strategy(
+        "stress_advanced_circuit_partitioned_4s_from_plates",
+        "advanced-circuit",
+        4.0,
+        "assembling-machine-2",
+        None,
+        &inputs,
+        LayoutStrategy::PartitionedPerConsumer,
+    ).expect("PartitionedPerConsumer e2e pipeline");
+    assert_produces(&pooled, "advanced-circuit", 4.0);
+    assert_produces(&partitioned, "advanced-circuit", 4.0);
+    check_partitioned_stress_scoreboard(
+        "stress_advanced_circuit_partitioned_4s_from_plates",
+        &pooled,
+        &partitioned,
+        StressBaseline { max_errors: 1, max_warnings: 0 },
+        PartitionedStressBaseline {
+            max_errors_partitioned: 0,
+            // Post-fix (clean-slate SAT zone + pole-repair Euclidean): 0.
+            // The PR #207 baseline of 33 was probed before those landed.
+            max_warnings_partitioned: 0,
+            max_partition_rejections: 0,
+        },
+    );
+}
+
+/// **K1-1 partial-win case** — advanced-circuit @ 7/s is high enough
+/// that even partitioning leaves residual errors (vs Pooled). Useful
+/// as a *regression sentinel*: if the partitioned-side error count
+/// climbs back toward Pooled's, we've broken something. If it drops,
+/// tighten the baseline.
+///
+/// Baselines (post sibling-spec + clean-slate-SAT + pole-Euclidean fixes):
+/// - Pooled: 0 warnings, 5 errors.
+/// - PartitionedPerConsumer: 1 error, 0 warnings, 1 rejection event.
+#[test]
+#[ntest::timeout(600000)]
+fn stress_advanced_circuit_partitioned_7s_from_plates() {
+    use fucktorio_core::bus::layout::LayoutStrategy;
+
+    let inputs: FxHashSet<String> = ["iron-plate", "copper-plate", "coal", "crude-oil", "water"]
+        .iter().map(|s| s.to_string()).collect();
+    let pooled = run_e2e_with_strategy(
+        "stress_advanced_circuit_partitioned_7s_from_plates",
+        "advanced-circuit",
+        7.0,
+        "assembling-machine-2",
+        None,
+        &inputs,
+        LayoutStrategy::Pooled,
+    ).expect("Pooled e2e pipeline");
+    let partitioned = run_e2e_with_strategy(
+        "stress_advanced_circuit_partitioned_7s_from_plates",
+        "advanced-circuit",
+        7.0,
+        "assembling-machine-2",
+        None,
+        &inputs,
+        LayoutStrategy::PartitionedPerConsumer,
+    ).expect("PartitionedPerConsumer e2e pipeline");
+    assert_produces(&pooled, "advanced-circuit", 7.0);
+    assert_produces(&partitioned, "advanced-circuit", 7.0);
+    check_partitioned_stress_scoreboard(
+        "stress_advanced_circuit_partitioned_7s_from_plates",
+        &pooled,
+        &partitioned,
+        StressBaseline { max_errors: 5, max_warnings: 0 },
+        PartitionedStressBaseline {
+            // Post-fix (clean-slate SAT zone + pole-repair Euclidean): 1.
+            // The PR #207 baseline of 3 was probed before those landed.
+            // Partitioning still helps (5 → 1) but doesn't fully unblock
+            // at this rate.
+            max_errors_partitioned: 1,
+            max_warnings_partitioned: 0,
             max_partition_rejections: 1,
         },
     );
