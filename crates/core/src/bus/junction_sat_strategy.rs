@@ -948,6 +948,15 @@ impl JunctionStrategy for SatStrategy {
             }
         }
 
+        // Shadow-mode hint recognition: when FUCKTORIO_USE_SAT_HINTS=1, run
+        // the palette recogniser BEFORE SAT and emit a SatHintInjection event
+        // with what we WOULD have pinned. We do not actually pin anything yet
+        // — see the caveat on `Placement` for why (no flow-direction
+        // validity check).
+        if crate::junction_palette::palette_enabled() {
+            shadow_emit_hints(&zone, seed_x, seed_y, iter);
+        }
+
         let (entities_opt, stats) = crate::sat::solve_crossing_zone_per_channel(
             &zone,
             &channel_reaches,
@@ -1232,6 +1241,67 @@ pub(crate) fn prune_dangling_sat_entities(
     }
 
     pruned
+}
+
+// ---------------------------------------------------------------------------
+// Shadow-mode SAT-hint instrumentation
+// ---------------------------------------------------------------------------
+
+/// Build a [`crate::junction_palette::ZoneShape`] from a `CrossingZone`,
+/// run the recogniser, and emit a `SatHintInjection` trace event with the
+/// candidate count + greedy-cover count. **Doesn't actually pin anything**
+/// — pure observation while we figure out which patterns are safe to inject.
+fn shadow_emit_hints(
+    zone: &CrossingZone,
+    seed_x: i32,
+    seed_y: i32,
+    iter: usize,
+) {
+    use crate::junction_palette::{greedy_cover, recognise, shared_palette, ZoneShape};
+    use std::collections::HashSet;
+
+    let palette_full = shared_palette();
+    if palette_full.is_empty() {
+        return;
+    }
+
+    // Build zone-local boundary + forbidden tile sets.
+    let mut boundary: HashSet<(u8, u8)> = HashSet::new();
+    for b in &zone.boundaries {
+        let lx = (b.x - zone.x).max(0) as u8;
+        let ly = (b.y - zone.y).max(0) as u8;
+        boundary.insert((lx, ly));
+    }
+    let mut forbidden: HashSet<(u8, u8)> = HashSet::new();
+    for &(wx, wy) in &zone.forced_empty {
+        let lx = wx - zone.x;
+        let ly = wy - zone.y;
+        if lx < 0 || ly < 0 { continue; }
+        forbidden.insert((lx as u8, ly as u8));
+    }
+    let shape = ZoneShape {
+        width: zone.width as u8,
+        height: zone.height as u8,
+        forbidden: &forbidden,
+        boundary: &boundary,
+    };
+
+    let patterns: Vec<_> = palette_full.iter().map(|e| e.pattern.clone()).collect();
+    let freqs: Vec<usize> = palette_full.iter().map(|e| e.freq).collect();
+
+    let candidates = recognise(&shape, &patterns);
+    let chosen = greedy_cover(&candidates, &freqs);
+    let hints_emitted: usize = chosen.iter().map(|p| p.tiles.len()).sum();
+
+    trace::emit(TraceEvent::SatHintInjection {
+        seed_x, seed_y, iter,
+        zone_w: zone.width,
+        zone_h: zone.height,
+        palette_size: palette_full.len(),
+        candidates_considered: candidates.len(),
+        hints_emitted,
+        fell_back: false,
+    });
 }
 
 /// Tiles reachable downstream from entity `e` in one step (or one UG pair).

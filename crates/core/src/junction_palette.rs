@@ -15,9 +15,9 @@
 //! `diag_mine_palette` actually finds in the cache corpus.
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::sync::OnceLock;
 
 use crate::models::{EntityDirection, PlacedEntity};
-use crate::zone_cache::DecodedRecord;
 
 /// One entity in a normalized [`SubPattern`]. Coords are pattern-local
 /// (`x`, `y` ∈ `[0, w) × [0, h)`); `channel` is a relabelling-invariant
@@ -92,20 +92,24 @@ pub const DEFAULT_MIN_FREQ: usize = 3;
 ///
 /// Returns `(pattern, occurrences)` pairs sorted by descending occurrences.
 /// Patterns appearing in fewer than `min_freq` records are dropped.
+///
+/// Each `record_entities` element is one solved zone's full entity list (in
+/// canonical-frame local coords with `chN` channel tokens — same shape that
+/// `crate::zone_cache::DecodedRecord::entities` produces).
 pub fn mine_palette(
-    records: &[DecodedRecord],
+    record_entities: &[Vec<PlacedEntity>],
     k_hops: usize,
     min_freq: usize,
 ) -> Vec<(SubPattern, usize)> {
     let mut hist: HashMap<SubPattern, usize> = HashMap::new();
-    for rec in records {
+    for entities in record_entities {
         let mut seen_this_record: HashSet<SubPattern> = HashSet::new();
-        for seed in 0..rec.entities.len() {
-            let blob_indices = k_hop_neighborhood(seed, &rec.entities, k_hops);
+        for seed in 0..entities.len() {
+            let blob_indices = k_hop_neighborhood(seed, entities, k_hops);
             if blob_indices.len() < 2 {
                 continue;
             }
-            let blob: Vec<&PlacedEntity> = blob_indices.iter().map(|&i| &rec.entities[i]).collect();
+            let blob: Vec<&PlacedEntity> = blob_indices.iter().map(|&i| &entities[i]).collect();
             let pattern = canonicalise(&blob);
             if seen_this_record.insert(pattern.clone()) {
                 *hist.entry(pattern).or_default() += 1;
@@ -279,6 +283,221 @@ fn parse_channel_token(carries: Option<&str>) -> Option<u32> {
     carries
         .and_then(|s| s.strip_prefix("ch"))
         .and_then(|n| n.parse::<u32>().ok())
+}
+
+// ---------------------------------------------------------------------------
+// Recognition: zone → candidate placements
+// ---------------------------------------------------------------------------
+
+/// One place in a zone where a palette pattern could be pinned. Carries
+/// enough context to translate back into per-tile SAT unit clauses if the
+/// future hint-injection path decides to commit the placement.
+///
+/// **Shadow-mode caveat.** Today we only check geometric feasibility (in
+/// bounds, not on a forbidden tile, not on a boundary tile). We do NOT yet
+/// verify that the pattern's belt directions are consistent with the
+/// zone's per-channel flow direction. So `Placement` count is an
+/// upper-bound — actually pinning these would over-constrain SAT. Real
+/// validity checking lands with the SAT-injection commit.
+#[derive(Debug, Clone)]
+pub struct Placement {
+    /// Index into the palette slice passed to [`recognise`].
+    pub pattern_idx: usize,
+    /// D4 rotation applied to the pattern (0..4).
+    pub rotation: u8,
+    /// D4 reflection applied (before rotation).
+    pub reflect: bool,
+    /// Zone-local origin where the pattern's `(0, 0)` corner sits after
+    /// the D4 transform.
+    pub origin_x: u8,
+    pub origin_y: u8,
+    /// Tiles (zone-local) the pattern would pin if accepted.
+    pub tiles: Vec<(u8, u8)>,
+}
+
+/// Geometric inputs the recogniser needs from a zone, decoupled from
+/// `crate::sat::CrossingZone` to keep the dependency graph acyclic.
+pub struct ZoneShape<'a> {
+    pub width: u8,
+    pub height: u8,
+    /// Forced-empty tiles in zone-local coords.
+    pub forbidden: &'a HashSet<(u8, u8)>,
+    /// Boundary port tiles in zone-local coords. The recogniser refuses to
+    /// place pattern entities on these tiles — the encoder owns boundary
+    /// constraints and any pin would either contradict them or be redundant.
+    pub boundary: &'a HashSet<(u8, u8)>,
+}
+
+/// Find every palette pattern that could be pinned in `zone`, considering
+/// all 8 D4 orientations and every (origin_x, origin_y) position. **Does
+/// not validate flow direction or channel topology** — see the caveat on
+/// [`Placement`].
+///
+/// Output is unfiltered (overlapping placements coexist). Use
+/// [`greedy_cover`] to pick a non-overlapping subset.
+pub fn recognise(zone: &ZoneShape<'_>, palette: &[SubPattern]) -> Vec<Placement> {
+    let mut out = Vec::new();
+    for (idx, pattern) in palette.iter().enumerate() {
+        for rotation in 0u8..4 {
+            for &reflect in &[false, true] {
+                let (pw, ph) = if rotation.is_multiple_of(2) {
+                    (pattern.w, pattern.h)
+                } else {
+                    (pattern.h, pattern.w)
+                };
+                if pw > zone.width || ph > zone.height {
+                    continue;
+                }
+                let max_x = zone.width - pw;
+                let max_y = zone.height - ph;
+                for origin_x in 0..=max_x {
+                    for origin_y in 0..=max_y {
+                        if let Some(tiles) = try_place(
+                            pattern, rotation, reflect, origin_x, origin_y,
+                            pw, ph, zone,
+                        ) {
+                            out.push(Placement {
+                                pattern_idx: idx,
+                                rotation,
+                                reflect,
+                                origin_x,
+                                origin_y,
+                                tiles,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Try to place `pattern` at `(origin_x, origin_y)` with the given D4
+/// transform. Returns the absolute zone-local tiles if every entity lands
+/// on a free, in-bounds, non-boundary tile; otherwise `None`.
+fn try_place(
+    pattern: &SubPattern,
+    rotation: u8,
+    reflect: bool,
+    origin_x: u8,
+    origin_y: u8,
+    pw: u8,
+    ph: u8,
+    zone: &ZoneShape<'_>,
+) -> Option<Vec<(u8, u8)>> {
+    let mut tiles = Vec::with_capacity(pattern.entities.len());
+    for e in &pattern.entities {
+        let (lx, ly) = transform_point(e.x, e.y, pattern.w, pattern.h, rotation, reflect);
+        let zx = origin_x.checked_add(lx)?;
+        let zy = origin_y.checked_add(ly)?;
+        if zx >= origin_x + pw || zy >= origin_y + ph {
+            return None;
+        }
+        let tile = (zx, zy);
+        if zone.forbidden.contains(&tile) || zone.boundary.contains(&tile) {
+            return None;
+        }
+        tiles.push(tile);
+    }
+    Some(tiles)
+}
+
+/// Apply the same D4 transform we use in [`canonicalise`] to a single
+/// `(x, y)` point inside a `(w, h)` bbox; returns its position in the
+/// post-transform `(tw, th)` bbox.
+fn transform_point(x: u8, y: u8, w: u8, h: u8, rotation: u8, reflect: bool) -> (u8, u8) {
+    let (mut x, mut y) = (x as i32, y as i32);
+    if reflect {
+        x = (w as i32 - 1) - x;
+    }
+    let mut cur_w = w as i32;
+    let mut cur_h = h as i32;
+    for _ in 0..rotation {
+        let (nx, ny) = (cur_h - 1 - y, x);
+        x = nx;
+        y = ny;
+        std::mem::swap(&mut cur_w, &mut cur_h);
+    }
+    (x.max(0) as u8, y.max(0) as u8)
+}
+
+/// Pick a non-overlapping subset of `placements` greedily. Higher-frequency
+/// patterns (earlier in `palette`) are preferred; among equal-rank, larger
+/// footprints win.
+pub fn greedy_cover(placements: &[Placement], palette_freq: &[usize]) -> Vec<Placement> {
+    let mut order: Vec<usize> = (0..placements.len()).collect();
+    order.sort_by(|&a, &b| {
+        let pa = &placements[a];
+        let pb = &placements[b];
+        let fa = palette_freq.get(pa.pattern_idx).copied().unwrap_or(0);
+        let fb = palette_freq.get(pb.pattern_idx).copied().unwrap_or(0);
+        fb.cmp(&fa).then(pb.tiles.len().cmp(&pa.tiles.len()))
+    });
+    let mut claimed: HashSet<(u8, u8)> = HashSet::new();
+    let mut chosen = Vec::new();
+    for i in order {
+        let p = &placements[i];
+        if p.tiles.iter().any(|t| claimed.contains(t)) {
+            continue;
+        }
+        for &t in &p.tiles {
+            claimed.insert(t);
+        }
+        chosen.push(p.clone());
+    }
+    chosen
+}
+
+// ---------------------------------------------------------------------------
+// Process-wide palette: lazily mined from the embedded sat-zones.bin so the
+// recogniser has something to work with on first call.
+// ---------------------------------------------------------------------------
+
+/// Pre-baked cache embedded in WASM builds — same blob the zone cache
+/// uses for cold-start lookups.
+#[cfg(target_arch = "wasm32")]
+const EMBEDDED_CACHE: &[u8] = include_bytes!("../data/sat-zones.bin");
+
+/// One palette entry: the pattern itself plus its mining-time frequency
+/// (used by [`greedy_cover`] for tie-breaking).
+#[derive(Debug, Clone)]
+pub struct PaletteEntry {
+    pub pattern: SubPattern,
+    pub freq: usize,
+}
+
+/// Lazy-init shared palette. First call mines from the embedded
+/// `sat-zones.bin` (and on native, the on-disk equivalent). Subsequent
+/// calls reuse the cached `Vec`.
+pub fn shared_palette() -> &'static Vec<PaletteEntry> {
+    static PALETTE: OnceLock<Vec<PaletteEntry>> = OnceLock::new();
+    PALETTE.get_or_init(load_palette_from_zone_cache)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn load_palette_from_zone_cache() -> Vec<PaletteEntry> {
+    let records = crate::zone_cache::parse_records(EMBEDDED_CACHE);
+    let entity_lists: Vec<Vec<PlacedEntity>> = records.into_iter().map(|r| r.entities).collect();
+    mine_palette(&entity_lists, DEFAULT_K_HOPS, DEFAULT_MIN_FREQ)
+        .into_iter()
+        .map(|(pattern, freq)| PaletteEntry { pattern, freq })
+        .collect()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn load_palette_from_zone_cache() -> Vec<PaletteEntry> {
+    // On native, read the embedded blob from the source tree — same path
+    // that's `include_bytes!`d for WASM. Falls back to empty on any I/O
+    // error so this is never load-bearing for correctness.
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("data/sat-zones.bin");
+    let Ok(bytes) = std::fs::read(&path) else { return Vec::new() };
+    let records = crate::zone_cache::parse_records(&bytes);
+    let entity_lists: Vec<Vec<PlacedEntity>> = records.into_iter().map(|r| r.entities).collect();
+    mine_palette(&entity_lists, DEFAULT_K_HOPS, DEFAULT_MIN_FREQ)
+        .into_iter()
+        .map(|(pattern, freq)| PaletteEntry { pattern, freq })
+        .collect()
 }
 
 #[cfg(test)]

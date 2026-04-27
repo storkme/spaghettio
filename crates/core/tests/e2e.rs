@@ -3796,8 +3796,9 @@ fn diag_mine_palette() {
         panic!("no records found — populate ~/.cache/fucktorio/sat-zones.bin via diag_corpus_sweep first");
     }
 
+    let entity_lists: Vec<Vec<_>> = records.iter().map(|r| r.entities.clone()).collect();
     let start = std::time::Instant::now();
-    let palette = mine_palette(&records, k_hops, min_freq);
+    let palette = mine_palette(&entity_lists, k_hops, min_freq);
     let mining_ms = start.elapsed().as_millis();
 
     eprintln!(
@@ -3820,5 +3821,88 @@ fn diag_mine_palette() {
 
     if palette.len() > top_n {
         eprintln!("... and {} more", palette.len() - top_n);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shadow-mode hint statistics — per-zone candidate / coverage histogram
+// ---------------------------------------------------------------------------
+
+/// Run the e2e suite with `FUCKTORIO_USE_SAT_HINTS=1`, collect every
+/// `SatHintInjection` trace event, and summarise: how many candidates the
+/// recogniser found per zone, how many tiles greedy-cover would have
+/// pinned, distribution by zone size.
+///
+/// Used to confirm the recogniser is finding meaningful coverage *before*
+/// we wire the actual hint-injection path through SAT — see the caveat
+/// on `Placement` for why shadow mode is the right next step.
+///
+/// Run with:
+///   FUCKTORIO_USE_SAT_HINTS=1 cargo test --release --test e2e -- \
+///       --ignored diag_hint_shadow_stats --exact --nocapture
+#[test]
+#[ignore]
+fn diag_hint_shadow_stats() {
+    use fucktorio_core::trace::TraceEvent as T;
+    use std::collections::BTreeMap;
+
+    if std::env::var("FUCKTORIO_USE_SAT_HINTS").as_deref() != Ok("1") {
+        eprintln!("WARNING: run with FUCKTORIO_USE_SAT_HINTS=1 to see real numbers");
+    }
+
+    let mut available_inputs = FxHashSet::default();
+    available_inputs.insert("iron-ore".to_string());
+    available_inputs.insert("copper-ore".to_string());
+
+    let cases: &[(&str, &str, f64, Option<&str>, bool)] = &[
+        ("tier1_iron_gear_wheel_20s",          "iron-gear-wheel",     20.0, None, true),
+        ("tier2_electronic_circuit_from_ore",  "electronic-circuit",   1.0, None, true),
+        ("stress_electronic_circuit_30s_from_ore", "electronic-circuit", 30.0, None, true),
+        ("stress_electronic_circuit_60s_red_from_ore", "electronic-circuit", 60.0, Some("fast-transport-belt"), true),
+    ];
+
+    let mut zone_stats: Vec<(usize, usize, u32, u32)> = Vec::new();  // (candidates, hints, w, h)
+    let mut by_zone_size: BTreeMap<(u32, u32), (usize, usize, usize)> = BTreeMap::new();
+
+    for (name, item, rate, belt, from_ore) in cases {
+        let mut inputs = if *from_ore { available_inputs.clone() } else { FxHashSet::default() };
+        if !*from_ore { inputs.clear(); }
+        let result = match run_e2e(name, item, *rate, "assembling-machine-1", *belt, &inputs) {
+            Ok(r) => r,
+            Err(e) => { eprintln!("{}: {}", name, e); continue; }
+        };
+        let mut case_zones = 0;
+        let mut case_hints = 0;
+        for ev in &result.trace_events {
+            if let T::SatHintInjection { zone_w, zone_h, candidates_considered, hints_emitted, .. } = ev {
+                zone_stats.push((*candidates_considered, *hints_emitted, *zone_w, *zone_h));
+                case_zones += 1;
+                case_hints += hints_emitted;
+                let entry = by_zone_size.entry((*zone_w, *zone_h)).or_insert((0, 0, 0));
+                entry.0 += 1;
+                entry.1 += candidates_considered;
+                entry.2 += hints_emitted;
+            }
+        }
+        eprintln!("  {}: {} zones, {} total hints", name, case_zones, case_hints);
+    }
+
+    if zone_stats.is_empty() {
+        panic!("no SatHintInjection events captured — is FUCKTORIO_USE_SAT_HINTS=1 set?");
+    }
+
+    eprintln!("\n=== Per-zone summary ({} zones total) ===", zone_stats.len());
+    let total_cand: usize = zone_stats.iter().map(|s| s.0).sum();
+    let total_hints: usize = zone_stats.iter().map(|s| s.1).sum();
+    let max_cand = zone_stats.iter().map(|s| s.0).max().unwrap();
+    let max_hints = zone_stats.iter().map(|s| s.1).max().unwrap();
+    eprintln!("  candidates: total={} mean={:.1} max={}", total_cand, total_cand as f64 / zone_stats.len() as f64, max_cand);
+    eprintln!("  hints:      total={} mean={:.1} max={}", total_hints, total_hints as f64 / zone_stats.len() as f64, max_hints);
+
+    eprintln!("\n=== By zone size ===");
+    eprintln!("  {:>5} {:>5} {:>6} {:>10} {:>8} {:>8}", "w", "h", "zones", "candidates", "hints", "h/zone");
+    for ((w, h), (n, cand, hints)) in &by_zone_size {
+        eprintln!("  {:>5} {:>5} {:>6} {:>10} {:>8} {:>8.1}",
+            w, h, n, cand, hints, *hints as f64 / *n as f64);
     }
 }
