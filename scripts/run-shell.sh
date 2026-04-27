@@ -15,13 +15,19 @@ Drops into an interactive pi TUI with the named agent's personality loaded.
 No task is queued — you drive. The workspace has a fresh clone of the repo.
 
 Environment:
-  GH_TOKEN  (required)  Fine-grained PAT scoped to the target repo.
+  GH_TOKEN    (required)  Fine-grained PAT scoped to the target repo.
+  LLAMA_MODEL (required)  Model id from your llama-server's /v1/models endpoint.
+
+  LLAMA_PORT        (optional, default: 8080)
+  LLAMA_CONTEXT     (optional, default: 65536)
+  LLAMA_MAX_TOKENS  (optional, default: 8192)
+  LLAMA_HOST_IP     (optional)  Override the auto-detected Windows gateway IP.
 
   FUCKTORIO_AGENT_IMAGE (optional, default: fucktorio-agent:latest)
-                        The image tag to run.
 
 Examples:
-  GH_TOKEN=ghp_xxx ./scripts/run-shell.sh misia
+  export GH_TOKEN=ghp_xxx LLAMA_MODEL=qwen2.5-coder-32b-instruct
+  ./scripts/run-shell.sh misia
   ./scripts/run-shell.sh --list
 EOF
 }
@@ -68,10 +74,8 @@ if [ -z "${GH_TOKEN:-}" ]; then
     exit 64
 fi
 
-if [ -z "${HOME:-}" ] || [ ! -d "${HOME}/.pi" ]; then
-    echo "error: ~/.pi not found on host — pi is not logged in here." >&2
-    echo "       run 'pi' once on the host and use /login, or set ANTHROPIC_API_KEY;" >&2
-    echo "       then retry." >&2
+if [ -z "${LLAMA_MODEL:-}" ]; then
+    echo "error: LLAMA_MODEL is not set. See --help." >&2
     exit 64
 fi
 
@@ -81,16 +85,28 @@ if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     exit 64
 fi
 
+WIN_HOST="$(ip route | awk '/^default/ {print $3; exit}')"
+if [ -z "$WIN_HOST" ]; then
+    echo "error: could not auto-detect WSL default gateway. Override with:" >&2
+    echo "       LLAMA_HOST_IP=<your-windows-ip> $0 $NAME" >&2
+    exit 1
+fi
+WIN_HOST="${LLAMA_HOST_IP:-$WIN_HOST}"
+
 short="$(openssl rand -hex 3)"
 container="fucktorio-shell-${NAME}-${short}"
 
-echo "starting ${container} (agent=${NAME})"
+echo "starting ${container} (agent=${NAME}, model=${LLAMA_MODEL}, llama-host=${WIN_HOST})"
 echo "use ctrl-c / /exit to leave."
 echo
 
 exec docker run --rm -it \
     --name "$container" \
-    -v "${HOME}/.pi:/mnt/pi-ro:ro" \
+    --add-host="llama-host:${WIN_HOST}" \
     -e GH_TOKEN="$GH_TOKEN" \
     -e AGENT_NAME="$NAME" \
+    -e LLAMA_MODEL="$LLAMA_MODEL" \
+    -e LLAMA_PORT="${LLAMA_PORT:-8080}" \
+    -e LLAMA_CONTEXT="${LLAMA_CONTEXT:-65536}" \
+    -e LLAMA_MAX_TOKENS="${LLAMA_MAX_TOKENS:-8192}" \
     "$IMAGE" agent-shell.sh

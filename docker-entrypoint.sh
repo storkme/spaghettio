@@ -35,6 +35,7 @@ fi
 # ---------------------------------------------------------------------------
 have_oauth=0
 have_llama=0
+have_apikey=0
 
 if [ -d /mnt/pi-ro ]; then
     mkdir -p "$HOME/.pi"
@@ -59,10 +60,14 @@ if [ -n "${LLAMA_MODEL:-}" ]; then
     have_llama=1
 fi
 
-if [ $have_oauth -eq 0 ] && [ $have_llama -eq 0 ]; then
+if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+    have_apikey=1
+fi
+
+if [ $have_oauth -eq 0 ] && [ $have_llama -eq 0 ] && [ $have_apikey -eq 0 ]; then
     echo "error: no backend configured." >&2
-    echo "       either bind-mount ~/.pi to /mnt/pi-ro (OAuth/API-key path)," >&2
-    echo "       or set LLAMA_MODEL (local llama.cpp path)." >&2
+    echo "       bind-mount ~/.pi to /mnt/pi-ro (OAuth/API-key path)," >&2
+    echo "       set ANTHROPIC_API_KEY, or set LLAMA_MODEL." >&2
     exit 64
 fi
 
@@ -112,6 +117,8 @@ else
 fi
 if [ $have_llama -eq 1 ]; then
     echo "backend: llama.cpp  (model=${LLAMA_MODEL}, host=llama-host:${LLAMA_PORT})"
+elif [ $have_apikey -eq 1 ]; then
+    echo "backend: ANTHROPIC_API_KEY"
 else
     echo "backend: pi OAuth/API key via ~/.pi"
 fi
