@@ -870,6 +870,7 @@ impl JunctionStrategy for SatStrategy {
         );
 
         if let Some(cached_entities) = cached_hit {
+            let cached_count = cached_entities.len();
             let proposed_entities: Vec<SatProposedEntity> = cached_entities
                 .iter()
                 .map(|e| SatProposedEntity {
@@ -898,7 +899,7 @@ impl JunctionStrategy for SatStrategy {
                 variables: 0,
                 clauses: 0,
                 solve_time_us: 0,
-                entities_raw: cached_entities.len(),
+                entities_raw: cached_count,
                 initial_cost: Some(crate::bus::junction_cost::solution_cost(&cached_entities)),
                 proposed_entities,
             });
@@ -909,23 +910,42 @@ impl JunctionStrategy for SatStrategy {
                 zone.x,
                 zone.y,
             );
-            return Some(JunctionSolution {
-                entities: pruned,
-                footprint: Rect {
-                    x: zone.x,
-                    y: zone.y,
-                    w: zone.width,
-                    h: zone.height,
-                },
-                strategy_name: self.name(),
-                participating: ctx.region.participating.clone(),
-                sat_zone: Some(crate::bus::junction_solver::SatZoneSnapshot {
-                    boundaries: boundaries.clone(),
-                    forced_empty: zone.forced_empty.clone(),
-                    belt_tier: belt_name.to_string(),
-                    max_ug_reach: max_reach,
-                }),
-            });
+            // Defensive cache validation: if the cached entry had entities
+            // but pruning dropped them all, the cached entry doesn't form
+            // an input→output path under the current zone's boundaries.
+            // This indicates a signature collision or a stale entry from
+            // before a layout change — treat as a cache miss and fall
+            // through to a fresh SAT solve. Without this, an empty
+            // pruned result becomes a 0-cost candidate that wins the
+            // pick-cheapest race over a real 5-entity solve, leaving the
+            // zone visibly empty.
+            if pruned.is_empty() && cached_count > 0 && !boundaries.is_empty() {
+                trace::emit(TraceEvent::SatPruned {
+                    zone_x: zone.x,
+                    zone_y: zone.y,
+                    total: cached_count,
+                    kept: 0,
+                });
+                // Fall through to fresh SAT solve below.
+            } else {
+                return Some(JunctionSolution {
+                    entities: pruned,
+                    footprint: Rect {
+                        x: zone.x,
+                        y: zone.y,
+                        w: zone.width,
+                        h: zone.height,
+                    },
+                    strategy_name: self.name(),
+                    participating: ctx.region.participating.clone(),
+                    sat_zone: Some(crate::bus::junction_solver::SatZoneSnapshot {
+                        boundaries: boundaries.clone(),
+                        forced_empty: zone.forced_empty.clone(),
+                        belt_tier: belt_name.to_string(),
+                        max_ug_reach: max_reach,
+                    }),
+                });
+            }
         }
 
         let (entities_opt, stats) = crate::sat::solve_crossing_zone_per_channel(
@@ -1054,6 +1074,7 @@ impl JunctionStrategy for SatStrategy {
             None,
         );
 
+        let best_count = best.len();
         let pruned = prune_dangling_sat_entities(
             best,
             &boundaries,
@@ -1061,6 +1082,15 @@ impl JunctionStrategy for SatStrategy {
             zone.x,
             zone.y,
         );
+        // Same defensive guard as the cache-hit path: if SAT produced
+        // entities but pruning found none on a connected input→output
+        // path under these boundaries, the result is degenerate. A
+        // 0-entity solution would beat a real solve in `pick_cheapest`
+        // (cost 0) and leave the zone visibly empty. Reject as if SAT
+        // had returned UNSAT — the growth loop will keep trying.
+        if pruned.is_empty() && best_count > 0 && !boundaries.is_empty() {
+            return None;
+        }
 
         Some(JunctionSolution {
             entities: pruned,
