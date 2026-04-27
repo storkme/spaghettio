@@ -79,11 +79,11 @@ Extend the trunk-synth loop (`ghost_router.rs:277-354`) to emit fluid
 lanes. Key shape: `"trunk:fluid:{item}:{x}"` (distinct from solid
 trunks so downstream predicates can branch on it without parsing the
 item name). Tiles come from the same anchors the fluid stamper already
-computes in step 3.6: `start_y`, every tap_y, every breathing anchor,
-every UG-in/out, every surface-pipe tile. The cleanest implementation
-pulls the anchor list out of step 3.6 into a helper shared with the
-synth emitter, so both loops agree on which tiles belong to the fluid
-trunk column.
+computes in step 3.6: `start_y`, every tap_y, `end_y`, and every
+UG-in/out emitted by the back-to-back chain between anchors. The
+cleanest implementation pulls the anchor list out of step 3.6 into a
+helper shared with the synth emitter, so both loops agree on which
+tiles belong to the fluid trunk column.
 
 Extend the `spec_items` / `spec_belt_tiers` maps at
 `ghost_router.rs:1506-1517` to include fluid keys. Tier is irrelevant

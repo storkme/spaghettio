@@ -2333,6 +2333,29 @@ fn compute_lane_rates_impl(
         }
     }
 
+    // Post-pass: surface UG-input tiles inherit their upstream surface
+    // belt's lane rates. Inserters can pick from both lanes of any
+    // belt's surface, UG entries and exits included (rule I6). UG-out
+    // tiles are already in `belt_dir_map` and pick up rates via normal
+    // propagation; UG-in tiles aren't (their forward flow goes
+    // underground, not to a surface neighbour) so the topo sort skips
+    // them and `lane_rates` stays empty there. The input-rate-delivery
+    // check looks up the inserter's pickup tile in `lane_rates` and
+    // treats `None` as 0/s — without this fix-up, every long-handed
+    // inserter picking across a UG-in fires a false-positive "input
+    // belt delivers 0/s" warning.
+    let ug_input_tiles: Vec<((i32, i32), EntityDirection)> = ug_input_dir
+        .iter()
+        .map(|(&pos, &dir)| (pos, dir))
+        .collect();
+    for ((ix, iy), dir) in ug_input_tiles {
+        let (dx, dy) = dir_to_vec(dir);
+        let upstream = (ix - dx, iy - dy);
+        if let Some(&upstream_rates) = lane_rates.get(&upstream) {
+            lane_rates.insert((ix, iy), upstream_rates);
+        }
+    }
+
     lane_rates
 }
 

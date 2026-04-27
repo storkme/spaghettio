@@ -645,7 +645,15 @@ fn split_overflowing_lanes(
         //     shape (N, consumer_count). Without the family, the
         //     producers in empty-consumer splits were silently dropped
         //     (producing belt-dead-end errors downstream).
-        if n_producers >= 1 && n_lanes_with_consumers >= 2 {
+        //   - HS fan-in to single trunk (any_hs, N > 1, M = 1): HS
+        //     rows hold `force_single_row`, so DualInput consumers
+        //     stay as one row even when producers split into multiple.
+        //     Without a (N,1) family the producers sideload onto the
+        //     single trunk, exceeding belt cap. Scoped to HS so
+        //     existing VerticalSplit layouts (which work fine without
+        //     this family) keep their golden hashes.
+        let hs_single_trunk_fan_in = any_hs && n_producers > 1 && n_lanes_with_consumers == 1;
+        if (n_producers >= 1 && n_lanes_with_consumers >= 2) || hs_single_trunk_fan_in {
             let shape = (n_producers, n_lanes_with_consumers);
             family_id = Some(families.len());
 

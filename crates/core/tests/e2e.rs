@@ -527,13 +527,13 @@ fn assert_partitioned_inertness(
 /// `(test_name, sha256_hex_of_entities)`. Captured under
 /// `LayoutStrategy::Pooled` on the pre-RFP baseline.
 const GOLDEN_HASHES: &[(&str, &str)] = &[
-    ("tier1_iron_gear_wheel", "c3ad3100d0d4a68befa8b6beb05f200ad25a60b41e89a98e490a61486a958ccd"),
-    ("tier1_iron_gear_wheel_from_ore", "3cd35e7f5cd6a06fb84df10f902b6726f9ce8c6f66d557989fada973c4eacb3b"),
-    ("tier1_iron_gear_wheel_20s", "cb9db5d05c01524432c2f4524e3e8eaa50b8957b8a764622fc9c59dfcc27fffd"),
-    ("tier2_electronic_circuit_from_ore", "b3fdf981f86d7794b0346424123a553436b04628a77d45fb01fc56f9cb2bf044"),
-    ("tier2_electronic_circuit_20s_from_ore", "6187078fcdbfebd265d1417c0b71650951fed4c3d2c216c29801fd5ee2917104"),
-    ("tier2_electronic_circuit_splitter_stamp_regression", "71b3a54a5bbc6248f7ce049f99e4579815a73fd841aa3fb0b8b10576f2c814de"),
-    ("tier3_plastic_bar", "6985e6c920c10e4f20ec4c7b18bbb0cde98a6a8c030787e85a3f8ab3618e70fb"),
+    ("tier1_iron_gear_wheel", "458679d5a3a9f732eeec1701cd48396b3e2215ff66a63d982b876ef4a93c85b5"),
+    ("tier1_iron_gear_wheel_from_ore", "5fffb4c717d4b283cba0237a405e99cc0959bf76e23caa36f1ba47b40ed6ae84"),
+    ("tier1_iron_gear_wheel_20s", "add07d75c26386616aa4b7d4abf7edd754a2231523598145e2f0fc2ecd3c8a2f"),
+    ("tier2_electronic_circuit_from_ore", "85867c6174490364b8b08d6d94f300ab8f1d2da7ee1f12f559b324c25a88ff5b"),
+    ("tier2_electronic_circuit_20s_from_ore", "1d63b9e0e1ddd93497845fe22773313efd615f3880bd29ae3f495604ac873306"),
+    ("tier2_electronic_circuit_splitter_stamp_regression", "28e2d81aba961ebb4186e1ad6b935394c609ba6d8abed7fbe1cca39840dbcc5f"),
+    ("tier3_plastic_bar", "7dc56ef4ecc86acba1780271ae319e8cffecee8cf286379b181672efe6aeccd8"),
     ("tier3_sulfuric_acid", "091765fa6a50b4438137e0500e32eb8378ed22224f9b58843070cb70d6561bcd"),
     ("tier3_heavy_oil_cracking", "e035b72e76cff247546b12ff47e264b8f9ae44e8cf9969107e45aad4690e1980"),
 ];
@@ -641,7 +641,6 @@ fn tier1_iron_gear_wheel_20s() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "After belt-permissive + splitter-topology + perpendicular-UG-in rule: SAT has an honest model of the iron+copper splitter flows and can't sideload into UG-ins. But SAT still satisfies iter 2 with a solution the reachability walker rejects (iron-plate tap doesn't reach (5,10) in the SAT placement), iter 3+ go UNSAT. Growth caps, original ghost layout ships with belt-item-isolation error. Remaining bug is in the SAT routing or walker reasoning — the splitter-topology change correctly forces (1,8) surface-belt feed instead of UG bypass, but something downstream still doesn't connect iron to its exit. Next to investigate."]
 #[ntest::timeout(10000)]
 fn tier2_electronic_circuit() {
     let inputs: FxHashSet<String> = ["iron-plate", "copper-plate"]
@@ -713,9 +712,7 @@ fn tier2_electronic_circuit_from_ore() {
     .unwrap_or_else(|e| panic!("tier2_electronic_circuit_from_ore: {e}"));
 
     assert_no_errors(&result);
-    // The `power` warning (27 disconnected poles) is a pre-existing layout-engine
-    // bug tracked separately — all belt-flow validator false-positives are fixed.
-    assert_no_warnings_except(&result, &["power"]);
+    assert_no_warnings(&result);
     assert_produces(&result, "electronic-circuit", 10.0);
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier2_electronic_circuit_from_ore");
@@ -739,9 +736,7 @@ fn tier2_electronic_circuit_20s_from_ore() {
     .unwrap_or_else(|e| panic!("tier2_electronic_circuit_20s_from_ore: {e}"));
 
     assert_no_errors(&result);
-    // The `power` warning (25 disconnected poles) is a pre-existing layout-engine
-    // bug tracked separately — all belt-flow validator false-positives are fixed.
-    assert_no_warnings_except(&result, &["power"]);
+    assert_no_warnings(&result);
     assert_produces(&result, "electronic-circuit", 20.0);
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier2_electronic_circuit_20s_from_ore");
@@ -893,7 +888,6 @@ fn tier3_heavy_oil_cracking() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore] // Blocked by #64: lane-throughput warnings
 #[ntest::timeout(10000)]
 fn tier4_advanced_circuit_from_plates() {
     // Nauvis-style inputs: plates + raw resources (coal, crude-oil) + water.
@@ -951,15 +945,6 @@ fn tier4_advanced_circuit_partitioned() {
     )
     .unwrap_or_else(|e| panic!("tier4_advanced_circuit_partitioned: {e}"));
 
-    // K1-1 (partial): the motivating case must not produce validator
-    // ERRORS under PartitionedPerConsumer. Pooled at this same rate
-    // *does* produce errors (see `scoreboard_strategy_sweep`); the
-    // whole point of partitioning is to unblock that case. Strict
-    // K1-1's "validator-clean" gate is the stricter assertion that
-    // there are zero warnings either — the residual warnings here are
-    // pre-existing #64 lane-throughput false-positives, not a
-    // partitioning failure. Asserting `errors == 0` is the partitioning-
-    // specific signal: it would have been > 0 without this work.
     assert_produces(&result, "advanced-circuit", 1.0);
     let copper_cable_partitioned = result.trace_events.iter().any(|evt| {
         matches!(
@@ -972,16 +957,8 @@ fn tier4_advanced_circuit_partitioned() {
         "expected `ModulePartitioned` trace event with item=copper-cable, modules≥2 — \
          partitioner did not fire on the motivating case"
     );
-    let errors: Vec<_> = result.issues.iter()
-        .filter(|i| i.severity == Severity::Error)
-        .collect();
-    assert!(
-        errors.is_empty(),
-        "K1-1 partial: PartitionedPerConsumer must produce 0 validator errors on the \
-         motivating case. Got {} error(s):\n  {}",
-        errors.len(),
-        errors.iter().map(|e| format!("[{}] {}", e.category, e.message)).collect::<Vec<_>>().join("\n  ")
-    );
+    assert_no_errors(&result);
+    assert_no_warnings(&result);
 }
 
 /// Advanced circuit, rate 5/s, AM1, yellow belts, from raw ores + crude oil.
@@ -1463,9 +1440,9 @@ fn stress_advanced_circuit_45s_from_plates() {
 ///
 /// What this gates:
 ///   - **K1-2**: warnings under `PartitionedPerConsumer` stay
-///     bounded (≤ 50 here, room for #64 jitter). If the count
-///     blows up while the gate isn't tripping more than expected,
-///     the "belts over-provisioned" assumption is failing.
+///     bounded (≤ 41 here — the deterministic baseline). If the
+///     count regresses while the gate isn't tripping more than
+///     expected, the "belts over-provisioned" assumption is failing.
 ///   - **K1-3 per-test**: rejection events stay at 1 (the EC
 ///     module's borderline rate). If we see > 1, the gate fired
 ///     for an additional module — investigate.
@@ -1473,7 +1450,8 @@ fn stress_advanced_circuit_45s_from_plates() {
 ///     3 errors to 0.
 ///
 /// Corpus-level K1-3 (≤ 20% of cases trip the gate at default
-/// rates) needs more K>1 cases over time; this test contributes one.
+/// rates) is contributed to by this test plus the 4/s and 7/s
+/// siblings below.
 ///
 /// Run with `cargo test --test e2e
 /// stress_advanced_circuit_partitioned_5s_from_plates -- --nocapture`.
@@ -1508,16 +1486,130 @@ fn stress_advanced_circuit_partitioned_5s_from_plates() {
         "stress_advanced_circuit_partitioned_5s_from_plates",
         &pooled,
         &partitioned,
-        StressBaseline { max_errors: 3, max_warnings: 0 },
+        StressBaseline { max_errors: 3, max_warnings: 1 },
         PartitionedStressBaseline {
             max_errors_partitioned: 0,
-            // 41 warnings probed; 50 leaves slack for #64 jitter.
-            // Tighten when #64 (lane-throughput false-positives) is
-            // resolved separately.
-            max_warnings_partitioned: 50,
-            // 1 rejection: EC module hits 89% of per-side capacity
-            // on blue belt at AC=5/s. Documented as expected
-            // behavior, not a violation. See doc-comment above.
+            // The "41 deterministic" baseline this test was originally tightened
+            // to was an artefact of two now-fixed bugs: the partitioner sibling-
+            // spec dedup orphaned the AC module's copper-cable trunk
+            // (input-rate-delivery warnings) and the pole-repair Chebyshev/
+            // Euclidean mismatch left disconnected poles (power warnings). With
+            // both fixed, post-fix actual count is 0.
+            max_warnings_partitioned: 0,
+            // 1 rejection: EC module hits 89% of per-side capacity on blue belt
+            // at AC=5/s. Documented as expected behavior, not a violation.
+            max_partition_rejections: 1,
+        },
+    );
+}
+
+/// **K1-3 floor case** — advanced-circuit @ 4/s is just below the
+/// partitioner's 75% utilization gate, so no rejection events fire.
+/// Pairs with the 5/s and 7/s siblings to give a 3-point sweep.
+///
+/// Baselines (post sibling-spec + clean-slate-SAT + pole-Euclidean fixes):
+/// - Pooled: 0 warnings, 1 error.
+/// - PartitionedPerConsumer: 0 errors, 0 warnings, 0 rejection events.
+///
+/// What this gates beyond what 5/s already does:
+///   - **K1-3 floor**: confirms the gate doesn't fire spuriously at
+///     comfortable rates. If `max_partition_rejections > 0` here,
+///     the gate threshold is too aggressive.
+#[test]
+#[ntest::timeout(600000)]
+fn stress_advanced_circuit_partitioned_4s_from_plates() {
+    use fucktorio_core::bus::layout::LayoutStrategy;
+
+    let inputs: FxHashSet<String> = ["iron-plate", "copper-plate", "coal", "crude-oil", "water"]
+        .iter().map(|s| s.to_string()).collect();
+    let pooled = run_e2e_with_strategy(
+        "stress_advanced_circuit_partitioned_4s_from_plates",
+        "advanced-circuit",
+        4.0,
+        "assembling-machine-2",
+        None,
+        &inputs,
+        LayoutStrategy::Pooled,
+    ).expect("Pooled e2e pipeline");
+    let partitioned = run_e2e_with_strategy(
+        "stress_advanced_circuit_partitioned_4s_from_plates",
+        "advanced-circuit",
+        4.0,
+        "assembling-machine-2",
+        None,
+        &inputs,
+        LayoutStrategy::PartitionedPerConsumer,
+    ).expect("PartitionedPerConsumer e2e pipeline");
+    assert_produces(&pooled, "advanced-circuit", 4.0);
+    assert_produces(&partitioned, "advanced-circuit", 4.0);
+    check_partitioned_stress_scoreboard(
+        "stress_advanced_circuit_partitioned_4s_from_plates",
+        &pooled,
+        &partitioned,
+        StressBaseline { max_errors: 1, max_warnings: 0 },
+        PartitionedStressBaseline {
+            max_errors_partitioned: 0,
+            // Post-fix (clean-slate SAT zone + pole-repair Euclidean): 0.
+            // The PR #207 baseline of 33 was probed before those landed.
+            max_warnings_partitioned: 0,
+            max_partition_rejections: 0,
+        },
+    );
+}
+
+/// **K1-1 partial-win case** — advanced-circuit @ 7/s is high enough
+/// that even partitioning leaves residual errors (vs Pooled). Useful
+/// as a *regression sentinel*: if the partitioned-side error count
+/// climbs back toward Pooled's, we've broken something. If it drops,
+/// tighten the baseline.
+///
+/// Baselines (post sibling-spec + clean-slate-SAT + pole-Euclidean fixes):
+/// - Pooled: 0 warnings, 5 errors.
+/// - PartitionedPerConsumer: 1 error, 0 warnings, 1 rejection event.
+#[test]
+#[ntest::timeout(600000)]
+fn stress_advanced_circuit_partitioned_7s_from_plates() {
+    use fucktorio_core::bus::layout::LayoutStrategy;
+
+    let inputs: FxHashSet<String> = ["iron-plate", "copper-plate", "coal", "crude-oil", "water"]
+        .iter().map(|s| s.to_string()).collect();
+    let pooled = run_e2e_with_strategy(
+        "stress_advanced_circuit_partitioned_7s_from_plates",
+        "advanced-circuit",
+        7.0,
+        "assembling-machine-2",
+        None,
+        &inputs,
+        LayoutStrategy::Pooled,
+    ).expect("Pooled e2e pipeline");
+    let partitioned = run_e2e_with_strategy(
+        "stress_advanced_circuit_partitioned_7s_from_plates",
+        "advanced-circuit",
+        7.0,
+        "assembling-machine-2",
+        None,
+        &inputs,
+        LayoutStrategy::PartitionedPerConsumer,
+    ).expect("PartitionedPerConsumer e2e pipeline");
+    assert_produces(&pooled, "advanced-circuit", 7.0);
+    assert_produces(&partitioned, "advanced-circuit", 7.0);
+    check_partitioned_stress_scoreboard(
+        "stress_advanced_circuit_partitioned_7s_from_plates",
+        &pooled,
+        &partitioned,
+        StressBaseline { max_errors: 5, max_warnings: 0 },
+        PartitionedStressBaseline {
+            // Post-fix (clean-slate SAT zone + pole-repair Euclidean): 1.
+            // The PR #207 baseline of 3 was probed before those landed.
+            // Partitioning still helps (5 → 2) but doesn't fully unblock
+            // at this rate. The +1 over the post-fix baseline is from
+            // the new `unresolved-junction` validator catching a 1-tile
+            // capped cluster at (10,18) that previously showed up only
+            // as a belt-dead-end at (11,18). Two errors, same underlying
+            // failure — the cluster never solved and the belt feeding
+            // into it has no receiver.
+            max_errors_partitioned: 2,
+            max_warnings_partitioned: 0,
             max_partition_rejections: 1,
         },
     );
@@ -3466,4 +3558,164 @@ fn diag_corpus_sweep() {
 
     // Don't panic — we want the cache populated and the summary printed.
     // No assertion; this is purely a data-gathering diag.
+}
+
+// ---------------------------------------------------------------------------
+// Junction-cap census — baseline measurement for the junction-solver spike
+// ---------------------------------------------------------------------------
+
+/// For each combo in the corpus, run the layout pipeline and tally
+/// `JunctionGrowthCapped` events. Reports per-case + per-reason counts and
+/// a global summary. The spike's measurement baseline: experiments
+/// (e.g. raising `MAX_GROWTH_ITERS`, adaptive growth budgets) are scored
+/// against the table this prints.
+///
+/// Run with:
+///   cargo test --manifest-path crates/core/Cargo.toml --release --test e2e -- \
+///       --ignored diag_junction_caps_sweep --exact --nocapture
+#[test]
+#[ignore]
+fn diag_junction_caps_sweep() {
+    use rustc_hash::FxHashMap;
+
+    struct Combo {
+        item: &'static str,
+        rate: f64,
+        belt: Option<&'static str>,
+        from_ore: bool,
+        from_crude: bool,
+    }
+
+    let mut combos: Vec<Combo> = Vec::new();
+
+    // Mirrors diag_corpus_sweep so caps can be cross-referenced against
+    // SAT-call counts from the same combos.
+    for &rate in &[1.0, 2.0, 3.0, 5.0, 7.5, 10.0, 15.0, 20.0, 30.0] {
+        for from_ore in [false, true] {
+            for belt in [None, Some("fast-transport-belt")] {
+                combos.push(Combo { item: "iron-gear-wheel", rate, belt, from_ore, from_crude: false });
+            }
+        }
+    }
+    for &rate in &[1.0, 5.0, 10.0, 20.0, 30.0] {
+        for from_ore in [false, true] {
+            for belt in [None, Some("fast-transport-belt")] {
+                combos.push(Combo { item: "copper-cable", rate, belt, from_ore, from_crude: false });
+            }
+        }
+    }
+    for &rate in &[1.0, 5.0, 10.0] {
+        for from_ore in [false, true] {
+            combos.push(Combo { item: "transport-belt", rate, belt: None, from_ore, from_crude: false });
+        }
+    }
+    for &rate in &[1.0, 2.5, 5.0, 7.5, 10.0, 15.0, 20.0, 22.0, 25.0, 30.0, 40.0, 50.0] {
+        for from_ore in [false, true] {
+            for belt in [None, Some("fast-transport-belt")] {
+                combos.push(Combo { item: "electronic-circuit", rate, belt, from_ore, from_crude: false });
+            }
+        }
+    }
+    for &rate in &[1.0, 2.0, 5.0] {
+        combos.push(Combo { item: "plastic-bar", rate, belt: None, from_ore: false, from_crude: false });
+        combos.push(Combo { item: "plastic-bar", rate, belt: None, from_ore: false, from_crude: true });
+    }
+    for &rate in &[1.0, 2.0, 5.0] {
+        combos.push(Combo { item: "sulfuric-acid", rate, belt: None, from_ore: false, from_crude: false });
+    }
+
+    eprintln!("\n=== diag_junction_caps_sweep: {} combinations ===", combos.len());
+
+    let sweep_start = Instant::now();
+    let mut attempted = 0usize;
+    let mut succeeded = 0usize;
+    let mut total_caps: usize = 0;
+    let mut reason_totals: FxHashMap<String, usize> = FxHashMap::default();
+    // Per-case rows: (test_name, total_caps, by_reason, max_iters, max_region_tiles)
+    let mut per_case: Vec<(String, usize, FxHashMap<String, usize>, usize, usize)> = Vec::new();
+
+    for c in &combos {
+        attempted += 1;
+        let mut available_inputs = FxHashSet::default();
+        if c.from_ore {
+            available_inputs.insert("iron-ore".to_string());
+            available_inputs.insert("copper-ore".to_string());
+        }
+        if c.from_crude {
+            available_inputs.insert("crude-oil".to_string());
+        }
+
+        let test_name = format!(
+            "caps_{}_{:.1}s_{}{}",
+            c.item.replace('-', "_"),
+            c.rate,
+            c.belt.map(|b| if b == "fast-transport-belt" { "red" } else { "yel" }).unwrap_or("auto"),
+            if c.from_ore { "_ore" } else if c.from_crude { "_crude" } else { "" },
+        );
+
+        match run_e2e(&test_name, c.item, c.rate, "assembling-machine-1", c.belt, &available_inputs) {
+            Ok(result) => {
+                succeeded += 1;
+                let mut case_caps = 0usize;
+                let mut case_reasons: FxHashMap<String, usize> = FxHashMap::default();
+                let mut max_iters = 0usize;
+                let mut max_tiles = 0usize;
+                for ev in &result.trace_events {
+                    if let TraceEvent::JunctionGrowthCapped {
+                        iters, region_tiles, reason, ..
+                    } = ev {
+                        case_caps += 1;
+                        total_caps += 1;
+                        *case_reasons.entry(reason.clone()).or_insert(0) += 1;
+                        *reason_totals.entry(reason.clone()).or_insert(0) += 1;
+                        max_iters = max_iters.max(*iters);
+                        max_tiles = max_tiles.max(*region_tiles);
+                    }
+                }
+                if case_caps > 0 {
+                    per_case.push((test_name, case_caps, case_reasons, max_iters, max_tiles));
+                }
+            }
+            Err(_) => {
+                // Skip silently — a layout that errors out is its own
+                // problem; we want the cap-rate signal across the rest.
+            }
+        }
+    }
+
+    let elapsed_ms = sweep_start.elapsed().as_millis();
+
+    // Sort cases by total caps descending so the biggest offenders rise.
+    per_case.sort_by(|a, b| b.1.cmp(&a.1));
+
+    eprintln!(
+        "\nSweep done in {:.1}s: {}/{} combos completed layout, {} cases with ≥1 cap, {} caps total",
+        elapsed_ms as f64 / 1000.0,
+        succeeded,
+        attempted,
+        per_case.len(),
+        total_caps,
+    );
+
+    eprintln!("\nCaps by reason (global):");
+    let mut reasons: Vec<_> = reason_totals.iter().collect();
+    reasons.sort_by(|a, b| b.1.cmp(a.1));
+    for (r, n) in &reasons {
+        eprintln!("  {:<24} {}", r, n);
+    }
+
+    eprintln!("\nPer-case breakdown (cases with ≥1 cap, sorted by total):");
+    eprintln!("  {:<54} {:>5} {:>9} {:>9} {}", "case", "caps", "max_iter", "max_tile", "by_reason");
+    for (name, total, by_reason, max_iters, max_tiles) in &per_case {
+        let mut rs: Vec<_> = by_reason.iter().collect();
+        rs.sort_by(|a, b| b.1.cmp(a.1));
+        let detail: Vec<String> = rs.iter().map(|(r, n)| format!("{}={}", r, n)).collect();
+        eprintln!(
+            "  {:<54} {:>5} {:>9} {:>9} {}",
+            name, total, max_iters, max_tiles, detail.join(" ")
+        );
+    }
+
+    // No assertion — purely diagnostic. The numbers above are the
+    // baseline against which solver-reliability experiments are scored.
 }

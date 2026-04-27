@@ -255,6 +255,114 @@ fn fixture_seed_14_104_cost() {
 // Diagnostic: report all fixture costs in one run, formatted.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Fixture: pu_2s_hs_seed_15_135 — splitter mis-detection at (13,142)
+// ---------------------------------------------------------------------------
+//
+// Source URL:
+//   /?item=processing-unit&rate=2&machine=assembling-machine-2
+//    &in=iron-plate,copper-plate,steel-plate,stone,coal,water,crude-oil,iron-ore,copper-ore
+//    &belt=fast-transport-belt&row_layout=horizontal-stack
+//
+// The advanced-circuit row's `balancer:advanced-circuit:1x2` fan-out
+// splitter sits at (13,142)+(14,142) facing South — a pre-existing,
+// preserved layout entity, not something for SAT to re-route. Only the
+// RIGHT input is fed (feeder belt at (14,141) South), and the two
+// outputs flow south to bus-trunk continuation at (13,143)/(14,143)
+// (outside the bbox).
+//
+// From the junction solver's POV the correct shape is **one** input
+// boundary at (14,142) S — "1 lane of advanced-circuit accepted by the
+// splitter" — and the splitter's two-tile footprint marked as
+// forbidden so SAT doesn't try to route copper-cable or plastic-bar
+// through it. The splitter's south-side outputs are not the junction's
+// concern (they're handled by the bus trunk continuation outside the
+// bbox).
+//
+// Current boundary builder (the bug) produces:
+//   IN:  (13,142) S adv-c (interior), (14,142) S adv-c (interior, feeder)
+//   OUT: (14,142) S adv-c (interior)         ← spurious; splitter is preserved, not re-routed
+// Plus no `forced_empty` covering the splitter tiles, so SAT can collide
+// with the splitter's footprint.
+//
+// Bbox shape mirrors iter 2 idx 11: x=13, y=134, w=5, h=9.
+// Other participating items in the bbox:
+//   - copper-cable trunk going south through column 15 (turns east at y=142)
+//   - plastic-bar belt going east through row 135
+
+fn fixture_pu_2s_hs_seed_15_135() -> CrossingZone {
+    let mut boundaries: Vec<ZoneBoundary> = Vec::new();
+
+    // copper-cable trunk: enters from north at (15, 134) South, turns
+    // east and exits at (16, 142) East.
+    boundaries.push(ZoneBoundary {
+        x: 15, y: 134, direction: EntityDirection::South,
+        item: "copper-cable".into(), is_input: true, interior: false,
+        belt_tier: None, channel_id: 0,
+    });
+    boundaries.push(ZoneBoundary {
+        x: 16, y: 142, direction: EntityDirection::East,
+        item: "copper-cable".into(), is_input: false, interior: false,
+        belt_tier: None, channel_id: 0,
+    });
+
+    // plastic-bar belt: enters west at (12, 135), exits east at (16, 135).
+    boundaries.push(ZoneBoundary {
+        x: 12, y: 135, direction: EntityDirection::East,
+        item: "plastic-bar".into(), is_input: true, interior: false,
+        belt_tier: None, channel_id: 0,
+    });
+    boundaries.push(ZoneBoundary {
+        x: 16, y: 135, direction: EntityDirection::East,
+        item: "plastic-bar".into(), is_input: false, interior: false,
+        belt_tier: None, channel_id: 0,
+    });
+
+    // advanced-circuit feeder enters from east at (16, 141) West and
+    // descends into the splitter via UG at (15,141). It surfaces at
+    // (14,141) (outside the bbox's bottom row) and continues south one
+    // tile into the splitter's right input at (14,142).
+    boundaries.push(ZoneBoundary {
+        x: 16, y: 141, direction: EntityDirection::West,
+        item: "advanced-circuit".into(), is_input: true, interior: false,
+        belt_tier: None, channel_id: 0,
+    });
+
+    // Splitter "accepts 1 lane of adv-c" — the single fed input. No
+    // boundary for the unfed left input at (13,142), and no boundaries
+    // for the splitter's south-side outputs (handled by bus trunk
+    // continuation outside the bbox).
+    boundaries.push(ZoneBoundary {
+        x: 14, y: 142, direction: EntityDirection::South,
+        item: "advanced-circuit".into(), is_input: true, interior: true,
+        belt_tier: None, channel_id: 0,
+    });
+
+    CrossingZone {
+        x: 13, y: 134, width: 5, height: 9,
+        boundaries,
+        // Splitter footprint — preserved, SAT must route around it.
+        forced_empty: vec![(13, 142), (14, 142)],
+    }
+}
+
+const BASELINE_PU_2S_HS_15_135: u32 = u32::MAX;
+
+#[test]
+#[ignore]
+fn fixture_pu_2s_hs_seed_15_135_cost() {
+    let zone = fixture_pu_2s_hs_seed_15_135();
+    let cost = solve_cost(&zone, "fast-transport-belt", 6);
+    eprintln!("pu_2s_hs_seed_15_135: cost = {cost} (baseline {BASELINE_PU_2S_HS_15_135})");
+    #[allow(clippy::absurd_extreme_comparisons)]
+    let ok = cost <= BASELINE_PU_2S_HS_15_135;
+    assert!(ok, "regression at pu_2s_hs_seed_15_135: cost {cost} > BASELINE {BASELINE_PU_2S_HS_15_135}");
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostic: report all fixture costs in one run, formatted.
+// ---------------------------------------------------------------------------
+
 #[test]
 #[ignore]
 fn report_all_fixture_costs() {
@@ -262,6 +370,7 @@ fn report_all_fixture_costs() {
         ("seed_14_88", fixture_seed_14_88()),
         ("seed_14_96", fixture_seed_14_96()),
         ("seed_14_104", fixture_seed_14_104()),
+        ("pu_2s_hs_15_135", fixture_pu_2s_hs_seed_15_135()),
     ];
     eprintln!("\n{:<14} {:>8} {:>12} {:>10}", "fixture", "w×h", "baseline", "cost");
     eprintln!("{}", "-".repeat(48));
@@ -277,6 +386,7 @@ fn report_all_fixture_costs() {
                 "seed_14_88" => BASELINE_14_88,
                 "seed_14_96" => BASELINE_14_96,
                 "seed_14_104" => BASELINE_14_104,
+                "pu_2s_hs_15_135" => BASELINE_PU_2S_HS_15_135,
                 _ => 0,
             },
             cost_s,

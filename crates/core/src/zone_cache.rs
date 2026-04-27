@@ -1196,29 +1196,29 @@ pub fn record_zone_with_solution(
         );
     }
 
-    // Encode the binary record into the buffer.
-    let thread_src = ZONE_SOURCE.with(|s| s.borrow().clone());
-    let effective_source: Option<String> = thread_src
-        .or_else(|| source.map(|s| s.to_string()))
-        .or_else(|| std::env::var("FUCKTORIO_ZONE_SOURCE").ok());
-
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-
-    // Pack entities as [kind, x, y, dir, carries_idx] tuples. Anything that
-    // doesn't encode (unknown name, broken carries token) is dropped — these
-    // shouldn't happen for SAT-produced entities.
-    let entity_tuples: Vec<[i32; 5]> = canonical_entities
-        .iter()
-        .filter_map(entity_to_tuple)
-        .collect();
-
-    // WASM has nowhere to flush to, so skip the encode + buffer entirely.
+    // WASM has nowhere to flush to, so skip the encode + buffer entirely
+    // (and avoid `SystemTime::now()`, which panics on the wasm32 target).
     // The in-memory cache update above already gives us same-session reuse.
     #[cfg(not(target_arch = "wasm32"))]
     {
+        let thread_src = ZONE_SOURCE.with(|s| s.borrow().clone());
+        let effective_source: Option<String> = thread_src
+            .or_else(|| source.map(|s| s.to_string()))
+            .or_else(|| std::env::var("FUCKTORIO_ZONE_SOURCE").ok());
+
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        // Pack entities as [kind, x, y, dir, carries_idx] tuples. Anything that
+        // doesn't encode (unknown name, broken carries token) is dropped — these
+        // shouldn't happen for SAT-produced entities.
+        let entity_tuples: Vec<[i32; 5]> = canonical_entities
+            .iter()
+            .filter_map(entity_to_tuple)
+            .collect();
+
         let mut bytes: Vec<u8> = Vec::with_capacity(64 + entity_tuples.len() * 5);
         encode_record(
             &mut bytes,
@@ -1239,7 +1239,7 @@ pub fn record_zone_with_solution(
     }
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = (ts, effective_source, entity_tuples, &stats);  // silence unused
+        let _ = (source, &stats);  // silence unused
     }
 }
 
