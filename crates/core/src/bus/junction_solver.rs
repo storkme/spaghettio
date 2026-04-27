@@ -1576,12 +1576,21 @@ fn try_solve_on_region(
         };
 
         // Deferred-exit: a participating spec's frontier exits on
-        // another unresolved crossing belonging to a DIFFERENT cluster.
-        // Skip this attempt so the growth loop can push the frontier
-        // past all consecutive crossings before committing.
+        // another unresolved crossing belonging to a DIFFERENT cluster
+        // (either the exit tile itself, or the very next tile in the
+        // exit direction — the spec would land there on the first
+        // post-zone belt step). Skip this attempt so the growth loop
+        // can push the frontier past all consecutive crossings before
+        // committing.
+        //
+        // The "next tile" check matters when a UG-out at the bbox
+        // edge would dump items directly into another cluster's
+        // pipe-tile crossing: without it, this cluster commits a
+        // surface belt run that the next cluster's solve has to
+        // bridge over after the fact, and the second commit ends up
+        // overwriting tiles the first one had already claimed.
         let exits_at_crossing = strategy_ctx.junction.specs.iter().any(|s| {
-            let exit = (s.exit.x, s.exit.y);
-            should_defer_on_exit(exit, ctx.pending_crossings, ctx.cluster_seeds)
+            should_defer_on_exit(s.exit, ctx.pending_crossings, ctx.cluster_seeds)
         });
         if exits_at_crossing {
             trace::emit(TraceEvent::JunctionStrategyAttempt {
@@ -1763,20 +1772,38 @@ fn near_bbox(bbox: Rect, (x, y): (i32, i32)) -> bool {
     x >= min_x && x <= max_x && y >= min_y && y <= max_y
 }
 
-/// Should the strategy defer because `exit` lands on an unresolved
-/// crossing belonging to a *different* cluster?
+/// Should the strategy defer because `exit` (or the tile immediately
+/// past it in the exit direction) lands on an unresolved crossing
+/// belonging to a *different* cluster?
 ///
-/// True iff `exit` is in `pending_crossings` AND NOT in `cluster_seeds`.
-/// Excluding the current cluster's own seeds is critical — a spec's
-/// frontier exit landing on one of our seeds means it's landing on a
-/// tile we are in the middle of solving, not an external crossing to
-/// coordinate with.
+/// Returns true iff a candidate tile is in `pending_crossings` AND not
+/// in `cluster_seeds`. Excluding the current cluster's own seeds is
+/// critical — a spec's frontier exit landing on one of our seeds means
+/// it's landing on a tile we are in the middle of solving, not an
+/// external crossing to coordinate with.
+///
+/// Two candidates are checked:
+///
+/// 1. The exit tile itself. Original behaviour.
+/// 2. The next tile in the exit direction (e.g. for a West-flowing
+///    exit at (30, 123) the candidate is (29, 123)). This catches the
+///    "exit dumps into another cluster's pipe column" case: without
+///    deferring, this cluster commits a surface belt at the exit and
+///    the next cluster's pipe×belt solve has to bridge over already-
+///    permanent tiles, often producing an orphan UG-out the walker
+///    can't pair.
 fn should_defer_on_exit(
-    exit: (i32, i32),
+    exit: PortPoint,
     pending_crossings: &FxHashSet<(i32, i32)>,
     cluster_seeds: &FxHashSet<(i32, i32)>,
 ) -> bool {
-    !cluster_seeds.contains(&exit) && pending_crossings.contains(&exit)
+    let here = (exit.x, exit.y);
+    if !cluster_seeds.contains(&here) && pending_crossings.contains(&here) {
+        return true;
+    }
+    let (dx, dy) = dir_delta(exit.direction);
+    let after = (exit.x + dx, exit.y + dy);
+    !cluster_seeds.contains(&after) && pending_crossings.contains(&after)
 }
 
 /// Trim a routed path down to the contiguous bbox-adjacent span.
@@ -2217,6 +2244,10 @@ mod tests {
     /// fired anyway because the check only excluded `seeds[0]`.
     ///
     /// Fix: exclude all cluster seeds, not just the first.
+    fn pp(x: i32, y: i32) -> PortPoint {
+        PortPoint { x, y, direction: EntityDirection::North }
+    }
+
     #[test]
     fn should_not_defer_on_own_cluster_seed() {
         let pending: FxHashSet<(i32, i32)> = [(25, 196), (25, 197), (40, 100)]
@@ -2224,11 +2255,11 @@ mod tests {
             .collect();
         let seeds: FxHashSet<(i32, i32)> = [(25, 196), (25, 197)].into_iter().collect();
         assert!(
-            !should_defer_on_exit((25, 197), &pending, &seeds),
+            !should_defer_on_exit(pp(25, 197), &pending, &seeds),
             "exit on our own seed must not defer"
         );
         assert!(
-            !should_defer_on_exit((25, 196), &pending, &seeds),
+            !should_defer_on_exit(pp(25, 196), &pending, &seeds),
             "exit on our initial seed must not defer"
         );
     }
@@ -2238,7 +2269,7 @@ mod tests {
         let pending: FxHashSet<(i32, i32)> = [(25, 196), (40, 100)].into_iter().collect();
         let seeds: FxHashSet<(i32, i32)> = [(25, 196)].into_iter().collect();
         assert!(
-            should_defer_on_exit((40, 100), &pending, &seeds),
+            should_defer_on_exit(pp(40, 100), &pending, &seeds),
             "exit on a pending crossing in a different cluster must defer"
         );
     }
@@ -2248,8 +2279,24 @@ mod tests {
         let pending: FxHashSet<(i32, i32)> = [(25, 196)].into_iter().collect();
         let seeds: FxHashSet<(i32, i32)> = [(25, 196)].into_iter().collect();
         assert!(
-            !should_defer_on_exit((99, 99), &pending, &seeds),
+            !should_defer_on_exit(pp(99, 99), &pending, &seeds),
             "exit on a non-crossing tile must not defer"
+        );
+    }
+
+    #[test]
+    fn should_defer_on_pending_immediately_past_exit() {
+        // Exit at (30, 123) flowing East; (31, 123) is a pending crossing
+        // in another cluster (e.g. a fluid trunk's belt-pipe crossing).
+        // The post-exit tile is the very next belt step, so committing
+        // here would dump items into a tile the other cluster will
+        // forbid. Defer so growth absorbs the conflict.
+        let pending: FxHashSet<(i32, i32)> = [(31, 123)].into_iter().collect();
+        let seeds: FxHashSet<(i32, i32)> = FxHashSet::default();
+        let exit = PortPoint { x: 30, y: 123, direction: EntityDirection::East };
+        assert!(
+            should_defer_on_exit(exit, &pending, &seeds),
+            "exit one tile west of an external pending crossing must defer"
         );
     }
 
