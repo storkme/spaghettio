@@ -43,7 +43,7 @@ function wasmPackPlugin(): Plugin {
 
 export default defineConfig({
   root: ".",
-  base: process.env.GITHUB_ACTIONS ? "/fucktorio/" : "/",
+  base: process.env.BASE_PATH || (process.env.GITHUB_ACTIONS ? "/fucktorio/" : "/"),
   plugins: [wasmPackPlugin(), wasm(), topLevelAwait()],
   server: {
     host: "0.0.0.0",
