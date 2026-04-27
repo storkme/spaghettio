@@ -557,7 +557,16 @@ fn place_poles(
     /// Supply range of a medium-electric-pole (Chebyshev, tiles).
     const POLE_RANGE: i32 = 3;
     /// Max X offset to probe when the ideal pole position is occupied.
-    const POLE_PROBE_X: i32 = 3;
+    /// Set to `2 * POLE_RANGE` so the search covers the full supply range
+    /// either side of the machine center: the rightmost-first ordering
+    /// keeps forward reach, but when every position from `ideal_px` down
+    /// to `ideal_px - POLE_RANGE` is blocked, we keep probing leftward
+    /// to `ideal_px - 2*POLE_RANGE = cx - POLE_RANGE`. Without this, a
+    /// tight row whose right side is full of bridge belts (sideload
+    /// balancer below the machine row) leaves the corresponding machine
+    /// center uncovered even though a free tile exists to its left
+    /// inside the supply range — the pre-fix algorithm gave up at d=3.
+    const POLE_PROBE_X: i32 = POLE_RANGE * 2;
 
     if machines.is_empty() {
         return Vec::new();
