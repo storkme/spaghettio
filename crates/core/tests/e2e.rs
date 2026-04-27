@@ -200,6 +200,32 @@ fn run_e2e_with_strategy(
         available_inputs,
         &FxHashSet::default(),
         strategy,
+        fucktorio_core::bus::layout::RowLayout::default(),
+    )
+}
+
+/// Like `run_e2e_with_strategy` but with a non-default `RowLayout`.
+/// Used by scoreboard cases that test horizontal-stack rows.
+fn run_e2e_with_strategy_and_row_layout(
+    test_name: &str,
+    item: &str,
+    rate: f64,
+    machine: &str,
+    belt_tier: Option<&str>,
+    available_inputs: &FxHashSet<String>,
+    strategy: fucktorio_core::bus::layout::LayoutStrategy,
+    row_layout: fucktorio_core::bus::layout::RowLayout,
+) -> Result<E2EResult, String> {
+    run_e2e_inner(
+        test_name,
+        item,
+        rate,
+        machine,
+        belt_tier,
+        available_inputs,
+        &FxHashSet::default(),
+        strategy,
+        row_layout,
     )
 }
 
@@ -221,6 +247,7 @@ fn run_e2e_with_exclusions(
         available_inputs,
         excluded_recipes,
         fucktorio_core::bus::layout::LayoutStrategy::Pooled,
+        fucktorio_core::bus::layout::RowLayout::default(),
     )
 }
 
@@ -234,6 +261,7 @@ fn run_e2e_inner(
     available_inputs: &FxHashSet<String>,
     excluded_recipes: &FxHashSet<String>,
     strategy: fucktorio_core::bus::layout::LayoutStrategy,
+    row_layout: fucktorio_core::bus::layout::RowLayout,
 ) -> Result<E2EResult, String> {
     let _guard = trace::start_trace();
     fucktorio_core::zone_cache::set_thread_source(Some(test_name));
@@ -251,7 +279,7 @@ fn run_e2e_inner(
         layout::LayoutOptions {
             strategy,
             max_belt_tier: belt_tier.map(|s| s.to_string()),
-            ..Default::default()
+            row_layout,
         },
     )
         .map_err(|e| {
@@ -1778,6 +1806,9 @@ struct ScoreboardCase {
     machine: &'static str,
     belt: Option<&'static str>,
     inputs: &'static [&'static str],
+    /// `None` → default `VerticalSplit`. Cases that test horizontal-stack
+    /// row layout set this to `Some(RowLayout::HorizontalStack)`.
+    row_layout: Option<fucktorio_core::bus::layout::RowLayout>,
     /// Expected error counts: (Pool, PartitionedPerConsumer,
     /// PartitionedDecomposed). Test fails if any actual > expected.
     expected: (usize, usize, usize),
@@ -1788,22 +1819,23 @@ struct ScoreboardCase {
 /// suggests tightening when actuals improve. Test name is the
 /// `test_name` passed to `run_e2e_with_strategy` for snapshot output.
 fn run_partition_scoreboard(test_name: &str, cases: &[ScoreboardCase]) {
-    use fucktorio_core::bus::layout::LayoutStrategy;
+    use fucktorio_core::bus::layout::{LayoutStrategy, RowLayout};
     let mut tighten: Vec<String> = Vec::new();
     let mut regressions: Vec<String> = Vec::new();
     for case in cases {
         let inputs: FxHashSet<String> = case.inputs.iter().map(|s| s.to_string()).collect();
-        let pool = run_e2e_with_strategy(
+        let row_layout = case.row_layout.unwrap_or(RowLayout::default());
+        let pool = run_e2e_with_strategy_and_row_layout(
             test_name, case.item, case.rate, case.machine,
-            case.belt, &inputs, LayoutStrategy::Pooled,
+            case.belt, &inputs, LayoutStrategy::Pooled, row_layout,
         ).unwrap_or_else(|e| panic!("{}: Pool e2e failed: {e}", case.name));
-        let phase1 = run_e2e_with_strategy(
+        let phase1 = run_e2e_with_strategy_and_row_layout(
             test_name, case.item, case.rate, case.machine,
-            case.belt, &inputs, LayoutStrategy::PartitionedPerConsumer,
+            case.belt, &inputs, LayoutStrategy::PartitionedPerConsumer, row_layout,
         ).unwrap_or_else(|e| panic!("{}: Phase 1 e2e failed: {e}", case.name));
-        let phase2 = run_e2e_with_strategy(
+        let phase2 = run_e2e_with_strategy_and_row_layout(
             test_name, case.item, case.rate, case.machine,
-            case.belt, &inputs, LayoutStrategy::PartitionedDecomposed,
+            case.belt, &inputs, LayoutStrategy::PartitionedDecomposed, row_layout,
         ).unwrap_or_else(|e| panic!("{}: Phase 2 e2e failed: {e}", case.name));
         let pool_e = pool.issues.iter().filter(|i| i.severity == Severity::Error).count();
         let p1_e = phase1.issues.iter().filter(|i| i.severity == Severity::Error).count();
@@ -1871,6 +1903,7 @@ fn partition_strategy_scoreboard() {
             // SAT-degeneracy + pipe-belt UG fixes); regression hits
             // partitioned layouts only. Worth investigating
             // separately — recorded here as the new baseline.
+            row_layout: None,
             expected: (7, 12, 12),
         },
         ScoreboardCase {
@@ -1878,7 +1911,24 @@ fn partition_strategy_scoreboard() {
             item: "advanced-circuit", rate: 5.0, machine: "assembling-machine-2",
             belt: Some("transport-belt"),
             inputs: &["iron-plate", "copper-plate", "coal", "crude-oil", "water"],
+            row_layout: None,
             expected: (5, 9, 9),
+        },
+        // The user's working URL: PU@2/s, AM3, fast belts, horizontal-stack,
+        // ores + steel-plate as external inputs. Pool produces a working
+        // layout in the browser; partitioned strategies regress with
+        // routing/template bugs (west-edge belt-loop, west-facing
+        // belt-out, UG max-reach). Drive P1/P2 toward Pool.
+        ScoreboardCase {
+            name: "PU@2/s ore red HS",
+            item: "processing-unit", rate: 2.0, machine: "assembling-machine-3",
+            belt: Some("fast-transport-belt"),
+            inputs: &[
+                "steel-plate", "stone", "coal", "water", "crude-oil",
+                "iron-ore", "copper-ore",
+            ],
+            row_layout: Some(fucktorio_core::bus::layout::RowLayout::HorizontalStack),
+            expected: (2, 5, 5),
         },
     ];
     run_partition_scoreboard("partition_strategy_scoreboard", cases);
@@ -1916,6 +1966,7 @@ fn partition_strategy_scoreboard_extended() {
             // (refusing sub-templates wider than sub_m). Was: three
             // (5,1) balancers stamped on top of each other for
             // electronic-circuit's (15,3) family. P1 still wins (28).
+            row_layout: None,
             expected: (30, 28, 41),
         },
         ScoreboardCase {
@@ -1927,6 +1978,7 @@ fn partition_strategy_scoreboard_extended() {
             // main merge — junction-fix improvements landed at this
             // higher rate. P2 still slightly regresses vs P1 because
             // 22-lane shard exceeds MAX_SHARDS=3 and stays whole.
+            row_layout: None,
             expected: (11, 7, 11),
         },
         ScoreboardCase {
@@ -1942,6 +1994,7 @@ fn partition_strategy_scoreboard_extended() {
             // overlapping (5,1) sub-stamps were corrupting layouts
             // even under Pool. P1=P2 here because Phase 2's K=1 sharding
             // doesn't fire on items already covered by Phase 1.
+            row_layout: None,
             expected: (44, 45, 45),
         },
     ];
