@@ -7,9 +7,8 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
+  pull-requests: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -92,6 +91,8 @@ jobs:
     needs: changes
     if: always() && (needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true')
     runs-on: ubuntu-latest
+    env:
+      BASE_PATH: ${{ github.event_name == 'pull_request' && format('/fucktorio/pr-{0}/', github.event.pull_request.number) || '/fucktorio/' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -116,21 +117,48 @@ jobs:
           name: web-dist
           path: web/dist/
 
-  deploy:
-    if: github.ref == 'refs/heads/main'
+  deploy-main:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [web]
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: web-dist
           path: site/
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v4
+      - name: Deploy to gh-pages root
+        uses: JamesIves/github-pages-deploy-action@v4
         with:
+          folder: site
+          branch: gh-pages
+          clean: true
+          clean-exclude: |
+            pr-*
+
+  deploy-preview:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    needs: [web]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
           path: site/
-      - id: deployment
-        uses: actions/deploy-pages@v5
+      - name: Deploy preview to gh-pages/pr-${{ github.event.pull_request.number }}
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: site
+          branch: gh-pages
+          target-folder: pr-${{ github.event.pull_request.number }}
+          clean: true
+          commit-message: "Deploy preview for PR #${{ github.event.pull_request.number }} (${{ github.sha }})"
+      - name: Comment preview URL on PR
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: pr-preview
+          message: |
+            Preview deployed: https://storkme.github.io/fucktorio/pr-${{ github.event.pull_request.number }}/
+
+            Last updated: ${{ github.sha }} at ${{ github.event.pull_request.updated_at }}
