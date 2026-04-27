@@ -590,7 +590,7 @@ fn place_poles(
         // the above-row is jammed with inserters/pipes. Both rows are
         // within POLE_RANGE of the machine center on the y axis.
         let mut candidate_ys: Vec<i32> = Vec::with_capacity(2);
-        if top_y - 1 >= 0 {
+        if top_y > 0 {
             candidate_ys.push(top_y - 1);
         }
         candidate_ys.push(top_y + sz);
