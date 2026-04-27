@@ -243,7 +243,7 @@ pub fn improve_region_streaming(
     let zh = zone.height;
     let mut iter: u32 = 0;
     let iter_cap = if max_iters == 0 { 1024 } else { max_iters };
-    let (final_raw, _stop) = descend(
+    let (final_raw, stop_reason) = descend(
         &zone,
         &belt_tier,
         max_ug_reach,
@@ -276,6 +276,45 @@ pub fn improve_region_streaming(
     // belt/UG inside the zone bbox, then push the new set. SAT stamps
     // per-channel tiers at solve time so no post-pass retype needed.
     let pruned_final = prune_dangling(final_raw, &boundaries, max_ug_reach, zx, zy);
+
+    // Descent terminated with UNSAT on cap-1: this is the proven optimum
+    // for the zone. Record it (updates the in-memory cache for same-session
+    // reuse) and emit a terminal trace event carrying the binary record so
+    // the frontend can persist to localStorage.
+    if matches!(stop_reason, fucktorio_core::bus::region_reimprove::StopReason::Optimal) {
+        // Per-channel reaches: descent uses uniform `max_ug_reach`, so the
+        // signature should match. Size the array to cover every channel_id
+        // referenced by any boundary. `max_ug_ins = None` matches the
+        // descent's call into `solve_crossing_zone_with_cost_cap`.
+        let n_channels = boundaries
+            .iter()
+            .map(|b| b.channel_id as usize + 1)
+            .max()
+            .unwrap_or(0);
+        let channel_reaches = vec![max_ug_reach; n_channels];
+        let stats = fucktorio_core::zone_cache::ZoneStats {
+            variables: 0,
+            clauses: 0,
+            solve_time_us: 0,
+        };
+        let (signature, record_bytes) = fucktorio_core::zone_cache::record_zone_with_solution(
+            &zone,
+            &channel_reaches,
+            None,
+            stats,
+            &pruned_final,
+            Some("wasm-optimize"),
+        );
+        let evt = fucktorio_core::trace::TraceEvent::SatOptimumProven {
+            region_id,
+            signature,
+            record_bytes,
+        };
+        if let Ok(js_evt) = serde_wasm_bindgen::to_value(&evt) {
+            let _ = emit.call1(&JsValue::NULL, &js_evt);
+        }
+    }
+
     layout_result
         .entities
         .retain(|e| !(in_bbox(e) && is_belt_or_ug(&e.name)));
@@ -304,6 +343,21 @@ pub fn export_blueprint(layout_result: LayoutResult, label: String) -> String {
 #[wasm_bindgen]
 pub fn parse_blueprint(bp_string: &str) -> Result<LayoutResult, JsError> {
     blueprint_parser::parse_blueprint_string(bp_string).map_err(|e| JsError::new(&e))
+}
+
+/// Seed the in-memory SAT crossing-zone cache with `bytes` — a sequence of
+/// length-prefixed binary records in the same format as
+/// `crates/core/data/sat-zones.bin`. The frontend calls this on boot with
+/// records previously persisted to localStorage by `SatOptimumProven`.
+///
+/// Returns the number of records successfully ingested. Malformed records
+/// are skipped silently, so a partially-corrupt blob still installs
+/// whatever decodes cleanly.
+#[wasm_bindgen]
+pub fn seed_zone_cache(bytes: &[u8]) -> u32 {
+    let count = fucktorio_core::zone_cache::parse_records(bytes).len() as u32;
+    fucktorio_core::zone_cache::install_prebaked(bytes);
+    count
 }
 
 /// Response shape for `solve_fixture`. Serialised via
