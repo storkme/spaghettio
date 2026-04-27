@@ -1,7 +1,7 @@
 import type { Engine, SolverResult, LayoutResult, ItemFlow, ValidationIssue, TraceEvent } from "../engine.js";
 import { readUrlState, writeUrlState, DEFAULT_INPUTS } from "../state.js";
 import { beltTierForRate, hexToCss } from "../renderer/colors.js";
-import { niceName, setRecipeFlows } from "../renderer/entities.js";
+import { niceName, setRecipeFlows, preloadCarriesIcons } from "../renderer/entities.js";
 import "./sidebar.css";
 
 // ---------------------------------------------------------------------------
@@ -661,6 +661,22 @@ export function renderSidebar(
     callbacks.renderGraph(result);
     const totalMachines = result.machines.reduce((sum, m) => sum + Math.ceil(m.count), 0);
     if (solverCount) solverCount.textContent = `${totalMachines} machines`;
+
+    // Scoped carries-icon preload before streaming kicks in. The streaming
+    // renderer commits ghost / trunk belts incrementally with their carries
+    // icon, and committed particles don't pick up textures that arrive
+    // later — so icons must be cached before the first event fires. The
+    // set is the union of every recipe input/output and external in/out,
+    // typically <20 items.
+    const carriesItems = new Set<string>();
+    for (const m of result.machines) {
+      for (const i of m.inputs) carriesItems.add(i.item);
+      for (const o of m.outputs) carriesItems.add(o.item);
+    }
+    for (const e of result.external_inputs) carriesItems.add(e.item);
+    for (const e of result.external_outputs) carriesItems.add(e.item);
+    await preloadCarriesIcons(Array.from(carriesItems));
+    if (gen !== solveGeneration) return;
 
     let layout: LayoutResult;
     try {

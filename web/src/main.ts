@@ -2,7 +2,7 @@ import { Container, Graphics } from "pixi.js";
 import { createApp, WORLD_SIZE } from "./renderer/app";
 import { drawGrid, updateGrid } from "./renderer/grid";
 import { drawGraph } from "./renderer/graph";
-import { initEntityIcons, preloadCarriesIcons, renderLayout, setItemColoring, TILE_PX, MACHINE_SIZES, SPLITTER_ENTITIES, splitterCompanionOffset, type HighlightController } from "./renderer/entities";
+import { initEntityIcons, preloadCarriesIcons, renderLayout, setItemColoring, TILE_PX, MACHINE_SIZES, SPLITTER_ENTITIES, splitterCompanionOffset, type HighlightController, extractCarriesFromEntities } from "./renderer/entities";
 import { createParticleScene, renderLayoutAsParticles } from "./renderer/particleLayout";
 import { renderInputLabels } from "./renderer/inputLabels";
 import { createSelectionController, type SelectionController } from "./renderer/selection";
@@ -50,12 +50,9 @@ async function main(): Promise<void> {
   await initEngine();
   const engine = getEngine();
   await initEntityIcons(MACHINE_SLUGS);
-  // Preload item icons for belt/pipe carries overlays and machine recipe panels.
-  // Raw inputs (ores, fluids) aren't in allProducibleItems so we add them explicitly.
-  await preloadCarriesIcons([
-    ...engine.allProducibleItems(),
-    "crude-oil", "water", "iron-ore", "copper-ore", "coal", "stone", "uranium-ore",
-  ]);
+  // Carries-icon preload is now scoped per-layout (see sidebar's solve flow
+  // and renderLayoutOnCanvas). Pre-loading every producible item up front
+  // gated first paint by ~5s on cold dev-server starts.
 
   const appRoot = document.getElementById("app")!;
   const hash = window.location.hash;
@@ -1171,6 +1168,14 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
   }
 
   function renderLayoutOnCanvas(layout: LayoutResult, solverResult?: SolverResult): void {
+    // Scope-preload carries icons for whatever this layout actually carries.
+    // Sidebar's solve flow already preloads before streaming starts, so by
+    // the time we get here every needed icon is cached and this resolves
+    // synchronously. The corpus / snapshot / blueprint-import paths skip
+    // the sidebar entirely though, so we kick off a fire-and-forget load
+    // here as a safety net — fine to render iconless on the first frame
+    // for those paths since they don't stream.
+    void preloadCarriesIcons(extractCarriesFromEntities(layout.entities));
     lastLayout = layout;
     if (solverResult) lastSolverResult = solverResult;
     rebuildTileEntityMap(layout);

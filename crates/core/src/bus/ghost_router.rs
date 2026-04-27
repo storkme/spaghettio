@@ -2225,41 +2225,28 @@ pub fn route_bus_ghost(
             })
             .collect();
         proposed_tiles.extend(ug_pair_interiors);
-        let preserve_trunk_tiles: rustc_hash::FxHashSet<(i32, i32)> =
-            (0..release_rect.h as i32)
-                .flat_map(|dy| {
-                    (0..release_rect.w as i32)
-                        .map(move |dx| (release_rect.x + dx, release_rect.y + dy))
-                })
-                .filter(|t| !proposed_tiles.contains(t))
-                .collect();
-        // Only release ghost surface entities that lie on a participating
-        // spec path. Ghost entities belonging to non-participating specs
-        // (e.g. a copper-cable tap whose path runs through the zone bbox
-        // but is NOT being rerouted) must stay so the belt chain is intact.
+        // Clean-slate release: clear every releasable claim inside the SAT
+        // zone — ghost surface belts AND main-bus structure (trunk/tapoff/
+        // balancer Permanent claims) — regardless of which spec they belong
+        // to. The previous "minimum-authority" rule (preserve any tile SAT
+        // didn't explicitly stamp) created orphan trunk stubs when SAT
+        // routed a participating item through a different column from the
+        // pre-stamped trunk (issue #243). The release function already
+        // preserves non-bus structure (machines, poles, pipes, row
+        // entities), so this is safe for those.
         //
-        // The authoritative participating set comes from the solver on
-        // `sol.participating`, not from `keys_at_tile` — the latter is
-        // built from specs touching the original cluster seeds, so after
-        // region growth it can miss participating specs whose path only
-        // enters the footprint via the grown bbox. Using the solver's
-        // list closes that gap and keeps I3's minimum-authority rule
-        // honest.
+        // Non-participating "encountered" specs are handled via the SAT
+        // boundary mechanism — `topology_boundaries` emits port boundaries
+        // for them so the SAT solution covers their flow through the zone.
         let participating_keys: rustc_hash::FxHashSet<&str> = sol
             .participating
             .iter()
             .map(String::as_str)
             .collect();
-        let releasable_ghost_tiles: rustc_hash::FxHashSet<(i32, i32)> = routed_paths
-            .iter()
-            .filter(|(k, _)| participating_keys.contains(k.as_str()))
-            .flat_map(|(_, path)| path.iter().copied())
-            .filter(|&t| release_rect.contains(t.0, t.1))
-            .collect();
         let released_count = occupancy.release_for_pertile_template(
             &release_rect,
-            Some(&releasable_ghost_tiles),
-            Some(&preserve_trunk_tiles),
+            None,
+            None,
         );
         trace::emit(trace::TraceEvent::GhostResidueCleared {
             zone_x: release_rect.x,
@@ -2720,15 +2707,18 @@ fn cluster_adjacent_crossings(
         if on_path.len() < 2 {
             continue;
         }
-        let tier = spec_belt_tiers
+        let _tier = spec_belt_tiers
             .get(key.as_str())
             .copied()
             .unwrap_or(BeltTier::Yellow);
-        let max_reach = ug_max_reach(belt_name_for_tier(tier)) as usize;
-        // UG-pair span = max_reach + 1 positions (max_reach hidden-
-        // middle tiles). See `sat.rs::encode_underground` and memory
-        // `project_prune_first_suspect`.
-        let reach_threshold = max_reach + 1;
+        // Tighter reach threshold (was `max_reach + 1` ≡ 5 yellow, 7
+        // fast, 9 express): the wide threshold pulled distant
+        // independently-soluble crossings into super-clusters when
+        // they merely shared a long trunk path. The rescue scenario
+        // we still want to catch (an isolated tap-off jammed up
+        // against a multi-cluster's committed UG envelope) lives at
+        // path-distance ≤ 3; anything further is over-aggressive.
+        let reach_threshold = 3;
         for w in on_path.windows(2) {
             let (i, p_i) = w[0];
             let (j, p_j) = w[1];

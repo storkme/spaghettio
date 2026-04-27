@@ -271,6 +271,28 @@ pub fn check_belt_dead_ends(layout: &LayoutResult) -> Vec<ValidationIssue> {
         }
     }
 
+    // Tiles where items are deposited by something *other than* a same-direction
+    // belt chain — i.e. an actual flow source: inserter drops, splitter outputs,
+    // underground-belt outputs. Used to distinguish a real dead-end (items pile
+    // up because there's a producer upstream but no receiver downstream) from
+    // an orphan segment (no source AND no receiver — dead concrete).
+    let mut supplier_tiles: FxHashSet<(i32, i32)> = FxHashSet::default();
+    for e in &layout.entities {
+        if is_inserter(&e.name) {
+            let d = dir_to_vec(e.direction);
+            let reach = inserter_reach(&e.name);
+            supplier_tiles.insert((e.x + d.0 * reach, e.y + d.1 * reach));
+        } else if is_splitter(&e.name) {
+            let d = dir_to_vec(e.direction);
+            let (sx2, sy2) = splitter_second_tile(e);
+            supplier_tiles.insert((e.x + d.0, e.y + d.1));
+            supplier_tiles.insert((sx2 + d.0, sy2 + d.1));
+        } else if is_ug_belt(&e.name) && e.io_type.as_deref() == Some("output") {
+            let d = dir_to_vec(e.direction);
+            supplier_tiles.insert((e.x + d.0, e.y + d.1));
+        }
+    }
+
     let w = layout.width;
     let h = layout.height;
 
@@ -290,24 +312,78 @@ pub fn check_belt_dead_ends(layout: &LayoutResult) -> Vec<ValidationIssue> {
         if chain_has_pickup((e.x, e.y), e.direction, &belt_at, &pickup_tiles) {
             continue;
         }
-        issues.push(ValidationIssue::with_pos(
-            Severity::Error,
-            "belt-dead-end",
-            format!(
-                "Belt at ({},{}) facing {:?} has no receiver at output tile ({},{}) \
-                 — items accumulate with nowhere to go",
+        let has_source = chain_has_source((e.x, e.y), e.direction, &belt_at, &supplier_tiles);
+        if has_source {
+            issues.push(ValidationIssue::with_pos(
+                Severity::Error,
+                "belt-dead-end",
+                format!(
+                    "Belt at ({},{}) facing {:?} has no receiver at output tile ({},{}) \
+                     — items accumulate with nowhere to go",
+                    e.x,
+                    e.y,
+                    e.direction,
+                    out_x,
+                    out_y
+                ),
                 e.x,
                 e.y,
-                e.direction,
-                out_x,
-                out_y
-            ),
-            e.x,
-            e.y,
-        ));
+            ));
+        } else {
+            issues.push(ValidationIssue::with_pos(
+                Severity::Warning,
+                "orphan-belt-segment",
+                format!(
+                    "Belt at ({},{}) facing {:?} is part of an orphan segment — \
+                     no producer upstream and no receiver downstream",
+                    e.x, e.y, e.direction,
+                ),
+                e.x,
+                e.y,
+            ));
+        }
     }
 
     issues
+}
+
+/// Walk upstream from `tail_tile` along same-direction belts; return true if
+/// any tile in the chain has a non-chain flow source — an inserter drop, a
+/// splitter output, an underground-belt output, or a perpendicular belt that
+/// sideloads onto the chain. Returns false when the chain terminates with no
+/// such source (orphan segment).
+fn chain_has_source(
+    tail_tile: (i32, i32),
+    direction: EntityDirection,
+    belt_at: &FxHashMap<(i32, i32), &PlacedEntity>,
+    supplier_tiles: &FxHashSet<(i32, i32)>,
+) -> bool {
+    let d = dir_to_vec(direction);
+    let mut cur = tail_tile;
+    let mut visited: FxHashSet<(i32, i32)> = FxHashSet::default();
+    for _ in 0..200 {
+        if !visited.insert(cur) {
+            break;
+        }
+        if supplier_tiles.contains(&cur) {
+            return true;
+        }
+        for (ndx, ndy) in [(0i32, -1i32), (1, 0), (0, 1), (-1, 0)] {
+            let n = (cur.0 + ndx, cur.1 + ndy);
+            if let Some(nb) = belt_at.get(&n) {
+                let nd = dir_to_vec(nb.direction);
+                if (n.0 + nd.0, n.1 + nd.1) == cur && nb.direction != direction {
+                    return true;
+                }
+            }
+        }
+        let upstream = (cur.0 - d.0, cur.1 - d.1);
+        match belt_at.get(&upstream) {
+            Some(b) if b.direction == direction => cur = upstream,
+            _ => break,
+        }
+    }
+    false
 }
 
 /// Walk upstream from `tail_tile` along same-direction belts; return true if
@@ -1091,8 +1167,22 @@ mod tests {
     }
 
     #[test]
-    fn dead_end_isolated_belt_error() {
+    fn dead_end_isolated_belt_is_orphan_warning() {
+        // No producer upstream, no receiver downstream — dead concrete, not
+        // a flow that's piling up. Reclassified to Warning orphan-belt-segment.
         let lr = layout(vec![belt(5, 5, EntityDirection::East)]);
+        let issues = check_belt_dead_ends(&lr);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].category, "orphan-belt-segment");
+        assert_eq!(issues[0].severity, Severity::Warning);
+    }
+
+    #[test]
+    fn dead_end_with_inserter_source_is_real_error() {
+        // Inserter drops onto belt, belt has no receiver — items genuinely
+        // pile up. Stays an Error.
+        let inserter_drop = inserter(7, 5, EntityDirection::West); // drops at (6,5)
+        let lr = layout(vec![belt(6, 5, EntityDirection::East), inserter_drop]);
         let issues = check_belt_dead_ends(&lr);
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].category, "belt-dead-end");

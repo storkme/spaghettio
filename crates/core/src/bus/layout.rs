@@ -581,12 +581,19 @@ fn place_poles(
     let mut placed: FxHashSet<(i32, i32)> = FxHashSet::default();
 
     for key in keys {
-        let (top_y, _sz) = key;
+        let (top_y, sz) = key;
         let cxs = &by_row[&key];
-        let pole_y = top_y - 1; // one tile above the machine footprint
-        if pole_y < 0 {
-            continue;
+
+        // Two candidate pole rows: one above the machine row (preferred —
+        // keeps poles in a single visible band) and one below as fallback
+        // for dense templates (HS / TripleInput / FluidDualInput) where
+        // the above-row is jammed with inserters/pipes. Both rows are
+        // within POLE_RANGE of the machine center on the y axis.
+        let mut candidate_ys: Vec<i32> = Vec::with_capacity(2);
+        if top_y - 1 >= 0 {
+            candidate_ys.push(top_y - 1);
         }
+        candidate_ys.push(top_y + sz);
 
         let mut i = 0;
         while i < cxs.len() {
@@ -596,30 +603,31 @@ fn place_poles(
             // staying within POLE_RANGE of the target machine.
             let target_cx = cxs[i];
             let ideal_px = target_cx + POLE_RANGE;
-            let mut placed_x: Option<i32> = None;
-            for d in 0..=POLE_PROBE_X {
-                let offsets: &[i32] = if d == 0 { &[0] } else { &[-d, d] };
-                for &off in offsets {
-                    let px = ideal_px + off;
-                    if (px - target_cx).abs() > POLE_RANGE {
-                        continue; // stepped outside range of the target machine
+            let mut placed_at: Option<(i32, i32)> = None;
+            'outer: for &py in &candidate_ys {
+                for d in 0..=POLE_PROBE_X {
+                    let offsets: &[i32] = if d == 0 { &[0] } else { &[-d, d] };
+                    for &off in offsets {
+                        let px = ideal_px + off;
+                        if (px - target_cx).abs() > POLE_RANGE {
+                            continue; // stepped outside range of the target machine
+                        }
+                        if occupied.contains(&(px, py)) || placed.contains(&(px, py)) {
+                            continue;
+                        }
+                        placed_at = Some((px, py));
+                        break 'outer;
                     }
-                    if occupied.contains(&(px, pole_y)) || placed.contains(&(px, pole_y)) {
-                        continue;
-                    }
-                    placed_x = Some(px);
-                    break;
-                }
-                if placed_x.is_some() {
-                    break;
                 }
             }
 
-            match placed_x {
-                Some(px) => {
-                    entities.push(make_pole(px, pole_y));
-                    placed.insert((px, pole_y));
-                    // Advance past every machine this pole covers.
+            match placed_at {
+                Some((px, py)) => {
+                    entities.push(make_pole(px, py));
+                    placed.insert((px, py));
+                    // Advance past every machine this pole covers. POLE_RANGE
+                    // is Chebyshev — both candidate y rows are within range
+                    // of the machine center, so the x check alone is enough.
                     i += 1;
                     while i < cxs.len() && (cxs[i] - px).abs() <= POLE_RANGE {
                         i += 1;

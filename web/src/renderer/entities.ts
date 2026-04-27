@@ -772,6 +772,18 @@ export async function preloadCarriesIcons(slugs: string[]): Promise<void> {
   await Promise.allSettled(slugs.map((s) => Assets.load(`${base}icons/${s}.png`)));
 }
 
+/** Extract every distinct `carries` slug from a list of placed entities.
+ * Used to scope the carries-icon preload to just the items that actually
+ * appear in the current layout — versus pre-loading every producible item
+ * (which gates first paint by seconds on cold dev-server starts). */
+export function extractCarriesFromEntities(entities: ReadonlyArray<{ carries?: string | null }>): string[] {
+  const out = new Set<string>();
+  for (const e of entities) {
+    if (e.carries) out.add(e.carries);
+  }
+  return Array.from(out);
+}
+
 /** `Assets.get` warns when called with a key that wasn't loaded — and recipe /
  * entity slugs frequently have no PNG (multi-output recipes, fluid-only outputs,
  * entity frames not yet generated). Hot draw paths call this thousands of times

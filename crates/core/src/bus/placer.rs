@@ -24,8 +24,8 @@ fn effective_in_lane_cap(max_belt_tier: Option<&str>) -> f64 {
     }
 }
 
-/// Gap added between the two lane-split groups of machines (in tiles).
-pub const LANE_SPLIT_GAP: i32 = 3;
+// (LANE_SPLIT_GAP deleted in the inline-bridge unification —
+// templates now pack tight with the bridge stamped inline.)
 
 /// Per-row metadata for `RowLayout::HorizontalStack` rows. Recorded by the
 /// placer and consumed by `lane_planner` to allocate K input₀ trunks.
@@ -166,6 +166,39 @@ pub(crate) fn max_machines_for_belt_both_lanes(
     (max_m as usize).max(1)
 }
 
+/// Per-row cap for `RowLayout::HorizontalStack` DualInput rows. Same as
+/// `max_machines_for_belt_both_lanes` but skips the highest-rate solid
+/// input (input₀) — that input is fed via K stacked input belts at the
+/// top of the HS row, so its per-row demand is bounded by `K × belt_cap`,
+/// not a single belt. The output belt and the low-demand input₁ are
+/// still single belts and so still constrain machines per row.
+pub(crate) fn max_machines_for_belt_horizontal_stack(
+    spec: &MachineSpec,
+    belt_name: &str,
+    max_belt_tier: Option<&str>,
+) -> usize {
+    let out_lane_cap = lane_capacity(belt_name);
+    let in_lane_cap = effective_in_lane_cap(max_belt_tier);
+    let mut max_m: f64 = 999.0;
+
+    for out in &spec.outputs {
+        if !out.is_fluid && out.rate > 0.0 {
+            max_m = max_m.min((out_lane_cap / out.rate).floor() * 2.0);
+        }
+    }
+
+    let mut solid_inputs: Vec<&crate::models::ItemFlow> = spec.inputs.iter()
+        .filter(|i| !i.is_fluid && i.rate > 0.0)
+        .collect();
+    solid_inputs.sort_by(|a, b| b.rate.partial_cmp(&a.rate).unwrap_or(std::cmp::Ordering::Equal));
+    // Skip input₀ (highest rate) — handled by K stacked trunks.
+    for inp in solid_inputs.iter().skip(1) {
+        max_m = max_m.min((in_lane_cap / inp.rate).floor() * 2.0);
+    }
+
+    (max_m as usize).max(1)
+}
+
 /// Return machine specs ordered with upstream (producing) recipes first.
 ///
 /// Performs a topological sort on solid-input dependencies so every producer
@@ -175,8 +208,14 @@ pub(crate) fn order_specs<'a>(
     machines: &'a [MachineSpec],
     dependency_order: &[String],
 ) -> Vec<&'a MachineSpec> {
-    let recipe_to_spec: FxHashMap<&str, &MachineSpec> =
-        machines.iter().map(|m| (m.recipe.as_str(), m)).collect();
+    // A single recipe may have multiple `MachineSpec`s when the partitioner
+    // splits a producer into per-module siblings (same recipe, distinct
+    // `outputs[0].module_id`). Collect all siblings; the final emit loop
+    // orders them deterministically by module_id.
+    let mut recipe_to_specs: FxHashMap<&str, Vec<&MachineSpec>> = FxHashMap::default();
+    for m in machines {
+        recipe_to_specs.entry(m.recipe.as_str()).or_default().push(m);
+    }
 
     // item -> recipe that produces it
     let mut producer: FxHashMap<&str, &str> = FxHashMap::default();
@@ -252,7 +291,11 @@ pub(crate) fn order_specs<'a>(
 
     emitted
         .into_iter()
-        .filter_map(|r| recipe_to_spec.get(r).copied())
+        .flat_map(|r| {
+            let mut siblings = recipe_to_specs.remove(r).unwrap_or_default();
+            siblings.sort_by_key(|s| s.outputs.first().map(|o| o.module_id).unwrap_or(0));
+            siblings
+        })
         .collect()
 }
 
@@ -776,8 +819,13 @@ pub(crate) fn build_one_row(
     }
 
     let machine_pitch: i32 = machine_size(&spec.entity) as i32;
-    let gap = if lane_split { LANE_SPLIT_GAP } else { 0 };
-    let row_width = bus_width + count as i32 * machine_pitch + gap;
+    // Inline-bridge unification: machines pack tight (Strategy A) or
+    // with a single 1-tile gap at the anchor (Strategy B,
+    // triple_input_row only). The `default_max` below is a fallback
+    // for fluid-only rows that emit no output belts and is consumed
+    // only by downstream code that doesn't care about the exact gap;
+    // hardcoding 0 here is correct for every template that uses it.
+    let gap = 0;
 
     // Scan the emitted row entities for surface belts on the output belt row,
     // carrying the row's (solid) output item. This captures the exact x-range
@@ -818,6 +866,12 @@ pub(crate) fn build_one_row(
             max_x.unwrap_or(default_max),
         )
     };
+
+    // Row width is the exclusive east-end of the output-belt run. The
+    // naive `bus_width + count*pitch + gap` undercounts HorizontalStack
+    // rows, which add per-block dive columns; the merger then leaves
+    // the HS template's east-most belt dead-ending into empty tiles.
+    let row_width = output_belt_x_max + 1;
 
     // Inherit module_id from the spec's primary solid output. Under
     // Pooled this is always 0; under PartitionedPerConsumer the
@@ -912,9 +966,16 @@ pub fn place_rows(
         let single_lane = !has_bridge_template;
         let _ = has_fluid;
         let _ = solid_inputs_count;
+        let is_hs_dual = matches!(row_layout, RowLayout::HorizontalStack)
+            && matches!(kind, RowKind::DualInput);
         let max_per_row = if single_lane {
             let ob = belt_entity_for_rate(output_rate * 2.0, max_belt_tier);
             max_machines_for_belt(spec, ob, max_belt_tier)
+        } else if is_hs_dual {
+            // HS feeds input₀ via K stacked trunks, so only output and
+            // input₁ constrain machines per row.
+            let ob = belt_entity_for_rate(output_rate, max_belt_tier);
+            max_machines_for_belt_horizontal_stack(spec, ob, max_belt_tier)
         } else {
             let ob = belt_entity_for_rate(output_rate, max_belt_tier);
             max_machines_for_belt_both_lanes(spec, ob, max_belt_tier)
@@ -925,19 +986,13 @@ pub fn place_rows(
             .iter()
             .any(|o| !o.is_fluid && final_items.contains(o.item.as_str()));
 
-        // HorizontalStack mode keeps every dual-input solid recipe in a
-        // single long row; vertical splitting would defeat the strategy.
-        // Other row kinds (single-input, fluid, triple-input) fall back
-        // to vertical splitting.
-        let force_single_row = matches!(row_layout, RowLayout::HorizontalStack)
-            && matches!(kind, RowKind::DualInput);
-
-        // Split into evenly-sized chunks
-        let n_rows = if force_single_row {
-            1
-        } else {
-            ((total_count as f64) / (max_per_row as f64)).ceil() as usize
-        };
+        // Split into evenly-sized chunks driven by `max_per_row` —
+        // the per-row machine cap that keeps each row's output rate
+        // within its output belt's capacity. Applies uniformly to VS
+        // and HS; HS rows that exceed the cap simply split into
+        // multiple HS sub-rows (each with its own K-trunk stack at
+        // the top and its own lane-balanced output belt).
+        let n_rows = ((total_count as f64) / (max_per_row as f64)).ceil() as usize;
         if n_rows > 1 {
             crate::trace::emit(crate::trace::TraceEvent::RowSplit {
                 recipe: spec.recipe.clone(),
