@@ -68,10 +68,16 @@ if [ -z "${GH_TOKEN:-}" ]; then
     exit 64
 fi
 
-if [ -z "${HOME:-}" ] || [ ! -d "${HOME}/.pi" ]; then
-    echo "error: ~/.pi not found on host — pi is not logged in here." >&2
-    echo "       run 'pi' once on the host and use /login, or set ANTHROPIC_API_KEY;" >&2
-    echo "       then retry." >&2
+PI_MOUNT_ARGS=()
+PI_KEY_ARGS=()
+if [ -n "${HOME:-}" ] && [ -d "${HOME}/.pi" ]; then
+    PI_MOUNT_ARGS=(-v "${HOME}/.pi:/mnt/pi-ro:ro")
+elif [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+    PI_KEY_ARGS=(-e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY")
+else
+    echo "error: no pi backend found." >&2
+    echo "       either have ~/.pi on the host (run 'pi' once and /login)," >&2
+    echo "       or set ANTHROPIC_API_KEY." >&2
     exit 64
 fi
 
@@ -90,7 +96,8 @@ echo
 
 exec docker run --rm -it \
     --name "$container" \
-    -v "${HOME}/.pi:/mnt/pi-ro:ro" \
+    "${PI_MOUNT_ARGS[@]}" \
+    "${PI_KEY_ARGS[@]}" \
     -e GH_TOKEN="$GH_TOKEN" \
     -e AGENT_NAME="$NAME" \
     "$IMAGE" agent-shell.sh
