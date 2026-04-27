@@ -46,12 +46,14 @@ COPY --chown=node:node docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 COPY --chown=node:node scripts/agent-runner.sh /usr/local/bin/agent-runner.sh
 COPY --chown=node:node scripts/agent-watcher.sh /usr/local/bin/agent-watcher.sh
 COPY --chown=node:node scripts/agent-reviewer.sh /usr/local/bin/agent-reviewer.sh
+COPY --chown=node:node scripts/agent-shell.sh /usr/local/bin/agent-shell.sh
 COPY --chown=node:node scripts/agents/ /usr/local/share/agents/
 COPY --chown=node:node scripts/pi/models.json.tmpl /usr/local/share/pi/models.json.tmpl
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
              /usr/local/bin/agent-runner.sh \
              /usr/local/bin/agent-watcher.sh \
-             /usr/local/bin/agent-reviewer.sh
+             /usr/local/bin/agent-reviewer.sh \
+             /usr/local/bin/agent-shell.sh
 
 WORKDIR /home/node
 
