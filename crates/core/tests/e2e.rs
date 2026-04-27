@@ -3241,3 +3241,163 @@ fn diag_corpus_sweep() {
     // Don't panic — we want the cache populated and the summary printed.
     // No assertion; this is purely a data-gathering diag.
 }
+
+// ---------------------------------------------------------------------------
+// Junction-cap census — baseline measurement for the junction-solver spike
+// ---------------------------------------------------------------------------
+
+/// For each combo in the corpus, run the layout pipeline and tally
+/// `JunctionGrowthCapped` events. Reports per-case + per-reason counts and
+/// a global summary. The spike's measurement baseline: experiments
+/// (e.g. raising `MAX_GROWTH_ITERS`, adaptive growth budgets) are scored
+/// against the table this prints.
+///
+/// Run with:
+///   cargo test --manifest-path crates/core/Cargo.toml --release --test e2e -- \
+///       --ignored diag_junction_caps_sweep --exact --nocapture
+#[test]
+#[ignore]
+fn diag_junction_caps_sweep() {
+    use rustc_hash::FxHashMap;
+
+    struct Combo {
+        item: &'static str,
+        rate: f64,
+        belt: Option<&'static str>,
+        from_ore: bool,
+        from_crude: bool,
+    }
+
+    let mut combos: Vec<Combo> = Vec::new();
+
+    // Mirrors diag_corpus_sweep so caps can be cross-referenced against
+    // SAT-call counts from the same combos.
+    for &rate in &[1.0, 2.0, 3.0, 5.0, 7.5, 10.0, 15.0, 20.0, 30.0] {
+        for from_ore in [false, true] {
+            for belt in [None, Some("fast-transport-belt")] {
+                combos.push(Combo { item: "iron-gear-wheel", rate, belt, from_ore, from_crude: false });
+            }
+        }
+    }
+    for &rate in &[1.0, 5.0, 10.0, 20.0, 30.0] {
+        for from_ore in [false, true] {
+            for belt in [None, Some("fast-transport-belt")] {
+                combos.push(Combo { item: "copper-cable", rate, belt, from_ore, from_crude: false });
+            }
+        }
+    }
+    for &rate in &[1.0, 5.0, 10.0] {
+        for from_ore in [false, true] {
+            combos.push(Combo { item: "transport-belt", rate, belt: None, from_ore, from_crude: false });
+        }
+    }
+    for &rate in &[1.0, 2.5, 5.0, 7.5, 10.0, 15.0, 20.0, 22.0, 25.0, 30.0, 40.0, 50.0] {
+        for from_ore in [false, true] {
+            for belt in [None, Some("fast-transport-belt")] {
+                combos.push(Combo { item: "electronic-circuit", rate, belt, from_ore, from_crude: false });
+            }
+        }
+    }
+    for &rate in &[1.0, 2.0, 5.0] {
+        combos.push(Combo { item: "plastic-bar", rate, belt: None, from_ore: false, from_crude: false });
+        combos.push(Combo { item: "plastic-bar", rate, belt: None, from_ore: false, from_crude: true });
+    }
+    for &rate in &[1.0, 2.0, 5.0] {
+        combos.push(Combo { item: "sulfuric-acid", rate, belt: None, from_ore: false, from_crude: false });
+    }
+
+    eprintln!("\n=== diag_junction_caps_sweep: {} combinations ===", combos.len());
+
+    let sweep_start = Instant::now();
+    let mut attempted = 0usize;
+    let mut succeeded = 0usize;
+    let mut total_caps: usize = 0;
+    let mut reason_totals: FxHashMap<String, usize> = FxHashMap::default();
+    // Per-case rows: (test_name, total_caps, by_reason, max_iters, max_region_tiles)
+    let mut per_case: Vec<(String, usize, FxHashMap<String, usize>, usize, usize)> = Vec::new();
+
+    for c in &combos {
+        attempted += 1;
+        let mut available_inputs = FxHashSet::default();
+        if c.from_ore {
+            available_inputs.insert("iron-ore".to_string());
+            available_inputs.insert("copper-ore".to_string());
+        }
+        if c.from_crude {
+            available_inputs.insert("crude-oil".to_string());
+        }
+
+        let test_name = format!(
+            "caps_{}_{:.1}s_{}{}",
+            c.item.replace('-', "_"),
+            c.rate,
+            c.belt.map(|b| if b == "fast-transport-belt" { "red" } else { "yel" }).unwrap_or("auto"),
+            if c.from_ore { "_ore" } else if c.from_crude { "_crude" } else { "" },
+        );
+
+        match run_e2e(&test_name, c.item, c.rate, "assembling-machine-1", c.belt, &available_inputs) {
+            Ok(result) => {
+                succeeded += 1;
+                let mut case_caps = 0usize;
+                let mut case_reasons: FxHashMap<String, usize> = FxHashMap::default();
+                let mut max_iters = 0usize;
+                let mut max_tiles = 0usize;
+                for ev in &result.trace_events {
+                    if let TraceEvent::JunctionGrowthCapped {
+                        iters, region_tiles, reason, ..
+                    } = ev {
+                        case_caps += 1;
+                        total_caps += 1;
+                        *case_reasons.entry(reason.clone()).or_insert(0) += 1;
+                        *reason_totals.entry(reason.clone()).or_insert(0) += 1;
+                        max_iters = max_iters.max(*iters);
+                        max_tiles = max_tiles.max(*region_tiles);
+                    }
+                }
+                if case_caps > 0 {
+                    per_case.push((test_name, case_caps, case_reasons, max_iters, max_tiles));
+                }
+            }
+            Err(_) => {
+                // Skip silently — a layout that errors out is its own
+                // problem; we want the cap-rate signal across the rest.
+            }
+        }
+    }
+
+    let elapsed_ms = sweep_start.elapsed().as_millis();
+
+    // Sort cases by total caps descending so the biggest offenders rise.
+    per_case.sort_by(|a, b| b.1.cmp(&a.1));
+
+    eprintln!(
+        "\nSweep done in {:.1}s: {}/{} combos completed layout, {} cases with ≥1 cap, {} caps total",
+        elapsed_ms as f64 / 1000.0,
+        succeeded,
+        attempted,
+        per_case.len(),
+        total_caps,
+    );
+
+    eprintln!("\nCaps by reason (global):");
+    let mut reasons: Vec<_> = reason_totals.iter().collect();
+    reasons.sort_by(|a, b| b.1.cmp(a.1));
+    for (r, n) in &reasons {
+        eprintln!("  {:<24} {}", r, n);
+    }
+
+    eprintln!("\nPer-case breakdown (cases with ≥1 cap, sorted by total):");
+    eprintln!("  {:<54} {:>5} {:>9} {:>9} {}", "case", "caps", "max_iter", "max_tile", "by_reason");
+    for (name, total, by_reason, max_iters, max_tiles) in &per_case {
+        let mut rs: Vec<_> = by_reason.iter().collect();
+        rs.sort_by(|a, b| b.1.cmp(a.1));
+        let detail: Vec<String> = rs.iter().map(|(r, n)| format!("{}={}", r, n)).collect();
+        eprintln!(
+            "  {:<54} {:>5} {:>9} {:>9} {}",
+            name, total, max_iters, max_tiles, detail.join(" ")
+        );
+    }
+
+    // No assertion — purely diagnostic. The numbers above are the
+    // baseline against which solver-reliability experiments are scored.
+}
