@@ -1724,17 +1724,16 @@ fn partition_strategy_scoreboard() {
             item: "processing-unit", rate: 2.0, machine: "assembling-machine-3",
             belt: Some("fast-transport-belt"),
             inputs: &["iron-ore", "copper-ore", "coal", "water", "crude-oil"],
-            // The +1 vs prior baseline (13 → 14) is the new
-            // `unresolved-junction` error replacing two suppressed
-            // belt-item-isolation orphans — net more honest signal.
-            expected: (14, 14, 14),
+            // 14 → 7 across all strategies after merging main
+            // (clean-slate SAT zone release in #480442a).
+            expected: (7, 7, 7),
         },
         Case {
             name: "AC@5/s plates yellow",
             item: "advanced-circuit", rate: 5.0, machine: "assembling-machine-2",
             belt: Some("transport-belt"),
             inputs: &["iron-plate", "copper-plate", "coal", "crude-oil", "water"],
-            expected: (5, 10, 10),
+            expected: (5, 9, 9),
         },
         // Expanded corpus (added 2026-04-27 from probe data). Documents
         // the regressions Phase 2 introduces at higher rates and on
@@ -1748,19 +1747,20 @@ fn partition_strategy_scoreboard() {
                 "iron-plate", "copper-plate", "steel-plate", "stone",
                 "coal", "water", "crude-oil",
             ],
-            // P1 wins small (38 → 30); P2 still regresses (38 → 83)
-            // — improved from 86 once orphan ghost-belt
-            // belt-item-isolations were suppressed.
-            expected: (38, 30, 83),
+            // P1 still wins small (30 → 28); P2 still regresses (38 → 80)
+            // — `MAX_SHARDS_PER_MODULE = 3` cuts the worst sharding but
+            // 3-shard cases still multiply consumer rows here.
+            expected: (30, 28, 80),
         },
         Case {
             name: "PU@3/s ore red",
             item: "processing-unit", rate: 3.0, machine: "assembling-machine-3",
             belt: Some("fast-transport-belt"),
             inputs: &["iron-ore", "copper-ore", "coal", "water", "crude-oil"],
-            // P2 regresses (16 → 22) — the 10-lane threshold escape
-            // hatch that saved PU@2/s no longer applies here.
-            expected: (17, 16, 22),
+            // P2 still regresses 9 → 12 — the 22-lane shard at this rate
+            // is over the MAX_SHARDS=3 threshold and now stays as a
+            // single wide module, but other 3-shard cases multiply rows.
+            expected: (11, 9, 12),
         },
         Case {
             name: "PU@3/s plates yellow",
@@ -1770,12 +1770,14 @@ fn partition_strategy_scoreboard() {
                 "iron-plate", "copper-plate", "steel-plate", "stone",
                 "coal", "water", "crude-oil",
             ],
-            // P1=98 / P2=129. P2 improved from 140 once orphan ghost-
-            // belt belt-item-isolations were suppressed; the remaining
-            // gap is real layout failure (entity-overlap, dead-ends,
-            // unresolved-junctions) compounded by sharded consumer-row
-            // multiplication.
-            expected: (68, 98, 129),
+            // P2 dropped 129 → 95 with `MAX_SHARDS_PER_MODULE = 3` —
+            // the 29-lane copper-cable→EC module that was sharding
+            // into 4 (multiplying EC consumer rows 4×) now stays as
+            // one wide module, matching P1's behaviour. Remaining
+            // P1=P2 gap vs Pool is the wide-module utilization
+            // problem; needs balancer-template work (#136) or
+            // junction-solver capacity (RFP #241).
+            expected: (65, 95, 95),
         },
     ];
 

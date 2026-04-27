@@ -176,6 +176,21 @@ pub enum TraceEvent {
         lanes_per_shard: Vec<usize>,
     },
 
+    // Phase 2 cost-benefit gate: would-be shard count exceeded
+    // `MAX_SHARDS_PER_MODULE`, so the partitioner kept the module
+    // intact. The downstream balancer may not have a template wide
+    // enough, but the alternative (multiplying consumer rows by
+    // ⌈lane_count / 8⌉) was judged worse. Helps explain why Phase 2
+    // sometimes leaves a wide trunk that Phase 1 also produced.
+    ShardSkipped {
+        item: String,
+        consumer_recipe: String,
+        lane_count: u32,
+        /// What the shard count would have been without the gate.
+        would_be_shards: u32,
+        max_shards: u32,
+    },
+
     // Decomposition produced shards whose lane count doesn't tile
     // cleanly with consumer demand (multi-consumer K2-2 case from the
     // RFP). Fires when a consumer's tap from a shard is uneven —

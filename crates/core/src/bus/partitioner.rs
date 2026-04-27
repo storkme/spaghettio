@@ -311,6 +311,28 @@ pub fn plan_partitioning(
 /// stress corpus; revisit if new stress cases shift the trade-off.
 const SHARD_THRESHOLD_LANES: u32 = 10;
 
+/// Cost-benefit ceiling on shard count. Sharding a module into N pieces
+/// multiplies every consuming recipe-row by N (each consumer sub-row
+/// taps one specific shard). For modules whose lane_count would
+/// produce ≥ 4 shards, the consumer-side cost (more rows → more
+/// junction crossings → more solver-failed clusters) routinely
+/// dominates the producer-side benefit (smaller balancer SAT zones,
+/// access to narrower library templates).
+///
+/// Bounding shards at 3 keeps the wins on EC@30/s ores yellow
+/// (12 lanes → 2 shards, 1 extra consumer row) and EC@45/s ores
+/// yellow (18 lanes → 3 shards, 2 extra rows) but blocks the
+/// regression on PU@3/s plates yellow (29-lane copper-cable would be
+/// 4 shards, 3 extra EC-consumer rows + 8× cluster multiplication
+/// from Cartesian split with consumer-side EC partitioning).
+///
+/// Tuning rationale: above 3, the unsolved-junction count on the
+/// scoreboard's plates-yellow cases climbed faster than the
+/// balancer-template-availability won back. See PR #238 thread for
+/// the data; revisit when junction-solver capability work (RFP #241)
+/// changes the baseline.
+const MAX_SHARDS_PER_MODULE: u32 = 3;
+
 /// Phase 2 sub-pass: replace modules with `lane_count > SHARD_THRESHOLD_LANES`
 /// with N proportional shards. Module IDs are reassigned dense per
 /// item (0..N across all modules combined). Emits `ShardSplit` traces.
@@ -336,7 +358,22 @@ fn decompose_oversized_modules(
                 out.push(keep);
                 continue;
             }
-            let n_shards = m.lane_count.div_ceil(8) as usize;
+            let would_be_shards = m.lane_count.div_ceil(8);
+            if would_be_shards > MAX_SHARDS_PER_MODULE {
+                trace::emit(TraceEvent::ShardSkipped {
+                    item: item.clone(),
+                    consumer_recipe: m.consumer_recipe.clone(),
+                    lane_count: m.lane_count,
+                    would_be_shards,
+                    max_shards: MAX_SHARDS_PER_MODULE,
+                });
+                let mut keep = m;
+                keep.module_id = next_module_id;
+                next_module_id += 1;
+                out.push(keep);
+                continue;
+            }
+            let n_shards = would_be_shards as usize;
             let lanes_per_shard: Vec<usize> = (0..n_shards)
                 .map(|i| {
                     let total = m.lane_count as usize;
@@ -405,7 +442,20 @@ fn decompose_single_consumer_items(
         if lane_count <= SHARD_THRESHOLD_LANES {
             continue; // fits without sharding (see SHARD_THRESHOLD_LANES doc)
         }
-        let n_shards = lane_count.div_ceil(8) as usize;
+        let would_be_shards = lane_count.div_ceil(8);
+        if would_be_shards > MAX_SHARDS_PER_MODULE {
+            trace::emit(TraceEvent::ShardSkipped {
+                item: item.clone(),
+                consumer_recipe: recipe.clone(),
+                lane_count,
+                would_be_shards,
+                max_shards: MAX_SHARDS_PER_MODULE,
+            });
+            // K=1 item left out of the plan entirely — falls back to
+            // Pooled-equivalent for this item (one wide module).
+            continue;
+        }
+        let n_shards = would_be_shards as usize;
         let lanes_per_shard: Vec<usize> = (0..n_shards)
             .map(|i| {
                 let total = lane_count as usize;
