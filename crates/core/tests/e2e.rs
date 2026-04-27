@@ -1047,6 +1047,77 @@ fn tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing() {
     }
 }
 
+/// Regression test for the `place_poles` rightward-only probe bug.
+/// `processing-unit @ 2.5/s` HorizontalStack puts six AM3s tight in one
+/// row with a 3-tile sideload bridge below the middle pair. The pole
+/// search aimed for `cx + POLE_RANGE` and probed ±3 around it — strictly
+/// at-or-right-of the machine center. With the bridge belts occupying
+/// the right side of the inserter row and the input row fully packed,
+/// every right-side probe hit an obstacle, the algorithm gave up at
+/// d=3, and the bridge-anchor AM3 (and the row's last AM3) ended up
+/// without a pole within Chebyshev 3 of its center — even though a
+/// free tile existed inside the supply range to the *left*.
+///
+/// Fix: extend `POLE_PROBE_X` to `2 * POLE_RANGE` so the probe falls
+/// back leftward when rightward is exhausted. Rightmost-first ordering
+/// is preserved so forward reach is unchanged.
+#[test]
+#[ntest::timeout(60000)]
+fn tier5_processing_unit_25s_horizontal_stack_pole_coverage() {
+    use fucktorio_core::bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy, RowLayout};
+
+    let inputs: FxHashSet<String> = [
+        "iron-plate", "copper-plate", "steel-plate", "stone",
+        "coal", "water", "crude-oil", "iron-ore", "copper-ore",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    let test_name = "tier5_processing_unit_25s_horizontal_stack_pole_coverage";
+
+    let solver_result = solver::solve("processing-unit", 2.5, &inputs, "assembling-machine-3")
+        .unwrap_or_else(|e| panic!("{test_name}: solver: {e}"));
+
+    let layout = build_bus_layout(
+        &solver_result,
+        LayoutOptions {
+            strategy: LayoutStrategy::Pooled,
+            max_belt_tier: None,
+            row_layout: RowLayout::HorizontalStack,
+        },
+    )
+    .unwrap_or_else(|e| panic!("{test_name}: layout: {e}"));
+
+    let issues = match validate::validate(&layout, Some(&solver_result), LayoutStyle::Bus) {
+        Ok(i) => i,
+        Err(e) => e.issues,
+    };
+
+    let power_warnings: Vec<_> = issues
+        .iter()
+        .filter(|i| i.severity == Severity::Warning && i.category == "power")
+        .collect();
+
+    if !power_warnings.is_empty() {
+        let lines = power_warnings
+            .iter()
+            .take(8)
+            .map(|i| format!("  {}", i.message))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let extra = if power_warnings.len() > 8 {
+            format!("\n  …and {} more", power_warnings.len() - 8)
+        } else {
+            String::new()
+        };
+        panic!(
+            "{test_name}: expected every assembler within Chebyshev 3 of a \
+             medium-electric-pole, got {} `power` warnings:\n{lines}{extra}",
+            power_warnings.len()
+        );
+    }
+}
+
 /// Advanced circuit, rate 5/s, AM1, yellow belts, from raw ores + crude oil.
 /// This is the "hello-world fully-from-ore AC" goal — cheapest machine tier,
 /// cheapest belt tier, everything upstream of the factory is raw resources.
