@@ -2086,6 +2086,27 @@ pub fn route_bus_ghost(
             &strategies,
             &pending_crossings,
         ) else {
+            // Diagnostic: when FUCKTORIO_BLAME_JUNCTIONS=1 is set,
+            // identify which spec's removal would let the cluster
+            // solve. Helps narrow "what shape of crossing keeps
+            // failing" without instrumenting the solver itself.
+            if std::env::var("FUCKTORIO_BLAME_JUNCTIONS").is_ok() {
+                blame_unsolvable_cluster(
+                    cluster.as_slice(),
+                    &keys_at_tile,
+                    &routed_paths,
+                    &hard,
+                    &junction_hard,
+                    &unreleasable_obstacles,
+                    &spec_belt_tiers,
+                    &spec_items,
+                    &spec_exit_dirs,
+                    &spec_kinds,
+                    &entities,
+                    &strategies,
+                    &pending_crossings,
+                );
+            }
             for &t in cluster {
                 remaining_crossings.insert(t);
             }
@@ -2804,6 +2825,82 @@ fn cluster_adjacent_crossings(
 /// Returns CrossingInfo if exactly 2 different-item specs cross at this tile.
 ///
 /// `spec_items` and `spec_belt_tiers` are consulted as a fallback for keys
+/// Diagnostic for `FUCKTORIO_BLAME_JUNCTIONS=1`: when a cluster fails
+/// to solve, retry with each participating spec removed in turn. Any
+/// removal that lets the cluster solve points at a "blamed" spec —
+/// the kind of crossing this solver is failing on. Emits one
+/// `JunctionBlamedSpec` per such removal.
+///
+/// Cost: up to N extra `solve_crossing` calls per failed cluster (N =
+/// participating spec count). Gated on env var because each retry can
+/// take seconds; keep it off in CI. Trace events from the retries are
+/// muted via `trace::with_muted` so they don't pollute the real
+/// event stream.
+#[allow(clippy::too_many_arguments)]
+fn blame_unsolvable_cluster(
+    cluster: &[(i32, i32)],
+    initial_specs: &[&str],
+    routed_paths: &FxHashMap<String, Vec<(i32, i32)>>,
+    hard: &FxHashSet<(i32, i32)>,
+    junction_hard: &FxHashSet<(i32, i32)>,
+    unreleasable_obstacles: &FxHashSet<(i32, i32)>,
+    spec_belt_tiers: &FxHashMap<String, BeltTier>,
+    spec_items: &FxHashMap<String, String>,
+    spec_exit_dirs: &FxHashMap<String, EntityDirection>,
+    spec_kinds: &FxHashMap<String, crate::bus::junction::SpecKind>,
+    entities: &[PlacedEntity],
+    strategies: &[&dyn JunctionStrategy],
+    pending_crossings: &FxHashSet<(i32, i32)>,
+) {
+    if initial_specs.len() < 2 {
+        return; // can't blame a single spec — nothing to remove
+    }
+    let cluster_seed = cluster[0];
+    for &removed in initial_specs {
+        let kept_specs: Vec<&str> = initial_specs
+            .iter()
+            .copied()
+            .filter(|&k| k != removed)
+            .collect();
+        let mut kept_paths = routed_paths.clone();
+        kept_paths.remove(removed);
+        let solved = trace::with_muted(|| {
+            junction_solver::solve_crossing(
+                cluster,
+                &kept_specs,
+                &kept_paths,
+                hard,
+                junction_hard,
+                unreleasable_obstacles,
+                spec_belt_tiers,
+                spec_items,
+                spec_exit_dirs,
+                spec_kinds,
+                entities,
+                strategies,
+                pending_crossings,
+            )
+            .is_some()
+        });
+        if !solved {
+            continue;
+        }
+        let item = spec_items.get(removed).cloned().unwrap_or_default();
+        let dir = spec_exit_dirs
+            .get(removed)
+            .map(|d| format!("{d:?}"))
+            .unwrap_or_default();
+        trace::emit(trace::TraceEvent::JunctionBlamedSpec {
+            cluster_x: cluster_seed.0,
+            cluster_y: cluster_seed.1,
+            participating: initial_specs.len(),
+            spec_key: removed.to_string(),
+            spec_item: item,
+            spec_direction: dir,
+        });
+    }
+}
+
 /// (e.g. synthetic trunk paths) that don't have a corresponding `BeltSpec`
 /// in `specs`.
 fn classify_crossing(

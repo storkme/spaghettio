@@ -4,7 +4,7 @@
 //! Use `start_trace()` to begin collection, `emit()` to record events,
 //! and `drain_events()` to retrieve them.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use serde::{Deserialize, Serialize};
 use crate::models::PlacedEntity;
@@ -16,6 +16,10 @@ use crate::models::PlacedEntity;
 thread_local! {
     static COLLECTOR: RefCell<Option<Vec<TraceEvent>>> = const { RefCell::new(None) };
     static SINK: RefCell<Option<Box<dyn FnMut(&TraceEvent)>>> = const { RefCell::new(None) };
+    /// Suppress event recording within a `with_muted` scope. Used by
+    /// junction-blame retries so the speculative re-solves don't pollute
+    /// the real event stream with phantom JunctionGrowth* etc events.
+    static MUTED: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Start trace collection for the current thread. Returns a guard that
@@ -51,8 +55,12 @@ impl Drop for SinkGuard {
     }
 }
 
-/// Emit a trace event. No-op if neither a collector nor a sink is active.
+/// Emit a trace event. No-op if neither a collector nor a sink is active,
+/// or if `with_muted` is in effect on this thread.
 pub fn emit(event: TraceEvent) {
+    if MUTED.with(|m| m.get()) {
+        return;
+    }
     SINK.with(|s| {
         if let Some(ref mut sink) = *s.borrow_mut() {
             sink(&event);
@@ -63,6 +71,16 @@ pub fn emit(event: TraceEvent) {
             events.push(event);
         }
     });
+}
+
+/// Run `f` with event emission suppressed on this thread. Used by
+/// junction-blame retries so speculative re-solves don't pollute the
+/// real event stream.
+pub fn with_muted<F: FnOnce() -> R, R>(f: F) -> R {
+    let prev = MUTED.with(|m| m.replace(true));
+    let result = f();
+    MUTED.with(|m| m.set(prev));
+    result
 }
 
 /// Drain collected events from the current thread.
@@ -551,6 +569,27 @@ pub enum TraceEvent {
         iters: usize,
         region_tiles: usize,
         reason: String,
+    },
+
+    // Diagnostic: when a cluster fails to solve, which spec(s) made
+    // the difference? Emitted once per failed cluster (gated on
+    // `FUCKTORIO_BLAME_JUNCTIONS=1`). Each event names one spec whose
+    // removal lets the rest of the cluster solve. Multiple events for
+    // one cluster mean any of those individual removals would unblock
+    // it; zero events mean no single-spec removal helps (multi-spec
+    // entanglement, or a structurally unsolvable cluster).
+    JunctionBlamedSpec {
+        /// Seed of the failed cluster.
+        cluster_x: i32,
+        cluster_y: i32,
+        /// Total participating specs in the cluster.
+        participating: usize,
+        /// The spec whose removal would have let the cluster solve.
+        spec_key: String,
+        spec_item: String,
+        /// Direction string ("North"/"East"/"South"/"West") at the
+        /// initial cluster tile, or empty if not classifiable.
+        spec_direction: String,
     },
     // Emitted when the region walker rejects a strategy's proposed
     // solution because it would break a routed path that touches the
