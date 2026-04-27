@@ -118,6 +118,13 @@ impl JunctionStrategy for EvictionStrategy {
         let mut recipes_tried = 0usize;
         let seed = ctx.region.initial_tile;
 
+        // Try every recipe under the wall-clock budget and keep the
+        // cheapest solution. Don't bail on first success — a later
+        // recipe might produce a cheaper layout (e.g. evicting one
+        // spec via OppositePairUg + SAT-on-3 may beat evicting two
+        // longer specs even though both are valid).
+        let mut best: Option<(u32, JunctionSolution, Vec<String>, &'static str, u64, u64, Vec<EvictionSpecMetric>, usize)> = None;
+
         for recipe in &self.recipes {
             if web_time::Instant::now() >= total_deadline {
                 break;
@@ -250,27 +257,48 @@ impl JunctionStrategy for EvictionStrategy {
                 }
             }
 
-            let total_us = total_started.elapsed().as_micros() as u64;
-            trace::emit(TraceEvent::EvictionSucceeded {
-                seed_x: seed.0,
-                seed_y: seed.1,
-                iter: ctx.growth_iter,
-                recipe: recipe.name().to_string(),
-                evicted_spec_keys: selected,
-                boundary_count_after: filtered_junction.specs.len() * 2,
-                sat_us,
-                route_us,
-                total_us,
-                metrics,
-            });
-
-            return Some(JunctionSolution {
+            let cost = crate::bus::junction_cost::solution_cost(&merged_entities);
+            let candidate_solution = JunctionSolution {
                 entities: merged_entities,
                 footprint: sat_sol.footprint,
                 strategy_name: "eviction",
                 participating: merged_participating,
                 sat_zone: sat_sol.sat_zone,
+            };
+            let recipe_name: &'static str = recipe.name();
+            let boundary_after = filtered_junction.specs.len() * 2;
+            let is_better = best.as_ref().is_none_or(|b| cost < b.0);
+            if is_better {
+                best = Some((
+                    cost,
+                    candidate_solution,
+                    selected,
+                    recipe_name,
+                    sat_us,
+                    route_us,
+                    metrics,
+                    boundary_after,
+                ));
+            }
+        }
+
+        if let Some((_cost, sol, selected, recipe_name, sat_us, route_us, metrics, boundary_after)) =
+            best
+        {
+            let total_us = total_started.elapsed().as_micros() as u64;
+            trace::emit(TraceEvent::EvictionSucceeded {
+                seed_x: seed.0,
+                seed_y: seed.1,
+                iter: ctx.growth_iter,
+                recipe: recipe_name.to_string(),
+                evicted_spec_keys: selected,
+                boundary_count_after: boundary_after,
+                sat_us,
+                route_us,
+                total_us,
+                metrics,
             });
+            return Some(sol);
         }
 
         trace::emit(TraceEvent::EvictionBudgetExhausted {
