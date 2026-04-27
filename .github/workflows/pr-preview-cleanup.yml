@@ -1,0 +1,53 @@
+name: Cleanup PR Preview
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: pr-preview-cleanup-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout gh-pages
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          fetch-depth: 0
+      - name: Remove preview directory
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [ ! -d "pr-${PR_NUMBER}" ]; then
+            echo "No preview directory pr-${PR_NUMBER} to remove"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm -rf "pr-${PR_NUMBER}"
+          git commit -m "Remove preview for PR #${PR_NUMBER}"
+          for attempt in 1 2 3 4; do
+            if git push origin gh-pages; then
+              exit 0
+            fi
+            echo "Push failed (attempt ${attempt}); rebasing and retrying"
+            git pull --rebase origin gh-pages
+            sleep $((2 ** attempt))
+          done
+          echo "Failed to push cleanup commit after retries" >&2
+          exit 1
+      - name: Update PR comment
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: pr-preview
+          message: |
+            Preview for this PR has been removed.

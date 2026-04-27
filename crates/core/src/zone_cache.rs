@@ -93,6 +93,7 @@ use std::cell::RefCell;
 #[cfg(not(target_arch = "wasm32"))]
 use std::io::Write as _;
 use std::sync::{Mutex, OnceLock};
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // Thread-local source tag so parallel tests each carry their own label
@@ -1142,6 +1143,13 @@ fn entity_carries_from_token(mut e: PlacedEntity, channel_items: &[String]) -> P
 /// `entities` should be the post-cost-descent SAT output, in absolute world
 /// coords (as returned by `solve_crossing_zone_per_channel`). We strip the
 /// world-coord origin and apply the canonical transform before storing.
+///
+/// Returns `(signature, record_bytes)` where `record_bytes` is the
+/// single-record binary blob (length prefix + body) — same wire format as
+/// the on-disk `sat-zones.bin`. Native callers don't need this return value
+/// (the disk-write side effect is internal); the WASM-bindings emit path
+/// uses it to forward the new entry to the frontend for localStorage
+/// persistence.
 pub fn record_zone_with_solution(
     zone: &CrossingZone,
     channel_reaches: &[u32],
@@ -1149,7 +1157,7 @@ pub fn record_zone_with_solution(
     stats: ZoneStats,
     entities: &[PlacedEntity],
     source: Option<&str>,
-) {
+) -> (String, Vec<u8>) {
     let form = canonicalise(zone, channel_reaches, max_ug_ins);
     let channel_items = canonical_channel_items(zone, &form);
 
@@ -1196,51 +1204,60 @@ pub fn record_zone_with_solution(
         );
     }
 
-    // WASM has nowhere to flush to, so skip the encode + buffer entirely
-    // (and avoid `SystemTime::now()`, which panics on the wasm32 target).
-    // The in-memory cache update above already gives us same-session reuse.
+    // Pack entities as [kind, x, y, dir, carries_idx] tuples. Anything that
+    // doesn't encode (unknown name, broken carries token) is dropped — these
+    // shouldn't happen for SAT-produced entities.
+    let entity_tuples: Vec<[i32; 5]> = canonical_entities
+        .iter()
+        .filter_map(entity_to_tuple)
+        .collect();
+
+    // Resolve the effective source label. Native: thread-local override →
+    // caller-provided → env var. WASM: caller-provided only (no env, no
+    // thread-local writer).
+    #[cfg(not(target_arch = "wasm32"))]
+    let effective_source: Option<String> = ZONE_SOURCE
+        .with(|s| s.borrow().clone())
+        .or_else(|| source.map(|s| s.to_string()))
+        .or_else(|| std::env::var("FUCKTORIO_ZONE_SOURCE").ok());
+    #[cfg(target_arch = "wasm32")]
+    let effective_source: Option<String> = source.map(|s| s.to_string());
+
+    // Avoid `SystemTime::now()` on WASM — it panics on the wasm32 target.
+    // The frontend's persistence path doesn't need a high-fidelity timestamp.
+    #[cfg(not(target_arch = "wasm32"))]
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    #[cfg(target_arch = "wasm32")]
+    let ts: u64 = 0;
+
+    let mut bytes: Vec<u8> = Vec::with_capacity(64 + entity_tuples.len() * 5);
+    encode_record(
+        &mut bytes,
+        ts,
+        &form.signature,
+        effective_source.as_deref(),
+        canon_w,
+        canon_h,
+        stats.variables,
+        stats.clauses,
+        stats.solve_time_us,
+        &channel_items,
+        &entity_tuples,
+    );
+
+    // Native: queue for disk flush. WASM: nothing to flush to — the
+    // returned bytes are the persistence vehicle.
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let thread_src = ZONE_SOURCE.with(|s| s.borrow().clone());
-        let effective_source: Option<String> = thread_src
-            .or_else(|| source.map(|s| s.to_string()))
-            .or_else(|| std::env::var("FUCKTORIO_ZONE_SOURCE").ok());
-
-        let ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-
-        // Pack entities as [kind, x, y, dir, carries_idx] tuples. Anything that
-        // doesn't encode (unknown name, broken carries token) is dropped — these
-        // shouldn't happen for SAT-produced entities.
-        let entity_tuples: Vec<[i32; 5]> = canonical_entities
-            .iter()
-            .filter_map(entity_to_tuple)
-            .collect();
-
-        let mut bytes: Vec<u8> = Vec::with_capacity(64 + entity_tuples.len() * 5);
-        encode_record(
-            &mut bytes,
-            ts,
-            &form.signature,
-            effective_source.as_deref(),
-            canon_w,
-            canon_h,
-            stats.variables,
-            stats.clauses,
-            stats.solve_time_us,
-            &channel_items,
-            &entity_tuples,
-        );
         if let Ok(mut buf) = buffer().lock() {
-            buf.push(PendingRecord { bytes });
+            buf.push(PendingRecord { bytes: bytes.clone() });
         }
     }
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = (source, &stats);  // silence unused
-    }
+
+    (form.signature, bytes)
 }
 
 /// Look up a previously-cached SAT solution for `zone`. Returns `Some` of a
@@ -1250,10 +1267,20 @@ pub fn record_zone_with_solution(
 ///
 /// The returned entities have `segment_id` set to `"crossing:{x}:{y}"` to
 /// mirror the SAT path's tagging.
+///
+/// `fallback_belt_name` is the surface-belt entity name used to retype
+/// entities whose channel has no per-port `belt_tier` annotation (e.g.
+/// `"fast-transport-belt"`). The SAT formula is tier-agnostic, so a cache
+/// entry recorded under one tier is correct for any tier with the same
+/// per-channel reaches — but the stored entity names need to be re-typed
+/// to match each channel's tier in the current zone (mixed-tier zones in
+/// `ReachMode::Relaxed` collapse to the same signature across tiers, so a
+/// red-channel cached entry could be hit by a yellow-channel lookup).
 pub fn lookup_zone(
     zone: &CrossingZone,
     channel_reaches: &[u32],
     max_ug_ins: Option<u32>,
+    fallback_belt_name: &str,
 ) -> Option<Vec<PlacedEntity>> {
     if !cache_enabled() {
         return None;
@@ -1273,6 +1300,14 @@ pub fn lookup_zone(
         return None;
     }
 
+    // item → surface-belt tier from the current zone's boundaries. Used to
+    // retype each cached entity to its channel's actual tier.
+    let item_to_tier: std::collections::HashMap<&str, &str> = zone
+        .boundaries
+        .iter()
+        .filter_map(|b| b.belt_tier.as_deref().map(|t| (b.item.as_str(), t)))
+        .collect();
+
     // Inverse-transform entities: canonical-frame → zone-local → absolute.
     let segment_id = format!("crossing:{}:{}", zone.x, zone.y);
     let entities: Vec<PlacedEntity> = entry
@@ -1284,11 +1319,32 @@ pub fn lookup_zone(
             out.x += zone.x;
             out.y += zone.y;
             out.segment_id = Some(segment_id.clone());
+            let tier = out
+                .carries
+                .as_deref()
+                .and_then(|item| item_to_tier.get(item).copied())
+                .unwrap_or(fallback_belt_name);
+            retype_entity_to_tier(&mut out, tier);
             out
         })
         .collect();
 
     Some(entities)
+}
+
+/// Retype a belt or underground-belt entity's `name` to match `surface_belt_name`.
+/// Non-belt entities are left untouched. Uses [`crate::sat::ug_name_for_tier`]
+/// to map the surface tier to its corresponding UG tier.
+fn retype_entity_to_tier(e: &mut PlacedEntity, surface_belt_name: &str) {
+    match e.name.as_str() {
+        "transport-belt" | "fast-transport-belt" | "express-transport-belt" => {
+            e.name = surface_belt_name.to_string();
+        }
+        "underground-belt" | "fast-underground-belt" | "express-underground-belt" => {
+            e.name = crate::sat::ug_name_for_tier(surface_belt_name).to_string();
+        }
+        _ => {}
+    }
 }
 
 #[cfg(test)]
@@ -1592,5 +1648,158 @@ mod tests {
         buf.truncate(buf.len() - 5);
         let recs = parse_records(&buf);
         assert_eq!(recs.len(), 0, "truncated records should be skipped");
+    }
+
+    /// A solution recorded under yellow belts must be returned with the
+    /// caller's channel-tier names. `lookup_zone` reads the per-port
+    /// `belt_tier` from the current zone's boundaries (not the cache entry)
+    /// so the same cache entry serves any tier with matching channel reaches.
+    #[test]
+    fn lookup_zone_retypes_to_caller_tier() {
+        // Zone with one channel; carries item "iron-plate".
+        let mk_zone = |port_tier: &str| {
+            let item = "iron-plate".to_string();
+            CrossingZone {
+                x: 10, y: 20, width: 3, height: 3,
+                boundaries: vec![
+                    ZoneBoundary {
+                        x: 11, y: 20, direction: EntityDirection::South,
+                        item: item.clone(), is_input: true, interior: false,
+                        belt_tier: Some(port_tier.to_string()), channel_id: 0,
+                    },
+                    ZoneBoundary {
+                        x: 11, y: 22, direction: EntityDirection::South,
+                        item: item.clone(), is_input: false, interior: false,
+                        belt_tier: Some(port_tier.to_string()), channel_id: 0,
+                    },
+                ],
+                forced_empty: vec![],
+            }
+        };
+        let reaches = [5];
+        let yellow_zone = mk_zone("transport-belt");
+
+        // Record a yellow-belt solution.
+        let yellow_solution = vec![
+            PlacedEntity {
+                name: "transport-belt".into(), x: 11, y: 20,
+                direction: EntityDirection::South,
+                carries: Some("iron-plate".into()),
+                ..Default::default()
+            },
+            PlacedEntity {
+                name: "underground-belt".into(), x: 11, y: 21,
+                direction: EntityDirection::South,
+                io_type: Some("input".into()),
+                carries: Some("iron-plate".into()),
+                ..Default::default()
+            },
+            PlacedEntity {
+                name: "underground-belt".into(), x: 11, y: 22,
+                direction: EntityDirection::South,
+                io_type: Some("output".into()),
+                carries: Some("iron-plate".into()),
+                ..Default::default()
+            },
+        ];
+        record_zone_with_solution(
+            &yellow_zone,
+            &reaches,
+            None,
+            ZoneStats { variables: 0, clauses: 0, solve_time_us: 0 },
+            &yellow_solution,
+            Some("test"),
+        );
+
+        // Same topology + reaches but boundaries declare red tier.
+        let red_zone = mk_zone("fast-transport-belt");
+        let red = lookup_zone(&red_zone, &reaches, None, "fast-transport-belt")
+            .expect("cache hit");
+        assert_eq!(red.len(), 3);
+        for e in &red {
+            match e.name.as_str() {
+                "fast-transport-belt" | "fast-underground-belt" => {}
+                other => panic!("expected red-tier name, got {other:?}"),
+            }
+        }
+
+        // Blue:
+        let blue_zone = mk_zone("express-transport-belt");
+        let blue = lookup_zone(&blue_zone, &reaches, None, "express-transport-belt")
+            .expect("cache hit");
+        for e in &blue {
+            match e.name.as_str() {
+                "express-transport-belt" | "express-underground-belt" => {}
+                other => panic!("expected blue-tier name, got {other:?}"),
+            }
+        }
+
+        // Same-tier lookup is a no-op rename.
+        let yellow_again = lookup_zone(&yellow_zone, &reaches, None, "transport-belt")
+            .expect("cache hit");
+        for e in &yellow_again {
+            match e.name.as_str() {
+                "transport-belt" | "underground-belt" => {}
+                other => panic!("expected yellow-tier name, got {other:?}"),
+            }
+        }
+    }
+
+    /// Mixed-tier zone: per-channel rename must respect each channel's own
+    /// tier, not the dominant/fallback tier.
+    #[test]
+    fn lookup_zone_respects_per_channel_tier() {
+        // Two channels: copper-plate on yellow, iron-plate on red. Both
+        // have reach 5 (artificially uniform — like Relaxed mode).
+        let mk_boundary = |x, y, dir, item: &str, tier: &str, ch: u32, is_in| ZoneBoundary {
+            x, y, direction: dir,
+            item: item.to_string(),
+            is_input: is_in, interior: false,
+            belt_tier: Some(tier.to_string()),
+            channel_id: ch,
+        };
+        let zone = CrossingZone {
+            x: 0, y: 0, width: 3, height: 3,
+            boundaries: vec![
+                mk_boundary(1, 0, EntityDirection::South, "copper-plate", "transport-belt", 0, true),
+                mk_boundary(1, 2, EntityDirection::South, "copper-plate", "transport-belt", 0, false),
+                mk_boundary(0, 1, EntityDirection::East,  "iron-plate",   "fast-transport-belt", 1, true),
+                mk_boundary(2, 1, EntityDirection::East,  "iron-plate",   "fast-transport-belt", 1, false),
+            ],
+            forced_empty: vec![],
+        };
+        let reaches = [5, 5];
+
+        // Record stored entities under whatever tier names — we'll verify
+        // the rename does the right thing.
+        let solution = vec![
+            PlacedEntity {
+                name: "transport-belt".into(), x: 1, y: 0,
+                direction: EntityDirection::South,
+                carries: Some("copper-plate".into()),
+                ..Default::default()
+            },
+            PlacedEntity {
+                name: "express-transport-belt".into(), x: 0, y: 1,
+                direction: EntityDirection::East,
+                carries: Some("iron-plate".into()),
+                ..Default::default()
+            },
+        ];
+        record_zone_with_solution(
+            &zone,
+            &reaches,
+            None,
+            ZoneStats { variables: 0, clauses: 0, solve_time_us: 0 },
+            &solution,
+            Some("test"),
+        );
+
+        let out = lookup_zone(&zone, &reaches, None, "fast-transport-belt")
+            .expect("cache hit");
+        let copper = out.iter().find(|e| e.carries.as_deref() == Some("copper-plate")).unwrap();
+        let iron = out.iter().find(|e| e.carries.as_deref() == Some("iron-plate")).unwrap();
+        assert_eq!(copper.name, "transport-belt", "copper-plate channel should stay yellow");
+        assert_eq!(iron.name, "fast-transport-belt", "iron-plate channel should be red");
     }
 }

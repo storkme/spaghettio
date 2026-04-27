@@ -1783,6 +1783,40 @@ pub fn route_bus_ghost(
             spec_kinds.insert(key, crate::bus::junction::SpecKind::Belt);
         }
     }
+    // Fluid catch-up: `trunk_synth_paths` may contain keys for adjacent
+    // pipe columns (e.g. `trunk:petroleum-gas:20` next to a primary lane
+    // at column 19) that the per-lane loop above never names. Without
+    // explicit spec_kinds entries these default to `Belt`, slipping
+    // through every pipe filter (cluster construction, expand_bbox
+    // promotion, walker veto exclusion). Sweep every synth-path key
+    // whose path tiles all sit on pipe / pipe-to-ground entities and
+    // tag them as Pipe + Yellow tier + their item.
+    let pipe_tile_set: FxHashSet<(i32, i32)> = entities
+        .iter()
+        .filter(|e| matches!(e.name.as_str(), "pipe" | "pipe-to-ground"))
+        .map(|e| (e.x, e.y))
+        .collect();
+    for (key, path) in &trunk_synth_paths {
+        if spec_kinds.contains_key(key) {
+            continue;
+        }
+        let all_pipe = !path.is_empty()
+            && path.iter().all(|t| pipe_tile_set.contains(t));
+        if !all_pipe {
+            continue;
+        }
+        // Recover the item name from the key: "trunk:{item}:{x}".
+        let item = key
+            .strip_prefix("trunk:")
+            .and_then(|rest| rest.rsplit_once(':').map(|(item, _x)| item.to_string()))
+            .unwrap_or_default();
+        if item.is_empty() {
+            continue;
+        }
+        spec_items.insert(key.clone(), item);
+        spec_belt_tiers.insert(key.clone(), BeltTier::Yellow);
+        spec_kinds.insert(key.clone(), crate::bus::junction::SpecKind::Pipe);
+    }
 
     // -------------------------------------------------------------------------
     // Phases 1+2 of `docs/rfp-unified-belt-specs.md`: unify trunk+last-tap
@@ -2022,10 +2056,22 @@ pub fn route_bus_ghost(
         // Union of spec keys across every cluster tile. Scan
         // routed_paths directly so synthetic trunk keys (injected
         // above) are included alongside regular BeltSpec keys.
+        // Pipe specs are filtered out — the SAT solver doesn't model
+        // fluid flow, so pipes participate as forbidden tiles only
+        // (their entities are placed and become hard obstacles via
+        // `refresh_forbidden`'s obstacle pass). Including them here
+        // makes their in-bbox tiles get exempted as boundary ports
+        // and emitted as fluid flow boundaries SAT can't satisfy.
         let cluster_tiles: FxHashSet<(i32, i32)> = cluster.iter().copied().collect();
         let keys_at_tile: Vec<&str> = routed_paths
             .iter()
-            .filter(|(_, path)| path.iter().any(|t| cluster_tiles.contains(t)))
+            .filter(|(key, path)| {
+                path.iter().any(|t| cluster_tiles.contains(t))
+                    && !matches!(
+                        spec_kinds.get(key.as_str()),
+                        Some(crate::bus::junction::SpecKind::Pipe)
+                    )
+            })
             .map(|(key, _)| key.as_str())
             .collect();
 

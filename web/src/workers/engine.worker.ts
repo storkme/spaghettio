@@ -11,6 +11,7 @@ import wasmInit, {
   layout_traced,
   layout_streaming,
   parse_blueprint,
+  seed_zone_cache,
   validate_layout,
 } from "../wasm-pkg/fucktorio_wasm.js";
 import type {
@@ -50,7 +51,8 @@ type Request =
       regionId: number;
       budgetMs: number;
       maxIters: number;
-    };
+    }
+  | { id: number; method: "seedZoneCache"; bytes: Uint8Array };
 
 let ready: Promise<void> | null = null;
 
@@ -168,6 +170,9 @@ self.onmessage = async (e: MessageEvent<Request>) => {
         break;
       case "solveFixture":
         result = solve_fixture(req.fixtureJson, req.pinsJson);
+        break;
+      case "seedZoneCache":
+        result = seed_zone_cache(req.bytes);
         break;
       case "improveRegionStreaming": {
         // Streams SatImprovement events through the same batched channel

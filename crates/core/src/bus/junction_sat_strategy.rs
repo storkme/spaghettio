@@ -417,6 +417,18 @@ fn topology_boundaries(
 ) -> Vec<ZoneBoundary> {
     let mut boundaries: Vec<ZoneBoundary> = Vec::new();
 
+    // Pipes are obstacles, not flow destinations. A belt outputting
+    // toward a pipe tile (or fed from one) should NOT receive an
+    // interior boundary at that tile — the belt has to be re-routed
+    // (UG bypass) to skip the pipe, which is what the SAT zone is for.
+    // Without this exclusion, SAT receives a "belt must reach pipe"
+    // constraint and UNSATs.
+    let pipe_tiles: FxHashSet<(i32, i32)> = placed_entities
+        .iter()
+        .filter(|e| matches!(e.name.as_str(), "pipe" | "pipe-to-ground"))
+        .map(|e| (e.x, e.y))
+        .collect();
+
     // Phase 1: Walk every entity whose tile is inside bbox and FREE.
     for e in placed_entities {
         // Pipes / pipe-to-grounds are obstacles, never SAT-routable.
@@ -472,8 +484,10 @@ fn topology_boundaries(
                     belt_tier: external_tier,
                     channel_id: 0,
                 });
-            } else if forbidden.contains(&target) {
-                // Target is FIXED: interior OUT at the FIXED tile.
+            } else if forbidden.contains(&target) && !pipe_tiles.contains(&target) {
+                // Target is FIXED (and not a pipe): interior OUT at the
+                // FIXED tile. Pipe targets are excluded — the belt must
+                // bypass them, not flow into them.
                 boundaries.push(ZoneBoundary {
                     x: target.0,
                     y: target.1,
@@ -502,8 +516,15 @@ fn topology_boundaries(
                         belt_tier: feeder_belt_tier,
                         channel_id: 0,
                     });
-                } else if forbidden.contains(&hit.entity_tile) {
-                    // Feeder is FIXED: interior IN at the FIXED tile.
+                } else if forbidden.contains(&hit.entity_tile)
+                    && !pipe_tiles.contains(&hit.entity_tile)
+                {
+                    // Feeder is FIXED (and not a pipe): interior IN at
+                    // the FIXED tile. Pipe feeders are excluded — pipes
+                    // don't carry items, so this branch is unlikely to
+                    // fire for a pipe today (physical_feeder_hit
+                    // matches by `carries`), but the symmetric guard
+                    // keeps us robust if pipe handling changes.
                     boundaries.push(ZoneBoundary {
                         x: hit.entity_tile.0,
                         y: hit.entity_tile.1,
@@ -674,38 +695,19 @@ impl JunctionStrategy for SatStrategy {
         if !ctx.junction.specs.iter().any(|s| s.kind == SpecKind::Belt) {
             return None;
         }
-        // Belt-on-pipe avoidance: SAT's cost model (10 per UG pair vs
-        // 2 per belt-tile traversal) consistently prefers a 2-tile
-        // surface solution over `bridge_belt_over_pipe`'s UG bypass,
-        // even though the SAT solution silently overstamps the pipe
-        // tile (the boundary entity-list machinery doesn't faithfully
-        // honor `forced_empty` for tiles right next to UG-input
-        // boundaries — see ghost_router.rs:2308 panic). Defer any
-        // junction containing a pipe spec to the perpendicular
-        // template strategy, whose `bridge_belt_over_pipe` knows how
-        // to span multi-pipe runs without touching pipe tiles.
-        if ctx.junction.specs.iter().any(|s| s.kind == SpecKind::Pipe) {
-            return None;
-        }
-        // Belt-on-pipe avoidance, second backstop: even when the pipe
-        // spec was dropped from `participating` by `expand_bbox`'s
-        // strict_range filter (a 1-tile in-bbox presence collapses
-        // start==end and the pipe's frontier is silently dropped),
-        // there's still a pipe entity sitting on the surface inside
-        // the bbox. SAT's `forced_empty` mechanism is supposed to
-        // keep belts off it, but boundary-port handling and SAT's
-        // cost minimum sometimes route through the tile anyway,
-        // panicking the post-place loop with `AlreadyClaimed` over
-        // a Permanent pipe. Bail outright when ANY pipe entity sits
-        // inside the bbox — `bridge_belt_over_pipe` is the only
-        // strategy entitled to plan around pipes.
-        let bbox = &ctx.junction.bbox;
-        let any_pipe_in_bbox = ctx.placed_entities.iter().any(|e| {
-            bbox.contains(e.x, e.y) && (e.name == "pipe" || e.name == "pipe-to-ground")
-        });
-        if any_pipe_in_bbox {
-            return None;
-        }
+        // Pipe specs no longer participate in the junction (they're
+        // filtered at the cluster-construction site in ghost_router.rs).
+        // Pipe entities in the bbox sit in `forbidden_tiles` (via
+        // `refresh_forbidden`'s obstacle pass — they no longer get
+        // exempted as boundary ports), and `topology_boundaries` skips
+        // entities at forbidden tiles. So SAT receives no fluid
+        // boundaries to satisfy and `forced_empty` keeps belts off the
+        // pipe tiles. The two historical bails this used to perform
+        // (any pipe spec in junction; any pipe entity in bbox) are
+        // both dead now: the first can't fire (filter excludes pipes
+        // from junction.specs), and the second was a backstop against
+        // a forced_empty leak that doesn't trigger when pipe tiles
+        // aren't adjacent to a participating spec's boundary port.
 
         // Dominant belt tier across participating specs. If a junction
         // carries both yellow and red specs we use red (faster) so the
@@ -860,10 +862,15 @@ impl JunctionStrategy for SatStrategy {
         // pre-baked cache embedded at compile time; native loads from
         // `~/.cache/fucktorio/sat-zones.bin`. Both honour
         // `FUCKTORIO_USE_ZONE_CACHE=0` to disable on native.
-        let cached_hit: Option<Vec<crate::models::PlacedEntity>> =
-            crate::zone_cache::lookup_zone(&zone, &channel_reaches, self.constraints.max_ug_ins);
+        let cached_hit: Option<Vec<crate::models::PlacedEntity>> = crate::zone_cache::lookup_zone(
+            &zone,
+            &channel_reaches,
+            self.constraints.max_ug_ins,
+            belt_name,
+        );
 
         if let Some(cached_entities) = cached_hit {
+            let cached_count = cached_entities.len();
             let proposed_entities: Vec<SatProposedEntity> = cached_entities
                 .iter()
                 .map(|e| SatProposedEntity {
@@ -892,7 +899,7 @@ impl JunctionStrategy for SatStrategy {
                 variables: 0,
                 clauses: 0,
                 solve_time_us: 0,
-                entities_raw: cached_entities.len(),
+                entities_raw: cached_count,
                 initial_cost: Some(crate::bus::junction_cost::solution_cost(&cached_entities)),
                 proposed_entities,
             });
@@ -903,23 +910,42 @@ impl JunctionStrategy for SatStrategy {
                 zone.x,
                 zone.y,
             );
-            return Some(JunctionSolution {
-                entities: pruned,
-                footprint: Rect {
-                    x: zone.x,
-                    y: zone.y,
-                    w: zone.width,
-                    h: zone.height,
-                },
-                strategy_name: self.name(),
-                participating: ctx.region.participating.clone(),
-                sat_zone: Some(crate::bus::junction_solver::SatZoneSnapshot {
-                    boundaries: boundaries.clone(),
-                    forced_empty: zone.forced_empty.clone(),
-                    belt_tier: belt_name.to_string(),
-                    max_ug_reach: max_reach,
-                }),
-            });
+            // Defensive cache validation: if the cached entry had entities
+            // but pruning dropped them all, the cached entry doesn't form
+            // an input→output path under the current zone's boundaries.
+            // This indicates a signature collision or a stale entry from
+            // before a layout change — treat as a cache miss and fall
+            // through to a fresh SAT solve. Without this, an empty
+            // pruned result becomes a 0-cost candidate that wins the
+            // pick-cheapest race over a real 5-entity solve, leaving the
+            // zone visibly empty.
+            if pruned.is_empty() && cached_count > 0 && !boundaries.is_empty() {
+                trace::emit(TraceEvent::SatPruned {
+                    zone_x: zone.x,
+                    zone_y: zone.y,
+                    total: cached_count,
+                    kept: 0,
+                });
+                // Fall through to fresh SAT solve below.
+            } else {
+                return Some(JunctionSolution {
+                    entities: pruned,
+                    footprint: Rect {
+                        x: zone.x,
+                        y: zone.y,
+                        w: zone.width,
+                        h: zone.height,
+                    },
+                    strategy_name: self.name(),
+                    participating: ctx.region.participating.clone(),
+                    sat_zone: Some(crate::bus::junction_solver::SatZoneSnapshot {
+                        boundaries: boundaries.clone(),
+                        forced_empty: zone.forced_empty.clone(),
+                        belt_tier: belt_name.to_string(),
+                        max_ug_reach: max_reach,
+                    }),
+                });
+            }
         }
 
         let (entities_opt, stats) = crate::sat::solve_crossing_zone_per_channel(
@@ -1048,6 +1074,7 @@ impl JunctionStrategy for SatStrategy {
             None,
         );
 
+        let best_count = best.len();
         let pruned = prune_dangling_sat_entities(
             best,
             &boundaries,
@@ -1055,6 +1082,15 @@ impl JunctionStrategy for SatStrategy {
             zone.x,
             zone.y,
         );
+        // Same defensive guard as the cache-hit path: if SAT produced
+        // entities but pruning found none on a connected input→output
+        // path under these boundaries, the result is degenerate. A
+        // 0-entity solution would beat a real solve in `pick_cheapest`
+        // (cost 0) and leave the zone visibly empty. Reject as if SAT
+        // had returned UNSAT — the growth loop will keep trying.
+        if pruned.is_empty() && best_count > 0 && !boundaries.is_empty() {
+            return None;
+        }
 
         Some(JunctionSolution {
             entities: pruned,

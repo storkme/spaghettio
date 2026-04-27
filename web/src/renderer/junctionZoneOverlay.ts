@@ -45,11 +45,44 @@ export function renderJunctionZoneOverlay(
   const layer = new Container();
   const hits: Hit[] = [];
 
+  // First pass: collect every Solved cluster's terminal bbox. The
+  // ghost router's `corridor_handled` mechanism absorbs the crossing
+  // tiles of an earlier Capped cluster when a later Solved cluster's
+  // footprint covers them — so a Capped cluster whose seed tile sits
+  // inside any Solved cluster's bbox represents a junction that was
+  // *functionally resolved* by the successor, not a real failure.
+  // Drawing its amber border on top of the green Solved border just
+  // adds visual noise that misleads about layout health.
+  interface SolvedBox { x: number; y: number; w: number; h: number }
+  const solvedBoxes: SolvedBox[] = [];
+  for (const cluster of clusters) {
+    if (cluster.outcome.kind !== "Solved") continue;
+    const term = terminalIteration(cluster);
+    if (!term) continue;
+    const b = term.bbox;
+    if (b.w <= 0 || b.h <= 0) continue;
+    solvedBoxes.push({ x: b.x, y: b.y, w: b.w, h: b.h });
+  }
+  const seedAbsorbedBySolved = (sx: number, sy: number): boolean => {
+    for (const b of solvedBoxes) {
+      if (sx >= b.x && sx < b.x + b.w && sy >= b.y && sy < b.y + b.h) {
+        return true;
+      }
+    }
+    return false;
+  };
+
   for (const cluster of clusters) {
     const term = terminalIteration(cluster);
     if (!term) continue;
     const b = term.bbox;
     if (b.w <= 0 || b.h <= 0) continue;
+    if (
+      cluster.outcome.kind === "Capped"
+      && seedAbsorbedBySolved(cluster.seed.x, cluster.seed.y)
+    ) {
+      continue;
+    }
 
     const pxX = b.x * TILE_PX;
     const pxY = b.y * TILE_PX;

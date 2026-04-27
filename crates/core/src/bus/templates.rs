@@ -11,8 +11,11 @@
 
 use crate::models::{EntityDirection, PlacedEntity};
 
-// LANE_SPLIT_GAP = 3 was deleted in the inline-bridge unification —
-// machines now pack tight with the bridge stamped inline.
+// Gap between machine groups when lane-splitting output belts.
+// 3 tiles: 1 for sideload target filler, 1 for through-belt filler,
+// 1 for the NORTH lift from group 2.
+// (LANE_SPLIT_GAP = 3 deleted in the inline-bridge unification —
+// machines now pack tight with the bridge stamped inline.)
 
 // Fluid port dx (relative to machine tile_position) for each machine type.
 fn fluid_input_port_dx(machine_entity: &str) -> i32 {

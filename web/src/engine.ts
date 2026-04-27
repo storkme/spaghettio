@@ -56,6 +56,61 @@ let nextId = 0;
 const pending = new Map<number, PendingEntry>();
 let activeStreamingId: number | null = null;
 
+// SAT crossing-zone cache persisted to localStorage. Seeded into the WASM
+// in-memory cache on boot via `seedZoneCache`; appended to whenever a
+// descent terminates with `SatOptimumProven`. Same wire format as
+// `crates/core/data/sat-zones.bin` — concatenated length-prefixed records.
+const SAT_CACHE_KEY = "fucktorio:sat-cache:v1";
+let satCacheBytes: Uint8Array<ArrayBufferLike> = new Uint8Array(0);
+
+function readSatCacheFromStorage(): Uint8Array<ArrayBufferLike> {
+  try {
+    const raw = localStorage.getItem(SAT_CACHE_KEY);
+    if (!raw) return new Uint8Array(0);
+    const binary = atob(raw);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  } catch (e) {
+    console.warn("[engine] could not read SAT cache from localStorage", e);
+    return new Uint8Array(0);
+  }
+}
+
+function writeSatCacheToStorage(bytes: Uint8Array): void {
+  // String.fromCharCode(...) blows the call-stack on large arrays, so chunk.
+  let binary = "";
+  const chunk = 8192;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunk)));
+  }
+  const b64 = btoa(binary);
+  try {
+    localStorage.setItem(SAT_CACHE_KEY, b64);
+  } catch (e) {
+    if (e instanceof DOMException && (e.name === "QuotaExceededError" || e.code === 22)) {
+      // Quota exceeded — drop everything and start over with the latest
+      // record. We've already lost the rest of the cache; logging and
+      // continuing keeps the session usable.
+      console.warn("[engine] SAT cache quota exceeded — clearing");
+      try {
+        localStorage.removeItem(SAT_CACHE_KEY);
+      } catch { /* ignore */ }
+      satCacheBytes = new Uint8Array(0);
+    } else {
+      console.warn("[engine] failed to persist SAT cache", e);
+    }
+  }
+}
+
+function appendSatCacheRecord(recordBytes: Uint8Array): void {
+  const next = new Uint8Array(satCacheBytes.length + recordBytes.length);
+  next.set(satCacheBytes, 0);
+  next.set(recordBytes, satCacheBytes.length);
+  satCacheBytes = next;
+  writeSatCacheToStorage(satCacheBytes);
+}
+
 let itemsCache: string[] = [];
 let machinesCache: string[] = [];
 let defaultMachineCache = new Map<string, string>();
@@ -136,6 +191,25 @@ export async function initEngine(): Promise<void> {
   };
 
   await call<null>({ method: "init" });
+
+  // Seed the SAT zone cache from localStorage before any solve goes out, so
+  // the very first layout pass can hit cached entries from prior sessions.
+  satCacheBytes = readSatCacheFromStorage();
+  if (satCacheBytes.length > 0) {
+    try {
+      const seeded = await call<number>({
+        method: "seedZoneCache",
+        bytes: satCacheBytes,
+      });
+      if ((globalThis as { __TRACE_LOGS?: boolean }).__TRACE_LOGS === true) {
+        // eslint-disable-next-line no-console
+        console.log(`[engine] seeded ${seeded} SAT zone records from localStorage`);
+      }
+    } catch (e) {
+      console.warn("[engine] seedZoneCache failed; persistence disabled this session", e);
+    }
+  }
+
   itemsCache = await call<string[]>({ method: "allProducibleItems" });
   machinesCache = await call<string[]>({ method: "allProducerMachines" });
   const defaults = await call<[string, string][]>({
@@ -348,9 +422,18 @@ async function improveRegion(
         reject(e);
       },
       onEvent: (evt) => {
-        const anyEvt = evt as unknown as { phase?: string; data?: SatImprovement };
+        const anyEvt = evt as unknown as { phase?: string; data?: unknown };
         if (anyEvt.phase === "SatImprovement" && anyEvt.data) {
-          onImprovement(anyEvt.data);
+          onImprovement(anyEvt.data as SatImprovement);
+        } else if (anyEvt.phase === "SatOptimumProven" && anyEvt.data) {
+          // Descent proved the current layout optimal. Persist the
+          // single-record binary blob to localStorage so next session
+          // hits the cache without re-running descent.
+          const data = anyEvt.data as { record_bytes: number[] | Uint8Array };
+          const bytes = data.record_bytes instanceof Uint8Array
+            ? data.record_bytes
+            : new Uint8Array(data.record_bytes);
+          appendSatCacheRecord(bytes);
         }
       },
     });
