@@ -3574,3 +3574,251 @@ fn diag_junction_caps_sweep() {
     // No assertion — purely diagnostic. The numbers above are the
     // baseline against which solver-reliability experiments are scored.
 }
+
+// ---------------------------------------------------------------------------
+// Curated wide sweep — only commits records from clean (zero errors AND
+// zero warnings) layouts.
+// ---------------------------------------------------------------------------
+
+/// Wide recipe × rate × belt × input sweep with per-combo curation.
+///
+/// Defers `flush()`, runs the layout, validates; on success (zero errors AND
+/// zero warnings) commits the buffered records, otherwise discards them.
+/// Result is a curated cache containing only junctions from layouts the
+/// validator considers fully sound.
+///
+/// Run with cache disabled so SAT actually runs and produces records:
+///   FUCKTORIO_USE_ZONE_CACHE=0 cargo test --release --test e2e -- \
+///       --ignored diag_curated_sweep --exact --nocapture
+#[test]
+#[ignore]
+fn diag_curated_sweep() {
+    use std::time::Instant as I;
+
+    struct Combo {
+        item: &'static str,
+        rate: f64,
+        belt: Option<&'static str>,
+        from_ore: bool,
+        from_crude: bool,
+    }
+
+    // (item, min_rate, max_rate, supports_from_ore, supports_from_crude).
+    // Tighter ceilings on deeper recipes that hit timeouts at high rates.
+    let cases: &[(&'static str, f64, f64, bool, bool)] = &[
+        ("iron-gear-wheel",          0.5, 20.0, true,  false),
+        ("copper-cable",             0.5, 20.0, true,  false),
+        ("transport-belt",           0.5, 10.0, true,  false),
+        ("electronic-circuit",       0.5, 20.0, true,  false),
+        ("plastic-bar",              0.5, 5.0,  false, true ),
+        ("sulfuric-acid",            0.5, 5.0,  false, false),
+        ("automation-science-pack",  0.5, 10.0, true,  false),
+        ("logistic-science-pack",    0.5, 5.0,  true,  false),
+        ("military-science-pack",    0.5, 3.0,  true,  false),
+        ("chemical-science-pack",    0.5, 3.0,  false, true ),
+        ("advanced-circuit",         0.5, 5.0,  false, false),
+    ];
+
+    let mut combos: Vec<Combo> = Vec::new();
+    for (item, lo, hi, supports_ore, supports_crude) in cases {
+        let mut r = *lo;
+        while r <= *hi + 1e-9 {
+            for belt in [None, Some("fast-transport-belt")] {
+                combos.push(Combo { item, rate: r, belt, from_ore: false, from_crude: false });
+                if *supports_ore {
+                    combos.push(Combo { item, rate: r, belt, from_ore: true, from_crude: false });
+                }
+                if *supports_crude {
+                    combos.push(Combo { item, rate: r, belt, from_ore: false, from_crude: true });
+                }
+            }
+            r += 0.5;
+        }
+    }
+
+    eprintln!("\n=== diag_curated_sweep: {} combinations ===", combos.len());
+
+    fucktorio_core::zone_cache::defer_flush(true);
+
+    let sweep_start = I::now();
+    let mut attempted = 0usize;
+    let mut clean = 0usize;
+    let mut dirty = 0usize;
+    let mut failed = 0usize;
+    let mut records_committed: u64 = 0;
+    let mut records_discarded: u64 = 0;
+
+    let mut by_recipe: std::collections::BTreeMap<&'static str, [usize; 3]> =
+        Default::default();
+    let mut warning_categories: std::collections::BTreeMap<String, usize> = Default::default();
+
+    for c in &combos {
+        attempted += 1;
+        let mut available_inputs = FxHashSet::default();
+        if c.from_ore {
+            available_inputs.insert("iron-ore".to_string());
+            available_inputs.insert("copper-ore".to_string());
+        }
+        if c.from_crude {
+            available_inputs.insert("crude-oil".to_string());
+        }
+
+        let test_name = format!(
+            "curated_{}_{:.1}s_{}{}",
+            c.item.replace('-', "_"),
+            c.rate,
+            c.belt.map(|b| if b == "fast-transport-belt" { "red" } else { "yel" }).unwrap_or("auto"),
+            if c.from_ore { "_ore" } else if c.from_crude { "_crude" } else { "" },
+        );
+
+        fucktorio_core::zone_cache::discard_pending();
+
+        let result = run_e2e(&test_name, c.item, c.rate, "assembling-machine-1", c.belt, &available_inputs);
+
+        match result {
+            Ok(r) if r.issues.is_empty() => {
+                let pending = fucktorio_core::zone_cache::pending_count() as u64;
+                fucktorio_core::zone_cache::defer_flush(false);
+                fucktorio_core::zone_cache::flush();
+                fucktorio_core::zone_cache::defer_flush(true);
+                records_committed += pending;
+                clean += 1;
+                by_recipe.entry(c.item).or_default()[0] += 1;
+            }
+            Ok(r) => {
+                let dropped = fucktorio_core::zone_cache::discard_pending() as u64;
+                records_discarded += dropped;
+                dirty += 1;
+                by_recipe.entry(c.item).or_default()[1] += 1;
+                for issue in &r.issues {
+                    *warning_categories.entry(issue.category.clone()).or_default() += 1;
+                }
+            }
+            Err(_) => {
+                fucktorio_core::zone_cache::discard_pending();
+                failed += 1;
+                by_recipe.entry(c.item).or_default()[2] += 1;
+            }
+        }
+
+        if attempted.is_multiple_of(50) {
+            eprintln!(
+                "  ...{}/{} ({} clean, {} dirty, {} failed; {} records committed, {} discarded)",
+                attempted, combos.len(), clean, dirty, failed,
+                records_committed, records_discarded,
+            );
+        }
+    }
+
+    fucktorio_core::zone_cache::defer_flush(false);
+
+    let elapsed_s = sweep_start.elapsed().as_secs_f64();
+    eprintln!(
+        "\nCurated sweep done in {:.1}s: {}/{} attempted, {} clean, {} dirty, {} failed",
+        elapsed_s, attempted, combos.len(), clean, dirty, failed,
+    );
+    eprintln!("  records: {} committed, {} discarded", records_committed, records_discarded);
+
+    eprintln!("\nPer-recipe breakdown:");
+    eprintln!("  {:<28} {:>6} {:>6} {:>6}", "recipe", "clean", "dirty", "failed");
+    for (recipe, counts) in &by_recipe {
+        eprintln!("  {:<28} {:>6} {:>6} {:>6}", recipe, counts[0], counts[1], counts[2]);
+    }
+
+    eprintln!("\nValidation issue categories on dirty combos:");
+    let mut cats: Vec<_> = warning_categories.iter().collect();
+    cats.sort_by(|a, b| b.1.cmp(a.1));
+    for (cat, count) in cats.iter().take(15) {
+        eprintln!("  {:<40} {:>6}", cat, count);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Sub-pattern palette miner — eyeball pass before hint injection lands
+// ---------------------------------------------------------------------------
+
+/// Read the on-disk + embedded SAT zone cache, mine sub-patterns, and print
+/// the top-N most frequent. Lets us see what kind of palette the
+/// recogniser would have to work with before we wire the SAT-hint path
+/// through `solve_crossing_zone_per_channel`.
+///
+/// Run with:
+///   cargo test --release --test e2e -- --ignored diag_mine_palette --exact --nocapture
+///
+/// Knob env vars (so we can sweep without recompiling):
+///   PALETTE_K_HOPS    — BFS radius (default 2)
+///   PALETTE_MIN_FREQ  — min #records a pattern must appear in (default 3)
+///   PALETTE_TOP       — how many to print (default 30)
+#[test]
+#[ignore]
+fn diag_mine_palette() {
+    use fucktorio_core::junction_palette::{mine_palette, DEFAULT_K_HOPS, DEFAULT_MIN_FREQ};
+    use fucktorio_core::zone_cache::{parse_records, DecodedRecord};
+
+    let k_hops: usize = std::env::var("PALETTE_K_HOPS")
+        .ok().and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_K_HOPS);
+    let min_freq: usize = std::env::var("PALETTE_MIN_FREQ")
+        .ok().and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_MIN_FREQ);
+    let top_n: usize = std::env::var("PALETTE_TOP")
+        .ok().and_then(|v| v.parse().ok())
+        .unwrap_or(30);
+
+    let mut records: Vec<DecodedRecord> = Vec::new();
+
+    let cache_path = std::env::var("FUCKTORIO_ZONE_CACHE_PATH")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            let base = std::env::var("XDG_CACHE_HOME").ok()
+                .filter(|s| !s.is_empty()).map(std::path::PathBuf::from)
+                .or_else(|| std::env::var("HOME").ok()
+                    .map(|h| std::path::PathBuf::from(h).join(".cache")))
+                .unwrap_or_else(|| std::path::PathBuf::from(".cache"));
+            base.join("fucktorio").join("sat-zones.bin")
+        });
+    if let Ok(bytes) = std::fs::read(&cache_path) {
+        records.extend(parse_records(&bytes));
+        eprintln!("loaded {} records from {}", records.len(), cache_path.display());
+    } else {
+        eprintln!("no on-disk cache at {} (skipping)", cache_path.display());
+    }
+
+    let embedded_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("data/sat-zones.bin");
+    if let Ok(bytes) = std::fs::read(&embedded_path) {
+        let n_before = records.len();
+        records.extend(parse_records(&bytes));
+        eprintln!("loaded {} records from {} (running total: {})",
+            records.len() - n_before, embedded_path.display(), records.len());
+    }
+
+    if records.is_empty() {
+        panic!("no records found — populate ~/.cache/fucktorio/sat-zones.bin via diag_corpus_sweep first");
+    }
+
+    let start = std::time::Instant::now();
+    let palette = mine_palette(&records, k_hops, min_freq);
+    let mining_ms = start.elapsed().as_millis();
+
+    eprintln!(
+        "\n=== palette miner: k_hops={}, min_freq={}, mined {} patterns from {} records in {}ms ===",
+        k_hops, min_freq, palette.len(), records.len(), mining_ms,
+    );
+    eprintln!("{:<5} {:>5} {:>5} {:>4} {:>5}  {}", "rank", "freq", "size", "wxh", "chans", "preview");
+    eprintln!("{}", "-".repeat(110));
+    for (rank, (pattern, freq)) in palette.iter().take(top_n).enumerate() {
+        let preview: String = pattern.entities.iter()
+            .map(|e| format!("({},{},{},{},{})", e.kind, e.x, e.y, e.dir, e.channel))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let preview = if preview.len() > 90 { format!("{}…", &preview[..89]) } else { preview };
+        eprintln!(
+            "{:<5} {:>5} {:>5} {:>2}x{:<2} {:>5}  {}",
+            rank + 1, freq, pattern.entities.len(), pattern.w, pattern.h, pattern.n_channels, preview,
+        );
+    }
+
+    if palette.len() > top_n {
+        eprintln!("... and {} more", palette.len() - top_n);
+    }
+}
