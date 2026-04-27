@@ -3317,3 +3317,98 @@ fn diag_curated_sweep() {
         eprintln!("  {:<40} {:>6}", cat, count);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Sub-pattern palette miner — eyeball pass before hint injection lands
+// ---------------------------------------------------------------------------
+
+/// Read the on-disk + embedded SAT zone cache, mine sub-patterns, and print
+/// the top-N most frequent. Lets us see what kind of palette the
+/// recogniser would have to work with before we wire the SAT-hint path
+/// through `solve_crossing_zone_per_channel`.
+///
+/// Run with:
+///   cargo test --release --test e2e -- --ignored diag_mine_palette --exact --nocapture
+///
+/// Knob env vars (so we can sweep without recompiling):
+///   PALETTE_K_HOPS    — BFS radius (default 2)
+///   PALETTE_MIN_FREQ  — min #records a pattern must appear in (default 3)
+///   PALETTE_TOP       — how many to print (default 30)
+#[test]
+#[ignore]
+fn diag_mine_palette() {
+    use fucktorio_core::junction_palette::{mine_palette, DEFAULT_K_HOPS, DEFAULT_MIN_FREQ};
+    use fucktorio_core::zone_cache::{parse_records, DecodedRecord};
+
+    let k_hops: usize = std::env::var("PALETTE_K_HOPS")
+        .ok().and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_K_HOPS);
+    let min_freq: usize = std::env::var("PALETTE_MIN_FREQ")
+        .ok().and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_MIN_FREQ);
+    let top_n: usize = std::env::var("PALETTE_TOP")
+        .ok().and_then(|v| v.parse().ok())
+        .unwrap_or(30);
+
+    // Pull records from disk cache (~/.cache) AND the embedded blob (in repo).
+    // Two sources because the disk one carries any locally-curated additions.
+    let mut records: Vec<DecodedRecord> = Vec::new();
+
+    // Disk: ~/.cache/fucktorio/sat-zones.bin (matches resolve_cache_path).
+    let cache_path = std::env::var("FUCKTORIO_ZONE_CACHE_PATH")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            let base = std::env::var("XDG_CACHE_HOME").ok()
+                .filter(|s| !s.is_empty()).map(std::path::PathBuf::from)
+                .or_else(|| std::env::var("HOME").ok()
+                    .map(|h| std::path::PathBuf::from(h).join(".cache")))
+                .unwrap_or_else(|| std::path::PathBuf::from(".cache"));
+            base.join("fucktorio").join("sat-zones.bin")
+        });
+    if let Ok(bytes) = std::fs::read(&cache_path) {
+        records.extend(parse_records(&bytes));
+        eprintln!("loaded {} records from {}", records.len(), cache_path.display());
+    } else {
+        eprintln!("no on-disk cache at {} (skipping)", cache_path.display());
+    }
+
+    // Embedded committed blob (always in repo, ground-truth corpus).
+    let embedded_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("data/sat-zones.bin");
+    if let Ok(bytes) = std::fs::read(&embedded_path) {
+        let n_before = records.len();
+        records.extend(parse_records(&bytes));
+        eprintln!("loaded {} records from {} (running total: {})",
+            records.len() - n_before, embedded_path.display(), records.len());
+    }
+
+    if records.is_empty() {
+        panic!("no records found — populate ~/.cache/fucktorio/sat-zones.bin via diag_corpus_sweep first");
+    }
+
+    let start = std::time::Instant::now();
+    let palette = mine_palette(&records, k_hops, min_freq);
+    let mining_ms = start.elapsed().as_millis();
+
+    eprintln!(
+        "\n=== palette miner: k_hops={}, min_freq={}, mined {} patterns from {} records in {}ms ===",
+        k_hops, min_freq, palette.len(), records.len(), mining_ms,
+    );
+    eprintln!("{:<5} {:>5} {:>5} {:>4} {:>5}  {}", "rank", "freq", "size", "wxh", "chans", "preview");
+    eprintln!("{}", "-".repeat(110));
+    for (rank, (pattern, freq)) in palette.iter().take(top_n).enumerate() {
+        // Compact preview: list of (kind, x, y, dir, ch) tuples.
+        let preview: String = pattern.entities.iter()
+            .map(|e| format!("({},{},{},{},{})", e.kind, e.x, e.y, e.dir, e.channel))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let preview = if preview.len() > 90 { format!("{}…", &preview[..89]) } else { preview };
+        eprintln!(
+            "{:<5} {:>5} {:>5} {:>2}x{:<2} {:>5}  {}",
+            rank + 1, freq, pattern.entities.len(), pattern.w, pattern.h, pattern.n_channels, preview,
+        );
+    }
+
+    if palette.len() > top_n {
+        eprintln!("... and {} more", palette.len() - top_n);
+    }
+}

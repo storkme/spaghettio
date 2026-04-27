@@ -650,6 +650,27 @@ pub enum TraceEvent {
         proposed_entities: Vec<SatProposedEntity>,
     },
 
+    /// Emitted by the future SAT-hint-injection path immediately before
+    /// the corresponding [`Self::SatInvocation`]. Captures what the
+    /// recogniser actually pinned for this zone so we can correlate
+    /// (in the diag harness) hint count → solver wall-clock & UNSAT rate.
+    ///
+    /// `palette_size` is the total catalogue size at the time of the
+    /// solve (constant across a single run); `hints_emitted` is how many
+    /// tiles got pinned. `fell_back` is set on the post-solve event when
+    /// hint-on solve returned UNSAT and we re-ran without hints.
+    SatHintInjection {
+        seed_x: i32,
+        seed_y: i32,
+        iter: usize,
+        zone_w: u32,
+        zone_h: u32,
+        palette_size: usize,
+        candidates_considered: usize,
+        hints_emitted: usize,
+        fell_back: bool,
+    },
+
     // Phase-1 instrumentation: emitted after all ghost specs are routed but
     // before crossing resolution. Reports per-tile axis occupancy so we can
     // see same-axis conflicts (Phase 2 negotiation target).

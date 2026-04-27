@@ -18,6 +18,7 @@ pub mod bus;
 pub mod common;
 pub mod density;
 pub mod fixture;
+pub mod junction_palette;
 pub mod models;
 pub mod recipe_db;
 pub mod sat;
