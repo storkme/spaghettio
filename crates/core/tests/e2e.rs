@@ -532,7 +532,7 @@ const GOLDEN_HASHES: &[(&str, &str)] = &[
     ("tier1_iron_gear_wheel_20s", "add07d75c26386616aa4b7d4abf7edd754a2231523598145e2f0fc2ecd3c8a2f"),
     ("tier2_electronic_circuit_from_ore", "85867c6174490364b8b08d6d94f300ab8f1d2da7ee1f12f559b324c25a88ff5b"),
     ("tier2_electronic_circuit_20s_from_ore", "1d63b9e0e1ddd93497845fe22773313efd615f3880bd29ae3f495604ac873306"),
-    ("tier2_electronic_circuit_splitter_stamp_regression", "c2ad6fac15ec0b90e28f9b72556d2143b793a362dc0cea08b846e9e9bf504d15"),
+    ("tier2_electronic_circuit_splitter_stamp_regression", "28e2d81aba961ebb4186e1ad6b935394c609ba6d8abed7fbe1cca39840dbcc5f"),
     ("tier3_plastic_bar", "7dc56ef4ecc86acba1780271ae319e8cffecee8cf286379b181672efe6aeccd8"),
     ("tier3_sulfuric_acid", "091765fa6a50b4438137e0500e32eb8378ed22224f9b58843070cb70d6561bcd"),
     ("tier3_heavy_oil_cracking", "e035b72e76cff247546b12ff47e264b8f9ae44e8cf9969107e45aad4690e1980"),
@@ -641,7 +641,6 @@ fn tier1_iron_gear_wheel_20s() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "After belt-permissive + splitter-topology + perpendicular-UG-in rule: SAT has an honest model of the iron+copper splitter flows and can't sideload into UG-ins. But SAT still satisfies iter 2 with a solution the reachability walker rejects (iron-plate tap doesn't reach (5,10) in the SAT placement), iter 3+ go UNSAT. Growth caps, original ghost layout ships with belt-item-isolation error. Remaining bug is in the SAT routing or walker reasoning — the splitter-topology change correctly forces (1,8) surface-belt feed instead of UG bypass, but something downstream still doesn't connect iron to its exit. Next to investigate."]
 #[ntest::timeout(10000)]
 fn tier2_electronic_circuit() {
     let inputs: FxHashSet<String> = ["iron-plate", "copper-plate"]
@@ -713,9 +712,7 @@ fn tier2_electronic_circuit_from_ore() {
     .unwrap_or_else(|e| panic!("tier2_electronic_circuit_from_ore: {e}"));
 
     assert_no_errors(&result);
-    // The `power` warning (27 disconnected poles) is a pre-existing layout-engine
-    // bug tracked separately — all belt-flow validator false-positives are fixed.
-    assert_no_warnings_except(&result, &["power"]);
+    assert_no_warnings(&result);
     assert_produces(&result, "electronic-circuit", 10.0);
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier2_electronic_circuit_from_ore");
@@ -739,9 +736,7 @@ fn tier2_electronic_circuit_20s_from_ore() {
     .unwrap_or_else(|e| panic!("tier2_electronic_circuit_20s_from_ore: {e}"));
 
     assert_no_errors(&result);
-    // The `power` warning (25 disconnected poles) is a pre-existing layout-engine
-    // bug tracked separately — all belt-flow validator false-positives are fixed.
-    assert_no_warnings_except(&result, &["power"]);
+    assert_no_warnings(&result);
     assert_produces(&result, "electronic-circuit", 20.0);
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier2_electronic_circuit_20s_from_ore");
@@ -912,9 +907,7 @@ fn tier4_advanced_circuit_from_plates() {
     .unwrap_or_else(|e| panic!("tier4_advanced_circuit_from_plates: {e}"));
 
     assert_no_errors(&result);
-    // Skip power-pole warning (#235) — pre-existing pole-placement bug
-    // affecting many layouts at this size.
-    assert_no_warnings_except(&result, &["power"]);
+    assert_no_warnings(&result);
     assert_produces(&result, "advanced-circuit", 1.0);
     assert_round_trip(&result);
 }
@@ -965,10 +958,7 @@ fn tier4_advanced_circuit_partitioned() {
          partitioner did not fire on the motivating case"
     );
     assert_no_errors(&result);
-    // Skip power-pole connectivity warnings — pre-existing pole-placement bug
-    // tracked in #235; affects this case (8 disconnected poles) the same way it
-    // affects `tier2_electronic_circuit_from_ore`.
-    assert_no_warnings_except(&result, &["power"]);
+    assert_no_warnings(&result);
 }
 
 /// Advanced circuit, rate 5/s, AM1, yellow belts, from raw ores + crude oil.

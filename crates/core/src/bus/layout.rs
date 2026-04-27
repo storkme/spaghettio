@@ -656,7 +656,13 @@ fn repair_pole_connectivity(
     placed: &FxHashSet<(i32, i32)>,
     occupied: &FxHashSet<(i32, i32)>,
 ) {
+    /// Wire reach in tiles. Matches `validate::power::MEDIUM_POLE_WIRE_REACH`.
+    /// Two poles are connected iff `dx² + dy² ≤ WIRE_REACH²` (Euclidean) —
+    /// using Chebyshev here as a proxy is a near-miss bug: poles 7 right and
+    /// 6 down are Chebyshev=7 (looks connected) but Euclidean≈9.22 (actually
+    /// disconnected per the validator).
     const WIRE_REACH: i32 = 9;
+    const WIRE_REACH_SQ: i32 = WIRE_REACH * WIRE_REACH;
 
     let mut all_occupied: FxHashSet<(i32, i32)> = occupied.iter().copied().collect();
     for &p in placed {
@@ -681,9 +687,9 @@ fn repair_pole_connectivity(
         }
         for i in 0..n {
             for j in (i + 1)..n {
-                let dx = (positions[i].0 - positions[j].0).abs();
-                let dy = (positions[i].1 - positions[j].1).abs();
-                if dx.max(dy) <= WIRE_REACH {
+                let dx = positions[i].0 - positions[j].0;
+                let dy = positions[i].1 - positions[j].1;
+                if dx * dx + dy * dy <= WIRE_REACH_SQ {
                     let ri = find(&mut parent, i);
                     let rj = find(&mut parent, j);
                     if ri != rj {
@@ -705,14 +711,18 @@ fn repair_pole_connectivity(
 
         // Find the closest inter-component pole pair.
         let comps: Vec<&Vec<(i32, i32)>> = by_comp.values().collect();
+        // Squared Euclidean for closest-pair selection — order is identical to
+        // Euclidean and we avoid sqrt.
         let mut best: Option<((i32, i32), (i32, i32), i32)> = None;
         for a in 0..comps.len() {
             for b in (a + 1)..comps.len() {
                 for &pa in comps[a] {
                     for &pb in comps[b] {
-                        let d = (pa.0 - pb.0).abs().max((pa.1 - pb.1).abs());
-                        if best.is_none_or(|(_, _, bd)| d < bd) {
-                            best = Some((pa, pb, d));
+                        let dx = pa.0 - pb.0;
+                        let dy = pa.1 - pb.1;
+                        let d_sq = dx * dx + dy * dy;
+                        if best.is_none_or(|(_, _, bd)| d_sq < bd) {
+                            best = Some((pa, pb, d_sq));
                         }
                     }
                 }
@@ -737,9 +747,12 @@ fn repair_pole_connectivity(
                         continue;
                     }
                     // Must be within wire-reach of pa or pb for it to actually bridge.
-                    let near_a = (p.0 - pa.0).abs().max((p.1 - pa.1).abs()) <= WIRE_REACH;
-                    let near_b = (p.0 - pb.0).abs().max((p.1 - pb.1).abs()) <= WIRE_REACH;
-                    if near_a || near_b {
+                    let near = |q: (i32, i32)| -> bool {
+                        let dx = p.0 - q.0;
+                        let dy = p.1 - q.1;
+                        dx * dx + dy * dy <= WIRE_REACH_SQ
+                    };
+                    if near(pa) || near(pb) {
                         bridge = Some(p);
                         break 'scan;
                     }
