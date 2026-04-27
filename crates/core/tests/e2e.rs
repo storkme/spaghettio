@@ -1682,119 +1682,41 @@ fn stress_electronic_circuit_30s_decomposed() {
     );
 }
 
-/// **Partition-strategy scoreboard** (K2-3 expanded).
-///
-/// Records current error counts for `Pooled`, `PartitionedPerConsumer`,
-/// and `PartitionedDecomposed` on a corpus of stress cases. The
-/// assertion gate is "no regression": if any actual count exceeds the
-/// recorded `expected`, the test fails. Counts are *current state*, not
-/// targets — when fixes drop them, tighten the constants in this file.
-///
-/// Why a scoreboard, not a `p2 ≤ p1` hard fail? At rates above the
-/// motivating PU@2/s ore red case, Phase 2 currently regresses on
-/// most plates-yellow configs (Cartesian-input blowup × low per-lane
-/// capacity). A hard gate would either hold the build hostage to
-/// multi-PR work, or force us to artificially mute by raising
-/// `SHARD_THRESHOLD_LANES`. The scoreboard lets us land Phase 2 with
-/// known regressions visible in CI and drive them down separately.
-///
-/// Each `expected` triple is `(pool, p1, p2)`. Test fails on any
-/// `actual[i] > expected[i]`. Equality is fine; lower than expected
-/// means a fix landed and the gate should be tightened.
-#[test]
-#[ntest::timeout(600000)]
-fn partition_strategy_scoreboard() {
+/// One row of the partition-strategy scoreboard. Fields mirror what
+/// `run_e2e_with_strategy` needs, plus the `(Pool, P1, P2)` expected
+/// error counts for the regression gate.
+struct ScoreboardCase {
+    name: &'static str,
+    item: &'static str,
+    rate: f64,
+    machine: &'static str,
+    belt: Option<&'static str>,
+    inputs: &'static [&'static str],
+    /// Expected error counts: (Pool, PartitionedPerConsumer,
+    /// PartitionedDecomposed). Test fails if any actual > expected.
+    expected: (usize, usize, usize),
+}
+
+/// Run the partition-strategy scoreboard over `cases`. Asserts no
+/// strategy's error count regressed beyond its recorded expected;
+/// suggests tightening when actuals improve. Test name is the
+/// `test_name` passed to `run_e2e_with_strategy` for snapshot output.
+fn run_partition_scoreboard(test_name: &str, cases: &[ScoreboardCase]) {
     use fucktorio_core::bus::layout::LayoutStrategy;
-
-    struct Case {
-        name: &'static str,
-        item: &'static str,
-        rate: f64,
-        machine: &'static str,
-        belt: Option<&'static str>,
-        inputs: &'static [&'static str],
-        /// Expected error counts: (Pool, PartitionedPerConsumer,
-        /// PartitionedDecomposed). Test fails if any actual > expected.
-        expected: (usize, usize, usize),
-    }
-    const CASES: &[Case] = &[
-        // Original K2-3 cases (PU@2/s parity, AC@5/s P1 baseline).
-        Case {
-            name: "PU@2/s ore red",
-            item: "processing-unit", rate: 2.0, machine: "assembling-machine-3",
-            belt: Some("fast-transport-belt"),
-            inputs: &["iron-ore", "copper-ore", "coal", "water", "crude-oil"],
-            // 14 → 7 across all strategies after merging main
-            // (clean-slate SAT zone release in #480442a).
-            expected: (7, 7, 7),
-        },
-        Case {
-            name: "AC@5/s plates yellow",
-            item: "advanced-circuit", rate: 5.0, machine: "assembling-machine-2",
-            belt: Some("transport-belt"),
-            inputs: &["iron-plate", "copper-plate", "coal", "crude-oil", "water"],
-            expected: (5, 9, 9),
-        },
-        // Expanded corpus (added 2026-04-27 from probe data). Documents
-        // the regressions Phase 2 introduces at higher rates and on
-        // yellow-belt configs. These are the hit list for follow-up
-        // PRs; don't loosen the numbers, drive them down.
-        Case {
-            name: "PU@2/s plates yellow",
-            item: "processing-unit", rate: 2.0, machine: "assembling-machine-2",
-            belt: Some("transport-belt"),
-            inputs: &[
-                "iron-plate", "copper-plate", "steel-plate", "stone",
-                "coal", "water", "crude-oil",
-            ],
-            // P1 still wins small (30 → 28); P2 still regresses (38 → 80)
-            // — `MAX_SHARDS_PER_MODULE = 3` cuts the worst sharding but
-            // 3-shard cases still multiply consumer rows here.
-            expected: (30, 28, 80),
-        },
-        Case {
-            name: "PU@3/s ore red",
-            item: "processing-unit", rate: 3.0, machine: "assembling-machine-3",
-            belt: Some("fast-transport-belt"),
-            inputs: &["iron-ore", "copper-ore", "coal", "water", "crude-oil"],
-            // P2 still regresses 9 → 12 — the 22-lane shard at this rate
-            // is over the MAX_SHARDS=3 threshold and now stays as a
-            // single wide module, but other 3-shard cases multiply rows.
-            expected: (11, 9, 12),
-        },
-        Case {
-            name: "PU@3/s plates yellow",
-            item: "processing-unit", rate: 3.0, machine: "assembling-machine-2",
-            belt: Some("transport-belt"),
-            inputs: &[
-                "iron-plate", "copper-plate", "steel-plate", "stone",
-                "coal", "water", "crude-oil",
-            ],
-            // P2 dropped 129 → 95 with `MAX_SHARDS_PER_MODULE = 3` —
-            // the 29-lane copper-cable→EC module that was sharding
-            // into 4 (multiplying EC consumer rows 4×) now stays as
-            // one wide module, matching P1's behaviour. Remaining
-            // P1=P2 gap vs Pool is the wide-module utilization
-            // problem; needs balancer-template work (#136) or
-            // junction-solver capacity (RFP #241).
-            expected: (65, 95, 95),
-        },
-    ];
-
     let mut tighten: Vec<String> = Vec::new();
     let mut regressions: Vec<String> = Vec::new();
-    for case in CASES {
+    for case in cases {
         let inputs: FxHashSet<String> = case.inputs.iter().map(|s| s.to_string()).collect();
         let pool = run_e2e_with_strategy(
-            "partition_strategy_scoreboard", case.item, case.rate, case.machine,
+            test_name, case.item, case.rate, case.machine,
             case.belt, &inputs, LayoutStrategy::Pooled,
         ).unwrap_or_else(|e| panic!("{}: Pool e2e failed: {e}", case.name));
         let phase1 = run_e2e_with_strategy(
-            "partition_strategy_scoreboard", case.item, case.rate, case.machine,
+            test_name, case.item, case.rate, case.machine,
             case.belt, &inputs, LayoutStrategy::PartitionedPerConsumer,
         ).unwrap_or_else(|e| panic!("{}: Phase 1 e2e failed: {e}", case.name));
         let phase2 = run_e2e_with_strategy(
-            "partition_strategy_scoreboard", case.item, case.rate, case.machine,
+            test_name, case.item, case.rate, case.machine,
             case.belt, &inputs, LayoutStrategy::PartitionedDecomposed,
         ).unwrap_or_else(|e| panic!("{}: Phase 2 e2e failed: {e}", case.name));
         let pool_e = pool.issues.iter().filter(|i| i.severity == Severity::Error).count();
@@ -1835,8 +1757,106 @@ fn partition_strategy_scoreboard() {
     }
     if !regressions.is_empty() {
         let body = regressions.join("\n  - ");
-        panic!("partition_strategy_scoreboard regressions:\n  - {body}");
+        panic!("{test_name} regressions:\n  - {body}");
     }
+}
+
+/// **Partition-strategy scoreboard** (K2-3 fast core).
+///
+/// Two cases — PU@2/s ore red and AC@5/s plates yellow — chosen to fit
+/// inside CI's 90s nextest slow-timeout in debug-build mode. The fuller
+/// corpus (PU@2/s plates, PU@3/s ore, PU@3/s plates) lives in
+/// `partition_strategy_scoreboard_extended` behind `#[ignore]`.
+///
+/// Each `expected` triple is `(pool, p1, p2)`. Test fails on any
+/// `actual[i] > expected[i]`. Equality is fine; lower than expected
+/// means a fix landed and the gate should be tightened.
+#[test]
+#[ntest::timeout(600000)]
+fn partition_strategy_scoreboard() {
+    let cases: &[ScoreboardCase] = &[
+        ScoreboardCase {
+            name: "PU@2/s ore red",
+            item: "processing-unit", rate: 2.0, machine: "assembling-machine-3",
+            belt: Some("fast-transport-belt"),
+            inputs: &["iron-ore", "copper-ore", "coal", "water", "crude-oil"],
+            // 14 → 7 across all strategies after merging main
+            // (clean-slate SAT zone release in #480442a).
+            expected: (7, 7, 7),
+        },
+        ScoreboardCase {
+            name: "AC@5/s plates yellow",
+            item: "advanced-circuit", rate: 5.0, machine: "assembling-machine-2",
+            belt: Some("transport-belt"),
+            inputs: &["iron-plate", "copper-plate", "coal", "crude-oil", "water"],
+            expected: (5, 9, 9),
+        },
+    ];
+    run_partition_scoreboard("partition_strategy_scoreboard", cases);
+}
+
+/// **Partition-strategy scoreboard — extended corpus.**
+/// `#[ignore]`d because the three plates-yellow / 3/s cases together
+/// exceed CI's 90s nextest slow-timeout in debug-build mode (each
+/// case is ~50s of layout work, three strategies each). Run locally
+/// in release mode to track regressions on the harder corpus:
+///
+/// ```
+/// cargo test --manifest-path crates/core/Cargo.toml --release \
+///     --test e2e partition_strategy_scoreboard_extended \
+///     -- --ignored --exact --nocapture
+/// ```
+///
+/// These cases are the hit list for Phase 2 follow-up work — they
+/// document where decomposition currently regresses vs Phase 1 / Pool.
+/// Don't loosen the numbers, drive them down.
+#[test]
+#[ntest::timeout(600000)]
+#[ignore = "extended corpus exceeds CI debug-mode time budget; run locally with --release --ignored"]
+fn partition_strategy_scoreboard_extended() {
+    let cases: &[ScoreboardCase] = &[
+        ScoreboardCase {
+            name: "PU@2/s plates yellow",
+            item: "processing-unit", rate: 2.0, machine: "assembling-machine-2",
+            belt: Some("transport-belt"),
+            inputs: &[
+                "iron-plate", "copper-plate", "steel-plate", "stone",
+                "coal", "water", "crude-oil",
+            ],
+            // P1 still wins small (30 → 28); P2 still regresses (38 → 80)
+            // — `MAX_SHARDS_PER_MODULE = 3` cuts the worst sharding but
+            // 3-shard cases still multiply consumer rows here.
+            expected: (30, 28, 80),
+        },
+        ScoreboardCase {
+            name: "PU@3/s ore red",
+            item: "processing-unit", rate: 3.0, machine: "assembling-machine-3",
+            belt: Some("fast-transport-belt"),
+            inputs: &["iron-ore", "copper-ore", "coal", "water", "crude-oil"],
+            // P2 still regresses 9 → 12 — the 22-lane shard at this rate
+            // is over the MAX_SHARDS=3 threshold and now stays as a
+            // single wide module, but other 3-shard cases multiply rows.
+            expected: (11, 9, 12),
+        },
+        ScoreboardCase {
+            name: "PU@3/s plates yellow",
+            item: "processing-unit", rate: 3.0, machine: "assembling-machine-2",
+            belt: Some("transport-belt"),
+            inputs: &[
+                "iron-plate", "copper-plate", "steel-plate", "stone",
+                "coal", "water", "crude-oil",
+            ],
+            // P2 dropped 129 → 95 with `MAX_SHARDS_PER_MODULE = 3` —
+            // the 29-lane copper-cable→EC module that was sharding
+            // into 4 (multiplying EC consumer rows 4×) now stays as
+            // one wide module, matching P1's behaviour. Remaining
+            // P1=P2 gap vs Pool is the wide-module utilization
+            // problem; needs balancer-template work (#136) or
+            // junction-solver capacity (RFP #241).
+            expected: (65, 95, 95),
+        },
+    ];
+    run_partition_scoreboard("partition_strategy_scoreboard_extended", cases);
 }
 
 /// User's processing-unit @ 2/s URL config (vertical-split, AM2, fast belts).
