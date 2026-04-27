@@ -417,6 +417,18 @@ fn topology_boundaries(
 ) -> Vec<ZoneBoundary> {
     let mut boundaries: Vec<ZoneBoundary> = Vec::new();
 
+    // Pipes are obstacles, not flow destinations. A belt outputting
+    // toward a pipe tile (or fed from one) should NOT receive an
+    // interior boundary at that tile — the belt has to be re-routed
+    // (UG bypass) to skip the pipe, which is what the SAT zone is for.
+    // Without this exclusion, SAT receives a "belt must reach pipe"
+    // constraint and UNSATs.
+    let pipe_tiles: FxHashSet<(i32, i32)> = placed_entities
+        .iter()
+        .filter(|e| matches!(e.name.as_str(), "pipe" | "pipe-to-ground"))
+        .map(|e| (e.x, e.y))
+        .collect();
+
     // Phase 1: Walk every entity whose tile is inside bbox and FREE.
     for e in placed_entities {
         // Pipes / pipe-to-grounds are obstacles, never SAT-routable.
@@ -472,8 +484,10 @@ fn topology_boundaries(
                     belt_tier: external_tier,
                     channel_id: 0,
                 });
-            } else if forbidden.contains(&target) {
-                // Target is FIXED: interior OUT at the FIXED tile.
+            } else if forbidden.contains(&target) && !pipe_tiles.contains(&target) {
+                // Target is FIXED (and not a pipe): interior OUT at the
+                // FIXED tile. Pipe targets are excluded — the belt must
+                // bypass them, not flow into them.
                 boundaries.push(ZoneBoundary {
                     x: target.0,
                     y: target.1,
@@ -502,8 +516,15 @@ fn topology_boundaries(
                         belt_tier: feeder_belt_tier,
                         channel_id: 0,
                     });
-                } else if forbidden.contains(&hit.entity_tile) {
-                    // Feeder is FIXED: interior IN at the FIXED tile.
+                } else if forbidden.contains(&hit.entity_tile)
+                    && !pipe_tiles.contains(&hit.entity_tile)
+                {
+                    // Feeder is FIXED (and not a pipe): interior IN at
+                    // the FIXED tile. Pipe feeders are excluded — pipes
+                    // don't carry items, so this branch is unlikely to
+                    // fire for a pipe today (physical_feeder_hit
+                    // matches by `carries`), but the symmetric guard
+                    // keeps us robust if pipe handling changes.
                     boundaries.push(ZoneBoundary {
                         x: hit.entity_tile.0,
                         y: hit.entity_tile.1,
@@ -674,38 +695,19 @@ impl JunctionStrategy for SatStrategy {
         if !ctx.junction.specs.iter().any(|s| s.kind == SpecKind::Belt) {
             return None;
         }
-        // Belt-on-pipe avoidance: SAT's cost model (10 per UG pair vs
-        // 2 per belt-tile traversal) consistently prefers a 2-tile
-        // surface solution over `bridge_belt_over_pipe`'s UG bypass,
-        // even though the SAT solution silently overstamps the pipe
-        // tile (the boundary entity-list machinery doesn't faithfully
-        // honor `forced_empty` for tiles right next to UG-input
-        // boundaries — see ghost_router.rs:2308 panic). Defer any
-        // junction containing a pipe spec to the perpendicular
-        // template strategy, whose `bridge_belt_over_pipe` knows how
-        // to span multi-pipe runs without touching pipe tiles.
-        if ctx.junction.specs.iter().any(|s| s.kind == SpecKind::Pipe) {
-            return None;
-        }
-        // Belt-on-pipe avoidance, second backstop: even when the pipe
-        // spec was dropped from `participating` by `expand_bbox`'s
-        // strict_range filter (a 1-tile in-bbox presence collapses
-        // start==end and the pipe's frontier is silently dropped),
-        // there's still a pipe entity sitting on the surface inside
-        // the bbox. SAT's `forced_empty` mechanism is supposed to
-        // keep belts off it, but boundary-port handling and SAT's
-        // cost minimum sometimes route through the tile anyway,
-        // panicking the post-place loop with `AlreadyClaimed` over
-        // a Permanent pipe. Bail outright when ANY pipe entity sits
-        // inside the bbox — `bridge_belt_over_pipe` is the only
-        // strategy entitled to plan around pipes.
-        let bbox = &ctx.junction.bbox;
-        let any_pipe_in_bbox = ctx.placed_entities.iter().any(|e| {
-            bbox.contains(e.x, e.y) && (e.name == "pipe" || e.name == "pipe-to-ground")
-        });
-        if any_pipe_in_bbox {
-            return None;
-        }
+        // Pipe specs no longer participate in the junction (they're
+        // filtered at the cluster-construction site in ghost_router.rs).
+        // Pipe entities in the bbox sit in `forbidden_tiles` (via
+        // `refresh_forbidden`'s obstacle pass — they no longer get
+        // exempted as boundary ports), and `topology_boundaries` skips
+        // entities at forbidden tiles. So SAT receives no fluid
+        // boundaries to satisfy and `forced_empty` keeps belts off the
+        // pipe tiles. The two historical bails this used to perform
+        // (any pipe spec in junction; any pipe entity in bbox) are
+        // both dead now: the first can't fire (filter excludes pipes
+        // from junction.specs), and the second was a backstop against
+        // a forced_empty leak that doesn't trigger when pipe tiles
+        // aren't adjacent to a participating spec's boundary port.
 
         // Dominant belt tier across participating specs. If a junction
         // carries both yellow and red specs we use red (faster) so the

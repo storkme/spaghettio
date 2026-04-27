@@ -961,6 +961,92 @@ fn tier4_advanced_circuit_partitioned() {
     assert_no_warnings(&result);
 }
 
+/// Regression test for the pipe-as-port-tile bug. URL:
+/// `?item=advanced-circuit&rate=7&machine=assembling-machine-2&in=iron-plate,copper-plate,coal,water,crude-oil&belt=transport-belt&row_layout=horizontal-stack`
+///
+/// `HorizontalStack` places the petroleum-gas trunk in column 19, north-of
+/// the plastic-bar feeder in row 18. A SAT zone forms at (19,18) with the
+/// belt × pipe crossing. Before the fix, the petroleum-gas trunk was
+/// included in the participating set, which made `refresh_forbidden`
+/// classify its in-bbox tiles as boundary-port tiles (exempt from
+/// forbidden) and `junction_boundaries_to_snapshots` emit them as flow
+/// boundaries. SAT received bogus fluid boundaries it can't satisfy,
+/// `bridge_belt_over_pipe` got vetoed by an adjacent column-20 pipe, and
+/// the cluster capped — leaving an orphan plastic-bar belt that hits
+/// `belt-dead-end` / `orphan-belt-segment` validators.
+///
+/// The fix should make the layout produce a valid UG bypass: belt enters
+/// UG at (20,18) west, surfaces at (18,18) west, pipe at (19,18)
+/// untouched. No errors and no warnings.
+#[test]
+#[ntest::timeout(30000)]
+fn tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing() {
+    use fucktorio_core::bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy, RowLayout};
+
+    let inputs: FxHashSet<String> = ["iron-plate", "copper-plate", "coal", "water", "crude-oil"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let test_name = "tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing";
+    let _guard = trace::start_trace();
+
+    let solver_result = solver::solve("advanced-circuit", 7.0, &inputs, "assembling-machine-2")
+        .unwrap_or_else(|e| panic!("{test_name}: solver: {e}"));
+
+    let layout = build_bus_layout(
+        &solver_result,
+        LayoutOptions {
+            strategy: LayoutStrategy::Pooled,
+            max_belt_tier: Some("transport-belt".to_string()),
+            row_layout: RowLayout::HorizontalStack,
+        },
+    )
+    .unwrap_or_else(|e| panic!("{test_name}: layout: {e}"));
+
+    let issues = match validate::validate(&layout, Some(&solver_result), LayoutStyle::Bus) {
+        Ok(i) => i,
+        Err(e) => e.issues,
+    };
+
+    let trace_events = trace::drain_events();
+    let capped: Vec<_> = trace_events
+        .iter()
+        .filter_map(|e| match e {
+            TraceEvent::JunctionGrowthCapped { tile_x, tile_y, reason, .. } => {
+                Some((tile_x, tile_y, reason.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+
+    let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
+    let warnings: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Warning).collect();
+
+    let bad =
+        !errors.is_empty() || !warnings.is_empty() || !capped.is_empty();
+    if bad {
+        let cap_lines = capped
+            .iter()
+            .map(|(x, y, r)| format!("  capped at ({x},{y}) reason={r}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let err_lines = errors
+            .iter()
+            .map(|i| format!("  ERROR [{}] {}", i.category, i.message))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let warn_lines = warnings
+            .iter()
+            .map(|i| format!("  WARN  [{}] {}", i.category, i.message))
+            .collect::<Vec<_>>()
+            .join("\n");
+        panic!(
+            "{test_name}: belt-pipe SAT zone regression — \
+             expected zero capped clusters and a clean validation, got:\n{cap_lines}\n{err_lines}\n{warn_lines}"
+        );
+    }
+}
+
 /// Advanced circuit, rate 5/s, AM1, yellow belts, from raw ores + crude oil.
 /// This is the "hello-world fully-from-ore AC" goal — cheapest machine tier,
 /// cheapest belt tier, everything upstream of the factory is raw resources.

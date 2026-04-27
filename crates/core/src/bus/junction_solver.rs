@@ -185,6 +185,7 @@ impl GrowingRegion {
         strict_obstacles: &FxHashSet<(i32, i32)>,
         placed_entities: &[PlacedEntity],
         protected_balancer_tiles: &FxHashSet<(i32, i32)>,
+        spec_kinds: &FxHashMap<String, SpecKind>,
     ) -> bool {
         // Clamp each side so growth never crosses into a multi-splitter
         // balancer bbox. A side is zeroed if any tile in its new strip
@@ -283,6 +284,11 @@ impl GrowingRegion {
         let mut promoted: Vec<String> = Vec::new();
         for (key, path) in routed_paths {
             if kept_set.contains(key.as_str()) {
+                continue;
+            }
+            // Pipes never participate. See the matching filter at the
+            // cluster-construction site in ghost_router.rs.
+            if matches!(spec_kinds.get(key.as_str()), Some(SpecKind::Pipe)) {
                 continue;
             }
             let Some(range) = strict_range(path) else {
@@ -437,6 +443,21 @@ impl GrowingRegion {
         // contribute their first+last in-bbox tiles. Without this, SAT
         // rejects zones whose boundary ports land on tiles occupied by
         // Permanent feeders.
+        //
+        // Tiles occupied by pipe / pipe-to-ground entities are *not*
+        // exempted. SAT doesn't model fluid flow, so a pipe tile is
+        // never a valid port — it's an obstacle the belt must route
+        // around. Without this filter, a participating fluid trunk's
+        // in-bbox tiles bleed into `port_tiles`, get skipped by the
+        // obstacle pass, and end up looking like flow boundaries that
+        // SAT can't satisfy. The user-visible symptom is a SAT zone
+        // failing UNSAT with bogus fluid boundaries instead of treating
+        // the pipe as a forbidden tile to tunnel under.
+        let pipe_tiles: FxHashSet<(i32, i32)> = placed_entities
+            .iter()
+            .filter(|e| matches!(e.name.as_str(), "pipe" | "pipe-to-ground"))
+            .map(|e| (e.x, e.y))
+            .collect();
         let mut port_tiles: FxHashSet<(i32, i32)> = self
             .frontiers
             .iter()
@@ -444,12 +465,17 @@ impl GrowingRegion {
                 routed_paths.get(key).map(|p| (p, start, end))
             })
             .flat_map(|(p, start, end)| [p[start], p[end]])
+            .filter(|t| !pipe_tiles.contains(t))
             .collect();
         for key in &self.encountered {
             if let Some(path) = routed_paths.get(key) {
                 if let Some((start, end)) = path_bbox_range(path, &self.bbox) {
-                    port_tiles.insert(path[start]);
-                    port_tiles.insert(path[end]);
+                    if !pipe_tiles.contains(&path[start]) {
+                        port_tiles.insert(path[start]);
+                    }
+                    if !pipe_tiles.contains(&path[end]) {
+                        port_tiles.insert(path[end]);
+                    }
                 }
             }
         }
@@ -610,6 +636,12 @@ impl GrowingRegion {
         // indices; intermediate excursions are collapsed (acceptable —
         // SAT isn't obliged to mirror the ghost-router path exactly).
         for key in &self.encountered {
+            // Pipes never become SAT-routed flows — their tiles sit in
+            // `forbidden_tiles` for the strategies to plan around. Skip
+            // them here so junction.specs holds only belt specs.
+            if matches!(spec_kinds.get(key), Some(SpecKind::Pipe)) {
+                continue;
+            }
             let Some(path) = routed_paths.get(key) else {
                 continue;
             };
@@ -1091,6 +1123,7 @@ pub fn solve_crossing(
                 strict_obstacles,
                 placed_entities,
                 solve_ctx.protected_balancer_tiles,
+                solve_ctx.spec_kinds,
             );
             if !changed {
                 continue;
@@ -1147,6 +1180,7 @@ pub fn solve_crossing(
                 strict_obstacles,
                 placed_entities,
                 solve_ctx.protected_balancer_tiles,
+                solve_ctx.spec_kinds,
             ),
             None => {
                 let after_uniform =
@@ -1167,6 +1201,7 @@ pub fn solve_crossing(
                     strict_obstacles,
                     placed_entities,
                     solve_ctx.protected_balancer_tiles,
+                    solve_ctx.spec_kinds,
                 )
             }
         };
