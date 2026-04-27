@@ -1823,10 +1823,11 @@ fn partition_strategy_scoreboard_extended() {
                 "iron-plate", "copper-plate", "steel-plate", "stone",
                 "coal", "water", "crude-oil",
             ],
-            // P1 still wins small (30 → 28); P2 still regresses (38 → 80)
-            // — `MAX_SHARDS_PER_MODULE = 3` cuts the worst sharding but
-            // 3-shard cases still multiply consumer rows here.
-            expected: (30, 28, 80),
+            // P2 dropped 80 → 41 after the balancer-decomposition fix
+            // (refusing sub-templates wider than sub_m). Was: three
+            // (5,1) balancers stamped on top of each other for
+            // electronic-circuit's (15,3) family. P1 still wins (28).
+            expected: (30, 28, 41),
         },
         ScoreboardCase {
             name: "PU@3/s ore red",
@@ -1846,14 +1847,12 @@ fn partition_strategy_scoreboard_extended() {
                 "iron-plate", "copper-plate", "steel-plate", "stone",
                 "coal", "water", "crude-oil",
             ],
-            // P2 dropped 129 → 95 with `MAX_SHARDS_PER_MODULE = 3` —
-            // the 29-lane copper-cable→EC module that was sharding
-            // into 4 (multiplying EC consumer rows 4×) now stays as
-            // one wide module, matching P1's behaviour. Remaining
-            // P1=P2 gap vs Pool is the wide-module utilization
-            // problem; needs balancer-template work (#136) or
-            // junction-solver capacity (RFP #241).
-            expected: (65, 95, 95),
+            // All three strategies dropped sharply (Pool 65→44, P1 95→45,
+            // P2 95→45) after the balancer-decomposition fix —
+            // overlapping (5,1) sub-stamps were corrupting layouts
+            // even under Pool. P1=P2 here because Phase 2's K=1 sharding
+            // doesn't fire on items already covered by Phase 1.
+            expected: (44, 45, 45),
         },
     ];
     run_partition_scoreboard("partition_strategy_scoreboard_extended", cases);
