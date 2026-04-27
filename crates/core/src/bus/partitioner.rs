@@ -299,10 +299,21 @@ pub fn plan_partitioning(
     plan
 }
 
-/// Phase 2 sub-pass: replace each `lane_count > 8` module with N
-/// proportional shards. Module IDs are reassigned to keep them dense
-/// per item (0..N for each item's modules combined). Emits
-/// `ShardSplit` traces.
+/// Lane count below which we skip Phase 2 sharding even though the
+/// module is over the 8-lane cap. The bus engine's downstream balancer
+/// `decompose` fallback handles 9-10 lane modules cleanly via existing
+/// templates (e.g. (10, 10) decomposes as 2 × (5, 5)), so sharding
+/// these adds spec-multiplication overhead without a meaningful SAT-
+/// zone-shrink win — and PU@2/s ore red specifically shows a regression
+/// vs Phase 1 when 10-lane modules get sharded. Sharding kicks in at
+/// 11+ lanes where the balancer library starts to thin out and the
+/// SAT-zone shrink is more substantial. Tuned empirically against the
+/// stress corpus; revisit if new stress cases shift the trade-off.
+const SHARD_THRESHOLD_LANES: u32 = 10;
+
+/// Phase 2 sub-pass: replace modules with `lane_count > SHARD_THRESHOLD_LANES`
+/// with N proportional shards. Module IDs are reassigned dense per
+/// item (0..N across all modules combined). Emits `ShardSplit` traces.
 fn decompose_oversized_modules(
     modules: Vec<ModuleAssignment>,
     cap: f64,
@@ -318,7 +329,7 @@ fn decompose_oversized_modules(
         let item_modules = by_item.remove(&item).unwrap_or_default();
         let mut next_module_id: u32 = 0;
         for m in item_modules {
-            if m.lane_count <= 8 {
+            if m.lane_count <= SHARD_THRESHOLD_LANES {
                 let mut keep = m;
                 keep.module_id = next_module_id;
                 next_module_id += 1;
@@ -391,8 +402,8 @@ fn decompose_single_consumer_items(
         }
         let (recipe, rate) = by_recipe.into_iter().next().unwrap();
         let lane_count = (rate / cap).ceil().max(1.0) as u32;
-        if lane_count <= 8 {
-            continue; // fits without sharding
+        if lane_count <= SHARD_THRESHOLD_LANES {
+            continue; // fits without sharding (see SHARD_THRESHOLD_LANES doc)
         }
         let n_shards = lane_count.div_ceil(8) as usize;
         let lanes_per_shard: Vec<usize> = (0..n_shards)

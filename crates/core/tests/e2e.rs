@@ -1590,6 +1590,73 @@ fn stress_electronic_circuit_30s_decomposed() {
     );
 }
 
+/// **Phase 2 non-regression vs Phase 1** (K2-3 by analogy with K1-4).
+/// Asserts PartitionedDecomposed produces no more errors than
+/// PartitionedPerConsumer on each stress case in the corpus. Phase 2's
+/// strictly an opt-in optimisation over Phase 1; if shading produces
+/// MORE errors on any case, the algorithm has a bug or the
+/// `SHARD_THRESHOLD_LANES` heuristic is too aggressive.
+///
+/// Today's corpus targets:
+///   - `processing-unit @ 2/s ore red` — was the original regression
+///     case (Phase 1 13E, early Phase 2 produced 15E by sharding a
+///     10-lane module). Threshold tuned to skip ≤10 lanes.
+///   - `advanced-circuit @ 5/s plates yellow` — Phase 1 baseline;
+///     Phase 2 has nothing to do here (no >10-lane modules).
+///
+/// Adding more cases tightens the gate. K1-1-style strict-improvement
+/// signals (Phase 2 < Phase 1) live in their own per-case tests
+/// (`stress_electronic_circuit_30s_decomposed`).
+#[test]
+#[ntest::timeout(600000)]
+fn phase2_no_regression_vs_phase1() {
+    use fucktorio_core::bus::layout::LayoutStrategy;
+
+    struct Case {
+        name: &'static str,
+        item: &'static str,
+        rate: f64,
+        machine: &'static str,
+        belt: Option<&'static str>,
+        inputs: &'static [&'static str],
+    }
+    const CASES: &[Case] = &[
+        Case {
+            name: "PU@2/s ore red",
+            item: "processing-unit", rate: 2.0, machine: "assembling-machine-3",
+            belt: Some("fast-transport-belt"),
+            inputs: &["iron-ore", "copper-ore", "coal", "water", "crude-oil"],
+        },
+        Case {
+            name: "AC@5/s plates yellow",
+            item: "advanced-circuit", rate: 5.0, machine: "assembling-machine-2",
+            belt: Some("transport-belt"),
+            inputs: &["iron-plate", "copper-plate", "coal", "crude-oil", "water"],
+        },
+    ];
+
+    for case in CASES {
+        let inputs: FxHashSet<String> = case.inputs.iter().map(|s| s.to_string()).collect();
+        let phase1 = run_e2e_with_strategy(
+            "phase2_no_regression_vs_phase1", case.item, case.rate, case.machine,
+            case.belt, &inputs, LayoutStrategy::PartitionedPerConsumer,
+        ).unwrap_or_else(|e| panic!("{}: Phase 1 e2e failed: {e}", case.name));
+        let phase2 = run_e2e_with_strategy(
+            "phase2_no_regression_vs_phase1", case.item, case.rate, case.machine,
+            case.belt, &inputs, LayoutStrategy::PartitionedDecomposed,
+        ).unwrap_or_else(|e| panic!("{}: Phase 2 e2e failed: {e}", case.name));
+        let p1_errs = phase1.issues.iter().filter(|i| i.severity == Severity::Error).count();
+        let p2_errs = phase2.issues.iter().filter(|i| i.severity == Severity::Error).count();
+        assert!(
+            p2_errs <= p1_errs,
+            "{}: Phase 2 regressed vs Phase 1 — phase1={} phase2={} errors. \
+             Either the partitioner sharded a case that doesn't benefit, or a \
+             new layout-engine bug surfaced from the duplicate-recipe path.",
+            case.name, p1_errs, p2_errs,
+        );
+    }
+}
+
 /// User's processing-unit @ 2/s URL config (vertical-split, AM2, fast belts).
 /// Tracks the validator-error baseline so regressions in the fluid-trunk
 /// router, output-merger, or balancer-stamp logic surface immediately. The
