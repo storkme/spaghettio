@@ -28,6 +28,7 @@ use crate::bus::lane_planner::{BusLane, LaneFamily, MACHINE_ENTITIES};
 use crate::bus::output_merger::merge_output_rows;
 use crate::bus::trunk_renderer::{is_intermediate, render_path, trunk_segments};
 use crate::bus::junction::{BeltTier, Rect};
+use crate::bus::eviction::EvictionStrategy;
 use crate::bus::junction_sat_strategy::SatStrategy;
 use crate::bus::junction_solver::{
     self, JunctionSolution, JunctionStrategy, JunctionStrategyContext,
@@ -1975,7 +1976,8 @@ pub fn route_bus_ghost(
     //   6-8. SAT with increasing UG budget at RELAXED reach (zone's
     //        max tier). Fallback for zones that genuinely can't route
     //        under tight per-tier reach.
-    let strategies: [&dyn JunctionStrategy; 8] = [
+    let eviction_strategy = EvictionStrategy::default_recipes();
+    let strategies: [&dyn JunctionStrategy; 9] = [
         &perp_strategy,
         &sat_surface,
         &sat_1ug_native,
@@ -1984,6 +1986,11 @@ pub fn route_bus_ghost(
         &sat_1ug,
         &sat_2ug,
         &sat_full,
+        // Eviction runs only after every SAT variant returned UNSAT.
+        // Each recipe pulls one or more participating specs out of the
+        // SAT problem (geometrically or via A*), then re-invokes SAT on
+        // the reduced spec set.
+        &eviction_strategy,
     ];
 
     // Group adjacent crossings that share a spec into a single cluster
