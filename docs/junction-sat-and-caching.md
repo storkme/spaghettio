@@ -458,21 +458,92 @@ Whether that translates to wall-clock wins depends on whether the
 pins are *correct* — see §7 for the validity-check work that's still
 needed before real injection.
 
+### Real injection A/B (cache off, e2e subset, both passes in-process)
+
+This is what happens when we actually pin the recognised hints and
+let SAT run with them. Cache is OFF for both passes so every junction
+goes through fresh SAT (or hint-injected SAT).
+
+```
+                  wall_ms     sat_ms
+  hints OFF       1084.5      119.3
+  hints ON        1204.4      119.8
+  delta            11.1%       0.4%
+```
+
+Per case (the stress 60s one is the most informative):
+
+```
+  case                    wall_ms   sat_ms  calls  hints   fb
+  ab_stress_60s_red_ore     732.6     98.5   548    —      —    (off)
+  ab_stress_60s_red_ore_h   948.0     98.2   548   1564   208   (on)
+```
+
+Three honest read-outs:
+
+1. **Hints don't reduce SAT time** at all (119.3 → 119.8 ms total). The
+   pinned tiles are mostly ones SAT was already figuring out via unit
+   propagation in microseconds — pinning them externally doesn't shorten
+   the search.
+2. **Hints add 11% wall-clock** of pure recogniser overhead. The
+   palette × positions × transforms loop is per-zone and the constant
+   doesn't amortise.
+3. **38% fall-back rate** on the stress case (208 / 548). Roughly two
+   in five hint-on solves return UNSAT and have to retry without —
+   that's the cost of skipping the flow-direction validity check.
+
+This is the kind of result the experiment was set up to measure, and
+it's a "no" today. The recogniser identifies real local primitives but
+they don't move the needle: SAT is already fast enough at the small
+zone sizes we're hitting (median solve is ~200µs), and the cache
+already covers most repeats.
+
+Where it could become useful, in roughly the order I'd try:
+
+1. **Bigger zones** (the long-tail 11×4 / 17×3 records). On those, SAT
+   solves take 1-7 ms each, and the cache doesn't have many of them
+   yet because they only appear once per unique recipe. Hints might pay
+   off here even if they don't on the trivial 4×4 cases.
+2. **Tighter validity checks** to drop the 38% fall-back rate. Each
+   fall-back is a wasted SAT call; cutting that to <5% would shift the
+   wall-clock balance.
+3. **Decomposition**, not pinning — recognise large patterns that match
+   a sub-rectangle, look that sub-rectangle up in the cache directly,
+   stitch results. This is fundamentally different (it skips SAT
+   entirely on the matched region) and has much higher potential.
+
+What stays useful from this commit regardless:
+
+- The miner produces an artefact (`palette`) we can eyeball to confirm
+  what shapes the engine actually relies on. Useful for engine
+  debugging even if hints don't ship.
+- The trace event scaffolding lets future experiments swap in
+  different recognisers (decomposition, learned policy) without
+  re-plumbing instrumentation.
+
 ## 11. Where this might go
 
-Three credible follow-ups in order of expected payoff:
+Updated after the §10 A/B result. The tile-pinning approach didn't
+move the needle on our typical workload. Three credible follow-ups in
+roughly the order I'd try them:
 
-1. **Tighten the recogniser**: add flow-direction checks and per-channel
-   topology matching. Cuts the false-positive rate, makes real injection
-   safe.
-2. **Wire real injection** behind the same env gate. Add UNSAT-retry
-   fallback. Measure hint-on vs hint-off solve time per zone size.
-3. **Decomposition for large zones**: the 11×4 and 17×3 records in the
-   cache are visibly assemblies of smaller patterns side-by-side.
+1. **Decomposition (highest leverage)**: the 11×4 and 17×3 records in
+   the cache are visibly assemblies of smaller patterns side-by-side.
    Recognise sub-rectangles whose port topology + forbidden tiles match
    a cached small zone, look those up via the existing cache, stitch
-   them together at the seams. Turns linear-in-tile-count into
-   sublinear and is where caching's killer scale story lives.
+   them together at the seams. This skips SAT entirely on the matched
+   region — fundamentally different from pinning, and where caching's
+   killer scale story lives.
+2. **Tighten the recogniser**: add flow-direction checks and
+   per-channel topology matching to drop the 38% fall-back rate on
+   real injection. Each fall-back is a wasted SAT call; cutting that
+   to <5% would tip the wall-clock balance and might make hints worth
+   the recogniser overhead on bigger zones.
+3. **Run the A/B against the long-tail (11×4, 17×3) zones only**:
+   trivial 4×4 cases are SAT-bound by ~200µs solves where pinning
+   can't help. The big zones take 1-7 ms each; that's where pinning
+   could actually save time. Need to populate the curated cache more
+   widely first to have a meaningful sample.
 
 The ML angle, when we get there, is mostly about which decomposition
 to try first — a learned policy on `(zone → best decomposition)` pairs

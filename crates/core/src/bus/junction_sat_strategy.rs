@@ -948,21 +948,62 @@ impl JunctionStrategy for SatStrategy {
             }
         }
 
-        // Shadow-mode hint recognition: when FUCKTORIO_USE_SAT_HINTS=1, run
-        // the palette recogniser BEFORE SAT and emit a SatHintInjection event
-        // with what we WOULD have pinned. We do not actually pin anything yet
-        // — see the caveat on `Placement` for why (no flow-direction
-        // validity check).
+        // SAT-hint injection (gated by FUCKTORIO_USE_SAT_HINTS=1). Try a
+        // pinned solve first; if it returns UNSAT, fall back to the
+        // un-pinned path. The recogniser today only validates geometry,
+        // not flow direction, so over-constraint UNSAT is the failure
+        // mode we expect — fall_back rate from SatHintInjection events
+        // tells us how often that happens.
+        let mut hinted_attempt: Option<(Vec<crate::models::PlacedEntity>, crate::sat::CrossingZoneStats)> = None;
+        let mut hint_pins: Vec<crate::models::PlacedEntity> = Vec::new();
+        let mut hint_palette_size: usize = 0;
+        let mut hint_candidates: usize = 0;
         if crate::junction_palette::palette_enabled() {
-            shadow_emit_hints(&zone, seed_x, seed_y, iter);
+            let (pins, stats) = build_palette_pins(&zone);
+            hint_pins = pins;
+            hint_palette_size = stats.palette_size;
+            hint_candidates = stats.candidates_considered;
+
+            if !hint_pins.is_empty() {
+                let (opt, sat_stats) = crate::sat::solve_crossing_zone_per_channel_with_pins(
+                    &zone,
+                    &channel_reaches,
+                    &hint_pins,
+                    belt_name,
+                    self.constraints.max_ug_ins,
+                );
+                if let Some(ents) = opt {
+                    hinted_attempt = Some((ents, sat_stats));
+                }
+            }
         }
 
-        let (entities_opt, stats) = crate::sat::solve_crossing_zone_per_channel(
-            &zone,
-            &channel_reaches,
-            belt_name,
-            self.constraints.max_ug_ins,
-        );
+        let fell_back = crate::junction_palette::palette_enabled()
+            && !hint_pins.is_empty()
+            && hinted_attempt.is_none();
+
+        let (entities_opt, stats) = if let Some((ents, st)) = hinted_attempt {
+            (Some(ents), st)
+        } else {
+            crate::sat::solve_crossing_zone_per_channel(
+                &zone,
+                &channel_reaches,
+                belt_name,
+                self.constraints.max_ug_ins,
+            )
+        };
+
+        if crate::junction_palette::palette_enabled() {
+            trace::emit(TraceEvent::SatHintInjection {
+                seed_x, seed_y, iter,
+                zone_w: zone.width,
+                zone_h: zone.height,
+                palette_size: hint_palette_size,
+                candidates_considered: hint_candidates,
+                hints_emitted: hint_pins.len(),
+                fell_back,
+            });
+        }
         let satisfied = entities_opt.is_some();
         let entities_raw = entities_opt.as_ref().map(|e| e.len()).unwrap_or(0);
         let proposed_entities: Vec<SatProposedEntity> = entities_opt
@@ -1244,28 +1285,35 @@ pub(crate) fn prune_dangling_sat_entities(
 }
 
 // ---------------------------------------------------------------------------
-// Shadow-mode SAT-hint instrumentation
+// SAT-hint injection helpers
 // ---------------------------------------------------------------------------
 
-/// Build a [`crate::junction_palette::ZoneShape`] from a `CrossingZone`,
-/// run the recogniser, and emit a `SatHintInjection` trace event with the
-/// candidate count + greedy-cover count. **Doesn't actually pin anything**
-/// — pure observation while we figure out which patterns are safe to inject.
-fn shadow_emit_hints(
-    zone: &CrossingZone,
-    seed_x: i32,
-    seed_y: i32,
-    iter: usize,
-) {
+/// Side-channel stats from [`build_palette_pins`] so the caller can
+/// populate a `SatHintInjection` event without re-walking the palette.
+struct HintStats {
+    palette_size: usize,
+    candidates_considered: usize,
+}
+
+/// Run the palette recogniser against `zone`, greedy-cover the candidates,
+/// and return the chosen pins as `PlacedEntity`s ready to feed into
+/// [`crate::sat::solve_crossing_zone_per_channel_with_pins`].
+///
+/// The pins use **world coords** (zone-local + zone offset) and have the
+/// kind/direction inferred from the palette pattern. Channel and item are
+/// left unset — the encoder's pin path only constrains kind + direction +
+/// position, not channel.
+fn build_palette_pins(zone: &CrossingZone) -> (Vec<crate::models::PlacedEntity>, HintStats) {
     use crate::junction_palette::{greedy_cover, recognise, shared_palette, ZoneShape};
+    use crate::models::PlacedEntity;
     use std::collections::HashSet;
 
     let palette_full = shared_palette();
+    let stats_empty = HintStats { palette_size: palette_full.len(), candidates_considered: 0 };
     if palette_full.is_empty() {
-        return;
+        return (Vec::new(), stats_empty);
     }
 
-    // Build zone-local boundary + forbidden tile sets.
     let mut boundary: HashSet<(u8, u8)> = HashSet::new();
     for b in &zone.boundaries {
         let lx = (b.x - zone.x).max(0) as u8;
@@ -1291,17 +1339,89 @@ fn shadow_emit_hints(
 
     let candidates = recognise(&shape, &patterns);
     let chosen = greedy_cover(&candidates, &freqs);
-    let hints_emitted: usize = chosen.iter().map(|p| p.tiles.len()).sum();
-
-    trace::emit(TraceEvent::SatHintInjection {
-        seed_x, seed_y, iter,
-        zone_w: zone.width,
-        zone_h: zone.height,
+    let stats = HintStats {
         palette_size: palette_full.len(),
         candidates_considered: candidates.len(),
-        hints_emitted,
-        fell_back: false,
-    });
+    };
+
+    // Translate each chosen Placement back into PlacedEntity pins. The
+    // recogniser stored only tiles (post-D4 transform) — we need to
+    // re-apply the transform to figure out the per-entity direction +
+    // kind for the pin.
+    let mut pins: Vec<PlacedEntity> = Vec::new();
+    for placement in &chosen {
+        let pattern = &patterns[placement.pattern_idx];
+        for (entity, &(zx, zy)) in pattern.entities.iter().zip(placement.tiles.iter()) {
+            // Apply the placement's D4 rotation/reflect to the entity's
+            // direction. Position is already in zone-local coords (provided
+            // in placement.tiles by the recogniser).
+            let pin_dir = transform_direction(entity.dir, placement.rotation, placement.reflect);
+            let Some((name, io_type)) = entity_kind_to_name(entity.kind, belt_name_default(zone)) else {
+                continue;
+            };
+            pins.push(PlacedEntity {
+                name: name.to_string(),
+                x: zone.x + zx as i32,
+                y: zone.y + zy as i32,
+                direction: dir_byte_to_entity(pin_dir),
+                io_type: io_type.map(str::to_string),
+                ..Default::default()
+            });
+        }
+    }
+    (pins, stats)
+}
+
+fn transform_direction(d: u8, rotation: u8, reflect: bool) -> u8 {
+    let mut d = if reflect {
+        match d { 1 => 3, 3 => 1, other => other }
+    } else { d };
+    for _ in 0..rotation {
+        d = (d + 1) % 4;
+    }
+    d
+}
+
+fn dir_byte_to_entity(d: u8) -> crate::models::EntityDirection {
+    use crate::models::EntityDirection::*;
+    match d { 0 => North, 1 => East, 2 => South, 3 => West, _ => North }
+}
+
+/// Map an entity-kind byte (matching `EntityKind` in zone_cache) plus the
+/// zone's default belt tier to `(entity_name, io_type)`. Returns `None` for
+/// unknown kinds.
+fn entity_kind_to_name(kind: u8, _default_tier: &str) -> Option<(&'static str, Option<&'static str>)> {
+    match kind {
+        0 => Some(("transport-belt", None)),
+        1 => Some(("fast-transport-belt", None)),
+        2 => Some(("express-transport-belt", None)),
+        3 => Some(("underground-belt", Some("input"))),
+        4 => Some(("underground-belt", Some("output"))),
+        5 => Some(("fast-underground-belt", Some("input"))),
+        6 => Some(("fast-underground-belt", Some("output"))),
+        7 => Some(("express-underground-belt", Some("input"))),
+        8 => Some(("express-underground-belt", Some("output"))),
+        _ => None,
+    }
+}
+
+fn belt_name_default(zone: &CrossingZone) -> &'static str {
+    // Pick the highest-tier belt referenced by any boundary. Falls back to
+    // yellow if the zone has no tier hints (shouldn't happen).
+    let mut best = 0u8;
+    for b in &zone.boundaries {
+        let tier = match b.belt_tier.as_deref() {
+            Some("fast-transport-belt") => 1,
+            Some("express-transport-belt") => 2,
+            _ => 0,
+        };
+        if tier > best { best = tier; }
+    }
+    match best {
+        2 => "express-transport-belt",
+        1 => "fast-transport-belt",
+        _ => "transport-belt",
+    }
 }
 
 /// Tiles reachable downstream from entity `e` in one step (or one UG pair).

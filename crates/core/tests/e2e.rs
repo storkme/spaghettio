@@ -3906,3 +3906,101 @@ fn diag_hint_shadow_stats() {
             w, h, n, cand, hints, *hints as f64 / *n as f64);
     }
 }
+
+/// A/B compare: run the e2e cache-off corpus with and without
+/// FUCKTORIO_USE_SAT_HINTS, tally per-zone-size SAT time, hint count, and
+/// fall-back rate.
+///
+/// Run inside the same process so hint and no-hint paths share PALETTE
+/// init cost. Both passes run with cache OFF so every junction goes
+/// through fresh SAT (or hint-injected SAT).
+///
+/// Run with:
+///   FUCKTORIO_USE_ZONE_CACHE=0 cargo test --release --test e2e -- \
+///       --ignored diag_hint_ab_compare --exact --nocapture
+#[test]
+#[ignore]
+fn diag_hint_ab_compare() {
+    use fucktorio_core::trace::TraceEvent as T;
+    use std::collections::BTreeMap;
+
+    let cases: &[(&str, &str, f64, Option<&str>, bool)] = &[
+        ("ab_tier1_iron_gear_wheel_20s",       "iron-gear-wheel",     20.0, None, false),
+        ("ab_tier2_electronic_circuit_5s",     "electronic-circuit",   5.0, None, false),
+        ("ab_tier2_electronic_circuit_15s",    "electronic-circuit",  15.0, None, false),
+        ("ab_tier2_electronic_circuit_30s",    "electronic-circuit",  30.0, None, true),
+        ("ab_stress_60s_red_from_ore",         "electronic-circuit",  60.0, Some("fast-transport-belt"), true),
+    ];
+
+    fn run_case(
+        name: &str, item: &str, rate: f64, belt: Option<&str>, from_ore: bool,
+    ) -> (u64, u64, u64, usize, usize, usize) {
+        let mut inputs = FxHashSet::default();
+        if from_ore {
+            inputs.insert("iron-ore".to_string());
+            inputs.insert("copper-ore".to_string());
+        }
+        let start = std::time::Instant::now();
+        let result = run_e2e(name, item, rate, "assembling-machine-1", belt, &inputs);
+        let wall_us = start.elapsed().as_micros() as u64;
+        let mut sat_us: u64 = 0;
+        let mut hint_us: u64 = 0;  // unused for now; placeholder
+        let mut sat_calls = 0;
+        let mut hints_total = 0;
+        let mut fallbacks = 0;
+        if let Ok(r) = result {
+            for ev in &r.trace_events {
+                match ev {
+                    T::SatInvocation { solve_time_us, .. } => {
+                        sat_us += solve_time_us;
+                        sat_calls += 1;
+                    }
+                    T::SatHintInjection { hints_emitted, fell_back, .. } => {
+                        hints_total += hints_emitted;
+                        if *fell_back { fallbacks += 1; }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let _ = hint_us;
+        (wall_us, sat_us, sat_calls as u64, hints_total, fallbacks, sat_calls)
+    }
+
+    let mut totals: BTreeMap<&'static str, (u64, u64)> = BTreeMap::new(); // mode -> (wall, sat)
+
+    eprintln!("\n=== HINTS OFF ===");
+    eprintln!("  {:<45} {:>9} {:>9} {:>6}", "case", "wall_ms", "sat_ms", "calls");
+    std::env::set_var("FUCKTORIO_USE_SAT_HINTS", "0");
+    for (name, item, rate, belt, from_ore) in cases {
+        let (wall, sat, calls, _, _, _) = run_case(name, item, *rate, *belt, *from_ore);
+        eprintln!("  {:<45} {:>9.1} {:>9.1} {:>6}",
+            name, wall as f64 / 1000.0, sat as f64 / 1000.0, calls);
+        let entry = totals.entry("off").or_insert((0, 0));
+        entry.0 += wall; entry.1 += sat;
+    }
+
+    eprintln!("\n=== HINTS ON ===");
+    eprintln!("  {:<45} {:>9} {:>9} {:>6} {:>5} {:>5}",
+        "case", "wall_ms", "sat_ms", "calls", "hints", "fb");
+    std::env::set_var("FUCKTORIO_USE_SAT_HINTS", "1");
+    for (name, item, rate, belt, from_ore) in cases {
+        let test_name = format!("{}_h", name);
+        let (wall, sat, calls, hints, fb, _) = run_case(&test_name, item, *rate, *belt, *from_ore);
+        eprintln!("  {:<45} {:>9.1} {:>9.1} {:>6} {:>5} {:>5}",
+            test_name, wall as f64 / 1000.0, sat as f64 / 1000.0, calls, hints, fb);
+        let entry = totals.entry("on").or_insert((0, 0));
+        entry.0 += wall; entry.1 += sat;
+    }
+    std::env::set_var("FUCKTORIO_USE_SAT_HINTS", "0");
+
+    let off = totals["off"];
+    let on = totals["on"];
+    eprintln!("\n=== TOTALS ===");
+    eprintln!("              {:>10} {:>10}", "wall_ms", "sat_ms");
+    eprintln!("  hints OFF   {:>10.1} {:>10.1}", off.0 as f64 / 1000.0, off.1 as f64 / 1000.0);
+    eprintln!("  hints ON    {:>10.1} {:>10.1}", on.0 as f64 / 1000.0, on.1 as f64 / 1000.0);
+    let wall_delta = (on.0 as f64 - off.0 as f64) / off.0 as f64 * 100.0;
+    let sat_delta = (on.1 as f64 - off.1 as f64) / off.1 as f64 * 100.0;
+    eprintln!("  delta       {:>9.1}%  {:>9.1}%", wall_delta, sat_delta);
+}

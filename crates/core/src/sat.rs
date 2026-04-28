@@ -1955,6 +1955,68 @@ pub fn solve_crossing_zone_with_pins(
     (Some(entities), stats)
 }
 
+/// Per-channel-reach variant of [`solve_crossing_zone_with_pins`]. Used by
+/// the SAT-hint-injection path so we keep tier-correct UG sizing.
+///
+/// On failed pin (UNSAT before solve, e.g. a pin contradicts an existing
+/// constraint), returns `(None, _)` immediately — caller is expected to
+/// fall back to the un-pinned variant.
+pub fn solve_crossing_zone_per_channel_with_pins(
+    zone: &CrossingZone,
+    channel_reaches: &[u32],
+    pins: &[PlacedEntity],
+    belt_tier: &str,
+    max_ug_ins: Option<u32>,
+) -> (Option<Vec<PlacedEntity>>, CrossingZoneStats) {
+    let channel_info = channel_info_from_boundaries(&zone.boundaries);
+    let n_channels = channel_info.len() as u32;
+
+    let encoder = CrossingEncoder::new(zone.width, zone.height, n_channels);
+    let cnf = encoder.encode(zone, channel_reaches, max_ug_ins);
+
+    let variables = encoder.total_vars;
+    let clauses = cnf.count;
+
+    let mut assumptions: Vec<Lit> = Vec::new();
+    for pin in pins {
+        if !encoder.pin_to_literals(pin, zone, &mut assumptions) {
+            // Pin couldn't be translated (out of bounds, unknown kind, etc.).
+            // Fail fast so the caller falls back to the un-pinned solve.
+            return (
+                None,
+                CrossingZoneStats {
+                    variables,
+                    clauses,
+                    solve_time_us: 0,
+                    zone_width: zone.width,
+                    zone_height: zone.height,
+                },
+            );
+        }
+    }
+
+    let start = web_time::Instant::now();
+
+    let mut solver = Solver::new();
+    solver.add_formula(&cnf.formula);
+    solver.assume(&assumptions);
+
+    let sat_result = solver.solve();
+    let solve_time_us = start.elapsed().as_micros() as u64;
+    let stats = CrossingZoneStats {
+        variables, clauses, solve_time_us,
+        zone_width: zone.width,
+        zone_height: zone.height,
+    };
+
+    let Ok(sat) = sat_result else { return (None, stats) };
+    if !sat { return (None, stats); }
+
+    let model: Vec<Lit> = solver.model().unwrap_or_default().to_vec();
+    let entities = encoder.extract_solution(&model, zone, belt_tier, &channel_info);
+    (Some(entities), stats)
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
