@@ -216,48 +216,7 @@ by the `transform_port` issue described in §6.
 
 ---
 
-## 6. Known issue: `transform_port` D4 inconsistency
-
-While building the parser used by the decomposition probe, found that
-`transform_port` (in `zone_cache.rs`) has a long-standing D4 rotation
-inconsistency:
-
-- 90° CW rotation maps tile `(x, y)` in `(w, h)` to `(h-1-y, x)` in
-  `(h, w)`. The geometrically correct per-edge offset rules are:
-
-  | edge transition | offset rule |
-  |---|---|
-  | N → E | offset stays |
-  | E → S | new offset = `cur_h - 1 - old_offset` |
-  | S → W | offset stays |
-  | W → N | new offset = `cur_h - 1 - old_offset` |
-
-- The current code has `cur_w - 1 - o` for E→S, `cur_h - 1 - o` for
-  S→W, and `o` (stays) for W→N. Three of the four rules are wrong.
-
-The bug is **self-consistent**: both the write path
-(`canonicalise → record_zone_with_solution`) and the read path
-(`canonicalise → lookup_zone`) call the same buggy function, so cache
-correctness is preserved end-to-end. But it means our "D4-canonical"
-signatures aren't actual D4 invariants, and `parse → reconstruct →
-canonicalise` doesn't round-trip cleanly for ~40% of cached signatures.
-
-Fixing it isn't a one-liner: changing the rules invalidates every
-signature in the embedded `sat-zones.bin`, and a quick attempt also
-exposed a separate cache-replay regression on `partition_strategy_scoreboard`'s
-PU@2/s baseline (one extra issue under warm cache vs cold, suggesting
-something else in the lookup path also has an orientation
-assumption). Worth a focused investigation as its own commit; for now
-the bug is documented at the call site and on `ParsedSignature`.
-
-The signature parser (`parse_signature`, `parsed_to_crossing_zone`) is
-still useful for telemetry and for sigs that happen to round-trip
-cleanly; it just can't be the foundation of a full decomposition
-solver until this is fixed.
-
----
-
-## 7. Cheat sheet
+## 6. Cheat sheet
 
 ```bash
 # Run the full e2e suite (cache enabled by default)
