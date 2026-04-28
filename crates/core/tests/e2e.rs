@@ -1776,13 +1776,13 @@ fn stress_electronic_circuit_30s_from_ore() {
         "stress_electronic_circuit_30s_from_ore",
         &result,
         StressBaseline {
-            max_errors: 10,
+            // Post-junction-solver-fix (a207b76 + 56c3ca4): 0 errors.
+            // The PR baseline of 10 belt-dead-end was probed before the
+            // fluid-reservation filter + promote_blocked_encountered +
+            // perimeter-boundary check landed.
+            max_errors: 0,
             max_warnings: 0,
-            // All 10 errors are belt-dead-end — orphaned east-flowing
-            // output-merger belts that don't reach a destination.
-            max_errors_by_category: [
-                ("belt-dead-end".to_string(), 10),
-            ].into_iter().collect(),
+            max_errors_by_category: Default::default(),
         },
     );
 }
@@ -2006,7 +2006,10 @@ fn stress_advanced_circuit_partitioned_7s_from_plates() {
         &pooled,
         &partitioned,
         StressBaseline {
-            max_errors: 5,
+            // Post-junction-solver-fix: 0 errors on the Pooled run
+            // (down from 5 pre-fix). The partitioned baseline (2)
+            // tracks separately below.
+            max_errors: 0,
             max_warnings: 0,
             max_errors_by_category: Default::default(),
         },
@@ -2666,12 +2669,14 @@ fn stress_electronic_circuit_35s_from_ore() {
         "stress_electronic_circuit_35s_from_ore",
         &result,
         StressBaseline {
-            max_errors: 16,
+            // Post-junction-solver-fix: 4 belt-dead-end (down from 16
+            // pre-fix). Same regime as 30/s but with more lanes; the
+            // residual errors are orphaned output-merger belts that
+            // the SAT zone fixes haven't reached.
+            max_errors: 4,
             max_warnings: 0,
-            // All 16 errors are belt-dead-end — same regime as 30/s but
-            // with more lanes and a wider layout.
             max_errors_by_category: [
-                ("belt-dead-end".to_string(), 16),
+                ("belt-dead-end".to_string(), 4),
             ].into_iter().collect(),
         },
     );
@@ -2695,16 +2700,15 @@ fn stress_electronic_circuit_40s_from_ore() {
         "stress_electronic_circuit_40s_from_ore",
         &result,
         StressBaseline {
-            max_errors: 47,
+            // Post-junction-solver-fix: 13 belt-dead-end (down from 47
+            // total: 17 belt-dead-end + 2 belt-junction + 28 entity-
+            // overlap pre-fix). The belt-junction + entity-overlap
+            // categories are gone entirely; remaining errors are
+            // orphaned output-merger belts.
+            max_errors: 13,
             max_warnings: 0,
-            // 40/s is the highest lane-count regime in the corpus:
-            // belt-dead-end — orphaned output-merger belts
-            // belt-junction — unresolved junctions on the eastern edge
-            // entity-overlap — balancer stamp collision at row boundaries
             max_errors_by_category: [
-                ("belt-dead-end".to_string(), 17),
-                ("belt-junction".to_string(), 2),
-                ("entity-overlap".to_string(), 28),
+                ("belt-dead-end".to_string(), 13),
             ].into_iter().collect(),
         },
     );
