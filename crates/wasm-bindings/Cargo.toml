@@ -6,6 +6,15 @@ edition = "2021"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+# Skip wasm-opt: wasm-pack tries to download Binaryen v117 from GitHub
+# Releases on first build, which fails intermittently in CI
+# (network/rate-limit). The unoptimized .wasm is ~10% larger but
+# behaviour is identical. Re-enable when CI has reliable access to
+# the binaryen GitHub Releases CDN, or pre-install binaryen as a
+# separate workflow step.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
+
 [dependencies]
 console_error_panic_hook = "0.1"
 fucktorio_core = { path = "../core", features = ["wasm"] }

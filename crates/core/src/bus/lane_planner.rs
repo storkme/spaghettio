@@ -367,7 +367,21 @@ pub fn plan_bus_lanes(
             fam.balancer_y_end = fam.balancer_y_start + h as i32 - 1;
             let range = (fam.balancer_y_start, fam.balancer_y_end);
             for lane in lanes.iter_mut() {
-                if lane.family_id.is_some() && lane.item == fam.item {
+                // Filter by `(item, module_id)` not just item: under
+                // `LayoutStrategy::PartitionedDecomposed`, a single item
+                // can have K sibling families at different lane columns
+                // and different y-ranges. Without the module_id check,
+                // each iteration overwrites all sibling lanes' ranges,
+                // so module 0's lanes inherit module 1's balancer
+                // y-range (or vice versa) — the trunk renderer then
+                // skips that y-range in module 0's columns even though
+                // module 1's balancer is in *different* columns. Result
+                // before this guard: 17-row gap of missing trunk belts,
+                // belt-dead-end errors at the boundary.
+                if lane.family_id.is_some()
+                    && lane.item == fam.item
+                    && lane.module_id == fam.module_id
+                {
                     lane.family_balancer_range = Some(range);
                 }
             }

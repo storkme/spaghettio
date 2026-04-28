@@ -418,6 +418,11 @@ fn chain_has_pickup(
 // ---------------------------------------------------------------------------
 
 /// Check that belts carrying different items don't feed into each other.
+///
+/// Belt pairs where either tile sits inside a `RegionKind::Unresolved`
+/// region are skipped — those are orphan ghost belts left behind by a
+/// `JunctionGrowthCapped` failure, and the unresolved-junction check
+/// already reports the underlying cause.
 pub fn check_belt_item_isolation(layout: &LayoutResult) -> Vec<ValidationIssue> {
     let mut belt_dir: FxHashMap<(i32, i32), EntityDirection> = FxHashMap::default();
     let mut belt_carry: FxHashMap<(i32, i32), Option<String>> = FxHashMap::default();
@@ -438,6 +443,7 @@ pub fn check_belt_item_isolation(layout: &LayoutResult) -> Vec<ValidationIssue> 
         }
     }
 
+    let unresolved = super::unresolved_region_tiles(layout);
     let mut issues = Vec::new();
     let mut seen: FxHashSet<((i32, i32), (i32, i32))> = FxHashSet::default();
 
@@ -449,6 +455,9 @@ pub fn check_belt_item_isolation(layout: &LayoutResult) -> Vec<ValidationIssue> 
         let (dx, dy) = dir_to_vec(ad);
         let b = (ax + dx, ay + dy);
         if !belt_dir.contains_key(&b) {
+            continue;
+        }
+        if unresolved.contains(&(ax, ay)) || unresolved.contains(&b) {
             continue;
         }
         let ac = belt_carry.get(&(ax, ay)).and_then(|c| c.as_deref());

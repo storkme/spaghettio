@@ -4,7 +4,7 @@
 //! Use `start_trace()` to begin collection, `emit()` to record events,
 //! and `drain_events()` to retrieve them.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use serde::{Deserialize, Serialize};
 use crate::models::PlacedEntity;
@@ -16,6 +16,10 @@ use crate::models::PlacedEntity;
 thread_local! {
     static COLLECTOR: RefCell<Option<Vec<TraceEvent>>> = const { RefCell::new(None) };
     static SINK: RefCell<Option<Box<dyn FnMut(&TraceEvent)>>> = const { RefCell::new(None) };
+    /// Suppress event recording within a `with_muted` scope. Used by
+    /// junction-blame retries so the speculative re-solves don't pollute
+    /// the real event stream with phantom JunctionGrowth* etc events.
+    static MUTED: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Start trace collection for the current thread. Returns a guard that
@@ -51,8 +55,12 @@ impl Drop for SinkGuard {
     }
 }
 
-/// Emit a trace event. No-op if neither a collector nor a sink is active.
+/// Emit a trace event. No-op if neither a collector nor a sink is active,
+/// or if `with_muted` is in effect on this thread.
 pub fn emit(event: TraceEvent) {
+    if MUTED.with(|m| m.get()) {
+        return;
+    }
     SINK.with(|s| {
         if let Some(ref mut sink) = *s.borrow_mut() {
             sink(&event);
@@ -63,6 +71,16 @@ pub fn emit(event: TraceEvent) {
             events.push(event);
         }
     });
+}
+
+/// Run `f` with event emission suppressed on this thread. Used by
+/// junction-blame retries so speculative re-solves don't pollute the
+/// real event stream.
+pub fn with_muted<F: FnOnce() -> R, R>(f: F) -> R {
+    let prev = MUTED.with(|m| m.replace(true));
+    let result = f();
+    MUTED.with(|m| m.set(prev));
+    result
 }
 
 /// Drain collected events from the current thread.
@@ -138,6 +156,54 @@ pub enum TraceEvent {
         /// the gate.
         lane_util: f64,
         belt_tier: String,
+    },
+
+    // `LayoutStrategy::PartitionedDecomposed` sharded an oversized
+    // module into N sub-modules of ≤8 lanes each. Fires once per
+    // sharded module. K2-1 / K2-2 instrumentation per
+    // `docs/rfp-modular-production.md`.
+    ShardSplit {
+        item: String,
+        /// Recipe consuming from this module. For K=1 items not in
+        /// Phase 1's plan, the single consumer recipe.
+        consumer_recipe: String,
+        /// Pre-shard lane count (the value that exceeded 8 and
+        /// triggered the split).
+        original_lane_count: u32,
+        /// Number of shards the module was split into = ⌈original / 8⌉.
+        shards: u32,
+        /// Per-shard lane count, parallel to shard module_id 0..shards.
+        lanes_per_shard: Vec<usize>,
+    },
+
+    // Phase 2 cost-benefit gate: would-be shard count exceeded
+    // `MAX_SHARDS_PER_MODULE`, so the partitioner kept the module
+    // intact. The downstream balancer may not have a template wide
+    // enough, but the alternative (multiplying consumer rows by
+    // ⌈lane_count / 8⌉) was judged worse. Helps explain why Phase 2
+    // sometimes leaves a wide trunk that Phase 1 also produced.
+    ShardSkipped {
+        item: String,
+        consumer_recipe: String,
+        lane_count: u32,
+        /// What the shard count would have been without the gate.
+        would_be_shards: u32,
+        max_shards: u32,
+    },
+
+    // Decomposition produced shards whose lane count doesn't tile
+    // cleanly with consumer demand (multi-consumer K2-2 case from the
+    // RFP). Fires when a consumer's tap from a shard is uneven —
+    // e.g. a 7-lane consumer tapping from a (6, 6) shard split.
+    // For single-consumer modules this never fires by construction
+    // (uniform demand divides cleanly).
+    LumpyShardTap {
+        item: String,
+        consumer_recipe: String,
+        /// Lanes the consumer needs from this specific shard.
+        consumer_lanes_in_shard: u32,
+        /// The shard's total lane width.
+        shard_lane_count: u32,
     },
     LaneSplit {
         item: String,
@@ -518,6 +584,27 @@ pub enum TraceEvent {
         iters: usize,
         region_tiles: usize,
         reason: String,
+    },
+
+    // Diagnostic: when a cluster fails to solve, which spec(s) made
+    // the difference? Emitted once per failed cluster (gated on
+    // `FUCKTORIO_BLAME_JUNCTIONS=1`). Each event names one spec whose
+    // removal lets the rest of the cluster solve. Multiple events for
+    // one cluster mean any of those individual removals would unblock
+    // it; zero events mean no single-spec removal helps (multi-spec
+    // entanglement, or a structurally unsolvable cluster).
+    JunctionBlamedSpec {
+        /// Seed of the failed cluster.
+        cluster_x: i32,
+        cluster_y: i32,
+        /// Total participating specs in the cluster.
+        participating: usize,
+        /// The spec whose removal would have let the cluster solve.
+        spec_key: String,
+        spec_item: String,
+        /// Direction string ("North"/"East"/"South"/"West") at the
+        /// initial cluster tile, or empty if not classifiable.
+        spec_direction: String,
     },
     // Emitted when the region walker rejects a strategy's proposed
     // solution because it would break a routed path that touches the
