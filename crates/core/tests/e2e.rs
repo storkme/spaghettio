@@ -559,10 +559,13 @@ const GOLDEN_HASHES: &[(&str, &str)] = &[
     ("tier1_iron_gear_wheel_from_ore", "5fffb4c717d4b283cba0237a405e99cc0959bf76e23caa36f1ba47b40ed6ae84"),
     ("tier1_iron_gear_wheel_20s", "add07d75c26386616aa4b7d4abf7edd754a2231523598145e2f0fc2ecd3c8a2f"),
     ("tier2_electronic_circuit_from_ore", "85867c6174490364b8b08d6d94f300ab8f1d2da7ee1f12f559b324c25a88ff5b"),
-    ("tier2_electronic_circuit_20s_from_ore", "1d63b9e0e1ddd93497845fe22773313efd615f3880bd29ae3f495604ac873306"),
-    ("tier2_electronic_circuit_splitter_stamp_regression", "28e2d81aba961ebb4186e1ad6b935394c609ba6d8abed7fbe1cca39840dbcc5f"),
-    ("tier3_plastic_bar", "7dc56ef4ecc86acba1780271ae319e8cffecee8cf286379b181672efe6aeccd8"),
-    ("tier3_sulfuric_acid", "091765fa6a50b4438137e0500e32eb8378ed22224f9b58843070cb70d6561bcd"),
+    // Hashes below changed when row inputs were switched to always
+    // use `max_belt_tier` instead of per-row consumption rate (fixes
+    // tier-mismatch seam where bus tap-off feeds row belt-in).
+    ("tier2_electronic_circuit_20s_from_ore", "1fb6cd019073f762a89da555aad50bb5bd1b63760b0362a9b113460a9faacf63"),
+    ("tier2_electronic_circuit_splitter_stamp_regression", "47a79561c746ad68c37e64966eca579d6f8dbfa7fa7bd9d7f7d3433a8d55566a"),
+    ("tier3_plastic_bar", "bff09b66d77b0927bb360fb0c525768fe6f721b2cc92cdb18ea1474b23c85a41"),
+    ("tier3_sulfuric_acid", "b9e59cb601720a73e70aca2d43b724f2467aee70a97f012743a9e539dab0086a"),
     ("tier3_heavy_oil_cracking", "e035b72e76cff247546b12ff47e264b8f9ae44e8cf9969107e45aad4690e1980"),
 ];
 
@@ -2089,8 +2092,13 @@ fn partition_strategy_scoreboard() {
             // aee30a1/022722c (junction SAT-degeneracy + pipe-belt UG
             // fixes); 12 → 13 (debug) is the build-mode delta, not a
             // further regression.
+            //
+            // Pool 7 → 1 after the row_input_belt fix (always use
+            // max_belt_tier for row inputs, eliminating the bus-trunk
+            // / row-belt seam mismatch that flagged 6 lane-throughput
+            // errors per row).
             row_layout: None,
-            expected: (7, 13, 13),
+            expected: (1, 13, 13),
         },
         ScoreboardCase {
             name: "AC@5/s plates yellow",
@@ -2144,12 +2152,12 @@ fn partition_strategy_scoreboard_extended() {
             item: "processing-unit", rate: 3.0, machine: "assembling-machine-3",
             belt: Some("fast-transport-belt"),
             inputs: &["iron-ore", "copper-ore", "coal", "water", "crude-oil"],
-            // P1 dropped 9 → 7 and P2 dropped 12 → 11 after the same
-            // main merge — junction-fix improvements landed at this
-            // higher rate. P2 still slightly regresses vs P1 because
-            // 22-lane shard exceeds MAX_SHARDS=3 and stays whole.
+            // P1 dropped 9 → 7 and P2 dropped 12 → 11 after the
+            // main merge. P2 ticked back up 11 → 12 after the
+            // row_input_belt fix (small extra cluster from the new
+            // row-belt-tier choice).
             row_layout: None,
-            expected: (11, 7, 11),
+            expected: (11, 7, 12),
         },
         ScoreboardCase {
             name: "PU@3/s plates yellow",
@@ -2187,7 +2195,10 @@ fn partition_strategy_scoreboard_extended() {
                 "iron-ore", "copper-ore",
             ],
             row_layout: Some(fucktorio_core::bus::layout::RowLayout::HorizontalStack),
-            expected: (2, 5, 5),
+            // Pool 2 → 1 with row_input_belt fix; P1/P2 each
+            // ticked up 5 → 6 from the new row-belt-tier choice
+            // interacting with the existing west-edge belt-loop bug.
+            expected: (1, 6, 6),
         },
     ];
     run_partition_scoreboard("partition_strategy_scoreboard_extended", cases);
