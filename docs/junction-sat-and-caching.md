@@ -210,54 +210,45 @@ Total candidate cuts: 122 vertical + 35 horizontal
 ```
 
 Strong upper bound — almost every big cached zone could in principle be
-sliced into cached small pieces. The stricter boundary-topology probe
-(do the implied sub-signatures actually match cached entries?) is blocked
-by the `transform_port` issue described in §6.
+sliced into cached small pieces.
+
+The stricter probe (`diag_decomposition_signature_match`) checks whether
+the implied sub-zone signatures — including boundary topology, forbidden
+tiles, and per-channel reach — actually appear in the cache. Result on
+the same 46 large shapes:
+
+```
+with at least one CLEAN cut:    13/46 (28%)
+with at least one MATCHING cut:  0/46 (0%)
+```
+
+A "clean cut" is one where no UG corridor would be sliced and no
+original boundary lands on a corner of either sub-zone. 28% of large
+zones have at least one such cut. **Zero** of those cuts produce
+sub-signatures that appear in the cache.
+
+Interpretation: the bus router never emits "half a junction" shapes,
+so synthetic-cut sub-zones don't match anything organically cached.
+For decomposition to be a real strategy, you'd need either:
+
+1. **A synthetic-fragment populator** that enumerates plausible
+   sub-shapes (likely-cuttable boundaries, no UG corridors) and SAT-
+   solves each one, seeding the cache with fragments the bus router
+   wouldn't produce on its own.
+2. **A different decomposition strategy** that doesn't require exact
+   signature match — e.g., recognise that a residual sub-rectangle
+   has the same channel topology as a cached shape modulo extra
+   forbidden tiles, and use the cached solution as a seed for a
+   smaller fresh SAT solve.
+
+Either is a non-trivial chunk of work. For now: decomposition is parked
+behind "the geometric structure is there but the corpus shape isn't",
+not behind a missing technique. The signature-match probe stays in
+`tests/e2e.rs` so you can re-run it as the corpus grows.
 
 ---
 
-## 6. Known issue: `transform_port` D4 inconsistency
-
-While building the parser used by the decomposition probe, found that
-`transform_port` (in `zone_cache.rs`) has a long-standing D4 rotation
-inconsistency:
-
-- 90° CW rotation maps tile `(x, y)` in `(w, h)` to `(h-1-y, x)` in
-  `(h, w)`. The geometrically correct per-edge offset rules are:
-
-  | edge transition | offset rule |
-  |---|---|
-  | N → E | offset stays |
-  | E → S | new offset = `cur_h - 1 - old_offset` |
-  | S → W | offset stays |
-  | W → N | new offset = `cur_h - 1 - old_offset` |
-
-- The current code has `cur_w - 1 - o` for E→S, `cur_h - 1 - o` for
-  S→W, and `o` (stays) for W→N. Three of the four rules are wrong.
-
-The bug is **self-consistent**: both the write path
-(`canonicalise → record_zone_with_solution`) and the read path
-(`canonicalise → lookup_zone`) call the same buggy function, so cache
-correctness is preserved end-to-end. But it means our "D4-canonical"
-signatures aren't actual D4 invariants, and `parse → reconstruct →
-canonicalise` doesn't round-trip cleanly for ~40% of cached signatures.
-
-Fixing it isn't a one-liner: changing the rules invalidates every
-signature in the embedded `sat-zones.bin`, and a quick attempt also
-exposed a separate cache-replay regression on `partition_strategy_scoreboard`'s
-PU@2/s baseline (one extra issue under warm cache vs cold, suggesting
-something else in the lookup path also has an orientation
-assumption). Worth a focused investigation as its own commit; for now
-the bug is documented at the call site and on `ParsedSignature`.
-
-The signature parser (`parse_signature`, `parsed_to_crossing_zone`) is
-still useful for telemetry and for sigs that happen to round-trip
-cleanly; it just can't be the foundation of a full decomposition
-solver until this is fixed.
-
----
-
-## 7. Cheat sheet
+## 6. Cheat sheet
 
 ```bash
 # Run the full e2e suite (cache enabled by default)

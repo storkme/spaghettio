@@ -220,11 +220,19 @@ fn transform_port(
     let mut cur_w = w;
     let mut cur_h = h;
     for _ in 0..rotation {
+        // 90° CW rotation maps tile (x, y) in (w, h) to (h-1-y, x) in
+        // (h, w). Per-edge offset rules follow:
+        //   N edge tile (offset, 0) → (h-1, offset) → on E edge, offset stays.
+        //   E edge tile (w-1, offset) → (h-1-offset, w-1) → on S edge, new offset = h-1-old.
+        //   S edge tile (offset, h-1) → (0, offset) → on W edge, offset stays.
+        //   W edge tile (0, offset) → (h-1-offset, 0) → on N edge, new offset = h-1-old.
+        // `cur_h` here is the height BEFORE the swap below, i.e. the
+        // pre-rotation `h` for this iteration — exactly what the rules need.
         let (ne, no) = match e {
-            0 => (1u8, o),
-            1 => (2u8, cur_w.saturating_sub(1).saturating_sub(o)),
-            2 => (3u8, cur_h.saturating_sub(1).saturating_sub(o)),
-            3 => (0u8, o),
+            0 => (1u8, o),                                          // N → E
+            1 => (2u8, cur_h.saturating_sub(1).saturating_sub(o)),  // E → S
+            2 => (3u8, o),                                          // S → W
+            3 => (0u8, cur_h.saturating_sub(1).saturating_sub(o)),  // W → N
             _ => (e, o),
         };
         e = ne;
@@ -752,20 +760,9 @@ pub fn canonical_signature(
 /// correspond to position in `channels` (channel 0 = first tuple in the
 /// signature, etc.) — the canonical signature already sorts channels.
 ///
-/// **Caveat.** `parse_signature → parsed_to_crossing_zone → canonicalise`
-/// does not perfectly round-trip ~40% of cached signatures because of a
-/// pre-existing inconsistency in `transform_port`'s D4 rotation rules
-/// (`E → S` uses `cur_w-1-o` where `cur_h-1-o` is the geometrically
-/// correct value; `S → W` and `W → N` are similarly flipped). The bug is
-/// self-consistent at runtime — both write and read paths produce the
-/// same wrong output, so caching still works — but the resulting
-/// "canonical" signatures aren't full D4 invariants.
-///
-/// Fixing the bug invalidates the embedded `crates/core/data/sat-zones.bin`
-/// AND, in our local testing, exposed a separate cache-replay regression
-/// (one PU@2/s baseline issue count goes 17 → 18). Rolled back; the bug
-/// stays for now. The parser is still useful for telemetry and for
-/// signature shapes that happen to round-trip cleanly.
+/// `parse_signature → parsed_to_crossing_zone → canonicalise` round-trips
+/// every cached signature exactly (verified by the
+/// `embedded_cache_full_roundtrip` test).
 #[derive(Debug, Clone)]
 pub struct ParsedSignature {
     pub width: u32,
@@ -950,13 +947,61 @@ mod parse_tests {
 
     #[test]
     fn parsed_to_crossing_zone_roundtrip_simple() {
-        // 3x3 with two perpendicular channels — geometric round-trip works
-        // for this shape (no corner tiles in the channel section).
         let sig = "3x3:E1>W1@5;N1>S1@5|F:|UG:2";
         let parsed = parse_signature(sig).expect("parse");
         let (zone, reaches) = parsed_to_crossing_zone(&parsed);
         let recomputed = canonical_signature(&zone, &reaches, parsed.max_ug_ins);
         assert_eq!(recomputed, sig);
+    }
+
+    /// Roundtrip every signature from the embedded committed cache. With
+    /// the geometrically correct `transform_port` rotation rules, this
+    /// should hit 100% — any failure indicates either a parser bug or a
+    /// regression in the canonicalise <-> parse symmetry.
+    #[test]
+    fn embedded_cache_full_roundtrip() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("data/sat-zones.bin");
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| {
+            panic!("embedded cache missing or unreadable at {}: {}", path.display(), e)
+        });
+        let records = parse_records(&bytes);
+        assert!(
+            !records.is_empty(),
+            "embedded cache at {} parsed to zero records — corrupt or stale?",
+            path.display(),
+        );
+        let mut ok = 0usize;
+        let mut bad: Vec<(String, String)> = Vec::new();
+        for rec in &records {
+            let parsed = match parse_signature(&rec.signature) {
+                Some(p) => p,
+                None => {
+                    if bad.len() < 5 {
+                        bad.push((rec.signature.clone(), "<parse failed>".to_string()));
+                    }
+                    continue;
+                }
+            };
+            let (zone, reaches) = parsed_to_crossing_zone(&parsed);
+            let recomputed = canonical_signature(&zone, &reaches, parsed.max_ug_ins);
+            if recomputed == rec.signature {
+                ok += 1;
+            } else if bad.len() < 5 {
+                bad.push((rec.signature.clone(), recomputed));
+            }
+        }
+        if !bad.is_empty() {
+            for (orig, got) in &bad {
+                eprintln!("  orig: {}", orig);
+                eprintln!("  got:  {}", got);
+            }
+        }
+        assert!(
+            bad.is_empty(),
+            "{}/{} signatures failed to round-trip; samples printed above",
+            bad.len(), records.len(),
+        );
+        eprintln!("roundtripped {}/{} signatures", ok, records.len());
     }
 }
 
