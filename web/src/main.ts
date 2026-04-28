@@ -26,6 +26,7 @@ import { createJunctionDebugger } from "./ui/junctionDebugger";
 import { createSatEditor } from "./ui/satEditor";
 import * as debugState from "./state/debugState";
 import { createOverlayPanel } from "./ui/overlayPanel";
+import { createRetryPanel } from "./ui/retryPanel";
 import { createInspector } from "./ui/inspector";
 import { buildTileContext } from "./ui/tileContext";
 import { createSnapshotMode } from "./ui/snapshotMode";
@@ -113,6 +114,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
   // --- Modules ---
   const overlayControls = createOverlayPanel(container);
   const { debugCb, colorCb, regionsCb, soloRegionsCb, ghostTilesCb, traceOverlayCb } = overlayControls;
+  const retryPanel = createRetryPanel(container);
   // Sync the item-coloring flag with the persisted checkbox state so
   // a user who turned colours off stays off across reloads.
   setItemColoring(colorCb.checked);
@@ -730,6 +732,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       inspector.setTileContext(null);
       lastLayout = null;
       lastSolverResult = null;
+      retryPanel.update(null);
       tileEntityMap = new Map();
       cachedValidationIssues = null;
       drawGraph(viewport, null);
@@ -891,6 +894,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
         waitForDrain();
       });
       lastLayout = finalLayout;
+      retryPanel.update(finalLayout);
       rebuildTileEntityMap(finalLayout);
       (window as unknown as { __layout?: LayoutResult }).__layout = finalLayout;
       // Final authoritative redraw with the committed layout.
@@ -1177,6 +1181,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     // for those paths since they don't stream.
     void preloadCarriesIcons(extractCarriesFromEntities(layout.entities));
     lastLayout = layout;
+    retryPanel.update(layout);
     if (solverResult) lastSolverResult = solverResult;
     rebuildTileEntityMap(layout);
     (window as unknown as { __layout?: LayoutResult }).__layout = layout;
