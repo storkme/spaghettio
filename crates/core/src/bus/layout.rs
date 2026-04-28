@@ -177,7 +177,10 @@ fn layout_pass(
     let owned_solver_result;
     let solver_result: &SolverResult = match opts.strategy {
         LayoutStrategy::Pooled => solver_result,
-        LayoutStrategy::PartitionedPerConsumer => {
+        LayoutStrategy::PartitionedPerConsumer | LayoutStrategy::PartitionedDecomposed => {
+            // Same plan+apply path for both strategies; the strategy
+            // flag flows through `plan_partitioning` which adds Phase 2
+            // sharding when `PartitionedDecomposed` is selected.
             let plan = crate::bus::partitioner::plan_partitioning(
                 solver_result,
                 opts.strategy,
@@ -190,9 +193,6 @@ fn layout_pass(
                     crate::bus::partitioner::apply_partition_plan(solver_result, &plan);
                 &owned_solver_result
             }
-        }
-        LayoutStrategy::PartitionedDecomposed => {
-            unimplemented!("PartitionedDecomposed strategy is wired in Phase 2 (rfp-modular-production)");
         }
     };
     // Final product items get EAST-flowing output belts (merge at right side)

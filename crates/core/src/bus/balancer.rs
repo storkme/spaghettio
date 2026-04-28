@@ -155,6 +155,15 @@ pub(crate) fn stamp_family_balancer(
     // templates. Search for a divisor g of N where (N/g, M/g) has a
     // template. E.g., (6,8) → g=2 → 2 copies of (3,4). (5,10) → g=5 →
     // 5 copies of (1,2).
+    //
+    // Geometric constraint: sub-stamps are placed at output-lane spacing
+    // (1 column per output lane). If the sub-template is wider than its
+    // output count (`sub_template.width > sub_m`), neighbouring stamps
+    // overlap in x. Skip those decompositions — better to fail to stamp
+    // (caller treats empty as "no balancer placed") than to write
+    // overlapping entities. PU@2/s plates yellow tripped this with
+    // (15, 3) → 3×(5, 1): width=5 > sub_m=1, three balancers stamped on
+    // top of each other, ~37 entity-overlap errors.
     for g in (1..=n).rev() {
         if n % g != 0 || m % g != 0 {
             continue;
@@ -162,6 +171,9 @@ pub(crate) fn stamp_family_balancer(
         let sub_n = n / g;
         let sub_m = m / g;
         if let Some(sub_template) = templates.get(&(sub_n, sub_m)) {
+            if sub_template.width > sub_m {
+                continue; // would overlap with neighbouring stamps
+            }
             let mut all_entities = Vec::new();
             let lanes_per_group = sub_m as usize;
 

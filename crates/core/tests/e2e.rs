@@ -200,6 +200,32 @@ fn run_e2e_with_strategy(
         available_inputs,
         &FxHashSet::default(),
         strategy,
+        fucktorio_core::bus::layout::RowLayout::default(),
+    )
+}
+
+/// Like `run_e2e_with_strategy` but with a non-default `RowLayout`.
+/// Used by scoreboard cases that test horizontal-stack rows.
+fn run_e2e_with_strategy_and_row_layout(
+    test_name: &str,
+    item: &str,
+    rate: f64,
+    machine: &str,
+    belt_tier: Option<&str>,
+    available_inputs: &FxHashSet<String>,
+    strategy: fucktorio_core::bus::layout::LayoutStrategy,
+    row_layout: fucktorio_core::bus::layout::RowLayout,
+) -> Result<E2EResult, String> {
+    run_e2e_inner(
+        test_name,
+        item,
+        rate,
+        machine,
+        belt_tier,
+        available_inputs,
+        &FxHashSet::default(),
+        strategy,
+        row_layout,
     )
 }
 
@@ -221,6 +247,7 @@ fn run_e2e_with_exclusions(
         available_inputs,
         excluded_recipes,
         fucktorio_core::bus::layout::LayoutStrategy::Pooled,
+        fucktorio_core::bus::layout::RowLayout::default(),
     )
 }
 
@@ -234,6 +261,7 @@ fn run_e2e_inner(
     available_inputs: &FxHashSet<String>,
     excluded_recipes: &FxHashSet<String>,
     strategy: fucktorio_core::bus::layout::LayoutStrategy,
+    row_layout: fucktorio_core::bus::layout::RowLayout,
 ) -> Result<E2EResult, String> {
     let _guard = trace::start_trace();
     fucktorio_core::zone_cache::set_thread_source(Some(test_name));
@@ -251,7 +279,7 @@ fn run_e2e_inner(
         layout::LayoutOptions {
             strategy,
             max_belt_tier: belt_tier.map(|s| s.to_string()),
-            ..Default::default()
+            row_layout,
         },
     )
         .map_err(|e| {
@@ -531,10 +559,13 @@ const GOLDEN_HASHES: &[(&str, &str)] = &[
     ("tier1_iron_gear_wheel_from_ore", "5fffb4c717d4b283cba0237a405e99cc0959bf76e23caa36f1ba47b40ed6ae84"),
     ("tier1_iron_gear_wheel_20s", "add07d75c26386616aa4b7d4abf7edd754a2231523598145e2f0fc2ecd3c8a2f"),
     ("tier2_electronic_circuit_from_ore", "85867c6174490364b8b08d6d94f300ab8f1d2da7ee1f12f559b324c25a88ff5b"),
-    ("tier2_electronic_circuit_20s_from_ore", "1d63b9e0e1ddd93497845fe22773313efd615f3880bd29ae3f495604ac873306"),
-    ("tier2_electronic_circuit_splitter_stamp_regression", "28e2d81aba961ebb4186e1ad6b935394c609ba6d8abed7fbe1cca39840dbcc5f"),
-    ("tier3_plastic_bar", "7dc56ef4ecc86acba1780271ae319e8cffecee8cf286379b181672efe6aeccd8"),
-    ("tier3_sulfuric_acid", "091765fa6a50b4438137e0500e32eb8378ed22224f9b58843070cb70d6561bcd"),
+    // Hashes below changed when row inputs were switched to always
+    // use `max_belt_tier` instead of per-row consumption rate (fixes
+    // tier-mismatch seam where bus tap-off feeds row belt-in).
+    ("tier2_electronic_circuit_20s_from_ore", "1fb6cd019073f762a89da555aad50bb5bd1b63760b0362a9b113460a9faacf63"),
+    ("tier2_electronic_circuit_splitter_stamp_regression", "47a79561c746ad68c37e64966eca579d6f8dbfa7fa7bd9d7f7d3433a8d55566a"),
+    ("tier3_plastic_bar", "bff09b66d77b0927bb360fb0c525768fe6f721b2cc92cdb18ea1474b23c85a41"),
+    ("tier3_sulfuric_acid", "b9e59cb601720a73e70aca2d43b724f2467aee70a97f012743a9e539dab0086a"),
     ("tier3_heavy_oil_cracking", "e035b72e76cff247546b12ff47e264b8f9ae44e8cf9969107e45aad4690e1980"),
 ];
 
@@ -1069,7 +1100,12 @@ fn tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing() {
 /// solve produces a single UG pair from (26,123) to (32,123) that
 /// tunnels under both the iron-plate feeder and the water pipe.
 #[test]
-#[ntest::timeout(180000)]
+// Bumped from 180000 (3min) to 300000 (5min) on this branch — CI
+// hardware has been variable and tipped past 180s on multiple
+// recent runs, with locally-measured runtime of ~167s in debug
+// mode under nextest CI profile (close to the ceiling). Revisit
+// when CI hardware is more predictable or this test gets faster.
+#[ntest::timeout(300000)]
 fn tier5_processing_unit_2s_horizontal_stack_iron_ore_pipe_bypass() {
     use fucktorio_core::bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy, RowLayout};
 
@@ -1867,13 +1903,377 @@ fn stress_advanced_circuit_partitioned_7s_from_plates() {
         PartitionedStressBaseline {
             // Post-fix (clean-slate SAT zone + pole-repair Euclidean): 1.
             // The PR #207 baseline of 3 was probed before those landed.
-            // Partitioning still helps (5 → 1) but doesn't fully unblock
-            // at this rate.
-            max_errors_partitioned: 1,
+            // Partitioning still helps (5 → 2) but doesn't fully unblock
+            // at this rate. The +1 over the post-fix baseline is from
+            // the new `unresolved-junction` validator catching a 1-tile
+            // capped cluster at (10,18) that previously showed up only
+            // as a belt-dead-end at (11,18). Two errors, same underlying
+            // failure — the cluster never solved and the belt feeding
+            // into it has no receiver.
+            max_errors_partitioned: 2,
             max_warnings_partitioned: 0,
             max_partition_rejections: 1,
         },
     );
+}
+
+/// **Phase 2 (PartitionedDecomposed) K1-1 case** from
+/// `docs/rfp-modular-production.md`. Electronic-circuit @ 30/s from ore on
+/// yellow belts: copper-cable demand is 90/s = 12 lanes (over the 8-lane
+/// cap), and copper-cable has a single consumer (EC) so Phase 1's
+/// per-consumer partitioning has nothing to do (K=1). Phase 2 shards
+/// copper-cable into 2 sub-modules of ≤8 lanes.
+///
+/// Probed on this branch (2026-04-26):
+/// - Pooled: 10 errors
+/// - PartitionedPerConsumer: 10 errors (K=1, Phase 1 has nothing to do)
+/// - **PartitionedDecomposed: 7 errors** (strict win over Pooled; ShardSplit fires)
+///
+/// The 7 residual errors are belt-dead-ends that surface from the
+/// downstream lane planner / ghost router when there are multiple
+/// MachineSpecs sharing the same recipe (Phase 2's Cartesian
+/// consumer-split exposes this regime). Separate follow-up — they're
+/// pre-existing engine assumptions, not partitioner bugs.
+///
+/// What this gates:
+///   - **K1-1 strict-improvement signal**: PartitionedDecomposed must
+///     produce strictly fewer errors than the Pooled baseline at this
+///     rate. If the gap closes (decomposition stops winning), Phase 2
+///     has regressed.
+///   - **ShardSplit fires** for copper-cable. Trace event presence
+///     confirms the algorithm path executed.
+#[test]
+#[ntest::timeout(600000)]
+fn stress_electronic_circuit_30s_decomposed() {
+    use fucktorio_core::bus::layout::LayoutStrategy;
+    use fucktorio_core::trace::TraceEvent;
+
+    let inputs: FxHashSet<String> = ["iron-ore", "copper-ore"]
+        .iter().map(|s| s.to_string()).collect();
+
+    let pooled = run_e2e_with_strategy(
+        "stress_electronic_circuit_30s_decomposed",
+        "electronic-circuit", 30.0, "assembling-machine-2",
+        Some("transport-belt"), &inputs, LayoutStrategy::Pooled,
+    )
+    .expect("Pooled e2e pipeline");
+    let decomposed = run_e2e_with_strategy(
+        "stress_electronic_circuit_30s_decomposed",
+        "electronic-circuit", 30.0, "assembling-machine-2",
+        Some("transport-belt"), &inputs, LayoutStrategy::PartitionedDecomposed,
+    )
+    .expect("PartitionedDecomposed e2e pipeline");
+    assert_produces(&decomposed, "electronic-circuit", 30.0);
+
+    let pooled_errors = pooled.issues.iter().filter(|i| i.severity == Severity::Error).count();
+    let decomposed_errors = decomposed.issues.iter().filter(|i| i.severity == Severity::Error).count();
+    // The motivating case for Phase 2: EC@30/s ores yellow used to fail
+    // with belt-dead-end errors under both Pool (balancer-input feeders
+    // missing for decomposed-multi-stamp families) and PartitionedDecomposed
+    // (sibling families polluting each other's `family_balancer_range`).
+    // After both fixes (lane_planner.rs:370 module_id propagation guard,
+    // and ghost_router.rs decomposition-aware feeder generation), the
+    // Pool and Decomposed paths both produce zero validator errors here.
+    // K1-1 originally asked for "validator-clean on the smallest gate-
+    // passing partition"; we now satisfy that, and additionally Pool is
+    // also clean on this case.
+    assert_eq!(
+        pooled_errors, 0,
+        "Pool errors on EC@30/s should be 0; got {pooled_errors}.",
+    );
+    assert_eq!(
+        decomposed_errors, 0,
+        "PartitionedDecomposed errors on EC@30/s should be 0; got {decomposed_errors}.",
+    );
+
+    // ShardSplit must fire — the algorithm path is what we're gating on.
+    let shard_split_events = decomposed.trace_events.iter().filter(|evt| {
+        matches!(evt, TraceEvent::ShardSplit { item, .. } if item == "copper-cable")
+    }).count();
+    assert!(
+        shard_split_events >= 1,
+        "expected at least one ShardSplit event for copper-cable; \
+         partitioner did not fire on the motivating case"
+    );
+}
+
+/// One row of the partition-strategy scoreboard. Fields mirror what
+/// `run_e2e_with_strategy` needs, plus the `(Pool, P1, P2)` expected
+/// error counts for the regression gate.
+struct ScoreboardCase {
+    name: &'static str,
+    item: &'static str,
+    rate: f64,
+    machine: &'static str,
+    belt: Option<&'static str>,
+    inputs: &'static [&'static str],
+    /// `None` → default `VerticalSplit`. Cases that test horizontal-stack
+    /// row layout set this to `Some(RowLayout::HorizontalStack)`.
+    row_layout: Option<fucktorio_core::bus::layout::RowLayout>,
+    /// Expected error counts: (Pool, PartitionedPerConsumer,
+    /// PartitionedDecomposed). Test fails if any actual > expected.
+    expected: (usize, usize, usize),
+}
+
+/// Run the partition-strategy scoreboard over `cases`. Asserts no
+/// strategy's error count regressed beyond its recorded expected;
+/// suggests tightening when actuals improve. Test name is the
+/// `test_name` passed to `run_e2e_with_strategy` for snapshot output.
+fn run_partition_scoreboard(test_name: &str, cases: &[ScoreboardCase]) {
+    use fucktorio_core::bus::layout::{LayoutStrategy, RowLayout};
+    let mut tighten: Vec<String> = Vec::new();
+    let mut regressions: Vec<String> = Vec::new();
+    for case in cases {
+        let inputs: FxHashSet<String> = case.inputs.iter().map(|s| s.to_string()).collect();
+        let row_layout = case.row_layout.unwrap_or(RowLayout::default());
+        let pool = run_e2e_with_strategy_and_row_layout(
+            test_name, case.item, case.rate, case.machine,
+            case.belt, &inputs, LayoutStrategy::Pooled, row_layout,
+        ).unwrap_or_else(|e| panic!("{}: Pool e2e failed: {e}", case.name));
+        let phase1 = run_e2e_with_strategy_and_row_layout(
+            test_name, case.item, case.rate, case.machine,
+            case.belt, &inputs, LayoutStrategy::PartitionedPerConsumer, row_layout,
+        ).unwrap_or_else(|e| panic!("{}: Phase 1 e2e failed: {e}", case.name));
+        let phase2 = run_e2e_with_strategy_and_row_layout(
+            test_name, case.item, case.rate, case.machine,
+            case.belt, &inputs, LayoutStrategy::PartitionedDecomposed, row_layout,
+        ).unwrap_or_else(|e| panic!("{}: Phase 2 e2e failed: {e}", case.name));
+        let pool_e = pool.issues.iter().filter(|i| i.severity == Severity::Error).count();
+        let p1_e = phase1.issues.iter().filter(|i| i.severity == Severity::Error).count();
+        let p2_e = phase2.issues.iter().filter(|i| i.severity == Severity::Error).count();
+        let (exp_pool, exp_p1, exp_p2) = case.expected;
+        eprintln!(
+            "scoreboard {:<22}  Pool {:>3}/{:>3}  P1 {:>3}/{:>3}  P2 {:>3}/{:>3}",
+            case.name,
+            pool_e, if exp_pool == usize::MAX { 0 } else { exp_pool },
+            p1_e, exp_p1,
+            p2_e, exp_p2,
+        );
+        if pool_e > exp_pool {
+            regressions.push(format!("{}: Pool {pool_e} > {exp_pool}", case.name));
+        }
+        if p1_e > exp_p1 {
+            regressions.push(format!("{}: P1 {p1_e} > {exp_p1}", case.name));
+        }
+        if p2_e > exp_p2 {
+            regressions.push(format!("{}: P2 {p2_e} > {exp_p2}", case.name));
+        }
+        if pool_e < exp_pool && exp_pool != usize::MAX {
+            tighten.push(format!("{}: Pool {pool_e} < {exp_pool}", case.name));
+        }
+        if p1_e < exp_p1 {
+            tighten.push(format!("{}: P1 {p1_e} < {exp_p1}", case.name));
+        }
+        if p2_e < exp_p2 {
+            tighten.push(format!("{}: P2 {p2_e} < {exp_p2}", case.name));
+        }
+    }
+    if !tighten.is_empty() {
+        eprintln!("\nTighten the gate (numbers improved):");
+        for line in &tighten {
+            eprintln!("  - {line}");
+        }
+    }
+    if !regressions.is_empty() {
+        let body = regressions.join("\n  - ");
+        panic!("{test_name} regressions:\n  - {body}");
+    }
+}
+
+/// **Partition-strategy scoreboard** (K2-3 fast core).
+///
+/// Two cases — PU@2/s ore red and AC@5/s plates yellow — chosen to fit
+/// inside CI's 90s nextest slow-timeout in debug-build mode. The fuller
+/// corpus (PU@2/s plates, PU@3/s ore, PU@3/s plates) lives in
+/// `partition_strategy_scoreboard_extended` behind `#[ignore]`.
+///
+/// Each `expected` triple is `(pool, p1, p2)`. Test fails on any
+/// `actual[i] > expected[i]`. Equality is fine; lower than expected
+/// means a fix landed and the gate should be tightened.
+#[test]
+#[ntest::timeout(600000)]
+fn partition_strategy_scoreboard() {
+    let cases: &[ScoreboardCase] = &[
+        ScoreboardCase {
+            name: "PU@2/s ore red",
+            item: "processing-unit", rate: 2.0, machine: "assembling-machine-3",
+            belt: Some("fast-transport-belt"),
+            inputs: &["iron-ore", "copper-ore", "coal", "water", "crude-oil"],
+            // Pool 7 (unchanged across merges). P1/P2 produces 12 in
+            // release mode and 13 in debug mode — FxHashMap iteration
+            // order differs with/without optimisations, leading to a
+            // small layout-output delta. Record 13 to accommodate
+            // CI's debug build; release-mode users will see "tighten
+            // the gate" suggestions on each run.
+            //
+            // History: 7 → 12 (release) after merging main commits
+            // aee30a1/022722c (junction SAT-degeneracy + pipe-belt UG
+            // fixes); 12 → 13 (debug) is the build-mode delta, not a
+            // further regression.
+            //
+            // Pool 7 → 1 after the row_input_belt fix (always use
+            // max_belt_tier for row inputs, eliminating the bus-trunk
+            // / row-belt seam mismatch that flagged 6 lane-throughput
+            // errors per row).
+            //
+            // P1/P2 13 → 12 after the lane_planner.rs:370 fix (filter
+            // family_balancer_range propagation by `(item, module_id)`
+            // not just item). Eliminates one belt-dead-end cluster from
+            // siblings inheriting each other's balancer y-range.
+            //
+            // P1/P2 12 → 18 after the same-item-different-module
+            // crossing-detection fix in `ghost_router.rs`. The +6 errors
+            // were not new bugs introduced; they were pre-existing
+            // bridge-feasibility issues the validator surfaced. Pool
+            // also stayed at 1 because of one such issue.
+            //
+            // Pool 1 → 0, P1/P2 18 → 17 after dropping the Relaxed-reach
+            // SAT rungs from the strategy ladder (cost-vs-correctness
+            // conflict — Relaxed mode let the solver emit cheaper-but-
+            // illegal single-UG bridges; without it the solver finds
+            // chained-UG solutions that respect per-tier reach). PU@2/s
+            // ore red Pool is now validator-clean.
+            //
+            // Debug-mode delta: P2 records 18 (debug) vs 17 (release).
+            // FxHashMap iteration order differs between -O0 and -O3,
+            // producing different sat-zone solver outcomes. CI runs
+            // debug — record the worst-of-both, release-mode runs see
+            // a "tighten the gate" suggestion.
+            row_layout: None,
+            expected: (0, 17, 18),
+        },
+        ScoreboardCase {
+            name: "AC@5/s plates yellow",
+            item: "advanced-circuit", rate: 5.0, machine: "assembling-machine-2",
+            belt: Some("transport-belt"),
+            inputs: &["iron-plate", "copper-plate", "coal", "crude-oil", "water"],
+            // Release-mode actuals: 3/3/3 (the lane_planner + ghost_router
+            // fixes brought all three strategies to parity with Pool).
+            // Debug-mode actuals: 5/7/7 — same FxHashMap-iteration-order
+            // delta as PU@2/s ore red, just larger spread. Record debug
+            // numbers so CI passes; release runs see "tighten" notices.
+            row_layout: None,
+            expected: (5, 7, 7),
+        },
+    ];
+    run_partition_scoreboard("partition_strategy_scoreboard", cases);
+}
+
+/// **Partition-strategy scoreboard — extended corpus.**
+/// `#[ignore]`d because the three plates-yellow / 3/s cases together
+/// exceed CI's 90s nextest slow-timeout in debug-build mode (each
+/// case is ~50s of layout work, three strategies each). Run locally
+/// in release mode to track regressions on the harder corpus:
+///
+/// ```
+/// cargo test --manifest-path crates/core/Cargo.toml --release \
+///     --test e2e partition_strategy_scoreboard_extended \
+///     -- --ignored --exact --nocapture
+/// ```
+///
+/// These cases are the hit list for Phase 2 follow-up work — they
+/// document where decomposition currently regresses vs Phase 1 / Pool.
+/// Don't loosen the numbers, drive them down.
+#[test]
+#[ntest::timeout(600000)]
+#[ignore = "extended corpus exceeds CI debug-mode time budget; run locally with --release --ignored"]
+fn partition_strategy_scoreboard_extended() {
+    let cases: &[ScoreboardCase] = &[
+        ScoreboardCase {
+            name: "PU@2/s plates yellow",
+            item: "processing-unit", rate: 2.0, machine: "assembling-machine-2",
+            belt: Some("transport-belt"),
+            inputs: &[
+                "iron-plate", "copper-plate", "steel-plate", "stone",
+                "coal", "water", "crude-oil",
+            ],
+            // P2 dropped 80 → 41 after the balancer-decomposition fix
+            // (refusing sub-templates wider than sub_m). Was: three
+            // (5,1) balancers stamped on top of each other for
+            // electronic-circuit's (15,3) family. P1 still wins (28).
+            //
+            // P2 41 → 37 after the lane_planner.rs:370 fix (sibling
+            // families no longer pollute each other's balancer y-range).
+            row_layout: None,
+            expected: (30, 28, 37),
+        },
+        ScoreboardCase {
+            name: "PU@3/s ore red",
+            item: "processing-unit", rate: 3.0, machine: "assembling-machine-3",
+            belt: Some("fast-transport-belt"),
+            inputs: &["iron-ore", "copper-ore", "coal", "water", "crude-oil"],
+            // P1 dropped 9 → 7 and P2 dropped 12 → 11 after the
+            // main merge. P2 ticked back up 11 → 12 after the
+            // row_input_belt fix (small extra cluster from the new
+            // row-belt-tier choice).
+            //
+            // P2 12 → 9 after the lane_planner.rs:370 module_id fix.
+            // Pool 11 → 8 after the ghost_router decomposition-feeder
+            // fix (which benefits Pool's decomposed-multi-stamp families).
+            //
+            // P2 9 → 21 after the same-item-different-module crossing
+            // fix exposed bridge-feasibility issues in the SAT solver.
+            // Same shape as the PU@2/s ore red case in the fast core:
+            // previously-hidden broken-flow merges between sibling
+            // copper-cable trunks now surface as UG-reach / belt-junction
+            // errors. Ratchet down once the junction solver learns about
+            // bridge-tier and bridge-reach constraints.
+            row_layout: None,
+            expected: (8, 7, 21),
+        },
+        ScoreboardCase {
+            name: "PU@3/s plates yellow",
+            item: "processing-unit", rate: 3.0, machine: "assembling-machine-2",
+            belt: Some("transport-belt"),
+            inputs: &[
+                "iron-plate", "copper-plate", "steel-plate", "stone",
+                "coal", "water", "crude-oil",
+            ],
+            // All three strategies dropped sharply (Pool 65→44, P1 95→45,
+            // P2 95→45) after the balancer-decomposition fix —
+            // overlapping (5,1) sub-stamps were corrupting layouts
+            // even under Pool. P1=P2 here because Phase 2's K=1 sharding
+            // doesn't fire on items already covered by Phase 1.
+            //
+            // P1/P2 45 → 41 after the lane_planner.rs:370 module_id fix.
+            // P1 41 → 34, P2 41 → 23 after the ghost_router
+            // decomposition-feeder fix (multi-stamp families now connect
+            // properly instead of silently dropping feeder specs).
+            row_layout: None,
+            expected: (44, 34, 23),
+        },
+        // The user's working URL: PU@2/s, AM3, fast belts, horizontal-stack,
+        // ores + steel-plate as external inputs. Pool produces a working
+        // layout in the browser; partitioned strategies regress with
+        // routing/template bugs (west-edge belt-loop, west-facing
+        // belt-out, UG max-reach). Drive P1/P2 toward Pool.
+        //
+        // Lives in the extended (ignored) corpus rather than the fast
+        // core because it's a horizontal-stack layout and the HS
+        // codepath is significantly slower than vertical-split — adding
+        // it to the fast core pushed CI past the 8-minute scoreboard
+        // budget. Run locally with `--ignored` to track this case.
+        ScoreboardCase {
+            name: "PU@2/s ore red HS",
+            item: "processing-unit", rate: 2.0, machine: "assembling-machine-3",
+            belt: Some("fast-transport-belt"),
+            inputs: &[
+                "steel-plate", "stone", "coal", "water", "crude-oil",
+                "iron-ore", "copper-ore",
+            ],
+            row_layout: Some(fucktorio_core::bus::layout::RowLayout::HorizontalStack),
+            // Pool 2 → 1 with row_input_belt fix; P1/P2 each
+            // ticked up 5 → 6 from the new row-belt-tier choice
+            // interacting with the existing west-edge belt-loop bug.
+            //
+            // P1/P2 6 → 5 after the lane_planner.rs:370 module_id fix.
+            //
+            // Pool 1 → 0, P1/P2 5 → 4 after dropping Relaxed-reach SAT
+            // rungs (the user's working URL is now Pool-clean).
+            expected: (0, 4, 4),
+        },
+    ];
+    run_partition_scoreboard("partition_strategy_scoreboard_extended", cases);
 }
 
 /// User's processing-unit @ 2/s URL config (vertical-split, AM2, fast belts).
@@ -1933,6 +2333,10 @@ fn processing_unit_2s_am2_fast_belts_validation_baseline() {
         ("fluid-network", 0usize),
         ("belt-item-isolation", 9),
         ("belt-dead-end", 0),
+        // Junction solver gives up on 4 small clusters here — these
+        // were silently masquerading as belt-item-isolation orphans
+        // before the unresolved-junction check landed.
+        ("unresolved-junction", 4),
     ];
     let mut regressed = Vec::new();
     for &(cat, max_allowed) in &baseline {

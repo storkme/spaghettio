@@ -49,4 +49,4 @@ echo "starting interactive session as ${AGENT_NAME}..."
 echo "(workspace: ${WORKSPACE}, repo: ${REPO})"
 echo
 
-exec pi "${PI_BACKEND_ARGS[@]}" -p "$PERSONAL_PROMPT"
+exec pi "${PI_BACKEND_ARGS[@]}"

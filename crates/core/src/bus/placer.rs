@@ -24,6 +24,25 @@ fn effective_in_lane_cap(max_belt_tier: Option<&str>) -> f64 {
     }
 }
 
+/// Belt tier for a row's INPUT belt — always picks the maximum
+/// allowed by `max_belt_tier`, regardless of per-row consumption rate.
+///
+/// The per-row consumption rate would let `belt_entity_for_rate` pick a
+/// smaller tier, but the row's input belt is connected directly to the
+/// bus tap-off, which uses the trunk's tier (sized for total demand
+/// across all consumers). When the trunk is faster than the per-row
+/// rate, picking the per-row tier creates a tier mismatch at the seam:
+/// fast belt feeds yellow belt, validator flags lane-throughput
+/// errors, and items physically back up at the boundary.
+///
+/// Always matching the user's max tier avoids the seam mismatch. Cost:
+/// slightly more red/blue belts than the minimum needed for the per-
+/// row throughput, which is acceptable since the user explicitly chose
+/// that tier as the cap.
+fn row_input_belt(max_belt_tier: Option<&str>) -> &'static str {
+    belt_entity_for_rate(f64::INFINITY, max_belt_tier)
+}
+
 // (LANE_SPLIT_GAP deleted in the inline-bridge unification —
 // templates now pack tight with the bridge stamped inline.)
 
@@ -500,14 +519,8 @@ pub(crate) fn build_one_row(
             let solid_item0 = solid_inputs.first().map(|f| f.item.as_str()).unwrap_or("");
             let solid_item1 = solid_inputs.get(1).map(|f| f.item.as_str()).unwrap_or("");
             let fluid_item = fluid_inputs.first().map(|f| f.item.as_str()).unwrap_or("");
-            let in_belt1 = belt_entity_for_rate(
-                solid_inputs.first().map(|f| f.rate * count as f64 * 2.0).unwrap_or(0.0),
-                max_belt_tier,
-            );
-            let in_belt2 = belt_entity_for_rate(
-                solid_inputs.get(1).map(|f| f.rate * count as f64 * 2.0).unwrap_or(0.0),
-                max_belt_tier,
-            );
+            let in_belt1 = row_input_belt(max_belt_tier);
+            let in_belt2 = row_input_belt(max_belt_tier);
             let msz = machine_size(&spec.entity);
             let (ents, rh, in_port_pipes, out_port_pipes) = templates::fluid_dual_input_row(
                 &spec.recipe,
@@ -555,8 +568,7 @@ pub(crate) fn build_one_row(
         RowKind::FluidInput => {
             let solid_item = solid_inputs.first().map(|f| f.item.as_str()).unwrap_or("");
             let fluid_item = fluid_inputs.first().map(|f| f.item.as_str()).unwrap_or("");
-            let in_rate = solid_inputs.first().map(|f| f.rate * count as f64).unwrap_or(0.0);
-            let in_belt = belt_entity_for_rate(in_rate * 2.0, max_belt_tier);
+            let in_belt = row_input_belt(max_belt_tier);
             let msz = machine_size(&spec.entity);
             let (ents, rh, port_pipes) = templates::fluid_input_row(
                 &spec.recipe,
@@ -582,8 +594,7 @@ pub(crate) fn build_one_row(
         }
         RowKind::SingleInput => {
             let input_item = solid_inputs.first().map(|f| f.item.as_str()).unwrap_or("");
-            let in_rate = solid_inputs.first().map(|f| f.rate * count as f64).unwrap_or(0.0);
-            let in_belt = belt_entity_for_rate(in_rate * 2.0, max_belt_tier);
+            let in_belt = row_input_belt(max_belt_tier);
             let msz = machine_size(&spec.entity);
             let (ents, rh) = templates::single_input_row(
                 &spec.recipe,
@@ -607,18 +618,9 @@ pub(crate) fn build_one_row(
             let item0 = solid_inputs.first().map(|f| f.item.as_str()).unwrap_or("");
             let item1 = solid_inputs.get(1).map(|f| f.item.as_str()).unwrap_or("");
             let item2 = solid_inputs.get(2).map(|f| f.item.as_str()).unwrap_or("");
-            let in_belt1 = belt_entity_for_rate(
-                solid_inputs.first().map(|f| f.rate * count as f64 * 2.0).unwrap_or(0.0),
-                max_belt_tier,
-            );
-            let in_belt2 = belt_entity_for_rate(
-                solid_inputs.get(1).map(|f| f.rate * count as f64 * 2.0).unwrap_or(0.0),
-                max_belt_tier,
-            );
-            let in_belt3 = belt_entity_for_rate(
-                solid_inputs.get(2).map(|f| f.rate * count as f64 * 2.0).unwrap_or(0.0),
-                max_belt_tier,
-            );
+            let in_belt1 = row_input_belt(max_belt_tier);
+            let in_belt2 = row_input_belt(max_belt_tier);
+            let in_belt3 = row_input_belt(max_belt_tier);
             let msz = machine_size(&spec.entity);
             let (ents, rh) = templates::triple_input_row(
                 &spec.recipe,
@@ -689,7 +691,7 @@ pub(crate) fn build_one_row(
                 let item0 = ranked.first().map(|f| f.item.as_str()).unwrap_or("");
                 let item1 = ranked.get(1).map(|f| f.item.as_str()).unwrap_or("");
                 let item0_per_machine = ranked.first().map(|f| f.rate).unwrap_or(0.0);
-                let item1_per_machine = ranked.get(1).map(|f| f.rate).unwrap_or(0.0);
+                let _item1_per_machine = ranked.get(1).map(|f| f.rate).unwrap_or(0.0);
                 // Block size: how many machines a single full belt
                 // (both lanes) can feed at this per-machine rate. Trunk
                 // count: one trunk per block, since each trunk sources
@@ -707,7 +709,7 @@ pub(crate) fn build_one_row(
                 };
                 let k_trunks = count.div_ceil(block_size).max(1);
                 let in_belt1 = belt_entity_for_rate(belt_cap, max_belt_tier);
-                let in_belt2 = belt_entity_for_rate(item1_per_machine * count as f64 * 2.0, max_belt_tier);
+                let in_belt2 = row_input_belt(max_belt_tier);
                 crate::trace::emit(crate::trace::TraceEvent::RowLayoutSelected {
                     recipe: spec.recipe.clone(),
                     kind: "HorizontalStack".to_string(),
@@ -767,14 +769,8 @@ pub(crate) fn build_one_row(
             } else {
                 let item0 = solid_inputs.first().map(|f| f.item.as_str()).unwrap_or("");
                 let item1 = solid_inputs.get(1).map(|f| f.item.as_str()).unwrap_or("");
-                let in_belt1 = belt_entity_for_rate(
-                    solid_inputs.first().map(|f| f.rate * count as f64 * 2.0).unwrap_or(0.0),
-                    max_belt_tier,
-                );
-                let in_belt2 = belt_entity_for_rate(
-                    solid_inputs.get(1).map(|f| f.rate * count as f64 * 2.0).unwrap_or(0.0),
-                    max_belt_tier,
-                );
+                let in_belt1 = row_input_belt(max_belt_tier);
+                let in_belt2 = row_input_belt(max_belt_tier);
                 let (ents, rh) = templates::dual_input_row(
                     &spec.recipe,
                     &spec.entity,

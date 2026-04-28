@@ -72,6 +72,15 @@ struct BeltSpec {
     start: (i32, i32),
     goal: (i32, i32),
     item: String,
+    /// Module the spec's lane belongs to. Under `LayoutStrategy::Pooled`
+    /// always 0; under `PartitionedPerConsumer`/`PartitionedDecomposed` a
+    /// single item can have multiple sibling families with the same item
+    /// name but different module ids. The crossing-detection filter
+    /// (`ghost_item_at`) keys on `(item, module_id)` so same-item-
+    /// different-module paths get bridged via UG instead of silently
+    /// merging — see comment at the filter site for the symptom this
+    /// guards against.
+    module_id: u32,
     belt_name: &'static str,
     /// Explicit exit direction for the final belt on this path. Set when the
     /// planner knows the spec's topology — producer-row orientation, trunk
@@ -287,7 +296,11 @@ pub fn route_bus_ghost(
     // trunk tile, and the `all_ghost_crossings` check still fires for different-
     // item overlaps so the junction solver can bridge them.
     // -------------------------------------------------------------------------
-    let mut trunk_tile_items: FxHashMap<(i32, i32), String> = FxHashMap::default();
+    // Tile → `(item, module_id)`. Module id is needed alongside item so the
+    // crossing filter at the materialisation step can distinguish same-item
+    // sibling families (under Phase 2 the same item can have multiple
+    // independent flows that must be physically separated via UG bridges).
+    let mut trunk_tile_items: FxHashMap<(i32, i32), (String, u32)> = FxHashMap::default();
     // Synthetic column paths for each trunk lane, keyed by "trunk:{item}:{x}".
     // Keyed per-column (not just per-item) because multi-lane items like a
     // split copper-cable trunk have multiple vertical columns — merging them
@@ -369,7 +382,7 @@ pub fn route_bus_ghost(
                 // tap/ret entities at trunk tiles, and preserves crossing
                 // detection so the junction solver can bridge them.
                 existing_belts.insert(tile);
-                trunk_tile_items.insert(tile, lane.item.clone());
+                trunk_tile_items.insert(tile, (lane.item.clone(), lane.module_id));
                 trunk_synth_paths
                     .entry(format!("trunk:{}:{}", lane.item, x))
                     .or_default()
@@ -915,7 +928,11 @@ pub fn route_bus_ghost(
             continue;
         }
         if let Some(item) = &ent.carries {
-            trunk_tile_items.insert((ent.x, ent.y), item.clone());
+            // Fluid trunks stay pooled (RFP "Fluids" carve-out), so module_id
+            // is always 0 here. The `(item, 0)` tuple still distinguishes
+            // them from any solid-trunk sibling at the same tile under the
+            // crossing filter.
+            trunk_tile_items.insert((ent.x, ent.y), (item.clone(), 0));
             // Also inject a synthetic fluid-trunk path so classify_crossing
             // sees the pipe column as a second spec at belt×pipe crossing
             // tiles. Key format mirrors the solid-trunk synth path format
@@ -1054,6 +1071,7 @@ pub fn route_bus_ghost(
                     start: (start_x, tap_y),
                     goal: (goal_x, tap_y),
                     item: lane.item.clone(),
+                    module_id: lane.module_id,
                     belt_name: horiz_belt,
                     exit_dir: Some(EntityDirection::East),
                 });
@@ -1103,6 +1121,7 @@ pub fn route_bus_ghost(
                     start: (start_x, out_y),
                     goal: (goal_x, out_y),
                     item: lane.item.clone(),
+                    module_id: lane.module_id,
                     belt_name: horiz_belt,
                     exit_dir: Some(EntityDirection::West),
                 });
@@ -1142,6 +1161,7 @@ pub fn route_bus_ghost(
                     start: (start_x, out_y),
                     goal: (goal_x, out_y),
                     item: lane.item.clone(),
+                    module_id: lane.module_id,
                     belt_name: horiz_belt,
                     exit_dir: Some(EntityDirection::West),
                 });
@@ -1164,20 +1184,84 @@ pub fn route_bus_ghost(
                 if is_first_lane_in_family {
                     let templates = crate::bus::balancer_library::balancer_templates();
                     let (n, m) = (fam.shape.0 as u32, fam.shape.1 as u32);
+
+                    // Collect all input tile absolute x-coords across the
+                    // family's stamps. For a direct (n, m) template match
+                    // there's a single stamp; under the decomposition
+                    // fallback (mirroring `stamp_family_balancer` in
+                    // `balancer.rs`) the family is realised as g sibling
+                    // sub-stamps each at their own origin, with one set of
+                    // input tiles per sub-stamp. Without this fallback
+                    // path, decomposed families (e.g. iron-plate (2, 10)
+                    // → 2 × (1, 5)) had zero feeders generated and the
+                    // producer rows dead-ended.
+                    //
+                    // The two paths must agree with the stamper on origin
+                    // selection (`balancer_origin_x` on the relevant lane
+                    // chunk) and on the geometric guard
+                    // `sub_template.width <= sub_m` — otherwise feeders
+                    // aim at tiles where no balancer was actually stamped.
+                    let mut input_xs: Vec<i32> = Vec::new();
                     if let Some(template) = templates.get(&(n, m)) {
-                        // Must match the origin used by stamp_family_balancer
-                        // (see balancer::balancer_origin_x). Feeder goals
-                        // are template.input_tiles offsets added to this
-                        // origin; if it diverges from the stamper's origin
-                        // the feeder belts aim at the wrong tiles.
                         let origin_x = if fam.lane_xs.is_empty() {
                             x
                         } else {
                             balancer_origin_x(&fam.lane_xs, template.output_tiles)
                         };
+                        let mut rel_inputs: Vec<i32> =
+                            template.input_tiles.iter().map(|t| t.0).collect();
+                        rel_inputs.sort();
+                        for r in rel_inputs {
+                            input_xs.push(origin_x + r);
+                        }
+                    } else {
+                        // Decomposition fallback: must match
+                        // `stamp_family_balancer`'s search order
+                        // (largest g first) and skip-rule
+                        // (sub_template.width > sub_m).
+                        for g in (1..=n).rev() {
+                            if n % g != 0 || m % g != 0 {
+                                continue;
+                            }
+                            let sub_n = n / g;
+                            let sub_m = m / g;
+                            let Some(sub_template) = templates.get(&(sub_n, sub_m)) else {
+                                continue;
+                            };
+                            if sub_template.width > sub_m {
+                                continue;
+                            }
+                            let lanes_per_group = sub_m as usize;
+                            for gi in 0..(g as usize) {
+                                let lane_start = gi * lanes_per_group;
+                                let lane_end = (lane_start + lanes_per_group)
+                                    .min(fam.lane_xs.len());
+                                let lane_chunk = &fam.lane_xs[lane_start..lane_end];
+                                if lane_chunk.is_empty() {
+                                    continue;
+                                }
+                                let sub_origin_x = balancer_origin_x(
+                                    lane_chunk, sub_template.output_tiles,
+                                );
+                                let mut rel_inputs: Vec<i32> =
+                                    sub_template.input_tiles.iter().map(|t| t.0).collect();
+                                rel_inputs.sort();
+                                for r in rel_inputs {
+                                    input_xs.push(sub_origin_x + r);
+                                }
+                            }
+                            break;
+                        }
+                    }
+
+                    if !input_xs.is_empty() {
+                        // Sort across all sub-stamps so the leftmost
+                        // producer row maps to the leftmost balancer
+                        // input — same convention as the direct-template
+                        // path used (`sort_by_key(|t| t.0)`), now applied
+                        // across the union of sub-stamp inputs.
+                        input_xs.sort();
                         let origin_y = fam.balancer_y_start;
-                        let mut inputs: Vec<(i32, i32)> = template.input_tiles.to_vec();
-                        inputs.sort_by_key(|t| t.0);
                         let feeder_belt = belt_entity_for_rate(fam.total_rate, max_belt_tier);
 
                         for (i, &pri) in fam.producer_rows.iter().enumerate() {
@@ -1186,8 +1270,7 @@ pub fn route_bus_ghost(
                             }
                             let row = &row_spans[pri];
                             let (start_x, out_y) = row_exit_origin(row);
-                            if let Some(&(input_x_rel, _input_y_rel)) = inputs.get(i) {
-                                let input_x = origin_x + input_x_rel;
+                            if let Some(&input_x) = input_xs.get(i) {
                                 let input_y = origin_y;
                                 let feeder_key =
                                     format!("feeder:{}:{}:{}", lane.item, input_x, out_y);
@@ -1209,6 +1292,7 @@ pub fn route_bus_ghost(
                                     start: (start_x, out_y),
                                     goal: (input_x, input_y),
                                     item: lane.item.clone(),
+                                    module_id: lane.module_id,
                                     belt_name: feeder_belt,
                                     exit_dir: Some(feeder_exit_dir),
                                 });
@@ -1240,9 +1324,16 @@ pub fn route_bus_ghost(
     let mut all_ghost_crossings: Vec<(i32, i32)> = Vec::new();
     #[allow(clippy::needless_late_init)]
     let unroutable_specs: Vec<String>;
-    // Tracks which item each ghost-routed tile carries, so we can distinguish
-    // same-item overlaps (not conflicts) from different-item overlaps (real).
-    let mut ghost_item_at: FxHashMap<(i32, i32), String> = FxHashMap::default();
+    // Tracks `(item, module_id)` at each ghost-routed tile so the crossing
+    // filter can distinguish three cases: (1) same-item-same-module
+    // overlaps (not conflicts — the original "two belts converging"
+    // semantics), (2) different-item overlaps (real crossings), and (3)
+    // same-item-different-module overlaps (also real crossings under
+    // Phase 2 — sibling families must stay physically separate). Pre-Phase 2
+    // this was a `FxHashMap<_, String>` and case (3) silently merged into
+    // case (1), so mod0 taps would disappear into mod1 trunks at every
+    // east-tap row pitch.
+    let mut ghost_item_at: FxHashMap<(i32, i32), (String, u32)> = FxHashMap::default();
 
     // All remaining specs (taps, returns, feeders) — no ordering constraint
     // since trunks are now stamped as hard obstacles before A* runs.
@@ -1601,13 +1692,24 @@ pub fn route_bus_ghost(
                     return false;
                 }
                 match ghost_item_at.get(t) {
-                    Some(existing_item) => *existing_item != spec.item,
+                    // Real crossing iff item OR module_id differs. Same-item-
+                    // same-module overlaps remain silent (the original
+                    // "two converging belts" case under Pool); same-item-
+                    // different-module gets bridged via the junction solver
+                    // — without this guard, mod0 east taps merged silently
+                    // into mod1 south trunks at every consumer-row pitch
+                    // (y=144/152/160/168/176 on EC@30/s decomposed).
+                    Some((existing_item, existing_mod)) => {
+                        existing_item != &spec.item || *existing_mod != spec.module_id
+                    }
                     None => false,
                 }
             }));
 
             for &tile in &path {
-                ghost_item_at.entry(tile).or_insert_with(|| spec.item.clone());
+                ghost_item_at
+                    .entry(tile)
+                    .or_insert_with(|| (spec.item.clone(), spec.module_id));
             }
         }
     }
@@ -1937,21 +2039,9 @@ pub fn route_bus_ghost(
         .collect();
     let perp_strategy = PerpendicularTemplateStrategy;
     let sat_surface = SatStrategy::surface_only();
-    let sat_1ug = SatStrategy::with(
-        "sat-1ug",
-        crate::bus::junction_sat_strategy::SatConstraints::max_ug_ins(1),
-    );
-    let sat_2ug = SatStrategy::with(
-        "sat-2ug",
-        crate::bus::junction_sat_strategy::SatConstraints::max_ug_ins(2),
-    );
-    let sat_full = SatStrategy::unrestricted();
     // Native-reach rungs: each channel's UG reach equals its declared
-    // belt tier. Tried before the relaxed ladder so mixed-tier zones
-    // get tier-correct UG pair lengths when feasible. If every native
-    // rung returns UNSAT (the zone genuinely needs longer-than-native
-    // UGs), falls through to the relaxed rungs which stamp all UGs at
-    // the zone's max tier.
+    // belt tier. Tier-correct UG pair lengths — the SAT solver finds
+    // chained-UG solutions when a single UG can't reach.
     let sat_1ug_native = SatStrategy::with(
         "sat-1ug-native",
         crate::bus::junction_sat_strategy::SatConstraints::max_ug_ins_native(1),
@@ -1964,34 +2054,53 @@ pub fn route_bus_ghost(
         "sat-native",
         crate::bus::junction_sat_strategy::SatConstraints::unrestricted_native(),
     );
+    // Auto-upgrade rungs: only included when the user did NOT pin a
+    // `max_belt_tier`. When the tier is auto, the engine is free to
+    // promote a low-rate channel's UG to the zone's dominant tier so
+    // a yellow channel needing more reach than yellow can do gets a
+    // red UG (which the SatStrategy post-processes to keep the entity
+    // tier in sync with the relaxed reach the solver used). When the
+    // user pinned a tier, we deliberately DO NOT include these — an
+    // unsolvable zone surfaces as `unresolved-junction`, signalling
+    // "your geometry needs a wider belt" rather than silently mixing
+    // tiers behind the user's back.
+    let sat_1ug_upgrade = SatStrategy::with(
+        "sat-1ug-upgrade",
+        crate::bus::junction_sat_strategy::SatConstraints::max_ug_ins(1),
+    );
+    let sat_2ug_upgrade = SatStrategy::with(
+        "sat-2ug-upgrade",
+        crate::bus::junction_sat_strategy::SatConstraints::max_ug_ins(2),
+    );
+    let sat_full_upgrade = SatStrategy::unrestricted();
     // Strategy order = priority. Walker vetoes bad proposals from any
     // of them; escalation happens naturally by falling through to the
     // next strategy in the list.
     //   1. cheap templates (fixed footprint, no search)
-    //   2. surface-only SAT — simplest layout, no UG at all. Reach
-    //      doesn't apply so we don't need a -native variant here.
-    //   3-5. SAT with increasing UG budget at NATIVE reach — prefer
-    //        tier-correct UG lengths; the solver has to justify each
-    //        corridor by infeasibility at the previous cap.
-    //   6-8. SAT with increasing UG budget at RELAXED reach (zone's
-    //        max tier). Fallback for zones that genuinely can't route
-    //        under tight per-tier reach.
+    //   2. surface-only SAT — simplest layout, no UG at all
+    //   3-5. SAT with increasing UG budget at NATIVE reach — tier-
+    //        correct UG lengths, including chained-UG solutions.
+    //   6.   eviction — last-resort, runs only after every SAT variant
+    //        returned UNSAT. Each recipe pulls one or more participating
+    //        specs out of the SAT problem (geometrically or via A*),
+    //        then re-invokes SAT on the reduced spec set.
+    //   7-9. (auto only) AutoUpgrade rungs — Relaxed reach with UG
+    //        entity-tier promoted to the zone's dominant tier.
     let eviction_strategy = EvictionStrategy::default_recipes();
-    let strategies: [&dyn JunctionStrategy; 9] = [
+    let mut strategies: Vec<&dyn JunctionStrategy> = vec![
         &perp_strategy,
         &sat_surface,
         &sat_1ug_native,
         &sat_2ug_native,
         &sat_full_native,
-        &sat_1ug,
-        &sat_2ug,
-        &sat_full,
-        // Eviction runs only after every SAT variant returned UNSAT.
-        // Each recipe pulls one or more participating specs out of the
-        // SAT problem (geometrically or via A*), then re-invokes SAT on
-        // the reduced spec set.
         &eviction_strategy,
     ];
+    if max_belt_tier.is_none() {
+        strategies.push(&sat_1ug_upgrade);
+        strategies.push(&sat_2ug_upgrade);
+        strategies.push(&sat_full_upgrade);
+    }
+    let strategies: &[&dyn JunctionStrategy] = &strategies;
 
     // Group adjacent crossings that share a spec into a single cluster
     // and solve each cluster jointly. A single crossing is still a
@@ -2126,9 +2235,30 @@ pub fn route_bus_ghost(
             &spec_exit_dirs,
             &spec_kinds,
             &entities,
-            &strategies,
+            strategies,
             &pending_crossings,
         ) else {
+            // Diagnostic: when FUCKTORIO_BLAME_JUNCTIONS=1 is set,
+            // identify which spec's removal would let the cluster
+            // solve. Helps narrow "what shape of crossing keeps
+            // failing" without instrumenting the solver itself.
+            if std::env::var("FUCKTORIO_BLAME_JUNCTIONS").is_ok() {
+                blame_unsolvable_cluster(
+                    cluster.as_slice(),
+                    &keys_at_tile,
+                    &routed_paths,
+                    &hard,
+                    &junction_hard,
+                    &unreleasable_obstacles,
+                    &spec_belt_tiers,
+                    &spec_items,
+                    &spec_exit_dirs,
+                    &spec_kinds,
+                    &entities,
+                    strategies,
+                    &pending_crossings,
+                );
+            }
             for &t in cluster {
                 remaining_crossings.insert(t);
             }
@@ -2837,6 +2967,82 @@ fn cluster_adjacent_crossings(
 /// Returns CrossingInfo if exactly 2 different-item specs cross at this tile.
 ///
 /// `spec_items` and `spec_belt_tiers` are consulted as a fallback for keys
+/// Diagnostic for `FUCKTORIO_BLAME_JUNCTIONS=1`: when a cluster fails
+/// to solve, retry with each participating spec removed in turn. Any
+/// removal that lets the cluster solve points at a "blamed" spec —
+/// the kind of crossing this solver is failing on. Emits one
+/// `JunctionBlamedSpec` per such removal.
+///
+/// Cost: up to N extra `solve_crossing` calls per failed cluster (N =
+/// participating spec count). Gated on env var because each retry can
+/// take seconds; keep it off in CI. Trace events from the retries are
+/// muted via `trace::with_muted` so they don't pollute the real
+/// event stream.
+#[allow(clippy::too_many_arguments)]
+fn blame_unsolvable_cluster(
+    cluster: &[(i32, i32)],
+    initial_specs: &[&str],
+    routed_paths: &FxHashMap<String, Vec<(i32, i32)>>,
+    hard: &FxHashSet<(i32, i32)>,
+    junction_hard: &FxHashSet<(i32, i32)>,
+    unreleasable_obstacles: &FxHashSet<(i32, i32)>,
+    spec_belt_tiers: &FxHashMap<String, BeltTier>,
+    spec_items: &FxHashMap<String, String>,
+    spec_exit_dirs: &FxHashMap<String, EntityDirection>,
+    spec_kinds: &FxHashMap<String, crate::bus::junction::SpecKind>,
+    entities: &[PlacedEntity],
+    strategies: &[&dyn JunctionStrategy],
+    pending_crossings: &FxHashSet<(i32, i32)>,
+) {
+    if initial_specs.len() < 2 {
+        return; // can't blame a single spec — nothing to remove
+    }
+    let cluster_seed = cluster[0];
+    for &removed in initial_specs {
+        let kept_specs: Vec<&str> = initial_specs
+            .iter()
+            .copied()
+            .filter(|&k| k != removed)
+            .collect();
+        let mut kept_paths = routed_paths.clone();
+        kept_paths.remove(removed);
+        let solved = trace::with_muted(|| {
+            junction_solver::solve_crossing(
+                cluster,
+                &kept_specs,
+                &kept_paths,
+                hard,
+                junction_hard,
+                unreleasable_obstacles,
+                spec_belt_tiers,
+                spec_items,
+                spec_exit_dirs,
+                spec_kinds,
+                entities,
+                strategies,
+                pending_crossings,
+            )
+            .is_some()
+        });
+        if !solved {
+            continue;
+        }
+        let item = spec_items.get(removed).cloned().unwrap_or_default();
+        let dir = spec_exit_dirs
+            .get(removed)
+            .map(|d| format!("{d:?}"))
+            .unwrap_or_default();
+        trace::emit(trace::TraceEvent::JunctionBlamedSpec {
+            cluster_x: cluster_seed.0,
+            cluster_y: cluster_seed.1,
+            participating: initial_specs.len(),
+            spec_key: removed.to_string(),
+            spec_item: item,
+            spec_direction: dir,
+        });
+    }
+}
+
 /// (e.g. synthetic trunk paths) that don't have a corresponding `BeltSpec`
 /// in `specs`.
 fn classify_crossing(
@@ -2921,7 +3127,7 @@ fn emit_unresolved_junctions(
     spec_items: &FxHashMap<String, String>,
     spec_belt_tiers: &FxHashMap<String, BeltTier>,
     spec_kinds: &FxHashMap<String, crate::bus::junction::SpecKind>,
-    ghost_item_at: &FxHashMap<(i32, i32), String>,
+    ghost_item_at: &FxHashMap<(i32, i32), (String, u32)>,
 ) -> Vec<LayoutRegion> {
     use crate::bus::junction::{Junction, Rect, SpecCrossing, SpecKind, SpecOrigin};
     use crate::models::{PortPoint, RegionKind};

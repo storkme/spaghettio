@@ -42,6 +42,27 @@ struct FeederHit {
     entity_name: String,
 }
 
+/// Upgrade every UG entity's name to the dominant tier's UG. Used by
+/// `ReachMode::Relaxed` rungs (the AutoUpgrade path, only enabled when
+/// `max_belt_tier` is `None`). The SAT solver under Relaxed reach lets
+/// any channel's UG pair span the zone's max-reach distance, but the
+/// per-channel entity emission in `sat::extract_solution` paints each
+/// UG at its boundary's declared tier — so a low-rate channel ends up
+/// with a yellow `underground-belt` physically too short for the span
+/// the solver allowed. Promoting the entity name to the dominant
+/// tier's UG closes that gap. Surface belts stay at their per-channel
+/// tier (Factorio handles mixed-tier belt→UG transitions, throughput
+/// caps at the slowest segment).
+fn promote_ug_entity_tiers(entities: &mut [crate::models::PlacedEntity], dominant_belt: &str) {
+    use crate::bus::balancer::underground_for_belt;
+    let dominant_ug = underground_for_belt(dominant_belt);
+    for e in entities.iter_mut() {
+        if is_ug_belt(&e.name) && e.name != dominant_ug {
+            e.name = dominant_ug.to_string();
+        }
+    }
+}
+
 /// Canonical surface-belt name for an entity's tier — `"transport-belt"`
 /// / `"fast-transport-belt"` / `"express-transport-belt"`. Accepts belts,
 /// undergrounds and splitters. Returns `None` only for entities that
@@ -928,6 +949,10 @@ impl JunctionStrategy for SatStrategy {
                 });
                 // Fall through to fresh SAT solve below.
             } else {
+                let mut pruned = pruned;
+                if self.constraints.reach_mode == ReachMode::Relaxed {
+                    promote_ug_entity_tiers(&mut pruned, belt_name);
+                }
                 return Some(JunctionSolution {
                     entities: pruned,
                     footprint: Rect {
@@ -1090,6 +1115,11 @@ impl JunctionStrategy for SatStrategy {
         // had returned UNSAT — the growth loop will keep trying.
         if pruned.is_empty() && best_count > 0 && !boundaries.is_empty() {
             return None;
+        }
+
+        let mut pruned = pruned;
+        if self.constraints.reach_mode == ReachMode::Relaxed {
+            promote_ug_entity_tiers(&mut pruned, belt_name);
         }
 
         Some(JunctionSolution {

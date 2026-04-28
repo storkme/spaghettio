@@ -35,3 +35,6 @@ web/.playwright-mcp/
 web/node_modules/
 web/dist/
 web/src/wasm-pkg/
+
+
+/crates/core/examples/
