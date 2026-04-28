@@ -521,33 +521,101 @@ What stays useful from this commit regardless:
   different recognisers (decomposition, learned policy) without
   re-plumbing instrumentation.
 
-## 11. Where this might go
+## 11. Decomposition probe and what it found
 
-Updated after the §10 A/B result. The tile-pinning approach didn't
-move the needle on our typical workload. Three credible follow-ups in
-roughly the order I'd try them:
+After the §10 A/B null result on tile-pinning, the next experiment
+was decomposition: instead of pinning tiles inside a fresh zone, can
+we recognise sub-rectangles whose shape + boundary topology + forbidden
+tiles match a *cached small zone*, look those up, and stitch results
+together at the seams? This skips SAT entirely on the matched region
+rather than pinning constraints into it.
 
-1. **Decomposition (highest leverage)**: the 11×4 and 17×3 records in
-   the cache are visibly assemblies of smaller patterns side-by-side.
-   Recognise sub-rectangles whose port topology + forbidden tiles match
-   a cached small zone, look those up via the existing cache, stitch
-   them together at the seams. This skips SAT entirely on the matched
-   region — fundamentally different from pinning, and where caching's
-   killer scale story lives.
-2. **Tighten the recogniser**: add flow-direction checks and
-   per-channel topology matching to drop the 38% fall-back rate on
-   real injection. Each fall-back is a wasted SAT call; cutting that
-   to <5% would tip the wall-clock balance and might make hints worth
-   the recogniser overhead on bigger zones.
-3. **Run the A/B against the long-tail (11×4, 17×3) zones only**:
-   trivial 4×4 cases are SAT-bound by ~200µs solves where pinning
-   can't help. The big zones take 1-7 ms each; that's where pinning
-   could actually save time. Need to populate the curated cache more
-   widely first to have a meaningful sample.
+### Geometric upper bound
+
+A cheap first probe (`diag_decomposition_potential`): for each cached
+zone with width or height ≥ 5, count cuts where both halves' dimensions
+also appear in the cache. Just sizes — not boundary topology yet.
+
+Reading on 10660 records (53 distinct shapes):
+
+```
+Large zones: 45 unique shapes, 41 have at least one valid cut (91%)
+Candidate cuts: 122 vertical + 35 horizontal
+```
+
+The corpus has enough variety in widths/heights that almost every big
+zone could in principle be sliced into pieces with sizes we've seen.
+So decomposition is geometrically viable.
+
+### Signature-level probe — blocked by a pre-existing bug
+
+The next, stricter probe needs to reconstruct synthetic sub-zone
+signatures (not just sizes — the boundary tiles + forbidden tiles
+have to match a cached entry's full signature). I added a
+`parse_signature` for the canonical-signature string and a
+`parsed_to_crossing_zone` helper that round-trips a parsed signature
+through `canonicalise` to recover the canonical form.
+
+**Hit a pre-existing bug in `transform_port`** (in `zone_cache.rs`,
+not introduced by this work). The 90° CW rotation rule for the
+`E → S` edge transition uses `cur_w-1-o` where the geometric
+derivation gives `cur_h-1-o`. Self-consistent at runtime — both write
+and read paths produce the same wrong output, so caching still
+works — but it means the canonical signatures aren't faithful
+geometric representations. ~40% of cached signatures don't
+round-trip through `parse_signature → parsed_to_crossing_zone →
+canonicalise` because the lex-min winner in the buggy D4 transform
+table changes when the input zone's orientation changes.
+
+This blocks the decomposition probe at the signature-matching step.
+Two options to unblock:
+
+1. **Fix the bug + regenerate the cache.** Small change in
+   `transform_port`'s match arms, but invalidates every committed
+   `sat-zones.bin` (web app + native both). Need to confirm parity
+   on the e2e suite after the fix and re-bake the embedded blob.
+2. **Build a decomposition-friendly secondary data structure** that
+   stores boundary topology in geometric form rather than via
+   round-tripping the signature. More work, doesn't disturb existing
+   callers.
+
+Option 1 is probably the right move — the bug also means our
+"D4-canonical" signature isn't fully canonical, and other future
+tooling that wants to reason about zone geometry will hit the same
+wall. But it's a chunk of work that wants its own commit.
+
+### What's actually in this branch
+
+- `parse_signature(sig)` — turns a canonical signature string back
+  into a structured `ParsedSignature { width, height, channels,
+  forbidden, max_ug_ins }`. Useful regardless of the bug, e.g. for
+  debugging tools that want to inspect cached zones without round-trip
+  through `canonicalise`.
+- `parsed_to_crossing_zone(parsed)` — reconstructs a synthetic
+  `CrossingZone` from a parsed signature. Correctly handles the
+  corner-direction quirk for 1×N degenerate zones.
+- `diag_decomposition_potential` — the geometric upper bound diag.
+
+The full decomposition runtime path is parked behind the bug fix.
+
+## 12. Where this might go
+
+Probably-correct next steps, given everything above:
+
+1. **Fix the `transform_port` E→S / W→N / S→W rules** so all 8 D4
+   transforms preserve geometric equivalence. Re-run the e2e suite
+   to confirm parity. Re-bake `crates/core/data/sat-zones.bin`.
+2. **Build the signature-level decomposition probe** on top of the
+   fixed parser. This is what tells us whether decomposition's
+   "almost every big zone has cuts" upper bound (91%) holds when we
+   add the boundary-topology requirement.
+3. If decomposition validates, **wire the runtime path**: in the
+   SAT call site, on cache miss, try decomposing the zone. Every
+   fully-decomposed zone skips SAT entirely.
 
 The ML angle, when we get there, is mostly about which decomposition
-to try first — a learned policy on `(zone → best decomposition)` pairs
-where the reward is total solve time. That's a future commit.
+to try first — a learned policy on `(zone → best decomposition)`
+pairs where the reward is total solve time. That's a future commit.
 
 ---
 
