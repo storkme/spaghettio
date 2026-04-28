@@ -961,8 +961,15 @@ mod parse_tests {
     #[test]
     fn embedded_cache_full_roundtrip() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("data/sat-zones.bin");
-        let Ok(bytes) = std::fs::read(&path) else { return };
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| {
+            panic!("embedded cache missing or unreadable at {}: {}", path.display(), e)
+        });
         let records = parse_records(&bytes);
+        assert!(
+            !records.is_empty(),
+            "embedded cache at {} parsed to zero records — corrupt or stale?",
+            path.display(),
+        );
         let mut ok = 0usize;
         let mut bad: Vec<(String, String)> = Vec::new();
         for rec in &records {
