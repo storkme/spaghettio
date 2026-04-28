@@ -14,6 +14,17 @@ test-threads = 1
 filter = "test(partition_strategy_scoreboard)"
 slow-timeout = { period = "60s", terminate-after = 6 }
 
+# `tier5_processing_unit_2s_horizontal_stack_iron_ore_pipe_bypass`
+# runs the horizontal-stack PU layout end-to-end. ~29s in release,
+# >90s in debug, and the author's `#[ntest::timeout(180000)]` is a
+# 3-min ceiling — so the test is known-slow under debug. Give
+# nextest 4 minutes to complete (at the ntest ceiling + slack) so
+# the slow-timeout doesn't kill it before the test's own ceiling
+# catches genuine hangs.
+[[profile.ci.overrides]]
+filter = "test(tier5_processing_unit_2s_horizontal_stack_iron_ore_pipe_bypass)"
+slow-timeout = { period = "60s", terminate-after = 4 }
+
 [profile.ci.junit]
 path = "junit.xml"
 store-success-output = true
