@@ -1,4 +1,4 @@
-const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["assets/browserAll-BncQSJGI.js","assets/webworkerAll-DWj94gpJ.js","assets/Filter-B-4b-lvw.js","assets/WebGPURenderer-zgMRJmkC.js","assets/BufferResource-B2bMqEqB.js","assets/RenderTargetSystem-NUVyvph8.js","assets/WebGLRenderer-BZfVIqmF.js","assets/CanvasRenderer-D69YrZiX.js"])))=>i.map(i=>d[i]);
+const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["assets/browserAll-3Qu07gxA.js","assets/webworkerAll-CZeleR3S.js","assets/Filter-ewR1IesA.js","assets/WebGPURenderer-60DwED-6.js","assets/BufferResource-Be_YGnrG.js","assets/RenderTargetSystem-HJAwcT2z.js","assets/WebGLRenderer-BIxpyy6c.js","assets/CanvasRenderer-DerDtZo0.js"])))=>i.map(i=>d[i]);
 let Iu, Os, jn, rn, Bc, Qe, it, ti, ut, fs, Dg, Bm, Ki, _t, Tm, fn, Ji, jc, Nt, Xi, Ct, Mt, uh, so, Ot, Nn, Hs, At, Oi, zt, If, _s, ja, Ii, Bo, ch, ke, Fo, am, lm, hm, ym, mm, xm, cm, gm, pm, yu, bm, _e, Lc, Se, ji, Ea, De, by, Xu, Pa, fr, Ia, qu, Oc, Zi, Gh, ph, Qs, qp, Up, Sh, Ff, Oo, Hn, Et, yo, xo, yi, Gt, Le, Uh, jh, Pe, ww, ly, qg, te, St, zs, Bi, $f, Tp, qt, Vt, re, Kt, jt;
 let __tla = (async () => {
   (function() {
@@ -148,7 +148,7 @@ let __tla = (async () => {
     },
     test: () => true,
     load: async () => {
-      await Gn(() => import("./browserAll-BncQSJGI.js"), __vite__mapDeps([0,1,2]));
+      await Gn(() => import("./browserAll-3Qu07gxA.js"), __vite__mapDeps([0,1,2]));
     }
   };
   ou = {
@@ -159,7 +159,7 @@ let __tla = (async () => {
     },
     test: () => typeof self < "u" && self.WorkerGlobalScope !== void 0,
     load: async () => {
-      await Gn(() => import("./webworkerAll-DWj94gpJ.js"), __vite__mapDeps([1,2]));
+      await Gn(() => import("./webworkerAll-CZeleR3S.js"), __vite__mapDeps([1,2]));
     }
   };
   class le {
@@ -5189,7 +5189,7 @@ ${n}`;
       const o = t[r];
       if (o === "webgpu" && await Yp()) {
         const { WebGPURenderer: a } = await Gn(async () => {
-          const { WebGPURenderer: l } = await import("./WebGPURenderer-zgMRJmkC.js");
+          const { WebGPURenderer: l } = await import("./WebGPURenderer-60DwED-6.js");
           return {
             WebGPURenderer: l
           };
@@ -5201,7 +5201,7 @@ ${n}`;
         break;
       } else if (o === "webgl" && Vp(n.failIfMajorPerformanceCaveat ?? uh.defaultOptions.failIfMajorPerformanceCaveat)) {
         const { WebGLRenderer: a } = await Gn(async () => {
-          const { WebGLRenderer: l } = await import("./WebGLRenderer-BZfVIqmF.js");
+          const { WebGLRenderer: l } = await import("./WebGLRenderer-BIxpyy6c.js");
           return {
             WebGLRenderer: l
           };
@@ -5213,7 +5213,7 @@ ${n}`;
         break;
       } else if (o === "canvas") {
         const { CanvasRenderer: a } = await Gn(async () => {
-          const { CanvasRenderer: l } = await import("./CanvasRenderer-D69YrZiX.js");
+          const { CanvasRenderer: l } = await import("./CanvasRenderer-DerDtZo0.js");
           return {
             CanvasRenderer: l
           };
@@ -5523,7 +5523,7 @@ ${n}`;
       }
       const [l, { BitmapFont: c }] = await Promise.all([
         e.load(o),
-        Gn(() => import("./BitmapFont-CRzx0Fpn.js"), [])
+        Gn(() => import("./BitmapFont-zXqvW-9S.js"), [])
       ]), h = o.map((u) => l[u.src]);
       return new c({
         data: s,
@@ -17320,7 +17320,7 @@ fn mainFragment(
   }
   async function Hd() {
     if (Ie) return;
-    if (Ie = new Worker(new URL("/fucktorio/assets/engine.worker-bobcFdqY.js", import.meta.url), {
+    if (Ie = new Worker(new URL("/fucktorio/assets/engine.worker-BNBR1zwS.js", import.meta.url), {
       type: "module",
       name: "fucktorio-engine"
     }), Ie.onmessage = (t) => {
@@ -18476,7 +18476,7 @@ fn mainFragment(
     const w = new zt();
     v.addChild(w), v.fit(true, b * 1.15, x * 1.2), v.moveCenter(b / 2, x / 2);
     const { renderLayoutAnimated: C } = await Gn(async () => {
-      const { renderLayoutAnimated: E } = await import("./animated-Dmn7SUN8.js");
+      const { renderLayoutAnimated: E } = await import("./animated-Z5UBQs5G.js");
       return {
         renderLayoutAnimated: E
       };
