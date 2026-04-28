@@ -322,6 +322,7 @@ pub fn build_bus_layout(
         solver_result,
         &families,
         &row_entities,
+        &pole_entities,
     )?;
     let bus_entities = ghost_result.entities;
     let max_y = ghost_result.max_y;

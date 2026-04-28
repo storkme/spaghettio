@@ -102,6 +102,7 @@ pub fn route_bus_ghost(
     solver_result: &SolverResult,
     families: &[LaneFamily],
     row_entities: &[PlacedEntity],
+    pole_entities: &[PlacedEntity],
 ) -> Result<GhostRouteResult, String> {
     let mut entities: Vec<PlacedEntity> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
@@ -133,6 +134,14 @@ pub fn route_bus_ghost(
         } else {
             hard.insert((e.x, e.y));
         }
+    }
+    // Poles are placed before ghost routing but otherwise live outside the
+    // row_entities flow. Inject their 1×1 tiles into the hard set so SAT,
+    // ghost A*, and the junction solver all treat them as obstacles. Without
+    // this, SAT can stamp belts/UGs on top of a pole when it solves a
+    // junction whose grown bbox happens to overlap a pole tile.
+    for e in pole_entities {
+        hard.insert((e.x, e.y));
     }
 
     // Reserve fluid lane tiles as hard obstacles (same logic as pole placer
