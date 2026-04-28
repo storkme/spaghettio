@@ -1967,10 +1967,23 @@ fn stress_electronic_circuit_30s_decomposed() {
 
     let pooled_errors = pooled.issues.iter().filter(|i| i.severity == Severity::Error).count();
     let decomposed_errors = decomposed.issues.iter().filter(|i| i.severity == Severity::Error).count();
-    assert!(
-        decomposed_errors < pooled_errors,
-        "Phase 2 K1-1 strict-improvement: PartitionedDecomposed must produce \
-         fewer errors than Pooled. Got pooled={pooled_errors}, decomposed={decomposed_errors}.",
+    // The motivating case for Phase 2: EC@30/s ores yellow used to fail
+    // with belt-dead-end errors under both Pool (balancer-input feeders
+    // missing for decomposed-multi-stamp families) and PartitionedDecomposed
+    // (sibling families polluting each other's `family_balancer_range`).
+    // After both fixes (lane_planner.rs:370 module_id propagation guard,
+    // and ghost_router.rs decomposition-aware feeder generation), the
+    // Pool and Decomposed paths both produce zero validator errors here.
+    // K1-1 originally asked for "validator-clean on the smallest gate-
+    // passing partition"; we now satisfy that, and additionally Pool is
+    // also clean on this case.
+    assert_eq!(
+        pooled_errors, 0,
+        "Pool errors on EC@30/s should be 0; got {pooled_errors}.",
+    );
+    assert_eq!(
+        decomposed_errors, 0,
+        "PartitionedDecomposed errors on EC@30/s should be 0; got {decomposed_errors}.",
     );
 
     // ShardSplit must fire — the algorithm path is what we're gating on.
@@ -2102,16 +2115,27 @@ fn partition_strategy_scoreboard() {
             // max_belt_tier for row inputs, eliminating the bus-trunk
             // / row-belt seam mismatch that flagged 6 lane-throughput
             // errors per row).
+            //
+            // P1/P2 13 → 12 after the lane_planner.rs:370 fix (filter
+            // family_balancer_range propagation by `(item, module_id)`
+            // not just item). Eliminates one belt-dead-end cluster from
+            // siblings inheriting each other's balancer y-range.
             row_layout: None,
-            expected: (1, 13, 13),
+            expected: (1, 12, 12),
         },
         ScoreboardCase {
             name: "AC@5/s plates yellow",
             item: "advanced-circuit", rate: 5.0, machine: "assembling-machine-2",
             belt: Some("transport-belt"),
             inputs: &["iron-plate", "copper-plate", "coal", "crude-oil", "water"],
+            // Pool 5 → 3 (recorded value was loose; actual was 3 already
+            // before the lane_planner fix — Pool's module_id=0 means the
+            // fix is byte-identical for it). P1/P2 9 → 3 after the fix:
+            // copper-cable / iron-plate sibling families no longer
+            // pollute each other's balancer y-range, so all three
+            // strategies converge to parity on this case.
             row_layout: None,
-            expected: (5, 9, 9),
+            expected: (3, 3, 3),
         },
     ];
     run_partition_scoreboard("partition_strategy_scoreboard", cases);
@@ -2149,8 +2173,11 @@ fn partition_strategy_scoreboard_extended() {
             // (refusing sub-templates wider than sub_m). Was: three
             // (5,1) balancers stamped on top of each other for
             // electronic-circuit's (15,3) family. P1 still wins (28).
+            //
+            // P2 41 → 37 after the lane_planner.rs:370 fix (sibling
+            // families no longer pollute each other's balancer y-range).
             row_layout: None,
-            expected: (30, 28, 41),
+            expected: (30, 28, 37),
         },
         ScoreboardCase {
             name: "PU@3/s ore red",
@@ -2161,8 +2188,12 @@ fn partition_strategy_scoreboard_extended() {
             // main merge. P2 ticked back up 11 → 12 after the
             // row_input_belt fix (small extra cluster from the new
             // row-belt-tier choice).
+            //
+            // P2 12 → 9 after the lane_planner.rs:370 module_id fix.
+            // Pool 11 → 8 after the ghost_router decomposition-feeder
+            // fix (which benefits Pool's decomposed-multi-stamp families).
             row_layout: None,
-            expected: (11, 7, 12),
+            expected: (8, 7, 9),
         },
         ScoreboardCase {
             name: "PU@3/s plates yellow",
@@ -2177,8 +2208,13 @@ fn partition_strategy_scoreboard_extended() {
             // overlapping (5,1) sub-stamps were corrupting layouts
             // even under Pool. P1=P2 here because Phase 2's K=1 sharding
             // doesn't fire on items already covered by Phase 1.
+            //
+            // P1/P2 45 → 41 after the lane_planner.rs:370 module_id fix.
+            // P1 41 → 34, P2 41 → 23 after the ghost_router
+            // decomposition-feeder fix (multi-stamp families now connect
+            // properly instead of silently dropping feeder specs).
             row_layout: None,
-            expected: (44, 45, 45),
+            expected: (44, 34, 23),
         },
         // The user's working URL: PU@2/s, AM3, fast belts, horizontal-stack,
         // ores + steel-plate as external inputs. Pool produces a working
@@ -2203,7 +2239,9 @@ fn partition_strategy_scoreboard_extended() {
             // Pool 2 → 1 with row_input_belt fix; P1/P2 each
             // ticked up 5 → 6 from the new row-belt-tier choice
             // interacting with the existing west-edge belt-loop bug.
-            expected: (1, 6, 6),
+            //
+            // P1/P2 6 → 5 after the lane_planner.rs:370 module_id fix.
+            expected: (1, 5, 5),
         },
     ];
     run_partition_scoreboard("partition_strategy_scoreboard_extended", cases);

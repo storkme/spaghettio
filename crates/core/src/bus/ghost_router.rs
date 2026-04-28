@@ -1163,20 +1163,84 @@ pub fn route_bus_ghost(
                 if is_first_lane_in_family {
                     let templates = crate::bus::balancer_library::balancer_templates();
                     let (n, m) = (fam.shape.0 as u32, fam.shape.1 as u32);
+
+                    // Collect all input tile absolute x-coords across the
+                    // family's stamps. For a direct (n, m) template match
+                    // there's a single stamp; under the decomposition
+                    // fallback (mirroring `stamp_family_balancer` in
+                    // `balancer.rs`) the family is realised as g sibling
+                    // sub-stamps each at their own origin, with one set of
+                    // input tiles per sub-stamp. Without this fallback
+                    // path, decomposed families (e.g. iron-plate (2, 10)
+                    // → 2 × (1, 5)) had zero feeders generated and the
+                    // producer rows dead-ended.
+                    //
+                    // The two paths must agree with the stamper on origin
+                    // selection (`balancer_origin_x` on the relevant lane
+                    // chunk) and on the geometric guard
+                    // `sub_template.width <= sub_m` — otherwise feeders
+                    // aim at tiles where no balancer was actually stamped.
+                    let mut input_xs: Vec<i32> = Vec::new();
                     if let Some(template) = templates.get(&(n, m)) {
-                        // Must match the origin used by stamp_family_balancer
-                        // (see balancer::balancer_origin_x). Feeder goals
-                        // are template.input_tiles offsets added to this
-                        // origin; if it diverges from the stamper's origin
-                        // the feeder belts aim at the wrong tiles.
                         let origin_x = if fam.lane_xs.is_empty() {
                             x
                         } else {
                             balancer_origin_x(&fam.lane_xs, template.output_tiles)
                         };
+                        let mut rel_inputs: Vec<i32> =
+                            template.input_tiles.iter().map(|t| t.0).collect();
+                        rel_inputs.sort();
+                        for r in rel_inputs {
+                            input_xs.push(origin_x + r);
+                        }
+                    } else {
+                        // Decomposition fallback: must match
+                        // `stamp_family_balancer`'s search order
+                        // (largest g first) and skip-rule
+                        // (sub_template.width > sub_m).
+                        for g in (1..=n).rev() {
+                            if n % g != 0 || m % g != 0 {
+                                continue;
+                            }
+                            let sub_n = n / g;
+                            let sub_m = m / g;
+                            let Some(sub_template) = templates.get(&(sub_n, sub_m)) else {
+                                continue;
+                            };
+                            if sub_template.width > sub_m {
+                                continue;
+                            }
+                            let lanes_per_group = sub_m as usize;
+                            for gi in 0..(g as usize) {
+                                let lane_start = gi * lanes_per_group;
+                                let lane_end = (lane_start + lanes_per_group)
+                                    .min(fam.lane_xs.len());
+                                let lane_chunk = &fam.lane_xs[lane_start..lane_end];
+                                if lane_chunk.is_empty() {
+                                    continue;
+                                }
+                                let sub_origin_x = balancer_origin_x(
+                                    lane_chunk, sub_template.output_tiles,
+                                );
+                                let mut rel_inputs: Vec<i32> =
+                                    sub_template.input_tiles.iter().map(|t| t.0).collect();
+                                rel_inputs.sort();
+                                for r in rel_inputs {
+                                    input_xs.push(sub_origin_x + r);
+                                }
+                            }
+                            break;
+                        }
+                    }
+
+                    if !input_xs.is_empty() {
+                        // Sort across all sub-stamps so the leftmost
+                        // producer row maps to the leftmost balancer
+                        // input — same convention as the direct-template
+                        // path used (`sort_by_key(|t| t.0)`), now applied
+                        // across the union of sub-stamp inputs.
+                        input_xs.sort();
                         let origin_y = fam.balancer_y_start;
-                        let mut inputs: Vec<(i32, i32)> = template.input_tiles.to_vec();
-                        inputs.sort_by_key(|t| t.0);
                         let feeder_belt = belt_entity_for_rate(fam.total_rate, max_belt_tier);
 
                         for (i, &pri) in fam.producer_rows.iter().enumerate() {
@@ -1185,8 +1249,7 @@ pub fn route_bus_ghost(
                             }
                             let row = &row_spans[pri];
                             let (start_x, out_y) = row_exit_origin(row);
-                            if let Some(&(input_x_rel, _input_y_rel)) = inputs.get(i) {
-                                let input_x = origin_x + input_x_rel;
+                            if let Some(&input_x) = input_xs.get(i) {
                                 let input_y = origin_y;
                                 let feeder_key =
                                     format!("feeder:{}:{}:{}", lane.item, input_x, out_y);
