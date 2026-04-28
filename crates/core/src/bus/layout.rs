@@ -82,7 +82,15 @@ pub fn build_bus_layout(
     // call (and not whatever the caller already had collected).
     let trace_start = crate::trace::peek_events_len();
 
-    let (result_1, row_spans_1) = layout_pass(solver_result, &opts, None)?;
+    // Detach the active sink (if any) for pass 1. The collector still
+    // sees every event — that's what we need for retry detection. The
+    // sink is reinstalled (or replayed-into) below depending on whether
+    // pass 1 caps. This keeps the streaming consumer from seeing
+    // events from a layout pass that gets abandoned by retry.
+    let original_sink = crate::trace::swap_sink(None);
+
+    let pass_1 = layout_pass(solver_result, &opts, None);
+    let (result_1, row_spans_1) = pass_1?;
 
     // Scan only events emitted by this layout call.
     let new_events = crate::trace::peek_events_since(trace_start);
@@ -96,21 +104,35 @@ pub fn build_bus_layout(
         })
         .collect();
 
-    if cap_coords.is_empty() {
-        return Ok(result_1);
-    }
+    let retry_gaps = if cap_coords.is_empty() {
+        FxHashMap::default()
+    } else {
+        compute_retry_gaps(&cap_coords, &row_spans_1)
+    };
 
-    let retry_gaps = compute_retry_gaps(&cap_coords, &row_spans_1);
     if retry_gaps.is_empty() {
-        // Caps fired but none mapped to a row span — nothing to widen.
-        // (Defensive: shouldn't happen in practice.)
+        // No retry — replay pass-1 events from the collector to the
+        // original sink so the streaming consumer sees the same events
+        // it would have seen without the silent-pass wrapper.
+        if let Some(mut sink) = original_sink {
+            for evt in &new_events {
+                sink(evt);
+            }
+            crate::trace::swap_sink(Some(sink));
+        }
         return Ok(result_1);
     }
 
     // Discard pass-1 events from the collector so `result.trace`
-    // reflects only the retried (final) pass. The streaming sink, if
-    // any, already saw them live.
+    // reflects only the retried (final) pass. The sink never saw them
+    // (because we detached it above), so the streaming consumer
+    // doesn't see the abandoned pass 1 either.
     crate::trace::truncate_events(trace_start);
+
+    // Reinstall the original sink so pass-2 events stream live.
+    if let Some(sink) = original_sink {
+        crate::trace::swap_sink(Some(sink));
+    }
 
     let mut gaps_vec: Vec<(usize, i32)> = retry_gaps.iter().map(|(k, v)| (*k, *v)).collect();
     gaps_vec.sort_by_key(|(k, _)| *k);
@@ -971,6 +993,116 @@ mod tests {
     fn test_compute_extra_gaps_empty() {
         let extras = compute_extra_gaps(&[]);
         assert!(extras.is_empty());
+    }
+
+    /// Build a synthetic `RowSpan` with just the y-coordinates that
+    /// `compute_retry_gaps` looks at. Other fields use minimal defaults.
+    fn dummy_row_span(recipe: &str, y_start: i32, y_end: i32) -> RowSpan {
+        use crate::models::MachineSpec;
+        RowSpan {
+            y_start,
+            y_end,
+            spec: MachineSpec {
+                entity: "assembling-machine-1".to_string(),
+                recipe: recipe.to_string(),
+                count: 1.0,
+                inputs: vec![],
+                outputs: vec![],
+            },
+            machine_count: 1,
+            module_id: 0,
+            input_belt_y: vec![],
+            output_belt_y: y_end,
+            row_width: 0,
+            fluid_port_ys: vec![],
+            fluid_port_pipes: vec![],
+            fluid_output_port_pipes: vec![],
+            output_east: false,
+            output_belt_x_min: 0,
+            output_belt_x_max: 0,
+            horizontal_stack: None,
+        }
+    }
+
+    fn three_row_layout() -> Vec<RowSpan> {
+        vec![
+            dummy_row_span("copper-plate", 1, 8),
+            dummy_row_span("iron-plate", 15, 22),
+            dummy_row_span("electronic-circuit", 30, 38),
+        ]
+    }
+
+    #[test]
+    fn compute_retry_gaps_no_caps_is_empty() {
+        let spans = three_row_layout();
+        let gaps = compute_retry_gaps(&[], &spans);
+        assert!(gaps.is_empty());
+    }
+
+    #[test]
+    fn compute_retry_gaps_cap_inside_row_widens_predecessor_gap() {
+        let spans = three_row_layout();
+        // Cap at y=31 lands inside electronic-circuit (row 2). The
+        // heuristic widens the gap *before* row 2, i.e. after row 1.
+        let gaps = compute_retry_gaps(&[(10, 31)], &spans);
+        assert_eq!(gaps.len(), 1);
+        assert_eq!(gaps.get(&1), Some(&1));
+    }
+
+    #[test]
+    fn compute_retry_gaps_cap_in_inter_row_band_attributes_to_next_row() {
+        let spans = three_row_layout();
+        // Cap at y=25 lands in the gap between row 1 (ends at 22) and
+        // row 2 (starts at 30). `position(|s| y <= s.y_end)` matches
+        // row 2 (since 25 <= 38), so we widen the gap before row 2.
+        let gaps = compute_retry_gaps(&[(10, 25)], &spans);
+        assert_eq!(gaps.get(&1), Some(&1));
+    }
+
+    #[test]
+    fn compute_retry_gaps_cap_in_first_row_skips() {
+        let spans = three_row_layout();
+        // Cap at y=5 lands inside row 0 — there's no preceding row to
+        // widen, so the cap is silently ignored.
+        let gaps = compute_retry_gaps(&[(10, 5)], &spans);
+        assert!(gaps.is_empty());
+    }
+
+    #[test]
+    fn compute_retry_gaps_cap_below_last_row_skips() {
+        let spans = three_row_layout();
+        // Cap at y=100 falls past every row's y_end. No row matches
+        // `y <= y_end`; the cap is silently ignored.
+        let gaps = compute_retry_gaps(&[(10, 100)], &spans);
+        assert!(gaps.is_empty());
+    }
+
+    #[test]
+    fn compute_retry_gaps_multiple_caps_same_row_collapse_to_single_widen() {
+        let spans = three_row_layout();
+        // Two caps both inside row 2. Both widen the same predecessor
+        // gap; the resulting map has one entry with value 1 (max, not
+        // sum — caps can fire multiple times for one geometry issue).
+        let gaps = compute_retry_gaps(&[(5, 31), (12, 35)], &spans);
+        assert_eq!(gaps.len(), 1);
+        assert_eq!(gaps.get(&1), Some(&1));
+    }
+
+    #[test]
+    fn compute_retry_gaps_caps_in_different_rows_widen_each_predecessor() {
+        let spans = three_row_layout();
+        // One cap in row 1, one in row 2. Each widens its own
+        // predecessor gap (rows 0 and 1 respectively).
+        let gaps = compute_retry_gaps(&[(5, 18), (12, 35)], &spans);
+        assert_eq!(gaps.len(), 2);
+        assert_eq!(gaps.get(&0), Some(&1));
+        assert_eq!(gaps.get(&1), Some(&1));
+    }
+
+    #[test]
+    fn compute_retry_gaps_empty_row_spans_returns_empty() {
+        let gaps = compute_retry_gaps(&[(10, 20)], &[]);
+        assert!(gaps.is_empty());
     }
 
 }

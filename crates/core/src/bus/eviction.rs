@@ -17,14 +17,14 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::astar::ghost_astar;
-use crate::bus::junction::{BeltTier, Junction, Rect, SpecCrossing};
+use crate::bus::junction::{Junction, Rect, SpecCrossing};
 use crate::bus::junction_sat_strategy::SatStrategy;
 use crate::bus::junction_solver::{
     GrowingRegion, JunctionSolution, JunctionStrategy, JunctionStrategyContext,
 };
 use crate::bus::trunk_renderer::render_path;
 use crate::common::ug_max_reach;
-use crate::models::{EntityDirection, PlacedEntity};
+use crate::models::PlacedEntity;
 use crate::trace::{self, EvictionSpecMetric, TraceEvent};
 
 /// Which spec selector + route emitter combo to try.
@@ -587,9 +587,3 @@ fn count_turns(path: &[(i32, i32)]) -> u32 {
     turns
 }
 
-// Suppress unused-import warning when feature flags strip a binding.
-#[allow(dead_code)]
-fn _unused_imports() {
-    let _ = EntityDirection::East;
-    let _ = BeltTier::Yellow;
-}

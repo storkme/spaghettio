@@ -46,6 +46,18 @@ pub fn set_sink(sink: Box<dyn FnMut(&TraceEvent)>) -> SinkGuard {
     SinkGuard
 }
 
+/// Atomically replace the active sink with `new_sink` (or `None` to
+/// disable streaming) and return whatever sink was previously active.
+/// Used by `build_bus_layout` to install a buffering sink for pass 1
+/// so the streaming consumer never sees events from a layout pass that
+/// was abandoned by retry. Caller is responsible for restoring the
+/// returned sink (or letting it drop) at the right moment.
+pub fn swap_sink(
+    new_sink: Option<Box<dyn FnMut(&TraceEvent)>>,
+) -> Option<Box<dyn FnMut(&TraceEvent)>> {
+    SINK.with(|s| std::mem::replace(&mut *s.borrow_mut(), new_sink))
+}
+
 /// RAII guard — clears the sink on drop.
 pub struct SinkGuard;
 
