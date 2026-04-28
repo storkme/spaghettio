@@ -1100,7 +1100,12 @@ fn tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing() {
 /// solve produces a single UG pair from (26,123) to (32,123) that
 /// tunnels under both the iron-plate feeder and the water pipe.
 #[test]
-#[ntest::timeout(180000)]
+// Bumped from 180000 (3min) to 300000 (5min) on this branch — CI
+// hardware has been variable and tipped past 180s on multiple
+// recent runs, with locally-measured runtime of ~167s in debug
+// mode under nextest CI profile (close to the ceiling). Revisit
+// when CI hardware is more predictable or this test gets faster.
+#[ntest::timeout(300000)]
 fn tier5_processing_unit_2s_horizontal_stack_iron_ore_pipe_bypass() {
     use fucktorio_core::bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy, RowLayout};
 
