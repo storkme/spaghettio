@@ -2041,15 +2041,6 @@ pub fn route_bus_ghost(
     // Native-reach rungs: each channel's UG reach equals its declared
     // belt tier. Tier-correct UG pair lengths — the SAT solver finds
     // chained-UG solutions when a single UG can't reach.
-    //
-    // The Relaxed-reach rungs (which uniformly used the zone's
-    // dominant tier's reach) were removed: they let the solver emit
-    // "solutions" with UG pairs longer than the channel's actual
-    // tier could physically span, producing layouts the validator
-    // correctly flagged as `underground-belt`-too-long. Better to
-    // surface as `unresolved-junction` (this zone is genuinely
-    // infeasible at the user's `max_belt_tier`) than to paint a
-    // yellow UG over a span no yellow belt can do in the game.
     let sat_1ug_native = SatStrategy::with(
         "sat-1ug-native",
         crate::bus::junction_sat_strategy::SatConstraints::max_ug_ins_native(1),
@@ -2062,6 +2053,25 @@ pub fn route_bus_ghost(
         "sat-native",
         crate::bus::junction_sat_strategy::SatConstraints::unrestricted_native(),
     );
+    // Auto-upgrade rungs: only included when the user did NOT pin a
+    // `max_belt_tier`. When the tier is auto, the engine is free to
+    // promote a low-rate channel's UG to the zone's dominant tier so
+    // a yellow channel needing more reach than yellow can do gets a
+    // red UG (which the SatStrategy post-processes to keep the entity
+    // tier in sync with the relaxed reach the solver used). When the
+    // user pinned a tier, we deliberately DO NOT include these — an
+    // unsolvable zone surfaces as `unresolved-junction`, signalling
+    // "your geometry needs a wider belt" rather than silently mixing
+    // tiers behind the user's back.
+    let sat_1ug_upgrade = SatStrategy::with(
+        "sat-1ug-upgrade",
+        crate::bus::junction_sat_strategy::SatConstraints::max_ug_ins(1),
+    );
+    let sat_2ug_upgrade = SatStrategy::with(
+        "sat-2ug-upgrade",
+        crate::bus::junction_sat_strategy::SatConstraints::max_ug_ins(2),
+    );
+    let sat_full_upgrade = SatStrategy::unrestricted();
     // Strategy order = priority. Walker vetoes bad proposals from any
     // of them; escalation happens naturally by falling through to the
     // next strategy in the list.
@@ -2069,13 +2079,21 @@ pub fn route_bus_ghost(
     //   2. surface-only SAT — simplest layout, no UG at all
     //   3-5. SAT with increasing UG budget at NATIVE reach — tier-
     //        correct UG lengths, including chained-UG solutions.
-    let strategies: [&dyn JunctionStrategy; 5] = [
+    //   6-8. (auto only) AutoUpgrade rungs — Relaxed reach with UG
+    //        entity-tier promoted to the zone's dominant tier.
+    let mut strategies: Vec<&dyn JunctionStrategy> = vec![
         &perp_strategy,
         &sat_surface,
         &sat_1ug_native,
         &sat_2ug_native,
         &sat_full_native,
     ];
+    if max_belt_tier.is_none() {
+        strategies.push(&sat_1ug_upgrade);
+        strategies.push(&sat_2ug_upgrade);
+        strategies.push(&sat_full_upgrade);
+    }
+    let strategies: &[&dyn JunctionStrategy] = &strategies;
 
     // Group adjacent crossings that share a spec into a single cluster
     // and solve each cluster jointly. A single crossing is still a
@@ -2210,7 +2228,7 @@ pub fn route_bus_ghost(
             &spec_exit_dirs,
             &spec_kinds,
             &entities,
-            &strategies,
+            strategies,
             &pending_crossings,
         ) else {
             // Diagnostic: when FUCKTORIO_BLAME_JUNCTIONS=1 is set,
@@ -2230,7 +2248,7 @@ pub fn route_bus_ghost(
                     &spec_exit_dirs,
                     &spec_kinds,
                     &entities,
-                    &strategies,
+                    strategies,
                     &pending_crossings,
                 );
             }
