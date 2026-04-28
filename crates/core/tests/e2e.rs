@@ -4444,3 +4444,370 @@ fn diag_decomposition_potential() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Decomposition signature-match probe — does the geometric upper bound hold
+// when boundary topology + forbidden tiles also have to match?
+// ---------------------------------------------------------------------------
+
+/// For each cached zone with width or height ≥ 5, try every internal cut.
+/// For cuts that are "clean" (no UG entity at the cut column, no original
+/// boundary at the cut corners), synthesise the implied left/right
+/// sub-zone signatures and check whether BOTH appear in the cache.
+///
+/// Tighter than `diag_decomposition_potential` (which just checks
+/// dimension match). Tells us whether decomposition actually has a real
+/// hit rate, vs the geometric upper bound being a coincidence of size
+/// availability.
+///
+/// Run with:
+///   cargo test --release --test e2e -- \
+///       --ignored diag_decomposition_signature_match --exact --nocapture
+#[test]
+#[ignore]
+fn diag_decomposition_signature_match() {
+    use fucktorio_core::models::PlacedEntity;
+    use fucktorio_core::sat::{CrossingZone, ZoneBoundary};
+    use fucktorio_core::zone_cache::{
+        canonical_signature, parse_records, parse_signature, DecodedRecord, ParsedSignature,
+    };
+    use std::collections::{BTreeMap, HashMap, HashSet};
+
+    let mut records: Vec<DecodedRecord> = Vec::new();
+    let cache_path = std::env::var("FUCKTORIO_ZONE_CACHE_PATH")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            let base = std::env::var("XDG_CACHE_HOME").ok()
+                .filter(|s| !s.is_empty()).map(std::path::PathBuf::from)
+                .or_else(|| std::env::var("HOME").ok()
+                    .map(|h| std::path::PathBuf::from(h).join(".cache")))
+                .unwrap_or_else(|| std::path::PathBuf::from(".cache"));
+            base.join("fucktorio").join("sat-zones.bin")
+        });
+    if let Ok(bytes) = std::fs::read(&cache_path) {
+        records.extend(parse_records(&bytes));
+    }
+    let embedded_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("data/sat-zones.bin");
+    if let Ok(bytes) = std::fs::read(&embedded_path) {
+        records.extend(parse_records(&bytes));
+    }
+    if records.is_empty() {
+        panic!("no records — populate ~/.cache/fucktorio/sat-zones.bin first");
+    }
+
+    // Build the set of all known signatures.
+    let known_sigs: HashSet<String> = records.iter().map(|r| r.signature.clone()).collect();
+    eprintln!(
+        "\n=== Decomposition signature match probe ===\nloaded {} records ({} distinct signatures)",
+        records.len(), known_sigs.len(),
+    );
+
+    // Skip helpers.
+    fn is_ug(name: &str) -> bool {
+        name.contains("underground-belt")
+    }
+    fn east_or_west_belt(e: &PlacedEntity) -> Option<i8> {
+        // Returns 1 for east-belt, -1 for west-belt, None for anything else
+        // (UG, vertical belt, empty).
+        if is_ug(&e.name) {
+            return None;
+        }
+        match e.direction {
+            fucktorio_core::models::EntityDirection::East => Some(1),
+            fucktorio_core::models::EntityDirection::West => Some(-1),
+            _ => None,
+        }
+    }
+
+    fn channel_id_from_carries(c: Option<&str>) -> Option<u32> {
+        c.and_then(|s| s.strip_prefix("ch")).and_then(|n| n.parse().ok())
+    }
+
+    // For each cut, build a sub-zone's CrossingZone synthetically.
+    // Returns None if the cut is not clean (UG at cut, channel mismatch,
+    // boundary on a corner cell, etc.).
+    fn split_at_x(
+        rec: &DecodedRecord,
+        parsed: &ParsedSignature,
+        cut_x: u32,
+    ) -> Option<((CrossingZone, Vec<u32>), (CrossingZone, Vec<u32>))> {
+        let h = parsed.height;
+        let w = parsed.width;
+        if cut_x == 0 || cut_x >= w {
+            return None;
+        }
+
+        // Index entities by (x, y).
+        let by_tile: HashMap<(u32, u32), &PlacedEntity> = rec.entities.iter()
+            .map(|e| ((e.x as u32, e.y as u32), e))
+            .collect();
+
+        // Validate cut is clean: no UG at cut_x or cut_x-1.
+        for y in 0..h {
+            for cx in [cut_x.saturating_sub(1), cut_x] {
+                if let Some(e) = by_tile.get(&(cx, y)) {
+                    if is_ug(&e.name) {
+                        return None;  // cut splits a UG corridor
+                    }
+                }
+            }
+        }
+
+        // For each row y, determine if there's a flow crossing the cut.
+        // Returns Some((channel_id, direction_sign)) or None.
+        let mut crossings: Vec<Option<(u32, i8)>> = Vec::with_capacity(h as usize);
+        for y in 0..h {
+            // Look at entities at (cut_x-1, y) and (cut_x, y). For a clean
+            // crossing, both (if present) should be the same channel and
+            // direction. If either is N/S-facing (or missing), no crossing
+            // at this row.
+            let left_e = by_tile.get(&(cut_x - 1, y));
+            let right_e = by_tile.get(&(cut_x, y));
+            let left_dir = left_e.and_then(|e| east_or_west_belt(e));
+            let right_dir = right_e.and_then(|e| east_or_west_belt(e));
+            match (left_dir, right_dir) {
+                (Some(ld), Some(rd)) if ld == rd => {
+                    let lc = channel_id_from_carries(left_e.unwrap().carries.as_deref());
+                    let rc = channel_id_from_carries(right_e.unwrap().carries.as_deref());
+                    if lc != rc { return None; }  // channel mismatch at cut
+                    if let Some(c) = lc { crossings.push(Some((c, ld))); }
+                    else { crossings.push(None); }
+                }
+                (Some(ld), None) => {
+                    // Left has east/west belt, right tile empty. Must mean
+                    // flow ends at the cut, which it can't if the entity is
+                    // an actual flow belt. Skip cut as malformed.
+                    let _ = ld;
+                    return None;
+                }
+                (None, Some(_)) => return None,
+                (None, None) => crossings.push(None),
+                _ => return None,
+            }
+        }
+
+        // Reject cut if any original boundary is at column cut_x-1 or cut_x
+        // on the N/S edge — those would be corner tiles in the sub-zones,
+        // making canonicalisation messy.
+        for ch in &parsed.channels {
+            for (edge, off) in ch.inputs.iter().chain(ch.outputs.iter()) {
+                match edge {
+                    'N' | 'S' => {
+                        if *off == cut_x - 1 || *off == cut_x {
+                            return None;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Build left and right boundary lists. Channel IDs preserved
+        // from the original; canonicalise will resort and rewrite anyway.
+        let mut left_b: Vec<ZoneBoundary> = Vec::new();
+        let mut right_b: Vec<ZoneBoundary> = Vec::new();
+        // Track which channels appear in each half (to filter reaches).
+        let mut left_channels: HashSet<u32> = HashSet::new();
+        let mut right_channels: HashSet<u32> = HashSet::new();
+
+        // Original perimeter boundaries.
+        for (ch_idx, channel) in parsed.channels.iter().enumerate() {
+            let ch_id = ch_idx as u32;
+            let visit = |edge: char, offset: u32, is_input: bool,
+                         left_b: &mut Vec<ZoneBoundary>,
+                         right_b: &mut Vec<ZoneBoundary>,
+                         left_channels: &mut HashSet<u32>,
+                         right_channels: &mut HashSet<u32>| {
+                let in_left = match edge {
+                    'N' | 'S' => offset < cut_x,
+                    'W' => true,
+                    'E' => false,
+                    _ => return,
+                };
+                if in_left {
+                    left_b.push(synth_boundary(edge, offset, cut_x, h, ch_id, is_input));
+                    left_channels.insert(ch_id);
+                } else {
+                    let new_off = match edge {
+                        'N' | 'S' => offset - cut_x,
+                        _ => offset,
+                    };
+                    right_b.push(synth_boundary(edge, new_off, w - cut_x, h, ch_id, is_input));
+                    right_channels.insert(ch_id);
+                }
+            };
+            for &(edge, off) in &channel.inputs {
+                visit(edge, off, true, &mut left_b, &mut right_b, &mut left_channels, &mut right_channels);
+            }
+            for &(edge, off) in &channel.outputs {
+                visit(edge, off, false, &mut left_b, &mut right_b, &mut left_channels, &mut right_channels);
+            }
+        }
+
+        // New cut boundaries.
+        for (y, crossing) in crossings.iter().enumerate() {
+            let Some((ch_id, dir)) = crossing else { continue };
+            let y = y as u32;
+            // Left half: right edge at column cut_x-1; in left's local
+            // frame that's the E edge with offset=y.
+            // - If dir == 1 (east), flow exits left going east → output port
+            // - If dir == -1 (west), flow enters left from the right →
+            //   input port
+            let left_is_input = *dir == -1;
+            left_b.push(synth_boundary('E', y, cut_x, h, *ch_id, left_is_input));
+            left_channels.insert(*ch_id);
+            // Right half: left edge at column cut_x in original = column 0
+            // in right's frame. W edge with offset=y.
+            // - If dir == 1 (east), flow enters right from left → input
+            // - If dir == -1 (west), flow exits right to left → output
+            let right_is_input = *dir == 1;
+            right_b.push(synth_boundary('W', y, w - cut_x, h, *ch_id, right_is_input));
+            right_channels.insert(*ch_id);
+        }
+
+        // Forbidden tiles.
+        let mut left_forbidden: Vec<(i32, i32)> = Vec::new();
+        let mut right_forbidden: Vec<(i32, i32)> = Vec::new();
+        for &(fx, fy) in &parsed.forbidden {
+            if fx < cut_x {
+                left_forbidden.push((fx as i32, fy as i32));
+            } else {
+                right_forbidden.push(((fx - cut_x) as i32, fy as i32));
+            }
+        }
+
+        let left_zone = CrossingZone {
+            x: 0, y: 0,
+            width: cut_x, height: h,
+            boundaries: left_b,
+            forced_empty: left_forbidden,
+        };
+        let right_zone = CrossingZone {
+            x: 0, y: 0,
+            width: w - cut_x, height: h,
+            boundaries: right_b,
+            forced_empty: right_forbidden,
+        };
+
+        // Reaches: pull from the original parsed channels for any channel
+        // that appears in the half. Build dense vectors indexed by channel_id.
+        let max_ch = parsed.channels.len() as u32;
+        let mut left_reaches: Vec<u32> = vec![0; max_ch as usize];
+        let mut right_reaches: Vec<u32> = vec![0; max_ch as usize];
+        for (idx, ch) in parsed.channels.iter().enumerate() {
+            left_reaches[idx] = ch.reach;
+            right_reaches[idx] = ch.reach;
+        }
+
+        Some(((left_zone, left_reaches), (right_zone, right_reaches)))
+    }
+
+    fn synth_boundary(
+        edge: char,
+        offset: u32,
+        w: u32,
+        h: u32,
+        channel_id: u32,
+        is_input: bool,
+    ) -> ZoneBoundary {
+        use fucktorio_core::models::EntityDirection::*;
+        let (x, y, direction) = match edge {
+            'N' => (offset as i32, 0, North),
+            'S' => (offset as i32, h.saturating_sub(1) as i32, South),
+            'W' => (0, offset as i32, West),
+            'E' => (w.saturating_sub(1) as i32, offset as i32, East),
+            _ => (0, 0, North),
+        };
+        ZoneBoundary {
+            x, y, direction,
+            item: format!("item{}", channel_id),
+            is_input,
+            interior: false,
+            belt_tier: None,
+            channel_id,
+        }
+    }
+
+    let mut large_zones = 0usize;
+    let mut zones_with_clean_cut = 0usize;
+    let mut zones_with_matching_cut = 0usize;
+    let mut total_clean_cuts = 0usize;
+    let mut total_matching_cuts = 0usize;
+
+    let mut seen_shapes: HashSet<(u32, u32)> = HashSet::new();
+    let mut by_shape: BTreeMap<(u32, u32), (usize, usize, usize)> = BTreeMap::new();
+    // (occurrences, clean cuts, matching cuts)
+
+    let mut shape_count: BTreeMap<(u32, u32), usize> = BTreeMap::new();
+    for rec in &records {
+        *shape_count.entry((rec.canon_w, rec.canon_h)).or_default() += 1;
+    }
+
+    for rec in &records {
+        if rec.canon_w < 5 && rec.canon_h < 5 { continue; }
+        if !seen_shapes.insert((rec.canon_w, rec.canon_h)) { continue; }
+        large_zones += 1;
+        let Some(parsed) = parse_signature(&rec.signature) else { continue };
+
+        let mut had_clean = false;
+        let mut had_match = false;
+        let mut clean_cuts_here = 0;
+        let mut matching_cuts_here = 0;
+
+        for cut_x in 1..parsed.width {
+            let Some(((lz, lr), (rz, rr))) = split_at_x(rec, &parsed, cut_x) else { continue };
+            had_clean = true;
+            clean_cuts_here += 1;
+            total_clean_cuts += 1;
+            let lsig = canonical_signature(&lz, &lr, parsed.max_ug_ins);
+            let rsig = canonical_signature(&rz, &rr, parsed.max_ug_ins);
+            if known_sigs.contains(&lsig) && known_sigs.contains(&rsig) {
+                had_match = true;
+                matching_cuts_here += 1;
+                total_matching_cuts += 1;
+            }
+        }
+
+        if had_clean { zones_with_clean_cut += 1; }
+        if had_match { zones_with_matching_cut += 1; }
+        by_shape.insert(
+            (rec.canon_w, rec.canon_h),
+            (
+                shape_count.get(&(rec.canon_w, rec.canon_h)).copied().unwrap_or(0),
+                clean_cuts_here,
+                matching_cuts_here,
+            ),
+        );
+    }
+
+    eprintln!(
+        "\nLarge zones (w>=5 or h>=5): {} unique shapes",
+        large_zones,
+    );
+    eprintln!(
+        "  with at least one CLEAN cut:    {} ({:.0}%)",
+        zones_with_clean_cut,
+        if large_zones > 0 { zones_with_clean_cut as f64 / large_zones as f64 * 100.0 } else { 0.0 },
+    );
+    eprintln!(
+        "  with at least one MATCHING cut: {} ({:.0}%)",
+        zones_with_matching_cut,
+        if large_zones > 0 { zones_with_matching_cut as f64 / large_zones as f64 * 100.0 } else { 0.0 },
+    );
+    eprintln!(
+        "Total candidates: {} clean cuts, {} matching cuts",
+        total_clean_cuts, total_matching_cuts,
+    );
+
+    eprintln!("\nPer-shape breakdown (top 25 by occurrence):");
+    eprintln!("  {:<8} {:>6} {:>9} {:>9}", "shape", "count", "clean_cuts", "match_cuts");
+    let mut rows: Vec<_> = by_shape.iter().collect();
+    rows.sort_by(|a, b| b.1.0.cmp(&a.1.0).then(b.0.cmp(a.0)));
+    for ((w, h), (count, clean, matching)) in rows.iter().take(25) {
+        eprintln!(
+            "  {:>3}x{:<3}  {:>6} {:>9} {:>9}{}",
+            w, h, count, clean, matching,
+            if *matching > 0 { "  ✓" } else { "" },
+        );
+    }
+}

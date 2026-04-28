@@ -210,9 +210,41 @@ Total candidate cuts: 122 vertical + 35 horizontal
 ```
 
 Strong upper bound — almost every big cached zone could in principle be
-sliced into cached small pieces. The stricter boundary-topology probe
-(do the implied sub-signatures actually match cached entries?) is blocked
-by the `transform_port` issue described in §6.
+sliced into cached small pieces.
+
+The stricter probe (`diag_decomposition_signature_match`) checks whether
+the implied sub-zone signatures — including boundary topology, forbidden
+tiles, and per-channel reach — actually appear in the cache. Result on
+the same 46 large shapes:
+
+```
+with at least one CLEAN cut:    13/46 (28%)
+with at least one MATCHING cut:  0/46 (0%)
+```
+
+A "clean cut" is one where no UG corridor would be sliced and no
+original boundary lands on a corner of either sub-zone. 28% of large
+zones have at least one such cut. **Zero** of those cuts produce
+sub-signatures that appear in the cache.
+
+Interpretation: the bus router never emits "half a junction" shapes,
+so synthetic-cut sub-zones don't match anything organically cached.
+For decomposition to be a real strategy, you'd need either:
+
+1. **A synthetic-fragment populator** that enumerates plausible
+   sub-shapes (likely-cuttable boundaries, no UG corridors) and SAT-
+   solves each one, seeding the cache with fragments the bus router
+   wouldn't produce on its own.
+2. **A different decomposition strategy** that doesn't require exact
+   signature match — e.g., recognise that a residual sub-rectangle
+   has the same channel topology as a cached shape modulo extra
+   forbidden tiles, and use the cached solution as a seed for a
+   smaller fresh SAT solve.
+
+Either is a non-trivial chunk of work. For now: decomposition is parked
+behind "the geometric structure is there but the corpus shape isn't",
+not behind a missing technique. The signature-match probe stays in
+`tests/e2e.rs` so you can re-run it as the corpus grows.
 
 ---
 
