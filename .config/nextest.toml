@@ -4,14 +4,15 @@ fail-fast = false
 slow-timeout = { period = "30s", terminate-after = 3 }
 test-threads = 1
 
-# `partition_strategy_scoreboard` runs Pool/P1/P2 across 2 cases —
-# baseline ~72s locally, ~115s on slower CI hardware. The default
-# 90s terminate window is too tight; give it a 5-minute ceiling.
-# The slow-tail extended corpus lives in
+# `partition_strategy_scoreboard` runs Pool/P1/P2 across 3 cases
+# (PU@2/s ore red, AC@5/s plates yellow, PU@2/s ore red HS) —
+# baseline ~110s locally, ~240s on slower CI hardware. The default
+# 90s terminate window is too tight; give it a generous 8-minute
+# ceiling. The slow-tail extended corpus lives in
 # `partition_strategy_scoreboard_extended` and is `#[ignore]`d.
 [[profile.ci.overrides]]
 filter = "test(partition_strategy_scoreboard)"
-slow-timeout = { period = "60s", terminate-after = 5 }
+slow-timeout = { period = "60s", terminate-after = 8 }
 
 [profile.ci.junit]
 path = "junit.xml"
