@@ -76,6 +76,37 @@ pub fn is_active() -> bool {
     COLLECTOR.with(|c| c.borrow().is_some())
 }
 
+/// Number of events currently in the collector (0 if none active).
+/// Lets the layout-retry loop snapshot the collector size before its
+/// inner pass, then read only events emitted by that pass.
+pub fn peek_events_len() -> usize {
+    COLLECTOR.with(|c| c.borrow().as_ref().map(|v| v.len()).unwrap_or(0))
+}
+
+/// Clone of every event emitted at or after `start` (0 if no collector
+/// active). Non-destructive; the collector keeps its contents.
+pub fn peek_events_since(start: usize) -> Vec<TraceEvent> {
+    COLLECTOR.with(|c| {
+        c.borrow()
+            .as_ref()
+            .map(|v| v.iter().skip(start).cloned().collect())
+            .unwrap_or_default()
+    })
+}
+
+/// Drop every event from index `len` onward (no-op if no collector
+/// active or `len` already past the end). Used by the layout-retry loop
+/// to discard the failed first pass before emitting the retried pass.
+/// The streaming sink still saw the discarded events live; only the
+/// `result.trace` snapshot is affected.
+pub fn truncate_events(len: usize) {
+    COLLECTOR.with(|c| {
+        if let Some(ref mut events) = *c.borrow_mut() {
+            events.truncate(len);
+        }
+    });
+}
+
 // ---------------------------------------------------------------------------
 // Trace event types
 // ---------------------------------------------------------------------------
@@ -271,6 +302,22 @@ pub enum TraceEvent {
         external_input_count: usize,
         external_output_count: usize,
         machines: Vec<MachineTrace>,
+    },
+
+    /// The layout pipeline ran once, hit `JunctionGrowthCapped` events,
+    /// and is being re-run with extra vertical gap inserted after each
+    /// row whose successor junction couldn't fit. Emitted at the start
+    /// of the retried pass, so the trace stream that reaches the UI
+    /// records that a retry happened and which rows got widened.
+    LayoutRetried {
+        /// `(row_index, extra_tiles)` pairs — the same map that's plumbed
+        /// into `place_rows::extra_gap_after_row` for the retry.
+        gaps: Vec<(usize, i32)>,
+        /// Number of `JunctionGrowthCapped` events seen on the original pass.
+        caps_before: usize,
+        /// Recipe name for each row that got widened (parallel to `gaps`).
+        /// Lets the UI label the panel without cross-referencing other events.
+        recipes: Vec<String>,
     },
 
     // A* route failure — a spec had no valid path after all iterations

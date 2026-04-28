@@ -77,6 +77,97 @@ pub fn build_bus_layout(
     solver_result: &SolverResult,
     opts: LayoutOptions,
 ) -> Result<LayoutResult, String> {
+    // Snapshot the trace collector before the first pass so we can
+    // detect `JunctionGrowthCapped` events emitted by *this* layout
+    // call (and not whatever the caller already had collected).
+    let trace_start = crate::trace::peek_events_len();
+
+    let (result_1, row_spans_1) = layout_pass(solver_result, &opts, None)?;
+
+    // Scan only events emitted by this layout call.
+    let new_events = crate::trace::peek_events_since(trace_start);
+    let cap_coords: Vec<(i32, i32)> = new_events
+        .iter()
+        .filter_map(|e| match e {
+            crate::trace::TraceEvent::JunctionGrowthCapped { tile_x, tile_y, .. } => {
+                Some((*tile_x, *tile_y))
+            }
+            _ => None,
+        })
+        .collect();
+
+    if cap_coords.is_empty() {
+        return Ok(result_1);
+    }
+
+    let retry_gaps = compute_retry_gaps(&cap_coords, &row_spans_1);
+    if retry_gaps.is_empty() {
+        // Caps fired but none mapped to a row span — nothing to widen.
+        // (Defensive: shouldn't happen in practice.)
+        return Ok(result_1);
+    }
+
+    // Discard pass-1 events from the collector so `result.trace`
+    // reflects only the retried (final) pass. The streaming sink, if
+    // any, already saw them live.
+    crate::trace::truncate_events(trace_start);
+
+    let mut gaps_vec: Vec<(usize, i32)> = retry_gaps.iter().map(|(k, v)| (*k, *v)).collect();
+    gaps_vec.sort_by_key(|(k, _)| *k);
+    let recipes: Vec<String> = gaps_vec
+        .iter()
+        .map(|(idx, _)| row_spans_1[*idx].spec.recipe.clone())
+        .collect();
+    crate::trace::emit(crate::trace::TraceEvent::LayoutRetried {
+        gaps: gaps_vec,
+        caps_before: cap_coords.len(),
+        recipes,
+    });
+
+    let (result_2, _) = layout_pass(solver_result, &opts, Some(&retry_gaps))?;
+    Ok(result_2)
+}
+
+/// Map `JunctionGrowthCapped` (x, y) coordinates to the row indices
+/// whose *successor* gap should be widened. A cap that fires inside
+/// row `i`'s span (or in the open band immediately below it) means the
+/// junction couldn't pack the geometry around row `i`'s tap-offs.
+/// Widening the gap *before* row `i` (i.e. after row `i-1`) shifts row
+/// `i` and everything below it down by one tile, giving the junction
+/// solver an extra row of vertical room to land its entries/exits.
+fn compute_retry_gaps(
+    cap_coords: &[(i32, i32)],
+    row_spans: &[RowSpan],
+) -> FxHashMap<usize, i32> {
+    let mut out: FxHashMap<usize, i32> = FxHashMap::default();
+    for &(_x, y) in cap_coords {
+        // Find the row whose span contains y, or the first row that
+        // starts at-or-below y if y is in an inter-row gap.
+        let target = row_spans.iter().position(|span| y <= span.y_end);
+        let Some(target) = target else { continue };
+        // Widen the gap *before* `target` (i.e. after row `target - 1`).
+        // No-op if target is row 0 — there's no preceding row to widen.
+        if target > 0 {
+            let widen_after = target - 1;
+            out.entry(widen_after)
+                .and_modify(|v| *v = (*v).max(1))
+                .or_insert(1);
+        }
+    }
+    out
+}
+
+/// One layout attempt — the body of the original `build_bus_layout`.
+/// Takes an optional `retry_extra_gaps` map (row index → extra tiles)
+/// that the retry loop in `build_bus_layout` uses to widen specific
+/// row boundaries on a second pass. `None` on the first pass; `Some`
+/// on the retry. Returns the layout plus the final `row_spans`, which
+/// `build_bus_layout` needs to map cap coordinates back to row indices.
+fn layout_pass(
+    solver_result: &SolverResult,
+    opts: &LayoutOptions,
+    retry_extra_gaps: Option<&FxHashMap<usize, i32>>,
+) -> Result<(LayoutResult, Vec<RowSpan>), String> {
     let max_belt_tier = opts.max_belt_tier.as_deref();
     // Strategy dispatch. Pooled passes through unchanged. The
     // partitioning strategies run `plan_partitioning` + `apply_partition_plan`
@@ -139,7 +230,7 @@ pub fn build_bus_layout(
         bus_header,
         max_belt_tier,
         Some(&final_output_items),
-        None,
+        retry_extra_gaps,
         opts.row_layout,
     );
     crate::trace::emit(crate::trace::TraceEvent::PhaseTime {
@@ -153,14 +244,26 @@ pub fn build_bus_layout(
         duration_ms: t_plan1.elapsed().as_millis() as u64,
     });
     let actual_bw = bus_width_for_lanes(&lanes_1);
-    let extra_gaps = compute_extra_gaps(&families_1);
+    let balancer_gaps = compute_extra_gaps(&families_1);
 
-    // Pass 2: re-place rows with the real bus width + any extra gaps
-    // needed to fit balancer blocks. Skipped only when nothing changed.
+    // Pass 2: re-place rows with the real bus width + any balancer
+    // gaps. Retry gaps were already applied in pass 1, so they don't
+    // gate pass 2 — but if pass 2 runs anyway, both sets are merged so
+    // the second placement keeps the retry slack.
     let (row_entities, row_spans, row_width, total_height, lanes, families) =
-        if actual_bw == temp_bw && extra_gaps.is_empty() {
+        if actual_bw == temp_bw && balancer_gaps.is_empty() {
             (row_entities_1, row_spans_1, _row_width_1, _total_height_1, lanes_1, families_1)
         } else {
+            let merged_gaps: FxHashMap<usize, i32> = match retry_extra_gaps {
+                None => balancer_gaps,
+                Some(retry) => {
+                    let mut merged = balancer_gaps;
+                    for (k, v) in retry {
+                        merged.entry(*k).and_modify(|cur| *cur += *v).or_insert(*v);
+                    }
+                    merged
+                }
+            };
             let t_place2 = web_time::Instant::now();
             let (re, rs, rw, th) = place_rows(
                 &solver_result.machines,
@@ -169,7 +272,7 @@ pub fn build_bus_layout(
                 bus_header,
                 max_belt_tier,
                 Some(&final_output_items),
-                Some(&extra_gaps),
+                Some(&merged_gaps),
                 opts.row_layout,
             );
             crate::trace::emit(crate::trace::TraceEvent::PhaseTime {
@@ -411,14 +514,17 @@ pub fn build_bus_layout(
     all_entities.extend(bus_entities);
     all_entities.extend(pole_entities);
 
-    Ok(LayoutResult {
-        entities: all_entities,
-        width,
-        height: max_y,
-        warnings,
-        regions,
-        trace: None,
-    })
+    Ok((
+        LayoutResult {
+            entities: all_entities,
+            width,
+            height: max_y,
+            warnings,
+            regions,
+            trace: None,
+        },
+        row_spans,
+    ))
 }
 
 /// Traced variant of [`build_bus_layout`].
