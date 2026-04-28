@@ -105,6 +105,7 @@ impl GrowingRegion {
         hard_obstacles: &FxHashSet<(i32, i32)>,
         strict_obstacles: &FxHashSet<(i32, i32)>,
         placed_entities: &[PlacedEntity],
+        spec_kinds: &FxHashMap<String, SpecKind>,
     ) -> Self {
         assert!(!seeds.is_empty(), "from_crossings: seeds must be non-empty");
         let min_x = seeds.iter().map(|(x, _)| *x).min().unwrap();
@@ -152,7 +153,65 @@ impl GrowingRegion {
             strict_obstacles,
             placed_entities,
         );
+        region.promote_blocked_encountered(routed_paths, spec_kinds);
         region
+    }
+
+    /// Promote any belt-kind encountered spec whose path crosses a
+    /// forbidden interior tile within the current bbox.
+    ///
+    /// Without this, the SAT strategy ladder picks the cheapest
+    /// satisfying strategy (sat-1ug-native before sat-2ug-native).
+    /// When a participating spec can be solved with 1 UG pair AND an
+    /// encountered spec's path passes through a forbidden tile, SAT
+    /// believes it has solved the zone — but only the participating
+    /// flow actually gets a bridge. The encountered flow's interior
+    /// goes through unrouted, leaving its boundary belts dangling
+    /// (validator catches this as belt-dead-end).
+    ///
+    /// Promoting forces SAT to model the encountered's frontier as
+    /// participating, so the strategy ladder must produce a solution
+    /// that bridges all flows that need bridging.
+    ///
+    /// `SpecKind::Pipe` is excluded — pipe paths ARE the obstacles
+    /// (PTGs); SAT can't re-route them.
+    fn promote_blocked_encountered(
+        &mut self,
+        routed_paths: &FxHashMap<String, Vec<(i32, i32)>>,
+        spec_kinds: &FxHashMap<String, SpecKind>,
+    ) {
+        let to_promote: Vec<String> = self
+            .encountered
+            .iter()
+            .filter(|key| {
+                if matches!(spec_kinds.get(key.as_str()), Some(SpecKind::Pipe)) {
+                    return false;
+                }
+                let Some(path) = routed_paths.get(key.as_str()) else {
+                    return false;
+                };
+                let Some((start, end)) = path_bbox_range(path, &self.bbox) else {
+                    return false;
+                };
+                // Need at least one interior tile strictly between the
+                // boundary ports (path[start] and path[end] are exempt
+                // from forbidden checks).
+                (start + 1..end).any(|i| self.forbidden_tiles.contains(&path[i]))
+            })
+            .cloned()
+            .collect();
+        if to_promote.is_empty() {
+            return;
+        }
+        for key in &to_promote {
+            if let Some(path) = routed_paths.get(key.as_str()) {
+                if let Some((start, end)) = path_bbox_range(path, &self.bbox) {
+                    self.frontiers.insert(key.clone(), (start, end));
+                }
+            }
+            self.participating.push(key.clone());
+        }
+        self.encountered.retain(|k| !to_promote.contains(k));
     }
 
     /// Expand the region's bbox by the given per-side deltas, absorb
@@ -317,6 +376,7 @@ impl GrowingRegion {
             strict_obstacles,
             placed_entities,
         );
+        self.promote_blocked_encountered(routed_paths, spec_kinds);
         true
     }
 
@@ -1009,6 +1069,7 @@ pub fn solve_crossing(
         hard_obstacles,
         strict_obstacles,
         placed_entities,
+        spec_kinds,
     );
 
     // Emit start-of-solve snapshot: seed, participating specs, and

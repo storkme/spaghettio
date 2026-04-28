@@ -1245,6 +1245,48 @@ pub(crate) fn prune_dangling_sat_entities(
         }
     }
 
+    // ---- verify every perimeter boundary has a SAT entity at its tile ----
+    //
+    // A perimeter boundary's tile is SAT-placeable (not in forced_empty).
+    // If SAT placed NO entity there, no flow can enter or exit — the
+    // boundary's spec is silently dropped from the layout. This catches
+    // the failure mode where SAT picks a cheap satisfying assignment
+    // (e.g. sat-1ug-native) that bridges one participating spec but
+    // leaves another's frontier with no entity at the perimeter port.
+    //
+    // Interior boundaries are exempt: their boundary tile is in
+    // forced_empty (the in-zone Permanent feeder occupies it), and the
+    // encoder's flow constraints propagate via the in-zone neighbor.
+    //
+    // Doesn't walk the BFS graph (which can't follow splitters /
+    // sideloads / Permanent entities); only checks "did SAT acknowledge
+    // this perimeter port at all". A perimeter port with a SAT entity
+    // but a broken in-zone chain is still possible — that's caught by
+    // the existing dangling-prune below, which the validator can
+    // surface as a specific belt-flow / dead-end error.
+    //
+    // When this fires, return an empty Vec — the call-site guards
+    // ("pruned empty && entities placed && boundaries non-empty")
+    // reject the solve as degenerate, falling through to the next
+    // strategy (typically sat-2ug-native, which has the budget for
+    // one UG pair per spec).
+    for b in boundaries {
+        if b.interior {
+            continue;
+        }
+        let t = (b.x, b.y);
+        if by_tile.get(&t).is_none() {
+            let total = entities.len();
+            trace::emit(trace::TraceEvent::SatPruned {
+                zone_x,
+                zone_y,
+                total,
+                kept: 0,
+            });
+            return Vec::new();
+        }
+    }
+
     // ---- keep intersection ----
 
     let total = entities.len();
