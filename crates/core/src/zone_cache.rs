@@ -100,6 +100,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 // without stomping on each other via a process-global env var.
 thread_local! {
     static ZONE_SOURCE: RefCell<Option<String>> = const { RefCell::new(None) };
+    /// Per-thread switch: when `true`, [`flush`] is a no-op so the buffer
+    /// keeps accumulating across multiple solves. Used by per-combo curation
+    /// diags that need to commit-or-discard records based on validation
+    /// outcome, without the per-test flush hook firing in between.
+    static FLUSH_DEFERRED: RefCell<bool> = const { RefCell::new(false) };
 }
 
 /// Per-zone record buffered between flushes. Stored serialised because
@@ -124,6 +129,34 @@ fn buffer() -> &'static Mutex<Vec<PendingRecord>> {
 pub fn set_thread_source(source: Option<&str>) {
     ZONE_SOURCE.with(|s| *s.borrow_mut() = source.map(|s| s.to_string()));
 }
+
+/// Defer / undefer [`flush`] on this thread. While deferred, `flush()` is a
+/// no-op and the buffer keeps growing — call [`discard_pending`] to drop
+/// uncommitted records, or clear the deferral first to flush them. Used by
+/// per-combo curation diags so the validate-then-commit-or-discard cycle
+/// works at the granularity the diag wants, not the per-test flush hook.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn defer_flush(deferred: bool) {
+    FLUSH_DEFERRED.with(|f| *f.borrow_mut() = deferred);
+}
+#[cfg(target_arch = "wasm32")]
+pub fn defer_flush(_: bool) {}
+
+/// Drop all currently-buffered records without writing them. Returns the
+/// number dropped. Companion to [`defer_flush`] for diag curation.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn discard_pending() -> usize {
+    match buffer().lock() {
+        Ok(mut buf) => {
+            let n = buf.len();
+            buf.clear();
+            n
+        }
+        Err(_) => 0,
+    }
+}
+#[cfg(target_arch = "wasm32")]
+pub fn discard_pending() -> usize { 0 }
 
 /// Resolve the binary cache file path. Format suffix is `.bin` (binary
 /// records) — older `.jsonl` files in the same dir are still read at load
@@ -710,6 +743,223 @@ pub fn canonical_signature(
     canonicalise(zone, channel_reaches, max_ug_ins).signature
 }
 
+// ---------------------------------------------------------------------------
+// Signature parser — inverse of canonicalise's rendering. Lets diag tools
+// inspect cached zones' geometry without re-running the layout pipeline.
+// ---------------------------------------------------------------------------
+
+/// Parsed form of a canonical signature string. Channel-id labels
+/// correspond to position in `channels` (channel 0 = first tuple in the
+/// signature, etc.) — the canonical signature already sorts channels.
+///
+/// **Caveat.** `parse_signature → parsed_to_crossing_zone → canonicalise`
+/// does not perfectly round-trip ~40% of cached signatures because of a
+/// pre-existing inconsistency in `transform_port`'s D4 rotation rules
+/// (`E → S` uses `cur_w-1-o` where `cur_h-1-o` is the geometrically
+/// correct value; `S → W` and `W → N` are similarly flipped). The bug is
+/// self-consistent at runtime — both write and read paths produce the
+/// same wrong output, so caching still works — but the resulting
+/// "canonical" signatures aren't full D4 invariants.
+///
+/// Fixing the bug invalidates the embedded `crates/core/data/sat-zones.bin`
+/// AND, in our local testing, exposed a separate cache-replay regression
+/// (one PU@2/s baseline issue count goes 17 → 18). Rolled back; the bug
+/// stays for now. The parser is still useful for telemetry and for
+/// signature shapes that happen to round-trip cleanly.
+#[derive(Debug, Clone)]
+pub struct ParsedSignature {
+    pub width: u32,
+    pub height: u32,
+    pub channels: Vec<ParsedChannel>,
+    pub forbidden: Vec<(u32, u32)>,
+    pub max_ug_ins: Option<u32>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ParsedChannel {
+    pub inputs: Vec<(char, u32)>,   // (edge, offset) pairs, e.g. ('N', 1)
+    pub outputs: Vec<(char, u32)>,
+    pub reach: u32,
+}
+
+/// Parse a canonical signature back into structured form. Returns `None`
+/// on any malformed input.
+pub fn parse_signature(sig: &str) -> Option<ParsedSignature> {
+    let dims_end = sig.find(':')?;
+    let dims = &sig[..dims_end];
+    let rest = &sig[dims_end + 1..];
+
+    let (w_str, h_str) = dims.split_once('x')?;
+    let width: u32 = w_str.parse().ok()?;
+    let height: u32 = h_str.parse().ok()?;
+
+    let f_marker = rest.find("|F:")?;
+    let channels_str = &rest[..f_marker];
+    let after_f = &rest[f_marker + 3..];
+    let ug_marker = after_f.find("|UG:")?;
+    let forbidden_str = &after_f[..ug_marker];
+    let cap_str = &after_f[ug_marker + 4..];
+
+    let channels: Vec<ParsedChannel> = if channels_str.is_empty() {
+        Vec::new()
+    } else {
+        channels_str.split(';').filter_map(parse_channel).collect()
+    };
+    let forbidden: Vec<(u32, u32)> = if forbidden_str.is_empty() {
+        Vec::new()
+    } else {
+        forbidden_str.split(';').filter_map(parse_xy).collect()
+    };
+    let max_ug_ins = if cap_str == "*" {
+        None
+    } else {
+        Some(cap_str.parse().ok()?)
+    };
+
+    Some(ParsedSignature { width, height, channels, forbidden, max_ug_ins })
+}
+
+fn parse_channel(s: &str) -> Option<ParsedChannel> {
+    let at = s.rfind('@')?;
+    let body = &s[..at];
+    let reach: u32 = s[at + 1..].parse().ok()?;
+    let (ins_str, outs_str) = body.split_once('>')?;
+    let inputs = parse_endpoint_list(ins_str);
+    let outputs = parse_endpoint_list(outs_str);
+    Some(ParsedChannel { inputs, outputs, reach })
+}
+
+fn parse_endpoint_list(s: &str) -> Vec<(char, u32)> {
+    if s.is_empty() {
+        return Vec::new();
+    }
+    s.split('+').filter_map(parse_endpoint).collect()
+}
+
+fn parse_endpoint(s: &str) -> Option<(char, u32)> {
+    let edge = s.chars().next()?;
+    if !matches!(edge, 'N' | 'E' | 'S' | 'W') {
+        return None;
+    }
+    let offset: u32 = s[1..].parse().ok()?;
+    Some((edge, offset))
+}
+
+fn parse_xy(s: &str) -> Option<(u32, u32)> {
+    let (x_str, y_str) = s.split_once(',')?;
+    Some((x_str.parse().ok()?, y_str.parse().ok()?))
+}
+
+/// Reconstruct a `CrossingZone` from a `ParsedSignature`. Items are
+/// synthesised as `"item0"`, `"item1"`, ... per channel — enough for
+/// downstream code that needs a zone shape but doesn't care about item
+/// strings (e.g. signature equality probes, shape diagnostics).
+pub fn parsed_to_crossing_zone(parsed: &ParsedSignature) -> (CrossingZone, Vec<u32>) {
+    let mut boundaries: Vec<crate::sat::ZoneBoundary> = Vec::new();
+    let mut reaches: Vec<u32> = Vec::with_capacity(parsed.channels.len());
+    for (ch_idx, channel) in parsed.channels.iter().enumerate() {
+        reaches.push(channel.reach);
+        for &(edge, offset) in &channel.inputs {
+            boundaries.push(make_boundary(
+                edge, offset, parsed.width, parsed.height, ch_idx as u32, true,
+            ));
+        }
+        for &(edge, offset) in &channel.outputs {
+            boundaries.push(make_boundary(
+                edge, offset, parsed.width, parsed.height, ch_idx as u32, false,
+            ));
+        }
+    }
+    let forced_empty: Vec<(i32, i32)> = parsed.forbidden.iter()
+        .map(|&(x, y)| (x as i32, y as i32))
+        .collect();
+    let zone = CrossingZone {
+        x: 0, y: 0,
+        width: parsed.width, height: parsed.height,
+        boundaries, forced_empty,
+    };
+    (zone, reaches)
+}
+
+fn make_boundary(
+    edge: char,
+    offset: u32,
+    w: u32,
+    h: u32,
+    channel_id: u32,
+    is_input: bool,
+) -> crate::sat::ZoneBoundary {
+    use crate::models::EntityDirection::*;
+    // Direction set to match the edge label (N for N edge, etc.) rather
+    // than the natural flow direction. `canonicalise` falls back to
+    // direction-based edge classification at corner tiles (every tile in
+    // a 1×N or N×1 zone is a corner), so matching the edge label keeps
+    // the round-trip stable for those degenerate shapes. `is_input` is
+    // preserved as a separate field — direction only affects edge
+    // classification, not the encoder's input/output handling.
+    let (x, y, direction) = match edge {
+        'N' => (offset as i32, 0, North),
+        'S' => (offset as i32, h.saturating_sub(1) as i32, South),
+        'W' => (0, offset as i32, West),
+        'E' => (w.saturating_sub(1) as i32, offset as i32, East),
+        _ => (0, 0, North),
+    };
+    crate::sat::ZoneBoundary {
+        x, y, direction,
+        item: format!("item{}", channel_id),
+        is_input,
+        interior: false,
+        belt_tier: None,
+        channel_id,
+    }
+}
+
+#[cfg(test)]
+mod parse_tests {
+    use super::*;
+
+    #[test]
+    fn roundtrip_simple() {
+        let sig = "3x3:E1>W1@5;N1>S1@7|F:1,1|UG:2";
+        let p = parse_signature(sig).expect("parse");
+        assert_eq!((p.width, p.height), (3, 3));
+        assert_eq!(p.channels.len(), 2);
+        assert_eq!(p.channels[0].inputs, vec![('E', 1)]);
+        assert_eq!(p.channels[0].outputs, vec![('W', 1)]);
+        assert_eq!(p.channels[0].reach, 5);
+        assert_eq!(p.channels[1].reach, 7);
+        assert_eq!(p.forbidden, vec![(1, 1)]);
+        assert_eq!(p.max_ug_ins, Some(2));
+    }
+
+    #[test]
+    fn roundtrip_unlimited_ug() {
+        let p = parse_signature("4x2:N0>N0@4|F:|UG:*").expect("parse");
+        assert_eq!(p.max_ug_ins, None);
+        assert!(p.forbidden.is_empty());
+    }
+
+    #[test]
+    fn roundtrip_multi_channel_multi_endpoint() {
+        let sig = "5x3:E1+E2>W0+W1@6;N1>S1@6|F:0,0;1,0|UG:1";
+        let p = parse_signature(sig).expect("parse");
+        assert_eq!(p.channels[0].inputs, vec![('E', 1), ('E', 2)]);
+        assert_eq!(p.channels[0].outputs, vec![('W', 0), ('W', 1)]);
+        assert_eq!(p.forbidden, vec![(0, 0), (1, 0)]);
+    }
+
+    #[test]
+    fn parsed_to_crossing_zone_roundtrip_simple() {
+        // 3x3 with two perpendicular channels — geometric round-trip works
+        // for this shape (no corner tiles in the channel section).
+        let sig = "3x3:E1>W1@5;N1>S1@5|F:|UG:2";
+        let parsed = parse_signature(sig).expect("parse");
+        let (zone, reaches) = parsed_to_crossing_zone(&parsed);
+        let recomputed = canonical_signature(&zone, &reaches, parsed.max_ug_ins);
+        assert_eq!(recomputed, sig);
+    }
+}
+
 /// Result of canonicalising a crossing zone — the signature plus enough
 /// orientation metadata to round-trip a stored SAT solution back into the
 /// original (or any same-shape) zone's coordinate frame.
@@ -886,6 +1136,9 @@ pub fn canonicalise(
 /// populated there, so this never has anything to do.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn flush() {
+    if FLUSH_DEFERRED.with(|f| *f.borrow()) {
+        return;
+    }
     let pending: Vec<PendingRecord> = match buffer().lock() {
         Ok(mut buf) => std::mem::take(&mut *buf),
         Err(_) => return,
