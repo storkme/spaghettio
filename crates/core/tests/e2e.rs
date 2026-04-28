@@ -1444,10 +1444,12 @@ fn run_timed_validators(lr: &LayoutResult, sr: &SolverResult) {
 // against the baseline recorded in each test's comment header.
 //
 // Pass/fail is gated by a `StressBaseline`: errors and warnings must each be
-// ≤ a recorded ceiling. Some tests carry `max_errors > 0` because the regimes
-// they exercise produce known residual errors today — the corpus's job is to
-// detect *regression*, not to assert today's layouts are bug-free. Strict
-// improvements (fewer errors / warnings) must tighten the baseline downward.
+// ≤ a recorded ceiling. Some tests carry `max_errors > 0` to codify known
+// residual errors — the corpus's job is to detect *regression*, not to assert
+// today's layouts are bug-free. Strict improvements (fewer errors / warnings)
+// must tighten the baseline downward. See `StressBaseline::max_errors_by_category`
+// for per-category tracking that lets the baseline detect when a fix targeted
+// a known error vs when a *different* category regressed.
 // ---------------------------------------------------------------------------
 
 /// Pass/fail expectations for a stress test. The reporter still prints the
@@ -1460,6 +1462,13 @@ fn run_timed_validators(lr: &LayoutResult, sr: &SolverResult) {
 struct StressBaseline {
     max_errors: usize,
     max_warnings: usize,
+    /// Per-category error ceilings. When `max_errors > 0`, populate this
+    /// to codify *which* categories are known to produce errors. This lets
+    /// the baseline detect when a fix targeted a known error (category
+    /// count drops) vs when a *different* category regressed.
+    ///
+    /// Categories not listed here are implicitly allowed 0 errors.
+    max_errors_by_category: std::collections::BTreeMap<String, usize>,
 }
 
 /// Tally warnings + trace metrics, print the scoreboard, then assert against
@@ -1561,11 +1570,14 @@ fn check_stress_scoreboard(test_name: &str, result: &E2EResult, baseline: Stress
     }
     eprintln!("{msg}");
 
-    let errors = result
-        .issues
-        .iter()
-        .filter(|i| i.severity == Severity::Error)
-        .count();
+    // Count errors by category.
+    let mut errors_by_category: std::collections::BTreeMap<&str, usize> = Default::default();
+    for i in result.issues.iter().filter(|i| i.severity == Severity::Error) {
+        *errors_by_category.entry(i.category.as_str()).or_default() += 1;
+    }
+    let errors: usize = errors_by_category.values().sum();
+
+    // Total-error ceiling (coarse gate).
     assert!(
         errors <= baseline.max_errors,
         "{test_name}: validator errors regressed: got {errors}, baseline allows ≤ {}. \
@@ -1573,6 +1585,38 @@ fn check_stress_scoreboard(test_name: &str, result: &E2EResult, baseline: Stress
          errors result).",
         baseline.max_errors,
     );
+    // Per-category ceilings — catches regressions in specific categories
+    // even when the total error count is within the overall ceiling.
+    // Skipped when the map is empty (e.g. smoke tests with max_errors: usize::MAX).
+    if !baseline.max_errors_by_category.is_empty() {
+        for (cat, max_allowed) in &baseline.max_errors_by_category {
+            let actual = *errors_by_category.get(cat.as_str()).unwrap_or(&0);
+            assert!(
+                actual <= *max_allowed,
+                "{test_name}: error category `{cat}` regressed: got {actual}, baseline allows ≤ {max_allowed}. \
+                 If this is an intentional change, update the baseline (and tighten when fewer errors result).",
+            );
+        }
+        // Surface unexpected new error categories so we notice when a
+        // different class of error starts appearing.
+        let known: std::collections::HashSet<&str> = baseline
+            .max_errors_by_category
+            .keys()
+            .map(|s| s.as_str())
+            .collect();
+        let unexpected: Vec<String> = errors_by_category
+            .iter()
+            .filter(|(cat, count)| !known.contains(*cat) && **count > 0)
+            .map(|(cat, count)| format!("{cat}: {count}"))
+            .collect();
+        assert!(
+            unexpected.is_empty(),
+            "{test_name}: unexpected error categories appeared: {}. \
+             Full error counts: {:?}",
+            unexpected.join(", "),
+            errors_by_category,
+        );
+    }
     assert!(
         total_warnings <= baseline.max_warnings,
         "{test_name}: warnings regressed: got {total_warnings}, baseline allows ≤ {}. \
@@ -1588,6 +1632,9 @@ fn check_stress_scoreboard(test_name: &str, result: &E2EResult, baseline: Stress
 struct PartitionedStressBaseline {
     /// `StressBaseline.max_errors`-equivalent for the partitioned run.
     max_errors_partitioned: usize,
+    /// Per-category error ceilings for the partitioned run.
+    /// See `StressBaseline::max_errors_by_category` for rationale.
+    max_errors_by_category_partitioned: std::collections::BTreeMap<String, usize>,
     /// `StressBaseline.max_warnings`-equivalent for the partitioned run.
     /// **K1-2**: should ideally be ≤ the Pooled `max_warnings` baseline.
     /// If the partitioned run introduces new starvation warnings while
@@ -1644,6 +1691,12 @@ fn check_partitioned_stress_scoreboard(
     eprintln!("  errors: {partitioned_errors} (baseline ≤ {})", partitioned_baseline.max_errors_partitioned);
     eprintln!("  warnings: {partitioned_warnings} (baseline ≤ {})", partitioned_baseline.max_warnings_partitioned);
 
+    // Count partitioned errors by category for per-category checks.
+    let mut partitioned_errors_by_category: std::collections::BTreeMap<&str, usize> = Default::default();
+    for i in partitioned_result.issues.iter().filter(|i| i.severity == Severity::Error) {
+        *partitioned_errors_by_category.entry(i.category.as_str()).or_default() += 1;
+    }
+
     assert!(
         partitioned_errors <= partitioned_baseline.max_errors_partitioned,
         "{test_name}: PartitionedPerConsumer errors regressed: got {partitioned_errors}, \
@@ -1651,6 +1704,37 @@ fn check_partitioned_stress_scoreboard(
          errors result).",
         partitioned_baseline.max_errors_partitioned,
     );
+    // Per-category error ceilings for the partitioned run.
+    // Skipped when the map is empty (smoke-test behaviour).
+    if !partitioned_baseline.max_errors_by_category_partitioned.is_empty() {
+        for (cat, max_allowed) in &partitioned_baseline.max_errors_by_category_partitioned {
+            let actual = *partitioned_errors_by_category.get(cat.as_str()).unwrap_or(&0);
+            assert!(
+                actual <= *max_allowed,
+                "{test_name}: partitioned error category `{cat}` regressed: got {actual}, \
+                 baseline allows ≤ {max_allowed}. If this is an intentional change, update the \
+                 baseline (and tighten when fewer errors result).",
+            );
+        }
+        // Surface unexpected new error categories in the partitioned run.
+        let known: std::collections::HashSet<&str> = partitioned_baseline
+            .max_errors_by_category_partitioned
+            .keys()
+            .map(|s| s.as_str())
+            .collect();
+        let unexpected: Vec<String> = partitioned_errors_by_category
+            .iter()
+            .filter(|(cat, count)| !known.contains(*cat) && **count > 0)
+            .map(|(cat, count)| format!("{cat}: {count}"))
+            .collect();
+        assert!(
+            unexpected.is_empty(),
+            "{test_name}: unexpected partitioned error categories appeared: {}. \
+             Full error counts: {:?}",
+            unexpected.join(", "),
+            partitioned_errors_by_category,
+        );
+    }
     assert!(
         partitioned_warnings <= partitioned_baseline.max_warnings_partitioned,
         "{test_name}: K1-2 — PartitionedPerConsumer warnings regressed: got {partitioned_warnings}, \
@@ -1691,7 +1775,15 @@ fn stress_electronic_circuit_30s_from_ore() {
     check_stress_scoreboard(
         "stress_electronic_circuit_30s_from_ore",
         &result,
-        StressBaseline { max_errors: 10, max_warnings: 0 },
+        StressBaseline {
+            // Post-junction-solver-fix (a207b76 + 56c3ca4): 0 errors.
+            // The PR baseline of 10 belt-dead-end was probed before the
+            // fluid-reservation filter + promote_blocked_encountered +
+            // perimeter-boundary check landed.
+            max_errors: 0,
+            max_warnings: 0,
+            max_errors_by_category: Default::default(),
+        },
     );
 }
 
@@ -1718,7 +1810,11 @@ fn stress_advanced_circuit_45s_from_plates() {
     check_stress_scoreboard(
         "stress_advanced_circuit_45s_from_plates",
         &result,
-        StressBaseline { max_errors: usize::MAX, max_warnings: usize::MAX },
+        StressBaseline {
+            max_errors: usize::MAX,
+            max_warnings: usize::MAX,
+            max_errors_by_category: Default::default(),
+        },
     );
 }
 
@@ -1788,9 +1884,14 @@ fn stress_advanced_circuit_partitioned_5s_from_plates() {
         "stress_advanced_circuit_partitioned_5s_from_plates",
         &pooled,
         &partitioned,
-        StressBaseline { max_errors: 3, max_warnings: 1 },
+        StressBaseline {
+            max_errors: 3,
+            max_warnings: 1,
+            max_errors_by_category: Default::default(),
+        },
         PartitionedStressBaseline {
             max_errors_partitioned: 0,
+            max_errors_by_category_partitioned: Default::default(),
             // The "41 deterministic" baseline this test was originally tightened
             // to was an artefact of two now-fixed bugs: the partitioner sibling-
             // spec dedup orphaned the AC module's copper-cable trunk
@@ -1848,9 +1949,14 @@ fn stress_advanced_circuit_partitioned_4s_from_plates() {
         "stress_advanced_circuit_partitioned_4s_from_plates",
         &pooled,
         &partitioned,
-        StressBaseline { max_errors: 1, max_warnings: 0 },
+        StressBaseline {
+            max_errors: 1,
+            max_warnings: 0,
+            max_errors_by_category: Default::default(),
+        },
         PartitionedStressBaseline {
             max_errors_partitioned: 0,
+            max_errors_by_category_partitioned: Default::default(),
             // Post-fix (clean-slate SAT zone + pole-repair Euclidean): 0.
             // The PR #207 baseline of 33 was probed before those landed.
             max_warnings_partitioned: 0,
@@ -1899,7 +2005,14 @@ fn stress_advanced_circuit_partitioned_7s_from_plates() {
         "stress_advanced_circuit_partitioned_7s_from_plates",
         &pooled,
         &partitioned,
-        StressBaseline { max_errors: 5, max_warnings: 0 },
+        StressBaseline {
+            // Post-junction-solver-fix: 0 errors on the Pooled run
+            // (down from 5 pre-fix). The partitioned baseline (2)
+            // tracks separately below.
+            max_errors: 0,
+            max_warnings: 0,
+            max_errors_by_category: Default::default(),
+        },
         PartitionedStressBaseline {
             // Post-fix (clean-slate SAT zone + pole-repair Euclidean): 1.
             // The PR #207 baseline of 3 was probed before those landed.
@@ -1911,6 +2024,13 @@ fn stress_advanced_circuit_partitioned_7s_from_plates() {
             // failure — the cluster never solved and the belt feeding
             // into it has no receiver.
             max_errors_partitioned: 2,
+            // Two errors: belt-dead-end + unresolved-junction (same
+            // underlying capped-cluster failure surfaced two different
+            // ways).
+            max_errors_by_category_partitioned: [
+                ("belt-dead-end".to_string(), 1),
+                ("unresolved-junction".to_string(), 1),
+            ].into_iter().collect(),
             max_warnings_partitioned: 0,
             max_partition_rejections: 1,
         },
@@ -2434,7 +2554,11 @@ fn stress_processing_unit_20s_from_plates() {
     check_stress_scoreboard(
         "stress_processing_unit_20s_from_plates",
         &result,
-        StressBaseline { max_errors: usize::MAX, max_warnings: usize::MAX },
+        StressBaseline {
+            max_errors: usize::MAX,
+            max_warnings: usize::MAX,
+            max_errors_by_category: Default::default(),
+        },
     );
 }
 
@@ -2460,7 +2584,11 @@ fn stress_electronic_circuit_60s_red_from_ore() {
     check_stress_scoreboard(
         "stress_electronic_circuit_60s_red_from_ore",
         &result,
-        StressBaseline { max_errors: 1, max_warnings: 0 },
+        StressBaseline {
+            max_errors: 1,
+            max_warnings: 0,
+            max_errors_by_category: Default::default(),
+        },
     );
 }
 
@@ -2490,7 +2618,11 @@ fn stress_electronic_circuit_22s_from_ore() {
     check_stress_scoreboard(
         "stress_electronic_circuit_22s_from_ore",
         &result,
-        StressBaseline { max_errors: 0, max_warnings: 1 },
+        StressBaseline {
+            max_errors: 0,
+            max_warnings: 1,
+            max_errors_by_category: Default::default(),
+        },
     );
 }
 
@@ -2511,7 +2643,11 @@ fn stress_electronic_circuit_23s_from_ore() {
     check_stress_scoreboard(
         "stress_electronic_circuit_23s_from_ore",
         &result,
-        StressBaseline { max_errors: 0, max_warnings: 1 },
+        StressBaseline {
+            max_errors: 0,
+            max_warnings: 1,
+            max_errors_by_category: Default::default(),
+        },
     );
 }
 
@@ -2532,7 +2668,17 @@ fn stress_electronic_circuit_35s_from_ore() {
     check_stress_scoreboard(
         "stress_electronic_circuit_35s_from_ore",
         &result,
-        StressBaseline { max_errors: 16, max_warnings: 0 },
+        StressBaseline {
+            // Post-junction-solver-fix: 4 belt-dead-end (down from 16
+            // pre-fix). Same regime as 30/s but with more lanes; the
+            // residual errors are orphaned output-merger belts that
+            // the SAT zone fixes haven't reached.
+            max_errors: 4,
+            max_warnings: 0,
+            max_errors_by_category: [
+                ("belt-dead-end".to_string(), 4),
+            ].into_iter().collect(),
+        },
     );
 }
 
@@ -2553,7 +2699,18 @@ fn stress_electronic_circuit_40s_from_ore() {
     check_stress_scoreboard(
         "stress_electronic_circuit_40s_from_ore",
         &result,
-        StressBaseline { max_errors: 47, max_warnings: 0 },
+        StressBaseline {
+            // Post-junction-solver-fix: 13 belt-dead-end (down from 47
+            // total: 17 belt-dead-end + 2 belt-junction + 28 entity-
+            // overlap pre-fix). The belt-junction + entity-overlap
+            // categories are gone entirely; remaining errors are
+            // orphaned output-merger belts.
+            max_errors: 13,
+            max_warnings: 0,
+            max_errors_by_category: [
+                ("belt-dead-end".to_string(), 13),
+            ].into_iter().collect(),
+        },
     );
 }
 
