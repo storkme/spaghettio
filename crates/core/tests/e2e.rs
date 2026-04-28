@@ -1914,22 +1914,6 @@ fn partition_strategy_scoreboard() {
             row_layout: None,
             expected: (5, 9, 9),
         },
-        // The user's working URL: PU@2/s, AM3, fast belts, horizontal-stack,
-        // ores + steel-plate as external inputs. Pool produces a working
-        // layout in the browser; partitioned strategies regress with
-        // routing/template bugs (west-edge belt-loop, west-facing
-        // belt-out, UG max-reach). Drive P1/P2 toward Pool.
-        ScoreboardCase {
-            name: "PU@2/s ore red HS",
-            item: "processing-unit", rate: 2.0, machine: "assembling-machine-3",
-            belt: Some("fast-transport-belt"),
-            inputs: &[
-                "steel-plate", "stone", "coal", "water", "crude-oil",
-                "iron-ore", "copper-ore",
-            ],
-            row_layout: Some(fucktorio_core::bus::layout::RowLayout::HorizontalStack),
-            expected: (2, 5, 5),
-        },
     ];
     run_partition_scoreboard("partition_strategy_scoreboard", cases);
 }
@@ -1996,6 +1980,28 @@ fn partition_strategy_scoreboard_extended() {
             // doesn't fire on items already covered by Phase 1.
             row_layout: None,
             expected: (44, 45, 45),
+        },
+        // The user's working URL: PU@2/s, AM3, fast belts, horizontal-stack,
+        // ores + steel-plate as external inputs. Pool produces a working
+        // layout in the browser; partitioned strategies regress with
+        // routing/template bugs (west-edge belt-loop, west-facing
+        // belt-out, UG max-reach). Drive P1/P2 toward Pool.
+        //
+        // Lives in the extended (ignored) corpus rather than the fast
+        // core because it's a horizontal-stack layout and the HS
+        // codepath is significantly slower than vertical-split — adding
+        // it to the fast core pushed CI past the 8-minute scoreboard
+        // budget. Run locally with `--ignored` to track this case.
+        ScoreboardCase {
+            name: "PU@2/s ore red HS",
+            item: "processing-unit", rate: 2.0, machine: "assembling-machine-3",
+            belt: Some("fast-transport-belt"),
+            inputs: &[
+                "steel-plate", "stone", "coal", "water", "crude-oil",
+                "iron-ore", "copper-ore",
+            ],
+            row_layout: Some(fucktorio_core::bus::layout::RowLayout::HorizontalStack),
+            expected: (2, 5, 5),
         },
     ];
     run_partition_scoreboard("partition_strategy_scoreboard_extended", cases);
