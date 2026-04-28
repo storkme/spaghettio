@@ -4004,3 +4004,146 @@ fn diag_hint_ab_compare() {
     let sat_delta = (on.1 as f64 - off.1 as f64) / off.1 as f64 * 100.0;
     eprintln!("  delta       {:>9.1}%  {:>9.1}%", wall_delta, sat_delta);
 }
+
+// ---------------------------------------------------------------------------
+// Decomposition-potential probe — is decomposition even viable for our
+// cache, or is the corpus too narrow?
+// ---------------------------------------------------------------------------
+
+/// Read the on-disk + embedded zone cache and check, for every record
+/// large enough to be worth decomposing (width or height >= 5), whether
+/// it could in principle be split into two pieces whose dimensions both
+/// also appear in the cache. This is a **geometric upper bound** —
+/// whether the signatures actually match (boundary topology, forbidden
+/// tiles) is a stricter check that comes next.
+///
+/// Tells us cheaply whether to invest in a full signature-matching
+/// decomposer, or whether the corpus needs to grow first.
+///
+/// Run with:
+///   cargo test --release --test e2e -- --ignored diag_decomposition_potential --exact --nocapture
+#[test]
+#[ignore]
+fn diag_decomposition_potential() {
+    use fucktorio_core::zone_cache::{parse_records, DecodedRecord};
+    use std::collections::{BTreeMap, HashSet};
+
+    // Same loader as diag_mine_palette: ~/.cache + the embedded blob.
+    let mut records: Vec<DecodedRecord> = Vec::new();
+    let cache_path = std::env::var("FUCKTORIO_ZONE_CACHE_PATH")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            let base = std::env::var("XDG_CACHE_HOME").ok()
+                .filter(|s| !s.is_empty()).map(std::path::PathBuf::from)
+                .or_else(|| std::env::var("HOME").ok()
+                    .map(|h| std::path::PathBuf::from(h).join(".cache")))
+                .unwrap_or_else(|| std::path::PathBuf::from(".cache"));
+            base.join("fucktorio").join("sat-zones.bin")
+        });
+    if let Ok(bytes) = std::fs::read(&cache_path) {
+        records.extend(parse_records(&bytes));
+    }
+    let embedded_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("data/sat-zones.bin");
+    if let Ok(bytes) = std::fs::read(&embedded_path) {
+        records.extend(parse_records(&bytes));
+    }
+    if records.is_empty() {
+        panic!("no records — populate ~/.cache/fucktorio/sat-zones.bin first");
+    }
+
+    // Build dim sets.
+    let widths_present: HashSet<u32> = records.iter().map(|r| r.canon_w).collect();
+    let heights_present: HashSet<u32> = records.iter().map(|r| r.canon_h).collect();
+    // (w, h) sets — same-row decomposition needs both halves to share h
+    // (or w for vertical splits) AND the orthogonal dimension to appear.
+    let shapes_present: HashSet<(u32, u32)> = records.iter()
+        .map(|r| (r.canon_w, r.canon_h)).collect();
+
+    // Histogram of zone sizes.
+    let mut by_shape: BTreeMap<(u32, u32), usize> = BTreeMap::new();
+    for rec in &records {
+        *by_shape.entry((rec.canon_w, rec.canon_h)).or_default() += 1;
+    }
+
+    eprintln!("\n=== Decomposition potential (geometric upper bound) ===");
+    eprintln!(
+        "loaded {} records ({} distinct shapes, {} distinct widths, {} distinct heights)",
+        records.len(), shapes_present.len(), widths_present.len(), heights_present.len(),
+    );
+
+    // For each "big" cached zone, count how many ways it can be cut such
+    // that both halves' shapes are also in the cache.
+    let mut decomposable_records = 0usize;
+    let mut total_big_records = 0usize;
+    let mut h_cuts_total = 0usize;
+    let mut v_cuts_total = 0usize;
+
+    // Per-shape detail for the top-N biggest zones.
+    let mut per_shape_decomp: BTreeMap<(u32, u32), (usize, usize, usize)> = BTreeMap::new();
+    // (occurrences in cache, h_cuts_found, v_cuts_found)
+
+    // Dedup by shape to avoid double-counting identical zones.
+    let mut seen_shapes: HashSet<(u32, u32)> = HashSet::new();
+    for rec in &records {
+        if rec.canon_w < 5 && rec.canon_h < 5 {
+            continue;
+        }
+        if !seen_shapes.insert((rec.canon_w, rec.canon_h)) {
+            continue;
+        }
+        total_big_records += 1;
+        let mut h_cuts = 0;
+        let mut v_cuts = 0;
+
+        // Vertical cut at column cut_x: left = cut_x × h, right = (w - cut_x) × h
+        for cut_x in 1..rec.canon_w {
+            let left = (cut_x, rec.canon_h);
+            let right = (rec.canon_w - cut_x, rec.canon_h);
+            if shapes_present.contains(&left) && shapes_present.contains(&right) {
+                v_cuts += 1;
+            }
+        }
+        // Horizontal cut at row cut_y: top = w × cut_y, bottom = w × (h - cut_y)
+        for cut_y in 1..rec.canon_h {
+            let top = (rec.canon_w, cut_y);
+            let bottom = (rec.canon_w, rec.canon_h - cut_y);
+            if shapes_present.contains(&top) && shapes_present.contains(&bottom) {
+                h_cuts += 1;
+            }
+        }
+
+        if v_cuts > 0 || h_cuts > 0 {
+            decomposable_records += 1;
+        }
+        v_cuts_total += v_cuts;
+        h_cuts_total += h_cuts;
+        per_shape_decomp.insert(
+            (rec.canon_w, rec.canon_h),
+            (
+                by_shape.get(&(rec.canon_w, rec.canon_h)).copied().unwrap_or(0),
+                h_cuts,
+                v_cuts,
+            ),
+        );
+    }
+
+    eprintln!(
+        "\nLarge zones (w>=5 or h>=5): {} unique shapes, {} have at least one geometrically valid cut ({:.0}%)",
+        total_big_records, decomposable_records,
+        if total_big_records > 0 { decomposable_records as f64 / total_big_records as f64 * 100.0 } else { 0.0 },
+    );
+    eprintln!("Total candidate cuts: {} vertical + {} horizontal", v_cuts_total, h_cuts_total);
+
+    eprintln!("\nPer-shape breakdown (top 20 by occurrence):");
+    eprintln!("  {:<8} {:>6} {:>8} {:>8}", "shape", "count", "h_cuts", "v_cuts");
+    let mut rows: Vec<_> = per_shape_decomp.iter().collect();
+    rows.sort_by(|a, b| b.1.0.cmp(&a.1.0).then(b.0.cmp(a.0)));
+    for ((w, h), (count, h_cuts, v_cuts)) in rows.iter().take(20) {
+        eprintln!(
+            "  {:>3}x{:<3}  {:>6} {:>8} {:>8}{}",
+            w, h, count, h_cuts, v_cuts,
+            if *h_cuts > 0 || *v_cuts > 0 { "" } else { "  ← no cut works" },
+        );
+    }
+}
+
