@@ -71,6 +71,15 @@ struct BeltSpec {
     start: (i32, i32),
     goal: (i32, i32),
     item: String,
+    /// Module the spec's lane belongs to. Under `LayoutStrategy::Pooled`
+    /// always 0; under `PartitionedPerConsumer`/`PartitionedDecomposed` a
+    /// single item can have multiple sibling families with the same item
+    /// name but different module ids. The crossing-detection filter
+    /// (`ghost_item_at`) keys on `(item, module_id)` so same-item-
+    /// different-module paths get bridged via UG instead of silently
+    /// merging — see comment at the filter site for the symptom this
+    /// guards against.
+    module_id: u32,
     belt_name: &'static str,
     /// Explicit exit direction for the final belt on this path. Set when the
     /// planner knows the spec's topology — producer-row orientation, trunk
@@ -286,7 +295,11 @@ pub fn route_bus_ghost(
     // trunk tile, and the `all_ghost_crossings` check still fires for different-
     // item overlaps so the junction solver can bridge them.
     // -------------------------------------------------------------------------
-    let mut trunk_tile_items: FxHashMap<(i32, i32), String> = FxHashMap::default();
+    // Tile → `(item, module_id)`. Module id is needed alongside item so the
+    // crossing filter at the materialisation step can distinguish same-item
+    // sibling families (under Phase 2 the same item can have multiple
+    // independent flows that must be physically separated via UG bridges).
+    let mut trunk_tile_items: FxHashMap<(i32, i32), (String, u32)> = FxHashMap::default();
     // Synthetic column paths for each trunk lane, keyed by "trunk:{item}:{x}".
     // Keyed per-column (not just per-item) because multi-lane items like a
     // split copper-cable trunk have multiple vertical columns — merging them
@@ -368,7 +381,7 @@ pub fn route_bus_ghost(
                 // tap/ret entities at trunk tiles, and preserves crossing
                 // detection so the junction solver can bridge them.
                 existing_belts.insert(tile);
-                trunk_tile_items.insert(tile, lane.item.clone());
+                trunk_tile_items.insert(tile, (lane.item.clone(), lane.module_id));
                 trunk_synth_paths
                     .entry(format!("trunk:{}:{}", lane.item, x))
                     .or_default()
@@ -914,7 +927,11 @@ pub fn route_bus_ghost(
             continue;
         }
         if let Some(item) = &ent.carries {
-            trunk_tile_items.insert((ent.x, ent.y), item.clone());
+            // Fluid trunks stay pooled (RFP "Fluids" carve-out), so module_id
+            // is always 0 here. The `(item, 0)` tuple still distinguishes
+            // them from any solid-trunk sibling at the same tile under the
+            // crossing filter.
+            trunk_tile_items.insert((ent.x, ent.y), (item.clone(), 0));
             // Also inject a synthetic fluid-trunk path so classify_crossing
             // sees the pipe column as a second spec at belt×pipe crossing
             // tiles. Key format mirrors the solid-trunk synth path format
@@ -1053,6 +1070,7 @@ pub fn route_bus_ghost(
                     start: (start_x, tap_y),
                     goal: (goal_x, tap_y),
                     item: lane.item.clone(),
+                    module_id: lane.module_id,
                     belt_name: horiz_belt,
                     exit_dir: Some(EntityDirection::East),
                 });
@@ -1102,6 +1120,7 @@ pub fn route_bus_ghost(
                     start: (start_x, out_y),
                     goal: (goal_x, out_y),
                     item: lane.item.clone(),
+                    module_id: lane.module_id,
                     belt_name: horiz_belt,
                     exit_dir: Some(EntityDirection::West),
                 });
@@ -1141,6 +1160,7 @@ pub fn route_bus_ghost(
                     start: (start_x, out_y),
                     goal: (goal_x, out_y),
                     item: lane.item.clone(),
+                    module_id: lane.module_id,
                     belt_name: horiz_belt,
                     exit_dir: Some(EntityDirection::West),
                 });
@@ -1271,6 +1291,7 @@ pub fn route_bus_ghost(
                                     start: (start_x, out_y),
                                     goal: (input_x, input_y),
                                     item: lane.item.clone(),
+                                    module_id: lane.module_id,
                                     belt_name: feeder_belt,
                                     exit_dir: Some(feeder_exit_dir),
                                 });
@@ -1302,9 +1323,16 @@ pub fn route_bus_ghost(
     let mut all_ghost_crossings: Vec<(i32, i32)> = Vec::new();
     #[allow(clippy::needless_late_init)]
     let unroutable_specs: Vec<String>;
-    // Tracks which item each ghost-routed tile carries, so we can distinguish
-    // same-item overlaps (not conflicts) from different-item overlaps (real).
-    let mut ghost_item_at: FxHashMap<(i32, i32), String> = FxHashMap::default();
+    // Tracks `(item, module_id)` at each ghost-routed tile so the crossing
+    // filter can distinguish three cases: (1) same-item-same-module
+    // overlaps (not conflicts — the original "two belts converging"
+    // semantics), (2) different-item overlaps (real crossings), and (3)
+    // same-item-different-module overlaps (also real crossings under
+    // Phase 2 — sibling families must stay physically separate). Pre-Phase 2
+    // this was a `FxHashMap<_, String>` and case (3) silently merged into
+    // case (1), so mod0 taps would disappear into mod1 trunks at every
+    // east-tap row pitch.
+    let mut ghost_item_at: FxHashMap<(i32, i32), (String, u32)> = FxHashMap::default();
 
     // All remaining specs (taps, returns, feeders) — no ordering constraint
     // since trunks are now stamped as hard obstacles before A* runs.
@@ -1663,13 +1691,24 @@ pub fn route_bus_ghost(
                     return false;
                 }
                 match ghost_item_at.get(t) {
-                    Some(existing_item) => *existing_item != spec.item,
+                    // Real crossing iff item OR module_id differs. Same-item-
+                    // same-module overlaps remain silent (the original
+                    // "two converging belts" case under Pool); same-item-
+                    // different-module gets bridged via the junction solver
+                    // — without this guard, mod0 east taps merged silently
+                    // into mod1 south trunks at every consumer-row pitch
+                    // (y=144/152/160/168/176 on EC@30/s decomposed).
+                    Some((existing_item, existing_mod)) => {
+                        existing_item != &spec.item || *existing_mod != spec.module_id
+                    }
                     None => false,
                 }
             }));
 
             for &tile in &path {
-                ghost_item_at.entry(tile).or_insert_with(|| spec.item.clone());
+                ghost_item_at
+                    .entry(tile)
+                    .or_insert_with(|| (spec.item.clone(), spec.module_id));
             }
         }
     }
@@ -3074,7 +3113,7 @@ fn emit_unresolved_junctions(
     spec_items: &FxHashMap<String, String>,
     spec_belt_tiers: &FxHashMap<String, BeltTier>,
     spec_kinds: &FxHashMap<String, crate::bus::junction::SpecKind>,
-    ghost_item_at: &FxHashMap<(i32, i32), String>,
+    ghost_item_at: &FxHashMap<(i32, i32), (String, u32)>,
 ) -> Vec<LayoutRegion> {
     use crate::bus::junction::{Junction, Rect, SpecCrossing, SpecKind, SpecOrigin};
     use crate::models::{PortPoint, RegionKind};

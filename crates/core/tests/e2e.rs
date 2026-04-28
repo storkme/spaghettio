@@ -2120,8 +2120,19 @@ fn partition_strategy_scoreboard() {
             // family_balancer_range propagation by `(item, module_id)`
             // not just item). Eliminates one belt-dead-end cluster from
             // siblings inheriting each other's balancer y-range.
+            //
+            // P1/P2 12 → 18 after the same-item-different-module
+            // crossing-detection fix in `ghost_router.rs`. The +6 errors
+            // are NOT new bugs introduced; they are pre-existing
+            // bridge-feasibility issues the validator now surfaces (UG
+            // reach exceeded for yellow on wide trunk crossings, head-on
+            // belt-junction at west edge). Before the fix, mod0 east
+            // taps merged silently into mod1 south trunks via sideloading
+            // — the broken flow was hidden because both belts carry the
+            // same item. Ratchet down once the junction solver learns
+            // bridge-tier and bridge-reach constraints (follow-up).
             row_layout: None,
-            expected: (1, 12, 12),
+            expected: (1, 18, 18),
         },
         ScoreboardCase {
             name: "AC@5/s plates yellow",
@@ -2192,8 +2203,16 @@ fn partition_strategy_scoreboard_extended() {
             // P2 12 → 9 after the lane_planner.rs:370 module_id fix.
             // Pool 11 → 8 after the ghost_router decomposition-feeder
             // fix (which benefits Pool's decomposed-multi-stamp families).
+            //
+            // P2 9 → 21 after the same-item-different-module crossing
+            // fix exposed bridge-feasibility issues in the SAT solver.
+            // Same shape as the PU@2/s ore red case in the fast core:
+            // previously-hidden broken-flow merges between sibling
+            // copper-cable trunks now surface as UG-reach / belt-junction
+            // errors. Ratchet down once the junction solver learns about
+            // bridge-tier and bridge-reach constraints.
             row_layout: None,
-            expected: (8, 7, 9),
+            expected: (8, 7, 21),
         },
         ScoreboardCase {
             name: "PU@3/s plates yellow",
