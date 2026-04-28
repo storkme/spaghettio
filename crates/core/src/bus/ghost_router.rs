@@ -2080,10 +2080,15 @@ pub fn route_bus_ghost(
     //   2. surface-only SAT — simplest layout, no UG at all
     //   3-5. SAT with increasing UG budget at NATIVE reach — tier-
     //        correct UG lengths, including chained-UG solutions.
-    //   6.   eviction — last-resort, runs only after every SAT variant
-    //        returned UNSAT. Each recipe pulls one or more participating
+    //   6.   (auto only) eviction — pulls one or more participating
     //        specs out of the SAT problem (geometrically or via A*),
-    //        then re-invokes SAT on the reduced spec set.
+    //        then re-invokes SAT on the reduced spec set. Gated to
+    //        auto-tier alongside the AutoUpgrade rungs because pinned-
+    //        tier mode is contractually strict (see f04152d): an
+    //        unsolvable zone should fail loudly with `unresolved-
+    //        junction` rather than silently re-route specs around it,
+    //        even though eviction's per-channel reach stays tier-correct
+    //        unlike Relaxed.
     //   7-9. (auto only) AutoUpgrade rungs — Relaxed reach with UG
     //        entity-tier promoted to the zone's dominant tier.
     let eviction_strategy = EvictionStrategy::default_recipes();
@@ -2093,9 +2098,9 @@ pub fn route_bus_ghost(
         &sat_1ug_native,
         &sat_2ug_native,
         &sat_full_native,
-        &eviction_strategy,
     ];
     if max_belt_tier.is_none() {
+        strategies.push(&eviction_strategy);
         strategies.push(&sat_1ug_upgrade);
         strategies.push(&sat_2ug_upgrade);
         strategies.push(&sat_full_upgrade);
