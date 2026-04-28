@@ -2123,16 +2123,18 @@ fn partition_strategy_scoreboard() {
             //
             // P1/P2 12 → 18 after the same-item-different-module
             // crossing-detection fix in `ghost_router.rs`. The +6 errors
-            // are NOT new bugs introduced; they are pre-existing
-            // bridge-feasibility issues the validator now surfaces (UG
-            // reach exceeded for yellow on wide trunk crossings, head-on
-            // belt-junction at west edge). Before the fix, mod0 east
-            // taps merged silently into mod1 south trunks via sideloading
-            // — the broken flow was hidden because both belts carry the
-            // same item. Ratchet down once the junction solver learns
-            // bridge-tier and bridge-reach constraints (follow-up).
+            // were not new bugs introduced; they were pre-existing
+            // bridge-feasibility issues the validator surfaced. Pool
+            // also stayed at 1 because of one such issue.
+            //
+            // Pool 1 → 0, P1/P2 18 → 17 after dropping the Relaxed-reach
+            // SAT rungs from the strategy ladder (cost-vs-correctness
+            // conflict — Relaxed mode let the solver emit cheaper-but-
+            // illegal single-UG bridges; without it the solver finds
+            // chained-UG solutions that respect per-tier reach). PU@2/s
+            // ore red Pool is now validator-clean.
             row_layout: None,
-            expected: (1, 18, 18),
+            expected: (0, 17, 17),
         },
         ScoreboardCase {
             name: "AC@5/s plates yellow",
@@ -2260,7 +2262,10 @@ fn partition_strategy_scoreboard_extended() {
             // interacting with the existing west-edge belt-loop bug.
             //
             // P1/P2 6 → 5 after the lane_planner.rs:370 module_id fix.
-            expected: (1, 5, 5),
+            //
+            // Pool 1 → 0, P1/P2 5 → 4 after dropping Relaxed-reach SAT
+            // rungs (the user's working URL is now Pool-clean).
+            expected: (0, 4, 4),
         },
     ];
     run_partition_scoreboard("partition_strategy_scoreboard_extended", cases);
