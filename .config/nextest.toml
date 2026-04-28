@@ -5,13 +5,14 @@ slow-timeout = { period = "30s", terminate-after = 3 }
 test-threads = 1
 
 # `partition_strategy_scoreboard` runs Pool/P1/P2 across 2 cases —
-# baseline ~72s locally, ~115s on slower CI hardware. The default
-# 90s terminate window is too tight; give it a 5-minute ceiling.
+# baseline ~50s locally in debug mode. CI has been variable, with
+# observed runtimes from 200s to 480s+; give it a 6-minute ceiling
+# to stay clear of intermittent slowness without hiding real timeouts.
 # The slow-tail extended corpus lives in
 # `partition_strategy_scoreboard_extended` and is `#[ignore]`d.
 [[profile.ci.overrides]]
 filter = "test(partition_strategy_scoreboard)"
-slow-timeout = { period = "60s", terminate-after = 5 }
+slow-timeout = { period = "60s", terminate-after = 6 }
 
 [profile.ci.junit]
 path = "junit.xml"
