@@ -1075,6 +1075,186 @@ fn tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing() {
     }
 }
 
+/// Regression test for the deferred-exit bug at adjacent clusters.
+///
+/// `processing-unit @ 2/s` from-ore + HorizontalStack puts an iron-ore
+/// flow east-bound on row 123 across two crossings: an iron-ore ×
+/// iron-plate-feeder cluster at (28,123) and an iron-ore × water-trunk
+/// pipe-tile cluster at (31,123). Pre-fix these solved as separate
+/// clusters in commit order: cluster 15 (the multi-crossing belt×belt
+/// one) committed first, stamping a UG-out at (30,123) — but (30,123)
+/// east → (31,123) is the water pipe, off-limits. Cluster 16 (the
+/// pipe-tile singleton) then committed, stamping a *second* UG-out at
+/// (32,123) without a matching UG-in (the obvious upstream tile was
+/// already cluster 15's UG-out). Result: orphan iron-ore UG-out, items
+/// flow into the water pipe.
+///
+/// Fix: `should_defer_on_exit` now also defers when the tile
+/// immediately past the spec's exit (in flow direction) is a pending
+/// crossing in another cluster. Cluster 15's iron-ore exit at (30,123)
+/// East has (31,123) as its immediate next tile — a pending pipe×belt
+/// crossing — so the strategy defers, the bbox grows, and the joint
+/// solve produces a single UG pair from (26,123) to (32,123) that
+/// tunnels under both the iron-plate feeder and the water pipe.
+#[test]
+#[ntest::timeout(180000)]
+fn tier5_processing_unit_2s_horizontal_stack_iron_ore_pipe_bypass() {
+    use fucktorio_core::bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy, RowLayout};
+
+    let inputs: FxHashSet<String> = [
+        "iron-ore", "copper-ore", "stone", "coal", "water", "crude-oil",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    let test_name = "tier5_processing_unit_2s_horizontal_stack_iron_ore_pipe_bypass";
+
+    let solver_result = solver::solve("processing-unit", 2.0, &inputs, "assembling-machine-3")
+        .unwrap_or_else(|e| panic!("{test_name}: solver: {e}"));
+
+    let layout = build_bus_layout(
+        &solver_result,
+        LayoutOptions {
+            strategy: LayoutStrategy::Pooled,
+            max_belt_tier: Some("fast-transport-belt".to_string()),
+            row_layout: RowLayout::HorizontalStack,
+        },
+    )
+    .unwrap_or_else(|e| panic!("{test_name}: layout: {e}"));
+
+    // Tightly scoped invariant for the original bug: at row 123 (the
+    // bug's failing row), there must NOT be a doubled iron-ore UG-out
+    // pattern — pre-fix the layout had UG-outs at both x=30 and x=32
+    // sharing the row, with no matching UG-in for the second one.
+    // Allow any number of UG-outs on the row as long as each is paired
+    // with an UG-in within fast-belt's max-reach to its west.
+    let row = 123;
+    let outs_at_row: Vec<i32> = layout
+        .entities
+        .iter()
+        .filter(|e| {
+            e.y == row
+                && e.name == "fast-underground-belt"
+                && e.io_type.as_deref() == Some("output")
+                && e.carries.as_deref() == Some("iron-ore")
+                && e.direction == fucktorio_core::models::EntityDirection::East
+        })
+        .map(|e| e.x)
+        .collect();
+    let ins_at_row: Vec<i32> = layout
+        .entities
+        .iter()
+        .filter(|e| {
+            e.y == row
+                && e.name == "fast-underground-belt"
+                && e.io_type.as_deref() == Some("input")
+                && e.carries.as_deref() == Some("iron-ore")
+                && e.direction == fucktorio_core::models::EntityDirection::East
+        })
+        .map(|e| e.x)
+        .collect();
+    // Strict pairing: each UG-in pairs with at most ONE UG-out (its
+    // nearest east neighbour within fast-belt's max-reach of 6 tiles).
+    // The original bug had two UG-outs (x=30 and x=32) "matched" by a
+    // single UG-in at x=27 — a non-strict "any in-range UG-in" check
+    // would say both are paired, which was the lax logic that let the
+    // bug ship. Walk through east-to-west, claim each in's matching
+    // out, and any unclaimed UG-out is the orphan.
+    let mut sorted_outs = outs_at_row.clone();
+    sorted_outs.sort();
+    let mut sorted_ins = ins_at_row.clone();
+    sorted_ins.sort();
+    let mut claimed_outs: Vec<bool> = vec![false; sorted_outs.len()];
+    for &in_x in &sorted_ins {
+        // Pair with the nearest unclaimed UG-out east of `in_x` within reach.
+        for (idx, &out_x) in sorted_outs.iter().enumerate() {
+            if claimed_outs[idx] { continue; }
+            if out_x <= in_x { continue; }
+            if out_x - in_x > 7 { break; }
+            claimed_outs[idx] = true;
+            break;
+        }
+    }
+    for (idx, &out_x) in sorted_outs.iter().enumerate() {
+        assert!(
+            claimed_outs[idx],
+            "{test_name}: orphan iron-ore UG-out at ({out_x},{row}); \
+             East-facing UG-ins at x={ins_at_row:?}, UG-outs at x={outs_at_row:?}"
+        );
+    }
+}
+
+/// Regression test for the `place_poles` rightward-only probe bug.
+/// `processing-unit @ 2.5/s` HorizontalStack puts six AM3s tight in one
+/// row with a 3-tile sideload bridge below the middle pair. The pole
+/// search aimed for `cx + POLE_RANGE` and probed ±3 around it — strictly
+/// at-or-right-of the machine center. With the bridge belts occupying
+/// the right side of the inserter row and the input row fully packed,
+/// every right-side probe hit an obstacle, the algorithm gave up at
+/// d=3, and the bridge-anchor AM3 (and the row's last AM3) ended up
+/// without a pole within Chebyshev 3 of its center — even though a
+/// free tile existed inside the supply range to the *left*.
+///
+/// Fix: extend `POLE_PROBE_X` to `2 * POLE_RANGE` so the probe falls
+/// back leftward when rightward is exhausted. Rightmost-first ordering
+/// is preserved so forward reach is unchanged.
+#[test]
+#[ntest::timeout(60000)]
+fn tier5_processing_unit_25s_horizontal_stack_pole_coverage() {
+    use fucktorio_core::bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy, RowLayout};
+
+    let inputs: FxHashSet<String> = [
+        "iron-plate", "copper-plate", "steel-plate", "stone",
+        "coal", "water", "crude-oil", "iron-ore", "copper-ore",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    let test_name = "tier5_processing_unit_25s_horizontal_stack_pole_coverage";
+
+    let solver_result = solver::solve("processing-unit", 2.5, &inputs, "assembling-machine-3")
+        .unwrap_or_else(|e| panic!("{test_name}: solver: {e}"));
+
+    let layout = build_bus_layout(
+        &solver_result,
+        LayoutOptions {
+            strategy: LayoutStrategy::Pooled,
+            max_belt_tier: None,
+            row_layout: RowLayout::HorizontalStack,
+        },
+    )
+    .unwrap_or_else(|e| panic!("{test_name}: layout: {e}"));
+
+    let issues = match validate::validate(&layout, Some(&solver_result), LayoutStyle::Bus) {
+        Ok(i) => i,
+        Err(e) => e.issues,
+    };
+
+    let power_warnings: Vec<_> = issues
+        .iter()
+        .filter(|i| i.severity == Severity::Warning && i.category == "power")
+        .collect();
+
+    if !power_warnings.is_empty() {
+        let lines = power_warnings
+            .iter()
+            .take(8)
+            .map(|i| format!("  {}", i.message))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let extra = if power_warnings.len() > 8 {
+            format!("\n  …and {} more", power_warnings.len() - 8)
+        } else {
+            String::new()
+        };
+        panic!(
+            "{test_name}: expected every assembler within Chebyshev 3 of a \
+             medium-electric-pole, got {} `power` warnings:\n{lines}{extra}",
+            power_warnings.len()
+        );
+    }
+}
+
 /// Advanced circuit, rate 5/s, AM1, yellow belts, from raw ores + crude oil.
 /// This is the "hello-world fully-from-ore AC" goal — cheapest machine tier,
 /// cheapest belt tier, everything upstream of the factory is raw resources.
