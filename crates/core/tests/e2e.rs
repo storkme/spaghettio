@@ -4158,3 +4158,289 @@ fn diag_junction_caps_sweep() {
     // No assertion — purely diagnostic. The numbers above are the
     // baseline against which solver-reliability experiments are scored.
 }
+
+// ---------------------------------------------------------------------------
+// Curated wide sweep — only commits records from clean (zero errors AND
+// zero warnings) layouts.
+// ---------------------------------------------------------------------------
+
+/// Wide recipe × rate × belt × input sweep with per-combo curation.
+///
+/// Defers `flush()`, runs the layout, validates; on success (zero errors AND
+/// zero warnings) commits the buffered records, otherwise discards them.
+/// Useful when you want to enrich the cache from layouts the validator
+/// considers fully sound, leaving warning-producing ones out.
+///
+/// Run with cache disabled so SAT actually runs and produces records:
+///   FUCKTORIO_USE_ZONE_CACHE=0 cargo test --release --test e2e -- \
+///       --ignored diag_curated_sweep --exact --nocapture
+///
+/// Reports per-recipe clean/dirty/failed counts and the top validation
+/// issue categories on dirty combos.
+#[test]
+#[ignore]
+fn diag_curated_sweep() {
+    use std::time::Instant as I;
+
+    struct Combo {
+        item: &'static str,
+        rate: f64,
+        belt: Option<&'static str>,
+        from_ore: bool,
+        from_crude: bool,
+    }
+
+    // (item, min_rate, max_rate, supports_from_ore, supports_from_crude).
+    // Tighter ceilings on deeper recipes that hit timeouts at high rates.
+    let cases: &[(&'static str, f64, f64, bool, bool)] = &[
+        ("iron-gear-wheel",          0.5, 20.0, true,  false),
+        ("copper-cable",             0.5, 20.0, true,  false),
+        ("transport-belt",           0.5, 10.0, true,  false),
+        ("electronic-circuit",       0.5, 20.0, true,  false),
+        ("plastic-bar",              0.5, 5.0,  false, true ),
+        ("sulfuric-acid",            0.5, 5.0,  false, false),
+        ("automation-science-pack",  0.5, 10.0, true,  false),
+        ("logistic-science-pack",    0.5, 5.0,  true,  false),
+        ("military-science-pack",    0.5, 3.0,  true,  false),
+        ("chemical-science-pack",    0.5, 3.0,  false, true ),
+        ("advanced-circuit",         0.5, 5.0,  false, false),
+    ];
+
+    let mut combos: Vec<Combo> = Vec::new();
+    for (item, lo, hi, supports_ore, supports_crude) in cases {
+        let mut r = *lo;
+        while r <= *hi + 1e-9 {
+            for belt in [None, Some("fast-transport-belt")] {
+                combos.push(Combo { item, rate: r, belt, from_ore: false, from_crude: false });
+                if *supports_ore {
+                    combos.push(Combo { item, rate: r, belt, from_ore: true, from_crude: false });
+                }
+                if *supports_crude {
+                    combos.push(Combo { item, rate: r, belt, from_ore: false, from_crude: true });
+                }
+            }
+            r += 0.5;
+        }
+    }
+
+    eprintln!("\n=== diag_curated_sweep: {} combinations ===", combos.len());
+
+    fucktorio_core::zone_cache::defer_flush(true);
+
+    let sweep_start = I::now();
+    let mut attempted = 0usize;
+    let mut clean = 0usize;
+    let mut dirty = 0usize;
+    let mut failed = 0usize;
+    let mut records_committed: u64 = 0;
+    let mut records_discarded: u64 = 0;
+
+    let mut by_recipe: std::collections::BTreeMap<&'static str, [usize; 3]> =
+        Default::default();
+    let mut warning_categories: std::collections::BTreeMap<String, usize> = Default::default();
+
+    for c in &combos {
+        attempted += 1;
+        let mut available_inputs = FxHashSet::default();
+        if c.from_ore {
+            available_inputs.insert("iron-ore".to_string());
+            available_inputs.insert("copper-ore".to_string());
+        }
+        if c.from_crude {
+            available_inputs.insert("crude-oil".to_string());
+        }
+
+        let test_name = format!(
+            "curated_{}_{:.1}s_{}{}",
+            c.item.replace('-', "_"),
+            c.rate,
+            c.belt.map(|b| if b == "fast-transport-belt" { "red" } else { "yel" }).unwrap_or("auto"),
+            if c.from_ore { "_ore" } else if c.from_crude { "_crude" } else { "" },
+        );
+
+        fucktorio_core::zone_cache::discard_pending();
+
+        let result = run_e2e(&test_name, c.item, c.rate, "assembling-machine-1", c.belt, &available_inputs);
+
+        match result {
+            Ok(r) if r.issues.is_empty() => {
+                let pending = fucktorio_core::zone_cache::pending_count() as u64;
+                fucktorio_core::zone_cache::defer_flush(false);
+                fucktorio_core::zone_cache::flush();
+                fucktorio_core::zone_cache::defer_flush(true);
+                records_committed += pending;
+                clean += 1;
+                by_recipe.entry(c.item).or_default()[0] += 1;
+            }
+            Ok(r) => {
+                let dropped = fucktorio_core::zone_cache::discard_pending() as u64;
+                records_discarded += dropped;
+                dirty += 1;
+                by_recipe.entry(c.item).or_default()[1] += 1;
+                for issue in &r.issues {
+                    *warning_categories.entry(issue.category.clone()).or_default() += 1;
+                }
+            }
+            Err(_) => {
+                fucktorio_core::zone_cache::discard_pending();
+                failed += 1;
+                by_recipe.entry(c.item).or_default()[2] += 1;
+            }
+        }
+
+        if attempted.is_multiple_of(50) {
+            eprintln!(
+                "  ...{}/{} ({} clean, {} dirty, {} failed; {} records committed, {} discarded)",
+                attempted, combos.len(), clean, dirty, failed,
+                records_committed, records_discarded,
+            );
+        }
+    }
+
+    fucktorio_core::zone_cache::defer_flush(false);
+
+    let elapsed_s = sweep_start.elapsed().as_secs_f64();
+    eprintln!(
+        "\nCurated sweep done in {:.1}s: {}/{} attempted, {} clean, {} dirty, {} failed",
+        elapsed_s, attempted, combos.len(), clean, dirty, failed,
+    );
+    eprintln!("  records: {} committed, {} discarded", records_committed, records_discarded);
+
+    eprintln!("\nPer-recipe breakdown:");
+    eprintln!("  {:<28} {:>6} {:>6} {:>6}", "recipe", "clean", "dirty", "failed");
+    for (recipe, counts) in &by_recipe {
+        eprintln!("  {:<28} {:>6} {:>6} {:>6}", recipe, counts[0], counts[1], counts[2]);
+    }
+
+    eprintln!("\nValidation issue categories on dirty combos:");
+    let mut cats: Vec<_> = warning_categories.iter().collect();
+    cats.sort_by(|a, b| b.1.cmp(a.1));
+    for (cat, count) in cats.iter().take(15) {
+        eprintln!("  {:<40} {:>6}", cat, count);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Decomposition-potential probe — geometric upper bound on whether the
+// long-tail big zones in our cache could in principle be sliced into
+// cached small ones.
+// ---------------------------------------------------------------------------
+
+/// For each cached zone with width or height ≥ 5, count how many cuts
+/// produce two pieces whose dimensions both also appear in the cache.
+/// Just sizes — boundary topology + forbidden tiles isn't checked, which
+/// would be the stricter probe (blocked by the `transform_port` D4
+/// inconsistency noted on `ParsedSignature`).
+///
+/// Tells us cheaply whether decomposition is geometrically viable for the
+/// current corpus. Last reading on a 10k-record corpus: 91% of large
+/// zones have at least one dimension-matching cut.
+///
+/// Run with:
+///   cargo test --release --test e2e -- --ignored diag_decomposition_potential --exact --nocapture
+#[test]
+#[ignore]
+fn diag_decomposition_potential() {
+    use fucktorio_core::zone_cache::{parse_records, DecodedRecord};
+    use std::collections::{BTreeMap, HashSet};
+
+    let mut records: Vec<DecodedRecord> = Vec::new();
+    let cache_path = std::env::var("FUCKTORIO_ZONE_CACHE_PATH")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            let base = std::env::var("XDG_CACHE_HOME").ok()
+                .filter(|s| !s.is_empty()).map(std::path::PathBuf::from)
+                .or_else(|| std::env::var("HOME").ok()
+                    .map(|h| std::path::PathBuf::from(h).join(".cache")))
+                .unwrap_or_else(|| std::path::PathBuf::from(".cache"));
+            base.join("fucktorio").join("sat-zones.bin")
+        });
+    if let Ok(bytes) = std::fs::read(&cache_path) {
+        records.extend(parse_records(&bytes));
+    }
+    let embedded_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("data/sat-zones.bin");
+    if let Ok(bytes) = std::fs::read(&embedded_path) {
+        records.extend(parse_records(&bytes));
+    }
+    if records.is_empty() {
+        panic!("no records — populate ~/.cache/fucktorio/sat-zones.bin first");
+    }
+
+    let shapes_present: HashSet<(u32, u32)> = records.iter()
+        .map(|r| (r.canon_w, r.canon_h)).collect();
+
+    let mut by_shape: BTreeMap<(u32, u32), usize> = BTreeMap::new();
+    for rec in &records {
+        *by_shape.entry((rec.canon_w, rec.canon_h)).or_default() += 1;
+    }
+
+    eprintln!(
+        "\n=== Decomposition potential (geometric upper bound) ===\nloaded {} records ({} distinct shapes)",
+        records.len(), shapes_present.len(),
+    );
+
+    let mut decomposable_records = 0usize;
+    let mut total_big_records = 0usize;
+    let mut h_cuts_total = 0usize;
+    let mut v_cuts_total = 0usize;
+    let mut per_shape_decomp: BTreeMap<(u32, u32), (usize, usize, usize)> = BTreeMap::new();
+    let mut seen_shapes: HashSet<(u32, u32)> = HashSet::new();
+
+    for rec in &records {
+        if rec.canon_w < 5 && rec.canon_h < 5 {
+            continue;
+        }
+        if !seen_shapes.insert((rec.canon_w, rec.canon_h)) {
+            continue;
+        }
+        total_big_records += 1;
+        let mut h_cuts = 0;
+        let mut v_cuts = 0;
+        for cut_x in 1..rec.canon_w {
+            let left = (cut_x, rec.canon_h);
+            let right = (rec.canon_w - cut_x, rec.canon_h);
+            if shapes_present.contains(&left) && shapes_present.contains(&right) {
+                v_cuts += 1;
+            }
+        }
+        for cut_y in 1..rec.canon_h {
+            let top = (rec.canon_w, cut_y);
+            let bottom = (rec.canon_w, rec.canon_h - cut_y);
+            if shapes_present.contains(&top) && shapes_present.contains(&bottom) {
+                h_cuts += 1;
+            }
+        }
+        if v_cuts > 0 || h_cuts > 0 {
+            decomposable_records += 1;
+        }
+        v_cuts_total += v_cuts;
+        h_cuts_total += h_cuts;
+        per_shape_decomp.insert(
+            (rec.canon_w, rec.canon_h),
+            (
+                by_shape.get(&(rec.canon_w, rec.canon_h)).copied().unwrap_or(0),
+                h_cuts,
+                v_cuts,
+            ),
+        );
+    }
+
+    eprintln!(
+        "\nLarge zones (w>=5 or h>=5): {} unique shapes, {} have at least one geometrically valid cut ({:.0}%)",
+        total_big_records, decomposable_records,
+        if total_big_records > 0 { decomposable_records as f64 / total_big_records as f64 * 100.0 } else { 0.0 },
+    );
+    eprintln!("Total candidate cuts: {} vertical + {} horizontal", v_cuts_total, h_cuts_total);
+
+    eprintln!("\nPer-shape breakdown (top 20 by occurrence):");
+    eprintln!("  {:<8} {:>6} {:>8} {:>8}", "shape", "count", "h_cuts", "v_cuts");
+    let mut rows: Vec<_> = per_shape_decomp.iter().collect();
+    rows.sort_by(|a, b| b.1.0.cmp(&a.1.0).then(b.0.cmp(a.0)));
+    for ((w, h), (count, h_cuts, v_cuts)) in rows.iter().take(20) {
+        eprintln!(
+            "  {:>3}x{:<3}  {:>6} {:>8} {:>8}{}",
+            w, h, count, h_cuts, v_cuts,
+            if *h_cuts > 0 || *v_cuts > 0 { "" } else { "  ← no cut works" },
+        );
+    }
+}
