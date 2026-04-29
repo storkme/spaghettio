@@ -2134,13 +2134,18 @@ fn partition_strategy_scoreboard() {
             // chained-UG solutions that respect per-tier reach). PU@2/s
             // ore red Pool is now validator-clean.
             //
-            // Debug-mode delta: P2 records 18 (debug) vs 17 (release).
-            // FxHashMap iteration order differs between -O0 and -O3,
-            // producing different sat-zone solver outcomes. CI runs
-            // debug — record the worst-of-both, release-mode runs see
-            // a "tighten the gate" suggestion.
+            // Debug-mode delta: P1 records 18 (debug) vs 17 (release);
+            // P2 records 18 (debug) vs 17 (release). FxHashMap
+            // iteration order differs between -O0 and -O3, producing
+            // different sat-zone solver outcomes. CI runs debug —
+            // record the worst-of-both, release-mode users see a
+            // "tighten the gate" suggestion.
+            //
+            // P1 17 → 18: P1 was left at 17 when P2 was bumped to 18
+            // for debug, an oversight — CI runs debug and consistently
+            // sees P1=18. Restoring the worst-of-both convention.
             row_layout: None,
-            expected: (0, 17, 18),
+            expected: (0, 18, 18),
         },
         ScoreboardCase {
             name: "AC@5/s plates yellow",
