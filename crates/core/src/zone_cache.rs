@@ -1601,11 +1601,37 @@ pub fn lookup_zone(
 
     // item → surface-belt tier from the current zone's boundaries. Used to
     // retype each cached entity to its channel's actual tier.
-    let item_to_tier: FxHashMap<&str, &str> = zone
-        .boundaries
-        .iter()
-        .filter_map(|b| b.belt_tier.as_deref().map(|t| (b.item.as_str(), t)))
-        .collect();
+    //
+    // When a zone has multiple boundaries for the same item at different
+    // tiers (e.g. 8 iron-plate trunks crossing a single iron-plate
+    // row-input — same item, trunks at red, row-input at yellow), naive
+    // `HashMap::collect` does last-wins with non-deterministic iteration
+    // order, painting whichever boundary lands last. If yellow wins, the
+    // red trunks get under-tiered and the lane-throughput validator fires.
+    //
+    // Take the MAX tier per item: over-tiering a slow belt is cosmetic
+    // (red belt carries yellow rate fine), under-tiering causes throughput
+    // violations. Strict safety improvement.
+    let item_to_tier: FxHashMap<&str, &str> = {
+        use crate::bus::junction::BeltTier;
+        let mut acc: FxHashMap<&str, &str> = FxHashMap::default();
+        for b in &zone.boundaries {
+            let Some(t) = b.belt_tier.as_deref() else { continue; };
+            let new_rank = BeltTier::from_name(t).map(|bt| bt.rank()).unwrap_or(0);
+            let item = b.item.as_str();
+            let should_insert = match acc.get(item) {
+                None => true,
+                Some(cur) => {
+                    let cur_rank = BeltTier::from_name(cur).map(|bt| bt.rank()).unwrap_or(0);
+                    new_rank > cur_rank
+                }
+            };
+            if should_insert {
+                acc.insert(item, t);
+            }
+        }
+        acc
+    };
 
     // Inverse-transform entities: canonical-frame → zone-local → absolute.
     let segment_id = format!("crossing:{}:{}", zone.x, zone.y);
@@ -2100,5 +2126,71 @@ mod tests {
         let iron = out.iter().find(|e| e.carries.as_deref() == Some("iron-plate")).unwrap();
         assert_eq!(copper.name, "transport-belt", "copper-plate channel should stay yellow");
         assert_eq!(iron.name, "fast-transport-belt", "iron-plate channel should be red");
+    }
+
+    /// Same-item, mixed-tier zone: when several boundaries declare the same
+    /// item but at different tiers (e.g. fast iron-plate trunks crossing a
+    /// slow iron-plate row-input), retype must take the MAX tier, not let
+    /// the slowest boundary silently downgrade the cached entities.
+    ///
+    /// Repro for the PU@3/s ore red P2 lane-throughput regression: the SAT
+    /// junction at seed (36,190) has 8 iron-plate trunks at red and 1
+    /// iron-plate row-input at yellow. Pre-fix, HashMap last-wins iteration
+    /// could collapse all 9 onto whichever tier landed last, painting the
+    /// red trunks yellow and tripping the lane-rate walker.
+    #[test]
+    fn lookup_zone_takes_max_tier_for_mixed_same_item() {
+        let mk_boundary = |x, y, dir, item: &str, tier: &str, ch: u32, is_in| ZoneBoundary {
+            x, y, direction: dir,
+            item: item.to_string(),
+            is_input: is_in, interior: false,
+            belt_tier: Some(tier.to_string()),
+            channel_id: ch,
+        };
+        // 2 iron-plate trunks at red (channel 0) + 1 iron-plate row-input at
+        // yellow (channel 1). All same item; HashMap last-wins iteration
+        // order historically painted all three with whichever boundary
+        // happened to be iterated last.
+        let zone = CrossingZone {
+            x: 0, y: 0, width: 5, height: 3,
+            boundaries: vec![
+                mk_boundary(1, 0, EntityDirection::South, "iron-plate", "fast-transport-belt", 0, true),
+                mk_boundary(1, 2, EntityDirection::South, "iron-plate", "fast-transport-belt", 0, false),
+                mk_boundary(2, 0, EntityDirection::South, "iron-plate", "fast-transport-belt", 0, true),
+                mk_boundary(2, 2, EntityDirection::South, "iron-plate", "fast-transport-belt", 0, false),
+                mk_boundary(0, 1, EntityDirection::East,  "iron-plate", "transport-belt", 1, true),
+                mk_boundary(4, 1, EntityDirection::East,  "iron-plate", "transport-belt", 1, false),
+            ],
+            forced_empty: vec![],
+        };
+        let reaches = [5, 5];
+
+        let solution = vec![
+            PlacedEntity {
+                name: "transport-belt".into(), x: 1, y: 1,
+                direction: EntityDirection::South,
+                carries: Some("iron-plate".into()),
+                ..Default::default()
+            },
+        ];
+        record_zone_with_solution(
+            &zone, &reaches, None,
+            ZoneStats { variables: 0, clauses: 0, solve_time_us: 0 },
+            &solution, Some("test"),
+        );
+
+        // Run the lookup many times: the bug only manifests when HashMap
+        // iteration happens to put the yellow boundary last. With the fix,
+        // every iteration must yield a red belt regardless of order.
+        for i in 0..32 {
+            let out = lookup_zone(&zone, &reaches, None, "fast-transport-belt")
+                .expect("cache hit");
+            let belt = out.iter().find(|e| e.carries.as_deref() == Some("iron-plate")).unwrap();
+            assert_eq!(
+                belt.name, "fast-transport-belt",
+                "iter {i}: iron-plate belt must take MAX tier (red) when zone has \
+                 mixed-tier same-item boundaries; got {:?}", belt.name,
+            );
+        }
     }
 }
