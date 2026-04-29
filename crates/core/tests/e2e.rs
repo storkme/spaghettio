@@ -2433,8 +2433,10 @@ fn partition_strategy_scoreboard_extended() {
             //
             // P2 41 → 37 after the lane_planner.rs:370 fix (sibling
             // families no longer pollute each other's balancer y-range).
+            //
+            // P2 37 → 20 after shape-fix Phase 3.
             row_layout: None,
-            expected: (30, 37),
+            expected: (30, 20),
         },
         ScoreboardCase {
             name: "PU@3/s ore red",
@@ -2457,8 +2459,11 @@ fn partition_strategy_scoreboard_extended() {
             // copper-cable trunks now surface as UG-reach / belt-junction
             // errors. Ratchet down once the junction solver learns about
             // bridge-tier and bridge-reach constraints.
+            //
+            // P2 21 → 7 after shape-fix Phase 3 (pad-lanes fixes the
+            // copper-plate (4, 9) coprime shape that was dead-ending).
             row_layout: None,
-            expected: (8, 21),
+            expected: (8, 7),
         },
         ScoreboardCase {
             name: "PU@3/s plates yellow",
@@ -2478,8 +2483,10 @@ fn partition_strategy_scoreboard_extended() {
             // P1 41 → 34, P2 41 → 23 after the ghost_router
             // decomposition-feeder fix (multi-stamp families now connect
             // properly instead of silently dropping feeder specs).
+            //
+            // P2 23 → 22 after shape-fix Phase 3.
             row_layout: None,
-            expected: (44, 23),
+            expected: (44, 22),
         },
         // The user's working URL: PU@2/s, AM3, fast belts, horizontal-stack,
         // ores + steel-plate as external inputs. Pool produces a working
