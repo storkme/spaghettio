@@ -115,7 +115,7 @@ Tracks which recipes produce zero-error bus blueprints. Moving up = real progres
 | 5 | `processing-unit` | Deep chain, multiple fluids | Not attempted |
 | 6 | `rocket-control-unit` | Very deep chain | Not attempted |
 
-Open tracking issues for layout quality: [#135 balancer templates are oversized](https://github.com/storkme/fucktorio/issues/135), [#136 missing coprime balancer shapes](https://github.com/storkme/fucktorio/issues/136), [#68 fluid row 3-tile pitch](https://github.com/storkme/fucktorio/issues/68).
+Open tracking issues for layout quality: [#135 balancer templates are oversized](https://github.com/storkme/fucktorio/issues/135), [#136 missing coprime balancer shapes](https://github.com/storkme/fucktorio/issues/136), [#68 fluid row 3-tile pitch](https://github.com/storkme/fucktorio/issues/68) (design: [`docs/rfp-fluid-dual-input-row.md`](docs/rfp-fluid-dual-input-row.md)).
 
 ## Verification protocol for layout engine changes
 
