@@ -2357,8 +2357,13 @@ fn partition_strategy_scoreboard() {
             // landed (junction solver now bridges encountered flows
             // whose path crosses a forbidden interior tile, instead of
             // letting sat-1ug-native silently drop them).
+            //
+            // P2 17 → 3 after shape-fix Phase 3 (pad-lanes + shard for
+            // coprime balancer shapes). The copper-plate (4, 9) shape
+            // that was silently dead-ending is now padded to a stampable
+            // nearby shape.
             row_layout: None,
-            expected: (0, 17),
+            expected: (0, 3),
         },
         ScoreboardCase {
             name: "AC@5/s plates yellow",
@@ -2384,8 +2389,10 @@ fn partition_strategy_scoreboard() {
             // tightened target. Bumping to 4 to match this branch's
             // actuals; main's separate regression should be
             // addressed upstream.
+            //
+            // Pool/P2 4 → 2 after shape-fix Phase 3.
             row_layout: None,
-            expected: (4, 4),
+            expected: (2, 2),
         },
     ];
     run_partition_scoreboard("partition_strategy_scoreboard", cases);
