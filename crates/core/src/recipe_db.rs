@@ -163,8 +163,36 @@ pub fn get_crafting_speed(entity: &str) -> f64 {
         .unwrap_or(1.0)
 }
 
+/// User-supplied per-category machine overrides.
+///
+/// Maps a recipe `category` string (the same key used in [`machine_for_recipe`])
+/// to the entity name the user picked for it (e.g. `crafting →
+/// assembling-machine-2`). Categories absent here fall through to the
+/// hardcoded mapping in [`machine_for_recipe`], which itself falls through to
+/// the caller's `default`.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MachinePalette {
+    pub by_category: FxHashMap<String, String>,
+}
+
 /// Choose the right machine entity for a recipe based on its category.
 pub fn machine_for_recipe(recipe: &Recipe, default: &str) -> String {
+    machine_for_recipe_with_palette(recipe, &MachinePalette::default(), default)
+}
+
+/// Like [`machine_for_recipe`], but consults `palette` first. The palette is
+/// the caller's per-category override; on miss we fall through to the same
+/// hardcoded category → machine table, then finally to `default`.
+pub fn machine_for_recipe_with_palette(
+    recipe: &Recipe,
+    palette: &MachinePalette,
+    default: &str,
+) -> String {
+    if let Some(override_machine) = palette.by_category.get(&recipe.category) {
+        return override_machine.clone();
+    }
     match recipe.category.as_str() {
         "chemistry" | "chemistry-or-cryogenics" | "organic-or-chemistry" => "chemical-plant".to_string(),
         "oil-processing" => "oil-refinery".to_string(),
@@ -205,8 +233,18 @@ pub fn all_producer_machines() -> Vec<String> {
 /// Return the canonical machine for an item, falling back to `fallback` if
 /// the item has no recipe or the recipe uses the default crafting category.
 pub fn default_machine_for_item(item: &str, fallback: &str) -> String {
+    default_machine_for_item_with_palette(item, &MachinePalette::default(), fallback)
+}
+
+/// Like [`default_machine_for_item`], but consults the caller's palette before
+/// the hardcoded category mapping.
+pub fn default_machine_for_item_with_palette(
+    item: &str,
+    palette: &MachinePalette,
+    fallback: &str,
+) -> String {
     match find_recipe_for_item(item) {
-        Some(recipe) => machine_for_recipe(recipe, fallback).to_string(),
+        Some(recipe) => machine_for_recipe_with_palette(recipe, palette, fallback),
         None => fallback.to_string(),
     }
 }
@@ -293,5 +331,78 @@ mod tests {
         // chemistry-or-cryogenics still maps to chemical-plant
         let recipe = Recipe { category: "chemistry-or-cryogenics".into(), ..recipe.clone() };
         assert_eq!(machine_for_recipe(&recipe, "assembling-machine-3"), "chemical-plant");
+    }
+
+    fn palette_with(entries: &[(&str, &str)]) -> MachinePalette {
+        let mut p = MachinePalette::default();
+        for (k, v) in entries {
+            p.by_category.insert((*k).to_string(), (*v).to_string());
+        }
+        p
+    }
+
+    fn make_recipe(category: &str) -> Recipe {
+        Recipe {
+            name: "test-recipe".into(),
+            category: category.into(),
+            energy: 1.0,
+            ingredients: vec![],
+            products: vec![],
+        }
+    }
+
+    #[test]
+    fn palette_overrides_default_for_crafting() {
+        let palette = palette_with(&[("crafting", "assembling-machine-2")]);
+        let recipe = make_recipe("crafting");
+        assert_eq!(
+            machine_for_recipe_with_palette(&recipe, &palette, "assembling-machine-3"),
+            "assembling-machine-2"
+        );
+    }
+
+    #[test]
+    fn palette_miss_falls_through_to_hardcoded() {
+        // Empty palette: smelting still picks the hardcoded electric-furnace.
+        let palette = MachinePalette::default();
+        let recipe = make_recipe("smelting");
+        assert_eq!(
+            machine_for_recipe_with_palette(&recipe, &palette, "assembling-machine-3"),
+            "electric-furnace"
+        );
+    }
+
+    #[test]
+    fn palette_miss_falls_through_to_default() {
+        // Empty palette + crafting category falls through to caller's default.
+        let palette = MachinePalette::default();
+        let recipe = make_recipe("crafting");
+        assert_eq!(
+            machine_for_recipe_with_palette(&recipe, &palette, "assembling-machine-1"),
+            "assembling-machine-1"
+        );
+    }
+
+    #[test]
+    fn palette_does_not_override_hardcoded_when_absent() {
+        // Palette only sets crafting; smelting recipe still hits hardcoded path.
+        let palette = palette_with(&[("crafting", "assembling-machine-1")]);
+        let recipe = make_recipe("smelting");
+        assert_eq!(
+            machine_for_recipe_with_palette(&recipe, &palette, "assembling-machine-3"),
+            "electric-furnace"
+        );
+    }
+
+    #[test]
+    fn palette_can_override_hardcoded_smelting() {
+        // If a future palette wants stone-furnace for smelting, it wins over
+        // the hardcoded electric-furnace.
+        let palette = palette_with(&[("smelting", "stone-furnace")]);
+        let recipe = make_recipe("smelting");
+        assert_eq!(
+            machine_for_recipe_with_palette(&recipe, &palette, "assembling-machine-3"),
+            "stone-furnace"
+        );
     }
 }

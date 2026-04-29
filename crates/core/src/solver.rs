@@ -1,7 +1,10 @@
 //! Recursive recipe solver: target item/rate → machine counts & flows.
 
 use crate::models::{ItemFlow, MachineSpec, SolverResult};
-use crate::recipe_db::{find_recipe_for_item_excluding, get_crafting_speed, machine_for_recipe};
+use crate::recipe_db::{
+    find_recipe_for_item_excluding, get_crafting_speed, machine_for_recipe_with_palette,
+    MachinePalette,
+};
 use rustc_hash::FxHashSet;
 
 #[derive(Debug, thiserror::Error)]
@@ -45,11 +48,31 @@ pub fn solve(
     available_inputs: &FxHashSet<String>,
     machine_entity: &str,
 ) -> Result<SolverResult, SolverError> {
-    solve_with_exclusions(
+    solve_with_palette_and_exclusions(
         target_item,
         target_rate,
         available_inputs,
+        &MachinePalette::default(),
         machine_entity,
+        &FxHashSet::default(),
+    )
+}
+
+/// Like [`solve`] but consults a per-category [`MachinePalette`] before
+/// falling back to the hardcoded category mapping and `default_machine`.
+pub fn solve_with_palette(
+    target_item: &str,
+    target_rate: f64,
+    available_inputs: &FxHashSet<String>,
+    palette: &MachinePalette,
+    default_machine: &str,
+) -> Result<SolverResult, SolverError> {
+    solve_with_palette_and_exclusions(
+        target_item,
+        target_rate,
+        available_inputs,
+        palette,
+        default_machine,
         &FxHashSet::default(),
     )
 }
@@ -66,6 +89,25 @@ pub fn solve_with_exclusions(
     machine_entity: &str,
     excluded_recipes: &FxHashSet<String>,
 ) -> Result<SolverResult, SolverError> {
+    solve_with_palette_and_exclusions(
+        target_item,
+        target_rate,
+        available_inputs,
+        &MachinePalette::default(),
+        machine_entity,
+        excluded_recipes,
+    )
+}
+
+/// Combined variant: per-category palette + recipe exclusions.
+pub fn solve_with_palette_and_exclusions(
+    target_item: &str,
+    target_rate: f64,
+    available_inputs: &FxHashSet<String>,
+    palette: &MachinePalette,
+    default_machine: &str,
+    excluded_recipes: &FxHashSet<String>,
+) -> Result<SolverResult, SolverError> {
     let mut state = SolveState {
         machines: Vec::new(),
         external_inputs: Vec::new(),
@@ -78,7 +120,8 @@ pub fn solve_with_exclusions(
         target_rate,
         false,
         available_inputs,
-        machine_entity,
+        palette,
+        default_machine,
         excluded_recipes,
         &mut state,
     )?;
@@ -96,12 +139,14 @@ pub fn solve_with_exclusions(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resolve(
     item: &str,
     rate: f64,
     is_fluid: bool,
     available_inputs: &FxHashSet<String>,
-    machine_entity: &str,
+    palette: &MachinePalette,
+    default_machine: &str,
     excluded_recipes: &FxHashSet<String>,
     state: &mut SolveState,
 ) -> Result<(), SolverError> {
@@ -125,7 +170,7 @@ fn resolve(
 
     state.resolving.insert(item.to_string());
 
-    let entity = machine_for_recipe(recipe, machine_entity);
+    let entity = machine_for_recipe_with_palette(recipe, palette, default_machine);
     let crafting_speed = get_crafting_speed(&entity);
     if crafting_speed <= 0.0 {
         return Err(SolverError::MissingCraftingSpeed {
@@ -194,7 +239,8 @@ fn resolve(
             ingredient_rate,
             ing_is_fluid,
             available_inputs,
-            machine_entity,
+            palette,
+            default_machine,
             excluded_recipes,
             state,
         )?;
@@ -242,5 +288,34 @@ mod tests {
         assert_eq!(result.external_outputs.len(), 1);
         assert_eq!(result.external_outputs[0].item, "iron-gear-wheel");
         assert_eq!(result.external_outputs[0].rate, 10.0);
+    }
+
+    #[test]
+    fn palette_overrides_electronics_machine_end_to_end() {
+        // electronic-circuit and copper-cable are both `electronics` category
+        // (a fall-through, not hardcoded). With palette {electronics: AM1},
+        // both production steps should land on AM1 regardless of `default`.
+        let available = inputs_of(&["iron-plate", "copper-plate"]);
+        let mut palette = MachinePalette::default();
+        palette
+            .by_category
+            .insert("electronics".into(), "assembling-machine-1".into());
+        let result = solve_with_palette(
+            "electronic-circuit",
+            5.0,
+            &available,
+            &palette,
+            "assembling-machine-3",
+        )
+        .expect("solver runs");
+
+        assert!(!result.machines.is_empty());
+        for m in &result.machines {
+            assert_eq!(
+                m.entity, "assembling-machine-1",
+                "recipe {} ended up on {}, expected AM1",
+                m.recipe, m.entity
+            );
+        }
     }
 }

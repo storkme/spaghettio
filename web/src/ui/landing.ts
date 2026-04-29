@@ -609,7 +609,10 @@ function openPreview(
     let layout: LayoutResult;
     try {
       const machine = engine.defaultMachineForItem(entry.item, entry.machine);
-      solverResult = await engine.solve(entry.item, entry.rate, entry.inputs, machine);
+      // Landing thumbnails don't expose a per-category palette; pass an
+      // empty palette so the solver falls through to the hardcoded category
+      // mapping for everything except crafting (which uses `machine`).
+      solverResult = await engine.solve(entry.item, entry.rate, entry.inputs, {}, machine);
       layout = await engine.buildLayout(solverResult, entry.beltTier);
     } catch (err) {
       card.classList.remove("loading");

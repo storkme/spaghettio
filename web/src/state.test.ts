@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_CHECKED_INPUTS,
   DEFAULT_ITEM,
-  DEFAULT_MACHINE,
+  DEFAULT_MACHINES,
   DEFAULT_RATE,
   type FormState,
   readUrlState,
@@ -21,12 +21,11 @@ function setUrl(suffix: string): void {
   history.replaceState(null, "", suffix);
 }
 
-function makeState(overrides: Partial<FormState> & { machine: string }): FormState & {
-  machine: string;
-} {
+function makeState(overrides: Partial<FormState>): FormState {
   return {
     item: DEFAULT_ITEM,
     rate: DEFAULT_RATE,
+    machines: {},
     inputs: DEFAULT_CHECKED_INPUTS,
     belt: null,
     strategy: null,
@@ -41,7 +40,7 @@ describe("readUrlState — defaults", () => {
     expect(readUrlState()).toEqual({
       item: DEFAULT_ITEM,
       rate: DEFAULT_RATE,
-      machine: null,
+      machines: {},
       inputs: DEFAULT_CHECKED_INPUTS,
       belt: null,
       strategy: null,
@@ -57,7 +56,7 @@ describe("readUrlState — hash form", () => {
     const s = readUrlState();
     expect(s.item).toBe("iron-gear-wheel");
     expect(s.rate).toBe(10);
-    expect(s.machine).toBeNull();
+    expect(s.machines).toEqual({});
     expect(s.inputs).toEqual(DEFAULT_CHECKED_INPUTS);
     expect(s.belt).toBeNull();
   });
@@ -67,7 +66,7 @@ describe("readUrlState — hash form", () => {
     const s = readUrlState();
     expect(s.item).toBe("advanced-circuit");
     expect(s.rate).toBe(5);
-    expect(s.machine).toBe("assembling-machine-1");
+    expect(s.machines.crafting).toBe("assembling-machine-1");
     expect(s.inputs).toEqual([
       "iron-ore",
       "copper-ore",
@@ -107,7 +106,7 @@ describe("readUrlState — hash form", () => {
     expect(readUrlState()).toEqual({
       item: DEFAULT_ITEM,
       rate: DEFAULT_RATE,
-      machine: null,
+      machines: {},
       inputs: DEFAULT_CHECKED_INPUTS,
       belt: null,
       strategy: null,
@@ -123,7 +122,7 @@ describe("readUrlState — legacy query string", () => {
     const s = readUrlState();
     expect(s.item).toBe("iron-plate");
     expect(s.rate).toBe(5);
-    expect(s.machine).toBe("assembling-machine-3");
+    expect(s.machines.crafting).toBe("assembling-machine-3");
     expect(s.inputs).toEqual(["iron-ore", "copper-ore"]);
   });
 
@@ -134,13 +133,15 @@ describe("readUrlState — legacy query string", () => {
 });
 
 describe("writeUrlState → readUrlState round-trip", () => {
-  function roundTrip(state: FormState & { machine: string }): FormState {
+  function roundTrip(state: FormState): FormState {
     writeUrlState(state);
     return readUrlState();
   }
 
   it("default state collapses to a bare URL", () => {
-    const state = makeState({ machine: DEFAULT_MACHINE });
+    const state = makeState({
+      machines: { crafting: DEFAULT_MACHINES.crafting },
+    });
     writeUrlState(state);
     expect(window.location.hash).toBe("");
     expect(window.location.search).toBe("");
@@ -150,13 +151,14 @@ describe("writeUrlState → readUrlState round-trip", () => {
     const state = makeState({
       item: "iron-plate",
       rate: 5,
-      machine: DEFAULT_MACHINE,
+      machines: { crafting: DEFAULT_MACHINES.crafting },
     });
     const back = roundTrip(state);
     expect(back.item).toBe(state.item);
     expect(back.rate).toBe(state.rate);
-    // machine omitted in URL → reader returns null, sidebar derives from item.
-    expect(back.machine).toBeNull();
+    // machine matches default → omitted from URL, reader returns empty map,
+    // sidebar derives from item.
+    expect(back.machines).toEqual({});
     expect(back.inputs).toEqual(DEFAULT_CHECKED_INPUTS);
   });
 
@@ -164,14 +166,14 @@ describe("writeUrlState → readUrlState round-trip", () => {
     const state = makeState({
       item: "advanced-circuit",
       rate: 5,
-      machine: "assembling-machine-1",
+      machines: { crafting: "assembling-machine-1" },
       inputs: ["iron-ore", "copper-ore", "coal", "water", "crude-oil"],
       belt: "fast-transport-belt",
     });
     const back = roundTrip(state);
     expect(back.item).toBe(state.item);
     expect(back.rate).toBe(state.rate);
-    expect(back.machine).toBe(state.machine);
+    expect(back.machines.crafting).toBe(state.machines.crafting);
     expect(back.inputs).toEqual(state.inputs);
     expect(back.belt).toBe(state.belt);
   });
@@ -180,7 +182,7 @@ describe("writeUrlState → readUrlState round-trip", () => {
     const state = makeState({
       item: "processing-unit",
       rate: 2,
-      machine: "assembling-machine-3",
+      machines: { crafting: "assembling-machine-3" },
       strategy: "partitioned-decomposed",
       rowLayout: "horizontal-stack",
       customInputs: ["iron-plate", "copper-plate"],
@@ -191,9 +193,25 @@ describe("writeUrlState → readUrlState round-trip", () => {
     expect(back.customInputs).toEqual(["iron-plate", "copper-plate"]);
   });
 
+  it("survives a non-default smelting machine via extras", () => {
+    const state = makeState({
+      item: "iron-plate",
+      rate: 5,
+      machines: { smelting: "stone-furnace" },
+    });
+    const back = roundTrip(state);
+    expect(back.machines.smelting).toBe("stone-furnace");
+    // Crafting unspecified → reader leaves it absent.
+    expect(back.machines.crafting).toBeUndefined();
+  });
+
   it("trims trailing skip slots in the emitted URL", () => {
     writeUrlState(
-      makeState({ item: "iron-gear-wheel", rate: 7, machine: DEFAULT_MACHINE }),
+      makeState({
+        item: "iron-gear-wheel",
+        rate: 7,
+        machines: { crafting: DEFAULT_MACHINES.crafting },
+      }),
     );
     // No machine/inputs/belt slots written when they're at default —
     // makes shared URLs read cleanly.
