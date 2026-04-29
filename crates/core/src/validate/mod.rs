@@ -209,6 +209,49 @@ pub fn check_unresolved_junctions(layout: &LayoutResult) -> Vec<ValidationIssue>
         .collect()
 }
 
+/// Surface "balancer template missing" as a warning per affected family.
+///
+/// Background: when `stamp_family_balancer` finds neither a direct
+/// `(n, m)` template nor a gcd-decomposable `(n/g, m/g)` template, it
+/// returns an empty entity vec and the producer→trunk handoff is silently
+/// dropped. The downstream symptom is dead-end belts at the row's exit
+/// column (see PU@3/s ore red copper-plate (4, 9) — issue #136 / PR #257).
+///
+/// `BalancerStamped { template_found: false }` trace events flag exactly
+/// this case. Read them off `layout.trace` and emit a warning per shape so
+/// users see "missing balancer template (4, 9) for copper-plate" instead
+/// of having to chase the dead-end belts back to their cause.
+///
+/// Warning, not Error — the layout is still rendered (with broken
+/// connectivity), and Pool fallback can sometimes produce a valid
+/// alternative. The downstream belt-dead-end errors fire too if connectivity
+/// is genuinely broken.
+pub fn check_balancer_template_coverage(layout: &LayoutResult) -> Vec<ValidationIssue> {
+    let Some(trace) = layout.trace.as_ref() else {
+        return Vec::new();
+    };
+    let mut issues = Vec::new();
+    for ev in trace {
+        if let crate::trace::TraceEvent::BalancerStamped {
+            item, shape, template_found, ..
+        } = ev
+        {
+            if !*template_found {
+                issues.push(ValidationIssue::new(
+                    Severity::Warning,
+                    "missing-balancer-template",
+                    format!(
+                        "no balancer template for shape ({}, {}) for item {item}; \
+                         producer→trunk handoff dropped (downstream belts will dead-end)",
+                        shape.0, shape.1,
+                    ),
+                ));
+            }
+        }
+    }
+    issues
+}
+
 /// Run all functional validation checks on a layout.
 ///
 /// Returns a list of issues found.  Returns `Err(ValidationError)` if any
@@ -261,6 +304,7 @@ pub fn validate(
         Box::new(|| check_belt_flow_reachability(layout, solver, layout_style)),
         Box::new(|| belt_structural::check_lane_throughput(layout, solver)),
         Box::new(|| check_input_rate_delivery(layout, solver)),
+        Box::new(|| check_balancer_template_coverage(layout)),
     ];
 
     let issues: Vec<ValidationIssue> = checks.par_iter().flat_map(|f| f()).collect();
