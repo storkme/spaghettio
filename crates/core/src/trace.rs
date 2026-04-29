@@ -1009,6 +1009,29 @@ pub enum TraceEvent {
         recipes_tried: usize,
         total_us: u64,
     },
+
+    // Decomposition-search layer (see `docs/rfp-decomposition-search.md`).
+    // The search-and-score loop scores each `DecompositionCandidate` it
+    // evaluates and emits one of these per candidate; then a single
+    // `DecompositionChosen` once the winner is selected. With Phase 0's
+    // single `NativeCandidate` catalogue, exactly one
+    // `DecompositionCandidateScored` and one `DecompositionChosen` fire
+    // per layout call.
+    DecompositionCandidateScored {
+        name: String,
+        density: f64,
+        overproduction: f64,
+        entity_count: usize,
+        score: f64,
+        /// True iff hard constraints (demand met, all balancer shapes
+        /// resolvable) are satisfied. Phase 0 stub always emits `true`;
+        /// Phase 1+ implements the actual rejection logic.
+        accepted: bool,
+    },
+    DecompositionChosen {
+        name: String,
+        score: f64,
+    },
 }
 
 // ---------------------------------------------------------------------------

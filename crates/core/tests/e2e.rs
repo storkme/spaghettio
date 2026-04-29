@@ -596,6 +596,51 @@ fn tier1_iron_gear_wheel() {
     assert_golden_hash(&result, "tier1_iron_gear_wheel");
 }
 
+/// Smoke test for the decomposition-search layer
+/// (`docs/rfp-decomposition-search.md`). Confirms the layer is
+/// actually exercising — not just compiling but emitting the
+/// `DecompositionCandidateScored` and `DecompositionChosen` trace
+/// events. With Phase 0's single `NativeCandidate`, exactly one of
+/// each fires per layout call.
+#[test]
+#[ntest::timeout(10000)]
+fn decomposition_search_native_candidate_fires_trace_events() {
+    let inputs: FxHashSet<String> = ["iron-plate"].iter().map(|s| s.to_string()).collect();
+    let result = run_e2e(
+        "decomposition_search_native_candidate_fires_trace_events",
+        "iron-gear-wheel",
+        10.0,
+        "assembling-machine-1",
+        None,
+        &inputs,
+    )
+    .unwrap_or_else(|e| panic!("smoke test: {e}"));
+
+    let scored: Vec<_> = result.trace_events.iter()
+        .filter_map(|e| match e {
+            TraceEvent::DecompositionCandidateScored { name, accepted, .. } => {
+                Some((name.clone(), *accepted))
+            }
+            _ => None,
+        })
+        .collect();
+    let chosen: Vec<_> = result.trace_events.iter()
+        .filter_map(|e| match e {
+            TraceEvent::DecompositionChosen { name, .. } => Some(name.clone()),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(scored.len(), 1,
+        "expected exactly one DecompositionCandidateScored event under Phase 0; got {scored:?}");
+    assert_eq!(scored[0].0, "native", "expected `native` candidate; got {:?}", scored[0].0);
+    assert!(scored[0].1, "Phase 0 stub should always accept");
+
+    assert_eq!(chosen.len(), 1,
+        "expected exactly one DecompositionChosen event; got {chosen:?}");
+    assert_eq!(chosen[0], "native", "expected `native` to win; got {:?}", chosen[0]);
+}
+
 #[test]
 #[ntest::timeout(10000)]
 fn tier1_iron_gear_wheel_from_ore() {
@@ -1432,8 +1477,8 @@ fn scoreboard_strategy_sweep() {
 
     eprintln!("strategy scoreboard:");
     eprintln!(
-        "  {:<46} {:<28} {:>8} {:>6} {:>6} {:>4}",
-        "test", "strategy", "entities", "WxH", "dens%", "warn",
+        "  {:<46} {:<28} {:>8} {:>8} {:>6} {:>6} {:>4}",
+        "test", "strategy", "candidate", "entities", "WxH", "dens%", "warn",
     );
     for case in cases {
         let inputs: FxHashSet<String> = case.inputs.iter().map(|s| s.to_string()).collect();
@@ -1446,10 +1491,19 @@ fn scoreboard_strategy_sweep() {
                     let warns = r.issues.iter().filter(|i| i.severity == Severity::Warning).count();
                     let errs = r.issues.iter().filter(|i| i.severity == Severity::Error).count();
                     let density_score = density::score_density(&r.layout, (1, 1));
+                    // Decomposition-search winner. Phase 0: always
+                    // "native". Future-proofs the column for later
+                    // phases when non-Native candidates can win. See
+                    // `docs/rfp-decomposition-search.md`.
+                    let chosen = r.trace_events.iter().find_map(|e| match e {
+                        TraceEvent::DecompositionChosen { name, .. } => Some(name.clone()),
+                        _ => None,
+                    }).unwrap_or_else(|| "?".to_string());
                     eprintln!(
-                        "  {:<46} {:<28} {:>8} {:>3}x{:<3} {:>5.1}% {:>3}/{}",
+                        "  {:<46} {:<28} {:>8} {:>8} {:>3}x{:<3} {:>5.1}% {:>3}/{}",
                         case.name,
                         format!("{strategy:?}"),
+                        chosen,
                         r.layout.entities.len(),
                         r.layout.width,
                         r.layout.height,

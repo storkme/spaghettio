@@ -26,6 +26,7 @@
 
 pub mod balancer;
 pub mod balancer_library;
+pub mod decomposition_search;
 pub(crate) mod ghost_occupancy;
 pub mod ghost_router;
 pub(crate) mod eviction;

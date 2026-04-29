@@ -75,9 +75,29 @@ impl LayoutOptions {
 /// - entities: all belts, inserters, machines, power poles
 /// - width: maximum x dimension used
 /// - height: maximum y dimension used
+///
+/// Delegates to the decomposition-search layer
+/// (`crate::bus::decomposition_search::select_best_decomposition`),
+/// which evaluates each `DecompositionCandidate` against a scoring
+/// function and returns the winner. With Phase 0's single
+/// `NativeCandidate`, output is byte-identical to direct dispatch
+/// (K-DS0-1 inertness gate). See `docs/rfp-decomposition-search.md`.
 pub fn build_bus_layout(
     solver_result: &SolverResult,
     opts: LayoutOptions,
+) -> Result<LayoutResult, String> {
+    crate::bus::decomposition_search::select_best_decomposition(solver_result, opts)
+}
+
+/// Today's `build_bus_layout` body — the retry orchestrator that
+/// invokes `layout_pass`, scans for `JunctionGrowthCapped` events,
+/// computes retry gaps, and runs a second pass if needed. Extracted
+/// from `build_bus_layout` so `NativeCandidate::produce` can call it
+/// directly without recursing through the search layer. See
+/// `docs/rfp-decomposition-search.md` §Design.
+pub(crate) fn run_layout_with_retry(
+    solver_result: &SolverResult,
+    opts: &LayoutOptions,
 ) -> Result<LayoutResult, String> {
     // Snapshot the trace collector before the first pass so we can
     // detect `JunctionGrowthCapped` events emitted by *this* layout
@@ -91,7 +111,7 @@ pub fn build_bus_layout(
     // events from a layout pass that gets abandoned by retry.
     let original_sink = crate::trace::swap_sink(None);
 
-    let pass_1 = layout_pass(solver_result, &opts, None);
+    let pass_1 = layout_pass(solver_result, opts, None);
     let (result_1, row_spans_1) = pass_1?;
 
     // Scan only events emitted by this layout call.
@@ -148,7 +168,7 @@ pub fn build_bus_layout(
         recipes,
     });
 
-    let (result_2, _) = layout_pass(solver_result, &opts, Some(&retry_gaps))?;
+    let (result_2, _) = layout_pass(solver_result, opts, Some(&retry_gaps))?;
     Ok(result_2)
 }
 
