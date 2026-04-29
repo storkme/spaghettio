@@ -1293,6 +1293,81 @@ fn tier4_advanced_circuit_from_ore_am1() {
     assert_round_trip(&result);
 }
 
+/// Regression test for [issue #136][] — coprime balancer-shape coverage.
+///
+/// Repro URL:
+/// `?item=advanced-circuit&rate=5&machine=assembling-machine-2&in=coal,water,crude-oil,iron-ore,copper-ore&belt=transport-belt`
+///
+/// The original bug report was triggered by a missing `5→9` balancer
+/// template in `bus::balancer_library`: the lane planner asked the
+/// stamper for `(5, 9)` for `copper-cable`, the stamper had no template
+/// and no decomposition for coprime shapes (`gcd(5, 9) = 1`), and the
+/// layout surfaced "No 5→9 balancer template for copper-cable; producer
+/// outputs are disconnected" as a layout warning.
+///
+/// On the current main this exact URL produces a `(5, 6)` family for
+/// copper-cable instead of `(5, 9)` — that shape *does* have a
+/// template, so the original symptom is masked. We keep the regression
+/// test pinned to the issue's URL parameters: any future change to
+/// lane-planning that drives the family back into a coprime shape that
+/// the library still doesn't cover will reintroduce the warning, and
+/// this test will catch it.
+///
+/// Specifically asserted:
+///   - layout pipeline returns Ok (does not panic on missing template).
+///   - `layout.warnings` contains no `"balancer template"` warning, i.e.
+///     the lane-planner family shape is one the library can stamp.
+///
+/// This test does *not* assert zero errors / warnings overall — the
+/// from-ore corpus has unrelated lane-throughput / pole issues tracked
+/// in #65 / #68 / `tier4_advanced_circuit_from_ore_am1`. The check is
+/// scoped to the balancer-template gap that #136 documents.
+///
+/// See `crates/core/src/bus/balancer.rs::stamp_family_balancer` for the
+/// fallback path and `crates/core/src/bus/balancer_library.rs` for the
+/// shape coverage. Templates currently cover `1..=8 × 1..=8`. Any
+/// `(N, 9)` or `(9, M)` shape will still trip the warning.
+///
+/// [issue #136]: https://github.com/storkme/fucktorio/issues/136
+#[test]
+#[ntest::timeout(60000)]
+fn issue_136_no_balancer_template_warning_ac5_ore_yellow() {
+    let inputs: FxHashSet<String> = [
+        "iron-ore", "copper-ore", "coal", "water", "crude-oil",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    let result = run_e2e(
+        "issue_136_no_balancer_template_warning_ac5_ore_yellow",
+        "advanced-circuit",
+        5.0,
+        "assembling-machine-2",
+        Some("transport-belt"),
+        &inputs,
+    )
+    .unwrap_or_else(|e| panic!("issue #136 repro pipeline: {e}"));
+
+    let template_warnings: Vec<_> = result
+        .layout
+        .warnings
+        .iter()
+        .filter(|w| w.contains("balancer template"))
+        .collect();
+    assert!(
+        template_warnings.is_empty(),
+        "expected zero \"No N→M balancer template for ...\" layout warnings \
+         (issue #136 — coprime balancer shapes), got {}:\n{}",
+        template_warnings.len(),
+        template_warnings
+            .iter()
+            .map(|w| format!("  {w}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+    assert_produces(&result, "advanced-circuit", 5.0);
+}
+
 // ---------------------------------------------------------------------------
 // Strategy scoreboard — runs every tier case under both strategies and emits
 // a single line of (entities, density, validator) per (test, strategy). The

@@ -4367,4 +4367,56 @@ mod tests {
             assert!(!t.source_blueprint.is_empty(), "source_blueprint empty for {key:?}");
         }
     }
+
+    /// Documents the dense-coverage gap at N=9 (and beyond).
+    ///
+    /// `scripts/generate_balancer_library.py` generates everything in
+    /// `1..=8 × 1..=8` minus `(1, 1)`. Anything with `N=9` or `M=9` is
+    /// missing because:
+    ///   1. there are no `external/factorio-sat/networks/Nx9` files
+    ///      (network construction for asymmetric balancers is non-trivial),
+    ///   2. and the `SHAPES` list in the generator caps at 8.
+    ///
+    /// [Issue #136][] tracks the user-visible failure mode: lane-planner
+    /// shapes such as `(5, 9)` and `(7, 9)` are coprime, so the
+    /// decomposition fallback in `stamp_family_balancer` (`gcd ≥ 2`)
+    /// can't paper over the gap, and the layout surfaces a
+    /// "No N→M balancer template" warning. Closing the gap requires
+    /// either generating proper SAT-validated 9-shapes (blocked on the
+    /// missing `Nx9` network files) or extending the stamper's
+    /// fallback to dominate-and-pad to a larger covered shape.
+    ///
+    /// Don't loosen the bound below as templates land — let this test
+    /// go green naturally.
+    ///
+    /// [Issue #136]: https://github.com/storkme/fucktorio/issues/136
+    #[test]
+    #[ignore = "Documents missing 9-shape templates (issue #136). \
+                Closing requires hand-built balancer networks for \
+                external/factorio-sat/networks/{N}x9 + an extension to \
+                generate_balancer_library.py's SHAPES range."]
+    fn balancer_library_should_cover_n_lt_10() {
+        let templates = balancer_templates();
+        let mut missing: Vec<(u32, u32)> = Vec::new();
+        for n in 1..=9u32 {
+            for m in 1..=9u32 {
+                if (n, m) == (1, 1) {
+                    continue;
+                }
+                if !templates.contains_key(&(n, m)) {
+                    missing.push((n, m));
+                }
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "balancer library is missing {} (N, M) shape(s) below 10x10:\n{}",
+            missing.len(),
+            missing
+                .iter()
+                .map(|(n, m)| format!("  ({n}, {m})"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+    }
 }
