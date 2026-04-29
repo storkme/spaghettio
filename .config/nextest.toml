@@ -25,6 +25,16 @@ slow-timeout = { period = "60s", terminate-after = 6 }
 filter = "test(tier5_processing_unit_2s_horizontal_stack_iron_ore_pipe_bypass)"
 slow-timeout = { period = "60s", terminate-after = 4 }
 
+# `stress_advanced_circuit_partitioned_7s_from_plates` runs Pooled +
+# PartitionedPerConsumer layouts at AC@7/s with auto-tier (eviction
+# strategy active). Local debug: ~96s on main, ~191s with the layout
+# retry pipeline (PR #252). Both exceed the default 90s slow-timeout.
+# Give it a 5-minute ceiling to stay clear of CI variance without
+# hiding genuine hangs.
+[[profile.ci.overrides]]
+filter = "test(stress_advanced_circuit_partitioned_7s_from_plates)"
+slow-timeout = { period = "60s", terminate-after = 5 }
+
 [profile.ci.junit]
 path = "junit.xml"
 store-success-output = true
