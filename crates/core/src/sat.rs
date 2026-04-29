@@ -9,6 +9,7 @@
 //! are known, and I/O ports are fixed.
 
 use crate::models::{EntityDirection, PlacedEntity};
+use rustc_hash::{FxHashMap, FxHashSet};
 use varisat::{CnfFormula, ExtendFormula, Lit, Solver, Var};
 
 /// Per-channel metadata derived from a zone's boundaries. Indexed by
@@ -1079,7 +1080,7 @@ impl CrossingEncoder {
         b: &ZoneBoundary,
         lx: u32,
         ly: u32,
-        boundary_tiles: &mut std::collections::HashSet<(u32, u32)>,
+        boundary_tiles: &mut FxHashSet<(u32, u32)>,
     ) {
         boundary_tiles.insert((lx, ly));
         let t = self.tiles[self.idx(lx, ly)];
@@ -1167,7 +1168,7 @@ impl CrossingEncoder {
         b: &ZoneBoundary,
         lx: u32,
         ly: u32,
-        _boundary_tiles: &mut std::collections::HashSet<(u32, u32)>,
+        _boundary_tiles: &mut FxHashSet<(u32, u32)>,
     ) {
         let d = entity_dir_to_idx(b.direction);
         // Neighbor position depends on input/output:
@@ -1268,7 +1269,7 @@ impl CrossingEncoder {
         bs: &[&ZoneBoundary],
         lx: u32,
         ly: u32,
-        boundary_tiles: &mut std::collections::HashSet<(u32, u32)>,
+        boundary_tiles: &mut FxHashSet<(u32, u32)>,
     ) {
         if bs.len() == 2 {
             let (b1, b2) = (bs[0], bs[1]);
@@ -1306,7 +1307,7 @@ impl CrossingEncoder {
         out_b: &ZoneBoundary,
         lx: u32,
         ly: u32,
-        boundary_tiles: &mut std::collections::HashSet<(u32, u32)>,
+        boundary_tiles: &mut FxHashSet<(u32, u32)>,
     ) {
         boundary_tiles.insert((lx, ly));
         let t = self.tiles[self.idx(lx, ly)];
@@ -1348,7 +1349,7 @@ impl CrossingEncoder {
 
     fn encode_boundaries(&self, cnf: &mut Cnf, zone: &CrossingZone) {
         // Track which local tiles have boundary conditions.
-        let mut boundary_tiles = std::collections::HashSet::new();
+        let mut boundary_tiles: FxHashSet<(u32, u32)> = FxHashSet::default();
 
         // Group boundaries by tile. A single tile can legitimately carry
         // both an IN and an OUT entry when flow enters along one axis and
@@ -1357,8 +1358,7 @@ impl CrossingEncoder {
         // independently would clash on `out_dir` (AMO) and on the OUT
         // side's "direct upstream must feed" clause. Detect the pair and
         // encode it holistically.
-        let mut by_tile: std::collections::HashMap<(u32, u32), Vec<&ZoneBoundary>> =
-            std::collections::HashMap::new();
+        let mut by_tile: FxHashMap<(u32, u32), Vec<&ZoneBoundary>> = FxHashMap::default();
         for b in &zone.boundaries {
             let lx = (b.x - zone.x) as u32;
             let ly = (b.y - zone.y) as u32;
@@ -1368,7 +1368,13 @@ impl CrossingEncoder {
             by_tile.entry((lx, ly)).or_default().push(b);
         }
 
-        for (&(lx, ly), bs) in &by_tile {
+        // Sort by tile coordinate so CNF clause order is platform-independent.
+        // Hash-bucket order would otherwise differ between native and wasm32
+        // builds and steer the solver to a different model.
+        let mut tile_keys: Vec<(u32, u32)> = by_tile.keys().copied().collect();
+        tile_keys.sort_unstable();
+        for (lx, ly) in tile_keys {
+            let bs = &by_tile[&(lx, ly)];
             self.encode_tile_boundaries(cnf, zone, bs, lx, ly, &mut boundary_tiles);
         }
 
@@ -1422,8 +1428,7 @@ impl CrossingEncoder {
         //     from the Permanent feeder is a source.
         // UG-outs don't need a surface source — their underground pair
         // provides items — so the constraint only fires on `is_belt`.
-        let mut source_tiles: std::collections::HashSet<(u32, u32)> =
-            std::collections::HashSet::new();
+        let mut source_tiles: FxHashSet<(u32, u32)> = FxHashSet::default();
         for b in &zone.boundaries {
             if !b.is_input {
                 continue;
@@ -1595,7 +1600,7 @@ impl CrossingEncoder {
         default_belt_tier: &str,
         channel_info: &[ChannelInfo],
     ) -> Vec<PlacedEntity> {
-        let model_set: std::collections::HashSet<Lit> = model.iter().copied().collect();
+        let model_set: FxHashSet<Lit> = model.iter().copied().collect();
         let is_true = |v: Var| model_set.contains(&v.positive());
 
         let mut entities = Vec::new();
