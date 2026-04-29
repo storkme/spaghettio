@@ -137,6 +137,9 @@ fn streamable(evt: &fucktorio_core::trace::TraceEvent) -> bool {
             | T::BalancerCommitted { .. }
             | T::OutputMergerCommitted { .. }
             | T::PolesCommitted { .. }
+            // Retry signal — UI clears its rendered state so pass-2 events
+            // don't stack on top of pass-1 entities that were abandoned.
+            | T::LayoutRetried { .. }
     )
 }
 

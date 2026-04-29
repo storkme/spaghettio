@@ -28,6 +28,7 @@ pub mod balancer;
 pub mod balancer_library;
 pub(crate) mod ghost_occupancy;
 pub mod ghost_router;
+pub(crate) mod eviction;
 pub(crate) mod junction;
 pub mod junction_cost;
 pub(crate) mod junction_sat_strategy;

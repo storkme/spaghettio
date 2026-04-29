@@ -46,6 +46,18 @@ pub fn set_sink(sink: Box<dyn FnMut(&TraceEvent)>) -> SinkGuard {
     SinkGuard
 }
 
+/// Atomically replace the active sink with `new_sink` (or `None` to
+/// disable streaming) and return whatever sink was previously active.
+/// Used by `build_bus_layout` to install a buffering sink for pass 1
+/// so the streaming consumer never sees events from a layout pass that
+/// was abandoned by retry. Caller is responsible for restoring the
+/// returned sink (or letting it drop) at the right moment.
+pub fn swap_sink(
+    new_sink: Option<Box<dyn FnMut(&TraceEvent)>>,
+) -> Option<Box<dyn FnMut(&TraceEvent)>> {
+    SINK.with(|s| std::mem::replace(&mut *s.borrow_mut(), new_sink))
+}
+
 /// RAII guard — clears the sink on drop.
 pub struct SinkGuard;
 
@@ -92,6 +104,37 @@ pub fn drain_events() -> Vec<TraceEvent> {
 #[allow(dead_code)]
 pub fn is_active() -> bool {
     COLLECTOR.with(|c| c.borrow().is_some())
+}
+
+/// Number of events currently in the collector (0 if none active).
+/// Lets the layout-retry loop snapshot the collector size before its
+/// inner pass, then read only events emitted by that pass.
+pub fn peek_events_len() -> usize {
+    COLLECTOR.with(|c| c.borrow().as_ref().map(|v| v.len()).unwrap_or(0))
+}
+
+/// Clone of every event emitted at or after `start` (0 if no collector
+/// active). Non-destructive; the collector keeps its contents.
+pub fn peek_events_since(start: usize) -> Vec<TraceEvent> {
+    COLLECTOR.with(|c| {
+        c.borrow()
+            .as_ref()
+            .map(|v| v.iter().skip(start).cloned().collect())
+            .unwrap_or_default()
+    })
+}
+
+/// Drop every event from index `len` onward (no-op if no collector
+/// active or `len` already past the end). Used by the layout-retry loop
+/// to discard the failed first pass before emitting the retried pass.
+/// The streaming sink still saw the discarded events live; only the
+/// `result.trace` snapshot is affected.
+pub fn truncate_events(len: usize) {
+    COLLECTOR.with(|c| {
+        if let Some(ref mut events) = *c.borrow_mut() {
+            events.truncate(len);
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -337,6 +380,22 @@ pub enum TraceEvent {
         external_input_count: usize,
         external_output_count: usize,
         machines: Vec<MachineTrace>,
+    },
+
+    /// The layout pipeline ran once, hit `JunctionGrowthCapped` events,
+    /// and is being re-run with extra vertical gap inserted after each
+    /// row whose successor junction couldn't fit. Emitted at the start
+    /// of the retried pass, so the trace stream that reaches the UI
+    /// records that a retry happened and which rows got widened.
+    LayoutRetried {
+        /// `(row_index, extra_tiles)` pairs — the same map that's plumbed
+        /// into `place_rows::extra_gap_after_row` for the retry.
+        gaps: Vec<(usize, i32)>,
+        /// Number of `JunctionGrowthCapped` events seen on the original pass.
+        caps_before: usize,
+        /// Recipe name for each row that got widened (parallel to `gaps`).
+        /// Lets the UI label the panel without cross-referencing other events.
+        recipes: Vec<String>,
     },
 
     // A* route failure — a spec had no valid path after all iterations
@@ -851,6 +910,57 @@ pub enum TraceEvent {
         entities: Vec<PlacedEntity>,
         participating: Vec<String>,
     },
+
+    // Eviction-strategy events. Eviction runs as a fallback after SAT
+    // returns UNSAT for every variant on this iteration. Each recipe
+    // selects one or more participating specs, routes them around or
+    // through the bbox via A*/geometric pre-pass, then re-invokes SAT
+    // on the reduced spec set.
+    EvictionAttempted {
+        seed_x: i32,
+        seed_y: i32,
+        iter: usize,
+        recipe: String,
+        candidate_spec_keys: Vec<String>,
+        region_tiles: usize,
+        boundary_count_before: usize,
+    },
+    EvictionRouteFailed {
+        seed_x: i32,
+        seed_y: i32,
+        recipe: String,
+        spec_key: String,
+        reason: String,
+        elapsed_us: u64,
+    },
+    EvictionSatFailed {
+        seed_x: i32,
+        seed_y: i32,
+        recipe: String,
+        evicted_spec_keys: Vec<String>,
+        elapsed_us: u64,
+    },
+    EvictionSucceeded {
+        seed_x: i32,
+        seed_y: i32,
+        iter: usize,
+        recipe: String,
+        evicted_spec_keys: Vec<String>,
+        boundary_count_after: usize,
+        sat_us: u64,
+        route_us: u64,
+        total_us: u64,
+        /// Per-evicted-spec metrics — Manhattan length of the evicted
+        /// route, turn count of the rendered path, item, belt tier name.
+        /// Captured for the recipe-grid pattern table.
+        metrics: Vec<EvictionSpecMetric>,
+    },
+    EvictionBudgetExhausted {
+        seed_x: i32,
+        seed_y: i32,
+        recipes_tried: usize,
+        total_us: u64,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -959,6 +1069,24 @@ pub struct SatProposedEntity {
     pub carries: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub io_type: Option<String>,
+}
+
+/// Per-evicted-spec metric attached to `EvictionSucceeded`. Captures
+/// shape of the evicted route so the diagnostic sweep can ask "what
+/// kind of specs do we win on?".
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvictionSpecMetric {
+    pub spec_key: String,
+    pub item: String,
+    pub belt_tier: String,
+    /// Manhattan distance between the spec's entry tile and exit tile.
+    pub manhattan_len: u32,
+    /// Number of direction changes along the rendered route.
+    pub turn_count: u32,
+    /// Number of entities the route emitted.
+    pub entity_count: usize,
 }
 
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]

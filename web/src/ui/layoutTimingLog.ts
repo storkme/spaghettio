@@ -6,6 +6,19 @@ function filter<T extends string>(events: TraceEvent[], phase: T): EventOf<T>[] 
   return events.filter(e => e.phase === phase) as EventOf<T>[];
 }
 
+// Mirrors the Rust `TraceEvent::LayoutRetried` variant. After a WASM
+// rebuild picks it up the auto-generated `TraceEvent` union will
+// include this shape and the local declaration can be removed
+// (same workaround as retryPanel.ts).
+interface LayoutRetriedEvent {
+  phase: "LayoutRetried";
+  data: {
+    gaps: Array<[number, number]>;
+    caps_before: number;
+    recipes: string[];
+  };
+}
+
 const HDR = "color:#9cdcfe;font-weight:bold";
 const LBL = "color:#888";
 const VAL = "color:#e0e0e0";
@@ -31,15 +44,26 @@ export function logLayoutStats(layout: LayoutResult): void {
   const growthIters = filter(events, "JunctionGrowthIteration");
   const negotiate = filter(events, "NegotiateComplete");
   const validation = filter(events, "ValidationCompleted");
+  const retried: LayoutRetriedEvent[] = events.filter(
+    e => (e.phase as string) === "LayoutRetried",
+  ) as unknown as LayoutRetriedEvent[];
 
   const totalMs = phases.reduce((s, t) => s + t.data.duration_ms, 0);
   const satUs = sat.reduce((s, t) => s + t.data.solve_time_us, 0);
   const satSatisfied = sat.filter(s => s.data.satisfied).length;
   const entityCount = layout.entities?.length ?? 0;
 
-  // One-liner summary (always visible).
-  const summaryStyle = capped.length > 0 ? WARN : GOOD;
-  const note = capped.length > 0 ? ` · ${capped.length} capped` : "";
+  // One-liner summary (always visible). Note that `capped` here counts
+  // post-retry caps — if a `LayoutRetried` is present, the original
+  // first-pass caps were intercepted by the retry and only show in the
+  // discarded trace. So the summary order is: caps first (current
+  // failures), retried second (recovery happened, no caps now).
+  const note = retried.length > 0
+    ? capped.length > 0
+      ? ` · ${capped.length} capped · retried (${retried[0].data.caps_before} caps recovered)`
+      : ` · retried (${retried[0].data.caps_before} caps recovered)`
+    : capped.length > 0 ? ` · ${capped.length} capped` : "";
+  const summaryStyle = capped.length > 0 ? WARN : retried.length > 0 ? ACCENT : GOOD;
   console.log(
     `%c▶ layout %c${layout.width}×${layout.height}  %c${entityCount} entities  %c${totalMs}ms  %cSAT ${Math.round(satUs / 1000)}ms (${sat.length}×)%c${note}`,
     HDR, VAL, LBL, VAL, ACCENT, summaryStyle,

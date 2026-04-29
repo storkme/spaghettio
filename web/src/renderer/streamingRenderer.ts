@@ -605,8 +605,23 @@ export function createStreamingRenderer(
         commitEntitiesAsParticles(data.entities, s);
         break;
       }
-      default:
+      default: {
+        // LayoutRetried isn't in the auto-generated TraceEvent union yet
+        // (a WASM rebuild after pickup will include it; same workaround as
+        // retryPanel.ts). The bus layout ran twice — pass 1's events
+        // streamed through and rendered entities the engine then
+        // abandoned. Clear all live rendering state so pass-2 events
+        // arrive on a fresh canvas.
+        if ((evt.phase as string) === "LayoutRetried") {
+          particleScene.clear();
+          ghostStateByTile.clear();
+          committedKeys.clear();
+          ghostClusters.length = 0;
+          clusterOverlay.clear();
+          requestRender();
+        }
         break;
+      }
     }
     pendingMilestoneCallback = null;
   }
