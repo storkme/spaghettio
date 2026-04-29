@@ -29,8 +29,13 @@ fn layout_options(
     row_layout: Option<String>,
 ) -> LayoutOptions {
     let strategy = match strategy.as_deref() {
-        Some("partitioned-per-consumer") => LayoutStrategy::PartitionedPerConsumer,
-        Some("partitioned-decomposed") => LayoutStrategy::PartitionedDecomposed,
+        // `partitioned-per-consumer` is the deprecated P1 string; the
+        // P1 enum variant was hard-deleted (it was strictly dominated
+        // by P2 across the diag corpus). Bookmarked URLs continue to
+        // load by transparently mapping to `PartitionedDecomposed`.
+        Some("partitioned-per-consumer") | Some("partitioned-decomposed") => {
+            LayoutStrategy::PartitionedDecomposed
+        }
         _ => LayoutStrategy::Pooled,
     };
     let row_layout = match row_layout.as_deref() {

@@ -367,14 +367,15 @@ export function renderSidebar(
   targetBody.appendChild(makeField("Belt", beltSelect));
 
   // Layout strategy. Phase 0b of `rfp-modular-production` shipped the
-  // dropdown; partitioned variants are now wired through the WASM API
-  // and produce strictly ≤ Pooled errors on every case in the corpus,
-  // so they're enabled.
+  // dropdown; the surviving `partitioned-decomposed` variant produces
+  // strictly ≤ Pooled errors on every case in the corpus. The deprecated
+  // `partitioned-per-consumer` (P1) option was dropped from the UI when
+  // the P1 enum variant was hard-deleted; bookmarked URLs still load
+  // via the back-compat alias in `state.ts`.
   const strategySelect = document.createElement("select");
   strategySelect.className = "sb-select";
   ([
     ["Pooled (default)", ""],
-    ["Partitioned per consumer", "partitioned-per-consumer"],
     ["Partitioned + decomposed", "partitioned-decomposed"],
   ] as const).forEach(([label, value]) => {
     const opt = document.createElement("option");

@@ -35,8 +35,11 @@ struct E2EResult {
     parsed: LayoutResult,
     issues: Vec<ValidationIssue>,
     analysis: BlueprintAnalysis,
-    /// Belt tier the original layout ran with — needed to re-run under
-    /// `PartitionedPerConsumer` for K1-4 inertness checks.
+    /// Belt tier the original layout ran with. Was previously consumed
+    /// by the now-deleted K1-4 inertness re-run; retained as
+    /// `#[allow(dead_code)]` so future strategy comparisons can rebuild
+    /// without plumbing it back in.
+    #[allow(dead_code)]
     belt_tier: Option<String>,
     #[allow(dead_code)]
     trace_events: Vec<TraceEvent>,
@@ -180,7 +183,7 @@ fn run_e2e(
 }
 
 /// Like `run_e2e` but with a non-default `LayoutStrategy`. Used for K1-1
-/// (`PartitionedPerConsumer` on the motivating case) and for the
+/// (`PartitionedDecomposed` on the motivating case) and for the
 /// scoreboard sweep across strategies.
 fn run_e2e_with_strategy(
     test_name: &str,
@@ -503,52 +506,13 @@ fn assert_golden_hash(result: &E2EResult, test_name: &str) {
         ),
     }
 
-    // K1-4 inertness: re-run under PartitionedPerConsumer for cases
-    // with K=1 everywhere; the layout must match Pooled byte-for-byte.
-    assert_partitioned_inertness(
-        &result.solver_result,
-        result.belt_tier.as_deref(),
-        &computed,
-        test_name,
-    );
-}
-
-/// K1-4 inertness assertion from `docs/rfp-modular-production.md`. For
-/// cases with no multi-consumer intermediates, the layout produced
-/// under `LayoutStrategy::PartitionedPerConsumer` must be byte-identical
-/// to `LayoutStrategy::Pooled`. Tests with K>1 intermediates are out of
-/// K1-4's scope and are skipped here (they exercise PR2 of Phase 1
-/// directly).
-fn assert_partitioned_inertness(
-    solver_result: &fucktorio_core::models::SolverResult,
-    belt_tier: Option<&str>,
-    pooled_hash: &str,
-    test_name: &str,
-) {
-    use fucktorio_core::bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy};
-    use fucktorio_core::bus::partitioner::multi_consumer_items;
-
-    let multi = multi_consumer_items(solver_result);
-    if !multi.is_empty() {
-        // Out of K1-4 scope; PR2 covers the K>1 path.
-        return;
-    }
-    let layout = build_bus_layout(
-        solver_result,
-        LayoutOptions {
-            strategy: LayoutStrategy::PartitionedPerConsumer,
-            max_belt_tier: belt_tier.map(|s| s.to_string()),
-            ..Default::default()
-        },
-    )
-    .unwrap_or_else(|e| panic!("`{test_name}`: PartitionedPerConsumer layout failed: {e}"));
-    let computed = golden_hash(&layout);
-    assert_eq!(
-        computed, pooled_hash,
-        "K1-4 inertness violated for `{test_name}`: \
-         PartitionedPerConsumer produced a different layout than Pooled \
-         on a K=1-everywhere case.\n  pooled:        {pooled_hash}\n  partitioned:   {computed}",
-    );
+    // K1-4 inertness was an assertion that `PartitionedPerConsumer`
+    // (P1) produced a byte-identical layout to `Pooled` on K=1
+    // cases. With P1 hard-deleted (its only surviving caller was
+    // PartitionedDecomposed, which intentionally diverges from Pooled
+    // for oversized K=1 items via the Phase 2 sharding pass), the
+    // inertness property no longer applies and the assertion was
+    // dropped.
 }
 
 /// K0-1 byte-equality regression table. Entries are
@@ -944,11 +908,11 @@ fn tier4_advanced_circuit_from_plates() {
 }
 
 /// K1-1 from `docs/rfp-modular-production.md`. Advanced-circuit with
-/// `LayoutStrategy::PartitionedPerConsumer` is the motivating case: copper-cable
+/// `LayoutStrategy::PartitionedDecomposed` is the motivating case: copper-cable
 /// is consumed by both `electronic-circuit` and `advanced-circuit` recipes, so
 /// the partitioner allocates two modules and each module's lane count is sized
 /// to its single consumer's demand. Under Pooled this case (at higher rates)
-/// trips the 8-lane balancer ceiling; under PartitionedPerConsumer the per-
+/// trips the 8-lane balancer ceiling; under PartitionedDecomposed the per-
 /// module balancers are bounded by the largest single consumer's demand.
 ///
 /// The 1/s rate matches the Pooled tier4 test above; this test specifically
@@ -972,7 +936,7 @@ fn tier4_advanced_circuit_partitioned() {
         "assembling-machine-2",
         None,
         &inputs,
-        LayoutStrategy::PartitionedPerConsumer,
+        LayoutStrategy::PartitionedDecomposed,
     )
     .unwrap_or_else(|e| panic!("tier4_advanced_circuit_partitioned: {e}"));
 
@@ -1409,7 +1373,7 @@ fn scoreboard_strategy_sweep() {
     );
     for case in cases {
         let inputs: FxHashSet<String> = case.inputs.iter().map(|s| s.to_string()).collect();
-        for strategy in [LayoutStrategy::Pooled, LayoutStrategy::PartitionedPerConsumer] {
+        for strategy in [LayoutStrategy::Pooled, LayoutStrategy::PartitionedDecomposed] {
             let result = run_e2e_with_strategy(
                 case.name, case.item, case.rate, case.machine, case.belt_tier, &inputs, strategy,
             );
@@ -1701,7 +1665,7 @@ fn check_stress_scoreboard(test_name: &str, result: &E2EResult, baseline: Stress
     );
 }
 
-/// Baseline for `LayoutStrategy::PartitionedPerConsumer` runs of stress
+/// Baseline for `LayoutStrategy::PartitionedDecomposed` runs of stress
 /// cases. Adds the K1-2 / K1-3 ceilings on top of `StressBaseline`'s
 /// pass-fail mechanism. See `docs/rfp-modular-production.md`.
 struct PartitionedStressBaseline {
@@ -1754,7 +1718,7 @@ fn check_partitioned_stress_scoreboard(
         .filter(|evt| matches!(evt, TraceEvent::ModulePartitioned { .. }))
         .count();
 
-    eprintln!("\n=== {test_name} :: PartitionedPerConsumer ===");
+    eprintln!("\n=== {test_name} :: PartitionedDecomposed ===");
     eprintln!(
         "  entities={} {}x{}",
         partitioned_result.layout.entities.len(),
@@ -1774,7 +1738,7 @@ fn check_partitioned_stress_scoreboard(
 
     assert!(
         partitioned_errors <= partitioned_baseline.max_errors_partitioned,
-        "{test_name}: PartitionedPerConsumer errors regressed: got {partitioned_errors}, \
+        "{test_name}: PartitionedDecomposed errors regressed: got {partitioned_errors}, \
          baseline allows ≤ {}. If intentional, update the baseline (and tighten when fewer \
          errors result).",
         partitioned_baseline.max_errors_partitioned,
@@ -1812,7 +1776,7 @@ fn check_partitioned_stress_scoreboard(
     }
     assert!(
         partitioned_warnings <= partitioned_baseline.max_warnings_partitioned,
-        "{test_name}: K1-2 — PartitionedPerConsumer warnings regressed: got {partitioned_warnings}, \
+        "{test_name}: K1-2 — PartitionedDecomposed warnings regressed: got {partitioned_warnings}, \
          baseline allows ≤ {}. If the 75%-utilization gate isn't tripping (see \
          partition_rejected events), this means the 'belts over-provisioned' assumption from \
          the RFP is failing on this case.",
@@ -1897,12 +1861,12 @@ fn stress_advanced_circuit_45s_from_plates() {
 /// advanced-circuit @ 5/s exercises the partitioner — copper-cable is
 /// consumed by both `electronic-circuit` and `advanced-circuit`
 /// recipes (K=2). Runs the case under both `Pooled` and
-/// `PartitionedPerConsumer` and asserts the K1-2 / K1-3 properties.
+/// `PartitionedDecomposed` and asserts the K1-2 / K1-3 properties.
 ///
 /// Baselines (probed 2026-04-25, blue belt = auto):
 /// - Pooled: 0 warnings, 3 errors. The errors are pre-existing
 ///   #64-bound layout issues — Pooled can't avoid them at this rate.
-/// - PartitionedPerConsumer: 0 errors, 41 warnings,
+/// - PartitionedDecomposed: 0 errors, 41 warnings,
 ///   1 PartitionRejectedByUtilization event.
 ///
 /// The single rejection event is *expected*: at AC=5/s the EC
@@ -1912,14 +1876,14 @@ fn stress_advanced_circuit_45s_from_plates() {
 /// mechanism working — not a violation.
 ///
 /// What this gates:
-///   - **K1-2**: warnings under `PartitionedPerConsumer` stay
+///   - **K1-2**: warnings under `PartitionedDecomposed` stay
 ///     bounded (≤ 41 here — the deterministic baseline). If the
 ///     count regresses while the gate isn't tripping more than
 ///     expected, the "belts over-provisioned" assumption is failing.
 ///   - **K1-3 per-test**: rejection events stay at 1 (the EC
 ///     module's borderline rate). If we see > 1, the gate fired
 ///     for an additional module — investigate.
-///   - **Phase 1 strict win**: PartitionedPerConsumer drops Pooled's
+///   - **Strict win**: PartitionedDecomposed drops Pooled's
 ///     3 errors to 0.
 ///
 /// Corpus-level K1-3 (≤ 20% of cases trip the gate at default
@@ -1951,8 +1915,8 @@ fn stress_advanced_circuit_partitioned_5s_from_plates() {
         "assembling-machine-2",
         None,
         &inputs,
-        LayoutStrategy::PartitionedPerConsumer,
-    ).expect("PartitionedPerConsumer e2e pipeline");
+        LayoutStrategy::PartitionedDecomposed,
+    ).expect("PartitionedDecomposed e2e pipeline");
     assert_produces(&pooled, "advanced-circuit", 5.0);
     assert_produces(&partitioned, "advanced-circuit", 5.0);
     check_partitioned_stress_scoreboard(
@@ -1987,7 +1951,7 @@ fn stress_advanced_circuit_partitioned_5s_from_plates() {
 ///
 /// Baselines (post sibling-spec + clean-slate-SAT + pole-Euclidean fixes):
 /// - Pooled: 0 warnings, 1 error.
-/// - PartitionedPerConsumer: 0 errors, 0 warnings, 0 rejection events.
+/// - PartitionedDecomposed: 0 errors, 0 warnings, 0 rejection events.
 ///
 /// What this gates beyond what 5/s already does:
 ///   - **K1-3 floor**: confirms the gate doesn't fire spuriously at
@@ -2016,8 +1980,8 @@ fn stress_advanced_circuit_partitioned_4s_from_plates() {
         "assembling-machine-2",
         None,
         &inputs,
-        LayoutStrategy::PartitionedPerConsumer,
-    ).expect("PartitionedPerConsumer e2e pipeline");
+        LayoutStrategy::PartitionedDecomposed,
+    ).expect("PartitionedDecomposed e2e pipeline");
     assert_produces(&pooled, "advanced-circuit", 4.0);
     assert_produces(&partitioned, "advanced-circuit", 4.0);
     check_partitioned_stress_scoreboard(
@@ -2048,7 +2012,7 @@ fn stress_advanced_circuit_partitioned_4s_from_plates() {
 ///
 /// Baselines (post sibling-spec + clean-slate-SAT + pole-Euclidean fixes):
 /// - Pooled: 0 warnings, 5 errors.
-/// - PartitionedPerConsumer: 1 error, 0 warnings, 1 rejection event.
+/// - PartitionedDecomposed: 1 error, 0 warnings, 1 rejection event.
 #[test]
 #[ntest::timeout(600000)]
 fn stress_advanced_circuit_partitioned_7s_from_plates() {
@@ -2072,8 +2036,8 @@ fn stress_advanced_circuit_partitioned_7s_from_plates() {
         "assembling-machine-2",
         None,
         &inputs,
-        LayoutStrategy::PartitionedPerConsumer,
-    ).expect("PartitionedPerConsumer e2e pipeline");
+        LayoutStrategy::PartitionedDecomposed,
+    ).expect("PartitionedDecomposed e2e pipeline");
     assert_produces(&pooled, "advanced-circuit", 7.0);
     assert_produces(&partitioned, "advanced-circuit", 7.0);
     check_partitioned_stress_scoreboard(
@@ -2121,8 +2085,12 @@ fn stress_advanced_circuit_partitioned_7s_from_plates() {
 ///
 /// Probed on this branch (2026-04-26):
 /// - Pooled: 10 errors
-/// - PartitionedPerConsumer: 10 errors (K=1, Phase 1 has nothing to do)
 /// - **PartitionedDecomposed: 7 errors** (strict win over Pooled; ShardSplit fires)
+///
+/// Historical note: under the deleted `PartitionedPerConsumer` (P1)
+/// strategy this case also produced 10 errors — copper-cable has K=1
+/// here so P1's per-consumer partitioning had nothing to do, and only
+/// P2's K=1 sharding pass moves the needle.
 ///
 /// The 7 residual errors are belt-dead-ends that surface from the
 /// downstream lane planner / ghost router when there are multiple
@@ -2193,7 +2161,7 @@ fn stress_electronic_circuit_30s_decomposed() {
 }
 
 /// One row of the partition-strategy scoreboard. Fields mirror what
-/// `run_e2e_with_strategy` needs, plus the `(Pool, P1, P2)` expected
+/// `run_e2e_with_strategy` needs, plus the `(Pool, P2)` expected
 /// error counts for the regression gate.
 struct ScoreboardCase {
     name: &'static str,
@@ -2205,9 +2173,12 @@ struct ScoreboardCase {
     /// `None` → default `VerticalSplit`. Cases that test horizontal-stack
     /// row layout set this to `Some(RowLayout::HorizontalStack)`.
     row_layout: Option<fucktorio_core::bus::layout::RowLayout>,
-    /// Expected error counts: (Pool, PartitionedPerConsumer,
-    /// PartitionedDecomposed). Test fails if any actual > expected.
-    expected: (usize, usize, usize),
+    /// Expected error counts: (Pool, PartitionedDecomposed). Test fails
+    /// if any actual > expected. P1 (`PartitionedPerConsumer`) was
+    /// dropped from the scoreboard when the enum variant was hard-deleted
+    /// — historical P1 numbers are preserved in nearby comments only
+    /// where they explain how a number arrived at its current value.
+    expected: (usize, usize),
 }
 
 /// Run the partition-strategy scoreboard over `cases`. Asserts no
@@ -2225,39 +2196,27 @@ fn run_partition_scoreboard(test_name: &str, cases: &[ScoreboardCase]) {
             test_name, case.item, case.rate, case.machine,
             case.belt, &inputs, LayoutStrategy::Pooled, row_layout,
         ).unwrap_or_else(|e| panic!("{}: Pool e2e failed: {e}", case.name));
-        let phase1 = run_e2e_with_strategy_and_row_layout(
-            test_name, case.item, case.rate, case.machine,
-            case.belt, &inputs, LayoutStrategy::PartitionedPerConsumer, row_layout,
-        ).unwrap_or_else(|e| panic!("{}: Phase 1 e2e failed: {e}", case.name));
         let phase2 = run_e2e_with_strategy_and_row_layout(
             test_name, case.item, case.rate, case.machine,
             case.belt, &inputs, LayoutStrategy::PartitionedDecomposed, row_layout,
         ).unwrap_or_else(|e| panic!("{}: Phase 2 e2e failed: {e}", case.name));
         let pool_e = pool.issues.iter().filter(|i| i.severity == Severity::Error).count();
-        let p1_e = phase1.issues.iter().filter(|i| i.severity == Severity::Error).count();
         let p2_e = phase2.issues.iter().filter(|i| i.severity == Severity::Error).count();
-        let (exp_pool, exp_p1, exp_p2) = case.expected;
+        let (exp_pool, exp_p2) = case.expected;
         eprintln!(
-            "scoreboard {:<22}  Pool {:>3}/{:>3}  P1 {:>3}/{:>3}  P2 {:>3}/{:>3}",
+            "scoreboard {:<22}  Pool {:>3}/{:>3}  P2 {:>3}/{:>3}",
             case.name,
             pool_e, if exp_pool == usize::MAX { 0 } else { exp_pool },
-            p1_e, exp_p1,
             p2_e, exp_p2,
         );
         if pool_e > exp_pool {
             regressions.push(format!("{}: Pool {pool_e} > {exp_pool}", case.name));
-        }
-        if p1_e > exp_p1 {
-            regressions.push(format!("{}: P1 {p1_e} > {exp_p1}", case.name));
         }
         if p2_e > exp_p2 {
             regressions.push(format!("{}: P2 {p2_e} > {exp_p2}", case.name));
         }
         if pool_e < exp_pool && exp_pool != usize::MAX {
             tighten.push(format!("{}: Pool {pool_e} < {exp_pool}", case.name));
-        }
-        if p1_e < exp_p1 {
-            tighten.push(format!("{}: P1 {p1_e} < {exp_p1}", case.name));
         }
         if p2_e < exp_p2 {
             tighten.push(format!("{}: P2 {p2_e} < {exp_p2}", case.name));
@@ -2335,7 +2294,7 @@ fn partition_strategy_scoreboard() {
             // whose path crosses a forbidden interior tile, instead of
             // letting sat-1ug-native silently drop them).
             row_layout: None,
-            expected: (0, 17, 17),
+            expected: (0, 17),
         },
         ScoreboardCase {
             name: "AC@5/s plates yellow",
@@ -2362,7 +2321,7 @@ fn partition_strategy_scoreboard() {
             // actuals; main's separate regression should be
             // addressed upstream.
             row_layout: None,
-            expected: (4, 4, 4),
+            expected: (4, 4),
         },
     ];
     run_partition_scoreboard("partition_strategy_scoreboard", cases);
@@ -2404,7 +2363,7 @@ fn partition_strategy_scoreboard_extended() {
             // P2 41 → 37 after the lane_planner.rs:370 fix (sibling
             // families no longer pollute each other's balancer y-range).
             row_layout: None,
-            expected: (30, 28, 37),
+            expected: (30, 37),
         },
         ScoreboardCase {
             name: "PU@3/s ore red",
@@ -2428,7 +2387,7 @@ fn partition_strategy_scoreboard_extended() {
             // errors. Ratchet down once the junction solver learns about
             // bridge-tier and bridge-reach constraints.
             row_layout: None,
-            expected: (8, 7, 21),
+            expected: (8, 21),
         },
         ScoreboardCase {
             name: "PU@3/s plates yellow",
@@ -2449,7 +2408,7 @@ fn partition_strategy_scoreboard_extended() {
             // decomposition-feeder fix (multi-stamp families now connect
             // properly instead of silently dropping feeder specs).
             row_layout: None,
-            expected: (44, 34, 23),
+            expected: (44, 23),
         },
         // The user's working URL: PU@2/s, AM3, fast belts, horizontal-stack,
         // ores + steel-plate as external inputs. Pool produces a working
@@ -2479,7 +2438,7 @@ fn partition_strategy_scoreboard_extended() {
             //
             // Pool 1 → 0, P1/P2 5 → 4 after dropping Relaxed-reach SAT
             // rungs (the user's working URL is now Pool-clean).
-            expected: (0, 4, 4),
+            expected: (0, 4),
         },
     ];
     run_partition_scoreboard("partition_strategy_scoreboard_extended", cases);
@@ -5058,145 +5017,3 @@ fn diag_decomposition_signature_match() {
     }
 }
 
-/// Diagnostic: dump per-category error breakdown for cases where P2 regresses
-/// vs P1, so we can see which validator categories are driving the gap.
-///
-/// Run with:
-///   cargo test --manifest-path crates/core/Cargo.toml --release \
-///     --test e2e -- --ignored diag_p2_regression_categories \
-///     --exact --nocapture
-#[test]
-#[ignore]
-#[ntest::timeout(600000)]
-fn diag_p2_regression_categories() {
-    use fucktorio_core::bus::layout::{LayoutStrategy, RowLayout};
-    use std::collections::BTreeMap;
-
-    struct Case {
-        name: &'static str,
-        item: &'static str,
-        rate: f64,
-        machine: &'static str,
-        belt: Option<&'static str>,
-        inputs: &'static [&'static str],
-    }
-
-    // Cases where P2 > P1 in the extended scoreboard, plus PU@2/s ore red
-    // (where P2 == P1) as a control.
-    let cases: &[Case] = &[
-        Case {
-            name: "PU@2/s plates yellow",
-            item: "processing-unit", rate: 2.0, machine: "assembling-machine-2",
-            belt: Some("transport-belt"),
-            inputs: &["iron-plate", "copper-plate", "steel-plate", "stone",
-                      "coal", "water", "crude-oil"],
-        },
-        Case {
-            name: "PU@3/s ore red",
-            item: "processing-unit", rate: 3.0, machine: "assembling-machine-3",
-            belt: Some("fast-transport-belt"),
-            inputs: &["iron-ore", "copper-ore", "coal", "water", "crude-oil"],
-        },
-        Case {
-            name: "PU@3/s plates yellow",
-            item: "processing-unit", rate: 3.0, machine: "assembling-machine-2",
-            belt: Some("transport-belt"),
-            inputs: &["iron-plate", "copper-plate", "steel-plate", "stone",
-                      "coal", "water", "crude-oil"],
-        },
-        // Control: P1 == P2 here (sharding doesn't fire / changes nothing)
-        Case {
-            name: "PU@2/s ore red (control)",
-            item: "processing-unit", rate: 2.0, machine: "assembling-machine-3",
-            belt: Some("fast-transport-belt"),
-            inputs: &["iron-ore", "copper-ore", "coal", "water", "crude-oil"],
-        },
-    ];
-
-    fn run(case: &Case, strategy: LayoutStrategy) -> E2EResult {
-        let inputs: FxHashSet<String> = case.inputs.iter().map(|s| s.to_string()).collect();
-        run_e2e_with_strategy_and_row_layout(
-            "diag_p2_regression_categories",
-            case.item, case.rate, case.machine,
-            case.belt, &inputs, strategy, RowLayout::default(),
-        ).unwrap_or_else(|e| panic!("{}: {strategy:?} e2e failed: {e}", case.name))
-    }
-
-    fn count_by_category(r: &E2EResult) -> BTreeMap<String, usize> {
-        let mut m: BTreeMap<String, usize> = BTreeMap::new();
-        for issue in &r.issues {
-            if issue.severity == Severity::Error {
-                *m.entry(issue.category.clone()).or_default() += 1;
-            }
-        }
-        m
-    }
-
-    eprintln!("\n=== P2 regression: per-category error breakdown ===\n");
-
-    for case in cases {
-        eprintln!("--- {} ---", case.name);
-        let p1_full = run(case, LayoutStrategy::PartitionedPerConsumer);
-        let p2_full = run(case, LayoutStrategy::PartitionedDecomposed);
-
-        // For PU@3/s ore red specifically, dump entities at the failing column.
-        if case.name == "PU@3/s ore red" {
-            eprintln!("  [PU@3/s ore red] entities at column 42, y in 180..200:");
-            eprintln!("  P2 entities:");
-            let mut p2_at_col: Vec<&fucktorio_core::models::PlacedEntity> = p2_full.layout.entities.iter()
-                .filter(|e| e.x == 42 && e.y >= 180 && e.y <= 200)
-                .collect();
-            p2_at_col.sort_by_key(|e| e.y);
-            for e in &p2_at_col {
-                eprintln!("    ({}, {:>3}) {:30} dir={:?} segment={:?}",
-                    e.x, e.y, e.name, e.direction, e.segment_id);
-            }
-            eprintln!("  P1 entities:");
-            let mut p1_at_col: Vec<&fucktorio_core::models::PlacedEntity> = p1_full.layout.entities.iter()
-                .filter(|e| e.x == 42 && e.y >= 180 && e.y <= 200)
-                .collect();
-            p1_at_col.sort_by_key(|e| e.y);
-            for e in &p1_at_col {
-                eprintln!("    ({}, {:>3}) {:30} dir={:?} segment={:?}",
-                    e.x, e.y, e.name, e.direction, e.segment_id);
-            }
-        }
-
-        // Dump lane-throughput messages for cases where P2 has more than P1.
-        let p1_lt: Vec<&str> = p1_full.issues.iter()
-            .filter(|i| i.severity == Severity::Error && i.category == "lane-throughput")
-            .map(|i| i.message.as_str()).collect();
-        let p2_lt: Vec<&str> = p2_full.issues.iter()
-            .filter(|i| i.severity == Severity::Error && i.category == "lane-throughput")
-            .map(|i| i.message.as_str()).collect();
-        if p2_lt.len() > p1_lt.len() {
-            eprintln!("  ⚠ lane-throughput P2 messages ({}):", p2_lt.len());
-            for m in &p2_lt {
-                eprintln!("    {}", m);
-            }
-            if !p1_lt.is_empty() {
-                eprintln!("  (P1 had {} lane-throughput messages — also dumping):", p1_lt.len());
-                for m in &p1_lt {
-                    eprintln!("    {}", m);
-                }
-            }
-        }
-
-        let p1 = count_by_category(&p1_full);
-        let p2 = count_by_category(&p2_full);
-        let mut all_cats: std::collections::BTreeSet<String> = p1.keys().cloned().collect();
-        all_cats.extend(p2.keys().cloned());
-        let p1_total: usize = p1.values().sum();
-        let p2_total: usize = p2.values().sum();
-        eprintln!("  total: P1={p1_total}, P2={p2_total}, delta={:+}", p2_total as i64 - p1_total as i64);
-        eprintln!("  {:<32} {:>5} {:>5} {:>7}", "category", "P1", "P2", "delta");
-        for cat in &all_cats {
-            let p1n = p1.get(cat).copied().unwrap_or(0);
-            let p2n = p2.get(cat).copied().unwrap_or(0);
-            let delta = p2n as i64 - p1n as i64;
-            let marker = if delta > 0 { " ←" } else if delta < 0 { " ✓" } else { "" };
-            eprintln!("  {:<32} {:>5} {:>5} {:>+7}{}", cat, p1n, p2n, delta, marker);
-        }
-        eprintln!();
-    }
-}

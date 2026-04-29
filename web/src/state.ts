@@ -6,8 +6,13 @@ export interface FormState {
   inputs: string[];
   /** Max belt tier override, e.g. "transport-belt". null = auto. */
   belt: string | null;
-  /** Layout strategy ("partitioned-per-consumer" | "partitioned-decomposed").
-   * null = pooled (today's default). See `docs/rfp-modular-production.md`. */
+  /** Layout strategy ("partitioned-decomposed").
+   * null = pooled (today's default). See `docs/rfp-modular-production.md`.
+   *
+   * The legacy `"partitioned-per-consumer"` URL value is still accepted
+   * on read (back-compat for bookmarked URLs) and normalised to
+   * `"partitioned-decomposed"` here — the P1 strategy was strictly
+   * dominated by P2 across the diag corpus and was hard-deleted. */
   strategy: string | null;
   /** Row layout ("horizontal-stack"). null = vertical-split (today's default).
    * See `docs/rfp-horizontal-trunks.md`. */
@@ -16,7 +21,13 @@ export interface FormState {
   customInputs: string[];
 }
 
-/** Strategy values accepted on the URL and in `FormState.strategy`. */
+/** Strategy values accepted on the URL and in `FormState.strategy`.
+ *
+ * `"partitioned-per-consumer"` is the legacy P1 alias — accepted on
+ * read (bookmarked URLs continue to work) and normalised to
+ * `"partitioned-decomposed"` by `readUrlState`. The P1 enum variant
+ * was hard-deleted because it was strictly dominated by P2 across the
+ * diag corpus. */
 export const KNOWN_STRATEGIES = ["partitioned-per-consumer", "partitioned-decomposed"] as const;
 
 /** Row-layout values accepted on the URL and in `FormState.rowLayout`. */
@@ -61,7 +72,11 @@ export function readUrlState(): FormState {
   const inputs = inParam ? inParam.split(",").filter((s) => s.length > 0) : DEFAULT_CHECKED_INPUTS;
   const belt = params.get("belt");
   const rawStrategy = params.get("strategy");
-  const strategy = rawStrategy && (KNOWN_STRATEGIES as readonly string[]).includes(rawStrategy) ? rawStrategy : null;
+  let strategy = rawStrategy && (KNOWN_STRATEGIES as readonly string[]).includes(rawStrategy) ? rawStrategy : null;
+  // Normalise the legacy P1 alias to the surviving P2 string. Keeps
+  // bookmarked `?strategy=partitioned-per-consumer` URLs working
+  // without surfacing the deprecated value back into UI / WASM.
+  if (strategy === "partitioned-per-consumer") strategy = "partitioned-decomposed";
   const rawRowLayout = params.get("row_layout");
   const rowLayout = rawRowLayout && (KNOWN_ROW_LAYOUTS as readonly string[]).includes(rawRowLayout) ? rawRowLayout : null;
   const ciParam = params.get("ci");

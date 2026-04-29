@@ -73,7 +73,7 @@ struct BeltSpec {
     goal: (i32, i32),
     item: String,
     /// Module the spec's lane belongs to. Under `LayoutStrategy::Pooled`
-    /// always 0; under `PartitionedPerConsumer`/`PartitionedDecomposed` a
+    /// always 0; under `PartitionedDecomposed` a
     /// single item can have multiple sibling families with the same item
     /// name but different module ids. The crossing-detection filter
     /// (`ghost_item_at`) keys on `(item, module_id)` so same-item-
