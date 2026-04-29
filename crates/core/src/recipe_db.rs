@@ -80,6 +80,17 @@ pub struct Recipe {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MachineData {
     pub crafting_speed: f64,
+    /// Maximum number of solid+fluid ingredient slots. `None` = unbounded
+    /// (Factorio represents this as `-1` on prototypes; we treat absence in
+    /// the data file as unbounded). Today only `assembling-machine-1` has a
+    /// finite limit (2) in the bundled `recipes.json`.
+    #[serde(default)]
+    pub ingredient_slots: Option<usize>,
+    /// Raw fluid-box descriptors copied from the prototype data. We don't
+    /// inspect their shape — only whether the array is non-empty (machine
+    /// supports fluids at all). Defaults to empty.
+    #[serde(default)]
+    pub fluid_boxes: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -161,6 +172,134 @@ pub fn get_crafting_speed(entity: &str) -> f64 {
         .get(entity)
         .map(|m| m.crafting_speed)
         .unwrap_or(1.0)
+}
+
+/// Reasons a chosen `(machine, recipe)` pair can't run as configured.
+///
+/// Surfaced via [`SolverError::IncompatibleMachine`](crate::solver::SolverError)
+/// and rendered in the web UI's config-error banner. Messages are
+/// user-facing so the wording in `Display` should suggest a fix.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MachineIncompatibility {
+    /// Recipe lists more ingredients than the machine has slots
+    /// (e.g. `assembling-machine-1` caps at 2).
+    TooManyIngredients { limit: usize, got: usize },
+    /// Recipe has fluid ingredients or products and the machine has no
+    /// fluid boxes (AM1, stone/steel/electric furnaces, recycler, crusher).
+    FluidNotSupported { items: Vec<String> },
+    /// The chosen machine isn't a valid producer for the recipe's category.
+    /// Only triggers for hand-edited URLs that map a category to a machine
+    /// that never handles it (e.g. `?craft=stone-furnace`); the UI's
+    /// dropdown prevents this through normal use.
+    CategoryNotSupported { category: String },
+}
+
+impl std::fmt::Display for MachineIncompatibility {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MachineIncompatibility::TooManyIngredients { limit, got } => {
+                write!(
+                    f,
+                    "{got} ingredients exceed the {limit}-slot limit — switch to a machine with more slots"
+                )
+            }
+            MachineIncompatibility::FluidNotSupported { items } => {
+                write!(
+                    f,
+                    "needs fluid {} but the machine has no fluid connections — switch to a fluid-capable machine",
+                    items.join(", ")
+                )
+            }
+            MachineIncompatibility::CategoryNotSupported { category } => {
+                write!(f, "doesn't support recipe category `{category}`")
+            }
+        }
+    }
+}
+
+/// Verify that `machine` can actually run `recipe` as configured.
+///
+/// Returns `Ok(())` if the pair is buildable, otherwise the first
+/// incompatibility it hits (slot count → fluid → category). Unknown
+/// machines (not in the bundled data) are treated as unconstrained — the
+/// solver will hit `MissingCraftingSpeed` separately if the entity is
+/// completely unknown.
+pub fn machine_can_run_recipe(
+    machine: &str,
+    recipe: &Recipe,
+) -> Result<(), MachineIncompatibility> {
+    let Some(data) = db().machines.get(machine) else {
+        return Ok(());
+    };
+
+    if let Some(limit) = data.ingredient_slots {
+        let got = recipe.ingredients.len();
+        if got > limit {
+            return Err(MachineIncompatibility::TooManyIngredients { limit, got });
+        }
+    }
+
+    if data.fluid_boxes.is_empty() {
+        let mut fluids: Vec<String> = recipe
+            .ingredients
+            .iter()
+            .filter(|i| i.type_ == "fluid")
+            .map(|i| i.name.clone())
+            .chain(
+                recipe
+                    .products
+                    .iter()
+                    .filter(|p| p.type_ == "fluid")
+                    .map(|p| p.name.clone()),
+            )
+            .collect();
+        fluids.sort();
+        fluids.dedup();
+        if !fluids.is_empty() {
+            return Err(MachineIncompatibility::FluidNotSupported { items: fluids });
+        }
+    }
+
+    // Category whitelist: a machine is valid for a category if either
+    //   (a) `machine_for_recipe` would naturally pick it for that category, or
+    //   (b) the category falls through to `default` (the assembler tier),
+    //       in which case any non-specialised machine is fine.
+    // The check guards hand-edited URLs like `?craft=stone-furnace`.
+    if !machine_handles_category(machine, &recipe.category) {
+        return Err(MachineIncompatibility::CategoryNotSupported {
+            category: recipe.category.clone(),
+        });
+    }
+
+    Ok(())
+}
+
+/// Compatibility check between a machine and a recipe category. Mirrors the
+/// hardcoded mapping in [`machine_for_recipe`]. Specialised categories
+/// require their specialised machine; fall-through categories require an
+/// assembler tier (the only machines we model as general-purpose).
+fn machine_handles_category(machine: &str, category: &str) -> bool {
+    match category {
+        "chemistry" | "chemistry-or-cryogenics" | "organic-or-chemistry" => {
+            matches!(machine, "chemical-plant")
+        }
+        "oil-processing" => matches!(machine, "oil-refinery"),
+        "smelting" => matches!(
+            machine,
+            "stone-furnace" | "steel-furnace" | "electric-furnace"
+        ),
+        "electromagnetics" => matches!(machine, "electromagnetic-plant"),
+        "cryogenics" | "cryogenics-or-assembling" => matches!(machine, "cryogenic-plant"),
+        "metallurgy" | "metallurgy-or-assembling" | "pressing" => matches!(machine, "foundry"),
+        "organic" | "organic-or-assembling" => matches!(machine, "biochamber"),
+        // Fall-through categories. Only the assembler tiers handle these —
+        // dropping a furnace or foundry into a crafting palette slot is a
+        // user error worth catching.
+        _ => matches!(
+            machine,
+            "assembling-machine-1" | "assembling-machine-2" | "assembling-machine-3"
+        ),
+    }
 }
 
 /// User-supplied per-category machine overrides.
@@ -392,6 +531,88 @@ mod tests {
             machine_for_recipe_with_palette(&recipe, &palette, "assembling-machine-3"),
             "electric-furnace"
         );
+    }
+
+    #[test]
+    fn am1_rejects_recipe_with_too_many_ingredients() {
+        // advanced-circuit needs 3 ingredients; AM1 has 2 slots.
+        let recipe = find_recipe_for_item("advanced-circuit").expect("recipe exists");
+        let err = machine_can_run_recipe("assembling-machine-1", recipe).unwrap_err();
+        match err {
+            MachineIncompatibility::TooManyIngredients { limit, got } => {
+                assert_eq!(limit, 2);
+                assert!(got >= 3, "expected ≥3 ingredients, got {got}");
+            }
+            other => panic!("expected TooManyIngredients, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn am1_rejects_recipe_with_fluid_ingredient() {
+        // plastic-bar uses petroleum-gas (fluid). AM1 has no fluid boxes.
+        let recipe = find_recipe_for_item("plastic-bar").expect("recipe exists");
+        // plastic-bar's category is "chemistry" → category check would fire
+        // first. Test against a fluid-using crafting recipe that AM1 fails on
+        // the fluid check, not the category check.
+        // Use the 2-ingredient lubricant recipe: any AM2/3-only recipe with
+        // a fluid will do. Fall back to a hardcoded constructed recipe if
+        // none is in the DB to keep this test stable.
+        let _ = recipe; // keep the lookup as a sanity check on data.
+        let synthetic = Recipe {
+            name: "synthetic".into(),
+            category: "crafting-with-fluid".into(),
+            energy: 1.0,
+            ingredients: vec![
+                Ingredient {
+                    name: "iron-plate".into(),
+                    amount: 1.0,
+                    type_: "item".into(),
+                },
+                Ingredient {
+                    name: "water".into(),
+                    amount: 10.0,
+                    type_: "fluid".into(),
+                },
+            ],
+            products: vec![],
+        };
+        let err = machine_can_run_recipe("assembling-machine-1", &synthetic).unwrap_err();
+        assert!(matches!(err, MachineIncompatibility::FluidNotSupported { .. }));
+    }
+
+    #[test]
+    fn am3_accepts_arbitrary_recipes() {
+        let recipe = find_recipe_for_item("advanced-circuit").expect("recipe exists");
+        machine_can_run_recipe("assembling-machine-3", recipe)
+            .expect("AM3 handles 3+ ingredients");
+    }
+
+    #[test]
+    fn category_mismatch_rejected() {
+        // Hand-edited URL would put stone-furnace in the crafting palette.
+        let recipe = make_recipe("crafting");
+        let err = machine_can_run_recipe("stone-furnace", &recipe).unwrap_err();
+        assert!(matches!(
+            err,
+            MachineIncompatibility::CategoryNotSupported { .. }
+        ));
+    }
+
+    #[test]
+    fn smelting_accepts_stone_furnace() {
+        // Conversely, stone-furnace IS valid for the smelting category.
+        let recipe = make_recipe("smelting");
+        machine_can_run_recipe("stone-furnace", &recipe)
+            .expect("stone-furnace handles smelting");
+    }
+
+    #[test]
+    fn unknown_machine_passes_through() {
+        // Unknown entities are treated as unconstrained — the solver hits
+        // MissingCraftingSpeed separately for these.
+        let recipe = make_recipe("crafting");
+        machine_can_run_recipe("totally-made-up-machine", &recipe)
+            .expect("unknown machines bypass the capability check");
     }
 
     #[test]

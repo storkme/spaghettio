@@ -4,6 +4,12 @@ import { beltTierForRate, hexToCss } from "../renderer/colors.js";
 import { niceName, setRecipeFlows, preloadCarriesIcons } from "../renderer/entities.js";
 import "./sidebar.css";
 
+/** Marker the Rust solver prepends to `SolverError::IncompatibleMachine`
+ * messages. Must stay in sync with `INCOMPATIBLE_MACHINE_PREFIX` in
+ * `crates/core/src/solver.rs`. The sidebar splits on it to route the
+ * message to the dedicated config-error banner. */
+const INCOMPATIBLE_MACHINE_MARKER = "[INCOMPATIBLE_MACHINE]";
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -747,10 +753,20 @@ export function renderSidebar(
       if (gen !== solveGeneration) return;
       callbacks.renderGraph(null);
       if (solverCount) solverCount.textContent = "error";
-      const errDiv = document.createElement("div");
-      errDiv.className = "sb-result-error";
-      errDiv.textContent = String(err);
-      resultContainer.appendChild(errDiv);
+      const msg = String(err instanceof Error ? err.message : err);
+      // Pre-flight machine/category errors carry a marker prefix from the
+      // Rust solver. Route them to the dedicated config-error banner so
+      // they sit above the result container; everything else stays inline.
+      if (msg.includes(INCOMPATIBLE_MACHINE_MARKER)) {
+        const idx = msg.indexOf(INCOMPATIBLE_MACHINE_MARKER);
+        const cleaned = msg.slice(idx + INCOMPATIBLE_MACHINE_MARKER.length).trim();
+        setConfigError(cleaned);
+      } else {
+        const errDiv = document.createElement("div");
+        errDiv.className = "sb-result-error";
+        errDiv.textContent = msg;
+        resultContainer.appendChild(errDiv);
+      }
       return;
     }
     if (gen !== solveGeneration) return;
