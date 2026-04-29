@@ -41,6 +41,7 @@ pub mod layout;
 pub mod output_merger;
 pub mod partitioner;
 pub mod placer;
+pub(crate) mod shape_fix;
 pub mod tapoff_search;
 pub mod templates;
 pub mod trunk_renderer;
