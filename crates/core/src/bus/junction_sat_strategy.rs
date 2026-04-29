@@ -1275,7 +1275,7 @@ pub(crate) fn prune_dangling_sat_entities(
             continue;
         }
         let t = (b.x, b.y);
-        if by_tile.get(&t).is_none() {
+        if !by_tile.contains_key(&t) {
             let total = entities.len();
             trace::emit(trace::TraceEvent::SatPruned {
                 zone_x,
