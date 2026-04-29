@@ -5057,3 +5057,146 @@ fn diag_decomposition_signature_match() {
         );
     }
 }
+
+/// Diagnostic: dump per-category error breakdown for cases where P2 regresses
+/// vs P1, so we can see which validator categories are driving the gap.
+///
+/// Run with:
+///   cargo test --manifest-path crates/core/Cargo.toml --release \
+///     --test e2e -- --ignored diag_p2_regression_categories \
+///     --exact --nocapture
+#[test]
+#[ignore]
+#[ntest::timeout(600000)]
+fn diag_p2_regression_categories() {
+    use fucktorio_core::bus::layout::{LayoutStrategy, RowLayout};
+    use std::collections::BTreeMap;
+
+    struct Case {
+        name: &'static str,
+        item: &'static str,
+        rate: f64,
+        machine: &'static str,
+        belt: Option<&'static str>,
+        inputs: &'static [&'static str],
+    }
+
+    // Cases where P2 > P1 in the extended scoreboard, plus PU@2/s ore red
+    // (where P2 == P1) as a control.
+    let cases: &[Case] = &[
+        Case {
+            name: "PU@2/s plates yellow",
+            item: "processing-unit", rate: 2.0, machine: "assembling-machine-2",
+            belt: Some("transport-belt"),
+            inputs: &["iron-plate", "copper-plate", "steel-plate", "stone",
+                      "coal", "water", "crude-oil"],
+        },
+        Case {
+            name: "PU@3/s ore red",
+            item: "processing-unit", rate: 3.0, machine: "assembling-machine-3",
+            belt: Some("fast-transport-belt"),
+            inputs: &["iron-ore", "copper-ore", "coal", "water", "crude-oil"],
+        },
+        Case {
+            name: "PU@3/s plates yellow",
+            item: "processing-unit", rate: 3.0, machine: "assembling-machine-2",
+            belt: Some("transport-belt"),
+            inputs: &["iron-plate", "copper-plate", "steel-plate", "stone",
+                      "coal", "water", "crude-oil"],
+        },
+        // Control: P1 == P2 here (sharding doesn't fire / changes nothing)
+        Case {
+            name: "PU@2/s ore red (control)",
+            item: "processing-unit", rate: 2.0, machine: "assembling-machine-3",
+            belt: Some("fast-transport-belt"),
+            inputs: &["iron-ore", "copper-ore", "coal", "water", "crude-oil"],
+        },
+    ];
+
+    fn run(case: &Case, strategy: LayoutStrategy) -> E2EResult {
+        let inputs: FxHashSet<String> = case.inputs.iter().map(|s| s.to_string()).collect();
+        run_e2e_with_strategy_and_row_layout(
+            "diag_p2_regression_categories",
+            case.item, case.rate, case.machine,
+            case.belt, &inputs, strategy, RowLayout::default(),
+        ).unwrap_or_else(|e| panic!("{}: {strategy:?} e2e failed: {e}", case.name))
+    }
+
+    fn count_by_category(r: &E2EResult) -> BTreeMap<String, usize> {
+        let mut m: BTreeMap<String, usize> = BTreeMap::new();
+        for issue in &r.issues {
+            if issue.severity == Severity::Error {
+                *m.entry(issue.category.clone()).or_default() += 1;
+            }
+        }
+        m
+    }
+
+    eprintln!("\n=== P2 regression: per-category error breakdown ===\n");
+
+    for case in cases {
+        eprintln!("--- {} ---", case.name);
+        let p1_full = run(case, LayoutStrategy::PartitionedPerConsumer);
+        let p2_full = run(case, LayoutStrategy::PartitionedDecomposed);
+
+        // For PU@3/s ore red specifically, dump entities at the failing column.
+        if case.name == "PU@3/s ore red" {
+            eprintln!("  [PU@3/s ore red] entities at column 42, y in 180..200:");
+            eprintln!("  P2 entities:");
+            let mut p2_at_col: Vec<&fucktorio_core::models::PlacedEntity> = p2_full.layout.entities.iter()
+                .filter(|e| e.x == 42 && e.y >= 180 && e.y <= 200)
+                .collect();
+            p2_at_col.sort_by_key(|e| e.y);
+            for e in &p2_at_col {
+                eprintln!("    ({}, {:>3}) {:30} dir={:?} segment={:?}",
+                    e.x, e.y, e.name, e.direction, e.segment_id);
+            }
+            eprintln!("  P1 entities:");
+            let mut p1_at_col: Vec<&fucktorio_core::models::PlacedEntity> = p1_full.layout.entities.iter()
+                .filter(|e| e.x == 42 && e.y >= 180 && e.y <= 200)
+                .collect();
+            p1_at_col.sort_by_key(|e| e.y);
+            for e in &p1_at_col {
+                eprintln!("    ({}, {:>3}) {:30} dir={:?} segment={:?}",
+                    e.x, e.y, e.name, e.direction, e.segment_id);
+            }
+        }
+
+        // Dump lane-throughput messages for cases where P2 has more than P1.
+        let p1_lt: Vec<&str> = p1_full.issues.iter()
+            .filter(|i| i.severity == Severity::Error && i.category == "lane-throughput")
+            .map(|i| i.message.as_str()).collect();
+        let p2_lt: Vec<&str> = p2_full.issues.iter()
+            .filter(|i| i.severity == Severity::Error && i.category == "lane-throughput")
+            .map(|i| i.message.as_str()).collect();
+        if p2_lt.len() > p1_lt.len() {
+            eprintln!("  ⚠ lane-throughput P2 messages ({}):", p2_lt.len());
+            for m in &p2_lt {
+                eprintln!("    {}", m);
+            }
+            if !p1_lt.is_empty() {
+                eprintln!("  (P1 had {} lane-throughput messages — also dumping):", p1_lt.len());
+                for m in &p1_lt {
+                    eprintln!("    {}", m);
+                }
+            }
+        }
+
+        let p1 = count_by_category(&p1_full);
+        let p2 = count_by_category(&p2_full);
+        let mut all_cats: std::collections::BTreeSet<String> = p1.keys().cloned().collect();
+        all_cats.extend(p2.keys().cloned());
+        let p1_total: usize = p1.values().sum();
+        let p2_total: usize = p2.values().sum();
+        eprintln!("  total: P1={p1_total}, P2={p2_total}, delta={:+}", p2_total as i64 - p1_total as i64);
+        eprintln!("  {:<32} {:>5} {:>5} {:>7}", "category", "P1", "P2", "delta");
+        for cat in &all_cats {
+            let p1n = p1.get(cat).copied().unwrap_or(0);
+            let p2n = p2.get(cat).copied().unwrap_or(0);
+            let delta = p2n as i64 - p1n as i64;
+            let marker = if delta > 0 { " ←" } else if delta < 0 { " ✓" } else { "" };
+            eprintln!("  {:<32} {:>5} {:>5} {:>+7}{}", cat, p1n, p2n, delta, marker);
+        }
+        eprintln!();
+    }
+}
