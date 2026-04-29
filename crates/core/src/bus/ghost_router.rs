@@ -103,6 +103,7 @@ pub fn route_bus_ghost(
     solver_result: &SolverResult,
     families: &[LaneFamily],
     row_entities: &[PlacedEntity],
+    pole_entities: &[PlacedEntity],
 ) -> Result<GhostRouteResult, String> {
     let mut entities: Vec<PlacedEntity> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
@@ -134,6 +135,14 @@ pub fn route_bus_ghost(
         } else {
             hard.insert((e.x, e.y));
         }
+    }
+    // Poles are placed before ghost routing but otherwise live outside the
+    // row_entities flow. Inject their 1×1 tiles into the hard set so SAT,
+    // ghost A*, and the junction solver all treat them as obstacles. Without
+    // this, SAT can stamp belts/UGs on top of a pole when it solves a
+    // junction whose grown bbox happens to overlap a pole tile.
+    for e in pole_entities {
+        hard.insert((e.x, e.y));
     }
 
     // Reserve fluid lane tiles as hard obstacles (same logic as pole placer
@@ -2013,6 +2022,29 @@ pub fn route_bus_ghost(
     // the pipeline — covers everything except `GhostSurface`, which
     // strategies are allowed to replace.
     let junction_hard: FxHashSet<(i32, i32)> = occupancy.snapshot_junction_obstacles();
+    // Filter the wide `hard` set the same way `occupancy_hard` was filtered:
+    // drop empty fluid-reservation tiles (those between a PTG-in and PTG-out
+    // on a fluid trunk — physically empty, belts can cross over per F7) but
+    // keep pipe tiles (which the junction solver must UG-over). Without this,
+    // `refresh_forbidden`'s `hard_obstacles || strict_obstacles` OR
+    // re-introduces empty-reservation tiles that Occupancy already excluded,
+    // and SAT mistakenly treats them as forbidden. The matching defence
+    // against the old "encountered flow loses its bridge when sat-1ug-native
+    // becomes satisfiable" failure mode lives in
+    // `GrowingRegion::promote_blocked_encountered`, which forces SAT to
+    // model encountered flows as participating when their path crosses a
+    // forbidden interior tile.
+    let pipe_tile_set: FxHashSet<(i32, i32)> = row_entities
+        .iter()
+        .chain(entities.iter())
+        .filter(|e| matches!(e.name.as_str(), "pipe" | "pipe-to-ground"))
+        .map(|e| (e.x, e.y))
+        .collect();
+    let hard_for_junction: FxHashSet<(i32, i32)> = hard
+        .iter()
+        .filter(|t| !fluid_reservations.contains(t) || pipe_tile_set.contains(t))
+        .copied()
+        .collect();
     // Subset of `junction_hard` whose claims would panic if perp-template
     // stamped over them. `release_for_pertile_template` clears trunks and
     // tapoffs inside the footprint, and the post-place loop
@@ -2218,7 +2250,7 @@ pub fn route_bus_ghost(
             cluster.as_slice(),
             &keys_at_tile,
             &routed_paths,
-            &hard,
+            &hard_for_junction,
             &junction_hard,
             &unreleasable_obstacles,
             &spec_belt_tiers,
@@ -2232,7 +2264,7 @@ pub fn route_bus_ghost(
             cluster.as_slice(),
             &keys_at_tile,
             &routed_paths,
-            &hard,
+            &hard_for_junction,
             &junction_hard,
             &unreleasable_obstacles,
             &spec_belt_tiers,
