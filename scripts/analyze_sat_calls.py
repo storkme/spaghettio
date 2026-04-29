@@ -155,8 +155,9 @@ def per_call_stats(invocs: list[dict]) -> None:
     print(fmt_pct_row("zone area (tiles)", [i["zone_w"] * i["zone_h"] for i in invocs]))
     print(fmt_pct_row("boundary count", [len(i.get("boundaries", [])) for i in invocs]))
     print(fmt_pct_row("forced_empty count", [len(i.get("forced_empty", [])) for i in invocs]))
-    if sat_ok:
-        print(fmt_pct_row("initial_cost (SAT ok)", [i["initial_cost"] for i in sat_ok]))
+    initial_costs = [i["initial_cost"] for i in sat_ok if i.get("initial_cost") is not None]
+    if initial_costs:
+        print(fmt_pct_row("initial_cost (SAT ok)", initial_costs))
     print()
 
     # Zone-shape histogram (top shapes)
@@ -173,7 +174,7 @@ def descent_stats(invocs: list[dict], descents: list[dict]) -> None:
     print("=" * 72)
 
     def key(e: dict) -> tuple:
-        return (e["_file"], e["seed_x"], e["seed_y"], e["iter"], e["variant"])
+        return (e["_file"], e["seed_x"], e["seed_y"], e["iter"], e.get("variant", ""))
 
     grouped: dict[tuple, list[dict]] = defaultdict(list)
     for d in descents:
@@ -201,8 +202,8 @@ def descent_stats(invocs: list[dict], descents: list[dict]) -> None:
     improvements_rel: list[float] = []
     for i in with_descent:
         steps = grouped[key(i)]
-        improving = [s for s in steps if s["cost_after"] is not None]
-        if not improving:
+        improving = [s for s in steps if s.get("cost_after") is not None]
+        if not improving or i.get("initial_cost") is None:
             continue
         final_cost = improving[-1]["cost_after"]
         delta = i["initial_cost"] - final_cost
@@ -227,7 +228,7 @@ def descent_stats(invocs: list[dict], descents: list[dict]) -> None:
             f"({100 * descent_us_sum / total:.1f}%)."
         )
         unsat_descent_us = sum(
-            d["solve_time_us"] for d in descents if d["cost_after"] is None
+            d["solve_time_us"] for d in descents if d.get("cost_after") is None
         )
         print(
             f"  of descent time, {unsat_descent_us / 1000:.1f} ms "
@@ -305,7 +306,7 @@ def filter_descents(descents: list[dict], kept: set[tuple]) -> list[dict]:
     """Keep descent events whose parent invocation survived filtering."""
 
     def key(e: dict) -> tuple:
-        return (e["_file"], e["seed_x"], e["seed_y"], e["iter"], e["variant"])
+        return (e["_file"], e["seed_x"], e["seed_y"], e["iter"], e.get("variant", ""))
 
     return [d for d in descents if key(d) in kept]
 
