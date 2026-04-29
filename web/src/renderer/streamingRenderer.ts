@@ -50,7 +50,7 @@ import {
   clearAllGhostParticles,
   entityKey,
   evictParticlesAtTile,
-  refreshPipeTextures,
+  refreshNeighbourDependentTextures,
   type ParticleScene,
 } from "./particleLayout";
 
@@ -694,16 +694,18 @@ export function createStreamingRenderer(
         }
       }
 
-      // Pipes committed in earlier phases see only the neighbours that
-      // existed at commit time, so a pipe whose west/east/etc. neighbour
-      // arrived in a later phase is left with an under-connected texture
-      // (visible cut-offs in mid-bus pipe runs). drawCtx is now the
-      // complete tileMap — re-resolve every pipe particle's texture
-      // against it. The container's UV buffer is static (uvs:false), so
-      // refreshPipeTextures has to remove+re-add changed particles. The
-      // reveals list above was built from the pre-swap particle map, so
-      // patch any swapped references through.
-      const swaps = refreshPipeTextures(particleScene, drawCtx);
+      // Pipes and belts committed in earlier phases see only the
+      // neighbours that existed at commit time, so a pipe whose
+      // west/east/etc. neighbour or a corner belt whose perpendicular
+      // feeder arrived in a later phase is left with a stale texture
+      // (under-connected pipe stubs, corner belts rendered straight).
+      // drawCtx is now the complete tileMap — re-resolve every
+      // neighbour-dependent particle's texture against it. The
+      // container's UV buffer is static (uvs:false), so the refresh
+      // has to remove+re-add changed particles. The reveals list above
+      // was built from the pre-swap particle map, so patch any swapped
+      // references through.
+      const swaps = refreshNeighbourDependentTextures(particleScene, drawCtx);
       if (swaps.size > 0) {
         for (const r of list) {
           const swap = swaps.get(r.particle);
