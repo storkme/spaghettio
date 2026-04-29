@@ -1175,9 +1175,11 @@ pub(crate) fn prune_dangling_sat_entities(
     zone_x: i32,
     zone_y: i32,
 ) -> Vec<PlacedEntity> {
-    use std::collections::{HashMap, VecDeque};
+    use std::collections::VecDeque;
 
-    let by_tile: HashMap<(i32, i32), usize> = entities
+    use rustc_hash::FxHashMap;
+
+    let by_tile: FxHashMap<(i32, i32), usize> = entities
         .iter()
         .enumerate()
         .map(|(i, e)| ((e.x, e.y), i))
@@ -1309,7 +1311,7 @@ pub(crate) fn prune_dangling_sat_entities(
 /// Tiles reachable downstream from entity `e` in one step (or one UG pair).
 fn next_downstream(
     entities: &[PlacedEntity],
-    by_tile: &std::collections::HashMap<(i32, i32), usize>,
+    by_tile: &rustc_hash::FxHashMap<(i32, i32), usize>,
     e: &PlacedEntity,
     max_reach: u32,
 ) -> Vec<(i32, i32)> {
@@ -1350,7 +1352,7 @@ fn next_downstream(
 /// Tiles reachable upstream from entity `e` in one step (or one UG pair).
 fn next_upstream(
     entities: &[PlacedEntity],
-    by_tile: &std::collections::HashMap<(i32, i32), usize>,
+    by_tile: &rustc_hash::FxHashMap<(i32, i32), usize>,
     e: &PlacedEntity,
     max_reach: u32,
 ) -> Vec<(i32, i32)> {
