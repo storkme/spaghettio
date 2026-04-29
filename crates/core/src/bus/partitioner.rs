@@ -1,10 +1,12 @@
 //! Demand-partitioning of multi-consumer items.
 //!
-//! Implements the outer pass of `LayoutStrategy::PartitionedPerConsumer`
+//! Implements the outer pass of `LayoutStrategy::PartitionedDecomposed`
 //! from `docs/rfp-modular-production.md`. PR1 of Phase 1 introduced the
 //! dispatcher + utilization helpers; PR2 (this file's full algorithm)
 //! actually splits multi-consumer items into K modules at the
-//! `SolverResult` level, before placement and lane planning.
+//! `SolverResult` level, before placement and lane planning. Phase 2's
+//! decomposition pass adds subtree sharding when a single module still
+//! exceeds the 8-lane cap.
 //!
 //! Granularity note. The RFP defines a "consumer" as one consuming
 //! recipe-row. PR2 partitions at *recipe* granularity instead — if a
@@ -80,7 +82,7 @@ pub fn lane_utilization(lane_rate: f64, max_belt_tier: Option<&str>) -> f64 {
 
 /// Per-item count of consuming recipe-rows. The partitioner uses this
 /// to decide which items need K>1 modules under
-/// `PartitionedPerConsumer`. Iteration over `solver_result.machines` is
+/// `PartitionedDecomposed`. Iteration over `solver_result.machines` is
 /// the right unit because the placer turns each `MachineSpec` into one
 /// or more `RowSpan` instances; the count of unique consuming
 /// recipes is a conservative under-estimate of consuming rows
@@ -99,8 +101,8 @@ pub fn consumers_per_item(solver_result: &SolverResult) -> FxHashMap<String, u32
 }
 
 /// Items that the partitioner would produce K>1 modules for. Under
-/// `PartitionedPerConsumer`, these are the items whose handling diverges
-/// from `Pooled`; PR1 of Phase 1 does not yet support them.
+/// `PartitionedDecomposed`, these are the items whose handling diverges
+/// from `Pooled`.
 pub fn multi_consumer_items(solver_result: &SolverResult) -> Vec<String> {
     let mut items: Vec<String> = consumers_per_item(solver_result)
         .into_iter()
@@ -111,7 +113,7 @@ pub fn multi_consumer_items(solver_result: &SolverResult) -> Vec<String> {
     items
 }
 
-/// Per-recipe partition assignment. Under `PartitionedPerConsumer`,
+/// Per-recipe partition assignment. Under `PartitionedDecomposed`,
 /// item X with K consuming recipes gets K modules, indexed by the
 /// recipe name they serve.
 #[derive(Debug, Clone, PartialEq)]
@@ -138,8 +140,9 @@ pub struct ModuleAssignment {
 }
 
 /// Materialised partition plan for a `SolverResult`. Empty under
-/// `LayoutStrategy::Pooled`; populated under `PartitionedPerConsumer`
-/// when there is at least one item with K ≥ 2 consuming recipes.
+/// `LayoutStrategy::Pooled`; populated under `PartitionedDecomposed`
+/// when there is at least one item with K ≥ 2 consuming recipes (or a
+/// K=1 item whose demand exceeds the 8-lane cap).
 #[derive(Debug, Clone, Default)]
 pub struct PartitionPlan {
     pub modules: Vec<ModuleAssignment>,
@@ -175,9 +178,9 @@ impl PartitionPlan {
 }
 
 /// Build a partition plan for the given solver result. Empty under
-/// `Pooled`; populated under `PartitionedPerConsumer`.
+/// `Pooled`; populated under `PartitionedDecomposed`.
 ///
-/// Algorithm (PR2 of Phase 1):
+/// Algorithm (PR2 of Phase 1, plus Phase 2 decomposition):
 ///   1. For each output item across `solver_result.machines`, count
 ///      distinct consuming recipes (excluding fluids).
 ///   2. For items with K ≥ 2 consumers, allocate one module per
@@ -197,7 +200,7 @@ pub fn plan_partitioning(
     max_belt_tier: Option<&str>,
 ) -> PartitionPlan {
     use crate::bus::layout::LayoutStrategy;
-    if !matches!(strategy, LayoutStrategy::PartitionedPerConsumer | LayoutStrategy::PartitionedDecomposed) {
+    if !matches!(strategy, LayoutStrategy::PartitionedDecomposed) {
         return PartitionPlan::empty();
     }
 
@@ -284,26 +287,15 @@ pub fn plan_partitioning(
         });
     }
 
-    // Phase 2 decomposition pass. Originally gated on `PartitionedDecomposed`:
+    // Phase 2 decomposition pass. Under `PartitionedDecomposed`
+    // (the only strategy reaching this point):
     //   1. Sub-shard any existing module where lane_count > 8 into
     //      ⌈lane_count/8⌉ sub-modules of proportional rate.
     //   2. Add modules for K=1 items where total demand exceeds 8
-    //      lanes (Phase 1 ignores these because they have only one
-    //      consumer; Phase 2 shards them since they're the structural
-    //      growth blocker — one consumer demanding >8 lanes by itself).
-    //
-    // Aliased to fire under `PartitionedPerConsumer` too: P2 is now
-    // strictly ≤ P1 across the diag corpus (post-zone_cache mixed-tier
-    // retype fix), so there is no case where the legacy P1 path produces
-    // a better layout. Keeping the enum variant for URL stability;
-    // hard-delete deferred to a follow-up.
-    if matches!(
-        strategy,
-        LayoutStrategy::PartitionedPerConsumer | LayoutStrategy::PartitionedDecomposed
-    ) {
-        plan.modules = decompose_oversized_modules(plan.modules, cap);
-        decompose_single_consumer_items(&mut plan, &consumers_of, cap);
-    }
+    //      lanes — these are the structural growth blocker (one
+    //      consumer demanding >8 lanes by itself).
+    plan.modules = decompose_oversized_modules(plan.modules, cap);
+    decompose_single_consumer_items(&mut plan, &consumers_of, cap);
 
     plan
 }
@@ -712,7 +704,7 @@ mod tests {
             external_outputs: vec![flow("iron-gear-wheel", 5.0)],
             dependency_order: vec!["iron-gear-wheel".to_string()],
         };
-        let plan = plan_partitioning(&solver_result, LayoutStrategy::PartitionedPerConsumer, None);
+        let plan = plan_partitioning(&solver_result, LayoutStrategy::PartitionedDecomposed, None);
         assert!(plan.is_empty(), "K=1 should not partition");
     }
 
@@ -732,7 +724,7 @@ mod tests {
             external_outputs: vec![flow("advanced-circuit", 2.0)],
             dependency_order: vec!["copper-cable".to_string(), "electronic-circuit".to_string(), "advanced-circuit".to_string()],
         };
-        let plan = plan_partitioning(&solver_result, LayoutStrategy::PartitionedPerConsumer, Some("transport-belt"));
+        let plan = plan_partitioning(&solver_result, LayoutStrategy::PartitionedDecomposed, Some("transport-belt"));
         let cu_modules: Vec<_> = plan.modules.iter().filter(|m| m.item == "copper-cable").collect();
         assert_eq!(cu_modules.len(), 2, "expected 2 modules for copper-cable");
         // Sorted by recipe name: advanced-circuit first, electronic-circuit second.
@@ -760,7 +752,7 @@ mod tests {
             external_outputs: vec![flow("plastic-bar", 8.0), fluid("sulfuric-acid", 100.0), flow("explosives", 1.0)],
             dependency_order: vec![],
         };
-        let plan = plan_partitioning(&solver_result, LayoutStrategy::PartitionedPerConsumer, None);
+        let plan = plan_partitioning(&solver_result, LayoutStrategy::PartitionedDecomposed, None);
         // water has 2 consumers but is fluid → not partitioned.
         assert!(plan.modules.iter().all(|m| m.item != "water"));
         // coal has 2 consumers (plastic-bar, explosives) and is solid → partitioned.
@@ -782,7 +774,7 @@ mod tests {
             external_outputs: vec![flow("advanced-circuit", 2.0)],
             dependency_order: vec![],
         };
-        let plan = plan_partitioning(&solver_result, LayoutStrategy::PartitionedPerConsumer, Some("transport-belt"));
+        let plan = plan_partitioning(&solver_result, LayoutStrategy::PartitionedDecomposed, Some("transport-belt"));
         let partitioned = apply_partition_plan(&solver_result, &plan);
 
         // Copper-cable producer was 1 spec; should now be 2 (one per module).
@@ -807,14 +799,8 @@ mod tests {
         assert_eq!(cc_input.module_id, 0);
     }
 
-    /// Phase 2: a K=1 item with > 8 lanes of demand gets sharded.
-    ///
-    /// Originally asserted that `PartitionedPerConsumer` left K=1 alone
-    /// while `PartitionedDecomposed` sharded it. Since P1 is now aliased
-    /// to P2 (see `partitioner.rs` decomposition gate comment), both
-    /// strategies shard identically. Test asserts the sharding output
-    /// for both. The full P1-vs-P2 separation will be removed when P1
-    /// is hard-deleted.
+    /// Phase 2: a K=1 item with > 8 lanes of demand gets sharded
+    /// under PartitionedDecomposed.
     #[test]
     fn phase2_shards_k1_oversized_item() {
         // Single iron-gear-wheel consumer at high rate. iron-plate has K=1.
@@ -827,22 +813,18 @@ mod tests {
             external_outputs: vec![flow("iron-gear-wheel", 60.0)],
             dependency_order: vec!["iron-gear-wheel".to_string()],
         };
-
-        for strategy in [
-            LayoutStrategy::PartitionedPerConsumer,
-            LayoutStrategy::PartitionedDecomposed,
-        ] {
-            let plan = plan_partitioning(&solver_result, strategy, Some("transport-belt"));
-            let plate_modules: Vec<_> = plan.modules.iter().filter(|m| m.item == "iron-plate").collect();
-            assert_eq!(plate_modules.len(), 2, "{strategy:?}: expected 2 shards for 16-lane K=1 item");
-            assert_eq!(plate_modules[0].lane_count, 8);
-            assert_eq!(plate_modules[1].lane_count, 8);
-            assert_eq!(plate_modules[0].consumer_recipe, "iron-gear-wheel");
-            assert_eq!(plate_modules[1].consumer_recipe, "iron-gear-wheel");
-            let mut ids: Vec<u32> = plate_modules.iter().map(|m| m.module_id).collect();
-            ids.sort();
-            assert_eq!(ids, vec![0, 1]);
-        }
+        // PartitionedDecomposed: K=1 with 16 lanes → shard into 2 of 8.
+        let p2 = plan_partitioning(&solver_result, LayoutStrategy::PartitionedDecomposed, Some("transport-belt"));
+        let plate_modules: Vec<_> = p2.modules.iter().filter(|m| m.item == "iron-plate").collect();
+        assert_eq!(plate_modules.len(), 2, "expected 2 shards for 16-lane K=1 item");
+        assert_eq!(plate_modules[0].lane_count, 8);
+        assert_eq!(plate_modules[1].lane_count, 8);
+        assert_eq!(plate_modules[0].consumer_recipe, "iron-gear-wheel");
+        assert_eq!(plate_modules[1].consumer_recipe, "iron-gear-wheel");
+        // Module IDs are 0 and 1 within iron-plate.
+        let mut ids: Vec<u32> = plate_modules.iter().map(|m| m.module_id).collect();
+        ids.sort();
+        assert_eq!(ids, vec![0, 1]);
     }
 
     /// Phase 2: a K≥2 item where one module is itself > 8 lanes gets

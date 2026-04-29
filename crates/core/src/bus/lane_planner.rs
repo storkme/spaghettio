@@ -44,10 +44,10 @@ pub struct BusLane {
     /// Item (or fluid) name this lane carries.
     pub item: String,
     /// Module index within the item: `0` under `LayoutStrategy::Pooled`
-    /// (one lane family per item — today's behaviour). Phase 1 of
-    /// `rfp-modular-production` distinguishes multiple
+    /// (one lane family per item — today's behaviour). The
+    /// `rfp-modular-production` strategies distinguish multiple
     /// `(item, module_id)` lanes per item under
-    /// `PartitionedPerConsumer`.
+    /// `PartitionedDecomposed`.
     pub module_id: u32,
     /// Column (x-coordinate) assigned to this lane in the layout.
     pub x: i32,
@@ -167,7 +167,7 @@ pub fn plan_bus_lanes(
     let mut lanes: Vec<BusLane> = Vec::new();
     // Keyed by `(item, module_id)`. `module_id == 0` under Pooled and
     // for non-partitioned items; > 0 distinguishes per-consumer modules
-    // when `LayoutStrategy::PartitionedPerConsumer` is in use.
+    // when `LayoutStrategy::PartitionedDecomposed` is in use.
     let mut seen_keys: FxHashSet<(String, u32)> = FxHashSet::default();
 
     // Build item_to_consumers map, keyed by `(item, module_id)`. Each
@@ -684,7 +684,7 @@ fn split_overflowing_lanes(
                 item: lane.item.clone(),
                 // Inherit the parent lane's module_id so the split
                 // family stays inside its module's identity. Under
-                // Pooled this is always 0; under PartitionedPerConsumer
+                // Pooled this is always 0; under PartitionedDecomposed
                 // it preserves the (item, module_id) keying that the
                 // top of `plan_bus_lanes` relies on.
                 module_id: lane.module_id,

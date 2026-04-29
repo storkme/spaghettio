@@ -175,7 +175,7 @@ pub enum TraceEvent {
         bus_width: i32,
     },
 
-    // `LayoutStrategy::PartitionedPerConsumer` partitioned an item into
+    // `LayoutStrategy::PartitionedDecomposed` partitioned an item into
     // `modules` distinct lane families (one per consuming recipe-row).
     // Fires zero or one time per partitioned item; absent for items with
     // K=1 consumer rows. See `docs/rfp-modular-production.md`.

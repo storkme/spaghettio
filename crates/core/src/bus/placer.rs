@@ -870,7 +870,7 @@ pub(crate) fn build_one_row(
     let row_width = output_belt_x_max + 1;
 
     // Inherit module_id from the spec's primary solid output. Under
-    // Pooled this is always 0; under PartitionedPerConsumer the
+    // Pooled this is always 0; under PartitionedDecomposed the
     // partitioner has tagged the spec's outputs with the module index.
     let module_id = spec
         .outputs
