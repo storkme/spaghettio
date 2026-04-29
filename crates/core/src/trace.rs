@@ -883,6 +883,32 @@ pub enum TraceEvent {
         kept: usize,
     },
 
+    /// Defensive guard for issue #163. Emitted when a participating spec's
+    /// boundary set, after `topology_boundaries` + chain-head augmentation,
+    /// has at least one OUT boundary but zero IN boundaries for the item.
+    /// This is the "items appear from thin air" failure mode: SAT would
+    /// solve the under-constrained zone with output-only flows.
+    ///
+    /// The event is observational only — `try_solve` does NOT reject the
+    /// solve based on it, because the asymmetry can also arise legitimately
+    /// for `Encountered` specs whose IN boundary is provided by an
+    /// upstream cluster's commit. Future regressions in
+    /// `topology_boundaries` boundary derivation that re-introduce the
+    /// silent "no IN boundary" path will surface in the snapshot
+    /// debugger as this event firing on a participating spec, instead
+    /// of a silent broken layout.
+    SatBoundariesAsymmetric {
+        seed_x: i32,
+        seed_y: i32,
+        iter: usize,
+        variant: String,
+        zone_x: i32,
+        zone_y: i32,
+        zone_w: u32,
+        zone_h: u32,
+        item: String,
+    },
+
     // Emitted by the final ghost-router render pass once a spec's path
     // has been materialised into belt/UG entities. Carries the full
     // entity list so a streaming renderer can swap its per-tile "ghost

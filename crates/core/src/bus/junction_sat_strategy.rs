@@ -523,41 +523,93 @@ fn topology_boundaries(
             // else: target is FREE, both SAT-routable → no boundary.
 
             // -- Input check: does anything feed this tile from outside/FIXED? --
-            if let Some(hit) = physical_feeder_hit((tx, ty), placed_entities, item) {
-                let feeder_belt_tier = tier_name_for(&hit.entity_name);
-                if !bbox.contains(hit.entity_tile.0, hit.entity_tile.1) {
-                    // Feeder outside bbox: perimeter IN.
-                    boundaries.push(ZoneBoundary {
-                        x: tx,
-                        y: ty,
-                        direction: hit.entity_direction,
-                        item: item.to_string(),
-                        is_input: true,
-                        interior: false,
-                        belt_tier: feeder_belt_tier,
-                        channel_id: 0,
-                    });
-                } else if forbidden.contains(&hit.entity_tile)
-                    && !pipe_tiles.contains(&hit.entity_tile)
-                {
-                    // Feeder is FIXED (and not a pipe): interior IN at
-                    // the FIXED tile. Pipe feeders are excluded — pipes
-                    // don't carry items, so this branch is unlikely to
-                    // fire for a pipe today (physical_feeder_hit
-                    // matches by `carries`), but the symmetric guard
-                    // keeps us robust if pipe handling changes.
-                    boundaries.push(ZoneBoundary {
-                        x: hit.entity_tile.0,
-                        y: hit.entity_tile.1,
-                        direction: hit.entity_direction,
-                        item: item.to_string(),
-                        is_input: true,
-                        interior: true,
-                        belt_tier: feeder_belt_tier,
-                        channel_id: 0,
-                    });
+            //
+            // Walk the physical feeder chain upstream until we either
+            //   (a) find a feeder OUTSIDE the bbox → perimeter IN at the
+            //       in-bbox end of the chain (the tile whose feeder is
+            //       external);
+            //   (b) find a FIXED feeder inside the bbox (forbidden,
+            //       non-pipe) → interior IN at the FIXED tile;
+            //   (c) walk off the physical chain (no feeder at all) →
+            //       no topology boundary; the spec-level chain-head
+            //       augmentation in `try_solve` synthesises the IN
+            //       from the participating spec list.
+            //
+            // Issue #163: previously the input check was a single hop
+            // — `physical_feeder_hit` once, then bail. When the chain's
+            // immediate feeder moved INSIDE the bbox (FREE) but the
+            // chain extended further east, the per-tile output of the
+            // in-bbox FREE feeder was not emitted (intermediate FREE),
+            // so case (a) was never reached. The chain-walk here
+            // restores it: each FREE feeder relays the upstream walk
+            // until we hit a non-FREE-in-bbox edge.
+            //
+            // Cycle-safe via `walked`; bounded by the bbox tile count
+            // since each step visits a new in-bbox FREE belt tile.
+            let mut chain_tile = (tx, ty);
+            let mut walked: FxHashSet<(i32, i32)> = FxHashSet::default();
+            walked.insert(chain_tile);
+            loop {
+                match physical_feeder_hit(chain_tile, placed_entities, item) {
+                    None => {
+                        // (c) Chain head reached without crossing any
+                        // bbox edge. Defer to the spec-level
+                        // chain-head augmentation in `try_solve`.
+                        break;
+                    }
+                    Some(hit) => {
+                        let feeder_belt_tier = tier_name_for(&hit.entity_name);
+                        if !bbox.contains(hit.entity_tile.0, hit.entity_tile.1) {
+                            // (a) External feeder: perimeter IN at the
+                            // current in-bbox chain tile (the bbox's
+                            // east edge for west-flowing chains, etc.).
+                            boundaries.push(ZoneBoundary {
+                                x: chain_tile.0,
+                                y: chain_tile.1,
+                                direction: hit.entity_direction,
+                                item: item.to_string(),
+                                is_input: true,
+                                interior: false,
+                                belt_tier: feeder_belt_tier,
+                                channel_id: 0,
+                            });
+                            break;
+                        }
+                        if forbidden.contains(&hit.entity_tile)
+                            && !pipe_tiles.contains(&hit.entity_tile)
+                        {
+                            // (b) FIXED feeder: interior IN at the
+                            // FIXED tile. Pipe feeders are excluded —
+                            // pipes don't carry items, so this branch
+                            // is unlikely to fire for a pipe today
+                            // (physical_feeder_hit matches by
+                            // `carries`), but the symmetric guard keeps
+                            // us robust if pipe handling changes.
+                            boundaries.push(ZoneBoundary {
+                                x: hit.entity_tile.0,
+                                y: hit.entity_tile.1,
+                                direction: hit.entity_direction,
+                                item: item.to_string(),
+                                is_input: true,
+                                interior: true,
+                                belt_tier: feeder_belt_tier,
+                                channel_id: 0,
+                            });
+                            break;
+                        }
+                        // FREE feeder inside bbox: continue walking
+                        // upstream from the feeder's tile. The feeder
+                        // becomes the new chain endpoint candidate;
+                        // its own input check decides where the
+                        // boundary actually lands. Cycle break if the
+                        // feeder revisits an already-walked tile (only
+                        // possible for synthetic test inputs / bugs).
+                        if !walked.insert(hit.entity_tile) {
+                            break;
+                        }
+                        chain_tile = hit.entity_tile;
+                    }
                 }
-                // else: feeder is FREE → no boundary.
             }
         }
     }
@@ -647,6 +699,28 @@ fn topology_boundaries(
             }
         }
     }
+
+    // Dedup pass. The per-tile chain walk in Phase 1 emits a chain
+    // endpoint IN once per starting tile in the same chain, so a 4-tile
+    // chain produces 4 identical perimeter-IN boundaries. Collapse
+    // identical `(item, x, y, direction, is_input, interior)` tuples
+    // — `belt_tier` is functionally derived from the same feeder so
+    // identical tuples will also share the tier. Order is preserved
+    // (first occurrence wins) so the SAT trace stays deterministic.
+    // EntityDirection isn't Hash; encode as a 2-bit integer via
+    // dir_label for the seen-set key.
+    let mut seen: FxHashSet<(String, i32, i32, String, bool, bool)> =
+        FxHashSet::default();
+    boundaries.retain(|b| {
+        seen.insert((
+            b.item.clone(),
+            b.x,
+            b.y,
+            dir_label(b.direction),
+            b.is_input,
+            b.interior,
+        ))
+    });
 
     boundaries
 }
@@ -807,6 +881,44 @@ impl JunctionStrategy for SatStrategy {
                 channel_id: 0,
             });
             origins.push("spec-chain-head".to_string());
+        }
+
+        // Defensive sanity check (#163): if any participating spec ends up
+        // with at least one OUT boundary but ZERO IN boundaries for its
+        // item, the SAT zone is under-constrained — SAT will solve it but
+        // produce belts that carry the item from thin air. The walker
+        // doesn't catch this because it only checks path continuity of
+        // already-stamped paths. Emit a trace event so the failure mode
+        // is observable to the snapshot debugger; this lets future
+        // regressions in `topology_boundaries` show up as a loud signal
+        // instead of silently wrong layouts. We don't reject the solve
+        // here — that would change pass/fail behaviour for fixtures whose
+        // current solution is genuinely well-formed via the chain-head
+        // augmentation downstream — but the event is enough to catch a
+        // regression on inspection.
+        for sc in ctx.junction.specs.iter() {
+            if sc.kind == SpecKind::Pipe {
+                continue;
+            }
+            let has_out_for_item = boundaries
+                .iter()
+                .any(|b| !b.is_input && b.item == sc.item);
+            let has_in_for_item = boundaries
+                .iter()
+                .any(|b| b.is_input && b.item == sc.item);
+            if has_out_for_item && !has_in_for_item {
+                trace::emit(TraceEvent::SatBoundariesAsymmetric {
+                    seed_x: ctx.region.initial_tile.0,
+                    seed_y: ctx.region.initial_tile.1,
+                    iter: ctx.growth_iter,
+                    variant: ctx.growth_variant.to_string(),
+                    zone_x: ctx.junction.bbox.x,
+                    zone_y: ctx.junction.bbox.y,
+                    zone_w: ctx.junction.bbox.w,
+                    zone_h: ctx.junction.bbox.h,
+                    item: sc.item.clone(),
+                });
+            }
         }
 
         // Assign channel ids now that the boundary set is final. Buckets
@@ -1647,6 +1759,100 @@ mod tests {
                 && b.item == "copper-cable"
                 && !b.interior),
             "missing perimeter OUT (5,19) East copper-cable"
+        );
+    }
+
+    /// Regression for #163: when the SAT region bbox grows so that the
+    /// immediate feeder of an in-bbox belt is itself inside the bbox
+    /// (FREE), but the chain extends further upstream to a belt whose
+    /// own feeder is OUTSIDE the bbox, `topology_boundaries` must
+    /// chain-walk through the FREE-in-bbox feeders to find the
+    /// external feeder and emit a perimeter IN at the in-bbox end of
+    /// the chain (not the immediate FREE-in-bbox tile, which would
+    /// shadow the external boundary).
+    ///
+    /// Pre-fix: `physical_feeder_hit` was checked once per tile. When
+    /// the immediate feeder was FREE-in-bbox the input check fell
+    /// through with no boundary. If the chain extended further to an
+    /// external feeder, that chain endpoint never got recognised,
+    /// silently dropping the IN boundary as the bbox grew east-ward.
+    ///
+    /// Post-fix: the chain walk follows FREE-in-bbox feeders until it
+    /// hits an external feeder (case a → perimeter IN at the chain
+    /// endpoint), a FIXED feeder (case b → interior IN at the FIXED
+    /// tile), or the head of the chain with no feeder (case c → defer
+    /// to the spec-level chain-head augmentation in `try_solve`).
+    ///
+    /// This test exercises case (a). The chain
+    /// `(8,7)W → (7,7)W → (6,7)W → (5,7)S` has its head at (8,7); we
+    /// add an external feeder at (9,7) West so the topology walk
+    /// must chain back through (5,7)→(6,7)→(7,7)→(8,7) and emit a
+    /// perimeter IN at (8,7) referencing (9,7) as the external feeder.
+    #[test]
+    fn test_topology_boundaries_chain_walk_to_external_feeder() {
+        // Bbox 6×6 at (3,7): x:3-8, y:7-12. (9,7) is OUTSIDE the bbox.
+        let bbox = Rect { x: 3, y: 7, w: 6, h: 6 };
+        let placed = vec![
+            // External feeder for the chain (outside bbox).
+            make_belt(9, 7, EntityDirection::West, "copper-cable"),
+            // In-bbox chain.
+            make_belt(8, 7, EntityDirection::West, "copper-cable"),
+            make_belt(7, 7, EntityDirection::West, "copper-cable"),
+            make_belt(6, 7, EntityDirection::West, "copper-cable"),
+            make_belt(5, 7, EntityDirection::South, "copper-cable"),
+            make_belt(5, 8, EntityDirection::South, "copper-cable"),
+            make_belt(5, 9, EntityDirection::South, "copper-cable"),
+            make_belt(5, 10, EntityDirection::South, "copper-cable"),
+            make_belt(5, 11, EntityDirection::South, "copper-cable"),
+            make_belt(5, 12, EntityDirection::South, "copper-cable"),
+        ];
+        let forbidden: FxHashSet<(i32, i32)> = FxHashSet::default();
+
+        let bounds = topology_boundaries(&placed, &bbox, &forbidden);
+
+        let copper_ins: Vec<_> = bounds
+            .iter()
+            .filter(|b| b.is_input && b.item == "copper-cable")
+            .collect();
+        let copper_outs: Vec<_> = bounds
+            .iter()
+            .filter(|b| !b.is_input && b.item == "copper-cable")
+            .collect();
+
+        // Perimeter OUT at (5,12) South (target (5,13) outside bbox).
+        assert_eq!(
+            copper_outs.len(),
+            1,
+            "copper-cable OUT boundaries: {copper_outs:#?}"
+        );
+        assert!(
+            copper_outs
+                .iter()
+                .any(|b| (b.x, b.y) == (5, 12)
+                    && b.direction == EntityDirection::South
+                    && !b.interior),
+            "missing perimeter OUT (5,12) South copper-cable"
+        );
+
+        // Perimeter IN at (8,7) West — the in-bbox tile whose external
+        // feeder is at (9,7). Pre-fix: 0 IN boundaries (every per-tile
+        // input check sees a FREE-in-bbox feeder and emits nothing).
+        // Post-fix: the chain walk relays through the FREE feeders to
+        // emit one IN at the chain endpoint inside the bbox. After
+        // dedup the count is exactly 1 — every chain walk converges to
+        // the same endpoint, and `topology_boundaries` collapses
+        // identical (item, tile, direction, is_input) duplicates.
+        assert_eq!(
+            copper_ins.len(),
+            1,
+            "copper-cable IN boundaries (chain endpoint should produce one after dedup): \
+             got {copper_ins:#?}"
+        );
+        assert!(
+            copper_ins.iter().any(|b| (b.x, b.y) == (8, 7)
+                && b.direction == EntityDirection::West
+                && !b.interior),
+            "missing perimeter IN at (8,7) West copper-cable: got {copper_ins:#?}"
         );
     }
 
