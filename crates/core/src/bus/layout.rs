@@ -22,8 +22,12 @@ pub enum LayoutStrategy {
     /// row. Capped at 8 lanes per item.
     #[default]
     Pooled,
-    /// One lane family per consuming recipe-row, sized to that
-    /// consumer's exact demand, no pool-balancer. Phase 1 (RFP).
+    /// **Deprecated alias for `PartitionedDecomposed`.** Originally Phase 1
+    /// (one lane family per consuming recipe-row, no Phase 2 sharding).
+    /// Retained for URL stability (bookmarks with `?strategy=partitioned-per-consumer`
+    /// still work); behaviour now matches `PartitionedDecomposed` since
+    /// P2 is strictly ≤ P1 across the diag corpus. Hard-delete deferred
+    /// to a follow-up.
     PartitionedPerConsumer,
     /// `PartitionedPerConsumer` plus subtree sharding when a single
     /// module's widest upstream recipe still exceeds 8 lanes. Phase 2.

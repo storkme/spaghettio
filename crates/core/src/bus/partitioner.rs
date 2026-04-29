@@ -284,14 +284,23 @@ pub fn plan_partitioning(
         });
     }
 
-    // Phase 2 decomposition pass. Under `PartitionedDecomposed`:
+    // Phase 2 decomposition pass. Originally gated on `PartitionedDecomposed`:
     //   1. Sub-shard any existing module where lane_count > 8 into
     //      ⌈lane_count/8⌉ sub-modules of proportional rate.
     //   2. Add modules for K=1 items where total demand exceeds 8
     //      lanes (Phase 1 ignores these because they have only one
     //      consumer; Phase 2 shards them since they're the structural
     //      growth blocker — one consumer demanding >8 lanes by itself).
-    if matches!(strategy, LayoutStrategy::PartitionedDecomposed) {
+    //
+    // Aliased to fire under `PartitionedPerConsumer` too: P2 is now
+    // strictly ≤ P1 across the diag corpus (post-zone_cache mixed-tier
+    // retype fix), so there is no case where the legacy P1 path produces
+    // a better layout. Keeping the enum variant for URL stability;
+    // hard-delete deferred to a follow-up.
+    if matches!(
+        strategy,
+        LayoutStrategy::PartitionedPerConsumer | LayoutStrategy::PartitionedDecomposed
+    ) {
         plan.modules = decompose_oversized_modules(plan.modules, cap);
         decompose_single_consumer_items(&mut plan, &consumers_of, cap);
     }
@@ -798,8 +807,14 @@ mod tests {
         assert_eq!(cc_input.module_id, 0);
     }
 
-    /// Phase 2: a K=1 item with > 8 lanes of demand gets sharded
-    /// under PartitionedDecomposed (skipped under PartitionedPerConsumer).
+    /// Phase 2: a K=1 item with > 8 lanes of demand gets sharded.
+    ///
+    /// Originally asserted that `PartitionedPerConsumer` left K=1 alone
+    /// while `PartitionedDecomposed` sharded it. Since P1 is now aliased
+    /// to P2 (see `partitioner.rs` decomposition gate comment), both
+    /// strategies shard identically. Test asserts the sharding output
+    /// for both. The full P1-vs-P2 separation will be removed when P1
+    /// is hard-deleted.
     #[test]
     fn phase2_shards_k1_oversized_item() {
         // Single iron-gear-wheel consumer at high rate. iron-plate has K=1.
@@ -812,22 +827,22 @@ mod tests {
             external_outputs: vec![flow("iron-gear-wheel", 60.0)],
             dependency_order: vec!["iron-gear-wheel".to_string()],
         };
-        // Phase 1 (PartitionedPerConsumer): K=1 → empty plan.
-        let p1 = plan_partitioning(&solver_result, LayoutStrategy::PartitionedPerConsumer, Some("transport-belt"));
-        assert!(p1.is_empty(), "PartitionedPerConsumer should leave K=1 alone");
 
-        // Phase 2 (PartitionedDecomposed): K=1 with 16 lanes → shard into 2 of 8.
-        let p2 = plan_partitioning(&solver_result, LayoutStrategy::PartitionedDecomposed, Some("transport-belt"));
-        let plate_modules: Vec<_> = p2.modules.iter().filter(|m| m.item == "iron-plate").collect();
-        assert_eq!(plate_modules.len(), 2, "expected 2 shards for 16-lane K=1 item");
-        assert_eq!(plate_modules[0].lane_count, 8);
-        assert_eq!(plate_modules[1].lane_count, 8);
-        assert_eq!(plate_modules[0].consumer_recipe, "iron-gear-wheel");
-        assert_eq!(plate_modules[1].consumer_recipe, "iron-gear-wheel");
-        // Module IDs are 0 and 1 within iron-plate.
-        let mut ids: Vec<u32> = plate_modules.iter().map(|m| m.module_id).collect();
-        ids.sort();
-        assert_eq!(ids, vec![0, 1]);
+        for strategy in [
+            LayoutStrategy::PartitionedPerConsumer,
+            LayoutStrategy::PartitionedDecomposed,
+        ] {
+            let plan = plan_partitioning(&solver_result, strategy, Some("transport-belt"));
+            let plate_modules: Vec<_> = plan.modules.iter().filter(|m| m.item == "iron-plate").collect();
+            assert_eq!(plate_modules.len(), 2, "{strategy:?}: expected 2 shards for 16-lane K=1 item");
+            assert_eq!(plate_modules[0].lane_count, 8);
+            assert_eq!(plate_modules[1].lane_count, 8);
+            assert_eq!(plate_modules[0].consumer_recipe, "iron-gear-wheel");
+            assert_eq!(plate_modules[1].consumer_recipe, "iron-gear-wheel");
+            let mut ids: Vec<u32> = plate_modules.iter().map(|m| m.module_id).collect();
+            ids.sort();
+            assert_eq!(ids, vec![0, 1]);
+        }
     }
 
     /// Phase 2: a K≥2 item where one module is itself > 8 lanes gets
