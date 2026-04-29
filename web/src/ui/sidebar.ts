@@ -366,23 +366,20 @@ export function renderSidebar(
   });
   targetBody.appendChild(makeField("Belt", beltSelect));
 
-  // Layout strategy. Phase 0b of `rfp-modular-production` ships the
-  // dropdown; the partitioned variants are wired in Phase 1, so they are
-  // disabled here and a tooltip explains why.
+  // Layout strategy. Phase 0b of `rfp-modular-production` shipped the
+  // dropdown; partitioned variants are now wired through the WASM API
+  // and produce strictly ≤ Pooled errors on every case in the corpus,
+  // so they're enabled.
   const strategySelect = document.createElement("select");
   strategySelect.className = "sb-select";
   ([
-    ["Pooled (today)", "", false],
-    ["Partitioned per consumer", "partitioned-per-consumer", true],
-    ["Partitioned + decomposed", "partitioned-decomposed", true],
-  ] as const).forEach(([label, value, disabled]) => {
+    ["Pooled (default)", ""],
+    ["Partitioned per consumer", "partitioned-per-consumer"],
+    ["Partitioned + decomposed", "partitioned-decomposed"],
+  ] as const).forEach(([label, value]) => {
     const opt = document.createElement("option");
     opt.value = value;
     opt.textContent = label;
-    if (disabled) {
-      opt.disabled = true;
-      opt.title = "Wired in Phase 1 of rfp-modular-production";
-    }
     strategySelect.appendChild(opt);
   });
   targetBody.appendChild(makeField("Strategy", strategySelect));
