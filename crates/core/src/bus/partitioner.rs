@@ -297,6 +297,15 @@ pub fn plan_partitioning(
     plan.modules = decompose_oversized_modules(plan.modules, cap);
     decompose_single_consumer_items(&mut plan, &consumers_of, cap);
 
+    // Phase 3 (shape-aware): for any remaining module whose `(n, m)` shape
+    // is not stampable (no direct template, no gcd-decomposition path —
+    // the coprime trap, e.g. (4, 9) for copper-plate on PU@3/s ore red),
+    // try strategies in order: pad lanes first (cheap layout-side cost),
+    // shard as fallback (multiplies consumer rows). If neither works,
+    // module stays as-is and the missing-balancer-template validator
+    // warning surfaces.
+    plan.modules = apply_shape_fixes(plan.modules, solver_result, cap);
+
     plan
 }
 
@@ -485,6 +494,135 @@ fn decompose_single_consumer_items(
             });
         }
     }
+}
+
+/// Estimate the producer-row count for a given item from the solver
+/// result. Used as the `n` input to shape-aware sharding decisions.
+///
+/// Returns the sum of `count` across all machines whose recipe outputs
+/// the given (non-fluid) item. **This is an approximation:** the placer
+/// row-splits machines based on output-belt capacity (`max_per_row` in
+/// `placer.rs`), so the actual N at lane-planner time can be higher than
+/// the raw machine count when a recipe needs more rows than its machine
+/// count to fit the belt. For most cases the estimate matches; the
+/// validator's `missing-balancer-template` warning catches the
+/// divergent cases at layout time.
+fn estimate_producer_count(solver: &SolverResult, item: &str) -> u32 {
+    solver
+        .machines
+        .iter()
+        .filter(|m| {
+            m.outputs
+                .iter()
+                .any(|o| o.item == item && !o.is_fluid)
+        })
+        .map(|m| m.count as u32)
+        .sum()
+}
+
+/// Phase 3 shape-aware fix pass. Walks every module and asks the strategy
+/// selector if the module's `(n, m)` shape is stampable. If not, applies
+/// the chosen fix (pad lanes or shard). Strategies tried in order: pad
+/// first (cheap layout cost), shard fallback.
+///
+/// Returns the transformed module list. Module IDs are reassigned dense
+/// per item so downstream code (apply_partition_plan) sees contiguous IDs.
+fn apply_shape_fixes(
+    modules: Vec<ModuleAssignment>,
+    solver_result: &SolverResult,
+    cap: f64,
+) -> Vec<ModuleAssignment> {
+    use crate::bus::shape_fix::{
+        select_shape_fix, PadLanesStrategy, ShapeFix, ShapeFixStrategy, ShardStrategy,
+    };
+
+    let pad = PadLanesStrategy { max_pad: 4 };
+    let shard = ShardStrategy {
+        max_shards: MAX_SHARDS_PER_MODULE,
+    };
+    let strategies: &[&dyn ShapeFixStrategy] = &[&pad, &shard];
+
+    // Group by item so we can reassign module_ids densely after fixing.
+    let mut by_item: FxHashMap<String, Vec<ModuleAssignment>> = FxHashMap::default();
+    for m in modules {
+        by_item.entry(m.item.clone()).or_default().push(m);
+    }
+
+    let mut item_keys: Vec<String> = by_item.keys().cloned().collect();
+    item_keys.sort();
+
+    let mut out: Vec<ModuleAssignment> = Vec::new();
+    for item in item_keys {
+        let item_modules = by_item.remove(&item).unwrap_or_default();
+        let n_estimate = estimate_producer_count(solver_result, &item);
+        let mut next_module_id: u32 = 0;
+
+        for m in item_modules {
+            let m_lanes = m.lane_count;
+            let fix = select_shape_fix(n_estimate, m_lanes, strategies);
+
+            match fix {
+                Some(ShapeFix::Native) | None => {
+                    // Native: shape is already stampable. Keep as-is.
+                    // None: no strategy could fix; keep as-is so the
+                    // validator surfaces the missing-template warning
+                    // and the layout dead-ends loudly.
+                    let mut keep = m;
+                    keep.module_id = next_module_id;
+                    next_module_id += 1;
+                    out.push(keep);
+                }
+                Some(ShapeFix::PadLanes { new_m }) => {
+                    trace::emit(TraceEvent::ShapeFixApplied {
+                        item: item.clone(),
+                        consumer_recipe: m.consumer_recipe.clone(),
+                        n: n_estimate,
+                        original_m: m_lanes,
+                        strategy: "pad-lanes".to_string(),
+                        kind: "pad-lanes".to_string(),
+                        new_total_lanes: new_m,
+                    });
+                    let mut keep = m;
+                    // Bump lane_count; rate stays the same so per-lane
+                    // utilisation drops (the extra lanes are empty).
+                    keep.lane_count = new_m;
+                    keep.utilization = (keep.rate / new_m as f64) / (cap * UTILIZATION_CEILING);
+                    keep.module_id = next_module_id;
+                    next_module_id += 1;
+                    out.push(keep);
+                }
+                Some(ShapeFix::Shard { lanes }) => {
+                    let total_lanes: u32 = lanes.iter().sum();
+                    trace::emit(TraceEvent::ShapeFixApplied {
+                        item: item.clone(),
+                        consumer_recipe: m.consumer_recipe.clone(),
+                        n: n_estimate,
+                        original_m: m_lanes,
+                        strategy: "shard".to_string(),
+                        kind: "shard".to_string(),
+                        new_total_lanes: total_lanes,
+                    });
+                    // Split rate proportionally to lane allocation.
+                    let total_rate = m.rate;
+                    for shard_lanes in &lanes {
+                        let shard_rate = total_rate * (*shard_lanes as f64) / (m_lanes as f64);
+                        let per_lane_rate = shard_rate / *shard_lanes as f64;
+                        out.push(ModuleAssignment {
+                            item: m.item.clone(),
+                            module_id: next_module_id,
+                            consumer_recipe: m.consumer_recipe.clone(),
+                            rate: shard_rate,
+                            lane_count: *shard_lanes,
+                            utilization: per_lane_rate / (cap * UTILIZATION_CEILING),
+                        });
+                        next_module_id += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    out
 }
 
 /// Apply a partition plan to a solver result, producing a transformed

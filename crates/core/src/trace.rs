@@ -234,6 +234,28 @@ pub enum TraceEvent {
         max_shards: u32,
     },
 
+    // Shape-aware fix applied to a module whose `(n, m)` shape was not
+    // stampable by the balancer library + gcd-decomposition fallback.
+    // `strategy` is the name of the strategy that produced the fix
+    // ("pad-lanes", "shard"); `kind` describes what was done.
+    //
+    // Fires from `apply_shape_fixes` in `bus/partitioner.rs` after the
+    // existing Phase 2 oversize / K=1 sharding passes. When `kind` is
+    // `"none"` and the shape was unstampable, no strategy could fix it
+    // — the layout will dead-end and the
+    // `missing-balancer-template` validator warning will surface.
+    ShapeFixApplied {
+        item: String,
+        consumer_recipe: String,
+        n: u32,
+        original_m: u32,
+        strategy: String,
+        kind: String,
+        /// For PadLanes: the new lane count (>= original_m).
+        /// For Shard: total lane count across shards.
+        new_total_lanes: u32,
+    },
+
     // Decomposition produced shards whose lane count doesn't tile
     // cleanly with consumer demand (multi-consumer K2-2 case from the
     // RFP). Fires when a consumer's tap from a shard is uneven —
