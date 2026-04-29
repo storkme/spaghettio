@@ -756,13 +756,16 @@ export function evictParticlesAtTile(
 }
 
 /**
- * Walk every committed pipe particle and refresh its atlas texture
- * against the (now-complete) draw context. Streaming commits a pipe
- * with whatever neighbours are visible at the moment its phase fires,
- * so a pipe whose neighbour appears in a later phase ends up with a
- * stale, under-connected texture. The non-streaming path doesn't hit
- * this — it stages the whole tileMap before committing — but the
- * streaming finish() does, so it calls this once at finalisation.
+ * Walk every committed neighbour-dependent particle (pipes and belts)
+ * and refresh its atlas texture against the (now-complete) draw context.
+ * Streaming commits a particle with whatever neighbours are visible at
+ * the moment its phase fires, so a tile whose neighbour appears in a
+ * later phase ends up with a stale texture: pipes look under-connected
+ * (E+S corner pipes render as plain S stubs when both neighbours arrive
+ * later), and corner belts render as straight when their perpendicular
+ * feeder is committed in a subsequent phase. The non-streaming path
+ * doesn't hit this — it stages the whole tileMap before committing —
+ * but the streaming finish() does, so it calls this once at finalisation.
  *
  * Implementation note: `beltContainer` is configured with
  * `uvs: false` (see `makeParticleContainer`), so reassigning
@@ -771,18 +774,18 @@ export function evictParticlesAtTile(
  * the texture we have to remove the old particle and add a fresh
  * one with the new texture, which forces the container to rebatch.
  *
- * Returns a Map<oldParticle, newParticle> for any pipe whose
- * particle was replaced, so the caller can patch its scrub-mode
- * reveals list (which holds particle references built before this
- * runs).
+ * Returns a Map<oldParticle, newParticle> for any particle that was
+ * replaced, so the caller can patch its scrub-mode reveals list (which
+ * holds particle references built before this runs).
  */
-export function refreshPipeTextures(
+export function refreshNeighbourDependentTextures(
   scene: ParticleScene,
   ctx: DrawContext,
 ): Map<Particle, Particle> {
   const swaps = new Map<Particle, Particle>();
   for (const [key, entry] of particleMap.entries()) {
-    if (entry.placedEntity.name !== "pipe") continue;
+    const name = entry.placedEntity.name;
+    if (name !== "pipe" && !BELT_ENTITIES.has(name)) continue;
     const newTex = getEntityAtlasTexture(entry.placedEntity, ctx);
     if (entry.entity.texture === newTex) continue;
 
