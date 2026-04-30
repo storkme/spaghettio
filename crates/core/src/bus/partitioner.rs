@@ -867,6 +867,102 @@ pub(crate) fn apply_size_split(
     }
 }
 
+/// Replace any module whose rate exceeds full-belt capacity with K
+/// sibling sub-modules, where `K = ceil(rate / full_belt_cap)` and
+/// `full_belt_cap = lane_capacity(belt_tier) * 2`. Each sub-module's
+/// rate ≤ `full_belt_cap`, so the lane planner's consumer-clamp path
+/// (`split_overflowing_lanes`) won't be asked to fit more flow than a
+/// single physical belt can carry.
+///
+/// Module IDs are densely reassigned per item; existing
+/// `apply_partition_plan` Cartesian unrolling splits consuming
+/// machines across the new sub-modules naturally. Producer-side, the
+/// rate-share formula gives each sub-module its proportional share of
+/// the upstream machines.
+///
+/// Modules already at-or-below `full_belt_cap` are passed through
+/// unchanged with their `module_id` densely re-numbered.
+///
+/// Trace event: `ModuleCapSplitApplied` per resulting sub-module of a
+/// split (not for unchanged modules).
+pub(crate) fn apply_cap_driven_split(
+    modules: Vec<ModuleAssignment>,
+    max_belt_tier: Option<&str>,
+) -> Vec<ModuleAssignment> {
+    let cap = lane_capacity(max_belt_tier);
+    let full_belt_cap = cap * 2.0;
+    if full_belt_cap <= 0.0 {
+        return modules;
+    }
+    let utilization_cap = cap * UTILIZATION_CEILING;
+
+    let mut by_item: FxHashMap<String, Vec<ModuleAssignment>> = FxHashMap::default();
+    for module in modules {
+        by_item.entry(module.item.clone()).or_default().push(module);
+    }
+
+    let mut new_modules: Vec<ModuleAssignment> = Vec::new();
+    for (_item, item_modules) in by_item.iter_mut() {
+        // Process in deterministic order so module_id reassignment is stable.
+        item_modules.sort_by_key(|m| m.module_id);
+        let mut next_id: u32 = 0;
+        for original in item_modules.drain(..) {
+            // No split needed — rate fits on a single full-belt trunk.
+            // Renumber densely and pass through.
+            if original.rate <= full_belt_cap {
+                let mut kept = original.clone();
+                kept.module_id = next_id;
+                next_id += 1;
+                new_modules.push(kept);
+                continue;
+            }
+
+            // Compute K. Float-safe ceil — `(rate / cap).ceil()` rounds
+            // up exactly when rate > cap.
+            let k = (original.rate / full_belt_cap).ceil() as u32;
+            let k = k.max(2); // already > cap, so K is at least 2
+            let original_module_id = original.module_id;
+            let split_rate = original.rate / k as f64;
+            let split_lane_count = ((split_rate / cap).ceil() as u32).max(1);
+            let split_utilization = if utilization_cap > 0.0 {
+                (split_rate / split_lane_count as f64) / utilization_cap
+            } else {
+                f64::INFINITY
+            };
+
+            for _ in 0..k {
+                let new_module_id = next_id;
+                next_id += 1;
+                let sibling = ModuleAssignment {
+                    item: original.item.clone(),
+                    module_id: new_module_id,
+                    consumer_recipe: original.consumer_recipe.clone(),
+                    rate: split_rate,
+                    lane_count: split_lane_count,
+                    utilization: split_utilization,
+                };
+                trace::emit(TraceEvent::ModuleCapSplitApplied {
+                    item: sibling.item.clone(),
+                    consumer_recipe: sibling.consumer_recipe.clone(),
+                    original_module_id,
+                    k_splits: k,
+                    new_module_id,
+                    original_rate: original.rate,
+                    new_rate: split_rate,
+                    full_belt_cap,
+                });
+                new_modules.push(sibling);
+            }
+        }
+    }
+
+    // Sort for deterministic output (apply_partition_plan does its own
+    // sorts but we preserve ordering by (item, module_id) for tests).
+    new_modules.sort_by(|a, b| a.item.cmp(&b.item).then(a.module_id.cmp(&b.module_id)));
+
+    new_modules
+}
+
 /// Convenience helper: an `ItemFlow` constructor that fills in `module_id: 0`.
 /// Used by call sites that don't care about partitioning.
 pub fn pooled_flow(item: impl Into<String>, rate: f64, is_fluid: bool) -> ItemFlow {

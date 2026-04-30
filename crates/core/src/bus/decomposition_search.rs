@@ -20,7 +20,8 @@ use crate::models::{LayoutResult, SolverResult};
 use super::balancer::shape_is_stampable;
 use super::layout::{run_layout_with_retry, LayoutOptions, LayoutStrategy};
 use super::partitioner::{
-    apply_partition_plan, apply_size_split, plan_partitioning, ModuleAssignment,
+    apply_cap_driven_split, apply_partition_plan, apply_size_split, plan_partitioning,
+    ModuleAssignment,
 };
 
 /// Soft-score weights. Frozen until Phase 1 introduces a second
@@ -165,7 +166,23 @@ impl DecompositionCandidate for ModuleSizeSplit {
             );
         }
 
-        let augmented = crate::trace::with_muted(|| apply_size_split(plan, self.k, max_belt_tier));
+        // Two-stage augmentation. First the k-way size split (the
+        // (4, 9) coprime fix). Then a cap-driven split for any module
+        // whose post-size-split rate still exceeds full belt capacity
+        // — without this, e.g. PU@3/s ore-red lands a 40/s EC module
+        // on a 30/s red trunk, and the lane planner's consumer-clamp
+        // path returns Err. Cap-driven split inside ModuleSizeSplit
+        // (rather than as an unconditional partitioner phase) keeps
+        // existing PartitionedDecomposed cases byte-equal — only
+        // candidates that opt into more partitioning pay the
+        // multiply-modules cost.
+        let augmented = crate::trace::with_muted(|| {
+            let size_split = apply_size_split(plan, self.k, max_belt_tier);
+            super::partitioner::PartitionPlan {
+                modules: apply_cap_driven_split(size_split.modules, max_belt_tier),
+                utilization_violations: size_split.utilization_violations,
+            }
+        });
         let transformed = apply_partition_plan(solver_result, &augmented);
 
         // Use Pooled in the inner call so the strategy-dispatch in

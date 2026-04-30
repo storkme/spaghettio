@@ -362,3 +362,29 @@ Per the [verification protocol](../CLAUDE.md#verification-protocol-for-layout-en
     case (tier-3 plastic-bar). K-DS1-2 (PU@3/s ore-red error count
     drops below 7) is **not yet satisfied** because of the
     `lane_planner.rs:571` blocker.*
+
+- *2026-04-30 — `apply_cap_driven_split` helper added (partitioner.rs)
+  and composed inside `ModuleSizeSplit::produce` after the size split.
+  Splits any module whose post-size-split rate exceeds full belt
+  capacity into K = ceil(rate/full_belt_cap) sub-modules. Trace event
+  `ModuleCapSplitApplied`. Lane planner's consumer-clamped fan-in path
+  (`lane_planner.rs:570`) won't be asked to fit more flow than a
+  single belt can carry — when the helper fires.*
+
+- *2026-04-30 — Investigation: K-DS1-2 still not satisfied even with
+  cap-driven split. Probed PU@3/s ore-red and found the (4, 9)
+  copper-plate trap is on a **K=1 item** (only one consumer recipe —
+  copper-cable). K=1 items don't enter `plan.modules` unless their
+  lane_count exceeds `SHARD_THRESHOLD_LANES = 10`. Copper-plate's
+  lane_count is below that threshold, so `apply_shape_fixes` never
+  sees it. `ModuleSizeSplit` operates on `plan.modules` too, so it
+  also misses copper-plate.*
+
+  *The actual fix for PU@3/s ore-red requires either (a) extending
+  `apply_shape_fixes` to include K=1 items (probably by adding a pass
+  that enrolls them in the plan with `module_id=0` when their lane-
+  planner shape would be unstampable), or (b) a lane-planner-level
+  shape fix that pads `(4, 9) → (4, 12)` directly when constructing
+  the family. Both are tractable but are their own pieces of work.
+  Tracking K-DS1-2 as **blocked on shape-fix-for-K1** for the next
+  chunk.*

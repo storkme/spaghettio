@@ -1060,6 +1060,26 @@ pub enum TraceEvent {
         rate: f64,
         lane_count: u32,
     },
+
+    // Partitioner cap-driven split: a module's per-trunk rate would
+    // bust full belt capacity (`lane_capacity * 2`), so it was split
+    // into `k_splits = ceil(rate / full_belt_cap)` sibling sub-modules
+    // each with sub-cap rate. Fires once per resulting sibling. Runs
+    // unconditionally under `LayoutStrategy::PartitionedDecomposed`
+    // after Phase 2 sharding; preempts the lane planner's
+    // consumer-clamped fan-in panic for cases where the planner would
+    // otherwise be asked to clamp a multi-producer-row lane onto a
+    // single-belt consumer trunk above its capacity.
+    ModuleCapSplitApplied {
+        item: String,
+        consumer_recipe: String,
+        original_module_id: u32,
+        k_splits: u32,
+        new_module_id: u32,
+        original_rate: f64,
+        new_rate: f64,
+        full_belt_cap: f64,
+    },
 }
 
 // ---------------------------------------------------------------------------
