@@ -440,6 +440,104 @@ pub fn score_layout(layout: &LayoutResult, solver_result: &SolverResult) -> Cand
     }
 }
 
+/// One candidate's outcome plus the trace events it emitted. Captured
+/// per-candidate so only the winning candidate's events are replayed
+/// into the global trace stream — losing candidates' events are
+/// dropped instead of overlapping the winner's in the web UI's live
+/// renderer (which surfaces the streaming sink).
+struct CandidateRun {
+    outcome: Option<(LayoutResult, CandidateScore)>,
+    events: Vec<crate::trace::TraceEvent>,
+}
+
+impl CandidateRun {
+    /// A candidate that wasn't tried (e.g. gating predicate was false).
+    /// No outcome, no events; the winner-selection code skips it.
+    fn skipped(_name: &str) -> Self {
+        Self { outcome: None, events: Vec::new() }
+    }
+}
+
+/// Run a candidate, score it, and capture every trace event it emitted.
+/// The events are removed from the global collector so they don't bleed
+/// into other candidates' runs or into the final result; the caller
+/// replays only the winner's events at the end.
+fn run_candidate<F>(name: &str, solver_result: &SolverResult, f: F) -> CandidateRun
+where
+    F: FnOnce(&SolverResult) -> Result<LayoutResult, String>,
+{
+    let start = crate::trace::peek_events_len();
+    let result = f(solver_result);
+    let mut events = crate::trace::peek_events_since(start);
+    crate::trace::truncate_events(start);
+    let outcome = match result {
+        Ok(layout) => {
+            let score = score_layout(&layout, solver_result);
+            // The Score event lives with the candidate's events (so the
+            // winner-replay step keeps it alongside the rest of the
+            // stream). For losing candidates, the caller separately
+            // filters out and re-emits Score events for telemetry.
+            events.push(crate::trace::TraceEvent::DecompositionCandidateScored {
+                name: name.to_string(),
+                density: score.density,
+                overproduction: score.overproduction,
+                entity_count: score.entity_count,
+                score: score.score,
+                accepted: score.accepted,
+                accepted_reason: score.accepted_reason.clone(),
+            });
+            Some((layout, score))
+        }
+        Err(_) => None,
+    };
+    CandidateRun { outcome, events }
+}
+
+/// Like `run_candidate` but wraps the produce call in `catch_unwind`.
+/// Used for `ModuleSizeSplit`, whose transformed solver can land the
+/// lane planner in panic territory (e.g. consumer-clamped fan-in for
+/// configurations the multi-stage balancer doesn't yet handle). Captures
+/// the panic so the search degrades to whichever earlier candidate had
+/// a layout instead of bringing the whole call down.
+fn run_candidate_catch_unwind<F>(name: &str, solver_result: &SolverResult, f: F) -> CandidateRun
+where
+    F: FnOnce() -> Result<LayoutResult, String> + std::panic::UnwindSafe,
+{
+    let start = crate::trace::peek_events_len();
+    let result = std::panic::catch_unwind(f);
+    let mut events = crate::trace::peek_events_since(start);
+    crate::trace::truncate_events(start);
+    let outcome = match result {
+        Ok(Ok(layout)) => {
+            let score = score_layout(&layout, solver_result);
+            events.push(crate::trace::TraceEvent::DecompositionCandidateScored {
+                name: name.to_string(),
+                density: score.density,
+                overproduction: score.overproduction,
+                entity_count: score.entity_count,
+                score: score.score,
+                accepted: score.accepted,
+                accepted_reason: score.accepted_reason.clone(),
+            });
+            Some((layout, score))
+        }
+        Ok(Err(_)) => None,
+        Err(_) => {
+            events.push(crate::trace::TraceEvent::DecompositionCandidateScored {
+                name: name.to_string(),
+                density: 0.0,
+                overproduction: 0.0,
+                entity_count: 0,
+                score: f64::NEG_INFINITY,
+                accepted: false,
+                accepted_reason: Some("panic in produce()".to_string()),
+            });
+            None
+        }
+    };
+    CandidateRun { outcome, events }
+}
+
 /// Run candidates and pick the winner.
 ///
 /// The dispatch is **sequential, not parallel**: Native runs first; if
@@ -460,176 +558,135 @@ pub fn select_best_decomposition(
     solver_result: &SolverResult,
     opts: LayoutOptions,
 ) -> Result<LayoutResult, String> {
-    let native = NativeCandidate;
-    let native_name = native.name().to_string();
+    // Per-candidate run + captured trace events. Detach the sink for the
+    // duration so the streaming web UI doesn't render every candidate's
+    // entities live (which produced the visual stack-up of two layouts on
+    // top of each other before this fix). Capture each candidate's events
+    // into a side buffer and truncate them out of the collector; at the
+    // end, only the winner's events get replayed to the sink and back
+    // into the collector.
+    let original_sink = crate::trace::swap_sink(None);
 
-    let native_outcome = match native.produce(solver_result, &opts) {
-        Ok(layout) => {
-            let score = score_layout(&layout, solver_result);
-            crate::trace::emit(crate::trace::TraceEvent::DecompositionCandidateScored {
-                name: native_name.clone(),
-                density: score.density,
-                overproduction: score.overproduction,
-                entity_count: score.entity_count,
-                score: score.score,
-                accepted: score.accepted,
-                accepted_reason: score.accepted_reason.clone(),
-            });
-            Some((layout, score))
-        }
-        Err(_) => None,
-    };
+    let native_run = run_candidate("native", solver_result, |s| {
+        NativeCandidate.produce(s, &opts)
+    });
 
     // K=1 shape-fix follow-up. When Native's layout has missing-balancer
     // warnings on K=1 items (the (4, 9) coprime trap on PU@3/s ore-red
     // copper-plate), enroll those items in the partition plan with a
-    // padded `lane_count` and re-run. This is much cheaper than
-    // `ModuleSizeSplit` (no producer-rate split, no machine-count
-    // multiplication) and surgical to the actual unstampable shape.
-    // Skipped on `Pooled` (no per-`(item, module_id)` partitioning) and
-    // when Native is already accepted.
+    // padded `lane_count` and re-run. Surgical to the actual unstampable
+    // shape — no producer-rate split, no machine-count multiplication.
+    // Skipped on `Pooled` and when Native is already accepted.
     let try_k1_shape_fix = matches!(opts.strategy, LayoutStrategy::PartitionedDecomposed)
-        && native_outcome
+        && native_run
+            .outcome
             .as_ref()
             .is_some_and(|(_, score)| !score.accepted);
 
-    let k1_outcome = if try_k1_shape_fix {
-        let native_layout = &native_outcome.as_ref().unwrap().0;
-        match build_k1_enrollment_plan(native_layout, solver_result, &opts) {
-            Some(plan) => {
-                match run_layout_with_explicit_plan(solver_result, &opts, &plan) {
-                    Ok(layout) => {
-                        let score = score_layout(&layout, solver_result);
-                        crate::trace::emit(crate::trace::TraceEvent::DecompositionCandidateScored {
-                            name: "k1-shape-fix".to_string(),
-                            density: score.density,
-                            overproduction: score.overproduction,
-                            entity_count: score.entity_count,
-                            score: score.score,
-                            accepted: score.accepted,
-                            accepted_reason: score.accepted_reason.clone(),
-                        });
-                        Some((layout, score))
-                    }
-                    Err(_) => None,
-                }
-            }
-            None => None,
-        }
+    let k1_run = if try_k1_shape_fix {
+        let native_layout = &native_run.outcome.as_ref().unwrap().0;
+        let maybe_plan = build_k1_enrollment_plan(native_layout, solver_result, &opts);
+        run_candidate("k1-shape-fix", solver_result, |s| match maybe_plan.as_ref() {
+            Some(plan) => run_layout_with_explicit_plan(s, &opts, plan),
+            None => Err("no k1 enrollment".to_string()),
+        })
     } else {
-        None
+        CandidateRun::skipped("k1-shape-fix")
     };
 
-    // Decide whether to also try `ModuleSizeSplit`. Only relevant under
-    // `PartitionedDecomposed` (Pooled re-merges sibling producers, so
-    // the split has no effect). And only when neither Native nor the
-    // cheaper K=1 shape-fix produced an accepted layout — otherwise the
-    // split costs density without a benefit and we shouldn't pay the
-    // runtime.
+    // `ModuleSizeSplit` is the heavy fallback. Same gating as before but
+    // also gated on the cheaper K=1 fix not landing.
     let try_size_split = matches!(opts.strategy, LayoutStrategy::PartitionedDecomposed)
-        && native_outcome
+        && native_run
+            .outcome
             .as_ref()
             .is_none_or(|(_, score)| !score.accepted)
-        && k1_outcome
+        && k1_run
+            .outcome
             .as_ref()
             .is_none_or(|(_, score)| !score.accepted);
 
-    let split_outcome = if try_size_split {
-        let candidate = ModuleSizeSplit { k: 2 };
-        let name = candidate.name().to_string();
-        // `ModuleSizeSplit`'s transformed solver can land the lane
-        // planner on `todo!()` paths (e.g. `lane_planner.rs:571`
-        // consumer-clamped fan-in for items where the split creates a
-        // configuration the multi-stage balancer hasn't been wired for
-        // yet). Catch panics so the search degrades gracefully back to
-        // Native's layout instead of bringing down the whole call —
-        // same user-visible behaviour as today's pipeline (Native's
-        // result with whatever errors it has). Fixing the underlying
-        // `todo!()` is downstream work; tracked in the RFP decision
-        // log.
-        let produce_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            candidate.produce(solver_result, &opts)
-        }));
-        match produce_result {
-            Ok(Ok(layout)) => {
-                let score = score_layout(&layout, solver_result);
-                crate::trace::emit(crate::trace::TraceEvent::DecompositionCandidateScored {
-                    name: name.clone(),
-                    density: score.density,
-                    overproduction: score.overproduction,
-                    entity_count: score.entity_count,
-                    score: score.score,
-                    accepted: score.accepted,
-                    accepted_reason: score.accepted_reason.clone(),
-                });
-                Some((layout, score))
-            }
-            Ok(Err(_)) => None,
-            Err(_) => {
-                crate::trace::emit(crate::trace::TraceEvent::DecompositionCandidateScored {
-                    name: name.clone(),
-                    density: 0.0,
-                    overproduction: 0.0,
-                    entity_count: 0,
-                    score: f64::NEG_INFINITY,
-                    accepted: false,
-                    accepted_reason: Some("panic in produce()".to_string()),
-                });
-                None
+    let split_run = if try_size_split {
+        run_candidate_catch_unwind("size-split-2", solver_result, || {
+            ModuleSizeSplit { k: 2 }.produce(solver_result, &opts)
+        })
+    } else {
+        CandidateRun::skipped("size-split-2")
+    };
+
+    // Re-attach the sink before replaying the winner's events. Score
+    // events for *every* candidate that actually ran are emitted (so
+    // telemetry/snapshot debugger see what was tried), then the winner's
+    // full event stream, then `DecompositionChosen`.
+    if let Some(sink) = original_sink {
+        crate::trace::swap_sink(Some(sink));
+    }
+
+    // Re-emit each candidate's `DecompositionCandidateScored` event for
+    // telemetry. Filtering each candidate's captured events for the
+    // single Score line is cheap (≤1 hit per candidate).
+    for events in [&native_run.events, &k1_run.events, &split_run.events] {
+        for ev in events {
+            if matches!(ev, crate::trace::TraceEvent::DecompositionCandidateScored { .. }) {
+                crate::trace::emit(ev.clone());
             }
         }
-    } else {
-        None
-    };
+    }
 
     // Pick winner: best accepted candidate by score; otherwise best
     // unaccepted candidate (degraded path so the user still sees a
     // layout — same behaviour as today's pipeline when shape-fix can't
     // resolve a (n, m) trap).
-    let candidates: [(Option<(LayoutResult, CandidateScore)>, &str); 3] = [
-        (native_outcome, "native"),
-        (k1_outcome, "k1-shape-fix"),
-        (split_outcome, "size-split-2"),
+    let candidates: [(Option<(LayoutResult, CandidateScore)>, Vec<crate::trace::TraceEvent>, &str); 3] = [
+        (native_run.outcome, native_run.events, "native"),
+        (k1_run.outcome, k1_run.events, "k1-shape-fix"),
+        (split_run.outcome, split_run.events, "size-split-2"),
     ];
 
-    let accepted: Option<(LayoutResult, CandidateScore, &str)> = candidates
+    // Find best accepted candidate (highest score).
+    let best_accepted_idx = candidates
         .iter()
-        .filter_map(|(outcome, name)| {
-            outcome.as_ref().and_then(|(layout, score)| {
+        .enumerate()
+        .filter_map(|(i, (outcome, _, _))| {
+            outcome.as_ref().and_then(|(_, score)| {
                 if score.accepted {
-                    Some((layout.clone(), score.clone(), *name))
+                    Some((i, score.score))
                 } else {
                     None
                 }
             })
         })
-        .max_by(|(_, a, _), (_, b, _)| a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal));
+        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(i, _)| i);
 
-    if let Some((layout, score, name)) = accepted {
-        crate::trace::emit(crate::trace::TraceEvent::DecompositionChosen {
-            name: name.to_string(),
-            score: score.score,
-        });
-        return Ok(layout);
-    }
+    // Falling back: first candidate that produced a layout (Native
+    // preferred — earliest in the array). Same degraded behaviour as
+    // today's pipeline when shape-fix can't resolve a (n, m) trap.
+    let winner_idx = best_accepted_idx
+        .or_else(|| candidates.iter().position(|(o, _, _)| o.is_some()));
 
-    // No accepted candidate. Fall back to whichever candidate produced
-    // a layout (Native preferred — first listed). If neither produced,
-    // propagate the error.
-    let fallback: Option<(LayoutResult, CandidateScore, &str)> = candidates
-        .into_iter()
-        .find_map(|(outcome, name)| outcome.map(|(l, s)| (l, s, name)));
+    let Some(idx) = winner_idx else {
+        return Err("no decomposition candidate produced a layout".to_string());
+    };
 
-    match fallback {
-        Some((layout, score, name)) => {
-            crate::trace::emit(crate::trace::TraceEvent::DecompositionChosen {
-                name: name.to_string(),
-                score: score.score,
-            });
-            Ok(layout)
+    // Move winning entry out of the array; replay its captured trace
+    // events to the live sink and back into the collector so the only
+    // entities the web UI / snapshot debugger see are the winner's.
+    let mut candidates = candidates.into_iter().collect::<Vec<_>>();
+    let (outcome, events, name) = candidates.swap_remove(idx);
+    let (layout, score) = outcome.expect("winner_idx must point to Some outcome");
+    for ev in events {
+        // Skip Score events — already replayed for telemetry above.
+        if matches!(ev, crate::trace::TraceEvent::DecompositionCandidateScored { .. }) {
+            continue;
         }
-        None => Err("no decomposition candidate produced a layout".to_string()),
+        crate::trace::emit(ev);
     }
+    crate::trace::emit(crate::trace::TraceEvent::DecompositionChosen {
+        name: name.to_string(),
+        score: score.score,
+    });
+    Ok(layout)
 }
 
 #[cfg(test)]
