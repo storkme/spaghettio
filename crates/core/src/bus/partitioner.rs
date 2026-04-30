@@ -175,6 +175,20 @@ impl PartitionPlan {
     pub fn modules_for_item(&self, item: &str) -> u32 {
         self.modules.iter().filter(|m| m.item == item).count() as u32
     }
+
+    /// The plan's `lane_count` for `(item, module_id)`, or `None` if no
+    /// module is recorded. The lane planner consults this as a lower
+    /// bound on `effective_n_splits` so that `apply_shape_fixes`'s
+    /// `PadLanes` strategy can actually grow the family's `m` past
+    /// what the natural rate-and-consumer derivation produces — which
+    /// is how the (4, 9) coprime trap on K=1 items like copper-plate
+    /// gets pushed to a stampable nearby shape (e.g. (4, 10)).
+    pub fn lane_count_override(&self, item: &str, module_id: u32) -> Option<u32> {
+        self.modules
+            .iter()
+            .find(|m| m.item == item && m.module_id == module_id)
+            .map(|m| m.lane_count)
+    }
 }
 
 /// Build a partition plan for the given solver result. Empty under

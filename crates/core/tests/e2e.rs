@@ -2575,8 +2575,20 @@ fn partition_strategy_scoreboard_extended() {
             //
             // P2 21 → 7 after shape-fix Phase 3 (pad-lanes fixes the
             // copper-plate (4, 9) coprime shape that was dead-ending).
+            //
+            // P2 7 → 3 after the K-DS1-2 K=1 shape-fix candidate landed:
+            // copper-plate is K=1 (single consumer copper-cable), so it
+            // never entered `plan.modules` and the existing Phase-3
+            // `apply_shape_fixes` couldn't reach it. The new
+            // `decomposition_search::K1ShapeFix` candidate enrolls K=1
+            // items with unstampable shapes (read off Native's
+            // `missing-balancer-template` warnings), then re-runs the
+            // layout with `plan.lane_count_override` honoured by the
+            // lane planner — pad lanes finally propagate. The remaining
+            // 3 errors are an unrelated belt-loop on the leftmost lane
+            // that was always present but masked by the (4, 9) dead-end.
             row_layout: None,
-            expected: (8, 7),
+            expected: (8, 3),
         },
         ScoreboardCase {
             name: "PU@3/s plates yellow",

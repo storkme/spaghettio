@@ -18,10 +18,15 @@ use crate::density;
 use crate::models::{LayoutResult, SolverResult};
 
 use super::balancer::shape_is_stampable;
-use super::layout::{run_layout_with_retry, LayoutOptions, LayoutStrategy};
+use super::layout::{
+    run_layout_with_explicit_plan, run_layout_with_retry, LayoutOptions, LayoutStrategy,
+};
 use super::partitioner::{
     apply_cap_driven_split, apply_partition_plan, apply_size_split, plan_partitioning,
-    ModuleAssignment,
+    ModuleAssignment, PartitionPlan,
+};
+use super::shape_fix::{
+    select_shape_fix, PadLanesStrategy, ShapeFix, ShapeFixStrategy, ShardStrategy,
 };
 
 /// Soft-score weights. Frozen until Phase 1 introduces a second
@@ -236,6 +241,141 @@ fn estimate_producer_count(
     ((total_producers * share).ceil() as u32).max(1)
 }
 
+/// Parse Native's `layout.warnings` for missing-balancer-template
+/// strings into structured `(item, n, m)` tuples. The warning format
+/// is the one emitted by `bus::layout::layout_pass`:
+/// `"No {n}→{m} balancer template for {item}; producer outputs are disconnected"`.
+///
+/// Used by `try_k1_shape_fix` to identify which K=1 items had their
+/// producer→trunk handoff dropped at balancer-stamp time, so we can
+/// enroll them in a follow-up partition plan with `apply_shape_fixes`-
+/// computed `lane_count` overrides.
+fn parse_unstampable_warnings(layout: &LayoutResult) -> Vec<(String, u32, u32)> {
+    let mut out = Vec::new();
+    for w in &layout.warnings {
+        let Some(rest) = w.strip_prefix("No ") else { continue };
+        let Some((shape_str, item_part)) = rest.split_once(" balancer template for ") else {
+            continue;
+        };
+        let Some((n_str, m_str)) = shape_str.split_once('\u{2192}') else {
+            continue;
+        };
+        let Ok(n) = n_str.parse::<u32>() else { continue };
+        let Ok(m) = m_str.parse::<u32>() else { continue };
+        let item = match item_part.split_once(';') {
+            Some((before_semi, _)) => before_semi.trim().to_string(),
+            None => item_part.trim().to_string(),
+        };
+        out.push((item, n, m));
+    }
+    out
+}
+
+/// Find the single consumer recipe for a K=1 item. Returns the recipe
+/// name and total consumption rate, or `None` if `item` is consumed by
+/// zero or 2+ recipes (in which case enrollment doesn't make sense —
+/// K=1 path doesn't apply).
+fn k1_consumer_for_item(
+    item: &str,
+    solver_result: &SolverResult,
+) -> Option<(String, f64)> {
+    let mut by_recipe: rustc_hash::FxHashMap<String, f64> =
+        rustc_hash::FxHashMap::default();
+    let mut found_fluid = false;
+    for m in &solver_result.machines {
+        for inp in &m.inputs {
+            if inp.item == item {
+                if inp.is_fluid {
+                    found_fluid = true;
+                }
+                *by_recipe.entry(m.recipe.clone()).or_insert(0.0) += inp.rate * m.count;
+            }
+        }
+    }
+    if found_fluid || by_recipe.len() != 1 {
+        return None;
+    }
+    by_recipe.into_iter().next()
+}
+
+/// Build a partition plan that overlays K=1 enrollments onto the
+/// strategy-driven base plan. For each `(item, n, m)` from Native's
+/// missing-balancer warnings:
+///   * Skip if `item` is already in the base plan (multi-consumer K≥2
+///     case — Phase 3 `apply_shape_fixes` already had a chance).
+///   * Compute `select_shape_fix(n, m)` with the same strategies the
+///     existing `apply_shape_fixes` uses (pad first, shard fallback).
+///   * On a `PadLanes { new_m }` fix: enroll item with `module_id=0`,
+///     `lane_count = new_m`. The lane planner picks this up via
+///     `plan.lane_count_override` and pads the family.
+///   * `Shard` fix is unsupported here (would require splitting the
+///     producer rate, which interacts with the existing partition plan
+///     in non-obvious ways) — fall through.
+///
+/// Returns `None` if no enrollments would apply (e.g. all warnings are
+/// for K≥2 items or shard-only fixes), so the caller can skip the
+/// follow-up layout pass.
+fn build_k1_enrollment_plan(
+    native_layout: &LayoutResult,
+    solver_result: &SolverResult,
+    opts: &LayoutOptions,
+) -> Option<PartitionPlan> {
+    let warnings = parse_unstampable_warnings(native_layout);
+    if warnings.is_empty() {
+        return None;
+    }
+
+    let max_belt_tier = opts.max_belt_tier.as_deref();
+    let cap = super::partitioner::lane_capacity(max_belt_tier);
+    let utilization_cap = cap * super::partitioner::UTILIZATION_CEILING;
+
+    // Base plan first; if `item` already has a module here it is K≥2 and
+    // out of scope for this pass.
+    let mut plan = crate::trace::with_muted(|| {
+        plan_partitioning(solver_result, opts.strategy, max_belt_tier)
+    });
+
+    let pad = PadLanesStrategy { max_pad: 4 };
+    let shard = ShardStrategy { max_shards: 3 };
+    let strategies: &[&dyn ShapeFixStrategy] = &[&pad, &shard];
+
+    let mut enrolled_any = false;
+    for (item, n, m) in warnings {
+        if plan.modules.iter().any(|x| x.item == item) {
+            continue; // K≥2; not our case
+        }
+        let Some((recipe, rate)) = k1_consumer_for_item(&item, solver_result) else {
+            continue;
+        };
+        let new_m = match select_shape_fix(n, m, strategies) {
+            Some(ShapeFix::PadLanes { new_m }) => new_m,
+            // Native shouldn't reach here (the family wouldn't have
+            // dropped if it were stampable), but bail safely.
+            Some(ShapeFix::Native) => continue,
+            // Shard for K=1 needs producer-rate splitting; leave for
+            // a follow-up. Pad already covers the (4, 9) motivating case.
+            Some(ShapeFix::Shard { .. }) | None => continue,
+        };
+        let per_lane_rate = rate / new_m as f64;
+        crate::trace::emit(crate::trace::TraceEvent::K1ItemEnrolled {
+            item: item.clone(),
+            consumer_recipe: recipe.clone(),
+            n_producers: n,
+            lane_count: new_m,
+        });
+        plan.modules.push(ModuleAssignment {
+            item,
+            module_id: 0,
+            consumer_recipe: recipe,
+            rate,
+            lane_count: new_m,
+            utilization: per_lane_rate / utilization_cap.max(f64::EPSILON),
+        });
+        enrolled_any = true;
+    }
+    if enrolled_any { Some(plan) } else { None }
+}
+
 /// Sum of `max(0, production - demand)` across external output items.
 /// Captures the cost of strategies that overshoot demand (e.g.
 /// `ProducerCountRoundUp`). Native overshoots only by the solver's
@@ -340,13 +480,57 @@ pub fn select_best_decomposition(
         Err(_) => None,
     };
 
+    // K=1 shape-fix follow-up. When Native's layout has missing-balancer
+    // warnings on K=1 items (the (4, 9) coprime trap on PU@3/s ore-red
+    // copper-plate), enroll those items in the partition plan with a
+    // padded `lane_count` and re-run. This is much cheaper than
+    // `ModuleSizeSplit` (no producer-rate split, no machine-count
+    // multiplication) and surgical to the actual unstampable shape.
+    // Skipped on `Pooled` (no per-`(item, module_id)` partitioning) and
+    // when Native is already accepted.
+    let try_k1_shape_fix = matches!(opts.strategy, LayoutStrategy::PartitionedDecomposed)
+        && native_outcome
+            .as_ref()
+            .is_some_and(|(_, score)| !score.accepted);
+
+    let k1_outcome = if try_k1_shape_fix {
+        let native_layout = &native_outcome.as_ref().unwrap().0;
+        match build_k1_enrollment_plan(native_layout, solver_result, &opts) {
+            Some(plan) => {
+                match run_layout_with_explicit_plan(solver_result, &opts, &plan) {
+                    Ok(layout) => {
+                        let score = score_layout(&layout, solver_result);
+                        crate::trace::emit(crate::trace::TraceEvent::DecompositionCandidateScored {
+                            name: "k1-shape-fix".to_string(),
+                            density: score.density,
+                            overproduction: score.overproduction,
+                            entity_count: score.entity_count,
+                            score: score.score,
+                            accepted: score.accepted,
+                            accepted_reason: score.accepted_reason.clone(),
+                        });
+                        Some((layout, score))
+                    }
+                    Err(_) => None,
+                }
+            }
+            None => None,
+        }
+    } else {
+        None
+    };
+
     // Decide whether to also try `ModuleSizeSplit`. Only relevant under
     // `PartitionedDecomposed` (Pooled re-merges sibling producers, so
-    // the split has no effect). And only when Native's layout has
-    // unstampable shapes — otherwise the split costs density without a
-    // benefit and we shouldn't pay the runtime.
+    // the split has no effect). And only when neither Native nor the
+    // cheaper K=1 shape-fix produced an accepted layout — otherwise the
+    // split costs density without a benefit and we shouldn't pay the
+    // runtime.
     let try_size_split = matches!(opts.strategy, LayoutStrategy::PartitionedDecomposed)
         && native_outcome
+            .as_ref()
+            .is_none_or(|(_, score)| !score.accepted)
+        && k1_outcome
             .as_ref()
             .is_none_or(|(_, score)| !score.accepted);
 
@@ -402,8 +586,9 @@ pub fn select_best_decomposition(
     // unaccepted candidate (degraded path so the user still sees a
     // layout — same behaviour as today's pipeline when shape-fix can't
     // resolve a (n, m) trap).
-    let candidates: [(Option<(LayoutResult, CandidateScore)>, &str); 2] = [
+    let candidates: [(Option<(LayoutResult, CandidateScore)>, &str); 3] = [
         (native_outcome, "native"),
+        (k1_outcome, "k1-shape-fix"),
         (split_outcome, "size-split-2"),
     ];
 

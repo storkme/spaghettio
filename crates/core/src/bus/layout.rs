@@ -99,6 +99,29 @@ pub(crate) fn run_layout_with_retry(
     solver_result: &SolverResult,
     opts: &LayoutOptions,
 ) -> Result<LayoutResult, String> {
+    run_layout_with_retry_inner(solver_result, opts, None)
+}
+
+/// Variant of `run_layout_with_retry` that bypasses the strategy-driven
+/// `plan_partitioning` call and uses the caller's `explicit_plan`
+/// directly. Used by candidate decompositions
+/// (`bus::decomposition_search::K1ShapeFix`) that want to overlay
+/// per-`(item, module_id)` `lane_count` overrides onto the partition
+/// plan — `plan_pad_floor` in `lane_planner::split_overflowing_lanes`
+/// reads those overrides as a lower bound on `effective_n_splits`.
+pub(crate) fn run_layout_with_explicit_plan(
+    solver_result: &SolverResult,
+    opts: &LayoutOptions,
+    plan: &crate::bus::partitioner::PartitionPlan,
+) -> Result<LayoutResult, String> {
+    run_layout_with_retry_inner(solver_result, opts, Some(plan))
+}
+
+fn run_layout_with_retry_inner(
+    solver_result: &SolverResult,
+    opts: &LayoutOptions,
+    explicit_plan: Option<&crate::bus::partitioner::PartitionPlan>,
+) -> Result<LayoutResult, String> {
     // Snapshot the trace collector before the first pass so we can
     // detect `JunctionGrowthCapped` events emitted by *this* layout
     // call (and not whatever the caller already had collected).
@@ -111,7 +134,7 @@ pub(crate) fn run_layout_with_retry(
     // events from a layout pass that gets abandoned by retry.
     let original_sink = crate::trace::swap_sink(None);
 
-    let pass_1 = layout_pass(solver_result, opts, None);
+    let pass_1 = layout_pass(solver_result, opts, None, explicit_plan);
     let (result_1, row_spans_1) = pass_1?;
 
     // Scan only events emitted by this layout call.
@@ -168,7 +191,7 @@ pub(crate) fn run_layout_with_retry(
         recipes,
     });
 
-    let (result_2, _) = layout_pass(solver_result, opts, Some(&retry_gaps))?;
+    let (result_2, _) = layout_pass(solver_result, opts, Some(&retry_gaps), explicit_plan)?;
     Ok(result_2)
 }
 
@@ -211,31 +234,43 @@ fn layout_pass(
     solver_result: &SolverResult,
     opts: &LayoutOptions,
     retry_extra_gaps: Option<&FxHashMap<usize, i32>>,
+    explicit_plan: Option<&crate::bus::partitioner::PartitionPlan>,
 ) -> Result<(LayoutResult, Vec<RowSpan>), String> {
     let max_belt_tier = opts.max_belt_tier.as_deref();
-    // Strategy dispatch. Pooled passes through unchanged. The
-    // partitioning strategies run `plan_partitioning` + `apply_partition_plan`
-    // up-front and the rest of the pipeline picks up the per-`(item,
+    // Plan source. If the caller has pre-built a plan (candidate
+    // decompositions in `bus::decomposition_search`), use it directly
+    // and skip the strategy-driven `plan_partitioning` call. Otherwise
+    // dispatch on `opts.strategy`: `Pooled` passes through unchanged;
+    // `PartitionedDecomposed` runs `plan_partitioning` + `apply_partition_plan`
+    // up-front so the rest of the pipeline picks up the per-`(item,
     // module_id)` flow tagging via `ItemFlow.module_id`. Empty plan
     // (K=1 everywhere) → byte-identical to `Pooled`.
     let owned_solver_result;
-    let solver_result: &SolverResult = match opts.strategy {
-        LayoutStrategy::Pooled => solver_result,
-        LayoutStrategy::PartitionedDecomposed => {
-            let plan = crate::bus::partitioner::plan_partitioning(
-                solver_result,
-                opts.strategy,
-                max_belt_tier,
-            );
-            if plan.is_empty() {
-                solver_result
-            } else {
+    let owned_plan;
+    let (solver_result, plan_ref): (&SolverResult, Option<&crate::bus::partitioner::PartitionPlan>) =
+        match (explicit_plan, opts.strategy) {
+            (Some(plan), _) => {
                 owned_solver_result =
-                    crate::bus::partitioner::apply_partition_plan(solver_result, &plan);
-                &owned_solver_result
+                    crate::bus::partitioner::apply_partition_plan(solver_result, plan);
+                (&owned_solver_result, Some(plan))
             }
-        }
-    };
+            (None, LayoutStrategy::Pooled) => (solver_result, None),
+            (None, LayoutStrategy::PartitionedDecomposed) => {
+                let plan = crate::bus::partitioner::plan_partitioning(
+                    solver_result,
+                    opts.strategy,
+                    max_belt_tier,
+                );
+                if plan.is_empty() {
+                    (solver_result, None)
+                } else {
+                    owned_solver_result =
+                        crate::bus::partitioner::apply_partition_plan(solver_result, &plan);
+                    owned_plan = plan;
+                    (&owned_solver_result, Some(&owned_plan))
+                }
+            }
+        };
     // Final product items get EAST-flowing output belts (merge at right side)
     let final_output_items: FxHashSet<String> = solver_result
         .external_outputs
@@ -279,7 +314,7 @@ fn layout_pass(
         duration_ms: t_place1.elapsed().as_millis() as u64,
     });
     let t_plan1 = web_time::Instant::now();
-    let (lanes_1, families_1) = plan_bus_lanes(solver_result, &row_spans_1, max_belt_tier)?;
+    let (lanes_1, families_1) = plan_bus_lanes(solver_result, &row_spans_1, max_belt_tier, plan_ref)?;
     crate::trace::emit(crate::trace::TraceEvent::PhaseTime {
         phase: "plan_bus_lanes_1".to_string(),
         duration_ms: t_plan1.elapsed().as_millis() as u64,
@@ -321,7 +356,7 @@ fn layout_pass(
                 duration_ms: t_place2.elapsed().as_millis() as u64,
             });
             let t_plan2 = web_time::Instant::now();
-            let (nl, nf) = plan_bus_lanes(solver_result, &rs, max_belt_tier)?;
+            let (nl, nf) = plan_bus_lanes(solver_result, &rs, max_belt_tier, plan_ref)?;
             crate::trace::emit(crate::trace::TraceEvent::PhaseTime {
                 phase: "plan_bus_lanes_2".to_string(),
                 duration_ms: t_plan2.elapsed().as_millis() as u64,

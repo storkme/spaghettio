@@ -266,6 +266,19 @@ pub enum TraceEvent {
         new_total_lanes: u32,
     },
 
+    // K=1 item with an unstampable (n, m) shape was enrolled in
+    // `plan.modules` with `module_id=0` so `apply_shape_fixes` can
+    // pad/shard it. Fires from `enroll_unstampable_k1_items` in
+    // `bus/partitioner.rs`. Without this enrollment, K=1 coprime-trap
+    // shapes (e.g. (4, 9) for copper-plate on PU@3/s ore-red) silently
+    // dead-end at balancer stamp time.
+    K1ItemEnrolled {
+        item: String,
+        consumer_recipe: String,
+        n_producers: u32,
+        lane_count: u32,
+    },
+
     // Decomposition produced shards whose lane count doesn't tile
     // cleanly with consumer demand (multi-consumer K2-2 case from the
     // RFP). Fires when a consumer's tap from a shard is uneven —

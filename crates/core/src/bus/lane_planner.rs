@@ -13,6 +13,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::models::SolverResult;
 use crate::bus::lane_order::optimize_lane_order;
+use crate::bus::partitioner::PartitionPlan;
 use crate::bus::placer::RowSpan;
 
 const LANE_CAPACITY_TABLE: &[(&str, f64)] = &[
@@ -163,6 +164,7 @@ pub fn plan_bus_lanes(
     solver_result: &SolverResult,
     row_spans: &[RowSpan],
     max_belt_tier: Option<&str>,
+    plan: Option<&PartitionPlan>,
 ) -> Result<(Vec<BusLane>, Vec<LaneFamily>), String> {
     let mut lanes: Vec<BusLane> = Vec::new();
     // Keyed by `(item, module_id)`. `module_id == 0` under Pooled and
@@ -251,7 +253,7 @@ pub fn plan_bus_lanes(
     }
 
     // Split lanes that exceed max belt tier capacity
-    let (mut lanes, mut families) = split_overflowing_lanes(&lanes, row_spans, max_belt_tier)?;
+    let (mut lanes, mut families) = split_overflowing_lanes(&lanes, row_spans, max_belt_tier, plan)?;
 
     // Pre-compute tap-off ys before sorting
     for lane in &mut lanes {
@@ -442,10 +444,19 @@ impl Default for BusLane {
 
 
 /// Split lanes whose rate exceeds the available belt's per-lane capacity.
+///
+/// `plan`, when present, supplies a per-`(item, module_id)` lower bound
+/// on `effective_n_splits` via `lane_count_override`. This is how
+/// `apply_shape_fixes`'s `PadLanes` strategy reaches the lane planner:
+/// the partition plan records the padded `m`, and we honour it here as
+/// long as it's at least as large as the natural rate-and-consumer
+/// derivation. Plan never *shrinks* lane counts; it can only force
+/// extra empty pad lanes to materialise.
 fn split_overflowing_lanes(
     lanes: &[BusLane],
     row_spans: &[RowSpan],
     max_belt_tier: Option<&str>,
+    plan: Option<&PartitionPlan>,
 ) -> Result<(Vec<BusLane>, Vec<LaneFamily>), String> {
     let default_cap = LANE_CAPACITY_TABLE.last().map(|(_, c)| *c).unwrap_or(15.0);
     let max_lane_cap = if let Some(tier) = max_belt_tier {
@@ -558,6 +569,19 @@ fn split_overflowing_lanes(
         let clamp_to_consumers =
             !is_external_input && !is_collector && n_splits > consumer_trunk_count;
 
+        // Plan-driven pad floor. `apply_shape_fixes` records the padded
+        // `m` in the partition plan via `PadLanes`; we honour it here as
+        // a lower bound on `effective_n_splits`. Only meaningful in the
+        // intermediate non-HS, non-clamp path (HS rows pin a fixed slot
+        // count; consumer-clamp is for the "rate exceeds consumer trunk
+        // capacity" failure mode that pad doesn't address). External
+        // inputs and collectors (which already hit the `is_external_input`
+        // or `is_collector` paths) ignore the pad floor.
+        let plan_pad_floor: usize = plan
+            .and_then(|p| p.lane_count_override(&lane.item, lane.module_id))
+            .map(|lc| lc as usize)
+            .unwrap_or(0);
+
         let effective_n_splits = if any_hs {
             // HS consumer(s) want a fixed total trunk count.
             consumer_trunk_count
@@ -586,8 +610,16 @@ fn split_overflowing_lanes(
             }
             consumer_trunk_count
         } else {
-            n_splits
+            n_splits.max(plan_pad_floor)
         };
+        // Empty pad lanes (those with no consumer assignment) must
+        // survive the `consumers.is_empty()` skip below when the plan
+        // forced extra `m` past the natural rate-or-consumer count. Any
+        // other path keeps the legacy skip-empty behaviour.
+        let pad_active = !any_hs
+            && !clamp_to_consumers
+            && plan_pad_floor > n_splits
+            && effective_n_splits > consumer_trunk_count;
 
         crate::trace::emit(crate::trace::TraceEvent::LaneSplit {
             item: lane.item.clone(),
@@ -642,7 +674,12 @@ fn split_overflowing_lanes(
         // With `clamp_to_consumers` set, every effective trunk has exactly
         // one consumer (M = consumer count). Without the clamp this falls
         // back to the original count that drove the legacy fan-out family.
-        let n_lanes_with_consumers = if is_collector {
+        // When `pad_active` (the partition plan demanded extra trunks past
+        // the natural rate-or-consumer count), include those pad lanes —
+        // the family balancer's `m` must match the *physical* trunk count,
+        // not the consumer-bearing-trunk count, so `apply_shape_fixes`'s
+        // `PadLanes` strategy actually shifts `m` to a stampable shape.
+        let n_lanes_with_consumers = if is_collector || pad_active {
             effective_n_splits
         } else {
             consumers_per_split.iter().filter(|c| !c.is_empty()).count()
@@ -707,8 +744,11 @@ fn split_overflowing_lanes(
         for si in 0..effective_n_splits {
             let consumers = consumers_per_split[si].clone();
             // HS lanes are always retained — every required trunk slot
-            // needs its own BusLane.
-            if !any_hs && consumers.is_empty() && !is_collector && si > 0 {
+            // needs its own BusLane. Plan-driven pad lanes are also
+            // retained (empty-consumer trunks present so the family
+            // balancer can stamp at the padded shape — apply_shape_fixes
+            // PadLanes path).
+            if !any_hs && !pad_active && consumers.is_empty() && !is_collector && si > 0 {
                 continue;  // skip empty splits
             }
             let split_rate = lane.rate / effective_n_splits as f64;
@@ -947,7 +987,7 @@ mod tests {
             vec![6],  // input belt at y=6
         );
 
-        let (lanes, families) = plan_bus_lanes(&sr, &[row_span], None)
+        let (lanes, families) = plan_bus_lanes(&sr, &[row_span], None, None)
             .expect("plan_bus_lanes should succeed for iron-gear-wheel");
 
         // Should have exactly 1 lane for iron-plate
@@ -973,7 +1013,7 @@ mod tests {
             vec![6],
         );
 
-        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None).unwrap();
+        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None, None).unwrap();
 
         // iron-gear-wheel is the final output, not consumed internally, so no lane for it
         // Only iron-plate (the external input) needs a lane
@@ -998,7 +1038,7 @@ mod tests {
             vec![6, 7],  // two input belt y positions
         );
 
-        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None)
+        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None, None)
             .expect("plan_bus_lanes should succeed for plastic-bar");
 
         // Should have lanes for coal and petroleum-gas (plastic-bar is final output)
@@ -1034,7 +1074,7 @@ mod tests {
             vec![6, 7],
         );
 
-        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None).unwrap();
+        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None, None).unwrap();
 
         // optimize_lane_order puts solid before fluid
         let fluid_indices: Vec<usize> = lanes.iter().enumerate()
@@ -1066,7 +1106,7 @@ mod tests {
             vec![6],
         );
 
-        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None).unwrap();
+        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None, None).unwrap();
 
         // The iron-plate lane has consumer row 0, so it should have a tap-off y
         let iron_plate_lane = lanes.iter().find(|l| l.item == "iron-plate").unwrap();
@@ -1116,7 +1156,7 @@ mod tests {
             }
         }).collect();
 
-        let (lanes, _families) = plan_bus_lanes(&sr, &row_spans, None)
+        let (lanes, _families) = plan_bus_lanes(&sr, &row_spans, None, None)
             .expect("plan_bus_lanes should succeed");
 
         // Must have at least one lane
