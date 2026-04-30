@@ -2587,8 +2587,16 @@ fn partition_strategy_scoreboard_extended() {
             // lane planner — pad lanes finally propagate. The remaining
             // 3 errors are an unrelated belt-loop on the leftmost lane
             // that was always present but masked by the (4, 9) dead-end.
+            //
+            // P2 3 → 0 after the ghost-router own-trunk hard-block:
+            // each tap/ret spec carries its `lane_trunk_col` and A*
+            // hard-blocks that column for the spec's routing call.
+            // A* now never routes through own south-facing trunk
+            // tiles, so the surviving path is structurally connected
+            // and the head-on + loop + downstream-dead-end trio go
+            // away. PU@3/s ore-red is now validator-clean.
             row_layout: None,
-            expected: (8, 3),
+            expected: (8, 0),
         },
         ScoreboardCase {
             name: "PU@3/s plates yellow",
@@ -2641,7 +2649,14 @@ fn partition_strategy_scoreboard_extended() {
             //
             // Pool 1 → 0, P1/P2 5 → 4 after dropping Relaxed-reach SAT
             // rungs (the user's working URL is now Pool-clean).
-            expected: (0, 4),
+            //
+            // P2 4 → 1 after the ghost-router own-trunk hard-block:
+            // same root cause as PU@3/s ore red — A* used to detour
+            // through own south-facing trunk tiles, leaving fragmented
+            // paths with head-on belt-junctions at the start tile.
+            // The lane_trunk_col hard-block forces A* to find a real
+            // east-going path or fail.
+            expected: (0, 1),
         },
     ];
     run_partition_scoreboard("partition_strategy_scoreboard_extended", cases);

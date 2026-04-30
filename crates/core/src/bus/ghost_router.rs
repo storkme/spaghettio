@@ -90,6 +90,17 @@ struct BeltSpec {
     /// ambiguous for degenerate start == goal specs and length-1 blocked A*
     /// fallbacks). See plan file abundant-gliding-turing.md for context.
     exit_dir: Option<EntityDirection>,
+    /// X-column of the lane's own south-flowing trunk, when the spec
+    /// originates from a tap-off or producer-return on a specific lane.
+    /// A* hard-blocks `(lane_trunk_col, y)` for every `y` during this
+    /// spec's routing call, so the path cannot detour through its own
+    /// trunk tiles — flowing items north against the trunk's south-only
+    /// flow doesn't physically work, and the surviving-tile filter that
+    /// strips the overlap leaves a fragmented path with a head-on belt-
+    /// junction at the start tile (PU@3/s ore-red copper-cable @ x=1,
+    /// y=292 was the motivating bug). `None` for specs that don't have
+    /// a single owning trunk (feeders into a balancer input).
+    lane_trunk_col: Option<i32>,
 }
 
 /// Route all bus belts using the ghost A* approach.
@@ -1083,6 +1094,7 @@ pub fn route_bus_ghost(
                     module_id: lane.module_id,
                     belt_name: horiz_belt,
                     exit_dir: Some(EntityDirection::East),
+                    lane_trunk_col: Some(x),
                 });
             }
         }
@@ -1133,6 +1145,7 @@ pub fn route_bus_ghost(
                     module_id: lane.module_id,
                     belt_name: horiz_belt,
                     exit_dir: Some(EntityDirection::West),
+                    lane_trunk_col: Some(x),
                 });
             }
         }
@@ -1173,6 +1186,7 @@ pub fn route_bus_ghost(
                     module_id: lane.module_id,
                     belt_name: horiz_belt,
                     exit_dir: Some(EntityDirection::West),
+                    lane_trunk_col: Some(x),
                 });
             }
         }
@@ -1304,6 +1318,10 @@ pub fn route_bus_ghost(
                                     module_id: lane.module_id,
                                     belt_name: feeder_belt,
                                     exit_dir: Some(feeder_exit_dir),
+                                    // Feeders walk into a balancer input,
+                                    // not down a single trunk column —
+                                    // own-trunk hard-blocking doesn't apply.
+                                    lane_trunk_col: None,
                                 });
                             }
                         }
@@ -1418,10 +1436,37 @@ pub fn route_bus_ghost(
             history_cost_grid.clone();
 
         for spec in ordered_specs.iter().copied() {
+            // Augment hard-obstacles with the spec's own trunk column
+            // so A* can't detour through its own south-flowing trunk
+            // tiles (the (1, 292) head-on bug). The full column gets
+            // hard-blocked, including tiles south of `spec.start.y`
+            // that aren't physically trunks today — those are simply
+            // empty bus tiles and blocking them just confines the path
+            // to genuinely-relevant directions. `goal_on_obstacle`
+            // semantics still let the path land on the goal even if it
+            // sits in a blocked column (no current spec does, but the
+            // semantics are stable). For specs without a single owning
+            // trunk (feeders), `lane_trunk_col` is `None` and we reuse
+            // the shared `astar_hard` directly.
+            let hard_with_own_trunk;
+            let hard_ref: &FxHashSet<(i32, i32)> = match spec.lane_trunk_col {
+                Some(col) => {
+                    let mut h = astar_hard.clone();
+                    for y in 0..height {
+                        if (col, y) == spec.start || (col, y) == spec.goal {
+                            continue;
+                        }
+                        h.insert((col, y));
+                    }
+                    hard_with_own_trunk = h;
+                    &hard_with_own_trunk
+                }
+                None => &astar_hard,
+            };
             match ghost_astar(
                 spec.start,
                 spec.goal,
-                &astar_hard,
+                hard_ref,
                 &iter_existing,
                 width,
                 height,
