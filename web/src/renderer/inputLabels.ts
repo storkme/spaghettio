@@ -11,7 +11,7 @@
 // items. Groups merge contiguous columns sharing the same carries value.
 // Output trunks are explicitly out of scope for this phase.
 
-import { Container, Sprite, Text, TextStyle } from "pixi.js";
+import { Container, Graphics, Sprite, Text, TextStyle } from "pixi.js";
 import type { LayoutResult, PlacedEntity, SolverResult } from "../engine";
 import { TILE_PX, BELT_ENTITIES, UG_BELT_ENTITIES, PIPE_ENTITIES, niceName } from "./entities";
 import { getItemIconTexture } from "./atlas";
@@ -30,6 +30,22 @@ const SEGMENT_GAP_PX = 6;
 const FONT_BASE_PX = 18;
 const FONT_PER_EXTRA_TILE_PX = 2;
 const FONT_MAX_PX = 26;
+
+// Label rotation. Originally -π/2 (straight up) which made multi-group
+// layouts hard to scan. -π/3 (-60°) reads like slanted text climbing
+// up-and-to-the-right while still keeping labels mostly in their column's
+// vertical headroom.
+const LABEL_ROTATION = -Math.PI / 3;
+
+// Per-group divider bar drawn flush above the trunk top. Makes the column
+// span of each label visually obvious so adjacent groups don't blur
+// together.
+const DIVIDER_THICKNESS_PX = 2;
+const DIVIDER_COLOR = 0xffffff;
+const DIVIDER_ALPHA = 0.55;
+// Inset from each end of the group span so neighbours don't appear to share
+// a single bar — half a tile of horizontal padding feels right at TILE_PX=32.
+const DIVIDER_INSET_PX = 4;
 
 // External input trunks always have `source_y = 0` (lane_planner.rs:198),
 // so their topmost trunk tile sits at the top of the layout. Anything with
@@ -151,16 +167,16 @@ function formatRate(rate: number): string {
 
 /**
  * Build a single rotated label container for one trunk group. The
- * container is positioned so that, when rotated 90° CCW, it reads
- * upward (bottom-to-top) starting near y=0 and rising into the negative
- * world-y headroom above the layout.
+ * container is positioned so that, after `LABEL_ROTATION` is applied, it
+ * reads from near the trunk's top edge climbing into the headroom above
+ * the layout.
  *
  * Layout (pre-rotation, in local coords running left to right):
  *
  *   [icon][gap][rate ][gap][item name (dimmer)]
  *
- * After `rotation = -π/2`, "left to right" becomes "bottom to top",
- * which is the reading order the user requested.
+ * Rotated by -60°, "left to right" becomes "lower-left to upper-right",
+ * so the icon hugs the trunk and the rate + name lean diagonally up.
  */
 function buildLabel(group: TrunkGroup): Container {
   const span = group.xMax - group.xMin + 1;
@@ -229,8 +245,21 @@ export function renderInputLabels(
   if (groups.length === 0) return;
 
   for (const group of groups) {
+    // Divider bar sits flush above the trunk's top tile, spanning just the
+    // group's columns so adjacent groups read as visually distinct.
+    const dividerY = group.topY * TILE_PX - DIVIDER_THICKNESS_PX;
+    const dividerX = group.xMin * TILE_PX + DIVIDER_INSET_PX;
+    const dividerW = (group.xMax - group.xMin + 1) * TILE_PX - 2 * DIVIDER_INSET_PX;
+    if (dividerW > 0) {
+      const divider = new Graphics();
+      divider
+        .rect(dividerX, dividerY, dividerW, DIVIDER_THICKNESS_PX)
+        .fill({ color: DIVIDER_COLOR, alpha: DIVIDER_ALPHA });
+      layer.addChild(divider);
+    }
+
     const label = buildLabel(group);
-    label.rotation = -Math.PI / 2;
+    label.rotation = LABEL_ROTATION;
 
     // Anchor in world (pixel) space. The trunk's top tile sits at
     // (group.xMin .. group.xMax, group.topY). We want the label centred
@@ -239,10 +268,10 @@ export function renderInputLabels(
     const groupCenterX =
       ((group.xMin + group.xMax + 1) / 2) * TILE_PX;
     // Place the rotated baseline ~half a tile above the trunk's top
-    // tile. After the -90° rotation, the label's positive local-x grows
-    // upward in world space, so positioning at (centerX, topY - 0.5)
-    // makes the icon sit just above the trunk and the rate + name rise
-    // further up into the negative-y headroom.
+    // tile. After rotation the label's positive local-x climbs up and
+    // (with a non-90° tilt) slightly to the right, so positioning at
+    // (centerX, topY - 0.5) makes the icon sit just above the trunk and
+    // the rate + name rise into the negative-y headroom.
     const baselineY = group.topY * TILE_PX - TILE_PX * 0.5;
 
     label.x = groupCenterX;
