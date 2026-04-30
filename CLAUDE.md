@@ -104,16 +104,18 @@ Physical rules the layout engine must satisfy:
 
 ## Recipe complexity ladder
 
-Tracks which recipes produce zero-error bus blueprints. Moving up = real progress. Tests for each tier live in `crates/core/tests/e2e.rs`.
+Nauvis science packs as the milestone ladder — each tier adds a chain layer the layout engine has to handle from raw ore. Target rate is 5/s through tier 4; tier 5 reduces to 2/s and tier 6 is a stretch goal. Tests for the underlying recipes live in `crates/core/tests/e2e.rs`; existing tier1–4 test names (e.g. `tier4_advanced_circuit_*`) stay as recipe regression tests independent of this ladder.
 
-| Tier | Recipe | Complexity | Bus status |
-|------|--------|-----------|-----|
-| 1 | `iron-gear-wheel` | 1 recipe, 1 solid input | SOLVED |
-| 2 | `electronic-circuit` | 2 recipes, 2 solid inputs | SOLVED (incl. from ores) |
-| 3 | `plastic-bar` | 1 recipe, 1 fluid + 1 solid input | SOLVED |
-| 4 | `advanced-circuit` | 5+ recipes, mixed solid/fluid | Partial (from plates: lane-throughput warnings, needs [#65](https://github.com/storkme/fucktorio/issues/65); from ores blocked by [#68](https://github.com/storkme/fucktorio/issues/68) and missing balancer shapes [#136](https://github.com/storkme/fucktorio/issues/136)) |
-| 5 | `processing-unit` | Deep chain, multiple fluids | Not attempted |
-| 6 | `rocket-control-unit` | Very deep chain | Not attempted |
+(Off-Nauvis packs — agricultural / electromagnetic / metallurgic / cryogenic / promethium / space — depend on planet-specific raw resources the bus model isn't shaped for, and are deliberately out of scope.)
+
+| Tier | Science pack | New chain elements | Target rate | Bus status |
+|------|--------------|--------------------|-------------|------------|
+| 1 | `automation-science-pack` (red) | iron-plate + copper-plate | 5/s | Should work (subset of solved tier1 cases — no specific test yet) |
+| 2 | `logistic-science-pack` (green) | + iron-gear-wheel + transport-belt + inserter | 5/s | Should work (subset of solved tier2 cases — no specific test yet) |
+| 3 | `military-science-pack` (black) | + piercing-rounds + grenade + stone-wall (no fluids) | 5/s | Untested |
+| 4 | `chemical-science-pack` (blue) | + advanced-circuit + sulfur (sulfuric-acid) + engine-unit (lubricant) | 5/s | Partial — same underlying issues as `advanced-circuit` (lane-throughput [#65](https://github.com/storkme/fucktorio/issues/65), fluid row 3-tile pitch [#68](https://github.com/storkme/fucktorio/issues/68), missing balancer shapes [#136](https://github.com/storkme/fucktorio/issues/136)) |
+| 5 | `production-science-pack` (purple) | + electric-furnace + productivity-module-1 + rail (steel + stone + iron-stick) | 2/s | Not attempted |
+| 6 | `utility-science-pack` (yellow) | + flying-robot-frame + processing-unit + low-density-structure (deepest Nauvis chain) | 2/s (stretch) | Not attempted |
 
 Open tracking issues for layout quality: [#135 balancer templates are oversized](https://github.com/storkme/fucktorio/issues/135), [#136 missing coprime balancer shapes](https://github.com/storkme/fucktorio/issues/136), [#68 fluid row 3-tile pitch](https://github.com/storkme/fucktorio/issues/68) (design: [`docs/rfp-fluid-dual-input-row.md`](docs/rfp-fluid-dual-input-row.md)).
 
