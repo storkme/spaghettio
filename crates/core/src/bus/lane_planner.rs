@@ -564,20 +564,25 @@ fn split_overflowing_lanes(
         } else if clamp_to_consumers {
             // Sanity: with M trunks each capped at full-belt rate, the
             // total rate must fit. Today's corpus (up to processing-unit
-            // @ 2/s express belt) stays inside this envelope — panic
-            // with a clear message rather than silently mis-routing
-            // when a future case overruns.
+            // @ 2/s express belt) stays inside this envelope. Return Err
+            // (rather than panic) when an experimental candidate
+            // (e.g. `bus::decomposition_search::ModuleSizeSplit`) lands
+            // a configuration this lane planner doesn't yet handle —
+            // the caller can then fall back to a candidate that does.
+            // Fixing properly requires a multi-stage balancer in this
+            // path; tracked as the unblocker for K-DS1-2 in
+            // `docs/rfp-decomposition-search.md`.
             if lane.rate > (consumer_trunk_count as f64) * full_belt_cap {
-                todo!(
+                return Err(format!(
                     "lane_planner: consumer-clamped fan-in for item {item} needs total_rate \
                      {rate}/s <= {m} consumer trunks * full-belt-cap {cap}/s = {limit}/s; \
-                     not reachable in current corpus, extend with multi-stage balancer if hit",
+                     not yet supported (multi-stage balancer not wired)",
                     item = lane.item,
                     rate = lane.rate,
                     m = consumer_trunk_count,
                     cap = full_belt_cap,
                     limit = (consumer_trunk_count as f64) * full_belt_cap,
-                );
+                ));
             }
             consumer_trunk_count
         } else {
