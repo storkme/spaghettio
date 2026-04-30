@@ -9,6 +9,7 @@
 //! `get_all_items`, `get_recipes_for_item`, `parse_blueprint`.
 
 use fucktorio_core::models::{LayoutResult, PlacedEntity, SolverResult};
+use fucktorio_core::recipe_db::MachinePalette;
 use fucktorio_core::validate::{self, LayoutStyle, ValidationIssue};
 use fucktorio_core::{
     blueprint, blueprint_parser, bus::junction_cost::solution_cost,
@@ -59,6 +60,23 @@ pub fn solve(
 ) -> Result<SolverResult, JsError> {
     let inputs: FxHashSet<String> = available_inputs.into_iter().collect();
     solver::solve(target_item, target_rate, &inputs, machine_entity)
+        .map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Solve with a per-category machine palette. Categories absent from the
+/// palette fall through to the hardcoded mapping (see
+/// `recipe_db::machine_for_recipe`); fully unmapped categories use
+/// `default_machine`.
+#[wasm_bindgen]
+pub fn solve_with_palette(
+    target_item: &str,
+    target_rate: f64,
+    available_inputs: Vec<String>,
+    palette: MachinePalette,
+    default_machine: &str,
+) -> Result<SolverResult, JsError> {
+    let inputs: FxHashSet<String> = available_inputs.into_iter().collect();
+    solver::solve_with_palette(target_item, target_rate, &inputs, &palette, default_machine)
         .map_err(|e| JsError::new(&e.to_string()))
 }
 

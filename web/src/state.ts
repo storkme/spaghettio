@@ -3,8 +3,12 @@ import { shortIdForSlug, slugForShortId } from "./shortIds.js";
 export interface FormState {
   item: string;
   rate: number;
-  /** null means "no machine in URL — caller should derive from item". */
-  machine: string | null;
+  /** Per-recipe-category machine override. Sparse — categories absent here
+   * fall through to the hardcoded mapping in the Rust solver, which itself
+   * falls through to `DEFAULT_MACHINES.crafting`. URL keys are listed in
+   * `URL_KEY_BY_CATEGORY`; the legacy `?machine=` param (single-string
+   * AM tier) is migrated into `machines.crafting` on read. */
+  machines: Record<string, string>;
   inputs: string[];
   /** Max belt tier override, e.g. "transport-belt". null = auto. */
   belt: string | null;
@@ -61,7 +65,24 @@ export const DEFAULT_CHECKED_INPUTS: string[] = [
 
 export const DEFAULT_ITEM = "iron-gear-wheel";
 export const DEFAULT_RATE = 10;
-export const DEFAULT_MACHINE = "assembling-machine-3";
+/** Per-category default machine. Read by the sidebar to populate selectors
+ * and by the engine to fill the `default_machine` argument. The crafting
+ * entry doubles as the "fall-through" machine for any category not present
+ * in the palette and not hardcoded in `recipe_db::machine_for_recipe`. */
+export const DEFAULT_MACHINES: Record<string, string> = {
+  crafting: "assembling-machine-3",
+  smelting: "electric-furnace",
+};
+
+/** Categories the user can edit in the URL, with their short URL keys. */
+export const URL_KEY_BY_CATEGORY: Record<string, string> = {
+  crafting: "craft",
+  smelting: "smelt",
+};
+
+/** Back-compat alias: the legacy single-machine URL parameter used to
+ * configure the assembler tier. Read into `machines.crafting`. */
+const LEGACY_MACHINE_KEY = "machine";
 
 // Hash-form (Bucket B) URL scheme:
 //
@@ -150,10 +171,13 @@ function readHashState(): FormState | null {
   const rate = !isNaN(rateParsed) && rateParsed > 0 ? rateParsed : DEFAULT_RATE;
 
   const machineCode = get(2);
-  let machine: string | null = null;
+  const machines: Record<string, string> = {};
   if (machineCode) {
-    machine = codeToSlug(machineCode);
-    if (machine === null) return null;
+    const decoded = codeToSlug(machineCode);
+    if (decoded === null) return null;
+    // Slot 2 is the crafting tier — the canonical "the user changed the
+    // assembler" knob. Other categories ride in extras (see below).
+    machines.crafting = decoded;
   }
 
   const inputsRaw = get(3);
@@ -194,7 +218,19 @@ function readHashState(): FormState | null {
     }
   }
 
-  return { item, rate, machine, inputs, belt, strategy, rowLayout, customInputs };
+  // Per-category machines other than crafting (which lives in slot 2)
+  // ride as `<urlKey>=<short-code>` extras — smelting today, plus any
+  // future category in `URL_KEY_BY_CATEGORY`.
+  for (const [category, urlKey] of Object.entries(URL_KEY_BY_CATEGORY)) {
+    if (category === "crafting") continue;
+    const code = extras.get(urlKey);
+    if (!code) continue;
+    const slug = codeToSlug(code);
+    if (slug === null) return null;
+    machines[category] = slug;
+  }
+
+  return { item, rate, machines, inputs, belt, strategy, rowLayout, customInputs };
 }
 
 function readQueryState(): FormState {
@@ -203,7 +239,18 @@ function readQueryState(): FormState {
   const item = params.get("item") ?? DEFAULT_ITEM;
   const rawRate = parseFloat(params.get("rate") ?? "");
   const rate = isNaN(rawRate) || rawRate <= 0 ? DEFAULT_RATE : rawRate;
-  const machine = params.get("machine");
+
+  // Per-category machine palette. Read each editable category's URL key,
+  // then fold in the legacy `?machine=` value as `machines.crafting` if
+  // the new `?craft=` key is absent.
+  const machines: Record<string, string> = {};
+  for (const [category, urlKey] of Object.entries(URL_KEY_BY_CATEGORY)) {
+    const value = params.get(urlKey);
+    if (value) machines[category] = value;
+  }
+  const legacy = params.get(LEGACY_MACHINE_KEY);
+  if (legacy && !machines.crafting) machines.crafting = legacy;
+
   const inParam = params.get("in");
   const inputs = inParam ? inParam.split(",").filter((s) => s.length > 0) : DEFAULT_CHECKED_INPUTS;
   const belt = params.get("belt");
@@ -218,7 +265,7 @@ function readQueryState(): FormState {
   const ciParam = params.get("ci");
   const customInputs = ciParam ? ciParam.split(",").filter((s) => s.length > 0) : [];
 
-  return { item, rate, machine, inputs, belt, strategy, rowLayout, customInputs };
+  return { item, rate, machines, inputs, belt, strategy, rowLayout, customInputs };
 }
 
 export function readUrlState(): FormState {
@@ -241,13 +288,32 @@ export function urlHasGeneratorState(): boolean {
   );
 }
 
-function formatHashState(
-  state: Omit<FormState, "machine"> & { machine: string },
-): string {
+function machinesAreDefault(machines: Record<string, string>): boolean {
+  // Defaults are equal when every editable category either matches its
+  // default exactly or is absent from the palette.
+  for (const [category, urlKey] of Object.entries(URL_KEY_BY_CATEGORY)) {
+    void urlKey;
+    const picked = machines[category];
+    if (picked && picked !== DEFAULT_MACHINES[category]) return false;
+  }
+  // Reject any palette entry not in URL_KEY_BY_CATEGORY (shouldn't happen
+  // through the UI, but a hand-edited URL could).
+  for (const category of Object.keys(machines)) {
+    if (!(category in URL_KEY_BY_CATEGORY)) return false;
+  }
+  return true;
+}
+
+function formatHashState(state: FormState): string {
   const itemCode = slugToCode(state.item);
   const rate = String(state.rate);
+  // Slot 2 carries the crafting tier — the canonical assembler-tier knob.
+  // Other categories (smelting today) ride as extras when non-default.
+  const crafting = state.machines.crafting;
   const machineCode =
-    state.machine === DEFAULT_MACHINE ? SKIP_TOKEN : slugToCode(state.machine);
+    !crafting || crafting === DEFAULT_MACHINES.crafting
+      ? SKIP_TOKEN
+      : slugToCode(crafting);
   const inputsAreDefault =
     state.inputs.length === DEFAULT_CHECKED_INPUTS.length &&
     state.inputs.every((v, i) => v === DEFAULT_CHECKED_INPUTS[i]);
@@ -270,6 +336,17 @@ function formatHashState(
       state.customInputs.map(slugToCode).join(INPUT_SEPARATOR),
     );
   }
+  // Per-category machines other than crafting — encode as
+  // `<urlKey>=<short-code>` extras using the same `URL_KEY_BY_CATEGORY`
+  // table the query-form writer uses, so a hand-edited hash URL reads
+  // the same as a hand-edited query URL for any non-default smelter.
+  for (const [category, urlKey] of Object.entries(URL_KEY_BY_CATEGORY)) {
+    if (category === "crafting") continue;
+    const picked = state.machines[category];
+    if (picked && picked !== DEFAULT_MACHINES[category]) {
+      extras.set(urlKey, slugToCode(picked));
+    }
+  }
 
   // Trim trailing skip-token slots when no extras follow — produces
   // `#/l/ipr/5` instead of `#/l/ipr/5/_/_/_` for the common case where
@@ -287,11 +364,11 @@ function formatHashState(
   return path;
 }
 
-export function writeUrlState(state: Omit<FormState, "machine"> & { machine: string }): void {
+export function writeUrlState(state: FormState): void {
   const isDefault =
     state.item === DEFAULT_ITEM &&
     state.rate === DEFAULT_RATE &&
-    state.machine === DEFAULT_MACHINE &&
+    machinesAreDefault(state.machines) &&
     state.inputs.length === DEFAULT_CHECKED_INPUTS.length &&
     state.inputs.every((v, i) => v === DEFAULT_CHECKED_INPUTS[i]) &&
     !state.belt &&

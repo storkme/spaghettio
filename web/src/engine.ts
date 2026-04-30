@@ -224,7 +224,8 @@ async function solve(
   targetItem: string,
   targetRate: number,
   availableInputs: string[],
-  machineEntity: string,
+  palette: Record<string, string>,
+  defaultMachine: string,
 ): Promise<SolverResult> {
   // If a streaming layout is in flight, the user has just typed a new target
   // and is waiting for feedback — kill the old WASM work so solve isn't
@@ -235,7 +236,8 @@ async function solve(
     targetItem,
     targetRate,
     availableInputs,
-    machineEntity,
+    palette,
+    defaultMachine,
   });
 }
 

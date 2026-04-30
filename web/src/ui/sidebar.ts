@@ -1,8 +1,14 @@
 import type { Engine, SolverResult, LayoutResult, ItemFlow, ValidationIssue, TraceEvent } from "../engine.js";
-import { readUrlState, writeUrlState, DEFAULT_INPUTS } from "../state.js";
+import { readUrlState, writeUrlState, DEFAULT_INPUTS, DEFAULT_MACHINES } from "../state.js";
 import { beltTierForRate, hexToCss } from "../renderer/colors.js";
 import { niceName, setRecipeFlows, preloadCarriesIcons } from "../renderer/entities.js";
 import "./sidebar.css";
+
+/** Marker the Rust solver prepends to `SolverError::IncompatibleMachine`
+ * messages. Must stay in sync with `INCOMPATIBLE_MACHINE_PREFIX` in
+ * `crates/core/src/solver.rs`. The sidebar splits on it to route the
+ * message to the dedicated config-error banner. */
+const INCOMPATIBLE_MACHINE_MARKER = "[INCOMPATIBLE_MACHINE]";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -342,13 +348,76 @@ export function renderSidebar(
   picker.el.style.cssText = "margin-bottom:6px";
   targetBody.appendChild(picker.el);
 
-  // Assembler tier (only assembling-machine-1/2/3 — specialized machines are auto-picked per recipe)
-  const machineSelect = document.createElement("select");
-  machineSelect.className = "sb-select";
-  ["assembling-machine-1", "assembling-machine-2", "assembling-machine-3"].forEach(
-    (m) => machineSelect.appendChild(makeOption(m, "assembling-machine-3")),
-  );
-  targetBody.appendChild(makeField("Assembler", machineSelect));
+  // Per-category machine palette. Each editable category gets a `<select>`
+  // tagged with `data-cat="<category>"` so the solve handler can build the
+  // palette in one pass. Categories with only one Space Age option today
+  // render as a read-only label so the user can see which machine each
+  // recipe class will use.
+  type EditableMachine = {
+    category: string;
+    label: string;
+    options: { value: string; disabled?: boolean; title?: string }[];
+  };
+  const EDITABLE_MACHINES: EditableMachine[] = [
+    {
+      category: "crafting",
+      label: "Assembler",
+      options: [
+        { value: "assembling-machine-1" },
+        { value: "assembling-machine-2" },
+        { value: "assembling-machine-3" },
+      ],
+    },
+    {
+      category: "smelting",
+      label: "Furnace",
+      options: [
+        { value: "electric-furnace" },
+        { value: "stone-furnace", disabled: true, title: "Requires fuel routing — coming later" },
+      ],
+    },
+  ];
+  const READONLY_MACHINES: { label: string; machine: string }[] = [
+    { label: "Foundry", machine: "foundry" },
+    { label: "EM Plant", machine: "electromagnetic-plant" },
+    { label: "Chemical Plant", machine: "chemical-plant" },
+    { label: "Oil Refinery", machine: "oil-refinery" },
+    { label: "Cryogenic Plant", machine: "cryogenic-plant" },
+    { label: "Biochamber", machine: "biochamber" },
+  ];
+
+  const machineSelects = new Map<string, HTMLSelectElement>();
+  for (const m of EDITABLE_MACHINES) {
+    const sel = document.createElement("select");
+    sel.className = "sb-select";
+    sel.dataset.cat = m.category;
+    const defaultValue = DEFAULT_MACHINES[m.category] ?? "";
+    for (const opt of m.options) {
+      const o = makeOption(opt.value, defaultValue);
+      if (opt.disabled) o.disabled = true;
+      if (opt.title) o.title = opt.title;
+      sel.appendChild(o);
+    }
+    targetBody.appendChild(makeField(m.label, sel));
+    machineSelects.set(m.category, sel);
+  }
+  // Kept around for the back-compat readers below (auto-pick on item change,
+  // setParams snapshot restore). These all act on the assembler tier.
+  const machineSelect = machineSelects.get("crafting")!;
+  for (const ro of READONLY_MACHINES) {
+    const span = document.createElement("span");
+    span.className = "sb-machine-readonly";
+    span.textContent = niceName(ro.machine);
+    targetBody.appendChild(makeField(ro.label, span));
+  }
+
+  function buildPalette(): Record<string, string> {
+    const palette: Record<string, string> = {};
+    for (const [cat, sel] of machineSelects) {
+      if (sel.value) palette[cat] = sel.value;
+    }
+    return palette;
+  }
 
   // Belt tier (Auto / Yellow / Red / Blue) — moved up from the former Layout section
   const beltSelect = document.createElement("select");
@@ -570,11 +639,20 @@ export function renderSidebar(
   const urlState = readUrlState();
   picker.setValue(urlState.item);
   rateInput.value = String(urlState.rate);
-  // Only accept assembling-machine-1/2/3 from URL; anything else (legacy specialized machines) → AM3
+  // Per-category palette. Each `<select>` only keeps a URL value if it's a
+  // valid (non-disabled) option for its category, so a hand-edited URL or a
+  // legacy `?machine=`-derived value that points at a removed machine falls
+  // back to the default rather than rendering an empty select.
   const ASSEMBLER_TIERS = new Set(["assembling-machine-1", "assembling-machine-2", "assembling-machine-3"]);
-  machineSelect.value = (urlState.machine && ASSEMBLER_TIERS.has(urlState.machine))
-    ? urlState.machine
-    : "assembling-machine-3";
+  for (const [cat, sel] of machineSelects) {
+    const urlValue = urlState.machines[cat];
+    const validOptions = new Set(
+      Array.from(sel.options).filter((o) => !o.disabled).map((o) => o.value),
+    );
+    sel.value = urlValue && validOptions.has(urlValue)
+      ? urlValue
+      : (DEFAULT_MACHINES[cat] ?? sel.options[0]?.value ?? "");
+  }
   checkboxes.forEach((cb, name) => {
     cb.checked = urlState.inputs.includes(name);
     const tag = cb.closest(".sb-tag") as HTMLLabelElement;
@@ -588,6 +666,23 @@ export function renderSidebar(
     if (itemSet.has(item) && !defaultInputSet.has(item) && !customInputs.includes(item)) {
       customInputs.push(item);
       renderCustomTag(item);
+    }
+  }
+
+  // Pre-flight error banner. Rendered above the solver result; populated
+  // by `setConfigError(msg)`. Today nothing writes to it — the next PR
+  // (incompatible-machine preflight + layout-error promotion) wires it up.
+  const configErrorDiv = document.createElement("div");
+  configErrorDiv.className = "sb-config-error";
+  configErrorDiv.style.display = "none";
+  resultContainer.before(configErrorDiv);
+  function setConfigError(message: string | null): void {
+    if (message) {
+      configErrorDiv.textContent = message;
+      configErrorDiv.style.display = "";
+    } else {
+      configErrorDiv.textContent = "";
+      configErrorDiv.style.display = "none";
     }
   }
 
@@ -606,7 +701,6 @@ export function renderSidebar(
   async function runSolve(): Promise<void> {
     const targetItem = picker.getValue();
     const targetRate = parseFloat(rateInput.value);
-    const machineEntity = machineSelect.value;
     const checkedDefaults = DEFAULT_INPUTS.filter((inp) => checkboxes.get(inp)?.checked);
     const availableInputs = [...checkedDefaults, ...customInputs];
 
@@ -619,15 +713,20 @@ export function renderSidebar(
     if (isNaN(targetRate) || targetRate <= 0) return;
 
     if (targetItem !== previousItem) {
-      const suggestedMachine = engine.defaultMachineForItem(targetItem, machineEntity);
+      // Auto-pick assembler tier from the recipe's category mapping. Only
+      // applies to the crafting `<select>` — the per-category palette
+      // doesn't (yet) feed `defaultMachineForItem`.
+      const suggestedMachine = engine.defaultMachineForItem(targetItem, machineSelect.value);
       if (ASSEMBLER_TIERS.has(suggestedMachine)) machineSelect.value = suggestedMachine;
       previousItem = targetItem;
     }
 
+    const palette = buildPalette();
+
     writeUrlState({
       item: targetItem,
       rate: targetRate,
-      machine: machineSelect.value,
+      machines: palette,
       inputs: checkedDefaults,
       belt: beltSelect.value || null,
       strategy: strategySelect.value || null,
@@ -637,20 +736,37 @@ export function renderSidebar(
 
     const gen = ++solveGeneration;
     resultContainer.innerHTML = "";
+    setConfigError(null);
     currentLayout = null;
     blueprintSection.style.display = "none";
 
     let result: SolverResult;
     try {
-      result = await engine.solve(targetItem, targetRate, availableInputs, machineSelect.value);
+      result = await engine.solve(
+        targetItem,
+        targetRate,
+        availableInputs,
+        palette,
+        palette.crafting ?? DEFAULT_MACHINES.crafting,
+      );
     } catch (err) {
       if (gen !== solveGeneration) return;
       callbacks.renderGraph(null);
       if (solverCount) solverCount.textContent = "error";
-      const errDiv = document.createElement("div");
-      errDiv.className = "sb-result-error";
-      errDiv.textContent = String(err);
-      resultContainer.appendChild(errDiv);
+      const msg = String(err instanceof Error ? err.message : err);
+      // Pre-flight machine/category errors carry a marker prefix from the
+      // Rust solver. Route them to the dedicated config-error banner so
+      // they sit above the result container; everything else stays inline.
+      if (msg.includes(INCOMPATIBLE_MACHINE_MARKER)) {
+        const idx = msg.indexOf(INCOMPATIBLE_MACHINE_MARKER);
+        const cleaned = msg.slice(idx + INCOMPATIBLE_MACHINE_MARKER.length).trim();
+        setConfigError(cleaned);
+      } else {
+        const errDiv = document.createElement("div");
+        errDiv.className = "sb-result-error";
+        errDiv.textContent = msg;
+        resultContainer.appendChild(errDiv);
+      }
       return;
     }
     if (gen !== solveGeneration) return;
@@ -711,7 +827,9 @@ export function renderSidebar(
   });
 
   rateInput.addEventListener("input", scheduleAutoSolve);
-  machineSelect.addEventListener("change", scheduleAutoSolve);
+  for (const sel of machineSelects.values()) {
+    sel.addEventListener("change", scheduleAutoSolve);
+  }
   beltSelect.addEventListener("change", scheduleAutoSolve);
   strategySelect.addEventListener("change", scheduleAutoSolve);
   rowLayoutSelect.addEventListener("change", scheduleAutoSolve);

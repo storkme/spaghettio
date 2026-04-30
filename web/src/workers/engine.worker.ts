@@ -1,6 +1,6 @@
 import wasmInit, {
   init,
-  solve,
+  solve_with_palette,
   solve_fixture,
   all_producible_items,
   all_producer_machines,
@@ -30,7 +30,8 @@ type Request =
       targetItem: string;
       targetRate: number;
       availableInputs: string[];
-      machineEntity: string;
+      palette: Record<string, string>;
+      defaultMachine: string;
     }
   | { id: number; method: "layout"; result: SolverResult; maxBeltTier: string | null; strategy: string | null; rowLayout: string | null }
   | { id: number; method: "layoutTraced"; result: SolverResult; maxBeltTier: string | null; strategy: string | null; rowLayout: string | null }
@@ -98,7 +99,13 @@ self.onmessage = async (e: MessageEvent<Request>) => {
         break;
       }
       case "solve":
-        result = solve(req.targetItem, req.targetRate, req.availableInputs, req.machineEntity);
+        result = solve_with_palette(
+          req.targetItem,
+          req.targetRate,
+          req.availableInputs,
+          { by_category: req.palette },
+          req.defaultMachine,
+        );
         break;
       case "layout":
         result = layout(req.result, req.maxBeltTier ?? undefined, req.strategy ?? undefined, req.rowLayout ?? undefined);

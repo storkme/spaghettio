@@ -631,6 +631,70 @@ fn tier1_iron_gear_wheel_20s() {
     assert_golden_hash(&result, "tier1_iron_gear_wheel_20s");
 }
 
+/// E2E coverage for the per-category machine palette: solve →
+/// layout → validate, but with a non-default palette that pins the
+/// crafting category to AM1 (the slowest tier) and verify (a) every
+/// machine in the result uses AM1 and (b) the layout is still valid.
+/// AM1, AM2, AM3 are all 3x3, so the layout engine sees identical
+/// geometry — only machine count changes (AM1 is slower → more
+/// machines). Catches regressions where the palette doesn't actually
+/// thread through to the solver, and any layout-engine assumptions
+/// that machines must be AM3.
+#[test]
+#[ntest::timeout(10000)]
+fn palette_pins_iron_gear_wheel_to_am1() {
+    use fucktorio_core::recipe_db::MachinePalette;
+
+    let inputs: FxHashSet<String> = ["iron-plate"].iter().map(|s| s.to_string()).collect();
+    let mut palette = MachinePalette::default();
+    palette
+        .by_category
+        .insert("crafting".into(), "assembling-machine-1".into());
+
+    let solver_result = solver::solve_with_palette(
+        "iron-gear-wheel",
+        10.0,
+        &inputs,
+        &palette,
+        "assembling-machine-3",
+    )
+    .expect("solver runs with AM1 palette");
+
+    // Every recipe step in this chain is `crafting` category, so the
+    // palette pin should win across the board.
+    assert!(
+        solver_result.machines.iter().all(|m| m.entity == "assembling-machine-1"),
+        "expected all AM1, got {:?}",
+        solver_result.machines.iter().map(|m| &m.entity).collect::<Vec<_>>()
+    );
+
+    // AM1 (speed 0.5) needs more machines than AM3 (speed 1.25) for the
+    // same throughput. Sanity-check we got the slower path, not silently
+    // re-resolved to the default.
+    let am1_count: f64 = solver_result.machines.iter().map(|m| m.count).sum();
+    assert!(am1_count > 4.0, "expected >4 AM1s for 10/s gears, got {am1_count}");
+
+    // Layout + validate. We don't pin a golden hash — the goal is to
+    // confirm the palette doesn't break the layout engine, not to lock
+    // a specific layout.
+    let layout = layout::build_bus_layout(
+        &solver_result,
+        layout::LayoutOptions::default(),
+    )
+    .expect("layout builds");
+
+    let issues = match validate::validate(&layout, Some(&solver_result), LayoutStyle::Bus) {
+        Ok(issues) => issues,
+        Err(e) => e.issues,
+    };
+    let errors: Vec<&ValidationIssue> =
+        issues.iter().filter(|i| i.severity == Severity::Error).collect();
+    assert!(
+        errors.is_empty(),
+        "AM1 palette layout produced validation errors: {errors:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Tier 2: electronic-circuit (2 recipes, 2 solid inputs)
 // ---------------------------------------------------------------------------

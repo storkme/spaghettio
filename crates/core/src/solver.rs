@@ -1,8 +1,17 @@
 //! Recursive recipe solver: target item/rate → machine counts & flows.
 
 use crate::models::{ItemFlow, MachineSpec, SolverResult};
-use crate::recipe_db::{find_recipe_for_item_excluding, get_crafting_speed, machine_for_recipe};
+use crate::recipe_db::{
+    find_recipe_for_item_excluding, get_crafting_speed, machine_can_run_recipe,
+    machine_for_recipe_with_palette, MachineIncompatibility, MachinePalette,
+};
 use rustc_hash::FxHashSet;
+
+/// Marker prefix carried in `IncompatibleMachine` error strings across the
+/// WASM boundary. The web sidebar splits on this to route the message to
+/// the dedicated config-error banner instead of the generic solver-error
+/// region. Keep in sync with `INCOMPATIBLE_MACHINE_PREFIX` in the web layer.
+pub const INCOMPATIBLE_MACHINE_PREFIX: &str = "[INCOMPATIBLE_MACHINE] ";
 
 #[derive(Debug, thiserror::Error)]
 pub enum SolverError {
@@ -10,6 +19,16 @@ pub enum SolverError {
     ZeroProduct { recipe: String, item: String },
     #[error("no crafting speed for entity {entity}")]
     MissingCraftingSpeed { entity: String },
+    /// Pre-flight rejection: the machine the palette resolved to can't run
+    /// this recipe. The Display impl prefixes the message with
+    /// [`INCOMPATIBLE_MACHINE_PREFIX`] so web callers can route it to the
+    /// dedicated config-error banner.
+    #[error("{}{machine} can't make {recipe}: {reason}", INCOMPATIBLE_MACHINE_PREFIX)]
+    IncompatibleMachine {
+        recipe: String,
+        machine: String,
+        reason: MachineIncompatibility,
+    },
 }
 
 struct SolveState {
@@ -45,11 +64,31 @@ pub fn solve(
     available_inputs: &FxHashSet<String>,
     machine_entity: &str,
 ) -> Result<SolverResult, SolverError> {
-    solve_with_exclusions(
+    solve_with_palette_and_exclusions(
         target_item,
         target_rate,
         available_inputs,
+        &MachinePalette::default(),
         machine_entity,
+        &FxHashSet::default(),
+    )
+}
+
+/// Like [`solve`] but consults a per-category [`MachinePalette`] before
+/// falling back to the hardcoded category mapping and `default_machine`.
+pub fn solve_with_palette(
+    target_item: &str,
+    target_rate: f64,
+    available_inputs: &FxHashSet<String>,
+    palette: &MachinePalette,
+    default_machine: &str,
+) -> Result<SolverResult, SolverError> {
+    solve_with_palette_and_exclusions(
+        target_item,
+        target_rate,
+        available_inputs,
+        palette,
+        default_machine,
         &FxHashSet::default(),
     )
 }
@@ -66,6 +105,25 @@ pub fn solve_with_exclusions(
     machine_entity: &str,
     excluded_recipes: &FxHashSet<String>,
 ) -> Result<SolverResult, SolverError> {
+    solve_with_palette_and_exclusions(
+        target_item,
+        target_rate,
+        available_inputs,
+        &MachinePalette::default(),
+        machine_entity,
+        excluded_recipes,
+    )
+}
+
+/// Combined variant: per-category palette + recipe exclusions.
+pub fn solve_with_palette_and_exclusions(
+    target_item: &str,
+    target_rate: f64,
+    available_inputs: &FxHashSet<String>,
+    palette: &MachinePalette,
+    default_machine: &str,
+    excluded_recipes: &FxHashSet<String>,
+) -> Result<SolverResult, SolverError> {
     let mut state = SolveState {
         machines: Vec::new(),
         external_inputs: Vec::new(),
@@ -78,7 +136,8 @@ pub fn solve_with_exclusions(
         target_rate,
         false,
         available_inputs,
-        machine_entity,
+        palette,
+        default_machine,
         excluded_recipes,
         &mut state,
     )?;
@@ -96,12 +155,14 @@ pub fn solve_with_exclusions(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resolve(
     item: &str,
     rate: f64,
     is_fluid: bool,
     available_inputs: &FxHashSet<String>,
-    machine_entity: &str,
+    palette: &MachinePalette,
+    default_machine: &str,
     excluded_recipes: &FxHashSet<String>,
     state: &mut SolveState,
 ) -> Result<(), SolverError> {
@@ -125,7 +186,14 @@ fn resolve(
 
     state.resolving.insert(item.to_string());
 
-    let entity = machine_for_recipe(recipe, machine_entity);
+    let entity = machine_for_recipe_with_palette(recipe, palette, default_machine);
+    if let Err(reason) = machine_can_run_recipe(&entity, recipe) {
+        return Err(SolverError::IncompatibleMachine {
+            recipe: recipe.name.clone(),
+            machine: entity.clone(),
+            reason,
+        });
+    }
     let crafting_speed = get_crafting_speed(&entity);
     if crafting_speed <= 0.0 {
         return Err(SolverError::MissingCraftingSpeed {
@@ -194,7 +262,8 @@ fn resolve(
             ingredient_rate,
             ing_is_fluid,
             available_inputs,
-            machine_entity,
+            palette,
+            default_machine,
             excluded_recipes,
             state,
         )?;
@@ -242,5 +311,85 @@ mod tests {
         assert_eq!(result.external_outputs.len(), 1);
         assert_eq!(result.external_outputs[0].item, "iron-gear-wheel");
         assert_eq!(result.external_outputs[0].rate, 10.0);
+    }
+
+    #[test]
+    fn am1_palette_for_advanced_circuit_returns_incompatible_error() {
+        // advanced-circuit has 3 ingredients in `electronics` category. Pin
+        // electronics → AM1 in the palette and expect a typed
+        // IncompatibleMachine error rather than a silent half-broken layout.
+        let available = inputs_of(&[
+            "iron-plate",
+            "copper-plate",
+            "plastic-bar",
+            "electronic-circuit",
+        ]);
+        let mut palette = MachinePalette::default();
+        palette
+            .by_category
+            .insert("electronics".into(), "assembling-machine-1".into());
+        let err = solve_with_palette(
+            "advanced-circuit",
+            1.0,
+            &available,
+            &palette,
+            "assembling-machine-3",
+        )
+        .expect_err("AM1 should be rejected for advanced-circuit");
+        match err {
+            SolverError::IncompatibleMachine { machine, reason, .. } => {
+                assert_eq!(machine, "assembling-machine-1");
+                assert!(matches!(
+                    reason,
+                    MachineIncompatibility::TooManyIngredients { limit: 2, .. }
+                ));
+            }
+            other => panic!("expected IncompatibleMachine, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn incompatible_machine_error_message_carries_marker_prefix() {
+        // The web layer relies on the marker prefix to route this error to
+        // the dedicated config-error banner. Lock the contract.
+        let err = SolverError::IncompatibleMachine {
+            recipe: "advanced-circuit".into(),
+            machine: "assembling-machine-1".into(),
+            reason: MachineIncompatibility::TooManyIngredients { limit: 2, got: 3 },
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.starts_with(INCOMPATIBLE_MACHINE_PREFIX),
+            "expected leading marker, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn palette_overrides_electronics_machine_end_to_end() {
+        // electronic-circuit and copper-cable are both `electronics` category
+        // (a fall-through, not hardcoded). With palette {electronics: AM1},
+        // both production steps should land on AM1 regardless of `default`.
+        let available = inputs_of(&["iron-plate", "copper-plate"]);
+        let mut palette = MachinePalette::default();
+        palette
+            .by_category
+            .insert("electronics".into(), "assembling-machine-1".into());
+        let result = solve_with_palette(
+            "electronic-circuit",
+            5.0,
+            &available,
+            &palette,
+            "assembling-machine-3",
+        )
+        .expect("solver runs");
+
+        assert!(!result.machines.is_empty());
+        for m in &result.machines {
+            assert_eq!(
+                m.entity, "assembling-machine-1",
+                "recipe {} ended up on {}, expected AM1",
+                m.recipe, m.entity
+            );
+        }
     }
 }

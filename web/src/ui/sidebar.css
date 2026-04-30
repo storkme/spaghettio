@@ -82,6 +82,18 @@
 }
 .sb-select:focus { border-color: #555; }
 
+/* Read-only machine label, styled like a disabled .sb-select. Used in the
+ * Machines section for categories with only a single Space Age option. */
+.sb-machine-readonly {
+  background: #1a1a1a;
+  color: #888;
+  border: 1px solid #2a2a2a;
+  border-radius: 3px;
+  padding: 4px 6px;
+  font-size: 12px;
+  font-family: inherit;
+}
+
 /* ---- Tag pills ---- */
 .sb-tags {
   display: flex;
@@ -314,6 +326,18 @@
 
 /* ---- Errors (inline) ---- */
 .sb-result-error {
+  color: #f44;
+  font-family: monospace;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 4px 0;
+}
+
+/* Pre-flight config error — same red styling as `.sb-result-error` but
+ * sits above the result container so it stays visible while a stale
+ * solver result is being discarded. */
+.sb-config-error {
   color: #f44;
   font-family: monospace;
   font-size: 11px;
