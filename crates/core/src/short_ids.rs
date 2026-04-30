@@ -126,7 +126,10 @@ pub fn build_short_id_map(slugs: &[&str]) -> Result<FxHashMap<String, String>, V
 /// Universe of slugs the short-id table covers: every item that appears as
 /// a recipe ingredient or product, plus every machine entity. Sorted +
 /// deduped so the table is identical across runs.
-fn known_slugs() -> Vec<String> {
+///
+/// Also the input the web app feeds to its TS port of the algorithm — both
+/// sides must use the same universe to produce identical codes.
+pub fn known_slugs() -> Vec<String> {
     let mut set: FxHashSet<String> = FxHashSet::default();
     for recipe in db().recipes.values() {
         for ing in &recipe.ingredients {

@@ -113,6 +113,7 @@ function appendSatCacheRecord(recordBytes: Uint8Array): void {
 
 let itemsCache: string[] = [];
 let machinesCache: string[] = [];
+let knownSlugsCache: string[] = [];
 let defaultMachineCache = new Map<string, string>();
 
 let activeCountListeners = new Set<(active: number) => void>();
@@ -212,6 +213,7 @@ export async function initEngine(): Promise<void> {
 
   itemsCache = await call<string[]>({ method: "allProducibleItems" });
   machinesCache = await call<string[]>({ method: "allProducerMachines" });
+  knownSlugsCache = await call<string[]>({ method: "allKnownSlugs" });
   const defaults = await call<[string, string][]>({
     method: "defaultMachinesForItems",
     items: itemsCache,
@@ -245,6 +247,10 @@ function allProducibleItems(): string[] {
 
 function allProducerMachines(): string[] {
   return machinesCache;
+}
+
+function allKnownSlugs(): string[] {
+  return knownSlugsCache;
 }
 
 function buildLayout(result: SolverResult, maxBeltTier?: string, strategy?: string, rowLayout?: string): Promise<LayoutResult> {
@@ -519,6 +525,7 @@ export type Engine = {
   solve: typeof solve;
   allProducibleItems: typeof allProducibleItems;
   allProducerMachines: typeof allProducerMachines;
+  allKnownSlugs: typeof allKnownSlugs;
   buildLayout: typeof buildLayout;
   buildLayoutTraced: typeof buildLayoutTraced;
   buildLayoutStreaming: typeof buildLayoutStreaming;
@@ -535,6 +542,7 @@ export function getEngine(): Engine {
     solve,
     allProducibleItems,
     allProducerMachines,
+    allKnownSlugs,
     buildLayout,
     buildLayoutTraced,
     buildLayoutStreaming,

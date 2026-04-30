@@ -14,6 +14,8 @@ import {
   decodeSnapshot,
 } from "./ui/snapshotLoader";
 import { initEngine, getEngine } from "./engine";
+import { initShortIds } from "./shortIds";
+import { urlHasGeneratorState } from "./state";
 import type { SolverResult, LayoutResult, PlacedEntity, ValidationIssue, SatImprovement } from "./engine";
 import { renderTraceOverlay, getTracePhases, eventsUpToPhase, type TraceEvent, type PhaseSnapshot } from "./renderer/traceOverlay";
 import { renderValidationOverlay } from "./renderer/validationOverlay";
@@ -50,6 +52,10 @@ const MACHINE_SLUGS = [
 async function main(): Promise<void> {
   await initEngine();
   const engine = getEngine();
+  // Build the slug↔short-id table once WASM is ready. URL parsing /
+  // serialisation depends on it, so this must happen before
+  // `readUrlState` (called from sidebar init) runs.
+  initShortIds(engine.allKnownSlugs());
   await initEntityIcons(MACHINE_SLUGS);
   // Carries-icon preload is now scoped per-layout (see sidebar's solve flow
   // and renderLayoutOnCanvas). Pre-loading every producible item up front
@@ -58,20 +64,13 @@ async function main(): Promise<void> {
   const appRoot = document.getElementById("app")!;
   const hash = window.location.hash;
   const params = new URLSearchParams(window.location.search);
-  // Skip the landing page when the URL carries any generator state:
-  // item/rate/machine/in/belt. Lets shared links (e.g. layout URLs
-  // pasted into chat) open straight into the generator without the
-  // extra click through the landing screen.
-  const hasGeneratorParams =
-    params.has("item") ||
-    params.has("rate") ||
-    params.has("machine") ||
-    params.has("in") ||
-    params.has("belt");
+  // Skip the landing page when the URL carries any generator state. Both
+  // legacy `?item=...` query strings and new `#/l/...` hash fragments
+  // count — `urlHasGeneratorState` knows about both shapes.
   const skipLanding =
     hash.startsWith("#/layout") ||
     params.has("generator") ||
-    hasGeneratorParams;
+    urlHasGeneratorState();
 
   if (!skipLanding) {
     const landingHost = document.createElement("div");

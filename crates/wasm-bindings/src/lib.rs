@@ -13,7 +13,7 @@ use fucktorio_core::validate::{self, LayoutStyle, ValidationIssue};
 use fucktorio_core::{
     blueprint, blueprint_parser, bus::junction_cost::solution_cost,
     bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy, RowLayout},
-    fixture as fixture_mod, recipe_db, sat, solver,
+    fixture as fixture_mod, recipe_db, sat, short_ids, solver,
 };
 use rustc_hash::FxHashSet;
 use serde::Serialize;
@@ -70,6 +70,15 @@ pub fn all_producible_items() -> Vec<String> {
 #[wasm_bindgen]
 pub fn all_producer_machines() -> Vec<String> {
     recipe_db::all_producer_machines()
+}
+
+/// Universe of slugs covered by the short-id URL scheme — items that
+/// appear as a recipe ingredient or product, plus every machine entity.
+/// The web app feeds this to its TS port of the short-id algorithm so
+/// both sides agree on the slug↔code table.
+#[wasm_bindgen]
+pub fn all_known_slugs() -> Vec<String> {
+    short_ids::known_slugs()
 }
 
 #[wasm_bindgen]
