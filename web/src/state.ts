@@ -68,16 +68,19 @@ export const DEFAULT_MACHINE = "assembling-machine-3";
 //   #/l/<item>/<rate>/<machine>/<inputs>/<belt>?<extras>
 //
 // Each path slot uses short codes from `shortIds.ts` (or `_` to mean "use
-// default"). Inputs are `+`-separated. The `?<extras>` segment is optional
+// default"). Inputs are `,`-separated. The `?<extras>` segment is optional
 // and carries less-common params (`s=` strategy, `rl=` row layout, `ci=`
-// custom inputs).
+// custom inputs). `,` is safe in both URL paths and form-encoded query
+// strings, so the same separator works in both places — `+` would be
+// silently rewritten to a space when extras are parsed via
+// URLSearchParams, breaking hand-edited URLs.
 //
 // Both this scheme and the legacy `?item=...&rate=...&...` query string
 // are accepted on read for at least one release; new URLs are always
 // written in hash form.
 const HASH_PREFIX = "#/l/";
 const SKIP_TOKEN = "_";
-const INPUT_SEPARATOR = "+";
+const INPUT_SEPARATOR = ",";
 
 const STRATEGY_SHORT_TO_FULL: Record<string, string> = {
   pd: "partitioned-decomposed",
