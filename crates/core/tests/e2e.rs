@@ -641,6 +641,65 @@ fn decomposition_search_native_candidate_fires_trace_events() {
     assert_eq!(chosen[0], "native", "expected `native` to win; got {:?}", chosen[0]);
 }
 
+/// K-DS1-1 from `docs/rfp-decomposition-search.md`: on cases where
+/// Native produces a clean layout (no `missing-balancer-template`
+/// warnings), the search must pick `NativeCandidate`. With sequential
+/// dispatch — Native runs first, search exits early if Native is
+/// accepted — this is true by construction; the test guards against
+/// future changes that would remove that property.
+///
+/// Runs `tier3_plastic_bar` under `PartitionedDecomposed` because
+/// that's the strategy where `ModuleSizeSplit` becomes a possible
+/// competitor (under `Pooled` it's never added to the candidate list).
+#[test]
+#[ntest::timeout(30000)]
+fn decomposition_search_picks_native_on_clean_partitioned_case() {
+    use fucktorio_core::bus::layout::LayoutStrategy;
+    let inputs: FxHashSet<String> = ["petroleum-gas", "coal"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let result = run_e2e_with_strategy(
+        "decomposition_search_picks_native_on_clean_partitioned_case",
+        "plastic-bar",
+        10.0,
+        "chemical-plant",
+        None,
+        &inputs,
+        LayoutStrategy::PartitionedDecomposed,
+    )
+    .unwrap_or_else(|e| panic!("K-DS1-1 test: {e}"));
+
+    // Native must win on this clean case.
+    let chosen: Vec<_> = result.trace_events.iter()
+        .filter_map(|e| match e {
+            TraceEvent::DecompositionChosen { name, .. } => Some(name.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(chosen.len(), 1, "expected one DecompositionChosen event; got {chosen:?}");
+    assert_eq!(
+        chosen[0], "native",
+        "K-DS1-1: search must pick `native` when Native produces a clean layout; \
+         got {:?}. If a non-Native candidate won, scoring or acceptance is wrong.",
+        chosen[0]
+    );
+
+    // ModuleSizeSplit should not have run at all (sequential dispatch:
+    // Native accepted → search exits). Confirms the runtime cost of the
+    // candidate is paid only on cases that need it.
+    let scored_names: Vec<_> = result.trace_events.iter()
+        .filter_map(|e| match e {
+            TraceEvent::DecompositionCandidateScored { name, .. } => Some(name.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        scored_names, vec!["native".to_string()],
+        "expected only `native` to be scored on a clean case; got {scored_names:?}"
+    );
+}
+
 #[test]
 #[ntest::timeout(10000)]
 fn tier1_iron_gear_wheel_from_ore() {

@@ -88,11 +88,21 @@ pub fn emit(event: TraceEvent) {
 /// Run `f` with event emission suppressed on this thread. Used by
 /// junction-blame retries so speculative re-solves don't pollute the
 /// real event stream.
+///
+/// RAII via Drop guard — a panic inside `f` still restores the
+/// previous mute state, which matters for callers that wrap unstable
+/// code (e.g. `bus::decomposition_search::select_best_decomposition`
+/// catching panics from candidate `produce` calls).
 pub fn with_muted<F: FnOnce() -> R, R>(f: F) -> R {
+    struct MuteGuard(bool);
+    impl Drop for MuteGuard {
+        fn drop(&mut self) {
+            MUTED.with(|m| m.set(self.0));
+        }
+    }
     let prev = MUTED.with(|m| m.replace(true));
-    let result = f();
-    MUTED.with(|m| m.set(prev));
-    result
+    let _guard = MuteGuard(prev);
+    f()
 }
 
 /// Drain collected events from the current thread.
@@ -1025,12 +1035,30 @@ pub enum TraceEvent {
         score: f64,
         /// True iff hard constraints (demand met, all balancer shapes
         /// resolvable) are satisfied. Phase 0 stub always emits `true`;
-        /// Phase 1+ implements the actual rejection logic.
+        /// Phase 1b activates the actual rejection logic.
         accepted: bool,
+        /// When `accepted == false`, a short tag describing why
+        /// (e.g. `"missing-balancer-template"`). `None` when accepted.
+        accepted_reason: Option<String>,
     },
     DecompositionChosen {
         name: String,
         score: f64,
+    },
+
+    // `ModuleSizeSplit` candidate (see `docs/rfp-decomposition-search.md`)
+    // applied a k-way split to one module of the partition plan. Fires
+    // once per split module per `produce()` call. With Phase 1's k=2,
+    // a single original `(item, recipe)` module spawns two events with
+    // the same `original_module_id` and dense reassigned sub-ids.
+    ModuleSizeSplitApplied {
+        item: String,
+        consumer_recipe: String,
+        original_module_id: u32,
+        k_splits: u32,
+        new_module_id: u32,
+        rate: f64,
+        lane_count: u32,
     },
 }
 

@@ -252,6 +252,24 @@ pub fn check_balancer_template_coverage(layout: &LayoutResult) -> Vec<Validation
     issues
 }
 
+/// Count "No N→M balancer template for X" warnings on a layout.
+///
+/// These warnings are emitted inline by `bus::layout::layout_pass` when a
+/// `LaneFamily`'s `(n, m)` shape has no direct template AND no gcd-
+/// decomposition path. Cheap proxy used by the decomposition-search
+/// hard-constraint check (`docs/rfp-decomposition-search.md`) — avoids
+/// running the full validator just to spot unstampable shapes.
+///
+/// Reads `LayoutResult.warnings` directly (no trace dependency, unlike
+/// `check_balancer_template_coverage`).
+pub fn count_missing_balancer_template_warnings(layout: &LayoutResult) -> usize {
+    layout
+        .warnings
+        .iter()
+        .filter(|w| w.contains("balancer template"))
+        .count()
+}
+
 /// Run all functional validation checks on a layout.
 ///
 /// Returns a list of issues found.  Returns `Err(ValidationError)` if any

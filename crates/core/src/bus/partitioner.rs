@@ -763,6 +763,110 @@ pub fn apply_partition_plan(solver_result: &SolverResult, plan: &PartitionPlan) 
     }
 }
 
+/// Replace each module in `plan` with `k` sibling modules each carrying
+/// `1/k` of the original rate. Module IDs are densely reassigned per item
+/// so downstream `apply_partition_plan` keying on `(item, module_id)`
+/// remains contiguous.
+///
+/// Used by `bus::decomposition_search::ModuleSizeSplit` (see
+/// `docs/rfp-decomposition-search.md`). Splitting `(item=copper-plate,
+/// recipe=electronic-circuit, rate=R, lane_count=L)` into `k=2` gives
+/// two modules with `rate=R/2` and `lane_count=ceil(R/2 / per_lane_cap)`,
+/// both serving the same consumer recipe. Producer-side, the existing
+/// `apply_partition_plan` machine-share formula (line ~688) divides
+/// `MachineSpec.count` by `k` automatically, since each new sibling has
+/// rate `R/k` against original total `R`. Consumer-side, the Cartesian
+/// unrolling splits consuming machines across the `k` modules.
+///
+/// Lane-count rounding: `ceil(rate / k / per_lane_cap)` per sibling. Total
+/// across siblings may slightly overshoot the original `lane_count`
+/// (e.g. `(4, 9) → 2 × (2, 5)` = 10 lanes for what was 9), which is the
+/// expected layout-width cost of the split. The rate-per-lane stays the
+/// same; sub-saturation isn't introduced.
+///
+/// Skips modules with `lane_count <= 1` — splitting a single-lane module
+/// produces two modules each rounded back up to one lane, doubling the
+/// lane count without any shape benefit.
+///
+/// Trace event: emits `ModuleSizeSplitApplied` per resulting sibling.
+/// Read by tests / scoreboards to verify the candidate exercised on a
+/// given case.
+pub(crate) fn apply_size_split(
+    plan: PartitionPlan,
+    k: u32,
+    max_belt_tier: Option<&str>,
+) -> PartitionPlan {
+    if k <= 1 {
+        return plan;
+    }
+    let cap = lane_capacity(max_belt_tier);
+    let utilization_cap = cap * UTILIZATION_CEILING;
+
+    let mut by_item: FxHashMap<String, Vec<ModuleAssignment>> = FxHashMap::default();
+    for module in plan.modules {
+        by_item.entry(module.item.clone()).or_default().push(module);
+    }
+
+    let mut new_modules: Vec<ModuleAssignment> = Vec::new();
+    for (_item, modules) in by_item.iter_mut() {
+        // Process in deterministic order so module_id reassignment is stable.
+        modules.sort_by_key(|m| m.module_id);
+        let mut next_id: u32 = 0;
+        for original in modules.drain(..) {
+            // Trivial module — splitting yields two 1-lane siblings; no
+            // shape-fix benefit, just lane-count waste. Keep as-is.
+            if original.lane_count <= 1 {
+                let mut kept = original.clone();
+                kept.module_id = next_id;
+                next_id += 1;
+                new_modules.push(kept);
+                continue;
+            }
+
+            let original_module_id = original.module_id;
+            let split_rate = original.rate / k as f64;
+            let split_lane_count = ((split_rate / cap).ceil() as u32).max(1);
+            let split_utilization = if utilization_cap > 0.0 && split_lane_count > 0 {
+                (split_rate / split_lane_count as f64) / utilization_cap
+            } else {
+                f64::INFINITY
+            };
+
+            for _ in 0..k {
+                let new_module_id = next_id;
+                next_id += 1;
+                let sibling = ModuleAssignment {
+                    item: original.item.clone(),
+                    module_id: new_module_id,
+                    consumer_recipe: original.consumer_recipe.clone(),
+                    rate: split_rate,
+                    lane_count: split_lane_count,
+                    utilization: split_utilization,
+                };
+                trace::emit(TraceEvent::ModuleSizeSplitApplied {
+                    item: sibling.item.clone(),
+                    consumer_recipe: sibling.consumer_recipe.clone(),
+                    original_module_id,
+                    k_splits: k,
+                    new_module_id,
+                    rate: split_rate,
+                    lane_count: split_lane_count,
+                });
+                new_modules.push(sibling);
+            }
+        }
+    }
+
+    // Sort for deterministic output (apply_partition_plan does its own
+    // sorts but we preserve ordering by (item, module_id) for tests).
+    new_modules.sort_by(|a, b| a.item.cmp(&b.item).then(a.module_id.cmp(&b.module_id)));
+
+    PartitionPlan {
+        modules: new_modules,
+        utilization_violations: Vec::new(),
+    }
+}
+
 /// Convenience helper: an `ItemFlow` constructor that fills in `module_id: 0`.
 /// Used by call sites that don't care about partitioning.
 pub fn pooled_flow(item: impl Into<String>, rate: f64, is_fluid: bool) -> ItemFlow {
@@ -1035,5 +1139,98 @@ mod tests {
         // Each EC sub-spec count = original / 3.
         let total: f64 = ec_specs.iter().map(|s| s.count).sum();
         assert!((total - 60.0).abs() < 1e-9, "EC total count should preserve");
+    }
+
+    fn module(item: &str, recipe: &str, module_id: u32, rate: f64, lane_count: u32) -> ModuleAssignment {
+        ModuleAssignment {
+            item: item.to_string(),
+            module_id,
+            consumer_recipe: recipe.to_string(),
+            rate,
+            lane_count,
+            utilization: 0.5,
+        }
+    }
+
+    #[test]
+    fn apply_size_split_doubles_modules_with_halved_rate() {
+        let plan = PartitionPlan {
+            modules: vec![
+                module("copper-plate", "electronic-circuit", 0, 60.0, 9),
+            ],
+            utilization_violations: vec![],
+        };
+        let split = apply_size_split(plan, 2, Some("transport-belt"));
+        assert_eq!(split.modules.len(), 2, "k=2 should produce two sibling modules");
+        let total_rate: f64 = split.modules.iter().map(|m| m.rate).sum();
+        assert!((total_rate - 60.0).abs() < 1e-9, "total rate must be preserved");
+        // Module IDs are densely re-numbered per item starting at 0.
+        let mut ids: Vec<u32> = split.modules.iter().map(|m| m.module_id).collect();
+        ids.sort();
+        assert_eq!(ids, vec![0, 1]);
+        // Both siblings serve the same consumer recipe.
+        for m in &split.modules {
+            assert_eq!(m.consumer_recipe, "electronic-circuit");
+            assert_eq!(m.item, "copper-plate");
+        }
+    }
+
+    #[test]
+    fn apply_size_split_skips_lane_count_one_modules() {
+        let plan = PartitionPlan {
+            modules: vec![
+                module("rare-metal", "advanced-circuit", 0, 5.0, 1),
+            ],
+            utilization_violations: vec![],
+        };
+        let split = apply_size_split(plan, 2, Some("transport-belt"));
+        // Single-lane modules can't usefully halve — splitting yields
+        // two 1-lane siblings (lane_count rounds back up). We keep the
+        // original to avoid the lane-count waste.
+        assert_eq!(split.modules.len(), 1, "single-lane modules stay intact");
+        assert_eq!(split.modules[0].lane_count, 1);
+        assert!((split.modules[0].rate - 5.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn apply_size_split_no_op_for_k_le_1() {
+        let plan = PartitionPlan {
+            modules: vec![
+                module("copper-plate", "electronic-circuit", 0, 60.0, 9),
+                module("copper-plate", "advanced-circuit", 1, 30.0, 4),
+            ],
+            utilization_violations: vec![],
+        };
+        let original_count = plan.modules.len();
+        let result = apply_size_split(plan, 1, Some("transport-belt"));
+        assert_eq!(result.modules.len(), original_count, "k=1 is a no-op");
+    }
+
+    #[test]
+    fn apply_size_split_renumbers_per_item_densely() {
+        // Two items each with two modules. After k=2 split, each item
+        // should have 4 modules with module_ids 0..4 (dense per-item).
+        let plan = PartitionPlan {
+            modules: vec![
+                module("copper-plate", "ec", 0, 30.0, 4),
+                module("copper-plate", "ac", 1, 30.0, 4),
+                module("iron-plate", "ec", 0, 20.0, 3),
+                module("iron-plate", "ac", 1, 20.0, 3),
+            ],
+            utilization_violations: vec![],
+        };
+        let split = apply_size_split(plan, 2, Some("transport-belt"));
+        let mut copper_ids: Vec<u32> = split.modules.iter()
+            .filter(|m| m.item == "copper-plate")
+            .map(|m| m.module_id)
+            .collect();
+        copper_ids.sort();
+        assert_eq!(copper_ids, vec![0, 1, 2, 3]);
+        let mut iron_ids: Vec<u32> = split.modules.iter()
+            .filter(|m| m.item == "iron-plate")
+            .map(|m| m.module_id)
+            .collect();
+        iron_ids.sort();
+        assert_eq!(iron_ids, vec![0, 1, 2, 3]);
     }
 }

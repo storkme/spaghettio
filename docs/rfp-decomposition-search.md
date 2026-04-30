@@ -313,3 +313,52 @@ Per the [verification protocol](../CLAUDE.md#verification-protocol-for-layout-en
   invasive candidate (requires new placer machinery for adjacency-
   coupled rows) but potentially the largest density win. Scoped to
   its own phase with its own RFP expansion at land-time.*
+
+- *2026-04-30 — Phase 1 landed (`ModuleSizeSplit` candidate, k=2). Key
+  deviations from the original plan:*
+  - *Search is **sequential, not parallel**. Native runs first; if its
+    layout has zero `missing-balancer-template` warnings, search
+    exits and Native wins. Only when Native is rejected does
+    `ModuleSizeSplit` run. Reason: parallel evaluation busts the
+    600s test timeout on big partitioned cases (advanced-circuit /
+    processing-unit at 5s+). Trade-off: gives up the "score every
+    candidate, pick best by density" framing the RFP committed to.
+    Acceptable: in practice no candidate would beat Native on
+    density when Native is already clean, so the early-exit doesn't
+    miss anything valuable. Phase 1a/1b split (proposed earlier) is
+    therefore collapsed into one chunk.*
+  - *Acceptance check is `count_missing_balancer_template_warnings(layout)
+    == 0`. Narrower than the Plan agent proposed (which also gated
+    on `belt-throughput` / `belt-flow-path` errors). Reason: those
+    wider categories fire on harmless edge cases and would break
+    inertness on currently-clean tier 1-3 layouts. The narrow check
+    targets exactly the (n, m) coprime trap this RFP exists to
+    address.*
+  - *`ModuleSizeSplit::produce` is wrapped in `std::panic::catch_unwind`
+    in the search dispatcher. Reason: PU@3/s ore-red — the
+    motivating case — trips a `todo!()` in `lane_planner.rs:571`
+    (consumer-clamped fan-in for `electronic-circuit` when the
+    split creates a configuration the multi-stage balancer hasn't
+    been wired for). Without the catch, ModuleSizeSplit would
+    propagate the panic to the caller (web app or test suite),
+    a strict regression vs today's "7 errors but produces a
+    layout." With the catch, ModuleSizeSplit gracefully degrades
+    to Native's layout. The `lane_planner.rs:571` panic remains
+    a blocker for ModuleSizeSplit actually delivering the
+    promised improvement on PU@3/s ore-red — **fixing it is the
+    next concrete task before Phase 1 can be considered done in
+    spirit (motivating case still at baseline 7 errors).** Also
+    RAII-fied `trace::with_muted` so a panic doesn't leak
+    `MUTED=true` to subsequent calls on the thread.*
+  - *Pre-layout shape-stampability guard inside
+    `ModuleSizeSplit::produce`: skip the candidate when no module's
+    `(estimated_n, lane_count)` is unstampable. Avoids wasting
+    layout work on cases where the split can't help (preserves
+    the runtime budget on partition_strategy_scoreboard).*
+  - *Verification: 483 tests green (was 478 at Phase 0). Added 4 unit
+    tests for `apply_size_split` and one e2e test
+    (`decomposition_search_picks_native_on_clean_partitioned_case`)
+    pinning K-DS1-1 — search picks Native on a clean partitioned
+    case (tier-3 plastic-bar). K-DS1-2 (PU@3/s ore-red error count
+    drops below 7) is **not yet satisfied** because of the
+    `lane_planner.rs:571` blocker.*
