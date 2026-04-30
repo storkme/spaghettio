@@ -21,6 +21,7 @@ pub mod fixture;
 pub mod models;
 pub mod recipe_db;
 pub mod sat;
+pub mod short_ids;
 pub mod snapshot;
 pub mod solver;
 pub mod trace;
