@@ -20,8 +20,12 @@ Crash safety:
   on the next commit step.
 
 Concurrency:
-- N workers (default = ``os.cpu_count()``) cooperate over an
-  ``asyncio.PriorityQueue`` of probes.
+- N workers cooperate over an ``asyncio.PriorityQueue`` of probes.
+  Default count is the smaller of ``os.cpu_count()`` and a memory-derived
+  cap (see ``default_worker_count``); each kissat instance can peak at
+  ~1-1.5 GB on tier-9 SAT, so blindly using all cores on a memory-poor
+  host OOM-kills systemd. Override with ``--workers`` or
+  ``BALANCER_WORKERS``.
 - Each worker spawns one ``belt_balancer*`` subprocess at a time.
 - When a shape is solved, queued probes for that shape are drained without
   execution. In-flight probes for a now-solved shape are NOT killed; they
@@ -49,6 +53,24 @@ SAT_PY = SAT_DIR / ".venv" / "bin" / "python"
 LIBRARY_PATH = Path(__file__).parent.parent / "src" / "bus" / "balancer_library.py"
 JOURNAL_PATH = Path(__file__).parent / "balancer_journal.jsonl"
 ATTEMPTS_PATH = Path(__file__).parent / "balancer_attempts.jsonl"
+
+def default_worker_count() -> int:
+    """Pick a worker count that fits both core count and physical memory.
+
+    A tier-9 kissat instance can peak around 1-1.5 GB RSS. With 16 workers
+    on a 16 GB WSL host we OOM-killed systemd mid-run; assume ~1.5 GB per
+    worker and reserve ~3 GB for the surrounding Python/Rust/Node stack.
+    """
+    cores = os.cpu_count() or 4
+    try:
+        with open("/proc/meminfo") as f:
+            mem_kb = next(int(line.split()[1]) for line in f if line.startswith("MemTotal:"))
+    except (OSError, StopIteration, ValueError):
+        return cores
+    mem_gb = mem_kb / (1024 * 1024)
+    mem_cap = max(1, int((mem_gb - 3) / 1.5))
+    return max(1, min(cores, mem_cap))
+
 
 # Practical cap: tier 16 = (16, 16), already an unphysically large balancer.
 MAX_PRACTICAL_TIER = 16
@@ -844,7 +866,7 @@ def main() -> int:
             "attempted at that solver/timeout. Implies --skip-existing."
         ),
     )
-    default_workers = int(os.environ.get("BALANCER_WORKERS", "0")) or os.cpu_count() or 4
+    default_workers = int(os.environ.get("BALANCER_WORKERS", "0")) or default_worker_count()
     p.add_argument("--workers", type=int, default=default_workers)
     p.add_argument("--solver", type=str, default="kissat404")
     args = p.parse_args()
