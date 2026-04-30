@@ -4,7 +4,6 @@ import wasmInit, {
   solve_fixture,
   all_producible_items,
   all_producer_machines,
-  all_known_slugs,
   default_machine_for_item,
   export_blueprint,
   improve_region_streaming,
@@ -24,7 +23,6 @@ type Request =
   | { id: number; method: "init" }
   | { id: number; method: "allProducibleItems" }
   | { id: number; method: "allProducerMachines" }
-  | { id: number; method: "allKnownSlugs" }
   | { id: number; method: "defaultMachinesForItems"; items: string[]; fallback: string }
   | {
       id: number;
@@ -90,9 +88,6 @@ self.onmessage = async (e: MessageEvent<Request>) => {
         break;
       case "allProducerMachines":
         result = all_producer_machines();
-        break;
-      case "allKnownSlugs":
-        result = all_known_slugs();
         break;
       case "defaultMachinesForItems": {
         const out: [string, string][] = [];

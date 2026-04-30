@@ -14,7 +14,6 @@ import {
   decodeSnapshot,
 } from "./ui/snapshotLoader";
 import { initEngine, getEngine } from "./engine";
-import { initShortIds } from "./shortIds";
 import { urlHasGeneratorState } from "./state";
 import type { SolverResult, LayoutResult, PlacedEntity, ValidationIssue, SatImprovement } from "./engine";
 import { renderTraceOverlay, getTracePhases, eventsUpToPhase, type TraceEvent, type PhaseSnapshot } from "./renderer/traceOverlay";
@@ -52,10 +51,9 @@ const MACHINE_SLUGS = [
 async function main(): Promise<void> {
   await initEngine();
   const engine = getEngine();
-  // Build the slug↔short-id table once WASM is ready. URL parsing /
-  // serialisation depends on it, so this must happen before
-  // `readUrlState` (called from sidebar init) runs.
-  initShortIds(engine.allKnownSlugs());
+  // The slug↔short-id table is a static JSON snapshot import, no init
+  // needed. See `web/src/shortIds.ts` and the Rust drift test
+  // `short_ids::tests::snapshot_matches_algorithm`.
   await initEntityIcons(MACHINE_SLUGS);
   // Carries-icon preload is now scoped per-layout (see sidebar's solve flow
   // and renderLayoutOnCanvas). Pre-loading every producible item up front

@@ -1,4 +1,4 @@
-import { shortIdForSlug, shortIdsReady, slugForShortId } from "./shortIds.js";
+import { shortIdForSlug, slugForShortId } from "./shortIds.js";
 
 export interface FormState {
   item: string;
@@ -95,19 +95,22 @@ const ROW_LAYOUT_FULL_TO_SHORT: Record<string, string> = {
 
 function slugToCode(slug: string): string {
   // Fall back to the slug itself if it's not in the table — keeps
-  // serialization total (e.g. an unknown item still produces a usable URL,
-  // just a longer one). Decoders also fall back.
+  // serialization total (e.g. an unknown / modded item still produces a
+  // usable URL, just a longer one). The decoder accepts known codes only;
+  // an unknown token in the URL means we bail back to the legacy parser.
   return shortIdForSlug(slug) ?? slug;
 }
 
-function codeToSlug(code: string): string {
-  return slugForShortId(code) ?? code;
+/** Decode a single short-code path token. Returns null for unrecognised
+ * tokens; callers treat that as "this hash form is malformed, fall back
+ * to the legacy parser" rather than silently inventing a slug. */
+function codeToSlug(code: string): string | null {
+  return slugForShortId(code);
 }
 
 function readHashState(): FormState | null {
   const hash = window.location.hash;
   if (!hash.startsWith(HASH_PREFIX)) return null;
-  if (!shortIdsReady()) return null;
 
   // Split off the `?extras` portion, if present.
   const rest = hash.slice(HASH_PREFIX.length);
@@ -125,26 +128,52 @@ function readHashState(): FormState | null {
     return v;
   };
 
+  // Decode every code-bearing slot. Unknown codes return null — we bail
+  // out of the hash parser and let the caller fall back to the legacy
+  // query-string form (or defaults), rather than treating gibberish as a
+  // literal slug.
   const itemCode = get(0);
-  const item = itemCode ? codeToSlug(decodeURIComponent(itemCode)) : DEFAULT_ITEM;
+  let item: string;
+  if (itemCode) {
+    const decoded = codeToSlug(itemCode);
+    if (decoded === null) return null;
+    item = decoded;
+  } else {
+    item = DEFAULT_ITEM;
+  }
 
   const rateRaw = get(1);
   const rateParsed = rateRaw !== null ? parseFloat(rateRaw) : NaN;
   const rate = !isNaN(rateParsed) && rateParsed > 0 ? rateParsed : DEFAULT_RATE;
 
   const machineCode = get(2);
-  const machine = machineCode ? codeToSlug(decodeURIComponent(machineCode)) : null;
+  let machine: string | null = null;
+  if (machineCode) {
+    machine = codeToSlug(machineCode);
+    if (machine === null) return null;
+  }
 
   const inputsRaw = get(3);
-  const inputs = inputsRaw
-    ? inputsRaw
-        .split(INPUT_SEPARATOR)
-        .filter((s) => s.length > 0)
-        .map((c) => codeToSlug(decodeURIComponent(c)))
-    : DEFAULT_CHECKED_INPUTS;
+  let inputs: string[];
+  if (inputsRaw) {
+    const tokens = inputsRaw.split(INPUT_SEPARATOR).filter((s) => s.length > 0);
+    const decoded: string[] = [];
+    for (const t of tokens) {
+      const slug = codeToSlug(t);
+      if (slug === null) return null;
+      decoded.push(slug);
+    }
+    inputs = decoded;
+  } else {
+    inputs = DEFAULT_CHECKED_INPUTS;
+  }
 
   const beltCode = get(4);
-  const belt = beltCode ? codeToSlug(decodeURIComponent(beltCode)) : null;
+  let belt: string | null = null;
+  if (beltCode) {
+    belt = codeToSlug(beltCode);
+    if (belt === null) return null;
+  }
 
   const extras = new URLSearchParams(extrasStr);
   const sShort = extras.get("s");
@@ -152,12 +181,15 @@ function readHashState(): FormState | null {
   const rlShort = extras.get("rl");
   const rowLayout = rlShort ? ROW_LAYOUT_SHORT_TO_FULL[rlShort] ?? null : null;
   const ciRaw = extras.get("ci");
-  const customInputs = ciRaw
-    ? ciRaw
-        .split(INPUT_SEPARATOR)
-        .filter((s) => s.length > 0)
-        .map((c) => codeToSlug(decodeURIComponent(c)))
-    : [];
+  let customInputs: string[] = [];
+  if (ciRaw) {
+    const tokens = ciRaw.split(INPUT_SEPARATOR).filter((s) => s.length > 0);
+    for (const t of tokens) {
+      const slug = codeToSlug(t);
+      if (slug === null) return null;
+      customInputs.push(slug);
+    }
+  }
 
   return { item, rate, machine, inputs, belt, strategy, rowLayout, customInputs };
 }
@@ -270,25 +302,6 @@ export function writeUrlState(state: Omit<FormState, "machine"> & { machine: str
 
   if (isDefault) {
     history.replaceState(null, "", cleanPath);
-    return;
-  }
-
-  // Short-id table not ready yet (e.g. early-paint write before WASM
-  // initialises): fall back to the legacy query-string form so we never
-  // emit a hash with un-encoded slugs that would round-trip back to the
-  // wrong values. This path goes away once `initShortIds` always fires
-  // before any solve.
-  if (!shortIdsReady()) {
-    const params = new URLSearchParams();
-    params.set("item", state.item);
-    params.set("rate", String(state.rate));
-    params.set("machine", state.machine);
-    params.set("in", state.inputs.join(","));
-    if (state.belt) params.set("belt", state.belt);
-    if (state.strategy) params.set("strategy", state.strategy);
-    if (state.rowLayout) params.set("row_layout", state.rowLayout);
-    if (state.customInputs.length > 0) params.set("ci", state.customInputs.join(","));
-    history.replaceState(null, "", "?" + params.toString());
     return;
   }
 
