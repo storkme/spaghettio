@@ -274,31 +274,42 @@ pub fn machine_can_run_recipe(
     Ok(())
 }
 
-/// Compatibility check between a machine and a recipe category. Mirrors the
-/// hardcoded mapping in [`machine_for_recipe`]. Specialised categories
-/// require their specialised machine; fall-through categories require an
-/// assembler tier (the only machines we model as general-purpose).
-fn machine_handles_category(machine: &str, category: &str) -> bool {
+/// Assembler tiers — the general-purpose machines that handle every
+/// non-specialised recipe category. Used both as the valid-machine set for
+/// fall-through categories in [`machine_handles_category`] and as the
+/// allowed-options gate in the web sidebar's crafting dropdown.
+pub const ASSEMBLER_TIERS: &[&str] =
+    &["assembling-machine-1", "assembling-machine-2", "assembling-machine-3"];
+
+/// Single source of truth for the recipe-category → valid-machines mapping.
+///
+/// The first entry in each slice is the canonical default that
+/// [`machine_for_recipe`] picks when the user hasn't overridden it via the
+/// palette. An empty slice means the category is "general-purpose": the
+/// caller's `default` machine is used (caller is expected to provide one
+/// of [`ASSEMBLER_TIERS`]).
+fn category_machines(category: &str) -> &'static [&'static str] {
     match category {
-        "chemistry" | "chemistry-or-cryogenics" | "organic-or-chemistry" => {
-            matches!(machine, "chemical-plant")
-        }
-        "oil-processing" => matches!(machine, "oil-refinery"),
-        "smelting" => matches!(
-            machine,
-            "stone-furnace" | "steel-furnace" | "electric-furnace"
-        ),
-        "electromagnetics" => matches!(machine, "electromagnetic-plant"),
-        "cryogenics" | "cryogenics-or-assembling" => matches!(machine, "cryogenic-plant"),
-        "metallurgy" | "metallurgy-or-assembling" | "pressing" => matches!(machine, "foundry"),
-        "organic" | "organic-or-assembling" => matches!(machine, "biochamber"),
-        // Fall-through categories. Only the assembler tiers handle these —
-        // dropping a furnace or foundry into a crafting palette slot is a
-        // user error worth catching.
-        _ => matches!(
-            machine,
-            "assembling-machine-1" | "assembling-machine-2" | "assembling-machine-3"
-        ),
+        "chemistry" | "chemistry-or-cryogenics" | "organic-or-chemistry" => &["chemical-plant"],
+        "oil-processing" => &["oil-refinery"],
+        "smelting" => &["electric-furnace", "stone-furnace", "steel-furnace"],
+        "electromagnetics" => &["electromagnetic-plant"],
+        "cryogenics" | "cryogenics-or-assembling" => &["cryogenic-plant"],
+        "metallurgy" | "metallurgy-or-assembling" | "pressing" => &["foundry"],
+        "organic" | "organic-or-assembling" => &["biochamber"],
+        _ => &[],
+    }
+}
+
+/// Compatibility check between a machine and a recipe category. Specialised
+/// categories require one of their listed machines; fall-through categories
+/// require an [assembler tier](ASSEMBLER_TIERS).
+fn machine_handles_category(machine: &str, category: &str) -> bool {
+    let valid = category_machines(category);
+    if valid.is_empty() {
+        ASSEMBLER_TIERS.contains(&machine)
+    } else {
+        valid.contains(&machine)
     }
 }
 
@@ -322,8 +333,9 @@ pub fn machine_for_recipe(recipe: &Recipe, default: &str) -> String {
 }
 
 /// Like [`machine_for_recipe`], but consults `palette` first. The palette is
-/// the caller's per-category override; on miss we fall through to the same
-/// hardcoded category → machine table, then finally to `default`.
+/// the caller's per-category override; on miss we consult the same
+/// category → machine table that [`machine_handles_category`] uses, and
+/// finally fall through to `default` for general-purpose categories.
 pub fn machine_for_recipe_with_palette(
     recipe: &Recipe,
     palette: &MachinePalette,
@@ -332,15 +344,9 @@ pub fn machine_for_recipe_with_palette(
     if let Some(override_machine) = palette.by_category.get(&recipe.category) {
         return override_machine.clone();
     }
-    match recipe.category.as_str() {
-        "chemistry" | "chemistry-or-cryogenics" | "organic-or-chemistry" => "chemical-plant".to_string(),
-        "oil-processing" => "oil-refinery".to_string(),
-        "smelting" => "electric-furnace".to_string(),
-        "electromagnetics" => "electromagnetic-plant".to_string(),
-        "cryogenics" | "cryogenics-or-assembling" => "cryogenic-plant".to_string(),
-        "metallurgy" | "metallurgy-or-assembling" | "pressing" => "foundry".to_string(),
-        "organic" | "organic-or-assembling" => "biochamber".to_string(),
-        _ => default.to_string(),
+    match category_machines(&recipe.category) {
+        [] => default.to_string(),
+        [first, ..] => (*first).to_string(),
     }
 }
 
