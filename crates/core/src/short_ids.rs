@@ -75,7 +75,7 @@ fn round_robin_code(slug: &str, length: usize) -> String {
 pub fn build_short_id_map(slugs: &[&str]) -> Result<FxHashMap<String, String>, Vec<String>> {
     // Sort + dedup for determinism. Two callers passing the same set in
     // different orders should get byte-identical maps.
-    let mut universe: Vec<&str> = slugs.iter().copied().collect();
+    let mut universe: Vec<&str> = slugs.to_vec();
     universe.sort();
     universe.dedup();
 
