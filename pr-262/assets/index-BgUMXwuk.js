@@ -1,4 +1,4 @@
-const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["assets/browserAll-dWxgDv1F.js","assets/webworkerAll-DrY1y2ls.js","assets/Filter-DwgS2XdP.js","assets/WebGPURenderer-FF7pBEnr.js","assets/BufferResource-CXrQYnQD.js","assets/RenderTargetSystem-BMqoUD_9.js","assets/WebGLRenderer-14TSoo0s.js","assets/CanvasRenderer-BWUGrWr8.js"])))=>i.map(i=>d[i]);
+const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["assets/browserAll-DXVbmN8-.js","assets/webworkerAll-CnSnObkD.js","assets/Filter-B2Fb_lRG.js","assets/WebGPURenderer-OHAQvMeO.js","assets/BufferResource-ylTlxgN8.js","assets/RenderTargetSystem-Dk5yJejN.js","assets/WebGLRenderer-HNI3nwPG.js","assets/CanvasRenderer-DnTi1jnV.js"])))=>i.map(i=>d[i]);
 let ju, zs, Vn, an, Xc, en, it, ri, dt, ms, ny, qm, rr, vt, Gm, mn, or, ih, Ft, sr, Ct, Et, kh, uo, Bt, Wn, Xs, Tt, Hi, Dt, jf, vs, tl, Ni, Do, vh, Te, Uo, wm, vm, Sm, Im, Mm, Rm, Cm, Pm, Am, Iu, Lm, we, Vc, ke, tr, Na, Ue, Ly, lp, Wa, Cr, Ga, cp, qc, ar, Qh, Th, ii, hf, rf, Nh, Jf, Ho, Un, At, ko, To, vi, zt, $e, sd, id, Ie, qw, vy, cy, Zt, kt, Vs, Di, Xf, Gp, qt, Vt, ie, Kt, jt;
 let __tla = (async () => {
   (function() {
@@ -148,7 +148,7 @@ let __tla = (async () => {
     },
     test: () => true,
     load: async () => {
-      await zn(() => import("./browserAll-dWxgDv1F.js"), __vite__mapDeps([0,1,2]));
+      await zn(() => import("./browserAll-DXVbmN8-.js"), __vite__mapDeps([0,1,2]));
     }
   };
   _u = {
@@ -159,7 +159,7 @@ let __tla = (async () => {
     },
     test: () => typeof self < "u" && self.WorkerGlobalScope !== void 0,
     load: async () => {
-      await zn(() => import("./webworkerAll-DrY1y2ls.js"), __vite__mapDeps([1,2]));
+      await zn(() => import("./webworkerAll-CnSnObkD.js"), __vite__mapDeps([1,2]));
     }
   };
   class ce {
@@ -5189,7 +5189,7 @@ ${n}`;
       const o = t[r];
       if (o === "webgpu" && await lf()) {
         const { WebGPURenderer: a } = await zn(async () => {
-          const { WebGPURenderer: l } = await import("./WebGPURenderer-FF7pBEnr.js");
+          const { WebGPURenderer: l } = await import("./WebGPURenderer-OHAQvMeO.js");
           return {
             WebGPURenderer: l
           };
@@ -5201,7 +5201,7 @@ ${n}`;
         break;
       } else if (o === "webgl" && af(n.failIfMajorPerformanceCaveat ?? kh.defaultOptions.failIfMajorPerformanceCaveat)) {
         const { WebGLRenderer: a } = await zn(async () => {
-          const { WebGLRenderer: l } = await import("./WebGLRenderer-14TSoo0s.js");
+          const { WebGLRenderer: l } = await import("./WebGLRenderer-HNI3nwPG.js");
           return {
             WebGLRenderer: l
           };
@@ -5213,7 +5213,7 @@ ${n}`;
         break;
       } else if (o === "canvas") {
         const { CanvasRenderer: a } = await zn(async () => {
-          const { CanvasRenderer: l } = await import("./CanvasRenderer-BWUGrWr8.js");
+          const { CanvasRenderer: l } = await import("./CanvasRenderer-DnTi1jnV.js");
           return {
             CanvasRenderer: l
           };
@@ -5523,7 +5523,7 @@ ${n}`;
       }
       const [l, { BitmapFont: c }] = await Promise.all([
         e.load(o),
-        zn(() => import("./BitmapFont-BuBclCnz.js"), [])
+        zn(() => import("./BitmapFont-DeQaEYZd.js"), [])
       ]), h = o.map((u) => l[u.src]);
       return new c({
         data: s,
@@ -17057,7 +17057,7 @@ fn mainFragment(
     "crude-oil",
     "iron-ore",
     "copper-ore"
-  ], ma = "iron-gear-wheel", ga = 10, Jd = "assembling-machine-3", Ji = "#/l/", Ws = "_", Zi = "+", eb = {
+  ], ma = "iron-gear-wheel", ga = 10, Jd = "assembling-machine-3", Ji = "#/l/", Ws = "_", Zi = ",", eb = {
     pd: "partitioned-decomposed"
   }, pc = {
     "partitioned-decomposed": "pd"
@@ -18887,7 +18887,7 @@ fn mainFragment(
     const _ = new Dt();
     v.addChild(_), v.fit(true, w * 1.15, x * 1.2), v.moveCenter(w / 2, x / 2);
     const { renderLayoutAnimated: C } = await zn(async () => {
-      const { renderLayoutAnimated: E } = await import("./animated-XB_ujIxR.js");
+      const { renderLayoutAnimated: E } = await import("./animated-CHaCWvAc.js");
       return {
         renderLayoutAnimated: E
       };
