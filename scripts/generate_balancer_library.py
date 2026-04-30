@@ -1,9 +1,12 @@
 """Generate balancer templates using Factorio-SAT.
 
-Invokes `belt_balancer` from external/factorio-sat for each (N, M) shape
-we care about, converts each solution to a Factorio blueprint, extracts
-entity positions, rotates 90° CW (SAT uses horizontal flow; the bus uses
-vertical SOUTH flow), and emits `src/bus/balancer_library.py`.
+Invokes `belt_balancer` (network-guided) or `belt_balancer_net_free`
+(network-free) from external/factorio-sat for each (N, M) shape we care
+about, converts each solution to a Factorio blueprint, extracts entity
+positions, rotates 90° CW (SAT uses horizontal flow; the bus uses vertical
+SOUTH flow), and emits `src/bus/balancer_library.py`.  After generation,
+`sync_balancer_to_rust.py` is called automatically to patch
+`crates/core/src/bus/balancer_library.rs`.
 
 Run manually:
     uv run python scripts/generate_balancer_library.py
@@ -12,10 +15,19 @@ Incremental / resumable:
     uv run python scripts/generate_balancer_library.py --skip-existing
 
 Limit difficulty (max(N,M) <= K):
-    uv run python scripts/generate_balancer_library.py --skip-existing --max-tier 6
+    uv run python scripts/generate_balancer_library.py --skip-existing --max-tier 9
 
 This is an offline workflow: Factorio-SAT is NOT a runtime dependency.
 The generated library ships in the repo.
+
+Solver
+------
+Uses kissat404 (via python-sat) for all shapes — faster than the default
+Glucose3 on structured/hard instances.  Symmetric shapes (N=N) use
+belt_balancer with a Benes network file (auto-generated if missing).
+Asymmetric shapes in tiers 9-10 that lack a network file use
+belt_balancer_net_free which discovers the network topology together with
+the physical layout.
 
 Symmetry optimisation
 ---------------------
@@ -58,8 +70,9 @@ SYNC_SCRIPT = Path(__file__).parent / "sync_balancer_to_rust.py"
 FACTORIO_NORTH, FACTORIO_EAST, FACTORIO_SOUTH, FACTORIO_WEST = 0, 2, 4, 6
 
 # Shapes to generate: (N inputs, M outputs)
-# Cover all combinations up to 8×8 (except 1×1 identity).
-SHAPES: list[tuple[int, int]] = [(n, m) for n in range(1, 9) for m in range(1, 9) if (n, m) != (1, 1)]
+# Cover all combinations up to 10×10 (except 1×1 identity).
+# Tier 9-10 shapes without a pre-existing network file use belt_balancer_net_free.
+SHAPES: list[tuple[int, int]] = [(n, m) for n in range(1, 11) for m in range(1, 11) if (n, m) != (1, 1)]
 
 
 @dataclass
@@ -73,34 +86,11 @@ class RawEntity:
     io_type: str | None = None  # "input" or "output" for underground-belt
 
 
-def run_sat(n: int, m: int, width: int, height: int, fast: bool = True, timeout: int = 300) -> str | None:
-    """Run belt_balancer then blueprint encode.
-
-    Returns the encoded blueprint string, or None if SAT fails / unsat.
-    """
-    network = SAT_DIR / "networks" / f"{n}x{m}"
-    if not network.exists():
-        raise FileNotFoundError(f"No network file for {n}x{m}: {network}")
-
-    cmd = [str(SAT_PY), "-m", "factorio_sat.belt_balancer"]
-    if fast:
-        cmd.append("--fast")
-    cmd.extend([str(network), str(width), str(height)])
-    try:
-        bb = subprocess.run(
-            cmd,
-            capture_output=True,
-            cwd=str(SAT_DIR),
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired:
-        print(f"    timeout after {timeout}s at {width}x{height} (fast={fast})", flush=True)
-        return None
-    if bb.returncode != 0 or not bb.stdout:
-        return None
+def _encode_blueprint(raw_output: bytes) -> str | None:
+    """Run blueprint encode on SAT solver output. Returns blueprint string or None."""
     enc = subprocess.run(
         [str(SAT_PY), "-m", "factorio_sat.blueprint", "encode"],
-        input=bb.stdout,
+        input=raw_output,
         capture_output=True,
         cwd=str(SAT_DIR),
         timeout=30,
@@ -115,19 +105,87 @@ def run_sat(n: int, m: int, width: int, height: int, fast: bool = True, timeout:
     return out
 
 
+def run_sat(n: int, m: int, width: int, height: int, fast: bool = True, timeout: int = 300) -> str | None:
+    """Run belt_balancer (network-guided) then blueprint encode.
+
+    Returns the encoded blueprint string, or None if SAT fails / unsat.
+    Requires a network file at external/factorio-sat/networks/{n}x{m}.
+    """
+    network = SAT_DIR / "networks" / f"{n}x{m}"
+    if not network.exists():
+        raise FileNotFoundError(f"No network file for {n}x{m}: {network}")
+
+    cmd = [str(SAT_PY), "-m", "factorio_sat.belt_balancer", "--solver", "kissat404"]
+    if fast:
+        cmd.append("--fast")
+    cmd.extend([str(network), str(width), str(height)])
+    try:
+        bb = subprocess.run(cmd, capture_output=True, cwd=str(SAT_DIR), timeout=timeout)
+    except subprocess.TimeoutExpired:
+        print(f"    timeout after {timeout}s at {width}x{height} (fast={fast})", flush=True)
+        return None
+    if bb.returncode != 0 or not bb.stdout:
+        return None
+    return _encode_blueprint(bb.stdout)
+
+
+def run_sat_net_free(n: int, m: int, width: int, height: int, timeout: int = 300) -> str | None:
+    """Run belt_balancer_net_free (no network file needed) then blueprint encode.
+
+    Used for tier-9/10 asymmetric shapes that don't have a pre-existing
+    network file.  Discovers topology and physical layout simultaneously.
+    Returns the encoded blueprint string, or None if SAT fails / unsat.
+    """
+    cmd = [
+        str(SAT_PY), "-m", "factorio_sat.belt_balancer_net_free",
+        "--solver", "kissat404",
+        str(width), str(height), str(n), str(m),
+    ]
+    try:
+        bb = subprocess.run(cmd, capture_output=True, cwd=str(SAT_DIR), timeout=timeout)
+    except subprocess.TimeoutExpired:
+        print(f"    timeout after {timeout}s at {width}x{height} (net_free)", flush=True)
+        return None
+    if bb.returncode != 0 or not bb.stdout:
+        return None
+    return _encode_blueprint(bb.stdout)
+
+
+def ensure_network(size: int) -> None:
+    """Generate the size×size Benes network file if it does not already exist."""
+    path = SAT_DIR / "networks" / f"{size}x{size}"
+    if path.exists():
+        return
+    print(f"  Generating {size}×{size} Benes network file...", flush=True)
+    subprocess.run(
+        [str(SAT_PY), "-m", "factorio_sat.network", "create", str(path), str(size)],
+        cwd=str(SAT_DIR),
+        check=True,
+    )
+    print(f"  Wrote {path}", flush=True)
+
+
 def find_balancer(n: int, m: int) -> tuple[str, int, int] | None:
     """Search for a compact balancer by increasing width.
 
     Returns (blueprint_string, width, height) for the first solution found.
 
-    For small shapes (max(n,m) < 6), fast mode alone finds solutions
-    reliably. For larger shapes, the full solver is tried at each width
-    after fast mode times out, since CaDiCaL's heuristics sometimes
-    struggle where the plain solver succeeds.
+    Routing strategy:
+    - Shapes with an existing network file use belt_balancer (kissat404).
+      Fast mode is tried first; for tier≥6, the full solver is interleaved.
+    - Symmetric shapes (N=N) with a missing network file auto-generate the
+      Benes network, then use belt_balancer.
+    - Asymmetric tier-9/10 shapes without a network file use
+      belt_balancer_net_free (no fast mode; single sweep with full budget).
     """
     base_h = max(n, m)
     # Scale search space with shape complexity.
-    if base_h >= 7:
+    if base_h >= 9:
+        max_width = 50
+        extra_heights = 5
+        fast_timeout = 180
+        use_full_interleave = True
+    elif base_h >= 7:
         max_width = 40
         extra_heights = 4
         fast_timeout = 120
@@ -147,20 +205,42 @@ def find_balancer(n: int, m: int) -> tuple[str, int, int] | None:
         extra_heights = 2
         fast_timeout = 120
         use_full_interleave = False
+
+    # Decide which solver path to take.
+    network_path = SAT_DIR / "networks" / f"{n}x{m}"
+    if not network_path.exists() and n == m:
+        # Symmetric shapes: auto-generate the Benes network, then use belt_balancer.
+        ensure_network(n)
+    use_net_free = not network_path.exists()
+
     heights = [base_h + i for i in range(extra_heights + 1)]
-    # Phase 1: fast probe, optionally interleaved with full solver.
+
+    if use_net_free:
+        # belt_balancer_net_free has no --fast mode; sweep with a fixed per-probe budget.
+        # Use the full_interleave timeout as the per-probe cap.
+        net_free_timeout = max(fast_timeout, 300)
+        for height in heights:
+            for width in range(3, max_width + 1):
+                print(f"  probing {n}x{m} at {width}x{height} (net_free)...", flush=True)
+                bp = run_sat_net_free(n, m, width, height, timeout=net_free_timeout)
+                if bp is not None:
+                    print(f"  -> solved at {width}x{height} (net_free)", flush=True)
+                    return bp, width, height
+        return None
+
+    # Network-guided path: fast probe, optionally interleaved with full solver.
     for height in heights:
         for width in range(3, max_width + 1):
             print(f"  probing {n}x{m} at {width}x{height} (fast)...", flush=True)
             bp = run_sat(n, m, width, height, fast=True, timeout=fast_timeout)
             if bp is not None:
-                print(f"  -> solved at {width}x{height} (fast)")
+                print(f"  -> solved at {width}x{height} (fast)", flush=True)
                 return bp, width, height
             if use_full_interleave and width >= base_h:
                 print(f"  probing {n}x{m} at {width}x{height} (full)...", flush=True)
                 bp = run_sat(n, m, width, height, fast=False, timeout=300)
                 if bp is not None:
-                    print(f"  -> solved at {width}x{height} (full)")
+                    print(f"  -> solved at {width}x{height} (full)", flush=True)
                     return bp, width, height
     # Phase 2: full solver sweep (only if not already interleaved).
     if not use_full_interleave:
@@ -169,7 +249,7 @@ def find_balancer(n: int, m: int) -> tuple[str, int, int] | None:
                 print(f"  probing {n}x{m} at {width}x{height} (full)...", flush=True)
                 bp = run_sat(n, m, width, height, fast=False, timeout=300)
                 if bp is not None:
-                    print(f"  -> solved at {width}x{height} (full)")
+                    print(f"  -> solved at {width}x{height} (full)", flush=True)
                     return bp, width, height
     return None
 
