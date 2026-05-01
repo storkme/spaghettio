@@ -40,9 +40,12 @@ def main():
 
     # All splitters south-facing for the spike: they occupy 2 tiles
     # along the x-axis. Each splitter's anchor at (x, y), second tile at
-    # (x+1, y). Bounds: x ∈ [0, W-2], y ∈ [0, H-1].
+    # (x+1, y). Bounds: x ∈ [0, W-2], y ∈ [1, H-2] (so input slots above
+    # and output slots below are inside the grid).
     xs = [model.NewIntVar(0, width - 2, f"x{i}") for i in range(n_splitters)]
-    ys = [model.NewIntVar(0, height - 1, f"y{i}") for i in range(n_splitters)]
+    y_lo = 1
+    y_hi = max(y_lo, height - 2)
+    ys = [model.NewIntVar(y_lo, y_hi, f"y{i}") for i in range(n_splitters)]
 
     # NoOverlap2D over fixed-size 2×1 rectangles.
     x_intervals = [
