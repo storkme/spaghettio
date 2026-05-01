@@ -325,6 +325,17 @@ pub enum TraceEvent {
         y_end: i32,
         template_found: bool,
     },
+    /// Phase 2.0 runtime template generator produced a layout for a shape
+    /// that wasn't directly served by the library (and decomposition
+    /// either missed it or the generator's output was preferred). Useful
+    /// for measuring the generator's reach in real layouts.
+    BalancerGenerated {
+        item: String,
+        shape: (usize, usize),
+        entity_count: usize,
+        width: u32,
+        height: u32,
+    },
     /// Stream sibling of `BalancerStamped` — carries the actual entity batch
     /// so the live renderer can reveal a balancer cascade progressively
     /// instead of dumping it via the `bus_routed` safety net at the end.
