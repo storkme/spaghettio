@@ -107,6 +107,92 @@ def place_single_splitter(n: int, m: int) -> dict[str, Any]:
     }
 
 
+def place_one_to_four() -> dict[str, Any]:
+    """`(1, 4)` complete binary tree, library-style tight-stack layout.
+
+    Width 4, height 4. 3 splitters + 5 belts. Splitters interlock:
+      - Root at (1, 1) spans (1,1)-(2,1). Outputs at (1,2) and (2,2).
+      - Level-1 left at (0, 2) spans (0,2)-(1,2). Tile (1,2) is its
+        right tile, so root's left output feeds it as port-1 input.
+      - Level-1 right at (2, 2) spans (2,2)-(3,2). Tile (2,2) is its
+        left tile, so root's right output feeds it as port-0 input.
+      - Each level-1 splitter has its other input port empty (rate 0).
+
+    Trace at unit input: root in = 1, outs each = 0.5. Each level-1
+    in = 0.5, outs each = 0.25. Outputs uniform at 1/4.
+    """
+    entities: list[dict[str, Any]] = [
+        {"name": "transport-belt", "x": 1, "y": 0, "direction": 4},
+        {"name": "splitter", "x": 1, "y": 1, "direction": 4},
+        {"name": "splitter", "x": 0, "y": 2, "direction": 4},
+        {"name": "splitter", "x": 2, "y": 2, "direction": 4},
+    ]
+    for col in range(4):
+        entities.append({"name": "transport-belt", "x": col, "y": 3, "direction": 4})
+    return {
+        "n_inputs": 1,
+        "n_outputs": 4,
+        "width": 4,
+        "height": 4,
+        "entities": entities,
+        "input_tiles": [[1, 0]],
+        "output_tiles": [[c, 3] for c in range(4)],
+    }
+
+
+def place_one_to_eight() -> dict[str, Any]:
+    """`(1, 8)` complete binary tree with one routing row.
+
+    Width 8, height 6. 7 splitters + 13 belts. Layout:
+      - Root at (3, 1) spans (3,1)-(4,1). Real input belt at (4, 0)
+        feeds root's port-1 (right input); port 0 at (3, 0) empty.
+      - Routing row y=2: belts at (3, 2)W, (2, 2)S, (4, 2)E, (5, 2)S.
+        Root left output at (3, 2) → west to (2, 2) → south to (2, 3).
+        Root right output at (4, 2) → east to (5, 2) → south to (5, 3).
+      - Level-1 splitters at (1, 3) (spans 1-2) and (5, 3) (spans 5-6).
+        Receive inputs at (2, 2)S → (2, 3) [right input of left]
+        and (5, 2)S → (5, 3) [left input of right]. Other input
+        ports empty (rate 0).
+      - Level-2 splitters at (0, 4), (2, 4), (4, 4), (6, 4), each
+        spanning 2 cols. Tight-stack with level-1: each level-1
+        output drops directly into a level-2 splitter's tile.
+      - Output belts at y=5 cols 0..7.
+
+    Trace at unit input: root in = 1, outs = 0.5 each. After routing,
+    level-1 in = 0.5 each, outs = 0.25 each. Level-2 in = 0.25 each
+    (one port wired, other rate 0), outs = 0.125 each. 8 outputs
+    uniform at 1/8.
+    """
+    entities: list[dict[str, Any]] = []
+    # Input belt at (4, 0) feeds root's port-1.
+    entities.append({"name": "transport-belt", "x": 4, "y": 0, "direction": 4})
+    # Root splitter.
+    entities.append({"name": "splitter", "x": 3, "y": 1, "direction": 4})
+    # Routing row at y=2. Direction codes: 0=N, 2=E, 4=S, 6=W.
+    entities.append({"name": "transport-belt", "x": 3, "y": 2, "direction": 6})  # W
+    entities.append({"name": "transport-belt", "x": 2, "y": 2, "direction": 4})  # S
+    entities.append({"name": "transport-belt", "x": 4, "y": 2, "direction": 2})  # E
+    entities.append({"name": "transport-belt", "x": 5, "y": 2, "direction": 4})  # S
+    # Level-1 splitters.
+    entities.append({"name": "splitter", "x": 1, "y": 3, "direction": 4})
+    entities.append({"name": "splitter", "x": 5, "y": 3, "direction": 4})
+    # Level-2 splitters.
+    for col in (0, 2, 4, 6):
+        entities.append({"name": "splitter", "x": col, "y": 4, "direction": 4})
+    # Output belts.
+    for col in range(8):
+        entities.append({"name": "transport-belt", "x": col, "y": 5, "direction": 4})
+    return {
+        "n_inputs": 1,
+        "n_outputs": 8,
+        "width": 8,
+        "height": 6,
+        "entities": entities,
+        "input_tiles": [[4, 0]],
+        "output_tiles": [[c, 5] for c in range(8)],
+    }
+
+
 def main() -> int:
     raw = sys.stdin.read()
     try:
@@ -121,15 +207,25 @@ def main() -> int:
 
     started = time.monotonic()
 
-    # Lazy import — unimplemented shapes shouldn't pay the ~200 ms
-    # ortools import cost.
-    if (n, m) == (1, 1) or (n, m) in [(1, 2), (2, 1), (2, 2)]:
+    # Map shape → geometry-emitting function. v1 uses hardcoded
+    # geometry; phase 2 of the placement RFP replaces this with a
+    # real CP-SAT spatial model.
+    geometry: dict[tuple[int, int], Any] = {
+        (1, 1): place_one_to_one,
+        (1, 2): lambda: place_single_splitter(1, 2),
+        (2, 1): lambda: place_single_splitter(2, 1),
+        (2, 2): lambda: place_single_splitter(2, 2),
+        (1, 4): place_one_to_four,
+        (1, 8): place_one_to_eight,
+    }
+
+    if (n, m) in geometry:
+        # Lazy import — unimplemented shapes shouldn't pay the
+        # ~200 ms ortools cost.
         from ortools.sat.python import cp_model
 
-        # Trivial CP-SAT solve, just to exercise the solver pipeline
-        # before delegating to the geometry helper. v1 uses hardcoded
-        # geometry; phase 2 of the placement RFP will replace this with
-        # a real spatial model.
+        # Trivial CP-SAT solve to exercise the solver pipeline before
+        # delegating to the geometry helper.
         model = cp_model.CpModel()
         sentinel = model.new_int_var(0, 0, "sentinel")
         model.add(sentinel == 0)
@@ -148,10 +244,7 @@ def main() -> int:
             )
             return 0
 
-        if (n, m) == (1, 1):
-            template = place_one_to_one()
-        else:
-            template = place_single_splitter(n, m)
+        template = geometry[(n, m)]()
         elapsed_ms = int((time.monotonic() - started) * 1000)
         emit({"kind": "ok", "template": template, "solve_wall_ms": elapsed_ms})
         return 0

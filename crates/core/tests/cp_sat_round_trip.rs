@@ -105,3 +105,13 @@ fn round_trip_2_1() {
 fn round_trip_2_2() {
     round_trip(2, 2);
 }
+
+#[test]
+fn round_trip_1_4() {
+    round_trip(1, 4);
+}
+
+#[test]
+fn round_trip_1_8() {
+    round_trip(1, 8);
+}
