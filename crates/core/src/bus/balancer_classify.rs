@@ -125,6 +125,17 @@ pub fn classify_ref(template: BalancerTemplateRef<'_>) -> Result<ClassificationR
     classify_graph(&graph)
 }
 
+/// Extract the logical splitter graph from a balancer template — strips
+/// physical positions and exposes the connectivity that the topology
+/// generator and placement solver work with. Wraps the internal
+/// `recover_graph` (which would otherwise still be accessible only via
+/// `classify_ref`).
+pub fn topology_of_template(
+    template: BalancerTemplateRef<'_>,
+) -> Result<SplitterGraph, ClassifyError> {
+    recover_graph(template)
+}
+
 // ---------------------------------------------------------------------------
 // Graph reconstruction
 // ---------------------------------------------------------------------------

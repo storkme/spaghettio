@@ -21,7 +21,40 @@
 //! topologies via [`recover_topology_from_library`] until the standalone
 //! generator catches up.
 
-use crate::bus::balancer_classify::{NodeId, SplitterGraph};
+use crate::bus::balancer_classify::{
+    topology_of_template, BalancerTemplateRef, ClassifyError, NodeId, SplitterGraph,
+};
+use crate::bus::balancer_library::balancer_templates;
+
+/// Bootstrap atom: extract the logical topology from a known-good library
+/// template. Used by the Clos-style composers to build coprime balancers
+/// out of small library atoms (e.g. `library_atom(1, 3)` for the back-loop
+/// `1→3` building block) before the standalone universal-balancer
+/// generator catches up.
+///
+/// Returns `None` if the library doesn't have `(m, n)`.
+pub fn library_atom(m: u32, n: u32) -> Option<SplitterGraph> {
+    let t = balancer_templates().get(&(m, n))?;
+    topology_of_template(BalancerTemplateRef::from(t)).ok()
+}
+
+/// Same as [`library_atom`] but returns the underlying error if the
+/// recovery fails — useful when you want to surface a malformed-library
+/// finding rather than silently fall back.
+pub fn library_atom_strict(m: u32, n: u32) -> Result<SplitterGraph, LibraryAtomError> {
+    let templates = balancer_templates();
+    let t = templates
+        .get(&(m, n))
+        .ok_or(LibraryAtomError::ShapeNotInLibrary { m, n })?;
+    topology_of_template(BalancerTemplateRef::from(t))
+        .map_err(LibraryAtomError::Recovery)
+}
+
+#[derive(Debug)]
+pub enum LibraryAtomError {
+    ShapeNotInLibrary { m: u32, n: u32 },
+    Recovery(ClassifyError),
+}
 
 /// `m` parallel paths from input port `i` to output port `i`. No
 /// splitters. Trivially MX2b — every input has a unique output, max-flow
@@ -106,44 +139,61 @@ pub fn parallel(atom: &SplitterGraph, count: usize) -> SplitterGraph {
 }
 
 /// Connect `a`'s outputs 1-to-1 to `b`'s inputs (requires
-/// `a.n_outputs == b.n_inputs`). The composed graph has `a.n_inputs`
-/// inputs, `b.n_outputs` outputs, and `a.n_splitters + b.n_splitters`
-/// splitters; `a`'s `OutputPort(i)` boundary nodes get rewritten to
-/// `b`'s `InputPort(i)` predecessor edges.
-///
-/// Used by phase 3.1+ to compose library-extracted atoms (e.g. `(1, 3)`
-/// from the library) into multi-stage networks.
+/// `a.n_outputs == b.n_inputs`). Equivalent to
+/// [`series_permuted(a, b, &identity)`].
 pub fn series(a: &SplitterGraph, b: &SplitterGraph) -> SplitterGraph {
-    assert_eq!(a.n_outputs, b.n_inputs, "series: a.n_outputs must equal b.n_inputs");
+    let identity: Vec<usize> = (0..a.n_outputs).collect();
+    series_permuted(a, b, &identity)
+}
 
-    let s_a = a.n_splitters;
-    let mut edges: Vec<(NodeId, NodeId)> = Vec::with_capacity(a.edges.len() + b.edges.len());
-
-    // Build maps so we can rewrite a's OutputPort(i) to whatever b's
-    // InputPort(i) feeds into. Two passes:
-    //   1. Find each (InputPort(i) → X) edge in b. Record X.
-    //   2. Replace each (Y → OutputPort(i)) edge in a with (Y → X) where
-    //      X is b's destination from input i. Splitter indices in b are
-    //      shifted by s_a.
-
-    let mut b_input_dest: Vec<Option<NodeId>> = vec![None; b.n_inputs];
-    for &(src, dst) in &b.edges {
-        if let NodeId::InputPort(i) = src {
-            b_input_dest[i] = Some(shift_b_node(dst, s_a));
+/// Connect `a`'s outputs to `b`'s inputs through a permutation: edge
+/// `a.OutputPort(i) → b.InputPort(perm[i])`. `perm` must be a valid
+/// permutation of `0..a.n_outputs`.
+///
+/// This is the Clos-style composer: stage 1's parallel-tree outputs are
+/// re-ordered so each stage-2 sub-balancer receives one belt from each
+/// stage-1 tree, mixing inputs across the network for true balanced
+/// composition.
+pub fn series_permuted(
+    a: &SplitterGraph,
+    b: &SplitterGraph,
+    perm: &[usize],
+) -> SplitterGraph {
+    assert_eq!(a.n_outputs, b.n_inputs, "series_permuted: a.n_outputs must equal b.n_inputs");
+    assert_eq!(perm.len(), a.n_outputs, "perm length must match a.n_outputs");
+    {
+        let mut seen = vec![false; perm.len()];
+        for &p in perm {
+            assert!(p < perm.len(), "perm entry {p} out of range");
+            assert!(!seen[p], "perm has duplicate entry {p}");
+            seen[p] = true;
         }
     }
 
-    // a's edges: rewrite OutputPort(i) destinations.
+    let s_a = a.n_splitters;
+    let mut edges: Vec<(NodeId, NodeId)> =
+        Vec::with_capacity(a.edges.len() + b.edges.len());
+
+    // Resolve each b.InputPort(j) to its downstream destination in b.
+    let mut b_input_dest: Vec<Option<NodeId>> = vec![None; b.n_inputs];
+    for &(src, dst) in &b.edges {
+        if let NodeId::InputPort(j) = src {
+            b_input_dest[j] = Some(shift_b_node(dst, s_a));
+        }
+    }
+
+    // Rewrite `a.OutputPort(i)` destinations to `b_input_dest[perm[i]]`.
     for &(src, dst) in &a.edges {
         let new_dst = match dst {
-            NodeId::OutputPort(i) => b_input_dest[i].expect("b's InputPort(i) has no outgoing edge"),
+            NodeId::OutputPort(i) => b_input_dest[perm[i]]
+                .expect("b's InputPort has no outgoing edge"),
             other => other,
         };
         edges.push((src, new_dst));
     }
 
-    // b's edges: shift splitter indices, drop InputPort(*) → X edges
-    // (they were folded into a's OutputPort(i) above).
+    // Carry over b's internal edges (splitter→splitter, splitter→output).
+    // Skip b's input-port edges: they were folded above.
     for &(src, dst) in &b.edges {
         if matches!(src, NodeId::InputPort(_)) {
             continue;
@@ -157,6 +207,25 @@ pub fn series(a: &SplitterGraph, b: &SplitterGraph) -> SplitterGraph {
         n_splitters: a.n_splitters + b.n_splitters,
         edges,
     }
+}
+
+/// Permutation that re-orders parallel-tree outputs so each downstream
+/// sub-balancer in a Clos network receives one belt from each tree.
+///
+/// For `m` parallel trees each with `k` outputs (so `m·k` total outputs
+/// at the output of stage 1), and a stage 2 of `k` parallel sub-balancers
+/// each taking `m` inputs, the right permutation maps stage-1 output
+/// `i = tree·k + slot` to stage-2 input `slot·m + tree`.
+///
+/// Returns a `Vec<usize>` of length `m * k`.
+pub fn clos_interleave(m: usize, k: usize) -> Vec<usize> {
+    let mut perm = vec![0usize; m * k];
+    for tree in 0..m {
+        for slot in 0..k {
+            perm[tree * k + slot] = slot * m + tree;
+        }
+    }
+    perm
 }
 
 fn shift_node(n: NodeId, in_off: usize, out_off: usize, sp_off: usize) -> NodeId {
@@ -259,27 +328,124 @@ mod tests {
         }
     }
 
-    /// Round-trip: extract topology from a library template via
-    /// `recover_graph`, then verify `classify_graph` gives the same
-    /// classification as `classify` did originally. Sanity-check that the
-    /// `SplitterGraph` abstraction is faithful to physical templates —
-    /// phase 3.1's placement solver will rely on this round-trip.
+    /// Round-trip: classify_graph on a topology recovered from a library
+    /// template must match classify on the original template. Sanity-check
+    /// that the `SplitterGraph` abstraction is faithful to physical
+    /// templates — phase 3.1's placement solver will rely on this contract.
     #[test]
     fn round_trip_library_templates() {
         use crate::bus::balancer_classify::classify;
         use crate::bus::balancer_library::balancer_templates;
 
-        // Pick a handful of representative shapes including coprime ones.
-        // We can't reach the recovered graph publicly (recover_graph is
-        // private), so we just confirm classify and classify_graph
-        // pipelines end up in the same class for the same template via
-        // the public classify(...) entrypoint.
         for &(m, n) in &[(1, 2), (2, 2), (1, 3), (2, 3), (4, 4), (3, 5), (4, 8)] {
             let t = &balancer_templates()[&(m, n)];
-            let r1 = classify(t).unwrap();
-            // Round-trip via classify_ref must produce identical class.
-            let r2 = classify(t).unwrap();
-            assert_eq!(r1.class, r2.class, "({m}, {n}) class differs across calls");
+            let original = classify(t).unwrap();
+            let topology = library_atom(m, n).unwrap();
+            let recovered = classify_graph(&topology).unwrap();
+            assert_eq!(
+                original.class, recovered.class,
+                "({m}, {n}): classify={:?} but classify_graph(topology)={:?}",
+                original.class, recovered.class
+            );
         }
+    }
+
+    #[test]
+    fn library_atom_missing_shape_is_none() {
+        // (9, 9) is not in the library; my generator's passthrough is
+        // separate. library_atom should report None.
+        assert!(library_atom(9, 9).is_none());
+    }
+
+    /// The headline coprime case: `(4, 9)` via Clos composition of
+    /// library atoms. This confirms the topology layer can express
+    /// coprime balancers correctly *before* any placement work.
+    ///
+    /// Construction:
+    ///   stage1 = parallel(library(1, 3), 4)         # (4, 12)
+    ///   stage2 = parallel(library(4, 3), 3)         # (12, 9)
+    ///   network = series_permuted(stage1, stage2, clos_interleave(4, 3))
+    ///
+    /// The interleave makes each sub-balancer in stage 2 take one belt
+    /// from each tree in stage 1 — the symmetric mixing that buys MX3.
+    #[test]
+    fn coprime_4_9_via_clos_composition() {
+        let stage1 = parallel(&library_atom(1, 3).unwrap(), 4);
+        assert_eq!(stage1.n_inputs, 4);
+        assert_eq!(stage1.n_outputs, 12);
+
+        let stage2 = parallel(&library_atom(4, 3).unwrap(), 3);
+        assert_eq!(stage2.n_inputs, 12);
+        assert_eq!(stage2.n_outputs, 9);
+
+        let perm = clos_interleave(4, 3);
+        let network = series_permuted(&stage1, &stage2, &perm);
+        assert_eq!(network.n_inputs, 4);
+        assert_eq!(network.n_outputs, 9);
+
+        let report = classify_graph(&network).unwrap();
+        // For a Clos composition of MX3 atoms with the symmetric
+        // interleave, every output is the 1/4 mixed combination of every
+        // input — that's MX3.
+        assert_eq!(
+            report.class,
+            BalancerClass::Balanced,
+            "(4, 9) Clos composition class = {:?}, composition = {:?}",
+            report.class,
+            report.composition
+        );
+
+        // Splitter count: 4 × library(1,3).n_splitters
+        // + 3 × library(4,3).n_splitters.
+        let lib_1_3 = library_atom(1, 3).unwrap();
+        let lib_4_3 = library_atom(4, 3).unwrap();
+        let expected = 4 * lib_1_3.n_splitters + 3 * lib_4_3.n_splitters;
+        assert_eq!(network.n_splitters, expected);
+        eprintln!(
+            "(4, 9) Clos: {} splitters ({}+{}), {} edges",
+            network.n_splitters,
+            4 * lib_1_3.n_splitters,
+            3 * lib_4_3.n_splitters,
+            network.edges.len()
+        );
+    }
+
+    /// Sanity-check: the same Clos pattern works for other coprime
+    /// shapes. `(3, 7)` via parallel(library(1, k), 3) + parallel(library(3, k'), ?) —
+    /// not directly applicable since k must divide n cleanly. Instead use
+    /// `(3, 12)` via parallel(library(1, 4), 3) + parallel(library(3, 3), 4)?
+    /// `(3, 3)` square is trivial. Let's try `(3, 5)` via library
+    /// composition: (3, 15) / (15, 5) = (3, 5).
+    /// (3, 15) = 3 × (1, 5). library has (1, 5).
+    /// (15, 5) = 5 × (3, 1). library has (3, 1).
+    /// clos_interleave(3, 5) on stage 1's 15 outputs → stage 2's 15 inputs.
+    #[test]
+    fn coprime_3_5_via_clos_composition() {
+        let stage1 = parallel(&library_atom(1, 5).unwrap(), 3);
+        assert_eq!(stage1.n_inputs, 3);
+        assert_eq!(stage1.n_outputs, 15);
+
+        let stage2 = parallel(&library_atom(3, 1).unwrap(), 5);
+        assert_eq!(stage2.n_inputs, 15);
+        assert_eq!(stage2.n_outputs, 5);
+
+        let perm = clos_interleave(3, 5);
+        let network = series_permuted(&stage1, &stage2, &perm);
+        assert_eq!(network.n_inputs, 3);
+        assert_eq!(network.n_outputs, 5);
+
+        let report = classify_graph(&network).unwrap();
+        assert_eq!(
+            report.class,
+            BalancerClass::Balanced,
+            "(3, 5) Clos: class = {:?}",
+            report.class
+        );
+
+        eprintln!(
+            "(3, 5) Clos: {} splitters, {} edges",
+            network.n_splitters,
+            network.edges.len()
+        );
     }
 }
