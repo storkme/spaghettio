@@ -1395,14 +1395,20 @@ fn tier5_processing_unit_25s_horizontal_stack_pole_coverage() {
     }
 }
 
-/// Advanced circuit, rate 5/s, AM1, yellow belts, from raw ores + crude oil.
-/// This is the "hello-world fully-from-ore AC" goal — cheapest machine tier,
-/// cheapest belt tier, everything upstream of the factory is raw resources.
-/// Currently failing; see docs/tier2-from-ore-followup.md and tracking work.
+/// Advanced circuit, rate 5/s, AM2, yellow belts, from raw ores + crude oil.
+/// "Hello-world fully-from-ore AC" goal — cheapest *valid* machine tier
+/// (AM1 is rejected by machine-compatibility validation since advanced-circuit
+/// has 3 ingredients and AM1 has only 2 slots), cheapest belt tier,
+/// everything upstream of the factory is raw resources.
+///
+/// As of the decomposition-search Phase 1 + ghost-router own-trunk fixes:
+/// 0 errors, 1 warning — `[power] 28 power pole(s) are not connected to the
+/// main pole network via copper wire`. Sole remaining blocker is
+/// pole-network connectivity.
 #[test]
-#[ignore] // Goal: make this green. See tier4_advanced_circuit_from_ore_am1.
-#[ntest::timeout(30000)]
-fn tier4_advanced_circuit_from_ore_am1() {
+#[ignore] // Goal: make this green. See tier4_advanced_circuit_from_ore_am2.
+#[ntest::timeout(60000)]
+fn tier4_advanced_circuit_from_ore_am2() {
     let inputs: FxHashSet<String> = [
         "iron-ore", "copper-ore", "coal", "water", "crude-oil",
     ]
@@ -1410,14 +1416,14 @@ fn tier4_advanced_circuit_from_ore_am1() {
     .map(|s| s.to_string())
     .collect();
     let result = run_e2e(
-        "tier4_advanced_circuit_from_ore_am1",
+        "tier4_advanced_circuit_from_ore_am2",
         "advanced-circuit",
         5.0,
-        "assembling-machine-1",
+        "assembling-machine-2",
         Some("transport-belt"),
         &inputs,
     )
-    .unwrap_or_else(|e| panic!("tier4_advanced_circuit_from_ore_am1: {e}"));
+    .unwrap_or_else(|e| panic!("tier4_advanced_circuit_from_ore_am2: {e}"));
 
     assert_no_errors(&result);
     assert_no_warnings(&result);
@@ -1452,7 +1458,7 @@ fn tier4_advanced_circuit_from_ore_am1() {
 ///
 /// This test does *not* assert zero errors / warnings overall — the
 /// from-ore corpus has unrelated lane-throughput / pole issues tracked
-/// in #65 / #68 / `tier4_advanced_circuit_from_ore_am1`. The check is
+/// in #65 / #68 / `tier4_advanced_circuit_from_ore_am2`. The check is
 /// scoped to the balancer-template gap that #136 documents.
 ///
 /// See `crates/core/src/bus/balancer.rs::stamp_family_balancer` for the
