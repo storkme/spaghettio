@@ -12,10 +12,15 @@
 
 pub mod bake;
 pub mod graph;
+pub mod placement;
 pub mod synth;
 pub mod verify;
 
 pub use bake::{from_splitter_graph, BakeError};
 pub use graph::{Arc, BalancerGraph, GraphError, Sink, Source};
+pub use placement::{
+    PlacedTemplate, PlacedTemplateEntity, PlacementEngine, PlacementError, PlacementRequest,
+    PlacementResult,
+};
 pub use synth::{synth, SynthError};
 pub use verify::{verify_balancer, verify_balancer_with_tolerance, VerifyError, VerifyOutcome};
