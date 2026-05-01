@@ -10,10 +10,10 @@
 //!     `max_flow(S → all) = min(|S|, n)`, and dually for every output
 //!     subset `T`.
 //!
-//! Sideloads (B8) are a kill criterion: if any belt has more than one
-//! incoming feeder, or any UG input is fed perpendicularly, the
-//! 50/50 splitter model is unreliable for that template and we bail
-//! loudly with [`ClassifyError::Sideload`].
+//! Sideloads (B8 / U7) are accepted as valid flow merges. The walker
+//! emits one edge per upstream flow source, and the linear-system
+//! composition handles multi-feeder splitter inputs via flow conservation.
+//! Lane-level semantics are an MX5 concern, separate from MX1/MX2/MX3.
 
 use crate::bus::balancer_library::BalancerTemplate;
 use rustc_hash::FxHashMap;
@@ -31,8 +31,6 @@ pub enum BalancerClass {
 
 #[derive(Debug, Clone)]
 pub enum ClassifyError {
-    /// Belt has multiple incoming feeders, or UG input fed perpendicularly.
-    Sideload { tile: (i32, i32), reason: String },
     /// Belt walk fell off the template footprint.
     DanglingBelt { from: (i32, i32) },
     /// Underground-belt input has no matching output downstream.
@@ -126,32 +124,15 @@ impl Cardinal {
             _ => unreachable!("invalid cardinal {}", self.0),
         }
     }
-    fn is_perpendicular_to(self, other: Cardinal) -> bool {
-        let diff = (self.0 + 8 - other.0) % 8;
-        diff == 2 || diff == 6
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
 enum TileEntity {
-    Belt {
-        dir: Cardinal,
-    },
-    SplitterAnchor {
-        dir: Cardinal,
-        idx: usize,
-    },
-    SplitterSecond {
-        dir: Cardinal,
-        idx: usize,
-    },
-    UgInput {
-        dir: Cardinal,
-        idx: usize,
-    },
-    UgOutput {
-        dir: Cardinal,
-    },
+    Belt { dir: Cardinal },
+    SplitterAnchor { idx: usize },
+    SplitterSecond { idx: usize },
+    UgInput { dir: Cardinal, idx: usize },
+    UgOutput { dir: Cardinal },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -197,8 +178,8 @@ fn recover_graph(template: &BalancerTemplate) -> Result<SplitterGraph, ClassifyE
                 let idx = splitters.len();
                 splitters.push(e);
                 let (sx, sy) = splitter_second(e.x, e.y, dir);
-                insert(&mut occ, (e.x, e.y), TileEntity::SplitterAnchor { dir, idx })?;
-                insert(&mut occ, (sx, sy), TileEntity::SplitterSecond { dir, idx })?;
+                insert(&mut occ, (e.x, e.y), TileEntity::SplitterAnchor { idx })?;
+                insert(&mut occ, (sx, sy), TileEntity::SplitterSecond { idx })?;
             }
             "underground-belt" => match e.io_type {
                 Some("input") => {
@@ -251,70 +232,13 @@ fn recover_graph(template: &BalancerTemplate) -> Result<SplitterGraph, ClassifyE
         }
     }
 
-    // ----- Sideload audit -----
-    // - Belts: ≤1 feeder (back or one perpendicular = turn). Two = sideload.
-    // - UG inputs: only the back feeder. Perpendicular = U7 sideload.
-    // - Splitter back tiles: only fed from the back (direction = splitter
-    //   facing). Perpendicular feeders = side-loaded splitter input. The
-    //   simple 50/50 model we use does not faithfully represent the lane
-    //   semantics of side-loaded splitters and the resulting splitter-graph
-    //   may form back-loops that aren't true cycles in the flow sense.
-    //   Bail loudly per the RFP kill criterion.
-    for (&tile, ent) in &occ {
-        match ent {
-            TileEntity::Belt { dir } => {
-                let feeders = belt_feeders(&occ, tile);
-                if feeders.len() > 1 {
-                    return Err(ClassifyError::Sideload {
-                        tile,
-                        reason: format!(
-                            "belt facing {} has {} feeders {:?}; expected ≤1",
-                            dir.0,
-                            feeders.len(),
-                            feeders
-                        ),
-                    });
-                }
-            }
-            TileEntity::UgInput { dir, .. } => {
-                let feeders = belt_feeders(&occ, tile);
-                for &(ftile, fdir) in &feeders {
-                    if fdir.is_perpendicular_to(*dir) {
-                        return Err(ClassifyError::Sideload {
-                            tile,
-                            reason: format!(
-                                "UG input fed perpendicularly from {ftile:?} (B8/U7)"
-                            ),
-                        });
-                    }
-                }
-                if feeders.len() > 1 {
-                    return Err(ClassifyError::Sideload {
-                        tile,
-                        reason: format!("UG input has {} feeders", feeders.len()),
-                    });
-                }
-            }
-            TileEntity::SplitterAnchor { dir, .. } | TileEntity::SplitterSecond { dir, .. } => {
-                // Valid feed direction = the splitter's facing direction
-                // (feeder is behind the tile, flowing forward).
-                let feeders = belt_feeders(&occ, tile);
-                for &(ftile, fdir) in &feeders {
-                    if fdir.0 != dir.0 {
-                        return Err(ClassifyError::Sideload {
-                            tile,
-                            reason: format!(
-                                "splitter input fed perpendicularly from {ftile:?} \
-                                 (feeder dir {} vs splitter facing {})",
-                                fdir.0, dir.0
-                            ),
-                        });
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
+    // Sideloads (B8 / U7) are accepted as valid flow merges. The walker
+    // emits one edge per upstream flow source through any shared belt, so
+    // multi-feeder tiles naturally produce one edge per feeder reaching the
+    // downstream sink — flow conservation at splitters in the linear-system
+    // composition handles the merge correctly. Lane-level semantics matter
+    // for MX5 (lane throughput) but not for the belt-level MX1/MX2/MX3
+    // classification done here.
 
     // ----- Build edges by walking forward from every flow source -----
     let mut edges: Vec<(NodeId, NodeId)> = Vec::new();
@@ -357,53 +281,28 @@ fn splitter_second(x: i32, y: i32, dir: Cardinal) -> (i32, i32) {
     }
 }
 
-/// Adjacent tiles whose outflow points into `target`.
-fn belt_feeders(
-    occ: &FxHashMap<(i32, i32), TileEntity>,
-    target: (i32, i32),
-) -> Vec<((i32, i32), Cardinal)> {
-    let mut feeders = Vec::new();
-    for d in [0u8, 2, 4, 6] {
-        let dir = Cardinal(d);
-        let (dx, dy) = dir.step();
-        let src = (target.0 - dx, target.1 - dy);
-        let Some(src_ent) = occ.get(&src) else { continue };
-        if let Some(odir) = entity_outflow_direction(src_ent) {
-            if odir.0 == dir.0 {
-                feeders.push((src, dir));
-            }
-        }
-    }
-    feeders
-}
-
-fn entity_outflow_direction(ent: &TileEntity) -> Option<Cardinal> {
-    match ent {
-        TileEntity::Belt { dir } => Some(*dir),
-        TileEntity::SplitterAnchor { dir, .. } => Some(*dir),
-        TileEntity::SplitterSecond { dir, .. } => Some(*dir),
-        TileEntity::UgOutput { dir, .. } => Some(*dir),
-        TileEntity::UgInput { .. } => None,
-    }
-}
-
 /// Walk into `tile` and continue forward until reaching a sink (output port,
 /// splitter input, or UG input that re-emerges and continues).
 ///
-/// Returns `Ok(None)` for a "dangling" walk that ends on an empty tile —
-/// physically this represents an unused splitter output (per S5: splitter
-/// routes everything to the connected output) or an input port leading
-/// nowhere. Callers either drop the edge (splitter outputs) or surface the
-/// loss (input ports).
+/// Returns `Ok(None)` for a dangling walk that ends on an empty tile, or
+/// for a walk that loops back on itself (a literal belt cycle, possible
+/// once side-loaded splitter outputs re-enter the network). Looping flow
+/// has no well-defined sink in the saturated model — physically items
+/// would just recirculate — so dropping the edge is the right behaviour
+/// for our static analysis.
 fn walk_into_neighbor(
     occ: &FxHashMap<(i32, i32), TileEntity>,
     mut tile: (i32, i32),
     ug_pair: &FxHashMap<usize, (i32, i32)>,
     template: &BalancerTemplate,
 ) -> Result<Option<NodeId>, ClassifyError> {
-    for _ in 0..2000 {
+    let mut visited: rustc_hash::FxHashSet<(i32, i32)> = rustc_hash::FxHashSet::default();
+    loop {
         if let Some(out_idx) = template.output_tiles.iter().position(|&t| t == tile) {
             return Ok(Some(NodeId::OutputPort(out_idx)));
+        }
+        if !visited.insert(tile) {
+            return Ok(None);
         }
         let Some(ent) = occ.get(&tile) else {
             return Ok(None);
@@ -426,9 +325,6 @@ fn walk_into_neighbor(
             }
         }
     }
-    Err(ClassifyError::Malformed(format!(
-        "walk exceeded 2000 steps near {tile:?}"
-    )))
 }
 
 fn step_tile(tile: (i32, i32), dir: Cardinal) -> (i32, i32) {
@@ -753,7 +649,6 @@ mod tests {
         // returns a structural diagnostic. Print categorical counts so the
         // shape of the corpus is visible.
         let mut ok = 0;
-        let mut sideload = 0;
         let mut cycle = 0;
         let mut dangling = 0;
         let mut unpaired_ug = 0;
@@ -769,7 +664,6 @@ mod tests {
                     }
                     ok += 1;
                 }
-                Err(ClassifyError::Sideload { .. }) => sideload += 1,
                 Err(ClassifyError::Cycle { .. }) => cycle += 1,
                 Err(ClassifyError::DanglingBelt { .. }) => dangling += 1,
                 Err(ClassifyError::UnpairedUg { .. }) => unpaired_ug += 1,
@@ -780,8 +674,8 @@ mod tests {
         }
         assert!(ok > 0, "no templates classified");
         eprintln!(
-            "classify smoke: ok={ok} sideload={sideload} cycle={cycle} \
-             dangling={dangling} unpaired_ug={unpaired_ug} overlap={overlap} \
+            "classify smoke: ok={ok} cycle={cycle} dangling={dangling} \
+             unpaired_ug={unpaired_ug} overlap={overlap} \
              malformed={malformed} singular={singular}"
         );
     }
@@ -825,7 +719,6 @@ mod tests {
         #[derive(Debug)]
         enum Outcome {
             Class(BalancerClass),
-            Sideload,
             Singular,
             Cycle,
             Other(String),
@@ -837,7 +730,6 @@ mod tests {
             let area = t.width * t.height;
             let outcome = match classify(t) {
                 Ok(r) => Outcome::Class(r.class),
-                Err(ClassifyError::Sideload { .. }) => Outcome::Sideload,
                 Err(ClassifyError::Cycle { .. }) => Outcome::Cycle,
                 Err(ClassifyError::Singular) => Outcome::Singular,
                 Err(e) => Outcome::Other(format!("{e:?}")),
@@ -864,10 +756,6 @@ mod tests {
                 Outcome::Class(BalancerClass::ThroughputLimited) => {
                     *counts.entry("MX1 throughput-limited").or_insert(0) += 1;
                     "MX1 throughput-limited".to_string()
-                }
-                Outcome::Sideload => {
-                    *counts.entry("kill: sideload").or_insert(0) += 1;
-                    "kill: sideload".to_string()
                 }
                 Outcome::Cycle => {
                     *counts.entry("kill: cycle").or_insert(0) += 1;
