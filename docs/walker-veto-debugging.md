@@ -81,7 +81,7 @@ mkdir -p /tmp/rfx
 FUCKTORIO_DUMP_REGION_FIXTURE=/tmp/rfx \
 FUCKTORIO_DUMP_REGION_FIXTURE_SEED="10,161" \
     cargo test --manifest-path crates/core/Cargo.toml \
-    --test e2e tier4_advanced_circuit_from_ore_am1 -- --ignored --nocapture
+    --test e2e tier4_advanced_circuit_from_ore_am2 -- --ignored --nocapture
 
 # Promote to a committed fixture
 mv /tmp/rfx/seed_10_161.json \
@@ -123,7 +123,7 @@ FUCKTORIO_DUMP_WALKER_VETO="seed:22,143" cargo run ...
 FUCKTORIO_DUMP_WALKER_VETO="seed:22,143;tile:11,196" cargo run ...
 ```
 
-You need a harness that actually exercises the failing layout. If there isn't an existing test, a one-off `crates/core/examples/X.rs` is fine — delete it when you're done. The built-in e2e `tier4_advanced_circuit_from_ore_am1` and `veto_repro`-shaped scripts are the typical shapes.
+You need a harness that actually exercises the failing layout. If there isn't an existing test, a one-off `crates/core/examples/X.rs` is fine — delete it when you're done. The built-in e2e `tier4_advanced_circuit_from_ore_am2` and `veto_repro`-shaped scripts are the typical shapes.
 
 Read the dump top-down:
 

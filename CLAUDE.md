@@ -111,7 +111,7 @@ Tracks which recipes produce zero-error bus blueprints. Moving up = real progres
 | 1 | `iron-gear-wheel` | 1 recipe, 1 solid input | SOLVED |
 | 2 | `electronic-circuit` | 2 recipes, 2 solid inputs | SOLVED (incl. from ores) |
 | 3 | `plastic-bar` | 1 recipe, 1 fluid + 1 solid input | SOLVED |
-| 4 | `advanced-circuit` | 5+ recipes, mixed solid/fluid | Partial (from plates: lane-throughput warnings, needs [#65](https://github.com/storkme/fucktorio/issues/65); from ores blocked by [#68](https://github.com/storkme/fucktorio/issues/68) and missing balancer shapes [#136](https://github.com/storkme/fucktorio/issues/136)) |
+| 4 | `advanced-circuit` | 5+ recipes, mixed solid/fluid | SOLVED (`tier4_advanced_circuit_from_ore_am2` green: AC@5/s ores AM2 yellow, 0 errors / 0 warnings). From plates still has lane-throughput warnings, [#65](https://github.com/storkme/fucktorio/issues/65). |
 | 5 | `processing-unit` | Deep chain, multiple fluids | Not attempted |
 | 6 | `rocket-control-unit` | Very deep chain | Not attempted |
 

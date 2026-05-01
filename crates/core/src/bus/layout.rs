@@ -925,10 +925,19 @@ fn repair_pole_connectivity(
         };
 
         // Pick a midpoint and walk outward in a small neighbourhood looking
-        // for a free tile to place a bridge pole.
+        // for a free tile to place a bridge pole. The search radius must
+        // reach at least `WIRE_REACH` so that for component pairs whose
+        // midpoint is more than `WIRE_REACH` away from both endpoints
+        // (i.e. when the gap between components is wider than `2 *
+        // WIRE_REACH`), the scan can step *back* toward an endpoint and
+        // find a tile that's both free and within wire reach of `pa` or
+        // `pb`. With radius 6, gaps wider than 12 left the loop unable
+        // to drop a first bridge pole and the components stayed
+        // disconnected — see `tier4_advanced_circuit_from_ore_am2`,
+        // where the pa↔pb gap is ~32 tiles.
         let mid = ((pa.0 + pb.0) / 2, (pa.1 + pb.1) / 2);
         let mut bridge: Option<(i32, i32)> = None;
-        'scan: for r in 0i32..=6 {
+        'scan: for r in 0i32..=WIRE_REACH {
             for dy in -r..=r {
                 for dx in -r..=r {
                     if dx.abs() != r && dy.abs() != r {

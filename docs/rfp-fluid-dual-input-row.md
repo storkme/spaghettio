@@ -24,7 +24,7 @@ balancer-alignment regressions.
 
 ## Motivation
 
-Concrete failing case: `tier4_advanced_circuit_from_ore_am1` (in
+Concrete failing case: `tier4_advanced_circuit_from_ore_am2` (in
 `crates/core/tests/e2e.rs`) is currently `#[ignore]` and times out at
 30s when un-ignored. The dependency tree of `advanced-circuit` from
 ores includes `sulfuric-acid` and (via Space Age recipes) chains
@@ -368,7 +368,7 @@ Required. Each criterion is observable on a specific scoreboard
 case or test, and either firing means we abandon Option B and
 revisit (most likely Option A as the consolation).
 
-1. **`tier4_advanced_circuit_from_ore_am1` does not reach a
+1. **`tier4_advanced_circuit_from_ore_am2` does not reach a
    layoutable state within 30s after the implementation lands.**
    Current behavior: 30s timeout. If after the new template the
    test still times out, the geometric blocker wasn't actually #68
@@ -476,7 +476,7 @@ revisit (most likely Option A as the consolation).
 - **Per-machine fluid taps** (Option C) — would solve the same
   problem at higher cost; revisit only if multi-row layouts develop
   a separate need for per-machine fluid topology (none today).
-- **`tier4_advanced_circuit_from_ore_am1` un-ignoring** — the
+- **`tier4_advanced_circuit_from_ore_am2` un-ignoring** — the
   fluid-row fix is necessary but **not sufficient** for that test
   to go green; it also needs balancer template work
   ([#136](https://github.com/storkme/fucktorio/issues/136)). The

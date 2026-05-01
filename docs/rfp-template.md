@@ -51,7 +51,7 @@ unambiguous after you run the experiment.
 Good examples:
 
 - *"After implementing strategy 1 + 2, if the
-  `tier4_advanced_circuit_from_ore_am1` snapshot still has phantom
+  `tier4_advanced_circuit_from_ore_am2` snapshot still has phantom
   belts in any junction zone, this approach is wrong — the SAT zones
   are not the root cause."*
 - *"If the new junction solver requires more than ~500 LOC of strategy
