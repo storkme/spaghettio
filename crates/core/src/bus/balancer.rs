@@ -265,6 +265,13 @@ pub(crate) fn stamp_family_balancer(
             for ent in &mut entities {
                 ent.segment_id = seg_id.clone();
             }
+            crate::trace::emit(crate::trace::TraceEvent::BalancerGenerated {
+                item: family.item.clone(),
+                shape: (n as usize, m as usize),
+                entity_count: entities.len(),
+                width: generated.width,
+                height: generated.height,
+            });
             return Ok(entities);
         }
     }

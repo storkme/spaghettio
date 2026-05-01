@@ -56,6 +56,21 @@ impl OwnedTemplate {
             .map(|e| e.stamp(origin_x, origin_y, belt_name, splitter_name, ug_name, item))
             .collect()
     }
+
+    /// Render the template as a Factorio-importable blueprint string.
+    /// Useful for quick visualisation: paste into Factorio (or a blueprint
+    /// inspector) to verify a generated layout looks sane.
+    pub fn to_blueprint(&self, label: &str) -> String {
+        let entities = self.stamp(0, 0, "transport-belt", "splitter", "underground-belt", None);
+        let layout = crate::models::LayoutResult {
+            entities,
+            width: self.width as i32,
+            height: self.height as i32,
+            warnings: Vec::new(),
+            ..Default::default()
+        };
+        crate::blueprint::export(&layout, label)
+    }
 }
 
 /// Try to generate a template for `(m, n)`. Returns `None` if the
@@ -380,6 +395,26 @@ mod tests {
             eprintln!(
                 "| ({m}, {n}) | {gen_entities} | {gen_tiles} | {lib_entities} | {lib_tiles} | {savings} |"
             );
+        }
+    }
+
+    /// Print Factorio blueprint strings for a handful of representative
+    /// generated shapes. Run with `--nocapture` to copy-paste into the
+    /// game (or a blueprint inspector) for visual sanity-checking.
+    /// `(9, 9)` is the smallest shape this generator covers that the
+    /// library lacks; the others demonstrate atom replication.
+    #[test]
+    fn dump_blueprints_for_visualisation() {
+        let shapes = [(2, 2), (4, 4), (9, 9), (10, 10), (1, 2), (2, 4), (4, 8)];
+        eprintln!();
+        for (m, n) in shapes {
+            let Some(gen) = generate(m, n) else {
+                eprintln!("({m}, {n}): generator returned None");
+                continue;
+            };
+            let bp = gen.to_blueprint(&format!("gen_{m}x{n}"));
+            eprintln!("({m}, {n}): {} entities, {}×{}", gen.entities.len(), gen.width, gen.height);
+            eprintln!("  blueprint: {bp}");
         }
     }
 }
