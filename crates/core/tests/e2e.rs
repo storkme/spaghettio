@@ -526,10 +526,13 @@ const GOLDEN_HASHES: &[(&str, &str)] = &[
     // Hashes below changed when row inputs were switched to always
     // use `max_belt_tier` instead of per-row consumption rate (fixes
     // tier-mismatch seam where bus tap-off feeds row belt-in).
-    ("tier2_electronic_circuit_20s_from_ore", "1fb6cd019073f762a89da555aad50bb5bd1b63760b0362a9b113460a9faacf63"),
+    // Updated again when ghost-routed tap/ret/feeder horizontals were
+    // upgraded to `max_belt_tier` at materialisation time so they no
+    // longer downshift visually at row gaps.
+    ("tier2_electronic_circuit_20s_from_ore", "e1790abe6fd073d89c0ec9b5050307fc84c80f13ff25440301f29bf1cc4c766d"),
     ("tier2_electronic_circuit_splitter_stamp_regression", "47a79561c746ad68c37e64966eca579d6f8dbfa7fa7bd9d7f7d3433a8d55566a"),
-    ("tier3_plastic_bar", "bff09b66d77b0927bb360fb0c525768fe6f721b2cc92cdb18ea1474b23c85a41"),
-    ("tier3_sulfuric_acid", "b9e59cb601720a73e70aca2d43b724f2467aee70a97f012743a9e539dab0086a"),
+    ("tier3_plastic_bar", "0177826236e45ddc46870105465bef1097e7cd20cdf7b62d191081e904f2634f"),
+    ("tier3_sulfuric_acid", "d55bb14dc0d24dc32f1f74a95bb525202704a34eda3d9b9a53c16779e6c3af36"),
     ("tier3_heavy_oil_cracking", "e035b72e76cff247546b12ff47e264b8f9ae44e8cf9969107e45aad4690e1980"),
 ];
 
@@ -2660,6 +2663,70 @@ fn partition_strategy_scoreboard_extended() {
         },
     ];
     run_partition_scoreboard("partition_strategy_scoreboard_extended", cases);
+}
+
+/// Diagnostic for the user's `#/l/acd/5/am1/_/tbr?s=pd&rl=hs` URL —
+/// AC@5/s on AM1 yellow ores, partitioned-decomposed, horizontal-stack.
+/// Specific complaint: `input-rate-delivery` warning on (97, 126) saying
+/// the belt delivers 0/s of copper-cable but the AM1 wants 0.3/s.
+#[test]
+#[ntest::timeout(600000)]
+#[ignore = "diagnostic; run with --ignored to dump fresh ac5-ores-yellow-hs snapshot"]
+fn diag_ac5_ores_yellow_hs_input_rate() {
+    use fucktorio_core::bus::layout::{LayoutStrategy, RowLayout};
+    let inputs: FxHashSet<String> = ["stone", "coal", "water", "crude-oil", "iron-ore", "copper-ore"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let result = run_e2e_with_strategy_and_row_layout(
+        "diag_ac5_ores_yellow_hs_input_rate",
+        "advanced-circuit",
+        5.0,
+        "assembling-machine-2",
+        Some("transport-belt"),
+        &inputs,
+        LayoutStrategy::PartitionedDecomposed,
+        RowLayout::HorizontalStack,
+    )
+    .expect("AC@5/s ores yellow HS pipeline must complete");
+    let issues = &result.issues;
+    let by_cat: std::collections::HashMap<&str, usize> =
+        issues.iter().fold(std::collections::HashMap::new(), |mut m, i| {
+            *m.entry(i.category.as_str()).or_insert(0) += 1;
+            m
+        });
+    eprintln!("issues by category: {:?}", by_cat);
+    for i in issues.iter().filter(|i| i.category == "input-rate-delivery").take(5) {
+        eprintln!("  {} ({},{}): {}", i.category, i.x.unwrap_or(-1), i.y.unwrap_or(-1), i.message);
+    }
+    // Probe lane_rates along the y=123 copper-cable chain to figure out
+    // where flow gets lost. The first warning was on (25, 123) so trace
+    // back from the trunk's exit at (7, 123) east.
+    let lane_rates = fucktorio_core::validate::belt_flow::compute_lane_rates(
+        &result.layout,
+        Some(&result.solver_result),
+    );
+    let probes: &[(i32, i32)] = &[
+        // Producer-row drop tiles (lane_injections seed)
+        (24, 51), (26, 51), (30, 51), (33, 51),
+        // Producer belt-out chain heading west
+        (33, 51), (30, 51), (28, 50), (29, 50),
+        // Feeder path west then south
+        (22, 51), (21, 51), (16, 51), (10, 51),
+        (9, 51), (8, 51), (7, 51), (6, 51), (6, 55), (6, 58), (6, 59),
+        // Balancer
+        (6, 60), (6, 61), (7, 61),
+        // Trunk
+        (6, 62), (7, 62), (7, 100), (7, 121), (7, 122),
+        // Tap chain
+        (7, 123), (8, 123), (15, 123), (19, 123), (20, 123),
+        (22, 123), (23, 123), (25, 123),
+    ];
+    eprintln!("lane_rates probes:");
+    for &p in probes {
+        let r = lane_rates.get(&p).copied().unwrap_or([f64::NAN, f64::NAN]);
+        eprintln!("  ({},{}) → [{:.3}, {:.3}]", p.0, p.1, r[0], r[1]);
+    }
 }
 
 /// User's processing-unit @ 2/s URL config (vertical-split, AM2, fast belts).

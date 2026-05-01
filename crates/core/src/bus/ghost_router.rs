@@ -23,7 +23,7 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::astar::ghost_astar;
-use crate::bus::balancer::{balancer_origin_x, splitter_for_belt, stamp_family_balancer};
+use crate::bus::balancer::{balancer_origin_x, splitter_for_belt, stamp_family_balancer, underground_for_belt};
 use crate::bus::lane_planner::{BusLane, LaneFamily, MACHINE_ENTITIES};
 use crate::bus::output_merger::merge_output_rows;
 use crate::bus::trunk_renderer::{is_intermediate, render_path, trunk_segments};
@@ -2720,6 +2720,109 @@ pub fn route_bus_ghost(
             entities.extend(merge_ents);
             max_y = max_y.max(merge_end_y);
             merge_max_x = merge_max_x.max(item_merge_x);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Display-tier pass: upgrade ghost-routed horizontal belts to max tier
+    // -------------------------------------------------------------------------
+    // Tap, ret, and feeder specs are sized for their actual rate during
+    // routing — `lane.rate * 2.0` for taps/returns, `fam.total_rate` for
+    // feeders — because the junction solver consults entity tier names to
+    // size UG-reach budgets and assign SAT channels (junction_sat_strategy
+    // line 492+, line 810+). Bumping the routing tier broke dense
+    // processing-unit / partitioned-AC corridors with 60s+ timeouts.
+    //
+    // But the user-visible artefact is `transport-belt` next to
+    // `express-transport-belt` at row-gap y-coords: the row's input belt
+    // is always max tier (`row_input_belt` in placer.rs), so a tap-off
+    // sized for less than max tier displays as a 1-tile downshift right at
+    // the seam. Trunks (`trunk:` segment) and tap-off splitters
+    // (`tapoff:` segment) keep their routing tier — they don't abut row
+    // inputs.
+    let display_belt = belt_entity_for_rate(f64::INFINITY, max_belt_tier);
+    let display_ug = underground_for_belt(display_belt);
+    for ent in &mut entities {
+        let Some(seg) = ent.segment_id.as_deref() else {
+            continue;
+        };
+        if !seg.starts_with("ghost:") {
+            continue;
+        }
+        if crate::common::is_surface_belt(&ent.name) {
+            ent.name = display_belt.to_string();
+        } else if crate::common::is_ug_belt(&ent.name) {
+            ent.name = display_ug.to_string();
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Family-trunk pass: lift trunk/tapoff tiers to match the family balancer
+    // -------------------------------------------------------------------------
+    // When a lane belongs to a family, the family balancer above is sized for
+    // `family.total_rate` while the trunk below is sized for `lane.rate * 2.0`
+    // (the per-output rate). When the per-output rate falls just under a tier
+    // threshold (e.g. 30/s split four ways = 7.5/s per lane → `lane.rate * 2.0
+    // = 15` lands exactly on yellow's 15/s threshold), the trunk renders
+    // yellow under a fast balancer. This isn't just cosmetic: the balancer's
+    // outputs concentrate flow on one lane (a single-side feed pattern), so
+    // the trunk's left lane sees up to `lane.rate * 2.0`, exceeding yellow's
+    // 7.5/s per-lane cap and tripping the `lane-throughput` validator
+    // (issue #267).
+    //
+    // The fix runs as a post-routing rename so the junction solver and SAT
+    // see routing-tier entities throughout (the same reason the ghost: pass
+    // upgrades only after routing). We build a `(item, x) → family_tier`
+    // lookup and rename trunk-segment entities — surface belts, UGs, and
+    // splitters — to the family tier when applicable.
+    let mut family_tier_for: FxHashMap<(String, i32), &'static str> = FxHashMap::default();
+    for lane in lanes {
+        if lane.is_fluid {
+            continue;
+        }
+        let Some(fid) = lane.family_id else { continue };
+        let Some(fam) = families.get(fid) else { continue };
+        let tier = belt_entity_for_rate(fam.total_rate, max_belt_tier);
+        let lane_tier = belt_entity_for_rate(lane.rate * 2.0, max_belt_tier);
+        if tier == lane_tier {
+            continue; // Already at the right tier; skip the lookup insert.
+        }
+        // The splitter at non-last taps occupies (lane.x, ty-1) and
+        // (lane.x+1, ty-1); register both columns so the splitter's
+        // secondary tile gets renamed too.
+        family_tier_for.insert((lane.item.clone(), lane.x), tier);
+        family_tier_for.insert((lane.item.clone(), lane.x + 1), tier);
+    }
+    if !family_tier_for.is_empty() {
+        for ent in &mut entities {
+            let Some(item) = ent.carries.as_deref() else {
+                continue;
+            };
+            let Some(&tier) = family_tier_for.get(&(item.to_string(), ent.x)) else {
+                continue;
+            };
+            // Trunk verticals + tap-off splitters (the original stamps),
+            // plus junction-crossing replacements (SAT / eviction) that
+            // sit on a trunk column carrying the family item — those
+            // entities continue the trunk's vertical flow through the
+            // bbox interior, so they need the family tier too.
+            let Some(seg) = ent.segment_id.as_deref() else {
+                continue;
+            };
+            let upgradeable = seg.starts_with("trunk:")
+                || seg.starts_with("tapoff:")
+                || seg.starts_with("crossing:")
+                || seg.starts_with("junction:");
+            if !upgradeable {
+                continue;
+            }
+            if crate::common::is_surface_belt(&ent.name) {
+                ent.name = tier.to_string();
+            } else if crate::common::is_ug_belt(&ent.name) {
+                ent.name = underground_for_belt(tier).to_string();
+            } else if crate::common::is_splitter(&ent.name) {
+                ent.name = splitter_for_belt(tier).to_string();
+            }
         }
     }
 
