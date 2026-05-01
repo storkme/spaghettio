@@ -58,8 +58,8 @@ fn bench_library_vs_synth_for_n_m_up_to_10() {
     }
 
     eprintln!(
-        "\n{:>5} {:>5} {:>10} {:>10} {:>10} {:>5} {:>5}  {}",
-        "n", "m", "synth_S", "lib_S", "lib_E", "lib_W", "lib_H", "status"
+        "\n{:>5} {:>5} {:>10} {:>10} {:>10} {:>5} {:>5}  status",
+        "n", "m", "synth_S", "lib_S", "lib_E", "lib_W", "lib_H"
     );
     for (n, m, synth_s, library) in &rows {
         // Status reflects what's *placeable* end-to-end, not just what

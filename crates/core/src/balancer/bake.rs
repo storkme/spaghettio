@@ -1,6 +1,6 @@
 //! Bridge between [`SplitterGraph`] (recovered from a placed
-//! `BalancerTemplate` via `bus::balancer_classify::recover_graph`) and
-//! [`BalancerGraph`] (the canonical type our verifier consumes).
+//! `BalancerTemplate` via `bus::balancer_classify::topology_of_template`)
+//! and [`BalancerGraph`] (the canonical type our verifier consumes).
 //!
 //! The two representations differ:
 //!   - `SplitterGraph` is **node-coarse**: a splitter is a single node and

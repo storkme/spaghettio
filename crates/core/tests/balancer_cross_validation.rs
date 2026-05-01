@@ -14,11 +14,14 @@
 //! flags a bug in either implementation or a graph the all-fluid model
 //! can't represent.
 //!
-//! v1: report-only (don't gate). The first run pins agreement at 60/63
-//! per the audit notes; subsequent regressions show up as a numeric drop.
+//! Hard pin: 0 disagreements; exactly `[(5,8), (7,6), (8,6)]` rejected
+//! by both checkers; 0 conversion errors. New disagreements or set
+//! changes surface as test failures, not silent drift.
 
 use fucktorio_core::balancer::{from_splitter_graph, verify_balancer, VerifyError};
-use fucktorio_core::bus::balancer_classify::{classify, recover_graph, BalancerClass};
+use fucktorio_core::bus::balancer_classify::{
+    classify, topology_of_template, BalancerClass, BalancerTemplateRef,
+};
 use fucktorio_core::bus::balancer_library::balancer_templates;
 
 #[test]
@@ -42,7 +45,7 @@ fn cross_validate_existing_templates() {
         let classifier_outcome = classify(template);
 
         // Recover graph + convert + run our verifier.
-        let recovered = match recover_graph(template) {
+        let recovered = match topology_of_template(BalancerTemplateRef::from(template)) {
             Ok(g) => g,
             Err(e) => {
                 classifier_only_errored.push((shape.0, shape.1, format!("recover: {:?}", e)));
