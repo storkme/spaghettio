@@ -1,20 +1,22 @@
-//! Phase 3.1 spike + 3.2 MVP: drive a Python+OR-Tools placement
-//! subprocess for splitter no-overlap, then a Rust router emits a full
-//! `OwnedTemplate` (splitters + boundary belts) for single-splitter
-//! shapes and round-trips through `classify_ref` to confirm the
-//! placement preserves the topology's class.
+//! Phase 3.1 / 3.2 / 3.2A spike — drive a Python+OR-Tools placement
+//! subprocess for splitter no-overlap (3.1) and now belt-routing (3.2A.1)
+//! with caller-provided splitter positions, then verify via classify_ref.
 //!
-//! Phase 3.2 MVP scope (this binary):
-//!   - Single-splitter topologies only (`(1, 2)`, `(2, 2)`).
-//!   - South-facing splitters.
-//!   - Belt entities only at input/output port tiles — no inter-splitter
-//!     routing yet (that's the next chunk of phase 3.2).
+//! Three modes exercised here:
+//!   - Mode A — splitter no-overlap only on `(2, 3)` and `(4, 9)` Clos
+//!     topologies (legacy 3.1 spike).
+//!   - Mode B — single-splitter end-to-end round-trip on `(1, 2)` and
+//!     `(2, 2)` (3.2 MVP).
+//!   - **Mode C — flow-conservation belt routing** on multi-splitter
+//!     library shapes with no back-loops: takes splitter positions
+//!     from the library template, computes per-edge slot assignments
+//!     via a min-distance greedy, sends the topology + slot assignments
+//!     to CP-SAT for belt routing, reassembles entity list, verifies.
 //!
-//! Even with that scope, this is the first end-to-end round-trip:
-//!     library template → topology → CP-SAT placement → entities →
-//!     classify_ref → expected class.
-//! If it closes for `(1, 2)` and `(2, 2)`, the framework is solid; the
-//! remaining work is router complexity, not pipeline plumbing.
+//! 3.2A.1 scope: south-facing splitters, no UGs. Test cases that
+//! satisfy these constraints: `(2, 2)`, `(2, 4)`, `(4, 8)`, `(1, 4)`.
+//! Library shapes that need west-facing splitters or UGs are excluded
+//! and tagged for phase 3.2B/3.2C.
 
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -23,7 +25,7 @@ use serde::{Deserialize, Serialize};
 
 use fucktorio_core::bus::balancer_classify::{
     classify_graph, classify_ref, topology_of_template, BalancerClass, BalancerTemplateRef,
-    SplitterGraph,
+    NodeId, SplitterGraph,
 };
 use fucktorio_core::bus::balancer_generate::OwnedTemplate;
 use fucktorio_core::bus::balancer_library::{balancer_templates, BalancerTemplateEntity};
@@ -31,10 +33,40 @@ use fucktorio_core::bus::balancer_topology::{
     clos_interleave, library_atom, parallel, series_permuted,
 };
 
+// ---------------------------------------------------------------------------
+// Protocol with `scripts/place.py`
+// ---------------------------------------------------------------------------
+
 #[derive(Serialize)]
-struct PlaceRequest {
-    n_splitters: usize,
-    bounds: (u32, u32),
+#[serde(untagged)]
+enum PlaceRequest {
+    OverlapOnly {
+        n_splitters: usize,
+        bounds: (u32, u32),
+    },
+    Routing {
+        bounds: (u32, u32),
+        splitter_positions: Vec<SplitterPosOut>,
+        input_port_tiles: Vec<(i32, i32)>,
+        output_port_tiles: Vec<(i32, i32)>,
+        edges: Vec<EdgeReq>,
+    },
+}
+
+#[derive(Serialize)]
+struct SplitterPosOut {
+    x: i32,
+    y: i32,
+}
+
+#[derive(Serialize)]
+struct EdgeReq {
+    src_kind: &'static str,
+    src_idx: usize,
+    src_slot: u8,
+    dst_kind: &'static str,
+    dst_idx: usize,
+    dst_slot: u8,
 }
 
 #[derive(Deserialize, Debug)]
@@ -43,6 +75,8 @@ struct PlaceResponse {
     elapsed_s: f64,
     #[serde(default)]
     splitters: Vec<SplitterPos>,
+    #[serde(default)]
+    belts: Vec<BeltOutput>,
 }
 
 #[derive(Deserialize, Debug, Clone, Copy)]
@@ -51,13 +85,24 @@ struct SplitterPos {
     y: i32,
 }
 
+#[derive(Deserialize, Debug, Clone, Copy)]
+#[allow(dead_code)] // edge_idx exposed for future debugging / merging
+struct BeltOutput {
+    x: i32,
+    y: i32,
+    dir: u8,
+    edge_idx: usize,
+}
+
+// ---------------------------------------------------------------------------
+// main
+// ---------------------------------------------------------------------------
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let templates = balancer_templates();
 
-    // Phase 3.1: splitter no-overlap only, two cases.
-    let small_template = templates
-        .get(&(2u32, 3u32))
-        .ok_or("library missing (2, 3)")?;
+    // Mode A — phase 3.1 splitter no-overlap.
+    let small_template = templates.get(&(2u32, 3u32)).ok_or("library missing (2, 3)")?;
     let small_topology = topology_of_template(BalancerTemplateRef::from(small_template))
         .map_err(|e| format!("recover_graph failed: {e:?}"))?;
     spike_run_overlap_only(
@@ -75,15 +120,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     spike_run_overlap_only("(4, 9) Clos composition [overlap only]", &big, (24, 24))?;
 
-    // Phase 3.2 MVP: full placement → entity emission → classify round-trip
-    // on single-splitter shapes.
-    println!("\n=== phase 3.2 MVP: end-to-end round-trip ===");
+    // Mode B — single-splitter MVP round-trip.
+    println!("\n=== phase 3.2 MVP: single-splitter end-to-end round-trip ===");
     spike_round_trip("(1, 2)", (1, 2))?;
     spike_round_trip("(2, 2)", (2, 2))?;
+
+    // Mode C — phase 3.2A.1 multi-splitter belt routing.
+    println!("\n=== phase 3.2A.1: flow-conservation belt routing ===");
+    spike_routing_round_trip("(2, 2)", (2, 2))?;
+    spike_routing_round_trip("(2, 4)", (2, 4))?;
+    spike_routing_round_trip("(4, 8)", (4, 8))?;
+    spike_routing_round_trip("(1, 4)", (1, 4))?;
 
     println!("\n✓ all spike runs passed");
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Mode A — splitter no-overlap only
+// ---------------------------------------------------------------------------
 
 fn spike_run_overlap_only(
     label: &str,
@@ -97,20 +152,33 @@ fn spike_run_overlap_only(
         bounds.0,
         bounds.1
     );
-    let resp = run_solver(topology.n_splitters, bounds)?;
+    let req = PlaceRequest::OverlapOnly {
+        n_splitters: topology.n_splitters,
+        bounds,
+    };
+    let resp = run_solver(&req)?;
     println!(
         "status: {}  elapsed: {:.3}s  placements: {}",
         resp.status,
         resp.elapsed_s,
         resp.splitters.len()
     );
-    enforce_kill_criteria(&resp, topology.n_splitters)?;
+    enforce_kill_criteria(&resp)?;
+    if resp.splitters.len() != topology.n_splitters {
+        return Err(format!(
+            "got {} placements, expected {}",
+            resp.splitters.len(),
+            topology.n_splitters
+        )
+        .into());
+    }
     Ok(())
 }
 
-/// Phase 3.2 MVP: place splitters via CP-SAT, emit boundary belts in
-/// Rust, build an `OwnedTemplate`, run through `classify_ref` to confirm
-/// the placement preserves the topology's class.
+// ---------------------------------------------------------------------------
+// Mode B — single-splitter MVP
+// ---------------------------------------------------------------------------
+
 fn spike_round_trip(
     label: &str,
     shape: (u32, u32),
@@ -121,11 +189,9 @@ fn spike_round_trip(
         .ok_or_else(|| format!("library missing {shape:?}"))?;
     let topology = topology_of_template(BalancerTemplateRef::from(lib))
         .map_err(|e| format!("recover_graph failed: {e:?}"))?;
-
     if topology.n_splitters != 1 {
         return Err(format!(
-            "{label}: phase 3.2 MVP only handles single-splitter shapes \
-             (got {} splitters)",
+            "{label}: MVP only handles single-splitter shapes (got {})",
             topology.n_splitters
         )
         .into());
@@ -133,19 +199,22 @@ fn spike_round_trip(
 
     println!(
         "\n--- {label} ---  bounds: {}×{}  topology: {} splitters, {} edges",
-        lib.width, lib.height, topology.n_splitters, topology.edges.len()
+        lib.width,
+        lib.height,
+        topology.n_splitters,
+        topology.edges.len()
     );
-
-    let resp = run_solver(topology.n_splitters, (lib.width, lib.height))?;
-    enforce_kill_criteria(&resp, topology.n_splitters)?;
-
+    let req = PlaceRequest::OverlapOnly {
+        n_splitters: topology.n_splitters,
+        bounds: (lib.width, lib.height),
+    };
+    let resp = run_solver(&req)?;
+    enforce_kill_criteria(&resp)?;
     let sp = resp.splitters[0];
     let placed = emit_single_splitter_template(shape, sp, (lib.width, lib.height))?;
 
-    // Verify: the placed template must classify as MX3 (single-splitter
-    // (m, n) shapes are all MX3 under the linear model).
-    let class_report = classify_ref(placed.as_ref())
-        .map_err(|e| format!("{label}: classify_ref on placed template: {e:?}"))?;
+    let class_report =
+        classify_ref(placed.as_ref()).map_err(|e| format!("classify_ref: {e:?}"))?;
     if class_report.class != BalancerClass::Balanced {
         return Err(format!(
             "{label}: round-trip class = {:?}, expected Balanced",
@@ -153,7 +222,6 @@ fn spike_round_trip(
         )
         .into());
     }
-
     println!(
         "  splitter ({}, {})  → {} entities, classified {:?} ✓",
         sp.x,
@@ -164,11 +232,6 @@ fn spike_round_trip(
     Ok(())
 }
 
-/// Build an `OwnedTemplate` for a single-splitter `(m, n)` shape:
-/// south-facing splitter at the given position, belts at port tiles.
-/// Uses the simple slot-assignment heuristic: the first `m` of the 2
-/// input slots get input ports; the first `n` of the 2 output slots get
-/// output ports.
 fn emit_single_splitter_template(
     shape: (u32, u32),
     sp: SplitterPos,
@@ -176,11 +239,8 @@ fn emit_single_splitter_template(
 ) -> Result<OwnedTemplate, String> {
     let (m, n) = shape;
     if m > 2 || n > 2 {
-        return Err(format!("single-splitter only handles m,n ≤ 2; got {shape:?}"));
+        return Err(format!("MVP only handles single-splitter shapes; got {shape:?}"));
     }
-
-    // South-facing splitter: anchor (sp.x, sp.y), second (sp.x+1, sp.y).
-    // Input slots above (y-1), output slots below (y+1).
     let input_slots = [(sp.x, sp.y - 1), (sp.x + 1, sp.y - 1)];
     let output_slots = [(sp.x, sp.y + 1), (sp.x + 1, sp.y + 1)];
 
@@ -188,8 +248,6 @@ fn emit_single_splitter_template(
     let mut input_tiles: Vec<(i32, i32)> = Vec::new();
     let mut output_tiles: Vec<(i32, i32)> = Vec::new();
 
-    // Splitter entity. Static-string lifetimes are required by the
-    // BalancerTemplateEntity struct, so we use the literal "splitter".
     entities.push(BalancerTemplateEntity {
         name: "splitter",
         x: sp.x,
@@ -197,8 +255,6 @@ fn emit_single_splitter_template(
         direction: 4,
         io_type: None,
     });
-
-    // Input port belts at the chosen input slots, all south-facing.
     for &slot in input_slots.iter().take(m as usize) {
         entities.push(BalancerTemplateEntity {
             name: "transport-belt",
@@ -209,8 +265,6 @@ fn emit_single_splitter_template(
         });
         input_tiles.push(slot);
     }
-
-    // Output port belts at chosen output slots.
     for &slot in output_slots.iter().take(n as usize) {
         entities.push(BalancerTemplateEntity {
             name: "transport-belt",
@@ -221,7 +275,6 @@ fn emit_single_splitter_template(
         });
         output_tiles.push(slot);
     }
-
     Ok(OwnedTemplate {
         n_inputs: m,
         n_outputs: n,
@@ -233,19 +286,259 @@ fn emit_single_splitter_template(
     })
 }
 
-fn run_solver(
-    n_splitters: usize,
-    bounds: (u32, u32),
-) -> Result<PlaceResponse, Box<dyn std::error::Error>> {
-    let req = PlaceRequest { n_splitters, bounds };
-    let req_json = serde_json::to_string(&req)?;
+// ---------------------------------------------------------------------------
+// Mode C — phase 3.2A.1 flow-conservation routing
+// ---------------------------------------------------------------------------
 
-    // Drive the placer via `uv run --no-project`: the script's PEP 723
-    // header pins `ortools`, so the first invocation self-installs
-    // dependencies into a uv-managed environment. Keeps the spike free
-    // of "user must `pip install ortools` first" friction and matches
-    // the convention PR #270's `scripts/cp_sat_placer.py` uses, so the
-    // two entrypoints can consolidate later without rework.
+fn spike_routing_round_trip(
+    label: &str,
+    shape: (u32, u32),
+) -> Result<(), Box<dyn std::error::Error>> {
+    let templates = balancer_templates();
+    let lib = templates
+        .get(&shape)
+        .ok_or_else(|| format!("library missing {shape:?}"))?;
+    let topology = topology_of_template(BalancerTemplateRef::from(lib))
+        .map_err(|e| format!("recover_graph failed: {e:?}"))?;
+
+    // 3.2A.1 only handles south-facing splitters with no UGs. If any
+    // library entity is a non-south splitter or UG, skip — that's
+    // phase 3.2B/3.2C.
+    let all_south_splitters_no_ug = lib.entities.iter().all(|e| match e.name {
+        "splitter" => e.direction == 4,
+        "underground-belt" => false,
+        _ => true,
+    });
+    if !all_south_splitters_no_ug {
+        println!(
+            "\n--- {label} skipped: needs phase 3.2B (UGs) or 3.2C (non-south splitters) ---"
+        );
+        return Ok(());
+    }
+
+    let splitter_positions: Vec<SplitterPosOut> = lib
+        .entities
+        .iter()
+        .filter(|e| e.name == "splitter")
+        .map(|e| SplitterPosOut { x: e.x, y: e.y })
+        .collect();
+    if splitter_positions.len() != topology.n_splitters {
+        return Err(format!(
+            "{label}: lib has {} splitters but topology has {}",
+            splitter_positions.len(),
+            topology.n_splitters
+        )
+        .into());
+    }
+
+    let edge_assignments = assign_slots(&topology, &splitter_positions, lib)?;
+
+    let req = PlaceRequest::Routing {
+        bounds: (lib.width, lib.height),
+        splitter_positions: splitter_positions
+            .iter()
+            .map(|p| SplitterPosOut { x: p.x, y: p.y })
+            .collect(),
+        input_port_tiles: lib.input_tiles.to_vec(),
+        output_port_tiles: lib.output_tiles.to_vec(),
+        edges: edge_assignments,
+    };
+
+    println!(
+        "\n--- {label} ---  bounds: {}×{}  splitters: {}  edges: {}",
+        lib.width,
+        lib.height,
+        splitter_positions.len(),
+        topology.edges.len()
+    );
+    let resp = run_solver(&req)?;
+    enforce_kill_criteria(&resp)?;
+
+    println!(
+        "  routing: status={} elapsed={:.3}s belts={}",
+        resp.status,
+        resp.elapsed_s,
+        resp.belts.len()
+    );
+
+    let placed = assemble_template_from_routing(shape, lib, &splitter_positions, &resp.belts)?;
+    let class_report = classify_ref(placed.as_ref())
+        .map_err(|e| format!("{label}: classify_ref on assembled template: {e:?}"))?;
+
+    let original = classify_ref(BalancerTemplateRef::from(lib))
+        .map_err(|e| format!("{label}: classify original library template: {e:?}"))?;
+    if class_report.class != original.class {
+        return Err(format!(
+            "{label}: assembled class {:?} differs from library class {:?}",
+            class_report.class, original.class
+        )
+        .into());
+    }
+    println!(
+        "  assembled {} entities, classified {:?} (matches library) ✓",
+        placed.entities.len(),
+        class_report.class
+    );
+    Ok(())
+}
+
+/// Min-distance greedy slot assignment. For each edge in the topology,
+/// pick (src_slot, dst_slot) such that the cell-to-cell manhattan distance
+/// between source and destination cells is minimised, subject to slots
+/// not being reused across edges sharing a splitter endpoint.
+///
+/// Works for shapes without back-loops where the natural slot assignment
+/// matches the library's physical layout. Phase 3.2A.2+ may need a
+/// smarter assignment (or letting CP-SAT pick).
+fn assign_slots(
+    topology: &SplitterGraph,
+    splitter_positions: &[SplitterPosOut],
+    lib: &fucktorio_core::bus::balancer_library::BalancerTemplate,
+) -> Result<Vec<EdgeReq>, Box<dyn std::error::Error>> {
+    let mut input_slots_used: Vec<[bool; 2]> = vec![[false; 2]; topology.n_splitters];
+    let mut output_slots_used: Vec<[bool; 2]> = vec![[false; 2]; topology.n_splitters];
+
+    let mut edge_reqs = Vec::with_capacity(topology.edges.len());
+
+    for (a, b) in &topology.edges {
+        let src_candidates: Vec<(u8, (i32, i32))> = match a {
+            NodeId::InputPort(i) => {
+                vec![(0, lib.input_tiles[*i])]
+            }
+            NodeId::Splitter(s) => {
+                let sp = &splitter_positions[*s];
+                let mut v = Vec::new();
+                for slot in 0..2 {
+                    if !output_slots_used[*s][slot as usize] {
+                        v.push((slot, (sp.x + slot as i32, sp.y)));
+                    }
+                }
+                if v.is_empty() {
+                    return Err(format!(
+                        "splitter {s} has no free output slots for edge {a:?} → {b:?}"
+                    )
+                    .into());
+                }
+                v
+            }
+            NodeId::OutputPort(_) => {
+                return Err("invalid: edge sourced from OutputPort".into())
+            }
+        };
+        let dst_candidates: Vec<(u8, (i32, i32))> = match b {
+            NodeId::OutputPort(j) => {
+                vec![(0, lib.output_tiles[*j])]
+            }
+            NodeId::Splitter(s) => {
+                let sp = &splitter_positions[*s];
+                let mut v = Vec::new();
+                for slot in 0..2 {
+                    if !input_slots_used[*s][slot as usize] {
+                        v.push((slot, (sp.x + slot as i32, sp.y)));
+                    }
+                }
+                if v.is_empty() {
+                    return Err(format!(
+                        "splitter {s} has no free input slots for edge {a:?} → {b:?}"
+                    )
+                    .into());
+                }
+                v
+            }
+            NodeId::InputPort(_) => {
+                return Err("invalid: edge destined for InputPort".into())
+            }
+        };
+
+        let mut best: Option<(i32, u8, u8)> = None;
+        for &(src_slot, src_cell) in &src_candidates {
+            for &(dst_slot, dst_cell) in &dst_candidates {
+                let dist = (src_cell.0 - dst_cell.0).abs() + (src_cell.1 - dst_cell.1).abs();
+                if best.is_none_or(|(b, _, _)| dist < b) {
+                    best = Some((dist, src_slot, dst_slot));
+                }
+            }
+        }
+        let (_, src_slot, dst_slot) = best.unwrap();
+
+        if let NodeId::Splitter(s) = a {
+            output_slots_used[*s][src_slot as usize] = true;
+        }
+        if let NodeId::Splitter(s) = b {
+            input_slots_used[*s][dst_slot as usize] = true;
+        }
+
+        edge_reqs.push(EdgeReq {
+            src_kind: match a {
+                NodeId::InputPort(_) => "InputPort",
+                NodeId::Splitter(_) => "Splitter",
+                _ => unreachable!(),
+            },
+            src_idx: match a {
+                NodeId::InputPort(i) => *i,
+                NodeId::Splitter(s) => *s,
+                _ => unreachable!(),
+            },
+            src_slot,
+            dst_kind: match b {
+                NodeId::OutputPort(_) => "OutputPort",
+                NodeId::Splitter(_) => "Splitter",
+                _ => unreachable!(),
+            },
+            dst_idx: match b {
+                NodeId::OutputPort(j) => *j,
+                NodeId::Splitter(s) => *s,
+                _ => unreachable!(),
+            },
+            dst_slot,
+        });
+    }
+
+    Ok(edge_reqs)
+}
+
+fn assemble_template_from_routing(
+    shape: (u32, u32),
+    lib: &fucktorio_core::bus::balancer_library::BalancerTemplate,
+    splitter_positions: &[SplitterPosOut],
+    belts: &[BeltOutput],
+) -> Result<OwnedTemplate, Box<dyn std::error::Error>> {
+    let mut entities: Vec<BalancerTemplateEntity> = Vec::new();
+    for sp in splitter_positions {
+        entities.push(BalancerTemplateEntity {
+            name: "splitter",
+            x: sp.x,
+            y: sp.y,
+            direction: 4,
+            io_type: None,
+        });
+    }
+    for b in belts {
+        entities.push(BalancerTemplateEntity {
+            name: "transport-belt",
+            x: b.x,
+            y: b.y,
+            direction: b.dir,
+            io_type: None,
+        });
+    }
+    Ok(OwnedTemplate {
+        n_inputs: shape.0,
+        n_outputs: shape.1,
+        width: lib.width,
+        height: lib.height,
+        entities,
+        input_tiles: lib.input_tiles.to_vec(),
+        output_tiles: lib.output_tiles.to_vec(),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Subprocess plumbing
+// ---------------------------------------------------------------------------
+
+fn run_solver(req: &PlaceRequest) -> Result<PlaceResponse, Box<dyn std::error::Error>> {
+    let req_json = serde_json::to_string(req)?;
     let script = "crates/balancer-gen/scripts/place.py";
     let mut child = Command::new("uv")
         .args(["run", "--no-project", "--script", script])
@@ -254,7 +547,6 @@ fn run_solver(
         .stderr(Stdio::inherit())
         .spawn()
         .map_err(|e| format!("failed to spawn `uv run {script}`: {e}"))?;
-
     child
         .stdin
         .as_mut()
@@ -267,23 +559,12 @@ fn run_solver(
     Ok(serde_json::from_slice(&output.stdout)?)
 }
 
-fn enforce_kill_criteria(
-    resp: &PlaceResponse,
-    expected_splitters: usize,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn enforce_kill_criteria(resp: &PlaceResponse) -> Result<(), Box<dyn std::error::Error>> {
     if resp.elapsed_s > 30.0 {
         return Err(format!("kill criterion: solve time {:.1}s > 30s", resp.elapsed_s).into());
     }
     if resp.status != "OPTIMAL" && resp.status != "FEASIBLE" {
         return Err(format!("solver returned {} (no placement)", resp.status).into());
-    }
-    if resp.splitters.len() != expected_splitters {
-        return Err(format!(
-            "got {} placements, expected {}",
-            resp.splitters.len(),
-            expected_splitters
-        )
-        .into());
     }
     Ok(())
 }
