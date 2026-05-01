@@ -12,8 +12,10 @@
 
 pub mod bake;
 pub mod graph;
+pub mod synth;
 pub mod verify;
 
 pub use bake::{from_splitter_graph, BakeError};
 pub use graph::{Arc, BalancerGraph, GraphError, Sink, Source};
+pub use synth::{synth, SynthError};
 pub use verify::{verify_balancer, verify_balancer_with_tolerance, VerifyError, VerifyOutcome};
