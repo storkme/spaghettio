@@ -336,3 +336,35 @@ re-litigating decisions:
   bounds — particularly `(2, 3)` ≤100 entities and `(4, 9)` ≤250
   entities. Phase 3.2A is the gating item; if `(1, 3)` round-trip
   works in <30s, the encoding is viable and we proceed through 3.2B-D.*
+
+- *2026-05-01 — phase 3.2A.1, 3.2B, 3.2C all encoded. Status:*
+
+  | Sub-phase | Encoding | Round-trip on simple shapes | Round-trip on coprime |
+  |-----------|----------|------------------------------|------------------------|
+  | 3.2A.1 (flow-conservation) | ✅ shipped | ✅ (2, 2), (2, 4), (1, 4) | n/a |
+  | 3.2B (UG belts)             | ✅ shipped | ✅ same                   | partial — see below   |
+  | 3.2C (direction freedom)    | ✅ shipped | ✅ same                   | partial — see below   |
+
+  *Working coprime / library-with-UG / library-with-non-south-splitter
+  shapes round-trip 3/8 (the simple shapes). The remaining 5 fail with
+  one of two symptoms — INFEASIBLE (CP-SAT can't route inside library
+  bbox with our slot assignment) or Singular (CP-SAT routes but the
+  recovered topology has degenerate cycles).*
+
+  *Single root cause: the Rust-side **greedy min-distance slot
+  assigner** picks the same slot the library used only for shapes
+  without back-loops. For shapes where the library uses specific
+  slot orderings to enable the back-loop pattern, the greedy diverges
+  and either (a) routes into a topology equivalent to the library
+  but in a way the classifier's linear-system solver finds singular,
+  or (b) can't route at all in the same bbox.*
+
+  *Fix is **phase 3.2A.2** — let CP-SAT pick slots as variables, not
+  Rust greedy. Estimated 200-300 LOC of Python (slot bool vars per
+  edge × splitter, slot-usage constraints per splitter, reified
+  source/dest-cell expressions in conservation). Deferred to next
+  session.*
+
+  *Phases 3.2D (bbox minimisation), 3.3 (measure vs Factorio-SAT),
+  3.4 (bake into library_extra) all deferred — they're gated on full
+  shape coverage, which 3.2A.2 unlocks.*
