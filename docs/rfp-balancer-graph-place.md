@@ -5,21 +5,29 @@
 Generate balancer layouts for coprime `(m, n)` shapes by **decomposing
 graph discovery from grid placement**:
 
-1. **Rust topology generator** — given `(m, n)`, emit a logical splitter
-   graph (universal-balancer with back-loops sized to introduce the right
-   non-binary denominator for `m/n`).
-2. **Rust placement solver** — given the graph + a bounding box, encode
-   placement as a SAT problem and solve with `varisat` (already in tree).
-3. **Cache + integrate** — produced templates are verified by
-   [`balancer_classify::classify`](../crates/core/src/bus/balancer_classify.rs)
-   and inserted into the same `OnceLock` lookup the phase-2.0 generator
-   uses.
+1. **Rust topology generator** (in-tree, runtime-callable) — given
+   `(m, n)`, emit a logical splitter graph (universal-balancer with
+   back-loops sized to introduce the right non-binary denominator
+   for `m/n`).
+2. **Rust + CP-SAT placement solver** (build-time, offline binary) —
+   given the graph + a bounding box, encode placement as a CP problem
+   using OR-Tools' CP-SAT (via the `cp_sat` Rust crate). Solve, decode
+   to entity positions.
+3. **Bake** the resulting `BalancerTemplate` into `balancer_library.rs`
+   via a regeneration step, same shape as the existing
+   `scripts/generate_balancer_library.py` pipeline — but written in
+   Rust and using a fixed topology, so search is dramatically narrower.
 
 The premise: today's Factorio-SAT pipeline searches topology *and*
 placement jointly, which is why it falls over on tier-9/10 and is the
-reason `rfp-balancer-runner.md` exists. If we hand SAT a *known* graph
-and ask only for a placement, the search shrinks dramatically — and we
-can do it inside the Rust process with no Python dependency.
+reason `rfp-balancer-runner.md` exists. If we hand the solver a *known*
+graph and ask only for a placement, the search shrinks dramatically —
+and we can do it all in Rust, replacing the Python+Factorio-SAT pipeline
+end-to-end.
+
+The runtime classifier ([`balancer_classify::classify_ref`](../crates/core/src/bus/balancer_classify.rs))
+verifies every generated template before it lands in the library, so
+correctness is checked by tooling we already trust.
 
 ## Motivation
 
@@ -45,9 +53,10 @@ for the audit-flagged latent bugs in `(5, 8)` / `(8, 6)` from
   to finish a tier-9/10 corpus. Costs overnight wall-clock per tier; still
   produces 100-200 entity templates per coprime shape.
 - Or build the decomposed approach proposed here. Order-of-magnitude
-  faster for the placement step (the topology is already known), so per-
-  shape generation drops from minutes-to-hours to milliseconds-to-seconds.
-  Runs in the same Rust process — no Python dependency.
+  faster per shape (placement-only search is much smaller than the
+  joint search Factorio-SAT does), and the entire pipeline is Rust —
+  no Python interpreter, no Factorio-SAT venv, no tier-by-tier overnight
+  runs.
 
 ### Why it should be smaller
 
@@ -97,30 +106,36 @@ classifier confirms it's MX3 (or MX2a, depending on whether back-loop
 position respects composition), measure entity count vs library. If
 significantly larger, switch to D1b.
 
-### D2 — Placement encoding
+### D2 — Placement encoding (CP-SAT)
 
-Variables (boolean, fed to varisat):
+CP-SAT's high-level constraints map naturally onto the placement
+problem — none of the boolean-encoding tedium that pure SAT needs:
 
-- For each graph node `v` (a splitter or port) and each grid tile `(x, y)`:
-  `place_v_at_xy` — is node `v` placed at tile `(x, y)`?
-- For each graph edge `(u → v)` and each tile `(x, y)`:
-  `belt_at_xy_for_edge` — is there a belt for this edge at this tile?
-- Direction of each belt at each tile.
+Variables (integer / interval, native to CP-SAT):
+
+- For each graph node `v`: `(x_v, y_v)` integer position.
+- For each graph edge `(u → v)`: an ordered sequence of `(x, y, dir)`
+  tile triples representing the belt path.
+- Per-tile occupancy: a single integer "what's here" per tile (0 = empty,
+  ≥1 = entity id).
 
 Constraints:
 
-- Each node placed exactly once (one-hot over grid tiles).
-- No two entities at the same tile.
-- For each edge, the belt sequence forms a path from `u` to `v`.
-- For each splitter, the second tile is at the appropriate offset (per
-  `splitter_second_tile`).
-- Belts respect direction continuity (S2-S5 from
-  [`docs/factorio-mechanics.md`](factorio-mechanics.md)).
-- Underground belts pair correctly when used (U1-U5).
-
-Bounding box: a search loop tries `(W, H)` from `(min_w, min_h)` upward,
-solving each. First SAT result wins. The min_w/h are derived from the
-graph (entity count, max fan-out, etc.).
+- **`AddNoOverlap2D`** for splitter footprints (2×1 perpendicular to
+  flow direction). One global constraint instead of pairwise overlap
+  bools.
+- **`AddAllDifferent`** on tile occupancy — at most one entity per tile.
+- For each edge, **`AddCircuit` / `AddPathConstraint`** — encodes a
+  legal belt path from `u` to `v` with direction continuity.
+- Splitter second-tile offset modelled as a fixed displacement between
+  paired tile variables (per
+  [`splitter_second_tile`](../crates/core/src/common.rs)).
+- UG-pair constraints — input/output same axis, same direction, distance
+  ≤ tier limit (U3, U5).
+- Bounding box: integer variables `(W, H)` with `AddMaxEquality` over
+  all entity x/y coordinates. Minimised in a single CP-SAT objective
+  pass — no outer search loop needed (CP-SAT handles bounding-box
+  optimisation natively).
 
 ### D3 — Topology generator
 
@@ -139,34 +154,67 @@ output through the existing `classify_ref` (which already accepts
 graph-structured input via `BalancerTemplateRef`). If the topology
 classifies MX3, the topology is correct.
 
-### D4 — Integration
+### D4 — Build pipeline integration
 
-The placement solver returns `Option<OwnedTemplate>` (or None on
-infeasibility / timeout). The phase-2.0 generator's `generate(m, n)`
-function gets a new code path: if the divisible case doesn't apply,
-try the topology+placement path. Cache results in a `OnceLock` keyed
-by `(m, n)`.
+The pipeline mirrors the existing `scripts/generate_balancer_library.py`
+flow but in Rust:
 
-`balancer_templates()` is left untouched — the generator wraps
-everything. Existing call sites in
-[`stamp_family_balancer`](../crates/core/src/bus/balancer.rs) get
-broader coverage with no API change.
+```
+crates/balancer-gen/                  # NEW Rust binary crate
+  src/main.rs                         # CLI: --shapes, --max-tier, --check
+  src/topology.rs                     # D3: emits LogicalGraph
+  src/placement.rs                    # D2: CP-SAT encoding via cp_sat crate
+  src/sync.rs                         # writes BalancerTemplate constants
+                                      # into balancer_library.rs
+
+crates/core/src/bus/balancer_topology.rs    # NEW (in-tree, runtime)
+                                      # topology generator + verifier hooks
+                                      # for unit tests; no CP-SAT dep here
+
+crates/core/src/bus/balancer_library.rs     # extended with new shapes
+```
+
+Workflow:
+
+1. Run `cargo run -p balancer-gen -- --shapes 4x9,5x9,7x9` (or
+   `--max-tier 10` to fill all coprime gaps).
+2. Each shape: topology generator → CP-SAT placement → verify via
+   `classify_ref` → emit Rust constant.
+3. The binary writes directly into `balancer_library.rs` (or a sibling
+   `balancer_library_extra.rs` to keep the diff isolated). Atomic
+   replace, same pattern as the existing Python sync.
+4. `cargo test` then exercises the new templates; CI catches any
+   regressions.
+
+The runtime `crates/core/` code does **not** depend on `cp_sat` or
+OR-Tools. It only consumes `BalancerTemplate` constants. WASM build is
+unaffected.
+
+`stamp_family_balancer` doesn't change — it just sees more shapes in
+`balancer_templates()`.
 
 ### Trade-offs considered
 
-- **Custom Rust placer instead of SAT.** Tempting (no SAT bottleneck,
-  no constraint encoding), but the placement problem is genuinely
-  combinatorial — handling underground-belt crossings and
-  splitter-tile-overlap shortcuts in a hand-rolled placer is complex.
-  varisat is already in tree, the encoding is well-understood (we did
-  it for junction zones), and the placement search is small enough that
-  SAT performance won't be a bottleneck.
-- **CP-SAT instead of pure SAT.** No Rust binding for OR-Tools that's
-  in tree. Adding one is its own dependency-management work. Defer
-  unless varisat hits perf walls.
-- **Reuse Factorio-SAT's placement primitives via Python subprocess.**
-  Brings back the dependency we're trying to escape. Possible as a
-  shortcut for D2 prototyping but not for the shipped path.
+- **CP-SAT vs pure SAT (varisat).** SAT requires manual boolean
+  encoding of integer positions and overlap constraints — high LOC and
+  fragile. CP-SAT's `AddNoOverlap2D`, `AddAllDifferent`, `AddCircuit`
+  map directly onto the problem. The win is encoding clarity, not
+  necessarily solve speed.
+- **CP-SAT in-tree (runtime + WASM) vs offline.** Build-time is the
+  right call — CP-SAT is a C++ library, WASM-incompatible without
+  serious work. Offline keeps the runtime crate clean and lets us pick
+  the best solver for the job.
+- **Custom Rust placer instead of CP-SAT.** Tempting but the
+  combinatorics (UG crossings, splitter-overlap shortcuts) are subtle;
+  reinventing CP-SAT's propagation badly is a tarpit.
+- **Pure-Rust CP solver (`pumpkin-solver`, `copper`).** Maturity
+  uncertain; defer until/unless OR-Tools turns out to be a build-time
+  pain. If a credible WASM-friendly Rust CP solver lands during this
+  project, we revisit and *might* be able to move the work in-tree at
+  runtime.
+- **Python+OR-Tools subprocess instead of cp_sat Rust crate.** Same
+  result for the user, but introduces a Python+venv dep we're trying
+  to phase out. Use only if `cp_sat` Rust binding is too immature.
 - **D1b instead of D1a as default topology.** Smaller, but less
   verifiable. If D1a runs into entity-count problems, switch.
 
@@ -179,17 +227,19 @@ broader coverage with no API change.
   Factorio-SAT typically produces for coprime tier-≤8 shapes
   (100-150 range). If we can't beat that, this approach has no value
   prop and we revert to the SAT-runner pipeline.
-- **`varisat` solve time per shape > 30s.** Above this, runtime
-  generation isn't viable; we'd have to fall back to offline / cached
-  generation. Not necessarily a kill, but pushes us toward an
-  offline-only flow which complicates the build pipeline.
-- **WASM bundle size grows by >200 KB.** varisat is already shipped, so
-  the new code is mostly the topology generator. If we balloon the
-  bundle materially, the web app's interactivity suffers.
-- **Placement solver loops on a known-good graph.** If we hand-construct
-  a topology we know is placeable (e.g. round-trip the library's
-  existing `(2, 3)` template through the placement solver) and the
+- **CP-SAT solve time per shape > 5 minutes.** Per-shape time matters
+  even build-time — full library regeneration shouldn't take more than
+  a coffee break. If we hit this, either the topology is too loose
+  (try D1b) or the encoding has redundancy.
+- **Round-trip placement fails.** If we hand-construct a topology we
+  know is placeable (extract via `recover_graph` from an existing
+  library template, feed back through the placement solver) and the
   solver doesn't return a result, the encoding has a bug.
+- **`cp_sat` Rust binding doesn't build cleanly cross-platform.** The
+  binary needs to run in CI (Linux) and on dev machines (macOS, Linux).
+  If `cp_sat` requires manual OR-Tools install with multiple platform
+  variants, fall back to a Python+OR-Tools subprocess invocation.
+  Less elegant but ships.
 
 ## Verification plan
 
@@ -218,50 +268,76 @@ broader coverage with no API change.
 
 ## Phasing
 
-- **Phase 3.0 — topology generator only.** Land the Rust-side topology
-  emitter as a new module `bus/balancer_topology.rs`. Verify via
-  `classify_ref` over all coprime shapes for `(m, n) ≤ 6`. *No
-  placement yet.* Output is logical graph data only. ~200-400 LOC.
-- **Phase 3.1 — placement solver scaffold.** New module
-  `bus/balancer_place_sat.rs`. Encode placement constraints, run
-  varisat, decode result into `OwnedTemplate`. Validate via the
-  round-trip test (phase 1 case). ~500-800 LOC.
-- **Phase 3.2 — beat-Factorio-SAT comparison.** Run on the headline
-  shapes (`(4, 9)`, etc.). Decide whether kill criteria are tripped or
-  this approach is shipping.
-- **Phase 3.3 — integrate.** Wire into `generate(m, n)` after the
-  divisible path. Add the `OnceLock` cache. Run full e2e + WASM
-  smoke.
-- **Phase 3.4 (optional) — replace library coprime entries with
-  generated equivalents.** Phase 2.1-style work; gated on phase 3.3
-  stability.
+- **Phase 3.0 — topology generator only.** Land
+  `crates/core/src/bus/balancer_topology.rs`. Verify via `classify_ref`
+  over all coprime shapes for `(m, n) ≤ 6`. *No placement yet.* Output
+  is logical graph data only — independently useful for the audit and
+  for round-trip tests later. ~200-400 LOC, zero new deps.
+- **Phase 3.1 — `cp_sat` spike.** Add `crates/balancer-gen/` binary
+  crate, depend on the `cp_sat` Rust crate. Encode placement of a
+  *known-good* template (e.g. extract `(2, 3)` from the library, feed
+  back through). Confirm CP-SAT can place it within 30s. Cross-platform
+  build verified on macOS + Linux CI. Bail to "Python subprocess"
+  fallback if blocked. ~200 LOC + Cargo wiring.
+- **Phase 3.2 — full placement encoding.** Generalise the spike to
+  arbitrary topology graphs. Round-trip test: every existing library
+  template extracted via `recover_graph`, re-placed, classified — must
+  match original class. ~500-800 LOC.
+- **Phase 3.3 — beat-Factorio-SAT measurement.** Generate `(4, 9)`,
+  `(5, 9)`, `(7, 9)`, `(5, 7)`. Compare entity counts + solve times
+  against current Factorio-SAT pipeline (run that pipeline once on
+  these as baseline). Decision-log the numbers; trigger kill criteria
+  if missed.
+- **Phase 3.4 — bake into library.** Run the binary, atomically replace
+  the relevant section of `balancer_library.rs`, run the full test
+  suite. New shapes are now usable by `stamp_family_balancer` with no
+  runtime change.
+- **Phase 3.5 (optional) — replace existing library entries** where
+  our generator beats Factorio-SAT on entity count. Phase 2.1-style
+  work; gated on 3.4 stability.
+- **Phase 3.6 (longer-term, optional) — retire Factorio-SAT.** Once
+  the new pipeline covers the full `(1..10) × (1..10)` envelope and
+  has run in CI for a release cycle, archive
+  `scripts/generate_balancer_library.py` and `external/factorio-sat/`.
+  Closes the dependency loop.
 - **Out of scope:** lane-aware MX5 verification, mixed-content buses,
-  D1b topology variant (deferred unless D1a misses kill criteria).
+  D1b topology variant (deferred unless D1a misses kill criteria),
+  runtime in-WASM placement (would require a pure-Rust CP solver).
 
 ## Open questions
 
-- **Does `varisat` handle the placement encoding fast enough?** The
-  junction-zone solver uses varisat on much smaller problem sizes.
-  Placement of a 30-node graph in a 12×12 grid is in the same ballpark
-  but with more variables. Worth a spike before committing to phase
-  3.1.
-- **Do we cache the placement results offline?** Runtime generation is
-  attractive (no build-time pipeline), but if solve time is variable
-  (some shapes 100ms, others 30s) the user-facing latency is bad.
-  Compromise: cache results in a checked-in JSON/RON, generate on
-  first miss, write back to source. Decide based on phase 3.1
-  benchmarks.
-- **D1a or D1b?** Defer until phase 3.0 has the D1a entity counts in
-  hand. If D1a's `(4, 9)` is already <100 entities, ship it. If
-  150+, try D1b.
+- **`cp_sat` crate maturity / cross-platform build.** Phase 3.1 spike
+  is gated on this. If the crate works cleanly on Linux + macOS we
+  proceed; otherwise fall back to Python+OR-Tools subprocess (still
+  a build-time-only dep) or revisit a pure-Rust CP solver.
+- **D1a or D1b topology?** Defer until phase 3.0 has D1a entity
+  counts in hand. If D1a's `(4, 9)` is already <100 entities, ship
+  it. If 150+, try D1b.
+- **Where does the generator's output go in `balancer_library.rs`?**
+  Two options: (a) inline-merge into the existing build_templates
+  function, keeping one source of truth; (b) emit a sibling
+  `balancer_library_extra.rs` that the library lookup also consults.
+  Option (a) is cleaner but means the existing Factorio-SAT pipeline
+  and our generator are writing to the same file (race conditions,
+  source-of-truth confusion). Option (b) is uglier but keeps the
+  pipelines independent until phase 3.6 retires Factorio-SAT.
 - **What about the existing rfp-balancer-runner work?** That work
   parallelises Factorio-SAT for tier-9/10. It's complementary: even
-  with phase-3 shipped, the SAT-runner is still useful as a fallback
-  for shapes our topology generator can't handle (if any). No conflict.
+  with phase-3 shipped, the SAT-runner remains useful as a fallback
+  for shapes our topology generator can't handle (if any). They
+  converge at phase 3.6 when Factorio-SAT can be retired.
+- **Cross-shape solver caching.** OR-Tools' CP-SAT supports incremental
+  solving. If we generate (4, 9), (5, 9), (7, 9) in one run, can we
+  share search state? Probably not worth optimising in phase 3, but
+  worth noting if the per-shape solve time turns out to dominate.
 
 ## Decision log
 
-- *2026-05-01 — drafted. Awaiting user feedback on D1 (topology
-  recipe), D2 (SAT vs custom placer), and the kill criterion bounds
-  (esp. the entity-count target for `(4, 9)`). Spike on `varisat`
-  placement perf is the gating item before committing to phase 3.1.*
+- *2026-05-01 — drafted (initial: in-tree varisat + runtime
+  placement).*
+- *2026-05-01 — revised after feedback: keep CP-SAT placement
+  offline / build-time, written in Rust. Topology generator stays
+  in-tree and runtime-callable for verification. WASM bundle / runtime
+  perf concerns drop. Awaiting user feedback on D1 (topology recipe),
+  the cp_sat-vs-Python-subprocess fallback, and the kill criterion
+  bounds. Phase 3.1 cp_sat spike is the gating item.*
