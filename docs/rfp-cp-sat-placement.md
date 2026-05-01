@@ -281,3 +281,15 @@ After each phase:
 - *2026-05-01 — RFP drafted. Subprocess plumbing landed in `5687ddf`;
   this RFP scopes the placement model itself. Phase 1 starts when
   approved.*
+- *2026-05-01 — Phase 1 shipped on branch `claude/cp-sat-place-dyadic`.
+  6 shapes covered: `(1, 1), (1, 2), (2, 1), (2, 2), (1, 4), (1, 8)`,
+  all round-tripping synth → CpSat → topology_of_template →
+  verify_balancer at the expected `n/m` rate. Layout details:
+  - `(1, 4)`: library-style tight-stack with 1-col stagger between
+    root and level-1; 3 splitters, 5 belts, 4×4 grid.
+  - `(1, 8)`: adds one routing row between root and level-1; bottom
+    two splitter levels still tight-stack; 7 splitters, 13 belts,
+    8×6 grid.
+  Underground belts deferred — not needed at depth ≤ 3. UGs become
+  useful for depth ≥ 4 (multi-row routing) and for crossing flows
+  in the asymmetric coprime shapes (#136); both phase 3+ territory.*
