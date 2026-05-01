@@ -1,0 +1,173 @@
+//! Cross-validate the all-fluid Gaussian-elim verifier
+//! (`balancer::verify::verify_balancer`) against the splitter-node-coarse
+//! classifier (`bus::balancer_classify::classify`) over every entry of
+//! `balancer_library::balancer_templates()`.
+//!
+//! The two implementations parameterize the linear system differently:
+//!   - The classifier solves an `s × s` system over per-splitter rates
+//!     under a saturated 50/50 splitter model.
+//!   - The verifier solves an `n_arcs × n_arcs` system over per-arc rates
+//!     under the all-fluid steady-state restriction of Couëtoux et al. §3.
+//!
+//! For a well-formed balancer they should agree on the load-balancing
+//! property (classifier MX3 ⇔ verifier reports balanced). Disagreement
+//! flags a bug in either implementation or a graph the all-fluid model
+//! can't represent.
+//!
+//! v1: report-only (don't gate). The first run pins agreement at 60/63
+//! per the audit notes; subsequent regressions show up as a numeric drop.
+
+use fucktorio_core::balancer::{from_splitter_graph, verify_balancer, VerifyError};
+use fucktorio_core::bus::balancer_classify::{classify, recover_graph, BalancerClass};
+use fucktorio_core::bus::balancer_library::balancer_templates;
+
+#[test]
+fn cross_validate_existing_templates() {
+    let templates = balancer_templates();
+
+    let mut shapes: Vec<(u32, u32)> = templates.keys().copied().collect();
+    shapes.sort();
+
+    let mut both_balanced: Vec<(u32, u32)> = Vec::new();
+    let mut both_not_balanced: Vec<(u32, u32, String, String)> = Vec::new();
+    let mut disagreements: Vec<(u32, u32, String, String)> = Vec::new();
+    let mut classifier_only_errored: Vec<(u32, u32, String)> = Vec::new();
+    let mut verifier_only_errored: Vec<(u32, u32, String)> = Vec::new();
+    let mut convert_errored: Vec<(u32, u32, String)> = Vec::new();
+
+    for shape in shapes {
+        let template = &templates[&shape];
+
+        // Classifier path.
+        let classifier_outcome = classify(template);
+
+        // Recover graph + convert + run our verifier.
+        let recovered = match recover_graph(template) {
+            Ok(g) => g,
+            Err(e) => {
+                classifier_only_errored.push((shape.0, shape.1, format!("recover: {:?}", e)));
+                continue;
+            }
+        };
+        let bg = match from_splitter_graph(&recovered) {
+            Ok(g) => g,
+            Err(e) => {
+                convert_errored.push((shape.0, shape.1, format!("convert: {:?}", e)));
+                continue;
+            }
+        };
+        let verifier_outcome = verify_balancer(&bg);
+
+        // Compare.
+        match (&classifier_outcome, &verifier_outcome) {
+            (Ok(report), Ok(_)) => {
+                let their_balanced = matches!(report.class, BalancerClass::Balanced);
+                if their_balanced {
+                    both_balanced.push(shape);
+                } else {
+                    disagreements.push((
+                        shape.0,
+                        shape.1,
+                        format!("classifier:{:?}", report.class),
+                        "verifier:Ok".to_string(),
+                    ));
+                }
+            }
+            (Ok(report), Err(verr)) => {
+                let their_balanced = matches!(report.class, BalancerClass::Balanced);
+                if their_balanced {
+                    disagreements.push((
+                        shape.0,
+                        shape.1,
+                        format!("classifier:{:?}", report.class),
+                        format!("verifier:{}", short_verr(verr)),
+                    ));
+                } else {
+                    both_not_balanced.push((
+                        shape.0,
+                        shape.1,
+                        format!("classifier:{:?}", report.class),
+                        format!("verifier:{}", short_verr(verr)),
+                    ));
+                }
+            }
+            (Err(cerr), Ok(_)) => {
+                verifier_only_errored.push((
+                    shape.0,
+                    shape.1,
+                    format!("classifier-errored:{:?}, verifier-ok", cerr),
+                ));
+            }
+            (Err(cerr), Err(verr)) => {
+                both_not_balanced.push((
+                    shape.0,
+                    shape.1,
+                    format!("classifier-errored:{:?}", cerr),
+                    format!("verifier:{}", short_verr(verr)),
+                ));
+            }
+        }
+    }
+
+    eprintln!("\n=== Cross-validation summary ===");
+    eprintln!("Total templates:           {}", templates.len());
+    eprintln!("Both classify as balanced: {}", both_balanced.len());
+    eprintln!("Both NOT balanced:         {}", both_not_balanced.len());
+    eprintln!("Disagreements:             {}", disagreements.len());
+    eprintln!("Conversion errored:        {}", convert_errored.len());
+    eprintln!("Classifier-only errored:   {}", classifier_only_errored.len());
+    eprintln!("Verifier-only errored:     {}", verifier_only_errored.len());
+
+    if !disagreements.is_empty() {
+        eprintln!("\nDisagreements:");
+        for (n, m, c, v) in &disagreements {
+            eprintln!("  ({}, {}): {} | {}", n, m, c, v);
+        }
+    }
+    if !both_not_balanced.is_empty() {
+        eprintln!("\nBoth-not-balanced (expected):");
+        for (n, m, c, v) in &both_not_balanced {
+            eprintln!("  ({}, {}): {} | {}", n, m, c, v);
+        }
+    }
+    if !convert_errored.is_empty() {
+        eprintln!("\nConversion errors:");
+        for (n, m, e) in &convert_errored {
+            eprintln!("  ({}, {}): {}", n, m, e);
+        }
+    }
+    if !classifier_only_errored.is_empty() {
+        eprintln!("\nClassifier errors:");
+        for (n, m, e) in &classifier_only_errored {
+            eprintln!("  ({}, {}): {}", n, m, e);
+        }
+    }
+    if !verifier_only_errored.is_empty() {
+        eprintln!("\nVerifier-only errored (verifier disagreed):");
+        for (n, m, e) in &verifier_only_errored {
+            eprintln!("  ({}, {}): {}", n, m, e);
+        }
+    }
+
+    // Pin: report-only on the first pass. Print the numbers so any drift
+    // from the documented audit (60 MX3, 2 MX1, 1 singular) is visible.
+    // Once the numbers stabilize we can ratchet this into a hard assert.
+    assert!(
+        disagreements.is_empty()
+            || std::env::var("FUCKTORIO_BALANCER_CV_PERMISSIVE").is_ok(),
+        "verifier and classifier disagree on {} templates; \
+         set FUCKTORIO_BALANCER_CV_PERMISSIVE=1 to make this report-only",
+        disagreements.len()
+    );
+}
+
+fn short_verr(err: &VerifyError) -> String {
+    match err {
+        VerifyError::Graph(g) => format!("Graph({:?})", g),
+        VerifyError::Singular { rank, expected } => {
+            format!("Singular(rank={}, expected={})", rank, expected)
+        }
+        VerifyError::Imbalanced { imbalance, .. } => format!("Imbalanced({:.4e})", imbalance),
+        VerifyError::NoRealOutputs => "NoRealOutputs".to_string(),
+    }
+}
