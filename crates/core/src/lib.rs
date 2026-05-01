@@ -12,6 +12,7 @@
 
 pub mod analysis;
 pub mod astar;
+pub mod balancer;
 pub mod blueprint;
 pub mod blueprint_parser;
 pub mod bus;
