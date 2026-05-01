@@ -84,6 +84,74 @@ pub struct PlacedTemplate {
     pub source_blueprint: Option<String>,
 }
 
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum ToOwnedTemplateError {
+    #[error("entity {idx} has unknown name {name:?} (expected one of: {expected:?})")]
+    UnknownName {
+        idx: usize,
+        name: String,
+        expected: &'static [&'static str],
+    },
+    #[error("entity {idx} has unknown io_type {io_type:?} (expected \"input\" or \"output\")")]
+    UnknownIoType { idx: usize, io_type: String },
+}
+
+impl PlacedTemplate {
+    /// Convert to [`crate::bus::balancer_generate::OwnedTemplate`] so the
+    /// template can be classified by [`crate::bus::balancer_classify`]
+    /// (which requires `&'static str` names from a fixed set). Maps each
+    /// entity's owned [`String`] name to the matching static literal;
+    /// returns an error for unrecognized names.
+    pub fn into_owned_template(
+        self,
+    ) -> Result<crate::bus::balancer_generate::OwnedTemplate, ToOwnedTemplateError> {
+        use crate::bus::balancer_library::BalancerTemplateEntity;
+
+        let mut entities = Vec::with_capacity(self.entities.len());
+        for (idx, e) in self.entities.into_iter().enumerate() {
+            let name: &'static str = match e.name.as_str() {
+                "transport-belt" => "transport-belt",
+                "splitter" => "splitter",
+                "underground-belt" => "underground-belt",
+                _ => {
+                    return Err(ToOwnedTemplateError::UnknownName {
+                        idx,
+                        name: e.name,
+                        expected: &["transport-belt", "splitter", "underground-belt"],
+                    });
+                }
+            };
+            let io_type: Option<&'static str> = match e.io_type.as_deref() {
+                None => None,
+                Some("input") => Some("input"),
+                Some("output") => Some("output"),
+                Some(other) => {
+                    return Err(ToOwnedTemplateError::UnknownIoType {
+                        idx,
+                        io_type: other.to_string(),
+                    });
+                }
+            };
+            entities.push(BalancerTemplateEntity {
+                name,
+                x: e.x,
+                y: e.y,
+                direction: e.direction,
+                io_type,
+            });
+        }
+        Ok(crate::bus::balancer_generate::OwnedTemplate {
+            n_inputs: self.n_inputs,
+            n_outputs: self.n_outputs,
+            width: self.width,
+            height: self.height,
+            entities,
+            input_tiles: self.input_tiles,
+            output_tiles: self.output_tiles,
+        })
+    }
+}
+
 /// One successful placement.
 #[derive(Debug, Clone)]
 pub struct PlacementResult {

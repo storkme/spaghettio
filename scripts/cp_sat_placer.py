@@ -54,12 +54,11 @@ def emit_unimplemented(reason: str) -> None:
 
 
 def place_one_to_one() -> dict[str, Any]:
-    """The trivial passthrough: a single south-facing belt at (0, 0).
+    """Trivial passthrough — a single south-facing belt at (0, 0).
 
-    Width 1, height 1. Input at (0, 0), output also at (0, 0) — the
-    same tile is both. The bus engine reads `input_tiles` to find where
-    flow enters and `output_tiles` to find where it exits. For a
-    single-belt template they're the same tile.
+    Width 1, height 1. Input and output are the same tile. The bus
+    engine reads `input_tiles` to find where flow enters and
+    `output_tiles` to find where it exits.
     """
     return {
         "n_inputs": 1,
@@ -71,6 +70,40 @@ def place_one_to_one() -> dict[str, Any]:
         ],
         "input_tiles": [[0, 0]],
         "output_tiles": [[0, 0]],
+    }
+
+
+def place_single_splitter(n: int, m: int) -> dict[str, Any]:
+    """Single-splitter shapes for n, m ∈ {1, 2}: (1, 2), (2, 1), (2, 2).
+
+    South-facing splitter at anchor (0, 1) occupying (0, 1) and (1, 1).
+    Input ports above at (0, 0) and (1, 0); output ports below at
+    (0, 2) and (1, 2). The first `n` of the 2 input slots get input
+    belts; the first `m` of the 2 output slots get output belts.
+
+    Width 2, height 3. Mirrors the layout in
+    `crates/balancer-gen/src/main.rs::emit_single_splitter_template`
+    so the two entrypoints converge on a single geometry.
+    """
+    entities: list[dict[str, Any]] = [
+        {"name": "splitter", "x": 0, "y": 1, "direction": 4},
+    ]
+    input_tiles: list[list[int]] = []
+    output_tiles: list[list[int]] = []
+    for slot in range(n):
+        entities.append({"name": "transport-belt", "x": slot, "y": 0, "direction": 4})
+        input_tiles.append([slot, 0])
+    for slot in range(m):
+        entities.append({"name": "transport-belt", "x": slot, "y": 2, "direction": 4})
+        output_tiles.append([slot, 2])
+    return {
+        "n_inputs": n,
+        "n_outputs": m,
+        "width": 2,
+        "height": 3,
+        "entities": entities,
+        "input_tiles": input_tiles,
+        "output_tiles": output_tiles,
     }
 
 
@@ -88,17 +121,18 @@ def main() -> int:
 
     started = time.monotonic()
 
-    if n == 1 and m == 1:
-        # Trivial CP-SAT model: place 1 belt with no constraints.
-        # We import lazily so that unimplemented shapes don't pay the
-        # ortools import cost (~200 ms).
+    # Lazy import — unimplemented shapes shouldn't pay the ~200 ms
+    # ortools import cost.
+    if (n, m) == (1, 1) or (n, m) in [(1, 2), (2, 1), (2, 2)]:
         from ortools.sat.python import cp_model
 
+        # Trivial CP-SAT solve, just to exercise the solver pipeline
+        # before delegating to the geometry helper. v1 uses hardcoded
+        # geometry; phase 2 of the placement RFP will replace this with
+        # a real spatial model.
         model = cp_model.CpModel()
-        x = model.new_int_var(0, 0, "x")
-        y = model.new_int_var(0, 0, "y")
-        model.add(x == 0)
-        model.add(y == 0)
+        sentinel = model.new_int_var(0, 0, "sentinel")
+        model.add(sentinel == 0)
         solver = cp_model.CpSolver()
         solver.parameters.max_time_in_seconds = timeout_ms / 1000.0
         seed = request.get("seed")
@@ -106,10 +140,18 @@ def main() -> int:
             solver.parameters.random_seed = int(seed)
         status = solver.solve(model)
         if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-            emit({"kind": "engine", "message": f"solver returned {solver.status_name(status)}"})
+            emit(
+                {
+                    "kind": "engine",
+                    "message": f"solver returned {solver.status_name(status)}",
+                }
+            )
             return 0
 
-        template = place_one_to_one()
+        if (n, m) == (1, 1):
+            template = place_one_to_one()
+        else:
+            template = place_single_splitter(n, m)
         elapsed_ms = int((time.monotonic() - started) * 1000)
         emit({"kind": "ok", "template": template, "solve_wall_ms": elapsed_ms})
         return 0
