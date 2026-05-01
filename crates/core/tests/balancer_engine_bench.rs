@@ -58,18 +58,28 @@ fn bench_library_vs_synth_for_n_m_up_to_10() {
     }
 
     eprintln!(
-        "\n{:>5} {:>5} {:>10} {:>10} {:>10} {:>5} {:>5}",
-        "n", "m", "synth_S", "lib_S", "lib_E", "lib_W", "lib_H"
+        "\n{:>5} {:>5} {:>10} {:>10} {:>10} {:>5} {:>5}  {}",
+        "n", "m", "synth_S", "lib_S", "lib_E", "lib_W", "lib_H", "status"
     );
     for (n, m, synth_s, library) in &rows {
+        // Status reflects what's *placeable* end-to-end, not just what
+        // synth produces:
+        //   - "library"      — `LibraryLookup` has a Factorio-SAT-baked
+        //                       template; this shape is fully usable today.
+        //   - "synth-only"   — synth produces a verified-balanced graph
+        //                       but no placement engine can lay it out.
+        //                       The CP-SAT placer (currently `(1, 1)` only)
+        //                       is the path forward; until it lands more
+        //                       shapes, these graphs are abstract-only.
+        let status = if library.is_some() { "library" } else { "synth-only" };
         match library {
             Some((entities, splitters, w, h)) => eprintln!(
-                "{:>5} {:>5} {:>10} {:>10} {:>10} {:>5} {:>5}",
-                n, m, synth_s, splitters, entities, w, h
+                "{:>5} {:>5} {:>10} {:>10} {:>10} {:>5} {:>5}  {}",
+                n, m, synth_s, splitters, entities, w, h, status
             ),
             None => eprintln!(
-                "{:>5} {:>5} {:>10} {:>10} {:>10} {:>5} {:>5}",
-                n, m, synth_s, "-", "-", "-", "-"
+                "{:>5} {:>5} {:>10} {:>10} {:>10} {:>5} {:>5}  {}",
+                n, m, synth_s, "-", "-", "-", "-", status
             ),
         }
     }

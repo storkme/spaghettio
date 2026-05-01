@@ -149,15 +149,42 @@ fn cross_validate_existing_templates() {
         }
     }
 
-    // Pin: report-only on the first pass. Print the numbers so any drift
-    // from the documented audit (60 MX3, 2 MX1, 1 singular) is visible.
-    // Once the numbers stabilize we can ratchet this into a hard assert.
+    // Hard-gate on three things:
+    //   1. `disagreements` is empty — classifier and verifier never disagree
+    //      on whether a template is balanced (they may give different
+    //      *errors* for not-balanced templates; that's `both_not_balanced`,
+    //      tracked separately).
+    //   2. `both_not_balanced` is exactly the three known templates that
+    //      both rejecters reject. Adding a new not-balanced shape is a
+    //      regression in the library; losing one means the rejecters are
+    //      too lenient.
+    //   3. No conversion errors — every template round-trips through
+    //      `bake::from_splitter_graph`.
     assert!(
         disagreements.is_empty()
             || std::env::var("FUCKTORIO_BALANCER_CV_PERMISSIVE").is_ok(),
-        "verifier and classifier disagree on {} templates; \
-         set FUCKTORIO_BALANCER_CV_PERMISSIVE=1 to make this report-only",
-        disagreements.len()
+        "verifier and classifier disagree on {} templates: {:#?}",
+        disagreements.len(),
+        disagreements
+    );
+
+    let mut both_unbalanced_shapes: Vec<(u32, u32)> =
+        both_not_balanced.iter().map(|(n, m, _, _)| (*n, *m)).collect();
+    both_unbalanced_shapes.sort();
+    let expected_unbalanced: &[(u32, u32)] = &[(5, 8), (7, 6), (8, 6)];
+    assert_eq!(
+        both_unbalanced_shapes, expected_unbalanced,
+        "expected exactly {:?} to fail balance check; got {:?}. \
+         If a new shape became unbalanced, investigate before pinning. \
+         If a previously-unbalanced shape now passes, update the pin.",
+        expected_unbalanced, both_unbalanced_shapes
+    );
+
+    assert!(
+        convert_errored.is_empty(),
+        "{} templates failed to round-trip through from_splitter_graph: {:#?}",
+        convert_errored.len(),
+        convert_errored
     );
 }
 
