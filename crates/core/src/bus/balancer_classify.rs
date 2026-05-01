@@ -122,47 +122,7 @@ pub fn classify(template: &BalancerTemplate) -> Result<ClassificationReport, Cla
 /// runtime template generator to verify newly-built layouts.
 pub fn classify_ref(template: BalancerTemplateRef<'_>) -> Result<ClassificationReport, ClassifyError> {
     let graph = recover_graph(template)?;
-    let composition = compute_composition_matrix(&graph)?;
-
-    let m = template.n_inputs as usize;
-    let n = template.n_outputs as usize;
-
-    // MX3: every composition entry equals 1/n.
-    let target = 1.0 / n as f64;
-    let is_mx3 = composition
-        .iter()
-        .all(|row| row.iter().all(|&v| (v - target).abs() < 1e-9));
-
-    if is_mx3 {
-        return Ok(ClassificationReport {
-            class: BalancerClass::Balanced,
-            composition,
-            mx2_counterexample: None,
-        });
-    }
-
-    // MX2a: input-subset max-flow only.
-    let mx2a_counterexample = check_input_subsets(&graph, m, n);
-    if mx2a_counterexample.is_some() {
-        return Ok(ClassificationReport {
-            class: BalancerClass::ThroughputLimited,
-            composition,
-            mx2_counterexample: mx2a_counterexample,
-        });
-    }
-
-    // MX2a satisfied. Check the dual direction for MX2b.
-    let mx2b_counterexample = check_output_subsets(&graph, m, n);
-    let class = if mx2b_counterexample.is_none() {
-        BalancerClass::ThroughputUnlimited
-    } else {
-        BalancerClass::ThroughputBalancedRate
-    };
-    Ok(ClassificationReport {
-        class,
-        composition,
-        mx2_counterexample: mx2b_counterexample,
-    })
+    classify_graph(&graph)
 }
 
 // ---------------------------------------------------------------------------
@@ -193,22 +153,72 @@ enum TileEntity {
     UgOutput { dir: Cardinal },
 }
 
+/// One node in the balancer's logical splitter graph. Public so the
+/// topology generator in [`super::balancer_topology`] and any future
+/// placement solver can construct graphs directly without going through
+/// the entity-position layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum NodeId {
+pub enum NodeId {
     InputPort(usize),
     OutputPort(usize),
     /// One whole splitter; flow through ≤ 2 (natural cap from edge count).
     Splitter(usize),
 }
 
-#[derive(Debug)]
-struct SplitterGraph {
-    n_inputs: usize,
-    n_outputs: usize,
-    n_splitters: usize,
+/// Logical splitter graph — abstract topology of an `(m, n)` balancer
+/// with all physical-position information stripped away. Each splitter
+/// is one node with up to 2 incoming edges and up to 2 outgoing edges.
+#[derive(Debug, Clone)]
+pub struct SplitterGraph {
+    pub n_inputs: usize,
+    pub n_outputs: usize,
+    pub n_splitters: usize,
     /// Directed edges (from, to). Each edge carries one belt's worth of
     /// throughput (capacity 1).
-    edges: Vec<(NodeId, NodeId)>,
+    pub edges: Vec<(NodeId, NodeId)>,
+}
+
+/// Classify a logical splitter graph directly, skipping the
+/// `recover_graph` step. Used by [`super::balancer_topology`] for graphs
+/// constructed without a physical layout, and by phase 3 placement-solver
+/// round-trip tests.
+pub fn classify_graph(graph: &SplitterGraph) -> Result<ClassificationReport, ClassifyError> {
+    let composition = compute_composition_matrix(graph)?;
+    let m = graph.n_inputs;
+    let n = graph.n_outputs;
+
+    let target = 1.0 / n as f64;
+    let is_mx3 = composition
+        .iter()
+        .all(|row| row.iter().all(|&v| (v - target).abs() < 1e-9));
+    if is_mx3 {
+        return Ok(ClassificationReport {
+            class: BalancerClass::Balanced,
+            composition,
+            mx2_counterexample: None,
+        });
+    }
+
+    let mx2a_counterexample = check_input_subsets(graph, m, n);
+    if mx2a_counterexample.is_some() {
+        return Ok(ClassificationReport {
+            class: BalancerClass::ThroughputLimited,
+            composition,
+            mx2_counterexample: mx2a_counterexample,
+        });
+    }
+
+    let mx2b_counterexample = check_output_subsets(graph, m, n);
+    let class = if mx2b_counterexample.is_none() {
+        BalancerClass::ThroughputUnlimited
+    } else {
+        BalancerClass::ThroughputBalancedRate
+    };
+    Ok(ClassificationReport {
+        class,
+        composition,
+        mx2_counterexample: mx2b_counterexample,
+    })
 }
 
 fn recover_graph(template: BalancerTemplateRef<'_>) -> Result<SplitterGraph, ClassifyError> {

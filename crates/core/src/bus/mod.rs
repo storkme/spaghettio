@@ -28,6 +28,7 @@ pub mod balancer;
 pub mod balancer_classify;
 pub mod balancer_generate;
 pub mod balancer_library;
+pub mod balancer_topology;
 pub mod decomposition_search;
 pub(crate) mod ghost_occupancy;
 pub mod ghost_router;
