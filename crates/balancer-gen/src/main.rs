@@ -53,10 +53,11 @@ enum PlaceRequest {
     },
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 struct SplitterPosOut {
     x: i32,
     y: i32,
+    dir: u8,
 }
 
 #[derive(Serialize)]
@@ -77,6 +78,18 @@ struct PlaceResponse {
     splitters: Vec<SplitterPos>,
     #[serde(default)]
     belts: Vec<BeltOutput>,
+    #[serde(default)]
+    ugs: Vec<UgOutput>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+#[allow(dead_code)] // edge_idx exposed for future debugging
+struct UgOutput {
+    x: i32,
+    y: i32,
+    dir: u8,
+    io: String, // "input" or "output"
+    edge_idx: usize,
 }
 
 #[derive(Deserialize, Debug, Clone, Copy)]
@@ -125,12 +138,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     spike_round_trip("(1, 2)", (1, 2))?;
     spike_round_trip("(2, 2)", (2, 2))?;
 
-    // Mode C — phase 3.2A.1 multi-splitter belt routing.
-    println!("\n=== phase 3.2A.1: flow-conservation belt routing ===");
-    spike_routing_round_trip("(2, 2)", (2, 2))?;
-    spike_routing_round_trip("(2, 4)", (2, 4))?;
-    spike_routing_round_trip("(4, 8)", (4, 8))?;
-    spike_routing_round_trip("(1, 4)", (1, 4))?;
+    // Mode C — phase 3.2A.1 / 3.2B / 3.2C multi-splitter belt routing.
+    // Continues past failures so we can see the coverage matrix.
+    println!("\n=== phase 3.2A / 3.2B / 3.2C: flow-conservation belt routing ===");
+    let mut routing_results: Vec<(String, Result<(), String>)> = Vec::new();
+    for &(label, shape) in &[
+        ("(2, 2)", (2u32, 2u32)),
+        ("(2, 4)", (2, 4)),
+        ("(1, 4)", (1, 4)),
+        ("(1, 3)", (1, 3)),
+        ("(2, 3)", (2, 3)),
+        ("(4, 8)", (4, 8)),
+        ("(3, 5)", (3, 5)),
+        ("(5, 3)", (5, 3)),
+    ] {
+        let result = spike_routing_round_trip(label, shape).map_err(|e| e.to_string());
+        if result.is_err() {
+            println!("  ✗ {label}: {}", result.as_ref().err().unwrap());
+        }
+        routing_results.push((label.to_string(), result));
+    }
+    let pass = routing_results.iter().filter(|(_, r)| r.is_ok()).count();
+    let total = routing_results.len();
+    println!("\nrouting round-trip: {pass}/{total} pass");
+    for (label, r) in &routing_results {
+        let icon = if r.is_ok() { "✓" } else { "✗" };
+        println!("  {icon} {label}");
+    }
+    if pass == 0 {
+        return Err("no routing round-trips passed".into());
+    }
 
     println!("\n✓ all spike runs passed");
     Ok(())
@@ -301,26 +338,16 @@ fn spike_routing_round_trip(
     let topology = topology_of_template(BalancerTemplateRef::from(lib))
         .map_err(|e| format!("recover_graph failed: {e:?}"))?;
 
-    // 3.2A.1 only handles south-facing splitters with no UGs. If any
-    // library entity is a non-south splitter or UG, skip — that's
-    // phase 3.2B/3.2C.
-    let all_south_splitters_no_ug = lib.entities.iter().all(|e| match e.name {
-        "splitter" => e.direction == 4,
-        "underground-belt" => false,
-        _ => true,
-    });
-    if !all_south_splitters_no_ug {
-        println!(
-            "\n--- {label} skipped: needs phase 3.2B (UGs) or 3.2C (non-south splitters) ---"
-        );
-        return Ok(());
-    }
-
+    // 3.2C handles all four splitter directions plus UGs.
     let splitter_positions: Vec<SplitterPosOut> = lib
         .entities
         .iter()
         .filter(|e| e.name == "splitter")
-        .map(|e| SplitterPosOut { x: e.x, y: e.y })
+        .map(|e| SplitterPosOut {
+            x: e.x,
+            y: e.y,
+            dir: e.direction,
+        })
         .collect();
     if splitter_positions.len() != topology.n_splitters {
         return Err(format!(
@@ -335,10 +362,7 @@ fn spike_routing_round_trip(
 
     let req = PlaceRequest::Routing {
         bounds: (lib.width, lib.height),
-        splitter_positions: splitter_positions
-            .iter()
-            .map(|p| SplitterPosOut { x: p.x, y: p.y })
-            .collect(),
+        splitter_positions: splitter_positions.clone(),
         input_port_tiles: lib.input_tiles.to_vec(),
         output_port_tiles: lib.output_tiles.to_vec(),
         edges: edge_assignments,
@@ -361,7 +385,9 @@ fn spike_routing_round_trip(
         resp.belts.len()
     );
 
-    let placed = assemble_template_from_routing(shape, lib, &splitter_positions, &resp.belts)?;
+    let placed = assemble_template_from_routing(
+        shape, lib, &splitter_positions, &resp.belts, &resp.ugs,
+    )?;
     let class_report = classify_ref(placed.as_ref())
         .map_err(|e| format!("{label}: classify_ref on assembled template: {e:?}"))?;
 
@@ -380,6 +406,19 @@ fn spike_routing_round_trip(
         class_report.class
     );
     Ok(())
+}
+
+/// Direction-aware splitter tile lookup. Slot 0 = anchor; slot 1 = the
+/// perpendicular second tile (east of anchor for N/S, south for E/W),
+/// matching `splitter_second_tile` in `crates/core/src/common.rs`.
+fn splitter_slot_tile(sp: &SplitterPosOut, slot: u8) -> (i32, i32) {
+    if slot == 0 {
+        return (sp.x, sp.y);
+    }
+    match sp.dir {
+        0 | 4 => (sp.x + 1, sp.y),
+        _ => (sp.x, sp.y + 1),
+    }
 }
 
 /// Min-distance greedy slot assignment. For each edge in the topology,
@@ -408,9 +447,9 @@ fn assign_slots(
             NodeId::Splitter(s) => {
                 let sp = &splitter_positions[*s];
                 let mut v = Vec::new();
-                for slot in 0..2 {
+                for slot in 0..2u8 {
                     if !output_slots_used[*s][slot as usize] {
-                        v.push((slot, (sp.x + slot as i32, sp.y)));
+                        v.push((slot, splitter_slot_tile(sp, slot)));
                     }
                 }
                 if v.is_empty() {
@@ -432,9 +471,9 @@ fn assign_slots(
             NodeId::Splitter(s) => {
                 let sp = &splitter_positions[*s];
                 let mut v = Vec::new();
-                for slot in 0..2 {
+                for slot in 0..2u8 {
                     if !input_slots_used[*s][slot as usize] {
-                        v.push((slot, (sp.x + slot as i32, sp.y)));
+                        v.push((slot, splitter_slot_tile(sp, slot)));
                     }
                 }
                 if v.is_empty() {
@@ -502,6 +541,7 @@ fn assemble_template_from_routing(
     lib: &fucktorio_core::bus::balancer_library::BalancerTemplate,
     splitter_positions: &[SplitterPosOut],
     belts: &[BeltOutput],
+    ugs: &[UgOutput],
 ) -> Result<OwnedTemplate, Box<dyn std::error::Error>> {
     let mut entities: Vec<BalancerTemplateEntity> = Vec::new();
     for sp in splitter_positions {
@@ -509,7 +549,7 @@ fn assemble_template_from_routing(
             name: "splitter",
             x: sp.x,
             y: sp.y,
-            direction: 4,
+            direction: sp.dir,
             io_type: None,
         });
     }
@@ -520,6 +560,20 @@ fn assemble_template_from_routing(
             y: b.y,
             direction: b.dir,
             io_type: None,
+        });
+    }
+    for u in ugs {
+        let io_type: &'static str = match u.io.as_str() {
+            "input" => "input",
+            "output" => "output",
+            other => return Err(format!("invalid UG io_type: {other}").into()),
+        };
+        entities.push(BalancerTemplateEntity {
+            name: "underground-belt",
+            x: u.x,
+            y: u.y,
+            direction: u.dir,
+            io_type: Some(io_type),
         });
     }
     Ok(OwnedTemplate {
