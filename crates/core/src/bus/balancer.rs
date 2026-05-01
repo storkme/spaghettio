@@ -147,6 +147,13 @@ pub(crate) fn shape_is_stampable(n: u32, m: u32) -> bool {
             }
         }
     }
+    // Phase 2.0 generator. Mirror the same width-guard the stamping path
+    // applies (`generated.width <= m`) so the predicate matches reality.
+    if let Some(generated) = crate::bus::balancer_generate::generate(n, m) {
+        if generated.width <= m {
+            return true;
+        }
+    }
     false
 }
 
@@ -242,7 +249,27 @@ pub(crate) fn stamp_family_balancer(
         }
     }
 
-    // No template and no decomposition possible — skip.
+    // Final fallback: runtime template generator (phase 2.0). Produces
+    // verified MX2a/MX2b/MX3 layouts for shapes the library lacks
+    // (e.g. (m, m) for m > 8, (5, 10), (9, 9)) without relying on
+    // Factorio-SAT. Skipped if the generator can't handle the shape.
+    if let Some(generated) = crate::bus::balancer_generate::generate(n, m) {
+        if generated.width <= m {
+            let origin_x = balancer_origin_x(&family.lane_xs, &generated.output_tiles);
+            let origin_y = family.balancer_y_start;
+            let mut entities = generated.stamp(
+                origin_x, origin_y, belt_tier, splitter_name, ug_name,
+                Some(&family.item),
+            );
+            let seg_id = Some(format_segment_id(&family.item, family.module_id, n, m, None));
+            for ent in &mut entities {
+                ent.segment_id = seg_id.clone();
+            }
+            return Ok(entities);
+        }
+    }
+
+    // No template and no fallback possible — skip.
     Ok(Vec::new())
 }
 
@@ -344,17 +371,17 @@ mod tests {
         }
     }
 
-    /// The 17 missing-shape coprime gaps documented by issue #136 / PR #257
-    /// (1..=8, 9) and (9, 1..=9) — `shape_is_stampable` must report
-    /// false for all of them so the partitioner force-shards. Pin via
-    /// explicit fixture so a future template addition that closes any
-    /// of these gaps is visible (the test will fail at the closed shape;
-    /// remove that case from the fixture).
+    /// Coprime / asymmetric gaps that remain unstampable.
+    /// Originally 17 (issue #136 / PR #257: `(1..=8, 9)` and `(9, 1..=9)`).
+    /// Phase-2.0 generator closes `(3, 9)` (3 × library `(1, 3)`),
+    /// `(6, 9)` (3 × library `(2, 3)`), and `(9, 9)` (passthrough) — those
+    /// are removed from the fixture below. Remaining gaps need either
+    /// missing library templates or richer generator atoms.
     #[test]
     fn shape_is_stampable_pins_known_gaps() {
         let known_gaps: &[(u32, u32)] = &[
-            (1, 9), (2, 9), (3, 9), (4, 9), (5, 9), (6, 9), (7, 9), (8, 9),
-            (9, 1), (9, 2), (9, 3), (9, 4), (9, 5), (9, 6), (9, 7), (9, 8), (9, 9),
+            (1, 9), (2, 9), (4, 9), (5, 9), (7, 9), (8, 9),
+            (9, 1), (9, 2), (9, 3), (9, 4), (9, 5), (9, 6), (9, 7), (9, 8),
         ];
         for &(n, m) in known_gaps {
             let stampable = shape_is_stampable(n, m);

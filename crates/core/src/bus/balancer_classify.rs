@@ -15,17 +15,56 @@
 //! composition handles multi-feeder splitter inputs via flow conservation.
 //! Lane-level semantics are an MX5 concern, separate from MX1/MX2/MX3.
 
-use crate::bus::balancer_library::BalancerTemplate;
+use crate::bus::balancer_library::{BalancerTemplate, BalancerTemplateEntity};
 use rustc_hash::FxHashMap;
 use std::collections::VecDeque;
+
+/// Borrowed view over the fields a classifier (or generator-side verifier)
+/// needs. Lets us run the classifier on either a static [`BalancerTemplate`]
+/// from the library or a runtime-generated template held in `Vec`s without
+/// duplicating the analysis code.
+#[derive(Debug, Clone, Copy)]
+pub struct BalancerTemplateRef<'a> {
+    pub n_inputs: u32,
+    pub n_outputs: u32,
+    pub width: u32,
+    pub height: u32,
+    pub entities: &'a [BalancerTemplateEntity],
+    pub input_tiles: &'a [(i32, i32)],
+    pub output_tiles: &'a [(i32, i32)],
+}
+
+impl<'a> From<&'a BalancerTemplate> for BalancerTemplateRef<'a> {
+    fn from(t: &'a BalancerTemplate) -> Self {
+        BalancerTemplateRef {
+            n_inputs: t.n_inputs,
+            n_outputs: t.n_outputs,
+            width: t.width,
+            height: t.height,
+            entities: t.entities,
+            input_tiles: t.input_tiles,
+            output_tiles: t.output_tiles,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum BalancerClass {
     /// MX1 — outputs may starve under saturated input.
     ThroughputLimited,
-    /// MX2 — max-flow property holds for every matched k-subset.
+    /// MX2a — saturation + balanced rate. Under all-saturated inputs and
+    /// unblocked outputs, every output runs at exactly `total_input / n`.
+    /// `max_flow(S → all)` = `min(|S|, n)` for every input subset `S`, but
+    /// does *not* guarantee max-flow over output subsets.
+    ///
+    /// Sufficient for fucktorio's bus (homogeneous consumer rows). The
+    /// throughput-priority generator targets this class.
+    ThroughputBalancedRate,
+    /// MX2b — full max-flow property: also holds over output subsets.
+    /// Inputs reroute around blocked outputs through sibling paths.
     ThroughputUnlimited,
-    /// MX3 — every output is a uniform `1/n` mix of every input.
+    /// MX3 — every output is a uniform `1/n` mix of every input
+    /// (composition guarantee). Required only for mixed-content belts.
     Balanced,
 }
 
@@ -76,10 +115,19 @@ pub struct ClassificationReport {
 
 /// Classify a single balancer template.
 pub fn classify(template: &BalancerTemplate) -> Result<ClassificationReport, ClassifyError> {
+    classify_ref(BalancerTemplateRef::from(template))
+}
+
+/// Classify any object with a [`BalancerTemplateRef`] view — used by the
+/// runtime template generator to verify newly-built layouts.
+pub fn classify_ref(template: BalancerTemplateRef<'_>) -> Result<ClassificationReport, ClassifyError> {
     let graph = recover_graph(template)?;
     let composition = compute_composition_matrix(&graph)?;
 
+    let m = template.n_inputs as usize;
     let n = template.n_outputs as usize;
+
+    // MX3: every composition entry equals 1/n.
     let target = 1.0 / n as f64;
     let is_mx3 = composition
         .iter()
@@ -93,17 +141,27 @@ pub fn classify(template: &BalancerTemplate) -> Result<ClassificationReport, Cla
         });
     }
 
-    let m = template.n_inputs as usize;
-    let mx2_counterexample = check_mx2(&graph, m, n);
-    let class = if mx2_counterexample.is_none() {
+    // MX2a: input-subset max-flow only.
+    let mx2a_counterexample = check_input_subsets(&graph, m, n);
+    if mx2a_counterexample.is_some() {
+        return Ok(ClassificationReport {
+            class: BalancerClass::ThroughputLimited,
+            composition,
+            mx2_counterexample: mx2a_counterexample,
+        });
+    }
+
+    // MX2a satisfied. Check the dual direction for MX2b.
+    let mx2b_counterexample = check_output_subsets(&graph, m, n);
+    let class = if mx2b_counterexample.is_none() {
         BalancerClass::ThroughputUnlimited
     } else {
-        BalancerClass::ThroughputLimited
+        BalancerClass::ThroughputBalancedRate
     };
     Ok(ClassificationReport {
         class,
         composition,
-        mx2_counterexample,
+        mx2_counterexample: mx2b_counterexample,
     })
 }
 
@@ -153,10 +211,10 @@ struct SplitterGraph {
     edges: Vec<(NodeId, NodeId)>,
 }
 
-fn recover_graph(template: &BalancerTemplate) -> Result<SplitterGraph, ClassifyError> {
+fn recover_graph(template: BalancerTemplateRef<'_>) -> Result<SplitterGraph, ClassifyError> {
     // ----- Build occupancy map -----
     let mut occ: FxHashMap<(i32, i32), TileEntity> = FxHashMap::default();
-    let mut splitters: Vec<&crate::bus::balancer_library::BalancerTemplateEntity> = Vec::new();
+    let mut splitters: Vec<&BalancerTemplateEntity> = Vec::new();
     let mut ug_inputs: Vec<(i32, i32, Cardinal)> = Vec::new();
 
     let insert =
@@ -294,7 +352,7 @@ fn walk_into_neighbor(
     occ: &FxHashMap<(i32, i32), TileEntity>,
     mut tile: (i32, i32),
     ug_pair: &FxHashMap<usize, (i32, i32)>,
-    template: &BalancerTemplate,
+    template: BalancerTemplateRef<'_>,
 ) -> Result<Option<NodeId>, ClassifyError> {
     let mut visited: rustc_hash::FxHashSet<(i32, i32)> = rustc_hash::FxHashSet::default();
     loop {
@@ -596,15 +654,16 @@ fn run_subset_flow(
     fg.max_flow(0, 1)
 }
 
-fn check_mx2(graph: &SplitterGraph, m: usize, n: usize) -> Option<Mx2Counterexample> {
-    if m > 16 || n > 16 {
-        // 2^16 = 65k is fine; bail above just in case.
+fn check_input_subsets(
+    graph: &SplitterGraph,
+    m: usize,
+    n: usize,
+) -> Option<Mx2Counterexample> {
+    if m > 16 {
         return None;
     }
     let (base, inputs, outputs) = build_flow_graph(graph);
-    let all_inputs: Vec<usize> = (0..m).collect();
     let all_outputs: Vec<usize> = (0..n).collect();
-
     for mask in 1u64..(1u64 << m) {
         let s: Vec<usize> = (0..m).filter(|i| (mask >> i) & 1 == 1).collect();
         let expected = s.len().min(n) as i32;
@@ -618,6 +677,19 @@ fn check_mx2(graph: &SplitterGraph, m: usize, n: usize) -> Option<Mx2Counterexam
             });
         }
     }
+    None
+}
+
+fn check_output_subsets(
+    graph: &SplitterGraph,
+    m: usize,
+    n: usize,
+) -> Option<Mx2Counterexample> {
+    if n > 16 {
+        return None;
+    }
+    let (base, inputs, outputs) = build_flow_graph(graph);
+    let all_inputs: Vec<usize> = (0..m).collect();
     for mask in 1u64..(1u64 << n) {
         let t: Vec<usize> = (0..n).filter(|j| (mask >> j) & 1 == 1).collect();
         let expected = m.min(t.len()) as i32;
@@ -750,8 +822,14 @@ mod tests {
                     "MX3 balanced".to_string()
                 }
                 Outcome::Class(BalancerClass::ThroughputUnlimited) => {
-                    *counts.entry("MX2 throughput-unlimited").or_insert(0) += 1;
-                    "MX2 throughput-unlimited".to_string()
+                    *counts.entry("MX2b throughput-unlimited").or_insert(0) += 1;
+                    "MX2b throughput-unlimited".to_string()
+                }
+                Outcome::Class(BalancerClass::ThroughputBalancedRate) => {
+                    *counts
+                        .entry("MX2a saturation + balanced rate")
+                        .or_insert(0) += 1;
+                    "MX2a sat+balanced".to_string()
                 }
                 Outcome::Class(BalancerClass::ThroughputLimited) => {
                     *counts.entry("MX1 throughput-limited").or_insert(0) += 1;
