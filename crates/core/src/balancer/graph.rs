@@ -1,10 +1,23 @@
-//! [`BalancerGraph`]: directed splitter network per Couëtoux et al. §1.1
-//! Definition 1.1 — vertex set `V = I ⊎ S ⊎ O` where inputs have d⁺=1/d⁻=0,
-//! outputs have d⁻=1/d⁺=0, and splitters have d⁻=d⁺=2.
+//! [`BalancerGraph`]: directed splitter network. Permissive extension of
+//! Couëtoux et al. §1.1 Definition 1.1: inputs have d⁺=1/d⁻=0, outputs have
+//! d⁻=1/d⁺=0, and splitters have d⁻ ∈ {0, 1, 2, ...} and d⁺=2.
 //!
-//! Arc-counting forces `n_inputs == n_outputs`. Asymmetric `(n, m)` shapes
-//! are modeled by padding with dummy I/O nodes at capacity 0 (per the
-//! "for convenience" relaxation in Couëtoux §1.1, end of subsection).
+//! ## Multi-arc / underdegree splitter ports
+//!
+//! Couëtoux's strict definition requires d⁻=d⁺=2 with one arc per port. We
+//! relax both sides:
+//!   - **In-ports** may carry 0+ arcs (port rate = sum of arc rates).
+//!     Models belt sideloading.
+//!   - **Out-ports** may carry 0+ arcs total across the two ports. A
+//!     splitter with `< 2` out-arcs is "underdegree": one or both
+//!     out-ports have dead-end belts providing backpressure in the
+//!     saturation-rich Couëtoux model. In our all-fluid model we treat
+//!     this as: conservation still holds (sum-in = sum-out), but R7
+//!     out-couple only applies when both ports have arcs.
+//!
+//! Combined effect: `n_inputs` and `n_outputs` can be whatever the graph
+//! declares, and splitter ports with no incoming/outgoing edges contribute
+//! 0 to conservation. No dummy I/O padding required.
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -84,18 +97,11 @@ pub enum GraphError {
     InputCapsLength { got: usize, expected: u32 },
     #[error("output_caps length {got} != n_outputs {expected}")]
     OutputCapsLength { got: usize, expected: u32 },
-    #[error(
-        "n_inputs {n_inputs} != n_outputs {n_outputs} (forced by arc counting; \
-         pad with dummy nodes at capacity 0 instead)"
-    )]
-    InputOutputMismatch { n_inputs: u32, n_outputs: u32 },
     #[error("input {idx} has {count} outgoing arcs (expected exactly 1)")]
     InputDegree { idx: u32, count: u32 },
     #[error("output {idx} has {count} incoming arcs (expected exactly 1)")]
     OutputDegree { idx: u32, count: u32 },
-    #[error("splitter {idx} in-port {port} has {count} arcs (expected exactly 1)")]
-    SplitterInPort { idx: u32, port: u8, count: u32 },
-    #[error("splitter {idx} out-port {port} has {count} arcs (expected exactly 1)")]
+    #[error("splitter {idx} out-port {port} has {count} arcs (expected at most 1)")]
     SplitterOutPort { idx: u32, port: u8, count: u32 },
     #[error("arc {arc_idx} references nonexistent input {input_idx}")]
     BadInput { arc_idx: usize, input_idx: u32 },
@@ -107,15 +113,15 @@ pub enum GraphError {
     BadPort { arc_idx: usize, port: u8 },
 }
 
-/// Indexed lookup of arcs by endpoint, built once per validate/verify call.
-///
-/// `validate` populates this and confirms exactly one arc per endpoint; the
-/// verifier then reads it directly without re-scanning the arc list.
+/// Indexed lookup of arcs by endpoint. In-arc lists allow 0+ arcs per
+/// port (sideloading); out-arc slots are `Option` to allow underdegree
+/// splitters with one or both out-ports unwired (dead-end belts in the
+/// Factorio template provide backpressure under saturation).
 pub(super) struct ArcIndex {
     pub input_arc: Vec<usize>,
     pub output_arc: Vec<usize>,
-    pub splitter_in: Vec<[usize; 2]>,
-    pub splitter_out: Vec<[usize; 2]>,
+    pub splitter_in: Vec<[Vec<usize>; 2]>,
+    pub splitter_out: Vec<[Option<usize>; 2]>,
 }
 
 impl BalancerGraph {
@@ -135,18 +141,12 @@ impl BalancerGraph {
                 expected: self.n_outputs,
             });
         }
-        if self.n_inputs != self.n_outputs {
-            return Err(GraphError::InputOutputMismatch {
-                n_inputs: self.n_inputs,
-                n_outputs: self.n_outputs,
-            });
-        }
-
-        // None = no arc seen yet for this endpoint.
         let mut input_arc: Vec<Option<usize>> = vec![None; self.n_inputs as usize];
         let mut output_arc: Vec<Option<usize>> = vec![None; self.n_outputs as usize];
-        let mut splitter_in: Vec<[Option<usize>; 2]> =
-            vec![[None, None]; self.n_splitters as usize];
+        // Multi-arc per splitter in-port is allowed; out-port stays single.
+        let mut splitter_in: Vec<[Vec<usize>; 2]> = (0..self.n_splitters)
+            .map(|_| [Vec::new(), Vec::new()])
+            .collect();
         let mut splitter_out: Vec<[Option<usize>; 2]> =
             vec![[None, None]; self.n_splitters as usize];
 
@@ -156,10 +156,10 @@ impl BalancerGraph {
                     if i >= self.n_inputs {
                         return Err(GraphError::BadInput { arc_idx, input_idx: i });
                     }
-                    if let Some(prev) = input_arc[i as usize] {
+                    if input_arc[i as usize].is_some() {
                         return Err(GraphError::InputDegree {
                             idx: i,
-                            count: count_input_arcs(self, i, prev, arc_idx),
+                            count: count_input_arcs(self, i),
                         });
                     }
                     input_arc[i as usize] = Some(arc_idx);
@@ -211,15 +211,7 @@ impl BalancerGraph {
                     if port > 1 {
                         return Err(GraphError::BadPort { arc_idx, port });
                     }
-                    let slot = &mut splitter_in[idx as usize][port as usize];
-                    if slot.is_some() {
-                        return Err(GraphError::SplitterInPort {
-                            idx,
-                            port,
-                            count: count_splitter_in_arcs(self, idx, port),
-                        });
-                    }
-                    *slot = Some(arc_idx);
+                    splitter_in[idx as usize][port as usize].push(arc_idx);
                 }
             }
         }
@@ -235,28 +227,13 @@ impl BalancerGraph {
                 return Err(GraphError::OutputDegree { idx: o, count: 0 });
             }
         }
-        for s in 0..self.n_splitters {
-            for port in 0..2u8 {
-                if splitter_in[s as usize][port as usize].is_none() {
-                    return Err(GraphError::SplitterInPort { idx: s, port, count: 0 });
-                }
-                if splitter_out[s as usize][port as usize].is_none() {
-                    return Err(GraphError::SplitterOutPort { idx: s, port, count: 0 });
-                }
-            }
-        }
+        // Both in-ports and out-ports allow 0+ arcs.
 
         Ok(ArcIndex {
             input_arc: input_arc.into_iter().map(Option::unwrap).collect(),
             output_arc: output_arc.into_iter().map(Option::unwrap).collect(),
-            splitter_in: splitter_in
-                .into_iter()
-                .map(|[a, b]| [a.unwrap(), b.unwrap()])
-                .collect(),
-            splitter_out: splitter_out
-                .into_iter()
-                .map(|[a, b]| [a.unwrap(), b.unwrap()])
-                .collect(),
+            splitter_in,
+            splitter_out,
         })
     }
 
@@ -268,7 +245,7 @@ impl BalancerGraph {
 
 // ── error-reporting helpers (slow scans; only run on the failure path) ────
 
-fn count_input_arcs(g: &BalancerGraph, idx: u32, _prev: usize, _curr: usize) -> u32 {
+fn count_input_arcs(g: &BalancerGraph, idx: u32) -> u32 {
     g.arcs
         .iter()
         .filter(|a| matches!(a.src, Source::Input(i) if i == idx))
@@ -279,13 +256,6 @@ fn count_output_arcs(g: &BalancerGraph, idx: u32) -> u32 {
     g.arcs
         .iter()
         .filter(|a| matches!(a.dst, Sink::Output(i) if i == idx))
-        .count() as u32
-}
-
-fn count_splitter_in_arcs(g: &BalancerGraph, splitter: u32, port: u8) -> u32 {
-    g.arcs
-        .iter()
-        .filter(|a| matches!(a.dst, Sink::Splitter { idx, port: p } if idx == splitter && p == port))
         .count() as u32
 }
 
@@ -376,9 +346,10 @@ mod tests {
         ));
     }
 
+    /// Asymmetric `(1, 2)` graph: splitter port 1 has zero in-arcs (no
+    /// dummy padding required under the multi-arc relaxation).
     #[test]
-    fn unequal_in_out_rejected() {
-        // Trying to claim a 1-input/2-output graph without dummy padding.
+    fn asymmetric_with_empty_port_validates() {
         let g = BalancerGraph::new(
             1,
             2,
@@ -388,13 +359,80 @@ mod tests {
                     src: Source::Input(0),
                     dst: Sink::Splitter { idx: 0, port: 0 },
                 },
-                // Not constructible — we'd need an arc into splitter port 1.
+                Arc {
+                    src: Source::Splitter { idx: 0, port: 0 },
+                    dst: Sink::Output(0),
+                },
+                Arc {
+                    src: Source::Splitter { idx: 0, port: 1 },
+                    dst: Sink::Output(1),
+                },
             ],
         );
-        assert!(matches!(
-            g.validate(),
-            Err(GraphError::InputOutputMismatch { .. })
-        ));
+        g.validate().unwrap();
+    }
+
+    /// Sideloaded splitter: 3 arcs converging on the same in-port.
+    #[test]
+    fn multi_arc_in_port_validates() {
+        let g = BalancerGraph::new(
+            3,
+            1,
+            1,
+            vec![
+                Arc {
+                    src: Source::Input(0),
+                    dst: Sink::Splitter { idx: 0, port: 0 },
+                },
+                Arc {
+                    src: Source::Input(1),
+                    dst: Sink::Splitter { idx: 0, port: 0 },
+                },
+                Arc {
+                    src: Source::Input(2),
+                    dst: Sink::Splitter { idx: 0, port: 0 },
+                },
+                Arc {
+                    src: Source::Splitter { idx: 0, port: 0 },
+                    dst: Sink::Output(0),
+                },
+                // Splitter out-port 1 must still be wired (R7 needs both
+                // out-arcs); send to a discarded sink would need another
+                // node — for a unit test we just leave it as an output.
+            ],
+        );
+        // Need 1 more arc for splitter out-port 1, and 1 more output.
+        // Actually we have n_outputs=1 but 2 out-ports. Let me fix.
+        let _ = g;
+
+        let g = BalancerGraph::new(
+            3,
+            2,
+            1,
+            vec![
+                Arc {
+                    src: Source::Input(0),
+                    dst: Sink::Splitter { idx: 0, port: 0 },
+                },
+                Arc {
+                    src: Source::Input(1),
+                    dst: Sink::Splitter { idx: 0, port: 0 },
+                },
+                Arc {
+                    src: Source::Input(2),
+                    dst: Sink::Splitter { idx: 0, port: 0 },
+                },
+                Arc {
+                    src: Source::Splitter { idx: 0, port: 0 },
+                    dst: Sink::Output(0),
+                },
+                Arc {
+                    src: Source::Splitter { idx: 0, port: 1 },
+                    dst: Sink::Output(1),
+                },
+            ],
+        );
+        g.validate().unwrap();
     }
 
     #[test]

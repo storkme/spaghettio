@@ -79,11 +79,34 @@ pub fn verify_balancer_with_tolerance(
     let index = graph.validate_and_index()?;
 
     let n_arcs = graph.arcs.len();
-    // Equations: 1 per input (rate fix) + 2 per splitter (conservation, out-couple).
-    let n_eqs = graph.n_inputs as usize + 2 * graph.n_splitters as usize;
+    let total_out_arcs: usize = index
+        .splitter_out
+        .iter()
+        .map(|[a, b]| a.is_some() as usize + b.is_some() as usize)
+        .sum();
+    debug_assert_eq!(n_arcs, graph.n_inputs as usize + total_out_arcs);
+
+    // Per splitter, decide which equations to emit:
+    //   - Disconnected (no arcs at all): skip — conservation is trivial 0=0
+    //     and would over-determine the system.
+    //   - At least one arc: emit conservation (sum-in = sum-out).
+    //   - Two out-arcs: also emit R7 out-couple.
+    let splitter_emits = (0..graph.n_splitters as usize)
+        .map(|s| {
+            let [in0, in1] = &index.splitter_in[s];
+            let has_in = !in0.is_empty() || !in1.is_empty();
+            let [o0, o1] = index.splitter_out[s];
+            let n_out = o0.is_some() as usize + o1.is_some() as usize;
+            let has_any = has_in || n_out > 0;
+            (has_any, n_out == 2)
+        })
+        .collect::<Vec<_>>();
+    let n_eqs = graph.n_inputs as usize
+        + splitter_emits.iter().filter(|(any, _)| *any).count()
+        + splitter_emits.iter().filter(|(_, full)| *full).count();
     debug_assert_eq!(
         n_eqs, n_arcs,
-        "arc-counting forces square system when n_inputs == n_outputs"
+        "equation count must match arc count for square system"
     );
 
     let mut mat = vec![vec![0.0f64; n_arcs + 1]; n_eqs];
@@ -97,20 +120,32 @@ pub fn verify_balancer_with_tolerance(
         row += 1;
     }
 
-    // Per splitter:
-    //   conservation: t(in0) + t(in1) - t(out0) - t(out1) = 0
-    //   out-couple:   t(out0) - t(out1) = 0
     for s in 0..graph.n_splitters as usize {
-        let [in0, in1] = index.splitter_in[s];
-        let [out0, out1] = index.splitter_out[s];
-        mat[row][in0] += 1.0;
-        mat[row][in1] += 1.0;
-        mat[row][out0] -= 1.0;
-        mat[row][out1] -= 1.0;
+        let (emit_any, full) = splitter_emits[s];
+        if !emit_any {
+            continue;
+        }
+        let [in0_arcs, in1_arcs] = &index.splitter_in[s];
+        let [out0_opt, out1_opt] = index.splitter_out[s];
+        // Conservation
+        for &arc in in0_arcs.iter().chain(in1_arcs.iter()) {
+            mat[row][arc] += 1.0;
+        }
+        if let Some(out0) = out0_opt {
+            mat[row][out0] -= 1.0;
+        }
+        if let Some(out1) = out1_opt {
+            mat[row][out1] -= 1.0;
+        }
         row += 1;
-        mat[row][out0] += 1.0;
-        mat[row][out1] -= 1.0;
-        row += 1;
+        // R7 only when both out-ports are wired.
+        if full {
+            let out0 = out0_opt.unwrap();
+            let out1 = out1_opt.unwrap();
+            mat[row][out0] += 1.0;
+            mat[row][out1] -= 1.0;
+            row += 1;
+        }
     }
     debug_assert_eq!(row, n_eqs);
 
