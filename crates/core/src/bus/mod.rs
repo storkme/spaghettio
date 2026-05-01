@@ -25,6 +25,7 @@
 //! - [`junction`] — `Junction` snapshot type consumed by strategies
 
 pub mod balancer;
+pub mod balancer_classify;
 pub mod balancer_library;
 pub mod decomposition_search;
 pub(crate) mod ghost_occupancy;

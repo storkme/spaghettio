@@ -291,3 +291,63 @@ protocol](../CLAUDE.md#verification-protocol-for-layout-engine-changes):
   classifier. Discussion thread:
   taxonomy + audit-first approach agreed; phase 2 generator design
   deferred until audit results are in.*
+
+- *2026-05-01 — phase 1 implemented in
+  `crates/core/src/bus/balancer_classify.rs`; report produced via
+  `cargo test --lib audit_report -- --nocapture`. Findings:*
+
+  | class | count |
+  |-------|-------|
+  | MX3 balanced | 46 |
+  | MX1 throughput-limited | 1 |
+  | kill: sideload | 15 |
+  | kill: singular linear system | 1 |
+  | **total** | **63** |
+
+  **Headline:** the user's hypothesis is largely confirmed —
+  46/63 templates are unambiguously MX3 (true balanced balancers,
+  including back-loop "universal" patterns). Two outliers warrant
+  follow-up:
+
+  - **(5, 8) — MX1 throughput-limited.** The classifier returns a
+    non-uniform composition matrix (inputs 1-2 contribute 0.0625 to outer
+    outputs vs 0.1875 to inner outputs, instead of the uniform 0.125
+    target). Max-flow counterexample: under saturated inputs `{1, 2}`,
+    realized throughput is 1 (expected 2). If this matches in-game
+    behaviour, the (5, 8) template silently underdelivers — a latent bus
+    bug. Verification step: stamp the template in Factorio, saturate
+    inputs 1 and 2 only, observe the outputs.
+  - **(7, 6) — kill: singular.** The linear system describing the
+    saturated 50/50 splitter network is singular (a recirculation loop
+    the simple model can't resolve). Max-flow finds paths so this isn't
+    a topology bug per se — it's a model limitation. Likely also MX3 in
+    reality but not provable with the current classifier.
+
+  **15 sideloaded templates** (per the kill criterion): all in
+  many-to-few or asymmetric tap-off shapes — `(1, 5)`, `(3, 2)`,
+  `(5, 1)`, `(5, 3)`, `(6, 1..4)`, `(7, 1..4)`, `(8, 1)`, `(8, 2)`,
+  `(8, 6)`. Factorio-SAT places splitter outputs directly on the next
+  splitter's anchor tile (perpendicular orientations), which is a
+  side-load onto the splitter input. The simple 50/50 model can't
+  faithfully represent the lane semantics, so we bail loudly per the
+  RFP.
+
+  **What changed during implementation:** the design originally proposed
+  topo-sort propagation for composition. That kills on cycles, which
+  turn out to dominate the corpus (35/63 templates have legitimate
+  back-loops — universal-balancer patterns). Replaced with a Gaussian
+  solve over the splitter outflow vector, which handles cycles
+  correctly and surfaces only the truly degenerate cases as `Singular`.
+
+  **Implication for phase 2:** the spec brief's premise (library is
+  uniformly MX3) holds for the templates the simple model can classify.
+  The 15 sideloaded templates can't be cheaply re-classified without
+  extending the model to lane-aware flow analysis (out of scope for the
+  audit). The (5, 8) finding suggests a separate latent-bug investigation
+  workstream, independent of the throughput-priority project. Pending
+  user direction on whether to:
+  - File an issue for (5, 8) and verify in-game.
+  - Accept the 15 sideload templates as "MX3 by construction" (since
+    Factorio-SAT was asked for MX3) and move on.
+  - Extend the classifier to handle side-loaded splitter inputs (lane
+    semantics) before deciding phase 2.
