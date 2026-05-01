@@ -313,14 +313,12 @@ unaffected.
 - **D1a or D1b topology?** Defer until phase 3.0 has D1a entity
   counts in hand. If D1a's `(4, 9)` is already <100 entities, ship
   it. If 150+, try D1b.
-- **Where does the generator's output go in `balancer_library.rs`?**
-  Two options: (a) inline-merge into the existing build_templates
-  function, keeping one source of truth; (b) emit a sibling
-  `balancer_library_extra.rs` that the library lookup also consults.
-  Option (a) is cleaner but means the existing Factorio-SAT pipeline
-  and our generator are writing to the same file (race conditions,
-  source-of-truth confusion). Option (b) is uglier but keeps the
-  pipelines independent until phase 3.6 retires Factorio-SAT.
+- ~~**Where does the generator's output go in `balancer_library.rs`?**~~
+  *Resolved 2026-05-01:* sibling `balancer_library_extra.rs`. Keeps the
+  Factorio-SAT and graph+place pipelines writing to independent files
+  until phase 3.6 retires Factorio-SAT and the contents are merged.
+  The library lookup will consult both maps (extra first, then library
+  fallback).
 - **What about the existing rfp-balancer-runner work?** That work
   parallelises Factorio-SAT for tier-9/10. It's complementary: even
   with phase-3 shipped, the SAT-runner remains useful as a fallback
@@ -337,7 +335,13 @@ unaffected.
   placement).*
 - *2026-05-01 — revised after feedback: keep CP-SAT placement
   offline / build-time, written in Rust. Topology generator stays
-  in-tree and runtime-callable for verification. WASM bundle / runtime
-  perf concerns drop. Awaiting user feedback on D1 (topology recipe),
-  the cp_sat-vs-Python-subprocess fallback, and the kill criterion
-  bounds. Phase 3.1 cp_sat spike is the gating item.*
+  in-tree and runtime-callable for verification. WASM bundle /
+  runtime perf concerns drop.*
+- *2026-05-01 — kill criteria, phase 3.1 spike acceptance, and D4
+  output-file decision approved. Locked in: `cp_sat` Rust crate as
+  the placement solver (with Python+OR-Tools subprocess as documented
+  fallback if cross-platform build fails); sibling
+  `balancer_library_extra.rs` for generated output. Factorio-SAT
+  baseline for `(2, 3)` is <1s per probe (timeout 300s × multiple
+  probes worst case) — the 30s CP-SAT spike target is comfortably
+  inside that envelope.*
