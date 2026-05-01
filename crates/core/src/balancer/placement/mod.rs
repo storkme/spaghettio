@@ -26,10 +26,12 @@
 //! [`PlacementResult`] is the owned counterpart of [`BalancerTemplate`]
 //! plus engine metadata (id, wall-clock).
 
+pub mod cp_sat;
 pub mod library_lookup;
 
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::balancer::graph::BalancerGraph;
@@ -54,7 +56,7 @@ pub struct PlacementRequest<'a> {
 /// One placed entity — owned counterpart of
 /// [`crate::bus::balancer_library::BalancerTemplateEntity`]. Coordinates
 /// are tile offsets from the template origin.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlacedTemplateEntity {
     pub name: String,
     pub x: i32,
@@ -62,11 +64,12 @@ pub struct PlacedTemplateEntity {
     /// Factorio 1.0 8-way direction: 0=N, 2=E, 4=S, 6=W.
     pub direction: u8,
     /// `Some("input")` or `Some("output")` for underground-belt, else `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub io_type: Option<String>,
 }
 
 /// Owned counterpart of [`crate::bus::balancer_library::BalancerTemplate`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlacedTemplate {
     pub n_inputs: u32,
     pub n_outputs: u32,
@@ -77,6 +80,7 @@ pub struct PlacedTemplate {
     pub output_tiles: Vec<(i32, i32)>,
     /// Original blueprint string when the engine emits one (Factorio-SAT
     /// does; CP-SAT may not).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_blueprint: Option<String>,
 }
 
