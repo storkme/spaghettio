@@ -522,14 +522,17 @@ const GOLDEN_HASHES: &[(&str, &str)] = &[
     ("tier1_iron_gear_wheel", "458679d5a3a9f732eeec1701cd48396b3e2215ff66a63d982b876ef4a93c85b5"),
     ("tier1_iron_gear_wheel_from_ore", "5fffb4c717d4b283cba0237a405e99cc0959bf76e23caa36f1ba47b40ed6ae84"),
     ("tier1_iron_gear_wheel_20s", "add07d75c26386616aa4b7d4abf7edd754a2231523598145e2f0fc2ecd3c8a2f"),
-    ("tier2_electronic_circuit_from_ore", "85867c6174490364b8b08d6d94f300ab8f1d2da7ee1f12f559b324c25a88ff5b"),
+    // Updated when `(m, m)` family balancers became passthroughs
+    // (issue #268) — splitter blocks replaced by a single south-facing
+    // belt per output column.
+    ("tier2_electronic_circuit_from_ore", "4605743dfe38a8ce969f81c98871cfb7625724f7aec87474fbff54491a5586b0"),
     // Hashes below changed when row inputs were switched to always
     // use `max_belt_tier` instead of per-row consumption rate (fixes
     // tier-mismatch seam where bus tap-off feeds row belt-in).
     // Updated again when ghost-routed tap/ret/feeder horizontals were
-    // upgraded to `max_belt_tier` at materialisation time so they no
-    // longer downshift visually at row gaps.
-    ("tier2_electronic_circuit_20s_from_ore", "e1790abe6fd073d89c0ec9b5050307fc84c80f13ff25440301f29bf1cc4c766d"),
+    // upgraded to `max_belt_tier` at materialisation time, and again
+    // when `(m, m)` family balancers became passthroughs (#268).
+    ("tier2_electronic_circuit_20s_from_ore", "852bcd457031b30ac088716dd5023d121a0024f4b9f7b46111ca400bb398d029"),
     ("tier2_electronic_circuit_splitter_stamp_regression", "47a79561c746ad68c37e64966eca579d6f8dbfa7fa7bd9d7f7d3433a8d55566a"),
     ("tier3_plastic_bar", "0177826236e45ddc46870105465bef1097e7cd20cdf7b62d191081e904f2634f"),
     ("tier3_sulfuric_acid", "d55bb14dc0d24dc32f1f74a95bb525202704a34eda3d9b9a53c16779e6c3af36"),

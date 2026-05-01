@@ -353,18 +353,26 @@ pub fn plan_bus_lanes(
     let templates = crate::bus::balancer_library::balancer_templates();
     for fam in &mut families {
         let (n, m) = (fam.shape.0 as u32, fam.shape.1 as u32);
-        // Find the effective template height: direct match or decomposed.
-        let tpl_height = templates.get(&(n, m)).map(|t| t.height)
-            .or_else(|| {
-                // Decomposition: find divisor g where (n/g, m/g) has a template.
-                (1..=n).rev().find_map(|g| {
-                    if n % g == 0 && m % g == 0 {
-                        templates.get(&(n / g, m / g)).map(|t| t.height)
-                    } else {
-                        None
-                    }
+        // Find the effective template height: passthrough (`(m, m)` —
+        // a single south-facing belt per output column, see issue #268)
+        // takes priority over the library so it consumes only one row
+        // instead of the library template's 6+. Otherwise direct match,
+        // then decomposition fallback.
+        let tpl_height = if crate::bus::balancer::is_passthrough_shape(n, m) {
+            Some(1u32)
+        } else {
+            templates.get(&(n, m)).map(|t| t.height)
+                .or_else(|| {
+                    // Decomposition: find divisor g where (n/g, m/g) has a template.
+                    (1..=n).rev().find_map(|g| {
+                        if n % g == 0 && m % g == 0 {
+                            templates.get(&(n / g, m / g)).map(|t| t.height)
+                        } else {
+                            None
+                        }
+                    })
                 })
-            });
+        };
         if let Some(h) = tpl_height {
             fam.balancer_y_end = fam.balancer_y_start + h as i32 - 1;
             let range = (fam.balancer_y_start, fam.balancer_y_end);

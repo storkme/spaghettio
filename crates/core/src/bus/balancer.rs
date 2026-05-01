@@ -11,7 +11,7 @@
 //! lookup helpers since the balancer needs them and so does `render_path`
 //! in `lane_planner.rs`.
 
-use crate::models::PlacedEntity;
+use crate::models::{EntityDirection, PlacedEntity};
 use crate::bus::lane_planner::LaneFamily;
 
 /// Splitter name mapping by belt tier.
@@ -109,12 +109,26 @@ fn format_segment_id(item: &str, module_id: u32, n: u32, m: u32, group: Option<u
     s
 }
 
+/// True for shapes where `stamp_family_balancer` emits a passthrough —
+/// `n == m` with `n >= 2`. Each producer feeds its own output column via
+/// a single south-facing belt; no splitters or undergrounds are needed
+/// because every input has a unique output and the lane carries a single
+/// fungible item type, so balancing is unnecessary (issue #268). This
+/// check runs before the library lookup so passthrough wins even for
+/// shapes the library has a full template for — the passthrough is
+/// 60–94% smaller and functionally equivalent for fucktorio's bus
+/// design.
+pub(crate) fn is_passthrough_shape(n: u32, m: u32) -> bool {
+    n == m && n >= 2
+}
+
 /// Predicate: would `stamp_family_balancer((n, m), …)` find a template
 /// to use, either directly or via decomposition?
 ///
 /// Mirrors the exact stamping decision logic in `stamp_family_balancer`:
-///   1. Direct (n, m) template hit, OR
-///   2. A divisor `g ≥ 2` of both n and m where (n/g, m/g) has a template
+///   1. Passthrough hit (`n == m && n >= 2`), OR
+///   2. Direct (n, m) template hit, OR
+///   3. A divisor `g ≥ 2` of both n and m where (n/g, m/g) has a template
 ///      AND that sub-template's width ≤ sub_m (the geometric overlap
 ///      guard at line 174 — neighbouring stamps would collide otherwise).
 ///
@@ -129,6 +143,9 @@ fn format_segment_id(item: &str, module_id: u32, n: u32, m: u32, group: Option<u
 pub(crate) fn shape_is_stampable(n: u32, m: u32) -> bool {
     if n == 0 || m == 0 {
         return false;
+    }
+    if is_passthrough_shape(n, m) {
+        return true;
     }
     let templates = crate::bus::balancer_library::balancer_templates();
     if templates.contains_key(&(n, m)) {
@@ -182,6 +199,33 @@ pub(crate) fn stamp_family_balancer(
     let belt_tier = belt_entity_for_rate(family.total_rate, max_belt_tier);
     let splitter_name = splitter_for_belt(belt_tier);
     let ug_name = underground_for_belt(belt_tier);
+
+    // Passthrough shortcut for `(m, m)`: each producer feeds its own
+    // output column; no balancing is required because the lane carries
+    // a single fungible item type, every input has a unique output, and
+    // max-flow holds in both directions (MX2b / throughput-unlimited —
+    // see issue #268). Stamps `m` south-facing belts at the family's
+    // top row; the producer feeders sideload-or-straight-load onto
+    // these belts and the trunk picks up at `balancer_y_end + 1`.
+    // Library entries for `(2, 2)`..`(8, 8)` are kept as a safety net
+    // but never consulted — the passthrough check runs first.
+    if is_passthrough_shape(n, m) {
+        let seg_id = Some(format_segment_id(&family.item, family.module_id, n, m, None));
+        let entities: Vec<PlacedEntity> = family
+            .lane_xs
+            .iter()
+            .map(|&lane_x| PlacedEntity {
+                name: belt_tier.to_string(),
+                x: lane_x,
+                y: family.balancer_y_start,
+                direction: EntityDirection::South,
+                carries: Some(family.item.clone()),
+                segment_id: seg_id.clone(),
+                ..Default::default()
+            })
+            .collect();
+        return Ok(entities);
+    }
 
     if let Some(template) = templates.get(&template_key) {
         // Direct template match.

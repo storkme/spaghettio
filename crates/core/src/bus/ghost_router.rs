@@ -1225,7 +1225,12 @@ pub fn route_bus_ghost(
                     // `sub_template.width <= sub_m` — otherwise feeders
                     // aim at tiles where no balancer was actually stamped.
                     let mut input_xs: Vec<i32> = Vec::new();
-                    if let Some(template) = templates.get(&(n, m)) {
+                    if crate::bus::balancer::is_passthrough_shape(n, m) {
+                        // Passthrough: each producer feeds the matching
+                        // output column directly (issue #268). No template
+                        // origin offset — input_xs == lane_xs.
+                        input_xs = fam.lane_xs.clone();
+                    } else if let Some(template) = templates.get(&(n, m)) {
                         let origin_x = if fam.lane_xs.is_empty() {
                             x
                         } else {
