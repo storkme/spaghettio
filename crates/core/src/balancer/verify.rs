@@ -120,8 +120,7 @@ pub fn verify_balancer_with_tolerance(
         row += 1;
     }
 
-    for s in 0..graph.n_splitters as usize {
-        let (emit_any, full) = splitter_emits[s];
+    for (s, &(emit_any, full)) in splitter_emits.iter().enumerate() {
         if !emit_any {
             continue;
         }

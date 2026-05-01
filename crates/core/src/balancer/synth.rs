@@ -1,32 +1,34 @@
 //! Balancer graph synthesis from a target shape `(n, m)`.
 //!
-//! Implements Zhou-Chen-Bruck (2012) §VI.A and §VI.B: build a Huffman /
-//! Knuth-Yao binary tree over the target distribution `{q_1, ..., q_m}`,
-//! replace each internal node with a 2-output splitter implementing
-//! `{w_l/(w_l+w_r), w_r/(w_l+w_r)}`, and treat each leaf as an output.
-//! Non-dyadic distributions are realized via the §VI.A feedback
-//! construction: pad to a power-of-2 denominator, route the leftover
-//! atoms back to the network's starting point.
+//! Implements Zhou-Chen-Bruck (2012) §VI.A: pad a uniform target
+//! distribution `{1/m, ..., 1/m}` to power-of-2 denominator
+//! `{1/2^n × m, (2^n - m)/2^n × 1}`, build the Knuth-Yao complete binary
+//! tree, and connect the leftover output(s) back to the input. Combined
+//! with our multi-arc-port model relaxation, *all* leftover leaves
+//! sideload onto a single merger splitter's in-port — no `(k, 2)` merger
+//! sub-network needed.
 //!
-//! For load balancers all `q_i = 1/m`. v1 supports two regimes:
+//! Construction for `(1, m)` with `m ≥ 2`:
 //!
-//! - **Dyadic** (`m` a power of 2): complete binary tree of vanilla
-//!   `{1/2, 1/2}` splitters, `m-1` splitters total. No feedback.
-//! - **Single-leftover** (`m+1` a power of 2, i.e. `m ∈ {3, 7, 15, ...}`):
-//!   build the `(1, 2^n)` tree, redirect the last leaf as a feedback edge,
-//!   and add one merger splitter combining `real_input + feedback` whose
-//!   outputs feed the root's two in-ports. `m` splitters total.
+//! 1. `pow2 = next_power_of_two(m)`, `leftover = pow2 - m`.
+//! 2. Build the `(1, pow2)` complete binary tree (`pow2 - 1` splitters in
+//!    BFS-heap layout). Leaves 0..m become real outputs; leaves m..pow2
+//!    become feedback edges.
+//! 3. If `leftover > 0`: prepend a merger splitter M. M.in0 = real input;
+//!    M.in1 = all `leftover` feedback edges sideloaded onto a single
+//!    in-port (port rate = sum, multi-arc relaxation). M's two outputs
+//!    feed the tree's root.
+//! 4. If `leftover == 0` (dyadic m): no merger; real input directly to the
+//!    root's in-port 0. Root's in-port 1 is empty (rate 0 by relaxation).
 //!
-//! Larger leftovers (e.g. `m=5` with 3 feedbacks, `m=9` with 7) require a
-//! `(k, 2)` merger sub-network that preserves flow conservation under our
-//! all-fluid model — itself a non-trivial non-dyadic balancer. Deferred
-//! until the placement engine can tell us whether canonical-graph quality
-//! is the binding constraint (per the plan's "candidate-graph generation"
-//! v2 lever).
+//! Each leaf in the (1, pow2) tree carries rate `(1 + total_feedback) /
+//! pow2`. With `total_feedback = leftover × (1/m)`, that's `pow2 / pow2 / m
+//! = 1/m`. Real outputs all see `1/m`. ✓
 //!
-//! `n > 1` is also deferred: the symmetric `n = m` case wants Beneš
-//! (out of scope), and `n < m` wants a merge-prefix into the (1, m)
-//! synth tree.
+//! `n > 1` is still unsupported. The natural extensions are: symmetric
+//! `n = m` via Beneš (no feedback needed), or `n < m` via a merge-prefix
+//! into a `(1, m)` synth tree (each input feeds one of the merger's
+//! in-ports, possibly with fan-in if `n > 2`).
 
 use thiserror::Error;
 
@@ -36,10 +38,7 @@ use crate::balancer::graph::{Arc, BalancerGraph, Sink, Source};
 pub enum SynthError {
     #[error("invalid shape: ({n}, {m}) — both must be ≥ 1")]
     InvalidShape { n: u32, m: u32 },
-    #[error(
-        "synthesis for ({n}, {m}) is not yet supported in v1 \
-         (only n == 1 and m a power of 2)"
-    )]
+    #[error("synthesis for ({n}, {m}) is not yet supported in v1 (only n == 1)")]
     Unsupported { n: u32, m: u32 },
 }
 
@@ -55,25 +54,13 @@ pub fn synth(n: u32, m: u32) -> Result<BalancerGraph, SynthError> {
     if n != 1 {
         return Err(SynthError::Unsupported { n, m });
     }
-    if m.is_power_of_two() {
-        return Ok(synth_one_to_pow2(m));
-    }
-    // m+1 a power of 2 → single feedback leaf, single merger splitter.
-    if (m + 1).is_power_of_two() {
-        return Ok(synth_one_to_pow2_minus_one(m));
-    }
-    Err(SynthError::Unsupported { n, m })
+    Ok(synth_one_to_m(m))
 }
 
-/// Build the (1, m) balancer for `m` a power of 2 as a complete binary
-/// tree of 50/50 splitters in BFS-heap layout. Every splitter port that
-/// isn't wired to the real input or to a child receives a dummy input at
-/// capacity 0.
-fn synth_one_to_pow2(m: u32) -> BalancerGraph {
-    debug_assert!(m >= 1 && m.is_power_of_two());
+fn synth_one_to_m(m: u32) -> BalancerGraph {
+    debug_assert!(m >= 1);
 
     if m == 1 {
-        // Trivial: direct passthrough. No splitters.
         return BalancerGraph::new(
             1,
             1,
@@ -85,114 +72,47 @@ fn synth_one_to_pow2(m: u32) -> BalancerGraph {
         );
     }
 
-    let n_splitters = m - 1;
-
-    // Splitters in BFS-heap layout: splitter `i` has children at `2i+1`
-    // (left) and `2i+2` (right). When a child index is ≥ n_splitters, it
-    // is a leaf and maps to output `child_index - n_splitters`.
-    let mut arcs: Vec<Arc> = Vec::with_capacity((m - 1 + 1 + m) as usize);
-
-    // Root (splitter 0) receives the real input on in-port 0.
-    arcs.push(Arc {
-        src: Source::Input(0),
-        dst: Sink::Splitter { idx: 0, port: 0 },
-    });
-
-    // For each splitter, emit edges from its two out-ports to its children.
-    for i in 0..n_splitters {
-        for (port, child) in [(0u8, 2 * i + 1), (1u8, 2 * i + 2)] {
-            if child < n_splitters {
-                arcs.push(Arc {
-                    src: Source::Splitter { idx: i, port },
-                    dst: Sink::Splitter {
-                        idx: child,
-                        port: 0,
-                    },
-                });
-            } else {
-                arcs.push(Arc {
-                    src: Source::Splitter { idx: i, port },
-                    dst: Sink::Output(child - n_splitters),
-                });
-            }
-        }
-    }
-
-    // Every splitter's in-port 1 needs a dummy input (cap 0). Internal
-    // splitters' in-port 0 is already wired to a parent's out-port; the
-    // root's in-port 0 carries the real input.
-    let total_inputs = 1 + n_splitters; // 1 real + (m-1) dummies = m
-    let total_outputs = m;
-    debug_assert_eq!(total_inputs, total_outputs);
-
-    for s in 0..n_splitters {
-        arcs.push(Arc {
-            src: Source::Input(1 + s),
-            dst: Sink::Splitter { idx: s, port: 1 },
-        });
-    }
-
-    let mut input_caps = vec![1.0f64];
-    input_caps.resize(total_inputs as usize, 0.0);
-    let output_caps = vec![1.0f64; total_outputs as usize];
-
-    let g = BalancerGraph {
-        n_inputs: total_inputs,
-        n_outputs: total_outputs,
-        n_splitters,
-        arcs,
-        input_caps,
-        output_caps,
-    };
-    debug_assert!(g.validate().is_ok());
-    g
-}
-
-/// Build the `(1, m)` balancer for `m = 2^n - 1` (i.e. `m+1` is a power of
-/// 2 and the §VI.A leftover is exactly 1).
-///
-/// Construction: take the `(1, 2^n)` complete-binary-tree, reroute the last
-/// leaf (output index `m`) to be a feedback edge instead of a real output,
-/// and prepend a merger splitter `M` whose two outputs feed the root's two
-/// in-ports.
-///
-/// New splitter numbering: `M` is index 0; the original tree's splitters
-/// shift to indices `1..=m-1` (so the original root becomes splitter 1).
-/// Each splitter has `m` total = `(m-1) + 1` (tree + merger).
-fn synth_one_to_pow2_minus_one(m: u32) -> BalancerGraph {
-    debug_assert!(m >= 1 && (m + 1).is_power_of_two());
-    let pow2 = m + 1;
-    let inner_splitters = pow2 - 1; // splitters in the original (1, 2^n) tree
-    let total_splitters = inner_splitters + 1; // +1 for the merger M
+    let pow2 = m.next_power_of_two();
+    let leftover = pow2 - m;
+    let n_inner = pow2 - 1; // splitters in the (1, pow2) tree
+    let need_merger = leftover > 0;
+    let inner_offset = if need_merger { 1u32 } else { 0u32 };
+    let total_splitters = n_inner + inner_offset;
 
     let mut arcs: Vec<Arc> = Vec::new();
 
-    // Merger M (splitter 0). M.in0 ← real_input; M.in1 ← feedback (added below).
-    arcs.push(Arc {
-        src: Source::Input(0),
-        dst: Sink::Splitter { idx: 0, port: 0 },
-    });
-    // M's two outputs feed the root (which is splitter 1 in the new numbering).
-    arcs.push(Arc {
-        src: Source::Splitter { idx: 0, port: 0 },
-        dst: Sink::Splitter { idx: 1, port: 0 },
-    });
-    arcs.push(Arc {
-        src: Source::Splitter { idx: 0, port: 1 },
-        dst: Sink::Splitter { idx: 1, port: 1 },
-    });
+    if need_merger {
+        // Merger M (idx 0). in0 = real input; in1 = all feedback edges
+        // (sideloaded — multi-arc in-port).
+        arcs.push(Arc {
+            src: Source::Input(0),
+            dst: Sink::Splitter { idx: 0, port: 0 },
+        });
+        // M's two outputs feed the inner tree's root (idx 1).
+        arcs.push(Arc {
+            src: Source::Splitter { idx: 0, port: 0 },
+            dst: Sink::Splitter { idx: 1, port: 0 },
+        });
+        arcs.push(Arc {
+            src: Source::Splitter { idx: 0, port: 1 },
+            dst: Sink::Splitter { idx: 1, port: 1 },
+        });
+    } else {
+        // Dyadic case: real input directly to root's in-port 0. The
+        // root's in-port 1 is empty (no arcs); rate 0 by relaxation.
+        arcs.push(Arc {
+            src: Source::Input(0),
+            dst: Sink::Splitter { idx: 0, port: 0 },
+        });
+    }
 
-    // Inner tree edges, with old splitter index `i` shifted to `i + 1`.
-    // BFS-heap layout of the (1, 2^n) tree: parent `i` has children at
-    // `2i+1` and `2i+2`; child idx >= inner_splitters means it's a leaf
-    // mapping to output `child_idx - inner_splitters` in the dyadic case.
-    // Here, leaf index `m` (the final leaf in BFS order) becomes the
-    // single feedback edge instead of a real output.
-    for old_i in 0..inner_splitters {
-        let new_i = old_i + 1;
+    // Inner tree in BFS-heap layout. Old idx i has children at 2i+1, 2i+2.
+    // Map old → new by adding `inner_offset`.
+    for old_i in 0..n_inner {
+        let new_i = old_i + inner_offset;
         for (port, child_old) in [(0u8, 2 * old_i + 1), (1u8, 2 * old_i + 2)] {
-            if child_old < inner_splitters {
-                let child_new = child_old + 1;
+            if child_old < n_inner {
+                let child_new = child_old + inner_offset;
                 arcs.push(Arc {
                     src: Source::Splitter { idx: new_i, port },
                     dst: Sink::Splitter {
@@ -201,14 +121,14 @@ fn synth_one_to_pow2_minus_one(m: u32) -> BalancerGraph {
                     },
                 });
             } else {
-                let leaf_idx = child_old - inner_splitters;
+                let leaf_idx = child_old - n_inner;
                 if leaf_idx < m {
                     arcs.push(Arc {
                         src: Source::Splitter { idx: new_i, port },
                         dst: Sink::Output(leaf_idx),
                     });
                 } else {
-                    debug_assert_eq!(leaf_idx, m, "exactly one leftover leaf");
+                    debug_assert!(need_merger, "leftover only exists when merger is added");
                     arcs.push(Arc {
                         src: Source::Splitter { idx: new_i, port },
                         dst: Sink::Splitter { idx: 0, port: 1 },
@@ -218,32 +138,7 @@ fn synth_one_to_pow2_minus_one(m: u32) -> BalancerGraph {
         }
     }
 
-    // Inner non-root splitters (new idx 2..total_splitters) need a dummy on
-    // their in-port 1. The root (new idx 1) has both in-ports wired by M.
-    let mut next_dummy_input = 1u32;
-    for new_i in 2..total_splitters {
-        arcs.push(Arc {
-            src: Source::Input(next_dummy_input),
-            dst: Sink::Splitter { idx: new_i, port: 1 },
-        });
-        next_dummy_input += 1;
-    }
-    let total_inputs = next_dummy_input;
-    let total_outputs = m;
-    debug_assert_eq!(total_inputs, total_outputs);
-
-    let mut input_caps = vec![1.0f64];
-    input_caps.resize(total_inputs as usize, 0.0);
-    let output_caps = vec![1.0f64; total_outputs as usize];
-
-    let g = BalancerGraph {
-        n_inputs: total_inputs,
-        n_outputs: total_outputs,
-        n_splitters: total_splitters,
-        arcs,
-        input_caps,
-        output_caps,
-    };
+    let g = BalancerGraph::new(1, m, total_splitters, arcs);
     debug_assert!(g.validate().is_ok());
     g
 }
@@ -257,136 +152,118 @@ mod tests {
         (a - b).abs() < 1e-9
     }
 
-    /// `synth(1, 1)` is the trivial passthrough — no splitters, one arc.
+    fn check_uniform(m: u32) {
+        let g = synth(1, m).unwrap();
+        let out = verify_balancer(&g).unwrap();
+        assert_eq!(out.output_throughputs.len(), m as usize);
+        let target = 1.0 / m as f64;
+        for (i, &t) in out.output_throughputs.iter().enumerate() {
+            assert!(
+                approx_eq(t, target),
+                "synth(1, {}) output {} = {} != {}",
+                m,
+                i,
+                t,
+                target
+            );
+        }
+    }
+
     #[test]
     fn synth_1_1_passthrough() {
         let g = synth(1, 1).unwrap();
+        assert_eq!(g.n_splitters, 0);
         assert_eq!(g.n_inputs, 1);
         assert_eq!(g.n_outputs, 1);
-        assert_eq!(g.n_splitters, 0);
-        assert_eq!(g.arcs.len(), 1);
         let out = verify_balancer(&g).unwrap();
         assert!(approx_eq(out.real_output_throughput, 1.0));
     }
 
-    /// `synth(1, 2)`: single 50/50 splitter. Each output 0.5.
+    /// Dyadic: m a power of 2. m-1 splitters, no merger.
     #[test]
-    fn synth_1_2_single_splitter() {
-        let g = synth(1, 2).unwrap();
-        assert_eq!(g.n_splitters, 1);
-        assert_eq!(g.n_inputs, 2); // 1 real + 1 dummy
-        assert_eq!(g.n_outputs, 2);
-        let out = verify_balancer(&g).unwrap();
-        assert!(approx_eq(out.real_output_throughput, 0.5));
-        assert!(approx_eq(out.max_imbalance, 0.0));
-    }
-
-    /// `synth(1, 4)`: 3-splitter complete binary tree. Each output 0.25.
-    #[test]
-    fn synth_1_4_complete_tree() {
-        let g = synth(1, 4).unwrap();
-        assert_eq!(g.n_splitters, 3);
-        assert_eq!(g.n_inputs, 4); // 1 real + 3 dummies
-        assert_eq!(g.n_outputs, 4);
-        let out = verify_balancer(&g).unwrap();
-        assert!(approx_eq(out.real_output_throughput, 0.25));
-        for &t in &out.output_throughputs {
-            assert!(approx_eq(t, 0.25));
+    fn synth_dyadic_powers_of_two() {
+        for m in [2u32, 4, 8, 16] {
+            let g = synth(1, m).unwrap();
+            assert_eq!(g.n_splitters, m - 1, "synth(1, {}) splitter count", m);
+            assert_eq!(g.n_inputs, 1);
+            assert_eq!(g.n_outputs, m);
+            check_uniform(m);
         }
     }
 
-    /// `synth(1, 8)`: 7-splitter complete binary tree. Each output 0.125.
+    /// Single leftover: m = 2^n - 1. Adds 1 merger splitter.
     #[test]
-    fn synth_1_8_three_levels() {
-        let g = synth(1, 8).unwrap();
-        assert_eq!(g.n_splitters, 7);
-        assert_eq!(g.n_inputs, 8);
-        assert_eq!(g.n_outputs, 8);
-        let out = verify_balancer(&g).unwrap();
-        assert!(approx_eq(out.real_output_throughput, 0.125));
-    }
-
-    /// `synth(1, 16)`: confirms the recurrence holds at depth 4.
-    #[test]
-    fn synth_1_16() {
-        let g = synth(1, 16).unwrap();
-        assert_eq!(g.n_splitters, 15);
-        let out = verify_balancer(&g).unwrap();
-        assert!(approx_eq(out.real_output_throughput, 1.0 / 16.0));
-    }
-
-    /// Round-trip the synthesized graph through serde to confirm it's
-    /// stable for use as a build-time artifact (e.g., balancer_library).
-    #[test]
-    fn synth_serde_round_trip() {
-        let g = synth(1, 4).unwrap();
-        let json = serde_json::to_string(&g).unwrap();
-        let g2: BalancerGraph = serde_json::from_str(&json).unwrap();
-        assert_eq!(g, g2);
-    }
-
-    /// `synth(1, 3)`: smallest non-dyadic case. Single feedback leaf,
-    /// single merger splitter. 4 splitters total.
-    #[test]
-    fn synth_1_3_single_feedback() {
-        let g = synth(1, 3).unwrap();
-        assert_eq!(g.n_splitters, 4); // 3 tree + 1 merger
-        assert_eq!(g.n_inputs, 3); // 1 real + 2 dummies (for the 2 non-root tree splitters)
-        assert_eq!(g.n_outputs, 3);
-        let out = verify_balancer(&g).unwrap();
-        for &t in &out.output_throughputs {
-            assert!(approx_eq(t, 1.0 / 3.0), "output {} != 1/3", t);
+    fn synth_single_leftover() {
+        for m in [3u32, 7, 15] {
+            let g = synth(1, m).unwrap();
+            // pow2 = m+1; n_inner = m; +1 merger.
+            assert_eq!(g.n_splitters, m + 1, "synth(1, {}) splitter count", m);
+            check_uniform(m);
         }
     }
 
-    /// `synth(1, 7)`: leftover-1 case at depth 3. 7 + 1 = 8 splitters.
+    /// Multi-leftover: leftover > 1. Merger sideloads multiple feedback
+    /// edges onto its in-port 1.
     #[test]
-    fn synth_1_7_leftover_one() {
-        let g = synth(1, 7).unwrap();
-        assert_eq!(g.n_splitters, 8); // 7 tree + 1 merger
-        assert_eq!(g.n_inputs, 7);
-        assert_eq!(g.n_outputs, 7);
-        let out = verify_balancer(&g).unwrap();
-        for &t in &out.output_throughputs {
-            assert!(approx_eq(t, 1.0 / 7.0));
+    fn synth_multi_leftover() {
+        // (1, 5): pow2=8, leftover=3. 7 inner + 1 merger = 8 splitters.
+        let g = synth(1, 5).unwrap();
+        assert_eq!(g.n_splitters, 8);
+        check_uniform(5);
+
+        // (1, 6): pow2=8, leftover=2. 8 splitters.
+        let g = synth(1, 6).unwrap();
+        assert_eq!(g.n_splitters, 8);
+        check_uniform(6);
+
+        // (1, 9): pow2=16, leftover=7. 15 inner + 1 merger = 16. Unblocks
+        // a shape from issue #136.
+        let g = synth(1, 9).unwrap();
+        assert_eq!(g.n_splitters, 16);
+        check_uniform(9);
+
+        // (1, 10): pow2=16, leftover=6. 16 splitters. Also from #136.
+        check_uniform(10);
+    }
+
+    /// Stress: synth and verify every (1, m) for m in 1..=16.
+    #[test]
+    fn synth_every_m_up_to_16() {
+        for m in 1u32..=16 {
+            check_uniform(m);
         }
     }
 
-    /// `synth(1, 15)`: leftover-1 at depth 4. Stress-test the construction
-    /// at a larger size.
+    /// Sideloaded merger: confirm M's in-port 1 has `leftover` arcs.
     #[test]
-    fn synth_1_15_leftover_one() {
-        let g = synth(1, 15).unwrap();
-        assert_eq!(g.n_splitters, 16); // 15 tree + 1 merger
-        let out = verify_balancer(&g).unwrap();
-        for &t in &out.output_throughputs {
-            assert!(approx_eq(t, 1.0 / 15.0));
-        }
+    fn merger_in_port_1_has_leftover_arcs() {
+        let g = synth(1, 5).unwrap();
+        // M is splitter idx 0; count arcs with dst Splitter{idx:0, port:1}.
+        let count = g
+            .arcs
+            .iter()
+            .filter(|a| matches!(a.dst, Sink::Splitter { idx: 0, port: 1 }))
+            .count();
+        assert_eq!(count, 3, "(1, 5) leftover = 3, expected 3 sideloaded feedbacks");
+
+        let g = synth(1, 9).unwrap();
+        let count = g
+            .arcs
+            .iter()
+            .filter(|a| matches!(a.dst, Sink::Splitter { idx: 0, port: 1 }))
+            .count();
+        assert_eq!(count, 7, "(1, 9) leftover = 7");
     }
 
     #[test]
-    fn unsupported_shapes_error() {
-        // n != 1
+    fn unsupported_n_gt_1() {
         assert!(matches!(
             synth(2, 4),
             Err(SynthError::Unsupported { n: 2, m: 4 })
         ));
-        // m where neither m nor m+1 is a power of 2 — needs (k, 2) merger.
         assert!(matches!(
-            synth(1, 5),
-            Err(SynthError::Unsupported { n: 1, m: 5 })
-        ));
-        assert!(matches!(
-            synth(1, 6),
-            Err(SynthError::Unsupported { n: 1, m: 6 })
-        ));
-        assert!(matches!(
-            synth(1, 9),
-            Err(SynthError::Unsupported { n: 1, m: 9 })
-        ));
-        assert!(matches!(
-            synth(1, 10),
-            Err(SynthError::Unsupported { n: 1, m: 10 })
+            synth(3, 5),
+            Err(SynthError::Unsupported { .. })
         ));
     }
 
@@ -394,5 +271,13 @@ mod tests {
     fn invalid_shapes_error() {
         assert!(matches!(synth(0, 4), Err(SynthError::InvalidShape { .. })));
         assert!(matches!(synth(1, 0), Err(SynthError::InvalidShape { .. })));
+    }
+
+    #[test]
+    fn synth_serde_round_trip() {
+        let g = synth(1, 5).unwrap();
+        let json = serde_json::to_string(&g).unwrap();
+        let g2: BalancerGraph = serde_json::from_str(&json).unwrap();
+        assert_eq!(g, g2);
     }
 }
