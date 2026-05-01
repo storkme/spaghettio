@@ -240,14 +240,20 @@ fn run_solver(
     let req = PlaceRequest { n_splitters, bounds };
     let req_json = serde_json::to_string(&req)?;
 
+    // Drive the placer via `uv run --no-project`: the script's PEP 723
+    // header pins `ortools`, so the first invocation self-installs
+    // dependencies into a uv-managed environment. Keeps the spike free
+    // of "user must `pip install ortools` first" friction and matches
+    // the convention PR #270's `scripts/cp_sat_placer.py` uses, so the
+    // two entrypoints can consolidate later without rework.
     let script = "crates/balancer-gen/scripts/place.py";
-    let mut child = Command::new("python3")
-        .arg(script)
+    let mut child = Command::new("uv")
+        .args(["run", "--no-project", "--script", script])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .spawn()
-        .map_err(|e| format!("failed to spawn {script}: {e}"))?;
+        .map_err(|e| format!("failed to spawn `uv run {script}`: {e}"))?;
 
     child
         .stdin

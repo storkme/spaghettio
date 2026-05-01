@@ -197,6 +197,17 @@ fn one_to_two() -> OwnedTemplate {
 /// capped at 1 (output belt cap), but composition is balanced (each
 /// input contributes 1/2 to the output) — classifier reports MX3 under
 /// the saturated linear model.
+///
+/// **Verifier note**: this construction relies on Factorio's splitter
+/// back-pressure behaviour — items can't go to the empty `(1, 2)` tile,
+/// so the splitter saturates internally and balances 50/50 between input
+/// belts in steady state. The all-fluid Couëtoux verifier proposed in
+/// PR #270 will report this as an unbalanced steady state because it
+/// doesn't model the back-pressure-induced saturation. Both signals are
+/// honest about a different question: this classifier checks the
+/// saturated-model invariants we rely on at the layout layer; the all-
+/// fluid verifier checks an unsaturated-flow invariant. Cross-validation
+/// disagreements on `two_to_one`-using templates are expected.
 fn two_to_one() -> OwnedTemplate {
     // Layout:
     //   y=0: 2 input belts at (0, 0) and (1, 0) facing south
@@ -351,6 +362,58 @@ mod tests {
                 matches!(r.class, BalancerClass::ThroughputBalancedRate),
                 "({m}, {n}) class = {:?}",
                 r.class
+            );
+        }
+    }
+
+    /// Mirror of `parallel_one_to_two_for_m_to_2m` for the `(2m, m)`
+    /// family. The user's review comment requested this as a pin so a
+    /// future bug that elevates these to MX2/MX3 gets caught — but
+    /// tracing through the math shows the symmetry doesn't quite hold:
+    ///
+    /// `m × (1, 2)`: each input feeds 2 outputs at rate 1/2. Input-
+    /// subset max-flow of `|S| = 1` reaches `min(1, 2m) = 1`. Output-
+    /// subset max-flow of `|T| = 2` confined to one column drops to 1,
+    /// short of `min(m, 2) = 2`. → MX2a (passes input, fails output).
+    ///
+    /// `m × (2, 1)`: each *pair* of inputs feeds 1 output, capped at 1
+    /// by the dangling-output back-pressure trick. Input-subset
+    /// `|S| = 2` confined to one column delivers 1 to all `m` outputs,
+    /// short of `min(2, m) = 2` for `m ≥ 2`. → MX1 (fails input
+    /// already; output check is moot).
+    ///
+    /// The asymmetry: in `(m, 2m)` the per-input cap is the limit; in
+    /// `(2m, m)` the per-output cap of the dangling-output trick is the
+    /// limit, and that limit *bottlenecks* the input subset. So
+    /// `generate(2m, m)` returns `None` (caught by the self-verify
+    /// gate). The test pins this — both that the underlying composition
+    /// classifies as MX1 *and* that the public generator correctly
+    /// rejects it.
+    #[test]
+    fn parallel_two_to_one_for_2m_to_m() {
+        for m in 2..=5 {
+            let n = 2 * m;
+
+            // Pin 1: the underlying parallel composition is MX1 because
+            // the per-column merger cap = 1 short-circuits input-subset
+            // Menger.
+            let composed = replicate_horizontally(&two_to_one(), m);
+            let r = classify_ref(composed.as_ref()).expect("classify");
+            assert!(
+                matches!(r.class, BalancerClass::ThroughputLimited),
+                "({n}, {m}) parallel two_to_one composition class = {:?}",
+                r.class
+            );
+
+            // Pin 2: the public generator's self-verify gate rejects
+            // MX1, so callers see `None` for these shapes today. If a
+            // future change accepts MX1 (or upgrades the class), this
+            // assertion catches it.
+            assert!(
+                generate(n, m).is_none(),
+                "generate({n}, {m}) unexpectedly returned a template; \
+                 the (2m, m) parallel composition is MX1 and should be \
+                 filtered by the self-verify gate"
             );
         }
     }

@@ -1,5 +1,16 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --no-project --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["ortools>=9.10"]
+# ///
 """Phase 3.1 spike — CP-SAT splitter placement.
+
+Run via `uv run --no-project crates/balancer-gen/scripts/place.py` (the
+PEP 723 inline metadata above pins `ortools` so first-run dep resolution
+is automatic; same pattern PR #270 uses for its `cp_sat_placer.py`). The
+two scripts will eventually consolidate behind a shared placer; for now
+both share the dep convention so consolidation is a refactor, not a
+re-architect.
 
 Reads a topology spec from stdin (JSON), encodes splitter positions and
 no-overlap constraints with OR-Tools CP-SAT, writes the placement back

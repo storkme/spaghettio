@@ -269,6 +269,47 @@ This RFP doesn't change that decision, just implements it.
 
 Each sub-phase is landable independently with its own round-trip test.
 
+## Coordination with PR #270
+
+[PR #270](https://github.com/storkme/fucktorio/pull/270) is a parallel
+audit-phase fork that diverged in two interesting ways. Both deserve
+explicit notes here so phase-3.2+ implementation lands without
+re-litigating decisions:
+
+- **Verifier divergence on saturated-merge constructions.** PR #270
+  introduces an all-fluid Couëtoux verifier that rejects any layout
+  whose steady state depends on internal back-pressure saturation —
+  including the `two_to_one()` atom in `balancer_generate.rs` (the
+  dangling-output trick caps a `(2, 1)` merger at 1 unit of throughput
+  by saturating the splitter via back-pressure). Both signals are
+  honest: this RFP's classifier checks the saturated-model invariants
+  the layout layer relies on; the all-fluid verifier checks an
+  unsaturated-flow invariant. Cross-validation disagreements on
+  `two_to_one`-using templates are *expected*, not bugs. Whichever
+  verifier becomes authoritative for the placement output, this RFP's
+  generator will be cross-checked against the other; the disagreement
+  count is the right signal, not the absolute pass/fail.
+
+- **CP-SAT subprocess pattern convergence.** PR #270's
+  `scripts/cp_sat_placer.py` lives behind a `PlacementEngine` trait
+  inside `crates/core/` and uses PEP 723 + `uv run --no-project` for
+  self-installing dependencies. The phase-3.1 spike binary in
+  [`crates/balancer-gen/`](../crates/balancer-gen/) drove a separate
+  `python3` subprocess at first; this PR's review brought us to the
+  same `uv run --no-project` PEP 723 pattern, so the dep convention now
+  matches. The deferred work is folding `crates/balancer-gen/` into
+  PR #270's `PlacementEngine` trait once the placement encoding
+  graduates from spike to real engine — the spike binary's only
+  remaining job is exercising CP-SAT against non-trivial topologies
+  (the Clos composition test, the single-splitter MVP round-trip).
+
+  Concretely: phase 3.2C is a natural seam for consolidation. By that
+  point the encoder handles direction-free splitters and UGs, which
+  matches the trait's expected surface. We adopt the trait, retire the
+  spike binary's standalone main, and the `crates/balancer-gen/` crate
+  becomes a thin wrapper around the trait's `place(graph, bounds)`
+  call (or disappears entirely if the trait subsumes the CLI).
+
 ## Open questions
 
 - **How big does the encoding get for `(4, 9)` Clos?** 33 splitters,
