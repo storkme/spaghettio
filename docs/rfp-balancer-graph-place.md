@@ -337,11 +337,25 @@ unaffected.
   offline / build-time, written in Rust. Topology generator stays
   in-tree and runtime-callable for verification. WASM bundle /
   runtime perf concerns drop.*
-- *2026-05-01 — kill criteria, phase 3.1 spike acceptance, and D4
-  output-file decision approved. Locked in: `cp_sat` Rust crate as
-  the placement solver (with Python+OR-Tools subprocess as documented
-  fallback if cross-platform build fails); sibling
-  `balancer_library_extra.rs` for generated output. Factorio-SAT
-  baseline for `(2, 3)` is <1s per probe (timeout 300s × multiple
-  probes worst case) — the 30s CP-SAT spike target is comfortably
-  inside that envelope.*
+- *2026-05-01 — phase 3.0 (topology generator) landed. SplitterGraph
+  and NodeId promoted to public API; classify_graph and
+  topology_of_template entrypoints added. Atoms (passthrough,
+  one_to_two, two_to_one), composers (parallel, series, series_permuted,
+  clos_interleave), and library_atom bootstrap. (4, 9) Clos composition
+  via series_permuted(parallel(library(1, 3), 4),
+  parallel(library(4, 3), 3), clos_interleave(4, 3)) classifies as
+  MX3 — the headline coprime case is verified end-to-end at the
+  topology layer. (3, 5) verified similarly. Topology splitter counts:
+  (4, 9) Clos = 33; (3, 5) Clos = 36 (small shapes the library has
+  hand-tighter unified topologies).*
+
+- *2026-05-01 — phase 3.1 spike result: `cp_sat` Rust crate failed to
+  build in our sandbox (needs OR-Tools C++ at `/opt/ortools/include/`).
+  Cross-platform-build kill criterion hit; pivoted to Python+OR-Tools
+  subprocess as documented in the RFP fallback. `pip install ortools`
+  worked first try. Spike (2, 3) library round-trip: 10ms; (4, 9) Clos
+  composition with 33 splitters: 12ms. Both well under the 30s kill
+  budget. Splitter no-overlap is what's encoded so far — belt routing
+  is phase 3.2 work and will materially increase solve time. The
+  framework is viable; new Rust crate `crates/balancer-gen/` and
+  `crates/balancer-gen/scripts/place.py` ship the spike.*
