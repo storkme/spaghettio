@@ -480,3 +480,24 @@ The remaining work, in order:
   Phase 4 increments 1+2 shipped as standalone infrastructure
   value; (1, 5) and the rest of coprime coverage need a
   layout-design follow-up before they become tractable.*
+- *2026-05-02 — Phase 4 increment 3 (`(1, 5)` placer) shipped via
+  direction (a)+(c) combined: UG belts in `_route_belts` (already
+  shipped in `1e3d17c`) plus a placement-only lane-balancer splitter
+  inserted above M (a 9th splitter beyond synth's 8). The first attempt
+  without the balancer UNSATs as expected — M.in1 at the top edge has
+  only east-side feeds available (M.in0 occupies the west neighbour),
+  so the 0.6 feedback lumps onto a single lane and overflows the 0.5
+  cap. The fix: insert south-facing B' two rows above M with B'.out0
+  feeding M.in1 (north back-feed, lanes preserved) and B'.out1 looping
+  west through (6, 4) W to sideload (5, 4) east-side onto lane 0,
+  yielding lanes 0.45 / 0.15 at M.in1 — both within cap. The 0.6
+  feedback splits 0.4 + 0.2 across B's two input ports (rates
+  comfortably under the 0.5 lane cap on each input belt). The placer
+  uses a finer local rate scale (`LOCAL_RATE_SCALE = 20`,
+  `lane_cap = 10`) so B's 0.3 outputs encode head-on as two integer
+  lane-routes at 0.15 each. Recovered topology has 9 splitters; the
+  extra B' shows up as a regular 1→2 node and verifier handles it
+  via standard R7 / conservation. `round_trip_1_5` passes; total
+  cp_sat round-trip suite goes 10 → 11 tests green. Solve time on
+  (1, 5): ~66 s (within the test's 60 s timeout — close call, may need
+  bumping or seed pinning if it flakes).*
