@@ -602,6 +602,161 @@ def place_x_to_sixteen(n: int) -> dict[str, Any]:
     }
 
 
+def place_one_to_five() -> dict[str, Any]:
+    """`(1, 5)` — first coprime shape, with a merger and feedback arcs.
+
+    Topology (synth(1, 5)): input → merger → 7-splitter (1, 8) tree
+    → 5 outputs + 3 feedback arcs back to merger.in_1 (sideloaded).
+
+    Layout (10 × 8):
+      - Row 1: merger at (3, 1).
+      - Row 2: two length-1 belts feed root from above.
+      - Row 3: root at (3, 3).
+      - Row 4: routing row root → L1.
+      - Row 5: L1 at (1, 5), (5, 5).
+      - Row 6: L2 at (0, 6), (2, 6), (4, 6), (6, 6) — cols 8-9 free
+        for the feedback channel.
+      - Row 7: 5 output belts + 3 feedback starts.
+
+    Feedback paths from row 7 wrap up the right side (cols 8-9)
+    back to row 0 then west into merger.in_1. All 3 feedback routes
+    converge via sideloading.
+
+    Splitter ordering: 0 = merger, 1 = root, 2-3 = L1, 4-7 = L2.
+    """
+    from ortools.sat.python import cp_model
+
+    width, height = 10, 8
+    n_splitters = 8
+    model = cp_model.CpModel()
+    xs = [model.new_int_var(0, width - 2, f"x{i}") for i in range(n_splitters)]
+    ys = [model.new_int_var(0, height - 1, f"y{i}") for i in range(n_splitters)]
+
+    x_intervals = [
+        model.new_interval_var(xs[i], 2, xs[i] + 2, f"x_iv_{i}")
+        for i in range(n_splitters)
+    ]
+    y_intervals = [
+        model.new_interval_var(ys[i], 1, ys[i] + 1, f"y_iv_{i}")
+        for i in range(n_splitters)
+    ]
+    model.add_no_overlap_2d(x_intervals, y_intervals)
+
+    # Merger at row 1 (inputs come from row 0).
+    model.add(ys[0] == 1)
+    # Root directly below merger with a 1-row belt gap.
+    model.add(xs[1] == xs[0])
+    model.add(ys[1] == ys[0] + 2)
+    # Root → L1: routing-row offset.
+    model.add(xs[2] == xs[1] - 2)
+    model.add(xs[3] == xs[1] + 2)
+    model.add(ys[2] == ys[1] + 2)
+    model.add(ys[3] == ys[1] + 2)
+    # L1 → L2: tight-stack.
+    model.add(xs[4] == xs[2] - 1)
+    model.add(xs[5] == xs[2] + 1)
+    model.add(ys[4] == ys[2] + 1)
+    model.add(ys[5] == ys[2] + 1)
+    model.add(xs[6] == xs[3] - 1)
+    model.add(xs[7] == xs[3] + 1)
+    model.add(ys[6] == ys[3] + 1)
+    model.add(ys[7] == ys[3] + 1)
+
+    # Boundary: leave columns 8-9 free for the feedback channel —
+    # L2[3] (rightmost) must end at col 7, so root.x ≤ 3.
+    model.add(xs[1] >= 3)
+    model.add(xs[1] <= 3)
+    # Output row at L2.y + 1 must fit.
+    model.add(ys[4] + 1 <= height - 1)
+
+    solver = cp_model.CpSolver()
+    status = solver.solve(model)
+    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        raise RuntimeError(f"(1, 5) CP-SAT model UNSAT: {solver.status_name(status)}")
+
+    pos = [(solver.value(xs[i]), solver.value(ys[i])) for i in range(n_splitters)]
+    x_merger, y_merger = pos[0]
+    x_root, y_root = pos[1]
+
+    DIR_S = 2
+    routes: list[tuple[tuple[int, int], tuple[int, int], int]] = []
+
+    # Input belt at (x_merger, 0), feeds merger.in_0.
+    input_tile = (x_merger, 0)
+    routes.append((input_tile, input_tile, DIR_S))
+    # Feedback approach belt at (x_merger + 1, 0), receives 3 feedback
+    # routes via sideloading. Declared as the sink_dir's belt by each
+    # feedback route below.
+
+    # Merger → root: 2 vertical length-1 belts at row y_merger + 1 = 2.
+    for port in (0, 1):
+        belt = (x_merger + port, y_merger + 1)
+        routes.append((belt, belt, DIR_S))
+
+    # Root → L1: routing-row offset; pick the closer L1 input port.
+    for port, child_idx in ((0, 2), (1, 3)):
+        cx, cy = pos[child_idx]
+        drop = (x_root + port, y_root + 1)
+        approach_port = 0 if drop[0] < cx else 1
+        approach = (cx + approach_port, cy - 1)
+        routes.append((drop, approach, DIR_S))
+
+    # L1 → L2: tight-stack, no belts.
+
+    # L2 → outputs/feedback. Leaf assignment from synth(1, 5):
+    #   leaf 0..4 → Output(0..4); leaf 5..7 → feedback.
+    # In synth's BFS-heap layout, leaves of inner-tree node `old_i` are
+    # at child_old = 2*old_i + {1, 2}. The L2 splitters are inner
+    # indices 4-7 (after +1 inner_offset for the merger), corresponding
+    # to old_i ∈ 3..6. Leaf indices: old_i=3 → leaves 0,1; old_i=4 → 2,3;
+    # old_i=5 → 4,fb; old_i=6 → fb,fb.
+    output_tiles: list[tuple[int, int]] = []
+    feedback_srcs: list[tuple[int, int]] = []
+    leaf_targets = [
+        (4, [0, 1]),       # L2[0]
+        (5, [2, 3]),       # L2[1]
+        (6, [4, "fb"]),   # L2[2]
+        (7, ["fb", "fb"]),# L2[3]
+    ]
+    for splitter_idx, targets in leaf_targets:
+        px, py = pos[splitter_idx]
+        for port, target in zip((0, 1), targets):
+            drop = (px + port, py + 1)
+            if target == "fb":
+                feedback_srcs.append(drop)
+            else:
+                routes.append((drop, drop, DIR_S))
+                output_tiles.append(drop)
+
+    # Feedback: 3 arcs from L2 leaves back to merger.in_1's approach
+    # tile (x_merger + 1, 0). All sideload onto the same sink belt.
+    feedback_sink = (x_merger + 1, 0)
+    for src in feedback_srcs:
+        routes.append((src, feedback_sink, DIR_S))
+
+    belt_dirs = _route_belts(pos, routes, width, height)
+    if belt_dirs is None:
+        raise RuntimeError("(1, 5) belt routing UNSAT")
+
+    entities: list[dict[str, Any]] = []
+    for x, y in pos:
+        entities.append({"name": "splitter", "x": x, "y": y, "direction": 4})
+    for (x, y), d in belt_dirs.items():
+        entities.append(
+            {"name": "transport-belt", "x": x, "y": y, "direction": _FACTORIO_DIR[d]}
+        )
+
+    return {
+        "n_inputs": 1,
+        "n_outputs": 5,
+        "width": width,
+        "height": height,
+        "entities": entities,
+        "input_tiles": [list(input_tile)],
+        "output_tiles": [list(t) for t in output_tiles],
+    }
+
+
 def main() -> int:
     raw = sys.stdin.read()
     try:
@@ -627,6 +782,7 @@ def main() -> int:
         (1, 4): lambda: place_x_to_four(1),
         (2, 4): lambda: place_x_to_four(2),
         (3, 4): lambda: place_x_to_four(3),
+        (1, 5): place_one_to_five,
         (1, 8): lambda: place_x_to_eight(1),
         (2, 8): lambda: place_x_to_eight(2),
         (3, 8): lambda: place_x_to_eight(3),
