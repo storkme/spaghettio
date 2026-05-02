@@ -56,6 +56,27 @@ INTERNAL_TO_FACTORIO_DIR = [0, 2, 4, 6]
 # 4 transit tiles between input and output, i.e., L ∈ 1..5.
 UG_MAX_REACH = 5
 
+# CP-SAT random seed for pure-routing solvers. CP-SAT runs a 16-worker
+# portfolio with random strategy selection; the default wall-clock seed
+# produces 35× run-to-run variance on hard problems (observed on (4, 9)
+# Clos compose jh=9: 10s vs 353s, same code, same encoding).
+# Pinning the seed makes solves deterministic and lets us choose a seed
+# whose portfolio assignment happens to be fast for the common shapes.
+# Override via env var FUCKTORIO_CP_SAT_SEED=<int> (sweep / testing).
+# See docs/rfp-balancer-jh-search.md decision log for selection rationale.
+DEFAULT_SEED: int = 42  # placeholder; updated after empirical sweep
+
+
+def _get_cp_sat_seed(req: dict) -> int:
+    """Return the CP-SAT random_seed to use for this request.
+
+    Priority: env var FUCKTORIO_CP_SAT_SEED > req["random_seed"] > DEFAULT_SEED.
+    """
+    env_val = os.environ.get("FUCKTORIO_CP_SAT_SEED")
+    if env_val is not None:
+        return int(env_val)
+    return int(req.get("random_seed", DEFAULT_SEED))
+
 
 def solve_overlap_only(req: dict) -> dict:
     """Original phase 3.1 spike — splitter no-overlap only."""
@@ -1545,6 +1566,7 @@ def solve_pure_routing(req: dict) -> dict:
     # Stop on first feasible when no objective is set. With Minimize() this
     # parameter is ignored — the solver always pursues optimality.
     solver.parameters.stop_after_first_solution = not req.get("minimize_entities", False)
+    solver.parameters.random_seed = _get_cp_sat_seed(req)
     t0 = time.monotonic()
     status = solver.Solve(model)
     elapsed = time.monotonic() - t0
@@ -1962,6 +1984,7 @@ def _solve_pure_routing_circuit_inner(req: dict, slack) -> dict:
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = float(req.get("max_time_s", 30.0))
     solver.parameters.stop_after_first_solution = not req.get("minimize_entities", False)
+    solver.parameters.random_seed = _get_cp_sat_seed(req)
     if req.get("debug_no_probing", False):
         solver.parameters.cp_model_probing_level = 0
         print("  circuit DEBUG: probing disabled", file=sys.stderr)

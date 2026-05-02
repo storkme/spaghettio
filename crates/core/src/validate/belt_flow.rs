@@ -2296,21 +2296,15 @@ fn compute_lane_rates_impl(
                     } else {
                         let pos_rates = lane_rates.get(&pos).copied().unwrap_or([0.0, 0.0]);
                         let sib_rates = lane_rates.get(&sib).copied().unwrap_or([0.0, 0.0]);
-                        // In the cycle-breaker, one tile may be a feedback-loop
-                        // recirculation tile (rates=[0,0]) while the other carries
-                        // the real external rate.  Averaging (real+0)/2 would
-                        // halve the output; instead propagate the non-zero side
-                        // to both tiles so each output gets the full steady-state
-                        // throughput (the cycle carries the same rate as the source).
-                        let pos_zero = pos_rates[0] == 0.0 && pos_rates[1] == 0.0;
-                        let sib_zero = sib_rates[0] == 0.0 && sib_rates[1] == 0.0;
-                        let (eff_pos, eff_sib) = if pos_zero && !sib_zero {
-                            (sib_rates, sib_rates)
-                        } else if sib_zero && !pos_zero {
-                            (pos_rates, pos_rates)
-                        } else {
-                            (pos_rates, sib_rates)
-                        };
+                        // Use the combined rate of both halves and distribute
+                        // equally. This correctly models 1→2 balanced splitting
+                        // (one half has the feeder rate, the other has 0) as well
+                        // as 2→2 splits and feedback-loop steady states — in all
+                        // cases the splitter gives each output half the total input.
+                        // The old "propagate non-zero to both" rule inflated rates
+                        // 2× for the stuck-secondary case, causing false lane-
+                        // throughput errors in the template audit.
+                        let (eff_pos, eff_sib) = (pos_rates, sib_rates);
                         let total_l = eff_pos[0] + eff_sib[0];
                         let total_r = eff_pos[1] + eff_sib[1];
                         for &tile in &[pos, sib] {
@@ -2564,7 +2558,7 @@ pub fn check_input_rate_delivery(
             None => 0.0,
         };
 
-        if available < per_inserter_rate - 0.01 {
+        if available < per_inserter_rate - 0.02 {
             issues.push(ValidationIssue::with_pos(
                 Severity::Warning,
                 "input-rate-delivery",

@@ -184,3 +184,30 @@ fn audit_lane_correctness() {
         );
     }
 }
+
+/// Print detailed error messages for a single template — useful for debugging
+/// remaining lane-throughput issues. Run with `BALANCER_DEBUG_SHAPE=(m,n)` env var.
+#[test]
+fn debug_single_shape() {
+    let shape_str = match std::env::var("BALANCER_DEBUG_SHAPE") {
+        Ok(s) => s,
+        Err(_) => return, // only runs when env var is set
+    };
+    // Parse "(m, n)" format
+    let nums: Vec<u32> = shape_str
+        .trim_matches(|c| c == '(' || c == ')')
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+    if nums.len() != 2 {
+        panic!("BALANCER_DEBUG_SHAPE must be '(m, n)', got: {shape_str}");
+    }
+    let (m, n) = (nums[0], nums[1]);
+    let templates = balancer_templates();
+    let t = templates.get(&(m, n)).unwrap_or_else(|| panic!("template ({m},{n}) not in library"));
+    let issues = validate_template_lanes(BalancerTemplateRef::from(t));
+    eprintln!("\n=== ({m}, {n}) lane issues ({} total) ===", issues.len());
+    for issue in &issues {
+        eprintln!("  {:?} [{}] at ({:?},{:?}): {}", issue.severity, issue.category, issue.x, issue.y, issue.message);
+    }
+}
