@@ -56,22 +56,20 @@ shapes in 1..=10 × 1..=10):
 3. **Increment a (UG-belt direction)** — chosen unblock path:
    - ✅ a.1: UG infrastructure in `_route_belts` (`1e3d17c`)
    - ✅ a.2: `(1, 5)` placer + round-trip test (`9fb5276`)
-   - 🟢 a.3: `(1, m)` 3-level shapes generalised
-     - ✅ `(1, 6)`, `(1, 7)` shipped via `place_one_to_m_from_synth`
-       — synth-driven placer that derives geometry from the
-       BalancerGraph + arc throughputs.
-     - 🟡 `(1, 5)` still on hand-tuned placer; runs fine on the generalised
-       one in isolation but flakes in full-suite runs (CP-SAT finds
-       OutputDegree-violating alternates with longer timeouts when other
-       tests share the system). Follow-up: add structural constraints
-       (e.g., explicit forbid-direction at specific tiles) so the
-       generalised placer can subsume `(1, 5)` reliably.
-     - ⏳ `(1, 9)`, `(1, 10)` need the generalised placer extended to
-       4-level trees (16 splitters with an L3 layer). Two paths:
-       (a) hand-tune them like the original `(1, 5)`; (b) extend the
-       generalised placer with deeper layout primitives. See
-       `docs/rfp-lane-aware-routing.md` decision log for why the
-       4-level head-on cascade is structurally harder.
+   - ✅ a.3: `(1, m)` 3-level shapes shipped via `place_one_to_m_from_synth`
+     — synth-driven placer that derives geometry from the BalancerGraph
+     + arc throughputs. Subsumes `(1, 5)`, `(1, 6)`, `(1, 7)`.
+     Hand-tuned `place_one_to_five` and `place_one_to_six` deleted.
+     Key trick for reliability: emit B' → M routes immediately after the
+     input boundary, BEFORE any L1 → L2 routes — anchors CP-SAT search
+     onto the canonical solution and stops it wandering off into
+     OutputDegree-violating alternates.
+   - ⏳ a.3 (4-level): `(1, 9)`, `(1, 10)` need the generalised placer
+     extended for 16-splitter trees with an L3 layer. Two paths:
+     (a) hand-tune them like the original `(1, 5)`; (b) extend the
+     generalised placer with deeper layout primitives. See
+     `docs/rfp-lane-aware-routing.md` decision log for why the 4-level
+     head-on cascade is structurally harder.
 4. ⏳ Coprime coverage for the rest of the 20 missing shapes
 5. ⏳ Library regen, browser eyeball, cleanup
 

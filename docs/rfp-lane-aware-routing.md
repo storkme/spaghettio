@@ -537,3 +537,16 @@ The remaining work, in order:
   recovered graph). Hand-tuned `(1, 5)` is more reliable under load
   for now; tightening structural constraints in the generalised one
   to subsume `(1, 5)` is a follow-up.*
+- *2026-05-02 — `(1, 5)` flakiness on the generalised placer fixed by
+  REORDERING route emission. The hand-tuned `(1, 5)` emitted B' → M
+  routes immediately after the input boundary, BEFORE the L1 → L2
+  routes; the original generalised version emitted them last. Putting
+  these critical short-distance routes first anchors CP-SAT's search
+  heuristic onto the canonical solution and stops it wandering off
+  into OutputDegree-violating alternates of equal cost. `(1, 5)` now
+  passes reliably in full-suite runs through the generalised placer.
+  Hand-tuned `place_one_to_five` and `place_one_to_six` deleted; both
+  shapes are now driven by `place_one_to_m_from_synth`. Solve times:
+  `(1, 5)` ~196 s (unchanged — bound by the optimization tail), `(1, 6)`
+  ~13 s (down from ~70 s; the route reorder helped here too), `(1, 7)`
+  ~9 s. Suite total: 13 / 13 green in ~325 s.*
