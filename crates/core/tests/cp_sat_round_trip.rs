@@ -117,6 +117,11 @@ fn round_trip_2_4() {
 }
 
 #[test]
+fn round_trip_3_4() {
+    round_trip(3, 4);
+}
+
+#[test]
 fn round_trip_1_8() {
     round_trip(1, 8);
 }

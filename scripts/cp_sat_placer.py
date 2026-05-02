@@ -48,6 +48,13 @@ from typing import Any
 _INTERNAL_DIRS = (0, 1, 2, 3)
 _DELTAS = ((0, -1), (1, 0), (0, 1), (-1, 0))
 _OPPOSITE = (2, 3, 0, 1)
+# 90° counterclockwise / clockwise rotations. Used by the per-lane
+# sideload rule: items entering a belt from the LEFT side land on the
+# left lane (lane 0); from the RIGHT side land on the right lane
+# (lane 1); from the BACK (opposite of belt direction) preserve the
+# upstream lane.
+_LEFT_OF = (3, 0, 1, 2)
+_RIGHT_OF = (1, 2, 3, 0)
 _FACTORIO_DIR = (0, 2, 4, 6)
 
 
@@ -150,60 +157,91 @@ def _route_belts(
             model.add(s >= belt[(t, d)])
             model.add(s <= 2 * belt[(t, d)])
 
-    # No tile shared between routes (no sideloading).
-    for t in free:
-        model.add(
-            sum(
-                f_lane[(r, t, d, lane)]
-                for r in range(len(routes))
-                for d in _INTERNAL_DIRS
-                for lane in range(n_lanes)
+    # Each route uses at most one (direction, lane) per tile. Without
+    # this a route could occupy multiple lanes/dirs at the same tile,
+    # which is incoherent for a single belt-path.
+    for r in range(len(routes)):
+        for t in free:
+            model.add(
+                sum(
+                    f_lane[(r, t, d, lane)]
+                    for d in _INTERNAL_DIRS
+                    for lane in range(n_lanes)
+                )
+                <= 1
             )
-            <= 1
-        )
 
-    # Per-route flow constraints. Conservation model:
-    #   - At each free tile, "on_route" ∈ {0, 1} = sum of direction
-    #     bools for this route.
-    #   - "Inflow" at tile t = number of neighbors feeding t (a neighbor
-    #     n feeds t if n is on the route AND n's belt points at t).
-    #   - At source: on_route = 1, inflow = 0.
-    #   - At sink: on_route = 1, inflow = 1 (via sink_dir's predecessor).
-    #   - Otherwise: inflow == on_route. If on the route, exactly one
-    #     neighbor feeds; outgoing direction must land on a free tile
-    #     also on the route.
+    # Per-route flow conservation, per-lane (phase 2).
+    # Items at tile t (direction d_recv, lane L_recv) arrive from a
+    # neighbor n at side s of t whose belt heads d_pred = OPPOSITE(s).
+    # The lane the items land on at t depends on s relative to d_recv:
+    #   - s = OPPOSITE(d_recv) (back / natural input): lane preserved
+    #     from predecessor.
+    #   - s = LEFT_OF(d_recv) (left side feed): items land on lane 0
+    #     regardless of predecessor lane.
+    #   - s = RIGHT_OF(d_recv) (right side feed): items land on lane 1
+    #     regardless of predecessor lane.
+    #   - s = d_recv (forward / output side): items can't enter.
     for r, (src, sink, sink_dir) in enumerate(routes):
-        # Sink belt's direction is fixed.
+        # Sink belt's direction is fixed; route uses sink with
+        # exactly one lane (solver picks).
         model.add(belt[(sink, sink_dir)] == 1)
         model.add(f_sum(r, sink, sink_dir) == 1)
 
         if src != sink:
-            # Source has exactly one outgoing direction.
-            model.add(sum(f_sum(r, src, d) for d in _INTERNAL_DIRS) == 1)
+            # Source has exactly one (direction, lane).
+            model.add(
+                sum(
+                    f_lane[(r, src, d, lane)]
+                    for d in _INTERNAL_DIRS
+                    for lane in range(n_lanes)
+                )
+                == 1
+            )
 
         for t in free:
-            on_route = sum(f_sum(r, t, d) for d in _INTERNAL_DIRS)
+            for d_recv in _INTERNAL_DIRS:
+                for L_recv in range(n_lanes):
+                    in_flows = []
+                    for s in _INTERNAL_DIRS:
+                        if s == d_recv:
+                            continue  # output side
+                        sdx, sdy = _DELTAS[s]
+                        n = (t[0] + sdx, t[1] + sdy)
+                        if n not in free_set:
+                            continue
+                        d_pred = _OPPOSITE[s]
+                        if s == _OPPOSITE[d_recv]:
+                            # Natural input: predecessor on same lane.
+                            in_flows.append(f_lane[(r, n, d_pred, L_recv)])
+                        elif s == _LEFT_OF[d_recv]:
+                            # Sideload from left → lane 0 of t.
+                            if L_recv == 0:
+                                for L in range(n_lanes):
+                                    in_flows.append(f_lane[(r, n, d_pred, L)])
+                        elif s == _RIGHT_OF[d_recv]:
+                            # Sideload from right → lane 1 of t.
+                            if L_recv == 1:
+                                for L in range(n_lanes):
+                                    in_flows.append(f_lane[(r, n, d_pred, L)])
 
-            # Inflow: a neighbor n in direction d_n_to_t (relative to t)
-            # feeds t iff n's belt heads d_n_to_t (toward t).
-            in_flows = []
-            for d_n_to_t in _INTERNAL_DIRS:
-                opp_dx, opp_dy = _DELTAS[_OPPOSITE[d_n_to_t]]
-                n = (t[0] + opp_dx, t[1] + opp_dy)
-                if n in free_set:
-                    in_flows.append(f_sum(r, n, d_n_to_t))
+                    # Conservation only meaningful when the tile actually
+                    # has a belt heading d_recv; otherwise predecessor
+                    # contributions are accounted for at the tile's true
+                    # belt direction (or the tile is empty).
+                    if t == src:
+                        if in_flows:
+                            model.add(sum(in_flows) == 0).only_enforce_if(
+                                belt[(t, d_recv)]
+                            )
+                    else:
+                        model.add(
+                            sum(in_flows) == f_lane[(r, t, d_recv, L_recv)]
+                        ).only_enforce_if(belt[(t, d_recv)])
 
-            if t == src:
-                # No inflow at source.
-                if in_flows:
-                    model.add(sum(in_flows) == 0)
-            else:
-                # Inflow matches on_route.
-                model.add(sum(in_flows) == on_route)
-
-            # Outflow: if heading direction d at t, the next tile must
-            # be a free tile on the route — except at the sink, whose
-            # next tile is the consumer splitter (off-route).
+            # Outflow: if heading direction d at t (any lane), next tile
+            # must be a free tile that the route uses too — except at
+            # the sink, whose next tile is the consumer splitter.
             if t != sink:
                 for d in _INTERNAL_DIRS:
                     ndx, ndy = _DELTAS[d]
@@ -309,18 +347,17 @@ def _input_routes_for_root(
     list[tuple[int, int]],
     list[tuple[tuple[int, int], tuple[int, int], int]],
 ]:
-    """Build input belt tiles and routes for `n ∈ {1, 2}` inputs.
+    """Build input belt tiles and routes for `n ∈ {1, 2, 3}` inputs.
 
     Returns `(input_tiles, routes)`. Each route is
     `(src, sink, sink_dir)` for [`_route_belts`].
 
     n=1: feed port 0 (left tile of root).
     n=2: feed both root ports directly.
-    Larger n requires sideloading or a merger sub-network — both
-    rejected: sideloading is lane-unsafe in our lane-blind model and
-    would cap throughput at half the belt rate; an n-input merger
-    sub-network would also overload its belts (n × 1.0 rate funneled
-    onto a 1.0-cap belt before reaching the merger splitter).
+    n=3: 2 direct + 1 sideload from west: (x_root - 1, y_root - 1)
+         heads east into the south-belt above port 0. Requires the
+         routing model's per-lane semantics (phase 2+) to land items
+         on the correct lane.
     """
     DIR_S = 2
     direct_left = (x_root, y_root - 1)
@@ -330,7 +367,16 @@ def _input_routes_for_root(
     if n == 2:
         tiles = [direct_left, direct_right]
         return tiles, [(t, t, DIR_S) for t in tiles]
-    raise ValueError(f"unsupported input count {n}; expected 1 or 2")
+    if n == 3:
+        sideload = (x_root - 1, y_root - 1)
+        tiles = [direct_left, direct_right, sideload]
+        routes = [
+            (direct_left, direct_left, DIR_S),
+            (direct_right, direct_right, DIR_S),
+            (sideload, direct_left, DIR_S),
+        ]
+        return tiles, routes
+    raise ValueError(f"unsupported input count {n}; expected 1, 2, or 3")
 
 
 def place_x_to_four(n: int) -> dict[str, Any]:
@@ -651,6 +697,7 @@ def main() -> int:
         (2, 2): lambda: place_single_splitter(2, 2),
         (1, 4): lambda: place_x_to_four(1),
         (2, 4): lambda: place_x_to_four(2),
+        (3, 4): lambda: place_x_to_four(3),
         (1, 8): lambda: place_x_to_eight(1),
         (2, 8): lambda: place_x_to_eight(2),
         (1, 16): lambda: place_x_to_sixteen(1),
