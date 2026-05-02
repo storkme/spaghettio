@@ -191,6 +191,13 @@ def _route_belts(
                             f[(r, t, d)]
                         )
 
+    # Minimize total belts so the solver picks shortest paths instead of
+    # wandering. Without this, large grids admit many long-path
+    # alternatives that all satisfy the structural constraints.
+    model.minimize(
+        sum(belt[(t, d)] for t in free for d in _INTERNAL_DIRS)
+    )
+
     solver = cp_model.CpSolver()
     status = solver.solve(model)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
@@ -270,42 +277,26 @@ def place_single_splitter(n: int, m: int) -> dict[str, Any]:
 
 
 def place_one_to_four() -> dict[str, Any]:
-    """`(1, 4)` complete binary tree, placed via real CP-SAT.
+    """`(1, 4)` complete binary tree, placed via real CP-SAT for both
+    splitter positions and belt routing.
 
-    Phase 2 of the placement RFP — this replaces the prior hardcoded
-    geometry with an actual CP-SAT spatial model. The constraint set
-    in a 4×4 grid is tight enough that only one assignment satisfies
-    it (root at (1, 1), level-1 children at (0, 2) and (2, 2)), so
-    CP-SAT functions here as a proof of model correctness rather
-    than as a search. The same modeling pattern extends to harder
-    shapes where the search space is non-trivial.
+    All splitter-to-splitter arcs are tight-stack (no belts needed);
+    the routing solver only handles the input belt and the 4 output
+    belts (each a length-1 south belt).
 
     Constraints:
       - 3 splitter rectangles (2×1, south-facing), `no_overlap_2d`.
-      - Tight-stack equalities between root and each child:
-        left child anchor = (xR - 1, yR + 1); right = (xR + 1, yR + 1).
-      - Grid bounds: input row above requires yR ≥ 1; output row
-        below requires yR + 2 ≤ H - 1; columns must fit so leftmost
-        and rightmost output belts stay in [0, W - 1].
-
-    Returns the solved template dict, or raises if the model proves
-    UNSAT (which would indicate a bug in the constraint set).
+      - Tight-stack: child anchor = `(parent.x ± 1, parent.y + 1)`.
+      - Boundary: yR ≥ 1; yR + 2 ≤ H − 1; columns fit.
     """
     from ortools.sat.python import cp_model
 
     width, height = 4, 4
     model = cp_model.CpModel()
 
-    # 3 splitters: 0 = root, 1 = left child, 2 = right child.
     xs = [model.new_int_var(0, width - 2, f"x{i}") for i in range(3)]
     ys = [model.new_int_var(0, height - 1, f"y{i}") for i in range(3)]
 
-    # No-overlap on the splitter rectangles. Each splitter is 2 tiles
-    # wide × 1 tile tall (south-facing). Redundant given the
-    # tight-stack equalities below place children at y = yR+1
-    # (different row from root), but exercises `add_no_overlap_2d` so
-    # the same model structure carries to harder shapes where the
-    # constraint isn't redundant.
     x_intervals = [
         model.new_interval_var(xs[i], 2, xs[i] + 2, f"x_iv_{i}") for i in range(3)
     ]
@@ -314,15 +305,11 @@ def place_one_to_four() -> dict[str, Any]:
     ]
     model.add_no_overlap_2d(x_intervals, y_intervals)
 
-    # Tight-stack: each child sits exactly one row below the root,
-    # offset by ±1 column so the root's output port tiles coincide
-    # with each child's tile.
     model.add(xs[1] == xs[0] - 1)
     model.add(xs[2] == xs[0] + 1)
     model.add(ys[1] == ys[0] + 1)
     model.add(ys[2] == ys[0] + 1)
 
-    # Boundary rows.
     model.add(ys[0] >= 1)
     model.add(ys[0] + 2 <= height - 1)
     model.add(xs[0] - 1 >= 0)
@@ -333,32 +320,43 @@ def place_one_to_four() -> dict[str, Any]:
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         raise RuntimeError(f"(1, 4) CP-SAT model UNSAT: {solver.status_name(status)}")
 
-    x_root = solver.value(xs[0])
-    y_root = solver.value(ys[0])
-    x_left = solver.value(xs[1])
-    y_left = solver.value(ys[1])
-    x_right = solver.value(xs[2])
-    y_right = solver.value(ys[2])
+    pos = [(solver.value(xs[i]), solver.value(ys[i])) for i in range(3)]
+    x_root, y_root = pos[0]
 
-    entities: list[dict[str, Any]] = [
-        {"name": "transport-belt", "x": x_root, "y": y_root - 1, "direction": 4},
-        {"name": "splitter", "x": x_root, "y": y_root, "direction": 4},
-        {"name": "splitter", "x": x_left, "y": y_left, "direction": 4},
-        {"name": "splitter", "x": x_right, "y": y_right, "direction": 4},
-    ]
-    output_y = y_root + 2
-    output_cols = [x_left, x_left + 1, x_right, x_right + 1]
-    for col in output_cols:
+    DIR_S = 2
+    routes: list[tuple[tuple[int, int], tuple[int, int], int]] = []
+    # Input belt feeds root.left_tile (port 0) via south drop.
+    input_tile = (x_root, y_root - 1)
+    routes.append((input_tile, input_tile, DIR_S))
+    # Root → L1: tight-stack, no belts.
+    # L1 → outputs: 4 length-1 south belts on the bottom row.
+    for parent_idx in (1, 2):
+        px, py = pos[parent_idx]
+        for port in (0, 1):
+            drop = (px + port, py + 1)
+            routes.append((drop, drop, DIR_S))
+
+    belt_dirs = _route_belts(pos, routes, width, height)
+    if belt_dirs is None:
+        raise RuntimeError("(1, 4) belt routing UNSAT")
+
+    entities: list[dict[str, Any]] = []
+    for x, y in pos:
+        entities.append({"name": "splitter", "x": x, "y": y, "direction": 4})
+    for (x, y), d in belt_dirs.items():
         entities.append(
-            {"name": "transport-belt", "x": col, "y": output_y, "direction": 4}
+            {"name": "transport-belt", "x": x, "y": y, "direction": _FACTORIO_DIR[d]}
         )
+
+    output_y = pos[1][1] + 1
+    output_cols = [pos[1][0], pos[1][0] + 1, pos[2][0], pos[2][0] + 1]
     return {
         "n_inputs": 1,
         "n_outputs": 4,
         "width": width,
         "height": height,
         "entities": entities,
-        "input_tiles": [[x_root, y_root - 1]],
+        "input_tiles": [list(input_tile)],
         "output_tiles": [[c, output_y] for c in output_cols],
     }
 
@@ -478,26 +476,20 @@ def place_one_to_eight() -> dict[str, Any]:
 
 
 def place_one_to_sixteen() -> dict[str, Any]:
-    """`(1, 16)` 15-splitter tree, placed via real CP-SAT.
+    """`(1, 16)` 15-splitter tree, placed via real CP-SAT for both
+    splitter positions and belt routing.
 
-    Phase 3 of the placement RFP — extends the routing-row pattern to a
-    second level. The CP-SAT model has 15 splitter rectangles with
-    `add_no_overlap_2d` plus structural equalities:
-      - Routing-row offset between root and level-1: `(root.x ± 4,
-        root.y + 2)`. The 1-row gap holds a 9-belt
-        W-W-W-W-S-E-E-E-S routing strip that spreads root's two
-        outputs to columns 4 apart.
-      - Routing-row offset between level-1 and level-2: `(L1.x ± 2,
-        L1.y + 2)`. The 1-row gap holds two mirrored W-W-S / E-S
-        routing groups (10 belts, columns -6..-2 and +2..+6 of the
-        root) that spread each L1 splitter's two outputs by ±2.
-      - Tight-stack between level-2 and level-3: each level-3
-        splitter is at `(L2.x ± 1, L2.y + 1)`.
+    The CP-SAT model fixes the structural offsets:
+      - Root → level-1: routing-row offset, ±4 cols, +2 rows.
+      - Level-1 → level-2: routing-row offset, ±2 cols, +2 rows.
+      - Level-2 → level-3: tight-stack, ±1 col, +1 row.
 
-    Width 16, height 8. Like (1, 4) and (1, 8), the constraint set has
-    only one valid assignment (root at (7, 1)); the model proves this
-    rather than asserting it. Splitter ordering is BFS:
-    0 = root, 1-2 = level-1, 3-6 = level-2, 7-14 = level-3.
+    [`_route_belts`] then solves per-tile belt directions for the
+    input belt, the two non-tight-stack levels of routes, and the 16
+    output belts. Splitter ordering is BFS: 0 = root, 1-2 = level-1,
+    3-6 = level-2, 7-14 = level-3.
+
+    Width 16, height 8.
     """
     from ortools.sat.python import cp_model
 
@@ -517,27 +509,23 @@ def place_one_to_sixteen() -> dict[str, Any]:
     ]
     model.add_no_overlap_2d(x_intervals, y_intervals)
 
-    # Routing-row offsets between root and level-1 (4-col spread).
     model.add(xs[1] == xs[0] - 4)
     model.add(xs[2] == xs[0] + 4)
     model.add(ys[1] == ys[0] + 2)
     model.add(ys[2] == ys[0] + 2)
 
-    # Routing-row offsets between level-1 and level-2 (2-col spread per L1).
     for parent, (lc, rc) in [(1, (3, 4)), (2, (5, 6))]:
         model.add(xs[lc] == xs[parent] - 2)
         model.add(xs[rc] == xs[parent] + 2)
         model.add(ys[lc] == ys[parent] + 2)
         model.add(ys[rc] == ys[parent] + 2)
 
-    # Tight-stack between level-2 and level-3.
     for parent, (lc, rc) in [(3, (7, 8)), (4, (9, 10)), (5, (11, 12)), (6, (13, 14))]:
         model.add(xs[lc] == xs[parent] - 1)
         model.add(xs[rc] == xs[parent] + 1)
         model.add(ys[lc] == ys[parent] + 1)
         model.add(ys[rc] == ys[parent] + 1)
 
-    # Boundary rows: input row above root, output row below level-3.
     model.add(ys[0] >= 1)
     model.add(ys[0] + 6 <= height - 1)
     model.add(xs[0] - 7 >= 0)
@@ -551,93 +539,59 @@ def place_one_to_sixteen() -> dict[str, Any]:
     pos = [(solver.value(xs[i]), solver.value(ys[i])) for i in range(n_splitters)]
     x_root, y_root = pos[0]
 
+    DIR_S = 2
+    routes: list[tuple[tuple[int, int], tuple[int, int], int]] = []
+    # Input belt feeds root.right_tile (port 1).
+    input_tile = (x_root + 1, y_root - 1)
+    routes.append((input_tile, input_tile, DIR_S))
+    # Root → L1.
+    for parent_idx, port, child_idx in ((0, 0, 1), (0, 1, 2)):
+        px, py = pos[parent_idx]
+        cx, cy = pos[child_idx]
+        drop = (px + port, py + 1)
+        approach_port = 0 if drop[0] < cx else 1
+        approach = (cx + approach_port, cy - 1)
+        routes.append((drop, approach, DIR_S))
+    # L1 → L2: routing-row offset, not tight-stack.
+    for parent_idx, child_left, child_right in ((1, 3, 4), (2, 5, 6)):
+        px, py = pos[parent_idx]
+        for port, child_idx in ((0, child_left), (1, child_right)):
+            cx, cy = pos[child_idx]
+            drop = (px + port, py + 1)
+            approach_port = 0 if drop[0] < cx else 1
+            approach = (cx + approach_port, cy - 1)
+            routes.append((drop, approach, DIR_S))
+    # L2 → L3: tight-stack, no belts.
+    # L3 → outputs: 16 length-1 south belts.
+    for parent_idx in range(7, 15):
+        px, py = pos[parent_idx]
+        for port in (0, 1):
+            drop = (px + port, py + 1)
+            routes.append((drop, drop, DIR_S))
+
+    belt_dirs = _route_belts(pos, routes, width, height)
+    if belt_dirs is None:
+        raise RuntimeError("(1, 16) belt routing UNSAT")
+
     entities: list[dict[str, Any]] = []
-    # Input belt above root's right tile.
-    entities.append(
-        {"name": "transport-belt", "x": x_root + 1, "y": y_root - 1, "direction": 4}
-    )
-    # Splitters.
     for x, y in pos:
         entities.append({"name": "splitter", "x": x, "y": y, "direction": 4})
-
-    # Routing strip between root (y_root) and level-1 (y_root + 2).
-    # 9 belts: W on cols [x_root-3 .. x_root], S on x_root-4, E on
-    # cols [x_root+1 .. x_root+3], S on x_root+4. Direction codes:
-    # 0=N, 2=E, 4=S, 6=W.
-    routing_y_1 = y_root + 1
-    entities.append(
-        {"name": "transport-belt", "x": x_root - 4, "y": routing_y_1, "direction": 4}
-    )
-    for col in range(x_root - 3, x_root + 1):
+    for (x, y), d in belt_dirs.items():
         entities.append(
-            {"name": "transport-belt", "x": col, "y": routing_y_1, "direction": 6}
+            {"name": "transport-belt", "x": x, "y": y, "direction": _FACTORIO_DIR[d]}
         )
-    for col in range(x_root + 1, x_root + 4):
-        entities.append(
-            {"name": "transport-belt", "x": col, "y": routing_y_1, "direction": 2}
-        )
-    entities.append(
-        {"name": "transport-belt", "x": x_root + 4, "y": routing_y_1, "direction": 4}
-    )
 
-    # Routing strip between level-1 (y_root + 2) and level-2 (y_root + 4).
-    # Two groups, each spreading an L1 splitter's outputs by ±2.
-    # Left group (under L1-left): W on its two output cols and the col to
-    #   their west, then S two cols further west; E on the col east of
-    #   port-1's output, then S one further east.
-    # Right group: mirror layout under L1-right.
-    routing_y_2 = pos[1][1] + 1
-    # Left group: under L1-left at x_l1l = x_root - 4.
-    x_l1l = pos[1][0]
-    entities.append(
-        {"name": "transport-belt", "x": x_l1l - 2, "y": routing_y_2, "direction": 4}
-    )
-    entities.append(
-        {"name": "transport-belt", "x": x_l1l - 1, "y": routing_y_2, "direction": 6}
-    )
-    entities.append(
-        {"name": "transport-belt", "x": x_l1l, "y": routing_y_2, "direction": 6}
-    )
-    entities.append(
-        {"name": "transport-belt", "x": x_l1l + 1, "y": routing_y_2, "direction": 2}
-    )
-    entities.append(
-        {"name": "transport-belt", "x": x_l1l + 2, "y": routing_y_2, "direction": 4}
-    )
-    # Right group: under L1-right at x_l1r = x_root + 4.
-    x_l1r = pos[2][0]
-    entities.append(
-        {"name": "transport-belt", "x": x_l1r - 2, "y": routing_y_2, "direction": 4}
-    )
-    entities.append(
-        {"name": "transport-belt", "x": x_l1r - 1, "y": routing_y_2, "direction": 6}
-    )
-    entities.append(
-        {"name": "transport-belt", "x": x_l1r, "y": routing_y_2, "direction": 6}
-    )
-    entities.append(
-        {"name": "transport-belt", "x": x_l1r + 1, "y": routing_y_2, "direction": 2}
-    )
-    entities.append(
-        {"name": "transport-belt", "x": x_l1r + 2, "y": routing_y_2, "direction": 4}
-    )
-
-    # Output row at y = level-3.y + 1, cols spanning all 8 level-3 splitters.
     output_y = pos[7][1] + 1
     leftmost = pos[7][0]
     rightmost = pos[14][0] + 1
     output_cols = list(range(leftmost, rightmost + 1))
-    for col in output_cols:
-        entities.append(
-            {"name": "transport-belt", "x": col, "y": output_y, "direction": 4}
-        )
     return {
         "n_inputs": 1,
         "n_outputs": 16,
         "width": width,
         "height": height,
         "entities": entities,
-        "input_tiles": [[x_root + 1, y_root - 1]],
+        "input_tiles": [list(input_tile)],
         "output_tiles": [[c, output_y] for c in output_cols],
     }
 
