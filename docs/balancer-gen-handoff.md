@@ -18,13 +18,37 @@ Five phases shipped, one in flight:
 | 3.2D.3 | done | Splitter direction freedom (opt-in, MX2b on (1, 3)) |
 | 3.3 bench | done | Mode D ≈ library on south-only corpus, (4, 4) -2 entities |
 | 3.3 stress | done — negative result | Direct Mode D on (4, 9) Clos OOMs at every bbox tried |
-| 4.1–4.3 | shipped, **unverified** | compose_parallel, solve_pure_routing, compose_series wired |
-| 4.4 | **incomplete** | (4, 9) Clos via composition test was running >30min on the previous box and got killed at session end |
+| 4.1–4.3 | shipped, verified mechanically | compose_parallel, solve_pure_routing, compose_series wired and producing layouts |
+| 4.4 | **fails — `Singular` classification** | (4, 9) Clos via composition runs end-to-end (junction_height=10 in 354s) but the placed template is Singular, not Balanced |
 
-The big unknown right now is whether **phase 4.4 actually works** —
-whether `compose_series` produces a layout that classifies MX3 for the
-(4, 9) Clos topology. The wiring is in `main.rs`, untested end-to-end
-because the previous box couldn't finish the run.
+### The verified (4, 9) compose result (from the previous box)
+
+```
+=== phase 4.4: (4, 9) Clos via compose_parallel + compose_series ===
+  stage1: parallel((1, 3), 4) = 12×9, 4 inputs, 12 outputs, 80 entities
+  stage2: parallel((4, 3), 3) = 12×12, 12 inputs, 9 outputs, 111 entities
+  clos_interleave(4, 3) perm: [0, 4, 8, 1, 5, 9, 2, 6, 10, 3, 7, 11]
+  composed: 12×31, junction_height=10 (compose+route in 354.6s)
+    279 entities total
+  ✗ compose stress: classify_ref: Singular
+```
+
+Mechanical pieces work: `compose_parallel` produces correctly-sized
+templates, `solve_pure_routing` finds a permutation routing in 354s,
+`compose_series` stitches the result without panicking. **But the
+classifier reports `Singular`** — the recovered graph from the placed
+entities has a degenerate flow matrix.
+
+`classify_graph(big)` on the *source* topology reports `Balanced`
+(verified in `stress_clos_4_9` in 3.3 wiring). So the source topology
+is fine; what's wrong is the mapping from source topology to placed
+entities.
+
+This is Open Question #2 — IO-port-ordering between `parallel`
+(graph-level, in `balancer_topology.rs`) and `compose_parallel`
+(template-level, in `main.rs`) almost certainly disagree. The fix
+likely lives in `compose_parallel`'s output ordering or in how
+`compose_series` indexes the perm.
 
 ## What needs verification on the new box
 
@@ -126,9 +150,10 @@ c0d56c5 phase 3.3 stress result — Mode D doesn't scale to (4, 9) Clos
 
 ## Next actions in priority order
 
-1. **Verify phase 4.4** — run the spike, check the (4, 9) Clos
-   composition classifies MX3. See "What needs verification" above.
-2. **If 4.4 passes**: kick off phase 3.4 — synth → SplitterGraph
+1. **Debug the (4, 9) compose `Singular` result** — see "Debugging
+   approach" below. This is the next critical step; phase 4 and 3.4
+   both depend on getting this right.
+2. **Once 4.4 passes**: kick off phase 3.4 — synth → SplitterGraph
    adapter, bbox heuristic, codegen for `BalancerTemplate` constants.
    Target the 37 missing-from-library shapes (issue #136). RAM
    headroom on the new box also unblocks retrying direct Mode D on
@@ -141,24 +166,82 @@ c0d56c5 phase 3.3 stress result — Mode D doesn't scale to (4, 9) Clos
    fundamentally capped at ~10 splitters or just RAM-capped on the
    old box. Result changes how we scope phase 3.4.
 
+## Debugging approach for the Singular result
+
+The classifier walks placed entities to recover a `SplitterGraph`,
+then runs the same Gaussian-elimination flow analysis on the
+recovered graph. `Singular` means the recovered graph has a
+degenerate flow matrix.
+
+Likely causes (most → least likely):
+
+1. **Port ordering mismatch.** `compose_parallel` numbers ports as
+   `c * atom.n_ports + i` (i.e., copy-major). `parallel` in
+   `balancer_topology.rs` may number ports differently — check it.
+   If they differ, then `clos_interleave`'s indices don't point at
+   the same physical lanes that `compose_series` is feeding into the
+   permutation.
+
+2. **`(1, 3)` atom uses a back-loop**, with one west-facing splitter.
+   `compose_parallel` blindly stamps the atom 4 times side-by-side,
+   shifted by `template.width = 3`. The west-facing splitter in copy
+   `c` emits west *into copy c-1's territory* (since "west" means
+   smaller x, and copy c's anchor x = (c-1) * atom.width + something).
+   This may cause the back-loop edges to fold into a neighbouring
+   atom instead of the same atom.
+
+   Quick test: try `compose_parallel(library_atom_for_dyadic_shape, k)`
+   on a shape that's all-south, e.g., `parallel((1, 4), 2) = (2, 8)`.
+   If that classifies correctly through `compose_parallel + identity
+   compose_series`, the bug is specific to non-south atoms.
+
+3. **`compose_series` IO tile mapping wrong**. The perm might be
+   getting applied as input_tile_index→output_tile_index but the
+   classifier expects something else. Print
+   `top.output_tiles` and `bot.input_tiles` and trace one perm entry
+   manually.
+
+### Concrete debug steps
+
+Run with `RUST_LOG=trace` and sprinkle `eprintln!` in:
+- `compose_parallel`: print each copy's IO tile positions.
+- `compose_series`: print `junction_input_tiles` and the resolved
+  `junction_output_tiles` for the chosen `junction_height`.
+- After `compose_series` returns, before `classify_ref`, print
+  `composed.input_tiles` and `composed.output_tiles`.
+
+Then walk through `clos_interleave(4, 3)` by hand for the simpler
+case `clos_interleave(2, 2)` (= `[0, 2, 1, 3]`) and verify the
+composed template would route lane 0's input to lane 0's output (etc.)
+through the Clos network.
+
+If port ordering is the issue, the fix is to make `compose_parallel`
+number ports the same way `parallel` does. `parallel`'s ordering is
+the canonical one since the classifier and verifier both rely on it.
+
+### Faster iteration alternative
+
+Instead of `(4, 9)` (354s solve time), reproduce the Singular issue
+on a smaller composition first. Try `(2, 4)` Clos:
+```
+parallel((1, 2), 2) → clos_interleave(2, 2) → parallel((2, 1), 2)
+```
+That's `(2, 4)` from atoms — only 6 splitters, junction routing
+trivial. If that classifies Balanced via composition, the (4, 9)
+issue is elsewhere; if it's Singular, the bug is in the simpler case
+and easier to debug.
+
 ## Open questions / known issues
 
 1. **Pre-existing CI failure on `partition_strategy_scoreboard`**:
    reproduces with our changes stashed. Not from this branch. User
    has acknowledged and is aware.
 
-2. **(4, 9) Clos compose IO-port-ordering risk**: `compose_parallel`
-   concatenates IO tiles in copy order: input port `c * n_in + i` is
-   the i-th input of the c-th copy. `clos_interleave(4, 3)` indexes
-   into the post-parallel port list. If `parallel` and
-   `compose_parallel` index ports differently, the perm is
-   semantically wrong and the composed layout won't classify MX3.
-   Worth double-checking by printing the input/output cells in
-   `compose_series` and tracing one lane through the topology. The
-   relevant code: `parallel` in `balancer_topology.rs` (graph-level)
-   vs `compose_parallel` in `main.rs` (template-level). If they
-   diverge, the fix is to make `compose_parallel`'s ordering match
-   `parallel`'s.
+2. **(4, 9) Clos compose IO-port-ordering — confirmed broken**: this
+   was a hypothesis pre-result; the result is in (Singular
+   classification). See "Debugging approach for the Singular result"
+   above. Likely fix is in `compose_parallel`'s ordering or in how
+   `compose_series` indexes the perm.
 
 3. **MX2b on (1, 3) with direction freedom**: documented in the RFP.
    User said pure-balancers (MX3) are a separate workstream so MX2b
