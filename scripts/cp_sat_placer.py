@@ -352,26 +352,45 @@ def _input_routes_for_root(
     Returns `(input_tiles, routes)`. Each route is
     `(src, sink, sink_dir)` for [`_route_belts`].
 
-    n=1: feed port 0 (left tile of root).
-    n=2: feed both root ports directly.
-    n=3: 2 direct + 1 sideload from west: (x_root - 1, y_root - 1)
-         heads east into the south-belt above port 0. Requires the
-         routing model's per-lane semantics (phase 2+) to land items
-         on the correct lane.
+    Each direct input boundary belt is modeled as **two** length-1
+    routes at the same tile. Real Factorio input belts arrive with
+    items on both lanes (the upstream bus or balancer feeds both),
+    so two routes at the same `(t, S)` sink tile force both lanes
+    to be claimed via the per-lane cap (≤ 1 route per
+    `(tile, dir, lane)`). Without this, single-route input modeling
+    leaves the "other" lane of the boundary belt available for
+    sideload — under-counting saturation.
+
+    Sideload inputs (n=3 case) emit a single route, since they only
+    fill the lane the side-feed forces.
+
+    n=1: 2 lane-routes feeding port 0 (left tile of root).
+    n=2: 4 lane-routes (2 per port).
+    n=3: 4 + 1 sideload from west.
     """
     DIR_S = 2
     direct_left = (x_root, y_root - 1)
     direct_right = (x_root + 1, y_root - 1)
     if n == 1:
-        return [direct_left], [(direct_left, direct_left, DIR_S)]
+        # Two routes at the same tile force both lanes to be claimed.
+        return [direct_left], [
+            (direct_left, direct_left, DIR_S),
+            (direct_left, direct_left, DIR_S),
+        ]
     if n == 2:
         tiles = [direct_left, direct_right]
-        return tiles, [(t, t, DIR_S) for t in tiles]
+        routes = []
+        for t in tiles:
+            routes.append((t, t, DIR_S))
+            routes.append((t, t, DIR_S))
+        return tiles, routes
     if n == 3:
         sideload = (x_root - 1, y_root - 1)
         tiles = [direct_left, direct_right, sideload]
         routes = [
             (direct_left, direct_left, DIR_S),
+            (direct_left, direct_left, DIR_S),
+            (direct_right, direct_right, DIR_S),
             (direct_right, direct_right, DIR_S),
             (sideload, direct_left, DIR_S),
         ]
@@ -697,7 +716,8 @@ def main() -> int:
         (2, 2): lambda: place_single_splitter(2, 2),
         (1, 4): lambda: place_x_to_four(1),
         (2, 4): lambda: place_x_to_four(2),
-        (3, 4): lambda: place_x_to_four(3),
+        # (3, 4) deferred: per-lane cap correctly rejects it. Needs a
+        # structural mitigation (lane-balancer splitter) — phase 3.
         (1, 8): lambda: place_x_to_eight(1),
         (2, 8): lambda: place_x_to_eight(2),
         (1, 16): lambda: place_x_to_sixteen(1),
