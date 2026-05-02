@@ -89,6 +89,8 @@ def _route_belts(
     routes: list[tuple[tuple[int, int], tuple[int, int], int]],
     width: int,
     height: int,
+    rates: list[int] | None = None,
+    lane_cap: int = 1,
 ) -> dict[tuple[int, int], int] | None:
     """Solve belt routing on the grid given fixed splitter positions.
 
@@ -100,14 +102,29 @@ def _route_belts(
         will carry a belt in `sink_dir` (so its outflow drops into the
         downstream consumer — typically south into a child splitter).
 
+    `rates` and `lane_cap` carry the rate-aware encoding: each route
+    consumes `rates[r]` units of lane capacity and the per-lane cap is
+    `lane_cap`. Defaults (`rates = [1] * len(routes)`, `lane_cap = 1`)
+    reproduce the discrete-cap behavior — one route per lane. For shapes
+    whose arcs carry fractional belt rates (e.g. coprime feedback
+    channels at rate 0.2), pass per-route rates and a higher lane cap so
+    multiple low-rate routes can share a lane when their sum fits.
+
     Returns a dict mapping each used belt tile to a direction code (one
     of 0/1/2/3 = N/E/S/W), or `None` if no routing is feasible.
 
-    Each free tile is either empty or carries one belt direction; tiles
-    are not shared between routes (no sideloading in this MVP). Splitter
-    tiles are off-limits.
+    Splitter tiles are off-limits to belts. Multiple routes may share a
+    free tile if they agree on belt direction and the per-lane cap is
+    not exceeded — phase 2's lifted tile-exclusivity rule.
     """
     from ortools.sat.python import cp_model
+
+    if rates is None:
+        rates = [1] * len(routes)
+    elif len(rates) != len(routes):
+        raise ValueError(
+            f"rates length {len(rates)} != routes length {len(routes)}"
+        )
 
     occupied = _splitter_tiles(splitter_positions)
     free: list[tuple[int, int]] = [
@@ -149,17 +166,23 @@ def _route_belts(
         """Lane-summed flow indicator: 1 iff route r uses (t, d) on either lane."""
         return sum(f_lane[(r, t, d, lane)] for lane in range(n_lanes))
 
-    # Per-lane cap: each (tile, direction, lane) carries at most one
-    # route. Half a belt per route in the normalized fluid model. With
-    # the at-most-one-route-per-tile constraint below this is currently
-    # redundant; it becomes load-bearing in phase 2 when we drop the
-    # tile-exclusivity rule and let routes share tiles on different
-    # lanes (sideloading).
+    # Per-lane cap: weighted sum of route rates ≤ lane_cap.
+    # In the default discrete encoding (`rates = [1, 1, ...]`,
+    # `lane_cap = 1`), each lane carries at most one route. With
+    # rate-aware encoding, multiple low-rate routes can share a lane if
+    # their rates sum within `lane_cap`. This is the model unblock for
+    # coprime-shape feedback channels where 2-3 routes at rate 0.2 each
+    # need to share a lane (rate-aware: `0.4 ≤ 0.5`; discrete:
+    # `2 ≰ 1`).
     for t in free:
         for d in _INTERNAL_DIRS:
             for lane in range(n_lanes):
                 model.add(
-                    sum(f_lane[(r, t, d, lane)] for r in range(len(routes))) <= 1
+                    sum(
+                        rates[r] * f_lane[(r, t, d, lane)]
+                        for r in range(len(routes))
+                    )
+                    <= lane_cap
                 )
 
     # Belt at (t, d) iff some route uses (t, d) on any lane. The
@@ -170,9 +193,16 @@ def _route_belts(
     # lanes; this OR-style equivalence still holds.
     for t in free:
         for d in _INTERNAL_DIRS:
-            s = sum(f_lane[(r, t, d, lane)] for r in range(len(routes)) for lane in range(n_lanes))
+            s = sum(
+                f_lane[(r, t, d, lane)]
+                for r in range(len(routes))
+                for lane in range(n_lanes)
+            )
             model.add(s >= belt[(t, d)])
-            model.add(s <= 2 * belt[(t, d)])
+            # Big-M = max possible route uses at this (t, d). With
+            # rate-aware caps allowing multiple low-rate routes per
+            # lane, this is bounded only by the total number of routes.
+            model.add(s <= len(routes) * belt[(t, d)])
 
     # Each route uses at most one (direction, lane) per tile. Without
     # this a route could occupy multiple lanes/dirs at the same tile,
