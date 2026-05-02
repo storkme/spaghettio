@@ -43,6 +43,168 @@ import time
 from typing import Any
 
 
+# Direction codes (internal): 0=N, 1=E, 2=S, 3=W. Mapped to Factorio's
+# 0/2/4/6 at output time.
+_INTERNAL_DIRS = (0, 1, 2, 3)
+_DELTAS = ((0, -1), (1, 0), (0, 1), (-1, 0))
+_OPPOSITE = (2, 3, 0, 1)
+_FACTORIO_DIR = (0, 2, 4, 6)
+
+
+def _splitter_tiles(positions: list[tuple[int, int]]) -> set[tuple[int, int]]:
+    """Tiles occupied by the given south-facing 2x1 splitter anchors."""
+    tiles: set[tuple[int, int]] = set()
+    for sx, sy in positions:
+        tiles.add((sx, sy))
+        tiles.add((sx + 1, sy))
+    return tiles
+
+
+def _route_belts(
+    splitter_positions: list[tuple[int, int]],
+    routes: list[tuple[tuple[int, int], tuple[int, int], int]],
+    width: int,
+    height: int,
+) -> dict[tuple[int, int], int] | None:
+    """Solve belt routing on the grid given fixed splitter positions.
+
+    Each route in `routes` is `(src_tile, sink_tile, sink_dir)`:
+      - `src_tile` is where the path begins (typically the tile directly
+        south of a parent splitter's output port). It is assumed to be a
+        free tile; the solver picks the belt direction at this tile.
+      - `sink_tile` is where the path ends. It must be a free tile and
+        will carry a belt in `sink_dir` (so its outflow drops into the
+        downstream consumer — typically south into a child splitter).
+
+    Returns a dict mapping each used belt tile to a direction code (one
+    of 0/1/2/3 = N/E/S/W), or `None` if no routing is feasible.
+
+    Each free tile is either empty or carries one belt direction; tiles
+    are not shared between routes (no sideloading in this MVP). Splitter
+    tiles are off-limits.
+    """
+    from ortools.sat.python import cp_model
+
+    occupied = _splitter_tiles(splitter_positions)
+    free: list[tuple[int, int]] = [
+        (x, y)
+        for x in range(width)
+        for y in range(height)
+        if (x, y) not in occupied
+    ]
+    free_set = set(free)
+    for src, sink, _ in routes:
+        if src not in free_set or sink not in free_set:
+            return None
+
+    model = cp_model.CpModel()
+
+    # Per free tile, per direction: belt[(t, d)] = "tile t carries a
+    # belt heading d".  Each tile has at most one direction.
+    belt = {
+        (t, d): model.new_bool_var(f"belt_{t[0]}_{t[1]}_d{d}")
+        for t in free
+        for d in _INTERNAL_DIRS
+    }
+    for t in free:
+        model.add(sum(belt[(t, d)] for d in _INTERNAL_DIRS) <= 1)
+
+    # Per route, per free tile, per direction: f[(r, t, d)] = "route r
+    # uses tile t with belt direction d".  Tying f to belt:
+    # f[(r, t, d)] = 1 implies belt[(t, d)] = 1.
+    f = {
+        (r, t, d): model.new_bool_var(f"f_r{r}_{t[0]}_{t[1]}_d{d}")
+        for r in range(len(routes))
+        for t in free
+        for d in _INTERNAL_DIRS
+    }
+    # Belt at (t, d) iff some route uses (t, d). Combined with
+    # at-most-one-direction-per-tile and at-most-one-route-per-tile
+    # (below), this means belts are exactly the tiles needed by routes.
+    for t in free:
+        for d in _INTERNAL_DIRS:
+            model.add(
+                belt[(t, d)]
+                == sum(f[(r, t, d)] for r in range(len(routes)))
+            )
+
+    # No tile shared between routes (MVP: no sideloading).
+    for t in free:
+        model.add(
+            sum(f[(r, t, d)] for r in range(len(routes)) for d in _INTERNAL_DIRS)
+            <= 1
+        )
+
+    # Per-route flow constraints. Conservation model:
+    #   - At each free tile, "on_route" ∈ {0, 1} = sum of direction
+    #     bools for this route.
+    #   - "Inflow" at tile t = number of neighbors feeding t (a neighbor
+    #     n feeds t if n is on the route AND n's belt points at t).
+    #   - At source: on_route = 1, inflow = 0.
+    #   - At sink: on_route = 1, inflow = 1 (via sink_dir's predecessor).
+    #   - Otherwise: inflow == on_route. If on the route, exactly one
+    #     neighbor feeds; outgoing direction must land on a free tile
+    #     also on the route.
+    for r, (src, sink, sink_dir) in enumerate(routes):
+        # Sink belt's direction is fixed.
+        model.add(belt[(sink, sink_dir)] == 1)
+        model.add(f[(r, sink, sink_dir)] == 1)
+
+        if src != sink:
+            # Source has exactly one outgoing direction.
+            model.add(sum(f[(r, src, d)] for d in _INTERNAL_DIRS) == 1)
+
+        for t in free:
+            on_route = sum(f[(r, t, d)] for d in _INTERNAL_DIRS)
+
+            # Inflow: a neighbor n in direction d_n_to_t (relative to t)
+            # feeds t iff n's belt heads d_n_to_t (toward t).
+            in_flows = []
+            for d_n_to_t in _INTERNAL_DIRS:
+                opp_dx, opp_dy = _DELTAS[_OPPOSITE[d_n_to_t]]
+                n = (t[0] + opp_dx, t[1] + opp_dy)
+                if n in free_set:
+                    in_flows.append(f[(r, n, d_n_to_t)])
+
+            if t == src:
+                # No inflow at source.
+                if in_flows:
+                    model.add(sum(in_flows) == 0)
+            else:
+                # Inflow matches on_route.
+                model.add(sum(in_flows) == on_route)
+
+            # Outflow: if heading direction d at t, the next tile must
+            # be a free tile on the route — except at the sink, whose
+            # next tile is the consumer splitter (off-route).
+            if t != sink:
+                for d in _INTERNAL_DIRS:
+                    ndx, ndy = _DELTAS[d]
+                    nxt = (t[0] + ndx, t[1] + ndy)
+                    if nxt not in free_set:
+                        model.add(f[(r, t, d)] == 0)
+                    else:
+                        on_route_nxt = sum(
+                            f[(r, nxt, dd)] for dd in _INTERNAL_DIRS
+                        )
+                        model.add(on_route_nxt >= 1).only_enforce_if(
+                            f[(r, t, d)]
+                        )
+
+    solver = cp_model.CpSolver()
+    status = solver.solve(model)
+    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        return None
+
+    out: dict[tuple[int, int], int] = {}
+    for t in free:
+        for d in _INTERNAL_DIRS:
+            if solver.value(belt[(t, d)]):
+                out[t] = d
+                break
+    return out
+
+
 def emit(payload: dict[str, Any]) -> None:
     json.dump(payload, sys.stdout)
     sys.stdout.write("\n")
@@ -202,27 +364,23 @@ def place_one_to_four() -> dict[str, Any]:
 
 
 def place_one_to_eight() -> dict[str, Any]:
-    """`(1, 8)` 7-splitter tree, placed via real CP-SAT.
+    """`(1, 8)` 7-splitter tree, placed via real CP-SAT for both
+    splitter positions and belt routing.
 
-    Phase 2 of the placement RFP. The CP-SAT model has 7 splitter
-    rectangles with `add_no_overlap_2d` plus structural equalities:
-      - Tight-stack between level-1 and level-2: each level-2
-        splitter is at `(level1.x ± 1, level1.y + 1)`.
-      - Routing-row offsets between root and level-1: each level-1
-        splitter is at `(root.x ± 2, root.y + 2)`. The 1-row gap
-        accommodates the 4-belt routing strip W-S-E-S.
+    Two-phase model: the structural CP-SAT model fixes splitter
+    positions (root + routing-row offset to level-1, tight-stack to
+    level-2), then [`_route_belts`] solves the per-tile belt
+    directions via flow-conservation constraints over a tile graph.
+    Replaces the prior hand-coded W-S-E-S routing strip with a
+    generic router that scales to any graph topology.
 
-    With width 8, height 6, the constraint set has only one valid
-    assignment (root at (3, 1)); the model proves this rather than
-    asserting it. The same constraint pattern extends to (1, 16)
-    with a 5-row gap and additional routing belts.
+    Width 8, height 6. Splitter ordering: 0 = root, 1-2 = level-1,
+    3-6 = level-2.
     """
     from ortools.sat.python import cp_model
 
     width, height = 8, 6
     n_splitters = 7
-    # Splitter ordering: 0 = root, 1 = level-1-left, 2 = level-1-right,
-    # 3-4 = level-2 under level-1-left, 5-6 = level-2 under level-1-right.
     model = cp_model.CpModel()
     xs = [model.new_int_var(0, width - 2, f"x{i}") for i in range(n_splitters)]
     ys = [model.new_int_var(0, height - 1, f"y{i}") for i in range(n_splitters)]
@@ -253,7 +411,7 @@ def place_one_to_eight() -> dict[str, Any]:
     model.add(ys[5] == ys[2] + 1)
     model.add(ys[6] == ys[2] + 1)
 
-    # Boundary rows: input row above root, output row below level-2.
+    # Boundary rows.
     model.add(ys[0] >= 1)
     model.add(ys[0] + 4 <= height - 1)
     model.add(xs[0] - 3 >= 0)
@@ -267,45 +425,54 @@ def place_one_to_eight() -> dict[str, Any]:
     pos = [(solver.value(xs[i]), solver.value(ys[i])) for i in range(n_splitters)]
     x_root, y_root = pos[0]
 
+    # Derive routes from the tree topology + splitter positions. Each
+    # route is (src_tile, sink_tile, sink_dir) where sink_dir is south
+    # (= 2 internal, = 4 Factorio) so items drop into the next splitter
+    # or out of the grid.
+    DIR_S = 2
+    routes: list[tuple[tuple[int, int], tuple[int, int], int]] = []
+    # Input belt feeds root's right tile (port 1) via south drop.
+    input_tile = (x_root + 1, y_root - 1)
+    routes.append((input_tile, input_tile, DIR_S))
+    # Root → level-1: each side picks the closer L1 input port.
+    for parent_idx, port, child_idx in ((0, 0, 1), (0, 1, 2)):
+        px, py = pos[parent_idx]
+        cx, cy = pos[child_idx]
+        drop = (px + port, py + 1)
+        approach_port = 0 if drop[0] < cx else 1
+        approach = (cx + approach_port, cy - 1)
+        routes.append((drop, approach, DIR_S))
+    # L1 → L2: tight-stack, no belt needed.
+    # L2 → outputs: 8 length-1 south belts on the bottom row.
+    for parent_idx in (3, 4, 5, 6):
+        px, py = pos[parent_idx]
+        for port in (0, 1):
+            drop = (px + port, py + 1)
+            routes.append((drop, drop, DIR_S))
+
+    belt_dirs = _route_belts(pos, routes, width, height)
+    if belt_dirs is None:
+        raise RuntimeError("(1, 8) belt routing UNSAT")
+
     entities: list[dict[str, Any]] = []
-    # Input belt above root's right tile (matches phase 1 layout — feeds
-    # root's port-1 input via south flow).
-    entities.append(
-        {"name": "transport-belt", "x": x_root + 1, "y": y_root - 1, "direction": 4}
-    )
-    # Splitters.
     for x, y in pos:
         entities.append({"name": "splitter", "x": x, "y": y, "direction": 4})
-    # Routing row at y = y_root + 1. Direction codes: 0=N, 2=E, 4=S, 6=W.
-    routing_y = y_root + 1
-    entities.append(
-        {"name": "transport-belt", "x": x_root, "y": routing_y, "direction": 6}
-    )
-    entities.append(
-        {"name": "transport-belt", "x": x_root - 1, "y": routing_y, "direction": 4}
-    )
-    entities.append(
-        {"name": "transport-belt", "x": x_root + 1, "y": routing_y, "direction": 2}
-    )
-    entities.append(
-        {"name": "transport-belt", "x": x_root + 2, "y": routing_y, "direction": 4}
-    )
-    # Output row at y = level-2.y + 1, cols spanning all 4 level-2 splitters.
+    for (x, y), d in belt_dirs.items():
+        entities.append(
+            {"name": "transport-belt", "x": x, "y": y, "direction": _FACTORIO_DIR[d]}
+        )
+
     output_y = pos[3][1] + 1
     leftmost = pos[3][0]
     rightmost = pos[6][0] + 1
     output_cols = list(range(leftmost, rightmost + 1))
-    for col in output_cols:
-        entities.append(
-            {"name": "transport-belt", "x": col, "y": output_y, "direction": 4}
-        )
     return {
         "n_inputs": 1,
         "n_outputs": 8,
         "width": width,
         "height": height,
         "entities": entities,
-        "input_tiles": [[x_root + 1, y_root - 1]],
+        "input_tiles": [list(input_tile)],
         "output_tiles": [[c, output_y] for c in output_cols],
     }
 
