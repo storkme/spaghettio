@@ -210,4 +210,73 @@ fn debug_single_shape() {
     for issue in &issues {
         eprintln!("  {:?} [{}] at ({:?},{:?}): {}", issue.severity, issue.category, issue.x, issue.y, issue.message);
     }
+
+    // Dump the entity layout as ASCII art so we can visualise what's at the
+    // suspect coordinates without decoding the source blueprint.
+    eprintln!("\n=== ({m}, {n}) entity grid (W={}, H={}) ===", t.width, t.height);
+    eprintln!("input_tiles = {:?}", t.input_tiles);
+    eprintln!("output_tiles = {:?}", t.output_tiles);
+    let mut grid: Vec<Vec<String>> =
+        (0..t.height).map(|_| (0..t.width).map(|_| ".".to_string()).collect()).collect();
+    for e in t.entities.iter() {
+        let glyph = match (e.name, e.io_type, e.direction) {
+            ("transport-belt", _, 0) => "↑",
+            ("transport-belt", _, 2) => "→",
+            ("transport-belt", _, 4) => "↓",
+            ("transport-belt", _, 6) => "←",
+            ("splitter", _, 0) => "S↑",
+            ("splitter", _, 2) => "S→",
+            ("splitter", _, 4) => "S↓",
+            ("splitter", _, 6) => "S←",
+            ("underground-belt", Some("input"), 0) => "U↑i",
+            ("underground-belt", Some("input"), 2) => "U→i",
+            ("underground-belt", Some("input"), 4) => "U↓i",
+            ("underground-belt", Some("input"), 6) => "U←i",
+            ("underground-belt", Some("output"), 0) => "U↑o",
+            ("underground-belt", Some("output"), 2) => "U→o",
+            ("underground-belt", Some("output"), 4) => "U↓o",
+            ("underground-belt", Some("output"), 6) => "U←o",
+            _ => "?",
+        };
+        if (e.x as usize) < grid[0].len() && (e.y as usize) < grid.len() {
+            grid[e.y as usize][e.x as usize] = glyph.to_string();
+        }
+    }
+    eprint!("    ");
+    for x in 0..t.width {
+        eprint!("{:>3} ", x);
+    }
+    eprintln!();
+    for (y, row) in grid.iter().enumerate() {
+        eprint!("{:>3}: ", y);
+        for cell in row {
+            eprint!("{:>3} ", cell);
+        }
+        eprintln!();
+    }
+
+    // Also list the raw entity records around the first issue coordinate so
+    // we can see what's driving the rate value.
+    if let Some(first) = issues.iter().find(|i| matches!(i.severity, fucktorio_core::validate::Severity::Error)) {
+        let (Some(ix), Some(iy)) = (first.x, first.y) else { return };
+        eprintln!("\n=== entities within ±2 of ({ix}, {iy}) ===");
+        for e in t.entities.iter() {
+            if (e.x - ix).abs() <= 2 && (e.y - iy).abs() <= 2 {
+                eprintln!("  ({}, {}) name={} dir={} io={:?}", e.x, e.y, e.name, e.direction, e.io_type);
+            }
+        }
+    }
+
+    // Compute and dump the full lane-rate map so we can see propagation.
+    use fucktorio_core::bus::template_validate::compute_template_lane_rates;
+    let rates = compute_template_lane_rates(BalancerTemplateRef::from(t));
+    eprintln!("\n=== lane rates (left, right) per tile ===");
+    let mut keys: Vec<_> = rates.keys().copied().collect();
+    keys.sort_by_key(|&(x, y)| (y, x));
+    for (x, y) in keys {
+        let [l, r] = rates[&(x, y)];
+        if l > 0.01 || r > 0.01 {
+            eprintln!("  ({x:>2}, {y:>2}): L={l:6.3}  R={r:6.3}");
+        }
+    }
 }

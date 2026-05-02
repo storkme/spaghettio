@@ -2089,6 +2089,14 @@ fn compute_lane_rates_impl(
         }
     }
 
+    // Snapshot the seed rates (lane_injections + external-source seeds) before
+    // the topo-sort mutates lane_rates. The iterative convergence pass below
+    // uses these as the immutable "always-present" base for non-splitter tiles:
+    // each iteration recomputes `next[pos] = seed_rates[pos] + feeder_sum(pos)`,
+    // and seed values would otherwise be lost after the first iteration since
+    // feeders accumulate on top of whatever's there.
+    let seed_rates: FxHashMap<(i32, i32), [f64; 2]> = lane_rates.clone();
+
     let mut processed: FxHashSet<(i32, i32)> = FxHashSet::default();
     let mut splitter_input_ready: FxHashSet<(i32, i32)> = FxHashSet::default();
     let mut queue: VecDeque<(i32, i32)> = in_degree
@@ -2327,6 +2335,102 @@ fn compute_lane_rates_impl(
         }
     }
 
+    // Iterate-to-convergence pass. The Kahn topo-sort + cycle-breaker above
+    // gives correct rates for acyclic belt sub-graphs but settles for whatever
+    // it produces on the first reach into balancer-internal feedback loops —
+    // splitter pairs in those loops can end up with unbalanced halves (one
+    // half picks up its feeder rate, the other half's feedback hasn't been
+    // computed yet). This pass treats the rate map as a fixed point of a
+    // linear transfer function `T(x) = x` and iterates Jacobi-style until it
+    // converges.  Splitters dampen cycle gain by 0.5 per pass, so feedback
+    // error decays geometrically; ~14 iterations suffice to drop a 15/s seed
+    // below 1e-3.
+    {
+        const MAX_ITER: usize = 200;
+        const EPS: f64 = 1e-5;
+
+        // Pre-collect splitter pairs (canonical order) so we visit each once.
+        let mut pair_set: Vec<((i32, i32), (i32, i32))> = Vec::new();
+        let mut seen_pair: FxHashSet<((i32, i32), (i32, i32))> = FxHashSet::default();
+        for (&a, &b) in &splitter_sibling {
+            let key = if a < b { (a, b) } else { (b, a) };
+            if seen_pair.insert(key) {
+                pair_set.push(key);
+            }
+        }
+
+        for _iter in 0..MAX_ITER {
+            let prev = lane_rates.clone();
+            let mut next: FxHashMap<(i32, i32), [f64; 2]> = FxHashMap::default();
+
+            // Phase 1: non-splitter, non-UG-output tiles.
+            // rate = seed (injections + external sources) + sum of feeder contributions.
+            for &pos in belt_dir_map.keys() {
+                if splitter_sibling.contains_key(&pos) || ug_output_tiles.contains(&pos) {
+                    continue;
+                }
+                let seed = seed_rates.get(&pos).copied().unwrap_or([0.0, 0.0]);
+                let fc = feeder_contributions_for_tile(pos, &prev, &feeders, &belt_dir_map);
+                next.insert(pos, [seed[0] + fc[0], seed[1] + fc[1]]);
+            }
+
+            // Phase 2: splitter pairs. Output = balanced average of pair's
+            // total feeder contribution.
+            for &(a, b) in &pair_set {
+                let a_fc = feeder_contributions_for_tile(a, &prev, &feeders, &belt_dir_map);
+                let b_fc = feeder_contributions_for_tile(b, &prev, &feeders, &belt_dir_map);
+                let total_l = a_fc[0] + b_fc[0];
+                let total_r = a_fc[1] + b_fc[1];
+                let half = [total_l / 2.0, total_r / 2.0];
+                next.insert(a, half);
+                next.insert(b, half);
+            }
+
+            // Phase 3: UG-output tiles inherit from the surface tile behind
+            // their paired UG-input. Use `next` (already updated in phase 1/2)
+            // when available, else fall back to `prev`. The walker ADDs behind
+            // to any seed (e.g. an inserter dropping onto the UG-output's
+            // surface tile contributes alongside the underground throughput),
+            // so we mirror that here — REPLACE would silently drop injected
+            // rate.
+            for &ug_out in &ug_output_tiles {
+                let Some(&paired_input) = ug_output_to_input.get(&ug_out) else {
+                    continue;
+                };
+                let Some(&inp_d) = ug_input_dir.get(&paired_input) else {
+                    continue;
+                };
+                let (idx, idy) = dir_to_vec(inp_d);
+                let behind = (paired_input.0 - idx, paired_input.1 - idy);
+                let behind_rates = next
+                    .get(&behind)
+                    .copied()
+                    .or_else(|| prev.get(&behind).copied())
+                    .unwrap_or([0.0, 0.0]);
+                let seed = seed_rates.get(&ug_out).copied().unwrap_or([0.0, 0.0]);
+                next.insert(ug_out, [seed[0] + behind_rates[0], seed[1] + behind_rates[1]]);
+            }
+
+            // Convergence check: max per-lane absolute difference across all tiles.
+            let mut max_change: f64 = 0.0;
+            for (pos, &[nl, nr]) in &next {
+                let &[pl, pr] = prev.get(pos).unwrap_or(&[0.0, 0.0]);
+                let dl = (nl - pl).abs();
+                let dr = (nr - pr).abs();
+                if dl > max_change {
+                    max_change = dl;
+                }
+                if dr > max_change {
+                    max_change = dr;
+                }
+            }
+            lane_rates = next;
+            if max_change < EPS {
+                break;
+            }
+        }
+    }
+
     // Post-pass: surface UG-input tiles inherit their upstream surface
     // belt's lane rates. Inserters can pick from both lanes of any
     // belt's surface, UG entries and exits included (rule I6). UG-out
@@ -2351,6 +2455,90 @@ fn compute_lane_rates_impl(
     }
 
     lane_rates
+}
+
+/// Pull-direction analogue of [`do_propagate`]'s lane logic: given a feeder
+/// at `fp` with rates `fr` flowing into receiver `pos`, return the per-lane
+/// contribution that lands on `pos`.  Used by the iterative convergence pass
+/// in [`compute_lane_rates_impl`] which needs to recompute each tile's rate
+/// from current upstream rates without the side effects of the push-direction
+/// `do_propagate`.
+///
+/// Mirrors the four cases in `do_propagate`:
+/// - same direction → straight pass-through, lanes preserved
+/// - feeder is directly behind `pos` → also straight (e.g. UG-output → belt)
+/// - else, if `pos` has any straight feeder → sideload (everything onto one
+///   lane based on which side `fp` sits)
+/// - else → 90-degree turn (lanes swap on CW, preserve on CCW)
+fn feeder_contribution(
+    fp: (i32, i32),
+    pos: (i32, i32),
+    fr: [f64; 2],
+    feeders: &FxHashMap<(i32, i32), Vec<((i32, i32), u8)>>,
+    belt_dir_map: &FxHashMap<(i32, i32), EntityDirection>,
+) -> [f64; 2] {
+    let fd = match belt_dir_map.get(&fp) {
+        Some(&d) => d,
+        None => return [0.0, 0.0],
+    };
+    let pd = match belt_dir_map.get(&pos) {
+        Some(&d) => d,
+        None => return [0.0, 0.0],
+    };
+    let (fdx, fdy) = dir_to_vec(fd);
+    let (pdx, pdy) = dir_to_vec(pd);
+
+    if fd == pd {
+        return fr;
+    }
+    let behind_pos = (pos.0 - pdx, pos.1 - pdy);
+    if fp == behind_pos {
+        return fr;
+    }
+
+    let (left_dx, left_dy) = (-pdy, pdx);
+    let pos_feeders = feeders.get(&pos);
+    let has_straight = pos_feeders.is_some_and(|fs| fs.iter().any(|(_, ft)| *ft == 0));
+
+    if has_straight {
+        let rel_x = fp.0 - pos.0;
+        let rel_y = fp.1 - pos.1;
+        let dot = rel_x * left_dx + rel_y * left_dy;
+        let total = fr[0] + fr[1];
+        if dot > 0 {
+            [total, 0.0]
+        } else {
+            [0.0, total]
+        }
+    } else {
+        let cross = fdx * pdy - fdy * pdx;
+        if cross > 0 {
+            [fr[1], fr[0]]
+        } else {
+            [fr[0], fr[1]]
+        }
+    }
+}
+
+/// Sum every feeder's contribution into `pos`.  Wrapper over
+/// [`feeder_contribution`] that walks `pos`'s feeder list.
+fn feeder_contributions_for_tile(
+    pos: (i32, i32),
+    rates: &FxHashMap<(i32, i32), [f64; 2]>,
+    feeders: &FxHashMap<(i32, i32), Vec<((i32, i32), u8)>>,
+    belt_dir_map: &FxHashMap<(i32, i32), EntityDirection>,
+) -> [f64; 2] {
+    let Some(my_feeders) = feeders.get(&pos) else {
+        return [0.0, 0.0];
+    };
+    let mut total = [0.0, 0.0];
+    for &(fp, _ft) in my_feeders {
+        let fr = rates.get(&fp).copied().unwrap_or([0.0, 0.0]);
+        let contrib = feeder_contribution(fp, pos, fr, feeders, belt_dir_map);
+        total[0] += contrib[0];
+        total[1] += contrib[1];
+    }
+    total
 }
 
 fn do_propagate(

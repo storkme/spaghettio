@@ -25,6 +25,7 @@ use crate::models::{ItemFlow, LayoutResult, PlacedEntity, SolverResult};
 use crate::validate::belt_flow::{
     check_lane_throughput, check_underground_belt_entry_sideload,
     check_underground_belt_pairs, check_underground_belt_sideloading,
+    compute_lane_rates,
 };
 use crate::validate::ValidationIssue;
 
@@ -86,6 +87,35 @@ pub fn validate_template_lanes(template: BalancerTemplateRef<'_>) -> Vec<Validat
     issues.extend(check_underground_belt_entry_sideload(&layout));
     issues.extend(check_lane_throughput(&layout, Some(&solver)));
     issues
+}
+
+/// Debug helper — synthesise the same layout as `validate_template_lanes`
+/// and return the per-tile lane-rate map. Used by `debug_single_shape` in
+/// `tests/balancer_lane_audit.rs` to trace propagation.
+pub fn compute_template_lane_rates(
+    template: BalancerTemplateRef<'_>,
+) -> rustc_hash::FxHashMap<(i32, i32), [f64; 2]> {
+    let entities = synthesize_entities(template);
+    let layout = LayoutResult {
+        entities,
+        width: template.width as i32,
+        height: template.height as i32,
+        ..Default::default()
+    };
+    let belt_throughput = lane_capacity("transport-belt") * 2.0;
+    let saturate = belt_throughput * template.n_inputs.min(template.n_outputs) as f64;
+    let solver = SolverResult {
+        machines: Vec::new(),
+        external_inputs: vec![ItemFlow {
+            item: TEST_ITEM.to_string(),
+            rate: saturate,
+            is_fluid: false,
+            module_id: 0,
+        }],
+        external_outputs: Vec::new(),
+        dependency_order: Vec::new(),
+    };
+    compute_lane_rates(&layout, Some(&solver))
 }
 
 /// Convert template entities to [`PlacedEntity`]s. Only the *input
