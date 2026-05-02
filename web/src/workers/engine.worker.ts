@@ -4,6 +4,7 @@ import wasmInit, {
   solve_fixture,
   all_producible_items,
   all_producer_machines,
+  balancer_showcase,
   default_machine_for_item,
   export_blueprint,
   improve_region_streaming,
@@ -53,7 +54,8 @@ type Request =
       budgetMs: number;
       maxIters: number;
     }
-  | { id: number; method: "seedZoneCache"; bytes: Uint8Array };
+  | { id: number; method: "seedZoneCache"; bytes: Uint8Array }
+  | { id: number; method: "balancerShowcase"; maxInputs: number; maxOutputs: number };
 
 let ready: Promise<void> | null = null;
 
@@ -180,6 +182,9 @@ self.onmessage = async (e: MessageEvent<Request>) => {
         break;
       case "seedZoneCache":
         result = seed_zone_cache(req.bytes);
+        break;
+      case "balancerShowcase":
+        result = balancer_showcase(req.maxInputs, req.maxOutputs);
         break;
       case "improveRegionStreaming": {
         // Streams SatImprovement events through the same batched channel

@@ -517,6 +517,41 @@ export async function cancelInFlight(): Promise<void> {
   }
 }
 
+/**
+ * One balancer template — entities stamped at origin (0, 0), with the
+ * source label and footprint metadata. Mirrors the Rust
+ * `ShowcaseTemplate` in `crates/wasm-bindings/src/lib.rs`.
+ */
+export interface BalancerShowcaseTemplate {
+  source: string;
+  width: number;
+  height: number;
+  n_inputs: number;
+  n_outputs: number;
+  entities: PlacedEntity[];
+}
+
+/** Library + generated entries for a single (n_inputs, n_outputs) shape. */
+export interface BalancerShowcaseCell {
+  n_inputs: number;
+  n_outputs: number;
+  library: BalancerShowcaseTemplate | null;
+  generated: BalancerShowcaseTemplate | null;
+}
+
+/** Enumerate templates for `(1..=maxInputs) × (1..=maxOutputs)`. Single
+ *  WASM round-trip; consumed by the `/balancers` showcase route. */
+function balancerShowcase(
+  maxInputs: number,
+  maxOutputs: number,
+): Promise<BalancerShowcaseCell[]> {
+  return call<BalancerShowcaseCell[]>({
+    method: "balancerShowcase",
+    maxInputs,
+    maxOutputs,
+  });
+}
+
 export type Engine = {
   solve: typeof solve;
   allProducibleItems: typeof allProducibleItems;
@@ -530,6 +565,7 @@ export type Engine = {
   solveFixture: typeof solveFixture;
   improveRegion: typeof improveRegion;
   optimizeAllRegions: typeof optimizeAllRegions;
+  balancerShowcase: typeof balancerShowcase;
 };
 
 export function getEngine(): Engine {
@@ -546,5 +582,6 @@ export function getEngine(): Engine {
     solveFixture,
     improveRegion,
     optimizeAllRegions,
+    balancerShowcase,
   };
 }
