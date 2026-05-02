@@ -1410,20 +1410,33 @@ def solve_pure_routing(req: dict) -> dict:
                                 f"u_{cx}_{cy}_{d}_{L}_{e_idx}"
                             )
 
-    # No arcs leaving the grid.
+    # No arcs leaving the grid — except south at the bottom row, which
+    # represents the junction's exit into stage2's input belts. The dst
+    # cell is forced to a south-facing belt below; that belt's south arc
+    # leaves the grid and counts as the per-edge outflow that balances the
+    # inflow from above.
     for cx in range(width):
         for cy in range(height):
             for d in range(4):
                 ncx, ncy = cx + DIR_STEPS[d][0], cy + DIR_STEPS[d][1]
                 if not (0 <= ncx < width and 0 <= ncy < height):
+                    if d == 2 and cy == height - 1:
+                        continue  # south exit allowed at the bottom row.
                     for e_idx in range(len(edges)):
                         model.Add(arcs[(cx, cy, d, e_idx)] == 0)
-
     # At most one outgoing direction per (cell, edge).
     for cx in range(width):
         for cy in range(height):
             for e_idx in range(len(edges)):
                 model.AddAtMostOne([arcs[(cx, cy, d, e_idx)] for d in range(4)])
+
+    # Force a south-facing belt at every dst cell — this is the belt that
+    # physically passes flow out of the junction into stage2's input belt
+    # one row below. Without this, the dst cell ends up empty (or wrong-
+    # facing) and the recovered topology drops the splitter→splitter edge.
+    for e_idx, dst in enumerate(edge_dst):
+        dx, dy = dst
+        model.Add(arcs[(dx, dy, 2, e_idx)] == 1)
 
     # At most one entity per cell (pure routing — no splitters anywhere).
     for cx in range(width):
@@ -1494,29 +1507,38 @@ def solve_pure_routing(req: dict) -> dict:
                 outflow = belt_outflow + ug_outflow
                 inflow = belt_inflow + ug_inflow
 
+                # Conservation: outflow == inflow + (1 if src else 0).
+                # The dst cell's south-facing belt (forced above) emits its
+                # south arc off the bottom of the grid (allowed at y=jh-1),
+                # which counts as outflow and balances the inflow from
+                # above — so dst cells need no special-case.
                 is_src = (cx, cy) == edge_src[e_idx]
-                is_dst = (cx, cy) == edge_dst[e_idx]
-                if is_src and is_dst:
-                    model.Add(outflow == 0)
-                    model.Add(inflow == 0)
-                elif is_src:
+                if is_src:
                     model.Add(outflow - inflow == 1)
-                elif is_dst:
-                    model.Add(inflow - outflow == 1)
                 else:
                     model.Add(outflow - inflow == 0)
 
-    # Objective: minimize entity count.
-    entity_terms = []
-    for var in arcs.values():
-        entity_terms.append(var)
-    for var in ug_arcs.values():
-        entity_terms.append(var)
-        entity_terms.append(var)
-    model.Minimize(sum(entity_terms))
+    # Objective: when "minimize_entities" is set, minimise total entity
+    # count (belt arcs + 2× UG arcs since UGs are 2 entities). Default for
+    # the composition baker is feasibility-only — the first valid layout is
+    # accepted. Skipping the optimisation loop is the difference between
+    # a 600-second jh=N solve and a ~50-second one. Fatness in the junction
+    # is acceptable; the consumer (`compose_series`) just stamps whatever
+    # the solver returns.
+    if req.get("minimize_entities", False):
+        entity_terms = []
+        for var in arcs.values():
+            entity_terms.append(var)
+        for var in ug_arcs.values():
+            entity_terms.append(var)
+            entity_terms.append(var)
+        model.Minimize(sum(entity_terms))
 
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = float(req.get("max_time_s", 30.0))
+    # Stop on first feasible when no objective is set. With Minimize() this
+    # parameter is ignored — the solver always pursues optimality.
+    solver.parameters.stop_after_first_solution = not req.get("minimize_entities", False)
     t0 = time.monotonic()
     status = solver.Solve(model)
     elapsed = time.monotonic() - t0
@@ -1572,10 +1594,271 @@ def solve_pure_routing(req: dict) -> dict:
     return out
 
 
+def solve_pure_routing_circuit(req: dict) -> dict:
+    """Phase 4.2 alternative — same problem as `solve_pure_routing` but
+    uses CP-SAT's `AddCircuit` constraint instead of per-(cell, edge, dir)
+    bool vars + explicit conservation. CP-SAT has dedicated propagation
+    for circuit constraints (cycle detection, reachability bounds) which
+    can be much faster than generic AC-3 over flow conservation.
+
+    Per-edge model: build a directed graph where nodes are cells (plus a
+    virtual `exit` node), arcs are belt-moves (cell → adjacent cell) and
+    UG-jumps (cell → cell + L*step). Each cell that may be off-path gets
+    a self-loop arc with literal `not_on_path`. The src and dst nodes
+    have no self-loops — they MUST be on the path. A virtual closing arc
+    `dst → src` (literal pinned to 1) closes the circuit.
+
+    The forced south-belt at dst is recorded as an entity in the result,
+    not as an arc — the arc into dst is whichever real arc the circuit
+    selected; the south-belt is the additional exit-the-junction entity.
+
+    Cross-edge constraints (at-most-one entity per cell, UG pairing) are
+    posted on top of the per-edge circuits.
+    """
+    width, height = req["bounds"]
+    input_port_tiles = [tuple(t) for t in req["input_port_tiles"]]
+    output_port_tiles = [tuple(t) for t in req["output_port_tiles"]]
+    edges = req["edges"]
+    n_edges = len(edges)
+
+    edge_src: list[tuple[int, int]] = []
+    edge_dst: list[tuple[int, int]] = []
+    for edge in edges:
+        if edge["src_kind"] != "InputPort" or edge["dst_kind"] != "OutputPort":
+            return {"status": "INVALID", "elapsed_s": 0.0,
+                    "error": "circuit pure routing: edges must be InputPort→OutputPort"}
+        edge_src.append(input_port_tiles[edge["src_idx"]])
+        edge_dst.append(output_port_tiles[edge["dst_idx"]])
+
+    model = cp_model.CpModel()
+
+    def cell_id(x: int, y: int) -> int:
+        return y * width + x
+
+    # Virtual exit node — one per edge would also work, but circuits are
+    # per-edge constraints so we can reuse the same id across edges.
+    EXIT_NODE = width * height
+
+    # Per-edge variable maps. We need them by (cell, dir, e) etc. for
+    # post-processing into belts/ugs. Storing the bool var alongside the
+    # circuit arc list keeps the solver's encoding aligned with what we
+    # extract afterward.
+    belt_vars: dict[tuple[int, int, int, int], any] = {}
+    ug_vars: dict[tuple[int, int, int, int, int], any] = {}
+    self_loop_vars: dict[tuple[int, int, int], any] = {}
+
+    for e_idx in range(n_edges):
+        sx, sy = edge_src[e_idx]
+        dx_, dy_ = edge_dst[e_idx]
+        src_node = cell_id(sx, sy)
+        dst_node = cell_id(dx_, dy_)
+
+        arc_list = []  # (tail_node, head_node, literal)
+
+        # Belt arcs: cell → in-bounds neighbor in each direction. The
+        # dst's south arc is special — it's a real belt facing south
+        # (the junction-exit), and the arc head is the virtual exit
+        # node so the circuit can close via exit → src.
+        for cy in range(height):
+            for cx in range(width):
+                for d in range(4):
+                    sdx, sdy = DIR_STEPS[d]
+                    nx, ny = cx + sdx, cy + sdy
+                    if 0 <= nx < width and 0 <= ny < height:
+                        var = model.NewBoolVar(f"b{cx}_{cy}_{d}_e{e_idx}")
+                        belt_vars[(cx, cy, d, e_idx)] = var
+                        arc_list.append((cell_id(cx, cy), cell_id(nx, ny), var))
+                    elif d == 2 and (cx, cy) == (dx_, dy_):
+                        # Forced south belt at dst; goes off-grid into
+                        # the virtual exit node. Pinned to 1.
+                        var = model.NewBoolVar(f"b{cx}_{cy}_{d}_e{e_idx}")
+                        belt_vars[(cx, cy, d, e_idx)] = var
+                        model.Add(var == 1)
+                        arc_list.append((cell_id(cx, cy), EXIT_NODE, var))
+
+        # UG arcs: per-Factorio semantics, the UG-input is at A, the
+        # UG-output entity sits at B = A + L*step, and the flow lands
+        # one cell *beyond* B at C = A + (L+1)*step. In the circuit
+        # graph the arc therefore hops A → C — the B cell is consumed
+        # as an entity (counted in at-most-one as a UG-output landing)
+        # but isn't itself part of the path. Modelling A → B directly
+        # would force B to also have an out-arc (a belt or another UG),
+        # which collides with the UG-output entity at B in at-most-one.
+        # Skip L=1 — equivalent to a belt, never picked when minimizing
+        # entities.
+        if not req.get("debug_no_ugs", False):
+            for cy in range(height):
+                for cx in range(width):
+                    for d in range(4):
+                        sdx, sdy = DIR_STEPS[d]
+                        for L in range(2, UG_MAX_REACH + 1):
+                            bx, by = cx + L * sdx, cy + L * sdy
+                            cx_c, cy_c = cx + (L + 1) * sdx, cy + (L + 1) * sdy
+                            if not (0 <= bx < width and 0 <= by < height):
+                                continue
+                            in_bounds_c = (0 <= cx_c < width and 0 <= cy_c < height)
+                            is_dst_landing = (cx_c, cy_c) == (dx_, dy_) and in_bounds_c
+                            # Allow C off-grid only when the UG would
+                            # land flow at the south exit beneath dst.
+                            is_dst_exit = (
+                                d == 2 and bx == dx_ and by == dy_
+                                and not in_bounds_c
+                            )
+                            if not in_bounds_c and not is_dst_exit:
+                                continue
+                            var = model.NewBoolVar(f"u{cx}_{cy}_{d}_{L}_e{e_idx}")
+                            ug_vars[(cx, cy, d, L, e_idx)] = var
+                            head = EXIT_NODE if is_dst_exit else cell_id(cx_c, cy_c)
+                            arc_list.append((cell_id(cx, cy), head, var))
+                            _ = is_dst_landing  # kept for readability
+
+        # Self-loops for cells that may be off-path. src and dst are
+        # forced on-path by omitting their self-loops.
+        for cy in range(height):
+            for cx in range(width):
+                if (cx, cy) == (sx, sy) or (cx, cy) == (dx_, dy_):
+                    continue
+                var = model.NewBoolVar(f"sl{cx}_{cy}_e{e_idx}")
+                self_loop_vars[(cx, cy, e_idx)] = var
+                node = cell_id(cx, cy)
+                arc_list.append((node, node, var))
+
+        # Closing arc: exit_node → src, literal pinned to true. Closes
+        # the cycle (dst → exit via south-belt, exit → src here).
+        closing_lit = model.NewBoolVar(f"close_e{e_idx}")
+        model.Add(closing_lit == 1)
+        arc_list.append((EXIT_NODE, src_node, closing_lit))
+
+        # Debug: log arc counts before adding the constraint.
+        sl_count = sum(1 for (a, b, _) in arc_list if a == b)
+        belt_arc_count = sum(
+            1 for (cx, cy, d, ee) in belt_vars.keys() if ee == e_idx
+        )
+        ug_arc_count = sum(
+            1 for k in ug_vars.keys() if k[4] == e_idx
+        )
+        print(
+            f"  circuit edge_idx={e_idx} src={(sx, sy)} dst={(dx_, dy_)} "
+            f"arcs={len(arc_list)} belts={belt_arc_count} ugs={ug_arc_count} "
+            f"self_loops={sl_count} closing=1",
+            file=sys.stderr,
+        )
+        model.AddCircuit(arc_list)
+
+    debug_no_atmost_one = req.get("debug_no_atmost_one", False)
+    debug_no_ug_arrival = req.get("debug_no_ug_arrival", False)
+    debug_no_ug_pairing = req.get("debug_no_ug_pairing", False)
+    if debug_no_atmost_one:
+        print("  circuit DEBUG: at-most-one disabled", file=sys.stderr)
+    if debug_no_ug_arrival:
+        print("  circuit DEBUG: UG arrival in at-most-one disabled", file=sys.stderr)
+    if debug_no_ug_pairing:
+        print("  circuit DEBUG: UG pairing rule disabled", file=sys.stderr)
+    # At-most-one entity per cell across edges. An entity is:
+    #   - belt outgoing from this cell (any of 4 directions, any edge);
+    #   - UG-input at this cell;
+    #   - UG-output landing at this cell;
+    #   - forced south-belt at this cell (dst of some edge).
+    for cy in range(height):
+        for cx in range(width):
+            terms = []
+            for e_idx in range(n_edges):
+                for d in range(4):
+                    if (cx, cy, d, e_idx) in belt_vars:
+                        terms.append(belt_vars[(cx, cy, d, e_idx)])
+                for d in range(4):
+                    sdx, sdy = DIR_STEPS[d]
+                    for L in range(2, UG_MAX_REACH + 1):
+                        if (cx, cy, d, L, e_idx) in ug_vars:
+                            terms.append(ug_vars[(cx, cy, d, L, e_idx)])
+                        # UG outputs land at (cx, cy) when input was at
+                        # (cx - L*step). Each such input arc-var counts.
+                        ux, uy = cx - L * sdx, cy - L * sdy
+                        if (ux, uy, d, L, e_idx) in ug_vars and not debug_no_ug_arrival:
+                            terms.append(ug_vars[(ux, uy, d, L, e_idx)])
+            if terms and not debug_no_atmost_one:
+                model.Add(sum(terms) <= 1)
+
+    # UG pairing: forbid configurations where one UG's transit cell
+    # coincides with another UG's exit (Factorio re-pairs them).
+    if debug_no_ug_pairing:
+        pass
+    else:
+      for (c1x, c1y, d1, L1, e1), arc1 in ug_vars.items():
+        sdx, sdy = DIR_STEPS[d1]
+        for k in range(1, L1):
+            mcx, mcy = c1x + k * sdx, c1y + k * sdy
+            for L2 in range(2, UG_MAX_REACH + 1):
+                ucx, ucy = mcx - L2 * sdx, mcy - L2 * sdy
+                if not (0 <= ucx < width and 0 <= ucy < height):
+                    continue
+                for e2 in range(n_edges):
+                    key = (ucx, ucy, d1, L2, e2)
+                    if key in ug_vars and key != (c1x, c1y, d1, L1, e1):
+                        model.AddBoolOr([arc1.Not(), ug_vars[key].Not()])
+
+    # Optional objective. Default feasibility-only; minimize entity count
+    # if requested.
+    if req.get("minimize_entities", False):
+        ent_terms = []
+        for var in belt_vars.values():
+            ent_terms.append(var)
+        for var in ug_vars.values():
+            ent_terms.append(var)
+            ent_terms.append(var)
+        model.Minimize(sum(ent_terms))
+
+    solver = cp_model.CpSolver()
+    solver.parameters.max_time_in_seconds = float(req.get("max_time_s", 30.0))
+    solver.parameters.stop_after_first_solution = not req.get("minimize_entities", False)
+    if req.get("debug_no_probing", False):
+        solver.parameters.cp_model_probing_level = 0
+        print("  circuit DEBUG: probing disabled", file=sys.stderr)
+    if req.get("debug_log_progress", False):
+        solver.parameters.log_search_progress = True
+        solver.parameters.log_to_stdout = False
+        solver.log_callback = lambda msg: print(f"  [cp-sat] {msg}", file=sys.stderr)
+
+    t0 = time.monotonic()
+    status = solver.Solve(model)
+    elapsed = time.monotonic() - t0
+
+    out: dict = {"status": solver.StatusName(status), "elapsed_s": elapsed}
+    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        return out
+
+    # Extract belts and UGs from selected vars.
+    belts = []
+    ugs = []
+    for (cx, cy, d, L, e_idx), arc_var in ug_vars.items():
+        if solver.Value(arc_var) == 1:
+            fdir = INTERNAL_TO_FACTORIO_DIR[d]
+            ugs.append({"x": cx, "y": cy, "dir": fdir, "io": "input", "edge_idx": e_idx})
+            sdx, sdy = DIR_STEPS[d]
+            ugs.append({"x": cx + L * sdx, "y": cy + L * sdy, "dir": fdir,
+                        "io": "output", "edge_idx": e_idx})
+
+    ug_cells = {(u["x"], u["y"]) for u in ugs}
+    for (cx, cy, d, e_idx), arc_var in belt_vars.items():
+        if (cx, cy) in ug_cells:
+            continue
+        if solver.Value(arc_var) == 1:
+            belts.append({"x": cx, "y": cy,
+                          "dir": INTERNAL_TO_FACTORIO_DIR[d],
+                          "edge_idx": e_idx})
+
+    out["belts"] = belts
+    out["ugs"] = ugs
+    return out
+
+
 def main() -> None:
     req = json.load(sys.stdin)
     if req.get("kind") == "pure_routing":
-        out = solve_pure_routing(req)
+        if req.get("encoding") == "circuit":
+            out = solve_pure_routing_circuit(req)
+        else:
+            out = solve_pure_routing(req)
     elif "edges" in req and "splitter_positions" in req:
         out = solve_routing(req)
     elif "edges" in req and "n_splitters" in req:
