@@ -326,43 +326,42 @@ After each phase:
 The remaining work, in order:
 
 4. **Phase 3 (next): source-lane forcing for splitter-output drops.**
-   This is the concrete next piece. Without it the model under-counts
-   saturation at splitter-output drops, which is why `(1, 5)`'s 3
-   feedback drops can't be made lane-safe even with rate-aware caps —
-   they all end up free-laned in the model but lane-0-forced in
-   reality.
+   ✅ Infrastructure shipped. The route tuple now carries optional
+   `splitter_dir`; `_route_belts` forces source-lane per the sideload
+   table when set; dyadic placers thread `splitter_dir = S` for every
+   drop and emit 2 lane-routes for head-on south continuations. All
+   10 dyadic round-trip tests stay green; `(1, 16)` solve time bumped
+   from ~12s to ~16s (consistent with the head-on-route doubling and
+   within the 60s round-trip budget).
 
-   Concrete steps:
+   `(1, 5)` validation **moved to phase 4** — see the decision log for
+   the analysis. Source-lane forcing is necessary but not sufficient
+   for `(1, 5)`: the feedback channel needs to wrap E→N→W back to
+   `M.in1`, and every perpendicular turn collapses both lanes onto the
+   receiver's LEFT lane regardless of source-lane forcing. With 0.6
+   total feedback rate, that violates the 0.5 lane cap. Unblocking
+   needs a lane-balancer splitter at the wrap (extra splitter beyond
+   what the synth provides) or a topology change.
 
-   1. Extend the route tuple with optional `splitter_dir` —
-      `(src, sink, sink_dir, splitter_dir | None)`. `None` means the
-      source is an input boundary (free lane); a value means the
-      source is a splitter-output drop with the upstream splitter
-      facing that direction.
-   2. Update `_input_routes_for_root` and the per-shape route
-      construction sites to set `splitter_dir` for every drop-tile
-      source. For dyadic shapes, all drops are head-on south
-      (continues splitter face) — set `splitter_dir = S` and the
-      head-on rule emits 2 lane-routes per arc (matching the input
-      boundary handling).
-   3. Add the source-lane forcing constraint in `_route_belts`: for
-      each route with `splitter_dir != None`, force the source tile's
-      `(d_drop, lane)` per the table in the design.
-   4. Re-attempt `(1, 5)` with grid 10×9 (extra row gives geometric
-      flexibility — 1 of 3 drops can take a southern detour and
-      arrive at the channel on lane 1 via sideload-from-S).
+5. **Phase 4: lane-balancer splitter + cover the rest of
+   `1..=10 × 1..=10`.** Phase 4 now bundles two pieces:
 
-   ~2-3 days. Lands `(1, 5)` and is the structural unblock for
-   `(1, 6), (1, 7), (1, 9), (1, 10)` and the whole coprime track.
+   1. **Lane-balancer splitter** in the placer. When a route's
+      perpendicular turn would saturate the receiver's lane, the
+      placer inserts an extra south-facing splitter at the turn
+      (taking a 1×2 bite of the grid) so the items rebalance to 50/50
+      on its outputs before continuing. This splitter is *placement-
+      only* — the synth graph is unchanged; the recovery in
+      `topology_of_template` collapses it back into a single arc.
 
-5. **Phase 4: cover the rest of `1..=10 × 1..=10`.** Once `(1, 5)` is
-   working, the same machinery extends to other coprimes by computing
-   per-route rates from the synth flow analysis and choosing grid
-   sizes per shape. Shape-specific tuning may be needed for the larger
-   coprimes (`(4, 9)`, `(7, 9)`, `(8, 9)`); the lane-walker
-   cross-check (verification step #3) catches drift between the
-   router and Factorio semantics. Issue [#136] closes here.
-   ~1 week.
+   2. **Coprime coverage.** With the lane-balancer available, the
+      same machinery extends to other coprimes by computing per-route
+      rates from the synth flow analysis and choosing grid sizes per
+      shape. Shape-specific tuning may be needed for the larger
+      coprimes (`(4, 9)`, `(7, 9)`, `(8, 9)`); the lane-walker
+      cross-check (verification step #3) catches drift between the
+      router and Factorio semantics. Issue [#136] closes here.
+   ~1-2 weeks.
 
 6. **Phase 5: bench + library regeneration.** Run the cross-engine
    bench across all 99 shapes; compare against the community library.
@@ -422,3 +421,30 @@ The remaining work, in order:
   this PR is the right foundation; what's missing is source-lane
   forcing for splitter-output drops. That's the next concrete piece
   of work.*
+- *2026-05-02 — Phase 3 (next) source-lane forcing infrastructure
+  shipped. Route tuple extended to `(src, sink, sink_dir,
+  splitter_dir | None)`; `_route_belts` forces lane per the sideload
+  table at every splitter-output drop; dyadic placers thread
+  `splitter_dir = S` everywhere and emit 2 lane-routes for head-on
+  south continuations (`L1 → outputs`, `L2 → outputs`, `L3 →
+  outputs`). All 10 dyadic round-trip tests pass; `(1, 16)` cost
+  rose from ~12s to ~16s (within the 60s round-trip budget — the test
+  timeout was raised from 10s to match).*
+- *2026-05-02 — `(1, 5)` not unlockable by source-lane forcing
+  alone. Walked the layout: `M, S1` tight-stacked vertical (rate-0.8
+  arcs preserved as head-on); `S1 → L1` also tight-stacked (rate 0.8
+  perpendicular doesn't fit the 0.5 lane cap); `L1 → L2` routing-row
+  offset (rate 0.4 perpendicular fits); `L2 → outputs` head-on south
+  drops; 3 feedback drops at the bottom row at rate 0.2 each = 0.6
+  total. The feedback channel needs to wrap E→N→W back to `M.in1` —
+  and **every perpendicular turn collapses both lanes of the feeder
+  onto the receiver's LEFT lane** (sideload table: feeder W onto
+  N-belt → lane 0; feeder N onto W-belt → lane 0; etc). 0.6 lumped
+  onto a single lane violates the 0.5 cap regardless of how the
+  drops were distributed at the source. The "1-drop-south-detour"
+  trick from the design splits 0.4 + 0.2 across the two lanes of the
+  east-bound channel correctly, but the very next turn (E→N at the
+  east edge) collapses 0.6 back onto N-lane-0. Unblocking needs a
+  lane-balancer splitter at the turn — an extra splitter beyond
+  what the synth provides — or a different topology. Bumped to
+  phase 4 (now bundled with the lane-balancer-splitter piece).*

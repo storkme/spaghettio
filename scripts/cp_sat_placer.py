@@ -65,6 +65,25 @@ _LEFT_OF = (3, 0, 1, 2)
 _RIGHT_OF = (1, 2, 3, 0)
 _FACTORIO_DIR = (0, 2, 4, 6)
 
+# Route tuple shape:
+#   (src, sink, sink_dir, splitter_dir)
+# where `splitter_dir ∈ {0, 1, 2, 3, None}`. None means the source is an
+# input boundary belt — its lane is unconstrained at the source. A
+# direction means the source tile is a splitter-output drop with the
+# upstream splitter facing that direction; source-lane forcing applies
+# per the table in `docs/rfp-lane-aware-routing.md`:
+#   d_drop == splitter_dir          → head-on, items fill both lanes;
+#                                      construction emits 2 lane-routes
+#                                      per arc and the per-lane cap
+#                                      forces them apart.
+#   d_drop == LEFT_OF(splitter_dir) → sideload onto LEFT lane (lane 0).
+#   d_drop == RIGHT_OF(splitter_dir)→ sideload onto RIGHT lane (lane 1).
+#   d_drop == OPPOSITE(splitter_dir)→ would head into the splitter tile;
+#                                      blocked by the existing geometry
+#                                      constraints (splitter tile not
+#                                      free), so we don't emit an
+#                                      explicit forbid.
+
 
 def _splitter_dir(pos: tuple[int, int] | tuple[int, int, int]) -> int:
     """Direction of a splitter from its position tuple. Default south."""
@@ -125,7 +144,9 @@ def _splitter_tiles(
 
 def _route_belts(
     splitter_positions: list[tuple[int, int]],
-    routes: list[tuple[tuple[int, int], tuple[int, int], int]],
+    routes: list[
+        tuple[tuple[int, int], tuple[int, int], int, int | None]
+    ],
     width: int,
     height: int,
     rates: list[int] | None = None,
@@ -133,13 +154,17 @@ def _route_belts(
 ) -> dict[tuple[int, int], int] | None:
     """Solve belt routing on the grid given fixed splitter positions.
 
-    Each route in `routes` is `(src_tile, sink_tile, sink_dir)`:
+    Each route in `routes` is `(src_tile, sink_tile, sink_dir, splitter_dir)`:
       - `src_tile` is where the path begins (typically the tile directly
         south of a parent splitter's output port). It is assumed to be a
         free tile; the solver picks the belt direction at this tile.
       - `sink_tile` is where the path ends. It must be a free tile and
         will carry a belt in `sink_dir` (so its outflow drops into the
         downstream consumer — typically south into a child splitter).
+      - `splitter_dir` is `None` for input-boundary sources or the
+        upstream splitter's facing direction for splitter-output drops.
+        See the route-tuple comment at the top of this file for the
+        source-lane forcing semantics.
 
     `rates` and `lane_cap` carry the rate-aware encoding: each route
     consumes `rates[r]` units of lane capacity and the per-lane cap is
@@ -173,7 +198,7 @@ def _route_belts(
         if (x, y) not in occupied
     ]
     free_set = set(free)
-    for src, sink, _ in routes:
+    for src, sink, _, _ in routes:
         if src not in free_set or sink not in free_set:
             return None
 
@@ -268,7 +293,7 @@ def _route_belts(
     #   - s = RIGHT_OF(d_recv) (right side feed): items land on lane 1
     #     regardless of predecessor lane.
     #   - s = d_recv (forward / output side): items can't enter.
-    for r, (src, sink, sink_dir) in enumerate(routes):
+    for r, (src, sink, sink_dir, splitter_dir) in enumerate(routes):
         # Sink belt's direction is fixed; route uses sink with
         # exactly one lane (solver picks).
         model.add(belt[(sink, sink_dir)] == 1)
@@ -284,6 +309,27 @@ def _route_belts(
                 )
                 == 1
             )
+
+        # Source-lane forcing for splitter-output drops. The route is
+        # tagged with the upstream splitter's facing direction; for
+        # whichever direction the source tile picks, the items entering
+        # from the splitter side land on a specific lane via the
+        # sideload table. Without this, the model treats the source as
+        # free-laned and lets multiple drops "freely" pick whichever
+        # lane keeps them feasible — physics doesn't.
+        if splitter_dir is not None:
+            for d in _INTERNAL_DIRS:
+                if d == splitter_dir:
+                    continue  # head-on: occupy both lanes via duplicate routes
+                if d == _LEFT_OF[splitter_dir]:
+                    # Items from the splitter side land on lane 0.
+                    model.add(f_lane[(r, src, d, 1)] == 0)
+                elif d == _RIGHT_OF[splitter_dir]:
+                    # Items from the splitter side land on lane 1.
+                    model.add(f_lane[(r, src, d, 0)] == 0)
+                # OPPOSITE(splitter_dir): handled by existing geometry
+                # (splitter tile is not free, so the outflow constraint
+                # already disallows this direction at a drop tile).
 
         for t in free:
             for d_recv in _INTERNAL_DIRS:
@@ -431,12 +477,13 @@ def _input_routes_for_root(
     x_root: int, y_root: int, n: int
 ) -> tuple[
     list[tuple[int, int]],
-    list[tuple[tuple[int, int], tuple[int, int], int]],
+    list[tuple[tuple[int, int], tuple[int, int], int, int | None]],
 ]:
     """Build input belt tiles and routes for `n ∈ {1, 2}` inputs.
 
     Returns `(input_tiles, routes)`. Each route is
-    `(src, sink, sink_dir)` for [`_route_belts`].
+    `(src, sink, sink_dir, splitter_dir)` for [`_route_belts`]; input
+    boundary sources have `splitter_dir = None` (free-lane).
 
     Each direct input boundary belt is modeled as **two** length-1
     routes at the same tile. Real Factorio input belts arrive with
@@ -461,15 +508,17 @@ def _input_routes_for_root(
     if n == 1:
         # Two routes at the same tile force both lanes to be claimed.
         return [direct_left], [
-            (direct_left, direct_left, DIR_S),
-            (direct_left, direct_left, DIR_S),
+            (direct_left, direct_left, DIR_S, None),
+            (direct_left, direct_left, DIR_S, None),
         ]
     if n == 2:
         tiles = [direct_left, direct_right]
-        routes = []
+        routes: list[
+            tuple[tuple[int, int], tuple[int, int], int, int | None]
+        ] = []
         for t in tiles:
-            routes.append((t, t, DIR_S))
-            routes.append((t, t, DIR_S))
+            routes.append((t, t, DIR_S, None))
+            routes.append((t, t, DIR_S, None))
         return tiles, routes
     raise ValueError(f"unsupported input count {n}; expected 1 or 2")
 
@@ -517,11 +566,15 @@ def place_x_to_four(n: int) -> dict[str, Any]:
 
     DIR_S = 2
     input_tiles, routes = _input_routes_for_root(x_root, y_root, n)
+    # L1 → outputs: head-on south drops. Emit 2 lane-routes per arc so
+    # the per-lane cap claims both lanes at the drop tile (matches the
+    # input-boundary handling).
     for parent_idx in (1, 2):
         px, py = pos[parent_idx]
         for port in (0, 1):
             drop = (px + port, py + 1)
-            routes.append((drop, drop, DIR_S))
+            routes.append((drop, drop, DIR_S, DIR_S))
+            routes.append((drop, drop, DIR_S, DIR_S))
 
     belt_dirs = _route_belts(pos, routes, width, height)
     if belt_dirs is None:
@@ -609,21 +662,24 @@ def place_x_to_eight(n: int) -> dict[str, Any]:
 
     DIR_S = 2
     input_tiles, routes = _input_routes_for_root(x_root, y_root, n)
-    # Root → level-1: each side picks the closer L1 input port.
+    # Root → level-1: each side picks the closer L1 input port. The
+    # drop tile picks E or W (perpendicular to the south splitter face),
+    # so source-lane forcing pins the drop's lane via the sideload table.
     for parent_idx, port, child_idx in ((0, 0, 1), (0, 1, 2)):
         px, py = pos[parent_idx]
         cx, cy = pos[child_idx]
         drop = (px + port, py + 1)
         approach_port = 0 if drop[0] < cx else 1
         approach = (cx + approach_port, cy - 1)
-        routes.append((drop, approach, DIR_S))
+        routes.append((drop, approach, DIR_S, DIR_S))
     # L1 → L2: tight-stack, no belt needed.
-    # L2 → outputs: 8 length-1 south belts on the bottom row.
+    # L2 → outputs: 8 head-on south drops, 2 lane-routes per arc.
     for parent_idx in (3, 4, 5, 6):
         px, py = pos[parent_idx]
         for port in (0, 1):
             drop = (px + port, py + 1)
-            routes.append((drop, drop, DIR_S))
+            routes.append((drop, drop, DIR_S, DIR_S))
+            routes.append((drop, drop, DIR_S, DIR_S))
 
     belt_dirs = _route_belts(pos, routes, width, height)
     if belt_dirs is None:
@@ -716,15 +772,15 @@ def place_x_to_sixteen(n: int) -> dict[str, Any]:
 
     DIR_S = 2
     input_tiles, routes = _input_routes_for_root(x_root, y_root, n)
-    # Root → L1.
+    # Root → L1: perpendicular drop, source-lane pinned via sideload table.
     for parent_idx, port, child_idx in ((0, 0, 1), (0, 1, 2)):
         px, py = pos[parent_idx]
         cx, cy = pos[child_idx]
         drop = (px + port, py + 1)
         approach_port = 0 if drop[0] < cx else 1
         approach = (cx + approach_port, cy - 1)
-        routes.append((drop, approach, DIR_S))
-    # L1 → L2: routing-row offset, not tight-stack.
+        routes.append((drop, approach, DIR_S, DIR_S))
+    # L1 → L2: routing-row offset, perpendicular drops.
     for parent_idx, child_left, child_right in ((1, 3, 4), (2, 5, 6)):
         px, py = pos[parent_idx]
         for port, child_idx in ((0, child_left), (1, child_right)):
@@ -732,14 +788,15 @@ def place_x_to_sixteen(n: int) -> dict[str, Any]:
             drop = (px + port, py + 1)
             approach_port = 0 if drop[0] < cx else 1
             approach = (cx + approach_port, cy - 1)
-            routes.append((drop, approach, DIR_S))
+            routes.append((drop, approach, DIR_S, DIR_S))
     # L2 → L3: tight-stack, no belts.
-    # L3 → outputs: 16 length-1 south belts.
+    # L3 → outputs: 16 head-on south drops, 2 lane-routes per arc.
     for parent_idx in range(7, 15):
         px, py = pos[parent_idx]
         for port in (0, 1):
             drop = (px + port, py + 1)
-            routes.append((drop, drop, DIR_S))
+            routes.append((drop, drop, DIR_S, DIR_S))
+            routes.append((drop, drop, DIR_S, DIR_S))
 
     belt_dirs = _route_belts(pos, routes, width, height)
     if belt_dirs is None:

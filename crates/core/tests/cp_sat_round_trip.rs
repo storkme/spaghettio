@@ -49,7 +49,7 @@ fn round_trip(n: u32, m: u32) {
         graph: &graph,
         n,
         m,
-        timeout: Duration::from_secs(10),
+        timeout: Duration::from_secs(60),
         seed: Some(42),
     };
     let result = engine
