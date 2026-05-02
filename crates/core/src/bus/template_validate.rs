@@ -167,4 +167,57 @@ mod tests {
             "(1, 2) should have no lane errors, got: {errors:#?}"
         );
     }
+
+    /// A synthetic template with an L=1 underground-belt pair (input at x=0,
+    /// output at x=1, both going east — no transit tile underground). This
+    /// is structurally invalid in Factorio (minimum reach is L=2).
+    ///
+    /// The lane gate in `bake_missing_shapes` must reject any template that
+    /// emits a `Severity::Error` with `category == "underground-belt"`.
+    #[test]
+    fn l1_ug_pair_is_rejected_by_gate() {
+        use crate::bus::balancer_classify::BalancerTemplateRef;
+        use crate::bus::balancer_library::BalancerTemplateEntity;
+
+        // Two underground belts going east (direction=2), adjacent at x=0
+        // and x=1 — the minimum L=1 pair that Factorio rejects.
+        let entities = [
+            BalancerTemplateEntity {
+                name: "underground-belt",
+                x: 0,
+                y: 0,
+                direction: 2,
+                io_type: Some("input"),
+            },
+            BalancerTemplateEntity {
+                name: "underground-belt",
+                x: 1,
+                y: 0,
+                direction: 2,
+                io_type: Some("output"),
+            },
+        ];
+        let input_tiles = [(0i32, 0i32)];
+        let output_tiles = [(1i32, 0i32)];
+
+        let tref = BalancerTemplateRef {
+            n_inputs: 1,
+            n_outputs: 1,
+            width: 2,
+            height: 1,
+            entities: &entities,
+            input_tiles: &input_tiles,
+            output_tiles: &output_tiles,
+        };
+
+        let issues = validate_template_lanes(tref);
+        let ug_errors: Vec<_> = issues
+            .iter()
+            .filter(|i| i.severity == Severity::Error && i.category == "underground-belt")
+            .collect();
+        assert!(
+            !ug_errors.is_empty(),
+            "L=1 UG pair should produce at least one underground-belt Error, got: {issues:#?}"
+        );
+    }
 }

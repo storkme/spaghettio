@@ -27,6 +27,8 @@ use fucktorio_core::bus::balancer_library::{balancer_templates, BalancerTemplate
 use fucktorio_core::bus::balancer_topology::{
     clos_interleave, library_atom, parallel, series_permuted,
 };
+use fucktorio_core::bus::template_validate::validate_template_lanes;
+use fucktorio_core::validate::Severity;
 // Aliased import — `parallel` is a graph-level combinator from
 // balancer_topology; `compose_parallel` (defined locally) is the
 // template-level combinator. Both are needed in the same fn for the
@@ -963,7 +965,7 @@ fn stress_compose_clos_4_9() -> Result<(), Box<dyn std::error::Error>> {
     println!("  clos_interleave(4, 3) perm: {perm:?}");
 
     let t0 = std::time::Instant::now();
-    let composed = compose_series(stage1.as_ref(), stage2.as_ref(), &perm, 1, 20)?;
+    let (composed, _) = compose_series(stage1.as_ref(), stage2.as_ref(), &perm, 1, 20)?;
     let elapsed = t0.elapsed().as_secs_f64();
     let junction_h = composed.height - stage1.height - stage2.height;
     println!(
@@ -1036,7 +1038,7 @@ fn debug_compose_clos_2_2() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|e| format!("topology_of_template(stage2): {e:?}"))?;
     print_graph_summary("  stage2.recovered", &stage2_recovered);
 
-    let composed = compose_series(stage1.as_ref(), stage2.as_ref(), &perm, 1, 8)?;
+    let (composed, _) = compose_series(stage1.as_ref(), stage2.as_ref(), &perm, 1, 8)?;
     let junction_h = composed.height - stage1.height - stage2.height;
     println!(
         "  composed: {}×{}, junction_height={}, in={}, out={}",
@@ -1136,7 +1138,7 @@ fn bake_compose_1_9() -> Result<(), Box<dyn std::error::Error>> {
     println!("  perm = {perm:?} (identity)");
 
     let t0 = std::time::Instant::now();
-    let composed = compose_series(
+    let (composed, _) = compose_series(
         BalancerTemplateRef::from(atom_1_3),
         stage2.as_ref(),
         &perm,
@@ -1281,7 +1283,7 @@ fn build_stage(s: Stage) -> Result<OwnedTemplate, Box<dyn std::error::Error>> {
     }
 }
 
-fn run_recipe(r: &Recipe) -> Result<OwnedTemplate, Box<dyn std::error::Error>> {
+fn run_recipe_from_jh(r: &Recipe, min_jh: u32) -> Result<(OwnedTemplate, u32), Box<dyn std::error::Error>> {
     let stage1 = build_stage(r.stage1)?;
     let stage2 = build_stage(r.stage2)?;
     if stage1.n_outputs != stage2.n_inputs {
@@ -1311,7 +1313,7 @@ fn run_recipe(r: &Recipe) -> Result<OwnedTemplate, Box<dyn std::error::Error>> {
         )
         .into());
     }
-    compose_series(stage1.as_ref(), stage2.as_ref(), &perm, 1, r.max_jh)
+    compose_series(stage1.as_ref(), stage2.as_ref(), &perm, min_jh, r.max_jh)
 }
 
 fn bake_missing_shapes() -> Result<(), Box<dyn std::error::Error>> {
@@ -1386,7 +1388,7 @@ fn bake_missing_shapes() -> Result<(), Box<dyn std::error::Error>> {
     let mut shapes_skipped: Vec<(u32, u32)> = Vec::new();
     let library = balancer_templates();
     let total = recipes.len();
-    for (idx, r) in recipes.iter().enumerate() {
+    'outer: for (idx, r) in recipes.iter().enumerate() {
         let (m, n) = r.shape;
         if library.contains_key(&(m, n)) {
             println!("\n--- [{}/{total}] ({m}, {n}): SKIP (already in library) ---", idx + 1);
@@ -1395,20 +1397,57 @@ fn bake_missing_shapes() -> Result<(), Box<dyn std::error::Error>> {
         }
         println!("\n--- [{}/{total}] ({m}, {n}): {:?} → {:?} via {:?} ---",
                  idx + 1, r.stage1, r.stage2, r.perm);
-        let t0 = std::time::Instant::now();
-        let composed = match run_recipe(r) {
-            Ok(c) => c,
-            Err(e) => {
-                println!("  ✗ compose: {e}");
-                shapes_failed.push(((m, n), format!("compose: {e}")));
+
+        // Bounded retry: if lane validation finds underground-belt errors, bump
+        // min_jh past the used value and retry up to 3 times total.
+        let mut min_jh: u32 = 1;
+        let mut composed_opt: Option<OwnedTemplate> = None;
+        'bake: for attempt in 1u32..=3 {
+            let t0 = std::time::Instant::now();
+            let (composed, used_jh) = match run_recipe_from_jh(r, min_jh) {
+                Ok(c) => c,
+                Err(e) => {
+                    println!("  ✗ compose (attempt {attempt}): {e}");
+                    shapes_failed.push(((m, n), format!("compose: {e}")));
+                    continue 'outer;
+                }
+            };
+            let elapsed = t0.elapsed().as_secs_f64();
+            println!(
+                "  attempt {attempt}: composed {}×{}, {} entities, jh={used_jh} ({:.2}s)",
+                composed.width, composed.height, composed.entities.len(), elapsed
+            );
+
+            // Lane gate: only block on underground-belt Severity::Error.
+            // Lane-throughput artifacts (category != "underground-belt") are
+            // validator noise on standalone templates — do not gate on them.
+            let issues = validate_template_lanes(composed.as_ref());
+            let ug_errors: Vec<_> = issues
+                .iter()
+                .filter(|i| i.severity == Severity::Error && i.category == "underground-belt")
+                .collect();
+            if ug_errors.is_empty() {
+                composed_opt = Some(composed);
+                break 'bake;
+            }
+            println!(
+                "  ✗ lane gate ({} ug error(s) at jh={used_jh}), next min_jh={}",
+                ug_errors.len(),
+                used_jh + 1
+            );
+            for e in &ug_errors {
+                println!("    {:?}: {} at ({:?}, {:?})", e.severity, e.message, e.x, e.y);
+            }
+            min_jh = used_jh + 1;
+        }
+
+        let composed = match composed_opt {
+            Some(c) => c,
+            None => {
+                shapes_failed.push(((m, n), "lane gate: exhausted 3 attempts".to_string()));
                 continue;
             }
         };
-        let elapsed = t0.elapsed().as_secs_f64();
-        println!(
-            "  composed: {}×{}, {} entities ({:.2}s)",
-            composed.width, composed.height, composed.entities.len(), elapsed
-        );
 
         let report = match classify_ref(composed.as_ref()) {
             Ok(r) => r,
@@ -1558,7 +1597,7 @@ fn compose_series(
     perm: &[usize],
     initial_junction_height: u32,
     max_junction_height: u32,
-) -> Result<OwnedTemplate, Box<dyn std::error::Error>> {
+) -> Result<(OwnedTemplate, u32), Box<dyn std::error::Error>> {
     if top.output_tiles.len() != perm.len() {
         return Err(format!(
             "compose_series: top has {} outputs but perm has {} entries",
@@ -1610,6 +1649,22 @@ fn compose_series(
         );
     }
 
+    // Two-budget search (RFP rfp-balancer-jh-search.md):
+    // - SHORT_TIMEOUT: fast infeasibility proof. INFEASIBLE under SHORT is a
+    //   real CP-SAT proof; advance immediately without spending more time.
+    // - LONG_TIMEOUT: used only when SHORT returns UNKNOWN (ambiguous). Retry
+    //   same jh once with the full budget before advancing.
+    // This replaces the old stratified 90s→240s→600s scheme, which was slow
+    // at proving infeasible jhs (esp. jh=8 on (4,9) which burned ~120s there).
+    const SHORT_TIMEOUT: f64 = 30.0;
+    const LONG_TIMEOUT: f64 = 600.0;
+
+    // Encoding selector is constant for the whole compose_series call.
+    let encoding: Option<&'static str> = match std::env::var("FUCKTORIO_PURE_ROUTING_ENCODING").as_deref() {
+        Ok("circuit") => Some("circuit"),
+        _ => None,
+    };
+
     let mut last_err: String = String::new();
     for jh in effective_start..=max_junction_height {
         let junction_output_tiles: Vec<(i32, i32)> = bot
@@ -1617,119 +1672,134 @@ fn compose_series(
             .iter()
             .map(|&(x, _)| (x, (jh - 1) as i32))
             .collect();
-        // Stratified per-attempt timeout. The first few attempts past the
-        // heuristic-start are likely still infeasible — give CP-SAT a short
-        // budget to prove it and bump quickly. As we creep into the feasible
-        // region, raise the budget so genuine solves don't time out.
-        let attempt_index = jh - effective_start;
-        let timeout_s: f64 = match attempt_index {
-            0..=1 => 90.0,
-            2..=3 => 240.0,
-            _ => 600.0,
-        };
-        // Encoding selector — `circuit` uses CP-SAT's AddCircuit-based
-        // formulation in `solve_pure_routing_circuit`; otherwise the
-        // generic per-(cell, dir, edge) bool model in `solve_pure_routing`.
-        let encoding: Option<&'static str> = match std::env::var("FUCKTORIO_PURE_ROUTING_ENCODING").as_deref() {
-            Ok("circuit") => Some("circuit"),
-            _ => None,
-        };
-        let req = PlaceRequest::PureRouting {
-            kind: "pure_routing",
-            bounds: (composed_width, jh),
-            input_port_tiles: junction_input_tiles.clone(),
-            output_port_tiles: junction_output_tiles,
-            edges: edges.clone(),
-            max_time_s: Some(timeout_s),
-            encoding,
-            ug_max_reach: None, // None = default yellow (reach=4); future PR sweeps to red/blue
-        };
-        let t_attempt = std::time::Instant::now();
-        let resp = match run_solver(&req) {
-            Ok(r) => r,
-            Err(e) => {
-                last_err = format!("subprocess error at junction_height={jh}: {e}");
-                continue;
-            }
-        };
-        eprintln!(
-            "  compose_series: jh={jh} status={} solver_elapsed={:.1}s wall={:.1}s timeout={:.0}s",
-            resp.status,
-            resp.elapsed_s,
-            t_attempt.elapsed().as_secs_f64(),
-            timeout_s
-        );
-        if resp.status == "OPTIMAL" || resp.status == "FEASIBLE" {
-            // Found feasible junction. Assemble composed template.
-            let junction_y_off = top.height as i32;
-            let bot_y_off = (top.height + jh) as i32;
 
-            let mut entities: Vec<BalancerTemplateEntity> = Vec::with_capacity(
-                top.entities.len() + bot.entities.len() + resp.belts.len() + resp.ugs.len(),
-            );
-            for e in top.entities {
-                entities.push(BalancerTemplateEntity {
-                    name: e.name,
-                    x: e.x,
-                    y: e.y,
-                    direction: e.direction,
-                    io_type: e.io_type,
-                });
-            }
-            for b in &resp.belts {
-                entities.push(BalancerTemplateEntity {
-                    name: "transport-belt",
-                    x: b.x,
-                    y: b.y + junction_y_off,
-                    direction: b.dir,
-                    io_type: None,
-                });
-            }
-            for u in &resp.ugs {
-                let io_type: &'static str = match u.io.as_str() {
-                    "input" => "input",
-                    "output" => "output",
-                    other => return Err(format!("invalid UG io_type: {other}").into()),
+        // Inner retry loop: start with SHORT; escalate to LONG on UNKNOWN.
+        // Uses a labeled block so `break 'attempt` can carry a value out.
+        let resp_opt: Option<PlaceResponse> = 'attempt: {
+            let mut timeout_s = SHORT_TIMEOUT;
+            loop {
+                let req = PlaceRequest::PureRouting {
+                    kind: "pure_routing",
+                    bounds: (composed_width, jh),
+                    input_port_tiles: junction_input_tiles.clone(),
+                    output_port_tiles: junction_output_tiles.clone(),
+                    edges: edges.clone(),
+                    max_time_s: Some(timeout_s),
+                    encoding,
+                    ug_max_reach: None, // None = default yellow (reach=4); future PR sweeps to red/blue
                 };
-                entities.push(BalancerTemplateEntity {
-                    name: "underground-belt",
-                    x: u.x,
-                    y: u.y + junction_y_off,
-                    direction: u.dir,
-                    io_type: Some(io_type),
-                });
+                let budget_tag = if timeout_s <= SHORT_TIMEOUT { "[SHORT]" } else { "[LONG]" };
+                let t_attempt = std::time::Instant::now();
+                let resp = match run_solver(&req) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        last_err = format!("subprocess error at junction_height={jh}: {e}");
+                        break 'attempt None;
+                    }
+                };
+                eprintln!(
+                    "  compose_series: {budget_tag} jh={jh} status={} solver_elapsed={:.1}s wall={:.1}s timeout={:.0}s",
+                    resp.status,
+                    resp.elapsed_s,
+                    t_attempt.elapsed().as_secs_f64(),
+                    timeout_s
+                );
+                match resp.status.as_str() {
+                    "OPTIMAL" | "FEASIBLE" => break 'attempt Some(resp),
+                    "INFEASIBLE" => {
+                        // Real proof — advance to next jh immediately.
+                        last_err = format!(
+                            "junction_height={jh}: {budget_tag} solver returned INFEASIBLE after {:.2}s",
+                            resp.elapsed_s
+                        );
+                        break 'attempt None;
+                    }
+                    _ => {
+                        // UNKNOWN — ambiguous. If we haven't tried LONG yet,
+                        // retry same jh with the full budget. If LONG also
+                        // returns UNKNOWN, both budgets are exhausted: advance
+                        // (matches the old behaviour of advancing on UNKNOWN).
+                        if timeout_s >= LONG_TIMEOUT {
+                            last_err = format!(
+                                "junction_height={jh}: both budgets exhausted (UNKNOWN) after {:.2}s",
+                                resp.elapsed_s
+                            );
+                            break 'attempt None;
+                        }
+                        // Escalate to LONG and retry.
+                        timeout_s = LONG_TIMEOUT;
+                    }
+                }
             }
-            for e in bot.entities {
-                entities.push(BalancerTemplateEntity {
-                    name: e.name,
-                    x: e.x,
-                    y: e.y + bot_y_off,
-                    direction: e.direction,
-                    io_type: e.io_type,
-                });
-            }
+        };
 
-            let composed_input_tiles: Vec<(i32, i32)> = top.input_tiles.to_vec();
-            let composed_output_tiles: Vec<(i32, i32)> = bot
-                .output_tiles
-                .iter()
-                .map(|&(x, y)| (x, y + bot_y_off))
-                .collect();
+        let Some(resp) = resp_opt else { continue; };
 
-            return Ok(OwnedTemplate {
-                n_inputs: top.n_inputs,
-                n_outputs: bot.n_outputs,
-                width: composed_width,
-                height: top.height + jh + bot.height,
-                entities,
-                input_tiles: composed_input_tiles,
-                output_tiles: composed_output_tiles,
+        // Found feasible junction. Assemble composed template.
+        let junction_y_off = top.height as i32;
+        let bot_y_off = (top.height + jh) as i32;
+
+        let mut entities: Vec<BalancerTemplateEntity> = Vec::with_capacity(
+            top.entities.len() + bot.entities.len() + resp.belts.len() + resp.ugs.len(),
+        );
+        for e in top.entities {
+            entities.push(BalancerTemplateEntity {
+                name: e.name,
+                x: e.x,
+                y: e.y,
+                direction: e.direction,
+                io_type: e.io_type,
             });
         }
-        last_err = format!(
-            "junction_height={jh}: solver returned {} after {:.2}s",
-            resp.status, resp.elapsed_s
-        );
+        for b in &resp.belts {
+            entities.push(BalancerTemplateEntity {
+                name: "transport-belt",
+                x: b.x,
+                y: b.y + junction_y_off,
+                direction: b.dir,
+                io_type: None,
+            });
+        }
+        for u in &resp.ugs {
+            let io_type: &'static str = match u.io.as_str() {
+                "input" => "input",
+                "output" => "output",
+                other => return Err(format!("invalid UG io_type: {other}").into()),
+            };
+            entities.push(BalancerTemplateEntity {
+                name: "underground-belt",
+                x: u.x,
+                y: u.y + junction_y_off,
+                direction: u.dir,
+                io_type: Some(io_type),
+            });
+        }
+        for e in bot.entities {
+            entities.push(BalancerTemplateEntity {
+                name: e.name,
+                x: e.x,
+                y: e.y + bot_y_off,
+                direction: e.direction,
+                io_type: e.io_type,
+            });
+        }
+
+        let composed_input_tiles: Vec<(i32, i32)> = top.input_tiles.to_vec();
+        let composed_output_tiles: Vec<(i32, i32)> = bot
+            .output_tiles
+            .iter()
+            .map(|&(x, y)| (x, y + bot_y_off))
+            .collect();
+
+        return Ok((OwnedTemplate {
+            n_inputs: top.n_inputs,
+            n_outputs: bot.n_outputs,
+            width: composed_width,
+            height: top.height + jh + bot.height,
+            entities,
+            input_tiles: composed_input_tiles,
+            output_tiles: composed_output_tiles,
+        }, jh));
     }
     Err(format!(
         "compose_series: no feasible junction_height in [{initial_junction_height}, {max_junction_height}]: {last_err}"
