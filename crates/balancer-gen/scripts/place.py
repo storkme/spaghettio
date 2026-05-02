@@ -1614,6 +1614,44 @@ def solve_pure_routing_circuit(req: dict) -> dict:
 
     Cross-edge constraints (at-most-one entity per cell, UG pairing) are
     posted on top of the per-edge circuits.
+
+    Spatial pruning (RFP `docs/rfp-balancer-spatial-pruning.md`): per-edge
+    variables are restricted to cells inside a Manhattan-ellipse around
+    (src, dst). slack defaults to `bounds height + 2` (the bake passes
+    height = junction_height; this matches "jh + 2"). If the pruned
+    encoding turns out to be INFEASIBLE, we retry once with no pruning
+    before reporting infeasibility upstream — see the kill criteria in
+    the RFP. Override the slack with `req["routing_slack"]` (an int) or
+    pass JSON null to disable pruning entirely.
+    """
+    width, height = req["bounds"]
+    # Default slack = jh + 2 (RFP §design "Initial implementation").
+    default_slack = height + 2
+    slack_arg = req.get("routing_slack", default_slack)
+
+    out = _solve_pure_routing_circuit_inner(req, slack=slack_arg)
+    # Fallback (RFP §design "Fallback on infeasibility"): the corridor
+    # heuristic may exclude valid paths. Retry once with no pruning
+    # before reporting INFEASIBLE upstream.
+    if out.get("status") == "INFEASIBLE" and slack_arg is not None:
+        print(
+            f"  circuit: pruned solve INFEASIBLE at slack={slack_arg} — "
+            "retrying with full encoding",
+            file=sys.stderr,
+        )
+        out = _solve_pure_routing_circuit_inner(req, slack=None)
+    return out
+
+
+def _solve_pure_routing_circuit_inner(req: dict, slack) -> dict:
+    """Inner helper: build and solve the CP-SAT circuit model with
+    optional spatial pruning.
+
+    `slack=None` disables pruning (full encoding, every cell in-corridor
+    for every edge). Otherwise `slack` is a non-negative int and the
+    per-edge corridor mask restricts variable creation to cells with
+    `manhattan((cx, cy), src) + manhattan((cx, cy), dst)
+        <= manhattan(src, dst) + slack`.
     """
     width, height = req["bounds"]
     input_port_tiles = [tuple(t) for t in req["input_port_tiles"]]
@@ -1629,6 +1667,32 @@ def solve_pure_routing_circuit(req: dict) -> dict:
                     "error": "circuit pure routing: edges must be InputPort→OutputPort"}
         edge_src.append(input_port_tiles[edge["src_idx"]])
         edge_dst.append(output_port_tiles[edge["dst_idx"]])
+
+    # Per-edge corridor masks. Out-of-corridor cells get only a
+    # self-loop arc (no belt/UG arcs), so the solver can skip them in
+    # the circuit and doesn't propagate conservation over dead vars.
+    edge_corridors: list[set[tuple[int, int]]] = []
+    for e_idx in range(n_edges):
+        sx, sy = edge_src[e_idx]
+        dx_, dy_ = edge_dst[e_idx]
+        if slack is None:
+            mask = {(cx, cy) for cy in range(height) for cx in range(width)}
+        else:
+            base = abs(sx - dx_) + abs(sy - dy_)
+            threshold = base + slack
+            mask = set()
+            for cy in range(height):
+                for cx in range(width):
+                    if (abs(cx - sx) + abs(cy - sy)
+                            + abs(cx - dx_) + abs(cy - dy_)) <= threshold:
+                        mask.add((cx, cy))
+            # Defensive: src and dst are foci of the ellipse and are
+            # already in-corridor for slack >= 0, but make this explicit
+            # so a degenerate slack value can't accidentally exclude
+            # them. The forced south-belt at dst depends on it.
+            mask.add((sx, sy))
+            mask.add((dx_, dy_))
+        edge_corridors.append(mask)
 
     model = cp_model.CpModel()
 
@@ -1647,24 +1711,64 @@ def solve_pure_routing_circuit(req: dict) -> dict:
     ug_vars: dict[tuple[int, int, int, int, int], any] = {}
     self_loop_vars: dict[tuple[int, int, int], any] = {}
 
+    gen_ugs = not req.get("debug_no_ugs", False)
+
     for e_idx in range(n_edges):
         sx, sy = edge_src[e_idx]
         dx_, dy_ = edge_dst[e_idx]
         src_node = cell_id(sx, sy)
         dst_node = cell_id(dx_, dy_)
+        corridor = edge_corridors[e_idx]
 
         arc_list = []  # (tail_node, head_node, literal)
 
-        # Belt arcs: cell → in-bounds neighbor in each direction. The
-        # dst's south arc is special — it's a real belt facing south
-        # (the junction-exit), and the arc head is the virtual exit
-        # node so the circuit can close via exit → src.
+        # Count what would have been generated unpruned (so the debug
+        # log can show pruning ratio). Cheap relative to var creation.
+        belt_potential = 0
+        ug_potential = 0
         for cy in range(height):
             for cx in range(width):
                 for d in range(4):
                     sdx, sdy = DIR_STEPS[d]
                     nx, ny = cx + sdx, cy + sdy
                     if 0 <= nx < width and 0 <= ny < height:
+                        belt_potential += 1
+                    elif d == 2 and (cx, cy) == (dx_, dy_):
+                        belt_potential += 1
+                    if not gen_ugs:
+                        continue
+                    for L in range(2, UG_MAX_REACH + 1):
+                        bx, by = cx + L * sdx, cy + L * sdy
+                        cx_c, cy_c = cx + (L + 1) * sdx, cy + (L + 1) * sdy
+                        if not (0 <= bx < width and 0 <= by < height):
+                            continue
+                        in_bounds_c = (0 <= cx_c < width and 0 <= cy_c < height)
+                        is_dst_exit_pot = (
+                            d == 2 and bx == dx_ and by == dy_
+                            and not in_bounds_c
+                        )
+                        if not in_bounds_c and not is_dst_exit_pot:
+                            continue
+                        ug_potential += 1
+
+        # Belt arcs: cell → in-bounds neighbor in each direction. Both
+        # endpoints must be in-corridor (cells outside the ellipse can
+        # never lie on a path that respects the corridor; arcs into
+        # them are dead). The dst's south arc is special — it's a real
+        # belt facing south (the junction-exit), and the arc head is
+        # the virtual exit node so the circuit can close via
+        # exit → src. Dst is always in-corridor (it's a focus), so the
+        # forced south-belt is always emitted.
+        for cy in range(height):
+            for cx in range(width):
+                if (cx, cy) not in corridor:
+                    continue
+                for d in range(4):
+                    sdx, sdy = DIR_STEPS[d]
+                    nx, ny = cx + sdx, cy + sdy
+                    if 0 <= nx < width and 0 <= ny < height:
+                        if (nx, ny) not in corridor:
+                            continue
                         var = model.NewBoolVar(f"b{cx}_{cy}_{d}_e{e_idx}")
                         belt_vars[(cx, cy, d, e_idx)] = var
                         arc_list.append((cell_id(cx, cy), cell_id(nx, ny), var))
@@ -1686,9 +1790,16 @@ def solve_pure_routing_circuit(req: dict) -> dict:
         # which collides with the UG-output entity at B in at-most-one.
         # Skip L=1 — equivalent to a belt, never picked when minimizing
         # entities.
-        if not req.get("debug_no_ugs", False):
+        #
+        # Pruning: BOTH A and C must be in-corridor for the arc to
+        # exist. The dst-exit case (d==2, B==dst, C off-grid) is always
+        # allowed unconditionally — dst is a focus of the corridor and
+        # the EXIT_NODE is logically downstream.
+        if gen_ugs:
             for cy in range(height):
                 for cx in range(width):
+                    if (cx, cy) not in corridor:
+                        continue
                     for d in range(4):
                         sdx, sdy = DIR_STEPS[d]
                         for L in range(2, UG_MAX_REACH + 1):
@@ -1706,6 +1817,10 @@ def solve_pure_routing_circuit(req: dict) -> dict:
                             )
                             if not in_bounds_c and not is_dst_exit:
                                 continue
+                            # Corridor check on C. Dst-exit is always
+                            # in-corridor (head is EXIT_NODE).
+                            if not is_dst_exit and (cx_c, cy_c) not in corridor:
+                                continue
                             var = model.NewBoolVar(f"u{cx}_{cy}_{d}_{L}_e{e_idx}")
                             ug_vars[(cx, cy, d, L, e_idx)] = var
                             head = EXIT_NODE if is_dst_exit else cell_id(cx_c, cy_c)
@@ -1713,7 +1828,10 @@ def solve_pure_routing_circuit(req: dict) -> dict:
                             _ = is_dst_landing  # kept for readability
 
         # Self-loops for cells that may be off-path. src and dst are
-        # forced on-path by omitting their self-loops.
+        # forced on-path by omitting their self-loops. Out-of-corridor
+        # cells DO get a self-loop — AddCircuit needs every node to
+        # either be visited or self-looped, and out-of-corridor cells
+        # have no other arcs so the self-loop is their only option.
         for cy in range(height):
             for cx in range(width):
                 if (cx, cy) == (sx, sy) or (cx, cy) == (dx_, dy_):
@@ -1729,7 +1847,9 @@ def solve_pure_routing_circuit(req: dict) -> dict:
         model.Add(closing_lit == 1)
         arc_list.append((EXIT_NODE, src_node, closing_lit))
 
-        # Debug: log arc counts before adding the constraint.
+        # Debug: log arc counts before adding the constraint. With
+        # pruning, also report the unpruned-potential numbers so the
+        # reduction ratio is visible per edge.
         sl_count = sum(1 for (a, b, _) in arc_list if a == b)
         belt_arc_count = sum(
             1 for (cx, cy, d, ee) in belt_vars.keys() if ee == e_idx
@@ -1737,12 +1857,22 @@ def solve_pure_routing_circuit(req: dict) -> dict:
         ug_arc_count = sum(
             1 for k in ug_vars.keys() if k[4] == e_idx
         )
-        print(
-            f"  circuit edge_idx={e_idx} src={(sx, sy)} dst={(dx_, dy_)} "
-            f"arcs={len(arc_list)} belts={belt_arc_count} ugs={ug_arc_count} "
-            f"self_loops={sl_count} closing=1",
-            file=sys.stderr,
-        )
+        if slack is None:
+            print(
+                f"  circuit edge_idx={e_idx} src={(sx, sy)} dst={(dx_, dy_)} "
+                f"arcs={len(arc_list)} belts={belt_arc_count} ugs={ug_arc_count} "
+                f"self_loops={sl_count} closing=1 (no pruning)",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"  circuit edge_idx={e_idx} pruned slack={slack}: "
+                f"belts={belt_arc_count}/{belt_potential} "
+                f"ugs={ug_arc_count}/{ug_potential} "
+                f"src={(sx, sy)} dst={(dx_, dy_)} "
+                f"arcs={len(arc_list)} self_loops={sl_count}",
+                file=sys.stderr,
+            )
         model.AddCircuit(arc_list)
 
     debug_no_atmost_one = req.get("debug_no_atmost_one", False)
