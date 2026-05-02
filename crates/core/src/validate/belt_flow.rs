@@ -2375,13 +2375,17 @@ fn compute_lane_rates_impl(
             }
 
             // Phase 2: splitter pairs. Output = balanced average of pair's
-            // total feeder contribution.
+            // total feeder contribution, distributed evenly across all four
+            // output lanes (2 halves × 2 lanes per half). Real Factorio
+            // splitters mix lanes — input [L=15, R=0] becomes output
+            // [L=7.5, R=7.5] per half — so a lane-imbalanced sideload
+            // upstream gets re-balanced at the splitter, not propagated.
             for &(a, b) in &pair_set {
                 let a_fc = feeder_contributions_for_tile(a, &prev, &feeders, &belt_dir_map);
                 let b_fc = feeder_contributions_for_tile(b, &prev, &feeders, &belt_dir_map);
-                let total_l = a_fc[0] + b_fc[0];
-                let total_r = a_fc[1] + b_fc[1];
-                let half = [total_l / 2.0, total_r / 2.0];
+                let total = a_fc[0] + a_fc[1] + b_fc[0] + b_fc[1];
+                let per_lane = total / 4.0;
+                let half = [per_lane, per_lane];
                 next.insert(a, half);
                 next.insert(b, half);
             }
