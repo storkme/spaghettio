@@ -46,6 +46,7 @@ follow-up commits, all of which slot into this same wire format.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from typing import Any
@@ -1779,9 +1780,13 @@ def place_one_to_m_from_synth() -> dict[str, Any]:
     if levels == 3:
         width = M_X + (7 if needs_balancer else 6)
     else:
-        # 4-level: M_X = 9, max L3 col = M_X+8 (anchor) + 1 (second tile) = 18.
-        # Add east-edge wrap.
-        width = M_X + (10 if needs_balancer else 10)
+        # 4-level: M_X = 9, outer-right L3 anchor at M_X+8 spans cols
+        # M_X+8 .. M_X+9. The feedback wrap needs at least one free
+        # east-edge column beyond that, so width must be ≥ M_X + 11.
+        # Add a second wrap column for the balancer case (B's outputs
+        # need to loop east before turning back to M.in1) — width
+        # M_X + 12 = 21 with M_X = 9.
+        width = M_X + (12 if needs_balancer else 11)
     height = output_drop_y + (2 if needs_balancer else 3)
 
     # ----- Solve -----
@@ -1870,7 +1875,17 @@ def main() -> int:
     n = int(request.get("n", 0))
     m = int(request.get("m", 0))
     timeout_ms = int(request.get("timeout_ms", 1000))
-    seed = request.get("seed")
+    # Seed precedence: env var FUCKTORIO_CP_SAT_SEED > request "seed" field >
+    # None (CP-SAT picks a wall-clock seed). Mirrors the spike placer's
+    # convention in `crates/balancer-gen/scripts/place.py` so the same
+    # sweep harness pattern can drive both. The env var is used by
+    # `scripts/bake_cp_sat_runner.py` (overnight seed sweep) to vary the
+    # seed without rewriting the request body.
+    seed_env = os.environ.get("FUCKTORIO_CP_SAT_SEED")
+    if seed_env is not None:
+        seed = int(seed_env)
+    else:
+        seed = request.get("seed")
 
     # Configure the module-level solver params so every CP-SAT solve
     # in this run honours the request's timeout and seed. See
@@ -1903,19 +1918,16 @@ def main() -> int:
         (2, 8): lambda: place_x_to_eight(2),
         (1, 16): lambda: place_x_to_sixteen(1),
         (2, 16): lambda: place_x_to_sixteen(2),
-        # `(1, 5)` stays on the hand-tuned placer: the generalised one
-        # subsumes it in isolation but flakes intermittently in full-suite
-        # runs (CP-SAT picks OutputDegree-violating alternates when system
-        # load extends solve time). Subsuming `(1, 5)` reliably needs
-        # tighter structural constraints; tracked as follow-up.
+        # `(1, 5)` stays on the hand-tuned placer (see RFP decision log).
         (1, 5): place_one_to_five,
-        # Generalised placer for `(1, 6)` and `(1, 7)`. `(1, 9)` and
-        # `(1, 10)` 4-level branch is in `place_one_to_m_from_synth`
-        # but the model doesn't solve within 10 min even at 8 workers —
-        # needs further layout work or an overnight bake job (see RFP
-        # decision log).
+        # Generalised placer for `(1, m)` shapes. 4-level shapes
+        # (`(1, 9)`, `(1, 10)`) are wired but the model is large; pin a
+        # known-fast seed via `FUCKTORIO_CP_SAT_SEED=<seed>` (sweep
+        # harness in `scripts/bake_cp_sat_runner.py`).
         (1, 6): place_one_to_m_from_synth,
         (1, 7): place_one_to_m_from_synth,
+        (1, 9): place_one_to_m_from_synth,
+        (1, 10): place_one_to_m_from_synth,
     }
 
     if (n, m) in geometry:
