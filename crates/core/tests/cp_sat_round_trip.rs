@@ -112,11 +112,26 @@ fn round_trip_1_4() {
 }
 
 #[test]
+fn round_trip_2_4() {
+    round_trip(2, 4);
+}
+
+#[test]
 fn round_trip_1_8() {
     round_trip(1, 8);
 }
 
 #[test]
+fn round_trip_2_8() {
+    round_trip(2, 8);
+}
+
+#[test]
 fn round_trip_1_16() {
     round_trip(1, 16);
+}
+
+#[test]
+fn round_trip_2_16() {
+    round_trip(2, 16);
 }

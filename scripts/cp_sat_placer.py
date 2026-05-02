@@ -276,18 +276,26 @@ def place_single_splitter(n: int, m: int) -> dict[str, Any]:
     }
 
 
-def place_one_to_four() -> dict[str, Any]:
-    """`(1, 4)` complete binary tree, placed via real CP-SAT for both
-    splitter positions and belt routing.
+def _input_tiles_for_root(x_root: int, y_root: int, n: int) -> list[tuple[int, int]]:
+    """Choose input belt tiles above the root for `n ∈ {1, 2}` inputs.
+
+    n=1: feed port 0 (left tile).  n=2: feed both ports.  Larger n
+    would require sideloading or a merger sub-network; not yet
+    supported.
+    """
+    if n == 1:
+        return [(x_root, y_root - 1)]
+    if n == 2:
+        return [(x_root, y_root - 1), (x_root + 1, y_root - 1)]
+    raise ValueError(f"unsupported input count {n}; expected 1 or 2")
+
+
+def place_x_to_four(n: int) -> dict[str, Any]:
+    """`(n, 4)` complete binary tree for `n ∈ {1, 2}`.
 
     All splitter-to-splitter arcs are tight-stack (no belts needed);
-    the routing solver only handles the input belt and the 4 output
-    belts (each a length-1 south belt).
-
-    Constraints:
-      - 3 splitter rectangles (2×1, south-facing), `no_overlap_2d`.
-      - Tight-stack: child anchor = `(parent.x ± 1, parent.y + 1)`.
-      - Boundary: yR ≥ 1; yR + 2 ≤ H − 1; columns fit.
+    the routing solver handles only the input belt(s) and the 4
+    output belts.
     """
     from ortools.sat.python import cp_model
 
@@ -318,18 +326,16 @@ def place_one_to_four() -> dict[str, Any]:
     solver = cp_model.CpSolver()
     status = solver.solve(model)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        raise RuntimeError(f"(1, 4) CP-SAT model UNSAT: {solver.status_name(status)}")
+        raise RuntimeError(f"({n}, 4) CP-SAT model UNSAT: {solver.status_name(status)}")
 
     pos = [(solver.value(xs[i]), solver.value(ys[i])) for i in range(3)]
     x_root, y_root = pos[0]
 
     DIR_S = 2
     routes: list[tuple[tuple[int, int], tuple[int, int], int]] = []
-    # Input belt feeds root.left_tile (port 0) via south drop.
-    input_tile = (x_root, y_root - 1)
-    routes.append((input_tile, input_tile, DIR_S))
-    # Root → L1: tight-stack, no belts.
-    # L1 → outputs: 4 length-1 south belts on the bottom row.
+    input_tiles = _input_tiles_for_root(x_root, y_root, n)
+    for it in input_tiles:
+        routes.append((it, it, DIR_S))
     for parent_idx in (1, 2):
         px, py = pos[parent_idx]
         for port in (0, 1):
@@ -338,7 +344,7 @@ def place_one_to_four() -> dict[str, Any]:
 
     belt_dirs = _route_belts(pos, routes, width, height)
     if belt_dirs is None:
-        raise RuntimeError("(1, 4) belt routing UNSAT")
+        raise RuntimeError(f"({n}, 4) belt routing UNSAT")
 
     entities: list[dict[str, Any]] = []
     for x, y in pos:
@@ -351,29 +357,26 @@ def place_one_to_four() -> dict[str, Any]:
     output_y = pos[1][1] + 1
     output_cols = [pos[1][0], pos[1][0] + 1, pos[2][0], pos[2][0] + 1]
     return {
-        "n_inputs": 1,
+        "n_inputs": n,
         "n_outputs": 4,
         "width": width,
         "height": height,
         "entities": entities,
-        "input_tiles": [list(input_tile)],
+        "input_tiles": [list(it) for it in input_tiles],
         "output_tiles": [[c, output_y] for c in output_cols],
     }
 
 
-def place_one_to_eight() -> dict[str, Any]:
-    """`(1, 8)` 7-splitter tree, placed via real CP-SAT for both
-    splitter positions and belt routing.
+def place_x_to_eight(n: int) -> dict[str, Any]:
+    """`(n, 8)` 7-splitter tree for `n ∈ {1, 2}`.
 
-    Two-phase model: the structural CP-SAT model fixes splitter
-    positions (root + routing-row offset to level-1, tight-stack to
-    level-2), then [`_route_belts`] solves the per-tile belt
-    directions via flow-conservation constraints over a tile graph.
-    Replaces the prior hand-coded W-S-E-S routing strip with a
-    generic router that scales to any graph topology.
-
-    Width 8, height 6. Splitter ordering: 0 = root, 1-2 = level-1,
+    Structural CP-SAT model fixes splitter positions (root +
+    routing-row offset to level-1, tight-stack to level-2), then
+    [`_route_belts`] solves per-tile belt directions via flow
+    conservation. Splitter ordering: 0 = root, 1-2 = level-1,
     3-6 = level-2.
+
+    Width 8, height 6.
     """
     from ortools.sat.python import cp_model
 
@@ -418,20 +421,16 @@ def place_one_to_eight() -> dict[str, Any]:
     solver = cp_model.CpSolver()
     status = solver.solve(model)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        raise RuntimeError(f"(1, 8) CP-SAT model UNSAT: {solver.status_name(status)}")
+        raise RuntimeError(f"({n}, 8) CP-SAT model UNSAT: {solver.status_name(status)}")
 
     pos = [(solver.value(xs[i]), solver.value(ys[i])) for i in range(n_splitters)]
     x_root, y_root = pos[0]
 
-    # Derive routes from the tree topology + splitter positions. Each
-    # route is (src_tile, sink_tile, sink_dir) where sink_dir is south
-    # (= 2 internal, = 4 Factorio) so items drop into the next splitter
-    # or out of the grid.
     DIR_S = 2
     routes: list[tuple[tuple[int, int], tuple[int, int], int]] = []
-    # Input belt feeds root's right tile (port 1) via south drop.
-    input_tile = (x_root + 1, y_root - 1)
-    routes.append((input_tile, input_tile, DIR_S))
+    input_tiles = _input_tiles_for_root(x_root, y_root, n)
+    for it in input_tiles:
+        routes.append((it, it, DIR_S))
     # Root → level-1: each side picks the closer L1 input port.
     for parent_idx, port, child_idx in ((0, 0, 1), (0, 1, 2)):
         px, py = pos[parent_idx]
@@ -450,7 +449,7 @@ def place_one_to_eight() -> dict[str, Any]:
 
     belt_dirs = _route_belts(pos, routes, width, height)
     if belt_dirs is None:
-        raise RuntimeError("(1, 8) belt routing UNSAT")
+        raise RuntimeError(f"({n}, 8) belt routing UNSAT")
 
     entities: list[dict[str, Any]] = []
     for x, y in pos:
@@ -465,29 +464,27 @@ def place_one_to_eight() -> dict[str, Any]:
     rightmost = pos[6][0] + 1
     output_cols = list(range(leftmost, rightmost + 1))
     return {
-        "n_inputs": 1,
+        "n_inputs": n,
         "n_outputs": 8,
         "width": width,
         "height": height,
         "entities": entities,
-        "input_tiles": [list(input_tile)],
+        "input_tiles": [list(it) for it in input_tiles],
         "output_tiles": [[c, output_y] for c in output_cols],
     }
 
 
-def place_one_to_sixteen() -> dict[str, Any]:
-    """`(1, 16)` 15-splitter tree, placed via real CP-SAT for both
-    splitter positions and belt routing.
+def place_x_to_sixteen(n: int) -> dict[str, Any]:
+    """`(n, 16)` 15-splitter tree for `n ∈ {1, 2}`.
 
-    The CP-SAT model fixes the structural offsets:
+    Structural offsets:
       - Root → level-1: routing-row offset, ±4 cols, +2 rows.
       - Level-1 → level-2: routing-row offset, ±2 cols, +2 rows.
       - Level-2 → level-3: tight-stack, ±1 col, +1 row.
 
-    [`_route_belts`] then solves per-tile belt directions for the
-    input belt, the two non-tight-stack levels of routes, and the 16
-    output belts. Splitter ordering is BFS: 0 = root, 1-2 = level-1,
-    3-6 = level-2, 7-14 = level-3.
+    [`_route_belts`] solves per-tile belt directions. Splitter
+    ordering is BFS: 0 = root, 1-2 = level-1, 3-6 = level-2,
+    7-14 = level-3.
 
     Width 16, height 8.
     """
@@ -534,16 +531,16 @@ def place_one_to_sixteen() -> dict[str, Any]:
     solver = cp_model.CpSolver()
     status = solver.solve(model)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        raise RuntimeError(f"(1, 16) CP-SAT model UNSAT: {solver.status_name(status)}")
+        raise RuntimeError(f"({n}, 16) CP-SAT model UNSAT: {solver.status_name(status)}")
 
     pos = [(solver.value(xs[i]), solver.value(ys[i])) for i in range(n_splitters)]
     x_root, y_root = pos[0]
 
     DIR_S = 2
     routes: list[tuple[tuple[int, int], tuple[int, int], int]] = []
-    # Input belt feeds root.right_tile (port 1).
-    input_tile = (x_root + 1, y_root - 1)
-    routes.append((input_tile, input_tile, DIR_S))
+    input_tiles = _input_tiles_for_root(x_root, y_root, n)
+    for it in input_tiles:
+        routes.append((it, it, DIR_S))
     # Root → L1.
     for parent_idx, port, child_idx in ((0, 0, 1), (0, 1, 2)):
         px, py = pos[parent_idx]
@@ -571,7 +568,7 @@ def place_one_to_sixteen() -> dict[str, Any]:
 
     belt_dirs = _route_belts(pos, routes, width, height)
     if belt_dirs is None:
-        raise RuntimeError("(1, 16) belt routing UNSAT")
+        raise RuntimeError(f"({n}, 16) belt routing UNSAT")
 
     entities: list[dict[str, Any]] = []
     for x, y in pos:
@@ -586,12 +583,12 @@ def place_one_to_sixteen() -> dict[str, Any]:
     rightmost = pos[14][0] + 1
     output_cols = list(range(leftmost, rightmost + 1))
     return {
-        "n_inputs": 1,
+        "n_inputs": n,
         "n_outputs": 16,
         "width": width,
         "height": height,
         "entities": entities,
-        "input_tiles": [list(input_tile)],
+        "input_tiles": [list(it) for it in input_tiles],
         "output_tiles": [[c, output_y] for c in output_cols],
     }
 
@@ -618,9 +615,12 @@ def main() -> int:
         (1, 2): lambda: place_single_splitter(1, 2),
         (2, 1): lambda: place_single_splitter(2, 1),
         (2, 2): lambda: place_single_splitter(2, 2),
-        (1, 4): place_one_to_four,
-        (1, 8): place_one_to_eight,
-        (1, 16): place_one_to_sixteen,
+        (1, 4): lambda: place_x_to_four(1),
+        (2, 4): lambda: place_x_to_four(2),
+        (1, 8): lambda: place_x_to_eight(1),
+        (2, 8): lambda: place_x_to_eight(2),
+        (1, 16): lambda: place_x_to_sixteen(1),
+        (2, 16): lambda: place_x_to_sixteen(2),
     }
 
     if (n, m) in geometry:
