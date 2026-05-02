@@ -1051,6 +1051,39 @@ fn tier3_heavy_oil_cracking() {
     assert_golden_hash(&result, "tier3_heavy_oil_cracking");
 }
 
+/// Regression for issue #277: `fluid_only_row_staggered_3output` panicked with
+/// `machine_count == 1` assertion when advanced-oil-processing needed ≥2
+/// refineries.  At 12/s petroleum-gas the solver yields 2 oil-refineries
+/// (one refinery produces 11/s petroleum-gas), forcing the multi-machine
+/// 3-fluid-output path that previously hit the assertion.
+#[test]
+#[ntest::timeout(15000)]
+fn tier3_advanced_oil_processing_multi_machine() {
+    let inputs: FxHashSet<String> = ["water", "crude-oil"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let result = run_e2e(
+        "tier3_advanced_oil_processing_multi_machine",
+        "petroleum-gas",
+        12.0,
+        "oil-refinery",
+        None,
+        &inputs,
+    )
+    .unwrap_or_else(|e| panic!("tier3_advanced_oil_processing_multi_machine: {e}"));
+
+    assert_no_errors(&result);
+    // Two refineries should be present.
+    let refinery_count = result.layout.entities.iter()
+        .filter(|e| e.name == "oil-refinery")
+        .count();
+    assert!(
+        refinery_count >= 2,
+        "expected ≥2 oil-refineries for 12/s petroleum-gas, got {refinery_count}",
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Tier 4: advanced-circuit (5+ recipes, mixed solid/fluid)
 // Known issues: lane-throughput warnings from single-lane sideload bottleneck (#64)
