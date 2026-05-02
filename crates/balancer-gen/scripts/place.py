@@ -1619,11 +1619,21 @@ def solve_pure_routing_circuit(req: dict) -> dict:
     Spatial pruning (RFP `docs/rfp-balancer-spatial-pruning.md`): per-edge
     variables are restricted to cells inside a Manhattan-ellipse around
     (src, dst). slack defaults to `bounds height + 2` (the bake passes
-    height = junction_height; this matches "jh + 2"). If the pruned
-    encoding turns out to be INFEASIBLE, we retry once with no pruning
-    before reporting infeasibility upstream — see the kill criteria in
-    the RFP. Override the slack with `req["routing_slack"]` (an int) or
-    pass JSON null to disable pruning entirely.
+    height = junction_height; this matches "jh + 2"). Override with
+    `req["routing_slack"]` (an int) or pass JSON null to disable pruning
+    entirely.
+
+    Fallback: the RFP originally specified a post-INFEASIBLE retry with
+    full encoding to guard against false-INFEASIBLE from the heuristic.
+    Verification (Decision log entry 2026-05-02) showed the retry never
+    rescues anything in the bake context — `compose_series` in main.rs
+    treats INFEASIBLE and UNKNOWN identically (both bump `jh`), so a
+    pruned-INFEASIBLE just advances the bake's outer loop, which is the
+    real safety net. The fallback meanwhile doubled wall time at every
+    infeasible jh and tripped kill criterion #3. Default is therefore
+    fallback OFF; opt back in by setting FUCKTORIO_ROUTING_FALLBACK=1
+    (paranoia mode for one-off requests where +1 row of jh is more
+    expensive than the re-solve).
     """
     width, height = req["bounds"]
     # Default slack = jh + 2 (RFP §design "Initial implementation").
@@ -1631,19 +1641,15 @@ def solve_pure_routing_circuit(req: dict) -> dict:
     slack_arg = req.get("routing_slack", default_slack)
 
     out = _solve_pure_routing_circuit_inner(req, slack=slack_arg)
-    # Fallback (RFP §design "Fallback on infeasibility"): the corridor
-    # heuristic may exclude valid paths. Retry once with no pruning
-    # before reporting INFEASIBLE upstream.
-    # DIAGNOSTIC: env var FUCKTORIO_ROUTING_NO_FALLBACK=1 disables the
-    # fallback so we can isolate pruning's effect from the fallback's
-    # cost on infeasible jhs.
-    skip_fallback = os.environ.get("FUCKTORIO_ROUTING_NO_FALLBACK") == "1"
+    # Fallback is OFF by default; opt in via FUCKTORIO_ROUTING_FALLBACK=1.
+    # See docstring above + RFP decision log for why.
+    fallback_enabled = os.environ.get("FUCKTORIO_ROUTING_FALLBACK") == "1"
     if (out.get("status") == "INFEASIBLE"
             and slack_arg is not None
-            and not skip_fallback):
+            and fallback_enabled):
         print(
             f"  circuit: pruned solve INFEASIBLE at slack={slack_arg} — "
-            "retrying with full encoding",
+            "retrying with full encoding (FUCKTORIO_ROUTING_FALLBACK=1)",
             file=sys.stderr,
         )
         out = _solve_pure_routing_circuit_inner(req, slack=None)

@@ -192,3 +192,63 @@ Single phase. ~150-200 LOC change in `place.py`. No Rust touches.
 - *2026-05-02 — drafted. Awaiting approval. Can run in parallel with
   the bake-lane-validation RFP (this one touches Python, that one
   touches Rust orchestration; zero merge-conflict surface).*
+
+- *2026-05-02 — landed (commits `7f840a3` initial impl, `72e9cda`
+  env-var diagnostic, follow-up flipping the default). Default is
+  fallback OFF; `FUCKTORIO_ROUTING_FALLBACK=1` re-enables it for
+  one-off paranoia.*
+
+  **Verification numbers** ((4, 9) Clos compose,
+  `FUCKTORIO_DEBUG_4_9=1 FUCKTORIO_PURE_ROUTING_ENCODING=circuit`):
+
+  | run | wall | jh=9 solver |
+  |---|---|---|
+  | baseline (pre-pruning) | 209s | 118.8s |
+  | pruning + fallback ON | 403–516s (variance) | 126.6–203.5s |
+  | **pruning, fallback OFF (new default)** | **122s** | **10.2s** |
+
+  Per-edge var-count reduction at (4, 9) jh=9: belts 187/391 to
+  391/391 (close-edge corners ~52% off, longest edges 0%); UGs
+  328/976 to 976/976 (close edges ~66% off). In line with the
+  RFP-predicted "30–50% per edge".
+
+  (5, 9) jh=9 standalone: previously **UNKNOWN at 645s timeout**
+  (the RFP's headline failing case). With pruning + fallback OFF:
+  **OPTIMAL in 324s solver/wall**. Headline unlock met.
+
+  **Why the fallback was harmful in practice.** The RFP rationale
+  for the fallback was "guard against the heuristic killing real
+  solutions." The bake's `compose_series` (`crates/balancer-gen/
+  src/main.rs:1656`) only branches on OPTIMAL/FEASIBLE — INFEASIBLE
+  and UNKNOWN both bump `jh`. So a pruned-INFEASIBLE has no
+  semantic difference from a full-encoding-INFEASIBLE in the bake
+  path: both push the outer loop one row taller. The bake's outer
+  loop is already the correct safety net; the fallback was
+  decorative. Meanwhile it doubled wall time at every infeasible
+  `jh` (at jh=8 specifically, ~80s baseline + ~80–180s fallback
+  re-solve), making total wall on (4, 9) regress 2× — kill
+  criterion #3 territory.
+
+  **Kill criteria final status:**
+
+  - #1 ("any prior-feasible repro becomes INFEASIBLE under
+    pruning"): NOT tripped in either fallback mode.
+  - #2 ("doesn't shrink (4, 9) wall time by ≥2× at any slack
+    tuning"): borderline — total wall is 1.7× at slack=jh+2. At
+    jh=9 alone (the OPTIMAL solve, where the speedup matters) it's
+    ~10×. The headline (5, 9) jh=9 unlock is the deciding factor.
+    Accepted.
+  - #3 (">25% slower"): tripped with fallback ON; cleared with
+    fallback OFF (which is now the default). Opt-in mode trips it
+    intentionally for users who prefer the correctness guard.
+  - #4 (jh=9 OPTIMAL but worse layout than jh=10): not observed —
+    same Balanced classification at (4, 9) jh=9.
+
+  **Follow-on flagged.** With pruning landed, the dominant remaining
+  wall-time consumer on (4, 9) is the infeasible-jh climb: the bake
+  walks `jh ∈ [5, 9]` proving each lower one infeasible before
+  finding OPTIMAL at 9. That's ~110s of "I'm sure it doesn't fit"
+  before the actual solve. A smarter `jh` search (binary, or learned
+  start-jh from shape parameters, or single-shot oracle for a lower
+  bound) would compound with this pruning. Not in scope for this
+  RFP; flagged for whoever picks up the next "going larger" thread.
