@@ -401,3 +401,38 @@ re-litigating decisions:
   sideload limitation means we can't reproduce every Factorio-SAT
   output exactly, but for coprime shape generation we don't need to —
   we just need a working topology in a tight bbox.*
+
+- *2026-05-02 — phase 3.2D.1 shipped (Mode D in `place.py`,
+  `solve_synth_place`). Takes a topology + bbox; CP-SAT picks
+  splitter anchor cells, IO port columns, slot assignments, and belt
+  routing all in one call. Splitters stay all-south for now, IO ports
+  on top/bottom rows with x-positions sorted left-to-right (the
+  classifier's flow accounting depends on output_tiles index ↔
+  physical-x correspondence — without sorted ports, the layout
+  classifies as MX2a even when topologically equivalent).*
+
+  *Round-trip on south-only shapes at library bbox: 3/3 pass.
+  `(2, 2)` 0.03s, `(2, 4)` 0.04s, `(1, 4)` 0.04s — fast.*
+
+  *UGs disabled in Mode D for this phase. With UGs enabled the
+  solver finds valid-but-nonsensical conservation flows: a CP-SAT
+  spike on (1, 4) with UGs produced a layout with a UG heading
+  north (away from output ports) creating a U-turn — conservation
+  is satisfied but the physical layout has a backward loop that
+  the lane-level classifier reads as MX2a. The fix is anti-loop
+  constraints on per-edge paths (no cell visited twice by the same
+  edge, or shortest-path objective). Deferred to 3.2D.2 along with
+  splitter direction freedom.*
+
+  *Bbox minimisation itself isn't yet wired — Mode D solves at a
+  fixed caller-supplied bbox. The library bboxes for our south-only
+  test shapes are already tight (all match the
+  width=max(n_inputs, n_outputs), height=3+ceil(splitters/2)
+  lower bound), so external shrink-loop demonstrations aren't
+  meaningful on this corpus. Direction freedom + UGs will open up
+  shapes where shrinking actually wins.*
+
+  *Phase 3.2D.2 plan: re-enable UGs with `arcs+ug_arcs` per edge
+  visiting each cell at most once (no-loop constraint), add direction
+  bool var per splitter, re-test on the (1, 3)/(2, 3)/(4, 8)/(3, 5)
+  corpus that worked in Mode C. Phases 3.3, 3.4 remain unblocked.*

@@ -46,6 +46,13 @@ enum PlaceRequest {
         output_port_tiles: Vec<(i32, i32)>,
         edges: Vec<EdgeReq>,
     },
+    SynthPlace {
+        bounds: (u32, u32),
+        n_inputs: u32,
+        n_outputs: u32,
+        n_splitters: usize,
+        edges: Vec<EdgeReq>,
+    },
 }
 
 #[derive(Serialize, Clone)]
@@ -73,6 +80,10 @@ struct PlaceResponse {
     belts: Vec<BeltOutput>,
     #[serde(default)]
     ugs: Vec<UgOutput>,
+    #[serde(default)]
+    input_port_tiles: Vec<[i32; 2]>,
+    #[serde(default)]
+    output_port_tiles: Vec<[i32; 2]>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -89,6 +100,8 @@ struct UgOutput {
 struct SplitterPos {
     x: i32,
     y: i32,
+    #[serde(default)]
+    dir: u8,
 }
 
 #[derive(Deserialize, Debug, Clone, Copy)]
@@ -161,6 +174,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if pass == 0 {
         return Err("no routing round-trips passed".into());
+    }
+
+    // Mode D — phase 3.2D.1 synth-place at fixed bbox. CP-SAT picks
+    // splitter positions, IO port columns, slot assignments, and belt
+    // routing all in one shot. Tested on south-only shapes against the
+    // library bbox.
+    println!("\n=== phase 3.2D.1: synth-place at fixed bbox ===");
+    let mut synth_results: Vec<(String, Result<(), String>)> = Vec::new();
+    for &(label, shape) in &[
+        ("(2, 2)", (2u32, 2u32)),
+        ("(2, 4)", (2, 4)),
+        ("(1, 4)", (1, 4)),
+    ] {
+        let result = spike_synth_place(label, shape).map_err(|e| e.to_string());
+        if result.is_err() {
+            println!("  ✗ {label}: {}", result.as_ref().err().unwrap());
+        }
+        synth_results.push((label.to_string(), result));
+    }
+    let synth_pass = synth_results.iter().filter(|(_, r)| r.is_ok()).count();
+    let synth_total = synth_results.len();
+    println!("\nsynth-place: {synth_pass}/{synth_total} pass");
+    for (label, r) in &synth_results {
+        let icon = if r.is_ok() { "✓" } else { "✗" };
+        println!("  {icon} {label}");
     }
 
     println!("\n✓ all spike runs passed");
@@ -431,6 +469,109 @@ fn build_edge_reqs(
         });
     }
     Ok(edge_reqs)
+}
+
+// ---------------------------------------------------------------------------
+// Mode D — phase 3.2D.1 synth-place
+// ---------------------------------------------------------------------------
+
+fn spike_synth_place(
+    label: &str,
+    shape: (u32, u32),
+) -> Result<(), Box<dyn std::error::Error>> {
+    let templates = balancer_templates();
+    let lib = templates
+        .get(&shape)
+        .ok_or_else(|| format!("library missing {shape:?}"))?;
+    let topology = topology_of_template(BalancerTemplateRef::from(lib))
+        .map_err(|e| format!("recover_graph failed: {e:?}"))?;
+    let edge_reqs = build_edge_reqs(&topology)?;
+
+    let req = PlaceRequest::SynthPlace {
+        bounds: (lib.width, lib.height),
+        n_inputs: shape.0,
+        n_outputs: shape.1,
+        n_splitters: topology.n_splitters,
+        edges: edge_reqs,
+    };
+
+    println!(
+        "\n--- {label} ---  bbox: {}×{}  splitters: {}  edges: {}",
+        lib.width,
+        lib.height,
+        topology.n_splitters,
+        topology.edges.len()
+    );
+    let resp = run_solver(&req)?;
+    if resp.elapsed_s > 60.0 {
+        return Err(format!("kill: solve time {:.1}s > 60s", resp.elapsed_s).into());
+    }
+    if resp.status != "OPTIMAL" && resp.status != "FEASIBLE" {
+        return Err(format!("solver returned {} (no placement)", resp.status).into());
+    }
+
+    println!(
+        "  synth-place: status={} elapsed={:.3}s splitters={} belts={} ugs={}",
+        resp.status,
+        resp.elapsed_s,
+        resp.splitters.len(),
+        resp.belts.len(),
+        resp.ugs.len(),
+    );
+
+    let splitter_positions: Vec<SplitterPosOut> = resp
+        .splitters
+        .iter()
+        .map(|sp| SplitterPosOut {
+            x: sp.x,
+            y: sp.y,
+            dir: sp.dir,
+        })
+        .collect();
+    let placed = assemble_template_from_routing(
+        shape,
+        lib,
+        &splitter_positions,
+        &resp.belts,
+        &resp.ugs,
+    )?;
+    // Override IO tiles with what the solver picked.
+    let placed = OwnedTemplate {
+        n_inputs: placed.n_inputs,
+        n_outputs: placed.n_outputs,
+        width: placed.width,
+        height: placed.height,
+        entities: placed.entities,
+        input_tiles: resp
+            .input_port_tiles
+            .iter()
+            .map(|t| (t[0], t[1]))
+            .collect(),
+        output_tiles: resp
+            .output_port_tiles
+            .iter()
+            .map(|t| (t[0], t[1]))
+            .collect(),
+    };
+
+    let class_report = classify_ref(placed.as_ref())
+        .map_err(|e| format!("{label}: classify_ref on synth-placed template: {e:?}"))?;
+    let original = classify_ref(BalancerTemplateRef::from(lib))
+        .map_err(|e| format!("{label}: classify original library template: {e:?}"))?;
+    if class_report.class != original.class {
+        return Err(format!(
+            "{label}: synth-placed class {:?} differs from library class {:?}",
+            class_report.class, original.class
+        )
+        .into());
+    }
+    println!(
+        "  ✓ {label}: classified {:?} (matches library); IO {:?}→{:?}",
+        class_report.class,
+        resp.input_port_tiles,
+        resp.output_port_tiles,
+    );
+    Ok(())
 }
 
 fn assemble_template_from_routing(
