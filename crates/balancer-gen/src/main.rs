@@ -27,6 +27,10 @@ use fucktorio_core::bus::balancer_library::{balancer_templates, BalancerTemplate
 use fucktorio_core::bus::balancer_topology::{
     clos_interleave, library_atom, parallel, series_permuted,
 };
+// Aliased import — `parallel` is a graph-level combinator from
+// balancer_topology; `compose_parallel` (defined locally) is the
+// template-level combinator. Both are needed in the same fn for the
+// (4, 9) Clos stress test.
 
 // ---------------------------------------------------------------------------
 // Protocol with `scripts/place.py`
@@ -57,6 +61,15 @@ enum PlaceRequest {
         #[serde(skip_serializing_if = "Option::is_none")]
         max_time_s: Option<f64>,
     },
+    PureRouting {
+        kind: &'static str,
+        bounds: (u32, u32),
+        input_port_tiles: Vec<(i32, i32)>,
+        output_port_tiles: Vec<(i32, i32)>,
+        edges: Vec<EdgeReq>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        max_time_s: Option<f64>,
+    },
 }
 
 #[derive(Serialize, Clone)]
@@ -66,7 +79,7 @@ struct SplitterPosOut {
     dir: u8,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 struct EdgeReq {
     src_kind: &'static str,
     src_idx: usize,
@@ -261,6 +274,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             area_str,
             r.shrink_total_s,
         );
+    }
+
+    // Phase 4.1 — compose_parallel smoke test.
+    println!("\n=== phase 4.1: compose_parallel ===");
+    if let Err(e) = smoke_compose_parallel() {
+        println!("  ✗ smoke test: {e}");
+    }
+
+    // Phase 4.4 — (4, 9) Clos via composition combinator.
+    // Same topology as the phase 3.3 stress test (33 splitters, 67 edges)
+    // that OOM'd Mode D, but built by composing library atoms with the
+    // pure-routing junction in between.
+    println!("\n=== phase 4.4: (4, 9) Clos via compose_parallel + compose_series ===");
+    if let Err(e) = stress_compose_clos_4_9() {
+        println!("  ✗ compose stress: {e}");
     }
 
     // Phase 3.3 stress test — (4, 9) Clos composition.
@@ -873,6 +901,286 @@ fn assemble_template_from_routing(
         input_tiles: lib.input_tiles.to_vec(),
         output_tiles: lib.output_tiles.to_vec(),
     })
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4 — Composition combinator
+// ---------------------------------------------------------------------------
+
+fn stress_compose_clos_4_9() -> Result<(), Box<dyn std::error::Error>> {
+    let templates = balancer_templates();
+    let atom_1_3 = templates
+        .get(&(1u32, 3u32))
+        .ok_or("library missing (1, 3)")?;
+    let atom_4_3 = templates
+        .get(&(4u32, 3u32))
+        .ok_or("library missing (4, 3)")?;
+
+    let stage1 = compose_parallel(BalancerTemplateRef::from(atom_1_3), 4);
+    println!(
+        "  stage1: parallel((1, 3), 4) = {}×{}, {} inputs, {} outputs, {} entities",
+        stage1.width, stage1.height, stage1.n_inputs, stage1.n_outputs, stage1.entities.len()
+    );
+    let stage2 = compose_parallel(BalancerTemplateRef::from(atom_4_3), 3);
+    println!(
+        "  stage2: parallel((4, 3), 3) = {}×{}, {} inputs, {} outputs, {} entities",
+        stage2.width, stage2.height, stage2.n_inputs, stage2.n_outputs, stage2.entities.len()
+    );
+
+    let perm = clos_interleave(4, 3);
+    println!("  clos_interleave(4, 3) perm: {perm:?}");
+
+    let t0 = std::time::Instant::now();
+    let composed = compose_series(stage1.as_ref(), stage2.as_ref(), &perm, 1, 12)?;
+    let elapsed = t0.elapsed().as_secs_f64();
+    let junction_h = composed.height - stage1.height - stage2.height;
+    println!(
+        "  composed: {}×{}, junction_height={} (compose+route in {:.1}s)",
+        composed.width, composed.height, junction_h, elapsed
+    );
+    println!("    {} entities total", composed.entities.len());
+
+    let report =
+        classify_ref(composed.as_ref()).map_err(|e| format!("classify_ref: {e:?}"))?;
+    println!("    classified: {:?}", report.class);
+
+    if report.class != BalancerClass::Balanced {
+        return Err(format!(
+            "(4, 9) Clos via compose_*: classified {:?}, expected Balanced",
+            report.class
+        )
+        .into());
+    }
+    println!("  ✓ (4, 9) Clos placed via composition combinator and verified MX3");
+    Ok(())
+}
+
+fn smoke_compose_parallel() -> Result<(), Box<dyn std::error::Error>> {
+    let templates = balancer_templates();
+    let atom = templates.get(&(1u32, 3u32)).ok_or("library missing (1, 3)")?;
+    let composed = compose_parallel(BalancerTemplateRef::from(atom), 4);
+    println!(
+        "  compose_parallel((1, 3), 4): {}×{}, {} inputs, {} outputs, {} entities",
+        composed.width, composed.height,
+        composed.n_inputs, composed.n_outputs,
+        composed.entities.len(),
+    );
+    if composed.n_inputs != 4 || composed.n_outputs != 12 {
+        return Err(format!(
+            "expected (4, 12) IO, got ({}, {})",
+            composed.n_inputs, composed.n_outputs
+        ).into());
+    }
+    if composed.width != atom.width * 4 {
+        return Err(format!(
+            "expected width {}, got {}",
+            atom.width * 4, composed.width
+        ).into());
+    }
+    if composed.entities.len() != atom.entities.len() * 4 {
+        return Err(format!(
+            "expected {} entities, got {}",
+            atom.entities.len() * 4, composed.entities.len()
+        ).into());
+    }
+    // Each copy is independent — the composed graph is k disjoint atoms.
+    // Classification: this is NOT an MX3 (4, 12) balancer — it's 4
+    // separate (1, 3) atoms. The classifier should still parse it; we
+    // just don't assert MX3 here.
+    let report = classify_ref(composed.as_ref())
+        .map_err(|e| format!("classify_ref on parallel composition: {e:?}"))?;
+    println!("  classified {:?} (parallel of MX3 atoms — not itself a balancer)", report.class);
+    Ok(())
+}
+
+/// Place `k` copies of `template` side-by-side along the x-axis.
+///
+/// IO tiles are concatenated in copy order: input port `c * t.n_inputs + i`
+/// is the i-th input port of the c-th copy, and similarly for outputs.
+/// All entity coordinates are shifted by `c * template.width` for copy c.
+fn compose_parallel(template: BalancerTemplateRef<'_>, k: u32) -> OwnedTemplate {
+    let mut entities: Vec<BalancerTemplateEntity> = Vec::with_capacity(template.entities.len() * k as usize);
+    let mut input_tiles: Vec<(i32, i32)> = Vec::with_capacity(template.input_tiles.len() * k as usize);
+    let mut output_tiles: Vec<(i32, i32)> = Vec::with_capacity(template.output_tiles.len() * k as usize);
+    for copy in 0..k {
+        let x_off = (copy * template.width) as i32;
+        for e in template.entities {
+            entities.push(BalancerTemplateEntity {
+                name: e.name,
+                x: e.x + x_off,
+                y: e.y,
+                direction: e.direction,
+                io_type: e.io_type,
+            });
+        }
+        for &(x, y) in template.input_tiles {
+            input_tiles.push((x + x_off, y));
+        }
+        for &(x, y) in template.output_tiles {
+            output_tiles.push((x + x_off, y));
+        }
+    }
+    OwnedTemplate {
+        n_inputs: template.n_inputs * k,
+        n_outputs: template.n_outputs * k,
+        width: template.width * k,
+        height: template.height,
+        entities,
+        input_tiles,
+        output_tiles,
+    }
+}
+
+/// Stack `top` over `bot` with a junction region in between that
+/// implements the permutation `perm`: `top.output_tiles[i]` flow lands
+/// at `bot.input_tiles[perm[i]]`.
+///
+/// `junction_height` is a starting guess; the function grows the
+/// junction up to `max_junction_height` until `solve_pure_routing`
+/// finds a feasible layout.
+///
+/// Width alignment: composed width is `max(top.width, bot.width)`.
+/// Both stages are left-aligned (x_pad = 0). MVP scope; if widths
+/// differ significantly, the narrower stage trails empty cells.
+fn compose_series(
+    top: BalancerTemplateRef<'_>,
+    bot: BalancerTemplateRef<'_>,
+    perm: &[usize],
+    initial_junction_height: u32,
+    max_junction_height: u32,
+) -> Result<OwnedTemplate, Box<dyn std::error::Error>> {
+    if top.output_tiles.len() != perm.len() {
+        return Err(format!(
+            "compose_series: top has {} outputs but perm has {} entries",
+            top.output_tiles.len(), perm.len()
+        ).into());
+    }
+    if bot.input_tiles.len() != perm.len() {
+        return Err(format!(
+            "compose_series: bot has {} inputs but perm has {} entries",
+            bot.input_tiles.len(), perm.len()
+        ).into());
+    }
+    let composed_width = std::cmp::max(top.width, bot.width);
+
+    // Junction-routing source/dest tiles (in junction-local coords).
+    // Source tiles: y=0 in junction-local, x = top.output_tiles[i].x.
+    // Dest tiles: y=junction_height-1 in junction-local, x = bot.input_tiles[j].x.
+    let junction_input_tiles: Vec<(i32, i32)> = top
+        .output_tiles
+        .iter()
+        .map(|&(x, _)| (x, 0))
+        .collect();
+    let edges: Vec<EdgeReq> = (0..perm.len())
+        .map(|i| EdgeReq {
+            src_kind: "InputPort",
+            src_idx: i,
+            dst_kind: "OutputPort",
+            dst_idx: perm[i],
+        })
+        .collect();
+
+    let mut last_err: String = String::new();
+    for jh in initial_junction_height..=max_junction_height {
+        let junction_output_tiles: Vec<(i32, i32)> = bot
+            .input_tiles
+            .iter()
+            .map(|&(x, _)| (x, (jh - 1) as i32))
+            .collect();
+        let req = PlaceRequest::PureRouting {
+            kind: "pure_routing",
+            bounds: (composed_width, jh),
+            input_port_tiles: junction_input_tiles.clone(),
+            output_port_tiles: junction_output_tiles,
+            edges: edges.clone(),
+            max_time_s: Some(60.0),
+        };
+        let resp = match run_solver(&req) {
+            Ok(r) => r,
+            Err(e) => {
+                last_err = format!("subprocess error at junction_height={jh}: {e}");
+                continue;
+            }
+        };
+        if resp.status == "OPTIMAL" || resp.status == "FEASIBLE" {
+            // Found feasible junction. Assemble composed template.
+            let junction_y_off = top.height as i32;
+            let bot_y_off = (top.height + jh) as i32;
+
+            let mut entities: Vec<BalancerTemplateEntity> = Vec::with_capacity(
+                top.entities.len() + bot.entities.len() + resp.belts.len() + resp.ugs.len(),
+            );
+            for e in top.entities {
+                entities.push(BalancerTemplateEntity {
+                    name: e.name,
+                    x: e.x,
+                    y: e.y,
+                    direction: e.direction,
+                    io_type: e.io_type,
+                });
+            }
+            for b in &resp.belts {
+                entities.push(BalancerTemplateEntity {
+                    name: "transport-belt",
+                    x: b.x,
+                    y: b.y + junction_y_off,
+                    direction: b.dir,
+                    io_type: None,
+                });
+            }
+            for u in &resp.ugs {
+                let io_type: &'static str = match u.io.as_str() {
+                    "input" => "input",
+                    "output" => "output",
+                    other => return Err(format!("invalid UG io_type: {other}").into()),
+                };
+                entities.push(BalancerTemplateEntity {
+                    name: "underground-belt",
+                    x: u.x,
+                    y: u.y + junction_y_off,
+                    direction: u.dir,
+                    io_type: Some(io_type),
+                });
+            }
+            for e in bot.entities {
+                entities.push(BalancerTemplateEntity {
+                    name: e.name,
+                    x: e.x,
+                    y: e.y + bot_y_off,
+                    direction: e.direction,
+                    io_type: e.io_type,
+                });
+            }
+
+            let composed_input_tiles: Vec<(i32, i32)> = top
+                .input_tiles
+                .iter()
+                .copied()
+                .collect();
+            let composed_output_tiles: Vec<(i32, i32)> = bot
+                .output_tiles
+                .iter()
+                .map(|&(x, y)| (x, y + bot_y_off))
+                .collect();
+
+            return Ok(OwnedTemplate {
+                n_inputs: top.n_inputs,
+                n_outputs: bot.n_outputs,
+                width: composed_width,
+                height: top.height + jh + bot.height,
+                entities,
+                input_tiles: composed_input_tiles,
+                output_tiles: composed_output_tiles,
+            });
+        }
+        last_err = format!(
+            "junction_height={jh}: solver returned {} after {:.2}s",
+            resp.status, resp.elapsed_s
+        );
+    }
+    Err(format!(
+        "compose_series: no feasible junction_height in [{initial_junction_height}, {max_junction_height}]: {last_err}"
+    ).into())
 }
 
 // ---------------------------------------------------------------------------

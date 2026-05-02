@@ -1352,9 +1352,231 @@ def solve_synth_place_dirs(req: dict) -> dict:
     return out
 
 
+def solve_pure_routing(req: dict) -> dict:
+    """Phase 4.2 — belt/UG routing between fixed IO tiles, no splitters.
+
+    Used by the composition combinator (`compose_series`) to route the
+    inter-stage permutation. Strips out everything from `solve_routing`
+    that's about splitters (slot vars, splitter-cell direction
+    constraints, splitter-cell exclusions): every edge has
+    `src_kind=InputPort` and `dst_kind=OutputPort` with constant cells,
+    so conservation is a fixed integer comparison.
+
+    Adds the same `Minimize(arcs + 2*ugs)` objective as Mode D so paths
+    pull tight and UGs are only chosen when they save cells.
+
+    Request fields: `bounds`, `input_port_tiles`, `output_port_tiles`,
+    `edges` (each `{src_kind: "InputPort", src_idx, dst_kind: "OutputPort",
+    dst_idx}`), optional `max_time_s`.
+    """
+    width, height = req["bounds"]
+    input_port_tiles = [tuple(t) for t in req["input_port_tiles"]]
+    output_port_tiles = [tuple(t) for t in req["output_port_tiles"]]
+    edges = req["edges"]
+
+    edge_src: list[tuple[int, int]] = []
+    edge_dst: list[tuple[int, int]] = []
+    for edge in edges:
+        if edge["src_kind"] != "InputPort":
+            return {"status": "INVALID", "elapsed_s": 0.0,
+                    "error": f"pure routing: src must be InputPort, got {edge['src_kind']}"}
+        if edge["dst_kind"] != "OutputPort":
+            return {"status": "INVALID", "elapsed_s": 0.0,
+                    "error": f"pure routing: dst must be OutputPort, got {edge['dst_kind']}"}
+        edge_src.append(input_port_tiles[edge["src_idx"]])
+        edge_dst.append(output_port_tiles[edge["dst_idx"]])
+
+    model = cp_model.CpModel()
+
+    arcs: dict[tuple[int, int, int, int], any] = {}
+    for cx in range(width):
+        for cy in range(height):
+            for d in range(4):
+                for e_idx in range(len(edges)):
+                    arcs[(cx, cy, d, e_idx)] = model.NewBoolVar(
+                        f"a_{cx}_{cy}_{d}_{e_idx}"
+                    )
+
+    ug_arcs: dict[tuple[int, int, int, int, int], any] = {}
+    for cx in range(width):
+        for cy in range(height):
+            for d in range(4):
+                dx, dy = DIR_STEPS[d]
+                for L in range(1, UG_MAX_REACH + 1):
+                    ncx, ncy = cx + L * dx, cy + L * dy
+                    if 0 <= ncx < width and 0 <= ncy < height:
+                        for e_idx in range(len(edges)):
+                            ug_arcs[(cx, cy, d, L, e_idx)] = model.NewBoolVar(
+                                f"u_{cx}_{cy}_{d}_{L}_{e_idx}"
+                            )
+
+    # No arcs leaving the grid.
+    for cx in range(width):
+        for cy in range(height):
+            for d in range(4):
+                ncx, ncy = cx + DIR_STEPS[d][0], cy + DIR_STEPS[d][1]
+                if not (0 <= ncx < width and 0 <= ncy < height):
+                    for e_idx in range(len(edges)):
+                        model.Add(arcs[(cx, cy, d, e_idx)] == 0)
+
+    # At most one outgoing direction per (cell, edge).
+    for cx in range(width):
+        for cy in range(height):
+            for e_idx in range(len(edges)):
+                model.AddAtMostOne([arcs[(cx, cy, d, e_idx)] for d in range(4)])
+
+    # At most one entity per cell (pure routing — no splitters anywhere).
+    for cx in range(width):
+        for cy in range(height):
+            terms = []
+            for e_idx in range(len(edges)):
+                terms.append(sum(arcs[(cx, cy, d, e_idx)] for d in range(4)))
+                for d in range(4):
+                    for L in range(1, UG_MAX_REACH + 1):
+                        if (cx, cy, d, L, e_idx) in ug_arcs:
+                            terms.append(ug_arcs[(cx, cy, d, L, e_idx)])
+                for d in range(4):
+                    dx, dy = DIR_STEPS[d]
+                    for L in range(1, UG_MAX_REACH + 1):
+                        ucx, ucy = cx - L * dx, cy - L * dy
+                        if (ucx, ucy, d, L, e_idx) in ug_arcs:
+                            terms.append(ug_arcs[(ucx, ucy, d, L, e_idx)])
+            model.Add(sum(terms) <= 1)
+
+    # UG pairing rule (matches Mode B / Mode D): forbid configurations
+    # where one UG's intermediate transit cell coincides with another's
+    # output, since Factorio would re-pair them in-game.
+    for (c1x, c1y, d1, L1, e1), arc1 in ug_arcs.items():
+        dx, dy = DIR_STEPS[d1]
+        for k in range(1, L1):
+            mcx, mcy = c1x + k * dx, c1y + k * dy
+            for L2 in range(1, UG_MAX_REACH + 1):
+                ucx, ucy = mcx - L2 * dx, mcy - L2 * dy
+                if not (0 <= ucx < width and 0 <= ucy < height):
+                    continue
+                for e2 in range(len(edges)):
+                    key = (ucx, ucy, d1, L2, e2)
+                    if key in ug_arcs and key != (c1x, c1y, d1, L1, e1):
+                        model.AddBoolOr([arc1.Not(), ug_arcs[key].Not()])
+
+    # Conservation per (cell, edge), fixed IO positions.
+    for cx in range(width):
+        for cy in range(height):
+            for e_idx in range(len(edges)):
+                belt_outflow = sum(arcs[(cx, cy, d, e_idx)] for d in range(4))
+                ug_outflow_terms = []
+                for d in range(4):
+                    for L in range(1, UG_MAX_REACH + 1):
+                        if (cx, cy, d, L, e_idx) in ug_arcs:
+                            ug_outflow_terms.append(ug_arcs[(cx, cy, d, L, e_idx)])
+                ug_outflow = sum(ug_outflow_terms) if ug_outflow_terms else 0
+
+                belt_inflow_terms = []
+                for d in range(4):
+                    ncx = cx - DIR_STEPS[d][0]
+                    ncy = cy - DIR_STEPS[d][1]
+                    if 0 <= ncx < width and 0 <= ncy < height:
+                        belt_inflow_terms.append(arcs[(ncx, ncy, d, e_idx)])
+                belt_inflow = sum(belt_inflow_terms) if belt_inflow_terms else 0
+
+                # UG inflow lands one cell ahead of the UG output (matches
+                # Mode B / Mode D semantics; see 3.2A.2 fix).
+                ug_inflow_terms = []
+                for d in range(4):
+                    dx, dy = DIR_STEPS[d]
+                    for L in range(1, UG_MAX_REACH + 1):
+                        ucx = cx - (L + 1) * dx
+                        ucy = cy - (L + 1) * dy
+                        if (ucx, ucy, d, L, e_idx) in ug_arcs:
+                            ug_inflow_terms.append(ug_arcs[(ucx, ucy, d, L, e_idx)])
+                ug_inflow = sum(ug_inflow_terms) if ug_inflow_terms else 0
+
+                outflow = belt_outflow + ug_outflow
+                inflow = belt_inflow + ug_inflow
+
+                is_src = (cx, cy) == edge_src[e_idx]
+                is_dst = (cx, cy) == edge_dst[e_idx]
+                if is_src and is_dst:
+                    model.Add(outflow == 0)
+                    model.Add(inflow == 0)
+                elif is_src:
+                    model.Add(outflow - inflow == 1)
+                elif is_dst:
+                    model.Add(inflow - outflow == 1)
+                else:
+                    model.Add(outflow - inflow == 0)
+
+    # Objective: minimize entity count.
+    entity_terms = []
+    for var in arcs.values():
+        entity_terms.append(var)
+    for var in ug_arcs.values():
+        entity_terms.append(var)
+        entity_terms.append(var)
+    model.Minimize(sum(entity_terms))
+
+    solver = cp_model.CpSolver()
+    solver.parameters.max_time_in_seconds = float(req.get("max_time_s", 30.0))
+    t0 = time.monotonic()
+    status = solver.Solve(model)
+    elapsed = time.monotonic() - t0
+
+    out: dict = {"status": solver.StatusName(status), "elapsed_s": elapsed}
+    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        return out
+
+    belts = []
+    ugs = []
+    for (cx, cy, d, L, e_idx), arc_var in ug_arcs.items():
+        if solver.Value(arc_var) == 1:
+            fdir = INTERNAL_TO_FACTORIO_DIR[d]
+            ugs.append({"x": cx, "y": cy, "dir": fdir, "io": "input", "edge_idx": e_idx})
+            dx, dy = DIR_STEPS[d]
+            ugs.append({"x": cx + L * dx, "y": cy + L * dy, "dir": fdir,
+                        "io": "output", "edge_idx": e_idx})
+
+    ug_cells = {(u["x"], u["y"]) for u in ugs}
+    for cx in range(width):
+        for cy in range(height):
+            if (cx, cy) in ug_cells:
+                continue
+            emitted = False
+            for d in range(4):
+                for e_idx in range(len(edges)):
+                    if solver.Value(arcs[(cx, cy, d, e_idx)]) == 1:
+                        belts.append({"x": cx, "y": cy,
+                                      "dir": INTERNAL_TO_FACTORIO_DIR[d],
+                                      "edge_idx": e_idx})
+                        emitted = True
+                        break
+                if emitted:
+                    break
+            if emitted:
+                continue
+            for d in range(4):
+                ncx, ncy = cx - DIR_STEPS[d][0], cy - DIR_STEPS[d][1]
+                if not (0 <= ncx < width and 0 <= ncy < height):
+                    continue
+                for e_idx in range(len(edges)):
+                    if solver.Value(arcs[(ncx, ncy, d, e_idx)]) == 1:
+                        belts.append({"x": cx, "y": cy,
+                                      "dir": INTERNAL_TO_FACTORIO_DIR[d],
+                                      "edge_idx": e_idx})
+                        emitted = True
+                        break
+                if emitted:
+                    break
+
+    out["belts"] = belts
+    out["ugs"] = ugs
+    return out
+
+
 def main() -> None:
     req = json.load(sys.stdin)
-    if "edges" in req and "splitter_positions" in req:
+    if req.get("kind") == "pure_routing":
+        out = solve_pure_routing(req)
+    elif "edges" in req and "splitter_positions" in req:
         out = solve_routing(req)
     elif "edges" in req and "n_splitters" in req:
         if "allow_dirs" in req and req["allow_dirs"] != [4]:
