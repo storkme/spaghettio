@@ -1,6 +1,20 @@
 # Handoff — CP-SAT placer Phase 4 (UG-belt unblock for coprime shapes)
 
-Branch: `claude/cp-sat-lane-balancer` (4 commits ahead of `main`).
+Branch: `claude/cp-sat-lane-balancer` (5 commits ahead of `main`).
+
+**Status update 2026-05-02:** Phase 4 increment a.2 shipped in
+`9fb5276` — `place_one_to_five()` + `round_trip_1_5`. Test suite
+goes 10 → 11 green. Pickup point is now a.3 (roll out to remaining
+`(1, m)` coprimes — `(1, 6)`, `(1, 7)`, `(1, 9)`, `(1, 10)`).
+
+**Key insight from a.2:** the lane-saturation problem at M.in1 was
+real but solvable with a *placement-only* lane-balancer splitter B'
+above M. The synth graph stays untouched; recovery sees a 9-splitter
+graph and `verify_balancer` accepts it via the standard R7 +
+conservation flow. The trick is feeding M.in1 from both north
+(back-feed, lanes preserved) and east-side sideload (lane 0) via
+B's two outputs — yielding lanes 0.45 / 0.15 at M.in1, both within
+cap. See the RFP decision log for the full lane analysis.
 
 ## What's shipped
 
@@ -28,11 +42,11 @@ Five increments toward closing issue #136 (20 missing coprime balancer
 shapes in 1..=10 × 1..=10):
 
 1. ✅ Per-arc rate plumbing (`f580dfc`)
-2. ✅ Lane-balancer splitter helper (`7eecf22`) — built but unused
+2. ✅ Lane-balancer splitter helper (`7eecf22`) — used by `(1, 5)`
 3. **Increment a (UG-belt direction)** — chosen unblock path:
    - ✅ a.1: UG infrastructure in `_route_belts` (`1e3d17c`)
-   - ⏳ **a.2: `(1, 5)` placer + round-trip test** ← next
-   - ⏳ a.3: roll out to remaining `(1, m)` coprimes
+   - ✅ a.2: `(1, 5)` placer + round-trip test (`9fb5276`)
+   - ⏳ **a.3: roll out to remaining `(1, m)` coprimes** ← next
 4. ⏳ Coprime coverage for the rest of the 20 missing shapes
 5. ⏳ Library regen, browser eyeball, cleanup
 
