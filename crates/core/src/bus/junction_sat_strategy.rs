@@ -921,6 +921,28 @@ impl JunctionStrategy for SatStrategy {
             }
         }
 
+        // Tier normalisation: ensure every boundary for a participating
+        // spec's item uses the spec's declared belt tier. Without this,
+        // `assign_channels` buckets IN and OUT for the same item into
+        // separate channels when the topology walk uses the physical
+        // entity's tier (e.g. "transport-belt" for a yellow tap segment)
+        // while the spec-chain-head augmentation uses `sc.belt_tier`
+        // (e.g. "express-transport-belt" for a blue-tier spec). The split
+        // channels cause SAT to route IN and OUT independently, producing
+        // mismatched UG belt pairs (blue input / yellow output) and
+        // belt-loop / dead-end validation errors.
+        for sc in ctx.junction.specs.iter() {
+            if sc.kind == SpecKind::Pipe {
+                continue;
+            }
+            let tier = sc.belt_tier.belt_name().to_string();
+            for b in boundaries.iter_mut() {
+                if b.item == sc.item {
+                    b.belt_tier = Some(tier.clone());
+                }
+            }
+        }
+
         // Assign channel ids now that the boundary set is final. Buckets
         // by (item, belt_tier); ids are deterministic. `channel_table[i]`
         // gives `(item, belt_tier)` for channel id `i` — used below to
