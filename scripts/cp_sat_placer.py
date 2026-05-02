@@ -58,12 +58,29 @@ _RIGHT_OF = (1, 2, 3, 0)
 _FACTORIO_DIR = (0, 2, 4, 6)
 
 
-def _splitter_tiles(positions: list[tuple[int, int]]) -> set[tuple[int, int]]:
-    """Tiles occupied by the given south-facing 2x1 splitter anchors."""
+def _splitter_tiles(
+    positions: list[tuple[int, int, int]] | list[tuple[int, int]],
+) -> set[tuple[int, int]]:
+    """Tiles occupied by the given splitter anchors.
+
+    `positions` is a list of `(x, y)` (defaulting to south-facing) or
+    `(x, y, direction)` tuples where direction is the internal code
+    (0=N, 1=E, 2=S, 3=W). North/south splitters span 2 tiles
+    east-west: `(x, y)` and `(x+1, y)`. East/west splitters span 2
+    tiles north-south: `(x, y)` and `(x, y+1)`.
+    """
     tiles: set[tuple[int, int]] = set()
-    for sx, sy in positions:
+    for pos in positions:
+        if len(pos) == 2:
+            sx, sy = pos
+            d = 2  # south
+        else:
+            sx, sy, d = pos
         tiles.add((sx, sy))
-        tiles.add((sx + 1, sy))
+        if d in (0, 2):  # north or south: footprint is east-west
+            tiles.add((sx + 1, sy))
+        else:  # east or west: footprint is north-south
+            tiles.add((sx, sy + 1))
     return tiles
 
 
