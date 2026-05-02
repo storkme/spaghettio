@@ -218,8 +218,137 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  {icon} {label}");
     }
 
+    // Phase 3.3 — bench Mode D vs library on south-only shapes.
+    // For each shape: solve at library bbox, then try shrinking by 1 row
+    // and by 1 col to see whether Mode D can find tighter than library.
+    println!("\n=== phase 3.3: bench Mode D vs library ===");
+    let bench_shapes: &[(u32, u32)] = &[
+        (1, 2), (2, 2), (2, 4), (1, 4), (4, 4), (1, 8),
+    ];
+    let mut rows: Vec<BenchRow> = Vec::new();
+    for &shape in bench_shapes {
+        match bench_synth_place(shape) {
+            Ok(row) => rows.push(row),
+            Err(e) => println!("  ✗ {shape:?}: {e}"),
+        }
+    }
+    println!();
+    println!(
+        "  {:<8} | {:<8} {:>8} | {:>8} {:>9} | {:>8} {:>10} {:>10}",
+        "shape", "lib_bbox", "lib_ents", "modeD_e", "solve_s", "min_bbox", "min_area", "shrink_s"
+    );
+    println!("  {:-<86}", "");
+    for r in &rows {
+        let lib_bbox = format!("{}×{}", r.lib_w, r.lib_h);
+        let min_bbox = format!("{}×{}", r.min_w, r.min_h);
+        let lib_area = r.lib_w * r.lib_h;
+        let min_area = r.min_w * r.min_h;
+        let area_str = if min_area < lib_area {
+            format!("{} (-{})", min_area, lib_area - min_area)
+        } else {
+            format!("{}", min_area)
+        };
+        println!(
+            "  {:<8} | {:<8} {:>8} | {:>8} {:>7.2}s | {:>8} {:>10} {:>8.1}s",
+            format!("{:?}", r.shape),
+            lib_bbox,
+            r.lib_entities,
+            r.mode_d_entities,
+            r.mode_d_solve_s,
+            min_bbox,
+            area_str,
+            r.shrink_total_s,
+        );
+    }
+
     println!("\n✓ all spike runs passed");
     Ok(())
+}
+
+struct BenchRow {
+    shape: (u32, u32),
+    lib_w: u32,
+    lib_h: u32,
+    lib_entities: usize,
+    mode_d_entities: usize,
+    mode_d_solve_s: f64,
+    min_w: u32,
+    min_h: u32,
+    shrink_total_s: f64,
+}
+
+fn bench_synth_place(shape: (u32, u32)) -> Result<BenchRow, Box<dyn std::error::Error>> {
+    let templates = balancer_templates();
+    let lib = templates
+        .get(&shape)
+        .ok_or_else(|| format!("library missing {shape:?}"))?;
+    let topology = topology_of_template(BalancerTemplateRef::from(lib))
+        .map_err(|e| format!("recover_graph failed: {e:?}"))?;
+    let lib_entities = lib.entities.len();
+
+    // Run at library bbox.
+    let lib_resp = solve_synth(&topology, shape, (lib.width, lib.height))?;
+    let mode_d_entities = lib_resp.splitters.len() + lib_resp.belts.len() + lib_resp.ugs.len();
+    let mode_d_solve_s = lib_resp.elapsed_s;
+
+    // Shrink loop: greedy linear shrink. Try -1 height, then -1 width, repeat
+    // until both shrinks fail.
+    let (mut min_w, mut min_h) = (lib.width, lib.height);
+    let shrink_t0 = std::time::Instant::now();
+    loop {
+        let mut shrank = false;
+        if min_h > 3 {
+            let candidate = (min_w, min_h - 1);
+            if solve_synth(&topology, shape, candidate).is_ok() {
+                min_h -= 1;
+                shrank = true;
+            }
+        }
+        if min_w > std::cmp::max(shape.0, shape.1) {
+            let candidate = (min_w - 1, min_h);
+            if solve_synth(&topology, shape, candidate).is_ok() {
+                min_w -= 1;
+                shrank = true;
+            }
+        }
+        if !shrank {
+            break;
+        }
+    }
+    let shrink_total_s = shrink_t0.elapsed().as_secs_f64();
+
+    Ok(BenchRow {
+        shape,
+        lib_w: lib.width,
+        lib_h: lib.height,
+        lib_entities,
+        mode_d_entities,
+        mode_d_solve_s,
+        min_w,
+        min_h,
+        shrink_total_s,
+    })
+}
+
+fn solve_synth(
+    topology: &SplitterGraph,
+    shape: (u32, u32),
+    bbox: (u32, u32),
+) -> Result<PlaceResponse, Box<dyn std::error::Error>> {
+    let edge_reqs = build_edge_reqs(topology)?;
+    let req = PlaceRequest::SynthPlace {
+        bounds: bbox,
+        n_inputs: shape.0,
+        n_outputs: shape.1,
+        n_splitters: topology.n_splitters,
+        edges: edge_reqs,
+        allow_dirs: None,
+    };
+    let resp = run_solver(&req)?;
+    if resp.status != "OPTIMAL" && resp.status != "FEASIBLE" {
+        return Err(format!("status {} at {:?}", resp.status, bbox).into());
+    }
+    Ok(resp)
 }
 
 // ---------------------------------------------------------------------------

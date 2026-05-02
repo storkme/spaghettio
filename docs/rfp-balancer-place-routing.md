@@ -507,3 +507,47 @@ re-litigating decisions:
   freedom is now available behind the opt-in flag for shapes that
   need it, and the default fast path is unchanged for shapes that
   don't.*
+
+- *2026-05-02 (later) — phase 3.3 shipped — bench Mode D vs library
+  on the south-only corpus, with greedy shrink loop testing whether
+  Mode D can find tighter than the library bbox.*
+
+  | shape   | lib bbox / ents | Mode D ents / solve | min bbox / area | shrink |
+  |---------|-----------------|---------------------|-----------------|--------|
+  | (1, 2)  | 2×3   /  4      |  4 / 0.01s          | 2×3  /  6       | none   |
+  | (2, 2)  | 2×3   /  5      |  5 / 0.01s          | 2×3  /  6       | none   |
+  | (2, 4)  | 4×4   /  9      |  9 / 0.07s          | 4×4  / 16       | none   |
+  | (1, 4)  | 4×4   /  8      |  8 / 0.09s          | 4×4  / 16       | none   |
+  | (4, 4)  | 4×10  / 32      | 30 / 7.06s          | 4×10 / 40       | none   |
+  | (1, 8)  | 8×5   / 20      | 20 / 4.08s          | 8×5  / 40       | none   |
+
+  *Findings:*
+  - *Mode D matches the library bbox on every shape — the library is
+    at the lower bound (W = max(n_in, n_out), H = 3 + splitter rows)
+    so bbox shrinking can't gain anything for this corpus. The shrink
+    loop confirmed infeasibility one row/col below library bbox in
+    every case.*
+  - *Entity count: parity except for **(4, 4) where Mode D found a
+    layout with 30 entities vs library's 32** (-2, ≈6% smaller). The
+    library uses sideloading (4 UGs + 5 belts on the bus axis); Mode
+    D's encoding doesn't model sideloading and instead routes via
+    pure-belt paths.*
+  - *Solve times scale with shape complexity: trivial single-splitter
+    cases under 100ms, multi-splitter cases up to 7s at this bbox.
+    The shrink loop adds 0–7s of overhead per shape proving
+    infeasibility one step below the lib bbox.*
+
+  *No comparison to Factorio-SAT directly: the library IS Factorio-SAT
+  output for the shapes it covers, so library bbox / entity count
+  serves as a proxy. Comparing Mode D against synth's Knuth-Yao
+  splitter counts is also possible but synth gives just an abstract
+  graph (no spatial layout) — splitter count parity isn't a meaningful
+  metric without bbox.*
+
+  *Phase 3.4 (bake into library_extra) is the natural next step. Mode
+  D already hits parity-or-better on south-only library shapes, so the
+  immediate value is filling in synth-only shapes (the 37 missing
+  (n, m) ≤ 10×10 from issue #136). That requires either (a) extending
+  Mode D to consume synth's `BalancerGraph` directly, or (b) writing
+  a synth → SplitterGraph adapter so the existing Mode D request
+  format works.*
