@@ -521,3 +521,19 @@ The remaining work, in order:
   is harder to find when the alternates are forbidden), but it's now
   reliable rather than flaky. `(1, 6)` solves in ~50 s. Round-trip
   suite goes 11 → 12 tests green.*
+- *2026-05-02 — Generalised `(1, m)` placer landed
+  (`place_one_to_m_from_synth`). Walks the synth graph in topological
+  order (mutable Kahn's), picks splitter positions from rate-driven
+  geometry rules (head-on tight-stack for arcs > 0.5, routing-row
+  offset otherwise), and inserts a placement-only south-facing lane
+  balancer above M when total feedback exceeds 0.5. The hand-tuned
+  `(1, 6)` placer was effectively replaced by this routine — same
+  layout, same solve time. `(1, 7)` (8 splitters, single feedback arc
+  at 1/7) shipped on top: 49 s solve. Suite now 13 tests green:
+  10 dyadic + `(1, 5)` (still hand-tuned — see below) + `(1, 6)` +
+  `(1, 7)`. Known limitation: the generalised placer also produces a
+  valid `(1, 5)` layout in isolation, but flakes in full-suite runs
+  (CP-SAT finds alternate optima that violate OutputDegree on the
+  recovered graph). Hand-tuned `(1, 5)` is more reliable under load
+  for now; tightening structural constraints in the generalised one
+  to subsume `(1, 5)` is a follow-up.*

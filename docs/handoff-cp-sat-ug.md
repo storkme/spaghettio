@@ -56,12 +56,22 @@ shapes in 1..=10 × 1..=10):
 3. **Increment a (UG-belt direction)** — chosen unblock path:
    - ✅ a.1: UG infrastructure in `_route_belts` (`1e3d17c`)
    - ✅ a.2: `(1, 5)` placer + round-trip test (`9fb5276`)
-   - 🟡 a.3: rolling out to remaining `(1, m)` coprimes
-     - ✅ `(1, 6)` shipped (no balancer needed; this commit)
-     - ⏳ `(1, 7)`, `(1, 9)`, `(1, 10)` ← next
-     - `(1, 10)` is harder than the others (extra L3 layer; 16 splitters);
-       likely worth attempting `(1, 7)` first, then `(1, 9)` as warm-up
-       before tackling `(1, 10)`.
+   - 🟢 a.3: `(1, m)` 3-level shapes generalised
+     - ✅ `(1, 6)`, `(1, 7)` shipped via `place_one_to_m_from_synth`
+       — synth-driven placer that derives geometry from the
+       BalancerGraph + arc throughputs.
+     - 🟡 `(1, 5)` still on hand-tuned placer; runs fine on the generalised
+       one in isolation but flakes in full-suite runs (CP-SAT finds
+       OutputDegree-violating alternates with longer timeouts when other
+       tests share the system). Follow-up: add structural constraints
+       (e.g., explicit forbid-direction at specific tiles) so the
+       generalised placer can subsume `(1, 5)` reliably.
+     - ⏳ `(1, 9)`, `(1, 10)` need the generalised placer extended to
+       4-level trees (16 splitters with an L3 layer). Two paths:
+       (a) hand-tune them like the original `(1, 5)`; (b) extend the
+       generalised placer with deeper layout primitives. See
+       `docs/rfp-lane-aware-routing.md` decision log for why the
+       4-level head-on cascade is structurally harder.
 4. ⏳ Coprime coverage for the rest of the 20 missing shapes
 5. ⏳ Library regen, browser eyeball, cleanup
 
