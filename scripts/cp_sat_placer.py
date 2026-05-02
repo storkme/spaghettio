@@ -58,6 +58,11 @@ _RIGHT_OF = (1, 2, 3, 0)
 _FACTORIO_DIR = (0, 2, 4, 6)
 
 
+def _splitter_dir(pos: tuple[int, int] | tuple[int, int, int]) -> int:
+    """Direction of a splitter from its position tuple. Default south."""
+    return pos[2] if len(pos) >= 3 else 2
+
+
 def _splitter_tiles(
     positions: list[tuple[int, int, int]] | list[tuple[int, int]],
 ) -> set[tuple[int, int]]:
@@ -499,8 +504,8 @@ def place_x_to_four(n: int) -> dict[str, Any]:
         raise RuntimeError(f"({n}, 4) belt routing UNSAT")
 
     entities: list[dict[str, Any]] = []
-    for x, y in pos:
-        entities.append({"name": "splitter", "x": x, "y": y, "direction": 4})
+    for p in pos:
+        entities.append({"name": "splitter", "x": p[0], "y": p[1], "direction": _FACTORIO_DIR[_splitter_dir(p)]})
     for (x, y), d in belt_dirs.items():
         entities.append(
             {"name": "transport-belt", "x": x, "y": y, "direction": _FACTORIO_DIR[d]}
@@ -601,8 +606,8 @@ def place_x_to_eight(n: int) -> dict[str, Any]:
         raise RuntimeError(f"({n}, 8) belt routing UNSAT")
 
     entities: list[dict[str, Any]] = []
-    for x, y in pos:
-        entities.append({"name": "splitter", "x": x, "y": y, "direction": 4})
+    for p in pos:
+        entities.append({"name": "splitter", "x": p[0], "y": p[1], "direction": _FACTORIO_DIR[_splitter_dir(p)]})
     for (x, y), d in belt_dirs.items():
         entities.append(
             {"name": "transport-belt", "x": x, "y": y, "direction": _FACTORIO_DIR[d]}
@@ -717,8 +722,8 @@ def place_x_to_sixteen(n: int) -> dict[str, Any]:
         raise RuntimeError(f"({n}, 16) belt routing UNSAT")
 
     entities: list[dict[str, Any]] = []
-    for x, y in pos:
-        entities.append({"name": "splitter", "x": x, "y": y, "direction": 4})
+    for p in pos:
+        entities.append({"name": "splitter", "x": p[0], "y": p[1], "direction": _FACTORIO_DIR[_splitter_dir(p)]})
     for (x, y), d in belt_dirs.items():
         entities.append(
             {"name": "transport-belt", "x": x, "y": y, "direction": _FACTORIO_DIR[d]}
