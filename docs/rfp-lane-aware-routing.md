@@ -144,6 +144,39 @@ Encoded as: at the output port tile of every splitter, the flow vars on
 both lanes are unconstrained from upstream (in particular, a single-lane
 input becomes a half-rate two-lane output).
 
+**Source-lane forcing for splitter-output drops** *(the missing piece
+for `(1, 5)`)*. The above sets the splitter-internal rule. The router
+also needs to force the lane *at the drop tile* based on whether the
+drop heads in the same direction as the splitter (head-on) or
+perpendicular (sideload from the splitter's face).
+
+For a south-facing splitter `S` at `(x, y)` with output port `p ∈
+{0, 1}`, the drop tile is `(x + p, y + 1)`. Let `d_drop` be the direction
+the drop tile's belt heads (chosen by the solver):
+
+| `d_drop` | Source-lane rule |
+|:---:|---|
+| S (continues splitter face) | Head-on: items fill **both lanes**. Model as 2 lane-routes per arc, like input boundaries. |
+| E (perpendicular, splitter face on left) | Items sideload from N onto E-belt → LEFT lane (lane 0). Force. |
+| W (perpendicular, splitter face on right) | Items sideload from N onto W-belt → RIGHT lane (lane 1). Force. |
+| N (against splitter face) | Forbidden — would route items back into the splitter. |
+
+For non-south splitter directions, the table rotates by 90°/180°/270°
+according to `_LEFT_OF` / `_RIGHT_OF`.
+
+The router currently treats source tiles as having **free** lane
+choice. That's correct for input-boundary belts (where `Task 1` already
+emits 2 lane-routes for both lanes) but **wrong for splitter-output
+drops** — without source-lane forcing, the model accepts layouts where
+3 feedback drops all "freely" pick lane 1 to avoid saturating lane 0,
+even though physics says they all hit lane 0.
+
+Encoding: at every source tile that is a splitter-output drop, add a
+constraint that pairs `(d_drop, lane)` per the table above. The route
+tuple grows an optional `splitter_dir` field to signal "this source is
+a splitter-output drop with the upstream splitter facing direction X."
+Input-boundary sources omit the field and keep the free-lane behavior.
+
 **Belt structure unchanged.** The `belt[t][d]` indicator and the
 "which-direction-per-tile" rules are unchanged. The lane vars are added
 *on top of* the existing belt structure, not in place of it.
@@ -284,37 +317,58 @@ After each phase:
 
 ## Phasing
 
-Plan to land in chunks. Each phase ships a working subset.
+1. **Phase 1: per-lane variables and caps.** ✅ Shipped in `c6d1264`.
+2. **Phase 2: sideload semantics + lifted tile-exclusivity.** ✅
+   Shipped in `e5250a1`.
+3. **Phase 3 (foundation): rate-aware caps, dual-lane inputs, splitter
+   direction support.** ✅ Shipped in `29f353b` / `1a71e31` / `0c21003`.
 
-1. **Phase 1: per-lane variables and caps, no sideload semantics.**
-   Replace `flow[r][t][d]` with `flow[r][t][d][lane]`. Add per-lane caps.
-   Since no sideload rule yet, every route still has a single
-   predecessor and lane is unambiguous. Existing 10 shapes should
-   produce the same layout (with lane assignments now being explicit
-   but trivially satisfiable). Validates the variable refactor.
-   ~2 days.
+The remaining work, in order:
 
-2. **Phase 2: sideload semantics + lane-walker cross-check.** Add the
-   `(receiver_dir, feeder_dir) → lane` table, drop the at-most-one-
-   route-per-tile constraint. Add the lane-walker assertion on placed
-   templates. At this point `(3, m)` should solve correctly (if there's
-   a feasible layout) or come back UNSAT (no feasible layout in the
-   given grid). For shapes that come back UNSAT, widen the grid and
-   retry — the placer should find a valid layout with a lane-balancer
-   splitter inserted along the over-saturated path.
-   ~3-4 days.
+4. **Phase 3 (next): source-lane forcing for splitter-output drops.**
+   This is the concrete next piece. Without it the model under-counts
+   saturation at splitter-output drops, which is why `(1, 5)`'s 3
+   feedback drops can't be made lane-safe even with rate-aware caps —
+   they all end up free-laned in the model but lane-0-forced in
+   reality.
 
-3. **Phase 3: splitter lane re-distribution + coprime shapes.** Once
-   sideloads are safe, the natural fix for over-saturated paths is to
-   route through a splitter. Phase 3 verifies this works — declares
-   `(1, 5), (1, 6), (1, 7), (1, 9), (1, 10)` and all `(2, m)`
-   coprimes, then `(3, m)` and `(4, m)` for dyadic m. The router should
-   handle these by inserting balancer splitters along feedback channels
-   when the per-lane caps would otherwise be exceeded.
-   ~3-4 days.
+   Concrete steps:
 
-4. **Phase 4: full coverage.** All `(n, m)` in `1..=10 × 1..=10`. Issue
-   [#136] closes. ~2 days, mostly testing.
+   1. Extend the route tuple with optional `splitter_dir` —
+      `(src, sink, sink_dir, splitter_dir | None)`. `None` means the
+      source is an input boundary (free lane); a value means the
+      source is a splitter-output drop with the upstream splitter
+      facing that direction.
+   2. Update `_input_routes_for_root` and the per-shape route
+      construction sites to set `splitter_dir` for every drop-tile
+      source. For dyadic shapes, all drops are head-on south
+      (continues splitter face) — set `splitter_dir = S` and the
+      head-on rule emits 2 lane-routes per arc (matching the input
+      boundary handling).
+   3. Add the source-lane forcing constraint in `_route_belts`: for
+      each route with `splitter_dir != None`, force the source tile's
+      `(d_drop, lane)` per the table in the design.
+   4. Re-attempt `(1, 5)` with grid 10×9 (extra row gives geometric
+      flexibility — 1 of 3 drops can take a southern detour and
+      arrive at the channel on lane 1 via sideload-from-S).
+
+   ~2-3 days. Lands `(1, 5)` and is the structural unblock for
+   `(1, 6), (1, 7), (1, 9), (1, 10)` and the whole coprime track.
+
+5. **Phase 4: cover the rest of `1..=10 × 1..=10`.** Once `(1, 5)` is
+   working, the same machinery extends to other coprimes by computing
+   per-route rates from the synth flow analysis and choosing grid
+   sizes per shape. Shape-specific tuning may be needed for the larger
+   coprimes (`(4, 9)`, `(7, 9)`, `(8, 9)`); the lane-walker
+   cross-check (verification step #3) catches drift between the
+   router and Factorio semantics. Issue [#136] closes here.
+   ~1 week.
+
+6. **Phase 5: bench + library regeneration.** Run the cross-engine
+   bench across all 99 shapes; compare against the community library.
+   Fold the regenerated templates into `balancer_library.rs`. Update
+   `bus::balancer::stamp_family_balancer` to consume the new shapes.
+   ~1-2 days.
 
 ## Decision log
 
