@@ -2,12 +2,12 @@
 
 This doc captures the state of the throughput-priority-merges
 balancer-gen workstream as of branch
-`claude/throughput-priority-merges-YcXbi` tip `3d3ec84`. Use it to
-resume work on a different machine without losing context.
+`claude/throughput-priority-merges-YcXbi`. Use it to resume work on a
+different machine without losing context.
 
 ## TL;DR — where we are
 
-Five phases shipped, one in flight:
+Phase 4 fully shipped; post-bake quality work landed on branch tip:
 
 | Phase | Status | Notes |
 |-------|--------|-------|
@@ -19,75 +19,80 @@ Five phases shipped, one in flight:
 | 3.3 bench | done | Mode D ≈ library on south-only corpus, (4, 4) -2 entities |
 | 3.3 stress | done — negative result | Direct Mode D on (4, 9) Clos OOMs at every bbox tried |
 | 4.1–4.3 | shipped, verified mechanically | compose_parallel, solve_pure_routing, compose_series wired and producing layouts |
-| 4.4 | **fails — `Singular` classification** | (4, 9) Clos via composition runs end-to-end (junction_height=10 in 354s) but the placed template is Singular, not Balanced |
+| 4.4 | **done — verified MX3** | (4, 9) Clos via composition: junction_height=9, 284 entities, recovered topology classifies as `Balanced` |
+| 5 — L=1 UG fix | **done** | `solve_pure_routing` UG arcs now start at L=2; 6 broken templates removed + re-baked via circuit encoder |
+| 6 — lane gate | **done** | `bake_missing_shapes` now gates on `underground-belt` `Severity::Error` and retries with higher jh (up to 3 attempts) |
+| 7 — smarter jh search | in progress (ug-plumber) | Two-budget climb in `compose_series`; RFP at `docs/rfp-smarter-jh-search.md` |
 
-### The verified (4, 9) compose result (from the previous box)
+### The verified (4, 9) compose result
 
 ```
-=== phase 4.4: (4, 9) Clos via compose_parallel + compose_series ===
+=== phase 4.4: (4, 9) Clos via compose_* ===
   stage1: parallel((1, 3), 4) = 12×9, 4 inputs, 12 outputs, 80 entities
   stage2: parallel((4, 3), 3) = 12×12, 12 inputs, 9 outputs, 111 entities
   clos_interleave(4, 3) perm: [0, 4, 8, 1, 5, 9, 2, 6, 10, 3, 7, 11]
-  composed: 12×31, junction_height=10 (compose+route in 354.6s)
-    279 entities total
-  ✗ compose stress: classify_ref: Singular
+  composed: 12×30, junction_height=9 (compose+route in 1173.3s)
+    284 entities total
+    classified: Balanced
+  ✓ (4, 9) Clos placed via composition combinator and verified MX3
 ```
 
-Mechanical pieces work: `compose_parallel` produces correctly-sized
-templates, `solve_pure_routing` finds a permutation routing in 354s,
-`compose_series` stitches the result without panicking. **But the
-classifier reports `Singular`** — the recovered graph from the placed
-entities has a degenerate flow matrix.
+A reduced repro (`debug_compose_clos_2_2`, gated by
+`FUCKTORIO_DEBUG_2_2=1`) builds the same Beneš pattern on `(2, 2)` —
+finds `junction_height=6`, recovers 8 edges, classifies `Balanced`.
+Useful as a fast regression check (~10s) when iterating on the
+junction model.
 
-`classify_graph(big)` on the *source* topology reports `Balanced`
-(verified in `stress_clos_4_9` in 3.3 wiring). So the source topology
-is fine; what's wrong is the mapping from source topology to placed
-entities.
+### What was actually broken (and fixed)
 
-This is Open Question #2 — IO-port-ordering between `parallel`
-(graph-level, in `balancer_topology.rs`) and `compose_parallel`
-(template-level, in `main.rs`) almost certainly disagree. The fix
-likely lives in `compose_parallel`'s output ordering or in how
-`compose_series` indexes the perm.
+The handoff hypothesis blamed IO-port-ordering, but the bug was
+deeper: `solve_pure_routing` in `crates/balancer-gen/scripts/place.py`
+was structurally inadequate for the inter-stage junction. Two failure
+modes, both invisible to per-edge conservation:
 
-## What needs verification on the new box
+1. **Identity edges (`perm[i] == i`):** the source/destination
+   coincide, so `is_src AND is_dst` forced `outflow == 0 AND
+   inflow == 0`. The cell ends up empty. Stage1's south-emit drops
+   into a void; the walker returns `None`; the splitter→splitter edge
+   disappears from the recovered topology.
+2. **Swap pairs:** the model's per-edge conservation was satisfied by
+   placing edge 1's source-belt facing east at `(1, 0)` and edge 2's
+   source-belt facing west at `(2, 0)`. Each edge's `inflow == 1` is
+   ticked off by the *other* edge's source-arc — but physically those
+   two belts face each other, so the walker steps east → west → east
+   → west and returns `None` at the visited-set check.
 
-Run the spike and look at the phase 4.4 section:
+The fix in `solve_pure_routing` is three small changes:
+
+1. Allow south arcs at `y = jh-1` to leave the grid (junction exit
+   into stage2's input belt).
+2. Force a south-facing belt at every `dst` cell:
+   `model.Add(arcs[(dst.x, dst.y, 2, e)] == 1)`.
+3. Drop the `is_dst` special-case from conservation. The forced
+   south-belt's off-grid south arc is the per-edge outflow; conservation
+   becomes a single rule: `outflow == inflow + (1 if src else 0)`.
+
+After these changes, the swap case at `jh=1` is correctly infeasible
+(forced south-belt at edge 1's dst conflicts with edge 2's required
+source-outflow, and vice versa), and the solver bumps `jh` until the
+permutation can be routed without belt collisions.
+
+## How to re-verify phase 4.4
+
+The full spike runs all phases sequentially and ends with the (4, 9)
+compose stress (the slow one — ~20 min on a release build). For a
+fast smoke check, two env-var hatches in `main()` short-circuit
+straight to the relevant phase:
 
 ```bash
-cargo run -p balancer-gen 2>&1 | tail -100
+# Fast (~10s after build): (2, 2) Beneš via compose, with diagnostics.
+FUCKTORIO_DEBUG_2_2=1 cargo run -p balancer-gen
+
+# Slow (~20 min release): the headline (4, 9) Clos compose.
+FUCKTORIO_DEBUG_4_9=1 cargo run --release -p balancer-gen
 ```
 
-Phase 4.4 will print:
-
-```
-=== phase 4.4: (4, 9) Clos via compose_parallel + compose_series ===
-  stage1: parallel((1, 3), 4) = 12×9, ...
-  stage2: parallel((4, 3), 3) = ...
-  clos_interleave(4, 3) perm: [0, 4, 8, 1, 5, 9, 2, 6, 10, 3, 7, 11]
-  composed: WxH, junction_height=N (compose+route in T.Ts)
-    M entities total
-    classified: ...
-```
-
-Three possible outcomes:
-
-1. **Classification = `Balanced`**: ✓ phase 4 done. Compose
-   combinator works; commit "phase 4.4 verified MX3" and proceed to
-   phase 3.4 (bake into library_extra).
-2. **Classification ≠ `Balanced`**: layout-vs-graph mismatch. The
-   topology is MX3 (verified by `classify_graph(big)` in the existing
-   stress_clos_4_9 function in 3.3) but the placed template
-   classifies as something else — likely the IO port ordering of
-   parallel composition isn't lining up with the perm. See "Open
-   questions" #2 below.
-3. **Subprocess timeout / infeasible at every junction_height**: the
-   junction routing CP-SAT subproblem can't find a permutation
-   layout in the candidate junction_height range `1..=12`. Try
-   bumping `max_jh` parameter in `stress_compose_clos_4_9` (in
-   `crates/balancer-gen/src/main.rs`). Or the perm is being passed
-   wrong — print the resolved source/dest cells from
-   `compose_series` to see.
+Both should print `classified: Balanced` and a `✓` line.
 
 ## Setup on the new box
 
@@ -150,86 +155,24 @@ c0d56c5 phase 3.3 stress result — Mode D doesn't scale to (4, 9) Clos
 
 ## Next actions in priority order
 
-1. **Debug the (4, 9) compose `Singular` result** — see "Debugging
-   approach" below. This is the next critical step; phase 4 and 3.4
-   both depend on getting this right.
-2. **Once 4.4 passes**: kick off phase 3.4 — synth → SplitterGraph
-   adapter, bbox heuristic, codegen for `BalancerTemplate` constants.
-   Target the 37 missing-from-library shapes (issue #136). RAM
-   headroom on the new box also unblocks retrying direct Mode D on
-   smaller compositions like (3, 5) or (5, 3) where the
-   sideloading-classify-as-MX2b limitation was the only blocker
-   (these need direction freedom and Mode D, OOM on the old box).
-3. **RAM-headroom retest**: with 20GB available, retry phase 3.3
-   stress on (4, 9) Clos at the bboxes that OOM'd on the old box
-   (16×16, 12×18, 10×20, 9×24). Tells us whether direct Mode D is
-   fundamentally capped at ~10 splitters or just RAM-capped on the
-   old box. Result changes how we scope phase 3.4.
-
-## Debugging approach for the Singular result
-
-The classifier walks placed entities to recover a `SplitterGraph`,
-then runs the same Gaussian-elimination flow analysis on the
-recovered graph. `Singular` means the recovered graph has a
-degenerate flow matrix.
-
-Likely causes (most → least likely):
-
-1. **Port ordering mismatch.** `compose_parallel` numbers ports as
-   `c * atom.n_ports + i` (i.e., copy-major). `parallel` in
-   `balancer_topology.rs` may number ports differently — check it.
-   If they differ, then `clos_interleave`'s indices don't point at
-   the same physical lanes that `compose_series` is feeding into the
-   permutation.
-
-2. **`(1, 3)` atom uses a back-loop**, with one west-facing splitter.
-   `compose_parallel` blindly stamps the atom 4 times side-by-side,
-   shifted by `template.width = 3`. The west-facing splitter in copy
-   `c` emits west *into copy c-1's territory* (since "west" means
-   smaller x, and copy c's anchor x = (c-1) * atom.width + something).
-   This may cause the back-loop edges to fold into a neighbouring
-   atom instead of the same atom.
-
-   Quick test: try `compose_parallel(library_atom_for_dyadic_shape, k)`
-   on a shape that's all-south, e.g., `parallel((1, 4), 2) = (2, 8)`.
-   If that classifies correctly through `compose_parallel + identity
-   compose_series`, the bug is specific to non-south atoms.
-
-3. **`compose_series` IO tile mapping wrong**. The perm might be
-   getting applied as input_tile_index→output_tile_index but the
-   classifier expects something else. Print
-   `top.output_tiles` and `bot.input_tiles` and trace one perm entry
-   manually.
-
-### Concrete debug steps
-
-Run with `RUST_LOG=trace` and sprinkle `eprintln!` in:
-- `compose_parallel`: print each copy's IO tile positions.
-- `compose_series`: print `junction_input_tiles` and the resolved
-  `junction_output_tiles` for the chosen `junction_height`.
-- After `compose_series` returns, before `classify_ref`, print
-  `composed.input_tiles` and `composed.output_tiles`.
-
-Then walk through `clos_interleave(4, 3)` by hand for the simpler
-case `clos_interleave(2, 2)` (= `[0, 2, 1, 3]`) and verify the
-composed template would route lane 0's input to lane 0's output (etc.)
-through the Clos network.
-
-If port ordering is the issue, the fix is to make `compose_parallel`
-number ports the same way `parallel` does. `parallel`'s ordering is
-the canonical one since the classifier and verifier both rely on it.
-
-### Faster iteration alternative
-
-Instead of `(4, 9)` (354s solve time), reproduce the Singular issue
-on a smaller composition first. Try `(2, 4)` Clos:
-```
-parallel((1, 2), 2) → clos_interleave(2, 2) → parallel((2, 1), 2)
-```
-That's `(2, 4)` from atoms — only 6 splitters, junction routing
-trivial. If that classifies Balanced via composition, the (4, 9)
-issue is elsewhere; if it's Singular, the bug is in the simpler case
-and easier to debug.
+1. **Phase 3.4 — bake compositions into the library.** Synth →
+   SplitterGraph adapter, bbox heuristic, codegen for
+   `BalancerTemplate` constants. Target the 37 missing-from-library
+   shapes (issue #136). The (4, 9) Clos at 12×30 / 284 entities is a
+   reasonable upper bound on what compose_* produces today; lots of
+   shapes will be smaller (and more cells worth of routing slack would
+   probably let the optimiser shave entity count further).
+2. **Tune `solve_pure_routing` solve time.** (4, 9) takes ~20 minutes
+   on release. Most of that is jh-search burn at infeasible heights
+   before the solver can prove infeasibility. Two cheap wins likely
+   available: (a) start the search at a heuristic jh ≈ ceil(log2(N))
+   plus slack instead of jh=1, (b) cap per-attempt `max_time_s` at
+   60-90s with a fallback to mark-as-infeasible-and-bump.
+3. **RAM-headroom retest of direct Mode D**: with 20GB available,
+   retry phase 3.3 stress on (4, 9) Clos at the bboxes that OOM'd on
+   the old box (16×16, 12×18, 10×20, 9×24). Tells us whether direct
+   Mode D is fundamentally capped at ~10 splitters or just RAM-capped
+   on the old box. Result changes how we scope phase 3.4.
 
 ## Open questions / known issues
 
@@ -237,27 +180,22 @@ and easier to debug.
    reproduces with our changes stashed. Not from this branch. User
    has acknowledged and is aware.
 
-2. **(4, 9) Clos compose IO-port-ordering — confirmed broken**: this
-   was a hypothesis pre-result; the result is in (Singular
-   classification). See "Debugging approach for the Singular result"
-   above. Likely fix is in `compose_parallel`'s ordering or in how
-   `compose_series` indexes the perm.
-
-3. **MX2b on (1, 3) with direction freedom**: documented in the RFP.
+2. **MX2b on (1, 3) with direction freedom**: documented in the RFP.
    User said pure-balancers (MX3) are a separate workstream so MX2b
    is acceptable. No action needed.
 
-4. **Width alignment in `compose_series`**: currently left-aligned
+3. **Width alignment in `compose_series`**: currently left-aligned
    with `composed_width = max(top.width, bot.width)`. If `top` and
    `bot` have different widths, the narrower one trails empty cells.
    For (4, 9) Clos, both stages are 12 wide so no padding needed.
    For other compositions, may need to revisit (RFP option: pad,
    re-layout, or shift).
 
-5. **Junction height search bounds**: hardcoded
-   `initial_junction_height = 1`, `max_junction_height = 12` for the
-   (4, 9) test. Search is linear; for larger N may need a smarter
-   heuristic.
+4. **Junction height search is linear from jh=1**:
+   `compose_series(top, bot, perm, initial_jh=1, max_jh=20)`. For
+   small permutations this is fine; for larger N a smarter heuristic
+   would skip over guaranteed-infeasible jh values. See "Next
+   actions" #2.
 
 ## Code map quick reference
 
