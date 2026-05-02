@@ -368,3 +368,36 @@ re-litigating decisions:
   *Phases 3.2D (bbox minimisation), 3.3 (measure vs Factorio-SAT),
   3.4 (bake into library_extra) all deferred — they're gated on full
   shape coverage, which 3.2A.2 unlocks.*
+
+- *2026-05-01 (later) — phase 3.2A.2 shipped. Slot assignment is now a
+  CP-SAT variable: per-edge `src_slot_anchor[e] / src_slot_second[e]`
+  bool vars (and dst counterparts) with `ExactlyOne` per edge and
+  `AtMostOne` per splitter slot. Conservation uses reified
+  `is_src_term_at` / `is_dst_term_at` linear expressions so source/dest
+  cells are picked by the solver. Two follow-on bugs found and fixed
+  along the way:*
+
+  1. *UG output emission — the original 3.2B code accounted UG inflow
+     at the output cell, but the at-most-one-entity rule already used
+     that cell for the UG output entity, leaving no place for a
+     forwarding belt. Fix: shift UG inflow accounting one cell ahead
+     in the UG's direction (the UG output entity itself emits its
+     flow forward). The output cell becomes a passthrough — its UG
+     inflow cancels with its own emission, conservation is balanced.*
+  2. *`UG_MAX_REACH` was set to 4 but yellow belts allow up to 4
+     transit tiles between input and output, i.e., a max length of 5
+     (`output = input + 5*direction`). Bumped to 5.*
+
+  *Round-trip results: 7/8 pass — (2, 2), (2, 4), (1, 4), (1, 3),
+  (2, 3), (4, 8), (3, 5). Solve times 0.01s..16s. Only (5, 3) still
+  fails INFEASIBLE: its library template uses **belt-into-UG-output
+  sideloading** (a regular belt's flow merges into a UG output's
+  lane), which the flow-conservation encoding doesn't model — every
+  edge carries one indivisible flow along one path. This is a
+  fundamental limitation of the encoding rather than a slot issue.*
+
+  *Remaining work: phases 3.2D (bbox minimisation), 3.3 (measure vs
+  Factorio-SAT), 3.4 (bake into library_extra) now unblocked. The
+  sideload limitation means we can't reproduce every Factorio-SAT
+  output exactly, but for coprime shape generation we don't need to —
+  we just need a working topology in a tight bbox.*

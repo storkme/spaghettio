@@ -3,8 +3,7 @@
 # requires-python = ">=3.10"
 # dependencies = ["ortools>=9.10"]
 # ///
-"""Phase 3.2A — flow-conservation belt routing for fixed-direction
-splitters.
+"""Phase 3.2A — flow-conservation belt routing for splitter layouts.
 
 Two modes, selected by the input JSON:
 
@@ -12,36 +11,30 @@ Two modes, selected by the input JSON:
 Input has `n_splitters` and `bounds` only. CP-SAT places splitters with
 no-overlap and reports positions. Belt routing not solved.
 
-**Mode B — belt routing with given splitter layout** (phase 3.2A.1).
-Input has `splitter_positions`, `input_port_tiles`, `output_port_tiles`,
-`edges` (with source/dest slot assignments), and `bounds`. CP-SAT
-encodes belt routing as flow conservation per topology edge:
+**Mode B — belt routing with given splitter layout** (phase 3.2A).
+Input has `splitter_positions` (each with `x`, `y`, `dir` in Factorio
+encoding 0/2/4/6), `input_port_tiles`, `output_port_tiles`, `edges`
+(topology only — no slot info), and `bounds`. CP-SAT encodes:
 
   - For each cell `c`, each topology edge `e`, each direction `d`:
     bool `arc[c, d, e]` — is there flow of edge e leaving cell c
     heading direction d?
-  - Each non-splitter cell can host at most one edge's arc (no shared
-    belts).
-  - Splitter cells can host arcs for multiple edges (the splitter is
-    the merge/split point).
-  - Conservation per (cell, edge):
-      outflow - inflow = 1 if cell is edge's source,
-      inflow - outflow = 1 if cell is edge's dest,
-      0 otherwise.
-  - Source/dest cells are determined from caller-provided splitter
-    positions + per-edge slot assignments. South-facing splitters only:
-    anchor at (sx, sy), second at (sx+1, sy); inputs come from
-    (sx, sy-1)/(sx+1, sy-1), outputs go to (sx, sy+1)/(sx+1, sy+1).
-    For source=Splitter the source cell IS the splitter tile (anchor or
-    second per slot); for dest=Splitter the dest cell IS the splitter
-    tile (anchor or second per slot).
+  - UG pairs as virtual arcs spanning 1..UG_MAX_REACH cells.
+  - Each non-splitter cell hosts at most one entity (belt or UG).
+  - For each edge with src_kind=Splitter: bool `src_slot_anchor[e]` and
+    `src_slot_second[e]` with ExactlyOne — picks which of the splitter's
+    two output tiles is the source. Symmetric for dests. Per splitter,
+    AtMostOne enforces no two edges share an output (or input) slot.
+  - Conservation per (cell, edge): outflow - inflow = is_src - is_dst,
+    where is_src/is_dst at splitter tiles are reified slot bool vars.
+  - Splitter cells: outflow only in facing direction, inflow only from
+    facing direction, total outflow ≤ is_src, total inflow ≤ is_dst
+    (no transit through splitters).
 
-Output: belt list — cells with edge flow that are NOT splitter tiles.
-Each belt has the direction of its outgoing flow.
+Output: belt and UG entity lists with their chosen positions and
+directions. Slot assignment is implicit in the placed entities.
 
 Future phases:
-- 3.2B: underground belts (let crossings happen).
-- 3.2C: per-splitter direction variable (currently fixed south).
 - 3.2D: bounding-box minimisation (currently caller-provided).
 """
 
@@ -56,11 +49,11 @@ from ortools.sat.python import cp_model
 DIR_STEPS = [(0, -1), (1, 0), (0, 1), (-1, 0)]
 INTERNAL_TO_FACTORIO_DIR = [0, 2, 4, 6]
 
-# Underground belt max reach (yellow-belt tier; phase 3.2B-scoped to
-# single tier). One UG pair spans 1..UG_MAX_REACH cells in the chosen
-# direction (length 1 = input and output adjacent — admittedly silly
-# but lets the encoder treat the trivial case uniformly).
-UG_MAX_REACH = 4
+# Underground belt max length (yellow-belt tier; phase 3.2B-scoped to
+# single tier). L in `ug_arcs[(c, d, L, e)]` is the offset from input
+# to output (output cell = input + L*d_step). Yellow belts allow up to
+# 4 transit tiles between input and output, i.e., L ∈ 1..5.
+UG_MAX_REACH = 5
 
 
 def solve_overlap_only(req: dict) -> dict:
@@ -96,8 +89,8 @@ def solve_overlap_only(req: dict) -> dict:
 
 
 def solve_routing(req: dict) -> dict:
-    """Phase 3.2A.1 / 3.2B / 3.2C — belt routing with given splitter
-    positions AND directions (caller-provided)."""
+    """Phase 3.2A — belt routing with given splitter positions and
+    directions; CP-SAT picks slot assignments as variables."""
     width, height = req["bounds"]
     splitter_positions = req["splitter_positions"]
     input_port_tiles = [tuple(t) for t in req["input_port_tiles"]]
@@ -105,7 +98,6 @@ def solve_routing(req: dict) -> dict:
     edges = req["edges"]
 
     # Per-splitter facing direction (Factorio encoding 0/2/4/6 → internal 0/1/2/3).
-    # Default to S (4 → internal 2) for backward compat with 3.2A.1.
     factorio_to_internal = {0: 0, 2: 1, 4: 2, 6: 3}
     splitter_dirs_internal = [
         factorio_to_internal[sp.get("dir", 4)] for sp in splitter_positions
@@ -120,39 +112,105 @@ def solve_routing(req: dict) -> dict:
 
     # Splitter cells (anchor + perpendicular second).
     splitter_cells: set[tuple[int, int]] = set()
-    splitter_anchor_to_idx: dict[tuple[int, int], int] = {}
     for s_idx, sp in enumerate(splitter_positions):
         ax, ay = sp["x"], sp["y"]
-        bx, by = ax + splitter_second_offset(splitter_dirs_internal[s_idx])[0], ay + splitter_second_offset(splitter_dirs_internal[s_idx])[1]
+        ofx, ofy = splitter_second_offset(splitter_dirs_internal[s_idx])
+        bx, by = ax + ofx, ay + ofy
         splitter_cells.add((ax, ay))
         splitter_cells.add((bx, by))
-        splitter_anchor_to_idx[(ax, ay)] = s_idx
 
     def splitter_tile(s_idx: int, slot: int) -> tuple[int, int]:
         sp = splitter_positions[s_idx]
         ax, ay = sp["x"], sp["y"]
         if slot == 0:
             return (ax, ay)
-        bx, by = (
-            ax + splitter_second_offset(splitter_dirs_internal[s_idx])[0],
-            ay + splitter_second_offset(splitter_dirs_internal[s_idx])[1],
-        )
-        return (bx, by)
-
-    def src_cell(edge: dict) -> tuple[int, int]:
-        if edge["src_kind"] == "InputPort":
-            return input_port_tiles[edge["src_idx"]]
-        return splitter_tile(edge["src_idx"], edge.get("src_slot", 0))
-
-    def dst_cell(edge: dict) -> tuple[int, int]:
-        if edge["dst_kind"] == "OutputPort":
-            return output_port_tiles[edge["dst_idx"]]
-        return splitter_tile(edge["dst_idx"], edge.get("dst_slot", 0))
-
-    edge_src = [src_cell(e) for e in edges]
-    edge_dst = [dst_cell(e) for e in edges]
+        ofx, ofy = splitter_second_offset(splitter_dirs_internal[s_idx])
+        return (ax + ofx, ay + ofy)
 
     model = cp_model.CpModel()
+
+    # Per-edge slot vars: when src_kind=Splitter, ExactlyOne picks anchor
+    # vs second as the source tile. Symmetric for dest. Constants for
+    # InputPort/OutputPort sides — the cell is fixed.
+    src_slot_anchor: dict[int, any] = {}
+    src_slot_second: dict[int, any] = {}
+    dst_slot_anchor: dict[int, any] = {}
+    dst_slot_second: dict[int, any] = {}
+    for e_idx, edge in enumerate(edges):
+        if edge["src_kind"] == "Splitter":
+            a = model.NewBoolVar(f"src_anchor_e{e_idx}")
+            s = model.NewBoolVar(f"src_second_e{e_idx}")
+            model.AddExactlyOne([a, s])
+            src_slot_anchor[e_idx] = a
+            src_slot_second[e_idx] = s
+        if edge["dst_kind"] == "Splitter":
+            a = model.NewBoolVar(f"dst_anchor_e{e_idx}")
+            s = model.NewBoolVar(f"dst_second_e{e_idx}")
+            model.AddExactlyOne([a, s])
+            dst_slot_anchor[e_idx] = a
+            dst_slot_second[e_idx] = s
+
+    # Per-splitter slot uniqueness: across all edges sharing a splitter
+    # endpoint, at most one picks anchor (and at most one picks second)
+    # as its output slot. Same for input slots.
+    for s_idx in range(len(splitter_positions)):
+        out_anchor_users = [
+            src_slot_anchor[e_idx]
+            for e_idx, edge in enumerate(edges)
+            if edge["src_kind"] == "Splitter" and edge["src_idx"] == s_idx
+        ]
+        out_second_users = [
+            src_slot_second[e_idx]
+            for e_idx, edge in enumerate(edges)
+            if edge["src_kind"] == "Splitter" and edge["src_idx"] == s_idx
+        ]
+        in_anchor_users = [
+            dst_slot_anchor[e_idx]
+            for e_idx, edge in enumerate(edges)
+            if edge["dst_kind"] == "Splitter" and edge["dst_idx"] == s_idx
+        ]
+        in_second_users = [
+            dst_slot_second[e_idx]
+            for e_idx, edge in enumerate(edges)
+            if edge["dst_kind"] == "Splitter" and edge["dst_idx"] == s_idx
+        ]
+        if len(out_anchor_users) >= 2:
+            model.AddAtMostOne(out_anchor_users)
+        if len(out_second_users) >= 2:
+            model.AddAtMostOne(out_second_users)
+        if len(in_anchor_users) >= 2:
+            model.AddAtMostOne(in_anchor_users)
+        if len(in_second_users) >= 2:
+            model.AddAtMostOne(in_second_users)
+
+    def is_src_term_at(cx: int, cy: int, e_idx: int):
+        """Linear expr / constant: 1 iff (cx, cy) is the chosen source
+        cell for edge e_idx."""
+        edge = edges[e_idx]
+        if edge["src_kind"] == "InputPort":
+            return 1 if (cx, cy) == input_port_tiles[edge["src_idx"]] else 0
+        s_idx = edge["src_idx"]
+        anchor = splitter_tile(s_idx, 0)
+        second = splitter_tile(s_idx, 1)
+        if (cx, cy) == anchor:
+            return src_slot_anchor[e_idx]
+        if (cx, cy) == second:
+            return src_slot_second[e_idx]
+        return 0
+
+    def is_dst_term_at(cx: int, cy: int, e_idx: int):
+        edge = edges[e_idx]
+        if edge["dst_kind"] == "OutputPort":
+            return 1 if (cx, cy) == output_port_tiles[edge["dst_idx"]] else 0
+        s_idx = edge["dst_idx"]
+        anchor = splitter_tile(s_idx, 0)
+        second = splitter_tile(s_idx, 1)
+        if (cx, cy) == anchor:
+            return dst_slot_anchor[e_idx]
+        if (cx, cy) == second:
+            return dst_slot_second[e_idx]
+        return 0
+
     arcs: dict[tuple[int, int, int, int], any] = {}
     for cx in range(width):
         for cy in range(height):
@@ -235,12 +293,6 @@ def solve_routing(req: dict) -> dict:
                     ucx, ucy = cx - L * dx, cy - L * dy
                     if (ucx, ucy, d, L, e_idx) in ug_arcs:
                         model.Add(ug_arcs[(ucx, ucy, d, L, e_idx)] == 0)
-            # Splitter cells also can't carry regular edge belts.
-            for d in range(4):
-                # (Already handled by conservation — splitter cells with
-                # outgoing edge-belt flow would correspond to source
-                # arcs, which are valid; this comment is a no-op.)
-                pass
 
     # UG pairing rule (simplified for single tier): if two UG arcs
     # share a direction-axis and the output of one falls strictly
@@ -260,43 +312,59 @@ def solve_routing(req: dict) -> dict:
                     if (ucx, ucy, d1, L2, e2) in ug_arcs and (ucx, ucy, d1, L2, e2) != (c1x, c1y, d1, L1, e1):
                         model.AddBoolOr([arc1.Not(), ug_arcs[(ucx, ucy, d1, L2, e2)].Not()])
 
-    # Direction constraints at splitter sources/dests. For an edge that
-    # sources at a splitter, the outflow at the source cell must head in
-    # the splitter's facing direction (the splitter's "front"). Similarly
-    # for dests, the incoming arc must come from the back side (i.e.,
-    # the cell behind the splitter contributes flow heading in the
-    # facing direction).
-    for e_idx, edge in enumerate(edges):
-        if edge["src_kind"] == "Splitter":
-            s_idx = edge["src_idx"]
-            facing = splitter_dirs_internal[s_idx]
-            scx, scy = edge_src[e_idx]
-            for d in range(4):
-                if d != facing:
-                    model.Add(arcs[(scx, scy, d, e_idx)] == 0)
-                    # Also forbid UG arcs at splitter source in non-facing direction.
+    # Splitter-cell direction + transit constraints (apply to every edge
+    # at every splitter tile, regardless of whether the slot is chosen
+    # for that edge). Outflow allowed only in facing direction; inflow
+    # allowed only from facing direction. Total outflow/inflow at the
+    # cell are bounded by the reified is_src/is_dst slot vars (no
+    # transit through splitters).
+    for s_idx in range(len(splitter_positions)):
+        facing = splitter_dirs_internal[s_idx]
+        for slot in (0, 1):
+            cx, cy = splitter_tile(s_idx, slot)
+            for e_idx in range(len(edges)):
+                # Forbid outflow in non-facing directions.
+                for d in range(4):
+                    if d != facing:
+                        model.Add(arcs[(cx, cy, d, e_idx)] == 0)
+                        for L in range(1, UG_MAX_REACH + 1):
+                            if (cx, cy, d, L, e_idx) in ug_arcs:
+                                model.Add(ug_arcs[(cx, cy, d, L, e_idx)] == 0)
+                # Forbid inflow from non-facing directions.
+                for d in range(4):
+                    if d == facing:
+                        continue
+                    ncx = cx - DIR_STEPS[d][0]
+                    ncy = cy - DIR_STEPS[d][1]
+                    if 0 <= ncx < width and 0 <= ncy < height:
+                        model.Add(arcs[(ncx, ncy, d, e_idx)] == 0)
                     for L in range(1, UG_MAX_REACH + 1):
-                        if (scx, scy, d, L, e_idx) in ug_arcs:
-                            model.Add(ug_arcs[(scx, scy, d, L, e_idx)] == 0)
-        if edge["dst_kind"] == "Splitter":
-            s_idx = edge["dst_idx"]
-            facing = splitter_dirs_internal[s_idx]
-            dcx, dcy = edge_dst[e_idx]
-            # Incoming flow at dest must be from direction = facing
-            # (i.e., the back-side neighbor's outflow heads in facing
-            # direction toward the splitter).
-            for d in range(4):
-                if d == facing:
-                    continue
-                # Forbid belt-arcs from non-facing directions.
-                ncx, ncy = dcx - DIR_STEPS[d][0], dcy - DIR_STEPS[d][1]
-                if 0 <= ncx < width and 0 <= ncy < height:
-                    model.Add(arcs[(ncx, ncy, d, e_idx)] == 0)
-                # Forbid UG arcs ending at dest from wrong direction.
+                        ucx = cx - L * DIR_STEPS[d][0]
+                        ucy = cy - L * DIR_STEPS[d][1]
+                        if (ucx, ucy, d, L, e_idx) in ug_arcs:
+                            model.Add(ug_arcs[(ucx, ucy, d, L, e_idx)] == 0)
+                # Bound total outflow ≤ is_src_term, total inflow ≤ is_dst_term.
+                outflow_terms = [arcs[(cx, cy, facing, e_idx)]]
                 for L in range(1, UG_MAX_REACH + 1):
-                    ucx, ucy = dcx - L * DIR_STEPS[d][0], dcy - L * DIR_STEPS[d][1]
-                    if (ucx, ucy, d, L, e_idx) in ug_arcs:
-                        model.Add(ug_arcs[(ucx, ucy, d, L, e_idx)] == 0)
+                    if (cx, cy, facing, L, e_idx) in ug_arcs:
+                        outflow_terms.append(ug_arcs[(cx, cy, facing, L, e_idx)])
+                model.Add(sum(outflow_terms) <= is_src_term_at(cx, cy, e_idx))
+
+                inflow_terms = []
+                ncx = cx - DIR_STEPS[facing][0]
+                ncy = cy - DIR_STEPS[facing][1]
+                if 0 <= ncx < width and 0 <= ncy < height:
+                    inflow_terms.append(arcs[(ncx, ncy, facing, e_idx)])
+                # UG inflow at splitter cells: a UG output one step
+                # behind the splitter (in facing direction) emits forward
+                # into the splitter. Its input is at (cx - (L+1)*d, ...).
+                for L in range(1, UG_MAX_REACH + 1):
+                    ucx = cx - (L + 1) * DIR_STEPS[facing][0]
+                    ucy = cy - (L + 1) * DIR_STEPS[facing][1]
+                    if (ucx, ucy, facing, L, e_idx) in ug_arcs:
+                        inflow_terms.append(ug_arcs[(ucx, ucy, facing, L, e_idx)])
+                if inflow_terms:
+                    model.Add(sum(inflow_terms) <= is_dst_term_at(cx, cy, e_idx))
 
     # Flow conservation per (cell, edge). Outflow includes UG arcs
     # SOURCED at this cell (the input half of a UG); inflow includes UG
@@ -321,11 +389,17 @@ def solve_routing(req: dict) -> dict:
                         belt_inflow_terms.append(arcs[(ncx, ncy, d, e_idx)])
                 belt_inflow = sum(belt_inflow_terms) if belt_inflow_terms else 0
 
+                # UG inflow at this cell: a UG arc with input at
+                # (cx - (L+1)*dx, ...) and output at (cx - dx, ...) emits
+                # forward in direction d, landing here as inflow. The
+                # output cell itself is a passthrough — its UG inflow
+                # cancels with its UG output emission.
                 ug_inflow_terms = []
                 for d in range(4):
                     dx, dy = DIR_STEPS[d]
                     for L in range(1, UG_MAX_REACH + 1):
-                        ucx, ucy = cx - L * dx, cy - L * dy
+                        ucx = cx - (L + 1) * dx
+                        ucy = cy - (L + 1) * dy
                         if (ucx, ucy, d, L, e_idx) in ug_arcs:
                             ug_inflow_terms.append(ug_arcs[(ucx, ucy, d, L, e_idx)])
                 ug_inflow = sum(ug_inflow_terms) if ug_inflow_terms else 0
@@ -333,17 +407,9 @@ def solve_routing(req: dict) -> dict:
                 outflow = belt_outflow + ug_outflow
                 inflow = belt_inflow + ug_inflow
 
-                is_src = (cx, cy) == edge_src[e_idx]
-                is_dst = (cx, cy) == edge_dst[e_idx]
-                if is_src and is_dst:
-                    model.Add(outflow == 0)
-                    model.Add(inflow == 0)
-                elif is_src:
-                    model.Add(outflow - inflow == 1)
-                elif is_dst:
-                    model.Add(inflow - outflow == 1)
-                else:
-                    model.Add(outflow - inflow == 0)
+                src_term = is_src_term_at(cx, cy, e_idx)
+                dst_term = is_dst_term_at(cx, cy, e_idx)
+                model.Add(outflow - inflow == src_term - dst_term)
 
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = 30.0

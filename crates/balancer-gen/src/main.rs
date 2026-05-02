@@ -1,6 +1,6 @@
 //! Phase 3.1 / 3.2 / 3.2A spike — drive a Python+OR-Tools placement
-//! subprocess for splitter no-overlap (3.1) and now belt-routing (3.2A.1)
-//! with caller-provided splitter positions, then verify via classify_ref.
+//! subprocess for splitter no-overlap (3.1) and belt routing (3.2A),
+//! then verify via classify_ref.
 //!
 //! Three modes exercised here:
 //!   - Mode A — splitter no-overlap only on `(2, 3)` and `(4, 9)` Clos
@@ -8,15 +8,10 @@
 //!   - Mode B — single-splitter end-to-end round-trip on `(1, 2)` and
 //!     `(2, 2)` (3.2 MVP).
 //!   - **Mode C — flow-conservation belt routing** on multi-splitter
-//!     library shapes with no back-loops: takes splitter positions
-//!     from the library template, computes per-edge slot assignments
-//!     via a min-distance greedy, sends the topology + slot assignments
-//!     to CP-SAT for belt routing, reassembles entity list, verifies.
-//!
-//! 3.2A.1 scope: south-facing splitters, no UGs. Test cases that
-//! satisfy these constraints: `(2, 2)`, `(2, 4)`, `(4, 8)`, `(1, 4)`.
-//! Library shapes that need west-facing splitters or UGs are excluded
-//! and tagged for phase 3.2B/3.2C.
+//!     library shapes: takes splitter positions and directions from
+//!     the library template, sends the topology to CP-SAT (which picks
+//!     slot assignments as variables, phase 3.2A.2), reassembles the
+//!     entity list, verifies via classify_ref.
 
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -64,10 +59,8 @@ struct SplitterPosOut {
 struct EdgeReq {
     src_kind: &'static str,
     src_idx: usize,
-    src_slot: u8,
     dst_kind: &'static str,
     dst_idx: usize,
-    dst_slot: u8,
 }
 
 #[derive(Deserialize, Debug)]
@@ -138,8 +131,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     spike_round_trip("(1, 2)", (1, 2))?;
     spike_round_trip("(2, 2)", (2, 2))?;
 
-    // Mode C — phase 3.2A.1 / 3.2B / 3.2C multi-splitter belt routing.
-    // Continues past failures so we can see the coverage matrix.
+    // Mode C — phase 3.2A / 3.2B / 3.2C multi-splitter belt routing.
+    // CP-SAT picks slot assignments as variables (3.2A.2). Continues past
+    // failures so we can see the coverage matrix.
     println!("\n=== phase 3.2A / 3.2B / 3.2C: flow-conservation belt routing ===");
     let mut routing_results: Vec<(String, Result<(), String>)> = Vec::new();
     for &(label, shape) in &[
@@ -358,14 +352,14 @@ fn spike_routing_round_trip(
         .into());
     }
 
-    let edge_assignments = assign_slots(&topology, &splitter_positions, lib)?;
+    let edge_reqs = build_edge_reqs(&topology)?;
 
     let req = PlaceRequest::Routing {
         bounds: (lib.width, lib.height),
         splitter_positions: splitter_positions.clone(),
         input_port_tiles: lib.input_tiles.to_vec(),
         output_port_tiles: lib.output_tiles.to_vec(),
-        edges: edge_assignments,
+        edges: edge_reqs,
     };
 
     println!(
@@ -408,131 +402,34 @@ fn spike_routing_round_trip(
     Ok(())
 }
 
-/// Direction-aware splitter tile lookup. Slot 0 = anchor; slot 1 = the
-/// perpendicular second tile (east of anchor for N/S, south for E/W),
-/// matching `splitter_second_tile` in `crates/core/src/common.rs`.
-fn splitter_slot_tile(sp: &SplitterPosOut, slot: u8) -> (i32, i32) {
-    if slot == 0 {
-        return (sp.x, sp.y);
-    }
-    match sp.dir {
-        0 | 4 => (sp.x + 1, sp.y),
-        _ => (sp.x, sp.y + 1),
-    }
-}
-
-/// Min-distance greedy slot assignment. For each edge in the topology,
-/// pick (src_slot, dst_slot) such that the cell-to-cell manhattan distance
-/// between source and destination cells is minimised, subject to slots
-/// not being reused across edges sharing a splitter endpoint.
-///
-/// Works for shapes without back-loops where the natural slot assignment
-/// matches the library's physical layout. Phase 3.2A.2+ may need a
-/// smarter assignment (or letting CP-SAT pick).
-fn assign_slots(
+/// Build per-edge requests for the CP-SAT solver. No slot info — the
+/// solver picks slot assignments as variables (phase 3.2A.2).
+fn build_edge_reqs(
     topology: &SplitterGraph,
-    splitter_positions: &[SplitterPosOut],
-    lib: &fucktorio_core::bus::balancer_library::BalancerTemplate,
 ) -> Result<Vec<EdgeReq>, Box<dyn std::error::Error>> {
-    let mut input_slots_used: Vec<[bool; 2]> = vec![[false; 2]; topology.n_splitters];
-    let mut output_slots_used: Vec<[bool; 2]> = vec![[false; 2]; topology.n_splitters];
-
     let mut edge_reqs = Vec::with_capacity(topology.edges.len());
-
     for (a, b) in &topology.edges {
-        let src_candidates: Vec<(u8, (i32, i32))> = match a {
-            NodeId::InputPort(i) => {
-                vec![(0, lib.input_tiles[*i])]
-            }
-            NodeId::Splitter(s) => {
-                let sp = &splitter_positions[*s];
-                let mut v = Vec::new();
-                for slot in 0..2u8 {
-                    if !output_slots_used[*s][slot as usize] {
-                        v.push((slot, splitter_slot_tile(sp, slot)));
-                    }
-                }
-                if v.is_empty() {
-                    return Err(format!(
-                        "splitter {s} has no free output slots for edge {a:?} → {b:?}"
-                    )
-                    .into());
-                }
-                v
-            }
+        let (src_kind, src_idx) = match a {
+            NodeId::InputPort(i) => ("InputPort", *i),
+            NodeId::Splitter(s) => ("Splitter", *s),
             NodeId::OutputPort(_) => {
                 return Err("invalid: edge sourced from OutputPort".into())
             }
         };
-        let dst_candidates: Vec<(u8, (i32, i32))> = match b {
-            NodeId::OutputPort(j) => {
-                vec![(0, lib.output_tiles[*j])]
-            }
-            NodeId::Splitter(s) => {
-                let sp = &splitter_positions[*s];
-                let mut v = Vec::new();
-                for slot in 0..2u8 {
-                    if !input_slots_used[*s][slot as usize] {
-                        v.push((slot, splitter_slot_tile(sp, slot)));
-                    }
-                }
-                if v.is_empty() {
-                    return Err(format!(
-                        "splitter {s} has no free input slots for edge {a:?} → {b:?}"
-                    )
-                    .into());
-                }
-                v
-            }
+        let (dst_kind, dst_idx) = match b {
+            NodeId::OutputPort(j) => ("OutputPort", *j),
+            NodeId::Splitter(s) => ("Splitter", *s),
             NodeId::InputPort(_) => {
                 return Err("invalid: edge destined for InputPort".into())
             }
         };
-
-        let mut best: Option<(i32, u8, u8)> = None;
-        for &(src_slot, src_cell) in &src_candidates {
-            for &(dst_slot, dst_cell) in &dst_candidates {
-                let dist = (src_cell.0 - dst_cell.0).abs() + (src_cell.1 - dst_cell.1).abs();
-                if best.is_none_or(|(b, _, _)| dist < b) {
-                    best = Some((dist, src_slot, dst_slot));
-                }
-            }
-        }
-        let (_, src_slot, dst_slot) = best.unwrap();
-
-        if let NodeId::Splitter(s) = a {
-            output_slots_used[*s][src_slot as usize] = true;
-        }
-        if let NodeId::Splitter(s) = b {
-            input_slots_used[*s][dst_slot as usize] = true;
-        }
-
         edge_reqs.push(EdgeReq {
-            src_kind: match a {
-                NodeId::InputPort(_) => "InputPort",
-                NodeId::Splitter(_) => "Splitter",
-                _ => unreachable!(),
-            },
-            src_idx: match a {
-                NodeId::InputPort(i) => *i,
-                NodeId::Splitter(s) => *s,
-                _ => unreachable!(),
-            },
-            src_slot,
-            dst_kind: match b {
-                NodeId::OutputPort(_) => "OutputPort",
-                NodeId::Splitter(_) => "Splitter",
-                _ => unreachable!(),
-            },
-            dst_idx: match b {
-                NodeId::OutputPort(j) => *j,
-                NodeId::Splitter(s) => *s,
-                _ => unreachable!(),
-            },
-            dst_slot,
+            src_kind,
+            src_idx,
+            dst_kind,
+            dst_idx,
         });
     }
-
     Ok(edge_reqs)
 }
 
