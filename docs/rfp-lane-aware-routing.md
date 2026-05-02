@@ -331,3 +331,28 @@ Plan to land in chunks. Each phase ships a working subset.
   acceptable and Factorio-SAT's baseline is ∞ on the target shapes.
   New criteria gate on `(1, 5)` <30min, hard-coprime <4h, full library
   <8h.*
+- *2026-05-02 — Phase 2 shipped in `e5250a1`. Sideload table + lifted
+  tile-exclusivity. Multiple routes can share a tile in the same
+  direction; perpendicular feed → forced lane via the table.*
+- *2026-05-02 — Phase 3 task 1 (dual-lane input modeling) shipped in
+  `29f353b`. Each direct input emits 2 lane-routes; sideload routes
+  remain 1 route. `(3, 4)` now correctly UNSAT.*
+- *2026-05-02 — Phase 3 task 2 design captured in
+  `docs/scratch-lane-balancer-design.md`. Balancer insertion to absorb
+  ≥3 same-side sideloads via the head-on+sideload lane trick.*
+- *2026-05-02 — Phase 3 task 3 shipped in `1a71e31`. Rate-aware
+  per-lane cap: per-lane caps now use weighted sums
+  `sum (rates[r] * f_lane[r, t, d, lane]) ≤ lane_cap` instead of
+  unit caps. Defaults preserve discrete behavior; foundation for
+  fractional-rate convergence (coprime feedback channels). Existing
+  10/10 tests unaffected.*
+- *2026-05-02 — Open: `(1, 5)` integration. Rate-aware foundation is
+  in place but applying it requires *also* modeling that (a) head-on
+  splitter-output drops fill both lanes (so should emit 2 lane-routes
+  per arc), and (b) perpendicular drops force a specific lane via the
+  sideload table at the source tile. Without these, the routing model
+  treats splitter-output sources as freely-laned which under-counts
+  saturation. Deferred pending design — three approaches in play:
+  source-lane forcing + grid 10×9, structural balancer insertion (per
+  the design doc), or both. See `scratch-lane-balancer-design.md` for
+  the balancer track.*
