@@ -356,3 +356,11 @@ Plan to land in chunks. Each phase ships a working subset.
   source-lane forcing + grid 10×9, structural balancer insertion (per
   the design doc), or both. See `scratch-lane-balancer-design.md` for
   the balancer track.*
+- *2026-05-02 — `(1, 5)` deferral resolved by a different track:
+  `rfp-lane-safe-synth.md`. Rather than continue wrestling with
+  sideloading in the placer, push the merging upstream into synth via
+  cascading balancer splitters. The placer never sees multi-arc port
+  relaxation under that approach; phase 2 of that RFP rolls back the
+  sideload table and per-lane caps as obsolete. Splitter direction
+  support, dual-lane input modeling, and rate-aware encoding all
+  survive (still useful as foundational pieces).*
