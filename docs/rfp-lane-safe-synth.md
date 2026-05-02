@@ -335,6 +335,43 @@ After each phase:
   back, keeping only the bits that are still useful (splitter
   direction support, dual-lane input modeling, rate-aware foundation).*
 
+- *2026-05-02 — Self-loop construction tested. The single-splitter
+  case (one input port empty, output→empty-port self-loop)
+  verifies fluid-stable: `verify_balancer` returns full-rank with
+  output rate = input rate. **However**, the multi-splitter cascade
+  the RFP describes for K=3 mergers does NOT extend cleanly: any
+  attempt to feed a leftover output back into a port that already
+  has an input creates exactly the multi-arc relaxation
+  lane-safe-synth was supposed to eliminate. Working through the
+  conservation by hand:
+
+  - Single-splitter self-loop: works because port 1 starts empty,
+    the loop arc is the only arc on that port, no multi-arc.
+  - 2-splitter cascade for 3-input merger (S1 absorbs fb1+fb2,
+    S2 absorbs S1.out_0 + fb3, S2.out_0 → final, S1.out_1 + S2.out_1
+    leftover): no port left empty for self-loops to land on without
+    re-introducing multi-arc.
+  - Padded Beneš (4 inputs, 1 dummy at cap 0.0): verifies fine
+    (each output = 0.75) but produces 4 outputs, not 1 — doesn't
+    solve the K→1 single-feedback merger that the original `(1, 5)`
+    needs. We'd need an additional `(4, 1)` merger downstream,
+    which is itself a multi-arc convergence.
+
+  **Conclusion: the lane-safe-synth approach as drafted does not
+  actually eliminate multi-arc convergence for K→1 mergers.** Binary
+  splitters can only produce K outputs from K inputs at conserved
+  rate; reducing to a single belt at the convergence point requires
+  sideloading no matter how the upstream cascade is arranged.
+
+  The path forward is to fix lane-aware routing properly — the
+  problem the lane-aware-routing RFP was trying to solve. Specifically:
+  source-lane forcing for splitter-output drops (head-on fills both
+  lanes; perpendicular forces one lane) needs to land. With that,
+  the placer can find lane-safe layouts for `(1, 5)` directly,
+  using sideloading from opposite sides where geometry permits.
+  This RFP is parked, not abandoned — we may revisit some elements
+  (e.g., padded Beneš for `(n, n)`) in narrower contexts.*
+
 ## What this means for the in-flight PR
 
 The current PR (`claude/cp-sat-place-dyadic`) ships:

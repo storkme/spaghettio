@@ -9,6 +9,14 @@
 solves placement via Google OR-tools CP-SAT, writes a PlacedTemplate to
 stdout (JSON).
 
+This is the canonical placer consumed by
+`crates/core/src/balancer/placement/cp_sat.rs` and the
+`cp_sat_round_trip` test suite. A separate spike at
+`crates/balancer-gen/scripts/place.py` covers UG belts and mixed splitter
+directions for the bake pipeline; that spike will eventually migrate
+onto this script once the canonical placer covers the same shape
+repertoire. New shape coverage should land here, not in the spike.
+
 Wire format mirrors `crates/core/src/balancer/placement/cp_sat.rs`:
 
 Request (stdin)::
@@ -61,6 +69,32 @@ _FACTORIO_DIR = (0, 2, 4, 6)
 def _splitter_dir(pos: tuple[int, int] | tuple[int, int, int]) -> int:
     """Direction of a splitter from its position tuple. Default south."""
     return pos[2] if len(pos) >= 3 else 2
+
+
+# Module-level solver parameters. Populated by `main()` from the
+# stdin request and consumed by `_make_solver()` at every CP-SAT
+# solver instantiation. Centralising the configuration keeps each
+# `place_*` function from re-discovering it; threading the params
+# through every call site would be ~equivalent code but with more
+# surface area for the wiring to drift again.
+_SOLVER_PARAMS: dict[str, Any] = {"timeout_ms": 1000, "seed": None}
+
+
+def _make_solver():
+    """Build a `CpSolver` with timeout and seed from `_SOLVER_PARAMS`.
+
+    Honours the `timeout_ms` and `seed` fields of the request. Pins
+    `num_search_workers = 1` so determinism is reproducible across
+    same-seed runs (kill criterion #5 in `rfp-cp-sat-placement.md`).
+    """
+    from ortools.sat.python import cp_model
+    solver = cp_model.CpSolver()
+    solver.parameters.max_time_in_seconds = _SOLVER_PARAMS["timeout_ms"] / 1000.0
+    solver.parameters.num_search_workers = 1
+    seed = _SOLVER_PARAMS.get("seed")
+    if seed is not None:
+        solver.parameters.random_seed = int(seed)
+    return solver
 
 
 def _splitter_tiles(
@@ -315,7 +349,7 @@ def _route_belts(
         sum(belt[(t, d)] for t in free for d in _INTERNAL_DIRS)
     )
 
-    solver = cp_model.CpSolver()
+    solver = _make_solver()
     status = solver.solve(model)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         return None
@@ -399,7 +433,7 @@ def _input_routes_for_root(
     list[tuple[int, int]],
     list[tuple[tuple[int, int], tuple[int, int], int]],
 ]:
-    """Build input belt tiles and routes for `n ∈ {1, 2, 3}` inputs.
+    """Build input belt tiles and routes for `n ∈ {1, 2}` inputs.
 
     Returns `(input_tiles, routes)`. Each route is
     `(src, sink, sink_dir)` for [`_route_belts`].
@@ -413,12 +447,13 @@ def _input_routes_for_root(
     leaves the "other" lane of the boundary belt available for
     sideload — under-counting saturation.
 
-    Sideload inputs (n=3 case) emit a single route, since they only
-    fill the lane the side-feed forces.
-
     n=1: 2 lane-routes feeding port 0 (left tile of root).
     n=2: 4 lane-routes (2 per port).
-    n=3: 4 + 1 sideload from west.
+
+    Larger n (≥3) needs an explicit merger sub-network in the synth
+    output and is not yet supported. The earlier sideload variant
+    for n=3 was removed after the per-lane cap correctly rejected it
+    as lane-unsafe (saturation on the receiving belt).
     """
     DIR_S = 2
     direct_left = (x_root, y_root - 1)
@@ -436,18 +471,7 @@ def _input_routes_for_root(
             routes.append((t, t, DIR_S))
             routes.append((t, t, DIR_S))
         return tiles, routes
-    if n == 3:
-        sideload = (x_root - 1, y_root - 1)
-        tiles = [direct_left, direct_right, sideload]
-        routes = [
-            (direct_left, direct_left, DIR_S),
-            (direct_left, direct_left, DIR_S),
-            (direct_right, direct_right, DIR_S),
-            (direct_right, direct_right, DIR_S),
-            (sideload, direct_left, DIR_S),
-        ]
-        return tiles, routes
-    raise ValueError(f"unsupported input count {n}; expected 1, 2, or 3")
+    raise ValueError(f"unsupported input count {n}; expected 1 or 2")
 
 
 def place_x_to_four(n: int) -> dict[str, Any]:
@@ -483,7 +507,7 @@ def place_x_to_four(n: int) -> dict[str, Any]:
     model.add(xs[0] - 1 >= 0)
     model.add(xs[0] + 2 <= width - 1)
 
-    solver = cp_model.CpSolver()
+    solver = _make_solver()
     status = solver.solve(model)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         raise RuntimeError(f"({n}, 4) CP-SAT model UNSAT: {solver.status_name(status)}")
@@ -575,7 +599,7 @@ def place_x_to_eight(n: int) -> dict[str, Any]:
     model.add(xs[0] - 3 >= 0)
     model.add(xs[0] + 4 <= width - 1)
 
-    solver = cp_model.CpSolver()
+    solver = _make_solver()
     status = solver.solve(model)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         raise RuntimeError(f"({n}, 8) CP-SAT model UNSAT: {solver.status_name(status)}")
@@ -682,7 +706,7 @@ def place_x_to_sixteen(n: int) -> dict[str, Any]:
     model.add(xs[0] - 7 >= 0)
     model.add(xs[0] + 8 <= width - 1)
 
-    solver = cp_model.CpSolver()
+    solver = _make_solver()
     status = solver.solve(model)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         raise RuntimeError(f"({n}, 16) CP-SAT model UNSAT: {solver.status_name(status)}")
@@ -755,6 +779,13 @@ def main() -> int:
     n = int(request.get("n", 0))
     m = int(request.get("m", 0))
     timeout_ms = int(request.get("timeout_ms", 1000))
+    seed = request.get("seed")
+
+    # Configure the module-level solver params so every CP-SAT solve
+    # in this run honours the request's timeout and seed. See
+    # `_make_solver` for the wiring.
+    _SOLVER_PARAMS["timeout_ms"] = timeout_ms
+    _SOLVER_PARAMS["seed"] = seed
 
     started = time.monotonic()
 

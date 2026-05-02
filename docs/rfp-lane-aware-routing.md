@@ -356,11 +356,15 @@ Plan to land in chunks. Each phase ships a working subset.
   source-lane forcing + grid 10×9, structural balancer insertion (per
   the design doc), or both. See `scratch-lane-balancer-design.md` for
   the balancer track.*
-- *2026-05-02 — `(1, 5)` deferral resolved by a different track:
-  `rfp-lane-safe-synth.md`. Rather than continue wrestling with
-  sideloading in the placer, push the merging upstream into synth via
-  cascading balancer splitters. The placer never sees multi-arc port
-  relaxation under that approach; phase 2 of that RFP rolls back the
-  sideload table and per-lane caps as obsolete. Splitter direction
-  support, dual-lane input modeling, and rate-aware encoding all
-  survive (still useful as foundational pieces).*
+- *2026-05-02 — `(1, 5)` deferral re-routed through
+  `rfp-lane-safe-synth.md` — but that RFP got tested empirically
+  before commit and doesn't hold up: the self-loop construction
+  works for single splitters but multi-splitter cascades for K→1
+  mergers re-introduce the multi-arc relaxation we were trying to
+  eliminate. See the decision log in `rfp-lane-safe-synth.md` for
+  the full breakdown. Net: `(1, 5)` integration remains blocked on
+  source-lane forcing in the placer (the original lane-aware path),
+  not on synth enrichment. The lane-aware infrastructure shipped in
+  this PR is the right foundation; what's missing is source-lane
+  forcing for splitter-output drops. That's the next concrete piece
+  of work.*
