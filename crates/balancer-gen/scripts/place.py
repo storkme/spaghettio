@@ -851,7 +851,7 @@ def solve_synth_place(req: dict) -> dict:
     model.Minimize(sum(entity_terms))
 
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 60.0
+    solver.parameters.max_time_in_seconds = float(req.get("max_time_s", 60.0))
     t0 = time.monotonic()
     status = solver.Solve(model)
     elapsed = time.monotonic() - t0
@@ -1280,7 +1280,7 @@ def solve_synth_place_dirs(req: dict) -> dict:
     model.Minimize(sum(entity_terms))
 
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 120.0
+    solver.parameters.max_time_in_seconds = float(req.get("max_time_s", 120.0))
     t0 = time.monotonic()
     status = solver.Solve(model)
     elapsed = time.monotonic() - t0

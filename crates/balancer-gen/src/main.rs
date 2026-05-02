@@ -54,6 +54,8 @@ enum PlaceRequest {
         edges: Vec<EdgeReq>,
         #[serde(skip_serializing_if = "Option::is_none")]
         allow_dirs: Option<Vec<u8>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        max_time_s: Option<f64>,
     },
 }
 
@@ -261,7 +263,100 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
+    // Phase 3.3 stress test — (4, 9) Clos composition.
+    // 33 splitters, 67 edges. Library doesn't have (4, 9). Topology
+    // built from existing series_permuted(parallel(library_atom(1, 3),
+    // 4), parallel(library_atom(4, 3), 3), clos_interleave(4, 3)) and
+    // verified MX3 by classify_graph above. Tests whether Mode D can
+    // place a 30+ splitter graph at all — answers the open question
+    // gating phase 3.4 (bake into library_extra).
+    println!("\n=== phase 3.3 stress: (4, 9) Clos composition ===");
+    if let Err(e) = stress_clos_4_9() {
+        println!("  ✗ stress test: {e}");
+    }
+
     println!("\n✓ all spike runs passed");
+    Ok(())
+}
+
+fn stress_clos_4_9() -> Result<(), Box<dyn std::error::Error>> {
+    let stage1 = parallel(&library_atom(1, 3).ok_or("library (1, 3) missing")?, 4);
+    let stage2 = parallel(&library_atom(4, 3).ok_or("library (4, 3) missing")?, 3);
+    let big = series_permuted(&stage1, &stage2, &clos_interleave(4, 3));
+    let report = classify_graph(&big).map_err(|e| format!("classify_graph: {e:?}"))?;
+    if report.class != BalancerClass::Balanced {
+        return Err(format!("(4, 9) Clos expected MX3, got {:?}", report.class).into());
+    }
+    println!(
+        "  topology: {} splitters, {} edges (classified {:?})",
+        big.n_splitters,
+        big.edges.len(),
+        report.class
+    );
+
+    let timeout = 600.0_f64;
+
+    // Try increasingly tight bboxes. Mode D's model size is O(W*H*E)
+    // for routing arcs alone — at 24×24 with 67 edges the model OOMs
+    // during construction. Walk down from synth's bbox heuristic.
+    let bbox_candidates: &[(u32, u32)] = &[(16, 16), (12, 18), (10, 20), (9, 24)];
+
+    for &bbox in bbox_candidates {
+        println!(
+            "  attempting Mode D at {}×{} with {:.0}s budget...",
+            bbox.0, bbox.1, timeout
+        );
+        match try_clos_at(&big, bbox, timeout) {
+            Ok(()) => {
+                println!("  ✓ (4, 9) Clos placed at {}×{}", bbox.0, bbox.1);
+                return Ok(());
+            }
+            Err(e) => println!("    {e}"),
+        }
+    }
+    Err("(4, 9) Clos failed at every candidate bbox".into())
+}
+
+fn try_clos_at(
+    big: &SplitterGraph,
+    bbox: (u32, u32),
+    timeout: f64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let edge_reqs = build_edge_reqs(big)?;
+
+    let req = PlaceRequest::SynthPlace {
+        bounds: bbox,
+        n_inputs: 4,
+        n_outputs: 9,
+        n_splitters: big.n_splitters,
+        edges: edge_reqs,
+        allow_dirs: None,
+        max_time_s: Some(timeout),
+    };
+    let resp = run_solver(&req)?;
+    println!(
+        "  status={} elapsed={:.2}s splitters={} belts={} ugs={}",
+        resp.status,
+        resp.elapsed_s,
+        resp.splitters.len(),
+        resp.belts.len(),
+        resp.ugs.len()
+    );
+
+    if resp.status != "OPTIMAL" && resp.status != "FEASIBLE" {
+        return Err(format!(
+            "(4, 9) Clos returned {} at {bbox:?} after {:.1}s",
+            resp.status, resp.elapsed_s
+        )
+        .into());
+    }
+
+    println!(
+        "  → {} entities total in {}×{} bbox",
+        resp.splitters.len() + resp.belts.len() + resp.ugs.len(),
+        bbox.0,
+        bbox.1
+    );
     Ok(())
 }
 
@@ -343,6 +438,7 @@ fn solve_synth(
         n_splitters: topology.n_splitters,
         edges: edge_reqs,
         allow_dirs: None,
+        max_time_s: None,
     };
     let resp = run_solver(&req)?;
     if resp.status != "OPTIMAL" && resp.status != "FEASIBLE" {
@@ -645,6 +741,7 @@ fn spike_synth_place(
         n_splitters: topology.n_splitters,
         edges: edge_reqs,
         allow_dirs,
+        max_time_s: None,
     };
 
     println!(
