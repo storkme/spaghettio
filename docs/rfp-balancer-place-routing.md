@@ -551,3 +551,39 @@ re-litigating decisions:
   Mode D to consume synth's `BalancerGraph` directly, or (b) writing
   a synth → SplitterGraph adapter so the existing Mode D request
   format works.*
+
+- *2026-05-02 (later still) — phase 3.3 stress test on `(4, 9)` Clos
+  composition. Clear negative result: Mode D does NOT scale to 30+
+  splitter shapes in its current encoding.*
+
+  *The (4, 9) topology built via `series_permuted(parallel(library_atom(1, 3), 4),
+  parallel(library_atom(4, 3), 3), clos_interleave(4, 3))` has 33
+  splitters and 67 edges. Tried four progressively-smaller bboxes —
+  16×16, 12×18, 10×20, 9×24 — each with a 600s solve budget. All four
+  OOM-killed (exit 137) during model construction, before the solver
+  even starts.*
+
+  *Root cause: per-(cell, edge, direction) bool var count is `O(W * H *
+  E)` for routing arcs and `O(W * H * UG_MAX_REACH * E)` for UG arcs.
+  At 9×24 with 67 edges that's 67 × 216 × 4 ≈ 58K arc vars and 67 ×
+  216 × 5 ≈ 72K UG vars — plus `O(splitters * cells)` reified anchor
+  bools and reified is_src/is_dst term bools per (cell, edge). Total
+  ~500K bool vars; CP-SAT's model construction allocates more than
+  the available RAM before constraints are even posted.*
+
+  *Implication for phase 3.4: Mode D **cannot** bake compositions like
+  (4, 9) Clos that synth produces from atom composition. It CAN
+  probably handle the 37 atomic missing shapes from issue #136 (most
+  are ≤ 10 splitters, which Mode D handles in seconds), but anything
+  built by composing atoms is out of reach until the encoding is
+  rewritten. Two ways forward:*
+
+  - *Sparser encoding: don't allocate arc vars for every (cell, edge)
+    combo. Use lazy constraint generation, or shared arc vars across
+    edges with disjoint flow sets.*
+  - *Decompose compositions: solve each Clos stage independently (each
+    is small), then stitch the layouts together — pushes the
+    composition work back to a Rust-side combinator instead of CP-SAT.*
+
+  *Phase 3.4 starts with the atomic-shapes-only scope; compositions
+  wait for the encoding rework or the decomposition combinator.*
