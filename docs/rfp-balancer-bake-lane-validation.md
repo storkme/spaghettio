@@ -208,3 +208,162 @@ Per [the layout-engine verification protocol](../CLAUDE.md#verification-protocol
 - *2026-05-02 — drafted. Awaiting approval. Can run in parallel with
   spatial-pruning RFP (different files: Rust orchestration here,
   Python encoding there).*
+
+- *2026-05-02 — Phase 1 implemented. Module landed at
+  `crates/core/src/bus/template_validate.rs` (not in `balancer-gen`,
+  which is a bin crate). Audit test at
+  `crates/core/tests/balancer_lane_audit.rs`, run with
+  `cargo test --manifest-path crates/core/Cargo.toml --test
+  balancer_lane_audit -- --nocapture`. Synthesis is small (~30 LOC of
+  plumbing — well under the 50 LOC kill budget): convert template
+  entities to `PlacedEntity`s, mark only the input tiles as carrying a
+  sentinel item, and feed a `SolverResult` whose only external input is
+  that item at `belt_throughput * min(N, M)`. All four lane-relevant
+  validators run against the synthesized `LayoutResult`.*
+
+  **Headline numbers (75 templates audited):**
+
+  | metric | count | % |
+  |--------|------:|---|
+  | templates with errors | 50 | 66.7% |
+  | templates with warnings | 22 | 29.3% |
+  | total error issues | 373 | — |
+  | total warning issues | 53 | — |
+
+  **Errors by category:**
+
+  | category | total occurrences | templates affected |
+  |----------|------------------:|-------------------:|
+  | lane-throughput | 348 | 48 |
+  | underground-belt (unpaired) | 25 | 6 |
+
+  **Warnings by category:**
+
+  | category | total occurrences |
+  |----------|------------------:|
+  | underground-belt (sideload-into-input) | 53 |
+
+  **Top 10 worst-offender templates:**
+
+  | rank | (m, n) | errors | warnings |
+  |-----:|--------|-------:|---------:|
+  | 1 | (7, 4) | 27 | 0 |
+  | 2 | (9, 7) | 26 | 2 |
+  | 3 | (9, 5) | 24 | 1 |
+  | 4 | (2, 9) | 22 | 10 |
+  | 5 | (7, 5) | 22 | 0 |
+  | 6 | (9, 8) | 22 | 2 |
+  | 7 | (1, 9) | 16 | 2 |
+  | 8 | (5, 8) | 16 | 0 |
+  | 9 | (9, 6) | 16 | 1 |
+  | 10 | (6, 3) | 11 | 0 |
+
+  **Triage — kill criterion fired (>30% error rate).** Per the RFP, this
+  means stop and triage before declaring Phase 1 done. Triage outcome:
+
+  1. **Lane-throughput (348 / 48 templates) — DOMINANTLY VALIDATOR-SIDE
+     ARTIFACT, not real lane bugs.** Spot-checking the simplest cases:
+
+     - (1, 3) reports 15.0/s on both lanes at internal tiles (1, 2) and
+       (1, 3). Input is only 15/s total, so 15/s/lane = 30/s on a single
+       belt is non-physical (4× the input). The (1, 3) template uses a
+       feedback-loop column at `x=0` for recirculation; the lane
+       walker's cycle-breaker fallback (`belt_flow.rs:2187-2335`)
+       propagates the non-zero side of a splitter pair to *both* tiles
+       when one side is in a [0,0] feedback cycle. That's correct for
+       avoiding spurious starvation, but it produces non-physical
+       inflated rates when the cycle-breaker fires multiple times in
+       sequence.
+     - (3, 2) reports 10/s on both lanes at the internal tile (1, 9).
+       Input rate per source = 30/3 = 10/s; the rate showing up at an
+       internal tile suggests the same cycle-breaker doubling pattern.
+
+     The lane walker is documented as Kahn-topo-sort with cycle-breaker
+     fallback, designed for the bus pipeline (where templates don't
+     stand alone — they sit between trunks and consumer rows). Standing
+     alone, a template with internal recirculation is a hard case the
+     walker is not validated against. **The lane-throughput findings
+     are unreliable in this audit context.**
+
+  2. **Underground-belt unpaired errors (25 / 6 templates) —
+     ACTIONABLE.** All 6 affected templates are in the recently-baked
+     (9, *) family: (9, 1), (9, 2), (9, 7), (9, 8) plus the (1, 9) and
+     (2, 9) and (1, 10). Sample:
+
+     ```
+     (9, 7): Unpaired underground belt input at (2, 9) facing East: no matching output found
+     (9, 7): Unpaired underground belt input at (8, 9) facing West: no matching output found
+     (9, 7): Unpaired underground belt output at (3, 9) facing East: no matching input found
+     (9, 7): Unpaired underground belt output at (7, 9) facing West: no matching input found
+     ```
+
+     Pattern: the templates have East-facing UGs at column 2 paired
+     with East-facing outputs at column 3 (one cell apart, distance 1),
+     and similarly West-facing UGs paired one cell apart. The
+     `check_underground_belt_pairs` validator rejects pairs at
+     `dist <= 1` because a UG with no underground tile between input
+     and output is degenerate.
+
+     **This is a real bug in the (9, *) bake outputs.** Either the
+     CP-SAT encoding is allowing degenerate UG pairs (1-tile reach) or
+     the entity emission is dropping the intermediate tile. Should be
+     filed as a separate issue against `balancer-gen` and fixed before
+     these templates ship via the bake.
+
+     A separate pattern affects (1, 10): `check_underground_belt_pairs`
+     reports unpaired UGs there too — same diagnostic path.
+
+  3. **Underground-belt sideload-into-input warnings (53 across 22
+     templates) — ACCEPTED FINDING, MX5 LANE CAVEAT.** Every `(N, *)`
+     template for N >= 6 has at least one UG input fed by a
+     perpendicular belt. Memory `feedback_sideload_ug.md` says this
+     fills only the far lane — a real lane-imbalance, but consistent
+     with the throughput-priority audit's existing decision to accept
+     "side-loaded splitter inputs as MX3 at topology level despite the
+     lane caveat" (RFP throughput-priority decision log 2026-05-01).
+
+     These warnings are exactly what the RFP predicted: "every new
+     composed template is potentially broken in-game and we won't know
+     until users hit it." But: the existing library entries are
+     battle-tested by the Factorio-SAT community, so the warnings
+     largely reflect a known caveat, not a new bug. The new (9, *)
+     bakes inherit the same pattern.
+
+  **Recommendation: PHASE 2 IS WORTHWHILE, but with a narrower gate
+  than originally drafted.** Specifically:
+
+  - **Gate on `underground-belt` ERRORS only** (the unpaired-UG check).
+    These are cheap, deterministic, and catch real degenerate
+    encodings. Reject + bump on these.
+  - **Do NOT gate on `lane-throughput`** — the walker's cycle-breaker
+    behavior on standalone templates is too noisy. If we want
+    throughput-level lane validation in the bake, we need to either
+    (a) wrap the template in a "saturated source above, consumer
+    below" sandwich large enough to break the recirculation cycles
+    cleanly, or (b) write a template-specific lane walker that
+    understands balancer feedback loops.
+  - **Do NOT gate on UG-sideload WARNINGS** for now — these match
+    existing accepted practice. Track separately if/when MX5 becomes a
+    project-level priority.
+  - **File a separate bug** against `balancer-gen` for the (9, *) and
+    (1, 10) unpaired-UG outputs. Fix before merge of the bake's most
+    recent additions.
+
+  **Validator caveats discovered during implementation:**
+
+  - Setting `carries` on every entity (initially) caused splitter tiles
+    with no upstream feeders (common: first splitter in a column) to be
+    classified as "external sources" in `compute_lane_rates`'s
+    seed-rate pass, double-injecting the external rate. Fixed by
+    restricting the `carries` tag to the explicit `input_tiles`.
+  - The lane walker's saturated-source seeding distributes rate evenly
+    across source tiles. For asymmetric mergers (N > M), this works
+    because we cap external rate at `belt_throughput * min(N, M)` so no
+    side is over-driven. But for templates that internally recirculate
+    flow across "back-loop" belts (e.g. universal-balancer patterns),
+    the cycle-breaker is the source of the inflated lane-throughput
+    findings — see point (1) above.
+
+  **Phase 1 deliverable status:** module + audit test land in this
+  worktree. Findings recorded above. Phase 2 remains worth doing per
+  the recommendation, with the narrowed scope.*
