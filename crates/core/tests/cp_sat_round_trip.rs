@@ -156,3 +156,11 @@ fn round_trip_1_6() {
 fn round_trip_1_7() {
     round_trip(1, 7);
 }
+
+#[test]
+#[ignore] // 4-level layout in `place_one_to_m_from_synth` is in place but
+          // the resulting CP-SAT model doesn't solve in 10 min single-worker.
+          // Marked ignored until layout is tightened or workers are bumped.
+fn round_trip_1_9() {
+    round_trip_with_timeout(1, 9, 600);
+}

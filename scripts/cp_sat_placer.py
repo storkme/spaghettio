@@ -111,17 +111,18 @@ _SOLVER_PARAMS: dict[str, Any] = {"timeout_ms": 1000, "seed": None}
 _SYNTH_CTX: dict[str, Any] = {"graph": None, "arc_throughputs": None}
 
 
-def _make_solver():
+def _make_solver(workers: int = 1):
     """Build a `CpSolver` with timeout and seed from `_SOLVER_PARAMS`.
 
-    Honours the `timeout_ms` and `seed` fields of the request. Pins
-    `num_search_workers = 1` so determinism is reproducible across
-    same-seed runs (kill criterion #5 in `rfp-cp-sat-placement.md`).
+    Honours the `timeout_ms` and `seed` fields of the request. Defaults
+    to `num_search_workers = 1` for determinism (kill criterion #5 in
+    `rfp-cp-sat-placement.md`); larger problems can opt into parallel
+    workers via the `workers` arg, trading determinism for solve speed.
     """
     from ortools.sat.python import cp_model
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = _SOLVER_PARAMS["timeout_ms"] / 1000.0
-    solver.parameters.num_search_workers = 1
+    solver.parameters.num_search_workers = workers
     seed = _SOLVER_PARAMS.get("seed")
     if seed is not None:
         solver.parameters.random_seed = int(seed)
@@ -163,6 +164,7 @@ def _route_belts(
     height: int,
     rates: list[int] | None = None,
     lane_cap: int = 1,
+    workers: int = 1,
 ) -> dict[tuple[int, int], tuple[int, str]] | None:
     """Solve belt routing on the grid given fixed splitter positions.
 
@@ -594,12 +596,12 @@ def _route_belts(
         sum(belt[(t, d)] for t in free for d in _INTERNAL_DIRS)
     )
 
-    solver = _make_solver()
+    solver = _make_solver(workers=workers)
     status = solver.solve(model)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         print(
             f"_route_belts: status={solver.status_name(status)} "
-            f"wall={solver.wall_time:.1f}s",
+            f"wall={solver.wall_time:.1f}s workers={workers}",
             file=sys.stderr,
         )
         return None
@@ -1180,6 +1182,210 @@ def place_x_to_sixteen(n: int) -> dict[str, Any]:
         "input_tiles": [list(it) for it in input_tiles],
         "output_tiles": [[c, output_y] for c in output_cols],
     }
+def place_one_to_five() -> dict[str, Any]:
+    """`(1, 5)` coprime balancer — first non-dyadic shape.
+
+    Synth structure (see ``balancer::synth``):
+      - S0 (M, merger): in0 = 1.0 external, in1 = 0.6 feedback.
+        Outputs 0.8 each to S1.
+      - S1 (root): two head-on inputs (0.8 each from M).
+        Outputs 0.8 each to S2 / S3.
+      - S2, S3 (L1): each takes 0.8 head-on. Outputs 0.4 each to L2.
+      - S4-S7 (L2): each takes 0.4. S4/S5 emit two outputs; S6 emits one
+        output + one feedback; S7 emits two feedbacks.
+
+    The naive "M as merger at row 0" layout UNSATs because M.in1 at the
+    top edge has only east-side feeds available (M.in0 occupies the west
+    neighbour), so the 0.6 feedback lumps onto a single lane → exceeds
+    the 0.5 lane cap. We sidestep this by inserting an extra
+    south-facing splitter B' (placement-only) above M that takes the
+    feedback head-on (split across two input ports, fed from west AND
+    east sides) and rebalances onto its outputs. B's outputs feed M.in1
+    via the back-feed + east-sideload trick documented in
+    ``rfp-lane-aware-routing.md``.
+
+    Recovery sees 9 splitters (8 from synth + 1 lane-balancer). The
+    extra splitter shows up as a regular 1→2 node in the recovered graph
+    and is absorbed by ``from_splitter_graph`` / ``verify_balancer``
+    without special handling — both deal in flow-balance, not splitter
+    counts.
+
+    Layout (south-facing throughout, width 11 × height 12):
+
+    ::
+
+        Row 0–1: feedback wrap channels (from L2 row 9 back up).
+        Row 2: B' inputs at (5, 2), (6, 2). Feedback merges here.
+        Row 3: B' body at (5, 3)-(6, 3) (placement-only splitter).
+        Row 4: B' outputs land here. (5, 4) S → M.in1.
+               (6, 4) W → sideload (5, 4) east, balancing M.in1 lanes.
+               External input boundary at (4, 4) S → drops into M.in0.
+        Row 5: M body at (4, 5)-(5, 5).
+        Row 6: S1 body at (4, 6)-(5, 6) (tight-stack).
+        Row 7: S2=(3, 7), S3=(5, 7) staggered tight-stack.
+        Row 8: L1→L2 routing row.
+        Row 9: L2 — A=(1, 9), B=(3, 9), C=(5, 9), D=(7, 9).
+        Row 10: 5 outputs (cols 1-5) + 3 feedback drops (cols 6, 7, 8).
+        Row 11: feedback channel south-leg.
+
+    L1→L2 arc assignment (avoids the routing-row crossing that blocked
+    the original "M at row 0" attempt — see RFP decision log entries):
+
+      - S2.out0 (3, 8) heads west, drops south into A at (1, 8).
+      - S2.out1 (4, 8) head-on south into B (tight-stacked).
+      - S3.out0 (5, 8) head-on south into C (tight-stacked).
+      - S3.out1 (6, 8) heads east, drops south into D at (7, 8).
+
+    Rate-aware encoding: this placer uses a finer scale than the default
+    ``RATE_SCALE = 10`` so the lane balancer's 0.3 outputs (0.15 per
+    lane in head-on encoding) round to integers. Local
+    ``LOCAL_RATE_SCALE = 20`` and ``lane_cap = 10``.
+    """
+    width, height = 11, 12
+    DIR_S = 2
+
+    LOCAL_RATE_SCALE = 20
+    LOCAL_LANE_CAP = LOCAL_RATE_SCALE // 2  # = 10
+
+    def r(absolute: float) -> int:
+        """Scaled rate at the local scale."""
+        return int(round(absolute * LOCAL_RATE_SCALE))
+
+    M = (4, 5)
+    Bprime = (5, 3)
+    S1 = (4, 6)
+    S2 = (3, 7)
+    S3 = (5, 7)
+    A = (1, 9)
+    B_pos = (3, 9)
+    C = (5, 9)
+    D = (7, 9)
+    pos: list[tuple[int, int] | tuple[int, int, int]] = [
+        M, Bprime, S1, S2, S3, A, B_pos, C, D,
+    ]
+
+    routes: list[
+        tuple[tuple[int, int], tuple[int, int], int, int | None]
+    ] = []
+    rates: list[int] = []
+
+    # External input boundary at (4, 4) S — 2 lane-routes pin both lanes.
+    routes.append(((4, 4), (4, 4), DIR_S, None))
+    routes.append(((4, 4), (4, 4), DIR_S, None))
+    rates.extend([r(0.5), r(0.5)])
+
+    # B' → M.in1 connection. B' total input = 0.6, so each B' output
+    # carries 0.3.
+    # B'.out0 lands at (5, 4) heading S (head-on, 2 lane-routes each at 0.15).
+    # B'.out1 lands at (6, 4) heading W (perpendicular, 1 lane-route at 0.3).
+    # (6, 4) W feeds (5, 4) east-side → sideload onto lane 0 of (5, 4).
+    routes.append(((5, 4), (5, 4), DIR_S, DIR_S))
+    routes.append(((5, 4), (5, 4), DIR_S, DIR_S))
+    rates.extend([r(0.15), r(0.15)])
+    routes.append(((6, 4), (5, 4), DIR_S, DIR_S))
+    rates.append(r(0.3))
+
+    # L1 → L2 arcs (drops at row 8, L2 inputs at row 8).
+    # S2.out0 → A: perpendicular west drop, route to (1, 8) S sink.
+    routes.append(((3, 8), (1, 8), DIR_S, DIR_S))
+    rates.append(r(0.4))
+    # S2.out1 → B: head-on south at (4, 8). 2 lane-routes (0.2 per lane).
+    routes.append(((4, 8), (4, 8), DIR_S, DIR_S))
+    routes.append(((4, 8), (4, 8), DIR_S, DIR_S))
+    rates.extend([r(0.2), r(0.2)])
+    # S3.out0 → C: head-on south at (5, 8). 2 lane-routes.
+    routes.append(((5, 8), (5, 8), DIR_S, DIR_S))
+    routes.append(((5, 8), (5, 8), DIR_S, DIR_S))
+    rates.extend([r(0.2), r(0.2)])
+    # S3.out1 → D: perpendicular east drop, route to (7, 8) S sink.
+    routes.append(((6, 8), (7, 8), DIR_S, DIR_S))
+    rates.append(r(0.4))
+
+    # L2 → outputs (5 head-on south drops at row 10).
+    output_drops: list[tuple[int, int]] = [
+        (1, 10), (2, 10), (3, 10), (4, 10), (5, 10),
+    ]
+    for drop in output_drops:
+        routes.append((drop, drop, DIR_S, DIR_S))
+        routes.append((drop, drop, DIR_S, DIR_S))
+        rates.extend([r(0.1), r(0.1)])
+
+    # 3 feedback arcs from L2 outputs back to B' inputs at row 2.
+    # Two drops feed B'.in0 at (5, 2) (total 0.4); one drop feeds
+    # B'.in1 at (6, 2) (total 0.2).
+    feedback_drops_to_in0: list[tuple[int, int]] = [(6, 10), (7, 10)]
+    feedback_drops_to_in1: list[tuple[int, int]] = [(8, 10)]
+    for src in feedback_drops_to_in0:
+        routes.append((src, (5, 2), DIR_S, DIR_S))
+        rates.append(r(0.2))
+    for src in feedback_drops_to_in1:
+        routes.append((src, (6, 2), DIR_S, DIR_S))
+        rates.append(r(0.2))
+
+    belt_dirs = _route_belts(
+        pos,
+        routes,
+        width,
+        height,
+        rates=rates,
+        lane_cap=LOCAL_LANE_CAP,
+    )
+    if belt_dirs is None:
+        raise RuntimeError("(1, 5) belt routing UNSAT")
+
+    entities: list[dict[str, Any]] = []
+    for p in pos:
+        entities.append(
+            {
+                "name": "splitter",
+                "x": p[0],
+                "y": p[1],
+                "direction": _FACTORIO_DIR[_splitter_dir(p)],
+            }
+        )
+    for (x, y), (d, kind) in belt_dirs.items():
+        if kind == "belt":
+            entities.append(
+                {
+                    "name": "transport-belt",
+                    "x": x,
+                    "y": y,
+                    "direction": _FACTORIO_DIR[d],
+                }
+            )
+        elif kind == "ug_in":
+            entities.append(
+                {
+                    "name": "underground-belt",
+                    "x": x,
+                    "y": y,
+                    "direction": _FACTORIO_DIR[d],
+                    "io_type": "input",
+                }
+            )
+        else:  # ug_out
+            entities.append(
+                {
+                    "name": "underground-belt",
+                    "x": x,
+                    "y": y,
+                    "direction": _FACTORIO_DIR[d],
+                    "io_type": "output",
+                }
+            )
+
+    return {
+        "n_inputs": 1,
+        "n_outputs": 5,
+        "width": width,
+        "height": height,
+        "entities": entities,
+        "input_tiles": [[4, 4]],
+        "output_tiles": [[c, 10] for c in (1, 2, 3, 4, 5)],
+    }
+
+
+
 
 
 def _src_splitter(arc: dict[str, Any]) -> tuple[int, int] | None:
@@ -1267,11 +1473,12 @@ def place_one_to_m_from_synth() -> dict[str, Any]:
         )
 
     n_splitters = graph["n_splitters"]
-    if n_splitters != 8:
+    if n_splitters not in (8, 16):
         raise NotImplementedError(
-            f"place_one_to_m_from_synth handles only 3-level (8-splitter) trees; "
-            f"got {n_splitters} splitters"
+            f"place_one_to_m_from_synth handles 3-level (8-splitter) and "
+            f"4-level (16-splitter) trees only; got {n_splitters} splitters"
         )
+    levels = 3 if n_splitters == 8 else 4
 
     arcs: list[dict[str, Any]] = graph["arcs"]
     n_outputs = graph["n_outputs"]
@@ -1311,10 +1518,14 @@ def place_one_to_m_from_synth() -> dict[str, Any]:
         return int(round(absolute * scale))
 
     # ----- Splitter placement -----
-    # Uniform layout: M at (4, M_y) where M_y depends on whether B' is needed.
-    # L2 splitters at (1, 5, 7) with anchor cols (1, 3, 5, 7), all at a
-    # row 4 below M (so output row is 5 below M).
-    M_X = 4
+    # M at (M_X, M_Y). M_X chosen wide enough to centre the L3 layer when
+    # one is present. M_Y depends on whether B' is needed (extra rows
+    # above M for the balancer + feedback wrap top).
+    if levels == 3:
+        M_X = 4
+    else:
+        # 4-level needs L3 cols out to M_X ± 8; M_X = 9 fits cols 1..18.
+        M_X = 9
     if needs_balancer:
         M_Y = 5  # rows 0-4 reserved for B' + B's input feeds + feedback wrap top.
     else:
@@ -1328,14 +1539,43 @@ def place_one_to_m_from_synth() -> dict[str, Any]:
     pos[1] = (M_X, M_Y + 1)            # S1 (vertical tight-stack under M)
     pos[2] = (M_X - 1, M_Y + 2)        # S2 (staggered tight-stack left)
     pos[3] = (M_X + 1, M_Y + 2)        # S3 (staggered tight-stack right)
-    # L2 row at M_Y + 4 (with row M_Y + 3 as routing row between L1 and L2).
-    L2_Y = M_Y + 4
-    # L2 col mapping: synth assigns S4=L2_outer_left (S2.out0), S5=L2_inner_left
-    # (S2.out1), S6=L2_inner_right (S3.out0), S7=L2_outer_right (S3.out1).
-    pos[4] = (M_X - 3, L2_Y)           # outer-left  (receives S2.out0)
-    pos[5] = (M_X - 1, L2_Y)           # inner-left  (receives S2.out1)
-    pos[6] = (M_X + 1, L2_Y)           # inner-right (receives S3.out0)
-    pos[7] = (M_X + 3, L2_Y)           # outer-right (receives S3.out1)
+
+    if levels == 3:
+        # 3-level: L2 row at M_Y+4 (row M_Y+3 = L1 drop row).
+        L2_Y = M_Y + 4
+        # L2 col mapping: synth assigns S4=L2_outer_left (S2.out0),
+        # S5=L2_inner_left (S2.out1), S6=L2_inner_right (S3.out0),
+        # S7=L2_outer_right (S3.out1).
+        pos[4] = (M_X - 3, L2_Y)       # outer-left  (S2.out0)
+        pos[5] = (M_X - 1, L2_Y)       # inner-left  (S2.out1)
+        pos[6] = (M_X + 1, L2_Y)       # inner-right (S3.out0)
+        pos[7] = (M_X + 3, L2_Y)       # outer-right (S3.out1)
+        L3_Y: int | None = None
+    else:
+        # 4-level: WIDE-SPREAD L2 with offsets ±3 / ±7 from S1.x = M_X.
+        # Spacing 4 between adjacent L2 cols leaves room for an L3 layer
+        # tight-stacked below (each L3 child at L2.x ± 1, no col conflicts).
+        # The L1 → L2 routing uses BOTH the L1-drop row (M_Y+3) and an
+        # extra detour row (M_Y+4): outer routes traverse row M_Y+3,
+        # inner routes detour through head-on south at M_Y+3 then turn
+        # west/east on row M_Y+4 to reach the inner L2 cols. This avoids
+        # the dual-west lane lump that would happen if both S2 outputs
+        # tried to head west on the same row.
+        L2_Y = M_Y + 5
+        pos[4] = (M_X - 7, L2_Y)       # outer-left  (S2.out0)
+        pos[5] = (M_X - 3, L2_Y)       # inner-left  (S2.out1)
+        pos[6] = (M_X + 3, L2_Y)       # inner-right (S3.out0)
+        pos[7] = (M_X + 7, L2_Y)       # outer-right (S3.out1)
+        # L3 row at L2_Y+1 (tight-stack staggered, like S1→S2/S3 but at
+        # the L2→L3 layer). Each L2 has two L3 children at offsets ±1
+        # cols, +1 row, so L2.out0/out1 land directly on L3 splitter
+        # body tiles — no intermediate belts needed.
+        L3_Y = L2_Y + 1
+        for l2_local, l2_idx in enumerate((4, 5, 6, 7)):
+            l2_x = pos[l2_idx][0]
+            # L3 left child of this L2 at (l2_x - 1, L3_Y); right at (l2_x + 1, L3_Y).
+            pos[8 + 2 * l2_local + 0] = (l2_x - 1, L3_Y)
+            pos[8 + 2 * l2_local + 1] = (l2_x + 1, L3_Y)
 
     # Optional B' lane balancer above M.
     if needs_balancer:
@@ -1383,54 +1623,100 @@ def place_one_to_m_from_synth() -> dict[str, Any]:
     # 3. M → S1: tight-stack vertical (no route — splitter geometry adjacency).
     # 4. S1 → S2/S3: staggered tight-stack (no route — adjacency).
 
-    # 5. L1 → L2 arcs (4 arcs, parent = S2 or S3).
-    # Mapping per synth indexing (verified against (1, 5) / (1, 6) dumps):
-    #   arc src (S2.out0) → L2 idx 4 (outer-left A): perpendicular west drop.
-    #   arc src (S2.out1) → L2 idx 5 (inner-left B): head-on tight-stack south.
-    #   arc src (S3.out0) → L2 idx 6 (inner-right C): head-on tight-stack south.
-    #   arc src (S3.out1) → L2 idx 7 (outer-right D): perpendicular east drop.
+    # 5. L1 → L2 arcs (4 arcs, parent = S2 or S3). Pattern depends on `levels`.
     L1_drop_y = pos[2][1] + 1  # row below L1
-    # S2.out0 → L2[4] (outer west).
-    s2_out0_drop = (pos[2][0], L1_drop_y)  # (M_X-1, ...)
-    s2_out0_sink = (pos[4][0], L1_drop_y)  # (M_X-3, ...)
     arc_s2_0 = out_arc[(2, 0)]
-    routes.append((s2_out0_drop, s2_out0_sink, DIR_S, DIR_S))
-    rates.append(r(throughputs[arc_s2_0]))
-    # S2.out1 → L2[5] (inner head-on).
-    s2_out1_tile = (pos[2][0] + 1, L1_drop_y)  # (M_X, ...)
     arc_s2_1 = out_arc[(2, 1)]
-    half = throughputs[arc_s2_1] / 2.0
-    routes.append((s2_out1_tile, s2_out1_tile, DIR_S, DIR_S))
-    routes.append((s2_out1_tile, s2_out1_tile, DIR_S, DIR_S))
-    rates.extend([r(half), r(half)])
-    # S3.out0 → L2[6] (inner head-on).
-    s3_out0_tile = (pos[3][0], L1_drop_y)  # (M_X+1, ...)
     arc_s3_0 = out_arc[(3, 0)]
-    half = throughputs[arc_s3_0] / 2.0
-    routes.append((s3_out0_tile, s3_out0_tile, DIR_S, DIR_S))
-    routes.append((s3_out0_tile, s3_out0_tile, DIR_S, DIR_S))
-    rates.extend([r(half), r(half)])
-    # S3.out1 → L2[7] (outer east).
-    s3_out1_drop = (pos[3][0] + 1, L1_drop_y)  # (M_X+2, ...)
-    s3_out1_sink = (pos[7][0], L1_drop_y)      # (M_X+3, ...)
     arc_s3_1 = out_arc[(3, 1)]
-    routes.append((s3_out1_drop, s3_out1_sink, DIR_S, DIR_S))
-    rates.append(r(throughputs[arc_s3_1]))
 
-    # 5. L2 → output / feedback: emit one route per L2 output.
-    # For each L2 splitter idx 4..7, look up its 2 outgoing arcs. If dst is
-    # Output, emit head-on south drop (2 lane-routes). If dst is M.in1
-    # (feedback), emit perpendicular route to the appropriate sink.
-    output_drop_y = L2_Y + 1
+    if levels == 3:
+        # 3-level pattern (verified against (1, 5) / (1, 6) / (1, 7) dumps):
+        #   S2.out0 → L2 outer-left: perpendicular west drop.
+        #   S2.out1 → L2 inner-left: head-on tight-stack south (1-tile).
+        #   S3.out0 → L2 inner-right: head-on tight-stack south (1-tile).
+        #   S3.out1 → L2 outer-right: perpendicular east drop.
+        s2_out0_drop = (pos[2][0], L1_drop_y)  # (M_X-1, ...)
+        s2_out0_sink = (pos[4][0], L1_drop_y)  # (M_X-3, ...)
+        routes.append((s2_out0_drop, s2_out0_sink, DIR_S, DIR_S))
+        rates.append(r(throughputs[arc_s2_0]))
+        s2_out1_tile = (pos[2][0] + 1, L1_drop_y)  # (M_X, ...)
+        half = throughputs[arc_s2_1] / 2.0
+        routes.append((s2_out1_tile, s2_out1_tile, DIR_S, DIR_S))
+        routes.append((s2_out1_tile, s2_out1_tile, DIR_S, DIR_S))
+        rates.extend([r(half), r(half)])
+        s3_out0_tile = (pos[3][0], L1_drop_y)  # (M_X+1, ...)
+        half = throughputs[arc_s3_0] / 2.0
+        routes.append((s3_out0_tile, s3_out0_tile, DIR_S, DIR_S))
+        routes.append((s3_out0_tile, s3_out0_tile, DIR_S, DIR_S))
+        rates.extend([r(half), r(half)])
+        s3_out1_drop = (pos[3][0] + 1, L1_drop_y)  # (M_X+2, ...)
+        s3_out1_sink = (pos[7][0], L1_drop_y)      # (M_X+3, ...)
+        routes.append((s3_out1_drop, s3_out1_sink, DIR_S, DIR_S))
+        rates.append(r(throughputs[arc_s3_1]))
+    else:
+        # 4-level pattern: each L1 has two perpendicular routes, but the
+        # two children of the same L1 use DIFFERENT rows to avoid the
+        # dual-west / dual-east lane lump.
+        #   S2.out0 → L2 outer-left at (M_X-7, L2_Y): perpendicular west on
+        #             row L1_drop_y (M_Y+3).
+        #   S2.out1 → L2 inner-left at (M_X-3, L2_Y): head-on south first
+        #             to (M_X, M_Y+4), then perpendicular west on row M_Y+4.
+        #   S3.out0 / S3.out1 mirror image (east).
+        # The L2 input port at (L2.x, L2_Y - 1) = (L2.x, M_Y+4) for outer
+        # routes is on row M_Y+4 (same row as inner-route's turn),
+        # different col so no conflict. Sink direction is S in all cases.
+        detour_y = L1_drop_y + 1  # = M_Y + 4
+
+        # S2.out0 → outer-left via row L1_drop_y.
+        s2_out0_drop = (pos[2][0], L1_drop_y)              # (M_X-1, M_Y+3)
+        s2_out0_sink = (pos[4][0], L1_drop_y + 1)          # (M_X-7, M_Y+4)
+        routes.append((s2_out0_drop, s2_out0_sink, DIR_S, DIR_S))
+        rates.append(r(throughputs[arc_s2_0]))
+
+        # S2.out1 → inner-left via head-on south detour + row detour_y.
+        # The head-on south at (M_X, L1_drop_y) is encoded as a 2-lane-route
+        # head-on drop with sink (M_X, detour_y) S. CP-SAT must route
+        # forward from there; we leave the W-turn implicit and let the
+        # solver pick the path.
+        s2_out1_drop = (pos[2][0] + 1, L1_drop_y)          # (M_X, M_Y+3)
+        s2_out1_sink = (pos[5][0], detour_y)                # (M_X-3, M_Y+4)
+        routes.append((s2_out1_drop, s2_out1_sink, DIR_S, DIR_S))
+        rates.append(r(throughputs[arc_s2_1]))
+
+        # S3.out0 → inner-right via head-on south detour + east on detour_y.
+        s3_out0_drop = (pos[3][0], L1_drop_y)              # (M_X+1, M_Y+3)
+        s3_out0_sink = (pos[6][0], detour_y)                # (M_X+3, M_Y+4)
+        routes.append((s3_out0_drop, s3_out0_sink, DIR_S, DIR_S))
+        rates.append(r(throughputs[arc_s3_0]))
+
+        # S3.out1 → outer-right via row L1_drop_y.
+        s3_out1_drop = (pos[3][0] + 1, L1_drop_y)          # (M_X+2, M_Y+3)
+        s3_out1_sink = (pos[7][0], detour_y)                # (M_X+7, M_Y+4)
+        routes.append((s3_out1_drop, s3_out1_sink, DIR_S, DIR_S))
+        rates.append(r(throughputs[arc_s3_1]))
+
+    # 6. Leaf splitter → output / feedback: emit one route per leaf-output.
+    # In 3-level trees the leaves are L2 (idx 4-7); in 4-level trees the
+    # leaves are L3 (idx 8-15). For each leaf output, look up the arc:
+    # if dst is Output, emit head-on south drop (2 lane-routes); if dst
+    # is M.in1 (feedback), defer route emission to step 7.
+    if levels == 3:
+        leaf_idxs = (4, 5, 6, 7)
+        output_drop_y = L2_Y + 1
+    else:
+        leaf_idxs = tuple(range(8, 16))
+        assert L3_Y is not None
+        output_drop_y = L3_Y + 1
     output_drops: list[tuple[int, int]] = []
     feedback_drops: list[tuple[tuple[int, int], int]] = []  # (drop_tile, arc_idx)
 
-    for l2_idx in (4, 5, 6, 7):
-        l2_anchor_x = pos[l2_idx][0]
+    for leaf_idx in leaf_idxs:
+        leaf_anchor_x = pos[leaf_idx][0]
         for port in (0, 1):
-            arc_idx = out_arc[(l2_idx, port)]
+            arc_idx = out_arc[(leaf_idx, port)]
             arc = arcs[arc_idx]
-            drop_x = l2_anchor_x + port
+            drop_x = leaf_anchor_x + port
             drop_tile = (drop_x, output_drop_y)
             arc_rate = throughputs[arc_idx]
             if _dst_output(arc) is not None:
@@ -1441,11 +1727,11 @@ def place_one_to_m_from_synth() -> dict[str, Any]:
                 rates.extend([r(half), r(half)])
                 output_drops.append(drop_tile)
             elif _dst_splitter(arc) == (0, 1):
-                # Feedback drop: defer route emission to step 6.
+                # Feedback drop: defer route emission to step 7.
                 feedback_drops.append((drop_tile, arc_idx))
             else:
                 raise RuntimeError(
-                    f"place_one_to_m_from_synth: L2[{l2_idx}].out{port} has "
+                    f"place_one_to_m_from_synth: leaf[{leaf_idx}].out{port} has "
                     f"unexpected dst {arc['dst']}"
                 )
 
@@ -1483,16 +1769,25 @@ def place_one_to_m_from_synth() -> dict[str, Any]:
         # before L1 → L2 — that ordering anchors CP-SAT search.)
 
     # ----- Grid bounds -----
-    # Width: outer L2 cols span M_X-3 to M_X+4 (anchor + second tile), plus
-    # one east-edge column for the feedback wrap. M_X = 4 gives width 10
-    # for the simple (no-balancer) case. With a balancer, the wrap also
-    # needs a second east column to bring B' outputs around to M.in1 east
-    # sideload — width 11. Tight bounds matter: extra space lets CP-SAT
-    # find structurally-invalid alternates.
-    width = M_X + (7 if needs_balancer else 6)
+    # Width: depends on tree depth. 3-level outer L2 spans M_X-3..M_X+4;
+    # 4-level outer L3 spans M_X-8..M_X+9 (each leaf is 2 cols wide and
+    # 8 leaves at L3 cols M_X±2, ±4, ±6, ±8). Plus an east-edge column
+    # for the feedback wrap. With a balancer, the wrap needs a second
+    # east column to bring B' outputs around to M.in1 east sideload.
+    # Tight bounds matter: extra space lets CP-SAT find
+    # structurally-invalid alternates.
+    if levels == 3:
+        width = M_X + (7 if needs_balancer else 6)
+    else:
+        # 4-level: M_X = 9, max L3 col = M_X+8 (anchor) + 1 (second tile) = 18.
+        # Add east-edge wrap.
+        width = M_X + (10 if needs_balancer else 10)
     height = output_drop_y + (2 if needs_balancer else 3)
 
     # ----- Solve -----
+    # 4-level trees produce a much larger CP-SAT model; opt into parallel
+    # workers (loses determinism but solves orders of magnitude faster).
+    workers = 8 if levels == 4 else 1
     belt_dirs = _route_belts(
         pos,
         routes,
@@ -1500,6 +1795,7 @@ def place_one_to_m_from_synth() -> dict[str, Any]:
         height,
         rates=rates,
         lane_cap=lane_cap,
+        workers=workers,
     )
     if belt_dirs is None:
         raise RuntimeError(
@@ -1607,11 +1903,17 @@ def main() -> int:
         (2, 8): lambda: place_x_to_eight(2),
         (1, 16): lambda: place_x_to_sixteen(1),
         (2, 16): lambda: place_x_to_sixteen(2),
-        # Generalised placer for `(1, m)` 3-level trees (m ∈ {5, 6, 7}).
-        # Hand-tuned `place_one_to_five` and `place_one_to_six` remain in
-        # the file as references but are not in the dispatch — the
-        # generalised version subsumes them.
-        (1, 5): place_one_to_m_from_synth,
+        # `(1, 5)` stays on the hand-tuned placer: the generalised one
+        # subsumes it in isolation but flakes intermittently in full-suite
+        # runs (CP-SAT picks OutputDegree-violating alternates when system
+        # load extends solve time). Subsuming `(1, 5)` reliably needs
+        # tighter structural constraints; tracked as follow-up.
+        (1, 5): place_one_to_five,
+        # Generalised placer for `(1, 6)` and `(1, 7)`. `(1, 9)` and
+        # `(1, 10)` 4-level branch is in `place_one_to_m_from_synth`
+        # but the model doesn't solve within 10 min even at 8 workers —
+        # needs further layout work or an overnight bake job (see RFP
+        # decision log).
         (1, 6): place_one_to_m_from_synth,
         (1, 7): place_one_to_m_from_synth,
     }
