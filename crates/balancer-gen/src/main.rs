@@ -69,6 +69,13 @@ enum PlaceRequest {
         edges: Vec<EdgeReq>,
         #[serde(skip_serializing_if = "Option::is_none")]
         max_time_s: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        encoding: Option<&'static str>,
+        /// UG reach in transit tiles (yellow=4, red=6, blue=8).
+        /// `None` defaults to 4 (yellow) in the Python solver — identical to
+        /// the previous hardcoded `UG_MAX_REACH = 5` (L_max_in_loop = reach + 1).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        ug_max_reach: Option<u32>,
     },
 }
 
@@ -135,6 +142,22 @@ struct BeltOutput {
 // ---------------------------------------------------------------------------
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::var("FUCKTORIO_DEBUG_2_2").is_ok() {
+        println!("=== phase 4.4 debug: (2, 2) Clos via compose_* ===");
+        return debug_compose_clos_2_2();
+    }
+    if std::env::var("FUCKTORIO_DEBUG_4_9").is_ok() {
+        println!("=== phase 4.4: (4, 9) Clos via compose_* ===");
+        return stress_compose_clos_4_9();
+    }
+    if std::env::var("FUCKTORIO_BAKE_1_9").is_ok() {
+        println!("=== phase 3.4 spike: (1, 9) via compose + codegen ===");
+        return bake_compose_1_9();
+    }
+    if std::env::var("FUCKTORIO_BAKE_BATCH").is_ok() {
+        println!("=== phase 3.4: bake missing shapes ===");
+        return bake_missing_shapes();
+    }
     let templates = balancer_templates();
 
     // Mode A — phase 3.1 splitter no-overlap.
@@ -280,6 +303,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n=== phase 4.1: compose_parallel ===");
     if let Err(e) = smoke_compose_parallel() {
         println!("  ✗ smoke test: {e}");
+    }
+
+    // Phase 4.4 debug — minimal Clos compose reproducer for the
+    // Singular-classification bug seen on the (4, 9) case. Same composition
+    // pattern (parallel + clos_interleave + parallel) but only 4 splitters,
+    // junction routing trivial.
+    println!("\n=== phase 4.4 debug: (2, 2) Clos via compose_* ===");
+    if let Err(e) = debug_compose_clos_2_2() {
+        println!("  ✗ debug compose: {e}");
     }
 
     // Phase 4.4 — (4, 9) Clos via composition combinator.
@@ -931,7 +963,7 @@ fn stress_compose_clos_4_9() -> Result<(), Box<dyn std::error::Error>> {
     println!("  clos_interleave(4, 3) perm: {perm:?}");
 
     let t0 = std::time::Instant::now();
-    let composed = compose_series(stage1.as_ref(), stage2.as_ref(), &perm, 1, 12)?;
+    let composed = compose_series(stage1.as_ref(), stage2.as_ref(), &perm, 1, 20)?;
     let elapsed = t0.elapsed().as_secs_f64();
     let junction_h = composed.height - stage1.height - stage2.height;
     println!(
@@ -952,6 +984,484 @@ fn stress_compose_clos_4_9() -> Result<(), Box<dyn std::error::Error>> {
         .into());
     }
     println!("  ✓ (4, 9) Clos placed via composition combinator and verified MX3");
+    Ok(())
+}
+
+/// Reduced reproducer for the (4, 9) Clos compose Singular bug. Builds the
+/// smallest possible Clos composition — `parallel((1, 2), 2)` →
+/// `clos_interleave(2, 2)` → `parallel((2, 1), 2)` — which is a (2, 2)
+/// Beneš-style 2x2 swap network with 4 splitters and a 4-belt junction
+/// permutation [0, 2, 1, 3]. Both via canonical graph combinators
+/// (`parallel`/`series_permuted`) and via the template-level combinators
+/// (`compose_parallel`/`compose_series`); diffs the two recovered
+/// topologies so the failure mode is visible.
+fn debug_compose_clos_2_2() -> Result<(), Box<dyn std::error::Error>> {
+    let templates = balancer_templates();
+    let atom_1_2 = templates.get(&(1u32, 2u32)).ok_or("library missing (1, 2)")?;
+    let atom_2_1 = templates.get(&(2u32, 1u32)).ok_or("library missing (2, 1)")?;
+
+    // Canonical graph topology — the source of truth.
+    let stage1_graph = parallel(&library_atom(1, 2).unwrap(), 2);
+    let stage2_graph = parallel(&library_atom(2, 1).unwrap(), 2);
+    let perm = clos_interleave(2, 2);
+    println!("  perm = {perm:?}");
+    let canonical = series_permuted(&stage1_graph, &stage2_graph, &perm);
+    let canonical_class = classify_graph(&canonical)
+        .map_err(|e| format!("classify_graph(canonical): {e:?}"))?;
+    println!(
+        "  canonical: {} splitters, {} edges, classified {:?}",
+        canonical.n_splitters,
+        canonical.edges.len(),
+        canonical_class.class
+    );
+    print_graph_summary("  canonical", &canonical);
+
+    // Template-level composition.
+    let stage1 = compose_parallel(BalancerTemplateRef::from(atom_1_2), 2);
+    let stage2 = compose_parallel(BalancerTemplateRef::from(atom_2_1), 2);
+    println!(
+        "  stage1: {}×{}, in={}, out={}, entities={}",
+        stage1.width, stage1.height, stage1.n_inputs, stage1.n_outputs, stage1.entities.len()
+    );
+    println!(
+        "  stage2: {}×{}, in={}, out={}, entities={}",
+        stage2.width, stage2.height, stage2.n_inputs, stage2.n_outputs, stage2.entities.len()
+    );
+
+    // Recovered topology of stage1 / stage2 alone.
+    let stage1_recovered = topology_of_template(stage1.as_ref())
+        .map_err(|e| format!("topology_of_template(stage1): {e:?}"))?;
+    print_graph_summary("  stage1.recovered", &stage1_recovered);
+    let stage2_recovered = topology_of_template(stage2.as_ref())
+        .map_err(|e| format!("topology_of_template(stage2): {e:?}"))?;
+    print_graph_summary("  stage2.recovered", &stage2_recovered);
+
+    let composed = compose_series(stage1.as_ref(), stage2.as_ref(), &perm, 1, 8)?;
+    let junction_h = composed.height - stage1.height - stage2.height;
+    println!(
+        "  composed: {}×{}, junction_height={}, in={}, out={}",
+        composed.width, composed.height, junction_h, composed.n_inputs, composed.n_outputs
+    );
+
+    // Dump junction belts/UGs for inspection.
+    print_junction_entities(&composed, stage1.height, junction_h);
+
+    let recovered = topology_of_template(composed.as_ref())
+        .map_err(|e| format!("topology_of_template(composed): {e:?}"))?;
+    println!(
+        "  recovered: {} splitters, {} edges",
+        recovered.n_splitters,
+        recovered.edges.len()
+    );
+    print_graph_summary("  recovered", &recovered);
+
+    let class = match classify_ref(composed.as_ref()) {
+        Ok(r) => format!("{:?}", r.class),
+        Err(e) => format!("ERR {e:?}"),
+    };
+    println!("  composed classified: {class}");
+
+    if class == "Balanced" {
+        println!("  ✓ (2, 2) Clos compose works");
+    } else {
+        println!("  ✗ (2, 2) Clos compose: classified {class}, expected Balanced");
+    }
+    Ok(())
+}
+
+fn print_graph_summary(label: &str, g: &SplitterGraph) {
+    let mut in_deg = vec![0usize; g.n_splitters];
+    let mut out_deg = vec![0usize; g.n_splitters];
+    let mut in_from_input = vec![0usize; g.n_splitters];
+    let mut out_to_output = vec![0usize; g.n_splitters];
+    for &(src, dst) in &g.edges {
+        if let NodeId::Splitter(s) = src {
+            out_deg[s] += 1;
+            if matches!(dst, NodeId::OutputPort(_)) {
+                out_to_output[s] += 1;
+            }
+        }
+        if let NodeId::Splitter(s) = dst {
+            in_deg[s] += 1;
+            if matches!(src, NodeId::InputPort(_)) {
+                in_from_input[s] += 1;
+            }
+        }
+    }
+    println!(
+        "{label}: in/out={}, splitters={}, edges={}",
+        g.n_inputs, g.n_splitters, g.edges.len()
+    );
+    for s in 0..g.n_splitters {
+        println!(
+            "{label}:   S{s} in={} (in_from_input={}) out={} (out_to_output={})",
+            in_deg[s], in_from_input[s], out_deg[s], out_to_output[s]
+        );
+    }
+    for &(src, dst) in &g.edges {
+        println!("{label}:   {src:?} -> {dst:?}");
+    }
+}
+
+fn print_junction_entities(t: &OwnedTemplate, top_height: u32, jh: u32) {
+    let y0 = top_height as i32;
+    let y1 = (top_height + jh) as i32;
+    println!("  junction entities (y in [{y0}, {y1})):");
+    for e in &t.entities {
+        if e.y >= y0 && e.y < y1 {
+            let kind = match e.io_type {
+                Some("input") => "UG-in",
+                Some("output") => "UG-out",
+                _ => match e.name {
+                    "transport-belt" => "belt",
+                    "splitter" => "split",
+                    other => other,
+                },
+            };
+            println!("    ({}, {}) {kind} dir={}", e.x, e.y, e.direction);
+        }
+    }
+}
+
+/// Phase 3.4 spike — generate (1, 9) by composing the library (1, 3) atom
+/// with parallel((1, 3), 3) under an identity perm, verify it classifies as
+/// MX3, and emit the Rust source for `crates/core/src/bus/balancer_library.rs`.
+fn bake_compose_1_9() -> Result<(), Box<dyn std::error::Error>> {
+    let templates = balancer_templates();
+    let atom_1_3 = templates.get(&(1u32, 3u32)).ok_or("library missing (1, 3)")?;
+
+    // stage1 is just the library (1, 3) itself; stage2 is 3 copies of it.
+    let stage2 = compose_parallel(BalancerTemplateRef::from(atom_1_3), 3);
+    let perm: Vec<usize> = vec![0, 1, 2]; // identity — fanout tree, no swap.
+    println!("  perm = {perm:?} (identity)");
+
+    let t0 = std::time::Instant::now();
+    let composed = compose_series(
+        BalancerTemplateRef::from(atom_1_3),
+        stage2.as_ref(),
+        &perm,
+        1,
+        8,
+    )?;
+    let elapsed = t0.elapsed().as_secs_f64();
+    let junction_h = composed.height - atom_1_3.height - stage2.height;
+    println!(
+        "  composed: {}×{}, junction_height={} (compose+route in {:.2}s)",
+        composed.width, composed.height, junction_h, elapsed
+    );
+    println!(
+        "    inputs={}, outputs={}, entities={}",
+        composed.n_inputs,
+        composed.n_outputs,
+        composed.entities.len()
+    );
+
+    let report = classify_ref(composed.as_ref())
+        .map_err(|e| format!("classify_ref(composed): {e:?}"))?;
+    if report.class != BalancerClass::Balanced {
+        return Err(format!(
+            "(1, 9) compose: classified {:?}, expected Balanced",
+            report.class
+        )
+        .into());
+    }
+    println!("  ✓ (1, 9) classified Balanced");
+
+    let source = emit_template_rust_source(&composed, (1, 9));
+    println!("\n----- begin generated source for balancer_library.rs -----");
+    print!("{source}");
+    println!("----- end generated source -----");
+    Ok(())
+}
+
+/// Emit Rust source for a `BalancerTemplate` constant suitable for pasting
+/// into `crates/core/src/bus/balancer_library.rs`. Produces three statics
+/// (`T_<N>_<M>_ENTITIES`, `T_<N>_<M>_INPUT`, `T_<N>_<M>_OUTPUT`) and the
+/// matching `m.insert((<N>, <M>), BalancerTemplate { ... })` line. Caller
+/// is responsible for splicing the output into the right place in the file.
+fn emit_template_rust_source(t: &OwnedTemplate, shape: (u32, u32)) -> String {
+    let (n, m) = shape;
+    let mut out = String::new();
+
+    // ENTITIES
+    out.push_str(&format!(
+        "static T_{n}_{m}_ENTITIES: &[BalancerTemplateEntity] = &[\n"
+    ));
+    for e in &t.entities {
+        let io_str = match e.io_type {
+            Some("input") => "Some(\"input\")",
+            Some("output") => "Some(\"output\")",
+            Some(other) => panic!("unexpected io_type {other:?}"),
+            None => "None",
+        };
+        out.push_str(&format!(
+            "    BalancerTemplateEntity {{ name: {:?}, x: {}, y: {}, direction: {}, io_type: {} }},\n",
+            e.name, e.x, e.y, e.direction, io_str
+        ));
+    }
+    out.push_str("];\n");
+
+    // INPUT / OUTPUT tile lists
+    out.push_str(&format!(
+        "static T_{n}_{m}_INPUT: &[(i32, i32)] = &{:?};\n",
+        t.input_tiles
+    ));
+    out.push_str(&format!(
+        "static T_{n}_{m}_OUTPUT: &[(i32, i32)] = &{:?};\n",
+        t.output_tiles
+    ));
+
+    // m.insert(...)
+    out.push_str(&format!(
+        "\n    m.insert(({n}, {m}), BalancerTemplate {{\n\
+         \x20\x20\x20\x20    n_inputs: {n}, n_outputs: {m}, width: {w}, height: {h},\n\
+         \x20\x20\x20\x20    entities: T_{n}_{m}_ENTITIES, input_tiles: T_{n}_{m}_INPUT, output_tiles: T_{n}_{m}_OUTPUT,\n\
+         \x20\x20\x20\x20    source_blueprint: \"\",\n\
+         \x20\x20\x20\x20}});\n",
+        w = t.width,
+        h = t.height,
+    ));
+
+    out
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3.4 — recipe-driven baking of missing library shapes
+// ---------------------------------------------------------------------------
+
+/// One half of a compose recipe: either pull a library shape directly, or
+/// stamp `k` copies of a library shape side-by-side.
+#[derive(Debug, Clone, Copy)]
+enum Stage {
+    Lib(u32, u32),
+    Parallel(u32, u32, u32), // (m, n, k)
+}
+
+#[derive(Debug, Clone)]
+enum Perm {
+    Identity,
+    Clos(usize, usize), // (m, k) for clos_interleave
+}
+
+#[derive(Debug, Clone)]
+struct Recipe {
+    shape: (u32, u32),
+    stage1: Stage,
+    stage2: Stage,
+    perm: Perm,
+    /// Search bounds for the junction-routing solver. Identity perms can
+    /// usually solve at jh=1; Clos perms need a larger search window.
+    max_jh: u32,
+}
+
+fn build_stage(s: Stage) -> Result<OwnedTemplate, Box<dyn std::error::Error>> {
+    let templates = balancer_templates();
+    match s {
+        Stage::Lib(m, n) => {
+            let t = templates
+                .get(&(m, n))
+                .ok_or_else(|| format!("library missing ({m}, {n})"))?;
+            // Wrap as OwnedTemplate so the caller has a uniform handle.
+            Ok(OwnedTemplate {
+                n_inputs: t.n_inputs,
+                n_outputs: t.n_outputs,
+                width: t.width,
+                height: t.height,
+                entities: t.entities.to_vec(),
+                input_tiles: t.input_tiles.to_vec(),
+                output_tiles: t.output_tiles.to_vec(),
+            })
+        }
+        Stage::Parallel(m, n, k) => {
+            let atom = templates
+                .get(&(m, n))
+                .ok_or_else(|| format!("library missing ({m}, {n}) for parallel"))?;
+            Ok(compose_parallel(BalancerTemplateRef::from(atom), k))
+        }
+    }
+}
+
+fn run_recipe(r: &Recipe) -> Result<OwnedTemplate, Box<dyn std::error::Error>> {
+    let stage1 = build_stage(r.stage1)?;
+    let stage2 = build_stage(r.stage2)?;
+    if stage1.n_outputs != stage2.n_inputs {
+        return Err(format!(
+            "recipe {:?}: stage1.n_outputs={} != stage2.n_inputs={}",
+            r.shape, stage1.n_outputs, stage2.n_inputs
+        )
+        .into());
+    }
+    if stage1.n_inputs != r.shape.0 || stage2.n_outputs != r.shape.1 {
+        return Err(format!(
+            "recipe {:?}: stage1.n_inputs={} stage2.n_outputs={} ≠ target shape",
+            r.shape, stage1.n_inputs, stage2.n_outputs
+        )
+        .into());
+    }
+    let perm: Vec<usize> = match &r.perm {
+        Perm::Identity => (0..stage1.n_outputs as usize).collect(),
+        Perm::Clos(m, k) => clos_interleave(*m, *k),
+    };
+    if perm.len() != stage1.n_outputs as usize {
+        return Err(format!(
+            "recipe {:?}: perm length {} != stage1.n_outputs {}",
+            r.shape,
+            perm.len(),
+            stage1.n_outputs
+        )
+        .into());
+    }
+    compose_series(stage1.as_ref(), stage2.as_ref(), &perm, 1, r.max_jh)
+}
+
+fn bake_missing_shapes() -> Result<(), Box<dyn std::error::Error>> {
+    // Pattern key:
+    //   - merger (n, 1): parallel((k, 1), j) → (j, 1) with identity, j*k = n.
+    //   - fanout (1, m): (1, j) → parallel((1, k), j) with identity, j*k = m.
+    //   - merge-then-balance (n, p): parallel((k, 1), j) → (j, p) with identity.
+    //   - Clos (m, n) with k|n: parallel((1, k), m) → parallel((m, n/k), k) with clos_interleave(m, k).
+    let recipes: Vec<Recipe> = vec![
+        // (9, 1) — pure 9-input merger.
+        Recipe {
+            shape: (9, 1),
+            stage1: Stage::Parallel(3, 1, 3),
+            stage2: Stage::Lib(3, 1),
+            perm: Perm::Identity,
+            max_jh: 8,
+        },
+        // (1, 10) — fanout via (1, 5) → parallel((1, 2), 5).
+        Recipe {
+            shape: (1, 10),
+            stage1: Stage::Lib(1, 5),
+            stage2: Stage::Parallel(1, 2, 5),
+            perm: Perm::Identity,
+            max_jh: 8,
+        },
+        // (10, 1) — merger via parallel((5, 1), 2) → (2, 1).
+        Recipe {
+            shape: (10, 1),
+            stage1: Stage::Parallel(5, 1, 2),
+            stage2: Stage::Lib(2, 1),
+            perm: Perm::Identity,
+            max_jh: 8,
+        },
+        // (2, 9) — Clos via parallel((1, 3), 2) → parallel((2, 3), 3).
+        Recipe {
+            shape: (2, 9),
+            stage1: Stage::Parallel(1, 3, 2),
+            stage2: Stage::Parallel(2, 3, 3),
+            perm: Perm::Clos(2, 3),
+            max_jh: 16,
+        },
+        // (9, 2) — merge-then-balance via parallel((3, 1), 3) → (3, 2).
+        Recipe {
+            shape: (9, 2),
+            stage1: Stage::Parallel(3, 1, 3),
+            stage2: Stage::Lib(3, 2),
+            perm: Perm::Identity,
+            max_jh: 8,
+        },
+        // (9, 3..=8) — same merge-then-balance pattern through (3, m) atoms.
+        Recipe { shape: (9, 3), stage1: Stage::Parallel(3, 1, 3), stage2: Stage::Lib(3, 3), perm: Perm::Identity, max_jh: 8 },
+        Recipe { shape: (9, 4), stage1: Stage::Parallel(3, 1, 3), stage2: Stage::Lib(3, 4), perm: Perm::Identity, max_jh: 8 },
+        Recipe { shape: (9, 5), stage1: Stage::Parallel(3, 1, 3), stage2: Stage::Lib(3, 5), perm: Perm::Identity, max_jh: 8 },
+        Recipe { shape: (9, 6), stage1: Stage::Parallel(3, 1, 3), stage2: Stage::Lib(3, 6), perm: Perm::Identity, max_jh: 8 },
+        Recipe { shape: (9, 7), stage1: Stage::Parallel(3, 1, 3), stage2: Stage::Lib(3, 7), perm: Perm::Identity, max_jh: 8 },
+        Recipe { shape: (9, 8), stage1: Stage::Parallel(3, 1, 3), stage2: Stage::Lib(3, 8), perm: Perm::Identity, max_jh: 8 },
+        // (m, 9) Clos for m in 3..=9 — same pattern as (2, 9):
+        // parallel((1, 3), m) → parallel((m, 3), 3) with clos_interleave(m, 3).
+        // Issue #136. max_jh=24 is generous; (4, 9) finds jh=9.
+        Recipe { shape: (3, 9), stage1: Stage::Parallel(1, 3, 3), stage2: Stage::Parallel(3, 3, 3), perm: Perm::Clos(3, 3), max_jh: 24 },
+        Recipe { shape: (4, 9), stage1: Stage::Parallel(1, 3, 4), stage2: Stage::Parallel(4, 3, 3), perm: Perm::Clos(4, 3), max_jh: 24 },
+        Recipe { shape: (5, 9), stage1: Stage::Parallel(1, 3, 5), stage2: Stage::Parallel(5, 3, 3), perm: Perm::Clos(5, 3), max_jh: 24 },
+        Recipe { shape: (6, 9), stage1: Stage::Parallel(1, 3, 6), stage2: Stage::Parallel(6, 3, 3), perm: Perm::Clos(6, 3), max_jh: 24 },
+        Recipe { shape: (7, 9), stage1: Stage::Parallel(1, 3, 7), stage2: Stage::Parallel(7, 3, 3), perm: Perm::Clos(7, 3), max_jh: 24 },
+        Recipe { shape: (8, 9), stage1: Stage::Parallel(1, 3, 8), stage2: Stage::Parallel(8, 3, 3), perm: Perm::Clos(8, 3), max_jh: 24 },
+        Recipe { shape: (9, 9), stage1: Stage::Parallel(1, 3, 9), stage2: Stage::Parallel(9, 3, 3), perm: Perm::Clos(9, 3), max_jh: 24 },
+    ];
+
+    let mut all_source = String::new();
+    let mut shapes_done: Vec<(u32, u32)> = Vec::new();
+    let mut shapes_failed: Vec<((u32, u32), String)> = Vec::new();
+    let mut shapes_skipped: Vec<(u32, u32)> = Vec::new();
+    let library = balancer_templates();
+    let total = recipes.len();
+    for (idx, r) in recipes.iter().enumerate() {
+        let (m, n) = r.shape;
+        if library.contains_key(&(m, n)) {
+            println!("\n--- [{}/{total}] ({m}, {n}): SKIP (already in library) ---", idx + 1);
+            shapes_skipped.push((m, n));
+            continue;
+        }
+        println!("\n--- [{}/{total}] ({m}, {n}): {:?} → {:?} via {:?} ---",
+                 idx + 1, r.stage1, r.stage2, r.perm);
+        let t0 = std::time::Instant::now();
+        let composed = match run_recipe(r) {
+            Ok(c) => c,
+            Err(e) => {
+                println!("  ✗ compose: {e}");
+                shapes_failed.push(((m, n), format!("compose: {e}")));
+                continue;
+            }
+        };
+        let elapsed = t0.elapsed().as_secs_f64();
+        println!(
+            "  composed: {}×{}, {} entities ({:.2}s)",
+            composed.width, composed.height, composed.entities.len(), elapsed
+        );
+
+        let report = match classify_ref(composed.as_ref()) {
+            Ok(r) => r,
+            Err(e) => {
+                println!("  ✗ classify_ref: {e:?}");
+                shapes_failed.push(((m, n), format!("classify_ref: {e:?}")));
+                continue;
+            }
+        };
+        println!("  classified: {:?}", report.class);
+        if report.class != BalancerClass::Balanced {
+            shapes_failed.push(((m, n), format!("classified {:?}", report.class)));
+            continue;
+        }
+
+        let header = format!(
+            "\n// === ({m}, {n}) — generated by balancer-gen bake_missing_shapes ===\n"
+        );
+        let body = emit_template_rust_source(&composed, (m, n));
+        // Emit per-shape immediately so an interrupted run is still
+        // recoverable from the log — the final summary repeats it all.
+        println!("\n----- begin generated source ({m}, {n}) -----");
+        print!("{header}{body}");
+        println!("----- end generated source ({m}, {n}) -----");
+        all_source.push_str(&header);
+        all_source.push_str(&body);
+        shapes_done.push((m, n));
+    }
+
+    println!("\n=== summary ===");
+    println!(
+        "  baked: {} / {} shapes ({} skipped, {} failed)",
+        shapes_done.len(),
+        total,
+        shapes_skipped.len(),
+        shapes_failed.len()
+    );
+    for (m, n) in &shapes_done {
+        println!("    ✓ ({m}, {n})");
+    }
+    for (m, n) in &shapes_skipped {
+        println!("    – ({m}, {n}) skipped");
+    }
+    for ((m, n), reason) in &shapes_failed {
+        println!("    ✗ ({m}, {n}): {reason}");
+    }
+    println!("\n----- begin generated source -----");
+    print!("{all_source}");
+    println!("----- end generated source -----");
+
+    if !shapes_failed.is_empty() {
+        return Err(format!("{} shapes failed", shapes_failed.len()).into());
+    }
     Ok(())
 }
 
@@ -1080,21 +1590,61 @@ fn compose_series(
         })
         .collect();
 
+    // Heuristic starting jh: identity perms route at jh=1, but a non-trivial
+    // permutation routing typically needs ~ceil(log2(N)) + 1 rows of slack
+    // for the cross-overs. Skipping the obviously-infeasible early jh values
+    // is a multi-minute saving on larger Clos shapes (the (4, 9) compose ate
+    // most of its 1173s burning through jh=1..8 before finding 9).
+    let is_identity = perm.iter().enumerate().all(|(i, &p)| i == p);
+    let heuristic_start: u32 = if is_identity {
+        1
+    } else {
+        let n = perm.len() as f64;
+        ((n.log2().ceil() as u32) + 1).max(1)
+    };
+    let effective_start = std::cmp::max(initial_junction_height, heuristic_start);
+    if effective_start > initial_junction_height {
+        eprintln!(
+            "  compose_series: heuristic bumped initial_jh {initial_junction_height} → {effective_start} (perm len={}, identity={is_identity})",
+            perm.len()
+        );
+    }
+
     let mut last_err: String = String::new();
-    for jh in initial_junction_height..=max_junction_height {
+    for jh in effective_start..=max_junction_height {
         let junction_output_tiles: Vec<(i32, i32)> = bot
             .input_tiles
             .iter()
             .map(|&(x, _)| (x, (jh - 1) as i32))
             .collect();
+        // Stratified per-attempt timeout. The first few attempts past the
+        // heuristic-start are likely still infeasible — give CP-SAT a short
+        // budget to prove it and bump quickly. As we creep into the feasible
+        // region, raise the budget so genuine solves don't time out.
+        let attempt_index = jh - effective_start;
+        let timeout_s: f64 = match attempt_index {
+            0..=1 => 90.0,
+            2..=3 => 240.0,
+            _ => 600.0,
+        };
+        // Encoding selector — `circuit` uses CP-SAT's AddCircuit-based
+        // formulation in `solve_pure_routing_circuit`; otherwise the
+        // generic per-(cell, dir, edge) bool model in `solve_pure_routing`.
+        let encoding: Option<&'static str> = match std::env::var("FUCKTORIO_PURE_ROUTING_ENCODING").as_deref() {
+            Ok("circuit") => Some("circuit"),
+            _ => None,
+        };
         let req = PlaceRequest::PureRouting {
             kind: "pure_routing",
             bounds: (composed_width, jh),
             input_port_tiles: junction_input_tiles.clone(),
             output_port_tiles: junction_output_tiles,
             edges: edges.clone(),
-            max_time_s: Some(60.0),
+            max_time_s: Some(timeout_s),
+            encoding,
+            ug_max_reach: None, // None = default yellow (reach=4); future PR sweeps to red/blue
         };
+        let t_attempt = std::time::Instant::now();
         let resp = match run_solver(&req) {
             Ok(r) => r,
             Err(e) => {
@@ -1102,6 +1652,13 @@ fn compose_series(
                 continue;
             }
         };
+        eprintln!(
+            "  compose_series: jh={jh} status={} solver_elapsed={:.1}s wall={:.1}s timeout={:.0}s",
+            resp.status,
+            resp.elapsed_s,
+            t_attempt.elapsed().as_secs_f64(),
+            timeout_s
+        );
         if resp.status == "OPTIMAL" || resp.status == "FEASIBLE" {
             // Found feasible junction. Assemble composed template.
             let junction_y_off = top.height as i32;
@@ -1152,11 +1709,7 @@ fn compose_series(
                 });
             }
 
-            let composed_input_tiles: Vec<(i32, i32)> = top
-                .input_tiles
-                .iter()
-                .copied()
-                .collect();
+            let composed_input_tiles: Vec<(i32, i32)> = top.input_tiles.to_vec();
             let composed_output_tiles: Vec<(i32, i32)> = bot
                 .output_tiles
                 .iter()
