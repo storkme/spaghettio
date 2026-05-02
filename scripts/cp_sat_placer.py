@@ -118,22 +118,17 @@ def _route_belts(
         for t in free
         for d in _INTERNAL_DIRS
     }
-    # Belt at (t, d) iff some route uses (t, d). Combined with
-    # at-most-one-direction-per-tile and at-most-one-route-per-tile
-    # (below), this means belts are exactly the tiles needed by routes.
+    # Belt at (t, d) iff at least one route uses (t, d). Multiple
+    # routes can share a tile in the same direction (sideloading: a
+    # perpendicular belt feeds into the receiving belt's stream).
+    n_routes = len(routes)
     for t in free:
         for d in _INTERNAL_DIRS:
-            model.add(
-                belt[(t, d)]
-                == sum(f[(r, t, d)] for r in range(len(routes)))
-            )
-
-    # No tile shared between routes (MVP: no sideloading).
-    for t in free:
-        model.add(
-            sum(f[(r, t, d)] for r in range(len(routes)) for d in _INTERNAL_DIRS)
-            <= 1
-        )
+            s = sum(f[(r, t, d)] for r in range(n_routes))
+            # belt = 1 → s >= 1 (some route uses this tile).
+            model.add(s >= belt[(t, d)])
+            # belt = 0 → s = 0 (no route on a tile without a belt).
+            model.add(s <= n_routes * belt[(t, d)])
 
     # Per-route flow constraints. Conservation model:
     #   - At each free tile, "on_route" ∈ {0, 1} = sum of direction
@@ -276,18 +271,41 @@ def place_single_splitter(n: int, m: int) -> dict[str, Any]:
     }
 
 
-def _input_tiles_for_root(x_root: int, y_root: int, n: int) -> list[tuple[int, int]]:
-    """Choose input belt tiles above the root for `n ∈ {1, 2}` inputs.
+def _input_routes_for_root(
+    x_root: int, y_root: int, n: int
+) -> tuple[
+    list[tuple[int, int]],
+    list[tuple[tuple[int, int], tuple[int, int], int]],
+]:
+    """Build input belt tiles and routes for `n ∈ {1, 2, 3}` inputs.
 
-    n=1: feed port 0 (left tile).  n=2: feed both ports.  Larger n
-    would require sideloading or a merger sub-network; not yet
-    supported.
+    Returns `(input_tiles, routes)`. Each route is
+    `(src, sink, sink_dir)` for [`_route_belts`].
+
+    n=1: feed port 0 (left tile of root).
+    n=2: feed both root ports directly.
+    n=3: 2 direct + 1 sideload from west: (x_root - 1, y_root - 1)
+         heads east into the south-belt above port 0. Requires the
+         routing model to allow multiple routes per tile.
     """
+    DIR_S = 2
+    direct_left = (x_root, y_root - 1)
+    direct_right = (x_root + 1, y_root - 1)
     if n == 1:
-        return [(x_root, y_root - 1)]
+        return [direct_left], [(direct_left, direct_left, DIR_S)]
     if n == 2:
-        return [(x_root, y_root - 1), (x_root + 1, y_root - 1)]
-    raise ValueError(f"unsupported input count {n}; expected 1 or 2")
+        tiles = [direct_left, direct_right]
+        return tiles, [(t, t, DIR_S) for t in tiles]
+    if n == 3:
+        sideload = (x_root - 1, y_root - 1)
+        tiles = [direct_left, direct_right, sideload]
+        routes = [
+            (direct_left, direct_left, DIR_S),
+            (direct_right, direct_right, DIR_S),
+            (sideload, direct_left, DIR_S),
+        ]
+        return tiles, routes
+    raise ValueError(f"unsupported input count {n}; expected 1, 2, or 3")
 
 
 def place_x_to_four(n: int) -> dict[str, Any]:
@@ -332,10 +350,7 @@ def place_x_to_four(n: int) -> dict[str, Any]:
     x_root, y_root = pos[0]
 
     DIR_S = 2
-    routes: list[tuple[tuple[int, int], tuple[int, int], int]] = []
-    input_tiles = _input_tiles_for_root(x_root, y_root, n)
-    for it in input_tiles:
-        routes.append((it, it, DIR_S))
+    input_tiles, routes = _input_routes_for_root(x_root, y_root, n)
     for parent_idx in (1, 2):
         px, py = pos[parent_idx]
         for port in (0, 1):
@@ -427,10 +442,7 @@ def place_x_to_eight(n: int) -> dict[str, Any]:
     x_root, y_root = pos[0]
 
     DIR_S = 2
-    routes: list[tuple[tuple[int, int], tuple[int, int], int]] = []
-    input_tiles = _input_tiles_for_root(x_root, y_root, n)
-    for it in input_tiles:
-        routes.append((it, it, DIR_S))
+    input_tiles, routes = _input_routes_for_root(x_root, y_root, n)
     # Root → level-1: each side picks the closer L1 input port.
     for parent_idx, port, child_idx in ((0, 0, 1), (0, 1, 2)):
         px, py = pos[parent_idx]
@@ -537,10 +549,7 @@ def place_x_to_sixteen(n: int) -> dict[str, Any]:
     x_root, y_root = pos[0]
 
     DIR_S = 2
-    routes: list[tuple[tuple[int, int], tuple[int, int], int]] = []
-    input_tiles = _input_tiles_for_root(x_root, y_root, n)
-    for it in input_tiles:
-        routes.append((it, it, DIR_S))
+    input_tiles, routes = _input_routes_for_root(x_root, y_root, n)
     # Root → L1.
     for parent_idx, port, child_idx in ((0, 0, 1), (0, 1, 2)):
         px, py = pos[parent_idx]
@@ -617,10 +626,13 @@ def main() -> int:
         (2, 2): lambda: place_single_splitter(2, 2),
         (1, 4): lambda: place_x_to_four(1),
         (2, 4): lambda: place_x_to_four(2),
+        (3, 4): lambda: place_x_to_four(3),
         (1, 8): lambda: place_x_to_eight(1),
         (2, 8): lambda: place_x_to_eight(2),
+        (3, 8): lambda: place_x_to_eight(3),
         (1, 16): lambda: place_x_to_sixteen(1),
         (2, 16): lambda: place_x_to_sixteen(2),
+        (3, 16): lambda: place_x_to_sixteen(3),
     }
 
     if (n, m) in geometry:
