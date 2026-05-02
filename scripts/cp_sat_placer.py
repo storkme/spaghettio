@@ -527,6 +527,41 @@ def place_single_splitter(n: int, m: int) -> dict[str, Any]:
     }
 
 
+def _add_lane_balancer_south(
+    splitter_positions: list[tuple[int, int, int]] | list[tuple[int, int]],
+    anchor: tuple[int, int],
+) -> dict[str, tuple[int, int]]:
+    """Append a south-facing splitter at `anchor` and return its port tiles.
+
+    Returns a dict with keys `in0, in1` (input-port tiles, one row above
+    the splitter) and `out0, out1` (output-drop tiles, one row below).
+    Callers wire the upstream routes to terminate at the in-tiles and
+    seed downstream routes from the out-tiles with `splitter_dir = S`
+    so the existing source-lane forcing pins lanes correctly.
+
+    The lane-balancer splitter is **placement-only** — the synth graph
+    doesn't know about it. It shows up in the recovered topology as
+    an extra splitter node, but `from_splitter_graph` checks degrees
+    not counts and `verify_balancer` checks flow not structure, so the
+    round-trip absorbs it cleanly.
+
+    Use this at perpendicular turns where the sideload table would
+    lump multiple lanes onto the receiver's LEFT lane and exceed the
+    0.5 lane cap. The splitter eats the merged flow head-on (both
+    lanes filled at the input port) and emits 50/50 on both output
+    ports — physically restoring lane balance for the downstream
+    channel.
+    """
+    x, y = anchor
+    splitter_positions.append((x, y, 2))  # 2 = south
+    return {
+        "in0": (x, y - 1),
+        "in1": (x + 1, y - 1),
+        "out0": (x, y + 1),
+        "out1": (x + 1, y + 1),
+    }
+
+
 def _input_routes_for_root(
     x_root: int, y_root: int, n: int
 ) -> tuple[
