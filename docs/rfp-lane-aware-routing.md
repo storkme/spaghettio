@@ -448,3 +448,35 @@ The remaining work, in order:
   lane-balancer splitter at the turn — an extra splitter beyond
   what the synth provides — or a different topology. Bumped to
   phase 4 (now bundled with the lane-balancer-splitter piece).*
+- *2026-05-02 — Phase 4 increments 1+2 shipped (per-arc rate
+  plumbing + `_add_lane_balancer_south` helper). Wire format gains
+  optional `arc_throughputs: Vec<f64>` from `verify_balancer`;
+  Python placer exposes `_find_arc_rate(src, dst)` returning scaled
+  integer rates (`RATE_SCALE = 10`, `LANE_CAP_SCALED = 5`). Helper
+  appends a south-facing placement-only splitter and returns its port
+  tiles. No behaviour change for dyadic shapes — they still default
+  to discrete unit rates. All 10 round-trip tests stay green.*
+- *2026-05-02 — Phase 4 increment 3 (`(1, 5)` placer) parked. The
+  layout problem is harder than the design anticipated: rate-0.8
+  arcs (`M → S1`, `S1 → L1`) require head-on flow (perpendicular
+  doesn't fit the lane cap), forcing a tight-stack vertical chain.
+  This pins S2/S3 to `(S1.x ± 1, S1.y + 1)` — adjacent. Their L2
+  children then have to be at `(S1.x - 3, S1.x - 1, S1.x + 1, S1.x + 3)`
+  if routing-row offset, and the `S2.out1 → S5` (eastward) and
+  `S3.out0 → S6` (westward) routes both pass through the inner two
+  cols of the routing row, requiring a route-crossing. Without UG
+  belts (out of scope per the original RFP) there's no way to
+  cross. Alternative — collapse S2/S3 outputs onto a shared L2
+  splitter via tight-stack — fails verification because the merged
+  splitter outputs at rate 0.4 instead of the expected 0.2.
+  Three viable directions for unblocking, each material work:
+  (a) add UG-belt support to the placer (matches the existing
+  spike at `crates/balancer-gen/scripts/place.py`); (b) add a
+  pass-before-route step that re-distributes route paths (e.g.
+  swap port assignments to make the cross unnecessary); (c)
+  modify the synth to emit a lane-safe topology with extra
+  splitters in the tree (revisits the rejected
+  `rfp-lane-safe-synth.md` track but with different motivation).
+  Phase 4 increments 1+2 shipped as standalone infrastructure
+  value; (1, 5) and the rest of coprime coverage need a
+  layout-design follow-up before they become tractable.*
