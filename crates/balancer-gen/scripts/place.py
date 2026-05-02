@@ -230,7 +230,7 @@ def solve_routing(req: dict) -> dict:
         for cy in range(height):
             for d in range(4):
                 dx, dy = DIR_STEPS[d]
-                for L in range(1, UG_MAX_REACH + 1):
+                for L in range(1, ug_max_reach_param + 1):
                     ncx, ncy = cx + L * dx, cy + L * dy
                     if 0 <= ncx < width and 0 <= ncy < height:
                         for e_idx in range(len(edges)):
@@ -269,13 +269,13 @@ def solve_routing(req: dict) -> dict:
                 terms.append(sum(arcs[(cx, cy, d, e_idx)] for d in range(4)))
                 # UG inputs at this cell.
                 for d in range(4):
-                    for L in range(1, UG_MAX_REACH + 1):
+                    for L in range(1, ug_max_reach_param + 1):
                         if (cx, cy, d, L, e_idx) in ug_arcs:
                             terms.append(ug_arcs[(cx, cy, d, L, e_idx)])
                 # UG outputs at this cell (i.e., inputs upstream).
                 for d in range(4):
                     dx, dy = DIR_STEPS[d]
-                    for L in range(1, UG_MAX_REACH + 1):
+                    for L in range(1, ug_max_reach_param + 1):
                         ucx, ucy = cx - L * dx, cy - L * dy
                         if (ucx, ucy, d, L, e_idx) in ug_arcs:
                             terms.append(ug_arcs[(ucx, ucy, d, L, e_idx)])
@@ -287,7 +287,7 @@ def solve_routing(req: dict) -> dict:
         cx, cy = sp_cell
         for e_idx in range(len(edges)):
             for d in range(4):
-                for L in range(1, UG_MAX_REACH + 1):
+                for L in range(1, ug_max_reach_param + 1):
                     if (cx, cy, d, L, e_idx) in ug_arcs:
                         model.Add(ug_arcs[(cx, cy, d, L, e_idx)] == 0)
                     dx, dy = DIR_STEPS[d]
@@ -305,7 +305,7 @@ def solve_routing(req: dict) -> dict:
         for k in range(1, L1):
             mcx, mcy = c1x + k * dx, c1y + k * dy
             # Any OTHER ug_arc whose output is at (mcx, mcy) heading d1.
-            for L2 in range(1, UG_MAX_REACH + 1):
+            for L2 in range(1, ug_max_reach_param + 1):
                 ucx, ucy = mcx - L2 * dx, mcy - L2 * dy
                 if not (0 <= ucx < width and 0 <= ucy < height):
                     continue
@@ -328,7 +328,7 @@ def solve_routing(req: dict) -> dict:
                 for d in range(4):
                     if d != facing:
                         model.Add(arcs[(cx, cy, d, e_idx)] == 0)
-                        for L in range(1, UG_MAX_REACH + 1):
+                        for L in range(1, ug_max_reach_param + 1):
                             if (cx, cy, d, L, e_idx) in ug_arcs:
                                 model.Add(ug_arcs[(cx, cy, d, L, e_idx)] == 0)
                 # Forbid inflow from non-facing directions.
@@ -339,14 +339,14 @@ def solve_routing(req: dict) -> dict:
                     ncy = cy - DIR_STEPS[d][1]
                     if 0 <= ncx < width and 0 <= ncy < height:
                         model.Add(arcs[(ncx, ncy, d, e_idx)] == 0)
-                    for L in range(1, UG_MAX_REACH + 1):
+                    for L in range(1, ug_max_reach_param + 1):
                         ucx = cx - L * DIR_STEPS[d][0]
                         ucy = cy - L * DIR_STEPS[d][1]
                         if (ucx, ucy, d, L, e_idx) in ug_arcs:
                             model.Add(ug_arcs[(ucx, ucy, d, L, e_idx)] == 0)
                 # Bound total outflow ≤ is_src_term, total inflow ≤ is_dst_term.
                 outflow_terms = [arcs[(cx, cy, facing, e_idx)]]
-                for L in range(1, UG_MAX_REACH + 1):
+                for L in range(1, ug_max_reach_param + 1):
                     if (cx, cy, facing, L, e_idx) in ug_arcs:
                         outflow_terms.append(ug_arcs[(cx, cy, facing, L, e_idx)])
                 model.Add(sum(outflow_terms) <= is_src_term_at(cx, cy, e_idx))
@@ -359,7 +359,7 @@ def solve_routing(req: dict) -> dict:
                 # UG inflow at splitter cells: a UG output one step
                 # behind the splitter (in facing direction) emits forward
                 # into the splitter. Its input is at (cx - (L+1)*d, ...).
-                for L in range(1, UG_MAX_REACH + 1):
+                for L in range(1, ug_max_reach_param + 1):
                     ucx = cx - (L + 1) * DIR_STEPS[facing][0]
                     ucy = cy - (L + 1) * DIR_STEPS[facing][1]
                     if (ucx, ucy, facing, L, e_idx) in ug_arcs:
@@ -377,7 +377,7 @@ def solve_routing(req: dict) -> dict:
                 belt_outflow = sum(arcs[(cx, cy, d, e_idx)] for d in range(4))
                 ug_outflow_terms = []
                 for d in range(4):
-                    for L in range(1, UG_MAX_REACH + 1):
+                    for L in range(1, ug_max_reach_param + 1):
                         if (cx, cy, d, L, e_idx) in ug_arcs:
                             ug_outflow_terms.append(ug_arcs[(cx, cy, d, L, e_idx)])
                 ug_outflow = sum(ug_outflow_terms) if ug_outflow_terms else 0
@@ -398,7 +398,7 @@ def solve_routing(req: dict) -> dict:
                 ug_inflow_terms = []
                 for d in range(4):
                     dx, dy = DIR_STEPS[d]
-                    for L in range(1, UG_MAX_REACH + 1):
+                    for L in range(1, ug_max_reach_param + 1):
                         ucx = cx - (L + 1) * dx
                         ucy = cy - (L + 1) * dy
                         if (ucx, ucy, d, L, e_idx) in ug_arcs:
@@ -703,7 +703,7 @@ def solve_synth_place(req: dict) -> dict:
         for cy in range(height):
             d = facing
             dx, dy = DIR_STEPS[d]
-            for L in range(1, UG_MAX_REACH + 1):
+            for L in range(1, ug_max_reach_param + 1):
                 ncx, ncy = cx + L * dx, cy + L * dy
                 if 0 <= ncx < width and 0 <= ncy < height:
                     for e_idx in range(len(edges)):
@@ -738,7 +738,7 @@ def solve_synth_place(req: dict) -> dict:
                     if d != facing:
                         # arcs[(cx, cy, d, e)] = 0 if isp = 1.
                         model.Add(arcs[(cx, cy, d, e_idx)] == 0).OnlyEnforceIf(isp)
-                        for L in range(1, UG_MAX_REACH + 1):
+                        for L in range(1, ug_max_reach_param + 1):
                             if (cx, cy, d, L, e_idx) in ug_arcs:
                                 model.Add(ug_arcs[(cx, cy, d, L, e_idx)] == 0).OnlyEnforceIf(isp)
                 # Forbid inflow from non-facing directions if cell is splitter.
@@ -749,14 +749,14 @@ def solve_synth_place(req: dict) -> dict:
                     ncy = cy - DIR_STEPS[d][1]
                     if 0 <= ncx < width and 0 <= ncy < height:
                         model.Add(arcs[(ncx, ncy, d, e_idx)] == 0).OnlyEnforceIf(isp)
-                    for L in range(1, UG_MAX_REACH + 1):
+                    for L in range(1, ug_max_reach_param + 1):
                         ucx = cx - L * DIR_STEPS[d][0]
                         ucy = cy - L * DIR_STEPS[d][1]
                         if (ucx, ucy, d, L, e_idx) in ug_arcs:
                             model.Add(ug_arcs[(ucx, ucy, d, L, e_idx)] == 0).OnlyEnforceIf(isp)
                 # UG entities can't be at splitter cells (input or output).
                 for d in range(4):
-                    for L in range(1, UG_MAX_REACH + 1):
+                    for L in range(1, ug_max_reach_param + 1):
                         if (cx, cy, d, L, e_idx) in ug_arcs:
                             model.Add(ug_arcs[(cx, cy, d, L, e_idx)] == 0).OnlyEnforceIf(isp)
                         dx, dy = DIR_STEPS[d]
@@ -772,12 +772,12 @@ def solve_synth_place(req: dict) -> dict:
             for e_idx in range(len(edges)):
                 terms.append(sum(arcs[(cx, cy, d, e_idx)] for d in range(4)))
                 for d in range(4):
-                    for L in range(1, UG_MAX_REACH + 1):
+                    for L in range(1, ug_max_reach_param + 1):
                         if (cx, cy, d, L, e_idx) in ug_arcs:
                             terms.append(ug_arcs[(cx, cy, d, L, e_idx)])
                 for d in range(4):
                     dx, dy = DIR_STEPS[d]
-                    for L in range(1, UG_MAX_REACH + 1):
+                    for L in range(1, ug_max_reach_param + 1):
                         ucx, ucy = cx - L * dx, cy - L * dy
                         if (ucx, ucy, d, L, e_idx) in ug_arcs:
                             terms.append(ug_arcs[(ucx, ucy, d, L, e_idx)])
@@ -791,7 +791,7 @@ def solve_synth_place(req: dict) -> dict:
         dx, dy = DIR_STEPS[d1]
         for k in range(1, L1):
             mcx, mcy = c1x + k * dx, c1y + k * dy
-            for L2 in range(1, UG_MAX_REACH + 1):
+            for L2 in range(1, ug_max_reach_param + 1):
                 ucx, ucy = mcx - L2 * dx, mcy - L2 * dy
                 if not (0 <= ucx < width and 0 <= ucy < height):
                     continue
@@ -806,7 +806,7 @@ def solve_synth_place(req: dict) -> dict:
                 belt_outflow = sum(arcs[(cx, cy, d, e_idx)] for d in range(4))
                 ug_outflow_terms = []
                 for d in range(4):
-                    for L in range(1, UG_MAX_REACH + 1):
+                    for L in range(1, ug_max_reach_param + 1):
                         if (cx, cy, d, L, e_idx) in ug_arcs:
                             ug_outflow_terms.append(ug_arcs[(cx, cy, d, L, e_idx)])
                 ug_outflow = sum(ug_outflow_terms) if ug_outflow_terms else 0
@@ -824,7 +824,7 @@ def solve_synth_place(req: dict) -> dict:
                 ug_inflow_terms = []
                 for d in range(4):
                     dx, dy = DIR_STEPS[d]
-                    for L in range(1, UG_MAX_REACH + 1):
+                    for L in range(1, ug_max_reach_param + 1):
                         ucx = cx - (L + 1) * dx
                         ucy = cy - (L + 1) * dy
                         if (ucx, ucy, d, L, e_idx) in ug_arcs:
@@ -1151,7 +1151,7 @@ def solve_synth_place_dirs(req: dict) -> dict:
         for cy in range(height):
             for d in range(4):
                 dx, dy = DIR_STEPS[d]
-                for L in range(1, UG_MAX_REACH + 1):
+                for L in range(1, ug_max_reach_param + 1):
                     ncx, ncy = cx + L * dx, cy + L * dy
                     if 0 <= ncx < width and 0 <= ncy < height:
                         for e_idx in range(len(edges)):
@@ -1180,14 +1180,14 @@ def solve_synth_place_dirs(req: dict) -> dict:
                         if d_other == d_facing:
                             continue
                         model.Add(arcs[(cx, cy, d_other, e_idx)] + cfd <= 1)
-                        for L in range(1, UG_MAX_REACH + 1):
+                        for L in range(1, ug_max_reach_param + 1):
                             if (cx, cy, d_other, L, e_idx) in ug_arcs:
                                 model.Add(ug_arcs[(cx, cy, d_other, L, e_idx)] + cfd <= 1)
                         ncx = cx - DIR_STEPS[d_other][0]
                         ncy = cy - DIR_STEPS[d_other][1]
                         if 0 <= ncx < width and 0 <= ncy < height:
                             model.Add(arcs[(ncx, ncy, d_other, e_idx)] + cfd <= 1)
-                        for L in range(1, UG_MAX_REACH + 1):
+                        for L in range(1, ug_max_reach_param + 1):
                             ucx = cx - L * DIR_STEPS[d_other][0]
                             ucy = cy - L * DIR_STEPS[d_other][1]
                             if (ucx, ucy, d_other, L, e_idx) in ug_arcs:
@@ -1195,7 +1195,7 @@ def solve_synth_place_dirs(req: dict) -> dict:
             # No UG entities at splitter cells.
             for e_idx in range(len(edges)):
                 for d in range(4):
-                    for L in range(1, UG_MAX_REACH + 1):
+                    for L in range(1, ug_max_reach_param + 1):
                         if (cx, cy, d, L, e_idx) in ug_arcs:
                             model.Add(ug_arcs[(cx, cy, d, L, e_idx)] + isp <= 1)
                         dx, dy = DIR_STEPS[d]
@@ -1211,12 +1211,12 @@ def solve_synth_place_dirs(req: dict) -> dict:
             for e_idx in range(len(edges)):
                 terms.append(sum(arcs[(cx, cy, d, e_idx)] for d in range(4)))
                 for d in range(4):
-                    for L in range(1, UG_MAX_REACH + 1):
+                    for L in range(1, ug_max_reach_param + 1):
                         if (cx, cy, d, L, e_idx) in ug_arcs:
                             terms.append(ug_arcs[(cx, cy, d, L, e_idx)])
                 for d in range(4):
                     dx, dy = DIR_STEPS[d]
-                    for L in range(1, UG_MAX_REACH + 1):
+                    for L in range(1, ug_max_reach_param + 1):
                         ucx, ucy = cx - L * dx, cy - L * dy
                         if (ucx, ucy, d, L, e_idx) in ug_arcs:
                             terms.append(ug_arcs[(ucx, ucy, d, L, e_idx)])
@@ -1227,7 +1227,7 @@ def solve_synth_place_dirs(req: dict) -> dict:
         dx, dy = DIR_STEPS[d1]
         for k in range(1, L1):
             mcx, mcy = c1x + k * dx, c1y + k * dy
-            for L2 in range(1, UG_MAX_REACH + 1):
+            for L2 in range(1, ug_max_reach_param + 1):
                 ucx, ucy = mcx - L2 * dx, mcy - L2 * dy
                 if not (0 <= ucx < width and 0 <= ucy < height):
                     continue
@@ -1242,7 +1242,7 @@ def solve_synth_place_dirs(req: dict) -> dict:
                 belt_outflow = sum(arcs[(cx, cy, d, e_idx)] for d in range(4))
                 ug_outflow_terms = []
                 for d in range(4):
-                    for L in range(1, UG_MAX_REACH + 1):
+                    for L in range(1, ug_max_reach_param + 1):
                         if (cx, cy, d, L, e_idx) in ug_arcs:
                             ug_outflow_terms.append(ug_arcs[(cx, cy, d, L, e_idx)])
                 ug_outflow = sum(ug_outflow_terms) if ug_outflow_terms else 0
@@ -1258,7 +1258,7 @@ def solve_synth_place_dirs(req: dict) -> dict:
                 ug_inflow_terms = []
                 for d in range(4):
                     dx, dy = DIR_STEPS[d]
-                    for L in range(1, UG_MAX_REACH + 1):
+                    for L in range(1, ug_max_reach_param + 1):
                         ucx = cx - (L + 1) * dx
                         ucy = cy - (L + 1) * dy
                         if (ucx, ucy, d, L, e_idx) in ug_arcs:
@@ -1374,6 +1374,11 @@ def solve_pure_routing(req: dict) -> dict:
     input_port_tiles = [tuple(t) for t in req["input_port_tiles"]]
     output_port_tiles = [tuple(t) for t in req["output_port_tiles"]]
     edges = req["edges"]
+    # ug_max_reach_param: transit-tile reach for this request.
+    # Defaults to 4 (yellow belt) which matches the legacy UG_MAX_REACH = 5
+    # constant (L_max_in_loop = ug_max_reach_param + 1 = 5, same as before).
+    # Pass 6 for red or 8 for blue to allow longer underground belt spans.
+    ug_max_reach_param: int = req.get("ug_max_reach", 4)
 
     edge_src: list[tuple[int, int]] = []
     edge_dst: list[tuple[int, int]] = []
@@ -1403,7 +1408,7 @@ def solve_pure_routing(req: dict) -> dict:
         for cy in range(height):
             for d in range(4):
                 dx, dy = DIR_STEPS[d]
-                for L in range(1, UG_MAX_REACH + 1):
+                for L in range(1, ug_max_reach_param + 1):
                     ncx, ncy = cx + L * dx, cy + L * dy
                     if 0 <= ncx < width and 0 <= ncy < height:
                         for e_idx in range(len(edges)):
@@ -1446,12 +1451,12 @@ def solve_pure_routing(req: dict) -> dict:
             for e_idx in range(len(edges)):
                 terms.append(sum(arcs[(cx, cy, d, e_idx)] for d in range(4)))
                 for d in range(4):
-                    for L in range(1, UG_MAX_REACH + 1):
+                    for L in range(1, ug_max_reach_param + 1):
                         if (cx, cy, d, L, e_idx) in ug_arcs:
                             terms.append(ug_arcs[(cx, cy, d, L, e_idx)])
                 for d in range(4):
                     dx, dy = DIR_STEPS[d]
-                    for L in range(1, UG_MAX_REACH + 1):
+                    for L in range(1, ug_max_reach_param + 1):
                         ucx, ucy = cx - L * dx, cy - L * dy
                         if (ucx, ucy, d, L, e_idx) in ug_arcs:
                             terms.append(ug_arcs[(ucx, ucy, d, L, e_idx)])
@@ -1464,7 +1469,7 @@ def solve_pure_routing(req: dict) -> dict:
         dx, dy = DIR_STEPS[d1]
         for k in range(1, L1):
             mcx, mcy = c1x + k * dx, c1y + k * dy
-            for L2 in range(1, UG_MAX_REACH + 1):
+            for L2 in range(1, ug_max_reach_param + 1):
                 ucx, ucy = mcx - L2 * dx, mcy - L2 * dy
                 if not (0 <= ucx < width and 0 <= ucy < height):
                     continue
@@ -1480,7 +1485,7 @@ def solve_pure_routing(req: dict) -> dict:
                 belt_outflow = sum(arcs[(cx, cy, d, e_idx)] for d in range(4))
                 ug_outflow_terms = []
                 for d in range(4):
-                    for L in range(1, UG_MAX_REACH + 1):
+                    for L in range(1, ug_max_reach_param + 1):
                         if (cx, cy, d, L, e_idx) in ug_arcs:
                             ug_outflow_terms.append(ug_arcs[(cx, cy, d, L, e_idx)])
                 ug_outflow = sum(ug_outflow_terms) if ug_outflow_terms else 0
@@ -1498,7 +1503,7 @@ def solve_pure_routing(req: dict) -> dict:
                 ug_inflow_terms = []
                 for d in range(4):
                     dx, dy = DIR_STEPS[d]
-                    for L in range(1, UG_MAX_REACH + 1):
+                    for L in range(1, ug_max_reach_param + 1):
                         ucx = cx - (L + 1) * dx
                         ucy = cy - (L + 1) * dy
                         if (ucx, ucy, d, L, e_idx) in ug_arcs:
@@ -1671,6 +1676,9 @@ def _solve_pure_routing_circuit_inner(req: dict, slack) -> dict:
     output_port_tiles = [tuple(t) for t in req["output_port_tiles"]]
     edges = req["edges"]
     n_edges = len(edges)
+    # ug_max_reach_param: transit-tile reach for this request (same semantics
+    # as solve_pure_routing). Defaults to 4 (yellow) = legacy UG_MAX_REACH - 1.
+    ug_max_reach_param: int = req.get("ug_max_reach", 4)
 
     edge_src: list[tuple[int, int]] = []
     edge_dst: list[tuple[int, int]] = []
@@ -1750,7 +1758,7 @@ def _solve_pure_routing_circuit_inner(req: dict, slack) -> dict:
                         belt_potential += 1
                     if not gen_ugs:
                         continue
-                    for L in range(2, UG_MAX_REACH + 1):
+                    for L in range(2, ug_max_reach_param + 1):
                         bx, by = cx + L * sdx, cy + L * sdy
                         cx_c, cy_c = cx + (L + 1) * sdx, cy + (L + 1) * sdy
                         if not (0 <= bx < width and 0 <= by < height):
@@ -1815,7 +1823,7 @@ def _solve_pure_routing_circuit_inner(req: dict, slack) -> dict:
                         continue
                     for d in range(4):
                         sdx, sdy = DIR_STEPS[d]
-                        for L in range(2, UG_MAX_REACH + 1):
+                        for L in range(2, ug_max_reach_param + 1):
                             bx, by = cx + L * sdx, cy + L * sdy
                             cx_c, cy_c = cx + (L + 1) * sdx, cy + (L + 1) * sdy
                             if not (0 <= bx < width and 0 <= by < height):
@@ -1911,7 +1919,7 @@ def _solve_pure_routing_circuit_inner(req: dict, slack) -> dict:
                         terms.append(belt_vars[(cx, cy, d, e_idx)])
                 for d in range(4):
                     sdx, sdy = DIR_STEPS[d]
-                    for L in range(2, UG_MAX_REACH + 1):
+                    for L in range(2, ug_max_reach_param + 1):
                         if (cx, cy, d, L, e_idx) in ug_vars:
                             terms.append(ug_vars[(cx, cy, d, L, e_idx)])
                         # UG outputs land at (cx, cy) when input was at
@@ -1931,7 +1939,7 @@ def _solve_pure_routing_circuit_inner(req: dict, slack) -> dict:
         sdx, sdy = DIR_STEPS[d1]
         for k in range(1, L1):
             mcx, mcy = c1x + k * sdx, c1y + k * sdy
-            for L2 in range(2, UG_MAX_REACH + 1):
+            for L2 in range(2, ug_max_reach_param + 1):
                 ucx, ucy = mcx - L2 * sdx, mcy - L2 * sdy
                 if not (0 <= ucx < width and 0 <= ucy < height):
                     continue
