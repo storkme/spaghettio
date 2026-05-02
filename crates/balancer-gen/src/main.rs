@@ -13,6 +13,7 @@
 //!     slot assignments as variables, phase 3.2A.2), reassembles the
 //!     entity list, verifies via classify_ref.
 
+use std::collections::HashSet;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
@@ -1355,6 +1356,18 @@ fn bake_missing_shapes() -> Result<(), Box<dyn std::error::Error>> {
             perm: Perm::Clos(2, 3),
             max_jh: 16,
         },
+        // (7, 2) — re-bake via Lib(7, 1) → Lib(1, 2). The python-derived
+        // (7, 2) in balancer_library.rs sideloads a UG input (validator
+        // emits `belt sideloads into UG input — only one lane loaded`),
+        // which the new lane gate would have rejected. Re-baking with the
+        // gate active produces a clean composition.
+        Recipe {
+            shape: (7, 2),
+            stage1: Stage::Lib(7, 1),
+            stage2: Stage::Lib(1, 2),
+            perm: Perm::Identity,
+            max_jh: 4,
+        },
         // (9, 2) — merge-then-balance via parallel((3, 1), 3) → (3, 2).
         Recipe {
             shape: (9, 2),
@@ -1388,12 +1401,40 @@ fn bake_missing_shapes() -> Result<(), Box<dyn std::error::Error>> {
     let mut shapes_skipped: Vec<(u32, u32)> = Vec::new();
     let library = balancer_templates();
     let total = recipes.len();
+    // Optional re-bake override: semicolon-separated `(m,n)` pairs that
+    // should be re-generated even though they exist in the library. Used
+    // to fix grandfathered-in templates that fail the current lane gate.
+    // Example: FUCKTORIO_REBAKE_SHAPES='(7,2);(9,2)'
+    let force_rebake: HashSet<(u32, u32)> = std::env::var("FUCKTORIO_REBAKE_SHAPES")
+        .ok()
+        .map(|s| {
+            s.split(';')
+                .filter_map(|tok| {
+                    let nums: Vec<u32> = tok
+                        .trim_matches(|c: char| !c.is_ascii_digit())
+                        .split(|c: char| !c.is_ascii_digit())
+                        .filter(|p| !p.is_empty())
+                        .filter_map(|p| p.parse().ok())
+                        .collect();
+                    if nums.len() == 2 {
+                        Some((nums[0], nums[1]))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     'outer: for (idx, r) in recipes.iter().enumerate() {
         let (m, n) = r.shape;
-        if library.contains_key(&(m, n)) {
+        if library.contains_key(&(m, n)) && !force_rebake.contains(&(m, n)) {
             println!("\n--- [{}/{total}] ({m}, {n}): SKIP (already in library) ---", idx + 1);
             shapes_skipped.push((m, n));
             continue;
+        }
+        if force_rebake.contains(&(m, n)) {
+            println!("\n--- [{}/{total}] ({m}, {n}): FORCE-REBAKE (FUCKTORIO_REBAKE_SHAPES) ---", idx + 1);
         }
         println!("\n--- [{}/{total}] ({m}, {n}): {:?} → {:?} via {:?} ---",
                  idx + 1, r.stage1, r.stage2, r.perm);
