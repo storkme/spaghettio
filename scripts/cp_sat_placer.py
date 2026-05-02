@@ -99,6 +99,18 @@ def _splitter_dir(pos: tuple[int, int] | tuple[int, int, int]) -> int:
 _SOLVER_PARAMS: dict[str, Any] = {"timeout_ms": 1000, "seed": None}
 
 
+# Module-level synth context. Populated by `main()` from the stdin
+# request. `graph` is the BalancerGraph dict (n_inputs, n_outputs,
+# n_splitters, arcs) and `arc_throughputs` is the parallel `Vec<f64>`
+# of per-arc steady-state rates from `verify_balancer`. Per-shape
+# placers consult these to derive route rates for the rate-aware
+# per-lane cap (see `_route_belts` `rates` / `lane_cap` parameters).
+# When `arc_throughputs` is absent (the Rust side couldn't verify or
+# it's a unit-rate dyadic shape), placers fall back to the discrete
+# default — same as the pre-rate-aware behaviour.
+_SYNTH_CTX: dict[str, Any] = {"graph": None, "arc_throughputs": None}
+
+
 def _make_solver():
     """Build a `CpSolver` with timeout and seed from `_SOLVER_PARAMS`.
 
@@ -407,6 +419,48 @@ def _route_belts(
                 out[t] = d
                 break
     return out
+
+
+# Rate-aware encoding multiplier. The Couëtoux verifier emits arc
+# throughputs as floats in `[0, n]`; we multiply by RATE_SCALE and round
+# to integers for CP-SAT. Scale 10 covers the rates in 1..=10 × 1..=10
+# coprime shapes (denominators 2, 4, 5, 8, 10) without precision loss.
+# `LANE_CAP_SCALED = RATE_SCALE // 2 = 5` matches the 0.5 normalised
+# lane cap.
+RATE_SCALE = 10
+LANE_CAP_SCALED = RATE_SCALE // 2
+
+
+def _arc_rate_scaled(throughput: float) -> int:
+    """Round a Couëtoux arc throughput to integer-scaled units.
+
+    Returns `round(throughput * RATE_SCALE)`. Rates in `1..=10 ×
+    1..=10` synth graphs are rationals with denominators dividing
+    `RATE_SCALE`, so rounding is exact.
+    """
+    return int(round(throughput * RATE_SCALE))
+
+
+def _find_arc_rate(src: dict[str, Any], dst: dict[str, Any]) -> int | None:
+    """Look up the synth-graph arc throughput for a given (src, dst).
+
+    `src` and `dst` are the JSON-shaped `Source` / `Sink` enum values:
+    `{"Input": i}`, `{"Output": j}`, or `{"Splitter": {"idx": i, "port": p}}`.
+
+    Returns the scaled integer rate (`int(throughput * RATE_SCALE)`)
+    or `None` if the synth context is missing or the arc isn't in the
+    graph. Per-shape placers use this to set per-route rates.
+    """
+    graph = _SYNTH_CTX.get("graph")
+    rates = _SYNTH_CTX.get("arc_throughputs")
+    if graph is None or rates is None:
+        return None
+    for i, arc in enumerate(graph.get("arcs", [])):
+        if arc.get("src") == src and arc.get("dst") == dst:
+            if i < len(rates):
+                return _arc_rate_scaled(rates[i])
+            return None
+    return None
 
 
 def emit(payload: dict[str, Any]) -> None:
@@ -843,6 +897,13 @@ def main() -> int:
     # `_make_solver` for the wiring.
     _SOLVER_PARAMS["timeout_ms"] = timeout_ms
     _SOLVER_PARAMS["seed"] = seed
+
+    # Stash synth context (graph + per-arc throughputs) so per-shape
+    # placers can derive route rates for the rate-aware per-lane cap.
+    # Both are optional — missing fields fall back to discrete unit
+    # rates in `_route_belts`.
+    _SYNTH_CTX["graph"] = request.get("graph")
+    _SYNTH_CTX["arc_throughputs"] = request.get("arc_throughputs")
 
     started = time.monotonic()
 
