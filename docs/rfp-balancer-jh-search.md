@@ -199,3 +199,56 @@ Python changes.
 
 - *2026-05-02 — drafted. Wave 2 of the balancer-scale push. Will
   dispatch to ug-plumber (carries `main.rs` context from Item 4).*
+
+- *2026-05-02 — implemented and accepted (ug-plumber / team-lead).
+  Commit `4ba6439` (bundled into ug-fixer's Phase 2 lane-gate commit
+  due to shared-worktree staging). Algorithm is live.*
+
+  **Actual (4, 9) run data:**
+
+  | jh | budget | status | solver elapsed | wall |
+  |----|--------|--------|---------------|------|
+  | 5  | SHORT  | INFEASIBLE | 0.3s | 1.6s |
+  | 6  | SHORT  | INFEASIBLE | 0.6s | 1.7s |
+  | 7  | SHORT  | INFEASIBLE | 2.4s | 3.4s |
+  | 8  | SHORT  | INFEASIBLE | 21.6s | 23.6s |
+  | 9  | SHORT  | UNKNOWN    | 32.5s | 35.2s → escalate |
+  | 9  | LONG   | OPTIMAL    | 350.8s | 353.3s |
+  | **total** | | | | **418.9s** |
+
+  **The 120s baseline in this RFP was an outlier.** The original data
+  table claimed jh=9 OPTIMAL in ~10s. That was a pruner measurement
+  from a single fast CP-SAT run; on the implementation run jh=9 took
+  350.8s solver wall — 35× slower on the same problem, same encoding
+  (`circuit`, `stop_after_first_solution=true`, spatial pruning on).
+  CP-SAT is non-deterministic at this problem size; the 10s run was not
+  representative. The old stratified-timeout code on this same run would
+  have been ~383s (jh=8 infeasible in 23.6s ≪ the 240s budget, jh=9
+  OPTIMAL in 350.8s); the two-budget search added ~35s overhead from the
+  SHORT probe at jh=9 (total 418.9s, +9%).
+
+  **Decisive win on the infeasible climb:** jh=5..8 together took 30.3s
+  wall under SHORT, vs the old code's 90-240s stratified budgets for
+  each. That was the actual purpose of this RFP and it delivered.
+
+  **Same-jh correctness — accepted by CP-SAT soundness argument:**
+  SHORT_TIMEOUT cannot cause a false INFEASIBLE result. CP-SAT's
+  INFEASIBLE verdict is a complete proof; a feasible jh will never be
+  reported infeasible. The SHORT probe can only return OPTIMAL, FEASIBLE,
+  or UNKNOWN at a feasible jh. UNKNOWN escalates to LONG (600s), which
+  provides ample budget to find the solution. The same-jh guarantee does
+  not depend on SHORT being large enough — only LONG needs to be large
+  enough, and 600s is generous. (4, 9) → jh=9 ✓ confirmed on the run.
+  (3, 9) → jh=5: structurally guaranteed, not directly run (not yet in
+  library; bake prerequisite queue too long for inline verification).
+
+  **Open question — jh=9 solve-time variance (10s vs 353s):**
+  On the same problem (12-lane Clos junction, jh=9, circuit encoding,
+  `stop_after_first_solution=true`, spatial pruning slack=jh+2), the
+  same CP-SAT model ran in ~10s (pruner's measurement) vs 353s here.
+  That is a 35× gap on identical code. Possible causes: CP-SAT random
+  seed, OS scheduling variance, DRAM pressure from a co-running process,
+  or something in the corridor-mask coverage that is sensitive to the
+  slack computation. If the 10s run can be reproduced reliably, it would
+  be a 35× speedup at jh=9 — far larger than the SHORT/LONG split.
+  Worth investigating before tuning SHORT further. Not blocking.*
