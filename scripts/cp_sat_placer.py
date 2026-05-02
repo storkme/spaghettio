@@ -163,7 +163,7 @@ def _route_belts(
     height: int,
     rates: list[int] | None = None,
     lane_cap: int = 1,
-) -> dict[tuple[int, int], int] | None:
+) -> dict[tuple[int, int], tuple[int, str]] | None:
     """Solve belt routing on the grid given fixed splitter positions.
 
     Each route in `routes` is `(src_tile, sink_tile, sink_dir, splitter_dir)`:
@@ -186,12 +186,26 @@ def _route_belts(
     channels at rate 0.2), pass per-route rates and a higher lane cap so
     multiple low-rate routes can share a lane when their sum fits.
 
-    Returns a dict mapping each used belt tile to a direction code (one
-    of 0/1/2/3 = N/E/S/W), or `None` if no routing is feasible.
+    Returns a dict mapping each used tile to `(direction_code, kind)`
+    where `kind ∈ {"belt", "ug_in", "ug_out"}` — surface transport-belt,
+    underground-belt input, or underground-belt output. Direction is
+    one of 0/1/2/3 = N/E/S/W. Returns `None` if no routing is feasible.
 
-    Splitter tiles are off-limits to belts. Multiple routes may share a
-    free tile if they agree on belt direction and the per-lane cap is
-    not exceeded — phase 2's lifted tile-exclusivity rule.
+    Splitter tiles are off-limits to belt entities. Multiple routes may
+    share a free tile if they agree on belt direction and the per-lane
+    cap is not exceeded — phase 2's lifted tile-exclusivity rule.
+
+    Underground belts (yellow tier, `UG_MAX_REACH = 4`) are modeled
+    globally: any route may use UG-pairs as alternative to surface belts
+    (a route enters underground at an input tile and emerges at the
+    paired output tile up to 4 tiles downstream). The tiles between
+    entry and exit are unconstrained — surface belts of any direction
+    can sit there. Two UG-pairs in the same direction whose tunnels
+    overlap are forbidden (otherwise Factorio's auto-pairing rule would
+    re-pair them). The objective penalises surface and UG entities
+    equally; UG is picked only when it shortens the path or unlocks a
+    crossing. v1 doesn't model lane-shared UGs (each UG pair carries
+    one route on one lane).
     """
     from ortools.sat.python import cp_model
 
@@ -214,16 +228,39 @@ def _route_belts(
         if src not in free_set or sink not in free_set:
             return None
 
+    def in_bounds(t: tuple[int, int]) -> bool:
+        return 0 <= t[0] < width and 0 <= t[1] < height
+
     model = cp_model.CpModel()
 
-    # Per free tile, per direction: belt[(t, d)] = "tile t carries a
-    # belt heading d".  Each tile has at most one direction.
+    # Per-tile per-direction entity occupancy. Each tile holds at most
+    # one entity; the entity is one of three kinds heading some direction.
+    # `belt[(t, d)]` is the union indicator (any kind heading d).
+    surf = {
+        (t, d): model.new_bool_var(f"surf_{t[0]}_{t[1]}_d{d}")
+        for t in free
+        for d in _INTERNAL_DIRS
+    }
+    ug_in = {
+        (t, d): model.new_bool_var(f"ugin_{t[0]}_{t[1]}_d{d}")
+        for t in free
+        for d in _INTERNAL_DIRS
+    }
+    ug_out = {
+        (t, d): model.new_bool_var(f"ugout_{t[0]}_{t[1]}_d{d}")
+        for t in free
+        for d in _INTERNAL_DIRS
+    }
     belt = {
         (t, d): model.new_bool_var(f"belt_{t[0]}_{t[1]}_d{d}")
         for t in free
         for d in _INTERNAL_DIRS
     }
     for t in free:
+        for d in _INTERNAL_DIRS:
+            model.add(belt[(t, d)] == surf[(t, d)] + ug_in[(t, d)] + ug_out[(t, d)])
+        # Tile uniqueness: at most one entity per tile (any direction,
+        # any kind). Sum over all (d, kind) ≤ 1.
         model.add(sum(belt[(t, d)] for d in _INTERNAL_DIRS) <= 1)
 
     # Per route, per free tile, per direction, per lane: route uses
@@ -242,14 +279,146 @@ def _route_belts(
         """Lane-summed flow indicator: 1 iff route r uses (t, d) on either lane."""
         return sum(f_lane[(r, t, d, lane)] for lane in range(n_lanes))
 
-    # Per-lane cap: weighted sum of route rates ≤ lane_cap.
-    # In the default discrete encoding (`rates = [1, 1, ...]`,
-    # `lane_cap = 1`), each lane carries at most one route. With
-    # rate-aware encoding, multiple low-rate routes can share a lane if
-    # their rates sum within `lane_cap`. This is the model unblock for
-    # coprime-shape feedback channels where 2-3 routes at rate 0.2 each
-    # need to share a lane (rate-aware: `0.4 ≤ 0.5`; discrete:
-    # `2 ≰ 1`).
+    # Per-route UG entry/exit indicators. Subset of f_lane: a route that
+    # enters/exits UG at (t, d, lane) is also "present" there.
+    ug_in_r = {
+        (r, t, d, lane): model.new_bool_var(
+            f"ugin_r{r}_{t[0]}_{t[1]}_d{d}_l{lane}"
+        )
+        for r in range(len(routes))
+        for t in free
+        for d in _INTERNAL_DIRS
+        for lane in range(n_lanes)
+    }
+    ug_out_r = {
+        (r, t, d, lane): model.new_bool_var(
+            f"ugout_r{r}_{t[0]}_{t[1]}_d{d}_l{lane}"
+        )
+        for r in range(len(routes))
+        for t in free
+        for d in _INTERNAL_DIRS
+        for lane in range(n_lanes)
+    }
+    for r in range(len(routes)):
+        for t in free:
+            for d in _INTERNAL_DIRS:
+                for lane in range(n_lanes):
+                    # UG role implies route presence.
+                    model.add(
+                        ug_in_r[(r, t, d, lane)] <= f_lane[(r, t, d, lane)]
+                    )
+                    model.add(
+                        ug_out_r[(r, t, d, lane)] <= f_lane[(r, t, d, lane)]
+                    )
+                    # A given (route, tile, direction, lane) can be at
+                    # most one of: UG entry, UG exit (or just surface).
+                    model.add(
+                        ug_in_r[(r, t, d, lane)] + ug_out_r[(r, t, d, lane)]
+                        <= 1
+                    )
+
+    # UG-pair vars. `pair[(r, t1, k, d, lane)]` = 1 iff route r enters
+    # UG at t1 with reach k in direction d on lane (exit at t1 + k·δ).
+    # Constructed sparsely: only valid (entry, exit) pairs where exit is
+    # in `free` and all interior tiles are in bounds.
+    pair: dict[
+        tuple[int, tuple[int, int], int, int, int], Any
+    ] = {}
+    for r in range(len(routes)):
+        for t1 in free:
+            for d in _INTERNAL_DIRS:
+                dx, dy = _DELTAS[d]
+                for k in range(2, UG_MAX_REACH + 1):
+                    t2 = (t1[0] + k * dx, t1[1] + k * dy)
+                    if t2 not in free_set:
+                        continue
+                    interior_ok = True
+                    for i in range(1, k):
+                        ti = (t1[0] + i * dx, t1[1] + i * dy)
+                        if not in_bounds(ti):
+                            interior_ok = False
+                            break
+                    if not interior_ok:
+                        continue
+                    for lane in range(n_lanes):
+                        pair[(r, t1, k, d, lane)] = model.new_bool_var(
+                            f"pair_r{r}_{t1[0]}_{t1[1]}_k{k}_d{d}_l{lane}"
+                        )
+
+    # Couple pair vars to per-route ug_in_r / ug_out_r.
+    for r in range(len(routes)):
+        for t in free:
+            for d in _INTERNAL_DIRS:
+                dx, dy = _DELTAS[d]
+                for lane in range(n_lanes):
+                    pairs_from_t = [
+                        pair[(r, t, k, d, lane)]
+                        for k in range(2, UG_MAX_REACH + 1)
+                        if (r, t, k, d, lane) in pair
+                    ]
+                    if pairs_from_t:
+                        model.add(
+                            ug_in_r[(r, t, d, lane)] == sum(pairs_from_t)
+                        )
+                    else:
+                        model.add(ug_in_r[(r, t, d, lane)] == 0)
+                    pairs_to_t = []
+                    for k in range(2, UG_MAX_REACH + 1):
+                        from_t = (t[0] - k * dx, t[1] - k * dy)
+                        if (r, from_t, k, d, lane) in pair:
+                            pairs_to_t.append(pair[(r, from_t, k, d, lane)])
+                    if pairs_to_t:
+                        model.add(
+                            ug_out_r[(r, t, d, lane)] == sum(pairs_to_t)
+                        )
+                    else:
+                        model.add(ug_out_r[(r, t, d, lane)] == 0)
+
+    # Couple per-tile ug_in / ug_out to per-route ug_in_r / ug_out_r
+    # (OR-style: per-tile = 1 iff some route uses it).
+    for t in free:
+        for d in _INTERNAL_DIRS:
+            in_route_uses = [
+                ug_in_r[(r, t, d, lane)]
+                for r in range(len(routes))
+                for lane in range(n_lanes)
+            ]
+            out_route_uses = [
+                ug_out_r[(r, t, d, lane)]
+                for r in range(len(routes))
+                for lane in range(n_lanes)
+            ]
+            big_m = max(1, len(routes) * n_lanes)
+            s_in = sum(in_route_uses)
+            model.add(s_in >= ug_in[(t, d)])
+            model.add(s_in <= big_m * ug_in[(t, d)])
+            s_out = sum(out_route_uses)
+            model.add(s_out >= ug_out[(t, d)])
+            model.add(s_out <= big_m * ug_out[(t, d)])
+
+    # Same-direction tunnel non-overlap: at most one tunnel covers any
+    # given tile in any given direction. A tunnel covers tiles
+    # `t1, t1+δ, ..., t1+k·δ` (k+1 tiles inclusive). Two same-direction
+    # tunnels whose coverage intervals overlap would confuse Factorio's
+    # auto-pairing rule (the entry pairs with the nearest exit), so we
+    # forbid the overlap up front.
+    for d in _INTERNAL_DIRS:
+        dx, dy = _DELTAS[d]
+        for t in free:
+            covers: list[Any] = []
+            for r in range(len(routes)):
+                for lane in range(n_lanes):
+                    for k in range(2, UG_MAX_REACH + 1):
+                        for offset in range(k + 1):
+                            t1 = (t[0] - offset * dx, t[1] - offset * dy)
+                            if (r, t1, k, d, lane) in pair:
+                                covers.append(pair[(r, t1, k, d, lane)])
+            if covers:
+                model.add(sum(covers) <= 1)
+
+    # Per-lane cap: weighted sum of route rates ≤ lane_cap. Applies at
+    # all tiles (surface, UG entry, UG exit) — items still have lane
+    # discipline through the underground.
     for t in free:
         for d in _INTERNAL_DIRS:
             for lane in range(n_lanes):
@@ -261,12 +430,8 @@ def _route_belts(
                     <= lane_cap
                 )
 
-    # Belt at (t, d) iff some route uses (t, d) on any lane. The
-    # tile-exclusivity constraint below means at most one route per
-    # tile in phase 1, so this acts like the old `belt = sum_r f`
-    # (each lane contributes 0 or 1 with at most one nonzero). In
-    # phase 2 sideloading lets two routes share a tile on different
-    # lanes; this OR-style equivalence still holds.
+    # belt[(t, d)] = OR over (r, lane) of f_lane[(r, t, d, lane)]:
+    # the entity heading d at t exists iff some route is at t heading d.
     for t in free:
         for d in _INTERNAL_DIRS:
             s = sum(
@@ -275,14 +440,9 @@ def _route_belts(
                 for lane in range(n_lanes)
             )
             model.add(s >= belt[(t, d)])
-            # Big-M = max possible route uses at this (t, d). With
-            # rate-aware caps allowing multiple low-rate routes per
-            # lane, this is bounded only by the total number of routes.
             model.add(s <= len(routes) * belt[(t, d)])
 
-    # Each route uses at most one (direction, lane) per tile. Without
-    # this a route could occupy multiple lanes/dirs at the same tile,
-    # which is incoherent for a single belt-path.
+    # Each route uses at most one (direction, lane) per tile.
     for r in range(len(routes)):
         for t in free:
             model.add(
@@ -294,25 +454,44 @@ def _route_belts(
                 <= 1
             )
 
-    # Per-route flow conservation, per-lane (phase 2).
+    # Forbid UG roles at each route's source and sink. The source is a
+    # surface drop from a splitter (or boundary input belt); the sink
+    # is a surface drop into a downstream splitter. Going underground
+    # at either endpoint would break source-lane forcing or sink-direction
+    # constraints.
+    for r, (src, sink, _sink_dir, _splitter_dir) in enumerate(routes):
+        for d in _INTERNAL_DIRS:
+            for lane in range(n_lanes):
+                model.add(ug_in_r[(r, src, d, lane)] == 0)
+                model.add(ug_out_r[(r, src, d, lane)] == 0)
+                model.add(ug_in_r[(r, sink, d, lane)] == 0)
+                model.add(ug_out_r[(r, sink, d, lane)] == 0)
+
+    # Per-route flow conservation, per-lane.
     # Items at tile t (direction d_recv, lane L_recv) arrive from a
     # neighbor n at side s of t whose belt heads d_pred = OPPOSITE(s).
     # The lane the items land on at t depends on s relative to d_recv:
     #   - s = OPPOSITE(d_recv) (back / natural input): lane preserved
     #     from predecessor.
-    #   - s = LEFT_OF(d_recv) (left side feed): items land on lane 0
-    #     regardless of predecessor lane.
-    #   - s = RIGHT_OF(d_recv) (right side feed): items land on lane 1
-    #     regardless of predecessor lane.
+    #   - s = LEFT_OF(d_recv) (left side feed): items land on lane 0.
+    #   - s = RIGHT_OF(d_recv) (right side feed): items land on lane 1.
     #   - s = d_recv (forward / output side): items can't enter.
+    # UG handling layered on top:
+    #   - At a UG entry tile (ug_in[(t, d_recv)] = 1): inflow comes via
+    #     surface predecessors (route arrives on surface, descends).
+    #   - At a UG exit tile (ug_out[(t, d_recv)] = 1): inflow is the
+    #     teleported flow from the paired entry; surface predecessors
+    #     don't feed an exit (Factorio physics).
+    #   - At an entry, the route's outflow doesn't continue on surface
+    #     in d (it teleports), so the surface successor check is
+    #     skipped when ug_in_r is set.
     for r, (src, sink, sink_dir, splitter_dir) in enumerate(routes):
-        # Sink belt's direction is fixed; route uses sink with
-        # exactly one lane (solver picks).
-        model.add(belt[(sink, sink_dir)] == 1)
+        # Sink belt direction is fixed; sink is surface (we forbade UG
+        # roles there above, so `surf[(sink, sink_dir)] = 1` here).
+        model.add(surf[(sink, sink_dir)] == 1)
         model.add(f_sum(r, sink, sink_dir) == 1)
 
         if src != sink:
-            # Source has exactly one (direction, lane).
             model.add(
                 sum(
                     f_lane[(r, src, d, lane)]
@@ -322,26 +501,14 @@ def _route_belts(
                 == 1
             )
 
-        # Source-lane forcing for splitter-output drops. The route is
-        # tagged with the upstream splitter's facing direction; for
-        # whichever direction the source tile picks, the items entering
-        # from the splitter side land on a specific lane via the
-        # sideload table. Without this, the model treats the source as
-        # free-laned and lets multiple drops "freely" pick whichever
-        # lane keeps them feasible — physics doesn't.
         if splitter_dir is not None:
             for d in _INTERNAL_DIRS:
                 if d == splitter_dir:
-                    continue  # head-on: occupy both lanes via duplicate routes
+                    continue
                 if d == _LEFT_OF[splitter_dir]:
-                    # Items from the splitter side land on lane 0.
                     model.add(f_lane[(r, src, d, 1)] == 0)
                 elif d == _RIGHT_OF[splitter_dir]:
-                    # Items from the splitter side land on lane 1.
                     model.add(f_lane[(r, src, d, 0)] == 0)
-                # OPPOSITE(splitter_dir): handled by existing geometry
-                # (splitter tile is not free, so the outflow constraint
-                # already disallows this direction at a drop tile).
 
         for t in free:
             for d_recv in _INTERNAL_DIRS:
@@ -349,43 +516,51 @@ def _route_belts(
                     in_flows = []
                     for s in _INTERNAL_DIRS:
                         if s == d_recv:
-                            continue  # output side
+                            continue
                         sdx, sdy = _DELTAS[s]
                         n = (t[0] + sdx, t[1] + sdy)
                         if n not in free_set:
                             continue
                         d_pred = _OPPOSITE[s]
                         if s == _OPPOSITE[d_recv]:
-                            # Natural input: predecessor on same lane.
                             in_flows.append(f_lane[(r, n, d_pred, L_recv)])
                         elif s == _LEFT_OF[d_recv]:
-                            # Sideload from left → lane 0 of t.
                             if L_recv == 0:
                                 for L in range(n_lanes):
                                     in_flows.append(f_lane[(r, n, d_pred, L)])
                         elif s == _RIGHT_OF[d_recv]:
-                            # Sideload from right → lane 1 of t.
                             if L_recv == 1:
                                 for L in range(n_lanes):
                                     in_flows.append(f_lane[(r, n, d_pred, L)])
 
-                    # Conservation only meaningful when the tile actually
-                    # has a belt heading d_recv; otherwise predecessor
-                    # contributions are accounted for at the tile's true
-                    # belt direction (or the tile is empty).
                     if t == src:
                         if in_flows:
                             model.add(sum(in_flows) == 0).only_enforce_if(
                                 belt[(t, d_recv)]
                             )
                     else:
+                        # Three mutually-exclusive cases by entity type:
+                        #   surf  : f_lane == sum(in_flows)
+                        #   ug_in : f_lane == sum(in_flows) (route arrives
+                        #           on surface, then descends)
+                        #   ug_out: f_lane == ug_out_r (teleport from
+                        #           paired entry; no surface predecessors)
+                        # When no entity at (t, d_recv): f_lane is forced
+                        # to 0 by the `belt = OR f_lane` aggregator.
                         model.add(
                             sum(in_flows) == f_lane[(r, t, d_recv, L_recv)]
-                        ).only_enforce_if(belt[(t, d_recv)])
+                        ).only_enforce_if(surf[(t, d_recv)])
+                        model.add(
+                            sum(in_flows) == f_lane[(r, t, d_recv, L_recv)]
+                        ).only_enforce_if(ug_in[(t, d_recv)])
+                        model.add(
+                            f_lane[(r, t, d_recv, L_recv)]
+                            == ug_out_r[(r, t, d_recv, L_recv)]
+                        ).only_enforce_if(ug_out[(t, d_recv)])
 
-            # Outflow: if heading direction d at t (any lane), next tile
-            # must be a free tile that the route uses too — except at
-            # the sink, whose next tile is the consumer splitter.
+            # Outflow: surface continuation. Skipped when the route
+            # enters UG here (ug_in_r=1), since the route teleports
+            # rather than continuing to the next surface tile.
             if t != sink:
                 for d in _INTERNAL_DIRS:
                     ndx, ndy = _DELTAS[d]
@@ -394,15 +569,21 @@ def _route_belts(
                         for lane in range(n_lanes):
                             model.add(f_lane[(r, t, d, lane)] == 0)
                     else:
-                        on_route_nxt = sum(f_sum(r, nxt, dd) for dd in _INTERNAL_DIRS)
+                        on_route_nxt = sum(
+                            f_sum(r, nxt, dd) for dd in _INTERNAL_DIRS
+                        )
                         for lane in range(n_lanes):
                             model.add(on_route_nxt >= 1).only_enforce_if(
-                                f_lane[(r, t, d, lane)]
+                                [
+                                    f_lane[(r, t, d, lane)],
+                                    ug_in_r[(r, t, d, lane)].Not(),
+                                ]
                             )
 
-    # Minimize total belts so the solver picks shortest paths instead of
-    # wandering. Without this, large grids admit many long-path
-    # alternatives that all satisfy the structural constraints.
+    # Minimise total entity count (surface + UG entries + UG exits each
+    # contribute 1). UG is picked only when it shortens the path or
+    # unlocks a crossing — for shapes that don't need it, the optimiser
+    # leaves UG vars at 0 and the surface-only model is recovered.
     model.minimize(
         sum(belt[(t, d)] for t in free for d in _INTERNAL_DIRS)
     )
@@ -412,11 +593,17 @@ def _route_belts(
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         return None
 
-    out: dict[tuple[int, int], int] = {}
+    out: dict[tuple[int, int], tuple[int, str]] = {}
     for t in free:
         for d in _INTERNAL_DIRS:
-            if solver.value(belt[(t, d)]):
-                out[t] = d
+            if solver.value(surf[(t, d)]):
+                out[t] = (d, "belt")
+                break
+            if solver.value(ug_in[(t, d)]):
+                out[t] = (d, "ug_in")
+                break
+            if solver.value(ug_out[(t, d)]):
+                out[t] = (d, "ug_out")
                 break
     return out
 
@@ -429,6 +616,13 @@ def _route_belts(
 # lane cap.
 RATE_SCALE = 10
 LANE_CAP_SCALED = RATE_SCALE // 2
+
+# Yellow underground-belt max reach: entry and exit can be up to 4 tiles
+# apart (i.e., exit = entry + k·δ for k ∈ {2, 3, 4}; k=1 is illegal as
+# the exit would touch the entry). Higher tiers (red=6, blue=8) are
+# deferred — the placer emits yellow undergrounds and the bus engine
+# upgrades them at stamping time if a faster belt tier is in use.
+UG_MAX_REACH = 4
 
 
 def _arc_rate_scaled(throughput: float) -> int:
@@ -672,10 +866,31 @@ def place_x_to_four(n: int) -> dict[str, Any]:
     entities: list[dict[str, Any]] = []
     for p in pos:
         entities.append({"name": "splitter", "x": p[0], "y": p[1], "direction": _FACTORIO_DIR[_splitter_dir(p)]})
-    for (x, y), d in belt_dirs.items():
-        entities.append(
-            {"name": "transport-belt", "x": x, "y": y, "direction": _FACTORIO_DIR[d]}
-        )
+    for (x, y), (d, kind) in belt_dirs.items():
+        if kind == "belt":
+            entities.append(
+                {"name": "transport-belt", "x": x, "y": y, "direction": _FACTORIO_DIR[d]}
+            )
+        elif kind == "ug_in":
+            entities.append(
+                {
+                    "name": "underground-belt",
+                    "x": x,
+                    "y": y,
+                    "direction": _FACTORIO_DIR[d],
+                    "io_type": "input",
+                }
+            )
+        else:  # ug_out
+            entities.append(
+                {
+                    "name": "underground-belt",
+                    "x": x,
+                    "y": y,
+                    "direction": _FACTORIO_DIR[d],
+                    "io_type": "output",
+                }
+            )
 
     output_y = pos[1][1] + 1
     output_cols = [pos[1][0], pos[1][0] + 1, pos[2][0], pos[2][0] + 1]
@@ -777,10 +992,31 @@ def place_x_to_eight(n: int) -> dict[str, Any]:
     entities: list[dict[str, Any]] = []
     for p in pos:
         entities.append({"name": "splitter", "x": p[0], "y": p[1], "direction": _FACTORIO_DIR[_splitter_dir(p)]})
-    for (x, y), d in belt_dirs.items():
-        entities.append(
-            {"name": "transport-belt", "x": x, "y": y, "direction": _FACTORIO_DIR[d]}
-        )
+    for (x, y), (d, kind) in belt_dirs.items():
+        if kind == "belt":
+            entities.append(
+                {"name": "transport-belt", "x": x, "y": y, "direction": _FACTORIO_DIR[d]}
+            )
+        elif kind == "ug_in":
+            entities.append(
+                {
+                    "name": "underground-belt",
+                    "x": x,
+                    "y": y,
+                    "direction": _FACTORIO_DIR[d],
+                    "io_type": "input",
+                }
+            )
+        else:  # ug_out
+            entities.append(
+                {
+                    "name": "underground-belt",
+                    "x": x,
+                    "y": y,
+                    "direction": _FACTORIO_DIR[d],
+                    "io_type": "output",
+                }
+            )
 
     output_y = pos[3][1] + 1
     leftmost = pos[3][0]
@@ -894,10 +1130,31 @@ def place_x_to_sixteen(n: int) -> dict[str, Any]:
     entities: list[dict[str, Any]] = []
     for p in pos:
         entities.append({"name": "splitter", "x": p[0], "y": p[1], "direction": _FACTORIO_DIR[_splitter_dir(p)]})
-    for (x, y), d in belt_dirs.items():
-        entities.append(
-            {"name": "transport-belt", "x": x, "y": y, "direction": _FACTORIO_DIR[d]}
-        )
+    for (x, y), (d, kind) in belt_dirs.items():
+        if kind == "belt":
+            entities.append(
+                {"name": "transport-belt", "x": x, "y": y, "direction": _FACTORIO_DIR[d]}
+            )
+        elif kind == "ug_in":
+            entities.append(
+                {
+                    "name": "underground-belt",
+                    "x": x,
+                    "y": y,
+                    "direction": _FACTORIO_DIR[d],
+                    "io_type": "input",
+                }
+            )
+        else:  # ug_out
+            entities.append(
+                {
+                    "name": "underground-belt",
+                    "x": x,
+                    "y": y,
+                    "direction": _FACTORIO_DIR[d],
+                    "io_type": "output",
+                }
+            )
 
     output_y = pos[7][1] + 1
     leftmost = pos[7][0]
