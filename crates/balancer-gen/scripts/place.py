@@ -1408,7 +1408,7 @@ def solve_pure_routing(req: dict) -> dict:
         for cy in range(height):
             for d in range(4):
                 dx, dy = DIR_STEPS[d]
-                for L in range(1, ug_max_reach_param + 1):
+                for L in range(2, ug_max_reach_param + 1):
                     ncx, ncy = cx + L * dx, cy + L * dy
                     if 0 <= ncx < width and 0 <= ncy < height:
                         for e_idx in range(len(edges)):
@@ -1451,12 +1451,12 @@ def solve_pure_routing(req: dict) -> dict:
             for e_idx in range(len(edges)):
                 terms.append(sum(arcs[(cx, cy, d, e_idx)] for d in range(4)))
                 for d in range(4):
-                    for L in range(1, ug_max_reach_param + 1):
+                    for L in range(2, ug_max_reach_param + 1):
                         if (cx, cy, d, L, e_idx) in ug_arcs:
                             terms.append(ug_arcs[(cx, cy, d, L, e_idx)])
                 for d in range(4):
                     dx, dy = DIR_STEPS[d]
-                    for L in range(1, ug_max_reach_param + 1):
+                    for L in range(2, ug_max_reach_param + 1):
                         ucx, ucy = cx - L * dx, cy - L * dy
                         if (ucx, ucy, d, L, e_idx) in ug_arcs:
                             terms.append(ug_arcs[(ucx, ucy, d, L, e_idx)])
@@ -1469,7 +1469,7 @@ def solve_pure_routing(req: dict) -> dict:
         dx, dy = DIR_STEPS[d1]
         for k in range(1, L1):
             mcx, mcy = c1x + k * dx, c1y + k * dy
-            for L2 in range(1, ug_max_reach_param + 1):
+            for L2 in range(2, ug_max_reach_param + 1):
                 ucx, ucy = mcx - L2 * dx, mcy - L2 * dy
                 if not (0 <= ucx < width and 0 <= ucy < height):
                     continue
@@ -1485,7 +1485,7 @@ def solve_pure_routing(req: dict) -> dict:
                 belt_outflow = sum(arcs[(cx, cy, d, e_idx)] for d in range(4))
                 ug_outflow_terms = []
                 for d in range(4):
-                    for L in range(1, ug_max_reach_param + 1):
+                    for L in range(2, ug_max_reach_param + 1):
                         if (cx, cy, d, L, e_idx) in ug_arcs:
                             ug_outflow_terms.append(ug_arcs[(cx, cy, d, L, e_idx)])
                 ug_outflow = sum(ug_outflow_terms) if ug_outflow_terms else 0
@@ -1503,7 +1503,7 @@ def solve_pure_routing(req: dict) -> dict:
                 ug_inflow_terms = []
                 for d in range(4):
                     dx, dy = DIR_STEPS[d]
-                    for L in range(1, ug_max_reach_param + 1):
+                    for L in range(2, ug_max_reach_param + 1):
                         ucx = cx - (L + 1) * dx
                         ucy = cy - (L + 1) * dy
                         if (ucx, ucy, d, L, e_idx) in ug_arcs:
