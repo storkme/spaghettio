@@ -509,6 +509,12 @@ def _route_belts(
                     model.add(f_lane[(r, src, d, 1)] == 0)
                 elif d == _RIGHT_OF[splitter_dir]:
                     model.add(f_lane[(r, src, d, 0)] == 0)
+                elif d == _OPPOSITE[splitter_dir]:
+                    # Belt heading back into the splitter face would push
+                    # items into the splitter front — invalid in Factorio
+                    # and breaks topology recovery (creates self-loops).
+                    for lane in range(n_lanes):
+                        model.add(f_lane[(r, src, d, lane)] == 0)
 
         for t in free:
             for d_recv in _INTERNAL_DIRS:
@@ -591,6 +597,11 @@ def _route_belts(
     solver = _make_solver()
     status = solver.solve(model)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        print(
+            f"_route_belts: status={solver.status_name(status)} "
+            f"wall={solver.wall_time:.1f}s",
+            file=sys.stderr,
+        )
         return None
 
     out: dict[tuple[int, int], tuple[int, str]] = {}
@@ -1374,6 +1385,169 @@ def place_one_to_five() -> dict[str, Any]:
     }
 
 
+def place_one_to_six() -> dict[str, Any]:
+    """`(1, 6)` coprime balancer.
+
+    Synth structure: 8 splitters, identical topology to `(1, 5)` —
+    M (merger), S1 (root), S2/S3 (L1), S4-S7 (L2). Only the leaf
+    arc assignment differs: S4/S5/S6 each emit two outputs (= 6 outputs
+    total), and S7 emits two feedback arcs.
+
+    Rates: M outs at 0.667, S1 outs at 0.667, L1 outs at 0.333, L2 outs
+    at 0.167. Feedback total = 2 × 0.167 = 0.333 — fits a single
+    east-side sideload onto lane 0 of M.in1, so no lane balancer is
+    needed (unlike `(1, 5)`).
+
+    Local rate scale `12` so 0.667 (= 8/12), 0.333 (= 4/12), 0.167 (= 2/12),
+    and 0.0833 (per-lane head-on for output drops, = 1/12) all encode
+    as integers.
+
+    Layout reuses the `(1, 5)` upper structure verbatim:
+
+    ::
+
+        Row 0: external input (4, 0).
+        Row 1: M at (4, 1).
+        Row 2: S1 at (4, 2) tight-stack.
+        Row 3: S2 (3, 3), S3 (5, 3) staggered tight-stack.
+        Row 4: L1→L2 routing row.
+        Row 5: L2 splitters A=(1, 5), B=(3, 5), C=(5, 5), D=(7, 5).
+        Row 6: 6 outputs (cols 1-6) + 2 feedback drops (cols 7, 8).
+        Row 7+: feedback channel wraps east+north back to (5, 0).
+    """
+    # Tighter grid than `(1, 5)` because no lane balancer is needed —
+    # feedback total 0.333 fits a single east-side sideload into M.in1.
+    width, height = 10, 9
+    DIR_S = 2
+
+    LOCAL_RATE_SCALE = 12
+    LOCAL_LANE_CAP = LOCAL_RATE_SCALE // 2  # = 6 (= 0.5 absolute)
+
+    def r(numer: int, denom: int) -> int:
+        # Exact fraction encoding to avoid float rounding issues for 1/3, 1/6, 1/12.
+        scaled = numer * LOCAL_RATE_SCALE
+        if scaled % denom != 0:
+            raise ValueError(
+                f"rate {numer}/{denom} doesn't fit scale {LOCAL_RATE_SCALE}"
+            )
+        return scaled // denom
+
+    M = (4, 1)
+    S1 = (4, 2)
+    S2 = (3, 3)
+    S3 = (5, 3)
+    A = (1, 5)
+    B_pos = (3, 5)
+    C = (5, 5)
+    D = (7, 5)
+    pos: list[tuple[int, int] | tuple[int, int, int]] = [
+        M, S1, S2, S3, A, B_pos, C, D,
+    ]
+
+    routes: list[
+        tuple[tuple[int, int], tuple[int, int], int, int | None]
+    ] = []
+    rates: list[int] = []
+
+    # External input boundary at (4, 0) S — 2 lane-routes pin both lanes.
+    routes.append(((4, 0), (4, 0), DIR_S, None))
+    routes.append(((4, 0), (4, 0), DIR_S, None))
+    rates.extend([r(1, 2), r(1, 2)])  # 0.5 per lane
+
+    # L1 → L2 arcs (rate 1/3 each).
+    # S2.out0 → A: perpendicular west drop, route to (1, 4) S sink.
+    routes.append(((3, 4), (1, 4), DIR_S, DIR_S))
+    rates.append(r(1, 3))
+    # S2.out1 → B: head-on south at (4, 4). 2 lane-routes (1/6 per lane).
+    routes.append(((4, 4), (4, 4), DIR_S, DIR_S))
+    routes.append(((4, 4), (4, 4), DIR_S, DIR_S))
+    rates.extend([r(1, 6), r(1, 6)])
+    # S3.out0 → C: head-on south at (5, 4). 2 lane-routes.
+    routes.append(((5, 4), (5, 4), DIR_S, DIR_S))
+    routes.append(((5, 4), (5, 4), DIR_S, DIR_S))
+    rates.extend([r(1, 6), r(1, 6)])
+    # S3.out1 → D: perpendicular east drop, route to (7, 4) S sink.
+    routes.append(((6, 4), (7, 4), DIR_S, DIR_S))
+    rates.append(r(1, 3))
+
+    # L2 → outputs (6 head-on south drops at row 6 across A, B, C).
+    output_drops: list[tuple[int, int]] = [
+        (1, 6), (2, 6), (3, 6), (4, 6), (5, 6), (6, 6),
+    ]
+    for drop in output_drops:
+        routes.append((drop, drop, DIR_S, DIR_S))
+        routes.append((drop, drop, DIR_S, DIR_S))
+        rates.extend([r(1, 12), r(1, 12)])  # 1/12 per lane head-on
+
+    # 2 feedback arcs from D back to M.in1 at (5, 0).
+    feedback_drops: list[tuple[int, int]] = [(7, 6), (8, 6)]
+    for src in feedback_drops:
+        routes.append((src, (5, 0), DIR_S, DIR_S))
+        rates.append(r(1, 6))
+
+    belt_dirs = _route_belts(
+        pos,
+        routes,
+        width,
+        height,
+        rates=rates,
+        lane_cap=LOCAL_LANE_CAP,
+    )
+    if belt_dirs is None:
+        raise RuntimeError("(1, 6) belt routing UNSAT")
+
+    entities: list[dict[str, Any]] = []
+    for p in pos:
+        entities.append(
+            {
+                "name": "splitter",
+                "x": p[0],
+                "y": p[1],
+                "direction": _FACTORIO_DIR[_splitter_dir(p)],
+            }
+        )
+    for (x, y), (d, kind) in belt_dirs.items():
+        if kind == "belt":
+            entities.append(
+                {
+                    "name": "transport-belt",
+                    "x": x,
+                    "y": y,
+                    "direction": _FACTORIO_DIR[d],
+                }
+            )
+        elif kind == "ug_in":
+            entities.append(
+                {
+                    "name": "underground-belt",
+                    "x": x,
+                    "y": y,
+                    "direction": _FACTORIO_DIR[d],
+                    "io_type": "input",
+                }
+            )
+        else:  # ug_out
+            entities.append(
+                {
+                    "name": "underground-belt",
+                    "x": x,
+                    "y": y,
+                    "direction": _FACTORIO_DIR[d],
+                    "io_type": "output",
+                }
+            )
+
+    return {
+        "n_inputs": 1,
+        "n_outputs": 6,
+        "width": width,
+        "height": height,
+        "entities": entities,
+        "input_tiles": [[4, 0]],
+        "output_tiles": [[c, 6] for c in (1, 2, 3, 4, 5, 6)],
+    }
+
+
 def main() -> int:
     raw = sys.stdin.read()
     try:
@@ -1419,6 +1593,7 @@ def main() -> int:
         (1, 16): lambda: place_x_to_sixteen(1),
         (2, 16): lambda: place_x_to_sixteen(2),
         (1, 5): place_one_to_five,
+        (1, 6): place_one_to_six,
     }
 
     if (n, m) in geometry:

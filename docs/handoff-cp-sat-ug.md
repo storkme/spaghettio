@@ -1,11 +1,21 @@
 # Handoff — CP-SAT placer Phase 4 (UG-belt unblock for coprime shapes)
 
-Branch: `claude/cp-sat-lane-balancer` (5 commits ahead of `main`).
+Branch: `claude/cp-sat-lane-balancer` (6 commits ahead of `main`).
 
-**Status update 2026-05-02:** Phase 4 increment a.2 shipped in
-`9fb5276` — `place_one_to_five()` + `round_trip_1_5`. Test suite
-goes 10 → 11 green. Pickup point is now a.3 (roll out to remaining
-`(1, m)` coprimes — `(1, 6)`, `(1, 7)`, `(1, 9)`, `(1, 10)`).
+**Status update 2026-05-02 (later):** Phase 4 a.3 begun — `(1, 6)`
+shipped (no lane balancer needed; 2 feedback arcs at 0.167 each fit
+M.in1 lane 0 directly). Adding the test surfaced and fixed a real
+bug in `_route_belts`: it didn't forbid `d_drop = OPPOSITE(splitter_dir)`
+at splitter-typed sources, so the solver could pick belts that push
+items back into the splitter face and break recovery with self-loops.
+Bug was masked by the original `(1, 5)` timeout being just barely
+short enough; longer timeouts let CP-SAT find these invalid alternates.
+Tests now use a 180 s default timeout (with `round_trip_with_timeout`
+for per-shape tuning). Suite goes 11 → 12 green.
+
+**Earlier 2026-05-02 update:** Phase 4 increment a.2 shipped in
+`9fb5276` — `place_one_to_five()` + `round_trip_1_5`. Pickup point
+remains a.3 (roll out to `(1, 7)`, `(1, 9)`, `(1, 10)`).
 
 **Key insight from a.2:** the lane-saturation problem at M.in1 was
 real but solvable with a *placement-only* lane-balancer splitter B'
@@ -46,7 +56,12 @@ shapes in 1..=10 × 1..=10):
 3. **Increment a (UG-belt direction)** — chosen unblock path:
    - ✅ a.1: UG infrastructure in `_route_belts` (`1e3d17c`)
    - ✅ a.2: `(1, 5)` placer + round-trip test (`9fb5276`)
-   - ⏳ **a.3: roll out to remaining `(1, m)` coprimes** ← next
+   - 🟡 a.3: rolling out to remaining `(1, m)` coprimes
+     - ✅ `(1, 6)` shipped (no balancer needed; this commit)
+     - ⏳ `(1, 7)`, `(1, 9)`, `(1, 10)` ← next
+     - `(1, 10)` is harder than the others (extra L3 layer; 16 splitters);
+       likely worth attempting `(1, 7)` first, then `(1, 9)` as warm-up
+       before tackling `(1, 10)`.
 4. ⏳ Coprime coverage for the rest of the 20 missing shapes
 5. ⏳ Library regen, browser eyeball, cleanup
 

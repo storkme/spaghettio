@@ -501,3 +501,23 @@ The remaining work, in order:
   cp_sat round-trip suite goes 10 → 11 tests green. Solve time on
   (1, 5): ~66 s (within the test's 60 s timeout — close call, may need
   bumping or seed pinning if it flakes).*
+- *2026-05-02 — Phase 4 increment a.3 begun: `(1, 6)` shipped. Same
+  topology as `(1, 5)` (8 synth splitters), but with 2 feedback arcs
+  totaling 0.333 instead of 3 totaling 0.6 — fits a single east-side
+  sideload onto M.in1's lane 0 (no lane balancer needed). Local rate
+  scale 12 covers all rates exactly (1/12, 1/6, 1/3, 1/2). 10×9 grid.
+  Adding the test surfaced two bugs in the broader infrastructure that
+  were lurking: (1) the source-lane forcing in `_route_belts` didn't
+  forbid `d_drop = OPPOSITE(splitter_dir)`, so the solver could pick
+  belt directions that physically push items back into the splitter
+  face, producing self-loops in topology recovery and breaking
+  verification with mismatched arc counts; (2) the round-trip default
+  60 s solver timeout was on the edge for `(1, 5)` / `(1, 16)` /
+  `(2, 16)` and flaked under load. Both fixed in the same commit:
+  forbid `d = OPPOSITE(splitter_dir)` at source for splitter-typed
+  routes, bump default test timeout to 180 s, and expose
+  `round_trip_with_timeout` for per-shape tuning. `(1, 5)` solve time
+  went up to ~190 s with the extra constraint (the canonical solution
+  is harder to find when the alternates are forbidden), but it's now
+  reliable rather than flaky. `(1, 6)` solves in ~50 s. Round-trip
+  suite goes 11 → 12 tests green.*

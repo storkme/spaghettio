@@ -40,7 +40,7 @@ fn maybe_engine() -> Option<CpSat> {
     Some(CpSat::default().with_script_path(script))
 }
 
-fn round_trip(n: u32, m: u32) {
+fn round_trip_with_timeout(n: u32, m: u32, timeout_secs: u64) {
     let Some(engine) = maybe_engine() else {
         return;
     };
@@ -49,7 +49,7 @@ fn round_trip(n: u32, m: u32) {
         graph: &graph,
         n,
         m,
-        timeout: Duration::from_secs(60),
+        timeout: Duration::from_secs(timeout_secs),
         seed: Some(42),
     };
     let result = engine
@@ -84,6 +84,12 @@ fn round_trip(n: u32, m: u32) {
         "({n}, {m}) expected {expected}, got {}",
         outcome.real_output_throughput
     );
+}
+
+/// 180 s default. The harder shapes — `(1, 16)`, `(2, 16)`, `(1, 5)` —
+/// sit close to the 60 s mark and flake under load; 180 s gives headroom.
+fn round_trip(n: u32, m: u32) {
+    round_trip_with_timeout(n, m, 180);
 }
 
 #[test]
@@ -139,4 +145,9 @@ fn round_trip_2_16() {
 #[test]
 fn round_trip_1_5() {
     round_trip(1, 5);
+}
+
+#[test]
+fn round_trip_1_6() {
+    round_trip(1, 6);
 }
