@@ -310,6 +310,171 @@ def place_one_to_eight() -> dict[str, Any]:
     }
 
 
+def place_one_to_sixteen() -> dict[str, Any]:
+    """`(1, 16)` 15-splitter tree, placed via real CP-SAT.
+
+    Phase 3 of the placement RFP — extends the routing-row pattern to a
+    second level. The CP-SAT model has 15 splitter rectangles with
+    `add_no_overlap_2d` plus structural equalities:
+      - Routing-row offset between root and level-1: `(root.x ± 4,
+        root.y + 2)`. The 1-row gap holds a 9-belt
+        W-W-W-W-S-E-E-E-S routing strip that spreads root's two
+        outputs to columns 4 apart.
+      - Routing-row offset between level-1 and level-2: `(L1.x ± 2,
+        L1.y + 2)`. The 1-row gap holds two mirrored W-W-S / E-S
+        routing groups (10 belts, columns -6..-2 and +2..+6 of the
+        root) that spread each L1 splitter's two outputs by ±2.
+      - Tight-stack between level-2 and level-3: each level-3
+        splitter is at `(L2.x ± 1, L2.y + 1)`.
+
+    Width 16, height 8. Like (1, 4) and (1, 8), the constraint set has
+    only one valid assignment (root at (7, 1)); the model proves this
+    rather than asserting it. Splitter ordering is BFS:
+    0 = root, 1-2 = level-1, 3-6 = level-2, 7-14 = level-3.
+    """
+    from ortools.sat.python import cp_model
+
+    width, height = 16, 8
+    n_splitters = 15
+    model = cp_model.CpModel()
+    xs = [model.new_int_var(0, width - 2, f"x{i}") for i in range(n_splitters)]
+    ys = [model.new_int_var(0, height - 1, f"y{i}") for i in range(n_splitters)]
+
+    x_intervals = [
+        model.new_interval_var(xs[i], 2, xs[i] + 2, f"x_iv_{i}")
+        for i in range(n_splitters)
+    ]
+    y_intervals = [
+        model.new_interval_var(ys[i], 1, ys[i] + 1, f"y_iv_{i}")
+        for i in range(n_splitters)
+    ]
+    model.add_no_overlap_2d(x_intervals, y_intervals)
+
+    # Routing-row offsets between root and level-1 (4-col spread).
+    model.add(xs[1] == xs[0] - 4)
+    model.add(xs[2] == xs[0] + 4)
+    model.add(ys[1] == ys[0] + 2)
+    model.add(ys[2] == ys[0] + 2)
+
+    # Routing-row offsets between level-1 and level-2 (2-col spread per L1).
+    for parent, (lc, rc) in [(1, (3, 4)), (2, (5, 6))]:
+        model.add(xs[lc] == xs[parent] - 2)
+        model.add(xs[rc] == xs[parent] + 2)
+        model.add(ys[lc] == ys[parent] + 2)
+        model.add(ys[rc] == ys[parent] + 2)
+
+    # Tight-stack between level-2 and level-3.
+    for parent, (lc, rc) in [(3, (7, 8)), (4, (9, 10)), (5, (11, 12)), (6, (13, 14))]:
+        model.add(xs[lc] == xs[parent] - 1)
+        model.add(xs[rc] == xs[parent] + 1)
+        model.add(ys[lc] == ys[parent] + 1)
+        model.add(ys[rc] == ys[parent] + 1)
+
+    # Boundary rows: input row above root, output row below level-3.
+    model.add(ys[0] >= 1)
+    model.add(ys[0] + 6 <= height - 1)
+    model.add(xs[0] - 7 >= 0)
+    model.add(xs[0] + 8 <= width - 1)
+
+    solver = cp_model.CpSolver()
+    status = solver.solve(model)
+    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        raise RuntimeError(f"(1, 16) CP-SAT model UNSAT: {solver.status_name(status)}")
+
+    pos = [(solver.value(xs[i]), solver.value(ys[i])) for i in range(n_splitters)]
+    x_root, y_root = pos[0]
+
+    entities: list[dict[str, Any]] = []
+    # Input belt above root's right tile.
+    entities.append(
+        {"name": "transport-belt", "x": x_root + 1, "y": y_root - 1, "direction": 4}
+    )
+    # Splitters.
+    for x, y in pos:
+        entities.append({"name": "splitter", "x": x, "y": y, "direction": 4})
+
+    # Routing strip between root (y_root) and level-1 (y_root + 2).
+    # 9 belts: W on cols [x_root-3 .. x_root], S on x_root-4, E on
+    # cols [x_root+1 .. x_root+3], S on x_root+4. Direction codes:
+    # 0=N, 2=E, 4=S, 6=W.
+    routing_y_1 = y_root + 1
+    entities.append(
+        {"name": "transport-belt", "x": x_root - 4, "y": routing_y_1, "direction": 4}
+    )
+    for col in range(x_root - 3, x_root + 1):
+        entities.append(
+            {"name": "transport-belt", "x": col, "y": routing_y_1, "direction": 6}
+        )
+    for col in range(x_root + 1, x_root + 4):
+        entities.append(
+            {"name": "transport-belt", "x": col, "y": routing_y_1, "direction": 2}
+        )
+    entities.append(
+        {"name": "transport-belt", "x": x_root + 4, "y": routing_y_1, "direction": 4}
+    )
+
+    # Routing strip between level-1 (y_root + 2) and level-2 (y_root + 4).
+    # Two groups, each spreading an L1 splitter's outputs by ±2.
+    # Left group (under L1-left): W on its two output cols and the col to
+    #   their west, then S two cols further west; E on the col east of
+    #   port-1's output, then S one further east.
+    # Right group: mirror layout under L1-right.
+    routing_y_2 = pos[1][1] + 1
+    # Left group: under L1-left at x_l1l = x_root - 4.
+    x_l1l = pos[1][0]
+    entities.append(
+        {"name": "transport-belt", "x": x_l1l - 2, "y": routing_y_2, "direction": 4}
+    )
+    entities.append(
+        {"name": "transport-belt", "x": x_l1l - 1, "y": routing_y_2, "direction": 6}
+    )
+    entities.append(
+        {"name": "transport-belt", "x": x_l1l, "y": routing_y_2, "direction": 6}
+    )
+    entities.append(
+        {"name": "transport-belt", "x": x_l1l + 1, "y": routing_y_2, "direction": 2}
+    )
+    entities.append(
+        {"name": "transport-belt", "x": x_l1l + 2, "y": routing_y_2, "direction": 4}
+    )
+    # Right group: under L1-right at x_l1r = x_root + 4.
+    x_l1r = pos[2][0]
+    entities.append(
+        {"name": "transport-belt", "x": x_l1r - 2, "y": routing_y_2, "direction": 4}
+    )
+    entities.append(
+        {"name": "transport-belt", "x": x_l1r - 1, "y": routing_y_2, "direction": 6}
+    )
+    entities.append(
+        {"name": "transport-belt", "x": x_l1r, "y": routing_y_2, "direction": 6}
+    )
+    entities.append(
+        {"name": "transport-belt", "x": x_l1r + 1, "y": routing_y_2, "direction": 2}
+    )
+    entities.append(
+        {"name": "transport-belt", "x": x_l1r + 2, "y": routing_y_2, "direction": 4}
+    )
+
+    # Output row at y = level-3.y + 1, cols spanning all 8 level-3 splitters.
+    output_y = pos[7][1] + 1
+    leftmost = pos[7][0]
+    rightmost = pos[14][0] + 1
+    output_cols = list(range(leftmost, rightmost + 1))
+    for col in output_cols:
+        entities.append(
+            {"name": "transport-belt", "x": col, "y": output_y, "direction": 4}
+        )
+    return {
+        "n_inputs": 1,
+        "n_outputs": 16,
+        "width": width,
+        "height": height,
+        "entities": entities,
+        "input_tiles": [[x_root + 1, y_root - 1]],
+        "output_tiles": [[c, output_y] for c in output_cols],
+    }
+
+
 def main() -> int:
     raw = sys.stdin.read()
     try:
@@ -334,6 +499,7 @@ def main() -> int:
         (2, 2): lambda: place_single_splitter(2, 2),
         (1, 4): place_one_to_four,
         (1, 8): place_one_to_eight,
+        (1, 16): place_one_to_sixteen,
     }
 
     if (n, m) in geometry:
