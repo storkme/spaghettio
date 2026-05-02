@@ -680,9 +680,7 @@ def solve_synth_place(req: dict) -> dict:
             return 0
         return sum(terms)
 
-    # Routing arcs (belts only — UG support deferred to 3.2D.2 along
-    # with anti-U-turn / shortest-path constraints to prevent CP-SAT
-    # from finding valid-but-nonsensical loop layouts).
+    # Routing arcs over the full grid.
     arcs: dict[tuple[int, int, int, int], any] = {}
     for cx in range(width):
         for cy in range(height):
@@ -691,7 +689,26 @@ def solve_synth_place(req: dict) -> dict:
                     arcs[(cx, cy, d, e_idx)] = model.NewBoolVar(
                         f"a_{cx}_{cy}_{d}_{e_idx}"
                     )
+
+    # UG arcs. Direction restricted to facing (south) so the solver
+    # doesn't take U-turns via UGs heading away from the main flow
+    # direction — the conservation alone allows valid-but-nonsensical
+    # loops via reverse-direction UGs (a (1, 4) spike with all 4
+    # directions allowed produced a north-bound UG from the output
+    # row, classified MX2a). All-south matches the all-south splitter
+    # constraint in this phase.
     ug_arcs: dict[tuple[int, int, int, int, int], any] = {}
+    for cx in range(width):
+        for cy in range(height):
+            d = facing
+            dx, dy = DIR_STEPS[d]
+            for L in range(1, UG_MAX_REACH + 1):
+                ncx, ncy = cx + L * dx, cy + L * dy
+                if 0 <= ncx < width and 0 <= ncy < height:
+                    for e_idx in range(len(edges)):
+                        ug_arcs[(cx, cy, d, L, e_idx)] = model.NewBoolVar(
+                            f"u_{cx}_{cy}_{d}_{L}_{e_idx}"
+                        )
 
     # No arcs leaving the grid.
     for cx in range(width):
@@ -819,6 +836,19 @@ def solve_synth_place(req: dict) -> dict:
                 src_term = is_src_term_at(cx, cy, e_idx)
                 dst_term = is_dst_term_at(cx, cy, e_idx)
                 model.Add(outflow - inflow == src_term - dst_term)
+
+    # Objective: minimize total entity count (regular arcs + UG endpoints).
+    # Without this CP-SAT can find valid-but-meandering paths that take
+    # detours around the grid; with it, paths are pulled tight, U-turns
+    # become uneconomical, and UGs are used only when they save cells.
+    entity_terms = []
+    for var in arcs.values():
+        entity_terms.append(var)
+    for var in ug_arcs.values():
+        # Each UG counts as 2 entities (input + output).
+        entity_terms.append(var)
+        entity_terms.append(var)
+    model.Minimize(sum(entity_terms))
 
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = 60.0

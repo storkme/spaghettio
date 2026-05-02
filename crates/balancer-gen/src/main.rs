@@ -176,16 +176,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("no routing round-trips passed".into());
     }
 
-    // Mode D — phase 3.2D.1 synth-place at fixed bbox. CP-SAT picks
-    // splitter positions, IO port columns, slot assignments, and belt
-    // routing all in one shot. Tested on south-only shapes against the
-    // library bbox.
-    println!("\n=== phase 3.2D.1: synth-place at fixed bbox ===");
+    // Mode D — phase 3.2D synth-place at fixed bbox. CP-SAT picks
+    // splitter positions, IO port columns, slot assignments, and belt +
+    // UG routing all in one shot, with a minimum-entity-count objective
+    // to keep paths tight. All-south splitters; UGs restricted to south.
+    println!("\n=== phase 3.2D: synth-place at fixed bbox ===");
     let mut synth_results: Vec<(String, Result<(), String>)> = Vec::new();
     for &(label, shape) in &[
-        ("(2, 2)", (2u32, 2u32)),
+        ("(1, 2)", (1u32, 2u32)),
+        ("(2, 2)", (2, 2)),
         ("(2, 4)", (2, 4)),
         ("(1, 4)", (1, 4)),
+        ("(4, 4)", (4, 4)),
+        ("(1, 8)", (1, 8)),
     ] {
         let result = spike_synth_place(label, shape).map_err(|e| e.to_string());
         if result.is_err() {

@@ -436,3 +436,29 @@ re-litigating decisions:
   visiting each cell at most once (no-loop constraint), add direction
   bool var per splitter, re-test on the (1, 3)/(2, 3)/(4, 8)/(3, 5)
   corpus that worked in Mode C. Phases 3.3, 3.4 remain unblocked.*
+
+- *2026-05-02 (later) — phase 3.2D.2 partial — UG re-enablement
+  shipped via two complementary mechanisms:*
+
+  1. *UGs restricted to the splitters' facing direction (south for now).
+     This rules out reverse-direction UGs that produced the (1, 4)
+     U-turn pathology in 3.2D.1.*
+  2. *`Minimize(sum_of(arcs) + 2*sum_of(ug_arcs))` objective. With this,
+     CP-SAT pulls paths tight automatically — long detours become
+     uneconomical, and UGs are only chosen when they save total cells
+     (UG = 2 entities for skipping ≥1 transit cell). The objective
+     also doubles as a bbox-tightening proxy: layouts compress around
+     the splitter cluster instead of meandering across the grid.*
+
+  *Round-trip on south-only shapes at library bbox: 6/6 pass —
+  (1, 2), (2, 2), (2, 4), (1, 4), (4, 4), (1, 8). (4, 4) needed UGs
+  (8 of them at bbox 4×10, vs 4 in the library which uses sideloading
+  we don't model); classifies as Balanced. (1, 8) is a 7-splitter
+  3-deep tree, solved at 8×5 in ~5s.*
+
+  *Direction freedom and bbox minimization-as-objective are still
+  outstanding. With direction freedom, shapes like (1, 3) (which uses
+  one west-facing splitter for its back-loop) come into Mode D's reach
+  too. With explicit bbox minimization (e.g., minimize `max(sx) +
+  max(sy)`), Mode D could find layouts tighter than the library where
+  the library's choice was suboptimal.*
