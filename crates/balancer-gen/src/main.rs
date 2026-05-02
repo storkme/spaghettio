@@ -52,6 +52,8 @@ enum PlaceRequest {
         n_outputs: u32,
         n_splitters: usize,
         edges: Vec<EdgeReq>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        allow_dirs: Option<Vec<u8>>,
     },
 }
 
@@ -182,6 +184,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // to keep paths tight. All-south splitters; UGs restricted to south.
     println!("\n=== phase 3.2D: synth-place at fixed bbox ===");
     let mut synth_results: Vec<(String, Result<(), String>)> = Vec::new();
+    println!("--- default: south-only splitters ---");
     for &(label, shape) in &[
         ("(1, 2)", (1u32, 2u32)),
         ("(2, 2)", (2, 2)),
@@ -190,7 +193,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("(4, 4)", (4, 4)),
         ("(1, 8)", (1, 8)),
     ] {
-        let result = spike_synth_place(label, shape).map_err(|e| e.to_string());
+        let result = spike_synth_place(label, shape, None).map_err(|e| e.to_string());
+        if result.is_err() {
+            println!("  ✗ {label}: {}", result.as_ref().err().unwrap());
+        }
+        synth_results.push((label.to_string(), result));
+    }
+    println!("\n--- 3.2D.3: full direction freedom ---");
+    {
+        let label = "(1, 3)";
+        let shape = (1u32, 3u32);
+        let result =
+            spike_synth_place(label, shape, Some(vec![0u8, 2, 4, 6])).map_err(|e| e.to_string());
         if result.is_err() {
             println!("  ✗ {label}: {}", result.as_ref().err().unwrap());
         }
@@ -481,6 +495,7 @@ fn build_edge_reqs(
 fn spike_synth_place(
     label: &str,
     shape: (u32, u32),
+    allow_dirs: Option<Vec<u8>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let templates = balancer_templates();
     let lib = templates
@@ -490,24 +505,30 @@ fn spike_synth_place(
         .map_err(|e| format!("recover_graph failed: {e:?}"))?;
     let edge_reqs = build_edge_reqs(&topology)?;
 
+    let label_suffix = match &allow_dirs {
+        Some(_) => " [4-dir]",
+        None => "",
+    };
     let req = PlaceRequest::SynthPlace {
         bounds: (lib.width, lib.height),
         n_inputs: shape.0,
         n_outputs: shape.1,
         n_splitters: topology.n_splitters,
         edges: edge_reqs,
+        allow_dirs,
     };
 
     println!(
-        "\n--- {label} ---  bbox: {}×{}  splitters: {}  edges: {}",
+        "\n--- {label}{label_suffix} ---  bbox: {}×{}  splitters: {}  edges: {}",
         lib.width,
         lib.height,
         topology.n_splitters,
         topology.edges.len()
     );
     let resp = run_solver(&req)?;
-    if resp.elapsed_s > 60.0 {
-        return Err(format!("kill: solve time {:.1}s > 60s", resp.elapsed_s).into());
+    let budget = if label_suffix.is_empty() { 60.0 } else { 120.0 };
+    if resp.elapsed_s > budget {
+        return Err(format!("kill: solve time {:.1}s > {}s", resp.elapsed_s, budget).into());
     }
     if resp.status != "OPTIMAL" && resp.status != "FEASIBLE" {
         return Err(format!("solver returned {} (no placement)", resp.status).into());

@@ -462,3 +462,48 @@ re-litigating decisions:
   too. With explicit bbox minimization (e.g., minimize `max(sx) +
   max(sy)`), Mode D could find layouts tighter than the library where
   the library's choice was suboptimal.*
+
+- *2026-05-02 (later still) — phase 3.2D.3 partial — direction freedom
+  shipped as **opt-in** via `solve_synth_place_dirs` and the
+  `allow_dirs` request param. The default `solve_synth_place` keeps
+  the fast all-south path intact; setting `allow_dirs = [0, 2, 4, 6]`
+  routes to the heavier path that adds:*
+
+  - *`dir_at[s, d]` bool per (splitter, direction), `ExactlyOne` per
+    splitter; disallowed dirs pinned to 0.*
+  - *Reified `cell_facing_d[c, d]` per (cell, direction) from
+    per-(s, c, d) `AND` of anchor + dir vars.*
+  - *(anchor cell, dir) combo forbidden when the second tile lands OOG
+    or in an IO row — the rectangle dimensions become
+    direction-dependent (2×1 for N/S, 1×2 for E/W).*
+  - *Routing direction constraints reified per facing: at cell c
+    facing d, outflow only in direction d, inflow only from direction d
+    (replaces the all-south hardcoded constraint).*
+  - *UGs allowed in all 4 directions; entity-count objective is
+    relied on to keep them out of detour positions.*
+
+  *Default south-only path: 6/6 still pass at the same speeds as
+  3.2D.2 (no regression). Direction-freedom path on (1, 3): solver
+  finds OPTIMAL in ~20s; solution is materially more compact than the
+  library (12 entities vs 19) but classifies as MX2b
+  (`ThroughputUnlimited`) instead of MX3 (`Balanced`). The back-loop
+  is implemented but doesn't preserve composition mixing — likely
+  because the `AtMostOne` slot constraint is necessary but not
+  sufficient for proper lane mixing in the presence of UGs feeding
+  into a back-loop's merge splitter.*
+
+  *The MX2b regression isn't a direction-freedom bug per se — it's a
+  gap in the encoding of lane-level semantics. Closing it likely needs
+  one of: (a) explicit lane-level conservation per UG/belt, (b) ban on
+  UGs feeding back-loop merge splitters, or (c) post-hoc rejection of
+  MX2b solutions via a CP-SAT bool that's tied to the classifier's
+  composition test. None are obvious one-liners; deferred to 3.2D.4 if
+  we choose to chase MX3 from synth (vs. ship MX2b — which might be
+  perfectly acceptable for the bus pipeline since its existing layouts
+  classify MX3 only sometimes anyway).*
+
+  *Phases 3.2D.4 (bbox minimization), 3.3 (measure vs Factorio-SAT),
+  and 3.4 (bake into library_extra) remain unblocked — direction
+  freedom is now available behind the opt-in flag for shapes that
+  need it, and the default fast path is unchanged for shapes that
+  don't.*

@@ -932,12 +932,435 @@ def solve_synth_place(req: dict) -> dict:
     return out
 
 
+def solve_synth_place_dirs(req: dict) -> dict:
+    """Phase 3.2D.3 — synth-place with splitter direction freedom.
+
+    Same input as `solve_synth_place` plus `allow_dirs`: a list of
+    Factorio directions (0/2/4/6 = N/E/S/W) the solver can pick from.
+    Splitter rectangle dimensions become direction-dependent (2×1 for
+    N/S, 1×2 for E/W), the second tile's offset depends on direction,
+    and routing direction constraints are reified per cell × direction.
+
+    Materially slower than the all-south path: more variables, more
+    reification overhead, and CP-SAT has more layout possibilities to
+    rule out. Use only for shapes whose library/topology actually
+    requires non-south splitters (e.g., (1, 3) with its back-loop).
+    """
+    n_inputs = req["n_inputs"]
+    n_outputs = req["n_outputs"]
+    n_splitters = req["n_splitters"]
+    edges = req["edges"]
+    width, height = req["bounds"]
+    factorio_to_internal = {0: 0, 2: 1, 4: 2, 6: 3}
+    raw_dirs = req.get("allow_dirs", [4])
+    allowed_dirs_internal = sorted({factorio_to_internal[d] for d in raw_dirs})
+
+    if height < 3 or width < max(n_inputs, n_outputs, 2):
+        return {"status": "INFEASIBLE", "elapsed_s": 0.0,
+                "error": f"bbox {width}×{height} too small"}
+
+    model = cp_model.CpModel()
+    sp_y_lo, sp_y_hi = 1, height - 2
+
+    def second_offset(d: int) -> tuple[int, int]:
+        return (1, 0) if d in (0, 2) else (0, 1)
+
+    # Splitter position + direction vars.
+    anchor_at: dict[tuple[int, int, int], any] = {}
+    for s in range(n_splitters):
+        cells = []
+        for cx in range(width):
+            for cy in range(sp_y_lo, sp_y_hi + 1):
+                v = model.NewBoolVar(f"a_{s}_{cx}_{cy}")
+                anchor_at[(s, cx, cy)] = v
+                cells.append(v)
+        model.AddExactlyOne(cells)
+
+    dir_at: dict[tuple[int, int], any] = {}
+    for s in range(n_splitters):
+        dirs = []
+        for d in range(4):
+            v = model.NewBoolVar(f"d_{s}_{d}")
+            dir_at[(s, d)] = v
+            if d not in allowed_dirs_internal:
+                model.Add(v == 0)
+            dirs.append(v)
+        model.AddExactlyOne(dirs)
+
+    # Forbid (anchor, dir) where second tile is OOG or in IO row.
+    for s in range(n_splitters):
+        for cx in range(width):
+            for cy in range(sp_y_lo, sp_y_hi + 1):
+                for d in allowed_dirs_internal:
+                    ofx, ofy = second_offset(d)
+                    bx, by = cx + ofx, cy + ofy
+                    if not (0 <= bx < width and sp_y_lo <= by <= sp_y_hi):
+                        model.AddBoolOr([
+                            anchor_at[(s, cx, cy)].Not(),
+                            dir_at[(s, d)].Not(),
+                        ])
+
+    # Cell-level reified facing predicates.
+    def reify_and(name: str, vs: list) -> any:
+        b = model.NewBoolVar(name)
+        model.AddBoolAnd(vs).OnlyEnforceIf(b)
+        model.AddBoolOr([v.Not() for v in vs]).OnlyEnforceIf(b.Not())
+        return b
+
+    cell_facing_d: dict[tuple[int, int, int], any] = {}
+    for cx in range(width):
+        for cy in range(height):
+            for d in range(4):
+                if d not in allowed_dirs_internal:
+                    cell_facing_d[(cx, cy, d)] = 0
+                    continue
+                terms = []
+                for s in range(n_splitters):
+                    if (s, cx, cy) in anchor_at:
+                        terms.append(reify_and(
+                            f"af_{s}_{cx}_{cy}_{d}",
+                            [anchor_at[(s, cx, cy)], dir_at[(s, d)]],
+                        ))
+                    ofx, ofy = second_offset(d)
+                    if (s, cx - ofx, cy - ofy) in anchor_at:
+                        terms.append(reify_and(
+                            f"sf_{s}_{cx}_{cy}_{d}",
+                            [anchor_at[(s, cx - ofx, cy - ofy)], dir_at[(s, d)]],
+                        ))
+                cfd = model.NewBoolVar(f"cf_{cx}_{cy}_{d}")
+                if terms:
+                    model.Add(sum(terms) == cfd)
+                else:
+                    model.Add(cfd == 0)
+                cell_facing_d[(cx, cy, d)] = cfd
+
+    is_splitter_cell: dict[tuple[int, int], any] = {}
+    for cx in range(width):
+        for cy in range(height):
+            isp = model.NewBoolVar(f"isp_{cx}_{cy}")
+            terms = [cell_facing_d[(cx, cy, d)] for d in allowed_dirs_internal]
+            model.Add(sum(terms) == isp)
+            model.Add(isp <= 1)
+            is_splitter_cell[(cx, cy)] = isp
+
+    # IO port columns.
+    ix = [model.NewIntVar(0, width - 1, f"ix{i}") for i in range(n_inputs)]
+    ox = [model.NewIntVar(0, width - 1, f"ox{j}") for j in range(n_outputs)]
+    for i in range(n_inputs - 1):
+        model.Add(ix[i] < ix[i + 1])
+    for j in range(n_outputs - 1):
+        model.Add(ox[j] < ox[j + 1])
+
+    input_at, output_at = {}, {}
+    for i in range(n_inputs):
+        for cx in range(width):
+            v = model.NewBoolVar(f"in_{i}_at_{cx}")
+            model.Add(ix[i] == cx).OnlyEnforceIf(v)
+            model.Add(ix[i] != cx).OnlyEnforceIf(v.Not())
+            input_at[(i, cx)] = v
+    for j in range(n_outputs):
+        for cx in range(width):
+            v = model.NewBoolVar(f"out_{j}_at_{cx}")
+            model.Add(ox[j] == cx).OnlyEnforceIf(v)
+            model.Add(ox[j] != cx).OnlyEnforceIf(v.Not())
+            output_at[(j, cx)] = v
+
+    # Slot vars (3.2A.2).
+    src_slot_anchor, src_slot_second = {}, {}
+    dst_slot_anchor, dst_slot_second = {}, {}
+    for e_idx, edge in enumerate(edges):
+        if edge["src_kind"] == "Splitter":
+            a = model.NewBoolVar(f"sa_e{e_idx}")
+            b = model.NewBoolVar(f"ss_e{e_idx}")
+            model.AddExactlyOne([a, b])
+            src_slot_anchor[e_idx] = a
+            src_slot_second[e_idx] = b
+        if edge["dst_kind"] == "Splitter":
+            a = model.NewBoolVar(f"da_e{e_idx}")
+            b = model.NewBoolVar(f"ds_e{e_idx}")
+            model.AddExactlyOne([a, b])
+            dst_slot_anchor[e_idx] = a
+            dst_slot_second[e_idx] = b
+
+    for s in range(n_splitters):
+        for users in (
+            [src_slot_anchor[e] for e, edge in enumerate(edges)
+             if edge["src_kind"] == "Splitter" and edge["src_idx"] == s],
+            [src_slot_second[e] for e, edge in enumerate(edges)
+             if edge["src_kind"] == "Splitter" and edge["src_idx"] == s],
+            [dst_slot_anchor[e] for e, edge in enumerate(edges)
+             if edge["dst_kind"] == "Splitter" and edge["dst_idx"] == s],
+            [dst_slot_second[e] for e, edge in enumerate(edges)
+             if edge["dst_kind"] == "Splitter" and edge["dst_idx"] == s],
+        ):
+            if len(users) >= 2:
+                model.AddAtMostOne(users)
+
+    def is_src_term_at(cx: int, cy: int, e_idx: int):
+        edge = edges[e_idx]
+        if edge["src_kind"] == "InputPort":
+            return input_at[(edge["src_idx"], cx)] if cy == 0 else 0
+        s = edge["src_idx"]
+        terms = []
+        if (s, cx, cy) in anchor_at:
+            terms.append(reify_and(
+                f"src_a_{s}_{cx}_{cy}_e{e_idx}",
+                [anchor_at[(s, cx, cy)], src_slot_anchor[e_idx]],
+            ))
+        for d in allowed_dirs_internal:
+            ofx, ofy = second_offset(d)
+            if (s, cx - ofx, cy - ofy) in anchor_at:
+                terms.append(reify_and(
+                    f"src_s_{s}_{cx}_{cy}_d{d}_e{e_idx}",
+                    [anchor_at[(s, cx - ofx, cy - ofy)], dir_at[(s, d)],
+                     src_slot_second[e_idx]],
+                ))
+        return sum(terms) if terms else 0
+
+    def is_dst_term_at(cx: int, cy: int, e_idx: int):
+        edge = edges[e_idx]
+        if edge["dst_kind"] == "OutputPort":
+            return output_at[(edge["dst_idx"], cx)] if cy == height - 1 else 0
+        s = edge["dst_idx"]
+        terms = []
+        if (s, cx, cy) in anchor_at:
+            terms.append(reify_and(
+                f"dst_a_{s}_{cx}_{cy}_e{e_idx}",
+                [anchor_at[(s, cx, cy)], dst_slot_anchor[e_idx]],
+            ))
+        for d in allowed_dirs_internal:
+            ofx, ofy = second_offset(d)
+            if (s, cx - ofx, cy - ofy) in anchor_at:
+                terms.append(reify_and(
+                    f"dst_s_{s}_{cx}_{cy}_d{d}_e{e_idx}",
+                    [anchor_at[(s, cx - ofx, cy - ofy)], dir_at[(s, d)],
+                     dst_slot_second[e_idx]],
+                ))
+        return sum(terms) if terms else 0
+
+    # Routing arcs + UG arcs (UGs in all 4 directions to match direction freedom).
+    arcs = {}
+    for cx in range(width):
+        for cy in range(height):
+            for d in range(4):
+                for e_idx in range(len(edges)):
+                    arcs[(cx, cy, d, e_idx)] = model.NewBoolVar(f"a_{cx}_{cy}_{d}_{e_idx}")
+    ug_arcs = {}
+    for cx in range(width):
+        for cy in range(height):
+            for d in range(4):
+                dx, dy = DIR_STEPS[d]
+                for L in range(1, UG_MAX_REACH + 1):
+                    ncx, ncy = cx + L * dx, cy + L * dy
+                    if 0 <= ncx < width and 0 <= ncy < height:
+                        for e_idx in range(len(edges)):
+                            ug_arcs[(cx, cy, d, L, e_idx)] = model.NewBoolVar(
+                                f"u_{cx}_{cy}_{d}_{L}_{e_idx}")
+
+    # No arcs leaving grid + at-most-one direction per (cell, edge).
+    for cx in range(width):
+        for cy in range(height):
+            for d in range(4):
+                ncx, ncy = cx + DIR_STEPS[d][0], cy + DIR_STEPS[d][1]
+                if not (0 <= ncx < width and 0 <= ncy < height):
+                    for e_idx in range(len(edges)):
+                        model.Add(arcs[(cx, cy, d, e_idx)] == 0)
+            for e_idx in range(len(edges)):
+                model.AddAtMostOne([arcs[(cx, cy, d, e_idx)] for d in range(4)])
+
+    # Splitter cell direction + transit constraints, reified per facing.
+    for cx in range(width):
+        for cy in range(height):
+            isp = is_splitter_cell[(cx, cy)]
+            for d_facing in allowed_dirs_internal:
+                cfd = cell_facing_d[(cx, cy, d_facing)]
+                for e_idx in range(len(edges)):
+                    for d_other in range(4):
+                        if d_other == d_facing:
+                            continue
+                        model.Add(arcs[(cx, cy, d_other, e_idx)] + cfd <= 1)
+                        for L in range(1, UG_MAX_REACH + 1):
+                            if (cx, cy, d_other, L, e_idx) in ug_arcs:
+                                model.Add(ug_arcs[(cx, cy, d_other, L, e_idx)] + cfd <= 1)
+                        ncx = cx - DIR_STEPS[d_other][0]
+                        ncy = cy - DIR_STEPS[d_other][1]
+                        if 0 <= ncx < width and 0 <= ncy < height:
+                            model.Add(arcs[(ncx, ncy, d_other, e_idx)] + cfd <= 1)
+                        for L in range(1, UG_MAX_REACH + 1):
+                            ucx = cx - L * DIR_STEPS[d_other][0]
+                            ucy = cy - L * DIR_STEPS[d_other][1]
+                            if (ucx, ucy, d_other, L, e_idx) in ug_arcs:
+                                model.Add(ug_arcs[(ucx, ucy, d_other, L, e_idx)] + cfd <= 1)
+            # No UG entities at splitter cells.
+            for e_idx in range(len(edges)):
+                for d in range(4):
+                    for L in range(1, UG_MAX_REACH + 1):
+                        if (cx, cy, d, L, e_idx) in ug_arcs:
+                            model.Add(ug_arcs[(cx, cy, d, L, e_idx)] + isp <= 1)
+                        dx, dy = DIR_STEPS[d]
+                        ucx, ucy = cx - L * dx, cy - L * dy
+                        if (ucx, ucy, d, L, e_idx) in ug_arcs:
+                            model.Add(ug_arcs[(ucx, ucy, d, L, e_idx)] + isp <= 1)
+
+    # At most one entity per non-splitter cell.
+    for cx in range(width):
+        for cy in range(height):
+            isp = is_splitter_cell[(cx, cy)]
+            terms = []
+            for e_idx in range(len(edges)):
+                terms.append(sum(arcs[(cx, cy, d, e_idx)] for d in range(4)))
+                for d in range(4):
+                    for L in range(1, UG_MAX_REACH + 1):
+                        if (cx, cy, d, L, e_idx) in ug_arcs:
+                            terms.append(ug_arcs[(cx, cy, d, L, e_idx)])
+                for d in range(4):
+                    dx, dy = DIR_STEPS[d]
+                    for L in range(1, UG_MAX_REACH + 1):
+                        ucx, ucy = cx - L * dx, cy - L * dy
+                        if (ucx, ucy, d, L, e_idx) in ug_arcs:
+                            terms.append(ug_arcs[(ucx, ucy, d, L, e_idx)])
+            model.Add(sum(terms) <= 1).OnlyEnforceIf(isp.Not())
+
+    # UG pairing rule.
+    for (c1x, c1y, d1, L1, e1), arc1 in ug_arcs.items():
+        dx, dy = DIR_STEPS[d1]
+        for k in range(1, L1):
+            mcx, mcy = c1x + k * dx, c1y + k * dy
+            for L2 in range(1, UG_MAX_REACH + 1):
+                ucx, ucy = mcx - L2 * dx, mcy - L2 * dy
+                if not (0 <= ucx < width and 0 <= ucy < height):
+                    continue
+                for e2 in range(len(edges)):
+                    if (ucx, ucy, d1, L2, e2) in ug_arcs and (ucx, ucy, d1, L2, e2) != (c1x, c1y, d1, L1, e1):
+                        model.AddBoolOr([arc1.Not(), ug_arcs[(ucx, ucy, d1, L2, e2)].Not()])
+
+    # Conservation.
+    for cx in range(width):
+        for cy in range(height):
+            for e_idx in range(len(edges)):
+                belt_outflow = sum(arcs[(cx, cy, d, e_idx)] for d in range(4))
+                ug_outflow_terms = []
+                for d in range(4):
+                    for L in range(1, UG_MAX_REACH + 1):
+                        if (cx, cy, d, L, e_idx) in ug_arcs:
+                            ug_outflow_terms.append(ug_arcs[(cx, cy, d, L, e_idx)])
+                ug_outflow = sum(ug_outflow_terms) if ug_outflow_terms else 0
+
+                belt_inflow_terms = []
+                for d in range(4):
+                    ncx = cx - DIR_STEPS[d][0]
+                    ncy = cy - DIR_STEPS[d][1]
+                    if 0 <= ncx < width and 0 <= ncy < height:
+                        belt_inflow_terms.append(arcs[(ncx, ncy, d, e_idx)])
+                belt_inflow = sum(belt_inflow_terms) if belt_inflow_terms else 0
+
+                ug_inflow_terms = []
+                for d in range(4):
+                    dx, dy = DIR_STEPS[d]
+                    for L in range(1, UG_MAX_REACH + 1):
+                        ucx = cx - (L + 1) * dx
+                        ucy = cy - (L + 1) * dy
+                        if (ucx, ucy, d, L, e_idx) in ug_arcs:
+                            ug_inflow_terms.append(ug_arcs[(ucx, ucy, d, L, e_idx)])
+                ug_inflow = sum(ug_inflow_terms) if ug_inflow_terms else 0
+
+                outflow = belt_outflow + ug_outflow
+                inflow = belt_inflow + ug_inflow
+                src_term = is_src_term_at(cx, cy, e_idx)
+                dst_term = is_dst_term_at(cx, cy, e_idx)
+                model.Add(outflow - inflow == src_term - dst_term)
+
+    # Objective: minimize entity count.
+    entity_terms = []
+    for var in arcs.values():
+        entity_terms.append(var)
+    for var in ug_arcs.values():
+        entity_terms.append(var)
+        entity_terms.append(var)
+    model.Minimize(sum(entity_terms))
+
+    solver = cp_model.CpSolver()
+    solver.parameters.max_time_in_seconds = 120.0
+    t0 = time.monotonic()
+    status = solver.Solve(model)
+    elapsed = time.monotonic() - t0
+
+    out: dict = {"status": solver.StatusName(status), "elapsed_s": elapsed}
+    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        return out
+
+    splitters_out = []
+    for s in range(n_splitters):
+        anchor_cell = next(((cx, cy) for (ss, cx, cy), v in anchor_at.items()
+                            if ss == s and solver.Value(v) == 1), None)
+        chosen_d = next((d for d in range(4) if solver.Value(dir_at[(s, d)]) == 1), None)
+        ax, ay = anchor_cell
+        splitters_out.append({"x": ax, "y": ay, "dir": INTERNAL_TO_FACTORIO_DIR[chosen_d]})
+
+    splitter_cells: set[tuple[int, int]] = set()
+    for sp in splitters_out:
+        ax, ay = sp["x"], sp["y"]
+        chosen_d_internal = factorio_to_internal[sp["dir"]]
+        ofx, ofy = second_offset(chosen_d_internal)
+        splitter_cells.add((ax, ay))
+        splitter_cells.add((ax + ofx, ay + ofy))
+
+    out["splitters"] = splitters_out
+    out["input_port_tiles"] = [[solver.Value(ix[i]), 0] for i in range(n_inputs)]
+    out["output_port_tiles"] = [[solver.Value(ox[j]), height - 1] for j in range(n_outputs)]
+
+    belts, ugs = [], []
+    for (cx, cy, d, L, e_idx), arc_var in ug_arcs.items():
+        if solver.Value(arc_var) == 1:
+            fdir = INTERNAL_TO_FACTORIO_DIR[d]
+            ugs.append({"x": cx, "y": cy, "dir": fdir, "io": "input", "edge_idx": e_idx})
+            dx, dy = DIR_STEPS[d]
+            ugs.append({"x": cx + L * dx, "y": cy + L * dy, "dir": fdir, "io": "output", "edge_idx": e_idx})
+
+    ug_cells = {(u["x"], u["y"]) for u in ugs}
+    for cx in range(width):
+        for cy in range(height):
+            if (cx, cy) in splitter_cells or (cx, cy) in ug_cells:
+                continue
+            emitted = False
+            for d in range(4):
+                for e_idx in range(len(edges)):
+                    if solver.Value(arcs[(cx, cy, d, e_idx)]) == 1:
+                        belts.append({"x": cx, "y": cy,
+                                      "dir": INTERNAL_TO_FACTORIO_DIR[d], "edge_idx": e_idx})
+                        emitted = True
+                        break
+                if emitted:
+                    break
+            if emitted:
+                continue
+            for d in range(4):
+                ncx, ncy = cx - DIR_STEPS[d][0], cy - DIR_STEPS[d][1]
+                if not (0 <= ncx < width and 0 <= ncy < height):
+                    continue
+                for e_idx in range(len(edges)):
+                    if solver.Value(arcs[(ncx, ncy, d, e_idx)]) == 1:
+                        belts.append({"x": cx, "y": cy,
+                                      "dir": INTERNAL_TO_FACTORIO_DIR[d], "edge_idx": e_idx})
+                        emitted = True
+                        break
+                if emitted:
+                    break
+
+    out["belts"] = belts
+    out["ugs"] = ugs
+    return out
+
+
 def main() -> None:
     req = json.load(sys.stdin)
     if "edges" in req and "splitter_positions" in req:
         out = solve_routing(req)
     elif "edges" in req and "n_splitters" in req:
-        out = solve_synth_place(req)
+        if "allow_dirs" in req and req["allow_dirs"] != [4]:
+            out = solve_synth_place_dirs(req)
+        else:
+            out = solve_synth_place(req)
     else:
         out = solve_overlap_only(req)
     json.dump(out, sys.stdout)
