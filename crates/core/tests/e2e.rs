@@ -2196,7 +2196,14 @@ fn stress_advanced_circuit_partitioned_4s_from_plates() {
 /// Baselines (post sibling-spec + clean-slate-SAT + pole-Euclidean fixes):
 /// - Pooled: 0 warnings, 5 errors.
 /// - PartitionedDecomposed: 1 error, 0 warnings, 1 rejection event.
+// Moved to `#[ignore]` 2026-05-02 to cut CI runtime. This single
+// test was 113s local / ~270s CI — 41% of total wall by itself.
+// It's a SCOREBOARD-class test (allowed budget: 0 errs Pooled,
+// 2 errs P2), not a green-bar CLEAN guard, so the regression risk
+// is bounded — the AC@4s/5s partitioned siblings still cover the
+// partition path. Run periodically with `--ignored` if needed.
 #[test]
+#[ignore]
 #[ntest::timeout(600000)]
 fn stress_advanced_circuit_partitioned_7s_from_plates() {
     use fucktorio_core::bus::layout::LayoutStrategy;

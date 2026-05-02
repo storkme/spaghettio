@@ -2,7 +2,11 @@
 failure-output = "immediate"
 fail-fast = false
 slow-timeout = { period = "30s", terminate-after = 3 }
-test-threads = 1
+# test-threads unset → use nextest's default (num_cpus, 4 on
+# ubuntu-latest). Previously pinned to 1 in commit d97cd13's "minor"
+# section without a documented rationale; nextest runs each test in
+# its own process so there's no shared state to serialise. See
+# 2026-05-02 perf-audit conversation.
 
 # `partition_strategy_scoreboard` runs Pool/P1/P2 across 2 cases —
 # baseline ~50s locally in debug mode. CI has been variable, with
