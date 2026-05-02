@@ -39,6 +39,7 @@ Future phases:
 """
 
 import json
+import os
 import sys
 import time
 
@@ -1633,7 +1634,13 @@ def solve_pure_routing_circuit(req: dict) -> dict:
     # Fallback (RFP §design "Fallback on infeasibility"): the corridor
     # heuristic may exclude valid paths. Retry once with no pruning
     # before reporting INFEASIBLE upstream.
-    if out.get("status") == "INFEASIBLE" and slack_arg is not None:
+    # DIAGNOSTIC: env var FUCKTORIO_ROUTING_NO_FALLBACK=1 disables the
+    # fallback so we can isolate pruning's effect from the fallback's
+    # cost on infeasible jhs.
+    skip_fallback = os.environ.get("FUCKTORIO_ROUTING_NO_FALLBACK") == "1"
+    if (out.get("status") == "INFEASIBLE"
+            and slack_arg is not None
+            and not skip_fallback):
         print(
             f"  circuit: pruned solve INFEASIBLE at slack={slack_arg} — "
             "retrying with full encoding",
