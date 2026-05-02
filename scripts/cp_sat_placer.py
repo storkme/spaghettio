@@ -109,33 +109,56 @@ def _route_belts(
     for t in free:
         model.add(sum(belt[(t, d)] for d in _INTERNAL_DIRS) <= 1)
 
-    # Per route, per free tile, per direction: f[(r, t, d)] = "route r
-    # uses tile t with belt direction d".  Tying f to belt:
-    # f[(r, t, d)] = 1 implies belt[(t, d)] = 1.
-    f = {
-        (r, t, d): model.new_bool_var(f"f_r{r}_{t[0]}_{t[1]}_d{d}")
+    # Per route, per free tile, per direction, per lane: route uses
+    # this lane of this belt. `lane ∈ {0, 1}` = {LEFT, RIGHT} relative
+    # to the belt's direction of travel.
+    n_lanes = 2
+    f_lane = {
+        (r, t, d, lane): model.new_bool_var(f"f_r{r}_{t[0]}_{t[1]}_d{d}_l{lane}")
         for r in range(len(routes))
         for t in free
         for d in _INTERNAL_DIRS
+        for lane in range(n_lanes)
     }
-    # Belt at (t, d) iff some route uses (t, d). Combined with
-    # at-most-one-direction-per-tile and at-most-one-route-per-tile
-    # (below), belts are exactly the tiles needed by routes. We do
-    # NOT support sideloading: the routing engine is lane-blind, so
-    # any layout that requires sideloading would be lane-unsafe in
-    # real Factorio (multiple sources feeding the same lane saturate
-    # at half the belt's nominal rate).
+
+    def f_sum(r: int, t: tuple[int, int], d: int):
+        """Lane-summed flow indicator: 1 iff route r uses (t, d) on either lane."""
+        return sum(f_lane[(r, t, d, lane)] for lane in range(n_lanes))
+
+    # Per-lane cap: each (tile, direction, lane) carries at most one
+    # route. Half a belt per route in the normalized fluid model. With
+    # the at-most-one-route-per-tile constraint below this is currently
+    # redundant; it becomes load-bearing in phase 2 when we drop the
+    # tile-exclusivity rule and let routes share tiles on different
+    # lanes (sideloading).
     for t in free:
         for d in _INTERNAL_DIRS:
-            model.add(
-                belt[(t, d)]
-                == sum(f[(r, t, d)] for r in range(len(routes)))
-            )
+            for lane in range(n_lanes):
+                model.add(
+                    sum(f_lane[(r, t, d, lane)] for r in range(len(routes))) <= 1
+                )
+
+    # Belt at (t, d) iff some route uses (t, d) on any lane. The
+    # tile-exclusivity constraint below means at most one route per
+    # tile in phase 1, so this acts like the old `belt = sum_r f`
+    # (each lane contributes 0 or 1 with at most one nonzero). In
+    # phase 2 sideloading lets two routes share a tile on different
+    # lanes; this OR-style equivalence still holds.
+    for t in free:
+        for d in _INTERNAL_DIRS:
+            s = sum(f_lane[(r, t, d, lane)] for r in range(len(routes)) for lane in range(n_lanes))
+            model.add(s >= belt[(t, d)])
+            model.add(s <= 2 * belt[(t, d)])
 
     # No tile shared between routes (no sideloading).
     for t in free:
         model.add(
-            sum(f[(r, t, d)] for r in range(len(routes)) for d in _INTERNAL_DIRS)
+            sum(
+                f_lane[(r, t, d, lane)]
+                for r in range(len(routes))
+                for d in _INTERNAL_DIRS
+                for lane in range(n_lanes)
+            )
             <= 1
         )
 
@@ -152,14 +175,14 @@ def _route_belts(
     for r, (src, sink, sink_dir) in enumerate(routes):
         # Sink belt's direction is fixed.
         model.add(belt[(sink, sink_dir)] == 1)
-        model.add(f[(r, sink, sink_dir)] == 1)
+        model.add(f_sum(r, sink, sink_dir) == 1)
 
         if src != sink:
             # Source has exactly one outgoing direction.
-            model.add(sum(f[(r, src, d)] for d in _INTERNAL_DIRS) == 1)
+            model.add(sum(f_sum(r, src, d) for d in _INTERNAL_DIRS) == 1)
 
         for t in free:
-            on_route = sum(f[(r, t, d)] for d in _INTERNAL_DIRS)
+            on_route = sum(f_sum(r, t, d) for d in _INTERNAL_DIRS)
 
             # Inflow: a neighbor n in direction d_n_to_t (relative to t)
             # feeds t iff n's belt heads d_n_to_t (toward t).
@@ -168,7 +191,7 @@ def _route_belts(
                 opp_dx, opp_dy = _DELTAS[_OPPOSITE[d_n_to_t]]
                 n = (t[0] + opp_dx, t[1] + opp_dy)
                 if n in free_set:
-                    in_flows.append(f[(r, n, d_n_to_t)])
+                    in_flows.append(f_sum(r, n, d_n_to_t))
 
             if t == src:
                 # No inflow at source.
@@ -186,14 +209,14 @@ def _route_belts(
                     ndx, ndy = _DELTAS[d]
                     nxt = (t[0] + ndx, t[1] + ndy)
                     if nxt not in free_set:
-                        model.add(f[(r, t, d)] == 0)
+                        for lane in range(n_lanes):
+                            model.add(f_lane[(r, t, d, lane)] == 0)
                     else:
-                        on_route_nxt = sum(
-                            f[(r, nxt, dd)] for dd in _INTERNAL_DIRS
-                        )
-                        model.add(on_route_nxt >= 1).only_enforce_if(
-                            f[(r, t, d)]
-                        )
+                        on_route_nxt = sum(f_sum(r, nxt, dd) for dd in _INTERNAL_DIRS)
+                        for lane in range(n_lanes):
+                            model.add(on_route_nxt >= 1).only_enforce_if(
+                                f_lane[(r, t, d, lane)]
+                            )
 
     # Minimize total belts so the solver picks shortest paths instead of
     # wandering. Without this, large grids admit many long-path
