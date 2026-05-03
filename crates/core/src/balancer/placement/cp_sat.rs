@@ -113,12 +113,22 @@ impl PlacementEngine for CpSat {
     }
 
     fn place(&self, req: &PlacementRequest<'_>) -> Result<PlacementResult, PlacementError> {
-        // Best-effort arc-throughput computation. If the synth graph
-        // doesn't verify (shouldn't happen — synth produces verified
-        // graphs), the placer can still run with discrete unit rates.
-        let arc_throughputs = crate::balancer::verify::verify_balancer(req.graph)
-            .ok()
-            .map(|outcome| outcome.arc_throughputs);
+        // Per-arc throughputs from the verifier. Load-bearing for
+        // non-dyadic shapes — without it the placer falls back to
+        // discrete unit rates, which silently produces wrong layouts
+        // for fractional-arc shapes like (1, 5). `synth` is supposed to
+        // hand us a verified graph, so any failure here is an upstream
+        // bug worth surfacing as a hard engine error rather than a
+        // silent fallback.
+        let arc_throughputs = match crate::balancer::verify::verify_balancer(req.graph) {
+            Ok(outcome) => Some(outcome.arc_throughputs),
+            Err(e) => {
+                return Err(PlacementError::Engine(format!(
+                    "verify_balancer({}, {}): {:?} — synth graph should be verified upstream",
+                    req.n, req.m, e
+                )));
+            }
+        };
         let request = CpSatRequest {
             graph: req.graph,
             n: req.n,

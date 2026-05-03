@@ -86,10 +86,13 @@ fn round_trip_with_timeout(n: u32, m: u32, timeout_secs: u64) {
     );
 }
 
-/// 180 s default. The harder shapes — `(1, 16)`, `(2, 16)`, `(1, 5)` —
-/// sit close to the 60 s mark and flake under load; 180 s gives headroom.
+/// 60 s default — fits the fast dyadic shapes (`(1, 1)`–`(2, 8)`) with
+/// plenty of headroom. The handful of shapes whose canonical solve
+/// crowds or exceeds this budget call `round_trip_with_timeout` directly:
+/// `(1, 16)` / `(2, 16)` ~60 s under the new UG model → 120 s budget;
+/// `(1, 5)` ~182 s on the generalised placer → 300 s budget.
 fn round_trip(n: u32, m: u32) {
-    round_trip_with_timeout(n, m, 180);
+    round_trip_with_timeout(n, m, 60);
 }
 
 #[test]
@@ -134,17 +137,17 @@ fn round_trip_2_8() {
 
 #[test]
 fn round_trip_1_16() {
-    round_trip(1, 16);
+    round_trip_with_timeout(1, 16, 120);
 }
 
 #[test]
 fn round_trip_2_16() {
-    round_trip(2, 16);
+    round_trip_with_timeout(2, 16, 120);
 }
 
 #[test]
 fn round_trip_1_5() {
-    round_trip(1, 5);
+    round_trip_with_timeout(1, 5, 300);
 }
 
 #[test]
@@ -157,10 +160,8 @@ fn round_trip_1_7() {
     round_trip(1, 7);
 }
 
-#[test]
-#[ignore] // 4-level layout in `place_one_to_m_from_synth` is in place but
-          // the resulting CP-SAT model doesn't solve in 10 min single-worker.
-          // Marked ignored until layout is tightened or workers are bumped.
-fn round_trip_1_9() {
-    round_trip_with_timeout(1, 9, 600);
-}
+// `(1, 9)` and `(1, 10)` are wired into the placer dispatch but the
+// CP-SAT model doesn't solve in 15min/seed (overnight bake confirmed
+// 0/64 across 32 seeds × 2 shapes — see `docs/bake-overnight-results.md`).
+// No round-trip test until the layout is tightened or composed; tracked
+// under issue #136.
