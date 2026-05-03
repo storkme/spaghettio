@@ -23,7 +23,7 @@
 //!       -- --ignored --nocapture
 //!   cargo run --manifest-path crates/core/Cargo.toml --example promote_runtime_cache
 
-use fucktorio_core::zone_cache::{encode_record, parse_records};
+use fucktorio_core::zone_cache::{encode_record, parse_records, ENCODER_VERSION};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -179,8 +179,10 @@ fn main() {
             rec.variables,
             rec.clauses,
             rec.solve_time_us,
+            ENCODER_VERSION,
             &rec.channel_items,
             &tuples,
+            &rec.outcome,
         );
     }
 
@@ -200,6 +202,9 @@ fn main() {
     }
 
     // Summary for the PR
+    let solved_after = by_sig.values().filter(|r| matches!(r.outcome, fucktorio_core::zone_cache::CachedOutcome::Solved)).count();
+    let unsat_after  = by_sig.values().filter(|r| matches!(r.outcome, fucktorio_core::zone_cache::CachedOutcome::Unsat)).count();
+    let timeo_after  = by_sig.values().filter(|r| matches!(r.outcome, fucktorio_core::zone_cache::CachedOutcome::Timeout{..})).count();
     println!();
     println!("=== promotion summary ===");
     println!(
@@ -213,9 +218,12 @@ fn main() {
         runtime_bytes.len()
     );
     println!(
-        "  embedded after:  {} entries ({} bytes)",
+        "  embedded after:  {} entries ({} bytes) — solved={} unsat={} timeout={}",
         total,
-        out_bytes.len()
+        out_bytes.len(),
+        solved_after,
+        unsat_after,
+        timeo_after,
     );
     println!("  new entries added: {}", new_entries);
     println!("  entries updated:   {}", updated_entries);
