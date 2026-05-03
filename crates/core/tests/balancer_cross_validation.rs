@@ -174,7 +174,10 @@ fn cross_validate_existing_templates() {
     let mut both_unbalanced_shapes: Vec<(u32, u32)> =
         both_not_balanced.iter().map(|(n, m, _, _)| (*n, *m)).collect();
     both_unbalanced_shapes.sort();
-    let expected_unbalanced: &[(u32, u32)] = &[(5, 8), (7, 6), (8, 6)];
+    // (8, 6) was python-derived and used to fail balance check;
+    // re-baked clean via `Parallel(4, 1, 2) → Lib(2, 6)` recipe in
+    // PR #288 (UG-correctness constraints + library cleanup).
+    let expected_unbalanced: &[(u32, u32)] = &[(5, 8), (7, 6)];
     assert_eq!(
         both_unbalanced_shapes, expected_unbalanced,
         "expected exactly {:?} to fail balance check; got {:?}. \
