@@ -166,6 +166,7 @@ def _route_belts(
     rates: list[int] | None = None,
     lane_cap: int = 1,
     workers: int = 1,
+    ug_max_reach: int | None = None,
 ) -> dict[tuple[int, int], tuple[int, str]] | None:
     """Solve belt routing on the grid given fixed splitter positions.
 
@@ -218,6 +219,12 @@ def _route_belts(
         raise ValueError(
             f"rates length {len(rates)} != routes length {len(routes)}"
         )
+
+    # Per-call override for UG belt max reach; defaults to the module
+    # constant. Setting this to 1 effectively disables UG belts (the
+    # `range(2, ug_max + 1)` loops become empty), shrinking the model
+    # by tens of thousands of variables when UG isn't needed.
+    ug_max = UG_MAX_REACH if ug_max_reach is None else ug_max_reach
 
     occupied = _splitter_tiles(splitter_positions)
     free: list[tuple[int, int]] = [
@@ -331,7 +338,7 @@ def _route_belts(
         for t1 in free:
             for d in _INTERNAL_DIRS:
                 dx, dy = _DELTAS[d]
-                for k in range(2, UG_MAX_REACH + 1):
+                for k in range(2, ug_max + 1):
                     t2 = (t1[0] + k * dx, t1[1] + k * dy)
                     if t2 not in free_set:
                         continue
@@ -356,7 +363,7 @@ def _route_belts(
                 for lane in range(n_lanes):
                     pairs_from_t = [
                         pair[(r, t, k, d, lane)]
-                        for k in range(2, UG_MAX_REACH + 1)
+                        for k in range(2, ug_max + 1)
                         if (r, t, k, d, lane) in pair
                     ]
                     if pairs_from_t:
@@ -366,7 +373,7 @@ def _route_belts(
                     else:
                         model.add(ug_in_r[(r, t, d, lane)] == 0)
                     pairs_to_t = []
-                    for k in range(2, UG_MAX_REACH + 1):
+                    for k in range(2, ug_max + 1):
                         from_t = (t[0] - k * dx, t[1] - k * dy)
                         if (r, from_t, k, d, lane) in pair:
                             pairs_to_t.append(pair[(r, from_t, k, d, lane)])
@@ -411,7 +418,7 @@ def _route_belts(
             covers: list[Any] = []
             for r in range(len(routes)):
                 for lane in range(n_lanes):
-                    for k in range(2, UG_MAX_REACH + 1):
+                    for k in range(2, ug_max + 1):
                         for offset in range(k + 1):
                             t1 = (t[0] - offset * dx, t[1] - offset * dy)
                             if (r, t1, k, d, lane) in pair:
@@ -1792,7 +1799,17 @@ def place_one_to_m_from_synth() -> dict[str, Any]:
     # ----- Solve -----
     # 4-level trees produce a much larger CP-SAT model; opt into parallel
     # workers (loses determinism but solves orders of magnitude faster).
+    # Also disable UG belts in 4-level mode by default — the wide-spread
+    # layout has a free east-edge column for the feedback wrap, so UG
+    # isn't needed for any of the routes; killing the UG vars roughly
+    # halves the model size. Override via FUCKTORIO_CP_SAT_UG_MAX env
+    # var (set to 4 to re-enable UG; useful for layout debugging).
     workers = 8 if levels == 4 else 1
+    ug_env = os.environ.get("FUCKTORIO_CP_SAT_UG_MAX")
+    if ug_env is not None:
+        ug_max_reach = int(ug_env)
+    else:
+        ug_max_reach = 1 if levels == 4 else None  # 1 = effectively disabled
     belt_dirs = _route_belts(
         pos,
         routes,
@@ -1801,6 +1818,7 @@ def place_one_to_m_from_synth() -> dict[str, Any]:
         rates=rates,
         lane_cap=lane_cap,
         workers=workers,
+        ug_max_reach=ug_max_reach,
     )
     if belt_dirs is None:
         raise RuntimeError(
