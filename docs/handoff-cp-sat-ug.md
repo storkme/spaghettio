@@ -60,10 +60,14 @@ shapes in 1..=10 × 1..=10):
      — synth-driven placer that derives geometry from the BalancerGraph
      + arc throughputs. Subsumes `(1, 5)`, `(1, 6)`, `(1, 7)`.
      Hand-tuned `place_one_to_five` and `place_one_to_six` deleted.
-     Key trick for reliability: emit B' → M routes immediately after the
-     input boundary, BEFORE any L1 → L2 routes — anchors CP-SAT search
-     onto the canonical solution and stops it wandering off into
-     OutputDegree-violating alternates.
+     Empirically the d=OPPOSITE source-direction constraint in
+     `_route_belts` (forbid belts heading back into the splitter face)
+     is what makes every feasible solution topology-correct; the
+     "B' → M routes emitted before L1 → L2 routes" reordering inside
+     `place_one_to_m_from_synth` is just a search-time heuristic on top
+     of that — it speeds up the canonical solution but isn't load-bearing
+     for correctness. Validated: 8/8 full-suite runs at `--test-threads=4`,
+     all 13 tests green every run.
    - ⏳ a.3 (4-level): `(1, 9)`, `(1, 10)` need the generalised placer
      extended for 16-splitter trees with an L3 layer. Two paths:
      (a) hand-tune them like the original `(1, 5)`; (b) extend the

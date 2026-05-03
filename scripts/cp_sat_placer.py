@@ -1190,210 +1190,6 @@ def place_x_to_sixteen(n: int) -> dict[str, Any]:
         "input_tiles": [list(it) for it in input_tiles],
         "output_tiles": [[c, output_y] for c in output_cols],
     }
-def place_one_to_five() -> dict[str, Any]:
-    """`(1, 5)` coprime balancer — first non-dyadic shape.
-
-    Synth structure (see ``balancer::synth``):
-      - S0 (M, merger): in0 = 1.0 external, in1 = 0.6 feedback.
-        Outputs 0.8 each to S1.
-      - S1 (root): two head-on inputs (0.8 each from M).
-        Outputs 0.8 each to S2 / S3.
-      - S2, S3 (L1): each takes 0.8 head-on. Outputs 0.4 each to L2.
-      - S4-S7 (L2): each takes 0.4. S4/S5 emit two outputs; S6 emits one
-        output + one feedback; S7 emits two feedbacks.
-
-    The naive "M as merger at row 0" layout UNSATs because M.in1 at the
-    top edge has only east-side feeds available (M.in0 occupies the west
-    neighbour), so the 0.6 feedback lumps onto a single lane → exceeds
-    the 0.5 lane cap. We sidestep this by inserting an extra
-    south-facing splitter B' (placement-only) above M that takes the
-    feedback head-on (split across two input ports, fed from west AND
-    east sides) and rebalances onto its outputs. B's outputs feed M.in1
-    via the back-feed + east-sideload trick documented in
-    ``rfp-lane-aware-routing.md``.
-
-    Recovery sees 9 splitters (8 from synth + 1 lane-balancer). The
-    extra splitter shows up as a regular 1→2 node in the recovered graph
-    and is absorbed by ``from_splitter_graph`` / ``verify_balancer``
-    without special handling — both deal in flow-balance, not splitter
-    counts.
-
-    Layout (south-facing throughout, width 11 × height 12):
-
-    ::
-
-        Row 0–1: feedback wrap channels (from L2 row 9 back up).
-        Row 2: B' inputs at (5, 2), (6, 2). Feedback merges here.
-        Row 3: B' body at (5, 3)-(6, 3) (placement-only splitter).
-        Row 4: B' outputs land here. (5, 4) S → M.in1.
-               (6, 4) W → sideload (5, 4) east, balancing M.in1 lanes.
-               External input boundary at (4, 4) S → drops into M.in0.
-        Row 5: M body at (4, 5)-(5, 5).
-        Row 6: S1 body at (4, 6)-(5, 6) (tight-stack).
-        Row 7: S2=(3, 7), S3=(5, 7) staggered tight-stack.
-        Row 8: L1→L2 routing row.
-        Row 9: L2 — A=(1, 9), B=(3, 9), C=(5, 9), D=(7, 9).
-        Row 10: 5 outputs (cols 1-5) + 3 feedback drops (cols 6, 7, 8).
-        Row 11: feedback channel south-leg.
-
-    L1→L2 arc assignment (avoids the routing-row crossing that blocked
-    the original "M at row 0" attempt — see RFP decision log entries):
-
-      - S2.out0 (3, 8) heads west, drops south into A at (1, 8).
-      - S2.out1 (4, 8) head-on south into B (tight-stacked).
-      - S3.out0 (5, 8) head-on south into C (tight-stacked).
-      - S3.out1 (6, 8) heads east, drops south into D at (7, 8).
-
-    Rate-aware encoding: this placer uses a finer scale than the default
-    ``RATE_SCALE = 10`` so the lane balancer's 0.3 outputs (0.15 per
-    lane in head-on encoding) round to integers. Local
-    ``LOCAL_RATE_SCALE = 20`` and ``lane_cap = 10``.
-    """
-    width, height = 11, 12
-    DIR_S = 2
-
-    LOCAL_RATE_SCALE = 20
-    LOCAL_LANE_CAP = LOCAL_RATE_SCALE // 2  # = 10
-
-    def r(absolute: float) -> int:
-        """Scaled rate at the local scale."""
-        return int(round(absolute * LOCAL_RATE_SCALE))
-
-    M = (4, 5)
-    Bprime = (5, 3)
-    S1 = (4, 6)
-    S2 = (3, 7)
-    S3 = (5, 7)
-    A = (1, 9)
-    B_pos = (3, 9)
-    C = (5, 9)
-    D = (7, 9)
-    pos: list[tuple[int, int] | tuple[int, int, int]] = [
-        M, Bprime, S1, S2, S3, A, B_pos, C, D,
-    ]
-
-    routes: list[
-        tuple[tuple[int, int], tuple[int, int], int, int | None]
-    ] = []
-    rates: list[int] = []
-
-    # External input boundary at (4, 4) S — 2 lane-routes pin both lanes.
-    routes.append(((4, 4), (4, 4), DIR_S, None))
-    routes.append(((4, 4), (4, 4), DIR_S, None))
-    rates.extend([r(0.5), r(0.5)])
-
-    # B' → M.in1 connection. B' total input = 0.6, so each B' output
-    # carries 0.3.
-    # B'.out0 lands at (5, 4) heading S (head-on, 2 lane-routes each at 0.15).
-    # B'.out1 lands at (6, 4) heading W (perpendicular, 1 lane-route at 0.3).
-    # (6, 4) W feeds (5, 4) east-side → sideload onto lane 0 of (5, 4).
-    routes.append(((5, 4), (5, 4), DIR_S, DIR_S))
-    routes.append(((5, 4), (5, 4), DIR_S, DIR_S))
-    rates.extend([r(0.15), r(0.15)])
-    routes.append(((6, 4), (5, 4), DIR_S, DIR_S))
-    rates.append(r(0.3))
-
-    # L1 → L2 arcs (drops at row 8, L2 inputs at row 8).
-    # S2.out0 → A: perpendicular west drop, route to (1, 8) S sink.
-    routes.append(((3, 8), (1, 8), DIR_S, DIR_S))
-    rates.append(r(0.4))
-    # S2.out1 → B: head-on south at (4, 8). 2 lane-routes (0.2 per lane).
-    routes.append(((4, 8), (4, 8), DIR_S, DIR_S))
-    routes.append(((4, 8), (4, 8), DIR_S, DIR_S))
-    rates.extend([r(0.2), r(0.2)])
-    # S3.out0 → C: head-on south at (5, 8). 2 lane-routes.
-    routes.append(((5, 8), (5, 8), DIR_S, DIR_S))
-    routes.append(((5, 8), (5, 8), DIR_S, DIR_S))
-    rates.extend([r(0.2), r(0.2)])
-    # S3.out1 → D: perpendicular east drop, route to (7, 8) S sink.
-    routes.append(((6, 8), (7, 8), DIR_S, DIR_S))
-    rates.append(r(0.4))
-
-    # L2 → outputs (5 head-on south drops at row 10).
-    output_drops: list[tuple[int, int]] = [
-        (1, 10), (2, 10), (3, 10), (4, 10), (5, 10),
-    ]
-    for drop in output_drops:
-        routes.append((drop, drop, DIR_S, DIR_S))
-        routes.append((drop, drop, DIR_S, DIR_S))
-        rates.extend([r(0.1), r(0.1)])
-
-    # 3 feedback arcs from L2 outputs back to B' inputs at row 2.
-    # Two drops feed B'.in0 at (5, 2) (total 0.4); one drop feeds
-    # B'.in1 at (6, 2) (total 0.2).
-    feedback_drops_to_in0: list[tuple[int, int]] = [(6, 10), (7, 10)]
-    feedback_drops_to_in1: list[tuple[int, int]] = [(8, 10)]
-    for src in feedback_drops_to_in0:
-        routes.append((src, (5, 2), DIR_S, DIR_S))
-        rates.append(r(0.2))
-    for src in feedback_drops_to_in1:
-        routes.append((src, (6, 2), DIR_S, DIR_S))
-        rates.append(r(0.2))
-
-    belt_dirs = _route_belts(
-        pos,
-        routes,
-        width,
-        height,
-        rates=rates,
-        lane_cap=LOCAL_LANE_CAP,
-    )
-    if belt_dirs is None:
-        raise RuntimeError("(1, 5) belt routing UNSAT")
-
-    entities: list[dict[str, Any]] = []
-    for p in pos:
-        entities.append(
-            {
-                "name": "splitter",
-                "x": p[0],
-                "y": p[1],
-                "direction": _FACTORIO_DIR[_splitter_dir(p)],
-            }
-        )
-    for (x, y), (d, kind) in belt_dirs.items():
-        if kind == "belt":
-            entities.append(
-                {
-                    "name": "transport-belt",
-                    "x": x,
-                    "y": y,
-                    "direction": _FACTORIO_DIR[d],
-                }
-            )
-        elif kind == "ug_in":
-            entities.append(
-                {
-                    "name": "underground-belt",
-                    "x": x,
-                    "y": y,
-                    "direction": _FACTORIO_DIR[d],
-                    "io_type": "input",
-                }
-            )
-        else:  # ug_out
-            entities.append(
-                {
-                    "name": "underground-belt",
-                    "x": x,
-                    "y": y,
-                    "direction": _FACTORIO_DIR[d],
-                    "io_type": "output",
-                }
-            )
-
-    return {
-        "n_inputs": 1,
-        "n_outputs": 5,
-        "width": width,
-        "height": height,
-        "entities": entities,
-        "input_tiles": [[4, 4]],
-        "output_tiles": [[c, 10] for c in (1, 2, 3, 4, 5)],
-    }
-
-
-
 
 
 def _src_splitter(arc: dict[str, Any]) -> tuple[int, int] | None:
@@ -1607,14 +1403,15 @@ def place_one_to_m_from_synth() -> dict[str, Any]:
     routes.append((input_tile, input_tile, DIR_S, None))
     rates.extend([r(0.5), r(0.5)])
 
-    # 2. B' → M.in1 wiring (only when a balancer is in play). Emitting the
-    # B' → M routes here, immediately after the input boundary, matters for
-    # CP-SAT search heuristics: putting these critical short-distance routes
-    # early seems to anchor the solver onto the canonical solution and stop
-    # it wandering off into OutputDegree-violating alternates that fit the
-    # objective but break topology recovery. (Reordering observed
-    # empirically while subsuming the hand-tuned `(1, 5)` placer; the
-    # hand-tuned version emits B' → M routes in this position.)
+    # 2. B' → M.in1 wiring (only when a balancer is in play). Emitting these
+    # short B' → M routes here, immediately after the input boundary,
+    # consistently produces faster solves than emitting them after the
+    # L1 → L2 routes. CP-SAT's variable-ordering heuristic seems to fix
+    # the dense B'-to-M region first when these routes appear early, and
+    # then the rest of the layout falls out around it. The d=OPPOSITE
+    # source constraint above is what makes EVERY feasible solution
+    # topology-correct — this ordering is purely a search heuristic, not
+    # a correctness fix.
     if needs_balancer:
         b_out_total = feedback_total / 2.0  # rate per B' output port.
         b_out0_tile = (M_X + 1, M_Y - 1)
@@ -1936,12 +1733,11 @@ def main() -> int:
         (2, 8): lambda: place_x_to_eight(2),
         (1, 16): lambda: place_x_to_sixteen(1),
         (2, 16): lambda: place_x_to_sixteen(2),
-        # `(1, 5)` stays on the hand-tuned placer (see RFP decision log).
-        (1, 5): place_one_to_five,
         # Generalised placer for `(1, m)` shapes. 4-level shapes
         # (`(1, 9)`, `(1, 10)`) are wired but the model is large; pin a
         # known-fast seed via `FUCKTORIO_CP_SAT_SEED=<seed>` (sweep
         # harness in `scripts/bake_cp_sat_runner.py`).
+        (1, 5): place_one_to_m_from_synth,
         (1, 6): place_one_to_m_from_synth,
         (1, 7): place_one_to_m_from_synth,
         (1, 9): place_one_to_m_from_synth,
