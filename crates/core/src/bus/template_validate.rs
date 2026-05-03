@@ -54,7 +54,32 @@ const TEST_ITEM: &str = "__balancer_audit_item";
 ///
 /// Returns the concatenated issue list from all four lane-relevant
 /// checkers. An empty list means the template passes lane validation.
+///
+/// Validates at full saturation. For partial-saturation testing, see
+/// [`validate_template_lanes_at`].
 pub fn validate_template_lanes(template: BalancerTemplateRef<'_>) -> Vec<ValidationIssue> {
+    validate_template_lanes_at(template, 1.0)
+}
+
+/// Like [`validate_template_lanes`], but parameterised by a saturation
+/// fraction in `[0.0, 1.0]`. The seeded input rate is
+/// `belt_throughput * min(N, M) * saturation_fraction`.
+///
+/// Used to verify lane correctness at partial loads. The three UG-belt
+/// validators are topological and rate-independent; only
+/// `check_lane_throughput` is rate-sensitive. With the iterative walker
+/// (PR #283) rate scaling is linear, so partial saturation should never
+/// surface lane-throughput errors that don't also appear at full
+/// saturation. This function mainly serves as a regression guard
+/// against future walker changes that break that invariant.
+///
+/// `saturation_fraction` is clamped to `[0.0, 1.0]`.
+pub fn validate_template_lanes_at(
+    template: BalancerTemplateRef<'_>,
+    saturation_fraction: f64,
+) -> Vec<ValidationIssue> {
+    let fraction = saturation_fraction.clamp(0.0, 1.0);
+
     let entities = synthesize_entities(template);
     let layout = LayoutResult {
         entities,
@@ -68,7 +93,8 @@ pub fn validate_template_lanes(template: BalancerTemplateRef<'_>) -> Vec<Validat
     // intentionally over-drive a merger — any excess per-lane finding is
     // therefore a real layout bug.
     let belt_throughput = lane_capacity("transport-belt") * 2.0;
-    let saturate = belt_throughput * template.n_inputs.min(template.n_outputs) as f64;
+    let saturate =
+        belt_throughput * template.n_inputs.min(template.n_outputs) as f64 * fraction;
     let solver = SolverResult {
         machines: Vec::new(),
         external_inputs: vec![ItemFlow {

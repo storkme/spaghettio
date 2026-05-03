@@ -193,6 +193,88 @@ fn audit_lane_correctness() {
     }
 }
 
+/// Run the lane audit at multiple saturation levels. Discovery test:
+/// the existing `audit_lane_correctness` validates at 100% saturation;
+/// this variant runs the same checks at 25%, 50%, and 75% to surface
+/// any rate-dependent issues that don't appear at full load.
+///
+/// With the iterative walker (#283), lane rates scale linearly with
+/// input rate, so partial saturation should never produce
+/// lane-throughput errors absent at full saturation. The three UG
+/// validators are topological and rate-independent, so they should
+/// also report the same issues at every level. Confirming that
+/// invariant is the test's job.
+#[test]
+fn audit_lane_correctness_partial() {
+    use fucktorio_core::bus::template_validate::validate_template_lanes_at;
+
+    let templates = balancer_templates();
+    let saturations: &[f64] = &[0.25, 0.5, 0.75];
+
+    let mut shapes: Vec<(u32, u32)> = templates.keys().copied().collect();
+    shapes.sort();
+
+    eprintln!();
+    eprintln!("# Partial-saturation audit");
+    eprintln!();
+    eprintln!("| saturation | errors | warnings | templates affected |");
+    eprintln!("|-----------:|-------:|---------:|-------------------:|");
+
+    for &fraction in saturations {
+        let mut errors = 0usize;
+        let mut warnings = 0usize;
+        let mut templates_with_issues = 0usize;
+
+        for shape in &shapes {
+            let template = &templates[shape];
+            let issues = validate_template_lanes_at(BalancerTemplateRef::from(template), fraction);
+            let e = issues.iter().filter(|i| matches!(i.severity, Severity::Error)).count();
+            let w = issues.iter().filter(|i| matches!(i.severity, Severity::Warning)).count();
+            errors += e;
+            warnings += w;
+            if e + w > 0 {
+                templates_with_issues += 1;
+            }
+        }
+        eprintln!(
+            "| {:.0}% | {} | {} | {} |",
+            fraction * 100.0,
+            errors,
+            warnings,
+            templates_with_issues
+        );
+    }
+
+    // Gate: at every saturation level, no errors. The iterative walker
+    // scaling property means partial-load errors imply a walker bug —
+    // a regression we want to catch immediately. Warnings are
+    // topological and unaffected by rate, so they're not gated here
+    // (the main audit handles that).
+    for &fraction in saturations {
+        let total_errors: usize = shapes
+            .iter()
+            .map(|shape| {
+                validate_template_lanes_at(
+                    BalancerTemplateRef::from(&templates[shape]),
+                    fraction,
+                )
+            })
+            .map(|issues| {
+                issues
+                    .iter()
+                    .filter(|i| matches!(i.severity, Severity::Error))
+                    .count()
+            })
+            .sum();
+        assert_eq!(
+            total_errors, 0,
+            "Lane-throughput errors at {:.0}% saturation: walker should scale linearly \
+             — partial-load errors imply a walker regression.",
+            fraction * 100.0
+        );
+    }
+}
+
 /// Print detailed error messages for a single template — useful for debugging
 /// remaining lane-throughput issues. Run with `BALANCER_DEBUG_SHAPE=(m,n)` env var.
 #[test]
