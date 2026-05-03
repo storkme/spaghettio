@@ -627,7 +627,7 @@ fn emit_single_splitter_template(
         x: sp.x,
         y: sp.y,
         direction: 4,
-        io_type: None,
+        io_type: None, input_priority: None, output_priority: None,
     });
     for &slot in input_slots.iter().take(m as usize) {
         entities.push(BalancerTemplateEntity {
@@ -635,7 +635,7 @@ fn emit_single_splitter_template(
             x: slot.0,
             y: slot.1,
             direction: 4,
-            io_type: None,
+            io_type: None, input_priority: None, output_priority: None,
         });
         input_tiles.push(slot);
     }
@@ -645,7 +645,7 @@ fn emit_single_splitter_template(
             x: slot.0,
             y: slot.1,
             direction: 4,
-            io_type: None,
+            io_type: None, input_priority: None, output_priority: None,
         });
         output_tiles.push(slot);
     }
@@ -901,7 +901,7 @@ fn assemble_template_from_routing(
             x: sp.x,
             y: sp.y,
             direction: sp.dir,
-            io_type: None,
+            io_type: None, input_priority: None, output_priority: None,
         });
     }
     for b in belts {
@@ -910,7 +910,7 @@ fn assemble_template_from_routing(
             x: b.x,
             y: b.y,
             direction: b.dir,
-            io_type: None,
+            io_type: None, input_priority: None, output_priority: None,
         });
     }
     for u in ugs {
@@ -924,7 +924,7 @@ fn assemble_template_from_routing(
             x: u.x,
             y: u.y,
             direction: u.dir,
-            io_type: Some(io_type),
+            io_type: Some(io_type), input_priority: None, output_priority: None,
         });
     }
     Ok(OwnedTemplate {
@@ -1682,7 +1682,7 @@ fn compose_parallel(template: BalancerTemplateRef<'_>, k: u32) -> OwnedTemplate 
                 x: e.x + x_off,
                 y: e.y,
                 direction: e.direction,
-                io_type: e.io_type,
+                io_type: e.io_type, input_priority: None, output_priority: None,
             });
         }
         for &(x, y) in template.input_tiles {
@@ -1871,7 +1871,7 @@ fn compose_series(
                 x: e.x,
                 y: e.y,
                 direction: e.direction,
-                io_type: e.io_type,
+                io_type: e.io_type, input_priority: None, output_priority: None,
             });
         }
         for b in &resp.belts {
@@ -1880,7 +1880,7 @@ fn compose_series(
                 x: b.x,
                 y: b.y + junction_y_off,
                 direction: b.dir,
-                io_type: None,
+                io_type: None, input_priority: None, output_priority: None,
             });
         }
         for u in &resp.ugs {
@@ -1894,7 +1894,7 @@ fn compose_series(
                 x: u.x,
                 y: u.y + junction_y_off,
                 direction: u.dir,
-                io_type: Some(io_type),
+                io_type: Some(io_type), input_priority: None, output_priority: None,
             });
         }
         for e in bot.entities {
@@ -1903,7 +1903,7 @@ fn compose_series(
                 x: e.x,
                 y: e.y + bot_y_off,
                 direction: e.direction,
-                io_type: e.io_type,
+                io_type: e.io_type, input_priority: None, output_priority: None,
             });
         }
 
