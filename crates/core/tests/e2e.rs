@@ -2279,19 +2279,27 @@ fn stress_advanced_circuit_partitioned_7s_from_plates() {
             // Post-fix (clean-slate SAT zone + pole-repair Euclidean): 1.
             // The PR #207 baseline of 3 was probed before those landed.
             // Partitioning still helps (5 → 2) but doesn't fully unblock
-            // at this rate. The +1 over the post-fix baseline is from
-            // the new `unresolved-junction` validator catching a 1-tile
-            // capped cluster at (10,18) that previously showed up only
-            // as a belt-dead-end at (11,18). Two errors, same underlying
-            // failure — the cluster never solved and the belt feeding
-            // into it has no receiver.
+            // at this rate. Two errors, same underlying failure —
+            // the bus router struggles to route the partitioned AC
+            // module's plastic-bar trunk through its UG corridor near
+            // (11, 18), leaving a UG-input with no matching output and
+            // a 1-tile belt loop where the dead-end belt feeds back
+            // into itself.
+            //
+            // Category drift 2026-05-03: prior categories were
+            // belt-dead-end + unresolved-junction (the SAT zone
+            // capped-cluster failure mode). Some intermediate change
+            // — likely between commits 4ba6439 (lane gate) and main —
+            // shifted the surface form to underground-belt +
+            // belt-loop without changing the count or location. This
+            // test was `#[ignore]`d in 8eb6ace so the baseline drift
+            // wasn't caught by CI; updated here while picking up
+            // #284 (re-bake (7, 2)). The `#[ignore]` stays — runtime
+            // is still over the 10-min CI ceiling.
             max_errors_partitioned: 2,
-            // Two errors: belt-dead-end + unresolved-junction (same
-            // underlying capped-cluster failure surfaced two different
-            // ways).
             max_errors_by_category_partitioned: [
-                ("belt-dead-end".to_string(), 1),
-                ("unresolved-junction".to_string(), 1),
+                ("underground-belt".to_string(), 1),
+                ("belt-loop".to_string(), 1),
             ].into_iter().collect(),
             max_warnings_partitioned: 0,
             max_partition_rejections: 1,
