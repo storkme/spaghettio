@@ -1368,6 +1368,80 @@ fn bake_missing_shapes() -> Result<(), Box<dyn std::error::Error>> {
             perm: Perm::Identity,
             max_jh: 4,
         },
+        // Re-bakes for python-derived shapes that have UG-sideload
+        // warnings on the symmetric (n, m) ↔ (m, n) rotation. Each
+        // recipe here decomposes through CLEAN library atoms so the
+        // compose pipeline produces a sideload-free layout.
+
+        // (1, 9) — fanout via (1, 3) → parallel((1, 3), 3).
+        Recipe {
+            shape: (1, 9),
+            stage1: Stage::Lib(1, 3),
+            stage2: Stage::Parallel(1, 3, 3),
+            perm: Perm::Identity,
+            max_jh: 8,
+        },
+        // (3, 2) — merge-then-balance via Lib(3, 1) → Lib(1, 2).
+        Recipe {
+            shape: (3, 2),
+            stage1: Stage::Lib(3, 1),
+            stage2: Stage::Lib(1, 2),
+            perm: Perm::Identity,
+            max_jh: 4,
+        },
+        // (6, 2) — parallel((3, 1), 2) → Lib(2, 2). Avoids the dirty
+        // (6, 1) python-derived atom by using two clean (3, 1)s.
+        Recipe {
+            shape: (6, 2),
+            stage1: Stage::Parallel(3, 1, 2),
+            stage2: Stage::Lib(2, 2),
+            perm: Perm::Identity,
+            max_jh: 4,
+        },
+        // (7, 3) — Lib(7, 1) → Lib(1, 3). (7, 1) is clean.
+        Recipe {
+            shape: (7, 3),
+            stage1: Stage::Lib(7, 1),
+            stage2: Stage::Lib(1, 3),
+            perm: Perm::Identity,
+            max_jh: 4,
+        },
+        // (8, 2) — parallel((4, 1), 2) → Lib(2, 2). Avoids the dirty
+        // (8, 1) python-derived atom.
+        Recipe {
+            shape: (8, 2),
+            stage1: Stage::Parallel(4, 1, 2),
+            stage2: Stage::Lib(2, 2),
+            perm: Perm::Identity,
+            max_jh: 4,
+        },
+        // (6, 1) — parallel((3, 1), 2) → Lib(2, 1). (3, 1) and (2, 1)
+        // are clean atoms.
+        Recipe {
+            shape: (6, 1),
+            stage1: Stage::Parallel(3, 1, 2),
+            stage2: Stage::Lib(2, 1),
+            perm: Perm::Identity,
+            max_jh: 4,
+        },
+        // (8, 1) — parallel((4, 1), 2) → Lib(2, 1). Avoids the dirty
+        // (5, 1) prime atom.
+        Recipe {
+            shape: (8, 1),
+            stage1: Stage::Parallel(4, 1, 2),
+            stage2: Stage::Lib(2, 1),
+            perm: Perm::Identity,
+            max_jh: 4,
+        },
+        // (8, 6) — parallel((4, 1), 2) → Lib(2, 6). (2, 6) is a clean
+        // library atom.
+        Recipe {
+            shape: (8, 6),
+            stage1: Stage::Parallel(4, 1, 2),
+            stage2: Stage::Lib(2, 6),
+            perm: Perm::Identity,
+            max_jh: 4,
+        },
         // (9, 2) — merge-then-balance via parallel((3, 1), 3) → (3, 2).
         Recipe {
             shape: (9, 2),

@@ -2150,8 +2150,62 @@ def _solve_pure_routing_circuit_inner(req: dict, slack) -> dict:
     return out
 
 
+def _cache_key(req_text: str, source_path: str) -> str:
+    """Cache key = SHA256(place.py source bytes + request JSON).
+    Source bytes include all constraint logic, so changes invalidate
+    the cache automatically. The pinned `random_seed` makes CP-SAT
+    deterministic, so identical inputs always produce identical
+    outputs."""
+    import hashlib
+    h = hashlib.sha256()
+    try:
+        with open(source_path, "rb") as f:
+            h.update(f.read())
+    except OSError:
+        # If we can't read our own source (unlikely), fall back to a
+        # constant so behaviour matches the no-cache case (every key is
+        # collision-free vs request text).
+        h.update(b"<source-unavailable>")
+    h.update(b"\x00")
+    h.update(req_text.encode("utf-8"))
+    return h.hexdigest()
+
+
+def _cache_dir() -> str:
+    """Cache lives under $TMPDIR (default /tmp) so it survives across
+    bake runs but gets cleaned by the OS periodically. Per-user via
+    USER env var to avoid cross-user collisions on shared boxes."""
+    import os
+    base = os.environ.get("TMPDIR", "/tmp")
+    user = os.environ.get("USER", "default")
+    return os.path.join(base, f"fucktorio_place_cache_{user}")
+
+
 def main() -> None:
-    req = json.load(sys.stdin)
+    import os
+
+    req_text = sys.stdin.read()
+    req = json.loads(req_text)
+
+    # Subprocess-level cache: skip CP-SAT if (place.py source + request)
+    # has been solved before. Disable by setting FUCKTORIO_PLACE_NOCACHE=1
+    # — useful when debugging the solver itself or when the cache might
+    # be stale for some unforeseen reason.
+    use_cache = os.environ.get("FUCKTORIO_PLACE_NOCACHE") is None
+    if use_cache:
+        cache_dir = _cache_dir()
+        os.makedirs(cache_dir, exist_ok=True)
+        key = _cache_key(req_text, __file__)
+        cache_path = os.path.join(cache_dir, f"{key}.json")
+        if os.path.exists(cache_path):
+            try:
+                with open(cache_path, "r") as f:
+                    sys.stdout.write(f.read())
+                print(f"# place.py cache hit: {key[:12]}...", file=sys.stderr)
+                return
+            except OSError:
+                pass  # fall through to recompute
+
     if req.get("kind") == "pure_routing":
         if req.get("encoding") == "circuit":
             out = solve_pure_routing_circuit(req)
@@ -2166,8 +2220,19 @@ def main() -> None:
             out = solve_synth_place(req)
     else:
         out = solve_overlap_only(req)
-    json.dump(out, sys.stdout)
-    sys.stdout.write("\n")
+
+    out_text = json.dumps(out) + "\n"
+    sys.stdout.write(out_text)
+
+    # Only cache successful or proven-INFEASIBLE outcomes — UNKNOWN
+    # results are non-final and should be re-tried with a fresh budget.
+    status = out.get("status")
+    if use_cache and status in ("OPTIMAL", "FEASIBLE", "INFEASIBLE"):
+        try:
+            with open(cache_path, "w") as f:
+                f.write(out_text)
+        except OSError:
+            pass  # best-effort cache write
 
 
 if __name__ == "__main__":
