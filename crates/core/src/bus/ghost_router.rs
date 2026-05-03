@@ -2829,6 +2829,69 @@ pub fn route_bus_ghost(
                 ent.name = splitter_for_belt(tier).to_string();
             }
         }
+
+        // UG pair equalization: the rename above is keyed by (item, x-column).
+        // A horizontal UG INPUT upgraded on the trunk column leaves its OUTPUT
+        // (at a different x, outside the trunk columns) at the original tier,
+        // creating a mismatched pair that fails the underground-belt validator.
+        // Fix: for every crossing:/junction: UG input that was upgraded, find
+        // its matching output (same segment_id, item, direction) and set it to
+        // the same UG tier.
+        //
+        // Collect upgraded crossing/junction UG inputs: (seg, item, dir_u8) → new_ug_name
+        // EntityDirection is repr(u8) but doesn't impl Hash, so cast to u8 for the key.
+        let mut upgraded_ug_inputs: FxHashMap<(String, String, u8), String> =
+            FxHashMap::default();
+        for ent in entities.iter() {
+            if !crate::common::is_ug_belt(&ent.name) {
+                continue;
+            }
+            if ent.io_type.as_deref() != Some("input") {
+                continue;
+            }
+            let Some(seg) = ent.segment_id.as_deref() else {
+                continue;
+            };
+            if !seg.starts_with("crossing:") && !seg.starts_with("junction:") {
+                continue;
+            }
+            let Some(item) = ent.carries.as_deref() else {
+                continue;
+            };
+            // Only record if this input was actually upgraded (i.e. it hit a
+            // family_tier_for entry at its column).
+            if !family_tier_for.contains_key(&(item.to_string(), ent.x)) {
+                continue;
+            }
+            upgraded_ug_inputs.insert(
+                (seg.to_string(), item.to_string(), ent.direction as u8),
+                ent.name.clone(),
+            );
+        }
+        // Apply the same UG name to the matching outputs.
+        if !upgraded_ug_inputs.is_empty() {
+            for ent in &mut entities {
+                if !crate::common::is_ug_belt(&ent.name) {
+                    continue;
+                }
+                if ent.io_type.as_deref() != Some("output") {
+                    continue;
+                }
+                let Some(seg) = ent.segment_id.as_deref() else {
+                    continue;
+                };
+                if !seg.starts_with("crossing:") && !seg.starts_with("junction:") {
+                    continue;
+                }
+                let Some(item) = ent.carries.as_deref() else {
+                    continue;
+                };
+                let key = (seg.to_string(), item.to_string(), ent.direction as u8);
+                if let Some(ug_name) = upgraded_ug_inputs.get(&key) {
+                    ent.name = ug_name.clone();
+                }
+            }
+        }
     }
 
     // -------------------------------------------------------------------------
