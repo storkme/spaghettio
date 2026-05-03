@@ -4014,4 +4014,190 @@ mod tests {
         assert!(issues.iter().any(|i| i.category == "input-rate-delivery"),
             "expected input-rate-delivery issue, got: {:?}", issues);
     }
+
+    // ---------------------------------------------------------------------------
+    // Iterative walker / splitter math regression tests
+    //
+    // Three focused tests covering the math the iterative walker is supposed to
+    // produce. These are contracts: each documents what a specific case should
+    // compute, separate from the audit count which is end-to-end.
+    // ---------------------------------------------------------------------------
+
+    /// Splitter receiving rate on one half only must produce balanced, lane-
+    /// mixed output across both halves. Pre-fix behaviour was "propagate non-
+    /// zero half to both" which gave 2× the correct rate at the stuck
+    /// secondary; current behaviour averages and lane-mixes via the iterative
+    /// pass.
+    ///
+    /// 1→2 split: feeder full belt `[L=7.5, R=7.5]` → splitter pair → both
+    /// halves at `[3.75, 3.75]` (belt total 7.5/s = half of input). Total mass
+    /// conserved: 15/s in, 15/s out across two output belts.
+    #[test]
+    fn splitter_one_feeder_outputs_balanced_halves() {
+        use EntityDirection::*;
+        let item = "iron-plate";
+        // Source belt at (0, 0) carrying the external input. Splitter at
+        // (0, 1)/(1, 1) south-facing. Output belts at (0, 2) and (1, 2).
+        let layout = LayoutResult {
+            entities: vec![
+                belt_carries(0, 0, South, item),
+                PlacedEntity {
+                    name: "splitter".to_string(),
+                    x: 0,
+                    y: 1,
+                    direction: South,
+                    ..Default::default()
+                },
+                belt(0, 2, South),
+                belt(1, 2, South),
+            ],
+            width: 4,
+            height: 4,
+            ..Default::default()
+        };
+        let solver = SolverResult {
+            machines: vec![],
+            external_inputs: vec![ItemFlow {
+                item: item.to_string(),
+                rate: 15.0,
+                is_fluid: false,
+                module_id: 0,
+            }],
+            external_outputs: vec![],
+            dependency_order: vec![],
+        };
+        let rates = compute_lane_rates(&layout, Some(&solver));
+        let r0 = rates.get(&(0, 1)).copied().unwrap_or([0.0, 0.0]);
+        let r1 = rates.get(&(1, 1)).copied().unwrap_or([0.0, 0.0]);
+        assert!(
+            (r0[0] - 3.75).abs() < 0.01
+                && (r0[1] - 3.75).abs() < 0.01
+                && (r1[0] - 3.75).abs() < 0.01
+                && (r1[1] - 3.75).abs() < 0.01,
+            "splitter halves expected [3.75, 3.75] each, got pos={r0:?} sib={r1:?}"
+        );
+        // Outputs inherit the splitter rate.
+        let o0 = rates.get(&(0, 2)).copied().unwrap_or([0.0, 0.0]);
+        let o1 = rates.get(&(1, 2)).copied().unwrap_or([0.0, 0.0]);
+        assert!(
+            (o0[0] + o0[1] + o1[0] + o1[1] - 15.0).abs() < 0.01,
+            "total output mass should equal input 15/s, got {o0:?} + {o1:?}"
+        );
+    }
+
+    /// (3, 3) library template at full saturation should converge to exactly
+    /// `[7.5, 7.5]` per lane on every internal belt. Pre-iterative-walker, the
+    /// internal feedback splitter at `(0, 5)/(1, 5)` settled at `[3.75, 3.75]`
+    /// vs `[9.375, 9.375]` (1.25× capacity) because the single-pass walker
+    /// hit the feedback loop before the upstream half had stabilised.
+    ///
+    /// This is the headline regression case for the iterative pass.
+    #[test]
+    fn iterative_walker_balances_3_3_template() {
+        use crate::bus::balancer_classify::BalancerTemplateRef;
+        use crate::bus::balancer_library::balancer_templates;
+        use crate::bus::template_validate::compute_template_lane_rates;
+
+        let templates = balancer_templates();
+        let t = templates
+            .get(&(3, 3))
+            .expect("(3, 3) template missing from library");
+        let rates = compute_template_lane_rates(BalancerTemplateRef::from(t));
+
+        for (&pos, &[l, r]) in &rates {
+            assert!(
+                (l - 7.5).abs() < 0.01 && (r - 7.5).abs() < 0.01,
+                "(3, 3) tile {pos:?} expected [7.5, 7.5], got [{l:.4}, {r:.4}]"
+            );
+        }
+    }
+
+    /// UG-output rate inherits from the surface tile behind the paired UG-
+    /// input AND preserves any inserter injection on its own surface tile.
+    /// Bug caught during dev: the iterative pass was REPLACING `next[ug_out]`
+    /// with `behind`, dropping any `seed_rates[ug_out]` from inserter drops.
+    /// Fix: `next[ug_out] = seed[ug_out] + behind`.
+    ///
+    /// Setup: an inserter drops 1.0/s of `iron-plate` onto the surface of a
+    /// UG-output that's also carrying behind's rate via its underground feed.
+    /// The UG-output's effective rate must include both contributions.
+    #[test]
+    fn ug_output_preserves_inserter_injection() {
+        use EntityDirection::*;
+        let item = "iron-plate";
+        // Layout: source belt (0, 0) feeds UG-input (0, 1) south; pairs to
+        // UG-output at (0, 4) south; output belt (0, 5). Machine at (2, 4)
+        // making `iron-gear-wheel` from the picked-up plates; inserter at
+        // (1, 4) drops gears onto the UG-output's surface (0, 4).
+        //
+        // Wait — we need the inserter to drop onto the UG-out, but the
+        // injection is keyed off `belt_carries.get(drop_pos)` matching the
+        // machine's *output* item. Use a single item `iron-plate` for both
+        // the surface flow AND the inserter drop to keep the test focused on
+        // UG-out accumulation rather than item-mixing.
+        //
+        // The simplest faithful setup: build a `lane_injections` directly via
+        // the inserter+machine plumbing in `compute_lane_rates_impl`. Source
+        // belt carries `iron-plate` at 7.5/s (half belt to leave headroom for
+        // injection). Inserter long-handed into UG-out from a machine that
+        // outputs `iron-plate`.
+        // UG-out must have `carries` set for the inserter-drop logic to
+        // recognise the drop_pos as carrying the right item; without it the
+        // injection is silently skipped.
+        let ug_out_with_item = PlacedEntity {
+            name: "underground-belt".to_string(),
+            x: 0,
+            y: 4,
+            direction: South,
+            io_type: Some("output".to_string()),
+            carries: Some(item.to_string()),
+            ..Default::default()
+        };
+        let layout = LayoutResult {
+            entities: vec![
+                belt_carries(0, 0, South, item),
+                ug_belt(0, 1, South, "input"),
+                ug_out_with_item,
+                belt_carries(0, 5, South, item),
+                // Machine producing iron-plate; inserter long-handed onto UG-out.
+                machine(2, 4, "iron-plate-recycle"),
+                inserter(1, 4, West),
+            ],
+            width: 4,
+            height: 7,
+            ..Default::default()
+        };
+        let solver = SolverResult {
+            machines: vec![MachineSpec {
+                entity: "assembling-machine-3".to_string(),
+                recipe: "iron-plate-recycle".to_string(),
+                count: 1.0,
+                inputs: vec![],
+                outputs: vec![ItemFlow {
+                    item: item.to_string(),
+                    rate: 1.0,
+                    is_fluid: false,
+                    module_id: 0,
+                }],
+            }],
+            external_inputs: vec![ItemFlow {
+                item: item.to_string(),
+                rate: 7.5,
+                is_fluid: false,
+                module_id: 0,
+            }],
+            external_outputs: vec![],
+            dependency_order: vec!["iron-plate-recycle".to_string()],
+        };
+        let rates = compute_lane_rates(&layout, Some(&solver));
+        let ug_out = rates.get(&(0, 4)).copied().unwrap_or([0.0, 0.0]);
+        let total = ug_out[0] + ug_out[1];
+        // Surface inherited rate (3.75 per lane = 7.5/belt) + inserter
+        // injection (1.0/s on whichever lane) = 8.5/belt total. Allow some
+        // float slack and tolerate the lane the inserter targets.
+        assert!(
+            total > 8.0 && total < 9.0,
+            "UG-out should carry inherited 7.5 + injected 1.0 ≈ 8.5, got {total} ({ug_out:?})"
+        );
+    }
 }
