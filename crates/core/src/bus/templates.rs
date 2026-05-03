@@ -2116,7 +2116,14 @@ pub fn fluid_only_row(
     // layout (advanced-oil-processing, coal-liquefaction). Each output gets
     // its own trunk row below the machine so flanks and drop-UGs don't
     // share tiles.
-    if output_distinct_items.len() >= 3 {
+    //
+    // The staggered path requires machine_count == 1 (east R-flank of
+    // machine N at (mx + msz, y_east) collides with west drop UG of
+    // machine N+1 at the same tile). When machine_count > 1 we fall
+    // through to the non-staggered path, which places per-port isolated
+    // pipes for the multi-fluid output side and loops over each machine
+    // safely. See issue #277.
+    if output_distinct_items.len() >= 3 && machine_count == 1 {
         return fluid_only_row_staggered_3output(
             recipe, machine_entity, machine_size, machine_count,
             y_offset, x_offset, fluid_inputs, fluid_outputs,
@@ -3639,21 +3646,34 @@ mod tests {
         }
     }
 
-    // Staggered 3-output with machine_count > 1 is not yet supported —
-    // east R-flank at (mx+5, y_east) overlaps next machine's west drop UG.
+    // Staggered 3-output with machine_count > 1 falls back to the
+    // non-staggered path (per-port isolated pipes) rather than panicking.
+    // Regression guard for issue #277.
     #[test]
-    #[should_panic(expected = "multi-machine")]
-    fn fluid_only_row_advanced_multi_machine_panics() {
-        let _ = fluid_only_row(
+    fn fluid_only_row_advanced_multi_machine_non_staggered_fallback() {
+        let (entities, row_height, in_ports, out_ports) = fluid_only_row(
             "advanced-oil-processing",
             "oil-refinery",
             5,
-            2, // multi-machine
+            2, // multi-machine — previously hit assert_eq!(machine_count, 1)
             0,
             0,
             &[(1, "water"), (3, "crude-oil")],
             &[(0, "heavy-oil"), (2, "light-oil"), (4, "petroleum-gas")],
         );
+        // Non-staggered path: row_height = msz + 2 = 7
+        assert_eq!(row_height, 7, "non-staggered fallback row height should be msz+2=7");
+        // Two machines × msz=5 pitch = entities must include machines at x=0 and x=5
+        let machine_xs: Vec<i32> = entities.iter()
+            .filter(|e| e.name == "oil-refinery")
+            .map(|e| e.x)
+            .collect();
+        assert!(machine_xs.contains(&0), "first machine at x=0; got {machine_xs:?}");
+        assert!(machine_xs.contains(&5), "second machine at x=5; got {machine_xs:?}");
+        // 3 distinct output fluids → per-port isolated pipes, one per port per machine
+        assert_eq!(out_ports.len(), 6, "2 machines × 3 output ports = 6 out-port entries");
+        // 2 distinct input fluids → per-port pipes, one per port per machine
+        assert_eq!(in_ports.len(), 4, "2 machines × 2 input ports = 4 in-port entries");
     }
 
     // (machine_xs helper deleted in the inline-bridge unification —
