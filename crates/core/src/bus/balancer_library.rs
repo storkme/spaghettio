@@ -5290,6 +5290,81 @@ pub fn balancer_templates() -> &'static FxHashMap<(u32, u32), BalancerTemplate> 
     MAP.get_or_init(build_templates)
 }
 
+/// Provenance metadata for a library entry: where it came from and (when
+/// applicable) the strategy used to construct it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TemplateProvenance {
+    /// High-level source category — e.g. `"Raynquist"`, `"compose"`,
+    /// `"Factorio-SAT"`. Stable label suitable for display.
+    pub source: &'static str,
+    /// Optional strategy descriptor — for compose-baked entries this is
+    /// the recipe (e.g. `"Lib(7, 1) → Lib(1, 2)"`). Empty for atomic
+    /// generator outputs that have no decomposition.
+    pub strategy: &'static str,
+    /// Optional reference link — e.g. the Factoriobin URL for a
+    /// Raynquist import. Empty if no link is available.
+    pub reference: &'static str,
+}
+
+impl TemplateProvenance {
+    const fn factorio_sat() -> Self {
+        Self {
+            source: "Factorio-SAT",
+            strategy: "",
+            reference: "",
+        }
+    }
+}
+
+/// Provenance for every shape we know specifically. Defaults to
+/// `Factorio-SAT` for shapes not listed (the original python generator
+/// at `scripts/generate_balancer_library.py` was the source for most of
+/// the original library).
+///
+/// Update this when importing or re-baking a shape so the showcase
+/// surfaces accurate provenance instead of the misleading default.
+pub fn template_provenance(shape: (u32, u32)) -> TemplateProvenance {
+    use TemplateProvenance as P;
+
+    // Raynquist's TU collection (Factoriobin KafN8H7L). Imported via
+    // `import_balancer` — see PR #290 (1, 9) and PR #291 (5, x).
+    const RAYNQUIST: &str = "Raynquist (TU)";
+    const RAYNQUIST_URL: &str = "https://factoriobin.com/post/KafN8H7L/245";
+
+    match shape {
+        // Raynquist's TU (throughput-unlimited) imports.
+        (1, 9) | (5, 1) | (5, 2) | (5, 3) | (5, 4) => P {
+            source: RAYNQUIST,
+            strategy: "hand-tuned with priority annotations",
+            reference: RAYNQUIST_URL,
+        },
+
+        // Compose-baked re-bakes. Strategy = the recipe used in
+        // `bake_missing_shapes` to construct via `compose_series`.
+        (1, 10) => P { source: "compose", strategy: "Lib(1, 5) → Parallel(1, 2, 5)", reference: "" },
+        (2, 9) => P { source: "compose", strategy: "Parallel(1, 3, 2) → Parallel(2, 3, 3) via Clos(2, 3)", reference: "" },
+        (3, 2) => P { source: "compose", strategy: "Lib(3, 1) → Lib(1, 2)", reference: "" },
+        (3, 9) => P { source: "compose", strategy: "Parallel(1, 3, 3) → Parallel(3, 3, 3) via Clos(3, 3)", reference: "" },
+        (6, 1) => P { source: "compose", strategy: "Parallel(3, 1, 2) → Lib(2, 1)", reference: "" },
+        (6, 2) => P { source: "compose", strategy: "Parallel(3, 1, 2) → Lib(2, 2)", reference: "" },
+        (7, 2) => P { source: "compose", strategy: "Lib(7, 1) → Lib(1, 2)", reference: "" },
+        (7, 3) => P { source: "compose", strategy: "Lib(7, 1) → Lib(1, 3)", reference: "" },
+        (8, 1) => P { source: "compose", strategy: "Parallel(4, 1, 2) → Lib(2, 1)", reference: "" },
+        (8, 2) => P { source: "compose", strategy: "Parallel(4, 1, 2) → Lib(2, 2)", reference: "" },
+        (8, 6) => P { source: "compose", strategy: "Parallel(4, 1, 2) → Lib(2, 6)", reference: "" },
+        (9, 1) => P { source: "compose", strategy: "Parallel(3, 1, 3) → Lib(3, 1)", reference: "" },
+        (9, 2) => P { source: "compose", strategy: "Parallel(3, 1, 3) → Lib(3, 2)", reference: "" },
+        (9, 3) => P { source: "compose", strategy: "Parallel(3, 1, 3) → Lib(3, 3)", reference: "" },
+        (9, 4) => P { source: "compose", strategy: "Parallel(3, 1, 3) → Lib(3, 4)", reference: "" },
+        (9, 5) => P { source: "compose", strategy: "Parallel(3, 1, 3) → Lib(3, 5)", reference: "" },
+        (9, 6) => P { source: "compose", strategy: "Parallel(3, 1, 3) → Lib(3, 6)", reference: "" },
+        (10, 1) => P { source: "compose", strategy: "Parallel(5, 1, 2) → Lib(2, 1)", reference: "" },
+
+        // Default: original python Factorio-SAT generator.
+        _ => P::factorio_sat(),
+    }
+}
+
 fn build_templates() -> FxHashMap<(u32, u32), BalancerTemplate> {
     let mut m = FxHashMap::with_capacity_and_hasher(58, Default::default());
 

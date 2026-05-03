@@ -161,6 +161,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("=== phase 3.4: bake missing shapes ===");
         return bake_missing_shapes();
     }
+    if std::env::var("FUCKTORIO_MODE_D_ONLY").is_ok() {
+        // Fast path: skip phases 3.1, 3.2 (round-trips), 3.2A/B/C
+        // (flow-conservation routing) and run only phase 3.2D (Mode D
+        // synth-place). Used to validate Mode D constraints in
+        // isolation without paying for the upstream spike phases.
+        println!("=== Mode D-only: skipping earlier spike phases ===");
+        let mode_d_shapes: &[(&str, (u32, u32))] = &[
+            ("(1, 2)", (1, 2)),
+            ("(2, 2)", (2, 2)),
+            ("(2, 4)", (2, 4)),
+            ("(1, 4)", (1, 4)),
+            ("(4, 4)", (4, 4)),
+            ("(1, 8)", (1, 8)),
+            // Round-trip Raynquist's (5, 1) topology through Mode D.
+            // Mode D re-places an existing topology; if our UG-correctness
+            // constraints prevent a feasible layout for a topology that
+            // *should* be feasible (Raynquist proved feasibility by hand),
+            // that's a sign the constraints over-restrict.
+            ("(5, 1)", (5, 1)),
+        ];
+        for &(label, shape) in mode_d_shapes {
+            match spike_synth_place(label, shape, None) {
+                Ok(()) => {}
+                Err(e) => println!("  ✗ {label}: {e}"),
+            }
+        }
+        return Ok(());
+    }
     let templates = balancer_templates();
 
     // Mode A — phase 3.1 splitter no-overlap.

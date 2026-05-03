@@ -2,16 +2,16 @@
  * Balancer showcase QA tool — issue #274.
  *
  * Standalone route at `#/balancers` rendering every (n_inputs, n_outputs)
- * shape in a 10×10 grid. Each cell shows the Factorio-SAT library entry
- * (left) side-by-side with the compose-bake generator output (right),
- * captioned with source / dimensions / entity count so the topology and
- * sizing differences read at a glance.
+ * library entry in a 10×10 grid. Each cell shows the template captioned
+ * with source provenance (Raynquist / compose / Factorio-SAT) plus the
+ * construction strategy (e.g. `Lib(7, 1) → Lib(1, 2)`) so it's immediately
+ * clear where each balancer came from.
  *
- * The compose-bake side is the moving target — when generated layouts
- * are visibly fatter than the library equivalent (e.g. (1, 9) at 9×20 /
- * 93 entities vs library (1, 8) at 8×5 / 17 entities), this view is the
- * fastest QA loop. classify_ref returning Balanced misses the sizing
- * problem; the eyeball doesn't.
+ * The "generated" side-panel was removed — `balancer_generate::generate`
+ * is a stub that only handles trivial cases, and the compose pipeline
+ * (the real generator) doesn't run in WASM. Browser users who want to see
+ * a constructed layout look at the library entry, which IS the output of
+ * compose for the shapes we've baked through it.
  *
  * URL state: `#/balancers?focus=n,m` highlights and scrolls to that
  * shape. Used for permalinks in code review / decision log entries.
@@ -159,10 +159,6 @@ function createCellSkeleton(
         <div class="bs-panel-caption">loading…</div>
         <div class="bs-panel-canvas"></div>
       </div>
-      <div class="bs-panel" data-side="generated">
-        <div class="bs-panel-caption">loading…</div>
-        <div class="bs-panel-canvas"></div>
-      </div>
     </div>
   `;
 
@@ -204,12 +200,11 @@ async function hydrate(
     const dom = cellMap.get(cellKey(cellData.n_inputs, cellData.n_outputs));
     if (!dom) continue;
 
-    fillPanel(offApp, dom, "library", cellData.library);
-    fillPanel(offApp, dom, "generated", cellData.generated);
+    fillPanel(offApp, dom, cellData.library);
 
     const summary = dom.querySelector(".bs-summary") as HTMLElement | null;
     if (summary) {
-      summary.innerHTML = comparisonSummary(cellData);
+      summary.innerHTML = sourceSummary(cellData);
     }
   }
 
@@ -222,11 +217,10 @@ async function hydrate(
 function fillPanel(
   offApp: Application,
   cellDom: HTMLElement,
-  side: "library" | "generated",
   template: BalancerShowcaseTemplate | null,
 ): void {
   const panel = cellDom.querySelector(
-    `.bs-panel[data-side="${side}"]`,
+    `.bs-panel[data-side="library"]`,
   ) as HTMLElement | null;
   if (!panel) return;
   const caption = panel.querySelector(".bs-panel-caption") as HTMLElement | null;
@@ -235,16 +229,21 @@ function fillPanel(
 
   if (!template) {
     panel.classList.add("bs-empty");
-    caption.textContent = side === "library"
-      ? "no library entry"
-      : "no compose entry";
+    caption.textContent = "no library entry";
     canvasHost.innerHTML = "";
     return;
   }
 
   const entityCount = template.entities.length;
+  const strategyLine = template.strategy
+    ? `<div class="bs-strategy">${escapeHtml(template.strategy)}</div>`
+    : "";
+  const referenceLine = template.reference
+    ? `<div class="bs-reference"><a href="${escapeHtml(template.reference)}" target="_blank" rel="noopener">ref</a></div>`
+    : "";
   caption.innerHTML = `
-    <div class="bs-source">${escapeHtml(template.source)}</div>
+    <div class="bs-source">${escapeHtml(template.source)}${referenceLine}</div>
+    ${strategyLine}
     <div class="bs-stats">
       ${template.n_inputs} → ${template.n_outputs} ·
       ${template.width}×${template.height} ·
@@ -329,27 +328,17 @@ function renderTemplateCanvas(
   return out;
 }
 
-function comparisonSummary(cell: BalancerShowcaseCell): string {
+function sourceSummary(cell: BalancerShowcaseCell): string {
   const lib = cell.library;
-  const gen = cell.generated;
-  if (lib && gen) {
-    const libE = lib.entities.length;
-    const genE = gen.entities.length;
-    if (libE === 0) return "library has 0 entities (?)";
-    const delta = genE - libE;
-    if (delta === 0) {
-      return `<span class="bs-eq">parity</span>`;
-    }
-    if (delta < 0) {
-      const pct = Math.round(100 * (-delta) / libE);
-      return `<span class="bs-win">compose −${-delta} (−${pct}%)</span>`;
-    }
-    const pct = Math.round(100 * delta / libE);
-    return `<span class="bs-lose">compose +${delta} (+${pct}%)</span>`;
-  }
-  if (lib && !gen) return `<span class="bs-only-lib">library only</span>`;
-  if (!lib && gen) return `<span class="bs-only-gen">compose only</span>`;
-  return `<span class="bs-none">no template</span>`;
+  if (!lib) return `<span class="bs-none">no template</span>`;
+  // Color-code by source so the grid scans visually.
+  const cls = (() => {
+    if (lib.source.startsWith("Raynquist")) return "bs-source-raynquist";
+    if (lib.source === "compose") return "bs-source-compose";
+    if (lib.source === "Factorio-SAT") return "bs-source-fsat";
+    return "bs-source-other";
+  })();
+  return `<span class="${cls}">${escapeHtml(lib.source)}</span>`;
 }
 
 function escapeHtml(s: string): string {
@@ -431,17 +420,16 @@ function injectStyles(): void {
       color: #f0f0f0;
       font-variant-numeric: tabular-nums;
     }
-    .bs-summary { color: #888; font-size: 11px; }
-    .bs-summary .bs-win { color: #4eb072; }
-    .bs-summary .bs-lose { color: #d35a5a; }
-    .bs-summary .bs-eq { color: #888; }
-    .bs-summary .bs-only-lib { color: #6a9ed8; }
-    .bs-summary .bs-only-gen { color: #d39a3a; }
-    .bs-summary .bs-none { color: #555; }
+    .bs-summary { color: #888; font-size: 11px; font-weight: 500; }
+    .bs-summary .bs-source-raynquist { color: #d39a3a; }
+    .bs-summary .bs-source-compose   { color: #4eb072; }
+    .bs-summary .bs-source-fsat      { color: #6a9ed8; }
+    .bs-summary .bs-source-other     { color: #aaa; }
+    .bs-summary .bs-none             { color: #555; }
 
     .bs-panels {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: 1fr;
       gap: 6px;
     }
     .bs-panel {
@@ -467,10 +455,29 @@ function injectStyles(): void {
     .bs-panel-caption .bs-source {
       font-weight: 500;
       color: #d8d8d8;
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+    }
+    .bs-panel-caption .bs-strategy {
+      color: #888;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 9px;
+      margin-top: 2px;
+      word-break: break-word;
+    }
+    .bs-panel-caption .bs-reference a {
+      color: #6a9ed8;
+      text-decoration: none;
+      font-size: 9px;
+    }
+    .bs-panel-caption .bs-reference a:hover {
+      text-decoration: underline;
     }
     .bs-panel-caption .bs-stats {
       color: #888;
       font-variant-numeric: tabular-nums;
+      margin-top: 2px;
     }
     .bs-panel-caption strong {
       color: #d8d8d8;
