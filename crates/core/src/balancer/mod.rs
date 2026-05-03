@@ -22,5 +22,5 @@ pub use placement::{
     PlacedTemplate, PlacedTemplateEntity, PlacementEngine, PlacementError, PlacementRequest,
     PlacementResult,
 };
-pub use synth::{synth, SynthError};
+pub use synth::{synth, synth_benes, SynthError};
 pub use verify::{verify_balancer, verify_balancer_with_tolerance, VerifyError, VerifyOutcome};

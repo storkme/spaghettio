@@ -62,6 +62,17 @@ async function main(): Promise<void> {
   const appRoot = document.getElementById("app")!;
   const hash = window.location.hash;
   const params = new URLSearchParams(window.location.search);
+
+  // Balancer showcase QA tool — issue #274. Standalone route that
+  // renders the library + compose-bake balancer templates side-by-side
+  // for every (n_inputs, n_outputs) shape. Bypasses landing + generator
+  // entirely.
+  if (hash.startsWith("#/balancers")) {
+    const { renderBalancerShowcase } = await import("./ui/balancers");
+    renderBalancerShowcase(appRoot, engine);
+    return;
+  }
+
   // Skip the landing page when the URL carries any generator state. Both
   // legacy `?item=...` query strings and new `#/l/...` hash fragments
   // count — `urlHasGeneratorState` knows about both shapes.

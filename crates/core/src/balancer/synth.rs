@@ -39,6 +39,8 @@ use crate::balancer::graph::{Arc, BalancerGraph, Sink, Source};
 pub enum SynthError {
     #[error("invalid shape: ({n}, {m}) — both must be ≥ 1")]
     InvalidShape { n: u32, m: u32 },
+    #[error("Beneš construction requires n to be a power of two; got {n}")]
+    BenesNonPowerOfTwo { n: u32 },
 }
 
 /// Synthesize a load-balancer for `n` inputs and `m` outputs.
@@ -158,6 +160,173 @@ fn synth_n_to_m(n: u32, m: u32) -> BalancerGraph {
     let g = BalancerGraph::new(n, m, total_splitters, arcs);
     debug_assert!(g.validate().is_ok());
     g
+}
+
+/// Synthesize a symmetric Beneš `(n, n)` network for `n = 2^k`.
+///
+/// The classic Beneš construction (Beneš 1965; see Waksman 1968 for the
+/// rearrangeable proof) builds an `n × n` switching network from
+/// `(2k - 1)` stages of `n/2` 2×2 switches each, total
+/// `(2k - 1) · n/2` splitters.
+///
+/// Recursive structure:
+///   - **Base** (`k = 1`): one 2×2 splitter.
+///   - **Step**: `n/2` input-stage splitters fan out to two
+///     `n/2`-Beneš sub-networks (top via out-port 0, bottom via out-port 1);
+///     `n/2` output-stage splitters merge the two sub-networks (top via
+///     in-port 0, bottom via in-port 1).
+///
+/// Every splitter has exactly two in-arcs and two out-arcs — no
+/// sideloading, no underdegree. Compared to the tree-with-sideloads form
+/// of [`synth`], this trades a higher splitter count (e.g. 6 vs 3 for
+/// `(4, 4)`) for a cleaner placement target.
+///
+/// Errors with [`SynthError::BenesNonPowerOfTwo`] if `n` is not a
+/// power of two; for `n = 1` returns the trivial passthrough.
+///
+/// **No production caller yet.** Phase-4 prep for the placement RFP —
+/// `(n, n)` Beneš shapes are deferred until UG-belt support lands in
+/// the placer. The fluid-balance correctness is covered by the unit
+/// tests below, so the construction can be validated independently.
+pub fn synth_benes(n: u32) -> Result<BalancerGraph, SynthError> {
+    if n == 0 {
+        return Err(SynthError::InvalidShape { n, m: n });
+    }
+    if !n.is_power_of_two() {
+        return Err(SynthError::BenesNonPowerOfTwo { n });
+    }
+    if n == 1 {
+        return Ok(synth_n_to_one(1));
+    }
+    let k = n.trailing_zeros();
+    let mut b = BenesBuild::default();
+    let (input_sinks, output_sources) = b.build(k);
+    debug_assert_eq!(input_sinks.len(), n as usize);
+    debug_assert_eq!(output_sources.len(), n as usize);
+    let mut arcs = b.arcs;
+    for (i, sink) in input_sinks.into_iter().enumerate() {
+        arcs.push(Arc {
+            src: Source::Input(i as u32),
+            dst: sink,
+        });
+    }
+    for (j, src) in output_sources.into_iter().enumerate() {
+        arcs.push(Arc {
+            src,
+            dst: Sink::Output(j as u32),
+        });
+    }
+    let g = BalancerGraph::new(n, n, b.n_splitters, arcs);
+    debug_assert!(g.validate().is_ok());
+    Ok(g)
+}
+
+#[derive(Default)]
+struct BenesBuild {
+    arcs: Vec<Arc>,
+    n_splitters: u32,
+}
+
+impl BenesBuild {
+    fn alloc(&mut self) -> u32 {
+        let i = self.n_splitters;
+        self.n_splitters += 1;
+        i
+    }
+
+    /// Build a Beneš `(2^k, 2^k)` sub-network. Returns the in-port sinks
+    /// (length `2^k`, one per logical input of the sub-network) and the
+    /// out-port sources (length `2^k`, one per logical output). Caller
+    /// wires these to the surrounding context (graph I/O at the top level,
+    /// outer-stage splitter ports for nested calls).
+    fn build(&mut self, k: u32) -> (Vec<Sink>, Vec<Source>) {
+        debug_assert!(k >= 1);
+        if k == 1 {
+            let s = self.alloc();
+            return (
+                vec![
+                    Sink::Splitter { idx: s, port: 0 },
+                    Sink::Splitter { idx: s, port: 1 },
+                ],
+                vec![
+                    Source::Splitter { idx: s, port: 0 },
+                    Source::Splitter { idx: s, port: 1 },
+                ],
+            );
+        }
+        let n = 1u32 << k;
+        let half = (n / 2) as usize;
+
+        let in_stage: Vec<u32> = (0..half).map(|_| self.alloc()).collect();
+        let (top_in, top_out) = self.build(k - 1);
+        let (bot_in, bot_out) = self.build(k - 1);
+        let out_stage: Vec<u32> = (0..half).map(|_| self.alloc()).collect();
+
+        // Input stage → sub-networks: out0 to top, out1 to bottom.
+        for i in 0..half {
+            self.arcs.push(Arc {
+                src: Source::Splitter {
+                    idx: in_stage[i],
+                    port: 0,
+                },
+                dst: top_in[i],
+            });
+            self.arcs.push(Arc {
+                src: Source::Splitter {
+                    idx: in_stage[i],
+                    port: 1,
+                },
+                dst: bot_in[i],
+            });
+        }
+        // Sub-networks → output stage: top to in0, bottom to in1.
+        for i in 0..half {
+            self.arcs.push(Arc {
+                src: top_out[i],
+                dst: Sink::Splitter {
+                    idx: out_stage[i],
+                    port: 0,
+                },
+            });
+            self.arcs.push(Arc {
+                src: bot_out[i],
+                dst: Sink::Splitter {
+                    idx: out_stage[i],
+                    port: 1,
+                },
+            });
+        }
+
+        let inputs: Vec<Sink> = (0..half)
+            .flat_map(|i| {
+                [
+                    Sink::Splitter {
+                        idx: in_stage[i],
+                        port: 0,
+                    },
+                    Sink::Splitter {
+                        idx: in_stage[i],
+                        port: 1,
+                    },
+                ]
+            })
+            .collect();
+        let outputs: Vec<Source> = (0..half)
+            .flat_map(|i| {
+                [
+                    Source::Splitter {
+                        idx: out_stage[i],
+                        port: 0,
+                    },
+                    Source::Splitter {
+                        idx: out_stage[i],
+                        port: 1,
+                    },
+                ]
+            })
+            .collect();
+        (inputs, outputs)
+    }
 }
 
 #[cfg(test)]
@@ -297,6 +466,79 @@ mod tests {
         assert!(matches!(synth(0, 4), Err(SynthError::InvalidShape { .. })));
         assert!(matches!(synth(1, 0), Err(SynthError::InvalidShape { .. })));
         assert!(matches!(synth(0, 0), Err(SynthError::InvalidShape { .. })));
+    }
+
+    // ── Beneš (n, n) ───────────────────────────────────────────────────
+
+    fn check_benes_balanced(n: u32) {
+        let g = synth_benes(n).unwrap();
+        let out = verify_balancer(&g).unwrap();
+        assert_eq!(out.output_throughputs.len(), n as usize);
+        for (i, &t) in out.output_throughputs.iter().enumerate() {
+            assert!(
+                approx_eq(t, 1.0),
+                "synth_benes({}) output {} = {} != 1.0",
+                n,
+                i,
+                t,
+            );
+        }
+    }
+
+    #[test]
+    fn benes_balanced_powers_of_two() {
+        for n in [1u32, 2, 4, 8, 16] {
+            check_benes_balanced(n);
+        }
+    }
+
+    #[test]
+    fn benes_splitter_counts() {
+        // (2k - 1) · 2^(k-1) splitters for n = 2^k, k ≥ 1.
+        for k in 1u32..=4 {
+            let n = 1u32 << k;
+            let expected = (2 * k - 1) * (n / 2);
+            let g = synth_benes(n).unwrap();
+            assert_eq!(
+                g.n_splitters, expected,
+                "Beneš({}) should have {} splitters",
+                n, expected,
+            );
+        }
+        // n=1 is the passthrough (0 splitters).
+        assert_eq!(synth_benes(1).unwrap().n_splitters, 0);
+    }
+
+    #[test]
+    fn benes_no_sideloading() {
+        // Every splitter in-port should have exactly one incoming arc.
+        for n in [2u32, 4, 8] {
+            let g = synth_benes(n).unwrap();
+            let mut counts = vec![[0u32; 2]; g.n_splitters as usize];
+            for arc in &g.arcs {
+                if let Sink::Splitter { idx, port } = arc.dst {
+                    counts[idx as usize][port as usize] += 1;
+                }
+            }
+            for (idx, c) in counts.iter().enumerate() {
+                assert_eq!(
+                    c, &[1, 1],
+                    "Beneš({}) splitter {} in-port arc counts != [1,1]",
+                    n, idx,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn benes_rejects_non_power_of_two() {
+        for n in [3u32, 5, 6, 7, 10] {
+            assert!(matches!(
+                synth_benes(n),
+                Err(SynthError::BenesNonPowerOfTwo { .. })
+            ));
+        }
+        assert!(matches!(synth_benes(0), Err(SynthError::InvalidShape { .. })));
     }
 
     // ── Serde ──────────────────────────────────────────────────────────

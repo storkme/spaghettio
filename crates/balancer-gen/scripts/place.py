@@ -3,7 +3,23 @@
 # requires-python = ">=3.10"
 # dependencies = ["ortools>=9.10"]
 # ///
-"""Phase 3.2A — flow-conservation belt routing for splitter layouts.
+"""Phase 3.2A — flow-conservation belt routing for splitter layouts (older spike, NOT canonical).
+
+Canonical placer: `scripts/cp_sat_placer.py` at the repo root. That
+script is the one consumed by `crates/core/src/balancer/placement/cp_sat.rs`
+and the `cp_sat_round_trip` test suite.
+
+This script is the older spike (more general — handles UG belts, mixed
+splitter directions, edge-aware routing) used by the bake pipeline in
+`crates/balancer-gen` for phase 3.4 (`bake_missing_shapes`) and phase 4
+(`compose_parallel` / `compose_series`). It will be migrated onto
+`scripts/cp_sat_placer.py` once the canonical placer covers the same
+shape repertoire. Until then both live on disk; the canonical one is
+the one to extend.
+
+Run via `uv run --no-project crates/balancer-gen/scripts/place.py` (the
+PEP 723 inline metadata above pins `ortools` so first-run dep resolution
+is automatic).
 
 Two modes, selected by the input JSON:
 

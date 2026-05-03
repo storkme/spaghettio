@@ -933,7 +933,18 @@ pub fn place_rows(
         if spec_idx > 0 {
             y_cursor += 2; // gap between recipes for lane balancers
         }
-        let total_count = (spec.count.ceil() as usize).max(1);
+        // Snap to nearest integer when within float drift of one — solver
+        // math accumulates ulps in recursive ratio chains, so a recipe that
+        // logically needs N machines often arrives as N + 1ulp, which a
+        // naive ceil() would bump to N+1. The over-count silently wastes
+        // a machine in most rows, and trips template assertions in others
+        // (#277 utility-science-pack: 1.0000000000000002 advanced-oil-
+        // processing → machine_count=2 → staggered-3-output panic).
+        let total_count = {
+            let c = spec.count;
+            let snapped = if (c - c.round()).abs() < 1e-9 { c.round() } else { c.ceil() };
+            (snapped as usize).max(1)
+        };
 
         let solid_inputs_count = spec.inputs.iter().filter(|f| !f.is_fluid).count();
         let first_solid_output_rate = spec

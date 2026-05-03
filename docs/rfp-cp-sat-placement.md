@@ -281,3 +281,28 @@ After each phase:
 - *2026-05-01 — RFP drafted. Subprocess plumbing landed in `5687ddf`;
   this RFP scopes the placement model itself. Phase 1 starts when
   approved.*
+- *2026-05-01 — Phase 1 shipped on branch `claude/cp-sat-place-dyadic`.
+  6 shapes covered: `(1, 1), (1, 2), (2, 1), (2, 2), (1, 4), (1, 8)`,
+  all round-tripping synth → CpSat → topology_of_template →
+  verify_balancer at the expected `n/m` rate. Layout details:
+  - `(1, 4)`: library-style tight-stack with 1-col stagger between
+    root and level-1; 3 splitters, 5 belts, 4×4 grid.
+  - `(1, 8)`: adds one routing row between root and level-1; bottom
+    two splitter levels still tight-stack; 7 splitters, 13 belts,
+    8×6 grid.
+  Underground belts deferred — not needed at depth ≤ 3. UGs become
+  useful for depth ≥ 4 (multi-row routing) and for crossing flows
+  in the asymmetric coprime shapes (#136); both phase 3+ territory.*
+- *2026-05-01 — Phase 2 first slice shipped on the same branch:
+  `(1, 4)` and `(1, 8)` placement now uses real CP-SAT models
+  (`add_no_overlap_2d` over splitter rectangles + structural
+  equalities for tight-stack and routing-row offsets). The 4×4 and
+  8×6 constraint sets each have only one valid assignment, so
+  CP-SAT functions as a model-correctness proof rather than a
+  search; same modeling pattern extends to `(1, 16)` and beyond
+  with additional routing rows. Same 6/6 round-trip tests pass.
+  `(2, 2)` and `(4, 4)` Beneš deferred to phase 4: synth currently
+  produces sideloaded trees for `(n, n)`, and a 4-splitter Beneš
+  for `(4, 4)` requires underground-belt cross-wiring (the library
+  `(4, 4)` is 4×10 with UG belts) — phase 4's UG support handles
+  both shapes.*

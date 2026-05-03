@@ -469,3 +469,95 @@ pub fn validate_layout(
         Err(err) => err.issues,
     }
 }
+
+// ---------------------------------------------------------------------------
+// Balancer showcase (issue #274) — feeds the `/balancers` web QA tool.
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+struct ShowcaseTemplate {
+    /// Short label describing the source — `"Factorio-SAT"` for library
+    /// entries, or a `compose: ...` recipe for generator output.
+    source: String,
+    width: u32,
+    height: u32,
+    n_inputs: u32,
+    n_outputs: u32,
+    /// Stamped at origin (0, 0). Belt-tier strings are the yellow-tier
+    /// defaults (`transport-belt` / `splitter` / `underground-belt`); the
+    /// showcase doesn't care about higher tiers since it's a topology QA
+    /// tool, not a throughput tool.
+    entities: Vec<PlacedEntity>,
+}
+
+#[derive(Serialize)]
+struct ShowcaseCell {
+    n_inputs: u32,
+    n_outputs: u32,
+    library: Option<ShowcaseTemplate>,
+    generated: Option<ShowcaseTemplate>,
+}
+
+/// Mirror of `balancer_generate::generate`'s decision tree (enough of it
+/// to label the construction recipe). When the generator grows new shapes
+/// extend this in lockstep — the showcase caption reads from this.
+fn describe_generated(n_in: u32, n_out: u32) -> String {
+    if n_in == n_out {
+        return "compose: passthrough".to_string();
+    }
+    if n_in == 1 && n_out == 2 {
+        return "compose: 1→2 atom".to_string();
+    }
+    if n_in == 2 && n_out == 1 {
+        return "compose: 2→1 atom".to_string();
+    }
+    if n_in != 0 && n_out.is_multiple_of(n_in) {
+        let k = n_out / n_in;
+        return format!("compose: {n_in} × (1, {k})");
+    }
+    if n_out != 0 && n_in.is_multiple_of(n_out) {
+        let k = n_in / n_out;
+        return format!("compose: {k} × (2, 1)");
+    }
+    "compose: ?".to_string()
+}
+
+/// Enumerate balancer templates for `(1..=max_inputs) × (1..=max_outputs)`.
+/// Each cell carries the library entry (if present) and the generator's
+/// output (if it can build that shape) so the web showcase can render
+/// both side-by-side.
+///
+/// Single round-trip — calling per-shape would be 100+ wasm-bindgen calls
+/// for the default 10×10 grid; one call instead.
+#[wasm_bindgen]
+pub fn balancer_showcase(max_inputs: u32, max_outputs: u32) -> Result<JsValue, JsError> {
+    use fucktorio_core::bus::balancer_generate::generate;
+    use fucktorio_core::bus::balancer_library::balancer_templates;
+
+    let templates = balancer_templates();
+    let mut cells: Vec<ShowcaseCell> = Vec::with_capacity(
+        (max_inputs as usize).saturating_mul(max_outputs as usize),
+    );
+    for n_in in 1..=max_inputs {
+        for n_out in 1..=max_outputs {
+            let library = templates.get(&(n_in, n_out)).map(|t| ShowcaseTemplate {
+                source: "Factorio-SAT".to_string(),
+                width: t.width,
+                height: t.height,
+                n_inputs: n_in,
+                n_outputs: n_out,
+                entities: t.stamp(0, 0, "transport-belt", "splitter", "underground-belt", None),
+            });
+            let generated = generate(n_in, n_out).map(|t| ShowcaseTemplate {
+                source: describe_generated(n_in, n_out),
+                width: t.width,
+                height: t.height,
+                n_inputs: n_in,
+                n_outputs: n_out,
+                entities: t.stamp(0, 0, "transport-belt", "splitter", "underground-belt", None),
+            });
+            cells.push(ShowcaseCell { n_inputs: n_in, n_outputs: n_out, library, generated });
+        }
+    }
+    serde_wasm_bindgen::to_value(&cells).map_err(|e| JsError::new(&e.to_string()))
+}

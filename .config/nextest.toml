@@ -2,11 +2,16 @@
 failure-output = "immediate"
 fail-fast = false
 slow-timeout = { period = "30s", terminate-after = 3 }
-# test-threads unset → use nextest's default (num_cpus, 4 on
-# ubuntu-latest). Previously pinned to 1 in commit d97cd13's "minor"
-# section without a documented rationale; nextest runs each test in
-# its own process so there's no shared state to serialise. See
-# 2026-05-02 perf-audit conversation.
+# Pinned to 1 deliberately. Tried `test-threads = default (num_cpus = 4)`
+# on 2026-05-02 in commit 8eb6ace; rust job dropped 11m → 6m02s, but
+# `tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing` blew
+# its 30s `#[ntest::timeout]` at 30.002s (locally 2.05s — a 15× slowdown
+# under parallelism). ubuntu-latest is hyperthreaded (4 vCPUs ≈ 2 physical
+# cores); concurrent SAT-heavy tests contend on memory bandwidth and L1/L2
+# cache, blowing per-test timeouts that were sized for serial execution.
+# Reverted in 8eb6ace's follow-up. To re-enable parallelism, bump the
+# affected `#[ntest::timeout]` ceilings first.
+test-threads = 1
 
 # `partition_strategy_scoreboard` runs Pool/P1/P2 across 2 cases —
 # baseline ~50s locally in debug mode. CI has been variable, with
