@@ -1543,6 +1543,86 @@ def solve_pure_routing(req: dict) -> dict:
             if arc_var is not None:
                 model.Add(arc_var + ug_var <= 1)
 
+    # Junction src-cell direction constraint: stage1's bottom row
+    # has south-facing belts that physically feed into the junction
+    # at src cells (top row of the junction, y=0). Stage1's belts
+    # aren't in the CP-SAT model, so the same-edge constraint above
+    # can't catch sideloads from them. At src cells, force the entity
+    # to be either a south-belt or a south-facing UG-input — anything
+    # else (east/west/north belt, or non-south UG-input) would be
+    # sideloaded by stage1's south flow above (see
+    # `docs/rfp-ug-sideload-prevention.md`).
+    for e_idx, src in enumerate(edge_src):
+        sx, sy = src
+        for d in range(4):
+            if d == 2:  # south = stage1 → junction feed direction
+                continue
+            arc_var = arcs.get((sx, sy, d, e_idx))
+            if arc_var is not None:
+                model.Add(arc_var == 0)
+            for L in range(2, ug_max_reach_param + 1):
+                ug_var = ug_arcs.get((sx, sy, d, L, e_idx))
+                if ug_var is not None:
+                    model.Add(ug_var == 0)
+
+    # Chained UG sideload prevention: when one UG-input's output
+    # lands on a cell that hosts another UG-input, both UGs must
+    # face the same direction. Otherwise the upstream UG's flow
+    # sideloads the downstream UG perpendicularly — same lane-loss
+    # problem as belt-into-UG, just with a UG-output as the source.
+    #
+    # Cross-edge case: handled by at-most-one-entity-per-cell (the
+    # downstream UG cell can host only one edge's UG, and the
+    # upstream UG-output landing on it implies the upstream is the
+    # same edge for the model to balance).
+    #
+    # Same-edge case: encoded explicitly here. For each UG-input
+    # at (cx, cy, d_ug, L_ug, e), forbid an upstream UG-input of
+    # the same edge whose output lands on (cx, cy) but faces a
+    # different direction.
+    for (cx, cy, d_ug, L_ug, e_idx), ug_var in ug_arcs.items():
+        for d_up in range(4):
+            if d_up == d_ug:
+                continue  # straight chain is allowed.
+            udx, udy = DIR_STEPS[d_up]
+            for L_up in range(2, ug_max_reach_param + 1):
+                # Upstream UG-input position whose output lands one
+                # cell ahead, at (cx, cy). UG-output is at upstream
+                # + L_up * udir; flow continues one more cell to
+                # land on the next entity. So upstream input is at
+                # (cx, cy) - (L_up + 1) * udir.
+                ucx = cx - (L_up + 1) * udx
+                ucy = cy - (L_up + 1) * udy
+                if not (0 <= ucx < width and 0 <= ucy < height):
+                    continue
+                upstream = ug_arcs.get((ucx, ucy, d_up, L_up, e_idx))
+                if upstream is not None:
+                    model.Add(upstream + ug_var <= 1)
+
+    # UG-output head-on collision prevention: a UG-output exits
+    # facing the UG's direction and pushes flow into the cell
+    # ahead. If that cell hosts a belt facing the OPPOSITE direction
+    # for the same edge, the two flows collide head-on (validator
+    # error: `Underground belt exit at X facing W collides head-on
+    # with belt at Z facing E`). For each UG-input at (cx, cy, d_ug,
+    # L_ug, e), the cell ahead of its output (at out_pos + d_ug)
+    # cannot have an arc facing the opposite direction.
+    OPPOSITE = {0: 2, 1: 3, 2: 0, 3: 1}
+    for (cx, cy, d_ug, L_ug, e_idx), ug_var in ug_arcs.items():
+        dx, dy = DIR_STEPS[d_ug]
+        # UG-output cell:
+        ox, oy = cx + L_ug * dx, cy + L_ug * dy
+        # Cell ahead of UG-output (where flow continues to):
+        nx, ny = ox + dx, oy + dy
+        if not (0 <= nx < width and 0 <= ny < height):
+            continue
+        d_opposite = OPPOSITE[d_ug]
+        # An arc at (nx, ny) facing d_opposite would flow back
+        # toward the UG-output → head-on.
+        opp_arc = arcs.get((nx, ny, d_opposite, e_idx))
+        if opp_arc is not None:
+            model.Add(opp_arc + ug_var <= 1)
+
     # Conservation per (cell, edge), fixed IO positions.
     for cx in range(width):
         for cy in range(height):
