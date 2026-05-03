@@ -292,6 +292,8 @@ fn bp_data_to_layout(bp_data: BpData) -> LayoutResult {
             segment_id: None,
             rate: None,
             items,
+            input_priority: None,
+            output_priority: None,
         });
     }
 

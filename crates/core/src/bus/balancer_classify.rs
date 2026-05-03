@@ -189,6 +189,129 @@ pub struct SplitterGraph {
     pub edges: Vec<(NodeId, NodeId)>,
 }
 
+/// One splitter that needs an input-priority annotation to avoid
+/// discrete-time stalls in the real game. Returned by
+/// [`detect_priority_needed`].
+///
+/// In our [`SplitterGraph`] model, splitters have two input ports
+/// (`port 0` / `port 1`). Port assignment is the same convention used
+/// by [`from_splitter_graph`]: incoming edges are matched to ports in
+/// the order they appear in `graph.edges`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PrioritySuggestion {
+    /// Index into `SplitterGraph::n_splitters`.
+    pub splitter: usize,
+    /// Bitmask of feedback-loop ports: bit 0 = port 0 in feedback, bit 1
+    /// = port 1 in feedback.
+    pub feedback_ports: u8,
+    /// Recommended priority port (0 or 1) — the *non*-feedback input
+    /// gets priority so the feedback gets back-pressured. `None` when
+    /// both ports are in feedback (symmetric case — a priority is still
+    /// helpful but the choice is arbitrary).
+    pub priority_port: Option<u8>,
+}
+
+/// Find splitters that have a feedback loop through one (or both) of
+/// their inputs. Without an `input_priority` annotation in the placed
+/// blueprint, these splitters can suffer transient discrete-time stalls
+/// even when our scalar fluid-flow model says they balance perfectly.
+///
+/// Algorithm:
+/// 1. Build forward reachability through splitters: for each splitter
+///    S, the set of other splitters reachable from S's outputs.
+/// 2. For each splitter S with two incoming edges, check whether the
+///    edge sourcing each port comes from a splitter reachable from S.
+///    A reachable source = an indirect cycle through S = a feedback
+///    input that benefits from priority.
+///
+/// Pure feed-forward inputs aren't flagged. Single-input splitters
+/// aren't flagged (no contention to resolve).
+pub fn detect_priority_needed(graph: &SplitterGraph) -> Vec<PrioritySuggestion> {
+    use rustc_hash::FxHashSet;
+
+    // Forward adjacency: splitter idx → set of splitter targets
+    let mut adj: Vec<FxHashSet<usize>> = vec![FxHashSet::default(); graph.n_splitters];
+    for (src, dst) in &graph.edges {
+        if let (NodeId::Splitter(si), NodeId::Splitter(di)) = (src, dst) {
+            adj[*si].insert(*di);
+        }
+    }
+
+    // For each splitter, BFS forward to compute the set of splitters
+    // reachable from its outputs. (We could do this more efficiently
+    // with SCCs, but n_splitters is small and BFS-per-node is fine.)
+    let reach_from: Vec<FxHashSet<usize>> = (0..graph.n_splitters)
+        .map(|s| {
+            let mut seen = FxHashSet::default();
+            let mut stack: Vec<usize> = adj[s].iter().copied().collect();
+            while let Some(n) = stack.pop() {
+                if seen.insert(n) {
+                    for &t in &adj[n] {
+                        if !seen.contains(&t) {
+                            stack.push(t);
+                        }
+                    }
+                }
+            }
+            seen
+        })
+        .collect();
+
+    // For each splitter, group incoming edges by destination port using
+    // the same convention as `from_splitter_graph`: first incoming edge
+    // → port 0, second → port 1, further edges → port 1 sideloads.
+    let mut in_port: Vec<[Option<NodeId>; 2]> = vec![[None, None]; graph.n_splitters];
+    let mut next_port: Vec<[bool; 2]> = vec![[false, false]; graph.n_splitters];
+    for (src, dst) in &graph.edges {
+        if let NodeId::Splitter(s) = dst {
+            if !next_port[*s][0] {
+                next_port[*s][0] = true;
+                in_port[*s][0] = Some(*src);
+            } else if !next_port[*s][1] {
+                next_port[*s][1] = true;
+                in_port[*s][1] = Some(*src);
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    for s in 0..graph.n_splitters {
+        // Both ports must be wired for contention to matter.
+        let (Some(p0_src), Some(p1_src)) = (in_port[s][0], in_port[s][1]) else {
+            continue;
+        };
+        let in_feedback = |src: NodeId| -> bool {
+            match src {
+                NodeId::Splitter(si) => reach_from[s].contains(&si),
+                _ => false,
+            }
+        };
+        let p0_fb = in_feedback(p0_src);
+        let p1_fb = in_feedback(p1_src);
+        if !p0_fb && !p1_fb {
+            continue;
+        }
+        let mut feedback_ports = 0u8;
+        if p0_fb {
+            feedback_ports |= 1;
+        }
+        if p1_fb {
+            feedback_ports |= 2;
+        }
+        let priority_port = match (p0_fb, p1_fb) {
+            (true, false) => Some(1),
+            (false, true) => Some(0),
+            _ => None,
+        };
+        out.push(PrioritySuggestion {
+            splitter: s,
+            feedback_ports,
+            priority_port,
+        });
+    }
+    out
+}
+
 /// Classify a logical splitter graph directly, skipping the
 /// `recover_graph` step. Used by [`super::balancer_topology`] for graphs
 /// constructed without a physical layout, and by phase 3 placement-solver
@@ -735,6 +858,55 @@ fn check_output_subsets(
 mod tests {
     use super::*;
     use crate::bus::balancer_library::balancer_templates;
+
+    /// `detect_priority_needed` flags splitters whose inputs are part of
+    /// a feedback loop. The minimal example: two splitters mutually
+    /// feeding each other's port 1 (Couëtoux Figure 1c-style).
+    #[test]
+    fn priority_detection_simple_feedback_loop() {
+        // L: in (i0, R.out1), out (o0, R.in1)
+        // R: in (i1, L.out1), out (o1, L.in1)
+        let g = SplitterGraph {
+            n_inputs: 2,
+            n_outputs: 2,
+            n_splitters: 2,
+            edges: vec![
+                (NodeId::InputPort(0), NodeId::Splitter(0)),
+                (NodeId::InputPort(1), NodeId::Splitter(1)),
+                (NodeId::Splitter(0), NodeId::OutputPort(0)),
+                (NodeId::Splitter(0), NodeId::Splitter(1)),
+                (NodeId::Splitter(1), NodeId::OutputPort(1)),
+                (NodeId::Splitter(1), NodeId::Splitter(0)),
+            ],
+        };
+        let suggestions = detect_priority_needed(&g);
+        assert_eq!(suggestions.len(), 2);
+        // Both splitters: port 0 = external input (non-feedback),
+        // port 1 = feedback from the other splitter.
+        for s in &suggestions {
+            assert_eq!(s.feedback_ports, 0b10, "expected port 1 in feedback");
+            assert_eq!(s.priority_port, Some(0));
+        }
+    }
+
+    /// Pure feed-forward graph (no feedback loops) → no priority
+    /// suggestions.
+    #[test]
+    fn priority_detection_no_feedback() {
+        // Single splitter: 2 inputs → 2 outputs, no loops.
+        let g = SplitterGraph {
+            n_inputs: 2,
+            n_outputs: 2,
+            n_splitters: 1,
+            edges: vec![
+                (NodeId::InputPort(0), NodeId::Splitter(0)),
+                (NodeId::InputPort(1), NodeId::Splitter(0)),
+                (NodeId::Splitter(0), NodeId::OutputPort(0)),
+                (NodeId::Splitter(0), NodeId::OutputPort(1)),
+            ],
+        };
+        assert!(detect_priority_needed(&g).is_empty());
+    }
 
     #[test]
     fn classify_smoke_each_template() {

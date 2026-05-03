@@ -138,6 +138,8 @@ impl PlacedTemplate {
                 y: e.y,
                 direction: e.direction,
                 io_type,
+                input_priority: None,
+                output_priority: None,
             });
         }
         Ok(crate::bus::balancer_generate::OwnedTemplate {

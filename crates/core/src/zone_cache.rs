@@ -93,9 +93,53 @@ pub struct ZoneStats {
 use std::cell::RefCell;
 #[cfg(not(target_arch = "wasm32"))]
 use std::io::Write as _;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::{SystemTime, UNIX_EPOCH};
+
+// ---------------------------------------------------------------------------
+// Permanent hit-rate counters — always-on, lock-free, cheap.
+// ---------------------------------------------------------------------------
+
+static LOOKUP_TOTAL: AtomicUsize = AtomicUsize::new(0);
+static LOOKUP_HIT: AtomicUsize = AtomicUsize::new(0);
+static LOOKUP_MISS: AtomicUsize = AtomicUsize::new(0);
+/// Subset of hits that were `Unsat` cache entries — caller saved a SAT call.
+static LOOKUP_HIT_UNSAT: AtomicUsize = AtomicUsize::new(0);
+/// Subset of hits that were `Timeout` cache entries — caller saved a SAT call.
+static LOOKUP_HIT_TIMEOUT: AtomicUsize = AtomicUsize::new(0);
+
+/// Return `(total, hits, misses)` across all `lookup_zone` calls so far.
+/// Counters use `Relaxed` ordering — eventual consistency only, no guarantees
+/// about cross-thread visibility at any exact instant. Good enough for stats.
+pub fn cache_stats() -> (usize, usize, usize) {
+    (
+        LOOKUP_TOTAL.load(Ordering::Relaxed),
+        LOOKUP_HIT.load(Ordering::Relaxed),
+        LOOKUP_MISS.load(Ordering::Relaxed),
+    )
+}
+
+/// Extended stats: `(total, hits_solved, hits_unsat, hits_timeout, misses)`.
+pub fn cache_stats_extended() -> (usize, usize, usize, usize, usize) {
+    let total  = LOOKUP_TOTAL.load(Ordering::Relaxed);
+    let hits   = LOOKUP_HIT.load(Ordering::Relaxed);
+    let unsat  = LOOKUP_HIT_UNSAT.load(Ordering::Relaxed);
+    let timeo  = LOOKUP_HIT_TIMEOUT.load(Ordering::Relaxed);
+    let misses = LOOKUP_MISS.load(Ordering::Relaxed);
+    (total, hits, unsat, timeo, misses)
+}
+
+/// Reset the hit-rate counters to zero. Useful at the start of a test that
+/// wants to measure only its own workload.
+pub fn reset_cache_stats() {
+    LOOKUP_TOTAL.store(0, Ordering::Relaxed);
+    LOOKUP_HIT.store(0, Ordering::Relaxed);
+    LOOKUP_MISS.store(0, Ordering::Relaxed);
+    LOOKUP_HIT_UNSAT.store(0, Ordering::Relaxed);
+    LOOKUP_HIT_TIMEOUT.store(0, Ordering::Relaxed);
+}
 
 // Thread-local source tag so parallel tests each carry their own label
 // without stomping on each other via a process-global env var.
@@ -512,14 +556,54 @@ fn entity_from_tuple(t: [i32; 5]) -> Option<PlacedEntity> {
 //
 // Designed to be parseable from a `&[u8]` with no I/O, so the same loader
 // works for native (`std::fs::read`) and WASM (`include_bytes!`).
+//
+// Version history:
+//   1 — original schema: Solved outcomes only, no encoder_version field.
+//   2 — adds `u32 LE encoder_version` after `source`, and `u8 outcome_tag`
+//         + optional `u32 LE budget_ms` (Timeout only) after the entity list.
+//         Outcome tags: 0=Solved, 1=Unsat, 2=Timeout.
+//       Old version-1 records decode as encoder_version=0, outcome=Solved.
+//
+// On lookup, if a record's encoder_version != CURRENT_ENCODER_VERSION, it is
+// treated as a cache miss (stale). Misfit entries are kept in storage and
+// overwritten when re-solved.
 
 /// Schema version of records emitted by this build. Bumped on incompatible
-/// payload changes; the decoder rejects unknown versions.
-const RECORD_VERSION: u8 = 1;
+/// payload changes; the decoder rejects unknown versions (returns None).
+const RECORD_VERSION: u8 = 2;
+
+/// Outcome stored in a cache record — either a solved solution, an
+/// UNSAT result (the zone has no valid crossing layout under these
+/// constraints), or a Timeout (the solver did not finish within the
+/// configured budget).
+///
+/// The `#[repr(u8)]` tag is stored in version-2 records; version-1
+/// records (no tag byte) always decode as `Solved`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CachedOutcome {
+    /// Varisat found a satisfying model; entities hold the solution.
+    Solved,
+    /// Varisat proved the formula unsatisfiable.
+    Unsat,
+    /// Solver was interrupted (wall-clock budget exceeded). `budget_ms`
+    /// is the budget that was in force — future lookups with a higher
+    /// budget re-attempt the solve rather than re-using this result.
+    Timeout { budget_ms: u32 },
+}
+
+impl CachedOutcome {
+    fn tag(&self) -> u8 {
+        match self {
+            Self::Solved      => 0,
+            Self::Unsat       => 1,
+            Self::Timeout {..} => 2,
+        }
+    }
+}
 
 /// Telemetry fields decoded from a record. Only `signature` and the
-/// cache-payload subset (entities, channel_items, canon_w/h) are needed for
-/// cache hits; the rest is for diag tools (histogram, dumps).
+/// cache-payload subset (entities, channel_items, canon_w/h, outcome) are
+/// needed for cache hits; the rest is for diag tools (histogram, dumps).
 #[derive(Debug, Clone)]
 pub struct DecodedRecord {
     pub ts: u64,
@@ -532,6 +616,10 @@ pub struct DecodedRecord {
     pub solve_time_us: u64,
     pub channel_items: Vec<String>,
     pub entities: Vec<PlacedEntity>,
+    /// Encoder version that produced this record (`0` for legacy v1 records).
+    pub encoder_version: u32,
+    /// SAT outcome stored in this record.
+    pub outcome: CachedOutcome,
 }
 
 /// Append a length-prefixed `u16` UTF-8 string to `buf`. Strings longer than
@@ -591,10 +679,10 @@ fn read_u64(cursor: &mut &[u8]) -> Option<u64> {
 
 /// Encode a complete record (length prefix + body) into `buf`.
 ///
-/// Layout:
+/// Layout (version 2):
 /// ```text
 /// u32 LE body_len
-///   u8       version (=1)
+///   u8       version (=2)
 ///   u64 LE   ts
 ///   u32 LE   variables
 ///   u32 LE   clauses
@@ -603,10 +691,13 @@ fn read_u64(cursor: &mut &[u8]) -> Option<u64> {
 ///   u8       canon_h
 ///   u16+str  signature
 ///   u16+str  source      (zero-length = None)
+///   u32 LE   encoder_version
 ///   u8       n_channels
 ///   ×n       u16+str channel_items[i]
 ///   u16 LE   n_entities
 ///   ×n       [u8 kind, u8 x, u8 y, u8 dir, i8 carries_idx]
+///   u8       outcome_tag (0=Solved, 1=Unsat, 2=Timeout)
+///   [u32 LE  budget_ms]  (present only when outcome_tag=2)
 /// ```
 pub fn encode_record(
     buf: &mut Vec<u8>,
@@ -618,8 +709,10 @@ pub fn encode_record(
     variables: u32,
     clauses: u32,
     solve_time_us: u64,
+    encoder_version: u32,
     channel_items: &[String],
     entities: &[[i32; 5]],
+    outcome: &CachedOutcome,
 ) {
     let mut body: Vec<u8> = Vec::with_capacity(64 + entities.len() * 5);
     body.push(RECORD_VERSION);
@@ -631,6 +724,7 @@ pub fn encode_record(
     body.push(u8::try_from(canon_h).unwrap_or(u8::MAX));
     write_str(&mut body, signature);
     write_str(&mut body, source.unwrap_or(""));
+    body.extend_from_slice(&encoder_version.to_le_bytes());
     body.push(u8::try_from(channel_items.len()).unwrap_or(u8::MAX));
     for it in channel_items {
         write_str(&mut body, it);
@@ -644,6 +738,11 @@ pub fn encode_record(
         body.push(u8::try_from(t[3]).unwrap_or(0));
         body.push((t[4].clamp(-128, 127)) as i8 as u8);
     }
+    // Outcome tag + optional budget.
+    body.push(outcome.tag());
+    if let CachedOutcome::Timeout { budget_ms } = outcome {
+        body.extend_from_slice(&budget_ms.to_le_bytes());
+    }
 
     let body_len = u32::try_from(body.len()).unwrap_or(u32::MAX);
     buf.extend_from_slice(&body_len.to_le_bytes());
@@ -652,6 +751,10 @@ pub fn encode_record(
 
 /// Decode the next record from `bytes`, advancing the slice past it. Returns
 /// `None` on malformed input or unknown version.
+///
+/// Version 1 records (old Solved-only format) are decoded with
+/// `encoder_version: 0` and `outcome: CachedOutcome::Solved`.
+/// Version 2 adds `encoder_version` and an outcome tag.
 fn decode_record(bytes: &mut &[u8]) -> Option<DecodedRecord> {
     let body_len = read_u32(bytes)? as usize;
     if bytes.len() < body_len {
@@ -661,7 +764,8 @@ fn decode_record(bytes: &mut &[u8]) -> Option<DecodedRecord> {
     *bytes = &bytes[body_len..];
 
     let version = read_u8(&mut body)?;
-    if version != RECORD_VERSION {
+    // Accept version 1 (legacy) and version 2 (current).
+    if version != 1 && version != 2 {
         return None;
     }
     let ts = read_u64(&mut body)?;
@@ -673,6 +777,13 @@ fn decode_record(bytes: &mut &[u8]) -> Option<DecodedRecord> {
     let signature = read_str(&mut body)?;
     let source_raw = read_str(&mut body)?;
     let source = if source_raw.is_empty() { None } else { Some(source_raw) };
+
+    // Version 2 adds encoder_version here; version 1 implicitly = 0.
+    let encoder_version = if version >= 2 {
+        read_u32(&mut body)?
+    } else {
+        0
+    };
 
     let n_channels = read_u8(&mut body)? as usize;
     let mut channel_items = Vec::with_capacity(n_channels);
@@ -695,11 +806,27 @@ fn decode_record(bytes: &mut &[u8]) -> Option<DecodedRecord> {
         }
     }
 
+    // Version 2 adds outcome tag at end; version 1 is always Solved.
+    let outcome = if version >= 2 {
+        match read_u8(&mut body)? {
+            0 => CachedOutcome::Solved,
+            1 => CachedOutcome::Unsat,
+            2 => {
+                let budget_ms = read_u32(&mut body)?;
+                CachedOutcome::Timeout { budget_ms }
+            }
+            _ => return None, // unknown outcome tag — reject record
+        }
+    } else {
+        CachedOutcome::Solved
+    };
+
     Some(DecodedRecord {
         ts, signature, source,
         canon_w, canon_h,
         variables, clauses, solve_time_us,
         channel_items, entities,
+        encoder_version, outcome,
     })
 }
 
@@ -1237,24 +1364,40 @@ pub fn pending_count() -> usize { 0 }
 // Solution cache — record + lookup
 // ---------------------------------------------------------------------------
 
-/// A cached SAT solution stored by canonical signature.
+/// A cached SAT result stored by canonical signature.
 ///
-/// `entities` are in canonical-frame local coords: x ∈ [0, canon_w), y ∈ [0,
-/// canon_h), and each entity's `carries` is either `None` or a channel-token
-/// `"ch{N}"` referring to position N in `channel_items`. `segment_id` is
-/// stripped (rewritten at replay time using the new zone's coords).
+/// For `Solved` entries, `entities` are in canonical-frame local coords:
+/// x ∈ [0, canon_w), y ∈ [0, canon_h), and each entity's `carries` is
+/// either `None` or a channel-token `"ch{N}"`. `segment_id` is stripped
+/// (rewritten at replay time).
+///
+/// For `Unsat` / `Timeout` entries, `entities` and `channel_items` are empty.
 #[derive(Debug, Clone)]
 struct CacheEntry {
+    /// Outcome of the SAT call that produced this entry.
+    outcome: CachedOutcome,
+    /// Entities in canonical frame (non-empty only for `Solved`).
     entities: Vec<PlacedEntity>,
-    /// Items by canonical channel position. `channel_items[i]` is the item
-    /// that flowed through canonical-channel-position `i` at record time.
-    /// At lookup time we replace each `"ch{i}"` token with the item flowing
-    /// through that same canonical position in the new zone.
+    /// Items by canonical channel position (non-empty only for `Solved`).
     channel_items: Vec<String>,
     /// Canonical zone dimensions — needed for the inverse-transform call.
     canon_w: u32,
     canon_h: u32,
+    /// Encoder version that produced this entry. Mismatches current
+    /// `ENCODER_VERSION` → treat as a miss (stale).
+    encoder_version: u32,
 }
+
+/// Encoder version embedded in new cache records. Must be bumped whenever
+/// the SAT encoding logic changes in a way that could alter outcomes for the
+/// same canonical signature. Records with a different encoder_version than
+/// this value are treated as cache misses on lookup (stale) but are kept in
+/// storage and overwritten when the zone is re-solved.
+///
+/// Version history:
+///   0 — legacy (binary v1 records with no encoder_version field).
+///   1 — first explicitly-versioned records (binary format v2).
+pub const ENCODER_VERSION: u32 = 1;
 
 /// Lazy-loaded read-side cache. First lookup (re)reads the on-disk JSONL,
 /// in-session writes append directly so cache hits work for repeats inside
@@ -1291,10 +1434,12 @@ fn install_prebaked_into(
 ) {
     for rec in parse_records(bytes) {
         let entry = CacheEntry {
+            outcome: rec.outcome,
             entities: rec.entities,
             channel_items: rec.channel_items,
             canon_w: rec.canon_w,
             canon_h: rec.canon_h,
+            encoder_version: rec.encoder_version,
         };
         map.insert(rec.signature, entry);
     }
@@ -1326,10 +1471,12 @@ fn load_existing_jsonl(map: &mut FxHashMap<String, CacheEntry>) {
     if let Ok(bytes) = std::fs::read(&bin) {
         for rec in parse_records(&bytes) {
             let entry = CacheEntry {
+                outcome: rec.outcome,
                 entities: rec.entities,
                 channel_items: rec.channel_items,
                 canon_w: rec.canon_w,
                 canon_h: rec.canon_h,
+                encoder_version: rec.encoder_version,
             };
             map.insert(rec.signature, entry);
         }
@@ -1354,7 +1501,14 @@ fn parse_v1_record(value: &serde_json::Value) -> Option<(String, CacheEntry)> {
         .into_iter()
         .filter_map(entity_from_tuple)
         .collect();
-    Some((sig, CacheEntry { entities, channel_items, canon_w, canon_h }))
+    Some((sig, CacheEntry {
+        outcome: CachedOutcome::Solved,
+        entities,
+        channel_items,
+        canon_w,
+        canon_h,
+        encoder_version: 0,
+    }))
 }
 
 /// Parse a v0 (legacy verbose) record. Returns `(signature, entry)` on success.
@@ -1369,7 +1523,14 @@ fn parse_v0_record(value: &serde_json::Value) -> Option<(String, CacheEntry)> {
     if canon_w == 0 || canon_h == 0 {
         return None;
     }
-    Some((sig, CacheEntry { entities, channel_items, canon_w, canon_h }))
+    Some((sig, CacheEntry {
+        outcome: CachedOutcome::Solved,
+        entities,
+        channel_items,
+        canon_w,
+        canon_h,
+        encoder_version: 0,
+    }))
 }
 
 /// Whether to consult the cache on lookup. Defaults to enabled —
@@ -1457,10 +1618,76 @@ pub fn record_zone_with_solution(
     entities: &[PlacedEntity],
     source: Option<&str>,
 ) -> (String, Vec<u8>) {
+    record_zone_outcome(
+        zone,
+        channel_reaches,
+        max_ug_ins,
+        stats,
+        entities,
+        source,
+        CachedOutcome::Solved,
+    )
+}
+
+/// Record an UNSAT result for `zone` — varisat proved no solution exists.
+/// Same-signature future lookups immediately return "strategy fails" without
+/// re-running the solver.
+pub fn record_zone_unsat(
+    zone: &CrossingZone,
+    channel_reaches: &[u32],
+    max_ug_ins: Option<u32>,
+    stats: ZoneStats,
+    source: Option<&str>,
+) {
+    record_zone_outcome(
+        zone,
+        channel_reaches,
+        max_ug_ins,
+        stats,
+        &[],
+        source,
+        CachedOutcome::Unsat,
+    );
+}
+
+/// Record a Timeout result for `zone` — solver was interrupted before
+/// finishing. `budget_ms` is the wall-clock budget that was in force.
+/// Future lookups with a higher budget will re-attempt; those with
+/// budget ≤ `budget_ms` reuse this result immediately.
+pub fn record_zone_timeout(
+    zone: &CrossingZone,
+    channel_reaches: &[u32],
+    max_ug_ins: Option<u32>,
+    stats: ZoneStats,
+    budget_ms: u32,
+    source: Option<&str>,
+) {
+    record_zone_outcome(
+        zone,
+        channel_reaches,
+        max_ug_ins,
+        stats,
+        &[],
+        source,
+        CachedOutcome::Timeout { budget_ms },
+    );
+}
+
+/// Internal helper — shared logic for all three record functions.
+fn record_zone_outcome(
+    zone: &CrossingZone,
+    channel_reaches: &[u32],
+    max_ug_ins: Option<u32>,
+    stats: ZoneStats,
+    entities: &[PlacedEntity],
+    source: Option<&str>,
+    outcome: CachedOutcome,
+) -> (String, Vec<u8>) {
     let form = canonicalise(zone, channel_reaches, max_ug_ins);
     let channel_items = canonical_channel_items(zone, &form);
 
     // Convert entities: absolute → zone-local → canonical-frame.
+    // For Unsat/Timeout, entities is empty, so this loop produces nothing.
     let (canon_w, canon_h) = if form.rotation.is_multiple_of(2) {
         (zone.width, zone.height)
     } else {
@@ -1473,8 +1700,6 @@ pub fn record_zone_with_solution(
             let mut local = e.clone();
             local.x = e.x - zone.x;
             local.y = e.y - zone.y;
-            // Skip entities that escaped the bbox — shouldn't happen but be
-            // defensive (we'd produce out-of-bounds coords on transform).
             if local.x < 0
                 || local.y < 0
                 || (local.x as u32) >= zone.width
@@ -1483,7 +1708,6 @@ pub fn record_zone_with_solution(
                 return None;
             }
             let transformed = transform_entity(&local, zone.width, zone.height, form.rotation, form.reflect);
-            // Strip segment_id — it's per-zone-instance, regenerated at lookup.
             let mut e = transformed;
             e.segment_id = None;
             Some(entity_carries_to_token(e, &channel_items))
@@ -1495,17 +1719,17 @@ pub fn record_zone_with_solution(
         tbl.insert(
             form.signature.clone(),
             CacheEntry {
+                outcome: outcome.clone(),
                 entities: canonical_entities.clone(),
                 channel_items: channel_items.clone(),
                 canon_w,
                 canon_h,
+                encoder_version: ENCODER_VERSION,
             },
         );
     }
 
-    // Pack entities as [kind, x, y, dir, carries_idx] tuples. Anything that
-    // doesn't encode (unknown name, broken carries token) is dropped — these
-    // shouldn't happen for SAT-produced entities.
+    // Pack entities as [kind, x, y, dir, carries_idx] tuples.
     let entity_tuples: Vec<[i32; 5]> = canonical_entities
         .iter()
         .filter_map(entity_to_tuple)
@@ -1523,7 +1747,6 @@ pub fn record_zone_with_solution(
     let effective_source: Option<String> = source.map(|s| s.to_string());
 
     // Avoid `SystemTime::now()` on WASM — it panics on the wasm32 target.
-    // The frontend's persistence path doesn't need a high-fidelity timestamp.
     #[cfg(not(target_arch = "wasm32"))]
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1543,8 +1766,10 @@ pub fn record_zone_with_solution(
         stats.variables,
         stats.clauses,
         stats.solve_time_us,
+        ENCODER_VERSION,
         &channel_items,
         &entity_tuples,
+        &outcome,
     );
 
     // Native: queue for disk flush. WASM: nothing to flush to — the
@@ -1559,55 +1784,96 @@ pub fn record_zone_with_solution(
     (form.signature, bytes)
 }
 
-/// Look up a previously-cached SAT solution for `zone`. Returns `Some` of a
-/// fresh `Vec<PlacedEntity>` in absolute world coords matching what
-/// `solve_crossing_zone_per_channel` would have returned, or `None` on miss
-/// or if the cache is disabled (env-gated).
+/// Result of a zone-cache lookup.
 ///
-/// The returned entities have `segment_id` set to `"crossing:{x}:{y}"` to
-/// mirror the SAT path's tagging.
+/// Callers need to distinguish between "not in cache" (re-run SAT) and
+/// "in cache but UNSAT/Timeout" (skip this strategy rung).
+pub enum ZoneLookupResult {
+    /// Cache miss — no entry for this signature.
+    Miss,
+    /// Entry is stale (encoder version mismatch) — treat as miss.
+    Stale,
+    /// Cached solution; entities ready to use.
+    Solved(Vec<PlacedEntity>),
+    /// Cached UNSAT — the solver proved no solution exists for this signature.
+    Unsat,
+    /// Cached timeout — solver was interrupted within `budget_ms`. The caller
+    /// may re-attempt if it has a larger budget; otherwise treat as Unsat.
+    Timeout { budget_ms: u32 },
+}
+
+/// Look up a previously-cached SAT result for `zone`.
+///
+/// Returns a [`ZoneLookupResult`] describing what the cache holds:
+/// - [`ZoneLookupResult::Miss`] / [`ZoneLookupResult::Stale`] → run SAT.
+/// - [`ZoneLookupResult::Solved`] → use the cached entities.
+/// - [`ZoneLookupResult::Unsat`] → skip this strategy rung; it won't work.
+/// - [`ZoneLookupResult::Timeout`] → caller decides based on current budget.
 ///
 /// `fallback_belt_name` is the surface-belt entity name used to retype
 /// entities whose channel has no per-port `belt_tier` annotation (e.g.
 /// `"fast-transport-belt"`). The SAT formula is tier-agnostic, so a cache
 /// entry recorded under one tier is correct for any tier with the same
 /// per-channel reaches — but the stored entity names need to be re-typed
-/// to match each channel's tier in the current zone (mixed-tier zones in
-/// `ReachMode::Relaxed` collapse to the same signature across tiers, so a
-/// red-channel cached entry could be hit by a yellow-channel lookup).
-pub fn lookup_zone(
+/// to match each channel's tier in the current zone.
+pub fn lookup_zone_result(
     zone: &CrossingZone,
     channel_reaches: &[u32],
     max_ug_ins: Option<u32>,
     fallback_belt_name: &str,
-) -> Option<Vec<PlacedEntity>> {
+) -> ZoneLookupResult {
     if !cache_enabled() {
-        return None;
+        return ZoneLookupResult::Miss;
     }
+
+    LOOKUP_TOTAL.fetch_add(1, Ordering::Relaxed);
 
     let form = canonicalise(zone, channel_reaches, max_ug_ins);
     let entry = {
-        let tbl = lookup_table().lock().ok()?;
-        tbl.get(&form.signature).cloned()?
+        let Ok(tbl) = lookup_table().lock() else {
+            LOOKUP_MISS.fetch_add(1, Ordering::Relaxed);
+            return ZoneLookupResult::Miss;
+        };
+        match tbl.get(&form.signature).cloned() {
+            Some(e) => e,
+            None => {
+                LOOKUP_MISS.fetch_add(1, Ordering::Relaxed);
+                return ZoneLookupResult::Miss;
+            }
+        }
     };
+
+    // Encoder version check: stale entries are silently bypassed.
+    if entry.encoder_version != ENCODER_VERSION {
+        LOOKUP_MISS.fetch_add(1, Ordering::Relaxed);
+        return ZoneLookupResult::Stale;
+    }
+
+    // Non-Solved outcomes don't need entity/channel-count checks.
+    match &entry.outcome {
+        CachedOutcome::Unsat => {
+            LOOKUP_HIT.fetch_add(1, Ordering::Relaxed);
+            LOOKUP_HIT_UNSAT.fetch_add(1, Ordering::Relaxed);
+            return ZoneLookupResult::Unsat;
+        }
+        CachedOutcome::Timeout { budget_ms } => {
+            LOOKUP_HIT.fetch_add(1, Ordering::Relaxed);
+            LOOKUP_HIT_TIMEOUT.fetch_add(1, Ordering::Relaxed);
+            return ZoneLookupResult::Timeout { budget_ms: *budget_ms };
+        }
+        CachedOutcome::Solved => {}
+    }
 
     let new_channel_items = canonical_channel_items(zone, &form);
 
-    // Channel-count mismatch would mean either a hash collision or a stale
-    // entry from a different encoder; bail rather than return wrong items.
+    // Channel-count mismatch would mean a hash collision or stale entry.
     if new_channel_items.len() != entry.channel_items.len() {
-        return None;
+        LOOKUP_MISS.fetch_add(1, Ordering::Relaxed);
+        return ZoneLookupResult::Miss;
     }
 
     // item → surface-belt tier from the current zone's boundaries. Used to
     // retype each cached entity to its channel's actual tier.
-    //
-    // When a zone has multiple boundaries for the same item at different
-    // tiers (e.g. 8 iron-plate trunks crossing a single iron-plate
-    // row-input — same item, trunks at red, row-input at yellow), naive
-    // `HashMap::collect` does last-wins with non-deterministic iteration
-    // order, painting whichever boundary lands last. If yellow wins, the
-    // red trunks get under-tiered and the lane-throughput validator fires.
     //
     // Take the MAX tier per item: over-tiering a slow belt is cosmetic
     // (red belt carries yellow rate fine), under-tiering causes throughput
@@ -1654,7 +1920,29 @@ pub fn lookup_zone(
         })
         .collect();
 
-    Some(entities)
+    LOOKUP_HIT.fetch_add(1, Ordering::Relaxed);
+    ZoneLookupResult::Solved(entities)
+}
+
+/// Compatibility wrapper around [`lookup_zone_result`] for callers that only
+/// care about `Solved` hits. Returns `Some(entities)` on a `Solved` hit,
+/// `None` on miss/stale/unsat/timeout.
+///
+/// Note: UNSAT/Timeout results are counted as hits in the counters (they save
+/// a SAT call), but this wrapper returns `None` for them so existing callers
+/// that already handle `None` as "run SAT" continue to work. The `Unsat` /
+/// `Timeout` arms only benefit callers that have been updated to use
+/// [`lookup_zone_result`] directly.
+pub fn lookup_zone(
+    zone: &CrossingZone,
+    channel_reaches: &[u32],
+    max_ug_ins: Option<u32>,
+    fallback_belt_name: &str,
+) -> Option<Vec<PlacedEntity>> {
+    match lookup_zone_result(zone, channel_reaches, max_ug_ins, fallback_belt_name) {
+        ZoneLookupResult::Solved(entities) => Some(entities),
+        _ => None,
+    }
 }
 
 /// Retype a belt or underground-belt entity's `name` to match `surface_belt_name`.
@@ -1927,11 +2215,13 @@ mod tests {
             Some("test_source"),
             11, 4,
             616, 19428, 3152,
+            ENCODER_VERSION,
             &channel_items,
             &entities,
+            &CachedOutcome::Solved,
         );
 
-        // Append a second record so we test multi-record parsing too.
+        // Append a second record (Unsat) so we test multi-record parsing too.
         encode_record(
             &mut buf,
             1234567891,
@@ -1939,12 +2229,28 @@ mod tests {
             None,
             1, 2,
             22, 116, 47,
+            ENCODER_VERSION,
             &["iron-ore".to_string()],
             &[[1, 0, 1, 0, 0], [1, 0, 0, 0, 0]],
+            &CachedOutcome::Unsat,
+        );
+
+        // Third record: Timeout.
+        encode_record(
+            &mut buf,
+            1234567892,
+            "2x2:N0>S0@5|F:|UG:*",
+            None,
+            2, 2,
+            0, 0, 500_000,
+            ENCODER_VERSION,
+            &[],
+            &[],
+            &CachedOutcome::Timeout { budget_ms: 200 },
         );
 
         let recs = parse_records(&buf);
-        assert_eq!(recs.len(), 2, "should decode two records");
+        assert_eq!(recs.len(), 3, "should decode three records");
 
         assert_eq!(recs[0].ts, 1234567890);
         assert_eq!(recs[0].signature, "11x4:E1+E2>N10+N3@6;N2+N9>S0+S1@6|F:|UG:2");
@@ -1958,17 +2264,27 @@ mod tests {
         assert_eq!(recs[0].entities[1].name, "fast-underground-belt");
         assert_eq!(recs[0].entities[1].io_type.as_deref(), Some("output"));
         assert_eq!(recs[0].entities[2].carries, None);
+        assert_eq!(recs[0].encoder_version, ENCODER_VERSION);
+        assert_eq!(recs[0].outcome, CachedOutcome::Solved);
 
         assert_eq!(recs[1].source, None);
         assert_eq!(recs[1].channel_items, vec!["iron-ore"]);
         assert_eq!(recs[1].entities.len(), 2);
+        assert_eq!(recs[1].outcome, CachedOutcome::Unsat);
+        assert_eq!(recs[1].encoder_version, ENCODER_VERSION);
+
+        assert_eq!(recs[2].outcome, CachedOutcome::Timeout { budget_ms: 200 });
+        assert_eq!(recs[2].entities.len(), 0);
     }
 
     /// Truncated input should stop cleanly, returning whatever decoded fully.
     #[test]
     fn binary_truncated_input_safe() {
         let mut buf = Vec::new();
-        encode_record(&mut buf, 1, "1x2:N0>N0@6|F:|UG:0", None, 1, 2, 0, 0, 0, &[], &[[1, 0, 0, 0, -1]]);
+        encode_record(
+            &mut buf, 1, "1x2:N0>N0@6|F:|UG:0", None, 1, 2, 0, 0, 0,
+            ENCODER_VERSION, &[], &[[1, 0, 0, 0, -1]], &CachedOutcome::Solved,
+        );
         // Truncate mid-record.
         buf.truncate(buf.len() - 5);
         let recs = parse_records(&buf);
