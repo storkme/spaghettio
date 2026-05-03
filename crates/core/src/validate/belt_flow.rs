@@ -2461,19 +2461,73 @@ fn compute_lane_rates_impl(
     lane_rates
 }
 
-/// Pull-direction analogue of [`do_propagate`]'s lane logic: given a feeder
-/// at `fp` with rates `fr` flowing into receiver `pos`, return the per-lane
-/// contribution that lands on `pos`.  Used by the iterative convergence pass
-/// in [`compute_lane_rates_impl`] which needs to recompute each tile's rate
-/// from current upstream rates without the side effects of the push-direction
-/// `do_propagate`.
+/// Compute the per-lane contribution from a tile flowing into a downstream
+/// tile, applying Factorio's belt-mixing rules. Single source of truth for
+/// the four lane-transfer cases used by both [`do_propagate`] (push) and
+/// [`feeder_contribution`] (pull).
 ///
-/// Mirrors the four cases in `do_propagate`:
-/// - same direction → straight pass-through, lanes preserved
-/// - feeder is directly behind `pos` → also straight (e.g. UG-output → belt)
-/// - else, if `pos` has any straight feeder → sideload (everything onto one
-///   lane based on which side `fp` sits)
-/// - else → 90-degree turn (lanes swap on CW, preserve on CCW)
+/// Cases (in order):
+/// - **Same direction** → straight pass-through, lanes preserved.
+/// - **`from` directly behind `to`** → also straight (e.g. UG-output feeding
+///   a belt that turns).
+/// - **`to` has a straight feeder** (`to_has_straight_feeder=true`) →
+///   sideload: all flow goes onto the lane closest to `from`.
+/// - **Otherwise** → 90-degree turn: lanes swap on CW, preserve on CCW.
+fn lane_transfer(
+    from_pos: (i32, i32),
+    from_dir: EntityDirection,
+    from_rates: [f64; 2],
+    to_pos: (i32, i32),
+    to_dir: EntityDirection,
+    to_has_straight_feeder: bool,
+) -> [f64; 2] {
+    if from_dir == to_dir {
+        return from_rates;
+    }
+    let (fdx, fdy) = dir_to_vec(from_dir);
+    let (tdx, tdy) = dir_to_vec(to_dir);
+    let behind_to = (to_pos.0 - tdx, to_pos.1 - tdy);
+    if from_pos == behind_to {
+        return from_rates;
+    }
+
+    if to_has_straight_feeder {
+        let (left_dx, left_dy) = (-tdy, tdx);
+        let rel_x = from_pos.0 - to_pos.0;
+        let rel_y = from_pos.1 - to_pos.1;
+        let dot = rel_x * left_dx + rel_y * left_dy;
+        let total = from_rates[0] + from_rates[1];
+        if dot > 0 {
+            [total, 0.0]
+        } else {
+            [0.0, total]
+        }
+    } else {
+        let cross = fdx * tdy - fdy * tdx;
+        if cross > 0 {
+            [from_rates[1], from_rates[0]]
+        } else {
+            [from_rates[0], from_rates[1]]
+        }
+    }
+}
+
+/// Whether `pos`'s feeder list contains a straight feeder (ft == 0). Used
+/// by [`lane_transfer`] callers to disambiguate sideload from turn.
+fn has_straight_feeder(
+    pos: (i32, i32),
+    feeders: &FxHashMap<(i32, i32), Vec<((i32, i32), u8)>>,
+) -> bool {
+    feeders
+        .get(&pos)
+        .is_some_and(|fs| fs.iter().any(|(_, ft)| *ft == 0))
+}
+
+/// Pull-direction lane transfer: given a feeder at `fp` with rates `fr`
+/// flowing into receiver `pos`, return the per-lane contribution that lands
+/// on `pos`. Used by the iterative convergence pass in
+/// [`compute_lane_rates_impl`] which needs to recompute each tile's rate
+/// from current upstream rates without the side effects of [`do_propagate`].
 fn feeder_contribution(
     fp: (i32, i32),
     pos: (i32, i32),
@@ -2489,39 +2543,7 @@ fn feeder_contribution(
         Some(&d) => d,
         None => return [0.0, 0.0],
     };
-    let (fdx, fdy) = dir_to_vec(fd);
-    let (pdx, pdy) = dir_to_vec(pd);
-
-    if fd == pd {
-        return fr;
-    }
-    let behind_pos = (pos.0 - pdx, pos.1 - pdy);
-    if fp == behind_pos {
-        return fr;
-    }
-
-    let (left_dx, left_dy) = (-pdy, pdx);
-    let pos_feeders = feeders.get(&pos);
-    let has_straight = pos_feeders.is_some_and(|fs| fs.iter().any(|(_, ft)| *ft == 0));
-
-    if has_straight {
-        let rel_x = fp.0 - pos.0;
-        let rel_y = fp.1 - pos.1;
-        let dot = rel_x * left_dx + rel_y * left_dy;
-        let total = fr[0] + fr[1];
-        if dot > 0 {
-            [total, 0.0]
-        } else {
-            [0.0, total]
-        }
-    } else {
-        let cross = fdx * pdy - fdy * pdx;
-        if cross > 0 {
-            [fr[1], fr[0]]
-        } else {
-            [fr[0], fr[1]]
-        }
-    }
+    lane_transfer(fp, fd, fr, pos, pd, has_straight_feeder(pos, feeders))
 }
 
 /// Sum every feeder's contribution into `pos`.  Wrapper over
@@ -2566,52 +2588,17 @@ fn do_propagate(
 
     let my_rates = *lane_rates.get(&tile).unwrap_or(&[0.0, 0.0]);
     let ds_d = belt_dir_map[&downstream];
-    let (downstream_dx, downstream_dy) = dir_to_vec(ds_d);
-    let (left_dx, left_dy) = (-downstream_dy, downstream_dx);
-
+    let contrib = lane_transfer(
+        tile,
+        d,
+        my_rates,
+        downstream,
+        ds_d,
+        has_straight_feeder(downstream, feeders),
+    );
     let ds_rates = lane_rates.entry(downstream).or_insert([0.0, 0.0]);
-
-    if d == ds_d {
-        // Straight continuation
-        ds_rates[0] += my_rates[0];
-        ds_rates[1] += my_rates[1];
-    } else {
-        let behind_downstream = (downstream.0 - downstream_dx, downstream.1 - downstream_dy);
-        if tile == behind_downstream {
-            ds_rates[0] += my_rates[0];
-            ds_rates[1] += my_rates[1];
-        } else {
-            // Check if sideload (downstream has a straight feeder) or turn
-            let ds_feeders = feeders.get(&downstream);
-            let has_straight =
-                ds_feeders.is_some_and(|fs| fs.iter().any(|(_, ft)| *ft == 0));
-
-            if has_straight {
-                // Sideload: all items go onto the near lane
-                let rel_x = tile.0 - downstream.0;
-                let rel_y = tile.1 - downstream.1;
-                let dot = rel_x * left_dx + rel_y * left_dy;
-                let total = my_rates[0] + my_rates[1];
-                if dot > 0 {
-                    ds_rates[0] += total;
-                } else {
-                    ds_rates[1] += total;
-                }
-            } else {
-                // 90-degree turn: CW or CCW
-                let cross = ddx * downstream_dy - ddy * downstream_dx;
-                if cross > 0 {
-                    // Clockwise
-                    ds_rates[1] += my_rates[0];
-                    ds_rates[0] += my_rates[1];
-                } else {
-                    // Counter-clockwise
-                    ds_rates[0] += my_rates[0];
-                    ds_rates[1] += my_rates[1];
-                }
-            }
-        }
-    }
+    ds_rates[0] += contrib[0];
+    ds_rates[1] += contrib[1];
 
     let deg = in_degree.entry(downstream).or_insert(0);
     *deg -= 1;
