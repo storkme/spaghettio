@@ -31,6 +31,10 @@ struct RawEntity {
     y: f64,
     direction: u8,
     io_type: Option<String>,
+    /// Splitter input_priority — `"left"` or `"right"`.
+    input_priority: Option<String>,
+    /// Splitter output_priority — `"left"` or `"right"`.
+    output_priority: Option<String>,
 }
 
 const BELT_ENTITIES: &[&str] = &["transport-belt", "splitter", "underground-belt"];
@@ -78,7 +82,9 @@ fn extract_entities(data: &Value) -> Result<Vec<RawEntity>, String> {
             .ok_or("Entity missing position.y")?;
         let direction = ent["direction"].as_u64().unwrap_or(0) as u8;
         let io_type = ent["type"].as_str().map(|s| s.to_owned());
-        result.push(RawEntity { name, x, y, direction, io_type });
+        let input_priority = ent["input_priority"].as_str().map(|s| s.to_owned());
+        let output_priority = ent["output_priority"].as_str().map(|s| s.to_owned());
+        result.push(RawEntity { name, x, y, direction, io_type, input_priority, output_priority });
     }
     Ok(result)
 }
@@ -106,6 +112,9 @@ fn rotate_cw(entities: &[RawEntity], max_y: f64) -> Vec<RawEntity> {
             y: e.x,
             direction: rotate_dir_cw(e.direction),
             io_type: e.io_type.clone(),
+            // Priority strings are flow-relative, so they survive rotation.
+            input_priority: e.input_priority.clone(),
+            output_priority: e.output_priority.clone(),
         })
         .collect()
 }
@@ -119,6 +128,9 @@ fn rotate_ccw(entities: &[RawEntity], max_x: f64) -> Vec<RawEntity> {
             y: max_x - e.x,
             direction: rotate_dir_ccw(e.direction),
             io_type: e.io_type.clone(),
+            // Priority strings are flow-relative, so they survive rotation.
+            input_priority: e.input_priority.clone(),
+            output_priority: e.output_priority.clone(),
         })
         .collect()
 }
@@ -140,6 +152,8 @@ fn rotate_180(entities: &[RawEntity], max_x: f64, max_y: f64) -> Vec<RawEntity> 
                 y: max_y - e.y,
                 direction: new_dir,
                 io_type: new_io,
+                input_priority: e.input_priority.clone(),
+                output_priority: e.output_priority.clone(),
             }
         })
         .collect()
@@ -158,6 +172,9 @@ fn normalize(entities: &[RawEntity]) -> Vec<RawEntity> {
             y: e.y + dy,
             direction: e.direction,
             io_type: e.io_type.clone(),
+            // Priority strings are flow-relative, so they survive rotation.
+            input_priority: e.input_priority.clone(),
+            output_priority: e.output_priority.clone(),
         })
         .collect()
 }
@@ -245,17 +262,105 @@ fn identify_ports(entities: &[RawEntity]) -> TilePair {
     let min_y = tiles.iter().map(|((_, y), _)| *y).min().unwrap();
     let max_y = tiles.iter().map(|((_, y), _)| *y).max().unwrap();
 
+    // Build a tile→entity map covering all entities (including UG belts and
+    // splitter second tiles) so we can check what's adjacent to each candidate
+    // port and rule out tiles that have an internal feeder.
+    let mut tile_map: FxHashMap<(i32, i32), &RawEntity> = FxHashMap::default();
+    for e in entities {
+        let t = entity_tile(e);
+        tile_map.insert(t, e);
+        if e.name == "splitter" {
+            let (sx, sy) = if e.direction == N || e.direction == S {
+                (t.0 + 1, t.1)
+            } else {
+                (t.0, t.1 + 1)
+            };
+            tile_map.insert((sx, sy), e);
+        }
+    }
+
+    // Returns true if `tile` has an internal feeder along one of `dirs`
+    // (where each dir is the direction a *neighbour* would have to face to push
+    // items into `tile`). Internal feeders considered:
+    //   - perpendicular transport-belt facing into our tile (sideload)
+    //   - underground-belt OUTPUT facing into our tile (its emitted items
+    //     land here)
+    //   - splitter whose output side covers our tile
+    let has_internal_feeder = |tile: (i32, i32), excluded_axis: u8| -> bool {
+        // For each cardinal neighbour, what direction would make it feed us?
+        // neighbour west of us must face E to feed us; etc.
+        let neighbours: [(i32, i32, u8); 4] = [
+            (tile.0 - 1, tile.1, E), // west neighbour faces E → feeds us
+            (tile.0 + 1, tile.1, W),
+            (tile.0, tile.1 - 1, S),
+            (tile.0, tile.1 + 1, N),
+        ];
+        for (nx, ny, feed_dir) in neighbours {
+            // Skip the axis the candidate flows along — a neighbour upstream
+            // along the candidate's own flow direction is the *external*
+            // source we're trying to detect, not an internal feeder.
+            if feed_dir == excluded_axis {
+                continue;
+            }
+            let Some(e) = tile_map.get(&(nx, ny)) else {
+                continue;
+            };
+            if e.direction != feed_dir {
+                continue;
+            }
+            match e.name.as_str() {
+                "transport-belt" => return true,
+                "underground-belt" => {
+                    if e.io_type.as_deref() == Some("output") {
+                        return true;
+                    }
+                }
+                "splitter" => {
+                    // Splitter at (nx, ny) facing `feed_dir` outputs into us
+                    // if our tile is on its output side. The neighbour's
+                    // anchor + direction determines its output tiles; we just
+                    // need it to be a splitter whose output line covers our
+                    // tile. The simplest sufficient check: the neighbour
+                    // tile is the splitter's BACK side (facing away from us)
+                    // — no, actually that's the input side. The output side
+                    // is `feed_dir` from the splitter body, which IS our
+                    // tile by construction. So presence of a splitter facing
+                    // into us already means the neighbour's output reaches
+                    // our tile.
+                    return true;
+                }
+                _ => {}
+            }
+        }
+        false
+    };
+
+    // Inputs at the top edge (min_y) facing south (S). External-input only
+    // if no internal feeder.
     let mut inputs: Vec<(i32, i32)> = Vec::new();
     for &((tx, ty), e) in &tiles {
         if ty == min_y && e.direction == S {
-            inputs.push((tx, ty));
-            if e.name == "splitter" {
+            // For inputs, the candidate flows south, so the upstream axis
+            // (the would-be external feed) is from the north (a neighbour
+            // facing S sitting at (tx, ty-1)). Exclude that axis when
+            // checking for *internal* feeders.
+            if !has_internal_feeder((tx, ty), S) {
+                inputs.push((tx, ty));
+            }
+            if e.name == "splitter" && !has_internal_feeder((tx + 1, ty), S) {
                 inputs.push((tx + 1, ty));
             }
         }
     }
     inputs.sort();
 
+    // Outputs at the bottom edge (max_y) facing south. External-output only
+    // if no internal *consumer* — meaning, no neighbour into which our tile
+    // would feed, other than the off-grid south. For symmetry we apply the
+    // same check: a south-facing belt at the bottom edge whose items get
+    // consumed internally (by a perpendicular belt or splitter input
+    // adjacent) is not a real output. In practice this is rare for output
+    // ports at max_y; the same heuristic catches it.
     let mut outputs: Vec<(i32, i32)> = Vec::new();
     for &((tx, ty), e) in &tiles {
         if ty == max_y && e.direction == S {
@@ -281,6 +386,8 @@ struct TemplateEntity {
     y: i32,
     direction: u8,
     io_type: Option<String>,
+    input_priority: Option<String>,
+    output_priority: Option<String>,
 }
 
 #[derive(Debug)]
@@ -335,7 +442,15 @@ fn validate_and_build(bp: &str) -> Result<Template, String> {
         .iter()
         .map(|e| {
             let (x, y) = entity_tile(e);
-            TemplateEntity { name: e.name.clone(), x, y, direction: e.direction, io_type: e.io_type.clone() }
+            TemplateEntity {
+                name: e.name.clone(),
+                x,
+                y,
+                direction: e.direction,
+                io_type: e.io_type.clone(),
+                input_priority: e.input_priority.clone(),
+                output_priority: e.output_priority.clone(),
+            }
         })
         .collect();
 
@@ -584,9 +699,17 @@ fn rust_statics(t: &Template) -> String {
             Some(s) => format!(r#", io_type: Some("{s}")"#),
             None => ", io_type: None".to_owned(),
         };
+        let ip = match &e.input_priority {
+            Some(s) => format!(r#", input_priority: Some("{s}")"#),
+            None => ", input_priority: None".to_owned(),
+        };
+        let op = match &e.output_priority {
+            Some(s) => format!(r#", output_priority: Some("{s}")"#),
+            None => ", output_priority: None".to_owned(),
+        };
         writeln!(
             out,
-            r#"    BalancerTemplateEntity {{ name: "{}", x: {}, y: {}, direction: {}{io} }},"#,
+            r#"    BalancerTemplateEntity {{ name: "{}", x: {}, y: {}, direction: {}{io}{ip}{op} }},"#,
             e.name, e.x, e.y, e.direction,
         ).unwrap();
     }
@@ -704,6 +827,126 @@ fn remove_existing(src: &str, n: usize, m: usize) -> String {
 // JSON output
 // ---------------------------------------------------------------------------
 
+fn print_topology(t: &Template) {
+    use fucktorio_core::balancer::{from_splitter_graph, verify_balancer};
+    use fucktorio_core::bus::balancer_classify::{
+        classify_graph, detect_priority_needed, topology_of_template, BalancerTemplateRef,
+    };
+    use fucktorio_core::bus::balancer_library::BalancerTemplateEntity;
+
+    // Convert to BalancerTemplateEntity (leak strings — one-shot CLI is fine).
+    let entities: Vec<BalancerTemplateEntity> = t
+        .entities
+        .iter()
+        .map(|e| BalancerTemplateEntity {
+            name: Box::leak(e.name.clone().into_boxed_str()),
+            x: e.x,
+            y: e.y,
+            direction: e.direction,
+            io_type: e.io_type.as_deref().map(|s| {
+                let leaked: &'static str = Box::leak(s.to_owned().into_boxed_str());
+                leaked
+            }),
+            input_priority: e.input_priority.as_deref().map(|s| {
+                let leaked: &'static str = Box::leak(s.to_owned().into_boxed_str());
+                leaked
+            }),
+            output_priority: e.output_priority.as_deref().map(|s| {
+                let leaked: &'static str = Box::leak(s.to_owned().into_boxed_str());
+                leaked
+            }),
+        })
+        .collect();
+    let entities_static: &'static [BalancerTemplateEntity] = Box::leak(entities.into_boxed_slice());
+    let input_tiles_static: &'static [(i32, i32)] = Box::leak(t.input_tiles.clone().into_boxed_slice());
+    let output_tiles_static: &'static [(i32, i32)] =
+        Box::leak(t.output_tiles.clone().into_boxed_slice());
+
+    let template_ref = BalancerTemplateRef {
+        n_inputs: t.n_inputs as u32,
+        n_outputs: t.n_outputs as u32,
+        width: t.width as u32,
+        height: t.height as u32,
+        entities: entities_static,
+        input_tiles: input_tiles_static,
+        output_tiles: output_tiles_static,
+    };
+
+    let graph = match topology_of_template(template_ref) {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("topology_of_template failed: {e:?}");
+            process::exit(1);
+        }
+    };
+    println!(
+        "Recovered SplitterGraph: n_inputs={} n_outputs={} n_splitters={} n_edges={}",
+        graph.n_inputs,
+        graph.n_outputs,
+        graph.n_splitters,
+        graph.edges.len()
+    );
+    for (i, (src, dst)) in graph.edges.iter().enumerate() {
+        println!("  edge {:>2}: {:?} -> {:?}", i, src, dst);
+    }
+
+    println!();
+    let bg = match from_splitter_graph(&graph) {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("from_splitter_graph failed: {e:?}");
+            process::exit(1);
+        }
+    };
+    println!(
+        "BalancerGraph: n_inputs={} n_outputs={} n_splitters={} n_arcs={}",
+        bg.n_inputs,
+        bg.n_outputs,
+        bg.n_splitters,
+        bg.arcs.len()
+    );
+
+    match verify_balancer(&bg) {
+        Ok(outcome) => {
+            println!("verify_balancer OK: real_output_throughput = {}", outcome.real_output_throughput);
+            for (i, arc) in bg.arcs.iter().enumerate() {
+                let r = outcome.arc_throughputs[i];
+                println!("  arc {:>2}: {:?} -> {:?}  rate={:.6}", i, arc.src, arc.dst, r);
+            }
+        }
+        Err(e) => {
+            eprintln!("verify_balancer failed: {e:?}");
+            process::exit(1);
+        }
+    }
+
+    println!();
+    match classify_graph(&graph) {
+        Ok(report) => {
+            println!("classify_graph: {:?}", report.class);
+            if let Some(ce) = report.mx2_counterexample {
+                println!(
+                    "  MX2 counterexample: {:?} subset={:?} realized={} expected={}",
+                    ce.direction, ce.subset, ce.realized, ce.expected
+                );
+            }
+        }
+        Err(e) => {
+            eprintln!("classify_graph failed: {e:?}");
+        }
+    }
+
+    println!();
+    let suggestions = detect_priority_needed(&graph);
+    println!("detect_priority_needed: {} splitter(s) flagged", suggestions.len());
+    for s in &suggestions {
+        println!(
+            "  Splitter {}: feedback_ports=0b{:02b}, suggest input_priority on port {:?}",
+            s.splitter, s.feedback_ports, s.priority_port
+        );
+    }
+}
+
 fn print_json(t: &Template) {
     let entities: Vec<_> = t.entities.iter().map(|e| {
         let mut obj = serde_json::json!({
@@ -714,6 +957,12 @@ fn print_json(t: &Template) {
         });
         if let Some(io) = &e.io_type {
             obj["io_type"] = serde_json::json!(io);
+        }
+        if let Some(p) = &e.input_priority {
+            obj["input_priority"] = serde_json::json!(p);
+        }
+        if let Some(p) = &e.output_priority {
+            obj["output_priority"] = serde_json::json!(p);
         }
         obj
     }).collect();
@@ -740,6 +989,7 @@ fn main() {
     let mut dry_run = false;
     let mut json_mode = false;
     let mut from_stdin = false;
+    let mut topology_mode = false;
     let mut blueprint: Option<String> = None;
 
     for arg in &args {
@@ -747,6 +997,7 @@ fn main() {
             "--dry-run" => dry_run = true,
             "--json" => json_mode = true,
             "--stdin" => from_stdin = true,
+            "--topology" => topology_mode = true,
             other if !other.starts_with('-') => blueprint = Some(other.to_owned()),
             other => {
                 eprintln!("Unknown flag: {other}");
@@ -796,6 +1047,11 @@ fn main() {
         process::exit(1);
     }
     println!("Connectivity OK: all {} input lanes reach all {} output tiles.", template.n_inputs * 2, template.n_outputs);
+
+    if topology_mode {
+        print_topology(&template);
+        return;
+    }
 
     if json_mode {
         print_json(&template);
