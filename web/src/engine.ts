@@ -523,7 +523,12 @@ export async function cancelInFlight(): Promise<void> {
  * `ShowcaseTemplate` in `crates/wasm-bindings/src/lib.rs`.
  */
 export interface BalancerShowcaseTemplate {
+  /** High-level source — `"Raynquist (TU)"`, `"compose"`, `"Factorio-SAT"`. */
   source: string;
+  /** Strategy descriptor for compose-baked entries (e.g. `"Lib(7, 1) → Lib(1, 2)"`). Empty for atoms. */
+  strategy: string;
+  /** Optional reference URL — Factoriobin link for Raynquist's imports, etc. */
+  reference: string;
   width: number;
   height: number;
   n_inputs: number;
@@ -531,12 +536,11 @@ export interface BalancerShowcaseTemplate {
   entities: PlacedEntity[];
 }
 
-/** Library + generated entries for a single (n_inputs, n_outputs) shape. */
+/** Library entry for a single (n_inputs, n_outputs) shape. */
 export interface BalancerShowcaseCell {
   n_inputs: number;
   n_outputs: number;
   library: BalancerShowcaseTemplate | null;
-  generated: BalancerShowcaseTemplate | null;
 }
 
 /** Enumerate templates for `(1..=maxInputs) × (1..=maxOutputs)`. Single
