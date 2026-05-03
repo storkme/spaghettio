@@ -167,7 +167,7 @@ impl SatConstraints {
         Self {
             max_ug_ins: None,
             cost_descent_max_iters: 4,
-            cost_descent_budget_ms: 50,
+            cost_descent_budget_ms: 25,
             reach_mode: ReachMode::Relaxed,
         }
     }
@@ -177,7 +177,7 @@ impl SatConstraints {
         Self {
             max_ug_ins: Some(0),
             cost_descent_max_iters: 4,
-            cost_descent_budget_ms: 50,
+            cost_descent_budget_ms: 25,
             reach_mode: ReachMode::Relaxed,
         }
     }
@@ -187,7 +187,7 @@ impl SatConstraints {
         Self {
             max_ug_ins: Some(n),
             cost_descent_max_iters: 4,
-            cost_descent_budget_ms: 50,
+            cost_descent_budget_ms: 25,
             reach_mode: ReachMode::Relaxed,
         }
     }
@@ -200,7 +200,7 @@ impl SatConstraints {
         Self {
             max_ug_ins: Some(n),
             cost_descent_max_iters: 4,
-            cost_descent_budget_ms: 50,
+            cost_descent_budget_ms: 25,
             reach_mode: ReachMode::Native,
         }
     }
@@ -212,7 +212,7 @@ impl SatConstraints {
         Self {
             max_ug_ins: None,
             cost_descent_max_iters: 4,
-            cost_descent_budget_ms: 50,
+            cost_descent_budget_ms: 25,
             reach_mode: ReachMode::Native,
         }
     }
