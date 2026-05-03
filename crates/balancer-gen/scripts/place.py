@@ -540,6 +540,13 @@ def solve_synth_place(req: dict) -> dict:
     n_splitters = req["n_splitters"]
     edges = req["edges"]
     width, height = req["bounds"]
+    # Per-call UG transit-tile reach. Mirrors the parameter in
+    # `solve_pure_routing`; commit 5781676 added it to the pure-routing
+    # solvers but missed `solve_synth_place`'s UG path, leaving the
+    # name unbound at every UG-related loop. Default 4 = yellow-belt
+    # tier (matches `UG_MAX_REACH = 5` minus 1, since these loops use
+    # `range(1, ug_max_reach_param + 1)`).
+    ug_max_reach_param: int = req.get("ug_max_reach", 4)
 
     if height < 3 or width < max(n_inputs, n_outputs, 2):
         return {
@@ -835,6 +842,75 @@ def solve_synth_place(req: dict) -> dict:
                 for e2 in range(len(edges)):
                     if (ucx, ucy, d1, L2, e2) in ug_arcs and (ucx, ucy, d1, L2, e2) != (c1x, c1y, d1, L1, e1):
                         model.AddBoolOr([arc1.Not(), ug_arcs[(ucx, ucy, d1, L2, e2)].Not()])
+
+    # =========================================================================
+    # UG-correctness constraints (Phase 2C of rfp-ug-sideload-prevention.md).
+    # Mirror the four constraints from `solve_pure_routing` adapted for Mode D.
+    # All UGs in Mode D face south (d=facing=2); the d_ug iteration loops from
+    # solve_pure_routing collapse to a single iteration here. Constraint 3
+    # (chained UG) is vacuously satisfied because all chained UGs face south.
+    # =========================================================================
+
+    # Constraint 1 (Mode D): same-edge belt into UG-input sideload.
+    # When a UG-input is active, only a south-facing belt from the cell
+    # directly above (the straight-behind cell) may feed it. Belts entering
+    # from any other direction would only load one lane of the UG.
+    for (cx, cy, d_ug, L_ug, e_idx), ug_var in ug_arcs.items():
+        for d_in in range(4):
+            if d_in == d_ug:
+                continue  # straight feed is allowed
+            n_dx, n_dy = DIR_STEPS[d_in]
+            ncx, ncy = cx - n_dx, cy - n_dy
+            if not (0 <= ncx < width and 0 <= ncy < height):
+                continue
+            arc_var = arcs.get((ncx, ncy, d_in, e_idx))
+            if arc_var is not None:
+                model.Add(arc_var + ug_var <= 1)
+
+    # Constraint 2 (Mode D): InputPort src-cell direction.
+    # InputPort sources are at y=0; their column is a CP-SAT variable
+    # tracked via input_at[(i, cx)]. Items arrive from the north flowing
+    # south — only south-direction entities (belts or UGs) are valid at
+    # the chosen column. A non-south entity there would sideload the
+    # incoming flow.
+    for e_idx, edge in enumerate(edges):
+        if edge["src_kind"] != "InputPort":
+            continue
+        i = edge["src_idx"]
+        for cx in range(width):
+            in_v = input_at.get((i, cx))
+            if in_v is None:
+                continue
+            for d in range(4):
+                if d == facing:
+                    continue
+                arc_var = arcs.get((cx, 0, d, e_idx))
+                if arc_var is not None:
+                    model.Add(arc_var + in_v <= 1)
+            # UG-inputs at (cx, 0) all face south (d=facing) by construction
+            # of ug_arcs in this solver, so no UG forbid loop is needed.
+
+    # Constraint 3 (Mode D): vacuously satisfied. All UG arcs face south
+    # by construction, so chained UG-inputs of the same edge are necessarily
+    # both south-facing and the same-direction requirement holds.
+
+    # Constraint 4 (Mode D): UG-output head-on collision prevention.
+    # The UG-output is at (cx + L*dx, cy + L*dy); the cell ahead of the
+    # output flows in d_ug. A belt at the cell ahead facing the opposite
+    # direction would collide head-on with the UG-output.
+    OPPOSITE = {0: 2, 1: 3, 2: 0, 3: 1}
+    for (cx, cy, d_ug, L_ug, e_idx), ug_var in ug_arcs.items():
+        dx, dy = DIR_STEPS[d_ug]
+        # `out_x, out_y` to avoid shadowing the outer `ox` list (output
+        # port column vars used later when extracting solver values).
+        out_x, out_y = cx + L_ug * dx, cy + L_ug * dy
+        nx, ny = out_x + dx, out_y + dy
+        if not (0 <= nx < width and 0 <= ny < height):
+            continue
+        d_opposite = OPPOSITE[d_ug]
+        opp_arc = arcs.get((nx, ny, d_opposite, e_idx))
+        if opp_arc is not None:
+            model.Add(opp_arc + ug_var <= 1)
 
     # Flow conservation per (cell, edge), reified is_src/is_dst.
     for cx in range(width):
