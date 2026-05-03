@@ -310,10 +310,8 @@ fn identify_ports(entities: &[RawEntity]) -> TilePair {
             }
             match e.name.as_str() {
                 "transport-belt" => return true,
-                "underground-belt" => {
-                    if e.io_type.as_deref() == Some("output") {
-                        return true;
-                    }
+                "underground-belt" if e.io_type.as_deref() == Some("output") => {
+                    return true;
                 }
                 "splitter" => {
                     // Splitter at (nx, ny) facing `feed_dir` outputs into us
