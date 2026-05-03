@@ -1,4 +1,4 @@
-//! Phase-1 audit of lane-correctness across the entire baked balancer
+//! Audit of lane-correctness across the entire baked balancer
 //! library (`docs/rfp-balancer-bake-lane-validation.md`).
 //!
 //! For every `(m, n)` template in
@@ -7,10 +7,13 @@
 //! validators (UG pair / UG sideload / UG entry-sideload /
 //! lane-throughput). Print a markdown taxonomy table to stderr.
 //!
-//! This test does not assert on the issue counts: the first run is
-//! discovery; the report itself is the deliverable. Run with
-//! `--nocapture` (or pass `BALANCER_AUDIT_FAIL=1` once we know what the
-//! baseline is) to inspect findings.
+//! **Gates by default**: as of the (7, 2) re-bake (#285) the library
+//! is fully lane-clean (0 errors / 0 templates affected across all
+//! 75 entries). The test now asserts that baseline holds — any future
+//! change that adds a lane-throughput error to the audit will break
+//! this test. Set `BALANCER_AUDIT_NO_FAIL=1` to suppress the assert
+//! during exploratory work (e.g. baking new shapes, regenerating the
+//! library).
 //!
 //! Pattern mirrors `balancer_classify::tests::audit_report` (line 811
 //! of that module).
@@ -175,12 +178,17 @@ fn audit_lane_correctness() {
     eprintln!("- Total warning issues: **{total_warnings}**");
     eprintln!();
 
-    // Optional fail-on-error gate: useful once we know the baseline. For
-    // discovery we leave the test green so the report always prints.
-    if std::env::var("BALANCER_AUDIT_FAIL").is_ok() {
+    // Gate-on-by-default. The (7, 2) re-bake (#285) brought the library
+    // to 0 errors / 0 templates — the audit's job now is to keep it
+    // there. Set `BALANCER_AUDIT_NO_FAIL=1` to suppress the assert
+    // during exploratory work (baking new shapes, regenerating the
+    // library) where transient errors are expected.
+    if std::env::var("BALANCER_AUDIT_NO_FAIL").is_err() {
         assert_eq!(
-            templates_with_errors, 0,
-            "BALANCER_AUDIT_FAIL set: {templates_with_errors} templates have lane errors"
+            total_errors, 0,
+            "balancer library audit: {total_errors} lane errors across {templates_with_errors} \
+             template(s). Set BALANCER_AUDIT_NO_FAIL=1 to suppress this assert. Full report \
+             above (run with --nocapture)."
         );
     }
 }
