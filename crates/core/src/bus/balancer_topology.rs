@@ -337,7 +337,11 @@ mod tests {
         use crate::bus::balancer_classify::classify;
         use crate::bus::balancer_library::balancer_templates;
 
-        for &(m, n) in &[(1, 2), (2, 2), (1, 3), (2, 3), (4, 4), (3, 5), (4, 8)] {
+        for &(m, n) in &[
+            (1, 2), (2, 2), (1, 3), (2, 3), (4, 4), (3, 5), (4, 8),
+            (1, 9), (9, 1), (1, 10), (10, 1), (2, 9),
+            (9, 2), (9, 3), (9, 4), (9, 5), (9, 6), (9, 7), (9, 8),
+        ] {
             let t = &balancer_templates()[&(m, n)];
             let original = classify(t).unwrap();
             let topology = library_atom(m, n).unwrap();

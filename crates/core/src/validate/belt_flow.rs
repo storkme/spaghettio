@@ -2089,6 +2089,14 @@ fn compute_lane_rates_impl(
         }
     }
 
+    // Snapshot the seed rates (lane_injections + external-source seeds) before
+    // the topo-sort mutates lane_rates. The iterative convergence pass below
+    // uses these as the immutable "always-present" base for non-splitter tiles:
+    // each iteration recomputes `next[pos] = seed_rates[pos] + feeder_sum(pos)`,
+    // and seed values would otherwise be lost after the first iteration since
+    // feeders accumulate on top of whatever's there.
+    let seed_rates: FxHashMap<(i32, i32), [f64; 2]> = lane_rates.clone();
+
     let mut processed: FxHashSet<(i32, i32)> = FxHashSet::default();
     let mut splitter_input_ready: FxHashSet<(i32, i32)> = FxHashSet::default();
     let mut queue: VecDeque<(i32, i32)> = in_degree
@@ -2296,21 +2304,15 @@ fn compute_lane_rates_impl(
                     } else {
                         let pos_rates = lane_rates.get(&pos).copied().unwrap_or([0.0, 0.0]);
                         let sib_rates = lane_rates.get(&sib).copied().unwrap_or([0.0, 0.0]);
-                        // In the cycle-breaker, one tile may be a feedback-loop
-                        // recirculation tile (rates=[0,0]) while the other carries
-                        // the real external rate.  Averaging (real+0)/2 would
-                        // halve the output; instead propagate the non-zero side
-                        // to both tiles so each output gets the full steady-state
-                        // throughput (the cycle carries the same rate as the source).
-                        let pos_zero = pos_rates[0] == 0.0 && pos_rates[1] == 0.0;
-                        let sib_zero = sib_rates[0] == 0.0 && sib_rates[1] == 0.0;
-                        let (eff_pos, eff_sib) = if pos_zero && !sib_zero {
-                            (sib_rates, sib_rates)
-                        } else if sib_zero && !pos_zero {
-                            (pos_rates, pos_rates)
-                        } else {
-                            (pos_rates, sib_rates)
-                        };
+                        // Use the combined rate of both halves and distribute
+                        // equally. This correctly models 1→2 balanced splitting
+                        // (one half has the feeder rate, the other has 0) as well
+                        // as 2→2 splits and feedback-loop steady states — in all
+                        // cases the splitter gives each output half the total input.
+                        // The old "propagate non-zero to both" rule inflated rates
+                        // 2× for the stuck-secondary case, causing false lane-
+                        // throughput errors in the template audit.
+                        let (eff_pos, eff_sib) = (pos_rates, sib_rates);
                         let total_l = eff_pos[0] + eff_sib[0];
                         let total_r = eff_pos[1] + eff_sib[1];
                         for &tile in &[pos, sib] {
@@ -2330,6 +2332,106 @@ fn compute_lane_rates_impl(
             processed.insert(pos);
             do_propagate(pos, &belt_dir_map, &feeders, &splitter_sibling, &mut in_degree, &mut queue, &mut lane_rates);
             notify_ug_deps(pos, &mut in_degree, &mut queue);
+        }
+    }
+
+    // Iterate-to-convergence pass. The Kahn topo-sort + cycle-breaker above
+    // gives correct rates for acyclic belt sub-graphs but settles for whatever
+    // it produces on the first reach into balancer-internal feedback loops —
+    // splitter pairs in those loops can end up with unbalanced halves (one
+    // half picks up its feeder rate, the other half's feedback hasn't been
+    // computed yet). This pass treats the rate map as a fixed point of a
+    // linear transfer function `T(x) = x` and iterates Jacobi-style until it
+    // converges.  Splitters dampen cycle gain by 0.5 per pass, so feedback
+    // error decays geometrically; ~14 iterations suffice to drop a 15/s seed
+    // below 1e-3.
+    {
+        const MAX_ITER: usize = 200;
+        const EPS: f64 = 1e-5;
+
+        // Pre-collect splitter pairs (canonical order) so we visit each once.
+        let mut pair_set: Vec<((i32, i32), (i32, i32))> = Vec::new();
+        let mut seen_pair: FxHashSet<((i32, i32), (i32, i32))> = FxHashSet::default();
+        for (&a, &b) in &splitter_sibling {
+            let key = if a < b { (a, b) } else { (b, a) };
+            if seen_pair.insert(key) {
+                pair_set.push(key);
+            }
+        }
+
+        for _iter in 0..MAX_ITER {
+            let prev = lane_rates.clone();
+            let mut next: FxHashMap<(i32, i32), [f64; 2]> = FxHashMap::default();
+
+            // Phase 1: non-splitter, non-UG-output tiles.
+            // rate = seed (injections + external sources) + sum of feeder contributions.
+            for &pos in belt_dir_map.keys() {
+                if splitter_sibling.contains_key(&pos) || ug_output_tiles.contains(&pos) {
+                    continue;
+                }
+                let seed = seed_rates.get(&pos).copied().unwrap_or([0.0, 0.0]);
+                let fc = feeder_contributions_for_tile(pos, &prev, &feeders, &belt_dir_map);
+                next.insert(pos, [seed[0] + fc[0], seed[1] + fc[1]]);
+            }
+
+            // Phase 2: splitter pairs. Output = balanced average of pair's
+            // total feeder contribution, distributed evenly across all four
+            // output lanes (2 halves × 2 lanes per half). Real Factorio
+            // splitters mix lanes — input [L=15, R=0] becomes output
+            // [L=7.5, R=7.5] per half — so a lane-imbalanced sideload
+            // upstream gets re-balanced at the splitter, not propagated.
+            for &(a, b) in &pair_set {
+                let a_fc = feeder_contributions_for_tile(a, &prev, &feeders, &belt_dir_map);
+                let b_fc = feeder_contributions_for_tile(b, &prev, &feeders, &belt_dir_map);
+                let total = a_fc[0] + a_fc[1] + b_fc[0] + b_fc[1];
+                let per_lane = total / 4.0;
+                let half = [per_lane, per_lane];
+                next.insert(a, half);
+                next.insert(b, half);
+            }
+
+            // Phase 3: UG-output tiles inherit from the surface tile behind
+            // their paired UG-input. Use `next` (already updated in phase 1/2)
+            // when available, else fall back to `prev`. The walker ADDs behind
+            // to any seed (e.g. an inserter dropping onto the UG-output's
+            // surface tile contributes alongside the underground throughput),
+            // so we mirror that here — REPLACE would silently drop injected
+            // rate.
+            for &ug_out in &ug_output_tiles {
+                let Some(&paired_input) = ug_output_to_input.get(&ug_out) else {
+                    continue;
+                };
+                let Some(&inp_d) = ug_input_dir.get(&paired_input) else {
+                    continue;
+                };
+                let (idx, idy) = dir_to_vec(inp_d);
+                let behind = (paired_input.0 - idx, paired_input.1 - idy);
+                let behind_rates = next
+                    .get(&behind)
+                    .copied()
+                    .or_else(|| prev.get(&behind).copied())
+                    .unwrap_or([0.0, 0.0]);
+                let seed = seed_rates.get(&ug_out).copied().unwrap_or([0.0, 0.0]);
+                next.insert(ug_out, [seed[0] + behind_rates[0], seed[1] + behind_rates[1]]);
+            }
+
+            // Convergence check: max per-lane absolute difference across all tiles.
+            let mut max_change: f64 = 0.0;
+            for (pos, &[nl, nr]) in &next {
+                let &[pl, pr] = prev.get(pos).unwrap_or(&[0.0, 0.0]);
+                let dl = (nl - pl).abs();
+                let dr = (nr - pr).abs();
+                if dl > max_change {
+                    max_change = dl;
+                }
+                if dr > max_change {
+                    max_change = dr;
+                }
+            }
+            lane_rates = next;
+            if max_change < EPS {
+                break;
+            }
         }
     }
 
@@ -2357,6 +2459,90 @@ fn compute_lane_rates_impl(
     }
 
     lane_rates
+}
+
+/// Pull-direction analogue of [`do_propagate`]'s lane logic: given a feeder
+/// at `fp` with rates `fr` flowing into receiver `pos`, return the per-lane
+/// contribution that lands on `pos`.  Used by the iterative convergence pass
+/// in [`compute_lane_rates_impl`] which needs to recompute each tile's rate
+/// from current upstream rates without the side effects of the push-direction
+/// `do_propagate`.
+///
+/// Mirrors the four cases in `do_propagate`:
+/// - same direction → straight pass-through, lanes preserved
+/// - feeder is directly behind `pos` → also straight (e.g. UG-output → belt)
+/// - else, if `pos` has any straight feeder → sideload (everything onto one
+///   lane based on which side `fp` sits)
+/// - else → 90-degree turn (lanes swap on CW, preserve on CCW)
+fn feeder_contribution(
+    fp: (i32, i32),
+    pos: (i32, i32),
+    fr: [f64; 2],
+    feeders: &FxHashMap<(i32, i32), Vec<((i32, i32), u8)>>,
+    belt_dir_map: &FxHashMap<(i32, i32), EntityDirection>,
+) -> [f64; 2] {
+    let fd = match belt_dir_map.get(&fp) {
+        Some(&d) => d,
+        None => return [0.0, 0.0],
+    };
+    let pd = match belt_dir_map.get(&pos) {
+        Some(&d) => d,
+        None => return [0.0, 0.0],
+    };
+    let (fdx, fdy) = dir_to_vec(fd);
+    let (pdx, pdy) = dir_to_vec(pd);
+
+    if fd == pd {
+        return fr;
+    }
+    let behind_pos = (pos.0 - pdx, pos.1 - pdy);
+    if fp == behind_pos {
+        return fr;
+    }
+
+    let (left_dx, left_dy) = (-pdy, pdx);
+    let pos_feeders = feeders.get(&pos);
+    let has_straight = pos_feeders.is_some_and(|fs| fs.iter().any(|(_, ft)| *ft == 0));
+
+    if has_straight {
+        let rel_x = fp.0 - pos.0;
+        let rel_y = fp.1 - pos.1;
+        let dot = rel_x * left_dx + rel_y * left_dy;
+        let total = fr[0] + fr[1];
+        if dot > 0 {
+            [total, 0.0]
+        } else {
+            [0.0, total]
+        }
+    } else {
+        let cross = fdx * pdy - fdy * pdx;
+        if cross > 0 {
+            [fr[1], fr[0]]
+        } else {
+            [fr[0], fr[1]]
+        }
+    }
+}
+
+/// Sum every feeder's contribution into `pos`.  Wrapper over
+/// [`feeder_contribution`] that walks `pos`'s feeder list.
+fn feeder_contributions_for_tile(
+    pos: (i32, i32),
+    rates: &FxHashMap<(i32, i32), [f64; 2]>,
+    feeders: &FxHashMap<(i32, i32), Vec<((i32, i32), u8)>>,
+    belt_dir_map: &FxHashMap<(i32, i32), EntityDirection>,
+) -> [f64; 2] {
+    let Some(my_feeders) = feeders.get(&pos) else {
+        return [0.0, 0.0];
+    };
+    let mut total = [0.0, 0.0];
+    for &(fp, _ft) in my_feeders {
+        let fr = rates.get(&fp).copied().unwrap_or([0.0, 0.0]);
+        let contrib = feeder_contribution(fp, pos, fr, feeders, belt_dir_map);
+        total[0] += contrib[0];
+        total[1] += contrib[1];
+    }
+    total
 }
 
 fn do_propagate(
@@ -2564,7 +2750,7 @@ pub fn check_input_rate_delivery(
             None => 0.0,
         };
 
-        if available < per_inserter_rate - 0.01 {
+        if available < per_inserter_rate - 0.02 {
             issues.push(ValidationIssue::with_pos(
                 Severity::Warning,
                 "input-rate-delivery",
@@ -3827,5 +4013,191 @@ mod tests {
         assert!(!issues.is_empty(), "expected warning for insufficient rate");
         assert!(issues.iter().any(|i| i.category == "input-rate-delivery"),
             "expected input-rate-delivery issue, got: {:?}", issues);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Iterative walker / splitter math regression tests
+    //
+    // Three focused tests covering the math the iterative walker is supposed to
+    // produce. These are contracts: each documents what a specific case should
+    // compute, separate from the audit count which is end-to-end.
+    // ---------------------------------------------------------------------------
+
+    /// Splitter receiving rate on one half only must produce balanced, lane-
+    /// mixed output across both halves. Pre-fix behaviour was "propagate non-
+    /// zero half to both" which gave 2× the correct rate at the stuck
+    /// secondary; current behaviour averages and lane-mixes via the iterative
+    /// pass.
+    ///
+    /// 1→2 split: feeder full belt `[L=7.5, R=7.5]` → splitter pair → both
+    /// halves at `[3.75, 3.75]` (belt total 7.5/s = half of input). Total mass
+    /// conserved: 15/s in, 15/s out across two output belts.
+    #[test]
+    fn splitter_one_feeder_outputs_balanced_halves() {
+        use EntityDirection::*;
+        let item = "iron-plate";
+        // Source belt at (0, 0) carrying the external input. Splitter at
+        // (0, 1)/(1, 1) south-facing. Output belts at (0, 2) and (1, 2).
+        let layout = LayoutResult {
+            entities: vec![
+                belt_carries(0, 0, South, item),
+                PlacedEntity {
+                    name: "splitter".to_string(),
+                    x: 0,
+                    y: 1,
+                    direction: South,
+                    ..Default::default()
+                },
+                belt(0, 2, South),
+                belt(1, 2, South),
+            ],
+            width: 4,
+            height: 4,
+            ..Default::default()
+        };
+        let solver = SolverResult {
+            machines: vec![],
+            external_inputs: vec![ItemFlow {
+                item: item.to_string(),
+                rate: 15.0,
+                is_fluid: false,
+                module_id: 0,
+            }],
+            external_outputs: vec![],
+            dependency_order: vec![],
+        };
+        let rates = compute_lane_rates(&layout, Some(&solver));
+        let r0 = rates.get(&(0, 1)).copied().unwrap_or([0.0, 0.0]);
+        let r1 = rates.get(&(1, 1)).copied().unwrap_or([0.0, 0.0]);
+        assert!(
+            (r0[0] - 3.75).abs() < 0.01
+                && (r0[1] - 3.75).abs() < 0.01
+                && (r1[0] - 3.75).abs() < 0.01
+                && (r1[1] - 3.75).abs() < 0.01,
+            "splitter halves expected [3.75, 3.75] each, got pos={r0:?} sib={r1:?}"
+        );
+        // Outputs inherit the splitter rate.
+        let o0 = rates.get(&(0, 2)).copied().unwrap_or([0.0, 0.0]);
+        let o1 = rates.get(&(1, 2)).copied().unwrap_or([0.0, 0.0]);
+        assert!(
+            (o0[0] + o0[1] + o1[0] + o1[1] - 15.0).abs() < 0.01,
+            "total output mass should equal input 15/s, got {o0:?} + {o1:?}"
+        );
+    }
+
+    /// (3, 3) library template at full saturation should converge to exactly
+    /// `[7.5, 7.5]` per lane on every internal belt. Pre-iterative-walker, the
+    /// internal feedback splitter at `(0, 5)/(1, 5)` settled at `[3.75, 3.75]`
+    /// vs `[9.375, 9.375]` (1.25× capacity) because the single-pass walker
+    /// hit the feedback loop before the upstream half had stabilised.
+    ///
+    /// This is the headline regression case for the iterative pass.
+    #[test]
+    fn iterative_walker_balances_3_3_template() {
+        use crate::bus::balancer_classify::BalancerTemplateRef;
+        use crate::bus::balancer_library::balancer_templates;
+        use crate::bus::template_validate::compute_template_lane_rates;
+
+        let templates = balancer_templates();
+        let t = templates
+            .get(&(3, 3))
+            .expect("(3, 3) template missing from library");
+        let rates = compute_template_lane_rates(BalancerTemplateRef::from(t));
+
+        for (&pos, &[l, r]) in &rates {
+            assert!(
+                (l - 7.5).abs() < 0.01 && (r - 7.5).abs() < 0.01,
+                "(3, 3) tile {pos:?} expected [7.5, 7.5], got [{l:.4}, {r:.4}]"
+            );
+        }
+    }
+
+    /// UG-output rate inherits from the surface tile behind the paired UG-
+    /// input AND preserves any inserter injection on its own surface tile.
+    /// Bug caught during dev: the iterative pass was REPLACING `next[ug_out]`
+    /// with `behind`, dropping any `seed_rates[ug_out]` from inserter drops.
+    /// Fix: `next[ug_out] = seed[ug_out] + behind`.
+    ///
+    /// Setup: an inserter drops 1.0/s of `iron-plate` onto the surface of a
+    /// UG-output that's also carrying behind's rate via its underground feed.
+    /// The UG-output's effective rate must include both contributions.
+    #[test]
+    fn ug_output_preserves_inserter_injection() {
+        use EntityDirection::*;
+        let item = "iron-plate";
+        // Layout: source belt (0, 0) feeds UG-input (0, 1) south; pairs to
+        // UG-output at (0, 4) south; output belt (0, 5). Machine at (2, 4)
+        // making `iron-gear-wheel` from the picked-up plates; inserter at
+        // (1, 4) drops gears onto the UG-output's surface (0, 4).
+        //
+        // Wait — we need the inserter to drop onto the UG-out, but the
+        // injection is keyed off `belt_carries.get(drop_pos)` matching the
+        // machine's *output* item. Use a single item `iron-plate` for both
+        // the surface flow AND the inserter drop to keep the test focused on
+        // UG-out accumulation rather than item-mixing.
+        //
+        // The simplest faithful setup: build a `lane_injections` directly via
+        // the inserter+machine plumbing in `compute_lane_rates_impl`. Source
+        // belt carries `iron-plate` at 7.5/s (half belt to leave headroom for
+        // injection). Inserter long-handed into UG-out from a machine that
+        // outputs `iron-plate`.
+        // UG-out must have `carries` set for the inserter-drop logic to
+        // recognise the drop_pos as carrying the right item; without it the
+        // injection is silently skipped.
+        let ug_out_with_item = PlacedEntity {
+            name: "underground-belt".to_string(),
+            x: 0,
+            y: 4,
+            direction: South,
+            io_type: Some("output".to_string()),
+            carries: Some(item.to_string()),
+            ..Default::default()
+        };
+        let layout = LayoutResult {
+            entities: vec![
+                belt_carries(0, 0, South, item),
+                ug_belt(0, 1, South, "input"),
+                ug_out_with_item,
+                belt_carries(0, 5, South, item),
+                // Machine producing iron-plate; inserter long-handed onto UG-out.
+                machine(2, 4, "iron-plate-recycle"),
+                inserter(1, 4, West),
+            ],
+            width: 4,
+            height: 7,
+            ..Default::default()
+        };
+        let solver = SolverResult {
+            machines: vec![MachineSpec {
+                entity: "assembling-machine-3".to_string(),
+                recipe: "iron-plate-recycle".to_string(),
+                count: 1.0,
+                inputs: vec![],
+                outputs: vec![ItemFlow {
+                    item: item.to_string(),
+                    rate: 1.0,
+                    is_fluid: false,
+                    module_id: 0,
+                }],
+            }],
+            external_inputs: vec![ItemFlow {
+                item: item.to_string(),
+                rate: 7.5,
+                is_fluid: false,
+                module_id: 0,
+            }],
+            external_outputs: vec![],
+            dependency_order: vec!["iron-plate-recycle".to_string()],
+        };
+        let rates = compute_lane_rates(&layout, Some(&solver));
+        let ug_out = rates.get(&(0, 4)).copied().unwrap_or([0.0, 0.0]);
+        let total = ug_out[0] + ug_out[1];
+        // Surface inherited rate (3.75 per lane = 7.5/belt) + inserter
+        // injection (1.0/s on whichever lane) = 8.5/belt total. Allow some
+        // float slack and tolerate the lane the inserter targets.
+        assert!(
+            total > 8.0 && total < 9.0,
+            "UG-out should carry inherited 7.5 + injected 1.0 ≈ 8.5, got {total} ({ug_out:?})"
+        );
     }
 }

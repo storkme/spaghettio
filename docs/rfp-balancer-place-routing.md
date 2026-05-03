@@ -336,3 +336,254 @@ re-litigating decisions:
   bounds — particularly `(2, 3)` ≤100 entities and `(4, 9)` ≤250
   entities. Phase 3.2A is the gating item; if `(1, 3)` round-trip
   works in <30s, the encoding is viable and we proceed through 3.2B-D.*
+
+- *2026-05-01 — phase 3.2A.1, 3.2B, 3.2C all encoded. Status:*
+
+  | Sub-phase | Encoding | Round-trip on simple shapes | Round-trip on coprime |
+  |-----------|----------|------------------------------|------------------------|
+  | 3.2A.1 (flow-conservation) | ✅ shipped | ✅ (2, 2), (2, 4), (1, 4) | n/a |
+  | 3.2B (UG belts)             | ✅ shipped | ✅ same                   | partial — see below   |
+  | 3.2C (direction freedom)    | ✅ shipped | ✅ same                   | partial — see below   |
+
+  *Working coprime / library-with-UG / library-with-non-south-splitter
+  shapes round-trip 3/8 (the simple shapes). The remaining 5 fail with
+  one of two symptoms — INFEASIBLE (CP-SAT can't route inside library
+  bbox with our slot assignment) or Singular (CP-SAT routes but the
+  recovered topology has degenerate cycles).*
+
+  *Single root cause: the Rust-side **greedy min-distance slot
+  assigner** picks the same slot the library used only for shapes
+  without back-loops. For shapes where the library uses specific
+  slot orderings to enable the back-loop pattern, the greedy diverges
+  and either (a) routes into a topology equivalent to the library
+  but in a way the classifier's linear-system solver finds singular,
+  or (b) can't route at all in the same bbox.*
+
+  *Fix is **phase 3.2A.2** — let CP-SAT pick slots as variables, not
+  Rust greedy. Estimated 200-300 LOC of Python (slot bool vars per
+  edge × splitter, slot-usage constraints per splitter, reified
+  source/dest-cell expressions in conservation). Deferred to next
+  session.*
+
+  *Phases 3.2D (bbox minimisation), 3.3 (measure vs Factorio-SAT),
+  3.4 (bake into library_extra) all deferred — they're gated on full
+  shape coverage, which 3.2A.2 unlocks.*
+
+- *2026-05-01 (later) — phase 3.2A.2 shipped. Slot assignment is now a
+  CP-SAT variable: per-edge `src_slot_anchor[e] / src_slot_second[e]`
+  bool vars (and dst counterparts) with `ExactlyOne` per edge and
+  `AtMostOne` per splitter slot. Conservation uses reified
+  `is_src_term_at` / `is_dst_term_at` linear expressions so source/dest
+  cells are picked by the solver. Two follow-on bugs found and fixed
+  along the way:*
+
+  1. *UG output emission — the original 3.2B code accounted UG inflow
+     at the output cell, but the at-most-one-entity rule already used
+     that cell for the UG output entity, leaving no place for a
+     forwarding belt. Fix: shift UG inflow accounting one cell ahead
+     in the UG's direction (the UG output entity itself emits its
+     flow forward). The output cell becomes a passthrough — its UG
+     inflow cancels with its own emission, conservation is balanced.*
+  2. *`UG_MAX_REACH` was set to 4 but yellow belts allow up to 4
+     transit tiles between input and output, i.e., a max length of 5
+     (`output = input + 5*direction`). Bumped to 5.*
+
+  *Round-trip results: 7/8 pass — (2, 2), (2, 4), (1, 4), (1, 3),
+  (2, 3), (4, 8), (3, 5). Solve times 0.01s..16s. Only (5, 3) still
+  fails INFEASIBLE: its library template uses **belt-into-UG-output
+  sideloading** (a regular belt's flow merges into a UG output's
+  lane), which the flow-conservation encoding doesn't model — every
+  edge carries one indivisible flow along one path. This is a
+  fundamental limitation of the encoding rather than a slot issue.*
+
+  *Remaining work: phases 3.2D (bbox minimisation), 3.3 (measure vs
+  Factorio-SAT), 3.4 (bake into library_extra) now unblocked. The
+  sideload limitation means we can't reproduce every Factorio-SAT
+  output exactly, but for coprime shape generation we don't need to —
+  we just need a working topology in a tight bbox.*
+
+- *2026-05-02 — phase 3.2D.1 shipped (Mode D in `place.py`,
+  `solve_synth_place`). Takes a topology + bbox; CP-SAT picks
+  splitter anchor cells, IO port columns, slot assignments, and belt
+  routing all in one call. Splitters stay all-south for now, IO ports
+  on top/bottom rows with x-positions sorted left-to-right (the
+  classifier's flow accounting depends on output_tiles index ↔
+  physical-x correspondence — without sorted ports, the layout
+  classifies as MX2a even when topologically equivalent).*
+
+  *Round-trip on south-only shapes at library bbox: 3/3 pass.
+  `(2, 2)` 0.03s, `(2, 4)` 0.04s, `(1, 4)` 0.04s — fast.*
+
+  *UGs disabled in Mode D for this phase. With UGs enabled the
+  solver finds valid-but-nonsensical conservation flows: a CP-SAT
+  spike on (1, 4) with UGs produced a layout with a UG heading
+  north (away from output ports) creating a U-turn — conservation
+  is satisfied but the physical layout has a backward loop that
+  the lane-level classifier reads as MX2a. The fix is anti-loop
+  constraints on per-edge paths (no cell visited twice by the same
+  edge, or shortest-path objective). Deferred to 3.2D.2 along with
+  splitter direction freedom.*
+
+  *Bbox minimisation itself isn't yet wired — Mode D solves at a
+  fixed caller-supplied bbox. The library bboxes for our south-only
+  test shapes are already tight (all match the
+  width=max(n_inputs, n_outputs), height=3+ceil(splitters/2)
+  lower bound), so external shrink-loop demonstrations aren't
+  meaningful on this corpus. Direction freedom + UGs will open up
+  shapes where shrinking actually wins.*
+
+  *Phase 3.2D.2 plan: re-enable UGs with `arcs+ug_arcs` per edge
+  visiting each cell at most once (no-loop constraint), add direction
+  bool var per splitter, re-test on the (1, 3)/(2, 3)/(4, 8)/(3, 5)
+  corpus that worked in Mode C. Phases 3.3, 3.4 remain unblocked.*
+
+- *2026-05-02 (later) — phase 3.2D.2 partial — UG re-enablement
+  shipped via two complementary mechanisms:*
+
+  1. *UGs restricted to the splitters' facing direction (south for now).
+     This rules out reverse-direction UGs that produced the (1, 4)
+     U-turn pathology in 3.2D.1.*
+  2. *`Minimize(sum_of(arcs) + 2*sum_of(ug_arcs))` objective. With this,
+     CP-SAT pulls paths tight automatically — long detours become
+     uneconomical, and UGs are only chosen when they save total cells
+     (UG = 2 entities for skipping ≥1 transit cell). The objective
+     also doubles as a bbox-tightening proxy: layouts compress around
+     the splitter cluster instead of meandering across the grid.*
+
+  *Round-trip on south-only shapes at library bbox: 6/6 pass —
+  (1, 2), (2, 2), (2, 4), (1, 4), (4, 4), (1, 8). (4, 4) needed UGs
+  (8 of them at bbox 4×10, vs 4 in the library which uses sideloading
+  we don't model); classifies as Balanced. (1, 8) is a 7-splitter
+  3-deep tree, solved at 8×5 in ~5s.*
+
+  *Direction freedom and bbox minimization-as-objective are still
+  outstanding. With direction freedom, shapes like (1, 3) (which uses
+  one west-facing splitter for its back-loop) come into Mode D's reach
+  too. With explicit bbox minimization (e.g., minimize `max(sx) +
+  max(sy)`), Mode D could find layouts tighter than the library where
+  the library's choice was suboptimal.*
+
+- *2026-05-02 (later still) — phase 3.2D.3 partial — direction freedom
+  shipped as **opt-in** via `solve_synth_place_dirs` and the
+  `allow_dirs` request param. The default `solve_synth_place` keeps
+  the fast all-south path intact; setting `allow_dirs = [0, 2, 4, 6]`
+  routes to the heavier path that adds:*
+
+  - *`dir_at[s, d]` bool per (splitter, direction), `ExactlyOne` per
+    splitter; disallowed dirs pinned to 0.*
+  - *Reified `cell_facing_d[c, d]` per (cell, direction) from
+    per-(s, c, d) `AND` of anchor + dir vars.*
+  - *(anchor cell, dir) combo forbidden when the second tile lands OOG
+    or in an IO row — the rectangle dimensions become
+    direction-dependent (2×1 for N/S, 1×2 for E/W).*
+  - *Routing direction constraints reified per facing: at cell c
+    facing d, outflow only in direction d, inflow only from direction d
+    (replaces the all-south hardcoded constraint).*
+  - *UGs allowed in all 4 directions; entity-count objective is
+    relied on to keep them out of detour positions.*
+
+  *Default south-only path: 6/6 still pass at the same speeds as
+  3.2D.2 (no regression). Direction-freedom path on (1, 3): solver
+  finds OPTIMAL in ~20s; solution is materially more compact than the
+  library (12 entities vs 19) but classifies as MX2b
+  (`ThroughputUnlimited`) instead of MX3 (`Balanced`). The back-loop
+  is implemented but doesn't preserve composition mixing — likely
+  because the `AtMostOne` slot constraint is necessary but not
+  sufficient for proper lane mixing in the presence of UGs feeding
+  into a back-loop's merge splitter.*
+
+  *The MX2b regression isn't a direction-freedom bug per se — it's a
+  gap in the encoding of lane-level semantics. Closing it likely needs
+  one of: (a) explicit lane-level conservation per UG/belt, (b) ban on
+  UGs feeding back-loop merge splitters, or (c) post-hoc rejection of
+  MX2b solutions via a CP-SAT bool that's tied to the classifier's
+  composition test. None are obvious one-liners; deferred to 3.2D.4 if
+  we choose to chase MX3 from synth (vs. ship MX2b — which might be
+  perfectly acceptable for the bus pipeline since its existing layouts
+  classify MX3 only sometimes anyway).*
+
+  *Phases 3.2D.4 (bbox minimization), 3.3 (measure vs Factorio-SAT),
+  and 3.4 (bake into library_extra) remain unblocked — direction
+  freedom is now available behind the opt-in flag for shapes that
+  need it, and the default fast path is unchanged for shapes that
+  don't.*
+
+- *2026-05-02 (later) — phase 3.3 shipped — bench Mode D vs library
+  on the south-only corpus, with greedy shrink loop testing whether
+  Mode D can find tighter than the library bbox.*
+
+  | shape   | lib bbox / ents | Mode D ents / solve | min bbox / area | shrink |
+  |---------|-----------------|---------------------|-----------------|--------|
+  | (1, 2)  | 2×3   /  4      |  4 / 0.01s          | 2×3  /  6       | none   |
+  | (2, 2)  | 2×3   /  5      |  5 / 0.01s          | 2×3  /  6       | none   |
+  | (2, 4)  | 4×4   /  9      |  9 / 0.07s          | 4×4  / 16       | none   |
+  | (1, 4)  | 4×4   /  8      |  8 / 0.09s          | 4×4  / 16       | none   |
+  | (4, 4)  | 4×10  / 32      | 30 / 7.06s          | 4×10 / 40       | none   |
+  | (1, 8)  | 8×5   / 20      | 20 / 4.08s          | 8×5  / 40       | none   |
+
+  *Findings:*
+  - *Mode D matches the library bbox on every shape — the library is
+    at the lower bound (W = max(n_in, n_out), H = 3 + splitter rows)
+    so bbox shrinking can't gain anything for this corpus. The shrink
+    loop confirmed infeasibility one row/col below library bbox in
+    every case.*
+  - *Entity count: parity except for **(4, 4) where Mode D found a
+    layout with 30 entities vs library's 32** (-2, ≈6% smaller). The
+    library uses sideloading (4 UGs + 5 belts on the bus axis); Mode
+    D's encoding doesn't model sideloading and instead routes via
+    pure-belt paths.*
+  - *Solve times scale with shape complexity: trivial single-splitter
+    cases under 100ms, multi-splitter cases up to 7s at this bbox.
+    The shrink loop adds 0–7s of overhead per shape proving
+    infeasibility one step below the lib bbox.*
+
+  *No comparison to Factorio-SAT directly: the library IS Factorio-SAT
+  output for the shapes it covers, so library bbox / entity count
+  serves as a proxy. Comparing Mode D against synth's Knuth-Yao
+  splitter counts is also possible but synth gives just an abstract
+  graph (no spatial layout) — splitter count parity isn't a meaningful
+  metric without bbox.*
+
+  *Phase 3.4 (bake into library_extra) is the natural next step. Mode
+  D already hits parity-or-better on south-only library shapes, so the
+  immediate value is filling in synth-only shapes (the 37 missing
+  (n, m) ≤ 10×10 from issue #136). That requires either (a) extending
+  Mode D to consume synth's `BalancerGraph` directly, or (b) writing
+  a synth → SplitterGraph adapter so the existing Mode D request
+  format works.*
+
+- *2026-05-02 (later still) — phase 3.3 stress test on `(4, 9)` Clos
+  composition. Clear negative result: Mode D does NOT scale to 30+
+  splitter shapes in its current encoding.*
+
+  *The (4, 9) topology built via `series_permuted(parallel(library_atom(1, 3), 4),
+  parallel(library_atom(4, 3), 3), clos_interleave(4, 3))` has 33
+  splitters and 67 edges. Tried four progressively-smaller bboxes —
+  16×16, 12×18, 10×20, 9×24 — each with a 600s solve budget. All four
+  OOM-killed (exit 137) during model construction, before the solver
+  even starts.*
+
+  *Root cause: per-(cell, edge, direction) bool var count is `O(W * H *
+  E)` for routing arcs and `O(W * H * UG_MAX_REACH * E)` for UG arcs.
+  At 9×24 with 67 edges that's 67 × 216 × 4 ≈ 58K arc vars and 67 ×
+  216 × 5 ≈ 72K UG vars — plus `O(splitters * cells)` reified anchor
+  bools and reified is_src/is_dst term bools per (cell, edge). Total
+  ~500K bool vars; CP-SAT's model construction allocates more than
+  the available RAM before constraints are even posted.*
+
+  *Implication for phase 3.4: Mode D **cannot** bake compositions like
+  (4, 9) Clos that synth produces from atom composition. It CAN
+  probably handle the 37 atomic missing shapes from issue #136 (most
+  are ≤ 10 splitters, which Mode D handles in seconds), but anything
+  built by composing atoms is out of reach until the encoding is
+  rewritten. Two ways forward:*
+
+  - *Sparser encoding: don't allocate arc vars for every (cell, edge)
+    combo. Use lazy constraint generation, or shared arc vars across
+    edges with disjoint flow sets.*
+  - *Decompose compositions: solve each Clos stage independently (each
+    is small), then stitch the layouts together — pushes the
+    composition work back to a Rust-side combinator instead of CP-SAT.*
+
+  *Phase 3.4 starts with the atomic-shapes-only scope; compositions
+  wait for the encoding rework or the decomposition combinator.*
