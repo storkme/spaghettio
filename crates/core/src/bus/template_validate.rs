@@ -17,7 +17,7 @@
 //!   - No surface belt's lane may exceed `lane_capacity(belt_name)` once
 //!     the topology has propagated saturated input rates downstream.
 //!
-//! Public API: [`validate_template_lanes`].
+//! Public API: [`validate_template_lanes`], [`check_throughput_unlimited`].
 
 use crate::bus::balancer_classify::BalancerTemplateRef;
 use crate::common::lane_capacity;
@@ -183,6 +183,285 @@ fn synthesize_entities(template: BalancerTemplateRef<'_>) -> Vec<PlacedEntity> {
             )
         })
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Throughput-unlimited (TU) check
+// ---------------------------------------------------------------------------
+
+/// Run the throughput-unlimited (TU) check against a standalone balancer
+/// template.
+///
+/// ## What is TU?
+///
+/// A balancer is *throughput-unlimited* if, for every subset of `k` active
+/// inputs (1 ≤ k ≤ n), each of the `m` outputs receives exactly
+/// `k * belt_rate / m` — the theoretically maximum achievable under equal
+/// splitting. A non-TU balancer may internally bottleneck and deliver less
+/// total throughput than the inputs supply.
+///
+/// ## How we check it
+///
+/// We use the existing lane-rate walker ([`compute_lane_rates`]) as the rate
+/// model, which is already used for lane-throughput validation. For three
+/// representative input-subset sizes (k=1, k=⌊n/2⌋, k=n-1) we:
+///
+/// 1. Synthesise a `LayoutResult` where only the first `k` input tiles
+///    carry the sentinel item (as sources).
+/// 2. Set the external input rate to `k × belt_throughput` (so each active
+///    source injects exactly one belt's worth).
+/// 3. Run the rate-walker and read the combined (left + right) rate at each
+///    output tile.
+/// 4. Check all output totals are equal to `k × belt_throughput / m`
+///    (within a tolerance of `0.5/s`).
+///
+/// Issues are emitted at `Severity::Warning` since TU is a desirable quality
+/// attribute but not a hard correctness requirement for the bus engine.
+///
+/// ## Limitations
+///
+/// The lane-walker uses a static continuous model. For balancers with
+/// feedback loops that the cycle-breaker cannot resolve, some output tiles
+/// may converge to 0 rate — these cases are flagged as "inconclusive" rather
+/// than a definitive TU failure. The max-flow-based
+/// [`BalancerClass`](crate::bus::balancer_classify::BalancerClass) check
+/// in `balancer_classify` is more reliable for detecting TU structurally;
+/// this check is complementary in that it tests the *lane-level* behaviour
+/// under partial loading.
+///
+/// Mergers (n > m, e.g. (4,1)) that lack splitter priority annotations will
+/// inherently fail this check under partial input — standard 50/50 splitters
+/// route flow to dead-end outputs rather than concentrating it. Raynquist-
+/// style TU mergers use `input_priority`/`output_priority` to route around
+/// this.
+pub fn check_throughput_unlimited(template: BalancerTemplateRef<'_>) -> Vec<ValidationIssue> {
+    use crate::validate::Severity;
+
+    let n = template.n_inputs as usize;
+    let m = template.n_outputs as usize;
+    let belt_throughput = lane_capacity("transport-belt") * 2.0; // 15.0 /s for yellow
+
+    // Trivially TU: single input or single output, nothing to check under
+    // partial-input scenarios (only one scenario is k=n=1, which is always
+    // trivially satisfied).
+    if n <= 1 || m == 0 {
+        return Vec::new();
+    }
+
+    // Representative subset sizes: k=1, k=n/2 (floor), k=n-1.
+    // Deduplicated so we don't run the same k twice for small n.
+    let mut ks: Vec<usize> = Vec::new();
+    ks.push(1);
+    if n / 2 > 1 && n / 2 < n - 1 {
+        ks.push(n / 2);
+    }
+    if n - 1 > 1 {
+        ks.push(n - 1);
+    }
+    ks.dedup();
+
+    let mut issues = Vec::new();
+
+    for k in ks {
+        let result = run_partial_scenario(template, k, belt_throughput);
+        match result {
+            PartialScenarioResult::Ok => {} // TU holds for this k
+            PartialScenarioResult::NonUniform {
+                expected,
+                min_output,
+                max_output,
+            } => {
+                issues.push(ValidationIssue::new(
+                    Severity::Warning,
+                    "throughput-unlimited",
+                    format!(
+                        "({n}, {m}) balancer: with {k}/{n} inputs active, outputs are not \
+                         uniform (expected {expected:.2}/s each, got [{min_output:.2}, \
+                         {max_output:.2}]/s range). NOT throughput-unlimited.",
+                    ),
+                ));
+            }
+            PartialScenarioResult::LowThroughputNotTu {
+                expected_total,
+                actual_total,
+            } => {
+                issues.push(ValidationIssue::new(
+                    Severity::Warning,
+                    "throughput-unlimited",
+                    format!(
+                        "({n}, {m}) balancer: with {k}/{n} inputs active, total output \
+                         {actual_total:.2}/s < expected {expected_total:.2}/s (splitter \
+                         network routes {:.0}% of flow to unreachable dead-end outputs). \
+                         NOT throughput-unlimited; needs priority annotations to concentrate \
+                         partial-input flow.",
+                        100.0 * actual_total / expected_total.max(0.001),
+                    ),
+                ));
+            }
+            PartialScenarioResult::WalkerStall {
+                expected_total,
+            } => {
+                issues.push(ValidationIssue::new(
+                    Severity::Warning,
+                    "throughput-unlimited",
+                    format!(
+                        "({n}, {m}) balancer: with {k}/{n} inputs active, rate-walker \
+                         produced 0/s total output (expected {expected_total:.2}/s). \
+                         Likely a feedback loop the cycle-breaker could not resolve. \
+                         TU status inconclusive — check classifier for structural verdict.",
+                    ),
+                ));
+            }
+        }
+    }
+
+    issues
+}
+
+#[derive(Debug)]
+enum PartialScenarioResult {
+    /// All outputs are uniform at the expected rate.
+    Ok,
+    /// Outputs differ more than tolerance (non-uniform distribution).
+    NonUniform {
+        expected: f64,
+        min_output: f64,
+        max_output: f64,
+    },
+    /// Total output is significantly below `k * belt_throughput`, but nonzero —
+    /// flow is being routed to dead-end splitter outputs (non-TU, not a stall).
+    /// Typical for mergers (n > m) without priority annotations.
+    LowThroughputNotTu {
+        expected_total: f64,
+        actual_total: f64,
+    },
+    /// Total output is effectively zero despite nonzero input — the rate-walker
+    /// stalled due to an unresolvable feedback loop or cycle-breaker failure.
+    /// TU status is inconclusive for this scenario.
+    WalkerStall {
+        expected_total: f64,
+    },
+}
+
+/// Simulate the template with `k` of `n` active inputs (the first `k`
+/// by index order) and return whether outputs are uniform at the expected
+/// rate `k * belt_throughput / m`.
+///
+/// Uses only the first `k` input tiles so the "subset" is deterministic.
+fn run_partial_scenario(
+    template: BalancerTemplateRef<'_>,
+    k: usize,
+    belt_throughput: f64,
+) -> PartialScenarioResult {
+    let m = template.n_outputs as usize;
+
+    // Set of input tiles that are active (first k by index).
+    let active_inputs: std::collections::HashSet<(i32, i32)> = template
+        .input_tiles
+        .iter()
+        .take(k)
+        .copied()
+        .collect();
+
+    // Synthesise entities: only active input tiles carry the item.
+    let entities: Vec<PlacedEntity> = template
+        .entities
+        .iter()
+        .map(|e| {
+            let item = if active_inputs.contains(&(e.x, e.y)) {
+                Some(TEST_ITEM)
+            } else {
+                None
+            };
+            e.stamp(0, 0, "transport-belt", "splitter", "underground-belt", item)
+        })
+        .collect();
+
+    let layout = LayoutResult {
+        entities,
+        width: template.width as i32,
+        height: template.height as i32,
+        ..Default::default()
+    };
+
+    // Total external rate = k belts worth. The walker distributes this
+    // evenly across all k source tiles → each active input gets belt_throughput.
+    let total_input_rate = (k as f64) * belt_throughput;
+    let solver = SolverResult {
+        machines: Vec::new(),
+        external_inputs: vec![ItemFlow {
+            item: TEST_ITEM.to_string(),
+            rate: total_input_rate,
+            is_fluid: false,
+            module_id: 0,
+        }],
+        external_outputs: Vec::new(),
+        dependency_order: Vec::new(),
+    };
+
+    let lane_rates = compute_lane_rates(&layout, Some(&solver));
+
+    // Sum left+right lanes at each output tile.
+    let output_totals: Vec<f64> = template
+        .output_tiles
+        .iter()
+        .map(|&pos| {
+            lane_rates
+                .get(&pos)
+                .map(|&[l, r]| l + r)
+                .unwrap_or(0.0)
+        })
+        .collect();
+
+    let total_output: f64 = output_totals.iter().sum();
+    let expected_total = total_input_rate;
+    // Tolerance: 5% of expected total or 0.1 /s, whichever is larger.
+    let throughput_tolerance = (expected_total * 0.05_f64).max(0.1);
+    // "Stall" threshold: output is effectively zero (< 1% of expected).
+    let stall_threshold = expected_total * 0.01_f64;
+
+    // Check 1: total output is effectively zero — the walker stalled.
+    // This happens when feedback loops in the template prevent any rate
+    // from propagating to the output tiles under partial input conditions.
+    if total_output < stall_threshold {
+        return PartialScenarioResult::WalkerStall { expected_total };
+    }
+
+    // Check 2: total output is below expected but nonzero — the splitter
+    // network routes some fraction of flow to dead-end outputs (non-TU,
+    // not a stall). This is the normal case for mergers without priority.
+    if total_output < expected_total - throughput_tolerance {
+        return PartialScenarioResult::LowThroughputNotTu {
+            expected_total,
+            actual_total: total_output,
+        };
+    }
+
+    // Check 3: all outputs are uniform at the expected per-output rate (TU).
+    let expected_per_output = (k as f64) * belt_throughput / (m as f64);
+    let uniformity_tolerance = belt_throughput * 0.05_f64; // 5% of one belt
+
+    let min_out = output_totals
+        .iter()
+        .copied()
+        .fold(f64::INFINITY, f64::min);
+    let max_out = output_totals
+        .iter()
+        .copied()
+        .fold(f64::NEG_INFINITY, f64::max);
+
+    if (max_out - min_out) > uniformity_tolerance
+        || (max_out - expected_per_output).abs() > uniformity_tolerance
+        || (min_out - expected_per_output).abs() > uniformity_tolerance
+    {
+        return PartialScenarioResult::NonUniform {
+            expected: expected_per_output,
+            min_output: min_out,
+            max_output: max_out,
+        };
+    }
+
+    PartialScenarioResult::Ok
 }
 
 #[cfg(test)]
