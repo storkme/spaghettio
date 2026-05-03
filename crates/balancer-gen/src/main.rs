@@ -1463,20 +1463,28 @@ fn bake_missing_shapes() -> Result<(), Box<dyn std::error::Error>> {
             // Lane-throughput artifacts (category != "underground-belt") are
             // validator noise on standalone templates — do not gate on them.
             let issues = validate_template_lanes(composed.as_ref());
-            let ug_errors: Vec<_> = issues
+            // Gate on both errors and warnings in the underground-belt
+            // category. UG-sideload warnings ("Belt sideloads into UG input
+            // — only one lane loaded") are real throughput flaws — the UG
+            // carries half capacity. A bake that produces them isn't a
+            // viable balancer even if classify_ref says "Balanced".
+            let ug_issues: Vec<_> = issues
                 .iter()
-                .filter(|i| i.severity == Severity::Error && i.category == "underground-belt")
+                .filter(|i| {
+                    matches!(i.severity, Severity::Error | Severity::Warning)
+                        && i.category == "underground-belt"
+                })
                 .collect();
-            if ug_errors.is_empty() {
+            if ug_issues.is_empty() {
                 composed_opt = Some(composed);
                 break 'bake;
             }
             println!(
-                "  ✗ lane gate ({} ug error(s) at jh={used_jh}), next min_jh={}",
-                ug_errors.len(),
+                "  ✗ lane gate ({} ug issue(s) at jh={used_jh}), next min_jh={}",
+                ug_issues.len(),
                 used_jh + 1
             );
-            for e in &ug_errors {
+            for e in &ug_issues {
                 println!("    {:?}: {} at ({:?}, {:?})", e.severity, e.message, e.x, e.y);
             }
             min_jh = used_jh + 1;

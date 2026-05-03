@@ -1515,6 +1515,34 @@ def solve_pure_routing(req: dict) -> dict:
                     if key in ug_arcs and key != (c1x, c1y, d1, L1, e1):
                         model.AddBoolOr([arc1.Not(), ug_arcs[key].Not()])
 
+    # UG-input sideload prevention: when a UG-input is active at
+    # (cx, cy) facing d_ug, only the straight-behind cell flowing in
+    # d_ug is allowed to feed it. Belts entering perpendicular or
+    # head-on (rotated by 90/180 from the UG's facing direction)
+    # would only load one lane in real Factorio — the lane validator
+    # warns about this as `belt sideloads into UG input — only one
+    # lane loaded`. Without this constraint the model is free to
+    # produce topologically-balanced layouts that achieve only half
+    # capacity at sideloaded UGs (see issue #284 / library audit).
+    #
+    # Cross-edge sideloads are already excluded by flow conservation:
+    # a perpendicular belt for some other edge e' would deliver flow
+    # to (cx, cy) for e' but (cx, cy) hosts e_idx's UG-input not an
+    # e' entity, so e' inflow > e' outflow at this cell — infeasible.
+    # The constraint below targets the same-edge case where the
+    # router considers feeding its own UG from a side neighbor.
+    for (cx, cy, d_ug, L_ug, e_idx), ug_var in ug_arcs.items():
+        for d_in in range(4):
+            if d_in == d_ug:
+                continue  # straight feed is the only allowed direction.
+            n_dx, n_dy = DIR_STEPS[d_in]
+            ncx, ncy = cx - n_dx, cy - n_dy
+            if not (0 <= ncx < width and 0 <= ncy < height):
+                continue
+            arc_var = arcs.get((ncx, ncy, d_in, e_idx))
+            if arc_var is not None:
+                model.Add(arc_var + ug_var <= 1)
+
     # Conservation per (cell, edge), fixed IO positions.
     for cx in range(width):
         for cy in range(height):
