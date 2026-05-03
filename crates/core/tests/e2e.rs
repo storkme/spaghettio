@@ -4350,10 +4350,11 @@ fn diag_sat_total_time() {
     let mut total_sat_us: u64 = 0;
     let mut total_calls: u64 = 0;
     let mut total_sat_solved: u64 = 0;
+    let mut global_max_single_us: u64 = 0;
 
     eprintln!();
-    eprintln!("{:<55} {:>10} {:>10} {:>8} {:>8} {:>6}", "test", "wall_ms", "sat_ms", "sat%", "calls", "ok");
-    eprintln!("{}", "-".repeat(105));
+    eprintln!("{:<55} {:>10} {:>10} {:>8} {:>8} {:>6} {:>16}", "test", "wall_ms", "sat_ms", "sat%", "calls", "ok", "max_single_ms");
+    eprintln!("{}", "-".repeat(121));
 
     for c in &cases {
         let mut available_inputs = FxHashSet::default();
@@ -4378,39 +4379,45 @@ fn diag_sat_total_time() {
         let mut sat_us: u64 = 0;
         let mut sat_calls: u64 = 0;
         let mut sat_solved: u64 = 0;
+        let mut max_single_us: u64 = 0;
         for ev in &result.trace_events {
             if let TraceEvent::SatInvocation { solve_time_us, satisfied, .. } = ev {
                 sat_us += solve_time_us;
                 sat_calls += 1;
                 if *satisfied { sat_solved += 1; }
+                if *solve_time_us > max_single_us { max_single_us = *solve_time_us; }
             }
         }
 
         let pct = if wall_us > 0 { (sat_us as f64 / 1000.0) / (wall_us as f64 / 1000.0) * 100.0 } else { 0.0 };
-        eprintln!("{:<55} {:>10.1} {:>10.1} {:>7.1}% {:>8} {:>6}",
-            c.name, wall_us as f64 / 1000.0, sat_us as f64 / 1000.0, pct, sat_calls, sat_solved);
+        eprintln!("{:<55} {:>10.1} {:>10.1} {:>7.1}% {:>8} {:>6} {:>10.2}ms/call-max",
+            c.name, wall_us as f64 / 1000.0, sat_us as f64 / 1000.0, pct, sat_calls, sat_solved,
+            max_single_us as f64 / 1000.0);
 
         total_wall_us += wall_us;
         total_sat_us += sat_us;
         total_calls += sat_calls;
         total_sat_solved += sat_solved;
+        if max_single_us > global_max_single_us { global_max_single_us = max_single_us; }
     }
 
     let total_pct = if total_wall_us > 0 {
         (total_sat_us as f64 / 1000.0) / (total_wall_us as f64 / 1000.0) * 100.0
     } else { 0.0 };
 
-    eprintln!("{}", "-".repeat(105));
-    eprintln!("{:<55} {:>10.1} {:>10.1} {:>7.1}% {:>8} {:>6}",
-        "TOTAL", total_wall_us as f64 / 1000.0, total_sat_us as f64 / 1000.0, total_pct, total_calls, total_sat_solved);
+    eprintln!("{}", "-".repeat(121));
+    eprintln!("{:<55} {:>10.1} {:>10.1} {:>7.1}% {:>8} {:>6} {:>16.2}",
+        "TOTAL", total_wall_us as f64 / 1000.0, total_sat_us as f64 / 1000.0, total_pct, total_calls, total_sat_solved,
+        global_max_single_us as f64 / 1000.0);
 
     panic!(
-        "SAT total-time profile: wall={:.1}ms sat={:.1}ms ({:.1}%) calls={} solved={}",
+        "SAT total-time profile: wall={:.1}ms sat={:.1}ms ({:.1}%) calls={} solved={} max_single={:.2}ms",
         total_wall_us as f64 / 1000.0,
         total_sat_us as f64 / 1000.0,
         total_pct,
         total_calls,
-        total_sat_solved
+        total_sat_solved,
+        global_max_single_us as f64 / 1000.0
     );
 }
 

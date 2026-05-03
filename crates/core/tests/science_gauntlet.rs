@@ -266,12 +266,18 @@ fn science_gauntlet() {
     // -----------------------------------------------------------------------
     // SAT zone-cache hit-rate watchdog
     // -----------------------------------------------------------------------
-    let (total_lookups, hits, misses) = zone_cache::cache_stats();
+    // cache_stats_extended returns (total, hits_all, hits_unsat, hits_timeout, misses).
+    // hits_all already includes unsat+timeout; compute solved as the remainder.
+    let (total_lookups, hits_all, hits_unsat, hits_timeout, misses) =
+        zone_cache::cache_stats_extended();
+    let hits = hits_all; // already the total hit count
+    let hits_solved = hits_all.saturating_sub(hits_unsat + hits_timeout);
     if total_lookups > 0 {
         let hit_pct = hits as f64 / total_lookups as f64 * 100.0;
         eprintln!(
-            "cache hit rate: {:.1}% ({} hits / {} lookups, {} misses)",
-            hit_pct, hits, total_lookups, misses
+            "cache hit rate: {:.1}% ({} hits / {} lookups, {} misses) \
+             [solved={} unsat={} timeout={}]",
+            hit_pct, hits, total_lookups, misses, hits_solved, hits_unsat, hits_timeout,
         );
         // Only warn when the sample is large enough to be meaningful.
         if total_lookups > 1000 && hit_pct < 60.0 {

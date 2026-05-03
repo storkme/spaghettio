@@ -30,6 +30,27 @@ use crate::models::{EntityDirection, PlacedEntity};
 use crate::sat::{CrossingZone, ZoneBoundary};
 use crate::trace::{self, BoundarySnapshot, ExternalFeederSnapshot, SatProposedEntity, TraceEvent};
 
+/// Read the effective cost-descent budget from the environment.
+///
+/// `FUCKTORIO_SAT_DESCENT_BUDGET_MS` overrides the per-strategy default.
+/// Intended for test runs: the cache handles known-UNSAT/timeout zones, so
+/// new SAT solves are rare and the descent loop can be kept short.  Web app
+/// and production paths leave this unset and use the strategy's own default.
+///
+/// Parsed once per process (via `OnceLock`) so it's cheap to call per solve.
+#[cfg(not(target_arch = "wasm32"))]
+fn env_descent_budget_ms() -> Option<u32> {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<Option<u32>> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        std::env::var("FUCKTORIO_SAT_DESCENT_BUDGET_MS")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+    })
+}
+#[cfg(target_arch = "wasm32")]
+fn env_descent_budget_ms() -> Option<u32> { None }
+
 /// A feeder/consumer tile candidate found adjacent to a spec entry/exit.
 struct FeederHit {
     /// The tile of the Permanent entity that physically interacts with
@@ -146,7 +167,7 @@ impl SatConstraints {
         Self {
             max_ug_ins: None,
             cost_descent_max_iters: 4,
-            cost_descent_budget_ms: 50,
+            cost_descent_budget_ms: 25,
             reach_mode: ReachMode::Relaxed,
         }
     }
@@ -156,7 +177,7 @@ impl SatConstraints {
         Self {
             max_ug_ins: Some(0),
             cost_descent_max_iters: 4,
-            cost_descent_budget_ms: 50,
+            cost_descent_budget_ms: 25,
             reach_mode: ReachMode::Relaxed,
         }
     }
@@ -166,7 +187,7 @@ impl SatConstraints {
         Self {
             max_ug_ins: Some(n),
             cost_descent_max_iters: 4,
-            cost_descent_budget_ms: 50,
+            cost_descent_budget_ms: 25,
             reach_mode: ReachMode::Relaxed,
         }
     }
@@ -179,7 +200,7 @@ impl SatConstraints {
         Self {
             max_ug_ins: Some(n),
             cost_descent_max_iters: 4,
-            cost_descent_budget_ms: 50,
+            cost_descent_budget_ms: 25,
             reach_mode: ReachMode::Native,
         }
     }
@@ -191,7 +212,7 @@ impl SatConstraints {
         Self {
             max_ug_ins: None,
             cost_descent_max_iters: 4,
-            cost_descent_budget_ms: 50,
+            cost_descent_budget_ms: 25,
             reach_mode: ReachMode::Native,
         }
     }
@@ -1017,14 +1038,33 @@ impl JunctionStrategy for SatStrategy {
         // pre-baked cache embedded at compile time; native loads from
         // `~/.cache/fucktorio/sat-zones.bin`. Both honour
         // `FUCKTORIO_USE_ZONE_CACHE=0` to disable on native.
-        let cached_hit: Option<Vec<crate::models::PlacedEntity>> = crate::zone_cache::lookup_zone(
+        //
+        // `Unsat` and `Timeout` hits also skip SAT — they tell us this
+        // strategy rung won't produce a solution, so we fall through to None
+        // immediately rather than re-running the solver.
+        use crate::zone_cache::ZoneLookupResult;
+        let cache_result = crate::zone_cache::lookup_zone_result(
             &zone,
             &channel_reaches,
             self.constraints.max_ug_ins,
             belt_name,
         );
 
-        if let Some(cached_entities) = cached_hit {
+        // Unsat / Timeout hits: skip this strategy entirely (or fall through
+        // when the current budget exceeds the recorded timeout budget).
+        match &cache_result {
+            ZoneLookupResult::Unsat => return None,
+            // Timeout: re-attempt only if we now have a larger budget;
+            // otherwise treat as UNSAT-equivalent (won't finish anyway).
+            ZoneLookupResult::Timeout { budget_ms }
+                if *budget_ms >= self.constraints.cost_descent_budget_ms =>
+            {
+                return None;
+            }
+            _ => {}
+        }
+
+        if let ZoneLookupResult::Solved(cached_entities) = cache_result {
             let cached_count = cached_entities.len();
             let proposed_entities: Vec<SatProposedEntity> = cached_entities
                 .iter()
@@ -1107,6 +1147,13 @@ impl JunctionStrategy for SatStrategy {
             }
         }
 
+        // Effective cost-descent budget: env override wins over strategy default.
+        // `FUCKTORIO_SAT_DESCENT_BUDGET_MS` lets test runs use a shorter
+        // budget (e.g. 20ms) since the cache handles known-UNSAT/timeout zones.
+        // Web app and production binaries leave this unset.
+        let effective_budget_ms = env_descent_budget_ms()
+            .unwrap_or(self.constraints.cost_descent_budget_ms);
+
         let (entities_opt, stats) = crate::sat::solve_crossing_zone_per_channel(
             &zone,
             &channel_reaches,
@@ -1154,7 +1201,47 @@ impl JunctionStrategy for SatStrategy {
             initial_cost,
             proposed_entities,
         });
-        let mut best = entities_opt?;
+        // SAT returned None — either UNSAT or timeout. Record the outcome for
+        // future cache hits so the solver isn't re-run for known-bad zones.
+        //
+        // Distinguish UNSAT from timeout: if the solver took longer than the
+        // cost-descent budget, it was effectively a timeout (the initial call
+        // has no hard wall-clock limit, but a solve time far exceeding the
+        // budget signals a pathological zone). Use the descent budget as the
+        // reference threshold — if solve_time_us > budget_ms * 1000, record
+        // Timeout; otherwise UNSAT.
+        if entities_opt.is_none() {
+            let zone_stats = crate::zone_cache::ZoneStats {
+                variables: stats.variables,
+                clauses: stats.clauses,
+                solve_time_us: stats.solve_time_us,
+            };
+            // Use the effective budget (env override or strategy default) as
+            // the UNSAT/Timeout threshold — the cached budget_ms must reflect
+            // the actual budget that was in force so future lookups compare
+            // apples-to-apples.
+            let budget_us = (effective_budget_ms as u64) * 1_000;
+            if stats.solve_time_us > budget_us {
+                crate::zone_cache::record_zone_timeout(
+                    &zone,
+                    &channel_reaches,
+                    self.constraints.max_ug_ins,
+                    zone_stats,
+                    effective_budget_ms,
+                    None,
+                );
+            } else {
+                crate::zone_cache::record_zone_unsat(
+                    &zone,
+                    &channel_reaches,
+                    self.constraints.max_ug_ins,
+                    zone_stats,
+                    None,
+                );
+            }
+            return None;
+        }
+        let mut best = entities_opt.unwrap();
         let mut best_cost =
             initial_cost.expect("entities_opt is Some here, so initial_cost is Some");
 
@@ -1164,7 +1251,7 @@ impl JunctionStrategy for SatStrategy {
         // SAT output so the cap we compute lines up with what the
         // encoder sees; pruning happens once at the end.
         let deadline = web_time::Instant::now()
-            + std::time::Duration::from_millis(self.constraints.cost_descent_budget_ms as u64);
+            + std::time::Duration::from_millis(effective_budget_ms as u64);
 
         for descent_iter in 0..self.constraints.cost_descent_max_iters {
             if web_time::Instant::now() >= deadline {
