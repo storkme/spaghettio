@@ -2337,45 +2337,47 @@ static T_7_1_ENTITIES: &[BalancerTemplateEntity] = &[
 static T_7_1_INPUT: &[(i32, i32)] = &[(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0), (6, 0)];
 static T_7_1_OUTPUT: &[(i32, i32)] = &[(1, 6)];
 
+// Re-baked 2026-05-03 via balancer-gen Lib(7, 1) → Lib(1, 2). The prior
+// python-derived (7, 2) sideloaded a UG input (validator emitted
+// `belt sideloads into UG input — only one lane loaded`).
 static T_7_2_ENTITIES: &[BalancerTemplateEntity] = &[
+    BalancerTemplateEntity { name: "transport-belt", x: 6, y: 0, direction: 4, io_type: None },
+    BalancerTemplateEntity { name: "transport-belt", x: 6, y: 1, direction: 4, io_type: None },
     BalancerTemplateEntity { name: "transport-belt", x: 6, y: 2, direction: 4, io_type: None },
     BalancerTemplateEntity { name: "transport-belt", x: 6, y: 3, direction: 4, io_type: None },
     BalancerTemplateEntity { name: "transport-belt", x: 6, y: 4, direction: 4, io_type: None },
-    BalancerTemplateEntity { name: "transport-belt", x: 6, y: 6, direction: 4, io_type: None },
-    BalancerTemplateEntity { name: "splitter", x: 5, y: 0, direction: 4, io_type: None },
-    BalancerTemplateEntity { name: "underground-belt", x: 5, y: 1, direction: 4, io_type: Some("input") },
-    BalancerTemplateEntity { name: "underground-belt", x: 5, y: 2, direction: 2, io_type: Some("output") },
-    BalancerTemplateEntity { name: "underground-belt", x: 5, y: 3, direction: 4, io_type: Some("output") },
-    BalancerTemplateEntity { name: "splitter", x: 5, y: 5, direction: 4, io_type: None },
-    BalancerTemplateEntity { name: "transport-belt", x: 5, y: 6, direction: 4, io_type: None },
+    BalancerTemplateEntity { name: "transport-belt", x: 6, y: 5, direction: 6, io_type: None },
+    BalancerTemplateEntity { name: "transport-belt", x: 5, y: 0, direction: 4, io_type: None },
+    BalancerTemplateEntity { name: "transport-belt", x: 5, y: 2, direction: 6, io_type: None },
+    BalancerTemplateEntity { name: "transport-belt", x: 5, y: 3, direction: 6, io_type: None },
+    BalancerTemplateEntity { name: "splitter", x: 4, y: 4, direction: 0, io_type: None },
+    BalancerTemplateEntity { name: "transport-belt", x: 5, y: 5, direction: 0, io_type: None },
     BalancerTemplateEntity { name: "transport-belt", x: 4, y: 0, direction: 4, io_type: None },
-    BalancerTemplateEntity { name: "transport-belt", x: 4, y: 2, direction: 4, io_type: None },
-    BalancerTemplateEntity { name: "transport-belt", x: 4, y: 3, direction: 4, io_type: None },
-    BalancerTemplateEntity { name: "splitter", x: 4, y: 4, direction: 4, io_type: None },
-    BalancerTemplateEntity { name: "transport-belt", x: 4, y: 5, direction: 6, io_type: None },
+    BalancerTemplateEntity { name: "splitter", x: 4, y: 1, direction: 4, io_type: None },
+    BalancerTemplateEntity { name: "splitter", x: 4, y: 2, direction: 6, io_type: None },
+    BalancerTemplateEntity { name: "transport-belt", x: 4, y: 5, direction: 0, io_type: None },
     BalancerTemplateEntity { name: "transport-belt", x: 3, y: 0, direction: 4, io_type: None },
-    BalancerTemplateEntity { name: "splitter", x: 3, y: 1, direction: 4, io_type: None },
-    BalancerTemplateEntity { name: "underground-belt", x: 3, y: 2, direction: 2, io_type: Some("input") },
     BalancerTemplateEntity { name: "transport-belt", x: 3, y: 3, direction: 4, io_type: None },
-    BalancerTemplateEntity { name: "transport-belt", x: 3, y: 4, direction: 6, io_type: None },
-    BalancerTemplateEntity { name: "transport-belt", x: 3, y: 5, direction: 6, io_type: None },
+    BalancerTemplateEntity { name: "transport-belt", x: 3, y: 5, direction: 2, io_type: None },
     BalancerTemplateEntity { name: "transport-belt", x: 2, y: 0, direction: 4, io_type: None },
-    BalancerTemplateEntity { name: "splitter", x: 2, y: 2, direction: 2, io_type: None },
-    BalancerTemplateEntity { name: "splitter", x: 2, y: 4, direction: 6, io_type: None },
+    BalancerTemplateEntity { name: "splitter", x: 2, y: 1, direction: 4, io_type: None },
+    BalancerTemplateEntity { name: "transport-belt", x: 2, y: 3, direction: 4, io_type: None },
+    BalancerTemplateEntity { name: "splitter", x: 2, y: 4, direction: 4, io_type: None },
+    BalancerTemplateEntity { name: "transport-belt", x: 2, y: 5, direction: 6, io_type: None },
     BalancerTemplateEntity { name: "transport-belt", x: 1, y: 0, direction: 4, io_type: None },
-    BalancerTemplateEntity { name: "splitter", x: 1, y: 1, direction: 4, io_type: None },
-    BalancerTemplateEntity { name: "transport-belt", x: 1, y: 2, direction: 2, io_type: None },
-    BalancerTemplateEntity { name: "splitter", x: 1, y: 3, direction: 2, io_type: None },
-    BalancerTemplateEntity { name: "transport-belt", x: 1, y: 5, direction: 6, io_type: None },
+    BalancerTemplateEntity { name: "splitter", x: 1, y: 2, direction: 4, io_type: None },
+    BalancerTemplateEntity { name: "transport-belt", x: 1, y: 5, direction: 4, io_type: None },
+    BalancerTemplateEntity { name: "transport-belt", x: 1, y: 6, direction: 4, io_type: None },
     BalancerTemplateEntity { name: "transport-belt", x: 0, y: 0, direction: 4, io_type: None },
-    BalancerTemplateEntity { name: "transport-belt", x: 0, y: 1, direction: 4, io_type: None },
-    BalancerTemplateEntity { name: "transport-belt", x: 0, y: 2, direction: 4, io_type: None },
-    BalancerTemplateEntity { name: "transport-belt", x: 0, y: 3, direction: 2, io_type: None },
-    BalancerTemplateEntity { name: "transport-belt", x: 0, y: 4, direction: 2, io_type: None },
-    BalancerTemplateEntity { name: "transport-belt", x: 0, y: 5, direction: 0, io_type: None },
+    BalancerTemplateEntity { name: "splitter", x: 0, y: 1, direction: 4, io_type: None },
+    BalancerTemplateEntity { name: "transport-belt", x: 1, y: 7, direction: 4, io_type: None },
+    BalancerTemplateEntity { name: "transport-belt", x: 1, y: 8, direction: 4, io_type: None },
+    BalancerTemplateEntity { name: "transport-belt", x: 1, y: 10, direction: 4, io_type: None },
+    BalancerTemplateEntity { name: "splitter", x: 0, y: 9, direction: 4, io_type: None },
+    BalancerTemplateEntity { name: "transport-belt", x: 0, y: 10, direction: 4, io_type: None },
 ];
 static T_7_2_INPUT: &[(i32, i32)] = &[(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0), (6, 0)];
-static T_7_2_OUTPUT: &[(i32, i32)] = &[(5, 6), (6, 6)];
+static T_7_2_OUTPUT: &[(i32, i32)] = &[(0, 10), (1, 10)];
 
 
 static T_7_4_ENTITIES: &[BalancerTemplateEntity] = &[
@@ -5587,9 +5589,11 @@ fn build_templates() -> FxHashMap<(u32, u32), BalancerTemplate> {
     });
 
     m.insert((7, 2), BalancerTemplate {
-        n_inputs: 7, n_outputs: 2, width: 7, height: 7,
+        n_inputs: 7, n_outputs: 2, width: 7, height: 11,
         entities: T_7_2_ENTITIES, input_tiles: T_7_2_INPUT, output_tiles: T_7_2_OUTPUT,
-        source_blueprint: "0eNqtlttugzAMhl+lyvVW5UBCu1eZqqmHqIpEAwphWoV493mo6zrNdejIFYkJ/xfsn5ie7arONsH5yF4WPXP72rcweu1Z645+W43ReG4sDJiL9sSeFsxvT+O8bSoXow1sgKDzB/sBUTFsni5LYcmPPATfbWhd7SEuV6Ioi3VpSsGNNnDP+uiisxf4ODu/+e60A3kQhRVN3cKK8fGefZHkUkP4DCO+1MPNvmLY+rapQ3ze2WokH1yw+8vDEpb+JUiMoHISFEYochIKjGByEjRG4FeCWPIB88ckbYNpixvtX7vvwG7hGGq44vuH+dW3vukiQ6ElbawJ0G9I3cW7lBVtrhmvRlHXGFXnKZbgtNfEfK8JQZtNZkBIuvw5EIqufQ5EQZ8sclahNe2ih/Zf4AhDF1plSFFJHy5qVopWtIvU9EOEOKnEmjZShixJThtJza+1FLSdciAkbaciQ6LufNQcR9z+JyFiBZ6SlNi0ZCQ6ts6QjETj1nO+LZlo0PT+cckV7nKOSyaKl2iyer6fFadLaDL8mgq6hDkQiVabA5FoteZxr6hEa/2PZKKhPpQIM2yG4RMgtTMM",
+        // Re-baked 2026-05-03 — source_blueprint cleared (no Factorio
+        // import string for compose-derived templates yet).
+        source_blueprint: "",
     });
 
 
@@ -5909,6 +5913,7 @@ mod tests {
     /// regeneration.
     const COMPOSE_GENERATED_SHAPES: &[(u32, u32)] = &[
         (1, 9), (9, 1), (1, 10), (10, 1), (2, 9),
+        (7, 2),
         (9, 2), (9, 3), (9, 4), (9, 5), (9, 6), (9, 7), (9, 8),
     ];
 
