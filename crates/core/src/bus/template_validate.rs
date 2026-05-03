@@ -218,6 +218,8 @@ mod tests {
                 y: 0,
                 direction: 2,
                 io_type: Some("input"),
+                input_priority: None,
+                output_priority: None,
             },
             BalancerTemplateEntity {
                 name: "underground-belt",
@@ -225,6 +227,8 @@ mod tests {
                 y: 0,
                 direction: 2,
                 io_type: Some("output"),
+                input_priority: None,
+                output_priority: None,
             },
         ];
         let input_tiles = [(0i32, 0i32)];

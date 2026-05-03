@@ -131,6 +131,8 @@ fn passthrough(m: u32) -> OwnedTemplate {
             y: 0,
             direction: 4,
             io_type: None,
+            input_priority: None,
+            output_priority: None,
         });
     }
     let input_tiles: Vec<(i32, i32)> = (0..m as i32).map(|i| (i, 0)).collect();
@@ -159,6 +161,8 @@ fn one_to_two() -> OwnedTemplate {
             y: 0,
             direction: 4,
             io_type: None,
+            input_priority: None,
+            output_priority: None,
         },
         BalancerTemplateEntity {
             name: "splitter",
@@ -166,6 +170,8 @@ fn one_to_two() -> OwnedTemplate {
             y: 1,
             direction: 4,
             io_type: None,
+            input_priority: None,
+            output_priority: None,
         },
         BalancerTemplateEntity {
             name: "transport-belt",
@@ -173,6 +179,8 @@ fn one_to_two() -> OwnedTemplate {
             y: 2,
             direction: 4,
             io_type: None,
+            input_priority: None,
+            output_priority: None,
         },
         BalancerTemplateEntity {
             name: "transport-belt",
@@ -180,6 +188,8 @@ fn one_to_two() -> OwnedTemplate {
             y: 2,
             direction: 4,
             io_type: None,
+            input_priority: None,
+            output_priority: None,
         },
     ];
     OwnedTemplate {
@@ -223,6 +233,8 @@ fn two_to_one() -> OwnedTemplate {
             y: 0,
             direction: 4,
             io_type: None,
+            input_priority: None,
+            output_priority: None,
         },
         BalancerTemplateEntity {
             name: "transport-belt",
@@ -230,6 +242,8 @@ fn two_to_one() -> OwnedTemplate {
             y: 0,
             direction: 4,
             io_type: None,
+            input_priority: None,
+            output_priority: None,
         },
         BalancerTemplateEntity {
             name: "splitter",
@@ -237,6 +251,8 @@ fn two_to_one() -> OwnedTemplate {
             y: 1,
             direction: 4,
             io_type: None,
+            input_priority: None,
+            output_priority: None,
         },
         BalancerTemplateEntity {
             name: "transport-belt",
@@ -244,6 +260,8 @@ fn two_to_one() -> OwnedTemplate {
             y: 2,
             direction: 4,
             io_type: None,
+            input_priority: None,
+            output_priority: None,
         },
     ];
     OwnedTemplate {
@@ -278,6 +296,8 @@ fn replicate_horizontally(atom: &OwnedTemplate, count: u32) -> OwnedTemplate {
                 y: e.y,
                 direction: e.direction,
                 io_type: e.io_type,
+                input_priority: e.input_priority,
+                output_priority: e.output_priority,
             });
         }
         for &(x, y) in &atom.input_tiles {

@@ -1670,6 +1670,8 @@ impl CrossingEncoder {
                     rate: None,
                     mirror: false,
                     items: Vec::new(),
+                    input_priority: None,
+                    output_priority: None,
                 });
             }
         }

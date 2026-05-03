@@ -30,6 +30,10 @@ struct BlueprintEntity<'a> {
     io_type: Option<&'a str>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     mirror: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    input_priority: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_priority: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -70,6 +74,8 @@ pub fn export(layout: &LayoutResult, label: &str) -> String {
             recipe: ent.recipe.as_deref(),
             io_type: ent.io_type.as_deref(),
             mirror: ent.mirror,
+            input_priority: ent.input_priority.as_deref(),
+            output_priority: ent.output_priority.as_deref(),
         })
         .collect();
 
@@ -162,5 +168,61 @@ mod tests {
         assert!(ents[0].get("mirror").is_none());
         // recipe should be absent for belt
         assert!(ents[1].get("recipe").is_none());
+    }
+
+    #[test]
+    fn priority_round_trips() {
+        let layout = LayoutResult {
+            entities: vec![PlacedEntity {
+                name: "splitter".into(),
+                x: 0,
+                y: 0,
+                direction: EntityDirection::South,
+                input_priority: Some("left".into()),
+                output_priority: Some("right".into()),
+                ..Default::default()
+            }],
+            width: 2,
+            height: 1,
+            ..Default::default()
+        };
+        let s = export(&layout, "priority_test");
+        let b64 = &s[1..];
+        let compressed = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .unwrap();
+        let mut decoder = flate2::read::ZlibDecoder::new(&compressed[..]);
+        let mut json_str = String::new();
+        decoder.read_to_string(&mut json_str).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        let ents = parsed["blueprint"]["entities"].as_array().unwrap();
+        assert_eq!(ents[0]["input_priority"], "left");
+        assert_eq!(ents[0]["output_priority"], "right");
+
+        // Absent when None.
+        let bare = LayoutResult {
+            entities: vec![PlacedEntity {
+                name: "splitter".into(),
+                x: 0,
+                y: 0,
+                direction: EntityDirection::South,
+                ..Default::default()
+            }],
+            width: 2,
+            height: 1,
+            ..Default::default()
+        };
+        let s = export(&bare, "no_priority");
+        let b64 = &s[1..];
+        let compressed = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .unwrap();
+        let mut decoder = flate2::read::ZlibDecoder::new(&compressed[..]);
+        let mut json_str = String::new();
+        decoder.read_to_string(&mut json_str).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        let ents = parsed["blueprint"]["entities"].as_array().unwrap();
+        assert!(ents[0].get("input_priority").is_none());
+        assert!(ents[0].get("output_priority").is_none());
     }
 }

@@ -120,6 +120,16 @@ pub struct PlacedEntity {
     /// Modules/items inserted into this entity (e.g. speed modules in a beacon).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub items: Vec<ModuleItem>,
+    /// Splitter input priority (`"left"` or `"right"`). Set on splitters
+    /// where one input port should be preferred — under contention the
+    /// non-priority input is back-pressured. Critical for balancer
+    /// designs with feedback loops to avoid discrete-time stalls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_priority: Option<String>,
+    /// Splitter output priority (`"left"` or `"right"`). Items go to the
+    /// priority output first; when blocked they overflow to the other.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_priority: Option<String>,
 }
 
 /// Whether a boundary port is an input into the region or an output from it.
