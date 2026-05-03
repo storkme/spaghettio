@@ -93,9 +93,37 @@ pub struct ZoneStats {
 use std::cell::RefCell;
 #[cfg(not(target_arch = "wasm32"))]
 use std::io::Write as _;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::{SystemTime, UNIX_EPOCH};
+
+// ---------------------------------------------------------------------------
+// Permanent hit-rate counters — always-on, lock-free, cheap.
+// ---------------------------------------------------------------------------
+
+static LOOKUP_TOTAL: AtomicUsize = AtomicUsize::new(0);
+static LOOKUP_HIT: AtomicUsize = AtomicUsize::new(0);
+static LOOKUP_MISS: AtomicUsize = AtomicUsize::new(0);
+
+/// Return `(total, hits, misses)` across all `lookup_zone` calls so far.
+/// Counters use `Relaxed` ordering — eventual consistency only, no guarantees
+/// about cross-thread visibility at any exact instant. Good enough for stats.
+pub fn cache_stats() -> (usize, usize, usize) {
+    (
+        LOOKUP_TOTAL.load(Ordering::Relaxed),
+        LOOKUP_HIT.load(Ordering::Relaxed),
+        LOOKUP_MISS.load(Ordering::Relaxed),
+    )
+}
+
+/// Reset the hit-rate counters to zero. Useful at the start of a test that
+/// wants to measure only its own workload.
+pub fn reset_cache_stats() {
+    LOOKUP_TOTAL.store(0, Ordering::Relaxed);
+    LOOKUP_HIT.store(0, Ordering::Relaxed);
+    LOOKUP_MISS.store(0, Ordering::Relaxed);
+}
 
 // Thread-local source tag so parallel tests each carry their own label
 // without stomping on each other via a process-global env var.
@@ -1585,10 +1613,18 @@ pub fn lookup_zone(
         return None;
     }
 
+    LOOKUP_TOTAL.fetch_add(1, Ordering::Relaxed);
+
     let form = canonicalise(zone, channel_reaches, max_ug_ins);
     let entry = {
         let tbl = lookup_table().lock().ok()?;
-        tbl.get(&form.signature).cloned()?
+        match tbl.get(&form.signature).cloned() {
+            Some(e) => e,
+            None => {
+                LOOKUP_MISS.fetch_add(1, Ordering::Relaxed);
+                return None;
+            }
+        }
     };
 
     let new_channel_items = canonical_channel_items(zone, &form);
@@ -1596,6 +1632,7 @@ pub fn lookup_zone(
     // Channel-count mismatch would mean either a hash collision or a stale
     // entry from a different encoder; bail rather than return wrong items.
     if new_channel_items.len() != entry.channel_items.len() {
+        LOOKUP_MISS.fetch_add(1, Ordering::Relaxed);
         return None;
     }
 
@@ -1654,6 +1691,7 @@ pub fn lookup_zone(
         })
         .collect();
 
+    LOOKUP_HIT.fetch_add(1, Ordering::Relaxed);
     Some(entities)
 }
 

@@ -20,6 +20,7 @@ use fucktorio_core::density;
 use fucktorio_core::solver;
 use fucktorio_core::trace;
 use fucktorio_core::validate::{self, LayoutStyle, Severity};
+use fucktorio_core::zone_cache;
 use rustc_hash::FxHashSet;
 use std::collections::BTreeMap;
 
@@ -229,6 +230,9 @@ fn science_gauntlet() {
         },
     ];
 
+    // Reset hit-rate counters so we only measure this run's workload.
+    zone_cache::reset_cache_stats();
+
     eprintln!();
     eprintln!(
         "Science Gauntlet — Nauvis recipes, 1/s, auto belt tier, ore + crude/water/coal/stone inputs"
@@ -245,6 +249,9 @@ fn science_gauntlet() {
     for case in cases {
         let outcome = run_case(case);
         report(case, &outcome, &mut summary);
+        // Flush newly-solved SAT zones after each case so they accumulate in
+        // the runtime cache file even if a later case panics.
+        zone_cache::flush();
     }
     eprintln!("{sep}");
     eprintln!(
@@ -255,6 +262,32 @@ fn science_gauntlet() {
         summary.unsolved,
         summary.pass + summary.warn + summary.fail + summary.unsolved,
     );
+
+    // -----------------------------------------------------------------------
+    // SAT zone-cache hit-rate watchdog
+    // -----------------------------------------------------------------------
+    let (total_lookups, hits, misses) = zone_cache::cache_stats();
+    if total_lookups > 0 {
+        let hit_pct = hits as f64 / total_lookups as f64 * 100.0;
+        eprintln!(
+            "cache hit rate: {:.1}% ({} hits / {} lookups, {} misses)",
+            hit_pct, hits, total_lookups, misses
+        );
+        // Only warn when the sample is large enough to be meaningful.
+        if total_lookups > 1000 && hit_pct < 60.0 {
+            eprintln!(
+                "WARN: solve cache hit rate below 60% — corpus may need refresh. \
+                 Run: rm -f ~/.cache/fucktorio/sat-zones.bin && \
+                 cargo test --manifest-path crates/core/Cargo.toml && \
+                 cargo test --manifest-path crates/core/Cargo.toml \
+                 --test science_gauntlet -- --ignored --nocapture && \
+                 cargo run --manifest-path crates/core/Cargo.toml \
+                 --example promote_runtime_cache"
+            );
+        }
+    } else {
+        eprintln!("cache hit rate: n/a (0 lookups)");
+    }
 }
 
 #[derive(Default)]
