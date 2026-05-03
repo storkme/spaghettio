@@ -46,6 +46,7 @@ follow-up commits, all of which slot into this same wire format.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from typing import Any
@@ -99,17 +100,30 @@ def _splitter_dir(pos: tuple[int, int] | tuple[int, int, int]) -> int:
 _SOLVER_PARAMS: dict[str, Any] = {"timeout_ms": 1000, "seed": None}
 
 
-def _make_solver():
+# Module-level synth context. Populated by `main()` from the stdin
+# request. `graph` is the BalancerGraph dict (n_inputs, n_outputs,
+# n_splitters, arcs) and `arc_throughputs` is the parallel `Vec<f64>`
+# of per-arc steady-state rates from `verify_balancer`. Per-shape
+# placers consult these to derive route rates for the rate-aware
+# per-lane cap (see `_route_belts` `rates` / `lane_cap` parameters).
+# When `arc_throughputs` is absent (the Rust side couldn't verify or
+# it's a unit-rate dyadic shape), placers fall back to the discrete
+# default — same as the pre-rate-aware behaviour.
+_SYNTH_CTX: dict[str, Any] = {"graph": None, "arc_throughputs": None}
+
+
+def _make_solver(workers: int = 1):
     """Build a `CpSolver` with timeout and seed from `_SOLVER_PARAMS`.
 
-    Honours the `timeout_ms` and `seed` fields of the request. Pins
-    `num_search_workers = 1` so determinism is reproducible across
-    same-seed runs (kill criterion #5 in `rfp-cp-sat-placement.md`).
+    Honours the `timeout_ms` and `seed` fields of the request. Defaults
+    to `num_search_workers = 1` for determinism (kill criterion #5 in
+    `rfp-cp-sat-placement.md`); larger problems can opt into parallel
+    workers via the `workers` arg, trading determinism for solve speed.
     """
     from ortools.sat.python import cp_model
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = _SOLVER_PARAMS["timeout_ms"] / 1000.0
-    solver.parameters.num_search_workers = 1
+    solver.parameters.num_search_workers = workers
     seed = _SOLVER_PARAMS.get("seed")
     if seed is not None:
         solver.parameters.random_seed = int(seed)
@@ -151,7 +165,9 @@ def _route_belts(
     height: int,
     rates: list[int] | None = None,
     lane_cap: int = 1,
-) -> dict[tuple[int, int], int] | None:
+    workers: int = 1,
+    ug_max_reach: int | None = None,
+) -> dict[tuple[int, int], tuple[int, str]] | None:
     """Solve belt routing on the grid given fixed splitter positions.
 
     Each route in `routes` is `(src_tile, sink_tile, sink_dir, splitter_dir)`:
@@ -174,12 +190,26 @@ def _route_belts(
     channels at rate 0.2), pass per-route rates and a higher lane cap so
     multiple low-rate routes can share a lane when their sum fits.
 
-    Returns a dict mapping each used belt tile to a direction code (one
-    of 0/1/2/3 = N/E/S/W), or `None` if no routing is feasible.
+    Returns a dict mapping each used tile to `(direction_code, kind)`
+    where `kind ∈ {"belt", "ug_in", "ug_out"}` — surface transport-belt,
+    underground-belt input, or underground-belt output. Direction is
+    one of 0/1/2/3 = N/E/S/W. Returns `None` if no routing is feasible.
 
-    Splitter tiles are off-limits to belts. Multiple routes may share a
-    free tile if they agree on belt direction and the per-lane cap is
-    not exceeded — phase 2's lifted tile-exclusivity rule.
+    Splitter tiles are off-limits to belt entities. Multiple routes may
+    share a free tile if they agree on belt direction and the per-lane
+    cap is not exceeded — phase 2's lifted tile-exclusivity rule.
+
+    Underground belts (yellow tier, `UG_MAX_REACH = 4`) are modeled
+    globally: any route may use UG-pairs as alternative to surface belts
+    (a route enters underground at an input tile and emerges at the
+    paired output tile up to 4 tiles downstream). The tiles between
+    entry and exit are unconstrained — surface belts of any direction
+    can sit there. Two UG-pairs in the same direction whose tunnels
+    overlap are forbidden (otherwise Factorio's auto-pairing rule would
+    re-pair them). The objective penalises surface and UG entities
+    equally; UG is picked only when it shortens the path or unlocks a
+    crossing. v1 doesn't model lane-shared UGs (each UG pair carries
+    one route on one lane).
     """
     from ortools.sat.python import cp_model
 
@@ -189,6 +219,12 @@ def _route_belts(
         raise ValueError(
             f"rates length {len(rates)} != routes length {len(routes)}"
         )
+
+    # Per-call override for UG belt max reach; defaults to the module
+    # constant. Setting this to 1 effectively disables UG belts (the
+    # `range(2, ug_max + 1)` loops become empty), shrinking the model
+    # by tens of thousands of variables when UG isn't needed.
+    ug_max = UG_MAX_REACH if ug_max_reach is None else ug_max_reach
 
     occupied = _splitter_tiles(splitter_positions)
     free: list[tuple[int, int]] = [
@@ -202,16 +238,39 @@ def _route_belts(
         if src not in free_set or sink not in free_set:
             return None
 
+    def in_bounds(t: tuple[int, int]) -> bool:
+        return 0 <= t[0] < width and 0 <= t[1] < height
+
     model = cp_model.CpModel()
 
-    # Per free tile, per direction: belt[(t, d)] = "tile t carries a
-    # belt heading d".  Each tile has at most one direction.
+    # Per-tile per-direction entity occupancy. Each tile holds at most
+    # one entity; the entity is one of three kinds heading some direction.
+    # `belt[(t, d)]` is the union indicator (any kind heading d).
+    surf = {
+        (t, d): model.new_bool_var(f"surf_{t[0]}_{t[1]}_d{d}")
+        for t in free
+        for d in _INTERNAL_DIRS
+    }
+    ug_in = {
+        (t, d): model.new_bool_var(f"ugin_{t[0]}_{t[1]}_d{d}")
+        for t in free
+        for d in _INTERNAL_DIRS
+    }
+    ug_out = {
+        (t, d): model.new_bool_var(f"ugout_{t[0]}_{t[1]}_d{d}")
+        for t in free
+        for d in _INTERNAL_DIRS
+    }
     belt = {
         (t, d): model.new_bool_var(f"belt_{t[0]}_{t[1]}_d{d}")
         for t in free
         for d in _INTERNAL_DIRS
     }
     for t in free:
+        for d in _INTERNAL_DIRS:
+            model.add(belt[(t, d)] == surf[(t, d)] + ug_in[(t, d)] + ug_out[(t, d)])
+        # Tile uniqueness: at most one entity per tile (any direction,
+        # any kind). Sum over all (d, kind) ≤ 1.
         model.add(sum(belt[(t, d)] for d in _INTERNAL_DIRS) <= 1)
 
     # Per route, per free tile, per direction, per lane: route uses
@@ -230,14 +289,146 @@ def _route_belts(
         """Lane-summed flow indicator: 1 iff route r uses (t, d) on either lane."""
         return sum(f_lane[(r, t, d, lane)] for lane in range(n_lanes))
 
-    # Per-lane cap: weighted sum of route rates ≤ lane_cap.
-    # In the default discrete encoding (`rates = [1, 1, ...]`,
-    # `lane_cap = 1`), each lane carries at most one route. With
-    # rate-aware encoding, multiple low-rate routes can share a lane if
-    # their rates sum within `lane_cap`. This is the model unblock for
-    # coprime-shape feedback channels where 2-3 routes at rate 0.2 each
-    # need to share a lane (rate-aware: `0.4 ≤ 0.5`; discrete:
-    # `2 ≰ 1`).
+    # Per-route UG entry/exit indicators. Subset of f_lane: a route that
+    # enters/exits UG at (t, d, lane) is also "present" there.
+    ug_in_r = {
+        (r, t, d, lane): model.new_bool_var(
+            f"ugin_r{r}_{t[0]}_{t[1]}_d{d}_l{lane}"
+        )
+        for r in range(len(routes))
+        for t in free
+        for d in _INTERNAL_DIRS
+        for lane in range(n_lanes)
+    }
+    ug_out_r = {
+        (r, t, d, lane): model.new_bool_var(
+            f"ugout_r{r}_{t[0]}_{t[1]}_d{d}_l{lane}"
+        )
+        for r in range(len(routes))
+        for t in free
+        for d in _INTERNAL_DIRS
+        for lane in range(n_lanes)
+    }
+    for r in range(len(routes)):
+        for t in free:
+            for d in _INTERNAL_DIRS:
+                for lane in range(n_lanes):
+                    # UG role implies route presence.
+                    model.add(
+                        ug_in_r[(r, t, d, lane)] <= f_lane[(r, t, d, lane)]
+                    )
+                    model.add(
+                        ug_out_r[(r, t, d, lane)] <= f_lane[(r, t, d, lane)]
+                    )
+                    # A given (route, tile, direction, lane) can be at
+                    # most one of: UG entry, UG exit (or just surface).
+                    model.add(
+                        ug_in_r[(r, t, d, lane)] + ug_out_r[(r, t, d, lane)]
+                        <= 1
+                    )
+
+    # UG-pair vars. `pair[(r, t1, k, d, lane)]` = 1 iff route r enters
+    # UG at t1 with reach k in direction d on lane (exit at t1 + k·δ).
+    # Constructed sparsely: only valid (entry, exit) pairs where exit is
+    # in `free` and all interior tiles are in bounds.
+    pair: dict[
+        tuple[int, tuple[int, int], int, int, int], Any
+    ] = {}
+    for r in range(len(routes)):
+        for t1 in free:
+            for d in _INTERNAL_DIRS:
+                dx, dy = _DELTAS[d]
+                for k in range(2, ug_max + 1):
+                    t2 = (t1[0] + k * dx, t1[1] + k * dy)
+                    if t2 not in free_set:
+                        continue
+                    interior_ok = True
+                    for i in range(1, k):
+                        ti = (t1[0] + i * dx, t1[1] + i * dy)
+                        if not in_bounds(ti):
+                            interior_ok = False
+                            break
+                    if not interior_ok:
+                        continue
+                    for lane in range(n_lanes):
+                        pair[(r, t1, k, d, lane)] = model.new_bool_var(
+                            f"pair_r{r}_{t1[0]}_{t1[1]}_k{k}_d{d}_l{lane}"
+                        )
+
+    # Couple pair vars to per-route ug_in_r / ug_out_r.
+    for r in range(len(routes)):
+        for t in free:
+            for d in _INTERNAL_DIRS:
+                dx, dy = _DELTAS[d]
+                for lane in range(n_lanes):
+                    pairs_from_t = [
+                        pair[(r, t, k, d, lane)]
+                        for k in range(2, ug_max + 1)
+                        if (r, t, k, d, lane) in pair
+                    ]
+                    if pairs_from_t:
+                        model.add(
+                            ug_in_r[(r, t, d, lane)] == sum(pairs_from_t)
+                        )
+                    else:
+                        model.add(ug_in_r[(r, t, d, lane)] == 0)
+                    pairs_to_t = []
+                    for k in range(2, ug_max + 1):
+                        from_t = (t[0] - k * dx, t[1] - k * dy)
+                        if (r, from_t, k, d, lane) in pair:
+                            pairs_to_t.append(pair[(r, from_t, k, d, lane)])
+                    if pairs_to_t:
+                        model.add(
+                            ug_out_r[(r, t, d, lane)] == sum(pairs_to_t)
+                        )
+                    else:
+                        model.add(ug_out_r[(r, t, d, lane)] == 0)
+
+    # Couple per-tile ug_in / ug_out to per-route ug_in_r / ug_out_r
+    # (OR-style: per-tile = 1 iff some route uses it).
+    for t in free:
+        for d in _INTERNAL_DIRS:
+            in_route_uses = [
+                ug_in_r[(r, t, d, lane)]
+                for r in range(len(routes))
+                for lane in range(n_lanes)
+            ]
+            out_route_uses = [
+                ug_out_r[(r, t, d, lane)]
+                for r in range(len(routes))
+                for lane in range(n_lanes)
+            ]
+            big_m = max(1, len(routes) * n_lanes)
+            s_in = sum(in_route_uses)
+            model.add(s_in >= ug_in[(t, d)])
+            model.add(s_in <= big_m * ug_in[(t, d)])
+            s_out = sum(out_route_uses)
+            model.add(s_out >= ug_out[(t, d)])
+            model.add(s_out <= big_m * ug_out[(t, d)])
+
+    # Same-direction tunnel non-overlap: at most one tunnel covers any
+    # given tile in any given direction. A tunnel covers tiles
+    # `t1, t1+δ, ..., t1+k·δ` (k+1 tiles inclusive). Two same-direction
+    # tunnels whose coverage intervals overlap would confuse Factorio's
+    # auto-pairing rule (the entry pairs with the nearest exit), so we
+    # forbid the overlap up front.
+    for d in _INTERNAL_DIRS:
+        dx, dy = _DELTAS[d]
+        for t in free:
+            covers: list[Any] = []
+            for r in range(len(routes)):
+                for lane in range(n_lanes):
+                    for k in range(2, ug_max + 1):
+                        for offset in range(k + 1):
+                            t1 = (t[0] - offset * dx, t[1] - offset * dy)
+                            if (r, t1, k, d, lane) in pair:
+                                covers.append(pair[(r, t1, k, d, lane)])
+            if covers:
+                model.add(sum(covers) <= 1)
+
+    # Per-lane cap: weighted sum of route rates ≤ lane_cap. Applies at
+    # all tiles (surface, UG entry, UG exit) — items still have lane
+    # discipline through the underground.
     for t in free:
         for d in _INTERNAL_DIRS:
             for lane in range(n_lanes):
@@ -249,12 +440,8 @@ def _route_belts(
                     <= lane_cap
                 )
 
-    # Belt at (t, d) iff some route uses (t, d) on any lane. The
-    # tile-exclusivity constraint below means at most one route per
-    # tile in phase 1, so this acts like the old `belt = sum_r f`
-    # (each lane contributes 0 or 1 with at most one nonzero). In
-    # phase 2 sideloading lets two routes share a tile on different
-    # lanes; this OR-style equivalence still holds.
+    # belt[(t, d)] = OR over (r, lane) of f_lane[(r, t, d, lane)]:
+    # the entity heading d at t exists iff some route is at t heading d.
     for t in free:
         for d in _INTERNAL_DIRS:
             s = sum(
@@ -263,14 +450,9 @@ def _route_belts(
                 for lane in range(n_lanes)
             )
             model.add(s >= belt[(t, d)])
-            # Big-M = max possible route uses at this (t, d). With
-            # rate-aware caps allowing multiple low-rate routes per
-            # lane, this is bounded only by the total number of routes.
             model.add(s <= len(routes) * belt[(t, d)])
 
-    # Each route uses at most one (direction, lane) per tile. Without
-    # this a route could occupy multiple lanes/dirs at the same tile,
-    # which is incoherent for a single belt-path.
+    # Each route uses at most one (direction, lane) per tile.
     for r in range(len(routes)):
         for t in free:
             model.add(
@@ -282,25 +464,44 @@ def _route_belts(
                 <= 1
             )
 
-    # Per-route flow conservation, per-lane (phase 2).
+    # Forbid UG roles at each route's source and sink. The source is a
+    # surface drop from a splitter (or boundary input belt); the sink
+    # is a surface drop into a downstream splitter. Going underground
+    # at either endpoint would break source-lane forcing or sink-direction
+    # constraints.
+    for r, (src, sink, _sink_dir, _splitter_dir) in enumerate(routes):
+        for d in _INTERNAL_DIRS:
+            for lane in range(n_lanes):
+                model.add(ug_in_r[(r, src, d, lane)] == 0)
+                model.add(ug_out_r[(r, src, d, lane)] == 0)
+                model.add(ug_in_r[(r, sink, d, lane)] == 0)
+                model.add(ug_out_r[(r, sink, d, lane)] == 0)
+
+    # Per-route flow conservation, per-lane.
     # Items at tile t (direction d_recv, lane L_recv) arrive from a
     # neighbor n at side s of t whose belt heads d_pred = OPPOSITE(s).
     # The lane the items land on at t depends on s relative to d_recv:
     #   - s = OPPOSITE(d_recv) (back / natural input): lane preserved
     #     from predecessor.
-    #   - s = LEFT_OF(d_recv) (left side feed): items land on lane 0
-    #     regardless of predecessor lane.
-    #   - s = RIGHT_OF(d_recv) (right side feed): items land on lane 1
-    #     regardless of predecessor lane.
+    #   - s = LEFT_OF(d_recv) (left side feed): items land on lane 0.
+    #   - s = RIGHT_OF(d_recv) (right side feed): items land on lane 1.
     #   - s = d_recv (forward / output side): items can't enter.
+    # UG handling layered on top:
+    #   - At a UG entry tile (ug_in[(t, d_recv)] = 1): inflow comes via
+    #     surface predecessors (route arrives on surface, descends).
+    #   - At a UG exit tile (ug_out[(t, d_recv)] = 1): inflow is the
+    #     teleported flow from the paired entry; surface predecessors
+    #     don't feed an exit (Factorio physics).
+    #   - At an entry, the route's outflow doesn't continue on surface
+    #     in d (it teleports), so the surface successor check is
+    #     skipped when ug_in_r is set.
     for r, (src, sink, sink_dir, splitter_dir) in enumerate(routes):
-        # Sink belt's direction is fixed; route uses sink with
-        # exactly one lane (solver picks).
-        model.add(belt[(sink, sink_dir)] == 1)
+        # Sink belt direction is fixed; sink is surface (we forbade UG
+        # roles there above, so `surf[(sink, sink_dir)] = 1` here).
+        model.add(surf[(sink, sink_dir)] == 1)
         model.add(f_sum(r, sink, sink_dir) == 1)
 
         if src != sink:
-            # Source has exactly one (direction, lane).
             model.add(
                 sum(
                     f_lane[(r, src, d, lane)]
@@ -310,26 +511,20 @@ def _route_belts(
                 == 1
             )
 
-        # Source-lane forcing for splitter-output drops. The route is
-        # tagged with the upstream splitter's facing direction; for
-        # whichever direction the source tile picks, the items entering
-        # from the splitter side land on a specific lane via the
-        # sideload table. Without this, the model treats the source as
-        # free-laned and lets multiple drops "freely" pick whichever
-        # lane keeps them feasible — physics doesn't.
         if splitter_dir is not None:
             for d in _INTERNAL_DIRS:
                 if d == splitter_dir:
-                    continue  # head-on: occupy both lanes via duplicate routes
+                    continue
                 if d == _LEFT_OF[splitter_dir]:
-                    # Items from the splitter side land on lane 0.
                     model.add(f_lane[(r, src, d, 1)] == 0)
                 elif d == _RIGHT_OF[splitter_dir]:
-                    # Items from the splitter side land on lane 1.
                     model.add(f_lane[(r, src, d, 0)] == 0)
-                # OPPOSITE(splitter_dir): handled by existing geometry
-                # (splitter tile is not free, so the outflow constraint
-                # already disallows this direction at a drop tile).
+                elif d == _OPPOSITE[splitter_dir]:
+                    # Belt heading back into the splitter face would push
+                    # items into the splitter front — invalid in Factorio
+                    # and breaks topology recovery (creates self-loops).
+                    for lane in range(n_lanes):
+                        model.add(f_lane[(r, src, d, lane)] == 0)
 
         for t in free:
             for d_recv in _INTERNAL_DIRS:
@@ -337,43 +532,51 @@ def _route_belts(
                     in_flows = []
                     for s in _INTERNAL_DIRS:
                         if s == d_recv:
-                            continue  # output side
+                            continue
                         sdx, sdy = _DELTAS[s]
                         n = (t[0] + sdx, t[1] + sdy)
                         if n not in free_set:
                             continue
                         d_pred = _OPPOSITE[s]
                         if s == _OPPOSITE[d_recv]:
-                            # Natural input: predecessor on same lane.
                             in_flows.append(f_lane[(r, n, d_pred, L_recv)])
                         elif s == _LEFT_OF[d_recv]:
-                            # Sideload from left → lane 0 of t.
                             if L_recv == 0:
                                 for L in range(n_lanes):
                                     in_flows.append(f_lane[(r, n, d_pred, L)])
                         elif s == _RIGHT_OF[d_recv]:
-                            # Sideload from right → lane 1 of t.
                             if L_recv == 1:
                                 for L in range(n_lanes):
                                     in_flows.append(f_lane[(r, n, d_pred, L)])
 
-                    # Conservation only meaningful when the tile actually
-                    # has a belt heading d_recv; otherwise predecessor
-                    # contributions are accounted for at the tile's true
-                    # belt direction (or the tile is empty).
                     if t == src:
                         if in_flows:
                             model.add(sum(in_flows) == 0).only_enforce_if(
                                 belt[(t, d_recv)]
                             )
                     else:
+                        # Three mutually-exclusive cases by entity type:
+                        #   surf  : f_lane == sum(in_flows)
+                        #   ug_in : f_lane == sum(in_flows) (route arrives
+                        #           on surface, then descends)
+                        #   ug_out: f_lane == ug_out_r (teleport from
+                        #           paired entry; no surface predecessors)
+                        # When no entity at (t, d_recv): f_lane is forced
+                        # to 0 by the `belt = OR f_lane` aggregator.
                         model.add(
                             sum(in_flows) == f_lane[(r, t, d_recv, L_recv)]
-                        ).only_enforce_if(belt[(t, d_recv)])
+                        ).only_enforce_if(surf[(t, d_recv)])
+                        model.add(
+                            sum(in_flows) == f_lane[(r, t, d_recv, L_recv)]
+                        ).only_enforce_if(ug_in[(t, d_recv)])
+                        model.add(
+                            f_lane[(r, t, d_recv, L_recv)]
+                            == ug_out_r[(r, t, d_recv, L_recv)]
+                        ).only_enforce_if(ug_out[(t, d_recv)])
 
-            # Outflow: if heading direction d at t (any lane), next tile
-            # must be a free tile that the route uses too — except at
-            # the sink, whose next tile is the consumer splitter.
+            # Outflow: surface continuation. Skipped when the route
+            # enters UG here (ug_in_r=1), since the route teleports
+            # rather than continuing to the next surface tile.
             if t != sink:
                 for d in _INTERNAL_DIRS:
                     ndx, ndy = _DELTAS[d]
@@ -382,31 +585,97 @@ def _route_belts(
                         for lane in range(n_lanes):
                             model.add(f_lane[(r, t, d, lane)] == 0)
                     else:
-                        on_route_nxt = sum(f_sum(r, nxt, dd) for dd in _INTERNAL_DIRS)
+                        on_route_nxt = sum(
+                            f_sum(r, nxt, dd) for dd in _INTERNAL_DIRS
+                        )
                         for lane in range(n_lanes):
                             model.add(on_route_nxt >= 1).only_enforce_if(
-                                f_lane[(r, t, d, lane)]
+                                [
+                                    f_lane[(r, t, d, lane)],
+                                    ug_in_r[(r, t, d, lane)].Not(),
+                                ]
                             )
 
-    # Minimize total belts so the solver picks shortest paths instead of
-    # wandering. Without this, large grids admit many long-path
-    # alternatives that all satisfy the structural constraints.
+    # Minimise total entity count (surface + UG entries + UG exits each
+    # contribute 1). UG is picked only when it shortens the path or
+    # unlocks a crossing — for shapes that don't need it, the optimiser
+    # leaves UG vars at 0 and the surface-only model is recovered.
     model.minimize(
         sum(belt[(t, d)] for t in free for d in _INTERNAL_DIRS)
     )
 
-    solver = _make_solver()
+    solver = _make_solver(workers=workers)
     status = solver.solve(model)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        print(
+            f"_route_belts: status={solver.status_name(status)} "
+            f"wall={solver.wall_time:.1f}s workers={workers}",
+            file=sys.stderr,
+        )
         return None
 
-    out: dict[tuple[int, int], int] = {}
+    out: dict[tuple[int, int], tuple[int, str]] = {}
     for t in free:
         for d in _INTERNAL_DIRS:
-            if solver.value(belt[(t, d)]):
-                out[t] = d
+            if solver.value(surf[(t, d)]):
+                out[t] = (d, "belt")
+                break
+            if solver.value(ug_in[(t, d)]):
+                out[t] = (d, "ug_in")
+                break
+            if solver.value(ug_out[(t, d)]):
+                out[t] = (d, "ug_out")
                 break
     return out
+
+
+# Rate-aware encoding multiplier. The Couëtoux verifier emits arc
+# throughputs as floats in `[0, n]`; we multiply by RATE_SCALE and round
+# to integers for CP-SAT. Scale 10 covers the rates in 1..=10 × 1..=10
+# coprime shapes (denominators 2, 4, 5, 8, 10) without precision loss.
+# `LANE_CAP_SCALED = RATE_SCALE // 2 = 5` matches the 0.5 normalised
+# lane cap.
+RATE_SCALE = 10
+LANE_CAP_SCALED = RATE_SCALE // 2
+
+# Yellow underground-belt max reach: entry and exit can be up to 4 tiles
+# apart (i.e., exit = entry + k·δ for k ∈ {2, 3, 4}; k=1 is illegal as
+# the exit would touch the entry). Higher tiers (red=6, blue=8) are
+# deferred — the placer emits yellow undergrounds and the bus engine
+# upgrades them at stamping time if a faster belt tier is in use.
+UG_MAX_REACH = 4
+
+
+def _arc_rate_scaled(throughput: float) -> int:
+    """Round a Couëtoux arc throughput to integer-scaled units.
+
+    Returns `round(throughput * RATE_SCALE)`. Rates in `1..=10 ×
+    1..=10` synth graphs are rationals with denominators dividing
+    `RATE_SCALE`, so rounding is exact.
+    """
+    return int(round(throughput * RATE_SCALE))
+
+
+def _find_arc_rate(src: dict[str, Any], dst: dict[str, Any]) -> int | None:
+    """Look up the synth-graph arc throughput for a given (src, dst).
+
+    `src` and `dst` are the JSON-shaped `Source` / `Sink` enum values:
+    `{"Input": i}`, `{"Output": j}`, or `{"Splitter": {"idx": i, "port": p}}`.
+
+    Returns the scaled integer rate (`int(throughput * RATE_SCALE)`)
+    or `None` if the synth context is missing or the arc isn't in the
+    graph. Per-shape placers use this to set per-route rates.
+    """
+    graph = _SYNTH_CTX.get("graph")
+    rates = _SYNTH_CTX.get("arc_throughputs")
+    if graph is None or rates is None:
+        return None
+    for i, arc in enumerate(graph.get("arcs", [])):
+        if arc.get("src") == src and arc.get("dst") == dst:
+            if i < len(rates):
+                return _arc_rate_scaled(rates[i])
+            return None
+    return None
 
 
 def emit(payload: dict[str, Any]) -> None:
@@ -470,6 +739,41 @@ def place_single_splitter(n: int, m: int) -> dict[str, Any]:
         "entities": entities,
         "input_tiles": input_tiles,
         "output_tiles": output_tiles,
+    }
+
+
+def _add_lane_balancer_south(
+    splitter_positions: list[tuple[int, int, int]] | list[tuple[int, int]],
+    anchor: tuple[int, int],
+) -> dict[str, tuple[int, int]]:
+    """Append a south-facing splitter at `anchor` and return its port tiles.
+
+    Returns a dict with keys `in0, in1` (input-port tiles, one row above
+    the splitter) and `out0, out1` (output-drop tiles, one row below).
+    Callers wire the upstream routes to terminate at the in-tiles and
+    seed downstream routes from the out-tiles with `splitter_dir = S`
+    so the existing source-lane forcing pins lanes correctly.
+
+    The lane-balancer splitter is **placement-only** — the synth graph
+    doesn't know about it. It shows up in the recovered topology as
+    an extra splitter node, but `from_splitter_graph` checks degrees
+    not counts and `verify_balancer` checks flow not structure, so the
+    round-trip absorbs it cleanly.
+
+    Use this at perpendicular turns where the sideload table would
+    lump multiple lanes onto the receiver's LEFT lane and exceed the
+    0.5 lane cap. The splitter eats the merged flow head-on (both
+    lanes filled at the input port) and emits 50/50 on both output
+    ports — physically restoring lane balance for the downstream
+    channel.
+    """
+    x, y = anchor
+    splitter_positions.append((x, y, 2))  # 2 = south
+    return {
+        "in0": (x, y - 1),
+        "in1": (x + 1, y - 1),
+        "out0": (x, y + 1),
+        "out1": (x + 1, y + 1),
     }
 
 
@@ -583,10 +887,31 @@ def place_x_to_four(n: int) -> dict[str, Any]:
     entities: list[dict[str, Any]] = []
     for p in pos:
         entities.append({"name": "splitter", "x": p[0], "y": p[1], "direction": _FACTORIO_DIR[_splitter_dir(p)]})
-    for (x, y), d in belt_dirs.items():
-        entities.append(
-            {"name": "transport-belt", "x": x, "y": y, "direction": _FACTORIO_DIR[d]}
-        )
+    for (x, y), (d, kind) in belt_dirs.items():
+        if kind == "belt":
+            entities.append(
+                {"name": "transport-belt", "x": x, "y": y, "direction": _FACTORIO_DIR[d]}
+            )
+        elif kind == "ug_in":
+            entities.append(
+                {
+                    "name": "underground-belt",
+                    "x": x,
+                    "y": y,
+                    "direction": _FACTORIO_DIR[d],
+                    "io_type": "input",
+                }
+            )
+        else:  # ug_out
+            entities.append(
+                {
+                    "name": "underground-belt",
+                    "x": x,
+                    "y": y,
+                    "direction": _FACTORIO_DIR[d],
+                    "io_type": "output",
+                }
+            )
 
     output_y = pos[1][1] + 1
     output_cols = [pos[1][0], pos[1][0] + 1, pos[2][0], pos[2][0] + 1]
@@ -688,10 +1013,31 @@ def place_x_to_eight(n: int) -> dict[str, Any]:
     entities: list[dict[str, Any]] = []
     for p in pos:
         entities.append({"name": "splitter", "x": p[0], "y": p[1], "direction": _FACTORIO_DIR[_splitter_dir(p)]})
-    for (x, y), d in belt_dirs.items():
-        entities.append(
-            {"name": "transport-belt", "x": x, "y": y, "direction": _FACTORIO_DIR[d]}
-        )
+    for (x, y), (d, kind) in belt_dirs.items():
+        if kind == "belt":
+            entities.append(
+                {"name": "transport-belt", "x": x, "y": y, "direction": _FACTORIO_DIR[d]}
+            )
+        elif kind == "ug_in":
+            entities.append(
+                {
+                    "name": "underground-belt",
+                    "x": x,
+                    "y": y,
+                    "direction": _FACTORIO_DIR[d],
+                    "io_type": "input",
+                }
+            )
+        else:  # ug_out
+            entities.append(
+                {
+                    "name": "underground-belt",
+                    "x": x,
+                    "y": y,
+                    "direction": _FACTORIO_DIR[d],
+                    "io_type": "output",
+                }
+            )
 
     output_y = pos[3][1] + 1
     leftmost = pos[3][0]
@@ -805,10 +1151,31 @@ def place_x_to_sixteen(n: int) -> dict[str, Any]:
     entities: list[dict[str, Any]] = []
     for p in pos:
         entities.append({"name": "splitter", "x": p[0], "y": p[1], "direction": _FACTORIO_DIR[_splitter_dir(p)]})
-    for (x, y), d in belt_dirs.items():
-        entities.append(
-            {"name": "transport-belt", "x": x, "y": y, "direction": _FACTORIO_DIR[d]}
-        )
+    for (x, y), (d, kind) in belt_dirs.items():
+        if kind == "belt":
+            entities.append(
+                {"name": "transport-belt", "x": x, "y": y, "direction": _FACTORIO_DIR[d]}
+            )
+        elif kind == "ug_in":
+            entities.append(
+                {
+                    "name": "underground-belt",
+                    "x": x,
+                    "y": y,
+                    "direction": _FACTORIO_DIR[d],
+                    "io_type": "input",
+                }
+            )
+        else:  # ug_out
+            entities.append(
+                {
+                    "name": "underground-belt",
+                    "x": x,
+                    "y": y,
+                    "direction": _FACTORIO_DIR[d],
+                    "io_type": "output",
+                }
+            )
 
     output_y = pos[7][1] + 1
     leftmost = pos[7][0]
@@ -825,6 +1192,493 @@ def place_x_to_sixteen(n: int) -> dict[str, Any]:
     }
 
 
+def _src_splitter(arc: dict[str, Any]) -> tuple[int, int] | None:
+    """Return (idx, port) if arc src is a splitter, else None."""
+    s = arc.get("src", {})
+    if isinstance(s, dict) and "Splitter" in s:
+        sp = s["Splitter"]
+        return (sp["idx"], sp["port"])
+    return None
+
+
+def _dst_splitter(arc: dict[str, Any]) -> tuple[int, int] | None:
+    """Return (idx, port) if arc dst is a splitter, else None."""
+    d = arc.get("dst", {})
+    if isinstance(d, dict) and "Splitter" in d:
+        sp = d["Splitter"]
+        return (sp["idx"], sp["port"])
+    return None
+
+
+def _dst_output(arc: dict[str, Any]) -> int | None:
+    """Return output id if arc dst is an output, else None."""
+    d = arc.get("dst", {})
+    if isinstance(d, dict) and "Output" in d:
+        return d["Output"]
+    return None
+
+
+def _pick_rate_scale(rates: list[float]) -> int:
+    """Smallest integer scale that makes every absolute rate in `rates` an
+    integer when multiplied. Uses Python's `Fraction` to extract exact
+    denominators (CP-SAT gives us floats with rounding error, but the
+    rates are rational with small denominators in practice).
+    """
+    from fractions import Fraction
+    from math import gcd
+
+    def lcm(a: int, b: int) -> int:
+        return a * b // gcd(a, b)
+
+    scale = 1
+    for r in rates:
+        if r <= 0:
+            continue
+        # `limit_denominator(1000)` snaps the float back to its rational form
+        # — synth rates have denominators dividing m × something small.
+        denom = Fraction(r).limit_denominator(1000).denominator
+        scale = lcm(scale, denom)
+    return scale
+
+
+def place_one_to_m_from_synth() -> dict[str, Any]:
+    """Generalised `(1, m)` placer driven by the synth graph.
+
+    Handles 3-level trees (8 splitters: M, S1, S2/S3, four L2 leaves) for
+    `m ∈ {5, 6, 7}` — the existing `(1, 5)` and `(1, 6)` hand-tuned
+    placers should be functionally equivalent under this routine. Deeper
+    trees (`(1, 9)`, `(1, 10)` with their L3 layer) are NOT yet
+    supported here; they raise `NotImplementedError` for the dispatcher
+    to surface as `unimplemented`.
+
+    Algorithm: walk the synth in topological order (mutable Kahn's),
+    placing splitters at offsets dictated by the parent arc's rate:
+      - rate > 0.5 → must head-on. M→S1 is vertical tight-stack (both M
+        outputs feed S1.in0/S1.in1). S1→S2/S3 is staggered tight-stack.
+      - rate ≤ 0.5 → either works. L1→L2 uses the inner-tight-stack +
+        outer-perpendicular pattern from `place_one_to_five`.
+
+    Feedback: if the sum of arcs targeting M.in1 exceeds 0.5 (the lane
+    cap), insert a placement-only south-facing splitter B' above M and
+    partition the feedback drops across B's two input ports. B's outputs
+    feed M.in1 via north back-feed + east-side sideload (the `(1, 5)`
+    trick).
+
+    Rate scale: derived from the LCM of all per-route rate denominators
+    (including head-on per-lane halves and B' output halves when
+    relevant). For `(1, 5)` this gives 20; for `(1, 6)`, 12; for
+    `(1, 7)`, 14.
+    """
+    graph = _SYNTH_CTX.get("graph")
+    throughputs = _SYNTH_CTX.get("arc_throughputs")
+    if graph is None or throughputs is None:
+        raise RuntimeError(
+            "place_one_to_m_from_synth: missing synth context (graph / arc_throughputs)"
+        )
+
+    n_splitters = graph["n_splitters"]
+    if n_splitters not in (8, 16):
+        raise NotImplementedError(
+            f"place_one_to_m_from_synth handles 3-level (8-splitter) and "
+            f"4-level (16-splitter) trees only; got {n_splitters} splitters"
+        )
+    levels = 3 if n_splitters == 8 else 4
+
+    arcs: list[dict[str, Any]] = graph["arcs"]
+    n_outputs = graph["n_outputs"]
+
+    # ----- Index outgoing arcs per splitter port -----
+    # out_arc[(s_idx, port)] = arc index of the arc with that source.
+    out_arc: dict[tuple[int, int], int] = {}
+    for i, arc in enumerate(arcs):
+        sp = _src_splitter(arc)
+        if sp is not None:
+            out_arc[sp] = i
+
+    # ----- Identify feedback arcs (target = M.in1 = (0, 1)) -----
+    feedback_arc_indices = [
+        i
+        for i, arc in enumerate(arcs)
+        if _dst_splitter(arc) == (0, 1)
+    ]
+    feedback_total = sum(throughputs[i] for i in feedback_arc_indices)
+    needs_balancer = feedback_total > 0.5
+
+    # ----- Pick rate scale -----
+    # All absolute rates we'll need to encode integrally.
+    needed_rates: list[float] = list(throughputs)
+    # Include per-lane halves (head-on encoding) for every arc rate.
+    needed_rates.extend(r / 2.0 for r in throughputs)
+    if needs_balancer:
+        # B' takes feedback_total in, splits to feedback_total/2 per output,
+        # which encodes head-on as feedback_total/4 per lane.
+        b_out = feedback_total / 2.0
+        needed_rates.extend([b_out, b_out / 2.0])
+    needed_rates.append(0.5)  # input-boundary per-lane rate
+    scale = _pick_rate_scale(needed_rates)
+    lane_cap = scale // 2
+
+    def r(absolute: float) -> int:
+        return int(round(absolute * scale))
+
+    # ----- Splitter placement -----
+    # M at (M_X, M_Y). M_X chosen wide enough to centre the L3 layer when
+    # one is present. M_Y depends on whether B' is needed (extra rows
+    # above M for the balancer + feedback wrap top).
+    if levels == 3:
+        M_X = 4
+    else:
+        # 4-level needs L3 cols out to M_X ± 8; M_X = 9 fits cols 1..18.
+        M_X = 9
+    if needs_balancer:
+        M_Y = 5  # rows 0-4 reserved for B' + B's input feeds + feedback wrap top.
+    else:
+        M_Y = 1  # M.in tiles at row 0 (top edge → external input boundary).
+
+    DIR_S = 2
+
+    # Splitter positions, with `pos[idx]` matching synth splitter index.
+    pos: list[tuple[int, int] | tuple[int, int, int]] = [(0, 0)] * n_splitters
+    pos[0] = (M_X, M_Y)               # M
+    pos[1] = (M_X, M_Y + 1)            # S1 (vertical tight-stack under M)
+    pos[2] = (M_X - 1, M_Y + 2)        # S2 (staggered tight-stack left)
+    pos[3] = (M_X + 1, M_Y + 2)        # S3 (staggered tight-stack right)
+
+    if levels == 3:
+        # 3-level: L2 row at M_Y+4 (row M_Y+3 = L1 drop row).
+        L2_Y = M_Y + 4
+        # L2 col mapping: synth assigns S4=L2_outer_left (S2.out0),
+        # S5=L2_inner_left (S2.out1), S6=L2_inner_right (S3.out0),
+        # S7=L2_outer_right (S3.out1).
+        pos[4] = (M_X - 3, L2_Y)       # outer-left  (S2.out0)
+        pos[5] = (M_X - 1, L2_Y)       # inner-left  (S2.out1)
+        pos[6] = (M_X + 1, L2_Y)       # inner-right (S3.out0)
+        pos[7] = (M_X + 3, L2_Y)       # outer-right (S3.out1)
+        L3_Y: int | None = None
+    else:
+        # 4-level: WIDE-SPREAD L2 with offsets ±3 / ±7 from S1.x = M_X.
+        # Spacing 4 between adjacent L2 cols leaves room for an L3 layer
+        # tight-stacked below (each L3 child at L2.x ± 1, no col conflicts).
+        # The L1 → L2 routing uses BOTH the L1-drop row (M_Y+3) and an
+        # extra detour row (M_Y+4): outer routes traverse row M_Y+3,
+        # inner routes detour through head-on south at M_Y+3 then turn
+        # west/east on row M_Y+4 to reach the inner L2 cols. This avoids
+        # the dual-west lane lump that would happen if both S2 outputs
+        # tried to head west on the same row.
+        L2_Y = M_Y + 5
+        pos[4] = (M_X - 7, L2_Y)       # outer-left  (S2.out0)
+        pos[5] = (M_X - 3, L2_Y)       # inner-left  (S2.out1)
+        pos[6] = (M_X + 3, L2_Y)       # inner-right (S3.out0)
+        pos[7] = (M_X + 7, L2_Y)       # outer-right (S3.out1)
+        # L3 row at L2_Y+1 (tight-stack staggered, like S1→S2/S3 but at
+        # the L2→L3 layer). Each L2 has two L3 children at offsets ±1
+        # cols, +1 row, so L2.out0/out1 land directly on L3 splitter
+        # body tiles — no intermediate belts needed.
+        L3_Y = L2_Y + 1
+        for l2_local, l2_idx in enumerate((4, 5, 6, 7)):
+            l2_x = pos[l2_idx][0]
+            # L3 left child of this L2 at (l2_x - 1, L3_Y); right at (l2_x + 1, L3_Y).
+            pos[8 + 2 * l2_local + 0] = (l2_x - 1, L3_Y)
+            pos[8 + 2 * l2_local + 1] = (l2_x + 1, L3_Y)
+
+    # Optional B' lane balancer above M.
+    if needs_balancer:
+        # B' at (M_X + 1, M_Y - 2) span (M_X+1, M_X+2). Its outputs land at
+        # (M_X+1, M_Y - 1) and (M_X+2, M_Y - 1). M.in1 at (M_X+1, M_Y - 1)
+        # = B'.out0 (back-feed). B'.out1 at (M_X+2, M_Y - 1) heads W to
+        # sideload M.in1 east-side onto lane 0.
+        bprime_pos = (M_X + 1, M_Y - 2, DIR_S)
+        pos.append(bprime_pos)
+    bprime_idx = n_splitters if needs_balancer else None
+
+    # ----- Routes -----
+    routes: list[
+        tuple[tuple[int, int], tuple[int, int], int, int | None]
+    ] = []
+    rates: list[int] = []
+
+    # 1. External input boundary at M.in0 = (M_X, M_Y - 1).
+    input_tile = (M_X, M_Y - 1)
+    routes.append((input_tile, input_tile, DIR_S, None))
+    routes.append((input_tile, input_tile, DIR_S, None))
+    rates.extend([r(0.5), r(0.5)])
+
+    # 2. B' → M.in1 wiring (only when a balancer is in play). Emitting these
+    # short B' → M routes here, immediately after the input boundary,
+    # consistently produces faster solves than emitting them after the
+    # L1 → L2 routes. CP-SAT's variable-ordering heuristic seems to fix
+    # the dense B'-to-M region first when these routes appear early, and
+    # then the rest of the layout falls out around it. The d=OPPOSITE
+    # source constraint above is what makes EVERY feasible solution
+    # topology-correct — this ordering is purely a search heuristic, not
+    # a correctness fix.
+    if needs_balancer:
+        b_out_total = feedback_total / 2.0  # rate per B' output port.
+        b_out0_tile = (M_X + 1, M_Y - 1)
+        b_out_half = b_out_total / 2.0
+        # B'.out0 lands at b_out0_tile = M.in1: head-on south, 2 lane-routes.
+        routes.append((b_out0_tile, b_out0_tile, DIR_S, DIR_S))
+        routes.append((b_out0_tile, b_out0_tile, DIR_S, DIR_S))
+        rates.extend([r(b_out_half), r(b_out_half)])
+        # B'.out1 lands at (M_X+2, M_Y-1), heads W to sideload M.in1 east-side.
+        b_out1_src = (M_X + 2, M_Y - 1)
+        routes.append((b_out1_src, b_out0_tile, DIR_S, DIR_S))
+        rates.append(r(b_out_total))
+
+    # 3. M → S1: tight-stack vertical (no route — splitter geometry adjacency).
+    # 4. S1 → S2/S3: staggered tight-stack (no route — adjacency).
+
+    # 5. L1 → L2 arcs (4 arcs, parent = S2 or S3). Pattern depends on `levels`.
+    L1_drop_y = pos[2][1] + 1  # row below L1
+    arc_s2_0 = out_arc[(2, 0)]
+    arc_s2_1 = out_arc[(2, 1)]
+    arc_s3_0 = out_arc[(3, 0)]
+    arc_s3_1 = out_arc[(3, 1)]
+
+    if levels == 3:
+        # 3-level pattern (verified against (1, 5) / (1, 6) / (1, 7) dumps):
+        #   S2.out0 → L2 outer-left: perpendicular west drop.
+        #   S2.out1 → L2 inner-left: head-on tight-stack south (1-tile).
+        #   S3.out0 → L2 inner-right: head-on tight-stack south (1-tile).
+        #   S3.out1 → L2 outer-right: perpendicular east drop.
+        s2_out0_drop = (pos[2][0], L1_drop_y)  # (M_X-1, ...)
+        s2_out0_sink = (pos[4][0], L1_drop_y)  # (M_X-3, ...)
+        routes.append((s2_out0_drop, s2_out0_sink, DIR_S, DIR_S))
+        rates.append(r(throughputs[arc_s2_0]))
+        s2_out1_tile = (pos[2][0] + 1, L1_drop_y)  # (M_X, ...)
+        half = throughputs[arc_s2_1] / 2.0
+        routes.append((s2_out1_tile, s2_out1_tile, DIR_S, DIR_S))
+        routes.append((s2_out1_tile, s2_out1_tile, DIR_S, DIR_S))
+        rates.extend([r(half), r(half)])
+        s3_out0_tile = (pos[3][0], L1_drop_y)  # (M_X+1, ...)
+        half = throughputs[arc_s3_0] / 2.0
+        routes.append((s3_out0_tile, s3_out0_tile, DIR_S, DIR_S))
+        routes.append((s3_out0_tile, s3_out0_tile, DIR_S, DIR_S))
+        rates.extend([r(half), r(half)])
+        s3_out1_drop = (pos[3][0] + 1, L1_drop_y)  # (M_X+2, ...)
+        s3_out1_sink = (pos[7][0], L1_drop_y)      # (M_X+3, ...)
+        routes.append((s3_out1_drop, s3_out1_sink, DIR_S, DIR_S))
+        rates.append(r(throughputs[arc_s3_1]))
+    else:
+        # 4-level pattern: each L1 has two perpendicular routes, but the
+        # two children of the same L1 use DIFFERENT rows to avoid the
+        # dual-west / dual-east lane lump.
+        #   S2.out0 → L2 outer-left at (M_X-7, L2_Y): perpendicular west on
+        #             row L1_drop_y (M_Y+3).
+        #   S2.out1 → L2 inner-left at (M_X-3, L2_Y): head-on south first
+        #             to (M_X, M_Y+4), then perpendicular west on row M_Y+4.
+        #   S3.out0 / S3.out1 mirror image (east).
+        # The L2 input port at (L2.x, L2_Y - 1) = (L2.x, M_Y+4) for outer
+        # routes is on row M_Y+4 (same row as inner-route's turn),
+        # different col so no conflict. Sink direction is S in all cases.
+        detour_y = L1_drop_y + 1  # = M_Y + 4
+
+        # S2.out0 → outer-left via row L1_drop_y.
+        s2_out0_drop = (pos[2][0], L1_drop_y)              # (M_X-1, M_Y+3)
+        s2_out0_sink = (pos[4][0], L1_drop_y + 1)          # (M_X-7, M_Y+4)
+        routes.append((s2_out0_drop, s2_out0_sink, DIR_S, DIR_S))
+        rates.append(r(throughputs[arc_s2_0]))
+
+        # S2.out1 → inner-left via head-on south detour + row detour_y.
+        # The head-on south at (M_X, L1_drop_y) is encoded as a 2-lane-route
+        # head-on drop with sink (M_X, detour_y) S. CP-SAT must route
+        # forward from there; we leave the W-turn implicit and let the
+        # solver pick the path.
+        s2_out1_drop = (pos[2][0] + 1, L1_drop_y)          # (M_X, M_Y+3)
+        s2_out1_sink = (pos[5][0], detour_y)                # (M_X-3, M_Y+4)
+        routes.append((s2_out1_drop, s2_out1_sink, DIR_S, DIR_S))
+        rates.append(r(throughputs[arc_s2_1]))
+
+        # S3.out0 → inner-right via head-on south detour + east on detour_y.
+        s3_out0_drop = (pos[3][0], L1_drop_y)              # (M_X+1, M_Y+3)
+        s3_out0_sink = (pos[6][0], detour_y)                # (M_X+3, M_Y+4)
+        routes.append((s3_out0_drop, s3_out0_sink, DIR_S, DIR_S))
+        rates.append(r(throughputs[arc_s3_0]))
+
+        # S3.out1 → outer-right via row L1_drop_y.
+        s3_out1_drop = (pos[3][0] + 1, L1_drop_y)          # (M_X+2, M_Y+3)
+        s3_out1_sink = (pos[7][0], detour_y)                # (M_X+7, M_Y+4)
+        routes.append((s3_out1_drop, s3_out1_sink, DIR_S, DIR_S))
+        rates.append(r(throughputs[arc_s3_1]))
+
+    # 6. Leaf splitter → output / feedback: emit one route per leaf-output.
+    # In 3-level trees the leaves are L2 (idx 4-7); in 4-level trees the
+    # leaves are L3 (idx 8-15). For each leaf output, look up the arc:
+    # if dst is Output, emit head-on south drop (2 lane-routes); if dst
+    # is M.in1 (feedback), defer route emission to step 7.
+    if levels == 3:
+        leaf_idxs = (4, 5, 6, 7)
+        output_drop_y = L2_Y + 1
+    else:
+        leaf_idxs = tuple(range(8, 16))
+        assert L3_Y is not None
+        output_drop_y = L3_Y + 1
+    output_drops: list[tuple[int, int]] = []
+    feedback_drops: list[tuple[tuple[int, int], int]] = []  # (drop_tile, arc_idx)
+
+    for leaf_idx in leaf_idxs:
+        leaf_anchor_x = pos[leaf_idx][0]
+        for port in (0, 1):
+            arc_idx = out_arc[(leaf_idx, port)]
+            arc = arcs[arc_idx]
+            drop_x = leaf_anchor_x + port
+            drop_tile = (drop_x, output_drop_y)
+            arc_rate = throughputs[arc_idx]
+            if _dst_output(arc) is not None:
+                # Output drop: head-on south, 2 lane-routes at half-rate.
+                half = arc_rate / 2.0
+                routes.append((drop_tile, drop_tile, DIR_S, DIR_S))
+                routes.append((drop_tile, drop_tile, DIR_S, DIR_S))
+                rates.extend([r(half), r(half)])
+                output_drops.append(drop_tile)
+            elif _dst_splitter(arc) == (0, 1):
+                # Feedback drop: defer route emission to step 7.
+                feedback_drops.append((drop_tile, arc_idx))
+            else:
+                raise RuntimeError(
+                    f"place_one_to_m_from_synth: leaf[{leaf_idx}].out{port} has "
+                    f"unexpected dst {arc['dst']}"
+                )
+
+    # 6. Feedback routes — depends on whether B' is in play.
+    if not needs_balancer:
+        # Direct routing: each feedback arc → M.in1 = (M_X + 1, M_Y - 1).
+        m_in1 = (M_X + 1, M_Y - 1)
+        for drop_tile, arc_idx in feedback_drops:
+            arc_rate = throughputs[arc_idx]
+            routes.append((drop_tile, m_in1, DIR_S, DIR_S))
+            rates.append(r(arc_rate))
+    else:
+        # Through B': partition feedback arcs across B's 2 input ports such
+        # that each port's running total ≤ 0.5 (the lane cap). Assign drops
+        # left-to-right into the left port (B'.in0) until adding the next
+        # would overflow, then switch to the right port. This contiguous
+        # split produces simpler routing geometry than a greedy
+        # smallest-running-total approach: feedback drops are physically
+        # contiguous on row 10 east-of-centre, so giving the leftmost
+        # drops to in0 (the leftmost B' port) keeps each port's wrap
+        # channel locally bundled.
+        bprime_in0 = (M_X + 1, M_Y - 3)
+        bprime_in1 = (M_X + 2, M_Y - 3)
+        in0_total = 0.0
+        for drop_tile, arc_idx in feedback_drops:
+            arc_rate = throughputs[arc_idx]
+            if in0_total + arc_rate <= 0.5 + 1e-9:
+                target = bprime_in0
+                in0_total += arc_rate
+            else:
+                target = bprime_in1
+            routes.append((drop_tile, target, DIR_S, DIR_S))
+            rates.append(r(arc_rate))
+        # (B' → M.in1 routes already emitted near the top of this function,
+        # before L1 → L2 — that ordering anchors CP-SAT search.)
+
+    # ----- Grid bounds -----
+    # Width: depends on tree depth. 3-level outer L2 spans M_X-3..M_X+4;
+    # 4-level outer L3 spans M_X-8..M_X+9 (each leaf is 2 cols wide and
+    # 8 leaves at L3 cols M_X±2, ±4, ±6, ±8). Plus an east-edge column
+    # for the feedback wrap. With a balancer, the wrap needs a second
+    # east column to bring B' outputs around to M.in1 east sideload.
+    # Tight bounds matter: extra space lets CP-SAT find
+    # structurally-invalid alternates.
+    if levels == 3:
+        width = M_X + (7 if needs_balancer else 6)
+    else:
+        # 4-level: M_X = 9, outer-right L3 anchor at M_X+8 spans cols
+        # M_X+8 .. M_X+9. The feedback wrap needs at least one free
+        # east-edge column beyond that, so width must be ≥ M_X + 11.
+        # Add a second wrap column for the balancer case (B's outputs
+        # need to loop east before turning back to M.in1) — width
+        # M_X + 12 = 21 with M_X = 9.
+        width = M_X + (12 if needs_balancer else 11)
+    height = output_drop_y + (2 if needs_balancer else 3)
+
+    # ----- Solve -----
+    # 4-level trees produce a much larger CP-SAT model; opt into parallel
+    # workers (loses determinism but solves orders of magnitude faster).
+    # Also disable UG belts in 4-level mode by default — the wide-spread
+    # layout has a free east-edge column for the feedback wrap, so UG
+    # isn't needed for any of the routes; killing the UG vars roughly
+    # halves the model size. Override via FUCKTORIO_CP_SAT_UG_MAX env
+    # var (set to 4 to re-enable UG; useful for layout debugging).
+    workers = 8 if levels == 4 else 1
+    ug_env = os.environ.get("FUCKTORIO_CP_SAT_UG_MAX")
+    if ug_env is not None:
+        ug_max_reach = int(ug_env)
+    else:
+        ug_max_reach = 1 if levels == 4 else None  # 1 = effectively disabled
+    belt_dirs = _route_belts(
+        pos,
+        routes,
+        width,
+        height,
+        rates=rates,
+        lane_cap=lane_cap,
+        workers=workers,
+        ug_max_reach=ug_max_reach,
+    )
+    if belt_dirs is None:
+        raise RuntimeError(
+            f"(1, {n_outputs}) belt routing UNSAT (scale={scale}, "
+            f"needs_balancer={needs_balancer})"
+        )
+
+    # ----- Build entities -----
+    entities: list[dict[str, Any]] = []
+    for p in pos:
+        entities.append(
+            {
+                "name": "splitter",
+                "x": p[0],
+                "y": p[1],
+                "direction": _FACTORIO_DIR[_splitter_dir(p)],
+            }
+        )
+    for (x, y), (d, kind) in belt_dirs.items():
+        if kind == "belt":
+            entities.append(
+                {
+                    "name": "transport-belt",
+                    "x": x,
+                    "y": y,
+                    "direction": _FACTORIO_DIR[d],
+                }
+            )
+        elif kind == "ug_in":
+            entities.append(
+                {
+                    "name": "underground-belt",
+                    "x": x,
+                    "y": y,
+                    "direction": _FACTORIO_DIR[d],
+                    "io_type": "input",
+                }
+            )
+        else:  # ug_out
+            entities.append(
+                {
+                    "name": "underground-belt",
+                    "x": x,
+                    "y": y,
+                    "direction": _FACTORIO_DIR[d],
+                    "io_type": "output",
+                }
+            )
+
+    # Sort output drops left-to-right so output_tiles is deterministic.
+    output_drops.sort(key=lambda t: t[0])
+
+    return {
+        "n_inputs": 1,
+        "n_outputs": n_outputs,
+        "width": width,
+        "height": height,
+        "entities": entities,
+        "input_tiles": [list(input_tile)],
+        "output_tiles": [list(t) for t in output_drops],
+    }
+
+
 def main() -> int:
     raw = sys.stdin.read()
     try:
@@ -836,13 +1690,30 @@ def main() -> int:
     n = int(request.get("n", 0))
     m = int(request.get("m", 0))
     timeout_ms = int(request.get("timeout_ms", 1000))
-    seed = request.get("seed")
+    # Seed precedence: env var FUCKTORIO_CP_SAT_SEED > request "seed" field >
+    # None (CP-SAT picks a wall-clock seed). Mirrors the spike placer's
+    # convention in `crates/balancer-gen/scripts/place.py` so the same
+    # sweep harness pattern can drive both. The env var is used by
+    # `scripts/bake_cp_sat_runner.py` (overnight seed sweep) to vary the
+    # seed without rewriting the request body.
+    seed_env = os.environ.get("FUCKTORIO_CP_SAT_SEED")
+    if seed_env is not None:
+        seed = int(seed_env)
+    else:
+        seed = request.get("seed")
 
     # Configure the module-level solver params so every CP-SAT solve
     # in this run honours the request's timeout and seed. See
     # `_make_solver` for the wiring.
     _SOLVER_PARAMS["timeout_ms"] = timeout_ms
     _SOLVER_PARAMS["seed"] = seed
+
+    # Stash synth context (graph + per-arc throughputs) so per-shape
+    # placers can derive route rates for the rate-aware per-lane cap.
+    # Both are optional — missing fields fall back to discrete unit
+    # rates in `_route_belts`.
+    _SYNTH_CTX["graph"] = request.get("graph")
+    _SYNTH_CTX["arc_throughputs"] = request.get("arc_throughputs")
 
     started = time.monotonic()
 
@@ -862,6 +1733,15 @@ def main() -> int:
         (2, 8): lambda: place_x_to_eight(2),
         (1, 16): lambda: place_x_to_sixteen(1),
         (2, 16): lambda: place_x_to_sixteen(2),
+        # Generalised placer for `(1, m)` shapes. 4-level shapes
+        # (`(1, 9)`, `(1, 10)`) are wired but the model is large; pin a
+        # known-fast seed via `FUCKTORIO_CP_SAT_SEED=<seed>` (sweep
+        # harness in `scripts/bake_cp_sat_runner.py`).
+        (1, 5): place_one_to_m_from_synth,
+        (1, 6): place_one_to_m_from_synth,
+        (1, 7): place_one_to_m_from_synth,
+        (1, 9): place_one_to_m_from_synth,
+        (1, 10): place_one_to_m_from_synth,
     }
 
     if (n, m) in geometry:

@@ -76,6 +76,15 @@ pub struct CpSatRequest<'a> {
     pub timeout_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seed: Option<u64>,
+    /// Per-arc steady-state throughputs in `[0.0, n]` (matching the
+    /// `BalancerGraph::arcs` index order). The placer uses these to
+    /// compute per-route lane capacity for shapes whose arcs carry
+    /// fractional rates (coprime feedback channels at rate 0.2,
+    /// merger outputs at rate 0.8, etc.). Optional — when absent the
+    /// placer falls back to its discrete unit-rate encoding (which
+    /// is correct for dyadic shapes where every arc carries 1.0).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arc_throughputs: Option<Vec<f64>>,
 }
 
 /// Wire format: response from Python to Rust.
@@ -104,12 +113,29 @@ impl PlacementEngine for CpSat {
     }
 
     fn place(&self, req: &PlacementRequest<'_>) -> Result<PlacementResult, PlacementError> {
+        // Per-arc throughputs from the verifier. Load-bearing for
+        // non-dyadic shapes — without it the placer falls back to
+        // discrete unit rates, which silently produces wrong layouts
+        // for fractional-arc shapes like (1, 5). `synth` is supposed to
+        // hand us a verified graph, so any failure here is an upstream
+        // bug worth surfacing as a hard engine error rather than a
+        // silent fallback.
+        let arc_throughputs = match crate::balancer::verify::verify_balancer(req.graph) {
+            Ok(outcome) => Some(outcome.arc_throughputs),
+            Err(e) => {
+                return Err(PlacementError::Engine(format!(
+                    "verify_balancer({}, {}): {:?} — synth graph should be verified upstream",
+                    req.n, req.m, e
+                )));
+            }
+        };
         let request = CpSatRequest {
             graph: req.graph,
             n: req.n,
             m: req.m,
             timeout_ms: req.timeout.as_millis() as u64,
             seed: req.seed,
+            arc_throughputs,
         };
         let request_json = serde_json::to_string(&request)
             .map_err(|e| PlacementError::Engine(format!("serialize request: {}", e)))?;
@@ -187,10 +213,12 @@ mod tests {
             m: 1,
             timeout_ms: 1000,
             seed: Some(42),
+            arc_throughputs: Some(vec![1.0]),
         };
         let s = serde_json::to_string(&req).unwrap();
         assert!(s.contains("\"timeout_ms\":1000"));
         assert!(s.contains("\"seed\":42"));
+        assert!(s.contains("\"arc_throughputs\":[1.0]"));
     }
 
     #[test]

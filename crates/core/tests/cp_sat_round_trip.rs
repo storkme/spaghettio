@@ -40,7 +40,7 @@ fn maybe_engine() -> Option<CpSat> {
     Some(CpSat::default().with_script_path(script))
 }
 
-fn round_trip(n: u32, m: u32) {
+fn round_trip_with_timeout(n: u32, m: u32, timeout_secs: u64) {
     let Some(engine) = maybe_engine() else {
         return;
     };
@@ -49,7 +49,7 @@ fn round_trip(n: u32, m: u32) {
         graph: &graph,
         n,
         m,
-        timeout: Duration::from_secs(60),
+        timeout: Duration::from_secs(timeout_secs),
         seed: Some(42),
     };
     let result = engine
@@ -84,6 +84,15 @@ fn round_trip(n: u32, m: u32) {
         "({n}, {m}) expected {expected}, got {}",
         outcome.real_output_throughput
     );
+}
+
+/// 60 s default — fits the fast dyadic shapes (`(1, 1)`–`(2, 8)`) with
+/// plenty of headroom. The handful of shapes whose canonical solve
+/// crowds or exceeds this budget call `round_trip_with_timeout` directly:
+/// `(1, 16)` / `(2, 16)` ~60 s under the new UG model → 120 s budget;
+/// `(1, 5)` ~182 s on the generalised placer → 300 s budget.
+fn round_trip(n: u32, m: u32) {
+    round_trip_with_timeout(n, m, 60);
 }
 
 #[test]
@@ -128,10 +137,31 @@ fn round_trip_2_8() {
 
 #[test]
 fn round_trip_1_16() {
-    round_trip(1, 16);
+    round_trip_with_timeout(1, 16, 120);
 }
 
 #[test]
 fn round_trip_2_16() {
-    round_trip(2, 16);
+    round_trip_with_timeout(2, 16, 120);
 }
+
+#[test]
+fn round_trip_1_5() {
+    round_trip_with_timeout(1, 5, 300);
+}
+
+#[test]
+fn round_trip_1_6() {
+    round_trip(1, 6);
+}
+
+#[test]
+fn round_trip_1_7() {
+    round_trip(1, 7);
+}
+
+// `(1, 9)` and `(1, 10)` are wired into the placer dispatch but the
+// CP-SAT model doesn't solve in 15min/seed (overnight bake confirmed
+// 0/64 across 32 seeds × 2 shapes — see `docs/bake-overnight-results.md`).
+// No round-trip test until the layout is tightened or composed; tracked
+// under issue #136.

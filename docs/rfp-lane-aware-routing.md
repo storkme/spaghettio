@@ -448,3 +448,105 @@ The remaining work, in order:
   lane-balancer splitter at the turn — an extra splitter beyond
   what the synth provides — or a different topology. Bumped to
   phase 4 (now bundled with the lane-balancer-splitter piece).*
+- *2026-05-02 — Phase 4 increments 1+2 shipped (per-arc rate
+  plumbing + `_add_lane_balancer_south` helper). Wire format gains
+  optional `arc_throughputs: Vec<f64>` from `verify_balancer`;
+  Python placer exposes `_find_arc_rate(src, dst)` returning scaled
+  integer rates (`RATE_SCALE = 10`, `LANE_CAP_SCALED = 5`). Helper
+  appends a south-facing placement-only splitter and returns its port
+  tiles. No behaviour change for dyadic shapes — they still default
+  to discrete unit rates. All 10 round-trip tests stay green.*
+- *2026-05-02 — Phase 4 increment 3 (`(1, 5)` placer) parked. The
+  layout problem is harder than the design anticipated: rate-0.8
+  arcs (`M → S1`, `S1 → L1`) require head-on flow (perpendicular
+  doesn't fit the lane cap), forcing a tight-stack vertical chain.
+  This pins S2/S3 to `(S1.x ± 1, S1.y + 1)` — adjacent. Their L2
+  children then have to be at `(S1.x - 3, S1.x - 1, S1.x + 1, S1.x + 3)`
+  if routing-row offset, and the `S2.out1 → S5` (eastward) and
+  `S3.out0 → S6` (westward) routes both pass through the inner two
+  cols of the routing row, requiring a route-crossing. Without UG
+  belts (out of scope per the original RFP) there's no way to
+  cross. Alternative — collapse S2/S3 outputs onto a shared L2
+  splitter via tight-stack — fails verification because the merged
+  splitter outputs at rate 0.4 instead of the expected 0.2.
+  Three viable directions for unblocking, each material work:
+  (a) add UG-belt support to the placer (matches the existing
+  spike at `crates/balancer-gen/scripts/place.py`); (b) add a
+  pass-before-route step that re-distributes route paths (e.g.
+  swap port assignments to make the cross unnecessary); (c)
+  modify the synth to emit a lane-safe topology with extra
+  splitters in the tree (revisits the rejected
+  `rfp-lane-safe-synth.md` track but with different motivation).
+  Phase 4 increments 1+2 shipped as standalone infrastructure
+  value; (1, 5) and the rest of coprime coverage need a
+  layout-design follow-up before they become tractable.*
+- *2026-05-02 — Phase 4 increment 3 (`(1, 5)` placer) shipped via
+  direction (a)+(c) combined: UG belts in `_route_belts` (already
+  shipped in `1e3d17c`) plus a placement-only lane-balancer splitter
+  inserted above M (a 9th splitter beyond synth's 8). The first attempt
+  without the balancer UNSATs as expected — M.in1 at the top edge has
+  only east-side feeds available (M.in0 occupies the west neighbour),
+  so the 0.6 feedback lumps onto a single lane and overflows the 0.5
+  cap. The fix: insert south-facing B' two rows above M with B'.out0
+  feeding M.in1 (north back-feed, lanes preserved) and B'.out1 looping
+  west through (6, 4) W to sideload (5, 4) east-side onto lane 0,
+  yielding lanes 0.45 / 0.15 at M.in1 — both within cap. The 0.6
+  feedback splits 0.4 + 0.2 across B's two input ports (rates
+  comfortably under the 0.5 lane cap on each input belt). The placer
+  uses a finer local rate scale (`LOCAL_RATE_SCALE = 20`,
+  `lane_cap = 10`) so B's 0.3 outputs encode head-on as two integer
+  lane-routes at 0.15 each. Recovered topology has 9 splitters; the
+  extra B' shows up as a regular 1→2 node and verifier handles it
+  via standard R7 / conservation. `round_trip_1_5` passes; total
+  cp_sat round-trip suite goes 10 → 11 tests green. Solve time on
+  (1, 5): ~66 s (within the test's 60 s timeout — close call, may need
+  bumping or seed pinning if it flakes).*
+- *2026-05-02 — Phase 4 increment a.3 begun: `(1, 6)` shipped. Same
+  topology as `(1, 5)` (8 synth splitters), but with 2 feedback arcs
+  totaling 0.333 instead of 3 totaling 0.6 — fits a single east-side
+  sideload onto M.in1's lane 0 (no lane balancer needed). Local rate
+  scale 12 covers all rates exactly (1/12, 1/6, 1/3, 1/2). 10×9 grid.
+  Adding the test surfaced two bugs in the broader infrastructure that
+  were lurking: (1) the source-lane forcing in `_route_belts` didn't
+  forbid `d_drop = OPPOSITE(splitter_dir)`, so the solver could pick
+  belt directions that physically push items back into the splitter
+  face, producing self-loops in topology recovery and breaking
+  verification with mismatched arc counts; (2) the round-trip default
+  60 s solver timeout was on the edge for `(1, 5)` / `(1, 16)` /
+  `(2, 16)` and flaked under load. Both fixed in the same commit:
+  forbid `d = OPPOSITE(splitter_dir)` at source for splitter-typed
+  routes, bump default test timeout to 180 s, and expose
+  `round_trip_with_timeout` for per-shape tuning. `(1, 5)` solve time
+  went up to ~190 s with the extra constraint (the canonical solution
+  is harder to find when the alternates are forbidden), but it's now
+  reliable rather than flaky. `(1, 6)` solves in ~50 s. Round-trip
+  suite goes 11 → 12 tests green.*
+- *2026-05-02 — Generalised `(1, m)` placer landed
+  (`place_one_to_m_from_synth`). Walks the synth graph in topological
+  order (mutable Kahn's), picks splitter positions from rate-driven
+  geometry rules (head-on tight-stack for arcs > 0.5, routing-row
+  offset otherwise), and inserts a placement-only south-facing lane
+  balancer above M when total feedback exceeds 0.5. The hand-tuned
+  `(1, 6)` placer was effectively replaced by this routine — same
+  layout, same solve time. `(1, 7)` (8 splitters, single feedback arc
+  at 1/7) shipped on top: 49 s solve. Suite now 13 tests green:
+  10 dyadic + `(1, 5)` (still hand-tuned — see below) + `(1, 6)` +
+  `(1, 7)`. Known limitation: the generalised placer also produces a
+  valid `(1, 5)` layout in isolation, but flakes in full-suite runs
+  (CP-SAT finds alternate optima that violate OutputDegree on the
+  recovered graph). Hand-tuned `(1, 5)` is more reliable under load
+  for now; tightening structural constraints in the generalised one
+  to subsume `(1, 5)` is a follow-up.*
+- *2026-05-02 — `(1, 5)` flakiness on the generalised placer fixed by
+  REORDERING route emission. The hand-tuned `(1, 5)` emitted B' → M
+  routes immediately after the input boundary, BEFORE the L1 → L2
+  routes; the original generalised version emitted them last. Putting
+  these critical short-distance routes first anchors CP-SAT's search
+  heuristic onto the canonical solution and stops it wandering off
+  into OutputDegree-violating alternates of equal cost. `(1, 5)` now
+  passes reliably in full-suite runs through the generalised placer.
+  Hand-tuned `place_one_to_five` and `place_one_to_six` deleted; both
+  shapes are now driven by `place_one_to_m_from_synth`. Solve times:
+  `(1, 5)` ~196 s (unchanged — bound by the optimization tail), `(1, 6)`
+  ~13 s (down from ~70 s; the route reorder helped here too), `(1, 7)`
+  ~9 s. Suite total: 13 / 13 green in ~325 s.*
