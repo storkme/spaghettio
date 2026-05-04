@@ -2336,14 +2336,19 @@ pub fn fluid_only_row(
             }
         }
 
-        // Machine, mirrored so inputs face north, outputs face south
+        // Machine direction=NORTH. Mirror only matters for oil-refinery (it
+        // swaps input/output faces — `validate/fluids.rs::fluid_ports` lists
+        // OIL_MIRROR vs OIL). Chemical-plant ports are symmetric across the
+        // mirror axis, but we keep `mirror=false` to match the unmirrored
+        // chemical-plant geometry used elsewhere in the codebase.
+        let machine_mirror = machine_entity == "oil-refinery";
         entities.push(PlacedEntity {
             name: machine_entity.to_string(),
             x: mx,
             y: y_offset + 1,
             direction: EntityDirection::North,
             recipe: Some(recipe.to_string()),
-            mirror: true,
+            mirror: machine_mirror,
             segment_id: machine_seg.clone(),
             ..Default::default()
         });
@@ -3656,7 +3661,7 @@ mod tests {
 
     // advanced-oil-processing: 2 fluid inputs (water→dx=1, crude-oil→dx=3),
     // 3 fluid outputs (heavy-oil→dx=0, light-oil→dx=2, petroleum-gas→dx=4).
-    // Uses the staggered 3-trunk staircase output layout.
+    // Uses the staggered staircase on BOTH input and output sides.
     #[test]
     fn fluid_only_row_one_refinery_advanced() {
         let (entities, height, fluid_in, fluid_out) = fluid_only_row(
@@ -3669,78 +3674,120 @@ mod tests {
             &[(1, "water"), (3, "crude-oil")],
             &[(0, "heavy-oil"), (2, "light-oil"), (4, "petroleum-gas")],
         );
-        // Row height grows by 3 rows (msz+5 = 10) to accommodate the staircase.
-        assert_eq!(height, 10);
+        // Layout (n_inputs=2, gap=1):
+        //   y=0..4: input section (5 rows = n+2+gap)
+        //   y=5..9: machine (5×5)
+        //   y=10:   port row (output)
+        //   y=11..13: output staircase (middle, east, west)
+        // → height = 14 = msz + 5 + input_section(5) - 1 = ...
+        //   actually y_west = port_row_y + 3 = 13, height = 13 - 0 + 1 = 14.
+        assert_eq!(height, 14);
         assert_eq!(fluid_in.len(), 2);
         assert_eq!(fluid_out.len(), 3);
 
-        // Input pipes — unchanged from non-staggered path.
-        assert_eq!(fluid_in[0], ("water".to_string(), 1, 0));
-        assert_eq!(fluid_in[1], ("crude-oil".to_string(), 3, 0));
-        let water_pipe = assert_entity(&entities, 1, 0, "pipe");
-        assert_eq!(water_pipe.carries.as_deref(), Some("water"));
-        let crude_pipe = assert_entity(&entities, 3, 0, "pipe");
-        assert_eq!(crude_pipe.carries.as_deref(), Some("crude-oil"));
+        // --- Input staircase (mirrored vertically vs output) ---
+        // Outermost fluid (crude-oil at dx=3) anchors at y=0; water shifts down by 1+gap.
+        //
+        // Crude-oil trunk at y=0: UG-W at (2,0), pipe at (3,0), UG-E at (4,0).
+        let c_l = assert_entity(&entities, 2, 0, "pipe-to-ground");
+        assert_eq!(c_l.direction, EntityDirection::West);
+        assert_eq!(c_l.carries.as_deref(), Some("crude-oil"));
+        let c_t = assert_entity(&entities, 3, 0, "pipe");
+        assert_eq!(c_t.carries.as_deref(), Some("crude-oil"));
+        let c_r = assert_entity(&entities, 4, 0, "pipe-to-ground");
+        assert_eq!(c_r.direction, EntityDirection::East);
 
-        // Refinery at (0, 1).
-        let refinery = assert_entity(&entities, 0, 1, "oil-refinery");
+        // Crude-oil drop UG-S at (3, 1).
+        let c_drop = assert_entity(&entities, 3, 1, "pipe-to-ground");
+        assert_eq!(c_drop.direction, EntityDirection::South);
+        assert_eq!(c_drop.carries.as_deref(), Some("crude-oil"));
+
+        // Water trunk at y=2: UG-W at (0,2), pipe at (1,2), UG-E at (2,2).
+        let w_l_in = assert_entity(&entities, 0, 2, "pipe-to-ground");
+        assert_eq!(w_l_in.direction, EntityDirection::West);
+        assert_eq!(w_l_in.carries.as_deref(), Some("water"));
+        let w_t_in = assert_entity(&entities, 1, 2, "pipe");
+        assert_eq!(w_t_in.carries.as_deref(), Some("water"));
+        let w_r_in = assert_entity(&entities, 2, 2, "pipe-to-ground");
+        assert_eq!(w_r_in.direction, EntityDirection::East);
+
+        // Water drop UG-S at (1, 3) — sits in the gap row.
+        let w_drop_in = assert_entity(&entities, 1, 3, "pipe-to-ground");
+        assert_eq!(w_drop_in.direction, EntityDirection::South);
+
+        // UG-out row at y=4 (=machine_y-1): water at (1,4), crude-oil at (3,4),
+        // both UG-N facing south to merge with machine ports.
+        let w_out = assert_entity(&entities, 1, 4, "pipe-to-ground");
+        assert_eq!(w_out.direction, EntityDirection::North);
+        assert_eq!(w_out.carries.as_deref(), Some("water"));
+        let c_out = assert_entity(&entities, 3, 4, "pipe-to-ground");
+        assert_eq!(c_out.direction, EntityDirection::North);
+        assert_eq!(c_out.carries.as_deref(), Some("crude-oil"));
+
+        // Tap points report each input fluid's T-drop position.
+        assert_eq!(fluid_in[0], ("water".to_string(), 1, 2));
+        assert_eq!(fluid_in[1], ("crude-oil".to_string(), 3, 0));
+
+        // --- Refinery at (0, 5) ---
+        let refinery = assert_entity(&entities, 0, 5, "oil-refinery");
         assert_eq!(refinery.direction, EntityDirection::North);
         assert!(refinery.mirror);
         assert_eq!(refinery.recipe.as_deref(), Some("advanced-oil-processing"));
 
-        // Port row (y=6): west UG-S/input at (0,6), middle pipe at (2,6),
-        // east UG-S/input at (4,6). Each connects to its refinery output box.
-        let w_port = assert_entity(&entities, 0, 6, "pipe-to-ground");
+        // --- Output staircase ---
+        // Port row (y=10): west UG-S/input at (0,10), middle pipe at (2,10),
+        // east UG-S/input at (4,10). Each connects to its refinery output box.
+        let w_port = assert_entity(&entities, 0, 10, "pipe-to-ground");
         assert_eq!(w_port.direction, EntityDirection::South);
         assert_eq!(w_port.io_type.as_deref(), Some("input"));
         assert_eq!(w_port.carries.as_deref(), Some("heavy-oil"));
-        let m_port = assert_entity(&entities, 2, 6, "pipe");
+        let m_port = assert_entity(&entities, 2, 10, "pipe");
         assert_eq!(m_port.carries.as_deref(), Some("light-oil"));
-        let e_port = assert_entity(&entities, 4, 6, "pipe-to-ground");
+        let e_port = assert_entity(&entities, 4, 10, "pipe-to-ground");
         assert_eq!(e_port.direction, EntityDirection::South);
         assert_eq!(e_port.carries.as_deref(), Some("petroleum-gas"));
 
-        // Middle trunk at y=7: L-flank (1,7), T-drop (2,7), R-flank (3,7).
-        let m_l = assert_entity(&entities, 1, 7, "pipe-to-ground");
+        // Middle trunk at y=11: L-flank (1,11), T-drop (2,11), R-flank (3,11).
+        let m_l = assert_entity(&entities, 1, 11, "pipe-to-ground");
         assert_eq!(m_l.direction, EntityDirection::West);
         assert_eq!(m_l.io_type.as_deref(), Some("output"));
-        let m_t = assert_entity(&entities, 2, 7, "pipe");
+        let m_t = assert_entity(&entities, 2, 11, "pipe");
         assert_eq!(m_t.carries.as_deref(), Some("light-oil"));
-        let m_r = assert_entity(&entities, 3, 7, "pipe-to-ground");
+        let m_r = assert_entity(&entities, 3, 11, "pipe-to-ground");
         assert_eq!(m_r.direction, EntityDirection::East);
 
-        // East drop UG sits at (4,7) on the middle trunk row but on N-S axis
+        // East drop UG sits at (4,11) on the middle trunk row but on N-S axis
         // (F5a perpendicular to middle's E-W flanks — no fluid merge).
-        let e_drop = assert_entity(&entities, 4, 7, "pipe-to-ground");
+        let e_drop = assert_entity(&entities, 4, 11, "pipe-to-ground");
         assert_eq!(e_drop.direction, EntityDirection::North);
         assert_eq!(e_drop.carries.as_deref(), Some("petroleum-gas"));
 
-        // East trunk at y=8.
-        let e_l = assert_entity(&entities, 3, 8, "pipe-to-ground");
+        // East trunk at y=12.
+        let e_l = assert_entity(&entities, 3, 12, "pipe-to-ground");
         assert_eq!(e_l.direction, EntityDirection::West);
-        let e_t = assert_entity(&entities, 4, 8, "pipe");
+        let e_t = assert_entity(&entities, 4, 12, "pipe");
         assert_eq!(e_t.carries.as_deref(), Some("petroleum-gas"));
-        let e_r = assert_entity(&entities, 5, 8, "pipe-to-ground");
+        let e_r = assert_entity(&entities, 5, 12, "pipe-to-ground");
         assert_eq!(e_r.direction, EntityDirection::East);
 
-        // West drop UG at (0,8) — N-S axis, doesn't conflict with east trunk
-        // at y=8 (different columns).
-        let w_drop = assert_entity(&entities, 0, 8, "pipe-to-ground");
+        // West drop UG at (0,12) — N-S axis, doesn't conflict with east trunk
+        // at y=12 (different columns).
+        let w_drop = assert_entity(&entities, 0, 12, "pipe-to-ground");
         assert_eq!(w_drop.direction, EntityDirection::North);
         assert_eq!(w_drop.carries.as_deref(), Some("heavy-oil"));
 
-        // West trunk at y=9.
-        let w_l = assert_entity(&entities, -1, 9, "pipe-to-ground");
+        // West trunk at y=13.
+        let w_l = assert_entity(&entities, -1, 13, "pipe-to-ground");
         assert_eq!(w_l.direction, EntityDirection::West);
-        let w_t = assert_entity(&entities, 0, 9, "pipe");
+        let w_t = assert_entity(&entities, 0, 13, "pipe");
         assert_eq!(w_t.carries.as_deref(), Some("heavy-oil"));
-        let w_r = assert_entity(&entities, 1, 9, "pipe-to-ground");
+        let w_r = assert_entity(&entities, 1, 13, "pipe-to-ground");
         assert_eq!(w_r.direction, EntityDirection::East);
 
-        // Tap points report each fluid's T-drop pipe position.
-        assert_eq!(fluid_out[0], ("heavy-oil".to_string(), 0, 9));
-        assert_eq!(fluid_out[1], ("light-oil".to_string(), 2, 7));
-        assert_eq!(fluid_out[2], ("petroleum-gas".to_string(), 4, 8));
+        // Tap points report each output fluid's T-drop pipe position.
+        assert_eq!(fluid_out[0], ("heavy-oil".to_string(), 0, 13));
+        assert_eq!(fluid_out[1], ("light-oil".to_string(), 2, 11));
+        assert_eq!(fluid_out[2], ("petroleum-gas".to_string(), 4, 12));
 
         // No two entities share a tile (exclude machine anchor — 5×5 footprint
         // registered once at its origin).
