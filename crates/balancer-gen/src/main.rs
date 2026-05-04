@@ -161,28 +161,66 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("=== phase 3.4: bake missing shapes ===");
         return bake_missing_shapes();
     }
-    if std::env::var("FUCKTORIO_MODE_D_ONLY").is_ok() {
+    if let Ok(mode_d_value) = std::env::var("FUCKTORIO_MODE_D_ONLY") {
         // Fast path: skip phases 3.1, 3.2 (round-trips), 3.2A/B/C
         // (flow-conservation routing) and run only phase 3.2D (Mode D
         // synth-place). Used to validate Mode D constraints in
         // isolation without paying for the upstream spike phases.
+        //
+        // Value formats:
+        //   - "1" / unset-but-present: run a curated set of small shapes.
+        //   - "all": run every shape currently in `balancer_templates()`.
+        //   - "(n,m);(n2,m2);...": run only the listed shapes.
         println!("=== Mode D-only: skipping earlier spike phases ===");
-        let mode_d_shapes: &[(&str, (u32, u32))] = &[
-            ("(1, 2)", (1, 2)),
-            ("(2, 2)", (2, 2)),
-            ("(2, 4)", (2, 4)),
-            ("(1, 4)", (1, 4)),
-            ("(4, 4)", (4, 4)),
-            ("(1, 8)", (1, 8)),
-            // Round-trip Raynquist's (5, 1) topology through Mode D.
-            // Mode D re-places an existing topology; if our UG-correctness
-            // constraints prevent a feasible layout for a topology that
-            // *should* be feasible (Raynquist proved feasibility by hand),
-            // that's a sign the constraints over-restrict.
-            ("(5, 1)", (5, 1)),
+
+        let curated: Vec<(String, (u32, u32))> = vec![
+            ("(1, 2)".into(), (1, 2)),
+            ("(2, 2)".into(), (2, 2)),
+            ("(2, 4)".into(), (2, 4)),
+            ("(1, 4)".into(), (1, 4)),
+            ("(4, 4)".into(), (4, 4)),
+            ("(1, 8)".into(), (1, 8)),
+            ("(5, 1)".into(), (5, 1)),
         ];
-        for &(label, shape) in mode_d_shapes {
-            match spike_synth_place(label, shape, None) {
+
+        let shapes: Vec<(String, (u32, u32))> = match mode_d_value.as_str() {
+            "" | "1" => curated,
+            "all" => {
+                let mut shapes: Vec<(u32, u32)> =
+                    balancer_templates().keys().copied().collect();
+                shapes.sort();
+                shapes
+                    .into_iter()
+                    .map(|s| (format!("({}, {})", s.0, s.1), s))
+                    .collect()
+            }
+            spec => spec
+                .split(';')
+                .filter_map(|tok| {
+                    let nums: Vec<u32> = tok
+                        .trim_matches(|c: char| !c.is_ascii_digit())
+                        .split(|c: char| !c.is_ascii_digit())
+                        .filter(|p| !p.is_empty())
+                        .filter_map(|p| p.parse().ok())
+                        .collect();
+                    if nums.len() == 2 {
+                        Some((format!("({}, {})", nums[0], nums[1]), (nums[0], nums[1])))
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+        };
+
+        if shapes.is_empty() {
+            return Err(format!(
+                "FUCKTORIO_MODE_D_ONLY={mode_d_value:?} parsed to zero shapes"
+            )
+            .into());
+        }
+
+        for (label, shape) in &shapes {
+            match spike_synth_place(label, *shape, None) {
                 Ok(()) => {}
                 Err(e) => println!("  ✗ {label}: {e}"),
             }
@@ -825,8 +863,18 @@ fn spike_synth_place(
         Some(_) => " [4-dir]",
         None => "",
     };
+    // Optional bbox slack: expand width and height by N (each) so Mode D
+    // has more room. Used by `scripts/overnight_mode_d_bench.sh` to retry
+    // after an INFEASIBLE at library bbox. Library entries (especially
+    // Factorio-SAT-generated ones) are often very tight; Mode D's
+    // current encoding may need 1-2 cells of slack to find a placement.
+    let slack: u32 = std::env::var("FUCKTORIO_MODE_D_BBOX_SLACK")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let bounds = (lib.width + slack, lib.height + slack);
     let req = PlaceRequest::SynthPlace {
-        bounds: (lib.width, lib.height),
+        bounds,
         n_inputs: shape.0,
         n_outputs: shape.1,
         n_splitters: topology.n_splitters,
@@ -835,10 +883,15 @@ fn spike_synth_place(
         max_time_s: None,
     };
 
+    let slack_suffix = if slack > 0 {
+        format!(" [+{slack} slack]")
+    } else {
+        String::new()
+    };
     println!(
-        "\n--- {label}{label_suffix} ---  bbox: {}×{}  splitters: {}  edges: {}",
-        lib.width,
-        lib.height,
+        "\n--- {label}{label_suffix}{slack_suffix} ---  bbox: {}×{}  splitters: {}  edges: {}",
+        bounds.0,
+        bounds.1,
         topology.n_splitters,
         topology.edges.len()
     );
@@ -899,20 +952,39 @@ fn spike_synth_place(
         .map_err(|e| format!("{label}: classify_ref on synth-placed template: {e:?}"))?;
     let original = classify_ref(BalancerTemplateRef::from(lib))
         .map_err(|e| format!("{label}: classify original library template: {e:?}"))?;
-    if class_report.class != original.class {
+    // Bus minimum is MX2a (ThroughputBalancedRate). Library entries are typically MX3
+    // because the seed corpus was Raynquist-derived, but Mode D's CP-SAT model only
+    // enforces saturated rate balance — accepting any class at or above the bus
+    // requirement avoids rejecting correct-for-bus solutions purely on composition.
+    if !class_acceptable_for_bus(class_report.class) {
         return Err(format!(
-            "{label}: synth-placed class {:?} differs from library class {:?}",
+            "{label}: synth-placed class {:?} is below bus minimum (TBR or stronger required); library was {:?}",
             class_report.class, original.class
         )
         .into());
     }
+    let comparison = if class_report.class == original.class {
+        "matches library".to_string()
+    } else {
+        format!("library was {:?}, accepted as ≥ TBR", original.class)
+    };
     println!(
-        "  ✓ {label}: classified {:?} (matches library); IO {:?}→{:?}",
-        class_report.class,
-        resp.input_port_tiles,
-        resp.output_port_tiles,
+        "  ✓ {label}: classified {:?} ({comparison}); IO {:?}→{:?}",
+        class_report.class, resp.input_port_tiles, resp.output_port_tiles,
     );
     Ok(())
+}
+
+/// MX2a (saturated + balanced rate) is the minimum class needed for fucktorio's
+/// homogeneous-row bus. MX2b and MX3 are stronger and also acceptable. MX1 is
+/// not — outputs may starve.
+fn class_acceptable_for_bus(class: BalancerClass) -> bool {
+    matches!(
+        class,
+        BalancerClass::ThroughputBalancedRate
+            | BalancerClass::ThroughputUnlimited
+            | BalancerClass::Balanced
+    )
 }
 
 fn assemble_template_from_routing(
