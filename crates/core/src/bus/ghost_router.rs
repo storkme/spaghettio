@@ -2505,6 +2505,13 @@ pub fn route_bus_ghost(
         // preserves non-bus structure (machines, poles, pipes, row
         // entities), so this is safe for those.
         //
+        // Exception: tiles SAT marks as `forced_empty` are bus-structure
+        // tiles SAT relies on as fixed obstacles (e.g. a balancer splitter
+        // it routes around via interior boundaries). Releasing them and
+        // letting Step 6 drop the entity leaves SAT's solution feeding
+        // belts into thin air (issue #295). Preserve those Permanent
+        // claims via `preserve_trunk_tiles`.
+        //
         // Non-participating "encountered" specs are handled via the SAT
         // boundary mechanism — `topology_boundaries` emits port boundaries
         // for them so the SAT solution covers their flow through the zone.
@@ -2513,10 +2520,43 @@ pub fn route_bus_ghost(
             .iter()
             .map(String::as_str)
             .collect();
+        // Narrow preserve set to balancer-segment Permanent claims only.
+        // Trunks and tapoffs in `forced_empty` are still released — SAT may
+        // route around them via UG arcs and Step 6 will drop the orphan
+        // surface stubs (issue #243's original reason for clean-slate
+        // release). Splitters are different: SAT models them as fixed
+        // structure via interior boundaries and never re-stamps them, so
+        // they must survive (issue #295).
+        let forced_empty_set: rustc_hash::FxHashSet<(i32, i32)> = sol
+            .sat_zone
+            .as_ref()
+            .map(|snap| snap.forced_empty.iter().copied().collect())
+            .unwrap_or_default();
+        let preserve_balancer_tiles: rustc_hash::FxHashSet<(i32, i32)> =
+            forced_empty_set
+                .iter()
+                .filter(|tile| {
+                    matches!(
+                        occupancy.claim_at(**tile),
+                        Some(crate::bus::ghost_occupancy::Claim::Permanent { entity_idx })
+                            if occupancy
+                                .entity_at(**tile)
+                                .and_then(|e| e.segment_id.as_deref())
+                                .is_some_and(|seg| seg.starts_with("balancer:"))
+                                && { let _ = entity_idx; true }
+                    )
+                })
+                .copied()
+                .collect();
+        let preserve_ref = if preserve_balancer_tiles.is_empty() {
+            None
+        } else {
+            Some(&preserve_balancer_tiles)
+        };
         let released_count = occupancy.release_for_pertile_template(
             &release_rect,
             None,
-            None,
+            preserve_ref,
         );
         trace::emit(trace::TraceEvent::GhostResidueCleared {
             zone_x: release_rect.x,
