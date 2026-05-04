@@ -104,9 +104,13 @@ impl ValidationIssue {
 
 /// Raised when critical validation issues block blueprint generation.
 ///
-/// Mirrors Python's `ValidationError` exception.
+/// `issues` contains the full list — both errors and warnings — so callers
+/// that want a complete picture (e.g. scoreboards) don't lose warning
+/// counts when an error is also present. The `Display` impl only renders
+/// the error subset to keep the "Validation failed" message focused on
+/// what actually blocked generation.
 #[derive(Debug, Error)]
-#[error("Validation failed:\n{}", format_issues(.issues))]
+#[error("Validation failed:\n{}", format_errors(.issues))]
 pub struct ValidationError {
     pub issues: Vec<ValidationIssue>,
 }
@@ -117,9 +121,10 @@ impl ValidationError {
     }
 }
 
-fn format_issues(issues: &[ValidationIssue]) -> String {
+fn format_errors(issues: &[ValidationIssue]) -> String {
     issues
         .iter()
+        .filter(|i| i.severity == Severity::Error)
         .map(|i| format!("  [{}] {}", i.severity.as_str(), i.message))
         .collect::<Vec<_>>()
         .join("\n")
@@ -341,13 +346,13 @@ pub fn validate(
         }).collect(),
     });
 
-    let errors: Vec<ValidationIssue> = issues
-        .iter()
-        .filter(|i| i.severity == Severity::Error)
-        .cloned()
-        .collect();
-    if !errors.is_empty() {
-        return Err(ValidationError::new(errors));
+    let any_errors = issues.iter().any(|i| i.severity == Severity::Error);
+    if any_errors {
+        // Pass the full issues list (errors + warnings) so callers that
+        // do `Err(e) => e.issues` keep an accurate picture. Without this,
+        // a single masking error silently dropped every warning produced
+        // in the same run (issue #298).
+        return Err(ValidationError::new(issues));
     }
 
     Ok(issues)
@@ -447,6 +452,32 @@ mod tests {
         let lr = layout_with_machine();
         let result = validate(&lr, None, LayoutStyle::Bus);
         assert!(result.is_err(), "expected errors for a machine with no belts");
+    }
+
+    #[test]
+    fn validation_error_carries_warnings_alongside_errors() {
+        // Regression test for #298: when both errors and warnings exist,
+        // the Err path used to drop the warnings, hiding pre-existing
+        // issues from any caller that checked `e.issues.len()`.
+        let issues = vec![
+            ValidationIssue::new(Severity::Error, "pipe-isolation", "fluids merged"),
+            ValidationIssue::new(Severity::Warning, "input-rate-delivery", "slow input"),
+            ValidationIssue::new(Severity::Warning, "belt-flow-reachability", "stranded furnace"),
+        ];
+        let err = ValidationError::new(issues);
+        assert_eq!(err.issues.len(), 3, "all issues must survive on Err path");
+        assert_eq!(
+            err.issues.iter().filter(|i| i.severity == Severity::Error).count(),
+            1
+        );
+        assert_eq!(
+            err.issues.iter().filter(|i| i.severity == Severity::Warning).count(),
+            2
+        );
+        // Display should still focus on errors only.
+        let msg = err.to_string();
+        assert!(msg.contains("fluids merged"), "error message must surface");
+        assert!(!msg.contains("slow input"), "warnings shouldn't pollute error message");
     }
 
     #[test]
