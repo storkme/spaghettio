@@ -1397,7 +1397,10 @@ struct CacheEntry {
 /// Version history:
 ///   0 — legacy (binary v1 records with no encoder_version field).
 ///   1 — first explicitly-versioned records (binary format v2).
-pub const ENCODER_VERSION: u32 = 1;
+///   2 — perimeter-OUT sourcing rule now exempts source tiles (interior-IN
+///       neighbours and perimeter feeders); fix for #278 splitter-absorbed
+///       junction zones going UNSAT. SAT semantics change → invalidate v1.
+pub const ENCODER_VERSION: u32 = 2;
 
 /// Lazy-loaded read-side cache. First lookup (re)reads the on-disk JSONL,
 /// in-session writes append directly so cache hits work for repeats inside

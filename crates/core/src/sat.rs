@@ -1081,6 +1081,7 @@ impl CrossingEncoder {
         lx: u32,
         ly: u32,
         boundary_tiles: &mut FxHashSet<(u32, u32)>,
+        source_tiles: &FxHashSet<(u32, u32)>,
     ) {
         boundary_tiles.insert((lx, ly));
         let t = self.tiles[self.idx(lx, ly)];
@@ -1125,23 +1126,34 @@ impl CrossingEncoder {
             // directly upstream (T − dir_delta(d)) must itself be a
             // belt or UG-out outputting `d` toward T. UG-out boundaries
             // are exempt — their source is the paired UG-in elsewhere,
-            // not the adjacent surface tile.
-            let (dx, dy) = dir_delta(d);
-            let sx = lx as i32 - dx;
-            let sy = ly as i32 - dy;
-            if self.in_bounds(sx, sy) {
-                let s = self.tiles[self.idx(sx as u32, sy as u32)];
-                // T.is_ug_out OR (S.is_belt OR S.is_ug_out)
-                cnf.add(&[
-                    t.is_ug_out.positive(),
-                    s.is_belt.positive(),
-                    s.is_ug_out.positive(),
-                ]);
-                // T.is_ug_out OR S.out_dir[d]
-                cnf.add(&[t.is_ug_out.positive(), s.out_dir[d].positive()]);
-            } else {
-                // No upstream tile exists on-grid → T must be UG-out.
-                cnf.add(&[t.is_ug_out.positive()]);
+            // not the adjacent surface tile. Tiles already marked as
+            // source tiles (perimeter feeders or interior-IN neighbours
+            // like a splitter's output face) are *also* exempt: their
+            // items come from outside the SAT model, not from an in-zone
+            // upstream tile, so demanding upstream-feeds-T is wrong and
+            // would force `is_ug_out` whenever the upstream is forbidden
+            // (see issue #278: splitter output face neighbour also being
+            // a perimeter OUT — interior IN says "belt or ug_in", this
+            // rule says "ug_out only", and the contradiction was UNSAT).
+            let is_source = source_tiles.contains(&(lx, ly));
+            if !is_source {
+                let (dx, dy) = dir_delta(d);
+                let sx = lx as i32 - dx;
+                let sy = ly as i32 - dy;
+                if self.in_bounds(sx, sy) {
+                    let s = self.tiles[self.idx(sx as u32, sy as u32)];
+                    // T.is_ug_out OR (S.is_belt OR S.is_ug_out)
+                    cnf.add(&[
+                        t.is_ug_out.positive(),
+                        s.is_belt.positive(),
+                        s.is_ug_out.positive(),
+                    ]);
+                    // T.is_ug_out OR S.out_dir[d]
+                    cnf.add(&[t.is_ug_out.positive(), s.out_dir[d].positive()]);
+                } else {
+                    // No upstream tile exists on-grid → T must be UG-out.
+                    cnf.add(&[t.is_ug_out.positive()]);
+                }
             }
         }
 
@@ -1237,6 +1249,47 @@ impl CrossingEncoder {
         }
     }
 
+    /// Compute the set of tiles where flow originates from outside the
+    /// SAT-modeled region — i.e., tiles that are exempt from the "must be
+    /// fed by an in-zone neighbour" sourcing rules because their items
+    /// arrive from a perimeter feeder or an interior IN's adjacent
+    /// Permanent entity (a splitter's output face is the canonical case).
+    ///
+    /// Used in two places:
+    ///   1. `encode_perimeter_boundary` skips the upstream-must-feed
+    ///      clause for OUT boundaries that land on a source tile.
+    ///   2. The general belt-sourcing constraint (in `encode_boundaries`)
+    ///      skips its "needs an in-zone neighbour" rule for source tiles.
+    fn compute_source_tiles(&self, zone: &CrossingZone) -> FxHashSet<(u32, u32)> {
+        let mut out: FxHashSet<(u32, u32)> = FxHashSet::default();
+        for b in &zone.boundaries {
+            if !b.is_input {
+                continue;
+            }
+            let lx = b.x - zone.x;
+            let ly = b.y - zone.y;
+            if lx < 0 || ly < 0 {
+                continue;
+            }
+            let (lxu, lyu) = (lx as u32, ly as u32);
+            if lxu >= self.width || lyu >= self.height {
+                continue;
+            }
+            if is_interior_boundary(b, zone) {
+                let d = entity_dir_to_idx(b.direction);
+                let (dx, dy) = dir_delta(d);
+                let nx = lx + dx;
+                let ny = ly + dy;
+                if self.in_bounds(nx, ny) {
+                    out.insert((nx as u32, ny as u32));
+                }
+            } else {
+                out.insert((lxu, lyu));
+            }
+        }
+        out
+    }
+
     /// Apply item-bit constraints so the given tile carries the flow
     /// for `channel_id`. Replaces the old `fix_item_bits(item: &str)`
     /// lookup — SAT state is keyed on channel id, not on item string.
@@ -1270,6 +1323,7 @@ impl CrossingEncoder {
         lx: u32,
         ly: u32,
         boundary_tiles: &mut FxHashSet<(u32, u32)>,
+        source_tiles: &FxHashSet<(u32, u32)>,
     ) {
         if bs.len() == 2 {
             let (b1, b2) = (bs[0], bs[1]);
@@ -1287,7 +1341,7 @@ impl CrossingEncoder {
             if is_interior_boundary(b, zone) {
                 self.encode_interior_boundary(cnf, b, lx, ly, boundary_tiles);
             } else {
-                self.encode_perimeter_boundary(cnf, b, lx, ly, boundary_tiles);
+                self.encode_perimeter_boundary(cnf, b, lx, ly, boundary_tiles, source_tiles);
             }
         }
     }
@@ -1351,6 +1405,19 @@ impl CrossingEncoder {
         // Track which local tiles have boundary conditions.
         let mut boundary_tiles: FxHashSet<(u32, u32)> = FxHashSet::default();
 
+        // Pre-compute the set of "source tiles" — tiles where flow originates
+        // from outside the SAT-modeled region (a perimeter feeder or the
+        // FREE neighbour of an interior IN, e.g. a splitter's output face).
+        // These tiles are exempt from the general belt-sourcing constraint
+        // (they don't need an upstream neighbour to feed them inside the
+        // zone) and are also exempt from `encode_perimeter_boundary`'s
+        // upstream-must-feed sourcing rule when a perimeter OUT happens to
+        // land on them — without that exemption, the perimeter-OUT rule
+        // forces `is_ug_out` (because the only upstream is forced empty),
+        // which contradicts the interior IN's `is_belt OR is_ug_in` and
+        // produces UNSAT (see issue #278).
+        let source_tiles = self.compute_source_tiles(zone);
+
         // Group boundaries by tile. A single tile can legitimately carry
         // both an IN and an OUT entry when flow enters along one axis and
         // exits along another (corner turn on a zone corner tile — e.g.
@@ -1375,7 +1442,7 @@ impl CrossingEncoder {
         tile_keys.sort_unstable();
         for (lx, ly) in tile_keys {
             let bs = &by_tile[&(lx, ly)];
-            self.encode_tile_boundaries(cnf, zone, bs, lx, ly, &mut boundary_tiles);
+            self.encode_tile_boundaries(cnf, zone, bs, lx, ly, &mut boundary_tiles, &source_tiles);
         }
 
         // Non-boundary edge tiles: block output toward off-grid.
@@ -1428,32 +1495,7 @@ impl CrossingEncoder {
         //     from the Permanent feeder is a source.
         // UG-outs don't need a surface source — their underground pair
         // provides items — so the constraint only fires on `is_belt`.
-        let mut source_tiles: FxHashSet<(u32, u32)> = FxHashSet::default();
-        for b in &zone.boundaries {
-            if !b.is_input {
-                continue;
-            }
-            let lx = b.x - zone.x;
-            let ly = b.y - zone.y;
-            if lx < 0 || ly < 0 {
-                continue;
-            }
-            let (lxu, lyu) = (lx as u32, ly as u32);
-            if lxu >= self.width || lyu >= self.height {
-                continue;
-            }
-            if is_interior_boundary(b, zone) {
-                let d = entity_dir_to_idx(b.direction);
-                let (dx, dy) = dir_delta(d);
-                let nx = lx + dx;
-                let ny = ly + dy;
-                if self.in_bounds(nx, ny) {
-                    source_tiles.insert((nx as u32, ny as u32));
-                }
-            } else {
-                source_tiles.insert((lxu, lyu));
-            }
-        }
+        // `source_tiles` was pre-computed at the top of `encode_boundaries`.
         for y in 0..self.height {
             for x in 0..self.width {
                 if source_tiles.contains(&(x, y)) {
