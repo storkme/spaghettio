@@ -573,9 +573,65 @@ fn topology_boundaries(
             loop {
                 match physical_feeder_hit(chain_tile, placed_entities, item) {
                     None => {
-                        // (c) Chain head reached without crossing any
-                        // bbox edge. Defer to the spec-level
-                        // chain-head augmentation in `try_solve`.
+                        // (c) Chain head reached: no entity emits onto
+                        // `chain_tile`. If the outer-loop entity IS
+                        // the chain head AND its upstream tile lies
+                        // outside the bbox, emit a perimeter IN here:
+                        // items conceptually arrive at this tile from
+                        // outside the SAT zone (typical shape: an
+                        // external-input trunk lane that meets the
+                        // bbox at the layout's top edge with nothing
+                        // to stamp above y=0).
+                        //
+                        // Without this, a multi-lane trunk crossing
+                        // the bbox top edge produced matched OUTs
+                        // but only one IN — the per-spec chain-head
+                        // augmentation in `try_solve` synthesises an
+                        // IN per item, not per lane, so the second
+                        // lane's chain head was missed. The missed
+                        // lane's tiles got released without
+                        // replacement (issue #297).
+                        //
+                        // The bbox-contains gate keeps the new emit
+                        // narrow: chain heads at interior tiles
+                        // (orphan belt fragments etc.) still fall
+                        // through to the per-spec augmentation, so
+                        // we don't drown SAT in phantom-source
+                        // boundaries that the per-spec mechanism is
+                        // designed to handle.
+                        //
+                        // The outer-loop-equality check is the dedup:
+                        // multiple in-bbox entities on the same
+                        // chain all converge to the same chain_tile,
+                        // and we want exactly one PER IN per chain
+                        // head.
+                        if chain_tile == (tx, ty) {
+                            let (cdx, cdy) = dir_delta(e.direction);
+                            let upstream = (tx - cdx, ty - cdy);
+                            // Emit when upstream is outside the bbox
+                            // OR outside the layout's positive-coord
+                            // half-plane. The y<0 / x<0 check handles
+                            // the case where junction growth probes a
+                            // bbox that extends past the layout's top
+                            // or left edge (e.g. variant-north growing
+                            // y to -1): the upstream tile is technically
+                            // "inside the bbox" in coordinate terms, but
+                            // it's outside the layout entirely, so the
+                            // chain still has no real upstream feeder.
+                            let outside_layout = upstream.0 < 0 || upstream.1 < 0;
+                            if outside_layout || !bbox.contains(upstream.0, upstream.1) {
+                                boundaries.push(ZoneBoundary {
+                                    x: tx,
+                                    y: ty,
+                                    direction: e.direction,
+                                    item: item.to_string(),
+                                    is_input: true,
+                                    interior: false,
+                                    belt_tier: tier_name_for(&e.name),
+                                    channel_id: 0,
+                                });
+                            }
+                        }
                         break;
                     }
                     Some(hit) => {

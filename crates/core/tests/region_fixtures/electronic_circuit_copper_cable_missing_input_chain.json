@@ -1,7 +1,7 @@
 {
   "version": 1,
   "name": "electronic_circuit_copper_cable_missing_input_chain",
-  "notes": "BUG: topology_boundaries derivation chain-walk gap. The participating spec feeder:copper-cable:5:7 depends on a chain of feeder belts heading west along y=7: belt@(7,7) West -> belt@(6,7) West -> belt@(5,7) West. Under pre-fix geometry the equivalent was at y=7 with a belt at (3,7) receiving from (4,7) from (5,7). When the region bbox grows to include the immediate feeder (e.g. includes (5,7) but not (6,7)), the east-edge input boundary for copper-cable vanishes entirely instead of chaining one step further to (6,7). SAT then solves the zone with an output at (3,10) or equivalent but no registered copper-cable input -- producing belts that carry copper-cable from thin air. No validation fires because the walker only checks path continuity of EXISTING routed paths; a missing input boundary is invisible to it. Current cost=26, 10 entities. When the bug is fixed the solve will likely need more entities to route the full input chain -- max_cost=26 will ratchet and force a fixture update. See trace captured in the junction debugger with original pre-PR#161 coordinates at seed (3,8).",
+  "notes": "BUG: topology_boundaries derivation chain-walk gap. The participating spec feeder:copper-cable:5:7 depends on a chain of feeder belts heading west along y=7: belt@(7,7) West -> belt@(6,7) West -> belt@(5,7) West. Under pre-fix geometry the equivalent was at y=7 with a belt at (3,7) receiving from (4,7) from (5,7). When the region bbox grows to include the immediate feeder (e.g. includes (5,7) but not (6,7)), the east-edge input boundary for copper-cable vanishes entirely instead of chaining one step further to (6,7). SAT then solves the zone with an output at (3,10) or equivalent but no registered copper-cable input -- producing belts that carry copper-cable from thin air. No validation fires because the walker only checks path continuity of EXISTING routed paths; a missing input boundary is invisible to it. Original state: cost=26, 10 entities. After the topology-walk chain-head emit fix (issue #297, branch fix/297-trunk-perimeter-input-emit): cost=28; the SAT solution now sources copper-cable through a different path that no longer materialises an in-zone entity at (5,7). The chain is functionally re-connected (production-science-pack, the original repro for #297, validates clean), but the specific (5,7) tile is no longer load-bearing, so the required_entities check on (5,7) was relaxed. (6,7) is retained because it pins the east-edge input the original bug was deleting. Update the fixture again if a future fix routes copper-cable back through (5,7).",
   "source_url": "http://localhost:5173/?item=electronic-circuit&rate=10&machine=assembling-machine-1&in=iron-plate%2Ccopper-plate%2Csteel-plate%2Cstone%2Ccoal%2Cwater%2Ccrude-oil%2Ciron-ore%2Ccopper-ore",
   "seeds": [
     [
@@ -4878,16 +4878,11 @@
   ],
   "expected": {
     "mode": "solve",
-    "max_cost": 26,
+    "max_cost": 28,
     "optimal_cost": null,
     "required_entities": [
       {
         "x": 6,
-        "y": 7,
-        "carries": "copper-cable"
-      },
-      {
-        "x": 5,
         "y": 7,
         "carries": "copper-cable"
       }
