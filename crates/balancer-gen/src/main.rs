@@ -873,6 +873,12 @@ fn spike_synth_place(
         .and_then(|v| v.parse().ok())
         .unwrap_or(0);
     let bounds = (lib.width + slack, lib.height + slack);
+    // Optional solver budget override (seconds). Bumps the Python CP-SAT
+    // `max_time_in_seconds` and matches it against the Rust-side kill
+    // check below. Default leaves both at their hard-coded values.
+    let budget_override: Option<f64> = std::env::var("FUCKTORIO_MODE_D_BUDGET_S")
+        .ok()
+        .and_then(|v| v.parse().ok());
     let req = PlaceRequest::SynthPlace {
         bounds,
         n_inputs: shape.0,
@@ -880,7 +886,7 @@ fn spike_synth_place(
         n_splitters: topology.n_splitters,
         edges: edge_reqs,
         allow_dirs,
-        max_time_s: None,
+        max_time_s: budget_override,
     };
 
     let slack_suffix = if slack > 0 {
@@ -896,7 +902,8 @@ fn spike_synth_place(
         topology.edges.len()
     );
     let resp = run_solver(&req)?;
-    let budget = if label_suffix.is_empty() { 60.0 } else { 120.0 };
+    let default_budget = if label_suffix.is_empty() { 60.0 } else { 120.0 };
+    let budget = budget_override.unwrap_or(default_budget);
     if resp.elapsed_s > budget {
         return Err(format!("kill: solve time {:.1}s > {}s", resp.elapsed_s, budget).into());
     }

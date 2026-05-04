@@ -851,10 +851,14 @@ def solve_synth_place(req: dict) -> dict:
     # (chained UG) is vacuously satisfied because all chained UGs face south.
     # =========================================================================
 
-    # Constraint 1 (Mode D): same-edge belt into UG-input sideload.
-    # When a UG-input is active, only a south-facing belt from the cell
-    # directly above (the straight-behind cell) may feed it. Belts entering
-    # from any other direction would only load one lane of the UG.
+    # Constraint 1 (Mode D): cross-edge belt into UG-input sideload.
+    # When a UG-input is active, only a belt straight-behind it (same direction
+    # as the UG) may feed it. Belts arriving from any other direction would
+    # sideload the UG and only load one lane — even if those belts belong to
+    # different logical edges, they're physically the same belt landing on the
+    # UG-input cell, which is a real Factorio sideload regardless of edge
+    # ownership. The earlier same-edge-only formulation let the placer hide
+    # bad routing by attributing it to a different edge_idx.
     for (cx, cy, d_ug, L_ug, e_idx), ug_var in ug_arcs.items():
         for d_in in range(4):
             if d_in == d_ug:
@@ -863,9 +867,10 @@ def solve_synth_place(req: dict) -> dict:
             ncx, ncy = cx - n_dx, cy - n_dy
             if not (0 <= ncx < width and 0 <= ncy < height):
                 continue
-            arc_var = arcs.get((ncx, ncy, d_in, e_idx))
-            if arc_var is not None:
-                model.Add(arc_var + ug_var <= 1)
+            for e_other in range(len(edges)):
+                arc_var = arcs.get((ncx, ncy, d_in, e_other))
+                if arc_var is not None:
+                    model.Add(arc_var + ug_var <= 1)
 
     # Constraint 2 (Mode D): InputPort src-cell direction.
     # InputPort sources are at y=0; their column is a CP-SAT variable
@@ -1068,6 +1073,10 @@ def solve_synth_place_dirs(req: dict) -> dict:
     factorio_to_internal = {0: 0, 2: 1, 4: 2, 6: 3}
     raw_dirs = req.get("allow_dirs", [4])
     allowed_dirs_internal = sorted({factorio_to_internal[d] for d in raw_dirs})
+    # Per-call UG transit-tile reach. Mirrors `solve_synth_place`'s parameter
+    # added in the Phase 2C work; without it the UG arc loop hits a NameError.
+    # Default 4 = yellow-belt tier (range(1, ug_max_reach_param + 1) → L=1..4).
+    ug_max_reach_param: int = req.get("ug_max_reach", 4)
 
     if height < 3 or width < max(n_inputs, n_outputs, 2):
         return {"status": "INFEASIBLE", "elapsed_s": 0.0,
@@ -1383,6 +1392,88 @@ def solve_synth_place_dirs(req: dict) -> dict:
                 src_term = is_src_term_at(cx, cy, e_idx)
                 dst_term = is_dst_term_at(cx, cy, e_idx)
                 model.Add(outflow - inflow == src_term - dst_term)
+
+    # =========================================================================
+    # UG-correctness constraints (port from solve_synth_place's Phase 2C).
+    # These were originally added only to the south-only synth-place path; the
+    # _dirs path inherited none of them, so it freely produced sideloaded UGs
+    # and L=1 degenerate "underground" pairs that physically don't honor the
+    # 50/50 splitter invariant. Carry them over here so the multi-direction
+    # solver respects the same physical-realizability rules.
+    # =========================================================================
+
+    OPPOSITE = {0: 2, 1: 3, 2: 0, 3: 1}
+
+    # Constraint 1 (dirs): cross-edge belt into UG-input sideload.
+    # When a UG-input is active at (cx, cy) facing d_ug, only a belt straight
+    # behind it (same direction as d_ug) may feed it. Belts arriving from any
+    # other direction sideload the UG and load only one lane — even if the
+    # belt belongs to a different logical edge than the UG (cross-edge case
+    # that the same-edge formulation in solve_pure_routing missed).
+    for (cx, cy, d_ug, L_ug, e_idx), ug_var in ug_arcs.items():
+        for d_in in range(4):
+            if d_in == d_ug:
+                continue  # straight feed is the only allowed inflow direction
+            n_dx, n_dy = DIR_STEPS[d_in]
+            ncx, ncy = cx - n_dx, cy - n_dy
+            if not (0 <= ncx < width and 0 <= ncy < height):
+                continue
+            for e_other in range(len(edges)):
+                arc_var = arcs.get((ncx, ncy, d_in, e_other))
+                if arc_var is not None:
+                    model.Add(arc_var + ug_var <= 1)
+
+    # Constraint 1b (dirs): cross-edge UG-output emission into UG-input
+    # sideload. Symmetric to constraint 1, but the offending feeder is a
+    # UG-output rather than a belt arc. A UG-output at (ncx, ncy) facing
+    # direction d_emerge emits items in direction d_emerge — landing at
+    # (cx, cy) when (ncx, ncy) is the cell behind our UG-input. If
+    # d_emerge ≠ d_ug, the arriving flow sideloads our UG-input.
+    # Encode by enumerating the upstream UG-input that produces this output:
+    # an upstream UG with input at (ncx - L_up*dx_e, ncy - L_up*dy_e)
+    # facing d_emerge with reach L_up has its output at (ncx, ncy).
+    for (cx, cy, d_ug, L_ug, e_idx), ug_var in ug_arcs.items():
+        for d_emerge in range(4):
+            if d_emerge == d_ug:
+                continue  # chained UG with matching direction is the allowed case
+            n_dx, n_dy = DIR_STEPS[d_emerge]
+            # The cell directly behind our UG-input in direction d_emerge.
+            ncx, ncy = cx - n_dx, cy - n_dy
+            if not (0 <= ncx < width and 0 <= ncy < height):
+                continue
+            for L_up in range(1, ug_max_reach_param + 1):
+                ucx = ncx - L_up * n_dx
+                ucy = ncy - L_up * n_dy
+                if not (0 <= ucx < width and 0 <= ucy < height):
+                    continue
+                for e_other in range(len(edges)):
+                    upstream = ug_arcs.get((ucx, ucy, d_emerge, L_up, e_other))
+                    if upstream is not None:
+                        model.Add(upstream + ug_var <= 1)
+
+    # Constraint 2 (dirs): UG-output head-on collision prevention.
+    # The UG-output exits at (cx + L*dx, cy + L*dy); a belt in the cell ahead
+    # of the output, facing the opposite direction, would collide with the
+    # UG-output's flow.
+    for (cx, cy, d_ug, L_ug, e_idx), ug_var in ug_arcs.items():
+        dx, dy = DIR_STEPS[d_ug]
+        out_x, out_y = cx + L_ug * dx, cy + L_ug * dy
+        nx, ny = out_x + dx, out_y + dy
+        if not (0 <= nx < width and 0 <= ny < height):
+            continue
+        d_opposite = OPPOSITE[d_ug]
+        for e_other in range(len(edges)):
+            opp_arc = arcs.get((nx, ny, d_opposite, e_other))
+            if opp_arc is not None:
+                model.Add(opp_arc + ug_var <= 1)
+
+    # Constraint 3 (dirs): forbid L=1 "degenerate" UGs (input and output
+    # adjacent — no transit tile). These don't represent real Factorio UGs
+    # (functionally identical to two adjacent belts) but the placer was
+    # using them as cheap connectors to hide bad routing patterns.
+    for (cx, cy, d_ug, L_ug, e_idx), ug_var in ug_arcs.items():
+        if L_ug == 1:
+            model.Add(ug_var == 0)
 
     # Objective: minimize entity count.
     entity_terms = []

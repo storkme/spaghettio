@@ -24,6 +24,9 @@ target/
 external/*
 !external/README.md
 
+# Bench artifacts (overnight synth/place runs)
+bench-logs/
+
 # Playwright CLI / MCP artifacts
 .playwright-cli/
 web/.playwright-cli/
