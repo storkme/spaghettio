@@ -684,10 +684,44 @@ pub fn route_bus_ghost(
                 Some(y0)
             } else {
                 // First UG-S input at y0+1 (mouth at y0 merges F5 with
-                // the surface anchor). Slide forward if blocked.
+                // the surface anchor). Slide forward if blocked or if its
+                // mouth would land on a foreign tap row.
                 let cand: Vec<i32> = ((y0 + 1)..=(y1 - 1)).collect();
                 match pick_endpoint_y(&cand, -1, &existing_belts, &hard) {
                     Some(in_y) => {
+                        // When the UG-S slides past y0+1, the tiles between
+                        // the anchor at y0 and the UG-S mouth at (in_y-1)
+                        // are unowned — without filling them the chain
+                        // breaks and the surface anchor connects to nothing.
+                        // Fill with surface pipes (same fluid as the anchor;
+                        // adjacent columns are typically clear because the
+                        // mouth_clear heuristic only slides past *foreign-
+                        // tap* rows, where foreign trunks branch east via
+                        // perpendicular UGs with no surface fluid).
+                        for fill_y in (y0 + 1)..in_y {
+                            if is_blocked(fill_y, &existing_belts, &hard) {
+                                crate::trace::emit(crate::trace::TraceEvent::FluidTrunkBreak {
+                                    item: lane.item.clone(),
+                                    trunk_x: x,
+                                    y_start: y0,
+                                    y_end: y1,
+                                    reason: format!(
+                                        "anchor-to-UG-S bridge tile ({x},{fill_y}) blocked"
+                                    ),
+                                });
+                                continue;
+                            }
+                            entities.push(PlacedEntity {
+                                name: "pipe".to_string(),
+                                x,
+                                y: fill_y,
+                                carries: Some(lane.item.clone()),
+                                segment_id: trunk_seg_id.clone(),
+                                ..Default::default()
+                            });
+                            existing_belts.insert((x, fill_y));
+                            hard.insert((x, fill_y));
+                        }
                         entities.push(PlacedEntity {
                             name: "pipe-to-ground".to_string(),
                             x,

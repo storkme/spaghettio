@@ -1788,32 +1788,53 @@ pub fn fluid_dual_input_row(
 /// refineries. Each output fluid gets its own full-width trunk at a distinct
 /// y row so flanks and drop-UGs of adjacent fluids never share a tile.
 ///
-/// Staircase ordering (from the user's sketch in `misc/Untitled.png`):
+/// Output staircase ordering (from the user's sketch in `misc/Untitled.png`):
 /// - **West** (smallest dx, fluid_outputs[0]) → **lowest** (largest y)
 /// - **Middle** (middle dx, fluid_outputs[1]) → **highest** (smallest y,
 ///   adjacent to the port row)
 /// - **East** (largest dx, fluid_outputs[2]) → middle y
 ///
-/// For refinery ports at `dx = [0, 2, 4]`, y_offset = 0, and a single machine:
+/// Inputs use a vertically mirrored staircase: when ≥2 distinct fluids are
+/// consumed, each gets its own full-width trunk row above the machine plus a
+/// drop UG into the port row, same UG-pipe-UG / perpendicular-axis F5a
+/// isolation as the output side. With 1 fluid input the whole input side
+/// collapses to a single continuous strip (same as the non-staggered path).
+///
+/// For refinery output ports at `dx = [0, 2, 4]` and 1 fluid input
+/// (basic-oil-processing-style), y_offset = 0, a single machine:
 ///
 /// ```text
-///   y+0          : fluid input pipes (per-port, unchanged)
+///   y+0          : fluid input pipe strip (continuous)
 ///   y+1..y+5     : oil-refinery (mirror=true, dir=North)
-///   y+6          : port row — west UG-S/in, middle pipe, east UG-S/in
+///   y+6          : output port row — west UG-S/in, middle pipe, east UG-S/in
 ///   y+7 (middle) : middle L-flank · T-drop · R-flank  plus east drop UG at col_E
 ///   y+8 (east)   : east L-flank · T-drop · R-flank    plus west drop UG at col_W
 ///   y+9 (west)   : west L-flank · T-drop · R-flank
 /// ```
 ///
+/// For 2 fluid inputs at dx `[a, b]` (e.g. AOP: crude-oil dx=3, water dx=1),
+/// the input side grows by 4 extra rows. Same UG-pipe-UG / drop-UG-N pattern
+/// as `fluid_multi_input_row`, including the 1-tile gap row above the inner
+/// trunk that protects against adjacent bus-lane collisions:
+///
+/// ```text
+///   y+0           : outer trunk — UG-W · pipe · UG-E at col_b
+///   y+1           : outer drop UG-S at col_b (gap row otherwise)
+///   y+2           : inner trunk — UG-W · pipe · UG-E at col_a
+///   y+3           : inner drop UG-S at col_a
+///   y+4           : input port row — UG-N at col_a and col_b (surface-S into
+///                   the machine's north fluid ports)
+///   y+5..y+9      : oil-refinery
+///   y+10..y+13    : output port row + 3-trunk staircase as above
+/// ```
+///
 /// Perpendicular-axis PTG rule (F5a) keeps fluids isolated where a drop UG
-/// passes the flank column of a neighbouring trunk. Tunnel pairs:
+/// passes the flank column of a neighbouring trunk. Adjacent input ports
+/// (`port_dx` differing by exactly 1) would put the inner trunk's R-flank on
+/// the same tile as the outer drop UG, so the staircase asserts spacing ≥2.
 ///
-/// - West fluid: machine-side UG (col_W, y+6) dir=S ↔ drop UG (col_W, y+8) dir=N
-/// - East fluid: machine-side UG (col_E, y+6) dir=S ↔ drop UG (col_E, y+7) dir=N
-/// - Middle fluid: direct surface pipe from (col_M, y+6) to T-drop at (col_M, y+7)
-///
-/// Row height = `msz + 5` (3 extra rows for the staircase vs. the single-row
-/// output of the 1-fluid path).
+/// Row height = `msz + 5` for 1 fluid input, `msz + 9` for 2 distinct inputs
+/// (general formula: `msz + 5 + n_inputs + 2` for n ≥ 2 with the gap row).
 ///
 /// Currently requires `machine_count == 1`; the multi-machine case has a
 /// known collision (east R-flank of machine N overlaps west drop UG of
@@ -1848,39 +1869,132 @@ fn fluid_only_row_staggered_3output(
     let machine_seg = Some(format!("row:{recipe}:machine"));
 
     let mx = x_offset;
-    let input_y = y_offset;
-    let port_row_y = y_offset + 1 + msz;
-
-    // --- Input side (unchanged from the non-staggered path). ---
     let input_distinct: std::collections::BTreeSet<&str> =
         fluid_inputs.iter().map(|&(_, it)| it).collect();
-    if input_distinct.len() <= 1 {
+    let n_inputs = input_distinct.len() as i32;
+
+    // For 2+ distinct fluids we add a 1-tile gap above the inner trunk so the
+    // bus router has a clear column tile to bridge through when an outer
+    // fluid's bus lane is adjacent to an inner fluid's bus lane (same
+    // reasoning as `fluid_multi_input_row`'s gap=1 — bus lane adjacency
+    // can't be predicted at template-emission time, so we always pay the
+    // 1-tile cost).
+    //
+    // input_section_height counts: outer trunk + outer drop + gap row + inner
+    // trunk + inner drop + UG-out row = n + 2 + gap.
+    let gap: i32 = if n_inputs >= 2 { 1 } else { 0 };
+    let input_section_height: i32 = if n_inputs <= 1 { 1 } else { n_inputs + 2 + gap };
+    let machine_y = y_offset + input_section_height;
+    let port_row_y = machine_y + msz;
+
+    // --- Input side. ---
+    if n_inputs <= 1 {
+        // 1 distinct fluid (or 0): continuous pipe strip across the machine
+        // width. Same as the non-staggered single-fluid path.
         if let Some(&(_, item)) = fluid_inputs.first() {
             let seg = Some(format!("row:{recipe}:belt-in:{item}"));
             for dx in 0..msz {
                 entities.push(PlacedEntity {
                     name: "pipe".to_string(),
-                    x: mx + dx, y: input_y,
+                    x: mx + dx, y: y_offset,
                     carries: Some(item.to_string()),
                     segment_id: seg.clone(),
                     ..Default::default()
                 });
             }
             for &(dx, port_item) in fluid_inputs {
-                fluid_input_port_pipes.push((port_item.to_string(), mx + dx, input_y));
+                fluid_input_port_pipes.push((port_item.to_string(), mx + dx, y_offset));
             }
         }
     } else {
-        for &(dx, item) in fluid_inputs {
-            let seg = Some(format!("row:{recipe}:belt-in:{item}"));
+        // ≥2 distinct fluid inputs: vertically mirrored output staircase with
+        // the same gap-row protection as `fluid_multi_input_row`. Sort by
+        // port_dx ascending so fi=0 = smallest dx = innermost. Each fluid
+        // gets its own trunk row (UG-W · pipe · UG-E), a drop UG one row
+        // below the trunk, and a UG-out at the port row; the port row sits
+        // directly above the machine.
+        let mut by_dx: Vec<(i32, &str)> = fluid_inputs.to_vec();
+        by_dx.sort_by_key(|&(dx, _)| dx);
+        let input_port_y = machine_y - 1;
+        let n = n_inputs;
+
+        // Adjacent ports (dx delta == 1) would put the inner trunk's R-flank
+        // on the outer drop UG's tile. Refinery uses dx∈{1,3} (delta 2), so
+        // this is fine in practice; assert to flag any future caller that
+        // breaks the assumption.
+        for w in by_dx.windows(2) {
+            assert!(
+                (w[1].0 - w[0].0).abs() >= 2,
+                "fluid_only_row_staggered_3output multi-fluid input requires \
+                 port_dx values to differ by ≥2 (got {} and {})",
+                w[0].0, w[1].0,
+            );
+        }
+
+        for (fi, &(port_dx, item)) in by_dx.iter().enumerate() {
+            let fi = fi as i32;
+            // Outermost fluid (fi=n-1) anchors at y_offset+0; inner fluids
+            // shift down by `gap` so the outer fluid's drop UG lands in the
+            // empty gap row.
+            let trunk_y = y_offset + (n - 1 - fi) + if fi < n - 1 { gap } else { 0 };
+            let col_t = mx + port_dx;
+            let seg = Some(format!("row:{recipe}:fluid-in:{item}"));
+
+            // Trunk row: UG-W · pipe · UG-E (same shape as output trunk rows).
             entities.push(PlacedEntity {
-                name: "pipe".to_string(),
-                x: mx + dx, y: input_y,
+                name: "pipe-to-ground".to_string(),
+                x: col_t - 1, y: trunk_y,
+                direction: EntityDirection::West,
+                io_type: Some("output".to_string()),
                 carries: Some(item.to_string()),
-                segment_id: seg,
+                segment_id: seg.clone(),
                 ..Default::default()
             });
-            fluid_input_port_pipes.push((item.to_string(), mx + dx, input_y));
+            entities.push(PlacedEntity {
+                name: "pipe".to_string(),
+                x: col_t, y: trunk_y,
+                carries: Some(item.to_string()),
+                segment_id: seg.clone(),
+                ..Default::default()
+            });
+            entities.push(PlacedEntity {
+                name: "pipe-to-ground".to_string(),
+                x: col_t + 1, y: trunk_y,
+                direction: EntityDirection::East,
+                io_type: Some("input".to_string()),
+                carries: Some(item.to_string()),
+                segment_id: seg.clone(),
+                ..Default::default()
+            });
+
+            // Drop UG-S one row below the trunk row. Surface-N merges with
+            // T-drop above (same fluid). Tunnel goes south to the UG-out.
+            entities.push(PlacedEntity {
+                name: "pipe-to-ground".to_string(),
+                x: col_t, y: trunk_y + 1,
+                direction: EntityDirection::South,
+                io_type: Some("input".to_string()),
+                carries: Some(item.to_string()),
+                segment_id: seg.clone(),
+                ..Default::default()
+            });
+
+            // UG-out on port row, direction=North so surface-S merges with
+            // the machine's north fluid port at (col_t, machine_y).
+            entities.push(PlacedEntity {
+                name: "pipe-to-ground".to_string(),
+                x: col_t, y: input_port_y,
+                direction: EntityDirection::North,
+                io_type: Some("output".to_string()),
+                carries: Some(item.to_string()),
+                segment_id: seg.clone(),
+                ..Default::default()
+            });
+
+            // Tap point: the trunk's T-drop pipe. The bus router emits an
+            // east-facing UG at `(lane.x + 1, trunk_y)` to pair with the
+            // L-flank UG-W at `(col_t - 1, trunk_y)`.
+            fluid_input_port_pipes.push((item.to_string(), col_t, trunk_y));
         }
     }
 
@@ -1888,7 +2002,7 @@ fn fluid_only_row_staggered_3output(
     entities.push(PlacedEntity {
         name: machine_entity.to_string(),
         x: mx,
-        y: y_offset + 1,
+        y: machine_y,
         direction: EntityDirection::North,
         recipe: Some(recipe.to_string()),
         mirror: true,
@@ -2222,14 +2336,19 @@ pub fn fluid_only_row(
             }
         }
 
-        // Machine, mirrored so inputs face north, outputs face south
+        // Machine direction=NORTH. Mirror only matters for oil-refinery (it
+        // swaps input/output faces — `validate/fluids.rs::fluid_ports` lists
+        // OIL_MIRROR vs OIL). Chemical-plant ports are symmetric across the
+        // mirror axis, but we keep `mirror=false` to match the unmirrored
+        // chemical-plant geometry used elsewhere in the codebase.
+        let machine_mirror = machine_entity == "oil-refinery";
         entities.push(PlacedEntity {
             name: machine_entity.to_string(),
             x: mx,
             y: y_offset + 1,
             direction: EntityDirection::North,
             recipe: Some(recipe.to_string()),
-            mirror: true,
+            mirror: machine_mirror,
             segment_id: machine_seg.clone(),
             ..Default::default()
         });
@@ -3542,7 +3661,7 @@ mod tests {
 
     // advanced-oil-processing: 2 fluid inputs (water→dx=1, crude-oil→dx=3),
     // 3 fluid outputs (heavy-oil→dx=0, light-oil→dx=2, petroleum-gas→dx=4).
-    // Uses the staggered 3-trunk staircase output layout.
+    // Uses the staggered staircase on BOTH input and output sides.
     #[test]
     fn fluid_only_row_one_refinery_advanced() {
         let (entities, height, fluid_in, fluid_out) = fluid_only_row(
@@ -3555,78 +3674,120 @@ mod tests {
             &[(1, "water"), (3, "crude-oil")],
             &[(0, "heavy-oil"), (2, "light-oil"), (4, "petroleum-gas")],
         );
-        // Row height grows by 3 rows (msz+5 = 10) to accommodate the staircase.
-        assert_eq!(height, 10);
+        // Layout (n_inputs=2, gap=1):
+        //   y=0..4: input section (5 rows = n+2+gap)
+        //   y=5..9: machine (5×5)
+        //   y=10:   port row (output)
+        //   y=11..13: output staircase (middle, east, west)
+        // → height = 14 = msz + 5 + input_section(5) - 1 = ...
+        //   actually y_west = port_row_y + 3 = 13, height = 13 - 0 + 1 = 14.
+        assert_eq!(height, 14);
         assert_eq!(fluid_in.len(), 2);
         assert_eq!(fluid_out.len(), 3);
 
-        // Input pipes — unchanged from non-staggered path.
-        assert_eq!(fluid_in[0], ("water".to_string(), 1, 0));
-        assert_eq!(fluid_in[1], ("crude-oil".to_string(), 3, 0));
-        let water_pipe = assert_entity(&entities, 1, 0, "pipe");
-        assert_eq!(water_pipe.carries.as_deref(), Some("water"));
-        let crude_pipe = assert_entity(&entities, 3, 0, "pipe");
-        assert_eq!(crude_pipe.carries.as_deref(), Some("crude-oil"));
+        // --- Input staircase (mirrored vertically vs output) ---
+        // Outermost fluid (crude-oil at dx=3) anchors at y=0; water shifts down by 1+gap.
+        //
+        // Crude-oil trunk at y=0: UG-W at (2,0), pipe at (3,0), UG-E at (4,0).
+        let c_l = assert_entity(&entities, 2, 0, "pipe-to-ground");
+        assert_eq!(c_l.direction, EntityDirection::West);
+        assert_eq!(c_l.carries.as_deref(), Some("crude-oil"));
+        let c_t = assert_entity(&entities, 3, 0, "pipe");
+        assert_eq!(c_t.carries.as_deref(), Some("crude-oil"));
+        let c_r = assert_entity(&entities, 4, 0, "pipe-to-ground");
+        assert_eq!(c_r.direction, EntityDirection::East);
 
-        // Refinery at (0, 1).
-        let refinery = assert_entity(&entities, 0, 1, "oil-refinery");
+        // Crude-oil drop UG-S at (3, 1).
+        let c_drop = assert_entity(&entities, 3, 1, "pipe-to-ground");
+        assert_eq!(c_drop.direction, EntityDirection::South);
+        assert_eq!(c_drop.carries.as_deref(), Some("crude-oil"));
+
+        // Water trunk at y=2: UG-W at (0,2), pipe at (1,2), UG-E at (2,2).
+        let w_l_in = assert_entity(&entities, 0, 2, "pipe-to-ground");
+        assert_eq!(w_l_in.direction, EntityDirection::West);
+        assert_eq!(w_l_in.carries.as_deref(), Some("water"));
+        let w_t_in = assert_entity(&entities, 1, 2, "pipe");
+        assert_eq!(w_t_in.carries.as_deref(), Some("water"));
+        let w_r_in = assert_entity(&entities, 2, 2, "pipe-to-ground");
+        assert_eq!(w_r_in.direction, EntityDirection::East);
+
+        // Water drop UG-S at (1, 3) — sits in the gap row.
+        let w_drop_in = assert_entity(&entities, 1, 3, "pipe-to-ground");
+        assert_eq!(w_drop_in.direction, EntityDirection::South);
+
+        // UG-out row at y=4 (=machine_y-1): water at (1,4), crude-oil at (3,4),
+        // both UG-N facing south to merge with machine ports.
+        let w_out = assert_entity(&entities, 1, 4, "pipe-to-ground");
+        assert_eq!(w_out.direction, EntityDirection::North);
+        assert_eq!(w_out.carries.as_deref(), Some("water"));
+        let c_out = assert_entity(&entities, 3, 4, "pipe-to-ground");
+        assert_eq!(c_out.direction, EntityDirection::North);
+        assert_eq!(c_out.carries.as_deref(), Some("crude-oil"));
+
+        // Tap points report each input fluid's T-drop position.
+        assert_eq!(fluid_in[0], ("water".to_string(), 1, 2));
+        assert_eq!(fluid_in[1], ("crude-oil".to_string(), 3, 0));
+
+        // --- Refinery at (0, 5) ---
+        let refinery = assert_entity(&entities, 0, 5, "oil-refinery");
         assert_eq!(refinery.direction, EntityDirection::North);
         assert!(refinery.mirror);
         assert_eq!(refinery.recipe.as_deref(), Some("advanced-oil-processing"));
 
-        // Port row (y=6): west UG-S/input at (0,6), middle pipe at (2,6),
-        // east UG-S/input at (4,6). Each connects to its refinery output box.
-        let w_port = assert_entity(&entities, 0, 6, "pipe-to-ground");
+        // --- Output staircase ---
+        // Port row (y=10): west UG-S/input at (0,10), middle pipe at (2,10),
+        // east UG-S/input at (4,10). Each connects to its refinery output box.
+        let w_port = assert_entity(&entities, 0, 10, "pipe-to-ground");
         assert_eq!(w_port.direction, EntityDirection::South);
         assert_eq!(w_port.io_type.as_deref(), Some("input"));
         assert_eq!(w_port.carries.as_deref(), Some("heavy-oil"));
-        let m_port = assert_entity(&entities, 2, 6, "pipe");
+        let m_port = assert_entity(&entities, 2, 10, "pipe");
         assert_eq!(m_port.carries.as_deref(), Some("light-oil"));
-        let e_port = assert_entity(&entities, 4, 6, "pipe-to-ground");
+        let e_port = assert_entity(&entities, 4, 10, "pipe-to-ground");
         assert_eq!(e_port.direction, EntityDirection::South);
         assert_eq!(e_port.carries.as_deref(), Some("petroleum-gas"));
 
-        // Middle trunk at y=7: L-flank (1,7), T-drop (2,7), R-flank (3,7).
-        let m_l = assert_entity(&entities, 1, 7, "pipe-to-ground");
+        // Middle trunk at y=11: L-flank (1,11), T-drop (2,11), R-flank (3,11).
+        let m_l = assert_entity(&entities, 1, 11, "pipe-to-ground");
         assert_eq!(m_l.direction, EntityDirection::West);
         assert_eq!(m_l.io_type.as_deref(), Some("output"));
-        let m_t = assert_entity(&entities, 2, 7, "pipe");
+        let m_t = assert_entity(&entities, 2, 11, "pipe");
         assert_eq!(m_t.carries.as_deref(), Some("light-oil"));
-        let m_r = assert_entity(&entities, 3, 7, "pipe-to-ground");
+        let m_r = assert_entity(&entities, 3, 11, "pipe-to-ground");
         assert_eq!(m_r.direction, EntityDirection::East);
 
-        // East drop UG sits at (4,7) on the middle trunk row but on N-S axis
+        // East drop UG sits at (4,11) on the middle trunk row but on N-S axis
         // (F5a perpendicular to middle's E-W flanks — no fluid merge).
-        let e_drop = assert_entity(&entities, 4, 7, "pipe-to-ground");
+        let e_drop = assert_entity(&entities, 4, 11, "pipe-to-ground");
         assert_eq!(e_drop.direction, EntityDirection::North);
         assert_eq!(e_drop.carries.as_deref(), Some("petroleum-gas"));
 
-        // East trunk at y=8.
-        let e_l = assert_entity(&entities, 3, 8, "pipe-to-ground");
+        // East trunk at y=12.
+        let e_l = assert_entity(&entities, 3, 12, "pipe-to-ground");
         assert_eq!(e_l.direction, EntityDirection::West);
-        let e_t = assert_entity(&entities, 4, 8, "pipe");
+        let e_t = assert_entity(&entities, 4, 12, "pipe");
         assert_eq!(e_t.carries.as_deref(), Some("petroleum-gas"));
-        let e_r = assert_entity(&entities, 5, 8, "pipe-to-ground");
+        let e_r = assert_entity(&entities, 5, 12, "pipe-to-ground");
         assert_eq!(e_r.direction, EntityDirection::East);
 
-        // West drop UG at (0,8) — N-S axis, doesn't conflict with east trunk
-        // at y=8 (different columns).
-        let w_drop = assert_entity(&entities, 0, 8, "pipe-to-ground");
+        // West drop UG at (0,12) — N-S axis, doesn't conflict with east trunk
+        // at y=12 (different columns).
+        let w_drop = assert_entity(&entities, 0, 12, "pipe-to-ground");
         assert_eq!(w_drop.direction, EntityDirection::North);
         assert_eq!(w_drop.carries.as_deref(), Some("heavy-oil"));
 
-        // West trunk at y=9.
-        let w_l = assert_entity(&entities, -1, 9, "pipe-to-ground");
+        // West trunk at y=13.
+        let w_l = assert_entity(&entities, -1, 13, "pipe-to-ground");
         assert_eq!(w_l.direction, EntityDirection::West);
-        let w_t = assert_entity(&entities, 0, 9, "pipe");
+        let w_t = assert_entity(&entities, 0, 13, "pipe");
         assert_eq!(w_t.carries.as_deref(), Some("heavy-oil"));
-        let w_r = assert_entity(&entities, 1, 9, "pipe-to-ground");
+        let w_r = assert_entity(&entities, 1, 13, "pipe-to-ground");
         assert_eq!(w_r.direction, EntityDirection::East);
 
-        // Tap points report each fluid's T-drop pipe position.
-        assert_eq!(fluid_out[0], ("heavy-oil".to_string(), 0, 9));
-        assert_eq!(fluid_out[1], ("light-oil".to_string(), 2, 7));
-        assert_eq!(fluid_out[2], ("petroleum-gas".to_string(), 4, 8));
+        // Tap points report each output fluid's T-drop pipe position.
+        assert_eq!(fluid_out[0], ("heavy-oil".to_string(), 0, 13));
+        assert_eq!(fluid_out[1], ("light-oil".to_string(), 2, 11));
+        assert_eq!(fluid_out[2], ("petroleum-gas".to_string(), 4, 12));
 
         // No two entities share a tile (exclude machine anchor — 5×5 footprint
         // registered once at its origin).

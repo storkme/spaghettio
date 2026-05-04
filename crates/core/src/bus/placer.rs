@@ -373,6 +373,13 @@ fn row_kind(spec: &MachineSpec) -> RowKind {
         return RowKind::FluidMultiInput;
     }
 
+    // Small machines (<5×5) with 0 solid + exactly 1 fluid input (e.g. lubricant
+    // on chemical-plant). Reuses the continuous-pipe `fluid_only_row` template
+    // since a single fluid in/out doesn't need stacked-T isolation.
+    if solid_inputs == 0 && fluid_inputs == 1 && machine_size(&spec.entity) < 5 {
+        return RowKind::OilRefinery;
+    }
+
     let has_fluid_dual_solid = solid_inputs == 2 && fluid_inputs == 1;
     let has_fluid = fluid_inputs > 0 && solid_inputs > 0 && !has_fluid_dual_solid;
     let has_triple_solid = solid_inputs == 3 && fluid_inputs == 0;
@@ -462,31 +469,45 @@ pub(crate) fn build_one_row(
     let (row_ents, row_h, input_belt_ys, output_belt_y) = match &kind {
         RowKind::OilRefinery => {
             let msz = machine_size(&spec.entity);
-            // Oil-refinery (mirrored, direction=NORTH) has fixed port dx positions:
+            // Port dx assignment depends on the machine.
+            //
+            // Oil-refinery (5×5, mirrored, direction=NORTH):
             //   Input box 1 at dx=1, input box 2 at dx=3.
             //   Output box 3 at dx=0, output box 4 at dx=2, output box 5 at dx=4.
+            //   basic-oil-processing uses box 2 for crude-oil (dx=3) and box 3
+            //   for petroleum-gas (dx=0). advanced-oil-processing uses boxes
+            //   sequentially: inputs→[dx=1,dx=3], outputs→[dx=0,dx=2,dx=4].
             //
-            // basic-oil-processing uses fluidbox_index=2 for crude-oil (box 2, dx=3)
-            // and index=3 for petroleum-gas (box 3, dx=0).
-            // advanced-oil-processing uses boxes sequentially: inputs→[dx=1,dx=3],
-            // outputs→[dx=0,dx=2,dx=4].
-            //
-            // Assignment rules:
-            //   1 fluid input  → dx=3 (box 2)
-            //   2 fluid inputs → dx=1 (first), dx=3 (second)
-            //   1 fluid output → dx=0 (box 3)
-            //   2 fluid outputs→ dx=0 (first), dx=2 (second)
-            //   3 fluid outputs→ dx=0, dx=2, dx=4
-            let input_dxs: &[i32] = match fluid_inputs.len() {
-                0 => &[],
-                1 => &[3],
-                _ => &[1, 3],
-            };
-            let output_dxs: &[i32] = match fluid_outputs.len() {
-                0 => &[],
-                1 => &[0],
-                2 => &[0, 2],
-                _ => &[0, 2, 4],
+            // Chemical-plant (3×3, unmirrored, direction=NORTH; per
+            // `validate/fluids.rs::fluid_ports`):
+            //   Inputs at dx=0 and dx=2 (both on the north face).
+            //   Outputs at dx=0 and dx=2 (both on the south face).
+            //   Lubricant uses one input + one output, both at dx=0.
+            let (input_dxs, output_dxs): (&[i32], &[i32]) = if msz >= 5 {
+                let in_dxs: &[i32] = match fluid_inputs.len() {
+                    0 => &[],
+                    1 => &[3],
+                    _ => &[1, 3],
+                };
+                let out_dxs: &[i32] = match fluid_outputs.len() {
+                    0 => &[],
+                    1 => &[0],
+                    2 => &[0, 2],
+                    _ => &[0, 2, 4],
+                };
+                (in_dxs, out_dxs)
+            } else {
+                let in_dxs: &[i32] = match fluid_inputs.len() {
+                    0 => &[],
+                    1 => &[0],
+                    _ => &[0, 2],
+                };
+                let out_dxs: &[i32] = match fluid_outputs.len() {
+                    0 => &[],
+                    1 => &[0],
+                    _ => &[0, 2],
+                };
+                (in_dxs, out_dxs)
             };
             let in_port_assignments: Vec<(i32, &str)> = input_dxs
                 .iter()
