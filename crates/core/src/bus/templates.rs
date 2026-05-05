@@ -1268,6 +1268,265 @@ pub fn triple_input_row(
     (entities, row_height)
 }
 
+/// Row for a recipe with four solid inputs.
+///
+/// Stacks three input belts on the north side and one on the south side. The
+/// closest north belt (`y+2`) lives on the same row as a pair of stacked
+/// long-handed inserters at `mx+1`: belt segments go underground around the
+/// LHI tile, and the LHI on the belt row reaches two tiles north to pull
+/// from the topmost belt. The fourth input is delivered south-side via the
+/// same north-facing LHI pattern that `triple_input_row` uses.
+///
+/// ```text
+///   y+0  : input1 belt (continuous, east)            ← far north, picked by LHI on y+2
+///   y+1  : input2 belt (continuous, east)            ← mid,       picked by LHI on y+3
+///   y+2  : input3 belt (UG-in / [LHI-A] / UG-out per machine)
+///   y+3  : inserter row
+///            (mx+0): regular inserter for input3   (drops machine top)
+///            (mx+1): LHI for input2                (drops machine middle)
+///            (mx+2): regular inserter for input3   (drops machine top)
+///   y+4..y+6 : machine (msz=3)
+///   y+7  : output inserter (mx+1) + LHI for input4 facing North (mx+2)
+///   y+8  : output belt
+///   y+9  : input4 belt (continuous, east)            ← south side
+/// ```
+///
+/// Per-machine reach math (msz=3, machine at y+4..y+6):
+/// - LHI-A at `(mx+1, y+2)` facing south: picks `(mx+1, y+0)` = belt 1, drops
+///   `(mx+1, y+4)` = machine top middle.
+/// - LHI-B at `(mx+1, y+3)` facing south: picks `(mx+1, y+1)` = belt 2, drops
+///   `(mx+1, y+5)` = machine middle middle. Has to be a long-handed inserter
+///   because `(mx+1, y+2)` is LHI-A, not a belt.
+/// - Regular inserters at `(mx+0, y+3)` / `(mx+2, y+3)`: pick `(mx, y+2)` =
+///   belt 3 surface (UG-in / UG-out tile for input3), drop machine top.
+/// - South LHI at `(mx+2, y+7)` facing north: picks `(mx+2, y+9)` = belt 4,
+///   drops `(mx+2, y+5)` = machine middle right.
+///
+/// Per-machine col allocation: 5 inserters per machine (LHI-A + LHI-B at
+/// mx+1, regulars at mx+0 and mx+2, output inserter at mx+1, south LHI at
+/// mx+2). Drops cover machine top (3 tiles) + machine middle (2 tiles).
+///
+/// `lane_split` is currently ignored — the inserter row is too dense for
+/// the existing inline-bridge anchor patterns. Multi-machine rows still
+/// work; they just don't get a sideload bridge.
+///
+/// Returns `(entities, row_height)`.
+pub fn quad_input_row(
+    recipe: &str,
+    machine_entity: &str,
+    machine_size: u32,
+    machine_count: usize,
+    y_offset: i32,
+    x_offset: i32,
+    input_items: (&str, &str, &str, &str),
+    output_item: &str,
+    input_belts: (&str, &str, &str, &str),
+    output_belt: &str,
+    _lane_split: bool,
+    output_east: bool,
+) -> (Vec<PlacedEntity>, i32) {
+    use crate::bus::balancer::underground_for_belt;
+
+    let msz = machine_size as i32;
+    let pitch = msz;
+    // 3 north belts + inserter + msz machine + south inserter + output
+    // belt + south input belt = msz + 7.
+    let row_height = msz + 7;
+    let mut entities = Vec::new();
+
+    let (input1, input2, input3, input4) = input_items;
+    let (belt1, belt2, belt3, belt4) = input_belts;
+    let belt_in1_seg = Some(format!("row:{recipe}:belt-in:{input1}"));
+    let belt_in2_seg = Some(format!("row:{recipe}:belt-in:{input2}"));
+    let belt_in3_seg = Some(format!("row:{recipe}:belt-in:{input3}"));
+    let belt_in4_seg = Some(format!("row:{recipe}:belt-in:{input4}"));
+    let inserter_in1_seg = Some(format!("row:{recipe}:inserter-in:{input1}"));
+    let inserter_in2_seg = Some(format!("row:{recipe}:inserter-in:{input2}"));
+    let inserter_in3_seg = Some(format!("row:{recipe}:inserter-in:{input3}"));
+    let inserter_in4_seg = Some(format!("row:{recipe}:inserter-in:{input4}"));
+    let machine_seg = Some(format!("row:{recipe}:machine"));
+    let inserter_out_seg = Some(format!("row:{recipe}:inserter-out"));
+    let belt_out_seg = Some(format!("row:{recipe}:belt-out"));
+
+    // East-tail trims (last machine only). Belt 1 / 2 are picked at mx+1
+    // by long-handed inserters, so the tile at mx+2 is post-pickup orphan.
+    // Belt 3 has its UG-out at mx+2 and a regular inserter consumes it
+    // there; no trim. Belt 4 is picked at mx+2 by the south LHI; no trim.
+    // West-flow output: items end at mx+0, so trim 1 east tile.
+    let in1_tail = east_tail_skip(msz, 1);
+    let in2_tail = east_tail_skip(msz, 1);
+    let out_tail = if output_east { 0 } else { east_tail_skip(msz, 1) };
+
+    let mxs: Vec<i32> = (0..machine_count as i32).map(|i| x_offset + i * pitch).collect();
+    let last_mx = *mxs.last().expect("machine_count >= 1");
+    let ug_belt3 = underground_for_belt(belt3);
+    let machine_y = y_offset + 4;
+    let south_ins_y = machine_y + msz;
+    let out_belt_y = south_ins_y + 1;
+    let belt4_y = out_belt_y + 1;
+
+    for &mx in &mxs {
+        let is_last = mx == last_mx;
+        let in1_stop = if is_last { msz - in1_tail } else { msz };
+        let in2_stop = if is_last { msz - in2_tail } else { msz };
+        let out_stop = if is_last { msz - out_tail } else { msz };
+
+        // Belt 1 (top, y+0)
+        for dx in 0..in1_stop {
+            entities.push(PlacedEntity {
+                name: belt1.to_string(),
+                x: mx + dx,
+                y: y_offset,
+                direction: EntityDirection::East,
+                carries: Some(input1.to_string()),
+                segment_id: belt_in1_seg.clone(),
+                ..Default::default()
+            });
+        }
+
+        // Belt 2 (middle, y+1)
+        for dx in 0..in2_stop {
+            entities.push(PlacedEntity {
+                name: belt2.to_string(),
+                x: mx + dx,
+                y: y_offset + 1,
+                direction: EntityDirection::East,
+                carries: Some(input2.to_string()),
+                segment_id: belt_in2_seg.clone(),
+                ..Default::default()
+            });
+        }
+
+        // Belt 3 (close, y+2): UG-IN at mx+0, LHI-A occupies mx+1, UG-OUT
+        // at mx+2. The 1-tile UG span is well within transport-belt's
+        // 4-tile reach. Adjacent machines' UG-OUT abuts the next machine's
+        // UG-IN, so item flow continues across the row.
+        entities.push(PlacedEntity {
+            name: ug_belt3.to_string(),
+            x: mx,
+            y: y_offset + 2,
+            direction: EntityDirection::East,
+            io_type: Some("input".to_string()),
+            carries: Some(input3.to_string()),
+            segment_id: belt_in3_seg.clone(),
+            ..Default::default()
+        });
+        entities.push(PlacedEntity {
+            name: ug_belt3.to_string(),
+            x: mx + 2,
+            y: y_offset + 2,
+            direction: EntityDirection::East,
+            io_type: Some("output".to_string()),
+            carries: Some(input3.to_string()),
+            segment_id: belt_in3_seg.clone(),
+            ..Default::default()
+        });
+
+        // LHI-A at (mx+1, y+2) facing south: picks belt 1 at y+0,
+        // drops machine top y+4.
+        entities.push(PlacedEntity {
+            name: "long-handed-inserter".to_string(),
+            x: mx + 1,
+            y: y_offset + 2,
+            direction: EntityDirection::South,
+            carries: Some(input1.to_string()),
+            segment_id: inserter_in1_seg.clone(),
+            ..Default::default()
+        });
+
+        // LHI-B at (mx+1, y+3) facing south: picks belt 2 at y+1
+        // (reaching over LHI-A at y+2), drops machine middle y+5.
+        entities.push(PlacedEntity {
+            name: "long-handed-inserter".to_string(),
+            x: mx + 1,
+            y: y_offset + 3,
+            direction: EntityDirection::South,
+            carries: Some(input2.to_string()),
+            segment_id: inserter_in2_seg.clone(),
+            ..Default::default()
+        });
+
+        // Regular inserters at mx+0 and mx+2, y+3: pick belt 3 surface
+        // tile at y+2 (UG-IN at mx+0, UG-OUT at mx+2 — both expose
+        // surface for inserter pickup), drop machine top y+4.
+        for &dx in &[0i32, 2] {
+            entities.push(PlacedEntity {
+                name: "inserter".to_string(),
+                x: mx + dx,
+                y: y_offset + 3,
+                direction: EntityDirection::South,
+                carries: Some(input3.to_string()),
+                segment_id: inserter_in3_seg.clone(),
+                ..Default::default()
+            });
+        }
+
+        // Machine
+        entities.push(PlacedEntity {
+            name: machine_entity.to_string(),
+            x: mx,
+            y: machine_y,
+            direction: EntityDirection::North,
+            recipe: Some(recipe.to_string()),
+            segment_id: machine_seg.clone(),
+            ..Default::default()
+        });
+
+        // Output inserter at (mx+1, y+7) facing south: picks machine
+        // bottom (mx+1, y+6), drops output belt (mx+1, y+8).
+        entities.push(PlacedEntity {
+            name: "inserter".to_string(),
+            x: mx + 1,
+            y: south_ins_y,
+            direction: EntityDirection::South,
+            carries: Some(output_item.to_string()),
+            segment_id: inserter_out_seg.clone(),
+            ..Default::default()
+        });
+
+        // South LHI at (mx+2, y+7) facing north: picks belt 4 at y+9,
+        // drops machine middle (mx+2, y+5).
+        entities.push(PlacedEntity {
+            name: "long-handed-inserter".to_string(),
+            x: mx + 2,
+            y: south_ins_y,
+            direction: EntityDirection::North,
+            carries: Some(input4.to_string()),
+            segment_id: inserter_in4_seg.clone(),
+            ..Default::default()
+        });
+
+        // Output belt
+        let out_dir = output_dir(output_east);
+        for dx in 0..out_stop {
+            entities.push(PlacedEntity {
+                name: output_belt.to_string(),
+                x: mx + dx,
+                y: out_belt_y,
+                direction: out_dir,
+                carries: Some(output_item.to_string()),
+                segment_id: belt_out_seg.clone(),
+                ..Default::default()
+            });
+        }
+
+        // Belt 4 (south input)
+        for dx in 0..msz {
+            entities.push(PlacedEntity {
+                name: belt4.to_string(),
+                x: mx + dx,
+                y: belt4_y,
+                direction: EntityDirection::East,
+                carries: Some(input4.to_string()),
+                segment_id: belt_in4_seg.clone(),
+                ..Default::default()
+            });
+        }
+    }
+
+    (entities, row_height)
+}
+
 /// Row for a recipe with 1 solid input + 1 fluid input.
 ///
 /// For chemical-plant, uses the simple single-fluid pattern: a continuous
@@ -3152,6 +3411,151 @@ mod tests {
             let e = assert_entity(&entities, dx, 8, "transport-belt");
             assert_eq!(e.carries.as_deref(), Some("iron-plate"));
         }
+    }
+
+    // ---- quad_input_row ----
+
+    #[test]
+    fn quad_input_row_basic() {
+        // 1 machine, msz=3, west-flow output. Items 1..4 placeholder names.
+        let (entities, height) = quad_input_row(
+            "flying-robot-frame",
+            "assembling-machine-3",
+            3,
+            1,
+            0, // y_offset
+            0, // x_offset
+            ("input1", "input2", "input3", "input4"),
+            "flying-robot-frame",
+            ("transport-belt", "transport-belt", "transport-belt", "transport-belt"),
+            "transport-belt",
+            false, // lane_split
+            false, // output_east → west-flow
+        );
+        assert_eq!(height, 10);
+
+        // Belt 1 at y=0: continuous x=0..1 (LHI-A picks at mx+1, x=2 trimmed).
+        for dx in 0..2_i32 {
+            let e = assert_entity(&entities, dx, 0, "transport-belt");
+            assert_eq!(e.direction, EntityDirection::East);
+            assert_eq!(e.carries.as_deref(), Some("input1"));
+        }
+        assert!(entities.iter().find(|e| e.x == 2 && e.y == 0).is_none(),
+            "x=2,y=0 should be trimmed (east-tail)");
+
+        // Belt 2 at y=1: continuous x=0..1 (LHI-B picks at mx+1, x=2 trimmed).
+        for dx in 0..2_i32 {
+            let e = assert_entity(&entities, dx, 1, "transport-belt");
+            assert_eq!(e.carries.as_deref(), Some("input2"));
+        }
+        assert!(entities.iter().find(|e| e.x == 2 && e.y == 1).is_none());
+
+        // Belt 3 at y=2: UG-IN at x=0, LHI-A at x=1 (sits in gap), UG-OUT at x=2.
+        let ug_in = assert_entity(&entities, 0, 2, "underground-belt");
+        assert_eq!(ug_in.direction, EntityDirection::East);
+        assert_eq!(ug_in.io_type.as_deref(), Some("input"));
+        assert_eq!(ug_in.carries.as_deref(), Some("input3"));
+        let ug_out = assert_entity(&entities, 2, 2, "underground-belt");
+        assert_eq!(ug_out.direction, EntityDirection::East);
+        assert_eq!(ug_out.io_type.as_deref(), Some("output"));
+
+        // LHI-A at (1, 2) facing south, carrying input1.
+        let lha = assert_entity(&entities, 1, 2, "long-handed-inserter");
+        assert_eq!(lha.direction, EntityDirection::South);
+        assert_eq!(lha.carries.as_deref(), Some("input1"));
+
+        // Inserter row y=3: LHI-B at x=1, regulars at x=0 and x=2.
+        let lhb = assert_entity(&entities, 1, 3, "long-handed-inserter");
+        assert_eq!(lhb.direction, EntityDirection::South);
+        assert_eq!(lhb.carries.as_deref(), Some("input2"));
+        for &dx in &[0i32, 2] {
+            let r = assert_entity(&entities, dx, 3, "inserter");
+            assert_eq!(r.direction, EntityDirection::South);
+            assert_eq!(r.carries.as_deref(), Some("input3"));
+        }
+
+        // Machine at (0, 4)
+        let m = assert_entity(&entities, 0, 4, "assembling-machine-3");
+        assert_eq!(m.direction, EntityDirection::North);
+        assert_eq!(m.recipe.as_deref(), Some("flying-robot-frame"));
+
+        // South inserter row y=7: output inserter at x=1, south LHI at x=2.
+        let oi = assert_entity(&entities, 1, 7, "inserter");
+        assert_eq!(oi.direction, EntityDirection::South);
+        assert_eq!(oi.carries.as_deref(), Some("flying-robot-frame"));
+        let south_lh = assert_entity(&entities, 2, 7, "long-handed-inserter");
+        assert_eq!(south_lh.direction, EntityDirection::North);
+        assert_eq!(south_lh.carries.as_deref(), Some("input4"));
+
+        // Output belt at y=8: west-flow, x=0,1 (x=2 trimmed).
+        for dx in 0..2_i32 {
+            let b = assert_entity(&entities, dx, 8, "transport-belt");
+            assert_eq!(b.direction, EntityDirection::West);
+        }
+        assert!(entities.iter().find(|e| e.x == 2 && e.y == 8).is_none());
+
+        // Belt 4 (south input) at y=9: continuous x=0..2.
+        for dx in 0..3_i32 {
+            let b = assert_entity(&entities, dx, 9, "transport-belt");
+            assert_eq!(b.direction, EntityDirection::East);
+            assert_eq!(b.carries.as_deref(), Some("input4"));
+        }
+    }
+
+    #[test]
+    fn quad_input_row_two_machines_belt3_uses_chain_of_ugs() {
+        // 2 machines: belt 3 should be a chain UG-IN, [LHI-A], UG-OUT,
+        // UG-IN (next machine), [LHI-A], UG-OUT — UG-OUT of m1 abuts UG-IN
+        // of m2 at adjacent tiles.
+        let (entities, _) = quad_input_row(
+            "flying-robot-frame",
+            "assembling-machine-3",
+            3,
+            2, // 2 machines
+            0,
+            0,
+            ("input1", "input2", "input3", "input4"),
+            "flying-robot-frame",
+            ("transport-belt", "transport-belt", "transport-belt", "transport-belt"),
+            "transport-belt",
+            false,
+            false,
+        );
+
+        // m1: UG-IN @ (0,2), LHI-A @ (1,2), UG-OUT @ (2,2).
+        // m2: UG-IN @ (3,2), LHI-A @ (4,2), UG-OUT @ (5,2).
+        for &(x, kind, io) in &[
+            (0, "underground-belt", "input"),
+            (2, "underground-belt", "output"),
+            (3, "underground-belt", "input"),
+            (5, "underground-belt", "output"),
+        ] {
+            let e = assert_entity(&entities, x, 2, kind);
+            assert_eq!(e.io_type.as_deref(), Some(io),
+                "io_type at ({x},2) should be {io}");
+        }
+        for &x in &[1i32, 4] {
+            let lh = assert_entity(&entities, x, 2, "long-handed-inserter");
+            assert_eq!(lh.direction, EntityDirection::South);
+            assert_eq!(lh.carries.as_deref(), Some("input1"));
+        }
+        // UG-OUT of m1 at (2,2) and UG-IN of m2 at (3,2) are adjacent
+        // tiles — surface flow continues across the seam.
+    }
+
+    #[test]
+    fn quad_input_row_height_matches_row_kind() {
+        let (_, h) = quad_input_row(
+            "flying-robot-frame",
+            "assembling-machine-3",
+            3, 1, 0, 0,
+            ("a", "b", "c", "d"),
+            "flying-robot-frame",
+            ("transport-belt", "transport-belt", "transport-belt", "transport-belt"),
+            "transport-belt",
+            false, false,
+        );
+        assert_eq!(h, crate::bus::placer::RowKind::QuadInput.row_height());
     }
 
     // ---- fluid_input_row ----

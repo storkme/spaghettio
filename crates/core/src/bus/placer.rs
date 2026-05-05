@@ -331,6 +331,12 @@ pub enum RowKind {
     FluidInput,
     /// Three solid inputs — 9-tile high row.
     TripleInput,
+    /// Four solid inputs — 10-tile high row. Three input belts on the
+    /// north side (top two regular, third with UG gaps so a long-handed
+    /// inserter can sit on the belt row and reach two tiles further north),
+    /// fourth input on the south side via a north-facing long-handed
+    /// inserter (TripleInput-style).
+    QuadInput,
     /// Oil refinery (fluid-only row).
     OilRefinery,
     /// 2+ distinct fluid inputs on a small (<5×5) machine, no solid input.
@@ -349,6 +355,10 @@ impl RowKind {
             RowKind::FluidDualInput => 9,
             RowKind::FluidInput => 9,
             RowKind::TripleInput => 9,
+            // Three north belts (y+0..y+2) + inserter row (y+3) +
+            // 3-row machine (y+4..y+6) + south inserter (y+7) +
+            // output belt (y+8) + south input belt (y+9) = 10.
+            RowKind::QuadInput => 10,
             RowKind::OilRefinery => 7,
             // For 2 fluids + msz=3 + output (inserter+belt OR pipe row):
             // 2 trunk rows + 1 drop ext + 1 UG-out + 3 machine + 2 output = 9
@@ -383,11 +393,14 @@ fn row_kind(spec: &MachineSpec) -> RowKind {
     let has_fluid_dual_solid = solid_inputs == 2 && fluid_inputs == 1;
     let has_fluid = fluid_inputs > 0 && solid_inputs > 0 && !has_fluid_dual_solid;
     let has_triple_solid = solid_inputs == 3 && fluid_inputs == 0;
+    let has_quad_solid = solid_inputs == 4 && fluid_inputs == 0;
 
     if has_fluid_dual_solid {
         RowKind::FluidDualInput
     } else if has_fluid {
         RowKind::FluidInput
+    } else if has_quad_solid {
+        RowKind::QuadInput
     } else if has_triple_solid {
         RowKind::TripleInput
     } else if solid_inputs <= 1 {
@@ -659,6 +672,42 @@ pub(crate) fn build_one_row(
             );
             let input_ys = vec![y_cursor, y_cursor + 1, y_cursor + 3 + msz as i32 + 2];
             let out_y = y_cursor + 3 + msz as i32 + 1;
+            (ents, rh, input_ys, out_y)
+        }
+        RowKind::QuadInput => {
+            let item0 = solid_inputs.first().map(|f| f.item.as_str()).unwrap_or("");
+            let item1 = solid_inputs.get(1).map(|f| f.item.as_str()).unwrap_or("");
+            let item2 = solid_inputs.get(2).map(|f| f.item.as_str()).unwrap_or("");
+            let item3 = solid_inputs.get(3).map(|f| f.item.as_str()).unwrap_or("");
+            let in_belt1 = row_input_belt(max_belt_tier);
+            let in_belt2 = row_input_belt(max_belt_tier);
+            let in_belt3 = row_input_belt(max_belt_tier);
+            let in_belt4 = row_input_belt(max_belt_tier);
+            let msz = machine_size(&spec.entity);
+            let (ents, rh) = templates::quad_input_row(
+                &spec.recipe,
+                &spec.entity,
+                msz,
+                count,
+                y_cursor,
+                bus_width,
+                (item0, item1, item2, item3),
+                output_item,
+                (in_belt1, in_belt2, in_belt3, in_belt4),
+                out_belt,
+                lane_split,
+                output_east,
+            );
+            // input_belt_y[i] is where lane planner taps off lane.item
+            // matching solid_inputs[i]. Layout (msz=3): belt 1 at y+0,
+            // belt 2 at y+1, belt 3 at y+2, belt 4 (south) at y+9.
+            let input_ys = vec![
+                y_cursor,
+                y_cursor + 1,
+                y_cursor + 2,
+                y_cursor + 4 + msz as i32 + 2,
+            ];
+            let out_y = y_cursor + 4 + msz as i32 + 1;
             (ents, rh, input_ys, out_y)
         }
         RowKind::FluidMultiInput => {
