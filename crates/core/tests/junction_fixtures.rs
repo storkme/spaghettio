@@ -26,12 +26,12 @@
 //!    &in=iron-ore,copper-ore&belt=transport-belt
 //!
 //! To re-capture: run `fixture_source_ec_15s_am1_yellow_from_ore` in
-//! `e2e.rs` with `FUCKTORIO_DUMP_SNAPSHOTS=1`, then extract the
+//! `e2e.rs` with `SPAGHETTIO_DUMP_SNAPSHOTS=1`, then extract the
 //! `SatInvocation` events at the target seeds.
 
-use fucktorio_core::bus::junction_cost::solution_cost;
-use fucktorio_core::models::EntityDirection;
-use fucktorio_core::sat::{solve_crossing_zone_with_cost_cap, CrossingZone, ZoneBoundary};
+use spaghettio_core::bus::junction_cost::solution_cost;
+use spaghettio_core::models::EntityDirection;
+use spaghettio_core::sat::{solve_crossing_zone_with_cost_cap, CrossingZone, ZoneBoundary};
 
 // ---------------------------------------------------------------------------
 // Helpers

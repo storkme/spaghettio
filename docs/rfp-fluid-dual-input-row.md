@@ -373,7 +373,7 @@ revisit (most likely Option A as the consolation).
    Current behavior: 30s timeout. If after the new template the
    test still times out, the geometric blocker wasn't actually #68
    — it's something else (likely [#136 missing balancer
-   templates](https://github.com/storkme/fucktorio/issues/136) or a
+   templates](https://github.com/storkme/spaghettio/issues/136) or a
    junction-solver capacity wall). Conclusion: this RFP is not the
    bottleneck; close it without claiming progress, do not pivot to
    Option A.
@@ -479,7 +479,7 @@ revisit (most likely Option A as the consolation).
 - **`tier4_advanced_circuit_from_ore_am2` un-ignoring** — the
   fluid-row fix is necessary but **not sufficient** for that test
   to go green; it also needs balancer template work
-  ([#136](https://github.com/storkme/fucktorio/issues/136)). The
+  ([#136](https://github.com/storkme/spaghettio/issues/136)). The
   un-ignore is gated on both RFPs landing.
 - **Updating CLAUDE.md tier-ladder language** beyond a one-line
   cross-reference to this RFP — the ladder reflects the *current*
@@ -502,7 +502,7 @@ Per the [verification protocol in
    — confirm the fluid header runs continuously above the solid
    belts, both inserters reach their machine, and the PTG pair
    isolates the fluid network from any neighbouring fluid.
-4. **Snapshot inspection** with `FUCKTORIO_DUMP_SNAPSHOTS=1` — at
+4. **Snapshot inspection** with `SPAGHETTIO_DUMP_SNAPSHOTS=1` — at
    the new template's `y+1` and `y+4` rows, confirm the PTG pair
    exists per machine and the items at `y+2 / y+3` are
    transport-belts carrying the expected solid items. Check

@@ -1,6 +1,6 @@
 //! Inspect a region fixture: replay and print the resulting entities.
 
-use fucktorio_core::fixture::{replay_region_fixture, RegionFixture};
+use spaghettio_core::fixture::{replay_region_fixture, RegionFixture};
 
 fn main() {
     let path = std::env::args()

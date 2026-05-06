@@ -4,15 +4,15 @@
 //!    in=coal,water,crude-oil,iron-ore,copper-ore&belt=transport-belt
 //!
 //! Run with:
-//!   FUCKTORIO_DUMP_REGION_FIXTURE=/tmp/rfx \
+//!   SPAGHETTIO_DUMP_REGION_FIXTURE=/tmp/rfx \
 //!     cargo run --manifest-path crates/core/Cargo.toml \
 //!     --example capture_ac_am3_ore --release
 //!
 //! Prints the cluster seeds the region solver encounters + writes one
-//! fixture per cluster to `$FUCKTORIO_DUMP_REGION_FIXTURE` (when set).
+//! fixture per cluster to `$SPAGHETTIO_DUMP_REGION_FIXTURE` (when set).
 
-use fucktorio_core::bus::layout::{build_bus_layout, LayoutOptions};
-use fucktorio_core::solver;
+use spaghettio_core::bus::layout::{build_bus_layout, LayoutOptions};
+use spaghettio_core::solver;
 use rustc_hash::FxHashSet;
 
 fn main() {

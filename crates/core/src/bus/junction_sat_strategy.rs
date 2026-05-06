@@ -32,7 +32,7 @@ use crate::trace::{self, BoundarySnapshot, ExternalFeederSnapshot, SatProposedEn
 
 /// Read the effective cost-descent budget from the environment.
 ///
-/// `FUCKTORIO_SAT_DESCENT_BUDGET_MS` overrides the per-strategy default.
+/// `SPAGHETTIO_SAT_DESCENT_BUDGET_MS` overrides the per-strategy default.
 /// Intended for test runs: the cache handles known-UNSAT/timeout zones, so
 /// new SAT solves are rare and the descent loop can be kept short.  Web app
 /// and production paths leave this unset and use the strategy's own default.
@@ -43,7 +43,7 @@ fn env_descent_budget_ms() -> Option<u32> {
     use std::sync::OnceLock;
     static CACHED: OnceLock<Option<u32>> = OnceLock::new();
     *CACHED.get_or_init(|| {
-        std::env::var("FUCKTORIO_SAT_DESCENT_BUDGET_MS")
+        std::env::var("SPAGHETTIO_SAT_DESCENT_BUDGET_MS")
             .ok()
             .and_then(|v| v.parse::<u32>().ok())
     })
@@ -1092,8 +1092,8 @@ impl JunctionStrategy for SatStrategy {
         // Try the solution cache first. On a hit, skip SAT + cost-descent
         // entirely and reuse the previously-cached entities. WASM uses the
         // pre-baked cache embedded at compile time; native loads from
-        // `~/.cache/fucktorio/sat-zones.bin`. Both honour
-        // `FUCKTORIO_USE_ZONE_CACHE=0` to disable on native.
+        // `~/.cache/spaghettio/sat-zones.bin`. Both honour
+        // `SPAGHETTIO_USE_ZONE_CACHE=0` to disable on native.
         //
         // `Unsat` and `Timeout` hits also skip SAT — they tell us this
         // strategy rung won't produce a solution, so we fall through to None
@@ -1204,7 +1204,7 @@ impl JunctionStrategy for SatStrategy {
         }
 
         // Effective cost-descent budget: env override wins over strategy default.
-        // `FUCKTORIO_SAT_DESCENT_BUDGET_MS` lets test runs use a shorter
+        // `SPAGHETTIO_SAT_DESCENT_BUDGET_MS` lets test runs use a shorter
         // budget (e.g. 20ms) since the cache handles known-UNSAT/timeout zones.
         // Web app and production binaries leave this unset.
         let effective_budget_ms = env_descent_budget_ms()

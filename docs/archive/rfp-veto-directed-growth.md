@@ -23,7 +23,7 @@ four more pending crossings in neighbouring clusters constraining the
 context (7 crossings total in a ~10×6 tile window).
 
 Observed runtime signature (from
-`FUCKTORIO_DUMP_WALKER_VETO=1 cargo test --manifest-path crates/core/Cargo.toml --test region_fixtures -- --nocapture`):
+`SPAGHETTIO_DUMP_WALKER_VETO=1 cargo test --manifest-path crates/core/Cargo.toml --test region_fixtures -- --nocapture`):
 
 - **28 walker vetoes** across 5 growth iterations (4 / 17 / 3 / 3 / 1).
 - Every SAT strategy (`sat-surface`, `sat-1ug`, `sat-2ug`, `sat-full`)

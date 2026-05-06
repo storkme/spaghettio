@@ -12,7 +12,7 @@ set -euo pipefail
 #      aware branch, run pi, mark the result.
 # Graceful SIGTERM between iterations.
 
-REPO="${REPO:-storkme/fucktorio}"
+REPO="${REPO:-storkme/spaghettio}"
 WORKSPACE="/tmp/workspace"
 MEM_DIR="/tmp/agent-memory"
 MEM_BRANCH="agent-memory/${AGENT_NAME}"

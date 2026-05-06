@@ -66,7 +66,7 @@ Per [`CLAUDE.md`'s verification protocol](../CLAUDE.md#verification-protocol-for
 1. **Full e2e suite stays green.** All 377 currently-passing tests must still pass.
 2. **New active test**: un-ignore or add `tier3_heavy_oil_cracking` or `tier3_advanced_oil_processing` and assert zero validation errors. This is the primary regression signal for this RFP.
 3. **Browser eyeball**: load `?item=heavy-oil-cracking&rate=5` and confirm the two input fluid trunks (water, heavy-oil) are visibly disjoint networks, each with its own column and T-drop into the machine.
-4. **Snapshot decoder**: `FUCKTORIO_DUMP_SNAPSHOTS=1` on the new test, decode via `docs/layout-snapshot-debugger.md`. Grep the entity list for adjacent pipes with different `carries` values — should be zero hits.
+4. **Snapshot decoder**: `SPAGHETTIO_DUMP_SNAPSHOTS=1` on the new test, decode via `docs/layout-snapshot-debugger.md`. Grep the entity list for adjacent pipes with different `carries` values — should be zero hits.
 5. **Fluid validation unit tests** in `crates/core/src/validate/fluids.rs` must stay green (they test validator correctness, not geometry).
 6. **Clippy + WASM build** both pass.
 

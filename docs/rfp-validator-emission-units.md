@@ -78,7 +78,7 @@ Three failure modes follow:
    no shared convention for "what is the natural unit of an issue",
    and validator authors guess.
 
-Issue [#208](https://github.com/storkme/fucktorio/issues/208) tracks
+Issue [#208](https://github.com/storkme/spaghettio/issues/208) tracks
 the baseline-opacity symptom from the category angle (which categories
 contribute to a baseline of N?). This RFP attacks the upstream cause:
 **the count itself is the wrong quantity** because we conflate

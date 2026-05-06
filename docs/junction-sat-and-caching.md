@@ -163,7 +163,7 @@ tokens (`ch0`, `ch1`, ...) to the new zone's items.
 Code: `crates/core/src/zone_cache.rs`. The on-disk format is a custom
 binary file (`sat-zones.bin`); each record is length-prefixed, well
 under POSIX `PIPE_BUF` so concurrent appends are atomic. Native loads
-from `~/.cache/fucktorio/sat-zones.bin`; WASM loads a pre-baked blob
+from `~/.cache/spaghettio/sat-zones.bin`; WASM loads a pre-baked blob
 embedded via `include_bytes!()`.
 
 ---
@@ -174,7 +174,7 @@ Numbers from the e2e suite (28 tests, single-threaded, release build):
 
 | run | wall | notes |
 |---|---:|---|
-| cache disabled (`FUCKTORIO_USE_ZONE_CACHE=0`) | ~50s | full SAT every junction, no recording |
+| cache disabled (`SPAGHETTIO_USE_ZONE_CACHE=0`) | ~50s | full SAT every junction, no recording |
 | cold cache (record only, no hits) | ~50s | recording overhead is negligible |
 | **warm cache (default)** | **~5s** | **~10× speedup vs disabled; golden hashes byte-identical to fresh SAT** |
 
@@ -255,11 +255,11 @@ not behind a missing technique. The signature-match probe stays in
 cargo test --manifest-path crates/core/Cargo.toml --release --test e2e -- --test-threads=1
 
 # Disable the cache (e.g. to investigate a stale-cache regression)
-FUCKTORIO_USE_ZONE_CACHE=0 cargo test ...
+SPAGHETTIO_USE_ZONE_CACHE=0 cargo test ...
 
 # Wide curated sweep — only keeps records from clean (zero errors AND
 # zero warnings) layouts. Ignored test, run on demand:
-FUCKTORIO_USE_ZONE_CACHE=0 cargo test --release --test e2e -- \
+SPAGHETTIO_USE_ZONE_CACHE=0 cargo test --release --test e2e -- \
     --ignored diag_curated_sweep --exact --nocapture
 
 # Decomposition geometric potential
@@ -271,10 +271,10 @@ cargo test --release --test e2e -- \
     --ignored diag_sat_zone_histogram --exact --nocapture
 
 # Refresh the embedded committed cache
-rm ~/.cache/fucktorio/sat-zones.bin
+rm ~/.cache/spaghettio/sat-zones.bin
 cargo test --release --test e2e -- --ignored diag_curated_sweep --exact
 cargo test --release --test e2e -- --test-threads=1
-cp ~/.cache/fucktorio/sat-zones.bin crates/core/data/
+cp ~/.cache/spaghettio/sat-zones.bin crates/core/data/
 ```
 
 ## Where to read more

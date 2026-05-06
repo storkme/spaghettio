@@ -1,4 +1,4 @@
-//! Shared data models for the Fucktorio pipeline.
+//! Shared data models for the Spaghettio pipeline.
 //!
 //! Rust port of `src/models.py`. These types flow through every pipeline stage:
 //! solver → layout → blueprint export → validation.

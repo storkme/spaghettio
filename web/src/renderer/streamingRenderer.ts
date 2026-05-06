@@ -30,7 +30,7 @@
 import type { Application, Container } from "pixi.js";
 import { Graphics as PixiGraphics, Particle } from "pixi.js";
 import type { LayoutResult } from "../engine";
-import type { PlacedEntity, TraceEvent, EntityDirection } from "../wasm-pkg/fucktorio_wasm";
+import type { PlacedEntity, TraceEvent, EntityDirection } from "../wasm-pkg/spaghettio_wasm";
 import {
   addEntityToDrawContext,
   createDrawContext,

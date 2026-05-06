@@ -6,12 +6,12 @@ The current bus generator routes between asymmetric belt counts using a
 SAT-generated balancer library (`crates/core/src/bus/balancer_library.rs`).
 The library is *intended* to ship true balancers (composition-balanced,
 "MX3" in [`docs/factorio-mechanics.md`](factorio-mechanics.md#belt-merger-taxonomy-mn-splitter-networks)),
-which is overkill for fucktorio's single-recipe-per-trunk bus design — every
+which is overkill for spaghettio's single-recipe-per-trunk bus design — every
 belt carries one fungible item, so the only property we actually need is
 throughput-unlimited (MX2). MX3 is significantly larger than MX2 for
 asymmetric `(m, n)` and is the source of the coprime barrier in
-[#136](https://github.com/storkme/fucktorio/issues/136) and the oversize
-problem in [#135](https://github.com/storkme/fucktorio/issues/135).
+[#136](https://github.com/storkme/spaghettio/issues/136) and the oversize
+problem in [#135](https://github.com/storkme/spaghettio/issues/135).
 
 This RFP covers **phase 1 only**: build a classifier that takes any
 `BalancerTemplate` and assigns it to one of the three taxonomy classes
@@ -29,10 +29,10 @@ already MX2 (or worse, MX1), the project shape changes accordingly.
 
 ### Concrete failure cases driving this
 
-- [#136](https://github.com/storkme/fucktorio/issues/136) — missing coprime
+- [#136](https://github.com/storkme/spaghettio/issues/136) — missing coprime
   balancer shapes block tier-4 advanced-circuit-from-ores (per CLAUDE.md
   recipe complexity ladder).
-- [#135](https://github.com/storkme/fucktorio/issues/135) — oversized
+- [#135](https://github.com/storkme/spaghettio/issues/135) — oversized
   balancers inflate the bus footprint even when smaller MX2 equivalents
   would suffice.
 - Tier-5/6 (processing-unit, rocket-control-unit) are not yet wired up, but
@@ -321,12 +321,12 @@ protocol](../CLAUDE.md#verification-protocol-for-layout-engine-changes):
     outputs vs 0.1875 to inner outputs, instead of the uniform 0.125
     target). Max-flow counterexample: under saturated inputs `{1, 2}`,
     realized throughput is 1 (expected 2). Tracked in
-    [#266](https://github.com/storkme/fucktorio/issues/266).
+    [#266](https://github.com/storkme/spaghettio/issues/266).
   - **(8, 6) — MX1 throughput-limited.** Composition is uniform across
     inputs but uneven across outputs (outputs 0-3 each get 0.1458 from
     every input, outputs 4-5 each get 0.2083). Max-flow counterexample:
     under saturated inputs `{0..5}`, realized throughput is 5 (expected
-    6). Tracked in [#266](https://github.com/storkme/fucktorio/issues/266).
+    6). Tracked in [#266](https://github.com/storkme/spaghettio/issues/266).
   - **(7, 6) — kill: singular.** The linear system describing the
     saturated 50/50 splitter network is singular (a recirculation loop
     the simple model can't resolve). Max-flow finds paths so this isn't

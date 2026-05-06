@@ -78,7 +78,7 @@ UG_MAX_REACH = 5
 # Clos compose jh=9: 10s vs 353s, same code, same encoding).
 # Pinning the seed makes solves deterministic and lets us choose a seed
 # whose portfolio assignment happens to be fast for the common shapes.
-# Override via env var FUCKTORIO_CP_SAT_SEED=<int> (sweep / testing).
+# Override via env var SPAGHETTIO_CP_SAT_SEED=<int> (sweep / testing).
 # See docs/rfp-balancer-jh-search.md decision log for selection rationale.
 DEFAULT_SEED: int = 42  # placeholder; updated after empirical sweep
 
@@ -86,9 +86,9 @@ DEFAULT_SEED: int = 42  # placeholder; updated after empirical sweep
 def _get_cp_sat_seed(req: dict) -> int:
     """Return the CP-SAT random_seed to use for this request.
 
-    Priority: env var FUCKTORIO_CP_SAT_SEED > req["random_seed"] > DEFAULT_SEED.
+    Priority: env var SPAGHETTIO_CP_SAT_SEED > req["random_seed"] > DEFAULT_SEED.
     """
-    env_val = os.environ.get("FUCKTORIO_CP_SAT_SEED")
+    env_val = os.environ.get("SPAGHETTIO_CP_SAT_SEED")
     if env_val is not None:
         return int(env_val)
     return int(req.get("random_seed", DEFAULT_SEED))
@@ -1949,7 +1949,7 @@ def solve_pure_routing_circuit(req: dict) -> dict:
     pruned-INFEASIBLE just advances the bake's outer loop, which is the
     real safety net. The fallback meanwhile doubled wall time at every
     infeasible jh and tripped kill criterion #3. Default is therefore
-    fallback OFF; opt back in by setting FUCKTORIO_ROUTING_FALLBACK=1
+    fallback OFF; opt back in by setting SPAGHETTIO_ROUTING_FALLBACK=1
     (paranoia mode for one-off requests where +1 row of jh is more
     expensive than the re-solve).
     """
@@ -1959,15 +1959,15 @@ def solve_pure_routing_circuit(req: dict) -> dict:
     slack_arg = req.get("routing_slack", default_slack)
 
     out = _solve_pure_routing_circuit_inner(req, slack=slack_arg)
-    # Fallback is OFF by default; opt in via FUCKTORIO_ROUTING_FALLBACK=1.
+    # Fallback is OFF by default; opt in via SPAGHETTIO_ROUTING_FALLBACK=1.
     # See docstring above + RFP decision log for why.
-    fallback_enabled = os.environ.get("FUCKTORIO_ROUTING_FALLBACK") == "1"
+    fallback_enabled = os.environ.get("SPAGHETTIO_ROUTING_FALLBACK") == "1"
     if (out.get("status") == "INFEASIBLE"
             and slack_arg is not None
             and fallback_enabled):
         print(
             f"  circuit: pruned solve INFEASIBLE at slack={slack_arg} — "
-            "retrying with full encoding (FUCKTORIO_ROUTING_FALLBACK=1)",
+            "retrying with full encoding (SPAGHETTIO_ROUTING_FALLBACK=1)",
             file=sys.stderr,
         )
         out = _solve_pure_routing_circuit_inner(req, slack=None)
@@ -2345,7 +2345,7 @@ def _cache_dir() -> str:
     import os
     base = os.environ.get("TMPDIR", "/tmp")
     user = os.environ.get("USER", "default")
-    return os.path.join(base, f"fucktorio_place_cache_{user}")
+    return os.path.join(base, f"spaghettio_place_cache_{user}")
 
 
 def main() -> None:
@@ -2355,10 +2355,10 @@ def main() -> None:
     req = json.loads(req_text)
 
     # Subprocess-level cache: skip CP-SAT if (place.py source + request)
-    # has been solved before. Disable by setting FUCKTORIO_PLACE_NOCACHE=1
+    # has been solved before. Disable by setting SPAGHETTIO_PLACE_NOCACHE=1
     # — useful when debugging the solver itself or when the cache might
     # be stale for some unforeseen reason.
-    use_cache = os.environ.get("FUCKTORIO_PLACE_NOCACHE") is None
+    use_cache = os.environ.get("SPAGHETTIO_PLACE_NOCACHE") is None
     if use_cache:
         cache_dir = _cache_dir()
         os.makedirs(cache_dir, exist_ok=True)

@@ -229,9 +229,9 @@ const STYLE = `
 `;
 
 function injectStyle(): void {
-  if (document.getElementById("fucktorio-corpus-style")) return;
+  if (document.getElementById("spaghettio-corpus-style")) return;
   const el = document.createElement("style");
-  el.id = "fucktorio-corpus-style";
+  el.id = "spaghettio-corpus-style";
   el.textContent = STYLE;
   document.head.appendChild(el);
 }

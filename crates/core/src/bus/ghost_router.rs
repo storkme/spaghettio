@@ -2325,8 +2325,8 @@ pub fn route_bus_ghost(
             .collect();
 
         // Optional capture: dump a region-solver fixture on this
-        // invocation. Gated by `FUCKTORIO_DUMP_REGION_FIXTURE=<dir>`;
-        // narrowable with `FUCKTORIO_DUMP_REGION_FIXTURE_SEED="x,y"` to
+        // invocation. Gated by `SPAGHETTIO_DUMP_REGION_FIXTURE=<dir>`;
+        // narrowable with `SPAGHETTIO_DUMP_REGION_FIXTURE_SEED="x,y"` to
         // match a specific cluster seed. Off by default, zero-cost when
         // unset. See `crates/core/tests/region_fixtures/README.md`.
         #[cfg(not(target_arch = "wasm32"))]
@@ -2359,11 +2359,11 @@ pub fn route_bus_ghost(
             strategies,
             &pending_crossings,
         ) else {
-            // Diagnostic: when FUCKTORIO_BLAME_JUNCTIONS=1 is set,
+            // Diagnostic: when SPAGHETTIO_BLAME_JUNCTIONS=1 is set,
             // identify which spec's removal would let the cluster
             // solve. Helps narrow "what shape of crossing keeps
             // failing" without instrumenting the solver itself.
-            if std::env::var("FUCKTORIO_BLAME_JUNCTIONS").is_ok() {
+            if std::env::var("SPAGHETTIO_BLAME_JUNCTIONS").is_ok() {
                 blame_unsolvable_cluster(
                     cluster.as_slice(),
                     &keys_at_tile,
@@ -3294,7 +3294,7 @@ fn cluster_adjacent_crossings(
 /// Returns CrossingInfo if exactly 2 different-item specs cross at this tile.
 ///
 /// `spec_items` and `spec_belt_tiers` are consulted as a fallback for keys
-/// Diagnostic for `FUCKTORIO_BLAME_JUNCTIONS=1`: when a cluster fails
+/// Diagnostic for `SPAGHETTIO_BLAME_JUNCTIONS=1`: when a cluster fails
 /// to solve, retry with each participating spec removed in turn. Any
 /// removal that lets the cluster solve points at a "blamed" spec —
 /// the kind of crossing this solver is failing on. Emits one
@@ -4253,8 +4253,8 @@ impl JunctionStrategy for PerpendicularTemplateStrategy {
 // ---------------------------------------------------------------------------
 //
 // Writes a `RegionFixture` JSON for each `solve_crossing` call when the
-// `FUCKTORIO_DUMP_REGION_FIXTURE` env var names a directory. Optional
-// `FUCKTORIO_DUMP_REGION_FIXTURE_SEED="x,y"` restricts capture to
+// `SPAGHETTIO_DUMP_REGION_FIXTURE` env var names a directory. Optional
+// `SPAGHETTIO_DUMP_REGION_FIXTURE_SEED="x,y"` restricts capture to
 // clusters containing that seed. Off by default; the probe returns
 // immediately when the env var is unset.
 //
@@ -4276,7 +4276,7 @@ fn dump_region_fixture(
     placed_entities: &[PlacedEntity],
     pending_crossings: &FxHashSet<(i32, i32)>,
 ) {
-    let Ok(dir) = std::env::var("FUCKTORIO_DUMP_REGION_FIXTURE") else {
+    let Ok(dir) = std::env::var("SPAGHETTIO_DUMP_REGION_FIXTURE") else {
         return;
     };
     if dir.is_empty() {
@@ -4286,11 +4286,11 @@ fn dump_region_fixture(
     // Optional seed filter: only dump clusters whose seeds include the
     // requested tile. Useful when a layout produces dozens of clusters
     // and you want just one.
-    if let Ok(seed_str) = std::env::var("FUCKTORIO_DUMP_REGION_FIXTURE_SEED") {
+    if let Ok(seed_str) = std::env::var("SPAGHETTIO_DUMP_REGION_FIXTURE_SEED") {
         let parts: Vec<&str> = seed_str.split(',').collect();
         if parts.len() != 2 {
             eprintln!(
-                "FUCKTORIO_DUMP_REGION_FIXTURE_SEED: expected \"x,y\", got {:?}",
+                "SPAGHETTIO_DUMP_REGION_FIXTURE_SEED: expected \"x,y\", got {:?}",
                 seed_str
             );
             return;
@@ -4349,7 +4349,7 @@ fn dump_region_fixture(
         version: 1,
         name: format!("seed_{}_{}", seeds[0].0, seeds[0].1),
         notes: String::from(
-            "Captured via FUCKTORIO_DUMP_REGION_FIXTURE. Review expected.mode before committing.",
+            "Captured via SPAGHETTIO_DUMP_REGION_FIXTURE. Review expected.mode before committing.",
         ),
         source_url: None,
         seeds: seeds.to_vec(),

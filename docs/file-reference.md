@@ -55,7 +55,7 @@ Full reference table. The most-visited files are summarised in `CLAUDE.md`.
 | File | Purpose |
 |------|---------|
 | `crates/wasm-bindings/src/lib.rs` | wasm-bindgen wrapper: `solve`, `layout`, `layout_traced`, `export_blueprint`, `validate_layout`, `solve_fixture`, recipe lookups |
-| `crates/mining-cli/src/main.rs` | `blueprint-analyze` native CLI — reads blueprint strings from stdin/file, `--batch`/`--json` modes, expands books, prints shape summaries via `fucktorio_core::analysis` |
+| `crates/mining-cli/src/main.rs` | `blueprint-analyze` native CLI — reads blueprint strings from stdin/file, `--batch`/`--json` modes, expands books, prints shape summaries via `spaghettio_core::analysis` |
 
 ## Web app (`web/src/`)
 
@@ -64,7 +64,7 @@ Entry + shared state:
 | File | Purpose |
 |------|---------|
 | `main.ts` | Web app entry: wires Pixi canvas, sidebar, engine, overlays, URL state |
-| `engine.ts` | WASM loader + typed wrappers around `fucktorio_wasm`; emits engine-activity events; re-exported types |
+| `engine.ts` | WASM loader + typed wrappers around `spaghettio_wasm`; emits engine-activity events; re-exported types |
 | `state.ts` | `FormState` — the URL-addressable input (item, rate, machine, inputs, belt, custom inputs) |
 | `state/debugState.ts` | Debug toggle state (master, step-through, validation, SAT zones, solo regions, ghost tiles, item colours) |
 | `workers/engine.worker.ts` | Web Worker wrapping the WASM API so solves + layouts don't block the main thread |

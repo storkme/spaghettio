@@ -47,7 +47,7 @@ discussion established that:
 The library currently ships back-loop templates for coprime `(m, n)` ≤ 8,
 generated offline by Factorio-SAT. For shapes outside that envelope (and
 for the audit-flagged latent bugs in `(5, 8)` / `(8, 6)` from
-[#266](https://github.com/storkme/fucktorio/issues/266)), the choice is:
+[#266](https://github.com/storkme/spaghettio/issues/266)), the choice is:
 
 - Wait for the SAT-runner work ([`rfp-balancer-runner.md`](rfp-balancer-runner.md))
   to finish a tier-9/10 corpus. Costs overnight wall-clock per tier; still

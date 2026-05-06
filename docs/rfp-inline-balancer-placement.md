@@ -12,7 +12,7 @@ balancer cluster.
 
 ## Motivation
 
-[`/#/l/ecl/30/am2/_/ftb?s=pd`](https://storkme.github.io/fucktorio/#/l/ecl/30/am2/_/ftb?s=pd)
+[`/#/l/ecl/30/am2/_/ftb?s=pd`](https://storkme.github.io/spaghettio/#/l/ecl/30/am2/_/ftb?s=pd)
 shows three obvious horizontal bands where a tall, narrow balancer hugs the
 left trunk and the rest of the band's lane width is empty whitespace. The
 producer-to-trunk balancer is ~3 splitters wide in X, but the band reservation
@@ -110,7 +110,7 @@ Per the layout-engine verification protocol in
 2. Browser sanity check on the motivating URL above and at least
    `processing-unit @ 1/s` (deeper recipe chain, more `LaneFamily`s
    stacked) and any layout where the existing `(9, 9)` passthrough lands.
-3. Snapshot diff with `FUCKTORIO_DUMP_SNAPSHOTS=1`. Compare entity counts
+3. Snapshot diff with `SPAGHETTIO_DUMP_SNAPSHOTS=1`. Compare entity counts
    and Y-extent before/after on the e2e corpus. Compression target: >20%
    median Y reduction across the corpus, ideally >40% on layouts with
    multiple balancers.

@@ -22,7 +22,7 @@ import type {
   ParticipatingSpec,
   StampedNeighbor,
   TraceEvent,
-} from "../wasm-pkg/fucktorio_wasm.js";
+} from "../wasm-pkg/spaghettio_wasm.js";
 
 type GrowthStarted = Extract<TraceEvent, { phase: "JunctionGrowthStarted" }>;
 type GrowthIteration = Extract<TraceEvent, { phase: "JunctionGrowthIteration" }>;

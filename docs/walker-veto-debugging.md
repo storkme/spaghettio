@@ -78,8 +78,8 @@ Capture workflow (full detail in `crates/core/tests/region_fixtures/README.md`):
 # Capture one junction by seed. Runs any harness that builds the
 # target layout — here the existing tier4 ignored test.
 mkdir -p /tmp/rfx
-FUCKTORIO_DUMP_REGION_FIXTURE=/tmp/rfx \
-FUCKTORIO_DUMP_REGION_FIXTURE_SEED="10,161" \
+SPAGHETTIO_DUMP_REGION_FIXTURE=/tmp/rfx \
+SPAGHETTIO_DUMP_REGION_FIXTURE_SEED="10,161" \
     cargo test --manifest-path crates/core/Cargo.toml \
     --test e2e tier4_advanced_circuit_from_ore_am2 -- --ignored --nocapture
 
@@ -114,13 +114,13 @@ Enable it:
 
 ```bash
 # All vetoes
-FUCKTORIO_DUMP_WALKER_VETO=1 cargo run ...
+SPAGHETTIO_DUMP_WALKER_VETO=1 cargo run ...
 
 # Filter to one seed
-FUCKTORIO_DUMP_WALKER_VETO="seed:22,143" cargo run ...
+SPAGHETTIO_DUMP_WALKER_VETO="seed:22,143" cargo run ...
 
 # Filter to a specific break tile (useful when the same seed vetoes many times)
-FUCKTORIO_DUMP_WALKER_VETO="seed:22,143;tile:11,196" cargo run ...
+SPAGHETTIO_DUMP_WALKER_VETO="seed:22,143;tile:11,196" cargo run ...
 ```
 
 You need a harness that actually exercises the failing layout. If there isn't an existing test, a one-off `crates/core/examples/X.rs` is fine — delete it when you're done. The built-in e2e `tier4_advanced_circuit_from_ore_am2` and `veto_repro`-shaped scripts are the typical shapes.

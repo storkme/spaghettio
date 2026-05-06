@@ -107,7 +107,7 @@ for (let i = 0; i < samples.length - 1; i++) samples[i].dur = samples[i+1].ts - 
 ## Pitfalls in the trace
 
 - **18 dedicated worker threads** show up but only one (the
-  `fucktorio-engine` worker) does meaningful work. The other 17 spin up and
+  `spaghettio-engine` worker) does meaningful work. The other 17 spin up and
   die in 1–5 ms each, all within a 25 ms burst at +484 ms. They look
   alarming but they're not from our code — most likely a Chrome extension's
   content scripts or Vite dev-server scaffolding. Confirm by checking

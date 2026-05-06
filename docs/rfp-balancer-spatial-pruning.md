@@ -165,12 +165,12 @@ Per [the layout-engine verification protocol](../CLAUDE.md#verification-protocol
 1. **Smoke test the existing repros.** The minimal 4×6 swap and the
    4×3 swap should both still solve OPTIMAL after pruning. If either
    regresses to INFEASIBLE the kill criterion is tripped.
-2. **Re-run the (2, 2) and (4, 9) Clos compose tests** (`FUCKTORIO_DEBUG_2_2=1`,
-   `FUCKTORIO_DEBUG_4_9=1`). Both should still classify Balanced.
+2. **Re-run the (2, 2) and (4, 9) Clos compose tests** (`SPAGHETTIO_DEBUG_2_2=1`,
+   `SPAGHETTIO_DEBUG_4_9=1`). Both should still classify Balanced.
    Compare wall times: (4, 9) is the headline benchmark; aim for
    <60s wall (vs tonight's 209s).
-3. **Re-run the bake batch** (`FUCKTORIO_BAKE_BATCH=1
-   FUCKTORIO_PURE_ROUTING_ENCODING=circuit`). All 7 (n, 9) shapes
+3. **Re-run the bake batch** (`SPAGHETTIO_BAKE_BATCH=1
+   SPAGHETTIO_PURE_ROUTING_ENCODING=circuit`). All 7 (n, 9) shapes
    that we couldn't finish tonight should now complete in <2 hours
    total (vs the projected 3 hours unpruned).
 4. **Spot-check (5, 9) at jh=9 specifically.** This is the case that
@@ -195,11 +195,11 @@ Single phase. ~150-200 LOC change in `place.py`. No Rust touches.
 
 - *2026-05-02 — landed (commits `7f840a3` initial impl, `72e9cda`
   env-var diagnostic, follow-up flipping the default). Default is
-  fallback OFF; `FUCKTORIO_ROUTING_FALLBACK=1` re-enables it for
+  fallback OFF; `SPAGHETTIO_ROUTING_FALLBACK=1` re-enables it for
   one-off paranoia.*
 
   **Verification numbers** ((4, 9) Clos compose,
-  `FUCKTORIO_DEBUG_4_9=1 FUCKTORIO_PURE_ROUTING_ENCODING=circuit`):
+  `SPAGHETTIO_DEBUG_4_9=1 SPAGHETTIO_PURE_ROUTING_ENCODING=circuit`):
 
   | run | wall | jh=9 solver |
   |---|---|---|

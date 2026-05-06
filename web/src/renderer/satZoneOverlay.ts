@@ -29,7 +29,7 @@ import {
 } from "pixi.js";
 import { TILE_PX } from "./entities";
 import type { JunctionSelectionState } from "../ui/junctionDebugger";
-import type { BoundarySnapshot } from "../wasm-pkg/fucktorio_wasm.js";
+import type { BoundarySnapshot } from "../wasm-pkg/spaghettio_wasm.js";
 
 // Match the unselected junction-zone palette (see junctionZoneOverlay.ts).
 const OUTCOME_COLOR: Record<string, number> = {

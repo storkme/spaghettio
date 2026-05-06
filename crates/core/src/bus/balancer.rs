@@ -116,7 +116,7 @@ fn format_segment_id(item: &str, module_id: u32, n: u32, m: u32, group: Option<u
 /// fungible item type, so balancing is unnecessary (issue #268). This
 /// check runs before the library lookup so passthrough wins even for
 /// shapes the library has a full template for — the passthrough is
-/// 60–94% smaller and functionally equivalent for fucktorio's bus
+/// 60–94% smaller and functionally equivalent for spaghettio's bus
 /// design.
 pub(crate) fn is_passthrough_shape(n: u32, m: u32) -> bool {
     n == m && n >= 2

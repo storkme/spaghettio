@@ -52,7 +52,7 @@ same column without noticing.
 
 1. Dump the layout snapshot:
    ```
-   FUCKTORIO_DUMP_SNAPSHOTS=1 cargo test --manifest-path crates/core/Cargo.toml \
+   SPAGHETTIO_DUMP_SNAPSHOTS=1 cargo test --manifest-path crates/core/Cargo.toml \
        --test e2e -- --ignored tier2_electronic_circuit_from_ore --exact
    ```
 2. Extract the copper-plate balancer's shape (N→M) from the trace:
@@ -152,7 +152,7 @@ cargo test --manifest-path crates/core/Cargo.toml --test e2e -- \
 ### Dump snapshots for all tests (including passing)
 
 ```bash
-FUCKTORIO_DUMP_SNAPSHOTS=1 cargo test --manifest-path crates/core/Cargo.toml --test e2e
+SPAGHETTIO_DUMP_SNAPSHOTS=1 cargo test --manifest-path crates/core/Cargo.toml --test e2e
 ```
 
 ## Files most likely to be touched

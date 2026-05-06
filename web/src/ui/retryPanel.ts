@@ -3,7 +3,7 @@ import "./retryPanel.css";
 
 // Mirrors the Rust `TraceEvent::LayoutRetried` variant. After a WASM
 // rebuild, the auto-generated `TraceEvent` union from
-// `wasm-pkg/fucktorio_wasm.d.ts` will include this shape and can
+// `wasm-pkg/spaghettio_wasm.d.ts` will include this shape and can
 // replace the local declaration.
 interface LayoutRetriedEvent {
   phase: "LayoutRetried";

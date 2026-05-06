@@ -8,7 +8,7 @@ set -euo pipefail
 # Drops into an interactive pi TUI with the agent personality loaded as the
 # initial system context. No task instructions — the user drives from here.
 
-REPO="${REPO:-storkme/fucktorio}"
+REPO="${REPO:-storkme/spaghettio}"
 WORKSPACE="/tmp/workspace"
 
 PI_BACKEND_ARGS=()

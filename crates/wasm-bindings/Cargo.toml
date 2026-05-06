@@ -1,5 +1,5 @@
 [package]
-name = "fucktorio_wasm"
+name = "spaghettio_wasm"
 version = "0.1.0"
 edition = "2021"
 
@@ -17,7 +17,7 @@ wasm-opt = false
 
 [dependencies]
 console_error_panic_hook = "0.1"
-fucktorio_core = { path = "../core", features = ["wasm"] }
+spaghettio_core = { path = "../core", features = ["wasm"] }
 js-sys = "0.3"
 rustc-hash = "2"
 serde = { version = "1", features = ["derive"] }

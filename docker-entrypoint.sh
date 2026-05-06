@@ -72,7 +72,7 @@ if [ $have_oauth -eq 0 ] && [ $have_llama -eq 0 ] && [ $have_apikey -eq 0 ]; the
 fi
 
 # ---------------------------------------------------------------------------
-# Watcher state dir. Named volume fucktorio-state-<agent> mounts at
+# Watcher state dir. Named volume spaghettio-state-<agent> mounts at
 # /var/lib/agent and holds state.json (tracks last-seen comment ids per
 # issue/PR so the scan phase can detect new human comments). Root-owned on
 # first mount — chown it, then bootstrap an empty state.json if missing.
@@ -96,7 +96,7 @@ git config --global credential.https://github.com.helper \
 # ---------------------------------------------------------------------------
 agent_cap="$(echo "${AGENT_NAME:0:1}" | tr '[:lower:]' '[:upper:]')${AGENT_NAME:1}"
 git config --global user.name "${agent_cap} Bot"
-git config --global user.email "${AGENT_NAME}@fucktorio.local"
+git config --global user.email "${AGENT_NAME}@spaghettio.local"
 
 if gh_user="$(gh api user --jq .login 2>/dev/null)" \
    && [[ "$gh_user" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]; then
@@ -109,7 +109,7 @@ fi
 # Banner
 # ---------------------------------------------------------------------------
 echo "---"
-echo "agent:   ${AGENT_NAME}  (identity: ${agent_cap} Bot <${AGENT_NAME}@fucktorio.local>)"
+echo "agent:   ${AGENT_NAME}  (identity: ${agent_cap} Bot <${AGENT_NAME}@spaghettio.local>)"
 if [ -n "${ISSUE:-}" ]; then
     echo "mode:    one-shot (issue #${ISSUE})"
 else

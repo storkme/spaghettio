@@ -14,11 +14,11 @@ import wasmInit, {
   parse_blueprint,
   seed_zone_cache,
   validate_layout,
-} from "../wasm-pkg/fucktorio_wasm.js";
+} from "../wasm-pkg/spaghettio_wasm.js";
 import type {
   SolverResult,
   LayoutResult,
-} from "../wasm-pkg/fucktorio_wasm.js";
+} from "../wasm-pkg/spaghettio_wasm.js";
 
 type Request =
   | { id: number; method: "init" }

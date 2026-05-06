@@ -5,7 +5,7 @@
 """Async parallel seed-sweep runner for the canonical CP-SAT placer.
 
 For each (shape, seed) probe, spawns `scripts/cp_sat_placer.py` with
-`FUCKTORIO_CP_SAT_SEED=<seed>`, parses the JSON response, and:
+`SPAGHETTIO_CP_SAT_SEED=<seed>`, parses the JSON response, and:
   - On `kind=ok`: appends the template to the journal and DRAINS all
     other queued probes for that shape (first solve per shape wins).
   - On `unsat` / `timeout` / `engine`: logs to TSV and moves on.
@@ -238,7 +238,7 @@ async def run_probe(probe: Probe) -> dict | None:
         "arc_throughputs": payload["throughputs"],
     }
     env = dict(os.environ)
-    env["FUCKTORIO_CP_SAT_SEED"] = str(probe.seed)
+    env["SPAGHETTIO_CP_SAT_SEED"] = str(probe.seed)
     proc = await asyncio.create_subprocess_exec(
         "uv", "run", "--no-project", str(PLACER),
         cwd=str(REPO_ROOT),

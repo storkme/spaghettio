@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AGENTS_DIR="${SCRIPT_DIR}/agents"
-IMAGE="${FUCKTORIO_AGENT_IMAGE:-fucktorio-agent:latest}"
+IMAGE="${SPAGHETTIO_AGENT_IMAGE:-spaghettio-agent:latest}"
 
 usage() {
     cat <<'EOF'
@@ -23,7 +23,7 @@ Environment:
   LLAMA_MAX_TOKENS  (optional, default: 8192)
   LLAMA_HOST_IP     (optional)  Override the auto-detected Windows gateway IP.
 
-  FUCKTORIO_AGENT_IMAGE (optional, default: fucktorio-agent:latest)
+  SPAGHETTIO_AGENT_IMAGE (optional, default: spaghettio-agent:latest)
 
 Examples:
   export GH_TOKEN=ghp_xxx LLAMA_MODEL=qwen2.5-coder-32b-instruct
@@ -94,7 +94,7 @@ fi
 WIN_HOST="${LLAMA_HOST_IP:-$WIN_HOST}"
 
 short="$(openssl rand -hex 3)"
-container="fucktorio-shell-${NAME}-${short}"
+container="spaghettio-shell-${NAME}-${short}"
 
 echo "starting ${container} (agent=${NAME}, model=${LLAMA_MODEL}, llama-host=${WIN_HOST})"
 echo "use ctrl-c / /exit to leave."

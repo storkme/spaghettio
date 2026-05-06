@@ -10,7 +10,7 @@ if [ -z "${ISSUE:-}" ]; then
     exit 64
 fi
 
-REPO="${REPO:-storkme/fucktorio}"
+REPO="${REPO:-storkme/spaghettio}"
 WORKSPACE="/tmp/workspace"
 LOG="/tmp/agent.log"
 BRANCH="agent/${AGENT_NAME}/issue-${ISSUE}"

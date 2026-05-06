@@ -1,8 +1,8 @@
 //! Dump entities at the top of the processing-unit layout.
 //! Used to inspect the petroleum trunk's connectivity around y=1-12.
 
-use fucktorio_core::bus::layout::{build_bus_layout, LayoutOptions};
-use fucktorio_core::solver;
+use spaghettio_core::bus::layout::{build_bus_layout, LayoutOptions};
+use spaghettio_core::solver;
 use rustc_hash::FxHashSet;
 
 fn main() {

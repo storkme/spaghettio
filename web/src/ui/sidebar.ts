@@ -99,7 +99,7 @@ const FLUID_ITEMS = new Set(["water", "crude-oil", "petroleum-gas", "light-oil",
 // Rich item picker
 // ---------------------------------------------------------------------------
 
-const RECENT_ITEMS_KEY = "fucktorio-recent-items";
+const RECENT_ITEMS_KEY = "spaghettio-recent-items";
 const RECENT_MAX = 5;
 
 function getRecentItems(): string[] {
@@ -540,7 +540,7 @@ export function renderSidebar(
 
   // Datalist for custom-input search field (excludes DEFAULT_INPUTS)
   const customInputDatalist = document.createElement("datalist");
-  customInputDatalist.id = "fucktorio-custom-inputs-datalist";
+  customInputDatalist.id = "spaghettio-custom-inputs-datalist";
   const defaultInputSet = new Set(DEFAULT_INPUTS);
   allItems.filter((it) => !defaultInputSet.has(it)).forEach((it) => {
     const opt = document.createElement("option");
@@ -552,7 +552,7 @@ export function renderSidebar(
   const customInputField = document.createElement("input");
   customInputField.type = "text";
   customInputField.className = "sb-input sb-custom-input-field";
-  customInputField.setAttribute("list", "fucktorio-custom-inputs-datalist");
+  customInputField.setAttribute("list", "spaghettio-custom-inputs-datalist");
   customInputField.autocomplete = "off";
   customInputField.placeholder = "+ add input…";
   inputsBody.appendChild(customInputField);

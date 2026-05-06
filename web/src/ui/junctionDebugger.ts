@@ -28,7 +28,7 @@ import type { Viewport } from "pixi-viewport";
 import type {
   BoundarySnapshot,
   TraceEvent,
-} from "../wasm-pkg/fucktorio_wasm.js";
+} from "../wasm-pkg/spaghettio_wasm.js";
 import { TILE_PX } from "../renderer/entities";
 import {
   formatFeeder,

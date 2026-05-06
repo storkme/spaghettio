@@ -9,22 +9,22 @@
 //! All (incl. known-failing): cargo test --test e2e -- --ignored
 //!
 //! Snapshot dumping:
-//!   FUCKTORIO_DUMP_SNAPSHOTS=1  — dump .fls files for ALL tests (passing too)
+//!   SPAGHETTIO_DUMP_SNAPSHOTS=1  — dump .fls files for ALL tests (passing too)
 //!   Automatic on failure — any test with validation errors dumps a snapshot.
 
-use fucktorio_core::analysis::{self, BlueprintAnalysis};
-use fucktorio_core::blueprint;
-use fucktorio_core::blueprint_parser;
-use fucktorio_core::bus::layout;
-use fucktorio_core::density;
-use fucktorio_core::models::{LayoutResult, SolverResult};
-use fucktorio_core::snapshot::{
+use spaghettio_core::analysis::{self, BlueprintAnalysis};
+use spaghettio_core::blueprint;
+use spaghettio_core::blueprint_parser;
+use spaghettio_core::bus::layout;
+use spaghettio_core::density;
+use spaghettio_core::models::{LayoutResult, SolverResult};
+use spaghettio_core::snapshot::{
     LayoutSnapshot, SnapshotContext, SnapshotParams, SnapshotSource,
 };
-use fucktorio_core::solver;
-use fucktorio_core::trace::{self, TraceEvent};
-use fucktorio_core::validate::{self, LayoutStyle, Severity, ValidationIssue};
-use fucktorio_core::validate::{belt_flow, belt_structural, power, inserters};
+use spaghettio_core::solver;
+use spaghettio_core::trace::{self, TraceEvent};
+use spaghettio_core::validate::{self, LayoutStyle, Severity, ValidationIssue};
+use spaghettio_core::validate::{belt_flow, belt_structural, power, inserters};
 use rustc_hash::FxHashSet;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -47,7 +47,7 @@ struct E2EResult {
 
 /// Whether to dump snapshots for all tests or only failing ones.
 fn should_dump_snapshots() -> bool {
-    std::env::var("FUCKTORIO_DUMP_SNAPSHOTS").is_ok()
+    std::env::var("SPAGHETTIO_DUMP_SNAPSHOTS").is_ok()
 }
 
 /// Dump a snapshot file for a test. Called on failure or when env var is set.
@@ -192,7 +192,7 @@ fn run_e2e_with_strategy(
     machine: &str,
     belt_tier: Option<&str>,
     available_inputs: &FxHashSet<String>,
-    strategy: fucktorio_core::bus::layout::LayoutStrategy,
+    strategy: spaghettio_core::bus::layout::LayoutStrategy,
 ) -> Result<E2EResult, String> {
     run_e2e_inner(
         test_name,
@@ -203,7 +203,7 @@ fn run_e2e_with_strategy(
         available_inputs,
         &FxHashSet::default(),
         strategy,
-        fucktorio_core::bus::layout::RowLayout::default(),
+        spaghettio_core::bus::layout::RowLayout::default(),
     )
 }
 
@@ -216,8 +216,8 @@ fn run_e2e_with_strategy_and_row_layout(
     machine: &str,
     belt_tier: Option<&str>,
     available_inputs: &FxHashSet<String>,
-    strategy: fucktorio_core::bus::layout::LayoutStrategy,
-    row_layout: fucktorio_core::bus::layout::RowLayout,
+    strategy: spaghettio_core::bus::layout::LayoutStrategy,
+    row_layout: spaghettio_core::bus::layout::RowLayout,
 ) -> Result<E2EResult, String> {
     run_e2e_inner(
         test_name,
@@ -249,8 +249,8 @@ fn run_e2e_with_exclusions(
         belt_tier,
         available_inputs,
         excluded_recipes,
-        fucktorio_core::bus::layout::LayoutStrategy::Pooled,
-        fucktorio_core::bus::layout::RowLayout::default(),
+        spaghettio_core::bus::layout::LayoutStrategy::Pooled,
+        spaghettio_core::bus::layout::RowLayout::default(),
     )
 }
 
@@ -263,11 +263,11 @@ fn run_e2e_inner(
     belt_tier: Option<&str>,
     available_inputs: &FxHashSet<String>,
     excluded_recipes: &FxHashSet<String>,
-    strategy: fucktorio_core::bus::layout::LayoutStrategy,
-    row_layout: fucktorio_core::bus::layout::RowLayout,
+    strategy: spaghettio_core::bus::layout::LayoutStrategy,
+    row_layout: spaghettio_core::bus::layout::RowLayout,
 ) -> Result<E2EResult, String> {
     let _guard = trace::start_trace();
-    fucktorio_core::zone_cache::set_thread_source(Some(test_name));
+    spaghettio_core::zone_cache::set_thread_source(Some(test_name));
     let run_params = RunParams { item, rate, machine, belt_tier, available_inputs };
 
     let solver_result = solver::solve_with_exclusions(item, rate, available_inputs, machine, excluded_recipes)
@@ -351,8 +351,8 @@ fn run_e2e_inner(
         dump_snapshot(test_name, &run_params, &result);
     }
 
-    fucktorio_core::zone_cache::set_thread_source(None);
-    fucktorio_core::zone_cache::flush();
+    spaghettio_core::zone_cache::set_thread_source(None);
+    spaghettio_core::zone_cache::flush();
     Ok(result)
 }
 
@@ -435,7 +435,7 @@ fn assert_produces(result: &E2EResult, item: &str, min_rate: f64) {
 /// structural fields a Phase 0a refactor must preserve under
 /// `LayoutStrategy::Pooled`. Excludes `rate` (Option<f64>) and `items`
 /// (not yet structurally stable across the bus pipeline).
-fn golden_hash(layout: &fucktorio_core::models::LayoutResult) -> String {
+fn golden_hash(layout: &spaghettio_core::models::LayoutResult) -> String {
     use sha2::{Digest, Sha256};
     let mut sorted: Vec<_> = layout.entities.iter().collect();
     sorted.sort_by(|a, b| {
@@ -479,11 +479,11 @@ fn golden_hash(layout: &fucktorio_core::models::LayoutResult) -> String {
 /// that the layout produced under `LayoutStrategy::Pooled` is
 /// byte-identical (over structural fields) to the committed baseline.
 /// To regenerate after an intentional layout change:
-/// `FUCKTORIO_GOLDEN_DUMP=1 cargo test --test e2e -- --nocapture`,
+/// `SPAGHETTIO_GOLDEN_DUMP=1 cargo test --test e2e -- --nocapture`,
 /// then paste the printed hashes into `GOLDEN_HASHES`.
 fn assert_golden_hash(result: &E2EResult, test_name: &str) {
     let computed = golden_hash(&result.layout);
-    if std::env::var("FUCKTORIO_GOLDEN_DUMP").is_ok() {
+    if std::env::var("SPAGHETTIO_GOLDEN_DUMP").is_ok() {
         eprintln!("    (\"{test_name}\", \"{computed}\"),");
         return;
     }
@@ -497,11 +497,11 @@ fn assert_golden_hash(result: &E2EResult, test_name: &str) {
             "Golden hash mismatch for `{test_name}` (K0-1 regression).\n  \
              expected: {expected}\n  computed: {computed}\n  \
              If this is an intentional layout change, regenerate with \
-             FUCKTORIO_GOLDEN_DUMP=1."
+             SPAGHETTIO_GOLDEN_DUMP=1."
         ),
         None => panic!(
             "No golden hash registered for `{test_name}`. \
-             Run `FUCKTORIO_GOLDEN_DUMP=1 cargo test --test e2e -- --nocapture` \
+             Run `SPAGHETTIO_GOLDEN_DUMP=1 cargo test --test e2e -- --nocapture` \
              to capture. Computed: {computed}"
         ),
     }
@@ -660,7 +660,7 @@ fn decomposition_search_native_candidate_fires_trace_events() {
 #[test]
 #[ntest::timeout(30000)]
 fn decomposition_search_picks_native_on_clean_partitioned_case() {
-    use fucktorio_core::bus::layout::LayoutStrategy;
+    use spaghettio_core::bus::layout::LayoutStrategy;
     let inputs: FxHashSet<String> = ["petroleum-gas", "coal"]
         .iter()
         .map(|s| s.to_string())
@@ -753,7 +753,7 @@ fn tier1_iron_gear_wheel_20s() {
 #[test]
 #[ntest::timeout(10000)]
 fn palette_pins_iron_gear_wheel_to_am1() {
-    use fucktorio_core::recipe_db::MachinePalette;
+    use spaghettio_core::recipe_db::MachinePalette;
 
     let inputs: FxHashSet<String> = ["iron-plate"].iter().map(|s| s.to_string()).collect();
     let mut palette = MachinePalette::default();
@@ -839,7 +839,7 @@ fn tier2_electronic_circuit() {
 /// item-mix issues as `tier2_electronic_circuit_from_ore`). Its only job
 /// is to produce a `.fls` snapshot we can extract fixture zones from:
 ///
-///   FUCKTORIO_DUMP_SNAPSHOTS=1 cargo test --manifest-path crates/core/Cargo.toml \
+///   SPAGHETTIO_DUMP_SNAPSHOTS=1 cargo test --manifest-path crates/core/Cargo.toml \
 ///       --test e2e fixture_source_ec_15s_am1_yellow_from_ore -- --exact --ignored
 #[test]
 #[ignore]
@@ -1129,8 +1129,8 @@ fn tier4_advanced_circuit_from_plates() {
 #[test]
 #[ntest::timeout(30000)]
 fn tier4_advanced_circuit_partitioned() {
-    use fucktorio_core::bus::layout::LayoutStrategy;
-    use fucktorio_core::trace::TraceEvent;
+    use spaghettio_core::bus::layout::LayoutStrategy;
+    use spaghettio_core::trace::TraceEvent;
 
     let inputs: FxHashSet<String> = ["iron-plate", "copper-plate", "coal", "crude-oil", "water"]
         .iter()
@@ -1183,7 +1183,7 @@ fn tier4_advanced_circuit_partitioned() {
 #[test]
 #[ntest::timeout(30000)]
 fn tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing() {
-    use fucktorio_core::bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy, RowLayout};
+    use spaghettio_core::bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy, RowLayout};
 
     let inputs: FxHashSet<String> = ["iron-plate", "copper-plate", "coal", "water", "crude-oil"]
         .iter()
@@ -1278,7 +1278,7 @@ fn tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing() {
 // when CI hardware is more predictable or this test gets faster.
 #[ntest::timeout(300000)]
 fn tier5_processing_unit_2s_horizontal_stack_iron_ore_pipe_bypass() {
-    use fucktorio_core::bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy, RowLayout};
+    use spaghettio_core::bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy, RowLayout};
 
     let inputs: FxHashSet<String> = [
         "iron-ore", "copper-ore", "stone", "coal", "water", "crude-oil",
@@ -1316,7 +1316,7 @@ fn tier5_processing_unit_2s_horizontal_stack_iron_ore_pipe_bypass() {
                 && e.name == "fast-underground-belt"
                 && e.io_type.as_deref() == Some("output")
                 && e.carries.as_deref() == Some("iron-ore")
-                && e.direction == fucktorio_core::models::EntityDirection::East
+                && e.direction == spaghettio_core::models::EntityDirection::East
         })
         .map(|e| e.x)
         .collect();
@@ -1328,7 +1328,7 @@ fn tier5_processing_unit_2s_horizontal_stack_iron_ore_pipe_bypass() {
                 && e.name == "fast-underground-belt"
                 && e.io_type.as_deref() == Some("input")
                 && e.carries.as_deref() == Some("iron-ore")
-                && e.direction == fucktorio_core::models::EntityDirection::East
+                && e.direction == spaghettio_core::models::EntityDirection::East
         })
         .map(|e| e.x)
         .collect();
@@ -1380,7 +1380,7 @@ fn tier5_processing_unit_2s_horizontal_stack_iron_ore_pipe_bypass() {
 #[test]
 #[ntest::timeout(60000)]
 fn tier5_processing_unit_25s_horizontal_stack_pole_coverage() {
-    use fucktorio_core::bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy, RowLayout};
+    use spaghettio_core::bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy, RowLayout};
 
     let inputs: FxHashSet<String> = [
         "iron-plate", "copper-plate", "steel-plate", "stone",
@@ -1499,7 +1499,7 @@ fn tier4_advanced_circuit_from_ore_am2() {
 /// shape coverage. Templates currently cover `1..=8 × 1..=8`. Any
 /// `(N, 9)` or `(9, M)` shape will still trip the warning.
 ///
-/// [issue #136]: https://github.com/storkme/fucktorio/issues/136
+/// [issue #136]: https://github.com/storkme/spaghettio/issues/136
 #[test]
 #[ntest::timeout(60000)]
 fn issue_136_no_balancer_template_warning_ac5_ore_yellow() {
@@ -1552,7 +1552,7 @@ fn issue_136_no_balancer_template_warning_ac5_ore_yellow() {
 #[ignore = "Strategy scoreboard — output goes to stderr; run with --ignored --nocapture"]
 #[ntest::timeout(120000)]
 fn scoreboard_strategy_sweep() {
-    use fucktorio_core::bus::layout::LayoutStrategy;
+    use spaghettio_core::bus::layout::LayoutStrategy;
 
     struct Case {
         name: &'static str,
@@ -1916,7 +1916,7 @@ fn check_partitioned_stress_scoreboard(
     pooled_baseline: StressBaseline,
     partitioned_baseline: PartitionedStressBaseline,
 ) {
-    use fucktorio_core::trace::TraceEvent;
+    use spaghettio_core::trace::TraceEvent;
 
     eprintln!("\n=== {test_name} :: Pooled ===");
     check_stress_scoreboard(test_name, pooled_result, pooled_baseline);
@@ -2111,7 +2111,7 @@ fn stress_advanced_circuit_45s_from_plates() {
 #[test]
 #[ntest::timeout(600000)]
 fn stress_advanced_circuit_partitioned_5s_from_plates() {
-    use fucktorio_core::bus::layout::LayoutStrategy;
+    use spaghettio_core::bus::layout::LayoutStrategy;
 
     let inputs: FxHashSet<String> = ["iron-plate", "copper-plate", "coal", "crude-oil", "water"]
         .iter().map(|s| s.to_string()).collect();
@@ -2176,7 +2176,7 @@ fn stress_advanced_circuit_partitioned_5s_from_plates() {
 #[test]
 #[ntest::timeout(600000)]
 fn stress_advanced_circuit_partitioned_4s_from_plates() {
-    use fucktorio_core::bus::layout::LayoutStrategy;
+    use spaghettio_core::bus::layout::LayoutStrategy;
 
     let inputs: FxHashSet<String> = ["iron-plate", "copper-plate", "coal", "crude-oil", "water"]
         .iter().map(|s| s.to_string()).collect();
@@ -2239,7 +2239,7 @@ fn stress_advanced_circuit_partitioned_4s_from_plates() {
 #[ignore]
 #[ntest::timeout(600000)]
 fn stress_advanced_circuit_partitioned_7s_from_plates() {
-    use fucktorio_core::bus::layout::LayoutStrategy;
+    use spaghettio_core::bus::layout::LayoutStrategy;
 
     let inputs: FxHashSet<String> = ["iron-plate", "copper-plate", "coal", "crude-oil", "water"]
         .iter().map(|s| s.to_string()).collect();
@@ -2339,8 +2339,8 @@ fn stress_advanced_circuit_partitioned_7s_from_plates() {
 #[test]
 #[ntest::timeout(600000)]
 fn stress_electronic_circuit_30s_decomposed() {
-    use fucktorio_core::bus::layout::LayoutStrategy;
-    use fucktorio_core::trace::TraceEvent;
+    use spaghettio_core::bus::layout::LayoutStrategy;
+    use spaghettio_core::trace::TraceEvent;
 
     let inputs: FxHashSet<String> = ["iron-ore", "copper-ore"]
         .iter().map(|s| s.to_string()).collect();
@@ -2403,7 +2403,7 @@ struct ScoreboardCase {
     inputs: &'static [&'static str],
     /// `None` → default `VerticalSplit`. Cases that test horizontal-stack
     /// row layout set this to `Some(RowLayout::HorizontalStack)`.
-    row_layout: Option<fucktorio_core::bus::layout::RowLayout>,
+    row_layout: Option<spaghettio_core::bus::layout::RowLayout>,
     /// Expected error counts: (Pool, PartitionedDecomposed). Test fails
     /// if any actual > expected. P1 (`PartitionedPerConsumer`) was
     /// dropped from the scoreboard when the enum variant was hard-deleted
@@ -2417,7 +2417,7 @@ struct ScoreboardCase {
 /// suggests tightening when actuals improve. Test name is the
 /// `test_name` passed to `run_e2e_with_strategy` for snapshot output.
 fn run_partition_scoreboard(test_name: &str, cases: &[ScoreboardCase]) {
-    use fucktorio_core::bus::layout::{LayoutStrategy, RowLayout};
+    use spaghettio_core::bus::layout::{LayoutStrategy, RowLayout};
     let mut tighten: Vec<String> = Vec::new();
     let mut regressions: Vec<String> = Vec::new();
     for case in cases {
@@ -2703,7 +2703,7 @@ fn partition_strategy_scoreboard_extended() {
                 "steel-plate", "stone", "coal", "water", "crude-oil",
                 "iron-ore", "copper-ore",
             ],
-            row_layout: Some(fucktorio_core::bus::layout::RowLayout::HorizontalStack),
+            row_layout: Some(spaghettio_core::bus::layout::RowLayout::HorizontalStack),
             // Pool 2 → 1 with row_input_belt fix; P1/P2 each
             // ticked up 5 → 6 from the new row-belt-tier choice
             // interacting with the existing west-edge belt-loop bug.
@@ -2733,7 +2733,7 @@ fn partition_strategy_scoreboard_extended() {
 #[ntest::timeout(600000)]
 #[ignore = "diagnostic; run with --ignored to dump fresh ac5-ores-yellow-hs snapshot"]
 fn diag_ac5_ores_yellow_hs_input_rate() {
-    use fucktorio_core::bus::layout::{LayoutStrategy, RowLayout};
+    use spaghettio_core::bus::layout::{LayoutStrategy, RowLayout};
     let inputs: FxHashSet<String> = ["stone", "coal", "water", "crude-oil", "iron-ore", "copper-ore"]
         .iter()
         .map(|s| s.to_string())
@@ -2762,7 +2762,7 @@ fn diag_ac5_ores_yellow_hs_input_rate() {
     // Probe lane_rates along the y=123 copper-cable chain to figure out
     // where flow gets lost. The first warning was on (25, 123) so trace
     // back from the trunk's exit at (7, 123) east.
-    let lane_rates = fucktorio_core::validate::belt_flow::compute_lane_rates(
+    let lane_rates = spaghettio_core::validate::belt_flow::compute_lane_rates(
         &result.layout,
         Some(&result.solver_result),
     );
@@ -2828,7 +2828,7 @@ fn processing_unit_2s_am2_fast_belts_validation_baseline() {
 
     let mut by_cat: std::collections::BTreeMap<String, usize> = Default::default();
     for i in &result.issues {
-        if matches!(i.severity, fucktorio_core::validate::Severity::Error) {
+        if matches!(i.severity, spaghettio_core::validate::Severity::Error) {
             *by_cat.entry(i.category.clone()).or_default() += 1;
         }
     }
@@ -2909,7 +2909,7 @@ fn pipe_belt_processing_unit_1s_routes() {
     // the belt is dropped by the survivor filter and no UG bypass is
     // stamped. Phase 2 must drive these to zero.
     let belt_errs: Vec<_> = result.issues.iter()
-        .filter(|i| matches!(i.severity, fucktorio_core::validate::Severity::Error)
+        .filter(|i| matches!(i.severity, spaghettio_core::validate::Severity::Error)
             && i.category.contains("belt"))
         .collect();
     assert!(
@@ -2988,7 +2988,7 @@ fn stress_electronic_circuit_60s_red_from_ore() {
 // let the SAT-call analyzer measure how sensitive the junction-problem
 // distribution is to small rate deltas (22 vs 23) and how it scales
 // (35, 40). Gather with:
-//   FUCKTORIO_DUMP_SNAPSHOTS=1 cargo test --manifest-path \
+//   SPAGHETTIO_DUMP_SNAPSHOTS=1 cargo test --manifest-path \
 //     crates/core/Cargo.toml --test e2e -- --include-ignored stress_
 // then `python scripts/analyze_sat_calls.py --min-solve-us 5000`.
 
@@ -3139,7 +3139,7 @@ fn stress_electronic_circuit_40s_from_ore() {
 #[ntest::timeout(60000)]
 #[allow(clippy::type_complexity)]
 fn diag_ghost_cluster_ac_from_ore() {
-    use fucktorio_core::common::{machine_size, machine_tiles};
+    use spaghettio_core::common::{machine_size, machine_tiles};
     use rustc_hash::FxHashMap;
     use std::cmp::Reverse;
 
@@ -3442,7 +3442,7 @@ fn diag_ghost_cluster_helper(
     inputs: &FxHashSet<String>,
     skip_validation: bool,
 ) {
-    use fucktorio_core::common::{machine_size, machine_tiles};
+    use spaghettio_core::common::{machine_size, machine_tiles};
     use rustc_hash::FxHashMap;
     use std::cmp::Reverse;
 
@@ -3790,7 +3790,7 @@ fn diag_ghost_cluster_stress_processing_unit_20s() {
 #[ntest::timeout(60000)]
 #[allow(clippy::type_complexity)]
 fn diag_ghost_cluster_copper_cable_feeders() {
-    use fucktorio_core::common::{machine_size, machine_tiles};
+    use spaghettio_core::common::{machine_size, machine_tiles};
     use rustc_hash::FxHashMap;
     use std::cmp::Reverse;
 
@@ -4211,7 +4211,7 @@ fn diag_sat_zone_histogram() {
 
     // Resolve binary cache path. Falls back to legacy .jsonl if .bin doesn't
     // exist, so this diag still works against pre-binary log files.
-    let base = std::env::var("FUCKTORIO_ZONE_CACHE_PATH")
+    let base = std::env::var("SPAGHETTIO_ZONE_CACHE_PATH")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| {
             let cache_base = std::env::var("XDG_CACHE_HOME")
@@ -4224,7 +4224,7 @@ fn diag_sat_zone_histogram() {
                         .map(|h| std::path::PathBuf::from(h).join(".cache"))
                 })
                 .unwrap_or_else(|| std::path::PathBuf::from(".cache"));
-            cache_base.join("fucktorio").join("sat-zones.bin")
+            cache_base.join("spaghettio").join("sat-zones.bin")
         });
     let bin_path = base.clone();
     let jsonl_path = base.with_extension("jsonl");
@@ -4258,7 +4258,7 @@ fn diag_sat_zone_histogram() {
 
     // Binary records.
     if let Ok(bytes) = std::fs::read(&bin_path) {
-        for rec in fucktorio_core::zone_cache::parse_records(&bytes) {
+        for rec in spaghettio_core::zone_cache::parse_records(&bytes) {
             record_one(
                 rec.signature, rec.canon_w as u64, rec.canon_h as u64,
                 rec.variables as u64, rec.clauses as u64, rec.solve_time_us,
@@ -4742,7 +4742,7 @@ fn diag_junction_caps_sweep() {
 /// considers fully sound, leaving warning-producing ones out.
 ///
 /// Run with cache disabled so SAT actually runs and produces records:
-///   FUCKTORIO_USE_ZONE_CACHE=0 cargo test --release --test e2e -- \
+///   SPAGHETTIO_USE_ZONE_CACHE=0 cargo test --release --test e2e -- \
 ///       --ignored diag_curated_sweep --exact --nocapture
 ///
 /// Reports per-recipe clean/dirty/failed counts and the top validation
@@ -4795,7 +4795,7 @@ fn diag_curated_sweep() {
 
     eprintln!("\n=== diag_curated_sweep: {} combinations ===", combos.len());
 
-    fucktorio_core::zone_cache::defer_flush(true);
+    spaghettio_core::zone_cache::defer_flush(true);
 
     let sweep_start = I::now();
     let mut attempted = 0usize;
@@ -4828,22 +4828,22 @@ fn diag_curated_sweep() {
             if c.from_ore { "_ore" } else if c.from_crude { "_crude" } else { "" },
         );
 
-        fucktorio_core::zone_cache::discard_pending();
+        spaghettio_core::zone_cache::discard_pending();
 
         let result = run_e2e(&test_name, c.item, c.rate, "assembling-machine-1", c.belt, &available_inputs);
 
         match result {
             Ok(r) if r.issues.is_empty() => {
-                let pending = fucktorio_core::zone_cache::pending_count() as u64;
-                fucktorio_core::zone_cache::defer_flush(false);
-                fucktorio_core::zone_cache::flush();
-                fucktorio_core::zone_cache::defer_flush(true);
+                let pending = spaghettio_core::zone_cache::pending_count() as u64;
+                spaghettio_core::zone_cache::defer_flush(false);
+                spaghettio_core::zone_cache::flush();
+                spaghettio_core::zone_cache::defer_flush(true);
                 records_committed += pending;
                 clean += 1;
                 by_recipe.entry(c.item).or_default()[0] += 1;
             }
             Ok(r) => {
-                let dropped = fucktorio_core::zone_cache::discard_pending() as u64;
+                let dropped = spaghettio_core::zone_cache::discard_pending() as u64;
                 records_discarded += dropped;
                 dirty += 1;
                 by_recipe.entry(c.item).or_default()[1] += 1;
@@ -4852,7 +4852,7 @@ fn diag_curated_sweep() {
                 }
             }
             Err(_) => {
-                fucktorio_core::zone_cache::discard_pending();
+                spaghettio_core::zone_cache::discard_pending();
                 failed += 1;
                 by_recipe.entry(c.item).or_default()[2] += 1;
             }
@@ -4867,7 +4867,7 @@ fn diag_curated_sweep() {
         }
     }
 
-    fucktorio_core::zone_cache::defer_flush(false);
+    spaghettio_core::zone_cache::defer_flush(false);
 
     let elapsed_s = sweep_start.elapsed().as_secs_f64();
     eprintln!(
@@ -4911,11 +4911,11 @@ fn diag_curated_sweep() {
 #[test]
 #[ignore]
 fn diag_decomposition_potential() {
-    use fucktorio_core::zone_cache::{parse_records, DecodedRecord};
+    use spaghettio_core::zone_cache::{parse_records, DecodedRecord};
     use std::collections::{BTreeMap, HashSet};
 
     let mut records: Vec<DecodedRecord> = Vec::new();
-    let cache_path = std::env::var("FUCKTORIO_ZONE_CACHE_PATH")
+    let cache_path = std::env::var("SPAGHETTIO_ZONE_CACHE_PATH")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| {
             let base = std::env::var("XDG_CACHE_HOME").ok()
@@ -4923,7 +4923,7 @@ fn diag_decomposition_potential() {
                 .or_else(|| std::env::var("HOME").ok()
                     .map(|h| std::path::PathBuf::from(h).join(".cache")))
                 .unwrap_or_else(|| std::path::PathBuf::from(".cache"));
-            base.join("fucktorio").join("sat-zones.bin")
+            base.join("spaghettio").join("sat-zones.bin")
         });
     if let Ok(bytes) = std::fs::read(&cache_path) {
         records.extend(parse_records(&bytes));
@@ -4933,7 +4933,7 @@ fn diag_decomposition_potential() {
         records.extend(parse_records(&bytes));
     }
     if records.is_empty() {
-        panic!("no records — populate ~/.cache/fucktorio/sat-zones.bin first");
+        panic!("no records — populate ~/.cache/spaghettio/sat-zones.bin first");
     }
 
     let shapes_present: HashSet<(u32, u32)> = records.iter()
@@ -5036,15 +5036,15 @@ fn diag_decomposition_potential() {
 #[test]
 #[ignore]
 fn diag_decomposition_signature_match() {
-    use fucktorio_core::models::PlacedEntity;
-    use fucktorio_core::sat::{CrossingZone, ZoneBoundary};
-    use fucktorio_core::zone_cache::{
+    use spaghettio_core::models::PlacedEntity;
+    use spaghettio_core::sat::{CrossingZone, ZoneBoundary};
+    use spaghettio_core::zone_cache::{
         canonical_signature, parse_records, parse_signature, DecodedRecord, ParsedSignature,
     };
     use std::collections::{BTreeMap, HashMap, HashSet};
 
     let mut records: Vec<DecodedRecord> = Vec::new();
-    let cache_path = std::env::var("FUCKTORIO_ZONE_CACHE_PATH")
+    let cache_path = std::env::var("SPAGHETTIO_ZONE_CACHE_PATH")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| {
             let base = std::env::var("XDG_CACHE_HOME").ok()
@@ -5052,7 +5052,7 @@ fn diag_decomposition_signature_match() {
                 .or_else(|| std::env::var("HOME").ok()
                     .map(|h| std::path::PathBuf::from(h).join(".cache")))
                 .unwrap_or_else(|| std::path::PathBuf::from(".cache"));
-            base.join("fucktorio").join("sat-zones.bin")
+            base.join("spaghettio").join("sat-zones.bin")
         });
     if let Ok(bytes) = std::fs::read(&cache_path) {
         records.extend(parse_records(&bytes));
@@ -5062,7 +5062,7 @@ fn diag_decomposition_signature_match() {
         records.extend(parse_records(&bytes));
     }
     if records.is_empty() {
-        panic!("no records — populate ~/.cache/fucktorio/sat-zones.bin first");
+        panic!("no records — populate ~/.cache/spaghettio/sat-zones.bin first");
     }
 
     // Build the set of all known signatures.
@@ -5083,8 +5083,8 @@ fn diag_decomposition_signature_match() {
             return None;
         }
         match e.direction {
-            fucktorio_core::models::EntityDirection::East => Some(1),
-            fucktorio_core::models::EntityDirection::West => Some(-1),
+            spaghettio_core::models::EntityDirection::East => Some(1),
+            spaghettio_core::models::EntityDirection::West => Some(-1),
             _ => None,
         }
     }
@@ -5280,7 +5280,7 @@ fn diag_decomposition_signature_match() {
         channel_id: u32,
         is_input: bool,
     ) -> ZoneBoundary {
-        use fucktorio_core::models::EntityDirection::*;
+        use spaghettio_core::models::EntityDirection::*;
         let (x, y, direction) = match edge {
             'N' => (offset as i32, 0, North),
             'S' => (offset as i32, h.saturating_sub(1) as i32, South),

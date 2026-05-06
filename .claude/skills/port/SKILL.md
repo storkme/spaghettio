@@ -65,7 +65,7 @@ Assemble this prompt for the Agent tool. Replace `{UNIT_NAME}`, `{SCOPE}`, `{PYT
 
 ```
 ## Overall goal
-Port a Python module to Rust in crates/core for the Fucktorio web app. This is one unit in a larger porting effort — see docs/port-plan.md for the full plan.
+Port a Python module to Rust in crates/core for the Spaghettio web app. This is one unit in a larger porting effort — see docs/port-plan.md for the full plan.
 
 ## Your unit: {UNIT_NAME}
 
@@ -88,7 +88,7 @@ Port a Python module to Rust in crates/core for the Fucktorio web app. This is o
 3. Create the target Rust file(s). Add module declarations to `crates/core/src/lib.rs` or the relevant `mod.rs`.
 4. Port the Python logic as faithfully as possible. This is a translation, not a rewrite.
 5. Write unit tests that mirror the Done-When criterion. Where possible, compare against Python output for the same fixture.
-6. Verify: `cargo check --workspace` is clean, `cargo test -p fucktorio_core` passes.
+6. Verify: `cargo check --workspace` is clean, `cargo test -p spaghettio_core` passes.
 
 ## Shared context (project conventions)
 
@@ -98,7 +98,7 @@ Port a Python module to Rust in crates/core for the Fucktorio web app. This is o
 
 After you finish implementing the change:
 1. **Simplify** — Invoke the `Skill` tool with `skill: "simplify"` to review and clean up your changes.
-2. **Run tests** — Run `cargo test -p fucktorio_core` and `cargo check --workspace`. Fix any failures.
+2. **Run tests** — Run `cargo test -p spaghettio_core` and `cargo check --workspace`. Fix any failures.
 3. **Commit and push** — Commit with a clear message, push the branch, and create a PR with `gh pr create`. Use a descriptive title like "Port {UNIT_NAME} to Rust".
 4. **Report** — End with a single line: `PR: <url>`. If no PR was created, end with `PR: none — <reason>`.
 ```

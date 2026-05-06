@@ -1,4 +1,4 @@
-# Fucktorio
+# Spaghettio
 
 Automated Factorio factory blueprint generator. Takes a target item + production rate, solves recipe dependencies, generates a spatial bus layout, and exports a Factorio-importable blueprint string.
 
@@ -24,7 +24,7 @@ For full build commands (WASM rebuild, release builds), see [`docs/build-systems
 - **WASM rebuild**: `wasm-pack build crates/wasm-bindings --target web --out-dir "$(pwd)/web/src/wasm-pkg"`. Always pass an absolute `--out-dir` (see memory: `feedback_wasmpack_outdir`).
 - **Pre-commit hooks**: in `.githooks/pre-commit`, activate with `git config core.hooksPath .githooks`. Runs `cargo clippy` on staged Rust and `tsc` on staged TS. Bypass with `--no-verify` only for genuine emergencies.
 - **Scripts**: put exploratory snippets in `scripts/` rather than inline one-liners. Rust debug scripts go in `crates/core/examples/` or as `#[test] #[ignore]` benchmarks.
-- **Snapshots**: `FUCKTORIO_DUMP_SNAPSHOTS=1 cargo test ...` writes `.fls` files under `crates/core/target/tmp/`. Decode with `tail -c +5 <file> | base64 -d | gunzip`. See [`docs/layout-snapshot-debugger.md`](docs/layout-snapshot-debugger.md).
+- **Snapshots**: `SPAGHETTIO_DUMP_SNAPSHOTS=1 cargo test ...` writes `.fls` files under `crates/core/target/tmp/`. Decode with `tail -c +5 <file> | base64 -d | gunzip`. See [`docs/layout-snapshot-debugger.md`](docs/layout-snapshot-debugger.md).
 - **Process docs**: non-trivial design work uses [`docs/rfp-template.md`](docs/rfp-template.md) — the **kill criteria** section is required, since the dominant rework shape on this project is exploration that overruns its evidence. PRs follow [`.github/pull_request_template.md`](.github/pull_request_template.md), which captures intent, scope, verification actually run, and any deviations from agreed approach. Trivial changes can omit sections explicitly rather than leaving them blank.
 
 ## Architecture
@@ -33,13 +33,13 @@ For full build commands (WASM rebuild, release builds), see [`docs/build-systems
 
 - **`crates/core/`** — pure shared logic: solver, recipe DB, bus layout engine, blueprint export, A\*, validation. All new features and bug fixes land here. The `wasm` feature gates WASM-only derives.
 - **`crates/wasm-bindings/`** — thin wasm-bindgen wrapper exposing `solve`, `layout`, `export_blueprint`, and recipe lookups to the browser. Consumed by `web/src/engine.ts`.
-- **`crates/mining-cli/`** — `blueprint-analyze` native binary for dissecting community blueprint strings (stdin / file / `--batch` / `--json`). Uses `fucktorio_core::analysis` to expand books and report entity counts, recipes, and shape summaries.
+- **`crates/mining-cli/`** — `blueprint-analyze` native binary for dissecting community blueprint strings (stdin / file / `--batch` / `--json`). Uses `spaghettio_core::analysis` to expand books and report entity counts, recipes, and shape summaries.
 
 **Web app** (`web/`) is the primary interactive interface. Vite + vanilla TS + PixiJS v8 + pixi-viewport. Runs the full solver → layout → blueprint pipeline client-side via WASM. URL state encodes the recipe, rate, machine tier, external inputs, and belt tier, so links reproduce layouts exactly.
 
 ## Tooling
 
-- **Blueprint analyzer** — `cargo run -p fucktorio_mining --bin blueprint-analyze -- [file|--batch|--json]`. Useful for auditing community blueprints or spot-checking our own export round-trips.
+- **Blueprint analyzer** — `cargo run -p spaghettio_mining --bin blueprint-analyze -- [file|--batch|--json]`. Useful for auditing community blueprints or spot-checking our own export round-trips.
 - **Containerised Claude-Code runner** — `Dockerfile` + `docker-compose.yml` + `docker-entrypoint.sh` at the repo root. Ships a `node:24` image with Claude Code, `gh`, Rust, and the pi-coding-agent preinstalled. `docker compose run --rm claude-agent` drops into an interactive container with the workspace mounted and host creds (`~/.claude`, `~/.config/gh`) bind-mounted read-only. Used for one-shot / llama-backed watcher agent runs — see commit `56e2eeb`.
 
 ### Pipeline stages (all Rust)
@@ -111,11 +111,11 @@ Tracks which recipes produce zero-error bus blueprints. Moving up = real progres
 | 1 | `iron-gear-wheel` | 1 recipe, 1 solid input | SOLVED |
 | 2 | `electronic-circuit` | 2 recipes, 2 solid inputs | SOLVED (incl. from ores) |
 | 3 | `plastic-bar` | 1 recipe, 1 fluid + 1 solid input | SOLVED |
-| 4 | `advanced-circuit` | 5+ recipes, mixed solid/fluid | SOLVED (`tier4_advanced_circuit_from_ore_am2` green: AC@5/s ores AM2 yellow, 0 errors / 0 warnings). From plates still has lane-throughput warnings, [#65](https://github.com/storkme/fucktorio/issues/65). |
+| 4 | `advanced-circuit` | 5+ recipes, mixed solid/fluid | SOLVED (`tier4_advanced_circuit_from_ore_am2` green: AC@5/s ores AM2 yellow, 0 errors / 0 warnings). From plates still has lane-throughput warnings, [#65](https://github.com/storkme/spaghettio/issues/65). |
 | 5 | `processing-unit` | Deep chain, multiple fluids | Not attempted |
 | 6 | `rocket-control-unit` | Very deep chain | Not attempted |
 
-Open tracking issues for layout quality: [#135 balancer templates are oversized](https://github.com/storkme/fucktorio/issues/135), [#136 missing coprime balancer shapes](https://github.com/storkme/fucktorio/issues/136), [#68 fluid row 3-tile pitch](https://github.com/storkme/fucktorio/issues/68) (design: [`docs/rfp-fluid-dual-input-row.md`](docs/rfp-fluid-dual-input-row.md)).
+Open tracking issues for layout quality: [#135 balancer templates are oversized](https://github.com/storkme/spaghettio/issues/135), [#136 missing coprime balancer shapes](https://github.com/storkme/spaghettio/issues/136), [#68 fluid row 3-tile pitch](https://github.com/storkme/spaghettio/issues/68) (design: [`docs/rfp-fluid-dual-input-row.md`](docs/rfp-fluid-dual-input-row.md)).
 
 ## Verification protocol for layout engine changes
 
@@ -123,7 +123,7 @@ Layout bugs are easy to get wrong — zero validation errors can mean the check 
 
 1. **Run the full e2e suite** — `cargo test --manifest-path crates/core/Cargo.toml`. All 9 non-ignored e2e tests must stay green.
 2. **Load the case in the browser** — start the dev server, open the URL for the recipe you changed, and look at the layout with your eyes. A zero-warning layout that visibly has disconnected belts is a validator bug, not a success.
-3. **Check the snapshot for the exact bug you intended to fix** — `FUCKTORIO_DUMP_SNAPSHOTS=1 cargo test ... --nocapture <test>` then decode with the snippet in [`docs/layout-snapshot-debugger.md`](docs/layout-snapshot-debugger.md). Inspect entities at the suspect coordinates, not just the warning count.
+3. **Check the snapshot for the exact bug you intended to fix** — `SPAGHETTIO_DUMP_SNAPSHOTS=1 cargo test ... --nocapture <test>` then decode with the snippet in [`docs/layout-snapshot-debugger.md`](docs/layout-snapshot-debugger.md). Inspect entities at the suspect coordinates, not just the warning count.
 4. **Trace events are reliable signals** — `RouteFailure`, `BridgeDropped`, `CrossingZoneSkipped`, `BalancerStamped` are emitted by the pipeline and land in the snapshot's `trace.events`. Use them to confirm the specific failure mode before theorizing.
 5. **Don't trust an error-count drop alone** — if warnings go 5 → 0, ask *why*. Does the topology still make sense? Were belts actually re-routed, or did a check get silently skipped? Check the specific change caused the fix you wanted.
 6. **Clippy + WASM builds are checks, not nits** — a layout change that clippy-fails or breaks the WASM build is not done.
@@ -146,4 +146,4 @@ Layout bugs are easy to get wrong — zero validation errors can mean the check 
 
 ## Visualizations
 
-The web app at `http://localhost:5173` is the primary visualization — any URL (`?item=...&rate=...&in=...&belt=...`) renders a live layout with entity overlays, segment highlighting, and validation markers. The same app is deployed to GitHub Pages on every push to main: https://storkme.github.io/fucktorio/
+The web app at `http://localhost:5173` is the primary visualization — any URL (`?item=...&rate=...&in=...&belt=...`) renders a live layout with entity overlays, segment highlighting, and validation markers. The same app is deployed to GitHub Pages on every push to main: https://storkme.github.io/spaghettio/

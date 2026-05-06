@@ -1,8 +1,8 @@
-# Fucktorio
+# Spaghettio
 
-**Goal:** automatically generate end-to-end Factorio production lines. You pick the target item and a production rate; Fucktorio resolves the recipe tree, places machines + belts + pipes + power, validates the result against Factorio's physics, and emits an importable blueprint string.
+**Goal:** automatically generate end-to-end Factorio production lines. You pick the target item and a production rate; Spaghettio resolves the recipe tree, places machines + belts + pipes + power, validates the result against Factorio's physics, and emits an importable blueprint string.
 
-**[Try it in the browser](https://storkme.github.io/fucktorio/)** — full solver + bus layout + blueprint export runs client-side via WASM.
+**[Try it in the browser](https://storkme.github.io/spaghettio/)** — full solver + bus layout + blueprint export runs client-side via WASM.
 
 ## Quick start
 
@@ -51,7 +51,7 @@ CLAUDE.md has the detailed breakdown and links to open tracking issues.
 
 ## Built on
 
-Fucktorio leans heavily on two open-source projects. Credit where it's due:
+Spaghettio leans heavily on two open-source projects. Credit where it's due:
 
 - **[Factorio-SAT](https://github.com/R-O-C-K-E-T/Factorio-SAT/)** — R-O-C-K-E-T's SAT-based solver for Factorio belt puzzles. We vendor it under `external/factorio-sat/` and call its `belt_balancer` offline to generate our N→M balancer library (`scripts/generate_balancer_library.py` → `crates/core/src/bus/balancer_library.rs`). The runtime crossing-zone SAT encoder in `crates/core/src/sat.rs` is a simplified subset of the same approach.
 - **[factorio-draftsman](https://github.com/redruin1/factorio-draftsman)** — redruin1's Python library for reading and writing Factorio data. We use it at build time (`scripts/extract_factorio_data.py`, `scripts/extract_entity_frames.py`) to extract recipe and entity metadata from the installed Factorio data files into the JSON embedded in the Rust build. No runtime dependency.
@@ -60,6 +60,6 @@ Both projects made this one possible. Thank you.
 
 ## Visualizations
 
-Every push to `main` publishes the live web app to GitHub Pages: <https://storkme.github.io/fucktorio/>
+Every push to `main` publishes the live web app to GitHub Pages: <https://storkme.github.io/spaghettio/>
 
 Any URL with query params (`?item=iron-gear-wheel&rate=10&belt=yellow`) renders a live layout with entity overlays, segment highlighting, and validation markers.

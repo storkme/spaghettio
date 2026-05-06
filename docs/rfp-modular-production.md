@@ -44,9 +44,9 @@ strategy we produce; we don't silently upgrade or downgrade.
 
 Concrete failing case: `advanced_circuit` at moderate-to-high rates
 needs more copper cable than any 8-lane balancer can feed.
-[`#136`](https://github.com/storkme/fucktorio/issues/136) tracks the
-missing-shape problem. Related: [`#135`](https://github.com/storkme/fucktorio/issues/135)
-(balancer templates oversized) and [`#68`](https://github.com/storkme/fucktorio/issues/68)
+[`#136`](https://github.com/storkme/spaghettio/issues/136) tracks the
+missing-shape problem. Related: [`#135`](https://github.com/storkme/spaghettio/issues/135)
+(balancer templates oversized) and [`#68`](https://github.com/storkme/spaghettio/issues/68)
 (fluid row 3-tile pitch).
 
 Today the layout engine has no recourse when it hits a >8-lane

@@ -173,8 +173,8 @@ Per [the layout-engine verification protocol](../CLAUDE.md#verification-protocol
    validator across all 75 current templates; expect zero or near-zero
    errors. Document any unexpected failures as either validator bugs
    or library bugs (the audit hat from #266).
-2. **Smoke-test the bake.** Re-run `FUCKTORIO_BAKE_BATCH=1
-   FUCKTORIO_PURE_ROUTING_ENCODING=circuit cargo run --release -p
+2. **Smoke-test the bake.** Re-run `SPAGHETTIO_BAKE_BATCH=1
+   SPAGHETTIO_PURE_ROUTING_ENCODING=circuit cargo run --release -p
    balancer-gen` after the change. The 11 already-baked shapes should
    re-validate cleanly. The 7 new (n, 9) shapes should produce a
    lane-validate result per shape, and any rejections should bump

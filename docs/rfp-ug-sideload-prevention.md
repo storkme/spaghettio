@@ -454,7 +454,7 @@ entries change). It's foundation for phase 2.
 
 Phase 2A (src-cell direction constraint) is the next concrete step.
 ~10-15 LOC. Should fully clear the residual sideloads on (1, 10)
-and similar compose-generated shapes. Run `FUCKTORIO_REBAKE_SHAPES`
+and similar compose-generated shapes. Run `SPAGHETTIO_REBAKE_SHAPES`
 on each compose-generated shape, replace library entries that bake
 clean.
 

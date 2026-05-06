@@ -5,7 +5,7 @@
 Phase 1 ([`rfp-throughput-priority-merges.md`](rfp-throughput-priority-merges.md))
 confirmed the spec premise: 60/63 library templates are MX3 (composition-
 balanced), which is stronger than the MX2 (throughput-unlimited)
-property fucktorio's single-recipe-per-trunk bus actually needs.
+property spaghettio's single-recipe-per-trunk bus actually needs.
 
 This RFP scopes phase 2: build a Rust-side MX2 merge generator that, for
 any `(m, n)`, produces a `BalancerTemplate`-compatible logical+physical
@@ -39,13 +39,13 @@ The dominant lever is **#135** (template oversize). Spec brief estimate:
   SAT runner work targets `(1..10) × (1..10)`. Tier 5/6 layouts will
   soon demand shapes like `(9, 10)` and bigger.
 - **Latent bugs**: (5, 8) and (8, 6) are MX1 in the current library
-  ([#266](https://github.com/storkme/fucktorio/issues/266)). A
+  ([#266](https://github.com/storkme/spaghettio/issues/266)). A
   classifier-verified generator can replace them with correct MX2.
 
 ### Why MX2 not MX3
 
 Per [`docs/factorio-mechanics.md` — belt merger taxonomy](factorio-mechanics.md#belt-merger-taxonomy-mn-splitter-networks):
-fucktorio's bus has one item per trunk (single-recipe-per-row by
+spaghettio's bus has one item per trunk (single-recipe-per-row by
 construction). Composition guarantees (MX3) are wasted; the only
 load-bearing property is throughput-unlimited (MX2): every k-subset of
 inputs can simultaneously route to k outputs.
@@ -62,12 +62,12 @@ The spec brief lists three levels of "throughput-priority":
 1. **Saturation under all-saturated input.** Outputs are saturated
    when inputs are saturated. *Property of any feedforward tree.*
 2. **Equal output rate under uniform input.** Each output runs at
-   `total_in / n`. Required for fucktorio's bus (homogeneous consumer
+   `total_in / n`. Required for spaghettio's bus (homogeneous consumer
    rows must not see uneven feed rates, or some assemblers idle).
 3. **Max-flow under partial output blockage.** Inputs reroute around
    blocked outputs. Requires cross-mixing or back-loops.
 
-For fucktorio's bus design, output blockage is *uniform*: all consumer
+For spaghettio's bus design, output blockage is *uniform*: all consumer
 rows for a recipe consume at the same rate. So (3) isn't load-bearing.
 **(1) and (2) together** are the target — and (2) is what makes
 non-divisible `(m, n)` non-trivial.
@@ -98,7 +98,7 @@ properties (1)+(2)" from "MX3" — it'd label our intended target as MX1.
   cost is higher but the verifier's already there.
 
 I'd default to **D1a** (relax the classifier). MX2b is over-specified for
-fucktorio's bus, and the cleaner taxonomy makes the audit results more
+spaghettio's bus, and the cleaner taxonomy makes the audit results more
 useful.
 
 ### D2 — Logical-graph generator vs direct physical layout
@@ -253,7 +253,7 @@ once we trust the generator.
   in-game verification of representative shapes).
 - **Phase 2.2** (separate RFP): replace `scripts/generate_balancer_library.py`
   + Factorio-SAT entirely once 2.1 has shipped. Closes
-  [#135](https://github.com/storkme/fucktorio/issues/135) and the
+  [#135](https://github.com/storkme/spaghettio/issues/135) and the
   rfp-balancer-runner work.
 - **Out of scope:** lane-aware MX5 verification, mixed-content buses.
 

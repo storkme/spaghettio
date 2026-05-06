@@ -15,7 +15,7 @@
 //! [`snapshot_matches_algorithm`] (a unit test) guarantees the snapshot
 //! and the live algorithm agree — if a new recipe changes the table,
 //! regenerate the snapshot with
-//! `FUCKTORIO_UPDATE_SHORT_IDS=1 cargo test -p fucktorio_core short_ids`
+//! `SPAGHETTIO_UPDATE_SHORT_IDS=1 cargo test -p spaghettio_core short_ids`
 //! and audit the diff for any URL-breaking shifts before committing.
 //!
 //! Belt names get hardcoded one-letter codes elsewhere (only three tiers,
@@ -317,7 +317,7 @@ mod tests {
     ///
     /// To regenerate the file:
     ///
-    ///   FUCKTORIO_UPDATE_SHORT_IDS=1 cargo test -p fucktorio_core \
+    ///   SPAGHETTIO_UPDATE_SHORT_IDS=1 cargo test -p spaghettio_core \
     ///       --lib short_ids::tests::snapshot_matches_algorithm
     ///
     /// Then audit the diff: any code that *shifted* (rather than a new
@@ -327,7 +327,7 @@ mod tests {
         const SNAPSHOT_RAW: &str = include_str!("../data/short-ids.json");
         let expected = short_id_snapshot_json();
 
-        if std::env::var("FUCKTORIO_UPDATE_SHORT_IDS").is_ok() {
+        if std::env::var("SPAGHETTIO_UPDATE_SHORT_IDS").is_ok() {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("data")
                 .join("short-ids.json");
@@ -345,7 +345,7 @@ mod tests {
         assert_eq!(
             SNAPSHOT_RAW, expected,
             "short-ids.json is stale; rerun with \
-             FUCKTORIO_UPDATE_SHORT_IDS=1 cargo test short_ids::tests::snapshot_matches_algorithm \
+             SPAGHETTIO_UPDATE_SHORT_IDS=1 cargo test short_ids::tests::snapshot_matches_algorithm \
              to regenerate, then audit the diff for URL-breaking shifts"
         );
     }

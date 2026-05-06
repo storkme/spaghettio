@@ -1,11 +1,11 @@
 //! Debug tool: dump a bus layout as entity counts + ASCII map.
 //!
-//! Usage: cargo run -p fucktorio_core --example dump_layout [recipe] [rate]
+//! Usage: cargo run -p spaghettio_core --example dump_layout [recipe] [rate]
 //! Default: iron-gear-wheel 10.0
 
-use fucktorio_core::bus::layout::{build_bus_layout, LayoutOptions};
-use fucktorio_core::models::LayoutResult;
-use fucktorio_core::solver;
+use spaghettio_core::bus::layout::{build_bus_layout, LayoutOptions};
+use spaghettio_core::models::LayoutResult;
+use spaghettio_core::solver;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::BTreeMap;
 use std::env;

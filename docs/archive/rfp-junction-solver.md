@@ -305,5 +305,5 @@ individual tiles.
   crossing solver that becomes the fallback strategy.
 - [`crates/core/src/bus/ghost_router.rs`](../crates/core/src/bus/ghost_router.rs) —
   `resolve_clusters` is where the junction solver plugs in.
-- [#138](https://github.com/storkme/fucktorio/issues/138) �� SAT solver
+- [#138](https://github.com/storkme/spaghettio/issues/138) �� SAT solver
   optimisation backlog (memoisation, bifurcation, warm-start).

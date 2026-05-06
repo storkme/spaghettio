@@ -703,7 +703,7 @@ pub enum TraceEvent {
 
     // Diagnostic: when a cluster fails to solve, which spec(s) made
     // the difference? Emitted once per failed cluster (gated on
-    // `FUCKTORIO_BLAME_JUNCTIONS=1`). Each event names one spec whose
+    // `SPAGHETTIO_BLAME_JUNCTIONS=1`). Each event names one spec whose
     // removal lets the rest of the cluster solve. Multiple events for
     // one cluster mean any of those individual removals would unblock
     // it; zero events mean no single-spec removal helps (multi-spec

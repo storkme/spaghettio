@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AGENTS_DIR="${SCRIPT_DIR}/agents"
-IMAGE="${FUCKTORIO_AGENT_IMAGE:-fucktorio-agent:latest}"
+IMAGE="${SPAGHETTIO_AGENT_IMAGE:-spaghettio-agent:latest}"
 
 usage() {
     cat <<'EOF'
@@ -17,7 +17,7 @@ Environment:
                         issues:write. Avoid 'workflow' scope unless the agent
                         needs to edit files under .github/workflows/.
 
-  FUCKTORIO_AGENT_IMAGE (optional, default: fucktorio-agent:latest)
+  SPAGHETTIO_AGENT_IMAGE (optional, default: spaghettio-agent:latest)
                         The image tag to run.
 
 Examples:
@@ -94,7 +94,7 @@ if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
 fi
 
 short="$(openssl rand -hex 3)"
-container="fucktorio-agent-${NAME}-${short}"
+container="spaghettio-agent-${NAME}-${short}"
 
 echo "starting ${container} (agent=${NAME}, issue=#${ISSUE})"
 echo "use ctrl-c to abort; transcript streams to this terminal."

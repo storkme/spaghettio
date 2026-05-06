@@ -12,7 +12,7 @@
 use std::io::{self, BufRead, Read};
 use std::process;
 
-use fucktorio_core::analysis::{self, BlueprintAnalysis};
+use spaghettio_core::analysis::{self, BlueprintAnalysis};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();

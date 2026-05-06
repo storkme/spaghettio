@@ -18,11 +18,11 @@
 //! by both checkers; 0 conversion errors. New disagreements or set
 //! changes surface as test failures, not silent drift.
 
-use fucktorio_core::balancer::{from_splitter_graph, verify_balancer, VerifyError};
-use fucktorio_core::bus::balancer_classify::{
+use spaghettio_core::balancer::{from_splitter_graph, verify_balancer, VerifyError};
+use spaghettio_core::bus::balancer_classify::{
     classify, topology_of_template, BalancerClass, BalancerTemplateRef,
 };
-use fucktorio_core::bus::balancer_library::balancer_templates;
+use spaghettio_core::bus::balancer_library::balancer_templates;
 
 #[test]
 fn cross_validate_existing_templates() {
@@ -165,7 +165,7 @@ fn cross_validate_existing_templates() {
     //      `bake::from_splitter_graph`.
     assert!(
         disagreements.is_empty()
-            || std::env::var("FUCKTORIO_BALANCER_CV_PERMISSIVE").is_ok(),
+            || std::env::var("SPAGHETTIO_BALANCER_CV_PERMISSIVE").is_ok(),
         "verifier and classifier disagree on {} templates: {:#?}",
         disagreements.len(),
         disagreements

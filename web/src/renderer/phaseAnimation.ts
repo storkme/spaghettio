@@ -14,7 +14,7 @@
 
 import type { Application, Container, Graphics } from "pixi.js";
 import { beginAnimating, endAnimating, requestRender } from "./app";
-import type { LayoutResult, PlacedEntity } from "../wasm-pkg/fucktorio_wasm";
+import type { LayoutResult, PlacedEntity } from "../wasm-pkg/spaghettio_wasm";
 import { renderLayout, type HighlightController } from "./entities";
 
 const TOTAL_BUDGET_MS = 2200;

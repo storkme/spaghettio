@@ -163,12 +163,12 @@ debuggability.
 
 Per [the layout-engine verification protocol](../CLAUDE.md#verification-protocol-for-layout-engine-changes):
 
-1. **Smoke baseline.** `(2, 2)` Clos via `FUCKTORIO_DEBUG_2_2=1
-   FUCKTORIO_PURE_ROUTING_ENCODING=circuit cargo run --release -p
+1. **Smoke baseline.** `(2, 2)` Clos via `SPAGHETTIO_DEBUG_2_2=1
+   SPAGHETTIO_PURE_ROUTING_ENCODING=circuit cargo run --release -p
    balancer-gen` — must classify Balanced. Compare wall time.
 
-2. **Headline.** `(4, 9)` Clos via `FUCKTORIO_DEBUG_4_9=1
-   FUCKTORIO_PURE_ROUTING_ENCODING=circuit cargo run --release -p
+2. **Headline.** `(4, 9)` Clos via `SPAGHETTIO_DEBUG_4_9=1
+   SPAGHETTIO_PURE_ROUTING_ENCODING=circuit cargo run --release -p
    balancer-gen` — must classify Balanced. Wall target: ≤ 60s
    (vs current ~120s).
 

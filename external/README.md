@@ -1,7 +1,7 @@
 # External tools (not shipped in the repo)
 
 This directory holds third-party tools used for **offline** workflows.
-None of these are runtime dependencies of `fucktorio`.
+None of these are runtime dependencies of `spaghettio`.
 
 ## factorio-sat
 

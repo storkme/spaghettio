@@ -1,9 +1,9 @@
 //! Validate the user's processing-unit @ 2/s URL config (vertical-split,
 //! NOT horizontal-stack) and dump all issues by category.
 
-use fucktorio_core::bus::layout::{build_bus_layout, LayoutOptions};
-use fucktorio_core::solver;
-use fucktorio_core::validate::{self, LayoutStyle, Severity};
+use spaghettio_core::bus::layout::{build_bus_layout, LayoutOptions};
+use spaghettio_core::solver;
+use spaghettio_core::validate::{self, LayoutStyle, Severity};
 use rustc_hash::FxHashSet;
 use std::collections::BTreeMap;
 

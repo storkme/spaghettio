@@ -4,8 +4,8 @@
 //!   cargo run --manifest-path crates/core/Cargo.toml --release \
 //!     --example replay_region_trace -- <path_to_fixture.json>
 
-use fucktorio_core::fixture::{replay_region_fixture, RegionFixture};
-use fucktorio_core::trace::{self, TraceEvent};
+use spaghettio_core::fixture::{replay_region_fixture, RegionFixture};
+use spaghettio_core::trace::{self, TraceEvent};
 use std::env;
 
 fn main() {

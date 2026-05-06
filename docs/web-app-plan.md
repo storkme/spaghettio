@@ -14,7 +14,7 @@ Build an interactive web app for the Factorio blueprint generator. Three goals:
 Browser
 ├── Vanilla TS UI (sidebar: item picker, rate input, solver summary)
 ├── PixiJS v8 canvas (tile grid with pan/zoom via pixi-viewport)
-└── WASM module (fucktorio_core compiled via wasm-bindgen)
+└── WASM module (spaghettio_core compiled via wasm-bindgen)
 
 Rust Cargo Workspace
 ├── crates/core/           — shared pure logic (models, solver, recipe DB, blueprint export)

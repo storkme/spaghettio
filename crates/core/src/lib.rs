@@ -1,4 +1,4 @@
-//! `fucktorio_core` — shared pipeline logic for the Factorio blueprint generator.
+//! `spaghettio_core` — shared pipeline logic for the Factorio blueprint generator.
 //!
 //! Consumed by the WASM web app (`crates/wasm-bindings`). Enable the
 //! `wasm` feature to gate in `tsify-next`/`wasm-bindgen` derives;

@@ -7,13 +7,13 @@
 //!       iron-ore,copper-ore
 //!
 //! Run:
-//!   FUCKTORIO_DUMP_REGION_FIXTURE=/tmp/rfx_ec \
-//!   FUCKTORIO_DUMP_REGION_FIXTURE_SEED="3,8" \
+//!   SPAGHETTIO_DUMP_REGION_FIXTURE=/tmp/rfx_ec \
+//!   SPAGHETTIO_DUMP_REGION_FIXTURE_SEED="3,8" \
 //!     cargo run --manifest-path crates/core/Cargo.toml \
 //!     --example capture_ec_am1_seed_3_8 --release
 
-use fucktorio_core::bus::layout::{build_bus_layout, LayoutOptions};
-use fucktorio_core::solver;
+use spaghettio_core::bus::layout::{build_bus_layout, LayoutOptions};
+use spaghettio_core::solver;
 use rustc_hash::FxHashSet;
 
 fn main() {

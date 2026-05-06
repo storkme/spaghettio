@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AGENTS_DIR="${SCRIPT_DIR}/agents"
-IMAGE="${FUCKTORIO_AGENT_IMAGE:-fucktorio-agent:latest}"
+IMAGE="${SPAGHETTIO_AGENT_IMAGE:-spaghettio-agent:latest}"
 
 usage() {
     cat <<'EOF'
@@ -33,13 +33,13 @@ Environment:
   LLAMA_MAX_TOKENS  (optional)  Per-response cap (default: 8192).
   POLL_INTERVAL     (optional)  Seconds between issue-queue polls (default: 60).
 
-  FUCKTORIO_AGENT_IMAGE (optional, default: fucktorio-agent:latest)
+  SPAGHETTIO_AGENT_IMAGE (optional, default: spaghettio-agent:latest)
 
 Volumes:
   Each watcher owns three named Docker volumes:
-    fucktorio-workspace-<agent>  (/tmp/workspace — git clone, target/ cache)
-    fucktorio-cargo-<agent>      (~/.cargo/registry — downloaded crates)
-    fucktorio-state-<agent>      (/var/lib/agent — comment-tracking state.json)
+    spaghettio-workspace-<agent>  (/tmp/workspace — git clone, target/ cache)
+    spaghettio-cargo-<agent>      (~/.cargo/registry — downloaded crates)
+    spaghettio-state-<agent>      (/var/lib/agent — comment-tracking state.json)
   These survive container recreation and image rebuilds. Use --reset to wipe
   all three when you want a completely clean start.
 
@@ -72,7 +72,7 @@ list_agents() {
 }
 
 status() {
-    running="$(docker ps --format '{{.Names}}\t{{.Status}}' | grep '^fucktorio-watcher-' || true)"
+    running="$(docker ps --format '{{.Names}}\t{{.Status}}' | grep '^spaghettio-watcher-' || true)"
     if [ -z "$running" ]; then
         echo "no watchers running."
     else
@@ -81,10 +81,10 @@ status() {
     fi
 }
 
-container_name_for() { echo "fucktorio-watcher-$1"; }
-workspace_volume_for() { echo "fucktorio-workspace-$1"; }
-cargo_volume_for() { echo "fucktorio-cargo-$1"; }
-state_volume_for() { echo "fucktorio-state-$1"; }
+container_name_for() { echo "spaghettio-watcher-$1"; }
+workspace_volume_for() { echo "spaghettio-workspace-$1"; }
+cargo_volume_for() { echo "spaghettio-cargo-$1"; }
+state_volume_for() { echo "spaghettio-state-$1"; }
 
 reset_agent() {
     local name="$1"

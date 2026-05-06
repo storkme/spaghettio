@@ -2,9 +2,9 @@
 //! pipeline and report validator error/warning counts. Used to verify
 //! the clustering change doesn't regress the AM3 layout.
 
-use fucktorio_core::bus::layout::{build_bus_layout, LayoutOptions};
-use fucktorio_core::solver;
-use fucktorio_core::validate::{self, LayoutStyle, Severity};
+use spaghettio_core::bus::layout::{build_bus_layout, LayoutOptions};
+use spaghettio_core::solver;
+use spaghettio_core::validate::{self, LayoutStyle, Severity};
 use rustc_hash::FxHashSet;
 
 fn main() {

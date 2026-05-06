@@ -24,9 +24,9 @@
 use std::collections::BTreeMap;
 use std::env;
 
-use fucktorio_core::bus::layout::{build_bus_layout_traced, LayoutOptions};
-use fucktorio_core::solver;
-use fucktorio_core::trace::{BoundarySnapshot, StampedNeighbor, TraceEvent};
+use spaghettio_core::bus::layout::{build_bus_layout_traced, LayoutOptions};
+use spaghettio_core::solver;
+use spaghettio_core::trace::{BoundarySnapshot, StampedNeighbor, TraceEvent};
 use rustc_hash::FxHashSet;
 
 fn main() {

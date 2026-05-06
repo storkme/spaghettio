@@ -2,7 +2,7 @@
 //! library (`docs/rfp-balancer-bake-lane-validation.md`).
 //!
 //! For every `(m, n)` template in
-//! [`balancer_templates`](fucktorio_core::bus::balancer_library::balancer_templates),
+//! [`balancer_templates`](spaghettio_core::bus::balancer_library::balancer_templates),
 //! synthesise a minimal `LayoutResult` and run the lane-aware
 //! validators (UG pair / UG sideload / UG entry-sideload /
 //! lane-throughput). Print a markdown taxonomy table to stderr.
@@ -24,10 +24,10 @@
 
 use std::collections::BTreeMap;
 
-use fucktorio_core::bus::balancer_classify::BalancerTemplateRef;
-use fucktorio_core::bus::balancer_library::balancer_templates;
-use fucktorio_core::bus::template_validate::validate_template_lanes;
-use fucktorio_core::validate::Severity;
+use spaghettio_core::bus::balancer_classify::BalancerTemplateRef;
+use spaghettio_core::bus::balancer_library::balancer_templates;
+use spaghettio_core::bus::template_validate::validate_template_lanes;
+use spaghettio_core::validate::Severity;
 
 #[test]
 fn audit_lane_correctness() {
@@ -206,7 +206,7 @@ fn audit_lane_correctness() {
 /// invariant is the test's job.
 #[test]
 fn audit_lane_correctness_partial() {
-    use fucktorio_core::bus::template_validate::validate_template_lanes_at;
+    use spaghettio_core::bus::template_validate::validate_template_lanes_at;
 
     let templates = balancer_templates();
     let saturations: &[f64] = &[0.25, 0.5, 0.75];
@@ -347,7 +347,7 @@ fn debug_single_shape() {
 
     // Also list the raw entity records around the first issue coordinate so
     // we can see what's driving the rate value.
-    if let Some(first) = issues.iter().find(|i| matches!(i.severity, fucktorio_core::validate::Severity::Error)) {
+    if let Some(first) = issues.iter().find(|i| matches!(i.severity, spaghettio_core::validate::Severity::Error)) {
         let (Some(ix), Some(iy)) = (first.x, first.y) else { return };
         eprintln!("\n=== entities within ±2 of ({ix}, {iy}) ===");
         for e in t.entities.iter() {
@@ -358,7 +358,7 @@ fn debug_single_shape() {
     }
 
     // Compute and dump the full lane-rate map so we can see propagation.
-    use fucktorio_core::bus::template_validate::compute_template_lane_rates;
+    use spaghettio_core::bus::template_validate::compute_template_lane_rates;
     let rates = compute_template_lane_rates(BalancerTemplateRef::from(t));
     eprintln!("\n=== lane rates (left, right) per tile ===");
     let mut keys: Vec<_> = rates.keys().copied().collect();

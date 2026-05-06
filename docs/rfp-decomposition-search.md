@@ -29,7 +29,7 @@ real candidates, gated by the kill criteria below.
 ## Motivation
 
 Concrete failing case:
-[`?item=processing-unit&rate=3&machine=assembling-machine-3&in=coal,water,crude-oil,iron-ore,copper-ore&belt=fast-transport-belt&strategy=partitioned-decomposed`](https://storkme.github.io/fucktorio/?item=processing-unit&rate=3&machine=assembling-machine-3&in=coal%2Cwater%2Ccrude-oil%2Ciron-ore%2Ccopper-ore&belt=fast-transport-belt&strategy=partitioned-decomposed)
+[`?item=processing-unit&rate=3&machine=assembling-machine-3&in=coal,water,crude-oil,iron-ore,copper-ore&belt=fast-transport-belt&strategy=partitioned-decomposed`](https://storkme.github.io/spaghettio/?item=processing-unit&rate=3&machine=assembling-machine-3&in=coal%2Cwater%2Ccrude-oil%2Ciron-ore%2Ccopper-ore&belt=fast-transport-belt&strategy=partitioned-decomposed)
 — copper-plate produces a `(4, 9)` balancer module that no library template
 covers (gcd=1, coprime). After commits `8191cd2` / `18c1493` / `cd62344`
 landed pad-lanes / shard fix strategies in `bus/shape_fix.rs`, the case

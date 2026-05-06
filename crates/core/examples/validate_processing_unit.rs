@@ -2,9 +2,9 @@
 //! print all validator findings. Used to verify the
 //! `check_fluid_network_connectivity` validator catches the broken trunks.
 
-use fucktorio_core::bus::layout::{build_bus_layout, LayoutOptions};
-use fucktorio_core::solver;
-use fucktorio_core::validate::{self, LayoutStyle, Severity};
+use spaghettio_core::bus::layout::{build_bus_layout, LayoutOptions};
+use spaghettio_core::solver;
+use spaghettio_core::validate::{self, LayoutStyle, Severity};
 use rustc_hash::FxHashSet;
 
 fn main() {

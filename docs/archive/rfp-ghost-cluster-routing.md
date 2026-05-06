@@ -266,7 +266,7 @@ chain endpoints) in the pole placer's occupied set.
 
 Implemented as `crates/core/src/bus/ghost_router.rs`, with `ghost_astar`
 in `astar.rs` and env var gate in `layout.rs`. Gated behind
-`FUCKTORIO_GHOST_ROUTING=1`. When set, `route_bus_ghost` replaces
+`SPAGHETTIO_GHOST_ROUTING=1`. When set, `route_bus_ghost` replaces
 `route_bus`: places trunk belts + splitter stamps + balancer blocks as
 hard obstacles, routes every connecting-belt spec with `ghost_astar`,
 records ghost crossings, union-finds them into clusters.
@@ -387,7 +387,7 @@ delete the old code paths listed in "What goes away".
   the pipeline being replaced.
 - [`crates/core/src/sat.rs`](../crates/core/src/sat.rs) — SAT crossing
   solver; the engine this proposal leans on.
-- [#138](https://github.com/storkme/fucktorio/issues/138) — SAT solver
+- [#138](https://github.com/storkme/spaghettio/issues/138) — SAT solver
   optimization opportunities unlocked by the zone cache (memoisation,
   bifurcation, shape-specific fast paths, warm-start).
 - [`crates/core/tests/e2e.rs`](../crates/core/tests/e2e.rs) —

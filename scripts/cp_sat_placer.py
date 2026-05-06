@@ -1599,10 +1599,10 @@ def place_one_to_m_from_synth() -> dict[str, Any]:
     # Also disable UG belts in 4-level mode by default — the wide-spread
     # layout has a free east-edge column for the feedback wrap, so UG
     # isn't needed for any of the routes; killing the UG vars roughly
-    # halves the model size. Override via FUCKTORIO_CP_SAT_UG_MAX env
+    # halves the model size. Override via SPAGHETTIO_CP_SAT_UG_MAX env
     # var (set to 4 to re-enable UG; useful for layout debugging).
     workers = 8 if levels == 4 else 1
-    ug_env = os.environ.get("FUCKTORIO_CP_SAT_UG_MAX")
+    ug_env = os.environ.get("SPAGHETTIO_CP_SAT_UG_MAX")
     if ug_env is not None:
         ug_max_reach = int(ug_env)
     else:
@@ -1690,13 +1690,13 @@ def main() -> int:
     n = int(request.get("n", 0))
     m = int(request.get("m", 0))
     timeout_ms = int(request.get("timeout_ms", 1000))
-    # Seed precedence: env var FUCKTORIO_CP_SAT_SEED > request "seed" field >
+    # Seed precedence: env var SPAGHETTIO_CP_SAT_SEED > request "seed" field >
     # None (CP-SAT picks a wall-clock seed). Mirrors the spike placer's
     # convention in `crates/balancer-gen/scripts/place.py` so the same
     # sweep harness pattern can drive both. The env var is used by
     # `scripts/bake_cp_sat_runner.py` (overnight seed sweep) to vary the
     # seed without rewriting the request body.
-    seed_env = os.environ.get("FUCKTORIO_CP_SAT_SEED")
+    seed_env = os.environ.get("SPAGHETTIO_CP_SAT_SEED")
     if seed_env is not None:
         seed = int(seed_env)
     else:
@@ -1735,7 +1735,7 @@ def main() -> int:
         (2, 16): lambda: place_x_to_sixteen(2),
         # Generalised placer for `(1, m)` shapes. 4-level shapes
         # (`(1, 9)`, `(1, 10)`) are wired but the model is large; pin a
-        # known-fast seed via `FUCKTORIO_CP_SAT_SEED=<seed>` (sweep
+        # known-fast seed via `SPAGHETTIO_CP_SAT_SEED=<seed>` (sweep
         # harness in `scripts/bake_cp_sat_runner.py`).
         (1, 5): place_one_to_m_from_synth,
         (1, 6): place_one_to_m_from_synth,
