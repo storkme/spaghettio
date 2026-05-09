@@ -4,7 +4,7 @@ import type {
   PlacedEntity,
   ValidationIssue,
   TraceEvent,
-} from "./wasm-pkg/fucktorio_wasm.js";
+} from "./wasm-pkg/spaghettio_wasm.js";
 
 export type {
   SolverResult,
@@ -20,7 +20,7 @@ export type {
   EntityDirection,
   ValidationIssue,
   TraceEvent,
-} from "./wasm-pkg/fucktorio_wasm.js";
+} from "./wasm-pkg/spaghettio_wasm.js";
 
 /**
  * Result shape for `engine.solveFixture` — mirrors the
@@ -60,7 +60,7 @@ let activeStreamingId: number | null = null;
 // in-memory cache on boot via `seedZoneCache`; appended to whenever a
 // descent terminates with `SatOptimumProven`. Same wire format as
 // `crates/core/data/sat-zones.bin` — concatenated length-prefixed records.
-const SAT_CACHE_KEY = "fucktorio:sat-cache:v1";
+const SAT_CACHE_KEY = "spaghettio:sat-cache:v1";
 let satCacheBytes: Uint8Array<ArrayBufferLike> = new Uint8Array(0);
 
 function readSatCacheFromStorage(): Uint8Array<ArrayBufferLike> {
@@ -156,7 +156,7 @@ export async function initEngine(): Promise<void> {
   if (worker) return;
   worker = new Worker(new URL("./workers/engine.worker.ts", import.meta.url), {
     type: "module",
-    name: "fucktorio-engine",
+    name: "spaghettio-engine",
   });
   worker.onmessage = (e: MessageEvent<WorkerResponse>) => {
     const { id } = e.data;

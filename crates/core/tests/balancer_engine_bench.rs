@@ -12,11 +12,11 @@
 
 use std::time::Duration;
 
-use fucktorio_core::balancer::placement::library_lookup::LibraryLookup;
-use fucktorio_core::balancer::placement::{
+use spaghettio_core::balancer::placement::library_lookup::LibraryLookup;
+use spaghettio_core::balancer::placement::{
     PlacementEngine, PlacementError, PlacementRequest,
 };
-use fucktorio_core::balancer::synth::synth;
+use spaghettio_core::balancer::synth::synth;
 
 #[test]
 fn bench_library_vs_synth_for_n_m_up_to_10() {
@@ -124,6 +124,6 @@ fn bench_library_vs_synth_for_n_m_up_to_10() {
     );
 }
 
-fn splitter_count(t: &fucktorio_core::balancer::placement::PlacedTemplate) -> usize {
+fn splitter_count(t: &spaghettio_core::balancer::placement::PlacedTemplate) -> usize {
     t.entities.iter().filter(|e| e.name == "splitter").count()
 }

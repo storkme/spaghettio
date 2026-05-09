@@ -7,8 +7,8 @@ import { dirname, resolve } from "node:path";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkgDir = resolve(__dirname, "../web/src/wasm-pkg");
 
-const wasmMod = await import(`${pkgDir}/fucktorio_wasm.js`);
-const wasmBytes = readFileSync(`${pkgDir}/fucktorio_wasm_bg.wasm`);
+const wasmMod = await import(`${pkgDir}/spaghettio_wasm.js`);
+const wasmBytes = readFileSync(`${pkgDir}/spaghettio_wasm_bg.wasm`);
 await wasmMod.default(new WebAssembly.Module(wasmBytes));
 wasmMod.init();
 

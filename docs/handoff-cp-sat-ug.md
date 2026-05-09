@@ -212,7 +212,7 @@ geometry is wrong — adjust splitter positions.
 
 ```bash
 # Round-trip suite (tests/cp_sat_round_trip.rs):
-FUCKTORIO_RUN_CP_SAT=1 cargo test --manifest-path crates/core/Cargo.toml \
+SPAGHETTIO_RUN_CP_SAT=1 cargo test --manifest-path crates/core/Cargo.toml \
     --test cp_sat_round_trip -- --test-threads=1
 
 # Unit tests:

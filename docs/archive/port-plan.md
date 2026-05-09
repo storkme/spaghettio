@@ -15,7 +15,7 @@ For the inventory view (what's ported, what stays Python), see `docs/port-status
 - **Reference implementation**: the Python code in `src/` is the source of truth. When in doubt, match Python's behaviour exactly — this is a port, not a rewrite.
 - **Test fixtures**: for each unit, write at least one unit test that matches a known Python output (check `tests/` for existing assertions to mirror).
 - **Cargo.toml**: keep deps alphabetically sorted. Add new deps to `crates/core/Cargo.toml`.
-- **Verification before commit**: `cargo check --workspace` must be clean; `cargo test -p fucktorio_core` must pass.
+- **Verification before commit**: `cargo check --workspace` must be clean; `cargo test -p spaghettio_core` must pass.
 
 ## Unit list
 
@@ -27,7 +27,7 @@ For the inventory view (what's ported, what stays Python), see `docs/port-status
 **Rust**: `crates/core/src/common.rs` (new file). Export constants + helper fns.
 **Dependencies**: none — foundation unit.
 **Size**: ~150 LOC Rust.
-**Done when**: `cargo test -p fucktorio_core common` passes unit tests asserting machine size for assembling-machine-3 (3×3), belt tier for rate <15 (transport-belt), etc.
+**Done when**: `cargo test -p spaghettio_core common` passes unit tests asserting machine size for assembling-machine-3 (3×3), belt tier for rate <15 (transport-belt), etc.
 
 #### `bus-placer`
 **Scope**: Group machines by recipe into rows; split rows when throughput exceeds belt capacity.

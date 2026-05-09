@@ -1,7 +1,7 @@
 # Lane column packing: can we share bus columns between y-disjoint lanes?
 
 **Status**: Investigation closed 2026-04-23. Answer: **Not without rebuilding ghost-router crossing resolution.**
-**Related**: PR [#160](https://github.com/storkme/fucktorio/pull/160) (closed unmerged).
+**Related**: PR [#160](https://github.com/storkme/spaghettio/pull/160) (closed unmerged).
 
 ## What we were trying to do
 
@@ -47,7 +47,7 @@ Both fixes were landed locally:
 
 ### The failure mode after the fixes
 
-Same three errors, same coordinates. Snapshot inspection (`FUCKTORIO_DUMP_SNAPSHOTS=1 cargo test ... tier2_electronic_circuit_from_ore`) explains why.
+Same three errors, same coordinates. Snapshot inspection (`SPAGHETTIO_DUMP_SNAPSHOTS=1 cargo test ... tier2_electronic_circuit_from_ore`) explains why.
 
 Under the packer, the lane columns come out as:
 
@@ -101,6 +101,6 @@ Starting points worth knowing:
 - `ghost_router.rs:317-325` is the source-of-truth y-footprint formula any packer must mirror (mirrored in the attempted `active_range` rewrite).
 - `lane_order.rs:83` is the template-aware scoring that needs generalising for packed columns. The `ox = pos + 1` assumption is the first thing to break.
 - The crossing-zone detection is in `ghost_router` steps 4-6 plus `junction_solver`. A packed-column feeder vs. trunk crossing needs to land in that detector before anything else will work.
-- Snapshot inspection recipe: `FUCKTORIO_DUMP_SNAPSHOTS=1 cargo test --manifest-path crates/core/Cargo.toml --test e2e --release tier2_electronic_circuit_from_ore`, then decode `target/tmp/snapshot-*.fls` per `docs/layout-snapshot-debugger.md`. Filter `layout.entities` by `x == 1 and 15 <= y <= 55` to see the iron-ore vs copper-cable interleaving directly.
+- Snapshot inspection recipe: `SPAGHETTIO_DUMP_SNAPSHOTS=1 cargo test --manifest-path crates/core/Cargo.toml --test e2e --release tier2_electronic_circuit_from_ore`, then decode `target/tmp/snapshot-*.fls` per `docs/layout-snapshot-debugger.md`. Filter `layout.entities` by `x == 1 and 15 <= y <= 55` to see the iron-ore vs copper-cable interleaving directly.
 
 The original PR branch `feat/streaming-visibility-and-grid` and the exploration branch `pack-lane-columns-fix` were both deleted. The packer code is reachable via PR #160's final commit `e1b6da9`.

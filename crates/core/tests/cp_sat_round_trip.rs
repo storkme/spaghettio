@@ -10,23 +10,23 @@
 //!   5. Run `verify_balancer` and assert the recovered graph is balanced
 //!      at the expected `n/m` rate.
 //!
-//! Gated on `FUCKTORIO_RUN_CP_SAT=1` so CI doesn't try to install
+//! Gated on `SPAGHETTIO_RUN_CP_SAT=1` so CI doesn't try to install
 //! `ortools`. Run locally with:
 //!
 //! ```text
-//! FUCKTORIO_RUN_CP_SAT=1 cargo test --test cp_sat_round_trip
+//! SPAGHETTIO_RUN_CP_SAT=1 cargo test --test cp_sat_round_trip
 //! ```
 
 use std::time::Duration;
 
-use fucktorio_core::balancer::placement::cp_sat::CpSat;
-use fucktorio_core::balancer::placement::{PlacementEngine, PlacementRequest};
-use fucktorio_core::balancer::synth::synth;
-use fucktorio_core::balancer::{from_splitter_graph, verify_balancer};
-use fucktorio_core::bus::balancer_classify::{topology_of_template, BalancerTemplateRef};
+use spaghettio_core::balancer::placement::cp_sat::CpSat;
+use spaghettio_core::balancer::placement::{PlacementEngine, PlacementRequest};
+use spaghettio_core::balancer::synth::synth;
+use spaghettio_core::balancer::{from_splitter_graph, verify_balancer};
+use spaghettio_core::bus::balancer_classify::{topology_of_template, BalancerTemplateRef};
 
 fn maybe_engine() -> Option<CpSat> {
-    if std::env::var("FUCKTORIO_RUN_CP_SAT").is_err() {
+    if std::env::var("SPAGHETTIO_RUN_CP_SAT").is_err() {
         return None;
     }
     let manifest = env!("CARGO_MANIFEST_DIR");

@@ -269,7 +269,7 @@ If `RouteFailure` events exist, add a `⚠ N` badge to the step bar. Clicking it
 
 ### 4.1 Run history storage
 
-After each traced layout, store in `localStorage["fucktorio-trace-history"]`:
+After each traced layout, store in `localStorage["spaghettio-trace-history"]`:
 
 ```json
 [

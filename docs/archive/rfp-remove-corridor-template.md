@@ -18,7 +18,7 @@ RFP's scope.
 ## Motivation
 
 The corridor template was introduced in
-[`b383bed`](https://github.com/storkme/fucktorio/commit/b383bed)
+[`b383bed`](https://github.com/storkme/spaghettio/commit/b383bed)
 (2026-04-12) with this rationale:
 
 > Add a corridor template for runs of 2..4 adjacent trunks crossed
@@ -32,7 +32,7 @@ run. Measured validator-error reduction of 28% on
 `tier4_advanced_circuit_from_ore_am1_ghost`.
 
 **Two days later**
-([`0ea0367`](https://github.com/storkme/fucktorio/commit/0ea0367),
+([`0ea0367`](https://github.com/storkme/spaghettio/commit/0ea0367),
 2026-04-14) the SAT-based region-growth junction solver was
 introduced. That solver can handle arbitrary crossing shapes, and
 the cluster-formation machinery (`cluster_adjacent_crossings`)

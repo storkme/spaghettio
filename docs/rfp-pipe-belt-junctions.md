@@ -188,7 +188,7 @@ Follows CLAUDE.md's
    `junction:{belt_item}:...` segment id should appear at every
    pipe-trunk × belt intersection. Zero `JunctionTemplateRejected` with
    reason `surface_conflict` or similar at those tiles.
-4. **Snapshot**: `FUCKTORIO_DUMP_SNAPSHOTS=1 cargo test ...
+4. **Snapshot**: `SPAGHETTIO_DUMP_SNAPSHOTS=1 cargo test ...
    stress_processing_unit_20s_from_plates --nocapture`, decode, and
    confirm each pipe column has its adjacent belt rows using UG-in /
    UG-out pairs directly next to the pipe tile (not five tiles away,
@@ -239,7 +239,7 @@ Follows CLAUDE.md's
   satisfies all constraints without bridging the forbidden tile.
   The walker correctly vetoes; growth doesn't help because SAT
   proposes the same trivial model at every iteration. Confirmed
-  via `FUCKTORIO_DUMP_WALKER_VETO=seed:12,44` on the new
+  via `SPAGHETTIO_DUMP_WALKER_VETO=seed:12,44` on the new
   `pipe_belt_processing_unit_1s_routes` test.
 - *2026-04-24 — kept the gate fix and the
   `debug_assert!`-to-`continue` change at the cluster-handled-tile

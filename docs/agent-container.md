@@ -1,7 +1,7 @@
 # Agent container
 
 A Docker image that runs a [pi](https://pi.dev/) coding agent against
-Fucktorio GitHub issues. Two modes:
+Spaghettio GitHub issues. Two modes:
 
 - **One-shot** (`scripts/run-agent.sh`): the human names one issue, the
   container clones the repo, runs pi against that issue, then exits.
@@ -14,7 +14,7 @@ Both modes use the same image and the same personality files.
 ## Build
 
 ```sh
-docker build -t fucktorio-agent:latest .
+docker build -t spaghettio-agent:latest .
 ```
 
 Rebuild whenever you change `Dockerfile`, `docker-entrypoint.sh`, either
@@ -69,8 +69,8 @@ The watcher:
 
 1. Clones the repo into `/tmp/workspace` *if the persistent volume is empty*;
    otherwise it reuses what's there and `git fetch`es. The workspace volume
-   (`fucktorio-workspace-<agent>`) and cargo cache volume
-   (`fucktorio-cargo-<agent>`) survive container recreation and image
+   (`spaghettio-workspace-<agent>`) and cargo cache volume
+   (`spaghettio-cargo-<agent>`) survive container recreation and image
    rebuilds, so cold-compile costs are paid once per `--reset`.
 2. Loops: pick one open issue labelled `${AGENT_NAME}-ready` (e.g.
    `misia-ready`), reset the workspace to `origin/main`, branch to
@@ -88,9 +88,9 @@ Three named Docker volumes per watcher:
 
 | Volume | Mount point | Contents |
 |--------|-------------|----------|
-| `fucktorio-workspace-<agent>` | `/tmp/workspace` | Git clone, `target/` build cache |
-| `fucktorio-cargo-<agent>` | `~/.cargo/registry` | Downloaded crates |
-| `fucktorio-state-<agent>` | `/var/lib/agent` | `state.json` — per-issue/PR last-seen comment timestamps (see [Conversing with the agent](#conversing-with-the-agent)) |
+| `spaghettio-workspace-<agent>` | `/tmp/workspace` | Git clone, `target/` build cache |
+| `spaghettio-cargo-<agent>` | `~/.cargo/registry` | Downloaded crates |
+| `spaghettio-state-<agent>` | `/var/lib/agent` | `state.json` — per-issue/PR last-seen comment timestamps (see [Conversing with the agent](#conversing-with-the-agent)) |
 
 Host reboot: volumes survive, Docker auto-restarts the container (`--restart unless-stopped`), container picks up mid-idle (or mid-issue if it was working — without resume semantics; see [Limits](#limits)).
 
@@ -171,7 +171,7 @@ watcher's own auto-comments and all agent-authored comments include this
 marker). Your own comments should **not** include this marker — you want
 them to trigger the watcher.
 
-**State file.** `state.json` on the `fucktorio-state-<agent>` volume
+**State file.** `state.json` on the `spaghettio-state-<agent>` volume
 tracks per-issue and per-PR last-seen comment timestamps. Dump it with
 `./scripts/run-watcher.sh --state <agent>`. Shape:
 
@@ -326,7 +326,7 @@ pi auto-discovers `CLAUDE.md` and `AGENTS.md` from the workspace root on every r
 
 ## Recommended `GH_TOKEN` scopes
 
-Fine-grained PAT scoped to a single repo (e.g. `storkme/fucktorio`), with the
+Fine-grained PAT scoped to a single repo (e.g. `storkme/spaghettio`), with the
 minimum set of repository permissions:
 
 - **Contents**: Read and write
@@ -343,7 +343,7 @@ Personality files are **baked into the image at build time**, not read from the
 live checkout. The rule is: **edit → rebuild → run**.
 
 1. Create or edit `scripts/agents/<name>.md`.
-2. Rebuild the image: `docker build -t fucktorio-agent:latest .` (Docker's
+2. Rebuild the image: `docker build -t spaghettio-agent:latest .` (Docker's
    layer cache makes this fast once the Rust layer is warm — usually a few
    seconds for a pure personality-file change).
 3. Launch: `./scripts/run-agent.sh <name> <issue>` or

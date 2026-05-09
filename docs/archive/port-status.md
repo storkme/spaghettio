@@ -28,5 +28,5 @@ The full pipeline is ported to `crates/core` and runs in the browser via WASM. S
 | `src/analysis/` | Debug/research tool for parsing existing blueprints |
 | `src/visualize.py`, `src/showcase.py` | Draftsman-based HTML viz for pytest; browser has its own Pixi renderer |
 | `src/verify.py` | ASCII-map structural debug tool |
-| `src/spaghetti/`, `src/routing/`, `src/search/` | Parked; spaghetti engine work is paused per [#62](https://github.com/storkme/fucktorio/issues/62) |
+| `src/spaghetti/`, `src/routing/`, `src/search/` | Parked; spaghetti engine work is paused per [#62](https://github.com/storkme/spaghettio/issues/62) |
 | Python pipeline + pytest suite | Reference implementation and regression test harness |

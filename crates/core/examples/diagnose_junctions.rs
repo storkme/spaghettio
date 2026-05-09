@@ -10,11 +10,11 @@
 
 use std::collections::BTreeMap;
 
-use fucktorio_core::bus::layout::{build_bus_layout_traced, LayoutOptions};
-use fucktorio_core::models::{EntityDirection, LayoutRegion, PortIo, RegionKind, RegionPort};
-use fucktorio_core::solver;
-use fucktorio_core::trace::TraceEvent;
-use fucktorio_core::validate::{self, LayoutStyle};
+use spaghettio_core::bus::layout::{build_bus_layout_traced, LayoutOptions};
+use spaghettio_core::models::{EntityDirection, LayoutRegion, PortIo, RegionKind, RegionPort};
+use spaghettio_core::solver;
+use spaghettio_core::trace::TraceEvent;
+use spaghettio_core::validate::{self, LayoutStyle};
 use rustc_hash::FxHashSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

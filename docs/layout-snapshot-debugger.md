@@ -33,7 +33,7 @@ Once loaded, every existing visualization — entity rendering, trace overlays, 
 <snapshot blob> = "fls1" + base64(gzip(<json payload>))
 ```
 
-Lead with a 4-byte magic prefix (`"fls1"` = "Fucktorio Layout Snapshot v1") so we can detect and version-check without parsing. Gzip-wrapped JSON keeps the blob small (a typical layout is 5–20 KB compressed, under 30 KB base64'd) and remains debuggable with standard tools.
+Lead with a 4-byte magic prefix (`"fls1"` = "Spaghettio Layout Snapshot v1") so we can detect and version-check without parsing. Gzip-wrapped JSON keeps the blob small (a typical layout is 5–20 KB compressed, under 30 KB base64'd) and remains debuggable with standard tools.
 
 ### JSON payload schema
 
@@ -102,7 +102,7 @@ Extend the e2e test helper at `crates/core/tests/e2e.rs`:
 ```rust
 fn run_e2e_with_snapshot(...) -> Result<E2EResult, String> {
     let result = run_e2e(...)?;
-    if env::var("FUCKTORIO_DUMP_SNAPSHOTS").is_ok() || result.issues.iter().any(is_error) {
+    if env::var("SPAGHETTIO_DUMP_SNAPSHOTS").is_ok() || result.issues.iter().any(is_error) {
         let snapshot = LayoutSnapshot::from_run(params, &result.layout, ...);
         let path = PathBuf::from(env::var("CARGO_TARGET_TMPDIR").unwrap())
             .join(format!("snapshot-{}.fls", test_name));
@@ -253,7 +253,7 @@ Snapshots are 5–30 KB. You can email them, paste them in a gist, drop them in 
 - [ ] Panic hook integration with `ntest::timeout` so hanging tests also dump
 - [ ] Verify the panic hook actually fires on timeout (write a deliberately-hanging test as a check)
 
-**Validation:** Run the e2e suite. Failing/hanging tests leave `.fls` files in `target/tmp/`. Successful tests don't (unless `FUCKTORIO_DUMP_SNAPSHOTS=1`).
+**Validation:** Run the e2e suite. Failing/hanging tests leave `.fls` files in `target/tmp/`. Successful tests don't (unless `SPAGHETTIO_DUMP_SNAPSHOTS=1`).
 
 ### Phase 3 — Web app loader + hydration (2–3 days)
 

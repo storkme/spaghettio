@@ -57,7 +57,7 @@ pub enum BalancerClass {
     /// `max_flow(S → all)` = `min(|S|, n)` for every input subset `S`, but
     /// does *not* guarantee max-flow over output subsets.
     ///
-    /// Sufficient for fucktorio's bus (homogeneous consumer rows). The
+    /// Sufficient for spaghettio's bus (homogeneous consumer rows). The
     /// throughput-priority generator targets this class.
     ThroughputBalancedRate,
     /// MX2b — full max-flow property: also holds over output subsets.

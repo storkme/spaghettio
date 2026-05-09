@@ -1,6 +1,6 @@
 //! Promote runtime SAT zone cache → embedded corpus.
 //!
-//! Reads `~/.cache/fucktorio/sat-zones.bin` (the file the solver writes to
+//! Reads `~/.cache/spaghettio/sat-zones.bin` (the file the solver writes to
 //! at runtime), merges its entries with the existing embedded corpus at
 //! `crates/core/data/sat-zones.bin`, deduplicates by canonical signature
 //! (runtime entries overwrite embedded ones on collision), and writes the
@@ -10,27 +10,27 @@
 //!   cargo run --manifest-path crates/core/Cargo.toml --example promote_runtime_cache
 //!
 //! Or to promote from a custom runtime cache path:
-//!   FUCKTORIO_ZONE_CACHE_PATH=/path/to/sat-zones.bin \
+//!   SPAGHETTIO_ZONE_CACHE_PATH=/path/to/sat-zones.bin \
 //!       cargo run --manifest-path crates/core/Cargo.toml --example promote_runtime_cache
 //!
 //! After promotion, commit `crates/core/data/sat-zones.bin` to embed the
 //! expanded corpus in the next build.
 //!
 //! Regeneration recipe (start clean to maximise coverage):
-//!   rm -f ~/.cache/fucktorio/sat-zones.bin
+//!   rm -f ~/.cache/spaghettio/sat-zones.bin
 //!   cargo test --manifest-path crates/core/Cargo.toml
 //!   cargo test --manifest-path crates/core/Cargo.toml --test science_gauntlet \
 //!       -- --ignored --nocapture
 //!   cargo run --manifest-path crates/core/Cargo.toml --example promote_runtime_cache
 
-use fucktorio_core::zone_cache::{encode_record, parse_records, ENCODER_VERSION};
+use spaghettio_core::zone_cache::{encode_record, parse_records, ENCODER_VERSION};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 /// Resolve the runtime cache path using the same logic as `zone_cache`
 /// (env override → XDG → HOME fallback).
 fn runtime_cache_path() -> PathBuf {
-    if let Ok(p) = std::env::var("FUCKTORIO_ZONE_CACHE_PATH") {
+    if let Ok(p) = std::env::var("SPAGHETTIO_ZONE_CACHE_PATH") {
         return PathBuf::from(p);
     }
     let base = std::env::var("XDG_CACHE_HOME")
@@ -43,7 +43,7 @@ fn runtime_cache_path() -> PathBuf {
                 .map(|h| PathBuf::from(h).join(".cache"))
         })
         .unwrap_or_else(|| PathBuf::from(".cache"));
-    base.join("fucktorio").join("sat-zones.bin")
+    base.join("spaghettio").join("sat-zones.bin")
 }
 
 fn main() {
@@ -88,7 +88,7 @@ fn main() {
             );
             eprintln!("Have you run the test suite first to warm the cache?");
             eprintln!(
-                "  rm -f ~/.cache/fucktorio/sat-zones.bin && cargo test --manifest-path crates/core/Cargo.toml"
+                "  rm -f ~/.cache/spaghettio/sat-zones.bin && cargo test --manifest-path crates/core/Cargo.toml"
             );
             std::process::exit(1);
         }
@@ -108,7 +108,7 @@ fn main() {
     // iterate in deterministic order for a reproducible output file.
     // -----------------------------------------------------------------------
     // We store the raw records by signature, newest wins.
-    use fucktorio_core::zone_cache::DecodedRecord;
+    use spaghettio_core::zone_cache::DecodedRecord;
     let mut by_sig: BTreeMap<String, DecodedRecord> = BTreeMap::new();
 
     for rec in embedded_records {
@@ -153,10 +153,10 @@ fn main() {
                     _ => return None,
                 };
                 let dir = match e.direction {
-                    fucktorio_core::models::EntityDirection::North => 0i32,
-                    fucktorio_core::models::EntityDirection::East => 1,
-                    fucktorio_core::models::EntityDirection::South => 2,
-                    fucktorio_core::models::EntityDirection::West => 3,
+                    spaghettio_core::models::EntityDirection::North => 0i32,
+                    spaghettio_core::models::EntityDirection::East => 1,
+                    spaghettio_core::models::EntityDirection::South => 2,
+                    spaghettio_core::models::EntityDirection::West => 3,
                 };
                 let carries_idx = match e.carries.as_deref() {
                     None => -1i32,
@@ -202,9 +202,9 @@ fn main() {
     }
 
     // Summary for the PR
-    let solved_after = by_sig.values().filter(|r| matches!(r.outcome, fucktorio_core::zone_cache::CachedOutcome::Solved)).count();
-    let unsat_after  = by_sig.values().filter(|r| matches!(r.outcome, fucktorio_core::zone_cache::CachedOutcome::Unsat)).count();
-    let timeo_after  = by_sig.values().filter(|r| matches!(r.outcome, fucktorio_core::zone_cache::CachedOutcome::Timeout{..})).count();
+    let solved_after = by_sig.values().filter(|r| matches!(r.outcome, spaghettio_core::zone_cache::CachedOutcome::Solved)).count();
+    let unsat_after  = by_sig.values().filter(|r| matches!(r.outcome, spaghettio_core::zone_cache::CachedOutcome::Unsat)).count();
+    let timeo_after  = by_sig.values().filter(|r| matches!(r.outcome, spaghettio_core::zone_cache::CachedOutcome::Timeout{..})).count();
     println!();
     println!("=== promotion summary ===");
     println!(

@@ -9,13 +9,13 @@
 //!   cargo test --manifest-path crates/core/Cargo.toml --test region_fixtures
 //!
 //! See `tests/region_fixtures/README.md` for the schema, the capture
-//! workflow (via `FUCKTORIO_DUMP_REGION_FIXTURE`), and the promote-to-
+//! workflow (via `SPAGHETTIO_DUMP_REGION_FIXTURE`), and the promote-to-
 //! committed-fixture checklist.
 //!
 //! All fixture failures are accumulated and reported together at the end.
 
-use fucktorio_core::fixture::{replay_region_fixture, RegionFixture, RequiredEntity};
-use fucktorio_core::models::PlacedEntity;
+use spaghettio_core::fixture::{replay_region_fixture, RegionFixture, RequiredEntity};
+use spaghettio_core::models::PlacedEntity;
 use std::path::Path;
 
 /// Return human-readable descriptions of every `required` entity that

@@ -40,11 +40,11 @@
 //!     --test mode_d_baseline -- --ignored --nocapture
 //! ```
 
-use fucktorio_core::bus::balancer_classify::{classify, BalancerClass};
-use fucktorio_core::bus::balancer_generate::OwnedTemplate;
-use fucktorio_core::bus::balancer_library::balancer_templates;
-use fucktorio_core::bus::template_validate::validate_template_lanes;
-use fucktorio_core::validate::Severity;
+use spaghettio_core::bus::balancer_classify::{classify, BalancerClass};
+use spaghettio_core::bus::balancer_generate::OwnedTemplate;
+use spaghettio_core::bus::balancer_library::balancer_templates;
+use spaghettio_core::bus::template_validate::validate_template_lanes;
+use spaghettio_core::validate::Severity;
 
 /// Shapes for which we have a Raynquist baseline entry in the library.
 /// Add to this list as more Raynquist imports land. Each shape's

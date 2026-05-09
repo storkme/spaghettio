@@ -3,9 +3,9 @@
 //! Run with:
 //!   cargo test --manifest-path crates/core/Cargo.toml --test sat_pins
 
-use fucktorio_core::fixture::{build_zone, Fixture};
-use fucktorio_core::models::{EntityDirection, PlacedEntity};
-use fucktorio_core::sat::{solve_crossing_zone_with_pins, CrossingZone, ZoneBoundary};
+use spaghettio_core::fixture::{build_zone, Fixture};
+use spaghettio_core::models::{EntityDirection, PlacedEntity};
+use spaghettio_core::sat::{solve_crossing_zone_with_pins, CrossingZone, ZoneBoundary};
 
 fn load_sample_fixture() -> Fixture {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

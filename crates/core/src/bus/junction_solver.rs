@@ -1897,7 +1897,7 @@ fn trim_path_near_bbox(tiles: &[(i32, i32)], bbox: Rect) -> Option<&[(i32, i32)]
 // ---------------------------------------------------------------------------
 
 /// Print the exact input the walker was given when it vetoes a SAT
-/// solution. Enabled by setting `FUCKTORIO_DUMP_WALKER_VETO=1` (optionally
+/// solution. Enabled by setting `SPAGHETTIO_DUMP_WALKER_VETO=1` (optionally
 /// `=seed:10,197` to filter by seed, or `=tile:11,196` to filter by
 /// break tile). Off by default — adds nothing to the trace when
 /// disabled.
@@ -1923,7 +1923,7 @@ fn dump_walker_veto(
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let filter = match std::env::var("FUCKTORIO_DUMP_WALKER_VETO") {
+        let filter = match std::env::var("SPAGHETTIO_DUMP_WALKER_VETO") {
             Ok(v) if !v.is_empty() && v != "0" => v,
             _ => return,
         };

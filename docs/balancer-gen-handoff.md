@@ -38,7 +38,7 @@ Phase 4 fully shipped; post-bake quality work landed on branch tip:
 ```
 
 A reduced repro (`debug_compose_clos_2_2`, gated by
-`FUCKTORIO_DEBUG_2_2=1`) builds the same Beneš pattern on `(2, 2)` —
+`SPAGHETTIO_DEBUG_2_2=1`) builds the same Beneš pattern on `(2, 2)` —
 finds `junction_height=6`, recovers 8 edges, classifies `Balanced`.
 Useful as a fast regression check (~10s) when iterating on the
 junction model.
@@ -86,10 +86,10 @@ straight to the relevant phase:
 
 ```bash
 # Fast (~10s after build): (2, 2) Beneš via compose, with diagnostics.
-FUCKTORIO_DEBUG_2_2=1 cargo run -p balancer-gen
+SPAGHETTIO_DEBUG_2_2=1 cargo run -p balancer-gen
 
 # Slow (~20 min release): the headline (4, 9) Clos compose.
-FUCKTORIO_DEBUG_4_9=1 cargo run --release -p balancer-gen
+SPAGHETTIO_DEBUG_4_9=1 cargo run --release -p balancer-gen
 ```
 
 Both should print `classified: Balanced` and a `✓` line.
@@ -98,8 +98,8 @@ Both should print `classified: Balanced` and a `✓` line.
 
 ```bash
 # Clone
-git clone git@github.com:storkme/fucktorio.git
-cd fucktorio
+git clone git@github.com:storkme/spaghettio.git
+cd spaghettio
 git checkout claude/throughput-priority-merges-YcXbi
 
 # Rust

@@ -10,7 +10,7 @@
 import { onEngineActivity } from "../engine";
 
 const STYLE = `
-.fucktorio-busy {
+.spaghettio-busy {
   position: absolute;
   top: 12px;
   right: 12px;
@@ -29,23 +29,23 @@ const STYLE = `
   opacity: 0;
   transition: opacity 0.15s ease;
 }
-.fucktorio-busy.visible { opacity: 1; }
-.fucktorio-busy-spin {
+.spaghettio-busy.visible { opacity: 1; }
+.spaghettio-busy-spin {
   width: 12px;
   height: 12px;
   border: 2px solid #2a2a2a;
   border-top-color: #569cd6;
   border-radius: 50%;
-  animation: fucktorio-busy-spin 0.7s linear infinite;
+  animation: spaghettio-busy-spin 0.7s linear infinite;
   display: inline-block;
 }
-@keyframes fucktorio-busy-spin { to { transform: rotate(360deg); } }
+@keyframes spaghettio-busy-spin { to { transform: rotate(360deg); } }
 `;
 
 function injectStyle(): void {
-  if (document.getElementById("fucktorio-busy-style")) return;
+  if (document.getElementById("spaghettio-busy-style")) return;
   const el = document.createElement("style");
-  el.id = "fucktorio-busy-style";
+  el.id = "spaghettio-busy-style";
   el.textContent = STYLE;
   document.head.appendChild(el);
 }
@@ -56,10 +56,10 @@ export function attachBusyOverlay(container: HTMLElement): void {
   injectStyle();
 
   const overlay = document.createElement("div");
-  overlay.className = "fucktorio-busy";
+  overlay.className = "spaghettio-busy";
 
   const spinner = document.createElement("span");
-  spinner.className = "fucktorio-busy-spin";
+  spinner.className = "spaghettio-busy-spin";
   overlay.appendChild(spinner);
 
   const label = document.createElement("span");

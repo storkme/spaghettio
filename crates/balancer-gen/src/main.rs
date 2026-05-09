@@ -19,17 +19,17 @@ use std::process::{Command, Stdio};
 
 use serde::{Deserialize, Serialize};
 
-use fucktorio_core::bus::balancer_classify::{
+use spaghettio_core::bus::balancer_classify::{
     classify_graph, classify_ref, topology_of_template, BalancerClass, BalancerTemplateRef,
     NodeId, SplitterGraph,
 };
-use fucktorio_core::bus::balancer_generate::OwnedTemplate;
-use fucktorio_core::bus::balancer_library::{balancer_templates, BalancerTemplateEntity};
-use fucktorio_core::bus::balancer_topology::{
+use spaghettio_core::bus::balancer_generate::OwnedTemplate;
+use spaghettio_core::bus::balancer_library::{balancer_templates, BalancerTemplateEntity};
+use spaghettio_core::bus::balancer_topology::{
     clos_interleave, library_atom, parallel, series_permuted,
 };
-use fucktorio_core::bus::template_validate::validate_template_lanes;
-use fucktorio_core::validate::Severity;
+use spaghettio_core::bus::template_validate::validate_template_lanes;
+use spaghettio_core::validate::Severity;
 // Aliased import — `parallel` is a graph-level combinator from
 // balancer_topology; `compose_parallel` (defined locally) is the
 // template-level combinator. Both are needed in the same fn for the
@@ -145,23 +145,23 @@ struct BeltOutput {
 // ---------------------------------------------------------------------------
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    if std::env::var("FUCKTORIO_DEBUG_2_2").is_ok() {
+    if std::env::var("SPAGHETTIO_DEBUG_2_2").is_ok() {
         println!("=== phase 4.4 debug: (2, 2) Clos via compose_* ===");
         return debug_compose_clos_2_2();
     }
-    if std::env::var("FUCKTORIO_DEBUG_4_9").is_ok() {
+    if std::env::var("SPAGHETTIO_DEBUG_4_9").is_ok() {
         println!("=== phase 4.4: (4, 9) Clos via compose_* ===");
         return stress_compose_clos_4_9();
     }
-    if std::env::var("FUCKTORIO_BAKE_1_9").is_ok() {
+    if std::env::var("SPAGHETTIO_BAKE_1_9").is_ok() {
         println!("=== phase 3.4 spike: (1, 9) via compose + codegen ===");
         return bake_compose_1_9();
     }
-    if std::env::var("FUCKTORIO_BAKE_BATCH").is_ok() {
+    if std::env::var("SPAGHETTIO_BAKE_BATCH").is_ok() {
         println!("=== phase 3.4: bake missing shapes ===");
         return bake_missing_shapes();
     }
-    if let Ok(mode_d_value) = std::env::var("FUCKTORIO_MODE_D_ONLY") {
+    if let Ok(mode_d_value) = std::env::var("SPAGHETTIO_MODE_D_ONLY") {
         // Fast path: skip phases 3.1, 3.2 (round-trips), 3.2A/B/C
         // (flow-conservation routing) and run only phase 3.2D (Mode D
         // synth-place). Used to validate Mode D constraints in
@@ -214,7 +214,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         if shapes.is_empty() {
             return Err(format!(
-                "FUCKTORIO_MODE_D_ONLY={mode_d_value:?} parsed to zero shapes"
+                "SPAGHETTIO_MODE_D_ONLY={mode_d_value:?} parsed to zero shapes"
             )
             .into());
         }
@@ -868,7 +868,7 @@ fn spike_synth_place(
     // after an INFEASIBLE at library bbox. Library entries (especially
     // Factorio-SAT-generated ones) are often very tight; Mode D's
     // current encoding may need 1-2 cells of slack to find a placement.
-    let slack: u32 = std::env::var("FUCKTORIO_MODE_D_BBOX_SLACK")
+    let slack: u32 = std::env::var("SPAGHETTIO_MODE_D_BBOX_SLACK")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(0);
@@ -876,7 +876,7 @@ fn spike_synth_place(
     // Optional solver budget override (seconds). Bumps the Python CP-SAT
     // `max_time_in_seconds` and matches it against the Rust-side kill
     // check below. Default leaves both at their hard-coded values.
-    let budget_override: Option<f64> = std::env::var("FUCKTORIO_MODE_D_BUDGET_S")
+    let budget_override: Option<f64> = std::env::var("SPAGHETTIO_MODE_D_BUDGET_S")
         .ok()
         .and_then(|v| v.parse().ok());
     let req = PlaceRequest::SynthPlace {
@@ -982,7 +982,7 @@ fn spike_synth_place(
     Ok(())
 }
 
-/// MX2a (saturated + balanced rate) is the minimum class needed for fucktorio's
+/// MX2a (saturated + balanced rate) is the minimum class needed for spaghettio's
 /// homogeneous-row bus. MX2b and MX3 are stronger and also acceptable. MX1 is
 /// not — outputs may starve.
 fn class_acceptable_for_bus(class: BalancerClass) -> bool {
@@ -996,7 +996,7 @@ fn class_acceptable_for_bus(class: BalancerClass) -> bool {
 
 fn assemble_template_from_routing(
     shape: (u32, u32),
-    lib: &fucktorio_core::bus::balancer_library::BalancerTemplate,
+    lib: &spaghettio_core::bus::balancer_library::BalancerTemplate,
     splitter_positions: &[SplitterPosOut],
     belts: &[BeltOutput],
     ugs: &[UgOutput],
@@ -1585,8 +1585,8 @@ fn bake_missing_shapes() -> Result<(), Box<dyn std::error::Error>> {
     // Optional re-bake override: semicolon-separated `(m,n)` pairs that
     // should be re-generated even though they exist in the library. Used
     // to fix grandfathered-in templates that fail the current lane gate.
-    // Example: FUCKTORIO_REBAKE_SHAPES='(7,2);(9,2)'
-    let force_rebake: HashSet<(u32, u32)> = std::env::var("FUCKTORIO_REBAKE_SHAPES")
+    // Example: SPAGHETTIO_REBAKE_SHAPES='(7,2);(9,2)'
+    let force_rebake: HashSet<(u32, u32)> = std::env::var("SPAGHETTIO_REBAKE_SHAPES")
         .ok()
         .map(|s| {
             s.split(';')
@@ -1615,7 +1615,7 @@ fn bake_missing_shapes() -> Result<(), Box<dyn std::error::Error>> {
             continue;
         }
         if force_rebake.contains(&(m, n)) {
-            println!("\n--- [{}/{total}] ({m}, {n}): FORCE-REBAKE (FUCKTORIO_REBAKE_SHAPES) ---", idx + 1);
+            println!("\n--- [{}/{total}] ({m}, {n}): FORCE-REBAKE (SPAGHETTIO_REBAKE_SHAPES) ---", idx + 1);
         }
         println!("\n--- [{}/{total}] ({m}, {n}): {:?} → {:?} via {:?} ---",
                  idx + 1, r.stage1, r.stage2, r.perm);
@@ -1890,7 +1890,7 @@ fn compose_series(
     const LONG_TIMEOUT: f64 = 600.0;
 
     // Encoding selector is constant for the whole compose_series call.
-    let encoding: Option<&'static str> = match std::env::var("FUCKTORIO_PURE_ROUTING_ENCODING").as_deref() {
+    let encoding: Option<&'static str> = match std::env::var("SPAGHETTIO_PURE_ROUTING_ENCODING").as_deref() {
         Ok("circuit") => Some("circuit"),
         _ => None,
     };

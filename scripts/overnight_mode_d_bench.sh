@@ -100,8 +100,8 @@ fi
 run_mode_d_attempt() {
     local shape=$1 slack=$2 cap_gb=$3 timeout_s=$4
     local cap_bytes=$((cap_gb * 1024 * 1024 * 1024))
-    FUCKTORIO_MODE_D_ONLY="$shape" \
-    FUCKTORIO_MODE_D_BBOX_SLACK="$slack" \
+    SPAGHETTIO_MODE_D_ONLY="$shape" \
+    SPAGHETTIO_MODE_D_BBOX_SLACK="$slack" \
     nice -n 19 ionice -c idle \
     prlimit --as="$cap_bytes" \
     timeout "$timeout_s" \

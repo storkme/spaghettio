@@ -95,7 +95,7 @@ For the J2-style "all attempts UNSAT, capped, retry the whole layout" pathology,
 
 Apply after phase 1 ships, before deciding whether to proceed to phase 2.
 
-1. **No measurable wall-clock improvement on the slow tail.** If `cargo nextest run -p fucktorio_core --profile ci` total runtime drops by less than 20% (currently 275s local single-threaded, target ≤220s) after phase 1, the SAT-on-UNSAT cost wasn't the dominant bottleneck and we abandon both phases. Re-profile to find the real cost.
+1. **No measurable wall-clock improvement on the slow tail.** If `cargo nextest run -p spaghettio_core --profile ci` total runtime drops by less than 20% (currently 275s local single-threaded, target ≤220s) after phase 1, the SAT-on-UNSAT cost wasn't the dominant bottleneck and we abandon both phases. Re-profile to find the real cost.
 2. **Cache-hit rate doesn't change.** If the cache-hit:cache-miss ratio in `partition_strategy_scoreboard`'s snapshot stays at 17.8% post-phase-1, the reorder didn't actually capture more cache hits — something about the variant-shape signatures means our scan isn't seeing what `try_solve_on_region` eventually sees. Investigate before phase 2.
 3. **Layout regression on any CLEAN test.** If any of the 13 CLEAN-class e2e tests goes from 0 errors / 0 warnings to non-zero, the cache-first reorder broke determinism or cost optimality. Hard kill — revert.
 4. **Phase 2 implementation requires more than ~300 LOC of speculative-expansion plumbing.** That signals the lookahead semantics are fighting the existing growth loop, and the small win isn't worth the architectural debt. Stop after phase 1.

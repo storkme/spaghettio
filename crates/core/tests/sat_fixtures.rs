@@ -11,9 +11,9 @@
 //! See `tests/sat_fixtures/README.md` for the fixture schema and
 //! workflow for adding new fixtures.
 
-use fucktorio_core::bus::junction_cost::solution_cost;
-use fucktorio_core::fixture::{build_zone, Fixture};
-use fucktorio_core::sat::solve_crossing_zone_with_stats;
+use spaghettio_core::bus::junction_cost::solution_cost;
+use spaghettio_core::fixture::{build_zone, Fixture};
+use spaghettio_core::sat::solve_crossing_zone_with_stats;
 use std::path::Path;
 
 #[test]

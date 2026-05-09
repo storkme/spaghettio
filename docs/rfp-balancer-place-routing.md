@@ -58,7 +58,7 @@ Clos at 12ms — ~3000× under the 30s kill criterion. Belt routing is
 genuinely harder, but the spike data suggests CP-SAT has plenty of
 headroom for the larger encoding. If we land this, every coprime shape
 in the `(1..10) × (1..10)` envelope becomes generable in Rust without
-Factorio-SAT — closes [#266](https://github.com/storkme/fucktorio/issues/266)
+Factorio-SAT — closes [#266](https://github.com/storkme/spaghettio/issues/266)
 candidates and unlocks tier-9/10 layouts.
 
 ## Design
@@ -86,7 +86,7 @@ Python-subprocess cost, (ii) it scales cleanly to UGs and direction
 freedom (just more variables), (iii) gives global-optimal placement vs
 sequential greedy.
 
-D1b is tempting for simplicity but the existing fucktorio bus pipeline
+D1b is tempting for simplicity but the existing spaghettio bus pipeline
 proves grid-routing-with-priorities is non-trivial — see
 [`bus/junction_solver.rs`](../crates/core/src/bus/junction_solver.rs).
 We'd be reinventing what the SAT solver already does well.
@@ -190,7 +190,7 @@ This RFP doesn't change that decision, just implements it.
 
 ### Trade-offs considered
 
-- **Reuse fucktorio's existing routing infra.** The bus's ghost-router
+- **Reuse spaghettio's existing routing infra.** The bus's ghost-router
   + junction solver is sophisticated, but it's tightly coupled to the
   layout pipeline (consumer rows, lane families, etc.). Extracting it
   for standalone balancer placement would be a refactor; CP-SAT from
@@ -271,7 +271,7 @@ Each sub-phase is landable independently with its own round-trip test.
 
 ## Coordination with PR #270
 
-[PR #270](https://github.com/storkme/fucktorio/pull/270) is a parallel
+[PR #270](https://github.com/storkme/spaghettio/pull/270) is a parallel
 audit-phase fork that diverged in two interesting ways. Both deserve
 explicit notes here so phase-3.2+ implementation lands without
 re-litigating decisions:

@@ -33,9 +33,9 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 name = "balancer-gen"
 version = "0.1.0"
 dependencies = [
- "fucktorio_core",
  "serde",
  "serde_json",
+ "spaghettio_core",
 ]
 
 [[package]]
@@ -158,50 +158,6 @@ checksum = "843fba2746e448b37e26a819579957415c8cef339bf08564fe8b7ddbd959573c"
 dependencies = [
  "crc32fast",
  "miniz_oxide",
-]
-
-[[package]]
-name = "fucktorio_core"
-version = "0.1.0"
-dependencies = [
- "base64",
- "flate2",
- "indexmap",
- "ntest",
- "ordered-float 4.6.0",
- "rayon",
- "rustc-hash 2.1.2",
- "serde",
- "serde_json",
- "sha2",
- "thiserror 2.0.18",
- "tsify-next",
- "varisat",
- "wasm-bindgen",
- "web-time",
-]
-
-[[package]]
-name = "fucktorio_mining"
-version = "0.1.0"
-dependencies = [
- "fucktorio_core",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "fucktorio_wasm"
-version = "0.1.0"
-dependencies = [
- "console_error_panic_hook",
- "fucktorio_core",
- "js-sys",
- "rustc-hash 2.1.2",
- "serde",
- "serde-wasm-bindgen",
- "serde_json",
- "wasm-bindgen",
 ]
 
 [[package]]
@@ -568,6 +524,50 @@ name = "smallvec"
 version = "1.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
+
+[[package]]
+name = "spaghettio_core"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "flate2",
+ "indexmap",
+ "ntest",
+ "ordered-float 4.6.0",
+ "rayon",
+ "rustc-hash 2.1.2",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
+ "tsify-next",
+ "varisat",
+ "wasm-bindgen",
+ "web-time",
+]
+
+[[package]]
+name = "spaghettio_mining"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "spaghettio_core",
+]
+
+[[package]]
+name = "spaghettio_wasm"
+version = "0.1.0"
+dependencies = [
+ "console_error_panic_hook",
+ "js-sys",
+ "rustc-hash 2.1.2",
+ "serde",
+ "serde-wasm-bindgen",
+ "serde_json",
+ "spaghettio_core",
+ "wasm-bindgen",
+]
 
 [[package]]
 name = "syn"

@@ -13,7 +13,7 @@ if [ -z "${PR_NUM:-}" ]; then
     exit 64
 fi
 
-REPO="${REPO:-storkme/fucktorio}"
+REPO="${REPO:-storkme/spaghettio}"
 WORKSPACE="/tmp/workspace"
 REVIEW_LABEL='agent-reviewed'
 NO_TRIGGER_SENTINEL='<!-- agent-no-trigger -->'

@@ -3,7 +3,7 @@
 
 Usage
 -----
-    FUCKTORIO_DUMP_SNAPSHOTS=1 cargo test \\
+    SPAGHETTIO_DUMP_SNAPSHOTS=1 cargo test \\
         --manifest-path crates/core/Cargo.toml --test e2e
     python scripts/analyze_sat_calls.py
     python scripts/analyze_sat_calls.py --dir crates/core/target/tmp
@@ -342,7 +342,7 @@ def main() -> int:
 
     if not args.dir.is_dir():
         print(f"no such directory: {args.dir}")
-        print("run: FUCKTORIO_DUMP_SNAPSHOTS=1 cargo test "
+        print("run: SPAGHETTIO_DUMP_SNAPSHOTS=1 cargo test "
               "--manifest-path crates/core/Cargo.toml --test e2e")
         return 1
 

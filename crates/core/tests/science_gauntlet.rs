@@ -15,12 +15,12 @@
 //!   cargo test --manifest-path crates/core/Cargo.toml --test science_gauntlet \
 //!       -- --ignored --nocapture
 
-use fucktorio_core::bus::layout;
-use fucktorio_core::density;
-use fucktorio_core::solver;
-use fucktorio_core::trace;
-use fucktorio_core::validate::{self, LayoutStyle, Severity};
-use fucktorio_core::zone_cache;
+use spaghettio_core::bus::layout;
+use spaghettio_core::density;
+use spaghettio_core::solver;
+use spaghettio_core::trace;
+use spaghettio_core::validate::{self, LayoutStyle, Severity};
+use spaghettio_core::zone_cache;
 use rustc_hash::FxHashSet;
 use std::collections::BTreeMap;
 
@@ -63,7 +63,7 @@ enum Outcome {
 }
 
 struct SolverLayoutOk {
-    lr: fucktorio_core::models::LayoutResult,
+    lr: spaghettio_core::models::LayoutResult,
 }
 
 const NAUVIS_INPUTS: &[&str] = &[
@@ -283,7 +283,7 @@ fn science_gauntlet() {
         if total_lookups > 1000 && hit_pct < 60.0 {
             eprintln!(
                 "WARN: solve cache hit rate below 60% — corpus may need refresh. \
-                 Run: rm -f ~/.cache/fucktorio/sat-zones.bin && \
+                 Run: rm -f ~/.cache/spaghettio/sat-zones.bin && \
                  cargo test --manifest-path crates/core/Cargo.toml && \
                  cargo test --manifest-path crates/core/Cargo.toml \
                  --test science_gauntlet -- --ignored --nocapture && \

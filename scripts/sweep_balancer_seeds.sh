@@ -36,7 +36,7 @@ cargo build --release -p balancer-gen 2>&1 | tail -3
 printf "seed\ttotal_s\tjh9_solver_s\tstatus\n" | tee "$LOG"
 
 for seed in "${SEEDS[@]}"; do
-    out=$(FUCKTORIO_CP_SAT_SEED="$seed" FUCKTORIO_DEBUG_4_9=1 \
+    out=$(SPAGHETTIO_CP_SAT_SEED="$seed" SPAGHETTIO_DEBUG_4_9=1 \
         timeout 1200 ./target/release/balancer-gen 2>&1) || true
 
     total=$(echo "$out" | grep -oP 'compose\+route in \K[0-9.]+' | head -1)

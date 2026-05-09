@@ -1,6 +1,6 @@
 # Roadmap: From Tier 1 to Tier 4
 
-> **NOTE (2026-04-05):** This roadmap was written for the **spaghetti** engine. The bus engine now solves tiers 1-3 with zero validation errors and is partial on tier 4 (see `CLAUDE.md`). Spaghetti work is parked pending the negotiated-congestion rewrite ([#62](https://github.com/storkme/fucktorio/issues/62)). The analysis below is retained for the day spaghetti work resumes.
+> **NOTE (2026-04-05):** This roadmap was written for the **spaghetti** engine. The bus engine now solves tiers 1-3 with zero validation errors and is partial on tier 4 (see `CLAUDE.md`). Spaghetti work is parked pending the negotiated-congestion rewrite ([#62](https://github.com/storkme/spaghettio/issues/62)). The analysis below is retained for the day spaghetti work resumes.
 >
 > **Active work** is on the bus layout engine and the WASM web app (`web/`), which runs the full Rust pipeline (solver → bus layout → blueprint export) in the browser. The Python pipeline serves as the reference implementation and test harness. The Python-to-Rust port is complete.
 >

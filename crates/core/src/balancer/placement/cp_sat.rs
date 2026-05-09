@@ -245,12 +245,12 @@ mod tests {
         }
     }
 
-    /// Script-running tests are gated on `FUCKTORIO_RUN_CP_SAT=1` because
+    /// Script-running tests are gated on `SPAGHETTIO_RUN_CP_SAT=1` because
     /// they need network access to fetch ortools on first run plus the
     /// Python script in the workspace, which CI may not have. Run
-    /// locally with: FUCKTORIO_RUN_CP_SAT=1 cargo test --lib cp_sat.
+    /// locally with: SPAGHETTIO_RUN_CP_SAT=1 cargo test --lib cp_sat.
     fn maybe_run() -> Option<CpSat> {
-        if std::env::var("FUCKTORIO_RUN_CP_SAT").is_err() {
+        if std::env::var("SPAGHETTIO_RUN_CP_SAT").is_err() {
             return None;
         }
         // CARGO_MANIFEST_DIR points at crates/core/; the script lives at

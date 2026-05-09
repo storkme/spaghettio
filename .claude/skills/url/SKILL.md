@@ -1,10 +1,10 @@
 ---
 name: url
-description: Generate a fucktorio layout URL for localhost, the live GitHub Pages site, or a PR preview sub-path. Use when the user asks for a link to a specific recipe/rate/config, or says "/url". Accepts shorthand like "PU@3/s ore red P2" and expands it to a full URL.
+description: Generate a spaghettio layout URL for localhost, the live GitHub Pages site, or a PR preview sub-path. Use when the user asks for a link to a specific recipe/rate/config, or says "/url". Accepts shorthand like "PU@3/s ore red P2" and expands it to a full URL.
 allowed-tools: Read, Bash
 ---
 
-# url — generate a fucktorio layout URL
+# url — generate a spaghettio layout URL
 
 The user asks for a URL to a specific layout configuration, e.g.:
 - `/url PU@3/s ore red P2`
@@ -78,8 +78,8 @@ If the user explicitly lists items (e.g. `in=iron-plate,copper-plate`), use them
 
 ### target (which base URL to use)
 - `localhost` / `local` / not specified → `http://localhost:5173/`
-- `live` / `prod` / `github` → `https://storkme.github.io/fucktorio/`
-- `pr-N` / `pr N` / `PR #N` → `https://storkme.github.io/fucktorio/pr-N/`
+- `live` / `prod` / `github` → `https://storkme.github.io/spaghettio/`
+- `pr-N` / `pr N` / `PR #N` → `https://storkme.github.io/spaghettio/pr-N/`
 
 ## Step 2 — build the URL
 
@@ -108,10 +108,10 @@ unless the user's request was ambiguous — then ask one clarifying question.
 → `http://localhost:5173/?item=advanced-circuit&rate=5&machine=assembling-machine-2&belt=transport-belt&in=iron-plate,copper-plate,steel-plate,stone,coal,water,crude-oil`
 
 `/url EC 30/s from ore — live`
-→ `https://storkme.github.io/fucktorio/?item=electronic-circuit&rate=30&in=iron-ore,copper-ore,coal,water,crude-oil`
+→ `https://storkme.github.io/spaghettio/?item=electronic-circuit&rate=30&in=iron-ore,copper-ore,coal,water,crude-oil`
 
 `/url PU@2/s am3 fast ore red P2 pr-261`
-→ `https://storkme.github.io/fucktorio/pr-261/?item=processing-unit&rate=2&belt=fast-transport-belt&in=iron-ore,copper-ore,coal,water,crude-oil&strategy=partitioned-decomposed`
+→ `https://storkme.github.io/spaghettio/pr-261/?item=processing-unit&rate=2&belt=fast-transport-belt&in=iron-ore,copper-ore,coal,water,crude-oil&strategy=partitioned-decomposed`
 
 `/url PU@2/s ore red HS`
 → `http://localhost:5173/?item=processing-unit&rate=2&belt=fast-transport-belt&in=iron-ore,copper-ore,coal,water,crude-oil&row_layout=horizontal-stack`
@@ -127,6 +127,6 @@ unless the user's request was ambiguous — then ask one clarifying question.
 - `row_layout` — row layout variant (`horizontal-stack`)
 - `ci` — custom inputs beyond DEFAULT_INPUTS (rarely needed)
 
-Live site: `https://storkme.github.io/fucktorio/`
-PR previews: `https://storkme.github.io/fucktorio/pr-<N>/`
+Live site: `https://storkme.github.io/spaghettio/`
+PR previews: `https://storkme.github.io/spaghettio/pr-<N>/`
 Dev server: `http://localhost:5173/`

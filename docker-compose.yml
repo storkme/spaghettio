@@ -6,7 +6,7 @@
 services:
   dev:
     build: .
-    image: fucktorio-agent:latest
+    image: spaghettio-agent:latest
     volumes:
       - ${HOME}/.pi:/mnt/pi-ro:ro
     environment:

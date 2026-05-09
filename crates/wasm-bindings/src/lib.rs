@@ -1,6 +1,6 @@
-//! wasm-bindgen bindings for the Fucktorio pipeline.
+//! wasm-bindgen bindings for the Spaghettio pipeline.
 //!
-//! Thin wrapper around `fucktorio_core` that exposes the full pipeline to the
+//! Thin wrapper around `spaghettio_core` that exposes the full pipeline to the
 //! browser via WASM. Loaded by `web/src/engine.ts`.
 //!
 //! Build: `wasm-pack build crates/wasm-bindings --target web --out-dir ../../web/src/wasm-pkg`
@@ -8,10 +8,10 @@
 //! Exposed functions: `init`, `solve`, `layout`, `export_blueprint`, `validate`,
 //! `get_all_items`, `get_recipes_for_item`, `parse_blueprint`.
 
-use fucktorio_core::models::{LayoutResult, PlacedEntity, SolverResult};
-use fucktorio_core::recipe_db::MachinePalette;
-use fucktorio_core::validate::{self, LayoutStyle, ValidationIssue};
-use fucktorio_core::{
+use spaghettio_core::models::{LayoutResult, PlacedEntity, SolverResult};
+use spaghettio_core::recipe_db::MachinePalette;
+use spaghettio_core::validate::{self, LayoutStyle, ValidationIssue};
+use spaghettio_core::{
     blueprint, blueprint_parser, bus::junction_cost::solution_cost,
     bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy, RowLayout},
     fixture as fixture_mod, recipe_db, sat, solver,
@@ -117,7 +117,7 @@ pub fn layout_traced(
     strategy: Option<String>,
     row_layout: Option<String>,
 ) -> Result<LayoutResult, JsError> {
-    fucktorio_core::bus::layout::build_bus_layout_traced(
+    spaghettio_core::bus::layout::build_bus_layout_traced(
         &solver_result,
         layout_options(max_belt_tier, strategy, row_layout),
     )
@@ -140,8 +140,8 @@ pub fn layout_traced(
 ///
 /// The overlay renderer uses a single shared `Graphics` redrawn per frame,
 /// so event count doesn't blow up Pixi's tree.
-fn streamable(evt: &fucktorio_core::trace::TraceEvent) -> bool {
-    use fucktorio_core::trace::TraceEvent as T;
+fn streamable(evt: &spaghettio_core::trace::TraceEvent) -> bool {
+    use spaghettio_core::trace::TraceEvent as T;
     matches!(
         evt,
         T::PhaseSnapshot { .. }
@@ -181,7 +181,7 @@ pub fn layout_streaming(
     emit: &js_sys::Function,
 ) -> Result<LayoutResult, JsError> {
     let emit = emit.clone();
-    let on_event: Box<dyn FnMut(&fucktorio_core::trace::TraceEvent)> = Box::new(move |evt| {
+    let on_event: Box<dyn FnMut(&spaghettio_core::trace::TraceEvent)> = Box::new(move |evt| {
         if !streamable(evt) {
             return;
         }
@@ -189,7 +189,7 @@ pub fn layout_streaming(
             let _ = emit.call1(&JsValue::NULL, &js_evt);
         }
     });
-    fucktorio_core::bus::layout::build_bus_layout_streaming(
+    spaghettio_core::bus::layout::build_bus_layout_streaming(
         &solver_result,
         layout_options(max_belt_tier, strategy, row_layout),
         on_event,
@@ -223,10 +223,10 @@ pub fn improve_region_streaming(
     max_iters: u32,
     emit: &js_sys::Function,
 ) -> Result<LayoutResult, JsError> {
-    use fucktorio_core::bus::region_reimprove::{
+    use spaghettio_core::bus::region_reimprove::{
         deadline_in, descend, prune_dangling, rebuild_zone_from_region,
     };
-    use fucktorio_core::models::RegionKind;
+    use spaghettio_core::models::RegionKind;
 
     let region = layout_result
         .regions
@@ -280,7 +280,7 @@ pub fn improve_region_streaming(
         |imp| {
             let pruned =
                 prune_dangling(imp.entities.to_vec(), &boundaries, max_ug_reach, zx, zy);
-            let evt = fucktorio_core::trace::TraceEvent::SatImprovement {
+            let evt = spaghettio_core::trace::TraceEvent::SatImprovement {
                 region_id,
                 zone_x: zx,
                 zone_y: zy,
@@ -307,7 +307,7 @@ pub fn improve_region_streaming(
     // for the zone. Record it (updates the in-memory cache for same-session
     // reuse) and emit a terminal trace event carrying the binary record so
     // the frontend can persist to localStorage.
-    if matches!(stop_reason, fucktorio_core::bus::region_reimprove::StopReason::Optimal) {
+    if matches!(stop_reason, spaghettio_core::bus::region_reimprove::StopReason::Optimal) {
         // Per-channel reaches: descent uses uniform `max_ug_reach`, so the
         // signature should match. Size the array to cover every channel_id
         // referenced by any boundary. `max_ug_ins = None` matches the
@@ -318,12 +318,12 @@ pub fn improve_region_streaming(
             .max()
             .unwrap_or(0);
         let channel_reaches = vec![max_ug_reach; n_channels];
-        let stats = fucktorio_core::zone_cache::ZoneStats {
+        let stats = spaghettio_core::zone_cache::ZoneStats {
             variables: 0,
             clauses: 0,
             solve_time_us: 0,
         };
-        let (signature, record_bytes) = fucktorio_core::zone_cache::record_zone_with_solution(
+        let (signature, record_bytes) = spaghettio_core::zone_cache::record_zone_with_solution(
             &zone,
             &channel_reaches,
             None,
@@ -331,7 +331,7 @@ pub fn improve_region_streaming(
             &pruned_final,
             Some("wasm-optimize"),
         );
-        let evt = fucktorio_core::trace::TraceEvent::SatOptimumProven {
+        let evt = spaghettio_core::trace::TraceEvent::SatOptimumProven {
             region_id,
             signature,
             record_bytes,
@@ -381,8 +381,8 @@ pub fn parse_blueprint(bp_string: &str) -> Result<LayoutResult, JsError> {
 /// whatever decodes cleanly.
 #[wasm_bindgen]
 pub fn seed_zone_cache(bytes: &[u8]) -> u32 {
-    let count = fucktorio_core::zone_cache::parse_records(bytes).len() as u32;
-    fucktorio_core::zone_cache::install_prebaked(bytes);
+    let count = spaghettio_core::zone_cache::parse_records(bytes).len() as u32;
+    spaghettio_core::zone_cache::install_prebaked(bytes);
     count
 }
 
@@ -511,7 +511,7 @@ struct ShowcaseCell {
 /// for the default 10×10 grid; one call instead.
 #[wasm_bindgen]
 pub fn balancer_showcase(max_inputs: u32, max_outputs: u32) -> Result<JsValue, JsError> {
-    use fucktorio_core::bus::balancer_library::{balancer_templates, template_provenance};
+    use spaghettio_core::bus::balancer_library::{balancer_templates, template_provenance};
 
     let templates = balancer_templates();
     let mut cells: Vec<ShowcaseCell> = Vec::with_capacity(

@@ -1,4 +1,4 @@
-Loaded 43 templates from checkpoint /home/stork/code/fucktorio/scripts/balancer_checkpoint.json
+Loaded 43 templates from checkpoint /home/stork/code/spaghettio/scripts/balancer_checkpoint.json
 Merged 13 new template(s) from checkpoint
 Loaded 43 existing templates, generating missing shapes
 20 shapes to generate: [(5, 5), (5, 6), (6, 5), (6, 6), (3, 7), (7, 3), (7, 4), (5, 7), (7, 5), (6, 7), (7, 6), (7, 7), (8, 3), (5, 8), (8, 5), (6, 8), (8, 6), (7, 8), (8, 7), (8, 8)]

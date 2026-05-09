@@ -14,7 +14,7 @@ dst's south-belt is a real arc to a virtual `EXIT_NODE`, with closing arc
 `EXIT_NODE → src`. See commit and `solve_pure_routing_circuit` in
 `crates/balancer-gen/scripts/place.py`.
 
-**Numbers** (FUCKTORIO_DEBUG_4_9=1 + FUCKTORIO_PURE_ROUTING_ENCODING=circuit):
+**Numbers** (SPAGHETTIO_DEBUG_4_9=1 + SPAGHETTIO_PURE_ROUTING_ENCODING=circuit):
 
 | jh | status | solver | wall |
 |----|--------|--------|------|
@@ -29,7 +29,7 @@ speedup**, classified `Balanced`. The minimum target was <300s; this hits
 that comfortably.
 
 Next: bake the remaining 7 shapes ((3, 9), (5, 9), (6, 9), (7, 9), (8, 9),
-(9, 9)) and close issue #136. The `FUCKTORIO_PURE_ROUTING_ENCODING=circuit`
+(9, 9)) and close issue #136. The `SPAGHETTIO_PURE_ROUTING_ENCODING=circuit`
 env var still gates the new path; consider promoting it to default once
 the bake corpus passes.
 
@@ -49,7 +49,7 @@ at jh=9 (~640s).
 time meaningfully (folklore: 2–5× on TSP-shaped problems). The new
 function `solve_pure_routing_circuit` lives next to `solve_pure_routing`
 in the same file and is gated by `req["encoding"] == "circuit"` (set via
-the env var `FUCKTORIO_PURE_ROUTING_ENCODING=circuit` in
+the env var `SPAGHETTIO_PURE_ROUTING_ENCODING=circuit` in
 `compose_series`).
 
 **Status:** the encoding is wired end-to-end and runs, but produces
@@ -115,7 +115,7 @@ Expected: `INFEASIBLE` in <100ms. The same request with
 **Repro 2 — full (2, 2) Clos compose:**
 
 ```bash
-FUCKTORIO_DEBUG_2_2=1 FUCKTORIO_PURE_ROUTING_ENCODING=circuit \
+SPAGHETTIO_DEBUG_2_2=1 SPAGHETTIO_PURE_ROUTING_ENCODING=circuit \
   cargo run --release -p balancer-gen
 ```
 
@@ -126,7 +126,7 @@ returns `Balanced` at jh=6.
 **Repro 3 — full (4, 9) Clos compose** (slow; only run if you need it):
 
 ```bash
-FUCKTORIO_DEBUG_4_9=1 FUCKTORIO_PURE_ROUTING_ENCODING=circuit \
+SPAGHETTIO_DEBUG_4_9=1 SPAGHETTIO_PURE_ROUTING_ENCODING=circuit \
   cargo run --release -p balancer-gen
 ```
 
@@ -217,7 +217,7 @@ In order of effort:
   is the new function (lines 1601–1880ish, near the bottom). The
   dispatcher in `main()` checks `req.get("encoding") == "circuit"`.
 - `crates/balancer-gen/src/main.rs` — `compose_series` reads
-  `FUCKTORIO_PURE_ROUTING_ENCODING` and sets `req.encoding` accordingly.
+  `SPAGHETTIO_PURE_ROUTING_ENCODING` and sets `req.encoding` accordingly.
   `PlaceRequest::PureRouting` got an optional `encoding` field.
 
 The original `solve_pure_routing` is **untouched** — the spike is purely
@@ -246,7 +246,7 @@ If it doesn't land or solve time matches the baseline:
   for each edge, only allocate arc vars within a Manhattan-distance
   bound of src and dst. Cuts var count 30–50% on wide junctions.
   Predictable ~30 minutes of work.
-- **Minimal parallelism**: add `FUCKTORIO_BAKE_ONLY=m,n` to balancer-gen
+- **Minimal parallelism**: add `SPAGHETTIO_BAKE_ONLY=m,n` to balancer-gen
   so a shell wrapper can run multiple shape bakes concurrently. Wall
   time per overnight ≈ max(individual) instead of sum.
 - **Accept current performance** and bake the remaining shapes

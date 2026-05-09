@@ -1,7 +1,7 @@
 //! Throughput-unlimited (TU) audit across the entire baked balancer library.
 //!
 //! For every `(m, n)` template in
-//! [`balancer_templates`](fucktorio_core::bus::balancer_library::balancer_templates),
+//! [`balancer_templates`](spaghettio_core::bus::balancer_library::balancer_templates),
 //! runs [`check_throughput_unlimited`] and prints a markdown table of results.
 //!
 //! **Does NOT gate-on-pass by default** — we want to discover which library
@@ -13,9 +13,9 @@
 //!   cargo test --manifest-path crates/core/Cargo.toml \
 //!       --test balancer_tu_audit -- --nocapture
 
-use fucktorio_core::bus::balancer_classify::{classify, BalancerClass, BalancerTemplateRef};
-use fucktorio_core::bus::balancer_library::balancer_templates;
-use fucktorio_core::bus::template_validate::check_throughput_unlimited;
+use spaghettio_core::bus::balancer_classify::{classify, BalancerClass, BalancerTemplateRef};
+use spaghettio_core::bus::balancer_library::balancer_templates;
+use spaghettio_core::bus::template_validate::check_throughput_unlimited;
 
 #[test]
 fn audit_throughput_unlimited() {

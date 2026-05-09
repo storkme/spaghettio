@@ -207,7 +207,7 @@ Per CLAUDE.md verification protocol:
    metric; growing counts are a regression.
 
 3. **Blame-event triangulation.** Re-run the blame probe (set
-   `FUCKTORIO_BLAME_JUNCTIONS=1`) before and after each phase; the
+   `SPAGHETTIO_BLAME_JUNCTIONS=1`) before and after each phase; the
    set of "blamed item × direction" patterns should shrink as the
    solver learns to handle them. Patterns that persist across
    phases identify what the next phase needs to attack.

@@ -89,8 +89,8 @@ The region solver's call site in `ghost_router.rs` has a debug-only dump path ga
 ```bash
 mkdir -p /tmp/rfx
 # Dump the cluster whose seed set includes (10, 161).
-FUCKTORIO_DUMP_REGION_FIXTURE=/tmp/rfx \
-FUCKTORIO_DUMP_REGION_FIXTURE_SEED="10,161" \
+SPAGHETTIO_DUMP_REGION_FIXTURE=/tmp/rfx \
+SPAGHETTIO_DUMP_REGION_FIXTURE_SEED="10,161" \
     cargo test --manifest-path crates/core/Cargo.toml \
     --test e2e tier4_advanced_circuit_from_ore_am2 -- --ignored --nocapture
 ```
@@ -106,7 +106,7 @@ The seed filter matches against the cluster's `seeds` vec — the first tile (lo
 Drop the `_SEED` variable. Produces one file per cluster — useful for bulk capture but noisy.
 
 ```bash
-FUCKTORIO_DUMP_REGION_FIXTURE=/tmp/rfx \
+SPAGHETTIO_DUMP_REGION_FIXTURE=/tmp/rfx \
     cargo test --manifest-path crates/core/Cargo.toml \
     --test e2e tier4_advanced_circuit_from_ore_am2 -- --ignored --nocapture
 ```

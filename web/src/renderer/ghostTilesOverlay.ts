@@ -11,7 +11,7 @@
 
 import { Container, Graphics } from "pixi.js";
 import { TILE_PX } from "./entities";
-import type { TraceEvent } from "../wasm-pkg/fucktorio_wasm.js";
+import type { TraceEvent } from "../wasm-pkg/spaghettio_wasm.js";
 
 const GHOST_TILE_COLOR = 0x40d0e0;
 const GHOST_TILE_ALPHA = 0.18;

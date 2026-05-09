@@ -826,11 +826,11 @@ fn remove_existing(src: &str, n: usize, m: usize) -> String {
 // ---------------------------------------------------------------------------
 
 fn print_topology(t: &Template) {
-    use fucktorio_core::balancer::{from_splitter_graph, verify_balancer};
-    use fucktorio_core::bus::balancer_classify::{
+    use spaghettio_core::balancer::{from_splitter_graph, verify_balancer};
+    use spaghettio_core::bus::balancer_classify::{
         classify_graph, detect_priority_needed, topology_of_template, BalancerTemplateRef,
     };
-    use fucktorio_core::bus::balancer_library::BalancerTemplateEntity;
+    use spaghettio_core::bus::balancer_library::BalancerTemplateEntity;
 
     // Convert to BalancerTemplateEntity (leak strings — one-shot CLI is fine).
     let entities: Vec<BalancerTemplateEntity> = t

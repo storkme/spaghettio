@@ -6005,7 +6005,7 @@ mod tests {
     /// Don't loosen the bound below as templates land — let this test
     /// go green naturally.
     ///
-    /// [Issue #136]: https://github.com/storkme/fucktorio/issues/136
+    /// [Issue #136]: https://github.com/storkme/spaghettio/issues/136
     #[test]
     #[ignore = "Documents missing 9-shape templates (issue #136). \
                 Closing requires hand-built balancer networks for \
