@@ -1,4 +1,4 @@
-const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["assets/browserAll-BvqRyW9q.js","assets/webworkerAll-Bbm5WJmC.js","assets/Filter-Dmummd4P.js","assets/WebGPURenderer-DSMQX0fs.js","assets/BufferResource-BWNJRFws.js","assets/RenderTargetSystem-DfOk4Lef.js","assets/WebGLRenderer-6T0QTtIV.js","assets/CanvasRenderer-C2wO4B_5.js"])))=>i.map(i=>d[i]);
+const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["assets/browserAll-CVnQ8_tt.js","assets/webworkerAll-D5QR3bsZ.js","assets/Filter-CpgKaVo2.js","assets/WebGPURenderer-BxO9CcHs.js","assets/BufferResource-Dz-COGTg.js","assets/RenderTargetSystem-Bt2SuuTP.js","assets/WebGLRenderer-C2LNdu3h.js","assets/CanvasRenderer-DCtBaiNb.js"])))=>i.map(i=>d[i]);
 let ah, Xo, Ui, jt, Kf, en, Dp, ai, Yn, xs, ae, Qt, Yt, Ds, Jc, Ct, ot, mt, Dt, rr, A, de, iy, Jm, ar, Dm, mn, lr, Ji, Pt, kh, mo, Gt, Dn, qs, kt, Yu, Yf, Ts, nd, Mh, oi, uf, af, Gh, Qf, Sm, Am, Lm, Im, $m, sl, Wi, jo, Th, Ee, Yo, Cm, Tm, Rm, Mm, Lu, Bm, we, qc, Ae, nr, Ga, Ue, By, hp, Da, Tr, Ha, dp, Zc, cr, Ln, pr, ev, ji, Vo, Mt, St, Mo, jn, an, ko, Si, Ut, $e, od, ad, Ys, Ie, tv, Sy, Zt, dy, te, Xt, At;
 let __tla = (async () => {
   (function() {
@@ -148,7 +148,7 @@ let __tla = (async () => {
     },
     test: () => true,
     load: async () => {
-      await Tn(() => import("./browserAll-BvqRyW9q.js"), __vite__mapDeps([0,1,2]));
+      await Tn(() => import("./browserAll-CVnQ8_tt.js"), __vite__mapDeps([0,1,2]));
     }
   };
   vu = {
@@ -159,7 +159,7 @@ let __tla = (async () => {
     },
     test: () => typeof self < "u" && self.WorkerGlobalScope !== void 0,
     load: async () => {
-      await Tn(() => import("./webworkerAll-Bbm5WJmC.js"), __vite__mapDeps([1,2]));
+      await Tn(() => import("./webworkerAll-D5QR3bsZ.js"), __vite__mapDeps([1,2]));
     }
   };
   class he {
@@ -5189,7 +5189,7 @@ ${n}`;
       const o = t[r];
       if (o === "webgpu" && await hf()) {
         const { WebGPURenderer: a } = await Tn(async () => {
-          const { WebGPURenderer: l } = await import("./WebGPURenderer-DSMQX0fs.js");
+          const { WebGPURenderer: l } = await import("./WebGPURenderer-BxO9CcHs.js");
           return {
             WebGPURenderer: l
           };
@@ -5201,7 +5201,7 @@ ${n}`;
         break;
       } else if (o === "webgl" && cf(n.failIfMajorPerformanceCaveat ?? kh.defaultOptions.failIfMajorPerformanceCaveat)) {
         const { WebGLRenderer: a } = await Tn(async () => {
-          const { WebGLRenderer: l } = await import("./WebGLRenderer-6T0QTtIV.js");
+          const { WebGLRenderer: l } = await import("./WebGLRenderer-C2LNdu3h.js");
           return {
             WebGLRenderer: l
           };
@@ -5213,7 +5213,7 @@ ${n}`;
         break;
       } else if (o === "canvas") {
         const { CanvasRenderer: a } = await Tn(async () => {
-          const { CanvasRenderer: l } = await import("./CanvasRenderer-C2wO4B_5.js");
+          const { CanvasRenderer: l } = await import("./CanvasRenderer-DCtBaiNb.js");
           return {
             CanvasRenderer: l
           };
@@ -5523,7 +5523,7 @@ ${n}`;
       }
       const [l, { BitmapFont: c }] = await Promise.all([
         e.load(o),
-        Tn(() => import("./BitmapFont-3Vw0PArb.js"), [])
+        Tn(() => import("./BitmapFont-CO9GTeMd.js"), [])
       ]), h = o.map((u) => l[u.src]);
       return new c({
         data: s,
@@ -18543,7 +18543,24 @@ fn mainFragment(
       desc: "1 recipe, fluid + solid input"
     },
     {
-      label: "Advanced Circuit",
+      label: "Advanced Circuit (ores, AM2)",
+      item: "advanced-circuit",
+      rate: 5,
+      inputs: [
+        "coal",
+        "water",
+        "crude-oil",
+        "iron-ore",
+        "copper-ore"
+      ],
+      machine: "assembling-machine-2",
+      beltTier: "transport-belt",
+      tier: 4,
+      status: "solved",
+      desc: "Full stack from raw ores, AM2 + yellow belts (0 errors / 0 warnings)"
+    },
+    {
+      label: "Advanced Circuit (from plates)",
       item: "advanced-circuit",
       rate: 10,
       inputs: [
@@ -18554,26 +18571,25 @@ fn mainFragment(
       machine: "assembling-machine-2",
       tier: 4,
       status: "partial",
-      desc: "5+ recipes, mixed solid/fluid"
+      desc: "5+ recipes, mixed solid/fluid \u2014 still has lane-throughput warnings"
     },
     {
-      label: "Advanced Circuit (ores, T1)",
-      item: "advanced-circuit",
-      rate: 5,
+      label: "Processing Unit",
+      item: "processing-unit",
+      rate: 2,
       inputs: [
-        "iron-plate",
-        "copper-plate",
+        "iron-ore",
+        "copper-ore",
+        "stone",
         "coal",
         "water",
-        "crude-oil",
-        "iron-ore",
-        "copper-ore"
+        "crude-oil"
       ],
-      machine: "assembling-machine-1",
-      beltTier: "transport-belt",
-      tier: 4,
-      status: "partial",
-      desc: "Full stack from raw ores, tier-1 machines + yellow belts"
+      machine: "assembling-machine-3",
+      beltTier: "fast-transport-belt",
+      tier: 5,
+      status: "wip",
+      desc: "Deep chain, multiple fluids \u2014 scoped regression tests passing"
     }
   ], Gb = `
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
@@ -18954,7 +18970,7 @@ fn mainFragment(
     const r = document.createElement("div");
     r.className = "spaghettio-landing-header", i.appendChild(r);
     const o = document.createElement("h1");
-    o.className = "spaghettio-landing-title", o.innerHTML = "Fuck<span>torio</span>", r.appendChild(o);
+    o.className = "spaghettio-landing-title", o.innerHTML = "Spagh<span>ettio</span>", r.appendChild(o);
     const a = document.createElement("p");
     a.className = "spaghettio-landing-subtitle", a.textContent = "Automated Factory Blueprint Generator", r.appendChild(a);
     const l = document.createElement("div");
@@ -19070,7 +19086,7 @@ fn mainFragment(
     const _ = new jt();
     v.addChild(_), v.fit(true, w * 1.15, x * 1.2), v.moveCenter(w / 2, x / 2);
     const { renderLayoutAnimated: C } = await Tn(async () => {
-      const { renderLayoutAnimated: k } = await import("./animated-BoHQD--K.js");
+      const { renderLayoutAnimated: k } = await import("./animated-B5S2qY3C.js");
       return {
         renderLayoutAnimated: k
       };
@@ -22837,7 +22853,7 @@ ${S}` : j, rt();
     const t = document.getElementById("app"), e = window.location.hash, s = new URLSearchParams(window.location.search);
     if (e.startsWith("#/balancers")) {
       const { renderBalancerShowcase: r } = await Tn(async () => {
-        const { renderBalancerShowcase: o } = await import("./balancers-D7Q6ZyLJ.js");
+        const { renderBalancerShowcase: o } = await import("./balancers-BOxz-YuJ.js");
         return {
           renderBalancerShowcase: o
         };

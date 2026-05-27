@@ -1,4 +1,4 @@
-import { S as n, e as u, G as o, f } from "./index-CSi_vzEq.js";
+import { S as n, e as u, G as o, f } from "./index-BH-qxwVW.js";
 const s = class i extends n {
   constructor(e) {
     e = { ...i.defaultOptions, ...e }, super(e), this.enabled = true, this._state = u.for2d(), this.blendMode = e.blendMode, this.padding = e.padding, typeof e.antialias == "boolean" ? this.antialias = e.antialias ? "on" : "off" : this.antialias = e.antialias, this.resolution = e.resolution, this.blendRequired = e.blendRequired, this.clipToViewport = e.clipToViewport, this.addResource("uTexture", 0, 1), e.blendRequired && this.addResource("uBackTexture", 0, 3);
