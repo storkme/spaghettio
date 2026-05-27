@@ -68,33 +68,49 @@ const SHOWCASE: ShowcaseEntry[] = [
     desc: "1 recipe, fluid + solid input",
   },
   {
-    label: "Advanced Circuit",
-    item: "advanced-circuit",
-    rate: 10,
-    inputs: ["iron-plate", "copper-plate", "plastic-bar"],
-    machine: "assembling-machine-2",
-    tier: 4,
-    status: "partial",
-    desc: "5+ recipes, mixed solid/fluid",
-  },
-  {
-    label: "Advanced Circuit (ores, T1)",
+    label: "Advanced Circuit (ores, AM2)",
     item: "advanced-circuit",
     rate: 5,
     inputs: [
-      "iron-plate",
-      "copper-plate",
       "coal",
       "water",
       "crude-oil",
       "iron-ore",
       "copper-ore",
     ],
-    machine: "assembling-machine-1",
+    machine: "assembling-machine-2",
     beltTier: "transport-belt",
     tier: 4,
+    status: "solved",
+    desc: "Full stack from raw ores, AM2 + yellow belts (0 errors / 0 warnings)",
+  },
+  {
+    label: "Advanced Circuit (from plates)",
+    item: "advanced-circuit",
+    rate: 10,
+    inputs: ["iron-plate", "copper-plate", "plastic-bar"],
+    machine: "assembling-machine-2",
+    tier: 4,
     status: "partial",
-    desc: "Full stack from raw ores, tier-1 machines + yellow belts",
+    desc: "5+ recipes, mixed solid/fluid — still has lane-throughput warnings",
+  },
+  {
+    label: "Processing Unit",
+    item: "processing-unit",
+    rate: 2,
+    inputs: [
+      "iron-ore",
+      "copper-ore",
+      "stone",
+      "coal",
+      "water",
+      "crude-oil",
+    ],
+    machine: "assembling-machine-3",
+    beltTier: "fast-transport-belt",
+    tier: 5,
+    status: "wip",
+    desc: "Deep chain, multiple fluids — scoped regression tests passing",
   },
 ];
 
@@ -503,7 +519,7 @@ export function renderLanding(
 
   const title = document.createElement("h1");
   title.className = "spaghettio-landing-title";
-  title.innerHTML = "Fuck<span>torio</span>";
+  title.innerHTML = "Spagh<span>ettio</span>";
   header.appendChild(title);
 
   const subtitle = document.createElement("p");
