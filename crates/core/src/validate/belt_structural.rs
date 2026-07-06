@@ -800,7 +800,14 @@ pub fn compute_lane_rates(layout: &LayoutResult, solver_result: &SolverResult) -
             Some(i) => i,
             None => continue,
         };
-        let rate = spec.outputs.iter().find(|o| o.item == carried_item).map(|o| o.rate).unwrap_or(0.0);
+        // spec.outputs[].rate is the per-machine rate at full utilization;
+        // the layout places ceil(spec.count) machines each running at
+        // count/ceil(count) utilization. Scale like the input-rate-delivery
+        // check does, or a fast machine at fractional count overstates the
+        // lane rate (a 0.06-count foundry pressing transport-belt at 16/s
+        // nominal would seed 16/s onto a lane that actually carries 1/s).
+        let utilization = (spec.count / spec.count.ceil().max(1.0)).min(1.0);
+        let rate = spec.outputs.iter().find(|o| o.item == carried_item).map(|o| o.rate * utilization).unwrap_or(0.0);
         if rate <= 0.0 {
             continue;
         }
@@ -1450,6 +1457,61 @@ mod tests {
         let lr = layout(entities);
         let issues = check_lane_throughput(&lr, Some(&sr));
         assert!(issues.iter().any(|i| i.category.contains("lane")));
+    }
+
+    #[test]
+    fn lane_throughput_fractional_count_scales_to_utilization() {
+        // Regression: logistic-science-pack@1/s picked a foundry for
+        // transport-belt (category "pressing") — 16/s per machine nominal,
+        // but solver count 0.06 → actual sustained flow ~1/s. Seeding the
+        // nominal per-machine rate flagged the whole trunk over the lane
+        // cap. The injection must scale by count/ceil(count) utilization,
+        // matching the input-rate-delivery check's convention.
+        //
+        // Same geometry both times: count 1.0 (full utilization, 16/s)
+        // must flag — proving the setup actually seeds — and count 0.06
+        // (0.96/s effective) must not.
+        let run = |count: f64| {
+            let sr = SolverResult {
+                machines: vec![MachineSpec {
+                    entity: "assembling-machine-3".to_string(),
+                    recipe: "transport-belt".to_string(),
+                    count,
+                    inputs: vec![],
+                    outputs: vec![ItemFlow {
+                        item: "transport-belt".to_string(),
+                        rate: 16.0,
+                        is_fluid: false,
+                        module_id: 0,
+                    }],
+                }],
+                external_inputs: vec![],
+                external_outputs: vec![],
+                dependency_order: vec![],
+            };
+            let entities = vec![
+                machine("assembling-machine-3", 3, 0, "transport-belt"),
+                // inserter at (4,3) South: pickup (4,2) inside machine, drop (4,4)
+                inserter(4, 3, EntityDirection::South),
+                // yellow belt: 7.5/s lane cap
+                belt_carrying(4, 4, EntityDirection::East, "transport-belt"),
+                belt_carrying(5, 4, EntityDirection::East, "transport-belt"),
+            ];
+            check_lane_throughput(&layout(entities), Some(&sr))
+        };
+
+        let full = run(1.0);
+        assert!(
+            full.iter().any(|i| i.category == "lane-throughput"),
+            "count=1.0 at 16/s on yellow must flag (geometry sanity check), got: {:?}",
+            full.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+        let fractional = run(0.06);
+        assert!(
+            fractional.is_empty(),
+            "count=0.06 must seed utilization-scaled 0.96/s, got: {:?}",
+            fractional.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
     }
 }
 

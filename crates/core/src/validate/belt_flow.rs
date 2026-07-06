@@ -1934,11 +1934,20 @@ fn compute_lane_rates_impl(
             Some(i) => i,
             None => continue,
         };
+        // spec.outputs[].rate is the per-machine output rate at full
+        // utilization. The layout places ceil(spec.count) physical machines,
+        // each running at spec.count / ceil(spec.count) utilization — scale
+        // the injected rate the same way the input-rate-delivery check
+        // scales demand, or a fast machine at fractional count overstates
+        // the lane rate (e.g. a 0.06-count foundry pressing transport-belt
+        // at 16/s nominal seeds 16/s onto a lane that actually carries 1/s).
+        let effective_count = spec.count.ceil().max(1.0);
+        let utilization = (spec.count / effective_count).min(1.0);
         let rate = spec
             .outputs
             .iter()
             .find(|o| o.item == carried_item)
-            .map(|o| o.rate)
+            .map(|o| o.rate * utilization)
             .unwrap_or(0.0);
         if rate <= 0.0 {
             continue;
