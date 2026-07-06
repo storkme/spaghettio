@@ -1464,6 +1464,40 @@ fn tier4_advanced_circuit_from_ore_am2() {
     assert_round_trip(&result);
 }
 
+/// Tier 5 green: processing-unit @ 2/s, AM3, red belts, fully from ore.
+/// Deep chain — electronic-circuit + advanced-circuit + sulfuric-acid,
+/// with the whole plastic/sulfur/oil subtree upstream. This is the
+/// first tier-5 config to reach 0 errors / 0 warnings under the
+/// default Pooled strategy (same bar as the tier-4 green above), so
+/// it gates the recipe-ladder claim that tier 5 is solved.
+///
+/// URL repro:
+/// `?item=processing-unit&rate=2&machine=assembling-machine-3&in=coal,water,crude-oil,iron-ore,copper-ore&belt=fast-transport-belt`
+#[test]
+#[ntest::timeout(60000)]
+fn tier5_processing_unit_from_ore_am3() {
+    let inputs: FxHashSet<String> = [
+        "iron-ore", "copper-ore", "coal", "water", "crude-oil",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    let result = run_e2e(
+        "tier5_processing_unit_from_ore_am3",
+        "processing-unit",
+        2.0,
+        "assembling-machine-3",
+        Some("fast-transport-belt"),
+        &inputs,
+    )
+    .unwrap_or_else(|e| panic!("tier5_processing_unit_from_ore_am3: {e}"));
+
+    assert_no_errors(&result);
+    assert_no_warnings(&result);
+    assert_produces(&result, "processing-unit", 2.0);
+    assert_round_trip(&result);
+}
+
 /// Regression test for [issue #136][] — coprime balancer-shape coverage.
 ///
 /// Repro URL:
@@ -2589,6 +2623,19 @@ fn partition_strategy_scoreboard() {
 /// These cases are the hit list for Phase 2 follow-up work — they
 /// document where decomposition currently regresses vs Phase 1 / Pool.
 /// Don't loosen the numbers, drive them down.
+///
+/// KNOWN DRIFT (main @ 41835bf, release, 2026-07-06): this test
+/// currently FAILS — main has drifted past three recorded gates
+/// since they were last tightened (the `#[ignore]` hides this from
+/// CI). Observed actuals:
+///   - PU@2/s plates yellow: Pool 32 > 30 (P2 improved: 17 < 20)
+///   - PU@3/s ore red:       P2    1 > 0  (unresolved-junction near
+///     (35,254), 37 tiles, plus 36 downstream starvation warnings —
+///     the "validator-clean" claim in the case comment no longer
+///     holds on main)
+///   - PU@3/s plates yellow: Pool 46 > 44
+/// If you hit these same numbers, the regression predates your
+/// change; drive them down rather than loosening the gates.
 #[test]
 #[ntest::timeout(600000)]
 #[ignore = "extended corpus exceeds CI debug-mode time budget; run locally with --release --ignored"]

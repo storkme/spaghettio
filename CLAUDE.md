@@ -112,8 +112,9 @@ Tracks which recipes produce zero-error bus blueprints. Moving up = real progres
 | 2 | `electronic-circuit` | 2 recipes, 2 solid inputs | SOLVED (incl. from ores) |
 | 3 | `plastic-bar` | 1 recipe, 1 fluid + 1 solid input | SOLVED |
 | 4 | `advanced-circuit` | 5+ recipes, mixed solid/fluid | SOLVED (`tier4_advanced_circuit_from_ore_am2` green: AC@5/s ores AM2 yellow, 0 errors / 0 warnings). From plates still has lane-throughput warnings, [#65](https://github.com/storkme/spaghettio/issues/65). |
-| 5 | `processing-unit` | Deep chain, multiple fluids | Not attempted |
-| 6 | `rocket-control-unit` | Very deep chain | Not attempted |
+| 5 | `processing-unit` | Deep chain, multiple fluids | SOLVED (`tier5_processing_unit_from_ore_am3` green: PU@2/s ores AM3 red, 0 errors / 0 warnings, Pooled). Higher rates / partitioned strategies still have junction + starvation issues — see `partition_strategy_scoreboard_extended`. |
+| 6 | `flying-robot-frame` | Adds lubricant: advanced-oil-processing refinery rows with 3 fluid outputs | Probed 2026-07 (FRF@1/s ores AM3 red, Pooled): 32 errors, all fluid — pipe-isolation violations + split pipe networks at the refinery rows. Multi-fluid-output row support is the blocker. |
+| 7 | `utility-science-pack` | Very deep chain (LDS + PU + FRF) | Probed 2026-07 (USP@1/s ores AM3 red, Pooled): 4 belt errors (unpaired UGs + belt loops) + 11 starvation warnings. |
 
 Open tracking issues for layout quality: [#135 balancer templates are oversized](https://github.com/storkme/spaghettio/issues/135), [#136 missing coprime balancer shapes](https://github.com/storkme/spaghettio/issues/136), [#68 fluid row 3-tile pitch](https://github.com/storkme/spaghettio/issues/68) (design: [`docs/rfp-fluid-dual-input-row.md`](docs/rfp-fluid-dual-input-row.md)).
 
