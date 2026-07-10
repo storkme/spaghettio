@@ -415,6 +415,59 @@ pub fn plan_bus_lanes(
         }
     }
 
+    // Fluid lanes surface (plain pipe) at their ANCHOR rows: port taps,
+    // source, and perimeter exit. Two adjacent fluid columns surfacing at
+    // the SAME y auto-merge (F1) — templates stagger a single row's ports
+    // across fluids, but nothing staggers anchors across *rows* (e.g. a
+    // cracking row's heavy INPUT port sharing y with its light OUTPUT
+    // port puts the heavy and light lanes' anchors on one row). Insert a
+    // spacer column between any adjacent fluid pair whose surface-anchor
+    // sets intersect. `bus_width_for_lanes` follows max x, so the extra
+    // width is accounted for downstream.
+    let anchor_set = |lane: &BusLane| -> FxHashSet<i32> {
+        let mut s = FxHashSet::default();
+        for &(_, _, py) in &lane.fluid_port_positions {
+            s.insert(py);
+        }
+        for &(_, _, py) in &lane.fluid_output_port_positions {
+            s.insert(py);
+        }
+        if let Some(ey) = lane.perimeter_exit_y {
+            s.insert(ey);
+        }
+        // `source_y` only SURFACES when the run to the first downstream
+        // anchor is too short for a UG entry (gap ≤ 2 stamps surface
+        // pipe(s); gap ≥ 3 with a non-tap source gets an F5a-safe UG-S
+        // entry — e.g. every external input lane at source_y = 0).
+        let first_downstream = s.iter().copied().min();
+        match first_downstream {
+            Some(d) if d - lane.source_y >= 3 && !s.contains(&lane.source_y) => {}
+            _ => {
+                s.insert(lane.source_y);
+                s.insert(lane.source_y + 1);
+            }
+        }
+        s
+    };
+    let mut shift = 0i32;
+    for i in 0..lanes.len() {
+        lanes[i].x += shift;
+        if shift > 0 {
+            // keep family lane_xs consistent below (recomputed after this).
+        }
+        if i + 1 < lanes.len()
+            && lanes[i].is_fluid
+            && lanes[i + 1].is_fluid
+            && lanes[i + 1].x + shift == lanes[i].x + 1
+        {
+            let a = anchor_set(&lanes[i]);
+            let b = anchor_set(&lanes[i + 1]);
+            if a.intersection(&b).next().is_some() {
+                shift += 1;
+            }
+        }
+    }
+
     // Fill in lane_xs on each family
     for (fid, fam) in families.iter_mut().enumerate() {
         fam.lane_xs = lanes.iter()

@@ -1125,13 +1125,11 @@ fn tier3_advanced_oil_processing_forced_multi_machine_pipe_isolation() {
     let result = run_e2e_with_exclusions(
         "tier3_advanced_oil_processing_forced_multi_machine_pipe_isolation",
         "petroleum-gas",
-        // 12/s forces 2 refineries under compatibility mode (gas-only AOP
-        // yield: 11/s per refinery), exercising the multi-machine
-        // staggered-template path plus two surplus perimeter exits.
-        // NOTE for the Phase 3 default flip: free selection adds cracking
-        // (97.5 gas per AOP craft), so this rate then needs bumping to
-        // ~24/s to stay multi-machine.
-        12.0,
+        // 24/s forces 2 refineries under free selection (Phase 3): the LP
+        // adds heavy/light cracking, yielding 97.5 gas per AOP craft, so
+        // one refinery covers ~19.5/s. Keeps this fixture on the
+        // multi-machine staggered-template path it exists to exercise.
+        24.0,
         "oil-refinery",
         None,
         &inputs,
@@ -1144,27 +1142,21 @@ fn tier3_advanced_oil_processing_forced_multi_machine_pipe_isolation() {
         .count();
     assert!(
         refinery_count >= 2,
-        "expected ≥2 oil-refineries for forced advanced-oil-processing at 12/s, got {refinery_count}",
+        "expected ≥2 oil-refineries for forced advanced-oil-processing at 24/s, got {refinery_count}",
     );
 
-    // The staggered multi-machine template (issue #277) plus surplus
-    // perimeter routing (rfp-solver-net-flow Phase 2) leave this fixture
-    // with at most ONE known error: the fluid target (petroleum-gas) is
-    // this config's THIRD perimeter-exit lane, and the trunk walker's
-    // tail segment mis-chains its last UG pair (PTG-input at exit_y-1
-    // with a dead surface pipe at exit_y — network split of exactly the
-    // exit tile). Heavy-oil and light-oil surplus exits are clean.
-    // FIXME(rfp-solver-net-flow Phase 3): fix the anchor-walk tail for
-    // stacked perimeter exits, then tighten this back to zero.
+    // Full cleanliness: the staggered multi-machine template (issue #277),
+    // surplus perimeter routing (Phase 2), and the trunk-walker UG-S fix
+    // (no foreign-tap sliding, range capped at y1-2) leave this fixture —
+    // 2 refineries, 3 stacked perimeter exits — with zero errors.
     let errors: Vec<_> = result
         .issues
         .iter()
         .filter(|i| i.severity == Severity::Error)
-        .filter(|i| !(i.category == "fluid-network" && i.message.contains("petroleum-gas")))
         .collect();
     assert!(
         errors.is_empty(),
-        "expected 0 errors outside the known petroleum-gas exit-tail gap, got {}:\n{}",
+        "expected 0 errors, got {}:\n{}",
         errors.len(),
         errors
             .iter()

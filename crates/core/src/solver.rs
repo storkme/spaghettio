@@ -141,14 +141,35 @@ pub fn solve_with_exclusions(
 /// Cycle-shaped selections return typed errors instead of the walk's
 /// silent nonsense externals.
 ///
-/// Phase 3's free cost-based selection is implemented and verified at the
-/// solver level ([`solve_free_with_palette_and_exclusions`]) but is NOT
-/// yet the default: dense oil complexes (AOP + both cracking rows) exceed
-/// the fluid-lane stagger invariant — adjacent trunks surface-fill short
-/// anchor gaps in the same y-band and merge. Flip the default once that
-/// layout gap is closed (see the RFP decision log, 2026-07-10 Phase 3
-/// entry; motivating fixture: utility-science-pack@1/s free mode).
+/// Phase 3 (docs/rfp-solver-net-flow.md): free cost-based recipe
+/// selection is the default. All non-excluded recipes are candidate LP
+/// columns; the frozen cost table picks the mix — raw-input efficiency
+/// first, so e.g. advanced-oil-processing + cracking replaces
+/// basic-oil-processing wherever byproducts can be credited, typically
+/// with zero surplus. Byproduct surplus and fluid targets route to the
+/// layout perimeter (Phase 2). Unsupported cycles return typed errors.
 pub fn solve_with_palette_and_exclusions(
+    target_item: &str,
+    target_rate: f64,
+    available_inputs: &FxHashSet<String>,
+    palette: &MachinePalette,
+    default_machine: &str,
+    excluded_recipes: &FxHashSet<String>,
+) -> Result<SolverResult, SolverError> {
+    solve_free_with_palette_and_exclusions(
+        target_item,
+        target_rate,
+        available_inputs,
+        palette,
+        default_machine,
+        excluded_recipes,
+    )
+}
+
+/// Compatibility mode (Phase 1 behavior): the legacy tree walk picks the
+/// recipe set (JSON-first per item), then the LP re-derives flows over
+/// exactly that set. Kept for A/B comparison and the parity harness.
+pub fn solve_compat_with_palette_and_exclusions(
     target_item: &str,
     target_rate: f64,
     available_inputs: &FxHashSet<String>,

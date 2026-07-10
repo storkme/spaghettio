@@ -696,11 +696,25 @@ pub fn route_bus_ghost(
                 // starts there.
                 Some(y0)
             } else {
-                // First UG-S input at y0+1 (mouth at y0 merges F5 with
-                // the surface anchor). Slide forward if blocked or if its
-                // mouth would land on a foreign tap row.
-                let cand: Vec<i32> = ((y0 + 1)..=(y1 - 1)).collect();
-                match pick_endpoint_y(&cand, -1, &existing_belts, &hard) {
+                // First UG-S input at y0+1 (mouth at y0 merges F5 with the
+                // surface anchor — always our own tile, never a foreign
+                // tap). Slide forward ONLY past blocked tiles:
+                //  - Foreign-tap avoidance is wrong for the UG-S endpoint —
+                //    a PTG sitting ON a foreign tap row is F5a-safe (its
+                //    east/west faces are closed), whereas sliding past the
+                //    row forces plain SURFACE pipes across it via the
+                //    bridge fill below — the exact cross-fluid merge the
+                //    slide tried to prevent (observed: dense oil complexes
+                //    merging adjacent heavy/light trunks).
+                //  - The range caps at y1-2, not y1-1: a UG-S at y1-1 has
+                //    no room for its UG-N partner and strands the exit
+                //    anchor (observed: 3-stacked-perimeter-exit tail).
+                let cand: Vec<i32> = ((y0 + 1)..=(y1 - 2)).collect();
+                match cand
+                    .iter()
+                    .copied()
+                    .find(|&y| !is_blocked(y, &existing_belts, &hard))
+                {
                     Some(in_y) => {
                         // When the UG-S slides past y0+1, the tiles between
                         // the anchor at y0 and the UG-S mouth at (in_y-1)
