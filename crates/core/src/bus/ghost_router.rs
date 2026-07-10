@@ -2765,13 +2765,28 @@ pub fn route_bus_ghost(
     // -------------------------------------------------------------------------
     // Step 7: Merge output rows for final products
     // -------------------------------------------------------------------------
-    let output_items: FxHashSet<String> = solver_result
+    // Deterministic Vec order (not a set): with multiple output items the
+    // iteration order decides merge-column positions, and FxHashSet order
+    // is arbitrary. Dedup by seen-set, first occurrence wins.
+    let mut seen_output_items: FxHashSet<&str> = FxHashSet::default();
+    let output_items: Vec<String> = solver_result
         .external_outputs
         .iter()
-        .filter(|ext| !ext.is_fluid)
+        .filter(|ext| !ext.is_fluid && seen_output_items.insert(ext.item.as_str()))
         .map(|ext| ext.item.clone())
         .collect();
 
+    // Running x-cursor so successive items' merge blocks tile east instead
+    // of overlapping. Start east of EVERY row (not just the participating
+    // ones) so south columns never clip a wider foreign row, and record
+    // placed column x-positions so later items' east extension runs can
+    // UG-hop across them.
+    let mut merge_x_cursor: i32 = if output_items.len() > 1 {
+        row_spans.iter().map(|rs| rs.row_width).max().unwrap_or(0) + 1
+    } else {
+        0
+    };
+    let mut blocked_columns: Vec<i32> = Vec::new();
     for item in &output_items {
         let output_rows: Vec<usize> = row_spans
             .iter()
@@ -2781,8 +2796,17 @@ pub fn route_bus_ghost(
             .collect();
 
         if !output_rows.is_empty() {
-            let (merge_ents, merge_end_y, item_merge_x) =
-                merge_output_rows(&output_rows, item, row_spans, max_y, max_belt_tier);
+            let (merge_ents, merge_end_y, item_merge_x) = merge_output_rows(
+                &output_rows,
+                item,
+                row_spans,
+                max_y,
+                max_belt_tier,
+                merge_x_cursor,
+                &blocked_columns,
+            );
+            blocked_columns.extend((item_merge_x - output_rows.len() as i32)..item_merge_x);
+            merge_x_cursor = item_merge_x + 1;
             crate::trace::emit(crate::trace::TraceEvent::OutputMerged {
                 item: item.clone(),
                 rows: output_rows.clone(),

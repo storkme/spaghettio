@@ -16,8 +16,11 @@ pub(crate) fn merge_output_rows(
     row_spans: &[RowSpan],
     merge_start_y: i32,
     max_belt_tier: Option<&str>,
+    min_merge_x: i32,
+    blocked_columns: &[i32],
 ) -> (Vec<PlacedEntity>, i32, i32) {
-    use crate::common::belt_entity_for_rate;
+    use crate::bus::balancer::underground_for_belt;
+    use crate::common::{belt_entity_for_rate, ug_max_reach};
 
     let mut entities: Vec<PlacedEntity> = Vec::new();
     let n = output_rows.len();
@@ -43,10 +46,16 @@ pub(crate) fn merge_output_rows(
     let belt_name = belt_entity_for_rate(total_rate * 2.0, max_belt_tier);
     let splitter_name = splitter_for_belt(belt_name);
 
-    let merge_x = output_rows.iter()
+    // Column position: east of the widest participating row, but never west
+    // of `min_merge_x` — the caller threads a running cursor across
+    // successive per-item merges so two output items' splitter cascades and
+    // south columns tile left-to-right instead of stamping the same tiles
+    // (multi-item solid output support, Phase 2 of rfp-solver-net-flow).
+    let merge_x = (output_rows.iter()
         .map(|&ri| if ri < row_spans.len() { row_spans[ri].row_width } else { 0 })
         .max()
-        .unwrap_or(0) + 1;
+        .unwrap_or(0) + 1)
+        .max(min_merge_x);
 
     for (idx, &ri) in output_rows.iter().enumerate() {
         if ri >= row_spans.len() {
@@ -55,9 +64,50 @@ pub(crate) fn merge_output_rows(
         let out_y = row_spans[ri].output_belt_y;
         let col_x = merge_x + (n - 1 - idx) as i32; // first row rightmost, last row at merge_x
 
-        // Extend EAST belts from the row's rightmost tile to the merge column.
+        // Extend EAST belts from the row's rightmost tile to the merge
+        // column. Earlier items' south columns (`blocked_columns`) lie in
+        // this run's path — bridge each contiguous blocked range with an
+        // underground pair instead of stamping over (or sideloading into)
+        // the foreign belt.
         let rw = row_spans[ri].row_width;
-        for x in rw..col_x {
+        let ug_name = underground_for_belt(belt_name);
+        let reach = ug_max_reach(belt_name) as i32;
+        let mut x = rw;
+        while x < col_x {
+            if blocked_columns.contains(&x) {
+                // Contiguous blocked run [x, run_end], clamped by UG reach
+                // (entrance at x-1, exit at run_end+1; gap ≤ reach).
+                let mut run_end = x;
+                while run_end + 1 < col_x
+                    && blocked_columns.contains(&(run_end + 1))
+                    && (run_end + 1) - x < reach
+                {
+                    run_end += 1;
+                }
+                debug_assert!(x - 1 >= rw, "no room for UG entrance before blocked column");
+                // Replace the belt stamped at x-1 with a UG entrance.
+                if let Some(prev) = entities
+                    .iter_mut()
+                    .rev()
+                    .find(|e| e.x == x - 1 && e.y == out_y)
+                {
+                    prev.name = ug_name.to_string();
+                    prev.io_type = Some("input".to_string());
+                }
+                entities.push(PlacedEntity {
+                    name: ug_name.to_string(),
+                    x: run_end + 1,
+                    y: out_y,
+                    direction: EntityDirection::East,
+                    io_type: Some("output".to_string()),
+                    carries: Some(item.to_string()),
+                    segment_id: merger_seg_id.clone(),
+                    rate: Some(total_rate),
+                    ..Default::default()
+                });
+                x = run_end + 2;
+                continue;
+            }
             entities.push(PlacedEntity {
                 name: belt_name.to_string(),
                 x,
@@ -68,6 +118,7 @@ pub(crate) fn merge_output_rows(
                 rate: Some(total_rate),
                 ..Default::default()
             });
+            x += 1;
         }
 
         // SOUTH column from out_y to merge_start_y.
@@ -204,6 +255,49 @@ mod tests {
         }
     }
 
+
+    /// Phase 2 (rfp-solver-net-flow): two output items' merge blocks must
+    /// tile east via the threaded cursor instead of stamping the same
+    /// tiles. Regression for the review finding that per-item merge_x was
+    /// computed independently.
+    #[test]
+    fn test_two_items_merge_blocks_do_not_overlap() {
+        use rustc_hash::FxHashSet;
+        let row0 = make_test_row_span(
+            "iron-gear-wheel",
+            0,
+            vec![],
+            vec![ItemFlow { item: "iron-gear-wheel".to_string(), rate: 2.0, is_fluid: false, module_id: 0 }],
+            2,
+            vec![0],
+        );
+        let row1 = make_test_row_span(
+            "iron-stick",
+            5,
+            vec![],
+            vec![ItemFlow { item: "iron-stick".to_string(), rate: 2.0, is_fluid: false, module_id: 0 }],
+            2,
+            vec![5],
+        );
+        let rows = [row0, row1];
+        let (a_ents, a_end_y, a_max_x) = merge_output_rows(&[0], "iron-gear-wheel", &rows, 15, None, 11, &[]);
+        // Caller threads: next min_merge_x = returned max_x + 1, start_y = max_y.
+        let blocked: Vec<i32> = ((a_max_x - 1)..a_max_x).collect();
+        let (b_ents, _b_end_y, b_max_x) = merge_output_rows(&[1], "iron-stick", &rows, a_end_y.max(15), None, a_max_x + 1, &blocked);
+        assert!(b_max_x > a_max_x);
+        let a_tiles: FxHashSet<(i32, i32)> = a_ents.iter().map(|e| (e.x, e.y)).collect();
+        let overlap: Vec<(i32, i32)> = b_ents
+            .iter()
+            .map(|e| (e.x, e.y))
+            .filter(|t| a_tiles.contains(t))
+            .collect();
+        assert!(overlap.is_empty(), "merge blocks overlap at {overlap:?}");
+        // And without the cursor they WOULD overlap (guard the guard):
+        let (c_ents, _c_end_y, _c) = merge_output_rows(&[1], "iron-stick", &rows, 15, None, 0, &[]);
+        let c_overlap = c_ents.iter().map(|e| (e.x, e.y)).any(|t| a_tiles.contains(&t));
+        assert!(c_overlap, "expected uncursored merges to collide — geometry changed?");
+    }
+
     #[test]
     fn test_merge_output_rows_single_row() {
         let row_span = make_test_row_span(
@@ -216,7 +310,7 @@ mod tests {
         );
 
         let output_rows = vec![0];
-        let (entities, _end_y, _merge_max_x) = merge_output_rows(&output_rows, "iron-plate", &[row_span], 20, None);
+        let (entities, _end_y, _merge_max_x) = merge_output_rows(&output_rows, "iron-plate", &[row_span], 20, None, 0, &[]);
 
         // Single row should extend EAST and SOUTH without splitters
         assert!(!entities.is_empty());
@@ -243,7 +337,7 @@ mod tests {
         );
 
         let output_rows = vec![0, 1];
-        let (entities, _end_y, _merge_max_x) = merge_output_rows(&output_rows, "iron-plate", &[row_span1, row_span2], 20, None);
+        let (entities, _end_y, _merge_max_x) = merge_output_rows(&output_rows, "iron-plate", &[row_span1, row_span2], 20, None, 0, &[]);
 
         // Multiple rows should include splitters
         let splitters = entities.iter().filter(|e| e.name.contains("splitter")).count();
@@ -287,6 +381,8 @@ mod tests {
             &[row0, row1],
             15,
             None,
+            0,
+            &[],
         );
 
         // Splitters must be present
@@ -337,6 +433,8 @@ mod tests {
             &[row0, row1],
             20,
             None,
+            0,
+            &[],
         );
 
         let splitters: Vec<_> = entities.iter().filter(|e| e.name.contains("splitter")).collect();
