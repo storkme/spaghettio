@@ -299,7 +299,7 @@ fn layout_pass(
     // vertical gaps between producer rows.
     let temp_bw = estimate_bus_width(solver_result);
     let t_place1 = web_time::Instant::now();
-    let (row_entities_1, row_spans_1, _row_width_1, _total_height_1) = place_rows(
+    let (row_entities_1, row_spans_1, _row_width_1, total_height_1) = place_rows(
         &solver_result.machines,
         &solver_result.dependency_order,
         temp_bw,
@@ -314,7 +314,8 @@ fn layout_pass(
         duration_ms: t_place1.elapsed().as_millis() as u64,
     });
     let t_plan1 = web_time::Instant::now();
-    let (lanes_1, families_1) = plan_bus_lanes(solver_result, &row_spans_1, max_belt_tier, plan_ref)?;
+    let (lanes_1, families_1) =
+        plan_bus_lanes(solver_result, &row_spans_1, max_belt_tier, plan_ref, total_height_1)?;
     crate::trace::emit(crate::trace::TraceEvent::PhaseTime {
         phase: "plan_bus_lanes_1".to_string(),
         duration_ms: t_plan1.elapsed().as_millis() as u64,
@@ -328,7 +329,7 @@ fn layout_pass(
     // the second placement keeps the retry slack.
     let (row_entities, row_spans, row_width, total_height, lanes, families) =
         if actual_bw == temp_bw && balancer_gaps.is_empty() {
-            (row_entities_1, row_spans_1, _row_width_1, _total_height_1, lanes_1, families_1)
+            (row_entities_1, row_spans_1, _row_width_1, total_height_1, lanes_1, families_1)
         } else {
             let merged_gaps: FxHashMap<usize, i32> = match retry_extra_gaps {
                 None => balancer_gaps,
@@ -356,7 +357,7 @@ fn layout_pass(
                 duration_ms: t_place2.elapsed().as_millis() as u64,
             });
             let t_plan2 = web_time::Instant::now();
-            let (nl, nf) = plan_bus_lanes(solver_result, &rs, max_belt_tier, plan_ref)?;
+            let (nl, nf) = plan_bus_lanes(solver_result, &rs, max_belt_tier, plan_ref, th)?;
             crate::trace::emit(crate::trace::TraceEvent::PhaseTime {
                 phase: "plan_bus_lanes_2".to_string(),
                 duration_ms: t_plan2.elapsed().as_millis() as u64,
@@ -511,6 +512,7 @@ fn layout_pass(
         region.id = idx as u32;
     }
     let ghost_warnings = ghost_result.warnings;
+    let surplus_exits = ghost_result.surplus_exits;
     crate::trace::emit(crate::trace::TraceEvent::PhaseTime {
         phase: "ghost_routing".to_string(),
         duration_ms: t_ghost.elapsed().as_millis() as u64,
@@ -599,6 +601,7 @@ fn layout_pass(
             warnings,
             regions,
             trace: None,
+            surplus_exits,
         },
         row_spans,
     ))

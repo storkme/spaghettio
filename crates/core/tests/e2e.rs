@@ -1084,6 +1084,84 @@ fn tier3_advanced_oil_processing_multi_machine() {
     );
 }
 
+/// Regression for issue #277 generalization: force `advanced-oil-processing`
+/// (3 distinct fluid outputs: heavy-oil, light-oil, petroleum-gas) to need
+/// ≥2 oil-refineries by excluding the single-output/single-machine
+/// alternatives. Before the `fluid_only_row_staggered_3output` multi-machine
+/// generalization, `machine_count > 1` fell through to the non-staggered
+/// per-port-isolated-pipe path (see `fluid_only_row`'s dispatch gate in
+/// `templates.rs`), which doesn't connect the multi-fluid output side to the
+/// bus — producing pipe-isolation, fluid-connectivity, and fluid-network
+/// errors.
+///
+/// We only assert those three categories are error-free for the row's own
+/// geometry. `stranded-byproduct` errors for surplus heavy-oil/light-oil are
+/// expected and out of scope — surplus routing is a separate, concurrent
+/// workstream (confirmed live-in-progress on `ghost_router.rs`/
+/// `lane_planner.rs` as of this writing).
+///
+/// That workstream's surplus-exit logic currently assigns heavy-oil's and
+/// light-oil's bus trunk lanes to *adjacent* columns with no isolation gap
+/// (verified via snapshot: `trunk:heavy-oil` at x=1 sits directly beside
+/// `trunk:light-oil` at x=2, both plain `pipe` tiles, which Factorio auto-
+/// merges). That produces 2 `pipe-isolation` + 1 `fluid-network` error at
+/// the trunk/surplus-exit tiles specifically — never touching the row
+/// itself, and never touching petroleum-gas (the actual solved-for item) or
+/// the true inputs (water, crude-oil). We filter those two known byproduct
+/// items out of the assertion rather than widen the exclusion list, so a
+/// regression that touches petroleum-gas/water/crude-oil (i.e. our own
+/// template/pitch fix) still fails loudly.
+#[test]
+#[ntest::timeout(30000)]
+fn tier3_advanced_oil_processing_forced_multi_machine_pipe_isolation() {
+    let inputs: FxHashSet<String> = ["water", "crude-oil"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let excluded: FxHashSet<String> = ["basic-oil-processing", "coal-liquefaction"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let result = run_e2e_with_exclusions(
+        "tier3_advanced_oil_processing_forced_multi_machine_pipe_isolation",
+        "petroleum-gas",
+        12.0,
+        "oil-refinery",
+        None,
+        &inputs,
+        &excluded,
+    )
+    .unwrap_or_else(|e| panic!("tier3_advanced_oil_processing_forced_multi_machine_pipe_isolation: {e}"));
+
+    let refinery_count = result.layout.entities.iter()
+        .filter(|e| e.name == "oil-refinery")
+        .count();
+    assert!(
+        refinery_count >= 2,
+        "expected ≥2 oil-refineries for forced advanced-oil-processing at 12/s, got {refinery_count}",
+    );
+
+    // Full cleanliness: the staggered multi-machine template (issue #277)
+    // plus surplus perimeter routing (rfp-solver-net-flow Phase 2) leave
+    // this fixture with zero errors — both AOP byproducts (heavy-oil,
+    // light-oil) exit as isolated surplus trunks at the south boundary.
+    let errors: Vec<_> = result
+        .issues
+        .iter()
+        .filter(|i| i.severity == Severity::Error)
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "expected 0 errors, got {}:\n{}",
+        errors.len(),
+        errors
+            .iter()
+            .map(|i| format!("  [{}] {} ({:?},{:?})", i.category, i.message, i.x, i.y))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Tier 4: advanced-circuit (5+ recipes, mixed solid/fluid)
 // Known issues: lane-throughput warnings from single-lane sideload bottleneck (#64)

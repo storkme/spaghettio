@@ -84,7 +84,7 @@ pub(crate) fn merge_output_rows(
                 {
                     run_end += 1;
                 }
-                debug_assert!(x - 1 >= rw, "no room for UG entrance before blocked column");
+                debug_assert!(x > rw, "no room for UG entrance before blocked column");
                 // Replace the belt stamped at x-1 with a UG entrance.
                 if let Some(prev) = entities
                     .iter_mut()

@@ -702,6 +702,7 @@ mod tests {
             warnings: vec![],
             regions: vec![],
             trace: None,
+            surplus_exits: vec![],
         }
     }
 

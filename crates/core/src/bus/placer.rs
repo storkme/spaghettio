@@ -893,7 +893,24 @@ pub(crate) fn build_one_row(
         }
     }
 
-    let machine_pitch: i32 = machine_size(&spec.entity) as i32;
+    // Fluid-only rows (`RowKind::OilRefinery`) with ≥3 distinct fluid outputs
+    // use the staggered 3-trunk staircase template, whose machines are
+    // spaced by `templates::fluid_only_row_pitch` rather than plain
+    // `machine_size` (issue #277 — see that function's doc comment). Every
+    // other row kind packs at `machine_size`. Must agree with the pitch the
+    // template actually stamped with, or `default_max` below undercounts
+    // the row width by `(count - 1)` tiles.
+    let msz = machine_size(&spec.entity) as i32;
+    let machine_pitch: i32 = if matches!(kind, RowKind::OilRefinery) {
+        let distinct_fluid_outputs = fluid_outputs
+            .iter()
+            .map(|f| f.item.as_str())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len();
+        templates::fluid_only_row_pitch(msz as u32, distinct_fluid_outputs)
+    } else {
+        msz
+    };
     // Inline-bridge unification: machines pack tight (Strategy A) or
     // with a single 1-tile gap at the anchor (Strategy B,
     // triple_input_row only). The `default_max` below is a fallback

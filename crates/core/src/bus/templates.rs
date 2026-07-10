@@ -2043,6 +2043,23 @@ pub fn fluid_dual_input_row(
     (entities, row_height, fluid_input_port_pipes, fluid_output_port_pipes)
 }
 
+/// Column pitch between consecutive machines in a fluid-only row (issue
+/// #277). At `machine_size` pitch, adjacent machines' PTGs on the
+/// ≥3-distinct-fluid-output staircase collide (machine N's east R-flank at
+/// `mx + msz` lands on the same tile as machine N+1's west drop UG at
+/// `mx + msz`); adding 1 tile of pitch separates them and keeps them
+/// F5a-isolated. Used by both `fluid_only_row_staggered_3output` (to space
+/// machine stamps) and `placer.rs`'s row-width calculation (which must
+/// agree, or the row's reserved width undercounts).
+pub(crate) fn fluid_only_row_pitch(machine_size: u32, distinct_fluid_outputs: usize) -> i32 {
+    let msz = machine_size as i32;
+    if distinct_fluid_outputs >= 3 {
+        msz + 1
+    } else {
+        msz
+    }
+}
+
 /// Staggered 3-output layout for advanced-oil-processing-style recipes on 5×5
 /// refineries. Each output fluid gets its own full-width trunk at a distinct
 /// y row so flanks and drop-UGs of adjacent fluids never share a tile.
@@ -2095,9 +2112,16 @@ pub fn fluid_dual_input_row(
 /// Row height = `msz + 5` for 1 fluid input, `msz + 9` for 2 distinct inputs
 /// (general formula: `msz + 5 + n_inputs + 2` for n ≥ 2 with the gap row).
 ///
-/// Currently requires `machine_count == 1`; the multi-machine case has a
-/// known collision (east R-flank of machine N overlaps west drop UG of
-/// machine N+1 at `(mx + msz, y_east)`) that needs a separate design pass.
+/// ## Multi-machine (issue #277)
+///
+/// Machines repeat every [`fluid_only_row_pitch`] columns instead of every
+/// `msz` columns. At `pitch == msz`, machine N's east R-flank PTG at
+/// `(mx + msz, y_east)` collides with machine N+1's west drop UG at the same
+/// tile; `fluid_only_row_pitch` adds a 1-tile gap for the ≥3-distinct-output
+/// case, which separates the two and keeps them F5a-isolated (no shared
+/// tile between the perpendicular-oriented PTGs). At `machine_count == 1`
+/// the pitch is unused, so output is byte-identical to the single-machine
+/// layout.
 fn fluid_only_row_staggered_3output(
     recipe: &str,
     machine_entity: &str,
@@ -2112,12 +2136,6 @@ fn fluid_only_row_staggered_3output(
         fluid_outputs.len(), 3,
         "fluid_only_row_staggered_3output requires exactly 3 output ports",
     );
-    assert_eq!(
-        machine_count, 1,
-        "staggered 3-output layout doesn't yet support multi-machine — \
-         east R-flank of machine N at (mx + msz, y_east) collides with west \
-         drop UG of machine N+1 at the same tile",
-    );
 
     let msz = machine_size as i32;
     assert!(msz >= 5, "staggered 3-output requires a 5×5+ machine");
@@ -2127,7 +2145,11 @@ fn fluid_only_row_staggered_3output(
     let mut fluid_output_port_pipes: Vec<(String, i32, i32)> = Vec::new();
     let machine_seg = Some(format!("row:{recipe}:machine"));
 
-    let mx = x_offset;
+    // Pitch is a no-op (== msz) at machine_count == 1, so the single-machine
+    // output stays byte-identical to the pre-#277 layout.
+    let pitch = fluid_only_row_pitch(machine_size, fluid_outputs.len());
+    let mxs: Vec<i32> = (0..machine_count as i32).map(|i| x_offset + i * pitch).collect();
+
     let input_distinct: std::collections::BTreeSet<&str> =
         fluid_inputs.iter().map(|&(_, it)| it).collect();
     let n_inputs = input_distinct.len() as i32;
@@ -2146,41 +2168,18 @@ fn fluid_only_row_staggered_3output(
     let machine_y = y_offset + input_section_height;
     let port_row_y = machine_y + msz;
 
-    // --- Input side. ---
-    if n_inputs <= 1 {
-        // 1 distinct fluid (or 0): continuous pipe strip across the machine
-        // width. Same as the non-staggered single-fluid path.
-        if let Some(&(_, item)) = fluid_inputs.first() {
-            let seg = Some(format!("row:{recipe}:belt-in:{item}"));
-            for dx in 0..msz {
-                entities.push(PlacedEntity {
-                    name: "pipe".to_string(),
-                    x: mx + dx, y: y_offset,
-                    carries: Some(item.to_string()),
-                    segment_id: seg.clone(),
-                    ..Default::default()
-                });
-            }
-            for &(dx, port_item) in fluid_inputs {
-                fluid_input_port_pipes.push((port_item.to_string(), mx + dx, y_offset));
-            }
-        }
-    } else {
-        // ≥2 distinct fluid inputs: vertically mirrored output staircase with
-        // the same gap-row protection as `fluid_multi_input_row`. Sort by
-        // port_dx ascending so fi=0 = smallest dx = innermost. Each fluid
-        // gets its own trunk row (UG-W · pipe · UG-E), a drop UG one row
-        // below the trunk, and a UG-out at the port row; the port row sits
-        // directly above the machine.
-        let mut by_dx: Vec<(i32, &str)> = fluid_inputs.to_vec();
-        by_dx.sort_by_key(|&(dx, _)| dx);
-        let input_port_y = machine_y - 1;
-        let n = n_inputs;
+    // ≥2 distinct fluid inputs: sort by port_dx ascending so fi=0 = smallest
+    // dx = innermost. Same for every machine stamp, so sort once up front.
+    let mut by_dx: Vec<(i32, &str)> = fluid_inputs.to_vec();
+    by_dx.sort_by_key(|&(dx, _)| dx);
+    let input_port_y = machine_y - 1;
+    let n = n_inputs;
 
-        // Adjacent ports (dx delta == 1) would put the inner trunk's R-flank
-        // on the outer drop UG's tile. Refinery uses dx∈{1,3} (delta 2), so
-        // this is fine in practice; assert to flag any future caller that
-        // breaks the assumption.
+    // Adjacent ports (dx delta == 1) would put the inner trunk's R-flank
+    // on the outer drop UG's tile. Refinery uses dx∈{1,3} (delta 2), so
+    // this is fine in practice; assert to flag any future caller that
+    // breaks the assumption.
+    if n_inputs >= 2 {
         for w in by_dx.windows(2) {
             assert!(
                 (w[1].0 - w[0].0).abs() >= 2,
@@ -2189,95 +2188,14 @@ fn fluid_only_row_staggered_3output(
                 w[0].0, w[1].0,
             );
         }
-
-        for (fi, &(port_dx, item)) in by_dx.iter().enumerate() {
-            let fi = fi as i32;
-            // Outermost fluid (fi=n-1) anchors at y_offset+0; inner fluids
-            // shift down by `gap` so the outer fluid's drop UG lands in the
-            // empty gap row.
-            let trunk_y = y_offset + (n - 1 - fi) + if fi < n - 1 { gap } else { 0 };
-            let col_t = mx + port_dx;
-            let seg = Some(format!("row:{recipe}:fluid-in:{item}"));
-
-            // Trunk row: UG-W · pipe · UG-E (same shape as output trunk rows).
-            entities.push(PlacedEntity {
-                name: "pipe-to-ground".to_string(),
-                x: col_t - 1, y: trunk_y,
-                direction: EntityDirection::West,
-                io_type: Some("output".to_string()),
-                carries: Some(item.to_string()),
-                segment_id: seg.clone(),
-                ..Default::default()
-            });
-            entities.push(PlacedEntity {
-                name: "pipe".to_string(),
-                x: col_t, y: trunk_y,
-                carries: Some(item.to_string()),
-                segment_id: seg.clone(),
-                ..Default::default()
-            });
-            entities.push(PlacedEntity {
-                name: "pipe-to-ground".to_string(),
-                x: col_t + 1, y: trunk_y,
-                direction: EntityDirection::East,
-                io_type: Some("input".to_string()),
-                carries: Some(item.to_string()),
-                segment_id: seg.clone(),
-                ..Default::default()
-            });
-
-            // Drop UG-S one row below the trunk row. Surface-N merges with
-            // T-drop above (same fluid). Tunnel goes south to the UG-out.
-            entities.push(PlacedEntity {
-                name: "pipe-to-ground".to_string(),
-                x: col_t, y: trunk_y + 1,
-                direction: EntityDirection::South,
-                io_type: Some("input".to_string()),
-                carries: Some(item.to_string()),
-                segment_id: seg.clone(),
-                ..Default::default()
-            });
-
-            // UG-out on port row, direction=North so surface-S merges with
-            // the machine's north fluid port at (col_t, machine_y).
-            entities.push(PlacedEntity {
-                name: "pipe-to-ground".to_string(),
-                x: col_t, y: input_port_y,
-                direction: EntityDirection::North,
-                io_type: Some("output".to_string()),
-                carries: Some(item.to_string()),
-                segment_id: seg.clone(),
-                ..Default::default()
-            });
-
-            // Tap point: the trunk's T-drop pipe. The bus router emits an
-            // east-facing UG at `(lane.x + 1, trunk_y)` to pair with the
-            // L-flank UG-W at `(col_t - 1, trunk_y)`.
-            fluid_input_port_pipes.push((item.to_string(), col_t, trunk_y));
-        }
     }
 
-    // --- Machine. ---
-    entities.push(PlacedEntity {
-        name: machine_entity.to_string(),
-        x: mx,
-        y: machine_y,
-        direction: EntityDirection::North,
-        recipe: Some(recipe.to_string()),
-        mirror: true,
-        segment_id: machine_seg,
-        ..Default::default()
-    });
-
-    // --- Output side: staggered 3 trunks. ---
+    // Output staircase dx/item assignments — invariant across machines.
     // Order: fluid_outputs sorted by dx ascending — [0]=west, [1]=middle, [2]=east.
     // (Caller in placer.rs already passes them in this order for refinery outputs.)
     let (dx_w, item_w) = fluid_outputs[0];
     let (dx_m, item_m) = fluid_outputs[1];
     let (dx_e, item_e) = fluid_outputs[2];
-    let col_w = mx + dx_w;
-    let col_m = mx + dx_m;
-    let col_e = mx + dx_e;
 
     let y_middle = port_row_y + 1;
     let y_east = port_row_y + 2;
@@ -2287,145 +2205,256 @@ fn fluid_only_row_staggered_3output(
     let seg_m = Some(format!("row:{recipe}:fluid-out:{item_m}"));
     let seg_e = Some(format!("row:{recipe}:fluid-out:{item_e}"));
 
-    // Port row — one tile per fluid, each connecting to the refinery's
-    // corresponding fluid box. West and east use UG-S/input so the tunnel
-    // continues south to the trunk's drop UG. Middle uses a regular pipe
-    // since its trunk is directly below (0-tile gap).
-    entities.push(PlacedEntity {
-        name: "pipe-to-ground".to_string(),
-        x: col_w, y: port_row_y,
-        direction: EntityDirection::South,
-        io_type: Some("input".to_string()),
-        carries: Some(item_w.to_string()),
-        segment_id: seg_w.clone(),
-        ..Default::default()
-    });
-    entities.push(PlacedEntity {
-        name: "pipe".to_string(),
-        x: col_m, y: port_row_y,
-        carries: Some(item_m.to_string()),
-        segment_id: seg_m.clone(),
-        ..Default::default()
-    });
-    entities.push(PlacedEntity {
-        name: "pipe-to-ground".to_string(),
-        x: col_e, y: port_row_y,
-        direction: EntityDirection::South,
-        io_type: Some("input".to_string()),
-        carries: Some(item_e.to_string()),
-        segment_id: seg_e.clone(),
-        ..Default::default()
-    });
+    for &mx in &mxs {
+        // --- Input side. ---
+        if n_inputs <= 1 {
+            // 1 distinct fluid (or 0): continuous pipe strip across the machine
+            // width. Same as the non-staggered single-fluid path.
+            if let Some(&(_, item)) = fluid_inputs.first() {
+                let seg = Some(format!("row:{recipe}:belt-in:{item}"));
+                for dx in 0..msz {
+                    entities.push(PlacedEntity {
+                        name: "pipe".to_string(),
+                        x: mx + dx, y: y_offset,
+                        carries: Some(item.to_string()),
+                        segment_id: seg.clone(),
+                        ..Default::default()
+                    });
+                }
+                for &(dx, port_item) in fluid_inputs {
+                    fluid_input_port_pipes.push((port_item.to_string(), mx + dx, y_offset));
+                }
+            }
+        } else {
+            // ≥2 distinct fluid inputs: vertically mirrored output staircase with
+            // the same gap-row protection as `fluid_multi_input_row`. Each fluid
+            // gets its own trunk row (UG-W · pipe · UG-E), a drop UG one row
+            // below the trunk, and a UG-out at the port row; the port row sits
+            // directly above the machine.
+            for (fi, &(port_dx, item)) in by_dx.iter().enumerate() {
+                let fi = fi as i32;
+                // Outermost fluid (fi=n-1) anchors at y_offset+0; inner fluids
+                // shift down by `gap` so the outer fluid's drop UG lands in the
+                // empty gap row.
+                let trunk_y = y_offset + (n - 1 - fi) + if fi < n - 1 { gap } else { 0 };
+                let col_t = mx + port_dx;
+                let seg = Some(format!("row:{recipe}:fluid-in:{item}"));
 
-    // Middle trunk at y_middle (adjacent to port row).
-    entities.push(PlacedEntity {
-        name: "pipe-to-ground".to_string(),
-        x: col_m - 1, y: y_middle,
-        direction: EntityDirection::West,
-        io_type: Some("output".to_string()),
-        carries: Some(item_m.to_string()),
-        segment_id: seg_m.clone(),
-        ..Default::default()
-    });
-    entities.push(PlacedEntity {
-        name: "pipe".to_string(),
-        x: col_m, y: y_middle,
-        carries: Some(item_m.to_string()),
-        segment_id: seg_m.clone(),
-        ..Default::default()
-    });
-    entities.push(PlacedEntity {
-        name: "pipe-to-ground".to_string(),
-        x: col_m + 1, y: y_middle,
-        direction: EntityDirection::East,
-        io_type: Some("input".to_string()),
-        carries: Some(item_m.to_string()),
-        segment_id: seg_m.clone(),
-        ..Default::default()
-    });
+                // Trunk row: UG-W · pipe · UG-E (same shape as output trunk rows).
+                entities.push(PlacedEntity {
+                    name: "pipe-to-ground".to_string(),
+                    x: col_t - 1, y: trunk_y,
+                    direction: EntityDirection::West,
+                    io_type: Some("output".to_string()),
+                    carries: Some(item.to_string()),
+                    segment_id: seg.clone(),
+                    ..Default::default()
+                });
+                entities.push(PlacedEntity {
+                    name: "pipe".to_string(),
+                    x: col_t, y: trunk_y,
+                    carries: Some(item.to_string()),
+                    segment_id: seg.clone(),
+                    ..Default::default()
+                });
+                entities.push(PlacedEntity {
+                    name: "pipe-to-ground".to_string(),
+                    x: col_t + 1, y: trunk_y,
+                    direction: EntityDirection::East,
+                    io_type: Some("input".to_string()),
+                    carries: Some(item.to_string()),
+                    segment_id: seg.clone(),
+                    ..Default::default()
+                });
 
-    // East drop UG (at y_middle row, col_e) — pairs with machine-side UG at port row.
-    entities.push(PlacedEntity {
-        name: "pipe-to-ground".to_string(),
-        x: col_e, y: y_east - 1, // = y_middle
-        direction: EntityDirection::North,
-        io_type: Some("output".to_string()),
-        carries: Some(item_e.to_string()),
-        segment_id: seg_e.clone(),
-        ..Default::default()
-    });
+                // Drop UG-S one row below the trunk row. Surface-N merges with
+                // T-drop above (same fluid). Tunnel goes south to the UG-out.
+                entities.push(PlacedEntity {
+                    name: "pipe-to-ground".to_string(),
+                    x: col_t, y: trunk_y + 1,
+                    direction: EntityDirection::South,
+                    io_type: Some("input".to_string()),
+                    carries: Some(item.to_string()),
+                    segment_id: seg.clone(),
+                    ..Default::default()
+                });
 
-    // East trunk at y_east.
-    entities.push(PlacedEntity {
-        name: "pipe-to-ground".to_string(),
-        x: col_e - 1, y: y_east,
-        direction: EntityDirection::West,
-        io_type: Some("output".to_string()),
-        carries: Some(item_e.to_string()),
-        segment_id: seg_e.clone(),
-        ..Default::default()
-    });
-    entities.push(PlacedEntity {
-        name: "pipe".to_string(),
-        x: col_e, y: y_east,
-        carries: Some(item_e.to_string()),
-        segment_id: seg_e.clone(),
-        ..Default::default()
-    });
-    entities.push(PlacedEntity {
-        name: "pipe-to-ground".to_string(),
-        x: col_e + 1, y: y_east,
-        direction: EntityDirection::East,
-        io_type: Some("input".to_string()),
-        carries: Some(item_e.to_string()),
-        segment_id: seg_e.clone(),
-        ..Default::default()
-    });
+                // UG-out on port row, direction=North so surface-S merges with
+                // the machine's north fluid port at (col_t, machine_y).
+                entities.push(PlacedEntity {
+                    name: "pipe-to-ground".to_string(),
+                    x: col_t, y: input_port_y,
+                    direction: EntityDirection::North,
+                    io_type: Some("output".to_string()),
+                    carries: Some(item.to_string()),
+                    segment_id: seg.clone(),
+                    ..Default::default()
+                });
 
-    // West drop UG (at y_east row, col_w) — pairs with machine-side UG at port row,
-    // tunnel spans y_middle in between (perpendicular to middle trunk's PTGs, F5a).
-    entities.push(PlacedEntity {
-        name: "pipe-to-ground".to_string(),
-        x: col_w, y: y_west - 1, // = y_east
-        direction: EntityDirection::North,
-        io_type: Some("output".to_string()),
-        carries: Some(item_w.to_string()),
-        segment_id: seg_w.clone(),
-        ..Default::default()
-    });
+                // Tap point: the trunk's T-drop pipe. The bus router emits an
+                // east-facing UG at `(lane.x + 1, trunk_y)` to pair with the
+                // L-flank UG-W at `(col_t - 1, trunk_y)`.
+                fluid_input_port_pipes.push((item.to_string(), col_t, trunk_y));
+            }
+        }
 
-    // West trunk at y_west.
-    entities.push(PlacedEntity {
-        name: "pipe-to-ground".to_string(),
-        x: col_w - 1, y: y_west,
-        direction: EntityDirection::West,
-        io_type: Some("output".to_string()),
-        carries: Some(item_w.to_string()),
-        segment_id: seg_w.clone(),
-        ..Default::default()
-    });
-    entities.push(PlacedEntity {
-        name: "pipe".to_string(),
-        x: col_w, y: y_west,
-        carries: Some(item_w.to_string()),
-        segment_id: seg_w.clone(),
-        ..Default::default()
-    });
-    entities.push(PlacedEntity {
-        name: "pipe-to-ground".to_string(),
-        x: col_w + 1, y: y_west,
-        direction: EntityDirection::East,
-        io_type: Some("input".to_string()),
-        carries: Some(item_w.to_string()),
-        segment_id: seg_w,
-        ..Default::default()
-    });
+        // --- Machine. ---
+        entities.push(PlacedEntity {
+            name: machine_entity.to_string(),
+            x: mx,
+            y: machine_y,
+            direction: EntityDirection::North,
+            recipe: Some(recipe.to_string()),
+            mirror: true,
+            segment_id: machine_seg.clone(),
+            ..Default::default()
+        });
 
-    // Tap points at each trunk's T-drop — the ghost router connects the bus
-    // lanes for each output fluid to these positions.
-    fluid_output_port_pipes.push((item_w.to_string(), col_w, y_west));
-    fluid_output_port_pipes.push((item_m.to_string(), col_m, y_middle));
-    fluid_output_port_pipes.push((item_e.to_string(), col_e, y_east));
+        // --- Output side: staggered 3 trunks. ---
+        let col_w = mx + dx_w;
+        let col_m = mx + dx_m;
+        let col_e = mx + dx_e;
+
+        // Port row — one tile per fluid, each connecting to the refinery's
+        // corresponding fluid box. West and east use UG-S/input so the tunnel
+        // continues south to the trunk's drop UG. Middle uses a regular pipe
+        // since its trunk is directly below (0-tile gap).
+        entities.push(PlacedEntity {
+            name: "pipe-to-ground".to_string(),
+            x: col_w, y: port_row_y,
+            direction: EntityDirection::South,
+            io_type: Some("input".to_string()),
+            carries: Some(item_w.to_string()),
+            segment_id: seg_w.clone(),
+            ..Default::default()
+        });
+        entities.push(PlacedEntity {
+            name: "pipe".to_string(),
+            x: col_m, y: port_row_y,
+            carries: Some(item_m.to_string()),
+            segment_id: seg_m.clone(),
+            ..Default::default()
+        });
+        entities.push(PlacedEntity {
+            name: "pipe-to-ground".to_string(),
+            x: col_e, y: port_row_y,
+            direction: EntityDirection::South,
+            io_type: Some("input".to_string()),
+            carries: Some(item_e.to_string()),
+            segment_id: seg_e.clone(),
+            ..Default::default()
+        });
+
+        // Middle trunk at y_middle (adjacent to port row).
+        entities.push(PlacedEntity {
+            name: "pipe-to-ground".to_string(),
+            x: col_m - 1, y: y_middle,
+            direction: EntityDirection::West,
+            io_type: Some("output".to_string()),
+            carries: Some(item_m.to_string()),
+            segment_id: seg_m.clone(),
+            ..Default::default()
+        });
+        entities.push(PlacedEntity {
+            name: "pipe".to_string(),
+            x: col_m, y: y_middle,
+            carries: Some(item_m.to_string()),
+            segment_id: seg_m.clone(),
+            ..Default::default()
+        });
+        entities.push(PlacedEntity {
+            name: "pipe-to-ground".to_string(),
+            x: col_m + 1, y: y_middle,
+            direction: EntityDirection::East,
+            io_type: Some("input".to_string()),
+            carries: Some(item_m.to_string()),
+            segment_id: seg_m.clone(),
+            ..Default::default()
+        });
+
+        // East drop UG (at y_middle row, col_e) — pairs with machine-side UG at port row.
+        entities.push(PlacedEntity {
+            name: "pipe-to-ground".to_string(),
+            x: col_e, y: y_east - 1, // = y_middle
+            direction: EntityDirection::North,
+            io_type: Some("output".to_string()),
+            carries: Some(item_e.to_string()),
+            segment_id: seg_e.clone(),
+            ..Default::default()
+        });
+
+        // East trunk at y_east.
+        entities.push(PlacedEntity {
+            name: "pipe-to-ground".to_string(),
+            x: col_e - 1, y: y_east,
+            direction: EntityDirection::West,
+            io_type: Some("output".to_string()),
+            carries: Some(item_e.to_string()),
+            segment_id: seg_e.clone(),
+            ..Default::default()
+        });
+        entities.push(PlacedEntity {
+            name: "pipe".to_string(),
+            x: col_e, y: y_east,
+            carries: Some(item_e.to_string()),
+            segment_id: seg_e.clone(),
+            ..Default::default()
+        });
+        entities.push(PlacedEntity {
+            name: "pipe-to-ground".to_string(),
+            x: col_e + 1, y: y_east,
+            direction: EntityDirection::East,
+            io_type: Some("input".to_string()),
+            carries: Some(item_e.to_string()),
+            segment_id: seg_e.clone(),
+            ..Default::default()
+        });
+
+        // West drop UG (at y_east row, col_w) — pairs with machine-side UG at port row,
+        // tunnel spans y_middle in between (perpendicular to middle trunk's PTGs, F5a).
+        entities.push(PlacedEntity {
+            name: "pipe-to-ground".to_string(),
+            x: col_w, y: y_west - 1, // = y_east
+            direction: EntityDirection::North,
+            io_type: Some("output".to_string()),
+            carries: Some(item_w.to_string()),
+            segment_id: seg_w.clone(),
+            ..Default::default()
+        });
+
+        // West trunk at y_west.
+        entities.push(PlacedEntity {
+            name: "pipe-to-ground".to_string(),
+            x: col_w - 1, y: y_west,
+            direction: EntityDirection::West,
+            io_type: Some("output".to_string()),
+            carries: Some(item_w.to_string()),
+            segment_id: seg_w.clone(),
+            ..Default::default()
+        });
+        entities.push(PlacedEntity {
+            name: "pipe".to_string(),
+            x: col_w, y: y_west,
+            carries: Some(item_w.to_string()),
+            segment_id: seg_w.clone(),
+            ..Default::default()
+        });
+        entities.push(PlacedEntity {
+            name: "pipe-to-ground".to_string(),
+            x: col_w + 1, y: y_west,
+            direction: EntityDirection::East,
+            io_type: Some("input".to_string()),
+            carries: Some(item_w.to_string()),
+            segment_id: seg_w.clone(),
+            ..Default::default()
+        });
+
+        // Tap points at each trunk's T-drop — the ghost router connects the bus
+        // lanes for each output fluid to these positions.
+        fluid_output_port_pipes.push((item_w.to_string(), col_w, y_west));
+        fluid_output_port_pipes.push((item_m.to_string(), col_m, y_middle));
+        fluid_output_port_pipes.push((item_e.to_string(), col_e, y_east));
+    }
 
     // Row spans y_offset (input row) down to y_west.
     let row_height = y_west - y_offset + 1; // = msz + 5
@@ -2490,13 +2519,13 @@ pub fn fluid_only_row(
     // its own trunk row below the machine so flanks and drop-UGs don't
     // share tiles.
     //
-    // The staggered path requires machine_count == 1 (east R-flank of
-    // machine N at (mx + msz, y_east) collides with west drop UG of
-    // machine N+1 at the same tile). When machine_count > 1 we fall
-    // through to the non-staggered path, which places per-port isolated
-    // pipes for the multi-fluid output side and loops over each machine
-    // safely. See issue #277.
-    if output_distinct_items.len() >= 3 && machine_count == 1 {
+    // Multi-machine is supported (issue #277): the template spaces machine
+    // stamps by `fluid_only_row_pitch` instead of `machine_size`, which
+    // separates machine N's east R-flank from machine N+1's west drop UG
+    // (they'd otherwise collide at the same tile at plain `machine_size`
+    // pitch). `placer.rs`'s row-width calculation uses the same pitch
+    // helper so the reserved row width agrees.
+    if output_distinct_items.len() >= 3 {
         return fluid_only_row_staggered_3output(
             recipe, machine_entity, machine_size, machine_count,
             y_offset, x_offset, fluid_inputs, fluid_outputs,
@@ -4211,11 +4240,14 @@ mod tests {
         }
     }
 
-    // Staggered 3-output with machine_count > 1 falls back to the
-    // non-staggered path (per-port isolated pipes) rather than panicking.
-    // Regression guard for issue #277.
+    // Staggered 3-output now supports machine_count > 1 directly (issue
+    // #277) instead of falling back to the non-staggered per-port-isolated
+    // path. Regression guard: no panic, no two entities share a tile, and
+    // the coordinate pair that used to collide at plain `machine_size`
+    // pitch (machine N's east R-flank vs machine N+1's west drop UG) is
+    // now exactly 1 tile apart thanks to `fluid_only_row_pitch`.
     #[test]
-    fn fluid_only_row_advanced_multi_machine_non_staggered_fallback() {
+    fn fluid_only_row_advanced_multi_machine_staggered() {
         let (entities, row_height, in_ports, out_ports) = fluid_only_row(
             "advanced-oil-processing",
             "oil-refinery",
@@ -4226,19 +4258,60 @@ mod tests {
             &[(1, "water"), (3, "crude-oil")],
             &[(0, "heavy-oil"), (2, "light-oil"), (4, "petroleum-gas")],
         );
-        // Non-staggered path: row_height = msz + 2 = 7
-        assert_eq!(row_height, 7, "non-staggered fallback row height should be msz+2=7");
-        // Two machines × msz=5 pitch = entities must include machines at x=0 and x=5
+        // Staggered path, same row_height formula as the single-machine case
+        // (row height doesn't grow with machine_count — only width does).
+        assert_eq!(row_height, 14, "staggered multi-machine row height should match single-machine (msz+9)");
+
+        // Pitch = msz+1 = 6 for the ≥3-distinct-output case, so machines land
+        // at x=0 and x=6 (not x=0/x=5, which is where the collision was).
         let machine_xs: Vec<i32> = entities.iter()
             .filter(|e| e.name == "oil-refinery")
             .map(|e| e.x)
             .collect();
         assert!(machine_xs.contains(&0), "first machine at x=0; got {machine_xs:?}");
-        assert!(machine_xs.contains(&5), "second machine at x=5; got {machine_xs:?}");
-        // 3 distinct output fluids → per-port isolated pipes, one per port per machine
+        assert!(machine_xs.contains(&6), "second machine at x=6 (pitch=msz+1); got {machine_xs:?}");
+
+        // 3 distinct output fluids × 2 machines = 6 tap points; 2 distinct
+        // input fluids × 2 machines = 4 tap points.
         assert_eq!(out_ports.len(), 6, "2 machines × 3 output ports = 6 out-port entries");
-        // 2 distinct input fluids → per-port pipes, one per port per machine
         assert_eq!(in_ports.len(), 4, "2 machines × 2 input ports = 4 in-port entries");
+
+        // The previously-colliding tiles: machine 0's east R-flank UG (at
+        // col_e0+1, y_east) and machine 1's west drop UG (at col_w1,
+        // y_west-1 == y_east) are now 1 tile apart instead of identical.
+        // col_e0 = 4 (dx=4), so east R-flank is at x=5; col_w1 = mx1+0 = 6.
+        let y_east = 12; // port_row_y(10) + 2
+        let east_r_flank = entities.iter()
+            .find(|e| e.x == 5 && e.y == y_east && e.name == "pipe-to-ground" && e.direction == EntityDirection::East)
+            .expect("machine 0 east R-flank UG at (5, y_east)");
+        let west_drop = entities.iter()
+            .find(|e| e.x == 6 && e.y == y_east && e.name == "pipe-to-ground" && e.direction == EntityDirection::North)
+            .expect("machine 1 west drop UG at (6, y_east)");
+        assert_ne!(
+            (east_r_flank.x, east_r_flank.y), (west_drop.x, west_drop.y),
+            "east R-flank and west drop UG must not share a tile",
+        );
+        assert_eq!(
+            (west_drop.x - east_r_flank.x).abs(), 1,
+            "east R-flank and west drop UG should be exactly 1 tile apart",
+        );
+
+        // No two entities share a tile (exclude machine anchors — 5×5
+        // footprints registered once at their origin, one per machine).
+        use std::collections::HashMap;
+        let mut by_tile: HashMap<(i32, i32), Vec<&PlacedEntity>> = HashMap::new();
+        for e in &entities {
+            by_tile.entry((e.x, e.y)).or_default().push(e);
+        }
+        for (&(x, y), es) in &by_tile {
+            let non_machine: Vec<_> = es.iter().filter(|e| e.name != "oil-refinery").collect();
+            assert!(
+                non_machine.len() <= 1,
+                "tile ({x},{y}) has {} overlapping entities: {:?}",
+                non_machine.len(),
+                non_machine.iter().map(|e| &e.name).collect::<Vec<_>>(),
+            );
+        }
     }
 
     // (machine_xs helper deleted in the inline-bridge unification —

@@ -64,6 +64,11 @@ pub struct GhostRouteResult {
     /// Non-fatal warnings (direct/bare modes produce these for cases
     /// that would hard-error in the default pipeline).
     pub warnings: Vec<String>,
+    /// `(item, x, y)` perimeter exit tile per routed fluid surplus lane
+    /// (Phase 2 of rfp-solver-net-flow). First-class layout data — the
+    /// stranded-byproduct validator cross-checks these against physical
+    /// pipe entities, and must work in the non-traced pipeline too.
+    pub surplus_exits: Vec<(String, i32, i32)>,
 }
 
 /// A spec for one connecting belt run.
@@ -118,6 +123,7 @@ pub fn route_bus_ghost(
 ) -> Result<GhostRouteResult, String> {
     let mut entities: Vec<PlacedEntity> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
+    let mut surplus_exits: Vec<(String, i32, i32)> = Vec::new();
     let mut max_y = total_height;
     let mut merge_max_x = 0i32;
 
@@ -488,6 +494,13 @@ pub fn route_bus_ghost(
         for &(_ri, _px, py) in &lane.fluid_output_port_positions {
             end_y = end_y.max(py);
         }
+        // Surplus byproduct lanes extend past their last port down to the
+        // south boundary so the flow physically exits the layout (Phase 2
+        // of rfp-solver-net-flow). The anchor walk below stamps the extra
+        // span with the same UG-pipe chain as any inter-tap gap.
+        if let Some(exit_y) = lane.perimeter_exit_y {
+            end_y = end_y.max(exit_y);
+        }
         let start_y = lane.source_y;
 
         // Fluid trunks surface only at functional anchor rows: start_y
@@ -846,6 +859,18 @@ pub fn route_bus_ghost(
                 entities: entities[lane_start..].to_vec(),
             });
         }
+        // Surplus byproduct exit: record the exact boundary tile so the
+        // stranded-byproduct validator can verify the flow physically
+        // leaves the layout (entity cross-checked — a trace event alone
+        // is not proof of pipes).
+        if let Some(exit_y) = lane.perimeter_exit_y {
+            surplus_exits.push((lane.item.clone(), x, exit_y));
+            crate::trace::emit(crate::trace::TraceEvent::SurplusRouted {
+                item: lane.item.clone(),
+                x,
+                y: exit_y,
+            });
+        }
     }
 
     // Step 3.7: Horizontal branches per fluid lane.
@@ -927,26 +952,117 @@ pub fn route_bus_ghost(
                     hard.insert(ug_tile);
                 }
             } else {
-                // Single-fluid path: continuous surface pipes from (x+1, py)
-                // to (min_px - 1, py). Connects to the template's continuous
-                // pipe row starting at min_px.
-                for bx in (x + 1)..min_px {
+                // Single-fluid path: surface pipes from (x+1, py) to
+                // (min_px - 1, py), bridging blocked runs (foreign lane
+                // columns, belts, poles) with pipe-to-ground pairs. The
+                // old behavior silently SKIPPED blocked tiles, splitting
+                // the branch into disconnected fragments — latent until
+                // surplus lanes (westmost columns) started branching all
+                // the way across the bus band.
+                let is_blocked_tile = |tile: (i32, i32),
+                                       existing: &FxHashSet<(i32, i32)>,
+                                       hard: &FxHashSet<(i32, i32)>| {
+                    existing.contains(&tile)
+                        || (hard.contains(&tile) && !fluid_reservations.contains(&tile))
+                };
+                // When the template's West-facing flank PTG exists at
+                // (min_px-1, py) but the trunk is too far for the single-
+                // hop fast path above, the branch must END with an East-
+                // facing PTG that pairs with that flank — a surface pipe
+                // adjacent to the flank's west face connects to nothing
+                // (its surface connection is on the east side).
+                let branch_end = if has_ug_partner { min_px - 1 } else { min_px };
+                let mut bx = x + 1;
+                let mut prev_surface_idx: Option<usize> = None;
+                while bx < branch_end {
                     let tile = (bx, py);
-                    let blocked = existing_belts.contains(&tile)
-                        || (hard.contains(&tile) && !fluid_reservations.contains(&tile));
-                    if blocked {
+                    if !is_blocked_tile(tile, &existing_belts, &hard) {
+                        entities.push(PlacedEntity {
+                            name: "pipe".to_string(),
+                            x: bx,
+                            y: py,
+                            carries: Some(lane.item.clone()),
+                            segment_id: trunk_seg_id.clone(),
+                            ..Default::default()
+                        });
+                        existing_belts.insert(tile);
+                        hard.insert(tile);
+                        prev_surface_idx = Some(entities.len() - 1);
+                        bx += 1;
                         continue;
                     }
-                    entities.push(PlacedEntity {
-                        name: "pipe".to_string(),
-                        x: bx,
-                        y: py,
-                        carries: Some(lane.item.clone()),
-                        segment_id: trunk_seg_id.clone(),
-                        ..Default::default()
-                    });
-                    existing_belts.insert(tile);
-                    hard.insert(tile);
+                    // Blocked run [bx, run_end], capped by pipe UG reach (F4).
+                    let mut run_end = bx;
+                    while run_end + 1 < branch_end
+                        && is_blocked_tile((run_end + 1, py), &existing_belts, &hard)
+                        && (run_end + 1 - bx) < crate::common::UG_PIPE_REACH as i32
+                    {
+                        run_end += 1;
+                    }
+                    let exit_x = run_end + 1;
+                    let exit_open = exit_x < branch_end
+                        && !is_blocked_tile((exit_x, py), &existing_belts, &hard);
+                    match (prev_surface_idx, exit_open) {
+                        (Some(prev), true) => {
+                            // Convert the previous surface pipe into the UG
+                            // entrance (East: tunnel runs east, surface
+                            // connection stays on its west side) and emit
+                            // the West-facing exit — the same partner
+                            // convention as the stacked-T flank case above.
+                            entities[prev].name = "pipe-to-ground".to_string();
+                            entities[prev].direction = EntityDirection::East;
+                            entities[prev].io_type = Some("input".to_string());
+                            entities.push(PlacedEntity {
+                                name: "pipe-to-ground".to_string(),
+                                x: exit_x,
+                                y: py,
+                                direction: EntityDirection::West,
+                                io_type: Some("output".to_string()),
+                                carries: Some(lane.item.clone()),
+                                segment_id: trunk_seg_id.clone(),
+                                ..Default::default()
+                            });
+                            existing_belts.insert((exit_x, py));
+                            hard.insert((exit_x, py));
+                            prev_surface_idx = Some(entities.len() - 1);
+                            bx = exit_x + 1;
+                        }
+                        _ => {
+                            // No entrance tile (run starts at the trunk) or
+                            // no landing spot within reach — leave the gap
+                            // and say so; the fluid-network validator will
+                            // flag it rather than us papering over it.
+                            warnings.push(format!(
+                                "fluid branch for {} at y={} could not bridge blocked tiles x={}..{}",
+                                lane.item, py, bx, run_end
+                            ));
+                            bx = run_end + 1;
+                        }
+                    }
+                }
+                // Close the pairing with the template flank: convert the
+                // last surface pipe into the East-facing PTG entrance whose
+                // tunnel meets the flank at (min_px-1, py). Adjacent PTG
+                // mouths (gap 0) are a legal pair.
+                if has_ug_partner {
+                    match prev_surface_idx {
+                        Some(prev)
+                            if (min_px - 1) - entities[prev].x - 1
+                                <= crate::common::UG_PIPE_REACH as i32 =>
+                        {
+                            entities[prev].name = "pipe-to-ground".to_string();
+                            entities[prev].direction = EntityDirection::East;
+                            entities[prev].io_type = Some("input".to_string());
+                        }
+                        _ => {
+                            warnings.push(format!(
+                                "fluid branch for {} at y={} could not pair with the row flank at x={}",
+                                lane.item,
+                                py,
+                                min_px - 1
+                            ));
+                        }
+                    }
                 }
             }
         }
@@ -3012,6 +3128,7 @@ pub fn route_bus_ghost(
         merge_max_x,
         regions,
         warnings,
+        surplus_exits,
     })
 }
 

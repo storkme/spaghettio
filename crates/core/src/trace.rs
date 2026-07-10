@@ -472,6 +472,17 @@ pub enum TraceEvent {
         issues: Vec<ValidationIssueTrace>,
     },
 
+    // Surplus byproduct lane physically extended to the layout perimeter
+    // (Phase 2 of rfp-solver-net-flow). Consumed by the stranded-byproduct
+    // validator, which cross-checks a pipe entity actually exists at (x, y).
+    SurplusRouted {
+        item: String,
+        /// Trunk column x.
+        x: i32,
+        /// South-boundary exit y the trunk was extended to.
+        y: i32,
+    },
+
     // External input lane consolidation — N consumer rows served by M trunk lanes
     LaneConsolidated {
         item: String,

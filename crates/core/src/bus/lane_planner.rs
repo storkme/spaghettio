@@ -85,6 +85,15 @@ pub struct BusLane {
     /// at the consumer row's `horizontal_stack.trunk_ys[idx]`. `None`
     /// for lanes not feeding HS consumers.
     pub hs_trunk_idx: Option<usize>,
+    /// `Some(y)` when this lane carries a surplus byproduct
+    /// (`SolverResult::surplus_outputs`) that must exit at the layout
+    /// perimeter: the trunk is extended down to `y` (the south boundary)
+    /// so the flow physically leaves the layout instead of stranding at
+    /// the producer's port. Set for both pure-surplus lanes (no
+    /// consumers) and dual-purpose lanes (consumed AND surplus) — one
+    /// lane per item, one physical network. Phase 2 of
+    /// docs/rfp-solver-net-flow.md.
+    pub perimeter_exit_y: Option<i32>,
 }
 
 impl BusLane {
@@ -113,6 +122,7 @@ impl BusLane {
             fluid_output_port_positions: Vec::new(),
             family_balancer_range: None,
             hs_trunk_idx: None,
+            perimeter_exit_y: None,
         }
     }
 
@@ -165,7 +175,18 @@ pub fn plan_bus_lanes(
     row_spans: &[RowSpan],
     max_belt_tier: Option<&str>,
     plan: Option<&PartitionPlan>,
+    total_height: i32,
 ) -> Result<(Vec<BusLane>, Vec<LaneFamily>), String> {
+    // Fluid surplus items must physically exit at the south boundary
+    // (`total_height`) — see `BusLane::perimeter_exit_y`. Surplus entries
+    // are always module_id 0 (netflow emits no partitioning), so keying
+    // by item name alone is safe here.
+    let surplus_fluid_items: FxHashSet<&str> = solver_result
+        .surplus_outputs
+        .iter()
+        .filter(|f| f.is_fluid)
+        .map(|f| f.item.as_str())
+        .collect();
     let mut lanes: Vec<BusLane> = Vec::new();
     // Keyed by `(item, module_id)`. `module_id == 0` under Pooled and
     // for non-partitioned items; > 0 distinguishes per-consumer modules
@@ -230,7 +251,10 @@ pub fn plan_bus_lanes(
             continue;
         }
         let consumers = item_to_consumers.get(key).cloned().unwrap_or_default();
-        if consumers.is_empty() {
+        // A lane with zero consumers is normally pointless — except for a
+        // registered fluid surplus, whose lane exists purely to carry the
+        // byproduct to the perimeter exit (Phase 2, rfp-solver-net-flow).
+        if consumers.is_empty() && !surplus_fluid_items.contains(key.0.as_str()) {
             continue;
         }
         let first_producer = producer_rows[0];
@@ -293,6 +317,27 @@ pub fn plan_bus_lanes(
     // collisions with adjacent fluid trunks — now handled by F5a isolation
     // on UG trunks in ghost_router step 3.6.
 
+    // Mark surplus fluid lanes for perimeter exit. One pass covers both
+    // shapes: pure-surplus lanes (created above with zero consumers) and
+    // dual-purpose lanes (real consumers AND a surplus remainder) — the
+    // same lane, the same trunk column, one physical fluid network.
+    //
+    // Exit ys are STAGGERED (+1 per surplus lane): every exit anchor is a
+    // surface pipe, and two surplus lanes on adjacent columns with exits
+    // at the same y would auto-merge into one cross-fluid network (F1) —
+    // observed live on the forced-AOP fixture (heavy-oil x=1 / light-oil
+    // x=2 both surfacing at total_height). Diagonal offsets don't merge:
+    // pipes connect orthogonally only.
+    if !surplus_fluid_items.is_empty() {
+        let mut exit_offset: i32 = 0;
+        for lane in &mut lanes {
+            if lane.is_fluid && surplus_fluid_items.contains(lane.item.as_str()) {
+                lane.perimeter_exit_y = Some(total_height + exit_offset);
+                exit_offset += 1;
+            }
+        }
+    }
+
     // Compute lane balancer positions for intermediate solid lanes
     for lane in &mut lanes {
         if lane.is_fluid {
@@ -321,11 +366,32 @@ pub fn plan_bus_lanes(
     // Optimize lane left-to-right ordering
     lanes = optimize_lane_order(&lanes, row_spans);
 
+    // Pure-surplus lanes (perimeter exit, zero consumers) take the WESTMOST
+    // columns: nothing routes west of the first lane column, so a surplus
+    // trunk there crosses zero belts on its way to the south boundary —
+    // sidestepping pipe×belt bridge junctions entirely (the mechanism
+    // rfp-pipe-belt-junctions documents as unfinished). Their east-branch
+    // to the producer port reuses the ordinary step-3.7 branch machinery.
+    // Dual-purpose lanes (consumers AND surplus) keep their optimized slot;
+    // moving them would trade tap-off crossings for exit crossings.
+    lanes.sort_by_key(|l| {
+        !(l.perimeter_exit_y.is_some() && l.consumer_rows.is_empty()) as u8
+    });
+
     // Assign x-columns with 1-tile spacing. Adjacent fluid lanes are fine
     // because their vertical trunks are underground-by-default (UG pairs) —
-    // see `ghost_router` step 3.6.
+    // see `ghost_router` step 3.6. EXCEPTION: surplus lanes' exit spans
+    // can surface-fill short anchor gaps (plain pipe, not UG), so each
+    // pure-surplus lane takes an extra spacer column — adjacent surface
+    // pipe columns of different fluids would merge (F1).
+    // `bus_width_for_lanes` derives width from max x, so the spacers are
+    // accounted for in bus width and pass-2 row placement.
+    let mut extra = 0i32;
     for (i, lane) in lanes.iter_mut().enumerate() {
-        lane.x = (i + 1) as i32;
+        lane.x = (i + 1) as i32 + extra;
+        if lane.perimeter_exit_y.is_some() && lane.consumer_rows.is_empty() {
+            extra += 1;
+        }
     }
 
     // Fill in lane_xs on each family
@@ -446,6 +512,7 @@ impl Default for BusLane {
             fluid_output_port_positions: Vec::new(),
             family_balancer_range: None,
             hs_trunk_idx: None,
+            perimeter_exit_y: None,
         }
     }
 }
@@ -852,10 +919,13 @@ fn find_tap_off_ys(lane: &BusLane, row_spans: &[RowSpan]) -> Vec<i32> {
 
 /// Return the total bus width needed for the given lanes.
 pub fn bus_width_for_lanes(lanes: &[BusLane]) -> i32 {
-    if lanes.is_empty() {
-        2
-    } else {
-        (lanes.len() + 2) as i32
+    // Derived from the max assigned column, not the lane count — surplus
+    // lanes insert spacer columns (see the x-assignment loop), so count
+    // and extent can differ. Identical to the old `len + 2` when columns
+    // are gapless.
+    match lanes.iter().map(|l| l.x).max() {
+        None => 2,
+        Some(max_x) => max_x + 2,
     }
 }
 
@@ -905,8 +975,11 @@ mod tests {
 
     #[test]
     fn test_bus_width_for_lanes_single() {
+        // Width derives from the max assigned column (production assigns
+        // x = i+1, plus spacer columns for surplus lanes).
         let lane = BusLane {
             item: "iron-ore".to_string(),
+            x: 1,
             ..Default::default()
         };
         assert_eq!(bus_width_for_lanes(&[lane]), 3);
@@ -914,12 +987,27 @@ mod tests {
 
     #[test]
     fn test_bus_width_for_lanes_three() {
-        let lanes = vec![
-            BusLane { item: "iron-ore".to_string(), ..Default::default() },
-            BusLane { item: "copper-ore".to_string(), ..Default::default() },
-            BusLane { item: "coal".to_string(), ..Default::default() },
-        ];
+        let lanes: Vec<BusLane> = ["iron-ore", "copper-ore", "coal"]
+            .iter()
+            .enumerate()
+            .map(|(i, item)| BusLane {
+                item: item.to_string(),
+                x: (i + 1) as i32,
+                ..Default::default()
+            })
+            .collect();
         assert_eq!(bus_width_for_lanes(&lanes), 5);
+    }
+
+    #[test]
+    fn test_bus_width_for_lanes_counts_spacer_gaps() {
+        // A pure-surplus lane takes a spacer column; width must follow the
+        // max x, not the lane count.
+        let lanes: Vec<BusLane> = [1i32, 3, 4]
+            .iter()
+            .map(|&x| BusLane { item: format!("item-{x}"), x, ..Default::default() })
+            .collect();
+        assert_eq!(bus_width_for_lanes(&lanes), 6);
     }
 
     #[test]
@@ -997,7 +1085,7 @@ mod tests {
             vec![6],  // input belt at y=6
         );
 
-        let (lanes, families) = plan_bus_lanes(&sr, &[row_span], None, None)
+        let (lanes, families) = plan_bus_lanes(&sr, &[row_span], None, None, 40)
             .expect("plan_bus_lanes should succeed for iron-gear-wheel");
 
         // Should have exactly 1 lane for iron-plate
@@ -1023,7 +1111,7 @@ mod tests {
             vec![6],
         );
 
-        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None, None).unwrap();
+        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None, None, 40).unwrap();
 
         // iron-gear-wheel is the final output, not consumed internally, so no lane for it
         // Only iron-plate (the external input) needs a lane
@@ -1048,7 +1136,7 @@ mod tests {
             vec![6, 7],  // two input belt y positions
         );
 
-        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None, None)
+        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None, None, 40)
             .expect("plan_bus_lanes should succeed for plastic-bar");
 
         // Should have lanes for coal and petroleum-gas (plastic-bar is final output)
@@ -1084,7 +1172,7 @@ mod tests {
             vec![6, 7],
         );
 
-        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None, None).unwrap();
+        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None, None, 40).unwrap();
 
         // optimize_lane_order puts solid before fluid
         let fluid_indices: Vec<usize> = lanes.iter().enumerate()
@@ -1116,7 +1204,7 @@ mod tests {
             vec![6],
         );
 
-        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None, None).unwrap();
+        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None, None, 40).unwrap();
 
         // The iron-plate lane has consumer row 0, so it should have a tap-off y
         let iron_plate_lane = lanes.iter().find(|l| l.item == "iron-plate").unwrap();
@@ -1166,7 +1254,7 @@ mod tests {
             }
         }).collect();
 
-        let (lanes, _families) = plan_bus_lanes(&sr, &row_spans, None, None)
+        let (lanes, _families) = plan_bus_lanes(&sr, &row_spans, None, None, 40)
             .expect("plan_bus_lanes should succeed");
 
         // Must have at least one lane

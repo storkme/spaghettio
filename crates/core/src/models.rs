@@ -264,4 +264,9 @@ pub struct LayoutResult {
     pub regions: Vec<LayoutRegion>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trace: Option<Vec<crate::trace::TraceEvent>>,
+    /// `(item, x, y)` perimeter exit tile per routed fluid surplus lane —
+    /// see `GhostRouteResult::surplus_exits`. Empty when nothing is
+    /// surplus. Populated by the bus pipeline regardless of tracing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub surplus_exits: Vec<(String, i32, i32)>,
 }

@@ -170,10 +170,33 @@ pub fn unresolved_region_tiles(layout: &LayoutResult) -> FxHashSet<(i32, i32)> {
 /// exists to eliminate, and it was previously invisible (the tree walk
 /// dropped these flows on the floor; e.g. utility-science-pack's AOP
 /// light-oil, stranded silently for as long as the chain has existed).
-pub fn check_stranded_byproducts(solver: &SolverResult) -> Vec<ValidationIssue> {
+pub fn check_stranded_byproducts(
+    layout: &LayoutResult,
+    solver: &SolverResult,
+) -> Vec<ValidationIssue> {
+    // A fluid surplus counts as routed only when BOTH hold: the router
+    // recorded a perimeter exit for the item (`LayoutResult::surplus_exits`
+    // — first-class layout data, populated with or without tracing) AND a
+    // pipe entity carrying that item physically exists at the recorded
+    // boundary tile. The entity cross-check is deliberate — an exit record
+    // alone is a ledger entry, and a ledger without the pipe is exactly
+    // the stalled-machine bug this check exists to catch.
+    let is_routed = |item: &str| {
+        layout.surplus_exits.iter().any(|(ei, ex, ey)| {
+            ei == item
+                && layout.entities.iter().any(|e| {
+                    e.x == *ex
+                        && e.y == *ey
+                        && (e.name == "pipe" || e.name == "pipe-to-ground")
+                        && e.carries.as_deref() == Some(item)
+                })
+        })
+    };
+
     solver
         .surplus_outputs
         .iter()
+        .filter(|f| !(f.is_fluid && is_routed(&f.item)))
         .map(|f| {
             ValidationIssue::new(
                 Severity::Error,
@@ -181,9 +204,9 @@ pub fn check_stranded_byproducts(solver: &SolverResult) -> Vec<ValidationIssue> 
                 format!(
                     "byproduct {} ({:.3}/s) has no consumer and no route out of the \
                      layout — the producing machine will stall in-game once its \
-                     output buffer fills (surplus routing lands in Phase 2 of \
-                     rfp-solver-net-flow; workaround: consume it downstream or \
-                     supply the loop item externally)",
+                     output buffer fills (solid surplus routing is a later Phase 2 \
+                     step of rfp-solver-net-flow; workaround: consume it downstream \
+                     or supply the loop item externally)",
                     f.item, f.rate
                 ),
             )
@@ -354,7 +377,11 @@ pub fn validate(
         Box::new(|| belt_structural::check_belt_loops(layout)),
         Box::new(|| belt_structural::check_belt_item_isolation(layout)),
         Box::new(|| check_unresolved_junctions(layout)),
-        Box::new(|| solver.map(check_stranded_byproducts).unwrap_or_default()),
+        Box::new(|| {
+            solver
+                .map(|s| check_stranded_byproducts(layout, s))
+                .unwrap_or_default()
+        }),
         Box::new(|| belt_structural::check_belt_inserter_conflict(layout)),
         Box::new(|| check_belt_flow_reachability(layout, solver, layout_style)),
         Box::new(|| belt_structural::check_lane_throughput(layout, solver)),
