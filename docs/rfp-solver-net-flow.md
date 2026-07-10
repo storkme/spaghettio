@@ -593,3 +593,30 @@ independent follow-ups with their own gates.
   (pentapod-egg, raw-fish, fluoroketone-cold) as an external input
   and the chain solves honestly. Phase-1 go/no-go on shipping these
   as typed errors: pending user decision.*
+- *2026-07-10 — KC5 ratified by the user: **ship honest refusals**
+  (typed errors for the 18 census items; grandfathering the tree walk
+  rejected). KC3 closed on the analytic goldens (factoriolab
+  spot-check downgraded to nice-to-have). All five kill criteria
+  resolved → Phase 1 GO.*
+- *2026-07-10 — **Phase 1 landed.** Public `solve_*` entry points now
+  route through netflow in compatibility mode (tree walk retained as
+  the recipe-selection oracle and parity reference,
+  `solve_tree_walk_with_palette_and_exclusions`). Also landed:
+  `order_specs` multi-producer dependency edges (placer.rs);
+  `check_stranded_byproducts` validator (error severity, per
+  decision); `centrifuge` machine data + `centrifuging` category
+  mapping; explicit `GENERAL_CATEGORIES` whitelist — unknown recipe
+  categories (`rocket-building`, `captive-spawner-process`) now fail
+  machine pre-flight with the typed banner-routed error instead of
+  silently landing on assemblers.
+  Verification: full suite green **including unchanged golden layout
+  hashes on every gated e2e config** (the compat-mode LP reproduces
+  the walk's layouts byte-identically); science gauntlet shows the
+  designed honest-red — utility-science-pack 0/0 → **FAIL×1**
+  (stranded 9/s light-oil at the AOP rows, the game-stalling defect
+  the old pipeline certified as clean); uranium-235 now solves onto
+  centrifuges (was: silently AM3) with the U-238 co-product honestly
+  reported as surplus; rocket-part returns a typed error (was:
+  silently wrong AM3 layout). Phase 2 (fluid surplus routing +
+  self-loop rows) is the path back to gauntlet-green for USP and the
+  18 census items.*

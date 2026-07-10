@@ -236,12 +236,19 @@ pub(crate) fn order_specs<'a>(
         recipe_to_specs.entry(m.recipe.as_str()).or_default().push(m);
     }
 
-    // item -> recipe that produces it
-    let mut producer: FxHashMap<&str, &str> = FxHashMap::default();
+    // item -> ALL recipes that produce it. The net-flow solver can return
+    // several producers for one item (byproduct crediting — e.g. AOP and
+    // basic-oil both supplying petroleum-gas); a single-value map would
+    // drop the ordering edge to all but the last producer and let one be
+    // placed below its consumer, breaking the lanes-run-south invariant.
+    let mut producers: FxHashMap<&str, Vec<&str>> = FxHashMap::default();
     for m in machines {
         for out in &m.outputs {
             if !out.is_fluid {
-                producer.insert(out.item.as_str(), m.recipe.as_str());
+                producers
+                    .entry(out.item.as_str())
+                    .or_default()
+                    .push(m.recipe.as_str());
             }
         }
     }
@@ -257,9 +264,11 @@ pub(crate) fn order_specs<'a>(
             if inp.is_fluid {
                 continue;
             }
-            if let Some(&prod_recipe) = producer.get(inp.item.as_str()) {
-                if prod_recipe != m.recipe.as_str() {
-                    deps.entry(m.recipe.as_str()).or_default().insert(prod_recipe);
+            if let Some(prods) = producers.get(inp.item.as_str()) {
+                for &prod_recipe in prods {
+                    if prod_recipe != m.recipe.as_str() {
+                        deps.entry(m.recipe.as_str()).or_default().insert(prod_recipe);
+                    }
                 }
             }
         }

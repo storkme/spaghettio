@@ -61,8 +61,15 @@ fn compat_solve(
 ) {
     let inputs = set(cfg.inputs);
     let excluded = set(cfg.excluded);
-    let walk = solver::solve_with_exclusions(cfg.item, cfg.rate, &inputs, cfg.machine, &excluded)
-        .unwrap_or_else(|e| panic!("{}: tree walk failed: {e}", cfg.name));
+    let walk = solver::solve_tree_walk_with_palette_and_exclusions(
+        cfg.item,
+        cfg.rate,
+        &inputs,
+        &MachinePalette::default(),
+        cfg.machine,
+        &excluded,
+    )
+    .unwrap_or_else(|e| panic!("{}: tree walk failed: {e}", cfg.name));
     let recipes = walk_set(&walk);
     let lp = solve_netflow(
         cfg.item,
@@ -337,8 +344,15 @@ fn golden_rocket_fuel_free_mode_zero_surplus() {
 fn golden_rocket_fuel_compat_credits_byproducts() {
     let inputs = set(&["crude-oil", "water"]);
     let excluded = FxHashSet::default();
-    let walk = solver::solve_with_exclusions("rocket-fuel", 1.0, &inputs, "assembling-machine-3", &excluded)
-        .expect("walk solves");
+    let walk = solver::solve_tree_walk_with_palette_and_exclusions(
+        "rocket-fuel",
+        1.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &excluded,
+    )
+    .expect("walk solves");
     let recipes = walk_set(&walk);
     let lp = solve_netflow(
         "rocket-fuel",
@@ -459,7 +473,14 @@ fn report_unpinned_deltas() {
     let mut changed = 0usize;
     for item in recipe_db::all_producible_items() {
         let excluded = FxHashSet::default();
-        let walk = match solver::solve_with_exclusions(&item, 1.0, &inputs, "assembling-machine-3", &excluded) {
+        let walk = match solver::solve_tree_walk_with_palette_and_exclusions(
+            &item,
+            1.0,
+            &inputs,
+            &MachinePalette::default(),
+            "assembling-machine-3",
+            &excluded,
+        ) {
             Ok(w) => w,
             Err(e) => {
                 println!("{item}: walk error: {e}");

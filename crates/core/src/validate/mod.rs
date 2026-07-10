@@ -160,6 +160,37 @@ pub fn unresolved_region_tiles(layout: &LayoutResult) -> FxHashSet<(i32, i32)> {
 /// one error. Region-tiles inside the cluster are still excluded from
 /// `belt-item-isolation` so orphan ghosts don't pile follow-on noise on
 /// top.
+/// Byproduct flows the solver could not credit against any demand and the
+/// layout cannot yet route anywhere (`SolverResult::surplus_outputs`). Until
+/// Phase 2 of docs/rfp-solver-net-flow.md lands surplus-to-perimeter
+/// routing, every such flow is a machine output port that physically backs
+/// up in-game: the producing machine stalls once its internal buffer fills.
+/// Reported as an **error** (not a warning) by explicit decision — this is
+/// exactly the "validator-clean but game-dead" class the net-flow RFP
+/// exists to eliminate, and it was previously invisible (the tree walk
+/// dropped these flows on the floor; e.g. utility-science-pack's AOP
+/// light-oil, stranded silently for as long as the chain has existed).
+pub fn check_stranded_byproducts(solver: &SolverResult) -> Vec<ValidationIssue> {
+    solver
+        .surplus_outputs
+        .iter()
+        .map(|f| {
+            ValidationIssue::new(
+                Severity::Error,
+                "stranded-byproduct",
+                format!(
+                    "byproduct {} ({:.3}/s) has no consumer and no route out of the \
+                     layout — the producing machine will stall in-game once its \
+                     output buffer fills (surplus routing lands in Phase 2 of \
+                     rfp-solver-net-flow; workaround: consume it downstream or \
+                     supply the loop item externally)",
+                    f.item, f.rate
+                ),
+            )
+        })
+        .collect()
+}
+
 pub fn check_unresolved_junctions(layout: &LayoutResult) -> Vec<ValidationIssue> {
     let tiles = unresolved_region_tiles(layout);
     if tiles.is_empty() {
@@ -323,6 +354,7 @@ pub fn validate(
         Box::new(|| belt_structural::check_belt_loops(layout)),
         Box::new(|| belt_structural::check_belt_item_isolation(layout)),
         Box::new(|| check_unresolved_junctions(layout)),
+        Box::new(|| solver.map(check_stranded_byproducts).unwrap_or_default()),
         Box::new(|| belt_structural::check_belt_inserter_conflict(layout)),
         Box::new(|| check_belt_flow_reachability(layout, solver, layout_style)),
         Box::new(|| belt_structural::check_lane_throughput(layout, solver)),

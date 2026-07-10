@@ -31,7 +31,7 @@ pub fn is_machine_entity(entity: &str) -> bool {
 pub fn machine_size(entity: &str) -> u32 {
     match entity {
         "assembling-machine-1" | "assembling-machine-2" | "assembling-machine-3"
-        | "chemical-plant" | "electric-furnace" | "biochamber" => 3,
+        | "chemical-plant" | "electric-furnace" | "biochamber" | "centrifuge" => 3,
         "oil-refinery" | "cryogenic-plant" | "foundry" => 5,
         "electromagnetic-plant" => 4,
         _ => DEFAULT_MACHINE_SIZE,

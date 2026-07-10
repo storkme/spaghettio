@@ -9031,6 +9031,9 @@
     }
   },
   "machines": {
+    "centrifuge": {
+      "crafting_speed": 1
+    },
     "assembling-machine-1": {
       "crafting_speed": 0.5,
       "ingredient_slots": 2

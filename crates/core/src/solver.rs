@@ -132,7 +132,49 @@ pub fn solve_with_exclusions(
 }
 
 /// Combined variant: per-category palette + recipe exclusions.
+///
+/// Since Phase 1 of docs/rfp-solver-net-flow.md this routes through the
+/// net-flow LP in **compatibility mode**: the legacy tree walk runs first
+/// to pick the recipe set (JSON-first per item, exclusions honored), then
+/// the LP re-derives flows over exactly that set — fixing byproduct
+/// crediting and fleet double-counting without changing recipe selection.
+/// Cycle-shaped selections return typed errors instead of the walk's
+/// silent nonsense externals.
 pub fn solve_with_palette_and_exclusions(
+    target_item: &str,
+    target_rate: f64,
+    available_inputs: &FxHashSet<String>,
+    palette: &MachinePalette,
+    default_machine: &str,
+    excluded_recipes: &FxHashSet<String>,
+) -> Result<SolverResult, SolverError> {
+    let walk = solve_tree_walk_with_palette_and_exclusions(
+        target_item,
+        target_rate,
+        available_inputs,
+        palette,
+        default_machine,
+        excluded_recipes,
+    )?;
+    let recipe_set: FxHashSet<String> = walk.dependency_order.iter().cloned().collect();
+    crate::netflow::solve_netflow(
+        target_item,
+        target_rate,
+        available_inputs,
+        palette,
+        default_machine,
+        excluded_recipes,
+        crate::netflow::RecipeScope::Restricted(&recipe_set),
+        &crate::netflow::CostTable::default(),
+    )
+}
+
+/// The legacy recursive tree walk. Kept as the recipe-*selection* oracle
+/// for compatibility mode and as the parity-harness reference. Known-wrong
+/// flow accounting (no byproduct crediting, `resolving`-guard cycle punts,
+/// fleet double-counting) — do not add new callers; use [`solve`] /
+/// [`solve_with_palette_and_exclusions`] instead.
+pub fn solve_tree_walk_with_palette_and_exclusions(
     target_item: &str,
     target_rate: f64,
     available_inputs: &FxHashSet<String>,

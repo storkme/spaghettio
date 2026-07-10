@@ -297,19 +297,44 @@ fn category_machines(category: &str) -> &'static [&'static str] {
         "cryogenics" | "cryogenics-or-assembling" => &["cryogenic-plant"],
         "metallurgy" | "metallurgy-or-assembling" | "pressing" => &["foundry"],
         "organic" | "organic-or-assembling" => &["biochamber"],
+        "centrifuging" => &["centrifuge"],
         _ => &[],
     }
 }
 
+/// Categories that genuinely run on general-purpose assemblers. An explicit
+/// whitelist, not a fall-through: before Phase 1 of
+/// docs/rfp-solver-net-flow.md, *any* unmapped category (`centrifuging`,
+/// `rocket-building`, …) silently landed on an assembler at assembler speed
+/// — confidently wrong output with zero signal. Unknown categories now fail
+/// [`machine_handles_category`] for every machine, surfacing as a typed
+/// `IncompatibleMachine` error instead.
+const GENERAL_CATEGORIES: &[&str] = &[
+    "crafting",
+    "advanced-crafting",
+    "crafting-with-fluid",
+    "crafting-with-fluid-or-metallurgy",
+    "electronics",
+    "electronics-or-assembling",
+    "electronics-with-fluid",
+    "organic-or-hand-crafting",
+    "parameters",
+];
+
 /// Compatibility check between a machine and a recipe category. Specialised
-/// categories require one of their listed machines; fall-through categories
-/// require an [assembler tier](ASSEMBLER_TIERS).
+/// categories require one of their listed machines; whitelisted general
+/// categories require an [assembler tier](ASSEMBLER_TIERS); anything else
+/// (`rocket-building`, `captive-spawner-process`, future unknowns) is
+/// unsupported on every machine — silo/spawner semantics aren't modeled,
+/// and saying so beats pretending.
 fn machine_handles_category(machine: &str, category: &str) -> bool {
     let valid = category_machines(category);
-    if valid.is_empty() {
+    if !valid.is_empty() {
+        valid.contains(&machine)
+    } else if GENERAL_CATEGORIES.contains(&category) {
         ASSEMBLER_TIERS.contains(&machine)
     } else {
-        valid.contains(&machine)
+        false
     }
 }
 

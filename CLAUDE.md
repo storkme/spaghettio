@@ -76,6 +76,7 @@ Most-visited files. Full reference in [`docs/file-reference.md`](docs/file-refer
 | `crates/core/src/bus/junction_sat_strategy.rs` | SAT-backed `JunctionStrategy` fallback |
 | `crates/core/src/bus/ghost_occupancy.rs` | Typed `Occupancy` map (HardObstacle / RowEntity / Permanent / GhostSurface / Template / SatSolved) |
 | `crates/core/src/bus/balancer_library.rs` | Pre-generated N→M balancer templates (do not edit manually) |
+| `crates/core/src/netflow.rs` | Net-flow LP solver (default since 2026-07, compatibility mode; byproduct crediting, typed cycle refusals). Legacy tree walk retained in `solver.rs` as the recipe-selection oracle. See `docs/rfp-solver-net-flow.md`. |
 | `crates/core/src/astar.rs` | `ghost_astar` + `astar_path` + `negotiate_lanes` pathfinder primitives |
 | `crates/core/src/sat.rs` | Varisat-backed crossing-zone SAT solver (see memory: `project_sat_crossing_solver`) |
 | `crates/core/src/validate/belt_flow.rs` | Lane-rate walker (Kahn topo sort with splitter pairing and balancer feedback-loop handling) |
@@ -122,7 +123,7 @@ Open tracking issues for layout quality: [#135 balancer templates are oversized]
 
 Layout bugs are easy to get wrong — zero validation errors can mean the check was wrong, not that the layout is. Follow this protocol:
 
-1. **Run the full e2e suite** — `cargo test --manifest-path crates/core/Cargo.toml`. All 9 non-ignored e2e tests must stay green.
+1. **Run the full e2e suite** — `cargo test --manifest-path crates/core/Cargo.toml`. All non-ignored tests must stay green (34 e2e + the netflow parity harness as of 2026-07).
 2. **Load the case in the browser** — start the dev server, open the URL for the recipe you changed, and look at the layout with your eyes. A zero-warning layout that visibly has disconnected belts is a validator bug, not a success.
 3. **Check the snapshot for the exact bug you intended to fix** — `SPAGHETTIO_DUMP_SNAPSHOTS=1 cargo test ... --nocapture <test>` then decode with the snippet in [`docs/layout-snapshot-debugger.md`](docs/layout-snapshot-debugger.md). Inspect entities at the suspect coordinates, not just the warning count.
 4. **Trace events are reliable signals** — `RouteFailure`, `BridgeDropped`, `CrossingZoneSkipped`, `BalancerStamped` are emitted by the pipeline and land in the snapshot's `trace.events`. Use them to confirm the specific failure mode before theorizing.
