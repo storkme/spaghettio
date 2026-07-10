@@ -191,6 +191,13 @@ fn netflow_flow_conservation_sweep() {
             Err(SolverError::UnsupportedCycle { recipes }) => {
                 refusals.push((item.clone(), format!("cycle {recipes}")));
             }
+            Err(SolverError::IncompatibleMachine { recipe, .. }) => {
+                // Unsupported machine categories (rocket-building,
+                // captive-spawner-process) surface as typed errors under
+                // free selection instead of the walk's silent wrong-machine
+                // or import-from-nowhere output.
+                refusals.push((item.clone(), format!("incompatible {recipe}")));
+            }
             Err(e) => panic!("{item}: unexpected solver error: {e}"),
         }
     }
@@ -209,14 +216,15 @@ fn netflow_flow_conservation_sweep() {
     for (item, why) in &refusals {
         let known = why.starts_with("self-loop pentapod-egg")
             || why.starts_with("self-loop fish-breeding")
-            || why.contains("fluoroketone-cooling");
+            || why.contains("fluoroketone-cooling")
+            || why.starts_with("incompatible");
         assert!(
             known,
             "KC5: refusal outside the reviewed census for {item}: {why}"
         );
     }
     assert!(
-        refusals.len() <= 18,
+        refusals.len() <= 24,
         "KC5: refusal list grew beyond the reviewed census: {refusals:?}"
     );
 }

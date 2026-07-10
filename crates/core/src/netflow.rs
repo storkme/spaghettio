@@ -309,6 +309,13 @@ fn solve_attempt(
     // Finalize columns for closure members only (machine resolution +
     // pre-flight happen here, so out-of-closure recipes can't error).
     let mut columns: Vec<Column> = Vec::new();
+    // Free-mode incompatibility bookkeeping: a column dropped because the
+    // configured machine can't run it must NOT make its products
+    // externally suppliable — otherwise an AM1-pinned advanced-circuit
+    // solve would silently "solve" by importing advanced-circuit from
+    // nowhere instead of surfacing the typed error the tree walk gave.
+    let mut dropped_incompat: Vec<SolverError> = Vec::new();
+    let mut has_dropped_producer = vec![false; items.len()];
     for (c, cand) in candidates.into_iter().enumerate() {
         if !in_closure[c] {
             continue;
@@ -326,9 +333,22 @@ fn solve_attempt(
                         reason,
                     }));
                 }
-                // Free mode: an incompatible column is simply not available
-                // as configured — drop it and let cost pick among the rest.
-                RecipeScope::Free => continue,
+                // Free mode: the column is not available as configured —
+                // drop it, let cost pick among the rest, but remember the
+                // error and the products it would have supplied.
+                RecipeScope::Free => {
+                    for &(i, coeff) in &cand.net {
+                        if coeff > 0.0 {
+                            has_dropped_producer[i] = true;
+                        }
+                    }
+                    dropped_incompat.push(SolverError::IncompatibleMachine {
+                        recipe: recipe.name.clone(),
+                        machine,
+                        reason,
+                    });
+                    continue;
+                }
             }
         }
         let crafting_speed = get_crafting_speed(&machine);
@@ -347,6 +367,10 @@ fn solve_attempt(
 
     // ---------------------------------------------------------------
     // 2. Producer analysis → s-eligibility (per-solve, post-exclusion).
+    //
+    // Items whose only producers were dropped for machine incompatibility
+    // are NOT s-eligible: they must stay infeasible so the stored
+    // IncompatibleMachine error surfaces instead of a silent import.
     // ---------------------------------------------------------------
     let mut has_producer = vec![false; items.len()];
     for col in &columns {
@@ -360,7 +384,10 @@ fn solve_attempt(
         .names
         .iter()
         .enumerate()
-        .map(|(i, name)| available_inputs.contains(*name) || !has_producer[i])
+        .map(|(i, name)| {
+            available_inputs.contains(*name)
+                || (!has_producer[i] && !has_dropped_producer[i])
+        })
         .collect();
 
     // ---------------------------------------------------------------
@@ -420,6 +447,21 @@ fn solve_attempt(
             row.push((o, -1.0));
         }
         if row.is_empty() {
+            // An untouched non-target item simply has no flow. The TARGET
+            // row going empty means nothing can produce or supply it —
+            // skipping it would let the LP "solve" with an empty plan.
+            // Surface the stored machine-incompatibility (the usual cause:
+            // every producer column was dropped for the configured
+            // machine) or an explicit unproducible error.
+            if i == target_idx {
+                if let Some(err) = dropped_incompat.into_iter().next() {
+                    return Err(AttemptError::Hard(err));
+                }
+                return Err(AttemptError::Hard(SolverError::LpFailed {
+                    target: target_item.to_string(),
+                    detail: "target has no producer, no external supply, and no surplus sink".to_string(),
+                }));
+            }
             continue;
         }
         let rhs = if i == target_idx { target_rate } else { 0.0 };
@@ -427,6 +469,14 @@ fn solve_attempt(
     }
 
     let solution = problem.solve().map_err(|e| {
+        // Infeasibility with dropped-incompatible columns in the closure
+        // means the configured machine set can't make the target — surface
+        // the first stored typed error (recipes.json order) rather than a
+        // generic LP failure. The web sidebar routes it to the config
+        // banner via INCOMPATIBLE_MACHINE_PREFIX.
+        if let Some(err) = dropped_incompat.into_iter().next() {
+            return AttemptError::Hard(err);
+        }
         AttemptError::Hard(SolverError::LpFailed {
             target: target_item.to_string(),
             detail: format!("{e:?}"),
@@ -497,9 +547,22 @@ fn solve_attempt(
     // DFS pre-order exactly (target-rooted, ingredients in recipe order,
     // first visit wins) — golden-hash stability depends on this.
     // ---------------------------------------------------------------
-    let x_of = |c: usize| solution[x_vars[c]];
-    let s_of = |i: usize| s_vars[i].map(|v| solution[v]).unwrap_or(0.0);
-    let o_of = |i: usize| o_vars[i].map(|v| solution[v]).unwrap_or(0.0);
+    // Snap simplex float residue to exact integers (relative 1e-9): a
+    // solution value of 15.000000000000016 must not become 16 machines at
+    // the layout's ceil, or flip a 15/s belt-tier threshold. Real
+    // fractional plans (e.g. 1.06 refineries) are far outside the snap
+    // window.
+    let snap = |v: f64| -> f64 {
+        let r = v.round();
+        if (v - r).abs() < 1e-9 * r.abs().max(1.0) {
+            r
+        } else {
+            v
+        }
+    };
+    let x_of = |c: usize| snap(solution[x_vars[c]]);
+    let s_of = |i: usize| snap(s_vars[i].map(|v| solution[v]).unwrap_or(0.0));
+    let o_of = |i: usize| snap(o_vars[i].map(|v| solution[v]).unwrap_or(0.0));
 
     // item → active producing columns (net > 0), in column order.
     let mut producers_of: FxHashMap<usize, Vec<usize>> = FxHashMap::default();
@@ -550,7 +613,7 @@ fn solve_attempt(
                 }
                 let col = &columns[c];
                 let crafts_per_sec_per_machine = col.crafting_speed / col.recipe.energy;
-                let count = x_of(c) / crafts_per_sec_per_machine;
+                let count = snap(x_of(c) / crafts_per_sec_per_machine);
                 let inputs: Vec<ItemFlow> = col
                     .recipe
                     .ingredients

@@ -140,6 +140,14 @@ pub fn solve_with_exclusions(
 /// crediting and fleet double-counting without changing recipe selection.
 /// Cycle-shaped selections return typed errors instead of the walk's
 /// silent nonsense externals.
+///
+/// Phase 3's free cost-based selection is implemented and verified at the
+/// solver level ([`solve_free_with_palette_and_exclusions`]) but is NOT
+/// yet the default: dense oil complexes (AOP + both cracking rows) exceed
+/// the fluid-lane stagger invariant — adjacent trunks surface-fill short
+/// anchor gaps in the same y-band and merge. Flip the default once that
+/// layout gap is closed (see the RFP decision log, 2026-07-10 Phase 3
+/// entry; motivating fixture: utility-science-pack@1/s free mode).
 pub fn solve_with_palette_and_exclusions(
     target_item: &str,
     target_rate: f64,
@@ -165,6 +173,33 @@ pub fn solve_with_palette_and_exclusions(
         default_machine,
         excluded_recipes,
         crate::netflow::RecipeScope::Restricted(&recipe_set),
+        &crate::netflow::CostTable::default(),
+    )
+}
+
+/// Phase 3 free cost-based recipe selection: all non-excluded recipes are
+/// candidate columns and the frozen cost table picks the mix (raw-input
+/// efficiency first — e.g. advanced-oil-processing + cracking replaces
+/// basic-oil-processing wherever byproducts can be credited, typically
+/// with zero surplus). Solver-level behavior is fully verified (parity
+/// harness); the LAYOUT of dense oil complexes still has a known fluid-
+/// lane stagger gap, so this is opt-in until that closes.
+pub fn solve_free_with_palette_and_exclusions(
+    target_item: &str,
+    target_rate: f64,
+    available_inputs: &FxHashSet<String>,
+    palette: &MachinePalette,
+    default_machine: &str,
+    excluded_recipes: &FxHashSet<String>,
+) -> Result<SolverResult, SolverError> {
+    crate::netflow::solve_netflow(
+        target_item,
+        target_rate,
+        available_inputs,
+        palette,
+        default_machine,
+        excluded_recipes,
+        crate::netflow::RecipeScope::Free,
         &crate::netflow::CostTable::default(),
     )
 }

@@ -177,13 +177,18 @@ pub fn plan_bus_lanes(
     plan: Option<&PartitionPlan>,
     total_height: i32,
 ) -> Result<(Vec<BusLane>, Vec<LaneFamily>), String> {
-    // Fluid surplus items must physically exit at the south boundary
-    // (`total_height`) — see `BusLane::perimeter_exit_y`. Surplus entries
-    // are always module_id 0 (netflow emits no partitioning), so keying
-    // by item name alone is safe here.
+    // Fluid surplus items AND fluid targets must physically exit at the
+    // south boundary (`total_height`) — see `BusLane::perimeter_exit_y`.
+    // Fluid targets previously got no lane at all (the output merger is
+    // solid-only), leaving their product stranded at row-local stubs —
+    // game-dead, and split into disconnected per-row networks the moment
+    // a second producer row exists. Surplus entries are always module_id
+    // 0 (netflow emits no partitioning), so keying by item name alone is
+    // safe here.
     let surplus_fluid_items: FxHashSet<&str> = solver_result
         .surplus_outputs
         .iter()
+        .chain(solver_result.external_outputs.iter())
         .filter(|f| f.is_fluid)
         .map(|f| f.item.as_str())
         .collect();
@@ -334,6 +339,22 @@ pub fn plan_bus_lanes(
             if lane.is_fluid && surplus_fluid_items.contains(lane.item.as_str()) {
                 lane.perimeter_exit_y = Some(total_height + exit_offset);
                 exit_offset += 1;
+                // Consumer-less perimeter lanes inherit `source_y` from the
+                // producer row's output BELT y — a solid-row concept that
+                // lands inside/below fluid-only rows and injects a phantom
+                // trunk anchor (observed: a stray mid-chain anchor breaking
+                // the UG chain to the exit). Anchor at the first real port
+                // instead.
+                if lane.consumer_rows.is_empty() {
+                    if let Some(min_port_y) = lane
+                        .fluid_output_port_positions
+                        .iter()
+                        .map(|&(_, _, py)| py)
+                        .min()
+                    {
+                        lane.source_y = lane.source_y.min(min_port_y);
+                    }
+                }
             }
         }
     }

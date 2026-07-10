@@ -620,3 +620,39 @@ independent follow-ups with their own gates.
   silently wrong AM3 layout). Phase 2 (fluid surplus routing +
   self-loop rows) is the path back to gauntlet-green for USP and the
   18 census items.*
+- *2026-07-10 — **Phase 2 landed** (fluid surplus → perimeter, #277
+  multi-machine staggered rows, multi-item merge cursor). USP gauntlet
+  FAIL → PASS with its light-oil surplus physically routed and
+  entity-verified; new forced-AOP fixture exercises 2 refineries + 2
+  clean surplus exits. Design docs from three subagents (fluid-surplus
+  lanes as per-item extensions with `perimeter_exit_y`; #277 pitch
+  msz+1; self-loop rows) — the self-loop design is complete but
+  UNIMPLEMENTED (blocked on a priority-splitter extension to the
+  lane-rate walker; the walker models all splitters 50/50). Fixed in
+  passing: the step-3.7 branch stamper silently skipped blocked tiles
+  (now UG-bridges), and fluid TARGETS (not just surplus) now route to
+  the perimeter — they were equally stranded, just unflagged
+  (sulfuric-acid / heavy-oil-cracking golden hashes regenerated
+  deliberately for the added exit trunks; both fixtures stay
+  0 errors / 0 warnings).*
+- *2026-07-10 — **Phase 3 attempted; flip HELD BACK, groundwork
+  landed.** Free selection is fully implemented and verified at the
+  solver level (`solve_free_with_palette_and_exclusions`): the
+  incompatible-machine guard (dropped columns must not become silent
+  imports; empty target row is a hard error), LP float snapping
+  (15.000000000000016 must not ceil to 16 machines or flip the 15/s
+  belt-tier threshold), and the refusal census extended with the
+  unsupported-category family (biolab via captive-spawner-process).
+  Under the flip the entire gated e2e corpus passes (the forced-AOP
+  fixture needs 24/s to stay multi-machine — free selection's
+  cracking chain yields 97.5 gas/craft vs 55). The flip was reverted
+  to compatibility mode as default because of ONE remaining layout
+  gap: dense oil complexes (AOP + both cracking rows, e.g. USP free
+  mode) put adjacent fluid trunks' surface-filled short anchor gaps
+  in the same y-band, which merge (F1) — USP would regress PASS →
+  FAIL×2. Also known: the trunk walker's tail mis-chains the last UG
+  pair when a config has 3+ stacked perimeter exits (budgeted at ≤1
+  fluid-network error in the forced-AOP fixture, FIXME in e2e.rs).
+  Next session: fix the fluid-lane stagger for dense oil complexes +
+  the exit-tail chain, then flip the default (one-line change in
+  solver.rs) and re-bless the delta-report fixtures.*
