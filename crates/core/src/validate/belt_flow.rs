@@ -2879,6 +2879,7 @@ mod tests {
                 is_fluid: false,
                 module_id: 0,
             }],
+            surplus_outputs: vec![],
             dependency_order: vec!["iron-gear-wheel".to_string()],
         }
     }
@@ -3657,6 +3658,7 @@ mod tests {
                 is_fluid: false,
                 module_id: 0,
             }],
+            surplus_outputs: vec![],
             dependency_order: vec!["iron-gear-wheel".to_string()],
         };
 
@@ -3781,6 +3783,7 @@ mod tests {
                 is_fluid: false,
                 module_id: 0,
             }],
+            surplus_outputs: vec![],
             dependency_order: vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()],
         };
 
@@ -3938,6 +3941,7 @@ mod tests {
                 is_fluid: false,
                 module_id: 0,
             }],
+            surplus_outputs: vec![],
             dependency_order: vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()],
         };
 
@@ -4060,6 +4064,7 @@ mod tests {
                 module_id: 0,
             }],
             external_outputs: vec![],
+            surplus_outputs: vec![],
             dependency_order: vec![],
         };
         let rates = compute_lane_rates(&layout, Some(&solver));
@@ -4183,6 +4188,7 @@ mod tests {
                 module_id: 0,
             }],
             external_outputs: vec![],
+            surplus_outputs: vec![],
             dependency_order: vec!["iron-plate-recycle".to_string()],
         };
         let rates = compute_lane_rates(&layout, Some(&solver));

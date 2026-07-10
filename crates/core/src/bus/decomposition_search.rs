@@ -710,6 +710,7 @@ mod tests {
             machines: vec![],
             external_inputs: vec![],
             external_outputs: vec![],
+            surplus_outputs: vec![],
             dependency_order: vec![],
         }
     }

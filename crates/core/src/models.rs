@@ -48,7 +48,17 @@ pub struct MachineSpec {
 pub struct SolverResult {
     pub machines: Vec<MachineSpec>,
     pub external_inputs: Vec<ItemFlow>,
+    /// The requested target item(s) only. Deliberately does NOT include
+    /// byproduct surplus — `decomposition_search::compute_overproduction`
+    /// and the step-7 output merger both assume entries here are targets.
     pub external_outputs: Vec<ItemFlow>,
+    /// Byproduct produced beyond internal demand (net-flow solver only;
+    /// always empty from the legacy tree walk). Routing these to the
+    /// perimeter is Phase 2 of docs/rfp-solver-net-flow.md — until then a
+    /// non-empty entry here means the layout physically strands the flow,
+    /// which the port-extraction validator reports as an error.
+    #[serde(default)]
+    pub surplus_outputs: Vec<ItemFlow>,
     pub dependency_order: Vec<String>,
 }
 

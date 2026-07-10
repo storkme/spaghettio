@@ -104,6 +104,7 @@ pub fn validate_template_lanes_at(
             module_id: 0,
         }],
         external_outputs: Vec::new(),
+        surplus_outputs: vec![],
         dependency_order: Vec::new(),
     };
 
@@ -139,6 +140,7 @@ pub fn compute_template_lane_rates(
             module_id: 0,
         }],
         external_outputs: Vec::new(),
+        surplus_outputs: vec![],
         dependency_order: Vec::new(),
     };
     compute_lane_rates(&layout, Some(&solver))
@@ -396,6 +398,7 @@ fn run_partial_scenario(
             module_id: 0,
         }],
         external_outputs: Vec::new(),
+        surplus_outputs: vec![],
         dependency_order: Vec::new(),
     };
 

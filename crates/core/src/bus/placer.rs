@@ -1279,6 +1279,7 @@ mod tests {
                 is_fluid: false,
                 module_id: 0,
             }],
+            surplus_outputs: vec![],
             dependency_order: vec![
                 "iron-plate".to_string(),
                 "copper-plate".to_string(),

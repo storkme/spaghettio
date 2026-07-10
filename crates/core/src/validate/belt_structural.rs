@@ -1378,6 +1378,7 @@ mod tests {
             }],
             external_inputs: vec![],
             external_outputs: vec![],
+            surplus_outputs: vec![],
             dependency_order: vec![],
         };
         let lr = layout(vec![machine("assembling-machine-3", 0, 0, "fluid-recipe")]);
@@ -1412,6 +1413,7 @@ mod tests {
             }],
             external_inputs: vec![],
             external_outputs: vec![],
+            surplus_outputs: vec![],
             dependency_order: vec![],
         };
         let entities = vec![
@@ -1443,6 +1445,7 @@ mod tests {
             }],
             external_inputs: vec![],
             external_outputs: vec![],
+            surplus_outputs: vec![],
             dependency_order: vec![],
         };
         let mut entities = vec![
@@ -1487,6 +1490,7 @@ mod tests {
                 }],
                 external_inputs: vec![],
                 external_outputs: vec![],
+                surplus_outputs: vec![],
                 dependency_order: vec![],
             };
             let entities = vec![

@@ -956,6 +956,7 @@ mod tests {
             }],
             external_inputs: vec![ItemFlow { item: "iron-plate".to_string(), rate: 2.0, is_fluid: false, module_id: 0 }],
             external_outputs: vec![ItemFlow { item: "iron-gear-wheel".to_string(), rate: 1.0, is_fluid: false, module_id: 0 }],
+            surplus_outputs: vec![],
             dependency_order: vec!["iron-gear-wheel".to_string()],
         }
     }
@@ -977,6 +978,7 @@ mod tests {
                 ItemFlow { item: "petroleum-gas".to_string(), rate: 2.0, is_fluid: true, module_id: 0 },
             ],
             external_outputs: vec![ItemFlow { item: "plastic-bar".to_string(), rate: 2.0, is_fluid: false, module_id: 0 }],
+            surplus_outputs: vec![],
             dependency_order: vec!["plastic-bar".to_string()],
         }
     }

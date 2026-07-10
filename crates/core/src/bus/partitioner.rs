@@ -773,6 +773,7 @@ pub fn apply_partition_plan(solver_result: &SolverResult, plan: &PartitionPlan) 
         machines: new_machines,
         external_inputs: solver_result.external_inputs.clone(),
         external_outputs: solver_result.external_outputs.clone(),
+        surplus_outputs: solver_result.surplus_outputs.clone(),
         dependency_order: solver_result.dependency_order.clone(),
     }
 }
@@ -1039,6 +1040,7 @@ mod tests {
             ],
             external_inputs: vec![flow("copper-plate", 4.0), flow("iron-plate", 2.0)],
             external_outputs: vec![flow("advanced-circuit", 1.0)],
+            surplus_outputs: vec![],
             dependency_order: vec!["copper-cable".to_string(), "electronic-circuit".to_string(), "advanced-circuit".to_string()],
         };
         let plan = plan_partitioning(&solver_result, LayoutStrategy::Pooled, None);
@@ -1054,6 +1056,7 @@ mod tests {
             ],
             external_inputs: vec![flow("iron-plate", 10.0)],
             external_outputs: vec![flow("iron-gear-wheel", 5.0)],
+            surplus_outputs: vec![],
             dependency_order: vec!["iron-gear-wheel".to_string()],
         };
         let plan = plan_partitioning(&solver_result, LayoutStrategy::PartitionedDecomposed, None);
@@ -1074,6 +1077,7 @@ mod tests {
             ],
             external_inputs: vec![flow("copper-plate", 4.0), flow("iron-plate", 3.0)],
             external_outputs: vec![flow("advanced-circuit", 2.0)],
+            surplus_outputs: vec![],
             dependency_order: vec!["copper-cable".to_string(), "electronic-circuit".to_string(), "advanced-circuit".to_string()],
         };
         let plan = plan_partitioning(&solver_result, LayoutStrategy::PartitionedDecomposed, Some("transport-belt"));
@@ -1102,6 +1106,7 @@ mod tests {
             ],
             external_inputs: vec![fluid("petroleum-gas", 80.0), fluid("water", 210.0), flow("coal", 5.0), flow("sulfur", 11.0), flow("iron-plate", 2.0)],
             external_outputs: vec![flow("plastic-bar", 8.0), fluid("sulfuric-acid", 100.0), flow("explosives", 1.0)],
+            surplus_outputs: vec![],
             dependency_order: vec![],
         };
         let plan = plan_partitioning(&solver_result, LayoutStrategy::PartitionedDecomposed, None);
@@ -1124,6 +1129,7 @@ mod tests {
             ],
             external_inputs: vec![flow("copper-plate", 4.0), flow("iron-plate", 3.0)],
             external_outputs: vec![flow("advanced-circuit", 2.0)],
+            surplus_outputs: vec![],
             dependency_order: vec![],
         };
         let plan = plan_partitioning(&solver_result, LayoutStrategy::PartitionedDecomposed, Some("transport-belt"));
@@ -1163,6 +1169,7 @@ mod tests {
             ],
             external_inputs: vec![flow("iron-plate", 120.0)],
             external_outputs: vec![flow("iron-gear-wheel", 60.0)],
+            surplus_outputs: vec![],
             dependency_order: vec!["iron-gear-wheel".to_string()],
         };
         // PartitionedDecomposed: K=1 with 16 lanes → shard into 2 of 8.
@@ -1193,6 +1200,7 @@ mod tests {
             ],
             external_inputs: vec![flow("copper-plate", 100.0), flow("iron-plate", 60.0)],
             external_outputs: vec![flow("advanced-circuit", 7.5)],
+            surplus_outputs: vec![],
             dependency_order: vec!["copper-cable".to_string(), "electronic-circuit".to_string(), "advanced-circuit".to_string()],
         };
         let plan = plan_partitioning(&solver_result, LayoutStrategy::PartitionedDecomposed, Some("transport-belt"));
@@ -1231,6 +1239,7 @@ mod tests {
             ],
             external_inputs: vec![flow("copper-plate", 100.0), flow("iron-plate", 60.0)],
             external_outputs: vec![flow("advanced-circuit", 7.5)],
+            surplus_outputs: vec![],
             dependency_order: vec![],
         };
         let plan = plan_partitioning(&solver_result, LayoutStrategy::PartitionedDecomposed, Some("transport-belt"));

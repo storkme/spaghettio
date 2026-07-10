@@ -413,6 +413,7 @@ mod tests {
             }],
             external_inputs: vec![],
             external_outputs: vec![],
+            surplus_outputs: vec![],
             dependency_order: vec![],
         };
         let lr = LayoutResult {
@@ -445,6 +446,7 @@ mod tests {
             }],
             external_inputs: vec![],
             external_outputs: vec![],
+            surplus_outputs: vec![],
             dependency_order: vec![],
         };
         let lr = LayoutResult {

@@ -20,7 +20,7 @@ const EXCLUDED_CATEGORIES: &[&str] = &["recycling", "crushing", "recycling-or-ha
 /// recurse through the whole barrel chain (steel-plate → barrel → fill →
 /// empty) for any recipe that needs the fluid. Callers who actually want to
 /// empty barrels should target the filled-barrel item directly.
-fn is_excluded_recipe(recipe: &Recipe) -> bool {
+pub(crate) fn is_excluded_recipe(recipe: &Recipe) -> bool {
     if EXCLUDED_CATEGORIES.contains(&recipe.category.as_str()) {
         return true;
     }

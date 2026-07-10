@@ -29,6 +29,22 @@ pub enum SolverError {
         machine: String,
         reason: MachineIncompatibility,
     },
+    /// The optimal plan uses a recipe that consumes its own output
+    /// (kovarex-class). Layout support for self-loop rows is Phase 2 of
+    /// docs/rfp-solver-net-flow.md; until then this is a loud, typed
+    /// refusal instead of the tree walk's silent nonsense externals.
+    #[error("recipe {recipe} feeds its own output back as an ingredient — self-loop rows are not supported yet")]
+    UnsupportedSelfLoop { recipe: String },
+    /// The optimal plan contains a multi-recipe cycle (e.g. the
+    /// carbon ↔ coal-synthesis loop). Cross-row feedback routing is out of
+    /// scope for the net-flow RFP.
+    #[error("recipes form a production cycle ({recipes}) — cyclic chains are not supported")]
+    UnsupportedCycle { recipes: String },
+    /// The LP itself failed (infeasible/unbounded/internal). Should not
+    /// happen for well-formed inputs — external-supply eligibility
+    /// guarantees feasibility — so this indicates a bug worth reporting.
+    #[error("net-flow solve failed for {target}: {detail}")]
+    LpFailed { target: String, detail: String },
 }
 
 struct SolveState {
@@ -151,6 +167,7 @@ pub fn solve_with_palette_and_exclusions(
             is_fluid: false,
             module_id: 0,
         }],
+        surplus_outputs: Vec::new(),
         dependency_order: state.dependency_order,
     })
 }
