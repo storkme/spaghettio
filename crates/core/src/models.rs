@@ -50,6 +50,17 @@ pub struct MachineSpec {
     /// ordinary recipes).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub self_loop: Vec<SelfLoopFlow>,
+    /// True for a layout-synthesized voider row (RFP Fulgora Phase 2,
+    /// `docs/rfp-fulgora-scrap.md` D1) — a recycler bank that
+    /// self-consumes a solid surplus stream down to nothing. Never set
+    /// by the solver (voiding is a layout policy, not a solver
+    /// objective); set only by `bus::voider::synthesize_voiders`.
+    /// `inputs` carries the bus-visible tap demand (per-machine rate,
+    /// matching every other `MachineSpec`'s convention); `outputs` is
+    /// always empty — nothing is exported. Drives `RowKind::Voider`
+    /// classification in `bus::placer::row_kind`.
+    #[serde(default)]
+    pub voider: bool,
 }
 
 /// One self-referencing item of a self-loop recipe: raw per-machine
@@ -307,4 +318,29 @@ pub struct LayoutResult {
     /// surplus. Populated by the bus pipeline regardless of tracing.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub surplus_exits: Vec<(String, i32, i32)>,
+    /// Solid surplus streams consumed by a synthesized voider row under
+    /// `SurplusPolicy::Void` (RFP Fulgora Phase 2,
+    /// `docs/rfp-fulgora-scrap.md` D1) — first-class, trace-independent,
+    /// like `surplus_exits`. `check_stranded_byproducts` cross-checks
+    /// each entry against real recycler entities rather than trusting
+    /// this ledger alone. Empty under `SurplusPolicy::Export` or when
+    /// nothing voided.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub voided_streams: Vec<VoidedStream>,
+}
+
+/// One solid surplus stream consumed by a layout-synthesized voider
+/// recycler bank. See `LayoutResult::voided_streams` and
+/// `bus::voider::synthesize_voiders`.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VoidedStream {
+    pub item: String,
+    /// Surplus rate (items/s) the bank destroys.
+    pub rate: f64,
+    /// Recycler machine count placed for this bank.
+    pub machines: usize,
+    /// The recycling recipe used (`"<item>-recycling"`).
+    pub recipe: String,
 }

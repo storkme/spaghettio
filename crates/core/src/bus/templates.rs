@@ -4067,6 +4067,319 @@ pub fn self_loop_row(
     (entities, row_height, fluid_input_port_pipes)
 }
 
+/// Voider row: a recycler bank that self-consumes a solid surplus stream
+/// (RFP Fulgora Phase 2, `docs/rfp-fulgora-scrap.md` D1). Inspired by
+/// `self_loop_row`'s vocabulary (loop corridor, recirculation, per-machine
+/// rate convention) but the plumbing inverts: recirculates the ENTIRE
+/// ejected stream (no export — there's no splitter at all), and is built
+/// around `recycler`'s real physicals (2×4, direct belt ejection,
+/// inserter-fed input) instead of a square inserter-only machine.
+///
+/// The external demand (near belt) is fed from a dedicated SOUTH-facing
+/// supply column, not a west-side bus tap — see `ghost_router`'s Step
+/// 7c. Voider rows are excluded from the ordinary west-trunk lane system
+/// (`lane_planner`'s voider-consumer skip): the row producing the voided
+/// item is typically EAST-flowing (its primary output is the solve's own
+/// target — e.g. uranium-processing's U-235 target + U-238 surplus), so
+/// a west-directed return spec would have to run backwards across the
+/// entire row against its own flow. Step 7c instead reuses the same
+/// producer-gathering + `merge_output_rows` machinery Step 7b (D2a/D2b
+/// export) already uses, then routes the merged tail to this row's
+/// supply column via a corridor below every other south-flushed tail.
+///
+/// Layout per machine (2-tile pitch, flush, `count` recyclers), relative
+/// to `(x_offset, y_offset)`:
+/// ```text
+///   y+0        : collector/eject row — recycler i ejects directly onto
+///                (mx_i, y+0) with NO inserter (mining-drill-style);
+///                flows WEST to a descent column west of the bank
+///   y+1..y+4   : recycler bank (2 wide x 4 tall each), facing NORTH
+///   y+5        : inserter row — regular (dx=0, reach 1) picks the near
+///                (tap) belt; long-handed (dx=1, reach 2) picks the far
+///                (recirc) belt
+///   y+6        : near belt — external tap demand, east-flowing, one UG
+///                dip near the west end so the descent column can cross
+///                it
+///   y+7        : far belt (desc_x east) — 100% recirculated ejections,
+///                fed by the descent's own turn; supply entry
+///                (x_offset, SAME row, west of desc_x) — Step 7c's
+///                landing tile, turns north into the near belt's UG
+/// ```
+/// ASCII sketch (2 recyclers, dx=0/1 are the two machine columns):
+/// ```text
+///           belt-in →→→[collect]←←←[collect]  <- eject row (y+0)
+///   descent  ↓          ┌──┐         ┌──┐
+///     col    ↓          │R1│         │R2│      <- recycler bank
+///     v      ↓          └──┘         └──┘         (y+1..y+4)
+///     v      ↓        near↑far     near↑far     <- inserters (y+5)
+///     v   ug-dip→[near tap belt]────────────→   <- near/tap (y+6)
+///     ^──────────[far recirc belt]───────────→  <- far/recirc (y+7)
+///   supply
+///   (Step 7c)
+/// ```
+/// Rate math (`bus::voider::synthesize_voiders`): a surplus stream of
+/// `r` items/s needs gross throughput `g = r / (1 - fraction)` (each
+/// pass returns `fraction` back), `machines = ceil(g / per_recycler_rate)`.
+/// `near_rate_per_machine`/`far_rate_per_machine` are PER-MACHINE (this
+/// function multiplies by `count` internally), matching
+/// `self_loop_row`'s calling convention.
+///
+/// Returns `(entities, row_height)`. `row_height` matches
+/// `RowKind::Voider::row_height()` (8).
+#[allow(clippy::too_many_arguments)]
+pub fn voider_row(
+    recipe: &str,
+    item: &str,
+    machine_count: usize,
+    y_offset: i32,
+    x_offset: i32,
+    near_rate_per_machine: f64,
+    far_rate_per_machine: f64,
+    max_belt_tier: Option<&str>,
+) -> (Vec<PlacedEntity>, i32) {
+    use crate::bus::balancer::underground_for_belt;
+    use crate::common::belt_entity_for_rate;
+
+    debug_assert_eq!(
+        crate::common::machine_dims("recycler"),
+        (2, 4),
+        "voider_row is built around the recycler's real 2x4 footprint; see rfp-fulgora-scrap Phase 0"
+    );
+    let count = machine_count.max(1) as i32;
+    let near_total = (near_rate_per_machine * count as f64).max(1e-6);
+    let far_total = (far_rate_per_machine * count as f64).max(1e-6);
+
+    let near_belt = belt_entity_for_rate(near_total, max_belt_tier);
+    let recirc_belt = belt_entity_for_rate(far_total, max_belt_tier);
+    let near_ug = underground_for_belt(near_belt);
+
+    // Prefix zone west of machine 0: 5 columns, two independent purposes
+    // that must NOT share a tile:
+    //   x_offset          : supply_col — the near belt's own west-most
+    //                       tile, fed by a PLAIN corner turn from the
+    //                       south (`ghost_router`'s Step 7c). A plain
+    //                       belt corner is fine (B11: preserves both
+    //                       lanes) — but a UG-entrance specifically
+    //                       needs a STRAIGHT feed to load both lanes
+    //                       (see `feedback_sideload_ug` — a perpendicular
+    //                       feed into a UG-entrance only loads one lane,
+    //                       unlike an ordinary belt corner), so this
+    //                       column must stay clear of the UG dip below.
+    //   x_offset+2/+3/+4  : near belt's UG dip (mirrors
+    //                       `self_loop_row`'s PREFIX=3 shape, just
+    //                       shifted 2 east) — UG-in / descent's own
+    //                       column / UG-out, straight-fed from
+    //                       supply_col's plain run.
+    const PREFIX: i32 = 5;
+    let mx0 = x_offset + PREFIX;
+    let mxs: Vec<i32> = (0..count).map(|i| mx0 + i * 2).collect();
+    let last_mx = *mxs.last().expect("machine_count >= 1");
+    let east_x = last_mx + 2;
+    let supply_col = x_offset;
+    let desc_x = mx0 - 2; // == x_offset + 3
+
+    let row_height = 8;
+    let dy_collect = 0;
+    let dy_machine = 1;
+    let dy_ins = 5;
+    let dy_near = 6;
+    let dy_far = 7;
+    let y = |dy: i32| y_offset + dy;
+
+    let mut entities: Vec<PlacedEntity> = Vec::new();
+
+    let machine_seg = Some(format!("row:{recipe}:machine"));
+    let near_in_seg = Some(format!("row:{recipe}:belt-in:{item}"));
+    let near_ins_seg = Some(format!("row:{recipe}:inserter-in:{item}"));
+    let far_ins_seg = Some(format!("row:{recipe}:inserter-in:{item}:recirc"));
+    // `:voider:` — the closed recirculation loop (eject -> collect ->
+    // descent -> far belt -> back into the machines). Tagged so
+    // `check_belt_loops` can extend its `:selfloop:` exemption to cover
+    // this physically-legitimate cycle (RFP brief point 6).
+    let loop_seg = Some(format!("row:{recipe}:voider:{item}"));
+
+    // ---- Recyclers ----
+    for &mx in &mxs {
+        entities.push(PlacedEntity {
+            name: "recycler".to_string(),
+            x: mx,
+            y: y(dy_machine),
+            direction: EntityDirection::North,
+            recipe: Some(recipe.to_string()),
+            segment_id: machine_seg.clone(),
+            ..Default::default()
+        });
+    }
+
+    // ---- Inserters (dy_ins): near (dx=0, reach 1) + far (dx=1, reach 2) ----
+    for &mx in &mxs {
+        entities.push(PlacedEntity {
+            name: "inserter".to_string(),
+            x: mx,
+            y: y(dy_ins),
+            direction: EntityDirection::North,
+            carries: Some(item.to_string()),
+            segment_id: near_ins_seg.clone(),
+            rate: Some(near_total),
+            ..Default::default()
+        });
+        entities.push(PlacedEntity {
+            name: "long-handed-inserter".to_string(),
+            x: mx + 1,
+            y: y(dy_ins),
+            direction: EntityDirection::North,
+            carries: Some(item.to_string()),
+            segment_id: far_ins_seg.clone(),
+            rate: Some(far_total),
+            ..Default::default()
+        });
+    }
+
+    // ---- Near belt (dy_near): external tap demand, east-flowing, UG
+    // dip at desc_x so the descent column can cross it. Trimmed to
+    // `last_mx` (dx=0 of the last machine) — the regular inserter's
+    // last adjacency; nothing picks from `last_mx + 1`.
+    //
+    // Fed from the SOUTH at `supply_col`, not the west bus
+    // (`ghost_router`'s Step 7c connects the producer row's own output
+    // belt directly to the dedicated supply tile below — see the block
+    // after this loop) — voider rows are excluded from the ordinary
+    // west-trunk lane system because their producer row is typically
+    // EAST-flowing (its primary output is the solve's own target), and
+    // a west-directed return spec would have to cross the entire row
+    // backwards against its own flow. `supply_col` is a PLAIN belt (not
+    // the UG dip below) — a perpendicular corner feed into a UG-entrance
+    // only loads one lane (`feedback_sideload_ug`), unlike an ordinary
+    // belt corner (B11), so the south-fed corner and the descent-hop UG
+    // dip must be different tiles.
+    for x in supply_col..=last_mx {
+        if x == desc_x {
+            continue;
+        }
+        let ent = if x == desc_x - 1 {
+            PlacedEntity {
+                name: near_ug.to_string(),
+                x,
+                y: y(dy_near),
+                direction: EntityDirection::East,
+                io_type: Some("input".to_string()),
+                carries: Some(item.to_string()),
+                segment_id: near_in_seg.clone(),
+                rate: Some(near_total),
+                ..Default::default()
+            }
+        } else if x == desc_x + 1 {
+            PlacedEntity {
+                name: near_ug.to_string(),
+                x,
+                y: y(dy_near),
+                direction: EntityDirection::East,
+                io_type: Some("output".to_string()),
+                carries: Some(item.to_string()),
+                segment_id: near_in_seg.clone(),
+                rate: Some(near_total),
+                ..Default::default()
+            }
+        } else {
+            PlacedEntity {
+                name: near_belt.to_string(),
+                x,
+                y: y(dy_near),
+                direction: EntityDirection::East,
+                carries: Some(item.to_string()),
+                segment_id: near_in_seg.clone(),
+                rate: Some(near_total),
+                ..Default::default()
+            }
+        };
+        entities.push(ent);
+    }
+
+    // Supply entry: one tile south of `supply_col`'s plain near-belt
+    // tile, turning the external feed NORTH into it — a plain corner
+    // (B11: preserves both lanes). `ghost_router`'s Step 7c extends this
+    // column further south to connect to the producer row. `supply_col`
+    // is untouched by every other part of this template (the UG dip
+    // lives at `desc_x = x_offset + 3`, the machine bank starts at
+    // `mx0 = x_offset + 5`), so this is always free.
+    entities.push(PlacedEntity {
+        name: near_belt.to_string(),
+        x: supply_col,
+        y: y(dy_near + 1),
+        direction: EntityDirection::North,
+        carries: Some(item.to_string()),
+        segment_id: near_in_seg.clone(),
+        rate: Some(near_total),
+        ..Default::default()
+    });
+
+    // ---- Far belt (dy_far): 100% recirculated, east-flowing. Starts at
+    // the descent's own turn (desc_x) and runs through `east_x - 1`
+    // (dx=1 of the last machine — the long-handed inserter's pickup).
+    for x in desc_x..east_x {
+        entities.push(PlacedEntity {
+            name: recirc_belt.to_string(),
+            x,
+            y: y(dy_far),
+            direction: EntityDirection::East,
+            carries: Some(item.to_string()),
+            segment_id: loop_seg.clone(),
+            rate: Some(far_total),
+            ..Default::default()
+        });
+    }
+
+    // ---- Collector/eject row (dy_collect): each recycler ejects
+    // directly onto (mx, dy_collect) with NO inserter — mining-drill-
+    // style, per the Phase 0 physicals finding (`vector_to_place_result`
+    // lands one tile north of the machine's north edge, on the west
+    // column). Flows WEST from `last_mx` (trimmed — nothing ejects onto
+    // `last_mx + 1`) back to the descent corner.
+    for x in (mx0 - 1)..=last_mx {
+        entities.push(PlacedEntity {
+            name: recirc_belt.to_string(),
+            x,
+            y: y(dy_collect),
+            direction: EntityDirection::West,
+            carries: Some(item.to_string()),
+            segment_id: loop_seg.clone(),
+            rate: Some(far_total),
+            ..Default::default()
+        });
+    }
+    // Corner: turn south into the descent column.
+    entities.push(PlacedEntity {
+        name: recirc_belt.to_string(),
+        x: desc_x,
+        y: y(dy_collect),
+        direction: EntityDirection::South,
+        carries: Some(item.to_string()),
+        segment_id: loop_seg.clone(),
+        rate: Some(far_total),
+        ..Default::default()
+    });
+
+    // ---- Descent column (desc_x): straight south from the collector
+    // corner, through the recycler bank's own column (clear — machines
+    // start at mx0) and the near belt's UG dip, landing on the far
+    // belt's own start tile (dy_far, already stamped above with EAST
+    // direction — this just fills the vertical run above it).
+    for dy in (dy_collect + 1)..dy_far {
+        entities.push(PlacedEntity {
+            name: recirc_belt.to_string(),
+            x: desc_x,
+            y: y(dy),
+            direction: EntityDirection::South,
+            carries: Some(item.to_string()),
+            segment_id: loop_seg.clone(),
+            rate: Some(far_total),
+            ..Default::default()
+        });
+    }
+
+    (entities, row_height)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

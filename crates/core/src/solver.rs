@@ -371,7 +371,7 @@ fn resolve(
         state.machines.push(MachineSpec {
             entity,
             recipe: recipe.name.clone(),
-            self_loop: vec![],
+            self_loop: vec![], voider: false,
             count,
             inputs: input_flows,
             outputs: output_flows,

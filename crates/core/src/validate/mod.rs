@@ -204,10 +204,32 @@ pub fn check_stranded_byproducts(
         })
     };
 
+    // RFP Fulgora Phase 2 (docs/rfp-fulgora-scrap.md D1): under
+    // `SurplusPolicy::Void`, a solid surplus item may instead be
+    // consumed by a layout-synthesized voider recycler bank —
+    // `LayoutResult::voided_streams`, recorded first-class and
+    // trace-independent like `surplus_exits`. Verified PHYSICALLY, not
+    // trusted alone: real `recycler` entities running the right
+    // `<item>-recycling` recipe must actually be present, in at least
+    // the recorded machine count — a ledger entry with no matching
+    // hardware is exactly the stalled-machine bug this check exists to
+    // catch, the same standard `is_routed` holds Export to.
+    let is_voided = |f: &crate::models::ItemFlow| {
+        layout.voided_streams.iter().any(|v| {
+            v.item == f.item
+                && layout
+                    .entities
+                    .iter()
+                    .filter(|e| e.name == "recycler" && e.recipe.as_deref() == Some(v.recipe.as_str()))
+                    .count()
+                    >= v.machines
+        })
+    };
+
     solver
         .surplus_outputs
         .iter()
-        .filter(|f| !is_routed(f))
+        .filter(|f| !is_routed(f) && !is_voided(f))
         .map(|f| {
             ValidationIssue::new(
                 Severity::Error,

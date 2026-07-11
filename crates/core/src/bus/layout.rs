@@ -47,6 +47,27 @@ pub enum RowLayout {
     HorizontalStack,
 }
 
+/// What the layout does with solid byproduct surplus (`SolverResult::
+/// surplus_outputs`). See `docs/rfp-fulgora-scrap.md` D1 — voiding is a
+/// layout policy, not a solver objective, so this lives on
+/// `LayoutOptions` rather than anywhere in the solver.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SurplusPolicy {
+    /// Today's behaviour: solid surplus routes to the perimeter/merger
+    /// (RFP Fulgora D2a/D2b). Byte-identical to pre-Phase-2 output.
+    #[default]
+    Export,
+    /// Solid surplus that resolves to a recognized self-voider recipe
+    /// (`<item>-recycling`: X → fraction·X) is consumed by a
+    /// layout-synthesized recycler bank instead of exported. Streams
+    /// that don't resolve (multi-output cascades, missing recipe) fall
+    /// back to `Export` with a `VoiderFallbackExport` trace event —
+    /// never silently dropped. Fluid surplus is never voided (recycling
+    /// takes items only) and always routes via `Export` regardless of
+    /// this setting.
+    Void,
+}
+
 /// Per-call options for `build_bus_layout`. New struct; absorbs the
 /// previous `max_belt_tier` parameter so future per-call options
 /// (strategy, escargio fold parameters, …) attach as additional fields.
@@ -55,6 +76,7 @@ pub struct LayoutOptions {
     pub strategy: LayoutStrategy,
     pub max_belt_tier: Option<String>,
     pub row_layout: RowLayout,
+    pub surplus_policy: SurplusPolicy,
 }
 
 impl LayoutOptions {
@@ -65,6 +87,7 @@ impl LayoutOptions {
             strategy: LayoutStrategy::default(),
             max_belt_tier: max_belt_tier.map(|s| s.to_string()),
             row_layout: RowLayout::default(),
+            surplus_policy: SurplusPolicy::default(),
         }
     }
 }
@@ -237,6 +260,24 @@ fn layout_pass(
     explicit_plan: Option<&crate::bus::partitioner::PartitionPlan>,
 ) -> Result<(LayoutResult, Vec<RowSpan>), String> {
     let max_belt_tier = opts.max_belt_tier.as_deref();
+
+    // RFP Fulgora Phase 2 (docs/rfp-fulgora-scrap.md D1): under
+    // `SurplusPolicy::Void`, synthesize recycler-bank voider rows for
+    // solid surplus that resolves to a self-voider recipe BEFORE any
+    // other pipeline stage runs, so `place_rows`/`plan_bus_lanes`/
+    // `route_bus_ghost` all see the voider `MachineSpec`s as ordinary
+    // rows and the item removed from `surplus_outputs` as ordinary
+    // export/lane machinery would expect. No-op (same reference, zero
+    // clone) under `SurplusPolicy::Export` — KC4's byte-identical
+    // guarantee for the default policy.
+    let voided_solver_result;
+    let solver_result: &SolverResult = if opts.surplus_policy == SurplusPolicy::Void {
+        voided_solver_result = crate::bus::voider::synthesize_voiders(solver_result);
+        &voided_solver_result
+    } else {
+        solver_result
+    };
+
     // Plan source. If the caller has pre-built a plan (candidate
     // decompositions in `bus::decomposition_search`), use it directly
     // and skip the strategy-driven `plan_partitioning` call. Otherwise
@@ -597,6 +638,29 @@ fn layout_pass(
     all_entities.extend(bus_entities);
     all_entities.extend(pole_entities);
 
+    // First-class, trace-independent ledger of voided solid surplus
+    // (RFP Fulgora Phase 2, D1/D6) — mirrors `surplus_exits`.
+    // `check_stranded_byproducts` cross-checks each entry against real
+    // recycler entities rather than trusting this alone. Reconstructed
+    // from the (possibly voider-synthesized) `solver_result` used by
+    // this pass: `MachineSpec.inputs[0].rate` is the PER-MACHINE tap
+    // rate (see `bus::voider::synthesize_voiders`), so `rate * count`
+    // recovers the original surplus rate.
+    let voided_streams: Vec<crate::models::VoidedStream> = solver_result
+        .machines
+        .iter()
+        .filter(|m| m.voider)
+        .filter_map(|m| {
+            let inp = m.inputs.first()?;
+            Some(crate::models::VoidedStream {
+                item: inp.item.clone(),
+                rate: inp.rate * m.count,
+                machines: m.count.round().max(1.0) as usize,
+                recipe: m.recipe.clone(),
+            })
+        })
+        .collect();
+
     Ok((
         LayoutResult {
             entities: all_entities,
@@ -606,6 +670,7 @@ fn layout_pass(
             regions,
             trace: None,
             surplus_exits,
+            voided_streams,
         },
         row_spans,
     ))
@@ -1091,7 +1156,7 @@ mod tests {
                 MachineSpec {
                     entity: "assembling-machine-3".to_string(),
                     recipe: "widget".to_string(),
-                    self_loop: vec![],
+                    self_loop: vec![], voider: false,
                     count: 1.0,
                     inputs: vec![ItemFlow {
                         item: "iron-plate".to_string(),
@@ -1109,7 +1174,7 @@ mod tests {
                 MachineSpec {
                     entity: "assembling-machine-3".to_string(),
                     recipe: "gadget-scrap".to_string(),
-                    self_loop: vec![],
+                    self_loop: vec![], voider: false,
                     count: 1.0,
                     inputs: vec![ItemFlow {
                         item: "iron-plate".to_string(),
@@ -1205,7 +1270,7 @@ mod tests {
             spec: MachineSpec {
                 entity: "assembling-machine-1".to_string(),
                 recipe: recipe.to_string(),
-                self_loop: vec![],
+                self_loop: vec![], voider: false,
                 count: 1.0,
                 inputs: vec![],
                 outputs: vec![],

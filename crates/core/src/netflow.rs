@@ -115,7 +115,7 @@ fn is_recycling_category(recipe: &Recipe) -> bool {
 /// `Unsupported` case, which this function does NOT change the behavior
 /// of — voiders are accepted only at the solver level, gated on
 /// `NetflowOptions::allow_voiding`.
-fn is_pure_voider(recipe: &Recipe) -> bool {
+pub(crate) fn is_pure_voider(recipe: &Recipe) -> bool {
     if recipe.ingredients.len() != 1 || recipe.products.len() != 1 {
         return false;
     }
@@ -886,6 +886,7 @@ fn solve_attempt(
             count,
             inputs,
             outputs,
+            voider: false,
         }
     };
 

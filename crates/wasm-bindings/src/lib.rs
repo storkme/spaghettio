@@ -13,7 +13,7 @@ use spaghettio_core::recipe_db::MachinePalette;
 use spaghettio_core::validate::{self, LayoutStyle, ValidationIssue};
 use spaghettio_core::{
     blueprint, blueprint_parser, bus::junction_cost::solution_cost,
-    bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy, RowLayout},
+    bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy, RowLayout, SurplusPolicy},
     fixture as fixture_mod, recipe_db, sat, solver,
 };
 use rustc_hash::FxHashSet;
@@ -43,7 +43,7 @@ fn layout_options(
         Some("horizontal-stack") => RowLayout::HorizontalStack,
         _ => RowLayout::VerticalSplit,
     };
-    LayoutOptions { strategy, max_belt_tier, row_layout }
+    LayoutOptions { strategy, max_belt_tier, row_layout, surplus_policy: SurplusPolicy::default() }
 }
 
 #[wasm_bindgen]

@@ -204,6 +204,7 @@ fn run_e2e_with_strategy(
         &FxHashSet::default(),
         strategy,
         spaghettio_core::bus::layout::RowLayout::default(),
+        spaghettio_core::bus::layout::SurplusPolicy::default(),
     )
 }
 
@@ -229,6 +230,7 @@ fn run_e2e_with_strategy_and_row_layout(
         &FxHashSet::default(),
         strategy,
         row_layout,
+        spaghettio_core::bus::layout::SurplusPolicy::default(),
     )
 }
 
@@ -251,6 +253,35 @@ fn run_e2e_with_exclusions(
         excluded_recipes,
         spaghettio_core::bus::layout::LayoutStrategy::Pooled,
         spaghettio_core::bus::layout::RowLayout::default(),
+        spaghettio_core::bus::layout::SurplusPolicy::default(),
+    )
+}
+
+/// Like `run_e2e_with_exclusions` but with a non-default `SurplusPolicy`
+/// (RFP Fulgora Phase 2, `docs/rfp-fulgora-scrap.md` D1). Used by the
+/// voider fixtures to exercise `SurplusPolicy::Void`.
+#[allow(dead_code)]
+fn run_e2e_with_exclusions_and_surplus_policy(
+    test_name: &str,
+    item: &str,
+    rate: f64,
+    machine: &str,
+    belt_tier: Option<&str>,
+    available_inputs: &FxHashSet<String>,
+    excluded_recipes: &FxHashSet<String>,
+    surplus_policy: spaghettio_core::bus::layout::SurplusPolicy,
+) -> Result<E2EResult, String> {
+    run_e2e_inner(
+        test_name,
+        item,
+        rate,
+        machine,
+        belt_tier,
+        available_inputs,
+        excluded_recipes,
+        spaghettio_core::bus::layout::LayoutStrategy::Pooled,
+        spaghettio_core::bus::layout::RowLayout::default(),
+        surplus_policy,
     )
 }
 
@@ -265,6 +296,7 @@ fn run_e2e_inner(
     excluded_recipes: &FxHashSet<String>,
     strategy: spaghettio_core::bus::layout::LayoutStrategy,
     row_layout: spaghettio_core::bus::layout::RowLayout,
+    surplus_policy: spaghettio_core::bus::layout::SurplusPolicy,
 ) -> Result<E2EResult, String> {
     let _guard = trace::start_trace();
     spaghettio_core::zone_cache::set_thread_source(Some(test_name));
@@ -281,6 +313,7 @@ fn run_e2e_inner(
         &solver_result,
         layout::LayoutOptions {
             strategy,
+            surplus_policy,
             max_belt_tier: belt_tier.map(|s| s.to_string()),
             row_layout,
         },
@@ -1265,7 +1298,7 @@ fn tier4_advanced_circuit_partitioned() {
 #[test]
 #[ntest::timeout(30000)]
 fn tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing() {
-    use spaghettio_core::bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy, RowLayout};
+    use spaghettio_core::bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy, RowLayout, SurplusPolicy};
 
     let inputs: FxHashSet<String> = ["iron-plate", "copper-plate", "coal", "water", "crude-oil"]
         .iter()
@@ -1283,6 +1316,7 @@ fn tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing() {
             strategy: LayoutStrategy::Pooled,
             max_belt_tier: Some("transport-belt".to_string()),
             row_layout: RowLayout::HorizontalStack,
+            surplus_policy: SurplusPolicy::default(),
         },
     )
     .unwrap_or_else(|e| panic!("{test_name}: layout: {e}"));
@@ -1360,7 +1394,7 @@ fn tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing() {
 // when CI hardware is more predictable or this test gets faster.
 #[ntest::timeout(300000)]
 fn tier5_processing_unit_2s_horizontal_stack_iron_ore_pipe_bypass() {
-    use spaghettio_core::bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy, RowLayout};
+    use spaghettio_core::bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy, RowLayout, SurplusPolicy};
 
     let inputs: FxHashSet<String> = [
         "iron-ore", "copper-ore", "stone", "coal", "water", "crude-oil",
@@ -1379,6 +1413,7 @@ fn tier5_processing_unit_2s_horizontal_stack_iron_ore_pipe_bypass() {
             strategy: LayoutStrategy::Pooled,
             max_belt_tier: Some("fast-transport-belt".to_string()),
             row_layout: RowLayout::HorizontalStack,
+            surplus_policy: SurplusPolicy::default(),
         },
     )
     .unwrap_or_else(|e| panic!("{test_name}: layout: {e}"));
@@ -1462,7 +1497,7 @@ fn tier5_processing_unit_2s_horizontal_stack_iron_ore_pipe_bypass() {
 #[test]
 #[ntest::timeout(60000)]
 fn tier5_processing_unit_25s_horizontal_stack_pole_coverage() {
-    use spaghettio_core::bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy, RowLayout};
+    use spaghettio_core::bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy, RowLayout, SurplusPolicy};
 
     let inputs: FxHashSet<String> = [
         "iron-plate", "copper-plate", "steel-plate", "stone",
@@ -1482,6 +1517,7 @@ fn tier5_processing_unit_25s_horizontal_stack_pole_coverage() {
             strategy: LayoutStrategy::Pooled,
             max_belt_tier: None,
             row_layout: RowLayout::HorizontalStack,
+            surplus_policy: SurplusPolicy::default(),
         },
     )
     .unwrap_or_else(|e| panic!("{test_name}: layout: {e}"));
@@ -1716,6 +1752,155 @@ fn tier_uranium_processing_surplus_export() {
         u238_belt_below,
         "expected a uranium-238 belt at y >= {last_row_bottom} (below the last \
          uranium-processing row) — the D2b secondary belt / D2a merger cascade"
+    );
+}
+
+/// Voider rows (RFP Fulgora Phase 2, D1, `docs/rfp-fulgora-scrap.md`).
+/// Same solve as `tier_uranium_processing_surplus_export` — uranium-235
+/// @0.05/s, kovarex excluded so uranium-238 surplus (~7.09/s) survives —
+/// but laid out under `SurplusPolicy::Void` instead of `Export`.
+/// uranium-238-recycling is a genuine self-voider (U-238 -> 0.25*U-238,
+/// Phase 0 physicals finding), so the surplus should be consumed by a
+/// synthesized recycler bank instead of exported to the perimeter.
+#[test]
+fn tier_uranium_processing_voider() {
+    let inputs: FxHashSet<String> = ["uranium-ore"].iter().map(|s| s.to_string()).collect();
+    let excluded: FxHashSet<String> = ["kovarex-enrichment-process"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let result = run_e2e_with_exclusions_and_surplus_policy(
+        "tier_uranium_processing_voider",
+        "uranium-235",
+        0.05,
+        "assembling-machine-3",
+        None,
+        &inputs,
+        &excluded,
+        spaghettio_core::bus::layout::SurplusPolicy::Void,
+    )
+    .unwrap_or_else(|e| panic!("tier_uranium_processing_voider: {e}"));
+
+    assert_no_errors(&result);
+    assert_no_warnings(&result);
+    assert_produces(&result, "uranium-235", 0.05);
+    assert_round_trip(&result);
+
+    // uranium-238 must be VOIDED, not exported — the whole point of the
+    // policy switch. Note: `result.solver_result` is the TOP-LEVEL solve
+    // (unaware of layout policy — voiding is layout-only per the RFP's
+    // D1 design), so it still legitimately reports uranium-238 in
+    // `surplus_outputs`; `bus::voider::synthesize_voiders` only mutates
+    // a layout-internal clone. The policy's effect is visible on the
+    // LAYOUT side: no perimeter export, plus a first-class
+    // `voided_streams` entry (checked below).
+    assert!(
+        result.layout.surplus_exits.iter().all(|(item, _, _)| item != "uranium-238"),
+        "uranium-238 should NOT have a perimeter surplus_exits entry under Void policy"
+    );
+
+    let voided = result
+        .layout
+        .voided_streams
+        .iter()
+        .find(|v| v.item == "uranium-238")
+        .unwrap_or_else(|| panic!("expected a uranium-238 entry in layout.voided_streams, got {:?}", result.layout.voided_streams));
+    assert_eq!(voided.recipe, "uranium-238-recycling");
+    assert!(
+        (6.5..7.7).contains(&voided.rate),
+        "expected voided uranium-238 rate near 7.09/s (hand-derived), got {}",
+        voided.rate
+    );
+
+    // Recycler bank must physically exist: right entity, right recipe,
+    // enough machines for the recorded gross rate.
+    let recycler_count = result
+        .layout
+        .entities
+        .iter()
+        .filter(|e| e.name == "recycler" && e.recipe.as_deref() == Some("uranium-238-recycling"))
+        .count();
+    assert!(
+        recycler_count >= voided.machines,
+        "expected >= {} recycler entities running uranium-238-recycling, found {}",
+        voided.machines,
+        recycler_count
+    );
+
+    // VoiderSynthesized trace event must actually fire.
+    let synthesized = result.trace_events.iter().any(|ev| {
+        matches!(ev, TraceEvent::VoiderSynthesized { item, .. } if item == "uranium-238")
+    });
+    assert!(synthesized, "expected a VoiderSynthesized trace event for uranium-238");
+}
+
+/// KC3 (voider purity, `docs/rfp-fulgora-scrap.md` kill criteria):
+/// synthesized voider rows must not perturb ANY non-surplus item's
+/// solver-reported rate or physical placement. Builds the SAME solve
+/// under `Export` and `Void` and asserts every uranium-processing
+/// machine (the only non-voider row in this fixture) lands at the
+/// identical entity/recipe/position in both layouts. Scoped to machine
+/// entities (not full entity-set equality) because bus width can
+/// legitimately shift once a solid item stops needing perimeter-export
+/// lane geometry — see the RFP's KC3 scoping note.
+#[test]
+fn voider_purity() {
+    let inputs: FxHashSet<String> = ["uranium-ore"].iter().map(|s| s.to_string()).collect();
+    let excluded: FxHashSet<String> = ["kovarex-enrichment-process"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+    let export_result = run_e2e_with_exclusions_and_surplus_policy(
+        "voider_purity_export",
+        "uranium-235",
+        0.05,
+        "assembling-machine-3",
+        None,
+        &inputs,
+        &excluded,
+        spaghettio_core::bus::layout::SurplusPolicy::Export,
+    )
+    .unwrap_or_else(|e| panic!("voider_purity (export leg): {e}"));
+    let void_result = run_e2e_with_exclusions_and_surplus_policy(
+        "voider_purity_void",
+        "uranium-235",
+        0.05,
+        "assembling-machine-3",
+        None,
+        &inputs,
+        &excluded,
+        spaghettio_core::bus::layout::SurplusPolicy::Void,
+    )
+    .unwrap_or_else(|e| panic!("voider_purity (void leg): {e}"));
+
+    assert_no_errors(&export_result);
+    assert_no_warnings(&export_result);
+    assert_no_errors(&void_result);
+    assert_no_warnings(&void_result);
+
+    // Solver-reported rate for the target item must be identical —
+    // voiding is layout-only, never a solver-level effect.
+    assert_produces(&export_result, "uranium-235", 0.05);
+    assert_produces(&void_result, "uranium-235", 0.05);
+
+    // Every uranium-processing machine (recipe, position, direction)
+    // must appear identically in both layouts — voider rows are pure
+    // sinks appended AFTER the real production graph; if adding them
+    // perturbed uranium-processing's own placement, that's KC3 firing.
+    let machines_of = |lr: &LayoutResult| -> std::collections::BTreeSet<(String, i32, i32, u8)> {
+        lr.entities
+            .iter()
+            .filter(|e| e.recipe.as_deref() == Some("uranium-processing"))
+            .map(|e| (e.name.clone(), e.x, e.y, e.direction as u8))
+            .collect()
+    };
+    let export_machines = machines_of(&export_result.layout);
+    let void_machines = machines_of(&void_result.layout);
+    assert!(!export_machines.is_empty(), "expected uranium-processing machines in the export layout");
+    assert_eq!(
+        export_machines, void_machines,
+        "uranium-processing machine placement diverged between Export and Void policies — KC3 violation"
     );
 }
 

@@ -14,6 +14,7 @@ fn main() {
     ].iter().map(|s| s.to_string()).collect();
     let sr = solver::solve("processing-unit", 2.0, &inputs, "assembling-machine-2").unwrap();
     let opts = LayoutOptions {
+        surplus_policy: Default::default(),
         max_belt_tier: Some("fast-transport-belt".to_string()),
         ..Default::default()
     };

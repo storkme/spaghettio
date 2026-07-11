@@ -30,6 +30,31 @@ pub fn is_machine_entity(entity: &str) -> bool {
     MACHINE_ENTITY_NAMES.contains(&entity)
 }
 
+/// Recycler direct-ejection tile (RFP Fulgora Phase 0 finding,
+/// `docs/rfp-fulgora-scrap.md`): the ONE tile a recycler credits its
+/// output onto directly, mining-drill-style — no output inserter, per
+/// `vector_to_place_result`. Only NORTH and SOUTH facing are supported
+/// (matches `templates::voider_row` and the RFP's documented E/W
+/// export-centering caveat — blueprint export doesn't swap width/height
+/// for rotated non-square machines). `(x, y)` is the entity's placement
+/// anchor (top-left tile of its 2×4 footprint). `None` for unsupported
+/// directions or non-recycler entities.
+pub fn recycler_eject_tile(entity: &str, x: i32, y: i32, direction: EntityDirection) -> Option<(i32, i32)> {
+    if entity != "recycler" {
+        return None;
+    }
+    match direction {
+        // West column (dx=0), one tile past the north edge (Phase 0:
+        // vector_to_place_result lands 0.6 tiles beyond the north edge,
+        // 0.5 tiles off-center toward -x).
+        EntityDirection::North => Some((x, y - 1)),
+        // 180° rotation of the North case: east column (dx=1), one tile
+        // past the south edge (height=4).
+        EntityDirection::South => Some((x + 1, y + 4)),
+        EntityDirection::East | EntityDirection::West => None,
+    }
+}
+
 /// Return the footprint `(width, height)` in tiles for the given entity name.
 ///
 /// All machines today are square, except `recycler` (Fulgora scrap recycler:

@@ -200,6 +200,7 @@ impl DecompositionCandidate for ModuleSizeSplit {
             strategy: LayoutStrategy::Pooled,
             max_belt_tier: opts.max_belt_tier.clone(),
             row_layout: opts.row_layout,
+            surplus_policy: opts.surplus_policy,
         };
         run_layout_with_retry(&transformed, &inner_opts)
     }
@@ -703,6 +704,7 @@ mod tests {
             regions: vec![],
             trace: None,
             surplus_exits: vec![],
+            voided_streams: vec![],
         }
     }
 
@@ -722,7 +724,7 @@ mod tests {
         solver.machines.push(MachineSpec {
             entity: "assembling-machine-1".to_string(),
             recipe: "iron-gear-wheel".to_string(),
-            self_loop: vec![],
+            self_loop: vec![], voider: false,
             count: 1.0,
             inputs: vec![],
             outputs: vec![ItemFlow {
@@ -747,7 +749,7 @@ mod tests {
         solver.machines.push(MachineSpec {
             entity: "assembling-machine-1".to_string(),
             recipe: "iron-gear-wheel".to_string(),
-            self_loop: vec![],
+            self_loop: vec![], voider: false,
             count: 2.0, // 2 machines × 1/s = 2/s production
             inputs: vec![],
             outputs: vec![ItemFlow {
@@ -776,7 +778,7 @@ mod tests {
         solver.machines.push(MachineSpec {
             entity: "electric-furnace".to_string(),
             recipe: "iron-plate".to_string(),
-            self_loop: vec![],
+            self_loop: vec![], voider: false,
             count: 5.0, // big internal item — not external, doesn't count
             inputs: vec![],
             outputs: vec![ItemFlow {

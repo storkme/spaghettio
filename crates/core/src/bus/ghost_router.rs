@@ -1222,7 +1222,30 @@ pub fn route_bus_ghost(
     // trunk column": West for westward rows (trunk is west of the exit), West
     // for eastward rows too (trunk is west of the row start at x = bus_width,
     // and the ret walks back west to it).
-    let row_exit_origin = |row: &RowSpan| -> (i32, i32) {
+    //
+    // `item` picks which of the row's (up to two) output belts to exit
+    // from: a row with a D2b secondary solid output
+    // (`RowSpan::secondary_output_belt`, RFP Fulgora
+    // `docs/rfp-fulgora-scrap.md`) has TWO physically distinct belts at
+    // different y — the primary (`output_belt_y`, item = the row's
+    // first solid output) and the secondary (its own y, one row over).
+    // Defaulting to `output_belt_y` unconditionally (as this helper did
+    // before the secondary-output-as-real-lane-source case existed)
+    // routes a secondary item's ret spec from the WRONG physical belt —
+    // silently correct-looking (A* still finds *a* path) but crossing
+    // the primary item's own belt/merge zone, since the x-range is
+    // identical between the two (same per-machine columns) and only y
+    // differs.
+    let row_exit_origin = |row: &RowSpan, item: &str| -> (i32, i32) {
+        if let Some((sec_item, sec_y)) = &row.secondary_output_belt {
+            if sec_item == item {
+                return if row.output_east {
+                    (row.output_belt_x_max + 1, *sec_y)
+                } else {
+                    (row.output_belt_x_min - 1, *sec_y)
+                };
+            }
+        }
         let out_y = row.output_belt_y;
         if row.output_east {
             (row.output_belt_x_max + 1, out_y)
@@ -1283,7 +1306,7 @@ pub fn route_bus_ghost(
                     continue;
                 }
                 let row = &row_spans[pri];
-                let (start_x, out_y) = row_exit_origin(row);
+                let (start_x, out_y) = row_exit_origin(row, &lane.item);
                 let goal_x = x + 1;
                 // Skip the spec entirely when the exit lands west of (or at)
                 // the goal — the row's own exit belt already covers it and
@@ -1328,7 +1351,7 @@ pub fn route_bus_ghost(
                     continue;
                 }
                 let row = &row_spans[pri];
-                let (start_x, out_y) = row_exit_origin(row);
+                let (start_x, out_y) = row_exit_origin(row, &lane.item);
                 let goal_x = x + 1;
                 if start_x < goal_x {
                     continue;
@@ -1462,7 +1485,7 @@ pub fn route_bus_ghost(
                                 continue;
                             }
                             let row = &row_spans[pri];
-                            let (start_x, out_y) = row_exit_origin(row);
+                            let (start_x, out_y) = row_exit_origin(row, &lane.item);
                             if let Some(&input_x) = input_xs.get(i) {
                                 let input_y = origin_y;
                                 let feeder_key =
@@ -3057,6 +3080,116 @@ pub fn route_bus_ghost(
     }
 
     // -------------------------------------------------------------------------
+    // Step 7c (gather): voided solid surplus streams (RFP Fulgora Phase 2,
+    // `docs/rfp-fulgora-scrap.md` D1) — synthesized voider rows
+    // (`RowSpan.spec.voider`), not `solver_result.surplus_outputs` (the
+    // item was already removed from there by
+    // `bus::voider::synthesize_voiders` so Step 7b above skips it).
+    // Reuses the EXACT same producer-row gathering + `merge_output_rows`
+    // machinery as Step 7b — a voided item's producer row is the same
+    // physical shape (D2a primary or D2b secondary output) a still-
+    // exported surplus item would have. `merge_x_cursor`/`blocked_columns`
+    // continue from Step 7b so columns keep tiling east without overlap.
+    // The merged tail is connected to the voider row's own supply column
+    // AFTER the south-flush below (once `max_y` is final) instead of
+    // being flushed to the perimeter — see the connect loop after it.
+    let mut voider_tails: Vec<(String, PlacedEntity, usize)> = Vec::new();
+    for (voider_ri, voider_rs) in row_spans.iter().enumerate() {
+        if !voider_rs.spec.voider {
+            continue;
+        }
+        let Some(item) = voider_rs.spec.inputs.first().map(|f| f.item.clone()) else {
+            continue;
+        };
+        let mut output_rows: Vec<usize> = Vec::new();
+        let mut output_ys: Vec<i32> = Vec::new();
+        for (ri, rs) in row_spans.iter().enumerate() {
+            if rs.spec.voider {
+                continue;
+            }
+            let is_primary = rs
+                .spec
+                .outputs
+                .iter()
+                .find(|o| !o.is_fluid)
+                .is_some_and(|o| o.item == item);
+            if is_primary {
+                output_rows.push(ri);
+                output_ys.push(rs.output_belt_y);
+                continue;
+            }
+            if let Some((sec_item, sec_y)) = &rs.secondary_output_belt {
+                if sec_item == &item {
+                    output_rows.push(ri);
+                    output_ys.push(*sec_y);
+                }
+            }
+        }
+        if output_rows.is_empty() {
+            // Shouldn't happen — `synthesize_voiders` only synthesizes a
+            // voider MachineSpec for an item that WAS in
+            // `surplus_outputs`, which requires a producer. Leave the
+            // voider row's supply unconnected rather than panicking;
+            // `check_stranded_byproducts`-style physical cross-checks
+            // downstream will flag the unfed recycler bank honestly.
+            continue;
+        }
+        let (merge_ents, merge_end_y, item_merge_x) = merge_output_rows(
+            &output_rows,
+            &output_ys,
+            &item,
+            row_spans,
+            max_y,
+            max_belt_tier,
+            merge_x_cursor,
+            &blocked_columns,
+        );
+        blocked_columns.extend((item_merge_x - output_rows.len() as i32)..item_merge_x);
+        merge_x_cursor = item_merge_x + 1;
+        if !merge_ents.is_empty() {
+            crate::trace::emit(crate::trace::TraceEvent::OutputMergerCommitted {
+                item: item.clone(),
+                entities: merge_ents.clone(),
+            });
+        }
+        if let Some(last) = merge_ents.last() {
+            voider_tails.push((item.clone(), last.clone(), voider_ri));
+        }
+        entities.extend(merge_ents);
+        max_y = max_y.max(merge_end_y);
+        merge_max_x = merge_max_x.max(item_merge_x);
+    }
+
+    // -------------------------------------------------------------------------
+    // Voided-item corridor rows (RFP Fulgora Phase 2, D1): one south row
+    // per voided item, below the old `max_y`.
+    // -------------------------------------------------------------------------
+    // `check_belt_dead_ends` exempts a belt only when its NEXT tile is
+    // out of `layout.height` bounds — so every merge_tails/surplus_tails
+    // tail MUST be extended to the new true bottom edge once this pass
+    // grows the layout, or it stops being exempt (a real belt-dead-end).
+    // But extending them means their column now has a south-facing belt
+    // at EVERY row from their old position to the new bottom — including
+    // whichever row a corridor lands on. There's no "empty" row to
+    // sandwich into: the corridor's westward run crosses those columns
+    // no matter where it sits. So corridors don't try to dodge by row
+    // choice — they UG-hop over any such column instead (see the
+    // `protected_cols` handling in the connect loop below), the same
+    // way `templates::self_loop_row`'s corridors hop over unrelated
+    // structure. Corridors are computed BEFORE the south-flush so its
+    // target already accounts for them.
+    // KC4 (no default regression): `n_voided == 0` under `SurplusPolicy::
+    // Export` (voider_tails is always empty there) or any Void layout
+    // with nothing to void — `final_max_y` must equal `max_y` EXACTLY,
+    // not `max_y + 1`, or every south-flush grows by one row and every
+    // golden hash in the corpus moves. The +1 buffer row only exists to
+    // separate corridor rows from the flush target, so it's only needed
+    // when there's at least one corridor.
+    let n_voided = voider_tails.len() as i32;
+    let corridor_base_y = max_y;
+    let final_max_y = if n_voided > 0 { max_y + n_voided + 1 } else { max_y };
+
+    // -------------------------------------------------------------------------
     // South-flush: extend every merge cascade's tail belt down to the
     // FINAL `max_y` (RFP Fulgora D2a/D2b).
     // -------------------------------------------------------------------------
@@ -3067,13 +3200,15 @@ pub fn route_bus_ghost(
     // LATER item needs more splitter-rows and pushes `max_y` deeper, an
     // earlier item's tail now sits mid-layout with nothing below it: a
     // real dead-end by the check's own definition, not a false positive.
-    // Extending every tail down to `max_y - 1` keeps every cascade's
-    // true exit at the layout's actual bottom edge. No-op for any tail
-    // already at `max_y - 1` — i.e. every existing single-target-item
-    // fixture, since nothing else grows `max_y` after their own merge.
+    // Extending every tail down to `final_max_y - 1` keeps every
+    // cascade's true exit at the layout's actual bottom edge. No-op for
+    // any tail already there — i.e. every existing single-target-item
+    // fixture (and every `Export`-policy layout: `voider_tails` is
+    // always empty there, so `final_max_y == max_y`, byte-identical to
+    // pre-Phase-2 behaviour).
     for tail in &merge_tails {
         let mut y = tail.y;
-        while y < max_y - 1 {
+        while y < final_max_y - 1 {
             y += 1;
             entities.push(PlacedEntity {
                 name: tail.name.clone(),
@@ -3089,7 +3224,7 @@ pub fn route_bus_ghost(
     }
     for (item, tail) in &surplus_tails {
         let mut y = tail.y;
-        while y < max_y - 1 {
+        while y < final_max_y - 1 {
             y += 1;
             entities.push(PlacedEntity {
                 name: tail.name.clone(),
@@ -3111,6 +3246,137 @@ pub fn route_bus_ghost(
             x: tail.x,
             y,
         });
+    }
+    max_y = max_y.max(final_max_y);
+
+    // -------------------------------------------------------------------------
+    // Step 7c (connect): route each voided item's merged tail to its
+    // voider row's supply column, now that `max_y` is final (every
+    // south-flush above has run).
+    // -------------------------------------------------------------------------
+    for (idx, (_item, tail, voider_ri)) in voider_tails.iter().enumerate() {
+        let Some(voider_rs) = row_spans.get(*voider_ri) else { continue };
+        let Some(&near_y) = voider_rs.input_belt_y.first() else { continue };
+        let supply_x = bw;
+        let supply_y = near_y + 1; // the template's pre-placed north-facing supply tile
+        let corridor_y = (corridor_base_y + idx as i32).max(supply_y + 2);
+        let merge_x = tail.x;
+
+        // A. South column from the merge tail down to corridor_y - 1.
+        let mut y = tail.y;
+        while y < corridor_y - 1 {
+            y += 1;
+            entities.push(PlacedEntity {
+                name: tail.name.clone(),
+                x: merge_x,
+                y,
+                direction: EntityDirection::South,
+                carries: tail.carries.clone(),
+                segment_id: tail.segment_id.clone(),
+                rate: tail.rate,
+                ..Default::default()
+            });
+        }
+        // B. Corner: turn WEST at the corridor row.
+        entities.push(PlacedEntity {
+            name: tail.name.clone(),
+            x: merge_x,
+            y: corridor_y,
+            direction: EntityDirection::West,
+            carries: tail.carries.clone(),
+            segment_id: tail.segment_id.clone(),
+            rate: tail.rate,
+            ..Default::default()
+        });
+        // C. Westward run across the corridor row to just east of the
+        // supply column. `merge_tails`/`surplus_tails` (and every OTHER
+        // voided item's own merge column) get extended straight down
+        // through their own column regardless of what row this corridor
+        // sits on, so any of THEIR x columns this run crosses already
+        // has a south-facing belt sitting on this exact row — UG-hop
+        // over each one (entrance east of it, exit west of it) instead
+        // of overlapping or feeding into it.
+        let protected_cols: FxHashSet<i32> = merge_tails
+            .iter()
+            .map(|t| t.x)
+            .chain(surplus_tails.iter().map(|(_, t)| t.x))
+            .chain(voider_tails.iter().map(|(_, t, _)| t.x))
+            .filter(|&x| x != merge_x)
+            .collect();
+        let ug_belt = underground_for_belt(&tail.name);
+        let mut in_ug = false;
+        for x in ((supply_x + 1)..merge_x).rev() {
+            if protected_cols.contains(&x) {
+                if !in_ug {
+                    // Convert the last-pushed tile (at x + 1 — either
+                    // corner B or the previous plain run tile) into the
+                    // UG-entrance, since it's what actually feeds this hop.
+                    if let Some(last) = entities.last_mut() {
+                        if last.x == x + 1 && last.y == corridor_y {
+                            last.name = ug_belt.to_string();
+                            last.io_type = Some("input".to_string());
+                        }
+                    }
+                    in_ug = true;
+                }
+                continue;
+            }
+            if in_ug {
+                entities.push(PlacedEntity {
+                    name: ug_belt.to_string(),
+                    x,
+                    y: corridor_y,
+                    direction: EntityDirection::West,
+                    io_type: Some("output".to_string()),
+                    carries: tail.carries.clone(),
+                    segment_id: tail.segment_id.clone(),
+                    rate: tail.rate,
+                    ..Default::default()
+                });
+                in_ug = false;
+                continue;
+            }
+            entities.push(PlacedEntity {
+                name: tail.name.clone(),
+                x,
+                y: corridor_y,
+                direction: EntityDirection::West,
+                carries: tail.carries.clone(),
+                segment_id: tail.segment_id.clone(),
+                rate: tail.rate,
+                ..Default::default()
+            });
+        }
+        // D. Corner: turn NORTH into the supply column.
+        entities.push(PlacedEntity {
+            name: tail.name.clone(),
+            x: supply_x,
+            y: corridor_y,
+            direction: EntityDirection::North,
+            carries: tail.carries.clone(),
+            segment_id: tail.segment_id.clone(),
+            rate: tail.rate,
+            ..Default::default()
+        });
+        // E. Northward run up to (but not including) the row template's
+        // own pre-placed supply tile at `supply_y`.
+        for y in ((supply_y + 1)..corridor_y).rev() {
+            entities.push(PlacedEntity {
+                name: tail.name.clone(),
+                x: supply_x,
+                y,
+                direction: EntityDirection::North,
+                carries: tail.carries.clone(),
+                segment_id: tail.segment_id.clone(),
+                rate: tail.rate,
+                ..Default::default()
+            });
+        }
+
+        // Safety net only — `final_max_y` (used to size the south-flush
+        // above) already reserves `corridor_y`'s row in the common case;
+        // this only bites if `supply_y + 2` pushed `corridor_y` past it.
+        max_y = max_y.max(corridor_y + 1);
     }
 
     // -------------------------------------------------------------------------

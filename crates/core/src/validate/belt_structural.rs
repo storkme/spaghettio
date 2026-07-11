@@ -138,11 +138,15 @@ pub fn check_belt_loops(layout: &LayoutResult) -> Vec<ValidationIssue> {
 
     // Balancer templates legitimately contain loops (splitter recirculation),
     // and so do self-loop rows (e.g. kovarex enrichment): a priority
-    // splitter deliberately recirculates its loop-back branch. Exclude
-    // tiles belonging to either from loop detection.
+    // splitter deliberately recirculates its loop-back branch. Voider
+    // rows (RFP Fulgora Phase 2, `docs/rfp-fulgora-scrap.md` D1) are the
+    // same shape without a splitter — a recycler bank recirculates its
+    // own ejected output 100% back into its own input, a genuine
+    // physical cycle. Exclude tiles belonging to any of the three from
+    // loop detection.
     let balancer_tiles: FxHashSet<(i32, i32)> = layout.entities.iter()
         .filter(|e| e.segment_id.as_deref().is_some_and(|s| {
-            s.starts_with("balancer:") || s.contains(":selfloop:")
+            s.starts_with("balancer:") || s.contains(":selfloop:") || s.contains(":voider:")
         }))
         .map(|e| (e.x, e.y))
         .collect();
@@ -608,6 +612,30 @@ pub fn check_output_belt_coverage(
         let (mw, mh) = (mw as i32, mh as i32);
         let my_tiles: FxHashSet<(i32, i32)> =
             (0..mw).flat_map(|dx| (0..mh).map(move |dy| (e.x + dx, e.y + dy))).collect();
+
+        // Recyclers (RFP Fulgora Phase 0/2, `docs/rfp-fulgora-scrap.md`)
+        // eject directly onto a belt tile, mining-drill-style — no
+        // output inserter, and none is wanted (Phase 0 physicals
+        // finding). `recycler_eject_tile` returns `None` for the
+        // unsupported E/W directions, correctly falling through to "no
+        // coverage" for those (nothing in this codebase places a
+        // recycler facing E/W today).
+        if let Some((ex, ey)) = crate::common::recycler_eject_tile(&e.name, e.x, e.y, e.direction) {
+            let has_eject_belt = belt_tiles.contains(&(ex, ey));
+            if !has_eject_belt {
+                issues.push(ValidationIssue::with_pos(
+                    Severity::Error,
+                    "output-belt",
+                    format!(
+                        "{} at ({},{}): no belt at the direct-ejection tile ({},{})",
+                        e.name, e.x, e.y, ex, ey
+                    ),
+                    e.x,
+                    e.y,
+                ));
+            }
+            continue;
+        }
 
         let has_output_belt = layout.entities.iter().any(|ins| {
             if !is_inserter(&ins.name) {
@@ -1465,7 +1493,7 @@ mod tests {
             machines: vec![MachineSpec {
                 entity: "assembling-machine-3".to_string(),
                 recipe: "fluid-recipe".to_string(),
-                self_loop: vec![],
+                self_loop: vec![], voider: false,
                 count: 1.0,
                 inputs: vec![],
                 outputs: vec![ItemFlow { item: "water".to_string(), rate: 10.0, is_fluid: true, module_id: 0 }],
@@ -1496,7 +1524,7 @@ mod tests {
             machines: vec![MachineSpec {
                 entity: "assembling-machine-3".to_string(),
                 recipe: "iron-gear-wheel".to_string(),
-                self_loop: vec![],
+                self_loop: vec![], voider: false,
                 count: 1.0,
                 inputs: vec![ItemFlow { item: "iron-plate".to_string(), rate: 5.0, is_fluid: false, module_id: 0 }],
                 outputs: vec![ItemFlow {
@@ -1529,7 +1557,7 @@ mod tests {
             machines: vec![MachineSpec {
                 entity: "assembling-machine-3".to_string(),
                 recipe: "iron-gear-wheel".to_string(),
-                self_loop: vec![],
+                self_loop: vec![], voider: false,
                 count: 2.0,
                 inputs: vec![ItemFlow { item: "iron-plate".to_string(), rate: 5.0, is_fluid: false, module_id: 0 }],
                 outputs: vec![ItemFlow {
@@ -1575,7 +1603,7 @@ mod tests {
                 machines: vec![MachineSpec {
                     entity: "assembling-machine-3".to_string(),
                     recipe: "transport-belt".to_string(),
-                    self_loop: vec![],
+                    self_loop: vec![], voider: false,
                     count,
                     inputs: vec![],
                     outputs: vec![ItemFlow {
@@ -1629,7 +1657,7 @@ mod tests {
             machines: vec![MachineSpec {
                 entity: "assembling-machine-3".to_string(),
                 recipe: "kovarex-enrichment-process".to_string(),
-                self_loop: vec![],
+                self_loop: vec![], voider: false,
                 count: 1.0,
                 inputs: vec![],
                 outputs: vec![ItemFlow {

@@ -534,3 +534,38 @@ and 3 wait on its artifacts as marked. Phase 3 is the long pole.
   centers entities as `(x + w/2, y + h/2)` but does not yet swap
   w/h for rotated non-square machines — recycler rows placed with
   east/west `direction` must handle this.*
+- *2026-07-11 — Phase 2 (voider rows) LANDED. v1 scope: self-voiders
+  only (`<item>-recycling`: X → fraction·X, e.g. uranium-238); cascade
+  hops and multi-output hops fall back to Export with a
+  `VoiderFallbackExport` trace event — never silently dropped. Fluid
+  surplus is never voided. Synthesis is `bus::voider::
+  synthesize_voiders` (layout-level clone of the SolverResult, one
+  shared `size_self_voider` sizing fn used by synthesis, placer, and
+  the stranded-byproducts check so they can't drift). Template:
+  north-facing recycler bank at pitch 2, direct ejection onto a
+  collector belt (`common::recycler_eject_tile`), 100% recirculation
+  corridor (`:voider:` segment tag, loop-exemption shares the
+  `:selfloop:` mechanism), inserter-fed from a near/far belt pair.
+  **One design deviation from D1's prose, recorded**: the voider row
+  is NOT fed by an ordinary west-trunk bus tap — the surplus producer
+  row is east-flowing (its primary output is the solve's target), and
+  forcing a west-directed ret spec walks backward across the row's own
+  output belt (reproducible junction/isolation/dead-end failures).
+  Instead ghost_router gained Step 7c: reuse the Step 7b
+  producer-gathering + `merge_output_rows` machinery, then route the
+  merged tail south-around to a dedicated supply column on the voider
+  row, UG-hopping foreign columns. Chasing this exposed a dormant
+  shared-code bug, fixed: `row_exit_origin` and lane `source_y`
+  ignored `RowSpan::secondary_output_belt`, so a D2b secondary item
+  with a real consumer would have exited from the primary belt's y
+  (nothing exercised that shape before; suite green + zero golden
+  movement proves the fix inert for existing layouts).
+  `check_stranded_byproducts` accepts voided streams only with
+  physical backing: `LayoutResult::voided_streams` ledger AND enough
+  recycler entities running the recipe. Fixtures green:
+  `tier_uranium_processing_voider` (0/0, 1 recycler eating 7.09/s
+  U-238) and `voider_purity` (KC3: uranium-processing machines
+  byte-identical between Export and Void legs — scoped to machine
+  entities because bus width legitimately shifts when an item stops
+  needing export lane geometry). KC4 held: zero golden-hash movement,
+  Export remains the default.*

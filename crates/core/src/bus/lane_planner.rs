@@ -212,6 +212,20 @@ pub fn plan_bus_lanes(
     // distinct `(item, k)` buckets here.
     let mut item_to_consumers: FxHashMap<(String, u32), Vec<usize>> = FxHashMap::default();
     for (idx, rs) in row_spans.iter().enumerate() {
+        // Voider rows (RFP Fulgora Phase 2, `docs/rfp-fulgora-scrap.md`
+        // D1) declare an `inputs` entry so `bus::placer::order_specs`
+        // sorts them after their producer, but they're deliberately
+        // invisible HERE: their producer row is typically EAST-flowing
+        // (its primary output is the solve's own target), and the
+        // ordinary west-trunk ret-spec assumes producers sit next to a
+        // WEST-side trunk — forcing that shape routes a return belt
+        // backwards across the row's own east-flowing output. Voider
+        // rows get their physical connection from `ghost_router`'s Step
+        // 7c instead, which reuses the same producer-gathering +
+        // `merge_output_rows` machinery the D2a/D2b export path uses.
+        if rs.spec.voider {
+            continue;
+        }
         for inp in &rs.spec.inputs {
             item_to_consumers
                 .entry((inp.item.clone(), inp.module_id))
@@ -274,11 +288,24 @@ pub fn plan_bus_lanes(
         let rate = item_to_rate.get(key).copied().unwrap_or(0.0);
         let is_fluid = item_is_fluid.get(key).copied().unwrap_or(false);
         let (item, module_id) = key.clone();
+        // A row with a D2b secondary solid output (RFP Fulgora
+        // `docs/rfp-fulgora-scrap.md`) has TWO physically distinct
+        // output belts at different y. If this lane's item is the
+        // secondary one, anchor `source_y` there instead of the
+        // primary's `output_belt_y` — otherwise the lane's vertical
+        // trunk-column reservation (see `layout.rs`'s pole occupancy)
+        // anchors at the wrong row.
+        let source_y = row_spans[first_producer]
+            .secondary_output_belt
+            .as_ref()
+            .filter(|(sec_item, _)| sec_item == &item)
+            .map(|(_, sec_y)| *sec_y)
+            .unwrap_or(row_spans[first_producer].output_belt_y);
         lanes.push(BusLane {
             item,
             module_id,
             x: 0,
-            source_y: row_spans[first_producer].output_belt_y,
+            source_y,
             consumer_rows: consumers,
             producer_row: Some(first_producer),
             rate,
@@ -1031,7 +1058,7 @@ mod tests {
             spec: MachineSpec {
                 entity: "assembling-machine-3".to_string(),
                 recipe: recipe.to_string(),
-                self_loop: vec![],
+                self_loop: vec![], voider: false,
                 count: machine_count as f64,
                 inputs,
                 outputs,
@@ -1122,7 +1149,7 @@ mod tests {
             machines: vec![MachineSpec {
                 entity: "assembling-machine-3".to_string(),
                 recipe: "iron-gear-wheel".to_string(),
-                self_loop: vec![],
+                self_loop: vec![], voider: false,
                 count: 1.0,
                 inputs: vec![ItemFlow { item: "iron-plate".to_string(), rate: 2.0, is_fluid: false, module_id: 0 }],
                 outputs: vec![ItemFlow { item: "iron-gear-wheel".to_string(), rate: 1.0, is_fluid: false, module_id: 0 }],
@@ -1139,7 +1166,7 @@ mod tests {
             machines: vec![MachineSpec {
                 entity: "assembling-machine-3".to_string(),
                 recipe: "plastic-bar".to_string(),
-                self_loop: vec![],
+                self_loop: vec![], voider: false,
                 count: 1.0,
                 inputs: vec![
                     ItemFlow { item: "coal".to_string(), rate: 1.5, is_fluid: false, module_id: 0 },

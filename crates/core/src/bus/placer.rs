@@ -372,6 +372,12 @@ pub enum RowKind {
     /// fish-breeding's water) — only legal alongside `has_minor == false`.
     /// See `templates::self_loop_row`.
     SelfLoop { has_minor: bool, has_fluid: bool },
+    /// Layout-synthesized voider row (RFP Fulgora Phase 2,
+    /// `docs/rfp-fulgora-scrap.md` D1): a recycler bank that
+    /// self-consumes a solid surplus stream. `MachineSpec.voider ==
+    /// true`. Non-square 2×4 machine, direct belt ejection (no output
+    /// inserter), no declared bus output. See `templates::voider_row`.
+    Voider,
 }
 
 impl RowKind {
@@ -407,12 +413,26 @@ impl RowKind {
                 let base = if *has_minor { 14 } else { 11 };
                 base + if *has_fluid { 1 } else { 0 }
             }
+            // Collector/eject row (0) + 4-tall recycler (1..4) +
+            // inserter row (5) + near/tap belt (6) + far/recirc belt
+            // (7) = 8. See `templates::voider_row`.
+            RowKind::Voider => 8,
         }
     }
 }
 
 /// Classify a spec into a RowKind.
 fn row_kind(spec: &MachineSpec) -> RowKind {
+    // Voider rows (RFP Fulgora Phase 2, `docs/rfp-fulgora-scrap.md` D1)
+    // short-circuit BEFORE the square-machine debug_assert below —
+    // `recycler` is 2×4, non-square, and would trip that assert
+    // (working as intended: any OTHER non-square machine reaching that
+    // point is a real bug, not this one). Mirrors the self-loop
+    // short-circuit immediately below for the same reason.
+    if spec.voider {
+        return RowKind::Voider;
+    }
+
     // Self-loop recipes (kovarex-class) short-circuit before the
     // ordinary solid/fluid counting cascade — `spec.inputs`/`outputs`
     // carry only NET flows for the self-loop item(s) (see
@@ -1025,6 +1045,39 @@ pub(crate) fn build_one_row(
             let out_y = y_cursor + dy_major_collect;
             (ents, rh, input_ys, out_y)
         }
+        RowKind::Voider => {
+            // Voider specs (`bus::voider::synthesize_voiders`) carry
+            // exactly one input: the surplus item, at the PER-MACHINE
+            // tap rate (matches every other `MachineSpec`'s convention
+            // — total = rate * count). The recirculated (far-belt) rate
+            // isn't threaded through `MachineSpec` — it's re-derived
+            // here from the same recipe data `synthesize_voiders` used,
+            // via the shared `bus::voider::size_self_voider` sizing
+            // function, so the two call sites can't drift out of sync.
+            let item = solid_inputs.first().map(|f| f.item.as_str()).unwrap_or("");
+            let near_rate_per_machine = solid_inputs.first().map(|f| f.rate).unwrap_or(0.0);
+            let near_total = near_rate_per_machine * count as f64;
+            let far_rate = crate::bus::voider::size_self_voider(item, near_total)
+                .map(|sizing| crate::bus::voider::far_rate_per_machine(&sizing, near_total))
+                .unwrap_or(0.0);
+            let (ents, rh) = templates::voider_row(
+                &spec.recipe,
+                item,
+                count,
+                y_cursor,
+                bus_width,
+                near_rate_per_machine,
+                far_rate,
+                max_belt_tier,
+            );
+            // Mirrors `templates::voider_row`'s row-offset constants:
+            // near/tap belt at dy=6 (bus tap-off lands here), far/recirc
+            // belt at dy=7 (last row — used as a placeholder
+            // `output_belt_y`; the row declares no real bus output).
+            let input_ys = vec![y_cursor + 6];
+            let out_y = y_cursor + 7;
+            (ents, rh, input_ys, out_y)
+        }
     };
 
     // Stamp throughput rates onto row entities based on their carried item.
@@ -1333,7 +1386,7 @@ mod tests {
         MachineSpec {
             entity: "assembling-machine-2".to_string(),
             recipe: "iron-plate".to_string(),
-            self_loop: vec![],
+            self_loop: vec![], voider: false,
             count: 1.0,
             inputs: vec![ItemFlow {
                 item: "iron-ore".to_string(),
@@ -1354,7 +1407,7 @@ mod tests {
         MachineSpec {
             entity: "assembling-machine-2".to_string(),
             recipe: "iron-gear-wheel".to_string(),
-            self_loop: vec![],
+            self_loop: vec![], voider: false,
             count: 1.0,
             inputs: vec![ItemFlow {
                 item: "iron-plate".to_string(),
@@ -1380,7 +1433,7 @@ mod tests {
                 MachineSpec {
                     entity: "assembling-machine-2".to_string(),
                     recipe: "electronic-circuit".to_string(),
-                    self_loop: vec![],
+                    self_loop: vec![], voider: false,
                     count: 3.0,
                     inputs: vec![
                         ItemFlow {
@@ -1406,7 +1459,7 @@ mod tests {
                 MachineSpec {
                     entity: "assembling-machine-2".to_string(),
                     recipe: "copper-cable".to_string(),
-                    self_loop: vec![],
+                    self_loop: vec![], voider: false,
                     count: 3.0,
                     inputs: vec![ItemFlow {
                         item: "copper-plate".to_string(),
@@ -1424,7 +1477,7 @@ mod tests {
                 MachineSpec {
                     entity: "electric-furnace".to_string(),
                     recipe: "iron-plate".to_string(),
-                    self_loop: vec![],
+                    self_loop: vec![], voider: false,
                     count: 1.0,
                     inputs: vec![ItemFlow {
                         item: "iron-ore".to_string(),
@@ -1442,7 +1495,7 @@ mod tests {
                 MachineSpec {
                     entity: "electric-furnace".to_string(),
                     recipe: "copper-plate".to_string(),
-                    self_loop: vec![],
+                    self_loop: vec![], voider: false,
                     count: 2.0,
                     inputs: vec![ItemFlow {
                         item: "copper-ore".to_string(),
@@ -1513,7 +1566,7 @@ mod tests {
         let spec = MachineSpec {
             entity: "assembling-machine-2".to_string(),
             recipe: "test".to_string(),
-            self_loop: vec![],
+            self_loop: vec![], voider: false,
             count: 1.0,
             inputs: vec![],
             outputs: vec![ItemFlow {
@@ -1570,7 +1623,7 @@ mod tests {
         let spec_a = MachineSpec {
             entity: "assembling-machine-2".to_string(),
             recipe: "recipe-a".to_string(),
-            self_loop: vec![],
+            self_loop: vec![], voider: false,
             count: 1.0,
             inputs: vec![],
             outputs: vec![ItemFlow {
@@ -1583,7 +1636,7 @@ mod tests {
         let spec_b = MachineSpec {
             entity: "assembling-machine-2".to_string(),
             recipe: "recipe-b".to_string(),
-            self_loop: vec![],
+            self_loop: vec![], voider: false,
             count: 1.0,
             inputs: vec![],
             outputs: vec![ItemFlow {
@@ -1693,7 +1746,7 @@ mod tests {
         let spec = MachineSpec {
             entity: "assembling-machine-2".to_string(),
             recipe: "iron-plate".to_string(),
-            self_loop: vec![],
+            self_loop: vec![], voider: false,
             count: 20.0,
             inputs: vec![ItemFlow {
                 item: "iron-ore".to_string(),
@@ -1737,7 +1790,7 @@ mod tests {
         let spec = MachineSpec {
             entity: "assembling-machine-2".to_string(),
             recipe: "iron-gear-wheel".to_string(),
-            self_loop: vec![],
+            self_loop: vec![], voider: false,
             count: 16.0, // Forces a 2-row split with yellow belt
             inputs: vec![ItemFlow {
                 item: "iron-plate".to_string(),
@@ -1756,7 +1809,7 @@ mod tests {
         let plate_spec = MachineSpec {
             entity: "electric-furnace".to_string(),
             recipe: "iron-plate".to_string(),
-            self_loop: vec![],
+            self_loop: vec![], voider: false,
             count: 4.0,
             inputs: vec![ItemFlow {
                 item: "iron-ore".to_string(),
@@ -1877,7 +1930,7 @@ mod tests {
         let spec = MachineSpec {
             entity: "assembling-machine-2".to_string(),
             recipe: "electronic-circuit".to_string(),
-            self_loop: vec![],
+            self_loop: vec![], voider: false,
             count: 1.0,
             inputs: vec![
                 ItemFlow {
@@ -1908,7 +1961,7 @@ mod tests {
         let spec = MachineSpec {
             entity: "chemical-plant".to_string(),
             recipe: "plastic-bar".to_string(),
-            self_loop: vec![],
+            self_loop: vec![], voider: false,
             count: 1.0,
             inputs: vec![
                 ItemFlow {
@@ -1939,7 +1992,7 @@ mod tests {
         let spec = MachineSpec {
             entity: "oil-refinery".to_string(),
             recipe: "basic-oil-processing".to_string(),
-            self_loop: vec![],
+            self_loop: vec![], voider: false,
             count: 1.0,
             inputs: vec![ItemFlow {
                 item: "crude-oil".to_string(),
@@ -1962,7 +2015,7 @@ mod tests {
         let spec = MachineSpec {
             entity: "chemical-plant".to_string(),
             recipe: "heavy-oil-cracking".to_string(),
-            self_loop: vec![],
+            self_loop: vec![], voider: false,
             count: 1.0,
             inputs: vec![
                 ItemFlow { item: "water".to_string(), rate: 30.0, is_fluid: true, module_id: 0 },
@@ -1983,7 +2036,7 @@ mod tests {
         let spec = MachineSpec {
             entity: "chemical-plant".to_string(),
             recipe: "sulfur".to_string(),
-            self_loop: vec![],
+            self_loop: vec![], voider: false,
             count: 1.0,
             inputs: vec![
                 ItemFlow { item: "water".to_string(), rate: 30.0, is_fluid: true, module_id: 0 },
@@ -2005,7 +2058,7 @@ mod tests {
         let spec = MachineSpec {
             entity: "foundry".to_string(),
             recipe: "molten-iron".to_string(),
-            self_loop: vec![],
+            self_loop: vec![], voider: false,
             count: 1.0,
             inputs: vec![ItemFlow {
                 item: "iron-ore".to_string(),
@@ -2029,7 +2082,7 @@ mod tests {
         let spec = MachineSpec {
             entity: "foundry".to_string(),
             recipe: "iron-plate".to_string(),
-            self_loop: vec![],
+            self_loop: vec![], voider: false,
             count: 1.0,
             inputs: vec![ItemFlow {
                 item: "iron-ore".to_string(),
@@ -2052,7 +2105,7 @@ mod tests {
         let spec = MachineSpec {
             entity: "assembling-machine-2".to_string(),
             recipe: "electronic-circuit".to_string(),
-            self_loop: vec![],
+            self_loop: vec![], voider: false,
             count: 3.0,
             inputs: vec![
                 ItemFlow {
@@ -2087,7 +2140,7 @@ mod tests {
         let spec = MachineSpec {
             entity: "chemical-plant".to_string(),
             recipe: "plastic-bar".to_string(),
-            self_loop: vec![],
+            self_loop: vec![], voider: false,
             count: 3.0,
             inputs: vec![
                 ItemFlow {
@@ -2123,7 +2176,7 @@ mod tests {
         let spec = MachineSpec {
             entity: "assembling-machine-2".to_string(),
             recipe: "example".to_string(),
-            self_loop: vec![],
+            self_loop: vec![], voider: false,
             count: 3.0,
             inputs: vec![
                 ItemFlow { item: "widget".to_string(), rate: 1.0, is_fluid: false, module_id: 0 },
@@ -2145,7 +2198,7 @@ mod tests {
         let cable = MachineSpec {
             entity: "assembling-machine-2".to_string(),
             recipe: "copper-cable".to_string(),
-            self_loop: vec![],
+            self_loop: vec![], voider: false,
             count: 4.0,
             inputs: vec![ItemFlow { item: "copper-plate".to_string(), rate: 1.0, is_fluid: false, module_id: 0 }],
             outputs: vec![ItemFlow { item: "copper-cable".to_string(), rate: 2.0, is_fluid: false, module_id: 0 }],
@@ -2153,7 +2206,7 @@ mod tests {
         let ec_a = MachineSpec {
             entity: "assembling-machine-2".to_string(),
             recipe: "electronic-circuit".to_string(),
-            self_loop: vec![],
+            self_loop: vec![], voider: false,
             count: 5.0,
             inputs: vec![ItemFlow { item: "copper-cable".to_string(), rate: 3.0, is_fluid: false, module_id: 0 }],
             outputs: vec![ItemFlow { item: "electronic-circuit".to_string(), rate: 1.0, is_fluid: false, module_id: 0 }],
@@ -2161,7 +2214,7 @@ mod tests {
         let ec_b = MachineSpec {
             entity: "assembling-machine-2".to_string(),
             recipe: "electronic-circuit".to_string(),
-            self_loop: vec![],
+            self_loop: vec![], voider: false,
             count: 7.0,
             inputs: vec![ItemFlow { item: "copper-cable".to_string(), rate: 3.0, is_fluid: false, module_id: 1 }],
             outputs: vec![ItemFlow { item: "electronic-circuit".to_string(), rate: 1.0, is_fluid: false, module_id: 0 }],

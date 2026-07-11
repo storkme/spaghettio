@@ -483,6 +483,27 @@ pub enum TraceEvent {
         y: i32,
     },
 
+    // RFP Fulgora Phase 2 (docs/rfp-fulgora-scrap.md D1): a solid surplus
+    // stream resolved to a self-voider recipe (`<item>-recycling`: X ->
+    // fraction*X) and a recycler bank was synthesized to consume it.
+    VoiderSynthesized {
+        item: String,
+        /// Surplus rate (items/s) the bank was sized to destroy.
+        rate: f64,
+        /// Recycler machine count placed for this bank.
+        machines: usize,
+    },
+
+    // A solid surplus stream under `SurplusPolicy::Void` could not be
+    // resolved to a synthesizable voider shape (no `<item>-recycling`
+    // recipe, or a multi-output / non-self cascade) and fell back to
+    // ordinary `SurplusPolicy::Export` routing instead of being silently
+    // dropped.
+    VoiderFallbackExport {
+        item: String,
+        reason: String,
+    },
+
     // External input lane consolidation — N consumer rows served by M trunk lanes
     LaneConsolidated {
         item: String,
