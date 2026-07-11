@@ -9028,6 +9028,7739 @@
           "type": "item"
         }
       ]
+    },
+    "steel-chest-recycling": {
+      "name": "steel-chest-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "steel-chest",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "steel-chest",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "express-underground-belt-recycling": {
+      "name": "express-underground-belt-recycling",
+      "category": "recycling",
+      "energy": 0.125,
+      "ingredients": [
+        {
+          "name": "express-underground-belt",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "express-underground-belt",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "turbo-underground-belt-recycling": {
+      "name": "turbo-underground-belt-recycling",
+      "category": "recycling",
+      "energy": 0.125,
+      "ingredients": [
+        {
+          "name": "turbo-underground-belt",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "turbo-underground-belt",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "fast-inserter-recycling": {
+      "name": "fast-inserter-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "fast-inserter",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "fast-inserter",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "inserter-recycling": {
+      "name": "inserter-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "inserter",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "inserter",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "rail-recycling": {
+      "name": "rail-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "rail",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "rail",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "car-recycling": {
+      "name": "car-recycling",
+      "category": "recycling",
+      "energy": 0.125,
+      "ingredients": [
+        {
+          "name": "car",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "car",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "passive-provider-chest-recycling": {
+      "name": "passive-provider-chest-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "passive-provider-chest",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "passive-provider-chest",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "foundation-recycling": {
+      "name": "foundation-recycling",
+      "category": "recycling",
+      "energy": 1.875,
+      "ingredients": [
+        {
+          "name": "foundation",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "foundation",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "landfill-recycling": {
+      "name": "landfill-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "landfill",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "landfill",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "stone-brick-recycling": {
+      "name": "stone-brick-recycling",
+      "category": "recycling",
+      "energy": 0.2,
+      "ingredients": [
+        {
+          "name": "stone-brick",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "stone-brick",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "blueprint-book-recycling": {
+      "name": "blueprint-book-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "blueprint-book",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "blueprint-book",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "blueprint-recycling": {
+      "name": "blueprint-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "blueprint",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "blueprint",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "deconstruction-planner-recycling": {
+      "name": "deconstruction-planner-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "deconstruction-planner",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "deconstruction-planner",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "upgrade-planner-recycling": {
+      "name": "upgrade-planner-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "upgrade-planner",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "upgrade-planner",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "captive-biter-spawner-recycling": {
+      "name": "captive-biter-spawner-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "captive-biter-spawner",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "captive-biter-spawner",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "biolab-recycling": {
+      "name": "biolab-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "biolab",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "biolab",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "electromagnetic-plant-recycling": {
+      "name": "electromagnetic-plant-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "electromagnetic-plant",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "electromagnetic-plant",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "lab-recycling": {
+      "name": "lab-recycling",
+      "category": "recycling",
+      "energy": 0.125,
+      "ingredients": [
+        {
+          "name": "lab",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "lab",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "efficiency-module-3-recycling": {
+      "name": "efficiency-module-3-recycling",
+      "category": "recycling",
+      "energy": 3.75,
+      "ingredients": [
+        {
+          "name": "efficiency-module-3",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "efficiency-module-3",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "empty-module-slot-recycling": {
+      "name": "empty-module-slot-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "empty-module-slot",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "empty-module-slot",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "coal-recycling": {
+      "name": "coal-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "coal",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "coal",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "copper-ore-recycling": {
+      "name": "copper-ore-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "copper-ore",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "copper-ore",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "ice-recycling": {
+      "name": "ice-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "ice",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "ice",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "iron-ore-recycling": {
+      "name": "iron-ore-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "iron-ore",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "iron-ore",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "raw-fish-recycling": {
+      "name": "raw-fish-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "raw-fish",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "raw-fish",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "stone-recycling": {
+      "name": "stone-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "stone",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "stone",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "uranium-ore-recycling": {
+      "name": "uranium-ore-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "uranium-ore",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "uranium-ore",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "wood-recycling": {
+      "name": "wood-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "wood",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "wood",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "carbon-recycling": {
+      "name": "carbon-recycling",
+      "category": "recycling",
+      "energy": 0.0625,
+      "ingredients": [
+        {
+          "name": "carbon",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "carbon",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "copper-plate-recycling": {
+      "name": "copper-plate-recycling",
+      "category": "recycling",
+      "energy": 0.2,
+      "ingredients": [
+        {
+          "name": "copper-plate",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "copper-plate",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "explosives-recycling": {
+      "name": "explosives-recycling",
+      "category": "recycling",
+      "energy": 0.25,
+      "ingredients": [
+        {
+          "name": "explosives",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "explosives",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "iron-plate-recycling": {
+      "name": "iron-plate-recycling",
+      "category": "recycling",
+      "energy": 0.2,
+      "ingredients": [
+        {
+          "name": "iron-plate",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "iron-plate",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "plastic-bar-recycling": {
+      "name": "plastic-bar-recycling",
+      "category": "recycling",
+      "energy": 0.0625,
+      "ingredients": [
+        {
+          "name": "plastic-bar",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "plastic-bar",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "solid-fuel-recycling": {
+      "name": "solid-fuel-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "solid-fuel",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "solid-fuel",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "steel-plate-recycling": {
+      "name": "steel-plate-recycling",
+      "category": "recycling",
+      "energy": 1,
+      "ingredients": [
+        {
+          "name": "steel-plate",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "steel-plate",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "sulfur-recycling": {
+      "name": "sulfur-recycling",
+      "category": "recycling",
+      "energy": 0.0625,
+      "ingredients": [
+        {
+          "name": "sulfur",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "sulfur",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "crude-oil-barrel-recycling": {
+      "name": "crude-oil-barrel-recycling",
+      "category": "recycling",
+      "energy": 0.0125,
+      "ingredients": [
+        {
+          "name": "crude-oil-barrel",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "barrel",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "fluoroketone-cold-barrel-recycling": {
+      "name": "fluoroketone-cold-barrel-recycling",
+      "category": "recycling",
+      "energy": 0.0125,
+      "ingredients": [
+        {
+          "name": "fluoroketone-cold-barrel",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "barrel",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "fluoroketone-hot-barrel-recycling": {
+      "name": "fluoroketone-hot-barrel-recycling",
+      "category": "recycling",
+      "energy": 0.0125,
+      "ingredients": [
+        {
+          "name": "fluoroketone-hot-barrel",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "barrel",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "heavy-oil-barrel-recycling": {
+      "name": "heavy-oil-barrel-recycling",
+      "category": "recycling",
+      "energy": 0.0125,
+      "ingredients": [
+        {
+          "name": "heavy-oil-barrel",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "barrel",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "light-oil-barrel-recycling": {
+      "name": "light-oil-barrel-recycling",
+      "category": "recycling",
+      "energy": 0.0125,
+      "ingredients": [
+        {
+          "name": "light-oil-barrel",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "barrel",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "lubricant-barrel-recycling": {
+      "name": "lubricant-barrel-recycling",
+      "category": "recycling",
+      "energy": 0.0125,
+      "ingredients": [
+        {
+          "name": "lubricant-barrel",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "barrel",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "petroleum-gas-barrel-recycling": {
+      "name": "petroleum-gas-barrel-recycling",
+      "category": "recycling",
+      "energy": 0.0125,
+      "ingredients": [
+        {
+          "name": "petroleum-gas-barrel",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "barrel",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "water-barrel-recycling": {
+      "name": "water-barrel-recycling",
+      "category": "recycling",
+      "energy": 0.0125,
+      "ingredients": [
+        {
+          "name": "water-barrel",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "barrel",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "barrel-recycling": {
+      "name": "barrel-recycling",
+      "category": "recycling",
+      "energy": 0.0625,
+      "ingredients": [
+        {
+          "name": "barrel",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "steel-plate",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "engine-unit-recycling": {
+      "name": "engine-unit-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "engine-unit",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "engine-unit",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "iron-stick-recycling": {
+      "name": "iron-stick-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "iron-stick",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "iron-stick",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "rocket-fuel-recycling": {
+      "name": "rocket-fuel-recycling",
+      "category": "recycling",
+      "energy": 0.9375,
+      "ingredients": [
+        {
+          "name": "rocket-fuel",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "rocket-fuel",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "depleted-uranium-fuel-cell-recycling": {
+      "name": "depleted-uranium-fuel-cell-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "depleted-uranium-fuel-cell",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "depleted-uranium-fuel-cell",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "nuclear-fuel-recycling": {
+      "name": "nuclear-fuel-recycling",
+      "category": "recycling",
+      "energy": 5.625,
+      "ingredients": [
+        {
+          "name": "nuclear-fuel",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "uranium-235",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "rocket-fuel",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "uranium-235-recycling": {
+      "name": "uranium-235-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "uranium-235",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "uranium-235",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "uranium-238-recycling": {
+      "name": "uranium-238-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "uranium-238",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "uranium-238",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "uranium-fuel-cell-recycling": {
+      "name": "uranium-fuel-cell-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "uranium-fuel-cell",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "uranium-fuel-cell",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "calcite-recycling": {
+      "name": "calcite-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "calcite",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "calcite",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "tungsten-carbide-recycling": {
+      "name": "tungsten-carbide-recycling",
+      "category": "recycling",
+      "energy": 0.0625,
+      "ingredients": [
+        {
+          "name": "tungsten-carbide",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "tungsten-carbide",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "tungsten-ore-recycling": {
+      "name": "tungsten-ore-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "tungsten-ore",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "tungsten-ore",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "tungsten-plate-recycling": {
+      "name": "tungsten-plate-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "tungsten-plate",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "tungsten-plate",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "scrap-recycling": {
+      "name": "scrap-recycling",
+      "category": "recycling-or-hand-crafting",
+      "energy": 0.2,
+      "ingredients": [
+        {
+          "name": "scrap",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "iron-gear-wheel",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.2
+        },
+        {
+          "name": "solid-fuel",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.07
+        },
+        {
+          "name": "concrete",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.06
+        },
+        {
+          "name": "ice",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.05
+        },
+        {
+          "name": "steel-plate",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.04
+        },
+        {
+          "name": "battery",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.04
+        },
+        {
+          "name": "stone",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.04
+        },
+        {
+          "name": "advanced-circuit",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.03
+        },
+        {
+          "name": "copper-cable",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.03
+        },
+        {
+          "name": "processing-unit",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.02
+        },
+        {
+          "name": "low-density-structure",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.01
+        },
+        {
+          "name": "holmium-ore",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.01
+        }
+      ]
+    },
+    "holmium-ore-recycling": {
+      "name": "holmium-ore-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "holmium-ore",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "holmium-ore",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "holmium-plate-recycling": {
+      "name": "holmium-plate-recycling",
+      "category": "recycling",
+      "energy": 0.0625,
+      "ingredients": [
+        {
+          "name": "holmium-plate",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "holmium-plate",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "supercapacitor-recycling": {
+      "name": "supercapacitor-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "supercapacitor",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "holmium-plate",
+          "amount": 0.5,
+          "type": "item"
+        },
+        {
+          "name": "superconductor",
+          "amount": 0.5,
+          "type": "item"
+        },
+        {
+          "name": "electronic-circuit",
+          "amount": 1,
+          "type": "item"
+        },
+        {
+          "name": "battery",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "superconductor-recycling": {
+      "name": "superconductor-recycling",
+      "category": "recycling",
+      "energy": 0.3125,
+      "ingredients": [
+        {
+          "name": "superconductor",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "superconductor",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "copper-bacteria-recycling": {
+      "name": "copper-bacteria-recycling",
+      "category": "recycling",
+      "energy": 0.0625,
+      "ingredients": [
+        {
+          "name": "copper-bacteria",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "copper-bacteria",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "iron-bacteria-recycling": {
+      "name": "iron-bacteria-recycling",
+      "category": "recycling",
+      "energy": 0.0625,
+      "ingredients": [
+        {
+          "name": "iron-bacteria",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "iron-bacteria",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "jellynut-recycling": {
+      "name": "jellynut-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "jellynut",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "jellynut",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "jellynut-seed-recycling": {
+      "name": "jellynut-seed-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "jellynut-seed",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "jellynut-seed",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "nutrients-recycling": {
+      "name": "nutrients-recycling",
+      "category": "recycling",
+      "energy": 0.125,
+      "ingredients": [
+        {
+          "name": "nutrients",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "spoilage",
+          "amount": 2.5,
+          "type": "item"
+        }
+      ]
+    },
+    "spoilage-recycling": {
+      "name": "spoilage-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "spoilage",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "spoilage",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "yumako-recycling": {
+      "name": "yumako-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "yumako",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "yumako",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "yumako-seed-recycling": {
+      "name": "yumako-seed-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "yumako-seed",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "yumako-seed",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "bioflux-recycling": {
+      "name": "bioflux-recycling",
+      "category": "recycling",
+      "energy": 0.375,
+      "ingredients": [
+        {
+          "name": "bioflux",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "bioflux",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "biter-egg-recycling": {
+      "name": "biter-egg-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "biter-egg",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "biter-egg",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "carbon-fiber-recycling": {
+      "name": "carbon-fiber-recycling",
+      "category": "recycling",
+      "energy": 0.3125,
+      "ingredients": [
+        {
+          "name": "carbon-fiber",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "carbon-fiber",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "jelly-recycling": {
+      "name": "jelly-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "jelly",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "jelly",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "pentapod-egg-recycling": {
+      "name": "pentapod-egg-recycling",
+      "category": "recycling",
+      "energy": 0.9375,
+      "ingredients": [
+        {
+          "name": "pentapod-egg",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "pentapod-egg",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "yumako-mash-recycling": {
+      "name": "yumako-mash-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "yumako-mash",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "yumako-mash",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "tree-seed-recycling": {
+      "name": "tree-seed-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "tree-seed",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "tree-seed",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "fusion-power-cell-recycling": {
+      "name": "fusion-power-cell-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "fusion-power-cell",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "fusion-power-cell",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "lithium-plate-recycling": {
+      "name": "lithium-plate-recycling",
+      "category": "recycling",
+      "energy": 0.4,
+      "ingredients": [
+        {
+          "name": "lithium-plate",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "lithium-plate",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "lithium-recycling": {
+      "name": "lithium-recycling",
+      "category": "recycling",
+      "energy": 1.25,
+      "ingredients": [
+        {
+          "name": "lithium",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "lithium",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "quantum-processor-recycling": {
+      "name": "quantum-processor-recycling",
+      "category": "recycling",
+      "energy": 1.875,
+      "ingredients": [
+        {
+          "name": "quantum-processor",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "quantum-processor",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "agricultural-science-pack-recycling": {
+      "name": "agricultural-science-pack-recycling",
+      "category": "recycling",
+      "energy": 0.25,
+      "ingredients": [
+        {
+          "name": "agricultural-science-pack",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "agricultural-science-pack",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "automation-science-pack-recycling": {
+      "name": "automation-science-pack-recycling",
+      "category": "recycling",
+      "energy": 0.3125,
+      "ingredients": [
+        {
+          "name": "automation-science-pack",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "automation-science-pack",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "chemical-science-pack-recycling": {
+      "name": "chemical-science-pack-recycling",
+      "category": "recycling",
+      "energy": 1.5,
+      "ingredients": [
+        {
+          "name": "chemical-science-pack",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "chemical-science-pack",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "coin-recycling": {
+      "name": "coin-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "coin",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "coin",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "cryogenic-science-pack-recycling": {
+      "name": "cryogenic-science-pack-recycling",
+      "category": "recycling",
+      "energy": 1.25,
+      "ingredients": [
+        {
+          "name": "cryogenic-science-pack",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "cryogenic-science-pack",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "electromagnetic-science-pack-recycling": {
+      "name": "electromagnetic-science-pack-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "electromagnetic-science-pack",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "electromagnetic-science-pack",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "logistic-science-pack-recycling": {
+      "name": "logistic-science-pack-recycling",
+      "category": "recycling",
+      "energy": 0.375,
+      "ingredients": [
+        {
+          "name": "logistic-science-pack",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "logistic-science-pack",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "metallurgic-science-pack-recycling": {
+      "name": "metallurgic-science-pack-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "metallurgic-science-pack",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "metallurgic-science-pack",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "military-science-pack-recycling": {
+      "name": "military-science-pack-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "military-science-pack",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "military-science-pack",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "production-science-pack-recycling": {
+      "name": "production-science-pack-recycling",
+      "category": "recycling",
+      "energy": 1.3125,
+      "ingredients": [
+        {
+          "name": "production-science-pack",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "production-science-pack",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "promethium-science-pack-recycling": {
+      "name": "promethium-science-pack-recycling",
+      "category": "recycling",
+      "energy": 0.3125,
+      "ingredients": [
+        {
+          "name": "promethium-science-pack",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "promethium-science-pack",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "science-recycling": {
+      "name": "science-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "science",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "science",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "space-science-pack-recycling": {
+      "name": "space-science-pack-recycling",
+      "category": "recycling",
+      "energy": 0.9375,
+      "ingredients": [
+        {
+          "name": "space-science-pack",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "space-science-pack",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "utility-science-pack-recycling": {
+      "name": "utility-science-pack-recycling",
+      "category": "recycling",
+      "energy": 1.3125,
+      "ingredients": [
+        {
+          "name": "utility-science-pack",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "utility-science-pack",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "cargo-landing-pad-recycling": {
+      "name": "cargo-landing-pad-recycling",
+      "category": "recycling",
+      "energy": 1.875,
+      "ingredients": [
+        {
+          "name": "cargo-landing-pad",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "cargo-landing-pad",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "space-platform-hub-recycling": {
+      "name": "space-platform-hub-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "space-platform-hub",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "space-platform-hub",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "carbonic-asteroid-chunk-recycling": {
+      "name": "carbonic-asteroid-chunk-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "carbonic-asteroid-chunk",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "carbonic-asteroid-chunk",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "metallic-asteroid-chunk-recycling": {
+      "name": "metallic-asteroid-chunk-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "metallic-asteroid-chunk",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "metallic-asteroid-chunk",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "oxide-asteroid-chunk-recycling": {
+      "name": "oxide-asteroid-chunk-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "oxide-asteroid-chunk",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "oxide-asteroid-chunk",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "promethium-asteroid-chunk-recycling": {
+      "name": "promethium-asteroid-chunk-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "promethium-asteroid-chunk",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "promethium-asteroid-chunk",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "railgun-recycling": {
+      "name": "railgun-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "railgun",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "railgun",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "cannon-shell-recycling": {
+      "name": "cannon-shell-recycling",
+      "category": "recycling",
+      "energy": 0.5,
+      "ingredients": [
+        {
+          "name": "cannon-shell",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "cannon-shell",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "flamethrower-ammo-recycling": {
+      "name": "flamethrower-ammo-recycling",
+      "category": "recycling",
+      "energy": 0.375,
+      "ingredients": [
+        {
+          "name": "flamethrower-ammo",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "flamethrower-ammo",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "destroyer-capsule-recycling": {
+      "name": "destroyer-capsule-recycling",
+      "category": "recycling",
+      "energy": 0.9375,
+      "ingredients": [
+        {
+          "name": "destroyer-capsule",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "destroyer-capsule",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "grenade-recycling": {
+      "name": "grenade-recycling",
+      "category": "recycling",
+      "energy": 0.5,
+      "ingredients": [
+        {
+          "name": "grenade",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "grenade",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "heavy-armor-recycling": {
+      "name": "heavy-armor-recycling",
+      "category": "recycling",
+      "energy": 0.5,
+      "ingredients": [
+        {
+          "name": "heavy-armor",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "heavy-armor",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "battery-equipment-recycling": {
+      "name": "battery-equipment-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "battery-equipment",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "battery-equipment",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "fusion-reactor-equipment-recycling": {
+      "name": "fusion-reactor-equipment-recycling",
+      "category": "recycling",
+      "energy": 1.875,
+      "ingredients": [
+        {
+          "name": "fusion-reactor-equipment",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "fusion-reactor-equipment",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "exoskeleton-equipment-recycling": {
+      "name": "exoskeleton-equipment-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "exoskeleton-equipment",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "exoskeleton-equipment",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "energy-shield-mk2-equipment-recycling": {
+      "name": "energy-shield-mk2-equipment-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "energy-shield-mk2-equipment",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "energy-shield-mk2-equipment",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "personal-laser-defense-equipment-recycling": {
+      "name": "personal-laser-defense-equipment-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "personal-laser-defense-equipment",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "personal-laser-defense-equipment",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "artillery-turret-recycling": {
+      "name": "artillery-turret-recycling",
+      "category": "recycling",
+      "energy": 2.5,
+      "ingredients": [
+        {
+          "name": "artillery-turret",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "artillery-turret",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "accumulator-recycling": {
+      "name": "accumulator-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "accumulator",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "iron-plate",
+          "amount": 0.5,
+          "type": "item"
+        },
+        {
+          "name": "battery",
+          "amount": 1.25,
+          "type": "item"
+        }
+      ]
+    },
+    "active-provider-chest-recycling": {
+      "name": "active-provider-chest-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "active-provider-chest",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "steel-chest",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "electronic-circuit",
+          "amount": 0.75,
+          "type": "item"
+        },
+        {
+          "name": "advanced-circuit",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "advanced-circuit-recycling": {
+      "name": "advanced-circuit-recycling",
+      "category": "recycling",
+      "energy": 0.375,
+      "ingredients": [
+        {
+          "name": "advanced-circuit",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "electronic-circuit",
+          "amount": 0.5,
+          "type": "item"
+        },
+        {
+          "name": "plastic-bar",
+          "amount": 0.5,
+          "type": "item"
+        },
+        {
+          "name": "copper-cable",
+          "amount": 1,
+          "type": "item"
+        }
+      ]
+    },
+    "agricultural-tower-recycling": {
+      "name": "agricultural-tower-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "agricultural-tower",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "steel-plate",
+          "amount": 2.5,
+          "type": "item"
+        },
+        {
+          "name": "electronic-circuit",
+          "amount": 0.75,
+          "type": "item"
+        },
+        {
+          "name": "spoilage",
+          "amount": 5,
+          "type": "item"
+        },
+        {
+          "name": "landfill",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "arithmetic-combinator-recycling": {
+      "name": "arithmetic-combinator-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "arithmetic-combinator",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "copper-cable",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "electronic-circuit",
+          "amount": 1.25,
+          "type": "item"
+        }
+      ]
+    },
+    "artificial-jellynut-soil-recycling": {
+      "name": "artificial-jellynut-soil-recycling",
+      "category": "recycling",
+      "energy": 0.125,
+      "ingredients": [
+        {
+          "name": "artificial-jellynut-soil",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "jellynut-seed",
+          "amount": 0.05,
+          "type": "item"
+        },
+        {
+          "name": "nutrients",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "landfill",
+          "amount": 0.125,
+          "type": "item"
+        }
+      ]
+    },
+    "artificial-yumako-soil-recycling": {
+      "name": "artificial-yumako-soil-recycling",
+      "category": "recycling",
+      "energy": 0.125,
+      "ingredients": [
+        {
+          "name": "artificial-yumako-soil",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "yumako-seed",
+          "amount": 0.05,
+          "type": "item"
+        },
+        {
+          "name": "nutrients",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "landfill",
+          "amount": 0.125,
+          "type": "item"
+        }
+      ]
+    },
+    "artillery-shell-recycling": {
+      "name": "artillery-shell-recycling",
+      "category": "recycling",
+      "energy": 0.9375,
+      "ingredients": [
+        {
+          "name": "artillery-shell",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "radar",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "calcite",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "tungsten-plate",
+          "amount": 1,
+          "type": "item"
+        },
+        {
+          "name": "explosives",
+          "amount": 2,
+          "type": "item"
+        }
+      ]
+    },
+    "artillery-wagon-recycling": {
+      "name": "artillery-wagon-recycling",
+      "category": "recycling",
+      "energy": 0.25,
+      "ingredients": [
+        {
+          "name": "artillery-wagon",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "engine-unit",
+          "amount": 15,
+          "type": "item"
+        },
+        {
+          "name": "tungsten-plate",
+          "amount": 15,
+          "type": "item"
+        },
+        {
+          "name": "refined-concrete",
+          "amount": 15,
+          "type": "item"
+        },
+        {
+          "name": "iron-gear-wheel",
+          "amount": 10,
+          "type": "item"
+        },
+        {
+          "name": "processing-unit",
+          "amount": 2.5,
+          "type": "item"
+        }
+      ]
+    },
+    "assembling-machine-1-recycling": {
+      "name": "assembling-machine-1-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "assembling-machine-1",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "electronic-circuit",
+          "amount": 0.75,
+          "type": "item"
+        },
+        {
+          "name": "iron-gear-wheel",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "iron-plate",
+          "amount": 2.25,
+          "type": "item"
+        }
+      ]
+    },
+    "assembling-machine-2-recycling": {
+      "name": "assembling-machine-2-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "assembling-machine-2",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "steel-plate",
+          "amount": 0.5,
+          "type": "item"
+        },
+        {
+          "name": "electronic-circuit",
+          "amount": 0.75,
+          "type": "item"
+        },
+        {
+          "name": "iron-gear-wheel",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "assembling-machine-1",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "assembling-machine-3-recycling": {
+      "name": "assembling-machine-3-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "assembling-machine-3",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "assembling-machine-2",
+          "amount": 0.5,
+          "type": "item"
+        },
+        {
+          "name": "speed-module",
+          "amount": 1,
+          "type": "item"
+        }
+      ]
+    },
+    "asteroid-collector-recycling": {
+      "name": "asteroid-collector-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "asteroid-collector",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "low-density-structure",
+          "amount": 5,
+          "type": "item"
+        },
+        {
+          "name": "electric-engine-unit",
+          "amount": 2,
+          "type": "item"
+        },
+        {
+          "name": "processing-unit",
+          "amount": 1.25,
+          "type": "item"
+        }
+      ]
+    },
+    "atomic-bomb-recycling": {
+      "name": "atomic-bomb-recycling",
+      "category": "recycling",
+      "energy": 3.125,
+      "ingredients": [
+        {
+          "name": "atomic-bomb",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "processing-unit",
+          "amount": 2.5,
+          "type": "item"
+        },
+        {
+          "name": "explosives",
+          "amount": 2.5,
+          "type": "item"
+        },
+        {
+          "name": "uranium-235",
+          "amount": 25,
+          "type": "item"
+        }
+      ]
+    },
+    "battery-mk2-equipment-recycling": {
+      "name": "battery-mk2-equipment-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "battery-mk2-equipment",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "battery-equipment",
+          "amount": 2.5,
+          "type": "item"
+        },
+        {
+          "name": "processing-unit",
+          "amount": 3.75,
+          "type": "item"
+        },
+        {
+          "name": "low-density-structure",
+          "amount": 1.25,
+          "type": "item"
+        }
+      ]
+    },
+    "battery-mk3-equipment-recycling": {
+      "name": "battery-mk3-equipment-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "battery-mk3-equipment",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "battery-mk2-equipment",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "supercapacitor",
+          "amount": 2.5,
+          "type": "item"
+        }
+      ]
+    },
+    "battery-recycling": {
+      "name": "battery-recycling",
+      "category": "recycling",
+      "energy": 0.25,
+      "ingredients": [
+        {
+          "name": "battery",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "iron-plate",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "copper-plate",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "beacon-recycling": {
+      "name": "beacon-recycling",
+      "category": "recycling",
+      "energy": 0.9375,
+      "ingredients": [
+        {
+          "name": "beacon",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "electronic-circuit",
+          "amount": 5,
+          "type": "item"
+        },
+        {
+          "name": "advanced-circuit",
+          "amount": 5,
+          "type": "item"
+        },
+        {
+          "name": "steel-plate",
+          "amount": 2.5,
+          "type": "item"
+        },
+        {
+          "name": "copper-cable",
+          "amount": 2.5,
+          "type": "item"
+        }
+      ]
+    },
+    "belt-immunity-equipment-recycling": {
+      "name": "belt-immunity-equipment-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "belt-immunity-equipment",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "advanced-circuit",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "steel-plate",
+          "amount": 2.5,
+          "type": "item"
+        }
+      ]
+    },
+    "big-electric-pole-recycling": {
+      "name": "big-electric-pole-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "big-electric-pole",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "iron-stick",
+          "amount": 2,
+          "type": "item"
+        },
+        {
+          "name": "steel-plate",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "copper-cable",
+          "amount": 1,
+          "type": "item"
+        }
+      ]
+    },
+    "big-mining-drill-recycling": {
+      "name": "big-mining-drill-recycling",
+      "category": "recycling",
+      "energy": 1.875,
+      "ingredients": [
+        {
+          "name": "big-mining-drill",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "electric-mining-drill",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "tungsten-carbide",
+          "amount": 5,
+          "type": "item"
+        },
+        {
+          "name": "electric-engine-unit",
+          "amount": 2.5,
+          "type": "item"
+        },
+        {
+          "name": "advanced-circuit",
+          "amount": 2.5,
+          "type": "item"
+        }
+      ]
+    },
+    "biochamber-recycling": {
+      "name": "biochamber-recycling",
+      "category": "recycling",
+      "energy": 1.25,
+      "ingredients": [
+        {
+          "name": "biochamber",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "nutrients",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "pentapod-egg",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "iron-plate",
+          "amount": 5,
+          "type": "item"
+        },
+        {
+          "name": "electronic-circuit",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "landfill",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "boiler-recycling": {
+      "name": "boiler-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "boiler",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "stone-furnace",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "pipe",
+          "amount": 1,
+          "type": "item"
+        }
+      ]
+    },
+    "bottomless-chest-recycling": {
+      "name": "bottomless-chest-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "bottomless-chest",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "bottomless-chest",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "buffer-chest-recycling": {
+      "name": "buffer-chest-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "buffer-chest",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "steel-chest",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "electronic-circuit",
+          "amount": 0.75,
+          "type": "item"
+        },
+        {
+          "name": "advanced-circuit",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "bulk-inserter-recycling": {
+      "name": "bulk-inserter-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "bulk-inserter",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "iron-gear-wheel",
+          "amount": 3.75,
+          "type": "item"
+        },
+        {
+          "name": "electronic-circuit",
+          "amount": 3.75,
+          "type": "item"
+        },
+        {
+          "name": "advanced-circuit",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "fast-inserter",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "burner-generator-recycling": {
+      "name": "burner-generator-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "burner-generator",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "burner-generator",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "burner-inserter-recycling": {
+      "name": "burner-inserter-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "burner-inserter",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "iron-plate",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "iron-gear-wheel",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "burner-mining-drill-recycling": {
+      "name": "burner-mining-drill-recycling",
+      "category": "recycling",
+      "energy": 0.125,
+      "ingredients": [
+        {
+          "name": "burner-mining-drill",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "iron-gear-wheel",
+          "amount": 0.75,
+          "type": "item"
+        },
+        {
+          "name": "stone-furnace",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "iron-plate",
+          "amount": 0.75,
+          "type": "item"
+        }
+      ]
+    },
+    "capture-robot-rocket-recycling": {
+      "name": "capture-robot-rocket-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "capture-robot-rocket",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "flying-robot-frame",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "steel-plate",
+          "amount": 0.5,
+          "type": "item"
+        },
+        {
+          "name": "bioflux",
+          "amount": 5,
+          "type": "item"
+        },
+        {
+          "name": "processing-unit",
+          "amount": 0.5,
+          "type": "item"
+        }
+      ]
+    },
+    "cargo-bay-recycling": {
+      "name": "cargo-bay-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "cargo-bay",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "steel-plate",
+          "amount": 5,
+          "type": "item"
+        },
+        {
+          "name": "low-density-structure",
+          "amount": 5,
+          "type": "item"
+        },
+        {
+          "name": "processing-unit",
+          "amount": 1.25,
+          "type": "item"
+        }
+      ]
+    },
+    "cargo-wagon-recycling": {
+      "name": "cargo-wagon-recycling",
+      "category": "recycling",
+      "energy": 0.0625,
+      "ingredients": [
+        {
+          "name": "cargo-wagon",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "iron-gear-wheel",
+          "amount": 2.5,
+          "type": "item"
+        },
+        {
+          "name": "iron-plate",
+          "amount": 5,
+          "type": "item"
+        },
+        {
+          "name": "steel-plate",
+          "amount": 5,
+          "type": "item"
+        }
+      ]
+    },
+    "centrifuge-recycling": {
+      "name": "centrifuge-recycling",
+      "category": "recycling",
+      "energy": 0.25,
+      "ingredients": [
+        {
+          "name": "centrifuge",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "concrete",
+          "amount": 25,
+          "type": "item"
+        },
+        {
+          "name": "steel-plate",
+          "amount": 12.5,
+          "type": "item"
+        },
+        {
+          "name": "advanced-circuit",
+          "amount": 25,
+          "type": "item"
+        },
+        {
+          "name": "iron-gear-wheel",
+          "amount": 25,
+          "type": "item"
+        }
+      ]
+    },
+    "chemical-plant-recycling": {
+      "name": "chemical-plant-recycling",
+      "category": "recycling",
+      "energy": 0.3125,
+      "ingredients": [
+        {
+          "name": "chemical-plant",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "steel-plate",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "iron-gear-wheel",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "electronic-circuit",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "pipe",
+          "amount": 1.25,
+          "type": "item"
+        }
+      ]
+    },
+    "cliff-explosives-recycling": {
+      "name": "cliff-explosives-recycling",
+      "category": "recycling",
+      "energy": 0.5,
+      "ingredients": [
+        {
+          "name": "cliff-explosives",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "explosives",
+          "amount": 2.5,
+          "type": "item"
+        },
+        {
+          "name": "calcite",
+          "amount": 2.5,
+          "type": "item"
+        },
+        {
+          "name": "grenade",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "barrel",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "cluster-grenade-recycling": {
+      "name": "cluster-grenade-recycling",
+      "category": "recycling",
+      "energy": 0.5,
+      "ingredients": [
+        {
+          "name": "cluster-grenade",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "grenade",
+          "amount": 1.75,
+          "type": "item"
+        },
+        {
+          "name": "explosives",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "steel-plate",
+          "amount": 1.25,
+          "type": "item"
+        }
+      ]
+    },
+    "combat-shotgun-recycling": {
+      "name": "combat-shotgun-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "combat-shotgun",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "steel-plate",
+          "amount": 3.75,
+          "type": "item"
+        },
+        {
+          "name": "iron-gear-wheel",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "copper-plate",
+          "amount": 2.5,
+          "type": "item"
+        },
+        {
+          "name": "wood",
+          "amount": 2.5,
+          "type": "item"
+        }
+      ]
+    },
+    "concrete-recycling": {
+      "name": "concrete-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "concrete",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "stone-brick",
+          "amount": 0.125,
+          "type": "item"
+        },
+        {
+          "name": "iron-ore",
+          "amount": 0.025,
+          "type": "item"
+        }
+      ]
+    },
+    "constant-combinator-recycling": {
+      "name": "constant-combinator-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "constant-combinator",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "copper-cable",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "electronic-circuit",
+          "amount": 0.5,
+          "type": "item"
+        }
+      ]
+    },
+    "construction-robot-recycling": {
+      "name": "construction-robot-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "construction-robot",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "flying-robot-frame",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "electronic-circuit",
+          "amount": 0.5,
+          "type": "item"
+        }
+      ]
+    },
+    "copper-cable-recycling": {
+      "name": "copper-cable-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "copper-cable",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "copper-plate",
+          "amount": 0.125,
+          "type": "item"
+        }
+      ]
+    },
+    "crusher-recycling": {
+      "name": "crusher-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "crusher",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "low-density-structure",
+          "amount": 5,
+          "type": "item"
+        },
+        {
+          "name": "steel-plate",
+          "amount": 2.5,
+          "type": "item"
+        },
+        {
+          "name": "electric-engine-unit",
+          "amount": 2.5,
+          "type": "item"
+        }
+      ]
+    },
+    "cryogenic-plant-recycling": {
+      "name": "cryogenic-plant-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "cryogenic-plant",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "refined-concrete",
+          "amount": 10,
+          "type": "item"
+        },
+        {
+          "name": "superconductor",
+          "amount": 5,
+          "type": "item"
+        },
+        {
+          "name": "processing-unit",
+          "amount": 5,
+          "type": "item"
+        },
+        {
+          "name": "lithium-plate",
+          "amount": 5,
+          "type": "item"
+        }
+      ]
+    },
+    "decider-combinator-recycling": {
+      "name": "decider-combinator-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "decider-combinator",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "copper-cable",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "electronic-circuit",
+          "amount": 1.25,
+          "type": "item"
+        }
+      ]
+    },
+    "defender-capsule-recycling": {
+      "name": "defender-capsule-recycling",
+      "category": "recycling",
+      "energy": 0.5,
+      "ingredients": [
+        {
+          "name": "defender-capsule",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "piercing-rounds-magazine",
+          "amount": 0.75,
+          "type": "item"
+        },
+        {
+          "name": "electronic-circuit",
+          "amount": 0.75,
+          "type": "item"
+        },
+        {
+          "name": "iron-gear-wheel",
+          "amount": 0.75,
+          "type": "item"
+        }
+      ]
+    },
+    "discharge-defense-equipment-recycling": {
+      "name": "discharge-defense-equipment-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "discharge-defense-equipment",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "processing-unit",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "steel-plate",
+          "amount": 5,
+          "type": "item"
+        },
+        {
+          "name": "laser-turret",
+          "amount": 2.5,
+          "type": "item"
+        }
+      ]
+    },
+    "display-panel-recycling": {
+      "name": "display-panel-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "display-panel",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "iron-plate",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "electronic-circuit",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "distractor-capsule-recycling": {
+      "name": "distractor-capsule-recycling",
+      "category": "recycling",
+      "energy": 0.9375,
+      "ingredients": [
+        {
+          "name": "distractor-capsule",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "defender-capsule",
+          "amount": 1,
+          "type": "item"
+        },
+        {
+          "name": "advanced-circuit",
+          "amount": 0.75,
+          "type": "item"
+        }
+      ]
+    },
+    "efficiency-module-2-recycling": {
+      "name": "efficiency-module-2-recycling",
+      "category": "recycling",
+      "energy": 1.875,
+      "ingredients": [
+        {
+          "name": "efficiency-module-2",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "efficiency-module",
+          "amount": 1,
+          "type": "item"
+        },
+        {
+          "name": "advanced-circuit",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "processing-unit",
+          "amount": 1.25,
+          "type": "item"
+        }
+      ]
+    },
+    "efficiency-module-recycling": {
+      "name": "efficiency-module-recycling",
+      "category": "recycling",
+      "energy": 0.9375,
+      "ingredients": [
+        {
+          "name": "efficiency-module",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "advanced-circuit",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "electronic-circuit",
+          "amount": 1.25,
+          "type": "item"
+        }
+      ]
+    },
+    "electric-energy-interface-recycling": {
+      "name": "electric-energy-interface-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "electric-energy-interface",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "electric-energy-interface",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "electric-engine-unit-recycling": {
+      "name": "electric-engine-unit-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "electric-engine-unit",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "engine-unit",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "electronic-circuit",
+          "amount": 0.5,
+          "type": "item"
+        }
+      ]
+    },
+    "electric-furnace-recycling": {
+      "name": "electric-furnace-recycling",
+      "category": "recycling",
+      "energy": 0.3125,
+      "ingredients": [
+        {
+          "name": "electric-furnace",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "steel-plate",
+          "amount": 2.5,
+          "type": "item"
+        },
+        {
+          "name": "advanced-circuit",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "stone-brick",
+          "amount": 2.5,
+          "type": "item"
+        }
+      ]
+    },
+    "electric-mining-drill-recycling": {
+      "name": "electric-mining-drill-recycling",
+      "category": "recycling",
+      "energy": 0.125,
+      "ingredients": [
+        {
+          "name": "electric-mining-drill",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "electronic-circuit",
+          "amount": 0.75,
+          "type": "item"
+        },
+        {
+          "name": "iron-gear-wheel",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "iron-plate",
+          "amount": 2.5,
+          "type": "item"
+        }
+      ]
+    },
+    "electronic-circuit-recycling": {
+      "name": "electronic-circuit-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "electronic-circuit",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "iron-plate",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "copper-cable",
+          "amount": 0.75,
+          "type": "item"
+        }
+      ]
+    },
+    "energy-shield-equipment-recycling": {
+      "name": "energy-shield-equipment-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "energy-shield-equipment",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "advanced-circuit",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "steel-plate",
+          "amount": 2.5,
+          "type": "item"
+        }
+      ]
+    },
+    "explosive-cannon-shell-recycling": {
+      "name": "explosive-cannon-shell-recycling",
+      "category": "recycling",
+      "energy": 0.5,
+      "ingredients": [
+        {
+          "name": "explosive-cannon-shell",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "steel-plate",
+          "amount": 0.5,
+          "type": "item"
+        },
+        {
+          "name": "plastic-bar",
+          "amount": 0.5,
+          "type": "item"
+        },
+        {
+          "name": "explosives",
+          "amount": 0.5,
+          "type": "item"
+        }
+      ]
+    },
+    "explosive-rocket-recycling": {
+      "name": "explosive-rocket-recycling",
+      "category": "recycling",
+      "energy": 0.5,
+      "ingredients": [
+        {
+          "name": "explosive-rocket",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "rocket",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "explosives",
+          "amount": 0.5,
+          "type": "item"
+        }
+      ]
+    },
+    "explosive-uranium-cannon-shell-recycling": {
+      "name": "explosive-uranium-cannon-shell-recycling",
+      "category": "recycling",
+      "energy": 0.75,
+      "ingredients": [
+        {
+          "name": "explosive-uranium-cannon-shell",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "explosive-cannon-shell",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "uranium-238",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "express-loader-recycling": {
+      "name": "express-loader-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "express-loader",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "express-transport-belt",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "fast-loader",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "express-splitter-recycling": {
+      "name": "express-splitter-recycling",
+      "category": "recycling",
+      "energy": 0.125,
+      "ingredients": [
+        {
+          "name": "express-splitter",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "fast-splitter",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "iron-gear-wheel",
+          "amount": 2.5,
+          "type": "item"
+        },
+        {
+          "name": "advanced-circuit",
+          "amount": 2.5,
+          "type": "item"
+        }
+      ]
+    },
+    "express-transport-belt-recycling": {
+      "name": "express-transport-belt-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "express-transport-belt",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "iron-gear-wheel",
+          "amount": 2.5,
+          "type": "item"
+        },
+        {
+          "name": "fast-transport-belt",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "fast-loader-recycling": {
+      "name": "fast-loader-recycling",
+      "category": "recycling",
+      "energy": 0.1875,
+      "ingredients": [
+        {
+          "name": "fast-loader",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "fast-transport-belt",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "loader",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "fast-splitter-recycling": {
+      "name": "fast-splitter-recycling",
+      "category": "recycling",
+      "energy": 0.125,
+      "ingredients": [
+        {
+          "name": "fast-splitter",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "splitter",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "iron-gear-wheel",
+          "amount": 2.5,
+          "type": "item"
+        },
+        {
+          "name": "electronic-circuit",
+          "amount": 2.5,
+          "type": "item"
+        }
+      ]
+    },
+    "fast-transport-belt-recycling": {
+      "name": "fast-transport-belt-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "fast-transport-belt",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "iron-gear-wheel",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "transport-belt",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "fast-underground-belt-recycling": {
+      "name": "fast-underground-belt-recycling",
+      "category": "recycling",
+      "energy": 0.125,
+      "ingredients": [
+        {
+          "name": "fast-underground-belt",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "iron-gear-wheel",
+          "amount": 5,
+          "type": "item"
+        },
+        {
+          "name": "underground-belt",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "firearm-magazine-recycling": {
+      "name": "firearm-magazine-recycling",
+      "category": "recycling",
+      "energy": 0.0625,
+      "ingredients": [
+        {
+          "name": "firearm-magazine",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "iron-plate",
+          "amount": 1,
+          "type": "item"
+        }
+      ]
+    },
+    "fission-reactor-equipment-recycling": {
+      "name": "fission-reactor-equipment-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "fission-reactor-equipment",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "processing-unit",
+          "amount": 50,
+          "type": "item"
+        },
+        {
+          "name": "low-density-structure",
+          "amount": 12.5,
+          "type": "item"
+        },
+        {
+          "name": "uranium-fuel-cell",
+          "amount": 1,
+          "type": "item"
+        }
+      ]
+    },
+    "flamethrower-recycling": {
+      "name": "flamethrower-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "flamethrower",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "steel-plate",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "iron-gear-wheel",
+          "amount": 2.5,
+          "type": "item"
+        }
+      ]
+    },
+    "flamethrower-turret-recycling": {
+      "name": "flamethrower-turret-recycling",
+      "category": "recycling",
+      "energy": 1.25,
+      "ingredients": [
+        {
+          "name": "flamethrower-turret",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "steel-plate",
+          "amount": 7.5,
+          "type": "item"
+        },
+        {
+          "name": "iron-gear-wheel",
+          "amount": 3.75,
+          "type": "item"
+        },
+        {
+          "name": "pipe",
+          "amount": 2.5,
+          "type": "item"
+        },
+        {
+          "name": "engine-unit",
+          "amount": 1.25,
+          "type": "item"
+        }
+      ]
+    },
+    "fluid-wagon-recycling": {
+      "name": "fluid-wagon-recycling",
+      "category": "recycling",
+      "energy": 0.09375,
+      "ingredients": [
+        {
+          "name": "fluid-wagon",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "iron-gear-wheel",
+          "amount": 2.5,
+          "type": "item"
+        },
+        {
+          "name": "steel-plate",
+          "amount": 4,
+          "type": "item"
+        },
+        {
+          "name": "pipe",
+          "amount": 2,
+          "type": "item"
+        },
+        {
+          "name": "storage-tank",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "flying-robot-frame-recycling": {
+      "name": "flying-robot-frame-recycling",
+      "category": "recycling",
+      "energy": 1.25,
+      "ingredients": [
+        {
+          "name": "flying-robot-frame",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "electric-engine-unit",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "battery",
+          "amount": 0.5,
+          "type": "item"
+        },
+        {
+          "name": "steel-plate",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "electronic-circuit",
+          "amount": 0.75,
+          "type": "item"
+        }
+      ]
+    },
+    "foundry-recycling": {
+      "name": "foundry-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "foundry",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "tungsten-carbide",
+          "amount": 12.5,
+          "type": "item"
+        },
+        {
+          "name": "steel-plate",
+          "amount": 12.5,
+          "type": "item"
+        },
+        {
+          "name": "electronic-circuit",
+          "amount": 7.5,
+          "type": "item"
+        },
+        {
+          "name": "refined-concrete",
+          "amount": 5,
+          "type": "item"
+        }
+      ]
+    },
+    "fusion-generator-recycling": {
+      "name": "fusion-generator-recycling",
+      "category": "recycling",
+      "energy": 1.875,
+      "ingredients": [
+        {
+          "name": "fusion-generator",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "tungsten-plate",
+          "amount": 25,
+          "type": "item"
+        },
+        {
+          "name": "superconductor",
+          "amount": 25,
+          "type": "item"
+        },
+        {
+          "name": "quantum-processor",
+          "amount": 12.5,
+          "type": "item"
+        }
+      ]
+    },
+    "fusion-reactor-recycling": {
+      "name": "fusion-reactor-recycling",
+      "category": "recycling",
+      "energy": 3.75,
+      "ingredients": [
+        {
+          "name": "fusion-reactor",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "tungsten-plate",
+          "amount": 50,
+          "type": "item"
+        },
+        {
+          "name": "superconductor",
+          "amount": 50,
+          "type": "item"
+        },
+        {
+          "name": "quantum-processor",
+          "amount": 62.5,
+          "type": "item"
+        }
+      ]
+    },
+    "gate-recycling": {
+      "name": "gate-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "gate",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "stone-wall",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "steel-plate",
+          "amount": 0.5,
+          "type": "item"
+        },
+        {
+          "name": "electronic-circuit",
+          "amount": 0.5,
+          "type": "item"
+        }
+      ]
+    },
+    "gun-turret-recycling": {
+      "name": "gun-turret-recycling",
+      "category": "recycling",
+      "energy": 0.5,
+      "ingredients": [
+        {
+          "name": "gun-turret",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "iron-gear-wheel",
+          "amount": 2.5,
+          "type": "item"
+        },
+        {
+          "name": "copper-plate",
+          "amount": 2.5,
+          "type": "item"
+        },
+        {
+          "name": "iron-plate",
+          "amount": 5,
+          "type": "item"
+        }
+      ]
+    },
+    "hazard-concrete-recycling": {
+      "name": "hazard-concrete-recycling",
+      "category": "recycling",
+      "energy": 0.015625,
+      "ingredients": [
+        {
+          "name": "hazard-concrete",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "concrete",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "heat-exchanger-recycling": {
+      "name": "heat-exchanger-recycling",
+      "category": "recycling",
+      "energy": 0.1875,
+      "ingredients": [
+        {
+          "name": "heat-exchanger",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "steel-plate",
+          "amount": 2.5,
+          "type": "item"
+        },
+        {
+          "name": "copper-plate",
+          "amount": 25,
+          "type": "item"
+        },
+        {
+          "name": "pipe",
+          "amount": 2.5,
+          "type": "item"
+        }
+      ]
+    },
+    "heat-interface-recycling": {
+      "name": "heat-interface-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "heat-interface",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "heat-pipe",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "electronic-circuit",
+          "amount": 1.25,
+          "type": "item"
+        }
+      ]
+    },
+    "heat-pipe-recycling": {
+      "name": "heat-pipe-recycling",
+      "category": "recycling",
+      "energy": 0.0625,
+      "ingredients": [
+        {
+          "name": "heat-pipe",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "steel-plate",
+          "amount": 2.5,
+          "type": "item"
+        },
+        {
+          "name": "copper-plate",
+          "amount": 5,
+          "type": "item"
+        }
+      ]
+    },
+    "heating-tower-recycling": {
+      "name": "heating-tower-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "heating-tower",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "boiler",
+          "amount": 0.5,
+          "type": "item"
+        },
+        {
+          "name": "heat-pipe",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "concrete",
+          "amount": 5,
+          "type": "item"
+        }
+      ]
+    },
+    "ice-platform-recycling": {
+      "name": "ice-platform-recycling",
+      "category": "recycling",
+      "energy": 1.875,
+      "ingredients": [
+        {
+          "name": "ice-platform",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "ice",
+          "amount": 12.5,
+          "type": "item"
+        }
+      ]
+    },
+    "infinity-cargo-wagon-recycling": {
+      "name": "infinity-cargo-wagon-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "infinity-cargo-wagon",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "infinity-cargo-wagon",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "infinity-chest-recycling": {
+      "name": "infinity-chest-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "infinity-chest",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "steel-chest",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "electronic-circuit",
+          "amount": 1.25,
+          "type": "item"
+        }
+      ]
+    },
+    "infinity-pipe-recycling": {
+      "name": "infinity-pipe-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "infinity-pipe",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "pipe",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "electronic-circuit",
+          "amount": 1.25,
+          "type": "item"
+        }
+      ]
+    },
+    "iron-chest-recycling": {
+      "name": "iron-chest-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "iron-chest",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "iron-plate",
+          "amount": 2,
+          "type": "item"
+        }
+      ]
+    },
+    "iron-gear-wheel-recycling": {
+      "name": "iron-gear-wheel-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "iron-gear-wheel",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "iron-plate",
+          "amount": 0.5,
+          "type": "item"
+        }
+      ]
+    },
+    "item-unknown-recycling": {
+      "name": "item-unknown-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "item-unknown",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "item-unknown",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "land-mine-recycling": {
+      "name": "land-mine-recycling",
+      "category": "recycling",
+      "energy": 0.3125,
+      "ingredients": [
+        {
+          "name": "land-mine",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "steel-plate",
+          "amount": 0.0625,
+          "type": "item"
+        },
+        {
+          "name": "explosives",
+          "amount": 0.125,
+          "type": "item"
+        }
+      ]
+    },
+    "lane-splitter-recycling": {
+      "name": "lane-splitter-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "lane-splitter",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "lane-splitter",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "laser-turret-recycling": {
+      "name": "laser-turret-recycling",
+      "category": "recycling",
+      "energy": 1.25,
+      "ingredients": [
+        {
+          "name": "laser-turret",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "steel-plate",
+          "amount": 5,
+          "type": "item"
+        },
+        {
+          "name": "electronic-circuit",
+          "amount": 5,
+          "type": "item"
+        },
+        {
+          "name": "battery",
+          "amount": 3,
+          "type": "item"
+        }
+      ]
+    },
+    "light-armor-recycling": {
+      "name": "light-armor-recycling",
+      "category": "recycling",
+      "energy": 0.1875,
+      "ingredients": [
+        {
+          "name": "light-armor",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "iron-plate",
+          "amount": 10,
+          "type": "item"
+        }
+      ]
+    },
+    "lightning-collector-recycling": {
+      "name": "lightning-collector-recycling",
+      "category": "recycling",
+      "energy": 0.3125,
+      "ingredients": [
+        {
+          "name": "lightning-collector",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "lightning-rod",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "supercapacitor",
+          "amount": 2,
+          "type": "item"
+        },
+        {
+          "name": "accumulator",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "lightning-rod-recycling": {
+      "name": "lightning-rod-recycling",
+      "category": "recycling",
+      "energy": 0.3125,
+      "ingredients": [
+        {
+          "name": "lightning-rod",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "copper-cable",
+          "amount": 3,
+          "type": "item"
+        },
+        {
+          "name": "steel-plate",
+          "amount": 2,
+          "type": "item"
+        },
+        {
+          "name": "stone-brick",
+          "amount": 1,
+          "type": "item"
+        }
+      ]
+    },
+    "linked-belt-recycling": {
+      "name": "linked-belt-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "linked-belt",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "linked-belt",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "linked-chest-recycling": {
+      "name": "linked-chest-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "linked-chest",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "linked-chest",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "loader-recycling": {
+      "name": "loader-recycling",
+      "category": "recycling",
+      "energy": 0.0625,
+      "ingredients": [
+        {
+          "name": "loader",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "inserter",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "electronic-circuit",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "iron-gear-wheel",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "iron-plate",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "transport-belt",
+          "amount": 1.25,
+          "type": "item"
+        }
+      ]
+    },
+    "locomotive-recycling": {
+      "name": "locomotive-recycling",
+      "category": "recycling",
+      "energy": 0.25,
+      "ingredients": [
+        {
+          "name": "locomotive",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "engine-unit",
+          "amount": 5,
+          "type": "item"
+        },
+        {
+          "name": "electronic-circuit",
+          "amount": 2.5,
+          "type": "item"
+        },
+        {
+          "name": "steel-plate",
+          "amount": 7.5,
+          "type": "item"
+        }
+      ]
+    },
+    "logistic-robot-recycling": {
+      "name": "logistic-robot-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "logistic-robot",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "flying-robot-frame",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "advanced-circuit",
+          "amount": 0.5,
+          "type": "item"
+        }
+      ]
+    },
+    "long-handed-inserter-recycling": {
+      "name": "long-handed-inserter-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "long-handed-inserter",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "iron-gear-wheel",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "iron-plate",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "inserter",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "low-density-structure-recycling": {
+      "name": "low-density-structure-recycling",
+      "category": "recycling",
+      "energy": 0.9375,
+      "ingredients": [
+        {
+          "name": "low-density-structure",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "steel-plate",
+          "amount": 0.5,
+          "type": "item"
+        },
+        {
+          "name": "copper-plate",
+          "amount": 5,
+          "type": "item"
+        },
+        {
+          "name": "plastic-bar",
+          "amount": 1.25,
+          "type": "item"
+        }
+      ]
+    },
+    "mech-armor-recycling": {
+      "name": "mech-armor-recycling",
+      "category": "recycling",
+      "energy": 3.75,
+      "ingredients": [
+        {
+          "name": "mech-armor",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "power-armor-mk2",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "holmium-plate",
+          "amount": 50,
+          "type": "item"
+        },
+        {
+          "name": "processing-unit",
+          "amount": 25,
+          "type": "item"
+        },
+        {
+          "name": "superconductor",
+          "amount": 12.5,
+          "type": "item"
+        },
+        {
+          "name": "supercapacitor",
+          "amount": 12.5,
+          "type": "item"
+        }
+      ]
+    },
+    "medium-electric-pole-recycling": {
+      "name": "medium-electric-pole-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "medium-electric-pole",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "iron-stick",
+          "amount": 1,
+          "type": "item"
+        },
+        {
+          "name": "steel-plate",
+          "amount": 0.5,
+          "type": "item"
+        },
+        {
+          "name": "copper-cable",
+          "amount": 0.5,
+          "type": "item"
+        }
+      ]
+    },
+    "modular-armor-recycling": {
+      "name": "modular-armor-recycling",
+      "category": "recycling",
+      "energy": 0.9375,
+      "ingredients": [
+        {
+          "name": "modular-armor",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "advanced-circuit",
+          "amount": 7.5,
+          "type": "item"
+        },
+        {
+          "name": "steel-plate",
+          "amount": 12.5,
+          "type": "item"
+        }
+      ]
+    },
+    "night-vision-equipment-recycling": {
+      "name": "night-vision-equipment-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "night-vision-equipment",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "advanced-circuit",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "steel-plate",
+          "amount": 2.5,
+          "type": "item"
+        }
+      ]
+    },
+    "nuclear-reactor-recycling": {
+      "name": "nuclear-reactor-recycling",
+      "category": "recycling",
+      "energy": 0.5,
+      "ingredients": [
+        {
+          "name": "nuclear-reactor",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "concrete",
+          "amount": 125,
+          "type": "item"
+        },
+        {
+          "name": "steel-plate",
+          "amount": 125,
+          "type": "item"
+        },
+        {
+          "name": "advanced-circuit",
+          "amount": 125,
+          "type": "item"
+        },
+        {
+          "name": "copper-plate",
+          "amount": 125,
+          "type": "item"
+        }
+      ]
+    },
+    "offshore-pump-recycling": {
+      "name": "offshore-pump-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "offshore-pump",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "pipe",
+          "amount": 0.75,
+          "type": "item"
+        },
+        {
+          "name": "iron-gear-wheel",
+          "amount": 0.5,
+          "type": "item"
+        }
+      ]
+    },
+    "oil-refinery-recycling": {
+      "name": "oil-refinery-recycling",
+      "category": "recycling",
+      "energy": 0.5,
+      "ingredients": [
+        {
+          "name": "oil-refinery",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "steel-plate",
+          "amount": 3.75,
+          "type": "item"
+        },
+        {
+          "name": "iron-gear-wheel",
+          "amount": 2.5,
+          "type": "item"
+        },
+        {
+          "name": "stone-brick",
+          "amount": 2.5,
+          "type": "item"
+        },
+        {
+          "name": "electronic-circuit",
+          "amount": 2.5,
+          "type": "item"
+        },
+        {
+          "name": "pipe",
+          "amount": 2.5,
+          "type": "item"
+        }
+      ]
+    },
+    "one-way-valve-recycling": {
+      "name": "one-way-valve-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "one-way-valve",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "one-way-valve",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "overflow-valve-recycling": {
+      "name": "overflow-valve-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "overflow-valve",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "overflow-valve",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "overgrowth-jellynut-soil-recycling": {
+      "name": "overgrowth-jellynut-soil-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "overgrowth-jellynut-soil",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "artificial-jellynut-soil",
+          "amount": 0.5,
+          "type": "item"
+        },
+        {
+          "name": "jellynut-seed",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "biter-egg",
+          "amount": 2.5,
+          "type": "item"
+        },
+        {
+          "name": "spoilage",
+          "amount": 12.5,
+          "type": "item"
+        }
+      ]
+    },
+    "overgrowth-yumako-soil-recycling": {
+      "name": "overgrowth-yumako-soil-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "overgrowth-yumako-soil",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "artificial-yumako-soil",
+          "amount": 0.5,
+          "type": "item"
+        },
+        {
+          "name": "yumako-seed",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "biter-egg",
+          "amount": 2.5,
+          "type": "item"
+        },
+        {
+          "name": "spoilage",
+          "amount": 12.5,
+          "type": "item"
+        }
+      ]
+    },
+    "personal-roboport-equipment-recycling": {
+      "name": "personal-roboport-equipment-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "personal-roboport-equipment",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "advanced-circuit",
+          "amount": 2.5,
+          "type": "item"
+        },
+        {
+          "name": "iron-gear-wheel",
+          "amount": 10,
+          "type": "item"
+        },
+        {
+          "name": "steel-plate",
+          "amount": 5,
+          "type": "item"
+        },
+        {
+          "name": "battery",
+          "amount": 11.25,
+          "type": "item"
+        }
+      ]
+    },
+    "personal-roboport-mk2-equipment-recycling": {
+      "name": "personal-roboport-mk2-equipment-recycling",
+      "category": "recycling",
+      "energy": 1.25,
+      "ingredients": [
+        {
+          "name": "personal-roboport-mk2-equipment",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "personal-roboport-equipment",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "processing-unit",
+          "amount": 12.5,
+          "type": "item"
+        },
+        {
+          "name": "superconductor",
+          "amount": 12.5,
+          "type": "item"
+        }
+      ]
+    },
+    "piercing-rounds-magazine-recycling": {
+      "name": "piercing-rounds-magazine-recycling",
+      "category": "recycling",
+      "energy": 0.375,
+      "ingredients": [
+        {
+          "name": "piercing-rounds-magazine",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "firearm-magazine",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "steel-plate",
+          "amount": 0.125,
+          "type": "item"
+        },
+        {
+          "name": "copper-plate",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "piercing-shotgun-shell-recycling": {
+      "name": "piercing-shotgun-shell-recycling",
+      "category": "recycling",
+      "energy": 0.5,
+      "ingredients": [
+        {
+          "name": "piercing-shotgun-shell",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "shotgun-shell",
+          "amount": 0.5,
+          "type": "item"
+        },
+        {
+          "name": "copper-plate",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "steel-plate",
+          "amount": 0.5,
+          "type": "item"
+        }
+      ]
+    },
+    "pipe-recycling": {
+      "name": "pipe-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "pipe",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "iron-plate",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "pipe-to-ground-recycling": {
+      "name": "pipe-to-ground-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "pipe-to-ground",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "pipe",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "iron-plate",
+          "amount": 0.625,
+          "type": "item"
+        }
+      ]
+    },
+    "pistol-recycling": {
+      "name": "pistol-recycling",
+      "category": "recycling",
+      "energy": 0.3125,
+      "ingredients": [
+        {
+          "name": "pistol",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "copper-plate",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "iron-plate",
+          "amount": 1.25,
+          "type": "item"
+        }
+      ]
+    },
+    "poison-capsule-recycling": {
+      "name": "poison-capsule-recycling",
+      "category": "recycling",
+      "energy": 0.5,
+      "ingredients": [
+        {
+          "name": "poison-capsule",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "steel-plate",
+          "amount": 0.75,
+          "type": "item"
+        },
+        {
+          "name": "electronic-circuit",
+          "amount": 0.75,
+          "type": "item"
+        },
+        {
+          "name": "coal",
+          "amount": 2.5,
+          "type": "item"
+        }
+      ]
+    },
+    "power-armor-mk2-recycling": {
+      "name": "power-armor-mk2-recycling",
+      "category": "recycling",
+      "energy": 1.5625,
+      "ingredients": [
+        {
+          "name": "power-armor-mk2",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "efficiency-module",
+          "amount": 25,
+          "type": "item"
+        },
+        {
+          "name": "speed-module",
+          "amount": 25,
+          "type": "item"
+        },
+        {
+          "name": "processing-unit",
+          "amount": 15,
+          "type": "item"
+        },
+        {
+          "name": "electric-engine-unit",
+          "amount": 10,
+          "type": "item"
+        },
+        {
+          "name": "low-density-structure",
+          "amount": 7.5,
+          "type": "item"
+        }
+      ]
+    },
+    "power-armor-recycling": {
+      "name": "power-armor-recycling",
+      "category": "recycling",
+      "energy": 1.25,
+      "ingredients": [
+        {
+          "name": "power-armor",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "processing-unit",
+          "amount": 10,
+          "type": "item"
+        },
+        {
+          "name": "electric-engine-unit",
+          "amount": 5,
+          "type": "item"
+        },
+        {
+          "name": "steel-plate",
+          "amount": 10,
+          "type": "item"
+        }
+      ]
+    },
+    "power-switch-recycling": {
+      "name": "power-switch-recycling",
+      "category": "recycling",
+      "energy": 0.125,
+      "ingredients": [
+        {
+          "name": "power-switch",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "iron-plate",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "copper-cable",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "electronic-circuit",
+          "amount": 0.5,
+          "type": "item"
+        }
+      ]
+    },
+    "processing-unit-recycling": {
+      "name": "processing-unit-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "processing-unit",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "electronic-circuit",
+          "amount": 5,
+          "type": "item"
+        },
+        {
+          "name": "advanced-circuit",
+          "amount": 0.5,
+          "type": "item"
+        }
+      ]
+    },
+    "productivity-module-2-recycling": {
+      "name": "productivity-module-2-recycling",
+      "category": "recycling",
+      "energy": 1.875,
+      "ingredients": [
+        {
+          "name": "productivity-module-2",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "productivity-module",
+          "amount": 1,
+          "type": "item"
+        },
+        {
+          "name": "advanced-circuit",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "processing-unit",
+          "amount": 1.25,
+          "type": "item"
+        }
+      ]
+    },
+    "productivity-module-3-recycling": {
+      "name": "productivity-module-3-recycling",
+      "category": "recycling",
+      "energy": 3.75,
+      "ingredients": [
+        {
+          "name": "productivity-module-3",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "productivity-module-2",
+          "amount": 1,
+          "type": "item"
+        },
+        {
+          "name": "advanced-circuit",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "processing-unit",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "biter-egg",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "productivity-module-recycling": {
+      "name": "productivity-module-recycling",
+      "category": "recycling",
+      "energy": 0.9375,
+      "ingredients": [
+        {
+          "name": "productivity-module",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "advanced-circuit",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "electronic-circuit",
+          "amount": 1.25,
+          "type": "item"
+        }
+      ]
+    },
+    "programmable-speaker-recycling": {
+      "name": "programmable-speaker-recycling",
+      "category": "recycling",
+      "energy": 0.125,
+      "ingredients": [
+        {
+          "name": "programmable-speaker",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "iron-plate",
+          "amount": 0.75,
+          "type": "item"
+        },
+        {
+          "name": "iron-stick",
+          "amount": 1,
+          "type": "item"
+        },
+        {
+          "name": "copper-cable",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "electronic-circuit",
+          "amount": 1,
+          "type": "item"
+        }
+      ]
+    },
+    "proxy-container-recycling": {
+      "name": "proxy-container-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "proxy-container",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "proxy-container",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "pump-recycling": {
+      "name": "pump-recycling",
+      "category": "recycling",
+      "energy": 0.125,
+      "ingredients": [
+        {
+          "name": "pump",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "engine-unit",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "steel-plate",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "pipe",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "pumpjack-recycling": {
+      "name": "pumpjack-recycling",
+      "category": "recycling",
+      "energy": 0.3125,
+      "ingredients": [
+        {
+          "name": "pumpjack",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "steel-plate",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "iron-gear-wheel",
+          "amount": 2.5,
+          "type": "item"
+        },
+        {
+          "name": "electronic-circuit",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "pipe",
+          "amount": 2.5,
+          "type": "item"
+        }
+      ]
+    },
+    "quality-module-2-recycling": {
+      "name": "quality-module-2-recycling",
+      "category": "recycling",
+      "energy": 1.875,
+      "ingredients": [
+        {
+          "name": "quality-module-2",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "quality-module",
+          "amount": 1,
+          "type": "item"
+        },
+        {
+          "name": "advanced-circuit",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "processing-unit",
+          "amount": 1.25,
+          "type": "item"
+        }
+      ]
+    },
+    "quality-module-3-recycling": {
+      "name": "quality-module-3-recycling",
+      "category": "recycling",
+      "energy": 3.75,
+      "ingredients": [
+        {
+          "name": "quality-module-3",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "quality-module-2",
+          "amount": 1,
+          "type": "item"
+        },
+        {
+          "name": "advanced-circuit",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "processing-unit",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "superconductor",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "quality-module-recycling": {
+      "name": "quality-module-recycling",
+      "category": "recycling",
+      "energy": 0.9375,
+      "ingredients": [
+        {
+          "name": "quality-module",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "electronic-circuit",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "advanced-circuit",
+          "amount": 1.25,
+          "type": "item"
+        }
+      ]
+    },
+    "radar-recycling": {
+      "name": "radar-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "radar",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "electronic-circuit",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "iron-gear-wheel",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "iron-plate",
+          "amount": 2.5,
+          "type": "item"
+        }
+      ]
+    },
+    "rail-chain-signal-recycling": {
+      "name": "rail-chain-signal-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "rail-chain-signal",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "electronic-circuit",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "iron-plate",
+          "amount": 1.25,
+          "type": "item"
+        }
+      ]
+    },
+    "rail-ramp-recycling": {
+      "name": "rail-ramp-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "rail-ramp",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "refined-concrete",
+          "amount": 25,
+          "type": "item"
+        },
+        {
+          "name": "rail",
+          "amount": 2,
+          "type": "item"
+        },
+        {
+          "name": "steel-plate",
+          "amount": 2.5,
+          "type": "item"
+        }
+      ]
+    },
+    "rail-signal-recycling": {
+      "name": "rail-signal-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "rail-signal",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "electronic-circuit",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "iron-plate",
+          "amount": 1.25,
+          "type": "item"
+        }
+      ]
+    },
+    "rail-support-recycling": {
+      "name": "rail-support-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "rail-support",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "refined-concrete",
+          "amount": 5,
+          "type": "item"
+        },
+        {
+          "name": "steel-plate",
+          "amount": 2.5,
+          "type": "item"
+        }
+      ]
+    },
+    "railgun-ammo-recycling": {
+      "name": "railgun-ammo-recycling",
+      "category": "recycling",
+      "energy": 1.5625,
+      "ingredients": [
+        {
+          "name": "railgun-ammo",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "steel-plate",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "copper-cable",
+          "amount": 2.5,
+          "type": "item"
+        },
+        {
+          "name": "explosives",
+          "amount": 0.5,
+          "type": "item"
+        }
+      ]
+    },
+    "railgun-turret-recycling": {
+      "name": "railgun-turret-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "railgun-turret",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "quantum-processor",
+          "amount": 25,
+          "type": "item"
+        },
+        {
+          "name": "tungsten-plate",
+          "amount": 7.5,
+          "type": "item"
+        },
+        {
+          "name": "superconductor",
+          "amount": 12.5,
+          "type": "item"
+        },
+        {
+          "name": "carbon-fiber",
+          "amount": 5,
+          "type": "item"
+        }
+      ]
+    },
+    "recycler-recycling": {
+      "name": "recycler-recycling",
+      "category": "recycling",
+      "energy": 0.1875,
+      "ingredients": [
+        {
+          "name": "recycler",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "processing-unit",
+          "amount": 1.5,
+          "type": "item"
+        },
+        {
+          "name": "steel-plate",
+          "amount": 5,
+          "type": "item"
+        },
+        {
+          "name": "iron-gear-wheel",
+          "amount": 10,
+          "type": "item"
+        },
+        {
+          "name": "concrete",
+          "amount": 5,
+          "type": "item"
+        }
+      ]
+    },
+    "refined-concrete-recycling": {
+      "name": "refined-concrete-recycling",
+      "category": "recycling",
+      "energy": 0.9375,
+      "ingredients": [
+        {
+          "name": "refined-concrete",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "concrete",
+          "amount": 0.5,
+          "type": "item"
+        },
+        {
+          "name": "iron-stick",
+          "amount": 0.2,
+          "type": "item"
+        },
+        {
+          "name": "steel-plate",
+          "amount": 0.025,
+          "type": "item"
+        }
+      ]
+    },
+    "refined-hazard-concrete-recycling": {
+      "name": "refined-hazard-concrete-recycling",
+      "category": "recycling",
+      "energy": 0.015625,
+      "ingredients": [
+        {
+          "name": "refined-hazard-concrete",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "refined-concrete",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "repair-pack-recycling": {
+      "name": "repair-pack-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "repair-pack",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "electronic-circuit",
+          "amount": 0.5,
+          "type": "item"
+        },
+        {
+          "name": "iron-gear-wheel",
+          "amount": 0.5,
+          "type": "item"
+        }
+      ]
+    },
+    "requester-chest-recycling": {
+      "name": "requester-chest-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "requester-chest",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "steel-chest",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "electronic-circuit",
+          "amount": 0.75,
+          "type": "item"
+        },
+        {
+          "name": "advanced-circuit",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "roboport-recycling": {
+      "name": "roboport-recycling",
+      "category": "recycling",
+      "energy": 0.3125,
+      "ingredients": [
+        {
+          "name": "roboport",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "steel-plate",
+          "amount": 11.25,
+          "type": "item"
+        },
+        {
+          "name": "iron-gear-wheel",
+          "amount": 11.25,
+          "type": "item"
+        },
+        {
+          "name": "advanced-circuit",
+          "amount": 11.25,
+          "type": "item"
+        }
+      ]
+    },
+    "rocket-launcher-recycling": {
+      "name": "rocket-launcher-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "rocket-launcher",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "iron-plate",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "iron-gear-wheel",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "electronic-circuit",
+          "amount": 1.25,
+          "type": "item"
+        }
+      ]
+    },
+    "rocket-recycling": {
+      "name": "rocket-recycling",
+      "category": "recycling",
+      "energy": 0.25,
+      "ingredients": [
+        {
+          "name": "rocket",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "explosives",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "iron-plate",
+          "amount": 0.5,
+          "type": "item"
+        }
+      ]
+    },
+    "rocket-silo-recycling": {
+      "name": "rocket-silo-recycling",
+      "category": "recycling",
+      "energy": 1.875,
+      "ingredients": [
+        {
+          "name": "rocket-silo",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "steel-plate",
+          "amount": 250,
+          "type": "item"
+        },
+        {
+          "name": "concrete",
+          "amount": 250,
+          "type": "item"
+        },
+        {
+          "name": "pipe",
+          "amount": 25,
+          "type": "item"
+        },
+        {
+          "name": "processing-unit",
+          "amount": 50,
+          "type": "item"
+        },
+        {
+          "name": "electric-engine-unit",
+          "amount": 50,
+          "type": "item"
+        }
+      ]
+    },
+    "rocket-turret-recycling": {
+      "name": "rocket-turret-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "rocket-turret",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "rocket-launcher",
+          "amount": 1,
+          "type": "item"
+        },
+        {
+          "name": "processing-unit",
+          "amount": 1,
+          "type": "item"
+        },
+        {
+          "name": "carbon-fiber",
+          "amount": 5,
+          "type": "item"
+        },
+        {
+          "name": "steel-plate",
+          "amount": 5,
+          "type": "item"
+        },
+        {
+          "name": "iron-gear-wheel",
+          "amount": 5,
+          "type": "item"
+        }
+      ]
+    },
+    "selection-tool-recycling": {
+      "name": "selection-tool-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "selection-tool",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "selection-tool",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "selector-combinator-recycling": {
+      "name": "selector-combinator-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "selector-combinator",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "advanced-circuit",
+          "amount": 0.5,
+          "type": "item"
+        },
+        {
+          "name": "decider-combinator",
+          "amount": 1.25,
+          "type": "item"
+        }
+      ]
+    },
+    "shotgun-recycling": {
+      "name": "shotgun-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "shotgun",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "iron-plate",
+          "amount": 3.75,
+          "type": "item"
+        },
+        {
+          "name": "iron-gear-wheel",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "copper-plate",
+          "amount": 2.5,
+          "type": "item"
+        },
+        {
+          "name": "wood",
+          "amount": 1.25,
+          "type": "item"
+        }
+      ]
+    },
+    "shotgun-shell-recycling": {
+      "name": "shotgun-shell-recycling",
+      "category": "recycling",
+      "energy": 0.1875,
+      "ingredients": [
+        {
+          "name": "shotgun-shell",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "copper-plate",
+          "amount": 0.5,
+          "type": "item"
+        },
+        {
+          "name": "iron-plate",
+          "amount": 0.5,
+          "type": "item"
+        }
+      ]
+    },
+    "simple-entity-with-force-recycling": {
+      "name": "simple-entity-with-force-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "simple-entity-with-force",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "simple-entity-with-force",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "simple-entity-with-owner-recycling": {
+      "name": "simple-entity-with-owner-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "simple-entity-with-owner",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "simple-entity-with-owner",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "slowdown-capsule-recycling": {
+      "name": "slowdown-capsule-recycling",
+      "category": "recycling",
+      "energy": 0.5,
+      "ingredients": [
+        {
+          "name": "slowdown-capsule",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "steel-plate",
+          "amount": 0.5,
+          "type": "item"
+        },
+        {
+          "name": "electronic-circuit",
+          "amount": 0.5,
+          "type": "item"
+        },
+        {
+          "name": "coal",
+          "amount": 1.25,
+          "type": "item"
+        }
+      ]
+    },
+    "small-electric-pole-recycling": {
+      "name": "small-electric-pole-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "small-electric-pole",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "wood",
+          "amount": 0.125,
+          "type": "item"
+        },
+        {
+          "name": "copper-cable",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "small-lamp-recycling": {
+      "name": "small-lamp-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "small-lamp",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "electronic-circuit",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "copper-cable",
+          "amount": 0.75,
+          "type": "item"
+        },
+        {
+          "name": "iron-plate",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "solar-panel-equipment-recycling": {
+      "name": "solar-panel-equipment-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "solar-panel-equipment",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "solar-panel",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "advanced-circuit",
+          "amount": 0.5,
+          "type": "item"
+        },
+        {
+          "name": "steel-plate",
+          "amount": 1.25,
+          "type": "item"
+        }
+      ]
+    },
+    "solar-panel-recycling": {
+      "name": "solar-panel-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "solar-panel",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "steel-plate",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "electronic-circuit",
+          "amount": 3.75,
+          "type": "item"
+        },
+        {
+          "name": "copper-plate",
+          "amount": 1.25,
+          "type": "item"
+        }
+      ]
+    },
+    "space-platform-foundation-recycling": {
+      "name": "space-platform-foundation-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "space-platform-foundation",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "steel-plate",
+          "amount": 5,
+          "type": "item"
+        },
+        {
+          "name": "copper-cable",
+          "amount": 5,
+          "type": "item"
+        }
+      ]
+    },
+    "space-platform-starter-pack-recycling": {
+      "name": "space-platform-starter-pack-recycling",
+      "category": "recycling",
+      "energy": 3.75,
+      "ingredients": [
+        {
+          "name": "space-platform-starter-pack",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "space-platform-foundation",
+          "amount": 15,
+          "type": "item"
+        },
+        {
+          "name": "steel-plate",
+          "amount": 5,
+          "type": "item"
+        },
+        {
+          "name": "processing-unit",
+          "amount": 5,
+          "type": "item"
+        }
+      ]
+    },
+    "speed-module-2-recycling": {
+      "name": "speed-module-2-recycling",
+      "category": "recycling",
+      "energy": 1.875,
+      "ingredients": [
+        {
+          "name": "speed-module-2",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "speed-module",
+          "amount": 1,
+          "type": "item"
+        },
+        {
+          "name": "advanced-circuit",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "processing-unit",
+          "amount": 1.25,
+          "type": "item"
+        }
+      ]
+    },
+    "speed-module-3-recycling": {
+      "name": "speed-module-3-recycling",
+      "category": "recycling",
+      "energy": 3.75,
+      "ingredients": [
+        {
+          "name": "speed-module-3",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "speed-module-2",
+          "amount": 1,
+          "type": "item"
+        },
+        {
+          "name": "advanced-circuit",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "processing-unit",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "tungsten-carbide",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "speed-module-recycling": {
+      "name": "speed-module-recycling",
+      "category": "recycling",
+      "energy": 0.9375,
+      "ingredients": [
+        {
+          "name": "speed-module",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "advanced-circuit",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "electronic-circuit",
+          "amount": 1.25,
+          "type": "item"
+        }
+      ]
+    },
+    "spidertron-recycling": {
+      "name": "spidertron-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "spidertron",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "exoskeleton-equipment",
+          "amount": 1,
+          "type": "item"
+        },
+        {
+          "name": "fission-reactor-equipment",
+          "amount": 0.5,
+          "type": "item"
+        },
+        {
+          "name": "rocket-turret",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "radar",
+          "amount": 0.5,
+          "type": "item"
+        },
+        {
+          "name": "raw-fish",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "splitter-recycling": {
+      "name": "splitter-recycling",
+      "category": "recycling",
+      "energy": 0.0625,
+      "ingredients": [
+        {
+          "name": "splitter",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "electronic-circuit",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "iron-plate",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "transport-belt",
+          "amount": 1,
+          "type": "item"
+        }
+      ]
+    },
+    "stack-inserter-recycling": {
+      "name": "stack-inserter-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "stack-inserter",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "bulk-inserter",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "processing-unit",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "carbon-fiber",
+          "amount": 0.5,
+          "type": "item"
+        },
+        {
+          "name": "jelly",
+          "amount": 2.5,
+          "type": "item"
+        }
+      ]
+    },
+    "steam-engine-recycling": {
+      "name": "steam-engine-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "steam-engine",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "iron-gear-wheel",
+          "amount": 2,
+          "type": "item"
+        },
+        {
+          "name": "pipe",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "iron-plate",
+          "amount": 2.5,
+          "type": "item"
+        }
+      ]
+    },
+    "steam-turbine-recycling": {
+      "name": "steam-turbine-recycling",
+      "category": "recycling",
+      "energy": 0.1875,
+      "ingredients": [
+        {
+          "name": "steam-turbine",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "iron-gear-wheel",
+          "amount": 12.5,
+          "type": "item"
+        },
+        {
+          "name": "copper-plate",
+          "amount": 12.5,
+          "type": "item"
+        },
+        {
+          "name": "pipe",
+          "amount": 5,
+          "type": "item"
+        }
+      ]
+    },
+    "steel-furnace-recycling": {
+      "name": "steel-furnace-recycling",
+      "category": "recycling",
+      "energy": 0.1875,
+      "ingredients": [
+        {
+          "name": "steel-furnace",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "steel-plate",
+          "amount": 1.5,
+          "type": "item"
+        },
+        {
+          "name": "stone-brick",
+          "amount": 2.5,
+          "type": "item"
+        }
+      ]
+    },
+    "stone-furnace-recycling": {
+      "name": "stone-furnace-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "stone-furnace",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "stone",
+          "amount": 1.25,
+          "type": "item"
+        }
+      ]
+    },
+    "stone-wall-recycling": {
+      "name": "stone-wall-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "stone-wall",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "stone-brick",
+          "amount": 1.25,
+          "type": "item"
+        }
+      ]
+    },
+    "storage-chest-recycling": {
+      "name": "storage-chest-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "storage-chest",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "steel-chest",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "electronic-circuit",
+          "amount": 0.75,
+          "type": "item"
+        },
+        {
+          "name": "advanced-circuit",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "storage-tank-recycling": {
+      "name": "storage-tank-recycling",
+      "category": "recycling",
+      "energy": 0.1875,
+      "ingredients": [
+        {
+          "name": "storage-tank",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "iron-plate",
+          "amount": 5,
+          "type": "item"
+        },
+        {
+          "name": "steel-plate",
+          "amount": 1.25,
+          "type": "item"
+        }
+      ]
+    },
+    "submachine-gun-recycling": {
+      "name": "submachine-gun-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "submachine-gun",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "iron-gear-wheel",
+          "amount": 2.5,
+          "type": "item"
+        },
+        {
+          "name": "copper-plate",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "iron-plate",
+          "amount": 2.5,
+          "type": "item"
+        }
+      ]
+    },
+    "substation-recycling": {
+      "name": "substation-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "substation",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "steel-plate",
+          "amount": 2.5,
+          "type": "item"
+        },
+        {
+          "name": "advanced-circuit",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "copper-cable",
+          "amount": 1.5,
+          "type": "item"
+        }
+      ]
+    },
+    "tank-recycling": {
+      "name": "tank-recycling",
+      "category": "recycling",
+      "energy": 0.3125,
+      "ingredients": [
+        {
+          "name": "tank",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "engine-unit",
+          "amount": 8,
+          "type": "item"
+        },
+        {
+          "name": "steel-plate",
+          "amount": 12.5,
+          "type": "item"
+        },
+        {
+          "name": "iron-gear-wheel",
+          "amount": 3.75,
+          "type": "item"
+        },
+        {
+          "name": "advanced-circuit",
+          "amount": 2.5,
+          "type": "item"
+        }
+      ]
+    },
+    "tesla-ammo-recycling": {
+      "name": "tesla-ammo-recycling",
+      "category": "recycling",
+      "energy": 1.875,
+      "ingredients": [
+        {
+          "name": "tesla-ammo",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "supercapacitor",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "plastic-bar",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "tesla-turret-recycling": {
+      "name": "tesla-turret-recycling",
+      "category": "recycling",
+      "energy": 1.875,
+      "ingredients": [
+        {
+          "name": "tesla-turret",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "teslagun",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "supercapacitor",
+          "amount": 2.5,
+          "type": "item"
+        },
+        {
+          "name": "processing-unit",
+          "amount": 2.5,
+          "type": "item"
+        },
+        {
+          "name": "superconductor",
+          "amount": 12.5,
+          "type": "item"
+        }
+      ]
+    },
+    "teslagun-recycling": {
+      "name": "teslagun-recycling",
+      "category": "recycling",
+      "energy": 1.875,
+      "ingredients": [
+        {
+          "name": "teslagun",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "holmium-plate",
+          "amount": 2.5,
+          "type": "item"
+        },
+        {
+          "name": "superconductor",
+          "amount": 2.5,
+          "type": "item"
+        },
+        {
+          "name": "plastic-bar",
+          "amount": 7.5,
+          "type": "item"
+        }
+      ]
+    },
+    "thruster-recycling": {
+      "name": "thruster-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "thruster",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "steel-plate",
+          "amount": 2.5,
+          "type": "item"
+        },
+        {
+          "name": "processing-unit",
+          "amount": 2.5,
+          "type": "item"
+        },
+        {
+          "name": "electric-engine-unit",
+          "amount": 1.25,
+          "type": "item"
+        }
+      ]
+    },
+    "toolbelt-equipment-recycling": {
+      "name": "toolbelt-equipment-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "toolbelt-equipment",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "advanced-circuit",
+          "amount": 0.75,
+          "type": "item"
+        },
+        {
+          "name": "carbon-fiber",
+          "amount": 2.5,
+          "type": "item"
+        }
+      ]
+    },
+    "top-up-valve-recycling": {
+      "name": "top-up-valve-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "top-up-valve",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "top-up-valve",
+          "amount": 1,
+          "type": "item",
+          "probability": 0.25
+        }
+      ]
+    },
+    "train-stop-recycling": {
+      "name": "train-stop-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "train-stop",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "electronic-circuit",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "iron-plate",
+          "amount": 1.5,
+          "type": "item"
+        },
+        {
+          "name": "iron-stick",
+          "amount": 1.5,
+          "type": "item"
+        },
+        {
+          "name": "steel-plate",
+          "amount": 0.75,
+          "type": "item"
+        }
+      ]
+    },
+    "transport-belt-recycling": {
+      "name": "transport-belt-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "transport-belt",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "iron-plate",
+          "amount": 0.125,
+          "type": "item"
+        },
+        {
+          "name": "iron-gear-wheel",
+          "amount": 0.125,
+          "type": "item"
+        }
+      ]
+    },
+    "turbo-loader-recycling": {
+      "name": "turbo-loader-recycling",
+      "category": "recycling",
+      "energy": 1.25,
+      "ingredients": [
+        {
+          "name": "turbo-loader",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "turbo-transport-belt",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "express-loader",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "turbo-splitter-recycling": {
+      "name": "turbo-splitter-recycling",
+      "category": "recycling",
+      "energy": 0.125,
+      "ingredients": [
+        {
+          "name": "turbo-splitter",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "express-splitter",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "tungsten-plate",
+          "amount": 3.75,
+          "type": "item"
+        },
+        {
+          "name": "processing-unit",
+          "amount": 0.5,
+          "type": "item"
+        }
+      ]
+    },
+    "turbo-transport-belt-recycling": {
+      "name": "turbo-transport-belt-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "turbo-transport-belt",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "tungsten-plate",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "express-transport-belt",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "underground-belt-recycling": {
+      "name": "underground-belt-recycling",
+      "category": "recycling",
+      "energy": 0.0625,
+      "ingredients": [
+        {
+          "name": "underground-belt",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "iron-plate",
+          "amount": 1.25,
+          "type": "item"
+        },
+        {
+          "name": "transport-belt",
+          "amount": 0.625,
+          "type": "item"
+        }
+      ]
+    },
+    "uranium-cannon-shell-recycling": {
+      "name": "uranium-cannon-shell-recycling",
+      "category": "recycling",
+      "energy": 0.75,
+      "ingredients": [
+        {
+          "name": "uranium-cannon-shell",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "cannon-shell",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "uranium-238",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "uranium-rounds-magazine-recycling": {
+      "name": "uranium-rounds-magazine-recycling",
+      "category": "recycling",
+      "energy": 0.625,
+      "ingredients": [
+        {
+          "name": "uranium-rounds-magazine",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "piercing-rounds-magazine",
+          "amount": 0.25,
+          "type": "item"
+        },
+        {
+          "name": "uranium-238",
+          "amount": 0.25,
+          "type": "item"
+        }
+      ]
+    },
+    "wooden-chest-recycling": {
+      "name": "wooden-chest-recycling",
+      "category": "recycling",
+      "energy": 0.03125,
+      "ingredients": [
+        {
+          "name": "wooden-chest",
+          "amount": 1,
+          "type": "item"
+        }
+      ],
+      "results": [
+        {
+          "name": "wood",
+          "amount": 0.5,
+          "type": "item"
+        }
+      ]
     }
   },
   "machines": {

@@ -32,12 +32,25 @@ MACHINES = [
 ]
 
 
-def extract_recipes() -> dict:
-    """Extract all non-excluded recipes."""
+def extract_recipes(include_categories: set[str] | None = None) -> dict:
+    """Extract recipes.
+
+    Default mode (include_categories=None): all non-excluded recipes, same
+    behaviour as before recycling support was added.
+
+    When include_categories is given, the normal EXCLUDED_CATEGORIES filter
+    is bypassed and ONLY recipes whose category is in the given set are
+    returned. Used by the --recycling-out mode below to pull just the
+    recycling-category recipes into a standalone file for surgical append,
+    without touching the main (default) extraction path at all.
+    """
     recipes = {}
     for name, raw in _recipes.raw.items():
         category = raw.get("category", "crafting")
-        if category in EXCLUDED_CATEGORIES:
+        if include_categories is not None:
+            if category not in include_categories:
+                continue
+        elif category in EXCLUDED_CATEGORIES:
             continue
 
         ingredients = []
@@ -117,7 +130,31 @@ def extract_machines() -> dict:
     return machines
 
 
+# Recycling-category recipes (Fulgora scrap economy): scrap-recycling plus
+# the ~309 auto-generated per-item `*-recycling` recipes. NOTE: scrap-recycling
+# itself is category "recycling-or-hand-crafting" in the game data, not plain
+# "recycling" as its name might suggest — both categories are needed to
+# capture the full recycling recipe set. Kept separate from EXCLUDED_CATEGORIES
+# (which still excludes both by default for normal solving) — this constant is
+# only consulted by --recycling-out below.
+RECYCLING_CATEGORIES = {"recycling", "recycling-or-hand-crafting"}
+
+
 def main():
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--recycling-out",
+        help=(
+            "Also extract recycling-category recipes (scrap-recycling + "
+            "per-item *-recycling recipes) to this standalone JSON path, "
+            "for manual/surgical append into recipes.json. Does not modify "
+            "the main recipes.json write below."
+        ),
+    )
+    args = parser.parse_args()
+
     data = {
         "recipes": extract_recipes(),
         "machines": extract_machines(),
@@ -133,6 +170,14 @@ def main():
     machine_count = len(data["machines"])
     size_kb = out_path.stat().st_size / 1024
     print(f"Extracted {recipe_count} recipes, {machine_count} machines -> {out_path} ({size_kb:.1f} KB)")
+
+    if args.recycling_out:
+        recycling_recipes = extract_recipes(include_categories=RECYCLING_CATEGORIES)
+        rec_path = Path(args.recycling_out)
+        rec_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(rec_path, "w") as f:
+            json.dump(recycling_recipes, f, indent=2)
+        print(f"Extracted {len(recycling_recipes)} recycling recipes -> {rec_path}")
 
 
 if __name__ == "__main__":

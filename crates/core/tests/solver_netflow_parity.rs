@@ -2,7 +2,8 @@
 //! See docs/rfp-solver-net-flow.md — kill criteria 1–5 are evaluated here.
 
 use rustc_hash::FxHashSet;
-use spaghettio_core::netflow::{solve_netflow, CostTable, RecipeScope};
+use spaghettio_core::models::SolverResult;
+use spaghettio_core::netflow::{solve_netflow, solve_netflow_with_options, CostTable, NetflowOptions, RecipeScope};
 use spaghettio_core::recipe_db::{self, MachinePalette};
 use spaghettio_core::solver::{self, SolverError};
 
@@ -644,4 +645,359 @@ fn report_unpinned_deltas() {
         }
     }
     println!("recipe-set deltas under free selection: {changed} items");
+}
+
+// ============================================================================
+// Fulgora scrap-economy spike (RFP decision log, 2026-07-11 entries).
+// Everything below is additive and behind `NetflowOptions`, which defaults
+// both flags to `false` — nothing above this point (or any other default
+// solve path) is affected.
+// ============================================================================
+
+/// True if `recipe_name` is a "pure voider": exactly one ingredient and one
+/// product, both the same item, net-negative. Mirrors netflow.rs's private
+/// `is_pure_voider`, reimplemented here against public `recipe_db` data
+/// since the original is crate-private and this is a report/test helper.
+fn is_pure_voider_recipe(recipe_name: &str) -> bool {
+    let Some(recipe) = recipe_db::db().recipes.get(recipe_name) else {
+        return false;
+    };
+    if recipe.ingredients.len() != 1 || recipe.products.len() != 1 {
+        return false;
+    }
+    let ing = &recipe.ingredients[0];
+    let prod = &recipe.products[0];
+    ing.name == prod.name && prod.amount * prod.probability - ing.amount < 0.0
+}
+
+/// Per-item conservation breakdown: produced / externally supplied /
+/// consumed by ordinary machines / destroyed by voiders / left as surplus.
+/// Report helper only — the invariant itself is `assert_conservation`.
+fn print_item_breakdown(r: &SolverResult) {
+    use std::collections::BTreeMap;
+    #[derive(Default, Clone, Copy)]
+    struct Row {
+        produced: f64,
+        consumed: f64,
+        voided: f64,
+    }
+    let mut rows: BTreeMap<String, Row> = BTreeMap::new();
+    for m in &r.machines {
+        let voider = is_pure_voider_recipe(&m.recipe);
+        for f in &m.outputs {
+            rows.entry(f.item.clone()).or_default().produced += f.rate * m.count;
+        }
+        for f in &m.inputs {
+            let row = rows.entry(f.item.clone()).or_default();
+            if voider {
+                row.voided += f.rate * m.count;
+            } else {
+                row.consumed += f.rate * m.count;
+            }
+        }
+    }
+    let external: FxHashSet<String> = r.external_inputs.iter().map(|f| f.item.clone()).collect();
+    let surplus: FxHashSet<String> = r.surplus_outputs.iter().map(|f| f.item.clone()).collect();
+    let mut items: Vec<String> = rows.keys().cloned().collect();
+    for s in external.iter().chain(surplus.iter()) {
+        if !items.contains(s) {
+            items.push(s.clone());
+        }
+    }
+    items.sort();
+    println!(
+        "  {:<28} {:>10} {:>10} {:>10} {:>10} {:>10}",
+        "item", "produced", "external", "consumed", "voided", "surplus"
+    );
+    for item in items {
+        let row = rows.get(&item).copied().unwrap_or_default();
+        let ext = r.external_inputs.iter().find(|f| f.item == item).map(|f| f.rate).unwrap_or(0.0);
+        let sur = r.surplus_outputs.iter().find(|f| f.item == item).map(|f| f.rate).unwrap_or(0.0);
+        println!(
+            "  {item:<28} {:>10.4} {ext:>10.4} {:>10.4} {:>10.4} {sur:>10.4}",
+            row.produced, row.consumed, row.voided,
+        );
+    }
+}
+
+fn print_machine_mix(r: &SolverResult) {
+    for m in &r.machines {
+        let tag = if is_pure_voider_recipe(&m.recipe) {
+            " [VOIDER]"
+        } else if m.entity == "recycler" {
+            " [recycler]"
+        } else {
+            ""
+        };
+        println!("  {:>10.4}x {:<34} ({}){tag}", m.count, m.recipe, m.entity);
+    }
+}
+
+/// Fulgora scrap-economy spike report (RFP decision log, 2026-07-11). Not a
+/// kill-criterion gate — run explicitly:
+///   cargo test --manifest-path crates/core/Cargo.toml --test solver_netflow_parity \
+///       report_fulgora_spike -- --ignored --nocapture
+#[test]
+#[ignore = "report only — run with --ignored --nocapture"]
+fn report_fulgora_spike() {
+    let inputs = set(&["scrap", "water"]);
+    let default_costs = CostTable::default();
+    let spike_costs_1e3 = CostTable { eps_surplus: 1e-3, ..CostTable::default() };
+    let spike_costs_1e2 = CostTable { eps_surplus: 1e-2, ..CostTable::default() };
+    let opts_novoid = NetflowOptions { allow_recycling: true, allow_voiding: false };
+    let opts_void = NetflowOptions { allow_recycling: true, allow_voiding: true };
+
+    // Item names verified directly against draftsman 3.3.0 / Space Age data
+    // before writing this test (see the recipe_db exploration in the RFP
+    // spike session) — all three exist under these exact slugs.
+    let targets: &[(&str, f64)] = &[
+        ("holmium-plate", 1.0),
+        ("superconductor", 0.5),
+        ("electromagnetic-science-pack", 1.0),
+    ];
+
+    for &(target, rate) in targets {
+        println!("\n================ {target} @ {rate}/s ================");
+
+        // --- frozen default cost table: surplus mode vs voiding-enabled ---
+        let surplus_mode = solve_netflow_with_options(
+            target, rate, &inputs, &MachinePalette::default(), "assembling-machine-3",
+            &FxHashSet::default(), RecipeScope::Free, &default_costs, &opts_novoid,
+        )
+        .unwrap_or_else(|e| panic!("{target}: surplus-mode solve failed: {e}"));
+        assert_conservation(target, rate, &surplus_mode);
+
+        let voiding_mode = solve_netflow_with_options(
+            target, rate, &inputs, &MachinePalette::default(), "assembling-machine-3",
+            &FxHashSet::default(), RecipeScope::Free, &default_costs, &opts_void,
+        )
+        .unwrap_or_else(|e| panic!("{target}: voiding-mode solve failed: {e}"));
+        assert_conservation(target, rate, &voiding_mode);
+
+        println!("--- default costs (eps_surplus={}), surplus mode ---", default_costs.eps_surplus);
+        print_machine_mix(&surplus_mode);
+        print_item_breakdown(&surplus_mode);
+        let scrap_rate =
+            surplus_mode.external_inputs.iter().find(|f| f.item == "scrap").map(|f| f.rate).unwrap_or(0.0);
+        println!("  scrap consumption: {scrap_rate:.4}/s");
+
+        // KEY DELIVERABLE: with the frozen default CostTable, does
+        // allow_voiding change anything? Per the RFP's cost-table design
+        // (w_available > eps_machine·time > eps_surplus), it must not —
+        // surplus stays strictly cheaper than running a voider machine.
+        let voider_ran =
+            voiding_mode.machines.iter().any(|m| is_pure_voider_recipe(&m.recipe) && m.count > 1e-9);
+        println!(
+            "--- default costs, voiding enabled: voider active = {voider_ran} \
+             (expected: false — surplus beats voider machine cost) ---"
+        );
+        assert!(
+            !voider_ran,
+            "{target}: a voider ran under the FROZEN default cost table — eps_surplus is no longer \
+             strictly cheaper than eps_machine·time; this is a real regression, not the spike finding"
+        );
+        assert_eq!(
+            surplus_mode.dependency_order, voiding_mode.dependency_order,
+            "{target}: allow_voiding changed the recipe set under default pricing — should be a no-op"
+        );
+        for wm in &surplus_mode.machines {
+            let vm = voiding_mode.machines.iter().find(|m| m.recipe == wm.recipe).unwrap();
+            assert!(
+                (wm.count - vm.count).abs() < 1e-6,
+                "{target}: {} machine count changed under default pricing: {} -> {}",
+                wm.recipe, wm.count, vm.count
+            );
+        }
+        assert_eq!(
+            surplus_mode.surplus_outputs.len(),
+            voiding_mode.surplus_outputs.len(),
+            "{target}: surplus item count changed under default pricing"
+        );
+
+        // --- spike-only elevated eps_surplus: the pricing experiment ---
+        for (label, costs) in [("1e-3", &spike_costs_1e3), ("1e-2", &spike_costs_1e2)] {
+            let r = solve_netflow_with_options(
+                target, rate, &inputs, &MachinePalette::default(), "assembling-machine-3",
+                &FxHashSet::default(), RecipeScope::Free, costs, &opts_void,
+            );
+            match r {
+                Ok(res) => {
+                    assert_conservation(target, rate, &res);
+                    let voider_ran =
+                        res.machines.iter().any(|m| is_pure_voider_recipe(&m.recipe) && m.count > 1e-9);
+                    println!(
+                        "--- eps_surplus={label}: SOLVED, voider active={voider_ran}, surplus items={} ---",
+                        res.surplus_outputs.len()
+                    );
+                    print_machine_mix(&res);
+                }
+                Err(SolverError::UnsupportedCycle { recipes }) => {
+                    // Observed finding (see RFP decision log): admitting
+                    // ~310 recycling recipes into the FULL free-selection
+                    // graph, combined with a high enough eps_surplus,
+                    // makes "craft an ordinary game entity purely to feed
+                    // it into its OWN recycling recipe as a byproduct
+                    // sink" look profitable — a NEW laundering shape, not
+                    // involving voiders at all (reproduces with
+                    // allow_voiding=false too). The existing multi-recipe
+                    // cycle guard (find_active_cycle_indices,
+                    // UnsupportedCycle) correctly refuses it rather than
+                    // silently laundering. This is why the pricing
+                    // experiment does not report clean full-graph voiding
+                    // for these three real targets — see
+                    // `voider_disposes_surplus_above_break_even_price` for
+                    // proof the underlying LP mechanism is nonetheless
+                    // correct once scoped away from this exploit family.
+                    println!("--- eps_surplus={label}: REFUSED (UnsupportedCycle) — {recipes} ---");
+                }
+                Err(e) => panic!("{target} @ eps_surplus={label}: unexpected error: {e}"),
+            }
+        }
+    }
+
+    // --- hand-derived golden: holmium-plate@1/s scrap rate ---
+    // holmium-plate needs 20 holmium-solution/craft (1 plate/craft);
+    // holmium-solution needs 0.2 holmium-ore per 10 solution/craft
+    // (= 0.02 ore/solution); scrap-recycling yields holmium-ore at
+    // p=0.01/craft (1 scrap/craft, category recycling-or-hand-crafting).
+    //   holmium-ore/s = 20 solution/s * 0.02 ore/solution = 0.4
+    //   scrap/s = 0.4 / 0.01 = 40.0
+    let r = solve_netflow_with_options(
+        "holmium-plate", 1.0, &inputs, &MachinePalette::default(), "assembling-machine-3",
+        &FxHashSet::default(), RecipeScope::Free, &default_costs, &opts_void,
+    )
+    .expect("holmium-plate solves");
+    let scrap_rate = r.external_inputs.iter().find(|f| f.item == "scrap").expect("scrap external").rate;
+    let hand_derived = 40.0;
+    assert!(
+        (scrap_rate - hand_derived).abs() / hand_derived < 0.01,
+        "holmium-plate@1/s: scrap rate {scrap_rate} not within 1% of hand-derived {hand_derived}"
+    );
+    println!("\nGOLDEN: holmium-plate@1/s scrap rate = {scrap_rate:.4} (hand-derived: {hand_derived})");
+}
+
+/// Determinism (RFP Fulgora spike): double-run byte-compare, KC2's shape
+/// scoped to the spike's actual solves (allow_recycling + allow_voiding,
+/// all three report targets, default AND spike-priced cost tables).
+#[test]
+fn fulgora_spike_determinism_double_run() {
+    let inputs = set(&["scrap", "water"]);
+    let opts = NetflowOptions { allow_recycling: true, allow_voiding: true };
+    let targets: &[(&str, f64)] =
+        &[("holmium-plate", 1.0), ("superconductor", 0.5), ("electromagnetic-science-pack", 1.0)];
+    let costs = [CostTable::default(), CostTable { eps_surplus: 1e-3, ..CostTable::default() }];
+    let run = || -> String {
+        let mut out = String::new();
+        for &(target, rate) in targets {
+            for c in &costs {
+                let r = solve_netflow_with_options(
+                    target, rate, &inputs, &MachinePalette::default(), "assembling-machine-3",
+                    &FxHashSet::default(), RecipeScope::Free, c, &opts,
+                );
+                match r {
+                    Ok(res) => out.push_str(&serde_json::to_string(&res).unwrap()),
+                    Err(e) => out.push_str(&format!("ERR:{e}")),
+                }
+                out.push('\n');
+            }
+        }
+        out
+    };
+    let a = run();
+    let b = run();
+    assert_eq!(a, b, "Fulgora spike solves are not deterministic");
+}
+
+/// Regression guard for the voiding mechanism itself, isolated from the
+/// full-graph elevated-eps_surplus cycle exploit documented in
+/// `report_fulgora_spike` by restricting scope to exactly two recipes:
+/// scrap-recycling (produces steel-plate as one of its ~12 byproducts) and
+/// steel-plate-recycling (a genuine pure voider: 1 steel-plate in, 0.25
+/// out, net −0.75/craft — unlike iron-plate, which scrap-recycling never
+/// produces, so it can't be used for this isolation).
+///
+/// Break-even eps_surplus, derived analytically: recycler crafting_speed
+/// 0.5, steel-plate-recycling energy 1.0 → machine_time = 2s. Voider cost
+/// per net-destroyed unit/s = eps_machine·machine_time / 0.75 =
+/// 1e-6·2/0.75 ≈ 2.667e-6. Below that price, accepting surplus
+/// (eps_surplus·rate) is cheaper; above it, voiding is cheaper. This test
+/// samples one point below (1e-6) and one comfortably above (1e-4) —
+/// neither is the frozen default (CostTable::default() uses 1e-8, used by
+/// every other test in this file).
+#[test]
+fn voider_disposes_surplus_above_break_even_price() {
+    let inputs = set(&["scrap", "water"]);
+    let scope = set(&["scrap-recycling", "steel-plate-recycling"]);
+    let opts = NetflowOptions { allow_recycling: true, allow_voiding: true };
+
+    let below = solve_netflow_with_options(
+        "iron-gear-wheel", 1.0, &inputs, &MachinePalette::default(), "assembling-machine-3",
+        &FxHashSet::default(), RecipeScope::Restricted(&scope),
+        &CostTable { eps_surplus: 1e-6, ..CostTable::default() }, &opts,
+    )
+    .expect("below break-even solves");
+    assert_conservation("iron-gear-wheel", 1.0, &below);
+    let steel_surplus_below =
+        below.surplus_outputs.iter().find(|f| f.item == "steel-plate").map(|f| f.rate).unwrap_or(0.0);
+    assert!(
+        steel_surplus_below > 0.0,
+        "expected steel-plate surplus below break-even: {:?}",
+        below.surplus_outputs
+    );
+    assert!(
+        !below.machines.iter().any(|m| m.recipe == "steel-plate-recycling" && m.count > 1e-9),
+        "voider should be inactive below break-even: {:?}",
+        below.machines
+    );
+
+    let above = solve_netflow_with_options(
+        "iron-gear-wheel", 1.0, &inputs, &MachinePalette::default(), "assembling-machine-3",
+        &FxHashSet::default(), RecipeScope::Restricted(&scope),
+        &CostTable { eps_surplus: 1e-4, ..CostTable::default() }, &opts,
+    )
+    .expect("above break-even solves");
+    assert_conservation("iron-gear-wheel", 1.0, &above);
+    assert!(
+        !above.surplus_outputs.iter().any(|f| f.item == "steel-plate"),
+        "expected steel-plate fully voided above break-even: {:?}",
+        above.surplus_outputs
+    );
+    let voider = above
+        .machines
+        .iter()
+        .find(|m| m.recipe == "steel-plate-recycling")
+        .expect("voider machine present above break-even");
+    // Hand-derived: scrap-recycling runs at exactly 2.0 machines (5
+    // crafts/s to hit iron-gear-wheel@1/s at p=0.2/craft), producing
+    // steel-plate at 5 * 0.04 = 0.2/s. The voider nets −0.375/s per
+    // machine (1*0.5 consumed − 1*0.25*0.5 produced), so it must run at
+    // 0.2 / 0.375 = 8/15 machines to net exactly zero steel-plate.
+    let hand_derived_voider_count = 8.0 / 15.0;
+    assert!(
+        (voider.count - hand_derived_voider_count).abs() < 1e-6,
+        "voider machine count: {} (hand-derived: {hand_derived_voider_count})",
+        voider.count
+    );
+
+    // No OTHER item's surplus, and no non-voider machine count, changed
+    // between the two price points — the price change is scoped to the
+    // voider's own decision, not a broader laundering resurgence.
+    for f in &below.surplus_outputs {
+        if f.item == "steel-plate" {
+            continue;
+        }
+        let a = above.surplus_outputs.iter().find(|g| g.item == f.item).map(|g| g.rate);
+        assert_eq!(a, Some(f.rate), "{}: surplus changed unexpectedly", f.item);
+    }
+    for wm in &below.machines {
+        if wm.recipe == "steel-plate-recycling" {
+            continue;
+        }
+        let am = above
+            .machines
+            .iter()
+            .find(|m| m.recipe == wm.recipe)
+            .unwrap_or_else(|| panic!("{}: missing above break-even", wm.recipe));
+        assert!((wm.count - am.count).abs() < 1e-9, "{}: count changed", wm.recipe);
+    }
 }

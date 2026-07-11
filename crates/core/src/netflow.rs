@@ -71,6 +71,59 @@ impl Default for CostTable {
 /// are ≤ 1e-12).
 const ACTIVE_TOL: f64 = 1e-9;
 
+/// Additive, opt-in options for the Fulgora scrap-economy spike (see
+/// docs/rfp-solver-net-flow.md decision log). Both default to `false`, so
+/// every existing caller (`solve_netflow`, both `solve_*` entry points in
+/// `solver.rs`) is behaviorally unchanged.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NetflowOptions {
+    /// Admit `category == "recycling"` (and `"recycling-or-hand-crafting"`
+    /// — see the note on [`is_recycling_category`]) recipes as LP columns
+    /// despite [`is_excluded_recipe`] refusing them. Non-voider recycling
+    /// recipes (e.g. `iron-gear-wheel-recycling`: gear → plates) behave as
+    /// ordinary columns once admitted — no special casing needed.
+    pub allow_recycling: bool,
+    /// Additionally accept "pure voider" recycling recipes (see
+    /// [`is_pure_voider`]) as a supported net-flow shape, with the closure
+    /// and reachability guard exemptions documented at their call sites.
+    /// Requires `allow_recycling` to have any candidates to exempt.
+    pub allow_voiding: bool,
+}
+
+/// True for both recycling-shaped categories in the bundled data.
+///
+/// NOTE: the RFP's Fulgora spike brief assumed `scrap-recycling` itself was
+/// category `"recycling"`; draftsman 3.3.0 / Space Age data says its actual
+/// category is `"recycling-or-hand-crafting"` (verified via the extractor
+/// spike — see the recipes.json append). Both are admitted here so
+/// `allow_recycling` actually reaches scrap-recycling, the entry point for
+/// the whole scrap chain — `"crushing"` (the third `EXCLUDED_CATEGORIES`
+/// member) stays excluded regardless, per the RFP brief.
+fn is_recycling_category(recipe: &Recipe) -> bool {
+    matches!(recipe.category.as_str(), "recycling" | "recycling-or-hand-crafting")
+}
+
+/// A "pure voider": a recycling recipe with exactly one ingredient and
+/// exactly one product, both the same item, with strictly negative net
+/// (produces less than it consumes) — e.g. `iron-plate-recycling`
+/// (1 iron-plate in, 0.25 out) or `holmium-ore-recycling` (1 in, 0.25 out).
+/// Shape-laundering-safe by construction: the ONLY item it ever touches is
+/// the one it nets-destroys, so admitting it can never manufacture a path
+/// from a cheap item to a demanded one — see the closure/reachability
+/// exemptions in `solve_attempt` for where this shape gets special-cased.
+/// Distinct from [`classify_self_loop`]'s net-negative single-item
+/// `Unsupported` case, which this function does NOT change the behavior
+/// of — voiders are accepted only at the solver level, gated on
+/// `NetflowOptions::allow_voiding`.
+fn is_pure_voider(recipe: &Recipe) -> bool {
+    if recipe.ingredients.len() != 1 || recipe.products.len() != 1 {
+        return false;
+    }
+    let ing = &recipe.ingredients[0];
+    let prod = &recipe.products[0];
+    ing.name == prod.name && raw_net_per_craft(recipe, &ing.name) < 0.0
+}
+
 /// Which recipe columns enter the LP.
 #[derive(Clone, Copy)]
 pub enum RecipeScope<'a> {
@@ -243,6 +296,33 @@ pub fn solve_netflow(
     scope: RecipeScope<'_>,
     costs: &CostTable,
 ) -> Result<SolverResult, SolverError> {
+    solve_netflow_with_options(
+        target_item,
+        target_rate,
+        available_inputs,
+        palette,
+        default_machine,
+        excluded_recipes,
+        scope,
+        costs,
+        &NetflowOptions::default(),
+    )
+}
+
+/// Like [`solve_netflow`] but accepts [`NetflowOptions`] (Fulgora
+/// scrap-economy spike — additive, both flags default `false`).
+#[allow(clippy::too_many_arguments)]
+pub fn solve_netflow_with_options(
+    target_item: &str,
+    target_rate: f64,
+    available_inputs: &FxHashSet<String>,
+    palette: &MachinePalette,
+    default_machine: &str,
+    excluded_recipes: &FxHashSet<String>,
+    scope: RecipeScope<'_>,
+    costs: &CostTable,
+    options: &NetflowOptions,
+) -> Result<SolverResult, SolverError> {
     // Acyclic-fallback loop (RFP "Cycle policy", amended after Phase 0
     // found the fluoroketone coolant loop on cryogenic-science-pack): when
     // the optimum contains an unsupported cycle, deterministically exclude
@@ -263,6 +343,7 @@ pub fn solve_netflow(
             &extra_excluded,
             scope,
             costs,
+            options,
         ) {
             Ok(r) => return Ok(r),
             Err(AttemptError::Hard(e)) => return Err(e),
@@ -292,6 +373,7 @@ fn solve_attempt(
     extra_excluded: &FxHashSet<String>,
     scope: RecipeScope<'_>,
     costs: &CostTable,
+    options: &NetflowOptions,
 ) -> Result<SolverResult, AttemptError> {
     // ---------------------------------------------------------------
     // 1. Collect scope-eligible candidates (recipes.json order —
@@ -314,10 +396,13 @@ fn solve_attempt(
     let mut candidates: Vec<Candidate> = Vec::new();
 
     for (name, recipe) in &db().recipes {
-        if excluded_recipes.contains(name)
-            || extra_excluded.contains(name)
-            || is_excluded_recipe(recipe)
-        {
+        // `allow_recycling` admits recycling-category recipes despite
+        // `is_excluded_recipe` — every OTHER excluded category (crushing)
+        // stays excluded regardless. See `is_recycling_category` for why
+        // both recycling-shaped categories are checked.
+        let excluded_by_category =
+            is_excluded_recipe(recipe) && !(options.allow_recycling && is_recycling_category(recipe));
+        if excluded_recipes.contains(name) || extra_excluded.contains(name) || excluded_by_category {
             continue;
         }
         // Placeholder rows (`parameter-N`, `recipe-unknown`) have no
@@ -404,6 +489,35 @@ fn solve_attempt(
         }
         if !grew {
             break;
+        }
+    }
+
+    // Pure-voider admission (RFP Fulgora spike, gated on allow_voiding):
+    // a voider's only net coefficient is negative (it strictly destroys its
+    // own item), so it can never satisfy `supplies_demand` above and would
+    // never join the closure through the ordinary fixpoint. Admit it
+    // separately, but ONLY for items a closure column already net-produces
+    // — this is what keeps the exemption laundering-safe: it lets the LP
+    // dispose of genuine excess of an already-demanded item, never invents
+    // a path from an unrelated cheap item to a demanded one (a voider only
+    // ever touches the one item it destroys, so there is no such path to
+    // invent). No further fixpoint iteration is needed — a voider's single
+    // negative coefficient touches an item that's already demanded (by
+    // construction, since we required a closure column producing it).
+    if options.allow_voiding {
+        let produced_by_closure: FxHashSet<usize> = candidates
+            .iter()
+            .enumerate()
+            .filter(|&(c, _)| in_closure[c])
+            .flat_map(|(_, cand)| cand.net.iter().filter(|&&(_, coeff)| coeff > 0.0).map(|&(i, _)| i))
+            .collect();
+        for (c, cand) in candidates.iter().enumerate() {
+            if in_closure[c] || !is_pure_voider(cand.recipe) {
+                continue;
+            }
+            if cand.net.iter().any(|&(i, _)| produced_by_closure.contains(&i)) {
+                in_closure[c] = true;
+            }
         }
     }
 
@@ -615,7 +729,14 @@ fn solve_attempt(
 
     for &c in &active {
         let r = columns[c].recipe;
-        if matches!(classify_self_loop(r), SelfLoopShape::Unsupported) {
+        // Pure voiders are net-negative single-item self-loops by shape —
+        // `classify_self_loop` correctly calls that Unsupported for every
+        // OTHER caller (it's still not a row-template-able recipe). Only
+        // the solver-level spike, gated on allow_voiding, treats it as an
+        // accepted shape (netted emission, no row template needed since
+        // voiders never reach layout).
+        let accepted_voider = options.allow_voiding && is_pure_voider(r);
+        if !accepted_voider && matches!(classify_self_loop(r), SelfLoopShape::Unsupported) {
             return Err(AttemptError::Cycle {
                 refusal: SolverError::UnsupportedSelfLoop {
                     recipe: r.name.clone(),
@@ -660,6 +781,113 @@ fn solve_attempt(
     let x_of = |c: usize| snap(solution[x_vars[c]]);
     let s_of = |i: usize| snap(s_vars[i].map(|v| solution[v]).unwrap_or(0.0));
     let o_of = |i: usize| snap(o_vars[i].map(|v| solution[v]).unwrap_or(0.0));
+
+    // Builds one MachineSpec for column `c`. Factored out of the DFS below
+    // so the pure-voider post-pass (RFP Fulgora spike) can emit voider
+    // machines the same way — voiders are demand-pulled sinks, not
+    // producers, so they're structurally invisible to the producer-of-item
+    // DFS and need their own emission pass (see the reachability-exemption
+    // comment after the DFS loop).
+    let build_machine_spec = |c: usize| -> MachineSpec {
+        let col = &columns[c];
+        let crafts_per_sec_per_machine = col.crafting_speed / col.recipe.energy;
+        let count = snap(x_of(c) / crafts_per_sec_per_machine);
+        // Self-loop items (RFP Phase 2): excluded from the ordinary
+        // ingredient/product mapping below and emitted instead as a
+        // single net flow (into inputs or outputs, by sign) plus a
+        // `self_loop` entry carrying the raw per-machine rates for
+        // the row template's loop-back belt sizing. Pure voiders (RFP
+        // Fulgora spike) fall through this same machinery: their one
+        // self-loop item nets negative, so it lands in `inputs` as a
+        // netted consumption with empty `outputs` — exactly the "netted
+        // emission" shape the spike calls for, with no extra code.
+        let self_loop_names = raw_self_loop_items(col.recipe);
+        let mut inputs: Vec<ItemFlow> = col
+            .recipe
+            .ingredients
+            .iter()
+            .filter(|ing| !self_loop_names.contains(&ing.name.as_str()))
+            .map(|ing| ItemFlow {
+                item: ing.name.clone(),
+                rate: ing.amount * crafts_per_sec_per_machine,
+                is_fluid: ing.type_ == "fluid",
+                module_id: 0,
+            })
+            .collect();
+        let mut outputs: Vec<ItemFlow> = col
+            .recipe
+            .products
+            .iter()
+            .filter(|p| !self_loop_names.contains(&p.name.as_str()))
+            .map(|p| ItemFlow {
+                item: p.name.clone(),
+                rate: p.amount * p.probability * crafts_per_sec_per_machine,
+                is_fluid: p.type_ == "fluid",
+                module_id: 0,
+            })
+            .collect();
+        let mut self_loop: Vec<SelfLoopFlow> = Vec::new();
+        for name in &self_loop_names {
+            let consumed_rate = col
+                .recipe
+                .ingredients
+                .iter()
+                .filter(|i| i.name == *name)
+                .map(|i| i.amount)
+                .sum::<f64>()
+                * crafts_per_sec_per_machine;
+            let produced_rate = col
+                .recipe
+                .products
+                .iter()
+                .filter(|p| p.name == *name)
+                .map(|p| p.amount * p.probability)
+                .sum::<f64>()
+                * crafts_per_sec_per_machine;
+            let net_rate = produced_rate - consumed_rate;
+            let is_fluid = col
+                .recipe
+                .ingredients
+                .iter()
+                .find(|i| i.name == *name)
+                .map(|i| i.type_ == "fluid")
+                .unwrap_or(false);
+            self_loop.push(SelfLoopFlow {
+                item: name.to_string(),
+                is_fluid,
+                consumed_rate,
+                produced_rate,
+                net_rate,
+            });
+            if net_rate > 0.0 {
+                outputs.push(ItemFlow {
+                    item: name.to_string(),
+                    rate: net_rate,
+                    is_fluid,
+                    module_id: 0,
+                });
+            } else if net_rate < 0.0 {
+                inputs.push(ItemFlow {
+                    item: name.to_string(),
+                    rate: -net_rate,
+                    is_fluid,
+                    module_id: 0,
+                });
+            }
+            // net_rate == 0.0 cannot occur for `SelfLoopShape::Supported`
+            // columns (both the 1-item net-positive and 2-item
+            // opposite-sign checks require nonzero net) nor for accepted
+            // voiders (net < 0 by definition), so no branch is needed here.
+        }
+        MachineSpec {
+            entity: col.machine.clone(),
+            recipe: col.recipe.name.clone(),
+            self_loop,
+            count,
+            inputs,
+            outputs,
+        }
+    };
 
     // item → active producing columns (net > 0), in column order.
     let mut producers_of: FxHashMap<usize, Vec<usize>> = FxHashMap::default();
@@ -708,107 +936,32 @@ fn solve_attempt(
                 if !visited_cols.insert(c) {
                     continue;
                 }
-                let col = &columns[c];
-                let crafts_per_sec_per_machine = col.crafting_speed / col.recipe.energy;
-                let count = snap(x_of(c) / crafts_per_sec_per_machine);
-                // Self-loop items (RFP Phase 2): excluded from the ordinary
-                // ingredient/product mapping below and emitted instead as a
-                // single net flow (into inputs or outputs, by sign) plus a
-                // `self_loop` entry carrying the raw per-machine rates for
-                // the row template's loop-back belt sizing.
-                let self_loop_names = raw_self_loop_items(col.recipe);
-                let mut inputs: Vec<ItemFlow> = col
-                    .recipe
-                    .ingredients
-                    .iter()
-                    .filter(|ing| !self_loop_names.contains(&ing.name.as_str()))
-                    .map(|ing| ItemFlow {
-                        item: ing.name.clone(),
-                        rate: ing.amount * crafts_per_sec_per_machine,
-                        is_fluid: ing.type_ == "fluid",
-                        module_id: 0,
-                    })
-                    .collect();
-                let mut outputs: Vec<ItemFlow> = col
-                    .recipe
-                    .products
-                    .iter()
-                    .filter(|p| !self_loop_names.contains(&p.name.as_str()))
-                    .map(|p| ItemFlow {
-                        item: p.name.clone(),
-                        rate: p.amount * p.probability * crafts_per_sec_per_machine,
-                        is_fluid: p.type_ == "fluid",
-                        module_id: 0,
-                    })
-                    .collect();
-                let mut self_loop: Vec<SelfLoopFlow> = Vec::new();
-                for name in &self_loop_names {
-                    let consumed_rate = col
-                        .recipe
-                        .ingredients
-                        .iter()
-                        .filter(|i| i.name == *name)
-                        .map(|i| i.amount)
-                        .sum::<f64>()
-                        * crafts_per_sec_per_machine;
-                    let produced_rate = col
-                        .recipe
-                        .products
-                        .iter()
-                        .filter(|p| p.name == *name)
-                        .map(|p| p.amount * p.probability)
-                        .sum::<f64>()
-                        * crafts_per_sec_per_machine;
-                    let net_rate = produced_rate - consumed_rate;
-                    let is_fluid = col
-                        .recipe
-                        .ingredients
-                        .iter()
-                        .find(|i| i.name == *name)
-                        .map(|i| i.type_ == "fluid")
-                        .unwrap_or(false);
-                    self_loop.push(SelfLoopFlow {
-                        item: name.to_string(),
-                        is_fluid,
-                        consumed_rate,
-                        produced_rate,
-                        net_rate,
-                    });
-                    if net_rate > 0.0 {
-                        outputs.push(ItemFlow {
-                            item: name.to_string(),
-                            rate: net_rate,
-                            is_fluid,
-                            module_id: 0,
-                        });
-                    } else if net_rate < 0.0 {
-                        inputs.push(ItemFlow {
-                            item: name.to_string(),
-                            rate: -net_rate,
-                            is_fluid,
-                            module_id: 0,
-                        });
-                    }
-                    // net_rate == 0.0 cannot occur for `SelfLoopShape::Supported`
-                    // columns (both the 1-item net-positive and 2-item
-                    // opposite-sign checks require nonzero net), so no branch
-                    // is needed for it here.
-                }
-                machines.push(MachineSpec {
-                    entity: col.machine.clone(),
-                    recipe: col.recipe.name.clone(),
-                    self_loop,
-                    count,
-                    inputs,
-                    outputs,
-                });
-                dependency_order.push(col.recipe.name.clone());
+                machines.push(build_machine_spec(c));
+                dependency_order.push(columns[c].recipe.name.clone());
                 // Recurse ingredients in declaration order (reversed for
                 // the stack), matching resolve()'s loop at solver.rs:257.
-                for ing in col.recipe.ingredients.iter().rev() {
+                for ing in columns[c].recipe.ingredients.iter().rev() {
                     let i = items.index[ing.name.as_str()];
                     stack.push(Work::Item(i));
                 }
+            }
+        }
+    }
+
+    // Pure-voider emission pass (RFP Fulgora spike, gated on allow_voiding).
+    // Voiders are demand-pulled SINKS (their only net coefficient is
+    // negative), so `producers_of` never lists them and the DFS above can
+    // never discover them by walking producer→ingredient edges — the same
+    // reason they're exempt from the surplus-compression guard just below.
+    // Emit them explicitly here and mark visited, so both the report (their
+    // MachineSpec must actually appear in the machine mix) and the guard
+    // (which would otherwise flag them as an unreachable active column) see
+    // consistent state.
+    if options.allow_voiding {
+        for &c in &active {
+            if is_pure_voider(columns[c].recipe) && visited_cols.insert(c) {
+                machines.push(build_machine_spec(c));
+                dependency_order.push(columns[c].recipe.name.clone());
             }
         }
     }

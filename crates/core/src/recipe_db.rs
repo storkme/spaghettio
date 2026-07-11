@@ -298,6 +298,13 @@ fn category_machines(category: &str) -> &'static [&'static str] {
         "metallurgy" | "metallurgy-or-assembling" | "pressing" => &["foundry"],
         "organic" | "organic-or-assembling" => &["biochamber"],
         "centrifuging" => &["centrifuge"],
+        // Fulgora scrap economy (docs/rfp-solver-net-flow.md spike): both
+        // categories are excluded from normal solving by
+        // EXCLUDED_CATEGORIES, so this mapping is inert on every default
+        // path — it only matters once a caller opts in via
+        // `NetflowOptions::allow_recycling`, at which point the recycler
+        // needs to be resolvable like any other specialised machine.
+        "recycling" | "recycling-or-hand-crafting" => &["recycler"],
         _ => &[],
     }
 }

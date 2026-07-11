@@ -134,6 +134,16 @@ pub fn build_short_id_map(slugs: &[&str]) -> Result<FxHashMap<String, String>, V
 pub fn known_slugs() -> Vec<String> {
     let mut set: FxHashSet<String> = FxHashSet::default();
     for recipe in db().recipes.values() {
+        // Excluded-category recipes (recycling, crushing, …) aren't part of
+        // the solvable universe — see recipe_db::is_excluded_recipe and
+        // recipe_db::all_producible_items, which apply the same filter.
+        // Without it, purely additive recipe-data growth in an excluded
+        // category (e.g. the ~310 Fulgora recycling recipes) would still
+        // expand the short-code universe and shift existing items' codes —
+        // a URL-breaking regression with no solver-visible cause.
+        if crate::recipe_db::is_excluded_recipe(recipe) {
+            continue;
+        }
         for ing in &recipe.ingredients {
             set.insert(ing.name.clone());
         }
