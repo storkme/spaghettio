@@ -590,3 +590,33 @@ and 3 wait on its artifacts as marked. Phase 3 is the long pole.
   what per-item belt pickup sustains; prerequisites are a container
   entity class + buffer-node flow semantics + eject-into-container
   support in the ejection model.***
+- *2026-07-11 — Phase 3 PARTIAL LANDING; **RFP closes here**. What
+  landed (all green, inert for existing layouts, zero golden
+  movement): `templates::scrap_recycling_row` + `RowKind::
+  ScrapRecycling` (south-facing recycler bank, direct ejection onto a
+  `:sushi:` belt, per-item filter-inserter bank, crossing-free
+  fan-out to one east-flowing belt per item);
+  `RowSpan.secondary_output_belt` generalized to
+  `sorted_output_belts: Vec<(item, y)>` behind one
+  `output_belt_y_for(item)` helper; KC5 validators in
+  `validate/sushi.rs` (isolation exemption sushi↔sushi only, new
+  boundary check — every off-sushi transition through a matching
+  filter inserter — and Σ-rate saturation check); e2e
+  `fulgora_scrap_sorter_mechanism_present` as the green reproduction
+  point. **KC5 does not fire** — containment held with zero
+  ordinary-belt weakening. What did NOT land: the holmium-plate 0/0
+  fixture. Snapshot-diagnosed wall, two independent structural
+  failures: (1) a row has ONE `output_east` direction but the 12
+  sorted outputs need per-item fates (3 consumer items west to
+  trunks, ~9 surplus items east to the merger) — same
+  east-row/west-consumer hazard the Phase 2 voider entry recorded,
+  here structural; (2) `merge_output_rows` self-collides at ~11
+  simultaneous surplus streams (UG entrances need clear tiles the
+  dense fan-out occupies; built for 1–2 streams). Dual-fate items
+  (stone, ice: partly consumed, partly surplus) need a solid split
+  neither the lane planner nor merger models. The remaining work is
+  a hybrid-direction multi-exit row + merger-at-scale design pass —
+  **parked as an explicitly separate future sub-phase with those two
+  failures as its entry criteria, alongside Phase 4 (UI, also
+  parked). Priority shifted to Nauvis science scaling by user
+  direction, 2026-07-11.***

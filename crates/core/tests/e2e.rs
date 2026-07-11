@@ -5979,3 +5979,78 @@ fn diag_decomposition_signature_match() {
     }
 }
 
+
+// ===========================================================================
+// Fulgora scrap sushi-sorter (RFP Fulgora Phase 3, docs/rfp-fulgora-scrap.md
+// D3). The recycler-bank + filter-inserter sushi sorter MECHANISM lands here
+// and is exercised end-to-end below. The full 0-error/0-warning fixture is
+// gated on the bus/merger routing at scale (12 single-item outputs dispersed
+// from ONE row: 3 to downstream consumers, ~11 east to the surplus merger),
+// which the current single-exit bus model does not yet route cleanly — see
+// the handoff report. This test asserts the sorter mechanism is present and
+// correct, not (yet) 0 errors, so it stays green while that routing lands.
+// ===========================================================================
+
+/// Solve a Fulgora scrap chain via the net-flow solver with
+/// `allow_recycling` (the public `solve_with_exclusions` path used by the
+/// other e2e fixtures does NOT plumb recycling — RFP D4, Phase 4). Mirrors
+/// `tests/solver_netflow_parity.rs::report_fulgora_spike`.
+fn solve_fulgora(target: &str, rate: f64) -> SolverResult {
+    use spaghettio_core::netflow::{solve_netflow_with_options, CostTable, NetflowOptions, RecipeScope};
+    use spaghettio_core::recipe_db::MachinePalette;
+    let inputs: FxHashSet<String> = ["scrap", "water"].iter().map(|s| s.to_string()).collect();
+    let opts = NetflowOptions { allow_recycling: true, allow_voiding: false };
+    solve_netflow_with_options(
+        target, rate, &inputs, &MachinePalette::default(), "assembling-machine-3",
+        &FxHashSet::default(), RecipeScope::Free, &CostTable::default(), &opts,
+    )
+    .expect("fulgora solve")
+}
+
+#[test]
+fn fulgora_scrap_sorter_mechanism_present() {
+    let sr = solve_fulgora("holmium-plate", 0.25);
+
+    // Solver side: a recycler bank running scrap-recycling.
+    let recyclers = sr.machines.iter().find(|m| m.recipe == "scrap-recycling").expect("scrap-recycling row");
+    assert_eq!(recyclers.entity, "recycler");
+    assert!(recyclers.count >= 4.0 - 1e-9, "expected >=4 recyclers at 0.25/s, got {}", recyclers.count);
+
+    let layout = layout::build_bus_layout(
+        &sr,
+        layout::LayoutOptions {
+            surplus_policy: layout::SurplusPolicy::Export,
+            max_belt_tier: Some("transport-belt".to_string()),
+            ..Default::default()
+        },
+    )
+    .expect("fulgora layout");
+
+    // Physical mechanism: >=4 recyclers, a :sushi: belt segment, and one
+    // filter inserter per solid recycler output with the matching filter.
+    let placed_recyclers = layout.entities.iter().filter(|e| e.name == "recycler").count();
+    assert!(placed_recyclers >= 4, "expected >=4 placed recyclers, got {placed_recyclers}");
+
+    let sushi = layout
+        .entities
+        .iter()
+        .filter(|e| e.segment_id.as_deref().is_some_and(|s| s.contains(":sushi:")))
+        .count();
+    assert!(sushi > 0, "expected a :sushi: tagged belt run");
+
+    for out in recyclers.outputs.iter().filter(|o| !o.is_fluid) {
+        let has_filter = layout.entities.iter().any(|e| {
+            e.name.contains("inserter")
+                && e.segment_id.as_deref().is_some_and(|s| s.contains(":sushi-sort:"))
+                && e.filters == vec![out.item.clone()]
+        });
+        assert!(has_filter, "expected a sushi sort inserter filtering {}", out.item);
+    }
+
+    // Sushi throughput stays under belt capacity (the saturation invariant).
+    let sat = validate::sushi::check_sushi_saturation(&layout, &sr);
+    assert!(sat.is_empty(), "sushi over capacity: {sat:?}");
+    // The sorter mechanism itself must not leak (KC5 boundary is clean).
+    let boundary = validate::sushi::check_sushi_boundary(&layout);
+    assert!(boundary.is_empty(), "sushi boundary leak: {boundary:?}");
+}

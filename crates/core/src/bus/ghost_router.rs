@@ -1237,16 +1237,10 @@ pub fn route_bus_ghost(
     // identical between the two (same per-machine columns) and only y
     // differs.
     let row_exit_origin = |row: &RowSpan, item: &str| -> (i32, i32) {
-        if let Some((sec_item, sec_y)) = &row.secondary_output_belt {
-            if sec_item == item {
-                return if row.output_east {
-                    (row.output_belt_x_max + 1, *sec_y)
-                } else {
-                    (row.output_belt_x_min - 1, *sec_y)
-                };
-            }
-        }
-        let out_y = row.output_belt_y;
+        // Per-item belt y (D2b secondary output, or a scrap-recycling
+        // sushi-sorter's N single-item belts) via the shared lookup, else
+        // the row's primary `output_belt_y`.
+        let out_y = row.output_belt_y_for(item);
         if row.output_east {
             (row.output_belt_x_max + 1, out_y)
         } else {
@@ -3026,6 +3020,14 @@ pub fn route_bus_ghost(
         let mut output_rows: Vec<usize> = Vec::new();
         let mut output_ys: Vec<i32> = Vec::new();
         for (ri, rs) in row_spans.iter().enumerate() {
+            // A scrap-recycling sushi-sorter row (RFP Fulgora Phase 3)
+            // emits every one of its ~12 outputs on its own belt via
+            // `sorted_output_belts`; that map is authoritative for it.
+            if let Some((_, sy)) = rs.sorted_output_belts.iter().find(|(it, _)| it == item) {
+                output_rows.push(ri);
+                output_ys.push(*sy);
+                continue;
+            }
             let is_primary = rs
                 .spec
                 .outputs

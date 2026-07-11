@@ -1288,6 +1288,7 @@ mod tests {
             output_belt_x_max: 0,
             horizontal_stack: None,
             secondary_output_belt: None,
+            sorted_output_belts: Vec::new(),
         }
     }
 

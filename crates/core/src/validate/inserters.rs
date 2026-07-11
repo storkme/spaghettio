@@ -124,6 +124,13 @@ pub fn check_inserter_direction(layout: &LayoutResult) -> Vec<ValidationIssue> {
         if !is_inserter(&e.name) {
             continue;
         }
+        // Sushi sort inserters (RFP Fulgora Phase 3) are belt-to-belt by
+        // design — they lift one item off a sushi belt onto its own lane
+        // and touch no machine. The sushi boundary check owns their
+        // correctness (`validate::sushi::check_sushi_boundary`).
+        if super::sushi::is_sushi_sort_inserter(e.segment_id.as_deref()) {
+            continue;
+        }
 
         let (dx, dy) = dir_to_vec(e.direction);
         let (odx, ody) = (-dx, -dy);

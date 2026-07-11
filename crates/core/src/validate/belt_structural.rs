@@ -435,11 +435,20 @@ pub fn check_belt_item_isolation(layout: &LayoutResult) -> Vec<ValidationIssue> 
     let mut belt_dir: FxHashMap<(i32, i32), EntityDirection> = FxHashMap::default();
     let mut belt_carry: FxHashMap<(i32, i32), Option<String>> = FxHashMap::default();
     let mut ug_inputs: FxHashSet<(i32, i32)> = FxHashSet::default();
+    // Sushi (mixed-item) belt tiles (RFP Fulgora Phase 3). A sushi↔sushi
+    // adjacency legitimately carries multiple items and is exempt here; the
+    // sushi boundary + saturation checks own it. This is a purely additive
+    // skip — ordinary (non-sushi) adjacencies are unaffected (KC5).
+    let mut sushi_tiles: FxHashSet<(i32, i32)> = FxHashSet::default();
 
     for e in &layout.entities {
         if is_belt_entity(&e.name) {
             belt_dir.insert((e.x, e.y), e.direction);
             belt_carry.insert((e.x, e.y), e.carries.clone());
+            let sushi = super::sushi::is_sushi_segment(e.segment_id.as_deref());
+            if sushi {
+                sushi_tiles.insert((e.x, e.y));
+            }
             if is_ug_belt(&e.name) && e.io_type.as_deref() == Some("input") {
                 ug_inputs.insert((e.x, e.y));
             }
@@ -447,6 +456,9 @@ pub fn check_belt_item_isolation(layout: &LayoutResult) -> Vec<ValidationIssue> 
                 let second = splitter_second_tile(e);
                 belt_dir.insert(second, e.direction);
                 belt_carry.insert(second, e.carries.clone());
+                if sushi {
+                    sushi_tiles.insert(second);
+                }
             }
         }
     }
@@ -466,6 +478,11 @@ pub fn check_belt_item_isolation(layout: &LayoutResult) -> Vec<ValidationIssue> 
             continue;
         }
         if unresolved.contains(&(ax, ay)) || unresolved.contains(&b) {
+            continue;
+        }
+        // Sushi↔sushi adjacency is exempt (both carry the mixed set);
+        // sushi→ordinary is caught by `check_sushi_boundary`, not here.
+        if sushi_tiles.contains(&(ax, ay)) && sushi_tiles.contains(&b) {
             continue;
         }
         let ac = belt_carry.get(&(ax, ay)).and_then(|c| c.as_deref());

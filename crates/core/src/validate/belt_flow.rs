@@ -38,7 +38,11 @@ fn belt_dir_map_filtered(entities: &[PlacedEntity], skip_balancers: bool) -> FxH
         }
         if skip_balancers {
             if let Some(ref seg) = e.segment_id {
-                if seg.starts_with("balancer:") {
+                // Sushi (mixed-item) belts (RFP Fulgora Phase 3) are not
+                // single-item lanes — the sushi saturation check owns their
+                // throughput; the per-item lanes downstream of the filter
+                // inserters walk normally.
+                if seg.starts_with("balancer:") || seg.contains(":sushi:") {
                     continue;
                 }
             }

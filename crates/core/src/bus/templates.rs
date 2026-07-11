@@ -4380,6 +4380,227 @@ pub fn voider_row(
     (entities, row_height)
 }
 
+/// Scrap-recycling sushi-sorter row (RFP Fulgora Phase 3,
+/// `docs/rfp-fulgora-scrap.md` D3, architecture (a)).
+///
+/// A bank of south-facing recyclers running `scrap-recycling` ejects its
+/// ~12 mixed products directly (mining-drill-style, `recycler_eject_tile`)
+/// onto a single east-flowing "sushi" belt one tile south of the machines.
+/// A bank of filter inserters — one per item type — lifts each product off
+/// the sushi belt onto its own single-item east-flowing output belt. Those
+/// per-item belts fan out south in a crossing-free staircase so each ends
+/// at its own y, reaching the row's east edge, where the ordinary bus
+/// machinery treats each as a normal producer output (consumers via the
+/// lane planner, surplus via the step-7b merger).
+///
+/// ```text
+///   dy0  scrap input belt (EAST) ── fed by the scrap trunk tap
+///   dy1  scrap input inserters (SOUTH, one per recycler)
+///   dy2  ┌── recyclers (2×4, SOUTH-facing) ──┐
+///   ..5  └──────────────────────────────────┘
+///   dy6  sushi belt (EAST, :sushi:) ── ejects land at (mx+1, dy6)
+///   dy7                     sort filter inserters (SOUTH) ▓ ▓ ▓ ▓ …
+///   dy8+ per-item output belts fan out east, one y each ───────►
+/// ```
+///
+/// Returns `(entities, row_height, sorted_output_belts)` where
+/// `sorted_output_belts[i] = (item, absolute_y)` is the belt each item
+/// exits on — used to populate `RowSpan::sorted_output_belts`.
+///
+/// The row is inherently EAST-flowing (`output_east == true`): every
+/// per-item belt reaches the east edge so the merger can continue it, and
+/// consumed items route to their trunk from the same east exit.
+#[allow(clippy::too_many_arguments)]
+pub fn scrap_recycling_row(
+    recipe: &str,
+    input_item: &str,
+    machine_count: usize,
+    y_offset: i32,
+    x_offset: i32,
+    input_total_rate: f64,
+    sorted_items: &[(String, f64)],
+    max_belt_tier: Option<&str>,
+) -> (Vec<PlacedEntity>, i32, Vec<(String, i32)>) {
+    use crate::common::belt_entity_for_rate;
+
+    debug_assert_eq!(
+        crate::common::machine_dims("recycler"),
+        (2, 4),
+        "scrap_recycling_row is built around the recycler's real 2x4 footprint; \
+         see rfp-fulgora-scrap Phase 0"
+    );
+
+    let count = machine_count.max(1) as i32;
+    let k = sorted_items.len() as i32;
+
+    // Geometry (see the module doc sketch above).
+    const PITCH: i32 = 2; // recycler width
+    let dy_scrap_in = 0;
+    let dy_scrap_ins = 1;
+    let dy_machine = 2; // recyclers occupy dy 2..=5 (height 4)
+    let dy_sushi = 6; // == dy_machine + 4 (South eject: y+4)
+    let dy_sort_ins = 7;
+    let dy_lanes = 8;
+    let y = |dy: i32| y_offset + dy;
+
+    let mxs: Vec<i32> = (0..count).map(|i| x_offset + i * PITCH).collect();
+    let mx0 = mxs[0];
+    let machine_east = mx0 + PITCH * count; // one past the last machine column
+    let eject_west = mx0 + 1; // machine 0's east column
+    // Sort inserters sit strictly EAST of every ejection tile so the
+    // east-flowing sushi carries each item past its own inserter.
+    let sort_x0 = machine_east;
+    let sort_cols: Vec<i32> = (0..k).map(|j| sort_x0 + j).collect();
+    let sushi_east = sort_cols.last().copied().unwrap_or(sort_x0);
+    // Each per-item horizontal belt runs one tile past the last inserter
+    // column, so even the eastmost item has a horizontal run the merger
+    // can pick up from the row's east edge.
+    let east_x = sushi_east + 1;
+
+    let scrap_belt = belt_entity_for_rate(input_total_rate, max_belt_tier);
+    let sushi_total: f64 = sorted_items.iter().map(|(_, r)| *r).sum();
+    let sushi_belt = belt_entity_for_rate(sushi_total, max_belt_tier);
+
+    let machine_seg = Some(format!("row:{recipe}:machine"));
+    let scrap_in_seg = Some(format!("row:{recipe}:belt-in:{input_item}"));
+    let scrap_ins_seg = Some(format!("row:{recipe}:inserter-in:{input_item}"));
+    // `:sushi:` — the mixed-item collection belt. Tagged so the validators
+    // exempt sushi↔sushi adjacency from item-isolation and lane-walking,
+    // and require every off-sushi transition to pass a filter inserter
+    // (RFP Fulgora Phase 3 KC5 containment).
+    let sushi_seg = Some(format!("row:{recipe}:sushi:{input_item}"));
+
+    let mut entities: Vec<PlacedEntity> = Vec::new();
+
+    // ---- Scrap input belt (dy0), east-flowing across the machine span ----
+    for x in mx0..machine_east {
+        entities.push(PlacedEntity {
+            name: scrap_belt.to_string(),
+            x,
+            y: y(dy_scrap_in),
+            direction: EntityDirection::East,
+            carries: Some(input_item.to_string()),
+            segment_id: scrap_in_seg.clone(),
+            rate: Some(input_total_rate),
+            ..Default::default()
+        });
+    }
+
+    // ---- Recyclers + scrap input inserters ----
+    for &mx in &mxs {
+        entities.push(PlacedEntity {
+            name: "inserter".to_string(),
+            x: mx,
+            y: y(dy_scrap_ins),
+            direction: EntityDirection::South,
+            carries: Some(input_item.to_string()),
+            segment_id: scrap_ins_seg.clone(),
+            ..Default::default()
+        });
+        entities.push(PlacedEntity {
+            name: "recycler".to_string(),
+            x: mx,
+            y: y(dy_machine),
+            direction: EntityDirection::South,
+            recipe: Some(recipe.to_string()),
+            segment_id: machine_seg.clone(),
+            ..Default::default()
+        });
+    }
+
+    // ---- Sushi belt (dy6), east-flowing from the westmost eject to the
+    // last sort inserter. Ejection tiles at (mx+1, dy6) land on it. ----
+    for x in eject_west..=sushi_east {
+        entities.push(PlacedEntity {
+            name: sushi_belt.to_string(),
+            x,
+            y: y(dy_sushi),
+            direction: EntityDirection::East,
+            // Sushi tiles carry a mixed set — no single `carries` tag; the
+            // saturation check owns their rate story. The `:sushi:` segment
+            // marker is what the validators key on.
+            segment_id: sushi_seg.clone(),
+            rate: Some(sushi_total),
+            ..Default::default()
+        });
+    }
+
+    // ---- Sort filter inserters + per-item fan-out output belts ----
+    // Crossing-free staircase: westmost inserter turns east at the DEEPEST
+    // y, eastmost at the shallowest, so no vertical drop crosses a
+    // horizontal run (see the RFP Phase 3 geometry note).
+    let mut sorted_output_belts: Vec<(String, i32)> = Vec::new();
+    for (j, (item, rate)) in sorted_items.iter().enumerate() {
+        let jx = sort_cols[j];
+        let rank = (k - 1) - j as i32; // westmost (j=0) => deepest
+        let turn_dy = dy_lanes + rank;
+        let out_belt = belt_entity_for_rate(*rate * 2.0, max_belt_tier);
+        let out_seg = Some(format!("row:{recipe}:belt-out:{item}"));
+        // `:sushi-sort:` marks the belt-to-belt filter inserter that lifts
+        // one item off the sushi belt. Validators key on it:
+        // `check_inserter_direction` exempts it (it touches belts, not a
+        // machine), and the sushi boundary check verifies its filter.
+        let sort_ins_seg = Some(format!("row:{recipe}:sushi-sort:{item}"));
+
+        // Filter inserter: picks from the sushi tile to its north, drops
+        // onto the head of this item's own belt to its south.
+        entities.push(PlacedEntity {
+            name: "fast-inserter".to_string(),
+            x: jx,
+            y: y(dy_sort_ins),
+            direction: EntityDirection::South,
+            carries: Some(item.clone()),
+            filters: vec![item.clone()],
+            segment_id: sort_ins_seg.clone(),
+            rate: Some(*rate),
+            ..Default::default()
+        });
+
+        // Vertical drop from the inserter's drop tile (dy_lanes) down to
+        // the turn row, then a corner turning EAST.
+        for dy in dy_lanes..turn_dy {
+            entities.push(PlacedEntity {
+                name: out_belt.to_string(),
+                x: jx,
+                y: y(dy),
+                direction: EntityDirection::South,
+                carries: Some(item.clone()),
+                segment_id: out_seg.clone(),
+                rate: Some(*rate),
+                ..Default::default()
+            });
+        }
+        // Corner (or drop tile itself, when turn_dy == dy_lanes): turn EAST.
+        entities.push(PlacedEntity {
+            name: out_belt.to_string(),
+            x: jx,
+            y: y(turn_dy),
+            direction: EntityDirection::East,
+            carries: Some(item.clone()),
+            segment_id: out_seg.clone(),
+            rate: Some(*rate),
+            ..Default::default()
+        });
+        // Horizontal run east to the row's east edge.
+        for x in (jx + 1)..=east_x {
+            entities.push(PlacedEntity {
+                name: out_belt.to_string(),
+                x,
+                y: y(turn_dy),
+                direction: EntityDirection::East,
+                carries: Some(item.clone()),
+                segment_id: out_seg.clone(),
+                rate: Some(*rate),
+                ..Default::default()
+            });
+        }
+        sorted_output_belts.push((item.clone(), y(turn_dy)));
+    }
+
+    let row_height = dy_lanes + k;
+    (entities, row_height, sorted_output_belts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6057,5 +6278,82 @@ mod tests {
             assert_entity(&entities, x, 8, "transport-belt");
             assert_entity(&entities, x, 9, "transport-belt");
         }
+    }
+
+    // ---- scrap_recycling_row (RFP Fulgora Phase 3 sushi sorter) ----
+
+    #[test]
+    fn scrap_recycling_row_places_sorter_mechanism() {
+        // 4 recyclers, 3 sorted items — enough to exercise the fan-out.
+        let items = vec![
+            ("iron-gear-wheel".to_string(), 2.0),
+            ("stone".to_string(), 0.4),
+            ("holmium-ore".to_string(), 0.1),
+        ];
+        let (entities, height, sorted_belts) = scrap_recycling_row(
+            "scrap-recycling",
+            "scrap",
+            4,
+            0,
+            0,
+            10.0,
+            &items,
+            Some("transport-belt"),
+        );
+
+        // Four south-facing recyclers at pitch 2, dy=2.
+        let recyclers: Vec<_> = entities.iter().filter(|e| e.name == "recycler").collect();
+        assert_eq!(recyclers.len(), 4, "expected 4 recyclers");
+        for r in &recyclers {
+            assert_eq!(r.direction, EntityDirection::South);
+            assert_eq!(r.recipe.as_deref(), Some("scrap-recycling"));
+            assert_eq!(r.y, 2);
+        }
+
+        // Sushi belt tagged `:sushi:`, carries no single item.
+        let sushi: Vec<_> = entities
+            .iter()
+            .filter(|e| e.segment_id.as_deref().is_some_and(|s| s.contains(":sushi:")))
+            .collect();
+        assert!(!sushi.is_empty(), "expected a :sushi: tagged belt run");
+        assert!(sushi.iter().all(|e| e.carries.is_none()), "sushi tiles carry no single item");
+        assert!(sushi.iter().all(|e| e.y == 6), "sushi belt at dy=6 (one tile past the eject edge)");
+
+        // One filter inserter per item, each with the matching filter.
+        for (item, _) in &items {
+            let ins: Vec<_> = entities
+                .iter()
+                .filter(|e| {
+                    e.name == "fast-inserter"
+                        && e.segment_id.as_deref().is_some_and(|s| s.contains(":sushi-sort:"))
+                        && e.filters == vec![item.clone()]
+                })
+                .collect();
+            assert_eq!(ins.len(), 1, "expected exactly one sort inserter filtering {item}");
+        }
+
+        // Each item gets its own output belt at a distinct y (the fan-out).
+        assert_eq!(sorted_belts.len(), 3);
+        let ys: std::collections::BTreeSet<i32> = sorted_belts.iter().map(|(_, y)| *y).collect();
+        assert_eq!(ys.len(), 3, "each sorted item exits on its own y");
+        // Height covers scrap-in (0) .. last fan-out row.
+        assert_eq!(height, 8 + 3);
+
+        // No two entities share a tile (crossing-free fan-out).
+        let mut seen: std::collections::HashSet<(i32, i32, String)> = Default::default();
+        let mut occ: std::collections::HashMap<(i32, i32), usize> = Default::default();
+        for e in &entities {
+            *occ.entry((e.x, e.y)).or_default() += 1;
+            seen.insert((e.x, e.y, e.name.clone()));
+        }
+        // Belts/inserters are 1×1; recyclers are 2×4 (handled separately).
+        // Assert no two BELTS overlap (the fan-out staircase must not cross).
+        let mut belt_occ: std::collections::HashMap<(i32, i32), usize> = Default::default();
+        for e in &entities {
+            if e.name.contains("belt") {
+                *belt_occ.entry((e.x, e.y)).or_default() += 1;
+            }
+        }
+        assert!(belt_occ.values().all(|&n| n == 1), "fan-out belts must not overlap");
     }
 }

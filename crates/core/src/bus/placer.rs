@@ -100,6 +100,37 @@ pub struct RowSpan {
     /// today (RFP Fulgora D2b, `docs/rfp-fulgora-scrap.md`). Read by the
     /// step-7 solid-surplus merger (`ghost_router` step 7b).
     pub secondary_output_belt: Option<(String, i32)>,
+    /// Per-item output belt y for rows that emit MANY single-item output
+    /// belts, each at its own row (RFP Fulgora Phase 3,
+    /// `docs/rfp-fulgora-scrap.md` D3): the scrap-recycling sushi-sorter
+    /// row lifts each of the recycler's ~12 mixed outputs onto its own
+    /// east-flowing belt at a distinct y. Generalises
+    /// `secondary_output_belt` from one extra belt to N. Empty for every
+    /// ordinary row. Read by the same three item→belt-y lookup sites the
+    /// secondary belt uses: `lane_planner` source_y, `ghost_router`
+    /// `row_exit_origin`, and the step-7b surplus merger. The helper
+    /// [`RowSpan::output_belt_y_for`] centralises the lookup.
+    pub sorted_output_belts: Vec<(String, i32)>,
+}
+
+impl RowSpan {
+    /// The physical output-belt y for `item` on this row. Checks the
+    /// per-item `sorted_output_belts` map first (scrap-recycling sushi
+    /// sorter), then the single `secondary_output_belt` (D2b), then falls
+    /// back to the row's primary `output_belt_y`. One helper so the lane
+    /// planner, ghost router, and surplus merger can't disagree about
+    /// which belt an item exits from.
+    pub fn output_belt_y_for(&self, item: &str) -> i32 {
+        if let Some((_, y)) = self.sorted_output_belts.iter().find(|(it, _)| it == item) {
+            return *y;
+        }
+        if let Some((sec_item, sec_y)) = &self.secondary_output_belt {
+            if sec_item == item {
+                return *sec_y;
+            }
+        }
+        self.output_belt_y
+    }
 }
 
 /// Maximum machines in one row before output or input exceeds belt lane capacity.
@@ -378,6 +409,14 @@ pub enum RowKind {
     /// true`. Non-square 2×4 machine, direct belt ejection (no output
     /// inserter), no declared bus output. See `templates::voider_row`.
     Voider,
+    /// Scrap-recycling sushi-sorter row (RFP Fulgora Phase 3,
+    /// `docs/rfp-fulgora-scrap.md` D3): a bank of `recycler`s running
+    /// `scrap-recycling` ejects ~12 mixed products onto a `:sushi:` belt;
+    /// a bank of filter inserters sorts each onto its own east-flowing
+    /// output belt. Non-square 2×4 machine, direct belt ejection, one
+    /// output belt PER item (`sorted_output_belts`). Always east-flowing.
+    /// See `templates::scrap_recycling_row`.
+    ScrapRecycling,
 }
 
 impl RowKind {
@@ -417,6 +456,12 @@ impl RowKind {
             // inserter row (5) + near/tap belt (6) + far/recirc belt
             // (7) = 8. See `templates::voider_row`.
             RowKind::Voider => 8,
+            // Scrap input (0) + input inserters (1) + 4-tall recycler
+            // (2..5) + sushi (6) + sort inserters (7) + one fan-out row per
+            // sorted item. Height is dynamic; this is a lower bound (2
+            // items) — the real height comes from
+            // `templates::scrap_recycling_row`'s returned value.
+            RowKind::ScrapRecycling => 8 + 2,
         }
     }
 }
@@ -431,6 +476,14 @@ fn row_kind(spec: &MachineSpec) -> RowKind {
     // short-circuit immediately below for the same reason.
     if spec.voider {
         return RowKind::Voider;
+    }
+
+    // Scrap-recycling sushi-sorter rows (RFP Fulgora Phase 3) also
+    // short-circuit before the square-machine assert — `recycler` is 2×4,
+    // non-square. A non-voider recycler is always a scrap-recycling
+    // producer (voider recyclers are caught above).
+    if spec.entity == "recycler" {
+        return RowKind::ScrapRecycling;
     }
 
     // Self-loop recipes (kovarex-class) short-circuit before the
@@ -557,6 +610,10 @@ pub(crate) fn build_one_row(
     use crate::bus::templates;
 
     let kind = row_kind(spec);
+    // Scrap-recycling sushi-sorter rows always flow east (every per-item
+    // belt reaches the east edge — see `templates::scrap_recycling_row`),
+    // regardless of whether any output happens to be a final product.
+    let output_east = output_east || matches!(kind, RowKind::ScrapRecycling);
     let lane_split = can_lane_split(spec, count);
 
     let solid_inputs: Vec<_> = spec.inputs.iter().filter(|f| !f.is_fluid).collect();
@@ -594,6 +651,7 @@ pub(crate) fn build_one_row(
     let mut fluid_output_port_pipes: Vec<(String, i32, i32)> = vec![];
     let mut horizontal_stack: Option<HorizontalStackInfo> = None;
     let mut secondary_output_belt: Option<(String, i32)> = None;
+    let mut sorted_output_belts: Vec<(String, i32)> = Vec::new();
 
     let (row_ents, row_h, input_belt_ys, output_belt_y) = match &kind {
         RowKind::OilRefinery => {
@@ -1078,6 +1136,40 @@ pub(crate) fn build_one_row(
             let out_y = y_cursor + 7;
             (ents, rh, input_ys, out_y)
         }
+        RowKind::ScrapRecycling => {
+            // Sushi sorter: one east-flowing output belt PER solid output
+            // (`sorted_output_belts`), consumed by the ordinary lane
+            // planner (items with consumers) and step-7b merger (surplus).
+            // See `templates::scrap_recycling_row`.
+            let input_item = solid_inputs.first().map(|f| f.item.as_str()).unwrap_or("scrap");
+            let input_total = solid_inputs.first().map(|f| f.rate * count as f64).unwrap_or(0.0);
+            let sorted_items: Vec<(String, f64)> = solid_outputs
+                .iter()
+                .map(|f| (f.item.clone(), f.rate * count as f64))
+                .collect();
+            let (ents, rh, sorted_belts) = templates::scrap_recycling_row(
+                &spec.recipe,
+                input_item,
+                count,
+                y_cursor,
+                bus_width,
+                input_total,
+                &sorted_items,
+                max_belt_tier,
+            );
+            sorted_output_belts = sorted_belts;
+            // Scrap input belt at dy=0 (the bus tap lands here). The
+            // primary `output_belt_y` points at the first solid output's
+            // own belt so the row-width scan below (which keys on
+            // `output_item` at `output_belt_y`) finds a real east belt.
+            let input_ys = vec![y_cursor];
+            let out_y = sorted_output_belts
+                .iter()
+                .find(|(it, _)| it == output_item)
+                .map(|(_, y)| *y)
+                .unwrap_or(y_cursor + 8);
+            (ents, rh, input_ys, out_y)
+        }
     };
 
     // Stamp throughput rates onto row entities based on their carried item.
@@ -1203,6 +1295,7 @@ pub(crate) fn build_one_row(
         output_belt_x_max,
         horizontal_stack,
         secondary_output_belt,
+        sorted_output_belts,
     };
 
     (row_ents, span, row_width)

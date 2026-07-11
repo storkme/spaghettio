@@ -288,19 +288,15 @@ pub fn plan_bus_lanes(
         let rate = item_to_rate.get(key).copied().unwrap_or(0.0);
         let is_fluid = item_is_fluid.get(key).copied().unwrap_or(false);
         let (item, module_id) = key.clone();
-        // A row with a D2b secondary solid output (RFP Fulgora
-        // `docs/rfp-fulgora-scrap.md`) has TWO physically distinct
-        // output belts at different y. If this lane's item is the
-        // secondary one, anchor `source_y` there instead of the
-        // primary's `output_belt_y` — otherwise the lane's vertical
-        // trunk-column reservation (see `layout.rs`'s pole occupancy)
-        // anchors at the wrong row.
-        let source_y = row_spans[first_producer]
-            .secondary_output_belt
-            .as_ref()
-            .filter(|(sec_item, _)| sec_item == &item)
-            .map(|(_, sec_y)| *sec_y)
-            .unwrap_or(row_spans[first_producer].output_belt_y);
+        // A row with a D2b secondary solid output or a scrap-recycling
+        // sushi sorter (RFP Fulgora `docs/rfp-fulgora-scrap.md`) has
+        // multiple physically distinct output belts at different y. Anchor
+        // `source_y` at THIS item's own belt (via the shared
+        // `output_belt_y_for` lookup) rather than the primary's
+        // `output_belt_y` — otherwise the lane's vertical trunk-column
+        // reservation (see `layout.rs`'s pole occupancy) anchors at the
+        // wrong row.
+        let source_y = row_spans[first_producer].output_belt_y_for(&item);
         lanes.push(BusLane {
             item,
             module_id,
@@ -1076,6 +1072,7 @@ mod tests {
             output_belt_x_max: 9,
             horizontal_stack: None,
             secondary_output_belt: None,
+            sorted_output_belts: Vec::new(),
         }
     }
 
@@ -1365,6 +1362,7 @@ mod tests {
                 output_belt_x_max: 9,
                 horizontal_stack: None,
                 secondary_output_belt: None,
+                sorted_output_belts: Vec::new(),
             }
         }).collect();
 

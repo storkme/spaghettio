@@ -6,6 +6,7 @@ pub mod belt_flow;
 pub mod inserters;
 mod fluids;
 pub mod power;
+pub mod sushi;
 pub mod underground;
 
 pub use fluids::{
@@ -409,6 +410,12 @@ pub fn validate(
         Box::new(|| belt_structural::check_belt_dead_ends(layout)),
         Box::new(|| belt_structural::check_belt_loops(layout)),
         Box::new(|| belt_structural::check_belt_item_isolation(layout)),
+        Box::new(|| sushi::check_sushi_boundary(layout)),
+        Box::new(|| {
+            solver
+                .map(|s| sushi::check_sushi_saturation(layout, s))
+                .unwrap_or_default()
+        }),
         Box::new(|| check_unresolved_junctions(layout)),
         Box::new(|| {
             solver
