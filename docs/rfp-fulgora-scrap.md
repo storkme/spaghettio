@@ -65,11 +65,17 @@ spike) stays available but is NOT the shipping mechanism. Instead:
   from gross throughput (each pass returns 25%, so a stream of `r`/s
   needs recyclers sized for `r / 0.75` gross plus the cascade's
   intermediate volumes — all computable from the recipe data).
-- The voider row template is the **net-negative variant of
-  `self_loop_row`**: loop corridor recirculating the 25% return, net
-  INPUT from the surplus stream, no export splitter. The spike's
-  break-even test already pins the LP-side arithmetic; the template is
-  new but sits on proven geometry.
+- The voider row template is a **new template inspired by
+  `self_loop_row`** — the vocabulary transfers (loop corridor,
+  recirculation), but the plumbing inverts: the corridor is fed by a
+  bus TAP consuming the surplus stream (not by a priority splitter off
+  the machine's own output), it recirculates only the ~25% return, and
+  there is no export splitter or declared bus output at all. It gets
+  its own design pass in Phase 2 — the reuse claim is vocabulary, not
+  code. The spike's break-even test already pins the LP-side
+  arithmetic. Phase 2 additionally depends on the recycler physicals
+  from Phase 0 (footprint, belt-vs-inserter ejection) — voider rows
+  ARE recycler banks.
 
 Why curated / why this dodges the laundering family: voider rows are
 synthesized ONLY for items in `surplus_outputs` — streams the LP
@@ -79,12 +85,27 @@ it" can never arise: crafting a combinator was never in the plan.
 
 ### D2. Solid surplus export (needed regardless of policy)
 
-`Export` must work for solids: extend the step-7 output merger to
-`surplus_outputs` entries (solid), reusing the multi-item merge-cursor
-+ UG-hop machinery landed for multi-item outputs. Each solid surplus
-stream gets a merge column tiling east of the target's. This is the
-smallest piece of the RFP and is independently valuable (uranium
-chains: the U-238 surplus stream currently errors as stranded).
+`Export` must work for solids, and it splits into two pieces of very
+different size:
+
+- **D2a — merger extension** (small): extend the step-7 output merger
+  to solid `surplus_outputs` entries whose stream already has its own
+  east-flowing belt — i.e. surplus from single-solid-output rows, and
+  (once Phase 3 lands) the sorter's per-item lanes. Reuses the
+  multi-item merge-cursor + UG-hop machinery; each stream gets a merge
+  column tiling east of the target's.
+- **D2b — multi-solid-output row belts** (not small, inherited): a row
+  whose machine produces TWO solid items (uranium-processing: U-235 +
+  U-238) only emits an output belt for `solid_outputs.first()` today
+  (`placer.rs` single `output_belt_y` per `RowSpan`) — the merger has
+  nothing to read for the second stream. This is the netflow RFP's
+  still-open "multi-solid-output specs" item, folded in here because
+  the uranium surplus stream cannot be un-stranded without it. It
+  needs template work (a second output belt + inserters per row), not
+  merger work.
+
+D2a alone is independently valuable and ships first; the uranium
+fixture goes green only after D2b.
 
 ### D3. Recycler rows and the sorting problem (the centerpiece)
 
@@ -111,19 +132,44 @@ designs as reference):
   collection belt per row; a bank of filter inserters lifts each item
   type onto its own bus lane. Pros: inserter mechanics already
   modeled except the filter field; per-item rates are known from the
-  solver so inserter counts are computable. Cons: the sushi belt
-  segment violates item-isolation as modeled — needs a validator
-  concept of an intentional mixed segment (analogous to the
-  `:selfloop:` exemption, e.g. a `:sushi:` segment class with its own
-  saturation math).
+  solver so inserter counts are computable. Cons: the sushi segment
+  violates item isolation as modeled. The exemption mechanism, named
+  now so KC5 is evaluable: `check_belt_item_isolation`
+  (`validate/belt_structural.rs`) looks up segment KIND by a
+  `:sushi:` segment-id prefix and skips only sushi↔sushi adjacencies;
+  a NEW companion check owns the sushi↔ordinary boundary, requiring
+  every transition off a sushi segment to pass through a filter
+  inserter (or a declared sink), and validating per-item saturation
+  on the sushi belt as Σ(per-item rates from the solver) vs belt
+  capacity — `carries` on sushi tiles is a segment-level item SET,
+  not a single tag. (Note the analogous precedent, the `:selfloop:`
+  exemption, lives in `check_belt_loops`, not item isolation — this
+  is a new exemption in a different check, not an extension of that
+  one.)
 - **(b) Filtered-splitter cascade**: a splitter tree peeling one item
   per stage. Pros: belt-only. Cons: 12 stages of new splitter
   semantics in both rate walkers, larger footprint.
+- **(c) Pre-solved sorter block**: a balancer-library-style stamped
+  template (possibly imported/adapted from a community design) for
+  the whole 12-way sort, treated as an opaque block with typed ports.
+  Pros: sidesteps generative geometry entirely; the corpus proves
+  such designs exist. Cons: fixed shapes per (item-set, rate) tier;
+  a new library to curate. This is a first-class alternative, not a
+  fallback — Phase 0 evaluates all three.
 
-The RFP does not pick (a) vs (b) — Phase 0 does, with the decision
+The RFP does not pick (a)/(b)/(c) — Phase 0 does, with the decision
 recorded here. Everything downstream of the sorter is ordinary bus:
 sorted per-item lanes join the bus exactly like any producer row's
 output.
+
+**Footprint benchmark protocol (frozen now, before Phase 0 — the
+frozen-cost-table precedent)**: reference = Fulgora sorter designs in
+`scripts/blueprints/` (or added to it from Factorio Prints, committed
+before measurement), measured with `blueprint-analyze` as (bounding
+box area, entity count) of the sorter subregion handling ≥10 item
+types at ≥1 full yellow belt of scrap. Candidate architectures are
+measured the same way on their Phase 0 paper designs. The 2× bound in
+KC2 refers to bbox area under this protocol.
 
 ### D4. Solver/UI polish
 
@@ -138,16 +184,23 @@ output.
 
 ## Kill criteria
 
-1. **Physicals**: if Phase 0 finds the recycler cannot be modeled in
-   the current row abstractions at all (e.g. direct ejection with no
-   viable collection geometry under our belt model), stop and rescope
-   before any template work — the sorting architecture depends on it.
-2. **Sorter viability**: if neither sorting architecture can express a
-   12-way sort within ~2× the footprint of community reference
-   designs (measured via `blueprint-analyze` on the corpus), the bus
-   model is the wrong substrate for scrap sorting — stop and consider
-   a dedicated "sorter block" pre-solved template (balancer-library
-   style) instead of generative geometry.
+1. **Physicals**: if fitting the recycler forces a new `RowKind`
+   variant AND either (a) on-belt ejection forces a machine shape no
+   current inserter-extractable template can wrap, or (b) collection
+   geometry requires the bus abstraction itself to carry multi-item
+   lanes at the template level (beyond the tagged sushi segment),
+   stop and rescope before any template work. Falsifiable in Phase 0
+   from the physicals artifact alone.
+2. **Sorter viability (pivot within scope)**: if neither generative
+   architecture (a)/(b) fits within 2× the frozen benchmark (protocol
+   in D3), pivot to (c) the pre-solved block — recorded as a decision,
+   not a kill.
+   **Sorter kill (actual)**: if (c) ALSO fails — no pre-solved block
+   can be expressed with typed ports the bus can feed and drain under
+   existing lane semantics — then scrap sorting has no home in this
+   engine: stop Fulgora layout support entirely, keep the solver-side
+   support (spike state) and document the wall. This is the evidence
+   that would make us abandon the RFP, stated up front.
 3. **Voider purity**: synthesized voider rows must not change any
    solver-reported rate for non-surplus items (they are pure sinks).
    The spike's bit-identical isolation test extends to the layout
@@ -190,25 +243,34 @@ Per the CLAUDE.md protocol, plus:
 
 ## Phasing
 
-- **Phase 0 — physicals + sorter design spike** (no production code):
-  factorio-expert verification of recycler footprint/ejection and
-  filter-entity semantics; `blueprint-analyze` sweep of community
-  Fulgora designs; sorting architecture decision recorded here.
-- **Phase 1 — solid surplus Export**: step-7 merger extension to solid
-  `surplus_outputs` + un-strand the uranium fixture class.
-  Independently valuable; ships alone.
-- **Phase 2 — voider rows**: net-negative `self_loop_row` variant +
-  layout-synthesized voider specs from `surplus_outputs` under
-  `SurplusPolicy::Void`; voider-purity fixture.
-- **Phase 3 — recycler rows + sorter**: per the Phase 0 decision;
+- **Phase 0 — physicals + sorter design spike** (no production code).
+  Two distinct artifacts:
+  (i) **recycler physicals**: factorio-expert verification of
+  footprint, belt-vs-inserter ejection, and filter-entity semantics,
+  recorded in this doc;
+  (ii) **sorter architecture decision**: `blueprint-analyze` sweep of
+  community Fulgora designs under the frozen benchmark protocol, then
+  the (a)/(b)/(c) decision recorded here.
+- **Phase 1 — solid surplus Export, D2a**: merger extension for
+  surplus streams that already have their own belt. Independently
+  valuable; ships alone; no Phase 0 dependency.
+- **Phase 2 — voider rows**: new voider template (D1) +
+  layout-synthesized voider specs under `SurplusPolicy::Void`;
+  voider-purity fixture. **Depends on Phase 0 artifact (i)** — voider
+  rows are recycler banks; footprint and ejection change the template.
+- **Phase 2b — D2b multi-solid-output row belts**: second output belt
+  on rows with two solid products; uranium fixture goes green. No
+  Phase 0 dependency; sequenced by value whenever convenient.
+- **Phase 3 — recycler rows + sorter**: per Phase 0 artifact (ii);
   scrap-recycling row template + sorting into per-item bus lanes;
-  `holmium-plate` fixture goes green.
+  `holmium-plate` fixture goes green. **Depends on both Phase 0
+  artifacts.**
 - **Phase 4 — UI/API**: scrap flow exposure, surplus-policy toggle,
   `electromagnetic-science-pack` fixture; CLAUDE.md ladder gains a
   Fulgora tier.
 
-Phases 1 and 2 are independent of the Phase 0 decision and can start
-immediately; Phase 3 is the long pole.
+Only Phase 1 (and 2b) can start before Phase 0 completes; Phases 2
+and 3 wait on its artifacts as marked. Phase 3 is the long pole.
 
 ## Decision log
 
@@ -217,3 +279,16 @@ immediately; Phase 3 is the long pole.
   findings: LP economics exact; eps_surplus price-tuning falsified as
   a voiding mechanism — entity-crafting disposal laundering; hence D1's
   layout-level voiding design). Pending review.*
+- *2026-07-11 — PR #306 review round: (1) D2 split into D2a (merger
+  extension) / D2b (multi-solid-output row belts — the uranium
+  un-stranding actually lives there, inheriting the netflow RFP's
+  open item); (2) voider template reuse claim hedged to
+  "inspired by", own design pass; (3) Phase 2's dependency on Phase
+  0's physicals artifact made explicit (voider rows are recycler
+  banks) — phase artifacts split into (i)/(ii); (4) KC1 rephrased to
+  a falsifiable RowKind/geometry test; (5) pre-solved sorter block
+  promoted to first-class architecture (c) with the ACTUAL kill
+  stated (all three fail → stop Fulgora layout support); (6) sushi
+  item-isolation exemption mechanism named (segment-kind lookup +
+  boundary check requiring filter inserters), correcting the
+  `:selfloop:`-precedent reference (that lives in check_belt_loops).*
