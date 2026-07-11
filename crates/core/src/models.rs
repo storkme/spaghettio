@@ -30,6 +30,13 @@ pub struct ItemFlow {
 }
 
 /// One production step: which machine, which recipe, how many.
+///
+/// For self-loop recipes (kovarex-class: an item on both sides of the
+/// recipe), `inputs`/`outputs` carry NET external flows only — the item
+/// appears in exactly one of them, signed by its net direction — so the
+/// bus/lane/placer layers see an ordinary recipe. The raw row-internal
+/// recirculation lives in `self_loop` for the row template to size the
+/// loop-back belt. See docs/rfp-solver-net-flow.md Phase 2(c).
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,6 +46,28 @@ pub struct MachineSpec {
     pub count: f64,
     pub inputs: Vec<ItemFlow>,
     pub outputs: Vec<ItemFlow>,
+    /// Row-internal recirculated flows for self-loop recipes (empty for
+    /// ordinary recipes).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub self_loop: Vec<SelfLoopFlow>,
+}
+
+/// One self-referencing item of a self-loop recipe: raw per-machine
+/// consumed/produced rates plus the net (already reflected in the owning
+/// spec's `inputs`/`outputs`).
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SelfLoopFlow {
+    pub item: String,
+    pub is_fluid: bool,
+    /// Raw per-machine consumption (items/s), e.g. kovarex U-235: 40/60.
+    pub consumed_rate: f64,
+    /// Raw per-machine production (items/s), e.g. kovarex U-235: 41/60.
+    pub produced_rate: f64,
+    /// `produced − consumed` per machine; sign matches which of the
+    /// spec's `inputs`/`outputs` carries the item.
+    pub net_rate: f64,
 }
 
 /// Everything the solver produces — no positional data.
@@ -140,6 +169,15 @@ pub struct PlacedEntity {
     /// priority output first; when blocked they overflow to the other.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_priority: Option<String>,
+    /// Self-loop split-point marker (splitters only): the loop-back
+    /// branch's demanded rate. The lane-rate walkers use this instead of
+    /// the generic symmetric 50/50 model — the loop output receives
+    /// `min(total, loop_priority_rate)` and the export side the
+    /// remainder, matching a priority-output splitter feeding a
+    /// saturated recirculation belt. Set only by the self-loop row
+    /// template. See docs/rfp-solver-net-flow.md Phase 2(c).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loop_priority_rate: Option<f64>,
 }
 
 /// Whether a boundary port is an input into the region or an output from it.

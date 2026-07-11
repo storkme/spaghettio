@@ -1787,6 +1787,101 @@ pub fn check_belt_inserter_conflict(layout: &LayoutResult) -> Vec<ValidationIssu
 // 16. compute_lane_rates + check_lane_throughput
 // ---------------------------------------------------------------------------
 
+/// Compute the pair of per-lane output rates `(pos_out, sib_out)` for a
+/// splitter's two output tiles, given the accumulated per-lane input rates
+/// at each tile (`pos_rates`, `sib_rates`).
+///
+/// Used by the topo-sort and cycle-breaker phases of
+/// [`compute_lane_rates_impl`], which preserve the left/right lane
+/// identity through a splitter (only the sibling total is split 50/50).
+/// See the `_mixed` sibling below for the full-lane-mixing model used by
+/// this same function's iterate-to-convergence phase.
+///
+/// Default behavior: the combined left-lane total is split 50/50 across
+/// both output tiles, and likewise for the right lane (both tiles end up
+/// with the same `(left, right)` tuple). When `loop_priority_rate` is
+/// `Some(cap)` and exactly one of `pos_is_loop_branch` /
+/// `sib_is_loop_branch` is `true` (the output tile feeding a tagged
+/// self-loop segment), the loop branch instead receives `min(total, cap)`
+/// and the other branch the remainder, preserving the input left/right
+/// ratio within each branch. Falls back to the symmetric split if
+/// `loop_priority_rate` is `None`, or the loop branch is ambiguous
+/// (neither or both flagged) — see docs/rfp-solver-net-flow.md Phase 2(c).
+fn splitter_output_rates(
+    pos_rates: (f64, f64),
+    sib_rates: (f64, f64),
+    loop_priority_rate: Option<f64>,
+    pos_is_loop_branch: bool,
+    sib_is_loop_branch: bool,
+) -> ((f64, f64), (f64, f64)) {
+    if let Some(cap) = loop_priority_rate {
+        if pos_is_loop_branch != sib_is_loop_branch {
+            let total_left = pos_rates.0 + sib_rates.0;
+            let total_right = pos_rates.1 + sib_rates.1;
+            let total = total_left + total_right;
+            let loop_share = total.min(cap.max(0.0));
+            let export_share = (total - loop_share).max(0.0);
+            let (loop_ratio, export_ratio) = if total > f64::EPSILON {
+                (loop_share / total, export_share / total)
+            } else {
+                (0.0, 0.0)
+            };
+            let loop_out = (total_left * loop_ratio, total_right * loop_ratio);
+            let export_out = (total_left * export_ratio, total_right * export_ratio);
+            return if pos_is_loop_branch {
+                (loop_out, export_out)
+            } else {
+                (export_out, loop_out)
+            };
+        }
+    }
+    let half_left = (pos_rates.0 + sib_rates.0) / 2.0;
+    let half_right = (pos_rates.1 + sib_rates.1) / 2.0;
+    ((half_left, half_right), (half_left, half_right))
+}
+
+/// Full-lane-mixing variant of [`splitter_output_rates`], for the
+/// iterate-to-convergence phase of [`compute_lane_rates_impl`], which
+/// models a splitter as merging both input lanes into one pool before
+/// redistributing (real Factorio splitter behavior: `[L=15, R=0]` in
+/// becomes `[L=7.5, R=7.5]` per output half).
+///
+/// `a_total` / `b_total` are each tile's already-summed (left + right)
+/// input contribution. Default behavior splits the combined total evenly
+/// across all four output sub-lanes (both tiles get `total / 4` per
+/// lane) — this must stay bit-for-bit equivalent to the pre-existing
+/// `total / 4.0` formula so non-loop splitters see zero behavior change.
+/// When `loop_priority_rate` is `Some(cap)` and exactly one of
+/// `a_is_loop_branch` / `b_is_loop_branch` is `true`, the loop branch
+/// instead receives `min(total, cap)` (split evenly across its own two
+/// lanes) and the other branch the remainder. Falls back to the
+/// symmetric split under the same ambiguous-flagging conditions as
+/// [`splitter_output_rates`].
+fn splitter_output_rates_mixed(
+    a_total: f64,
+    b_total: f64,
+    loop_priority_rate: Option<f64>,
+    a_is_loop_branch: bool,
+    b_is_loop_branch: bool,
+) -> ([f64; 2], [f64; 2]) {
+    let total = a_total + b_total;
+    if let Some(cap) = loop_priority_rate {
+        if a_is_loop_branch != b_is_loop_branch {
+            let loop_share = total.min(cap.max(0.0));
+            let export_share = (total - loop_share).max(0.0);
+            let loop_half = [loop_share / 2.0, loop_share / 2.0];
+            let export_half = [export_share / 2.0, export_share / 2.0];
+            return if a_is_loop_branch {
+                (loop_half, export_half)
+            } else {
+                (export_half, loop_half)
+            };
+        }
+    }
+    let per_lane = total / 4.0;
+    ([per_lane, per_lane], [per_lane, per_lane])
+}
+
 pub fn compute_lane_rates(
     layout: &LayoutResult,
     solver: Option<&SolverResult>,
@@ -1992,13 +2087,47 @@ fn compute_lane_rates_impl(
     }
 
     let mut splitter_sibling: FxHashMap<(i32, i32), (i32, i32)> = FxHashMap::default();
+    // Owning splitter entity for each of its two tiles, so the
+    // priority-loop model in `splitter_output_rates`/`splitter_output_rates_mixed`
+    // can look up `loop_priority_rate`.
+    let mut splitter_entity: FxHashMap<(i32, i32), &PlacedEntity> = FxHashMap::default();
     for e in &layout.entities {
         if is_splitter(&e.name) {
             let second = splitter_second_tile(e);
             splitter_sibling.insert((e.x, e.y), second);
             splitter_sibling.insert(second, (e.x, e.y));
+            splitter_entity.insert((e.x, e.y), e);
+            splitter_entity.insert(second, e);
         }
     }
+
+    // Segment id per belt tile (surface belts, UG in/out, splitters), used
+    // to find a self-loop-tagged tile immediately downstream of a splitter
+    // output — see `splitter_output_rates`.
+    let mut belt_segment: FxHashMap<(i32, i32), Option<&str>> = FxHashMap::default();
+    for e in &layout.entities {
+        if is_belt_entity(&e.name) {
+            belt_segment.insert((e.x, e.y), e.segment_id.as_deref());
+            if is_splitter(&e.name) {
+                belt_segment.insert(splitter_second_tile(e), e.segment_id.as_deref());
+            }
+        }
+    }
+
+    // Whether the downstream belt tile from `tile` (per `belt_dir_map`'s
+    // direction at `tile`) starts a tagged self-loop segment. Used to
+    // identify which half of a priority splitter is the loop-back branch.
+    let is_loop_branch = |tile: (i32, i32)| -> bool {
+        let Some(&dir) = belt_dir_map.get(&tile) else {
+            return false;
+        };
+        let (dx, dy) = dir_to_vec(dir);
+        belt_segment
+            .get(&(tile.0 + dx, tile.1 + dy))
+            .copied()
+            .flatten()
+            .is_some_and(|s| s.contains(":selfloop:"))
+    };
 
     let mut in_degree: FxHashMap<(i32, i32), i32> =
         belt_dir_map.keys().map(|&p| (p, 0)).collect();
@@ -2179,13 +2308,17 @@ fn compute_lane_rates_impl(
                 } else {
                     let pos_rates = lane_rates.get(&pos).copied().unwrap_or([0.0, 0.0]);
                     let sib_rates = lane_rates.get(&sib).copied().unwrap_or([0.0, 0.0]);
-                    let total_l = pos_rates[0] + sib_rates[0];
-                    let total_r = pos_rates[1] + sib_rates[1];
-                    for &tile in &[pos, sib] {
-                        let r = lane_rates.entry(tile).or_insert([0.0, 0.0]);
-                        r[0] = total_l / 2.0;
-                        r[1] = total_r / 2.0;
-                    }
+                    let loop_priority_rate =
+                        splitter_entity.get(&pos).and_then(|e| e.loop_priority_rate);
+                    let (pos_out, sib_out) = splitter_output_rates(
+                        (pos_rates[0], pos_rates[1]),
+                        (sib_rates[0], sib_rates[1]),
+                        loop_priority_rate,
+                        is_loop_branch(pos),
+                        is_loop_branch(sib),
+                    );
+                    lane_rates.insert(pos, [pos_out.0, pos_out.1]);
+                    lane_rates.insert(sib, [sib_out.0, sib_out.1]);
                     for &tile in &[sib, pos] {
                         processed.insert(tile);
                         do_propagate(tile, &belt_dir_map, &feeders, &splitter_sibling, &mut in_degree, &mut queue, &mut lane_rates);
@@ -2322,13 +2455,17 @@ fn compute_lane_rates_impl(
                         // 2× for the stuck-secondary case, causing false lane-
                         // throughput errors in the template audit.
                         let (eff_pos, eff_sib) = (pos_rates, sib_rates);
-                        let total_l = eff_pos[0] + eff_sib[0];
-                        let total_r = eff_pos[1] + eff_sib[1];
-                        for &tile in &[pos, sib] {
-                            let r = lane_rates.entry(tile).or_insert([0.0, 0.0]);
-                            r[0] = total_l / 2.0;
-                            r[1] = total_r / 2.0;
-                        }
+                        let loop_priority_rate =
+                            splitter_entity.get(&pos).and_then(|e| e.loop_priority_rate);
+                        let (pos_out, sib_out) = splitter_output_rates(
+                            (eff_pos[0], eff_pos[1]),
+                            (eff_sib[0], eff_sib[1]),
+                            loop_priority_rate,
+                            is_loop_branch(pos),
+                            is_loop_branch(sib),
+                        );
+                        lane_rates.insert(pos, [pos_out.0, pos_out.1]);
+                        lane_rates.insert(sib, [sib_out.0, sib_out.1]);
                         for &tile in &[sib, pos] {
                             processed.insert(tile);
                             do_propagate(tile, &belt_dir_map, &feeders, &splitter_sibling, &mut in_degree, &mut queue, &mut lane_rates);
@@ -2389,14 +2526,25 @@ fn compute_lane_rates_impl(
             // splitters mix lanes — input [L=15, R=0] becomes output
             // [L=7.5, R=7.5] per half — so a lane-imbalanced sideload
             // upstream gets re-balanced at the splitter, not propagated.
+            //
+            // Priority splitters (`loop_priority_rate` set) break that
+            // symmetry: the loop-back branch draws `min(total, cap)` and
+            // the export branch gets the remainder, via
+            // `splitter_output_rates_mixed`.
             for &(a, b) in &pair_set {
                 let a_fc = feeder_contributions_for_tile(a, &prev, &feeders, &belt_dir_map);
                 let b_fc = feeder_contributions_for_tile(b, &prev, &feeders, &belt_dir_map);
-                let total = a_fc[0] + a_fc[1] + b_fc[0] + b_fc[1];
-                let per_lane = total / 4.0;
-                let half = [per_lane, per_lane];
-                next.insert(a, half);
-                next.insert(b, half);
+                let loop_priority_rate =
+                    splitter_entity.get(&a).and_then(|e| e.loop_priority_rate);
+                let (a_out, b_out) = splitter_output_rates_mixed(
+                    a_fc[0] + a_fc[1],
+                    b_fc[0] + b_fc[1],
+                    loop_priority_rate,
+                    is_loop_branch(a),
+                    is_loop_branch(b),
+                );
+                next.insert(a, a_out);
+                next.insert(b, b_out);
             }
 
             // Phase 3: UG-output tiles inherit from the surface tile behind
@@ -2853,6 +3001,7 @@ mod tests {
             machines: vec![MachineSpec {
                 entity: "assembling-machine-3".to_string(),
                 recipe: "iron-gear-wheel".to_string(),
+                self_loop: vec![],
                 count: 1.0,
                 inputs: vec![ItemFlow {
                     item: "iron-plate".to_string(),
@@ -3632,6 +3781,7 @@ mod tests {
             machines: vec![MachineSpec {
                 entity: "assembling-machine-3".to_string(),
                 recipe: "iron-gear-wheel".to_string(),
+                self_loop: vec![],
                 count: 1.0,
                 inputs: vec![ItemFlow {
                     item: "iron-plate".to_string(),
@@ -3739,6 +3889,7 @@ mod tests {
                 MachineSpec {
                     entity: "electric-furnace".to_string(),
                     recipe: "iron-plate".to_string(),
+                    self_loop: vec![],
                     count: 1.0,
                     inputs: vec![ItemFlow {
                         item: "iron-ore".to_string(),
@@ -3756,6 +3907,7 @@ mod tests {
                 MachineSpec {
                     entity: "assembling-machine-3".to_string(),
                     recipe: "iron-gear-wheel".to_string(),
+                    self_loop: vec![],
                     count: 1.0,
                     inputs: vec![ItemFlow {
                         item: "iron-plate".to_string(),
@@ -3902,6 +4054,7 @@ mod tests {
                 MachineSpec {
                     entity: "electric-furnace".to_string(),
                     recipe: "iron-plate".to_string(),
+                    self_loop: vec![],
                     count: 1.0,
                     inputs: vec![ItemFlow {
                         item: "iron-ore".to_string(),
@@ -3919,6 +4072,7 @@ mod tests {
                 MachineSpec {
                     entity: "assembling-machine-3".to_string(),
                     recipe: "iron-gear-wheel".to_string(),
+                    self_loop: vec![],
                     count: 1.0,
                     inputs: vec![ItemFlow {
                         item: "iron-plate".to_string(),
@@ -4086,6 +4240,71 @@ mod tests {
         );
     }
 
+    /// Priority-output splitter (self-loop row, e.g. kovarex-enrichment-
+    /// process): the loop-back branch receives `min(total, loop_priority_rate)`
+    /// and the export branch the remainder, NOT the symmetric 50/50 split
+    /// that `splitter_one_feeder_outputs_balanced_halves` exercises above.
+    ///
+    /// Same 1-feeder-into-a-splitter shape as that test (source belt feeds
+    /// only the `(0,1)` half; `(1,1)` gets nothing directly), but the
+    /// splitter carries `loop_priority_rate: Some(4.0)` and `(0,1)`'s
+    /// downstream belt is tagged as the self-loop segment. Total input is
+    /// 4.1/s, so the loop branch should settle at ~4.0/s and the export
+    /// branch at ~0.1/s — not 2.05/2.05.
+    #[test]
+    fn splitter_priority_loop_branch_gets_priority_share() {
+        use EntityDirection::*;
+        let item = "uranium-235";
+        let layout = LayoutResult {
+            entities: vec![
+                belt_carries(0, 0, South, item),
+                PlacedEntity {
+                    name: "splitter".to_string(),
+                    x: 0,
+                    y: 1,
+                    direction: South,
+                    loop_priority_rate: Some(4.0),
+                    ..Default::default()
+                },
+                // (0,1)'s downstream: tagged self-loop segment.
+                PlacedEntity {
+                    segment_id: Some(
+                        "row:kovarex-enrichment-process:selfloop:uranium-235".to_string(),
+                    ),
+                    ..belt_carries(0, 2, South, item)
+                },
+                // (1,1)'s downstream: plain export belt, no tag.
+                belt_carries(1, 2, South, item),
+            ],
+            width: 4,
+            height: 4,
+            ..Default::default()
+        };
+        let solver = SolverResult {
+            machines: vec![],
+            external_inputs: vec![ItemFlow {
+                item: item.to_string(),
+                rate: 4.1,
+                is_fluid: false,
+                module_id: 0,
+            }],
+            external_outputs: vec![],
+            surplus_outputs: vec![],
+            dependency_order: vec![],
+        };
+        let rates = compute_lane_rates(&layout, Some(&solver));
+        let loop_total: f64 = rates.get(&(0, 1)).copied().unwrap_or([0.0, 0.0]).iter().sum();
+        let export_total: f64 = rates.get(&(1, 1)).copied().unwrap_or([0.0, 0.0]).iter().sum();
+        assert!(
+            (loop_total - 4.0).abs() < 0.01,
+            "loop branch should get ~4.0/s, got {loop_total}"
+        );
+        assert!(
+            (export_total - 0.1).abs() < 0.01,
+            "export branch should get ~0.1/s (not 2.05/2.05 symmetric), got {export_total}"
+        );
+    }
+
     /// (3, 3) library template at full saturation should converge to exactly
     /// `[7.5, 7.5]` per lane on every internal belt. Pre-iterative-walker, the
     /// internal feedback splitter at `(0, 5)/(1, 5)` settled at `[3.75, 3.75]`
@@ -4172,6 +4391,7 @@ mod tests {
             machines: vec![MachineSpec {
                 entity: "assembling-machine-3".to_string(),
                 recipe: "iron-plate-recycle".to_string(),
+                self_loop: vec![],
                 count: 1.0,
                 inputs: vec![],
                 outputs: vec![ItemFlow {

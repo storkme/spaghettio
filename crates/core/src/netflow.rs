@@ -23,7 +23,7 @@
 //!    output for identical input is a project-level contract (URL state,
 //!    `.fls` snapshots).
 
-use crate::models::{ItemFlow, MachineSpec, SolverResult};
+use crate::models::{ItemFlow, MachineSpec, SelfLoopFlow, SolverResult};
 use crate::recipe_db::{
     db, get_crafting_speed, is_excluded_recipe, machine_can_run_recipe,
     machine_for_recipe_with_palette, MachinePalette, Recipe,
@@ -116,6 +116,78 @@ impl<'a> Items<'a> {
     }
     fn len(&self) -> usize {
         self.names.len()
+    }
+}
+
+/// Item names present on both sides of a recipe (raw overlap, pre-netting;
+/// recipe ingredient order — determinism). Empty for ordinary recipes.
+fn raw_self_loop_items(recipe: &Recipe) -> Vec<&str> {
+    recipe
+        .ingredients
+        .iter()
+        .map(|i| i.name.as_str())
+        .filter(|name| recipe.products.iter().any(|p| p.name == *name))
+        .collect()
+}
+
+/// Raw per-craft net (produced − consumed) of one item in one recipe.
+/// Sums all matching entries, though every self-loop recipe in the current
+/// data has exactly one ingredient/product entry per self-loop item.
+fn raw_net_per_craft(recipe: &Recipe, item: &str) -> f64 {
+    let produced: f64 = recipe
+        .products
+        .iter()
+        .filter(|p| p.name == item)
+        .map(|p| p.amount * p.probability)
+        .sum();
+    let consumed: f64 = recipe
+        .ingredients
+        .iter()
+        .filter(|i| i.name == item)
+        .map(|i| i.amount)
+        .sum();
+    produced - consumed
+}
+
+/// Self-loop support classification (RFP Phase 2, "Cycle policy"). v1
+/// supports pure-solid self-loops with 1 net-positive self-loop item
+/// (bacteria cultivations) or 2 self-loop items with opposite net signs
+/// (kovarex: U-235 +1/craft, U-238 −3/craft). Fluid self-loops
+/// (coal-liquefaction) and fluid-adjacent ones (pentapod-egg, fish-breeding
+/// — a water ingredient alongside the self-loop item) stay refused: the row
+/// template and lane planner have no fluid self-loop support yet.
+enum SelfLoopShape {
+    /// Not a self-loop recipe at all — no item on both sides.
+    None,
+    /// v1-supported shape; net flows can be emitted.
+    Supported,
+    /// Self-referencing but outside v1's supported shapes — keep refusing.
+    Unsupported,
+}
+
+fn classify_self_loop(recipe: &Recipe) -> SelfLoopShape {
+    let names = raw_self_loop_items(recipe);
+    if names.is_empty() {
+        return SelfLoopShape::None;
+    }
+    let has_fluid = recipe.ingredients.iter().any(|i| i.type_ == "fluid")
+        || recipe.products.iter().any(|p| p.type_ == "fluid");
+    if has_fluid || names.len() > 2 {
+        return SelfLoopShape::Unsupported;
+    }
+    let supported = match names.len() {
+        1 => raw_net_per_craft(recipe, names[0]) > 0.0,
+        2 => {
+            let n0 = raw_net_per_craft(recipe, names[0]);
+            let n1 = raw_net_per_craft(recipe, names[1]);
+            (n0 > 0.0 && n1 < 0.0) || (n0 < 0.0 && n1 > 0.0)
+        }
+        _ => unreachable!("names.len() > 2 handled above"),
+    };
+    if supported {
+        SelfLoopShape::Supported
+    } else {
+        SelfLoopShape::Unsupported
     }
 }
 
@@ -514,11 +586,7 @@ fn solve_attempt(
 
     for &c in &active {
         let r = columns[c].recipe;
-        let self_loop = r
-            .ingredients
-            .iter()
-            .any(|ing| r.products.iter().any(|p| p.name == ing.name));
-        if self_loop {
+        if matches!(classify_self_loop(r), SelfLoopShape::Unsupported) {
             return Err(AttemptError::Cycle {
                 refusal: SolverError::UnsupportedSelfLoop {
                     recipe: r.name.clone(),
@@ -614,10 +682,17 @@ fn solve_attempt(
                 let col = &columns[c];
                 let crafts_per_sec_per_machine = col.crafting_speed / col.recipe.energy;
                 let count = snap(x_of(c) / crafts_per_sec_per_machine);
-                let inputs: Vec<ItemFlow> = col
+                // Self-loop items (RFP Phase 2): excluded from the ordinary
+                // ingredient/product mapping below and emitted instead as a
+                // single net flow (into inputs or outputs, by sign) plus a
+                // `self_loop` entry carrying the raw per-machine rates for
+                // the row template's loop-back belt sizing.
+                let self_loop_names = raw_self_loop_items(col.recipe);
+                let mut inputs: Vec<ItemFlow> = col
                     .recipe
                     .ingredients
                     .iter()
+                    .filter(|ing| !self_loop_names.contains(&ing.name.as_str()))
                     .map(|ing| ItemFlow {
                         item: ing.name.clone(),
                         rate: ing.amount * crafts_per_sec_per_machine,
@@ -625,10 +700,11 @@ fn solve_attempt(
                         module_id: 0,
                     })
                     .collect();
-                let outputs: Vec<ItemFlow> = col
+                let mut outputs: Vec<ItemFlow> = col
                     .recipe
                     .products
                     .iter()
+                    .filter(|p| !self_loop_names.contains(&p.name.as_str()))
                     .map(|p| ItemFlow {
                         item: p.name.clone(),
                         rate: p.amount * p.probability * crafts_per_sec_per_machine,
@@ -636,9 +712,63 @@ fn solve_attempt(
                         module_id: 0,
                     })
                     .collect();
+                let mut self_loop: Vec<SelfLoopFlow> = Vec::new();
+                for name in &self_loop_names {
+                    let consumed_rate = col
+                        .recipe
+                        .ingredients
+                        .iter()
+                        .filter(|i| i.name == *name)
+                        .map(|i| i.amount)
+                        .sum::<f64>()
+                        * crafts_per_sec_per_machine;
+                    let produced_rate = col
+                        .recipe
+                        .products
+                        .iter()
+                        .filter(|p| p.name == *name)
+                        .map(|p| p.amount * p.probability)
+                        .sum::<f64>()
+                        * crafts_per_sec_per_machine;
+                    let net_rate = produced_rate - consumed_rate;
+                    let is_fluid = col
+                        .recipe
+                        .ingredients
+                        .iter()
+                        .find(|i| i.name == *name)
+                        .map(|i| i.type_ == "fluid")
+                        .unwrap_or(false);
+                    self_loop.push(SelfLoopFlow {
+                        item: name.to_string(),
+                        is_fluid,
+                        consumed_rate,
+                        produced_rate,
+                        net_rate,
+                    });
+                    if net_rate > 0.0 {
+                        outputs.push(ItemFlow {
+                            item: name.to_string(),
+                            rate: net_rate,
+                            is_fluid,
+                            module_id: 0,
+                        });
+                    } else if net_rate < 0.0 {
+                        inputs.push(ItemFlow {
+                            item: name.to_string(),
+                            rate: -net_rate,
+                            is_fluid,
+                            module_id: 0,
+                        });
+                    }
+                    // net_rate == 0.0 cannot occur for `SelfLoopShape::Supported`
+                    // columns (both the 1-item net-positive and 2-item
+                    // opposite-sign checks require nonzero net), so no branch
+                    // is needed for it here.
+                }
                 machines.push(MachineSpec {
                     entity: col.machine.clone(),
                     recipe: col.recipe.name.clone(),
+                    self_loop,
                     count,
                     inputs,
                     outputs,

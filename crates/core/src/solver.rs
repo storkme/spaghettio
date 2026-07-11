@@ -29,10 +29,16 @@ pub enum SolverError {
         machine: String,
         reason: MachineIncompatibility,
     },
-    /// The optimal plan uses a recipe that consumes its own output
-    /// (kovarex-class). Layout support for self-loop rows is Phase 2 of
-    /// docs/rfp-solver-net-flow.md; until then this is a loud, typed
-    /// refusal instead of the tree walk's silent nonsense externals.
+    /// The optimal plan uses a self-loop recipe (an item on both sides)
+    /// outside v1's supported shapes (RFP Phase 2, "Cycle policy"): a
+    /// fluid ingredient or product anywhere in the recipe (coal-liquefaction,
+    /// pentapod-egg, fish-breeding — even though the self-loop item itself
+    /// may be solid, e.g. raw-fish/pentapod-egg, the water ingredient
+    /// alongside it disqualifies the recipe), more than two self-loop items,
+    /// or — for exactly two self-loop items — same-sign net flow. Pure-solid
+    /// self-loops within those shapes (kovarex: U-235 +1/craft, U-238
+    /// −3/craft; bacteria cultivations: single net-positive item) solve via
+    /// net flows instead of hitting this refusal.
     #[error("recipe {recipe} feeds its own output back as an ingredient — self-loop rows are not supported yet")]
     UnsupportedSelfLoop { recipe: String },
     /// The optimal plan contains a multi-recipe cycle (e.g. the
@@ -362,6 +368,7 @@ fn resolve(
         state.machines.push(MachineSpec {
             entity,
             recipe: recipe.name.clone(),
+            self_loop: vec![],
             count,
             inputs: input_flows,
             outputs: output_flows,

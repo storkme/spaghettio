@@ -282,6 +282,7 @@ fn bp_data_to_layout(bp_data: BpData) -> LayoutResult {
 
         entities.push(PlacedEntity {
             name: raw.name,
+            loop_priority_rate: None,
             x,
             y,
             direction: dir,

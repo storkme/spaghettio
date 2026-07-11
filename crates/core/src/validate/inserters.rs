@@ -407,6 +407,7 @@ mod tests {
             machines: vec![MachineSpec {
                 entity: "oil-refinery".into(),
                 recipe: "basic-oil-processing".into(),
+                self_loop: vec![],
                 count: 1.0,
                 inputs: vec![fluid_flow("crude-oil")],
                 outputs: vec![fluid_flow("petroleum-gas")],
@@ -440,6 +441,7 @@ mod tests {
             machines: vec![MachineSpec {
                 entity: "chemical-plant".into(),
                 recipe: "plastic-bar".into(),
+                self_loop: vec![],
                 count: 1.0,
                 inputs: vec![solid_flow("coal"), fluid_flow("petroleum-gas")],
                 outputs: vec![solid_flow("plastic-bar")],

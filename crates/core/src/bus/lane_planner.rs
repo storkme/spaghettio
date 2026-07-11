@@ -1023,6 +1023,7 @@ mod tests {
             spec: MachineSpec {
                 entity: "assembling-machine-3".to_string(),
                 recipe: recipe.to_string(),
+                self_loop: vec![],
                 count: machine_count as f64,
                 inputs,
                 outputs,
@@ -1112,6 +1113,7 @@ mod tests {
             machines: vec![MachineSpec {
                 entity: "assembling-machine-3".to_string(),
                 recipe: "iron-gear-wheel".to_string(),
+                self_loop: vec![],
                 count: 1.0,
                 inputs: vec![ItemFlow { item: "iron-plate".to_string(), rate: 2.0, is_fluid: false, module_id: 0 }],
                 outputs: vec![ItemFlow { item: "iron-gear-wheel".to_string(), rate: 1.0, is_fluid: false, module_id: 0 }],
@@ -1128,6 +1130,7 @@ mod tests {
             machines: vec![MachineSpec {
                 entity: "assembling-machine-3".to_string(),
                 recipe: "plastic-bar".to_string(),
+                self_loop: vec![],
                 count: 1.0,
                 inputs: vec![
                     ItemFlow { item: "coal".to_string(), rate: 1.5, is_fluid: false, module_id: 0 },

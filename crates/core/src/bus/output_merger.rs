@@ -236,6 +236,7 @@ mod tests {
             spec: MachineSpec {
                 entity: "assembling-machine-3".to_string(),
                 recipe: recipe.to_string(),
+                self_loop: vec![],
                 count: machine_count as f64,
                 inputs,
                 outputs,

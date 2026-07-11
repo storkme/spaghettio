@@ -1702,6 +1702,7 @@ impl CrossingEncoder {
 
                 entities.push(PlacedEntity {
                     name: entity_name,
+                    loop_priority_rate: None,
                     x: zone.x + x as i32,
                     y: zone.y + y as i32,
                     direction: idx_to_entity_dir(dir),

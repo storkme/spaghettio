@@ -203,16 +203,29 @@ fn netflow_flow_conservation_sweep() {
     }
 
     println!("solved {solved} items; {} typed refusals: {refusals:?}", refusals.len());
-    // KC5 census, evaluated 2026-07-10 (see RFP decision log). Two known
-    // refusal families, both of which the tree walk today "solves" with
-    // physically-broken output (nonsense externals / stranded byproducts):
-    //   1. Gleba forced self-loops (pentapod-egg, fish-breeding) — Phase 2
-    //      self-loop row template territory.
+    // KC5 census, evaluated 2026-07-10 (see RFP decision log); re-checked
+    // 2026-07-11 after solver-side self-loop netting landed (RFP Phase 2,
+    // "Cycle policy"). Two known refusal families remain, both of which the
+    // tree walk today "solves" with physically-broken output (nonsense
+    // externals / stranded byproducts):
+    //   1. Gleba forced self-loops: pentapod-egg (60 water/craft) and
+    //      fish-breeding (100 water/craft) each have a fluid ingredient
+    //      alongside their solid self-loop item, so — per
+    //      `classify_self_loop` in netflow.rs — they fall outside v1's
+    //      pure-solid self-loop support and stay refused. Phase 2's
+    //      self-loop row template needs fluid support before these solve.
     //   2. The Aquilo fluoroketone coolant loop (fresh fluoroketone is
     //      produced HOT; the only cold producer is the cooler, so the
     //      loop is mandatory) — needs the forced-surplus edge-cut planned
     //      for Phase 2, or multi-row cycle routing (out of scope).
-    // Anything outside these two families is an unreviewed regression.
+    // Pure-solid self-loops (kovarex-enrichment-process,
+    // iron/copper-bacteria-cultivation — verified via recipes.json: no
+    // fluid ingredients or products) now solve via net flows and are
+    // correctly absent from this list; they were never forced under this
+    // sweep's default inputs anyway (the plain, non-self-loop producing
+    // recipes are always cheaper here), so their absence isn't new. Forcing
+    // kovarex (excluding uranium-processing) is covered by the dedicated
+    // golden tests below instead.
     for (item, why) in &refusals {
         let known = why.starts_with("self-loop pentapod-egg")
             || why.starts_with("self-loop fish-breeding")
@@ -287,13 +300,20 @@ fn kc2_determinism_double_run() {
     assert!(a == b, "KC2: netflow sweep is not deterministic");
 }
 
-/// Golden: kovarex forced (exclude uranium-processing) must be a typed
-/// self-loop refusal — not the tree walk's silent nonsense externals.
+/// Golden: kovarex forced (exclude uranium-processing) now SOLVES via
+/// self-loop net flows (RFP Phase 2) instead of the typed refusal Phase 1
+/// shipped. Free selection is also free to route the U-238 deficit through
+/// any other in-closure producer (here: nuclear-fuel-reprocessing from
+/// depleted-uranium-fuel-cell, which the LP finds cheaper than the tree
+/// walk's silent nonsense externals) — this test only asserts kovarex
+/// itself is active and the whole plan conserves; the isolated netting
+/// arithmetic is nailed down by `kovarex_self_loop_net_flows_hand_derived`
+/// below, which restricts the scope to kovarex alone.
 #[test]
-fn golden_kovarex_refused_as_self_loop() {
+fn golden_kovarex_solves_as_self_loop() {
     let inputs = set(&["uranium-ore", "water"]);
     let excluded = set(&["uranium-processing"]);
-    let err = solve_netflow(
+    let r = solve_netflow(
         "uranium-235",
         1.0,
         &inputs,
@@ -303,13 +323,115 @@ fn golden_kovarex_refused_as_self_loop() {
         RecipeScope::Free,
         &CostTable::default(),
     )
-    .expect_err("kovarex must be refused until Phase 2");
-    match err {
-        SolverError::UnsupportedSelfLoop { recipe } => {
-            assert_eq!(recipe, "kovarex-enrichment-process");
-        }
-        other => panic!("expected UnsupportedSelfLoop, got: {other}"),
-    }
+    .expect("kovarex must solve now that Phase 2 self-loop netting has landed");
+    assert!(
+        r.dependency_order.contains(&"kovarex-enrichment-process".to_string()),
+        "expected kovarex in the plan: {:?}",
+        r.dependency_order
+    );
+    let kovarex = r
+        .machines
+        .iter()
+        .find(|m| m.recipe == "kovarex-enrichment-process")
+        .expect("kovarex machine spec present");
+    assert_eq!(kovarex.entity, "centrifuge");
+    // Net flows only: the self-referencing items must not leak into
+    // ordinary inputs/outputs alongside their netted entry.
+    assert_eq!(kovarex.self_loop.len(), 2);
+    assert!(!kovarex.inputs.iter().any(|f| f.item == "uranium-235"));
+    assert!(!kovarex.outputs.iter().any(|f| f.item == "uranium-238"));
+    assert_conservation("uranium-235", 1.0, &r);
+}
+
+/// Hand-derived kovarex netting math (RFP Phase 2): restrict the LP to
+/// kovarex alone (excluding uranium-processing AND any other producer of
+/// uranium-238, so there is no alternative for free selection to route
+/// through) so the only unknowns under test are the netting arithmetic
+/// itself — machine count, net inputs/outputs, self_loop entries, and the
+/// external supply of the net-consumed item.
+#[test]
+fn kovarex_self_loop_net_flows_hand_derived() {
+    let inputs = set(&["uranium-ore", "water"]);
+    let excluded = set(&["uranium-processing"]);
+    let scope_set = set(&["kovarex-enrichment-process"]);
+    let r = solve_netflow(
+        "uranium-235",
+        0.1,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &excluded,
+        RecipeScope::Restricted(&scope_set),
+        &CostTable::default(),
+    )
+    .expect("kovarex-only scope solves");
+
+    assert_eq!(
+        r.machines.len(),
+        1,
+        "expected only the kovarex column: {:?}",
+        r.machines
+    );
+    let m = &r.machines[0];
+    assert_eq!(m.recipe, "kovarex-enrichment-process");
+    assert_eq!(m.entity, "centrifuge");
+    // x[kovarex] = target_rate / net(U-235)/craft = 0.1 / 1 = 0.1 crafts/s.
+    // count = crafts/s / (crafting_speed/energy) = 0.1 / (1.0/60) = 6.0.
+    assert!((m.count - 6.0).abs() < 1e-9, "count: {}", m.count);
+
+    assert_eq!(m.inputs.len(), 1, "inputs: {:?}", m.inputs);
+    assert_eq!(m.inputs[0].item, "uranium-238");
+    assert!(!m.inputs[0].is_fluid);
+    assert!(
+        (m.inputs[0].rate - 3.0 / 60.0).abs() < 1e-9,
+        "input rate: {}",
+        m.inputs[0].rate
+    );
+
+    assert_eq!(m.outputs.len(), 1, "outputs: {:?}", m.outputs);
+    assert_eq!(m.outputs[0].item, "uranium-235");
+    assert!(!m.outputs[0].is_fluid);
+    assert!(
+        (m.outputs[0].rate - 1.0 / 60.0).abs() < 1e-9,
+        "output rate: {}",
+        m.outputs[0].rate
+    );
+
+    assert_eq!(m.self_loop.len(), 2, "self_loop: {:?}", m.self_loop);
+    let u235 = m
+        .self_loop
+        .iter()
+        .find(|f| f.item == "uranium-235")
+        .expect("uranium-235 self-loop entry");
+    assert!(!u235.is_fluid);
+    assert!((u235.consumed_rate - 40.0 / 60.0).abs() < 1e-9, "{u235:?}");
+    assert!((u235.produced_rate - 41.0 / 60.0).abs() < 1e-9, "{u235:?}");
+    assert!((u235.net_rate - 1.0 / 60.0).abs() < 1e-9, "{u235:?}");
+
+    let u238 = m
+        .self_loop
+        .iter()
+        .find(|f| f.item == "uranium-238")
+        .expect("uranium-238 self-loop entry");
+    assert!(!u238.is_fluid);
+    assert!((u238.consumed_rate - 5.0 / 60.0).abs() < 1e-9, "{u238:?}");
+    assert!((u238.produced_rate - 2.0 / 60.0).abs() < 1e-9, "{u238:?}");
+    assert!((u238.net_rate - (-3.0 / 60.0)).abs() < 1e-9, "{u238:?}");
+
+    assert_eq!(
+        r.external_inputs.len(),
+        1,
+        "unexpected externals: {:?}",
+        r.external_inputs
+    );
+    assert_eq!(r.external_inputs[0].item, "uranium-238");
+    assert!(
+        (r.external_inputs[0].rate - 0.3).abs() < 1e-9,
+        "external u238 rate: {}",
+        r.external_inputs[0].rate
+    );
+
+    assert_conservation("uranium-235", 0.1, &r);
 }
 
 /// Golden: rocket-fuel free mode — the reviewer-verified optimum. AOP alone

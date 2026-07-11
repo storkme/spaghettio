@@ -1073,6 +1073,7 @@ mod tests {
             spec: MachineSpec {
                 entity: "assembling-machine-1".to_string(),
                 recipe: recipe.to_string(),
+                self_loop: vec![],
                 count: 1.0,
                 inputs: vec![],
                 outputs: vec![],
