@@ -34,7 +34,7 @@ use crate::bus::junction_solver::{
     self, JunctionSolution, JunctionStrategy, JunctionStrategyContext,
 };
 use crate::bus::placer::RowSpan;
-use crate::common::{belt_entity_for_rate, machine_size, machine_tiles, ug_max_reach};
+use crate::common::{belt_entity_for_rate, machine_dims, machine_tiles, ug_max_reach};
 use crate::models::{EntityDirection, LayoutRegion, PlacedEntity, SolverResult};
 // sat.rs is retained in the tree as a standalone library; route_bus_ghost
 // no longer uses it after the per-tile "unresolved" rewrite. The junction
@@ -145,8 +145,8 @@ pub fn route_bus_ghost(
             existing_belts.insert((e.x, e.y));
             pre_ghost_belts.insert((e.x, e.y));
         } else if MACHINE_ENTITIES.contains(&e.name.as_str()) {
-            let sz = machine_size(&e.name);
-            for t in machine_tiles(e.x, e.y, sz) {
+            let (w, h) = machine_dims(&e.name);
+            for t in machine_tiles(e.x, e.y, w, h) {
                 hard.insert(t);
             }
         } else {
@@ -1161,7 +1161,8 @@ pub fn route_bus_ghost(
         .chain(entities.iter())
         .flat_map(|e| {
             if MACHINE_ENTITIES.contains(&e.name.as_str()) {
-                machine_tiles(e.x, e.y, machine_size(&e.name))
+                let (w, h) = machine_dims(&e.name);
+                machine_tiles(e.x, e.y, w, h)
             } else {
                 vec![(e.x, e.y)]
             }
@@ -1564,8 +1565,8 @@ pub fn route_bus_ghost(
         .chain(entities.iter())
         .flat_map(|e| {
             if MACHINE_ENTITIES.contains(&e.name.as_str()) {
-                let sz = machine_size(&e.name);
-                machine_tiles(e.x, e.y, sz)
+                let (w, h) = machine_dims(&e.name);
+                machine_tiles(e.x, e.y, w, h)
             } else {
                 vec![(e.x, e.y)]
             }

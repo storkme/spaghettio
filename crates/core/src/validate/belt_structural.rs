@@ -17,7 +17,7 @@ use crate::common::{
     belt_throughput, dir_to_vec, inserter_reach, inserter_target_lane, is_belt_entity,
     is_inserter, is_machine_entity, is_splitter, is_surface_belt, is_ug_belt,
     splitter_second_tile, splitter_to_surface_tier, ug_to_surface_tier, lane_capacity,
-    machine_size, machine_tiles,
+    machine_dims, machine_tiles,
 };
 use crate::models::{EntityDirection, LayoutResult, PlacedEntity, SolverResult};
 
@@ -117,9 +117,9 @@ fn build_machine_tile_set(entities: &[PlacedEntity]) -> FxHashSet<(i32, i32)> {
     let mut tiles = FxHashSet::default();
     for e in entities {
         if is_machine_entity(&e.name) {
-            let size = machine_size(&e.name) as i32;
-            for dx in 0..size {
-                for dy in 0..size {
+            let (w, h) = machine_dims(&e.name);
+            for dx in 0..w as i32 {
+                for dy in 0..h as i32 {
                     tiles.insert((e.x + dx, e.y + dy));
                 }
             }
@@ -604,9 +604,10 @@ pub fn check_output_belt_coverage(
             }
         }
 
-        let size = machine_size(&e.name) as i32;
+        let (mw, mh) = machine_dims(&e.name);
+        let (mw, mh) = (mw as i32, mh as i32);
         let my_tiles: FxHashSet<(i32, i32)> =
-            (0..size).flat_map(|dx| (0..size).map(move |dy| (e.x + dx, e.y + dy))).collect();
+            (0..mw).flat_map(|dx| (0..mh).map(move |dy| (e.x + dx, e.y + dy))).collect();
 
         let has_output_belt = layout.entities.iter().any(|ins| {
             if !is_inserter(&ins.name) {
@@ -798,9 +799,9 @@ pub fn compute_lane_rates(layout: &LayoutResult, solver_result: &SolverResult) -
     for e in &layout.entities {
         if is_machine_entity(&e.name) {
             machine_entity_map.insert((e.x, e.y), e);
-            let size = machine_size(&e.name) as i32;
-            for dx in 0..size {
-                for dy in 0..size {
+            let (w, h) = machine_dims(&e.name);
+            for dx in 0..w as i32 {
+                for dy in 0..h as i32 {
                     machine_by_tile.insert((e.x + dx, e.y + dy), (e.x, e.y));
                 }
             }
@@ -1710,7 +1711,8 @@ fn entity_tiles(e: &PlacedEntity) -> Vec<(i32, i32)> {
         return vec![(e.x, e.y), splitter_second_tile(e)];
     }
     if is_machine_entity(&e.name) {
-        return machine_tiles(e.x, e.y, machine_size(&e.name));
+        let (w, h) = machine_dims(&e.name);
+        return machine_tiles(e.x, e.y, w, h);
     }
     vec![(e.x, e.y)]
 }

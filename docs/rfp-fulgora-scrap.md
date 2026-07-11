@@ -512,3 +512,25 @@ and 3 wait on its artifacts as marked. Phase 3 is the long pole.
   with room to spare. KC2 and KC5 do not trip. Phase 2/3 should budget
   for the `machine_size` refactor before recycler-row template work
   begins.*
+- *2026-07-11 — `machine_size → machine_dims (width, height)` refactor
+  LANDED (prerequisite sub-phase from the KC1 rescope above). All ~45
+  call sites migrated with explicit per-axis choices; zero behavior
+  change (full suite green, zero golden-hash movement — necessarily so,
+  since every placed machine today is square, which also means tests
+  cannot catch a wrong axis choice; an independent adversarial audit
+  re-derived the geometry at every single-axis site and found zero
+  defects). `"recycler" => (2, 4)` is in the dims table and in
+  `MACHINE_ENTITY_NAMES` (it was missing — without it, every
+  `is_machine_entity` gate would have made the footprint dead code).
+  All 11 row templates keep scalar `machine_size` signatures but now
+  open with `debug_assert_eq!(machine_dims(entity), (msz, msz))`
+  tripwires. Notes for the Phase 2/3 implementer: (1) the `row_kind`
+  square-assert fires for ANY non-square machine at classification
+  time — a recycler panicking there is the tripwire working, forcing
+  an explicit `RowKind`, not a placement bug; (2) templates use one
+  scalar for both pitch and row-height internally, so giving a
+  non-square machine an existing row kind needs a genuine per-axis
+  template rework, not just passing width; (3) blueprint export
+  centers entities as `(x + w/2, y + h/2)` but does not yet swap
+  w/h for rotated non-square machines — recycler rows placed with
+  east/west `direction` must handle this.*

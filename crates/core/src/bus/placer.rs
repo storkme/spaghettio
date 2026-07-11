@@ -5,7 +5,7 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::bus::layout::RowLayout;
-use crate::common::{belt_entity_for_rate, lane_capacity, machine_size, BELT_TIERS};
+use crate::common::{belt_entity_for_rate, lane_capacity, machine_dims, BELT_TIERS};
 use crate::models::{EntityDirection, MachineSpec, PlacedEntity, SolverResult};
 
 /// Best available per-lane capacity across all belt tiers.
@@ -428,21 +428,35 @@ fn row_kind(spec: &MachineSpec) -> RowKind {
     let solid_inputs = spec.inputs.iter().filter(|f| !f.is_fluid).count();
     let fluid_inputs = spec.inputs.iter().filter(|f| f.is_fluid).count();
 
+    // "Large" vs "small" here is a single size threshold (5) with no
+    // per-axis meaning of its own — every machine that can reach this
+    // fluid-only classification today is square, so width and height
+    // agree. Recycler (2×4) has no fluid inputs/outputs so it can never
+    // hit this branch today, but if a future recipe change routes a
+    // non-square machine here, this assert trips loudly instead of
+    // silently picking the wrong axis.
+    let (mw, mh) = machine_dims(&spec.entity);
+    debug_assert_eq!(
+        mw, mh,
+        "row_kind's large/small fluid-machine split assumes square machines"
+    );
+    let machine_size = mw;
+
     // Large machines (5×5) with only fluid inputs use the dedicated fluid-only template.
-    if solid_inputs == 0 && fluid_inputs > 0 && machine_size(&spec.entity) >= 5 {
+    if solid_inputs == 0 && fluid_inputs > 0 && machine_size >= 5 {
         return RowKind::OilRefinery;
     }
 
     // Small machines (<5×5) with 0 solid + ≥2 fluid inputs use the stacked-T
     // multi-fluid template. Covers heavy-oil-cracking, light-oil-cracking, sulfur.
-    if solid_inputs == 0 && fluid_inputs >= 2 && machine_size(&spec.entity) < 5 {
+    if solid_inputs == 0 && fluid_inputs >= 2 && machine_size < 5 {
         return RowKind::FluidMultiInput;
     }
 
     // Small machines (<5×5) with 0 solid + exactly 1 fluid input (e.g. lubricant
     // on chemical-plant). Reuses the continuous-pipe `fluid_only_row` template
     // since a single fluid in/out doesn't need stacked-T isolation.
-    if solid_inputs == 0 && fluid_inputs == 1 && machine_size(&spec.entity) < 5 {
+    if solid_inputs == 0 && fluid_inputs == 1 && machine_size < 5 {
         return RowKind::OilRefinery;
     }
 
@@ -563,7 +577,11 @@ pub(crate) fn build_one_row(
 
     let (row_ents, row_h, input_belt_ys, output_belt_y) = match &kind {
         RowKind::OilRefinery => {
-            let msz = machine_size(&spec.entity);
+            // dx port assignment and the `>= 5` split are both along the
+            // machine's horizontal face, so this uses width; every machine
+            // reaching this arm is square (asserted inside
+            // `templates::fluid_only_row`).
+            let msz = machine_dims(&spec.entity).0;
             // Port dx assignment depends on the machine.
             //
             // Oil-refinery (5×5, mirrored, direction=NORTH):
@@ -637,11 +655,11 @@ pub(crate) fn build_one_row(
             let fluid_item = fluid_inputs.first().map(|f| f.item.as_str()).unwrap_or("");
             let in_belt1 = row_input_belt(max_belt_tier);
             let in_belt2 = row_input_belt(max_belt_tier);
-            let msz = machine_size(&spec.entity);
+            let (mw, mh) = machine_dims(&spec.entity);
             let (ents, rh, in_port_pipes, out_port_pipes) = templates::fluid_dual_input_row(
                 &spec.recipe,
                 &spec.entity,
-                msz,
+                mw,
                 count,
                 y_cursor,
                 bus_width,
@@ -655,7 +673,7 @@ pub(crate) fn build_one_row(
                 output_east,
             );
             let machine_y = y_cursor + 5;
-            let output_y = machine_y + msz as i32;
+            let output_y = machine_y + mh as i32;
             fluid_port_ys = in_port_pipes.first().map(|&(_, _, py)| vec![py]).unwrap_or_default();
             fluid_port_pipes = in_port_pipes;
             fluid_output_port_pipes = out_port_pipes;
@@ -685,11 +703,11 @@ pub(crate) fn build_one_row(
             let solid_item = solid_inputs.first().map(|f| f.item.as_str()).unwrap_or("");
             let fluid_item = fluid_inputs.first().map(|f| f.item.as_str()).unwrap_or("");
             let in_belt = row_input_belt(max_belt_tier);
-            let msz = machine_size(&spec.entity);
+            let (mw, mh) = machine_dims(&spec.entity);
             let (ents, rh, port_pipes) = templates::fluid_input_row(
                 &spec.recipe,
                 &spec.entity,
-                msz,
+                mw,
                 count,
                 y_cursor,
                 bus_width,
@@ -705,20 +723,20 @@ pub(crate) fn build_one_row(
             fluid_port_pipes = port_pipes;
             // T-shape layout: trunk at y+0, belt at y+2, machine at y+4, output belt at y+8
             let input_ys = vec![y_cursor + 2];
-            let out_y = y_cursor + 4 + msz as i32 + 1;
+            let out_y = y_cursor + 4 + mh as i32 + 1;
             (ents, rh, input_ys, out_y)
         }
         RowKind::SingleInput => {
             let input_item = solid_inputs.first().map(|f| f.item.as_str()).unwrap_or("");
             let in_belt = row_input_belt(max_belt_tier);
-            let msz = machine_size(&spec.entity);
+            let (mw, mh) = machine_dims(&spec.entity);
             let secondary = secondary_solid_output
                 .zip(secondary_belt_name)
                 .map(|(f, belt)| (f.item.as_str(), belt));
             let (ents, rh) = templates::single_input_row(
                 &spec.recipe,
                 &spec.entity,
-                msz,
+                mw,
                 count,
                 y_cursor,
                 bus_width,
@@ -731,7 +749,7 @@ pub(crate) fn build_one_row(
                 secondary,
             );
             let input_ys = vec![y_cursor];
-            let out_y = y_cursor + 2 + msz as i32 + 1;
+            let out_y = y_cursor + 2 + mh as i32 + 1;
             if let Some(f) = secondary_solid_output {
                 // Mirrors `templates::single_input_row`'s secondary-belt
                 // row offset: one row south of the primary output belt.
@@ -746,11 +764,11 @@ pub(crate) fn build_one_row(
             let in_belt1 = row_input_belt(max_belt_tier);
             let in_belt2 = row_input_belt(max_belt_tier);
             let in_belt3 = row_input_belt(max_belt_tier);
-            let msz = machine_size(&spec.entity);
+            let (mw, mh) = machine_dims(&spec.entity);
             let (ents, rh) = templates::triple_input_row(
                 &spec.recipe,
                 &spec.entity,
-                msz,
+                mw,
                 count,
                 y_cursor,
                 bus_width,
@@ -761,8 +779,8 @@ pub(crate) fn build_one_row(
                 lane_split,
                 output_east,
             );
-            let input_ys = vec![y_cursor, y_cursor + 1, y_cursor + 3 + msz as i32 + 2];
-            let out_y = y_cursor + 3 + msz as i32 + 1;
+            let input_ys = vec![y_cursor, y_cursor + 1, y_cursor + 3 + mh as i32 + 2];
+            let out_y = y_cursor + 3 + mh as i32 + 1;
             (ents, rh, input_ys, out_y)
         }
         RowKind::QuadInput => {
@@ -774,11 +792,11 @@ pub(crate) fn build_one_row(
             let in_belt2 = row_input_belt(max_belt_tier);
             let in_belt3 = row_input_belt(max_belt_tier);
             let in_belt4 = row_input_belt(max_belt_tier);
-            let msz = machine_size(&spec.entity);
+            let (mw, mh) = machine_dims(&spec.entity);
             let (ents, rh) = templates::quad_input_row(
                 &spec.recipe,
                 &spec.entity,
-                msz,
+                mw,
                 count,
                 y_cursor,
                 bus_width,
@@ -796,16 +814,16 @@ pub(crate) fn build_one_row(
                 y_cursor,
                 y_cursor + 1,
                 y_cursor + 2,
-                y_cursor + 4 + msz as i32 + 2,
+                y_cursor + 4 + mh as i32 + 2,
             ];
-            let out_y = y_cursor + 4 + msz as i32 + 1;
+            let out_y = y_cursor + 4 + mh as i32 + 1;
             (ents, rh, input_ys, out_y)
         }
         RowKind::FluidMultiInput => {
             // Chemical-plant fluid input port dxs: [0, 2] per the fluid-box
             // data in recipes.json. The 2 fluid inputs from the solver are
             // assigned to these ports in order.
-            let msz = machine_size(&spec.entity);
+            let msz = machine_dims(&spec.entity).0;
             let port_dxs: &[i32] = &[0, 2];
             let in_port_assignments: Vec<(i32, &str)> = port_dxs
                 .iter()
@@ -843,7 +861,7 @@ pub(crate) fn build_one_row(
             (ents, rh, input_ys, out_y)
         }
         RowKind::DualInput => {
-            let msz = machine_size(&spec.entity);
+            let msz = machine_dims(&spec.entity).0;
             if matches!(row_layout, RowLayout::HorizontalStack) {
                 // Re-rank inputs by per-machine demand so input₀ is the
                 // high-demand item (the one that gets K stacked trunks).
@@ -952,7 +970,7 @@ pub(crate) fn build_one_row(
             }
         }
         RowKind::SelfLoop { has_minor, has_fluid } => {
-            let msz = machine_size(&spec.entity);
+            let (mw, mh) = machine_dims(&spec.entity);
             let major = spec
                 .self_loop
                 .iter()
@@ -977,7 +995,7 @@ pub(crate) fn build_one_row(
             let (ents, rh, fluid_input_port_pipes) = templates::self_loop_row(
                 &spec.recipe,
                 &spec.entity,
-                msz,
+                mw,
                 count,
                 y_cursor,
                 bus_width,
@@ -1001,7 +1019,7 @@ pub(crate) fn build_one_row(
             // down by 1.
             let dy_near = 3;
             let dy_machine = if *has_minor { 6 } else { 5 + if *has_fluid { 1 } else { 0 } };
-            let dy_out_ins = dy_machine + msz as i32;
+            let dy_out_ins = dy_machine + mh as i32;
             let dy_major_collect = dy_out_ins + 1;
             let input_ys = vec![y_cursor + dy_near];
             let out_y = y_cursor + dy_major_collect;
@@ -1038,7 +1056,10 @@ pub(crate) fn build_one_row(
     // other row kind packs at `machine_size`. Must agree with the pitch the
     // template actually stamped with, or `default_max` below undercounts
     // the row width by `(count - 1)` tiles.
-    let msz = machine_size(&spec.entity) as i32;
+    //
+    // This is a horizontal per-machine pitch (row width along x), so it
+    // uses width, not height.
+    let msz = machine_dims(&spec.entity).0 as i32;
     let machine_pitch: i32 = if matches!(kind, RowKind::OilRefinery) {
         let distinct_fluid_outputs = fluid_outputs
             .iter()

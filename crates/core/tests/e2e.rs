@@ -3551,7 +3551,7 @@ fn stress_electronic_circuit_40s_from_ore() {
 #[ntest::timeout(60000)]
 #[allow(clippy::type_complexity)]
 fn diag_ghost_cluster_ac_from_ore() {
-    use spaghettio_core::common::{machine_size, machine_tiles};
+    use spaghettio_core::common::{machine_dims, machine_tiles};
     use rustc_hash::FxHashMap;
     use std::cmp::Reverse;
 
@@ -3615,11 +3615,11 @@ fn diag_ghost_cluster_ac_from_ore() {
         if is_belt_like(&e.name) {
             existing_belts.insert((e.x, e.y));
         } else {
-            // Machines and other multi-tile entities: use machine_size for
+            // Machines and other multi-tile entities: use machine_dims for
             // footprint; single-tile things (pipes, inserters, poles) fall
-            // through to size=1 from machine_size's default.
-            let sz = machine_size(&e.name);
-            for t in machine_tiles(e.x, e.y, sz) {
+            // through to machine_dims's default.
+            let (mw, mh) = machine_dims(&e.name);
+            for t in machine_tiles(e.x, e.y, mw, mh) {
                 hard.insert(t);
             }
         }
@@ -3854,7 +3854,7 @@ fn diag_ghost_cluster_helper(
     inputs: &FxHashSet<String>,
     skip_validation: bool,
 ) {
-    use spaghettio_core::common::{machine_size, machine_tiles};
+    use spaghettio_core::common::{machine_dims, machine_tiles};
     use rustc_hash::FxHashMap;
     use std::cmp::Reverse;
 
@@ -3926,8 +3926,8 @@ fn diag_ghost_cluster_helper(
         if is_belt_like(&e.name) {
             existing_belts.insert((e.x, e.y));
         } else {
-            let sz = machine_size(&e.name);
-            for t in machine_tiles(e.x, e.y, sz) {
+            let (mw, mh) = machine_dims(&e.name);
+            for t in machine_tiles(e.x, e.y, mw, mh) {
                 hard.insert(t);
             }
         }
@@ -4202,7 +4202,7 @@ fn diag_ghost_cluster_stress_processing_unit_20s() {
 #[ntest::timeout(60000)]
 #[allow(clippy::type_complexity)]
 fn diag_ghost_cluster_copper_cable_feeders() {
-    use spaghettio_core::common::{machine_size, machine_tiles};
+    use spaghettio_core::common::{machine_dims, machine_tiles};
     use rustc_hash::FxHashMap;
     use std::cmp::Reverse;
 
@@ -4245,8 +4245,8 @@ fn diag_ghost_cluster_copper_cable_feeders() {
         if is_belt_like(&e.name) {
             existing_belts.insert((e.x, e.y));
         } else {
-            let sz = machine_size(&e.name);
-            for t in machine_tiles(e.x, e.y, sz) {
+            let (mw, mh) = machine_dims(&e.name);
+            for t in machine_tiles(e.x, e.y, mw, mh) {
                 hard.insert(t);
             }
         }

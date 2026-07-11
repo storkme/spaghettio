@@ -346,6 +346,11 @@ pub fn single_input_row(
     output_east: bool,
     secondary_output: Option<(&str, &str)>,
 ) -> (Vec<PlacedEntity>, i32) {
+    debug_assert_eq!(
+        crate::common::machine_dims(machine_entity),
+        (machine_size, machine_size),
+        "single_input_row assumes square machines; see rfp-fulgora-scrap Phase 0"
+    );
     let msz = machine_size as i32;
     let pitch = msz;
     let row_height = msz + 4 + if secondary_output.is_some() { 1 } else { 0 };
@@ -550,6 +555,11 @@ pub fn dual_input_row(
     lane_split: bool,
     output_east: bool,
 ) -> (Vec<PlacedEntity>, i32) {
+    debug_assert_eq!(
+        crate::common::machine_dims(machine_entity),
+        (machine_size, machine_size),
+        "dual_input_row assumes square machines; see rfp-fulgora-scrap Phase 0"
+    );
     let msz = machine_size as i32;
     let pitch = msz;
     let row_height = msz + 5;
@@ -740,6 +750,11 @@ pub fn dual_input_row_horizontal(
     block_size: usize,
     output_east: bool,
 ) -> (Vec<PlacedEntity>, i32) {
+    debug_assert_eq!(
+        crate::common::machine_dims(machine_entity),
+        (machine_size, machine_size),
+        "dual_input_row_horizontal assumes square machines; see rfp-fulgora-scrap Phase 0"
+    );
     let msz = machine_size as i32;
     let pitch = msz;
     let k = k_trunks.max(1) as i32;
@@ -1109,6 +1124,11 @@ pub fn triple_input_row(
     lane_split: bool,
     output_east: bool,
 ) -> (Vec<PlacedEntity>, i32) {
+    debug_assert_eq!(
+        crate::common::machine_dims(machine_entity),
+        (machine_size, machine_size),
+        "triple_input_row assumes square machines; see rfp-fulgora-scrap Phase 0"
+    );
     let msz = machine_size as i32;
     let pitch = msz;
     let row_height = msz + 6;
@@ -1397,6 +1417,11 @@ pub fn quad_input_row(
 ) -> (Vec<PlacedEntity>, i32) {
     use crate::bus::balancer::underground_for_belt;
 
+    debug_assert_eq!(
+        crate::common::machine_dims(machine_entity),
+        (machine_size, machine_size),
+        "quad_input_row assumes square machines; see rfp-fulgora-scrap Phase 0"
+    );
     let msz = machine_size as i32;
     let pitch = msz;
     // 3 north belts + inserter + msz machine + south inserter + output
@@ -1646,6 +1671,11 @@ pub fn fluid_input_row(
     lane_split: bool,
     output_east: bool,
 ) -> (Vec<PlacedEntity>, i32, Vec<(String, i32, i32)>) {
+    debug_assert_eq!(
+        crate::common::machine_dims(machine_entity),
+        (machine_size, machine_size),
+        "fluid_input_row assumes square machines; see rfp-fulgora-scrap Phase 0"
+    );
     let msz = machine_size as i32;
     let pitch = msz;
     let port_dx = fluid_input_port_dx(machine_entity);
@@ -1881,6 +1911,11 @@ pub fn fluid_dual_input_row(
     lane_split: bool,
     output_east: bool,
 ) -> (Vec<PlacedEntity>, i32, Vec<(String, i32, i32)>, Vec<(String, i32, i32)>) {
+    debug_assert_eq!(
+        crate::common::machine_dims(machine_entity),
+        (machine_size, machine_size),
+        "fluid_dual_input_row assumes square machines; see rfp-fulgora-scrap Phase 0"
+    );
     let msz = machine_size as i32;
     let pitch = msz;
     // Fluid output occupies y+5+msz; add a trailing empty row so sub-row
@@ -2205,6 +2240,11 @@ fn fluid_only_row_staggered_3output(
     assert_eq!(
         fluid_outputs.len(), 3,
         "fluid_only_row_staggered_3output requires exactly 3 output ports",
+    );
+    debug_assert_eq!(
+        crate::common::machine_dims(machine_entity),
+        (machine_size, machine_size),
+        "fluid_only_row_staggered_3output assumes square machines; see rfp-fulgora-scrap Phase 0"
     );
 
     let msz = machine_size as i32;
@@ -2577,6 +2617,11 @@ pub fn fluid_only_row(
     fluid_inputs: &[(i32, &str)],   // (dx_from_machine_left, item_name) per input port
     fluid_outputs: &[(i32, &str)],  // (dx_from_machine_left, item_name) per output port
 ) -> (Vec<PlacedEntity>, i32, Vec<(String, i32, i32)>, Vec<(String, i32, i32)>) {
+    debug_assert_eq!(
+        crate::common::machine_dims(machine_entity),
+        (machine_size, machine_size),
+        "fluid_only_row assumes square machines; see rfp-fulgora-scrap Phase 0"
+    );
     // Is this row carrying a single fluid on each side? The continuous-pipe
     // simplification only applies when a side has 0 or 1 fluid.
     let input_distinct_items: std::collections::BTreeSet<&str> =
@@ -2809,6 +2854,11 @@ pub fn fluid_multi_input_row(
     assert!(
         solid_output_item.is_some() || !fluid_outputs.is_empty(),
         "fluid_multi_input_row requires either a solid output or a fluid output",
+    );
+    debug_assert_eq!(
+        crate::common::machine_dims(machine_entity),
+        (machine_size, machine_size),
+        "fluid_multi_input_row assumes square machines; see rfp-fulgora-scrap Phase 0"
     );
 
     let msz = machine_size as i32;
@@ -3169,6 +3219,11 @@ pub fn self_loop_row(
     use crate::bus::balancer::{splitter_for_belt, underground_for_belt};
     use crate::common::belt_entity_for_rate;
 
+    debug_assert_eq!(
+        crate::common::machine_dims(machine_entity),
+        (machine_size, machine_size),
+        "self_loop_row assumes square machines; see rfp-fulgora-scrap Phase 0"
+    );
     let msz = machine_size as i32;
     let pitch = msz;
     let count = machine_count as i32;

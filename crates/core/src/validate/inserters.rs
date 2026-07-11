@@ -7,7 +7,7 @@ use rustc_hash::FxHashSet;
 
 use crate::common::{
     dir_to_vec, fluid_only_recipes, inserter_reach, is_inserter, is_machine_entity,
-    machine_size, machine_tiles,
+    machine_dims, machine_tiles,
 };
 use crate::models::{LayoutResult, SolverResult};
 
@@ -19,7 +19,8 @@ fn build_machine_tile_set(layout: &LayoutResult) -> FxHashSet<(i32, i32)> {
     let mut tiles = FxHashSet::default();
     for e in &layout.entities {
         if is_machine_entity(&e.name) {
-            tiles.extend(machine_tiles(e.x, e.y, machine_size(&e.name)));
+            let (w, h) = machine_dims(&e.name);
+            tiles.extend(machine_tiles(e.x, e.y, w, h));
         }
     }
     tiles
@@ -68,12 +69,13 @@ pub fn check_inserter_chains(
             }
         }
 
-        let size = machine_size(&e.name) as i32;
+        let (mw, mh) = machine_dims(&e.name);
+        let (mw, mh) = (mw as i32, mh as i32);
         let mut has_inserter = false;
 
-        // Short inserters: 1 tile from border → dx/dy in [-1, size]
-        'outer_short: for dx in -1..=(size) {
-            for dy in -1..=(size) {
+        // Short inserters: 1 tile from border → dx in [-1, mw], dy in [-1, mh]
+        'outer_short: for dx in -1..=mw {
+            for dy in -1..=mh {
                 if short_inserter_positions.contains(&(e.x + dx, e.y + dy)) {
                     has_inserter = true;
                     break 'outer_short;
@@ -81,10 +83,10 @@ pub fn check_inserter_chains(
             }
         }
 
-        // Long-handed inserters: 2 tiles from border → dx/dy in [-2, size+1]
+        // Long-handed inserters: 2 tiles from border → dx in [-2, mw+1], dy in [-2, mh+1]
         if !has_inserter {
-            'outer_long: for dx in -2..=(size + 1) {
-                for dy in -2..=(size + 1) {
+            'outer_long: for dx in -2..=(mw + 1) {
+                for dy in -2..=(mh + 1) {
                     if long_inserter_positions.contains(&(e.x + dx, e.y + dy)) {
                         has_inserter = true;
                         break 'outer_long;

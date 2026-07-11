@@ -368,15 +368,16 @@ pub fn analyze(layout: &LayoutResult) -> BlueprintAnalysis {
         }
 
         // Beacon bonuses: check which beacons are in range
-        let machine_size = common::machine_size(&e.name) as i32;
+        let (machine_w, machine_h) = common::machine_dims(&e.name);
+        let (machine_w, machine_h) = (machine_w as i32, machine_h as i32);
 
         for b in &beacons {
             // Check if any tile of the machine overlaps the beacon's supply area.
             // Beacon supply area: center ± (1 + supply_distance) on each axis.
-            // Machine occupies [e.x .. e.x+size-1] × [e.y .. e.y+size-1].
+            // Machine occupies [e.x .. e.x+w-1] × [e.y .. e.y+h-1].
             let reach = 1 + beacon_dist; // beacon half-size (1) + supply distance
-            let in_x = e.x <= b.cx + reach && e.x + machine_size > b.cx - reach;
-            let in_y = e.y <= b.cy + reach && e.y + machine_size > b.cy - reach;
+            let in_x = e.x <= b.cx + reach && e.x + machine_w > b.cx - reach;
+            let in_y = e.y <= b.cy + reach && e.y + machine_h > b.cy - reach;
             if in_x && in_y {
                 speed_bonus += b.speed_bonus * beacon_eff;
                 prod_bonus += b.productivity_bonus * beacon_eff;

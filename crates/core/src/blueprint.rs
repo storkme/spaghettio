@@ -9,7 +9,7 @@ use flate2::write::ZlibEncoder;
 use flate2::Compression;
 use serde::Serialize;
 
-use crate::common::{is_machine_entity, machine_size};
+use crate::common::{is_machine_entity, machine_dims};
 use crate::models::LayoutResult;
 
 #[derive(Serialize)]
@@ -60,14 +60,14 @@ pub fn export(layout: &LayoutResult, label: &str) -> String {
             entity_number: i + 1,
             name: &ent.name,
             position: {
-                let size = if is_machine_entity(&ent.name) {
-                    machine_size(&ent.name) as f64
+                let (w, h) = if is_machine_entity(&ent.name) {
+                    machine_dims(&ent.name)
                 } else {
-                    1.0
+                    (1, 1)
                 };
                 Position {
-                    x: ent.x as f64 + size / 2.0,
-                    y: ent.y as f64 + size / 2.0,
+                    x: ent.x as f64 + w as f64 / 2.0,
+                    y: ent.y as f64 + h as f64 / 2.0,
                 }
             },
             direction: ent.direction as u8,
@@ -168,6 +168,36 @@ mod tests {
         assert!(ents[0].get("mirror").is_none());
         // recipe should be absent for belt
         assert!(ents[1].get("recipe").is_none());
+    }
+
+    #[test]
+    fn recycler_position_uses_non_square_center() {
+        // Recycler is 2 wide × 4 tall (rfp-fulgora-scrap Phase 0). A
+        // square-assuming position calc would center at (x+1, y+1) (using
+        // width for both axes) or (x+2, y+2) (using height for both).
+        let layout = LayoutResult {
+            entities: vec![PlacedEntity {
+                name: "recycler".into(),
+                x: 0,
+                y: 0,
+                direction: EntityDirection::North,
+                ..Default::default()
+            }],
+            width: 2,
+            height: 4,
+            ..Default::default()
+        };
+        let s = export(&layout, "test");
+        let b64 = &s[1..];
+        let compressed = base64::engine::general_purpose::STANDARD.decode(b64).unwrap();
+        let mut decoder = flate2::read::ZlibDecoder::new(&compressed[..]);
+        let mut json_str = String::new();
+        decoder.read_to_string(&mut json_str).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        let ents = parsed["blueprint"]["entities"].as_array().unwrap();
+        // 2×4 recycler at (0,0) → center at (1.0, 2.0), not (1.5, 1.5) or (2.0, 2.0).
+        assert_eq!(ents[0]["position"]["x"], 1.0);
+        assert_eq!(ents[0]["position"]["y"], 2.0);
     }
 
     #[test]

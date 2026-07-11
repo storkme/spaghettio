@@ -416,13 +416,17 @@ fn layout_pass(
         let mut machines_for_poles: Vec<(i32, i32, i32)> = Vec::new();
         for ent in &row_entities {
             if MACHINE_ENTITIES.contains(&ent.name.as_str()) {
-                let sz = crate::common::machine_size(&ent.name) as i32;
-                for dx in 0..sz {
-                    for dy in 0..sz {
+                let (mw, mh) = crate::common::machine_dims(&ent.name);
+                let (mw, mh) = (mw as i32, mh as i32);
+                for dx in 0..mw {
+                    for dy in 0..mh {
                         row_occupied.insert((ent.x + dx, ent.y + dy));
                     }
                 }
-                machines_for_poles.push((ent.x + sz / 2, ent.y, sz));
+                // place_poles groups by row height and offsets the fallback
+                // pole row by that height (below the machine row), so the
+                // third field is height; the center x uses width.
+                machines_for_poles.push((ent.x + mw / 2, ent.y, mh));
             } else {
                 row_occupied.insert((ent.x, ent.y));
             }
@@ -736,6 +740,9 @@ fn compute_extra_gaps(families: &[LaneFamily]) -> FxHashMap<usize, i32> {
 /// The old greedy + centroid-bridge implementation produced clumpy, order-
 /// dependent output; this approach is deterministic, regular, and matches the
 /// row-based structure of the bus layout.
+/// `machines` entries are `(center_x, top_y, height)` — height (not width)
+/// because every use below (row grouping, below-row fallback y) is a
+/// vertical offset from the machine row.
 fn place_poles(
     machines: &[(i32, i32, i32)],
     occupied: &FxHashSet<(i32, i32)>,
@@ -758,11 +765,11 @@ fn place_poles(
         return Vec::new();
     }
 
-    // Group by (top_y, size). Rows of different-sized machines get their own
-    // pole lines because the pole y needs to match the machine footprint.
+    // Group by (top_y, height). Rows of different-height machines get their
+    // own pole lines because the pole y needs to match the machine footprint.
     let mut by_row: FxHashMap<(i32, i32), Vec<i32>> = FxHashMap::default();
-    for &(cx, top_y, sz) in machines {
-        by_row.entry((top_y, sz)).or_default().push(cx);
+    for &(cx, top_y, mh) in machines {
+        by_row.entry((top_y, mh)).or_default().push(cx);
     }
     for xs in by_row.values_mut() {
         xs.sort_unstable();
@@ -776,7 +783,7 @@ fn place_poles(
     let mut placed: FxHashSet<(i32, i32)> = FxHashSet::default();
 
     for key in keys {
-        let (top_y, sz) = key;
+        let (top_y, mh) = key;
         let cxs = &by_row[&key];
 
         // Two candidate pole rows: one above the machine row (preferred —
@@ -788,7 +795,7 @@ fn place_poles(
         if top_y > 0 {
             candidate_ys.push(top_y - 1);
         }
-        candidate_ys.push(top_y + sz);
+        candidate_ys.push(top_y + mh);
 
         let mut i = 0;
         while i < cxs.len() {

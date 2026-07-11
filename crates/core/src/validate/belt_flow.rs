@@ -15,7 +15,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::common::{
     dir_to_vec, fluid_only_recipes, inserter_reach, inserter_target_lane, is_belt_entity,
     is_inserter, is_machine_entity, is_splitter, is_surface_belt, is_ug_belt,
-    splitter_second_tile, ug_max_reach, ug_to_surface_tier, lane_capacity, machine_size,
+    splitter_second_tile, ug_max_reach, ug_to_surface_tier, lane_capacity, machine_dims,
     machine_tiles, LANE_LEFT,
 };
 use crate::models::{EntityDirection, LayoutResult, PlacedEntity, SolverResult};
@@ -271,8 +271,8 @@ fn build_machine_tile_set(layout: &LayoutResult) -> FxHashSet<(i32, i32)> {
     let mut tiles = FxHashSet::default();
     for e in &layout.entities {
         if is_machine_entity(&e.name) {
-            let size = machine_size(&e.name);
-            for t in machine_tiles(e.x, e.y, size) {
+            let (w, h) = machine_dims(&e.name);
+            for t in machine_tiles(e.x, e.y, w, h) {
                 tiles.insert(t);
             }
         }
@@ -285,8 +285,8 @@ fn build_machine_by_tile(layout: &LayoutResult) -> FxHashMap<(i32, i32), (i32, i
     let mut by_tile = FxHashMap::default();
     for e in &layout.entities {
         if is_machine_entity(&e.name) {
-            let size = machine_size(&e.name);
-            for t in machine_tiles(e.x, e.y, size) {
+            let (w, h) = machine_dims(&e.name);
+            for t in machine_tiles(e.x, e.y, w, h) {
                 by_tile.insert(t, (e.x, e.y));
             }
         }
@@ -343,15 +343,16 @@ pub fn check_belt_connectivity(
             continue;
         }
 
-        let size = machine_size(&e.name) as i32;
-        let my_tiles: FxHashSet<(i32, i32)> = (0..size)
-            .flat_map(|dx| (0..size).map(move |dy| (e.x + dx, e.y + dy)))
+        let (mw, mh) = machine_dims(&e.name);
+        let (mw, mh) = (mw as i32, mh as i32);
+        let my_tiles: FxHashSet<(i32, i32)> = (0..mw)
+            .flat_map(|dx| (0..mh).map(move |dy| (e.x + dx, e.y + dy)))
             .collect();
 
         // Adjacent inserters
         let mut adjacent_inserters: Vec<(i32, i32)> = Vec::new();
-        for dx in -1..=size {
-            for dy in -1..=size {
+        for dx in -1..=mw {
+            for dy in -1..=mh {
                 let pos = (e.x + dx, e.y + dy);
                 if inserter_positions.contains(&pos) && !my_tiles.contains(&pos) {
                     adjacent_inserters.push(pos);
@@ -507,16 +508,17 @@ pub fn check_belt_flow_path(
             continue;
         }
 
-        let size = machine_size(&e.name) as i32;
-        let my_tiles: FxHashSet<(i32, i32)> = (0..size)
-            .flat_map(|dx| (0..size).map(move |dy| (e.x + dx, e.y + dy)))
+        let (mw, mh) = machine_dims(&e.name);
+        let (mw, mh) = (mw as i32, mh as i32);
+        let my_tiles: FxHashSet<(i32, i32)> = (0..mw)
+            .flat_map(|dx| (0..mh).map(move |dy| (e.x + dx, e.y + dy)))
             .collect();
 
         // Helper: belt tiles adjacent to this machine's inserters of a given type
         let belt_tiles_near_inserters = |target: &FxHashSet<(i32, i32)>| -> FxHashSet<(i32, i32)> {
             let mut result = FxHashSet::default();
-            for dx in -1..=size {
-                for dy in -1..=size {
+            for dx in -1..=mw {
+                for dy in -1..=mh {
                     let ipos = (e.x + dx, e.y + dy);
                     if !target.contains(&ipos) || my_tiles.contains(&ipos) {
                         continue;
@@ -1215,9 +1217,10 @@ pub fn check_output_belt_coverage(
             continue;
         }
 
-        let size = machine_size(&e.name) as i32;
-        let my_tiles: FxHashSet<(i32, i32)> = (0..size)
-            .flat_map(|dx| (0..size).map(move |dy| (e.x + dx, e.y + dy)))
+        let (mw, mh) = machine_dims(&e.name);
+        let (mw, mh) = (mw as i32, mh as i32);
+        let my_tiles: FxHashSet<(i32, i32)> = (0..mw)
+            .flat_map(|dx| (0..mh).map(move |dy| (e.x + dx, e.y + dy)))
             .collect();
 
         let mut has_output_belt = false;

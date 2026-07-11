@@ -12,7 +12,7 @@
 
 use std::collections::VecDeque;
 
-use crate::common::machine_size;
+use crate::common::machine_dims;
 use crate::models::LayoutResult;
 use crate::validate::{Severity, ValidationIssue};
 
@@ -140,10 +140,11 @@ pub fn check_power_coverage(layout_result: &LayoutResult) -> Vec<ValidationIssue
             continue;
         }
 
-        let size = machine_size(&e.name) as i32;
+        let (w, h) = machine_dims(&e.name);
+        let (w, h) = (w as i32, h as i32);
         // Machine center tile (integer division, same as Python `size // 2`)
-        let cx = e.x + size / 2;
-        let cy = e.y + size / 2;
+        let cx = e.x + w / 2;
+        let cy = e.y + h / 2;
 
         let powered = pole_positions
             .iter()

@@ -39,7 +39,7 @@ use crate::bus::junction::{BeltTier, Junction, Rect, SpecCrossing, SpecKind, Spe
 use crate::bus::region_walker::{walk_affected, AffectedPath, ShadowView, WalkResult};
 use crate::common::{
     balancer_seg_is_simple, is_machine_entity, is_splitter, is_surface_belt, is_ug_belt,
-    machine_size, machine_tiles, splitter_second_tile, tile_is_forbidden_kind,
+    machine_dims, machine_tiles, splitter_second_tile, tile_is_forbidden_kind,
 };
 use crate::models::{EntityDirection, PlacedEntity, PortPoint};
 use crate::trace::{
@@ -833,8 +833,8 @@ pub(crate) fn build_protected_balancer_tiles(
             out.insert((e.x, e.y));
             out.insert((sx, sy));
         } else if is_machine_entity(&e.name) {
-            let size = machine_size(&e.name);
-            for t in machine_tiles(e.x, e.y, size) {
+            let (w, h) = machine_dims(&e.name);
+            for t in machine_tiles(e.x, e.y, w, h) {
                 out.insert(t);
             }
         } else {
@@ -862,11 +862,11 @@ pub(crate) fn build_tile_kind_map<'a>(
             insert((sx, sy), name);
         } else if is_machine_entity(name) {
             // Assembling machines / furnaces / chemical plants / etc.
-            // expand to their full footprint. machine_size has a
-            // defaults-to-3 fallback for unknown names, so guard with
+            // expand to their full footprint. machine_dims has a
+            // defaults-to-(3,3) fallback for unknown names, so guard with
             // is_machine_entity to avoid treating belts as 3x3.
-            let size = machine_size(name);
-            for t in machine_tiles(e.x, e.y, size) {
+            let (w, h) = machine_dims(name);
+            for t in machine_tiles(e.x, e.y, w, h) {
                 insert(t, name);
             }
         } else {

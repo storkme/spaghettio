@@ -11,18 +11,17 @@
 //! rectangle area, [`DensityScore::filled_exceeds_rect`] is set so the caller
 //! can surface the anomaly rather than silently clamp.
 
-use crate::common::{machine_size, is_machine_entity};
+use crate::common::{machine_dims, is_machine_entity};
 use crate::models::{EntityDirection, LayoutResult, PlacedEntity};
 
 /// Axis-aligned footprint (in tiles) of a single entity.
 ///
 /// Splitters are 2×1 or 1×2 depending on their flow direction; machines use
-/// [`machine_size`]; beacons are 3×3; everything else is 1×1.
+/// [`machine_dims`]; beacons are 3×3; everything else is 1×1.
 pub fn entity_footprint(entity: &PlacedEntity) -> (u32, u32) {
     let name = entity.name.as_str();
     if is_machine_entity(name) {
-        let s = machine_size(name);
-        return (s, s);
+        return machine_dims(name);
     }
     if name == "beacon" {
         return (3, 3);
@@ -196,6 +195,20 @@ mod tests {
             direction: EntityDirection::North,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn entity_footprint_recycler_is_non_square() {
+        // Fulgora recycler: 2 wide × 4 tall (rfp-fulgora-scrap Phase 0).
+        // A square-assuming footprint helper would return (4, 4) or (2, 2).
+        let recycler = PlacedEntity {
+            name: "recycler".into(),
+            x: 0,
+            y: 0,
+            direction: EntityDirection::North,
+            ..Default::default()
+        };
+        assert_eq!(entity_footprint(&recycler), (2, 4));
     }
 
     fn splitter_ns(x: i32, y: i32) -> PlacedEntity {

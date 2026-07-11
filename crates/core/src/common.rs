@@ -7,6 +7,7 @@ use rustc_hash::FxHashSet;
 use crate::models::{EntityDirection, PlacedEntity, SolverResult};
 
 const DEFAULT_MACHINE_SIZE: u32 = 3;
+const DEFAULT_MACHINE_DIMS: (u32, u32) = (DEFAULT_MACHINE_SIZE, DEFAULT_MACHINE_SIZE);
 
 /// Known machine entity names (the set of all crafting machines the layout engine uses).
 pub const MACHINE_ENTITY_NAMES: &[&str] = &[
@@ -21,6 +22,7 @@ pub const MACHINE_ENTITY_NAMES: &[&str] = &[
     "foundry",
     "biochamber",
     "centrifuge",
+    "recycler",
 ];
 
 /// Return `true` if `entity` is a known crafting machine.
@@ -28,22 +30,29 @@ pub fn is_machine_entity(entity: &str) -> bool {
     MACHINE_ENTITY_NAMES.contains(&entity)
 }
 
-/// Return the footprint size (in tiles) for the given entity name.
-pub fn machine_size(entity: &str) -> u32 {
+/// Return the footprint `(width, height)` in tiles for the given entity name.
+///
+/// All machines today are square, except `recycler` (Fulgora scrap recycler:
+/// `tile_width=2, tile_height=4`, per `docs/rfp-fulgora-scrap.md` Phase 0
+/// findings). There is deliberately no square-assuming wrapper around this —
+/// every call site must pick width or height explicitly so a non-square
+/// machine can't silently grab the wrong axis.
+pub fn machine_dims(entity: &str) -> (u32, u32) {
     match entity {
         "assembling-machine-1" | "assembling-machine-2" | "assembling-machine-3"
-        | "chemical-plant" | "electric-furnace" | "biochamber" | "centrifuge" => 3,
-        "oil-refinery" | "cryogenic-plant" | "foundry" => 5,
-        "electromagnetic-plant" => 4,
-        _ => DEFAULT_MACHINE_SIZE,
+        | "chemical-plant" | "electric-furnace" | "biochamber" | "centrifuge" => (3, 3),
+        "oil-refinery" | "cryogenic-plant" | "foundry" => (5, 5),
+        "electromagnetic-plant" => (4, 4),
+        "recycler" => (2, 4),
+        _ => DEFAULT_MACHINE_DIMS,
     }
 }
 
-/// All tile coordinates occupied by a machine at `(x, y)` with `size`.
-pub fn machine_tiles(x: i32, y: i32, size: u32) -> Vec<(i32, i32)> {
-    let s = size as i32;
-    (0..s)
-        .flat_map(move |dx| (0..s).map(move |dy| (x + dx, y + dy)))
+/// All tile coordinates occupied by a machine at `(x, y)` with footprint `(w, h)`.
+pub fn machine_tiles(x: i32, y: i32, w: u32, h: u32) -> Vec<(i32, i32)> {
+    let (w, h) = (w as i32, h as i32);
+    (0..w)
+        .flat_map(move |dx| (0..h).map(move |dy| (x + dx, y + dy)))
         .collect()
 }
 
@@ -310,26 +319,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn machine_size_assembling_3() {
-        assert_eq!(machine_size("assembling-machine-3"), 3);
+    fn machine_dims_assembling_3() {
+        assert_eq!(machine_dims("assembling-machine-3"), (3, 3));
     }
 
     #[test]
-    fn machine_size_oil_refinery() {
-        assert_eq!(machine_size("oil-refinery"), 5);
+    fn machine_dims_oil_refinery() {
+        assert_eq!(machine_dims("oil-refinery"), (5, 5));
     }
 
     #[test]
-    fn machine_size_default() {
-        assert_eq!(machine_size("unknown-machine"), DEFAULT_MACHINE_SIZE);
+    fn machine_dims_default() {
+        assert_eq!(machine_dims("unknown-machine"), DEFAULT_MACHINE_DIMS);
     }
 
     #[test]
-    fn machine_size_space_age() {
-        assert_eq!(machine_size("electromagnetic-plant"), 4);
-        assert_eq!(machine_size("cryogenic-plant"), 5);
-        assert_eq!(machine_size("foundry"), 5);
-        assert_eq!(machine_size("biochamber"), 3);
+    fn machine_dims_space_age() {
+        assert_eq!(machine_dims("electromagnetic-plant"), (4, 4));
+        assert_eq!(machine_dims("cryogenic-plant"), (5, 5));
+        assert_eq!(machine_dims("foundry"), (5, 5));
+        assert_eq!(machine_dims("biochamber"), (3, 3));
+    }
+
+    #[test]
+    fn machine_dims_recycler_non_square() {
+        assert_eq!(machine_dims("recycler"), (2, 4));
     }
 
     #[test]
@@ -342,10 +356,24 @@ mod tests {
 
     #[test]
     fn machine_tiles_3x3() {
-        let tiles = machine_tiles(0, 0, 3);
+        let tiles = machine_tiles(0, 0, 3, 3);
         assert_eq!(tiles.len(), 9);
         assert!(tiles.contains(&(0, 0)));
         assert!(tiles.contains(&(2, 2)));
+    }
+
+    #[test]
+    fn machine_tiles_2x4_non_square() {
+        // Recycler footprint: 2 wide, 4 tall.
+        let tiles = machine_tiles(0, 0, 2, 4);
+        assert_eq!(tiles.len(), 8);
+        for x in 0..2 {
+            for y in 0..4 {
+                assert!(tiles.contains(&(x, y)), "missing tile ({x}, {y})");
+            }
+        }
+        assert!(!tiles.contains(&(2, 0)), "tile beyond width should not be included");
+        assert!(!tiles.contains(&(0, 4)), "tile beyond height should not be included");
     }
 
     #[test]
@@ -444,15 +472,15 @@ mod tests {
     }
 
     #[test]
-    fn machine_size_chemical_plant_and_furnace() {
-        assert_eq!(machine_size("chemical-plant"), 3);
-        assert_eq!(machine_size("electric-furnace"), 3);
+    fn machine_dims_chemical_plant_and_furnace() {
+        assert_eq!(machine_dims("chemical-plant"), (3, 3));
+        assert_eq!(machine_dims("electric-furnace"), (3, 3));
     }
 
     #[test]
     fn machine_tiles_offset_origin() {
         // Tiles should be offset by (x, y), not always start at (0, 0).
-        let tiles = machine_tiles(5, 3, 3);
+        let tiles = machine_tiles(5, 3, 3, 3);
         assert_eq!(tiles.len(), 9);
         assert!(tiles.contains(&(5, 3)));
         assert!(tiles.contains(&(7, 5)));
