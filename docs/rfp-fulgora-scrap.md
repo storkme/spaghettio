@@ -620,13 +620,21 @@ and 3 wait on its artifacts as marked. Phase 3 is the long pole.
   failures as its entry criteria, alongside Phase 4 (UI, also
   parked). Priority shifted to Nauvis science scaling by user
   direction, 2026-07-11.***
-- *2026-07-11 — corrected diagnosis + final increment before parking.
-  The consumer-west path LANDED (west-flowing scrap row; fan-out
+- *2026-07-11 — corrected diagnosis before parking. The consumer-west
+  path was BUILT AND VERIFIED in-tree (west-flowing scrap row; fan-out
   partitions by fate — consumed items fan WEST into ordinary bus
   lanes, pure surplus fans EAST to the merger; `consumed_items`
-  threaded through place_rows). Snapshot-verified: holmium-ore flows
-  sushi → filter inserter → west belt → bus → holmium-solution row
-  with zero errors on that path. This falsifies part of the previous
+  threaded through place_rows; full suite + clippy + WASM green,
+  zero golden movement), snapshot-verified end-to-end: holmium-ore
+  flowed sushi → filter inserter → west belt → bus →
+  holmium-solution row with zero errors on that path. **The code was
+  then discarded uncommitted in a stop-order message crossing**
+  (agent reverted per an earlier stand-down instruction at the
+  moment it was being committed) — commit `d55925c`'s message
+  describes it but the commit contains only this log entry. Not
+  reconstructed, deliberately: the priority had shifted to Nauvis
+  scaling, and the partition design documented here makes
+  re-derivation cheap at resume. This falsifies part of the previous
   entry: the ~46 belt-loops were never the consumer items — they are
   entirely the surplus-merger forest. **The sole remaining structural
   wall is `merge_output_rows`/Step 7b at N≈8 simultaneous single-item
