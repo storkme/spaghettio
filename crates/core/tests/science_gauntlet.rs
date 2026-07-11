@@ -23,6 +23,9 @@ use spaghettio_core::validate::{self, LayoutStyle, Severity};
 use spaghettio_core::zone_cache;
 use rustc_hash::FxHashSet;
 use std::collections::BTreeMap;
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, Instant};
 
 struct Case {
     pack: &'static str,
@@ -105,12 +108,12 @@ fn run_case(case: &Case) -> Outcome {
 
             let sr = match solver::solve(pack, rate, inputs_ref, machine) {
                 Ok(sr) => sr,
-                Err(e) => return Err(Outcome::SolverErr(format!("{e}"))),
+                Err(e) => return Err(Outcome::SolverErr(e.to_string())),
             };
 
             let lr = match layout::build_bus_layout(&sr, layout::LayoutOptions::default()) {
                 Ok(lr) => lr,
-                Err(e) => return Err(Outcome::LayoutErr(format!("{e}"))),
+                Err(e) => return Err(Outcome::LayoutErr(e.to_string())),
             };
 
             let issues = match validate::validate(&lr, Some(&sr), LayoutStyle::Bus) {
@@ -263,9 +266,13 @@ fn science_gauntlet() {
         summary.pass + summary.warn + summary.fail + summary.unsolved,
     );
 
-    // -----------------------------------------------------------------------
-    // SAT zone-cache hit-rate watchdog
-    // -----------------------------------------------------------------------
+    print_cache_footer();
+}
+
+// -----------------------------------------------------------------------
+// SAT zone-cache hit-rate watchdog — shared by both gauntlets.
+// -----------------------------------------------------------------------
+fn print_cache_footer() {
     // cache_stats_extended returns (total, hits_all, hits_unsat, hits_timeout, misses).
     // hits_all already includes unsat+timeout; compute solved as the remainder.
     let (total_lookups, hits_all, hits_unsat, hits_timeout, misses) =
@@ -402,6 +409,449 @@ fn report(case: &Case, outcome: &Outcome, summary: &mut Summary) {
                 eprintln!("      panic: {line}");
             }
             summary.fail += 1;
+        }
+    }
+}
+
+// =============================================================================
+// Science Scaling Gauntlet — rate-scaling scoreboard for the 6 Nauvis packs.
+// =============================================================================
+//
+// Same packs/machine tiers as `science_gauntlet`, but swept across
+// 1, 2, 5, 10 /s to find where each pack's layout stops being clean.
+// Reuses `Case`, `run_case`, `Outcome`, `Summary`/`report`-style formatting,
+// and the zone_cache flush/footer machinery from the 1/s gauntlet above.
+//
+// Each cell gets a wall-clock budget (`SCALING_CELL_BUDGET`) and runs on a
+// dedicated worker thread with a generous stack (deep recursive solving /
+// routing on large recipe graphs can blow the default thread stack, and a
+// stack overflow aborts the whole process — no catch_unwind can save us from
+// that). If a cell doesn't report back within the budget we record TIMEOUT
+// and move on, *deliberately leaking the worker thread* rather than trying
+// to kill it — this is an ignored scoreboard, correctness of the table
+// matters more than tidiness here.
+//
+// Run with (release recommended — USP@1/s is already ~6.6k entities in
+// debug and 10/s can be an order of magnitude bigger):
+//   cargo test --manifest-path crates/core/Cargo.toml --test science_gauntlet \
+//       --release -- --ignored --nocapture science_scaling_gauntlet
+
+const SCALING_RATES: &[f64] = &[1.0, 2.0, 5.0, 10.0];
+const SCALING_CELL_BUDGET: Duration = Duration::from_secs(180);
+const WORKER_STACK_BYTES: usize = 256 * 1024 * 1024;
+
+struct PackTemplate {
+    pack: &'static str,
+    machine: &'static str,
+}
+
+const PACK_TEMPLATES: &[PackTemplate] = &[
+    PackTemplate {
+        pack: "automation-science-pack",
+        machine: "assembling-machine-1",
+    },
+    PackTemplate {
+        pack: "logistic-science-pack",
+        machine: "assembling-machine-2",
+    },
+    PackTemplate {
+        pack: "military-science-pack",
+        machine: "assembling-machine-2",
+    },
+    PackTemplate {
+        pack: "chemical-science-pack",
+        machine: "assembling-machine-2",
+    },
+    PackTemplate {
+        pack: "production-science-pack",
+        machine: "assembling-machine-3",
+    },
+    PackTemplate {
+        pack: "utility-science-pack",
+        machine: "assembling-machine-3",
+    },
+];
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CellKind {
+    Pass,
+    Warn,
+    Fail,
+    SolverErr,
+    LayoutErr,
+    Panic,
+    Timeout,
+}
+
+struct CellRecord {
+    pack: &'static str,
+    rate: f64,
+    kind: CellKind,
+    label: String,
+    dims: Option<(i32, i32)>,
+    entities: Option<usize>,
+    wall_secs: f64,
+    err_by_cat: Vec<(String, usize)>,
+    warn_by_cat: Vec<(String, usize)>,
+    /// First line of a solver/layout error or panic message, for
+    /// spectacular-failure callouts. Not populated for Pass/Warn/Fail.
+    detail: Option<String>,
+}
+
+enum CellOutcome {
+    Ran(Outcome),
+    Timeout,
+}
+
+/// Run one case on a dedicated worker thread with a wall-clock budget.
+/// `run_case` already wraps the solve/layout/validate pipeline in its own
+/// `catch_unwind`, so the only failure mode this adds is the cell simply
+/// taking too long (or the worker dying without going through that
+/// catch_unwind at all, e.g. a stack overflow abort).
+fn run_case_with_budget(case: &Case, budget: Duration) -> (CellOutcome, Duration) {
+    // Case is just 'static refs + an f64 — rebuild by value so the worker
+    // closure can be 'static without needing Case: Clone.
+    let case_owned = Case {
+        pack: case.pack,
+        rate: case.rate,
+        machine: case.machine,
+        extra_inputs: case.extra_inputs,
+    };
+    let (tx, rx) = mpsc::channel();
+    let start = Instant::now();
+    let handle = thread::Builder::new()
+        .stack_size(WORKER_STACK_BYTES)
+        .spawn(move || {
+            let outcome = run_case(&case_owned);
+            // Ignore send failure: it only happens if the receiver already
+            // timed out and walked away, which is exactly the case we're
+            // deliberately tolerating here.
+            let _ = tx.send(outcome);
+        })
+        .expect("failed to spawn scoreboard worker thread");
+
+    match rx.recv_timeout(budget) {
+        Ok(outcome) => {
+            let _ = handle.join();
+            (CellOutcome::Ran(outcome), start.elapsed())
+        }
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            // Deliberately don't join or abort `handle` — let it run to
+            // completion (or forever) in the background. See module doc.
+            (CellOutcome::Timeout, start.elapsed())
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            // Sender dropped without sending — the worker died without
+            // going through run_case's own panic handling (e.g. a stack
+            // overflow, which aborts before any Rust-level catch runs).
+            // Surface it as a panic outcome so it still shows up as a fix
+            // target instead of silently vanishing from the table.
+            (
+                CellOutcome::Ran(Outcome::Panic(
+                    "worker thread died without reporting (stack overflow / abort?)".to_string(),
+                )),
+                start.elapsed(),
+            )
+        }
+    }
+}
+
+fn build_cell_record(pack: &'static str, rate: f64, outcome: CellOutcome, wall: Duration) -> CellRecord {
+    let wall_secs = wall.as_secs_f64();
+    match outcome {
+        CellOutcome::Timeout => CellRecord {
+            pack,
+            rate,
+            kind: CellKind::Timeout,
+            label: "TIMEOUT".to_string(),
+            dims: None,
+            entities: None,
+            wall_secs,
+            err_by_cat: Vec::new(),
+            warn_by_cat: Vec::new(),
+            detail: None,
+        },
+        CellOutcome::Ran(Outcome::Pass {
+            entities, w, h, ..
+        }) => CellRecord {
+            pack,
+            rate,
+            kind: CellKind::Pass,
+            label: "PASS".to_string(),
+            dims: Some((w, h)),
+            entities: Some(entities),
+            wall_secs,
+            err_by_cat: Vec::new(),
+            warn_by_cat: Vec::new(),
+            detail: None,
+        },
+        CellOutcome::Ran(Outcome::Warn {
+            entities,
+            w,
+            h,
+            warnings,
+            by_cat,
+            ..
+        }) => CellRecord {
+            pack,
+            rate,
+            kind: CellKind::Warn,
+            label: format!("WARN×{warnings}"),
+            dims: Some((w, h)),
+            entities: Some(entities),
+            wall_secs,
+            err_by_cat: Vec::new(),
+            warn_by_cat: by_cat,
+            detail: None,
+        },
+        CellOutcome::Ran(Outcome::Fail {
+            entities,
+            w,
+            h,
+            errors,
+            err_by_cat,
+            warn_by_cat,
+            ..
+        }) => CellRecord {
+            pack,
+            rate,
+            kind: CellKind::Fail,
+            label: format!("FAIL×{errors}"),
+            dims: Some((w, h)),
+            entities: Some(entities),
+            wall_secs,
+            err_by_cat,
+            warn_by_cat,
+            detail: None,
+        },
+        CellOutcome::Ran(Outcome::SolverErr(e)) => CellRecord {
+            pack,
+            rate,
+            kind: CellKind::SolverErr,
+            label: "SOLVER-ERR".to_string(),
+            dims: None,
+            entities: None,
+            wall_secs,
+            err_by_cat: Vec::new(),
+            warn_by_cat: Vec::new(),
+            detail: Some(e),
+        },
+        CellOutcome::Ran(Outcome::LayoutErr(e)) => CellRecord {
+            pack,
+            rate,
+            kind: CellKind::LayoutErr,
+            label: "LAYOUT-ERR".to_string(),
+            dims: None,
+            entities: None,
+            wall_secs,
+            err_by_cat: Vec::new(),
+            warn_by_cat: Vec::new(),
+            detail: Some(e),
+        },
+        CellOutcome::Ran(Outcome::Panic(msg)) => {
+            let first_line = msg.lines().next().unwrap_or("").to_string();
+            CellRecord {
+                pack,
+                rate,
+                kind: CellKind::Panic,
+                label: "PANIC".to_string(),
+                dims: None,
+                entities: None,
+                wall_secs,
+                err_by_cat: Vec::new(),
+                warn_by_cat: Vec::new(),
+                detail: Some(first_line),
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "milestone scoreboard — run with --ignored --nocapture"]
+fn science_scaling_gauntlet() {
+    zone_cache::reset_cache_stats();
+
+    eprintln!();
+    eprintln!(
+        "Science Scaling Gauntlet — Nauvis recipes × {{1,2,5,10}}/s, auto belt tier, ore + crude/water/coal/stone inputs"
+    );
+    eprintln!(
+        "per-cell wall-clock budget: {}s on a dedicated worker thread; exceeding it is recorded as TIMEOUT and the sweep continues",
+        SCALING_CELL_BUDGET.as_secs()
+    );
+    let sep: String = "-".repeat(102);
+    eprintln!("{sep}");
+    eprintln!(
+        "  {:<26} {:>6} {:>10} {:>10} {:>9} {:>11}",
+        "pack", "rate", "size", "entities", "wall(s)", "result"
+    );
+    eprintln!("{sep}");
+
+    let mut records: Vec<CellRecord> = Vec::with_capacity(PACK_TEMPLATES.len() * SCALING_RATES.len());
+
+    for tmpl in PACK_TEMPLATES {
+        for &rate in SCALING_RATES {
+            let case = Case {
+                pack: tmpl.pack,
+                rate,
+                machine: tmpl.machine,
+                extra_inputs: &[],
+            };
+            let (outcome, wall) = run_case_with_budget(&case, SCALING_CELL_BUDGET);
+            let rec = build_cell_record(tmpl.pack, rate, outcome, wall);
+
+            eprintln!(
+                "  {:<26} {:>5.0}/s {:>10} {:>10} {:>8.1}s {:>11}",
+                rec.pack,
+                rec.rate,
+                rec.dims
+                    .map(|(w, h)| format!("{w}x{h}"))
+                    .unwrap_or_else(|| "—".to_string()),
+                rec.entities
+                    .map(|e| e.to_string())
+                    .unwrap_or_else(|| "—".to_string()),
+                rec.wall_secs,
+                rec.label,
+            );
+            for (cat, n) in &rec.err_by_cat {
+                eprintln!("      err:  {cat} × {n}");
+            }
+            for (cat, n) in &rec.warn_by_cat {
+                eprintln!("      warn: {cat} × {n}");
+            }
+            if let Some(d) = &rec.detail {
+                eprintln!("      note: {d}");
+            }
+
+            records.push(rec);
+            // Flush newly-solved SAT zones after each case so they accumulate
+            // in the runtime cache file even if a later case panics/times out.
+            zone_cache::flush();
+        }
+    }
+    eprintln!("{sep}");
+
+    print_scaling_matrix(&records);
+    print_category_tally(&records);
+    print_walls(&records);
+    print_cache_footer();
+}
+
+/// 1. Per-cell matrix: rows = pack, columns = rate.
+fn print_scaling_matrix(records: &[CellRecord]) {
+    const COL_W: usize = 12;
+    eprintln!();
+    eprintln!("=== 1. Result matrix (rows = pack, columns = rate) ===");
+    eprint!("  {:<26}", "pack");
+    for &rate in SCALING_RATES {
+        eprint!("{:>COL_W$}", format!("{rate:.0}/s"));
+    }
+    eprintln!();
+    for tmpl in PACK_TEMPLATES {
+        eprint!("  {:<26}", tmpl.pack);
+        for &rate in SCALING_RATES {
+            let rec = records
+                .iter()
+                .find(|r| r.pack == tmpl.pack && (r.rate - rate).abs() < f64::EPSILON)
+                .expect("every pack×rate cell was run");
+            eprint!("{:>COL_W$}", rec.label);
+        }
+        eprintln!();
+    }
+}
+
+/// Category tally across the whole matrix (section 2 of the report), sorted
+/// by frequency, split by severity. Only validated cells (Pass/Warn/Fail)
+/// contribute categories; non-validated outcomes (solver/layout errors,
+/// panics, timeouts) are tallied separately by kind since they never reach
+/// the validator.
+fn print_category_tally(records: &[CellRecord]) {
+    eprintln!();
+    eprintln!("=== 2. Category tally (sorted by frequency, split by severity) ===");
+
+    let mut tally: BTreeMap<(String, &'static str), usize> = BTreeMap::new();
+    for rec in records {
+        for (cat, n) in &rec.err_by_cat {
+            *tally.entry((cat.clone(), "error")).or_default() += n;
+        }
+        for (cat, n) in &rec.warn_by_cat {
+            *tally.entry((cat.clone(), "warning")).or_default() += n;
+        }
+    }
+    let mut rows: Vec<((String, &str), usize)> = tally.into_iter().collect();
+    rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+    if rows.is_empty() {
+        eprintln!("  (no validation issues recorded)");
+    } else {
+        eprintln!("  {:<8} {:<32} {:>6}", "sev", "category", "count");
+        for ((cat, sev), n) in &rows {
+            eprintln!("  {sev:<8} {cat:<32} {n:>6}");
+        }
+    }
+
+    let mut kind_tally: BTreeMap<&'static str, usize> = BTreeMap::new();
+    for rec in records {
+        let kind = match rec.kind {
+            CellKind::SolverErr => Some("SOLVER-ERR"),
+            CellKind::LayoutErr => Some("LAYOUT-ERR"),
+            CellKind::Panic => Some("PANIC"),
+            CellKind::Timeout => Some("TIMEOUT"),
+            CellKind::Pass | CellKind::Warn | CellKind::Fail => None,
+        };
+        if let Some(kind) = kind {
+            *kind_tally.entry(kind).or_default() += 1;
+        }
+    }
+    if !kind_tally.is_empty() {
+        eprintln!();
+        eprintln!("  non-validation outcomes (no issue category — pipeline never reached the validator):");
+        let mut kinds: Vec<(&str, usize)> = kind_tally.into_iter().collect();
+        kinds.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+        for (kind, n) in kinds {
+            eprintln!("    {kind:<12} × {n}");
+        }
+    }
+}
+
+/// 3. Walls: for each pack, the first rate at which it stops being PASS.
+fn print_walls(records: &[CellRecord]) {
+    eprintln!();
+    eprintln!("=== 3. Walls — first rate per pack that stops being PASS ===");
+    for tmpl in PACK_TEMPLATES {
+        let mut cells: Vec<&CellRecord> = records.iter().filter(|r| r.pack == tmpl.pack).collect();
+        cells.sort_by(|a, b| a.rate.partial_cmp(&b.rate).unwrap());
+
+        match cells.iter().find(|r| r.kind != CellKind::Pass) {
+            Some(rec) => {
+                let mut parts: Vec<String> = rec
+                    .err_by_cat
+                    .iter()
+                    .chain(rec.warn_by_cat.iter())
+                    .map(|(c, n)| format!("{c}×{n}"))
+                    .collect();
+                if parts.is_empty() {
+                    if let Some(d) = &rec.detail {
+                        parts.push(d.clone());
+                    }
+                }
+                let suffix = if parts.is_empty() {
+                    String::new()
+                } else {
+                    format!(" — {}", parts.join(", "))
+                };
+                eprintln!(
+                    "  {:<26} wall at {:>4.0}/s: {}{}",
+                    tmpl.pack, rec.rate, rec.label, suffix
+                );
+            }
+            None => {
+                let last = SCALING_RATES.last().copied().unwrap_or(0.0);
+                eprintln!(
+                    "  {:<26} no wall within tested rates (PASS through {:.0}/s)",
+                    tmpl.pack, last
+                );
+            }
         }
     }
 }
