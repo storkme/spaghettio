@@ -691,3 +691,23 @@ independent follow-ups with their own gates.
   coolant loop (multi-recipe cycle, needs the forced-surplus edge-cut
   or its own RFP). Browser eyeball of the kovarex row is outstanding
   (user validates UI per project convention).*
+- *2026-07-11 — **fluid-ingredient self-loop rows LANDED**
+  (design + implementation subagents). pentapod-egg and fish-breeding
+  now build: `self_loop_row` gained a fluid input via a per-machine
+  pipe-to-ground bridge row (pipe UGs pair by OPPOSITE facing — the
+  design's simpler continuous-strip idea failed twice against
+  validation before the working shape). Solver gate: one non-self-loop
+  fluid ingredient allowed with the 1-item shape. Fixed in passing:
+  biochamber's fluid ports were entirely UNCHECKED by the validator
+  (absent from fluids.rs' machine table) — added with the
+  fluid-boxes-disabled guard, plus a bacteria-cultivation regression
+  fixture that previously had zero coverage. Three new fixtures all
+  0 errors / 0 warnings, browser-verified by the subagent.
+  **coal-liquefaction explicitly DEFERRED** by design review: it needs
+  a new solid+fluid refinery row shape (no template has a solid input
+  on a 5×5 machine), the staggered template's input face is already
+  maximally packed, and the fluid loop needs an unprecedented
+  around-the-machine wraparound (input/output ports on opposite
+  faces). Kept typed-refused; a proper RFP if ever wanted — it's a
+  coal-only-map niche. Remaining self-loop follow-ups: high-rate row
+  splitting, fluoroketone coolant loop (multi-recipe cycle).*
