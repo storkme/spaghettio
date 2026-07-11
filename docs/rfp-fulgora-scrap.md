@@ -292,3 +292,7 @@ and 3 wait on its artifacts as marked. Phase 3 is the long pole.
   item-isolation exemption mechanism named (segment-kind lookup +
   boundary check requiring filter inserters), correcting the
   `:selfloop:`-precedent reference (that lives in check_belt_loops).*
+- *2026-07-11 — re-review verified all six resolutions against the
+  code; merged as #306. **Accepted.** Phase 0 (physicals + sorter
+  decision) and Phase 1+2b (solid surplus export, D2a+D2b) kicked off
+  in parallel; Phases 2/3 gated on Phase 0's artifacts as specified.*
