@@ -569,3 +569,24 @@ and 3 wait on its artifacts as marked. Phase 3 is the long pole.
   entities because bus width legitimately shifts when an item stops
   needing export lane geometry). KC4 held: zero golden-hash movement,
   Export remains the default.*
+- *2026-07-11 — architecture **(d) chest-buffered sorting** recorded
+  post-hoc (user-flagged; it was absent from Phase 0's (a)/(b)/(c)
+  candidate set — a gap in that analysis, noted honestly). The
+  dominant community meta for compact scrap setups: the recycler's
+  drop vector inserts directly into a container on the drop tile
+  (drill-style), and filtered bulk inserters pull from the chest on
+  full-hand availability. What it buys over (a): the chest converts
+  the probabilistic output trickle into random-access buffered stock
+  (belt-pickup throughput for rare items — holmium-ore at p=0.01 —
+  degrades badly at scale, which is sushi's weak point), twelve
+  inserters physically fit around one chest, and a mixed-item chest
+  violates no belt invariant — the entire `:sushi:` isolation
+  exemption exists only because (a) puts the mixed stream on a belt.
+  Why it isn't v1: chests are unmodeled (no entity, and — the real
+  cost — no buffer-node vertex in either rate walker, which are
+  belt-segment graphs with inserters as machine↔belt edges), whereas
+  (a) needed one model field + one contained exemption. **Standing
+  note: (d) is the likely v2 evolution when scrap rates rise past
+  what per-item belt pickup sustains; prerequisites are a container
+  entity class + buffer-node flow semantics + eject-into-container
+  support in the ejection model.***
