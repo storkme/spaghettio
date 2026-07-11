@@ -220,6 +220,200 @@ KC2 refers to bbox area under this protocol.
 ~800 LOC of new template/validator code, pause and review against the
 pre-solved-block alternative.
 
+## Phase 0 findings (2026-07-11 spike)
+
+Both artifacts below are backed by draftsman 3.3.0 (`python3`,
+`draftsman.data.entities` / `draftsman.data.recipes`, plus
+`draftsman.entity.new_entity` for blueprint-field round-trips) and a
+`blueprint-analyze` sweep of `scripts/blueprints/`.
+
+### (i) Recycler physicals
+
+- **Footprint: non-square, as suspected.** `Furnace('recycler')`
+  reports `tile_width=2, tile_height=4` (from
+  `collision_box [[-0.7,-1.7],[0.7,1.7]]`; `selection_box` is
+  marginally larger, `[[-0.9,-1.85],[0.9,1.85]]`). 4 valid directions
+  (N/E/S/W), no fluid box, so `mirror` is a no-op for this entity.
+- **Output: ejects directly, mining-drill-style — confirmed, not
+  inserter-only.** The prototype sets
+  `vector_to_place_result: [-0.5, -2.3]`. Cross-checked against every
+  other machine on `MACHINES` in `scripts/extract_factorio_data.py`
+  (`stone/steel/electric-furnace`, `assembling-machine-1`, `foundry`,
+  `electromagnetic-plant`, `crusher`): all report `None` for this
+  field. Recycler is the only crafting machine in our set with it set.
+  At the default (north) orientation the vector lands 0.6 tiles beyond
+  the entity's own north edge (`y=-1.7`) and 0.5 tiles off-center in x
+  — i.e. one specific column of the 2-wide footprint, one tile past
+  the machine, matching a mining drill's belt-drop exactly. It also
+  keeps a conventional inserter-extractable output buffer
+  (`result_inventory_size: 12`, sized for all 12 possible
+  scrap-recycling results at once), so both extraction paths are
+  physically legal — the belt-drop is the one that needs no inserter,
+  which is what the reference design (below) uses.
+- **Input: inserter-fed**, `source_inventory_size: 1` — one input slot,
+  no belt-side direct input analogous to the output.
+- **Filter entities — blueprint-format fields, draftsman-verified
+  round-trip:**
+  - Inserters: Factorio 2.0 removed the standalone
+    `filter-inserter`/`stack-filter-inserter` entities. Every inserter
+    type (`inserter`, `long-handed-inserter`, `bulk-inserter`,
+    `fast-inserter`, `stack-inserter`) natively carries
+    `filter_count: 5`. Blueprint fields: `use_filters: true`,
+    `filters: [{"index": 1, "name": "<item>"}, ...]` (1-indexed),
+    optional `filter_mode: "blacklist"` (omitted at the default
+    `"whitelist"`).
+  - Splitters: `filter: {"type": "item", "name": "<item>"}` (one item
+    per splitter) routes that item to whichever side is
+    `output_priority` (`"left"`/`"right"`); the other side gets
+    everything else. Optional `input_priority`, same two values.
+- **Rate math.** `crafting_speed: 0.5`. `scrap-recycling`:
+  `energy_required: 0.2`, 1 scrap in, 12 possible results (amount 1
+  each) at probabilities 0.20/0.07/0.06/0.05/0.04/0.04/0.04/0.03/0.03/
+  0.02/0.01/0.01 (iron-gear-wheel, solid-fuel, concrete, ice,
+  steel-plate, battery, stone, advanced-circuit, copper-cable,
+  processing-unit, low-density-structure, holmium-ore respectively) —
+  Σ = 0.60 expected items/craft. Craft time = 0.2/0.5 = 0.4s → 2.5
+  scrap/s per recycler at 100% uptime → 1.5 items/s average mixed
+  output per recycler. Saturating 1 yellow belt (15/s) of scrap needs
+  **6 recyclers** (bare arithmetic, no modules/margin); red belt 12;
+  blue belt 18. (Aside, not load-bearing for this RFP:
+  `steel-plate-recycling` is a genuine `X → 0.25X` self-voider —
+  `energy_required: 1`, ingredient 1 steel-plate, result 0.25 expected
+  steel-plate — confirming D1's cascade arithmetic assumption for at
+  least one real item.)
+
+### (ii) Sorter architecture decision
+
+**Corpus sweep result: the corpus is not empty — it has a genuine,
+production, scrap-to-product Fulgora build.**
+`scripts/blueprints/-OPqXI7f5b36Cd1Tpb2Z_electromagnetic_science_pack_from_begin.json`
+("Electromagnetic science pack from begin": *"you need to submit only
+basic resources to the input: Scrap metal ~3600 units per minute"*).
+Decoded with draftsman and cross-checked against
+`blueprint-analyze --json`: 1000 entities total (`blueprint-analyze`
+sees 9 recipes / 85 non-recycler machines — it doesn't classify
+`recycler` as a recipe-bearing machine today, a small gap worth a
+follow-up issue but not blocking here). Full entity breakdown:
+68 `recycler`, 96 `bulk-inserter` (32 filtered, covering 10 distinct
+items: concrete, copper-plate, electronic-circuit, holmium-ore,
+iron-plate, low-density-structure, plastic-bar, solid-fuel,
+steel-plate, stone), 7 `long-handed-inserter` (unfiltered, positioned
+directly against the recycler cluster — likely direct extraction of
+the rarest items from the 12-slot output buffer rather than sushi
+sorting), 24 `turbo-splitter` (21 filtered — holmium-ore, ice, stone,
+advanced-circuit, iron-plate, copper-cable, electronic-circuit,
+plastic-bar, battery, processing-unit, solid-fuel, iron-gear-wheel),
+523 `turbo-transport-belt`, 101 `turbo-underground-belt`. **This is a
+hybrid of (a) and (b)**: filter inserters do fine per-item sushi
+extraction, filtered splitters do coarser redistribution elsewhere in
+the base. It runs ~60/s scrap (turbo belt, matches the "3600/min"
+description) — 4× the RFP's 1-yellow-belt benchmark rate.
+
+**Frozen-protocol measurement (60/s scale, the corpus's native rate):**
+the recycler+belt+splitter+inserter subregion (`recycler`,
+`turbo-transport-belt`, `turbo-underground-belt`, `turbo-splitter`,
+`bulk-inserter`, `long-handed-inserter` — excluding the
+`electromagnetic-plant`/`chemical-plant`/`assembling-machine-3`
+production machines and their pipes) is 819 entities in a
+59.5×47.0 = **2796-tile bbox** — essentially the *entire* blueprint
+footprint (total bbox 60.5×48.0 = 2904 tiles). The sorter dominates a
+real Fulgora build; this benchmark reference is provisional-by-scale
+(it's 4× our target rate) but not provisional-by-existence — it's a
+real, working design.
+
+Sanity check on recycler count: bare rate math predicts 60/2.5 = 24
+recyclers for 60/s scrap; the design uses 68 (2.83×). Most likely
+cause: productivity/quality modules inflating `energy_required` (the
+corpus's own "Clover of Legendary Quality Advanced Circuit" design
+confirms quality-module use is standard on Fulgora). **Phase 3 should
+size recycler banks from the bare crafting-speed arithmetic above
+against the LP's solved rate, not from community blueprint headcount.**
+
+**Paper-design sketch at 1 yellow belt (15/s scrap), architecture (a):**
+6 recyclers (2×4 each) side by side = 12 tiles wide × 4 tall row;
+sushi collection belt 1 tile north (matches the confirmed drop-vector
+finding above). Total mixed output ≈ 6 × 1.5/s = 9 items/s — under a
+single yellow belt's 15/s cap, so one sushi belt suffices at this
+scale. A bank of filter inserters (≤12, one per item type; the
+rarest — holmium-ore at 6×0.025=0.15/s, low-density-structure,
+processing-unit — could go to direct long-handed extraction instead,
+mirroring the reference design's 7 long-handed inserters) lifts each
+item onto its own lane. Rough footprint: ~12 (belt run) × ~7-8 (input
+inserter row + machine + sushi belt + sort-inserter row + short
+per-lane merge run) ≈ 84–96 tiles, ~30–35 entities. Comfortably under
+the frozen-protocol 2× bound under any reasonable scaling of the
+2796-tile/819-entity reference.
+
+Architecture (b) (filtered-splitter cascade) is confirmed feasible
+(`splitter.filter` verified above, and the reference design uses 21 of
+them) but the RFP's stated con holds on paper: a 12-item cascade needs
+12 sequential stages, and splitter-level item routing isn't modeled in
+either rate walker (`belt_flow.rs`) at all today — a materially bigger
+validator lift than (a)'s single new companion check.
+
+Architecture (c) (pre-solved block) is proven to exist in the wild —
+the reference design effectively *is* one — but adopting it as our
+mechanism means building a new blueprint-import/port-typing subsystem,
+which is a bigger new subsystem than extending validators for (a). Not
+needed to clear KC2 since (a) already fits the benchmark; kept as the
+fallback KC2 specifies.
+
+**Decision: architecture (a), filter-inserter sushi**, for the sorting
+sub-problem specifically. Smallest validator surface (one `filters`
+field + one new companion check next to, not modifying,
+`check_belt_item_isolation`; `BusLane.item: String` in
+`lane_planner.rs` is untouched — a sorted item becomes an ordinary
+single-item lane the instant it clears the filter-inserter boundary),
+proven at scale by the corpus, comfortable headroom at the RFP's
+reference rate. (b) remains a viable *later* addition — the corpus
+shows real designs blend both — but is not the Phase 3 starting point.
+
+### Kill criteria evaluation
+
+- **KC1 (physicals) — TRIPS.** The recycler's non-square footprint
+  (2×4) cannot be represented by the engine's machine-footprint
+  primitive: `common::machine_size(entity: &str) -> u32` is a single
+  scalar, and `machine_tiles(x, y, size)` generates a square `size ×
+  size` region unconditionally (`crates/core/src/common.rs:32-48`).
+  This primitive is called at 45 sites across `placer.rs`,
+  `templates.rs` (via `placer.rs`'s `msz`), `validate/inserters.rs`,
+  `validate/power.rs`, `validate/belt_structural.rs`,
+  `validate/belt_flow.rs`, `bus/junction_solver.rs`,
+  `bus/ghost_router.rs`, `bus/lane_planner.rs`, `bus/layout.rs`,
+  `blueprint.rs`, `analysis.rs`, `density.rs` — collision, occupancy,
+  power coverage, and belt-structural checks all assume it. Worse than
+  a mechanical scalar→tuple rename: several call sites thread the
+  *same* `msz` through both the row's vertical stacking math and its
+  horizontal per-machine pitch (e.g. `placer.rs:696`,
+  `out_y = y_cursor + 2 + msz as i32 + 1` — one number used as both
+  "how tall is the machine" and implicitly assumed equal to "how wide
+  is the machine" elsewhere in the same function), so a 2×4 machine
+  needs each call site individually triaged for which dimension
+  applies, not a blind type swap. Independently, no existing `RowKind`
+  template models direct-to-belt ejection at all — a repo-wide grep
+  for `mining-drill`/`vector_to_place_result`/`drop_position` in
+  `crates/core/src/` finds nothing outside `blueprint_parser.rs`
+  (generic field parsing, unrelated to row generation). Both facts
+  satisfy KC1 condition (a) independently. **Per KC1, this means stop
+  and rescope before Phase 2/3 template work — not abandon Fulgora.**
+  Recommended rescoping: extend `machine_size` to return `(width,
+  height)` (existing square machines become `(s, s)`, zero behavior
+  change) as its own mechanical prerequisite sub-phase touching the 45
+  call sites above, done *before* any recycler-specific row/template
+  work, rather than hand-rolling a bespoke collision path for
+  recyclers alone (which would risk the router/validators
+  silently disagreeing about recycler tile occupancy — worse than the
+  refactor). KC1 condition (b) does **not** trip — see the sushi/
+  `BusLane` analysis above; the core bus abstraction needs no changes.
+- **KC2 (sorter viability) — does not trip.** Architecture (a) fits
+  the frozen benchmark with large headroom at the RFP's reference
+  rate; no need to invoke the 2× fallback margin or pivot to (c).
+- **KC5 (mixed-belt containment) — does not trip.** The sushi
+  exemption is additive and narrowly scoped as designed: a new
+  segment-KIND lookup plus a standalone companion check, not a
+  modification of `check_belt_item_isolation`'s existing logic for
+  non-sushi segments; `BusLane` stays single-item throughout.
+
 ## Verification plan
 
 Per the CLAUDE.md protocol, plus:
@@ -296,3 +490,25 @@ and 3 wait on its artifacts as marked. Phase 3 is the long pole.
   code; merged as #306. **Accepted.** Phase 0 (physicals + sorter
   decision) and Phase 1+2b (solid surplus export, D2a+D2b) kicked off
   in parallel; Phases 2/3 gated on Phase 0's artifacts as specified.*
+- *2026-07-11 — Phase 0 complete, both artifacts recorded above
+  (draftsman 3.3.0 + `blueprint-analyze` sweep of
+  `scripts/blueprints/`). Findings: recycler is 2×4 (non-square,
+  confirmed via `tile_width`/`tile_height`) and ejects output directly
+  onto a belt via `vector_to_place_result` (mining-drill-style,
+  confirmed as unique among the machines in
+  `scripts/extract_factorio_data.py`'s `MACHINES` list), while also
+  keeping an inserter-extractable 12-slot output buffer. **KC1 trips**:
+  the non-square footprint breaks `common::machine_size() -> u32`
+  (single scalar) at 45 call sites spanning placement, occupancy,
+  power, and all three belt/inserter validators — bigger than "one new
+  `RowKind` variant," a `(width, height)` refactor is now a prerequisite
+  sub-phase before Phase 2/3 template work, not a kill of the RFP.
+  Sorter architecture: **(a) filter-inserter sushi selected** — the
+  corpus has a real scrap-to-electromagnetic-science-pack build
+  (`-OPqXI7f5b36Cd1Tpb2Z`, 68 recyclers + 96 bulk-inserters, hybrid of
+  (a)/(b), running 4× our reference rate) that proves the mechanism at
+  scale; a paper design at the RFP's 1-yellow-belt benchmark rate
+  (6 recyclers, ~30-35 entities, ~85 tiles) clears the frozen 2× bound
+  with room to spare. KC2 and KC5 do not trip. Phase 2/3 should budget
+  for the `machine_size` refactor before recycler-row template work
+  begins.*
