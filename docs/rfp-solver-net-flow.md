@@ -656,3 +656,38 @@ independent follow-ups with their own gates.
   Next session: fix the fluid-lane stagger for dense oil complexes +
   the exit-tail chain, then flip the default (one-line change in
   solver.rs) and re-bless the delta-report fixtures.*
+- *2026-07-11 — **Phase 3 FLIPPED: free cost-based selection is the
+  default.** Both blockers root-caused via walker instrumentation and
+  fixed: (1) the trunk walker's UG-S pick no longer slides past
+  foreign-tap rows (a PTG ON a foreign tap row is F5a-safe; the slide
+  surface-filled the very rows it avoided — the dense-oil merge
+  vector) and its range caps at y1−2 so the UG pair always fits (the
+  stacked-exit tail bug); (2) an anchor-spacer pass separates adjacent
+  fluid lanes whose surface-anchor sets intersect (cross-ROW port
+  sharing that no template stagger covers), with `source_y` counted
+  only when the entry can't be a UG. USP free mode: 0 errors /
+  0 warnings, zero surplus (everything cracked). Full suite green with
+  zero golden-hash churn; gauntlet 4 PASS / 2 WARN / 0 FAIL.
+  Compatibility mode retained as `solve_compat_with_palette_and_
+  exclusions`. Forced-AOP fixture at 24/s (multi-machine under
+  cracking) asserts zero errors — the exit-tail budget was removed.*
+- *2026-07-11 — **Phase 2(c) self-loop rows LANDED** (three subagents:
+  solver netting, priority-splitter rate walkers, row template).
+  Netflow emits pure-solid self-loop recipes (kovarex,
+  iron/copper-bacteria-cultivation) with NET flows in inputs/outputs
+  plus raw recirculation in `MachineSpec.self_loop`; both lane-rate
+  walkers honor `PlacedEntity.loop_priority_rate` (loop branch =
+  min(total, cap), replacing 50/50 for `:selfloop:`-tagged splitters
+  only); `check_belt_loops` exempts the tagged recirculation;
+  `templates::self_loop_row` builds the physical loop (3 north belts,
+  2 south belts, priority splitter, corridors that tunnel under the
+  output merger). `tier_kovarex_self_loop` fixture: uranium-235@0.1/s
+  → 6 centrifuges, **0 errors / 0 warnings**, round-trip clean. Fixed
+  in passing: centrifuge missing from two machine-entity tables.
+  Still refused (typed): coal-liquefaction (fluid self-loop item) and
+  pentapod-egg/fish-breeding (water ingredient) — fluid self-loops
+  are the remaining follow-up, along with high-rate self-loop row
+  splitting (v1 caps documented in the template) and the fluoroketone
+  coolant loop (multi-recipe cycle, needs the forced-surplus edge-cut
+  or its own RFP). Browser eyeball of the kovarex row is outstanding
+  (user validates UI per project convention).*
