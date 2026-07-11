@@ -711,3 +711,22 @@ independent follow-ups with their own gates.
   faces). Kept typed-refused; a proper RFP if ever wanted — it's a
   coal-only-map niche. Remaining self-loop follow-ups: high-rate row
   splitting, fluoroketone coolant loop (multi-recipe cycle).*
+- *2026-07-11 — **Fulgora scrap-economy spike** (data + solver, no
+  layout). 310 real recycling recipes appended to recipes.json from
+  draftsman's Space Age data (excluded-by-default; zero behavior
+  change — one real regression found and fixed: `short_ids` scanned
+  excluded recipes, so additive data shifted existing URL codes).
+  Opt-in `NetflowOptions { allow_recycling, allow_voiding }`. Results:
+  the LP's scrap economics are EXACT (holmium golden to 4 decimal
+  places; isolated voider activates at the analytic break-even price
+  and touches nothing else), and `allow_recycling` alone recovers
+  value from scrap's byproduct soup for free. But the assumed shipping
+  mechanism is falsified: raising `eps_surplus` to make voiding
+  profitable also makes **crafting entities purely to recycle them**
+  profitable (combinators, reactors, chests — a new laundering family;
+  the cycle guard correctly refuses it, so no silent breakage, but
+  the price-tuning path is blocked at graph scale). A real Fulgora
+  feature needs a curated voider/recycling allowlist or a dedicated
+  value-recovery design, PLUS solid-surplus perimeter routing (11+
+  genuine surplus streams even without voiding). Layout-side RFP
+  should start from that design decision, not from price tuning.*
