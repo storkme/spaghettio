@@ -20,6 +20,7 @@ pub const MACHINE_ENTITY_NAMES: &[&str] = &[
     "cryogenic-plant",
     "foundry",
     "biochamber",
+    "centrifuge",
 ];
 
 /// Return `true` if `entity` is a known crafting machine.

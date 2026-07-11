@@ -353,6 +353,14 @@ pub enum RowKind {
     /// heavy-oil-cracking, light-oil-cracking, sulfur. See
     /// `docs/archive/rfp-multi-fluid-rows.md`.
     FluidMultiInput,
+    /// Self-loop recipe (kovarex-class: an item appears on both sides of
+    /// the recipe). `has_minor` is true for the 2-item shape (kovarex:
+    /// a net-positive item recirculated via a priority-split corridor,
+    /// plus a net-negative item that's ALSO the bus-tapped input, on its
+    /// own recirculation belt); false for the 1-item shape (bacteria
+    /// cultivations: one net-positive self-loop item plus an ordinary
+    /// bus-tapped input). See `templates::self_loop_row`.
+    SelfLoop { has_minor: bool },
 }
 
 impl RowKind {
@@ -372,12 +380,29 @@ impl RowKind {
             // For 2 fluids + msz=3 + output (inserter+belt OR pipe row):
             // 2 trunk rows + 1 drop ext + 1 UG-out + 3 machine + 2 output = 9
             RowKind::FluidMultiInput => 9,
+            // Mirrors `templates::self_loop_row`'s row-offset formulas
+            // (msz=3, the only machine size self-loop recipes use today):
+            // 1-item: far-return(0) + descent(1) + far(2) + near(3) +
+            // ins(4) + machine(5-7) + out-ins(8) + collector(9) +
+            // splitter-2nd-row(10) = 11. 2-item adds near2(4)/ins2(5)
+            // (machine shifts to 6-8), a minor collector row, a
+            // dedicated pass-through row for the major loop's own
+            // straight-feed detour, and a near2 east-transit row = 14.
+            RowKind::SelfLoop { has_minor } => if *has_minor { 14 } else { 11 },
         }
     }
 }
 
 /// Classify a spec into a RowKind.
 fn row_kind(spec: &MachineSpec) -> RowKind {
+    // Self-loop recipes (kovarex-class) short-circuit before the
+    // ordinary solid/fluid counting cascade — `spec.inputs`/`outputs`
+    // carry only NET flows for these (see `models::MachineSpec` doc
+    // comment), which would otherwise misclassify them.
+    if !spec.self_loop.is_empty() {
+        return RowKind::SelfLoop { has_minor: spec.self_loop.len() > 1 };
+    }
+
     let solid_inputs = spec.inputs.iter().filter(|f| !f.is_fluid).count();
     let fluid_inputs = spec.inputs.iter().filter(|f| f.is_fluid).count();
 
@@ -868,6 +893,51 @@ pub(crate) fn build_one_row(
                 let out_y = y_cursor + rh - 1;
                 (ents, rh, input_ys, out_y)
             }
+        }
+        RowKind::SelfLoop { has_minor } => {
+            let msz = machine_size(&spec.entity);
+            let major = spec
+                .self_loop
+                .iter()
+                .find(|f| f.net_rate > 0.0)
+                .expect("self-loop spec must have a net-positive item (classify_self_loop guarantees this)");
+            let near = spec.inputs.first();
+            let near_item = near.map(|f| f.item.as_str()).unwrap_or("");
+            let near_net_rate = near.map(|f| f.rate).unwrap_or(0.0);
+            let minor = if *has_minor {
+                spec.self_loop
+                    .iter()
+                    .find(|f| f.net_rate < 0.0)
+                    .map(|f| (f.consumed_rate, f.produced_rate))
+            } else {
+                None
+            };
+            let (ents, rh) = templates::self_loop_row(
+                &spec.recipe,
+                &spec.entity,
+                msz,
+                count,
+                y_cursor,
+                bus_width,
+                &major.item,
+                major.consumed_rate,
+                major.produced_rate,
+                near_item,
+                near_net_rate,
+                minor,
+                max_belt_tier,
+            );
+            // Mirrors `templates::self_loop_row`'s row-offset formulas:
+            // the bus tap-off lands on the near belt (dy=3); the row's
+            // declared output is major's export tile, on the major
+            // collector row (dy_out_ins + 1).
+            let dy_near = 3;
+            let dy_machine = if *has_minor { 6 } else { 5 };
+            let dy_out_ins = dy_machine + msz as i32;
+            let dy_major_collect = dy_out_ins + 1;
+            let input_ys = vec![y_cursor + dy_near];
+            let out_y = y_cursor + dy_major_collect;
+            (ents, rh, input_ys, out_y)
         }
     };
 

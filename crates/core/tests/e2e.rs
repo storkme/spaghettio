@@ -1580,6 +1580,56 @@ fn tier5_processing_unit_from_ore_am3() {
     assert_round_trip(&result);
 }
 
+/// Kovarex self-loop row template — the final piece of RFP Phase 2(c)
+/// (`docs/rfp-solver-net-flow.md`). kovarex-enrichment-process consumes
+/// AND produces both uranium-235 and uranium-238 (at different rates
+/// per machine), so the solver nets the raw per-machine rates into a
+/// single external input (uranium-238) and output (uranium-235), with
+/// the raw consumed/produced breakdown carried on `MachineSpec::self_loop`.
+/// `templates::self_loop_row` physically recirculates the majority of
+/// each item's production via a loop corridor rather than routing it
+/// through the bus.
+///
+/// Forces kovarex by excluding uranium-processing (the only other
+/// uranium-235 producer) with no uranium-235 input available — the
+/// solver has no choice but to route through the self-loop recipe. Rate
+/// and machine count (6 centrifuges) match the hand-derived netting
+/// arithmetic in `kovarex_self_loop_net_flows_hand_derived`
+/// (`solver_netflow_parity.rs`).
+#[test]
+#[ntest::timeout(15000)]
+fn tier_kovarex_self_loop() {
+    let inputs: FxHashSet<String> = ["uranium-238"].iter().map(|s| s.to_string()).collect();
+    let excluded: FxHashSet<String> = ["uranium-processing"].iter().map(|s| s.to_string()).collect();
+    let result = run_e2e_with_exclusions(
+        "tier_kovarex_self_loop",
+        "uranium-235",
+        0.1,
+        "assembling-machine-3",
+        None,
+        &inputs,
+        &excluded,
+    )
+    .unwrap_or_else(|e| panic!("tier_kovarex_self_loop: {e}"));
+
+    assert_no_errors(&result);
+    assert_no_warnings(&result);
+    assert_produces(&result, "uranium-235", 0.1);
+
+    let centrifuge_count = result
+        .layout
+        .entities
+        .iter()
+        .filter(|e| e.name == "centrifuge")
+        .count();
+    assert_eq!(
+        centrifuge_count, 6,
+        "expected 6 centrifuges in one row (hand-derived count for 0.1/s), got {centrifuge_count}"
+    );
+
+    assert_round_trip(&result);
+}
+
 /// Regression test for [issue #136][] — coprime balancer-shape coverage.
 ///
 /// Repro URL:

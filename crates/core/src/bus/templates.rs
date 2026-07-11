@@ -3003,6 +3003,826 @@ pub fn fluid_multi_input_row(
     (entities, row_height, fluid_input_port_pipes, fluid_output_port_pipes)
 }
 
+/// Row for a self-loop recipe (kovarex-class: an item appears on both
+/// sides of the recipe). `spec.self_loop` carries the RAW per-machine
+/// consumed/produced rates for each self-referencing item; `spec.inputs`
+/// /`spec.outputs` carry only the NET flow (see `models::MachineSpec`
+/// doc comment). This template physically reconciles the two: a "loop
+/// corridor" recirculates the majority of each self-loop item's
+/// production back into its own consumption, and the bus is tapped only
+/// for the net external demand.
+///
+/// Two shapes are supported (`docs/rfp-solver-net-flow.md` Phase 2(c)):
+/// - **1-item** (bacteria cultivations): one self-loop item with net
+///   production (`major_item`), plus an ordinary solid input
+///   (nutrients-class, `near_item`) that is NOT self-referencing.
+/// - **2-item** (kovarex): a net-positive `major_item` (U-235) and a
+///   net-negative minor item that is the SAME item as `near_item`
+///   (U-238) — the bus taps `near_item` for its net demand on one
+///   belt, and a THIRD north belt (`near2`) independently recirculates
+///   the minor item's raw production. Keeping these on separate belts
+///   avoids needing a shared merge point for the bus tap and the
+///   corridor (a shared merge was explored and found geometrically
+///   intractable within a single row's footprint — every column at the
+///   near belt's row is claimed either by the continuous bus-tapped
+///   run or by a per-machine inserter, and the corridor's return path
+///   would sideload into a spot the router expects to extend from,
+///   colliding with the tap-off gap the router owns).
+///
+/// Layout (msz=3, 2-item shape; 1-item drops the `near2` belt, its
+/// stacked inserter row collapses into a single `dy_ins`, and there is
+/// no `near2` collector/corridor):
+/// ```text
+///   y+0  : far corridor return (major item, flows WEST, then turns
+///          south at machine 0's column)
+///   y+1  : (major corridor descent transit, machine-0 column only)
+///   y+2  : far belt (major item; fed ONLY by its corridor, no bus tap)
+///   y+3  : near belt (bus-tapped net demand)
+///   y+4  : near2 belt (minor item; UG-in / LHI-A / UG-out per machine)
+///   y+5  : LHI-B (picks near) / regular×2 (pick near2 surface); ALSO
+///          near2's own corridor return-transit row west of machine 0
+///          (that column is unused by any machine there)
+///   y+6..y+6+msz-1 : machine
+///   y+6+msz        : output inserters (regular picks major, LHI picks minor)
+///   y+6+msz+1      : major collector (raw production; feeds a priority
+///                    splitter east of the machines)
+///   y+6+msz+2      : minor collector (raw production; 100% recirculated,
+///                    no splitter)
+///   y+6+msz+3      : near2 corridor east-side transit row
+/// ```
+/// East of the machines: major's collector feeds a priority splitter
+/// (`loop_priority_rate = major_consumed_rate * count`); the export
+/// branch becomes the row's declared output (untouched item-isolation
+/// segment), the loop branch jogs one column east (clearing the export
+/// tile, which sits directly north of the splitter's loop output),
+/// rises, and returns via y+0/y+1 into the far belt. Minor's collector
+/// (2-item shape only) turns south, transits east past major's
+/// splitter zone, rises on its own column, returns west at row y+5,
+/// and drops one tile into y+4 via a sideload into machine 0's UG-in —
+/// crossing major's riser with a single 1-tile underground hop, the
+/// only crossing the two corridors need.
+///
+/// Returns `(entities, row_height)`.
+#[allow(clippy::too_many_arguments)]
+pub fn self_loop_row(
+    recipe: &str,
+    machine_entity: &str,
+    machine_size: u32,
+    machine_count: usize,
+    y_offset: i32,
+    x_offset: i32,
+    major_item: &str,
+    major_consumed_rate: f64,
+    major_produced_rate: f64,
+    near_item: &str,
+    near_net_rate: f64,
+    minor: Option<(f64, f64)>,
+    max_belt_tier: Option<&str>,
+) -> (Vec<PlacedEntity>, i32) {
+    use crate::bus::balancer::{splitter_for_belt, underground_for_belt};
+    use crate::common::belt_entity_for_rate;
+
+    let msz = machine_size as i32;
+    let pitch = msz;
+    let count = machine_count as i32;
+    let has_minor = minor.is_some();
+
+    // Prefix zone: 3 dead columns west of machine 0. `x_offset + 1`
+    // (= `mx0 - 2`) is the near2 corridor's vertical descent column
+    // (2-item shape only) — `near_belt` dips underground for that one
+    // tile so the descent has a clear surface path. `mx0` itself
+    // carries the major corridor's descent.
+    const PREFIX: i32 = 3;
+    let mx0 = x_offset + PREFIX;
+    let mxs: Vec<i32> = (0..machine_count as i32).map(|i| mx0 + i * pitch).collect();
+    let last_mx = *mxs.last().expect("machine_count >= 1");
+    let east_x = last_mx + msz;
+
+    let major_total = major_produced_rate * count as f64;
+    let major_loop_rate = major_consumed_rate * count as f64;
+    let major_export_rate = (major_total - major_loop_rate).max(0.0);
+    let near_total = (near_net_rate * count as f64).max(1e-6);
+    let minor_total = minor.map(|(_, p)| p * count as f64).unwrap_or(0.0).max(1e-6);
+
+    let far_belt = belt_entity_for_rate(major_total, max_belt_tier);
+    let near_belt_name = belt_entity_for_rate(near_total, max_belt_tier);
+    let near2_belt = belt_entity_for_rate(minor_total, max_belt_tier);
+    let collector_belt = belt_entity_for_rate(major_total, max_belt_tier);
+    let minor_collector_belt = belt_entity_for_rate(minor_total, max_belt_tier);
+    let splitter_name = splitter_for_belt(collector_belt);
+    let near2_ug = underground_for_belt(near2_belt);
+
+    let mut entities: Vec<PlacedEntity> = Vec::new();
+
+    let loop_major_seg = Some(format!("row:{recipe}:selfloop:{major_item}"));
+    let collect_major_seg = Some(format!("row:{recipe}:belt-out"));
+    let near_in_seg = Some(format!("row:{recipe}:belt-in:{near_item}"));
+    let near_ins_seg = Some(format!("row:{recipe}:inserter-in:{near_item}"));
+    let far_ins_seg = Some(format!("row:{recipe}:inserter-in:{major_item}"));
+    let loop_minor_seg = Some(format!("row:{recipe}:selfloop:{near_item}:recirc"));
+    let near2_ins_seg = Some(format!("row:{recipe}:inserter-in:{near_item}:recirc"));
+    let machine_seg = Some(format!("row:{recipe}:machine"));
+    let major_out_ins_seg = Some(format!("row:{recipe}:inserter-out:{major_item}"));
+    let minor_out_ins_seg = Some(format!("row:{recipe}:inserter-out:{near_item}"));
+
+    // ---- Row Y offsets (relative to y_offset) ----
+    let dy_far_ret = 0;
+    let dy_major_descent = 1;
+    let dy_far = 2;
+    let dy_near = 3;
+    let dy_near2 = 4; // 2-item shape only
+    let dy_ins2 = 5; // 2-item shape; ALSO near2's return-transit row
+    let dy_ins1 = 4; // 1-item shape's single inserter row
+    let dy_machine = if has_minor { 6 } else { dy_ins1 + 1 };
+    let dy_out_ins = dy_machine + msz;
+    let dy_major_collect = dy_out_ins + 1;
+    let dy_minor_collect = dy_out_ins + 2; // 2-item only
+    // dy_out_ins + 3 (dy_minor_collect + 1) is left as a dedicated pass
+    // for the major loop's own detour (a straight, non-sideload feed
+    // into its priority-splitter UG entrance — see the loop-corridor
+    // section below); near2's east-side transit row sits one further
+    // south so the two never share a tile.
+    let dy_near2_transit = dy_out_ins + 4; // 2-item only
+
+    let row_height = if has_minor { dy_near2_transit + 1 } else { dy_major_collect + 2 };
+
+    let y = |dy: i32| y_offset + dy;
+
+    // ---- North belts ----
+
+    // Far belt (major item): spans machine 0 through the last machine,
+    // fed exclusively by the corridor descent that lands at (mx0, dy_far).
+    for x in mx0..east_x {
+        entities.push(PlacedEntity {
+            name: far_belt.to_string(),
+            x,
+            y: y(dy_far),
+            direction: EntityDirection::East,
+            carries: Some(major_item.to_string()),
+            segment_id: loop_major_seg.clone(),
+            rate: Some(major_loop_rate),
+            ..Default::default()
+        });
+    }
+
+    // Near belt (bus-tapped): standard west-anchored tap-off run, same
+    // shape as `dual_input_row`'s belt2. In the 2-item shape, dips
+    // underground for the single tile at `x_offset + 1` (`mx0 - 2`) so
+    // the near2 corridor's vertical descent has a clear surface column
+    // there — see the module doc comment.
+    let near_dip_x = mx0 - 2;
+    let near_ug = underground_for_belt(near_belt_name);
+    for x in x_offset..east_x {
+        if has_minor && x == x_offset {
+            entities.push(PlacedEntity {
+                name: near_ug.to_string(),
+                x,
+                y: y(dy_near),
+                direction: EntityDirection::East,
+                io_type: Some("input".to_string()),
+                carries: Some(near_item.to_string()),
+                segment_id: near_in_seg.clone(),
+                rate: Some(near_total),
+                ..Default::default()
+            });
+            continue;
+        }
+        if has_minor && x == near_dip_x {
+            continue;
+        }
+        if has_minor && x == near_dip_x + 1 {
+            entities.push(PlacedEntity {
+                name: near_ug.to_string(),
+                x,
+                y: y(dy_near),
+                direction: EntityDirection::East,
+                io_type: Some("output".to_string()),
+                carries: Some(near_item.to_string()),
+                segment_id: near_in_seg.clone(),
+                rate: Some(near_total),
+                ..Default::default()
+            });
+            continue;
+        }
+        entities.push(PlacedEntity {
+            name: near_belt_name.to_string(),
+            x,
+            y: y(dy_near),
+            direction: EntityDirection::East,
+            carries: Some(near_item.to_string()),
+            segment_id: near_in_seg.clone(),
+            rate: Some(near_total),
+            ..Default::default()
+        });
+    }
+
+    if has_minor {
+        // Near2 belt (minor item, recirculated): per-machine UG-in /
+        // LHI-A / UG-out, matching `quad_input_row`'s belt3 pattern —
+        // the LHI-A tile at mx+1 needs the surface clear, so belt3
+        // dives underground for that single tile.
+        for &mx in &mxs {
+            entities.push(PlacedEntity {
+                name: near2_ug.to_string(),
+                x: mx,
+                y: y(dy_near2),
+                direction: EntityDirection::East,
+                io_type: Some("input".to_string()),
+                carries: Some(near_item.to_string()),
+                segment_id: loop_minor_seg.clone(),
+                rate: Some(minor_total),
+                ..Default::default()
+            });
+            entities.push(PlacedEntity {
+                name: near2_ug.to_string(),
+                x: mx + 2,
+                y: y(dy_near2),
+                direction: EntityDirection::East,
+                io_type: Some("output".to_string()),
+                carries: Some(near_item.to_string()),
+                segment_id: loop_minor_seg.clone(),
+                rate: Some(minor_total),
+                ..Default::default()
+            });
+        }
+    }
+
+    // ---- Inserters + machines ----
+
+    if has_minor {
+        for &mx in &mxs {
+            // LHI-A: picks far belt (dy_far, reach 2), drops machine top.
+            entities.push(PlacedEntity {
+                name: "long-handed-inserter".to_string(),
+                x: mx + 1,
+                y: y(dy_near2),
+                direction: EntityDirection::South,
+                carries: Some(major_item.to_string()),
+                segment_id: far_ins_seg.clone(),
+                rate: Some(major_loop_rate),
+                ..Default::default()
+            });
+            // LHI-B: picks near belt (dy_near, reach 2), drops machine mid.
+            entities.push(PlacedEntity {
+                name: "long-handed-inserter".to_string(),
+                x: mx + 1,
+                y: y(dy_ins2),
+                direction: EntityDirection::South,
+                carries: Some(near_item.to_string()),
+                segment_id: near_ins_seg.clone(),
+                rate: Some(near_total),
+                ..Default::default()
+            });
+            // Regulars: pick near2's UG surface tiles (dy_near2, reach 1), drop machine top.
+            for &dx in &[0i32, 2] {
+                entities.push(PlacedEntity {
+                    name: "inserter".to_string(),
+                    x: mx + dx,
+                    y: y(dy_ins2),
+                    direction: EntityDirection::South,
+                    carries: Some(near_item.to_string()),
+                    segment_id: near2_ins_seg.clone(),
+                    rate: Some(minor_total),
+                    ..Default::default()
+                });
+            }
+        }
+    } else {
+        for &mx in &mxs {
+            entities.push(PlacedEntity {
+                name: "long-handed-inserter".to_string(),
+                x: mx,
+                y: y(dy_ins1),
+                direction: EntityDirection::South,
+                carries: Some(major_item.to_string()),
+                segment_id: far_ins_seg.clone(),
+                rate: Some(major_loop_rate),
+                ..Default::default()
+            });
+            entities.push(PlacedEntity {
+                name: "inserter".to_string(),
+                x: mx + 2,
+                y: y(dy_ins1),
+                direction: EntityDirection::South,
+                carries: Some(near_item.to_string()),
+                segment_id: near_ins_seg.clone(),
+                rate: Some(near_total),
+                ..Default::default()
+            });
+        }
+    }
+
+    for &mx in &mxs {
+        entities.push(PlacedEntity {
+            name: machine_entity.to_string(),
+            x: mx,
+            y: y(dy_machine),
+            direction: EntityDirection::North,
+            recipe: Some(recipe.to_string()),
+            segment_id: machine_seg.clone(),
+            ..Default::default()
+        });
+    }
+
+    // ---- Output inserters ----
+    for &mx in &mxs {
+        entities.push(PlacedEntity {
+            name: "inserter".to_string(),
+            x: mx + 1,
+            y: y(dy_out_ins),
+            direction: EntityDirection::South,
+            carries: Some(major_item.to_string()),
+            segment_id: major_out_ins_seg.clone(),
+            rate: Some(major_total),
+            ..Default::default()
+        });
+        if has_minor {
+            entities.push(PlacedEntity {
+                name: "long-handed-inserter".to_string(),
+                x: mx,
+                y: y(dy_out_ins),
+                direction: EntityDirection::South,
+                carries: Some(near_item.to_string()),
+                segment_id: minor_out_ins_seg.clone(),
+                rate: Some(minor_total),
+                ..Default::default()
+            });
+        }
+    }
+
+    // ---- Major collector + priority splitter + loop corridor ----
+    let major_collect_seg = collect_major_seg.clone();
+    for x in mx0..=east_x {
+        entities.push(PlacedEntity {
+            name: collector_belt.to_string(),
+            x,
+            y: y(dy_major_collect),
+            direction: EntityDirection::East,
+            carries: Some(major_item.to_string()),
+            segment_id: major_collect_seg.clone(),
+            rate: Some(major_total),
+            ..Default::default()
+        });
+    }
+
+    let split_x = east_x + 1;
+    entities.push(PlacedEntity {
+        name: splitter_name.to_string(),
+        x: split_x,
+        y: y(dy_major_collect),
+        direction: EntityDirection::East,
+        loop_priority_rate: Some(major_loop_rate),
+        output_priority: Some("right".to_string()),
+        carries: Some(major_item.to_string()),
+        segment_id: major_collect_seg.clone(),
+        rate: Some(major_total),
+        ..Default::default()
+    });
+
+    // Export tile: splitter's "left" (north) output, continues the
+    // row's declared output belt east toward the merger.
+    entities.push(PlacedEntity {
+        name: collector_belt.to_string(),
+        x: split_x + 1,
+        y: y(dy_major_collect),
+        direction: EntityDirection::East,
+        carries: Some(major_item.to_string()),
+        segment_id: major_collect_seg,
+        rate: Some(major_export_rate),
+        ..Default::default()
+    });
+
+    // Loop tile: splitter's "right" (south) output. `dy_major_collect`
+    // (and `riser_x + 1`, the router's merge column) is where the
+    // ghost router's output-merger extends the row's declared export
+    // belt east then turns it south — a surface riser there collides
+    // with the merger. Route the loop DOWN one more row (to
+    // `dy_major_collect + 2`, otherwise unused) and jog east there
+    // before turning north into the priority-splitter UG entrance:
+    // the entrance needs a STRAIGHT (non-sideload) feed to load both
+    // lanes, which means its immediate predecessor must already be
+    // travelling north — turning directly off the splitter's own
+    // east-flowing output would sideload the entrance instead (see
+    // `tier_kovarex_self_loop` iteration history).
+    let loop_stub_x = split_x + 1;
+    let riser_x = split_x + 2;
+    entities.push(PlacedEntity {
+        name: collector_belt.to_string(),
+        x: loop_stub_x,
+        y: y(dy_major_collect + 1),
+        direction: EntityDirection::South,
+        carries: Some(major_item.to_string()),
+        segment_id: loop_major_seg.clone(),
+        rate: Some(major_loop_rate),
+        ..Default::default()
+    });
+    entities.push(PlacedEntity {
+        name: collector_belt.to_string(),
+        x: loop_stub_x,
+        y: y(dy_major_collect + 2),
+        direction: EntityDirection::East,
+        carries: Some(major_item.to_string()),
+        segment_id: loop_major_seg.clone(),
+        rate: Some(major_loop_rate),
+        ..Default::default()
+    });
+    entities.push(PlacedEntity {
+        name: collector_belt.to_string(),
+        x: riser_x,
+        y: y(dy_major_collect + 2),
+        direction: EntityDirection::North,
+        carries: Some(major_item.to_string()),
+        segment_id: loop_major_seg.clone(),
+        rate: Some(major_loop_rate),
+        ..Default::default()
+    });
+
+    // Riser: north from the loop's approach row up to the return row,
+    // turning west at dy_far_ret. Dips underground for the single tile
+    // at `dy_major_collect`, fed straight from the tile just placed.
+    let riser_ug = underground_for_belt(collector_belt);
+    entities.push(PlacedEntity {
+        name: riser_ug.to_string(),
+        x: riser_x,
+        y: y(dy_major_collect + 1),
+        direction: EntityDirection::North,
+        io_type: Some("input".to_string()),
+        carries: Some(major_item.to_string()),
+        segment_id: loop_major_seg.clone(),
+        rate: Some(major_loop_rate),
+        ..Default::default()
+    });
+    entities.push(PlacedEntity {
+        name: riser_ug.to_string(),
+        x: riser_x,
+        y: y(dy_major_collect - 1),
+        direction: EntityDirection::North,
+        io_type: Some("output".to_string()),
+        carries: Some(major_item.to_string()),
+        segment_id: loop_major_seg.clone(),
+        rate: Some(major_loop_rate),
+        ..Default::default()
+    });
+    for dy in (dy_far_ret + 1..dy_major_collect - 1).rev() {
+        entities.push(PlacedEntity {
+            name: collector_belt.to_string(),
+            x: riser_x,
+            y: y(dy),
+            direction: EntityDirection::North,
+            carries: Some(major_item.to_string()),
+            segment_id: loop_major_seg.clone(),
+            rate: Some(major_loop_rate),
+            ..Default::default()
+        });
+    }
+    entities.push(PlacedEntity {
+        name: collector_belt.to_string(),
+        x: riser_x,
+        y: y(dy_far_ret),
+        direction: EntityDirection::West,
+        carries: Some(major_item.to_string()),
+        segment_id: loop_major_seg.clone(),
+        rate: Some(major_loop_rate),
+        ..Default::default()
+    });
+    // Return row: west from the riser back to machine 0's column.
+    for x in (mx0 + 1..riser_x).rev() {
+        entities.push(PlacedEntity {
+            name: collector_belt.to_string(),
+            x,
+            y: y(dy_far_ret),
+            direction: EntityDirection::West,
+            carries: Some(major_item.to_string()),
+            segment_id: loop_major_seg.clone(),
+            rate: Some(major_loop_rate),
+            ..Default::default()
+        });
+    }
+    // Turn south at machine 0's column, descend past dy_major_descent
+    // into the far belt's own first tile (dy_far, already stamped
+    // above as part of the far-belt loop — this just overwrites its
+    // direction is unnecessary since that loop already used East).
+    entities.push(PlacedEntity {
+        name: collector_belt.to_string(),
+        x: mx0,
+        y: y(dy_far_ret),
+        direction: EntityDirection::South,
+        carries: Some(major_item.to_string()),
+        segment_id: loop_major_seg.clone(),
+        rate: Some(major_loop_rate),
+        ..Default::default()
+    });
+    entities.push(PlacedEntity {
+        name: collector_belt.to_string(),
+        x: mx0,
+        y: y(dy_major_descent),
+        direction: EntityDirection::South,
+        carries: Some(major_item.to_string()),
+        segment_id: loop_major_seg,
+        rate: Some(major_loop_rate),
+        ..Default::default()
+    });
+
+    // ---- Minor collector + corridor (2-item shape only) ----
+    if has_minor {
+        for x in mx0..east_x - 1 {
+            entities.push(PlacedEntity {
+                name: minor_collector_belt.to_string(),
+                x,
+                y: y(dy_minor_collect),
+                direction: EntityDirection::East,
+                carries: Some(near_item.to_string()),
+                segment_id: loop_minor_seg.clone(),
+                rate: Some(minor_total),
+                ..Default::default()
+            });
+        }
+        // Turn south at the last machine's own column, continuing one
+        // extra tile past `dy_minor_collect + 1` (left clear for
+        // major's own detour — see the module doc comment) before
+        // turning east into the transit row.
+        entities.push(PlacedEntity {
+            name: minor_collector_belt.to_string(),
+            x: east_x - 1,
+            y: y(dy_minor_collect),
+            direction: EntityDirection::South,
+            carries: Some(near_item.to_string()),
+            segment_id: loop_minor_seg.clone(),
+            rate: Some(minor_total),
+            ..Default::default()
+        });
+        entities.push(PlacedEntity {
+            name: minor_collector_belt.to_string(),
+            x: east_x - 1,
+            y: y(dy_minor_collect + 1),
+            direction: EntityDirection::South,
+            carries: Some(near_item.to_string()),
+            segment_id: loop_minor_seg.clone(),
+            rate: Some(minor_total),
+            ..Default::default()
+        });
+        // Transit east, clearing major's splitter zone entirely.
+        let transit_riser_x = riser_x + 3;
+        entities.push(PlacedEntity {
+            name: minor_collector_belt.to_string(),
+            x: east_x - 1,
+            y: y(dy_near2_transit),
+            direction: EntityDirection::East,
+            carries: Some(near_item.to_string()),
+            segment_id: loop_minor_seg.clone(),
+            rate: Some(minor_total),
+            ..Default::default()
+        });
+        // `riser_x` and `riser_x + 1` (= `merge_x`) are the ghost
+        // router's output-merger columns (east-extension + south
+        // column — see the major riser's UG dip above); dip
+        // underground under both so this transit row doesn't collide
+        // with the merger regardless of how far south its column runs.
+        for x in east_x..riser_x {
+            entities.push(PlacedEntity {
+                name: minor_collector_belt.to_string(),
+                x,
+                y: y(dy_near2_transit),
+                direction: EntityDirection::East,
+                carries: Some(near_item.to_string()),
+                segment_id: loop_minor_seg.clone(),
+                rate: Some(minor_total),
+                ..Default::default()
+            });
+        }
+        entities.push(PlacedEntity {
+            name: near2_ug.to_string(),
+            x: riser_x,
+            y: y(dy_near2_transit),
+            direction: EntityDirection::East,
+            io_type: Some("input".to_string()),
+            carries: Some(near_item.to_string()),
+            segment_id: loop_minor_seg.clone(),
+            rate: Some(minor_total),
+            ..Default::default()
+        });
+        entities.push(PlacedEntity {
+            name: near2_ug.to_string(),
+            x: riser_x + 2,
+            y: y(dy_near2_transit),
+            direction: EntityDirection::East,
+            io_type: Some("output".to_string()),
+            carries: Some(near_item.to_string()),
+            segment_id: loop_minor_seg.clone(),
+            rate: Some(minor_total),
+            ..Default::default()
+        });
+        for x in riser_x + 3..transit_riser_x {
+            entities.push(PlacedEntity {
+                name: minor_collector_belt.to_string(),
+                x,
+                y: y(dy_near2_transit),
+                direction: EntityDirection::East,
+                carries: Some(near_item.to_string()),
+                segment_id: loop_minor_seg.clone(),
+                rate: Some(minor_total),
+                ..Default::default()
+            });
+        }
+        // Riser: north from the transit row up to y+1 (major's own
+        // descent-transit row, otherwise clear — see below), turning
+        // west there. Note this rises past dy_ins2, dy_machine, and
+        // dy_out_ins at `transit_riser_x`, a column no other entity in
+        // this template touches. Dips underground at `dy_major_collect`
+        // for the same reason the major riser does.
+        entities.push(PlacedEntity {
+            name: near2_ug.to_string(),
+            x: transit_riser_x,
+            y: y(dy_major_collect + 1),
+            direction: EntityDirection::North,
+            io_type: Some("input".to_string()),
+            carries: Some(near_item.to_string()),
+            segment_id: loop_minor_seg.clone(),
+            rate: Some(minor_total),
+            ..Default::default()
+        });
+        entities.push(PlacedEntity {
+            name: near2_ug.to_string(),
+            x: transit_riser_x,
+            y: y(dy_major_collect - 1),
+            direction: EntityDirection::North,
+            io_type: Some("output".to_string()),
+            carries: Some(near_item.to_string()),
+            segment_id: loop_minor_seg.clone(),
+            rate: Some(minor_total),
+            ..Default::default()
+        });
+        for dy in (dy_major_descent + 1..dy_major_collect - 1).rev() {
+            entities.push(PlacedEntity {
+                name: minor_collector_belt.to_string(),
+                x: transit_riser_x,
+                y: y(dy),
+                direction: EntityDirection::North,
+                carries: Some(near_item.to_string()),
+                segment_id: loop_minor_seg.clone(),
+                rate: Some(minor_total),
+                ..Default::default()
+            });
+        }
+        for dy in (dy_major_collect + 2..=dy_near2_transit).rev() {
+            entities.push(PlacedEntity {
+                name: minor_collector_belt.to_string(),
+                x: transit_riser_x,
+                y: y(dy),
+                direction: EntityDirection::North,
+                carries: Some(near_item.to_string()),
+                segment_id: loop_minor_seg.clone(),
+                rate: Some(minor_total),
+                ..Default::default()
+            });
+        }
+        entities.push(PlacedEntity {
+            name: minor_collector_belt.to_string(),
+            x: transit_riser_x,
+            y: y(dy_major_descent),
+            direction: EntityDirection::West,
+            carries: Some(near_item.to_string()),
+            segment_id: loop_minor_seg.clone(),
+            rate: Some(minor_total),
+            ..Default::default()
+        });
+        // Return west at y+1, crossing TWO major structures with 1-tile
+        // underground hops: major's riser (column `riser_x`) and
+        // major's descent (column `mx0`) — the only crossings the two
+        // corridors need (`near_belt`'s own dip at `mx0 - 2` handles
+        // the third, on the vertical leg below).
+        let x1_entrance = riser_x + 1;
+        let x1_exit = riser_x - 1;
+        let x2_entrance = mx0 + 1;
+        let x2_exit = mx0 - 1;
+        for x in (x1_entrance + 1..transit_riser_x).rev() {
+            entities.push(PlacedEntity {
+                name: minor_collector_belt.to_string(),
+                x,
+                y: y(dy_major_descent),
+                direction: EntityDirection::West,
+                carries: Some(near_item.to_string()),
+                segment_id: loop_minor_seg.clone(),
+                rate: Some(minor_total),
+                ..Default::default()
+            });
+        }
+        entities.push(PlacedEntity {
+            name: near2_ug.to_string(),
+            x: x1_entrance,
+            y: y(dy_major_descent),
+            direction: EntityDirection::West,
+            io_type: Some("input".to_string()),
+            carries: Some(near_item.to_string()),
+            segment_id: loop_minor_seg.clone(),
+            rate: Some(minor_total),
+            ..Default::default()
+        });
+        entities.push(PlacedEntity {
+            name: near2_ug.to_string(),
+            x: x1_exit,
+            y: y(dy_major_descent),
+            direction: EntityDirection::West,
+            io_type: Some("output".to_string()),
+            carries: Some(near_item.to_string()),
+            segment_id: loop_minor_seg.clone(),
+            rate: Some(minor_total),
+            ..Default::default()
+        });
+        for x in (x2_entrance + 1..x1_exit).rev() {
+            entities.push(PlacedEntity {
+                name: minor_collector_belt.to_string(),
+                x,
+                y: y(dy_major_descent),
+                direction: EntityDirection::West,
+                carries: Some(near_item.to_string()),
+                segment_id: loop_minor_seg.clone(),
+                rate: Some(minor_total),
+                ..Default::default()
+            });
+        }
+        entities.push(PlacedEntity {
+            name: near2_ug.to_string(),
+            x: x2_entrance,
+            y: y(dy_major_descent),
+            direction: EntityDirection::West,
+            io_type: Some("input".to_string()),
+            carries: Some(near_item.to_string()),
+            segment_id: loop_minor_seg.clone(),
+            rate: Some(minor_total),
+            ..Default::default()
+        });
+        entities.push(PlacedEntity {
+            name: near2_ug.to_string(),
+            x: x2_exit,
+            y: y(dy_major_descent),
+            direction: EntityDirection::West,
+            io_type: Some("output".to_string()),
+            carries: Some(near_item.to_string()),
+            segment_id: loop_minor_seg.clone(),
+            rate: Some(minor_total),
+            ..Default::default()
+        });
+        // Turn south at `mx0 - 2` (the near2 descent column — the
+        // exact tile `near_belt`'s own dip left clear at dy_near).
+        let descent_x = mx0 - 2;
+        entities.push(PlacedEntity {
+            name: minor_collector_belt.to_string(),
+            x: descent_x,
+            y: y(dy_major_descent),
+            direction: EntityDirection::South,
+            carries: Some(near_item.to_string()),
+            segment_id: loop_minor_seg.clone(),
+            rate: Some(minor_total),
+            ..Default::default()
+        });
+        entities.push(PlacedEntity {
+            name: minor_collector_belt.to_string(),
+            x: descent_x,
+            y: y(dy_far),
+            direction: EntityDirection::South,
+            carries: Some(near_item.to_string()),
+            segment_id: loop_minor_seg.clone(),
+            rate: Some(minor_total),
+            ..Default::default()
+        });
+        entities.push(PlacedEntity {
+            name: minor_collector_belt.to_string(),
+            x: descent_x,
+            y: y(dy_near),
+            direction: EntityDirection::South,
+            carries: Some(near_item.to_string()),
+            segment_id: loop_minor_seg.clone(),
+            rate: Some(minor_total),
+            ..Default::default()
+        });
+        // Turn east into near2's own row, feeding straight into machine
+        // 0's UG-in (mx0, dy_near2).
+        entities.push(PlacedEntity {
+            name: minor_collector_belt.to_string(),
+            x: descent_x,
+            y: y(dy_near2),
+            direction: EntityDirection::East,
+            carries: Some(near_item.to_string()),
+            segment_id: loop_minor_seg.clone(),
+            rate: Some(minor_total),
+            ..Default::default()
+        });
+        entities.push(PlacedEntity {
+            name: minor_collector_belt.to_string(),
+            x: descent_x + 1,
+            y: y(dy_near2),
+            direction: EntityDirection::East,
+            carries: Some(near_item.to_string()),
+            segment_id: loop_minor_seg.clone(),
+            rate: Some(minor_total),
+            ..Default::default()
+        });
+    }
+
+    (entities, row_height)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

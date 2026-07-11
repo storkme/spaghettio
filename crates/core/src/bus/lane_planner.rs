@@ -34,6 +34,7 @@ pub(crate) const MACHINE_ENTITIES: &[&str] = &[
     "cryogenic-plant",
     "foundry",
     "biochamber",
+    "centrifuge",
 ];
 
 /// A single vertical lane on the main bus, carrying one item (or fluid) from its
