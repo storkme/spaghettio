@@ -189,6 +189,14 @@ pub struct PlacedEntity {
     /// template. See docs/rfp-solver-net-flow.md Phase 2(c).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loop_priority_rate: Option<f64>,
+    /// Inserter item filter, whitelist mode only (v1 — no blacklist, no
+    /// splitter `filter` field). Ordered item names, index 1-based when
+    /// exported to the blueprint's `filters` array. Empty means the
+    /// inserter has no filter (Factorio 2.0 default: `use_filters: false`,
+    /// no `filters` field emitted). See docs/rfp-fulgora-scrap.md Phase 0
+    /// "Filter entities" findings.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub filters: Vec<String>,
 }
 
 /// Whether a boundary port is an input into the region or an output from it.

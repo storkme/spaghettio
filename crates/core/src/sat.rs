@@ -1715,6 +1715,7 @@ impl CrossingEncoder {
                     items: Vec::new(),
                     input_priority: None,
                     output_priority: None,
+                    filters: Vec::new(),
                 });
             }
         }

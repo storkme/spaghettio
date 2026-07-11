@@ -149,6 +149,15 @@ fn parse_item_value(val: &serde_json::Value) -> Option<BpEntityItem> {
     None
 }
 
+/// Factorio 2.0 `filters` array entry: `{"index": 1, "name": "iron-plate"}`.
+/// 1-indexed; order is not guaranteed by the format so entries are sorted
+/// by `index` before being collapsed into `PlacedEntity.filters`.
+#[derive(Deserialize)]
+struct BpFilter {
+    index: u32,
+    name: String,
+}
+
 #[derive(Deserialize)]
 struct BpEntity {
     name: String,
@@ -162,6 +171,11 @@ struct BpEntity {
     /// Modules/items inserted into this entity (handles both array and map formats).
     #[serde(default)]
     items: BpEntityItems,
+    /// Inserter item filter (whitelist mode only — v1 has no blacklist
+    /// support). `use_filters` itself isn't needed: presence of a non-empty
+    /// `filters` array is sufficient to reconstruct `PlacedEntity.filters`.
+    #[serde(default)]
+    filters: Vec<BpFilter>,
 }
 
 #[derive(Deserialize)]
@@ -280,6 +294,10 @@ fn bp_data_to_layout(bp_data: BpData) -> LayoutResult {
             })
             .collect();
 
+        let mut raw_filters = raw.filters;
+        raw_filters.sort_by_key(|f| f.index);
+        let filters: Vec<String> = raw_filters.into_iter().map(|f| f.name).collect();
+
         entities.push(PlacedEntity {
             name: raw.name,
             loop_priority_rate: None,
@@ -295,6 +313,7 @@ fn bp_data_to_layout(bp_data: BpData) -> LayoutResult {
             items,
             input_priority: None,
             output_priority: None,
+            filters,
         });
     }
 
@@ -460,6 +479,82 @@ mod tests {
             .expect("should have underground belt");
         assert_eq!(ug.io_type.as_deref(), Some("input"));
         assert!(matches!(ug.direction, EntityDirection::East));
+    }
+
+    #[test]
+    fn filtered_inserter_round_trips() {
+        let layout = LayoutResult {
+            entities: vec![
+                PlacedEntity {
+                    name: "bulk-inserter".into(),
+                    x: 0,
+                    y: 0,
+                    direction: EntityDirection::North,
+                    filters: vec!["iron-plate".into(), "copper-plate".into()],
+                    ..Default::default()
+                },
+                PlacedEntity {
+                    name: "inserter".into(),
+                    x: 2,
+                    y: 0,
+                    direction: EntityDirection::South,
+                    ..Default::default()
+                },
+            ],
+            width: 3,
+            height: 1,
+            ..Default::default()
+        };
+
+        let bp_string = blueprint::export(&layout, "filter_test");
+
+        // Byte-level check: the filtered inserter emits use_filters/filters,
+        // the unfiltered one emits neither field.
+        let b64 = &bp_string[1..];
+        let compressed = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .unwrap();
+        let mut decoder = ZlibDecoder::new(&compressed[..]);
+        let mut json_str = String::new();
+        std::io::Read::read_to_string(&mut decoder, &mut json_str).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        let ents = parsed["blueprint"]["entities"].as_array().unwrap();
+        let filtered_json = ents
+            .iter()
+            .find(|e| e["name"] == "bulk-inserter")
+            .expect("bulk-inserter entity");
+        assert_eq!(filtered_json["use_filters"], true);
+        assert_eq!(
+            filtered_json["filters"],
+            serde_json::json!([
+                {"index": 1, "name": "iron-plate"},
+                {"index": 2, "name": "copper-plate"},
+            ])
+        );
+        let plain_json = ents
+            .iter()
+            .find(|e| e["name"] == "inserter")
+            .expect("plain inserter entity");
+        assert!(plain_json.get("use_filters").is_none());
+        assert!(plain_json.get("filters").is_none());
+
+        // Full round trip: export -> parse -> filters survive byte-for-byte.
+        let parsed_layout = parse_blueprint_string(&bp_string).expect("should parse");
+        let filtered = parsed_layout
+            .entities
+            .iter()
+            .find(|e| e.name == "bulk-inserter")
+            .expect("bulk-inserter entity");
+        assert_eq!(
+            filtered.filters,
+            vec!["iron-plate".to_string(), "copper-plate".to_string()]
+        );
+        let plain = parsed_layout
+            .entities
+            .iter()
+            .find(|e| e.name == "inserter")
+            .expect("plain inserter entity");
+        assert!(plain.filters.is_empty());
     }
 
     #[test]

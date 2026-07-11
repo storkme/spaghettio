@@ -12,10 +12,21 @@ use serde::Serialize;
 use crate::common::{is_machine_entity, machine_dims};
 use crate::models::LayoutResult;
 
+/// Factorio 2.0 inserter `filter_count` — every inserter type (`inserter`,
+/// `long-handed-inserter`, `bulk-inserter`, etc.) has exactly 5 filter
+/// slots. See docs/rfp-fulgora-scrap.md Phase 0 "Filter entities" findings.
+const MAX_INSERTER_FILTERS: usize = 5;
+
 #[derive(Serialize)]
 struct Position {
     x: f64,
     y: f64,
+}
+
+#[derive(Serialize)]
+struct BlueprintFilter<'a> {
+    index: u32,
+    name: &'a str,
 }
 
 #[derive(Serialize)]
@@ -34,6 +45,10 @@ struct BlueprintEntity<'a> {
     input_priority: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     output_priority: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    use_filters: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    filters: Option<Vec<BlueprintFilter<'a>>>,
 }
 
 #[derive(Serialize)]
@@ -56,26 +71,53 @@ pub fn export(layout: &LayoutResult, label: &str) -> String {
         .entities
         .iter()
         .enumerate()
-        .map(|(i, ent)| BlueprintEntity {
-            entity_number: i + 1,
-            name: &ent.name,
-            position: {
-                let (w, h) = if is_machine_entity(&ent.name) {
-                    machine_dims(&ent.name)
-                } else {
-                    (1, 1)
-                };
-                Position {
-                    x: ent.x as f64 + w as f64 / 2.0,
-                    y: ent.y as f64 + h as f64 / 2.0,
-                }
-            },
-            direction: ent.direction as u8,
-            recipe: ent.recipe.as_deref(),
-            io_type: ent.io_type.as_deref(),
-            mirror: ent.mirror,
-            input_priority: ent.input_priority.as_deref(),
-            output_priority: ent.output_priority.as_deref(),
+        .map(|(i, ent)| {
+            let filters = if ent.filters.is_empty() {
+                None
+            } else {
+                debug_assert!(
+                    ent.filters.len() <= MAX_INSERTER_FILTERS,
+                    "inserter filter_count is {MAX_INSERTER_FILTERS}; got {} filters for {} at ({}, {})",
+                    ent.filters.len(),
+                    ent.name,
+                    ent.x,
+                    ent.y,
+                );
+                Some(
+                    ent.filters
+                        .iter()
+                        .take(MAX_INSERTER_FILTERS)
+                        .enumerate()
+                        .map(|(i, name)| BlueprintFilter {
+                            index: (i + 1) as u32,
+                            name,
+                        })
+                        .collect(),
+                )
+            };
+            BlueprintEntity {
+                entity_number: i + 1,
+                name: &ent.name,
+                position: {
+                    let (w, h) = if is_machine_entity(&ent.name) {
+                        machine_dims(&ent.name)
+                    } else {
+                        (1, 1)
+                    };
+                    Position {
+                        x: ent.x as f64 + w as f64 / 2.0,
+                        y: ent.y as f64 + h as f64 / 2.0,
+                    }
+                },
+                direction: ent.direction as u8,
+                recipe: ent.recipe.as_deref(),
+                io_type: ent.io_type.as_deref(),
+                mirror: ent.mirror,
+                input_priority: ent.input_priority.as_deref(),
+                output_priority: ent.output_priority.as_deref(),
+                use_filters: filters.is_some().then_some(true),
+                filters,
+            }
         })
         .collect();
 
