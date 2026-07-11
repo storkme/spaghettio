@@ -12,6 +12,7 @@ use crate::bus::placer::RowSpan;
 
 pub(crate) fn merge_output_rows(
     output_rows: &[usize],
+    output_ys: &[i32],
     item: &str,
     row_spans: &[RowSpan],
     merge_start_y: i32,
@@ -22,6 +23,13 @@ pub(crate) fn merge_output_rows(
     use crate::bus::balancer::underground_for_belt;
     use crate::common::{belt_entity_for_rate, ug_max_reach};
 
+    debug_assert_eq!(
+        output_rows.len(),
+        output_ys.len(),
+        "merge_output_rows: output_rows and output_ys must be 1:1 — output_ys[idx] is the \
+         belt row for output_rows[idx] (RFP Fulgora D2a/D2b: primary rows use \
+         `output_belt_y`, secondary-output rows use `secondary_output_belt`'s y)"
+    );
     let mut entities: Vec<PlacedEntity> = Vec::new();
     let n = output_rows.len();
     if n == 0 {
@@ -61,7 +69,7 @@ pub(crate) fn merge_output_rows(
         if ri >= row_spans.len() {
             continue;
         }
-        let out_y = row_spans[ri].output_belt_y;
+        let out_y = output_ys[idx];
         let col_x = merge_x + (n - 1 - idx) as i32; // first row rightmost, last row at merge_x
 
         // Extend EAST belts from the row's rightmost tile to the merge
@@ -253,6 +261,7 @@ mod tests {
             output_belt_x_min: 0,
             output_belt_x_max: 9,
             horizontal_stack: None,
+            secondary_output_belt: None,
         }
     }
 
@@ -281,10 +290,10 @@ mod tests {
             vec![5],
         );
         let rows = [row0, row1];
-        let (a_ents, a_end_y, a_max_x) = merge_output_rows(&[0], "iron-gear-wheel", &rows, 15, None, 11, &[]);
+        let (a_ents, a_end_y, a_max_x) = merge_output_rows(&[0], &[rows[0].output_belt_y], "iron-gear-wheel", &rows, 15, None, 11, &[]);
         // Caller threads: next min_merge_x = returned max_x + 1, start_y = max_y.
         let blocked: Vec<i32> = ((a_max_x - 1)..a_max_x).collect();
-        let (b_ents, _b_end_y, b_max_x) = merge_output_rows(&[1], "iron-stick", &rows, a_end_y.max(15), None, a_max_x + 1, &blocked);
+        let (b_ents, _b_end_y, b_max_x) = merge_output_rows(&[1], &[rows[1].output_belt_y], "iron-stick", &rows, a_end_y.max(15), None, a_max_x + 1, &blocked);
         assert!(b_max_x > a_max_x);
         let a_tiles: FxHashSet<(i32, i32)> = a_ents.iter().map(|e| (e.x, e.y)).collect();
         let overlap: Vec<(i32, i32)> = b_ents
@@ -294,7 +303,7 @@ mod tests {
             .collect();
         assert!(overlap.is_empty(), "merge blocks overlap at {overlap:?}");
         // And without the cursor they WOULD overlap (guard the guard):
-        let (c_ents, _c_end_y, _c) = merge_output_rows(&[1], "iron-stick", &rows, 15, None, 0, &[]);
+        let (c_ents, _c_end_y, _c) = merge_output_rows(&[1], &[rows[1].output_belt_y], "iron-stick", &rows, 15, None, 0, &[]);
         let c_overlap = c_ents.iter().map(|e| (e.x, e.y)).any(|t| a_tiles.contains(&t));
         assert!(c_overlap, "expected uncursored merges to collide — geometry changed?");
     }
@@ -311,7 +320,8 @@ mod tests {
         );
 
         let output_rows = vec![0];
-        let (entities, _end_y, _merge_max_x) = merge_output_rows(&output_rows, "iron-plate", &[row_span], 20, None, 0, &[]);
+        let output_ys = vec![row_span.output_belt_y];
+        let (entities, _end_y, _merge_max_x) = merge_output_rows(&output_rows, &output_ys, "iron-plate", &[row_span], 20, None, 0, &[]);
 
         // Single row should extend EAST and SOUTH without splitters
         assert!(!entities.is_empty());
@@ -338,7 +348,8 @@ mod tests {
         );
 
         let output_rows = vec![0, 1];
-        let (entities, _end_y, _merge_max_x) = merge_output_rows(&output_rows, "iron-plate", &[row_span1, row_span2], 20, None, 0, &[]);
+        let output_ys = vec![row_span1.output_belt_y, row_span2.output_belt_y];
+        let (entities, _end_y, _merge_max_x) = merge_output_rows(&output_rows, &output_ys, "iron-plate", &[row_span1, row_span2], 20, None, 0, &[]);
 
         // Multiple rows should include splitters
         let splitters = entities.iter().filter(|e| e.name.contains("splitter")).count();
@@ -376,8 +387,10 @@ mod tests {
             rs
         };
 
+        let output_ys = vec![row0.output_belt_y, row1.output_belt_y];
         let (entities, end_y, merge_max_x) = merge_output_rows(
             &[0, 1],
+            &output_ys,
             "iron-gear-wheel",
             &[row0, row1],
             15,
@@ -428,8 +441,10 @@ mod tests {
             vec![],
         );
 
+        let output_ys = vec![row0.output_belt_y, row1.output_belt_y];
         let (entities, _end_y, _merge_max_x) = merge_output_rows(
             &[0, 1],
+            &output_ys,
             "electronic-circuit",
             &[row0, row1],
             20,

@@ -1630,6 +1630,95 @@ fn tier_kovarex_self_loop() {
     assert_round_trip(&result);
 }
 
+/// Solid surplus export via the step-7 merger (RFP Fulgora D2a + D2b,
+/// `docs/rfp-fulgora-scrap.md`). uranium-processing's SAME recipe
+/// produces uranium-235 (probability 0.007/craft) and uranium-238
+/// (probability 0.993/craft); kovarex-enrichment-process is excluded so
+/// its full absorption of the U-238 byproduct doesn't zero out
+/// `surplus_outputs` (free selection otherwise pulls it in and fully
+/// credits the byproduct — verified via a throwaway solver probe before
+/// writing this fixture, see the D2a/D2b implementation PR).
+///
+/// Hand-derived at 0.05/s uranium-235 (centrifuge, crafting_speed=1,
+/// energy=12s):
+///   count = 0.05 / (0.007 * 1/12) = 0.05 / 0.0005833... = 85.71... → 86 machines
+///   uranium-238 surplus = 0.993 * (1/12) * 85.71... ≈ 7.09/s
+///
+/// D2b gives uranium-processing's `RowSpan` a second output belt for
+/// uranium-238 (`spec.outputs[1]` — uranium-235 is `spec.outputs[0]`,
+/// owning `output_belt_y`); D2a's merger extension then routes both
+/// split sub-rows' uranium-238 streams into one exported belt. Without
+/// D2b this fixture strands uranium-238 (no belt to read it from);
+/// without D2a it's stranded even with the belt (no merger consumer).
+#[test]
+fn tier_uranium_processing_surplus_export() {
+    let inputs: FxHashSet<String> = ["uranium-ore"].iter().map(|s| s.to_string()).collect();
+    let excluded: FxHashSet<String> = ["kovarex-enrichment-process"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let result = run_e2e_with_exclusions(
+        "tier_uranium_processing_surplus_export",
+        "uranium-235",
+        0.05,
+        "assembling-machine-3",
+        None,
+        &inputs,
+        &excluded,
+    )
+    .unwrap_or_else(|e| panic!("tier_uranium_processing_surplus_export: {e}"));
+
+    assert_no_errors(&result);
+    assert_no_warnings(&result);
+    assert_produces(&result, "uranium-235", 0.05);
+    assert_round_trip(&result);
+
+    // Surplus must actually be reported — if solver behavior ever
+    // changes so something else consumes uranium-238, this fixture stops
+    // exercising D2a/D2b and needs revisiting.
+    let u238_rate = result
+        .solver_result
+        .surplus_outputs
+        .iter()
+        .find(|f| f.item == "uranium-238")
+        .map(|f| f.rate)
+        .unwrap_or_else(|| panic!("expected uranium-238 in surplus_outputs — did solver behavior change?"));
+    assert!(
+        (6.5..7.7).contains(&u238_rate),
+        "expected uranium-238 surplus rate near 7.09/s (hand-derived), got {u238_rate}"
+    );
+
+    // A uranium-238 belt must physically reach the merge area — at or
+    // below the last uranium-processing row's bottom edge. Without D2b's
+    // secondary belt (or D2a's merger extension), this is the assertion
+    // that fails: uranium-238 never gets a belt at all.
+    let last_row_bottom = result
+        .trace_events
+        .iter()
+        .find_map(|ev| {
+            if let TraceEvent::RowsPlaced { rows } = ev {
+                rows.iter()
+                    .filter(|r| r.recipe == "uranium-processing")
+                    .map(|r| r.y_end)
+                    .max()
+            } else {
+                None
+            }
+        })
+        .expect("expected a RowsPlaced trace event");
+
+    let u238_belt_below = result.layout.entities.iter().any(|e| {
+        e.carries.as_deref() == Some("uranium-238")
+            && e.y >= last_row_bottom
+            && spaghettio_core::common::is_belt_entity(&e.name)
+    });
+    assert!(
+        u238_belt_below,
+        "expected a uranium-238 belt at y >= {last_row_bottom} (below the last \
+         uranium-processing row) — the D2b secondary belt / D2a merger cascade"
+    );
+}
+
 /// Self-loop-with-fluid-ingredient row (solid self-loop item, plus a
 /// single non-self-loop fluid ingredient — the shape `classify_self_loop`
 /// in `netflow.rs` newly accepts, and `templates::self_loop_row`'s

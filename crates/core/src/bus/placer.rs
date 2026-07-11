@@ -92,6 +92,14 @@ pub struct RowSpan {
     /// lane planner reads this to allocate K trunk lanes for the
     /// row's high-demand input. See `docs/rfp-horizontal-trunks.md`.
     pub horizontal_stack: Option<HorizontalStackInfo>,
+    /// `Some((item, y))` when this row's spec has a SECOND solid output
+    /// beyond the primary (which owns `output_belt_y`) — e.g.
+    /// uranium-processing's uranium-238 surplus alongside uranium-235's
+    /// target belt. `y` is the secondary belt's row. Only
+    /// `RowKind::SingleInput` rows with 2+ solid outputs populate this
+    /// today (RFP Fulgora D2b, `docs/rfp-fulgora-scrap.md`). Read by the
+    /// step-7 solid-surplus merger (`ghost_router` step 7b).
+    pub secondary_output_belt: Option<(String, i32)>,
 }
 
 /// Maximum machines in one row before output or input exceeds belt lane capacity.
@@ -470,6 +478,19 @@ fn can_lane_split(spec: &MachineSpec, count: usize) -> bool {
     if count < 2 {
         return false;
     }
+    // Rows with 2+ solid outputs (RFP Fulgora D2b: uranium-processing's
+    // U-235 target + U-238 surplus) need the sideload-bridge anchor's
+    // columns at `output_row_dy - 1` for the secondary output's
+    // long-handed extraction inserter — the bridge and the second
+    // inserter both want the anchor machine's `mx+2` column, and the
+    // bridge already claims every free column at that row for the
+    // anchor. Disabling lane-split for these rows sidesteps the
+    // collision; the rate that motivates a second output is typically
+    // far under single-lane capacity anyway (see `secondary_output_belt`
+    // doc comment). Revisit if a fixture needs both.
+    if spec.outputs.iter().filter(|f| !f.is_fluid).count() >= 2 {
+        return false;
+    }
     let kind = row_kind(spec);
     let output_is_fluid =
         spec.outputs.iter().all(|f| f.is_fluid) && !spec.outputs.is_empty();
@@ -522,10 +543,23 @@ pub(crate) fn build_one_row(
         max_belt_tier,
     );
 
+    // Second solid output (RFP Fulgora D2b): only `solid_outputs[0]` owns
+    // `output_belt_y` today. When a spec has a second solid output (e.g.
+    // uranium-processing's uranium-235 target + uranium-238 surplus),
+    // size a belt for it too — `RowKind::SingleInput` is the only arm
+    // that currently stamps it (see the match arm below); other kinds
+    // leave this unused and `secondary_output_belt` stays `None`.
+    // `can_lane_split` already forces `lane_split == false` whenever
+    // `solid_outputs.len() >= 2`, so this is always single-lane (×2).
+    let secondary_solid_output = solid_outputs.get(1);
+    let secondary_belt_name: Option<&'static str> = secondary_solid_output
+        .map(|f| belt_entity_for_rate(f.rate * count as f64 * 2.0, max_belt_tier));
+
     let mut fluid_port_ys: Vec<i32> = vec![];
     let mut fluid_port_pipes: Vec<(String, i32, i32)> = vec![];
     let mut fluid_output_port_pipes: Vec<(String, i32, i32)> = vec![];
     let mut horizontal_stack: Option<HorizontalStackInfo> = None;
+    let mut secondary_output_belt: Option<(String, i32)> = None;
 
     let (row_ents, row_h, input_belt_ys, output_belt_y) = match &kind {
         RowKind::OilRefinery => {
@@ -678,6 +712,9 @@ pub(crate) fn build_one_row(
             let input_item = solid_inputs.first().map(|f| f.item.as_str()).unwrap_or("");
             let in_belt = row_input_belt(max_belt_tier);
             let msz = machine_size(&spec.entity);
+            let secondary = secondary_solid_output
+                .zip(secondary_belt_name)
+                .map(|(f, belt)| (f.item.as_str(), belt));
             let (ents, rh) = templates::single_input_row(
                 &spec.recipe,
                 &spec.entity,
@@ -691,9 +728,15 @@ pub(crate) fn build_one_row(
                 out_belt,
                 lane_split,
                 output_east,
+                secondary,
             );
             let input_ys = vec![y_cursor];
             let out_y = y_cursor + 2 + msz as i32 + 1;
+            if let Some(f) = secondary_solid_output {
+                // Mirrors `templates::single_input_row`'s secondary-belt
+                // row offset: one row south of the primary output belt.
+                secondary_output_belt = Some((f.item.clone(), out_y + 1));
+            }
             (ents, rh, input_ys, out_y)
         }
         RowKind::TripleInput => {
@@ -1085,6 +1128,7 @@ pub(crate) fn build_one_row(
         output_belt_x_min,
         output_belt_x_max,
         horizontal_stack,
+        secondary_output_belt,
     };
 
     (row_ents, span, row_width)
@@ -1155,12 +1199,19 @@ pub fn place_rows(
         // single-lane until their templates grow bridges.
         let kind = row_kind(spec);
         let output_is_fluid = spec.outputs.iter().all(|f| f.is_fluid) && !spec.outputs.is_empty();
-        let has_bridge_template = matches!(
-            kind,
-            RowKind::SingleInput | RowKind::DualInput | RowKind::TripleInput
-        ) || (matches!(kind, RowKind::FluidInput) && spec.entity == "chemical-plant")
-            || (matches!(kind, RowKind::FluidDualInput) && !output_is_fluid)
-            || (matches!(kind, RowKind::FluidMultiInput) && !output_is_fluid);
+        // Multi-solid-output rows (RFP Fulgora D2b) never lane-split —
+        // see the matching guard + comment in `can_lane_split`. Keep
+        // this in sync with that function so `single_lane`'s belt-cap
+        // math agrees with whether the template actually stamps a
+        // bridge.
+        let multi_solid_output = spec.outputs.iter().filter(|f| !f.is_fluid).count() >= 2;
+        let has_bridge_template = !multi_solid_output
+            && (matches!(
+                kind,
+                RowKind::SingleInput | RowKind::DualInput | RowKind::TripleInput
+            ) || (matches!(kind, RowKind::FluidInput) && spec.entity == "chemical-plant")
+                || (matches!(kind, RowKind::FluidDualInput) && !output_is_fluid)
+                || (matches!(kind, RowKind::FluidMultiInput) && !output_is_fluid));
         let single_lane = !has_bridge_template;
         let _ = has_fluid;
         let _ = solid_inputs_count;

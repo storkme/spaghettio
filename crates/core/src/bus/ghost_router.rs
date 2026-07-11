@@ -2917,6 +2917,17 @@ pub fn route_bus_ghost(
         0
     };
     let mut blocked_columns: Vec<i32> = Vec::new();
+    // Tail tiles of every merge cascade stamped below (target items AND
+    // solid surplus, Step 7b) — the LAST entity `merge_output_rows`
+    // pushes for each item, i.e. the surviving column's final belt tile.
+    // A later item's cascade can need more splitter-rows than an earlier
+    // one (surplus items start where the target items left off, per
+    // `max_y` threading), leaving the earlier item's own tail stranded
+    // mid-layout once the OVERALL `max_y` grows past it. Flushed south
+    // to the final `max_y` after both loops below (RFP Fulgora D2a/D2b —
+    // this is the first scenario to actually exercise depth-mismatched
+    // multi-item merges; single-target-item layouts are a no-op here).
+    let mut merge_tails: Vec<PlacedEntity> = Vec::new();
     for item in &output_items {
         let output_rows: Vec<usize> = row_spans
             .iter()
@@ -2926,8 +2937,10 @@ pub fn route_bus_ghost(
             .collect();
 
         if !output_rows.is_empty() {
+            let output_ys: Vec<i32> = output_rows.iter().map(|&ri| row_spans[ri].output_belt_y).collect();
             let (merge_ents, merge_end_y, item_merge_x) = merge_output_rows(
                 &output_rows,
+                &output_ys,
                 item,
                 row_spans,
                 max_y,
@@ -2950,10 +2963,153 @@ pub fn route_bus_ghost(
                     entities: merge_ents.clone(),
                 });
             }
+            if let Some(last) = merge_ents.last() {
+                merge_tails.push(last.clone());
+            }
             entities.extend(merge_ents);
             max_y = max_y.max(merge_end_y);
             merge_max_x = merge_max_x.max(item_merge_x);
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Step 7b: Merge solid surplus streams (RFP Fulgora D2a/D2b,
+    // docs/rfp-fulgora-scrap.md)
+    // -------------------------------------------------------------------------
+    // Reuses the same east-tiling merge-cursor + UG-hop machinery as the
+    // target-item merge above (`merge_x_cursor`/`blocked_columns` already
+    // account for every target item processed there, so surplus columns
+    // tile east of them). Two kinds of contributing row qualify:
+    //   - D2a: the surplus item is the row's FIRST solid output, so it
+    //     already owns `output_belt_y` (same belt a target item would use).
+    //   - D2b: the surplus item is a declared SECOND solid output
+    //     (`RowSpan::secondary_output_belt`), with its own belt/y.
+    // Rows whose surplus stream has neither (e.g. an intermediate
+    // west-flowing producer row with no east-flowing belt at all) are
+    // skipped here and remain stranded — `check_stranded_byproducts`
+    // reports them, matching the "no route out" case D2a/D2b don't cover.
+    let mut seen_surplus_items: FxHashSet<&str> = FxHashSet::default();
+    let surplus_items: Vec<String> = solver_result
+        .surplus_outputs
+        .iter()
+        .filter(|f| !f.is_fluid && seen_surplus_items.insert(f.item.as_str()))
+        .map(|f| f.item.clone())
+        .collect();
+    // (item, tail entity) — surplus_exits is recorded AFTER the south-flush
+    // below, once each tail's final (possibly-extended) position is known.
+    let mut surplus_tails: Vec<(String, PlacedEntity)> = Vec::new();
+    for item in &surplus_items {
+        let mut output_rows: Vec<usize> = Vec::new();
+        let mut output_ys: Vec<i32> = Vec::new();
+        for (ri, rs) in row_spans.iter().enumerate() {
+            let is_primary = rs
+                .spec
+                .outputs
+                .iter()
+                .find(|o| !o.is_fluid)
+                .is_some_and(|o| &o.item == item);
+            if is_primary {
+                output_rows.push(ri);
+                output_ys.push(rs.output_belt_y);
+                continue;
+            }
+            if let Some((sec_item, sec_y)) = &rs.secondary_output_belt {
+                if sec_item == item {
+                    output_rows.push(ri);
+                    output_ys.push(*sec_y);
+                }
+            }
+        }
+        if output_rows.is_empty() {
+            continue;
+        }
+        let (merge_ents, merge_end_y, item_merge_x) = merge_output_rows(
+            &output_rows,
+            &output_ys,
+            item,
+            row_spans,
+            max_y,
+            max_belt_tier,
+            merge_x_cursor,
+            &blocked_columns,
+        );
+        blocked_columns.extend((item_merge_x - output_rows.len() as i32)..item_merge_x);
+        merge_x_cursor = item_merge_x + 1;
+        if !merge_ents.is_empty() {
+            crate::trace::emit(crate::trace::TraceEvent::OutputMergerCommitted {
+                item: item.clone(),
+                entities: merge_ents.clone(),
+            });
+        }
+        // Tail tile = the merge cascade's final belt tile — the last
+        // entity `merge_output_rows` pushes is always the surviving
+        // column's last-stamped tile, whether that's the single-row
+        // south-column tail (n==1) or the final splitter's continuation
+        // belt (n>1). Flushed south (below) and recorded into
+        // `surplus_exits` once every item's final depth is known.
+        if let Some(last) = merge_ents.last() {
+            surplus_tails.push((item.clone(), last.clone()));
+        }
+        entities.extend(merge_ents);
+        max_y = max_y.max(merge_end_y);
+        merge_max_x = merge_max_x.max(item_merge_x);
+    }
+
+    // -------------------------------------------------------------------------
+    // South-flush: extend every merge cascade's tail belt down to the
+    // FINAL `max_y` (RFP Fulgora D2a/D2b).
+    // -------------------------------------------------------------------------
+    // `check_belt_dead_ends` exempts a belt only when its next tile is
+    // OUT OF the layout's bounds (`layout.height == max_y`). Items
+    // processed earlier (target items, then D2a/D2b surplus items) each
+    // stop their own cascade as soon as ITS rows are merged — if a
+    // LATER item needs more splitter-rows and pushes `max_y` deeper, an
+    // earlier item's tail now sits mid-layout with nothing below it: a
+    // real dead-end by the check's own definition, not a false positive.
+    // Extending every tail down to `max_y - 1` keeps every cascade's
+    // true exit at the layout's actual bottom edge. No-op for any tail
+    // already at `max_y - 1` — i.e. every existing single-target-item
+    // fixture, since nothing else grows `max_y` after their own merge.
+    for tail in &merge_tails {
+        let mut y = tail.y;
+        while y < max_y - 1 {
+            y += 1;
+            entities.push(PlacedEntity {
+                name: tail.name.clone(),
+                x: tail.x,
+                y,
+                direction: tail.direction,
+                carries: tail.carries.clone(),
+                segment_id: tail.segment_id.clone(),
+                rate: tail.rate,
+                ..Default::default()
+            });
+        }
+    }
+    for (item, tail) in &surplus_tails {
+        let mut y = tail.y;
+        while y < max_y - 1 {
+            y += 1;
+            entities.push(PlacedEntity {
+                name: tail.name.clone(),
+                x: tail.x,
+                y,
+                direction: tail.direction,
+                carries: tail.carries.clone(),
+                segment_id: tail.segment_id.clone(),
+                rate: tail.rate,
+                ..Default::default()
+            });
+        }
+        // Exit tile cross-checked by `check_stranded_byproducts` against
+        // a real belt/splitter entity at that tile, mirroring the fluid
+        // surplus path's pipe check.
+        surplus_exits.push((item.clone(), tail.x, y));
+        crate::trace::emit(crate::trace::TraceEvent::SurplusRouted {
+            item: item.clone(),
+            x: tail.x,
+            y,
+        });
     }
 
     // -------------------------------------------------------------------------

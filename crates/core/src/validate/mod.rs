@@ -170,25 +170,36 @@ pub fn unresolved_region_tiles(layout: &LayoutResult) -> FxHashSet<(i32, i32)> {
 /// exists to eliminate, and it was previously invisible (the tree walk
 /// dropped these flows on the floor; e.g. utility-science-pack's AOP
 /// light-oil, stranded silently for as long as the chain has existed).
+///
+/// Solid surplus routing (RFP Fulgora D2a/D2b, docs/rfp-fulgora-scrap.md)
+/// extends the same entity-cross-checked acceptance fluids already had —
+/// the step-7 solid-surplus merger records an exit tile in
+/// `LayoutResult::surplus_exits` the same way the fluid trunk router does.
 pub fn check_stranded_byproducts(
     layout: &LayoutResult,
     solver: &SolverResult,
 ) -> Vec<ValidationIssue> {
-    // A fluid surplus counts as routed only when BOTH hold: the router
-    // recorded a perimeter exit for the item (`LayoutResult::surplus_exits`
-    // — first-class layout data, populated with or without tracing) AND a
-    // pipe entity carrying that item physically exists at the recorded
-    // boundary tile. The entity cross-check is deliberate — an exit record
-    // alone is a ledger entry, and a ledger without the pipe is exactly
-    // the stalled-machine bug this check exists to catch.
-    let is_routed = |item: &str| {
+    // A surplus flow counts as routed only when BOTH hold: the router
+    // recorded a perimeter/merge exit for the item (`LayoutResult::
+    // surplus_exits` — first-class layout data, populated with or without
+    // tracing) AND a matching physical entity carrying that item exists at
+    // the recorded tile — a pipe/pipe-to-ground for fluids (perimeter
+    // routing), a belt/underground-belt/splitter for solids (the step-7
+    // merger cascade). The entity cross-check is deliberate — an exit
+    // record alone is a ledger entry, and a ledger without the physical
+    // entity is exactly the stalled-machine bug this check exists to catch.
+    let is_routed = |f: &crate::models::ItemFlow| {
         layout.surplus_exits.iter().any(|(ei, ex, ey)| {
-            ei == item
+            ei == &f.item
                 && layout.entities.iter().any(|e| {
                     e.x == *ex
                         && e.y == *ey
-                        && (e.name == "pipe" || e.name == "pipe-to-ground")
-                        && e.carries.as_deref() == Some(item)
+                        && e.carries.as_deref() == Some(f.item.as_str())
+                        && if f.is_fluid {
+                            e.name == "pipe" || e.name == "pipe-to-ground"
+                        } else {
+                            crate::common::is_belt_entity(&e.name)
+                        }
                 })
         })
     };
@@ -196,7 +207,7 @@ pub fn check_stranded_byproducts(
     solver
         .surplus_outputs
         .iter()
-        .filter(|f| !(f.is_fluid && is_routed(&f.item)))
+        .filter(|f| !is_routed(f))
         .map(|f| {
             ValidationIssue::new(
                 Severity::Error,
@@ -204,9 +215,9 @@ pub fn check_stranded_byproducts(
                 format!(
                     "byproduct {} ({:.3}/s) has no consumer and no route out of the \
                      layout — the producing machine will stall in-game once its \
-                     output buffer fills (solid surplus routing is a later Phase 2 \
-                     step of rfp-solver-net-flow; workaround: consume it downstream \
-                     or supply the loop item externally)",
+                     output buffer fills (workaround: consume it downstream, \
+                     supply the loop item externally, or route it to the \
+                     perimeter/merger)",
                     f.item, f.rate
                 ),
             )
@@ -420,7 +431,7 @@ pub fn validate(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{EntityDirection, LayoutResult, PlacedEntity};
+    use crate::models::{EntityDirection, ItemFlow, LayoutResult, PlacedEntity};
 
     fn empty_layout() -> LayoutResult {
         LayoutResult {
@@ -449,6 +460,101 @@ mod tests {
             height: 10,
             ..Default::default()
         }
+    }
+
+    fn solid_surplus_solver(item: &str, rate: f64) -> SolverResult {
+        SolverResult {
+            machines: vec![],
+            external_inputs: vec![],
+            external_outputs: vec![],
+            surplus_outputs: vec![ItemFlow {
+                item: item.to_string(),
+                rate,
+                is_fluid: false,
+                module_id: 0,
+            }],
+            dependency_order: vec![],
+        }
+    }
+
+    // ── check_stranded_byproducts (solid surplus, RFP Fulgora D2a/D2b) ──────
+
+    #[test]
+    fn stranded_byproducts_solid_surplus_with_exit_and_belt_is_clean() {
+        let solver = solid_surplus_solver("uranium-238", 7.09);
+        let layout = LayoutResult {
+            entities: vec![PlacedEntity {
+                name: "transport-belt".to_string(),
+                x: 10,
+                y: 20,
+                carries: Some("uranium-238".to_string()),
+                ..Default::default()
+            }],
+            width: 30,
+            height: 30,
+            surplus_exits: vec![("uranium-238".to_string(), 10, 20)],
+            ..Default::default()
+        };
+        let issues = check_stranded_byproducts(&layout, &solver);
+        assert!(
+            issues.is_empty(),
+            "expected no stranded-byproduct issues, got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn stranded_byproducts_solid_surplus_exit_without_belt_still_errors() {
+        let solver = solid_surplus_solver("uranium-238", 7.09);
+        // Exit tile recorded but no matching entity actually sits there —
+        // a ledger entry without the physical belt is exactly the
+        // stalled-machine bug this check exists to catch.
+        let layout = LayoutResult {
+            entities: vec![],
+            width: 30,
+            height: 30,
+            surplus_exits: vec![("uranium-238".to_string(), 10, 20)],
+            ..Default::default()
+        };
+        let issues = check_stranded_byproducts(&layout, &solver);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].category, "stranded-byproduct");
+        assert_eq!(issues[0].severity, Severity::Error);
+    }
+
+    #[test]
+    fn stranded_byproducts_solid_surplus_wrong_entity_kind_still_errors() {
+        // A pipe carrying the item at the exit tile doesn't count for a
+        // SOLID surplus — solids need a belt/underground-belt/splitter,
+        // mirroring fluids needing a pipe (not a belt).
+        let solver = solid_surplus_solver("uranium-238", 7.09);
+        let layout = LayoutResult {
+            entities: vec![PlacedEntity {
+                name: "pipe".to_string(),
+                x: 10,
+                y: 20,
+                carries: Some("uranium-238".to_string()),
+                ..Default::default()
+            }],
+            width: 30,
+            height: 30,
+            surplus_exits: vec![("uranium-238".to_string(), 10, 20)],
+            ..Default::default()
+        };
+        let issues = check_stranded_byproducts(&layout, &solver);
+        assert_eq!(issues.len(), 1);
+    }
+
+    #[test]
+    fn stranded_byproducts_solid_surplus_no_exit_record_errors() {
+        let solver = solid_surplus_solver("uranium-238", 7.09);
+        let layout = LayoutResult {
+            entities: vec![],
+            width: 30,
+            height: 30,
+            ..Default::default()
+        };
+        let issues = check_stranded_byproducts(&layout, &solver);
+        assert_eq!(issues.len(), 1);
     }
 
     #[test]

@@ -1063,6 +1063,131 @@ mod tests {
         assert!(extras.is_empty());
     }
 
+    /// D2a (RFP Fulgora, `docs/rfp-fulgora-scrap.md`): a solid surplus
+    /// item whose producing row's FIRST (and only) solid output IS the
+    /// surplus — distinct from D2b's secondary-belt shape
+    /// (uranium-processing, `tier_uranium_processing_surplus_export` in
+    /// `tests/e2e.rs`), which needs a second solid output on the SAME
+    /// row. No organic e2e fixture exercises D2a in isolation today —
+    /// Phase 3's scrap sorter is the first natural source of a
+    /// same-recipe-family surplus without a second output slot — so
+    /// this synthetic `SolverResult` is the intended coverage per the
+    /// D2a/D2b PR review. Two independent SingleInput rows: one
+    /// producing the target (`widget`), one producing a surplus with no
+    /// consumer (`gadget-scrap`) as its ONLY output.
+    #[test]
+    fn d2a_solid_surplus_merges_without_overlapping_target() {
+        use crate::models::{ItemFlow, MachineSpec};
+
+        let sr = SolverResult {
+            machines: vec![
+                MachineSpec {
+                    entity: "assembling-machine-3".to_string(),
+                    recipe: "widget".to_string(),
+                    self_loop: vec![],
+                    count: 1.0,
+                    inputs: vec![ItemFlow {
+                        item: "iron-plate".to_string(),
+                        rate: 2.0,
+                        is_fluid: false,
+                        module_id: 0,
+                    }],
+                    outputs: vec![ItemFlow {
+                        item: "widget".to_string(),
+                        rate: 1.0,
+                        is_fluid: false,
+                        module_id: 0,
+                    }],
+                },
+                MachineSpec {
+                    entity: "assembling-machine-3".to_string(),
+                    recipe: "gadget-scrap".to_string(),
+                    self_loop: vec![],
+                    count: 1.0,
+                    inputs: vec![ItemFlow {
+                        item: "iron-plate".to_string(),
+                        rate: 2.0,
+                        is_fluid: false,
+                        module_id: 0,
+                    }],
+                    outputs: vec![ItemFlow {
+                        item: "gadget-scrap".to_string(),
+                        rate: 3.0,
+                        is_fluid: false,
+                        module_id: 0,
+                    }],
+                },
+            ],
+            external_inputs: vec![ItemFlow {
+                item: "iron-plate".to_string(),
+                rate: 4.0,
+                is_fluid: false,
+                module_id: 0,
+            }],
+            external_outputs: vec![ItemFlow {
+                item: "widget".to_string(),
+                rate: 1.0,
+                is_fluid: false,
+                module_id: 0,
+            }],
+            surplus_outputs: vec![ItemFlow {
+                item: "gadget-scrap".to_string(),
+                rate: 3.0,
+                is_fluid: false,
+                module_id: 0,
+            }],
+            dependency_order: vec!["widget".to_string(), "gadget-scrap".to_string()],
+        };
+
+        let layout = build_bus_layout(&sr, LayoutOptions::default())
+            .expect("D2a synthetic layout should build");
+
+        // Surplus recorded and cross-checked against a real belt entity —
+        // mirrors `check_stranded_byproducts`'s own acceptance logic.
+        let exit = layout
+            .surplus_exits
+            .iter()
+            .find(|(item, _, _)| item == "gadget-scrap");
+        assert!(
+            exit.is_some(),
+            "expected a gadget-scrap surplus_exits entry, got {:?}",
+            layout.surplus_exits
+        );
+        let &(_, ex, ey) = exit.unwrap();
+        assert!(
+            layout.entities.iter().any(|e| e.x == ex
+                && e.y == ey
+                && e.carries.as_deref() == Some("gadget-scrap")
+                && crate::common::is_belt_entity(&e.name)),
+            "expected a belt/splitter entity carrying gadget-scrap at the recorded exit tile ({ex},{ey})"
+        );
+
+        // No overlap between the target's own merge block and the
+        // surplus merge block — the whole point of threading
+        // merge_x_cursor/blocked_columns through Step 7b. Mirrors
+        // `output_merger::test_two_items_merge_blocks_do_not_overlap`
+        // at the full-layout level.
+        let target_tiles: FxHashSet<(i32, i32)> = layout
+            .entities
+            .iter()
+            .filter(|e| e.segment_id.as_deref() == Some("merger:widget"))
+            .map(|e| (e.x, e.y))
+            .collect();
+        let surplus_tiles: FxHashSet<(i32, i32)> = layout
+            .entities
+            .iter()
+            .filter(|e| e.segment_id.as_deref() == Some("merger:gadget-scrap"))
+            .map(|e| (e.x, e.y))
+            .collect();
+        assert!(!target_tiles.is_empty(), "expected target merger tiles");
+        assert!(!surplus_tiles.is_empty(), "expected surplus merger tiles");
+        let overlap: Vec<_> = target_tiles.intersection(&surplus_tiles).collect();
+        assert!(
+            overlap.is_empty(),
+            "target and surplus merge blocks overlap at {overlap:?}"
+        );
+    }
+
     /// Build a synthetic `RowSpan` with just the y-coordinates that
     /// `compute_retry_gaps` looks at. Other fields use minimal defaults.
     fn dummy_row_span(recipe: &str, y_start: i32, y_end: i32) -> RowSpan {
@@ -1090,6 +1215,7 @@ mod tests {
             output_belt_x_min: 0,
             output_belt_x_max: 0,
             horizontal_stack: None,
+            secondary_output_belt: None,
         }
     }
 

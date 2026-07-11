@@ -306,14 +306,31 @@ pub(crate) fn stamp_inline_bridge_b(
 ///   y+0 : input belt (EAST)
 ///   y+1 : input inserter (SOUTH)
 ///   y+2..y+2+msz-1 : machine (msz×msz)
-///   y+2+msz : output inserter (SOUTH)
+///   y+2+msz : output inserter (SOUTH) [+ secondary output's long-handed
+///             extraction inserter at mx+2, when `secondary_output` is Some]
 ///   y+2+msz+1 : output belt (WEST -- toward bus)
+///   y+2+msz+2 : secondary output belt, when `secondary_output` is Some
 /// ```
 ///
 /// When `lane_split=true`, machines are split into two groups with a
 /// sideload bridge between them so the output belt uses both lanes.
 ///
+/// `secondary_output`, when `Some((item, belt))`, stamps a SECOND
+/// output belt one row south of the primary (RFP Fulgora D2b —
+/// uranium-processing's uranium-235 target + uranium-238 surplus:
+/// `spec.outputs[1]`, which owns no belt otherwise). Extracted via a
+/// long-handed inserter sharing the primary output inserter's row
+/// (`y+2+msz`) at column `mx+2`: reach 2 picks from the machine's
+/// middle row (`y+2+msz-2`, inside the machine footprint for `msz>=3`)
+/// and drops onto the new belt (`y+2+msz+2`), clearing the primary
+/// belt row entirely. Column `mx+2` collides with the sideload bridge's
+/// anchor columns, so callers must pass `lane_split=false` whenever
+/// `secondary_output.is_some()` — `placer::can_lane_split` enforces
+/// this. Requires `msz>=3` (debug-asserted); no caller today passes a
+/// smaller machine with a second solid output.
+///
 /// Returns `(entities, row_height)`.
+#[allow(clippy::too_many_arguments)]
 pub fn single_input_row(
     recipe: &str,
     machine_entity: &str,
@@ -327,16 +344,32 @@ pub fn single_input_row(
     output_belt: &str,
     lane_split: bool,
     output_east: bool,
+    secondary_output: Option<(&str, &str)>,
 ) -> (Vec<PlacedEntity>, i32) {
     let msz = machine_size as i32;
     let pitch = msz;
-    let row_height = msz + 4;
+    let row_height = msz + 4 + if secondary_output.is_some() { 1 } else { 0 };
     let mut entities = Vec::new();
     let belt_in_seg = Some(format!("row:{recipe}:belt-in:{input_item}"));
     let inserter_in_seg = Some(format!("row:{recipe}:inserter-in:{input_item}"));
     let machine_seg = Some(format!("row:{recipe}:machine"));
     let inserter_out_seg = Some(format!("row:{recipe}:inserter-out"));
     let belt_out_seg = Some(format!("row:{recipe}:belt-out"));
+
+    debug_assert!(
+        secondary_output.is_none() || !lane_split,
+        "single_input_row: secondary_output and lane_split are mutually exclusive \
+         (bridge anchor and secondary inserter both want column mx+2)"
+    );
+    debug_assert!(
+        secondary_output.is_none() || msz >= 3,
+        "single_input_row: secondary_output needs msz>=3 for the reach-2 extraction \
+         inserter to land inside the machine footprint"
+    );
+    let secondary_out_seg = secondary_output
+        .map(|(item, _)| format!("row:{recipe}:belt-out2:{item}"));
+    let secondary_ins_seg = secondary_output
+        .map(|(item, _)| format!("row:{recipe}:inserter-out2:{item}"));
 
     let lane_split = lane_split && machine_count >= 2;
     // Pack machines tight at `pitch` (no LANE_SPLIT_GAP). Strategy A:
@@ -361,10 +394,16 @@ pub fn single_input_row(
     let out_belt_y = y_offset + 2 + msz + 1;
     let out_dir = output_dir(output_east);
 
+    // Secondary belt's last-adjacency sits at dx=2 (the extraction
+    // inserter's column, see below) regardless of the primary's own
+    // dx=1 — trimmed independently.
+    let out_tail2 = if output_east { 0 } else { east_tail_skip(msz, 2) };
+
     for (i, &mx) in mxs.iter().enumerate() {
         let is_last = mx == last_mx;
         let in_stop = if is_last { msz - in_tail } else { msz };
         let out_stop = if is_last { msz - out_tail } else { msz };
+        let out_stop2 = if is_last { msz - out_tail2 } else { msz };
 
         // Input belt (machine_size tiles wide, continuous with adjacent machines)
         for dx in 0..in_stop {
@@ -431,6 +470,37 @@ pub fn single_input_row(
                 segment_id: belt_out_seg.clone(),
                 ..Default::default()
             });
+        }
+
+        // Secondary output (RFP Fulgora D2b): long-handed inserter at
+        // `mx+2`, same row as the primary output inserter — reach 2
+        // picks the machine's middle row (inside the footprint for
+        // msz>=3) and drops onto a new belt one row south of the
+        // primary, clearing it entirely. `mx+2` is guaranteed free of
+        // both the primary inserter (mx or mx+1) and the bridge
+        // (`lane_split` is always false here, see module doc comment).
+        if let Some((sec_item, sec_belt)) = secondary_output {
+            entities.push(PlacedEntity {
+                name: "long-handed-inserter".to_string(),
+                x: mx + 2,
+                y: out_ins_y,
+                direction: EntityDirection::South,
+                carries: Some(sec_item.to_string()),
+                segment_id: secondary_ins_seg.clone(),
+                ..Default::default()
+            });
+            let sec_belt_y = out_belt_y + 1;
+            for dx in 0..out_stop2 {
+                entities.push(PlacedEntity {
+                    name: sec_belt.to_string(),
+                    x: mx + dx,
+                    y: sec_belt_y,
+                    direction: out_dir,
+                    carries: Some(sec_item.to_string()),
+                    segment_id: secondary_out_seg.clone(),
+                    ..Default::default()
+                });
+            }
         }
     }
 
@@ -3975,6 +4045,7 @@ mod tests {
             "transport-belt",
             false,
             false,
+            None,
         );
         assert_eq!(height, 7);
         assert_eq!(entities.len(), 9 + 7);
@@ -3995,6 +4066,7 @@ mod tests {
             "transport-belt",
             false,
             false,
+            None,
         );
 
         // Input belts at y=0: x=0,1 (x=2 is orphan east-tail, trimmed).
@@ -4047,6 +4119,7 @@ mod tests {
             "transport-belt",
             false,
             false,
+            None,
         );
         assert_entity(&entities, 6, 12, "assembling-machine-3");
     }
@@ -4066,6 +4139,7 @@ mod tests {
             "transport-belt",
             false,
             true, // output_east
+            None,
         );
         // Output belts at y=6 should face EAST
         for dx in 0..3_i32 {
@@ -4091,6 +4165,7 @@ mod tests {
             "transport-belt",
             true, // lane_split
             false,
+            None,
         );
         assert_eq!(height, 7);
 
@@ -4141,6 +4216,7 @@ mod tests {
             "transport-belt",
             true,
             false,
+            None,
         );
         let (entities_no_split, _) = single_input_row(
             "iron-gear-wheel",
@@ -4155,6 +4231,7 @@ mod tests {
             "transport-belt",
             false,
             false,
+            None,
         );
         assert_eq!(entities_split.len(), entities_no_split.len());
     }

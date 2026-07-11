@@ -1041,6 +1041,7 @@ mod tests {
             output_belt_x_min: 0,
             output_belt_x_max: 9,
             horizontal_stack: None,
+            secondary_output_belt: None,
         }
     }
 
@@ -1329,6 +1330,7 @@ mod tests {
                 output_belt_x_min: 0,
                 output_belt_x_max: 9,
                 horizontal_stack: None,
+                secondary_output_belt: None,
             }
         }).collect();
 
