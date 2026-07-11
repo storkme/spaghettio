@@ -620,3 +620,26 @@ and 3 wait on its artifacts as marked. Phase 3 is the long pole.
   failures as its entry criteria, alongside Phase 4 (UI, also
   parked). Priority shifted to Nauvis science scaling by user
   direction, 2026-07-11.***
+- *2026-07-11 — corrected diagnosis + final increment before parking.
+  The consumer-west path LANDED (west-flowing scrap row; fan-out
+  partitions by fate — consumed items fan WEST into ordinary bus
+  lanes, pure surplus fans EAST to the merger; `consumed_items`
+  threaded through place_rows). Snapshot-verified: holmium-ore flows
+  sushi → filter inserter → west belt → bus → holmium-solution row
+  with zero errors on that path. This falsifies part of the previous
+  entry: the ~46 belt-loops were never the consumer items — they are
+  entirely the surplus-merger forest. **The sole remaining structural
+  wall is `merge_output_rows`/Step 7b at N≈8 simultaneous single-item
+  streams** (built for 1–2; needs a west gutter + N-way column
+  packing), plus the smaller dual-fate split-feed issue (stone/ice
+  need a split at the sort point, not a west-belt merger stub).
+  Sub-phase entry criteria updated accordingly. Validator debts for
+  the resumed sub-phase, recorded during review: (1) ground-truth one
+  exported sushi blueprint in-game before trusting the new checks —
+  the saturation check is necessary-not-sufficient, since item
+  DISTRIBUTION jams real sushi belts and aggregate rate math cannot
+  see it; (2) add an item-completeness check (every item entering a
+  sushi segment must have an exit — currently only a template-level
+  test assertion); (3) reconsider architecture (d) chest-buffering
+  for the resume, which deletes the exemption surface instead of
+  hardening it.*
