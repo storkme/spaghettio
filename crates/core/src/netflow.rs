@@ -149,13 +149,20 @@ fn raw_net_per_craft(recipe: &Recipe, item: &str) -> f64 {
     produced - consumed
 }
 
-/// Self-loop support classification (RFP Phase 2, "Cycle policy"). v1
-/// supports pure-solid self-loops with 1 net-positive self-loop item
-/// (bacteria cultivations) or 2 self-loop items with opposite net signs
-/// (kovarex: U-235 +1/craft, U-238 −3/craft). Fluid self-loops
-/// (coal-liquefaction) and fluid-adjacent ones (pentapod-egg, fish-breeding
-/// — a water ingredient alongside the self-loop item) stay refused: the row
-/// template and lane planner have no fluid self-loop support yet.
+/// Self-loop support classification (RFP Phase 2, "Cycle policy"; extended
+/// for the fluid-ingredient row variant). v1 supports pure-solid self-loops
+/// with 1 net-positive self-loop item (bacteria cultivations) or 2
+/// self-loop items with opposite net signs (kovarex: U-235 +1/craft, U-238
+/// −3/craft). The self-loop item itself must stay solid — fluid self-loops
+/// (coal-liquefaction: heavy-oil is both consumed and produced) stay
+/// refused, since no row template recirculates a fluid.
+///
+/// A single non-self-loop fluid INGREDIENT is now also supported (pentapod-
+/// egg's water, fish-breeding's water), via `templates::self_loop_row`'s
+/// fluid-header row — but only alongside the 1-item self-loop shape; the
+/// 2-item (kovarex) shape's template has no fluid-header row. Any
+/// non-self-loop fluid PRODUCT, or more than one non-self-loop fluid
+/// ingredient, stays refused: multi-fluid self-loop rows aren't modeled.
 enum SelfLoopShape {
     /// Not a self-loop recipe at all — no item on both sides.
     None,
@@ -170,9 +177,31 @@ fn classify_self_loop(recipe: &Recipe) -> SelfLoopShape {
     if names.is_empty() {
         return SelfLoopShape::None;
     }
-    let has_fluid = recipe.ingredients.iter().any(|i| i.type_ == "fluid")
-        || recipe.products.iter().any(|p| p.type_ == "fluid");
-    if has_fluid || names.len() > 2 {
+    if names.len() > 2 {
+        return SelfLoopShape::Unsupported;
+    }
+    // The self-loop item itself must be solid — fluid self-loops
+    // (coal-liquefaction's heavy-oil) stay refused regardless of the
+    // fluid-header row support added below.
+    let self_loop_has_fluid = names.iter().any(|&name| {
+        recipe.ingredients.iter().any(|i| i.name == name && i.type_ == "fluid")
+    });
+    if self_loop_has_fluid {
+        return SelfLoopShape::Unsupported;
+    }
+    let non_self_loop_fluid_ingredients = recipe
+        .ingredients
+        .iter()
+        .filter(|i| i.type_ == "fluid" && !names.contains(&i.name.as_str()))
+        .count();
+    let has_non_self_loop_fluid_product = recipe
+        .products
+        .iter()
+        .any(|p| p.type_ == "fluid" && !names.contains(&p.name.as_str()));
+    if has_non_self_loop_fluid_product
+        || non_self_loop_fluid_ingredients > 1
+        || (non_self_loop_fluid_ingredients == 1 && names.len() != 1)
+    {
         return SelfLoopShape::Unsupported;
     }
     let supported = match names.len() {

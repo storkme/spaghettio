@@ -30,15 +30,18 @@ pub enum SolverError {
         reason: MachineIncompatibility,
     },
     /// The optimal plan uses a self-loop recipe (an item on both sides)
-    /// outside v1's supported shapes (RFP Phase 2, "Cycle policy"): a
-    /// fluid ingredient or product anywhere in the recipe (coal-liquefaction,
-    /// pentapod-egg, fish-breeding — even though the self-loop item itself
-    /// may be solid, e.g. raw-fish/pentapod-egg, the water ingredient
-    /// alongside it disqualifies the recipe), more than two self-loop items,
-    /// or — for exactly two self-loop items — same-sign net flow. Pure-solid
-    /// self-loops within those shapes (kovarex: U-235 +1/craft, U-238
-    /// −3/craft; bacteria cultivations: single net-positive item) solve via
-    /// net flows instead of hitting this refusal.
+    /// outside v1's supported shapes (RFP Phase 2, "Cycle policy"; extended
+    /// for the fluid-ingredient row variant): a fluid self-loop item
+    /// (coal-liquefaction's heavy-oil — no template recirculates a fluid),
+    /// more than one non-self-loop fluid ingredient, any non-self-loop
+    /// fluid product, a non-self-loop fluid ingredient paired with the
+    /// two-item (kovarex-shape) self-loop, more than two self-loop items,
+    /// or — for exactly two self-loop items — same-sign net flow.
+    /// Pure-solid self-loops (kovarex: U-235 +1/craft, U-238 −3/craft;
+    /// bacteria cultivations: single net-positive item) and 1-item
+    /// self-loops with a single fluid ingredient (pentapod-egg,
+    /// fish-breeding — water alongside the net-positive solid self-loop
+    /// item) solve via net flows instead of hitting this refusal.
     #[error("recipe {recipe} feeds its own output back as an ingredient — self-loop rows are not supported yet")]
     UnsupportedSelfLoop { recipe: String },
     /// The optimal plan contains a multi-recipe cycle (e.g. the

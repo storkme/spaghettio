@@ -25,6 +25,7 @@ const MACHINE_ENTITIES: &[&str] = &[
     "chemical-plant",
     "electric-furnace",
     "oil-refinery",
+    "biochamber",
 ];
 
 // ---------------------------------------------------------------------------
@@ -86,7 +87,10 @@ fn fluid_ports(entity_name: &str, mirror: bool) -> &'static [(i32, i32, &'static
 
     match entity_name {
         "assembling-machine-2" | "assembling-machine-3" => AM2,
-        "chemical-plant" => CHEM,
+        // biochamber's fluid_boxes are geometrically identical to
+        // chemical-plant's (same relative port positions in
+        // recipes.json's machine data) — share the port table.
+        "chemical-plant" | "biochamber" => CHEM,
         // oil-refinery is the only entity where mirror flips port y-positions
         "oil-refinery" => {
             if mirror { OIL_MIRROR } else { OIL }
@@ -464,9 +468,23 @@ pub fn check_fluid_port_connectivity(
             continue;
         }
 
-        // assembling-machine-{2,3}: fluid boxes are disabled when no fluid
-        // recipe is assigned — skip if no pipes adjacent to any port.
-        if e.name == "assembling-machine-2" || e.name == "assembling-machine-3" {
+        // assembling-machine-{2,3} and biochamber: fluid boxes are
+        // disabled when no fluid recipe is assigned — skip if no pipes
+        // adjacent to any port. This matters most for biochamber, whose
+        // organic recipes are frequently pure-solid
+        // (iron/copper-bacteria-cultivation, bioflux, carbon-fiber,
+        // agricultural-science-pack, …) — without this guard every one of
+        // those would fail "no input port has an adjacent pipe" the
+        // moment biochamber gained port checking above.
+        //
+        // Deliberately NOT extended to chemical-plant: every
+        // chemical-plant recipe requires at least one fluid (that's why
+        // it's the chemical-plant category), so "no adjacent pipe" always
+        // means a genuine missing-pipe bug there, not an inert fluid box.
+        // Adding it here would silently swallow that error — see
+        // `chemical_plant_no_input_pipe_error` below, which pins exactly
+        // this case.
+        if matches!(e.name.as_str(), "assembling-machine-2" | "assembling-machine-3" | "biochamber") {
             let has_any_pipe = ports
                 .iter()
                 .any(|(rx, ry, _)| pipe_tiles.contains(&(e.x + rx, e.y + ry)));

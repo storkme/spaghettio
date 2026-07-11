@@ -1630,6 +1630,150 @@ fn tier_kovarex_self_loop() {
     assert_round_trip(&result);
 }
 
+/// Self-loop-with-fluid-ingredient row (solid self-loop item, plus a
+/// single non-self-loop fluid ingredient — the shape `classify_self_loop`
+/// in `netflow.rs` newly accepts, and `templates::self_loop_row`'s
+/// `fluid_input` header row renders). pentapod-egg self-loops
+/// (2 produced − 1 consumed = +1/craft) alongside solid nutrients and
+/// fluid water; the recipe's `organic` category routes to biochamber
+/// automatically regardless of the `machine` argument passed here.
+///
+/// biochamber crafting_speed=2, recipe energy=15 → 7.5s/craft → net
+/// 1/7.5 = 0.1333/s per machine. Target 0.2/s → ceil(0.2/0.1333) = 2
+/// machines (hand-derived, matches the `#[test]` name).
+#[test]
+#[ntest::timeout(15000)]
+fn tier_pentapod_egg_self_loop() {
+    let inputs: FxHashSet<String> =
+        ["nutrients", "water"].iter().map(|s| s.to_string()).collect();
+    let result = run_e2e(
+        "tier_pentapod_egg_self_loop",
+        "pentapod-egg",
+        0.2,
+        "assembling-machine-3",
+        None,
+        &inputs,
+    )
+    .unwrap_or_else(|e| panic!("tier_pentapod_egg_self_loop: {e}"));
+
+    assert_no_errors(&result);
+    assert_no_warnings(&result);
+    assert_produces(&result, "pentapod-egg", 0.2);
+
+    let biochamber_count =
+        result.layout.entities.iter().filter(|e| e.name == "biochamber").count();
+    assert_eq!(
+        biochamber_count, 2,
+        "expected 2 biochambers (hand-derived count for 0.2/s), got {biochamber_count}"
+    );
+
+    assert_round_trip(&result);
+}
+
+/// Same self-loop-with-fluid-ingredient shape as
+/// `tier_pentapod_egg_self_loop`, but on chemical-plant instead of
+/// biochamber (fish-breeding's `organic-or-chemistry` category routes
+/// there by default) — exercises the fluid-header row on the OTHER
+/// machine `fluid_ports` shares geometry with.
+///
+/// chemical-plant crafting_speed=1, recipe energy=6 → 6s/craft → net
+/// raw-fish (3 produced − 2 consumed = +1/craft) = 1/6 = 0.1667/s per
+/// machine. Target 0.15/s → ceil(0.15/0.1667) = 1 machine.
+///
+/// Per-machine nutrients demand is 100/6 = 16.67/s — above a single
+/// yellow belt's 15/s throughput — so this pins the fluid-header row
+/// alongside a solid input that needs a faster belt tier. Explicit
+/// `fast-transport-belt` cap (red) per the accepted design, rather than
+/// relying on `None`'s auto-upgrade behavior.
+#[test]
+#[ntest::timeout(15000)]
+fn tier_fish_breeding_self_loop() {
+    let inputs: FxHashSet<String> =
+        ["nutrients", "water"].iter().map(|s| s.to_string()).collect();
+    let result = run_e2e(
+        "tier_fish_breeding_self_loop",
+        "raw-fish",
+        0.15,
+        "assembling-machine-3",
+        Some("fast-transport-belt"),
+        &inputs,
+    )
+    .unwrap_or_else(|e| panic!("tier_fish_breeding_self_loop: {e}"));
+
+    assert_no_errors(&result);
+    assert_no_warnings(&result);
+    assert_produces(&result, "raw-fish", 0.15);
+
+    let chemical_plant_count =
+        result.layout.entities.iter().filter(|e| e.name == "chemical-plant").count();
+    assert_eq!(
+        chemical_plant_count, 1,
+        "expected 1 chemical-plant (hand-derived count for 0.15/s), got {chemical_plant_count}"
+    );
+
+    assert_round_trip(&result);
+}
+
+/// Regression test for the `fluids.rs` biochamber fluid-port guard (fix
+/// alongside the fluid-ingredient self-loop row above). iron-bacteria-
+/// cultivation is a PURE-SOLID biochamber self-loop recipe — iron-bacteria
+/// self-loops net +3/craft, bioflux is an ordinary bus-tapped input, no
+/// fluid anywhere — with zero prior test coverage of biochamber fluid-port
+/// checking. Before this change biochamber was missing from
+/// `MACHINE_ENTITIES`, so its ports were silently unchecked (a false
+/// negative gap); after adding port checking, the "fluid boxes disabled
+/// when no fluid recipe" guard must also cover biochamber, or every
+/// pure-solid biochamber recipe would newly fail "no input port has an
+/// adjacent pipe" (a false positive this test would catch).
+///
+/// biochamber crafting_speed=2, recipe energy=4 → 2s/craft → iron-bacteria
+/// nets (4 produced − 1 consumed)/2s = 1.5/s per machine; bioflux consumed
+/// 1/2s = 0.5/s per machine. Target 1.0/s → ceil(1.0/1.5) = 1 machine.
+///
+/// `iron-bacteria` (item) has two producers: this cultivation recipe and
+/// a separate `iron-bacteria` hand-crafting recipe (10% probability yield
+/// from jelly). Excluding the hand-crafting recipe forces the self-loop
+/// path deterministically, mirroring how `tier_kovarex_self_loop` forces
+/// its target recipe via exclusion.
+///
+/// Deviation from the accepted design: the design's fixture brief names
+/// "nutrients" as an available input for this recipe, but
+/// iron-bacteria-cultivation's actual ingredients (`recipes.json`) are
+/// `iron-bacteria` (self-loop) and `bioflux` — there is no nutrients
+/// ingredient here. Supplying `bioflux` directly as the available input
+/// instead (rather than solving bioflux's own yumako-mash/jelly chain)
+/// keeps the test focused on the self-loop + fluid-guard behavior it
+/// exists to pin.
+#[test]
+#[ntest::timeout(15000)]
+fn tier_bacteria_self_loop_regression() {
+    let inputs: FxHashSet<String> = ["bioflux"].iter().map(|s| s.to_string()).collect();
+    let excluded: FxHashSet<String> = ["iron-bacteria"].iter().map(|s| s.to_string()).collect();
+    let result = run_e2e_with_exclusions(
+        "tier_bacteria_self_loop_regression",
+        "iron-bacteria",
+        1.0,
+        "assembling-machine-3",
+        None,
+        &inputs,
+        &excluded,
+    )
+    .unwrap_or_else(|e| panic!("tier_bacteria_self_loop_regression: {e}"));
+
+    assert_no_errors(&result);
+    assert_no_warnings(&result);
+    assert_produces(&result, "iron-bacteria", 1.0);
+
+    let biochamber_count =
+        result.layout.entities.iter().filter(|e| e.name == "biochamber").count();
+    assert_eq!(
+        biochamber_count, 1,
+        "expected 1 biochamber (hand-derived count for 1.0/s), got {biochamber_count}"
+    );
+
+    assert_round_trip(&result);
+}
+
 /// Regression test for [issue #136][] — coprime balancer-shape coverage.
 ///
 /// Repro URL:

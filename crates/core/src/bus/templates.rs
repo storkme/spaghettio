@@ -3062,7 +3062,23 @@ pub fn fluid_multi_input_row(
 /// crossing major's riser with a single 1-tile underground hop, the
 /// only crossing the two corridors need.
 ///
-/// Returns `(entities, row_height)`.
+/// `fluid_input` — `Some((item, per_machine_rate))` — adds a single
+/// non-self-loop fluid ingredient (pentapod-egg's water, fish-breeding's
+/// water) via a header row directly above the machine (`dy_machine - 1`).
+/// The near-item's inserter also lives on this row (it can no longer
+/// reach the machine from `dy_ins1` once the header pushes the machine
+/// one row further south), so the header is a per-machine
+/// pipe-to-ground bridge — not a plain continuous strip — hopping over
+/// the inserter's column; see the "Fluid header" section below for the
+/// exact tile layout and the pairing-direction rationale. Only legal
+/// with `has_minor == false` (asserted) — the 2-item (kovarex) shape has
+/// no fluid-header row. Inserts one extra row between the inserter row
+/// and the machine row, so every dy offset from `dy_machine` down shifts
+/// by 1 relative to the no-fluid 1-item shape.
+///
+/// Returns `(entities, row_height, fluid_input_port_pipes)` — the third
+/// element mirrors `fluid_input_row`'s convention (one `(item, x, y)` tap
+/// point per machine on the header row), empty when `fluid_input` is `None`.
 #[allow(clippy::too_many_arguments)]
 pub fn self_loop_row(
     recipe: &str,
@@ -3077,8 +3093,9 @@ pub fn self_loop_row(
     near_item: &str,
     near_net_rate: f64,
     minor: Option<(f64, f64)>,
+    fluid_input: Option<(&str, f64)>,
     max_belt_tier: Option<&str>,
-) -> (Vec<PlacedEntity>, i32) {
+) -> (Vec<PlacedEntity>, i32, Vec<(String, i32, i32)>) {
     use crate::bus::balancer::{splitter_for_belt, underground_for_belt};
     use crate::common::belt_entity_for_rate;
 
@@ -3086,6 +3103,11 @@ pub fn self_loop_row(
     let pitch = msz;
     let count = machine_count as i32;
     let has_minor = minor.is_some();
+    let has_fluid = fluid_input.is_some();
+    assert!(
+        !has_fluid || !has_minor,
+        "self_loop_row: fluid_input is only supported for the 1-item shape (has_minor == false)"
+    );
 
     // Prefix zone: 3 dead columns west of machine 0. `x_offset + 1`
     // (= `mx0 - 2`) is the near2 corridor's vertical descent column
@@ -3124,6 +3146,8 @@ pub fn self_loop_row(
     let machine_seg = Some(format!("row:{recipe}:machine"));
     let major_out_ins_seg = Some(format!("row:{recipe}:inserter-out:{major_item}"));
     let minor_out_ins_seg = Some(format!("row:{recipe}:inserter-out:{near_item}"));
+    let fluid_hdr_seg = fluid_input.map(|(item, _)| format!("row:{recipe}:belt-in:{item}"));
+    let mut fluid_input_port_pipes: Vec<(String, i32, i32)> = Vec::new();
 
     // ---- Row Y offsets (relative to y_offset) ----
     let dy_far_ret = 0;
@@ -3133,7 +3157,11 @@ pub fn self_loop_row(
     let dy_near2 = 4; // 2-item shape only
     let dy_ins2 = 5; // 2-item shape; ALSO near2's return-transit row
     let dy_ins1 = 4; // 1-item shape's single inserter row
-    let dy_machine = if has_minor { 6 } else { dy_ins1 + 1 };
+    // 1-item shape gains a fluid-header row directly above the machine
+    // when `has_fluid` — shifts the machine row (and everything south of
+    // it) down by 1 relative to the no-fluid 1-item shape.
+    let dy_machine = if has_minor { 6 } else { dy_ins1 + 1 + if has_fluid { 1 } else { 0 } };
+    let dy_fluid_hdr = dy_machine - 1; // only meaningful when has_fluid
     let dy_out_ins = dy_machine + msz;
     let dy_major_collect = dy_out_ins + 1;
     let dy_minor_collect = dy_out_ins + 2; // 2-item only
@@ -3247,6 +3275,69 @@ pub fn self_loop_row(
         }
     }
 
+    // ---- Fluid header (1-item shape only; `has_fluid`) ----
+    //
+    // One row directly above the machine (`dy_fluid_hdr == dy_machine -
+    // 1`), at the SAME row the near-item's inserter must now occupy (see
+    // the "Inserters + machines" section below — with the machine pushed
+    // one row south to make room for this header, the near-item's
+    // formerly-regular inserter no longer reaches it from `dy_ins1` and
+    // becomes a long-handed inserter living on this row instead).
+    //
+    // CHEM-shape ports (chemical-plant/biochamber) sit at dx=0 and dx=2;
+    // the near-item's LHI takes the middle column (dx=1), so the header
+    // bridges over it with a per-machine pipe-to-ground pair (UG-in at
+    // dx=0, UG-out at dx=2) rather than a plain continuous strip.
+    //
+    // Unlike belt UGs (paired by matching direction), fluid PTGs pair by
+    // FACING EACH OTHER: `find_ptg_pairs` in `validate/fluids.rs` requires
+    // the output's direction to be the opposite of the input's — the same
+    // convention `fluid_input_row` uses (South in / North out). Here:
+    // dx=0 faces East (tunnels toward dx=2, surface mouth points West,
+    // toward the previous machine / bus trunk); dx=2 faces West (surface
+    // mouth points East). Both UG surface tiles land exactly on the
+    // machine's physical fluid ports (only one is strictly required by
+    // the validator, but connecting both is free here). Machines pack at
+    // `pitch == msz` with no gap, so machine N's dx=2 mouth (East) lands
+    // exactly on machine N+1's dx=0 tile, whose own mouth (West) points
+    // back — a mutual surface match chains every machine's bridge into
+    // one continuous network across the row.
+    if let Some((fluid_item, _fluid_rate)) = fluid_input {
+        for &mx in &mxs {
+            entities.push(PlacedEntity {
+                name: "pipe-to-ground".to_string(),
+                x: mx,
+                y: y(dy_fluid_hdr),
+                direction: EntityDirection::East,
+                io_type: Some("input".to_string()),
+                carries: Some(fluid_item.to_string()),
+                segment_id: fluid_hdr_seg.clone(),
+                ..Default::default()
+            });
+            entities.push(PlacedEntity {
+                // Faces WEST (toward the input), not East: fluid PTG
+                // pairing (`find_ptg_pairs` in `validate/fluids.rs`)
+                // requires the output to face the OPPOSITE direction of
+                // its input partner — same convention `fluid_input_row`
+                // uses (South in / North out). Facing West also makes
+                // this tile's OWN surface mouth point EAST, landing
+                // exactly on the next machine's dx=0 input tile
+                // (`pitch == msz`), so consecutive machines' bridges
+                // chain into one network without an explicit gap-fill.
+                name: "pipe-to-ground".to_string(),
+                x: mx + 2,
+                y: y(dy_fluid_hdr),
+                direction: EntityDirection::West,
+                io_type: Some("output".to_string()),
+                carries: Some(fluid_item.to_string()),
+                segment_id: fluid_hdr_seg.clone(),
+                ..Default::default()
+            });
+            // Bus tap-point for this machine: the dx=0 UG surface tile.
+            fluid_input_port_pipes.push((fluid_item.to_string(), mx, y(dy_fluid_hdr)));
+        }
+    }
+
     // ---- Inserters + machines ----
 
     if has_minor {
@@ -3289,6 +3380,13 @@ pub fn self_loop_row(
         }
     } else {
         for &mx in &mxs {
+            // Major's LHI stays at `dy_ins1` regardless of `has_fluid`:
+            // reach 2 already lands its pickup on `dy_far` (2 rows up)
+            // and its drop inside the machine's footprint (2 rows down),
+            // and both of those still hold whether the machine starts at
+            // `dy_ins1 + 1` (no fluid) or `dy_ins1 + 2` (has_fluid) —
+            // `msz == 3` machines overlap both possible footprints at
+            // that fixed drop row.
             entities.push(PlacedEntity {
                 name: "long-handed-inserter".to_string(),
                 x: mx,
@@ -3299,16 +3397,37 @@ pub fn self_loop_row(
                 rate: Some(major_loop_rate),
                 ..Default::default()
             });
-            entities.push(PlacedEntity {
-                name: "inserter".to_string(),
-                x: mx + 2,
-                y: y(dy_ins1),
-                direction: EntityDirection::South,
-                carries: Some(near_item.to_string()),
-                segment_id: near_ins_seg.clone(),
-                rate: Some(near_total),
-                ..Default::default()
-            });
+            if has_fluid {
+                // The fluid header row now sits between `dy_ins1` and
+                // the machine, so a reach-1 inserter here can no longer
+                // reach the machine. Move to `dy_fluid_hdr` itself
+                // (dx=1, the column the header's UG bridge already
+                // skips — see the "Fluid header" section above) as a
+                // long-handed inserter: pickup 2 rows up lands back on
+                // `dy_near` (unchanged), drop 2 rows down lands inside
+                // the machine.
+                entities.push(PlacedEntity {
+                    name: "long-handed-inserter".to_string(),
+                    x: mx + 1,
+                    y: y(dy_fluid_hdr),
+                    direction: EntityDirection::South,
+                    carries: Some(near_item.to_string()),
+                    segment_id: near_ins_seg.clone(),
+                    rate: Some(near_total),
+                    ..Default::default()
+                });
+            } else {
+                entities.push(PlacedEntity {
+                    name: "inserter".to_string(),
+                    x: mx + 2,
+                    y: y(dy_ins1),
+                    direction: EntityDirection::South,
+                    carries: Some(near_item.to_string()),
+                    segment_id: near_ins_seg.clone(),
+                    rate: Some(near_total),
+                    ..Default::default()
+                });
+            }
         }
     }
 
@@ -3820,7 +3939,7 @@ pub fn self_loop_row(
         });
     }
 
-    (entities, row_height)
+    (entities, row_height, fluid_input_port_pipes)
 }
 
 #[cfg(test)]
@@ -4520,6 +4639,58 @@ mod tests {
         );
         use crate::bus::placer::RowKind;
         assert_eq!(height, RowKind::FluidInput.row_height());
+    }
+
+    #[test]
+    fn self_loop_row_fluid_height_matches_row_kind() {
+        // Verify that the row_height returned by self_loop_row with a
+        // fluid_input (1-item shape) matches
+        // RowKind::SelfLoop{has_minor:false, has_fluid:true}.row_height().
+        let (_, height, port_pipes) = self_loop_row(
+            "pentapod-egg",
+            "biochamber",
+            3,
+            1,
+            0,
+            0,
+            "pentapod-egg",
+            0.1333,
+            0.2667,
+            "nutrients",
+            0.1333,
+            None, // minor
+            Some(("water", 8.0)),
+            None, // max_belt_tier
+        );
+        use crate::bus::placer::RowKind;
+        let expected = RowKind::SelfLoop { has_minor: false, has_fluid: true }.row_height();
+        assert_eq!(expected, 12, "row_height formula sanity: 11 (no-fluid base) + 1");
+        assert_eq!(height, expected);
+        assert_eq!(port_pipes.len(), 1, "expected 1 fluid tap point for 1 machine");
+        assert_eq!(port_pipes[0].0, "water");
+    }
+
+    #[test]
+    #[should_panic(expected = "has_minor == false")]
+    fn self_loop_row_fluid_input_with_minor_panics() {
+        // fluid_input is only legal alongside has_minor == false — the
+        // 2-item (kovarex) shape has no fluid-header row.
+        self_loop_row(
+            "some-recipe",
+            "centrifuge",
+            3,
+            1,
+            0,
+            0,
+            "major",
+            1.0,
+            2.0,
+            "near",
+            0.5,
+            Some((0.5, 0.1)), // minor: has_minor == true
+            Some(("water", 1.0)),
+            None,
+        );
     }
 
     #[test]

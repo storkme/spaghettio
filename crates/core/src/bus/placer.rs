@@ -359,8 +359,11 @@ pub enum RowKind {
     /// plus a net-negative item that's ALSO the bus-tapped input, on its
     /// own recirculation belt); false for the 1-item shape (bacteria
     /// cultivations: one net-positive self-loop item plus an ordinary
-    /// bus-tapped input). See `templates::self_loop_row`.
-    SelfLoop { has_minor: bool },
+    /// bus-tapped input). `has_fluid` is true when the recipe also has a
+    /// single non-self-loop fluid ingredient (pentapod-egg's water,
+    /// fish-breeding's water) — only legal alongside `has_minor == false`.
+    /// See `templates::self_loop_row`.
+    SelfLoop { has_minor: bool, has_fluid: bool },
 }
 
 impl RowKind {
@@ -388,7 +391,14 @@ impl RowKind {
             // (machine shifts to 6-8), a minor collector row, a
             // dedicated pass-through row for the major loop's own
             // straight-feed detour, and a near2 east-transit row = 14.
-            RowKind::SelfLoop { has_minor } => if *has_minor { 14 } else { 11 },
+            // `has_fluid` (1-item shape only) inserts one extra
+            // fluid-header row directly above the machine, shifting
+            // every dy from the machine row down and adding 1 to the
+            // total.
+            RowKind::SelfLoop { has_minor, has_fluid } => {
+                let base = if *has_minor { 14 } else { 11 };
+                base + if *has_fluid { 1 } else { 0 }
+            }
         }
     }
 }
@@ -397,10 +407,14 @@ impl RowKind {
 fn row_kind(spec: &MachineSpec) -> RowKind {
     // Self-loop recipes (kovarex-class) short-circuit before the
     // ordinary solid/fluid counting cascade — `spec.inputs`/`outputs`
-    // carry only NET flows for these (see `models::MachineSpec` doc
-    // comment), which would otherwise misclassify them.
+    // carry only NET flows for the self-loop item(s) (see
+    // `models::MachineSpec` doc comment), which would otherwise
+    // misclassify them. Ordinary (non-self-loop) ingredients like
+    // pentapod-egg's water still land in `spec.inputs` normally, so a
+    // fluid entry there means the row needs the fluid-header variant.
     if !spec.self_loop.is_empty() {
-        return RowKind::SelfLoop { has_minor: spec.self_loop.len() > 1 };
+        let has_fluid = spec.inputs.iter().any(|f| f.is_fluid);
+        return RowKind::SelfLoop { has_minor: spec.self_loop.len() > 1, has_fluid };
     }
 
     let solid_inputs = spec.inputs.iter().filter(|f| !f.is_fluid).count();
@@ -894,14 +908,18 @@ pub(crate) fn build_one_row(
                 (ents, rh, input_ys, out_y)
             }
         }
-        RowKind::SelfLoop { has_minor } => {
+        RowKind::SelfLoop { has_minor, has_fluid } => {
             let msz = machine_size(&spec.entity);
             let major = spec
                 .self_loop
                 .iter()
                 .find(|f| f.net_rate > 0.0)
                 .expect("self-loop spec must have a net-positive item (classify_self_loop guarantees this)");
-            let near = spec.inputs.first();
+            // Solid-only, not `spec.inputs.first()`: with a fluid
+            // ingredient present (pentapod-egg's water), the ordinary
+            // bus-tapped input must still be the SOLID one regardless of
+            // its position relative to the fluid in `spec.inputs`.
+            let near = solid_inputs.first().copied();
             let near_item = near.map(|f| f.item.as_str()).unwrap_or("");
             let near_net_rate = near.map(|f| f.rate).unwrap_or(0.0);
             let minor = if *has_minor {
@@ -912,7 +930,8 @@ pub(crate) fn build_one_row(
             } else {
                 None
             };
-            let (ents, rh) = templates::self_loop_row(
+            let fluid_in = fluid_inputs.first().map(|f| (f.item.as_str(), f.rate));
+            let (ents, rh, fluid_input_port_pipes) = templates::self_loop_row(
                 &spec.recipe,
                 &spec.entity,
                 msz,
@@ -925,14 +944,20 @@ pub(crate) fn build_one_row(
                 near_item,
                 near_net_rate,
                 minor,
+                fluid_in,
                 max_belt_tier,
             );
+            fluid_port_ys = fluid_input_port_pipes.first().map(|&(_, _, py)| vec![py]).unwrap_or_default();
+            fluid_port_pipes = fluid_input_port_pipes;
             // Mirrors `templates::self_loop_row`'s row-offset formulas:
             // the bus tap-off lands on the near belt (dy=3); the row's
             // declared output is major's export tile, on the major
-            // collector row (dy_out_ins + 1).
+            // collector row (dy_out_ins + 1). `has_fluid` (1-item shape
+            // only) inserts a fluid-header row directly above the
+            // machine, shifting the machine row (and everything south)
+            // down by 1.
             let dy_near = 3;
-            let dy_machine = if *has_minor { 6 } else { 5 };
+            let dy_machine = if *has_minor { 6 } else { 5 + if *has_fluid { 1 } else { 0 } };
             let dy_out_ins = dy_machine + msz as i32;
             let dy_major_collect = dy_out_ins + 1;
             let input_ys = vec![y_cursor + dy_near];
