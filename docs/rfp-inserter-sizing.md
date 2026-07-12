@@ -452,3 +452,8 @@ stop signal.
   cannot clear the pack-zero condition alone (dual/triple absolute
   far-ceiling cases remain in production/utility). **Awaiting user
   decision on v3 direction.***
+- *2026-07-12 — **v3 direction chosen by user: extend lever (b) to
+  `fluid_dual_input_row` and re-census first** — cheap and
+  falsifiable; kills the dominant 22/47 if the geometry holds;
+  template redesign follows scoped by whatever the re-census leaves.
+  Re-census dispatched.*
