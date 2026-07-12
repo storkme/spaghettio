@@ -601,14 +601,21 @@ const GOLDEN_HASHES: &[(&str, &str)] = &[
     // when `(m, m)` family balancers became passthroughs (#268).
     // RFP rfp-inserter-sizing.md Phase 1: single_input_row rows ladder-sized, see note above.
     // RFP rfp-inserter-sizing.md Phase 2: dual_input_row ladder-sized + near/far reassigned.
-    ("tier2_electronic_circuit_20s_from_ore", "80cb264e82beea22698c1be161844327c4107b13d85dd267be3eb8a578b92b7a"),
+    // RFP rfp-inserter-sizing.md Phase 3: far side's reach-2 count-ladder activated.
+    ("tier2_electronic_circuit_20s_from_ore", "e5618d6626a9176aa6b7addd4b256af80e1ab31d0bdcfad5da124a3bebf4f8fd"),
     // RFP rfp-inserter-sizing.md Phase 2: dual_input_row's inserters are now
     // ladder-sized + near/far reassigned (this fixture's dual-input EC row
     // is exactly the template Phase 2 touches) — entity types/positions on
     // that row moved.
     ("tier2_electronic_circuit_splitter_stamp_regression", "d7d4a166cddaaa7cc29b625a56812afbac0b96f2b7ac80fc656b83b9eae3e9a2"),
-    ("tier3_plastic_bar", "0177826236e45ddc46870105465bef1097e7cd20cdf7b62d191081e904f2634f"),
-    ("tier3_sulfuric_acid", "7f39e8a6a3639abf22a2c0c2555ccff94d33c6f4ca00cf27c119d1c0740c1724"),
+    // RFP rfp-inserter-sizing.md Phase 3: fluid_input_row's solid side
+    // (coal) is now ladder-sized. Reaches fully clean.
+    ("tier3_plastic_bar", "c19ff02e140bac9af96116aed36f86dff923e4b5c7c13941b7469920bb9e06ba"),
+    // RFP rfp-inserter-sizing.md Phase 3: fluid_input_row's solid side
+    // (iron-plate) is now ladder-sized — this fixture (sulfuric-acid:
+    // iron-plate + water) is exactly that shape. Stays fully clean
+    // (assert_no_warnings) — the ladder resolves the demand outright.
+    ("tier3_sulfuric_acid", "4ffea48ef878dcfe5ccb976ddd9c997e478cafd94484555fbab78b9880fe7b2c"),
     ("tier3_heavy_oil_cracking", "76f4dd59f1e6422e4001b81a57f2815ae4447a4f1e85f9fc2de386440b39a596"),
 ];
 
@@ -913,7 +920,7 @@ fn tier2_electronic_circuit() {
     // RFP Phase 1: 34 inserter-bound machine-sides (electronic-circuit chain —
     // copper-cable + EC assemblers, sides over the 0.84/s regular-inserter cap).
     // RFP rfp-inserter-sizing.md Phase 1 re-bless: single_input_row (iron-plate/copper-cable rows) ladder-sized; the electronic-circuit dual_input_row itself is Phase 2 scope, residue remains (34 -> 14).
-    assert_warnings_exactly(&result, &[("inserter-item-throughput", 7)]);
+    assert_warnings_exactly(&result, &[("inserter-item-throughput", 1)]);
     assert_produces(&result, "electronic-circuit", 10.0);
     assert_round_trip(&result);
 }
@@ -996,7 +1003,7 @@ fn tier2_electronic_circuit_20s_from_ore() {
     assert_no_errors(&result);
     // RFP Phase 1: 68 inserter-bound machine-sides (EC from ore at 20/s).
     // RFP rfp-inserter-sizing.md Phase 1 re-bless: single_input_row rows ladder-sized; electronic-circuit dual_input_row is Phase 2 scope, residue remains (68 -> 28).
-    assert_warnings_exactly(&result, &[("inserter-item-throughput", 14)]);
+    assert_warnings_exactly(&result, &[("inserter-item-throughput", 2)]);
     assert_produces(&result, "electronic-circuit", 20.0);
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier2_electronic_circuit_20s_from_ore");
@@ -1074,7 +1081,7 @@ fn tier3_plastic_bar() {
     assert_no_errors(&result);
     // RFP Phase 1: 10 inserter-bound machine-sides (plastic-bar chemical plants —
     // petroleum arrives by pipe, but coal in and plastic out both exceed 0.84/s).
-    assert_warnings_exactly(&result, &[("inserter-throughput", 10), ("inserter-item-throughput", 10)]);
+    assert_warnings_exactly(&result, &[]);
     assert_produces(&result, "plastic-bar", 10.0);
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier3_plastic_bar");
@@ -1094,7 +1101,7 @@ fn tier3_plastic_bar_from_crude() {
     assert_no_errors(&result);
     // RFP Phase 1: 10 inserter-bound machine-sides (plastic-bar from crude — same
     // chemical-plant sides over 0.84/s as the plate-fed variant).
-    assert_warnings_exactly(&result, &[("inserter-throughput", 10), ("inserter-item-throughput", 10)]);
+    assert_warnings_exactly(&result, &[]);
     assert_produces(&result, "plastic-bar", 10.0);
     assert_round_trip(&result);
 }
@@ -1288,7 +1295,7 @@ fn tier4_advanced_circuit_from_plates() {
     assert_no_errors(&result);
     // RFP Phase 1: 14 inserter-bound machine-sides (advanced-circuit @1/s chain).
     // RFP rfp-inserter-sizing.md Phase 1 re-bless: single_input_row (copper-cable) ladder-sized; advanced-circuit triple_input_row + electronic-circuit dual_input_row are Phase 2/3 scope, residue remains (14 -> 6).
-    assert_warnings_exactly(&result, &[("inserter-throughput", 2), ("inserter-item-throughput", 2)]);
+    assert_warnings_exactly(&result, &[]);
     assert_produces(&result, "advanced-circuit", 1.0);
     assert_round_trip(&result);
 }
@@ -1357,7 +1364,7 @@ fn tier4_advanced_circuit_partitioned() {
     // now resolves each machine's spec by row position first (falling back
     // to the recipe-keyed lookup only when no row matches), which
     // disambiguates the siblings and re-pins this to its true count.
-    assert_warnings_exactly(&result, &[("inserter-throughput", 2), ("inserter-item-throughput", 2)]);
+    assert_warnings_exactly(&result, &[]);
 }
 
 /// Regression test for the pipe-as-port-tile bug. URL:
@@ -1472,23 +1479,25 @@ fn tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing() {
     // strategy is Pooled (no partition-collapse risk).
     // RFP rfp-inserter-sizing.md Phase 2: dual_input_row_horizontal (this
     // fixture's own row shape) is now ladder-sized + near/far reassigned;
-    // 34 -> 14. Not part of the frozen Phase 0v2 census corpus
-    // (HorizontalStack), verified directly against this test's own live run.
+    // 34 -> 14. Phase 3: reaches 0. Not part of the frozen Phase 0v2 census
+    // corpus (HorizontalStack), verified directly against this test's own
+    // live run.
     let inserter_throughput_count =
         warnings.iter().filter(|i| i.category == "inserter-throughput").count();
     assert_eq!(
-        inserter_throughput_count, 14,
-        "{test_name}: expected exactly 14 inserter-throughput warnings"
+        inserter_throughput_count, 0,
+        "{test_name}: expected exactly 0 inserter-throughput warnings"
     );
 
-    // RFP rfp-inserter-sizing.md Phase 2: per-item companion check pin, same
-    // rationale as above — not part of the frozen Phase 0v2 census corpus
-    // (HorizontalStack), verified directly against this test's own live run.
+    // RFP rfp-inserter-sizing.md Phase 2/3: per-item companion check pin,
+    // same rationale as above — not part of the frozen Phase 0v2 census
+    // corpus (HorizontalStack), verified directly against this test's own
+    // live run. 24 -> 0 once Phase 3 activated the far ladder here too.
     let inserter_item_throughput_count =
         warnings.iter().filter(|i| i.category == "inserter-item-throughput").count();
     assert_eq!(
-        inserter_item_throughput_count, 24,
-        "{test_name}: expected exactly 24 inserter-item-throughput warnings"
+        inserter_item_throughput_count, 0,
+        "{test_name}: expected exactly 0 inserter-item-throughput warnings"
     );
 }
 
@@ -1714,7 +1723,7 @@ fn tier4_advanced_circuit_from_ore_am2() {
     // acyclic branch. Even-split delivered ≥4.3 here, so it is a modeling residual,
     // not a real starvation. See report / rfp-lane-demand-flow.md.
     // RFP rfp-inserter-sizing.md Phase 1 re-bless: single_input_row rows ladder-sized; remaining rows are Phase 2/3 scope, residue remains (58 -> 24). input-rate-delivery unrelated, unchanged.
-    assert_warnings_exactly(&result, &[("input-rate-delivery", 1), ("inserter-throughput", 10), ("inserter-item-throughput", 17)]);
+    assert_warnings_exactly(&result, &[("input-rate-delivery", 1), ("inserter-item-throughput", 4)]);
     assert_produces(&result, "advanced-circuit", 5.0);
     assert_round_trip(&result);
 }
@@ -1753,7 +1762,7 @@ fn tier5_processing_unit_from_ore_am3() {
     // positive across this layout's underground hops; the residual is purely
     // inserter-throughput.
     // RFP rfp-inserter-sizing.md Phase 1 re-bless: single_input_row rows ladder-sized; remaining rows are Phase 2/3 scope, residue remains (129 -> 65).
-    assert_warnings_exactly(&result, &[("inserter-throughput", 25), ("inserter-item-throughput", 45)]);
+    assert_warnings_exactly(&result, &[("inserter-item-throughput", 5)]);
     assert_produces(&result, "processing-unit", 2.0);
     assert_round_trip(&result);
 }
@@ -2073,7 +2082,12 @@ fn tier_pentapod_egg_self_loop() {
     .unwrap_or_else(|e| panic!("tier_pentapod_egg_self_loop: {e}"));
 
     assert_no_errors(&result);
-    // RFP Phase 1: 2 inserter-bound machine-sides (pentapod-egg biochamber self-loop).
+    // RFP rfp-inserter-sizing.md Phase 3: pentapod-egg is the HasFluid
+    // self-loop shape — near_item's inserter is a hard-0-budget LHI (both
+    // free columns are structurally packed), a genuine geometric wall
+    // (`docs/rfp-inserter-sizing.md`'s accepted residue: nutrients demand
+    // ~3/s per machine vs the reach-2 ceiling). Permanent, honest residue
+    // per the user-accepted DoD, not a bug — stays at 2/2 through Phase 3.
     assert_warnings_exactly(&result, &[("inserter-throughput", 2), ("inserter-item-throughput", 2)]);
     assert_produces(&result, "pentapod-egg", 0.2);
 
@@ -2179,8 +2193,10 @@ fn tier_bacteria_self_loop_regression() {
     .unwrap_or_else(|e| panic!("tier_bacteria_self_loop_regression: {e}"));
 
     assert_no_errors(&result);
-    // RFP Phase 1: 1 inserter-bound machine-side (iron-bacteria self-loop).
-    assert_warnings_exactly(&result, &[("inserter-throughput", 1), ("inserter-item-throughput", 1)]);
+    // RFP rfp-inserter-sizing.md Phase 3: self_loop_row's near_item ladder
+    // (near_item = bioflux here) resolves the one remaining inserter-bound
+    // side from Phase 1 — fully clean.
+    assert_warnings_exactly(&result, &[]);
     assert_produces(&result, "iron-bacteria", 1.0);
 
     let biochamber_count =

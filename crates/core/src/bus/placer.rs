@@ -733,6 +733,20 @@ pub(crate) fn build_one_row(
             let solid_item0 = solid_inputs.first().map(|f| f.item.as_str()).unwrap_or("");
             let solid_item1 = solid_inputs.get(1).map(|f| f.item.as_str()).unwrap_or("");
             let fluid_item = fluid_inputs.first().map(|f| f.item.as_str()).unwrap_or("");
+            // v3 extension of the reassignment lever (`docs/rfp-inserter-
+            // sizing.md`): same hungrier-item-to-near swap as DualInput/
+            // TripleInput. Geometrically identical positional pick
+            // (source-confirmed) — the fluid PTG's column depends only on
+            // `port_dx` (machine type), never on which solid item is
+            // passed as input1/input2, so swapping the far/near role
+            // never touches the fluid port.
+            let effective_count = spec.count.ceil().max(1.0);
+            let utilization = (spec.count / effective_count).min(1.0);
+            let item0_rate = solid_inputs.first().map(|f| f.rate).unwrap_or(0.0) * utilization;
+            let item1_rate = solid_inputs.get(1).map(|f| f.rate).unwrap_or(0.0) * utilization;
+            let output_rate_pm = solid_outputs.first().map(|f| f.rate).unwrap_or(0.0) * utilization;
+            let ((far_item, far_rate), (near_item, near_rate)) =
+                reassign_near_far(solid_item0, item0_rate, solid_item1, item1_rate);
             let in_belt1 = row_input_belt(max_belt_tier);
             let in_belt2 = row_input_belt(max_belt_tier);
             let (mw, mh) = machine_dims(&spec.entity);
@@ -743,7 +757,7 @@ pub(crate) fn build_one_row(
                 count,
                 y_cursor,
                 bus_width,
-                (solid_item0, solid_item1),
+                (far_item, near_item),
                 fluid_item,
                 output_item,
                 output_is_fluid,
@@ -751,13 +765,24 @@ pub(crate) fn build_one_row(
                 out_belt,
                 lane_split,
                 output_east,
+                far_rate,
+                near_rate,
+                output_rate_pm,
+                max_inserter_tier,
             );
             let machine_y = y_cursor + 5;
             let output_y = machine_y + mh as i32;
             fluid_port_ys = in_port_pipes.first().map(|&(_, _, py)| vec![py]).unwrap_or_default();
             fluid_port_pipes = in_port_pipes;
             fluid_output_port_pipes = out_port_pipes;
-            let input_ys = vec![y_cursor + 2, y_cursor + 3];
+            // Positional (far=y_cursor+2, near=y_cursor+3) mapped back to
+            // `solid_inputs`' natural order by item identity, since
+            // reassignment may have swapped which physical belt each item
+            // lives on.
+            let input_ys: Vec<i32> = solid_inputs
+                .iter()
+                .map(|f| if f.item == far_item { y_cursor + 2 } else { y_cursor + 3 })
+                .collect();
             // For solid output, `output_y` from the template is the
             // OUTPUT INSERTER row; the actual output belt is one tile
             // further south at `output_y + 1` (see `templates::
@@ -782,6 +807,10 @@ pub(crate) fn build_one_row(
         RowKind::FluidInput => {
             let solid_item = solid_inputs.first().map(|f| f.item.as_str()).unwrap_or("");
             let fluid_item = fluid_inputs.first().map(|f| f.item.as_str()).unwrap_or("");
+            let effective_count = spec.count.ceil().max(1.0);
+            let utilization = (spec.count / effective_count).min(1.0);
+            let solid_rate = solid_inputs.first().map(|f| f.rate).unwrap_or(0.0) * utilization;
+            let output_rate_pm = solid_outputs.first().map(|f| f.rate).unwrap_or(0.0) * utilization;
             let in_belt = row_input_belt(max_belt_tier);
             let (mw, mh) = machine_dims(&spec.entity);
             let (ents, rh, port_pipes) = templates::fluid_input_row(
@@ -798,6 +827,9 @@ pub(crate) fn build_one_row(
                 out_belt,
                 lane_split,
                 output_east,
+                solid_rate,
+                output_rate_pm,
+                max_inserter_tier,
             );
             fluid_port_ys = port_pipes.first().map(|&(_, _, py)| vec![py]).unwrap_or_default();
             fluid_port_pipes = port_pipes;
@@ -974,6 +1006,9 @@ pub(crate) fn build_one_row(
                 .map(|f| (1i32, f.item.as_str()))
                 .collect();
             let solid_out = solid_outputs.first().map(|f| f.item.as_str());
+            let effective_count = spec.count.ceil().max(1.0);
+            let utilization = (spec.count / effective_count).min(1.0);
+            let output_rate_pm = solid_outputs.first().map(|f| f.rate).unwrap_or(0.0) * utilization;
             let (ents, rh, in_port_pipes, out_port_pipes) = templates::fluid_multi_input_row(
                 &spec.recipe,
                 &spec.entity,
@@ -987,6 +1022,8 @@ pub(crate) fn build_one_row(
                 Some(out_belt),
                 lane_split,
                 output_east,
+                output_rate_pm,
+                max_inserter_tier,
             );
             fluid_port_ys = in_port_pipes.iter().map(|&(_, _, py)| py).collect();
             fluid_port_ys.sort_unstable();
@@ -1165,6 +1202,14 @@ pub(crate) fn build_one_row(
                 None
             };
             let fluid_in = fluid_inputs.first().map(|f| (f.item.as_str(), f.rate));
+            // Utilization scaling for the ladder-eligible (check-visible)
+            // rates only — near_item's own inserter and the output
+            // side(s). Major's/minor's INPUT demand stays unscaled here
+            // too (harmless: their inserters are hardcoded, unaffected
+            // by this factor) to avoid touching the existing belt-sizing
+            // rates this call site's other locals still depend on.
+            let effective_count = spec.count.ceil().max(1.0);
+            let utilization = (spec.count / effective_count).min(1.0);
             let (ents, rh, fluid_input_port_pipes) = templates::self_loop_row(
                 &spec.recipe,
                 &spec.entity,
@@ -1174,12 +1219,13 @@ pub(crate) fn build_one_row(
                 bus_width,
                 &major.item,
                 major.consumed_rate,
-                major.produced_rate,
+                major.produced_rate * utilization,
                 near_item,
-                near_net_rate,
-                minor,
+                near_net_rate * utilization,
+                minor.map(|(c, p)| (c, p * utilization)),
                 fluid_in,
                 max_belt_tier,
+                max_inserter_tier,
             );
             fluid_port_ys = fluid_input_port_pipes.first().map(|&(_, _, py)| vec![py]).unwrap_or_default();
             fluid_port_pipes = fluid_input_port_pipes;
@@ -1222,6 +1268,7 @@ pub(crate) fn build_one_row(
                 near_rate_per_machine,
                 far_rate,
                 max_belt_tier,
+                max_inserter_tier,
             );
             // Mirrors `templates::voider_row`'s row-offset constants:
             // near/tap belt at dy=6 (bus tap-off lands here), far/recirc
@@ -1251,6 +1298,7 @@ pub(crate) fn build_one_row(
                 input_total,
                 &sorted_items,
                 max_belt_tier,
+                max_inserter_tier,
             );
             sorted_output_belts = sorted_belts;
             // Scrap input belt at dy=0 (the bus tap lands here). The
