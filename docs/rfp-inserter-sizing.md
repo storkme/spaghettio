@@ -342,3 +342,11 @@ stop signal.
   item-blindness is provably harmless until Phase 2, which the
   attribution check precedes by construction. **v2 ready for
   acceptance → Phase 0v2.***
+- *2026-07-12 — reviewer's formal confirm landed: **SHIP**, no
+  transcription distortion, blocker sequencing verified
+  (single_input_row's `solid_inputs <= 1` row_kind guard makes
+  Phase 1 structurally item-blind-safe; the pre-Phase-2 check
+  landing means misassignment is caught same-commit). One scope
+  pin adopted: the attribution check covers `triple_input_row`'s
+  far/near pair as well as dual — Phase 2 bundles both, the check
+  is NOT dual-only.*
