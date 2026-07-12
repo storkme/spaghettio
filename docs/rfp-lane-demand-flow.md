@@ -134,11 +134,15 @@ belt tier is user-specified and never auto-escalated:
 3. **Branch A runtime**: if full-suite validation wall-time regresses
    more than 2× on the 1/s gauntlet corpus, drop the iterative model
    regardless of correctness.
-4. **Wrong root cause**: after the chosen fix, if logistic AND
-   military @1/s are not both PASS, or any golden hash moves under
-   Branch A (a validator-only change must not alter layouts), the
-   diagnosis was wrong — stop and re-run Phase 0 rather than
-   iterating on the fix.
+4. **Wrong root cause**: after the chosen fix, if any golden hash
+   moves under Branch A (a validator-only change must not alter
+   layouts), or the belt-model warnings persist at the warned
+   coordinates, the diagnosis was wrong — stop and re-run Phase 0
+   rather than iterating on the fix. (Original "logistic/military
+   must PASS" gate superseded 2026-07-12: honest inserter-throughput
+   warnings are EXPECTED to replace the belt-model warnings — see
+   decision log; the all-PASS gate belongs to the follow-up
+   inserter-sizing RFP.)
 5. **Scope fence (evidence gate)**: if utility@10/s's
    `input-rate-delivery` count does not drop by at least half under
    the fixed model, the mass warnings have a different root cause —
@@ -183,3 +187,33 @@ Per the CLAUDE.md layout-change protocol, plus:
   production@10/s runtime cliff, chemical@10/s errors) are separate
   work items that should be ranked AFTER this lens is clean.
   Pending review.*
+- *2026-07-12 — **Phase 0 resolved without the in-game run, and the
+  RFP gains a mandatory companion.** (a) Splitter backpressure
+  redistribution confirmed by the user as a domain call, consistent
+  with `docs/factorio-mechanics.md` — kill criterion 1 does not
+  fire; Branch A's belt-model premise stands. (b) Reviewing the
+  warned machine exposed a THIRD mechanism neither branch covered:
+  the gear machine needs 3.0 plates/s in and 1.5 gears/s out at
+  planned 100% utilization, but the template feeds and drains it
+  with ONE regular inserter per side (~0.84/s each, mechanics table
+  I8; blueprint-verified at the warned coordinates). The machine is
+  INSERTER-bound at ~28% regardless of belt delivery — the existing
+  warning reaches the right verdict via the wrong mechanism, and
+  shipping the walker fix alone would flip it to a false PASS.
+  Systemic: every template places one regular inserter per machine
+  side, so any machine whose per-side rate exceeds ~0.84/s is
+  silently capped engine-wide (the July review's "inserter-throughput
+  saturation unchecked" gap, now concrete). **Phase 1 therefore
+  ships as an inseparable pair**: the demand-pull walker model AND a
+  new inserter-throughput check (per machine side: required rate vs
+  Σ inserter rates by type from the I8 table, utilization-scaled).
+  Expected honest outcome: belt-model warnings are REPLACED by
+  inserter-throughput warnings and total counts may rise — that is
+  the lens getting cleaner. Kill criterion 4's "logistic/military
+  must PASS" gate transfers to the follow-up layout-side RFP
+  (inserter sizing: faster tiers or multiple inserters per hungry
+  machine side — touches every template and every golden, explicitly
+  out of scope here). The optional in-game run's observable, if
+  performed: inserter swinging nonstop over a full belt = inserter-
+  bound (expected); idle inserter over an empty belt = belt-bound
+  (would reopen Branch B).*
