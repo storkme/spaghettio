@@ -409,3 +409,46 @@ stop signal.
   tier3 ×2 10→10→10→0; tier4 14/14/58→6/6/24→4/4/17→0; tier5
   129→65/45/0; pentapod 2→2/2/0; fish 1→1/1/**1**; bacteria
   1→1/0/0. **Phase 1 (ladder + single_input_row) is GO.***
+- *2026-07-12 — **CORRECTION: the entry above is SUPERSEDED — KC1-v2
+  FIRES.** Two census runs emerged from the Phase 0v2 agent tree
+  with opposite verdicts, and reconciliation is unambiguous: the
+  PASS run evaluated KC1 against item-blind POOLED side ceilings — a
+  near-slot stack inserter's 12/s headroom "covering" a far item's
+  shortfall, which is physically impossible (a reach-1 inserter
+  cannot pick from the far belt). That is the exact item-blindness
+  failure class this RFP's own delta review flagged in the
+  validator; it claimed the census too. The corrected run
+  (`census_inserter_sizing_v2.rs`, gitignored; per-item per the
+  Phase 0v2 spec) reconciles 21/21, reproduces the zero-margin
+  case, caught+fixed its own inverted-reassignment bug, and
+  verified a real swap against recipes.json. **Corrected verdict:
+  47/700 item entries (6.71%) exceed; 45/593 aggregate (7.59%);
+  chemical/production/utility cannot reach zero (automation/
+  logistic/military can). Both KC1 conditions fire.** Phase 1 was
+  dispatched on the false PASS and hard-stopped before any code was
+  written; zero tree impact. Additional corrected geometry:
+  triple_input_row's input3-vs-output columns are ONE shared tile
+  (Interior/Last=1 shared, BridgeAnchor=0, Successor=0 — the earlier
+  "output=1 uniformly" fork claim was wrong); v1's "fluid_dual not
+  observed in corpus" comment was stale — it's the 4TH most common
+  row kind (22 sides; PU's own row). **Residue characterization
+  (what makes the fire tractable): 47/47 exceeding items are
+  reach-2/far.** Breakdown: fluid_dual_input_row 22 (its far solid
+  has a hard-0 budget AND the v2 reassignment lever was never
+  extended to it — a design OMISSION, not geometry; PU's
+  EC-vs-advanced-circuit inputs are 10:1, so extending hungry→near
+  would clear the dominant instance), dual 16 (far item exceeds the
+  1.2–2.4/s reach-2 ceiling in absolute terms — reassignment picks
+  WHICH item is far, not what far can carry), triple 6 (same, plus
+  the shared-tile correction), self_loop 3 (HasFluid near-wall:
+  budget genuinely 0, pentapod 3/s + fish 15/s). Also recorded:
+  self_loop major demand lives in `spec.self_loop`, invisible to
+  `check_inserter_throughput`'s required-rate math — a known check
+  gap, flagged not fixed. Predicted stack footprint 291 item-sides
+  (41.6%) — a cost-model question for Phase 4's UI regardless of
+  path. Per KC1's text the prescribed next step is template
+  redesign; the residue analysis suggests a cheaper intermediate
+  (extend lever (b) to fluid_dual_input_row, re-census) exists but
+  cannot clear the pack-zero condition alone (dual/triple absolute
+  far-ceiling cases remain in production/utility). **Awaiting user
+  decision on v3 direction.***
