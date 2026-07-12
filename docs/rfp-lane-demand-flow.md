@@ -217,3 +217,5 @@ Per the CLAUDE.md layout-change protocol, plus:
   performed: inserter swinging nonstop over a full belt = inserter-
   bound (expected); idle inserter over an empty belt = belt-bound
   (would reopen Branch B).*
+- *2026-07-12 — **accepted by user**. Phase 1 started: demand-pull
+  walker model + inserter-throughput check, shipped as a pair.*
