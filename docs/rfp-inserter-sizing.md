@@ -185,6 +185,20 @@ capacity).
 - The ~5 residual input-rate-delivery warnings from cyclic demand:
   separate (lane-demand-flow known limitation).
 
+**Future direction (user, 2026-07-12, recorded not scoped):** this
+ladder is the first step from stencil templates toward dynamic face
+allocation — a per-row pass where belts, inserters, bridges, AND
+pipes bid for face tiles under reach/throughput/adjacency
+constraints. Pipes are why that's a separate, bigger effort: fluid
+ports are prototype-fixed per orientation (allocation must search
+8 orientations), and pipe misplacement is hard-infeasibility
+(network merging), not cost. The census's position-budget model is
+the seed of the resource model; the ladder's unsatisfiable-side list
+(shortfall records) becomes the motivating dataset. Prerequisite
+evidence: two-plus phases of ladder contact with reality. See also
+the coal-liquefaction refusal (pipe wraparound) as the standing
+example of what stencil templates cannot express.
+
 ## Kill criteria
 
 1. **Phase 0v2 coverage gate**: census re-run with v2 ceilings
