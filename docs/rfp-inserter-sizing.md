@@ -581,3 +581,29 @@ stop signal.
   categories). Next: Phase 2 — attribution check in its own commit
   first, then dual/triple/quad/hstack ladders + the reassignment
   lever.*
+- *2026-07-12 — **Phase 2 LANDED** as the KC3-sequenced pair. Step A
+  (450bc3c, validator-only): `check_inserter_item_throughput`
+  (category `inserter-item-throughput`) — per machine per solid
+  item, carries-keyed, effective_rows-resolved from birth; the
+  canonical masked-side unit test asserts the aggregate check stays
+  clean while the item check warns; 20/21 predict-verify
+  reconciliation (the one mismatch is the census tool's blended-spec
+  pick_spec limitation — the check itself is exact; pinned at the
+  check's authoritative count). Step B (6a62efe, templates-only):
+  dual/triple/quad/hstack ladders with geometry-derived budgets +
+  the reassignment lever (hungry→near at the placer; input_ys and
+  carries follow items). **Scope ratification recorded**: far/
+  reach-2 count-ladders deferred to Phase 3 per the census's frozen
+  phase_for mapping — the after-P2 predictions were computed with
+  far at baseline, and the brief's contrary prose was wrong;
+  `contest_favors_far` is implemented (a far win denies near the
+  shared column) but places nothing until Phase 3. All 7 affected
+  fixtures hit the frozen after-P2 aggregate column to the digit;
+  tier2_from_ore reaches FULL ZERO in both categories; KC4 delta
+  exactly zero everywhere; KC6 clean (snapshot-verified EC row:
+  hungry copper-cable near on stack, iron-plate far on unchanged
+  LHI, fast output, carries following items). Remaining: Phase 3
+  (far/reach-2 ladders + fluid_input/fluid_dual solid sides +
+  fluid_dual reassignment + self_loop/voider/scrap whole rows) →
+  Phase 4 (max_inserter_tier UI + gauntlet close-out + in-game
+  anchors).*
