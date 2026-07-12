@@ -334,3 +334,11 @@ stop signal.
   folded in. (6) Phase 0v2 audits self_loop_row first (most complex
   untabled template). Pending final confirm on the blocker
   resolution, then acceptance for Phase 0v2.*
+- *2026-07-12 — review loop closed. The reviewer's transcript
+  re-verified the stack figures (draftsman prototype data, not
+  memory) and the zero-margin finding; the one open sequencing
+  question resolves by inspection: Phase 1 is `single_input_row`
+  only — one solid input per machine, so aggregate == per-item and
+  item-blindness is provably harmless until Phase 2, which the
+  attribution check precedes by construction. **v2 ready for
+  acceptance → Phase 0v2.***
