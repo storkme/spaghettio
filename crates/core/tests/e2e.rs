@@ -451,6 +451,30 @@ fn assert_no_warnings_except(result: &E2EResult, skip_categories: &[&str]) {
     panic!("{}", msg);
 }
 
+/// Assert the layout's warnings are EXACTLY the given `(category, count)`
+/// multiset — nothing more, nothing fewer — and that there are no errors.
+///
+/// Used to re-bless fixtures under the RFP `rfp-lane-demand-flow.md` Phase 1
+/// pair (demand-pull walker + inserter-throughput check): honest warning
+/// counts rise, so each fixture pins its *exact* expected breakdown by
+/// category rather than blanket-ignoring a category. The common case is a
+/// previously-clean fixture that now warns only on `inserter-throughput`
+/// (every template feeds/drains a machine with one ~0.84/s regular inserter,
+/// so any machine whose per-side rate exceeds that is inserter-bound).
+fn assert_warnings_exactly(result: &E2EResult, expected: &[(&str, usize)]) {
+    assert_no_errors(result);
+    let mut actual: std::collections::BTreeMap<&str, usize> = Default::default();
+    for w in result.issues.iter().filter(|i| i.severity == Severity::Warning) {
+        *actual.entry(w.category.as_str()).or_default() += 1;
+    }
+    let expected_map: std::collections::BTreeMap<&str, usize> =
+        expected.iter().copied().collect();
+    assert_eq!(
+        actual, expected_map,
+        "warning breakdown mismatch: actual {actual:?} vs expected {expected_map:?}"
+    );
+}
+
 fn assert_produces(result: &E2EResult, item: &str, min_rate: f64) {
     let actual = result
         .analysis
@@ -629,7 +653,10 @@ fn tier1_iron_gear_wheel() {
         .unwrap_or_else(|e| panic!("tier1_iron_gear_wheel: {e}"));
 
     assert_no_errors(&result);
-    assert_no_warnings(&result);
+    // RFP rfp-lane-demand-flow.md Phase 1: 10 gear machines (AM1, 1 gear/s each
+    // for 10/s) × 2 inserter-bound sides — 2.0/s iron-plate in and 1.0/s gears out,
+    // both over the 0.84/s regular-inserter cap. One regular inserter per side.
+    assert_warnings_exactly(&result, &[("inserter-throughput", 20)]);
     assert_produces(&result, "iron-gear-wheel", 10.0);
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier1_iron_gear_wheel");
@@ -754,7 +781,9 @@ fn tier1_iron_gear_wheel_from_ore() {
     .unwrap_or_else(|e| panic!("tier1_iron_gear_wheel_from_ore: {e}"));
 
     assert_no_errors(&result);
-    assert_no_warnings(&result);
+    // RFP Phase 1: 14 inserter-bound machine-sides (gear + from-ore smelting chain;
+    // every side's per-machine rate exceeds the 0.84/s regular-inserter cap).
+    assert_warnings_exactly(&result, &[("inserter-throughput", 14)]);
     assert_produces(&result, "iron-gear-wheel", 10.0);
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier1_iron_gear_wheel_from_ore");
@@ -768,7 +797,9 @@ fn tier1_iron_gear_wheel_20s() {
         .unwrap_or_else(|e| panic!("tier1_iron_gear_wheel_20s: {e}"));
 
     assert_no_errors(&result);
-    assert_no_warnings(&result);
+    // RFP Phase 1: 28 inserter-bound machine-sides at 20/s (more gear machines than
+    // the 10/s case; each side > 0.84/s).
+    assert_warnings_exactly(&result, &[("inserter-throughput", 28)]);
     assert_produces(&result, "iron-gear-wheel", 20.0);
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier1_iron_gear_wheel_20s");
@@ -860,7 +891,9 @@ fn tier2_electronic_circuit() {
     .unwrap_or_else(|e| panic!("tier2_electronic_circuit: {e}"));
 
     assert_no_errors(&result);
-    assert_no_warnings(&result);
+    // RFP Phase 1: 34 inserter-bound machine-sides (electronic-circuit chain —
+    // copper-cable + EC assemblers, sides over the 0.84/s regular-inserter cap).
+    assert_warnings_exactly(&result, &[("inserter-throughput", 34)]);
     assert_produces(&result, "electronic-circuit", 10.0);
     assert_round_trip(&result);
 }
@@ -914,7 +947,9 @@ fn tier2_electronic_circuit_from_ore() {
     .unwrap_or_else(|e| panic!("tier2_electronic_circuit_from_ore: {e}"));
 
     assert_no_errors(&result);
-    assert_no_warnings(&result);
+    // RFP Phase 1: 50 inserter-bound machine-sides (EC fully from ore, incl. the
+    // added iron/copper smelting rows; each side > 0.84/s).
+    assert_warnings_exactly(&result, &[("inserter-throughput", 50)]);
     assert_produces(&result, "electronic-circuit", 10.0);
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier2_electronic_circuit_from_ore");
@@ -938,7 +973,8 @@ fn tier2_electronic_circuit_20s_from_ore() {
     .unwrap_or_else(|e| panic!("tier2_electronic_circuit_20s_from_ore: {e}"));
 
     assert_no_errors(&result);
-    assert_no_warnings(&result);
+    // RFP Phase 1: 68 inserter-bound machine-sides (EC from ore at 20/s).
+    assert_warnings_exactly(&result, &[("inserter-throughput", 68)]);
     assert_produces(&result, "electronic-circuit", 20.0);
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier2_electronic_circuit_20s_from_ore");
@@ -1014,7 +1050,9 @@ fn tier3_plastic_bar() {
             .unwrap_or_else(|e| panic!("tier3_plastic_bar: {e}"));
 
     assert_no_errors(&result);
-    assert_no_warnings(&result);
+    // RFP Phase 1: 10 inserter-bound machine-sides (plastic-bar chemical plants —
+    // petroleum arrives by pipe, but coal in and plastic out both exceed 0.84/s).
+    assert_warnings_exactly(&result, &[("inserter-throughput", 10)]);
     assert_produces(&result, "plastic-bar", 10.0);
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier3_plastic_bar");
@@ -1032,7 +1070,9 @@ fn tier3_plastic_bar_from_crude() {
             .unwrap_or_else(|e| panic!("tier3_plastic_bar_from_crude: {e}"));
 
     assert_no_errors(&result);
-    assert_no_warnings(&result);
+    // RFP Phase 1: 10 inserter-bound machine-sides (plastic-bar from crude — same
+    // chemical-plant sides over 0.84/s as the plate-fed variant).
+    assert_warnings_exactly(&result, &[("inserter-throughput", 10)]);
     assert_produces(&result, "plastic-bar", 10.0);
     assert_round_trip(&result);
 }
@@ -1224,7 +1264,8 @@ fn tier4_advanced_circuit_from_plates() {
     .unwrap_or_else(|e| panic!("tier4_advanced_circuit_from_plates: {e}"));
 
     assert_no_errors(&result);
-    assert_no_warnings(&result);
+    // RFP Phase 1: 14 inserter-bound machine-sides (advanced-circuit @1/s chain).
+    assert_warnings_exactly(&result, &[("inserter-throughput", 14)]);
     assert_produces(&result, "advanced-circuit", 1.0);
     assert_round_trip(&result);
 }
@@ -1275,7 +1316,9 @@ fn tier4_advanced_circuit_partitioned() {
          partitioner did not fire on the motivating case"
     );
     assert_no_errors(&result);
-    assert_no_warnings(&result);
+    // RFP Phase 1: 14 inserter-bound machine-sides (same machine set as the Pooled
+    // tier4 AC@1/s above; partitioning changes lanes, not per-machine rates).
+    assert_warnings_exactly(&result, &[("inserter-throughput", 14)]);
 }
 
 /// Regression test for the pipe-as-port-tile bug. URL:
@@ -1340,9 +1383,23 @@ fn tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing() {
     let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
     let warnings: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Warning).collect();
 
+    // RFP rfp-lane-demand-flow.md Phase 1: this belt-pipe SAT-zone regression
+    // guards capped clusters + validation cleanliness, both orthogonal to the
+    // new inserter-throughput check. Every machine here (chemical-plants at
+    // 1.0/s in + 2.0/s out, etc.) is fed/drained by one ~0.84/s regular
+    // inserter, so the honest warnings are all inserter-throughput. Assert the
+    // SAT-zone concern first (no OTHER warning category, no errors, no caps),
+    // then pin the exact inserter-throughput count.
+    let non_inserter_warnings: Vec<_> = warnings
+        .iter()
+        .filter(|i| i.category != "inserter-throughput")
+        .copied()
+        .collect();
+
     let bad =
-        !errors.is_empty() || !warnings.is_empty() || !capped.is_empty();
+        !errors.is_empty() || !non_inserter_warnings.is_empty() || !capped.is_empty();
     if bad {
+        let warnings = &non_inserter_warnings;
         let cap_lines = capped
             .iter()
             .map(|(x, y, r)| format!("  capped at ({x},{y}) reason={r}"))
@@ -1363,6 +1420,15 @@ fn tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing() {
              expected zero capped clusters and a clean validation, got:\n{cap_lines}\n{err_lines}\n{warn_lines}"
         );
     }
+
+    // 82 inserter-bound machine-sides (AC@7/s HorizontalStack). Every machine
+    // is inserter-bound, so demand-pull leaves no belt-delivery warnings here.
+    let inserter_throughput_count =
+        warnings.iter().filter(|i| i.category == "inserter-throughput").count();
+    assert_eq!(
+        inserter_throughput_count, 82,
+        "{test_name}: expected exactly 82 inserter-throughput warnings"
+    );
 }
 
 /// Regression test for the deferred-exit bug at adjacent clusters.
@@ -1577,7 +1643,14 @@ fn tier4_advanced_circuit_from_ore_am2() {
     .unwrap_or_else(|e| panic!("tier4_advanced_circuit_from_ore_am2: {e}"));
 
     assert_no_errors(&result);
-    assert_no_warnings(&result);
+    // RFP Phase 1: 58 inserter-bound machine-sides, PLUS 1 residual input-rate-delivery
+    // at (29,140) — a copper-cable machine needing 4.3/s (already inserter-bound: one
+    // 0.84/s inserter) whose belt the demand-pull walker under-estimates at ~4.1/s.
+    // This is the documented demand-pull limitation: backward demand slightly
+    // over-inflates inside balancer feedback cycles, stealing from an adjacent
+    // acyclic branch. Even-split delivered ≥4.3 here, so it is a modeling residual,
+    // not a real starvation. See report / rfp-lane-demand-flow.md.
+    assert_warnings_exactly(&result, &[("input-rate-delivery", 1), ("inserter-throughput", 58)]);
     assert_produces(&result, "advanced-circuit", 5.0);
     assert_round_trip(&result);
 }
@@ -1611,7 +1684,11 @@ fn tier5_processing_unit_from_ore_am3() {
     .unwrap_or_else(|e| panic!("tier5_processing_unit_from_ore_am3: {e}"));
 
     assert_no_errors(&result);
-    assert_no_warnings(&result);
+    // RFP Phase 1: 129 inserter-bound machine-sides (processing-unit @2/s deep chain).
+    // Demand-pull + the UG-crossing demand fix clear every prior belt-delivery false
+    // positive across this layout's underground hops; the residual is purely
+    // inserter-throughput.
+    assert_warnings_exactly(&result, &[("inserter-throughput", 129)]);
     assert_produces(&result, "processing-unit", 2.0);
     assert_round_trip(&result);
 }
@@ -1931,7 +2008,8 @@ fn tier_pentapod_egg_self_loop() {
     .unwrap_or_else(|e| panic!("tier_pentapod_egg_self_loop: {e}"));
 
     assert_no_errors(&result);
-    assert_no_warnings(&result);
+    // RFP Phase 1: 2 inserter-bound machine-sides (pentapod-egg biochamber self-loop).
+    assert_warnings_exactly(&result, &[("inserter-throughput", 2)]);
     assert_produces(&result, "pentapod-egg", 0.2);
 
     let biochamber_count =
@@ -1975,7 +2053,8 @@ fn tier_fish_breeding_self_loop() {
     .unwrap_or_else(|e| panic!("tier_fish_breeding_self_loop: {e}"));
 
     assert_no_errors(&result);
-    assert_no_warnings(&result);
+    // RFP Phase 1: 1 inserter-bound machine-side (raw-fish self-loop).
+    assert_warnings_exactly(&result, &[("inserter-throughput", 1)]);
     assert_produces(&result, "raw-fish", 0.15);
 
     let chemical_plant_count =
@@ -2035,7 +2114,8 @@ fn tier_bacteria_self_loop_regression() {
     .unwrap_or_else(|e| panic!("tier_bacteria_self_loop_regression: {e}"));
 
     assert_no_errors(&result);
-    assert_no_warnings(&result);
+    // RFP Phase 1: 1 inserter-bound machine-side (iron-bacteria self-loop).
+    assert_warnings_exactly(&result, &[("inserter-throughput", 1)]);
     assert_produces(&result, "iron-bacteria", 1.0);
 
     let biochamber_count =
@@ -2620,7 +2700,8 @@ fn stress_electronic_circuit_30s_from_ore() {
             // fluid-reservation filter + promote_blocked_encountered +
             // perimeter-boundary check landed.
             max_errors: 0,
-            max_warnings: 0,
+            // RFP rfp-lane-demand-flow.md Phase 1: was 0; +104 inserter-throughput (100) + input-rate-delivery (4).
+            max_warnings: 104,
             max_errors_by_category: Default::default(),
         },
     );
@@ -2725,7 +2806,8 @@ fn stress_advanced_circuit_partitioned_5s_from_plates() {
         &partitioned,
         StressBaseline {
             max_errors: 3,
-            max_warnings: 1,
+            // RFP rfp-lane-demand-flow.md Phase 1: was 1; now 58 inserter-throughput (prior 1 belt-model warning cleared by demand-pull).
+            max_warnings: 58,
             max_errors_by_category: Default::default(),
         },
         PartitionedStressBaseline {
@@ -2737,7 +2819,8 @@ fn stress_advanced_circuit_partitioned_5s_from_plates() {
             // (input-rate-delivery warnings) and the pole-repair Chebyshev/
             // Euclidean mismatch left disconnected poles (power warnings). With
             // both fixed, post-fix actual count is 0.
-            max_warnings_partitioned: 0,
+            // RFP rfp-lane-demand-flow.md Phase 1: 58 inserter-throughput (PartitionedDecomposed, same inserter-bound machines as Pooled).
+            max_warnings_partitioned: 58,
             // 1 rejection: EC module hits 89% of per-side capacity on blue belt
             // at AC=5/s. Documented as expected behavior, not a violation.
             max_partition_rejections: 1,
@@ -2790,7 +2873,8 @@ fn stress_advanced_circuit_partitioned_4s_from_plates() {
         &partitioned,
         StressBaseline {
             max_errors: 1,
-            max_warnings: 0,
+            // RFP rfp-lane-demand-flow.md Phase 1: was 0; +48 inserter-throughput.
+            max_warnings: 48,
             max_errors_by_category: Default::default(),
         },
         PartitionedStressBaseline {
@@ -2798,7 +2882,8 @@ fn stress_advanced_circuit_partitioned_4s_from_plates() {
             max_errors_by_category_partitioned: Default::default(),
             // Post-fix (clean-slate SAT zone + pole-repair Euclidean): 0.
             // The PR #207 baseline of 33 was probed before those landed.
-            max_warnings_partitioned: 0,
+            // RFP rfp-lane-demand-flow.md Phase 1: 48 inserter-throughput (PartitionedDecomposed, same inserter-bound machines as Pooled).
+            max_warnings_partitioned: 48,
             max_partition_rejections: 0,
         },
     );
@@ -3574,7 +3659,8 @@ fn stress_electronic_circuit_60s_red_from_ore() {
         &result,
         StressBaseline {
             max_errors: 1,
-            max_warnings: 0,
+            // RFP rfp-lane-demand-flow.md Phase 1: was 0; +200 inserter-throughput.
+            max_warnings: 200,
             max_errors_by_category: Default::default(),
         },
     );
@@ -3608,7 +3694,8 @@ fn stress_electronic_circuit_22s_from_ore() {
         &result,
         StressBaseline {
             max_errors: 0,
-            max_warnings: 1,
+            // RFP rfp-lane-demand-flow.md Phase 1: was 1; now 74 inserter-throughput (prior belt-model warning cleared).
+            max_warnings: 74,
             max_errors_by_category: Default::default(),
         },
     );
@@ -3633,7 +3720,8 @@ fn stress_electronic_circuit_23s_from_ore() {
         &result,
         StressBaseline {
             max_errors: 0,
-            max_warnings: 1,
+            // RFP rfp-lane-demand-flow.md Phase 1: was 1; now 78 inserter-throughput (prior belt-model warning cleared).
+            max_warnings: 78,
             max_errors_by_category: Default::default(),
         },
     );
@@ -3668,7 +3756,8 @@ fn stress_electronic_circuit_35s_from_ore() {
             // present at this scoreboard for a long time. Tighten when
             // the upstream layout-pipeline bugs (e.g. #297) get fixed.
             max_errors: 4,
-            max_warnings: 123,
+            // RFP rfp-lane-demand-flow.md Phase 1: was 123 (88 belt-flow-reachability + 35 input-rate-delivery); now +118 inserter-throughput = 241.
+            max_warnings: 241,
             max_errors_by_category: [
                 ("belt-dead-end".to_string(), 4),
             ].into_iter().collect(),
@@ -3707,7 +3796,8 @@ fn stress_electronic_circuit_40s_from_ore() {
             // for a long time. Tighten when the upstream layout-pipeline
             // bugs (e.g. #297) get fixed.
             max_errors: 13,
-            max_warnings: 195,
+            // RFP rfp-lane-demand-flow.md Phase 1: was 195; now +inserter-throughput = 329 (belt-flow-reachability + input-rate-delivery unchanged).
+            max_warnings: 329,
             max_errors_by_category: [
                 ("belt-dead-end".to_string(), 13),
             ].into_iter().collect(),

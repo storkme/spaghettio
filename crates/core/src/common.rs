@@ -215,6 +215,28 @@ pub fn inserter_reach(name: &str) -> i32 {
     }
 }
 
+/// Approximate steady-state throughput (items/second) of an inserter,
+/// from `docs/factorio-mechanics.md` table I8.
+///
+/// Assumption: **no inserter-capacity / stack-bonus research** — these are
+/// the base (unresearched) rates a fresh factory sees. Values are
+/// `rotation_speed × 60 × items_per_swing`, adjusted for the observed
+/// extension delay on the fast inserter (table I8 note). Bases:
+/// regular ~0.84/s, long-handed ~1.2/s (faster per cycle than regular —
+/// the "long arm = slow" intuition is wrong, per I8), fast ~2.31/s,
+/// stack ~12/s base, bulk 2.4/s base. Unknown names fall back to the
+/// regular rate (conservative — never over-credits an unknown inserter).
+pub fn inserter_throughput(name: &str) -> f64 {
+    match name {
+        "inserter" => 0.84,
+        "long-handed-inserter" => 1.2,
+        "fast-inserter" => 2.31,
+        "stack-inserter" => 12.0,
+        "bulk-inserter" => 2.4,
+        _ => 0.84,
+    }
+}
+
 /// Map underground-belt entity name to its corresponding surface belt tier.
 pub fn ug_to_surface_tier(ug_name: &str) -> &'static str {
     match ug_name {

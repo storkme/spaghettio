@@ -13,10 +13,10 @@ use std::collections::VecDeque;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::common::{
-    dir_to_vec, fluid_only_recipes, inserter_reach, inserter_target_lane, is_belt_entity,
-    is_inserter, is_machine_entity, is_splitter, is_surface_belt, is_ug_belt,
-    splitter_second_tile, ug_max_reach, ug_to_surface_tier, lane_capacity, machine_dims,
-    machine_tiles, LANE_LEFT,
+    belt_throughput, dir_to_vec, fluid_only_recipes, inserter_reach, inserter_target_lane,
+    is_belt_entity, is_inserter, is_machine_entity, is_splitter, is_surface_belt, is_ug_belt,
+    splitter_second_tile, splitter_to_surface_tier, ug_max_reach, ug_to_surface_tier,
+    lane_capacity, machine_dims, machine_tiles, LANE_LEFT,
 };
 use crate::models::{EntityDirection, LayoutResult, PlacedEntity, SolverResult};
 
@@ -1854,27 +1854,40 @@ fn splitter_output_rates(
 /// becomes `[L=7.5, R=7.5]` per output half).
 ///
 /// `a_total` / `b_total` are each tile's already-summed (left + right)
-/// input contribution. Default behavior splits the combined total evenly
-/// across all four output sub-lanes (both tiles get `total / 4` per
-/// lane) — this must stay bit-for-bit equivalent to the pre-existing
-/// `total / 4.0` formula so non-loop splitters see zero behavior change.
-/// When `loop_priority_rate` is `Some(cap)` and exactly one of
+/// input contribution. The pooled `total` is split between the two output
+/// tiles by downstream **demand** ([`allocate_by_demand`], RFP
+/// `rfp-lane-demand-flow.md` Phase 1 Branch A) — modeling a splitter that
+/// redistributes under backpressure toward the output whose consumers draw
+/// faster, capped per output by belt capacity `cap`. When the two outputs
+/// have equal or absent demand (`demand_a ≈ demand_b`, e.g. balancer
+/// internals whose halves reach the same consumers, or demand-free belt
+/// stubs), the allocation is an exact even split — bit-for-bit equivalent
+/// to the pre-existing `total / 4.0` formula, so those cases see zero
+/// behavior change. Each output tile's scalar allocation is then spread
+/// evenly across its own two lanes (the lane-mixing model).
+///
+/// When `loop_priority_rate` is `Some(loop_cap)` and exactly one of
 /// `a_is_loop_branch` / `b_is_loop_branch` is `true`, the loop branch
-/// instead receives `min(total, cap)` (split evenly across its own two
-/// lanes) and the other branch the remainder. Falls back to the
-/// symmetric split under the same ambiguous-flagging conditions as
+/// instead receives `min(total, loop_cap)` (split evenly across its own two
+/// lanes) and the other branch the remainder — this **overrides**
+/// demand-pull (priority splitters, self-loop/voider rows). Falls back to
+/// the symmetric split under the same ambiguous-flagging conditions as
 /// [`splitter_output_rates`].
+#[allow(clippy::too_many_arguments)]
 fn splitter_output_rates_mixed(
     a_total: f64,
     b_total: f64,
     loop_priority_rate: Option<f64>,
     a_is_loop_branch: bool,
     b_is_loop_branch: bool,
+    demand_a: f64,
+    demand_b: f64,
+    cap: f64,
 ) -> ([f64; 2], [f64; 2]) {
     let total = a_total + b_total;
-    if let Some(cap) = loop_priority_rate {
+    if let Some(loop_cap) = loop_priority_rate {
         if a_is_loop_branch != b_is_loop_branch {
-            let loop_share = total.min(cap.max(0.0));
+            let loop_share = total.min(loop_cap.max(0.0));
             let export_share = (total - loop_share).max(0.0);
             let loop_half = [loop_share / 2.0, loop_share / 2.0];
             let export_half = [export_share / 2.0, export_share / 2.0];
@@ -1885,8 +1898,205 @@ fn splitter_output_rates_mixed(
             };
         }
     }
-    let per_lane = total / 4.0;
-    ([per_lane, per_lane], [per_lane, per_lane])
+    let (out_a, out_b) = allocate_by_demand(total, demand_a, demand_b, cap);
+    ([out_a / 2.0, out_a / 2.0], [out_b / 2.0, out_b / 2.0])
+}
+
+/// Allocate a splitter's total throughput `total` between its two output
+/// tiles by downstream demand (RFP `rfp-lane-demand-flow.md` Phase 1 Branch
+/// A). Returns `(out_a, out_b)` with `out_a + out_b == total` except when
+/// the input genuinely exceeds `2 × cap` (over-capacity, surfaced by the
+/// lane-throughput check).
+///
+/// Real splitters redistribute under backpressure: an output whose consumer
+/// draws faster keeps pulling while a backed-up output spills to the other.
+/// This models the steady state by splitting `total` **in proportion to
+/// downstream demand** — when supply meets aggregate demand
+/// (`total == demand_a + demand_b`) each output receives exactly its demand;
+/// on undersupply both starve proportionally (so a truly under-fed consumer
+/// still surfaces as a shortfall); on oversupply both scale up together, then
+/// each is clamped to belt capacity `cap` with the overflow spilled to the
+/// other output. A symmetric or absent demand signal (`demand_a ≈ demand_b`,
+/// or both zero) is an exact even split, byte-identical to the legacy 50/50
+/// model.
+///
+/// The allocation is deliberately **smooth in `total`** (a single linear
+/// ramp, not the piecewise meet-demand/spill split an earlier draft used):
+/// the demands are static, but `total` oscillates across iterations inside
+/// balancer feedback loops, and a kink at `total == demand_sum` there turns
+/// the forward fixed point into a limit cycle that never converges (observed
+/// on processing-unit@2/s — RFP kill-criterion-2 probe). Proportional
+/// splitting keeps the per-iteration map non-expansive, so the loop
+/// converges at the same rate as the legacy even-split model.
+fn allocate_by_demand(total: f64, demand_a: f64, demand_b: f64, cap: f64) -> (f64, f64) {
+    const DEMAND_EPS: f64 = 1e-6;
+    let demand_sum = demand_a + demand_b;
+    if demand_sum <= DEMAND_EPS || (demand_a - demand_b).abs() <= DEMAND_EPS {
+        let half = total / 2.0;
+        return (half, half);
+    }
+    // Proportional to demand (continuous in `total`).
+    let mut a = total * demand_a / demand_sum;
+    let mut b = total - a;
+    // Clamp each output to belt capacity, spilling the overflow to the other
+    // (whose consumer can still draw it). If both would exceed `cap` the input
+    // is over 2× belt capacity — a real over-capacity the lane-throughput
+    // check surfaces; here we just clamp and leave the impossible surplus off.
+    if a > cap {
+        b += a - cap;
+        a = cap;
+    }
+    if b > cap {
+        a = (a + (b - cap)).min(cap);
+        b = cap;
+    }
+    (a, b)
+}
+
+/// Backward demand propagation for the lane-rate walker (RFP
+/// `rfp-lane-demand-flow.md` Phase 1). Returns, per belt tile, the total
+/// downstream machine-input demand reachable by flowing forward from that
+/// tile — the weight [`allocate_by_demand`] uses to route splitter output.
+///
+/// `base_demand` seeds each machine-input-inserter pickup tile with its
+/// share of the (utilization-scaled) required rate. Demand flows upstream
+/// over the reverse of the forward feeder graph (`demand_feeders`, which
+/// mirrors `feeders` plus the underground `behind → ug-output` edge).
+/// Splitters **pool**: the demand at a pair's two output tiles is summed
+/// and distributed across all the pair's input feeders, so a multi-stage
+/// balancer routes correctly at every stage, not just the last.
+///
+/// Ordering is a reverse-topological Gauss-Seidel sweep (consumers before
+/// feeders) so a straight run's demand propagates its full length in a
+/// single sweep instead of one tile per iteration — the same reason the
+/// forward pass primes with a Kahn sort before iterating. Belt cycles
+/// (balancer feedback) that the ordering can't place are appended and
+/// resolved by repeating the sweep up to `budget` times; their demand is
+/// symmetric anyway, so it converges fast and only ever feeds the even
+/// fallback. Returns `(demand, sweeps_used)`.
+fn compute_demand(
+    belt_dir_map: &FxHashMap<(i32, i32), EntityDirection>,
+    feeders: &FxHashMap<(i32, i32), Vec<((i32, i32), u8)>>,
+    splitter_sibling: &FxHashMap<(i32, i32), (i32, i32)>,
+    ug_output_tiles: &FxHashSet<(i32, i32)>,
+    ug_output_to_input: &FxHashMap<(i32, i32), (i32, i32)>,
+    ug_input_dir: &FxHashMap<(i32, i32), EntityDirection>,
+    base_demand: &FxHashMap<(i32, i32), f64>,
+    budget: usize,
+) -> (FxHashMap<(i32, i32), f64>, usize) {
+    // Upstream feeders per tile (positions only) plus the UG tunnel edge.
+    let mut demand_feeders: FxHashMap<(i32, i32), Vec<(i32, i32)>> = FxHashMap::default();
+    for (&v, fs) in feeders {
+        demand_feeders.insert(v, fs.iter().map(|&(fp, _)| fp).collect());
+    }
+    for &ug_out in ug_output_tiles {
+        if let Some(&pin) = ug_output_to_input.get(&ug_out) {
+            if let Some(&idir) = ug_input_dir.get(&pin) {
+                let (idx, idy) = dir_to_vec(idir);
+                let behind = (pin.0 - idx, pin.1 - idy);
+                if belt_dir_map.contains_key(&behind) {
+                    demand_feeders.entry(ug_out).or_default().push(behind);
+                }
+            }
+        }
+    }
+
+    let feeder_count: FxHashMap<(i32, i32), usize> = belt_dir_map
+        .keys()
+        .map(|&t| (t, demand_feeders.get(&t).map_or(0, |f| f.len())))
+        .collect();
+    // consumers[u] = tiles u feeds (inverse of demand_feeders).
+    let mut consumers: FxHashMap<(i32, i32), Vec<(i32, i32)>> = FxHashMap::default();
+    for (&v, fs) in &demand_feeders {
+        for &fp in fs {
+            consumers.entry(fp).or_default().push(v);
+        }
+    }
+
+    // Reverse-topological order (consumers before feeders) via Kahn on the
+    // reverse graph. Tiles left in belt cycles are appended afterwards.
+    let mut out_degree: FxHashMap<(i32, i32), usize> = belt_dir_map
+        .keys()
+        .map(|&t| (t, consumers.get(&t).map_or(0, |c| c.len())))
+        .collect();
+    let mut order: Vec<(i32, i32)> = Vec::with_capacity(belt_dir_map.len());
+    let mut placed: FxHashSet<(i32, i32)> = FxHashSet::default();
+    let mut q: VecDeque<(i32, i32)> = out_degree
+        .iter()
+        .filter(|(_, &d)| d == 0)
+        .map(|(&t, _)| t)
+        .collect();
+    while let Some(u) = q.pop_front() {
+        if !placed.insert(u) {
+            continue;
+        }
+        order.push(u);
+        if let Some(fs) = demand_feeders.get(&u) {
+            for &fp in fs {
+                if let Some(d) = out_degree.get_mut(&fp) {
+                    *d = d.saturating_sub(1);
+                    if *d == 0 {
+                        q.push_back(fp);
+                    }
+                }
+            }
+        }
+    }
+    for &t in belt_dir_map.keys() {
+        if placed.insert(t) {
+            order.push(t);
+        }
+    }
+
+    let pull_from = |v: (i32, i32), demand: &FxHashMap<(i32, i32), f64>| -> f64 {
+        if let Some(&sib) = splitter_sibling.get(&v) {
+            // Splitter output: pool the pair's demand across all its feeders.
+            let pooled =
+                demand.get(&v).copied().unwrap_or(0.0) + demand.get(&sib).copied().unwrap_or(0.0);
+            let cnt = feeder_count.get(&v).copied().unwrap_or(0)
+                + feeder_count.get(&sib).copied().unwrap_or(0);
+            if cnt > 0 {
+                pooled / cnt as f64
+            } else {
+                0.0
+            }
+        } else {
+            let cnt = feeder_count.get(&v).copied().unwrap_or(0);
+            if cnt > 0 {
+                demand.get(&v).copied().unwrap_or(0.0) / cnt as f64
+            } else {
+                0.0
+            }
+        }
+    };
+
+    const EPS: f64 = 1e-5;
+    let mut demand: FxHashMap<(i32, i32), f64> =
+        belt_dir_map.keys().map(|&t| (t, 0.0)).collect();
+    let mut sweeps = 0usize;
+    for _ in 0..budget.max(1) {
+        sweeps += 1;
+        let mut max_change: f64 = 0.0;
+        // Gauss-Seidel: update in place in reverse-topo order so acyclic
+        // demand settles in one sweep.
+        for &u in &order {
+            let mut val = base_demand.get(&u).copied().unwrap_or(0.0);
+            if let Some(cons) = consumers.get(&u) {
+                for &v in cons {
+                    val += pull_from(v, &demand);
+                }
+            }
+            let prev = demand.insert(u, val).unwrap_or(0.0);
+            let change = (val - prev).abs();
+            if change > max_change {
+                max_change = change;
+            }
+        }
+        if max_change < EPS {
+            break;
+        }
+    }
+    (demand, sweeps)
 }
 
 pub fn compute_lane_rates(
@@ -2488,6 +2698,127 @@ fn compute_lane_rates_impl(
         }
     }
 
+    // Backward demand pass (RFP rfp-lane-demand-flow.md Phase 1 Branch A).
+    // Seed each machine-input-inserter pickup tile with its share of the
+    // machine's utilization-scaled required rate, then propagate that demand
+    // upstream so the splitter allocation below can route toward it instead
+    // of splitting 50/50.
+    let mut input_ins_count: FxHashMap<((i32, i32), String), usize> = FxHashMap::default();
+    let mut input_ins: Vec<((i32, i32), (i32, i32), String)> = Vec::new();
+    for ins in &layout.entities {
+        if !is_inserter(&ins.name) {
+            continue;
+        }
+        let (dx, dy) = dir_to_vec(ins.direction);
+        let reach = inserter_reach(&ins.name);
+        let drop_pos = (ins.x + dx * reach, ins.y + dy * reach);
+        let pickup_pos = (ins.x - dx * reach, ins.y - dy * reach);
+        if !machine_tiles_set.contains(&drop_pos) || !belt_dir_map.contains_key(&pickup_pos) {
+            continue;
+        }
+        let mpos = match machine_by_tile.get(&drop_pos) {
+            Some(&p) => p,
+            None => continue,
+        };
+        let item = match belt_carries.get(&pickup_pos).and_then(|c| c.as_deref()) {
+            Some(i) => i.to_string(),
+            None => continue,
+        };
+        *input_ins_count.entry((mpos, item.clone())).or_insert(0) += 1;
+        input_ins.push((pickup_pos, mpos, item));
+    }
+    let mut base_demand: FxHashMap<(i32, i32), f64> = FxHashMap::default();
+    for (pickup, mpos, item) in &input_ins {
+        let me = match machine_entity.get(mpos) {
+            Some(e) => e,
+            None => continue,
+        };
+        let spec = match me.recipe.as_deref().and_then(|r| recipe_to_spec.get(r)) {
+            Some(s) => *s,
+            None => continue,
+        };
+        let effective_count = spec.count.ceil().max(1.0);
+        let utilization = (spec.count / effective_count).min(1.0);
+        let required = spec
+            .inputs
+            .iter()
+            .find(|i| &i.item == item)
+            .map(|i| i.rate * utilization)
+            .unwrap_or(0.0);
+        if required <= 0.0 {
+            continue;
+        }
+        let count = input_ins_count
+            .get(&(*mpos, item.clone()))
+            .copied()
+            .unwrap_or(1);
+        *base_demand.entry(*pickup).or_insert(0.0) += required / count as f64;
+    }
+
+    // Convergence budget (RFP kill criterion 2): a HARD `3 × segment_count`,
+    // bounding both the demand pass and the forward fixed-point pass. Here a
+    // belt "segment" is one tile of the belt graph — the walker's actual
+    // propagation unit. This is the reading under which the hard budget
+    // accommodates the walker's *pre-existing*, demand-independent balancer
+    // convergence: a bare (3, 3) library template (33 tiles) needs 90
+    // even-split iterations, which `3 × distinct-segment-ids` (= 3) cannot
+    // cover but `3 × belt_tiles` (= 99) does — and it stays meaningful, since
+    // a well-conditioned fixed point converges in O(tiles) and only genuine
+    // oscillation/divergence exceeds 3× that. Measured max across the corpus
+    // is 313 iters on the 5118-tile utility layout (0.02 × its budget); the
+    // kill criterion fires nowhere. See docs/rfp-lane-demand-flow.md.
+    let segment_count = belt_dir_map.len().max(1);
+    let budget = 3 * segment_count;
+
+    let (demand, demand_sweeps) = compute_demand(
+        &belt_dir_map,
+        &feeders,
+        &splitter_sibling,
+        &ug_output_tiles,
+        &ug_output_to_input,
+        &ug_input_dir,
+        &base_demand,
+        budget,
+    );
+
+    // Underground-belt input → its paired output (tunnel exit). A splitter
+    // whose output feeds a UG-input has its immediate downstream *inside* the
+    // tunnel — a tile that isn't in `belt_dir_map` — so the demand behind the
+    // tunnel must be read at the exit, or proportional splitting would route
+    // zero flow across every UG hop (observed as 0.0/s starvation on
+    // processing-unit@2/s).
+    let ug_input_to_output: FxHashMap<(i32, i32), (i32, i32)> = ug_output_to_input
+        .iter()
+        .map(|(&out, &inp)| (inp, out))
+        .collect();
+
+    // Total downstream demand reachable through a splitter's output tile
+    // `ds`. When `ds` is a splitter tile, use the pooled demand of its pair
+    // (the flow entering `ds` is re-split there, so the whole downstream
+    // sub-tree's demand is what this branch must feed). When `ds` is a
+    // UG-input, resolve across the tunnel to the exit's demand.
+    let resolve_demand = |t: (i32, i32)| -> Option<f64> {
+        if !belt_dir_map.contains_key(&t) {
+            return None;
+        }
+        let base = demand.get(&t).copied().unwrap_or(0.0);
+        let extra = splitter_sibling
+            .get(&t)
+            .map(|&sib| demand.get(&sib).copied().unwrap_or(0.0))
+            .unwrap_or(0.0);
+        Some(base + extra)
+    };
+    let downstream_demand = |ds: (i32, i32)| -> f64 {
+        if let Some(d) = resolve_demand(ds) {
+            d
+        } else if let Some(&ug_out) = ug_input_to_output.get(&ds) {
+            resolve_demand(ug_out).unwrap_or(0.0)
+        } else {
+            // Off-map (external export) or otherwise no known consumer.
+            0.0
+        }
+    };
+
     // Iterate-to-convergence pass. The Kahn topo-sort + cycle-breaker above
     // gives correct rates for acyclic belt sub-graphs but settles for whatever
     // it produces on the first reach into balancer-internal feedback loops —
@@ -2498,8 +2829,10 @@ fn compute_lane_rates_impl(
     // converges.  Splitters dampen cycle gain by 0.5 per pass, so feedback
     // error decays geometrically; ~14 iterations suffice to drop a 15/s seed
     // below 1e-3.
+    let mut forward_iters = 0usize;
+    let mut forward_converged = false;
     {
-        const MAX_ITER: usize = 200;
+        let max_iter = budget;
         const EPS: f64 = 1e-5;
 
         // Pre-collect splitter pairs (canonical order) so we visit each once.
@@ -2512,7 +2845,8 @@ fn compute_lane_rates_impl(
             }
         }
 
-        for _iter in 0..MAX_ITER {
+        for _iter in 0..max_iter {
+            forward_iters += 1;
             let prev = lane_rates.clone();
             let mut next: FxHashMap<(i32, i32), [f64; 2]> = FxHashMap::default();
 
@@ -2543,12 +2877,29 @@ fn compute_lane_rates_impl(
                 let b_fc = feeder_contributions_for_tile(b, &prev, &feeders, &belt_dir_map);
                 let loop_priority_rate =
                     splitter_entity.get(&a).and_then(|e| e.loop_priority_rate);
+                // Demand at each output tile's downstream, and the per-output
+                // belt-capacity cap (full belt throughput of the splitter tier).
+                let a_ds = {
+                    let (adx, ady) = dir_to_vec(belt_dir_map[&a]);
+                    (a.0 + adx, a.1 + ady)
+                };
+                let b_ds = {
+                    let (bdx, bdy) = dir_to_vec(belt_dir_map[&b]);
+                    (b.0 + bdx, b.1 + bdy)
+                };
+                let cap = splitter_entity
+                    .get(&a)
+                    .map(|e| belt_throughput(splitter_to_surface_tier(&e.name)))
+                    .unwrap_or(15.0);
                 let (a_out, b_out) = splitter_output_rates_mixed(
                     a_fc[0] + a_fc[1],
                     b_fc[0] + b_fc[1],
                     loop_priority_rate,
                     is_loop_branch(a),
                     is_loop_branch(b),
+                    downstream_demand(a_ds),
+                    downstream_demand(b_ds),
+                    cap,
                 );
                 next.insert(a, a_out);
                 next.insert(b, b_out);
@@ -2594,9 +2945,30 @@ fn compute_lane_rates_impl(
             }
             lane_rates = next;
             if max_change < EPS {
+                forward_converged = true;
                 break;
             }
         }
+    }
+
+    // Instrumentation for RFP kill criterion 2. The demand-pull fixed point
+    // must converge within the `3 × segment_count` budget on every corpus
+    // layout; if the forward pass ever exhausts it without converging, the
+    // iterative model is wrong (STOP and report — do not widen the budget).
+    if std::env::var("SPAGHETTIO_LANE_WALK_STATS").is_ok() {
+        let splitter_pairs = {
+            let mut seen: FxHashSet<((i32, i32), (i32, i32))> = FxHashSet::default();
+            for (&a, &b) in &splitter_sibling {
+                seen.insert(if a < b { (a, b) } else { (b, a) });
+            }
+            seen.len()
+        };
+        eprintln!(
+            "lane-walk-stats forward_iters={forward_iters} forward_converged={forward_converged} \
+             demand_sweeps={demand_sweeps} segment_count={segment_count} budget={budget} \
+             splitter_pairs={splitter_pairs} belt_tiles={}",
+            belt_dir_map.len()
+        );
     }
 
     // Post-pass: surface UG-input tiles inherit their upstream surface
@@ -4193,6 +4565,12 @@ mod tests {
     /// 1→2 split: feeder full belt `[L=7.5, R=7.5]` → splitter pair → both
     /// halves at `[3.75, 3.75]` (belt total 7.5/s = half of input). Total mass
     /// conserved: 15/s in, 15/s out across two output belts.
+    ///
+    /// Under the demand-pull model (RFP rfp-lane-demand-flow.md) the outputs
+    /// here are bare belts with no downstream machine demand, so the split is
+    /// the exact-even *symmetric-residual fallback* — the same `[3.75, 3.75]`
+    /// the legacy 50/50 model produced. This pins that the fallback is
+    /// byte-identical when demand is absent.
     #[test]
     fn splitter_one_feeder_outputs_balanced_halves() {
         use EntityDirection::*;
@@ -4428,5 +4806,163 @@ mod tests {
             total > 8.0 && total < 9.0,
             "UG-out should carry inherited 7.5 + injected 1.0 ≈ 8.5, got {total} ({ug_out:?})"
         );
+    }
+
+    // ---------------------------------------------------------------------------
+    // Demand-pull splitter model (RFP rfp-lane-demand-flow.md Phase 1 Branch A)
+    // ---------------------------------------------------------------------------
+
+    /// Core allocation math. Pins each branch of [`allocate_by_demand`]: the
+    /// symmetric/zero-demand fallback (exact even split, byte-identical to the
+    /// legacy 50/50 model), demand-met, proportional undersupply, oversupply
+    /// spill, and the per-output capacity cap.
+    #[test]
+    fn allocate_by_demand_branches() {
+        let approx = |(a, b): (f64, f64), (ea, eb): (f64, f64)| {
+            assert!(
+                (a - ea).abs() < 1e-6 && (b - eb).abs() < 1e-6,
+                "got ({a}, {b}), expected ({ea}, {eb})"
+            );
+        };
+        // No demand / symmetric demand → exact even split (legacy 50/50).
+        approx(allocate_by_demand(4.0, 0.0, 0.0, 15.0), (2.0, 2.0));
+        approx(allocate_by_demand(4.0, 2.0, 2.0, 15.0), (2.0, 2.0));
+        // Exactly enough to meet both → each gets its demand.
+        approx(allocate_by_demand(4.0, 3.0, 1.0, 15.0), (3.0, 1.0));
+        // Undersupply → both starve in proportion to demand.
+        approx(allocate_by_demand(2.0, 3.0, 1.0, 15.0), (1.5, 0.5));
+        // Oversupply → meet both, spill the surplus across remaining room.
+        let (oa, ob) = allocate_by_demand(10.0, 3.0, 1.0, 15.0);
+        assert!((oa + ob - 10.0).abs() < 1e-6, "surplus conserved: {oa}+{ob}");
+        assert!(oa >= 3.0 && ob >= 1.0, "each output keeps at least its demand");
+        // Cap binds: with cap 5 and input 20, each output is clamped to 5 and
+        // the 10/s over 2×cap is left unrouted (a lane-throughput concern).
+        approx(allocate_by_demand(20.0, 3.0, 1.0, 5.0), (5.0, 5.0));
+    }
+
+    /// Build a 1→2 splitter feeding two consumer rows with independent
+    /// per-machine input demands. Source belt (0,0) → splitter (0,1)/(1,1) →
+    /// row A belt (0,2) (machine draws `demand_a`) and row B belt (1,2)
+    /// (machine draws `demand_b`). External `iron-plate` supply is `supply`.
+    fn two_row_split(supply: f64, demand_a: f64, demand_b: f64) -> (LayoutResult, SolverResult) {
+        use EntityDirection::*;
+        let item = "iron-plate";
+        let layout = LayoutResult {
+            entities: vec![
+                belt_carries(0, 0, South, item),
+                PlacedEntity {
+                    name: "splitter".to_string(),
+                    x: 0,
+                    y: 1,
+                    direction: South,
+                    ..Default::default()
+                },
+                belt_carries(0, 2, South, item),
+                belt_carries(1, 2, South, item),
+                // Machine A (west of row A) + input inserter picking from (0,2).
+                machine(-4, 1, "recipe-a"),
+                inserter(-1, 2, West),
+                // Machine B (east of row B) + input inserter picking from (1,2).
+                machine(3, 1, "recipe-b"),
+                inserter(2, 2, East),
+            ],
+            width: 40,
+            height: 40,
+            ..Default::default()
+        };
+        let mk = |recipe: &str, rate: f64| MachineSpec {
+            entity: "assembling-machine-1".to_string(),
+            recipe: recipe.to_string(),
+            self_loop: vec![],
+            voider: false,
+            count: 1.0,
+            inputs: vec![ItemFlow {
+                item: item.to_string(),
+                rate,
+                is_fluid: false,
+                module_id: 0,
+            }],
+            outputs: vec![ItemFlow {
+                item: format!("out-{recipe}"),
+                rate: 1.0,
+                is_fluid: false,
+                module_id: 0,
+            }],
+        };
+        let solver = SolverResult {
+            machines: vec![mk("recipe-a", demand_a), mk("recipe-b", demand_b)],
+            external_inputs: vec![ItemFlow {
+                item: item.to_string(),
+                rate: supply,
+                is_fluid: false,
+                module_id: 0,
+            }],
+            external_outputs: vec![],
+            surplus_outputs: vec![],
+            dependency_order: vec![],
+        };
+        (layout, solver)
+    }
+
+    /// Redistributes under backpressure: an even 1→2 balancer feeding rows that
+    /// draw 3.0/s and 1.0/s, with aggregate supply (4.0/s) meeting aggregate
+    /// demand, routes 3.0/s to the hungry row (not the even-split 2.0/s) and
+    /// clears the input-rate-delivery warning that the legacy 50/50 model
+    /// raised. This is the headline logistic@1/s false-positive.
+    #[test]
+    fn demand_pull_redistributes_under_backpressure() {
+        let (layout, solver) = two_row_split(4.0, 3.0, 1.0);
+        let rates = compute_lane_rates(&layout, Some(&solver));
+        let row_a: f64 = rates.get(&(0, 2)).copied().unwrap_or([0.0, 0.0]).iter().sum();
+        let row_b: f64 = rates.get(&(1, 2)).copied().unwrap_or([0.0, 0.0]).iter().sum();
+        assert!(
+            (row_a - 3.0).abs() < 0.05,
+            "hungry row should get its 3.0/s demand (not even-split 2.0/s), got {row_a}"
+        );
+        assert!(
+            (row_b - 1.0).abs() < 0.05,
+            "low-draw row should get its 1.0/s demand, got {row_b}"
+        );
+        let warns = check_input_rate_delivery(&layout, Some(&solver));
+        assert!(
+            warns.is_empty(),
+            "backpressure meets both demands → no input-rate-delivery warning: {warns:?}"
+        );
+    }
+
+    /// True positives survive: when aggregate supply (2.0/s) is genuinely below
+    /// aggregate demand (4.0/s), demand-pull starves both rows in proportion and
+    /// the input-rate-delivery check still warns — the model doesn't paper over
+    /// a real shortfall.
+    #[test]
+    fn demand_pull_true_starvation_still_warns() {
+        let (layout, solver) = two_row_split(2.0, 3.0, 1.0);
+        let rates = compute_lane_rates(&layout, Some(&solver));
+        let row_a: f64 = rates.get(&(0, 2)).copied().unwrap_or([0.0, 0.0]).iter().sum();
+        // 2.0 total, demand 3:1 → 1.5 to row A.
+        assert!(
+            (row_a - 1.5).abs() < 0.05,
+            "under-supplied hungry row gets its proportional 1.5/s, got {row_a}"
+        );
+        let warns = check_input_rate_delivery(&layout, Some(&solver));
+        assert!(
+            warns.iter().any(|w| w.category == "input-rate-delivery"),
+            "genuine undersupply must still warn, got {warns:?}"
+        );
+    }
+
+    /// Symmetric residual: two rows with equal demand get an exact even split
+    /// (the fallback path), and both are satisfied.
+    #[test]
+    fn demand_pull_symmetric_rows_split_evenly() {
+        let (layout, solver) = two_row_split(4.0, 2.0, 2.0);
+        let rates = compute_lane_rates(&layout, Some(&solver));
+        let row_a: f64 = rates.get(&(0, 2)).copied().unwrap_or([0.0, 0.0]).iter().sum();
+        let row_b: f64 = rates.get(&(1, 2)).copied().unwrap_or([0.0, 0.0]).iter().sum();
+        assert!(
+            (row_a - 2.0).abs() < 0.05 && (row_b - 2.0).abs() < 0.05,
+            "equal-demand rows split evenly, got a={row_a} b={row_b}"
+        );
+        assert!(check_input_rate_delivery(&layout, Some(&solver)).is_empty());
     }
 }

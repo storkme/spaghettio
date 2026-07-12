@@ -3,11 +3,11 @@
 //! Port of `check_inserter_chains` and `check_inserter_direction` from
 //! `src/validate.py`.
 
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::common::{
-    dir_to_vec, fluid_only_recipes, inserter_reach, is_inserter, is_machine_entity,
-    machine_dims, machine_tiles,
+    dir_to_vec, fluid_only_recipes, inserter_reach, inserter_throughput, is_inserter,
+    is_machine_entity, machine_dims, machine_tiles, recycler_eject_tile,
 };
 use crate::models::{LayoutResult, SolverResult};
 
@@ -158,6 +158,172 @@ pub fn check_inserter_direction(layout: &LayoutResult) -> Vec<ValidationIssue> {
     }
 
     issues
+}
+
+// ── check_inserter_throughput ─────────────────────────────────────────────────
+
+/// Per-machine-side inserter throughput check (RFP `rfp-lane-demand-flow.md`
+/// Phase 1, Component 2).
+///
+/// Every bus template feeds and drains a machine with **one regular inserter
+/// per side** (~0.84/s, `docs/factorio-mechanics.md` table I8), but planned
+/// per-machine rates routinely exceed that (e.g. a gear machine wants
+/// 3.0 plates/s in and 1.5 gears/s out). The machine is then inserter-bound
+/// regardless of belt delivery — a real cap that no other check sees. This
+/// emits one warning per deficient machine side (input feeds / output
+/// extraction) when the inserters on that side cannot collectively move the
+/// side's required rate.
+///
+/// Required rates are utilization-scaled the same way `check_input_rate_delivery`
+/// scales demand (ce732d9): the layout places `ceil(count)` physical machines
+/// each running at `count/ceil(count)`, so a fractional-count spec's per-machine
+/// rate is scaled down accordingly. Only SOLID inputs/outputs count — fluids
+/// arrive by pipe, not inserter.
+///
+/// Exemptions: recyclers eject their output directly onto a belt with no output
+/// inserter (`common::recycler_eject_tile`, the same knowledge
+/// `check_output_belt_coverage` keys on), so their output side is skipped.
+/// `:sushi-sort:` belt-to-belt inserters touch no machine tile, so the
+/// input/output classification below never counts them — no special case
+/// needed.
+pub fn check_inserter_throughput(
+    layout: &LayoutResult,
+    solver_result: Option<&SolverResult>,
+) -> Vec<ValidationIssue> {
+    let sr = match solver_result {
+        Some(s) => s,
+        None => return Vec::new(),
+    };
+
+    let machine_tiles_set = build_machine_tile_set(layout);
+    let machine_by_tile = machine_origin_by_tile(layout);
+
+    // Sum inserter throughput on each machine's input side (inserters that
+    // drop INTO the machine) and output side (inserters that pick FROM it).
+    let mut input_avail: FxHashMap<(i32, i32), f64> = FxHashMap::default();
+    let mut input_count: FxHashMap<(i32, i32), usize> = FxHashMap::default();
+    let mut output_avail: FxHashMap<(i32, i32), f64> = FxHashMap::default();
+    let mut output_count: FxHashMap<(i32, i32), usize> = FxHashMap::default();
+
+    for ins in &layout.entities {
+        if !is_inserter(&ins.name) {
+            continue;
+        }
+        let (dx, dy) = dir_to_vec(ins.direction);
+        let reach = inserter_reach(&ins.name);
+        let drop_pos = (ins.x + dx * reach, ins.y + dy * reach);
+        let pickup_pos = (ins.x - dx * reach, ins.y - dy * reach);
+        let rate = inserter_throughput(&ins.name);
+
+        if let Some(&mpos) = machine_by_tile.get(&drop_pos) {
+            *input_avail.entry(mpos).or_insert(0.0) += rate;
+            *input_count.entry(mpos).or_insert(0) += 1;
+        }
+        if let Some(&mpos) = machine_by_tile.get(&pickup_pos) {
+            // A drop_pos inside the same machine would make this a
+            // machine-internal inserter — ignore those (they don't extract
+            // to a belt). Only count picks that actually leave the machine.
+            if !machine_tiles_set.contains(&drop_pos) {
+                *output_avail.entry(mpos).or_insert(0.0) += rate;
+                *output_count.entry(mpos).or_insert(0) += 1;
+            }
+        }
+    }
+
+    let recipe_to_spec: FxHashMap<&str, &crate::models::MachineSpec> =
+        sr.machines.iter().map(|s| (s.recipe.as_str(), s)).collect();
+
+    let mut issues = Vec::new();
+    let mut checked: FxHashSet<(i32, i32)> = FxHashSet::default();
+    for e in &layout.entities {
+        if !is_machine_entity(&e.name) {
+            continue;
+        }
+        let mpos = (e.x, e.y);
+        if !checked.insert(mpos) {
+            continue;
+        }
+        let spec = match e.recipe.as_deref().and_then(|r| recipe_to_spec.get(r)) {
+            Some(s) => *s,
+            None => continue,
+        };
+
+        // Utilization scaling: the same convention check_input_rate_delivery
+        // uses — a spec placed as ceil(count) physical machines runs each at
+        // count/ceil(count).
+        let effective_count = spec.count.ceil().max(1.0);
+        let utilization = (spec.count / effective_count).min(1.0);
+
+        let required_in: f64 = spec
+            .inputs
+            .iter()
+            .filter(|f| !f.is_fluid)
+            .map(|f| f.rate * utilization)
+            .sum();
+        let required_out: f64 = spec
+            .outputs
+            .iter()
+            .filter(|f| !f.is_fluid)
+            .map(|f| f.rate * utilization)
+            .sum();
+
+        // Input side.
+        if required_in > 0.0 {
+            let avail = input_avail.get(&mpos).copied().unwrap_or(0.0);
+            if avail < required_in - 0.02 {
+                let n = input_count.get(&mpos).copied().unwrap_or(0);
+                issues.push(ValidationIssue::with_pos(
+                    Severity::Warning,
+                    "inserter-throughput",
+                    format!(
+                        "{} at ({},{}): {} input inserter{} move {:.2}/s but machine needs \
+                         {:.2}/s in — inserter-bound",
+                        e.name, e.x, e.y, n, if n == 1 { "" } else { "s" }, avail, required_in
+                    ),
+                    e.x,
+                    e.y,
+                ));
+            }
+        }
+
+        // Output side. Recyclers eject directly onto a belt (no output
+        // inserter is placed or wanted), so their output side is exempt.
+        let recycler_direct_eject =
+            recycler_eject_tile(&e.name, e.x, e.y, e.direction).is_some();
+        if required_out > 0.0 && !recycler_direct_eject {
+            let avail = output_avail.get(&mpos).copied().unwrap_or(0.0);
+            if avail < required_out - 0.02 {
+                let n = output_count.get(&mpos).copied().unwrap_or(0);
+                issues.push(ValidationIssue::with_pos(
+                    Severity::Warning,
+                    "inserter-throughput",
+                    format!(
+                        "{} at ({},{}): {} output inserter{} move {:.2}/s but machine needs \
+                         {:.2}/s out — inserter-bound",
+                        e.name, e.x, e.y, n, if n == 1 { "" } else { "s" }, avail, required_out
+                    ),
+                    e.x,
+                    e.y,
+                ));
+            }
+        }
+    }
+
+    issues
+}
+
+/// Map each machine tile → the machine's origin `(x, y)`.
+fn machine_origin_by_tile(layout: &LayoutResult) -> FxHashMap<(i32, i32), (i32, i32)> {
+    let mut by_tile = FxHashMap::default();
+    for e in &layout.entities {
+        if is_machine_entity(&e.name) {
+            let (w, h) = machine_dims(&e.name);
+            for t in machine_tiles(e.x, e.y, w, h) {
+                by_tile.insert(t, (e.x, e.y));
+            }
+        }
+    }
+    by_tile
 }
 
 // ── tests ─────────────────────────────────────────────────────────────────────
@@ -592,5 +758,147 @@ mod tests {
         let issues = check_inserter_chains(&lr, None);
         // Without solver context, we can't know it's fluid-only → should flag
         assert_eq!(issues.len(), 1);
+    }
+
+    // ── check_inserter_throughput ─────────────────────────────────────────────
+
+    fn gear_solver(input_rate: f64, output_rate: f64, count: f64) -> SolverResult {
+        SolverResult {
+            machines: vec![MachineSpec {
+                entity: "assembling-machine-1".into(),
+                recipe: "iron-gear-wheel".into(),
+                self_loop: vec![],
+                voider: false,
+                count,
+                inputs: vec![ItemFlow {
+                    item: "iron-plate".into(),
+                    rate: input_rate,
+                    is_fluid: false,
+                    module_id: 0,
+                }],
+                outputs: vec![ItemFlow {
+                    item: "iron-gear-wheel".into(),
+                    rate: output_rate,
+                    is_fluid: false,
+                    module_id: 0,
+                }],
+            }],
+            external_inputs: vec![],
+            external_outputs: vec![],
+            surplus_outputs: vec![],
+            dependency_order: vec![],
+        }
+    }
+
+    /// 3x3 machine at (0,0) with one input inserter (drops into (1,0)) and one
+    /// output inserter (picks from (1,2), drops to (1,4)).
+    fn gear_machine_layout(input_inserter: &str, output_inserter: &str) -> LayoutResult {
+        let input_reach = inserter_reach(input_inserter);
+        LayoutResult {
+            entities: vec![
+                PlacedEntity {
+                    name: "assembling-machine-1".into(),
+                    x: 0,
+                    y: 0,
+                    recipe: Some("iron-gear-wheel".into()),
+                    direction: EntityDirection::North,
+                    ..Default::default()
+                },
+                // Input: faces South, reach tiles above the top border so the
+                // drop lands on (1,0) inside the machine.
+                PlacedEntity {
+                    name: input_inserter.into(),
+                    x: 1,
+                    y: -input_reach,
+                    direction: EntityDirection::South,
+                    ..Default::default()
+                },
+                // Output: faces South at (1,3); picks from (1,2) inside the
+                // machine, drops to (1,4) outside.
+                PlacedEntity {
+                    name: output_inserter.into(),
+                    x: 1,
+                    y: 3,
+                    direction: EntityDirection::South,
+                    ..Default::default()
+                },
+            ],
+            width: 20,
+            height: 20,
+            ..Default::default()
+        }
+    }
+
+    fn throughput_warnings(issues: &[ValidationIssue]) -> Vec<&ValidationIssue> {
+        issues
+            .iter()
+            .filter(|i| i.category == "inserter-throughput")
+            .collect()
+    }
+
+    #[test]
+    fn inserter_throughput_gear_machine_warns_both_sides() {
+        // 3.0/s in via one regular inserter (0.84) → warns; 1.5/s out via one
+        // regular inserter (0.84) → warns. Two warnings, one per side.
+        let sr = gear_solver(3.0, 1.5, 1.0);
+        let lr = gear_machine_layout("inserter", "inserter");
+        let issues = check_inserter_throughput(&lr, Some(&sr));
+        let warns = throughput_warnings(&issues);
+        assert_eq!(warns.len(), 2, "both input and output sides deficient: {issues:?}");
+        assert!(warns.iter().all(|w| w.severity == Severity::Warning));
+        assert!(warns.iter().any(|w| w.message.contains("in —")));
+        assert!(warns.iter().any(|w| w.message.contains("out —")));
+    }
+
+    #[test]
+    fn inserter_throughput_within_capacity_no_warning() {
+        // 0.5/s in and 0.5/s out, each below the 0.84/s regular-inserter cap.
+        let sr = gear_solver(0.5, 0.5, 1.0);
+        let lr = gear_machine_layout("inserter", "inserter");
+        let issues = check_inserter_throughput(&lr, Some(&sr));
+        assert!(throughput_warnings(&issues).is_empty(), "within cap: {issues:?}");
+    }
+
+    #[test]
+    fn inserter_throughput_long_handed_credits_higher_rate() {
+        // 1.0/s in sits between the regular (0.84) and long-handed (1.2) caps:
+        // a regular inserter would warn, a long-handed one must not. Output at
+        // 0.5/s via a regular inserter stays clean, isolating the input side.
+        let sr = gear_solver(1.0, 0.5, 1.0);
+
+        let regular = gear_machine_layout("inserter", "inserter");
+        let regular_issues = check_inserter_throughput(&regular, Some(&sr));
+        let regular_warns = throughput_warnings(&regular_issues);
+        assert_eq!(regular_warns.len(), 1, "regular inserter under 1.0/s should warn");
+        assert!(regular_warns[0].message.contains("in —"));
+
+        let long = gear_machine_layout("long-handed-inserter", "inserter");
+        let long_issues = check_inserter_throughput(&long, Some(&sr));
+        let long_warns = throughput_warnings(&long_issues);
+        assert!(
+            long_warns.is_empty(),
+            "long-handed (1.2/s) covers 1.0/s in and regular covers 0.5/s out: {long_warns:?}"
+        );
+    }
+
+    #[test]
+    fn inserter_throughput_utilization_scaled_no_warning() {
+        // A half-count spec (count 0.5) runs its single physical machine at 50%
+        // utilization, so a nominal 1.5/s in scales to 0.75/s — under the 0.84
+        // regular cap — and 1.0/s out scales to 0.5/s. No warning despite the
+        // nominal rates exceeding 0.84.
+        let sr = gear_solver(1.5, 1.0, 0.5);
+        let lr = gear_machine_layout("inserter", "inserter");
+        let issues = check_inserter_throughput(&lr, Some(&sr));
+        assert!(
+            throughput_warnings(&issues).is_empty(),
+            "utilization-scaled need under cap: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn inserter_throughput_no_solver_is_noop() {
+        let lr = gear_machine_layout("inserter", "inserter");
+        assert!(check_inserter_throughput(&lr, None).is_empty());
     }
 }

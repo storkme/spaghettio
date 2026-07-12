@@ -219,3 +219,38 @@ Per the CLAUDE.md layout-change protocol, plus:
   (would reopen Branch B).*
 - *2026-07-12 — **accepted by user**. Phase 1 started: demand-pull
   walker model + inserter-throughput check, shipped as a pair.*
+- *2026-07-12 — **Phase 1 LANDED.** Walker: backward demand pass
+  (reverse-topological Gauss-Seidel; splitter pairs pool output
+  demand across input feeders, so multi-stage balancers route at
+  every stage) + forward pass with `allocate_by_demand` (continuous
+  demand-proportional split, per-output capacity clamp with spill;
+  symmetric/zero demand → byte-identical even split, which is what
+  keeps balancer INTERNALS on legacy semantics with no special case
+  — their two halves reach the same consumers). `loop_priority_rate`
+  overrides preserved. **Kill-criterion 2 near-miss, ratified**: the
+  first allocation (discontinuous water-fill) limit-cycled on
+  processing-unit@2/s and exhausted the 3×segment budget; A/B
+  evidence (even-split converges; smooth proportional converges in
+  87 iters; corpus max 313 of 15354 budget) showed a numerical
+  discontinuity, not a model failure. Fixed by making allocation
+  continuous; budget unchanged, no balancer special-cases. Ratified
+  as within the criterion's intent — recorded here because a
+  silent fix of a tripped kill criterion is exactly what decision
+  logs exist to prevent. Runtime 1.27× (gate 2×); zero golden
+  movement. Inserter-throughput check landed per design (I8
+  constants, per-machine-side, utilization-scaled, recycler
+  direct-eject exempt). Gauntlet 1/s: logistic/military belt-model
+  warnings GONE, replaced by honest inserter-throughput across all
+  packs (automation 2, logistic 8, military 11, chemical 22,
+  production 42, utility 55) — the engine-wide single-inserter
+  ceiling is now visible. 24 fixtures re-blessed with individually
+  derived exact counts (`assert_warnings_exactly`, no blanket
+  filters). **Kill-criterion 5 finding**: utility@10/s
+  input-rate-delivery stayed at 655 (unchanged) — the mass warnings
+  trace to the 35 dead-end topology ERRORS, not the flow model;
+  recorded as the next scaling work item, not chased here. Known
+  limitation for Phase 2: undamped demand conservation around
+  balancer feedback cycles inflates cyclic demand ~5%, leaving ~5
+  residual input-rate-delivery warnings on balancer-heavy layouts
+  (tier4_am2 ×1, EC-30s ×4) vs many eliminations; a balancer-aware
+  (black-box) demand pass would remove them.*
