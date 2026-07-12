@@ -457,3 +457,33 @@ stop signal.
   falsifiable; kills the dominant 22/47 if the geometry holds;
   template redesign follows scoped by whatever the re-census leaves.
   Re-census dispatched.*
+- *2026-07-12 — **v3 re-census complete. The extension works exactly
+  as predicted; KC1 still fires, but only on the packs-zero
+  condition.** Swap feasibility source-confirmed (placer.rs:730-752
+  positional pick, zero template coupling; independently
+  fork-verified). Results: exceeding items 47→**25/700 (3.57%)** —
+  now UNDER the 5% threshold; aggregate 45→23/593 (3.88%).
+  fluid_dual's contribution 22→**0** (PU's electronic-circuit moves
+  near, covered by fast/stack; advanced-circuit lands far at ~80%
+  margin). Packs: automation/logistic/military clean; utility 8→**2**;
+  chemical 1 and production 7 unchanged (their residue was never
+  fluid_dual). **Remaining 25 = two mechanisms, both inherent, no
+  assignment lever can touch them**: (1) dual/triple far-item
+  ABSOLUTE exceedances, 22 — whichever item is far caps at
+  1.2/s×slots, and at LastInRow/anchor-collapse positions the
+  contested column cannot serve far at all (iron-plate 1.43–2.40 vs
+  1.20; rail stone 2.50; electric-furnace stone-brick 1.67 at the
+  dead shared tile) — structural to "one near slot per 2-solid-input
+  machine"; (2) self_loop HasFluid near-wall, 3 (pentapod 3/s, fish
+  15/s vs hard 1.20). New at-risk case created by the swap, flagged:
+  utility's PU electronic-circuit input at 2.22 vs fast's 2.31 —
+  3.8% margin (tier5's same row needs stack, clears with headroom).
+  Zero-margin canonical case still reproduces exactly. Updated
+  predictions: only utility (after-P3 8→2) and tier5 (21→5) change.
+  Stack footprint 307/700 (43.9%). **Decision point: the residue is
+  now characterized as template-shape-inherent — the options are a
+  surgical template pass (e.g. far-belt tail-trim removal at
+  LastInRow, feasibility UNVERIFIED — trims may serve merger/exit
+  clearance), a full reach-2 redesign RFP, or accepting the residue
+  with honest warnings and re-scoping the definition of done (the
+  RFP's own best-effort language anticipates this). With user.***
