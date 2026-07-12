@@ -1333,26 +1333,25 @@ fn tier4_advanced_circuit_partitioned() {
          partitioner did not fire on the motivating case"
     );
     assert_no_errors(&result);
-    // RFP rfp-inserter-sizing.md Phase 1 re-bless: pinned to the CURRENT
-    // check output (8), not the frozen census contract's true count (6) —
-    // 2 of these 8 are false positives. `apply_partition_plan` splits
-    // copper-cable into two `MachineSpec` siblings sharing recipe name
-    // but different per-machine rates (module A ~2.0/s -> correctly gets
-    // fast-inserter; module B ~3.0/s -> correctly gets stack-inserter,
-    // both verified against the actual layout). `check_inserter_throughput`'s
-    // `recipe_to_spec` is keyed by recipe name only and collapses these
-    // siblings to one, AND is invoked with the pre-partition SolverResult
-    // (never the internally-partitioned one `build_bus_layout` uses) — so
-    // its "required" is the ORIGINAL unsplit recipe's blended rate (2.50/s),
-    // matching neither sibling's true demand. That falsely flags module A's
-    // rows (fast-inserter, 2.31/s avail) since 2.31 < 2.50, even though
-    // their real per-module demand (2.0/s) is fully covered. Pre-existing
-    // gap, invisible before this RFP's ladder (avail was uniformly 0.84/s
-    // everywhere, so the miscalibrated comparison happened to agree with
-    // itself). Decision log (docs/rfp-inserter-sizing.md): a follow-up
-    // validator-only commit fixes the recipe_to_spec keying / partition
-    // data-flow and re-pins this to 6.
-    assert_warnings_exactly(&result, &[("inserter-throughput", 8)]);
+    // RFP rfp-inserter-sizing.md Phase 1 pinned this to the check's
+    // then-current output (8), not the frozen census contract's true
+    // count (6) — 2 of those 8 were false positives. `apply_partition_plan`
+    // splits copper-cable into two `MachineSpec` siblings sharing a recipe
+    // name but different per-machine rates (module A ~2.0/s -> correctly
+    // gets a fast inserter; module B ~3.0/s -> correctly gets a stack
+    // inserter, both verified against the actual layout), and
+    // `check_inserter_throughput`'s `recipe_to_spec` — keyed by recipe
+    // name only — collapsed the siblings to whichever one iterated last,
+    // so its "required" matched neither module's true demand. Fixed by
+    // the KC3-sequenced validator-only follow-up: `LayoutResult` now
+    // carries `effective_rows` (`bus::layout::layout_pass`, mirroring the
+    // `voided_streams`/`surplus_exits` precedent) — a per-row `(y_start,
+    // y_end, spec)` ledger built from the actual post-partition
+    // `SolverResult` the layout pipeline placed. `check_inserter_throughput`
+    // now resolves each machine's spec by row position first (falling back
+    // to the recipe-keyed lookup only when no row matches), which
+    // disambiguates the siblings and re-pins this to its true count.
+    assert_warnings_exactly(&result, &[("inserter-throughput", 6)]);
 }
 
 /// Regression test for the pipe-as-port-tile bug. URL:

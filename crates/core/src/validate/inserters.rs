@@ -243,10 +243,31 @@ pub fn check_inserter_throughput(
         if !checked.insert(mpos) {
             continue;
         }
-        let spec = match e.recipe.as_deref().and_then(|r| recipe_to_spec.get(r)) {
+        let recipe = match e.recipe.as_deref() {
+            Some(r) => r,
+            None => continue,
+        };
+        let fallback_spec = match recipe_to_spec.get(recipe) {
             Some(s) => *s,
             None => continue,
         };
+        // Attribution: prefer the exact sibling `MachineSpec` the layout
+        // pipeline actually placed at this machine's row
+        // (`LayoutResult::effective_rows`), which disambiguates
+        // partition siblings sharing a recipe name but carrying
+        // different utilization (`docs/rfp-inserter-sizing.md` Phase 1
+        // finding — `recipe_to_spec` above collapses them to whichever
+        // sibling iterated last, matching neither module's true rate).
+        // Falls back to the recipe-keyed spec when no row attribution is
+        // available (e.g. hand-built `LayoutResult`s in tests, or
+        // spaghetti-style layouts that never populate `effective_rows`)
+        // — a byte-for-byte no-op wherever partitioning never occurred.
+        let spec = layout
+            .effective_rows
+            .iter()
+            .find(|row| row.spec.recipe == recipe && e.y >= row.y_start && e.y < row.y_end)
+            .map(|row| &row.spec)
+            .unwrap_or(fallback_spec);
 
         // Utilization scaling: the same convention check_input_rate_delivery
         // uses — a spec placed as ceil(count) physical machines runs each at
@@ -836,6 +857,61 @@ mod tests {
             .collect()
     }
 
+    /// A 3x3 gear machine at `(0, y)` with a regular input inserter
+    /// dropping into `(1, y)` and a regular output inserter picking from
+    /// `(1, y+2)`.
+    fn gear_machine_entities_at(y: i32) -> Vec<PlacedEntity> {
+        vec![
+            PlacedEntity {
+                name: "assembling-machine-1".into(),
+                x: 0,
+                y,
+                recipe: Some("iron-gear-wheel".into()),
+                direction: EntityDirection::North,
+                ..Default::default()
+            },
+            PlacedEntity {
+                name: "inserter".into(),
+                x: 1,
+                y: y - 1,
+                direction: EntityDirection::South,
+                ..Default::default()
+            },
+            PlacedEntity {
+                name: "inserter".into(),
+                x: 1,
+                y: y + 3,
+                direction: EntityDirection::South,
+                ..Default::default()
+            },
+        ]
+    }
+
+    /// A per-machine `iron-gear-wheel` `MachineSpec` sibling (as produced
+    /// by `bus::partitioner::apply_partition_plan`, which varies `count`/
+    /// `inputs`/`outputs` per sibling but keeps the recipe name shared).
+    fn gear_sibling_spec(input_rate: f64, output_rate: f64, count: f64) -> MachineSpec {
+        MachineSpec {
+            entity: "assembling-machine-1".into(),
+            recipe: "iron-gear-wheel".into(),
+            self_loop: vec![],
+            voider: false,
+            count,
+            inputs: vec![ItemFlow {
+                item: "iron-plate".into(),
+                rate: input_rate,
+                is_fluid: false,
+                module_id: 0,
+            }],
+            outputs: vec![ItemFlow {
+                item: "iron-gear-wheel".into(),
+                rate: output_rate,
+                is_fluid: false,
+                module_id: 0,
+            }],
+        }
+    }
+
     #[test]
     fn inserter_throughput_gear_machine_warns_both_sides() {
         // 3.0/s in via one regular inserter (0.84) → warns; 1.5/s out via one
@@ -900,5 +976,88 @@ mod tests {
     fn inserter_throughput_no_solver_is_noop() {
         let lr = gear_machine_layout("inserter", "inserter");
         assert!(check_inserter_throughput(&lr, None).is_empty());
+    }
+
+    // ── partition-sibling attribution (`EffectiveRow`) ─────────────────────
+
+    /// `apply_partition_plan` splits one recipe into sibling `MachineSpec`s
+    /// that share a recipe name but carry different per-machine rates.
+    /// `sr.machines` here holds the single, collapsed/blended spec a
+    /// recipe-name-keyed lookup would see (as `validate()` receives the
+    /// pre-partition `SolverResult` — docs/rfp-inserter-sizing.md's Phase 1
+    /// finding). Row A's true demand (0.5/s in, within a regular
+    /// inserter's 0.84/s) is deliberately far below the blended spec's
+    /// 2.0/s, and row B's true demand (3.0/s in) is deliberately far
+    /// above it — so a name-keyed lookup landing on the blended spec for
+    /// both rows could not produce "A clean, B warns" by coincidence.
+    /// `LayoutResult::effective_rows` must resolve each row to its own
+    /// true sibling by position for both outcomes to hold simultaneously.
+    #[test]
+    fn inserter_throughput_partition_siblings_disambiguated_by_row() {
+        let blended_spec = gear_sibling_spec(2.0, 1.0, 3.0);
+        let sr = SolverResult {
+            machines: vec![blended_spec],
+            external_inputs: vec![],
+            external_outputs: vec![],
+            surplus_outputs: vec![],
+            dependency_order: vec![],
+        };
+
+        let mut entities = gear_machine_entities_at(0); // row A: y in [0, 3)
+        entities.extend(gear_machine_entities_at(10)); // row B: y in [10, 13)
+
+        let lr = LayoutResult {
+            entities,
+            width: 20,
+            height: 20,
+            effective_rows: vec![
+                crate::models::EffectiveRow {
+                    y_start: 0,
+                    y_end: 8,
+                    spec: gear_sibling_spec(0.5, 0.5, 1.0),
+                },
+                crate::models::EffectiveRow {
+                    y_start: 8,
+                    y_end: 16,
+                    // Output stays within the regular-inserter cap so the
+                    // one expected warning isolates to the input side.
+                    spec: gear_sibling_spec(3.0, 0.5, 1.0),
+                },
+            ],
+            ..Default::default()
+        };
+
+        let issues = check_inserter_throughput(&lr, Some(&sr));
+        let warns = throughput_warnings(&issues);
+        assert_eq!(
+            warns.len(),
+            1,
+            "row A (0.5/s, in-capacity) must stay clean, row B (3.0/s, over-capacity) must warn: {issues:?}"
+        );
+        assert!(warns[0].message.contains("(0,10)"), "the warning must land on row B's machine: {warns:?}");
+        assert!(warns[0].message.contains("in —"));
+    }
+
+    /// A single, unpartitioned recipe: `effective_rows` carries exactly
+    /// one row whose spec is identical to `sr.machines`' entry — the shape
+    /// `layout_pass` produces whenever no partition sibling exists.
+    /// Position-based attribution must resolve to the same spec the old
+    /// recipe-name lookup would have, so the outcome is byte-identical to
+    /// `inserter_throughput_gear_machine_warns_both_sides`.
+    #[test]
+    fn inserter_throughput_effective_rows_noop_for_unsplit_recipe() {
+        let sr = gear_solver(3.0, 1.5, 1.0);
+        let mut lr = gear_machine_layout("inserter", "inserter");
+        lr.effective_rows = vec![crate::models::EffectiveRow {
+            y_start: -1,
+            y_end: 5,
+            spec: sr.machines[0].clone(),
+        }];
+
+        let issues = check_inserter_throughput(&lr, Some(&sr));
+        let warns = throughput_warnings(&issues);
+        assert_eq!(warns.len(), 2, "unchanged from the no-effective_rows case: {issues:?}");
+        assert!(warns.iter().any(|w| w.message.contains("in —")));
+        assert!(warns.iter().any(|w| w.message.contains("out —")));
     }
 }

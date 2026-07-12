@@ -335,6 +335,12 @@ pub struct LayoutResult {
     /// nothing voided.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub voided_streams: Vec<VoidedStream>,
+    /// Per-row `(y_start, y_end, spec)` attribution — one entry per
+    /// physical machine row the layout pipeline actually placed, first-
+    /// class and trace-independent like `voided_streams`/`surplus_exits`.
+    /// See [`EffectiveRow`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effective_rows: Vec<EffectiveRow>,
 }
 
 /// One solid surplus stream consumed by a layout-synthesized voider
@@ -351,4 +357,30 @@ pub struct VoidedStream {
     pub machines: usize,
     /// The recycling recipe used (`"<item>-recycling"`).
     pub recipe: String,
+}
+
+/// One physical machine row as actually placed by `bus::placer::place_rows`,
+/// pairing its `y` band with the exact `MachineSpec` sibling that produced
+/// it. Follow-up fix for `docs/rfp-inserter-sizing.md`'s Phase 1 finding:
+/// under `LayoutStrategy::PartitionedDecomposed`, `apply_partition_plan`
+/// can split one recipe into multiple sibling `MachineSpec`s sharing a
+/// recipe name but carrying different `count`/utilization (and therefore
+/// different per-machine required rates). A recipe-name-keyed lookup
+/// (`sr.machines.iter().map(|s| (s.recipe.as_str(), s))`, used by several
+/// validators) collapses those siblings into whichever one iterated last.
+/// `place_rows` lays each sibling's machines into its own non-overlapping
+/// `y` band, so this ledger — one entry per physical row, mirroring
+/// `bus::placer::RowSpan` trimmed to what validation needs — lets a
+/// validator resolve "which spec did THIS machine actually come from" by
+/// position instead of by name. Populated for every row unconditionally,
+/// not just partitioned ones, so consumers that fall back to a recipe-name
+/// lookup when no row matches see byte-identical behavior wherever
+/// partitioning never occurred.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EffectiveRow {
+    pub y_start: i32,
+    pub y_end: i32,
+    pub spec: MachineSpec,
 }

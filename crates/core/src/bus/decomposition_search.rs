@@ -706,6 +706,7 @@ mod tests {
             trace: None,
             surplus_exits: vec![],
             voided_streams: vec![],
+            effective_rows: vec![],
         }
     }
 

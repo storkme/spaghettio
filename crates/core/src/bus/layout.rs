@@ -671,6 +671,20 @@ fn layout_pass(
         })
         .collect();
 
+    // First-class per-row spec attribution (see `models::EffectiveRow`) —
+    // built from the same `row_spans` this pass actually placed, so it
+    // reflects the (possibly voider-synthesized, possibly partition-
+    // split) `solver_result` in scope here rather than whatever
+    // pre-transform SolverResult a caller happens to pass to `validate`.
+    let effective_rows: Vec<crate::models::EffectiveRow> = row_spans
+        .iter()
+        .map(|rs| crate::models::EffectiveRow {
+            y_start: rs.y_start,
+            y_end: rs.y_end,
+            spec: rs.spec.clone(),
+        })
+        .collect();
+
     Ok((
         LayoutResult {
             entities: all_entities,
@@ -681,6 +695,7 @@ fn layout_pass(
             trace: None,
             surplus_exits,
             voided_streams,
+            effective_rows,
         },
         row_spans,
     ))
