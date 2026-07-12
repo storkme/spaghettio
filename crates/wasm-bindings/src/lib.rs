@@ -43,7 +43,13 @@ fn layout_options(
         Some("horizontal-stack") => RowLayout::HorizontalStack,
         _ => RowLayout::VerticalSplit,
     };
-    LayoutOptions { strategy, max_belt_tier, row_layout, surplus_policy: SurplusPolicy::default() }
+    LayoutOptions {
+        strategy,
+        max_belt_tier,
+        row_layout,
+        surplus_policy: SurplusPolicy::default(),
+        max_inserter_tier: Default::default(),
+    }
 }
 
 #[wasm_bindgen]

@@ -4,6 +4,7 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use crate::bus::inserter_ladder::InserterTier;
 use crate::bus::layout::RowLayout;
 use crate::common::{belt_entity_for_rate, lane_capacity, machine_dims, BELT_TIERS};
 use crate::models::{EntityDirection, MachineSpec, PlacedEntity, SolverResult};
@@ -604,6 +605,7 @@ pub(crate) fn build_one_row(
     bus_width: i32,
     y_cursor: i32,
     max_belt_tier: Option<&str>,
+    max_inserter_tier: InserterTier,
     output_east: bool,
     row_layout: RowLayout,
 ) -> (Vec<PlacedEntity>, RowSpan, i32) {
@@ -811,6 +813,20 @@ pub(crate) fn build_one_row(
             let secondary = secondary_solid_output
                 .zip(secondary_belt_name)
                 .map(|(f, belt)| (f.item.as_str(), belt));
+
+            // Utilization scaling: the SAME convention
+            // `check_inserter_throughput` uses (ce732d9) — a fractional
+            // `spec.count` runs each of its `ceil(count)` physical
+            // machines at `count/ceil(count)`. The ladder must size to
+            // this exact per-machine rate, or a fractional-count spec's
+            // inserter picks would silently disagree with what the
+            // validator checks against.
+            let effective_count = spec.count.ceil().max(1.0);
+            let utilization = (spec.count / effective_count).min(1.0);
+            let input_rate = solid_inputs.first().map(|f| f.rate).unwrap_or(0.0) * utilization;
+            let output_rate = solid_outputs.first().map(|f| f.rate).unwrap_or(0.0) * utilization;
+            let secondary_rate = secondary_solid_output.map(|f| f.rate * utilization);
+
             let (ents, rh) = templates::single_input_row(
                 &spec.recipe,
                 &spec.entity,
@@ -825,6 +841,10 @@ pub(crate) fn build_one_row(
                 lane_split,
                 output_east,
                 secondary,
+                input_rate,
+                output_rate,
+                secondary_rate,
+                max_inserter_tier,
             );
             let input_ys = vec![y_cursor];
             let out_y = y_cursor + 2 + mh as i32 + 1;
@@ -1316,6 +1336,7 @@ pub fn place_rows(
     bus_width: i32,
     y_offset: i32,
     max_belt_tier: Option<&str>,
+    max_inserter_tier: InserterTier,
     final_output_items: Option<&FxHashSet<String>>,
     extra_gap_after_row: Option<&FxHashMap<usize, i32>>,
     row_layout: RowLayout,
@@ -1421,8 +1442,16 @@ pub fn place_rows(
 
         for ri in 0..n_rows {
             let chunk = ((remaining as f64) / (n_rows - ri) as f64).ceil() as usize;
-            let (row_ents, span, width) =
-                build_one_row(spec, chunk, bus_width, y_cursor, max_belt_tier, is_final, row_layout);
+            let (row_ents, span, width) = build_one_row(
+                spec,
+                chunk,
+                bus_width,
+                y_cursor,
+                max_belt_tier,
+                max_inserter_tier,
+                is_final,
+                row_layout,
+            );
             let row_idx = row_spans.len();
             max_width = max_width.max(width);
             let y_end = span.y_end;
@@ -1454,6 +1483,7 @@ pub fn place_rows_from_result(
     bus_width: i32,
     y_offset: i32,
     max_belt_tier: Option<&str>,
+    max_inserter_tier: InserterTier,
     final_output_items: Option<&FxHashSet<String>>,
     extra_gap_after_row: Option<&FxHashMap<usize, i32>>,
     row_layout: RowLayout,
@@ -1464,6 +1494,7 @@ pub fn place_rows_from_result(
         bus_width,
         y_offset,
         max_belt_tier,
+        max_inserter_tier,
         final_output_items,
         extra_gap_after_row,
         row_layout,
@@ -1754,7 +1785,7 @@ mod tests {
     fn place_rows_single_recipe_no_split() {
         let machines = vec![iron_plate_spec()];
         let dep_order = vec!["iron-plate".to_string()];
-        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, None, None, RowLayout::default());
+        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), None, None, RowLayout::default());
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].machine_count, 1);
         assert_eq!(spans[0].spec.recipe, "iron-plate");
@@ -1764,7 +1795,7 @@ mod tests {
     fn place_rows_two_recipes_ordered() {
         let machines = vec![iron_gear_spec(), iron_plate_spec()];
         let dep_order = vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()];
-        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, None, None, RowLayout::default());
+        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), None, None, RowLayout::default());
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0].spec.recipe, "iron-plate");
         assert_eq!(spans[1].spec.recipe, "iron-gear-wheel");
@@ -1775,7 +1806,7 @@ mod tests {
         // Second recipe starts at y_end_of_first + 2 (gap)
         let machines = vec![iron_plate_spec(), iron_gear_spec()];
         let dep_order = vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()];
-        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, None, None, RowLayout::default());
+        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), None, None, RowLayout::default());
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[1].y_start, spans[0].y_end + 2);
     }
@@ -1784,7 +1815,7 @@ mod tests {
     fn place_rows_y_offset() {
         let machines = vec![iron_plate_spec()];
         let dep_order = vec!["iron-plate".to_string()];
-        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 5, None, None, None, RowLayout::default());
+        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 5, None, InserterTier::default(), None, None, RowLayout::default());
         assert_eq!(spans[0].y_start, 5);
     }
 
@@ -1801,6 +1832,7 @@ mod tests {
             0,
             1,
             None,
+            InserterTier::default(),
             None,
             None,
             RowLayout::default(),
@@ -1862,6 +1894,7 @@ mod tests {
             0,
             0,
             Some("transport-belt"),
+            InserterTier::default(),
             None,
             None,
             RowLayout::default(),
@@ -1925,6 +1958,7 @@ mod tests {
             0,
             1,
             Some("transport-belt"),
+            InserterTier::default(),
             None,
             None,
             RowLayout::default(),
@@ -1947,7 +1981,7 @@ mod tests {
         let machines = vec![iron_plate_spec(), iron_gear_spec()];
         let dep_order = vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()];
         let (_, spans, _, total_height) =
-            place_rows(&machines, &dep_order, 5, 0, None, None, None, RowLayout::default());
+            place_rows(&machines, &dep_order, 5, 0, None, InserterTier::default(), None, None, RowLayout::default());
 
         // Every span should have y_end > y_start
         for span in &spans {
@@ -1975,7 +2009,7 @@ mod tests {
         let dep_order = vec!["iron-plate".to_string()];
         let bus_width = 10;
         let (_, spans, max_width, _) =
-            place_rows(&machines, &dep_order, bus_width, 0, None, None, None, RowLayout::default());
+            place_rows(&machines, &dep_order, bus_width, 0, None, InserterTier::default(), None, None, RowLayout::default());
 
         assert!(
             spans[0].row_width >= bus_width,
@@ -1998,11 +2032,12 @@ mod tests {
             0,
             0,
             None,
+            InserterTier::default(),
             None,
             Some(&extra_gaps),
             RowLayout::default(),
         );
-        let (_, spans_no_gap, _, _) = place_rows(&machines, &dep_order, 0, 0, None, None, None, RowLayout::default());
+        let (_, spans_no_gap, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), None, None, RowLayout::default());
 
         // Second row should start 5 tiles later with gap
         assert_eq!(

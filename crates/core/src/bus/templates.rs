@@ -9,6 +9,7 @@
 //!
 //! Port of `src/bus/templates.py`.
 
+use crate::bus::inserter_ladder::{size_side, InserterTier, Reach, SidePlan};
 use crate::models::{EntityDirection, PlacedEntity};
 
 // Gap between machine groups when lane-splitting output belts.
@@ -299,18 +300,90 @@ pub(crate) fn stamp_inline_bridge_b(
 // pack tight (Strategy A) or carry their own per-row continuation
 // at the 1-tile gap (Strategy B).)
 
+/// Free non-baseline dx offsets within `[0, stamped_stop)`, ascending,
+/// excluding every dx in `occupied` — the candidate columns
+/// `inserter_ladder::size_side`'s extra picks (beyond the one baseline
+/// slot every side already has) land on. Deriving this from the same
+/// stamped-range/occupancy variables the belts and bridge use (rather
+/// than a hardcoded budget table) means the ladder's column budget can
+/// never drift out of sync with the geometry that actually places
+/// entities — see `docs/rfp-inserter-sizing.md`'s free-column-budget
+/// table, which this reproduces for every `single_input_row` position.
+fn free_extra_dx(stamped_stop: i32, occupied: &[i32]) -> Vec<i32> {
+    (0..stamped_stop).filter(|dx| !occupied.contains(dx)).collect()
+}
+
+/// Stamp one machine side's ladder-sized inserters: one at `baseline_dx`,
+/// then `extra_dx` in ascending order until `plan.count` inserters are
+/// placed. `extra_dx` must have at least `plan.count - 1` entries —
+/// guaranteed by construction when its length is the `position_budget`
+/// passed to the `size_side` call that produced `plan`.
+#[allow(clippy::too_many_arguments)]
+fn stamp_side_inserters(
+    entities: &mut Vec<PlacedEntity>,
+    plan: &SidePlan,
+    mx: i32,
+    y: i32,
+    direction: EntityDirection,
+    item: &str,
+    segment_id: &Option<String>,
+    baseline_dx: i32,
+    extra_dx: &[i32],
+) {
+    let dxs = std::iter::once(baseline_dx).chain(extra_dx.iter().copied()).take(plan.count);
+    for dx in dxs {
+        entities.push(PlacedEntity {
+            name: plan.entity.to_string(),
+            x: mx + dx,
+            y,
+            direction,
+            carries: Some(item.to_string()),
+            segment_id: segment_id.clone(),
+            ..Default::default()
+        });
+    }
+}
+
+/// Emit `InserterSideCapped` when `plan` couldn't cover its required
+/// rate even at the richest tier `max_inserter_tier` allows and every
+/// free column used. No-op (and no trace event) when the side is fully
+/// covered.
+fn emit_shortfall_trace(recipe: &str, side_is_output: bool, required: f64, plan: &SidePlan) {
+    if let Some(shortfall) = plan.shortfall {
+        crate::trace::emit(crate::trace::TraceEvent::InserterSideCapped {
+            recipe: recipe.to_string(),
+            side_is_output,
+            required,
+            placed_entity: plan.entity.to_string(),
+            placed_count: plan.count,
+            shortfall,
+        });
+    }
+}
+
 /// Row for a recipe with 1 solid input.
 ///
 /// Layout per machine (`msz`-tile horizontal pitch, no gaps):
 /// ```text
 ///   y+0 : input belt (EAST)
-///   y+1 : input inserter (SOUTH)
+///   y+1 : input inserter(s) (SOUTH)
 ///   y+2..y+2+msz-1 : machine (msz×msz)
-///   y+2+msz : output inserter (SOUTH) [+ secondary output's long-handed
+///   y+2+msz : output inserter(s) (SOUTH) [+ secondary output's long-handed
 ///             extraction inserter at mx+2, when `secondary_output` is Some]
 ///   y+2+msz+1 : output belt (WEST -- toward bus)
 ///   y+2+msz+2 : secondary output belt, when `secondary_output` is Some
 /// ```
+///
+/// Each side's inserter count/tier is sized by
+/// `inserter_ladder::size_side` (`docs/rfp-inserter-sizing.md`):
+/// in-place tier upgrade (regular → fast → stack) first, extra
+/// inserters into whatever free columns the position's own belt/bridge
+/// geometry leaves (via [`free_extra_dx`]) only if the tier ladder alone
+/// can't cover `input_rate`/`output_rate`, capped at `max_inserter_tier`.
+/// `input_rate`/`output_rate` are per-machine, utilization-scaled —
+/// callers compute them the same way `check_inserter_throughput` scales
+/// its required rate, so the ladder and the check never size against
+/// different numbers.
 ///
 /// When `lane_split=true`, machines are split into two groups with a
 /// sideload bridge between them so the output belt uses both lanes.
@@ -319,15 +392,17 @@ pub(crate) fn stamp_inline_bridge_b(
 /// output belt one row south of the primary (RFP Fulgora D2b —
 /// uranium-processing's uranium-235 target + uranium-238 surplus:
 /// `spec.outputs[1]`, which owns no belt otherwise). Extracted via a
-/// long-handed inserter sharing the primary output inserter's row
-/// (`y+2+msz`) at column `mx+2`: reach 2 picks from the machine's
-/// middle row (`y+2+msz-2`, inside the machine footprint for `msz>=3`)
-/// and drops onto the new belt (`y+2+msz+2`), clearing the primary
-/// belt row entirely. Column `mx+2` collides with the sideload bridge's
-/// anchor columns, so callers must pass `lane_split=false` whenever
-/// `secondary_output.is_some()` — `placer::can_lane_split` enforces
-/// this. Requires `msz>=3` (debug-asserted); no caller today passes a
-/// smaller machine with a second solid output.
+/// dedicated long-handed inserter (reach-2, sized against
+/// `secondary_output_rate` but with a hard-0 extra-column budget — v2
+/// census: `mx+2` is its only slot) sharing the primary output
+/// inserter's row (`y+2+msz`) at column `mx+2`: picks from the
+/// machine's middle row (`y+2+msz-2`, inside the machine footprint for
+/// `msz>=3`) and drops onto the new belt (`y+2+msz+2`), clearing the
+/// primary belt row entirely. Column `mx+2` collides with the sideload
+/// bridge's anchor columns, so callers must pass `lane_split=false`
+/// whenever `secondary_output.is_some()` — `placer::can_lane_split`
+/// enforces this. Requires `msz>=3` (debug-asserted); no caller today
+/// passes a smaller machine with a second solid output.
 ///
 /// Returns `(entities, row_height)`.
 #[allow(clippy::too_many_arguments)]
@@ -345,6 +420,10 @@ pub fn single_input_row(
     lane_split: bool,
     output_east: bool,
     secondary_output: Option<(&str, &str)>,
+    input_rate: f64,
+    output_rate: f64,
+    secondary_output_rate: Option<f64>,
+    max_inserter_tier: InserterTier,
 ) -> (Vec<PlacedEntity>, i32) {
     debug_assert_eq!(
         crate::common::machine_dims(machine_entity),
@@ -423,16 +502,26 @@ pub fn single_input_row(
             });
         }
 
-        // Input inserter
-        entities.push(PlacedEntity {
-            name: "inserter".to_string(),
-            x: mx + 1,
-            y: y_offset + 1,
-            direction: EntityDirection::South,
-            carries: Some(input_item.to_string()),
-            segment_id: inserter_in_seg.clone(),
-            ..Default::default()
-        });
+        // Input inserter(s) — ladder-sized. Baseline slot at dx=1 (the
+        // column every pre-ladder layout used); extra picks land on
+        // whatever the input belt's own stamped range (`in_stop`) leaves
+        // free. The bridge lives on the output row only, so it never
+        // contests input columns.
+        const INPUT_BASELINE_DX: i32 = 1;
+        let input_extra_dx = free_extra_dx(in_stop, &[INPUT_BASELINE_DX]);
+        let input_plan = size_side(input_rate, Reach::Near, input_extra_dx.len(), max_inserter_tier);
+        stamp_side_inserters(
+            &mut entities,
+            &input_plan,
+            mx,
+            y_offset + 1,
+            EntityDirection::South,
+            input_item,
+            &inserter_in_seg,
+            INPUT_BASELINE_DX,
+            &input_extra_dx,
+        );
+        emit_shortfall_trace(recipe, false, input_rate, &input_plan);
 
         // Machine
         entities.push(PlacedEntity {
@@ -445,19 +534,38 @@ pub fn single_input_row(
             ..Default::default()
         });
 
-        // Output inserter — shifted to `mx` at the bridge anchor to
-        // free col `mx+1` for the bridge's South-belt entry.
+        // Output inserter(s) — ladder-sized. Baseline slot shifts to
+        // `mx` at the bridge anchor to free col `mx+1` for the bridge's
+        // South-belt entry; extra picks exclude every column the bridge
+        // owns (mapped from `bridge_x_set`'s absolute x's) and, when a
+        // secondary output rides this row, column `mx+2` (the
+        // secondary's own dedicated inserter).
         let out_ins_y = y_offset + 2 + msz;
-        let out_ins_x = if Some(i) == bridge_anchor { mx } else { mx + 1 };
-        entities.push(PlacedEntity {
-            name: "inserter".to_string(),
-            x: out_ins_x,
-            y: out_ins_y,
-            direction: EntityDirection::South,
-            carries: Some(output_item.to_string()),
-            segment_id: inserter_out_seg.clone(),
-            ..Default::default()
-        });
+        let is_anchor = Some(i) == bridge_anchor;
+        let out_baseline_dx = if is_anchor { 0 } else { 1 };
+        let mut out_occupied = vec![out_baseline_dx];
+        for dx in 0..msz {
+            if bridge_x_set.contains(&(mx + dx)) {
+                out_occupied.push(dx);
+            }
+        }
+        if secondary_output.is_some() {
+            out_occupied.push(2);
+        }
+        let out_extra_dx = free_extra_dx(out_stop, &out_occupied);
+        let output_plan = size_side(output_rate, Reach::Near, out_extra_dx.len(), max_inserter_tier);
+        stamp_side_inserters(
+            &mut entities,
+            &output_plan,
+            mx,
+            out_ins_y,
+            EntityDirection::South,
+            output_item,
+            &inserter_out_seg,
+            out_baseline_dx,
+            &out_extra_dx,
+        );
+        emit_shortfall_trace(recipe, true, output_rate, &output_plan);
 
         // Output belt (machine_size tiles wide) — skip cols owned by
         // the bridge to avoid duplicate-tile stamps.
@@ -477,16 +585,24 @@ pub fn single_input_row(
             });
         }
 
-        // Secondary output (RFP Fulgora D2b): long-handed inserter at
-        // `mx+2`, same row as the primary output inserter — reach 2
-        // picks the machine's middle row (inside the footprint for
-        // msz>=3) and drops onto a new belt one row south of the
+        // Secondary output (RFP Fulgora D2b): dedicated long-handed
+        // inserter at `mx+2`, same row as the primary output inserter —
+        // reach 2 picks the machine's middle row (inside the footprint
+        // for msz>=3) and drops onto a new belt one row south of the
         // primary, clearing it entirely. `mx+2` is guaranteed free of
-        // both the primary inserter (mx or mx+1) and the bridge
-        // (`lane_split` is always false here, see module doc comment).
+        // both the primary inserter(s) (mx or mx+1, plus any extra pick
+        // — excluded above) and the bridge (`lane_split` is always
+        // false here, see module doc comment). Sized on `Reach::Far`
+        // with a hard-0 extra-column budget (v2 census: no free column
+        // at this slot), so it always places exactly 1 inserter — a
+        // shortfall is recorded, never a second inserter, when the rate
+        // exceeds long-handed's reach-2 ceiling.
         if let Some((sec_item, sec_belt)) = secondary_output {
+            let sec_rate = secondary_output_rate.unwrap_or(0.0);
+            let sec_plan = size_side(sec_rate, Reach::Far, 0, max_inserter_tier);
+            debug_assert_eq!(sec_plan.count, 1, "secondary output has no extra-column budget");
             entities.push(PlacedEntity {
-                name: "long-handed-inserter".to_string(),
+                name: sec_plan.entity.to_string(),
                 x: mx + 2,
                 y: out_ins_y,
                 direction: EntityDirection::South,
@@ -494,6 +610,7 @@ pub fn single_input_row(
                 segment_id: secondary_ins_seg.clone(),
                 ..Default::default()
             });
+            emit_shortfall_trace(recipe, true, sec_rate, &sec_plan);
             let sec_belt_y = out_belt_y + 1;
             for dx in 0..out_stop2 {
                 entities.push(PlacedEntity {
@@ -4635,6 +4752,10 @@ mod tests {
             false,
             false,
             None,
+            0.5, // input_rate -- well under the regular-inserter ceiling
+            0.5, // output_rate
+            None,
+            InserterTier::default(),
         );
         assert_eq!(height, 7);
         assert_eq!(entities.len(), 9 + 7);
@@ -4656,6 +4777,10 @@ mod tests {
             false,
             false,
             None,
+            0.5,
+            0.5,
+            None,
+            InserterTier::default(),
         );
 
         // Input belts at y=0: x=0,1 (x=2 is orphan east-tail, trimmed).
@@ -4709,6 +4834,10 @@ mod tests {
             false,
             false,
             None,
+            0.5,
+            0.5,
+            None,
+            InserterTier::default(),
         );
         assert_entity(&entities, 6, 12, "assembling-machine-3");
     }
@@ -4729,6 +4858,10 @@ mod tests {
             false,
             true, // output_east
             None,
+            0.5,
+            0.5,
+            None,
+            InserterTier::default(),
         );
         // Output belts at y=6 should face EAST
         for dx in 0..3_i32 {
@@ -4755,6 +4888,10 @@ mod tests {
             true, // lane_split
             false,
             None,
+            0.5,
+            0.5,
+            None,
+            InserterTier::default(),
         );
         assert_eq!(height, 7);
 
@@ -4806,6 +4943,10 @@ mod tests {
             true,
             false,
             None,
+            0.5,
+            0.5,
+            None,
+            InserterTier::default(),
         );
         let (entities_no_split, _) = single_input_row(
             "iron-gear-wheel",
@@ -4821,6 +4962,10 @@ mod tests {
             false,
             false,
             None,
+            0.5,
+            0.5,
+            None,
+            InserterTier::default(),
         );
         assert_eq!(entities_split.len(), entities_no_split.len());
     }

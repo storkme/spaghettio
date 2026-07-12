@@ -532,3 +532,37 @@ stop signal.
   accepted-residue DoD is thus restated precisely: aggregate zero on
   all six packs (met by construction at P3), plus 20 attribution
   warnings + 3 aggregate warnings as the permanent, honest residue.*
+- *2026-07-12 — **Phase 1 LANDED.** `bus::inserter_ladder` (new):
+  `InserterTier{Regular,Fast,Stack}` (default Stack),
+  `size_side(rate, reach, budget, max_tier)` — cheapest-sufficient
+  rungs, long-handed count-ladder at reach-2, best-effort +
+  shortfall + `InserterSideCapped` trace beyond budget/cap; consumes
+  the same I8 constants the check reads, with a drift-canary
+  identity test; 23 unit tests. `LayoutOptions.max_inserter_tier`
+  threaded to `single_input_row`, whose three inserter sites now
+  size from per-machine utilization-scaled rates (validator's exact
+  count/ceil convention); free-column budgets DERIVED from the
+  template's own belt-trim/bridge variables, reproducing every
+  frozen-table cell as a consequence of geometry rather than a
+  lookup. **Contract: 20/21 fixtures matched the frozen after-P1
+  predictions to the digit** (gauntlet 0/6/4/0/18/31 verified by
+  live run). KC4: entity and area deltas ZERO everywhere — every
+  corpus fix is an in-place tier swap, confirming "rung-2+ empty" in
+  real placement. KC6: zero violations across 2012 sides; Phase-1
+  slice placed 1665 regular / 159 fast / 188 stack. The single
+  mismatch (tier4_advanced_circuit_partitioned, actual 8 vs
+  predicted 6) was STOPPED on, then root-caused to a PRE-EXISTING
+  validator gap: `check_inserter_throughput` keys specs by recipe
+  name only, collapsing partition-split siblings with different
+  utilizations, AND `validate()` receives the pre-partition
+  SolverResult — its "required" matches neither module (the ladder
+  sized both modules correctly, layout-verified). Invisible
+  pre-ladder because uniform 0.84/s avail made the wrong comparison
+  give the same answer. Resolution: fixture pinned at the check's
+  actual 8 with the two false positives documented in-line; a
+  follow-up VALIDATOR-ONLY commit (KC3-sequenced — check and
+  templates never move together) fixes the sibling keying/data-flow
+  and re-pins to 6. Also re-blessed: golden hashes corpus-wide
+  (entity types changed in place), and the HorizontalStack crossing
+  fixture 82→34 (outside the census corpus, independently
+  verified).*

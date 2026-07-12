@@ -16,6 +16,7 @@ fn main() {
     let opts = LayoutOptions {
         surplus_policy: Default::default(),
         max_belt_tier: Some("fast-transport-belt".to_string()),
+        max_inserter_tier: Default::default(),
         ..Default::default()
     };
     let layout = build_bus_layout(&sr, opts).unwrap();

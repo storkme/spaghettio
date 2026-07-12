@@ -178,6 +178,21 @@ pub enum TraceEvent {
         block_size: usize,
     },
 
+    /// `bus::inserter_ladder::size_side` couldn't cover a machine side's
+    /// planned rate even with every free column used at the richest tier
+    /// `max_inserter_tier` allows. The layout still gets built (best-
+    /// effort placement, no failure) and `check_inserter_throughput`
+    /// keeps its honest warning — this event just names the cap that
+    /// caused it. See `docs/rfp-inserter-sizing.md` Design.
+    InserterSideCapped {
+        recipe: String,
+        side_is_output: bool,
+        required: f64,
+        placed_entity: String,
+        placed_count: usize,
+        shortfall: f64,
+    },
+
     // Phase 2: Lane Planning
     LanesPlanned {
         lanes: Vec<LaneInfo>,

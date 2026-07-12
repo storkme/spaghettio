@@ -316,6 +316,7 @@ fn run_e2e_inner(
             surplus_policy,
             max_belt_tier: belt_tier.map(|s| s.to_string()),
             row_layout,
+            max_inserter_tier: Default::default(),
         },
     )
         .map_err(|e| {
@@ -576,21 +577,30 @@ fn assert_golden_hash(result: &E2EResult, test_name: &str) {
 /// `(test_name, sha256_hex_of_entities)`. Captured under
 /// `LayoutStrategy::Pooled` on the pre-RFP baseline.
 const GOLDEN_HASHES: &[(&str, &str)] = &[
-    ("tier1_iron_gear_wheel", "458679d5a3a9f732eeec1701cd48396b3e2215ff66a63d982b876ef4a93c85b5"),
-    ("tier1_iron_gear_wheel_from_ore", "5fffb4c717d4b283cba0237a405e99cc0959bf76e23caa36f1ba47b40ed6ae84"),
-    ("tier1_iron_gear_wheel_20s", "add07d75c26386616aa4b7d4abf7edd754a2231523598145e2f0fc2ecd3c8a2f"),
+    // RFP rfp-inserter-sizing.md Phase 1: single_input_row's inserters are
+    // now ladder-sized (regular -> fast -> stack in place), so hashes below
+    // that cover single_input_row-shaped fixtures moved even though entity
+    // COUNT and layout geometry (KC4) stayed byte-identical — only the
+    // inserter entity NAMES at the same positions changed.
+    ("tier1_iron_gear_wheel", "94154af11c8e30b329b5f165ebd60e2c689a138f227b336950db8a9e4a723b1e"),
+    ("tier1_iron_gear_wheel_from_ore", "9a7eefe79e18ce397c1c8249ff9f22846c08933dad00240e617ed4387cd8e4c1"),
+    ("tier1_iron_gear_wheel_20s", "8b991a05ee095d7c7f1debd145c88014a98d2ab41f3ed1945244d0cc76d4193d"),
     // Updated when `(m, m)` family balancers became passthroughs
     // (issue #268) — splitter blocks replaced by a single south-facing
     // belt per output column.
-    ("tier2_electronic_circuit_from_ore", "4605743dfe38a8ce969f81c98871cfb7625724f7aec87474fbff54491a5586b0"),
+    // RFP rfp-inserter-sizing.md Phase 1: single_input_row rows (iron-plate/
+    // copper-plate) ladder-sized, see note above.
+    ("tier2_electronic_circuit_from_ore", "20279b1523ab1b5b3b0a5843bb087909c4d6ad884cbd3fad31eb190cc3168a53"),
     // Hashes below changed when row inputs were switched to always
     // use `max_belt_tier` instead of per-row consumption rate (fixes
     // tier-mismatch seam where bus tap-off feeds row belt-in).
     // Updated again when ghost-routed tap/ret/feeder horizontals were
     // upgraded to `max_belt_tier` at materialisation time, and again
     // when `(m, m)` family balancers became passthroughs (#268).
-    ("tier2_electronic_circuit_20s_from_ore", "852bcd457031b30ac088716dd5023d121a0024f4b9f7b46111ca400bb398d029"),
-    ("tier2_electronic_circuit_splitter_stamp_regression", "47a79561c746ad68c37e64966eca579d6f8dbfa7fa7bd9d7f7d3433a8d55566a"),
+    // RFP rfp-inserter-sizing.md Phase 1: single_input_row rows ladder-sized, see note above.
+    ("tier2_electronic_circuit_20s_from_ore", "fcab0d27c3946295dc3976367be06ef96c3ab3606819bfa505f8ca5b04283785"),
+    // RFP rfp-inserter-sizing.md Phase 1: single_input_row rows ladder-sized, see note above.
+    ("tier2_electronic_circuit_splitter_stamp_regression", "8886a028a4e0d1427906c77b75b54de7ce59113df2cc04983fcd37f7baa1c365"),
     ("tier3_plastic_bar", "0177826236e45ddc46870105465bef1097e7cd20cdf7b62d191081e904f2634f"),
     ("tier3_sulfuric_acid", "7f39e8a6a3639abf22a2c0c2555ccff94d33c6f4ca00cf27c119d1c0740c1724"),
     ("tier3_heavy_oil_cracking", "76f4dd59f1e6422e4001b81a57f2815ae4447a4f1e85f9fc2de386440b39a596"),
@@ -656,7 +666,8 @@ fn tier1_iron_gear_wheel() {
     // RFP rfp-lane-demand-flow.md Phase 1: 10 gear machines (AM1, 1 gear/s each
     // for 10/s) × 2 inserter-bound sides — 2.0/s iron-plate in and 1.0/s gears out,
     // both over the 0.84/s regular-inserter cap. One regular inserter per side.
-    assert_warnings_exactly(&result, &[("inserter-throughput", 20)]);
+    // RFP rfp-inserter-sizing.md Phase 1 re-bless: ladder-sized inserters clear single_input_row entirely (20 -> 0).
+    assert_warnings_exactly(&result, &[]);
     assert_produces(&result, "iron-gear-wheel", 10.0);
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier1_iron_gear_wheel");
@@ -783,7 +794,8 @@ fn tier1_iron_gear_wheel_from_ore() {
     assert_no_errors(&result);
     // RFP Phase 1: 14 inserter-bound machine-sides (gear + from-ore smelting chain;
     // every side's per-machine rate exceeds the 0.84/s regular-inserter cap).
-    assert_warnings_exactly(&result, &[("inserter-throughput", 14)]);
+    // RFP rfp-inserter-sizing.md Phase 1 re-bless: ladder-sized inserters clear single_input_row entirely (14 -> 0).
+    assert_warnings_exactly(&result, &[]);
     assert_produces(&result, "iron-gear-wheel", 10.0);
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier1_iron_gear_wheel_from_ore");
@@ -799,7 +811,8 @@ fn tier1_iron_gear_wheel_20s() {
     assert_no_errors(&result);
     // RFP Phase 1: 28 inserter-bound machine-sides at 20/s (more gear machines than
     // the 10/s case; each side > 0.84/s).
-    assert_warnings_exactly(&result, &[("inserter-throughput", 28)]);
+    // RFP rfp-inserter-sizing.md Phase 1 re-bless: ladder-sized inserters clear single_input_row entirely (28 -> 0).
+    assert_warnings_exactly(&result, &[]);
     assert_produces(&result, "iron-gear-wheel", 20.0);
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier1_iron_gear_wheel_20s");
@@ -893,7 +906,8 @@ fn tier2_electronic_circuit() {
     assert_no_errors(&result);
     // RFP Phase 1: 34 inserter-bound machine-sides (electronic-circuit chain —
     // copper-cable + EC assemblers, sides over the 0.84/s regular-inserter cap).
-    assert_warnings_exactly(&result, &[("inserter-throughput", 34)]);
+    // RFP rfp-inserter-sizing.md Phase 1 re-bless: single_input_row (iron-plate/copper-cable rows) ladder-sized; the electronic-circuit dual_input_row itself is Phase 2 scope, residue remains (34 -> 14).
+    assert_warnings_exactly(&result, &[("inserter-throughput", 14)]);
     assert_produces(&result, "electronic-circuit", 10.0);
     assert_round_trip(&result);
 }
@@ -949,7 +963,8 @@ fn tier2_electronic_circuit_from_ore() {
     assert_no_errors(&result);
     // RFP Phase 1: 50 inserter-bound machine-sides (EC fully from ore, incl. the
     // added iron/copper smelting rows; each side > 0.84/s).
-    assert_warnings_exactly(&result, &[("inserter-throughput", 50)]);
+    // RFP rfp-inserter-sizing.md Phase 1 re-bless: single_input_row rows (iron-plate/copper-plate/copper-cable from ore) ladder-sized; electronic-circuit dual_input_row is Phase 2 scope, residue remains (50 -> 20).
+    assert_warnings_exactly(&result, &[("inserter-throughput", 20)]);
     assert_produces(&result, "electronic-circuit", 10.0);
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier2_electronic_circuit_from_ore");
@@ -974,7 +989,8 @@ fn tier2_electronic_circuit_20s_from_ore() {
 
     assert_no_errors(&result);
     // RFP Phase 1: 68 inserter-bound machine-sides (EC from ore at 20/s).
-    assert_warnings_exactly(&result, &[("inserter-throughput", 68)]);
+    // RFP rfp-inserter-sizing.md Phase 1 re-bless: single_input_row rows ladder-sized; electronic-circuit dual_input_row is Phase 2 scope, residue remains (68 -> 28).
+    assert_warnings_exactly(&result, &[("inserter-throughput", 28)]);
     assert_produces(&result, "electronic-circuit", 20.0);
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier2_electronic_circuit_20s_from_ore");
@@ -1265,7 +1281,8 @@ fn tier4_advanced_circuit_from_plates() {
 
     assert_no_errors(&result);
     // RFP Phase 1: 14 inserter-bound machine-sides (advanced-circuit @1/s chain).
-    assert_warnings_exactly(&result, &[("inserter-throughput", 14)]);
+    // RFP rfp-inserter-sizing.md Phase 1 re-bless: single_input_row (copper-cable) ladder-sized; advanced-circuit triple_input_row + electronic-circuit dual_input_row are Phase 2/3 scope, residue remains (14 -> 6).
+    assert_warnings_exactly(&result, &[("inserter-throughput", 6)]);
     assert_produces(&result, "advanced-circuit", 1.0);
     assert_round_trip(&result);
 }
@@ -1316,9 +1333,26 @@ fn tier4_advanced_circuit_partitioned() {
          partitioner did not fire on the motivating case"
     );
     assert_no_errors(&result);
-    // RFP Phase 1: 14 inserter-bound machine-sides (same machine set as the Pooled
-    // tier4 AC@1/s above; partitioning changes lanes, not per-machine rates).
-    assert_warnings_exactly(&result, &[("inserter-throughput", 14)]);
+    // RFP rfp-inserter-sizing.md Phase 1 re-bless: pinned to the CURRENT
+    // check output (8), not the frozen census contract's true count (6) —
+    // 2 of these 8 are false positives. `apply_partition_plan` splits
+    // copper-cable into two `MachineSpec` siblings sharing recipe name
+    // but different per-machine rates (module A ~2.0/s -> correctly gets
+    // fast-inserter; module B ~3.0/s -> correctly gets stack-inserter,
+    // both verified against the actual layout). `check_inserter_throughput`'s
+    // `recipe_to_spec` is keyed by recipe name only and collapses these
+    // siblings to one, AND is invoked with the pre-partition SolverResult
+    // (never the internally-partitioned one `build_bus_layout` uses) — so
+    // its "required" is the ORIGINAL unsplit recipe's blended rate (2.50/s),
+    // matching neither sibling's true demand. That falsely flags module A's
+    // rows (fast-inserter, 2.31/s avail) since 2.31 < 2.50, even though
+    // their real per-module demand (2.0/s) is fully covered. Pre-existing
+    // gap, invisible before this RFP's ladder (avail was uniformly 0.84/s
+    // everywhere, so the miscalibrated comparison happened to agree with
+    // itself). Decision log (docs/rfp-inserter-sizing.md): a follow-up
+    // validator-only commit fixes the recipe_to_spec keying / partition
+    // data-flow and re-pins this to 6.
+    assert_warnings_exactly(&result, &[("inserter-throughput", 8)]);
 }
 
 /// Regression test for the pipe-as-port-tile bug. URL:
@@ -1360,6 +1394,7 @@ fn tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing() {
             max_belt_tier: Some("transport-belt".to_string()),
             row_layout: RowLayout::HorizontalStack,
             surplus_policy: SurplusPolicy::default(),
+            max_inserter_tier: Default::default(),
         },
     )
     .unwrap_or_else(|e| panic!("{test_name}: layout: {e}"));
@@ -1421,13 +1456,18 @@ fn tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing() {
         );
     }
 
-    // 82 inserter-bound machine-sides (AC@7/s HorizontalStack). Every machine
-    // is inserter-bound, so demand-pull leaves no belt-delivery warnings here.
+    // RFP rfp-inserter-sizing.md Phase 1 re-bless: single_input_row rows
+    // (iron-plate/copper-plate/copper-cable) ladder-sized; the HorizontalStack
+    // dual_input_row itself is Phase 2 scope, residue remains (82 -> 34). Not
+    // part of the frozen Phase 0v2 census corpus (uses RowLayout::HorizontalStack,
+    // which the census never exercised), so this has no frozen prediction to
+    // check against -- verified directly: entity count/dims unchanged (KC4),
+    // strategy is Pooled (no partition-collapse risk).
     let inserter_throughput_count =
         warnings.iter().filter(|i| i.category == "inserter-throughput").count();
     assert_eq!(
-        inserter_throughput_count, 82,
-        "{test_name}: expected exactly 82 inserter-throughput warnings"
+        inserter_throughput_count, 34,
+        "{test_name}: expected exactly 34 inserter-throughput warnings"
     );
 }
 
@@ -1480,6 +1520,7 @@ fn tier5_processing_unit_2s_horizontal_stack_iron_ore_pipe_bypass() {
             max_belt_tier: Some("fast-transport-belt".to_string()),
             row_layout: RowLayout::HorizontalStack,
             surplus_policy: SurplusPolicy::default(),
+            max_inserter_tier: Default::default(),
         },
     )
     .unwrap_or_else(|e| panic!("{test_name}: layout: {e}"));
@@ -1584,6 +1625,7 @@ fn tier5_processing_unit_25s_horizontal_stack_pole_coverage() {
             max_belt_tier: None,
             row_layout: RowLayout::HorizontalStack,
             surplus_policy: SurplusPolicy::default(),
+            max_inserter_tier: Default::default(),
         },
     )
     .unwrap_or_else(|e| panic!("{test_name}: layout: {e}"));
@@ -1650,7 +1692,8 @@ fn tier4_advanced_circuit_from_ore_am2() {
     // over-inflates inside balancer feedback cycles, stealing from an adjacent
     // acyclic branch. Even-split delivered ≥4.3 here, so it is a modeling residual,
     // not a real starvation. See report / rfp-lane-demand-flow.md.
-    assert_warnings_exactly(&result, &[("input-rate-delivery", 1), ("inserter-throughput", 58)]);
+    // RFP rfp-inserter-sizing.md Phase 1 re-bless: single_input_row rows ladder-sized; remaining rows are Phase 2/3 scope, residue remains (58 -> 24). input-rate-delivery unrelated, unchanged.
+    assert_warnings_exactly(&result, &[("input-rate-delivery", 1), ("inserter-throughput", 24)]);
     assert_produces(&result, "advanced-circuit", 5.0);
     assert_round_trip(&result);
 }
@@ -1688,7 +1731,8 @@ fn tier5_processing_unit_from_ore_am3() {
     // Demand-pull + the UG-crossing demand fix clear every prior belt-delivery false
     // positive across this layout's underground hops; the residual is purely
     // inserter-throughput.
-    assert_warnings_exactly(&result, &[("inserter-throughput", 129)]);
+    // RFP rfp-inserter-sizing.md Phase 1 re-bless: single_input_row rows ladder-sized; remaining rows are Phase 2/3 scope, residue remains (129 -> 65).
+    assert_warnings_exactly(&result, &[("inserter-throughput", 65)]);
     assert_produces(&result, "processing-unit", 2.0);
     assert_round_trip(&result);
 }

@@ -9,6 +9,7 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::models::{EntityDirection, LayoutResult, PlacedEntity, SolverResult};
+use crate::bus::inserter_ladder::InserterTier;
 use crate::bus::lane_planner::{
     plan_bus_lanes, bus_width_for_lanes, BusLane, LaneFamily, MACHINE_ENTITIES,
 };
@@ -77,6 +78,11 @@ pub struct LayoutOptions {
     pub max_belt_tier: Option<String>,
     pub row_layout: RowLayout,
     pub surplus_policy: SurplusPolicy,
+    /// Hard cap on inserter tier the sizing ladder may place
+    /// (`docs/rfp-inserter-sizing.md`), mirroring `max_belt_tier`
+    /// semantics. Default `Stack`. Core field only in Phase 1 — not yet
+    /// plumbed through wasm-bindings or the web UI (Phase 4).
+    pub max_inserter_tier: InserterTier,
 }
 
 impl LayoutOptions {
@@ -88,6 +94,7 @@ impl LayoutOptions {
             max_belt_tier: max_belt_tier.map(|s| s.to_string()),
             row_layout: RowLayout::default(),
             surplus_policy: SurplusPolicy::default(),
+            max_inserter_tier: InserterTier::default(),
         }
     }
 }
@@ -260,6 +267,7 @@ fn layout_pass(
     explicit_plan: Option<&crate::bus::partitioner::PartitionPlan>,
 ) -> Result<(LayoutResult, Vec<RowSpan>), String> {
     let max_belt_tier = opts.max_belt_tier.as_deref();
+    let max_inserter_tier = opts.max_inserter_tier;
 
     // RFP Fulgora Phase 2 (docs/rfp-fulgora-scrap.md D1): under
     // `SurplusPolicy::Void`, synthesize recycler-bank voider rows for
@@ -346,6 +354,7 @@ fn layout_pass(
         temp_bw,
         bus_header,
         max_belt_tier,
+        max_inserter_tier,
         Some(&final_output_items),
         retry_extra_gaps,
         opts.row_layout,
@@ -389,6 +398,7 @@ fn layout_pass(
                 actual_bw,
                 bus_header,
                 max_belt_tier,
+                max_inserter_tier,
                 Some(&final_output_items),
                 Some(&merged_gaps),
                 opts.row_layout,

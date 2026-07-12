@@ -201,6 +201,7 @@ impl DecompositionCandidate for ModuleSizeSplit {
             max_belt_tier: opts.max_belt_tier.clone(),
             row_layout: opts.row_layout,
             surplus_policy: opts.surplus_policy,
+            max_inserter_tier: opts.max_inserter_tier,
         };
         run_layout_with_retry(&transformed, &inner_opts)
     }
