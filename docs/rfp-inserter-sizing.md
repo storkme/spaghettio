@@ -103,13 +103,31 @@ size_side(rate, reach, position_budget, max_tier) -> SidePlan
 
 `dual_input_row` (and the far/near pair in `triple_input_row`)
 currently assign ingredients to near/far belts by recipe order —
-arbitrary. v2 assigns the ingredient with the higher per-machine
+arbitrary (verified: item-agnostic inserter placement; item0/item1
+derive from `solid_inputs` order at placer.rs:1027-1047, a clean
+local reorder). v2 assigns the ingredient with the higher per-machine
 rate to the NEAR (reach-1) belt, where the full ladder applies; ties
 preserve the current order (golden-churn minimization). Deterministic,
 rate-derived, unit-tested. This is a real template behavior change
 that moves goldens on dual/triple-input rows by itself — it lands
 inside the same phase as those templates' ladder work so each fixture
 re-blesses once per phase, not twice.
+
+**Per-item attribution check (v2 delta-review blocker, resolved
+here).** `check_inserter_throughput` is item-blind: it aggregates a
+machine's input inserters into one side-wide total and never reads
+which item each inserter carries. Pre-v2 that was harmless; post-v2,
+assignment is load-bearing — a template bug putting the hungry
+ingredient on the far belt would validate CLEAN on aggregate while
+starving in-game (total avail unchanged, per-item delivery broken).
+Resolution: a NEW companion check (per machine, per solid input
+item: Σ throughput of the inserters attributed to that item ≥ that
+item's utilization-scaled rate), keyed on inserter `carries`
+attribution. It lands in its own commit BEFORE Phase 2's template
+commit — thereafter kill criterion 3's no-co-edit rule covers it
+like the aggregate check. Phase 0v2 audits that templates reliably
+set `carries` on input inserters (prerequisite for attribution); if
+they don't, that plumbing is Phase 1 scope.
 
 ### `max_inserter_tier` — user-facing engine parameter
 
@@ -138,16 +156,23 @@ final phase, alongside the existing belt-tier control.
 - Power: added/upgraded inserters verified per phase via existing
   power checks.
 
-### Composition gap (recorded, from v1 review)
+### Composition gap (recorded, from v1 review; sharpened by v2 delta)
 
 I8 constants are correct for belt-adjacent inserters under
 saturation; the residual is that `check_inserter_throughput` assumes
-the feeding belt sustains the demanded rate. Mitigation: I8 doc note
-+ the demand-pull walker already raises lane delivery toward true
-demand; a dedicated cross-check stays on the validator backlog. Note
-the stack rung sharpens this: a 12/s side demands more from its lane
-than fast ever did — the cross-check's priority rises if Phase 0v2
-census shows stack sides near lane capacity.
+the feeding belt sustains the demanded rate. The stack rung sharpens
+this in a QUALITATIVE way, not just rate magnitude: the 2.0
+`stack-inserter` prototype sets `wait_for_full_hand=true` (fast/
+regular/bulk do not) — it waits to fill all 5 hand slots before
+swinging (`grab_less_to_match_belt_stack=true` partially mitigates).
+The ~12/s figure therefore assumes the feeding belt delivers items
+DENSELY enough to fill a 5-item hand promptly — a burst-density
+requirement, not just "12/s average". Kill criterion 5(b)'s
+stack-upgraded in-game anchor explicitly watches for hand-fill
+stalls. Mitigation otherwise unchanged: I8 doc note, demand-pull
+walker, dedicated lane-vs-inserter cross-check on the validator
+backlog (priority rises if Phase 0v2 shows stack sides near lane
+capacity).
 
 ### Non-goals
 
@@ -181,10 +206,14 @@ census shows stack sides near lane capacity.
    machine after Phase 2. Either still starving with warnings at
    zero = the CHECK is miscalibrated — stop everything.
 6. **Cheapest-sufficient audit**: if any gauntlet layout places a
-   stack inserter where the arithmetic shows fast sufficed, the
-   ladder selection is buggy — stop and fix before proceeding (this
-   guards the user-facing aesthetic/cost contract, not just
-   correctness).
+   stack inserter where the arithmetic shows fast sufficed, or any
+   inserter above the user's `max_inserter_tier`, the ladder
+   selection is buggy — stop and fix before proceeding (this guards
+   the user-facing aesthetic/cost contract, not just correctness).
+   The audit arithmetic is evaluated against the SAME frozen
+   Phase 0v2 budget/ceiling table kill criterion 1 uses — a KC6
+   audit may never re-derive budgets ad hoc (single source of
+   truth, per the v1 review's discipline).
 
 ## Verification plan
 
@@ -209,9 +238,16 @@ Per the CLAUDE.md protocol, plus:
 ## Phasing
 
 - **Phase 0v2 — geometry audit + re-census**: close the v1 census
-  debts (self_loop/voider/scrap rows, extrapolated sub-budgets),
-  re-run the census with v2 ceilings, evaluate kill criterion 1,
-  freeze the per-phase per-fixture prediction table.
+  debts (self_loop/voider/scrap rows — audit `self_loop_row` FIRST,
+  it's structurally the most complex untabled template; extrapolated
+  sub-budgets), audit inserter `carries` attribution reliability,
+  re-run the census with v2 ceilings AND per-item decomposition
+  (recipe-ratio split per side — the delta review found a
+  zero-margin case: PU's electronic-circuit row puts iron-plate at
+  exactly 2.40/s against a 2.40/s far ceiling after reassignment),
+  flag every side within 10% of its ceiling as at-risk, evaluate
+  kill criterion 1, freeze the per-phase per-fixture prediction
+  table.
 - **Phase 1 — ladder helper + `single_input_row`**: tier1 zero;
   mixed fixtures re-bless to predicted reduced counts; anchor (a).
 - **Phase 2 — `dual_input_row` (ladder + ingredient assignment
@@ -276,3 +312,25 @@ stop signal.
   suffices). Phase 0v2 (geometry-debt audit + re-census) precedes
   any template code, same 5%/all-packs-zero gate. Pending delta
   re-review, then Phase 0v2.*
+- *2026-07-12 — v2 delta review: REVISE with one blocker, all
+  incorporated. (1) BLOCKER — `check_inserter_throughput` is
+  ITEM-BLIND (aggregates per side, never reads inserter carries);
+  v2 makes item identity load-bearing, so a hungry-ingredient
+  misassignment would validate clean while starving in-game.
+  Resolved: new per-item attribution companion check (lands in its
+  own commit BEFORE Phase 2's templates; carries-attribution audit
+  added to Phase 0v2). (2) Stack rung arithmetic CONFIRMED against
+  draftsman prototype data: `stack_size_bonus=4` is on the entity,
+  not research — 5 items/swing ≈ 12/s at zero research, ~20-25%
+  headroom over the 9.6/s worst case. New: `wait_for_full_hand=true`
+  on the stack prototype → burst-density requirement recorded in the
+  composition-gap note, watched by kill criterion 5(b). (3)
+  Reassignment geometry confirmed freely swappable (item-agnostic
+  inserters, positional item0/item1). (4) Zero-margin case found in
+  real census data: PU's EC row → iron-plate exactly 2.40/s vs
+  2.40/s far ceiling post-reassignment — Phase 0v2 now decomposes
+  per-item and flags all sides within 10% of ceiling. (5) KC6 pinned
+  to the same frozen budget table as KC1 + max-tier violations
+  folded in. (6) Phase 0v2 audits self_loop_row first (most complex
+  untabled template). Pending final confirm on the blocker
+  resolution, then acceptance for Phase 0v2.*
