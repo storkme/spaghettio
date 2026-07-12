@@ -364,3 +364,6 @@ stop signal.
   pin adopted: the attribution check covers `triple_input_row`'s
   far/near pair as well as dual — Phase 2 bundles both, the check
   is NOT dual-only.*
+- *2026-07-12 — **v2 accepted by user.** Phase 0v2 started: geometry
+  audit (self_loop_row first) + carries-attribution audit +
+  per-item re-census with v2 ceilings and 10% at-risk flagging.*
