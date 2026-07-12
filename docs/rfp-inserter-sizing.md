@@ -507,3 +507,28 @@ stop signal.
   what assert_warnings_exactly counts); the v3 table is
   item-granularity, and Phase 2's per-item check will add its own
   warning stream with its own frozen counts when it lands.*
+- *2026-07-12 — **FROZEN side-granularity re-blessing contract
+  delivered** (with two self-corrections: prior "aggregate" figures
+  used an any-item-exceeds proxy, stricter than the real summed
+  check; and self_loop/voider/scrap are Phase 3 whole-row per the
+  Phasing text, not reach-split). At the aggregate check's TRUE
+  semantics (Σ avail vs Σ required per side), **all six gauntlet
+  packs reach ZERO after Phase 3** — corpus total 593→246 (P1)→84
+  (P2)→**3** (P3: fish 1, pentapod 2, the HasFluid wall; the only
+  non-zero fixtures anywhere). Frozen after-P1 counts: automation 0,
+  chemical 6, logistic 4, military 0, production 18, utility 31,
+  tier1 0/0/0, tier2 14/28/20, tier3 10/10, tier4 24/6/6, tier5 65,
+  bacteria 1, fish 1, pentapod 2. **The honesty wrinkle — 20 MASKED
+  sides**: they go aggregate-clean while carrying real per-item
+  shortfalls (near-slot surplus capacity summing over a far-slot
+  item's deficit): chemical 1, production 5, utility 2, tier2 ×3,
+  tier4 ×4, tier5 ×5 — the exact same machines the item-level
+  residue named, systematic not incidental. e2e will therefore LOOK
+  fully green on the gauntlet packs after Phase 3; the truth (the
+  user-accepted 25-item residue) is visible ONLY through Phase 2's
+  per-item attribution check, whose warning counts are now
+  pre-derived and which must be asserted ALONGSIDE
+  assert_warnings_exactly, never treated as redundant with it. The
+  accepted-residue DoD is thus restated precisely: aggregate zero on
+  all six packs (met by construction at P3), plus 20 attribution
+  warnings + 3 aggregate warnings as the permanent, honest residue.*
