@@ -268,3 +268,37 @@ prediction is itself a stop signal.
   in-place swap needs zero columns), so no new honesty hole — the
   check remains the independent auditor. **Ready for acceptance.***
 - *2026-07-12 — **accepted by user.** Phase 0 census started.*
+- *2026-07-12 — **Phase 0 census complete: KC1 FIRES on both
+  conditions. STOP — no Phase 1 template code.** Census: 593 warned
+  sides across the six 1/s gauntlet packs + 15 tier fixtures,
+  reconciled 21/21 against actual warning counts (regenerate:
+  `cargo run --example census_inserter_sizing --release`, gitignored
+  example). 116/593 sides (19.6%) exceed their position ceiling vs
+  the 5% threshold — and a maximally conservative recount using ONLY
+  verbatim table-backed cells (zero extrapolation) still gives
+  66/593 = 11.1%, double the threshold. Per-pack: only automation
+  and logistic can reach zero within existing geometry; military,
+  chemical, production, utility cannot. Two walls drive nearly all
+  of it: (1) **dual_input_row's input ceiling ≈ 4.71/s** (rung-1
+  fast + long-handed + one contested column) vs electronic-circuit-
+  shaped demands of 5.7–9.6/s per machine — EC is in almost every
+  chain; (2) **single_input_row bridge-anchor output ceiling =
+  2.31/s** (bridge owns all extra columns) vs copper-cable outputs
+  of 3.0–5.0/s. Rung histogram: 46% of sides clear on the in-place
+  swap alone, 23% rung 2, 4% rung 3, 7% long-handed ladder, 20%
+  exceed. 44 machines have BOTH sides contesting columns (the
+  tie-break rule is load-bearing, and Phase 0's ceiling credit was
+  optimistic — real post-allocation capping will be higher). Census
+  gaps recorded: self_loop/voider/scrap rows have no free-column
+  table entries (their 3 fixture predictions are untrusted floors);
+  dual/triple/quad position sub-budgets partially extrapolated —
+  audit before any v2 census. The per-phase prediction table is
+  OBSOLETE (conditioned on the failed design). **Rethink levers
+  identified for a v2 design round**: (a) a stack-inserter rung
+  (~12/s at zero research, reach-1 only) dissolves both walls where
+  the hungry side is reach-1; (b) ingredient-to-belt assignment as a
+  free template lever — dual_input_row can put the HUNGRY ingredient
+  on the near (reach-1) belt where the full ladder applies, since no
+  fast long-handed inserter exists; (c) bridge redesign only if (a)+
+  (b) leave residue. v2 goes back through adversarial review before
+  acceptance.*
