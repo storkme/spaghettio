@@ -267,3 +267,4 @@ prediction is itself a stop signal.
   floor is provably ≥ today's baseline at every position (rung-1
   in-place swap needs zero columns), so no new honesty hole — the
   check remains the independent auditor. **Ready for acceptance.***
+- *2026-07-12 — **accepted by user.** Phase 0 census started.*
