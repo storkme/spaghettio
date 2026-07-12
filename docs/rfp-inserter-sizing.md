@@ -566,3 +566,18 @@ stop signal.
   (entity types changed in place), and the HorizontalStack crossing
   fixture 82→34 (outside the census corpus, independently
   verified).*
+- *2026-07-12 — **partition-sibling fix LANDED (5f67218,
+  validator-only, KC3-sequenced).** `LayoutResult.effective_rows`
+  ({y_start, y_end, spec} per placed row, derived from layout_pass's
+  internal post-partition SolverResult — the voided_streams
+  precedent); `check_inserter_throughput` resolves specs by recipe +
+  y-range with a provably-inert recipe-keyed fallback.
+  tier4_partitioned re-pinned 8→6 per the frozen contract; bonus:
+  PU@2/s P2 scoreboard variant dropped 3→0 same-class false
+  positives. The identical recipe-keyed collapse exists at three
+  more sites (belt_structural lane rates @856; belt_flow lane
+  injection @2209 + input-rate-delivery @3180) — documented
+  follow-ups, not fixed (no frozen baselines for their warning
+  categories). Next: Phase 2 — attribution check in its own commit
+  first, then dual/triple/quad/hstack ladders + the reassignment
+  lever.*
