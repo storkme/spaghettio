@@ -147,6 +147,55 @@ pub fn size_side(required: f64, reach: Reach, position_budget: usize, max_tier: 
     }
 }
 
+/// Ingredient-to-belt assignment for `dual_input_row`/`triple_input_row`'s
+/// near/far pair (`docs/rfp-inserter-sizing.md`, lever (b)): the item with
+/// the higher per-machine rate goes to the NEAR (reach-1) belt, where the
+/// full regular→fast→stack ladder applies — no fast/stack long-handed
+/// inserter exists, so the FAR (reach-2) belt stays low-ceiling regardless,
+/// making it worth keeping the hungrier ingredient off it. Ties (and
+/// `rate0 <= rate1`) preserve the caller's structural default (`item0`
+/// stays far, `item1` stays near) — deterministic, minimizes golden churn.
+/// Returns `(far, near)`, each paired with its rate. Mirrors the census's
+/// `reassign_near_far` exactly.
+pub fn reassign_near_far<T>(item0: T, rate0: f64, item1: T, rate1: f64) -> ((T, f64), (T, f64)) {
+    if rate0 > rate1 + EPS {
+        ((item1, rate1), (item0, rate0))
+    } else {
+        ((item0, rate0), (item1, rate1))
+    }
+}
+
+/// Resolve an extra inserter column shared by two competing machine
+/// sides — dual/triple's near-vs-far input pair, triple's
+/// input3-vs-output tile, quad's south-input-vs-output tile
+/// (`docs/rfp-inserter-sizing.md`). Larger RELATIVE shortfall, measured
+/// against each side's own single-slot top-tier ceiling (stack for
+/// `Reach::Near`, one long-handed for `Reach::Far`), wins the shared
+/// slot; ties favor the far/reach-2 side. `far_eligible` is `false` when
+/// the position's own geometry has already excluded far from the tile
+/// (e.g. `dual_input_row` at `LastInRow`, where the far belt itself is
+/// trimmed away, or a bridge-collapsed position where the tile doesn't
+/// exist for anyone) — near then wins (or, when the tile doesn't exist
+/// for near either, the caller simply never offers it a budget). Mirrors
+/// `examples/census_inserter_sizing_v2.rs`'s `resolve_contests` exactly —
+/// single source of truth per KC6's audit discipline. This function only
+/// decides who is ENTITLED to the slot; whether the winner's own ladder
+/// is threaded yet (near always is; far's reach-2 ladder is Phase 3) is
+/// the caller's concern — a far win with no far ladder simply leaves the
+/// slot unused rather than handing it to near.
+pub fn contest_favors_far(near_required: f64, far_required: f64, far_eligible: bool) -> bool {
+    if !far_eligible {
+        return false;
+    }
+    let near_ceiling = inserter_throughput(STACK);
+    let far_ceiling = inserter_throughput(LONG_HANDED);
+    let near_shortfall = (near_required - near_ceiling).max(0.0);
+    let far_shortfall = (far_required - far_ceiling).max(0.0);
+    let near_rel = if near_required > 0.0 { near_shortfall / near_required } else { 0.0 };
+    let far_rel = if far_required > 0.0 { far_shortfall / far_required } else { 0.0 };
+    far_rel >= near_rel
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -352,5 +401,62 @@ mod tests {
     #[test]
     fn default_tier_is_stack() {
         assert_eq!(InserterTier::default(), InserterTier::Stack);
+    }
+
+    // ── reassign_near_far (ingredient-to-belt assignment, lever (b)) ────
+
+    #[test]
+    fn reassign_item0_hungrier_swaps_to_near() {
+        // item0 (iron-plate, 5.0) is hungrier than item1 (copper-plate,
+        // 1.5) -> item0 swaps onto near, item1 becomes far.
+        let (far, near) = reassign_near_far("iron-plate", 5.0, "copper-plate", 1.5);
+        assert_eq!(far, ("copper-plate", 1.5));
+        assert_eq!(near, ("iron-plate", 5.0));
+    }
+
+    #[test]
+    fn reassign_item1_hungrier_keeps_default() {
+        // item1 (iron-plate, 5.0) is hungrier than item0 (copper-plate,
+        // 1.5) -> already in the default far/near slots, no swap.
+        let (far, near) = reassign_near_far("copper-plate", 1.5, "iron-plate", 5.0);
+        assert_eq!(far, ("copper-plate", 1.5));
+        assert_eq!(near, ("iron-plate", 5.0));
+    }
+
+    #[test]
+    fn reassign_tie_keeps_default_order() {
+        let (far, near) = reassign_near_far("iron-plate", 3.0, "copper-plate", 3.0);
+        assert_eq!(far, ("iron-plate", 3.0));
+        assert_eq!(near, ("copper-plate", 3.0));
+    }
+
+    // ── contest_favors_far (shared-column resolution) ────────────────────
+
+    #[test]
+    fn contest_far_wins_when_far_shortfall_larger() {
+        // far: 5.0/s vs its 1.2/s ceiling -> large relative shortfall.
+        // near: 2.0/s, comfortably under the 12.0/s stack ceiling -> zero.
+        assert!(contest_favors_far(2.0, 5.0, true));
+    }
+
+    #[test]
+    fn contest_near_wins_when_near_shortfall_larger() {
+        // near: 20.0/s vs its 12.0/s ceiling -> large relative shortfall.
+        // far: 1.0/s, under the 1.2/s ceiling -> zero.
+        assert!(!contest_favors_far(20.0, 1.0, true));
+    }
+
+    #[test]
+    fn contest_tie_favors_far() {
+        // Equal relative shortfall (both zero, well under their own
+        // ceilings) -> tie breaks to far.
+        assert!(contest_favors_far(0.5, 0.5, true));
+    }
+
+    #[test]
+    fn contest_far_ineligible_near_wins_unconditionally() {
+        // Even a huge far requirement can't win when the position's own
+        // geometry has excluded far from the tile (e.g. LastInRow).
+        assert!(!contest_favors_far(0.1, 100.0, false));
     }
 }

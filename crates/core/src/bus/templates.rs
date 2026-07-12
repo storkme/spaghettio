@@ -9,7 +9,9 @@
 //!
 //! Port of `src/bus/templates.py`.
 
-use crate::bus::inserter_ladder::{size_side, InserterTier, Reach, SidePlan};
+use crate::bus::inserter_ladder::{
+    contest_favors_far, size_side, InserterTier, Reach, SidePlan,
+};
 use crate::models::{EntityDirection, PlacedEntity};
 
 // Gap between machine groups when lane-splitting output belts.
@@ -658,6 +660,24 @@ pub fn single_input_row(
 /// sideload bridge between them so the output belt uses both lanes.
 ///
 /// Returns `(entities, row_height)`.
+/// `input_items`/`input_rates` are `(far, near)` — already assigned by the
+/// caller via `inserter_ladder::reassign_near_far` (the hungrier ingredient
+/// goes near). `far_rate`/`near_rate`/`output_rate` are per-machine,
+/// utilization-scaled (`check_inserter_throughput`'s convention).
+///
+/// Each side's inserter count/tier is sized by `inserter_ladder::size_side`,
+/// same discipline as `single_input_row`. The near input and the far input
+/// share ONE extra column (`dx=1` at `y_offset+2`, free only when the far
+/// belt itself still covers it — trimmed away at `LastInRow`, see `in1_tail`
+/// below): `inserter_ladder::contest_favors_far` decides who's entitled to
+/// it. Far's own reach-2 ladder isn't threaded here (`docs/rfp-inserter-
+/// sizing.md` Phase 3 scope — no fast/stack long-handed inserter exists, and
+/// the corpus's masking finding means Phase 2 can't observably tell the
+/// difference) — a far win just leaves the column unused, denying it to
+/// near rather than granting it to far. The output side is
+/// `single_input_row`-output-shaped (2 interior, bridge-anchor 0,
+/// bridge-anchor-successor 1) and reuses that exact derivation.
+#[allow(clippy::too_many_arguments)]
 pub fn dual_input_row(
     recipe: &str,
     machine_entity: &str,
@@ -671,6 +691,10 @@ pub fn dual_input_row(
     output_belt: &str,
     lane_split: bool,
     output_east: bool,
+    far_rate: f64,
+    near_rate: f64,
+    output_rate: f64,
+    max_inserter_tier: InserterTier,
 ) -> (Vec<PlacedEntity>, i32) {
     debug_assert_eq!(
         crate::common::machine_dims(machine_entity),
@@ -745,7 +769,8 @@ pub fn dual_input_row(
             });
         }
 
-        // Long-handed inserter (picks from far belt y+0, drops into machine y+3)
+        // Far input: long-handed, hardcoded (Phase 3 scope — see doc
+        // comment). Picks from far belt y+0, drops into machine y+3.
         entities.push(PlacedEntity {
             name: "long-handed-inserter".to_string(),
             x: mx,
@@ -756,16 +781,40 @@ pub fn dual_input_row(
             ..Default::default()
         });
 
-        // Regular inserter (picks from close belt y+1, drops into machine y+3)
-        entities.push(PlacedEntity {
-            name: "inserter".to_string(),
-            x: mx + 2,
-            y: y_offset + 2,
-            direction: EntityDirection::South,
-            carries: Some(input2.to_string()),
-            segment_id: inserter_in2_seg.clone(),
-            ..Default::default()
-        });
+        // Near input — ladder-sized. Baseline slot at dx=2; the ONE extra
+        // column (dx=1) is shared with far's own hypothetical extra pick,
+        // derived from each belt's own stamped range (excluding both
+        // baselines) rather than a lookup table — reproduces "1 contested
+        // at Interior, near-only at LastInRow" as a geometric consequence.
+        const FAR_BASELINE_DX: i32 = 0;
+        const NEAR_BASELINE_DX: i32 = 2;
+        let far_candidates = free_extra_dx(in1_stop, &[FAR_BASELINE_DX, NEAR_BASELINE_DX]);
+        let near_candidates = free_extra_dx(in2_stop, &[FAR_BASELINE_DX, NEAR_BASELINE_DX]);
+        let far_eligible = !far_candidates.is_empty();
+        let shared_dx: Vec<i32> =
+            near_candidates.iter().copied().filter(|dx| far_candidates.contains(dx)).collect();
+        let near_only_dx: Vec<i32> =
+            near_candidates.iter().copied().filter(|dx| !shared_dx.contains(dx)).collect();
+        let near_extra_dx: Vec<i32> = if !shared_dx.is_empty()
+            && contest_favors_far(near_rate, far_rate, far_eligible)
+        {
+            near_only_dx
+        } else {
+            near_candidates.clone()
+        };
+        let near_plan = size_side(near_rate, Reach::Near, near_extra_dx.len(), max_inserter_tier);
+        stamp_side_inserters(
+            &mut entities,
+            &near_plan,
+            mx,
+            y_offset + 2,
+            EntityDirection::South,
+            input2,
+            &inserter_in2_seg,
+            NEAR_BASELINE_DX,
+            &near_extra_dx,
+        );
+        emit_shortfall_trace(recipe, false, near_rate, &near_plan);
 
         // Machine
         entities.push(PlacedEntity {
@@ -778,18 +827,32 @@ pub fn dual_input_row(
             ..Default::default()
         });
 
-        // Output inserter — shifted to `mx` at the bridge anchor.
+        // Output — ladder-sized, single_input_row-output-shaped: baseline
+        // shifts to `mx` at the bridge anchor, extra picks exclude the
+        // bridge's own columns.
         let out_ins_y = y_offset + 3 + msz;
-        let out_ins_x = if Some(i) == bridge_anchor { mx } else { mx + 1 };
-        entities.push(PlacedEntity {
-            name: "inserter".to_string(),
-            x: out_ins_x,
-            y: out_ins_y,
-            direction: EntityDirection::South,
-            carries: Some(output_item.to_string()),
-            segment_id: inserter_out_seg.clone(),
-            ..Default::default()
-        });
+        let is_anchor = Some(i) == bridge_anchor;
+        let out_baseline_dx = if is_anchor { 0 } else { 1 };
+        let mut out_occupied = vec![out_baseline_dx];
+        for dx in 0..msz {
+            if bridge_x_set.contains(&(mx + dx)) {
+                out_occupied.push(dx);
+            }
+        }
+        let out_extra_dx = free_extra_dx(out_stop, &out_occupied);
+        let output_plan = size_side(output_rate, Reach::Near, out_extra_dx.len(), max_inserter_tier);
+        stamp_side_inserters(
+            &mut entities,
+            &output_plan,
+            mx,
+            out_ins_y,
+            EntityDirection::South,
+            output_item,
+            &inserter_out_seg,
+            out_baseline_dx,
+            &out_extra_dx,
+        );
+        emit_shortfall_trace(recipe, true, output_rate, &output_plan);
 
         // Output belt — skip cols owned by the bridge.
         for dx in 0..out_stop {
@@ -851,6 +914,18 @@ pub fn dual_input_row(
 /// surface belts. The validator will flag the missing item source on
 /// current-feed; the dive geometry will be added in subsequent
 /// iterations once the visible row shape has been validated.
+///
+/// `input_items` = `(input0, input1)` = `(near/high-demand, far/low-demand)`
+/// — already ranked by the caller for the K-trunk assignment (unrelated to,
+/// but structurally equivalent to, `dual_input_row`'s near-far reassignment:
+/// the hungrier item already lands near here for a different reason).
+/// `near_rate`/`far_rate`/`output_rate` are per-machine, utilization-scaled.
+/// Both belts cover every machine's full width (no per-machine LastInRow
+/// trim — HorizontalStack's belts are continuous across the row), so the
+/// near/far contested column (`dx=1` at `inserter_in_y`) is always eligible
+/// for both sides; far's own ladder stays Phase 3 (hardcoded), same
+/// rationale as `dual_input_row`. Output is ladder-sized
+/// `single_input_row`-output-shaped (2 free columns, bridge-anchor 0).
 #[allow(clippy::too_many_arguments)]
 pub fn dual_input_row_horizontal(
     recipe: &str,
@@ -866,6 +941,10 @@ pub fn dual_input_row_horizontal(
     k_trunks: usize,
     block_size: usize,
     output_east: bool,
+    near_rate: f64,
+    far_rate: f64,
+    output_rate: f64,
+    max_inserter_tier: InserterTier,
 ) -> (Vec<PlacedEntity>, i32) {
     debug_assert_eq!(
         crate::common::machine_dims(machine_entity),
@@ -1123,17 +1202,37 @@ pub fn dual_input_row_horizontal(
     // shifts from (mx+1, out_belt_y) to (mx, out_belt_y) — both on
     // the row's output belt.
     for (i, &mx) in machine_xs.iter().enumerate() {
-        // Regular inserter at mx — reaches y+K+1 (current-feed, distance 1).
-        entities.push(PlacedEntity {
-            name: "inserter".to_string(),
-            x: mx,
-            y: inserter_in_y,
-            direction: EntityDirection::South,
-            carries: Some(input0.to_string()),
-            segment_id: inserter_in0_seg.clone(),
-            ..Default::default()
-        });
-        // Long-handed inserter at mx+2 — reaches y+K (iron-plate, distance 2).
+        // Near input (input0) — ladder-sized. Baseline dx=0; the ONE
+        // extra column (dx=1) is shared with far's own hypothetical
+        // extra pick — both belts cover the full row width for every
+        // machine (no LastInRow trim in HorizontalStack), so it's always
+        // contested here, unlike `dual_input_row`'s LastInRow exception.
+        const NEAR_BASELINE_DX: i32 = 0;
+        const FAR_BASELINE_DX: i32 = 2;
+        let shared_dx = free_extra_dx(msz, &[NEAR_BASELINE_DX, FAR_BASELINE_DX]);
+        let near_extra_dx: Vec<i32> =
+            if !shared_dx.is_empty() && contest_favors_far(near_rate, far_rate, true) {
+                vec![]
+            } else {
+                shared_dx.clone()
+            };
+        let near_plan = size_side(near_rate, Reach::Near, near_extra_dx.len(), max_inserter_tier);
+        stamp_side_inserters(
+            &mut entities,
+            &near_plan,
+            mx,
+            inserter_in_y,
+            EntityDirection::South,
+            input0,
+            &inserter_in0_seg,
+            NEAR_BASELINE_DX,
+            &near_extra_dx,
+        );
+        emit_shortfall_trace(recipe, false, near_rate, &near_plan);
+
+        // Far input (input1): long-handed, hardcoded (Phase 3 scope,
+        // same rationale as `dual_input_row`). Reaches y+K (iron-plate,
+        // distance 2).
         entities.push(PlacedEntity {
             name: "long-handed-inserter".to_string(),
             x: mx + 2,
@@ -1152,16 +1251,32 @@ pub fn dual_input_row_horizontal(
             segment_id: machine_seg.clone(),
             ..Default::default()
         });
-        let out_inserter_x = if Some(i) == bridge_anchor { mx } else { mx + 1 };
-        entities.push(PlacedEntity {
-            name: "inserter".to_string(),
-            x: out_inserter_x,
-            y: inserter_out_y,
-            direction: EntityDirection::South,
-            carries: Some(output_item.to_string()),
-            segment_id: inserter_out_seg.clone(),
-            ..Default::default()
-        });
+
+        // Output — ladder-sized, single_input_row-output-shaped: baseline
+        // shifts to `mx` at the bridge anchor, extra picks exclude the
+        // bridge's own columns.
+        let is_anchor = Some(i) == bridge_anchor;
+        let out_baseline_dx = if is_anchor { 0 } else { 1 };
+        let mut out_occupied = vec![out_baseline_dx];
+        for dx in 0..msz {
+            if bridge_x_skip.contains(&(mx + dx)) {
+                out_occupied.push(dx);
+            }
+        }
+        let out_extra_dx = free_extra_dx(msz, &out_occupied);
+        let output_plan = size_side(output_rate, Reach::Near, out_extra_dx.len(), max_inserter_tier);
+        stamp_side_inserters(
+            &mut entities,
+            &output_plan,
+            mx,
+            inserter_out_y,
+            EntityDirection::South,
+            output_item,
+            &inserter_out_seg,
+            out_baseline_dx,
+            &out_extra_dx,
+        );
+        emit_shortfall_trace(recipe, true, output_rate, &output_plan);
     }
 
     // Output belt — single continuous east- (or west-) flowing belt
@@ -1227,6 +1342,21 @@ fn ug_belt_name(belt: &str) -> &str {
 /// belts (y+0, y+1, y+8) so items still reach the second group.
 ///
 /// Returns `(entities, row_height)`.
+/// `input_items`/rates: `(far, near, input3)` — `far`/`near` are the
+/// reassigned near-far pair (caller uses `inserter_ladder::
+/// reassign_near_far`, same as `dual_input_row`); `input3` is fixed
+/// reach-2, never reassigned. Rates are per-machine, utilization-scaled.
+///
+/// Near/far share the same ONE contested column as `dual_input_row`
+/// (derived from belt coverage, see there). Input3's own reach-2 ladder
+/// and the near-far pair's far side are Phase 3 scope (unchanged,
+/// hardcoded) — only near and output are ladder-sized here. Output shares
+/// its own extra column with input3's slot (`docs/rfp-inserter-sizing.md`:
+/// dx=0 at `ins_y`, free only when input3 hasn't shifted there at the
+/// bridge anchor, and dead entirely at the bridge-anchor successor where
+/// the bridge itself covers it — both derived from `bridge_x_set`, not a
+/// lookup table).
+#[allow(clippy::too_many_arguments)]
 pub fn triple_input_row(
     recipe: &str,
     machine_entity: &str,
@@ -1240,6 +1370,11 @@ pub fn triple_input_row(
     output_belt: &str,
     lane_split: bool,
     output_east: bool,
+    far_rate: f64,
+    near_rate: f64,
+    input3_rate: f64,
+    output_rate: f64,
+    max_inserter_tier: InserterTier,
 ) -> (Vec<PlacedEntity>, i32) {
     debug_assert_eq!(
         crate::common::machine_dims(machine_entity),
@@ -1334,7 +1469,9 @@ pub fn triple_input_row(
             });
         }
 
-        // Long-handed inserter: picks from y+0 (input1), drops into machine at y+3
+        // Far input: long-handed, hardcoded (Phase 3 scope, same
+        // rationale as `dual_input_row`). Picks from y+0 (input1), drops
+        // into machine at y+3.
         entities.push(PlacedEntity {
             name: "long-handed-inserter".to_string(),
             x: mx,
@@ -1345,16 +1482,37 @@ pub fn triple_input_row(
             ..Default::default()
         });
 
-        // Regular inserter: picks from y+1 (input2), drops into machine at y+3
-        entities.push(PlacedEntity {
-            name: "inserter".to_string(),
-            x: mx + 2,
-            y: y_offset + 2,
-            direction: EntityDirection::South,
-            carries: Some(input2.to_string()),
-            segment_id: inserter_in2_seg.clone(),
-            ..Default::default()
-        });
+        // Near input — ladder-sized, same contested-column derivation as
+        // `dual_input_row` (identical belt/inserter geometry for this pair).
+        const FAR_BASELINE_DX: i32 = 0;
+        const NEAR_BASELINE_DX: i32 = 2;
+        let far_candidates = free_extra_dx(in1_stop, &[FAR_BASELINE_DX, NEAR_BASELINE_DX]);
+        let near_candidates = free_extra_dx(in2_stop, &[FAR_BASELINE_DX, NEAR_BASELINE_DX]);
+        let near_far_eligible = !far_candidates.is_empty();
+        let near_far_shared: Vec<i32> =
+            near_candidates.iter().copied().filter(|dx| far_candidates.contains(dx)).collect();
+        let near_only_dx: Vec<i32> =
+            near_candidates.iter().copied().filter(|dx| !near_far_shared.contains(dx)).collect();
+        let near_extra_dx: Vec<i32> = if !near_far_shared.is_empty()
+            && contest_favors_far(near_rate, far_rate, near_far_eligible)
+        {
+            near_only_dx
+        } else {
+            near_candidates.clone()
+        };
+        let near_plan = size_side(near_rate, Reach::Near, near_extra_dx.len(), max_inserter_tier);
+        stamp_side_inserters(
+            &mut entities,
+            &near_plan,
+            mx,
+            y_offset + 2,
+            EntityDirection::South,
+            input2,
+            &inserter_in2_seg,
+            NEAR_BASELINE_DX,
+            &near_extra_dx,
+        );
+        emit_shortfall_trace(recipe, false, near_rate, &near_plan);
 
         // Machine
         entities.push(PlacedEntity {
@@ -1367,23 +1525,12 @@ pub fn triple_input_row(
             ..Default::default()
         });
 
-        // Output inserter: picks from machine south face, drops to output belt
+        // Input-3: long-handed, hardcoded (Phase 3 scope — fixed reach-2,
+        // never reassigned). Picks from belt3 (south side), drops into
+        // machine. Shifted from mx+2 to mx at the bridge anchor — picks
+        // from (mx, belt3_y) and drops into machine left col (mx,
+        // machine_y). This frees mx+2 on inserter_out_y for the bridge.
         let ins_y = y_offset + 3 + msz;
-        entities.push(PlacedEntity {
-            name: "inserter".to_string(),
-            x: mx + 1,
-            y: ins_y,
-            direction: EntityDirection::South,
-            carries: Some(output_item.to_string()),
-            segment_id: inserter_out_seg.clone(),
-            ..Default::default()
-        });
-
-        // Input-3 long-handed inserter: picks from belt3 (south side),
-        // drops into machine. Shifted from mx+2 to mx at the bridge
-        // anchor — picks from (mx, belt3_y) and drops into machine
-        // left col (mx, machine_y). This frees mx+2 on inserter_out_y
-        // for the bridge.
         let in3_x = if Some(mi) == bridge_anchor { mx } else { mx + 2 };
         entities.push(PlacedEntity {
             name: "long-handed-inserter".to_string(),
@@ -1394,6 +1541,46 @@ pub fn triple_input_row(
             segment_id: inserter_in3_seg.clone(),
             ..Default::default()
         });
+
+        // Output — ladder-sized. Shares its one extra column with
+        // input3's own hypothetical extra pick: both would use `ins_y`'s
+        // free dx (input3 baseline at `in3_x`, output baseline at
+        // `mx+1`), plus any tile the bridge itself occupies on this row
+        // (`bridge_x_set`, the "wall-2" alignment — the bridge's belt
+        // lands on `ins_y` exactly). Deriving occupancy this way
+        // reproduces "Interior/Last=1 shared, BridgeAnchor=0,
+        // Successor=0" from pure geometry: at the anchor, input3's own
+        // shift to `mx` already claims dx=0 AND the bridge claims mx+2;
+        // at the successor, the bridge's span reaches into its dx=0.
+        let output_occupied_base = [1i32, in3_x - mx];
+        let mut output_occupied = output_occupied_base.to_vec();
+        for dx in 0..msz {
+            if bridge_x_set.contains(&(mx + dx)) {
+                output_occupied.push(dx);
+            }
+        }
+        let output_shared_dx = free_extra_dx(msz, &output_occupied);
+        let output_tile_exists = !output_shared_dx.is_empty();
+        let output_extra_dx: Vec<i32> = if output_tile_exists
+            && contest_favors_far(output_rate, input3_rate, true)
+        {
+            vec![] // input3 wins; its own ladder is Phase 3, slot unused
+        } else {
+            output_shared_dx
+        };
+        let output_plan = size_side(output_rate, Reach::Near, output_extra_dx.len(), max_inserter_tier);
+        stamp_side_inserters(
+            &mut entities,
+            &output_plan,
+            mx,
+            ins_y,
+            EntityDirection::South,
+            output_item,
+            &inserter_out_seg,
+            1,
+            &output_extra_dx,
+        );
+        emit_shortfall_trace(recipe, true, output_rate, &output_plan);
 
         // Output belt — skip cols owned by the bridge.
         let out_belt_y = y_offset + 3 + msz + 1;
@@ -1518,6 +1705,17 @@ pub fn triple_input_row(
 /// work; they just don't get a sideload bridge.
 ///
 /// Returns `(entities, row_height)`.
+/// Inputs 1/2 (north, far) and input4 (south, far) are Phase 3 scope —
+/// hardcoded, unchanged (`docs/rfp-inserter-sizing.md`: "0 for 3 of 4
+/// inputs, north rows fully packed"). Input3 (the dual-baseline pair at
+/// `mx+0`/`mx+2`) is Phase 2: both existing regular inserters upgrade to
+/// the SAME cheapest-sufficient tier for HALF the demand each (the row's
+/// two structural pickup points are never removed — "upgrade both", not
+/// count-laddered from a 1-inserter baseline). Output is Phase 2, ladder-
+/// sized, sharing its one extra column (`mx+0` at `south_ins_y`) with
+/// input4's own hypothetical extra pick — input4's ladder isn't threaded
+/// here, so an input4 "win" just leaves the column unused.
+#[allow(clippy::too_many_arguments)]
 pub fn quad_input_row(
     recipe: &str,
     machine_entity: &str,
@@ -1531,8 +1729,13 @@ pub fn quad_input_row(
     output_belt: &str,
     _lane_split: bool,
     output_east: bool,
+    input3_rate: f64,
+    input4_rate: f64,
+    output_rate: f64,
+    max_inserter_tier: InserterTier,
 ) -> (Vec<PlacedEntity>, i32) {
     use crate::bus::balancer::underground_for_belt;
+    use crate::common::inserter_throughput;
 
     debug_assert_eq!(
         crate::common::machine_dims(machine_entity),
@@ -1658,12 +1861,18 @@ pub fn quad_input_row(
             ..Default::default()
         });
 
-        // Regular inserters at mx+0 and mx+2, y+3: pick belt 3 surface
-        // tile at y+2 (UG-IN at mx+0, UG-OUT at mx+2 — both expose
-        // surface for inserter pickup), drop machine top y+4.
+        // Input3 (dual-baseline) at mx+0 and mx+2, y+3: pick belt 3
+        // surface tile at y+2 (UG-IN at mx+0, UG-OUT at mx+2), drop
+        // machine top y+4. Both slots are structural (the UG belt's two
+        // exposed pickup points), never removed — ladder-sized as ONE
+        // in-place tier upgrade applied to both, at half the demand each
+        // (cheapest-sufficient for `input3_rate/2`, mirrored to both
+        // tiles) rather than a count-ladder from a 1-inserter baseline.
+        let input3_per_slot = input3_rate / 2.0;
+        let input3_plan = size_side(input3_per_slot, Reach::Near, 0, max_inserter_tier);
         for &dx in &[0i32, 2] {
             entities.push(PlacedEntity {
-                name: "inserter".to_string(),
+                name: input3_plan.entity.to_string(),
                 x: mx + dx,
                 y: y_offset + 3,
                 direction: EntityDirection::South,
@@ -1671,6 +1880,20 @@ pub fn quad_input_row(
                 segment_id: inserter_in3_seg.clone(),
                 ..Default::default()
             });
+        }
+        {
+            let total_avail = 2.0 * inserter_throughput(input3_plan.entity);
+            let shortfall = (input3_rate - total_avail).max(0.0);
+            if shortfall > 0.0 {
+                crate::trace::emit(crate::trace::TraceEvent::InserterSideCapped {
+                    recipe: recipe.to_string(),
+                    side_is_output: false,
+                    required: input3_rate,
+                    placed_entity: input3_plan.entity.to_string(),
+                    placed_count: 2,
+                    shortfall,
+                });
+            }
         }
 
         // Machine
@@ -1684,20 +1907,28 @@ pub fn quad_input_row(
             ..Default::default()
         });
 
-        // Output inserter at (mx+1, y+7) facing south: picks machine
-        // bottom (mx+1, y+6), drops output belt (mx+1, y+8).
-        entities.push(PlacedEntity {
-            name: "inserter".to_string(),
-            x: mx + 1,
-            y: south_ins_y,
-            direction: EntityDirection::South,
-            carries: Some(output_item.to_string()),
-            segment_id: inserter_out_seg.clone(),
-            ..Default::default()
-        });
+        // Output — ladder-sized. Shares its one extra column (relative
+        // dx=0, i.e. `mx+0`) with input4's own hypothetical extra pick;
+        // input4's ladder is Phase 3 (hardcoded below), so a "win" there
+        // just leaves the column unused rather than handing it to output.
+        let output_extra_dx: Vec<i32> =
+            if contest_favors_far(output_rate, input4_rate, true) { vec![] } else { vec![0] };
+        let output_plan = size_side(output_rate, Reach::Near, output_extra_dx.len(), max_inserter_tier);
+        stamp_side_inserters(
+            &mut entities,
+            &output_plan,
+            mx,
+            south_ins_y,
+            EntityDirection::South,
+            output_item,
+            &inserter_out_seg,
+            1,
+            &output_extra_dx,
+        );
+        emit_shortfall_trace(recipe, true, output_rate, &output_plan);
 
         // South LHI at (mx+2, y+7) facing north: picks belt 4 at y+9,
-        // drops machine middle (mx+2, y+5).
+        // drops machine middle (mx+2, y+5). Hardcoded (Phase 3 scope).
         entities.push(PlacedEntity {
             name: "long-handed-inserter".to_string(),
             x: mx + 2,
@@ -4987,6 +5218,10 @@ mod tests {
             "transport-belt",
             false,
             false,
+            0.5,
+            0.5,
+            0.5,
+            InserterTier::default(),
         );
         assert_eq!(height, 8);
 
@@ -5031,6 +5266,91 @@ mod tests {
         assert!(entities.iter().find(|e| e.x == 2 && e.y == 7).is_none());
     }
 
+    // ---- dual_input_row: ladder + reassignment (RFP Phase 2) ----
+
+    #[test]
+    fn dual_input_row_near_upgrades_to_stack_far_stays_hardcoded() {
+        // Near (iron-plate) at 3.0/s exceeds fast's 2.31/s ceiling ->
+        // stack. Far (copper-cable) at 1.0/s stays a single hardcoded
+        // long-handed inserter regardless of rate (Phase 3 scope).
+        let (entities, _) = dual_input_row(
+            "electronic-circuit",
+            "assembling-machine-3",
+            3,
+            1,
+            0,
+            0,
+            ("copper-cable", "iron-plate"),
+            "electronic-circuit",
+            ("transport-belt", "transport-belt"),
+            "transport-belt",
+            false,
+            false,
+            1.0, // far_rate (copper-cable)
+            3.0, // near_rate (iron-plate)
+            0.5, // output_rate
+            InserterTier::default(),
+        );
+        let near = assert_entity(&entities, 2, 2, "stack-inserter");
+        assert_eq!(near.carries.as_deref(), Some("iron-plate"));
+        let far = assert_entity(&entities, 0, 2, "long-handed-inserter");
+        assert_eq!(far.carries.as_deref(), Some("copper-cable"));
+        // Exactly one near-side inserter — no extra column used (far
+        // wins the contest at 1.0/s vs the far ceiling's 1.2/s shortfall
+        // vs near's zero shortfall against 12/s).
+        assert_eq!(entities.iter().filter(|e| e.y == 2 && e.name == "stack-inserter").count(), 1);
+    }
+
+    #[test]
+    fn dual_input_row_output_upgrades_to_fast() {
+        let (entities, _) = dual_input_row(
+            "electronic-circuit",
+            "assembling-machine-3",
+            3,
+            1,
+            0,
+            0,
+            ("copper-cable", "iron-plate"),
+            "electronic-circuit",
+            ("transport-belt", "transport-belt"),
+            "transport-belt",
+            false,
+            false,
+            0.5,
+            0.5,
+            1.5, // output_rate: exceeds regular (0.84), within fast (2.31)
+            InserterTier::default(),
+        );
+        let out = assert_entity(&entities, 1, 6, "fast-inserter");
+        assert_eq!(out.carries.as_deref(), Some("electronic-circuit"));
+    }
+
+    #[test]
+    fn dual_input_row_max_tier_regular_never_places_fast_or_stack() {
+        // Regular-capped: even a high near rate must degrade to
+        // best-effort regular, never escalate past the user's cap.
+        let (entities, _) = dual_input_row(
+            "electronic-circuit",
+            "assembling-machine-3",
+            3,
+            1,
+            0,
+            0,
+            ("copper-cable", "iron-plate"),
+            "electronic-circuit",
+            ("transport-belt", "transport-belt"),
+            "transport-belt",
+            false,
+            false,
+            0.5,
+            5.0,
+            0.5,
+            InserterTier::Regular,
+        );
+        let near = assert_entity(&entities, 2, 2, "inserter");
+        assert_eq!(near.carries.as_deref(), Some("iron-plate"));
+    }
+
     #[test]
     fn dual_input_row_lane_split_four_machines() {
         // 4 machines, Strategy A (tight pack, inline shift): machines
@@ -5049,6 +5369,10 @@ mod tests {
             "transport-belt",
             true,
             false,
+            0.5,
+            0.5,
+            0.5,
+            InserterTier::default(),
         );
 
         // Machines packed tight at x=0, 3, 6, 9
@@ -5094,6 +5418,10 @@ mod tests {
             "transport-belt",
             false,
             false, // west-flow output
+            0.5,
+            0.5,
+            0.5,
+            InserterTier::default(),
         );
         // Belt 1 (y=0) — only x=10 survives; x=11 and x=12 are orphan tail.
         assert!(entities.iter().any(|e| e.x == 10 && e.y == 0 && e.carries.as_deref() == Some("copper-cable")));
@@ -5126,6 +5454,10 @@ mod tests {
             "transport-belt",
             false,
             true, // east-flow output
+            0.5,
+            0.5,
+            0.5,
+            InserterTier::default(),
         );
         // Output belt at y=7, x=10,11,12 — all three preserved.
         for dx in 0..3_i32 {
@@ -5151,6 +5483,11 @@ mod tests {
             "transport-belt",
             false, // lane_split
             false,
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            InserterTier::default(),
         );
         assert_eq!(height, 9);
 
@@ -5192,6 +5529,40 @@ mod tests {
         }
     }
 
+    // ---- triple_input_row: ladder (RFP Phase 2) ----
+
+    #[test]
+    fn triple_input_row_near_upgrades_output_upgrades_input3_and_far_hardcoded() {
+        let (entities, _) = triple_input_row(
+            "advanced-circuit",
+            "assembling-machine-3",
+            3,
+            1,
+            0,
+            0,
+            ("copper-cable", "plastic-bar", "iron-plate"),
+            "advanced-circuit",
+            ("transport-belt", "transport-belt", "transport-belt"),
+            "transport-belt",
+            false,
+            false,
+            0.5, // far_rate (copper-cable) -- stays hardcoded regardless
+            3.0, // near_rate (plastic-bar) -- exceeds fast, needs stack
+            0.5, // input3_rate (iron-plate) -- stays hardcoded regardless
+            1.5, // output_rate -- exceeds regular, needs fast
+            InserterTier::default(),
+        );
+        let near = assert_entity(&entities, 2, 2, "stack-inserter");
+        assert_eq!(near.carries.as_deref(), Some("plastic-bar"));
+        let far = assert_entity(&entities, 0, 2, "long-handed-inserter");
+        assert_eq!(far.carries.as_deref(), Some("copper-cable"));
+        let out = assert_entity(&entities, 1, 6, "fast-inserter");
+        assert_eq!(out.carries.as_deref(), Some("advanced-circuit"));
+        // Input3 stays a single hardcoded long-handed inserter at mx+2.
+        let in3 = assert_entity(&entities, 2, 6, "long-handed-inserter");
+        assert_eq!(in3.carries.as_deref(), Some("iron-plate"));
+    }
+
     // ---- quad_input_row ----
 
     #[test]
@@ -5210,6 +5581,10 @@ mod tests {
             "transport-belt",
             false, // lane_split
             false, // output_east → west-flow
+            0.5,
+            0.5,
+            0.5,
+            InserterTier::default(),
         );
         assert_eq!(height, 10);
 
@@ -5281,6 +5656,43 @@ mod tests {
         }
     }
 
+    // ---- quad_input_row: ladder (RFP Phase 2) ----
+
+    #[test]
+    fn quad_input_row_input3_upgrades_both_slots_output_upgrades_input4_hardcoded() {
+        // input3_rate=3.0 -> 1.5/slot -> exceeds regular (0.84), within
+        // fast (2.31) -> BOTH mx+0 and mx+2 upgrade to fast, in lockstep.
+        let (entities, _) = quad_input_row(
+            "flying-robot-frame",
+            "assembling-machine-3",
+            3,
+            1,
+            0,
+            0,
+            ("input1", "input2", "input3", "input4"),
+            "flying-robot-frame",
+            ("transport-belt", "transport-belt", "transport-belt", "transport-belt"),
+            "transport-belt",
+            false,
+            false,
+            3.0, // input3_rate
+            0.5, // input4_rate -- stays hardcoded regardless
+            1.5, // output_rate -- exceeds regular, needs fast
+            InserterTier::default(),
+        );
+        for &dx in &[0i32, 2] {
+            let e = assert_entity(&entities, dx, 3, "fast-inserter");
+            assert_eq!(e.carries.as_deref(), Some("input3"));
+        }
+        // input2's own LHI at mx+1 on the same row is untouched.
+        let lhb = assert_entity(&entities, 1, 3, "long-handed-inserter");
+        assert_eq!(lhb.carries.as_deref(), Some("input2"));
+        let out = assert_entity(&entities, 1, 7, "fast-inserter");
+        assert_eq!(out.carries.as_deref(), Some("flying-robot-frame"));
+        let south_lh = assert_entity(&entities, 2, 7, "long-handed-inserter");
+        assert_eq!(south_lh.carries.as_deref(), Some("input4"));
+    }
+
     #[test]
     fn quad_input_row_two_machines_belt3_uses_chain_of_ugs() {
         // 2 machines: belt 3 should be a chain UG-IN, [LHI-A], UG-OUT,
@@ -5299,6 +5711,10 @@ mod tests {
             "transport-belt",
             false,
             false,
+            0.5,
+            0.5,
+            0.5,
+            InserterTier::default(),
         );
 
         // m1: UG-IN @ (0,2), LHI-A @ (1,2), UG-OUT @ (2,2).
@@ -5333,6 +5749,10 @@ mod tests {
             ("transport-belt", "transport-belt", "transport-belt", "transport-belt"),
             "transport-belt",
             false, false,
+            0.5,
+            0.5,
+            0.5,
+            InserterTier::default(),
         );
         assert_eq!(h, crate::bus::placer::RowKind::QuadInput.row_height());
     }

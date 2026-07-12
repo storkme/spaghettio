@@ -4,7 +4,7 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::bus::inserter_ladder::InserterTier;
+use crate::bus::inserter_ladder::{reassign_near_far, InserterTier};
 use crate::bus::layout::RowLayout;
 use crate::common::{belt_entity_for_rate, lane_capacity, machine_dims, BELT_TIERS};
 use crate::models::{EntityDirection, MachineSpec, PlacedEntity, SolverResult};
@@ -859,6 +859,17 @@ pub(crate) fn build_one_row(
             let item0 = solid_inputs.first().map(|f| f.item.as_str()).unwrap_or("");
             let item1 = solid_inputs.get(1).map(|f| f.item.as_str()).unwrap_or("");
             let item2 = solid_inputs.get(2).map(|f| f.item.as_str()).unwrap_or("");
+            // Same reassignment lever as DualInput: item0/item1 are the
+            // near-far pair (hungrier -> near); item2 (input3) is fixed
+            // reach-2, never reassigned.
+            let effective_count = spec.count.ceil().max(1.0);
+            let utilization = (spec.count / effective_count).min(1.0);
+            let item0_rate = solid_inputs.first().map(|f| f.rate).unwrap_or(0.0) * utilization;
+            let item1_rate = solid_inputs.get(1).map(|f| f.rate).unwrap_or(0.0) * utilization;
+            let item2_rate = solid_inputs.get(2).map(|f| f.rate).unwrap_or(0.0) * utilization;
+            let output_rate_pm = solid_outputs.first().map(|f| f.rate).unwrap_or(0.0) * utilization;
+            let ((far_item, far_rate), (near_item, near_rate)) =
+                reassign_near_far(item0, item0_rate, item1, item1_rate);
             let in_belt1 = row_input_belt(max_belt_tier);
             let in_belt2 = row_input_belt(max_belt_tier);
             let in_belt3 = row_input_belt(max_belt_tier);
@@ -870,14 +881,30 @@ pub(crate) fn build_one_row(
                 count,
                 y_cursor,
                 bus_width,
-                (item0, item1, item2),
+                (far_item, near_item, item2),
                 output_item,
                 (in_belt1, in_belt2, in_belt3),
                 out_belt,
                 lane_split,
                 output_east,
+                far_rate,
+                near_rate,
+                item2_rate,
+                output_rate_pm,
+                max_inserter_tier,
             );
-            let input_ys = vec![y_cursor, y_cursor + 1, y_cursor + 3 + mh as i32 + 2];
+            let input_ys: Vec<i32> = solid_inputs
+                .iter()
+                .map(|f| {
+                    if f.item == item2 {
+                        y_cursor + 3 + mh as i32 + 2
+                    } else if f.item == far_item {
+                        y_cursor
+                    } else {
+                        y_cursor + 1
+                    }
+                })
+                .collect();
             let out_y = y_cursor + 3 + mh as i32 + 1;
             (ents, rh, input_ys, out_y)
         }
@@ -886,6 +913,14 @@ pub(crate) fn build_one_row(
             let item1 = solid_inputs.get(1).map(|f| f.item.as_str()).unwrap_or("");
             let item2 = solid_inputs.get(2).map(|f| f.item.as_str()).unwrap_or("");
             let item3 = solid_inputs.get(3).map(|f| f.item.as_str()).unwrap_or("");
+            // No reassignment lever here — QuadInput's near-far pairing
+            // isn't item-swappable (inputs 1/2 are structurally north,
+            // input3 dual-baseline, input4 structurally south).
+            let effective_count = spec.count.ceil().max(1.0);
+            let utilization = (spec.count / effective_count).min(1.0);
+            let item2_rate = solid_inputs.get(2).map(|f| f.rate).unwrap_or(0.0) * utilization;
+            let item3_rate = solid_inputs.get(3).map(|f| f.rate).unwrap_or(0.0) * utilization;
+            let output_rate_pm = solid_outputs.first().map(|f| f.rate).unwrap_or(0.0) * utilization;
             let in_belt1 = row_input_belt(max_belt_tier);
             let in_belt2 = row_input_belt(max_belt_tier);
             let in_belt3 = row_input_belt(max_belt_tier);
@@ -904,6 +939,10 @@ pub(crate) fn build_one_row(
                 out_belt,
                 lane_split,
                 output_east,
+                item2_rate,
+                item3_rate,
+                output_rate_pm,
+                max_inserter_tier,
             );
             // input_belt_y[i] is where lane planner taps off lane.item
             // matching solid_inputs[i]. Layout (msz=3): belt 1 at y+0,
@@ -969,6 +1008,15 @@ pub(crate) fn build_one_row(
                 let item1 = ranked.get(1).map(|f| f.item.as_str()).unwrap_or("");
                 let item0_per_machine = ranked.first().map(|f| f.rate).unwrap_or(0.0);
                 let _item1_per_machine = ranked.get(1).map(|f| f.rate).unwrap_or(0.0);
+                // Utilization-scaled rates for the inserter ladder (same
+                // convention as the other branches) — kept separate from
+                // `item0_per_machine` above, which drives belt-capacity
+                // math and must stay the raw per-machine rate.
+                let effective_count = spec.count.ceil().max(1.0);
+                let utilization = (spec.count / effective_count).min(1.0);
+                let near_rate_pm = item0_per_machine * utilization;
+                let far_rate_pm = ranked.get(1).map(|f| f.rate).unwrap_or(0.0) * utilization;
+                let output_rate_pm = solid_outputs.first().map(|f| f.rate).unwrap_or(0.0) * utilization;
                 // Block size: how many machines a single full belt
                 // (both lanes) can feed at this per-machine rate. Trunk
                 // count: one trunk per block, since each trunk sources
@@ -1022,6 +1070,10 @@ pub(crate) fn build_one_row(
                     k_trunks,
                     block_size,
                     output_east,
+                    near_rate_pm,
+                    far_rate_pm,
+                    output_rate_pm,
+                    max_inserter_tier,
                 );
                 // Map each spec.solid_input (natural order) to its tap-off
                 // y position. High-demand (item0) sits on trunk 0 at y+0;
@@ -1046,6 +1098,17 @@ pub(crate) fn build_one_row(
             } else {
                 let item0 = solid_inputs.first().map(|f| f.item.as_str()).unwrap_or("");
                 let item1 = solid_inputs.get(1).map(|f| f.item.as_str()).unwrap_or("");
+                // Utilization scaling: same convention as SingleInput
+                // above. Reassignment lever (`docs/rfp-inserter-sizing.md`
+                // lever (b)): hungrier item goes near, where the full
+                // tier ladder applies.
+                let effective_count = spec.count.ceil().max(1.0);
+                let utilization = (spec.count / effective_count).min(1.0);
+                let item0_rate = solid_inputs.first().map(|f| f.rate).unwrap_or(0.0) * utilization;
+                let item1_rate = solid_inputs.get(1).map(|f| f.rate).unwrap_or(0.0) * utilization;
+                let output_rate_pm = solid_outputs.first().map(|f| f.rate).unwrap_or(0.0) * utilization;
+                let ((far_item, far_rate), (near_item, near_rate)) =
+                    reassign_near_far(item0, item0_rate, item1, item1_rate);
                 let in_belt1 = row_input_belt(max_belt_tier);
                 let in_belt2 = row_input_belt(max_belt_tier);
                 let (ents, rh) = templates::dual_input_row(
@@ -1055,14 +1118,26 @@ pub(crate) fn build_one_row(
                     count,
                     y_cursor,
                     bus_width,
-                    (item0, item1),
+                    (far_item, near_item),
                     output_item,
                     (in_belt1, in_belt2),
                     out_belt,
                     lane_split,
                     output_east,
+                    far_rate,
+                    near_rate,
+                    output_rate_pm,
+                    max_inserter_tier,
                 );
-                let input_ys = vec![y_cursor, y_cursor + 1];
+                // Positional (far=y_cursor, near=y_cursor+1) mapped back to
+                // `solid_inputs`' natural order by item identity, since
+                // reassignment may have swapped which physical belt each
+                // item lives on — same pattern the HorizontalStack branch
+                // above already uses.
+                let input_ys: Vec<i32> = solid_inputs
+                    .iter()
+                    .map(|f| if f.item == far_item { y_cursor } else { y_cursor + 1 })
+                    .collect();
                 let out_y = y_cursor + rh - 1;
                 (ents, rh, input_ys, out_y)
             }
