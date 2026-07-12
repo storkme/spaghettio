@@ -607,3 +607,20 @@ stop signal.
   fluid_dual reassignment + self_loop/voider/scrap whole rows) →
   Phase 4 (max_inserter_tier UI + gauntlet close-out + in-game
   anchors).*
+- *2026-07-12 — **Phase 3 LANDED (6b3815b): the RFP's Definition of
+  Done is MET.** Every gauntlet pack and tier fixture at aggregate
+  zero; corpus total 3 (fish 1 + pentapod 2, the accepted HasFluid
+  residue, held permanently visible by the attribution check whose
+  post-P3 counts reconciled 20/21 — same census-tool blended-spec
+  mismatch as Steps A/B, pinned at the check's authoritative
+  values). Far ladders active (contest wins place real second LHIs;
+  LastInRow ineligibility snapshot-confirmed live); fluid rows sized
+  incl. fluid_dual's v3 reassignment; self_loop/voider/scrap done;
+  TWO scope gaps found and fixed via the phase_for precedent
+  (dual_input_row_horizontal's far side — the HorizontalStack
+  fixture resolves 0/0 — and fluid_multi_input_row's output, found
+  by chasing tier5's last warning through sulfur production). KC4:
+  max entity delta +3.67% (tier2 EC), zero area growth everywhere.
+  Remaining: Phase 4 only (max_inserter_tier through wasm-bindings +
+  web UI/URL state, both gauntlets re-run with delta tables,
+  CLAUDE.md ladder refresh, the two in-game anchors — user's step).*
