@@ -907,7 +907,7 @@ fn tier2_electronic_circuit() {
     // RFP Phase 1: 34 inserter-bound machine-sides (electronic-circuit chain —
     // copper-cable + EC assemblers, sides over the 0.84/s regular-inserter cap).
     // RFP rfp-inserter-sizing.md Phase 1 re-bless: single_input_row (iron-plate/copper-cable rows) ladder-sized; the electronic-circuit dual_input_row itself is Phase 2 scope, residue remains (34 -> 14).
-    assert_warnings_exactly(&result, &[("inserter-throughput", 14)]);
+    assert_warnings_exactly(&result, &[("inserter-throughput", 14), ("inserter-item-throughput", 21)]);
     assert_produces(&result, "electronic-circuit", 10.0);
     assert_round_trip(&result);
 }
@@ -964,7 +964,7 @@ fn tier2_electronic_circuit_from_ore() {
     // RFP Phase 1: 50 inserter-bound machine-sides (EC fully from ore, incl. the
     // added iron/copper smelting rows; each side > 0.84/s).
     // RFP rfp-inserter-sizing.md Phase 1 re-bless: single_input_row rows (iron-plate/copper-plate/copper-cable from ore) ladder-sized; electronic-circuit dual_input_row is Phase 2 scope, residue remains (50 -> 20).
-    assert_warnings_exactly(&result, &[("inserter-throughput", 20)]);
+    assert_warnings_exactly(&result, &[("inserter-throughput", 20), ("inserter-item-throughput", 20)]);
     assert_produces(&result, "electronic-circuit", 10.0);
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier2_electronic_circuit_from_ore");
@@ -990,7 +990,7 @@ fn tier2_electronic_circuit_20s_from_ore() {
     assert_no_errors(&result);
     // RFP Phase 1: 68 inserter-bound machine-sides (EC from ore at 20/s).
     // RFP rfp-inserter-sizing.md Phase 1 re-bless: single_input_row rows ladder-sized; electronic-circuit dual_input_row is Phase 2 scope, residue remains (68 -> 28).
-    assert_warnings_exactly(&result, &[("inserter-throughput", 28)]);
+    assert_warnings_exactly(&result, &[("inserter-throughput", 28), ("inserter-item-throughput", 42)]);
     assert_produces(&result, "electronic-circuit", 20.0);
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier2_electronic_circuit_20s_from_ore");
@@ -1068,7 +1068,7 @@ fn tier3_plastic_bar() {
     assert_no_errors(&result);
     // RFP Phase 1: 10 inserter-bound machine-sides (plastic-bar chemical plants —
     // petroleum arrives by pipe, but coal in and plastic out both exceed 0.84/s).
-    assert_warnings_exactly(&result, &[("inserter-throughput", 10)]);
+    assert_warnings_exactly(&result, &[("inserter-throughput", 10), ("inserter-item-throughput", 10)]);
     assert_produces(&result, "plastic-bar", 10.0);
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier3_plastic_bar");
@@ -1088,7 +1088,7 @@ fn tier3_plastic_bar_from_crude() {
     assert_no_errors(&result);
     // RFP Phase 1: 10 inserter-bound machine-sides (plastic-bar from crude — same
     // chemical-plant sides over 0.84/s as the plate-fed variant).
-    assert_warnings_exactly(&result, &[("inserter-throughput", 10)]);
+    assert_warnings_exactly(&result, &[("inserter-throughput", 10), ("inserter-item-throughput", 10)]);
     assert_produces(&result, "plastic-bar", 10.0);
     assert_round_trip(&result);
 }
@@ -1282,7 +1282,7 @@ fn tier4_advanced_circuit_from_plates() {
     assert_no_errors(&result);
     // RFP Phase 1: 14 inserter-bound machine-sides (advanced-circuit @1/s chain).
     // RFP rfp-inserter-sizing.md Phase 1 re-bless: single_input_row (copper-cable) ladder-sized; advanced-circuit triple_input_row + electronic-circuit dual_input_row are Phase 2/3 scope, residue remains (14 -> 6).
-    assert_warnings_exactly(&result, &[("inserter-throughput", 6)]);
+    assert_warnings_exactly(&result, &[("inserter-throughput", 6), ("inserter-item-throughput", 6)]);
     assert_produces(&result, "advanced-circuit", 1.0);
     assert_round_trip(&result);
 }
@@ -1351,7 +1351,7 @@ fn tier4_advanced_circuit_partitioned() {
     // now resolves each machine's spec by row position first (falling back
     // to the recipe-keyed lookup only when no row matches), which
     // disambiguates the siblings and re-pins this to its true count.
-    assert_warnings_exactly(&result, &[("inserter-throughput", 6)]);
+    assert_warnings_exactly(&result, &[("inserter-throughput", 6), ("inserter-item-throughput", 6)]);
 }
 
 /// Regression test for the pipe-as-port-tile bug. URL:
@@ -1423,10 +1423,12 @@ fn tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing() {
     // 1.0/s in + 2.0/s out, etc.) is fed/drained by one ~0.84/s regular
     // inserter, so the honest warnings are all inserter-throughput. Assert the
     // SAT-zone concern first (no OTHER warning category, no errors, no caps),
-    // then pin the exact inserter-throughput count.
+    // then pin the exact inserter-throughput count. RFP rfp-inserter-sizing.md
+    // Phase 2: the new per-item companion check (`inserter-item-throughput`)
+    // is exempt for the same reason and pinned the same way below.
     let non_inserter_warnings: Vec<_> = warnings
         .iter()
-        .filter(|i| i.category != "inserter-throughput")
+        .filter(|i| i.category != "inserter-throughput" && i.category != "inserter-item-throughput")
         .copied()
         .collect();
 
@@ -1467,6 +1469,16 @@ fn tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing() {
     assert_eq!(
         inserter_throughput_count, 34,
         "{test_name}: expected exactly 34 inserter-throughput warnings"
+    );
+
+    // RFP rfp-inserter-sizing.md Phase 2: per-item companion check pin, same
+    // rationale as above — not part of the frozen Phase 0v2 census corpus
+    // (HorizontalStack), verified directly against this test's own live run.
+    let inserter_item_throughput_count =
+        warnings.iter().filter(|i| i.category == "inserter-item-throughput").count();
+    assert_eq!(
+        inserter_item_throughput_count, 44,
+        "{test_name}: expected exactly 44 inserter-item-throughput warnings"
     );
 }
 
@@ -1692,7 +1704,7 @@ fn tier4_advanced_circuit_from_ore_am2() {
     // acyclic branch. Even-split delivered ≥4.3 here, so it is a modeling residual,
     // not a real starvation. See report / rfp-lane-demand-flow.md.
     // RFP rfp-inserter-sizing.md Phase 1 re-bless: single_input_row rows ladder-sized; remaining rows are Phase 2/3 scope, residue remains (58 -> 24). input-rate-delivery unrelated, unchanged.
-    assert_warnings_exactly(&result, &[("input-rate-delivery", 1), ("inserter-throughput", 24)]);
+    assert_warnings_exactly(&result, &[("input-rate-delivery", 1), ("inserter-throughput", 24), ("inserter-item-throughput", 31)]);
     assert_produces(&result, "advanced-circuit", 5.0);
     assert_round_trip(&result);
 }
@@ -1731,7 +1743,7 @@ fn tier5_processing_unit_from_ore_am3() {
     // positive across this layout's underground hops; the residual is purely
     // inserter-throughput.
     // RFP rfp-inserter-sizing.md Phase 1 re-bless: single_input_row rows ladder-sized; remaining rows are Phase 2/3 scope, residue remains (129 -> 65).
-    assert_warnings_exactly(&result, &[("inserter-throughput", 65)]);
+    assert_warnings_exactly(&result, &[("inserter-throughput", 65), ("inserter-item-throughput", 85)]);
     assert_produces(&result, "processing-unit", 2.0);
     assert_round_trip(&result);
 }
@@ -2052,7 +2064,7 @@ fn tier_pentapod_egg_self_loop() {
 
     assert_no_errors(&result);
     // RFP Phase 1: 2 inserter-bound machine-sides (pentapod-egg biochamber self-loop).
-    assert_warnings_exactly(&result, &[("inserter-throughput", 2)]);
+    assert_warnings_exactly(&result, &[("inserter-throughput", 2), ("inserter-item-throughput", 2)]);
     assert_produces(&result, "pentapod-egg", 0.2);
 
     let biochamber_count =
@@ -2097,7 +2109,7 @@ fn tier_fish_breeding_self_loop() {
 
     assert_no_errors(&result);
     // RFP Phase 1: 1 inserter-bound machine-side (raw-fish self-loop).
-    assert_warnings_exactly(&result, &[("inserter-throughput", 1)]);
+    assert_warnings_exactly(&result, &[("inserter-throughput", 1), ("inserter-item-throughput", 1)]);
     assert_produces(&result, "raw-fish", 0.15);
 
     let chemical_plant_count =
@@ -2158,7 +2170,7 @@ fn tier_bacteria_self_loop_regression() {
 
     assert_no_errors(&result);
     // RFP Phase 1: 1 inserter-bound machine-side (iron-bacteria self-loop).
-    assert_warnings_exactly(&result, &[("inserter-throughput", 1)]);
+    assert_warnings_exactly(&result, &[("inserter-throughput", 1), ("inserter-item-throughput", 1)]);
     assert_produces(&result, "iron-bacteria", 1.0);
 
     let biochamber_count =
@@ -3738,7 +3750,8 @@ fn stress_electronic_circuit_22s_from_ore() {
         StressBaseline {
             max_errors: 0,
             // RFP rfp-lane-demand-flow.md Phase 1: was 1; now 74 inserter-throughput (prior belt-model warning cleared).
-            max_warnings: 74,
+            // RFP rfp-inserter-sizing.md Phase 2: +45 inserter-item-throughput (new per-item companion check) = 75.
+            max_warnings: 75,
             max_errors_by_category: Default::default(),
         },
     );
@@ -3764,7 +3777,8 @@ fn stress_electronic_circuit_23s_from_ore() {
         StressBaseline {
             max_errors: 0,
             // RFP rfp-lane-demand-flow.md Phase 1: was 1; now 78 inserter-throughput (prior belt-model warning cleared).
-            max_warnings: 78,
+            // RFP rfp-inserter-sizing.md Phase 2: +48 inserter-item-throughput (new per-item companion check) = 80.
+            max_warnings: 80,
             max_errors_by_category: Default::default(),
         },
     );
@@ -3800,7 +3814,8 @@ fn stress_electronic_circuit_35s_from_ore() {
             // the upstream layout-pipeline bugs (e.g. #297) get fixed.
             max_errors: 4,
             // RFP rfp-lane-demand-flow.md Phase 1: was 123 (88 belt-flow-reachability + 35 input-rate-delivery); now +118 inserter-throughput = 241.
-            max_warnings: 241,
+            // RFP rfp-inserter-sizing.md Phase 2: +72 inserter-item-throughput (new per-item companion check) = 243.
+            max_warnings: 243,
             max_errors_by_category: [
                 ("belt-dead-end".to_string(), 4),
             ].into_iter().collect(),
@@ -3840,7 +3855,8 @@ fn stress_electronic_circuit_40s_from_ore() {
             // bugs (e.g. #297) get fixed.
             max_errors: 13,
             // RFP rfp-lane-demand-flow.md Phase 1: was 195; now +inserter-throughput = 329 (belt-flow-reachability + input-rate-delivery unchanged).
-            max_warnings: 329,
+            // RFP rfp-inserter-sizing.md Phase 2: +81 inserter-item-throughput (new per-item companion check) = 330.
+            max_warnings: 330,
             max_errors_by_category: [
                 ("belt-dead-end".to_string(), 13),
             ].into_iter().collect(),

@@ -333,6 +333,170 @@ pub fn check_inserter_throughput(
     issues
 }
 
+// ── check_inserter_item_throughput ────────────────────────────────────────────
+
+/// Per-machine, per-solid-item inserter throughput check
+/// (`docs/rfp-inserter-sizing.md` Phase 2's delta-review blocker).
+///
+/// [`check_inserter_throughput`] is item-blind: it sums a machine side's
+/// inserters into one aggregate `avail` and compares that against one
+/// aggregate `required`, never checking which item each inserter actually
+/// carries. That was harmless while every side had at most one solid item
+/// (`single_input_row`, Phase 1's structural guard), but multi-item sides
+/// (dual/triple/quad-input rows, and the near/far ingredient-assignment
+/// lever) make item identity load-bearing: a near-slot inserter's surplus
+/// capacity can arithmetically "cover" a far-slot item's deficit in the
+/// aggregate sum while the far item is, in reality, starving — a reach-1
+/// inserter physically cannot pick up a far-belt item. This check closes
+/// that gap: for every machine, for every solid input item (and every solid
+/// output item), it sums only the inserters whose [`PlacedEntity::carries`]
+/// matches that item and compares against that item's own utilization-
+/// scaled per-machine rate.
+///
+/// Attribution mirrors [`check_inserter_throughput`] exactly: prefer the
+/// row-positioned sibling spec from `layout.effective_rows`
+/// (`docs/rfp-inserter-sizing.md` Phase 1 finding — partition siblings share
+/// a recipe name but carry different utilizations), falling back to the
+/// recipe-keyed spec when no row attribution is available (test scaffolding,
+/// spaghetti-style layouts). Recyclers are exempt on the output side (direct
+/// belt ejection, no output inserter — same knowledge
+/// `check_output_belt_coverage`/`check_inserter_throughput` key on).
+/// `:sushi-sort:` inserters are belt-to-belt by construction (RFP Fulgora
+/// Phase 3) — neither their drop nor pickup side ever lands on a machine
+/// tile, so the same drop/pickup-vs-machine-tile matching this check shares
+/// with `check_inserter_throughput` excludes them with no special case,
+/// exactly as documented there.
+///
+/// Known ceiling (recorded, not fixed here): self-loop machines' recirculated
+/// "major" item (and, in the has-minor shape, its recirculated portion) lives
+/// in `MachineSpec::self_loop`, never in `MachineSpec::inputs` — this check
+/// only iterates `inputs`/`outputs`, so major-item demand is structurally
+/// invisible to it, matching the same gap in `check_inserter_throughput`.
+pub fn check_inserter_item_throughput(
+    layout: &LayoutResult,
+    solver_result: Option<&SolverResult>,
+) -> Vec<ValidationIssue> {
+    let sr = match solver_result {
+        Some(s) => s,
+        None => return Vec::new(),
+    };
+
+    let machine_tiles_set = build_machine_tile_set(layout);
+    let machine_by_tile = machine_origin_by_tile(layout);
+
+    // Per (machine origin, item) avail, split by side — unlike
+    // `check_inserter_throughput`'s single f64 accumulator per side, this
+    // is keyed on the inserter's `carries` attribution.
+    let mut input_avail: FxHashMap<((i32, i32), &str), f64> = FxHashMap::default();
+    let mut output_avail: FxHashMap<((i32, i32), &str), f64> = FxHashMap::default();
+
+    for ins in &layout.entities {
+        if !is_inserter(&ins.name) {
+            continue;
+        }
+        let Some(item) = ins.carries.as_deref() else {
+            continue;
+        };
+        let (dx, dy) = dir_to_vec(ins.direction);
+        let reach = inserter_reach(&ins.name);
+        let drop_pos = (ins.x + dx * reach, ins.y + dy * reach);
+        let pickup_pos = (ins.x - dx * reach, ins.y - dy * reach);
+        let rate = inserter_throughput(&ins.name);
+
+        if let Some(&mpos) = machine_by_tile.get(&drop_pos) {
+            *input_avail.entry((mpos, item)).or_insert(0.0) += rate;
+        }
+        if let Some(&mpos) = machine_by_tile.get(&pickup_pos) {
+            if !machine_tiles_set.contains(&drop_pos) {
+                *output_avail.entry((mpos, item)).or_insert(0.0) += rate;
+            }
+        }
+    }
+
+    let recipe_to_spec: FxHashMap<&str, &crate::models::MachineSpec> =
+        sr.machines.iter().map(|s| (s.recipe.as_str(), s)).collect();
+
+    let mut issues = Vec::new();
+    let mut checked: FxHashSet<(i32, i32)> = FxHashSet::default();
+    for e in &layout.entities {
+        if !is_machine_entity(&e.name) {
+            continue;
+        }
+        let mpos = (e.x, e.y);
+        if !checked.insert(mpos) {
+            continue;
+        }
+        let recipe = match e.recipe.as_deref() {
+            Some(r) => r,
+            None => continue,
+        };
+        let fallback_spec = match recipe_to_spec.get(recipe) {
+            Some(s) => *s,
+            None => continue,
+        };
+        // Same `effective_rows` position-based resolution as
+        // `check_inserter_throughput` — see that function's comment for
+        // the partition-sibling rationale.
+        let spec = layout
+            .effective_rows
+            .iter()
+            .find(|row| row.spec.recipe == recipe && e.y >= row.y_start && e.y < row.y_end)
+            .map(|row| &row.spec)
+            .unwrap_or(fallback_spec);
+
+        let effective_count = spec.count.ceil().max(1.0);
+        let utilization = (spec.count / effective_count).min(1.0);
+
+        for f in spec.inputs.iter().filter(|f| !f.is_fluid) {
+            let required = f.rate * utilization;
+            if required <= 0.0 {
+                continue;
+            }
+            let avail = input_avail.get(&(mpos, f.item.as_str())).copied().unwrap_or(0.0);
+            if avail < required - 0.02 {
+                issues.push(ValidationIssue::with_pos(
+                    Severity::Warning,
+                    "inserter-item-throughput",
+                    format!(
+                        "{} at ({},{}): item {} input inserters move {:.2}/s but machine needs \
+                         {:.2}/s in — item-attribution-bound",
+                        e.name, e.x, e.y, f.item, avail, required
+                    ),
+                    e.x,
+                    e.y,
+                ));
+            }
+        }
+
+        let recycler_direct_eject =
+            recycler_eject_tile(&e.name, e.x, e.y, e.direction).is_some();
+        if !recycler_direct_eject {
+            for f in spec.outputs.iter().filter(|f| !f.is_fluid) {
+                let required = f.rate * utilization;
+                if required <= 0.0 {
+                    continue;
+                }
+                let avail = output_avail.get(&(mpos, f.item.as_str())).copied().unwrap_or(0.0);
+                if avail < required - 0.02 {
+                    issues.push(ValidationIssue::with_pos(
+                        Severity::Warning,
+                        "inserter-item-throughput",
+                        format!(
+                            "{} at ({},{}): item {} output inserters move {:.2}/s but machine needs \
+                             {:.2}/s out — item-attribution-bound",
+                            e.name, e.x, e.y, f.item, avail, required
+                        ),
+                        e.x,
+                        e.y,
+                    ));
+                }
+            }
+        }
+    }
+
+    issues
+}
+
 /// Map each machine tile → the machine's origin `(x, y)`.
 fn machine_origin_by_tile(layout: &LayoutResult) -> FxHashMap<(i32, i32), (i32, i32)> {
     let mut by_tile = FxHashMap::default();
@@ -1059,5 +1223,226 @@ mod tests {
         assert_eq!(warns.len(), 2, "unchanged from the no-effective_rows case: {issues:?}");
         assert!(warns.iter().any(|w| w.message.contains("in —")));
         assert!(warns.iter().any(|w| w.message.contains("out —")));
+    }
+
+    // ── check_inserter_item_throughput ─────────────────────────────────────
+
+    fn item_throughput_warnings(issues: &[ValidationIssue]) -> Vec<&ValidationIssue> {
+        issues
+            .iter()
+            .filter(|i| i.category == "inserter-item-throughput")
+            .collect()
+    }
+
+    /// A 3x3 machine at `(0, y)` with a NEAR (reach-1) input inserter
+    /// dropping into the machine's `(0, y)` corner tile, a FAR (reach-2)
+    /// input inserter dropping into the `(2, y)` corner tile, and a
+    /// regular output inserter picking from `(1, y+2)`. Mirrors the real
+    /// dual_input_row shape closely enough for attribution testing: two
+    /// distinct input items on distinct tiles, one item on the output.
+    fn dual_input_machine_entities_at(
+        y: i32,
+        near_entity: &str,
+        near_item: &str,
+        far_entity: &str,
+        far_item: &str,
+        output_entity: &str,
+        output_item: &str,
+    ) -> Vec<PlacedEntity> {
+        let near_reach = inserter_reach(near_entity);
+        let far_reach = inserter_reach(far_entity);
+        vec![
+            PlacedEntity {
+                name: "assembling-machine-2".into(),
+                x: 0,
+                y,
+                recipe: Some("test-dual-recipe".into()),
+                direction: EntityDirection::North,
+                ..Default::default()
+            },
+            PlacedEntity {
+                name: near_entity.into(),
+                x: 0,
+                y: y - near_reach,
+                direction: EntityDirection::South,
+                carries: Some(near_item.into()),
+                ..Default::default()
+            },
+            PlacedEntity {
+                name: far_entity.into(),
+                x: 2,
+                y: y - far_reach,
+                direction: EntityDirection::South,
+                carries: Some(far_item.into()),
+                ..Default::default()
+            },
+            PlacedEntity {
+                name: output_entity.into(),
+                x: 1,
+                y: y + 3,
+                direction: EntityDirection::South,
+                carries: Some(output_item.into()),
+                ..Default::default()
+            },
+        ]
+    }
+
+    fn dual_input_spec(
+        near_item: &str,
+        near_rate: f64,
+        far_item: &str,
+        far_rate: f64,
+        output_item: &str,
+        output_rate: f64,
+        count: f64,
+    ) -> SolverResult {
+        SolverResult {
+            machines: vec![MachineSpec {
+                entity: "assembling-machine-2".into(),
+                recipe: "test-dual-recipe".into(),
+                self_loop: vec![],
+                voider: false,
+                count,
+                inputs: vec![
+                    ItemFlow { item: near_item.into(), rate: near_rate, is_fluid: false, module_id: 0 },
+                    ItemFlow { item: far_item.into(), rate: far_rate, is_fluid: false, module_id: 0 },
+                ],
+                outputs: vec![ItemFlow {
+                    item: output_item.into(),
+                    rate: output_rate,
+                    is_fluid: false,
+                    module_id: 0,
+                }],
+            }],
+            external_inputs: vec![],
+            external_outputs: vec![],
+            surplus_outputs: vec![],
+            dependency_order: vec![],
+        }
+    }
+
+    /// The RFP's canonical item-blindness failure: a near-slot inserter's
+    /// spare capacity arithmetically "covers" a far-slot item's deficit in
+    /// the AGGREGATE sum (`check_inserter_throughput` stays clean), while
+    /// the far item is, in reality, starving — a reach-1 inserter cannot
+    /// pick up a far-belt item no matter how much headroom it has. Numbers:
+    /// avail = 0.84 (near, regular) + 1.2 (far, long-handed) = 2.04;
+    /// required = 0.3 (near) + 1.5 (far) = 1.8 ≤ 2.04 → aggregate clean.
+    /// But far's own avail (1.2) < far's own required (1.5) → per-item warn.
+    #[test]
+    fn inserter_item_throughput_masked_side_warns_per_item() {
+        let sr = dual_input_spec("item-near", 0.3, "item-far", 1.5, "product", 0.5, 1.0);
+        let entities =
+            dual_input_machine_entities_at(0, "inserter", "item-near", "long-handed-inserter", "item-far", "inserter", "product");
+        let lr = LayoutResult { entities, width: 20, height: 20, ..Default::default() };
+
+        let agg_issues = check_inserter_throughput(&lr, Some(&sr));
+        assert!(
+            throughput_warnings(&agg_issues).is_empty(),
+            "aggregate check must stay clean (2.04/s avail ≥ 1.8/s required): {agg_issues:?}"
+        );
+
+        let item_issues = check_inserter_item_throughput(&lr, Some(&sr));
+        let warns = item_throughput_warnings(&item_issues);
+        assert_eq!(warns.len(), 1, "only the far item should warn: {item_issues:?}");
+        assert!(warns[0].message.contains("item-far"), "{:?}", warns[0].message);
+        assert!(warns[0].message.contains("in —"));
+    }
+
+    #[test]
+    fn inserter_item_throughput_clean_case_no_warnings() {
+        // Both inputs comfortably within their own inserter's cap, output
+        // likewise — no aggregate deficiency and no per-item deficiency.
+        let sr = dual_input_spec("item-near", 0.3, "item-far", 1.0, "product", 0.4, 1.0);
+        let entities =
+            dual_input_machine_entities_at(0, "inserter", "item-near", "long-handed-inserter", "item-far", "inserter", "product");
+        let lr = LayoutResult { entities, width: 20, height: 20, ..Default::default() };
+
+        let issues = check_inserter_item_throughput(&lr, Some(&sr));
+        assert!(item_throughput_warnings(&issues).is_empty(), "{issues:?}");
+    }
+
+    #[test]
+    fn inserter_item_throughput_output_side_warns() {
+        // Both inputs clean; output item demands more than the single
+        // regular output inserter can move — must warn on the output side
+        // only, isolating the branch from the input-side masking case.
+        let sr = dual_input_spec("item-near", 0.3, "item-far", 1.0, "product", 5.0, 1.0);
+        let entities =
+            dual_input_machine_entities_at(0, "inserter", "item-near", "long-handed-inserter", "item-far", "inserter", "product");
+        let lr = LayoutResult { entities, width: 20, height: 20, ..Default::default() };
+
+        let issues = check_inserter_item_throughput(&lr, Some(&sr));
+        let warns = item_throughput_warnings(&issues);
+        assert_eq!(warns.len(), 1, "{issues:?}");
+        assert!(warns[0].message.contains("product"));
+        assert!(warns[0].message.contains("out —"));
+    }
+
+    /// Same partition-sibling scenario as
+    /// `inserter_throughput_partition_siblings_disambiguated_by_row`, but
+    /// for the per-item check: a blended `sr.machines` spec would produce
+    /// the SAME (wrong) verdict for both rows, while `effective_rows`
+    /// position-based resolution must disambiguate row A (clean, 0.5/s
+    /// in, within a regular inserter's 0.84/s) from row B (warns, 3.0/s
+    /// in, over cap) exactly as the aggregate check does.
+    #[test]
+    fn inserter_item_throughput_effective_rows_sibling_split() {
+        let blended_spec = gear_sibling_spec(2.0, 1.0, 3.0);
+        let sr = SolverResult {
+            machines: vec![blended_spec],
+            external_inputs: vec![],
+            external_outputs: vec![],
+            surplus_outputs: vec![],
+            dependency_order: vec![],
+        };
+
+        let mut entities = gear_machine_entities_at(0); // row A: y in [0, 3)
+        entities.extend(gear_machine_entities_at(10)); // row B: y in [10, 13)
+
+        let lr = LayoutResult {
+            entities,
+            width: 20,
+            height: 20,
+            effective_rows: vec![
+                crate::models::EffectiveRow {
+                    y_start: 0,
+                    y_end: 8,
+                    spec: gear_sibling_spec(0.5, 0.5, 1.0),
+                },
+                crate::models::EffectiveRow {
+                    y_start: 8,
+                    y_end: 16,
+                    spec: gear_sibling_spec(3.0, 0.5, 1.0),
+                },
+            ],
+            ..Default::default()
+        };
+
+        // `gear_machine_entities_at` places generic, unattributed inserters
+        // (`carries: None`) — patch in the recipe-matching `carries` tag so
+        // this test exercises attribution, not the "no carries → skip"
+        // path. Each row is a fixed [machine, input, output] triple
+        // (`gear_machine_entities_at`'s construction order), so index
+        // parity — not a global y-threshold, which would misclassify row
+        // B's input inserter (y=9) as "below" row A's output (y=3) — picks
+        // input vs output correctly per row.
+        let mut lr = lr;
+        for (idx, e) in lr.entities.iter_mut().enumerate() {
+            if e.name == "inserter" {
+                e.carries = Some(if idx % 3 == 1 { "iron-plate".into() } else { "iron-gear-wheel".into() });
+            }
+        }
+
+        let issues = check_inserter_item_throughput(&lr, Some(&sr));
+        let warns = item_throughput_warnings(&issues);
+        assert_eq!(
+            warns.len(),
+            1,
+            "row A (0.5/s, in-capacity) must stay clean, row B (3.0/s, over-capacity) must warn: {issues:?}"
+        );
+        assert!(warns[0].message.contains("(0,10)"), "the warning must land on row B's machine: {warns:?}");
+        assert!(warns[0].message.contains("iron-plate"));
+        assert!(warns[0].message.contains("in —"));
     }
 }
