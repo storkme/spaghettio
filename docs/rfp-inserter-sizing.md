@@ -45,13 +45,18 @@ unoccupied. The actual budget per face, from `templates.rs`:
 | Template / position | Extra input cols | Extra output cols |
 |---|---|---|
 | single_input_row, interior machine | 2 (mx, mx+2) | 2 |
-| single_input_row, last-in-row | 1 (belt tail-trim removes mx+2) | 1 |
+| single_input_row, last-in-row | 1 (belt tail-trim removes mx+2) | 1 (west-flow; east-flow keeps 2) |
 | single_input_row, bridge-anchor (lane_split) | per input | **0** (bridge owns mx+1..mx+3) |
+| single_input_row, bridge-anchor's successor | per input | 1 (own mx is the bridge's 3rd tile) |
 | single_input_row + secondary_output (D2b) | — | 1 (mx+2 is the LHI's) |
-| dual_input_row | 1, CONTESTED between far/near ingredients | 1 |
-| triple_input_row | 1 contested (far/near pair) + 1 for input3 (bridge-eaten when split) | 1 |
+| dual_input_row | 1, CONTESTED between far/near ingredients | 2 interior (output row is single_input_row-shaped) |
+| triple_input_row | 1 contested (far/near pair) + 1 for input3 (bridge-eaten when split) | 1 (second inserter shares the row) |
 | quad_input_row | **0** for 3 of 4 inputs (north rows fully packed) | 1 |
-| fluid_input_row (solid side) | 1 (fluid UG pipe owns a column) | 1 |
+| fluid_input_row (solid side) | 1 (fluid UG pipe owns a column) | 2 interior (output row is single_input_row-shaped) |
+
+(Bridge-anchor/last-in-row modifiers compose with the per-template
+rows; Phase 0's census enumerates the full position product, this
+table is the shape reference.)
 
 Two consequences drive the whole design:
 
@@ -250,3 +255,15 @@ prediction is itself a stop signal.
   a contested-column face, composition-gap note (inserter check
   assumes feeding-belt saturation — I8 doc note + validator-backlog
   cross-check). Pending re-review / acceptance.*
+- *2026-07-12 — re-review verification: **SHIP** after two census
+  cells corrected (dual_input_row and fluid_input_row interior
+  OUTPUT budgets are 2, not 1 — their output rows are
+  single_input_row-shaped; the draft extrapolated from triple/quad's
+  genuinely-1 shape). Both were understated (safe direction). Also
+  added: bridge-anchor successor position (1 output col) and the
+  east-flow last-in-row note, so Phase 0's census enumerates the
+  full position product. Re-review confirmed: KC1 rewrite
+  enforceable; phasing double-churn resolved; best-effort+warning
+  floor is provably ≥ today's baseline at every position (rung-1
+  in-place swap needs zero columns), so no new honesty hole — the
+  check remains the independent auditor. **Ready for acceptance.***
