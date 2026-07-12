@@ -367,3 +367,45 @@ stop signal.
 - *2026-07-12 — **v2 accepted by user.** Phase 0v2 started: geometry
   audit (self_loop_row first) + carries-attribution audit +
   per-item re-census with v2 ceilings and 10% at-risk flagging.*
+- *2026-07-12 — **Phase 0v2 complete: KC1-v2 PASSES.** 1/593 sides
+  (0.17%) exceed v2 ceilings vs the 5% threshold; ALL SIX gauntlet
+  packs reach zero. Reconciled 21/21; zero warned sides landed on an
+  unaudited budget cell (every extrapolated v1 cell now
+  source-audited with file:line; regenerate via the census example).
+  The RFP's cited zero-margin case reproduced to the cent (PU's EC
+  row: iron-plate 2.40/s vs 2.40/s far ceiling, 0.00% margin).
+  **Headline structural finding: with the stack rung, rung-2+ is
+  EMPTY** — no warned side in the corpus needs an extra column, only
+  in-place tier swaps (275 fast-sufficient + 212 need-stack = the
+  predicted stack footprint). The column-budget drama that killed v1
+  survives only as far/reach-2 headroom arithmetic. Per-item
+  decomposition: all 18 exceeding + 21 at-risk items are the
+  reassigned-to-FAR item (iron-plate ×37, iron-stick ×2) — residual
+  risk concentrates exactly where the design predicted, and the
+  aggregate check's comfortable margins MASK all 21 tight per-item
+  margins, making the Phase 2 attribution check corpus-measurably
+  load-bearing, not precautionary. Geometry corrections locked into
+  the frozen table: bridge_y == inserter row EVERYWHERE (wall-2
+  basis confirmed; triple output BridgeAnchor=0 AND Successor=0 —
+  Strategy B reaches one column further); LastInRow is a
+  first-class position (fluid_input solid-input drops to 0 there;
+  dual's contested column narrows to near-only); quad's south-input
+  and output budgets are ONE shared tile; self_loop shapes: 1-item
+  input 1-contested/output 2; has_fluid input near=0 (near's row
+  fully packed) + major reach-2-only ×2 / output 2; kovarex input 0
+  / output 1 contested; voider input 0 + output exempt; scrap input
+  1 (corrected up from floor 0) + output exempt; fluid_dual solid
+  input hard 0 everywhere. Carries attribution: all 34 inserter
+  construction sites set Some(item) — attribution check needs zero
+  plumbing. **Sole residue: tier_fish_breeding_self_loop** —
+  self_loop has_fluid shape's NEAR budget is genuinely 0 and
+  nutrients demand ~15/s/machine vs a 1.2/s per-item ceiling; a
+  real geometric wall in that template shape, carried to Phase 3
+  scope (template-shape work or accepted residue), does not gate
+  the verdict. Frozen after-P1/P2/P3 predictions (re-blessings must
+  match EXACTLY): automation 2→0/0/0; chemical 22→6/4/0; logistic
+  8→4/1/0; military 11→0/0/0; production 42→18/12/0; utility
+  55→31/23/0; tier1 ×3 →0 at P1; tier2 34/50/68→14/20/28→7/10/14→0;
+  tier3 ×2 10→10→10→0; tier4 14/14/58→6/6/24→4/4/17→0; tier5
+  129→65/45/0; pentapod 2→2/2/0; fish 1→1/1/**1**; bacteria
+  1→1/0/0. **Phase 1 (ladder + single_input_row) is GO.***
