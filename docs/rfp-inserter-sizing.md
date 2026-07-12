@@ -487,3 +487,23 @@ stop signal.
   clearance), a full reach-2 redesign RFP, or accepting the residue
   with honest warnings and re-scoping the definition of done (the
   RFP's own best-effort language anticipates this). With user.***
+- *2026-07-12 — **user decision: ACCEPT THE RESIDUE — v3 is the
+  final design; build it.** Definition of done re-scoped: every side
+  within its geometric ceiling reaches zero; the 25 characterized
+  residue items (dual/triple far-item absolute exceedances +
+  self_loop HasFluid) keep their honest inserter-throughput warnings
+  permanently — packs end at chemical 1 / production 7 / utility 2,
+  and those warnings are TRUE statements about template geometry,
+  not defects of this RFP. KC1's packs-zero condition is explicitly
+  waived by this decision (the percentage condition passes at
+  3.57%). The reach-2 template redesign — the only path to true zero
+  (rail's 2.50/s exceeds the far ceiling's absolute 2.40 maximum;
+  furnace's input3 sits on a bridge-dead tile) — is deferred to a
+  future RFP merging with the dynamic face-allocation north star
+  (Non-goals), with this census as its motivating dataset.
+  Implementation proceeds: Phases 1–3 against v3 predictions. One
+  pre-Phase-1 deliverable outstanding: the frozen prediction table
+  restated at SIDE granularity (the aggregate check's warning unit —
+  what assert_warnings_exactly counts); the v3 table is
+  item-granularity, and Phase 2's per-item check will add its own
+  warning stream with its own frozen counts when it lands.*
