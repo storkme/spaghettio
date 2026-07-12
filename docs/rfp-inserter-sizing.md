@@ -9,38 +9,45 @@ at a fraction of their planned utilization in a real game. This was
 invisible until the `inserter-throughput` check landed
 (`rfp-lane-demand-flow.md` Phase 1); the 1/s gauntlet now carries
 2/8/11/22/42/55 honest warnings across the six packs. This RFP sizes
-inserters to rates: a shared per-side ladder (in-place tier upgrade
-first, extra inserters where the face's REAL free-column budget
-allows), applied across all row templates, best-effort where geometry
-caps out — with the shortfall kept honestly visible, never hidden. It
-is the layout-side completion of the lane-demand-flow work. It moves
-every golden hash in the corpus, so it ships with full re-blessing
-discipline and browser-eyeball verification.
+inserters to rates via a shared per-side ladder — in-place tier
+upgrades first (regular → fast → **stack**), extra inserters where
+the face's real free-column budget allows — plus **ingredient-to-belt
+assignment** (the hungry ingredient goes to the near belt, where the
+full ladder applies). The maximum inserter tier is a **user-facing
+layout-engine parameter** (`max_inserter_tier`, default Stack),
+mirroring `max_belt_tier`: a hard cap the ladder never exceeds, with
+below-cap sides degrading best-effort + honestly warned. This is v2:
+the v1 design (fast-only ladder) was killed by its own Phase 0 census
+— kill criterion 1 fired at 19.6% of sides over ceiling and 4 of 6
+packs unable to reach zero (decision log, 2026-07-12).
 
 ## Motivation
 
 Reproducible today (`science_gauntlet`, HEAD ≥ `6849935`): all six
 Nauvis packs at 1/s warn on `inserter-throughput`. Canonical case —
 the logistic-science chain's iron-gear-wheel machine (AM2, 1.5
-crafts/s planned): needs 3.0 plates/s in and 1.5 gears/s out, gets one
-regular inserter (~0.84/s) on each side. Input caps the machine at
-~28%. In a real game the factory under-delivers its target by roughly
-3× at that machine, and the tier ladder's "SOLVED (0 errors)" rows
-have never been true at full rate in-game.
+crafts/s planned): 3.0 plates/s in, 1.5 gears/s out, one regular
+inserter (~0.84/s) each side → input caps the machine at ~28%.
 
-Tier-swap alone cannot fix everything (one fast inserter ≈ 2.31/s <
-3.0/s), so multi-inserter faces are required for the hungriest sides —
-which makes this a geometry problem. The adversarial review round
-(2026-07-12, decision log) established that the geometry is much
-tighter than a naive reading of the templates suggests; the design
-below is built on that census, not on assumption.
+The v1 census (593 sides, reconciled 21/21 against actual warning
+counts) proved fast-only insufficient and localized the failure to
+two walls:
+
+1. **dual_input_row input ceiling ≈ 4.71/s** (fast + long-handed +
+   one contested column) vs electronic-circuit-shaped demands of
+   5.7–9.6/s per machine — and EC is in nearly every chain.
+2. **single_input_row bridge-anchor output ceiling = 2.31/s** (the
+   sideload bridge owns all extra columns) vs copper-cable outputs
+   of 3.0–5.0/s.
+
+Both walls are reach-1 sides. A stack-inserter rung (~12/s at zero
+research) dissolves them in place; the far-belt (reach-2) sides that
+can't take stack inserters (no long-handed stack exists) are handled
+by assigning the hungry ingredient to the near belt instead.
 
 ## Design
 
-### The real free-column budget (review census, verified in code)
-
-Extra inserters can only occupy columns that are belt-adjacent AND
-unoccupied. The actual budget per face, from `templates.rs`:
+### The real free-column budget (v1 census table, retained)
 
 | Template / position | Extra input cols | Extra output cols |
 |---|---|---|
@@ -54,251 +61,218 @@ unoccupied. The actual budget per face, from `templates.rs`:
 | quad_input_row | **0** for 3 of 4 inputs (north rows fully packed) | 1 |
 | fluid_input_row (solid side) | 1 (fluid UG pipe owns a column) | 2 interior (output row is single_input_row-shaped) |
 
-(Bridge-anchor/last-in-row modifiers compose with the per-template
-rows; Phase 0's census enumerates the full position product, this
-table is the shape reference.)
+**v2 census debts (from the v1 census gaps, must close in Phase 0v2):**
+`self_loop_row`, `voider_row`, and `scrap_recycling_row` have no
+entries — their fixture predictions were untrusted floors; audit
+their geometry from source. The dual/triple/quad position
+sub-budgets that v1 extrapolated get verified against `templates.rs`
+before the v2 census locks its ceilings.
 
-Two consequences drive the whole design:
+### The ladder (v2)
 
-1. **The workhorse rung is the in-place tier swap** (regular → fast,
-   ≤2.31/s), which needs ZERO extra columns and therefore works at
-   every position in every template. Extra-column rungs are the
-   exception, available mostly on single-input faces.
-2. **Reach-2 (far-belt) sides ladder by long-handed count only**
-   (1.2/s per column, no fast long-handed exists) and their column
-   budget is 0–1 contested — so hungry far ingredients on
-   triple/quad rows are geometrically capped TODAY, by derivation,
-   not as a Phase 3 discovery. Those sides stay best-effort + warned
-   until a template redesign (explicitly out of scope, spun off if
-   the Phase 0 census shows the 1/s gauntlet needs it).
-
-### The ladder
-
-Shared helper (one constants table with the validator's
-`check_inserter_throughput` — I8 values, no-capacity-research; a unit
-test fails if fix and check ever diverge):
+Shared helper, one constants table with the validator's
+`check_inserter_throughput` (I8 values, no-capacity-research; a unit
+test fails if fix and check diverge):
 
 ```
-size_side(rate, reach, position_budget) -> SidePlan
+size_side(rate, reach, position_budget, max_tier) -> SidePlan
 // SidePlan = { picks: Vec<(dx, entity)>, shortfall: Option<f64> }
 ```
 
 - Rung 0: keep 1 regular (rate ≤ 0.84).
-- Rung 1: in-place swap to fast (rate ≤ 2.31). Zero columns. Reach-2:
-  stays long-handed (≤1.2).
-- Rung 2+: add fast/long-handed inserters into the position's actual
-  free columns, up to its budget.
-- Beyond budget: **best-effort placement + `shortfall`**. The
-  template places the best achievable config; the existing
-  inserter-throughput warning remains (honesty preserved by the
-  check, not by this code); a `InserterSideCapped` trace event
-  records the geometric cap. Layouts never FAIL from sizing — they
-  degrade exactly as visibly as they do today.
-- **Contested columns** (dual/triple rows): resolved deterministically
-  — the side with the larger relative shortfall wins; tie breaks to
-  the far/reach-2 side (its per-inserter rate is lower, so it needs
-  the column more). Determinism is a hard project contract: the rule
-  is a pure function of the two rates, unit-tested, no iteration
-  order anywhere.
+- Rung 1: in-place swap, **cheapest sufficient tier**: fast
+  (≤2.31/s) then stack (≤~12/s). Zero columns. The
+  cheapest-sufficient invariant is unit-tested — stack appears ONLY
+  where fast cannot cover, never as a default aesthetic.
+- Rung 2+: add inserters into the position's actual free columns,
+  again cheapest-sufficient per pick.
+- Reach-2 sides: long-handed only (1.2/s per column, count-ladder) —
+  no fast/stack long-handed exists. This is now a *minimized* path:
+  ingredient assignment (below) keeps hungry ingredients off far
+  belts wherever the recipe shape allows.
+- Beyond budget or above `max_inserter_tier`: **best-effort
+  placement + `shortfall`** — best achievable config placed, the
+  inserter-throughput warning remains (honesty lives in the check),
+  an `InserterSideCapped` trace event records the cap. Layouts never
+  fail from sizing.
+- **Contested columns**: larger relative shortfall wins; tie breaks
+  to the far/reach-2 side. Pure function of the two rates,
+  unit-tested, deterministic.
+
+### Ingredient-to-belt assignment (v2, lever b)
+
+`dual_input_row` (and the far/near pair in `triple_input_row`)
+currently assign ingredients to near/far belts by recipe order —
+arbitrary. v2 assigns the ingredient with the higher per-machine
+rate to the NEAR (reach-1) belt, where the full ladder applies; ties
+preserve the current order (golden-churn minimization). Deterministic,
+rate-derived, unit-tested. This is a real template behavior change
+that moves goldens on dual/triple-input rows by itself — it lands
+inside the same phase as those templates' ladder work so each fixture
+re-blesses once per phase, not twice.
+
+### `max_inserter_tier` — user-facing engine parameter
+
+`LayoutOptions.max_inserter_tier: InserterTier { Regular, Fast,
+Stack }`, default `Stack`. Semantics mirror `max_belt_tier`: a hard
+constraint the ladder never exceeds — capping at `Fast` or `Regular`
+re-creates the v1 geometry limits and the affected sides degrade to
+best-effort + warnings (the same machinery, no special mode).
+Plumbed through wasm-bindings and the web UI (URL state) in the
+final phase, alongside the existing belt-tier control.
 
 ### Integration
 
-- Rates: `MachineSpec.inputs`/`outputs` are per-machine (verified:
-  netflow constructs them as per-machine at 100%); utilization
-  scaling reproduces the validator's exact convention
-  (`count/ceil(count)` global scalar, validate/inserters.rs:254).
-- **Scope note (review finding 2)**: no template currently receives
-  any rate parameter — all ~10 row-template signatures gain a
-  per-side-rates argument threaded from `build_one_row`, and every
-  placer call site updates. Mechanical but wide; the diff is larger
-  than "add a helper".
+- Rates: `MachineSpec.inputs`/`outputs` are per-machine (verified);
+  utilization scaling reproduces the validator's exact
+  `count/ceil(count)` convention.
+- Scope note: all ~10 row-template signatures gain per-side-rate
+  parameters threaded from `build_one_row`; every placer call site
+  updates. Wide but mechanical.
 - Recyclers keep direct ejection (exempt in fix and check); sushi
-  sort inserters already size by rate (untouched).
-- Power: added inserters land inside existing row footprints already
-  blanketed by the pole grid — verified per phase via the existing
-  power checks, called out in the verification plan (review noted it
-  was previously unstated).
+  sort inserters already size by rate.
+- Stack-inserter physicals: 1×1, reach 1, standard power draw —
+  no entity-size or pole-coverage novelty; add to any hardcoded
+  entity vocabularies that gate on inserter names (blueprint export
+  already handles arbitrary inserter entities with filters).
+- Power: added/upgraded inserters verified per phase via existing
+  power checks.
 
-### Composition gap (review finding 5, recorded)
+### Composition gap (recorded, from v1 review)
 
-I8's chest-to-chest constants are correct for belt-adjacent inserters
-under saturation (swing timing is source-agnostic) — no derating. The
-genuine residual: `check_inserter_throughput` assumes the feeding
-belt sustains the demanded rate; nothing cross-checks an upsized
-inserter's demand against its feeding lane's provision. Mitigation
-here: a doc note in `factorio-mechanics.md` I8 stating the saturation
-precondition, and the demand-pull walker (already landed) naturally
-raises lane delivery toward real demand. A dedicated cross-check is
-noted for the validator backlog, not built here.
+I8 constants are correct for belt-adjacent inserters under
+saturation; the residual is that `check_inserter_throughput` assumes
+the feeding belt sustains the demanded rate. Mitigation: I8 doc note
++ the demand-pull walker already raises lane delivery toward true
+demand; a dedicated cross-check stays on the validator backlog. Note
+the stack rung sharpens this: a 12/s side demands more from its lane
+than fast ever did — the cross-check's priority rises if Phase 0v2
+census shows stack sides near lane capacity.
 
 ### Non-goals
 
-- No belt-tier escalation (hard user constraint).
-- No `max_inserter_tier` user knob in v1 (UI backlog note).
+- No belt-tier escalation (hard user constraint, unchanged).
 - No template geometry changes — no pitch, belt, or machine moves.
-- No stack inserters in the v1 ladder (research/cost assumptions
-  need their own decision; escape hatch if the census demands it).
-- Multi-input-row redesign for capped far-ingredients: separate
-  follow-up if needed.
-- The ~5 residual input-rate-delivery warnings from cyclic demand
-  (lane-demand-flow known limitation): separate.
+- Bulk inserters: skipped (2.4/s base ≈ fast; adds nothing between
+  fast and stack at zero research).
+- Multi-input-row redesign: only if the v2 census still leaves
+  gauntlet residue (not expected — both v1 walls are reach-1).
+- The ~5 residual input-rate-delivery warnings from cyclic demand:
+  separate (lane-demand-flow known limitation).
 
 ## Kill criteria
 
-1. **Phase 0 coverage gate (rewritten after review)**: the census
-   compares every machine side's utilization-scaled rate against its
-   POSITION's real ceiling from the free-column table above — NOT
-   against the abstract ladder maximum. Method: enumerate machine
-   sides per template per row-position across the six 1/s gauntlet
-   layouts (the warnings carry rates; the table carries budgets). If
-   >5% of sides exceed their position ceiling, OR any of the six
-   packs cannot reach zero warnings at 1/s within existing geometry,
-   the ladder design is insufficient for its own definition of done
-   — stop and rethink (template redesign or stack inserters) before
-   any template code.
+1. **Phase 0v2 coverage gate**: census re-run with v2 ceilings
+   (stack rung + ingredient reassignment + audited
+   self_loop/voider/scrap geometry + verified sub-budgets), same
+   conditions: if >5% of warned sides exceed their v2 position
+   ceiling, OR any of the six 1/s packs cannot reach zero, stop —
+   v2 is also insufficient and the next step is template redesign,
+   not another ladder tier.
 2. **Geometry containment**: if `single_input_row` or
-   `dual_input_row` (the workhorses) turn out to need pitch/belt/
-   machine-position changes to reach zero at 1/s, stop — this RFP is
-   under-scoped. (Triple/quad far-side caps are already known and
-   handled as best-effort residue, per the census — they do NOT trip
-   this criterion.)
-3. **Honest-zero gate**: per phase, the fixtures that phase's
-   templates own must reach their predicted counts with NO edits to
-   `check_inserter_throughput` or the I8 constants in any commit
-   that also touches templates — the check gates the fix; they may
-   never move together.
+   `dual_input_row` need pitch/belt/machine-position changes to
+   reach zero at 1/s, stop — under-scoped.
+3. **Honest-zero gate**: no edits to `check_inserter_throughput` or
+   the I8 constants in any commit touching templates.
 4. **Budget gate**: entity-count increase ≤ +15% and zero area
-   growth on every gauntlet fixture. Worse means the ladder
-   over-places — stop and audit.
-5. **In-game anchors (two, review-extended)**: (a) the logistic
-   gear machine (single-input face) after Phase 1; (b) one
-   contested-column dual/triple-input machine after Phase 2. If
-   either still starves with its warnings at zero, the CHECK is
-   miscalibrated — stop everything; the validator debt is deeper
-   than this RFP.
+   growth on every gauntlet fixture.
+5. **In-game anchors (two)**: (a) the logistic gear machine after
+   Phase 1; (b) one contested-column or stack-upgraded dual-input
+   machine after Phase 2. Either still starving with warnings at
+   zero = the CHECK is miscalibrated — stop everything.
+6. **Cheapest-sufficient audit**: if any gauntlet layout places a
+   stack inserter where the arithmetic shows fast sufficed, the
+   ladder selection is buggy — stop and fix before proceeding (this
+   guards the user-facing aesthetic/cost contract, not just
+   correctness).
 
 ## Verification plan
 
 Per the CLAUDE.md protocol, plus:
 
-- Definition of done: `science_gauntlet` 1/s — every side within its
-  geometric ceiling at zero warnings; any residual capped sides
-  enumerated in the decision log with their shortfalls (Phase 0
-  predicts this set; if it's non-empty for the six packs, kill
-  criterion 1 already fired).
+- Definition of done: `science_gauntlet` 1/s — all six packs at zero
+  inserter-throughput warnings (Phase 0v2 must predict this
+  reachable, else KC1 fired).
 - `science_scaling_gauntlet` re-run; delta into the decision log.
-- Golden re-bless per phase with browser eyeball of tier1,
-  tier2-from-ore, tier4-am2, one self-loop row (user validates).
-- Power checks green after each phase (added inserters draw from the
-  existing pole grid — verify, don't assume).
-- Unit tests: ladder boundary rates, reach-2 count-laddering,
-  contested-column resolution (both orders + tie), best-effort
-  shortfall path, shared-constants identity with the check,
-  determinism of column choice.
+- Golden re-bless per phase against Phase 0v2's frozen predictions;
+  browser eyeball of tier1, tier2-from-ore, tier4-am2, one self-loop
+  row (user validates).
+- Power checks green per phase.
+- Unit tests: ladder boundaries per tier, cheapest-sufficient
+  invariant, max_inserter_tier capping (Fast-capped reproduces v1
+  ceilings), reach-2 count-laddering, contested-column resolution
+  (both orders + tie), ingredient-assignment rule (hungry→near, tie
+  →stable), best-effort shortfall path, constants identity with the
+  check, determinism of all choices.
 - Netflow determinism sweep untouched.
 
 ## Phasing
 
-- **Phase 0 — corpus census** (no layout change): per-side rate ×
-  position ceiling across the six 1/s gauntlet layouts, built on the
-  review's per-template column table; kill criterion 1 evaluated;
-  the per-phase expected-warning-count table for every gauntlet
-  fixture is FROZEN here (so re-blessing is predicted, not
-  discovered).
-- **Phase 1 — ladder helper + `single_input_row`**: tier1 fixtures
-  reach zero. Mixed fixtures (tier2+ — electronic-circuit is a
-  DUAL-input row, review finding 7) re-bless to the reduced counts
-  predicted by Phase 0. Anchor (a).
-- **Phase 2 — `dual_input_row` + remaining solid templates**
-  (triple/quad/horizontal-stack/self-loop/voider/scrap): tier2
-  reaches zero; triple/quad best-effort residue lands as predicted.
-  Anchor (b).
-- **Phase 3 — reach-2 / fluid-adjacent rows**: long-handed count
-  ladder within real budgets; enumerate the geometrically-capped
-  residue; if that residue blocks any 1/s pack from PASS, spin off
-  the template-redesign RFP (it will already have the census data).
-- **Phase 4 — close-out**: both gauntlets re-run, delta tables
-  recorded, CLAUDE.md ladder refreshed (tier rows finally mean
-  "delivers the planned rate"), both in-game anchors confirmed.
+- **Phase 0v2 — geometry audit + re-census**: close the v1 census
+  debts (self_loop/voider/scrap rows, extrapolated sub-budgets),
+  re-run the census with v2 ceilings, evaluate kill criterion 1,
+  freeze the per-phase per-fixture prediction table.
+- **Phase 1 — ladder helper + `single_input_row`**: tier1 zero;
+  mixed fixtures re-bless to predicted reduced counts; anchor (a).
+- **Phase 2 — `dual_input_row` (ladder + ingredient assignment
+  together) + remaining solid templates**: tier2 zero; anchor (b).
+- **Phase 3 — reach-2 / fluid-adjacent rows + self-loop/voider/
+  scrap rows**: long-handed ladders within audited budgets;
+  enumerate any residue (expected ~zero per v2 design).
+- **Phase 4 — close-out**: `max_inserter_tier` through
+  wasm-bindings + web UI (URL state); both gauntlets re-run, deltas
+  recorded; CLAUDE.md ladder refreshed; in-game anchors confirmed.
 
-Every mixed fixture is re-blessed at most twice (Phase 1 reduced
-count, Phase 2/3 final count), and both blessings are against counts
-predicted by the Phase 0 table — a blessing that doesn't match its
-prediction is itself a stop signal.
+Every mixed fixture re-blesses at most once per phase, against
+Phase 0v2's predictions; a blessing that misses its prediction is a
+stop signal.
 
 ## Decision log
 
-- *2026-07-12 — drafted, immediately following lane-demand-flow
-  Phase 1 (`6849935`): 1/s gauntlet carries 140 inserter-throughput
-  warnings across the six packs. Pending review.*
-- *2026-07-12 — adversarial review round. Verdict: REVISE (core
-  ladder concept sound, constants verified — chest-to-chest I8
-  numbers hold for belt-adjacent inserters under saturation, no
-  derating). Three blocking findings, all incorporated: (1) the
-  free-column budget is position-dependent and far tighter than the
-  draft assumed (census table now in Design — bridge-anchor output
-  faces have ZERO free columns; quad-row north faces likewise;
-  multi-input rows have one CONTESTED column); the in-place tier
-  swap is therefore the workhorse rung, and beyond-budget sides are
-  best-effort + honestly-warned rather than hard errors. (2) Kill
-  criterion 1 rewritten to measure against per-position ceilings,
-  not the abstract ladder max — as drafted it would have
-  systematically underreported its own target failure mode. (3) The
-  Phase 1 claim "tier1/tier2 go zero" was factually wrong —
-  electronic-circuit is a dual-input row (recipes.json: iron-plate +
-  copper-cable×3; placer::row_kind routes 2 solid inputs to
-  DualInput), so tier2 clears in Phase 2; phasing corrected, and
-  every fixture's per-phase expected count is frozen in the Phase 0
-  table so re-blessing is predicted, not discovered. Also adopted:
-  deterministic contested-column resolution rule (golden-churn
-  guard), power verification made explicit, second in-game anchor on
-  a contested-column face, composition-gap note (inserter check
-  assumes feeding-belt saturation — I8 doc note + validator-backlog
-  cross-check). Pending re-review / acceptance.*
-- *2026-07-12 — re-review verification: **SHIP** after two census
-  cells corrected (dual_input_row and fluid_input_row interior
-  OUTPUT budgets are 2, not 1 — their output rows are
-  single_input_row-shaped; the draft extrapolated from triple/quad's
-  genuinely-1 shape). Both were understated (safe direction). Also
-  added: bridge-anchor successor position (1 output col) and the
-  east-flow last-in-row note, so Phase 0's census enumerates the
-  full position product. Re-review confirmed: KC1 rewrite
-  enforceable; phasing double-churn resolved; best-effort+warning
-  floor is provably ≥ today's baseline at every position (rung-1
-  in-place swap needs zero columns), so no new honesty hole — the
-  check remains the independent auditor. **Ready for acceptance.***
-- *2026-07-12 — **accepted by user.** Phase 0 census started.*
-- *2026-07-12 — **Phase 0 census complete: KC1 FIRES on both
-  conditions. STOP — no Phase 1 template code.** Census: 593 warned
-  sides across the six 1/s gauntlet packs + 15 tier fixtures,
-  reconciled 21/21 against actual warning counts (regenerate:
-  `cargo run --example census_inserter_sizing --release`, gitignored
-  example). 116/593 sides (19.6%) exceed their position ceiling vs
-  the 5% threshold — and a maximally conservative recount using ONLY
-  verbatim table-backed cells (zero extrapolation) still gives
-  66/593 = 11.1%, double the threshold. Per-pack: only automation
-  and logistic can reach zero within existing geometry; military,
-  chemical, production, utility cannot. Two walls drive nearly all
-  of it: (1) **dual_input_row's input ceiling ≈ 4.71/s** (rung-1
-  fast + long-handed + one contested column) vs electronic-circuit-
-  shaped demands of 5.7–9.6/s per machine — EC is in almost every
-  chain; (2) **single_input_row bridge-anchor output ceiling =
-  2.31/s** (bridge owns all extra columns) vs copper-cable outputs
-  of 3.0–5.0/s. Rung histogram: 46% of sides clear on the in-place
-  swap alone, 23% rung 2, 4% rung 3, 7% long-handed ladder, 20%
-  exceed. 44 machines have BOTH sides contesting columns (the
-  tie-break rule is load-bearing, and Phase 0's ceiling credit was
-  optimistic — real post-allocation capping will be higher). Census
-  gaps recorded: self_loop/voider/scrap rows have no free-column
-  table entries (their 3 fixture predictions are untrusted floors);
-  dual/triple/quad position sub-budgets partially extrapolated —
-  audit before any v2 census. The per-phase prediction table is
-  OBSOLETE (conditioned on the failed design). **Rethink levers
-  identified for a v2 design round**: (a) a stack-inserter rung
-  (~12/s at zero research, reach-1 only) dissolves both walls where
-  the hungry side is reach-1; (b) ingredient-to-belt assignment as a
-  free template lever — dual_input_row can put the HUNGRY ingredient
-  on the near (reach-1) belt where the full ladder applies, since no
-  fast long-handed inserter exists; (c) bridge redesign only if (a)+
-  (b) leave residue. v2 goes back through adversarial review before
-  acceptance.*
+- *2026-07-12 — drafted (v1: fast-only ladder), immediately following
+  lane-demand-flow Phase 1 (`6849935`): 1/s gauntlet carries 140
+  inserter-throughput warnings across the six packs. Pending review.*
+- *2026-07-12 — adversarial review round (v1). Verdict: REVISE.
+  Three blocking findings incorporated: real per-position
+  free-column census table (bridge-anchor output faces have ZERO
+  free columns; quad north faces likewise; multi-input rows have one
+  CONTESTED column) — in-place tier swap becomes the workhorse rung
+  and beyond-budget sides are best-effort + honestly-warned; kill
+  criterion 1 rewritten against per-position ceilings; phasing
+  corrected (electronic-circuit is a dual-input row — tier2 clears
+  in Phase 2) with per-phase expected counts frozen in Phase 0.
+  Also: deterministic contested-column rule, power verification,
+  second in-game anchor, composition-gap note. I8 constants verified
+  (chest-to-chest holds for belt-adjacent inserters under
+  saturation; no derating).*
+- *2026-07-12 — re-review verification: SHIP after two census cells
+  corrected (dual/fluid_input_row interior output budgets are 2, not
+  1); bridge-anchor-successor position and east-flow note added.*
+- *2026-07-12 — accepted by user. Phase 0 census started.*
+- *2026-07-12 — **Phase 0 census complete: KC1 FIRED on both
+  conditions — v1 design killed before any template code.** 593
+  warned sides, reconciled 21/21 (regenerate:
+  `cargo run --example census_inserter_sizing --release`). 116/593
+  (19.6%) over ceiling vs 5% threshold; conservative zero-
+  extrapolation recount 66/593 = 11.1%, still double. Only
+  automation + logistic could reach zero. Walls: dual_input_row
+  input ≈4.71/s vs EC-shaped 5.7–9.6/s; bridge-anchor output 2.31/s
+  vs copper-cable 3.0–5.0/s. Histogram: 46% rung-1, 23% rung-2, 4%
+  rung-3, 7% LHI-ladder, 20% exceed; 44 machines with genuinely
+  contested columns. Census gaps: self_loop/voider/scrap rows
+  untabled; dual/triple/quad sub-budgets partially extrapolated;
+  contested credit optimistic (real capping higher). The v1
+  per-phase prediction table is obsolete.*
+- *2026-07-12 — **v2 redesign accepted by user** ("stack inserters
+  are the way to go, but ideally the inserter level should be a
+  parameter to the layout engine"): levers (a) stack-inserter rung
+  (cheapest-sufficient, ~12/s reach-1, dissolves both v1 walls) +
+  (b) hungry-ingredient-to-near-belt assignment (no fast/stack
+  long-handed exists, so the far belt stays low-ceiling — keep
+  hungry ingredients off it). New: `LayoutOptions.max_inserter_tier
+  { Regular, Fast, Stack }`, default Stack, hard cap semantics
+  mirroring `max_belt_tier`, plumbed to web UI in Phase 4. New kill
+  criterion 6 (cheapest-sufficient audit — no stack where fast
+  suffices). Phase 0v2 (geometry-debt audit + re-census) precedes
+  any template code, same 5%/all-packs-zero gate. Pending delta
+  re-review, then Phase 0v2.*
