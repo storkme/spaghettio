@@ -396,3 +396,28 @@ Per the CLAUDE.md protocol, plus:
   preserved, with the fallback path added alongside; family lane_xs
   contiguity (hard Err at lane_planner.rs:503-519) is satisfied by
   the K-trunk assignment.*
+- *2026-07-14 — **Checkpoint B2 complete (6cb0368 / 0e27a14 /
+  bf061e3): the Step-6 hang is dead, and the measurement REFRAMES
+  kill criterion 6.** Root cause was an infeasibility trap, not
+  hardness: the pathological zone's boundary absorbed one channel's
+  outputs into another's trunk column, leaving a 3-source/0-sink
+  channel — UNSAT by flow conservation, unboundedly slow to REFUTE
+  (varisat 0.2.2 has no interrupt; WASM has no threads, so no
+  watchdog). Fixes: flow-balance pre-check (structural, any size,
+  never a false refusal; 28s→132ms on the isolated cluster) +
+  var-count ceiling at 700 (terminate-guarantee net, calibrated in
+  the 630/756 gap) + mergetree segments protected from zone growth
+  (the unmasked AlreadyClaimed panic — the #296 claims family).
+  Permanent regression guard: a region fixture replaying the exact
+  hang zone. Corrected expectation: these crossings DEGRADE (the
+  feeder sinks are never captured at any region size), they do not
+  heal. **The flag-on measurement (EC@35s: 132 errors = 125
+  lane-throughput + 7 unresolved-junction)**: crossing pressure is
+  ABSORBABLE — 7 junctions, not catastrophe — and the dominant
+  failure is flow MISDISTRIBUTION on shared trunks, exactly the
+  signature of the deferred priority taps (plain 50/50 splitters
+  metering nothing). Constrained-tap routing is demoted to a
+  7-crossing follow-up; **the next step is task #12 (priority taps,
+  now unblocked), then re-measure** — the lane-throughput count
+  collapsing (or not) is the falsification test for the
+  priority-tap hypothesis.*
