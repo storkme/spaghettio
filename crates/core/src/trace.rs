@@ -333,12 +333,59 @@ pub enum TraceEvent {
         tap_y: i32,
         reason: String,
     },
+    /// A balancer block was requested for a lane family. `template_found
+    /// == false` is not necessarily a bug by itself — it means no direct
+    /// template, gcd-decomposition, nor the runtime generator could
+    /// realize this `(N, M)` shape, so `stamp_family_balancer` legitimately
+    /// returned no entities. But the feeder-spec generator in
+    /// `route_bus_ghost` (`crates/core/src/bus/ghost_router.rs`) mirrors
+    /// the same passthrough/template/decomposition search (not the
+    /// runtime-generator fallback — see `FeederSpecsSkipped`) to find each
+    /// producer row's balancer input tile; when this event's
+    /// `template_found` is `false` for a family, that search comes up
+    /// empty too, and the family's producer rows dead-end with no feeder
+    /// belts routed at all. See `FeederSpecsSkipped`, which fires at that
+    /// downstream site.
     BalancerStamped {
         item: String,
         shape: (usize, usize),
         y_start: i32,
         y_end: i32,
         template_found: bool,
+    },
+    /// Feeder-spec generation for a lane family (`route_bus_ghost`,
+    /// `crates/core/src/bus/ghost_router.rs`) computed an empty
+    /// `input_xs` — no direct template, gcd-decomposition, nor
+    /// passthrough-shape rule could place any balancer input tile for
+    /// this family's `(N, M)` shape. In practice this coincides with
+    /// `BalancerStamped { template_found: false }` for the same family
+    /// (its direct consequence): without input tiles, the guard at the
+    /// skip site silently skips the entire per-producer feeder loop,
+    /// every one of the family's `producer_rows` gets no feeder belt, and
+    /// those producer rows' output belts dead-end with no other trace
+    /// signal. Fires at most once per family (checked on the leftmost
+    /// lane), and only when the family actually has producer rows to
+    /// route — a family with zero producer rows has nothing to dead-end
+    /// and does not fire this.
+    ///
+    /// Caveat for future maintainers: this input_xs search does NOT
+    /// mirror `stamp_family_balancer`'s third fallback, the Phase 2.0
+    /// runtime template generator (`balancer_generate::generate`). Today
+    /// that's a distinction without a difference — every shape whose
+    /// generator output passes the `width <= m` guard is (verified by
+    /// `crate::bus::balancer::shape_is_stampable`'s own property test)
+    /// already reachable via gcd-decomposition through the same 1↔2/2↔1
+    /// atom templates, so `template_found` and `input_xs` non-emptiness
+    /// never actually diverge. If the generator ever grows coverage the
+    /// decomposition search can't reach (e.g. non-2 fan ratios), this
+    /// event would start firing on families where `template_found` was
+    /// `true` — a real bug (balancer stamped, but never fed) distinct
+    /// from the legitimate-miss case this doc otherwise describes.
+    FeederSpecsSkipped {
+        item: String,
+        module_id: u32,
+        producer_rows: usize,
+        shape: (usize, usize),
     },
     /// Phase 2.0 runtime template generator produced a layout for a shape
     /// that wasn't directly served by the library (and decomposition

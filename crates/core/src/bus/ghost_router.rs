@@ -1464,7 +1464,24 @@ pub fn route_bus_ghost(
                         }
                     }
 
-                    if !input_xs.is_empty() {
+                    if input_xs.is_empty() {
+                        // No template, decomposition, or passthrough rule
+                        // resolved this family's shape — mirrors (and is
+                        // caused by) the same search coming up empty in
+                        // `stamp_family_balancer` (see `BalancerStamped {
+                        // template_found: false }`). Every producer row
+                        // below would otherwise dead-end with no feeder
+                        // belt and no trace signal at all; only emit when
+                        // there's actually something to dead-end.
+                        if !fam.producer_rows.is_empty() {
+                            crate::trace::emit(crate::trace::TraceEvent::FeederSpecsSkipped {
+                                item: fam.item.clone(),
+                                module_id: fam.module_id,
+                                producer_rows: fam.producer_rows.len(),
+                                shape: fam.shape,
+                            });
+                        }
+                    } else {
                         // Sort across all sub-stamps so the leftmost
                         // producer row maps to the leftmost balancer
                         // input — same convention as the direct-template
@@ -5165,5 +5182,197 @@ mod cluster_adjacent_crossings_tests {
         ]);
         let clusters = cluster_adjacent_crossings(&cs, &rp, &no_tiers(), &no_kinds());
         assert_eq!(clusters.len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod feeder_specs_skipped_tests {
+    use super::*;
+    use crate::bus::lane_planner::LaneFamily;
+    use crate::models::SolverResult;
+    use crate::trace::TraceEvent;
+
+    fn empty_solver_result() -> SolverResult {
+        SolverResult {
+            machines: Vec::new(),
+            external_inputs: Vec::new(),
+            external_outputs: Vec::new(),
+            surplus_outputs: Vec::new(),
+            dependency_order: Vec::new(),
+        }
+    }
+
+    /// One lane standing in for the leftmost lane of a family — the only
+    /// one the feeder-spec generator inspects (it fires once per family,
+    /// gated on `is_first_lane_in_family`). No consumers/producers of its
+    /// own so none of the other per-lane spec branches (tap-off/ret/
+    /// collector) fire; `row_spans` can stay empty because those branches
+    /// are the only ones that index into it before the family feeder
+    /// branch this test targets.
+    fn leftmost_lane(item: &str, x: i32, family_id: usize) -> BusLane {
+        BusLane {
+            item: item.to_string(),
+            module_id: 0,
+            x,
+            source_y: 0,
+            consumer_rows: Vec::new(),
+            producer_row: None,
+            rate: 20.0,
+            is_fluid: false,
+            tap_off_ys: Vec::new(),
+            extra_producer_rows: Vec::new(),
+            balancer_y: None,
+            family_id: Some(family_id),
+            fluid_port_positions: Vec::new(),
+            fluid_output_port_positions: Vec::new(),
+            family_balancer_range: None,
+            hs_trunk_idx: None,
+            perimeter_exit_y: None,
+        }
+    }
+
+    /// (7, 11) has no direct template (coprime — gcd is 1, so the
+    /// decomposition loop only ever re-checks the same (7, 11) key) and
+    /// isn't reachable by the runtime generator either (11 and 7 are
+    /// coprime, so neither of `generate`'s multiple-of branches apply).
+    /// `stamp_family_balancer` legitimately returns no entities for this
+    /// shape — this is the case `FeederSpecsSkipped` exists to surface.
+    #[test]
+    fn fires_when_shape_has_no_template_at_all() {
+        assert!(
+            crate::bus::balancer_library::balancer_templates()
+                .get(&(7, 11))
+                .is_none(),
+            "test assumes (7, 11) is not in the balancer library"
+        );
+
+        let lane_xs: Vec<i32> = (100..111).collect(); // 11 lanes
+        let family = LaneFamily {
+            item: "test-item".to_string(),
+            module_id: 0,
+            shape: (7, 11), // 7 producers, 11 lanes
+            producer_rows: vec![0, 1, 2, 3, 4, 5, 6],
+            lane_xs: lane_xs.clone(),
+            balancer_y_start: 10,
+            balancer_y_end: 11,
+            total_rate: 20.0,
+        };
+        let lanes = vec![leftmost_lane("test-item", *lane_xs.iter().min().unwrap(), 0)];
+        let solver_result = empty_solver_result();
+
+        let _trace_guard = crate::trace::start_trace();
+        let result = route_bus_ghost(
+            &lanes, &[], 50, 200, None, &solver_result, &[family], &[], &[],
+        );
+        let events = crate::trace::drain_events();
+
+        assert!(result.is_ok(), "route_bus_ghost failed: {:?}", result.err());
+
+        let balancer_stamped = events.iter().any(|e| {
+            matches!(
+                e,
+                TraceEvent::BalancerStamped { shape, template_found: false, .. }
+                    if *shape == (7, 11)
+            )
+        });
+        assert!(
+            balancer_stamped,
+            "expected BalancerStamped{{template_found: false}} for (7, 11); got {:#?}",
+            events
+        );
+
+        let skipped = events.iter().find_map(|e| match e {
+            TraceEvent::FeederSpecsSkipped { item, module_id, producer_rows, shape } => {
+                Some((item.clone(), *module_id, *producer_rows, *shape))
+            }
+            _ => None,
+        });
+        assert_eq!(
+            skipped,
+            Some(("test-item".to_string(), 0, 7, (7, 11))),
+            "expected FeederSpecsSkipped for the (7, 11) family; got {:#?}",
+            events
+        );
+    }
+
+    /// Sanity check on the other side of the guard: a family with zero
+    /// `producer_rows` has nothing to dead-end, so even with an empty
+    /// `input_xs` (no template for (7, 11)) the event must NOT fire.
+    #[test]
+    fn does_not_fire_when_family_has_no_producer_rows() {
+        let lane_xs: Vec<i32> = (100..111).collect();
+        let family = LaneFamily {
+            item: "test-item".to_string(),
+            module_id: 0,
+            shape: (7, 11),
+            producer_rows: Vec::new(),
+            lane_xs: lane_xs.clone(),
+            balancer_y_start: 10,
+            balancer_y_end: 11,
+            total_rate: 20.0,
+        };
+        let lanes = vec![leftmost_lane("test-item", *lane_xs.iter().min().unwrap(), 0)];
+        let solver_result = empty_solver_result();
+
+        let _trace_guard = crate::trace::start_trace();
+        let result = route_bus_ghost(
+            &lanes, &[], 50, 200, None, &solver_result, &[family], &[], &[],
+        );
+        let events = crate::trace::drain_events();
+
+        assert!(result.is_ok(), "route_bus_ghost failed: {:?}", result.err());
+        assert!(
+            !events.iter().any(|e| matches!(e, TraceEvent::FeederSpecsSkipped { .. })),
+            "FeederSpecsSkipped must not fire for a family with no producer rows; got {:#?}",
+            events
+        );
+    }
+
+    /// Control case: a stampable shape ((1, 2), library-covered) must
+    /// stamp a real balancer and must NOT emit `FeederSpecsSkipped` —
+    /// guards against the new event firing unconditionally.
+    #[test]
+    fn does_not_fire_when_shape_is_stampable() {
+        assert!(
+            crate::bus::balancer_library::balancer_templates()
+                .get(&(1, 2))
+                .is_some(),
+            "test assumes (1, 2) is in the balancer library"
+        );
+
+        let lane_xs: Vec<i32> = vec![100, 101];
+        let family = LaneFamily {
+            item: "test-item".to_string(),
+            module_id: 0,
+            shape: (1, 2),
+            producer_rows: vec![0],
+            lane_xs: lane_xs.clone(),
+            balancer_y_start: 10,
+            balancer_y_end: 11,
+            total_rate: 20.0,
+        };
+        let lanes = vec![leftmost_lane("test-item", *lane_xs.iter().min().unwrap(), 0)];
+        let solver_result = empty_solver_result();
+
+        let _trace_guard = crate::trace::start_trace();
+        let result = route_bus_ghost(
+            &lanes, &[], 50, 200, None, &solver_result, &[family], &[], &[],
+        );
+        let events = crate::trace::drain_events();
+
+        assert!(result.is_ok(), "route_bus_ghost failed: {:?}", result.err());
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                TraceEvent::BalancerStamped { shape, template_found: true, .. } if *shape == (1, 2)
+            )),
+            "expected BalancerStamped{{template_found: true}} for (1, 2); got {:#?}",
+            events
+        );
+        assert!(
+            !events.iter().any(|e| matches!(e, TraceEvent::FeederSpecsSkipped { .. })),
+            "FeederSpecsSkipped must not fire when the shape is stampable; got {:#?}",
+            events
+        );
     }
 }
