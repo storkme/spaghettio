@@ -16,7 +16,7 @@ use crate::common::{
     belt_throughput, dir_to_vec, fluid_only_recipes, inserter_reach, inserter_target_lane,
     is_belt_entity, is_inserter, is_machine_entity, is_splitter, is_surface_belt, is_ug_belt,
     splitter_second_tile, splitter_to_surface_tier, ug_max_reach, ug_to_surface_tier,
-    lane_capacity, machine_dims, machine_tiles, LANE_LEFT,
+    lane_capacity, machine_dims, machine_tiles, utilization_for, LANE_LEFT,
 };
 use crate::models::{EntityDirection, LayoutResult, PlacedEntity, SolverResult};
 
@@ -2253,8 +2253,7 @@ fn compute_lane_rates_impl(
         // scales demand, or a fast machine at fractional count overstates
         // the lane rate (e.g. a 0.06-count foundry pressing transport-belt
         // at 16/s nominal seeds 16/s onto a lane that actually carries 1/s).
-        let effective_count = spec.count.ceil().max(1.0);
-        let utilization = (spec.count / effective_count).min(1.0);
+        let utilization = utilization_for(spec);
         let rate = spec
             .outputs
             .iter()
@@ -2737,8 +2736,7 @@ fn compute_lane_rates_impl(
             Some(s) => *s,
             None => continue,
         };
-        let effective_count = spec.count.ceil().max(1.0);
-        let utilization = (spec.count / effective_count).min(1.0);
+        let utilization = utilization_for(spec);
         let required = spec
             .inputs
             .iter()
@@ -3254,8 +3252,7 @@ pub fn check_input_rate_delivery(
         // accordingly or the check is too strict by up to 10× when the solver
         // needs a fractional machine (e.g. sulfuric-acid at 5/s wants only 0.1
         // machines but the physical machine runs at 10% speed).
-        let effective_count = spec.count.ceil().max(1.0);
-        let utilization = (spec.count / effective_count).min(1.0);
+        let utilization = utilization_for(spec);
         let required_rate = spec
             .inputs
             .iter()

@@ -7,7 +7,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::common::{
     dir_to_vec, fluid_only_recipes, inserter_reach, inserter_throughput, is_inserter,
-    is_machine_entity, machine_dims, machine_tiles, recycler_eject_tile,
+    is_machine_entity, machine_dims, machine_tiles, recycler_eject_tile, utilization_for,
 };
 use crate::models::{LayoutResult, SolverResult};
 
@@ -24,6 +24,39 @@ fn build_machine_tile_set(layout: &LayoutResult) -> FxHashSet<(i32, i32)> {
         }
     }
     tiles
+}
+
+// ── Helper: shared spec/exemption resolution ─────────────────────────────────
+
+/// Resolve the exact `MachineSpec` sibling the layout pipeline placed at `y`
+/// for `recipe`, preferring `layout.effective_rows`'s position attribution
+/// over a recipe-name lookup — partition siblings share a recipe name but
+/// carry different utilizations, and a recipe-keyed lookup collapses them
+/// to whichever sibling iterated last (`docs/rfp-inserter-sizing.md` Phase 1
+/// finding). Falls back to `fallback_spec` when no row attribution is
+/// available (hand-built `LayoutResult`s in tests, or spaghetti-style
+/// layouts that never populate `effective_rows`) — a byte-for-byte no-op
+/// wherever partitioning never occurred. Shared by `check_inserter_throughput`
+/// and `check_inserter_item_throughput`.
+fn resolve_row_spec<'a>(
+    layout: &'a LayoutResult,
+    recipe: &str,
+    y: i32,
+    fallback_spec: &'a crate::models::MachineSpec,
+) -> &'a crate::models::MachineSpec {
+    layout
+        .effective_rows
+        .iter()
+        .find(|row| row.spec.recipe == recipe && y >= row.y_start && y < row.y_end)
+        .map(|row| &row.spec)
+        .unwrap_or(fallback_spec)
+}
+
+/// Recyclers eject directly onto a belt (no output inserter is placed or
+/// wanted), so their output side is exempt from throughput checks. Shared by
+/// `check_inserter_throughput` and `check_inserter_item_throughput`.
+fn is_recycler_direct_eject(e: &crate::models::PlacedEntity) -> bool {
+    recycler_eject_tile(&e.name, e.x, e.y, e.direction).is_some()
 }
 
 // ── check_inserter_chains ─────────────────────────────────────────────────────
@@ -252,28 +285,15 @@ pub fn check_inserter_throughput(
             None => continue,
         };
         // Attribution: prefer the exact sibling `MachineSpec` the layout
-        // pipeline actually placed at this machine's row
-        // (`LayoutResult::effective_rows`), which disambiguates
-        // partition siblings sharing a recipe name but carrying
-        // different utilization (`docs/rfp-inserter-sizing.md` Phase 1
-        // finding — `recipe_to_spec` above collapses them to whichever
-        // sibling iterated last, matching neither module's true rate).
-        // Falls back to the recipe-keyed spec when no row attribution is
-        // available (e.g. hand-built `LayoutResult`s in tests, or
-        // spaghetti-style layouts that never populate `effective_rows`)
-        // — a byte-for-byte no-op wherever partitioning never occurred.
-        let spec = layout
-            .effective_rows
-            .iter()
-            .find(|row| row.spec.recipe == recipe && e.y >= row.y_start && e.y < row.y_end)
-            .map(|row| &row.spec)
-            .unwrap_or(fallback_spec);
+        // pipeline actually placed at this machine's row — see
+        // `resolve_row_spec`'s doc comment for the partition-sibling
+        // rationale (`docs/rfp-inserter-sizing.md` Phase 1 finding).
+        let spec = resolve_row_spec(layout, recipe, e.y, fallback_spec);
 
         // Utilization scaling: the same convention check_input_rate_delivery
         // uses — a spec placed as ceil(count) physical machines runs each at
         // count/ceil(count).
-        let effective_count = spec.count.ceil().max(1.0);
-        let utilization = (spec.count / effective_count).min(1.0);
+        let utilization = utilization_for(spec);
 
         let required_in: f64 = spec
             .inputs
@@ -309,8 +329,7 @@ pub fn check_inserter_throughput(
 
         // Output side. Recyclers eject directly onto a belt (no output
         // inserter is placed or wanted), so their output side is exempt.
-        let recycler_direct_eject =
-            recycler_eject_tile(&e.name, e.x, e.y, e.direction).is_some();
+        let recycler_direct_eject = is_recycler_direct_eject(e);
         if required_out > 0.0 && !recycler_direct_eject {
             let avail = output_avail.get(&mpos).copied().unwrap_or(0.0);
             if avail < required_out - 0.02 {
@@ -435,17 +454,10 @@ pub fn check_inserter_item_throughput(
             None => continue,
         };
         // Same `effective_rows` position-based resolution as
-        // `check_inserter_throughput` — see that function's comment for
-        // the partition-sibling rationale.
-        let spec = layout
-            .effective_rows
-            .iter()
-            .find(|row| row.spec.recipe == recipe && e.y >= row.y_start && e.y < row.y_end)
-            .map(|row| &row.spec)
-            .unwrap_or(fallback_spec);
-
-        let effective_count = spec.count.ceil().max(1.0);
-        let utilization = (spec.count / effective_count).min(1.0);
+        // `check_inserter_throughput` — see `resolve_row_spec`'s doc
+        // comment for the partition-sibling rationale.
+        let spec = resolve_row_spec(layout, recipe, e.y, fallback_spec);
+        let utilization = utilization_for(spec);
 
         for f in spec.inputs.iter().filter(|f| !f.is_fluid) {
             let required = f.rate * utilization;
@@ -468,8 +480,7 @@ pub fn check_inserter_item_throughput(
             }
         }
 
-        let recycler_direct_eject =
-            recycler_eject_tile(&e.name, e.x, e.y, e.direction).is_some();
+        let recycler_direct_eject = is_recycler_direct_eject(e);
         if !recycler_direct_eject {
             for f in spec.outputs.iter().filter(|f| !f.is_fluid) {
                 let required = f.rate * utilization;
