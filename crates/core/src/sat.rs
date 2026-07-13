@@ -1805,6 +1805,17 @@ pub fn flow_imbalance_reason(boundaries: &[ZoneBoundary]) -> Option<String> {
         .map(|(ch, &(i, o))| format!("ch{ch} {i}in/{o}out"))
 }
 
+/// Number of SAT variables the crossing encoder would allocate for `zone`,
+/// computed without building the CNF or invoking the solver. Depends only on
+/// the zone's dimensions and channel count, so it is cheap and exact.
+///
+/// The junction strategy gates on this before the (unbounded) base solve —
+/// see `MAX_ZONE_SAT_VARS` in `bus::junction_sat_strategy`.
+pub fn crossing_zone_sat_var_count(zone: &CrossingZone) -> u32 {
+    let n_channels = channel_info_from_boundaries(&zone.boundaries).len() as u32;
+    CrossingEncoder::new(zone.width, zone.height, n_channels).total_vars
+}
+
 /// Per-channel-reach variant of `solve_crossing_zone_with_stats`.
 /// `channel_reaches[c]` caps the UG run length for channel `c`; the
 /// encoder enforces per-channel tightening so a yellow flow in a
@@ -2164,6 +2175,74 @@ mod tests {
     #[test]
     fn flow_imbalance_empty_is_ok() {
         assert_eq!(flow_imbalance_reason(&[]), None);
+    }
+
+    /// A balanced two-channel crossing: `iron-plate` runs south (ch0),
+    /// `copper-plate` runs east (ch1), each with one perimeter input and
+    /// one perimeter output. Two channels → 1 item bit → 14 vars/tile.
+    fn two_channel_zone(width: u32, height: u32) -> CrossingZone {
+        let mid_x = (width / 2) as i32;
+        let mid_y = (height / 2) as i32;
+        CrossingZone {
+            x: 0,
+            y: 0,
+            width,
+            height,
+            boundaries: vec![
+                fb_bnd_at(mid_x, 0, EntityDirection::South, "iron-plate", true, 0),
+                fb_bnd_at(mid_x, (height - 1) as i32, EntityDirection::South, "iron-plate", false, 0),
+                fb_bnd_at(0, mid_y, EntityDirection::East, "copper-plate", true, 1),
+                fb_bnd_at((width - 1) as i32, mid_y, EntityDirection::East, "copper-plate", false, 1),
+            ],
+            forced_empty: vec![],
+        }
+    }
+
+    fn fb_bnd_at(
+        x: i32,
+        y: i32,
+        direction: EntityDirection,
+        item: &str,
+        is_input: bool,
+        channel_id: u32,
+    ) -> ZoneBoundary {
+        ZoneBoundary {
+            x,
+            y,
+            direction,
+            item: item.into(),
+            is_input,
+            interior: false,
+            belt_tier: None,
+            channel_id,
+        }
+    }
+
+    #[test]
+    fn crossing_zone_sat_var_count_matches_calibration() {
+        // The merge-tap calibration points: 5×9 was the largest zone varisat
+        // solved (630), 6×9 was the hang (756), and 5×10 (700) is the exact
+        // ceiling. 2 channels → 14 vars/tile.
+        assert_eq!(crossing_zone_sat_var_count(&two_channel_zone(5, 9)), 630);
+        assert_eq!(crossing_zone_sat_var_count(&two_channel_zone(5, 10)), 700);
+        assert_eq!(crossing_zone_sat_var_count(&two_channel_zone(6, 9)), 756);
+        // Deterministic.
+        assert_eq!(
+            crossing_zone_sat_var_count(&two_channel_zone(6, 9)),
+            crossing_zone_sat_var_count(&two_channel_zone(6, 9)),
+        );
+    }
+
+    #[test]
+    fn balanced_700_var_zone_still_solves() {
+        // The var-ceiling comparison is `> MAX_ZONE_SAT_VARS` (700), so a
+        // balanced zone at EXACTLY 700 vars is on the pass side and must
+        // actually solve — pins the boundary semantics of the ceiling.
+        let zone = two_channel_zone(5, 10);
+        assert_eq!(crossing_zone_sat_var_count(&zone), 700);
+        let (entities, _) =
+            solve_crossing_zone_per_channel(&zone, &[4, 4], "transport-belt", None);
+        assert!(entities.is_some(), "balanced 700-var zone must solve");
     }
 
     /// Solve the same 3×3 zone twice. First without a cost cap to get

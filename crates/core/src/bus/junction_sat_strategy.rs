@@ -30,6 +30,32 @@ use crate::models::{EntityDirection, PlacedEntity};
 use crate::sat::{CrossingZone, ZoneBoundary};
 use crate::trace::{self, BoundarySnapshot, ExternalFeederSnapshot, SatProposedEntity, TraceEvent};
 
+/// Hard ceiling on the SAT variable count of a single crossing zone. Zones
+/// whose encoder would allocate *more* than this (`> `, not `>=`) are refused
+/// before the base solve runs, and recorded as a synthetic zone-cache Timeout.
+///
+/// This is the universal net behind the `sat::flow_imbalance_reason` primary
+/// fix. Flow-balance catches the structurally-infeasible zones (the merge-tap
+/// hang), but varisat's base solve (`Solver::solve`) has no wall-clock or
+/// conflict budget in its 0.2.x public API, and a native thread-join watchdog
+/// is unavailable under WASM (the primary interface) — so a *balanced but
+/// genuinely hard* zone could still hang Step-6 with no cap. This ceiling
+/// guarantees termination for that residual case.
+///
+/// Calibration (electronic-circuit @35/s from ore, merge-tap on): the largest
+/// zone varisat actually solved was 630 vars; the hang was 756. The ceiling
+/// sits in the gap. Variable count (≈ zone area × channel bits) — not clause
+/// count — is the discriminator: the hang had 7871 clauses while other zones
+/// with 20k+ clauses solved in milliseconds.
+///
+/// Known caveat: a genuinely-solvable zone above the ceiling is false-refused,
+/// degrading to a *visible* unresolved-junction (validation warning) — never a
+/// hang, which is the acceptable failure direction. The refusal is cached as
+/// Timeout (not Unsat), so raising this ceiling does not retroactively
+/// invalidate already-cached refusals: the cache reuses them exactly as it
+/// reuses any Timeout entry (a lookup at a strictly larger budget re-attempts).
+const MAX_ZONE_SAT_VARS: u32 = 700;
+
 /// Read the effective cost-descent budget from the environment.
 ///
 /// `SPAGHETTIO_SAT_DESCENT_BUDGET_MS` overrides the per-strategy default.
@@ -1239,6 +1265,44 @@ impl JunctionStrategy for SatStrategy {
             return None;
         }
 
+        // Variable-count ceiling (the universal net): flow-balance above catches
+        // the structurally-infeasible zones, but a balanced-but-hard zone could
+        // still hang the unbounded base solve. Refuse zones over the ceiling and
+        // record a synthetic Timeout so re-encounters skip via the normal cache
+        // path. See MAX_ZONE_SAT_VARS.
+        let sat_var_count = crate::sat::crossing_zone_sat_var_count(&zone);
+        if sat_var_count > MAX_ZONE_SAT_VARS {
+            trace::emit(TraceEvent::CrossingZoneSkipped {
+                tap_item: zone
+                    .boundaries
+                    .first()
+                    .map(|b| b.item.clone())
+                    .unwrap_or_default(),
+                tap_x: seed_x,
+                tap_y: seed_y,
+                reason: format!(
+                    "sat_var_ceiling: {sat_var_count} vars > {MAX_ZONE_SAT_VARS} \
+                     (zone {}x{}, {} channels)",
+                    zone.width,
+                    zone.height,
+                    channel_reaches.len(),
+                ),
+            });
+            crate::zone_cache::record_zone_timeout(
+                &zone,
+                &channel_reaches,
+                self.constraints.max_ug_ins,
+                crate::zone_cache::ZoneStats {
+                    variables: sat_var_count,
+                    clauses: 0,
+                    solve_time_us: 0,
+                },
+                effective_budget_ms,
+                None,
+            );
+            return None;
+        }
+
         let (entities_opt, stats) = crate::sat::solve_crossing_zone_per_channel(
             &zone,
             &channel_reaches,
@@ -1732,6 +1796,18 @@ mod tests {
             carries: Some(item.into()),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn sat_var_ceiling_sits_in_calibration_gap() {
+        // Calibration (pinned by
+        // sat::tests::crossing_zone_sat_var_count_matches_calibration): the
+        // largest zone varisat solved in the merge-tap repro was 630 vars, a
+        // balanced zone at the ceiling is 700, and the hang was 756. The
+        // ceiling must sit in [700, 756): a balanced exactly-700 zone passes
+        // (the comparison is `>`, not `>=`) while the 756-var hang is refused.
+        // 630 < 700 ≤ ceiling, so the largest solved zone passes too.
+        assert!((700..756).contains(&MAX_ZONE_SAT_VARS));
     }
 
     #[test]
