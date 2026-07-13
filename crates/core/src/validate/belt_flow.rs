@@ -2238,10 +2238,19 @@ fn compute_lane_rates_impl(
             Some(e) => e,
             None => continue,
         };
-        let spec = match me.recipe.as_deref().and_then(|r| recipe_to_spec.get(r)) {
+        let recipe = match me.recipe.as_deref() {
+            Some(r) => r,
+            None => continue,
+        };
+        let fallback_spec = match recipe_to_spec.get(recipe) {
             Some(s) => *s,
             None => continue,
         };
+        // Position-resolved via `effective_rows` — see
+        // `super::resolve_row_spec`'s doc comment for the
+        // partition-sibling rationale (`docs/rfp-inserter-sizing.md`
+        // Phase 1 finding).
+        let spec = super::resolve_row_spec(layout, recipe, me.y, fallback_spec);
         let carried_item = match belt_carries.get(&drop_pos).and_then(|c| c.as_deref()) {
             Some(i) => i,
             None => continue,
@@ -2732,10 +2741,17 @@ fn compute_lane_rates_impl(
             Some(e) => e,
             None => continue,
         };
-        let spec = match me.recipe.as_deref().and_then(|r| recipe_to_spec.get(r)) {
+        let recipe = match me.recipe.as_deref() {
+            Some(r) => r,
+            None => continue,
+        };
+        let fallback_spec = match recipe_to_spec.get(recipe) {
             Some(s) => *s,
             None => continue,
         };
+        // Same position-resolved attribution as the injection loop above —
+        // see `super::resolve_row_spec`'s doc comment.
+        let spec = super::resolve_row_spec(layout, recipe, me.y, fallback_spec);
         let utilization = utilization_for(spec);
         let required = spec
             .inputs
@@ -3242,10 +3258,19 @@ pub fn check_input_rate_delivery(
             Some(e) => e,
             None => continue,
         };
-        let spec = match me.recipe.as_deref().and_then(|r| recipe_to_spec.get(r)) {
+        let recipe = match me.recipe.as_deref() {
+            Some(r) => r,
+            None => continue,
+        };
+        let fallback_spec = match recipe_to_spec.get(recipe) {
             Some(s) => *s,
             None => continue,
         };
+        // Position-resolved via `effective_rows` — see
+        // `super::resolve_row_spec`'s doc comment for the
+        // partition-sibling rationale (`docs/rfp-inserter-sizing.md`
+        // Phase 1 finding).
+        let spec = super::resolve_row_spec(layout, recipe, me.y, fallback_spec);
         // spec.inputs[].rate is the per-machine input rate at full utilization.
         // The layout places ceil(spec.count) physical machines, each running at
         // spec.count / ceil(spec.count) utilization — scale the required rate

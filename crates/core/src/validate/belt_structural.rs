@@ -17,7 +17,7 @@ use crate::common::{
     belt_throughput, dir_to_vec, inserter_reach, inserter_target_lane, is_belt_entity,
     is_inserter, is_machine_entity, is_splitter, is_surface_belt, is_ug_belt,
     splitter_second_tile, splitter_to_surface_tier, ug_to_surface_tier, lane_capacity,
-    machine_dims, machine_tiles,
+    machine_dims, machine_tiles, utilization_for,
 };
 use crate::models::{EntityDirection, LayoutResult, PlacedEntity, SolverResult};
 
@@ -892,10 +892,15 @@ pub fn compute_lane_rates(layout: &LayoutResult, solver_result: &SolverResult) -
             Some(r) => r.as_str(),
             None => continue,
         };
-        let spec = match recipe_to_spec.get(recipe) {
+        let fallback_spec = match recipe_to_spec.get(recipe) {
             Some(&s) => s,
             None => continue,
         };
+        // Position-resolved via `effective_rows` — see
+        // `super::resolve_row_spec`'s doc comment for the
+        // partition-sibling rationale (`docs/rfp-inserter-sizing.md`
+        // Phase 1 finding).
+        let spec = super::resolve_row_spec(layout, recipe, me.y, fallback_spec);
         let carried_item = match belt_carries.get(&drop_pos).and_then(|c| c.as_deref()) {
             Some(i) => i,
             None => continue,
@@ -906,7 +911,7 @@ pub fn compute_lane_rates(layout: &LayoutResult, solver_result: &SolverResult) -
         // check does, or a fast machine at fractional count overstates the
         // lane rate (a 0.06-count foundry pressing transport-belt at 16/s
         // nominal would seed 16/s onto a lane that actually carries 1/s).
-        let utilization = (spec.count / spec.count.ceil().max(1.0)).min(1.0);
+        let utilization = utilization_for(spec);
         let rate = spec.outputs.iter().find(|o| o.item == carried_item).map(|o| o.rate * utilization).unwrap_or(0.0);
         if rate <= 0.0 {
             continue;

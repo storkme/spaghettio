@@ -26,31 +26,12 @@ fn build_machine_tile_set(layout: &LayoutResult) -> FxHashSet<(i32, i32)> {
     tiles
 }
 
-// ── Helper: shared spec/exemption resolution ─────────────────────────────────
-
-/// Resolve the exact `MachineSpec` sibling the layout pipeline placed at `y`
-/// for `recipe`, preferring `layout.effective_rows`'s position attribution
-/// over a recipe-name lookup — partition siblings share a recipe name but
-/// carry different utilizations, and a recipe-keyed lookup collapses them
-/// to whichever sibling iterated last (`docs/rfp-inserter-sizing.md` Phase 1
-/// finding). Falls back to `fallback_spec` when no row attribution is
-/// available (hand-built `LayoutResult`s in tests, or spaghetti-style
-/// layouts that never populate `effective_rows`) — a byte-for-byte no-op
-/// wherever partitioning never occurred. Shared by `check_inserter_throughput`
-/// and `check_inserter_item_throughput`.
-fn resolve_row_spec<'a>(
-    layout: &'a LayoutResult,
-    recipe: &str,
-    y: i32,
-    fallback_spec: &'a crate::models::MachineSpec,
-) -> &'a crate::models::MachineSpec {
-    layout
-        .effective_rows
-        .iter()
-        .find(|row| row.spec.recipe == recipe && y >= row.y_start && y < row.y_end)
-        .map(|row| &row.spec)
-        .unwrap_or(fallback_spec)
-}
+// ── Helper: shared exemption resolution ──────────────────────────────────────
+//
+// `resolve_row_spec` (the effective_rows position-based spec attribution)
+// now lives in `super` (`validate::mod`) so `belt_flow` and `belt_structural`
+// can share it too — see its doc comment there for the partition-sibling
+// rationale.
 
 /// Recyclers eject directly onto a belt (no output inserter is placed or
 /// wanted), so their output side is exempt from throughput checks. Shared by
@@ -288,7 +269,7 @@ pub fn check_inserter_throughput(
         // pipeline actually placed at this machine's row — see
         // `resolve_row_spec`'s doc comment for the partition-sibling
         // rationale (`docs/rfp-inserter-sizing.md` Phase 1 finding).
-        let spec = resolve_row_spec(layout, recipe, e.y, fallback_spec);
+        let spec = super::resolve_row_spec(layout, recipe, e.y, fallback_spec);
 
         // Utilization scaling: the same convention check_input_rate_delivery
         // uses — a spec placed as ceil(count) physical machines runs each at
@@ -456,7 +437,7 @@ pub fn check_inserter_item_throughput(
         // Same `effective_rows` position-based resolution as
         // `check_inserter_throughput` — see `resolve_row_spec`'s doc
         // comment for the partition-sibling rationale.
-        let spec = resolve_row_spec(layout, recipe, e.y, fallback_spec);
+        let spec = super::resolve_row_spec(layout, recipe, e.y, fallback_spec);
         let utilization = utilization_for(spec);
 
         for f in spec.inputs.iter().filter(|f| !f.is_fluid) {

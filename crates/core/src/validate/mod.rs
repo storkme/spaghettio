@@ -18,7 +18,7 @@ pub mod belt_structural;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::models::{LayoutResult, RegionKind, SolverResult};
+use crate::models::{LayoutResult, MachineSpec, RegionKind, SolverResult};
 use power::{check_pole_network_connectivity, check_power_coverage};
 use rustc_hash::FxHashSet;
 
@@ -150,6 +150,33 @@ pub fn unresolved_region_tiles(layout: &LayoutResult) -> FxHashSet<(i32, i32)> {
         }
     }
     tiles
+}
+
+/// Resolve the exact `MachineSpec` sibling the layout pipeline placed at `y`
+/// for `recipe`, preferring `layout.effective_rows`'s position attribution
+/// over a recipe-name lookup — partition siblings share a recipe name but
+/// carry different utilizations, and a recipe-keyed lookup collapses them
+/// to whichever sibling iterated last (`docs/rfp-inserter-sizing.md` Phase 1
+/// finding). Falls back to `fallback_spec` when no row attribution is
+/// available (hand-built `LayoutResult`s in tests, or spaghetti-style
+/// layouts that never populate `effective_rows`) — a byte-for-byte no-op
+/// wherever partitioning never occurred. Shared across every `validate::`
+/// check that resolves a machine's spec by recipe name — see
+/// `belt_flow::compute_lane_rates_impl`, `belt_flow::check_input_rate_delivery`,
+/// `belt_structural::compute_lane_rates`, `inserters::check_inserter_throughput`,
+/// and `inserters::check_inserter_item_throughput`.
+pub(crate) fn resolve_row_spec<'a>(
+    layout: &'a LayoutResult,
+    recipe: &str,
+    y: i32,
+    fallback_spec: &'a MachineSpec,
+) -> &'a MachineSpec {
+    layout
+        .effective_rows
+        .iter()
+        .find(|row| row.spec.recipe == recipe && y >= row.y_start && y < row.y_end)
+        .map(|row| &row.spec)
+        .unwrap_or(fallback_spec)
 }
 
 /// Emits one error per connected component of unresolved tiles. The
