@@ -822,10 +822,19 @@ pub(crate) fn build_protected_balancer_tiles(
         let Some(seg) = e.segment_id.as_deref() else {
             continue;
         };
-        if !seg.starts_with("balancer:") {
+        // Multi-tile bus structures a crossing zone must route AROUND, never
+        // through: balancer templates (`balancer:`) and merge-and-tap merge
+        // trees (`mergetree:`). Without this the SAT solve grows a zone over a
+        // merge-tree's splitters/belts and its committed template collides with
+        // the merge-tree's Permanent claims (the `AlreadyClaimed` panic in
+        // `route_bus_ghost`'s cluster-commit loop). Simple passthrough
+        // balancers can be routed through; merge trees are never "simple".
+        let is_balancer = seg.starts_with("balancer:");
+        let is_mergetree = seg.starts_with("mergetree:");
+        if !is_balancer && !is_mergetree {
             continue;
         }
-        if balancer_seg_is_simple(seg) {
+        if is_balancer && balancer_seg_is_simple(seg) {
             continue;
         }
         if is_splitter(&e.name) {
