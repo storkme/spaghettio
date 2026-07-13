@@ -624,3 +624,26 @@ stop signal.
   Remaining: Phase 4 only (max_inserter_tier through wasm-bindings +
   web UI/URL state, both gauntlets re-run with delta tables,
   CLAUDE.md ladder refresh, the two in-game anchors — user's step).*
+- *2026-07-13 — **Phase 4 LANDED (cfc20cb). All four phases complete;
+  the RFP remains OPEN on exactly one item: kill criterion 5's two
+  in-game anchors (user's step).** UI: InserterTier selector beside
+  the belt-tier control, URL-encoded (`it=`, omitted at default),
+  wasm-threaded mirroring max_belt_tier; tsc/vitest/Playwright
+  functional smoke clean. **Close-out deltas (baseline f07d6b4 →
+  HEAD)**: 1/s gauntlet 140 → 12 warnings — automation 2→0, logistic
+  8→0, military 11→0, chemical 22→1, production 42→9, utility 55→2;
+  baseline was 100% aggregate inserter-throughput, current is ZERO
+  aggregate anywhere with the 12 being honest per-item residues from
+  the check that didn't exist at baseline. Scaling matrix (24
+  cells): inserter warnings 2050 → 2 aggregate + 193 per-item; all
+  pre-existing FAILs (chemical@10s ×4, utility@2s ×2, utility@10s
+  ×35) and the production@10s TIMEOUT are unchanged cell-for-cell —
+  out of this RFP's scope, still the scaling program's next targets.
+  CLAUDE.md ladder refreshed with real residual counts and the
+  explicit claim boundary (validator-verified, NOT in-game-verified).
+  Anchors when the user runs them: (a) the logistic gear machine at
+  full utilization with zero warnings; (b) one stack-upgraded
+  dual-input machine, watching for wait_for_full_hand burst-density
+  stalls. Either starving with warnings at zero = the check is
+  miscalibrated → the RFP's verdict flips from done to
+  validator-debt.*
