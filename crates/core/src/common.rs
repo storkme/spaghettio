@@ -357,6 +357,22 @@ pub const LANE_LEFT: &str = "left";
 /// Belt lane: right relative to belt travel direction.
 pub const LANE_RIGHT: &str = "right";
 
+/// Segment-id marker for merge-and-tap **priority tap** branches
+/// (RFP `docs/rfp-merge-tap-trunks.md` D4). An inline splitter on a shared
+/// trunk whose feed branch's downstream belt carries a segment id containing
+/// this tag is modeled by the lane-rate walkers with the priority rate law
+/// (`loop_priority_rate`: the feed branch receives `min(total, cap)`, the
+/// trunk continuation the remainder) instead of the generic even split,
+/// mirroring the `:selfloop:` precedent.
+///
+/// Deliberately distinct from the ghost router's generic tap segment ids
+/// (`ghost:tap:*`, `tapoff:*`): those are plain 50/50 splitters and must NOT
+/// be re-modeled or flagged as priority taps — a bare `:tap:` substring would
+/// collide with `ghost:tap:*` and break the fallback's inertness. Keep this
+/// the single source of truth so the Checkpoint B stamper and the validators
+/// cannot drift.
+pub const MERGE_TAP_SEGMENT_TAG: &str = ":mergetap:";
+
 /// Return which lane an inserter places items on (the far lane).
 ///
 /// The inserter sits on one side of the belt (left or right relative to belt

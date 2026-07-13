@@ -152,6 +152,25 @@ pub fn unresolved_region_tiles(layout: &LayoutResult) -> FxHashSet<(i32, i32)> {
     tiles
 }
 
+/// Whether a splitter output branch is a *priority branch* — one whose
+/// downstream belt is tagged either as a self-loop recirculation
+/// (`:selfloop:`, the kovarex / voider precedent) or as a merge-and-tap
+/// priority tap ([`crate::common::MERGE_TAP_SEGMENT_TAG`], RFP
+/// `docs/rfp-merge-tap-trunks.md` D4). Both walkers route a priority branch
+/// with the `loop_priority_rate` min(total, cap) law instead of the generic
+/// even split; the two tags share that one rate law and differ only in the
+/// demand source (the loop's recirculation rate vs the tap's consumer
+/// demand). `seg` is the segment id of the belt tile immediately downstream
+/// of the splitter output tile.
+///
+/// Voider rows recirculate without a splitter, so they never reach this
+/// predicate; only `:selfloop:` and the tap tag identify a splitter branch.
+pub(crate) fn segment_is_priority_branch(seg: Option<&str>) -> bool {
+    seg.is_some_and(|s| {
+        s.contains(":selfloop:") || s.contains(crate::common::MERGE_TAP_SEGMENT_TAG)
+    })
+}
+
 /// Resolve the exact `MachineSpec` sibling the layout pipeline placed at `y`
 /// for `recipe`, preferring `layout.effective_rows`'s position attribution
 /// over a recipe-name lookup — partition siblings share a recipe name but
@@ -438,6 +457,7 @@ pub fn validate(
         Box::new(|| check_underground_belt_entry_sideload(layout)),
         Box::new(|| belt_structural::check_belt_dead_ends(layout)),
         Box::new(|| belt_structural::check_belt_loops(layout)),
+        Box::new(|| belt_structural::check_tap_splitter_priority(layout)),
         Box::new(|| belt_structural::check_belt_item_isolation(layout)),
         Box::new(|| sushi::check_sushi_boundary(layout)),
         Box::new(|| {

@@ -1809,11 +1809,13 @@ pub fn check_belt_inserter_conflict(layout: &LayoutResult) -> Vec<ValidationIssu
 /// with the same `(left, right)` tuple). When `loop_priority_rate` is
 /// `Some(cap)` and exactly one of `pos_is_loop_branch` /
 /// `sib_is_loop_branch` is `true` (the output tile feeding a tagged
-/// self-loop segment), the loop branch instead receives `min(total, cap)`
+/// priority-branch segment — a self-loop recirculation or a merge-and-tap
+/// consumer tap), the priority branch instead receives `min(total, cap)`
 /// and the other branch the remainder, preserving the input left/right
 /// ratio within each branch. Falls back to the symmetric split if
-/// `loop_priority_rate` is `None`, or the loop branch is ambiguous
-/// (neither or both flagged) — see docs/rfp-solver-net-flow.md Phase 2(c).
+/// `loop_priority_rate` is `None`, or the priority branch is ambiguous
+/// (neither or both flagged) — see docs/rfp-solver-net-flow.md Phase 2(c)
+/// and docs/rfp-merge-tap-trunks.md D4.
 fn splitter_output_rates(
     pos_rates: (f64, f64),
     sib_rates: (f64, f64),
@@ -1867,12 +1869,12 @@ fn splitter_output_rates(
 /// evenly across its own two lanes (the lane-mixing model).
 ///
 /// When `loop_priority_rate` is `Some(loop_cap)` and exactly one of
-/// `a_is_loop_branch` / `b_is_loop_branch` is `true`, the loop branch
+/// `a_is_loop_branch` / `b_is_loop_branch` is `true`, the priority branch
 /// instead receives `min(total, loop_cap)` (split evenly across its own two
 /// lanes) and the other branch the remainder — this **overrides**
-/// demand-pull (priority splitters, self-loop/voider rows). Falls back to
-/// the symmetric split under the same ambiguous-flagging conditions as
-/// [`splitter_output_rates`].
+/// demand-pull (priority splitters: self-loop/voider rows and merge-and-tap
+/// consumer taps). Falls back to the symmetric split under the same
+/// ambiguous-flagging conditions as [`splitter_output_rates`].
 #[allow(clippy::too_many_arguments)]
 fn splitter_output_rates_mixed(
     a_total: f64,
@@ -2340,18 +2342,18 @@ fn compute_lane_rates_impl(
     }
 
     // Whether the downstream belt tile from `tile` (per `belt_dir_map`'s
-    // direction at `tile`) starts a tagged self-loop segment. Used to
-    // identify which half of a priority splitter is the loop-back branch.
-    let is_loop_branch = |tile: (i32, i32)| -> bool {
+    // direction at `tile`) starts a tagged priority-branch segment — a
+    // self-loop recirculation (`:selfloop:`) or a merge-and-tap priority tap
+    // (`MERGE_TAP_SEGMENT_TAG`). Used to identify which half of a priority
+    // splitter is the priority branch (loop-back or consumer feed).
+    let is_priority_branch = |tile: (i32, i32)| -> bool {
         let Some(&dir) = belt_dir_map.get(&tile) else {
             return false;
         };
         let (dx, dy) = dir_to_vec(dir);
-        belt_segment
-            .get(&(tile.0 + dx, tile.1 + dy))
-            .copied()
-            .flatten()
-            .is_some_and(|s| s.contains(":selfloop:"))
+        super::segment_is_priority_branch(
+            belt_segment.get(&(tile.0 + dx, tile.1 + dy)).copied().flatten(),
+        )
     };
 
     let mut in_degree: FxHashMap<(i32, i32), i32> =
@@ -2539,8 +2541,8 @@ fn compute_lane_rates_impl(
                         (pos_rates[0], pos_rates[1]),
                         (sib_rates[0], sib_rates[1]),
                         loop_priority_rate,
-                        is_loop_branch(pos),
-                        is_loop_branch(sib),
+                        is_priority_branch(pos),
+                        is_priority_branch(sib),
                     );
                     lane_rates.insert(pos, [pos_out.0, pos_out.1]);
                     lane_rates.insert(sib, [sib_out.0, sib_out.1]);
@@ -2686,8 +2688,8 @@ fn compute_lane_rates_impl(
                             (eff_pos[0], eff_pos[1]),
                             (eff_sib[0], eff_sib[1]),
                             loop_priority_rate,
-                            is_loop_branch(pos),
-                            is_loop_branch(sib),
+                            is_priority_branch(pos),
+                            is_priority_branch(sib),
                         );
                         lane_rates.insert(pos, [pos_out.0, pos_out.1]);
                         lane_rates.insert(sib, [sib_out.0, sib_out.1]);
@@ -2909,8 +2911,8 @@ fn compute_lane_rates_impl(
                     a_fc[0] + a_fc[1],
                     b_fc[0] + b_fc[1],
                     loop_priority_rate,
-                    is_loop_branch(a),
-                    is_loop_branch(b),
+                    is_priority_branch(a),
+                    is_priority_branch(b),
                     downstream_demand(a_ds),
                     downstream_demand(b_ds),
                     cap,
@@ -4709,6 +4711,65 @@ mod tests {
         assert!(
             (export_total - 0.1).abs() < 0.01,
             "export branch should get ~0.1/s (not 2.05/2.05 symmetric), got {export_total}"
+        );
+    }
+
+    /// Merge-and-tap priority tap (RFP `docs/rfp-merge-tap-trunks.md` D4): the
+    /// feed branch (downstream tagged `MERGE_TAP_SEGMENT_TAG`) receives
+    /// `min(total, loop_priority_rate)` and the trunk continuation the
+    /// remainder — the same rate law the self-loop test above exercises, now
+    /// lit up by the tap tag instead of `:selfloop:`. Confirms the generalized
+    /// priority-branch predicate covers taps in the demand-pull walker.
+    #[test]
+    fn splitter_tap_branch_gets_priority_share() {
+        use crate::common::MERGE_TAP_SEGMENT_TAG;
+        use EntityDirection::*;
+        let item = "uranium-235";
+        let layout = LayoutResult {
+            entities: vec![
+                belt_carries(0, 0, South, item),
+                PlacedEntity {
+                    name: "splitter".to_string(),
+                    x: 0,
+                    y: 1,
+                    direction: South,
+                    loop_priority_rate: Some(4.0),
+                    ..Default::default()
+                },
+                // (0,1)'s downstream: tagged merge-tap feed branch.
+                PlacedEntity {
+                    segment_id: Some(format!("family:uranium-235{MERGE_TAP_SEGMENT_TAG}0")),
+                    ..belt_carries(0, 2, South, item)
+                },
+                // (1,1)'s downstream: trunk continuation, no tag.
+                belt_carries(1, 2, South, item),
+            ],
+            width: 4,
+            height: 4,
+            ..Default::default()
+        };
+        let solver = SolverResult {
+            machines: vec![],
+            external_inputs: vec![ItemFlow {
+                item: item.to_string(),
+                rate: 4.1,
+                is_fluid: false,
+                module_id: 0,
+            }],
+            external_outputs: vec![],
+            surplus_outputs: vec![],
+            dependency_order: vec![],
+        };
+        let rates = compute_lane_rates(&layout, Some(&solver));
+        let feed_total: f64 = rates.get(&(0, 1)).copied().unwrap_or([0.0, 0.0]).iter().sum();
+        let cont_total: f64 = rates.get(&(1, 1)).copied().unwrap_or([0.0, 0.0]).iter().sum();
+        assert!(
+            (feed_total - 4.0).abs() < 0.01,
+            "feed branch should get ~4.0/s, got {feed_total}"
+        );
+        assert!(
+            (cont_total - 0.1).abs() < 0.01,
+            "continuation should get ~0.1/s (not 2.05/2.05 symmetric), got {cont_total}"
         );
     }
 
