@@ -675,3 +675,20 @@ stop signal.
   self_loop major_consumed_rate scaling inconsistency filed as
   #307; Fast-cap count-vs-cost ladder tension and the zero-near
   contest edge are working-as-designed, noted for awareness.*
+- *2026-07-13 — **hardening pass complete** (1906510 / 5656283 /
+  a0084c6, KC3-sequenced): stamp invariant assert;
+  `common::utilization_for` now the ONLY copy of the formula
+  anywhere (13 inline copies removed across placer + all
+  validators); `resolve_row_spec` shared from validate/mod.rs with
+  five consumers; the three escalated collapse sites adopt
+  effective_rows resolution. Measured outcome worth recording: the
+  belt-level categories were NOT actually being fooled by the
+  collapse on the measurable partitioned fixtures (byte-identical
+  before/after) — the reviewer's "fixture-luck" hypothesis was
+  half-right (no architectural immunity exists) but the sibling
+  rate divergences don't cross belt-level thresholds in this
+  corpus; the fix is prophylactic there, load-bearing for the
+  inserter checks. Caveat: `partition_strategy_scoreboard_extended`'s
+  harder cases are release-only and unmeasured. **This RFP is now
+  fully closed except kill criterion 5's two in-game anchors
+  (user).***
