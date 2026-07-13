@@ -363,3 +363,36 @@ Per the CLAUDE.md protocol, plus:
   prerequisite (tap-priority generalization) first as its own
   commit, then the merge-tree builder + K-trunk fallback +
   priority taps, activated only where `shape_is_stampable` says no.*
+- *2026-07-13 — **Checkpoint B: machinery landed DORMANT (499287b);
+  STOP on kill criterion 6.** The merge-tree builder (prime-tested),
+  bin-packing, K-trunk fallback, and rendering seams are built and
+  inert behind a flag. Two findings from the stop: (1) **KC6 fired
+  as a HANG, not slowness** — enabling the fallback deterministically
+  hangs the Step-6 junction solver (EC@35/s from ore; copper-plate
+  (4,9) unstampable, K=4; steps 3-5 complete, step 6 never returns).
+  Mechanism: K trunks × per-consumer taps each fan east to the bus
+  edge, crossing every lane to their right — novel crossing density
+  the junction machinery has never absorbed, and something in it
+  loops unbounded rather than hitting its growth caps. The
+  investigation is its own next checkpoint; leads: constrain
+  merge-tap tap routing (consumer-column goals / UG bridging over
+  the lane block) to slash crossings, and make Step 6 degrade to a
+  bounded warning instead of hanging regardless (a hang is a bug
+  independent of merge-tap). (2) **KC2's premise corrected**: the
+  Phase 0 census was gauntlet-scoped, but the default e2e STRESS
+  corpus contains unstampable (4,9) cells (EC@35s, PU@3/s) — the
+  flip cannot be zero-movement as written. KC2 is re-scoped: zero
+  movement on all STAMPABLE-shape fixtures; unstampable-shape cells
+  healing is EXPECTED movement, re-blessed against predictions
+  (the accepted-residue restatement precedent). (3) Priority-tap
+  stamping (seam 5, lighting up Checkpoint A) deliberately deferred
+  to after the hang investigation — no point tagging taps the
+  router can't route. Also corrected during B (research fork): the
+  RFP's ghost_router.rs:2182-2264 reference is the flow-unify pass,
+  not tap stamping (Step 2, ~195-240 stamps taps; they are plain
+  50/50 today); the lane_planner "non-starter" comments are fossils
+  of the deleted direct-mode router; the round-robin at :828 is
+  live for external lanes (sole multi-tap producer) and was
+  preserved, with the fallback path added alongside; family lane_xs
+  contiguity (hard Err at lane_planner.rs:503-519) is satisfied by
+  the K-trunk assignment.*
