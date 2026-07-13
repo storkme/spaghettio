@@ -1305,8 +1305,8 @@ fn emit_template_rust_source(t: &OwnedTemplate, shape: (u32, u32)) -> String {
             None => "None",
         };
         out.push_str(&format!(
-            "    BalancerTemplateEntity {{ name: {:?}, x: {}, y: {}, direction: {}, io_type: {} }},\n",
-            e.name, e.x, e.y, e.direction, io_str
+            "    BalancerTemplateEntity {{ name: {:?}, x: {}, y: {}, direction: {}, io_type: {}, input_priority: {:?}, output_priority: {:?} }},\n",
+            e.name, e.x, e.y, e.direction, io_str, e.input_priority, e.output_priority
         ));
     }
     out.push_str("];\n");
@@ -1574,7 +1574,61 @@ fn bake_missing_shapes() -> Result<(), Box<dyn std::error::Error>> {
         Recipe { shape: (7, 9), stage1: Stage::Parallel(1, 3, 7), stage2: Stage::Parallel(7, 3, 3), perm: Perm::Clos(7, 3), max_jh: 24 },
         Recipe { shape: (8, 9), stage1: Stage::Parallel(1, 3, 8), stage2: Stage::Parallel(8, 3, 3), perm: Perm::Clos(8, 3), max_jh: 24 },
         Recipe { shape: (9, 9), stage1: Stage::Parallel(1, 3, 9), stage2: Stage::Parallel(9, 3, 3), perm: Perm::Clos(9, 3), max_jh: 24 },
+
+        // === utility@10/s balancer-gap spike (uncommitted) ===
+        // Demanded by the science_scaling_gauntlet utility-science-pack@10/s
+        // cell (35 dead-end producer rows across 3 families). See
+        // crates/core/examples/census_missing_balancer_shapes.rs for the
+        // full-corpus census this spike ran to confirm these are the only
+        // missing shapes across all 24 gauntlet cells.
+
+        // (12, 7) — electronic-circuit. merge-then-balance: both atoms
+        // ((4, 1) and (3, 7)) already in the library.
+        Recipe { shape: (12, 7), stage1: Stage::Parallel(4, 1, 3), stage2: Stage::Lib(3, 7), perm: Perm::Identity, max_jh: 8 },
+
+        // (15, 7) — NOT itself a demanded shape. Intermediate atom for the
+        // (15, 14) Clos below (n=15 exceeds the library's direct-atom
+        // range, so the Clos second stage needs this baked first).
+        // merge-then-balance: (3, 1) and (5, 7) already in the library.
+        Recipe { shape: (15, 7), stage1: Stage::Parallel(3, 1, 5), stage2: Stage::Lib(5, 7), perm: Perm::Identity, max_jh: 16 },
+
+        // (15, 14) — copper-cable. Clos via parallel((1,2), 15) →
+        // parallel((15,7), 2) with clos_interleave(15, 2). Needs (15, 7)
+        // baked above and synced into the library first (run this as a
+        // second pass after (15, 7) lands).
+        Recipe { shape: (15, 14), stage1: Stage::Parallel(1, 2, 15), stage2: Stage::Parallel(15, 7, 2), perm: Perm::Clos(15, 2), max_jh: 24 },
     ];
+
+    // SPAGHETTIO_BAKE_ONLY: semicolon-separated `(m,n)` pairs. When set,
+    // restrict this run to exactly those shapes — skips the (large) backlog
+    // of not-yet-synced precedent recipes earlier in the list so a targeted
+    // spike doesn't pay for unrelated multi-hour bakes.
+    // Example: SPAGHETTIO_BAKE_ONLY='(12,7);(15,7)'
+    let bake_only: HashSet<(u32, u32)> = std::env::var("SPAGHETTIO_BAKE_ONLY")
+        .ok()
+        .map(|s| {
+            s.split(';')
+                .filter_map(|tok| {
+                    let nums: Vec<u32> = tok
+                        .trim_matches(|c: char| !c.is_ascii_digit())
+                        .split(|c: char| !c.is_ascii_digit())
+                        .filter(|p| !p.is_empty())
+                        .filter_map(|p| p.parse().ok())
+                        .collect();
+                    if nums.len() == 2 {
+                        Some((nums[0], nums[1]))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let recipes: Vec<Recipe> = if bake_only.is_empty() {
+        recipes
+    } else {
+        recipes.into_iter().filter(|r| bake_only.contains(&r.shape)).collect()
+    };
 
     let mut all_source = String::new();
     let mut shapes_done: Vec<(u32, u32)> = Vec::new();
