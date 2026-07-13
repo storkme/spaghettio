@@ -23,7 +23,7 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::astar::ghost_astar;
-use crate::bus::balancer::{balancer_origin_x, splitter_for_belt, stamp_family_balancer, underground_for_belt};
+use crate::bus::balancer::{balancer_origin_x, splitter_for_belt, stamp_family_balancer, stamp_merge_tap_family, underground_for_belt};
 use crate::bus::lane_planner::{BusLane, LaneFamily, MACHINE_ENTITIES};
 use crate::bus::output_merger::merge_output_rows;
 use crate::bus::trunk_renderer::{is_intermediate, render_path, trunk_segments};
@@ -255,8 +255,14 @@ pub fn route_bus_ghost(
     // Step 3: Stamp balancer blocks as hard obstacles
     // -------------------------------------------------------------------------
     for fam in families {
-        let balancer_ents = stamp_family_balancer(fam, max_belt_tier)
-            .map_err(|e| format!("ghost router: balancer stamp failed for {:?}: {}", fam.shape, e))?;
+        let balancer_ents = if fam.merge_tap {
+            // Merge-and-tap fallback: stamp an n→1 splitter merge-tree instead
+            // of an (N, M) balancer (RFP docs/rfp-merge-tap-trunks.md D2).
+            stamp_merge_tap_family(fam, max_belt_tier)
+        } else {
+            stamp_family_balancer(fam, max_belt_tier)
+                .map_err(|e| format!("ghost router: balancer stamp failed for {:?}: {}", fam.shape, e))?
+        };
         crate::trace::emit(crate::trace::TraceEvent::BalancerStamped {
             item: fam.item.clone(),
             shape: fam.shape,
@@ -1407,7 +1413,22 @@ pub fn route_bus_ghost(
                     // `sub_template.width <= sub_m` — otherwise feeders
                     // aim at tiles where no balancer was actually stamped.
                     let mut input_xs: Vec<i32> = Vec::new();
-                    if crate::bus::balancer::is_passthrough_shape(n, m) {
+                    if fam.merge_tap {
+                        // Merge-and-tap fallback: feeders aim at the merge-tree's
+                        // `n` input columns, aligned to the same origin the
+                        // stamper uses (`stamp_merge_tap_family`).
+                        let tree = crate::bus::balancer_generate::merge_tree(n);
+                        let origin_x = if fam.lane_xs.is_empty() {
+                            x
+                        } else {
+                            balancer_origin_x(&fam.lane_xs, &tree.output_tiles)
+                        };
+                        let mut rel: Vec<i32> = tree.input_tiles.iter().map(|t| t.0).collect();
+                        rel.sort();
+                        for r in rel {
+                            input_xs.push(origin_x + r);
+                        }
+                    } else if crate::bus::balancer::is_passthrough_shape(n, m) {
                         // Passthrough: each producer feeds the matching
                         // output column directly (issue #268). No template
                         // origin offset — input_xs == lane_xs.
@@ -5256,6 +5277,7 @@ mod feeder_specs_skipped_tests {
             balancer_y_start: 10,
             balancer_y_end: 11,
             total_rate: 20.0,
+            merge_tap: false,
         };
         let lanes = vec![leftmost_lane("test-item", *lane_xs.iter().min().unwrap(), 0)];
         let solver_result = empty_solver_result();
@@ -5310,6 +5332,7 @@ mod feeder_specs_skipped_tests {
             balancer_y_start: 10,
             balancer_y_end: 11,
             total_rate: 20.0,
+            merge_tap: false,
         };
         let lanes = vec![leftmost_lane("test-item", *lane_xs.iter().min().unwrap(), 0)];
         let solver_result = empty_solver_result();
@@ -5350,6 +5373,7 @@ mod feeder_specs_skipped_tests {
             balancer_y_start: 10,
             balancer_y_end: 11,
             total_rate: 20.0,
+            merge_tap: false,
         };
         let lanes = vec![leftmost_lane("test-item", *lane_xs.iter().min().unwrap(), 0)];
         let solver_result = empty_solver_result();

@@ -22,6 +22,21 @@ const LANE_CAPACITY_TABLE: &[(&str, f64)] = &[
     ("express-transport-belt", 22.5),
 ];
 
+/// Merge-and-tap fallback (RFP `docs/rfp-merge-tap-trunks.md`) is fully built —
+/// merge-tree builder, K-trunk bin-packing, merge-tree stamping, feeder
+/// routing, and trunk pickup all land here and in `bus::balancer` /
+/// `bus::ghost_router` — but is GATED OFF pending a ghost-router fix. The
+/// multi-tap-on-family crossing pattern the fallback creates (K trunks whose
+/// per-consumer taps fan east across the bus) overwhelms the Step-6 junction
+/// solver / crossing resolver, which hangs on dense shapes (reproduced:
+/// electronic-circuit@35/s from ore → copper-plate (4, 9), K = 4 — the Step-6
+/// crossing phase never returns). This is the RFP's KC6 "router-pressure"
+/// cost made concrete. With the flag `false` no `merge_tap` family is ever
+/// created, so the whole mechanism is provably inert (the default corpus is
+/// byte-identical). Flip to `true` once the junction solver can absorb the tap
+/// density (trunk-anchor walker / lane_order attention, per the RFP).
+const MERGE_TAP_FALLBACK_ENABLED: bool = false;
+
 /// Entity names that occupy multiple tiles (sized by `machine_dims()`).
 ///
 /// Duplicates (rather than reuses) `common::MACHINE_ENTITY_NAMES` — this list
@@ -169,6 +184,15 @@ pub struct LaneFamily {
     pub balancer_y_end: i32,
     /// Combined throughput across all lanes, used for belt tier selection.
     pub total_rate: f64,
+    /// When `true`, this family is a merge-and-tap fallback trunk (RFP
+    /// `docs/rfp-merge-tap-trunks.md`): `shape.0` producers merge onto its
+    /// single output lane via a splitter merge-tree
+    /// (`balancer_generate::merge_tree`) instead of an `(N, M)` balancer
+    /// template, because `shape` was not stampable. `shape.1 == 1` always
+    /// (one output trunk per merge-tap family; `K` such families share the
+    /// item). The ghost router stamps a merge-tree and routes feeders to its
+    /// inputs instead of a balancer block.
+    pub merge_tap: bool,
 }
 
 
@@ -522,14 +546,16 @@ pub fn plan_bus_lanes(
     // Resolve balancer_y_end from actual template heights and propagate the
     // full balancer zone to each lane so trunks skip the entire zone.
     let templates = crate::bus::balancer_library::balancer_templates();
-    for fam in &mut families {
+    for (fam_idx, fam) in families.iter_mut().enumerate() {
         let (n, m) = (fam.shape.0 as u32, fam.shape.1 as u32);
-        // Find the effective template height: passthrough (`(m, m)` —
-        // a single south-facing belt per output column, see issue #268)
-        // takes priority over the library so it consumes only one row
-        // instead of the library template's 6+. Otherwise direct match,
-        // then decomposition fallback.
-        let tpl_height = if crate::bus::balancer::is_passthrough_shape(n, m) {
+        // Find the effective template height: a merge-and-tap family occupies
+        // its merge-tree's height (`2n-1`); passthrough (`(m, m)` — a single
+        // south-facing belt per output column, see issue #268) takes priority
+        // over the library so it consumes only one row instead of the library
+        // template's 6+; otherwise direct match, then decomposition fallback.
+        let tpl_height = if fam.merge_tap {
+            Some(crate::bus::balancer_generate::merge_tree(n).height)
+        } else if crate::bus::balancer::is_passthrough_shape(n, m) {
             Some(1u32)
         } else {
             templates.get(&(n, m)).map(|t| t.height)
@@ -547,7 +573,17 @@ pub fn plan_bus_lanes(
         if let Some(h) = tpl_height {
             fam.balancer_y_end = fam.balancer_y_start + h as i32 - 1;
             let range = (fam.balancer_y_start, fam.balancer_y_end);
+            // Merge-tap families share one `(item, module_id)` across their K
+            // sibling trunks, so match by the lane's own `family_id` to avoid K
+            // siblings clobbering each other's ranges; the balancer path keeps
+            // the historical `(item, module_id)` match byte-for-byte.
             for lane in lanes.iter_mut() {
+                if fam.merge_tap {
+                    if lane.family_id == Some(fam_idx) {
+                        lane.family_balancer_range = Some(range);
+                    }
+                    continue;
+                }
                 // Filter by `(item, module_id)` not just item: under
                 // `LayoutStrategy::PartitionedDecomposed`, a single item
                 // can have K sibling families at different lane columns
@@ -622,6 +658,42 @@ impl Default for BusLane {
     }
 }
 
+
+/// Deterministic largest-first bin-packing of weighted `items` (each
+/// `(row_index, weight)`) into `k` bins by least-loaded-bin (RFP
+/// `docs/rfp-merge-tap-trunks.md` D1). Sorts by weight descending (ties broken
+/// by original position), then greedily places each row into the currently
+/// least-loaded bin (ties → lowest bin index). Determinism is a hard project
+/// contract, so every tie is resolved by a stable index rule. With
+/// `items.len() >= k` every bin receives at least one row (the first `k`
+/// largest rows fill the `k` empty bins). Returns the `k` bins (row indices in
+/// placement order) and each bin's total weight.
+fn bin_pack_rows(items: &[(usize, f64)], k: usize) -> (Vec<Vec<usize>>, Vec<f64>) {
+    let k = k.max(1);
+    let mut bins: Vec<Vec<usize>> = vec![Vec::new(); k];
+    let mut load: Vec<f64> = vec![0.0; k];
+    let mut order: Vec<usize> = (0..items.len()).collect();
+    order.sort_by(|&a, &b| {
+        items[b].1
+            .partial_cmp(&items[a].1)
+            .unwrap_or(Ordering::Equal)
+            .then(a.cmp(&b))
+    });
+    for &i in &order {
+        let (row, w) = items[i];
+        let target = (0..k)
+            .min_by(|&p, &q| {
+                load[p]
+                    .partial_cmp(&load[q])
+                    .unwrap_or(Ordering::Equal)
+                    .then(p.cmp(&q))
+            })
+            .unwrap_or(0);
+        bins[target].push(row);
+        load[target] += w;
+    }
+    (bins, load)
+}
 
 /// Split lanes whose rate exceeds the available belt's per-lane capacity.
 ///
@@ -865,6 +937,121 @@ fn split_overflowing_lanes(
             consumers_per_split.iter().filter(|c| !c.is_empty()).count()
         };
 
+        // Merge-and-tap fallback (RFP docs/rfp-merge-tap-trunks.md). If the
+        // (N, M) balancer this lane would otherwise be given has no stampable
+        // template, retire it to K = ceil(rate / full_belt_cap) shared trunks:
+        // each trunk's producer group merges via a splitter merge-tree and its
+        // consumer group taps the trunk with priority splitters. Scoped to
+        // genuine multi-producer, multi-consumer intermediate families —
+        // HorizontalStack geometry and fan-out (N == 1) keep their existing
+        // paths. Strictly additive: `shape_is_stampable` shapes are byte-for-
+        // byte untouched, so nothing in the default corpus moves (only
+        // utility@10/s's copper-cable / iron-plate families are unstampable).
+        if MERGE_TAP_FALLBACK_ENABLED
+            && !any_hs
+            && !is_collector
+            && n_producers >= 2
+            && n_lanes_with_consumers >= 2
+            && !crate::bus::balancer::shape_is_stampable(
+                n_producers as u32,
+                n_lanes_with_consumers as u32,
+            )
+        {
+            // K throughput-sized trunks, clamped so no trunk is producer- or
+            // consumer-empty (K <= min(N, M)). full_belt_cap is the pinned 2×
+            // lane capacity (both lanes loaded — the balancer-present
+            // precedent at lane_planner's cap computation above).
+            let m_consumers = lane.consumer_rows.len();
+            let k = ((lane.rate / full_belt_cap).ceil() as usize)
+                .clamp(1, n_producers.min(m_consumers));
+
+            let consumer_weights: Vec<(usize, f64)> = lane
+                .consumer_rows
+                .iter()
+                .map(|&ri| {
+                    let rs = &row_spans[ri];
+                    let d: f64 = rs
+                        .spec
+                        .inputs
+                        .iter()
+                        .filter(|inp| inp.item == lane.item && !inp.is_fluid)
+                        .map(|inp| inp.rate * rs.machine_count as f64)
+                        .sum();
+                    (ri, d)
+                })
+                .collect();
+            let producer_weights: Vec<(usize, f64)> = all_producer_rows
+                .iter()
+                .map(|&pri| {
+                    let rs = &row_spans[pri];
+                    let p: f64 = rs
+                        .spec
+                        .outputs
+                        .iter()
+                        .filter(|o| o.item == lane.item)
+                        .map(|o| o.rate * rs.machine_count as f64)
+                        .sum();
+                    (pri, p)
+                })
+                .collect();
+
+            let (consumer_bins, consumer_bin_rate) = bin_pack_rows(&consumer_weights, k);
+            let (producer_bins, producer_bin_rate) = bin_pack_rows(&producer_weights, k);
+
+            // All K merge-trees sit in one horizontal band below every producer
+            // row (the trunk-head zone a balancer would occupy); the trunk picks
+            // up one row below. Resolved to the real per-trunk merge-tree height
+            // when `family_balancer_range` is finalized.
+            let band_y = all_producer_rows
+                .iter()
+                .map(|&p| row_spans[p].y_end)
+                .max()
+                .unwrap_or(0);
+
+            crate::trace::emit(crate::trace::TraceEvent::MergeTapFallback {
+                item: lane.item.clone(),
+                module_id: lane.module_id,
+                shape: (n_producers, n_lanes_with_consumers),
+                k_trunks: k,
+                producers_per_trunk: producer_bins.iter().map(|b| b.len()).collect(),
+                consumers_per_trunk: consumer_bins.iter().map(|b| b.len()).collect(),
+            });
+
+            for t in 0..k {
+                let n_t = producer_bins[t].len();
+                let fid = families.len();
+                families.push(LaneFamily {
+                    item: lane.item.clone(),
+                    module_id: lane.module_id,
+                    shape: (n_t, 1),
+                    producer_rows: producer_bins[t].clone(),
+                    lane_xs: Vec::new(),
+                    balancer_y_start: band_y,
+                    balancer_y_end: band_y,
+                    total_rate: producer_bin_rate[t],
+                    merge_tap: true,
+                });
+                // Consumers assigned to this trunk, in row order so the tap
+                // sequence down the trunk is deterministic (find_tap_off_ys
+                // resolves each to its y below).
+                let mut consumers = consumer_bins[t].clone();
+                consumers.sort_unstable();
+                result.push(BusLane {
+                    item: lane.item.clone(),
+                    module_id: lane.module_id,
+                    x: 0,
+                    source_y: band_y + 1,
+                    consumer_rows: consumers,
+                    producer_row: None,
+                    rate: producer_bin_rate[t].max(consumer_bin_rate[t]),
+                    is_fluid: false,
+                    family_id: Some(fid),
+                    ..Default::default()
+                });
+            }
+            continue;
+        }
+
         let mut family_id: Option<usize> = None;
         let mut family_source_y: Option<i32> = None;
 
@@ -916,6 +1103,7 @@ fn split_overflowing_lanes(
                 balancer_y_start,
                 balancer_y_end: balancer_y_start,
                 total_rate: lane.rate,
+                merge_tap: false,
             });
             family_source_y = Some(balancer_y_start + 1);
         }

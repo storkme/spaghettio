@@ -324,6 +324,43 @@ pub(crate) fn stamp_family_balancer(
     Ok(Vec::new())
 }
 
+/// Stamp a merge-and-tap family's `n → 1` splitter merge-tree at its trunk
+/// column (RFP `docs/rfp-merge-tap-trunks.md` D2). The merge-tree's single
+/// output is aligned onto `family.lane_xs[0]` exactly as a balancer's outputs
+/// align onto `lane_xs` (`balancer_origin_x`), so the trunk picks up below the
+/// merge-tree just like below a balancer block. Producer feeders are routed to
+/// the merge-tree's input columns by the ghost router's feeder-spec generator
+/// (which mirrors this same origin). Returns an empty vec if the family has no
+/// assigned trunk column yet.
+pub(crate) fn stamp_merge_tap_family(
+    family: &LaneFamily,
+    max_belt_tier: Option<&str>,
+) -> Vec<PlacedEntity> {
+    use crate::common::belt_entity_for_rate;
+
+    let Some(&lane_x) = family.lane_xs.first() else {
+        return Vec::new();
+    };
+    let n = family.shape.0 as u32;
+    let tree = crate::bus::balancer_generate::merge_tree(n);
+
+    let belt_tier = belt_entity_for_rate(family.total_rate, max_belt_tier);
+    let splitter_name = splitter_for_belt(belt_tier);
+    let ug_name = underground_for_belt(belt_tier);
+
+    let origin_x = balancer_origin_x(&[lane_x], &tree.output_tiles);
+    let origin_y = family.balancer_y_start;
+    let seg = Some(format!("mergetree:{}:{}", family.item, lane_x));
+
+    let mut entities = tree.stamp(
+        origin_x, origin_y, belt_tier, splitter_name, ug_name, Some(&family.item),
+    );
+    for ent in &mut entities {
+        ent.segment_id = seg.clone();
+    }
+    entities
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -340,6 +377,7 @@ mod tests {
             balancer_y_start: 10,
             balancer_y_end: 11,
             total_rate: 20.0,  // should use fast-transport-belt
+            merge_tap: false,
         };
 
         let entities = stamp_family_balancer(&family, None);
@@ -411,6 +449,7 @@ mod tests {
                     balancer_y_start: 100,
                     balancer_y_end: 100 + 50,
                     total_rate: 30.0,
+                    merge_tap: false,
                 };
                 let entities = stamp_family_balancer(&family, None).unwrap_or_default();
                 let actually_stamps = !entities.is_empty();

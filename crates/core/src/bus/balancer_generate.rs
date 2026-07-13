@@ -318,6 +318,99 @@ fn replicate_horizontally(atom: &OwnedTemplate, count: u32) -> OwnedTemplate {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Merge-trees (n → 1) — RFP docs/rfp-merge-tap-trunks.md D2/D3
+// ---------------------------------------------------------------------------
+
+/// Build an `n → 1` splitter merge-tree: `n` producer input belts on the top
+/// row, merged onto a single output belt at the bottom, using only splitters
+/// and straight (both-lane-preserving) belts — NO sideloads (D3). Merging is
+/// associative, so any `n` composes from `(2 → 1)` splitter merges with no
+/// coprime arithmetic — the property that lets the merge-tap fallback retire
+/// unstampable balancer shapes.
+///
+/// Geometry is a diagonal "staircase" cascade that mirrors the trunk-head
+/// placement frame `stamp_family_balancer` uses (inputs on row 0 facing south,
+/// the single output on the bottom row, so the trunk picks up below just like
+/// a balancer's outputs):
+///   * column `i` carries `input_i` straight south until it meets its merge;
+///   * `splitter_k` (k = 1..n) sits at row `2k-1` spanning columns `(k-1, k)`,
+///     merging the running trunk (its left input, straight from above) with
+///     `input_k` (its right input, straight from above); the right output
+///     continues the trunk one column right and two rows down, the left output
+///     is left empty so backpressure routes all flow to the used output (S5 —
+///     the same construction as [`two_to_one`]).
+///
+/// Result: width `n`, height `2n-1`, exactly `n-1` splitters, `n²` entities,
+/// and a single output tile at `(n-1, 2n-2)`. `n == 1` is the degenerate
+/// pass-through (one belt) — a trunk with a single producer needs no merge.
+///
+/// Returned as an [`OwnedTemplate`] so the caller stamps it through the same
+/// `.stamp()` path a balancer family uses.
+pub fn merge_tree(n: u32) -> OwnedTemplate {
+    assert!(n >= 1, "merge_tree needs at least one input");
+
+    let belt = |x: i32, y: i32| BalancerTemplateEntity {
+        name: "transport-belt",
+        x,
+        y,
+        direction: 4, // south
+        io_type: None,
+        input_priority: None,
+        output_priority: None,
+    };
+
+    if n == 1 {
+        return OwnedTemplate {
+            n_inputs: 1,
+            n_outputs: 1,
+            width: 1,
+            height: 1,
+            entities: vec![belt(0, 0)],
+            input_tiles: vec![(0, 0)],
+            output_tiles: vec![(0, 0)],
+        };
+    }
+
+    let n_i = n as i32;
+    let mut entities: Vec<BalancerTemplateEntity> = Vec::with_capacity((n * n) as usize);
+
+    // input_0: single belt feeding splitter_1's left input from the north.
+    entities.push(belt(0, 0));
+    // input_i (i >= 1): straight south feeder from row 0 down to row 2i-2,
+    // where it enters splitter_i's right input.
+    for i in 1..n_i {
+        for y in 0..=(2 * i - 2) {
+            entities.push(belt(i, y));
+        }
+    }
+    // splitter_k + its trunk-continuation (right) output belt.
+    for k in 1..n_i {
+        entities.push(BalancerTemplateEntity {
+            name: "splitter",
+            x: k - 1,
+            y: 2 * k - 1,
+            direction: 4, // south; spans (k-1, ·) and (k, ·)
+            io_type: None,
+            input_priority: None,
+            output_priority: None,
+        });
+        // Used (right) output at (k, 2k): trunk continuation / final output.
+        // The left output (k-1, 2k) is deliberately left empty (S5).
+        entities.push(belt(k, 2 * k));
+    }
+
+    OwnedTemplate {
+        n_inputs: n,
+        n_outputs: 1,
+        width: n,
+        height: 2 * n - 1,
+        entities,
+        input_tiles: (0..n_i).map(|i| (i, 0)).collect(),
+        output_tiles: vec![(n_i - 1, 2 * n_i - 2)],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -498,6 +591,117 @@ mod tests {
             let bp = gen.to_blueprint(&format!("gen_{m}x{n}"));
             eprintln!("({m}, {n}): {} entities, {}×{}", gen.entities.len(), gen.width, gen.height);
             eprintln!("  blueprint: {bp}");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Merge-trees (RFP merge-tap-trunks D2/D3)
+    // -----------------------------------------------------------------------
+
+    /// Expand a merge-tree's template entities into occupied tiles (splitters
+    /// occupy two tiles side by side along x, since they face south).
+    fn merge_tree_tiles(t: &OwnedTemplate) -> Vec<(i32, i32)> {
+        let mut tiles = Vec::new();
+        for e in &t.entities {
+            tiles.push((e.x, e.y));
+            if e.name == "splitter" {
+                tiles.push((e.x + 1, e.y));
+            }
+        }
+        tiles
+    }
+
+    #[test]
+    fn merge_tree_shapes_including_primes() {
+        // Primes are the deliberate stress: associativity means any n must
+        // compose, so 11 and 13 (no balancer atom) MUST build cleanly.
+        for n in [2u32, 3, 5, 7, 11, 13] {
+            let t = merge_tree(n);
+            assert_eq!(t.n_inputs, n, "n_inputs");
+            assert_eq!(t.n_outputs, 1, "n_outputs (a merge is n→1)");
+            assert_eq!(t.width, n, "width == n");
+            assert_eq!(t.height, 2 * n - 1, "height == 2n-1");
+            assert_eq!(t.entities.len() as u32, n * n, "entity count == n²");
+            let splitters = t.entities.iter().filter(|e| e.name == "splitter").count();
+            assert_eq!(splitters as u32, n - 1, "exactly n-1 splitters");
+            // No sideloads (D3): every belt/splitter faces south.
+            assert!(t.entities.iter().all(|e| e.direction == 4), "all south-facing");
+            assert_eq!(t.input_tiles.len(), n as usize, "n input tiles");
+            assert_eq!(
+                t.input_tiles,
+                (0..n as i32).map(|i| (i, 0)).collect::<Vec<_>>(),
+                "inputs on the top row"
+            );
+            assert_eq!(
+                t.output_tiles,
+                vec![(n as i32 - 1, 2 * n as i32 - 2)],
+                "single output at the bottom-right"
+            );
+        }
+    }
+
+    #[test]
+    fn merge_tree_has_no_tile_overlap() {
+        // Splitter-only, straight-fed: no two entities may claim a tile
+        // (overlaps would surface as entity-overlap errors downstream).
+        for n in [2u32, 3, 5, 7, 11, 13] {
+            let t = merge_tree(n);
+            let tiles = merge_tree_tiles(&t);
+            let unique: std::collections::HashSet<_> = tiles.iter().copied().collect();
+            assert_eq!(
+                tiles.len(),
+                unique.len(),
+                "merge_tree({n}) has overlapping tiles"
+            );
+            // Everything stays inside the declared bbox.
+            for (x, y) in tiles {
+                assert!(
+                    x >= 0 && (x as u32) < t.width && y >= 0 && (y as u32) < t.height,
+                    "tile ({x},{y}) outside {}×{} bbox for n={n}",
+                    t.width,
+                    t.height
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn merge_tree_is_deterministic() {
+        // Determinism is a hard project contract — same n, byte-identical
+        // entities every time.
+        for n in [2u32, 7, 13] {
+            assert_eq!(merge_tree(n).entities, merge_tree(n).entities);
+        }
+    }
+
+    #[test]
+    fn merge_tree_n1_is_passthrough() {
+        let t = merge_tree(1);
+        assert_eq!(t.n_inputs, 1);
+        assert_eq!(t.n_outputs, 1);
+        assert_eq!(t.entities.len(), 1);
+        assert_eq!(t.entities[0].name, "transport-belt");
+        assert_eq!(t.input_tiles, vec![(0, 0)]);
+        assert_eq!(t.output_tiles, vec![(0, 0)]);
+    }
+
+    #[test]
+    fn merge_tree_output_tile_is_a_belt() {
+        // The declared output tile must actually carry a belt (the trunk
+        // picks up there) — and the two-tile inputs must all be belts.
+        for n in [2u32, 3, 5] {
+            let t = merge_tree(n);
+            let out = t.output_tiles[0];
+            assert!(
+                t.entities.iter().any(|e| (e.x, e.y) == out && e.name == "transport-belt"),
+                "output tile {out:?} must be a belt for n={n}"
+            );
+            for &inp in &t.input_tiles {
+                assert!(
+                    t.entities.iter().any(|e| (e.x, e.y) == inp && e.name == "transport-belt"),
+                    "input tile {inp:?} must be a belt for n={n}"
+                );
+            }
         }
     }
 }

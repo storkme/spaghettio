@@ -578,6 +578,29 @@ pub enum TraceEvent {
         rate_per_lane: f64,
     },
 
+    /// A lane family's `(N, M)` shape had no balancer template
+    /// (`shape_is_stampable` returned false), so the merge-and-tap fallback
+    /// replaced it with `K = ceil(rate / full_belt_cap)` shared trunks: each
+    /// trunk's producer group merges via a splitter merge-tree
+    /// (`balancer_generate::merge_tree`) and its consumer group taps the trunk
+    /// with priority splitters (RFP `docs/rfp-merge-tap-trunks.md`). Emitted
+    /// once per family that takes the fallback so the activation is
+    /// one-grep diagnosable. `producers_per_trunk[i]` / `consumers_per_trunk[i]`
+    /// are the bin-packing assignment counts for trunk `i`.
+    MergeTapFallback {
+        item: String,
+        module_id: u32,
+        /// The unstampable `(N producers, M consumers)` shape that triggered
+        /// the fallback.
+        shape: (usize, usize),
+        /// `K` — the throughput-sized trunk count.
+        k_trunks: usize,
+        /// Producer-row count assigned to each of the `K` trunks.
+        producers_per_trunk: Vec<usize>,
+        /// Consumer-row count assigned to each of the `K` trunks.
+        consumers_per_trunk: Vec<usize>,
+    },
+
     // SAT crossing zone removed because it conflicted with a splitter stamp tile
     CrossingZoneConflict {
         /// The crossing segment ID that was removed
