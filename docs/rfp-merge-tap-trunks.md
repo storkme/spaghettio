@@ -359,3 +359,7 @@ Per the CLAUDE.md protocol, plus:
   balancer-related). Utility@10/s post-(12,7)-bake before/after
   confirmation pending as a follow-up. **RFP ready for user
   acceptance.***
+- *2026-07-13 — **accepted by user.** Phase 1 started: validator
+  prerequisite (tap-priority generalization) first as its own
+  commit, then the merge-tree builder + K-trunk fallback +
+  priority taps, activated only where `shape_is_stampable` says no.*
