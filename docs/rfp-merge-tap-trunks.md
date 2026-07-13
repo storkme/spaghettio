@@ -331,3 +331,31 @@ Per the CLAUDE.md protocol, plus:
   acceptance once Phase 0's shape census lands** (spike in flight:
   (12,7) already baked as an interim data point; census's final
   cells computing).*
+- *2026-07-13 — **Phase 0 census landed (spike; artifacts committed
+  8340f8b). Kill criterion 1 evaluated: the RFP does NOT close — the
+  census is its strongest evidence.** Blast radius: utility@10/s is
+  the ONLY missing-shape cell in the 24-cell corpus, demanding
+  exactly (15,14)/(12,7)/(8,19). But "all shapes cheaply bakeable"
+  FAILS: **(8,19) is analytically unreachable by composition** (19
+  is prime past the largest fan-out atom — no Clos factorization
+  exists), and (15,14) was non-convergent after 9 minutes of
+  junction search toward a would-be 30×60-90 monster. Only (12,7)
+  was trivial (baked, interim mitigation for 12 of the 35
+  dead-ends). **Mechanism confirmed with numbers**: M is a
+  consumer-count artifact, not throughput — raw capacity splits
+  would be 26/8/15 but get clamped/padded to consumer-row counts
+  (iron-plate padded 15→19 to match 19 consumer recipes; its K at
+  blue belt is 8, so M = 2.4×K). Prime consumer counts recur
+  indefinitely as recipe trees deepen: composition patching is
+  categorically unable to close this class, and merge-and-tap's
+  Phase 1 fallback is NECESSARY for (8,19)-class shapes, not merely
+  preferable. K table (blue belt): electronic-circuit K=4 (vs M=7),
+  copper-cable K=13 (vs M=14), iron-plate K=8 (vs M=19). Side
+  findings recorded: #136 is more open than its closed state
+  suggests (authored (m,9) recipes never baked; an `#[ignore]`d
+  coverage test documents the gap — folded into this RFP's Phase 3
+  scope decision); production@10/s is independently slow (>20min
+  uncontended, the known TIMEOUT cliff — separate wall, not
+  balancer-related). Utility@10/s post-(12,7)-bake before/after
+  confirmation pending as a follow-up. **RFP ready for user
+  acceptance.***
