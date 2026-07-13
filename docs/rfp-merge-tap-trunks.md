@@ -321,3 +321,13 @@ Per the CLAUDE.md protocol, plus:
   #136's Factorio-SAT bake wall (0/32 overnight) — different tools,
   different failure modes. Pending re-review verification, then
   Phase 0 (census results from the spike).*
+- *2026-07-13 — re-review verification: **SHIP.** All five findings
+  confirmed faithfully incorporated (D4's validation-gap rewrite
+  closes blocker 1 with the backwards-tap mode named; D1's multi-tap
+  reality accurate including the round-robin degeneracy needing
+  replacement-not-reactivation; K constant and precedent citation
+  correct; builder-as-new-code and shape_is_stampable transcription
+  accurate; prior-art attribution corrected). **RFP ready for
+  acceptance once Phase 0's shape census lands** (spike in flight:
+  (12,7) already baked as an interim data point; census's final
+  cells computing).*
