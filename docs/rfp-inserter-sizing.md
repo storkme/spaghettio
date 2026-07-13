@@ -647,3 +647,31 @@ stop signal.
   stalls. Either starving with warnings at zero = the check is
   miscalibrated → the RFP's verdict flips from done to
   validator-debt.*
+- *2026-07-13 — **post-landing adversarial review sweep
+  (f07d6b4..d9c9977, two parallel reviewers): SHIP + SHIP, zero
+  blockers.** Geometry half: every corpus-unexercised budget cell
+  independently re-derived and matching the frozen table;
+  reassignment threading (input_ys/carries/item order) consistent in
+  every branch — no partial-swap scenario exists. Validators half:
+  effective_rows y-range convention verified against RowSpan
+  construction (half-open, correct); self-loop double-counting
+  proven STRUCTURALLY impossible (netflow strips loop items from
+  inputs/outputs into spec.self_loop); KC3 audited per-commit —
+  held across all ten commits; UI/wasm positional threading traced
+  hop-by-hop; gauntlet numbers live-reproduced. Consolidated
+  SHOULD-FIXes → hardening pass (three KC3-sequenced commits):
+  stamp_side_inserters caller-invariant debug_assert;
+  `common::utilization_for` extracted (the formula was hand-copied
+  13× across placer/validators/belt_flow — the exact drift surface
+  the honest-zero gate exists to prevent); effective_rows resolution
+  + recycler exemption deduped; and the ESCALATED item — the three
+  remaining recipe-keyed collapse sites (belt_flow ×2,
+  belt_structural ×1) adopt effective_rows resolution, since the
+  reviewer established they pass on fixture-luck, not architecture
+  (same proven bug class as 5f67218). Recorded notes: effective_rows
+  duplicates full MachineSpecs per physical row (unmeasured wasm
+  payload cost — slim if it ever matters); landing.ts showcase
+  entries can't pin a non-default inserter tier; pre-existing
+  self_loop major_consumed_rate scaling inconsistency filed as
+  #307; Fast-cap count-vs-cost ladder tension and the zero-near
+  contest edge are working-as-designed, noted for awareness.*
