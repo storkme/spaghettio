@@ -1776,6 +1776,35 @@ pub fn solve_crossing_zone_with_stats(
     solve_crossing_zone_per_channel(zone, &channel_reaches, belt_tier, max_ug_ins)
 }
 
+/// If any channel's boundaries are all sources or all sinks, the zone cannot
+/// conserve flow and is therefore UNSAT — return a short human-readable
+/// reason (`"chN Xin/Yout"`). `None` means every channel has at least one
+/// input and one output, so the zone is at least flow-balanced.
+///
+/// Interior boundaries (flow that sources/sinks at a Permanent entity inside
+/// the bbox) count via their `is_input` flag — an interior sink is
+/// `is_input == false`, so a channel fed by a perimeter input and drained by
+/// an interior sink is balanced and not flagged.
+///
+/// The junction strategy calls this before the (unbounded) base solve:
+/// varisat can take unbounded time to *prove* such a zone UNSAT, so refusing
+/// it structurally avoids the hang. See `bus::junction_sat_strategy`.
+pub fn flow_imbalance_reason(boundaries: &[ZoneBoundary]) -> Option<String> {
+    use std::collections::BTreeMap;
+    let mut bal: BTreeMap<u32, (u32, u32)> = BTreeMap::new();
+    for b in boundaries {
+        let e = bal.entry(b.channel_id).or_default();
+        if b.is_input {
+            e.0 += 1;
+        } else {
+            e.1 += 1;
+        }
+    }
+    bal.iter()
+        .find(|(_, &(i, o))| (i > 0 && o == 0) || (o > 0 && i == 0))
+        .map(|(ch, &(i, o))| format!("ch{ch} {i}in/{o}out"))
+}
+
 /// Per-channel-reach variant of `solve_crossing_zone_with_stats`.
 /// `channel_reaches[c]` caps the UG run length for channel `c`; the
 /// encoder enforces per-channel tightening so a yellow flow in a
@@ -2071,6 +2100,70 @@ mod tests {
             ],
             forced_empty: vec![],
         }
+    }
+
+    fn fb_bnd(channel_id: u32, is_input: bool, interior: bool) -> ZoneBoundary {
+        ZoneBoundary {
+            x: 0,
+            y: 0,
+            direction: EntityDirection::East,
+            item: format!("item{channel_id}"),
+            is_input,
+            interior,
+            belt_tier: None,
+            channel_id,
+        }
+    }
+
+    #[test]
+    fn flow_imbalance_all_inputs_refused() {
+        // Three sources, no sink — the merge-and-tap copper-cable pathology.
+        let bs = vec![
+            fb_bnd(1, true, false),
+            fb_bnd(1, true, false),
+            fb_bnd(1, true, false),
+        ];
+        assert_eq!(flow_imbalance_reason(&bs).as_deref(), Some("ch1 3in/0out"));
+    }
+
+    #[test]
+    fn flow_imbalance_all_outputs_refused() {
+        let bs = vec![fb_bnd(0, false, false), fb_bnd(0, false, false)];
+        assert_eq!(flow_imbalance_reason(&bs).as_deref(), Some("ch0 0in/2out"));
+    }
+
+    #[test]
+    fn flow_imbalance_balanced_channel_ok() {
+        let bs = vec![fb_bnd(0, true, false), fb_bnd(0, false, false)];
+        assert_eq!(flow_imbalance_reason(&bs), None);
+    }
+
+    #[test]
+    fn flow_imbalance_interior_sink_counts_as_output() {
+        // A perimeter input drained by an interior sink (is_input == false)
+        // is balanced — legit interior-sink zones must not be refused.
+        let bs = vec![fb_bnd(2, true, false), fb_bnd(2, false, true)];
+        assert_eq!(flow_imbalance_reason(&bs), None);
+    }
+
+    #[test]
+    fn flow_imbalance_detects_one_bad_channel_among_many() {
+        // ch0 balanced, ch1 all-inputs. Deterministic (BTreeMap key order):
+        // the lowest imbalanced channel id is reported, and the pure function
+        // returns the same answer on repeat.
+        let bs = vec![
+            fb_bnd(0, true, false),
+            fb_bnd(0, false, false),
+            fb_bnd(1, true, false),
+            fb_bnd(1, true, false),
+        ];
+        assert_eq!(flow_imbalance_reason(&bs).as_deref(), Some("ch1 2in/0out"));
+        assert_eq!(flow_imbalance_reason(&bs), flow_imbalance_reason(&bs));
+    }
+
+    #[test]
+    fn flow_imbalance_empty_is_ok() {
+        assert_eq!(flow_imbalance_reason(&[]), None);
     }
 
     /// Solve the same 3×3 zone twice. First without a cost cap to get

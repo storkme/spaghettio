@@ -735,8 +735,14 @@ fn split_overflowing_lanes(
             1
         };
         // External input lanes (no producer) can share a trunk across multiple
-        // consumer rows — split only by capacity.  Intermediate lanes still need
-        // 1-per-consumer because route_intermediate_lane only handles tap_off_ys[0].
+        // consumer rows — split only by capacity. Intermediate lanes still get
+        // 1-per-consumer here (the round-robin below then degenerates to
+        // identity). NOTE: the historical reason ("route_intermediate_lane
+        // only handles tap_off_ys[0]") is stale — that direct-mode router was
+        // deleted (5c8abe3); today's `route_bus_ghost` Step 4 iterates ALL
+        // `tap_off_ys`, so multi-tap intermediate trunks are renderable. The
+        // 1-per-consumer split is retained deliberately (the merge-and-tap
+        // fallback is the path that shares an intermediate trunk).
         let is_external_input =
             lane.producer_row.is_none() && lane.extra_producer_rows.is_empty();
         let n_splits = if is_external_input {
@@ -798,12 +804,14 @@ fn split_overflowing_lanes(
             .iter()
             .any(|(_, t)| t.is_some());
 
-        // Consumer-side trunk count: each consumer row needs exactly one
-        // trunk to feed it (the existing `route_intermediate_lane` only
-        // honors `tap_off_ys[0]`, so multiple consumers in one trunk is
-        // a non-starter). For collector lanes (no consumers) keep the
-        // capacity-derived count. HS rows want K trunks for their
-        // input₀, expanding the trunk count beyond `consumer_rows.len()`.
+        // Consumer-side trunk count: on the balancer path each consumer row
+        // gets its own trunk. (The old "route_intermediate_lane only honors
+        // tap_off_ys[0]" rationale is stale — that router was deleted in
+        // 5c8abe3; `route_bus_ghost` Step 4 now iterates all `tap_off_ys`.
+        // Multiple consumers per trunk is the merge-and-tap fallback's job.)
+        // For collector lanes (no consumers) keep the capacity-derived count.
+        // HS rows want K trunks for their input₀, expanding the trunk count
+        // beyond `consumer_rows.len()`.
         let consumer_trunk_count = if is_collector {
             n_splits
         } else {

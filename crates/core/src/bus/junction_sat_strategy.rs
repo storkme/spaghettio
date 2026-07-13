@@ -1210,6 +1210,35 @@ impl JunctionStrategy for SatStrategy {
         let effective_budget_ms = env_descent_budget_ms()
             .unwrap_or(self.constraints.cost_descent_budget_ms);
 
+        // Flow-balance pre-check: a channel with inputs but no outputs (or vice
+        // versa) cannot conserve flow, so the zone is UNSAT — but varisat can
+        // take unbounded time to *prove* it (the merge-and-tap hang was exactly
+        // this: three copper-cable feeders entering a zone whose only west exit
+        // is the iron-ore trunk column, so the copper sink was never a
+        // boundary). Refuse instantly instead, recorded as UNSAT (this exact
+        // boundary set is permanently infeasible). Structural, so it holds at
+        // any zone size. See `sat::flow_imbalance_reason`.
+        if let Some(reason) = crate::sat::flow_imbalance_reason(&zone.boundaries) {
+            trace::emit(TraceEvent::CrossingZoneSkipped {
+                tap_item: zone
+                    .boundaries
+                    .first()
+                    .map(|b| b.item.clone())
+                    .unwrap_or_default(),
+                tap_x: seed_x,
+                tap_y: seed_y,
+                reason: format!("flow_imbalance: {reason}"),
+            });
+            crate::zone_cache::record_zone_unsat(
+                &zone,
+                &channel_reaches,
+                self.constraints.max_ug_ins,
+                crate::zone_cache::ZoneStats { variables: 0, clauses: 0, solve_time_us: 0 },
+                None,
+            );
+            return None;
+        }
+
         let (entities_opt, stats) = crate::sat::solve_crossing_zone_per_channel(
             &zone,
             &channel_reaches,
