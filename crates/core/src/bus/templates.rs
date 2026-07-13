@@ -332,6 +332,13 @@ fn stamp_side_inserters(
     baseline_dx: i32,
     extra_dx: &[i32],
 ) {
+    debug_assert!(
+        extra_dx.len() + 1 >= plan.count,
+        "stamp_side_inserters: extra_dx has {} entries but plan.count is {} — \
+         under-placement with no signal; caller must pass at least plan.count - 1 extras",
+        extra_dx.len(),
+        plan.count
+    );
     let dxs = std::iter::once(baseline_dx).chain(extra_dx.iter().copied()).take(plan.count);
     for dx in dxs {
         entities.push(PlacedEntity {

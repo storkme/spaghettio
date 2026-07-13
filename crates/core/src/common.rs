@@ -4,7 +4,7 @@
 
 use rustc_hash::FxHashSet;
 
-use crate::models::{EntityDirection, PlacedEntity, SolverResult};
+use crate::models::{EntityDirection, MachineSpec, PlacedEntity, SolverResult};
 
 const DEFAULT_MACHINE_SIZE: u32 = 3;
 const DEFAULT_MACHINE_DIMS: (u32, u32) = (DEFAULT_MACHINE_SIZE, DEFAULT_MACHINE_SIZE);
@@ -79,6 +79,22 @@ pub fn machine_tiles(x: i32, y: i32, w: u32, h: u32) -> Vec<(i32, i32)> {
     (0..w)
         .flat_map(move |dx| (0..h).map(move |dy| (x + dx, y + dy)))
         .collect()
+}
+
+/// Fraction of a full machine-slot the row's fractional `spec.count` actually
+/// fills. `effective_count` is the whole number of physical machine slots the
+/// row must place (at least 1); the returned utilization scales per-machine
+/// rates down so a partial last machine isn't credited with a full machine's
+/// throughput.
+///
+/// THE single source of this formula, shared by placement (`bus::placer`,
+/// which sizes belts/inserters per machine) and validation (`validate::`,
+/// which must reconstruct the same effective rate to avoid false-positive
+/// starvation/overflow warnings on partitioned rows) — see
+/// `docs/rfp-inserter-sizing.md`'s honest-zero gate.
+pub fn utilization_for(spec: &MachineSpec) -> f64 {
+    let effective_count = spec.count.ceil().max(1.0);
+    (spec.count / effective_count).min(1.0)
 }
 
 /// Belt throughput tiers: (entity name, items-per-second capacity).
