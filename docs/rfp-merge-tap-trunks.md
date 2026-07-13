@@ -59,12 +59,15 @@ The engine can now verify what humans build.
 ## Prior art (read before re-litigating)
 
 - **PR #272 / docs/rfp-balancer-place-routing.md (May 2026, closed
-  unmerged)**: CP-SAT flow-conservation SYNTHESIS of arbitrary
-  balancer shapes — 3/8 round-trips, stalled on greedy slot
-  assignment for coprime back-loop shapes; the overnight CP-SAT runs
-  put 0/32 seeds on (1,9)/(1,10). The "make balancers harder"
-  direction is researched and parked. This RFP is the opposite move:
-  need balancers less.
+  unmerged)**: CP-SAT flow-conservation placement/routing SYNTHESIS
+  of arbitrary balancer shapes — 3/8 round-trips, stalled on greedy
+  slot assignment for coprime back-loop shapes; the later (4,9)
+  Clos attempt died on memory exhaustion. Separately, **the
+  Factorio-SAT offline bake wall** (docs/bake-overnight-results.md,
+  behind #136): 0/32 overnight seeds on (1,9)/(1,10). Two different
+  tools, two different failure modes, one conclusion: the "make
+  balancers harder" direction is researched and parked. This RFP is
+  the opposite move: need balancers less.
 - **#136 (closed)**: the previous coprime-shape wall, closed via
   `balancer-gen bake_missing_shapes` composition recipes — the
   precedented interim fix, and still the fallback interim here if
@@ -87,26 +90,52 @@ The engine can now verify what humans build.
 ### D1. Throughput-sized trunks
 
 `split_overflowing_lanes` (lane_planner.rs): a family's lane count
-becomes `K = ceil(family_rate / lane_capacity)` — throughput-driven,
-not consumer-driven. Consumer rows are assigned to trunk lanes by
-deterministic demand bin-packing (largest-demand-first into
-least-loaded lane; ties by existing row order — determinism is a hard
-project contract). Multiple consumer rows share a lane via the
-EXISTING multi-tap machinery — single-lane multi-consumer items are
-already the engine's workhorse path; this design extends the
-workhorse to K-lane groups instead of escalating to balanced
-families.
+becomes **K = ceil(family_rate / full_belt_cap)** — throughput-
+driven, not consumer-driven. The capacity constant is PINNED (review
+round 1): `full_belt_cap = 2 × lane_capacity()` — D3's splitter-only
+plumbing gives merge-tap trunks the same both-lanes-loaded guarantee
+balancer-fed trunks have today, matching the existing precedent at
+lane_planner.rs:692-696 ("the balancer feeds full belts"). Using the
+conservative half-belt constant would double K corpus-wide and
+silently defeat kill criterion 4. Consumer rows are assigned to
+trunk lanes by deterministic demand bin-packing (largest-demand-first
+into least-loaded lane; ties by existing row order — determinism is
+a hard project contract).
+
+**Multi-tap status, stated honestly (review round 1)**: shared
+trunks are proven today only for EXTERNAL-input lanes
+(`LaneConsolidated`, lane_planner.rs:660-674); intermediate lanes
+are forced to one-trunk-per-consumer (`n_splits.max(consumer_rows
+.len())`, line 673, with a live "multiple consumers in one trunk is
+a non-starter" comment referencing the OLD single-tap renderer). The
+ghost router's general multi-tap rendering (rfp-unified-belt-specs
+Phases 1+2, ghost_router.rs:2182-2264) has since superseded that
+renderer but has NEVER been exercised on a family-tagged lane —
+Phase 1 treats the family+multi-tap combination as new integration
+territory with its own tests, not a drop-in. The round-robin
+assignment code at lane_planner.rs:828 (currently dead — the floor
+makes `i % effective_n_splits == i`) becomes live and must be
+replaced by the bin-packing above.
 
 ### D2. Merge-trees replace family balancers
 
 Producer rows are partitioned across the K trunks (same bin-packing
 discipline, producer rates against trunk capacity). Each trunk's
-producer group merges via a splitter merge-tree stamped from (n,1)
-merger atoms — the library already holds these, and merging is
-associative, so ANY n decomposes into small atoms: the coprime
-problem cannot exist on this path. The feeder-spec generator's
-balancer-mirroring branches are replaced by (or fall back to) the
-merge-tree path.
+producer group merges via a splitter merge-tree. Merging is
+associative, so ANY n decomposes into small steps and the coprime
+problem cannot exist on this path — but the BUILDER IS NEW CODE
+(review round 1): the library holds fixed pre-baked (n,1) lookups
+only to n≈10, and the sole runtime composition primitive is a (2,1)
+splitter replicated in parallel (`balancer_generate::two_to_one`) —
+a recursive n-ary merge-tree generator does not exist and is a
+named Phase 1 deliverable, sized against the scope trigger (simple
+— no combinatorial search, unlike balanced synthesis — but not
+free). The feeder-spec generator's balancer-mirroring branches are
+replaced by (or fall back to) the merge-tree path. Geometry note:
+merge-trees live where the family balancer stands today (the trunk
+head zone); Phase 0 confirms K parallel merge-trees fit the head
+area a single (N,M) balancer occupies (expectation: comfortably —
+they're narrower — but measured, not assumed).
 
 ### D3. Splitter-only plumbing (lane-balance invariant)
 
@@ -122,11 +151,23 @@ is provable; not v1.)
 A consumer tap is an inline splitter on the trunk: one output
 continues the bus, the other feeds the row, with Factorio 2.0 native
 `output_priority` set toward the TAP (human bus discipline:
-consumers fed first, surplus flows on). The blueprint export already
-carries priority fields (sushi/sorter work) and the rate walkers
-already model priority splitters (`loop_priority_rate` vocabulary,
-self-loop work). Priority-toward-tap directly mitigates the
-transient-starvation caution (D6).
+consumers fed first, surplus flows on). Plumbing status, verified
+(review round 1): `PlacedEntity` carries the priority fields
+(models.rs:178,182) and blueprint export round-trips them — that
+half is real. **The validation half is NOT built and is a named
+Phase 1 prerequisite**: no validator reads the real priority fields
+(zero references in validate/); the only priority-aware walker
+mechanism is `loop_priority_rate`, gated on a `:selfloop:`
+segment-tag string match, so a bus tap falls back to the generic
+splitter model — and a BACKWARDS-STAMPED TAP (continuation and feed
+swapped) would pass every existing check silently.
+**Phase 1 deliverable: generalize priority-branch detection past
+`:selfloop:`** — a tap-segment convention (e.g. `:tap:` segment
+kind) honored by both rate walkers (belt_flow.rs:2345-2354,
+belt_structural.rs:1041-1050), plus a structural check that a tap's
+priority points at the feed branch. Kill criterion 5's in-game
+anchor is the calibration for this new modeling, not a substitute
+for it.
 
 ### D5. Where balancers remain
 
@@ -221,11 +262,18 @@ Per the CLAUDE.md protocol, plus:
   spike) → blast radius + K table; freeze bin-packing rules, the
   balancer-retention boundary (D5), the D6 semantic; predict
   per-fixture flip movement.
-- **Phase 1 — fallback lands**: merge-tree stamper + K-trunk
-  splitting + priority taps, activated ONLY where
-  `stamp_family_balancer` finds no shape (the FeederSpecsSkipped
-  population). Strictly additive; broken cells heal; kill criteria
-  2–3 evaluated.
+- **Phase 1 — fallback lands**: merge-tree BUILDER (new, D2) +
+  K-trunk splitting + priority taps + the priority-aware walker
+  generalization (D4 prerequisite), activated ONLY where the shape
+  is unstampable — decided at PLANNING time via the EXISTING
+  `shape_is_stampable(n, m)` (balancer.rs:143, live in production
+  via shape_fix.rs and decomposition_search.rs:166 despite a stale
+  `#[allow(dead_code)]`; it mirrors `stamp_family_balancer`'s full
+  decision tree), called at `split_overflowing_lanes`' family
+  decision point (lane_planner.rs:892). No chicken-and-egg:
+  `FeederSpecsSkipped` fires at routing time and remains the
+  it-still-happened alarm, not the decision input. Strictly
+  additive; broken cells heal; kill criteria 2–3 evaluated.
 - **Phase 2 — the flip**: merge-and-tap becomes the default for all
   split families; balancer families retire to the D5 boundary.
   Kill criteria 4–6 evaluated; full re-bless against Phase 0
@@ -247,3 +295,29 @@ Per the CLAUDE.md protocol, plus:
   while composition baking (#136) remains the interim fallback.
   Shape census spike in flight; its results land in Phase 0.
   Pending adversarial review.*
+- *2026-07-13 — adversarial review round 1: REVISE, two blockers +
+  three should-fixes, all incorporated. (1) BLOCKER — D4's "walkers
+  already model priority splitters" was half-false: the priority
+  FIELDS exist and export, but no validator reads them; the only
+  priority-aware walker path is gated on `:selfloop:` tags, so a
+  backwards-stamped tap would validate silently. Now a named Phase 1
+  prerequisite (generalized tap-segment priority detection in both
+  walkers + a structural direction check). (2) BLOCKER — D1's
+  "multi-tap workhorse" holds only for external-input lanes;
+  intermediate lanes force one-trunk-per-consumer today, and the
+  ghost router's general multi-tap rendering has never been combined
+  with family-tagged lanes — that combination is Phase 1 integration
+  territory with its own tests, and lane_planner's dead round-robin
+  code becomes live. (3) K's capacity constant PINNED to
+  full_belt_cap (2× lane_capacity) matching the balancer-present
+  precedent — the conservative constant would double K and defeat
+  KC4. (4) The (n,1) merge-tree builder acknowledged as NEW code
+  (library atoms are fixed lookups to n≈10; the only runtime
+  primitive is a parallel (2,1)). (5) Review gift: the Phase-1
+  chicken-and-egg dissolves — `shape_is_stampable` already exists,
+  mirrors the stamper's full decision tree, and is live in
+  production; named at its exact call site. (6) Prior-art citation
+  split: PR #272's CP-SAT placement/routing (3/8, Clos OOM) vs
+  #136's Factorio-SAT bake wall (0/32 overnight) — different tools,
+  different failure modes. Pending re-review verification, then
+  Phase 0 (census results from the spike).*
