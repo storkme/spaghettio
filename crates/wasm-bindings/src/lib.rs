@@ -8,6 +8,7 @@
 //! Exposed functions: `init`, `solve`, `layout`, `export_blueprint`, `validate`,
 //! `get_all_items`, `get_recipes_for_item`, `parse_blueprint`.
 
+use spaghettio_core::bus::inserter_ladder::InserterTier;
 use spaghettio_core::models::{LayoutResult, PlacedEntity, SolverResult};
 use spaghettio_core::recipe_db::MachinePalette;
 use spaghettio_core::validate::{self, LayoutStyle, ValidationIssue};
@@ -20,14 +21,15 @@ use rustc_hash::FxHashSet;
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
-/// Build `LayoutOptions` from the optional belt-tier, strategy, and
-/// row-layout strings passed in across the WASM boundary. The TS engine
-/// layer validates URL params, so unknown values fall back to defaults
-/// silently.
+/// Build `LayoutOptions` from the optional belt-tier, strategy,
+/// row-layout, and inserter-tier strings passed in across the WASM
+/// boundary. The TS engine layer validates URL params, so unknown values
+/// fall back to defaults silently.
 fn layout_options(
     max_belt_tier: Option<String>,
     strategy: Option<String>,
     row_layout: Option<String>,
+    max_inserter_tier: Option<String>,
 ) -> LayoutOptions {
     let strategy = match strategy.as_deref() {
         // `partitioned-per-consumer` is the deprecated P1 string; the
@@ -43,12 +45,20 @@ fn layout_options(
         Some("horizontal-stack") => RowLayout::HorizontalStack,
         _ => RowLayout::VerticalSplit,
     };
+    // Mirrors `max_belt_tier`'s hard-cap semantics (`docs/rfp-inserter-
+    // sizing.md`): unrecognized or absent values fall back to the
+    // default (`Stack`), not an error.
+    let max_inserter_tier = match max_inserter_tier.as_deref() {
+        Some("regular") => InserterTier::Regular,
+        Some("fast") => InserterTier::Fast,
+        _ => InserterTier::default(),
+    };
     LayoutOptions {
         strategy,
         max_belt_tier,
         row_layout,
         surplus_policy: SurplusPolicy::default(),
-        max_inserter_tier: Default::default(),
+        max_inserter_tier,
     }
 }
 
@@ -107,9 +117,13 @@ pub fn layout(
     max_belt_tier: Option<String>,
     strategy: Option<String>,
     row_layout: Option<String>,
+    max_inserter_tier: Option<String>,
 ) -> Result<LayoutResult, JsError> {
-    build_bus_layout(&solver_result, layout_options(max_belt_tier, strategy, row_layout))
-        .map_err(|e| JsError::new(&e))
+    build_bus_layout(
+        &solver_result,
+        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier),
+    )
+    .map_err(|e| JsError::new(&e))
 }
 
 /// Traced variant of `layout()`. Returns the same `LayoutResult` plus
@@ -122,10 +136,11 @@ pub fn layout_traced(
     max_belt_tier: Option<String>,
     strategy: Option<String>,
     row_layout: Option<String>,
+    max_inserter_tier: Option<String>,
 ) -> Result<LayoutResult, JsError> {
     spaghettio_core::bus::layout::build_bus_layout_traced(
         &solver_result,
-        layout_options(max_belt_tier, strategy, row_layout),
+        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier),
     )
     .map_err(|e| JsError::new(&e))
 }
@@ -184,6 +199,7 @@ pub fn layout_streaming(
     max_belt_tier: Option<String>,
     strategy: Option<String>,
     row_layout: Option<String>,
+    max_inserter_tier: Option<String>,
     emit: &js_sys::Function,
 ) -> Result<LayoutResult, JsError> {
     let emit = emit.clone();
@@ -197,7 +213,7 @@ pub fn layout_streaming(
     });
     spaghettio_core::bus::layout::build_bus_layout_streaming(
         &solver_result,
-        layout_options(max_belt_tier, strategy, row_layout),
+        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier),
         on_event,
     )
     .map_err(|e| JsError::new(&e))

@@ -23,6 +23,11 @@ export interface FormState {
   /** Row layout ("horizontal-stack"). null = vertical-split (today's default).
    * See `docs/rfp-horizontal-trunks.md`. */
   rowLayout: string | null;
+  /** Max inserter tier override ("regular" | "fast"). null = stack
+   * (today's default) — mirrors `belt`'s "null = auto" semantics, except
+   * the un-set value IS the richest tier here (there's no cheaper
+   * "auto"), so null means "no cap". See `docs/rfp-inserter-sizing.md`. */
+  inserterTier: string | null;
   /** User-added inputs beyond the DEFAULT_INPUTS list. */
   customInputs: string[];
 }
@@ -38,6 +43,12 @@ export const KNOWN_STRATEGIES = ["partitioned-per-consumer", "partitioned-decomp
 
 /** Row-layout values accepted on the URL and in `FormState.rowLayout`. */
 export const KNOWN_ROW_LAYOUTS = ["horizontal-stack"] as const;
+
+/** Inserter-tier cap values accepted on the URL and in
+ * `FormState.inserterTier`. `"stack"` (the default) is intentionally
+ * absent — same convention as `KNOWN_STRATEGIES` omitting "pooled": the
+ * default is represented by `null`, never an explicit value. */
+export const KNOWN_INSERTER_TIERS = ["regular", "fast"] as const;
 
 /** Full list of input pills rendered in the sidebar. */
 export const DEFAULT_INPUTS: string[] = [
@@ -115,6 +126,15 @@ const ROW_LAYOUT_SHORT_TO_FULL: Record<string, string> = {
 };
 const ROW_LAYOUT_FULL_TO_SHORT: Record<string, string> = {
   "horizontal-stack": "hs",
+};
+
+const INSERTER_TIER_SHORT_TO_FULL: Record<string, string> = {
+  r: "regular",
+  f: "fast",
+};
+const INSERTER_TIER_FULL_TO_SHORT: Record<string, string> = {
+  regular: "r",
+  fast: "f",
 };
 
 function slugToCode(slug: string): string {
@@ -207,6 +227,8 @@ function readHashState(): FormState | null {
   const strategy = sShort ? STRATEGY_SHORT_TO_FULL[sShort] ?? null : null;
   const rlShort = extras.get("rl");
   const rowLayout = rlShort ? ROW_LAYOUT_SHORT_TO_FULL[rlShort] ?? null : null;
+  const itShort = extras.get("it");
+  const inserterTier = itShort ? INSERTER_TIER_SHORT_TO_FULL[itShort] ?? null : null;
   const ciRaw = extras.get("ci");
   let customInputs: string[] = [];
   if (ciRaw) {
@@ -230,7 +252,7 @@ function readHashState(): FormState | null {
     machines[category] = slug;
   }
 
-  return { item, rate, machines, inputs, belt, strategy, rowLayout, customInputs };
+  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, customInputs };
 }
 
 function readQueryState(): FormState {
@@ -262,10 +284,15 @@ function readQueryState(): FormState {
   if (strategy === "partitioned-per-consumer") strategy = "partitioned-decomposed";
   const rawRowLayout = params.get("row_layout");
   const rowLayout = rawRowLayout && (KNOWN_ROW_LAYOUTS as readonly string[]).includes(rawRowLayout) ? rawRowLayout : null;
+  const rawInserterTier = params.get("inserter_tier");
+  const inserterTier =
+    rawInserterTier && (KNOWN_INSERTER_TIERS as readonly string[]).includes(rawInserterTier)
+      ? rawInserterTier
+      : null;
   const ciParam = params.get("ci");
   const customInputs = ciParam ? ciParam.split(",").filter((s) => s.length > 0) : [];
 
-  return { item, rate, machines, inputs, belt, strategy, rowLayout, customInputs };
+  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, customInputs };
 }
 
 export function readUrlState(): FormState {
@@ -330,6 +357,9 @@ function formatHashState(state: FormState): string {
   if (state.rowLayout && ROW_LAYOUT_FULL_TO_SHORT[state.rowLayout]) {
     extras.set("rl", ROW_LAYOUT_FULL_TO_SHORT[state.rowLayout]);
   }
+  if (state.inserterTier && INSERTER_TIER_FULL_TO_SHORT[state.inserterTier]) {
+    extras.set("it", INSERTER_TIER_FULL_TO_SHORT[state.inserterTier]);
+  }
   if (state.customInputs.length > 0) {
     extras.set(
       "ci",
@@ -374,6 +404,7 @@ export function writeUrlState(state: FormState): void {
     !state.belt &&
     !state.strategy &&
     !state.rowLayout &&
+    !state.inserterTier &&
     state.customInputs.length === 0;
 
   // Drop any stale `?...` query string when transitioning to hash-form

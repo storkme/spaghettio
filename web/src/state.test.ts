@@ -30,6 +30,7 @@ function makeState(overrides: Partial<FormState>): FormState {
     belt: null,
     strategy: null,
     rowLayout: null,
+    inserterTier: null,
     customInputs: [],
     ...overrides,
   };
@@ -45,6 +46,7 @@ describe("readUrlState — defaults", () => {
       belt: null,
       strategy: null,
       rowLayout: null,
+      inserterTier: null,
       customInputs: [],
     });
   });
@@ -90,11 +92,12 @@ describe("readUrlState — hash form", () => {
     expect(b).toEqual(c);
   });
 
-  it("decodes extras (strategy, row layout, custom inputs)", () => {
-    setUrl("#/l/acd/5?s=pd&rl=hs&ci=ipr,cpo");
+  it("decodes extras (strategy, row layout, inserter tier, custom inputs)", () => {
+    setUrl("#/l/acd/5?s=pd&rl=hs&it=f&ci=ipr,cpo");
     const s = readUrlState();
     expect(s.strategy).toBe("partitioned-decomposed");
     expect(s.rowLayout).toBe("horizontal-stack");
+    expect(s.inserterTier).toBe("fast");
     expect(s.customInputs).toEqual(["iron-plate", "copper-plate"]);
   });
 
@@ -111,6 +114,7 @@ describe("readUrlState — hash form", () => {
       belt: null,
       strategy: null,
       rowLayout: null,
+      inserterTier: null,
       customInputs: [],
     });
   });
@@ -129,6 +133,16 @@ describe("readUrlState — legacy query string", () => {
   it("normalises the deprecated P1 strategy alias", () => {
     setUrl("?item=advanced-circuit&rate=5&strategy=partitioned-per-consumer");
     expect(readUrlState().strategy).toBe("partitioned-decomposed");
+  });
+
+  it("decodes the full-word `?inserter_tier=` form", () => {
+    setUrl("?item=advanced-circuit&rate=5&inserter_tier=regular");
+    expect(readUrlState().inserterTier).toBe("regular");
+  });
+
+  it("rejects an unknown `?inserter_tier=` value", () => {
+    setUrl("?item=advanced-circuit&rate=5&inserter_tier=bogus");
+    expect(readUrlState().inserterTier).toBeNull();
   });
 });
 
@@ -178,19 +192,32 @@ describe("writeUrlState → readUrlState round-trip", () => {
     expect(back.belt).toBe(state.belt);
   });
 
-  it("survives strategy + row layout + custom inputs", () => {
+  it("survives strategy + row layout + inserter tier + custom inputs", () => {
     const state = makeState({
       item: "processing-unit",
       rate: 2,
       machines: { crafting: "assembling-machine-3" },
       strategy: "partitioned-decomposed",
       rowLayout: "horizontal-stack",
+      inserterTier: "regular",
       customInputs: ["iron-plate", "copper-plate"],
     });
     const back = roundTrip(state);
     expect(back.strategy).toBe("partitioned-decomposed");
     expect(back.rowLayout).toBe("horizontal-stack");
+    expect(back.inserterTier).toBe("regular");
     expect(back.customInputs).toEqual(["iron-plate", "copper-plate"]);
+  });
+
+  it("stack (default) inserter tier is omitted from the URL", () => {
+    const state = makeState({
+      item: "iron-gear-wheel",
+      rate: 7,
+      machines: { crafting: DEFAULT_MACHINES.crafting },
+      inserterTier: null,
+    });
+    writeUrlState(state);
+    expect(window.location.hash).toBe("#/l/igw/7");
   });
 
   it("survives a non-default smelting machine via extras", () => {

@@ -435,6 +435,26 @@ export function renderSidebar(
   });
   targetBody.appendChild(makeField("Belt", beltSelect));
 
+  // Max inserter tier — hard cap on the per-side sizing ladder
+  // (`docs/rfp-inserter-sizing.md`), mirroring the belt-tier control's
+  // semantics: a ceiling the ladder never exceeds, not a target. Default
+  // is Stack (the richest tier, zero research) — capping to Fast or
+  // Regular reproduces the pre-ladder geometry limits on affected sides,
+  // degrading to best-effort + honest warnings rather than failing.
+  const inserterTierSelect = document.createElement("select");
+  inserterTierSelect.className = "sb-select";
+  [
+    ["Stack (default)", ""],
+    ["Fast", "fast"],
+    ["Regular", "regular"],
+  ].forEach(([label, value]) => {
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = label;
+    inserterTierSelect.appendChild(opt);
+  });
+  targetBody.appendChild(makeField("Inserter tier", inserterTierSelect));
+
   // Layout strategy. Phase 0b of `rfp-modular-production` shipped the
   // dropdown; the surviving `partitioned-decomposed` variant produces
   // strictly ≤ Pooled errors on every case in the corpus. The deprecated
@@ -661,6 +681,7 @@ export function renderSidebar(
   if (urlState.belt) beltSelect.value = urlState.belt;
   if (urlState.strategy) strategySelect.value = urlState.strategy;
   if (urlState.rowLayout) rowLayoutSelect.value = urlState.rowLayout;
+  if (urlState.inserterTier) inserterTierSelect.value = urlState.inserterTier;
   // Restore custom inputs from URL
   for (const item of urlState.customInputs) {
     if (itemSet.has(item) && !defaultInputSet.has(item) && !customInputs.includes(item)) {
@@ -731,6 +752,7 @@ export function renderSidebar(
       belt: beltSelect.value || null,
       strategy: strategySelect.value || null,
       rowLayout: rowLayoutSelect.value || null,
+      inserterTier: inserterTierSelect.value || null,
       customInputs,
     });
 
@@ -797,8 +819,9 @@ export function renderSidebar(
       const maxTier = beltSelect.value || undefined;
       const strategy = strategySelect.value || undefined;
       const rowLayout = rowLayoutSelect.value || undefined;
+      const maxInserterTier = inserterTierSelect.value || undefined;
       const onEvent = callbacks.startStreaming();
-      layout = await engine.buildLayoutStreaming(result, maxTier, strategy, rowLayout, onEvent);
+      layout = await engine.buildLayoutStreaming(result, maxTier, strategy, rowLayout, maxInserterTier, onEvent);
     } catch (err) {
       if (gen !== solveGeneration) return;
       const errDiv = document.createElement("div");
@@ -833,6 +856,7 @@ export function renderSidebar(
   beltSelect.addEventListener("change", scheduleAutoSolve);
   strategySelect.addEventListener("change", scheduleAutoSolve);
   rowLayoutSelect.addEventListener("change", scheduleAutoSolve);
+  inserterTierSelect.addEventListener("change", scheduleAutoSolve);
   checkboxes.forEach((cb) => cb.addEventListener("change", scheduleAutoSolve));
 
   runSolve().catch((err) => console.error("runSolve failed:", err));

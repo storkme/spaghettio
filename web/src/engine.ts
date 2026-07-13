@@ -249,23 +249,25 @@ function allProducerMachines(): string[] {
   return machinesCache;
 }
 
-function buildLayout(result: SolverResult, maxBeltTier?: string, strategy?: string, rowLayout?: string): Promise<LayoutResult> {
+function buildLayout(result: SolverResult, maxBeltTier?: string, strategy?: string, rowLayout?: string, maxInserterTier?: string): Promise<LayoutResult> {
   return call<LayoutResult>({
     method: "layout",
     result,
     maxBeltTier: maxBeltTier ?? null,
     strategy: strategy ?? null,
     rowLayout: rowLayout ?? null,
+    maxInserterTier: maxInserterTier ?? null,
   });
 }
 
-function buildLayoutTraced(result: SolverResult, maxBeltTier?: string, strategy?: string, rowLayout?: string): Promise<LayoutResult> {
+function buildLayoutTraced(result: SolverResult, maxBeltTier?: string, strategy?: string, rowLayout?: string, maxInserterTier?: string): Promise<LayoutResult> {
   return call<LayoutResult>({
     method: "layoutTraced",
     result,
     maxBeltTier: maxBeltTier ?? null,
     strategy: strategy ?? null,
     rowLayout: rowLayout ?? null,
+    maxInserterTier: maxInserterTier ?? null,
   });
 }
 
@@ -290,6 +292,7 @@ async function buildLayoutStreaming(
   maxBeltTier: string | undefined,
   strategy: string | undefined,
   rowLayout: string | undefined,
+  maxInserterTier: string | undefined,
   onEvent: (evt: TraceEvent) => void,
 ): Promise<LayoutResult> {
   if (activeStreamingId !== null) {
@@ -321,6 +324,7 @@ async function buildLayoutStreaming(
       maxBeltTier: maxBeltTier ?? null,
       strategy: strategy ?? null,
       rowLayout: rowLayout ?? null,
+      maxInserterTier: maxInserterTier ?? null,
       traceLogs,
     });
   });
