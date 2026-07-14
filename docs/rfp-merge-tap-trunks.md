@@ -978,3 +978,36 @@ Per the CLAUDE.md protocol, plus:
   crude-oil,water. NEXT: the −8 diagnosis hop (lane-planning owner
   of the balancer/trunk column overlap), then the remaining 34
   junctions are the priced STEP-3 fund-vs-park decision.*
+- *2026-07-14 — **−8 diagnosis: owner is the lane_planner column
+  cursor; the fix is a bounded-but-corpus-wide REFLOW. Goal push
+  CLOSES here — every remaining lever priced, decisions to the
+  user.** From the shipped snapshot: the EC family holds 7 lanes
+  (x69-75) but its (12,7) balancer template is width 12 — outputs
+  at dx 0-6, input row dx 0-11 — so the balancer overhangs 5
+  unreserved columns right (x76-80), and trunk:plastic-bar
+  (x76-82) is packed straight through them (full-height, y84-697,
+  crossing the balancer band y499-517). Owner: plan_bus_lanes
+  x-assignment (lane_planner.rs:451-457) — `lane.x = (i+1)+extra`
+  reserves lane COUNT, never balancer WIDTH; the spacer passes
+  only handle perimeter-surplus and fluid adjacency. NOT
+  lane_order (its soft +100 input-tile penalty is the existing,
+  insufficient mitigation — only one family can be rightmost),
+  NOT the partitioner or merge-tap lane assignment (they set the
+  shape, not the packing); a native (12,7) next to a foreign
+  trunk overlaps identically — merge-tap surfaced a general
+  Pooled gap. Priced fix: per-family left/right pad columns from
+  the template's output-tile extent at cursor time. HONEST
+  pricing: widens the bus for every family whose balancer exceeds
+  its lane count → corpus-wide column reflow + intentional golden
+  regeneration; mechanical and deterministic, but a quality
+  tradeoff (bus width vs the 8 contamination errors) and
+  agent-recommendation is NOT to shrink to a
+  widen-only-on-conflict variant (conditional complexity, still
+  reflows the conflicting fixtures). **Close-out decision menu
+  (user)**: (1) fund the reflow unit → utility 46→38, wider bus,
+  golden regen; (2) fund junction-solver capability → the 34,
+  deep program; (3) the 4 dead-ends, undiagnosed, small; (4)
+  publish the trace-gated-retry issue (draft ready); (5) browser
+  eyeball of utility@10/s; (6) inserter-sizing KC5 in-game
+  anchors (still open from that RFP). The /goal push ends with
+  utility@10/s at 46 on main: 175 → 108 → 98 → 46.*
