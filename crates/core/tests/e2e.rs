@@ -841,8 +841,11 @@ fn merge_tap_fallback_fires_with_correct_k_and_priority_taps() {
     drop(guard);
 
     // K correct: the unstampable copper-plate (4, 9) family is retired to K=4
-    // throughput trunks. (Two events are expected — the retry orchestrator
-    // runs the layout pass twice — so match the first.)
+    // throughput trunks. MergeTapFallback is deduped to one event per fallback
+    // family per layout_pass (the two-pass plan_bus_lanes previously
+    // double-emitted; see trace::with_merge_tap_fallback_suppressed). A
+    // junction-blame retry can still re-run layout_pass, so match the first
+    // rather than asserting an exact count.
     let fb = events.iter().find_map(|e| match e {
         TraceEvent::MergeTapFallback { item, shape, k_trunks, .. } if item == "copper-plate" => {
             Some((*shape, *k_trunks))

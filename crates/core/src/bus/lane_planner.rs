@@ -1003,14 +1003,20 @@ fn split_overflowing_lanes(
                 .max()
                 .unwrap_or(0);
 
-            crate::trace::emit(crate::trace::TraceEvent::MergeTapFallback {
-                item: lane.item.clone(),
-                module_id: lane.module_id,
-                shape: (n_producers, n_lanes_with_consumers),
-                k_trunks: k,
-                producers_per_trunk: producer_bins.iter().map(|b| b.len()).collect(),
-                consumers_per_trunk: consumer_bins.iter().map(|b| b.len()).collect(),
-            });
+            // Pass-invariant event, deduped across the two `plan_bus_lanes`
+            // passes by suppressing it on pass 2 (see `trace::
+            // with_merge_tap_fallback_suppressed`); pass 1 always runs and
+            // records it.
+            if !crate::trace::merge_tap_fallback_suppressed() {
+                crate::trace::emit(crate::trace::TraceEvent::MergeTapFallback {
+                    item: lane.item.clone(),
+                    module_id: lane.module_id,
+                    shape: (n_producers, n_lanes_with_consumers),
+                    k_trunks: k,
+                    producers_per_trunk: producer_bins.iter().map(|b| b.len()).collect(),
+                    consumers_per_trunk: consumer_bins.iter().map(|b| b.len()).collect(),
+                });
+            }
 
             for t in 0..k {
                 let n_t = producer_bins[t].len();

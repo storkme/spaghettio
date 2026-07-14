@@ -416,7 +416,12 @@ fn layout_pass(
                 duration_ms: t_place2.elapsed().as_millis() as u64,
             });
             let t_plan2 = web_time::Instant::now();
-            let (nl, nf) = plan_bus_lanes(solver_result, &rs, max_belt_tier, plan_ref, th, opts.merge_tap)?;
+            // Pass 2 is the real plan; pass 1 (always run) already recorded the
+            // pass-invariant `MergeTapFallback` event, so suppress it here to
+            // dedup the double-emit while keeping pass 2's other events.
+            let (nl, nf) = crate::trace::with_merge_tap_fallback_suppressed(|| {
+                plan_bus_lanes(solver_result, &rs, max_belt_tier, plan_ref, th, opts.merge_tap)
+            })?;
             crate::trace::emit(crate::trace::TraceEvent::PhaseTime {
                 phase: "plan_bus_lanes_2".to_string(),
                 duration_ms: t_plan2.elapsed().as_millis() as u64,

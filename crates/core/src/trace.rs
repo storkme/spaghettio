@@ -20,6 +20,15 @@ thread_local! {
     /// junction-blame retries so the speculative re-solves don't pollute
     /// the real event stream with phantom JunctionGrowth* etc events.
     static MUTED: Cell<bool> = const { Cell::new(false) };
+    /// Suppress ONLY `MergeTapFallback` emission within a
+    /// `with_merge_tap_fallback_suppressed` scope. The layout runs
+    /// `plan_bus_lanes` twice (a provisional pass-1 then the real pass-2),
+    /// and the fallback event is pass-invariant (its item/shape/K/bins derive
+    /// from solver counts+rates, not row geometry). Pass 1 always runs and
+    /// records it; pass 2 is wrapped in the suppressor so it isn't recorded
+    /// twice. Unlike `with_muted` this leaves pass 2's other (authoritative)
+    /// events intact. See `bus::layout::layout_pass`.
+    static SUPPRESS_MERGE_TAP_FALLBACK: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Start trace collection for the current thread. Returns a guard that
@@ -102,6 +111,28 @@ pub fn with_muted<F: FnOnce() -> R, R>(f: F) -> R {
     }
     let prev = MUTED.with(|m| m.replace(true));
     let _guard = MuteGuard(prev);
+    f()
+}
+
+/// True when `MergeTapFallback` emission is suppressed on this thread. Emit
+/// sites for that event gate on `!merge_tap_fallback_suppressed()`.
+pub fn merge_tap_fallback_suppressed() -> bool {
+    SUPPRESS_MERGE_TAP_FALLBACK.with(|c| c.get())
+}
+
+/// Run `f` with `MergeTapFallback` emission suppressed on this thread — used
+/// to dedup the two-pass `plan_bus_lanes` double-emit (pass 1 records the
+/// pass-invariant event; pass 2 is wrapped here). RAII-restored and
+/// panic-safe, mirroring `with_muted`.
+pub fn with_merge_tap_fallback_suppressed<F: FnOnce() -> R, R>(f: F) -> R {
+    struct Guard(bool);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            SUPPRESS_MERGE_TAP_FALLBACK.with(|c| c.set(self.0));
+        }
+    }
+    let prev = SUPPRESS_MERGE_TAP_FALLBACK.with(|c| c.replace(true));
+    let _guard = Guard(prev);
     f()
 }
 
