@@ -34,7 +34,10 @@ use crate::bus::junction_solver::{
     self, JunctionSolution, JunctionStrategy, JunctionStrategyContext,
 };
 use crate::bus::placer::RowSpan;
-use crate::common::{belt_entity_for_rate, machine_dims, machine_tiles, ug_max_reach};
+use crate::common::{
+    belt_entity_for_rate, machine_dims, machine_tiles, ug_max_reach, LANE_LEFT,
+    MERGE_TAP_SEGMENT_TAG,
+};
 use crate::models::{EntityDirection, LayoutRegion, PlacedEntity, SolverResult};
 // sat.rs is retained in the tree as a standalone library; route_bus_ghost
 // no longer uses it after the per-tile "unresolved" rewrite. The junction
@@ -106,6 +109,39 @@ struct BeltSpec {
     /// y=292 was the motivating bug). `None` for specs that don't have
     /// a single owning trunk (feeders into a balancer input).
     lane_trunk_col: Option<i32>,
+}
+
+/// A merge-and-tap trunk lane taps a shared trunk with PRIORITY splitters
+/// (RFP `docs/rfp-merge-tap-trunks.md` D4) — distinct from the generic
+/// even-split `tapoff:` splitters on ordinary lanes, which stay untouched
+/// (KC2). Identified by the lane's family carrying `merge_tap`.
+fn lane_is_merge_tap(lane: &BusLane, families: &[LaneFamily]) -> bool {
+    lane.family_id
+        .and_then(|fid| families.get(fid))
+        .is_some_and(|f| f.merge_tap)
+}
+
+/// Per-tap consumer demand (full-belt items/s) keyed by the trunk's tap-off
+/// `y`, for the priority-tap rate law: the feed branch draws
+/// `min(arriving, demand)` (`loop_priority_rate`) and the surplus flows on.
+/// Mirrors `find_tap_off_ys`'s solid-lane branch exactly so the keys line up
+/// with `lane.tap_off_ys`; merge-tap trunks are always solid and non-HS by
+/// the fallback guard, so the fluid / HS cases are intentionally absent.
+fn merge_tap_consumer_demands(lane: &BusLane, row_spans: &[RowSpan]) -> FxHashMap<i32, f64> {
+    let mut demands: FxHashMap<i32, f64> = FxHashMap::default();
+    for &ri in &lane.consumer_rows {
+        let Some(rs) = row_spans.get(ri) else {
+            continue;
+        };
+        let solid_inputs: Vec<_> = rs.spec.inputs.iter().filter(|f| !f.is_fluid).collect();
+        for (input_idx, inp) in solid_inputs.iter().enumerate() {
+            if inp.item == lane.item && input_idx < rs.input_belt_y.len() {
+                demands.insert(rs.input_belt_y[input_idx], inp.rate * rs.machine_count as f64);
+                break;
+            }
+        }
+    }
+    demands
 }
 
 /// Route all bus belts using the ghost A* approach.
@@ -196,12 +232,25 @@ pub fn route_bus_ghost(
         if lane.tap_off_ys.len() > 1 {
             let splitter_name = splitter_for_belt(belt_name);
             let tapoff_seg_id = Some(format!("tapoff:{}", lane.item));
+            // Merge-and-tap trunks tap with PRIORITY splitters (RFP D4):
+            // `output_priority` points at the east feed branch (the splitter's
+            // south-facing second tile, which is "left" for a South splitter
+            // under the left-hand-vector convention `priority_output_tile`
+            // validates), and `loop_priority_rate` caps the feed at the
+            // consumer's demand so consumers are fed first and the surplus flows
+            // on. Ordinary `tapoff:` lanes stay even-split (KC2).
+            let is_merge_tap = lane_is_merge_tap(lane, families);
+            let tap_demands = if is_merge_tap {
+                merge_tap_consumer_demands(lane, row_spans)
+            } else {
+                FxHashMap::default()
+            };
             for &tap_y in &lane.tap_off_ys {
                 if Some(tap_y) == last_tap_y {
                     continue;
                 }
-                // Splitter at (x, tap_y-1), East belt at (x+1, tap_y-1)
-                // Trunk-continue belt at (x, tap_y)
+                // Splitter at (x, tap_y-1); trunk-continue belt at (x, tap_y);
+                // east feed belt starts at (x+1, tap_y) (the tap spec below).
                 entities.push(PlacedEntity {
                     name: splitter_name.to_string(),
                     x,
@@ -210,6 +259,12 @@ pub fn route_bus_ghost(
                     carries: Some(lane.item.clone()),
                     segment_id: tapoff_seg_id.clone(),
                     rate: Some(lane.rate),
+                    output_priority: is_merge_tap.then(|| LANE_LEFT.to_string()),
+                    loop_priority_rate: if is_merge_tap {
+                        tap_demands.get(&tap_y).copied()
+                    } else {
+                        None
+                    },
                     ..Default::default()
                 });
                 entities.push(PlacedEntity {
@@ -1266,14 +1321,24 @@ pub fn route_bus_ghost(
 
         // Tap-off specs
         if has_consumers {
+            let is_merge_tap = lane_is_merge_tap(lane, families);
             for &tap_y in &lane.tap_off_ys {
                 let is_last = Some(tap_y) == last_tap_y;
-                // Non-last: start from (x+1, tap_y) (splitter right output)
+                // Non-last: start from (x+1, tap_y) (splitter feed output)
                 // Last: start from (x, tap_y) (trunk terminates here)
                 let start_x = if is_last { x } else { x + 1 };
                 // Goal: right edge of the bus
                 let goal_x = bw - 1;
-                let tap_key = format!("tap:{}:{}:{}", lane.item, x, tap_y);
+                // A merge-tap non-last feed branch carries MERGE_TAP_SEGMENT_TAG
+                // in its segment (rendered as "ghost:{key}") so the priority-tap
+                // validator and the lane-rate walkers recognise the feed half of
+                // the priority splitter above (RFP D4). The last tap has no
+                // splitter (the trunk terminates into it), so it stays untagged.
+                let tap_key = if is_merge_tap && !is_last {
+                    format!("tap{}{}:{}:{}", MERGE_TAP_SEGMENT_TAG, lane.item, x, tap_y)
+                } else {
+                    format!("tap:{}:{}:{}", lane.item, x, tap_y)
+                };
                 specs.push(BeltSpec {
                     key: tap_key,
                     start: (start_x, tap_y),
