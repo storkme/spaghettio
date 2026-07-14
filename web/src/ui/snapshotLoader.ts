@@ -35,6 +35,9 @@ export interface SnapshotValidationIssue {
   message: string;
   x?: number;
   y?: number;
+  /** Mirrors Rust `IssueDetail` (serde skips it when absent, so old
+   *  snapshots simply lack the key). */
+  detail?: { delivered: number; needed: number };
 }
 
 export interface SnapshotTrace {

@@ -457,7 +457,8 @@ pub fn check_inserter_item_throughput(
                     ),
                     e.x,
                     e.y,
-                ));
+                )
+                .with_detail(avail, required));
             }
         }
 
@@ -480,7 +481,8 @@ pub fn check_inserter_item_throughput(
                         ),
                         e.x,
                         e.y,
-                    ));
+                    )
+                    .with_detail(avail, required));
                 }
             }
         }
@@ -1369,6 +1371,15 @@ mod tests {
         assert_eq!(warns.len(), 1, "{issues:?}");
         assert!(warns[0].message.contains("product"));
         assert!(warns[0].message.contains("out —"));
+        // RFP validation-explainability D1: structured pair mirrors the
+        // check's own comparison — needed is the 5.0/s product demand, and
+        // delivered is what the single regular inserter moves (< needed).
+        let detail = warns[0]
+            .detail
+            .as_ref()
+            .expect("inserter-item-throughput must carry IssueDetail");
+        assert!((detail.needed - 5.0).abs() < 1e-9, "{detail:?}");
+        assert!(detail.delivered < detail.needed, "{detail:?}");
     }
 
     /// Same partition-sibling scenario as

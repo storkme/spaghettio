@@ -59,6 +59,24 @@ impl Severity {
     }
 }
 
+/// Machine-readable payload for rate-shaped issues. The prose `message`
+/// already states these numbers; carrying them structurally lets the web
+/// UI compute severity ratios (starvation heatmap) without parsing text.
+/// See `docs/rfp-validation-explainability.md` (D1). Cause attribution
+/// deliberately does NOT live here — causes are stamp-time facts and ride
+/// the trace-event side (D2).
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct IssueDetail {
+    /// Rate actually delivered/moved, in items per second.
+    pub delivered: f64,
+    /// Rate the machine needs at the compared boundary (per-inserter for
+    /// input-rate-delivery, per-item totals for inserter-item-throughput —
+    /// always the pair the check itself compared).
+    pub needed: f64,
+}
+
 /// A single validation finding, mirroring Python's `ValidationIssue` dataclass.
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
@@ -71,6 +89,10 @@ pub struct ValidationIssue {
     /// Optional grid position associated with the issue.
     pub x: Option<i32>,
     pub y: Option<i32>,
+    /// Structured numbers for rate-shaped issues; `None` for all others.
+    /// `serde(default)` keeps old `.fls` snapshots readable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<IssueDetail>,
 }
 
 impl ValidationIssue {
@@ -82,6 +104,7 @@ impl ValidationIssue {
             message: message.into(),
             x: None,
             y: None,
+            detail: None,
         }
     }
 
@@ -99,7 +122,15 @@ impl ValidationIssue {
             message: message.into(),
             x: Some(x),
             y: Some(y),
+            detail: None,
         }
+    }
+
+    /// Attach structured delivered/needed rates (builder style). The pair
+    /// must be exactly what the emitting check compared — not re-derived.
+    pub fn with_detail(mut self, delivered: f64, needed: f64) -> Self {
+        self.detail = Some(IssueDetail { delivered, needed });
+        self
     }
 }
 

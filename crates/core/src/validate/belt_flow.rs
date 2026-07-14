@@ -3320,7 +3320,10 @@ pub fn check_input_rate_delivery(
                 ),
                 ins.pickup_pos.0,
                 ins.pickup_pos.1,
-            ));
+            )
+            // The check compares per-inserter, so that's the structured pair
+            // (the prose prints the machine-total `required_rate` instead).
+            .with_detail(available, per_inserter_rate));
         }
     }
 
@@ -4582,6 +4585,17 @@ mod tests {
         assert!(!issues.is_empty(), "expected warning for insufficient rate");
         assert!(issues.iter().any(|i| i.category == "input-rate-delivery"),
             "expected input-rate-delivery issue, got: {:?}", issues);
+        // RFP validation-explainability D1: the warning carries the exact
+        // compared pair as structured numbers (delivered < needed).
+        let detail = issues
+            .iter()
+            .find(|i| i.category == "input-rate-delivery")
+            .and_then(|i| i.detail.as_ref())
+            .expect("input-rate-delivery must carry IssueDetail");
+        assert!(
+            detail.delivered < detail.needed,
+            "detail must reflect the failing comparison: {detail:?}"
+        );
     }
 
     // ---------------------------------------------------------------------------

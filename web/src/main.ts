@@ -18,6 +18,7 @@ import { urlHasGeneratorState } from "./state";
 import type { SolverResult, LayoutResult, PlacedEntity, ValidationIssue, SatImprovement } from "./engine";
 import { renderTraceOverlay, getTracePhases, eventsUpToPhase, type TraceEvent, type PhaseSnapshot } from "./renderer/traceOverlay";
 import { renderValidationOverlay } from "./renderer/validationOverlay";
+import { renderStarvationHeatmap } from "./renderer/heatmapOverlay";
 import { renderRegionOverlayDetailed, type RegionOverlayItem } from "./renderer/regionOverlay";
 import { renderJunctionZoneOverlay } from "./renderer/junctionZoneOverlay";
 import { createSatZoneOverlay } from "./renderer/satZoneOverlay";
@@ -121,7 +122,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
 
   // --- Modules ---
   const overlayControls = createOverlayPanel(container);
-  const { debugCb, colorCb, regionsCb, soloRegionsCb, ghostTilesCb, traceOverlayCb } = overlayControls;
+  const { debugCb, colorCb, heatmapCb, regionsCb, soloRegionsCb, ghostTilesCb, traceOverlayCb } = overlayControls;
   const retryPanel = createRetryPanel(container);
   // Sync the item-coloring flag with the persisted checkbox state so
   // a user who turned colours off stays off across reloads.
@@ -481,6 +482,8 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
 
   let valOverlayLayer: Container | null = null;
   let cachedValidationIssues: ValidationIssue[] | null = null;
+  let heatmapLayer: Container | null = null;
+  let lastHeatmapIssues: ValidationIssue[] = [];
   let validationInFlightFor: LayoutResult | null = null;
 
   // Top-left static badge that surfaces the issue count whenever a layout
@@ -601,6 +604,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     const allIssues = [...(cachedValidationIssues ?? []), ...layoutIssues];
     sidebarCtrl?.updateValidation(allIssues, panToTile);
     updateValidationBadge(allIssues);
+    updateHeatmapOverlay(allIssues);
 
     if (!lastLayout || allIssues.length === 0) {
       requestRender();
@@ -614,6 +618,26 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       },
     );
     valOverlayLayer = result.layer;
+    requestRender();
+  }
+
+  /** Starvation heatmap (RFP validation-explainability Phase 1): tint
+   *  machines by the structured delivered/needed ratio on rate-shaped
+   *  issues. Rebuilt whenever validation results or the toggle change;
+   *  `lastHeatmapIssues` remembers the issue set so the toggle listener
+   *  can rebuild without re-running validation. */
+  function updateHeatmapOverlay(issues?: ValidationIssue[]): void {
+    if (issues) lastHeatmapIssues = issues;
+    if (heatmapLayer) {
+      entityLayer.removeChild(heatmapLayer);
+      heatmapLayer.destroy({ children: true });
+      heatmapLayer = null;
+    }
+    if (!heatmapCb.checked || !lastLayout || lastHeatmapIssues.length === 0) {
+      requestRender();
+      return;
+    }
+    heatmapLayer = renderStarvationHeatmap(lastHeatmapIssues, lastLayout.entities, entityLayer);
     requestRender();
   }
 
@@ -1396,6 +1420,9 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       if (lastLayout) {
         renderLayoutOnCanvas(lastLayout);
       }
+    });
+    heatmapCb.addEventListener("change", () => {
+      updateHeatmapOverlay();
     });
     regionsCb.addEventListener("change", () => {
       updateRegionOverlay();

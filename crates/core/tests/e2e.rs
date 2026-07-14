@@ -99,13 +99,7 @@ fn dump_partial_snapshot(
     let dir = snapshot_dir();
     std::fs::create_dir_all(&dir).ok();
 
-    let error_issue = ValidationIssue {
-        severity: Severity::Error,
-        category: "pipeline".into(),
-        message: error_msg.into(),
-        x: None,
-        y: None,
-    };
+    let error_issue = ValidationIssue::new(Severity::Error, "pipeline", error_msg);
 
     let snapshot = LayoutSnapshot::from_run(
         SnapshotSource::Test,

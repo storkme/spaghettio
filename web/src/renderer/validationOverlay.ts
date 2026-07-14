@@ -7,6 +7,9 @@ export interface ValidationIssue {
   message: string;
   x?: number;
   y?: number;
+  /** Structured delivered/needed rates for rate-shaped issues (mirrors
+   *  Rust `IssueDetail`; absent for all other categories). */
+  detail?: { delivered: number; needed: number };
 }
 
 const COLORS: Record<string, number> = {
