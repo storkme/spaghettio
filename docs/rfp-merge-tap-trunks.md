@@ -795,3 +795,32 @@ Per the CLAUDE.md protocol, plus:
   unchanged, movement = STOP), untraced unit/region movement
   listed and explicitly re-blessed (that movement IS the fix),
   purity regression test traced==untraced where a cap fires.*
+- *2026-07-14 — **STEP B preserved on merge-tap/step-b-hold
+  @ add8754; package #3 LANDED (0f21941) — the retry is
+  observation-independent.** Hold branch: is_foreign encoded as
+  family-inequality (ratified deviation — byte-equivalent to the
+  column predicate per the v2 bijection, self-documenting, keeps
+  the threading live; caveat for the re-land: equivalence holds
+  only while merge-tap stamps one family per trunk column). #3:
+  cap coords carried as data (GhostRouteResult.cap_coords,
+  captured at the solve_crossing None branch) through
+  layout_pass's return; JunctionGrowthCapped still emitted for the
+  debugger but no longer control flow; the collector's only
+  remaining retry-path role is replay/truncate for streaming
+  consumers. Gate results: 44 pre-existing e2e byte-identical
+  (traced path unchanged, as designed), 661 lib green, clippy
+  clean; the behavior change is confined to the UNTRACED path
+  (wasm plain layout()), which now retries identically to the
+  traced one. **Purity-test surprise, resolved**: a public-API
+  test on EC@35s passed pre-fix too — candidate SELECTION masks
+  the impurity there (native wins on error count regardless), so
+  the test was rewritten to drive MergeTapCandidate::produce
+  directly; verified discriminating by checkout-swap (pre-fix
+  untraced 6077 vs traced 6198 entities; post-fix identical).
+  Retry confirmed NOT dead code on main: fires traced on
+  processing_unit_2s_am2 (1 cap), partition scoreboard (2),
+  EC@40s (8). Issue draft updated with the candidate-level
+  reproduction (public API masks on plain main); publication
+  still awaits user approval. NEXT under the goal: diagnose the
+  retry-contamination bug (pass-2 copper-onto-iron) — now
+  uniformly reproducible — then the STEP B re-land decision.*
