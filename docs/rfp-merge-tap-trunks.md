@@ -611,3 +611,28 @@ Per the CLAUDE.md protocol, plus:
   real priority fields") — the tag mechanism is now measured
   fragile in the wild. Expected: 61 → near-zero; honest floor
   → ~43-47.*
+- *2026-07-14 — **#1b LANDED (618ee0a): 61 → 51, and the residual
+  is a THIRD distinct mechanism, not detection.** Both walkers now
+  read the entity's `output_priority` via the shared
+  `priority_output_tile` (made pub(crate)); tag-sniff demoted to a
+  debug-asserted fallback. Four pre-existing priority-share tests
+  modelled tag-only splitters and tripped the assert — the fallback
+  firing on synthetic fixtures, exactly as predicted — fixed to
+  model real splitters; a new no-tag guard test proves the law
+  fires from `output_priority` alone. Gates: 743/0, byte-stable,
+  clippy clean. **Instrumented finding (one trunk, reverted): the
+  x=90 trunk now DEPLETES correctly (34.45/s → 6.0/s), so #1b
+  works; and injection is a healthy 333/s at 0.62/inserter, so the
+  effective_rows aggregate hypothesis is DEAD.** The remaining 51
+  (all ~29.9/s) are a downstream re-convergence: flow re-gains
+  6 → 14.93 → 44.86/s at a crossing (seg=crossing:85:472), split
+  15.0 left / 29.86 RIGHT — one lane over the 22.5 express cap on
+  near-saturated trunks (each iron trunk ~41/45). The planned
+  21-chain terminus≈2.5 test was correctly NOT written — its
+  prediction was wrong. **#1c funded, diagnosis-only**: classify
+  the 51 — (A) walker conflating surface+UG flows at shared
+  crossing tiles (UGs cannot mix underground → pure attribution
+  artifact) vs (B) genuine sideload merge concentrating one lane
+  (real layout lane-balancing gap → folds into STEP-3) vs (C)
+  other. Entity-level snapshot evidence at ≥3 sites, count per
+  class, priced recommendations; no fixes in-package.*
