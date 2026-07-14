@@ -755,3 +755,43 @@ Per the CLAUDE.md protocol, plus:
   win). STOP if the mechanism implicates junction-solver internals
   or A* cost shaping. Tree holds column predicate + inert family
   threading, uncommitted; FAMPROBE to be stripped on next edit.*
+- *2026-07-14 — **hop-geometry spike verdict: NOT the hop — a
+  pre-existing TRACE-GATED LAYOUT RETRY mediates the EC@35s
+  regression. STEP B held on a branch; package #3 (retry
+  determinism) funded.** Deterministic isolation (5 configurations,
+  fresh caches, entity-level): build_bus_layout with IDENTICAL args
+  yields 0 new errors WITHOUT a trace guard and the exact 3 errors
+  WITH one — trace guard necessary and sufficient; SAT budget ruled
+  out (traced fails at 25ms and 2000ms, untraced passes at 1ms).
+  Root cause (verified in code by both agent and lead):
+  run_layout_with_retry_inner (layout.rs:158) scrapes
+  JunctionGrowthCapped events from the thread-local trace collector
+  (peek_events_since :179) to build cap_coords → retry_gaps → a
+  second placement pass — and peek_events_since returns events only
+  while tracing is active, so **retries fire only when observed;
+  build_bus_layout is not a pure function of its arguments**.
+  STEP B's bridge creates a junction that caps in pass 1; under
+  trace the retry re-places the bus (iron-ore trunk shifts to x=20;
+  a new ghost:feeder:copper-plate:3:7 dumps copper onto the iron
+  trunk at (2,7) → belt-item-isolation; (20,46) junction
+  unresolvable; (22,46) over-cap) — trading 4 dead-ends + 88/35
+  warnings for 3 structural errors. Both the e2e harness AND the
+  web app trace (run_e2e_inner; build_bus_layout_streaming guard at
+  layout.rs:747), so both see the retried layout — not a test
+  artifact; only bare library calls get pass 1. The spike's
+  geometric premise (adjacent-columns hypothesis, hop diff) is
+  moot — observability state was the lever, not geometry. TWO
+  problems, both above the bridge: (1) the trace-gated retry
+  (latent determinism bug, pre-existing, affects any bare-library
+  measurement — GitHub issue drafted, filing awaits user approval;
+  draft in session scratchpad); (2) the retry's pass-2 re-placement
+  contaminates (copper onto iron trunk) — diagnosed AFTER (1)
+  lands, when it reproduces uniformly. **Ruling: STEP B + family
+  threading preserved on local branch merge-tap/step-b-hold
+  (98→46 forfeited from main until the retry layers are fixed);
+  package #3 funded** — thread cap coords through layout_pass's
+  return value (trace event kept for the debugger, dropped as
+  control flow); gates: e2e byte-identical (traced behavior
+  unchanged, movement = STOP), untraced unit/region movement
+  listed and explicitly re-blessed (that movement IS the fix),
+  purity regression test traced==untraced where a cap fires.*
