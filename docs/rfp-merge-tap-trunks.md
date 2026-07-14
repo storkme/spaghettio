@@ -846,3 +846,36 @@ Per the CLAUDE.md protocol, plus:
   output traced==untraced) needs merge-tap to win selection —
   deferred to the STEP B re-land. Gates: 662 lib + 45 e2e green,
   nothing moved, clippy clean.*
+- *2026-07-14 — **RECORD CORRECTION: the "retry-contamination"
+  framing is FALSIFIED — the retry is a 171→3 improvement; the 3
+  residuals are pre-existing merge-tap bugs, and STEP B is
+  SOUND.** Scratch branch (main + #3 + STEP B), layout_pass called
+  directly, validated error counts across 4 configs: with STEP B —
+  pass 1 (no retry) 171 errors, pass 2 (retry) 3; without STEP B —
+  173 / 5. The retry does exactly its job (resolves 14
+  unresolved-junction + ~155 cascade lane-throughput down to 1+1);
+  earlier entries describing it as "trading dead-ends for 3
+  structural errors" measured only the e2e new-category guard, not
+  validated totals — pass 1 was never clean. Decisive:
+  ghost:feeder:copper-plate:3:7 is BYTE-IDENTICAL in pass 1 and
+  pass 2, present in all four configs — the belt-item-isolation at
+  (3,7)→(2,7) is independent of BOTH the retry and STEP B. What it
+  actually is: a malformed west→south corner at a feeder ENDPOINT
+  wedged in a 1-tile slot between the iron-ore trunk (x1-2) and
+  copper-ore trunk (x4-6): the UG exit at (3,7) faces WEST and
+  emits copper onto the iron trunk at (2,7) instead of turning
+  south into the feeder's own continuation (3,8..3,28). Not a
+  crossing (STEP B's is_foreign correctly removes 2 other
+  residuals, 5→3) but an endpoint. The other residual pair
+  (20,46)+(22,46) is one junction the +1-gap retry didn't fully
+  resolve. **Consequence: the STEP B re-land path is fix the two
+  pre-existing bugs → merge-tap EC@35s goes clean → e2e guard
+  passes → utility lands at 46 on main.** Diagnosis round funded
+  (all diagnosis-only, scratch branch): (1) the (3,7) corner —
+  rendering vs spec-slot vs A*-path, bounded-vs-STEP-3 verdict;
+  (2) the (20,46) junction — same shape as utility's ~34
+  components, or resolvable by an iterated retry (cheap pass-3
+  experiment)?; (3) goal connection: classify utility@10/s's 46
+  residual for both signatures — if the endpoint bug fires there,
+  fixing it moves the goal metric directly. Stock-take follows
+  with everything priced.*
