@@ -147,6 +147,69 @@ fn merge_tap_consumer_demands(lane: &BusLane, row_spans: &[RowSpan]) -> FxHashMa
     demands
 }
 
+/// Reroute a FEEDER path to pass UNDER any foreign trunk column it crosses,
+/// instead of surface-crossing and sideloading onto it (the B2.4 EC@35 bug:
+/// copper feeders sideloaded onto the iron-ore trunk at x=20, concentrating a
+/// foreign lane to ~50/belt). A "foreign" tile is a pre-stamped trunk
+/// (`trunk_tile_items`) carrying a different item or module than this feeder.
+/// Dropping the foreign tiles turns them into a jump that `render_path`
+/// materialises as an underground hop (dive at the tile before, surface at the
+/// tile after); and because crossings are derived from the path, the dropped
+/// tiles never register as a crossing, so the (imbalanced, refused) crossing
+/// zone never forms. Prevention over cure — mirrors the output merger's
+/// `blocked_columns` UG-hop (RFP docs/rfp-merge-tap-trunks.md D4).
+///
+/// Only bridges a contiguous foreign run when the kept tiles on both sides are
+/// collinear with it (a straight perpendicular crossing) and the hop fits the
+/// belt tier's `reach` (gap under ≤ reach); otherwise the run is left on the
+/// surface for the crossing solver, exactly as before.
+fn bridge_feeder_under_foreign_trunks(
+    path: &[(i32, i32)],
+    spec_item: &str,
+    spec_module: u32,
+    trunk_tile_items: &FxHashMap<(i32, i32), (String, u32)>,
+    reach: i32,
+) -> Vec<(i32, i32)> {
+    let is_foreign = |t: &(i32, i32)| {
+        trunk_tile_items
+            .get(t)
+            .is_some_and(|(it, m)| it != spec_item || *m != spec_module)
+    };
+    let mut out: Vec<(i32, i32)> = Vec::with_capacity(path.len());
+    let mut i = 0;
+    while i < path.len() {
+        if !is_foreign(&path[i]) {
+            out.push(path[i]);
+            i += 1;
+            continue;
+        }
+        // Maximal contiguous foreign run [start, j).
+        let start = i;
+        let mut j = i;
+        while j < path.len() && is_foreign(&path[j]) {
+            j += 1;
+        }
+        let before = (start > 0).then(|| path[start - 1]);
+        let after = (j < path.len()).then(|| path[j]);
+        let bridgeable = match (before, after) {
+            (Some(b), Some(a)) => {
+                let straight = b.0 == a.0 || b.1 == a.1;
+                let hop = (a.0 - b.0).abs() + (a.1 - b.1).abs();
+                straight && (2..=reach + 1).contains(&hop)
+            }
+            _ => false,
+        };
+        if bridgeable {
+            // Drop the run: `render_path` bridges `before` -> `after` as a UG hop.
+            i = j;
+        } else {
+            out.extend_from_slice(&path[start..j]);
+            i = j;
+        }
+    }
+    out
+}
+
 /// Route all bus belts using the ghost A* approach.
 #[allow(clippy::too_many_arguments)]
 pub fn route_bus_ghost(
@@ -1275,6 +1338,12 @@ pub fn route_bus_ghost(
     // Step 4: Build connecting-belt spec list
     // -------------------------------------------------------------------------
     let mut specs: Vec<BeltSpec> = Vec::new();
+    // Feeder spec keys belonging to merge-tap families. The foreign-trunk
+    // self-bridge (B2.4) is scoped to these: it is the merge-tap fallback that
+    // routes feeders across foreign trunks, and gating on this set keeps the
+    // transform inert for the default (flag-off) corpus — a general feeder
+    // contract regressed golden layouts and produced unpaired UGs elsewhere.
+    let mut merge_tap_feeder_keys: FxHashSet<String> = FxHashSet::default();
 
     // Helper: compute the row-exit origin tile for a ret/feeder spec based on
     // the producer row's orientation. For westward rows (intermediate
@@ -1590,6 +1659,9 @@ pub fn route_bus_ghost(
                                 let input_y = origin_y;
                                 let feeder_key =
                                     format!("feeder:{}:{}:{}", lane.item, input_x, out_y);
+                                if fam.merge_tap {
+                                    merge_tap_feeder_keys.insert(feeder_key.clone());
+                                }
                                 // Feeders walk from the row exit to a
                                 // balancer input tile. exit_dir aims at the
                                 // balancer — South when the input is below
@@ -1914,7 +1986,21 @@ pub fn route_bus_ghost(
     }
 
     for spec in ordered_specs.iter().copied() {
-        if let Some(path) = routed_paths.get(&spec.key).cloned() {
+        if let Some(mut path) = routed_paths.get(&spec.key).cloned() {
+            // Merge-tap feeders must pass UNDER foreign trunk columns, not
+            // surface-cross and sideload onto them (B2.4). Rerouting the path to
+            // skip those tiles makes `render_path` UG-hop them and removes them
+            // from the crossing set below, so no (refused) crossing zone ever
+            // forms. Scoped to merge-tap feeders to stay inert flag-off.
+            if merge_tap_feeder_keys.contains(&spec.key) {
+                path = bridge_feeder_under_foreign_trunks(
+                    &path,
+                    &spec.item,
+                    spec.module_id,
+                    &trunk_tile_items,
+                    ug_max_reach(spec.belt_name) as i32,
+                );
+            }
             // Recompute crossings from the final state of existing_belts so
             // they reflect the converged routing order.
             let crossings: Vec<(i32, i32)> = path
