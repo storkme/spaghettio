@@ -446,3 +446,29 @@ Per the CLAUDE.md protocol, plus:
   loop skips Template/RowEntity but not Permanent; beyond the
   one-liner), and the MergeTapFallback double-emit (plan_bus_lanes
   apparently runs twice; cosmetic).*
+- *2026-07-14 — **the decisive measurement: utility@10/s (the
+  motivating cell) HEALS under the bridged fallback.** Flag-on vs
+  true flag-off baseline: total errors 175→80, belt-dead-ends 23→1
+  (KC3's target; baseline drift from the recorded 35 is
+  version-skew, same cascade shape), lane-throughput 115→25,
+  reachability warnings 755→226. The consumer-side mechanism does
+  NOT bite utility (zero row belt-in over-cap) — and EC@35's
+  72/belt row reading is LARGELY AN ATTRIBUTION ARTIFACT:
+  effective_rows clones the aggregate spec count (35) onto every
+  physical row, so per-row demand computed from it overstates ~9×;
+  the priority taps carry the correct ~6/s per-row shares. Honest
+  regressions on utility: item-isolation 6→19 and junctions 27→31,
+  both the residual adjacent-terminating foreign-sideload class the
+  pass-through bridge doesn't cover — bounded, named Phase 2 items
+  alongside the attribution artifact. Verdict: the fallback wins on
+  utility-class cells and loses only on EC-class cells whose
+  flag-off residue is 4 cheap dead-ends → **Phase 1 closes via
+  (b)-gating**, and the architecturally native gate is the
+  decomposition-search candidate pattern (run merge-tap as a
+  DecompositionCandidate for solves with unstampable shapes, score
+  against the native path, pick the winner — measured selection,
+  no heuristic). Feasibility check on scoring semantics dispatched;
+  cumulative Phase-1 LOC (~767) crosses the ~800 trigger with the
+  gate — reviewed and justified: the bake-shapes interim cannot
+  cover (8,19)-class primes, and every increment has been
+  checkpoint-verified.*
