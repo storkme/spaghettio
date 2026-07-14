@@ -824,3 +824,25 @@ Per the CLAUDE.md protocol, plus:
   still awaits user approval. NEXT under the goal: diagnose the
   retry-contamination bug (pass-2 copper-onto-iron) — now
   uniformly reproducible — then the STEP B re-land decision.*
+- *2026-07-14 — **neutrality mechanism named (case b: selection
+  discards the retried candidate) + mechanism test landed
+  (6d31f6c).** Win probe on EC@35s traced: native 6199 entities
+  accepted=false wins over merge-tap 6198 accepted=TRUE via the
+  validation-error-count tiebreak (decomposition_search.rs:707-723,
+  ties favor native) — the merge-tap candidate runs its full retry
+  (6077→6198, so pass 2 is NOT byte-identical and the gaps are NOT
+  no-ops) and is then discarded wholesale. This is precisely why
+  STEP B produced the first output-changing cap at the public API:
+  STEP B flips merge-tap to the winner, so the retry's effect
+  reaches the final output. Test coverage now: (i)
+  cap_detection_and_retry_gaps_are_trace_independent (lib,
+  6d31f6c) — the whole retry-trigger path untraced; unwritable
+  pre-#3 (the channel didn't exist); (ii)
+  layout_retry_is_trace_independent (e2e, 0f21941) —
+  candidate-level end-to-end, checkout-swap-verified
+  discriminating. Cap detection IS exercisable on plain main (the
+  EC@35s merge-tap candidate caps 11×), so neither test needed
+  STEP B; only the PUBLIC-API end-to-end variant (final selected
+  output traced==untraced) needs merge-tap to win selection —
+  deferred to the STEP B re-land. Gates: 662 lib + 45 e2e green,
+  nothing moved, clippy clean.*
