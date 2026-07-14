@@ -499,3 +499,36 @@ Per the CLAUDE.md protocol, plus:
   double-emit. Phase 2 (the default flip for ALL split families +
   balancer retirement + the area harvest) remains gated on that
   quality work per the original phasing.*
+- *2026-07-14 — **Phase 2 checkpoints 1–2a complete; the
+  proportionality gate fired and the flip is now PRICED.** CP1: the
+  19 missing-balancer warnings were phantoms from a second emitter
+  that never learned merge-tap families exist — 3-line exemption
+  (e4e1207), purity-proven (62 errors byte-unchanged), and a flip
+  prerequisite (they pinned merge-tap layouts accepted=false). CP2a:
+  the 11 copper→iron item-mixing errors were a TRAPPED-GAP bridge
+  bug — two UG hops colliding on a kept tile inside the foreign
+  block, render_path silently dropping the second, leaving a UG
+  output that sideloaded copper onto iron AND severing the feeder.
+  Fixed (b8b955a): coalesced single-span bridging + a
+  self-validating guard (FeederBridgeUnbridgeable → visible
+  dead-end; silent half-bridges structurally impossible). Honest
+  accounting: utility@10/s 62→64 errors — the contamination was
+  MASKING genuinely-unreachable trunks. **The falsified cheap
+  lever**: sorting merge-tap trunks eastmost (producer-adjacent) as
+  a post-hoc placement rule measured 62→1024 — the existing lane
+  order jointly satisfies fluid anchor spacing, crossing
+  minimisation, and throughput distribution, and a naive sort
+  violates all three; reverted after one attempt per the
+  proportionality rule. **UNIFIED ROOT CAUSE, CONFIRMED**: the
+  ordering optimiser is blind to merge-tap feeders — one cause
+  drives the 32 unresolved junctions AND the feeder failures. The
+  proper fix is merge-tap-aware lane ordering INSIDE
+  score_lane_ordering (shared scorer, multi-objective, corpus
+  re-bless risk) — priced at days, and it is the gate on BOTH
+  further utility@10/s error reduction AND Phase 2's flip with its
+  area-harvest promise. **State banked**: Phase 1's measured
+  selection stands (utility 175→64 honest, EC native), the
+  robustness/honesty floor is in, and the funding decision on
+  merge-tap-aware ordering goes to the user. CP2b/2c (EC@40
+  characterization, double-emit) and the native EC↔plastic-bar
+  mixing finding remain open, unstarted.*
