@@ -636,3 +636,36 @@ Per the CLAUDE.md protocol, plus:
   (real layout lane-balancing gap → folds into STEP-3) vs (C)
   other. Entity-level snapshot evidence at ≥3 sites, count per
   class, priced recommendations; no fixes in-package.*
+- *2026-07-14 — **#1c verdict: the 51 are REAL — class B 51/51,
+  class A REFUTED 0/51.** Entity dump at every one of the 51 error
+  tiles: single surface belt, zero underground, zero overlap. The
+  44.86/s is ONE contiguous physical flow path (x=90 iron trunk
+  y440-473 → East turn → ghost:tap:iron-plate:90:474 x92-105 →
+  row:electronic-circuit:belt-in x108-121) that ACCUMULATES flow
+  (6.0 → 14.93 → 44.86/s) because perpendicular iron belts
+  SURFACE-SIDELOAD onto the trunk. Smoking gun:
+  ghost:tap:iron-plate:89:458 is a surface East belt at (89,458)
+  and (91,458) with the South trunk at (90,458) between them and
+  NO underground — a real merge. Contrast: the UG crossings
+  (crossing:85:464, crossing:85:472) hop correctly and are NOT
+  conflated — the walker handles them right. All 44.86 lands
+  15.0 left / 29.86 RIGHT (sideloads fill one lane — the RFP D3
+  hazard, realized). Contributing: 3 iron FeederBridgeUnbridgeable
+  (spans 17-18 > express UG reach 8) forced surface crossings.
+  **RECORD CORRECTION**: the 2026-07-14 stock-take called the
+  61 lane-throughput "unreliable-walker noise" and the honest
+  floor ~43-47 — measured wrong. 10 of the 61 were walker noise
+  (killed by #1b); the 51 are a genuine layout defect (D3
+  invariant violation). With three walker defects fixed
+  (giveup, detection, and A refuted), the validator is now
+  TRUSTWORTHY on this topology and utility@10/s's honest number
+  is ~98: ~35 junction components + 51 lane over-cap tiles (ONE
+  mechanism, one flow path) + 8 EC↔plastic-bar isolation + 4
+  dead-ends. Priced fixes for the 51: (a) lane-balance the
+  converging path (44.86 < 45 total, so 1→1 inline splitter
+  rebalance clears the cap; moderate); (b) UG-hop/splitter-merge
+  the surface crossings (needs multi-hop UG, spans > reach;
+  expensive). Open follow-up before funding: where was the
+  sideloaded flow SUPPOSED to go — lane-balancing is only correct
+  if the merged destination is legitimate; if the flow is hijacked
+  from a starving consumer, (a) is a band-aid on mis-delivery.*
