@@ -532,3 +532,16 @@ Per the CLAUDE.md protocol, plus:
   merge-tap-aware ordering goes to the user. CP2b/2c (EC@40
   characterization, double-emit) and the native EC↔plastic-bar
   mixing finding remain open, unstarted.*
+- *2026-07-14 — CP2b/2c closed (884d212). The double-emit was the
+  two-pass lane planner, not the retry orchestrator (fixture comment
+  corrected); one event per fallback family now. EC@40 is OFF the
+  merge-tap worklist: it selects native at 13 errors (all
+  belt-dead-end, native output-merger/trunk-tail residual — the
+  recorded 69-error state predated the junction/netflow
+  improvements). **Phase 2 HOLDS here pending the user's funding
+  decision on merge-tap-aware lane ordering** — the single priced
+  lever for both the utility@10/s residual (honest floor: 64) and
+  the flip/area-harvest. Remaining named items: that ordering work,
+  the native EC↔plastic-bar mixing finding, the effective_rows
+  attribution artifact, item-isolation's perpendicular-sideload
+  inconsistency, the candidate second-pass cost note.*
