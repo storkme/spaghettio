@@ -1401,6 +1401,12 @@ pub fn route_bus_ghost(
     // transform inert for the default (flag-off) corpus — a general feeder
     // contract regressed golden layouts and produced unpaired UGs elsewhere.
     let mut merge_tap_feeder_keys: FxHashSet<String> = FxHashSet::default();
+    // Tap spec keys belonging to merge-tap lanes. Taps fan EAST from their
+    // trunk to a consumer, crossing every intervening foreign trunk column —
+    // the same crossing class as feeders — so they get the same foreign-trunk
+    // self-bridge (`bridge_feeder_under_foreign_trunks`) at the materialisation
+    // step. Scoped to this set to stay byte-inert for non-merge-tap lanes.
+    let mut merge_tap_tap_keys: FxHashSet<String> = FxHashSet::default();
 
     // Helper: compute the row-exit origin tile for a ret/feeder spec based on
     // the producer row's orientation. For westward rows (intermediate
@@ -1468,6 +1474,9 @@ pub fn route_bus_ghost(
                 } else {
                     format!("tap:{}:{}:{}", lane.item, x, tap_y)
                 };
+                if is_merge_tap {
+                    merge_tap_tap_keys.insert(tap_key.clone());
+                }
                 specs.push(BeltSpec {
                     key: tap_key,
                     start: (start_x, tap_y),
@@ -2044,12 +2053,17 @@ pub fn route_bus_ghost(
 
     for spec in ordered_specs.iter().copied() {
         if let Some(mut path) = routed_paths.get(&spec.key).cloned() {
-            // Merge-tap feeders must pass UNDER foreign trunk columns, not
-            // surface-cross and sideload onto them (B2.4). Rerouting the path to
-            // skip those tiles makes `render_path` UG-hop them and removes them
-            // from the crossing set below, so no (refused) crossing zone ever
-            // forms. Scoped to merge-tap feeders to stay inert flag-off.
-            if merge_tap_feeder_keys.contains(&spec.key) {
+            // Merge-tap feeders and taps must pass UNDER foreign trunk columns,
+            // not surface-cross and sideload onto them (B2.4). Feeders fan WEST
+            // to their trunk, taps fan EAST to a consumer, but both cross the
+            // same intervening foreign trunk columns, so both take the same
+            // bridge. Rerouting the path to skip those tiles makes `render_path`
+            // UG-hop them and removes them from the crossing set below, so no
+            // (refused) crossing zone ever forms. Scoped to merge-tap keys to
+            // stay inert for non-merge-tap lanes.
+            let is_mt_feeder = merge_tap_feeder_keys.contains(&spec.key);
+            let is_mt_tap = merge_tap_tap_keys.contains(&spec.key);
+            if is_mt_feeder || is_mt_tap {
                 match bridge_feeder_under_foreign_trunks(
                     &path,
                     &spec.item,
@@ -2059,16 +2073,28 @@ pub fn route_bus_ghost(
                 ) {
                     FeederBridge::Routed(p) => path = p,
                     FeederBridge::Unbridgeable { span, reach } => {
-                        // The feeder can't cross the foreign block cleanly.
-                        // Skip it entirely: the producer output dead-ends
-                        // (honest, validator-visible) rather than a severed
-                        // half-bridge that contaminates the foreign lane.
-                        crate::trace::emit(crate::trace::TraceEvent::FeederBridgeUnbridgeable {
-                            item: spec.item.clone(),
-                            module_id: spec.module_id,
-                            span,
-                            reach,
-                        });
+                        // The spec can't cross the foreign block cleanly. Skip
+                        // it entirely: an honest, validator-visible dead-end
+                        // (a feeder strands its producer; a tap starves its
+                        // consumer) rather than a severed half-bridge that
+                        // contaminates the foreign lane.
+                        if is_mt_tap {
+                            crate::trace::emit(crate::trace::TraceEvent::TapBridgeUnbridgeable {
+                                item: spec.item.clone(),
+                                module_id: spec.module_id,
+                                span,
+                                reach,
+                            });
+                        } else {
+                            crate::trace::emit(
+                                crate::trace::TraceEvent::FeederBridgeUnbridgeable {
+                                    item: spec.item.clone(),
+                                    module_id: spec.module_id,
+                                    span,
+                                    reach,
+                                },
+                            );
+                        }
                         continue;
                     }
                 }

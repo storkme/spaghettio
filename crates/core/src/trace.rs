@@ -437,6 +437,23 @@ pub enum TraceEvent {
         /// Underground reach for the feeder's belt tier (max bridgeable gap).
         reach: i32,
     },
+    /// A merge-tap TAP spec could not be routed cleanly under the foreign
+    /// trunk columns it crosses (same foreign-trunk bridge as feeders, but a
+    /// tap fans EAST from its trunk to a consumer). When the crossing is
+    /// unbridgeable — a foreign block wider than the UG reach with no legal
+    /// surface inside it — the tap is skipped entirely rather than surfaced
+    /// onto the foreign lane. Skipping a tap dead-ends the consumer it fed
+    /// (honest, validator-visible starvation) instead of contaminating the
+    /// crossed trunk. Like the feeder case, the categorical fix is lane
+    /// ordering. One `TapBridgeUnbridgeable` fires per skipped tap.
+    TapBridgeUnbridgeable {
+        item: String,
+        module_id: u32,
+        /// East-west span of the foreign block the tap must cross.
+        span: i32,
+        /// Underground reach for the tap's belt tier (max bridgeable gap).
+        reach: i32,
+    },
     /// Phase 2.0 runtime template generator produced a layout for a shape
     /// that wasn't directly served by the library (and decomposition
     /// either missed it or the generator's output was preferred). Useful
