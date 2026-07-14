@@ -2576,6 +2576,10 @@ struct StressBaseline {
 /// the recorded baseline. Errors and warnings must each be ≤ their recorded
 /// ceiling.
 fn check_stress_scoreboard(test_name: &str, result: &E2EResult, baseline: StressBaseline) {
+    // Byte-stability audit hook: SPAGHETTIO_STRESS_GOLDEN=1 prints one
+    // golden hash per stress fixture. Capture before and after a layout
+    // change and diff — identical hashes prove the fixture's shipped
+    // layout did not move (the "byte-identical" gate used for landings).
     if std::env::var("SPAGHETTIO_STRESS_GOLDEN").is_ok() {
         eprintln!("STRESSGOLD {test_name} {}", golden_hash(&result.layout));
     }
@@ -4028,9 +4032,11 @@ fn layout_retry_is_trace_independent() {
     );
 }
 
-/// DISPOSABLE measurement (STEP B re-land): utility-science-pack@10/s AM3
-/// through the public pipeline (build_bus_layout → selection). Prints the
-/// shipped error count + category split and dumps a snapshot. Not a gate.
+/// Measurement harness (not a gate): utility-science-pack@10/s AM3 through
+/// the public pipeline (build_bus_layout → selection) — the merge-tap RFP's
+/// goal cell. Prints the shipped error count + category split and dumps a
+/// snapshot. Run with --ignored --nocapture; takes ~25 min. History:
+/// 175 (native) → 108 → 98 → 46 (STEP B re-land, 2026-07-14).
 #[test]
 #[ignore]
 #[ntest::timeout(3600000)]
