@@ -1427,4 +1427,59 @@ mod tests {
         assert!(gaps.is_empty());
     }
 
+    /// Package #3 mechanism: cap detection and retry-gap computation must not
+    /// depend on the trace collector.
+    ///
+    /// The retry loop used to learn which junctions capped by scraping
+    /// `JunctionGrowthCapped` events out of the thread-local collector, which
+    /// only records while a trace guard is active — so untraced callers (the
+    /// wasm `layout()` entry point) silently skipped every retry. Package #3
+    /// returns the capped tiles as data on `layout_pass`'s tuple, so the retry
+    /// decision reads a real channel. This asserts that channel carries the
+    /// caps with NO trace guard on the thread, and that `compute_retry_gaps`
+    /// derives gaps from it — the whole retry-triggering path, untraced.
+    ///
+    /// The merge-tap layout of electronic-circuit@35/s from ore caps the
+    /// junction solver (`MergeTapCandidate::produce` sets `merge_tap`, then
+    /// runs exactly this `layout_pass`; 11 caps observed). This is the pass-1
+    /// call it makes. Pre-#3 this test could not be written at all —
+    /// `layout_pass` returned no cap tiles.
+    #[test]
+    fn cap_detection_and_retry_gaps_are_trace_independent() {
+        // No trace guard on this thread — the untraced regime.
+        assert!(!crate::trace::is_active(), "test must run untraced");
+
+        let inputs: FxHashSet<String> =
+            ["iron-ore", "copper-ore"].iter().map(|s| s.to_string()).collect();
+        let sr = crate::solver::solve_with_exclusions(
+            "electronic-circuit",
+            35.0,
+            &inputs,
+            "assembling-machine-2",
+            &FxHashSet::default(),
+        )
+        .expect("solve electronic-circuit@35/s");
+        let opts = LayoutOptions {
+            strategy: LayoutStrategy::Pooled,
+            max_belt_tier: Some("transport-belt".to_string()),
+            merge_tap: true,
+            ..Default::default()
+        };
+
+        let (_layout, row_spans, cap_coords) =
+            layout_pass(&sr, &opts, None, None).expect("layout_pass");
+
+        assert!(
+            !cap_coords.is_empty(),
+            "layout_pass returned no cap tiles untraced — cap detection still \
+             depends on a trace guard",
+        );
+        let retry_gaps = compute_retry_gaps(&cap_coords, &row_spans);
+        assert!(
+            !retry_gaps.is_empty(),
+            "no retry gaps computed from untraced cap tiles — the retry would \
+             not fire without a trace guard",
+        );
+    }
+
 }
