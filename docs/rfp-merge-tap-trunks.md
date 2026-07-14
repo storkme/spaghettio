@@ -472,3 +472,30 @@ Per the CLAUDE.md protocol, plus:
   gate — reviewed and justified: the bake-shapes interim cannot
   cover (8,19)-class primes, and every increment has been
   checkpoint-verified.*
+- *2026-07-14 — **PHASE 1 LANDED (4128440): the fallback ships as
+  MergeTapCandidate, measured selection, flag retired.** Constructed
+  only when native reports missing-balancer warnings; winner by
+  total validation-error count at the comparison site (score_layout
+  untouched — deviation ratified: validate() confined to the rare
+  Pooled+unstampable case keeps goldens and blessed trace streams
+  strictly inert); tie → native. KC2: zero movement, double-proven.
+  KC3: utility@10/s native 175/23/1479 → merge-tap 62/1/848
+  (errors −65%, dead-ends −96%), fallback firing at K=13/(15,14)
+  and K=8/(8,19) exactly as the Phase 0 census predicted; healed
+  region snapshot-verified; EC@35 correctly keeps native (4<66).
+  Deterministic mechanism fixture non-ignored in e2e (23s); a 0/0
+  gate is documented unreachable pending Phase 2 crossing quality.
+  Phase 1 cumulative: the fallback machinery + priority-tap
+  validation layer + THREE permanent robustness fixes shaken out
+  along the way (flow-balance pre-check, SAT var ceiling, mergetree
+  zone protection — the junction solver can no longer hang on any
+  input). **Phase 2 worklist (named, bounded)**: merge-tap router
+  crossing quality (the 62-error/miss-bal-19 residual — K-trunks
+  spawn unstampable sub-shapes), consumer-side effective_rows
+  aggregate-count attribution artifact, item-isolation blind spots
+  on perpendicular sideloads, adjacent-terminating feeder residual,
+  EC@40's 69-error state, candidate second-pass cost if
+  utility-scale cells ever enter the default suite, MergeTapFallback
+  double-emit. Phase 2 (the default flip for ALL split families +
+  balancer retirement + the area harvest) remains gated on that
+  quality work per the original phasing.*
