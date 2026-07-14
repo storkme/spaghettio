@@ -879,3 +879,33 @@ Per the CLAUDE.md protocol, plus:
   residual for both signatures — if the endpoint bug fires there,
   fixing it moves the goal metric directly. Stock-take follows
   with everything priced.*
+- *2026-07-14 — **part 3: utility@10/s's 46 classified — ZERO
+  (3,7)-class corners; the residual is three OTHER capability
+  gaps; kind-weighted-selection probe funded as the A-lite
+  re-land path.** With STEP B: 53819 entities, 46 errors = 34
+  unresolved-junction (74%, (20,46)-class junction-solver caps,
+  spread x30-103/y184-689 — the dominant goal lever) + 8
+  belt-item-isolation (ALL EC↔plastic-bar, one cluster x76-80/
+  y500-505, MUTUAL and LONGITUDINAL — head-to-tail merge of two
+  product flows in the same column; a different bug from the
+  (3,7) perpendicular UG-exit dump; the long-carried native
+  mixing signature) + 4 belt-dead-end. Zero lane-throughput —
+  STEP B's routing win holds end-to-end. So the (3,7) endpoint
+  fix is a GATE-unblocker only (EC@35s re-land), not a
+  goal-mover; utility's mass is junction-solver capability. The
+  STEP-3 program now owns four priced items: junction-solver
+  capability [dominant goal lever], EC↔plastic longitudinal
+  merge isolation [goal lever, contamination-kind], trunk-aware
+  feeder placement/balancer origin = (3,7) [gate only],
+  merge-tap-aware lane ordering. **A-lite probe funded
+  (diagnosis/design only)**: kind-weighted candidate selection —
+  contamination-class errors weigh more than starvation-class in
+  count_validation_errors (defensible in-game-severity taxonomy,
+  not tuned-to-pass). If clean: EC@35s keeps picking native (no
+  regression, the (3,7) contamination stays in an unselected
+  candidate exactly as on main today), utility flips to
+  merge-tap at 46, STEP B ships with NO STEP-3 dependency.
+  Probe = design sketch + corpus winner-flip measurement + an
+  honest-check for indefensible higher-total-error picks. If it
+  dies, Path A waits for STEP-3 and the fund-vs-park call goes
+  to the user with everything priced.*
