@@ -186,6 +186,10 @@ export function createInspector(container: HTMLElement): InspectorControls {
   ttJunctionRow.style.display = "none";
   tooltip.appendChild(ttJunctionRow);
 
+  const ttCappedRow = document.createElement("div");
+  ttCappedRow.style.display = "none";
+  tooltip.appendChild(ttCappedRow);
+
   // -------------------------------------------------------------------------
   // Pinned detail panel — fixed corner, pointer events enabled
   // -------------------------------------------------------------------------
@@ -474,6 +478,24 @@ export function createInspector(container: HTMLElement): InspectorControls {
     return true;
   }
 
+  /** Capped inserter sides at this machine origin (RFP
+   *  validation-explainability D2) — the stamp-time cause behind
+   *  rate-shaped warnings anchored here. One line per capped side:
+   *  what was placed, what it moves vs what's needed, and the binding
+   *  constraint the ladder derived. */
+  function renderCappedCompact(info: TileInfo): boolean {
+    if (info.cappedSides.length === 0) { ttCappedRow.style.display = "none"; return false; }
+    const lines = info.cappedSides.map((c) => {
+      const moved = c.required - c.shortfall;
+      const dir = c.sideIsOutput ? "out" : "in";
+      return `⚠ ${dir}: ${c.placedCount}×${c.placedEntity} moves ${moved.toFixed(2)}/s of ${c.required.toFixed(2)}/s · ${c.limit}`;
+    });
+    ttCappedRow.style.display = "";
+    ttCappedRow.style.color = "#ffa060";
+    ttCappedRow.textContent = lines.join(" | ");
+    return true;
+  }
+
   // -------------------------------------------------------------------------
   // Pinned ghost expanded block
   // -------------------------------------------------------------------------
@@ -583,10 +605,12 @@ export function createInspector(container: HTMLElement): InspectorControls {
         if (renderGhostCompact(info)) hasContent = true;
         if (renderAxisCompact(info)) hasContent = true;
         if (renderJunctionCompact(info)) hasContent = true;
+        if (renderCappedCompact(info)) hasContent = true;
       } else {
         ttGhostRow.style.display = "none";
         ttAxisRow.style.display = "none";
         ttJunctionRow.style.display = "none";
+        ttCappedRow.style.display = "none";
       }
       tooltipCoordEl.textContent = `(${cursorTile.x}, ${cursorTile.y})`;
       tooltipCoordEl.style.display = "block";

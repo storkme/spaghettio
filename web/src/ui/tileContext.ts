@@ -31,10 +31,26 @@ export interface JunctionMembership {
   outcome: "Solved" | "Capped" | "Open";
 }
 
+/** A machine side the inserter ladder couldn't fully provision, keyed at
+ *  the machine origin — the same tile rate-shaped validation warnings
+ *  anchor at, so the inspector can explain a warning by plain lookup
+ *  (RFP validation-explainability D2: join, never inference). */
+export interface CappedSideAtTile {
+  recipe: string;
+  sideIsOutput: boolean;
+  required: number;
+  placedEntity: string;
+  placedCount: number;
+  shortfall: number;
+  /** Binding constraint: "tier-cap" | "column-contest" | "geometry". */
+  limit: string;
+}
+
 export interface TileInfo {
   ghosts: GhostSpecAtTile[];
   axis: AxisAtTile | null;
   junction: JunctionMembership | null;
+  cappedSides: CappedSideAtTile[];
 }
 
 export interface TileContext {
@@ -54,7 +70,7 @@ function tileDirection(ax: number, ay: number, bx: number, by: number): "N" | "S
   return null;
 }
 
-const EMPTY: TileInfo = { ghosts: [], axis: null, junction: null };
+const EMPTY: TileInfo = { ghosts: [], axis: null, junction: null, cappedSides: [] };
 
 export function buildTileContext(trace: readonly TraceEvent[] | undefined): TileContext {
   if (!trace || trace.length === 0) {
@@ -64,6 +80,7 @@ export function buildTileContext(trace: readonly TraceEvent[] | undefined): Tile
   const ghostMap = new Map<string, GhostSpecAtTile[]>();
   const axisMap = new Map<string, AxisAtTile>();
   const junctionMap = new Map<string, JunctionMembership>();
+  const cappedMap = new Map<string, CappedSideAtTile[]>();
 
   for (const evt of trace) {
     if (evt.phase === "GhostSpecRouted") {
@@ -108,6 +125,21 @@ export function buildTileContext(trace: readonly TraceEvent[] | undefined): Tile
       junctionMap.set(`${d.tile_x},${d.tile_y}`, {
         seedX: d.tile_x, seedY: d.tile_y, outcome,
       });
+    } else if (evt.phase === "InserterSideCapped") {
+      const d = evt.data;
+      const key = `${d.machine_x},${d.machine_y}`;
+      const entry: CappedSideAtTile = {
+        recipe: d.recipe,
+        sideIsOutput: d.side_is_output,
+        required: d.required,
+        placedEntity: d.placed_entity,
+        placedCount: d.placed_count,
+        shortfall: d.shortfall,
+        limit: d.limit,
+      };
+      const list = cappedMap.get(key);
+      if (list) list.push(entry);
+      else cappedMap.set(key, [entry]);
     } else if (evt.phase === "JunctionGrowthIteration") {
       // Tag every tile in the grown region with the seed. Later iters
       // overwrite earlier ones so the last-seen membership wins (fine
@@ -133,6 +165,7 @@ export function buildTileContext(trace: readonly TraceEvent[] | undefined): Tile
         ghosts: ghostMap.get(key) ?? [],
         axis: axisMap.get(key) ?? null,
         junction: junctionMap.get(key) ?? null,
+        cappedSides: cappedMap.get(key) ?? [],
       };
     },
   };

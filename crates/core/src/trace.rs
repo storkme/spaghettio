@@ -222,6 +222,17 @@ pub enum TraceEvent {
         placed_entity: String,
         placed_count: usize,
         shortfall: f64,
+        /// Machine origin, so validation warnings anchored at the machine
+        /// can join this event per-tile (RFP validation-explainability D2).
+        machine_x: i32,
+        machine_y: i32,
+        /// Why the side capped: `"tier-cap"` (a richer tier at the same
+        /// budget would cover — `max_inserter_tier` is binding),
+        /// `"column-contest"` (the side lost the shared near/far column
+        /// and that one column would have covered), or `"geometry"`
+        /// (the row shape offers no further slots). Derived centrally in
+        /// `inserter_ladder::capped_limit`, never guessed post-hoc.
+        limit: String,
     },
 
     // Phase 2: Lane Planning
