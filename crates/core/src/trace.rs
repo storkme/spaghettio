@@ -387,6 +387,25 @@ pub enum TraceEvent {
         producer_rows: usize,
         shape: (usize, usize),
     },
+    /// A merge-tap feeder could not be routed UNDER a foreign trunk block:
+    /// the block is wider than the underground reach, so no single UG hop
+    /// spans it AND no surface tile inside it can host a belt (its neighbours
+    /// are foreign trunk on both sides). Rather than emit a severed
+    /// half-bridge that dumps the feeder's item onto the foreign lane (the
+    /// silent-drop `bridge_feeder_under_foreign_trunks` used to produce when
+    /// two UG hops met on one trapped tile), the feeder is skipped entirely —
+    /// its producer output dead-ends, an honest and visible failure. The
+    /// categorical fix is lane ordering: place merge-tap trunks on the
+    /// producer side of wide external-input blocks so feeders never cross
+    /// them. One `FeederBridgeUnbridgeable` fires per skipped feeder.
+    FeederBridgeUnbridgeable {
+        item: String,
+        module_id: u32,
+        /// East-west span of the foreign block the feeder must cross.
+        span: i32,
+        /// Underground reach for the feeder's belt tier (max bridgeable gap).
+        reach: i32,
+    },
     /// Phase 2.0 runtime template generator produced a layout for a shape
     /// that wasn't directly served by the library (and decomposition
     /// either missed it or the generator's output was preferred). Useful

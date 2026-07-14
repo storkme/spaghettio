@@ -147,6 +147,21 @@ fn merge_tap_consumer_demands(lane: &BusLane, row_spans: &[RowSpan]) -> FxHashMa
     demands
 }
 
+/// Outcome of routing a merge-tap feeder under the foreign trunk columns it
+/// crosses. `Routed` carries the rerouted path (foreign runs dropped so
+/// `render_path` UG-hops them). `Unbridgeable` means the feeder cannot cross
+/// cleanly — see `bridge_feeder_under_foreign_trunks`.
+enum FeederBridge {
+    Routed(Vec<(i32, i32)>),
+    /// A foreign block wider than the UG reach with an interior gap that can't
+    /// host a surface belt: no single hop spans it and no legal intermediate
+    /// surface exists. The caller skips the feeder (honest producer dead-end)
+    /// instead of rendering a severed half-bridge that contaminates the
+    /// foreign lane. `span` is the offending crossing width, `reach` the tier's
+    /// max UG gap.
+    Unbridgeable { span: i32, reach: i32 },
+}
+
 /// Reroute a FEEDER path to pass UNDER any foreign trunk column it crosses,
 /// instead of surface-crossing and sideloading onto it (the B2.4 EC@35 bug:
 /// copper feeders sideloaded onto the iron-ore trunk at x=20, concentrating a
@@ -159,17 +174,28 @@ fn merge_tap_consumer_demands(lane: &BusLane, row_spans: &[RowSpan]) -> FxHashMa
 /// zone never forms. Prevention over cure — mirrors the output merger's
 /// `blocked_columns` UG-hop (RFP docs/rfp-merge-tap-trunks.md D4).
 ///
-/// Only bridges a contiguous foreign run when the kept tiles on both sides are
-/// collinear with it (a straight perpendicular crossing) and the hop fits the
-/// belt tier's `reach` (gap under ≤ reach); otherwise the run is left on the
-/// surface for the crossing solver, exactly as before.
+/// A span is bridged when its kept endpoints are collinear (a straight
+/// perpendicular crossing) and the hop fits the belt tier's `reach`
+/// (gap under ≤ reach). The span is NOT just a single contiguous foreign run:
+/// a multi-column foreign block can leave a "trapped" kept tile between two
+/// runs (e.g. the iron-ore trunk occupying x14-17 and x19-20 with a gap at
+/// x18). A trapped tile — one flanked by foreign on both path-sides — cannot
+/// host a surface belt (both its neighbours are foreign trunk), so it must
+/// ride the SAME underground as the runs around it; the span therefore
+/// coalesces across it. Bridging the runs separately used to leave that tile
+/// as a UG exit AND a UG entrance for two hops that collide on it — an
+/// impossible geometry that `render_path` silently dropped, emitting a
+/// half-bridge that dumped the feeder onto the foreign lane. When a
+/// trapped-tile span is too wide to bridge in one hop, the feeder is refused
+/// (`Unbridgeable`) rather than surfaced. A lone foreign run that doesn't fit
+/// reach is left on the surface for the crossing solver, exactly as before.
 fn bridge_feeder_under_foreign_trunks(
     path: &[(i32, i32)],
     spec_item: &str,
     spec_module: u32,
     trunk_tile_items: &FxHashMap<(i32, i32), (String, u32)>,
     reach: i32,
-) -> Vec<(i32, i32)> {
+) -> FeederBridge {
     let is_foreign = |t: &(i32, i32)| {
         trunk_tile_items
             .get(t)
@@ -183,11 +209,21 @@ fn bridge_feeder_under_foreign_trunks(
             i += 1;
             continue;
         }
-        // Maximal contiguous foreign run [start, j).
+        // Maximal span of foreign tiles AND trapped kept tiles. A trapped tile
+        // is a non-foreign tile immediately followed by more foreign tiles: it
+        // sits inside a multi-column foreign block and can't carry a surface
+        // belt, so it is absorbed into the span the UG must dive under.
         let start = i;
-        let mut j = i;
-        while j < path.len() && is_foreign(&path[j]) {
-            j += 1;
+        let mut j = i + 1;
+        loop {
+            while j < path.len() && is_foreign(&path[j]) {
+                j += 1;
+            }
+            if j + 1 < path.len() && !is_foreign(&path[j]) && is_foreign(&path[j + 1]) {
+                j += 1; // absorb the trapped tile and keep scanning foreign
+            } else {
+                break;
+            }
         }
         let before = (start > 0).then(|| path[start - 1]);
         let after = (j < path.len()).then(|| path[j]);
@@ -200,14 +236,35 @@ fn bridge_feeder_under_foreign_trunks(
             _ => false,
         };
         if bridgeable {
-            // Drop the run: `render_path` bridges `before` -> `after` as a UG hop.
+            // Drop the whole span: `render_path` bridges `before` -> `after`
+            // as one UG hop under every foreign column and the trapped gap.
             i = j;
+        } else if (start..j).any(|k| !is_foreign(&path[k])) {
+            // The span absorbed a trapped tile but is too wide for one hop —
+            // there is no legal surface inside the block. Refuse the feeder.
+            let span = before
+                .zip(after)
+                .map(|(b, a)| (a.0 - b.0).abs() + (a.1 - b.1).abs())
+                .unwrap_or((j - start) as i32);
+            return FeederBridge::Unbridgeable { span, reach };
         } else {
+            // Lone foreign run that doesn't fit reach: surface it (legacy).
             out.extend_from_slice(&path[start..j]);
             i = j;
         }
     }
-    out
+    // Validate the output: two consecutive >1 gaps would put a UG exit and a UG
+    // entrance on one tile — the collision `render_path` silently drops. The
+    // coalescing above prevents it by construction, but guard the output so no
+    // future geometry can reintroduce a severed half-bridge quietly.
+    for w in out.windows(3) {
+        let d1 = (w[1].0 - w[0].0).abs() + (w[1].1 - w[0].1).abs();
+        let d2 = (w[2].0 - w[1].0).abs() + (w[2].1 - w[1].1).abs();
+        if d1 > 1 && d2 > 1 {
+            return FeederBridge::Unbridgeable { span: d1.max(d2), reach };
+        }
+    }
+    FeederBridge::Routed(out)
 }
 
 /// Route all bus belts using the ghost A* approach.
@@ -1993,13 +2050,28 @@ pub fn route_bus_ghost(
             // from the crossing set below, so no (refused) crossing zone ever
             // forms. Scoped to merge-tap feeders to stay inert flag-off.
             if merge_tap_feeder_keys.contains(&spec.key) {
-                path = bridge_feeder_under_foreign_trunks(
+                match bridge_feeder_under_foreign_trunks(
                     &path,
                     &spec.item,
                     spec.module_id,
                     &trunk_tile_items,
                     ug_max_reach(spec.belt_name) as i32,
-                );
+                ) {
+                    FeederBridge::Routed(p) => path = p,
+                    FeederBridge::Unbridgeable { span, reach } => {
+                        // The feeder can't cross the foreign block cleanly.
+                        // Skip it entirely: the producer output dead-ends
+                        // (honest, validator-visible) rather than a severed
+                        // half-bridge that contaminates the foreign lane.
+                        crate::trace::emit(crate::trace::TraceEvent::FeederBridgeUnbridgeable {
+                            item: spec.item.clone(),
+                            module_id: spec.module_id,
+                            span,
+                            reach,
+                        });
+                        continue;
+                    }
+                }
             }
             // Recompute crossings from the final state of existing_belts so
             // they reflect the converged routing order.
