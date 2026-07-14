@@ -190,7 +190,34 @@ trace-event join with click-to-pin (`web/src/ui/tileContext.ts` +
   ValidationIssue struct literal in tests/e2e.rs (outside the src/
   grep) — switched to the constructor. Awaiting the user's browser
   eyeball per feedback_user_validates_ui; Phase 2 (event extension +
-  tileContext join) gated on kill criterion 1's anchor re-check.*
+  tileContext join) gated on kill criterion 1's anchor re-check.
+  User eyeballed the heatmap on the anchor: "pretty good" — Phase 1
+  validated; user greenlit Phase 2.*
+- *2026-07-14 — **Phase 2 LANDED (981f40e)**. KC1 anchor re-check
+  PASSED first (24 events / 12 warnings, unchanged from baseline).
+  Design refinement over the brief: a capped plan is best-effort
+  (every slot filled at the richest allowed tier), so budget, reach
+  and tier ceiling are recoverable FROM THE PLAN — `capped_limit`
+  derives the limit centrally with counterfactual ladder re-runs
+  (tier-cap: stack at same budget covers; column-contest: caller
+  flags the lost column AND budget+1 covers; else geometry), keeping
+  all ~30 emit sites mechanical (coords + a contest bool). Scrap-row
+  emit moved inside the machine loop for per-machine joins. KC2
+  measured on the anchor: **12/12 warnings join by machine origin
+  (100% ≥ the 90% bar)**; KC3 held (plain key lookup, no inference).
+  **Finding: limits read 24× "geometry", correcting the review's
+  row-level "column contest" narrative** — every capped far side
+  sits at a position where the contested column never existed (a
+  contest winner places 2 LHIs and doesn't cap at all; the capped
+  positions are the trimmed ones with zero budget). The attribution
+  tooling sharpened its own RFP's diagnosis on first use — third
+  correction of this bug's story (pole → contest → trimmed-position
+  geometry), each one cheaper than the last. tier-cap and
+  column-contest are unit-tested reachable but absent from this
+  corpus cell (anchor runs default Stack tier). Gates: 669 lib + 45
+  e2e, STRESSGOLD byte-identical, clippy/wasm/tsc clean. Remaining:
+  Phase 3a click-to-explain, 3b cause rollup (both need the
+  heatmap-style user eyeball of the new hover line first).*
 - *2026-07-14 — **adversarial review (2 reviewers, parallel): REVISE
   ×2; draft rewritten as revision 2.** Confirmed findings against the
   original draft: (a) the anchor diagnosis was WRONG — the starved
