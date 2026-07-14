@@ -180,6 +180,17 @@ trace-event join with click-to-pin (`web/src/ui/tileContext.ts` +
 
 - *2026-07-14 — drafted after the user's EC@35s eyeball session; user:
   tooling "sounds worthwhile", geometry fix itself parked.*
+- *2026-07-14 — revision 2 accepted by the user ("go for it");
+  **Phase 1 LANDED (667c880)**: IssueDetail{delivered,needed} on the
+  three rate-shaped emission sites + the two hand-maintained TS
+  mirrors + the Starvation heatmap toggle (top-level, persisted,
+  pointer-inert layer, footprint-tinted via MACHINE_SIZES). Gates:
+  666 lib + 45 e2e green, STRESSGOLD byte-identical before/after
+  (KC4), clippy/wasm/tsc clean. One deviation found landing it: a
+  ValidationIssue struct literal in tests/e2e.rs (outside the src/
+  grep) — switched to the constructor. Awaiting the user's browser
+  eyeball per feedback_user_validates_ui; Phase 2 (event extension +
+  tileContext join) gated on kill criterion 1's anchor re-check.*
 - *2026-07-14 — **adversarial review (2 reviewers, parallel): REVISE
   ×2; draft rewritten as revision 2.** Confirmed findings against the
   original draft: (a) the anchor diagnosis was WRONG — the starved
