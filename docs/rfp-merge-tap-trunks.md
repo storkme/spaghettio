@@ -545,3 +545,35 @@ Per the CLAUDE.md protocol, plus:
   the native EC↔plastic-bar mixing finding, the effective_rows
   attribution artifact, item-isolation's perpendicular-sideload
   inconsistency, the candidate second-pass cost note.*
+- *2026-07-14 — **the bounded ladder is exhausted; final stock-take.**
+  Arc since the goal push began (baseline: native 175 errors):
+  phantom warnings fixed (e4e1207); feeder trapped-gap bridge +
+  honesty guard (b8b955a); double-emit dedup + EC@40 off the
+  worklist (884d212); tap bridge (cc0fd8a, junctions 42→35
+  components); wide-wall honest refusal FALSIFIED (fragments
+  clusters, 108→155, reverted); placement-sort FALSIFIED earlier
+  (62→1024). Three successive attribution hypotheses resolved by
+  measurement: effective_rows aggregate-count — NOT the cause (rate
+  injection is per-row-correct); (B)-broke-the-predicate — REFUTED
+  (the predicate is never reached); actual mechanism: **all 21
+  iron-plate tapoff splitters die at the topological walker's
+  sibling-wait GIVEUP branch (MAX_RETRIES=3 → rates (0,0), no
+  depletion)** — PRE-EXISTING (18 giveups before the tap bridge; the
+  bridge unmasked 3 more by pulling tiles out of junction-exclusion,
+  confirming cc0fd8a's honest-unmask framing). **Final decomposition
+  of utility@10/s's 108 errors**: (a) ~35 junction components = real
+  geometry debt — the 17-21-lane copper-plate wall between
+  copper-cable's merge-tree and its producers + general EC/AC
+  feeder crossings (native debt) — fixable only by the STEP-3
+  merge-tap-aware lane-ordering package (days, shared scorer,
+  corpus re-bless); (b) ~61 lane-throughput = UNRELIABLE-WALKER
+  NOISE from the sibling-ordering giveup bug — the taps are
+  physically per-row-correct (~2.5/s verified against solver
+  truth); the layout is likely fine there, the checker is not;
+  (c) 8 native EC↔plastic-bar isolation + remainder. Honest
+  FUNCTIONAL error mass ≈ 43-47. **Open deep items, all priced,
+  none bounded**: the STEP-3 placement package; the walker
+  sibling-giveup defect (validator-internals, affects
+  lane-throughput trust on trunk+tapoff topologies generally); the
+  general feeder bridge (golden-risky, folds into STEP-3). The goal
+  push ends here pending direction.*
