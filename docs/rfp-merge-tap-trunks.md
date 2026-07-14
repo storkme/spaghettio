@@ -695,3 +695,32 @@ Per the CLAUDE.md protocol, plus:
   byte-stability everywhere except utility@10/s (expected to move;
   junctions must not grow), fresh snapshot for the user's browser
   eyeball.***
+- *2026-07-14 — **STEP A confirmed the exemption; STEP B v1
+  (column-based) HARD-STOPPED on a native regression; v2
+  (family-identity) funded.** STEP A empirics: is_foreign
+  (ghost_router.rs:199) treats a crossed trunk tile as foreign only
+  on item/module mismatch — tap:89:458 is_mt_tap=TRUE, crosses
+  exactly (90,458)=("iron-plate",0), same item/module → not
+  foreign → surfaced → the #1c hijack. The exemption encoded "same
+  item = my own trunk," TRUE before D1's K-trunks — broken
+  silently by merge-tap. The 3 FeederBridgeUnbridgeable are a
+  separate, already-honest path (foreign different-item walls,
+  refuse at :242). STEP B v1 extended is_foreign with
+  own-trunk-column inequality (lane_trunk_col threaded in; None →
+  old predicate). **Target result — the routing diagnosis proven
+  end-to-end: utility@10/s 98 → 46 total** (lane-throughput 51→0,
+  trunk 44.86→14.93/s under cap; input-rate-delivery 574→563, the
+  11 starved iron consumers now FED; junctions 35→34; UG warnings
+  +1, the new hop). **BUT stress_electronic_circuit_35s_from_ore
+  regressed** (+1 belt-item-isolation, +1 lane-throughput, +1
+  unresolved-junction): that fixture also carries merge-tap lanes,
+  and its taps cross their OWN family's lane-split sibling column —
+  "different column" conflates cross-family crossings (hop
+  correct) with own-family split columns (hop wrong). Agent
+  hard-stopped per brief: no commit, no tweak-and-rerun. **v2
+  funded**: enrich trunk_tile_items with the owning family id
+  (from lane_planner's families, no geometric re-derivation) and
+  test foreignness as family inequality; empirical id-check at
+  both sites BEFORE coding (if merge-tap trunks share a family id,
+  the family test won't discriminate either → STOP); unit test
+  pinning both conflated cases; EC@35s must return byte-identical.*
