@@ -955,3 +955,26 @@ Per the CLAUDE.md protocol, plus:
   disposable — production code written fresh). The deferred
   public-API purity test still lacks a fast merge-tap-winning
   fixture (utility ≈ 15 min) — remains deferred, noted.*
+- *2026-07-14 — **STEP B RE-LANDED (1136147): utility@10/s on main
+  is 46 errors, measured through the shipped pipeline.** One
+  commit (designed/gated/measured as a unit; splitting would leave
+  an ungated intermediate). classify_errors + ErrorKinds with
+  structural encoded lexicographically dominant (ratified: truer
+  than a scalar, untunable, preserves the k-window) + k=3 weighted
+  functional comparison in merge_tap_choice; STEP B cherry-picked
+  byte-identical from adb68a4. Gates all green: 666 lib + 45 e2e,
+  EC@35s/EC@40s byte-identical by golden hash, zero scoreboard
+  shifts, clippy, WASM. Shipped measurement (1550s run):
+  53819 entities, 582×711, 46 errors = 4 belt-dead-end + 8
+  belt-item-isolation (the bounded column-allocation −8) + 34
+  unresolved-junction (the deep junction-solver mass). Arc
+  scorecard for the /goal: utility@10/s 175 (native, arc start)
+  → 108 (merge-tap Phase 1) → 98 (walker fixes) → 46 (re-land) =
+  −74%, with three walker defects and the trace-gated retry fixed
+  on main along the way. Snapshot:
+  target/tmp/snapshot-measure_utility_10s_am3.fls. User eyeball
+  URL: localhost:5173/?item=utility-science-pack&rate=10&machine=
+  assembling-machine-3&in=iron-ore,copper-ore,coal,stone,
+  crude-oil,water. NEXT: the −8 diagnosis hop (lane-planning owner
+  of the balancer/trunk column overlap), then the remaining 34
+  junctions are the priced STEP-3 fund-vs-park decision.*
