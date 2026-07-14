@@ -577,3 +577,37 @@ Per the CLAUDE.md protocol, plus:
   lane-throughput trust on trunk+tapoff topologies generally); the
   general feeder bridge (golden-risky, folds into STEP-3). The goal
   push ends here pending direction.*
+- *2026-07-14 — **walker package #1 (sibling parking) LANDED
+  (6e5be07); a second walker defect uncovered and scoped as #1b.**
+  The active /goal funded the walker fixes as the first bounded
+  lever. Diagnosis confirmed the giveup mechanism precisely: the 21
+  iron-trunk tapoff splitters form a pure dependency CHAIN (each
+  tapoff waits on the previous splitter's continuation; DAG, no
+  cycles), so depth 21 ≫ MAX_RETRIES=3 — a fixed retry budget can
+  never walk a chain. Fix ("parking", Option T): the waiting tile
+  parks as input-ready and the sibling fires both through
+  `splitter_output_rates` when popped; the only remaining give-up
+  is an outer-loop force-resolve (deterministic lowest-coordinate)
+  reached only for true cycles. O(E). Gates: all 21 splitters fire
+  (0 giveups / 0 force-resolves), full suite green and BYTE-STABLE
+  (zero pinned-fixture movement — the STOP zone "movement =
+  giveup-masked mis-model elsewhere" did not trigger), clippy
+  clean. **But the 61 lane-throughput errors did not move**,
+  because firing exposed defect #2: both walkers identify the
+  priority branch by sniffing the segment tag one tile downstream
+  (`segment_is_priority_branch`), and for most merge-tap taps both
+  downstream tiles read `trunk:iron-plate` / `crossing:*` —
+  untagged — so the law falls back 50/50 and the trunk never
+  depletes (last tap inherits ~29.9/s). The splitter ENTITIES carry
+  correct `output_priority` + `loop_priority_rate` (exported
+  blueprints are real priority splitters) — validator mis-model,
+  not a layout defect. **#1b scoped**: derive the priority branch
+  from the entity's own fields via `priority_output_tile` (the
+  structural check's existing geometric mapping — single source),
+  tag-sniff demoted to instrumented fallback; both walkers
+  (belt_flow's `is_priority_branch` verified to share the same
+  defect and the same `splitter_entity` map). This is the design
+  the delta review originally demanded ("no validator reads the
+  real priority fields") — the tag mechanism is now measured
+  fragile in the wild. Expected: 61 → near-zero; honest floor
+  → ~43-47.*
