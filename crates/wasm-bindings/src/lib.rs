@@ -59,6 +59,10 @@ fn layout_options(
         row_layout,
         surplus_policy: SurplusPolicy::default(),
         max_inserter_tier,
+        // The merge-tap fallback is chosen internally by the
+        // decomposition search (`MergeTapCandidate`), never requested by the
+        // web UI — always default-off at the public boundary.
+        merge_tap: false,
     }
 }
 

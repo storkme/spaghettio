@@ -91,6 +91,37 @@ impl DecompositionCandidate for NativeCandidate {
     }
 }
 
+/// Pooled candidate: retire the unstampable (n, m) balancer a family would
+/// otherwise get to `K = ceil(rate / belt_cap)` shared trunks — producers
+/// merge in via splitter merge-trees, consumers tap with priority splitters
+/// (`docs/rfp-merge-tap-trunks.md`). This is the only place `merge_tap` is
+/// turned on: it flips the runtime flag and re-runs the ordinary pipeline.
+///
+/// Pooled-only. Under any other strategy the merge-tap fallback either
+/// re-merges siblings away (`Pooled` is where the shared trunk makes sense)
+/// or fights the partitioner's module IDs, so `produce` returns an error and
+/// the selector falls through to `NativeCandidate`.
+pub struct MergeTapCandidate;
+
+impl DecompositionCandidate for MergeTapCandidate {
+    fn name(&self) -> &str {
+        "merge-tap"
+    }
+
+    fn produce(
+        &self,
+        solver_result: &SolverResult,
+        opts: &LayoutOptions,
+    ) -> Result<LayoutResult, String> {
+        if !matches!(opts.strategy, LayoutStrategy::Pooled) {
+            return Err("merge-tap candidate is Pooled-only".to_string());
+        }
+        let mut mt_opts = opts.clone();
+        mt_opts.merge_tap = true;
+        run_layout_with_retry(solver_result, &mt_opts)
+    }
+}
+
 /// Phase 1 candidate: split each multi-producer module into `k` sibling
 /// sub-modules, each with halved rate and independent bus presence.
 /// Targets coprime balancer shapes like `(4, 9)` on PU@3/s ore-red
@@ -202,6 +233,7 @@ impl DecompositionCandidate for ModuleSizeSplit {
             row_layout: opts.row_layout,
             surplus_policy: opts.surplus_policy,
             max_inserter_tier: opts.max_inserter_tier,
+            merge_tap: opts.merge_tap,
         };
         run_layout_with_retry(&transformed, &inner_opts)
     }
@@ -401,6 +433,29 @@ fn compute_overproduction(solver_result: &SolverResult) -> f64 {
         }
     }
     total
+}
+
+/// Total `Severity::Error` count from a full validation pass. Used only by
+/// the scoped Pooled merge-tap decision in `select_best_decomposition`: when
+/// native leaves an unstampable shape, native and the merge-tap fallback are
+/// compared by this metric and the strictly-lower one wins (ties favour
+/// native). Deliberately kept out of the common `score_layout` path — every
+/// accepted layout (all goldens, the bulk of the stress corpus) then pays no
+/// extra validation cost, and `validate()`'s terminal `ValidationCompleted`
+/// trace event never perturbs those already-blessed trace streams.
+fn count_validation_errors(layout: &LayoutResult, solver_result: &SolverResult) -> usize {
+    let issues = match crate::validate::validate(
+        layout,
+        Some(solver_result),
+        crate::validate::LayoutStyle::Bus,
+    ) {
+        Ok(issues) => issues,
+        Err(e) => e.issues,
+    };
+    issues
+        .iter()
+        .filter(|i| i.severity == crate::validate::Severity::Error)
+        .count()
 }
 
 /// Score a candidate's layout. Returns the soft score plus the input
@@ -616,6 +671,57 @@ pub fn select_best_decomposition(
         CandidateRun::skipped("size-split-2")
     };
 
+    // Merge-and-tap fallback candidate (`docs/rfp-merge-tap-trunks.md`).
+    // Pooled-only, and only when Native left an unstampable shape — Native's
+    // `accepted == false` is exactly the missing-balancer-template gate. This
+    // construction gate is what keeps every currently-blessed Pooled golden
+    // inert: they all validate with zero missing-balancer warnings, so Native
+    // is `accepted` and this candidate is never even built. `catch_unwind`
+    // because the merge-tree is the riskiest transform in the pipeline —
+    // a panic degrades the whole solve to Native rather than aborting.
+    let try_merge_tap = matches!(opts.strategy, LayoutStrategy::Pooled)
+        && native_run
+            .outcome
+            .as_ref()
+            .is_some_and(|(_, score)| !score.accepted);
+
+    let merge_tap_run = if try_merge_tap {
+        run_candidate_catch_unwind("merge-tap", solver_result, || {
+            MergeTapCandidate.produce(solver_result, &opts)
+        })
+    } else {
+        CandidateRun::skipped("merge-tap")
+    };
+
+    // Scoped Native-vs-merge-tap decision, resolved here while the sink is
+    // still detached. Metric: total validation-error count; ties favour
+    // Native (`NATIVE_IDX`). This is deliberately *not* the accepted-by-score
+    // path below — an accepted merge-tap layout with more errors than an
+    // unaccepted Native still loses. `count_validation_errors` runs
+    // `validate()`, which emits a `ValidationCompleted` event per call;
+    // peek/truncate drops both so they never reach the winner's replayed
+    // stream. `None` when merge-tap didn't run — the generic selection then
+    // applies unchanged (every non-Pooled and every Native-clean case).
+    const NATIVE_IDX: usize = 0;
+    const MERGE_TAP_IDX: usize = 3;
+    let merge_tap_choice: Option<usize> = merge_tap_run.outcome.as_ref().map(|(mt_layout, _)| {
+        let start = crate::trace::peek_events_len();
+        let mergetap_err = count_validation_errors(mt_layout, solver_result);
+        let native_err = native_run
+            .outcome
+            .as_ref()
+            .map(|(l, _)| count_validation_errors(l, solver_result));
+        crate::trace::truncate_events(start);
+        match native_err {
+            Some(n_err) if mergetap_err < n_err => MERGE_TAP_IDX,
+            Some(_) => NATIVE_IDX,
+            // The gate above requires an unstampable *Native layout*, so this
+            // arm is unreachable in practice; if Native somehow produced
+            // nothing, merge-tap is the only layout we have.
+            None => MERGE_TAP_IDX,
+        }
+    });
+
     // Re-attach the sink before replaying the winner's events. Score
     // events for *every* candidate that actually ran are emitted (so
     // telemetry/snapshot debugger see what was tried), then the winner's
@@ -627,7 +733,12 @@ pub fn select_best_decomposition(
     // Re-emit each candidate's `DecompositionCandidateScored` event for
     // telemetry. Filtering each candidate's captured events for the
     // single Score line is cheap (≤1 hit per candidate).
-    for events in [&native_run.events, &k1_run.events, &split_run.events] {
+    for events in [
+        &native_run.events,
+        &k1_run.events,
+        &split_run.events,
+        &merge_tap_run.events,
+    ] {
         for ev in events {
             if matches!(ev, crate::trace::TraceEvent::DecompositionCandidateScored { .. }) {
                 crate::trace::emit(ev.clone());
@@ -639,10 +750,12 @@ pub fn select_best_decomposition(
     // unaccepted candidate (degraded path so the user still sees a
     // layout — same behaviour as today's pipeline when shape-fix can't
     // resolve a (n, m) trap).
-    let candidates: [(Option<(LayoutResult, CandidateScore)>, Vec<crate::trace::TraceEvent>, &str); 3] = [
+    // Index order MUST match NATIVE_IDX (0) / MERGE_TAP_IDX (3) above.
+    let candidates: [(Option<(LayoutResult, CandidateScore)>, Vec<crate::trace::TraceEvent>, &str); 4] = [
         (native_run.outcome, native_run.events, "native"),
         (k1_run.outcome, k1_run.events, "k1-shape-fix"),
         (split_run.outcome, split_run.events, "size-split-2"),
+        (merge_tap_run.outcome, merge_tap_run.events, "merge-tap"),
     ];
 
     // Find best accepted candidate (highest score).
@@ -661,10 +774,13 @@ pub fn select_best_decomposition(
         .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
         .map(|(i, _)| i);
 
-    // Falling back: first candidate that produced a layout (Native
-    // preferred — earliest in the array). Same degraded behaviour as
-    // today's pipeline when shape-fix can't resolve a (n, m) trap.
-    let winner_idx = best_accepted_idx
+    // The scoped Pooled merge-tap decision (error-count metric, ties → Native)
+    // overrides the generic accepted-by-score pick when it ran; otherwise fall
+    // back to best-accepted, then to the first candidate that produced a
+    // layout (Native preferred — earliest in the array). Same degraded
+    // behaviour as today's pipeline when shape-fix can't resolve a (n, m) trap.
+    let winner_idx = merge_tap_choice
+        .or(best_accepted_idx)
         .or_else(|| candidates.iter().position(|(o, _, _)| o.is_some()));
 
     let Some(idx) = winner_idx else {
@@ -808,5 +924,28 @@ mod tests {
     #[test]
     fn native_candidate_name() {
         assert_eq!(NativeCandidate.name(), "native");
+    }
+
+    #[test]
+    fn merge_tap_candidate_name() {
+        assert_eq!(MergeTapCandidate.name(), "merge-tap");
+    }
+
+    #[test]
+    fn merge_tap_candidate_is_pooled_only() {
+        // The Pooled-only guard short-circuits before any layout work, so an
+        // empty solver is fine here — we only exercise the strategy gate that
+        // makes `select_best_decomposition` fall through to Native on any
+        // non-Pooled strategy.
+        let solver = empty_solver();
+        let opts = LayoutOptions {
+            strategy: LayoutStrategy::PartitionedDecomposed,
+            ..Default::default()
+        };
+        let out = MergeTapCandidate.produce(&solver, &opts);
+        assert!(
+            out.is_err(),
+            "merge-tap candidate must refuse non-Pooled strategies; got {out:?}"
+        );
     }
 }

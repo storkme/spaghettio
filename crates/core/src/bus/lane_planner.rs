@@ -22,21 +22,6 @@ const LANE_CAPACITY_TABLE: &[(&str, f64)] = &[
     ("express-transport-belt", 22.5),
 ];
 
-/// Merge-and-tap fallback (RFP `docs/rfp-merge-tap-trunks.md`) is fully built —
-/// merge-tree builder, K-trunk bin-packing, merge-tree stamping, feeder
-/// routing, and trunk pickup all land here and in `bus::balancer` /
-/// `bus::ghost_router` — but is GATED OFF pending a ghost-router fix. The
-/// multi-tap-on-family crossing pattern the fallback creates (K trunks whose
-/// per-consumer taps fan east across the bus) overwhelms the Step-6 junction
-/// solver / crossing resolver, which hangs on dense shapes (reproduced:
-/// electronic-circuit@35/s from ore → copper-plate (4, 9), K = 4 — the Step-6
-/// crossing phase never returns). This is the RFP's KC6 "router-pressure"
-/// cost made concrete. With the flag `false` no `merge_tap` family is ever
-/// created, so the whole mechanism is provably inert (the default corpus is
-/// byte-identical). Flip to `true` once the junction solver can absorb the tap
-/// density (trunk-anchor walker / lane_order attention, per the RFP).
-const MERGE_TAP_FALLBACK_ENABLED: bool = false;
-
 /// Entity names that occupy multiple tiles (sized by `machine_dims()`).
 ///
 /// Duplicates (rather than reuses) `common::MACHINE_ENTITY_NAMES` — this list
@@ -208,6 +193,7 @@ pub fn plan_bus_lanes(
     max_belt_tier: Option<&str>,
     plan: Option<&PartitionPlan>,
     total_height: i32,
+    merge_tap: bool,
 ) -> Result<(Vec<BusLane>, Vec<LaneFamily>), String> {
     // Fluid surplus items AND fluid targets must physically exit at the
     // south boundary (`total_height`) — see `BusLane::perimeter_exit_y`.
@@ -337,7 +323,7 @@ pub fn plan_bus_lanes(
     }
 
     // Split lanes that exceed max belt tier capacity
-    let (mut lanes, mut families) = split_overflowing_lanes(&lanes, row_spans, max_belt_tier, plan)?;
+    let (mut lanes, mut families) = split_overflowing_lanes(&lanes, row_spans, max_belt_tier, plan, merge_tap)?;
 
     // Pre-compute tap-off ys before sorting
     for lane in &mut lanes {
@@ -709,6 +695,7 @@ fn split_overflowing_lanes(
     row_spans: &[RowSpan],
     max_belt_tier: Option<&str>,
     plan: Option<&PartitionPlan>,
+    merge_tap: bool,
 ) -> Result<(Vec<BusLane>, Vec<LaneFamily>), String> {
     let default_cap = LANE_CAPACITY_TABLE.last().map(|(_, c)| *c).unwrap_or(15.0);
     let max_lane_cap = if let Some(tier) = max_belt_tier {
@@ -955,7 +942,7 @@ fn split_overflowing_lanes(
         // paths. Strictly additive: `shape_is_stampable` shapes are byte-for-
         // byte untouched, so nothing in the default corpus moves (only
         // utility@10/s's copper-cable / iron-plate families are unstampable).
-        if MERGE_TAP_FALLBACK_ENABLED
+        if merge_tap
             && !any_hs
             && !is_collector
             && n_producers >= 2
@@ -1391,7 +1378,7 @@ mod tests {
             vec![6],  // input belt at y=6
         );
 
-        let (lanes, families) = plan_bus_lanes(&sr, &[row_span], None, None, 40)
+        let (lanes, families) = plan_bus_lanes(&sr, &[row_span], None, None, 40, false)
             .expect("plan_bus_lanes should succeed for iron-gear-wheel");
 
         // Should have exactly 1 lane for iron-plate
@@ -1417,7 +1404,7 @@ mod tests {
             vec![6],
         );
 
-        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None, None, 40).unwrap();
+        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None, None, 40, false).unwrap();
 
         // iron-gear-wheel is the final output, not consumed internally, so no lane for it
         // Only iron-plate (the external input) needs a lane
@@ -1442,7 +1429,7 @@ mod tests {
             vec![6, 7],  // two input belt y positions
         );
 
-        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None, None, 40)
+        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None, None, 40, false)
             .expect("plan_bus_lanes should succeed for plastic-bar");
 
         // Should have lanes for coal and petroleum-gas (plastic-bar is final output)
@@ -1478,7 +1465,7 @@ mod tests {
             vec![6, 7],
         );
 
-        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None, None, 40).unwrap();
+        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None, None, 40, false).unwrap();
 
         // optimize_lane_order puts solid before fluid
         let fluid_indices: Vec<usize> = lanes.iter().enumerate()
@@ -1510,7 +1497,7 @@ mod tests {
             vec![6],
         );
 
-        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None, None, 40).unwrap();
+        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None, None, 40, false).unwrap();
 
         // The iron-plate lane has consumer row 0, so it should have a tap-off y
         let iron_plate_lane = lanes.iter().find(|l| l.item == "iron-plate").unwrap();
@@ -1562,7 +1549,7 @@ mod tests {
             }
         }).collect();
 
-        let (lanes, _families) = plan_bus_lanes(&sr, &row_spans, None, None, 40)
+        let (lanes, _families) = plan_bus_lanes(&sr, &row_spans, None, None, 40, false)
             .expect("plan_bus_lanes should succeed");
 
         // Must have at least one lane

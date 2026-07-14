@@ -317,6 +317,7 @@ fn run_e2e_inner(
             max_belt_tier: belt_tier.map(|s| s.to_string()),
             row_layout,
             max_inserter_tier: Default::default(),
+            merge_tap: false,
         },
     )
         .map_err(|e| {
@@ -787,6 +788,100 @@ fn decomposition_search_picks_native_on_clean_partitioned_case() {
     assert_eq!(
         scored_names, vec!["native".to_string()],
         "expected only `native` to be scored on a clean case; got {scored_names:?}"
+    );
+}
+
+/// Deterministic merge-and-tap fallback fixture
+/// (`docs/rfp-merge-tap-trunks.md`). Drives `MergeTapCandidate::produce`
+/// directly (not through the selector) on the smallest natural unstampable
+/// case — electronic-circuit@35/s from ore, AM2 yellow, whose copper-plate
+/// family is the coprime `(4, 9)` shape — and pins the fallback *mechanism*:
+///
+///   * the `MergeTapFallback` trace fires for copper-plate with shape `(4, 9)`
+///     and the throughput-sized trunk count `K = ceil(35·1.5 / 15) clamped =
+///     4`;
+///   * the consumer taps are priority splitters (>=1 splitter carries
+///     `output_priority`, and the priority-direction validator finds no
+///     violations);
+///   * two produces are byte-identical (KC2 determinism).
+///
+/// It intentionally does NOT assert 0 errors / 0 warnings. In the current
+/// router this merge-tap layout validates at ~66 errors / ~72 warnings — the
+/// dense multi-tap crossing quality is Phase-2 work — which is exactly why the
+/// selector keeps native for EC@35 (native = 4 errors). Selection coverage
+/// (candidate constructed, scored, native wins on error count) rides along on
+/// `stress_electronic_circuit_35s_from_ore`, which now runs the candidate.
+#[test]
+#[ntest::timeout(120000)]
+fn merge_tap_fallback_fires_with_correct_k_and_priority_taps() {
+    use spaghettio_core::bus::decomposition_search::{DecompositionCandidate, MergeTapCandidate};
+    use spaghettio_core::bus::layout::{LayoutOptions, LayoutStrategy};
+    use spaghettio_core::trace::{self, TraceEvent};
+
+    let inputs: FxHashSet<String> =
+        ["iron-ore", "copper-ore"].iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_exclusions(
+        "electronic-circuit",
+        35.0,
+        &inputs,
+        "assembling-machine-2",
+        &FxHashSet::default(),
+    )
+    .expect("solve EC@35 from ore");
+    let opts = LayoutOptions {
+        strategy: LayoutStrategy::Pooled,
+        max_belt_tier: Some("transport-belt".to_string()),
+        merge_tap: false,
+        ..Default::default()
+    };
+
+    let guard = trace::start_trace();
+    let l1 = MergeTapCandidate.produce(&sr, &opts).expect("merge-tap produce");
+    let events = trace::drain_events();
+    drop(guard);
+
+    // K correct: the unstampable copper-plate (4, 9) family is retired to K=4
+    // throughput trunks. (Two events are expected — the retry orchestrator
+    // runs the layout pass twice — so match the first.)
+    let fb = events.iter().find_map(|e| match e {
+        TraceEvent::MergeTapFallback { item, shape, k_trunks, .. } if item == "copper-plate" => {
+            Some((*shape, *k_trunks))
+        }
+        _ => None,
+    });
+    assert_eq!(
+        fb,
+        Some(((4, 9), 4)),
+        "expected copper-plate (4, 9) K=4 merge-tap fallback; got {fb:?}"
+    );
+
+    // Taps priority-correct: >=1 splitter carries output_priority and the
+    // priority-direction validator flags none of them.
+    let prio_taps = l1
+        .entities
+        .iter()
+        .filter(|e| e.name.contains("splitter") && e.output_priority.is_some())
+        .count();
+    assert!(prio_taps >= 1, "expected >=1 priority tap splitter; got {prio_taps}");
+    let issues = match validate::validate(&l1, Some(&sr), LayoutStyle::Bus) {
+        Ok(i) => i,
+        Err(e) => e.issues,
+    };
+    let prio_issues = issues
+        .iter()
+        .filter(|i| i.category.contains("priority") || i.message.contains("priority"))
+        .count();
+    assert_eq!(prio_issues, 0, "tap splitter priority must be correct; got {prio_issues}");
+
+    // KC2 determinism: a second produce is byte-identical over structural
+    // fields.
+    let guard2 = trace::start_trace();
+    let l2 = MergeTapCandidate.produce(&sr, &opts).expect("merge-tap produce (2nd)");
+    drop(guard2);
+    assert_eq!(
+        golden_hash(&l1),
+        golden_hash(&l2),
+        "merge-tap layout must be deterministic across runs"
     );
 }
 
@@ -1407,6 +1502,7 @@ fn tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing() {
             row_layout: RowLayout::HorizontalStack,
             surplus_policy: SurplusPolicy::default(),
             max_inserter_tier: Default::default(),
+            merge_tap: false,
         },
     )
     .unwrap_or_else(|e| panic!("{test_name}: layout: {e}"));
@@ -1551,6 +1647,7 @@ fn tier5_processing_unit_2s_horizontal_stack_iron_ore_pipe_bypass() {
             row_layout: RowLayout::HorizontalStack,
             surplus_policy: SurplusPolicy::default(),
             max_inserter_tier: Default::default(),
+            merge_tap: false,
         },
     )
     .unwrap_or_else(|e| panic!("{test_name}: layout: {e}"));
@@ -1656,6 +1753,7 @@ fn tier5_processing_unit_25s_horizontal_stack_pole_coverage() {
             row_layout: RowLayout::HorizontalStack,
             surplus_policy: SurplusPolicy::default(),
             max_inserter_tier: Default::default(),
+            merge_tap: false,
         },
     )
     .unwrap_or_else(|e| panic!("{test_name}: layout: {e}"));

@@ -83,6 +83,13 @@ pub struct LayoutOptions {
     /// semantics. Default `Stack`. Core field only in Phase 1 — not yet
     /// plumbed through wasm-bindings or the web UI (Phase 4).
     pub max_inserter_tier: InserterTier,
+    /// Enable the merge-and-tap trunk fallback for unstampable
+    /// multi-producer/multi-consumer families (`docs/rfp-merge-tap-trunks.md`).
+    /// Default `false` (byte-identical to pre-fallback layouts). Set only by
+    /// `bus::decomposition_search::MergeTapCandidate`; never by the default
+    /// `NativeCandidate`. Replaces the retired `MERGE_TAP_FALLBACK_ENABLED`
+    /// compile-time const.
+    pub merge_tap: bool,
 }
 
 impl LayoutOptions {
@@ -95,6 +102,7 @@ impl LayoutOptions {
             row_layout: RowLayout::default(),
             surplus_policy: SurplusPolicy::default(),
             max_inserter_tier: InserterTier::default(),
+            merge_tap: false,
         }
     }
 }
@@ -365,7 +373,7 @@ fn layout_pass(
     });
     let t_plan1 = web_time::Instant::now();
     let (lanes_1, families_1) =
-        plan_bus_lanes(solver_result, &row_spans_1, max_belt_tier, plan_ref, total_height_1)?;
+        plan_bus_lanes(solver_result, &row_spans_1, max_belt_tier, plan_ref, total_height_1, opts.merge_tap)?;
     crate::trace::emit(crate::trace::TraceEvent::PhaseTime {
         phase: "plan_bus_lanes_1".to_string(),
         duration_ms: t_plan1.elapsed().as_millis() as u64,
@@ -408,7 +416,7 @@ fn layout_pass(
                 duration_ms: t_place2.elapsed().as_millis() as u64,
             });
             let t_plan2 = web_time::Instant::now();
-            let (nl, nf) = plan_bus_lanes(solver_result, &rs, max_belt_tier, plan_ref, th)?;
+            let (nl, nf) = plan_bus_lanes(solver_result, &rs, max_belt_tier, plan_ref, th, opts.merge_tap)?;
             crate::trace::emit(crate::trace::TraceEvent::PhaseTime {
                 phase: "plan_bus_lanes_2".to_string(),
                 duration_ms: t_plan2.elapsed().as_millis() as u64,
