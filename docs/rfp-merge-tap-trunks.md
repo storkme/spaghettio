@@ -421,3 +421,28 @@ Per the CLAUDE.md protocol, plus:
   now unblocked), then re-measure** — the lane-throughput count
   collapsing (or not) is the falsification test for the
   priority-tap hypothesis.*
+- *2026-07-14 — **B2.4 diagnosis: RECORD CORRECTION + reframe.** The
+  B2.3 entry's "125 lane-throughput / 7 unresolved" and the later
+  "215/12" were both measurements of an already-broken FLAG-ON
+  state; the TRUE baseline is flag-OFF EC@35s = 4 errors (the
+  pinned golden: 4 belt-dead-ends from the missing (4,9) balancer).
+  Merge-tap as currently wired is a 4→227 REGRESSION on that cell
+  (and EC@40: 13→panic). The machinery itself is CORRECT — K=4
+  arithmetic verified, clamp didn't bite, the "4 mergetree entities"
+  anomaly is benign (4 single-producer trunks → merge_tree(1) =
+  passthrough), priority taps verified firing — the damage is
+  **foreign-lane feeder concentration**: the fallback's copper
+  feeders route onto/into the iron-ore trunk column at x=20,
+  concentrating a non-merge-tap lane to a modeled ~50/s per belt
+  (86+ of the 215 errors on iron-ore + adjacent crossings). Same
+  geometry that produced the B2.1 UNSAT zone. Priority taps (#12)
+  were the wrong lever twice over: right mechanism, error-free
+  corner. Ruling: fix the feeder ROUTING (the fallback is worthless
+  anywhere if feeders trample foreign trunks); the trigger-scoping
+  question (should (4,9)-class cells with 4 cheap dead-ends take
+  the fallback at all?) is deferred until routing is clean and
+  re-measured. Named follow-ups: EC@40's cluster-COMMIT
+  AlreadyClaimed (a GAP in B2.3a's mergetree protection — commit
+  loop skips Template/RowEntity but not Permanent; beyond the
+  one-liner), and the MergeTapFallback double-emit (plan_bus_lanes
+  apparently runs twice; cosmetic).*
