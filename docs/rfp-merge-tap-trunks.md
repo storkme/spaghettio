@@ -724,3 +724,34 @@ Per the CLAUDE.md protocol, plus:
   both sites BEFORE coding (if merge-tap trunks share a family id,
   the family test won't discriminate either → STOP); unit test
   pinning both conflated cases; EC@35s must return byte-identical.*
+- *2026-07-14 — **v2 (family-identity) FALSIFIED at the empirical
+  gate — family ≡ column on this corpus; the discriminator is
+  PHYSICAL. Hop-geometry diagnosis spike funded.** FAMPROBE at
+  every same-item different-column crossing: utility iron K=5
+  trunks cols 86-90 = fams 19/20/21/22/23, all 22 crossings
+  fam_foreign=TRUE; EC@35s copper K=4 trunks cols 3/7/21/22 =
+  fams 1/4/3/2, all 18 crossings ALSO fam_foreign=TRUE — EC@35s's
+  regressing crossings are NOT native lane-splits, they are
+  merge-tap taps crossing sibling merge-tap trunks, structurally
+  identical to utility's. Since merge-tap stamps one family per
+  trunk column (lane_planner:1021-1052), "different family" and
+  "different column" are a bijection on merge-tap tiles — probe
+  shows zero divergence, so the family flip is bit-identical to
+  the column predicate and buys nothing. The v1 post-mortem's
+  "own-family lane-split sibling" theory was WRONG; the identity
+  family of predicates is exhausted. The real question: the same
+  sibling-trunk UG-hop unstarves utility (98→46) but injects
+  belt-item-isolation + unresolved-junction + lane-throughput in
+  EC@35s — a physical difference downstream of foreignness.
+  **Spike funded, diagnosis-only**: entity dumps at one broken
+  EC@35s hop vs one working utility hop; the minimal geometric
+  diff is the discriminator; test (not assert) the
+  adjacent-columns-21/22 hypothesis (utility's 86-90 are all
+  adjacent yet hop cleanly); establish EC@35s's baseline behavior
+  at those crossings (green despite surface-crossing sibling
+  trunks — benign, tolerated, or masked?). Likely v3 shape: a
+  geometric GUARD (hop when the exit validates, refuse-and-keep-
+  surface otherwise — preserves EC@35s baseline, keeps utility's
+  win). STOP if the mechanism implicates junction-solver internals
+  or A* cost shaping. Tree holds column predicate + inert family
+  threading, uncommitted; FAMPROBE to be stripped on next edit.*
