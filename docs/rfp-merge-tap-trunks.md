@@ -669,3 +669,29 @@ Per the CLAUDE.md protocol, plus:
   sideloaded flow SUPPOSED to go — lane-balancing is only correct
   if the merged destination is legitimate; if the flow is hijacked
   from a starving consumer, (a) is a band-aid on mis-delivery.*
+- *2026-07-14 — **follow-up verdict: ROUTING, not lane-balancing;
+  package #2 funded.** Traced tap ghost:tap:iron-plate:89:458: it
+  carries 15/s East to AM3 consumers at (107,458)/(108,458)/
+  (110,458) needing 2.5/s each — a consumer tap, not a feeder. Its
+  flow is HIJACKED onto the x=90 trunk at the surface crossing;
+  (91,458)→(105,458) all read 0.00/s and the starvation IS flagged
+  (input-rate-delivery "delivers 0.0/s but machine needs 2.5/s" ×3
+  + inserter-item-throughput ×2 — not a validator gap). An inline
+  1→1 splitter would clear the lane-throughput symptom (epsilon
+  confirmed: threshold = cap + 0.01 = 22.51; 22.43 passes with
+  0.08 headroom) but the 15/s would still ride the wrong trunk and
+  the consumers stay starved — band-aid on mis-delivery, REJECTED.
+  Bonus finding raising the stakes: x=90 already reads 44.86/s at
+  y456, BEFORE the y458 sideload — MULTIPLE adjacent iron taps
+  hijack onto x=90, so the 51 lane-throughput AND a chunk of the
+  input-rate-delivery errors share this one root. **Package #2:
+  two steps, hard gate. STEP A (mechanism-first): why did the
+  router surface-cross — prime suspect a same-item exemption in
+  the bridge machinery (bridge_feeder_under_FOREIGN_trunks); B
+  only if the mechanism is a predicate/exemption shape: same-item
+  tap-vs-adjacent-trunk crossings must UG-hop (span here is one
+  column ≈3 tiles ≪ reach 8; do not regress the 17-18-tile
+  unbridgeable walls' honest dead-ends). Gates: full suite,
+  byte-stability everywhere except utility@10/s (expected to move;
+  junctions must not grow), fresh snapshot for the user's browser
+  eyeball.***
