@@ -1,176 +1,208 @@
 # RFP: Validation explainability — from warning soup to visible causes
 
+**Revision 2** — rewritten after a two-reviewer adversarial pass
+(2026-07-14) falsified the original draft's anchor diagnosis, its
+central kill criterion, and its cost estimate. The review findings are
+summarized in the decision log; the design below is the corrected one.
+
 ## Summary
 
 The validator finds real problems, but the web UI surfaces them as
-atomized one-line symptoms (`[warning] input-rate-delivery: needs
-3.0/s, delivers 1.4/s` × 35), and the *causal* knowledge the engine had
-at stamp time — which side was under-provisioned, why, what blocked the
-slot — is computed and then thrown away. A human eyeballing the layout
-has to re-derive the mechanism by hand (as happened 2026-07-14: the
-user traced EC@35s starvation to inserter slots blocked by the
-template's pole-gap reservation — a fact the inserter ladder knew when
-it capped the side). This RFP adds four composable pieces: **(1) a
-starvation heatmap** overlay, **(2) stamp-time causal attribution**
-carried on validation issues, **(3) click-to-explain** entity
-highlighting, and **(4) a cause rollup** in the sidebar. Pure
-metadata + UI — zero layout-output movement by construction.
+atomized one-line symptoms, and the *causal* knowledge the engine had
+at stamp time is computed and then thrown away. This RFP adds four
+composable pieces: **(1) a starvation heatmap** overlay driven by
+structured delivered/needed numbers, **(2) causal attribution** carried
+on the existing `InserterSideCapped` trace event and joined per-tile in
+the UI, **(3) click-to-explain** entity highlighting, and **(4) a cause
+rollup** in the sidebar. Metadata and UI only — no new `LayoutResult`
+surface, no golden/snapshot risk by construction.
 
 ## Motivation
 
-Reproducible today: `#/l/ecl/35/am2/ior,coo/tbr` (the
-`stress_electronic_circuit_35s_from_ore` cell). The shipped layout
-carries 35 `input-rate-delivery` warnings. Finding out *why* took a
-human staring at tiles: machines needing 2× long-handed inserters have
-one, because the dense templates reserve dx=2 for a power pole
-(`templates.rs` "leaving dx=2 free for `place_poles`") and the
-long-handed count-ladder caps at the slots left over. The engine knew
-this at stamp time (`inserter_ladder` computes planned vs fitted per
-side); the validator later rediscovers only the downstream symptom; the
-UI shows one hover line per machine (`validationOverlay.ts:44`).
+Reproducible today: `#/l/ecl/35/am2/ior,coo/tbr`
+(`stress_electronic_circuit_35s_from_ore`). The user eyeballed starved
+assemblers and read the scene as "power poles are in the way, so we
+can't fit 2× long-handed inserters." The session lead endorsed that
+reading and blamed the templates' pole-gap reservation.
 
-Every future eyeball session pays this cost. The verification protocol
-(CLAUDE.md step 2, "look at the layout with your eyes") and any future
-in-game ground-truthing (inserter-sizing KC5) get dramatically cheaper
-if the layout explains itself.
+**Adversarial review proved both humans wrong — which is this RFP's
+best evidence.** The actual mechanism (traced from the `.fls` snapshot
+and the code):
 
-Related but explicitly **out of scope**: actually *fixing* the
-pole-vs-inserter priority inversion (a human gives inserters first
-claim on face tiles and lets poles hunt; the engine reserves the pole
-gap up front). Parked by the user 2026-07-14 ("maybe we'll come back to
-this") — it belongs to the face-allocation north-star. This RFP's job
-is to make that future RFP's evidence gathering trivial.
+- The starved iron sides are capped by `dual_input_row`'s near/far
+  **shared-column contest** (`contest_favors_far`,
+  `templates.rs:794-796`) — the ladder's position budget loses a column
+  to the contest, fits 1 LHI where the plan needs ~1.46/s, and the
+  engine records exactly that: 24 `InserterSideCapped` trace events
+  (shortfall 0.258) matching 12 `inserter-item-throughput` warnings
+  ("moves 1.20/s, needs 1.46/s") to the decimal.
+- The pole is a *bystander*: `place_poles` runs after templates and
+  only takes tiles the ladder left free. Poles dodge inserters, never
+  the reverse. The only pole-gap reservations in the tree are in fluid
+  rows, never wired to inserter sizing.
+- The 35 `input-rate-delivery` warnings the original draft anchored on
+  are a *third* thing entirely: zero-delivery disconnections
+  (co-located `belt-flow-reachability` errors, tracked in #297) that no
+  inserter ledger could ever attribute.
+
+Three failure modes, three causes; two humans and the original RFP
+draft each picked the wrong one from the rendered layout. The engine
+knew the truth the whole time — in trace events and warning payloads
+nothing surfaces. That is the problem statement.
+
+Explicitly **out of scope**: fixing the contest/face-allocation
+geometry itself (parked by the user 2026-07-14, "maybe we'll come back
+to this" — belongs to the face-allocation north-star). This RFP makes
+that future work's evidence gathering trivial.
 
 ## Design
 
-### D1. Structured payloads on `ValidationIssue`
+### D1. Structured numbers on `ValidationIssue`
 
-`ValidationIssue` (validate/mod.rs:66) gains an optional structured
-field:
+`ValidationIssue` (validate/mod.rs:66) gains
+`pub detail: Option<IssueDetail>` with machine-readable
+`delivered`/`needed` — both rate checks (`check_input_rate_delivery`,
+`check_inserter_item_throughput`) already compute these locally before
+formatting prose (verified in review). No cause fields here — cause
+lives on the trace side (D2), keeping `ValidationIssue` a symptom
+record.
 
-```rust
-pub struct IssueDetail {
-    /// Machine-readable numbers the message already states in prose.
-    pub delivered: Option<f64>,
-    pub needed: Option<f64>,
-    /// Stamp-time cause, when a provision record matches (D2).
-    pub cause: Option<String>,          // human-readable, one line
-    pub cause_kind: Option<String>,     // stable enum-ish slug
-    /// Entities that constitute the explanation (D3 highlights these).
-    pub related: Vec<(i32, i32)>,
-}
-pub struct ValidationIssue { ..., pub detail: Option<IssueDetail> }
-```
+Required TS edits the derive does NOT cover (review finding): the
+hand-declared mirrors in `web/src/renderer/validationOverlay.ts:4-10`
+and `web/src/ui/snapshotLoader.ts:32-38` must gain `detail` explicitly.
+`.fls` additions use `#[serde(default)]` per the
+`effective_rows`/`voided_streams` pattern.
 
-Serialization crosses the WASM boundary with the existing derive
-plumbing (same pattern as prior field additions). Checks that already
-compute delivered/needed (`input-rate-delivery`,
-`inserter-item-throughput`, lane-throughput) populate the numbers
-instead of only formatting them into prose.
+### D2. Attribution via the existing `InserterSideCapped` event
 
-### D2. `side_provisions` ledger (the attribution source)
+The original draft proposed a new `side_provisions` ledger on
+`LayoutResult`. Review found the engine already emits
+`InserterSideCapped` (trace.rs:218-225) at ~30 of the 31 `size_side`
+call sites, carrying recipe/side/required/placed/shortfall — nearly the
+whole proposed payload — and the web UI already has a per-tile
+trace-event join with click-to-pin (`web/src/ui/tileContext.ts` +
+`inspector.ts`). So D2 becomes an extension, not a new type family:
 
-Following the `effective_rows` / `voided_streams` pattern: a pure
-metadata ledger on `LayoutResult`, written at stamp time, never read by
-layout logic.
-
-```rust
-pub struct SideProvision {
-    pub machine_x: i32, pub machine_y: i32,
-    pub face: Face,                    // N/E/S/W
-    pub item: String,
-    pub planned_rate: f64,             // what the ladder was asked for
-    pub fitted_rate: f64,              // what the placed inserters give
-    pub inserters: Vec<(i32, i32)>,
-    pub limit: ProvisionLimit,         // why fitted < planned, if it is
-}
-pub enum ProvisionLimit {
-    None,                              // fully provisioned
-    SlotReservedForPole { tile: (i32, i32) },
-    SlotGeometry,                      // no free tile on this face
-    TierCap,                           // max_inserter_tier ceiling
-}
-```
-
-Populated where the ladder/templates already know the answer
-(`inserter_ladder::size_side` call sites in `templates.rs` /
-`placer.rs`). **Attribution is a join, not an inference**: at validate
-time, an `input-rate-delivery` or `inserter-item-throughput` issue
-looks up the provision record for the same machine/face/item and copies
-its `limit` into `IssueDetail.cause`. If no record matches, `cause`
-stays `None` — the UI says "unattributed", never guesses.
+- Add to `InserterSideCapped`: `machine_x`, `machine_y` (in scope at
+  every emit site — used two lines later to place the entity) and
+  `limit: &'static str`, a small vocabulary of budget-cap reasons.
+- **Honest vocabulary, v1**: `"column-contest"` (dual-input near/far
+  contest — the anchor mechanism), `"tier-cap"` (max_inserter_tier),
+  `"geometry"` (catch-all: the row shape offers no further slots).
+  Review confirmed the *why* is currently discarded to a scalar
+  `position_budget` before `size_side` — so tagging is per-call-site
+  authoring work, and v1 only tags what the call site cheaply knows,
+  defaulting to `"geometry"`. `SlotReservedForPole` from the original
+  draft is DELETED — that mechanism does not exist for solid rows.
+- The join is tile-keyed in TS (`tileContext.ts` pattern): a warning at
+  a machine looks up co-located `InserterSideCapped` events. No `Face`
+  enum, no new join key on the validator side (review: the item
+  -throughput check sums across sides and no Face type exists — the
+  original join-key design was fiction).
+- Unattributed warnings stay unattributed. The UI never guesses.
 
 ### D3. Web UI
 
-- **Heatmap toggle** (Phase 1): color machine sprites by
-  `delivered/needed` (from D1 numbers; red → starved, green → fed).
-  Rides the existing overlay-toggle pattern
-  (`validationOverlay`/`regionOverlay` siblings).
-- **Click-to-explain** (Phase 3): clicking an issue marker highlights
-  `detail.related` (the side's inserters, the blocking pole tile, the
-  feeding belt segment) via the existing selection/segment-highlight
-  machinery, and shows `cause` in the hover/inspector text.
-- **Cause rollup** (Phase 3): sidebar panel grouping issues by
-  `(category, cause_kind)` with counts — "input-rate-delivery: 28 ×
-  slot-reserved-for-pole, 7 × lane under-provision" — replacing
-  warning-count soup with a diagnosis.
+- **Heatmap toggle** (Phase 1): color machines by `delivered/needed`
+  from D1. Rides the existing `overlayPanel.ts` toggle pattern.
+- **Click-to-explain** (Phase 3a): clicking an issue marker pins the
+  tile (existing `pinTile` machinery) and renders co-located capped
+  -side events — planned vs fitted, limit reason — in the inspector.
+- **Cause rollup** (Phase 3b, split per review): sidebar grouping of
+  warnings by `(category, limit)` for attributed ones + "unattributed"
+  bucket. The original draft's "lane under-provision" example is
+  deleted — that cause source doesn't exist in this design (a lane-side
+  provision source is future work, listed as a non-goal).
 
 ### Trade-offs / rejected
 
-- **Post-hoc inference in the validator** (guess causes from geometry
-  at validate time): rejected — it re-derives what stamp time already
-  knew and will be wrong at the margins; the whole point is carrying
-  facts forward.
-- **Message-string parsing in TS** for the heatmap: rejected —
-  structured fields are ~the same diff size and don't rot.
-- **Snapshot format**: `.fls` serializes `LayoutResult`, so the ledger
-  appears in snapshots for free (reader tolerates missing fields on old
-  snapshots — same as `effective_rows`).
+- **New `side_provisions` ledger on `LayoutResult`** (original draft):
+  rejected by review — duplicates an existing event stream, adds
+  golden/snapshot surface for no attribution power, and its
+  "join, not inference" framing hid per-call-site authoring anyway.
+- **Post-hoc inference in the validator**: still rejected — carrying
+  stamp-time facts forward is the point.
+- **Message-string parsing in TS**: still rejected — D1 is the same
+  size and doesn't rot.
 
 ## Kill criteria
 
-1. **Zero layout movement, absolute**: if adding the ledger/detail
-   fields moves ANY golden hash or e2e fixture byte
-   (`SPAGHETTIO_STRESS_GOLDEN` before/after), the "pure metadata"
-   premise is violated — stop and rethink; do not re-bless.
-2. **Attribution coverage on the anchor case**: on
-   `stress_electronic_circuit_35s_from_ore`, if fewer than ~80% of the
-   35 input-rate-delivery warnings get a non-None `cause` from the
-   ledger join, the `ProvisionLimit` vocabulary is wrong (the causes
-   live elsewhere) — stop before building UI on top of it.
-3. **No inference creep**: if making criterion 2 pass requires the
-   validator to *compute* causes (anything beyond a key join on
-   machine/face/item), D2's design is wrong — that's the post-hoc
-   guessing this RFP exists to avoid.
-4. **Runtime**: if validate+layout regresses >5% on the e2e corpus
-   from ledger collection, trim the ledger (record only capped sides)
-   or kill.
+1. **Anchor precondition (checked before Phase 2 starts)**: re-run the
+   anchor fixture and confirm ≥10 `inserter-item-throughput` warnings
+   still co-locate with `InserterSideCapped` events (baseline measured
+   2026-07-14: 12 warnings / 24 events). If the anchor no longer
+   exhibits the mechanism (e.g. #297-adjacent fixes moved it), pick a
+   new anchor by measurement before building — do not build against a
+   stale target.
+2. **Attribution coverage, measured against the RIGHT population**: on
+   the anchor, every `inserter-item-throughput` warning whose machine
+   has a matching capped-side event must render its cause in the UI;
+   warnings without events must show "unattributed". If <90% of the
+   *event-matched* warnings surface a cause, the join is broken. (The
+   original 80%-of-input-rate-delivery criterion is dead: measured
+   attribution against that population is 0% — they're #297
+   disconnections.)
+3. **No inference creep**: if attribution ever requires the validator
+   or UI to *compute* a cause (anything beyond the tile-keyed event
+   join), the design is wrong — stop.
+4. **Scoreboard stability**: full suite + `SPAGHETTIO_STRESS_GOLDEN`
+   before/after must be identical (golden_hash covers entities only —
+   review confirmed this is a safety net, not a discriminating gate;
+   the discriminating gate is warning-count stability in
+   `check_stress_scoreboard` across all fixtures).
+5. **Runtime**: >5% validate+layout regression on the corpus → trim or
+   kill.
 
 ## Verification plan
 
-- Full suite + `SPAGHETTIO_STRESS_GOLDEN` before/after (criterion 1).
-- Unit tests: ladder call sites emit provisions (planned vs fitted vs
-  limit) for a capped side and a clean side; issue join copies the
-  right cause; no-match leaves `cause: None`.
-- Anchor case: EC@35s — count attributed vs unattributed ird warnings
-  (criterion 2); spot-check 3 attributions against the entity map (the
-  pole tile named in `SlotReservedForPole` must actually hold a pole).
-- UI: per `feedback_user_validates_ui` — land the heatmap/click/rollup
-  and let the user eyeball on the EC@35s URL; no screenshot iteration.
+- Criterion 1 measurement first, before any Phase 2 code.
+- Unit tests: emit sites carry machine coords + limit; the anchor's
+  contest-capped side tags `"column-contest"`; a tier-capped fixture
+  tags `"tier-cap"`.
+- Anchor case: count attributed vs unattributed in the rollup; spot
+  -check 3 attributions against the entity map and the shortfall
+  arithmetic (0.258 pattern).
+- UI per `feedback_user_validates_ui`: land, let the user eyeball on
+  the anchor URL; no screenshot iteration.
 
 ## Phasing
 
-1. **Phase 1 — numbers + heatmap**: `IssueDetail` with
-   delivered/needed on the rate checks; heatmap toggle. Smallest
-   landable visible win.
-2. **Phase 2 — provisions + attribution**: `side_provisions` ledger,
-   the validate-time join, `cause`/`cause_kind`/`related` populated.
-   Criteria 2+3 gate here.
-3. **Phase 3 — explain UI**: click-to-explain + cause rollup panel.
+1. **Phase 1 — numbers + heatmap** (independent of the disputed-and-
+   corrected narrative; safe to build first): `IssueDetail`
+   delivered/needed + the two TS mirror edits + heatmap toggle.
+2. **Phase 2 — event extension + join**: `InserterSideCapped` coords +
+   limit vocabulary; tileContext join. Gated by criteria 1–3.
+3. **Phase 3a — click-to-explain**; **Phase 3b — cause rollup**. Two
+   separately landable UI diffs (split per review, gold-plating
+   control).
 
 ## Decision log
 
-- *2026-07-14 — drafted after the user's EC@35s eyeball session traced
-  input-rate-delivery starvation to pole-blocked inserter slots by
-  hand; user: tooling "sounds worthwhile", pole-priority fix itself
-  parked ("maybe we'll come back to this").*
+- *2026-07-14 — drafted after the user's EC@35s eyeball session; user:
+  tooling "sounds worthwhile", geometry fix itself parked.*
+- *2026-07-14 — **adversarial review (2 reviewers, parallel): REVISE
+  ×2; draft rewritten as revision 2.** Confirmed findings against the
+  original draft: (a) the anchor diagnosis was WRONG — the starved
+  sides are capped by dual_input_row's near/far column contest, not a
+  pole-gap reservation (poles are placed after inserters and only take
+  leftover tiles; pole-gap reservations exist only in fluid rows,
+  unwired to sizing) — both the user's eyeball read and the lead's
+  endorsement misattributed it, which is itself the strongest
+  motivation for this tooling; (b) KC2 gated on the wrong warning
+  population — the 35 input-rate-delivery warnings are #297
+  zero-delivery disconnections, 0% inserter-attributable (measured
+  from the .fls snapshot); the real mechanism lives in 12
+  inserter-item-throughput warnings ↔ 24 InserterSideCapped events
+  (shortfall arithmetic matches to the decimal); (c) the proposed
+  side_provisions ledger duplicated the existing InserterSideCapped
+  event + tileContext/inspector UI — design switched to extending
+  those; (d) D3's "lane under-provision" rollup example was
+  undeliverable by D2's vocabulary — deleted; (e) no Face enum exists
+  and the item-throughput check sums across sides — the (machine,
+  face, item) join key was fiction; join is now tile-keyed in TS; (f)
+  hand-declared TS mirrors (validationOverlay.ts, snapshotLoader.ts)
+  named as required edits; (g) golden_hash covers entities only — KC1
+  demoted to safety net, warning-count stability promoted to the
+  discriminating gate; (h) "light" relabeled honestly: Phase 2 is
+  per-call-site authoring (~30 sites), v1 vocabulary kept minimal to
+  match. Phase 1 declared safe to build independent of all findings.*
