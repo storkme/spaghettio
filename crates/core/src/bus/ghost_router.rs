@@ -136,6 +136,9 @@ fn merge_tap_consumer_demands(lane: &BusLane, row_spans: &[RowSpan]) -> FxHashMa
         let solid_inputs: Vec<_> = rs.spec.inputs.iter().filter(|f| !f.is_fluid).collect();
         for (input_idx, inp) in solid_inputs.iter().enumerate() {
             if inp.item == lane.item && input_idx < rs.input_belt_y.len() {
+                // First matching slot only (first-match == sum): assumes one
+                // input slot per item per recipe. Revisit if the fallback ever
+                // covers multi-item-per-recipe families — then sum all matches.
                 demands.insert(rs.input_belt_y[input_idx], inp.rate * rs.machine_count as f64);
                 break;
             }
