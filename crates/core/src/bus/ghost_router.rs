@@ -72,6 +72,14 @@ pub struct GhostRouteResult {
     /// stranded-byproduct validator cross-checks these against physical
     /// pipe entities, and must work in the non-traced pipeline too.
     pub surplus_exits: Vec<(String, i32, i32)>,
+    /// Seed tiles of crossing clusters the junction solver capped on
+    /// (`solve_crossing` returned `None`). First-class layout data so the
+    /// layout retry loop (`run_layout_with_retry_inner`) reads cap coords
+    /// from here instead of scraping `JunctionGrowthCapped` out of the trace
+    /// collector — the collector is only populated when tracing is active, so
+    /// the old path made retries fire only under a trace guard. The trace
+    /// event is still emitted for the debugger; this is the control-flow copy.
+    pub cap_coords: Vec<(i32, i32)>,
 }
 
 /// A spec for one connecting belt run.
@@ -2685,6 +2693,13 @@ pub fn route_bus_ghost(
         &spec_kinds,
     );
 
+    // Control-flow copy of the junction solver's cap tiles. `solve_crossing`
+    // returns `None` exactly when it caps (every `None` path emits
+    // `JunctionGrowthCapped` at `seeds[0]`), so pushing the cluster seed on the
+    // `None` branch below reproduces the capped-tile set the layout retry loop
+    // used to scrape from the trace collector — without needing a trace guard.
+    let mut cap_coords: Vec<(i32, i32)> = Vec::new();
+
     for cluster in &clusters {
         // `corridor_handled` grows during this loop — a prior cluster's
         // SAT footprint may have absorbed tiles that belong to this
@@ -2797,6 +2812,10 @@ pub fn route_bus_ghost(
             strategies,
             &pending_crossings,
         ) else {
+            // Capped: `solve_crossing` returned `None`, matching the
+            // `JunctionGrowthCapped` event it emitted at this cluster's seed.
+            // Record it for the retry loop (control flow, not the trace stream).
+            cap_coords.push(cluster[0]);
             // Diagnostic: when SPAGHETTIO_BLAME_JUNCTIONS=1 is set,
             // identify which spec's removal would let the cluster
             // solve. Helps narrow "what shape of crossing keeps
@@ -3858,6 +3877,7 @@ pub fn route_bus_ghost(
         regions,
         warnings,
         surplus_exits,
+        cap_coords,
     })
 }
 

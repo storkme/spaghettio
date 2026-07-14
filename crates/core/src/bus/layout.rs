@@ -128,7 +128,7 @@ pub fn build_bus_layout(
 }
 
 /// Today's `build_bus_layout` body — the retry orchestrator that
-/// invokes `layout_pass`, scans for `JunctionGrowthCapped` events,
+/// invokes `layout_pass`, reads the junction-cap tiles it returns,
 /// computes retry gaps, and runs a second pass if needed. Extracted
 /// from `build_bus_layout` so `NativeCandidate::produce` can call it
 /// directly without recursing through the search layer. See
@@ -160,32 +160,27 @@ fn run_layout_with_retry_inner(
     opts: &LayoutOptions,
     explicit_plan: Option<&crate::bus::partitioner::PartitionPlan>,
 ) -> Result<LayoutResult, String> {
-    // Snapshot the trace collector before the first pass so we can
-    // detect `JunctionGrowthCapped` events emitted by *this* layout
-    // call (and not whatever the caller already had collected).
+    // Snapshot the trace collector length before the first pass. This is
+    // now used ONLY to present a clean event stream to a streaming consumer
+    // (replay pass-1 events if we don't retry, truncate them if we do) —
+    // retry DETECTION reads cap coords from layout_pass's return, not the
+    // collector, so it works whether or not tracing is active.
     let trace_start = crate::trace::peek_events_len();
 
-    // Detach the active sink (if any) for pass 1. The collector still
-    // sees every event — that's what we need for retry detection. The
-    // sink is reinstalled (or replayed-into) below depending on whether
-    // pass 1 caps. This keeps the streaming consumer from seeing
-    // events from a layout pass that gets abandoned by retry.
+    // Detach the active sink (if any) for pass 1, so a streaming consumer
+    // doesn't see events from a layout pass that gets abandoned by retry.
+    // Reinstalled (or replayed-into) below depending on whether we retry.
     let original_sink = crate::trace::swap_sink(None);
 
-    let pass_1 = layout_pass(solver_result, opts, None, explicit_plan);
-    let (result_1, row_spans_1) = pass_1?;
-
-    // Scan only events emitted by this layout call.
-    let new_events = crate::trace::peek_events_since(trace_start);
-    let cap_coords: Vec<(i32, i32)> = new_events
-        .iter()
-        .filter_map(|e| match e {
-            crate::trace::TraceEvent::JunctionGrowthCapped { tile_x, tile_y, .. } => {
-                Some((*tile_x, *tile_y))
-            }
-            _ => None,
-        })
-        .collect();
+    // Cap coordinates come back as DATA from layout_pass (the ghost router's
+    // GhostRouteResult.cap_coords), not scraped from the trace collector.
+    // The old code read `JunctionGrowthCapped` out of `peek_events_since`,
+    // which only sees events when a trace collector is active — so retries
+    // fired only under a trace guard and `build_bus_layout` was not a pure
+    // function of its arguments (package #3). The event is still emitted for
+    // the snapshot debugger; this reads the control-flow copy instead.
+    let (result_1, row_spans_1, cap_coords) =
+        layout_pass(solver_result, opts, None, explicit_plan)?;
 
     let retry_gaps = if cap_coords.is_empty() {
         FxHashMap::default()
@@ -196,9 +191,10 @@ fn run_layout_with_retry_inner(
     if retry_gaps.is_empty() {
         // No retry — replay pass-1 events from the collector to the
         // original sink so the streaming consumer sees the same events
-        // it would have seen without the silent-pass wrapper.
+        // it would have seen without the silent-pass wrapper. Untraced,
+        // the sink is None and this block is a no-op.
         if let Some(mut sink) = original_sink {
-            for evt in &new_events {
+            for evt in &crate::trace::peek_events_since(trace_start) {
                 sink(evt);
             }
             crate::trace::swap_sink(Some(sink));
@@ -229,7 +225,7 @@ fn run_layout_with_retry_inner(
         recipes,
     });
 
-    let (result_2, _) = layout_pass(solver_result, opts, Some(&retry_gaps), explicit_plan)?;
+    let (result_2, _, _) = layout_pass(solver_result, opts, Some(&retry_gaps), explicit_plan)?;
     Ok(result_2)
 }
 
@@ -266,14 +262,16 @@ fn compute_retry_gaps(
 /// Takes an optional `retry_extra_gaps` map (row index → extra tiles)
 /// that the retry loop in `build_bus_layout` uses to widen specific
 /// row boundaries on a second pass. `None` on the first pass; `Some`
-/// on the retry. Returns the layout plus the final `row_spans`, which
-/// `build_bus_layout` needs to map cap coordinates back to row indices.
+/// on the retry. Returns `(layout, row_spans, cap_coords)`: the retry
+/// loop maps `cap_coords` (junction-solver cap tiles, carried as data
+/// rather than scraped from the trace stream) back to row indices via
+/// `row_spans` to build the gap map.
 fn layout_pass(
     solver_result: &SolverResult,
     opts: &LayoutOptions,
     retry_extra_gaps: Option<&FxHashMap<usize, i32>>,
     explicit_plan: Option<&crate::bus::partitioner::PartitionPlan>,
-) -> Result<(LayoutResult, Vec<RowSpan>), String> {
+) -> Result<(LayoutResult, Vec<RowSpan>, Vec<(i32, i32)>), String> {
     let max_belt_tier = opts.max_belt_tier.as_deref();
     let max_inserter_tier = opts.max_inserter_tier;
 
@@ -581,6 +579,10 @@ fn layout_pass(
     }
     let ghost_warnings = ghost_result.warnings;
     let surplus_exits = ghost_result.surplus_exits;
+    // Junction-cap seed tiles, carried as data (not scraped from the trace
+    // stream) so `run_layout_with_retry_inner` detects caps whether or not a
+    // trace collector is active — see that function and package #3.
+    let cap_coords = ghost_result.cap_coords;
     crate::trace::emit(crate::trace::TraceEvent::PhaseTime {
         phase: "ghost_routing".to_string(),
         duration_ms: t_ghost.elapsed().as_millis() as u64,
@@ -724,6 +726,7 @@ fn layout_pass(
             effective_rows,
         },
         row_spans,
+        cap_coords,
     ))
 }
 

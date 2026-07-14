@@ -3950,6 +3950,81 @@ fn stress_electronic_circuit_35s_from_ore() {
     );
 }
 
+/// Package #3 regression: the layout retry must fire the same way whether or
+/// not a trace guard is active on the calling thread.
+///
+/// The two-pass retry (`run_layout_with_retry_inner`) used to decide whether to
+/// run the second pass by scraping `JunctionGrowthCapped` events out of the
+/// thread-local trace collector. The collector only records while a trace guard
+/// is live, so the retry fired only when the caller happened to be tracing: the
+/// traced e2e / web-streaming paths retried, but the untraced wasm `layout()`
+/// entry point did not — so the same solver result produced different layouts
+/// depending purely on whether tracing was on. Package #3 carries the cap tiles
+/// as data (`GhostRouteResult.cap_coords` → `layout_pass`'s return) so the retry
+/// decision no longer depends on the trace stream.
+///
+/// This drives `MergeTapCandidate::produce` directly rather than the public
+/// `build_bus_layout`. That is deliberate: the impurity lives in
+/// `run_layout_with_retry`, and the merge-tap candidate for
+/// electronic-circuit@35/s from ore is a junction capper (11 caps → 9 retry
+/// gaps). Going through `build_bus_layout` would let the candidate-selection
+/// layer (which picks native over merge-tap for this fixture on error count)
+/// mask the candidate-level divergence, so the public API's final output is
+/// trace-independent here *by coincidence of selection*, not because the retry
+/// is. Testing the candidate isolates the retry itself.
+///
+/// Pre-#3: the untraced build skips the retry and the traced build runs it, so
+/// the two `golden_hash`es differ. Post-#3: both run it and the hashes match.
+#[test]
+#[ntest::timeout(600000)]
+fn layout_retry_is_trace_independent() {
+    use spaghettio_core::bus::decomposition_search::{DecompositionCandidate, MergeTapCandidate};
+
+    let inputs: FxHashSet<String> = ["iron-ore", "copper-ore"]
+        .iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_exclusions(
+        "electronic-circuit",
+        35.0,
+        &inputs,
+        "assembling-machine-2",
+        &FxHashSet::default(),
+    )
+    .expect("solve electronic-circuit@35/s");
+
+    let opts = layout::LayoutOptions {
+        strategy: layout::LayoutStrategy::Pooled,
+        max_belt_tier: Some("transport-belt".to_string()),
+        merge_tap: false,
+        ..Default::default()
+    };
+
+    // Warm the in-memory zone cache (pass-1 and retry-pass geometries) so the
+    // two compared produces never re-invoke the time-budgeted SAT solver — any
+    // divergence is then the retry decision, not solver timing jitter.
+    let _warm = MergeTapCandidate.produce(&sr, &opts).expect("warmup merge-tap produce");
+
+    let untraced = MergeTapCandidate.produce(&sr, &opts).expect("untraced merge-tap produce");
+    let traced = {
+        let _guard = trace::start_trace();
+        MergeTapCandidate.produce(&sr, &opts).expect("traced merge-tap produce")
+    };
+
+    assert_eq!(
+        untraced.entities.len(),
+        traced.entities.len(),
+        "merge-tap entity count differs (untraced {} vs traced {}) — the layout \
+         retry fired in only one produce, so it is not trace-independent",
+        untraced.entities.len(),
+        traced.entities.len(),
+    );
+    assert_eq!(
+        golden_hash(&untraced),
+        golden_hash(&traced),
+        "untraced and traced merge-tap layouts differ — the retry decision still \
+         depends on whether a trace guard is active",
+    );
+}
+
 #[test]
 #[ntest::timeout(600000)]
 fn stress_electronic_circuit_40s_from_ore() {
