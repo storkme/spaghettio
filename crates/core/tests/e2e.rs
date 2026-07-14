@@ -2576,6 +2576,9 @@ struct StressBaseline {
 /// the recorded baseline. Errors and warnings must each be ≤ their recorded
 /// ceiling.
 fn check_stress_scoreboard(test_name: &str, result: &E2EResult, baseline: StressBaseline) {
+    if std::env::var("SPAGHETTIO_STRESS_GOLDEN").is_ok() {
+        eprintln!("STRESSGOLD {test_name} {}", golden_hash(&result.layout));
+    }
     let mut by_category: std::collections::BTreeMap<&str, usize> = Default::default();
     for w in result.issues.iter().filter(|i| i.severity == Severity::Warning) {
         *by_category.entry(w.category.as_str()).or_default() += 1;
@@ -4023,6 +4026,33 @@ fn layout_retry_is_trace_independent() {
         "untraced and traced merge-tap layouts differ — the retry decision still \
          depends on whether a trace guard is active",
     );
+}
+
+/// DISPOSABLE measurement (STEP B re-land): utility-science-pack@10/s AM3
+/// through the public pipeline (build_bus_layout → selection). Prints the
+/// shipped error count + category split and dumps a snapshot. Not a gate.
+#[test]
+#[ignore]
+#[ntest::timeout(3600000)]
+fn measure_utility_10s_am3() {
+    let inputs: FxHashSet<String> =
+        ["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"]
+            .iter().map(|s| s.to_string()).collect();
+    let result = run_e2e(
+        "measure_utility_10s_am3",
+        "utility-science-pack",
+        10.0,
+        "assembling-machine-3",
+        None,
+        &inputs,
+    ).expect("e2e pipeline");
+    let errs: Vec<_> = result.issues.iter()
+        .filter(|i| i.severity == Severity::Error).collect();
+    let mut by_cat: std::collections::BTreeMap<&str, usize> = Default::default();
+    for e in &errs { *by_cat.entry(e.category.as_str()).or_default() += 1; }
+    eprintln!("=== MEASURE utility@10/s AM3 (shipped): {} entities, {} ERRORS ===",
+        result.layout.entities.len(), errs.len());
+    for (c, n) in &by_cat { eprintln!("  {c}: {n}"); }
 }
 
 #[test]
