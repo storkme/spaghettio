@@ -1126,15 +1126,39 @@ pub fn compute_lane_rates(layout: &LayoutResult, solver_result: &SolverResult) -
 
     let mut processed: FxHashSet<(i32, i32)> = FxHashSet::default();
     let mut splitter_input_ready: FxHashSet<(i32, i32)> = FxHashSet::default();
-    // Guard against infinite re-enqueue: if a tile's upstream is part of a
-    // cycle or otherwise unresolvable, give up after 3 retries.
-    // Separate counters for UG-pair waits and splitter-sibling waits so one
-    // doesn't consume the other's budget.
+    // UG output tiles wait for their paired input's feeder; guard against an
+    // unresolvable upstream (a cycle) by giving up after a few retries. Splitter
+    // tiles instead PARK on an unready sibling and are force-resolved by the
+    // outer loop below, so they need no retry budget of their own — a fixed
+    // budget starved long tap chains (each tapoff depends on the previous
+    // splitter's continuation, so an N-deep chain needs O(N) passes).
     let mut ug_retries: FxHashMap<(i32, i32), u32> = FxHashMap::default();
-    let mut splitter_retries: FxHashMap<(i32, i32), u32> = FxHashMap::default();
     const MAX_RETRIES: u32 = 3;
 
-    while let Some(pos) = queue.pop_front() {
+    // Drain the topological queue. When it empties, any splitter tile still
+    // parked on a sibling that never became ready sits in an upstream cycle;
+    // force-resolve the lowest-coordinate one (deterministic so cyclic results
+    // are reproducible) with its current rates and re-drain. This outer loop is
+    // the only remaining give-up path, and it is reached only for true cycles.
+    loop {
+        let pos = match queue.pop_front() {
+            Some(p) => p,
+            None => {
+                match splitter_input_ready
+                    .iter()
+                    .filter(|p| !processed.contains(p))
+                    .min()
+                    .copied()
+                {
+                    Some(stuck) => {
+                        processed.insert(stuck);
+                        do_propagate(stuck, &belt_dir_map, &mut lane_rates, &mut in_degree, &mut queue, &feeders);
+                        continue;
+                    }
+                    None => break,
+                }
+            }
+        };
         if processed.contains(&pos) {
             continue;
         }
@@ -1168,16 +1192,13 @@ pub fn compute_lane_rates(layout: &LayoutResult, solver_result: &SolverResult) -
             if !processed.contains(&sib) {
                 splitter_input_ready.insert(pos);
                 if !splitter_input_ready.contains(&sib) {
-                    let retry = splitter_retries.entry(pos).or_insert(0);
-                    if *retry < MAX_RETRIES {
-                        *retry += 1;
-                        queue.push_back(pos);
-                        continue;
-                    }
-                    // Gave up waiting for sibling — mark processed with current
-                    // rates and skip averaging to avoid silently wrong numbers.
-                    processed.insert(pos);
-                    do_propagate(pos, &belt_dir_map, &mut lane_rates, &mut in_degree, &mut queue, &feeders);
+                    // Sibling's inputs aren't resolved yet. `pos` was just marked
+                    // input-ready above, so when the sibling is popped it fires
+                    // both tiles through `splitter_output_rates`. Park here rather
+                    // than re-enqueue: in a DAG the sibling always resolves, and
+                    // parking preserves dependency order for chains of any depth.
+                    // A genuinely unresolvable sibling (cycle) is handled by the
+                    // outer loop's force-resolve after the main drain.
                     continue;
                 } else {
                     let pos_rates = lane_rates.get(&pos).copied().unwrap_or((0.0, 0.0));
