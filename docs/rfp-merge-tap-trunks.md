@@ -909,3 +909,49 @@ Per the CLAUDE.md protocol, plus:
   honest-check for indefensible higher-total-error picks. If it
   dies, Path A waits for STEP-3 and the fund-vs-park call goes
   to the user with everything priced.*
+- *2026-07-14 — **A-lite probe CLEAN — kind-weighted selection is
+  defensible; STEP B re-land package FUNDED with no STEP-3
+  dependency. Separately: the EC↔plastic −8 classified BOUNDED
+  (column-allocation class).** Probe results: taxonomy fixed on
+  Factorio mechanics BEFORE fixture testing — contamination k=3
+  (belt-item-isolation, fluid-network, pipe-isolation,
+  fluid-connectivity, underground-belt-sideload, belt-junction:
+  wrong item propagates downstream), structural highest
+  (entity-overlap, pipe-to-ground: won't import), starvation 1
+  (dead-end, lane-throughput, unresolved-junction,
+  input-rate-delivery, belt-flow-reachability, inserter/power:
+  local, recoverable). Winner-flip with STEP B applied: exactly
+  TWO fixtures reach merge_tap_choice (EC@35s, EC@40s). EC@35s:
+  count picks mergetap (3<4, ships contamination); kind picks
+  native (4 < 2+k=5) — the desired flip, and the ONLY flip.
+  EC@40s: native both rules (13 vs 159). utility@10/s: merge-tap
+  wins under BOTH rules (46/weighted-62 vs 175). k-robustness:
+  integer window k∈[3,17], 15 wide — k=3 comfortably interior,
+  not knife-edge. Honest-check: kind-weighting makes exactly one
+  higher-total pick (EC@35s native 4 over mergetap 3) and it is
+  principled (1 contamination vs 4 pure starvation). **EC↔plastic
+  mechanism (utilv.txt entity dump)**: the EC 12×7 family
+  balancer (cols x74-80) is INTERLEAVED with trunk:plastic-bar
+  (cols x76-82) in overlap cols 76-80 — no shared tile (not
+  entity-overlap), but belts vertically adjacent in-column, so
+  the two items feed head-to-tail. build_protected_balancer_tiles
+  is the WRONG guard (feeds only the crossing-zone SAT solver,
+  junction_solver.rs:1120); trunk rendering happens EARLIER
+  (Step 2) and balancer_origin_x (ghost_router.rs:484) stamps
+  with NO occupancy check. Nothing reserves a family balancer's
+  footprint against a foreign item's trunk. BOUNDED in class
+  (footprint reservation in lane planning) — one diagnosis hop
+  remains to pin the owner (lane_order vs partitioner vs
+  merge-tap lane assignment). **Funded: re-land package** —
+  production classify_errors + kind-weighted merge_tap_choice
+  (ties→native; comment records the severity rationale, the
+  k∈[3,17] window, and that the taxonomy predates the fixtures) +
+  cherry-pick STEP B (adb68a4). Gates: EC@35s/EC@40s
+  byte-identical to main (both pick native, same as today; any
+  movement = STOP), no other e2e movement, clippy, WASM build,
+  scoreboard shifts listed. Expected: utility@10/s on main
+  98 → 46. A-lite instrumentation preserved as
+  scratchpad/alite-instrumentation.patch (ratified deviation;
+  disposable — production code written fresh). The deferred
+  public-API purity test still lacks a fast merge-tap-winning
+  fixture (utility ≈ 15 min) — remains deferred, noted.*
