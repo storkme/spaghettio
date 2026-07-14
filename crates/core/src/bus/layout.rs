@@ -637,6 +637,19 @@ fn layout_pass(
     let mut warnings = ghost_warnings;
     let templates = crate::bus::balancer_library::balancer_templates();
     for fam in &families {
+        // Merge-tap families are stamped by the splitter merge-tree
+        // (`stamp_merge_tap_family`), not the balancer library, so the library
+        // lookup below is the wrong question for them — every K=1 sub-family
+        // has shape (1, 1), which the library has no entry for, producing a
+        // phantom "No 1→1 balancer template" warning even though merge_tree(1)
+        // (a passthrough belt) stamped fine. Mirror the `if fam.merge_tap`
+        // dispatch in ghost_router step 3. A GENUINE merge-tap stamp failure
+        // (empty lane_xs → empty entity vec) is NOT hidden by this skip: it
+        // still surfaces via `BalancerStamped { template_found: false }` and
+        // `check_balancer_template_coverage`, the trace-based path.
+        if fam.merge_tap {
+            continue;
+        }
         let (n, m) = (fam.shape.0 as u32, fam.shape.1 as u32);
         let has_direct = templates.contains_key(&(n, m));
         let has_decomp = (1..=n).rev().any(|g| {
