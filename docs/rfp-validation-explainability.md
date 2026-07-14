@@ -218,6 +218,30 @@ trace-event join with click-to-pin (`web/src/ui/tileContext.ts` +
   e2e, STRESSGOLD byte-identical, clippy/wasm/tsc clean. Remaining:
   Phase 3a click-to-explain, 3b cause rollup (both need the
   heatmap-style user eyeball of the new hover line first).*
+- *2026-07-14 — **the parked power question ANSWERED with entity
+  evidence (poles exonerated), and a trace-hygiene bug found.**
+  Item-aware pole probe at all 12 real capped machines: the pole
+  sits at the middle inserter column (dx=1, dy=-1) at every one,
+  and the far row above that column carries NO iron belt — the tile
+  is useless to the starved side; the binding constraint is the
+  iron belt's trimmed span (the ladder's "geometry" verdict,
+  confirmed). The engine already gives inserters precedence
+  (place_poles runs after and dodges); the parked priority-inversion
+  fix is MOOT — the real lever is belt-span/row geometry
+  (face-allocation territory). NOTE the first, item-BLIND probe
+  read "12 implicated" — the same error class as the census's
+  item-blind pooled ceilings; item-awareness flipped it. **Bug
+  found while verifying: 12 of the anchor's 24 InserterSideCapped
+  events are DISCARDED-CANDIDATE debris** — machine coords (x=14,
+  pitch 8) match no final machine (a copper balancer sits there);
+  LayoutRetried:0 rules out retry residue; the events sit early in
+  the stream (idx 7-18). run_candidate captures+truncates per
+  candidate, but the merge_tap_choice produce path leaks its
+  events into the winner's trace. Attribution risk: a warning
+  coincidentally anchored at a phantom coord would mis-explain
+  (didn't occur — the 12/12 join was measured against real
+  machines). Fix scoped next: scrub candidate-produce events in
+  merge_tap_choice the way run_candidate does.*
 - *2026-07-14 — **adversarial review (2 reviewers, parallel): REVISE
   ×2; draft rewritten as revision 2.** Confirmed findings against the
   original draft: (a) the anchor diagnosis was WRONG — the starved
