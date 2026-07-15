@@ -242,6 +242,30 @@ trace-event join with click-to-pin (`web/src/ui/tileContext.ts` +
   (didn't occur — the 12/12 join was measured against real
   machines). Fix scoped next: scrub candidate-produce events in
   merge_tap_choice the way run_candidate does.*
+- *2026-07-15 — **phantom-event root cause CORRECTED (three theories,
+  third one measured true) + fix landed (05b205c); Phases 3a+3b
+  landed (571cbe0) — ALL RFP PHASES COMPLETE.** The candidate-leak
+  theory was falsified by reading run_candidate (capture+truncate is
+  correct, merge-tap produce included); the retry-residue theory by
+  the stream itself (LayoutRetried absent). Truth: layout_pass runs
+  rows+lanes TWICE (estimated bus width → actual), pass-1 entities
+  discarded but its events kept — the phantom coords are pass-1
+  geometry (Δx=−28 the width correction, Δy=−13 the balancer band),
+  and the codebase already had the pattern for this
+  (with_merge_tap_fallback_suppressed, same two-pass dedup, opposite
+  pass kept since capped coords are NOT pass-invariant).
+  remove_capped_events_since scrubs pass-1 capped events when pass 2
+  runs; anchor now: 12 events, all real machines, 12/12 joined.
+  Streaming caveat noted: the live sink still sees pass-1 events
+  (same accepted semantics as the retry); the web joins from the
+  final layout.trace, which is scrubbed. 3a: pinned inspector block
+  with per-side explanation (plain-language limit text). 3b: sidebar
+  cause rollup per category — detail-bearing issues joined via the
+  same tileContext, counts per cause, honest "unattributed", unions
+  for multi-limit tiles, no guessing anywhere. Gates: 670 lib + 45
+  e2e, STRESSGOLD byte-identical, clippy/wasm/tsc clean. REMAINING:
+  user eyeball of the 3a pinned block + 3b rollup (per
+  feedback_user_validates_ui); then this RFP closes.*
 - *2026-07-14 — **adversarial review (2 reviewers, parallel): REVISE
   ×2; draft rewritten as revision 2.** Confirmed findings against the
   original draft: (a) the anchor diagnosis was WRONG — the starved
