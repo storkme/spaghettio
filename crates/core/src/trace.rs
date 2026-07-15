@@ -178,6 +178,28 @@ pub fn truncate_events(len: usize) {
     });
 }
 
+/// Remove `InserterSideCapped` events at collector index >= `start`,
+/// keeping everything else. Used by `layout_pass`'s two-pass rows/lanes
+/// placement: when the width-corrected pass 2 runs, pass 1's capped-side
+/// events describe machines at coordinates that no longer exist and would
+/// mis-anchor the per-tile attribution join (RFP validation-explainability
+/// D2). Other pass-1 events stay — the phase timeline deliberately shows
+/// both passes (see `place_rows_1`/`place_rows_2` PhaseTime events).
+pub fn remove_capped_events_since(start: usize) {
+    COLLECTOR.with(|c| {
+        if let Some(ref mut events) = *c.borrow_mut() {
+            if start >= events.len() {
+                return;
+            }
+            let tail: Vec<TraceEvent> = events
+                .drain(start..)
+                .filter(|e| !matches!(e, TraceEvent::InserterSideCapped { .. }))
+                .collect();
+            events.extend(tail);
+        }
+    });
+}
+
 // ---------------------------------------------------------------------------
 // Trace event types
 // ---------------------------------------------------------------------------
@@ -1507,4 +1529,41 @@ pub struct ValidationIssueTrace {
     pub message: String,
     pub x: Option<i32>,
     pub y: Option<i32>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `remove_capped_events_since` drops only `InserterSideCapped` at or
+    /// after `start`, preserving order of everything else — the pass-2
+    /// scrub must not disturb earlier events or non-capped pass-1 events
+    /// (RFP validation-explainability D2).
+    #[test]
+    fn remove_capped_events_since_is_selective() {
+        let _guard = start_trace();
+        let capped = |x: i32| TraceEvent::InserterSideCapped {
+            recipe: "electronic-circuit".into(),
+            side_is_output: false,
+            required: 1.0,
+            placed_entity: "long-handed-inserter".into(),
+            placed_count: 1,
+            shortfall: 0.2,
+            machine_x: x,
+            machine_y: 0,
+            limit: "geometry".into(),
+        };
+        emit(capped(1)); // before `start` — must survive
+        let start = peek_events_len();
+        emit(capped(2)); // in range — must be removed
+        emit(TraceEvent::PhaseTime { phase: "place_rows_1".into(), duration_ms: 1 });
+        emit(capped(3)); // in range — must be removed
+
+        remove_capped_events_since(start);
+
+        let events = peek_events_since(0);
+        assert_eq!(events.len(), 2, "{events:?}");
+        assert!(matches!(&events[0], TraceEvent::InserterSideCapped { machine_x: 1, .. }));
+        assert!(matches!(&events[1], TraceEvent::PhaseTime { .. }));
+    }
 }

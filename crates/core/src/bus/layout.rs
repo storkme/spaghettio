@@ -353,6 +353,11 @@ fn layout_pass(
     // so we know the real bus width and any balancer blocks that need
     // vertical gaps between producer rows.
     let temp_bw = estimate_bus_width(solver_result);
+    // Marks the start of pass-1 template events. If the width-corrected
+    // pass 2 runs, pass 1's `InserterSideCapped` events are scrubbed —
+    // their machine coordinates describe the discarded placement and
+    // would mis-anchor the per-tile attribution join.
+    let pass1_events_start = crate::trace::peek_events_len();
     let t_place1 = web_time::Instant::now();
     let (row_entities_1, row_spans_1, _row_width_1, total_height_1) = place_rows(
         &solver_result.machines,
@@ -397,6 +402,11 @@ fn layout_pass(
                     merged
                 }
             };
+            // Pass 2 replaces pass 1's placement wholesale; drop pass 1's
+            // capped-side events so the trace only anchors at machines
+            // that exist (other pass-1 events deliberately remain — the
+            // phase timeline shows both passes).
+            crate::trace::remove_capped_events_since(pass1_events_start);
             let t_place2 = web_time::Instant::now();
             let (re, rs, rw, th) = place_rows(
                 &solver_result.machines,
