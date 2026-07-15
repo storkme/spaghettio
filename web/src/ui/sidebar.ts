@@ -315,7 +315,7 @@ export function renderSidebar(
   el: HTMLElement,
   engine: Engine,
   callbacks: SidebarCallbacks,
-): { getParams(): SidebarParams | null; setParams(params: SidebarParams, opts?: { skipAutoSolve?: boolean }): void; updateValidation(issues: ValidationIssue[], onPanToTile: (x: number, y: number) => void): void } {
+): { getParams(): SidebarParams | null; setParams(params: SidebarParams, opts?: { skipAutoSolve?: boolean }): void; updateValidation(issues: ValidationIssue[], onPanToTile: (x: number, y: number) => void, causeOf?: (issue: ValidationIssue) => string | null): void } {
   el.innerHTML = "";
 
   const inner = document.createElement("div");
@@ -902,7 +902,7 @@ export function renderSidebar(
         scheduleAutoSolve();
       }
     },
-    updateValidation(issues: ValidationIssue[], onPanToTile: (x: number, y: number) => void) {
+    updateValidation(issues: ValidationIssue[], onPanToTile: (x: number, y: number) => void, causeOf?: (issue: ValidationIssue) => string | null) {
       valBody.innerHTML = "";
       if (issues.length === 0) {
         valSection.style.display = "none";
@@ -972,6 +972,30 @@ export function renderSidebar(
 
         const body = document.createElement("div");
         body.className = "sb-val-group-body";
+
+        // Cause rollup (RFP validation-explainability Phase 3b): for
+        // rate-shaped issues (those carrying structured detail), join
+        // each to its stamp-time cause and show counts per cause under
+        // the group header. Issues with no matching stamp-time event
+        // display honestly as "unattributed" — never guessed.
+        if (causeOf) {
+          const rated = groupIssues.filter((i) => i.detail != null);
+          if (rated.length > 0) {
+            const byCause = new Map<string, number>();
+            for (const issue of rated) {
+              const cause = causeOf(issue) ?? "unattributed";
+              byCause.set(cause, (byCause.get(cause) ?? 0) + 1);
+            }
+            const rollup = document.createElement("div");
+            rollup.className = "sb-val-cause-rollup";
+            rollup.style.cssText = "font-size:11px;color:#b90;padding:1px 0 2px 22px";
+            rollup.textContent = [...byCause.entries()]
+              .sort((a, b) => b[1] - a[1])
+              .map(([cause, n]) => `${n} × ${cause}`)
+              .join(" · ");
+            body.appendChild(rollup);
+          }
+        }
 
         if (firstWithPos) {
           header.classList.add("clickable");

@@ -30,7 +30,7 @@ import * as debugState from "./state/debugState";
 import { createOverlayPanel } from "./ui/overlayPanel";
 import { createRetryPanel } from "./ui/retryPanel";
 import { createInspector } from "./ui/inspector";
-import { buildTileContext } from "./ui/tileContext";
+import { buildTileContext, type TileContext } from "./ui/tileContext";
 import { createSnapshotMode } from "./ui/snapshotMode";
 import { renderLayoutPhaseAnimated, type PhaseAnimationHandle } from "./renderer/phaseAnimation";
 import { spawnRegionFlash } from "./renderer/improvementAnimation";
@@ -484,6 +484,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
   let cachedValidationIssues: ValidationIssue[] | null = null;
   let heatmapLayer: Container | null = null;
   let lastHeatmapIssues: ValidationIssue[] = [];
+  let lastTileCtx: TileContext | null = null;
   let validationInFlightFor: LayoutResult | null = null;
 
   // Top-left static badge that surfaces the issue count whenever a layout
@@ -602,7 +603,17 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
 
     const layoutIssues = lastLayout ? buildLayoutIssues(lastLayout) : [];
     const allIssues = [...(cachedValidationIssues ?? []), ...layoutIssues];
-    sidebarCtrl?.updateValidation(allIssues, panToTile);
+    // Cause rollup (Phase 3b): join a rate-shaped issue to the capped
+    // -side event(s) at its anchor tile. Multiple capped sides at one
+    // machine with differing limits report the union — never a guess.
+    const causeOf = (issue: ValidationIssue): string | null => {
+      if (issue.x == null || issue.y == null || !lastTileCtx) return null;
+      const sides = lastTileCtx.lookup(issue.x, issue.y).cappedSides;
+      if (sides.length === 0) return null;
+      const limits = [...new Set(sides.map((s) => s.limit))].sort();
+      return limits.join("+");
+    };
+    sidebarCtrl?.updateValidation(allIssues, panToTile, causeOf);
     updateValidationBadge(allIssues);
     updateHeatmapOverlay(allIssues);
 
@@ -1265,7 +1276,8 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       }
     }
     inspector.setHighlightController(wrapHighlight(ctrl));
-    inspector.setTileContext(buildTileContext(layout.trace));
+    lastTileCtx = buildTileContext(layout.trace);
+    inspector.setTileContext(lastTileCtx);
     inspector.clearPin();
     selectionCtrl = createSelectionController(app.canvas, viewport, entityLayer, layout, onSelectionChange);
     updateTraceOverlay();

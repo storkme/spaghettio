@@ -278,6 +278,15 @@ export function createInspector(container: HTMLElement): InspectorControls {
   pnJunctionBlock.append(pnJunctionLabel, pnJunctionOutcome);
   pinned.appendChild(pnJunctionBlock);
 
+  // Capped inserter sides at the pinned machine (RFP
+  // validation-explainability Phase 3a) — the expanded explanation
+  // behind rate-shaped warnings: what the ladder placed, the shortfall,
+  // and the binding constraint spelled out.
+  const pnCappedBlock = document.createElement("div");
+  pnCappedBlock.style.cssText = "margin-top:6px;padding-top:4px;border-top:1px solid #333";
+  pnCappedBlock.style.display = "none";
+  pinned.appendChild(pnCappedBlock);
+
   // Pinned axis block
   const pnAxisBlock = document.createElement("div");
   pnAxisBlock.style.marginTop = "4px";
@@ -703,10 +712,40 @@ export function createInspector(container: HTMLElement): InspectorControls {
 
       // Ghost expanded block
       renderPinnedGhostExpanded(info);
+
+      // Capped-sides expanded block (Phase 3a): one paragraph per
+      // capped side, with the binding constraint spelled out in plain
+      // language so the warning is self-explaining.
+      if (info.cappedSides.length > 0) {
+        const LIMIT_TEXT: Record<string, string> = {
+          "tier-cap": "a faster inserter tier at the same slot count would cover this — max inserter tier is the binding constraint",
+          "column-contest": "this side lost the shared inserter column to the other belt; that one column would have covered it",
+          geometry: "the row shape offers no further usable slot (belt span / fixed tiles) — a template geometry limit",
+        };
+        pnCappedBlock.replaceChildren();
+        const header = document.createElement("div");
+        header.style.color = "#ffa060";
+        header.textContent = `⚠ ${info.cappedSides.length} under-provisioned inserter side${info.cappedSides.length > 1 ? "s" : ""}`;
+        pnCappedBlock.appendChild(header);
+        for (const c of info.cappedSides) {
+          const moved = (c.required - c.shortfall).toFixed(2);
+          const row = document.createElement("div");
+          row.style.cssText = "margin-top:2px;color:#ccc";
+          row.textContent =
+            `${c.sideIsOutput ? "output" : "input"}: ${c.placedCount}×${c.placedEntity} ` +
+            `moves ${moved}/s of ${c.required.toFixed(2)}/s needed (short ${c.shortfall.toFixed(2)}/s) — ` +
+            `${c.limit}: ${LIMIT_TEXT[c.limit] ?? c.limit}`;
+          pnCappedBlock.appendChild(row);
+        }
+        pnCappedBlock.style.display = "";
+      } else {
+        pnCappedBlock.style.display = "none";
+      }
     } else {
       pnJunctionBlock.style.display = "none";
       pnAxisBlock.style.display = "none";
       pnGhostBlock.style.display = "none";
+      pnCappedBlock.style.display = "none";
     }
 
     pinned.style.display = "block";
