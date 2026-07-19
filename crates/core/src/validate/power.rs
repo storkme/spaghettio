@@ -12,7 +12,7 @@
 
 use std::collections::VecDeque;
 
-use crate::common::machine_dims;
+use crate::common::{is_machine_entity, machine_dims, needs_electricity};
 use crate::models::LayoutResult;
 use crate::validate::{Severity, ValidationIssue};
 
@@ -98,17 +98,17 @@ pub fn check_pole_network_connectivity(layout: &LayoutResult) -> Vec<ValidationI
     )]
 }
 
-/// Machine entities that must be covered by power.
-///
-/// Mirrors `_MACHINE_ENTITIES` from `src/validate.py` (derived from `_MACHINE_SIZE`).
-const MACHINE_ENTITIES: &[&str] = &[
-    "assembling-machine-1",
-    "assembling-machine-2",
-    "assembling-machine-3",
-    "chemical-plant",
-    "electric-furnace",
-    "oil-refinery",
-];
+/// Machine entities that must be covered by power: the canonical
+/// `common::MACHINE_ENTITY_NAMES` ∩ `needs_electricity` (RFP
+/// `docs/rfp-power-supply.md` Phase 0b). This replaces the old hand-synced
+/// 6-entry list and widens coverage checking to foundry, centrifuge,
+/// recycler, cryogenic-plant, and electromagnetic-plant. `biochamber` is
+/// deliberately excluded — it is burner-fueled (`needs_electricity` false),
+/// so flagging it as unpowered would be a false positive. See
+/// [`is_power_coverage_subject`].
+fn is_power_coverage_subject(name: &str) -> bool {
+    is_machine_entity(name) && needs_electricity(name)
+}
 
 /// Radius (in tiles) of a medium-electric-pole supply area.
 const POLE_RANGE: i32 = 3;
@@ -136,7 +136,7 @@ pub fn check_power_coverage(layout_result: &LayoutResult) -> Vec<ValidationIssue
     }
 
     for e in &layout_result.entities {
-        if !MACHINE_ENTITIES.contains(&e.name.as_str()) {
+        if !is_power_coverage_subject(&e.name) {
             continue;
         }
 
@@ -345,6 +345,9 @@ mod tests {
 
     #[test]
     fn all_machine_types_checked() {
+        // Every electric machine (canonical ∩ needs_electricity) is a
+        // power-coverage subject. Widened in RFP Phase 0b to add foundry,
+        // centrifuge, recycler, cryogenic-plant, electromagnetic-plant.
         let machine_names = [
             "assembling-machine-1",
             "assembling-machine-2",
@@ -352,6 +355,11 @@ mod tests {
             "chemical-plant",
             "electric-furnace",
             "oil-refinery",
+            "foundry",
+            "centrifuge",
+            "recycler",
+            "cryogenic-plant",
+            "electromagnetic-plant",
         ];
         for name in &machine_names {
             let lr = layout(vec![machine(name, 0, 0)]);
@@ -359,6 +367,25 @@ mod tests {
             let issues = check_power_coverage(&lr);
             assert_eq!(issues.len(), 1, "{} should trigger 'No power poles' warning", name);
         }
+    }
+
+    #[test]
+    fn biochamber_excluded_foundry_included_from_coverage() {
+        // A biochamber far from any pole must NOT warn — it is burner-fueled
+        // (needs_electricity false), so it draws no grid power. A foundry in
+        // the same spot MUST warn (it is electric and out of range). This is
+        // the Phase 0b widening's headline correctness property.
+        let lr = layout(vec![machine("biochamber", 0, 0), pole(30, 30)]);
+        let issues = check_power_coverage(&lr);
+        assert!(
+            issues.is_empty(),
+            "biochamber is burner-fueled and must not be a power-coverage subject: {issues:?}"
+        );
+
+        let lr = layout(vec![machine("foundry", 0, 0), pole(30, 30)]);
+        let issues = check_power_coverage(&lr);
+        assert_eq!(issues.len(), 1, "foundry is electric and out of range → must warn");
+        assert!(issues[0].message.contains("foundry"));
     }
 
     // --- Done-when criterion: layout missing power reports uncovered machines ---

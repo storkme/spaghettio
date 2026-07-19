@@ -11,8 +11,9 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::models::{EntityDirection, LayoutResult, PlacedEntity, SolverResult};
 use crate::bus::inserter_ladder::InserterTier;
 use crate::bus::lane_planner::{
-    plan_bus_lanes, bus_width_for_lanes, BusLane, LaneFamily, MACHINE_ENTITIES,
+    plan_bus_lanes, bus_width_for_lanes, BusLane, LaneFamily,
 };
+use crate::common::is_machine_entity;
 use crate::bus::placer::{place_rows, RowSpan};
 
 /// Layout strategy. Selects the shape of the bus the engine produces.
@@ -487,7 +488,7 @@ fn layout_pass(
         let mut row_occupied: FxHashSet<(i32, i32)> = FxHashSet::default();
         let mut machines_for_poles: Vec<(i32, i32, i32)> = Vec::new();
         for ent in &row_entities {
-            if MACHINE_ENTITIES.contains(&ent.name.as_str()) {
+            if is_machine_entity(&ent.name) {
                 let (mw, mh) = crate::common::machine_dims(&ent.name);
                 let (mw, mh) = (mw as i32, mh as i32);
                 for dx in 0..mw {

@@ -22,28 +22,6 @@ const LANE_CAPACITY_TABLE: &[(&str, f64)] = &[
     ("express-transport-belt", 22.5),
 ];
 
-/// Entity names that occupy multiple tiles (sized by `machine_dims()`).
-///
-/// Duplicates (rather than reuses) `common::MACHINE_ENTITY_NAMES` — this list
-/// predates that one and nothing has unified them yet. Kept in sync by hand;
-/// see the note in `docs/rfp-fulgora-scrap.md` Phase 0 findings about
-/// `recycler` needing to land in every machine-entity list, not just
-/// `machine_dims`.
-pub(crate) const MACHINE_ENTITIES: &[&str] = &[
-    "assembling-machine-1",
-    "assembling-machine-2",
-    "assembling-machine-3",
-    "chemical-plant",
-    "electric-furnace",
-    "oil-refinery",
-    "electromagnetic-plant",
-    "cryogenic-plant",
-    "foundry",
-    "biochamber",
-    "centrifuge",
-    "recycler",
-];
-
 /// A single vertical lane on the main bus, carrying one item (or fluid) from its
 /// source row(s) down to its consumer row(s). Lanes run SOUTH; at each consumer the
 /// lane turns EAST via a tap-off. See `docs/ghost-pipeline-contracts.md` for the

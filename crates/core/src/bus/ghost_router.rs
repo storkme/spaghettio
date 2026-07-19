@@ -24,7 +24,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::astar::ghost_astar;
 use crate::bus::balancer::{balancer_origin_x, splitter_for_belt, stamp_family_balancer, stamp_merge_tap_family, underground_for_belt};
-use crate::bus::lane_planner::{BusLane, LaneFamily, MACHINE_ENTITIES};
+use crate::bus::lane_planner::{BusLane, LaneFamily};
 use crate::bus::output_merger::merge_output_rows;
 use crate::bus::trunk_renderer::{is_intermediate, render_path, trunk_segments};
 use crate::bus::junction::{BeltTier, Rect};
@@ -35,8 +35,8 @@ use crate::bus::junction_solver::{
 };
 use crate::bus::placer::RowSpan;
 use crate::common::{
-    belt_entity_for_rate, machine_dims, machine_tiles, ug_max_reach, LANE_LEFT,
-    MERGE_TAP_SEGMENT_TAG,
+    belt_entity_for_rate, is_machine_entity, machine_dims, machine_tiles, ug_max_reach,
+    LANE_LEFT, MERGE_TAP_SEGMENT_TAG,
 };
 use crate::models::{EntityDirection, LayoutRegion, PlacedEntity, SolverResult};
 // sat.rs is retained in the tree as a standalone library; route_bus_ghost
@@ -346,7 +346,7 @@ pub fn route_bus_ghost(
         if is_belt_like(&e.name) {
             existing_belts.insert((e.x, e.y));
             pre_ghost_belts.insert((e.x, e.y));
-        } else if MACHINE_ENTITIES.contains(&e.name.as_str()) {
+        } else if is_machine_entity(&e.name) {
             let (w, h) = machine_dims(&e.name);
             for t in machine_tiles(e.x, e.y, w, h) {
                 hard.insert(t);
@@ -1397,7 +1397,7 @@ pub fn route_bus_ghost(
         .iter()
         .chain(entities.iter())
         .flat_map(|e| {
-            if MACHINE_ENTITIES.contains(&e.name.as_str()) {
+            if is_machine_entity(&e.name) {
                 let (w, h) = machine_dims(&e.name);
                 machine_tiles(e.x, e.y, w, h)
             } else {
@@ -1882,7 +1882,7 @@ pub fn route_bus_ghost(
         .iter()
         .chain(entities.iter())
         .flat_map(|e| {
-            if MACHINE_ENTITIES.contains(&e.name.as_str()) {
+            if is_machine_entity(&e.name) {
                 let (w, h) = machine_dims(&e.name);
                 machine_tiles(e.x, e.y, w, h)
             } else {
