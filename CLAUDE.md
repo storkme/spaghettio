@@ -25,7 +25,7 @@ For full build commands (WASM rebuild, release builds), see [`docs/build-systems
 - **Pre-commit hooks**: in `.githooks/pre-commit`, activate with `git config core.hooksPath .githooks`. Runs `cargo clippy` on staged Rust and `tsc` on staged TS. Bypass with `--no-verify` only for genuine emergencies.
 - **Scripts**: put exploratory snippets in `scripts/` rather than inline one-liners. Rust debug scripts go in `crates/core/examples/` or as `#[test] #[ignore]` benchmarks.
 - **Snapshots**: `SPAGHETTIO_DUMP_SNAPSHOTS=1 cargo test ...` writes `.fls` files under `crates/core/target/tmp/`. Decode with `tail -c +5 <file> | base64 -d | gunzip`. See [`docs/layout-snapshot-debugger.md`](docs/layout-snapshot-debugger.md).
-- **Process docs**: non-trivial design work uses [`docs/rfp-template.md`](docs/rfp-template.md) — the **kill criteria** section is required, since the dominant rework shape on this project is exploration that overruns its evidence. PRs follow [`.github/pull_request_template.md`](.github/pull_request_template.md), which captures intent, scope, verification actually run, and any deviations from agreed approach. Trivial changes can omit sections explicitly rather than leaving them blank.
+- **Process docs**: non-trivial design work uses [`docs/rfp-template.md`](docs/rfp-template.md) — the **kill criteria** section is required, since the dominant rework shape on this project is exploration that overruns its evidence. Deferred-work backlogs with pick-up notes are `docs/*-followups.md` (e.g. `junction-solver-followups.md`, `test-suite-followups.md`) — name them for what they track, not for the session that produced them, and keep a status line at the top so a cold pick-up knows what's still open. PRs follow [`.github/pull_request_template.md`](.github/pull_request_template.md), which captures intent, scope, verification actually run, and any deviations from agreed approach. Trivial changes can omit sections explicitly rather than leaving them blank.
 
 ## Architecture
 
@@ -121,7 +121,7 @@ Tracks which recipes produce zero-error bus blueprints. Moving up = real progres
 
 Open tracking issues for layout quality: [#135 balancer templates are oversized](https://github.com/storkme/spaghettio/issues/135), [#136 missing coprime balancer shapes](https://github.com/storkme/spaghettio/issues/136), [#68 fluid row 3-tile pitch](https://github.com/storkme/spaghettio/issues/68) (design: [`docs/rfp-fluid-dual-input-row.md`](docs/rfp-fluid-dual-input-row.md)).
 
-Deferred tooling tasks — test-suite time recovery (audited 2026-07-19, pick-up notes per item in [`docs/testing-time-audit.md`](docs/testing-time-audit.md)): committed STRESSGOLD baseline golden (kills the per-unit "before" run — do first), CI nextest parallelism re-enable via timeout-ceiling bumps (~5 min/push, experiment already documented in `.config/nextest.toml`), `[profile.test]` opt experiment for SAT/A*-heavy tests (measure before adopting).
+Deferred tooling tasks — test-suite time recovery (audited 2026-07-19, pick-up notes per item in [`docs/test-suite-followups.md`](docs/test-suite-followups.md)): committed STRESSGOLD baseline goldens landed 2026-07-19 (`SPAGHETTIO_STRESS_GOLDEN=check|bless`, see `crates/core/tests/goldens/stress/README.md` — host-cache-relative, opt-in, not CI-enforced); CI nextest parallelism re-enable via timeout-ceiling bumps (~5 min/push, experiment already documented in `.config/nextest.toml`); `[profile.test]` opt experiment for SAT/A*-heavy tests (measure before adopting).
 
 ## Verification protocol for layout engine changes
 

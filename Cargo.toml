@@ -1,3 +1,24 @@
 [workspace]
 members = ["crates/*"]
 resolver = "2"
+
+# Debug-build opt for the hot crates (docs/test-suite-followups.md item 3,
+# adopted 2026-07-19 on measurement). spaghettio_core at opt-level 1: ci
+# suite 37.8s -> 26.0s, serial stress gate subset 88s -> 28s, incremental
+# rebuild-after-edit unchanged (~2s), one-time conversion ~21s. varisat at
+# opt-level 3: cold-zone-cache SAT runs a further ~2.4x faster (5.6s ->
+# 2.3s on the 2-test probe) — this is what CI pays on every run, since
+# runners have no persistent ~/.cache.
+#
+# CAVEAT (measured): SAT junction solutions are wall-clock-budget shaped
+# (25ms cost-descent budget), so a faster build can land on *different*
+# valid solutions when solving fresh. Warm-cache runs replay recorded
+# solutions and are unaffected. Changing these opt levels is
+# layout-moving for cold-cache solves: expect a stress-golden re-bless
+# (see crates/core/tests/goldens/stress/README.md).
+[profile.dev.package.spaghettio_core]
+opt-level = 1
+
+
+[profile.dev.package.varisat]
+opt-level = 3

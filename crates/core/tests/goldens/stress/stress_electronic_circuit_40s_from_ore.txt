@@ -1,0 +1,18 @@
+=== stress_electronic_circuit_40s_from_ore scoreboard ===
+entities:         7201
+total warnings:   227
+zones solved:     0
+zones skipped:    0
+bridges dropped:  0
+bands:            3 (crossing: 0, non-crossing: 3)
+total gap tiles:  26
+mean gap:         8.67
+max gap:          13
+max trunks/band:  14
+warnings by category:
+  belt-flow-path: 25
+  belt-flow-reachability: 121
+  input-rate-delivery: 81
+errors by category:
+  belt-dead-end: 13
+layout hash: cf1f51aaa09649c9cdf0690e2b934b2a80cbfc69b75430598bd0673d37ce06fa
