@@ -3780,6 +3780,22 @@ fn processing_unit_2s_am2_fast_belts_validation_baseline() {
         "Unexpected error categories appeared: {}",
         unexpected.join(", "),
     );
+
+    // RFP `docs/rfp-power-supply.md` Phase 0f: this baseline tallies ERRORS
+    // only, which structurally masks inserter power-coverage WARNINGS. Pin the
+    // exact hard-limit count so the uncovered inserters are asserted, not
+    // invisible. All 43 are 0/49-free in the 7×7 vs real post-routing
+    // footprints (reviewer-scanned + re-scanned all-hard) — a genuine pitch
+    // limit; the fifth Phase 3 substation fixture.
+    let power_warnings = result
+        .issues
+        .iter()
+        .filter(|i| i.category == "power" && i.severity == Severity::Warning)
+        .count();
+    assert_eq!(
+        power_warnings, 43,
+        "expected exactly 43 hard-limit inserter power-coverage warnings"
+    );
 }
 
 /// User's processing-unit @ 1/s repro for the pipe×belt severance bug.

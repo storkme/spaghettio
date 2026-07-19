@@ -480,105 +480,13 @@ fn layout_pass(
             .collect(),
     });
 
-    // Place power poles from machine positions before routing so the router
-    // sees them as hard obstacles. The occupied set reserves row-entity tiles
-    // AND planned fluid-lane columns so poles don't land where the router
-    // will later place pipe/PTG entities.
-    let pole_entities: Vec<PlacedEntity> = {
-        let mut row_occupied: FxHashSet<(i32, i32)> = FxHashSet::default();
-        let mut machines_for_poles: Vec<(i32, i32, i32)> = Vec::new();
-        // Electric inserters are coverage subjects (RFP Phase 0f). Their
-        // rows sit at template-specific offsets — input inserters at
-        // top_y-1 for solid rows but far higher in tall/HorizontalStack
-        // rows — so `place_poles` covers them via a coverage-driven mop-up
-        // pass after the band lines, not by assumed geometry.
-        let mut inserters_for_poles: Vec<(i32, i32)> = Vec::new();
-        for ent in &row_entities {
-            // Burner machines (biochamber) stay pole subjects on purpose:
-            // their rows carry electric inserters that this pole line powers,
-            // and stranding those is validator-silent in mixed layouts. See
-            // rfp-power-supply.md Phase 0c decision (2026-07-19) before
-            // gating this on needs_electricity.
-            if is_machine_entity(&ent.name) {
-                let (mw, mh) = crate::common::machine_dims(&ent.name);
-                let (mw, mh) = (mw as i32, mh as i32);
-                for dx in 0..mw {
-                    for dy in 0..mh {
-                        row_occupied.insert((ent.x + dx, ent.y + dy));
-                    }
-                }
-                // place_poles groups by row height and offsets the fallback
-                // pole row by that height (below the machine row), so the
-                // third field is height; the center x uses width.
-                machines_for_poles.push((ent.x + mw / 2, ent.y, mh));
-            } else {
-                row_occupied.insert((ent.x, ent.y));
-                if is_inserter(&ent.name) {
-                    inserters_for_poles.push((ent.x, ent.y));
-                }
-            }
-        }
-        for lane in &lanes {
-            if !lane.is_fluid {
-                continue;
-            }
-            let mut trunk_ys: Vec<i32> = vec![lane.source_y];
-            trunk_ys.extend(lane.tap_off_ys.iter().copied());
-            for &(_ri, _px, py) in &lane.fluid_output_port_positions {
-                trunk_ys.push(py);
-            }
-            trunk_ys.sort_unstable();
-            trunk_ys.dedup();
-            for &y in &trunk_ys {
-                row_occupied.insert((lane.x, y));
-            }
-            for pair in trunk_ys.windows(2) {
-                let (y0, y1) = (pair[0], pair[1]);
-                if y1 - y0 > 1 {
-                    row_occupied.insert((lane.x, y0 + 1));
-                }
-                if y1 - y0 > 2 {
-                    row_occupied.insert((lane.x, y1 - 1));
-                }
-            }
-            let all_ports = lane.fluid_port_positions.iter()
-                .chain(lane.fluid_output_port_positions.iter());
-            for &(_ri, port_x, port_y) in all_ports {
-                row_occupied.insert((port_x, port_y));
-                row_occupied.insert((lane.x, port_y));
-                let (lo, hi) = if port_x < lane.x {
-                    (port_x, lane.x)
-                } else {
-                    (lane.x, port_x)
-                };
-                if hi - lo > 1 {
-                    row_occupied.insert((lo + 1, port_y));
-                }
-                if hi - lo > 2 {
-                    row_occupied.insert((hi - 1, port_y));
-                }
-            }
-        }
-        let pole_strategy = if machines_for_poles.is_empty() { "empty" } else { "rows" };
-        let poles = place_poles(&machines_for_poles, &inserters_for_poles, &row_occupied);
-        crate::trace::emit(crate::trace::TraceEvent::PolesPlaced {
-            count: poles.len(),
-            strategy: pole_strategy.to_string(),
-        });
-        // Stream sibling of PolesPlaced — carries the pole entity batch so
-        // the live renderer can reveal them progressively instead of dumping
-        // them via the poles_placed PhaseSnapshot safety net.
-        if !poles.is_empty() {
-            crate::trace::emit(crate::trace::TraceEvent::PolesCommitted {
-                entities: poles.clone(),
-            });
-        }
-        crate::trace::emit(crate::trace::TraceEvent::PhaseComplete {
-            phase: "poles_placed".into(),
-            entity_count: poles.len(),
-        });
-        poles
-    };
+    // Power poles are placed LAST — after ghost routing — so they occupy only
+    // tiles left free by the FINAL routed layout and can never obstruct a belt
+    // or pipe (RFP `docs/rfp-power-supply.md`: "poles are placed last and live
+    // off leftover tiles"). Phase 0f restored this invariant: pole-first meant
+    // the doubled inserter-coverage poles won tile contests against the router
+    // and broke belt routing (census_logistic_science_pack). See the
+    // post-routing block below.
 
     // Route all connecting belts via the ghost routing pipeline.
     // See `docs/ghost-pipeline-contracts.md` for the phase-by-phase
@@ -593,7 +501,7 @@ fn layout_pass(
         solver_result,
         &families,
         &row_entities,
-        &pole_entities,
+        &[], // poles are placed AFTER routing now — never a router obstacle
     )?;
     let bus_entities = ghost_result.entities;
     let max_y = ghost_result.max_y;
@@ -650,9 +558,68 @@ fn layout_pass(
         row_entities.into_iter().filter(|e| !bus_occupied.contains(&(e.x, e.y))).collect()
     };
 
+    // Poles LAST: place them on tiles free of the FINAL routed layout — row
+    // entities + the routed bus (belts, undergrounds, pipes, splitters) — so a
+    // pole can never sit under a belt/pipe or force the router around it. The
+    // mop-up now sees the true final occupancy, so coverage and hardness are
+    // consistent by construction (RFP Phase 0f fix — restores the poles-last
+    // invariant the pipeline had been violating).
+    let pole_entities: Vec<PlacedEntity> = {
+        let mut occupied: FxHashSet<(i32, i32)> = FxHashSet::default();
+        let mut machines_for_poles: Vec<(i32, i32, i32)> = Vec::new();
+        let mut inserters_for_poles: Vec<(i32, i32)> = Vec::new();
+        // Machines + electric inserters are the coverage subjects; biochamber
+        // (burner) rows stay pole-covered for their electric inserters (Phase
+        // 0c). Footprints go into `occupied` so poles never overlap them.
+        for ent in &row_entities {
+            if is_machine_entity(&ent.name) {
+                let (mw, mh) = crate::common::machine_dims(&ent.name);
+                let (mw, mh) = (mw as i32, mh as i32);
+                for dx in 0..mw {
+                    for dy in 0..mh {
+                        occupied.insert((ent.x + dx, ent.y + dy));
+                    }
+                }
+                machines_for_poles.push((ent.x + mw / 2, ent.y, mh));
+            } else {
+                occupied.insert((ent.x, ent.y));
+                if is_inserter(&ent.name) {
+                    inserters_for_poles.push((ent.x, ent.y));
+                }
+            }
+        }
+        // The routed bus is now REAL occupancy — this replaces the old
+        // pre-routing fluid-lane reservation (routed pipes ARE the reservation)
+        // and adds the solid belt/tap corridors that were never reserved
+        // before (the pole-first obstruction bug).
+        for ent in &bus_entities {
+            occupied.insert((ent.x, ent.y));
+            if crate::common::is_splitter(&ent.name) {
+                let (sx, sy) = crate::common::splitter_second_tile(ent);
+                occupied.insert((sx, sy));
+            }
+        }
+        let pole_strategy = if machines_for_poles.is_empty() { "empty" } else { "rows" };
+        let poles = place_poles(&machines_for_poles, &inserters_for_poles, &occupied);
+        crate::trace::emit(crate::trace::TraceEvent::PolesPlaced {
+            count: poles.len(),
+            strategy: pole_strategy.to_string(),
+        });
+        if !poles.is_empty() {
+            crate::trace::emit(crate::trace::TraceEvent::PolesCommitted {
+                entities: poles.clone(),
+            });
+        }
+        crate::trace::emit(crate::trace::TraceEvent::PhaseComplete {
+            phase: "poles_placed".into(),
+            entity_count: poles.len(),
+        });
+        poles
+    };
+
     let width = row_width.max(actual_bw).max(merge_max_x);
 
-    // Emit a post-routing snapshot showing poles already placed before routing.
+    // Post-routing snapshot with the poles now placed on leftover tiles.
     if crate::trace::is_active() {
         let mut snap_entities = row_entities.clone();
         snap_entities.extend(bus_entities.clone());
