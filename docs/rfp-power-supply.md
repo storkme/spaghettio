@@ -79,6 +79,12 @@ Two reproducibility caveats are recorded at the end of this section.
     `electromagnetic-plant` (4) — real, currently-unchecked ports
     (draftsman-verified). `centrifuge`/`recycler` have 0 fluid boxes and are
     correctly absent. Rev 1 missed this sibling blind spot entirely.
+  - The pattern is systemic beyond this RFP's blast radius: review also found
+    `analysis.rs:80` `is_crafting_machine()` (CLI-only, deliberately includes
+    burner furnaces — no pole-coverage category error) and `common.rs:611`
+    `module_slots()` (module counts, power-unrelated). Out of scope here;
+    noted so Phase 0b's "one fact, one place" direction is understood as
+    chipping at a codebase-wide habit, not completing it.
 - **Corpus presence of the unchecked types** (per-type, corrected from rev 1's
   "6 types in 8 snapshots"): `centrifuge` in 5 snapshots, `biochamber` 2,
   `recycler` 2, `foundry` 1 — and `cryogenic-plant` / `electromagnetic-plant`
