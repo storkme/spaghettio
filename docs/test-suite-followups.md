@@ -4,10 +4,12 @@ Deferred test-suite tooling work, from a session-time audit on 2026-07-19
 (originally `testing-time-audit.md`). Each item below has pick-up notes so a
 future session can start cold.
 
-Status: **in progress**. Priority: **item 2 → item 1 → item 3** (2 cheapens
-every gate run of the active power RFP; 1 is the best value-per-line; 3 needs
-measurement before commitment). Item 2 landed 2026-07-19 (see its section);
-items 1, 3, 4 still open.
+Status: **all items resolved 2026-07-19** — items 2 and 3 landed, item 1
+landed with its CI gate (3 consecutive green Rust-touching runs) tracked on
+the landing PR, item 4 measured and closed as not-worth-it host-side (open
+question remains for the docker agent container only). Per-item detail in
+each section below. One new follow-up spun out along the way: pruning
+`.claude/worktrees/` build-artifact disk (~100 G), see item 4.
 
 ## Measured baseline
 
@@ -106,6 +108,21 @@ agent's 32-minute census run and is the true source of the folkloric
 "science_gauntlet takes 25 minutes" — the SAT zone cache was never the
 problem). sccache or a shared read-only cargo cache would recover most of it.
 Occasional cost, so lowest priority.
+
+**MEASURED AND CLOSED 2026-07-19** (as a host-side item): a true cold
+build (`cargo build --tests -p spaghettio_core` into an empty
+`CARGO_TARGET_DIR`) takes **27.9 s** on the 16-core host — the "minutes"
+folklore does not reproduce here, so sccache is not worth the moving part
+for host worktrees (verdict per this doc's own decide-on-data rule). What
+the measurement *did* surface is disk: each worktree target is ~2.4 G
+cold (9.5 G after a working session), the main checkout's target is 38 G,
+and ~35 worktrees have accumulated under `.claude/worktrees/` — likely
+around 100 G of duplicate build artifacts. Recoverable by pruning merged
+worktrees (`git worktree list` / `git worktree prune` + deleting their
+directories) — needs a human pass since other sessions may have live
+work in them. If agent runs inside the docker container still feel
+build-bound, measure *there* before adopting any tooling; the 32-minute
+census datum most plausibly reflects that environment, not this host.
 
 ## Not waste — leave alone
 
