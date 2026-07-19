@@ -145,7 +145,25 @@ Two reproducibility caveats are recorded at the end of this section.
     test validates sushi belts only) — widen that test to full validation and
     fix the routing. Both are layout-moving: separate units, standard gates,
     one in flight at a time.
-- **Phase 1 — principled fluid-row reservation.** Computable at stamp time:
+  - **0f (added 2026-07-19 on the KC1 re-derivation trip, user-accepted) —
+    inserter power coverage.** Adversarially confirmed: 40–52% of electric
+    inserters corpus-wide sit at nearest-pole distance exactly 4 (one tile
+    beyond the ±3 supply area) because `place_poles` targets machine centers
+    from the north band; inserters are not coverage subjects anywhere in
+    validate/. One unit, two halves landed together: **(i)** electric
+    inserters become power-coverage subjects; **(ii)** `place_poles` covers
+    inserter rows, not machine centers only (the uniform distance-4 signature
+    suggests south-band or two-band placement). Landed as ONE unit
+    deliberately — splitting would leave the corpus either falsely green or
+    wearing hundreds of honest-but-transitional red warnings across commits;
+    the unit's report shows the intermediate red, and the landing is green.
+    Expect the largest golden movement of this RFP (every layout gains or
+    moves poles) — full team flow plus user eyeball. **After 0f lands:
+    re-census, then re-derive Phase 1's reservation formula inputs and
+    Phase 2's fixed-point baseline from the corrected corpus; Phase 3
+    trigger (b)'s pole-count baseline re-anchors to the post-0f census**
+    (otherwise the fix itself would trip the explosion trigger it
+    legitimately feeds). Sequencing: 0e → 0f → re-census → 1 → 2. Computable at stamp time:
   `place_poles`' candidate rows are a static function of row geometry
   (layout.rs:918 — `top_y - 1` and `top_y + mh`), which templates already
   know. Mandated shape: extract a shared `pole_candidate_ys(top_y, mh)` (or
@@ -191,6 +209,11 @@ Two reproducibility caveats are recorded at the end of this section.
   redesign of [#68](https://github.com/storkme/spaghettio/issues/68) /
   `docs/rfp-fluid-dual-input-row.md` — **stop**; that is a separate RFP and
   the user decides sequencing.
+- If Phase 0f cannot cover inserters within the current row pitch — i.e.
+  pole positions require new rows/columns beyond today's free tiles — that is
+  the Phase 3 substation trigger arriving early: **stop** and take the
+  substation conversation to the user rather than forcing coverage into
+  geometry that doesn't want it.
 - If Phase 1's rule cannot hold current row pitch (any corpus fluid row needs
   extra row height to fit the reservation), **stop** — the footprint-vs-power
   trade-off goes to the user, not into code.
@@ -310,3 +333,10 @@ genuinely and cheaply deferred.
   run. Consequences: "0 power warnings", the census slack distributions, and
   Phase 1's "what coverage needs" formula all understate true pole demand.
   Sequencing decision passed to the user.*
+- *2026-07-19 — **re-scope accepted by the user** ("agree with the re-scope,
+  please continue"): Phase 0f (inserter power coverage, one combined
+  validator+placement unit) added; ordering 0e → 0f → re-census → Phase 1
+  (re-derived) → Phase 2. Phase 3 trigger (b)'s pole-count baseline will
+  re-anchor to the post-0f census. Kill criterion added: if inserter
+  coverage can't fit current row pitch, the substation conversation starts
+  early with the user.*
