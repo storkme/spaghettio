@@ -13,7 +13,7 @@ use crate::bus::inserter_ladder::InserterTier;
 use crate::bus::lane_planner::{
     plan_bus_lanes, bus_width_for_lanes, BusLane, LaneFamily,
 };
-use crate::common::is_machine_entity;
+use crate::common::{is_inserter, is_machine_entity};
 use crate::bus::placer::{place_rows, RowSpan};
 
 /// Layout strategy. Selects the shape of the bus the engine produces.
@@ -487,6 +487,12 @@ fn layout_pass(
     let pole_entities: Vec<PlacedEntity> = {
         let mut row_occupied: FxHashSet<(i32, i32)> = FxHashSet::default();
         let mut machines_for_poles: Vec<(i32, i32, i32)> = Vec::new();
+        // Electric inserters are coverage subjects (RFP Phase 0f). Their
+        // rows sit at template-specific offsets — input inserters at
+        // top_y-1 for solid rows but far higher in tall/HorizontalStack
+        // rows — so `place_poles` covers them via a coverage-driven mop-up
+        // pass after the band lines, not by assumed geometry.
+        let mut inserters_for_poles: Vec<(i32, i32)> = Vec::new();
         for ent in &row_entities {
             // Burner machines (biochamber) stay pole subjects on purpose:
             // their rows carry electric inserters that this pole line powers,
@@ -507,6 +513,9 @@ fn layout_pass(
                 machines_for_poles.push((ent.x + mw / 2, ent.y, mh));
             } else {
                 row_occupied.insert((ent.x, ent.y));
+                if is_inserter(&ent.name) {
+                    inserters_for_poles.push((ent.x, ent.y));
+                }
             }
         }
         for lane in &lanes {
@@ -551,7 +560,7 @@ fn layout_pass(
             }
         }
         let pole_strategy = if machines_for_poles.is_empty() { "empty" } else { "rows" };
-        let poles = place_poles(&machines_for_poles, &row_occupied);
+        let poles = place_poles(&machines_for_poles, &inserters_for_poles, &row_occupied);
         crate::trace::emit(crate::trace::TraceEvent::PolesPlaced {
             count: poles.len(),
             strategy: pole_strategy.to_string(),
@@ -880,21 +889,11 @@ fn compute_extra_gaps(families: &[LaneFamily]) -> FxHashMap<usize, i32> {
 /// vertical offset from the machine row.
 fn place_poles(
     machines: &[(i32, i32, i32)],
+    inserters: &[(i32, i32)],
     occupied: &FxHashSet<(i32, i32)>,
 ) -> Vec<PlacedEntity> {
     /// Supply range of a medium-electric-pole (Chebyshev, tiles).
     const POLE_RANGE: i32 = 3;
-    /// Max X offset to probe when the ideal pole position is occupied.
-    /// Set to `2 * POLE_RANGE` so the search covers the full supply range
-    /// either side of the machine center: the rightmost-first ordering
-    /// keeps forward reach, but when every position from `ideal_px` down
-    /// to `ideal_px - POLE_RANGE` is blocked, we keep probing leftward
-    /// to `ideal_px - 2*POLE_RANGE = cx - POLE_RANGE`. Without this, a
-    /// tight row whose right side is full of bridge belts (sideload
-    /// balancer below the machine row) leaves the corresponding machine
-    /// center uncovered even though a free tile exists to its left
-    /// inside the supply range — the pre-fix algorithm gave up at d=3.
-    const POLE_PROBE_X: i32 = POLE_RANGE * 2;
 
     if machines.is_empty() {
         return Vec::new();
@@ -921,60 +920,136 @@ fn place_poles(
         let (top_y, mh) = key;
         let cxs = &by_row[&key];
 
-        // Two candidate pole rows: one above the machine row (preferred —
-        // keeps poles in a single visible band) and one below as fallback
-        // for dense templates (HS / TripleInput / FluidDualInput) where
-        // the above-row is jammed with inserters/pipes. Both rows are
-        // within POLE_RANGE of the machine center on the y axis.
-        let mut candidate_ys: Vec<i32> = Vec::with_capacity(2);
+        // Phase 0f (RFP `docs/rfp-power-supply.md`): place a pole line in
+        // BOTH candidate bands, not just the preferred one. The north band
+        // (top_y-1) sits on the row's input-inserter row and covers the
+        // machine's north face; the south band (top_y+mh) sits on the
+        // output-inserter row and covers the machine's south face. A single
+        // band leaves the opposite inserter row at Chebyshev distance mh+1
+        // (=4 for a 3×3 machine — one tile past the ±3 supply area), which
+        // was the systemic uncovered-inserter signature Phase 0c measured
+        // (40-52% of electric inserters). Both inserter rows are now
+        // coverage subjects (validate/power.rs), so both bands must carry a
+        // line. Redundant machine-center coverage from the two lines is
+        // fine; `repair_pole_connectivity` still bridges the row cluster.
+        // Each band targets one inserter row and may place the pole up to
+        // POLE_RANGE tiles FURTHER from the machine than that row, so a
+        // saturated inserter/belt band (high-throughput rows fill every
+        // column of the input-inserter row and the belt rows above it) can
+        // still be covered from the first free row beyond it. Ordered from
+        // the inserter row outward: the near tile also covers the machine,
+        // and one of the two bands always lands close enough to keep the
+        // machine center in range.
+        let mut band_y_lists: Vec<Vec<i32>> = Vec::with_capacity(2);
         if top_y > 0 {
-            candidate_ys.push(top_y - 1);
+            // North: input-inserter row (top_y-1) then upward, past the belts.
+            band_y_lists.push((0..=POLE_RANGE).map(|d| top_y - 1 - d).filter(|&y| y >= 0).collect());
         }
-        candidate_ys.push(top_y + mh);
+        // South: output-inserter row (top_y+mh) then downward.
+        band_y_lists.push((0..=POLE_RANGE).map(|d| top_y + mh + d).collect());
 
-        let mut i = 0;
-        while i < cxs.len() {
-            // Aim for the rightmost position that still covers cxs[i] — this
-            // maximises forward reach and keeps the line sparse. Probing
-            // searches nearby tiles if the ideal one is occupied, always
-            // staying within POLE_RANGE of the target machine.
-            let target_cx = cxs[i];
-            let ideal_px = target_cx + POLE_RANGE;
-            let mut placed_at: Option<(i32, i32)> = None;
-            'outer: for &py in &candidate_ys {
-                for d in 0..=POLE_PROBE_X {
-                    let offsets: &[i32] = if d == 0 { &[0] } else { &[-d, d] };
-                    for &off in offsets {
-                        let px = ideal_px + off;
-                        if (px - target_cx).abs() > POLE_RANGE {
-                            continue; // stepped outside range of the target machine
+        for band_ys in &band_y_lists {
+            let mut i = 0;
+            while i < cxs.len() {
+                // A 3×3 machine's inserters span cx-1..cx+1, so a pole in
+                // cx-2..cx+2 (rightmost-first, for forward reach) covers the
+                // machine's whole inserter footprint. Try each candidate y
+                // (inserter row first), then the same y's with a center-only
+                // fallback tile (cx±POLE_RANGE) if the inserter-covering
+                // window is full. The old `cx + POLE_RANGE` alone left the
+                // machine's own left inserter at distance 4.
+                let target_cx = cxs[i];
+                let mut placed_at: Option<(i32, i32)> = None;
+                'find: for &py in band_ys {
+                    for px in (target_cx - 2..=target_cx + 2).rev() {
+                        if !occupied.contains(&(px, py)) && !placed.contains(&(px, py)) {
+                            placed_at = Some((px, py));
+                            break 'find;
                         }
-                        if occupied.contains(&(px, py)) || placed.contains(&(px, py)) {
-                            continue;
-                        }
-                        placed_at = Some((px, py));
-                        break 'outer;
                     }
                 }
-            }
+                if placed_at.is_none() {
+                    'fallback: for &py in band_ys {
+                        for px in [target_cx + POLE_RANGE, target_cx - POLE_RANGE] {
+                            if !occupied.contains(&(px, py)) && !placed.contains(&(px, py)) {
+                                placed_at = Some((px, py));
+                                break 'fallback;
+                            }
+                        }
+                    }
+                }
 
-            match placed_at {
-                Some((px, py)) => {
-                    entities.push(make_pole(px, py));
-                    placed.insert((px, py));
-                    // Advance past every machine this pole covers. POLE_RANGE
-                    // is Chebyshev — both candidate y rows are within range
-                    // of the machine center, so the x check alone is enough.
-                    i += 1;
-                    while i < cxs.len() && (cxs[i] - px).abs() <= POLE_RANGE {
+                match placed_at {
+                    Some((px, py)) => {
+                        entities.push(make_pole(px, py));
+                        placed.insert((px, py));
+                        // Advance past every machine whose center this pole
+                        // still covers (Chebyshev, x only).
+                        i += 1;
+                        while i < cxs.len() && (cxs[i] - px).abs() <= POLE_RANGE {
+                            i += 1;
+                        }
+                    }
+                    None => {
+                        // No free tile covers cxs[i] in this band — skip to
+                        // avoid an infinite loop; the power validator flags
+                        // the resulting inserter/machine coverage gap.
                         i += 1;
                     }
                 }
-                None => {
-                    // Couldn't place a pole covering cxs[i]. Skip it to avoid an
-                    // infinite loop — power validator will flag the gap.
-                    i += 1;
+            }
+        }
+    }
+
+    // Coverage-driven mop-up (RFP `docs/rfp-power-supply.md` Phase 0f): the
+    // band lines above cover the standard input/output inserter rows, but
+    // tall / HorizontalStack rows place inserters at offsets the bands don't
+    // reach. For any electric inserter still beyond POLE_RANGE of every
+    // placed pole, place a pole at the free tile in its Chebyshev
+    // neighbourhood that covers the most still-uncovered inserters (a greedy
+    // set-cover step). Where no free tile exists in range, the inserter is
+    // left uncovered and `check_power_coverage` flags it — the
+    // "coverage can't fit the row pitch" kill-criterion signal.
+    let covered = |x: i32, y: i32, placed: &FxHashSet<(i32, i32)>| {
+        placed
+            .iter()
+            .any(|(px, py)| (x - px).abs() <= POLE_RANGE && (y - py).abs() <= POLE_RANGE)
+    };
+    let mut give_up: FxHashSet<(i32, i32)> = FxHashSet::default();
+    loop {
+        let uncovered: Vec<(i32, i32)> = inserters
+            .iter()
+            .copied()
+            .filter(|&(ix, iy)| !covered(ix, iy, &placed) && !give_up.contains(&(ix, iy)))
+            .collect();
+        let Some(&(ix, iy)) = uncovered.first() else {
+            break;
+        };
+        // Best free tile within POLE_RANGE of the target inserter, ranked by
+        // how many still-uncovered inserters it would also cover.
+        let mut best: Option<((i32, i32), usize)> = None;
+        for dy in -POLE_RANGE..=POLE_RANGE {
+            for dx in -POLE_RANGE..=POLE_RANGE {
+                let (px, py) = (ix + dx, iy + dy);
+                if occupied.contains(&(px, py)) || placed.contains(&(px, py)) {
+                    continue;
                 }
+                let n = uncovered
+                    .iter()
+                    .filter(|&&(ux, uy)| (ux - px).abs() <= POLE_RANGE && (uy - py).abs() <= POLE_RANGE)
+                    .count();
+                if best.is_none_or(|(_, bn)| n > bn) {
+                    best = Some(((px, py), n));
+                }
+            }
+        }
+        match best {
+            Some(((px, py), _)) => {
+                entities.push(make_pole(px, py));
+                placed.insert((px, py));
+            }
+            None => {
+                give_up.insert((ix, iy));
             }
         }
     }

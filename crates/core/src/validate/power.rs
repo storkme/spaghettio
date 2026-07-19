@@ -12,7 +12,7 @@
 
 use std::collections::VecDeque;
 
-use crate::common::{is_machine_entity, machine_dims, needs_electricity};
+use crate::common::{is_inserter, is_machine_entity, machine_dims, needs_electricity};
 use crate::models::LayoutResult;
 use crate::validate::{Severity, ValidationIssue};
 
@@ -136,15 +136,21 @@ pub fn check_power_coverage(layout_result: &LayoutResult) -> Vec<ValidationIssue
     }
 
     for e in &layout_result.entities {
-        if !is_power_coverage_subject(&e.name) {
+        // Coverage subjects (RFP `docs/rfp-power-supply.md` Phase 0f):
+        // electric crafting machines (checked at their footprint center) AND
+        // electric inserters (1×1, checked at their own tile). Every inserter
+        // tier the engine places is electric; a burner biochamber and all
+        // non-powered entities (belts, pipes, poles) are skipped. Before
+        // Phase 0f only machine centers were checked, hiding the ~40-52% of
+        // inserters that sit one tile beyond a north-band pole's supply area.
+        let (cx, cy) = if is_power_coverage_subject(&e.name) {
+            let (w, h) = machine_dims(&e.name);
+            (e.x + w as i32 / 2, e.y + h as i32 / 2)
+        } else if is_inserter(&e.name) {
+            (e.x, e.y)
+        } else {
             continue;
-        }
-
-        let (w, h) = machine_dims(&e.name);
-        let (w, h) = (w as i32, h as i32);
-        // Machine center tile (integer division, same as Python `size // 2`)
-        let cx = e.x + w / 2;
-        let cy = e.y + h / 2;
+        };
 
         let powered = pole_positions
             .iter()
