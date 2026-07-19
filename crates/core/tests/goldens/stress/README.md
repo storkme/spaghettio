@@ -46,6 +46,13 @@ state of the host** (`~/.cache/spaghettio/sat-zones.bin`):
   `SPAGHETTIO_USE_ZONE_CACHE=0` diagnostic run refreshes the host cache
   in place — after which zone-dependent goldens legitimately drift and
   need a re-bless (the diff shows exactly which fixtures moved and how).
+- Fresh solves are additionally **wall-clock-budget shaped** (25 ms
+  `cost_descent_budget_ms` in the junction strategy): a faster machine or
+  a faster build reaches a different point in the search before the
+  budget cuts off, and lands on a different valid solution. Measured
+  2026-07-19: switching `varisat` from opt-level 0 to 3 changed the
+  fresh-solve layouts of 5 of 8 fixtures. Cache-state relativity and
+  speed relativity are independent reasons the goldens are host-local.
 
 So a golden blessed on one host is not portable to a cold machine, and CI
 enforcement would flake. The always-on `StressBaseline` ceilings in

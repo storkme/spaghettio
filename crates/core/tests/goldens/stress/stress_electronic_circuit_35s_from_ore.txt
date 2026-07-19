@@ -1,5 +1,5 @@
 === stress_electronic_circuit_35s_from_ore scoreboard ===
-entities:         6237
+entities:         6240
 total warnings:   123
 zones solved:     0
 zones skipped:    0
@@ -14,4 +14,4 @@ warnings by category:
   input-rate-delivery: 35
 errors by category:
   belt-dead-end: 4
-layout hash: ed2dbb15c3210939f0624d87d85a1b96df744088a230787f207d2ed167286892
+layout hash: fbcc7596410fd54f8ccc6b07a0c4e600dad8d41ee81ac8cfaeaede0ef8eb2cb4

@@ -84,6 +84,21 @@ compile time on both cold and warm builds. Adopt only if the wall-clock win
 survives the compile cost on a typical edit-test cycle. Decide on data, not
 assumption.
 
+**LANDED 2026-07-19**: adopted as per-package overrides in the workspace
+`Cargo.toml` — `spaghettio_core` at `opt-level = 1` (ci suite 37.8 s →
+26.0 s, serial stress gate subset 88 s → 28 s, incremental
+rebuild-after-edit unchanged at ~2 s, one-time conversion ~21 s) and
+`varisat` at `opt-level = 3` (cold-cache SAT a further ~2.4×: 5.6 s →
+2.3 s on a 2-test probe; this is the CI path, which always runs cold).
+Measurement surfaced a new fact along the way: **junction solutions are
+wall-clock-budget shaped** (25 ms `cost_descent_budget_ms`), so the faster
+build lands on different valid solutions when solving fresh — 5 of 8
+stress fixtures re-solved differently and were re-blessed (goldens diff
+in the same commit). Warm-cache replays are unaffected. This adds a
+second, independent reason goldens must never be enforced cross-machine
+without pinning the cache: solutions depend not just on cache state but
+on host speed and build optimization level.
+
 ### 4. (Low priority) Fresh-worktree compile cost for agents
 
 Worktree-isolated agents pay a from-scratch build (minutes; dominated one

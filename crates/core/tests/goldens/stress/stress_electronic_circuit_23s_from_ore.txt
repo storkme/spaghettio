@@ -1,5 +1,5 @@
 === stress_electronic_circuit_23s_from_ore scoreboard ===
-entities:         3394
+entities:         3398
 total warnings:   0
 zones solved:     0
 zones skipped:    0
@@ -13,4 +13,4 @@ warnings by category:
   (none)
 errors by category:
   (none)
-layout hash: 14f77c3d61e75fa39f63c5380e7ae118fa0326d223a420f14d27ca1f964be38f
+layout hash: 3b43ccb1c636641c33aae2bf6d1ecf60cd2241362c626763a860ddc06176f80a
