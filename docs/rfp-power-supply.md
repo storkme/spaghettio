@@ -467,3 +467,22 @@ genuinely and cheaply deferred.
   first exposed by the new fixture — a follow-up candidate, not 0e debt).
   Corpus byte-identical (goldens 9/9, purely-additive e2e diff). Phase 0e is
   COMPLETE; Phase 1 dispatches next with the re-census inputs.*
+- *2026-07-20 — **Phase 1 LANDED** (`c91e98f`; light-scoped adversarial
+  review APPROVE + ACCEPT-SCOPE). The `msz==5 && oil-refinery` special case
+  is replaced by footprint-derived `fluid_row_pole_gap_dx` with a live
+  `debug_assert` linking the gap to `common::pole_candidate_ys` (drift fails
+  the suite). **Corpus outcome: byte-identical — and that is the correct
+  Phase 1.** The RFP's "expect moved fluid-row lines" prediction is
+  FALSIFIED and recorded: the refinery (the corpus's only 5×5 fluid-only
+  row) already carried a hand-rolled gap, and 3×3 fluid rows are covered
+  from an adjacent band tile (verified at two rates; reviewer notes the
+  covering pole sits either in the row above or beyond the row's end —
+  both within ±3). Reviewer tile evidence: 5×5 strips read P-U-O-U-P (full
+  except the derived gap), covering pole at Chebyshev exactly 3.0 — the
+  reservation is geometrically forced, not conventional. Speculative 3×3
+  reservation was declined (lead scope call, reviewer-affirmed on evidence):
+  works-but-fragile fluid poles (108 zero-slack) are Phase 2's
+  measure-then-react territory, not Phase 1 pre-emption. Forward-safe: a
+  future 5×5 fluid-only machine gets its gap automatically; the msz==4 arm
+  is unreachable today and fails LOUD (coverage warning) if ever reached.
+  Phase 2 dispatches next.*
