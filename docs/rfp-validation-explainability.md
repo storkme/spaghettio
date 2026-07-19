@@ -292,3 +292,14 @@ trace-event join with click-to-pin (`web/src/ui/tileContext.ts` +
   discriminating gate; (h) "light" relabeled honestly: Phase 2 is
   per-call-site authoring (~30 sites), v1 vocabulary kept minimal to
   match. Phase 1 declared safe to build independent of all findings.*
+- *2026-07-19 — **first material payoff + one residual**. The
+  `geometry` verdict this RFP's attribution surfaced (far-side cap at
+  last-in-row machines, pole exonerated) led straight to the
+  last-in-row belt extension (`0d7132c`, adversarially reviewed,
+  APPROVE): anchor inserter-item-throughput 12 → 0, corpus 12 → 8
+  (all remaining in production-science / the untouched
+  triple-quad-hstack trims). Residual found during that review: the
+  self_loop cap shape has NO InserterSideCapped emit site — fish and
+  pentapod self-loop cap warnings carry no events and stay honestly
+  unattributed. Known emit-site gap, not a join bug; candidate for a
+  Phase-2-style call-site addition if self-loop rows ever matter.*
