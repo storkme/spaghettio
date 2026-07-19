@@ -10,7 +10,7 @@ These replace the re-derive-the-before-leg step of the STRESSGOLD gate
 protocol: the "before" baseline is whatever is committed here, shared by
 construction across implementer/reviewer agents, and every deliberate
 layout movement is a visible re-bless diff in git history. See item 2 of
-`docs/testing-time-audit.md`.
+`docs/test-suite-followups.md`.
 
 ## Usage
 

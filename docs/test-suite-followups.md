@@ -1,10 +1,13 @@
-# Test-suite time audit (2026-07-19)
+# Test-suite followups
 
-Status: **in progress** — findings from a session-time audit. Each item below
-has pick-up notes so a future session can start cold. Priority: **item 2 →
-item 1 → item 3** (2 cheapens every gate run of the active power RFP; 1 is the
-best value-per-line; 3 needs measurement before commitment). Item 2 landed
-2026-07-19 (see its section); items 1, 3, 4 still open.
+Deferred test-suite tooling work, from a session-time audit on 2026-07-19
+(originally `testing-time-audit.md`). Each item below has pick-up notes so a
+future session can start cold.
+
+Status: **in progress**. Priority: **item 2 → item 1 → item 3** (2 cheapens
+every gate run of the active power RFP; 1 is the best value-per-line; 3 needs
+measurement before commitment). Item 2 landed 2026-07-19 (see its section);
+items 1, 3, 4 still open.
 
 ## Measured baseline
 
