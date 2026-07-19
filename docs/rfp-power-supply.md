@@ -445,3 +445,25 @@ genuinely and cheaply deferred.
   criterion now operates in a corpus where solid rows are already imperfect
   — the advanced-circuit tightness is Phase 3's problem, not Phase 1's, and
   Phase 1's scope stays fluid-only.*
+- *2026-07-20 — **Phase 0e-i LANDED** (`e58e1a6`..`20f475b`, 6 commits
+  rebased onto the re-census docs; adversarial review APPROVE, zero blocking
+  findings). Shared `crate::fluid_ports` module: validator AND templates now
+  consume one orientation-aware port-table source (mirror + direction), with
+  a committed draftsman provenance script
+  (`scripts/verify_fluid_ports_transforms.py`); the reviewer re-derived
+  every table and transform from raw fluid_boxes data — exact matches, and
+  the foundry/cryo x-symmetry makes mirror ≡ 180-rotation unambiguous.
+  Landed: cryo/foundry mirror rows, emag East-rotation (solid-output only;
+  electrolyte verified STILL failing loud), foundry molten-metal DualInput
+  fluid arm, biolubricant via a principled south-face gate. Four new
+  fixtures give emag/cryo/foundry-molten/biolubricant their first corpus
+  presence — 0d's fixture gap now fully closed. **Design-seam ruling**
+  (review adjudicated the implementer's dissent): per-template fluid-output
+  arms + shared `emit_fluid_output_row` helper, NOT row_kind promotion —
+  output_is_fluid has one central derivation feeding all arms, the gate
+  cannot drift from the tables by construction, and emission geometry is
+  irreducibly per-template. Superconductor's 6 pinned warnings adjudicated
+  pre-existing (the FluidInput template's standing 3-solids limitation,
+  first exposed by the new fixture — a follow-up candidate, not 0e debt).
+  Corpus byte-identical (goldens 9/9, purely-additive e2e diff). Phase 0e is
+  COMPLETE; Phase 1 dispatches next with the re-census inputs.*
