@@ -121,6 +121,8 @@ Tracks which recipes produce zero-error bus blueprints. Moving up = real progres
 
 Open tracking issues for layout quality: [#135 balancer templates are oversized](https://github.com/storkme/spaghettio/issues/135), [#136 missing coprime balancer shapes](https://github.com/storkme/spaghettio/issues/136), [#68 fluid row 3-tile pitch](https://github.com/storkme/spaghettio/issues/68) (design: [`docs/rfp-fluid-dual-input-row.md`](docs/rfp-fluid-dual-input-row.md)).
 
+Deferred tooling tasks — test-suite time recovery (audited 2026-07-19, pick-up notes per item in [`docs/testing-time-audit.md`](docs/testing-time-audit.md)): committed STRESSGOLD baseline golden (kills the per-unit "before" run — do first), CI nextest parallelism re-enable via timeout-ceiling bumps (~5 min/push, experiment already documented in `.config/nextest.toml`), `[profile.test]` opt experiment for SAT/A*-heavy tests (measure before adopting).
+
 ## Verification protocol for layout engine changes
 
 Layout bugs are easy to get wrong — zero validation errors can mean the check was wrong, not that the layout is. Follow this protocol:
