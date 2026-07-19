@@ -239,3 +239,7 @@ genuinely and cheaply deferred.
   failure mode the zero-slack trigger structurally cannot see. Phasing honesty
   inverted: Phase 0, not Phase 1, is where the judgment lives. Pending user
   acceptance.*
+- *2026-07-19 — **revision 2 accepted by the user** ("i'm happy with this
+  rfp"); user intends to set it as the session goal. Work proceeds phase by
+  phase under the implementer + adversarial-reviewer team flow established on
+  `beltspan-lastinrow`.*
