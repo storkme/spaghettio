@@ -419,3 +419,29 @@ genuinely and cheaply deferred.
   trigger-(b) baseline re-anchors to the post-0f re-census (pending).
   Follow-ups: delete the vestigial `pole_entities` router param (dead code);
   per-pack gauntlet assertions gap; exact-shape stress assertion.*
+- *2026-07-19 — **post-0f re-census complete** (agent-run on `debb398`; raw
+  data `scripts/pole-census-2026-07-19-post0f.json`, analysis script now
+  committed as `scripts/pole_census.py` — closing the pre-0f census's
+  script-reproducibility gap). Findings: **(A)** power warning footprint
+  matches the pinned reds exactly, zero deviation. **(B) Phase 3 trigger
+  (a)'s condition is now TRUE in the corpus**: 18 solid-row zero-slack poles
+  (pre-0f: 0/1881), all on advanced-circuit south-band output-inserter rows
+  across 13 cases — the two-band rework spent the slack the original census
+  measured (solid median 8→4, fluid 4→2; fluid zero-slack 38%→30.4%
+  proportionally but 108 absolute). Phase 3 is already activated, so no
+  state change — recorded as reinforcing evidence and as the first entry of
+  the trigger-(a) watchlist. **(C) trigger-(b) baseline re-anchored**:
+  corpus poles 2212→4226 (+91%, 45-snapshot scope; the landed cost table's
+  3464 is the 39-committed-config scope — both scopes now named). Missing
+  fixtures filled: kovarex 4→5 (+25%), PU-am2-baseline 99→190 (+92%). The
+  older spot figures in the "trip confirmed" entry (EC@10 30→59, PU
+  163→331) were pre-reconciliation config-drift numbers superseded by the
+  landed table — noted here so the log's two sets don't read as an open
+  contradiction. **(D)** in-span fraction 82%→~79-80%, inside the 10pp
+  re-derivation band. **(E) Phase 1 premise holds**: fluid rows remain
+  categorically tighter (30.4% vs 0.5% zero-slack); worst fluid rows are
+  all basic-oil-processing refinery rows (ranked list in the JSON). One
+  re-read flagged: Phase 1's "moves goldens on any non-fluid row → stop"
+  criterion now operates in a corpus where solid rows are already imperfect
+  — the advanced-circuit tightness is Phase 3's problem, not Phase 1's, and
+  Phase 1's scope stays fluid-only.*
