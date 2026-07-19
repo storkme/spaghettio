@@ -42,6 +42,33 @@ fn output_dir(output_east: bool) -> EntityDirection {
     if output_east { EntityDirection::East } else { EntityDirection::West }
 }
 
+/// The column (relative to the machine's left edge) to leave free for a power
+/// pole in a fluid-only row's continuous input pipe strip — or `None` when the
+/// row needs no reservation (RFP `docs/rfp-power-supply.md` Phase 1).
+///
+/// The continuous pipe strip sits on `pole_candidate_ys`' north band
+/// (`input_y == top_y - 1`), so it fills the one row a pole most wants. Whether
+/// the pole can instead sit in a row *beyond* the strip depends on the machine
+/// footprint: a medium-electric-pole supplies its tile ±3, so for a 5×5 machine
+/// the rows above the strip are occupied by the bus trunk and the strip itself
+/// is full — the pole has nowhere to go unless a strip tile is freed. Smaller
+/// (≤4-wide) fluid machines can be reached from the row above the strip, so
+/// they don't force a reservation. Replaces the former `oil-refinery`-only
+/// special case; now covers any 5×5 fluid-only machine (oil-refinery today, a
+/// fluid-only cryogenic-plant/foundry if one ever appears), and is byte-
+/// identical for the corpus (oil-refinery is its only 5×5 fluid-only row).
+///
+/// The gap goes at the machine's centre column (`msz / 2`), where the freed
+/// pole covers the whole footprint; the caller bridges the two pipe halves with
+/// a 1-tile underground pair so the fluid network stays connected across it.
+fn fluid_row_pole_gap_dx(msz: i32) -> Option<i32> {
+    if msz >= 5 {
+        Some(msz / 2)
+    } else {
+        None
+    }
+}
+
 /// Emit a continuous south-face fluid-output pipe row for a solid-in/fluid-out
 /// machine and register the machine's real south output-port columns (from the
 /// shared table) as bus tap points.
@@ -3327,6 +3354,16 @@ pub fn fluid_only_row(
     let input_y = y_offset;
     let output_y = y_offset + 1 + msz;
 
+    // The pole gap we reserve at `input_y` must land in the machine row's
+    // `pole_candidate_ys` north band — the exact row `place_poles` seeds its
+    // search from — so the reservation and the placer share one geometry and
+    // can never drift (RFP `docs/rfp-power-supply.md` Phase 1; the machine's
+    // top edge is `y_offset + 1`).
+    debug_assert!(
+        crate::common::pole_candidate_ys(y_offset + 1, msz).contains(&input_y),
+        "fluid_only_row pole gap row {input_y} is not a pole_candidate_ys band"
+    );
+
     for i in 0..machine_count {
         let mx = x_offset + i as i32 * pitch;
 
@@ -3346,11 +3383,19 @@ pub fn fluid_only_row(
             // pipes so adjacent machines' strips connect on the surface.
             if let Some(&(_, item)) = fluid_inputs.first() {
                 let seg = Some(format!("row:{recipe}:belt-in:{item}"));
-                let gap_dx: Option<i32> = if msz == 5 && machine_entity == "oil-refinery" {
-                    Some(2)
-                } else {
-                    None
-                };
+                // RFP `docs/rfp-power-supply.md` Phase 1: reserve a pole gap in
+                // the continuous input pipe row (a `pole_candidate_ys` band)
+                // whenever the machine footprint forces the covering pole INTO
+                // that band. A medium-electric-pole supplies its footprint ±3;
+                // for a 5×5 machine every tile of the rows above the input pipe
+                // row (the bus trunk) is >3 from the machine and the pipe row
+                // itself is full, so the pole has nowhere to sit unless a tile
+                // is freed here. Smaller (3×3) fluid rows can be covered from
+                // the row above the pipe strip (within ±3), so they don't force
+                // a reservation. Principled + footprint-derived, replacing the
+                // former `oil-refinery`-only special case — now also covers a
+                // fluid-only cryogenic-plant/foundry (both 5×5).
+                let gap_dx: Option<i32> = fluid_row_pole_gap_dx(msz);
                 for dx in 0..msz {
                     if Some(dx) == gap_dx {
                         continue;
@@ -3373,15 +3418,15 @@ pub fn fluid_only_row(
                         ..Default::default()
                     });
                 }
-                if gap_dx == Some(2) {
-                    // Report only dx=1 (the leftmost UG-bridge port) so the
+                if let Some(g) = gap_dx {
+                    // Report only the leftmost UG-bridge port (dx = g-1) so the
                     // pole-tap reservation around the lane→port path
-                    // (`hi - 1` in `layout.rs`) doesn't claim the dx=2 gap
-                    // tile before `place_poles` runs. The dx=3 port is
-                    // still a `pipe-to-ground` so the validator sees an
-                    // adjacent pipe at both physical input ports, and
-                    // fluid reaches it via the underground tunnel.
-                    fluid_input_port_pipes.push((item.to_string(), mx + 1, input_y));
+                    // (`hi - 1` in `layout.rs`) doesn't claim the gap tile
+                    // before `place_poles` runs. The dx=g+1 port is still a
+                    // `pipe-to-ground` so the validator sees an adjacent pipe at
+                    // both physical input ports, and fluid reaches it via the
+                    // underground tunnel. (g=2 for a 5×5 → reports dx=1.)
+                    fluid_input_port_pipes.push((item.to_string(), mx + g - 1, input_y));
                 } else {
                     for &(dx, port_item) in fluid_inputs {
                         fluid_input_port_pipes.push((port_item.to_string(), mx + dx, input_y));
@@ -5401,6 +5446,17 @@ pub fn scrap_recycling_row(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fluid_row_pole_gap_only_for_5x5() {
+        // RFP Phase 1: 5×5 fluid-only machines (oil-refinery, and a fluid-only
+        // cryogenic-plant/foundry if one appears) force the pole into the pipe
+        // strip → reserve the centre column. Smaller machines are covered from
+        // the row above → no reservation.
+        assert_eq!(fluid_row_pole_gap_dx(5), Some(2)); // byte-identical to the old oil-refinery gap
+        assert_eq!(fluid_row_pole_gap_dx(3), None);
+        assert_eq!(fluid_row_pole_gap_dx(4), None);
+    }
 
     // Helper: assert at least one entity at (x, y) with given name; returns the first match.
     fn assert_entity<'a>(entities: &'a [PlacedEntity], x: i32, y: i32, name: &str) -> &'a PlacedEntity {
