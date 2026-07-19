@@ -357,3 +357,21 @@ genuinely and cheaply deferred.
   defect outranks the port-face refactor, and Phase 1's premise no longer
   depends on (i) since unsupported rows can't be generated silently anymore.
   Foundry molten-metal support travels with 0e-i.*
+- *2026-07-19 — **Phase 0e-ii (fulgora) LANDED** (`cbf5017`; adversarial
+  review APPROVE, retargeted mid-review after a branch reconciliation — a
+  freeze-during-review rule now stands). Review evidence: cherry-pick
+  equivalence proven; STRESSGOLD 8/8 byte-identical; gate enumeration shows
+  ice-melting is today's only firing recipe; the widened fulgora test FAILS
+  against base (real regression guard); the water arc also cleared 2
+  incidental warnings from the phantom output belt (109→107). Review
+  findings folded forward: **biolubricant** (biochamber, jelly→lubricant) is
+  a third solid-in/fluid-out member, added to 0e-i's scope (likely a
+  one-line gate widening — biochamber's ports mirror chemical-plant's);
+  0e-i should consider promoting fluid-output into `row_kind` itself once
+  2–3 templates carry per-template fluid arms (design-seam note,
+  placer.rs:502–545); the fluid-validators-only test widening is ACCEPTED
+  (46 belt-loop + 53 UG errors are the documented sushi design, identical at
+  base and branch) with a "full-validate-minus-sushi-region" test noted as
+  future work. Pre-existing fulgora sushi defects (3 illegal entity
+  overlaps at (29,14)/(29,16)/(29,17) + the AM3 (8,45) single-exit-bus
+  cluster) filed as a tracking issue — out of this RFP's scope.*
