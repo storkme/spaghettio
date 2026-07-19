@@ -577,9 +577,9 @@ const GOLDEN_HASHES: &[(&str, &str)] = &[
     // that cover single_input_row-shaped fixtures moved even though entity
     // COUNT and layout geometry (KC4) stayed byte-identical — only the
     // inserter entity NAMES at the same positions changed.
-    ("tier1_iron_gear_wheel", "94154af11c8e30b329b5f165ebd60e2c689a138f227b336950db8a9e4a723b1e"),
-    ("tier1_iron_gear_wheel_from_ore", "9a7eefe79e18ce397c1c8249ff9f22846c08933dad00240e617ed4387cd8e4c1"),
-    ("tier1_iron_gear_wheel_20s", "8b991a05ee095d7c7f1debd145c88014a98d2ab41f3ed1945244d0cc76d4193d"),
+    ("tier1_iron_gear_wheel", "61ae6bb3babd5e5921e4ca3351664903444614ef9bd57e3579f08a9b2d12e503"),
+    ("tier1_iron_gear_wheel_from_ore", "7e7fbc36c596e237a8aa6838d2095f03a67284392085d8af4b6dea96af4d1f61"),
+    ("tier1_iron_gear_wheel_20s", "d00a81cb51d646c3755b5f7d5659a6f31f1cbfcdeb21ab2303c1dfd3b2121c02"),
     // Updated when `(m, m)` family balancers became passthroughs
     // (issue #268) — splitter blocks replaced by a single south-facing
     // belt per output column.
@@ -587,7 +587,7 @@ const GOLDEN_HASHES: &[(&str, &str)] = &[
     // copper-plate) ladder-sized, see note above.
     // RFP rfp-inserter-sizing.md Phase 2: dual_input_row (this fixture's EC
     // row is dual-input) is now ladder-sized + near/far reassigned.
-    ("tier2_electronic_circuit_from_ore", "b2d8f73b7e5beb07ffda0de064693f9ab6b3564cadb478e63c99427bbdc47287"),
+    ("tier2_electronic_circuit_from_ore", "0ae4d39372e33cf6c82dc96404a5f05b5a3b9888c2cea1f65ef542caeb91f182"),
     // Hashes below changed when row inputs were switched to always
     // use `max_belt_tier` instead of per-row consumption rate (fixes
     // tier-mismatch seam where bus tap-off feeds row belt-in).
@@ -597,21 +597,21 @@ const GOLDEN_HASHES: &[(&str, &str)] = &[
     // RFP rfp-inserter-sizing.md Phase 1: single_input_row rows ladder-sized, see note above.
     // RFP rfp-inserter-sizing.md Phase 2: dual_input_row ladder-sized + near/far reassigned.
     // RFP rfp-inserter-sizing.md Phase 3: far side's reach-2 count-ladder activated.
-    ("tier2_electronic_circuit_20s_from_ore", "30c3cdbce421bb6f29d93481470b2653f39882aebbf4d64579793e9f263e1010"),
+    ("tier2_electronic_circuit_20s_from_ore", "186fe9f7c87f51368484337feada9d33d00aa832c176b6ea066f93f30c7a6b48"),
     // RFP rfp-inserter-sizing.md Phase 2: dual_input_row's inserters are now
     // ladder-sized + near/far reassigned (this fixture's dual-input EC row
     // is exactly the template Phase 2 touches) — entity types/positions on
     // that row moved.
-    ("tier2_electronic_circuit_splitter_stamp_regression", "d7d4a166cddaaa7cc29b625a56812afbac0b96f2b7ac80fc656b83b9eae3e9a2"),
+    ("tier2_electronic_circuit_splitter_stamp_regression", "8f1eaa38c9a8beeae052ff9fd63b5c4e7d68662e685d576e731c192694ba1d5f"),
     // RFP rfp-inserter-sizing.md Phase 3: fluid_input_row's solid side
     // (coal) is now ladder-sized. Reaches fully clean.
-    ("tier3_plastic_bar", "c19ff02e140bac9af96116aed36f86dff923e4b5c7c13941b7469920bb9e06ba"),
+    ("tier3_plastic_bar", "bb1cccc422f0e44bfdb1d18ef59d870d71d8fe5d7147b659e7b388c79a526166"),
     // RFP rfp-inserter-sizing.md Phase 3: fluid_input_row's solid side
     // (iron-plate) is now ladder-sized — this fixture (sulfuric-acid:
     // iron-plate + water) is exactly that shape. Stays fully clean
     // (assert_no_warnings) — the ladder resolves the demand outright.
-    ("tier3_sulfuric_acid", "4ffea48ef878dcfe5ccb976ddd9c997e478cafd94484555fbab78b9880fe7b2c"),
-    ("tier3_heavy_oil_cracking", "76f4dd59f1e6422e4001b81a57f2815ae4447a4f1e85f9fc2de386440b39a596"),
+    ("tier3_sulfuric_acid", "99c6868035f7b1bd53abf65098e73d979cff7d97ed22354c5215e0683715519c"),
+    ("tier3_heavy_oil_cracking", "db76e06b3ace2e83a7776691cc716a92b3da8f1fe2a7d9b969d9adacedb8f109"),
 ];
 
 fn assert_round_trip(result: &E2EResult) {
@@ -1101,7 +1101,17 @@ fn tier2_electronic_circuit_20s_from_ore() {
     // beltspan-lastinrow: the 2 residual were EC dual_input_row last-in-row far
     // (iron-plate) sides, capped at one long-handed inserter; extending the far belt
     // one tile at each places the needed second inserter (2 -> 0).
-    assert_warnings_exactly(&result, &[]);
+    //
+    // RFP `docs/rfp-power-supply.md` Phase 0f (inserter power coverage): this
+    // is one of THREE strict-gating kill-criterion cases. At 20/s the EC
+    // dual_input_row input-inserter bands are saturated (machine below,
+    // ladder inserters across every column, belts above, zero-gap next row),
+    // leaving 14 inserters with a 7×7 neighbourhood that is 0/49 free of real
+    // post-routing entity footprints (exact AND conservative) — a hard pitch
+    // limit no pole can cover. Adjudicated hard, not a mop-up gap; pinned as
+    // an honest, visible red until Phase 3 substations. Fixtures for the
+    // substation design.
+    assert_warnings_exactly(&result, &[("power", 14)]);
     assert_produces(&result, "electronic-circuit", 20.0);
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier2_electronic_circuit_20s_from_ore");
@@ -1869,7 +1879,14 @@ fn tier5_processing_unit_from_ore_am3() {
     // beltspan-lastinrow: the 5 residual inserter-item-throughput were dual_input_row
     // last-in-row far sides capped at one long-handed inserter; extending the far belt
     // one tile clears them (5 -> 0) — this config is now fully clean (0 warnings).
-    assert_warnings_exactly(&result, &[]);
+    //
+    // RFP `docs/rfp-power-supply.md` Phase 0f (inserter power coverage): the
+    // deepest strict-gating kill-criterion case. The decomposed
+    // electronic-circuit input-inserter sub-rows stack with zero inter-row gap;
+    // 20 inserters (clusters x40-44 at y164/172/180/188) have a 0/49-free 7×7
+    // against real post-routing footprints — a hard pitch limit, verifier-
+    // confirmed. Pinned as an honest red; Phase 3 substation fixture.
+    assert_warnings_exactly(&result, &[("power", 20)]);
     assert_produces(&result, "processing-unit", 2.0);
     assert_round_trip(&result);
 }
@@ -1907,7 +1924,14 @@ fn tier_kovarex_self_loop() {
     .unwrap_or_else(|e| panic!("tier_kovarex_self_loop: {e}"));
 
     assert_no_errors(&result);
-    assert_no_warnings(&result);
+    // RFP `docs/rfp-power-supply.md` Phase 0f (inserter power coverage): the
+    // third strict-gating kill-criterion case, and a distinct structural
+    // cause from the electronic-circuit stacks — the kovarex self-loop packs
+    // uranium-235/238 + recirculation inserters across top_y-1 and top_y-2
+    // with the machines below, leaving 16 inserters with a 0/49-free 7×7
+    // against real footprints. Hard pitch limit; pinned as an honest red,
+    // Phase 3 substation fixture.
+    assert_warnings_exactly(&result, &[("power", 16)]);
     assert_produces(&result, "uranium-235", 0.1);
 
     let centrifuge_count = result
@@ -3855,7 +3879,12 @@ fn stress_electronic_circuit_60s_red_from_ore() {
         StressBaseline {
             max_errors: 1,
             // RFP rfp-lane-demand-flow.md Phase 1: was 0; +200 inserter-throughput.
-            max_warnings: 200,
+            // RFP `docs/rfp-power-supply.md` Phase 0f: this red variant's ONLY
+            // warnings are now the 60 hard-limit uncovered inserters (all 0/49
+            // free against real footprints — the biggest single trip population,
+            // adjudicated hard). Tightened 200 → 60 so those reds are EXPOSED
+            // and asserted, not swallowed by a loose ceiling. Phase 3 fixture.
+            max_warnings: 60,
             max_errors_by_category: Default::default(),
         },
     );
