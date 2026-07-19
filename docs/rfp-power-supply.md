@@ -131,6 +131,20 @@ Two reproducibility caveats are recorded at the end of this section.
     explicit "unverified post-Phase-0" caveat in CLAUDE.md's validator notes.
   - Rev 1 called this phase "a plain validator bug fix [that] could land ahead
     of acceptance" — retracted; 0a–0c carry design decisions. 0d is mechanical.
+  - **0e (added 2026-07-19, user-directed scope change) — fluid-port
+    correctness before pole design.** The widened Phase 0 validation exposed
+    two real defects that must be fixed before Phase 1 designs reservations
+    around fluid-row geometry: **(i)** fluid row templates route pipes to a
+    fixed north face, but cryogenic-plant's inputs are south and
+    electromagnetic-plant's are west/east — the templates must honor
+    per-machine port faces (bounded parameterization, see the kill criterion
+    below). Fixtures come from the Phase 0 repro params (superconductor@AM3,
+    fusion-power-cell@AM3) and land with the fix, retroactively closing 0d's
+    fixture gap. **(ii)** The fulgora holmium-chain chemical-plant output gap
+    (melted water unpiped at the chemical-plant, hidden because the fulgora
+    test validates sushi belts only) — widen that test to full validation and
+    fix the routing. Both are layout-moving: separate units, standard gates,
+    one in flight at a time.
 - **Phase 1 — principled fluid-row reservation.** Computable at stamp time:
   `place_poles`' candidate rows are a static function of row geometry
   (layout.rs:918 — `top_y - 1` and `top_y + mh`), which templates already
@@ -172,6 +186,11 @@ Two reproducibility caveats are recorded at the end of this section.
   incrementally.
 - If Phase 0c moves goldens on any case that contains no biochamber rows, the
   change is leaking — stop and investigate before re-blessing.
+- If Phase 0e's port-face fix cannot be a bounded parameterization of the
+  existing fluid templates — i.e. it starts requiring the wholesale fluid-row
+  redesign of [#68](https://github.com/storkme/spaghettio/issues/68) /
+  `docs/rfp-fluid-dual-input-row.md` — **stop**; that is a separate RFP and
+  the user decides sequencing.
 - If Phase 1's rule cannot hold current row pitch (any corpus fluid row needs
   extra row height to fit the reservation), **stop** — the footprint-vs-power
   trade-off goes to the user, not into code.
@@ -243,3 +262,25 @@ genuinely and cheaply deferred.
   rfp"); user intends to set it as the session goal. Work proceeds phase by
   phase under the implementer + adversarial-reviewer team flow established on
   `beltspan-lastinrow`.*
+- *2026-07-19 — **Phase 0a/0b/0d LANDED** (`d955434`/`35d9d5a`/`ed7cf6a`
+  post-rebase; implementer + adversarial-review fork, verdict APPROVE). Kill
+  criterion NOT tripped: corpus re-check clean, both-direction position-keyed
+  warning diff 0 added / 0 removed, STRESSGOLD byte-identical 8/8, drift test
+  demonstrated failing-then-passing. Review catches recorded: the fluids guard
+  swap correctly removed a false positive the old allowlist emitted — the
+  `ice-melting` recipe (ice→water, zero fluid ingredients) refutes the deleted
+  comment's "every chemical-plant recipe requires at least one fluid" premise;
+  and the census's USP fidelity figure (6615 entities) predates the
+  `0d7132c` belt extension — post-extension corpus value is 6619 (dims
+  208×281 unchanged), Phase 0 innocent. Two real defects surfaced by the
+  widened validation: the cryo/electromag port-face routing gap and the
+  fulgora chemical-plant output gap.*
+- *2026-07-19 — **user decision: fold both defects into this RFP as Phase
+  0e**, ahead of Phase 1 ("i don't think there's much point in us finding a
+  solution to power poles only to have it not work"). Rationale sharpened in
+  design terms: Phase 1 would otherwise bake broken port geometry into the
+  reservation rule's assumptions. 0d's "unverified post-Phase-0" CLAUDE.md
+  caveat is superseded (fixtures arrive with 0e); no external tracking issues
+  filed while the work sits inside the active session goal. New kill
+  criterion added: if the port-face fix escalates into the #68 fluid-row
+  redesign, stop and return sequencing to the user.*
