@@ -1,10 +1,10 @@
 # Test-suite time audit (2026-07-19)
 
-Status: **deferred tooling backlog** — findings from a session-time audit, no
-code changed. Each item below has pick-up notes so a future session can start
-cold. Priority: **item 2 → item 1 → item 3** (2 cheapens every gate run of the
-active power RFP; 1 is the best value-per-line; 3 needs measurement before
-commitment).
+Status: **in progress** — findings from a session-time audit. Each item below
+has pick-up notes so a future session can start cold. Priority: **item 2 →
+item 1 → item 3** (2 cheapens every gate run of the active power RFP; 1 is the
+best value-per-line; 3 needs measurement before commitment). Item 2 landed
+2026-07-19 (see its section); items 1, 3, 4 still open.
 
 ## Measured baseline
 
@@ -52,6 +52,21 @@ in the diff like any golden. Kills the before-leg entirely, makes baselines
 shared-by-construction across agents, and moves drift detection into git
 history. This is the best ergonomics payoff for the RFP team flow — do it
 first.
+
+**LANDED 2026-07-19**: one golden per fixture under
+`crates/core/tests/goldens/stress/` (canonical scoreboard + layout hash),
+driven by `SPAGHETTIO_STRESS_GOLDEN=check|bless` in `check_stress_scoreboard`
+(`=1` keeps the legacy hash-print protocol). Opt-in only — **not** enforced
+by default or in CI, because measurement showed the scoreboards are only
+deterministic relative to the host's SAT zone-cache state: 2 of 8 fixtures
+had different layout hashes warm-cache vs cache-disabled (stale-but-valid
+cached solutions), cached Unsat/Timeout hits skip the trace events fresh
+solves emit (`zones skipped` 0 vs 164 on the same fixture), and cache-off
+runs are 2.6× slower (174 s vs 67 s) *and* refresh the host cache in place
+(recording is unconditional). The always-on `StressBaseline` ceilings remain
+the portable gate. Follow-up if CI enforcement is ever wanted: pin the golden
+subset to a committed cache snapshot with ambient read/write disabled. Full
+rationale in `crates/core/tests/goldens/stress/README.md`.
 
 ### 3. Debug-mode tax on SAT/A*-heavy tests (~3×) — measure, then decide
 

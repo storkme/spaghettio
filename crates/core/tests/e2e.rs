@@ -2581,13 +2581,26 @@ struct StressBaseline {
 /// Tally warnings + trace metrics, print the scoreboard, then assert against
 /// the recorded baseline. Errors and warnings must each be ≤ their recorded
 /// ceiling.
+///
+/// `SPAGHETTIO_STRESS_GOLDEN` additionally drives the committed-baseline
+/// flow (see `tests/goldens/stress/README.md`):
+///   - `1` (or any other value): print one `STRESSGOLD <test> <hash>` line
+///     per fixture — the legacy capture-and-diff byte-stability protocol.
+///   - `check`: also diff the full scoreboard + hash against the committed
+///     golden file and fail on any drift.
+///   - `bless`: also rewrite the golden file with the current scoreboard.
+///
+/// Goldens are relative to this host's SAT zone-cache state — see the
+/// README for why they are opt-in rather than enforced by default/CI.
 fn check_stress_scoreboard(test_name: &str, result: &E2EResult, baseline: StressBaseline) {
-    // Byte-stability audit hook: SPAGHETTIO_STRESS_GOLDEN=1 prints one
-    // golden hash per stress fixture. Capture before and after a layout
+    let golden_mode = std::env::var("SPAGHETTIO_STRESS_GOLDEN").ok();
+    // Byte-stability audit hook: any SPAGHETTIO_STRESS_GOLDEN value prints
+    // one golden hash per stress fixture. Capture before and after a layout
     // change and diff — identical hashes prove the fixture's shipped
     // layout did not move (the "byte-identical" gate used for landings).
-    if std::env::var("SPAGHETTIO_STRESS_GOLDEN").is_ok() {
-        eprintln!("STRESSGOLD {test_name} {}", golden_hash(&result.layout));
+    let layout_hash = golden_hash(&result.layout);
+    if golden_mode.is_some() {
+        eprintln!("STRESSGOLD {test_name} {layout_hash}");
     }
     let mut by_category: std::collections::BTreeMap<&str, usize> = Default::default();
     for w in result.issues.iter().filter(|i| i.severity == Severity::Warning) {
@@ -2690,6 +2703,66 @@ fn check_stress_scoreboard(test_name: &str, result: &E2EResult, baseline: Stress
         *errors_by_category.entry(i.category.as_str()).or_default() += 1;
     }
     let errors: usize = errors_by_category.values().sum();
+
+    // Committed-golden flow: `bless` rewrites tests/goldens/stress/<test>.txt
+    // with the canonical scoreboard; `check` diffs against it and fails on
+    // any drift (byte movement, count changes, new categories — anything).
+    if matches!(golden_mode.as_deref(), Some("check") | Some("bless")) {
+        let mut golden = String::from(msg.trim_start());
+        golden.push_str("errors by category:\n");
+        if errors_by_category.is_empty() {
+            golden.push_str("  (none)\n");
+        } else {
+            for (cat, count) in &errors_by_category {
+                golden.push_str(&format!("  {cat}: {count}\n"));
+            }
+        }
+        golden.push_str(&format!("layout hash: {layout_hash}\n"));
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/goldens/stress")
+            .join(format!("{test_name}.txt"));
+        if golden_mode.as_deref() == Some("bless") {
+            std::fs::create_dir_all(path.parent().unwrap()).expect("create goldens dir");
+            std::fs::write(&path, &golden).expect("write golden file");
+            eprintln!("blessed {}", path.display());
+        } else {
+            let expected = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+                panic!(
+                    "{test_name}: no committed golden at {} ({e}). \
+                     If this fixture should be golden-gated, run once with \
+                     SPAGHETTIO_STRESS_GOLDEN=bless and commit the file.",
+                    path.display()
+                )
+            });
+            if expected != golden {
+                let mut diff = String::new();
+                let exp_lines: Vec<&str> = expected.lines().collect();
+                let got_lines: Vec<&str> = golden.lines().collect();
+                for i in 0..exp_lines.len().max(got_lines.len()) {
+                    match (exp_lines.get(i), got_lines.get(i)) {
+                        (Some(e), Some(g)) if e == g => {}
+                        (e, g) => {
+                            if let Some(e) = e {
+                                diff.push_str(&format!("  - {e}\n"));
+                            }
+                            if let Some(g) = g {
+                                diff.push_str(&format!("  + {g}\n"));
+                            }
+                        }
+                    }
+                }
+                panic!(
+                    "{test_name}: scoreboard drifted from committed golden {} \
+                     (-expected +got):\n{diff}\
+                     If the drift is intentional, re-bless with \
+                     SPAGHETTIO_STRESS_GOLDEN=bless and commit the diff. \
+                     Goldens are relative to this host's SAT zone cache — \
+                     see tests/goldens/stress/README.md.",
+                    path.display(),
+                );
+            }
+        }
+    }
 
     // Total-error ceiling (coarse gate).
     assert!(

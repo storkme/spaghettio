@@ -1,0 +1,16 @@
+=== stress_electronic_circuit_30s_from_ore scoreboard ===
+entities:         4867
+total warnings:   0
+zones solved:     0
+zones skipped:    0
+bridges dropped:  0
+bands:            3 (crossing: 0, non-crossing: 3)
+total gap tiles:  34
+mean gap:         11.33
+max gap:          17
+max trunks/band:  10
+warnings by category:
+  (none)
+errors by category:
+  (none)
+layout hash: e48eb5c8845de22eb5acaf2bede42c3bdce476c0ec895448e1f92b32ac0ec332
