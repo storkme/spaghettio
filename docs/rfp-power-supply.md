@@ -375,3 +375,26 @@ genuinely and cheaply deferred.
   future work. Pre-existing fulgora sushi defects (3 illegal entity
   overlaps at (29,14)/(29,16)/(29,17) + the AM3 (8,45) single-exit-bus
   cluster) filed as a tracking issue — out of this RFP's scope.*
+- *2026-07-19 — **0f kill criterion CONFIRMED by narrow-scope adversarial
+  verification; user decision: LAND with honest reds.** Verifier checked
+  every uncovered inserter (not a sample) against final post-routing
+  occupancy: zero free tiles in each one's entire 7×7 — a substation's 2×2
+  wouldn't fit post-hoc either; only template-level reserved power space
+  reaches these. The packed 7-row cycle (3 belts + inserter row + 3×3
+  machines, zero slack) puts inserter rows at distance exactly 4 from the
+  nearest possible pole row on both sides. Implementer's full-corpus tables
+  then widened the trip from two cases to THREE: processing-unit@2 (24 per
+  implementer / 20 per verifier — reconciliation is a merge-review item),
+  utility-science@1 (16), and uranium-235@0.1 kovarex self-loop recirc rows
+  (16, new find, same 0/49-free signature). Everything else lands 100%
+  covered, machines 0-uncovered corpus-wide, biochamber rows clear, pole
+  network single-component everywhere. Pole cost ≈2× corpus-wide (EC@10
+  30→59, PU 163→331, util-sci 134→278; committed-corpus-anchor caveat noted
+  for fluid rows) — this is the Phase 3 trigger-(b) re-anchor input.
+  **Phase 3 is hereby ACTIVATED as scheduled design work** (no longer
+  dormant): it inherits three live fixtures exhibiting exactly the failure
+  it must solve (deep decomposed stacks + self-loop recirc); scheduling
+  relative to Phase 1/2 to be decided at 0f wrap. Rationale for landing
+  (verifier + lead concur): holding buys nothing — substation work re-moves
+  the same goldens regardless, and the corpus-wide coverage win + honest
+  validator bank now.*
