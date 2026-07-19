@@ -443,6 +443,16 @@ pub fn single_input_row(
     output_item: &str,
     input_belt: &str,
     output_belt: &str,
+    // When true, the recipe's output is a fluid (solid input → fluid output,
+    // e.g. ice-melting: ice → water on a chemical-plant). The output belt +
+    // inserter are replaced by a south-face fluid output pipe row registered
+    // for the bus (RFP `docs/rfp-power-supply.md` Phase 0e, fulgora unit).
+    // Strictly gated: `output_is_fluid == false` is byte-identical to the
+    // pre-Phase-0e template. Only the SOUTH output face is handled here
+    // (chemical-plant's fluid output ports are south); machines with a
+    // non-south fluid output face (foundry's molten-metal, north) are
+    // deferred to the port-face unit and must NOT reach this branch.
+    output_is_fluid: bool,
     lane_split: bool,
     output_east: bool,
     secondary_output: Option<(&str, &str)>,
@@ -450,16 +460,22 @@ pub fn single_input_row(
     output_rate: f64,
     secondary_output_rate: Option<f64>,
     max_inserter_tier: InserterTier,
-) -> (Vec<PlacedEntity>, i32) {
+) -> (Vec<PlacedEntity>, i32, Vec<(String, i32, i32)>) {
     debug_assert_eq!(
         crate::common::machine_dims(machine_entity),
         (machine_size, machine_size),
         "single_input_row assumes square machines; see rfp-fulgora-scrap Phase 0"
     );
+    debug_assert!(
+        !output_is_fluid || machine_entity == "chemical-plant",
+        "single_input_row fluid-output branch only handles chemical-plant's south \
+         output face; other machines' fluid-output faces are the port-face unit's job"
+    );
     let msz = machine_size as i32;
     let pitch = msz;
     let row_height = msz + 4 + if secondary_output.is_some() { 1 } else { 0 };
     let mut entities = Vec::new();
+    let mut fluid_output_port_pipes: Vec<(String, i32, i32)> = Vec::new();
     let belt_in_seg = Some(format!("row:{recipe}:belt-in:{input_item}"));
     let inserter_in_seg = Some(format!("row:{recipe}:inserter-in:{input_item}"));
     let machine_seg = Some(format!("row:{recipe}:machine"));
@@ -481,7 +497,9 @@ pub fn single_input_row(
     let secondary_ins_seg = secondary_output
         .map(|(item, _)| format!("row:{recipe}:inserter-out2:{item}"));
 
-    let lane_split = lane_split && machine_count >= 2;
+    // Fluid output has no output belt to split across, so lane-splitting
+    // (and its inline bridge) never applies.
+    let lane_split = lane_split && machine_count >= 2 && !output_is_fluid;
     // Pack machines tight at `pitch` (no LANE_SPLIT_GAP). Strategy A:
     // bridge stamps inline by shifting the anchor's output inserter
     // from `mx+1` to `mx`, freeing 3 cols `[mx+1, mx+3)` for the
@@ -567,6 +585,30 @@ pub fn single_input_row(
         // secondary output rides this row, column `mx+2` (the
         // secondary's own dedicated inserter).
         let out_ins_y = y_offset + 2 + msz;
+
+        // Fluid output (RFP `docs/rfp-power-supply.md` Phase 0e fulgora
+        // unit): replace the solid output inserter + belt with a continuous
+        // south pipe row spanning the machine width, carrying the fluid
+        // product. Chemical-plant's two output fluid boxes sit at dx=0 and
+        // dx=2, both covered by this row; adjacent machines' rows abut for
+        // machine-to-machine connectivity and a clean run to the bus trunk.
+        // Mirrors `fluid_dual_input_row`'s fluid-output arm.
+        if output_is_fluid {
+            for dx in 0..msz {
+                entities.push(PlacedEntity {
+                    name: "pipe".to_string(),
+                    x: mx + dx,
+                    y: out_ins_y,
+                    carries: Some(output_item.to_string()),
+                    segment_id: belt_out_seg.clone(),
+                    ..Default::default()
+                });
+            }
+            fluid_output_port_pipes.push((output_item.to_string(), mx, out_ins_y));
+            fluid_output_port_pipes.push((output_item.to_string(), mx + 2, out_ins_y));
+            continue;
+        }
+
         let is_anchor = Some(i) == bridge_anchor;
         let out_baseline_dx = if is_anchor { 0 } else { 1 };
         let mut out_occupied = vec![out_baseline_dx];
@@ -665,7 +707,7 @@ pub fn single_input_row(
         );
     }
 
-    (entities, row_height)
+    (entities, row_height, fluid_output_port_pipes)
 }
 
 /// Row for a recipe with 2 solid inputs.
@@ -5267,7 +5309,7 @@ mod tests {
         // 9 entities (3 input + 1 inserter + 1 machine + 1 out inserter + 3 output).
         // Machine 2 (last) drops one input belt tile (east-tail orphan at mx+2)
         // and one output belt tile (west-flow orphan at mx+2): 7 entities.
-        let (entities, height) = single_input_row(
+        let (entities, height, _) = single_input_row(
             "iron-gear-wheel",
             "assembling-machine-3",
             3, // machine_size
@@ -5278,6 +5320,7 @@ mod tests {
             "iron-gear-wheel",
             "transport-belt",
             "transport-belt",
+            false, // output_is_fluid (Phase 0e)
             false,
             false,
             None,
@@ -5292,7 +5335,7 @@ mod tests {
 
     #[test]
     fn single_input_row_one_machine_positions() {
-        let (entities, _) = single_input_row(
+        let (entities, _, _) = single_input_row(
             "iron-gear-wheel",
             "assembling-machine-3",
             3,
@@ -5303,6 +5346,7 @@ mod tests {
             "iron-gear-wheel",
             "transport-belt",
             "transport-belt",
+            false, // output_is_fluid (Phase 0e)
             false,
             false,
             None,
@@ -5349,7 +5393,7 @@ mod tests {
     #[test]
     fn single_input_row_x_y_offset() {
         // With x_offset=6, y_offset=10, first machine should be at (6, 12).
-        let (entities, _) = single_input_row(
+        let (entities, _, _) = single_input_row(
             "iron-gear-wheel",
             "assembling-machine-3",
             3,
@@ -5360,6 +5404,7 @@ mod tests {
             "iron-gear-wheel",
             "transport-belt",
             "transport-belt",
+            false, // output_is_fluid (Phase 0e)
             false,
             false,
             None,
@@ -5373,7 +5418,7 @@ mod tests {
 
     #[test]
     fn single_input_row_output_east() {
-        let (entities, _) = single_input_row(
+        let (entities, _, _) = single_input_row(
             "iron-gear-wheel",
             "assembling-machine-3",
             3,
@@ -5384,6 +5429,7 @@ mod tests {
             "iron-gear-wheel",
             "transport-belt",
             "transport-belt",
+            false, // output_is_fluid (Phase 0e)
             false,
             true, // output_east
             None,
@@ -5403,7 +5449,7 @@ mod tests {
     fn single_input_row_lane_split_two_machines() {
         // 2 machines, Strategy A (inline shift, tight pack): machines
         // at x=0 and x=3. Anchor index = 0 → bridge cols 1,2,3.
-        let (entities, height) = single_input_row(
+        let (entities, height, _) = single_input_row(
             "iron-gear-wheel",
             "assembling-machine-3",
             3,
@@ -5414,6 +5460,7 @@ mod tests {
             "iron-gear-wheel",
             "transport-belt",
             "transport-belt",
+            false, // output_is_fluid (Phase 0e)
             true, // lane_split
             false,
             None,
@@ -5458,7 +5505,7 @@ mod tests {
     #[test]
     fn single_input_row_lane_split_ignored_for_one_machine() {
         // lane_split with only 1 machine should be a no-op
-        let (entities_split, _) = single_input_row(
+        let (entities_split, _, _) = single_input_row(
             "iron-gear-wheel",
             "assembling-machine-3",
             3,
@@ -5469,6 +5516,7 @@ mod tests {
             "iron-gear-wheel",
             "transport-belt",
             "transport-belt",
+            false, // output_is_fluid (Phase 0e)
             true,
             false,
             None,
@@ -5477,7 +5525,7 @@ mod tests {
             None,
             InserterTier::default(),
         );
-        let (entities_no_split, _) = single_input_row(
+        let (entities_no_split, _, _) = single_input_row(
             "iron-gear-wheel",
             "assembling-machine-3",
             3,
@@ -5488,6 +5536,7 @@ mod tests {
             "iron-gear-wheel",
             "transport-belt",
             "transport-belt",
+            false, // output_is_fluid (Phase 0e)
             false,
             false,
             None,

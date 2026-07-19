@@ -6446,6 +6446,38 @@ fn fulgora_scrap_sorter_mechanism_present() {
     // The sorter mechanism itself must not leak (KC5 boundary is clean).
     let boundary = validate::sushi::check_sushi_boundary(&layout);
     assert!(boundary.is_empty(), "sushi boundary leak: {boundary:?}");
+
+    // Phase 0e (fulgora unit): hold the layout to the FLUID validators.
+    // Before this unit, the ice-melting chemical-plant (solid ice → fluid
+    // water) fell into the solid-output SingleInput template and its water
+    // output port was never piped — a real fluid-connectivity error this
+    // sushi-only test structurally could not see. With the gated
+    // fluid-output branch it's piped + bus-routed, so all three fluid
+    // checks are clean.
+    //
+    // NOT full `validate()`: the scrap-recycling sushi sorter deliberately
+    // uses belt loops + undergrounds that the GENERAL belt validators flag
+    // (~100 belt-loop / underground false positives) — the sushi-specific
+    // saturation/boundary checks above exist precisely to replace them.
+    // The ice-melting defect is a fluid defect, so the fluid validators are
+    // the faithful gate for this arc. (Full validate() also surfaces
+    // pre-existing non-fluid fulgora issues — entity-overlap etc. — that
+    // are out of this unit's scope; reported separately.)
+    let mut fluid_errors: Vec<&ValidationIssue> = Vec::new();
+    let fp = validate::check_fluid_port_connectivity(&layout, LayoutStyle::Bus);
+    let fn_ = validate::check_fluid_network_connectivity(&layout);
+    let fi = validate::check_pipe_isolation(&layout);
+    for issue in fp.iter().chain(fn_.iter()).chain(fi.iter()) {
+        if issue.severity == Severity::Error {
+            fluid_errors.push(issue);
+        }
+    }
+    assert!(
+        fluid_errors.is_empty(),
+        "fulgora layout has {} fluid error(s) (ice-melting output regression?): {:#?}",
+        fluid_errors.len(),
+        fluid_errors
+    );
 }
 
 // ---------------------------------------------------------------------------

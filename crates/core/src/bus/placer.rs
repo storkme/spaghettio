@@ -856,7 +856,15 @@ pub(crate) fn build_one_row(
             let output_rate = solid_outputs.first().map(|f| f.rate).unwrap_or(0.0) * utilization;
             let secondary_rate = secondary_solid_output.map(|f| f.rate * utilization);
 
-            let (ents, rh) = templates::single_input_row(
+            // Phase 0e (fulgora unit): a solid-input recipe whose product is
+            // a fluid (ice-melting: ice → water) needs its output piped, not
+            // belted. Gated to chemical-plant, whose fluid output ports are
+            // on the south face this template already occupies. Non-chem
+            // fluid-output machines (foundry molten-metal, north face) are
+            // deferred to the port-face unit and keep the old (belt) path —
+            // they still surface the honest fluid-connectivity error there.
+            let output_is_fluid_chem = output_is_fluid && spec.entity == "chemical-plant";
+            let (ents, rh, out_port_pipes) = templates::single_input_row(
                 &spec.recipe,
                 &spec.entity,
                 mw,
@@ -867,6 +875,7 @@ pub(crate) fn build_one_row(
                 output_item,
                 in_belt,
                 out_belt,
+                output_is_fluid_chem,
                 lane_split,
                 output_east,
                 secondary,
@@ -875,6 +884,7 @@ pub(crate) fn build_one_row(
                 secondary_rate,
                 max_inserter_tier,
             );
+            fluid_output_port_pipes = out_port_pipes;
             let input_ys = vec![y_cursor];
             let out_y = y_cursor + 2 + mh as i32 + 1;
             if let Some(f) = secondary_solid_output {
