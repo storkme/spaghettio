@@ -444,14 +444,15 @@ pub fn single_input_row(
     input_belt: &str,
     output_belt: &str,
     // When true, the recipe's output is a fluid (solid input → fluid output,
-    // e.g. ice-melting: ice → water on a chemical-plant). The output belt +
-    // inserter are replaced by a south-face fluid output pipe row registered
-    // for the bus (RFP `docs/rfp-power-supply.md` Phase 0e, fulgora unit).
-    // Strictly gated: `output_is_fluid == false` is byte-identical to the
-    // pre-Phase-0e template. Only the SOUTH output face is handled here
-    // (chemical-plant's fluid output ports are south); machines with a
-    // non-south fluid output face (foundry's molten-metal, north) are
-    // deferred to the port-face unit and must NOT reach this branch.
+    // e.g. ice-melting: ice → water on a chemical-plant, or biolubricant:
+    // jelly → lubricant on a biochamber). The output belt + inserter are
+    // replaced by a south-face fluid output pipe row registered for the bus
+    // (RFP `docs/rfp-power-supply.md` Phase 0e). Strictly gated:
+    // `output_is_fluid == false` is byte-identical to the pre-Phase-0e
+    // template. Only the SOUTH output face is handled here — the caller gates
+    // this via `fluid_ports::output_ports_all_south`, so machines with a
+    // non-south fluid output face (an unmirrored foundry's molten-metal,
+    // north) never reach this branch.
     output_is_fluid: bool,
     lane_split: bool,
     output_east: bool,
@@ -467,9 +468,16 @@ pub fn single_input_row(
         "single_input_row assumes square machines; see rfp-fulgora-scrap Phase 0"
     );
     debug_assert!(
-        !output_is_fluid || machine_entity == "chemical-plant",
-        "single_input_row fluid-output branch only handles chemical-plant's south \
-         output face; other machines' fluid-output faces are the port-face unit's job"
+        !output_is_fluid
+            || crate::fluid_ports::output_ports_all_south(
+                machine_entity,
+                false,
+                EntityDirection::North,
+                machine_size as i32,
+            ),
+        "single_input_row fluid-output branch only handles machines with a south \
+         fluid-output face (chemical-plant, biochamber); machines whose output face \
+         is elsewhere are the port-face unit's per-template job"
     );
     let msz = machine_size as i32;
     let pitch = msz;
@@ -604,8 +612,17 @@ pub fn single_input_row(
                     ..Default::default()
                 });
             }
-            fluid_output_port_pipes.push((output_item.to_string(), mx, out_ins_y));
-            fluid_output_port_pipes.push((output_item.to_string(), mx + 2, out_ins_y));
+            // Register the actual south-face output-port columns from the
+            // shared table (chemical-plant / biochamber: dx 0 and 2) so the
+            // ghost router taps the right tiles.
+            for dx in crate::fluid_ports::south_output_dxs(
+                machine_entity,
+                false,
+                EntityDirection::North,
+                msz,
+            ) {
+                fluid_output_port_pipes.push((output_item.to_string(), mx + dx, out_ins_y));
+            }
             continue;
         }
 

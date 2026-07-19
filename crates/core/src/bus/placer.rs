@@ -856,14 +856,22 @@ pub(crate) fn build_one_row(
             let output_rate = solid_outputs.first().map(|f| f.rate).unwrap_or(0.0) * utilization;
             let secondary_rate = secondary_solid_output.map(|f| f.rate * utilization);
 
-            // Phase 0e (fulgora unit): a solid-input recipe whose product is
-            // a fluid (ice-melting: ice → water) needs its output piped, not
-            // belted. Gated to chemical-plant, whose fluid output ports are
-            // on the south face this template already occupies. Non-chem
-            // fluid-output machines (foundry molten-metal, north face) are
-            // deferred to the port-face unit and keep the old (belt) path —
-            // they still surface the honest fluid-connectivity error there.
-            let output_is_fluid_chem = output_is_fluid && spec.entity == "chemical-plant";
+            // Phase 0e: a solid-input recipe whose product is a fluid
+            // (ice-melting: ice → water on chemical-plant; biolubricant:
+            // jelly → lubricant on biochamber) needs its output piped, not
+            // belted. Gated by the shared port table to machines whose fluid
+            // output ports sit on the south face this template already
+            // occupies (RFP `docs/rfp-power-supply.md` Phase 0e-i item 5).
+            // Machines with a non-south fluid-output face (an unmirrored
+            // foundry's molten-metal, north) fail this gate and keep the old
+            // path — foundry molten-metal is handled by the dual-input arm.
+            let output_is_fluid_south = output_is_fluid
+                && crate::fluid_ports::output_ports_all_south(
+                    &spec.entity,
+                    false,
+                    crate::models::EntityDirection::North,
+                    mh as i32,
+                );
             let (ents, rh, out_port_pipes) = templates::single_input_row(
                 &spec.recipe,
                 &spec.entity,
@@ -875,7 +883,7 @@ pub(crate) fn build_one_row(
                 output_item,
                 in_belt,
                 out_belt,
-                output_is_fluid_chem,
+                output_is_fluid_south,
                 lane_split,
                 output_east,
                 secondary,

@@ -176,6 +176,34 @@ pub fn fluid_ports(entity: &str, mirror: bool, direction: EntityDirection) -> &'
     }
 }
 
+/// The `dx` offsets of the output-port pipes on the SOUTH face
+/// (`dy == mh`, the machine's height), for `entity` at the given orientation.
+/// This is what the single-/dual-input row templates' output pipe row must
+/// register so the ghost router taps the right columns. Sorted ascending.
+pub fn south_output_dxs(entity: &str, mirror: bool, direction: EntityDirection, mh: i32) -> Vec<i32> {
+    let mut dxs: Vec<i32> = fluid_ports(entity, mirror, direction)
+        .iter()
+        .filter(|(_, dy, pt)| *dy == mh && *pt == "output")
+        .map(|(dx, _, _)| *dx)
+        .collect();
+    dxs.sort_unstable();
+    dxs
+}
+
+/// Whether `entity`'s fluid output ports (at the given orientation) all sit on
+/// the SOUTH face (`dy == mh`) — the face the single-/dual-input row templates
+/// emit their fluid-output pipe row on. `false` when the machine has no output
+/// port there (e.g. an unmirrored foundry, whose outputs face north). Lets the
+/// placer gate "solid-in → fluid-out" rows onto that template branch without
+/// hard-coding machine names (chemical-plant, biochamber today).
+pub fn output_ports_all_south(entity: &str, mirror: bool, direction: EntityDirection, mh: i32) -> bool {
+    let outs: Vec<&FluidPort> = fluid_ports(entity, mirror, direction)
+        .iter()
+        .filter(|(_, _, pt)| *pt == "output")
+        .collect();
+    !outs.is_empty() && outs.iter().all(|(_, dy, _)| *dy == mh)
+}
+
 /// Whether `entity` has any fluid ports (non-empty base table). Test-only: the
 /// live validator uses the `fluid_ports(...).is_empty()` guard inline (it needs
 /// the port list, not just the presence bit); this accessor exists for the
