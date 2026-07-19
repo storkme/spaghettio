@@ -597,7 +597,7 @@ const GOLDEN_HASHES: &[(&str, &str)] = &[
     // RFP rfp-inserter-sizing.md Phase 1: single_input_row rows ladder-sized, see note above.
     // RFP rfp-inserter-sizing.md Phase 2: dual_input_row ladder-sized + near/far reassigned.
     // RFP rfp-inserter-sizing.md Phase 3: far side's reach-2 count-ladder activated.
-    ("tier2_electronic_circuit_20s_from_ore", "e5618d6626a9176aa6b7addd4b256af80e1ab31d0bdcfad5da124a3bebf4f8fd"),
+    ("tier2_electronic_circuit_20s_from_ore", "30c3cdbce421bb6f29d93481470b2653f39882aebbf4d64579793e9f263e1010"),
     // RFP rfp-inserter-sizing.md Phase 2: dual_input_row's inserters are now
     // ladder-sized + near/far reassigned (this fixture's dual-input EC row
     // is exactly the template Phase 2 touches) — entity types/positions on
@@ -1012,7 +1012,10 @@ fn tier2_electronic_circuit() {
     // RFP Phase 1: 34 inserter-bound machine-sides (electronic-circuit chain —
     // copper-cable + EC assemblers, sides over the 0.84/s regular-inserter cap).
     // RFP rfp-inserter-sizing.md Phase 1 re-bless: single_input_row (iron-plate/copper-cable rows) ladder-sized; the electronic-circuit dual_input_row itself is Phase 2 scope, residue remains (34 -> 14).
-    assert_warnings_exactly(&result, &[("inserter-item-throughput", 1)]);
+    // beltspan-lastinrow: the last residual (1) was the EC dual_input_row last-in-row
+    // far (iron-plate) side, capped at one long-handed inserter because the far belt
+    // was trimmed under the dx=1 contested column; extending it one tile clears it (1 -> 0).
+    assert_warnings_exactly(&result, &[]);
     assert_produces(&result, "electronic-circuit", 10.0);
     assert_round_trip(&result);
 }
@@ -1095,7 +1098,10 @@ fn tier2_electronic_circuit_20s_from_ore() {
     assert_no_errors(&result);
     // RFP Phase 1: 68 inserter-bound machine-sides (EC from ore at 20/s).
     // RFP rfp-inserter-sizing.md Phase 1 re-bless: single_input_row rows ladder-sized; electronic-circuit dual_input_row is Phase 2 scope, residue remains (68 -> 28).
-    assert_warnings_exactly(&result, &[("inserter-item-throughput", 2)]);
+    // beltspan-lastinrow: the 2 residual were EC dual_input_row last-in-row far
+    // (iron-plate) sides, capped at one long-handed inserter; extending the far belt
+    // one tile at each places the needed second inserter (2 -> 0).
+    assert_warnings_exactly(&result, &[]);
     assert_produces(&result, "electronic-circuit", 20.0);
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier2_electronic_circuit_20s_from_ore");
@@ -1818,7 +1824,10 @@ fn tier4_advanced_circuit_from_ore_am2() {
     // acyclic branch. Even-split delivered ≥4.3 here, so it is a modeling residual,
     // not a real starvation. See report / rfp-lane-demand-flow.md.
     // RFP rfp-inserter-sizing.md Phase 1 re-bless: single_input_row rows ladder-sized; remaining rows are Phase 2/3 scope, residue remains (58 -> 24). input-rate-delivery unrelated, unchanged.
-    assert_warnings_exactly(&result, &[("input-rate-delivery", 1), ("inserter-item-throughput", 4)]);
+    // beltspan-lastinrow: the 4 residual inserter-item-throughput were dual_input_row
+    // last-in-row far sides capped at one long-handed inserter; extending the far belt
+    // one tile clears them (4 -> 0). The input-rate-delivery (1) is unrelated and unchanged.
+    assert_warnings_exactly(&result, &[("input-rate-delivery", 1)]);
     assert_produces(&result, "advanced-circuit", 5.0);
     assert_round_trip(&result);
 }
@@ -1857,7 +1866,10 @@ fn tier5_processing_unit_from_ore_am3() {
     // positive across this layout's underground hops; the residual is purely
     // inserter-throughput.
     // RFP rfp-inserter-sizing.md Phase 1 re-bless: single_input_row rows ladder-sized; remaining rows are Phase 2/3 scope, residue remains (129 -> 65).
-    assert_warnings_exactly(&result, &[("inserter-item-throughput", 5)]);
+    // beltspan-lastinrow: the 5 residual inserter-item-throughput were dual_input_row
+    // last-in-row far sides capped at one long-handed inserter; extending the far belt
+    // one tile clears them (5 -> 0) — this config is now fully clean (0 warnings).
+    assert_warnings_exactly(&result, &[]);
     assert_produces(&result, "processing-unit", 2.0);
     assert_round_trip(&result);
 }

@@ -761,11 +761,43 @@ pub fn dual_input_row(
     let out_belt_y = y_offset + 3 + msz + 1;
     let out_dir = output_dir(output_east);
 
+    // Contested-column baselines: far input's long-handed inserter picks at
+    // dx=0, near input's at dx=2; the single dx=1 column between them is
+    // shared (resolved by the near/far contest below).
+    const FAR_BASELINE_DX: i32 = 0;
+    const NEAR_BASELINE_DX: i32 = 2;
+
     for (i, &mx) in mxs.iter().enumerate() {
         let is_last = mx == last_mx;
-        let in1_stop = if is_last { msz - in1_tail } else { msz };
         let in2_stop = if is_last { msz - in2_tail } else { msz };
         let out_stop = if is_last { msz - out_tail } else { msz };
+
+        // Far input belt span. At the last machine in the row the far belt is
+        // trimmed to dx=0 (`in1_tail`), which starves the near/far contested
+        // column of a belt tile: the far side's long-handed ladder then caps
+        // at one inserter and `place_poles` parks a pole in the vacated slot.
+        // When that cap is real and one extra belt column would let the ladder
+        // fully cover — the added column is a genuine free contested tile still
+        // under the near belt, and the near side itself needs no extra column —
+        // extend the far belt by exactly one tile. The existing contest +
+        // ladder then place the second long-handed inserter and the pole
+        // relocates on its own. Scoped to `dual_input_row` last-in-row; see
+        // `docs/rfp-inserter-sizing.md`.
+        let mut in1_stop = if is_last { msz - in1_tail } else { msz };
+        if is_last {
+            let new_dx = in1_stop; // first dx a one-tile extension would add
+            let contested =
+                new_dx > FAR_BASELINE_DX && new_dx < NEAR_BASELINE_DX && new_dx < in2_stop;
+            let far_capped =
+                size_side(far_rate, Reach::Far, 0, max_inserter_tier).shortfall.is_some();
+            let far_covered_extended =
+                size_side(far_rate, Reach::Far, 1, max_inserter_tier).shortfall.is_none();
+            let near_needs_no_extra =
+                size_side(near_rate, Reach::Near, 0, max_inserter_tier).shortfall.is_none();
+            if contested && far_capped && far_covered_extended && near_needs_no_extra {
+                in1_stop += 1;
+            }
+        }
 
         // Input belt 1 -- far belt
         for dx in 0..in1_stop {
@@ -793,14 +825,12 @@ pub fn dual_input_row(
             });
         }
 
-        // Near/far contested column (dx=1 at Interior, near-only at
-        // LastInRow — derived from each belt's own stamped range,
-        // excluding both baselines, rather than a lookup table).
-        // `docs/rfp-inserter-sizing.md` Phase 3: the far side's own
-        // reach-2 count-ladder is now ACTIVE — a far win genuinely
-        // places a second long-handed inserter within budget.
-        const FAR_BASELINE_DX: i32 = 0;
-        const NEAR_BASELINE_DX: i32 = 2;
+        // Near/far contested column (dx=1 at Interior; also at LastInRow when
+        // the far belt was extended one tile above, otherwise near-only there
+        // — derived from each belt's own stamped range, excluding both
+        // baselines, rather than a lookup table). `docs/rfp-inserter-sizing.md`
+        // Phase 3: the far side's own reach-2 count-ladder is now ACTIVE — a
+        // far win genuinely places a second long-handed inserter within budget.
         let far_candidates = free_extra_dx(in1_stop, &[FAR_BASELINE_DX, NEAR_BASELINE_DX]);
         let near_candidates = free_extra_dx(in2_stop, &[FAR_BASELINE_DX, NEAR_BASELINE_DX]);
         let far_eligible = !far_candidates.is_empty();
