@@ -29,153 +29,17 @@ const PIPE_ENTITIES: &[&str] = &["pipe", "pipe-to-ground"];
 // skipped. See `machine_has_fluid_ports`.
 
 // ---------------------------------------------------------------------------
-// Fluid port data (pre-computed from draftsman entity data)
-//
-// Positions are relative to the machine's top-left tile.
-// Format: (rel_x, rel_y, production_type)  where production_type is "input" | "output"
+// Fluid port data
 // ---------------------------------------------------------------------------
-
-/// Static fluid port data for each machine entity, mirroring `_get_fluid_ports` from Python.
-///
-/// These values were computed by calling `_get_fluid_ports(name)` in the
-/// Python reference implementation.  Formula:
-///   center = size // 2
-///   port_x = rel_x + center
-///   pipe_y = (rel_y + center) ± 1  (−1 for north-facing port, +1 for south)
-fn fluid_ports(entity_name: &str, mirror: bool) -> &'static [(i32, i32, &'static str)] {
-    // assembling-machine-2 and 3: 3x3, center=1
-    //   input  pos=[0,-1] dir=0(north)  → port(1,0)  pipe y=0-1=-1  → (1,-1)
-    //   output pos=[0, 1] dir=8(south)  → port(1,2)  pipe y=2+1= 3  → (1, 3)
-    const AM2: &[(i32, i32, &str)] = &[(1, -1, "input"), (1, 3, "output")];
-
-    // chemical-plant: 3x3, center=1
-    //   input  pos=[-1,-1] dir=0 → port(0,0) pipe y=-1 → (0,-1)
-    //   input  pos=[ 1,-1] dir=0 → port(2,0) pipe y=-1 → (2,-1)
-    //   output pos=[-1, 1] dir=8 → port(0,2) pipe y= 3 → (0, 3)
-    //   output pos=[ 1, 1] dir=8 → port(2,2) pipe y= 3 → (2, 3)
-    const CHEM: &[(i32, i32, &str)] = &[
-        (0, -1, "input"),
-        (2, -1, "input"),
-        (0, 3, "output"),
-        (2, 3, "output"),
-    ];
-
-    // oil-refinery: 5x5, center=2
-    //   input  pos=[-1, 2] dir=8(south) → port(1,4) pipe y=5 → (1, 5)
-    //   input  pos=[ 1, 2] dir=8(south) → port(3,4) pipe y=5 → (3, 5)
-    //   output pos=[-2,-2] dir=0(north) → port(0,0) pipe y=-1 → (0,-1)
-    //   output pos=[ 0,-2] dir=0(north) → port(2,0) pipe y=-1 → (2,-1)
-    //   output pos=[ 2,-2] dir=0(north) → port(4,0) pipe y=-1 → (4,-1)
-    //
-    // mirror=true flips inputs↔outputs and swaps their y positions:
-    //   input  (1,-1), (3,-1)
-    //   output (0, 5), (2, 5), (4, 5)
-    const OIL: &[(i32, i32, &str)] = &[
-        (1, 5, "input"),
-        (3, 5, "input"),
-        (0, -1, "output"),
-        (2, -1, "output"),
-        (4, -1, "output"),
-    ];
-    const OIL_MIRROR: &[(i32, i32, &str)] = &[
-        (1, -1, "input"),
-        (3, -1, "input"),
-        (0, 5, "output"),
-        (2, 5, "output"),
-        (4, 5, "output"),
-    ];
-
-    // foundry: 5x5, center=2 (RFP `docs/rfp-power-supply.md` Phase 0b).
-    // Ground truth from recipes.json `machines.foundry.fluid_boxes`; derived
-    // by the same formula as the tables above (verified to reproduce AM2,
-    // CHEM, and OIL exactly):
-    //   port_tile = floor(size/2 + rel);  pipe = port_tile + dir_offset
-    //   input  pos=[-1, 2] dir=8(south) → tile(1,4) pipe y=5 → (1, 5)
-    //   input  pos=[ 1, 2] dir=8(south) → tile(3,4) pipe y=5 → (3, 5)
-    //   output pos=[-1,-2] dir=0(north) → tile(1,0) pipe y=-1 → (1,-1)
-    //   output pos=[ 1,-2] dir=0(north) → tile(3,0) pipe y=-1 → (3,-1)
-    // Ports are symmetric across the vertical (left-right) mirror axis, and
-    // the layout engine only ever places foundry NORTH-facing, mirror=false
-    // (templates.rs sets mirror=true for oil-refinery ONLY), so `mirror` is
-    // deliberately ignored here — matching the chemical-plant/biochamber arm.
-    const FOUNDRY: &[(i32, i32, &str)] = &[
-        (1, 5, "input"),
-        (3, 5, "input"),
-        (1, -1, "output"),
-        (3, -1, "output"),
-    ];
-
-    // cryogenic-plant: 5x5, center=2. Ground truth from recipes.json
-    // `machines.cryogenic-plant.fluid_boxes` (6 boxes: 3 in / 3 out), same
-    // formula and same NORTH/unmirrored placement caveat as foundry.
-    //   input  pos=[-2,2] dir=8 → tile(0,4) pipe y=5 → (0, 5)
-    //   input  pos=[ 0,2] dir=8 → tile(2,4) pipe y=5 → (2, 5)
-    //   input  pos=[ 2,2] dir=8 → tile(4,4) pipe y=5 → (4, 5)
-    //   output pos=[-2,-2] dir=0 → tile(0,0) pipe y=-1 → (0,-1)
-    //   output pos=[ 0,-2] dir=0 → tile(2,0) pipe y=-1 → (2,-1)
-    //   output pos=[ 2,-2] dir=0 → tile(4,0) pipe y=-1 → (4,-1)
-    const CRYO: &[(i32, i32, &str)] = &[
-        (0, 5, "input"),
-        (2, 5, "input"),
-        (4, 5, "input"),
-        (0, -1, "output"),
-        (2, -1, "output"),
-        (4, -1, "output"),
-    ];
-
-    // electromagnetic-plant: 4x4, center=2.0 (even size → half-tile port
-    // offsets). Ground truth from recipes.json
-    // `machines.electromagnetic-plant.fluid_boxes` (2 in / 2 out). Unlike
-    // the machines above, its ports face EAST/WEST as well as N/S:
-    //   input  pos=[-1.5, 0.5] dir=12(west) → tile(0,2) pipe x=-1 → (-1, 2)
-    //   input  pos=[ 1.5,-0.5] dir=4(east)  → tile(3,1) pipe x=4  → ( 4, 1)
-    //   output pos=[ 0.5, 1.5] dir=8(south) → tile(2,3) pipe y=4  → ( 2, 4)
-    //   output pos=[-0.5,-1.5] dir=0(north) → tile(1,0) pipe y=-1 → ( 1,-1)
-    // These ports are NOT mirror-symmetric, but the layout engine never
-    // mirrors electromagnetic-plant (mirror=false always), so the single
-    // unmirrored table is the only orientation exercised. A mirrored
-    // placement would need its own table — see the Phase 0b report caveat.
-    const EMAG: &[(i32, i32, &str)] = &[
-        (-1, 2, "input"),
-        (4, 1, "input"),
-        (2, 4, "output"),
-        (1, -1, "output"),
-    ];
-
-    match entity_name {
-        "assembling-machine-2" | "assembling-machine-3" => AM2,
-        // biochamber's fluid_boxes are geometrically identical to
-        // chemical-plant's (same relative port positions in
-        // recipes.json's machine data) — share the port table.
-        "chemical-plant" | "biochamber" => CHEM,
-        // oil-refinery is the only entity where mirror flips port y-positions
-        "oil-refinery" => {
-            if mirror { OIL_MIRROR } else { OIL }
-        }
-        "foundry" => FOUNDRY,
-        "cryogenic-plant" => CRYO,
-        "electromagnetic-plant" => EMAG,
-        _ => &[],
-    }
-}
-
-/// Whether `entity` has any fluid ports (i.e. `fluid_ports` returns a
-/// non-empty table for the unmirrored orientation).
-///
-/// This is the fluid-port half of the RFP `docs/rfp-power-supply.md` Phase
-/// 0b classification: `check_fluid_port_connectivity` checks exactly the
-/// canonical machines for which this returns `true`. Exposed for the
-/// `common::machine_classification_no_drift` drift test, which pins that
-/// every canonical machine is classified for fluid ports (not silently
-/// defaulted to the empty table).
-///
-/// Test-only: the live check uses the `fluid_ports(...).is_empty()` guard
-/// inline (it needs the port list, not just the presence bit), so this
-/// accessor exists purely for the drift regression.
-#[cfg(test)]
-pub(crate) fn machine_has_fluid_ports(entity: &str) -> bool {
-    !fluid_ports(entity, false).is_empty()
-}
+//
+// Port geometry lives in the shared `crate::fluid_ports` module (RFP
+// `docs/rfp-power-supply.md` Phase 0e-i) so the bus templates and this
+// validator read the SAME tables — the geometry dual of the Phase 0b machine
+// list unification. `fluid_ports` is orientation-aware (mirror + direction);
+// the call site below passes each entity's actual `mirror`/`direction`, which
+// lets the check honor the East-rotated electromagnetic-plant and the mirrored
+// foundry/cryogenic-plant.
+use crate::fluid_ports::fluid_ports;
 
 // ---------------------------------------------------------------------------
 // check_pipe_isolation
@@ -561,7 +425,7 @@ pub fn check_fluid_port_connectivity(
 
         // Machines with no fluid ports (AM1, electric-furnace, centrifuge,
         // recycler) fall out here — this is the `∩ has-fluid-ports` filter.
-        let ports = fluid_ports(e.name.as_str(), e.mirror);
+        let ports = fluid_ports(e.name.as_str(), e.mirror, e.direction);
         if ports.is_empty() {
             continue;
         }
@@ -1234,117 +1098,6 @@ mod tests {
     #[test]
     fn unknown_recipe_has_no_fluid_output() {
         assert!(!recipe_has_fluid_output("nonexistent-recipe"));
-    }
-
-    // === fluid_ports static data ===
-
-    #[test]
-    fn fluid_ports_assembling_machine_2() {
-        let ports = fluid_ports("assembling-machine-2", false);
-        assert_eq!(ports.len(), 2);
-        assert!(ports.iter().any(|&(x, y, t)| x == 1 && y == -1 && t == "input"));
-        assert!(ports.iter().any(|&(x, y, t)| x == 1 && y == 3 && t == "output"));
-    }
-
-    #[test]
-    fn fluid_ports_chemical_plant() {
-        let ports = fluid_ports("chemical-plant", false);
-        assert_eq!(ports.len(), 4);
-        let inputs: Vec<_> = ports.iter().filter(|(_, _, t)| *t == "input").collect();
-        let outputs: Vec<_> = ports.iter().filter(|(_, _, t)| *t == "output").collect();
-        assert_eq!(inputs.len(), 2);
-        assert_eq!(outputs.len(), 2);
-    }
-
-    #[test]
-    fn fluid_ports_oil_refinery_normal() {
-        let ports = fluid_ports("oil-refinery", false);
-        assert_eq!(ports.len(), 5);
-        let inputs: Vec<_> = ports.iter().filter(|(_, _, t)| *t == "input").collect();
-        let outputs: Vec<_> = ports.iter().filter(|(_, _, t)| *t == "output").collect();
-        assert_eq!(inputs.len(), 2);
-        assert_eq!(outputs.len(), 3);
-        // Inputs are at y=5 (south side)
-        assert!(inputs.iter().all(|(_, y, _)| *y == 5));
-        // Outputs are at y=-1 (north side)
-        assert!(outputs.iter().all(|(_, y, _)| *y == -1));
-    }
-
-    #[test]
-    fn fluid_ports_oil_refinery_mirror() {
-        let ports = fluid_ports("oil-refinery", true);
-        assert_eq!(ports.len(), 5);
-        let inputs: Vec<_> = ports.iter().filter(|(_, _, t)| *t == "input").collect();
-        let outputs: Vec<_> = ports.iter().filter(|(_, _, t)| *t == "output").collect();
-        // With mirror: inputs flip to y=-1, outputs to y=5
-        assert!(inputs.iter().all(|(_, y, _)| *y == -1));
-        assert!(outputs.iter().all(|(_, y, _)| *y == 5));
-    }
-
-    #[test]
-    fn fluid_ports_assembling_machine_1_empty() {
-        // am-1 has no fluid ports
-        assert!(fluid_ports("assembling-machine-1", false).is_empty());
-    }
-
-    // === Phase 0b: new fluid-port tables (foundry / cryo / electromag) ===
-
-    #[test]
-    fn fluid_ports_foundry() {
-        // 5x5, 2 in (south, y=5) / 2 out (north, y=-1).
-        let ports = fluid_ports("foundry", false);
-        let inputs: Vec<_> = ports.iter().filter(|(_, _, t)| *t == "input").collect();
-        let outputs: Vec<_> = ports.iter().filter(|(_, _, t)| *t == "output").collect();
-        assert_eq!(inputs.len(), 2);
-        assert_eq!(outputs.len(), 2);
-        assert!(inputs.iter().all(|(_, y, _)| *y == 5));
-        assert!(outputs.iter().all(|(_, y, _)| *y == -1));
-        assert!(ports.iter().any(|&(x, y, t)| x == 1 && y == 5 && t == "input"));
-        assert!(ports.iter().any(|&(x, y, t)| x == 3 && y == -1 && t == "output"));
-    }
-
-    #[test]
-    fn fluid_ports_cryogenic_plant() {
-        // 5x5, 3 in (south, y=5) / 3 out (north, y=-1).
-        let ports = fluid_ports("cryogenic-plant", false);
-        let inputs: Vec<_> = ports.iter().filter(|(_, _, t)| *t == "input").collect();
-        let outputs: Vec<_> = ports.iter().filter(|(_, _, t)| *t == "output").collect();
-        assert_eq!(inputs.len(), 3);
-        assert_eq!(outputs.len(), 3);
-        assert!(inputs.iter().all(|(_, y, _)| *y == 5));
-        assert!(outputs.iter().all(|(_, y, _)| *y == -1));
-        for x in [0, 2, 4] {
-            assert!(ports.iter().any(|&(px, py, t)| px == x && py == 5 && t == "input"));
-            assert!(ports.iter().any(|&(px, py, t)| px == x && py == -1 && t == "output"));
-        }
-    }
-
-    #[test]
-    fn fluid_ports_electromagnetic_plant() {
-        // 4x4, ports face E/W as well as N/S (2 in / 2 out).
-        let ports = fluid_ports("electromagnetic-plant", false);
-        let inputs: Vec<_> = ports.iter().filter(|(_, _, t)| *t == "input").collect();
-        let outputs: Vec<_> = ports.iter().filter(|(_, _, t)| *t == "output").collect();
-        assert_eq!(inputs.len(), 2);
-        assert_eq!(outputs.len(), 2);
-        // West input at (-1,2); east input at (4,1).
-        assert!(ports.iter().any(|&(x, y, t)| x == -1 && y == 2 && t == "input"));
-        assert!(ports.iter().any(|&(x, y, t)| x == 4 && y == 1 && t == "input"));
-        // South output at (2,4); north output at (1,-1).
-        assert!(ports.iter().any(|&(x, y, t)| x == 2 && y == 4 && t == "output"));
-        assert!(ports.iter().any(|&(x, y, t)| x == 1 && y == -1 && t == "output"));
-    }
-
-    #[test]
-    fn machine_has_fluid_ports_classification() {
-        for m in ["assembling-machine-2", "assembling-machine-3", "chemical-plant",
-                  "oil-refinery", "biochamber", "foundry", "cryogenic-plant",
-                  "electromagnetic-plant"] {
-            assert!(machine_has_fluid_ports(m), "{m} should have fluid ports");
-        }
-        for m in ["assembling-machine-1", "electric-furnace", "centrifuge", "recycler"] {
-            assert!(!machine_has_fluid_ports(m), "{m} should have no fluid ports");
-        }
     }
 
     // === recipe_has_fluid_input gating ===

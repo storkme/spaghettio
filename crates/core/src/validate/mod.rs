@@ -14,10 +14,10 @@ pub use fluids::{
 };
 
 // Fluid-port classification accessor for the `common` drift regression
-// (RFP `docs/rfp-power-supply.md` Phase 0b). Test-only — keeps the `fluids`
-// module otherwise private.
+// (RFP `docs/rfp-power-supply.md` Phase 0b/0e-i). Test-only re-export; the
+// tables now live in the shared `crate::fluid_ports` module.
 #[cfg(test)]
-pub(crate) use fluids::machine_has_fluid_ports;
+pub(crate) use crate::fluid_ports::machine_has_fluid_ports;
 
 pub mod belt_structural;
 

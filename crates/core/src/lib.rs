@@ -19,6 +19,7 @@ pub mod bus;
 pub mod common;
 pub mod density;
 pub mod fixture;
+pub mod fluid_ports;
 pub mod models;
 pub mod netflow;
 pub mod recipe_db;
