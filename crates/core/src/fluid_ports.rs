@@ -176,6 +176,39 @@ pub fn fluid_ports(entity: &str, mirror: bool, direction: EntityDirection) -> &'
     }
 }
 
+/// The `(mirror, direction)` placement that brings `entity`'s fluid **input**
+/// ports onto the NORTH face (and its outputs onto the SOUTH face), so the bus
+/// fluid-row templates — which deliver inputs on a north pipe row and take
+/// outputs on a south pipe row — can connect them.
+///
+/// - AM2 / chemical-plant / biochamber already have north inputs → default
+///   `(false, North)`.
+/// - oil-refinery / foundry / cryogenic-plant → `(true, North)` (mirror y-flip).
+/// - electromagnetic-plant → `(false, East)` (rotation; only its inputs reach
+///   the north face — the outputs land west/east, so this orientation is only
+///   correct for solid-output recipes).
+pub fn north_input_orientation(entity: &str) -> (bool, EntityDirection) {
+    match entity {
+        "oil-refinery" | "foundry" | "cryogenic-plant" => (true, EntityDirection::North),
+        "electromagnetic-plant" => (false, EntityDirection::East),
+        _ => (false, EntityDirection::North),
+    }
+}
+
+/// The `dx` offsets (relative to the machine's left edge) of the input-port
+/// pipes on the NORTH face (`dy == -1`), for `entity` at the given orientation.
+/// This is where a template's north fluid-input pipe must sit to feed the
+/// machine. Sorted ascending; empty if no input port faces north.
+pub fn north_input_dxs(entity: &str, mirror: bool, direction: EntityDirection) -> Vec<i32> {
+    let mut dxs: Vec<i32> = fluid_ports(entity, mirror, direction)
+        .iter()
+        .filter(|(_, dy, pt)| *dy == -1 && *pt == "input")
+        .map(|(dx, _, _)| *dx)
+        .collect();
+    dxs.sort_unstable();
+    dxs
+}
+
 /// The `dx` offsets of the output-port pipes on the SOUTH face
 /// (`dy == mh`, the machine's height), for `entity` at the given orientation.
 /// This is what the single-/dual-input row templates' output pipe row must

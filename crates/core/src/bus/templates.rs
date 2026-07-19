@@ -21,11 +21,20 @@ use crate::models::{EntityDirection, PlacedEntity};
 // machines now pack tight with the bridge stamped inline.)
 
 // Fluid port dx (relative to machine tile_position) for each machine type.
+/// The `dx` (relative to the machine's left edge) where the fluid-dual-input
+/// row's vertical PTG delivers the fluid — the machine's first north-facing
+/// fluid **input** port, read from the shared table at the machine's
+/// north-input orientation (RFP `docs/rfp-power-supply.md` Phase 0e-i). The
+/// machine is placed at that same orientation (see the machine stamp below),
+/// so the delivered pipe lands on a real input port. Table-driven so it can
+/// never drift from the validator: AM2/3 -> 1, chemical-plant/biochamber -> 0,
+/// mirrored cryogenic-plant -> 0, mirrored foundry -> 1.
 fn fluid_input_port_dx(machine_entity: &str) -> i32 {
-    match machine_entity {
-        "assembling-machine-2" | "assembling-machine-3" => 1,
-        _ => 0,
-    }
+    let (mirror, dir) = crate::fluid_ports::north_input_orientation(machine_entity);
+    crate::fluid_ports::north_input_dxs(machine_entity, mirror, dir)
+        .first()
+        .copied()
+        .unwrap_or(0)
 }
 
 /// Map `output_east` flag to the corresponding belt direction.
@@ -2622,12 +2631,18 @@ pub fn fluid_dual_input_row(
         });
         emit_shortfall_trace(recipe, false, near_rate, &near_plan, mx, machine_y, false);
 
-        // Machine
+        // Machine — placed at the orientation that puts its fluid input ports
+        // on the north face the PTG tunnel delivers to (RFP Phase 0e-i): the
+        // default for chemical-plant/AM (already north inputs), mirror=true for
+        // a 5x5 cryogenic-plant/foundry. Matches `fluid_input_port_dx` above.
+        let (machine_mirror, machine_dir) =
+            crate::fluid_ports::north_input_orientation(machine_entity);
         entities.push(PlacedEntity {
             name: machine_entity.to_string(),
             x: mx,
             y: machine_y,
-            direction: EntityDirection::North,
+            direction: machine_dir,
+            mirror: machine_mirror,
             recipe: Some(recipe.to_string()),
             segment_id: machine_seg.clone(),
             ..Default::default()
@@ -2636,10 +2651,9 @@ pub fn fluid_dual_input_row(
         // Output row
         if output_is_fluid {
             // Continuous pipe row one tile south of the machine spanning the
-            // full machine width. Chemical-plant's two output fluid boxes sit
-            // at dx=0 and dx=2, both of which this pipe row covers. Adjacent
-            // machines' rows abut, giving machine-to-machine connectivity and
-            // a clean run out to the bus trunk for downstream consumers.
+            // full machine width. Adjacent machines' rows abut, giving
+            // machine-to-machine connectivity and a clean run out to the bus
+            // trunk for downstream consumers.
             for dx in 0..msz {
                 entities.push(PlacedEntity {
                     name: "pipe".to_string(),
@@ -2650,8 +2664,16 @@ pub fn fluid_dual_input_row(
                     ..Default::default()
                 });
             }
-            fluid_output_port_pipes.push((output_item.to_string(), mx, output_y));
-            fluid_output_port_pipes.push((output_item.to_string(), mx + 2, output_y));
+            // Register the machine's actual south output-port columns from the
+            // shared table (chemical-plant: dx 0,2; mirrored cryo: 0,2,4).
+            for dx in crate::fluid_ports::south_output_dxs(
+                machine_entity,
+                machine_mirror,
+                machine_dir,
+                msz,
+            ) {
+                fluid_output_port_pipes.push((output_item.to_string(), mx + dx, output_y));
+            }
         } else {
             // Solid output — ladder-sized, single_input_row-output-shaped:
             // baseline shifts to `mx` at the bridge anchor, extra picks
