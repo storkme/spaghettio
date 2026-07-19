@@ -6,6 +6,7 @@ export interface OverlayPanelControls {
   setDebugEnabled(on: boolean): void;
   debugCb: HTMLInputElement;
   colorCb: HTMLInputElement;
+  heatmapCb: HTMLInputElement;
   regionsCb: HTMLInputElement;
   soloRegionsCb: HTMLInputElement;
   ghostTilesCb: HTMLInputElement;
@@ -35,6 +36,8 @@ export function createOverlayPanel(container: HTMLElement): OverlayPanelControls
   const state = debugState.get();
   const debugCb = makeToggle(panel, "Debug", state.master);
   const colorCb = makeToggle(panel, "Item colours", state.itemColors);
+  // User-facing (not under Debug): tint machines by delivered/needed.
+  const heatmapCb = makeToggle(panel, "Starvation heatmap", state.heatmap);
 
   const subPanel = document.createElement("div");
   subPanel.className = "overlay-sub-panel";
@@ -70,6 +73,9 @@ export function createOverlayPanel(container: HTMLElement): OverlayPanelControls
   colorCb.addEventListener("change", () => {
     debugState.set({ itemColors: colorCb.checked });
   });
+  heatmapCb.addEventListener("change", () => {
+    debugState.set({ heatmap: heatmapCb.checked });
+  });
 
   return {
     setDebugEnabled(on: boolean): void {
@@ -79,6 +85,7 @@ export function createOverlayPanel(container: HTMLElement): OverlayPanelControls
     },
     debugCb,
     colorCb,
+    heatmapCb,
     regionsCb,
     soloRegionsCb,
     ghostTilesCb,

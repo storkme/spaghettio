@@ -1,48 +1,52 @@
 [profile.ci]
 failure-output = "immediate"
 fail-fast = false
-slow-timeout = { period = "30s", terminate-after = 3 }
-# Pinned to 1 deliberately. Tried `test-threads = default (num_cpus = 4)`
-# on 2026-05-02 in commit 8eb6ace; rust job dropped 11m → 6m02s, but
-# `tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing` blew
-# its 30s `#[ntest::timeout]` at 30.002s (locally 2.05s — a 15× slowdown
-# under parallelism). ubuntu-latest is hyperthreaded (4 vCPUs ≈ 2 physical
-# cores); concurrent SAT-heavy tests contend on memory bandwidth and L1/L2
-# cache, blowing per-test timeouts that were sized for serial execution.
-# Reverted in 8eb6ace's follow-up. To re-enable parallelism, bump the
-# affected `#[ntest::timeout]` ceilings first.
-test-threads = 1
+# Parallelism re-enabled 2026-07-19 (docs/test-suite-followups.md item 1).
+# History: parallel was tried 2026-05-02 (commit 8eb6ace, 11m → 6m02s) but
+# `tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing` blew its
+# 30s `#[ntest::timeout]` at 30.002s (2.05s locally — ~15× slowdown; the
+# ubuntu-latest runner is 4 hyperthreaded vCPUs ≈ 2 physical cores, and
+# concurrent SAT-heavy tests contend on memory bandwidth and cache) and it
+# was reverted pending ceiling bumps. Those bumps have now been applied,
+# sized from measured local 16-thread times (≥20s local → 600s ceiling,
+# 5–20s → 300s, 1–5s → 120s, never lowered). Two things make CI far slower
+# than a warm local run: weak cores AND a cold SAT zone cache — CI has no
+# persistent ~/.cache, so every zone is solved fresh
+# (partition_strategy_scoreboard: ~26s local warm vs 200–480s observed CI).
+# The heaviest tests also declare threads-required below so at most a
+# couple of them run concurrently on the 4-thread runner.
+#
+# Default slow-timeout: flag tests slower than 60s, hard-kill at 300s.
+# Tests that can legitimately exceed 300s carry overrides below; their
+# own #[ntest::timeout] ceilings (≤600s) fire before the nextest kill.
+slow-timeout = { period = "60s", terminate-after = 5 }
 
-# `partition_strategy_scoreboard` runs Pool/P1/P2 across 2 cases —
-# baseline ~50s locally in debug mode. CI has been variable, with
-# observed runtimes from 200s to 480s+; give it a 6-minute ceiling
-# to stay clear of intermittent slowness without hiding real timeouts.
-# The slow-tail extended corpus lives in
-# `partition_strategy_scoreboard_extended` and is `#[ignore]`d.
+# `partition_strategy_scoreboard` runs Pool/P1/P2 across 2 cases — 200s to
+# 480s+ observed in CI (cold zone cache). threads-required = 4 makes it run
+# effectively alone on the 4-thread runner, keeping the serial-CI numbers
+# valid; the 600s kill stays above the observed worst case. The slow-tail
+# extended corpus lives in `partition_strategy_scoreboard_extended` and is
+# `#[ignore]`d.
 [[profile.ci.overrides]]
 filter = "test(partition_strategy_scoreboard)"
-slow-timeout = { period = "60s", terminate-after = 6 }
+slow-timeout = { period = "60s", terminate-after = 10 }
+threads-required = 4
 
-# `tier5_processing_unit_2s_horizontal_stack_iron_ore_pipe_bypass`
-# runs the horizontal-stack PU layout end-to-end. ~29s in release,
-# >90s in debug, and the author's `#[ntest::timeout(180000)]` is a
-# 3-min ceiling — so the test is known-slow under debug. Give
-# nextest 4 minutes to complete (at the ntest ceiling + slack) so
-# the slow-timeout doesn't kill it before the test's own ceiling
-# catches genuine hangs.
+# Heavy group: ≥8s local warm on 16 threads, so plausibly minutes on the
+# cold-cache 2-core runner. threads-required = 2 limits concurrency to two
+# heavy tests at a time; the 600s nextest kill defers to each test's own
+# #[ntest::timeout] ceiling (300–600s) as the real hang detector.
 [[profile.ci.overrides]]
-filter = "test(tier5_processing_unit_2s_horizontal_stack_iron_ore_pipe_bypass)"
-slow-timeout = { period = "60s", terminate-after = 4 }
+filter = "test(stress_electronic_circuit) | test(layout_retry_is_trace_independent) | test(merge_tap_fallback_fires_with_correct_k_and_priority_taps) | test(processing_unit_2s_am2_fast_belts_validation_baseline) | test(tier5_processing_unit_from_ore_am3)"
+slow-timeout = { period = "60s", terminate-after = 10 }
+threads-required = 2
 
-# `stress_advanced_circuit_partitioned_7s_from_plates` runs Pooled +
-# PartitionedPerConsumer layouts at AC@7/s with auto-tier (eviction
-# strategy active). Local debug: ~96s on main, ~191s with the layout
-# retry pipeline (PR #252). Both exceed the default 90s slow-timeout.
-# Give it a 5-minute ceiling to stay clear of CI variance without
-# hiding genuine hangs.
+# `stress_advanced_circuit_partitioned_7s_from_plates` (#[ignore]d, opt-in
+# runs only): ~96–191s local debug, so the 300s default could kill it under
+# CI-grade slowness. Keep a 10-minute ceiling for --ignored runs.
 [[profile.ci.overrides]]
 filter = "test(stress_advanced_circuit_partitioned_7s_from_plates)"
-slow-timeout = { period = "60s", terminate-after = 5 }
+slow-timeout = { period = "60s", terminate-after = 10 }
 
 [profile.ci.junit]
 path = "junit.xml"

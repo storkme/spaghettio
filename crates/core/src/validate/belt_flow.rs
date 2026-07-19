@@ -2341,12 +2341,24 @@ fn compute_lane_rates_impl(
         }
     }
 
-    // Whether the downstream belt tile from `tile` (per `belt_dir_map`'s
-    // direction at `tile`) starts a tagged priority-branch segment — a
-    // self-loop recirculation (`:selfloop:`) or a merge-and-tap priority tap
-    // (`MERGE_TAP_SEGMENT_TAG`). Used to identify which half of a priority
-    // splitter is the priority branch (loop-back or consumer feed).
+    // Whether `tile` is the priority (feed / loop-back) branch of its splitter.
+    // Preferred signal is the entity's real Factorio field `output_priority`,
+    // resolved geometrically by the shared mapping the structural tap check
+    // owns — robust where the feed's first tile is overlaid by a trunk or
+    // crossing belt and the downstream `:selfloop:` / `:mergetap:` segment tag
+    // is absent. The tag (downstream of `tile`) is a fallback only for entities
+    // with no `output_priority`; self-loop and merge-tap taps both set it, so a
+    // priority splitter reaching the fallback is a stamper bug (debug-asserted).
     let is_priority_branch = |tile: (i32, i32)| -> bool {
+        if let Some(&e) = splitter_entity.get(&tile) {
+            if let Some(pt) = super::belt_structural::priority_output_tile(e) {
+                return pt == tile;
+            }
+            debug_assert!(
+                e.loop_priority_rate.is_none(),
+                "priority splitter at {tile:?} has loop_priority_rate but no output_priority"
+            );
+        }
         let Some(&dir) = belt_dir_map.get(&tile) else {
             return false;
         };
@@ -3308,7 +3320,10 @@ pub fn check_input_rate_delivery(
                 ),
                 ins.pickup_pos.0,
                 ins.pickup_pos.1,
-            ));
+            )
+            // The check compares per-inserter, so that's the structured pair
+            // (the prose prints the machine-total `required_rate` instead).
+            .with_detail(available, per_inserter_rate));
         }
     }
 
@@ -4570,6 +4585,17 @@ mod tests {
         assert!(!issues.is_empty(), "expected warning for insufficient rate");
         assert!(issues.iter().any(|i| i.category == "input-rate-delivery"),
             "expected input-rate-delivery issue, got: {:?}", issues);
+        // RFP validation-explainability D1: the warning carries the exact
+        // compared pair as structured numbers (delivered < needed).
+        let detail = issues
+            .iter()
+            .find(|i| i.category == "input-rate-delivery")
+            .and_then(|i| i.detail.as_ref())
+            .expect("input-rate-delivery must carry IssueDetail");
+        assert!(
+            detail.delivered < detail.needed,
+            "detail must reflect the failing comparison: {detail:?}"
+        );
     }
 
     // ---------------------------------------------------------------------------
@@ -4673,6 +4699,10 @@ mod tests {
                     y: 1,
                     direction: South,
                     loop_priority_rate: Some(4.0),
+                    // Real priority splitters set output_priority at the priority
+                    // branch; South splitter with priority on the (0,1) tile →
+                    // LANE_RIGHT. The walker now reads this field, not the tag.
+                    output_priority: Some(crate::common::LANE_RIGHT.to_string()),
                     ..Default::default()
                 },
                 // (0,1)'s downstream: tagged self-loop segment.
@@ -4734,6 +4764,10 @@ mod tests {
                     y: 1,
                     direction: South,
                     loop_priority_rate: Some(4.0),
+                    // Real priority splitters set output_priority at the priority
+                    // branch; South splitter with priority on the (0,1) tile →
+                    // LANE_RIGHT. The walker now reads this field, not the tag.
+                    output_priority: Some(crate::common::LANE_RIGHT.to_string()),
                     ..Default::default()
                 },
                 // (0,1)'s downstream: tagged merge-tap feed branch.

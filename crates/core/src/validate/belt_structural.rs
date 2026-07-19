@@ -246,7 +246,7 @@ pub fn check_belt_loops(layout: &LayoutResult) -> Vec<ValidationIssue> {
 /// East, "left" is the north tile, "right" the south tile). Verified against
 /// the in-game self-loop template (`bus/templates.rs`: an East splitter with
 /// its loop-back output on the south tile carries `output_priority: "right"`).
-fn priority_output_tile(e: &PlacedEntity) -> Option<(i32, i32)> {
+pub(crate) fn priority_output_tile(e: &PlacedEntity) -> Option<(i32, i32)> {
     let op = e.output_priority.as_deref()?;
     let (dx, dy) = dir_to_vec(e.direction);
     let (lx, ly) = (dy, -dx); // left-hand vector when facing (dx, dy)
@@ -1126,15 +1126,39 @@ pub fn compute_lane_rates(layout: &LayoutResult, solver_result: &SolverResult) -
 
     let mut processed: FxHashSet<(i32, i32)> = FxHashSet::default();
     let mut splitter_input_ready: FxHashSet<(i32, i32)> = FxHashSet::default();
-    // Guard against infinite re-enqueue: if a tile's upstream is part of a
-    // cycle or otherwise unresolvable, give up after 3 retries.
-    // Separate counters for UG-pair waits and splitter-sibling waits so one
-    // doesn't consume the other's budget.
+    // UG output tiles wait for their paired input's feeder; guard against an
+    // unresolvable upstream (a cycle) by giving up after a few retries. Splitter
+    // tiles instead PARK on an unready sibling and are force-resolved by the
+    // outer loop below, so they need no retry budget of their own — a fixed
+    // budget starved long tap chains (each tapoff depends on the previous
+    // splitter's continuation, so an N-deep chain needs O(N) passes).
     let mut ug_retries: FxHashMap<(i32, i32), u32> = FxHashMap::default();
-    let mut splitter_retries: FxHashMap<(i32, i32), u32> = FxHashMap::default();
     const MAX_RETRIES: u32 = 3;
 
-    while let Some(pos) = queue.pop_front() {
+    // Drain the topological queue. When it empties, any splitter tile still
+    // parked on a sibling that never became ready sits in an upstream cycle;
+    // force-resolve the lowest-coordinate one (deterministic so cyclic results
+    // are reproducible) with its current rates and re-drain. This outer loop is
+    // the only remaining give-up path, and it is reached only for true cycles.
+    loop {
+        let pos = match queue.pop_front() {
+            Some(p) => p,
+            None => {
+                match splitter_input_ready
+                    .iter()
+                    .filter(|p| !processed.contains(p))
+                    .min()
+                    .copied()
+                {
+                    Some(stuck) => {
+                        processed.insert(stuck);
+                        do_propagate(stuck, &belt_dir_map, &mut lane_rates, &mut in_degree, &mut queue, &feeders);
+                        continue;
+                    }
+                    None => break,
+                }
+            }
+        };
         if processed.contains(&pos) {
             continue;
         }
@@ -1168,16 +1192,13 @@ pub fn compute_lane_rates(layout: &LayoutResult, solver_result: &SolverResult) -
             if !processed.contains(&sib) {
                 splitter_input_ready.insert(pos);
                 if !splitter_input_ready.contains(&sib) {
-                    let retry = splitter_retries.entry(pos).or_insert(0);
-                    if *retry < MAX_RETRIES {
-                        *retry += 1;
-                        queue.push_back(pos);
-                        continue;
-                    }
-                    // Gave up waiting for sibling — mark processed with current
-                    // rates and skip averaging to avoid silently wrong numbers.
-                    processed.insert(pos);
-                    do_propagate(pos, &belt_dir_map, &mut lane_rates, &mut in_degree, &mut queue, &feeders);
+                    // Sibling's inputs aren't resolved yet. `pos` was just marked
+                    // input-ready above, so when the sibling is popped it fires
+                    // both tiles through `splitter_output_rates`. Park here rather
+                    // than re-enqueue: in a DAG the sibling always resolves, and
+                    // parking preserves dependency order for chains of any depth.
+                    // A genuinely unresolvable sibling (cycle) is handled by the
+                    // outer loop's force-resolve after the main drain.
                     continue;
                 } else {
                     let pos_rates = lane_rates.get(&pos).copied().unwrap_or((0.0, 0.0));
@@ -1186,14 +1207,35 @@ pub fn compute_lane_rates(layout: &LayoutResult, solver_result: &SolverResult) -
                         splitter_entity.get(&pos).and_then(|e| e.loop_priority_rate);
                     let dir = belt_dir_map[&pos];
                     let (dx, dy) = dir_to_vec(dir);
-                    // Priority branch = downstream tagged `:selfloop:` or a
-                    // merge-and-tap priority tap. Same rate law for both.
-                    let pos_is_priority_branch = super::segment_is_priority_branch(
-                        belt_segment.get(&(pos.0 + dx, pos.1 + dy)).copied().flatten(),
-                    );
-                    let sib_is_priority_branch = super::segment_is_priority_branch(
-                        belt_segment.get(&(sib.0 + dx, sib.1 + dy)).copied().flatten(),
-                    );
+                    // Priority branch (feed / loop-back) comes from the splitter
+                    // entity's real Factorio field `output_priority`, via the
+                    // shared geometric mapping the structural tap check owns. This
+                    // is robust where the feed's first tile is overlaid by a trunk
+                    // or crossing belt and the `:selfloop:` / `:mergetap:` segment
+                    // tag the walker would otherwise sniff is absent. The tag is a
+                    // fallback only for entities with no `output_priority` — both
+                    // self-loop and merge-tap taps set it, so a priority splitter
+                    // (`loop_priority_rate` present) reaching the fallback is a
+                    // stamper bug, debug-asserted.
+                    let priority_tile =
+                        splitter_entity.get(&pos).and_then(|&e| priority_output_tile(e));
+                    let (pos_is_priority_branch, sib_is_priority_branch) = match priority_tile {
+                        Some(pt) => (pt == pos, pt == sib),
+                        None => {
+                            debug_assert!(
+                                loop_priority_rate.is_none(),
+                                "priority splitter at {pos:?} has loop_priority_rate but no output_priority"
+                            );
+                            (
+                                super::segment_is_priority_branch(
+                                    belt_segment.get(&(pos.0 + dx, pos.1 + dy)).copied().flatten(),
+                                ),
+                                super::segment_is_priority_branch(
+                                    belt_segment.get(&(sib.0 + dx, sib.1 + dy)).copied().flatten(),
+                                ),
+                            )
+                        }
+                    };
                     let (pos_out, sib_out) = splitter_output_rates(
                         pos_rates,
                         sib_rates,
@@ -1842,6 +1884,10 @@ mod tests {
         };
         let splitter_entity = PlacedEntity {
             loop_priority_rate: Some(4.0),
+            // Real priority splitters set output_priority at the priority branch
+            // (feed / loop-back); East splitter with priority on the (10,0) tile
+            // → LANE_LEFT. The walker now reads this field, not the segment tag.
+            output_priority: Some(LANE_LEFT.to_string()),
             carries: Some("uranium-235".to_string()),
             ..make_entity("splitter", 10, 0, EntityDirection::East)
         };
@@ -2115,6 +2161,10 @@ mod tests {
         };
         let splitter_entity = PlacedEntity {
             loop_priority_rate: Some(4.0),
+            // Real priority splitters set output_priority at the priority branch
+            // (feed / loop-back); East splitter with priority on the (10,0) tile
+            // → LANE_LEFT. The walker now reads this field, not the segment tag.
+            output_priority: Some(LANE_LEFT.to_string()),
             carries: Some("uranium-235".to_string()),
             ..make_entity("splitter", 10, 0, EntityDirection::East)
         };
@@ -2141,6 +2191,61 @@ mod tests {
         assert!(
             (cont_total - 0.1).abs() < 0.01,
             "continuation should get ~0.1/s (not symmetric), got {cont_total}"
+        );
+    }
+
+    #[test]
+    fn lane_rates_priority_branch_from_output_priority_without_tag() {
+        // The priority law must fire from the splitter entity's `output_priority`
+        // alone, with NO `:selfloop:` / `:mergetap:` tag on either downstream
+        // belt. This is the merge-tap failure mode: on real trunks the feed's
+        // first tile is often overlaid by a trunk/crossing belt whose segment is
+        // untagged, so tag-sniffing mis-modelled the tap as an even 50/50 split.
+        let sr = SolverResult {
+            machines: vec![MachineSpec {
+                entity: "assembling-machine-3".to_string(),
+                recipe: "kovarex-enrichment-process".to_string(),
+                self_loop: vec![], voider: false,
+                count: 1.0,
+                inputs: vec![],
+                outputs: vec![ItemFlow {
+                    item: "uranium-235".to_string(),
+                    rate: 4.1,
+                    is_fluid: false,
+                    module_id: 0,
+                }],
+            }],
+            external_inputs: vec![],
+            external_outputs: vec![],
+            surplus_outputs: vec![],
+            dependency_order: vec![],
+        };
+        let splitter_entity = PlacedEntity {
+            loop_priority_rate: Some(4.0),
+            output_priority: Some(LANE_LEFT.to_string()),
+            carries: Some("uranium-235".to_string()),
+            ..make_entity("splitter", 10, 0, EntityDirection::East)
+        };
+        let entities = vec![
+            machine("assembling-machine-3", 8, -4, "kovarex-enrichment-process"),
+            inserter(10, -1, EntityDirection::South),
+            splitter_entity,
+            // Both downstreams are plain, UNTAGGED belts — the tag-sniff path
+            // would return false/false here and fall back to a 50/50 split.
+            belt_carrying(11, 0, EntityDirection::East, "uranium-235"),
+            belt_carrying(11, 1, EntityDirection::East, "uranium-235"),
+        ];
+        let lr = layout(entities);
+        let rates = compute_lane_rates(&lr, &sr);
+        let feed_total = rates.get(&(10, 0)).map(|&(l, r)| l + r).unwrap_or(0.0);
+        let cont_total = rates.get(&(10, 1)).map(|&(l, r)| l + r).unwrap_or(0.0);
+        assert!(
+            (feed_total - 4.0).abs() < 0.01,
+            "priority branch should get ~4.0/s from output_priority alone, got {feed_total}"
+        );
+        assert!(
+            (cont_total - 0.1).abs() < 0.01,
+            "continuation should get ~0.1/s (not a 2.05/2.05 even split), got {cont_total}"
         );
     }
 }

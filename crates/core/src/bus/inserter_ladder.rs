@@ -147,6 +147,43 @@ pub fn size_side(required: f64, reach: Reach, position_budget: usize, max_tier: 
     }
 }
 
+/// Name the binding constraint behind a CAPPED side plan (RFP
+/// validation-explainability D2 — the `limit` field of the
+/// `InserterSideCapped` trace event). Valid only when
+/// `plan.shortfall.is_some()`: a capped plan is best-effort, so it used
+/// every slot at the richest allowed tier — which makes both the budget
+/// (`count - 1` extra columns) and the reach (`LONG_HANDED` ⇔ far) and
+/// the allowed tier ceiling (`plan.entity`) recoverable from the plan
+/// itself, keeping the ~30 template emit sites mechanical.
+///
+/// Precedence, most-actionable first:
+/// 1. `"tier-cap"` — near side, and stack tier at the SAME budget would
+///    cover: the user's `max_inserter_tier` is the binding constraint.
+/// 2. `"column-contest"` — the caller says this side lost the shared
+///    near/far column, and the counterfactual (budget + 1 at the same
+///    tier ceiling) would cover: the contest is the binding constraint.
+/// 3. `"geometry"` — the row shape offers no slot that would help.
+pub fn capped_limit(required: f64, plan: &SidePlan, lost_contest: bool) -> &'static str {
+    debug_assert!(plan.shortfall.is_some(), "capped_limit is only defined for capped plans");
+    let budget = plan.count.saturating_sub(1);
+    let (reach, tier_ceiling) = match plan.entity {
+        LONG_HANDED => (Reach::Far, InserterTier::Stack), // far ignores tier
+        FAST => (Reach::Near, InserterTier::Fast),
+        REGULAR => (Reach::Near, InserterTier::Regular),
+        _ => (Reach::Near, InserterTier::Stack),
+    };
+    if reach == Reach::Near
+        && plan.entity != STACK
+        && size_side(required, Reach::Near, budget, InserterTier::Stack).shortfall.is_none()
+    {
+        return "tier-cap";
+    }
+    if lost_contest && size_side(required, reach, budget + 1, tier_ceiling).shortfall.is_none() {
+        return "column-contest";
+    }
+    "geometry"
+}
+
 /// Ingredient-to-belt assignment for `dual_input_row`/`triple_input_row`'s
 /// near/far pair (`docs/rfp-inserter-sizing.md`, lever (b)): the item with
 /// the higher per-machine rate goes to the NEAR (reach-1) belt, where the
@@ -213,6 +250,46 @@ mod tests {
         assert_eq!(inserter_throughput(FAST), 2.31);
         assert_eq!(inserter_throughput(STACK), 12.0);
         assert_eq!(inserter_throughput(LONG_HANDED), 1.2);
+    }
+
+    // ── capped_limit derivation (RFP validation-explainability D2) ──────
+
+    /// The anchor mechanism: EC@35s far side needs 1.4583/s, one LHI moves
+    /// 1.2/s. Lost the shared column → the budget+1 counterfactual (2.4/s)
+    /// covers → "column-contest"; same plan without a lost contest is
+    /// honest "geometry".
+    #[test]
+    fn capped_limit_column_contest_matches_anchor() {
+        let required = 1.4583333333333333;
+        let plan = size_side(required, Reach::Far, 0, InserterTier::Stack);
+        assert!(plan.shortfall.is_some());
+        assert_eq!(capped_limit(required, &plan, true), "column-contest");
+        assert_eq!(capped_limit(required, &plan, false), "geometry");
+    }
+
+    /// Near side capped at Regular where a stack inserter at the SAME
+    /// budget would cover → the user's max_inserter_tier is binding.
+    #[test]
+    fn capped_limit_tier_cap() {
+        let required = 2.0; // > 0.84 regular, < 12.0 stack
+        let plan = size_side(required, Reach::Near, 0, InserterTier::Regular);
+        assert!(plan.shortfall.is_some());
+        assert_eq!(plan.entity, REGULAR);
+        assert_eq!(capped_limit(required, &plan, false), "tier-cap");
+        // tier-cap outranks contest: even a lost contest reports the
+        // user-controllable knob first.
+        assert_eq!(capped_limit(required, &plan, true), "tier-cap");
+    }
+
+    /// Demand beyond any single-column relief or tier upgrade → geometry,
+    /// even when a contest was lost (the counterfactual doesn't cover).
+    #[test]
+    fn capped_limit_geometry_when_nothing_helps() {
+        let required = 100.0;
+        let plan = size_side(required, Reach::Near, 0, InserterTier::Stack);
+        assert!(plan.shortfall.is_some());
+        assert_eq!(plan.entity, STACK);
+        assert_eq!(capped_limit(required, &plan, true), "geometry");
     }
 
     // ── rung boundaries (Near, Stack cap, single slot) ──────────────────

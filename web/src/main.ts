@@ -18,6 +18,7 @@ import { urlHasGeneratorState } from "./state";
 import type { SolverResult, LayoutResult, PlacedEntity, ValidationIssue, SatImprovement } from "./engine";
 import { renderTraceOverlay, getTracePhases, eventsUpToPhase, type TraceEvent, type PhaseSnapshot } from "./renderer/traceOverlay";
 import { renderValidationOverlay } from "./renderer/validationOverlay";
+import { renderStarvationHeatmap } from "./renderer/heatmapOverlay";
 import { renderRegionOverlayDetailed, type RegionOverlayItem } from "./renderer/regionOverlay";
 import { renderJunctionZoneOverlay } from "./renderer/junctionZoneOverlay";
 import { createSatZoneOverlay } from "./renderer/satZoneOverlay";
@@ -29,7 +30,7 @@ import * as debugState from "./state/debugState";
 import { createOverlayPanel } from "./ui/overlayPanel";
 import { createRetryPanel } from "./ui/retryPanel";
 import { createInspector } from "./ui/inspector";
-import { buildTileContext } from "./ui/tileContext";
+import { buildTileContext, type TileContext } from "./ui/tileContext";
 import { createSnapshotMode } from "./ui/snapshotMode";
 import { renderLayoutPhaseAnimated, type PhaseAnimationHandle } from "./renderer/phaseAnimation";
 import { spawnRegionFlash } from "./renderer/improvementAnimation";
@@ -121,7 +122,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
 
   // --- Modules ---
   const overlayControls = createOverlayPanel(container);
-  const { debugCb, colorCb, regionsCb, soloRegionsCb, ghostTilesCb, traceOverlayCb } = overlayControls;
+  const { debugCb, colorCb, heatmapCb, regionsCb, soloRegionsCb, ghostTilesCb, traceOverlayCb } = overlayControls;
   const retryPanel = createRetryPanel(container);
   // Sync the item-coloring flag with the persisted checkbox state so
   // a user who turned colours off stays off across reloads.
@@ -481,6 +482,9 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
 
   let valOverlayLayer: Container | null = null;
   let cachedValidationIssues: ValidationIssue[] | null = null;
+  let heatmapLayer: Container | null = null;
+  let lastHeatmapIssues: ValidationIssue[] = [];
+  let lastTileCtx: TileContext | null = null;
   let validationInFlightFor: LayoutResult | null = null;
 
   // Top-left static badge that surfaces the issue count whenever a layout
@@ -599,8 +603,19 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
 
     const layoutIssues = lastLayout ? buildLayoutIssues(lastLayout) : [];
     const allIssues = [...(cachedValidationIssues ?? []), ...layoutIssues];
-    sidebarCtrl?.updateValidation(allIssues, panToTile);
+    // Cause rollup (Phase 3b): join a rate-shaped issue to the capped
+    // -side event(s) at its anchor tile. Multiple capped sides at one
+    // machine with differing limits report the union — never a guess.
+    const causeOf = (issue: ValidationIssue): string | null => {
+      if (issue.x == null || issue.y == null || !lastTileCtx) return null;
+      const sides = lastTileCtx.lookup(issue.x, issue.y).cappedSides;
+      if (sides.length === 0) return null;
+      const limits = [...new Set(sides.map((s) => s.limit))].sort();
+      return limits.join("+");
+    };
+    sidebarCtrl?.updateValidation(allIssues, panToTile, causeOf);
     updateValidationBadge(allIssues);
+    updateHeatmapOverlay(allIssues);
 
     if (!lastLayout || allIssues.length === 0) {
       requestRender();
@@ -614,6 +629,26 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       },
     );
     valOverlayLayer = result.layer;
+    requestRender();
+  }
+
+  /** Starvation heatmap (RFP validation-explainability Phase 1): tint
+   *  machines by the structured delivered/needed ratio on rate-shaped
+   *  issues. Rebuilt whenever validation results or the toggle change;
+   *  `lastHeatmapIssues` remembers the issue set so the toggle listener
+   *  can rebuild without re-running validation. */
+  function updateHeatmapOverlay(issues?: ValidationIssue[]): void {
+    if (issues) lastHeatmapIssues = issues;
+    if (heatmapLayer) {
+      entityLayer.removeChild(heatmapLayer);
+      heatmapLayer.destroy({ children: true });
+      heatmapLayer = null;
+    }
+    if (!heatmapCb.checked || !lastLayout || lastHeatmapIssues.length === 0) {
+      requestRender();
+      return;
+    }
+    heatmapLayer = renderStarvationHeatmap(lastHeatmapIssues, lastLayout.entities, entityLayer);
     requestRender();
   }
 
@@ -1241,7 +1276,8 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       }
     }
     inspector.setHighlightController(wrapHighlight(ctrl));
-    inspector.setTileContext(buildTileContext(layout.trace));
+    lastTileCtx = buildTileContext(layout.trace);
+    inspector.setTileContext(lastTileCtx);
     inspector.clearPin();
     selectionCtrl = createSelectionController(app.canvas, viewport, entityLayer, layout, onSelectionChange);
     updateTraceOverlay();
@@ -1396,6 +1432,9 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       if (lastLayout) {
         renderLayoutOnCanvas(lastLayout);
       }
+    });
+    heatmapCb.addEventListener("change", () => {
+      updateHeatmapOverlay();
     });
     regionsCb.addEventListener("change", () => {
       updateRegionOverlay();

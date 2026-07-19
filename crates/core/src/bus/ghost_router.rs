@@ -72,6 +72,14 @@ pub struct GhostRouteResult {
     /// stranded-byproduct validator cross-checks these against physical
     /// pipe entities, and must work in the non-traced pipeline too.
     pub surplus_exits: Vec<(String, i32, i32)>,
+    /// Seed tiles of crossing clusters the junction solver capped on
+    /// (`solve_crossing` returned `None`). First-class layout data so the
+    /// layout retry loop (`run_layout_with_retry_inner`) reads cap coords
+    /// from here instead of scraping `JunctionGrowthCapped` out of the trace
+    /// collector — the collector is only populated when tracing is active, so
+    /// the old path made retries fire only under a trace guard. The trace
+    /// event is still emitted for the debugger; this is the control-flow copy.
+    pub cap_coords: Vec<(i32, i32)>,
 }
 
 /// A spec for one connecting belt run.
@@ -109,6 +117,13 @@ struct BeltSpec {
     /// y=292 was the motivating bug). `None` for specs that don't have
     /// a single owning trunk (feeders into a balancer input).
     lane_trunk_col: Option<i32>,
+    /// Lane-family id this spec's lane belongs to (`BusLane::family_id`).
+    /// Used by the merge-tap bridge to test trunk foreignness by FAMILY
+    /// (a genuinely different logical network) rather than by column — two
+    /// columns of the SAME family (native lane splitting) must not UG-hop,
+    /// but a merge-tap tap crossing a DIFFERENT family's trunk must. `None`
+    /// for specs whose lane carries no family (unsplit single-trunk lanes).
+    family_id: Option<usize>,
 }
 
 /// A merge-and-tap trunk lane taps a shared trunk with PRIORITY splitters
@@ -193,13 +208,41 @@ fn bridge_feeder_under_foreign_trunks(
     path: &[(i32, i32)],
     spec_item: &str,
     spec_module: u32,
+    own_trunk_col: Option<i32>,
+    own_family_id: Option<usize>,
     trunk_tile_items: &FxHashMap<(i32, i32), (String, u32)>,
+    trunk_tile_family: &FxHashMap<(i32, i32), Option<usize>>,
     reach: i32,
 ) -> FeederBridge {
+    // A crossed trunk tile is "foreign" — the feeder/tap must UG-hop UNDER it
+    // rather than surface-cross and sideload onto it — when it belongs to a
+    // DIFFERENT logical trunk than this spec's own. "Different" means a
+    // different item/module OR, once K-trunk merge-tap (D1) puts multiple
+    // same-item trunks on the bus, a different lane FAMILY of the same item.
+    // The pre-D1 predicate keyed on item/module alone because "same item ==
+    // my own trunk" held; a tap that fans east to its consumer across a
+    // sibling same-item trunk then surface-crossed it, hijacking the tap's
+    // flow onto the wrong trunk and starving its consumer.
+    //
+    // Merge-tap stamps ONE family per K-trunk column (lane_planner), so
+    // family-inequality and column-inequality coincide for merge-tap trunks
+    // (the v2 falsification in docs/rfp-merge-tap-trunks.md proved this a
+    // bijection: every same-item cross-column crossing is also cross-family).
+    // Family identity is the semantically correct test — it does not treat two
+    // columns of ONE native lane-split family as foreign — and falls back to
+    // the column test when either family id is unknown (merge-tap specs always
+    // carry one, so the fallback is only reached by non-merge-tap callers,
+    // which never enter this bridge — behaviour-preserving either way).
     let is_foreign = |t: &(i32, i32)| {
-        trunk_tile_items
-            .get(t)
-            .is_some_and(|(it, m)| it != spec_item || *m != spec_module)
+        trunk_tile_items.get(t).is_some_and(|(it, m)| {
+            if it != spec_item || *m != spec_module {
+                return true;
+            }
+            match (own_family_id, trunk_tile_family.get(t).copied().flatten()) {
+                (Some(of), Some(tf)) => of != tf,
+                _ => own_trunk_col.is_some_and(|c| t.0 != c),
+            }
+        })
     };
     let mut out: Vec<(i32, i32)> = Vec::with_capacity(path.len());
     let mut i = 0;
@@ -511,6 +554,14 @@ pub fn route_bus_ghost(
     // sibling families (under Phase 2 the same item can have multiple
     // independent flows that must be physically separated via UG bridges).
     let mut trunk_tile_items: FxHashMap<(i32, i32), (String, u32)> = FxHashMap::default();
+    // Tile → owning lane-family id (parallel to `trunk_tile_items`). Lets the
+    // merge-tap bridge test trunk foreignness by FAMILY: a merge-tap trunk is
+    // its own family (lane_planner stamps one family per K-trunk), so a tap
+    // crossing a SIBLING same-item merge-tap trunk reads as a different family
+    // (→ UG-hop), while two columns of ONE native lane-split family share an
+    // id (→ surface, native behaviour preserved). `None` for pre-placed
+    // permanent trunk tiles with no family provenance.
+    let mut trunk_tile_family: FxHashMap<(i32, i32), Option<usize>> = FxHashMap::default();
     // Synthetic column paths for each trunk lane, keyed by "trunk:{item}:{x}".
     // Keyed per-column (not just per-item) because multi-lane items like a
     // split copper-cable trunk have multiple vertical columns — merging them
@@ -593,6 +644,7 @@ pub fn route_bus_ghost(
                 // detection so the junction solver can bridge them.
                 existing_belts.insert(tile);
                 trunk_tile_items.insert(tile, (lane.item.clone(), lane.module_id));
+                trunk_tile_family.insert(tile, lane.family_id);
                 trunk_synth_paths
                     .entry(format!("trunk:{}:{}", lane.item, x))
                     .or_default()
@@ -1301,6 +1353,7 @@ pub fn route_bus_ghost(
             // them from any solid-trunk sibling at the same tile under the
             // crossing filter.
             trunk_tile_items.insert((ent.x, ent.y), (item.clone(), 0));
+            trunk_tile_family.insert((ent.x, ent.y), None);
             // Also inject a synthetic fluid-trunk path so classify_crossing
             // sees the pipe column as a second spec at belt×pipe crossing
             // tiles. Key format mirrors the solid-trunk synth path format
@@ -1486,6 +1539,7 @@ pub fn route_bus_ghost(
                     belt_name: horiz_belt,
                     exit_dir: Some(EntityDirection::East),
                     lane_trunk_col: Some(x),
+                    family_id: lane.family_id,
                 });
             }
         }
@@ -1537,6 +1591,7 @@ pub fn route_bus_ghost(
                     belt_name: horiz_belt,
                     exit_dir: Some(EntityDirection::West),
                     lane_trunk_col: Some(x),
+                    family_id: lane.family_id,
                 });
             }
         }
@@ -1578,6 +1633,7 @@ pub fn route_bus_ghost(
                     belt_name: horiz_belt,
                     exit_dir: Some(EntityDirection::West),
                     lane_trunk_col: Some(x),
+                    family_id: lane.family_id,
                 });
             }
         }
@@ -1753,6 +1809,7 @@ pub fn route_bus_ghost(
                                     // not down a single trunk column —
                                     // own-trunk hard-blocking doesn't apply.
                                     lane_trunk_col: None,
+                                    family_id: lane.family_id,
                                 });
                             }
                         }
@@ -2068,7 +2125,10 @@ pub fn route_bus_ghost(
                     &path,
                     &spec.item,
                     spec.module_id,
+                    spec.lane_trunk_col,
+                    spec.family_id,
                     &trunk_tile_items,
+                    &trunk_tile_family,
                     ug_max_reach(spec.belt_name) as i32,
                 ) {
                     FeederBridge::Routed(p) => path = p,
@@ -2685,6 +2745,13 @@ pub fn route_bus_ghost(
         &spec_kinds,
     );
 
+    // Control-flow copy of the junction solver's cap tiles. `solve_crossing`
+    // returns `None` exactly when it caps (every `None` path emits
+    // `JunctionGrowthCapped` at `seeds[0]`), so pushing the cluster seed on the
+    // `None` branch below reproduces the capped-tile set the layout retry loop
+    // used to scrape from the trace collector — without needing a trace guard.
+    let mut cap_coords: Vec<(i32, i32)> = Vec::new();
+
     for cluster in &clusters {
         // `corridor_handled` grows during this loop — a prior cluster's
         // SAT footprint may have absorbed tiles that belong to this
@@ -2797,6 +2864,10 @@ pub fn route_bus_ghost(
             strategies,
             &pending_crossings,
         ) else {
+            // Capped: `solve_crossing` returned `None`, matching the
+            // `JunctionGrowthCapped` event it emitted at this cluster's seed.
+            // Record it for the retry loop (control flow, not the trace stream).
+            cap_coords.push(cluster[0]);
             // Diagnostic: when SPAGHETTIO_BLAME_JUNCTIONS=1 is set,
             // identify which spec's removal would let the cluster
             // solve. Helps narrow "what shape of crossing keeps
@@ -3858,6 +3929,7 @@ pub fn route_bus_ghost(
         regions,
         warnings,
         surplus_exits,
+        cap_coords,
     })
 }
 

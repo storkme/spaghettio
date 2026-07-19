@@ -10,7 +10,7 @@
 //! Port of `src/bus/templates.py`.
 
 use crate::bus::inserter_ladder::{
-    contest_favors_far, size_side, InserterTier, Reach, SidePlan,
+    capped_limit, contest_favors_far, size_side, InserterTier, Reach, SidePlan,
 };
 use crate::models::{EntityDirection, PlacedEntity};
 
@@ -357,7 +357,21 @@ fn stamp_side_inserters(
 /// rate even at the richest tier `max_inserter_tier` allows and every
 /// free column used. No-op (and no trace event) when the side is fully
 /// covered.
-fn emit_shortfall_trace(recipe: &str, side_is_output: bool, required: f64, plan: &SidePlan) {
+///
+/// `(machine_x, machine_y)` is the MACHINE ORIGIN (the tile the
+/// validator's warnings anchor at), and `lost_contest` is true only at
+/// the near/far shared-column contest sites for the LOSING side — the
+/// binding-constraint `limit` itself is derived centrally in
+/// `inserter_ladder::capped_limit` from the plan.
+fn emit_shortfall_trace(
+    recipe: &str,
+    side_is_output: bool,
+    required: f64,
+    plan: &SidePlan,
+    machine_x: i32,
+    machine_y: i32,
+    lost_contest: bool,
+) {
     if let Some(shortfall) = plan.shortfall {
         crate::trace::emit(crate::trace::TraceEvent::InserterSideCapped {
             recipe: recipe.to_string(),
@@ -366,6 +380,9 @@ fn emit_shortfall_trace(recipe: &str, side_is_output: bool, required: f64, plan:
             placed_entity: plan.entity.to_string(),
             placed_count: plan.count,
             shortfall,
+            machine_x,
+            machine_y,
+            limit: capped_limit(required, plan, lost_contest).to_string(),
         });
     }
 }
@@ -530,7 +547,7 @@ pub fn single_input_row(
             INPUT_BASELINE_DX,
             &input_extra_dx,
         );
-        emit_shortfall_trace(recipe, false, input_rate, &input_plan);
+        emit_shortfall_trace(recipe, false, input_rate, &input_plan, mx, y_offset + 2, false);
 
         // Machine
         entities.push(PlacedEntity {
@@ -574,7 +591,7 @@ pub fn single_input_row(
             out_baseline_dx,
             &out_extra_dx,
         );
-        emit_shortfall_trace(recipe, true, output_rate, &output_plan);
+        emit_shortfall_trace(recipe, true, output_rate, &output_plan, mx, y_offset + 2, false);
 
         // Output belt (machine_size tiles wide) — skip cols owned by
         // the bridge to avoid duplicate-tile stamps.
@@ -619,7 +636,7 @@ pub fn single_input_row(
                 segment_id: secondary_ins_seg.clone(),
                 ..Default::default()
             });
-            emit_shortfall_trace(recipe, true, sec_rate, &sec_plan);
+            emit_shortfall_trace(recipe, true, sec_rate, &sec_plan, mx, y_offset + 2, false);
             let sec_belt_y = out_belt_y + 1;
             for dx in 0..out_stop2 {
                 entities.push(PlacedEntity {
@@ -744,11 +761,43 @@ pub fn dual_input_row(
     let out_belt_y = y_offset + 3 + msz + 1;
     let out_dir = output_dir(output_east);
 
+    // Contested-column baselines: far input's long-handed inserter picks at
+    // dx=0, near input's at dx=2; the single dx=1 column between them is
+    // shared (resolved by the near/far contest below).
+    const FAR_BASELINE_DX: i32 = 0;
+    const NEAR_BASELINE_DX: i32 = 2;
+
     for (i, &mx) in mxs.iter().enumerate() {
         let is_last = mx == last_mx;
-        let in1_stop = if is_last { msz - in1_tail } else { msz };
         let in2_stop = if is_last { msz - in2_tail } else { msz };
         let out_stop = if is_last { msz - out_tail } else { msz };
+
+        // Far input belt span. At the last machine in the row the far belt is
+        // trimmed to dx=0 (`in1_tail`), which starves the near/far contested
+        // column of a belt tile: the far side's long-handed ladder then caps
+        // at one inserter and `place_poles` parks a pole in the vacated slot.
+        // When that cap is real and one extra belt column would let the ladder
+        // fully cover — the added column is a genuine free contested tile still
+        // under the near belt, and the near side itself needs no extra column —
+        // extend the far belt by exactly one tile. The existing contest +
+        // ladder then place the second long-handed inserter and the pole
+        // relocates on its own. Scoped to `dual_input_row` last-in-row; see
+        // `docs/rfp-inserter-sizing.md`.
+        let mut in1_stop = if is_last { msz - in1_tail } else { msz };
+        if is_last {
+            let new_dx = in1_stop; // first dx a one-tile extension would add
+            let contested =
+                new_dx > FAR_BASELINE_DX && new_dx < NEAR_BASELINE_DX && new_dx < in2_stop;
+            let far_capped =
+                size_side(far_rate, Reach::Far, 0, max_inserter_tier).shortfall.is_some();
+            let far_covered_extended =
+                size_side(far_rate, Reach::Far, 1, max_inserter_tier).shortfall.is_none();
+            let near_needs_no_extra =
+                size_side(near_rate, Reach::Near, 0, max_inserter_tier).shortfall.is_none();
+            if contested && far_capped && far_covered_extended && near_needs_no_extra {
+                in1_stop += 1;
+            }
+        }
 
         // Input belt 1 -- far belt
         for dx in 0..in1_stop {
@@ -776,14 +825,12 @@ pub fn dual_input_row(
             });
         }
 
-        // Near/far contested column (dx=1 at Interior, near-only at
-        // LastInRow — derived from each belt's own stamped range,
-        // excluding both baselines, rather than a lookup table).
-        // `docs/rfp-inserter-sizing.md` Phase 3: the far side's own
-        // reach-2 count-ladder is now ACTIVE — a far win genuinely
-        // places a second long-handed inserter within budget.
-        const FAR_BASELINE_DX: i32 = 0;
-        const NEAR_BASELINE_DX: i32 = 2;
+        // Near/far contested column (dx=1 at Interior; also at LastInRow when
+        // the far belt was extended one tile above, otherwise near-only there
+        // — derived from each belt's own stamped range, excluding both
+        // baselines, rather than a lookup table). `docs/rfp-inserter-sizing.md`
+        // Phase 3: the far side's own reach-2 count-ladder is now ACTIVE — a
+        // far win genuinely places a second long-handed inserter within budget.
         let far_candidates = free_extra_dx(in1_stop, &[FAR_BASELINE_DX, NEAR_BASELINE_DX]);
         let near_candidates = free_extra_dx(in2_stop, &[FAR_BASELINE_DX, NEAR_BASELINE_DX]);
         let far_eligible = !far_candidates.is_empty();
@@ -809,7 +856,11 @@ pub fn dual_input_row(
             FAR_BASELINE_DX,
             &far_extra_dx,
         );
-        emit_shortfall_trace(recipe, false, far_rate, &far_plan);
+        emit_shortfall_trace(
+            recipe, false, far_rate, &far_plan,
+            mx, y_offset + 3,
+            !shared_dx.is_empty() && !far_wins,
+        );
 
         // Near input — ladder-sized.
         let near_plan = size_side(near_rate, Reach::Near, near_extra_dx.len(), max_inserter_tier);
@@ -824,7 +875,7 @@ pub fn dual_input_row(
             NEAR_BASELINE_DX,
             &near_extra_dx,
         );
-        emit_shortfall_trace(recipe, false, near_rate, &near_plan);
+        emit_shortfall_trace(recipe, false, near_rate, &near_plan, mx, y_offset + 3, far_wins);
 
         // Machine
         entities.push(PlacedEntity {
@@ -862,7 +913,7 @@ pub fn dual_input_row(
             out_baseline_dx,
             &out_extra_dx,
         );
-        emit_shortfall_trace(recipe, true, output_rate, &output_plan);
+        emit_shortfall_trace(recipe, true, output_rate, &output_plan, mx, y_offset + 3, false);
 
         // Output belt — skip cols owned by the bridge.
         for dx in 0..out_stop {
@@ -1237,7 +1288,7 @@ pub fn dual_input_row_horizontal(
             NEAR_BASELINE_DX,
             &near_extra_dx,
         );
-        emit_shortfall_trace(recipe, false, near_rate, &near_plan);
+        emit_shortfall_trace(recipe, false, near_rate, &near_plan, mx, machine_y, far_wins);
 
         // Far input (input1) — ladder-sized (reach-2 count-ladder).
         let far_plan = size_side(far_rate, Reach::Far, far_extra_dx.len(), max_inserter_tier);
@@ -1252,7 +1303,7 @@ pub fn dual_input_row_horizontal(
             FAR_BASELINE_DX,
             &far_extra_dx,
         );
-        emit_shortfall_trace(recipe, false, far_rate, &far_plan);
+        emit_shortfall_trace(recipe, false, far_rate, &far_plan, mx, machine_y, !shared_dx.is_empty() && !far_wins);
         entities.push(PlacedEntity {
             name: machine_entity.to_string(),
             x: mx,
@@ -1287,7 +1338,7 @@ pub fn dual_input_row_horizontal(
             out_baseline_dx,
             &out_extra_dx,
         );
-        emit_shortfall_trace(recipe, true, output_rate, &output_plan);
+        emit_shortfall_trace(recipe, true, output_rate, &output_plan, mx, machine_y, false);
     }
 
     // Output belt — single continuous east- (or west-) flowing belt
@@ -1513,7 +1564,11 @@ pub fn triple_input_row(
             FAR_BASELINE_DX,
             &far_extra_dx,
         );
-        emit_shortfall_trace(recipe, false, far_rate, &far_plan);
+        emit_shortfall_trace(
+            recipe, false, far_rate, &far_plan,
+            mx, y_offset + 3,
+            !near_far_shared.is_empty() && !near_far_far_wins,
+        );
 
         // Near input — ladder-sized.
         let near_plan = size_side(near_rate, Reach::Near, near_extra_dx.len(), max_inserter_tier);
@@ -1528,7 +1583,10 @@ pub fn triple_input_row(
             NEAR_BASELINE_DX,
             &near_extra_dx,
         );
-        emit_shortfall_trace(recipe, false, near_rate, &near_plan);
+        emit_shortfall_trace(
+            recipe, false, near_rate, &near_plan,
+            mx, y_offset + 3, near_far_far_wins,
+        );
 
         // Machine
         entities.push(PlacedEntity {
@@ -1586,7 +1644,7 @@ pub fn triple_input_row(
             in3_baseline_dx,
             &input3_extra_dx,
         );
-        emit_shortfall_trace(recipe, false, input3_rate, &input3_plan);
+        emit_shortfall_trace(recipe, false, input3_rate, &input3_plan, mx, y_offset + 3, tile_exists && !input3_wins);
 
         // Output — ladder-sized.
         let output_plan = size_side(output_rate, Reach::Near, output_extra_dx.len(), max_inserter_tier);
@@ -1601,7 +1659,7 @@ pub fn triple_input_row(
             1,
             &output_extra_dx,
         );
-        emit_shortfall_trace(recipe, true, output_rate, &output_plan);
+        emit_shortfall_trace(recipe, true, output_rate, &output_plan, mx, y_offset + 3, input3_wins);
 
         // Output belt — skip cols owned by the bridge.
         let out_belt_y = y_offset + 3 + msz + 1;
@@ -1905,6 +1963,18 @@ pub fn quad_input_row(
             let total_avail = 2.0 * inserter_throughput(input3_plan.entity);
             let shortfall = (input3_rate - total_avail).max(0.0);
             if shortfall > 0.0 {
+                // This site sizes per-slot (rate/2 mirrored to two fixed
+                // structural tiles), so `capped_limit`'s plan-derived
+                // budget doesn't apply; classify directly: both slots are
+                // structural and count can't grow, so the only actionable
+                // constraint is the tier ceiling.
+                let limit = if input3_plan.entity != crate::bus::inserter_ladder::STACK
+                    && input3_rate <= 2.0 * inserter_throughput(crate::bus::inserter_ladder::STACK)
+                {
+                    "tier-cap"
+                } else {
+                    "geometry"
+                };
                 crate::trace::emit(crate::trace::TraceEvent::InserterSideCapped {
                     recipe: recipe.to_string(),
                     side_is_output: false,
@@ -1912,6 +1982,9 @@ pub fn quad_input_row(
                     placed_entity: input3_plan.entity.to_string(),
                     placed_count: 2,
                     shortfall,
+                    machine_x: mx,
+                    machine_y,
+                    limit: limit.to_string(),
                 });
             }
         }
@@ -1947,7 +2020,7 @@ pub fn quad_input_row(
             1,
             &output_extra_dx,
         );
-        emit_shortfall_trace(recipe, true, output_rate, &output_plan);
+        emit_shortfall_trace(recipe, true, output_rate, &output_plan, mx, machine_y, input4_wins);
 
         // South input4 — ladder-sized (reach-2 count-ladder). Baseline at
         // mx+2 (picks belt 4 at y+9, drops machine middle mx+2,y+5).
@@ -1963,7 +2036,7 @@ pub fn quad_input_row(
             2,
             &input4_extra_dx,
         );
-        emit_shortfall_trace(recipe, false, input4_rate, &input4_plan);
+        emit_shortfall_trace(recipe, false, input4_rate, &input4_plan, mx, machine_y, !input4_wins);
 
         // Output belt
         let out_dir = output_dir(output_east);
@@ -2198,7 +2271,7 @@ pub fn fluid_input_row(
                 inserter_dx,
                 &solid_extra_dx,
             );
-            emit_shortfall_trace(recipe, false, solid_rate, &solid_plan);
+            emit_shortfall_trace(recipe, false, solid_rate, &solid_plan, mx, machine_y, false);
 
             // Machine
             entities.push(PlacedEntity {
@@ -2234,7 +2307,7 @@ pub fn fluid_input_row(
                 out_baseline_dx,
                 &out_extra_dx,
             );
-            emit_shortfall_trace(recipe, true, output_rate, &output_plan);
+            emit_shortfall_trace(recipe, true, output_rate, &output_plan, mx, machine_y, false);
 
             // Output belt — skip cols owned by the bridge.
             for dx in 0..out_stop {
@@ -2476,7 +2549,7 @@ pub fn fluid_dual_input_row(
             segment_id: inserter_in1_seg.clone(),
             ..Default::default()
         });
-        emit_shortfall_trace(recipe, false, far_rate, &far_plan);
+        emit_shortfall_trace(recipe, false, far_rate, &far_plan, mx, machine_y, false);
 
         let near_plan = size_side(near_rate, Reach::Near, 0, max_inserter_tier);
         entities.push(PlacedEntity {
@@ -2488,7 +2561,7 @@ pub fn fluid_dual_input_row(
             segment_id: inserter_in2_seg.clone(),
             ..Default::default()
         });
-        emit_shortfall_trace(recipe, false, near_rate, &near_plan);
+        emit_shortfall_trace(recipe, false, near_rate, &near_plan, mx, machine_y, false);
 
         // Machine
         entities.push(PlacedEntity {
@@ -2546,7 +2619,7 @@ pub fn fluid_dual_input_row(
                 out_baseline_dx,
                 &out_extra_dx,
             );
-            emit_shortfall_trace(recipe, true, output_rate, &output_plan);
+            emit_shortfall_trace(recipe, true, output_rate, &output_plan, mx, machine_y, false);
             let out_dir = output_dir(output_east);
             for dx in 0..out_stop {
                 let x = mx + dx;
@@ -3532,7 +3605,7 @@ pub fn fluid_multi_input_row(
                 out_baseline_dx,
                 &out_extra_dx,
             );
-            emit_shortfall_trace(recipe, true, output_rate, &output_plan);
+            emit_shortfall_trace(recipe, true, output_rate, &output_plan, mx, y_offset + machine_row_idx, false);
             // Output belt row — skip cols owned by the bridge.
             let out_dir = output_dir(output_east);
             for dx in 0..msz {
@@ -3982,7 +4055,7 @@ pub fn self_loop_row(
                 rate: Some(near_total),
                 ..Default::default()
             });
-            emit_shortfall_trace(recipe, false, near_net_rate, &near_plan);
+            emit_shortfall_trace(recipe, false, near_net_rate, &near_plan, mx, y(dy_machine), false);
             // Regulars: minor's OWN INPUT demand (`spec.self_loop`,
             // check-invisible) — hardcoded, unchanged. Pick near2's UG
             // surface tiles (dy_near2, reach 1), drop machine top.
@@ -4041,7 +4114,7 @@ pub fn self_loop_row(
                     rate: Some(near_total),
                     ..Default::default()
                 });
-                emit_shortfall_trace(recipe, false, near_net_rate, &near_plan);
+                emit_shortfall_trace(recipe, false, near_net_rate, &near_plan, mx, y(dy_machine), false);
             } else {
                 // near_item is check-visible; ladder-sized. Baseline at
                 // dx=2 (major's LHI owns dx=0); the ONE extra column
@@ -4062,7 +4135,7 @@ pub fn self_loop_row(
                     2,
                     &near_extra_dx,
                 );
-                emit_shortfall_trace(recipe, false, near_net_rate, &near_plan);
+                emit_shortfall_trace(recipe, false, near_net_rate, &near_plan, mx, y(dy_machine), false);
             }
         }
     }
@@ -4103,7 +4176,7 @@ pub fn self_loop_row(
                 1,
                 &major_extra_dx,
             );
-            emit_shortfall_trace(recipe, true, major_produced_rate, &major_plan);
+            emit_shortfall_trace(recipe, true, major_produced_rate, &major_plan, mx, y(dy_machine), minor_wins);
 
             let minor_plan = size_side(minor_produced_rate, Reach::Far, minor_extra_dx.len(), max_inserter_tier);
             stamp_side_inserters(
@@ -4117,7 +4190,7 @@ pub fn self_loop_row(
                 0,
                 &minor_extra_dx,
             );
-            emit_shortfall_trace(recipe, true, minor_produced_rate, &minor_plan);
+            emit_shortfall_trace(recipe, true, minor_produced_rate, &minor_plan, mx, y(dy_machine), !minor_wins);
         } else {
             let major_extra_dx = vec![0i32, 2i32];
             let major_plan = size_side(major_produced_rate, Reach::Near, major_extra_dx.len(), max_inserter_tier);
@@ -4132,7 +4205,7 @@ pub fn self_loop_row(
                 1,
                 &major_extra_dx,
             );
-            emit_shortfall_trace(recipe, true, major_produced_rate, &major_plan);
+            emit_shortfall_trace(recipe, true, major_produced_rate, &major_plan, mx, y(dy_machine), false);
         }
     }
 
@@ -4772,7 +4845,7 @@ pub fn voider_row(
             rate: Some(near_total),
             ..Default::default()
         });
-        emit_shortfall_trace(recipe, false, near_rate_per_machine, &near_plan);
+        emit_shortfall_trace(recipe, false, near_rate_per_machine, &near_plan, mx, y(dy_machine), false);
 
         let far_plan = size_side(far_rate_per_machine, Reach::Far, 0, max_inserter_tier);
         entities.push(PlacedEntity {
@@ -4785,7 +4858,7 @@ pub fn voider_row(
             rate: Some(far_total),
             ..Default::default()
         });
-        emit_shortfall_trace(recipe, false, far_rate_per_machine, &far_plan);
+        emit_shortfall_trace(recipe, false, far_rate_per_machine, &far_plan, mx, y(dy_machine), false);
     }
 
     // ---- Near belt (dy_near): external tap demand, east-flowing, UG
@@ -5073,8 +5146,13 @@ pub fn scrap_recycling_row(
             segment_id: machine_seg.clone(),
             ..Default::default()
         });
+        // Per-machine (moved inside the loop for the D2 machine join —
+        // the shared plan means identical events, one per recycler).
+        emit_shortfall_trace(
+            recipe, false, input_rate_per_machine, &scrap_plan,
+            mx, y(dy_machine), false,
+        );
     }
-    emit_shortfall_trace(recipe, false, input_rate_per_machine, &scrap_plan);
 
     // ---- Sushi belt (dy6), east-flowing from the westmost eject to the
     // last sort inserter. Ejection tiles at (mx+1, dy6) land on it. ----

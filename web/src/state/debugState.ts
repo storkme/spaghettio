@@ -6,6 +6,8 @@ export interface DebugState {
   ghostTiles: boolean;
   itemColors: boolean;
   traceOverlay: boolean;
+  /** Starvation heatmap: tint machines by delivered/needed ratio. */
+  heatmap: boolean;
 }
 
 type Subscriber = (state: DebugState) => void;
@@ -18,6 +20,7 @@ let state: DebugState = {
   ghostTiles: false,
   itemColors: true,
   traceOverlay: false,
+  heatmap: false,
 };
 
 const subs: Subscriber[] = [];
@@ -29,6 +32,7 @@ export function create(): void {
   const ghostFromStorage = localStorage.getItem("fk-ghost-tiles") === "1";
   const itemColorsStored = localStorage.getItem("fk-item-colors");
   const traceOverlayStored = localStorage.getItem("fk-trace-overlay") === "1";
+  const heatmapStored = localStorage.getItem("fk-heatmap") === "1";
   state = {
     ...state,
     master: fromParam || fromStorage,
@@ -36,6 +40,7 @@ export function create(): void {
     ghostTiles: ghostFromStorage,
     itemColors: itemColorsStored === null ? true : itemColorsStored === "1",
     traceOverlay: traceOverlayStored,
+    heatmap: heatmapStored,
   };
 }
 
@@ -59,6 +64,9 @@ export function set(patch: Partial<DebugState>): void {
   }
   if ("traceOverlay" in patch) {
     localStorage.setItem("fk-trace-overlay", patch.traceOverlay ? "1" : "0");
+  }
+  if ("heatmap" in patch) {
+    localStorage.setItem("fk-heatmap", patch.heatmap ? "1" : "0");
   }
   for (const cb of subs) cb(state);
 }

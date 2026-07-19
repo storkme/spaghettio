@@ -1,0 +1,16 @@
+=== stress_advanced_circuit_partitioned_5s_from_plates scoreboard ===
+entities:         1430
+total warnings:   0
+zones solved:     0
+zones skipped:    0
+bridges dropped:  0
+bands:            4 (crossing: 0, non-crossing: 4)
+total gap tiles:  9
+mean gap:         2.25
+max gap:          3
+max trunks/band:  5
+warnings by category:
+  (none)
+errors by category:
+  (none)
+layout hash: 563e911c8c8b36648c2f2ab10503f84d8a477d8e88c54a81ca4a3f8839867869

@@ -1,0 +1,158 @@
+# Test-suite followups
+
+Deferred test-suite tooling work, from a session-time audit on 2026-07-19
+(originally `testing-time-audit.md`). Each item below has pick-up notes so a
+future session can start cold.
+
+Status: **all items resolved 2026-07-19** — items 2 and 3 landed, item 1
+landed with its CI gate (3 consecutive green Rust-touching runs) tracked on
+the landing PR, item 4 measured and closed as not-worth-it host-side (open
+question remains for the docker agent container only). Per-item detail in
+each section below. One new follow-up spun out along the way: pruning
+`.claude/worktrees/` build-artifact disk (~100 G), see item 4.
+
+## Measured baseline
+
+| What | Time | Source |
+|---|---|---|
+| CI, Rust-touching push (whole pipeline) | ~9–10 min | `gh run list` durations, 2026-07 |
+| CI, docs-only push | 8 s | paths-filter skips all jobs |
+| STRESSGOLD scoreboard subset (9 tests, forced serial) | 80–91 s | saved gate runs, 2026-07-19 session |
+| `science_gauntlet` (all 6 packs) | 22 s warm | adversarial-review run, 2026-07-19 |
+| Heaviest single tests, debug mode | 50–190 s each | comments in `.config/nextest.toml` |
+
+The test *content* is nearly all useful — the stress corpus exercises the
+product end-to-end and the golden/warning-population diffs are the
+discriminating gates. The recoverable waste is in *how* it runs.
+
+## Recoverable time
+
+### 1. CI serialization tax (~5 min per Rust push) — fix already documented
+
+`.config/nextest.toml` pins `test-threads = 1` in the ci profile. Its own
+comment records the 2026-05-02 experiment (commit `8eb6ace`): parallel
+execution dropped the Rust job **11m → 6m02s**, but
+`tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing` blew its 30s
+`#[ntest::timeout]` under 2-core CI contention (15× slowdown vs local), so it
+was reverted — with the note *"to re-enable parallelism, bump the affected
+timeout ceilings first."* The bump never happened.
+
+**Pick-up**: raise the `#[ntest::timeout]` ceilings on the SAT-heavy tests
+(they were sized for serial execution), flip `test-threads` back to default in
+the ci profile only (keep local serial for STRESSGOLD runs, which need
+ordered output). Gate: 3 consecutive green CI runs on Rust-touching pushes
+with no timeout flakes.
+
+**LANDED 2026-07-19** (gate tracked on the landing PR). Two-part fix, and
+the second part was the real one:
+
+1. Ceilings and shaping, as pick-up'd: ntest ceilings bumped from measured
+   local 16-thread times (≥20 s local → 600 s, 5–20 s → 300 s, 1–5 s →
+   120 s, never lowered), ci default slow-timeout 60 s period / 300 s kill,
+   `threads-required` on the heavy tests. "Keep local serial" turned out to
+   be free — the pin only ever lived in `[profile.ci]`.
+2. **CI zone-cache pin** — the first parallel run failed *not* on
+   timeouts but on layout quality: with a cold cache, zone solutions are
+   solved fresh under a 25 ms wall-clock descent budget, so layouts (and
+   the warning/error counts the ceilings gate) depend on runner speed,
+   build opt levels, and test schedule. Cold-cache runs reproduce the
+   failures locally at *both* varisat opt levels — the old serial green
+   CI was calibrated luck, not determinism. Fix:
+   `crates/core/data/sat-zones-ci.bin`, a committed snapshot of the host
+   cache, exported to the rust job via `SPAGHETTIO_ZONE_CACHE_PATH` — CI
+   now replays exactly the entries a warm local run replays, making it
+   independent of speed, schedule, and opt levels by construction.
+   Refresh protocol lives in the `ci.yml` comment (copy the host cache in
+   with any layout-moving change, like a golden re-bless). This is the
+   pinned-cache design from the goldens README, landed CI-side.
+
+### 2. Committed STRESSGOLD baseline (~90 s + a full-suite leg per work unit)
+
+The current gate protocol re-derives the "before" scoreboard from HEAD for
+every unit, even though that baseline is fully determined by the main commit —
+and in the implementer/adversarial-reviewer team flow, both agents capture
+their own copy.
+
+**Pick-up**: make the scoreboard a committed golden artifact (e.g.
+`crates/core/tests/goldens/stress_scoreboard.txt`); the test regenerates and
+diffs against it, and a deliberate re-bless is "regenerate + commit", visible
+in the diff like any golden. Kills the before-leg entirely, makes baselines
+shared-by-construction across agents, and moves drift detection into git
+history. This is the best ergonomics payoff for the RFP team flow — do it
+first.
+
+**LANDED 2026-07-19**: one golden per fixture under
+`crates/core/tests/goldens/stress/` (canonical scoreboard + layout hash),
+driven by `SPAGHETTIO_STRESS_GOLDEN=check|bless` in `check_stress_scoreboard`
+(`=1` keeps the legacy hash-print protocol). Opt-in only — **not** enforced
+by default or in CI, because measurement showed the scoreboards are only
+deterministic relative to the host's SAT zone-cache state: 2 of 8 fixtures
+had different layout hashes warm-cache vs cache-disabled (stale-but-valid
+cached solutions), cached Unsat/Timeout hits skip the trace events fresh
+solves emit (`zones skipped` 0 vs 164 on the same fixture), and cache-off
+runs are 2.6× slower (174 s vs 67 s) *and* refresh the host cache in place
+(recording is unconditional). The always-on `StressBaseline` ceilings remain
+the portable gate. Follow-up if CI enforcement is ever wanted: pin the golden
+subset to a committed cache snapshot with ambient read/write disabled. Full
+rationale in `crates/core/tests/goldens/stress/README.md`.
+
+### 3. Debug-mode tax on SAT/A*-heavy tests (~3×) — measure, then decide
+
+Documented in `.config/nextest.toml`'s own comments: the tier5 PU
+horizontal-stack test runs ~29 s in release vs >90 s in debug;
+`partition_strategy_scoreboard` ~50 s local debug with 200–480 s observed in
+CI.
+
+**Pick-up**: measure `[profile.test]` `opt-level = 1` (or per-package
+`opt-level` for the SAT/pathfinding-heavy dependencies) against the added
+compile time on both cold and warm builds. Adopt only if the wall-clock win
+survives the compile cost on a typical edit-test cycle. Decide on data, not
+assumption.
+
+**LANDED 2026-07-19**: adopted as per-package overrides in the workspace
+`Cargo.toml` — `spaghettio_core` at `opt-level = 1` (ci suite 37.8 s →
+26.0 s, serial stress gate subset 88 s → 28 s, incremental
+rebuild-after-edit unchanged at ~2 s, one-time conversion ~21 s) and
+`varisat` at `opt-level = 3` (cold-cache SAT a further ~2.4×: 5.6 s →
+2.3 s on a 2-test probe; this is the CI path, which always runs cold).
+Measurement surfaced a new fact along the way: **junction solutions are
+wall-clock-budget shaped** (25 ms `cost_descent_budget_ms`), so the faster
+build lands on different valid solutions when solving fresh — 5 of 8
+stress fixtures re-solved differently and were re-blessed (goldens diff
+in the same commit). Warm-cache replays are unaffected. This adds a
+second, independent reason goldens must never be enforced cross-machine
+without pinning the cache: solutions depend not just on cache state but
+on host speed and build optimization level.
+
+### 4. (Low priority) Fresh-worktree compile cost for agents
+
+Worktree-isolated agents pay a from-scratch build (minutes; dominated one
+agent's 32-minute census run and is the true source of the folkloric
+"science_gauntlet takes 25 minutes" — the SAT zone cache was never the
+problem). sccache or a shared read-only cargo cache would recover most of it.
+Occasional cost, so lowest priority.
+
+**MEASURED AND CLOSED 2026-07-19** (as a host-side item): a true cold
+build (`cargo build --tests -p spaghettio_core` into an empty
+`CARGO_TARGET_DIR`) takes **27.9 s** on the 16-core host — the "minutes"
+folklore does not reproduce here, so sccache is not worth the moving part
+for host worktrees (verdict per this doc's own decide-on-data rule). What
+the measurement *did* surface is disk: each worktree target is ~2.4 G
+cold (9.5 G after a working session), the main checkout's target is 38 G,
+and ~35 worktrees have accumulated under `.claude/worktrees/` — likely
+around 100 G of duplicate build artifacts. Recoverable by pruning merged
+worktrees (`git worktree list` / `git worktree prune` + deleting their
+directories) — needs a human pass since other sessions may have live
+work in them. If agent runs inside the docker container still feel
+build-bound, measure *there* before adopting any tooling; the 32-minute
+census datum most plausibly reflects that environment, not this host.
+
+## Not waste — leave alone
+
+- **The SAT zone cache already works**: `zone_cache.rs` persists crossing-zone
+  solutions to `~/.cache/spaghettio/sat-zones.bin` (WASM embeds a pre-baked
+  blob). Warm-cache science_gauntlet is 22 s. "Cold" pain is compile, not SAT.
+- **Implementer + reviewer each running the full suite** is deliberate
+  independent verification — the redundancy is the point of the adversarial
+  flow. Don't dedupe it.
+- **paths-filter short-circuit** already reduces docs-only pushes to 8 s.

@@ -99,13 +99,7 @@ fn dump_partial_snapshot(
     let dir = snapshot_dir();
     std::fs::create_dir_all(&dir).ok();
 
-    let error_issue = ValidationIssue {
-        severity: Severity::Error,
-        category: "pipeline".into(),
-        message: error_msg.into(),
-        x: None,
-        y: None,
-    };
+    let error_issue = ValidationIssue::new(Severity::Error, "pipeline", error_msg);
 
     let snapshot = LayoutSnapshot::from_run(
         SnapshotSource::Test,
@@ -603,7 +597,7 @@ const GOLDEN_HASHES: &[(&str, &str)] = &[
     // RFP rfp-inserter-sizing.md Phase 1: single_input_row rows ladder-sized, see note above.
     // RFP rfp-inserter-sizing.md Phase 2: dual_input_row ladder-sized + near/far reassigned.
     // RFP rfp-inserter-sizing.md Phase 3: far side's reach-2 count-ladder activated.
-    ("tier2_electronic_circuit_20s_from_ore", "e5618d6626a9176aa6b7addd4b256af80e1ab31d0bdcfad5da124a3bebf4f8fd"),
+    ("tier2_electronic_circuit_20s_from_ore", "30c3cdbce421bb6f29d93481470b2653f39882aebbf4d64579793e9f263e1010"),
     // RFP rfp-inserter-sizing.md Phase 2: dual_input_row's inserters are now
     // ladder-sized + near/far reassigned (this fixture's dual-input EC row
     // is exactly the template Phase 2 touches) — entity types/positions on
@@ -812,7 +806,7 @@ fn decomposition_search_picks_native_on_clean_partitioned_case() {
 /// (candidate constructed, scored, native wins on error count) rides along on
 /// `stress_electronic_circuit_35s_from_ore`, which now runs the candidate.
 #[test]
-#[ntest::timeout(120000)]
+#[ntest::timeout(600000)]
 fn merge_tap_fallback_fires_with_correct_k_and_priority_taps() {
     use spaghettio_core::bus::decomposition_search::{DecompositionCandidate, MergeTapCandidate};
     use spaghettio_core::bus::layout::{LayoutOptions, LayoutStrategy};
@@ -1018,7 +1012,10 @@ fn tier2_electronic_circuit() {
     // RFP Phase 1: 34 inserter-bound machine-sides (electronic-circuit chain —
     // copper-cable + EC assemblers, sides over the 0.84/s regular-inserter cap).
     // RFP rfp-inserter-sizing.md Phase 1 re-bless: single_input_row (iron-plate/copper-cable rows) ladder-sized; the electronic-circuit dual_input_row itself is Phase 2 scope, residue remains (34 -> 14).
-    assert_warnings_exactly(&result, &[("inserter-item-throughput", 1)]);
+    // beltspan-lastinrow: the last residual (1) was the EC dual_input_row last-in-row
+    // far (iron-plate) side, capped at one long-handed inserter because the far belt
+    // was trimmed under the dx=1 contested column; extending it one tile clears it (1 -> 0).
+    assert_warnings_exactly(&result, &[]);
     assert_produces(&result, "electronic-circuit", 10.0);
     assert_round_trip(&result);
 }
@@ -1051,7 +1048,7 @@ fn fixture_source_ec_15s_am1_yellow_from_ore() {
 }
 
 #[test]
-#[ntest::timeout(10000)]
+#[ntest::timeout(120000)]
 fn tier2_electronic_circuit_from_ore() {
     let inputs: FxHashSet<String> = ["iron-ore", "copper-ore"]
         .iter()
@@ -1101,7 +1098,10 @@ fn tier2_electronic_circuit_20s_from_ore() {
     assert_no_errors(&result);
     // RFP Phase 1: 68 inserter-bound machine-sides (EC from ore at 20/s).
     // RFP rfp-inserter-sizing.md Phase 1 re-bless: single_input_row rows ladder-sized; electronic-circuit dual_input_row is Phase 2 scope, residue remains (68 -> 28).
-    assert_warnings_exactly(&result, &[("inserter-item-throughput", 2)]);
+    // beltspan-lastinrow: the 2 residual were EC dual_input_row last-in-row far
+    // (iron-plate) sides, capped at one long-handed inserter; extending the far belt
+    // one tile at each places the needed second inserter (2 -> 0).
+    assert_warnings_exactly(&result, &[]);
     assert_produces(&result, "electronic-circuit", 20.0);
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier2_electronic_circuit_20s_from_ore");
@@ -1483,7 +1483,7 @@ fn tier4_advanced_circuit_partitioned() {
 /// UG at (20,18) west, surfaces at (18,18) west, pipe at (19,18)
 /// untouched. No errors and no warnings.
 #[test]
-#[ntest::timeout(30000)]
+#[ntest::timeout(120000)]
 fn tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing() {
     use spaghettio_core::bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy, RowLayout, SurplusPolicy};
 
@@ -1732,7 +1732,7 @@ fn tier5_processing_unit_2s_horizontal_stack_iron_ore_pipe_bypass() {
 /// back leftward when rightward is exhausted. Rightmost-first ordering
 /// is preserved so forward reach is unchanged.
 #[test]
-#[ntest::timeout(60000)]
+#[ntest::timeout(300000)]
 fn tier5_processing_unit_25s_horizontal_stack_pole_coverage() {
     use spaghettio_core::bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy, RowLayout, SurplusPolicy};
 
@@ -1797,7 +1797,7 @@ fn tier5_processing_unit_25s_horizontal_stack_pole_coverage() {
 /// has 3 ingredients and AM1 has only 2 slots), cheapest belt tier,
 /// everything upstream of the factory is raw resources.
 #[test]
-#[ntest::timeout(60000)]
+#[ntest::timeout(300000)]
 fn tier4_advanced_circuit_from_ore_am2() {
     let inputs: FxHashSet<String> = [
         "iron-ore", "copper-ore", "coal", "water", "crude-oil",
@@ -1824,7 +1824,10 @@ fn tier4_advanced_circuit_from_ore_am2() {
     // acyclic branch. Even-split delivered ≥4.3 here, so it is a modeling residual,
     // not a real starvation. See report / rfp-lane-demand-flow.md.
     // RFP rfp-inserter-sizing.md Phase 1 re-bless: single_input_row rows ladder-sized; remaining rows are Phase 2/3 scope, residue remains (58 -> 24). input-rate-delivery unrelated, unchanged.
-    assert_warnings_exactly(&result, &[("input-rate-delivery", 1), ("inserter-item-throughput", 4)]);
+    // beltspan-lastinrow: the 4 residual inserter-item-throughput were dual_input_row
+    // last-in-row far sides capped at one long-handed inserter; extending the far belt
+    // one tile clears them (4 -> 0). The input-rate-delivery (1) is unrelated and unchanged.
+    assert_warnings_exactly(&result, &[("input-rate-delivery", 1)]);
     assert_produces(&result, "advanced-circuit", 5.0);
     assert_round_trip(&result);
 }
@@ -1839,7 +1842,7 @@ fn tier4_advanced_circuit_from_ore_am2() {
 /// URL repro:
 /// `?item=processing-unit&rate=2&machine=assembling-machine-3&in=coal,water,crude-oil,iron-ore,copper-ore&belt=fast-transport-belt`
 #[test]
-#[ntest::timeout(60000)]
+#[ntest::timeout(300000)]
 fn tier5_processing_unit_from_ore_am3() {
     let inputs: FxHashSet<String> = [
         "iron-ore", "copper-ore", "coal", "water", "crude-oil",
@@ -1863,7 +1866,10 @@ fn tier5_processing_unit_from_ore_am3() {
     // positive across this layout's underground hops; the residual is purely
     // inserter-throughput.
     // RFP rfp-inserter-sizing.md Phase 1 re-bless: single_input_row rows ladder-sized; remaining rows are Phase 2/3 scope, residue remains (129 -> 65).
-    assert_warnings_exactly(&result, &[("inserter-item-throughput", 5)]);
+    // beltspan-lastinrow: the 5 residual inserter-item-throughput were dual_input_row
+    // last-in-row far sides capped at one long-handed inserter; extending the far belt
+    // one tile clears them (5 -> 0) — this config is now fully clean (0 warnings).
+    assert_warnings_exactly(&result, &[]);
     assert_produces(&result, "processing-unit", 2.0);
     assert_round_trip(&result);
 }
@@ -2347,7 +2353,7 @@ fn tier_bacteria_self_loop_regression() {
 ///
 /// [issue #136]: https://github.com/storkme/spaghettio/issues/136
 #[test]
-#[ntest::timeout(60000)]
+#[ntest::timeout(120000)]
 fn issue_136_no_balancer_template_warning_ac5_ore_yellow() {
     let inputs: FxHashSet<String> = [
         "iron-ore", "copper-ore", "coal", "water", "crude-oil",
@@ -2575,7 +2581,27 @@ struct StressBaseline {
 /// Tally warnings + trace metrics, print the scoreboard, then assert against
 /// the recorded baseline. Errors and warnings must each be ≤ their recorded
 /// ceiling.
+///
+/// `SPAGHETTIO_STRESS_GOLDEN` additionally drives the committed-baseline
+/// flow (see `tests/goldens/stress/README.md`):
+///   - `1` (or any other value): print one `STRESSGOLD <test> <hash>` line
+///     per fixture — the legacy capture-and-diff byte-stability protocol.
+///   - `check`: also diff the full scoreboard + hash against the committed
+///     golden file and fail on any drift.
+///   - `bless`: also rewrite the golden file with the current scoreboard.
+///
+/// Goldens are relative to this host's SAT zone-cache state — see the
+/// README for why they are opt-in rather than enforced by default/CI.
 fn check_stress_scoreboard(test_name: &str, result: &E2EResult, baseline: StressBaseline) {
+    let golden_mode = std::env::var("SPAGHETTIO_STRESS_GOLDEN").ok();
+    // Byte-stability audit hook: any SPAGHETTIO_STRESS_GOLDEN value prints
+    // one golden hash per stress fixture. Capture before and after a layout
+    // change and diff — identical hashes prove the fixture's shipped
+    // layout did not move (the "byte-identical" gate used for landings).
+    let layout_hash = golden_hash(&result.layout);
+    if golden_mode.is_some() {
+        eprintln!("STRESSGOLD {test_name} {layout_hash}");
+    }
     let mut by_category: std::collections::BTreeMap<&str, usize> = Default::default();
     for w in result.issues.iter().filter(|i| i.severity == Severity::Warning) {
         *by_category.entry(w.category.as_str()).or_default() += 1;
@@ -2677,6 +2703,66 @@ fn check_stress_scoreboard(test_name: &str, result: &E2EResult, baseline: Stress
         *errors_by_category.entry(i.category.as_str()).or_default() += 1;
     }
     let errors: usize = errors_by_category.values().sum();
+
+    // Committed-golden flow: `bless` rewrites tests/goldens/stress/<test>.txt
+    // with the canonical scoreboard; `check` diffs against it and fails on
+    // any drift (byte movement, count changes, new categories — anything).
+    if matches!(golden_mode.as_deref(), Some("check") | Some("bless")) {
+        let mut golden = String::from(msg.trim_start());
+        golden.push_str("errors by category:\n");
+        if errors_by_category.is_empty() {
+            golden.push_str("  (none)\n");
+        } else {
+            for (cat, count) in &errors_by_category {
+                golden.push_str(&format!("  {cat}: {count}\n"));
+            }
+        }
+        golden.push_str(&format!("layout hash: {layout_hash}\n"));
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/goldens/stress")
+            .join(format!("{test_name}.txt"));
+        if golden_mode.as_deref() == Some("bless") {
+            std::fs::create_dir_all(path.parent().unwrap()).expect("create goldens dir");
+            std::fs::write(&path, &golden).expect("write golden file");
+            eprintln!("blessed {}", path.display());
+        } else {
+            let expected = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+                panic!(
+                    "{test_name}: no committed golden at {} ({e}). \
+                     If this fixture should be golden-gated, run once with \
+                     SPAGHETTIO_STRESS_GOLDEN=bless and commit the file.",
+                    path.display()
+                )
+            });
+            if expected != golden {
+                let mut diff = String::new();
+                let exp_lines: Vec<&str> = expected.lines().collect();
+                let got_lines: Vec<&str> = golden.lines().collect();
+                for i in 0..exp_lines.len().max(got_lines.len()) {
+                    match (exp_lines.get(i), got_lines.get(i)) {
+                        (Some(e), Some(g)) if e == g => {}
+                        (e, g) => {
+                            if let Some(e) = e {
+                                diff.push_str(&format!("  - {e}\n"));
+                            }
+                            if let Some(g) = g {
+                                diff.push_str(&format!("  + {g}\n"));
+                            }
+                        }
+                    }
+                }
+                panic!(
+                    "{test_name}: scoreboard drifted from committed golden {} \
+                     (-expected +got):\n{diff}\
+                     If the drift is intentional, re-bless with \
+                     SPAGHETTIO_STRESS_GOLDEN=bless and commit the diff. \
+                     Goldens are relative to this host's SAT zone cache — \
+                     see tests/goldens/stress/README.md.",
+                    path.display(),
+                );
+            }
+        }
+    }
 
     // Total-error ceiling (coarse gate).
     assert!(
@@ -3675,7 +3761,7 @@ fn diag_ac5_ores_yellow_hs_input_rate() {
 ///   - belt-item-isolation (9): adjacent belts of different items feeding
 ///     into each other. Sideload mismatch in vertical-split row borders.
 #[test]
-#[ntest::timeout(120000)]
+#[ntest::timeout(300000)]
 fn processing_unit_2s_am2_fast_belts_validation_baseline() {
     let inputs: FxHashSet<String> = [
         "iron-plate", "copper-plate", "steel-plate", "stone", "coal",
@@ -3948,6 +4034,110 @@ fn stress_electronic_circuit_35s_from_ore() {
             ].into_iter().collect(),
         },
     );
+}
+
+/// Package #3 regression: the layout retry must fire the same way whether or
+/// not a trace guard is active on the calling thread.
+///
+/// The two-pass retry (`run_layout_with_retry_inner`) used to decide whether to
+/// run the second pass by scraping `JunctionGrowthCapped` events out of the
+/// thread-local trace collector. The collector only records while a trace guard
+/// is live, so the retry fired only when the caller happened to be tracing: the
+/// traced e2e / web-streaming paths retried, but the untraced wasm `layout()`
+/// entry point did not — so the same solver result produced different layouts
+/// depending purely on whether tracing was on. Package #3 carries the cap tiles
+/// as data (`GhostRouteResult.cap_coords` → `layout_pass`'s return) so the retry
+/// decision no longer depends on the trace stream.
+///
+/// This drives `MergeTapCandidate::produce` directly rather than the public
+/// `build_bus_layout`. That is deliberate: the impurity lives in
+/// `run_layout_with_retry`, and the merge-tap candidate for
+/// electronic-circuit@35/s from ore is a junction capper (11 caps → 9 retry
+/// gaps). Going through `build_bus_layout` would let the candidate-selection
+/// layer (which picks native over merge-tap for this fixture on error count)
+/// mask the candidate-level divergence, so the public API's final output is
+/// trace-independent here *by coincidence of selection*, not because the retry
+/// is. Testing the candidate isolates the retry itself.
+///
+/// Pre-#3: the untraced build skips the retry and the traced build runs it, so
+/// the two `golden_hash`es differ. Post-#3: both run it and the hashes match.
+#[test]
+#[ntest::timeout(600000)]
+fn layout_retry_is_trace_independent() {
+    use spaghettio_core::bus::decomposition_search::{DecompositionCandidate, MergeTapCandidate};
+
+    let inputs: FxHashSet<String> = ["iron-ore", "copper-ore"]
+        .iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_exclusions(
+        "electronic-circuit",
+        35.0,
+        &inputs,
+        "assembling-machine-2",
+        &FxHashSet::default(),
+    )
+    .expect("solve electronic-circuit@35/s");
+
+    let opts = layout::LayoutOptions {
+        strategy: layout::LayoutStrategy::Pooled,
+        max_belt_tier: Some("transport-belt".to_string()),
+        merge_tap: false,
+        ..Default::default()
+    };
+
+    // Warm the in-memory zone cache (pass-1 and retry-pass geometries) so the
+    // two compared produces never re-invoke the time-budgeted SAT solver — any
+    // divergence is then the retry decision, not solver timing jitter.
+    let _warm = MergeTapCandidate.produce(&sr, &opts).expect("warmup merge-tap produce");
+
+    let untraced = MergeTapCandidate.produce(&sr, &opts).expect("untraced merge-tap produce");
+    let traced = {
+        let _guard = trace::start_trace();
+        MergeTapCandidate.produce(&sr, &opts).expect("traced merge-tap produce")
+    };
+
+    assert_eq!(
+        untraced.entities.len(),
+        traced.entities.len(),
+        "merge-tap entity count differs (untraced {} vs traced {}) — the layout \
+         retry fired in only one produce, so it is not trace-independent",
+        untraced.entities.len(),
+        traced.entities.len(),
+    );
+    assert_eq!(
+        golden_hash(&untraced),
+        golden_hash(&traced),
+        "untraced and traced merge-tap layouts differ — the retry decision still \
+         depends on whether a trace guard is active",
+    );
+}
+
+/// Measurement harness (not a gate): utility-science-pack@10/s AM3 through
+/// the public pipeline (build_bus_layout → selection) — the merge-tap RFP's
+/// goal cell. Prints the shipped error count + category split and dumps a
+/// snapshot. Run with --ignored --nocapture; takes ~25 min. History:
+/// 175 (native) → 108 → 98 → 46 (STEP B re-land, 2026-07-14).
+#[test]
+#[ignore]
+#[ntest::timeout(3600000)]
+fn measure_utility_10s_am3() {
+    let inputs: FxHashSet<String> =
+        ["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"]
+            .iter().map(|s| s.to_string()).collect();
+    let result = run_e2e(
+        "measure_utility_10s_am3",
+        "utility-science-pack",
+        10.0,
+        "assembling-machine-3",
+        None,
+        &inputs,
+    ).expect("e2e pipeline");
+    let errs: Vec<_> = result.issues.iter()
+        .filter(|i| i.severity == Severity::Error).collect();
+    let mut by_cat: std::collections::BTreeMap<&str, usize> = Default::default();
+    for e in &errs { *by_cat.entry(e.category.as_str()).or_default() += 1; }
+    eprintln!("=== MEASURE utility@10/s AM3 (shipped): {} entities, {} ERRORS ===",
+        result.layout.entities.len(), errs.len());
+    for (c, n) in &by_cat { eprintln!("  {c}: {n}"); }
 }
 
 #[test]

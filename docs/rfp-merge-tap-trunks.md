@@ -577,3 +577,437 @@ Per the CLAUDE.md protocol, plus:
   lane-throughput trust on trunk+tapoff topologies generally); the
   general feeder bridge (golden-risky, folds into STEP-3). The goal
   push ends here pending direction.*
+- *2026-07-14 — **walker package #1 (sibling parking) LANDED
+  (6e5be07); a second walker defect uncovered and scoped as #1b.**
+  The active /goal funded the walker fixes as the first bounded
+  lever. Diagnosis confirmed the giveup mechanism precisely: the 21
+  iron-trunk tapoff splitters form a pure dependency CHAIN (each
+  tapoff waits on the previous splitter's continuation; DAG, no
+  cycles), so depth 21 ≫ MAX_RETRIES=3 — a fixed retry budget can
+  never walk a chain. Fix ("parking", Option T): the waiting tile
+  parks as input-ready and the sibling fires both through
+  `splitter_output_rates` when popped; the only remaining give-up
+  is an outer-loop force-resolve (deterministic lowest-coordinate)
+  reached only for true cycles. O(E). Gates: all 21 splitters fire
+  (0 giveups / 0 force-resolves), full suite green and BYTE-STABLE
+  (zero pinned-fixture movement — the STOP zone "movement =
+  giveup-masked mis-model elsewhere" did not trigger), clippy
+  clean. **But the 61 lane-throughput errors did not move**,
+  because firing exposed defect #2: both walkers identify the
+  priority branch by sniffing the segment tag one tile downstream
+  (`segment_is_priority_branch`), and for most merge-tap taps both
+  downstream tiles read `trunk:iron-plate` / `crossing:*` —
+  untagged — so the law falls back 50/50 and the trunk never
+  depletes (last tap inherits ~29.9/s). The splitter ENTITIES carry
+  correct `output_priority` + `loop_priority_rate` (exported
+  blueprints are real priority splitters) — validator mis-model,
+  not a layout defect. **#1b scoped**: derive the priority branch
+  from the entity's own fields via `priority_output_tile` (the
+  structural check's existing geometric mapping — single source),
+  tag-sniff demoted to instrumented fallback; both walkers
+  (belt_flow's `is_priority_branch` verified to share the same
+  defect and the same `splitter_entity` map). This is the design
+  the delta review originally demanded ("no validator reads the
+  real priority fields") — the tag mechanism is now measured
+  fragile in the wild. Expected: 61 → near-zero; honest floor
+  → ~43-47.*
+- *2026-07-14 — **#1b LANDED (618ee0a): 61 → 51, and the residual
+  is a THIRD distinct mechanism, not detection.** Both walkers now
+  read the entity's `output_priority` via the shared
+  `priority_output_tile` (made pub(crate)); tag-sniff demoted to a
+  debug-asserted fallback. Four pre-existing priority-share tests
+  modelled tag-only splitters and tripped the assert — the fallback
+  firing on synthetic fixtures, exactly as predicted — fixed to
+  model real splitters; a new no-tag guard test proves the law
+  fires from `output_priority` alone. Gates: 743/0, byte-stable,
+  clippy clean. **Instrumented finding (one trunk, reverted): the
+  x=90 trunk now DEPLETES correctly (34.45/s → 6.0/s), so #1b
+  works; and injection is a healthy 333/s at 0.62/inserter, so the
+  effective_rows aggregate hypothesis is DEAD.** The remaining 51
+  (all ~29.9/s) are a downstream re-convergence: flow re-gains
+  6 → 14.93 → 44.86/s at a crossing (seg=crossing:85:472), split
+  15.0 left / 29.86 RIGHT — one lane over the 22.5 express cap on
+  near-saturated trunks (each iron trunk ~41/45). The planned
+  21-chain terminus≈2.5 test was correctly NOT written — its
+  prediction was wrong. **#1c funded, diagnosis-only**: classify
+  the 51 — (A) walker conflating surface+UG flows at shared
+  crossing tiles (UGs cannot mix underground → pure attribution
+  artifact) vs (B) genuine sideload merge concentrating one lane
+  (real layout lane-balancing gap → folds into STEP-3) vs (C)
+  other. Entity-level snapshot evidence at ≥3 sites, count per
+  class, priced recommendations; no fixes in-package.*
+- *2026-07-14 — **#1c verdict: the 51 are REAL — class B 51/51,
+  class A REFUTED 0/51.** Entity dump at every one of the 51 error
+  tiles: single surface belt, zero underground, zero overlap. The
+  44.86/s is ONE contiguous physical flow path (x=90 iron trunk
+  y440-473 → East turn → ghost:tap:iron-plate:90:474 x92-105 →
+  row:electronic-circuit:belt-in x108-121) that ACCUMULATES flow
+  (6.0 → 14.93 → 44.86/s) because perpendicular iron belts
+  SURFACE-SIDELOAD onto the trunk. Smoking gun:
+  ghost:tap:iron-plate:89:458 is a surface East belt at (89,458)
+  and (91,458) with the South trunk at (90,458) between them and
+  NO underground — a real merge. Contrast: the UG crossings
+  (crossing:85:464, crossing:85:472) hop correctly and are NOT
+  conflated — the walker handles them right. All 44.86 lands
+  15.0 left / 29.86 RIGHT (sideloads fill one lane — the RFP D3
+  hazard, realized). Contributing: 3 iron FeederBridgeUnbridgeable
+  (spans 17-18 > express UG reach 8) forced surface crossings.
+  **RECORD CORRECTION**: the 2026-07-14 stock-take called the
+  61 lane-throughput "unreliable-walker noise" and the honest
+  floor ~43-47 — measured wrong. 10 of the 61 were walker noise
+  (killed by #1b); the 51 are a genuine layout defect (D3
+  invariant violation). With three walker defects fixed
+  (giveup, detection, and A refuted), the validator is now
+  TRUSTWORTHY on this topology and utility@10/s's honest number
+  is ~98: ~35 junction components + 51 lane over-cap tiles (ONE
+  mechanism, one flow path) + 8 EC↔plastic-bar isolation + 4
+  dead-ends. Priced fixes for the 51: (a) lane-balance the
+  converging path (44.86 < 45 total, so 1→1 inline splitter
+  rebalance clears the cap; moderate); (b) UG-hop/splitter-merge
+  the surface crossings (needs multi-hop UG, spans > reach;
+  expensive). Open follow-up before funding: where was the
+  sideloaded flow SUPPOSED to go — lane-balancing is only correct
+  if the merged destination is legitimate; if the flow is hijacked
+  from a starving consumer, (a) is a band-aid on mis-delivery.*
+- *2026-07-14 — **follow-up verdict: ROUTING, not lane-balancing;
+  package #2 funded.** Traced tap ghost:tap:iron-plate:89:458: it
+  carries 15/s East to AM3 consumers at (107,458)/(108,458)/
+  (110,458) needing 2.5/s each — a consumer tap, not a feeder. Its
+  flow is HIJACKED onto the x=90 trunk at the surface crossing;
+  (91,458)→(105,458) all read 0.00/s and the starvation IS flagged
+  (input-rate-delivery "delivers 0.0/s but machine needs 2.5/s" ×3
+  + inserter-item-throughput ×2 — not a validator gap). An inline
+  1→1 splitter would clear the lane-throughput symptom (epsilon
+  confirmed: threshold = cap + 0.01 = 22.51; 22.43 passes with
+  0.08 headroom) but the 15/s would still ride the wrong trunk and
+  the consumers stay starved — band-aid on mis-delivery, REJECTED.
+  Bonus finding raising the stakes: x=90 already reads 44.86/s at
+  y456, BEFORE the y458 sideload — MULTIPLE adjacent iron taps
+  hijack onto x=90, so the 51 lane-throughput AND a chunk of the
+  input-rate-delivery errors share this one root. **Package #2:
+  two steps, hard gate. STEP A (mechanism-first): why did the
+  router surface-cross — prime suspect a same-item exemption in
+  the bridge machinery (bridge_feeder_under_FOREIGN_trunks); B
+  only if the mechanism is a predicate/exemption shape: same-item
+  tap-vs-adjacent-trunk crossings must UG-hop (span here is one
+  column ≈3 tiles ≪ reach 8; do not regress the 17-18-tile
+  unbridgeable walls' honest dead-ends). Gates: full suite,
+  byte-stability everywhere except utility@10/s (expected to move;
+  junctions must not grow), fresh snapshot for the user's browser
+  eyeball.***
+- *2026-07-14 — **STEP A confirmed the exemption; STEP B v1
+  (column-based) HARD-STOPPED on a native regression; v2
+  (family-identity) funded.** STEP A empirics: is_foreign
+  (ghost_router.rs:199) treats a crossed trunk tile as foreign only
+  on item/module mismatch — tap:89:458 is_mt_tap=TRUE, crosses
+  exactly (90,458)=("iron-plate",0), same item/module → not
+  foreign → surfaced → the #1c hijack. The exemption encoded "same
+  item = my own trunk," TRUE before D1's K-trunks — broken
+  silently by merge-tap. The 3 FeederBridgeUnbridgeable are a
+  separate, already-honest path (foreign different-item walls,
+  refuse at :242). STEP B v1 extended is_foreign with
+  own-trunk-column inequality (lane_trunk_col threaded in; None →
+  old predicate). **Target result — the routing diagnosis proven
+  end-to-end: utility@10/s 98 → 46 total** (lane-throughput 51→0,
+  trunk 44.86→14.93/s under cap; input-rate-delivery 574→563, the
+  11 starved iron consumers now FED; junctions 35→34; UG warnings
+  +1, the new hop). **BUT stress_electronic_circuit_35s_from_ore
+  regressed** (+1 belt-item-isolation, +1 lane-throughput, +1
+  unresolved-junction): that fixture also carries merge-tap lanes,
+  and its taps cross their OWN family's lane-split sibling column —
+  "different column" conflates cross-family crossings (hop
+  correct) with own-family split columns (hop wrong). Agent
+  hard-stopped per brief: no commit, no tweak-and-rerun. **v2
+  funded**: enrich trunk_tile_items with the owning family id
+  (from lane_planner's families, no geometric re-derivation) and
+  test foreignness as family inequality; empirical id-check at
+  both sites BEFORE coding (if merge-tap trunks share a family id,
+  the family test won't discriminate either → STOP); unit test
+  pinning both conflated cases; EC@35s must return byte-identical.*
+- *2026-07-14 — **v2 (family-identity) FALSIFIED at the empirical
+  gate — family ≡ column on this corpus; the discriminator is
+  PHYSICAL. Hop-geometry diagnosis spike funded.** FAMPROBE at
+  every same-item different-column crossing: utility iron K=5
+  trunks cols 86-90 = fams 19/20/21/22/23, all 22 crossings
+  fam_foreign=TRUE; EC@35s copper K=4 trunks cols 3/7/21/22 =
+  fams 1/4/3/2, all 18 crossings ALSO fam_foreign=TRUE — EC@35s's
+  regressing crossings are NOT native lane-splits, they are
+  merge-tap taps crossing sibling merge-tap trunks, structurally
+  identical to utility's. Since merge-tap stamps one family per
+  trunk column (lane_planner:1021-1052), "different family" and
+  "different column" are a bijection on merge-tap tiles — probe
+  shows zero divergence, so the family flip is bit-identical to
+  the column predicate and buys nothing. The v1 post-mortem's
+  "own-family lane-split sibling" theory was WRONG; the identity
+  family of predicates is exhausted. The real question: the same
+  sibling-trunk UG-hop unstarves utility (98→46) but injects
+  belt-item-isolation + unresolved-junction + lane-throughput in
+  EC@35s — a physical difference downstream of foreignness.
+  **Spike funded, diagnosis-only**: entity dumps at one broken
+  EC@35s hop vs one working utility hop; the minimal geometric
+  diff is the discriminator; test (not assert) the
+  adjacent-columns-21/22 hypothesis (utility's 86-90 are all
+  adjacent yet hop cleanly); establish EC@35s's baseline behavior
+  at those crossings (green despite surface-crossing sibling
+  trunks — benign, tolerated, or masked?). Likely v3 shape: a
+  geometric GUARD (hop when the exit validates, refuse-and-keep-
+  surface otherwise — preserves EC@35s baseline, keeps utility's
+  win). STOP if the mechanism implicates junction-solver internals
+  or A* cost shaping. Tree holds column predicate + inert family
+  threading, uncommitted; FAMPROBE to be stripped on next edit.*
+- *2026-07-14 — **hop-geometry spike verdict: NOT the hop — a
+  pre-existing TRACE-GATED LAYOUT RETRY mediates the EC@35s
+  regression. STEP B held on a branch; package #3 (retry
+  determinism) funded.** Deterministic isolation (5 configurations,
+  fresh caches, entity-level): build_bus_layout with IDENTICAL args
+  yields 0 new errors WITHOUT a trace guard and the exact 3 errors
+  WITH one — trace guard necessary and sufficient; SAT budget ruled
+  out (traced fails at 25ms and 2000ms, untraced passes at 1ms).
+  Root cause (verified in code by both agent and lead):
+  run_layout_with_retry_inner (layout.rs:158) scrapes
+  JunctionGrowthCapped events from the thread-local trace collector
+  (peek_events_since :179) to build cap_coords → retry_gaps → a
+  second placement pass — and peek_events_since returns events only
+  while tracing is active, so **retries fire only when observed;
+  build_bus_layout is not a pure function of its arguments**.
+  STEP B's bridge creates a junction that caps in pass 1; under
+  trace the retry re-places the bus (iron-ore trunk shifts to x=20;
+  a new ghost:feeder:copper-plate:3:7 dumps copper onto the iron
+  trunk at (2,7) → belt-item-isolation; (20,46) junction
+  unresolvable; (22,46) over-cap) — trading 4 dead-ends + 88/35
+  warnings for 3 structural errors. Both the e2e harness AND the
+  web app trace (run_e2e_inner; build_bus_layout_streaming guard at
+  layout.rs:747), so both see the retried layout — not a test
+  artifact; only bare library calls get pass 1. The spike's
+  geometric premise (adjacent-columns hypothesis, hop diff) is
+  moot — observability state was the lever, not geometry. TWO
+  problems, both above the bridge: (1) the trace-gated retry
+  (latent determinism bug, pre-existing, affects any bare-library
+  measurement — GitHub issue drafted, filing awaits user approval;
+  draft in session scratchpad); (2) the retry's pass-2 re-placement
+  contaminates (copper onto iron trunk) — diagnosed AFTER (1)
+  lands, when it reproduces uniformly. **Ruling: STEP B + family
+  threading preserved on local branch merge-tap/step-b-hold
+  (98→46 forfeited from main until the retry layers are fixed);
+  package #3 funded** — thread cap coords through layout_pass's
+  return value (trace event kept for the debugger, dropped as
+  control flow); gates: e2e byte-identical (traced behavior
+  unchanged, movement = STOP), untraced unit/region movement
+  listed and explicitly re-blessed (that movement IS the fix),
+  purity regression test traced==untraced where a cap fires.*
+- *2026-07-14 — **STEP B preserved on merge-tap/step-b-hold
+  @ add8754; package #3 LANDED (0f21941) — the retry is
+  observation-independent.** Hold branch: is_foreign encoded as
+  family-inequality (ratified deviation — byte-equivalent to the
+  column predicate per the v2 bijection, self-documenting, keeps
+  the threading live; caveat for the re-land: equivalence holds
+  only while merge-tap stamps one family per trunk column). #3:
+  cap coords carried as data (GhostRouteResult.cap_coords,
+  captured at the solve_crossing None branch) through
+  layout_pass's return; JunctionGrowthCapped still emitted for the
+  debugger but no longer control flow; the collector's only
+  remaining retry-path role is replay/truncate for streaming
+  consumers. Gate results: 44 pre-existing e2e byte-identical
+  (traced path unchanged, as designed), 661 lib green, clippy
+  clean; the behavior change is confined to the UNTRACED path
+  (wasm plain layout()), which now retries identically to the
+  traced one. **Purity-test surprise, resolved**: a public-API
+  test on EC@35s passed pre-fix too — candidate SELECTION masks
+  the impurity there (native wins on error count regardless), so
+  the test was rewritten to drive MergeTapCandidate::produce
+  directly; verified discriminating by checkout-swap (pre-fix
+  untraced 6077 vs traced 6198 entities; post-fix identical).
+  Retry confirmed NOT dead code on main: fires traced on
+  processing_unit_2s_am2 (1 cap), partition scoreboard (2),
+  EC@40s (8). Issue draft updated with the candidate-level
+  reproduction (public API masks on plain main); publication
+  still awaits user approval. NEXT under the goal: diagnose the
+  retry-contamination bug (pass-2 copper-onto-iron) — now
+  uniformly reproducible — then the STEP B re-land decision.*
+- *2026-07-14 — **neutrality mechanism named (case b: selection
+  discards the retried candidate) + mechanism test landed
+  (6d31f6c).** Win probe on EC@35s traced: native 6199 entities
+  accepted=false wins over merge-tap 6198 accepted=TRUE via the
+  validation-error-count tiebreak (decomposition_search.rs:707-723,
+  ties favor native) — the merge-tap candidate runs its full retry
+  (6077→6198, so pass 2 is NOT byte-identical and the gaps are NOT
+  no-ops) and is then discarded wholesale. This is precisely why
+  STEP B produced the first output-changing cap at the public API:
+  STEP B flips merge-tap to the winner, so the retry's effect
+  reaches the final output. Test coverage now: (i)
+  cap_detection_and_retry_gaps_are_trace_independent (lib,
+  6d31f6c) — the whole retry-trigger path untraced; unwritable
+  pre-#3 (the channel didn't exist); (ii)
+  layout_retry_is_trace_independent (e2e, 0f21941) —
+  candidate-level end-to-end, checkout-swap-verified
+  discriminating. Cap detection IS exercisable on plain main (the
+  EC@35s merge-tap candidate caps 11×), so neither test needed
+  STEP B; only the PUBLIC-API end-to-end variant (final selected
+  output traced==untraced) needs merge-tap to win selection —
+  deferred to the STEP B re-land. Gates: 662 lib + 45 e2e green,
+  nothing moved, clippy clean.*
+- *2026-07-14 — **RECORD CORRECTION: the "retry-contamination"
+  framing is FALSIFIED — the retry is a 171→3 improvement; the 3
+  residuals are pre-existing merge-tap bugs, and STEP B is
+  SOUND.** Scratch branch (main + #3 + STEP B), layout_pass called
+  directly, validated error counts across 4 configs: with STEP B —
+  pass 1 (no retry) 171 errors, pass 2 (retry) 3; without STEP B —
+  173 / 5. The retry does exactly its job (resolves 14
+  unresolved-junction + ~155 cascade lane-throughput down to 1+1);
+  earlier entries describing it as "trading dead-ends for 3
+  structural errors" measured only the e2e new-category guard, not
+  validated totals — pass 1 was never clean. Decisive:
+  ghost:feeder:copper-plate:3:7 is BYTE-IDENTICAL in pass 1 and
+  pass 2, present in all four configs — the belt-item-isolation at
+  (3,7)→(2,7) is independent of BOTH the retry and STEP B. What it
+  actually is: a malformed west→south corner at a feeder ENDPOINT
+  wedged in a 1-tile slot between the iron-ore trunk (x1-2) and
+  copper-ore trunk (x4-6): the UG exit at (3,7) faces WEST and
+  emits copper onto the iron trunk at (2,7) instead of turning
+  south into the feeder's own continuation (3,8..3,28). Not a
+  crossing (STEP B's is_foreign correctly removes 2 other
+  residuals, 5→3) but an endpoint. The other residual pair
+  (20,46)+(22,46) is one junction the +1-gap retry didn't fully
+  resolve. **Consequence: the STEP B re-land path is fix the two
+  pre-existing bugs → merge-tap EC@35s goes clean → e2e guard
+  passes → utility lands at 46 on main.** Diagnosis round funded
+  (all diagnosis-only, scratch branch): (1) the (3,7) corner —
+  rendering vs spec-slot vs A*-path, bounded-vs-STEP-3 verdict;
+  (2) the (20,46) junction — same shape as utility's ~34
+  components, or resolvable by an iterated retry (cheap pass-3
+  experiment)?; (3) goal connection: classify utility@10/s's 46
+  residual for both signatures — if the endpoint bug fires there,
+  fixing it moves the goal metric directly. Stock-take follows
+  with everything priced.*
+- *2026-07-14 — **part 3: utility@10/s's 46 classified — ZERO
+  (3,7)-class corners; the residual is three OTHER capability
+  gaps; kind-weighted-selection probe funded as the A-lite
+  re-land path.** With STEP B: 53819 entities, 46 errors = 34
+  unresolved-junction (74%, (20,46)-class junction-solver caps,
+  spread x30-103/y184-689 — the dominant goal lever) + 8
+  belt-item-isolation (ALL EC↔plastic-bar, one cluster x76-80/
+  y500-505, MUTUAL and LONGITUDINAL — head-to-tail merge of two
+  product flows in the same column; a different bug from the
+  (3,7) perpendicular UG-exit dump; the long-carried native
+  mixing signature) + 4 belt-dead-end. Zero lane-throughput —
+  STEP B's routing win holds end-to-end. So the (3,7) endpoint
+  fix is a GATE-unblocker only (EC@35s re-land), not a
+  goal-mover; utility's mass is junction-solver capability. The
+  STEP-3 program now owns four priced items: junction-solver
+  capability [dominant goal lever], EC↔plastic longitudinal
+  merge isolation [goal lever, contamination-kind], trunk-aware
+  feeder placement/balancer origin = (3,7) [gate only],
+  merge-tap-aware lane ordering. **A-lite probe funded
+  (diagnosis/design only)**: kind-weighted candidate selection —
+  contamination-class errors weigh more than starvation-class in
+  count_validation_errors (defensible in-game-severity taxonomy,
+  not tuned-to-pass). If clean: EC@35s keeps picking native (no
+  regression, the (3,7) contamination stays in an unselected
+  candidate exactly as on main today), utility flips to
+  merge-tap at 46, STEP B ships with NO STEP-3 dependency.
+  Probe = design sketch + corpus winner-flip measurement + an
+  honest-check for indefensible higher-total-error picks. If it
+  dies, Path A waits for STEP-3 and the fund-vs-park call goes
+  to the user with everything priced.*
+- *2026-07-14 — **A-lite probe CLEAN — kind-weighted selection is
+  defensible; STEP B re-land package FUNDED with no STEP-3
+  dependency. Separately: the EC↔plastic −8 classified BOUNDED
+  (column-allocation class).** Probe results: taxonomy fixed on
+  Factorio mechanics BEFORE fixture testing — contamination k=3
+  (belt-item-isolation, fluid-network, pipe-isolation,
+  fluid-connectivity, underground-belt-sideload, belt-junction:
+  wrong item propagates downstream), structural highest
+  (entity-overlap, pipe-to-ground: won't import), starvation 1
+  (dead-end, lane-throughput, unresolved-junction,
+  input-rate-delivery, belt-flow-reachability, inserter/power:
+  local, recoverable). Winner-flip with STEP B applied: exactly
+  TWO fixtures reach merge_tap_choice (EC@35s, EC@40s). EC@35s:
+  count picks mergetap (3<4, ships contamination); kind picks
+  native (4 < 2+k=5) — the desired flip, and the ONLY flip.
+  EC@40s: native both rules (13 vs 159). utility@10/s: merge-tap
+  wins under BOTH rules (46/weighted-62 vs 175). k-robustness:
+  integer window k∈[3,17], 15 wide — k=3 comfortably interior,
+  not knife-edge. Honest-check: kind-weighting makes exactly one
+  higher-total pick (EC@35s native 4 over mergetap 3) and it is
+  principled (1 contamination vs 4 pure starvation). **EC↔plastic
+  mechanism (utilv.txt entity dump)**: the EC 12×7 family
+  balancer (cols x74-80) is INTERLEAVED with trunk:plastic-bar
+  (cols x76-82) in overlap cols 76-80 — no shared tile (not
+  entity-overlap), but belts vertically adjacent in-column, so
+  the two items feed head-to-tail. build_protected_balancer_tiles
+  is the WRONG guard (feeds only the crossing-zone SAT solver,
+  junction_solver.rs:1120); trunk rendering happens EARLIER
+  (Step 2) and balancer_origin_x (ghost_router.rs:484) stamps
+  with NO occupancy check. Nothing reserves a family balancer's
+  footprint against a foreign item's trunk. BOUNDED in class
+  (footprint reservation in lane planning) — one diagnosis hop
+  remains to pin the owner (lane_order vs partitioner vs
+  merge-tap lane assignment). **Funded: re-land package** —
+  production classify_errors + kind-weighted merge_tap_choice
+  (ties→native; comment records the severity rationale, the
+  k∈[3,17] window, and that the taxonomy predates the fixtures) +
+  cherry-pick STEP B (adb68a4). Gates: EC@35s/EC@40s
+  byte-identical to main (both pick native, same as today; any
+  movement = STOP), no other e2e movement, clippy, WASM build,
+  scoreboard shifts listed. Expected: utility@10/s on main
+  98 → 46. A-lite instrumentation preserved as
+  scratchpad/alite-instrumentation.patch (ratified deviation;
+  disposable — production code written fresh). The deferred
+  public-API purity test still lacks a fast merge-tap-winning
+  fixture (utility ≈ 15 min) — remains deferred, noted.*
+- *2026-07-14 — **STEP B RE-LANDED (1136147): utility@10/s on main
+  is 46 errors, measured through the shipped pipeline.** One
+  commit (designed/gated/measured as a unit; splitting would leave
+  an ungated intermediate). classify_errors + ErrorKinds with
+  structural encoded lexicographically dominant (ratified: truer
+  than a scalar, untunable, preserves the k-window) + k=3 weighted
+  functional comparison in merge_tap_choice; STEP B cherry-picked
+  byte-identical from adb68a4. Gates all green: 666 lib + 45 e2e,
+  EC@35s/EC@40s byte-identical by golden hash, zero scoreboard
+  shifts, clippy, WASM. Shipped measurement (1550s run):
+  53819 entities, 582×711, 46 errors = 4 belt-dead-end + 8
+  belt-item-isolation (the bounded column-allocation −8) + 34
+  unresolved-junction (the deep junction-solver mass). Arc
+  scorecard for the /goal: utility@10/s 175 (native, arc start)
+  → 108 (merge-tap Phase 1) → 98 (walker fixes) → 46 (re-land) =
+  −74%, with three walker defects and the trace-gated retry fixed
+  on main along the way. Snapshot:
+  target/tmp/snapshot-measure_utility_10s_am3.fls. User eyeball
+  URL: localhost:5173/?item=utility-science-pack&rate=10&machine=
+  assembling-machine-3&in=iron-ore,copper-ore,coal,stone,
+  crude-oil,water. NEXT: the −8 diagnosis hop (lane-planning owner
+  of the balancer/trunk column overlap), then the remaining 34
+  junctions are the priced STEP-3 fund-vs-park decision.*
+- *2026-07-14 — **−8 diagnosis: owner is the lane_planner column
+  cursor; the fix is a bounded-but-corpus-wide REFLOW. Goal push
+  CLOSES here — every remaining lever priced, decisions to the
+  user.** From the shipped snapshot: the EC family holds 7 lanes
+  (x69-75) but its (12,7) balancer template is width 12 — outputs
+  at dx 0-6, input row dx 0-11 — so the balancer overhangs 5
+  unreserved columns right (x76-80), and trunk:plastic-bar
+  (x76-82) is packed straight through them (full-height, y84-697,
+  crossing the balancer band y499-517). Owner: plan_bus_lanes
+  x-assignment (lane_planner.rs:451-457) — `lane.x = (i+1)+extra`
+  reserves lane COUNT, never balancer WIDTH; the spacer passes
+  only handle perimeter-surplus and fluid adjacency. NOT
+  lane_order (its soft +100 input-tile penalty is the existing,
+  insufficient mitigation — only one family can be rightmost),
+  NOT the partitioner or merge-tap lane assignment (they set the
+  shape, not the packing); a native (12,7) next to a foreign
+  trunk overlaps identically — merge-tap surfaced a general
+  Pooled gap. Priced fix: per-family left/right pad columns from
+  the template's output-tile extent at cursor time. HONEST
+  pricing: widens the bus for every family whose balancer exceeds
+  its lane count → corpus-wide column reflow + intentional golden
+  regeneration; mechanical and deterministic, but a quality
+  tradeoff (bus width vs the 8 contamination errors) and
+  agent-recommendation is NOT to shrink to a
+  widen-only-on-conflict variant (conditional complexity, still
+  reflows the conflicting fixtures). **Close-out decision menu
+  (user)**: (1) fund the reflow unit → utility 46→38, wider bus,
+  golden regen; (2) fund junction-solver capability → the 34,
+  deep program; (3) the 4 dead-ends, undiagnosed, small; (4)
+  publish the trace-gated-retry issue (draft ready); (5) browser
+  eyeball of utility@10/s; (6) inserter-sizing KC5 in-game
+  anchors (still open from that RFP). The /goal push ends with
+  utility@10/s at 46 on main: 175 → 108 → 98 → 46.*

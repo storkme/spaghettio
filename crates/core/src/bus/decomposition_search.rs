@@ -435,15 +435,76 @@ fn compute_overproduction(solver_result: &SolverResult) -> f64 {
     total
 }
 
-/// Total `Severity::Error` count from a full validation pass. Used only by
-/// the scoped Pooled merge-tap decision in `select_best_decomposition`: when
-/// native leaves an unstampable shape, native and the merge-tap fallback are
-/// compared by this metric and the strictly-lower one wins (ties favour
-/// native). Deliberately kept out of the common `score_layout` path — every
-/// accepted layout (all goldens, the bulk of the stress corpus) then pays no
-/// extra validation cost, and `validate()`'s terminal `ValidationCompleted`
-/// trace event never perturbs those already-blessed trace streams.
-fn count_validation_errors(layout: &LayoutResult, solver_result: &SolverResult) -> usize {
+/// Contamination is weighted this many starvation units in the merge-tap-vs-
+/// native decision (see [`ErrorKinds`]). `3` sits inside a robust `[3, 17]`
+/// window on the merge-tap corpus (see `contamination_weight_window` test):
+/// electronic-circuit@35/s stays native for any integer weight `> 2`, and
+/// utility-science-pack@10/s flips to merge-tap for any weight `< 18`.
+const KIND_CONTAMINATION_WEIGHT: usize = 3;
+
+/// `Severity::Error` count from a full validation pass, split by in-game
+/// severity CLASS rather than counted flat. The classes are ranked by how the
+/// defect behaves in a running factory, not by how many there are:
+///
+/// - **structural** (`entity-overlap`, `pipe-to-ground`) — the exported
+///   blueprint is invalid and will not import at all. Categorically worse than
+///   any number of functional defects, so it dominates the comparison
+///   lexicographically (a candidate with one structural error loses to one
+///   with fifty functional ones — the latter at least imports and can be
+///   patched).
+/// - **contamination** (`belt-item-isolation`, `fluid-network`,
+///   `pipe-isolation`, `fluid-connectivity`, `underground-belt-sideload`,
+///   `belt-junction`) — a wrong item/fluid reaches a shared belt/pipe. It jams
+///   and PROPAGATES downstream, poisoning the sink; a single one can stall a
+///   whole branch. Weighted [`KIND_CONTAMINATION_WEIGHT`]× starvation.
+/// - **starvation** (everything else: `belt-dead-end`, `lane-throughput`,
+///   `unresolved-junction`, `input-rate-delivery`, `belt-flow-reachability`,
+///   inserter/power) — a LOCAL underdelivery that stays put and is recoverable
+///   (add a belt, widen a lane). Weight 1.
+///
+/// This taxonomy was fixed on Factorio propagation semantics BEFORE it was
+/// measured against the fixtures it decides — it is not tuned to pass them.
+/// The decision it drives: on electronic-circuit@35/s the merge-tap candidate
+/// trades 2 starvation dead-ends for 1 contamination (copper-plate sideloaded
+/// onto the iron trunk), so it has fewer errors by COUNT (3 < 4) but is worse
+/// by KIND, and native is kept; on utility-science-pack@10/s merge-tap's
+/// contamination is dwarfed by native's error mass and it wins under both.
+///
+/// Deliberately kept out of the common `score_layout` path — every accepted
+/// layout (all goldens, the bulk of the stress corpus) then pays no extra
+/// validation cost, and `validate()`'s terminal `ValidationCompleted` trace
+/// event never perturbs those already-blessed trace streams.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ErrorKinds {
+    contamination: usize,
+    starvation: usize,
+    structural: usize,
+}
+
+impl ErrorKinds {
+    /// Weighted functional-error total at a given contamination weight.
+    /// Excludes structural (handled lexicographically in `quality_key`).
+    fn weighted_functional(&self, contamination_weight: usize) -> usize {
+        contamination_weight * self.contamination + self.starvation
+    }
+
+    /// Lexicographic quality key, lower is better: structural dominates (an
+    /// unimportable blueprint is worse than any functional defect), then the
+    /// weighted functional total breaks ties within equal structural.
+    fn quality_key(&self) -> (usize, usize) {
+        (
+            self.structural,
+            self.weighted_functional(KIND_CONTAMINATION_WEIGHT),
+        )
+    }
+}
+
+/// Classify a candidate layout's `Severity::Error` issues into the three
+/// [`ErrorKinds`] classes. Used only by the scoped Pooled merge-tap decision
+/// in `select_best_decomposition`: when native leaves an unstampable shape,
+/// native and the merge-tap fallback are compared by `quality_key` and the
+/// strictly-lower one wins (ties favour native).
+fn classify_errors(layout: &LayoutResult, solver_result: &SolverResult) -> ErrorKinds {
     let issues = match crate::validate::validate(
         layout,
         Some(solver_result),
@@ -452,10 +513,21 @@ fn count_validation_errors(layout: &LayoutResult, solver_result: &SolverResult) 
         Ok(issues) => issues,
         Err(e) => e.issues,
     };
-    issues
+    let mut kinds = ErrorKinds::default();
+    for i in issues
         .iter()
         .filter(|i| i.severity == crate::validate::Severity::Error)
-        .count()
+    {
+        match i.category.as_str() {
+            "belt-item-isolation" | "fluid-network" | "pipe-isolation"
+            | "fluid-connectivity" | "underground-belt-sideload" | "belt-junction" => {
+                kinds.contamination += 1
+            }
+            "entity-overlap" | "pipe-to-ground" => kinds.structural += 1,
+            _ => kinds.starvation += 1,
+        }
+    }
+    kinds
 }
 
 /// Score a candidate's layout. Returns the soft score plus the input
@@ -694,10 +766,13 @@ pub fn select_best_decomposition(
     };
 
     // Scoped Native-vs-merge-tap decision, resolved here while the sink is
-    // still detached. Metric: total validation-error count; ties favour
-    // Native (`NATIVE_IDX`). This is deliberately *not* the accepted-by-score
-    // path below — an accepted merge-tap layout with more errors than an
-    // unaccepted Native still loses. `count_validation_errors` runs
+    // still detached. Metric: kind-weighted error quality (`ErrorKinds::
+    // quality_key`), not a flat count — a merge-tap layout with FEWER total
+    // errors than native can still lose if the difference is contamination
+    // (which propagates) traded for starvation (which stays local). Ties
+    // favour Native (`NATIVE_IDX`). This is deliberately *not* the accepted-
+    // by-score path below — an accepted merge-tap layout that is worse by kind
+    // than an unaccepted Native still loses. `classify_errors` runs
     // `validate()`, which emits a `ValidationCompleted` event per call;
     // peek/truncate drops both so they never reach the winner's replayed
     // stream. `None` when merge-tap didn't run — the generic selection then
@@ -706,14 +781,14 @@ pub fn select_best_decomposition(
     const MERGE_TAP_IDX: usize = 3;
     let merge_tap_choice: Option<usize> = merge_tap_run.outcome.as_ref().map(|(mt_layout, _)| {
         let start = crate::trace::peek_events_len();
-        let mergetap_err = count_validation_errors(mt_layout, solver_result);
-        let native_err = native_run
+        let mergetap_kinds = classify_errors(mt_layout, solver_result);
+        let native_kinds = native_run
             .outcome
             .as_ref()
-            .map(|(l, _)| count_validation_errors(l, solver_result));
+            .map(|(l, _)| classify_errors(l, solver_result));
         crate::trace::truncate_events(start);
-        match native_err {
-            Some(n_err) if mergetap_err < n_err => MERGE_TAP_IDX,
+        match native_kinds {
+            Some(n) if mergetap_kinds.quality_key() < n.quality_key() => MERGE_TAP_IDX,
             Some(_) => NATIVE_IDX,
             // The gate above requires an unstampable *Native layout*, so this
             // arm is unreachable in practice; if Native somehow produced
@@ -947,5 +1022,81 @@ mod tests {
             out.is_err(),
             "merge-tap candidate must refuse non-Pooled strategies; got {out:?}"
         );
+    }
+
+    // ---- kind-weighted merge-tap-vs-native decision -------------------------
+    // These exercise the pure comparison (`ErrorKinds::quality_key`) with the
+    // real fixtures' measured kind splits as synthetic inputs, so they carry no
+    // slow layout work. The merge-tap winner gate is a strict `<` with ties to
+    // native, so "native selected" == `!(mergetap.quality_key() < native.…)`.
+
+    /// electronic-circuit@35/s-from-ore with STEP B: native is 4 starvation
+    /// dead-ends; merge-tap trades 2 of them for 1 contamination (copper-plate
+    /// sideloaded onto the iron trunk). Count picks merge-tap (3 < 4); kind
+    /// keeps native, because contamination propagates and dead-ends stay local.
+    #[test]
+    fn kind_keeps_ec35_native_despite_lower_count() {
+        let native = ErrorKinds { contamination: 0, starvation: 4, structural: 0 };
+        let mergetap = ErrorKinds { contamination: 1, starvation: 2, structural: 0 };
+        // Merge-tap is cheaper by flat count (1+2 = 3 < 4) — the old metric.
+        assert!(
+            mergetap.contamination + mergetap.starvation
+                < native.contamination + native.starvation
+        );
+        // …but worse by kind, so native must win.
+        assert!(
+            native.quality_key() < mergetap.quality_key(),
+            "native must win by kind (native {:?} vs merge-tap {:?})",
+            native.quality_key(),
+            mergetap.quality_key(),
+        );
+    }
+
+    /// utility-science-pack@10/s: native ~175 total errors, merge-tap 46
+    /// (8 contamination from the balancer/trunk interleave + 38 starvation).
+    /// Merge-tap wins under both count and kind — native's error mass dwarfs
+    /// the contamination penalty.
+    #[test]
+    fn kind_flips_utility_to_merge_tap() {
+        let native = ErrorKinds { contamination: 0, starvation: 175, structural: 0 };
+        let mergetap = ErrorKinds { contamination: 8, starvation: 38, structural: 0 };
+        assert!(
+            mergetap.quality_key() < native.quality_key(),
+            "merge-tap must win by kind (merge-tap {:?} vs native {:?})",
+            mergetap.quality_key(),
+            native.quality_key(),
+        );
+    }
+
+    /// A structural error (invalid, unimportable blueprint) loses to any number
+    /// of functional errors — the lexicographic structural term dominates.
+    #[test]
+    fn structural_dominates_functional() {
+        let importable = ErrorKinds { contamination: 50, starvation: 50, structural: 0 };
+        let unimportable = ErrorKinds { contamination: 0, starvation: 0, structural: 1 };
+        assert!(importable.quality_key() < unimportable.quality_key());
+    }
+
+    /// The contamination weight must land inside `[3, 17]`: below 3, EC@35s
+    /// stops being a strict native win (k=2 ties); at/above 18, utility flips
+    /// back to native. Both bounds are checked directly against the fixtures'
+    /// weighted functional totals.
+    #[test]
+    fn contamination_weight_window() {
+        let ec_native = ErrorKinds { contamination: 0, starvation: 4, structural: 0 };
+        let ec_mergetap = ErrorKinds { contamination: 1, starvation: 2, structural: 0 };
+        let util_native = ErrorKinds { contamination: 0, starvation: 175, structural: 0 };
+        let util_mergetap = ErrorKinds { contamination: 8, starvation: 38, structural: 0 };
+
+        // k=2: EC ties (both 4) → native only by the strict-`<` tiebreak.
+        assert_eq!(ec_native.weighted_functional(2), ec_mergetap.weighted_functional(2));
+        // k=3 (lower window bound): EC native strictly wins.
+        assert!(ec_native.weighted_functional(3) < ec_mergetap.weighted_functional(3));
+        // k=17 (upper window bound): utility still merge-tap (174 < 175)…
+        assert!(util_mergetap.weighted_functional(17) < util_native.weighted_functional(17));
+        // …k=18 flips it back to native (182 > 175), so 17 is the last good weight.
+        assert!(util_mergetap.weighted_functional(18) > util_native.weighted_functional(18));
+        // The production weight is inside the window.
+        assert!((3..=17).contains(&KIND_CONTAMINATION_WEIGHT));
     }
 }
