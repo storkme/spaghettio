@@ -6447,3 +6447,83 @@ fn fulgora_scrap_sorter_mechanism_present() {
     let boundary = validate::sushi::check_sushi_boundary(&layout);
     assert!(boundary.is_empty(), "sushi boundary leak: {boundary:?}");
 }
+
+// ---------------------------------------------------------------------------
+// Census snapshot regeneration (RFP `docs/rfp-power-supply.md` Phase 0d)
+// ---------------------------------------------------------------------------
+//
+// The 6 `census_*_science_pack` snapshots in the pole census
+// (`scripts/pole-census-2026-07-19.json`) originally came from an
+// uncommitted scratchpad dump script — there was no committed command to
+// regenerate them. This #[ignore]d test IS that command. The other 39
+// census snapshots are e2e/stress test functions that already dump under
+// `SPAGHETTIO_DUMP_SNAPSHOTS=1`, so together these regenerate all 45:
+//
+//   # 39 e2e/stress snapshots:
+//   SPAGHETTIO_DUMP_SNAPSHOTS=1 cargo test --manifest-path crates/core/Cargo.toml \
+//       --test e2e
+//   # 6 science-pack census snapshots:
+//   SPAGHETTIO_DUMP_SNAPSHOTS=1 cargo test --manifest-path crates/core/Cargo.toml \
+//       --test e2e -- --ignored census_science_pack_snapshots --nocapture
+//
+// Pack list, machine tiers, rate, and Nauvis input set are kept identical to
+// the `science_gauntlet` measurement test (crates/core/tests/science_gauntlet.rs)
+// so the census reproduces the same layouts the RFP measured. The snapshot
+// file names (`snapshot-census_<pack>_science_pack.fls`) match the census
+// `path` fields exactly.
+//
+// Also prints a per-pack validation-issue breakdown, so this doubles as the
+// warning-population probe for the corpus subset that actually exercises the
+// Phase 0b widened power/fluid validators (foundry/centrifuge/recycler; the
+// census confirms cryogenic-plant/electromagnetic-plant appear in zero
+// cases).
+#[test]
+#[ignore = "census snapshot regeneration — run with --ignored and SPAGHETTIO_DUMP_SNAPSHOTS=1"]
+fn census_science_pack_snapshots() {
+    // (pack, machine) — mirrors science_gauntlet::science_gauntlet's cases.
+    let packs: &[(&str, &str)] = &[
+        ("automation-science-pack", "assembling-machine-1"),
+        ("logistic-science-pack", "assembling-machine-2"),
+        ("military-science-pack", "assembling-machine-2"),
+        ("chemical-science-pack", "assembling-machine-2"),
+        ("production-science-pack", "assembling-machine-3"),
+        ("utility-science-pack", "assembling-machine-3"),
+    ];
+    let nauvis: FxHashSet<String> = ["iron-ore", "copper-ore", "coal", "stone", "crude-oil", "water"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+    eprintln!("\n=== census_science_pack_snapshots: per-pack validation breakdown ===");
+    for (pack, machine) in packs {
+        let test_name = format!("census_{}", pack.replace('-', "_"));
+        // Note: pack names already end in "_science_pack" once hyphens →
+        // underscores, so the snapshot lands at
+        // snapshot-census_<pack>_science_pack.fls.
+        let result = run_e2e(&test_name, pack, 1.0, machine, None, &nauvis)
+            .unwrap_or_else(|e| panic!("census {pack}: {e}"));
+
+        let mut by_cat: std::collections::BTreeMap<(&str, &str), usize> = Default::default();
+        for i in &result.issues {
+            let sev = match i.severity {
+                Severity::Error => "error",
+                Severity::Warning => "warning",
+            };
+            *by_cat.entry((sev, i.category.as_str())).or_default() += 1;
+        }
+        eprintln!(
+            "  {:<28} {:>4} entities  {}x{}",
+            pack,
+            result.layout.entities.len(),
+            result.layout.width,
+            result.layout.height,
+        );
+        if by_cat.is_empty() {
+            eprintln!("      (clean — 0 issues)");
+        } else {
+            for ((sev, cat), n) in &by_cat {
+                eprintln!("      {sev}: {cat} × {n}");
+            }
+        }
+    }
+}
