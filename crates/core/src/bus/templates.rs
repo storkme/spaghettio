@@ -42,6 +42,44 @@ fn output_dir(output_east: bool) -> EntityDirection {
     if output_east { EntityDirection::East } else { EntityDirection::West }
 }
 
+/// Emit a continuous south-face fluid-output pipe row for a solid-in/fluid-out
+/// machine and register the machine's real south output-port columns (from the
+/// shared table) as bus tap points.
+///
+/// Shared by `single_input_row`, `dual_input_row`, and `fluid_dual_input_row`
+/// (RFP `docs/rfp-power-supply.md` Phase 0e-i): the pipe-emission geometry is
+/// the one thing those three fluid-output arms have in common; the per-template
+/// dispatch (row shape, where `out_y` sits) stays in each template. `mirror`/
+/// `dir` are the machine's placement orientation, so the registered columns
+/// match the ports for a mirrored foundry (dx 1,3) or an unmirrored
+/// chemical-plant/biochamber (dx 0,2).
+fn emit_fluid_output_row(
+    entities: &mut Vec<PlacedEntity>,
+    ports: &mut Vec<(String, i32, i32)>,
+    machine_entity: &str,
+    mirror: bool,
+    dir: EntityDirection,
+    mx: i32,
+    out_y: i32,
+    msz: i32,
+    output_item: &str,
+    seg: &Option<String>,
+) {
+    for dx in 0..msz {
+        entities.push(PlacedEntity {
+            name: "pipe".to_string(),
+            x: mx + dx,
+            y: out_y,
+            carries: Some(output_item.to_string()),
+            segment_id: seg.clone(),
+            ..Default::default()
+        });
+    }
+    for dx in crate::fluid_ports::south_output_dxs(machine_entity, mirror, dir, msz) {
+        ports.push((output_item.to_string(), mx + dx, out_y));
+    }
+}
+
 /// Number of tiles to drop from the east end of the last machine's belt stamp.
 ///
 /// A belt tile is "orphan" when it sits east of every inserter that picks from
@@ -611,27 +649,20 @@ pub fn single_input_row(
         // machine-to-machine connectivity and a clean run to the bus trunk.
         // Mirrors `fluid_dual_input_row`'s fluid-output arm.
         if output_is_fluid {
-            for dx in 0..msz {
-                entities.push(PlacedEntity {
-                    name: "pipe".to_string(),
-                    x: mx + dx,
-                    y: out_ins_y,
-                    carries: Some(output_item.to_string()),
-                    segment_id: belt_out_seg.clone(),
-                    ..Default::default()
-                });
-            }
-            // Register the actual south-face output-port columns from the
-            // shared table (chemical-plant / biochamber: dx 0 and 2) so the
-            // ghost router taps the right tiles.
-            for dx in crate::fluid_ports::south_output_dxs(
+            // chemical-plant / biochamber are placed north/unmirrored (their
+            // fluid outputs are already on the south face).
+            emit_fluid_output_row(
+                &mut entities,
+                &mut fluid_output_port_pipes,
                 machine_entity,
                 false,
                 EntityDirection::North,
+                mx,
+                out_ins_y,
                 msz,
-            ) {
-                fluid_output_port_pipes.push((output_item.to_string(), mx + dx, out_ins_y));
-            }
+                output_item,
+                &belt_out_seg,
+            );
             continue;
         }
 
@@ -779,6 +810,14 @@ pub fn dual_input_row(
     x_offset: i32,
     input_items: (&str, &str),
     output_item: &str,
+    // When true, the recipe's output is a fluid with no solid product
+    // (foundry molten-iron/molten-copper: ore + calcite -> molten metal). The
+    // solid output inserter + belt are replaced by a south-face fluid output
+    // pipe row (RFP `docs/rfp-power-supply.md` Phase 0e-i item 4). The foundry
+    // is placed mirror=true so its outputs sit on that south face. Strictly
+    // gated: `output_is_fluid == false` is byte-identical to the pre-0e-i
+    // template.
+    output_is_fluid: bool,
     input_belts: (&str, &str),
     output_belt: &str,
     lane_split: bool,
@@ -787,7 +826,7 @@ pub fn dual_input_row(
     near_rate: f64,
     output_rate: f64,
     max_inserter_tier: InserterTier,
-) -> (Vec<PlacedEntity>, i32) {
+) -> (Vec<PlacedEntity>, i32, Vec<(String, i32, i32)>) {
     debug_assert_eq!(
         crate::common::machine_dims(machine_entity),
         (machine_size, machine_size),
@@ -797,6 +836,7 @@ pub fn dual_input_row(
     let pitch = msz;
     let row_height = msz + 5;
     let mut entities = Vec::new();
+    let mut fluid_output_port_pipes: Vec<(String, i32, i32)> = Vec::new();
 
     let (input1, input2) = input_items;
     let (belt1, belt2) = input_belts;
@@ -808,7 +848,9 @@ pub fn dual_input_row(
     let inserter_out_seg = Some(format!("row:{recipe}:inserter-out"));
     let belt_out_seg = Some(format!("row:{recipe}:belt-out"));
 
-    let lane_split = lane_split && machine_count >= 2;
+    // Fluid output has no belt to split across (and no bridge), same as the
+    // single/fluid-dual input rows' fluid arms.
+    let lane_split = lane_split && machine_count >= 2 && !output_is_fluid;
     // Strategy A: pack tight, shift anchor's output inserter, inline bridge.
     let mxs: Vec<i32> = (0..machine_count as i32).map(|i| x_offset + i * pitch).collect();
     let last_mx = *mxs.last().expect("machine_count >= 1");
@@ -945,21 +987,45 @@ pub fn dual_input_row(
         );
         emit_shortfall_trace(recipe, false, near_rate, &near_plan, mx, y_offset + 3, far_wins);
 
-        // Machine
+        // Machine — placed at its north-input orientation so a fluid-output
+        // foundry's outputs sit on the south face (mirror=true); unchanged
+        // (north/unmirrored) for the solid-output 3x3 assemblers.
+        let (machine_mirror, machine_dir) =
+            crate::fluid_ports::north_input_orientation(machine_entity);
         entities.push(PlacedEntity {
             name: machine_entity.to_string(),
             x: mx,
             y: y_offset + 3,
-            direction: EntityDirection::North,
+            direction: machine_dir,
+            mirror: machine_mirror,
             recipe: Some(recipe.to_string()),
             segment_id: machine_seg.clone(),
             ..Default::default()
         });
 
+        let out_ins_y = y_offset + 3 + msz;
+        if output_is_fluid {
+            // Fluid output: a south pipe row at the machine's south output face
+            // (out_ins_y == machine_bottom + 1), replacing the solid output
+            // inserter + belt. lane_split is already forced off above.
+            emit_fluid_output_row(
+                &mut entities,
+                &mut fluid_output_port_pipes,
+                machine_entity,
+                machine_mirror,
+                machine_dir,
+                mx,
+                out_ins_y,
+                msz,
+                output_item,
+                &belt_out_seg,
+            );
+            continue;
+        }
+
         // Output — ladder-sized, single_input_row-output-shaped: baseline
         // shifts to `mx` at the bridge anchor, extra picks exclude the
         // bridge's own columns.
-        let out_ins_y = y_offset + 3 + msz;
         let is_anchor = Some(i) == bridge_anchor;
         let out_baseline_dx = if is_anchor { 0 } else { 1 };
         let mut out_occupied = vec![out_baseline_dx];
@@ -1014,7 +1080,7 @@ pub fn dual_input_row(
         );
     }
 
-    (entities, row_height)
+    (entities, row_height, fluid_output_port_pipes)
 }
 
 /// HorizontalStack variant of `dual_input_row` — see
@@ -2662,30 +2728,22 @@ pub fn fluid_dual_input_row(
 
         // Output row
         if output_is_fluid {
-            // Continuous pipe row one tile south of the machine spanning the
-            // full machine width. Adjacent machines' rows abut, giving
-            // machine-to-machine connectivity and a clean run out to the bus
-            // trunk for downstream consumers.
-            for dx in 0..msz {
-                entities.push(PlacedEntity {
-                    name: "pipe".to_string(),
-                    x: mx + dx,
-                    y: output_y,
-                    carries: Some(output_item.to_string()),
-                    segment_id: belt_out_seg.clone(),
-                    ..Default::default()
-                });
-            }
-            // Register the machine's actual south output-port columns from the
-            // shared table (chemical-plant: dx 0,2; mirrored cryo: 0,2,4).
-            for dx in crate::fluid_ports::south_output_dxs(
+            // Continuous pipe row one tile south of the machine; registers the
+            // machine's real south output-port columns (chemical-plant: dx 0,2;
+            // mirrored cryo: 0,2,4). Adjacent machines' rows abut for
+            // machine-to-machine connectivity and a clean run to the bus trunk.
+            emit_fluid_output_row(
+                &mut entities,
+                &mut fluid_output_port_pipes,
                 machine_entity,
                 machine_mirror,
                 machine_dir,
+                mx,
+                output_y,
                 msz,
-            ) {
-                fluid_output_port_pipes.push((output_item.to_string(), mx + dx, output_y));
-            }
+                output_item,
+                &belt_out_seg,
+            );
         } else {
             // Solid output — ladder-sized, single_input_row-output-shaped:
             // baseline shifts to `mx` at the bridge anchor, extra picks
@@ -5603,7 +5661,7 @@ mod tests {
 
     #[test]
     fn dual_input_row_basic() {
-        let (entities, height) = dual_input_row(
+        let (entities, height, _) = dual_input_row(
             "electronic-circuit",
             "assembling-machine-3",
             3,
@@ -5612,6 +5670,7 @@ mod tests {
             0,
             ("copper-cable", "iron-plate"),
             "electronic-circuit",
+            false, // output_is_fluid (Phase 0e-i item 4)
             ("transport-belt", "transport-belt"),
             "transport-belt",
             false,
@@ -5675,7 +5734,7 @@ mod tests {
         // long-handed inserter (1.2/s) already covers 1.0/s, so it stays
         // at count=1 (cheapest-sufficient, not "hardcoded" — Phase 3's
         // far ladder is active, it just doesn't need to escalate here).
-        let (entities, _) = dual_input_row(
+        let (entities, _, _) = dual_input_row(
             "electronic-circuit",
             "assembling-machine-3",
             3,
@@ -5684,6 +5743,7 @@ mod tests {
             0,
             ("copper-cable", "iron-plate"),
             "electronic-circuit",
+            false, // output_is_fluid (Phase 0e-i item 4)
             ("transport-belt", "transport-belt"),
             "transport-belt",
             false,
@@ -5710,7 +5770,7 @@ mod tests {
         // 2 machines: a lone machine is always LastInRow, where the far
         // belt itself is trimmed and far is never eligible for the
         // contested column — checked on machine 0 (Interior, mx=0).
-        let (entities, _) = dual_input_row(
+        let (entities, _, _) = dual_input_row(
             "electronic-circuit",
             "assembling-machine-3",
             3,
@@ -5719,6 +5779,7 @@ mod tests {
             0,
             ("copper-cable", "iron-plate"),
             "electronic-circuit",
+            false, // output_is_fluid (Phase 0e-i item 4)
             ("transport-belt", "transport-belt"),
             "transport-belt",
             false,
@@ -5743,7 +5804,7 @@ mod tests {
 
     #[test]
     fn dual_input_row_output_upgrades_to_fast() {
-        let (entities, _) = dual_input_row(
+        let (entities, _, _) = dual_input_row(
             "electronic-circuit",
             "assembling-machine-3",
             3,
@@ -5752,6 +5813,7 @@ mod tests {
             0,
             ("copper-cable", "iron-plate"),
             "electronic-circuit",
+            false, // output_is_fluid (Phase 0e-i item 4)
             ("transport-belt", "transport-belt"),
             "transport-belt",
             false,
@@ -5769,7 +5831,7 @@ mod tests {
     fn dual_input_row_max_tier_regular_never_places_fast_or_stack() {
         // Regular-capped: even a high near rate must degrade to
         // best-effort regular, never escalate past the user's cap.
-        let (entities, _) = dual_input_row(
+        let (entities, _, _) = dual_input_row(
             "electronic-circuit",
             "assembling-machine-3",
             3,
@@ -5778,6 +5840,7 @@ mod tests {
             0,
             ("copper-cable", "iron-plate"),
             "electronic-circuit",
+            false, // output_is_fluid (Phase 0e-i item 4)
             ("transport-belt", "transport-belt"),
             "transport-belt",
             false,
@@ -5796,7 +5859,7 @@ mod tests {
         // 4 machines, Strategy A (tight pack, inline shift): machines
         // at x=0, 3, 6, 9. Anchor index = (4-1)/2 = 1 → mx_anchor = 3.
         // Bridge cols [4, 7).
-        let (entities, _) = dual_input_row(
+        let (entities, _, _) = dual_input_row(
             "electronic-circuit",
             "assembling-machine-3",
             3,
@@ -5805,6 +5868,7 @@ mod tests {
             0,
             ("copper-cable", "iron-plate"),
             "electronic-circuit",
+            false, // output_is_fluid (Phase 0e-i item 4)
             ("transport-belt", "transport-belt"),
             "transport-belt",
             true,
@@ -5845,7 +5909,7 @@ mod tests {
         // Regression: belts east of the last inserter pickup/drop must not be
         // stamped. Dual-input row at mx=10, msz=3: long-handed picks at mx=10,
         // regular at mx+2=12, output drop at mx+1=11.
-        let (entities, _) = dual_input_row(
+        let (entities, _, _) = dual_input_row(
             "electronic-circuit",
             "assembling-machine-3",
             3,
@@ -5854,6 +5918,7 @@ mod tests {
             10,  // x_offset
             ("copper-cable", "iron-plate"),
             "electronic-circuit",
+            false, // output_is_fluid (Phase 0e-i item 4)
             ("transport-belt", "transport-belt"),
             "transport-belt",
             false,
@@ -5881,7 +5946,7 @@ mod tests {
     fn east_flow_output_tail_preserved_dual_input_row() {
         // When output flows EAST, tiles east of the drop are on the path to
         // the output merger — they must NOT be trimmed.
-        let (entities, _) = dual_input_row(
+        let (entities, _, _) = dual_input_row(
             "electronic-circuit",
             "assembling-machine-3",
             3,
@@ -5890,6 +5955,7 @@ mod tests {
             10,
             ("copper-cable", "iron-plate"),
             "electronic-circuit",
+            false, // output_is_fluid (Phase 0e-i item 4)
             ("transport-belt", "transport-belt"),
             "transport-belt",
             false,

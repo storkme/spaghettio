@@ -1158,7 +1158,7 @@ pub(crate) fn build_one_row(
                     reassign_near_far(item0, item0_rate, item1, item1_rate);
                 let in_belt1 = row_input_belt(max_belt_tier);
                 let in_belt2 = row_input_belt(max_belt_tier);
-                let (ents, rh) = templates::dual_input_row(
+                let (ents, rh, out_port_pipes) = templates::dual_input_row(
                     &spec.recipe,
                     &spec.entity,
                     msz,
@@ -1167,6 +1167,7 @@ pub(crate) fn build_one_row(
                     bus_width,
                     (far_item, near_item),
                     output_item,
+                    output_is_fluid,
                     (in_belt1, in_belt2),
                     out_belt,
                     lane_split,
@@ -1176,6 +1177,7 @@ pub(crate) fn build_one_row(
                     output_rate_pm,
                     max_inserter_tier,
                 );
+                fluid_output_port_pipes = out_port_pipes;
                 // Positional (far=y_cursor, near=y_cursor+1) mapped back to
                 // `solid_inputs`' natural order by item identity, since
                 // reassignment may have swapped which physical belt each
@@ -1185,7 +1187,15 @@ pub(crate) fn build_one_row(
                     .iter()
                     .map(|f| if f.item == far_item { y_cursor } else { y_cursor + 1 })
                     .collect();
-                let out_y = y_cursor + rh - 1;
+                // Fluid output: the row's output is the south pipe row at
+                // out_ins_y (y_cursor+3+msz), not a belt at rh-1 — there's no
+                // east output belt/merger for it (the fluid reaches the bus via
+                // `fluid_output_port_pipes`). Mirrors FluidDualInput.
+                let out_y = if output_is_fluid {
+                    y_cursor + 3 + msz as i32
+                } else {
+                    y_cursor + rh - 1
+                };
                 (ents, rh, input_ys, out_y)
             }
         }
