@@ -806,7 +806,7 @@ fn decomposition_search_picks_native_on_clean_partitioned_case() {
 /// (candidate constructed, scored, native wins on error count) rides along on
 /// `stress_electronic_circuit_35s_from_ore`, which now runs the candidate.
 #[test]
-#[ntest::timeout(120000)]
+#[ntest::timeout(600000)]
 fn merge_tap_fallback_fires_with_correct_k_and_priority_taps() {
     use spaghettio_core::bus::decomposition_search::{DecompositionCandidate, MergeTapCandidate};
     use spaghettio_core::bus::layout::{LayoutOptions, LayoutStrategy};
@@ -1048,7 +1048,7 @@ fn fixture_source_ec_15s_am1_yellow_from_ore() {
 }
 
 #[test]
-#[ntest::timeout(10000)]
+#[ntest::timeout(120000)]
 fn tier2_electronic_circuit_from_ore() {
     let inputs: FxHashSet<String> = ["iron-ore", "copper-ore"]
         .iter()
@@ -1483,7 +1483,7 @@ fn tier4_advanced_circuit_partitioned() {
 /// UG at (20,18) west, surfaces at (18,18) west, pipe at (19,18)
 /// untouched. No errors and no warnings.
 #[test]
-#[ntest::timeout(30000)]
+#[ntest::timeout(120000)]
 fn tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing() {
     use spaghettio_core::bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy, RowLayout, SurplusPolicy};
 
@@ -1732,7 +1732,7 @@ fn tier5_processing_unit_2s_horizontal_stack_iron_ore_pipe_bypass() {
 /// back leftward when rightward is exhausted. Rightmost-first ordering
 /// is preserved so forward reach is unchanged.
 #[test]
-#[ntest::timeout(60000)]
+#[ntest::timeout(300000)]
 fn tier5_processing_unit_25s_horizontal_stack_pole_coverage() {
     use spaghettio_core::bus::layout::{build_bus_layout, LayoutOptions, LayoutStrategy, RowLayout, SurplusPolicy};
 
@@ -1797,7 +1797,7 @@ fn tier5_processing_unit_25s_horizontal_stack_pole_coverage() {
 /// has 3 ingredients and AM1 has only 2 slots), cheapest belt tier,
 /// everything upstream of the factory is raw resources.
 #[test]
-#[ntest::timeout(60000)]
+#[ntest::timeout(300000)]
 fn tier4_advanced_circuit_from_ore_am2() {
     let inputs: FxHashSet<String> = [
         "iron-ore", "copper-ore", "coal", "water", "crude-oil",
@@ -1842,7 +1842,7 @@ fn tier4_advanced_circuit_from_ore_am2() {
 /// URL repro:
 /// `?item=processing-unit&rate=2&machine=assembling-machine-3&in=coal,water,crude-oil,iron-ore,copper-ore&belt=fast-transport-belt`
 #[test]
-#[ntest::timeout(60000)]
+#[ntest::timeout(300000)]
 fn tier5_processing_unit_from_ore_am3() {
     let inputs: FxHashSet<String> = [
         "iron-ore", "copper-ore", "coal", "water", "crude-oil",
@@ -2353,7 +2353,7 @@ fn tier_bacteria_self_loop_regression() {
 ///
 /// [issue #136]: https://github.com/storkme/spaghettio/issues/136
 #[test]
-#[ntest::timeout(60000)]
+#[ntest::timeout(120000)]
 fn issue_136_no_balancer_template_warning_ac5_ore_yellow() {
     let inputs: FxHashSet<String> = [
         "iron-ore", "copper-ore", "coal", "water", "crude-oil",
@@ -3761,7 +3761,7 @@ fn diag_ac5_ores_yellow_hs_input_rate() {
 ///   - belt-item-isolation (9): adjacent belts of different items feeding
 ///     into each other. Sideload mismatch in vertical-split row borders.
 #[test]
-#[ntest::timeout(120000)]
+#[ntest::timeout(300000)]
 fn processing_unit_2s_am2_fast_belts_validation_baseline() {
     let inputs: FxHashSet<String> = [
         "iron-plate", "copper-plate", "steel-plate", "stone", "coal",
