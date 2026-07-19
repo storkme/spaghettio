@@ -488,6 +488,11 @@ fn layout_pass(
         let mut row_occupied: FxHashSet<(i32, i32)> = FxHashSet::default();
         let mut machines_for_poles: Vec<(i32, i32, i32)> = Vec::new();
         for ent in &row_entities {
+            // Burner machines (biochamber) stay pole subjects on purpose:
+            // their rows carry electric inserters that this pole line powers,
+            // and stranding those is validator-silent in mixed layouts. See
+            // rfp-power-supply.md Phase 0c decision (2026-07-19) before
+            // gating this on needs_electricity.
             if is_machine_entity(&ent.name) {
                 let (mw, mh) = crate::common::machine_dims(&ent.name);
                 let (mw, mh) = (mw as i32, mh as i32);

@@ -284,3 +284,29 @@ genuinely and cheaply deferred.
   filed while the work sits inside the active session goal. New kill
   criterion added: if the port-face fix escalates into the #68 fluid-row
   redesign, stop and return sequencing to the user.*
+- *2026-07-19 — **Phase 0c decided: KEEP biochamber in the pole trigger; no
+  layout change** (decision unit; adversarial review CONFIRM-KEEP). The RFP's
+  free-slack premise is disproven: a biochamber row's only grid consumers are
+  its electric inserters, and the row's pole line is what powers them.
+  Drop-experiment evidence (implementer, synthetically re-verified by
+  reviewer): pure rows lose all poles (pentapod 6/6 inserters stranded,
+  bacteria 3/3 — visible "No power poles" warning); mixed layouts strand
+  biochamber-row inserters with the validator **coverage-silent and
+  connectivity-fickle** (0 coverage warnings both ways; a connectivity
+  warning fires only when the removed poles happen to be wire bridges).
+  Defensive comment added at the layout.rs pole-subject loop.*
+- *2026-07-19 — **KC1 re-derivation clause TRIPPED (in spirit) by a systemic
+  finding out of 0c's investigation, adversarially confirmed**: 40–52% of
+  electric inserters across normal all-electric corpus layouts sit outside
+  pole coverage under the engine's own ±3 Chebyshev model (metric
+  draftsman-derived: supply_area_distance 3.5 on a 1×1 pole ⇒ ±3 exact for
+  1×1 entities; reviewer recounts EC@10 60/140, gear@5 10/20, mixed chain
+  67/168; machine centers 0% uncovered everywhere — the calibration anchor).
+  Signature: every uncovered inserter is at nearest-pole distance exactly 4 —
+  `place_poles` targets machine centers (`cxs`, layout.rs:936) from the north
+  band (top_y−1, layout.rs:926), putting 3×3-machine south inserter rows at
+  Δy=4. Latent because inserters are not power-coverage subjects anywhere in
+  validate/ and the inserter-sizing RFP's in-game import anchors were never
+  run. Consequences: "0 power warnings", the census slack distributions, and
+  Phase 1's "what coverage needs" formula all understate true pole demand.
+  Sequencing decision passed to the user.*
