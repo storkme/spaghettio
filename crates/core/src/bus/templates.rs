@@ -2341,12 +2341,24 @@ pub fn fluid_input_row(
             );
             emit_shortfall_trace(recipe, false, solid_rate, &solid_plan, mx, machine_y, false);
 
-            // Machine
+            // Machine — placed at its north-input orientation so the UG-out
+            // above lands on a real fluid input port (RFP Phase 0e-i). Default
+            // north for chemical-plant/AM; East-rotated for the
+            // electromagnetic-plant, whose fluid ports otherwise face west/east
+            // (`fluid_input_port_dx` reads the same orientation, so port and
+            // machine agree). The rotation only brings an *input* onto the
+            // north face — for a fluid-OUTPUT emag recipe (electrolyte,
+            // quantum-processor) the output stays west/east and unpiped, so the
+            // validator flags it loudly: those recipes are unsupported by
+            // design, not silently accepted.
+            let (machine_mirror, machine_dir) =
+                crate::fluid_ports::north_input_orientation(machine_entity);
             entities.push(PlacedEntity {
                 name: machine_entity.to_string(),
                 x: mx,
                 y: machine_y,
-                direction: EntityDirection::North,
+                direction: machine_dir,
+                mirror: machine_mirror,
                 recipe: Some(recipe.to_string()),
                 segment_id: machine_seg.clone(),
                 ..Default::default()
