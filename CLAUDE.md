@@ -63,7 +63,7 @@ Most-visited files. Full reference in [`docs/file-reference.md`](docs/file-refer
 
 | File | Purpose |
 |------|---------|
-| `crates/core/src/bus/layout.rs` | Top-level `build_bus_layout`: `place_rows` → `plan_bus_lanes` → `place_poles` → `route_bus_ghost`, single pass |
+| `crates/core/src/bus/layout.rs` | Top-level `build_bus_layout`: `place_rows` → `plan_bus_lanes` → `route_bus_ghost` → `place_poles` (poles are LAST — placed after routing, never router obstacles; invariant restored 2026-07-19, see `docs/rfp-power-supply.md` Phase 0f) |
 | `crates/core/src/bus/ghost_router.rs` | Ghost A* + negotiated congestion routing; junction solver integration; output merger call-site |
 | `crates/core/src/bus/lane_planner.rs` | `BusLane` / `LaneFamily` types, `plan_bus_lanes`, lane splitting + tap-off coordinate finding |
 | `crates/core/src/bus/lane_order.rs` | Left-to-right lane column order optimiser (exact search ≤7 lanes, hill-climb above) |

@@ -398,3 +398,24 @@ genuinely and cheaply deferred.
   (verifier + lead concur): holding buys nothing — substation work re-moves
   the same goldens regardless, and the corpus-wide coverage win + honest
   validator bank now.*
+- *2026-07-19 — **Phase 0f LANDED** (`3ae17e2`/`f0f2822`/`4a64f3c`/`e7c9a79`;
+  review arc REVISE → reorder fix → APPROVE; user eyeballed and approved).
+  Electric inserters are now power-coverage subjects (via the single
+  `needs_electricity` fact); `place_poles` runs two outward candidate bands
+  seeded from `common::pole_candidate_ys` plus a greedy set-cover mop-up; and
+  the pipeline finally honors its own stated invariant — **poles are placed
+  LAST, after `route_bus_ghost`, and are never router obstacles**. The
+  review's logistic-science regression exposed that poles-before-routing had
+  been quietly violating the RFP's "poles live off leftover tiles" premise;
+  after the reorder, routing is pole-independent: non-pole entities are
+  byte-identical to base across the entire corpus except pentapod, whose old
+  2-PTG water bridge was itself a pole artifact (base had a pole dead-center
+  in the water run). Honest-red pins, all hardness-scanned 0-free and
+  suite-asserted: EC@20 ×14, EC@60-red ×60 (ceiling=60; exact-shape stress
+  assertion is a follow-up), PU-am3 ×20, PU-am2-baseline ×43, kovarex ×16.
+  Known-hard non-gating: USP ×16, chemical@10 ×23 (gauntlet). Pole cost at
+  committed configs: corpus 1770 → 3464 (+96%); gear@5 5→11, EC@20 62→117,
+  EC@35 119→232, EC@60-red 179→357, AC-am2 82→162, PU-am3 181→343. Phase 3
+  trigger-(b) baseline re-anchors to the post-0f re-census (pending).
+  Follow-ups: delete the vestigial `pole_entities` router param (dead code);
+  per-pack gauntlet assertions gap; exact-shape stress assertion.*
