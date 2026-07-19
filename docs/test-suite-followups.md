@@ -43,6 +43,29 @@ the ci profile only (keep local serial for STRESSGOLD runs, which need
 ordered output). Gate: 3 consecutive green CI runs on Rust-touching pushes
 with no timeout flakes.
 
+**LANDED 2026-07-19** (gate tracked on the landing PR). Two-part fix, and
+the second part was the real one:
+
+1. Ceilings and shaping, as pick-up'd: ntest ceilings bumped from measured
+   local 16-thread times (≥20 s local → 600 s, 5–20 s → 300 s, 1–5 s →
+   120 s, never lowered), ci default slow-timeout 60 s period / 300 s kill,
+   `threads-required` on the heavy tests. "Keep local serial" turned out to
+   be free — the pin only ever lived in `[profile.ci]`.
+2. **CI zone-cache pin** — the first parallel run failed *not* on
+   timeouts but on layout quality: with a cold cache, zone solutions are
+   solved fresh under a 25 ms wall-clock descent budget, so layouts (and
+   the warning/error counts the ceilings gate) depend on runner speed,
+   build opt levels, and test schedule. Cold-cache runs reproduce the
+   failures locally at *both* varisat opt levels — the old serial green
+   CI was calibrated luck, not determinism. Fix:
+   `crates/core/data/sat-zones-ci.bin`, a committed snapshot of the host
+   cache, exported to the rust job via `SPAGHETTIO_ZONE_CACHE_PATH` — CI
+   now replays exactly the entries a warm local run replays, making it
+   independent of speed, schedule, and opt levels by construction.
+   Refresh protocol lives in the `ci.yml` comment (copy the host cache in
+   with any layout-moving change, like a golden re-bless). This is the
+   pinned-cache design from the goldens README, landed CI-side.
+
 ### 2. Committed STRESSGOLD baseline (~90 s + a full-suite leg per work unit)
 
 The current gate protocol re-derives the "before" scoreboard from HEAD for

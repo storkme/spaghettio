@@ -45,7 +45,19 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest
+      # SPAGHETTIO_ZONE_CACHE_PATH pins the SAT zone cache to a committed
+      # snapshot of the host cache. Without it CI solves zones fresh, and
+      # fresh solutions are wall-clock-budget shaped (25ms cost-descent
+      # budget) — layout quality then depends on runner speed, build opt
+      # levels, and test schedule, and ceiling-gated tests flake. Replaying
+      # the pin makes CI results equal to a warm local run by construction.
+      # Refresh protocol (analogous to a stress-golden re-bless): after a
+      # layout-moving change introduces new zone signatures, run the full
+      # suite locally, then `cp ~/.cache/spaghettio/sat-zones.bin
+      # crates/core/data/sat-zones-ci.bin` and commit it with the change.
       - run: cargo nextest run -p spaghettio_core --profile ci
+        env:
+          SPAGHETTIO_ZONE_CACHE_PATH: ${{ github.workspace }}/crates/core/data/sat-zones-ci.bin
       - name: Generate test summary
         if: always()
         run: |

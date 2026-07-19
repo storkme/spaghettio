@@ -19,5 +19,6 @@ resolver = "2"
 [profile.dev.package.spaghettio_core]
 opt-level = 1
 
+
 [profile.dev.package.varisat]
 opt-level = 3

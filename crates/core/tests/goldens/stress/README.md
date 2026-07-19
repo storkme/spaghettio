@@ -58,9 +58,15 @@ So a golden blessed on one host is not portable to a cold machine, and CI
 enforcement would flake. The always-on `StressBaseline` ceilings in
 `e2e.rs` remain the portable, cache-robust regression gate; the goldens
 are the exact-match gate for same-host before/after verification.
-Promoting them to CI enforcement requires pinning the cache (e.g. running
-the golden subset against a committed cache snapshot with ambient
-read/write disabled) — a deliberate follow-up, not this mechanism.
+
+CI-side, the pinning half of this already exists: the rust job replays a
+committed host-cache snapshot (`crates/core/data/sat-zones-ci.bin` via
+`SPAGHETTIO_ZONE_CACHE_PATH`, see the comment in `ci.yml`) — that landed
+2026-07-19 because ceiling-gated tests, not just goldens, turn out to
+need it. Enforcing *goldens* in CI on top of that pin is now feasible
+but still deferred: it would couple every golden re-bless to a cache
+snapshot refresh in the same commit, and the same-host flow hasn't
+needed the extra rigor yet.
 
 ## Coverage
 
