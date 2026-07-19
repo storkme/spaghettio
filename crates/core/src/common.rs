@@ -73,6 +73,41 @@ pub fn machine_dims(entity: &str) -> (u32, u32) {
     }
 }
 
+/// Whether `entity` draws electricity from the power grid.
+///
+/// The codebase's first energy-source fact (RFP `docs/rfp-power-supply.md`
+/// Phase 0a). Every canonical crafting machine is electric **except**
+/// `biochamber`, which is burner-fueled — draftsman ground truth:
+/// `energy_source.type == "burner"`, `fuel_categories: ["nutrients"]`. A
+/// biochamber draws zero grid power, so power-coverage validation must not
+/// flag one as unpowered, and pole placement need not reserve a pole line
+/// for a pure-biochamber row.
+///
+/// Non-machine entities (poles, belts, inserters, pipes) return `false`:
+/// they are not grid-powered crafting machines and are not power-coverage
+/// subjects. `biochamber` deliberately falls into the same `_ => false`
+/// arm; the drift test in this module pins that intent (biochamber must be
+/// in `MACHINE_ENTITY_NAMES` *and* classified non-electric here) so the
+/// shared arm can never silently swallow a newly-added machine.
+pub fn needs_electricity(entity: &str) -> bool {
+    match entity {
+        "assembling-machine-1"
+        | "assembling-machine-2"
+        | "assembling-machine-3"
+        | "chemical-plant"
+        | "electric-furnace"
+        | "oil-refinery"
+        | "electromagnetic-plant"
+        | "cryogenic-plant"
+        | "foundry"
+        | "centrifuge"
+        | "recycler" => true,
+        // `biochamber` (burner-fueled — see doc comment) lands here with
+        // every non-machine entity: none draw grid power.
+        _ => false,
+    }
+}
+
 /// All tile coordinates occupied by a machine at `(x, y)` with footprint `(w, h)`.
 pub fn machine_tiles(x: i32, y: i32, w: u32, h: u32) -> Vec<(i32, i32)> {
     let (w, h) = (w as i32, h as i32);
@@ -430,6 +465,88 @@ mod tests {
         for name in ["electromagnetic-plant", "cryogenic-plant", "foundry", "biochamber"] {
             assert!(MACHINE_ENTITY_NAMES.contains(&name), "{name} missing from MACHINE_ENTITY_NAMES");
             assert!(is_machine_entity(name), "{name} not recognized by is_machine_entity");
+        }
+    }
+
+    #[test]
+    fn needs_electricity_biochamber_is_burner() {
+        // Biochamber is burner-fueled (fuel category nutrients) — the one
+        // canonical machine that draws no grid power.
+        assert!(!needs_electricity("biochamber"));
+        // Every other canonical machine is electric.
+        for name in [
+            "assembling-machine-1",
+            "assembling-machine-2",
+            "assembling-machine-3",
+            "chemical-plant",
+            "electric-furnace",
+            "oil-refinery",
+            "electromagnetic-plant",
+            "cryogenic-plant",
+            "foundry",
+            "centrifuge",
+            "recycler",
+        ] {
+            assert!(needs_electricity(name), "{name} should be electric");
+        }
+        // Non-machine entities draw no grid power.
+        assert!(!needs_electricity("medium-electric-pole"));
+        assert!(!needs_electricity("transport-belt"));
+    }
+
+    /// Drift regression (RFP `docs/rfp-power-supply.md` Phase 0b): every
+    /// machine in the canonical `MACHINE_ENTITY_NAMES` list must be
+    /// classified for BOTH energy source (`needs_electricity`) and fluid
+    /// ports (`validate::fluids::machine_has_fluid_ports`). Adding a machine
+    /// to the canonical list without adding it to `CLASSIFIED` below fails
+    /// this test (set-equality check), forcing an explicit, ground-truthed
+    /// decision on both facts rather than letting a new machine silently
+    /// inherit a `_ => false` / empty-port-table default — which is exactly
+    /// the twin validator blind spot this RFP closes.
+    #[test]
+    fn machine_classification_no_drift() {
+        // (name, needs_electricity, has_fluid_ports) — ground-truthed from
+        // game data (recipes.json `machines.*.fluid_boxes`; biochamber's
+        // burner energy source is draftsman-verified).
+        const CLASSIFIED: &[(&str, bool, bool)] = &[
+            ("assembling-machine-1", true, false),
+            ("assembling-machine-2", true, true),
+            ("assembling-machine-3", true, true),
+            ("chemical-plant", true, true),
+            ("electric-furnace", true, false),
+            ("oil-refinery", true, true),
+            ("electromagnetic-plant", true, true),
+            ("cryogenic-plant", true, true),
+            ("foundry", true, true),
+            ("biochamber", false, true),
+            ("centrifuge", true, false),
+            ("recycler", true, false),
+        ];
+
+        // 1. Set-equality: CLASSIFIED covers exactly the canonical list. A
+        //    machine added to one but not the other trips here.
+        let classified_names: FxHashSet<&str> =
+            CLASSIFIED.iter().map(|(n, _, _)| *n).collect();
+        let canonical_names: FxHashSet<&str> =
+            MACHINE_ENTITY_NAMES.iter().copied().collect();
+        assert_eq!(
+            classified_names, canonical_names,
+            "machine classification table out of sync with MACHINE_ENTITY_NAMES — \
+             every canonical machine must be classified for energy AND fluid ports"
+        );
+
+        // 2. Each classification matches the real predicates.
+        for &(name, expect_elec, expect_fluid) in CLASSIFIED {
+            assert_eq!(
+                needs_electricity(name),
+                expect_elec,
+                "{name}: needs_electricity disagrees with classification table"
+            );
+            assert_eq!(
+                crate::validate::machine_has_fluid_ports(name),
+                expect_fluid,
+                "{name}: fluid-port presence disagrees with classification table"
+            );
         }
     }
 

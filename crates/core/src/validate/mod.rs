@@ -13,6 +13,12 @@ pub use fluids::{
     check_fluid_network_connectivity, check_fluid_port_connectivity, check_pipe_isolation,
 };
 
+// Fluid-port classification accessor for the `common` drift regression
+// (RFP `docs/rfp-power-supply.md` Phase 0b). Test-only — keeps the `fluids`
+// module otherwise private.
+#[cfg(test)]
+pub(crate) use fluids::machine_has_fluid_ports;
+
 pub mod belt_structural;
 
 use serde::{Deserialize, Serialize};
