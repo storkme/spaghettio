@@ -340,3 +340,20 @@ genuinely and cheaply deferred.
   re-anchor to the post-0f census. Kill criterion added: if inserter
   coverage can't fit current row pitch, the substation conversation starts
   early with the user.*
+- *2026-07-19 — **0e scope refinement + re-sequencing (user call)**. Implementer
+  diagnosis before code: 0e's two items share one root cause — fluid-row
+  templates hardcode port positions (input assumed north, output assumed
+  solid/south) instead of reading per-machine geometry. Fulgora's bug is the
+  classifier: `row_kind` ignores fluid OUTPUTS, so solid-in/fluid-out recipes
+  (ice-melting, foundry molten-metal) land in solid-output templates that
+  never pipe the fluid. The clean unified fix for the port-face half is a
+  per-machine port-geometry parameterization across all four fluid templates
+  + validator orientation-awareness — bounded (no #68 pitch redesign) but
+  sizable, and for electromagnetic-plant solid-output-only (fluid-output
+  recipes like electrolyte stay unsupported until #68; they fail LOUD post
+  Phase 0, which is what makes deferral safe). User decision: **0e-ii
+  (fulgora, green-lit, in flight) → 0f → 0e-i (port-face parameterization,
+  both fixtures) → re-census → Phase 1 → Phase 2** — the inserter-coverage
+  defect outranks the port-face refactor, and Phase 1's premise no longer
+  depends on (i) since unsupported rows can't be generated silently anymore.
+  Foundry molten-metal support travels with 0e-i.*
