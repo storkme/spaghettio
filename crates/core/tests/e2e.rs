@@ -1214,6 +1214,170 @@ fn tier3_plastic_bar_from_crude() {
     assert_round_trip(&result);
 }
 
+// ---------------------------------------------------------------------------
+// RFP `docs/rfp-power-supply.md` Phase 0e-i — per-machine fluid port faces.
+//
+// These four fixtures are the first corpus presence of the space-age fluid
+// machines whose ports don't face the bus template's default north-input /
+// south-output faces: electromagnetic-plant (west/east ports, needs East
+// rotation), cryogenic-plant + foundry (south inputs / north outputs, need a
+// mirror y-flip), and biochamber fluid output. Each supplies its immediate
+// ingredients raw (the Phase 0 repro params) so the row under test is isolated.
+// Every one produced fluid-connectivity ERRORS before the fix.
+// ---------------------------------------------------------------------------
+
+/// Tile-level, validator-independent evidence that the port-face fix connected
+/// the fluid: every `entity` in the layout is at the expected placement
+/// orientation, and at least one of its fluid port tiles (computed from the
+/// shared table at that orientation) holds a pipe.
+fn assert_fluid_machine(
+    result: &E2EResult,
+    entity: &str,
+    mirror: bool,
+    direction: spaghettio_core::models::EntityDirection,
+) {
+    use spaghettio_core::fluid_ports::fluid_ports;
+    let pipes: FxHashSet<(i32, i32)> = result
+        .layout
+        .entities
+        .iter()
+        .filter(|e| e.name == "pipe" || e.name == "pipe-to-ground")
+        .map(|e| (e.x, e.y))
+        .collect();
+    let machines: Vec<_> = result.layout.entities.iter().filter(|e| e.name == entity).collect();
+    assert!(!machines.is_empty(), "no {entity} placed in layout");
+    for m in machines {
+        assert_eq!(
+            (m.mirror, m.direction),
+            (mirror, direction),
+            "{entity} at ({},{}) placed mirror={}/{:?}, expected mirror={mirror}/{direction:?}",
+            m.x, m.y, m.mirror, m.direction
+        );
+        let piped = fluid_ports(entity, m.mirror, m.direction)
+            .iter()
+            .any(|(dx, dy, _)| pipes.contains(&(m.x + dx, m.y + dy)));
+        assert!(
+            piped,
+            "{entity} at ({},{}) [{:?}/{:?}] has no pipe at any of its fluid port tiles",
+            m.x, m.y, m.mirror, m.direction
+        );
+    }
+}
+
+#[test]
+#[ntest::timeout(10000)]
+fn phase0e1_superconductor_electromagnetic_plant() {
+    // electromagnetic-plant: 3 solid + light-oil (fluid) -> superconductor
+    // (solid). The emag's fluid ports face west/east; East rotation brings the
+    // light-oil input onto the north face the FluidInput row delivers to.
+    let inputs: FxHashSet<String> = ["holmium-plate", "copper-plate", "plastic-bar", "light-oil"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let result = run_e2e(
+        "phase0e1_superconductor_electromagnetic_plant",
+        "superconductor",
+        1.0,
+        "assembling-machine-3",
+        None,
+        &inputs,
+    )
+    .unwrap_or_else(|e| panic!("phase0e1_superconductor: {e}"));
+
+    // 0 errors (was 2 fluid-connectivity errors pre-fix). The residual warnings
+    // are pre-existing and orthogonal to port faces: superconductor has 3 solid
+    // inputs but the FluidInput template feeds one, so the other two solid belts
+    // are orphaned and their inserters undersized. Tracked separately; not this
+    // unit's scope.
+    assert_fluid_machine(&result, "electromagnetic-plant", false, spaghettio_core::models::EntityDirection::East);
+    assert_warnings_exactly(
+        &result,
+        &[("inserter-item-throughput", 4), ("orphan-belt-segment", 2)],
+    );
+    assert_round_trip(&result);
+}
+
+#[test]
+#[ntest::timeout(10000)]
+fn phase0e1_fusion_power_cell_cryogenic_plant() {
+    // cryogenic-plant: 2 solid + ammonia (fluid) -> fusion-power-cell (solid).
+    // cryo fluid inputs are on the south face; mirror=true flips them north to
+    // the FluidDualInput row's PTG delivery. Fully clean.
+    let inputs: FxHashSet<String> = ["lithium-plate", "holmium-plate", "ammonia"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let result = run_e2e(
+        "phase0e1_fusion_power_cell_cryogenic_plant",
+        "fusion-power-cell",
+        1.0,
+        "assembling-machine-3",
+        None,
+        &inputs,
+    )
+    .unwrap_or_else(|e| panic!("phase0e1_fusion_power_cell: {e}"));
+
+    // 0 errors (was 5 fluid-connectivity errors pre-fix), 0 warnings.
+    assert_fluid_machine(&result, "cryogenic-plant", true, spaghettio_core::models::EntityDirection::North);
+    assert_warnings_exactly(&result, &[]);
+    assert_round_trip(&result);
+}
+
+#[test]
+#[ntest::timeout(10000)]
+fn phase0e1_molten_iron_foundry() {
+    // foundry: iron-ore + calcite (solid) -> molten-iron (fluid). Fluid OUTPUT
+    // on the foundry, whose outputs are on the north face unmirrored; mirror=true
+    // moves them to the south face the DualInput fluid-output arm pipes. Clean.
+    let inputs: FxHashSet<String> = ["iron-ore", "calcite"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let result = run_e2e(
+        "phase0e1_molten_iron_foundry",
+        "molten-iron",
+        5.0,
+        "assembling-machine-3",
+        None,
+        &inputs,
+    )
+    .unwrap_or_else(|e| panic!("phase0e1_molten_iron: {e}"));
+
+    // 0 errors (was belt-dead-end + fluid-connectivity pre-fix), 0 warnings.
+    assert_fluid_machine(&result, "foundry", true, spaghettio_core::models::EntityDirection::North);
+    assert_warnings_exactly(&result, &[]);
+    assert_round_trip(&result);
+}
+
+#[test]
+#[ntest::timeout(10000)]
+fn phase0e1_biolubricant_biochamber() {
+    // biochamber: jelly (solid) -> lubricant (fluid). Fluid output on the
+    // biochamber, whose ports mirror chemical-plant's (south output at dx 0,2),
+    // so the SingleInput fluid-output arm pipes it with no reorientation. Clean.
+    let inputs: FxHashSet<String> = ["jelly"].iter().map(|s| s.to_string()).collect();
+    let result = run_e2e(
+        "phase0e1_biolubricant_biochamber",
+        "lubricant",
+        5.0,
+        "assembling-machine-3",
+        None,
+        &inputs,
+    )
+    .unwrap_or_else(|e| panic!("phase0e1_biolubricant: {e}"));
+
+    // 0 errors (was belt-dead-end + fluid-connectivity pre-fix), 0 warnings.
+    // Confirm the biolubricant recipe (not the chemistry lubricant) was chosen.
+    assert!(
+        result.solver_result.machines.iter().any(|m| m.entity == "biochamber"),
+        "expected biolubricant on a biochamber; got {:?}",
+        result.solver_result.machines.iter().map(|m| &m.entity).collect::<Vec<_>>()
+    );
+    assert_fluid_machine(&result, "biochamber", false, spaghettio_core::models::EntityDirection::North);
+    assert_warnings_exactly(&result, &[]);
+    assert_round_trip(&result);
+}
+
 #[test]
 #[ntest::timeout(10000)]
 fn tier3_sulfuric_acid() {
