@@ -12,7 +12,7 @@
 
 use std::collections::VecDeque;
 
-use crate::common::{is_inserter, is_machine_entity, machine_dims, needs_electricity};
+use crate::common::{is_machine_entity, machine_dims, needs_electricity};
 use crate::models::LayoutResult;
 use crate::validate::{Severity, ValidationIssue};
 
@@ -98,18 +98,6 @@ pub fn check_pole_network_connectivity(layout: &LayoutResult) -> Vec<ValidationI
     )]
 }
 
-/// Machine entities that must be covered by power: the canonical
-/// `common::MACHINE_ENTITY_NAMES` ∩ `needs_electricity` (RFP
-/// `docs/rfp-power-supply.md` Phase 0b). This replaces the old hand-synced
-/// 6-entry list and widens coverage checking to foundry, centrifuge,
-/// recycler, cryogenic-plant, and electromagnetic-plant. `biochamber` is
-/// deliberately excluded — it is burner-fueled (`needs_electricity` false),
-/// so flagging it as unpowered would be a false positive. See
-/// [`is_power_coverage_subject`].
-fn is_power_coverage_subject(name: &str) -> bool {
-    is_machine_entity(name) && needs_electricity(name)
-}
-
 /// Radius (in tiles) of a medium-electric-pole supply area.
 const POLE_RANGE: i32 = 3;
 
@@ -136,20 +124,24 @@ pub fn check_power_coverage(layout_result: &LayoutResult) -> Vec<ValidationIssue
     }
 
     for e in &layout_result.entities {
-        // Coverage subjects (RFP `docs/rfp-power-supply.md` Phase 0f):
-        // electric crafting machines (checked at their footprint center) AND
-        // electric inserters (1×1, checked at their own tile). Every inserter
-        // tier the engine places is electric; a burner biochamber and all
-        // non-powered entities (belts, pipes, poles) are skipped. Before
-        // Phase 0f only machine centers were checked, hiding the ~40-52% of
-        // inserters that sit one tile beyond a north-band pole's supply area.
-        let (cx, cy) = if is_power_coverage_subject(&e.name) {
+        // Coverage subjects (RFP `docs/rfp-power-supply.md` Phase 0b + 0f):
+        // everything that draws grid power, via the single `needs_electricity`
+        // fact — electric crafting machines (checked at their footprint
+        // center) and electric inserters (1×1, checked at their own tile).
+        // A burner biochamber (needs_electricity false) and all non-powered
+        // entities (belts, pipes, poles) are skipped. Phase 0b widened this
+        // beyond the old 6-machine list; Phase 0f folded inserters in (before
+        // it, only machine centers were checked, hiding the ~40-52% of
+        // inserters one tile beyond a north-band pole's supply area).
+        if !needs_electricity(&e.name) {
+            continue;
+        }
+        let (cx, cy) = if is_machine_entity(&e.name) {
             let (w, h) = machine_dims(&e.name);
             (e.x + w as i32 / 2, e.y + h as i32 / 2)
-        } else if is_inserter(&e.name) {
-            (e.x, e.y)
         } else {
-            continue;
+            // Electric inserter — 1×1, powered from its own tile.
+            (e.x, e.y)
         };
 
         let powered = pole_positions

@@ -940,13 +940,21 @@ fn place_poles(
         // the inserter row outward: the near tile also covers the machine,
         // and one of the two bands always lands close enough to keep the
         // machine center in range.
-        let mut band_y_lists: Vec<Vec<i32>> = Vec::with_capacity(2);
-        if top_y > 0 {
-            // North: input-inserter row (top_y-1) then upward, past the belts.
-            band_y_lists.push((0..=POLE_RANGE).map(|d| top_y - 1 - d).filter(|&y| y >= 0).collect());
-        }
-        // South: output-inserter row (top_y+mh) then downward.
-        band_y_lists.push((0..=POLE_RANGE).map(|d| top_y + mh + d).collect());
+        // Seed each band from the shared `pole_candidate_ys` (the row Phase 1
+        // reserves gap tiles in) and search outward from it, AWAY from the
+        // machine — north band (candidate above the machine) upward past the
+        // belts, south band (below) downward — so a saturated inserter/belt
+        // band is still covered from the first free row beyond it.
+        let band_y_lists: Vec<Vec<i32>> = crate::common::pole_candidate_ys(top_y, mh)
+            .into_iter()
+            .map(|cy| {
+                let dir = if cy < top_y { -1 } else { 1 };
+                (0..=POLE_RANGE)
+                    .map(|d| cy + dir * d)
+                    .filter(|&y| y >= 0)
+                    .collect()
+            })
+            .collect();
 
         for band_ys in &band_y_lists {
             let mut i = 0;

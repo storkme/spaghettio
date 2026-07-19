@@ -83,13 +83,21 @@ pub fn machine_dims(entity: &str) -> (u32, u32) {
 /// flag one as unpowered, and pole placement need not reserve a pole line
 /// for a pure-biochamber row.
 ///
-/// Non-machine entities (poles, belts, inserters, pipes) return `false`:
-/// they are not grid-powered crafting machines and are not power-coverage
-/// subjects. `biochamber` deliberately falls into the same `_ => false`
-/// arm; the drift test in this module pins that intent (biochamber must be
-/// in `MACHINE_ENTITY_NAMES` *and* classified non-electric here) so the
-/// shared arm can never silently swallow a newly-added machine.
+/// Inserters are the one non-crafting-machine class that also draws grid
+/// power (RFP Phase 0f): every tier the engine places is electric, so they
+/// are power-coverage subjects too. Folding them into this single predicate
+/// (rather than a parallel `is_inserter` check in the validator) keeps
+/// "draws grid power" in one place, drift-test covered.
+///
+/// All other non-machine entities (poles, belts, pipes) return `false`, and
+/// `biochamber` deliberately falls into the same `_ => false` arm; the drift
+/// test in this module pins that intent (biochamber must be in
+/// `MACHINE_ENTITY_NAMES` *and* classified non-electric here) so the shared
+/// arm can never silently swallow a newly-added machine.
 pub fn needs_electricity(entity: &str) -> bool {
+    if is_inserter(entity) {
+        return true;
+    }
     match entity {
         "assembling-machine-1"
         | "assembling-machine-2"
@@ -106,6 +114,26 @@ pub fn needs_electricity(entity: &str) -> bool {
         // every non-machine entity: none draw grid power.
         _ => false,
     }
+}
+
+/// Candidate pole rows for a machine row whose machines start at `top_y`
+/// with footprint height `mh`: the row just above the machine (`top_y-1`,
+/// the input-inserter band) and just below (`top_y+mh`, the output-inserter
+/// band). `top_y-1` is dropped when it would be negative (the topmost row).
+///
+/// THE shared source of truth for where a row's poles sit (RFP
+/// `docs/rfp-power-supply.md`). `bus::layout::place_poles` seeds each band's
+/// outward search from these rows; Phase 1's fluid-row reservation reserves
+/// gap tiles in exactly these rows — one function so the placer and the
+/// reservation can never drift (the geometry dual of the Phase 0b name-list
+/// unification).
+pub fn pole_candidate_ys(top_y: i32, mh: i32) -> Vec<i32> {
+    let mut ys = Vec::with_capacity(2);
+    if top_y > 0 {
+        ys.push(top_y - 1);
+    }
+    ys.push(top_y + mh);
+    ys
 }
 
 /// All tile coordinates occupied by a machine at `(x, y)` with footprint `(w, h)`.
@@ -548,6 +576,24 @@ mod tests {
                 "{name}: fluid-port presence disagrees with classification table"
             );
         }
+    }
+
+    #[test]
+    fn inserters_are_electric_coverage_subjects() {
+        // RFP Phase 0f: every inserter tier the engine places draws grid
+        // power and is folded into `needs_electricity`. Adding an inserter
+        // name to `INSERTER_ENTITIES` without it being electric would strand
+        // it from power coverage silently — this pins the whole list.
+        for &name in INSERTER_ENTITIES {
+            assert!(
+                needs_electricity(name),
+                "{name} is an inserter and must be an electric coverage subject"
+            );
+            assert!(is_inserter(name), "{name} must be recognized by is_inserter");
+        }
+        // And a machine/belt must NOT be mistaken for an inserter here.
+        assert!(!is_inserter("assembling-machine-1"));
+        assert!(!is_inserter("transport-belt"));
     }
 
     #[test]
