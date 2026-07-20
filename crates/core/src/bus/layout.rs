@@ -180,16 +180,24 @@ fn run_layout_with_retry_inner(
     // fired only under a trace guard and `build_bus_layout` was not a pure
     // function of its arguments (package #3). The event is still emitted for
     // the snapshot debugger; this reads the control-flow copy instead.
-    let (result_1, row_spans_1, cap_coords, _uncovered_1) =
-        layout_pass(solver_result, opts, None, explicit_plan)?;
+    let (result_1, row_spans_1, cap_coords, uncovered_1) =
+        layout_pass(solver_result, opts, None, None, explicit_plan)?;
 
-    let retry_gaps = if cap_coords.is_empty() {
+    // Two independent gap sources feed ONE pass-2 re-run (RFP Phase 3a-ii).
+    // Junction-cap gaps (existing) widen rows the junction solver couldn't pack;
+    // substation bands (new) widen the cycle boundary above a deep-packed
+    // inserter row so a substation can reach it. Both derive from pass-1 data
+    // and merge into the single row→extra-tiles map `place_rows` consumes; the
+    // substation bands are ALSO threaded to pass 2's `place_poles` (typed) so it
+    // powers them with a substation, never medium poles.
+    let junction_gaps = if cap_coords.is_empty() {
         FxHashMap::default()
     } else {
         compute_retry_gaps(&cap_coords, &row_spans_1)
     };
+    let substation_bands = compute_substation_bands(&uncovered_1, &row_spans_1);
 
-    if retry_gaps.is_empty() {
+    if junction_gaps.is_empty() && substation_bands.is_empty() {
         // No retry — replay pass-1 events from the collector to the
         // original sink so the streaming consumer sees the same events
         // it would have seen without the silent-pass wrapper. Untraced,
@@ -214,7 +222,19 @@ fn run_layout_with_retry_inner(
         crate::trace::swap_sink(Some(sink));
     }
 
-    let mut gaps_vec: Vec<(usize, i32)> = retry_gaps.iter().map(|(k, v)| (*k, *v)).collect();
+    // Merge both gap sources into the single map. A row that needs both takes
+    // the larger widening — a substation band's 2 tiles already give the
+    // junction solver its ≥1 tile of extra room, so `max` (not sum) keeps the
+    // freed band tight while satisfying both.
+    let mut merged_gaps = junction_gaps.clone();
+    for b in &substation_bands {
+        merged_gaps
+            .entry(b.row_after)
+            .and_modify(|v| *v = (*v).max(b.extra))
+            .or_insert(b.extra);
+    }
+
+    let mut gaps_vec: Vec<(usize, i32)> = merged_gaps.iter().map(|(k, v)| (*k, *v)).collect();
     gaps_vec.sort_by_key(|(k, _)| *k);
     let recipes: Vec<String> = gaps_vec
         .iter()
@@ -226,7 +246,9 @@ fn run_layout_with_retry_inner(
         recipes,
     });
 
-    let (result_2, _, _, _) = layout_pass(solver_result, opts, Some(&retry_gaps), explicit_plan)?;
+    let subs = (!substation_bands.is_empty()).then_some(substation_bands.as_slice());
+    let (result_2, _, _, _) =
+        layout_pass(solver_result, opts, Some(&merged_gaps), subs, explicit_plan)?;
     Ok(result_2)
 }
 
@@ -259,6 +281,75 @@ fn compute_retry_gaps(
     out
 }
 
+/// A pass-2 substation band (RFP `docs/rfp-power-reservation.md` Phase 3a-ii):
+/// widen the gap AFTER row `row_after` (row_spans index) by `extra` tiles so a
+/// substation can be dropped into the freed space to reach the deep-packed
+/// inserter row that follows — a row whose input inserters sit at distance ≥4
+/// from every physically possible medium-pole position (the packed-cycle wall
+/// Phase 0f proved). This is a distinct TYPE from the junction-retry gaps: both
+/// feed the single row→extra-tiles map `place_rows` consumes, but only these
+/// are threaded to `place_poles` (via `SubstationTarget`) so the freed band is
+/// powered by a substation's 18×18 supply, never medium poles — the distinction
+/// is carried, never inferred from a coordinate coincidence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SubstationBand {
+    row_after: usize,
+    extra: i32,
+}
+
+/// A widened substation band resolved to pass-2 coordinates and the inserter
+/// row it must power. Built in the pole block (which holds the pass-2
+/// `row_spans`) and handed to `place_poles`. `[band_y0, band_y1]` are the freed
+/// rows (inclusive); `inserters` is the deep input-inserter band of the row
+/// below, which the substation's supply must cover under the exact continuous
+/// check.
+struct SubstationTarget {
+    band_y0: i32,
+    band_y1: i32,
+    inserters: Vec<(i32, i32)>,
+}
+
+/// Map `place_poles`' pass-1 uncovered-inserter set to the cycle boundaries
+/// whose gap a substation band must widen (RFP Phase 3a-ii). For each uncovered
+/// inserter, find the row that contains it and flag the gap BEFORE that row
+/// (i.e. after row `target-1`): inserting free rows there lifts a band above the
+/// row's input belts WITHOUT breaking pick adjacency (the free space lands at
+/// the cycle boundary, never between belts and inserters — inserting there would
+/// sever the inserter from the belt it picks from). One band per starved row;
+/// deduped and sorted. Empty for every layout the two-band + mop-up covers, so
+/// non-starved layouts never enter pass 2 on this account.
+fn compute_substation_bands(
+    uncovered: &[(i32, i32)],
+    row_spans: &[RowSpan],
+) -> Vec<SubstationBand> {
+    // A substation is 2×2; two freed rows above the input belts give it a
+    // footprint that routing rarely fully consumes, while keeping vertical
+    // supply reach (±9 from center) comfortably over the input-inserter row a
+    // few tiles below. Held small on purpose — the freed rows are pure
+    // y-translation cost (movement-budget criterion). Pinned by the four gating
+    // fixtures.
+    const SUBSTATION_BAND_TILES: i32 = 2;
+    let mut rows_after: FxHashSet<usize> = FxHashSet::default();
+    for &(_x, y) in uncovered {
+        // The row that physically contains this inserter.
+        let Some(target) = row_spans.iter().position(|s| y >= s.y_start && y < s.y_end) else {
+            continue;
+        };
+        // Widen the gap before `target` (after `target-1`). Row 0 has no
+        // predecessor gap — skip it (a packed sub-row's predecessor is the
+        // same-recipe row above, never row 0, but guard defensively).
+        if target > 0 {
+            rows_after.insert(target - 1);
+        }
+    }
+    let mut bands: Vec<SubstationBand> = rows_after
+        .into_iter()
+        .map(|row_after| SubstationBand { row_after, extra: SUBSTATION_BAND_TILES })
+        .collect();
+    bands.sort_by_key(|b| b.row_after);
+    bands
+}
+
 /// One layout attempt — the body of the original `build_bus_layout`.
 /// Takes an optional `retry_extra_gaps` map (row index → extra tiles)
 /// that the retry loop in `build_bus_layout` uses to widen specific
@@ -273,6 +364,7 @@ fn layout_pass(
     solver_result: &SolverResult,
     opts: &LayoutOptions,
     retry_extra_gaps: Option<&FxHashMap<usize, i32>>,
+    substation_bands: Option<&[SubstationBand]>,
     explicit_plan: Option<&crate::bus::partitioner::PartitionPlan>,
 ) -> Result<(LayoutResult, Vec<RowSpan>, Vec<(i32, i32)>, Vec<(i32, i32)>), String> {
     let max_belt_tier = opts.max_belt_tier.as_deref();
@@ -605,8 +697,54 @@ fn layout_pass(
                 occupied.insert((sx, sy));
             }
         }
+        // Resolve each pass-2 substation band to concrete tile coordinates and
+        // the deep input-inserter band it must power (RFP Phase 3a-ii). The band
+        // is the freed gap between row `row_after` and its successor; the target
+        // inserters are the successor row's top inserter band (y_start..+4),
+        // exactly the input inserters no medium pole could reach. Empty for
+        // every non-starved layout, so `place_poles` stays byte-identical there.
+        let substation_targets: Vec<SubstationTarget> = match substation_bands {
+            None => Vec::new(),
+            Some(bands) => bands
+                .iter()
+                .filter_map(|b| {
+                    let after = row_spans.get(b.row_after)?;
+                    let below = row_spans.get(b.row_after + 1)?;
+                    let band_y0 = after.y_end;
+                    let band_y1 = below.y_start - 1;
+                    if band_y1 < band_y0 {
+                        return None;
+                    }
+                    let inserters: Vec<(i32, i32)> = inserters_for_poles
+                        .iter()
+                        .copied()
+                        // Top inserter band of the row below the widened gap…
+                        .filter(|&(_x, y)| y >= below.y_start && y < below.y_start + 4)
+                        // …restricted to the genuinely packed ones: 0 free tiles
+                        // in the 7×7 against the routed occupancy (the RFP Phase
+                        // 0f hardness signature). Flanking inserters a medium
+                        // pole can still reach are left to the medium pass, so a
+                        // substation covers exactly the previously-uncovered set
+                        // — minimal hardware, no redundant flank coverage.
+                        .filter(|&(ix, iy)| {
+                            (-3i32..=3)
+                                .all(|dy| (-3i32..=3).all(|dx| occupied.contains(&(ix + dx, iy + dy))))
+                        })
+                        .collect();
+                    if inserters.is_empty() {
+                        return None;
+                    }
+                    Some(SubstationTarget { band_y0, band_y1, inserters })
+                })
+                .collect(),
+        };
         let pole_strategy = if machines_for_poles.is_empty() { "empty" } else { "rows" };
-        let (poles, uncovered) = place_poles(&machines_for_poles, &inserters_for_poles, &occupied);
+        let (poles, uncovered) = place_poles(
+            &machines_for_poles,
+            &inserters_for_poles,
+            &occupied,
+            &substation_targets,
+        );
         crate::trace::emit(crate::trace::TraceEvent::PolesPlaced {
             count: poles.len(),
             strategy: pole_strategy.to_string(),
@@ -862,14 +1000,19 @@ fn compute_extra_gaps(families: &[LaneFamily]) -> FxHashMap<usize, i32> {
 /// because every use below (row grouping, below-row fallback y) is a
 /// vertical offset from the machine row.
 /// Places medium-electric-pole lines to cover the machine rows and their
-/// electric inserters. Returns `(poles, uncovered_inserters)` — the second
-/// element is the set of electric inserters no pole could reach (the `give_up`
-/// set), the reactive substation pass's trigger (RFP `docs/rfp-power-reservation.md`
-/// Phase 3a-ii). Empty for every layout the two-band + mop-up covers.
+/// electric inserters — and, for any `substation_targets` (RFP
+/// `docs/rfp-power-reservation.md` Phase 3a-ii), drops substations into the
+/// widened bands FIRST so their 18×18 supply reaches the deep-packed inserter
+/// rows no medium pole can. Returns `(poles, uncovered_inserters)` — the second
+/// element is the set of electric inserters NEITHER a substation NOR a medium
+/// pole could reach (the `give_up` set), the reactive substation pass's trigger.
+/// `substation_targets` is empty for every layout the two-band + mop-up covers,
+/// keeping those byte-identical.
 fn place_poles(
     machines: &[(i32, i32, i32)],
     inserters: &[(i32, i32)],
     occupied: &FxHashSet<(i32, i32)>,
+    substation_targets: &[SubstationTarget],
 ) -> (Vec<PlacedEntity>, Vec<(i32, i32)>) {
     // Medium-pole supply half-extent on the tile grid, floored from the shared
     // `supply_area_distance` (RFP Phase 3a-i/3a-ii) so this placement radius and
@@ -879,6 +1022,75 @@ fn place_poles(
 
     if machines.is_empty() {
         return (Vec::new(), Vec::new());
+    }
+
+    let mut entities: Vec<PlacedEntity> = Vec::new();
+    let mut placed: FxHashSet<(i32, i32)> = FxHashSet::default();
+
+    // Working occupancy carrying the substation footprints we place first, so
+    // the medium band lines and mop-up never collide with a 2×2. Equal to
+    // `occupied` (zero substations) for every non-starved layout, keeping them
+    // byte-identical. `placed` stays medium-only — the mop-up's Chebyshev-3
+    // coverage test must never treat a substation tile as a medium pole.
+    let mut occ: FxHashSet<(i32, i32)> = occupied.clone();
+    // Inserters a substation already covers under the EXACT continuous check
+    // (its 9-tile supply, not the medium 3), so the mop-up set-cover skips them.
+    let mut sub_covered: FxHashSet<(i32, i32)> = FxHashSet::default();
+
+    // === Substations first (RFP Phase 3a-ii) ===
+    // A substation top-left (sx,sy) → center (sx+1,sy+1); an inserter (ix,iy) →
+    // center (ix+0.5,iy+0.5) is powered iff |ix+0.5−(sx+1)| ≤ 9 and likewise in
+    // y, i.e. ix ∈ [sx−8, sx+9] and iy ∈ [sy−8, sy+9]. Identical to the
+    // validator's exact even-footprint check — placement guarantees real
+    // coverage, never leaning on the validator's word (the 3a-i carried
+    // constraint).
+    const SUB_LO: i32 = 8;
+    const SUB_HI: i32 = 9;
+    let sub_covers = |sx: i32, sy: i32, ix: i32, iy: i32| -> bool {
+        ix >= sx - SUB_LO && ix <= sx + SUB_HI && iy >= sy - SUB_LO && iy <= sy + SUB_HI
+    };
+    for target in substation_targets {
+        // Greedy set-cover: drop the fewest 2×2 substations into the widened
+        // band that together cover every target inserter. Each candidate must
+        // have a fully free 2×2 footprint inside the band's freed rows.
+        let mut remaining: Vec<(i32, i32)> =
+            target.inserters.iter().copied().filter(|p| !sub_covered.contains(p)).collect();
+        while !remaining.is_empty() {
+            let sy_lo = target.band_y0;
+            let sy_hi = target.band_y1 - 1; // rows sy and sy+1 must both fit the band
+            let rx_min = remaining.iter().map(|&(x, _)| x).min().unwrap();
+            let rx_max = remaining.iter().map(|&(x, _)| x).max().unwrap();
+            let mut best: Option<((i32, i32), usize)> = None;
+            let mut sy = sy_lo;
+            while sy <= sy_hi {
+                // Any sx whose 2×2 could touch a remaining inserter's reach.
+                for sx in (rx_min - SUB_HI)..=(rx_max + SUB_LO) {
+                    let foot = [(sx, sy), (sx + 1, sy), (sx, sy + 1), (sx + 1, sy + 1)];
+                    if foot.iter().any(|t| occ.contains(t) || placed.contains(t)) {
+                        continue;
+                    }
+                    let n =
+                        remaining.iter().filter(|&&(ix, iy)| sub_covers(sx, sy, ix, iy)).count();
+                    // Strict `>` keeps the first (smallest sy, then sx) best on
+                    // ties — deterministic.
+                    if n > 0 && best.is_none_or(|(_, bn)| n > bn) {
+                        best = Some(((sx, sy), n));
+                    }
+                }
+                sy += 1;
+            }
+            let Some(((sx, sy), _)) = best else { break };
+            entities.push(make_substation(sx, sy));
+            for t in [(sx, sy), (sx + 1, sy), (sx, sy + 1), (sx + 1, sy + 1)] {
+                occ.insert(t);
+            }
+            for &(ix, iy) in &target.inserters {
+                if sub_covers(sx, sy, ix, iy) {
+                    sub_covered.insert((ix, iy));
+                }
+            }
+            remaining.retain(|&(ix, iy)| !sub_covers(sx, sy, ix, iy));
+        }
     }
 
     // Group by (top_y, height). Rows of different-height machines get their
@@ -894,9 +1106,6 @@ fn place_poles(
     // Process rows top-to-bottom for determinism.
     let mut keys: Vec<(i32, i32)> = by_row.keys().copied().collect();
     keys.sort_unstable();
-
-    let mut entities: Vec<PlacedEntity> = Vec::new();
-    let mut placed: FxHashSet<(i32, i32)> = FxHashSet::default();
 
     for key in keys {
         let (top_y, mh) = key;
@@ -952,7 +1161,7 @@ fn place_poles(
                 let mut placed_at: Option<(i32, i32)> = None;
                 'find: for &py in band_ys {
                     for px in (target_cx - 2..=target_cx + 2).rev() {
-                        if !occupied.contains(&(px, py)) && !placed.contains(&(px, py)) {
+                        if !occ.contains(&(px, py)) && !placed.contains(&(px, py)) {
                             placed_at = Some((px, py));
                             break 'find;
                         }
@@ -961,7 +1170,7 @@ fn place_poles(
                 if placed_at.is_none() {
                     'fallback: for &py in band_ys {
                         for px in [target_cx + pole_range, target_cx - pole_range] {
-                            if !occupied.contains(&(px, py)) && !placed.contains(&(px, py)) {
+                            if !occ.contains(&(px, py)) && !placed.contains(&(px, py)) {
                                 placed_at = Some((px, py));
                                 break 'fallback;
                             }
@@ -1007,10 +1216,16 @@ fn place_poles(
     };
     let mut give_up: FxHashSet<(i32, i32)> = FxHashSet::default();
     loop {
+        // Inserters a substation already reaches are skipped — they are covered
+        // by its 9-tile supply, not the medium `covered` closure's Chebyshev-3.
         let uncovered: Vec<(i32, i32)> = inserters
             .iter()
             .copied()
-            .filter(|&(ix, iy)| !covered(ix, iy, &placed) && !give_up.contains(&(ix, iy)))
+            .filter(|&(ix, iy)| {
+                !covered(ix, iy, &placed)
+                    && !sub_covered.contains(&(ix, iy))
+                    && !give_up.contains(&(ix, iy))
+            })
             .collect();
         let Some(&(ix, iy)) = uncovered.first() else {
             break;
@@ -1021,7 +1236,7 @@ fn place_poles(
         for dy in -pole_range..=pole_range {
             for dx in -pole_range..=pole_range {
                 let (px, py) = (ix + dx, iy + dy);
-                if occupied.contains(&(px, py)) || placed.contains(&(px, py)) {
+                if occ.contains(&(px, py)) || placed.contains(&(px, py)) {
                     continue;
                 }
                 let n = uncovered
@@ -1044,7 +1259,12 @@ fn place_poles(
         }
     }
 
-    repair_pole_connectivity(&mut entities, &placed, occupied);
+    // Interconnect (RFP Phase 3a-ii): substations are already in `entities`, so
+    // the connectivity repair treats them as wire nodes and bridges any that
+    // land >9 tiles (min(18,9) substation↔medium reach) from the medium network
+    // with connector poles — counted in the stated pole cost. `occ` carries the
+    // substation footprints so bridges never overlap a 2×2.
+    repair_pole_connectivity(&mut entities, &placed, &occ);
 
     // Phase 2 (RFP `docs/rfp-power-supply.md`): live slack instrumentation.
     // Emit each pole's free-alternative count so the stress scoreboard tallies
@@ -1065,11 +1285,14 @@ fn place_poles(
     // replay — so it matches the census by construction. Emitted per pole ENTITY
     // (not per unique tile) so `total poles` is the true count and a future
     // overlapping-pole regression can't hide inside a deduped set.
+    // One PoleSlack per power ENTITY, substations included (they are in
+    // `entities`), so the scoreboard's `total poles` line is the true
+    // power-entity count — the census-baseline interconnect guardrail reads it.
     let all_poles: FxHashSet<(i32, i32)> = entities.iter().map(|e| (e.x, e.y)).collect();
     for e in &entities {
         let (px, py) = (e.x, e.y);
         let alternatives = (px - pole_range..=px + pole_range)
-            .filter(|&x| x != px && !occupied.contains(&(x, py)) && !all_poles.contains(&(x, py)))
+            .filter(|&x| x != px && !occ.contains(&(x, py)) && !all_poles.contains(&(x, py)))
             .count() as i32;
         crate::trace::emit(crate::trace::TraceEvent::PoleSlack { x: px, y: py, alternatives });
     }
@@ -1265,6 +1488,25 @@ fn emit_inter_row_bands(row_spans: &[RowSpan], lanes: &[BusLane]) {
 fn make_pole(x: i32, y: i32) -> PlacedEntity {
     PlacedEntity {
         name: "medium-electric-pole".to_string(),
+        x,
+        y,
+        direction: EntityDirection::North,
+        recipe: None,
+        io_type: None,
+        carries: None,
+        mirror: false,
+        segment_id: Some("pole".to_string()),
+        ..Default::default()
+    }
+}
+
+/// Create a substation entity (2×2, 18×18 supply) at top-left `(x, y)` (RFP
+/// `docs/rfp-power-reservation.md` Phase 3a-ii). Shares the `"pole"` segment tag
+/// so it groups with the power network in analysis/rendering; export centers it
+/// at `x+1.0` via the shared `entity_size` 2×2 entry.
+fn make_substation(x: i32, y: i32) -> PlacedEntity {
+    PlacedEntity {
+        name: "substation".to_string(),
         x,
         y,
         direction: EntityDirection::North,
@@ -1579,7 +1821,7 @@ mod tests {
         };
 
         let (_layout, row_spans, cap_coords, _uncovered) =
-            layout_pass(&sr, &opts, None, None).expect("layout_pass");
+            layout_pass(&sr, &opts, None, None, None).expect("layout_pass");
 
         assert!(
             !cap_coords.is_empty(),
