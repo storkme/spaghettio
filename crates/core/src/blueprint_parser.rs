@@ -530,6 +530,72 @@ mod tests {
     }
 
     #[test]
+    fn pole_wires_round_trip_simple() {
+        // Three medium poles in a line at pitch 7 (≤ reach 9): adjacent pairs
+        // wire, the ends do not (d=14 > 9), but all three are one network.
+        let layout = LayoutResult {
+            entities: vec![
+                PlacedEntity { name: "medium-electric-pole".into(), x: 0, y: 0, ..Default::default() },
+                PlacedEntity { name: "medium-electric-pole".into(), x: 7, y: 0, ..Default::default() },
+                PlacedEntity { name: "medium-electric-pole".into(), x: 14, y: 0, ..Default::default() },
+            ],
+            width: 15,
+            height: 1,
+            ..Default::default()
+        };
+        let emitted = crate::power_wires::compute_pole_wires(&layout.entities);
+        assert_eq!(emitted, vec![(0, 1), (1, 2)]);
+
+        let bp_string = blueprint::export(&layout, "pole-wires");
+        let parsed = parse_blueprint_string(&bp_string).expect("should parse");
+        // Wires must survive export → parse (before the fix: empty).
+        assert_eq!(parsed.power_wires, emitted, "power_wires must round-trip");
+        assert_eq!(
+            crate::power_wires::count_disconnected_poles(&parsed.entities, &parsed.power_wires),
+            0,
+            "all three poles are one network after round-trip"
+        );
+    }
+
+    #[test]
+    fn pole_wires_round_trip_dense_grid() {
+        // A 5×5 grid of medium poles at pitch 6 (both axes) — the dense,
+        // mutually-overlapping field a real bus produces. Every pole reaches
+        // its 4- and 8-neighbours (pitch 6 and 6√2≈8.49, both ≤ 9), so the
+        // whole 25-pole field must be one connected copper network, and the
+        // exact wire set must round-trip through export → parse.
+        let mut entities = Vec::new();
+        for gy in 0..5 {
+            for gx in 0..5 {
+                entities.push(PlacedEntity {
+                    name: "medium-electric-pole".into(),
+                    x: gx * 6,
+                    y: gy * 6,
+                    ..Default::default()
+                });
+            }
+        }
+        let layout = LayoutResult { entities, width: 25, height: 25, ..Default::default() };
+
+        let emitted = crate::power_wires::compute_pole_wires(&layout.entities);
+        assert!(!emitted.is_empty(), "dense grid must wire");
+        assert_eq!(
+            crate::power_wires::count_disconnected_poles(&layout.entities, &emitted),
+            0,
+            "all 25 poles must be one network"
+        );
+
+        let bp_string = blueprint::export(&layout, "dense-grid");
+        let parsed = parse_blueprint_string(&bp_string).expect("should parse");
+        assert_eq!(parsed.power_wires, emitted, "dense wire set must round-trip");
+        assert_eq!(
+            crate::power_wires::count_disconnected_poles(&parsed.entities, &parsed.power_wires),
+            0,
+            "the 25-pole network stays connected after round-trip"
+        );
+    }
+
+    #[test]
     fn filtered_inserter_round_trips() {
         let layout = LayoutResult {
             entities: vec![

@@ -648,6 +648,21 @@ fn assert_round_trip(result: &E2EResult) {
             parsed.name, parsed.x, parsed.y, parsed.direction
         );
     }
+
+    // The pole copper wire graph must survive export → parse. The exporter
+    // encodes `compute_pole_wires(layout.entities)` into the blueprint-level
+    // `wires` array (connector 5); the parser recovers it. Entity order is
+    // preserved through the round-trip, so the `(a, b)` index pairs must match
+    // exactly. Before the fix, export wrote NO `wires` array, so a layout with
+    // in-reach poles round-tripped to an empty `power_wires` — a power-dead
+    // paste. This is the corpus-wide regression guard for that bug.
+    assert_eq!(
+        result.layout.power_wires, result.parsed.power_wires,
+        "pole copper wires must round-trip through blueprint export/parse: \
+         layout emitted {} wire(s), parsed recovered {}",
+        result.layout.power_wires.len(),
+        result.parsed.power_wires.len(),
+    );
 }
 
 // ---------------------------------------------------------------------------

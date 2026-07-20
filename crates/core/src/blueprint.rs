@@ -235,6 +235,77 @@ mod tests {
         assert!(ents[1].get("recipe").is_none());
     }
 
+    /// Decode an exported blueprint string back to its JSON `blueprint` object.
+    fn decode_blueprint(bp: &str) -> serde_json::Value {
+        let b64 = &bp[1..];
+        let compressed = base64::engine::general_purpose::STANDARD.decode(b64).unwrap();
+        let mut decoder = flate2::read::ZlibDecoder::new(&compressed[..]);
+        let mut json_str = String::new();
+        decoder.read_to_string(&mut json_str).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        parsed["blueprint"].clone()
+    }
+
+    #[test]
+    fn export_emits_pole_copper_wires() {
+        // A 2×2 cluster of medium poles at pitch 5 (all within reach 9) plus a
+        // belt between them. The export MUST carry a blueprint-level `wires`
+        // array — its absence was the power-dead bug. Each wire is
+        // `[entity_number_a, 5, entity_number_b, 5]` with entity_number = idx+1.
+        let layout = LayoutResult {
+            entities: vec![
+                PlacedEntity { name: "medium-electric-pole".into(), x: 0, y: 0, ..Default::default() },
+                PlacedEntity { name: "transport-belt".into(), x: 2, y: 0, ..Default::default() },
+                PlacedEntity { name: "medium-electric-pole".into(), x: 5, y: 0, ..Default::default() },
+                PlacedEntity { name: "medium-electric-pole".into(), x: 0, y: 5, ..Default::default() },
+                PlacedEntity { name: "medium-electric-pole".into(), x: 5, y: 5, ..Default::default() },
+            ],
+            width: 6,
+            height: 6,
+            ..Default::default()
+        };
+        let bp = decode_blueprint(&export(&layout, "wires"));
+        let wires = bp["wires"].as_array().expect("blueprint must have a wires array");
+        assert!(!wires.is_empty(), "in-reach poles must produce copper wires");
+        // The belt (entity_number 2) must never appear as a wire endpoint.
+        for w in wires {
+            let w = w.as_array().unwrap();
+            assert_eq!(w.len(), 4, "each wire is a 4-tuple");
+            assert_eq!(w[1], 5, "connector id a must be pole copper (5)");
+            assert_eq!(w[3], 5, "connector id b must be pole copper (5)");
+            assert_ne!(w[0], 2, "belt (entity_number 2) is not a pole");
+            assert_ne!(w[2], 2, "belt (entity_number 2) is not a pole");
+        }
+        // The four poles are entity_numbers {1,3,4,5}; the wire graph must
+        // connect all of them (compute_pole_wires drives both export + check).
+        let pw = crate::power_wires::compute_pole_wires(&layout.entities);
+        assert_eq!(
+            crate::power_wires::count_disconnected_poles(&layout.entities, &pw),
+            0,
+            "the four-pole cluster must form one copper network"
+        );
+    }
+
+    #[test]
+    fn export_omits_wires_key_for_single_pole() {
+        // Fewer than 2 poles → no copper wires → the `wires` key is omitted
+        // entirely (skip_serializing_if), matching draftsman's shape for a
+        // wireless blueprint.
+        let layout = LayoutResult {
+            entities: vec![PlacedEntity {
+                name: "medium-electric-pole".into(),
+                x: 0,
+                y: 0,
+                ..Default::default()
+            }],
+            width: 1,
+            height: 1,
+            ..Default::default()
+        };
+        let bp = decode_blueprint(&export(&layout, "one-pole"));
+        assert!(bp.get("wires").is_none(), "single pole must not emit a wires key");
+    }
+
     #[test]
     fn recycler_position_uses_non_square_center() {
         // Recycler is 2 wide × 4 tall (rfp-fulgora-scrap Phase 0). A
