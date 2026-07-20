@@ -71,16 +71,36 @@ pub fn init() {
     console_error_panic_hook::set_once();
 }
 
+/// Map the optional quality string from JS to a tier; unknown/absent →
+/// Normal, matching the `max_inserter_tier` unknown→default pattern
+/// (rfp-build-quality Phase 1). NOTE (Phase 1 guard rail): the web UI and
+/// URL codec must NOT set this yet — Phase 2 lands that surface.
+fn quality_tier(quality: Option<String>) -> spaghettio_core::common::QualityTier {
+    quality
+        .as_deref()
+        .and_then(spaghettio_core::common::QualityTier::from_name)
+        .unwrap_or_default()
+}
+
 #[wasm_bindgen]
 pub fn solve(
     target_item: &str,
     target_rate: f64,
     available_inputs: Vec<String>,
     machine_entity: &str,
+    quality: Option<String>,
 ) -> Result<SolverResult, JsError> {
     let inputs: FxHashSet<String> = available_inputs.into_iter().collect();
-    solver::solve(target_item, target_rate, &inputs, machine_entity)
-        .map_err(|e| JsError::new(&e.to_string()))
+    solver::solve_with_palette_exclusions_and_quality(
+        target_item,
+        target_rate,
+        &inputs,
+        &MachinePalette::default(),
+        machine_entity,
+        &FxHashSet::default(),
+        quality_tier(quality),
+    )
+    .map_err(|e| JsError::new(&e.to_string()))
 }
 
 /// Solve with a per-category machine palette. Categories absent from the
@@ -94,10 +114,19 @@ pub fn solve_with_palette(
     available_inputs: Vec<String>,
     palette: MachinePalette,
     default_machine: &str,
+    quality: Option<String>,
 ) -> Result<SolverResult, JsError> {
     let inputs: FxHashSet<String> = available_inputs.into_iter().collect();
-    solver::solve_with_palette(target_item, target_rate, &inputs, &palette, default_machine)
-        .map_err(|e| JsError::new(&e.to_string()))
+    solver::solve_with_palette_exclusions_and_quality(
+        target_item,
+        target_rate,
+        &inputs,
+        &palette,
+        default_machine,
+        &FxHashSet::default(),
+        quality_tier(quality),
+    )
+    .map_err(|e| JsError::new(&e.to_string()))
 }
 
 #[wasm_bindgen]

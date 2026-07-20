@@ -25,7 +25,7 @@
 
 use crate::models::{ItemFlow, MachineSpec, SelfLoopFlow, SolverResult};
 use crate::recipe_db::{
-    db, get_crafting_speed, is_excluded_recipe, machine_can_run_recipe,
+    db, effective_crafting_speed, is_excluded_recipe, machine_can_run_recipe,
     machine_for_recipe_with_palette, MachinePalette, Recipe,
 };
 use crate::solver::SolverError;
@@ -88,6 +88,12 @@ pub struct NetflowOptions {
     /// and reachability guard exemptions documented at their call sites.
     /// Requires `allow_recycling` to have any candidates to exempt.
     pub allow_voiding: bool,
+    /// Build quality of the machines being planned
+    /// (`docs/rfp-build-quality.md` Phase 1). Scales every column's
+    /// crafting speed via [`effective_crafting_speed`] — `Normal`
+    /// (default) multiplies by exactly 1.0, bit-identical to the
+    /// pre-quality behavior.
+    pub quality: crate::common::QualityTier,
 }
 
 /// True for both recycling-shaped categories in the bundled data.
@@ -566,7 +572,9 @@ fn solve_attempt(
                 }
             }
         }
-        let crafting_speed = get_crafting_speed(&machine);
+        // Quality-scaled (rfp-build-quality Phase 1); ×1.0 at Normal, so the
+        // `<= 0.0` guard sees the same sign as the raw speed.
+        let crafting_speed = effective_crafting_speed(&machine, options.quality);
         if crafting_speed <= 0.0 {
             return Err(AttemptError::Hard(SolverError::MissingCraftingSpeed {
                 entity: machine,

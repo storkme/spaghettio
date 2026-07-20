@@ -744,8 +744,8 @@ fn report_fulgora_spike() {
     let default_costs = CostTable::default();
     let spike_costs_1e3 = CostTable { eps_surplus: 1e-3, ..CostTable::default() };
     let spike_costs_1e2 = CostTable { eps_surplus: 1e-2, ..CostTable::default() };
-    let opts_novoid = NetflowOptions { allow_recycling: true, allow_voiding: false };
-    let opts_void = NetflowOptions { allow_recycling: true, allow_voiding: true };
+    let opts_novoid = NetflowOptions { allow_recycling: true, allow_voiding: false, ..Default::default() };
+    let opts_void = NetflowOptions { allow_recycling: true, allow_voiding: true, ..Default::default() };
 
     // Item names verified directly against draftsman 3.3.0 / Space Age data
     // before writing this test (see the recipe_db exploration in the RFP
@@ -882,7 +882,7 @@ fn report_fulgora_spike() {
 #[test]
 fn fulgora_spike_determinism_double_run() {
     let inputs = set(&["scrap", "water"]);
-    let opts = NetflowOptions { allow_recycling: true, allow_voiding: true };
+    let opts = NetflowOptions { allow_recycling: true, allow_voiding: true, ..Default::default() };
     let targets: &[(&str, f64)] =
         &[("holmium-plate", 1.0), ("superconductor", 0.5), ("electromagnetic-science-pack", 1.0)];
     let costs = [CostTable::default(), CostTable { eps_surplus: 1e-3, ..CostTable::default() }];
@@ -928,7 +928,7 @@ fn fulgora_spike_determinism_double_run() {
 fn voider_disposes_surplus_above_break_even_price() {
     let inputs = set(&["scrap", "water"]);
     let scope = set(&["scrap-recycling", "steel-plate-recycling"]);
-    let opts = NetflowOptions { allow_recycling: true, allow_voiding: true };
+    let opts = NetflowOptions { allow_recycling: true, allow_voiding: true, ..Default::default() };
 
     let below = solve_netflow_with_options(
         "iron-gear-wheel", 1.0, &inputs, &MachinePalette::default(), "assembling-machine-3",

@@ -455,3 +455,20 @@ Per the CLAUDE.md layout-change protocol:
   validator first, then merger). Per kill 5: the differential
   legendary fixture caps at ≤45/s (one blue belt) until #311 closes;
   the 60 EC/s headline re-lands afterwards.*
+- *2026-07-20 — kill criterion 1 verified in-game by the user against
+  the legendary save ("checks out": AM3 3.125, furnace 5, medium pole
+  17×17/19, substation 28×28/28 + mid-tier). Phase 1 landed:
+  `effective_crafting_speed` choke point in `recipe_db`, quality rides
+  `NetflowOptions` (both net-flow modes), new
+  `solve_with_palette_exclusions_and_quality` entry, wasm `solve` +
+  `solve_with_palette` accept optional quality (unknown → Normal).
+  Kill 2a evidence: bit-identity boundary sweep + per-machine
+  bit-equality tests green; per-tier counts match the RFP's hand math
+  (legendary EC@60/s → 9.6). **One deviation from the design text**:
+  the legacy tree walk stays quality-blind rather than sharing the
+  helper — recipe selection is quality-invariant (JSON-first / cost
+  table, never speed) and the walk's counts are documented
+  oracle-only, so threading quality through it would churn signatures
+  with zero effect on any output; documented at the walk's doc
+  comment. Phase 1 guard rail held: no URL codec entry, no UI
+  surface.*

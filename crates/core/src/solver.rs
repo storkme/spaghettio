@@ -234,11 +234,46 @@ pub fn solve_free_with_palette_and_exclusions(
     )
 }
 
+/// Like [`solve_with_palette_and_exclusions`] with a build-quality tier
+/// (`docs/rfp-build-quality.md` Phase 1): machine counts shrink by the
+/// quality crafting-speed multiplier. `Normal` is bit-identical to the
+/// plain entry points (same code path — the multiplier rides through
+/// `NetflowOptions`, whose default is `Normal`).
+pub fn solve_with_palette_exclusions_and_quality(
+    target_item: &str,
+    target_rate: f64,
+    available_inputs: &FxHashSet<String>,
+    palette: &MachinePalette,
+    default_machine: &str,
+    excluded_recipes: &FxHashSet<String>,
+    quality: crate::common::QualityTier,
+) -> Result<SolverResult, SolverError> {
+    crate::netflow::solve_netflow_with_options(
+        target_item,
+        target_rate,
+        available_inputs,
+        palette,
+        default_machine,
+        excluded_recipes,
+        crate::netflow::RecipeScope::Free,
+        &crate::netflow::CostTable::default(),
+        &crate::netflow::NetflowOptions {
+            quality,
+            ..Default::default()
+        },
+    )
+}
+
 /// The legacy recursive tree walk. Kept as the recipe-*selection* oracle
 /// for compatibility mode and as the parity-harness reference. Known-wrong
 /// flow accounting (no byproduct crediting, `resolving`-guard cycle punts,
 /// fleet double-counting) — do not add new callers; use [`solve`] /
 /// [`solve_with_palette_and_exclusions`] instead.
+///
+/// Deliberately quality-blind (rfp-build-quality Phase 1): recipe
+/// *selection* is quality-invariant (JSON-first / cost table, never
+/// speed), and this walk's counts are oracle-only — see
+/// `recipe_db::effective_crafting_speed` for the quality choke point.
 pub fn solve_tree_walk_with_palette_and_exclusions(
     target_item: &str,
     target_rate: f64,
@@ -436,6 +471,111 @@ mod tests {
         assert_eq!(result.external_outputs.len(), 1);
         assert_eq!(result.external_outputs[0].item, "iron-gear-wheel");
         assert_eq!(result.external_outputs[0].rate, 10.0);
+    }
+
+    /// Kill criterion 2a (rfp-build-quality): the quality entry point at
+    /// `Normal` must be bit-identical to the plain entry point — same code
+    /// path, `×1.0` multiplier. Swept across rates adjacent to
+    /// whole-machine boundaries (EC on AM3: 2.5/s per machine), where any
+    /// rounding drift in the count math would surface first.
+    #[test]
+    fn quality_identity_at_normal_boundary_sweep() {
+        use crate::common::QualityTier;
+        let available = inputs_of(&["iron-plate", "copper-plate"]);
+        let boundaries = [2.5, 5.0, 45.0, 60.0];
+        let eps = [0.0, 1e-9, -1e-9, 1e-3, -1e-3];
+        for b in boundaries {
+            for e in eps {
+                let rate = b + e;
+                if rate <= 0.0 {
+                    continue;
+                }
+                let plain =
+                    solve("electronic-circuit", rate, &available, "assembling-machine-3").unwrap();
+                let quality = solve_with_palette_exclusions_and_quality(
+                    "electronic-circuit",
+                    rate,
+                    &available,
+                    &MachinePalette::default(),
+                    "assembling-machine-3",
+                    &FxHashSet::default(),
+                    QualityTier::Normal,
+                )
+                .unwrap();
+                assert_eq!(plain.machines.len(), quality.machines.len(), "rate {rate}");
+                for (p, q) in plain.machines.iter().zip(quality.machines.iter()) {
+                    assert_eq!(p.recipe, q.recipe, "rate {rate}");
+                    assert_eq!(p.entity, q.entity, "rate {rate}");
+                    assert_eq!(
+                        p.count.to_bits(),
+                        q.count.to_bits(),
+                        "rate {rate} recipe {}: {} vs {} not bit-identical",
+                        p.recipe,
+                        p.count,
+                        q.count
+                    );
+                }
+            }
+        }
+    }
+
+    /// Per-tier machine counts on the RFP's hand-computed cases:
+    /// EC@60/s on AM3 (Normal 2.5/s → 24 machines; Legendary 6.25/s →
+    /// 9.6) with cable scaling alongside (Normal 5/s → 36; Legendary
+    /// 12.5/s → 14.4), and iron smelting on electric furnaces (Normal
+    /// 0.625/s → 96; Legendary 1.5625/s → 38.4).
+    #[test]
+    fn quality_scales_machine_counts() {
+        use crate::common::QualityTier;
+
+        let count_of = |result: &SolverResult, recipe: &str| -> f64 {
+            result
+                .machines
+                .iter()
+                .find(|m| m.recipe == recipe)
+                .unwrap_or_else(|| panic!("no {recipe} machines"))
+                .count
+        };
+        let solve_q = |item: &str, rate: f64, inputs: &FxHashSet<String>, machine: &str, q| {
+            solve_with_palette_exclusions_and_quality(
+                item,
+                rate,
+                inputs,
+                &MachinePalette::default(),
+                machine,
+                &FxHashSet::default(),
+                q,
+            )
+            .unwrap()
+        };
+
+        let ec_inputs = inputs_of(&["iron-plate", "copper-plate"]);
+        for (tier, ec_expected, cable_expected) in [
+            (QualityTier::Normal, 24.0, 36.0),
+            (QualityTier::Uncommon, 24.0 / 1.3, 36.0 / 1.3),
+            (QualityTier::Rare, 24.0 / 1.6, 36.0 / 1.6),
+            (QualityTier::Epic, 24.0 / 1.9, 36.0 / 1.9),
+            (QualityTier::Legendary, 9.6, 14.4),
+        ] {
+            let r = solve_q("electronic-circuit", 60.0, &ec_inputs, "assembling-machine-3", tier);
+            let ec = count_of(&r, "electronic-circuit");
+            let cable = count_of(&r, "copper-cable");
+            assert!(
+                (ec - ec_expected).abs() < 1e-9,
+                "{tier:?}: EC count {ec} vs {ec_expected}"
+            );
+            assert!(
+                (cable - cable_expected).abs() < 1e-9,
+                "{tier:?}: cable count {cable} vs {cable_expected}"
+            );
+        }
+
+        let ore_inputs = inputs_of(&["iron-ore"]);
+        let normal = solve_q("iron-plate", 60.0, &ore_inputs, "electric-furnace", QualityTier::Normal);
+        let legendary =
+            solve_q("iron-plate", 60.0, &ore_inputs, "electric-furnace", QualityTier::Legendary);
+        assert!((count_of(&normal, "iron-plate") - 96.0).abs() < 1e-9);
+        assert!((count_of(&legendary, "iron-plate") - 38.4).abs() < 1e-9);
     }
 
     #[test]

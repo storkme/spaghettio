@@ -6763,7 +6763,7 @@ fn solve_fulgora(target: &str, rate: f64) -> SolverResult {
     use spaghettio_core::netflow::{solve_netflow_with_options, CostTable, NetflowOptions, RecipeScope};
     use spaghettio_core::recipe_db::MachinePalette;
     let inputs: FxHashSet<String> = ["scrap", "water"].iter().map(|s| s.to_string()).collect();
-    let opts = NetflowOptions { allow_recycling: true, allow_voiding: false };
+    let opts = NetflowOptions { allow_recycling: true, allow_voiding: false, ..Default::default() };
     solve_netflow_with_options(
         target, rate, &inputs, &MachinePalette::default(), "assembling-machine-3",
         &FxHashSet::default(), RecipeScope::Free, &CostTable::default(), &opts,
