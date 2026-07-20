@@ -206,6 +206,25 @@ same shared helpers; only this one writes `place_poles`.
 ## Decision log
 
 - *2026-07-20 — Phase 0 census run (numbers above); v1 draft written.*
+- *2026-07-20 — **Phase 1 landed** (gate + unified pass in
+  `place_poles`, extracted `place_band_line` /
+  `place_unified_band_line` / `band_y_lists` /
+  `single_band_depth_budget` helpers). Kill-2/3 census, thinned vs
+  unthinned NET medium poles:
+  EC@45/s — Normal 239→239 and Uncommon 129→129 (bit-identical,
+  gate off), **Legendary 60→30 (50%, beats the ≤48 gate and the ~35
+  prediction)**, validation issues identical per tier;
+  PU@2/s (tier5 fixture config) — Normal 343→343 identical with 0
+  issues, Rare 156→89, Epic 149→76, Legendary 98→53, failure
+  categories at qualifying tiers unchanged (the pre-existing
+  non-power Finding-B classes from #315 — belt-dead-end at Rare,
+  unresolved-junction at Legendary — zero power issues introduced
+  anywhere). Kovarex differential clean at both tiers, substation
+  behavior unchanged. Unit gates: `single_band_gate_table_per_mh_and_tier`
+  (structural kill-1: Normal/Uncommon can never thin),
+  `single_band_mode_halves_row_bands_and_stays_covered` (validator's
+  own continuous check on the thinned field), kill-2 pole pin (== 30)
+  in `quality_ec_45s_express_legendary_from_ore`.*
 - *2026-07-20 — adversarial review round 1: depth-budget math verified
   EXACT (floor vs continuous `.5`-fraction bound — no rounding slop);
   Chebyshev coverage confirmed from `check_power_coverage`; scope
