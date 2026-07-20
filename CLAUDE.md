@@ -25,7 +25,28 @@ For full build commands (WASM rebuild, release builds), see [`docs/build-systems
 - **Pre-commit hooks**: in `.githooks/pre-commit`, activate with `git config core.hooksPath .githooks`. Runs `cargo clippy` on staged Rust and `tsc` on staged TS. Bypass with `--no-verify` only for genuine emergencies.
 - **Scripts**: put exploratory snippets in `scripts/` rather than inline one-liners. Rust debug scripts go in `crates/core/examples/` or as `#[test] #[ignore]` benchmarks.
 - **Snapshots**: `SPAGHETTIO_DUMP_SNAPSHOTS=1 cargo test ...` writes `.fls` files under `crates/core/target/tmp/`. Decode with `tail -c +5 <file> | base64 -d | gunzip`. See [`docs/layout-snapshot-debugger.md`](docs/layout-snapshot-debugger.md).
-- **Process docs**: non-trivial design work uses [`docs/rfp-template.md`](docs/rfp-template.md) — the **kill criteria** section is required, since the dominant rework shape on this project is exploration that overruns its evidence. Deferred-work backlogs with pick-up notes are `docs/*-followups.md` (e.g. `junction-solver-followups.md`, `test-suite-followups.md`) — name them for what they track, not for the session that produced them, and keep a status line at the top so a cold pick-up knows what's still open. PRs follow [`.github/pull_request_template.md`](.github/pull_request_template.md), which captures intent, scope, verification actually run, and any deviations from agreed approach. Trivial changes can omit sections explicitly rather than leaving them blank.
+- **Docs taxonomy** (official as of 2026-07-20; everything in `docs/` is one of these):
+  - **RFPs** (`rfp-*.md`) — spec docs plus context: design, **kill criteria**
+    (required — the dominant rework shape here is exploration that overruns
+    its evidence), verification plan, and a **decision log**, which is the
+    canonical record of every call made while the work ran. Template:
+    [`docs/rfp-template.md`](docs/rfp-template.md). ("RFP" is this repo's
+    dialect for what the industry calls an RFC/design doc — the name is
+    historical; the decision log is the part that matters.) **Numbered**: the
+    registry at [`docs/rfps.md`](docs/rfps.md) assigns `RFP-NNN` to every RFP
+    chronologically; existing files keep their names (numbers live in the
+    registry), new RFPs are named `rfp-NNN-short-name.md` and get a registry
+    row in the same commit. Rejected/obsolete RFPs move to `docs/archive/`.
+  - **Followups** (`*-followups.md`) — deferred-work backlogs with pick-up
+    notes. Named for what they track, not the session that produced them;
+    status line at the top so a cold pick-up knows what's open.
+  - **Reference** — evergreen how-things-work docs (`factorio-mechanics.md`,
+    `build-systems.md`, `file-reference.md`, `ghost-pipeline-contracts.md`,
+    the debugger guides). Kept current when the subject changes; no
+    decision-log duty.
+  - **Notes** (handoffs, investigations, scratch) — session artifacts with no
+    durability contract; archive or delete freely once absorbed.
+- **PRs** follow [`.github/pull_request_template.md`](.github/pull_request_template.md), which captures intent, scope, verification actually run, and any deviations from agreed approach. Trivial changes can omit sections explicitly rather than leaving them blank.
 
 ### Workflow (branches, review, merging)
 
@@ -55,6 +76,18 @@ For full build commands (WASM rebuild, release builds), see [`docs/build-systems
   (rebase, delete, cherry-pick) until the verdict lands — route
   restructuring through whoever is coordinating, who retargets the reviewer
   with an equivalence check.
+- **Agent autonomy**: the agent decides and proceeds autonomously — making
+  reasonable assumptions is fine and expected. Surface to the user only the
+  genuinely big or unexpected: kill-criterion trips, scope changes,
+  falsified premises, destructive/irreversible actions, and trade-offs the
+  process explicitly reserves for the user (e.g. footprint-vs-power,
+  belt-tier choices). Everything else: pick the recommended path, execute,
+  and report in the running narrative — the user reviews asynchronously and
+  will object if something looks wrong. **The trade is documentation**:
+  every consequential autonomous decision (and every assumption it rests
+  on) is recorded where its subject lives — the owning RFP's decision log,
+  or the commit message / followups doc when no RFP owns it. An
+  undocumented decision is the only kind that's not allowed.
 
 ## Architecture
 
