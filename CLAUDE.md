@@ -27,6 +27,35 @@ For full build commands (WASM rebuild, release builds), see [`docs/build-systems
 - **Snapshots**: `SPAGHETTIO_DUMP_SNAPSHOTS=1 cargo test ...` writes `.fls` files under `crates/core/target/tmp/`. Decode with `tail -c +5 <file> | base64 -d | gunzip`. See [`docs/layout-snapshot-debugger.md`](docs/layout-snapshot-debugger.md).
 - **Process docs**: non-trivial design work uses [`docs/rfp-template.md`](docs/rfp-template.md) — the **kill criteria** section is required, since the dominant rework shape on this project is exploration that overruns its evidence. Deferred-work backlogs with pick-up notes are `docs/*-followups.md` (e.g. `junction-solver-followups.md`, `test-suite-followups.md`) — name them for what they track, not for the session that produced them, and keep a status line at the top so a cold pick-up knows what's still open. PRs follow [`.github/pull_request_template.md`](.github/pull_request_template.md), which captures intent, scope, verification actually run, and any deviations from agreed approach. Trivial changes can omit sections explicitly rather than leaving them blank.
 
+### Workflow (branches, review, merging)
+
+- **Branches + PRs by default.** Don't work directly on `main` unless
+  explicitly agreed for the task at hand. Work on a feature branch and open a
+  PR to get code onto `main`. Besides review, this serializes `main` across
+  the multiple concurrent Claude sessions that share this repo — interleaved
+  direct commits from two sessions in one checkout caused real branch
+  tangles (2026-07-20).
+- **Adversarial review before anything is commit-ready** — code *and*
+  documentation. Preferred: the CI review bot —
+  [`.github/workflows/claude-code-review.yml`](.github/workflows/claude-code-review.yml)
+  runs a Claude code review on every PR (opened/synchronized/reopened), and
+  `clear-agent-reviewed.yml` drops the `agent-reviewed` label when new
+  commits land so the new SHA gets re-reviewed. Local adversarial review (an
+  independent agent that re-runs gates and probes the claims) is the
+  fallback when a PR isn't in play — and it remains **required in addition
+  to the bot** for layout-engine or validator-semantics changes: the bot
+  reviews the diff, but it cannot run STRESSGOLD, decode snapshots, or do
+  tile-level verification, and every materially wrong claim caught in the
+  2026-07 power arc was caught by that deeper class of review.
+- **Keep `origin/main` current** — push promptly after merging. Worktree
+  agents branch from `origin/main`; a stale origin hands every spawned agent
+  a stale base (35 unpushed commits once sent an agent rebuilding a fix
+  against a pre-arc tree).
+- **Review freeze**: once a branch/PR is under review, no branch surgery
+  (rebase, delete, cherry-pick) until the verdict lands — route
+  restructuring through whoever is coordinating, who retargets the reviewer
+  with an equivalence check.
+
 ## Architecture
 
 **Rust workspace** (`crates/`) is where all work happens:
