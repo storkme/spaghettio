@@ -306,9 +306,33 @@ helper is scoped as explicit 3a work — not assumed to exist.
   zero-margin distance-3 warrants a comment near `compute_substation_bands`
   for template authors. Merged ff-only onto 1eddaee.*
 
+- *2026-07-20 — **Phase 3b LANDED** (kovarex top-edge substation boundary
+  variant). The RFP's 3b hypothesis is CONFIRMED shape, and — unlike all four
+  3a-ii fixtures — this is the case where the dormant **substation path finally
+  fires**. Real tile map (pass 1): the self-loop packs its 16 recirc input
+  inserters at `top_y-1/-2` with **5 belt/corridor rows stacked ABOVE them**
+  (far-corridor return, descent, far belt, near belt, near2 belt) — so the
+  top-edge freed band lands 5+ rows up, beyond a medium pole's ±3; only the
+  substation's ±9 reaches down. `compute_substation_bands` now flags the
+  STARVED row's own top edge when it has no predecessor cycle (`target == 0`,
+  `top_edge: true`) instead of skipping it; the widen is applied as a
+  y-offset bump (`layout_pass`'s new `top_widen`, a distinct channel from the
+  interior `extra_gap_after_row` map) and the target-resolution powers the
+  row's own input-inserter band (deeper than the interior `y_start..+4`
+  window). Result: pin `[("power", 16)] → []`, **+2 rows** (row 0
+  `y_start 1→3`, layout `29x15 → 29x17`), **exactly 1 substation** at (11,1)
+  covering the recirc bank under the exact continuous ±9 check, medium poles
+  5→6 (one connectivity bridge), network one connected component, 0 footprint
+  overlaps. **Self-loop composition intact**: `assert_no_errors` +
+  `assert_round_trip` green, 6 centrifuges invariant, no belt-dead-end /
+  unresolved-junction introduced, and the substation landed IN the freed band
+  (routing did not consume it — the KC risk did not trip). Selectivity:
+  STRESSGOLD `=check` 8/8 byte-identical, four 3a-ii pins still 0, full suite
+  green (lib 695, e2e 50), clippy lib clean, wasm target check clean. New pin
+  asserts `substation_count == 1` so a future geometry change that re-routes
+  coverage through a different (or absent) power entity fails loudly.*
+
 ## Phase 3 remaining
-- **3b** — kovarex recirc geometry (correctly untriggered by 3a-ii; the row-0
-  predecessor-gap skip leaves it clean for a dedicated boundary-variant unit).
 - **3c** — re-census (trigger-(b) re-anchor to the post-3a corpus) + close-out
   numbers into the parent RFP.
 - **Followups**: explicit convergence assertion in the reactive pass (so a
