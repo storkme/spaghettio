@@ -722,10 +722,18 @@ fn layout_pass(
                         .filter(|&(_x, y)| y >= below.y_start && y < below.y_start + 4)
                         // …restricted to the genuinely packed ones: 0 free tiles
                         // in the 7×7 against the routed occupancy (the RFP Phase
-                        // 0f hardness signature). Flanking inserters a medium
-                        // pole can still reach are left to the medium pass, so a
-                        // substation covers exactly the previously-uncovered set
-                        // — minimal hardware, no redundant flank coverage.
+                        // 0f hardness signature). A substation is placed only for
+                        // inserters STILL unreachable after the boundary is
+                        // widened. On the current corpus this yields zero targets:
+                        // the +2 widen lands the freed rows exactly 3 tiles above
+                        // the deep inserters (the dual-input belt bundle is 2 rows,
+                        // not the RFP-assumed 3), inside a medium pole's ±3, so the
+                        // 7×7 gains a free tile and the medium mop-up covers them.
+                        // The substation branch is the VERIFIED-CORRECT FALLBACK
+                        // for genuinely deeper geometry (a real 3-belt-row cycle,
+                        // a 5×5 fluid stack) where an inserter stays >3 from every
+                        // free tile even after widening — its gate runs on every
+                        // starved fixture; the body is unit-tested by construction.
                         .filter(|&(ix, iy)| {
                             (-3i32..=3)
                                 .all(|dy| (-3i32..=3).all(|dx| occupied.contains(&(ix + dx, iy + dy))))
@@ -1541,6 +1549,69 @@ mod tests {
     fn test_compute_extra_gaps_empty() {
         let extras = compute_extra_gaps(&[]);
         assert!(extras.is_empty());
+    }
+
+    // --- Reactive substation repair (RFP Phase 3a-ii) ---
+
+    #[test]
+    fn compute_substation_bands_flags_predecessor_gap_of_the_starved_row() {
+        // Rows: 0=[1,8) 1=[15,22) 2=[30,38). An uncovered inserter inside row 1
+        // widens the gap BEFORE row 1 (after row 0); one contained inside row 0
+        // yields no band (row 0 has no predecessor to widen).
+        let rows = three_row_layout();
+        let bands = compute_substation_bands(&[(5, 17)], &rows);
+        assert_eq!(bands, vec![SubstationBand { row_after: 0, extra: 2 }]);
+        assert!(compute_substation_bands(&[(5, 3)], &rows).is_empty());
+        // Two inserters in the same row collapse to one band; sorted by row.
+        assert_eq!(
+            compute_substation_bands(&[(5, 17), (7, 18), (2, 32)], &rows),
+            vec![
+                SubstationBand { row_after: 0, extra: 2 },
+                SubstationBand { row_after: 1, extra: 2 },
+            ]
+        );
+    }
+
+    /// The substation FALLBACK branch: when an electric inserter is genuinely
+    /// unreachable by any medium pole (its 7×7 is fully occupied) and a
+    /// substation band is supplied, `place_poles` drops a substation into the
+    /// freed band and the inserter is covered under the exact continuous check —
+    /// with give-up empty. The current corpus never reaches this branch (widening
+    /// alone lands the freed rows within a medium pole's ±3), but a deeper
+    /// geometry would, so it is verified here by construction.
+    #[test]
+    fn place_poles_substation_covers_an_inserter_no_medium_pole_can_reach() {
+        // One machine so place_poles doesn't early-return.
+        let machines = [(5, 0, 3)];
+        // A single deep inserter whose whole 7×7 is occupied → medium can't fit.
+        let ins = (40, 40);
+        let mut occupied: FxHashSet<(i32, i32)> = FxHashSet::default();
+        for dy in -3..=3 {
+            for dx in -3..=3 {
+                occupied.insert((ins.0 + dx, ins.1 + dy));
+            }
+        }
+        // A free 2-row band 8 tiles above the inserter — outside medium reach
+        // (>3), inside a substation's 9-tile supply. band top sy=31 → covers
+        // iy ∈ [23,40] ⊇ 40.
+        let targets = [SubstationTarget { band_y0: 31, band_y1: 32, inserters: vec![ins] }];
+
+        let (entities, uncovered) = place_poles(&machines, &[ins], &occupied, &targets);
+        let subs: Vec<&PlacedEntity> = entities.iter().filter(|e| e.name == "substation").collect();
+        assert_eq!(subs.len(), 1, "exactly one substation should cover the deep inserter");
+        let s = subs[0];
+        // Exact continuous coverage: ix ∈ [sx-8, sx+9], iy ∈ [sy-8, sy+9].
+        assert!(
+            ins.0 >= s.x - 8 && ins.0 <= s.x + 9 && ins.1 >= s.y - 8 && ins.1 <= s.y + 9,
+            "substation at ({},{}) must exactly cover inserter {:?}", s.x, s.y, ins
+        );
+        assert!(uncovered.is_empty(), "the substation must clear the give-up set");
+
+        // Without the band, the same inserter is unreachable — proving the
+        // substation, not medium, is what covered it.
+        let (ent2, unc2) = place_poles(&machines, &[ins], &occupied, &[]);
+        assert!(ent2.iter().all(|e| e.name != "substation"));
+        assert_eq!(unc2, vec![ins], "no band ⇒ the deep inserter stays uncovered");
     }
 
     /// D2a (RFP Fulgora, `docs/rfp-fulgora-scrap.md`): a solid surplus
