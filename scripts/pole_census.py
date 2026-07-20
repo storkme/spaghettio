@@ -1,14 +1,26 @@
 #!/usr/bin/env python3
-"""POST-Phase-0f power re-census (docs/rfp-power-supply.md).
+"""Power re-census (docs/rfp-power-supply.md + docs/rfp-power-reservation.md).
 
-Reads the 45 committed .fls snapshots (regenerated from the two committed
-commands at commit debb398, post Phase 0f) and computes, per case and
-corpus-wide:
-  A. power warning footprint vs the pinned Phase-0f-landed reds
-  B. slack distribution under the new two-band placement
-  C. pole totals per case (Phase 3 trigger-(b) baseline)
+Originally the post-Phase-0f re-census; re-run post-Phase-3b (commit ca8730e)
+to re-anchor the trigger-(b) pole-count baseline after 3a-ii's reactive
+band-widening and 3b's kovarex substation. Reads the .fls snapshots
+(regenerated from the two committed commands — the e2e/stress suite + the
+`census_science_pack_snapshots` #[ignore]d test, both with
+SPAGHETTIO_DUMP_SNAPSHOTS=1) and computes, per case and corpus-wide:
+  A. power warning footprint vs the pinned reds
+  B. slack distribution under the two-band placement (MEDIUM poles only)
+  C. pole totals per case, medium + substation (Phase 3 trigger-(b) baseline)
   D. in-span fraction
-  E. Phase 1 fluid-row free-tile budget inputs
+  E. fluid-row free-tile budget inputs
+
+SUBSTATION HANDLING (RFP Phase 3b — a pole TYPE the pre-3b census never saw):
+  substations are counted in the part-C pole totals (real_pole_count now =
+  medium + substation) and modelled as 2x2 obstacles in the medium-pole slack
+  occupancy, but are EXCLUDED from the part-B ±3 slack/densification analysis
+  (they have ±9 supply / a 2x2 footprint — a single-tile ±3 slack window is
+  meaningless for them). Two corpus cases carry a substation post-3b:
+  tier_kovarex_self_loop (top-edge band) and census_utility_science_pack
+  (deep-geometry fallback).
 
 METHODOLOGY CAVEATS (read before trusting the numbers):
   - Ground truth pole positions come from the final snapshot only. We do
@@ -88,6 +100,15 @@ MACHINE_NAMES = set(MACHINE_DIMS.keys())
 INSERTER_NAMES = {"inserter", "long-handed-inserter", "fast-inserter", "stack-inserter"}
 SPLITTER_NAMES = {"splitter", "fast-splitter", "express-splitter"}
 POLE_RANGE = 3
+# Substation (RFP `docs/rfp-power-reservation.md` Phase 3b — kovarex top-edge
+# band, plus the USP deep-geometry fallback): a NEW pole TYPE the pre-3b census
+# never saw. 2x2 footprint, ±9 supply (18x18) — a fundamentally different beast
+# from the medium pole's 1x1 / ±3, so it is COUNTED in the corpus pole totals
+# (part C) but deliberately EXCLUDED from the medium-pole ±3 slack/densification
+# analysis (part B), where a ±9 substation would be meaningless. Modelled as a
+# 2x2 obstacle in the medium-pole slack occupancy (a medium pole cannot land on
+# a substation tile).
+SUBSTATION_SIZE = 2
 NEEDS_ELECTRICITY_MACHINES = MACHINE_NAMES - {"biochamber"}  # biochamber is burner-fueled
 
 
@@ -119,11 +140,21 @@ def band_ys_for_seed(cy, top_y):
 
 
 def build_occupied_base(entities):
-    """Mirror bus/layout.rs's occupancy construction, excluding poles."""
+    """Mirror bus/layout.rs's occupancy construction, excluding MEDIUM poles.
+
+    Medium poles are handled separately as single-tile obstacles via `pole_set`
+    in the slack loop. Substations (RFP Phase 3b) are NOT medium poles, so they
+    stay in the occupancy set at their real 2x2 footprint — a medium pole cannot
+    land on a substation tile."""
     occ = set()
     for e in entities:
         name = e["name"]
         if name == "medium-electric-pole":
+            continue
+        if name == "substation":
+            for dx in range(SUBSTATION_SIZE):
+                for dy in range(SUBSTATION_SIZE):
+                    occ.add((e["x"] + dx, e["y"] + dy))
             continue
         if name in MACHINE_NAMES:
             w, h = MACHINE_DIMS[name]
@@ -231,8 +262,13 @@ def census_one(path):
     power_errors = [i for i in power_issues if i["severity"] == "Error"]
     all_issue_cats = Counter((i["severity"], i["category"]) for i in issues)
 
+    # `poles` = MEDIUM poles only — the subjects of the ±3 slack/densification
+    # analysis (parts B/D/E). Substations (RFP Phase 3b) are counted separately
+    # (part C pole totals) but are NOT ±3 slack subjects (they have ±9 supply and
+    # a 2x2 footprint; a "single-tile slack window" is meaningless for them).
     poles = [(e["x"], e["y"]) for e in entities if e["name"] == "medium-electric-pole"]
     pole_set = set(poles)
+    substations = [(e["x"], e["y"]) for e in entities if e["name"] == "substation"]
     inserters = [
         (e["x"], e["y"]) for e in entities if e["name"] in INSERTER_NAMES
     ]
@@ -380,7 +416,12 @@ def census_one(path):
         "power_warning_count": len(power_warnings),
         "power_error_count": len(power_errors),
         "power_messages_sample": [i["message"] for i in power_warnings[:5]],
-        "real_pole_count": len(poles),
+        # `real_pole_count` = ALL power poles (medium + substation), the part-C
+        # corpus total. `medium_pole_count` / `substation_count` break it down;
+        # the part-B ±3 slack analysis operates on `medium_pole_count` only.
+        "real_pole_count": len(poles) + len(substations),
+        "medium_pole_count": len(poles),
+        "substation_count": len(substations),
         "electric_inserter_count": electric_inserter_count,
         "n_rows": len(rows),
         "y_collisions": y_collisions,
@@ -399,7 +440,11 @@ def census_one(path):
 
 def main():
     files = sorted(f for f in os.listdir(SNAP_DIR) if f.startswith("snapshot-") and f.endswith(".fls"))
-    assert len(files) == 45, f"expected 45 snapshots, found {len(files)}"
+    # 49 = the 45-case post-0f corpus + 4 `phase0e1_*` fixtures landed with
+    # Phase 0e-i (emag/cryo/foundry-molten/biolubricant) AFTER the post-0f
+    # census. Bump this deliberately when the corpus grows so a partial/failed
+    # snapshot dump is caught rather than silently under-censused.
+    assert len(files) == 49, f"expected 49 snapshots, found {len(files)}"
     results = []
     for f in files:
         results.append(census_one(os.path.join(SNAP_DIR, f)))
@@ -410,14 +455,17 @@ if __name__ == "__main__":
     results = main()
     out = {
         "meta": {
-            "generated_at": "2026-07-19",
-            "commit": "debb398",
+            "generated_at": "2026-07-20",
+            "commit": "ca8730e",
             "n_snapshots": len(results),
-            "method": "post-0f re-census; see module docstring in census.py for full methodology + caveats",
+            "method": "post-3b re-census; see module docstring in pole_census.py for full methodology + caveats",
         },
         "cases": results,
     }
-    outpath = "/tmp/claude-1000/-home-stork-code-fucktorio/e861777b-2d64-4a65-b2a3-ce5957b45a51/scratchpad/census-raw.json"
+    outpath = os.environ.get(
+        "SPAGHETTIO_CENSUS_OUT",
+        "/tmp/census-raw.json",
+    )
     with open(outpath, "w") as fh:
         json.dump(out, fh, indent=1)
     print("wrote", outpath)
