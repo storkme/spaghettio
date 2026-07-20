@@ -30,6 +30,89 @@ pub fn is_machine_entity(entity: &str) -> bool {
     MACHINE_ENTITY_NAMES.contains(&entity)
 }
 
+/// Factorio 2.0 quality tier of the entities the user builds with
+/// (`docs/rfp-build-quality.md`). Build quality only — this says nothing
+/// about the quality of *items produced* (quality-production is a
+/// separate future RFP).
+///
+/// The scaling anchor is [`QualityTier::level`], NOT the enum ordinal:
+/// vanilla skips level 4, so legendary is level **5** (FFF-375; verified
+/// against wiki.factorio.com 2026-07-20, in-game tooltip check tracked as
+/// RFP kill criterion 1). Most positive attributes scale
+/// `×(1 + 0.3·level)` — crafting speed, inserter rotation — while pole
+/// geometry uses per-level tile bonuses (+1 supply radius, +2 wire
+/// reach), so consumers take the tier and derive what they need rather
+/// than sharing one multiplier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub enum QualityTier {
+    #[default]
+    Normal,
+    Uncommon,
+    Rare,
+    Epic,
+    Legendary,
+}
+
+impl QualityTier {
+    /// Vanilla quality level — the number the scaling rules key off.
+    /// Legendary is 5, not 4: level 4 is reserved/unused in vanilla.
+    pub fn level(self) -> u8 {
+        match self {
+            QualityTier::Normal => 0,
+            QualityTier::Uncommon => 1,
+            QualityTier::Rare => 2,
+            QualityTier::Epic => 3,
+            QualityTier::Legendary => 5,
+        }
+    }
+
+    /// The `×(1 + 0.3·level)` attribute multiplier (crafting speed,
+    /// inserter rotation). At `Normal` this is exactly `1.0` — kill
+    /// criterion 2 (identity at Normal) depends on `×1.0` staying
+    /// bit-exact, which IEEE 754 guarantees.
+    pub fn multiplier(self) -> f64 {
+        1.0 + 0.3 * f64::from(self.level())
+    }
+
+    /// The blueprint-JSON string for this tier (entity-level
+    /// `quality :: string?` per lua-api BlueprintEntity). `Normal` is
+    /// named too, but exporters skip the field entirely at Normal.
+    pub fn name(self) -> &'static str {
+        match self {
+            QualityTier::Normal => "normal",
+            QualityTier::Uncommon => "uncommon",
+            QualityTier::Rare => "rare",
+            QualityTier::Epic => "epic",
+            QualityTier::Legendary => "legendary",
+        }
+    }
+
+    /// Parse the blueprint-JSON / URL-param string form. Unknown strings
+    /// map to `None` so callers choose their own fallback (the wasm
+    /// boundary defaults unknown → `Normal`, matching the
+    /// `max_inserter_tier` pattern).
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "normal" => Some(QualityTier::Normal),
+            "uncommon" => Some(QualityTier::Uncommon),
+            "rare" => Some(QualityTier::Rare),
+            "epic" => Some(QualityTier::Epic),
+            "legendary" => Some(QualityTier::Legendary),
+            _ => None,
+        }
+    }
+
+    /// All tiers, ascending — the sweep the per-tier unit tests and the
+    /// UI dropdown both iterate.
+    pub const ALL: [QualityTier; 5] = [
+        QualityTier::Normal,
+        QualityTier::Uncommon,
+        QualityTier::Rare,
+        QualityTier::Epic,
+        QualityTier::Legendary,
+    ];
+}
+
 /// Recycler direct-ejection tile (RFP Fulgora Phase 0 finding,
 /// `docs/rfp-fulgora-scrap.md`): the ONE tile a recycler credits its
 /// output onto directly, mining-drill-style — no output inserter, per
@@ -524,6 +607,50 @@ mod tests {
     #[test]
     fn machine_dims_recycler_non_square() {
         assert_eq!(machine_dims("recycler"), (2, 4));
+    }
+
+    #[test]
+    fn quality_levels_skip_four() {
+        // Vanilla reserves level 4; legendary is 5. An ordinal-based
+        // implementation would produce [0,1,2,3,4] — the exact bug this
+        // sweep exists to catch (`docs/rfp-build-quality.md`).
+        let levels: Vec<u8> = QualityTier::ALL.iter().map(|q| q.level()).collect();
+        assert_eq!(levels, vec![0, 1, 2, 3, 5]);
+    }
+
+    #[test]
+    fn quality_multiplier_normal_is_exactly_one() {
+        // Kill criterion 2 (identity at Normal) leans on ×1.0 being a
+        // bit-exact no-op — the multiplier itself must be exactly 1.0,
+        // not merely close.
+        assert_eq!(QualityTier::Normal.multiplier(), 1.0);
+    }
+
+    #[test]
+    fn quality_multiplier_table() {
+        // Legendary: 0.3×5 = 1.5 is exact in f64, so 2.5 is exact too.
+        assert_eq!(QualityTier::Legendary.multiplier(), 2.5);
+        for (tier, expected) in [
+            (QualityTier::Uncommon, 1.3),
+            (QualityTier::Rare, 1.6),
+            (QualityTier::Epic, 1.9),
+        ] {
+            assert!(
+                (tier.multiplier() - expected).abs() < 1e-12,
+                "{tier:?}: {} vs {expected}",
+                tier.multiplier()
+            );
+        }
+    }
+
+    #[test]
+    fn quality_name_round_trip() {
+        for tier in QualityTier::ALL {
+            assert_eq!(QualityTier::from_name(tier.name()), Some(tier));
+        }
+        assert_eq!(QualityTier::from_name("quality"), None);
+        assert_eq!(QualityTier::from_name(""), None);
+        assert_eq!(QualityTier::default(), QualityTier::Normal);
     }
 
     #[test]

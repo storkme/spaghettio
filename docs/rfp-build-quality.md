@@ -446,3 +446,12 @@ Per the CLAUDE.md layout-change protocol:
   [#310](https://github.com/storkme/spaghettio/issues/310), user
   returning to it immediately after this RFP. Status → ACCEPTED;
   Phase 0 work starting in a worktree (main carries unrelated WIP).*
+- *2026-07-20 — kill criterion 5 resolved: **blind spot confirmed**.
+  Snapshot decode of `stress_electronic_circuit_60s_red_from_ore`
+  (`e3fcfc8`): the merger cascade collapses to one fast belt stamped
+  `rate=60.0` (287 tiles, 2× the 30/s cap) with `validation.issues:
+  []` — the lane-rate walker never visits merger-segment tiles. Filed
+  as [#311](https://github.com/storkme/spaghettio/issues/311) (fix
+  validator first, then merger). Per kill 5: the differential
+  legendary fixture caps at ≤45/s (one blue belt) until #311 closes;
+  the 60 EC/s headline re-lands afterwards.*
