@@ -273,3 +273,44 @@ helper is scoped as explicit 3a work — not assumed to exist.
   Non-blocking residual: export/parse footprint-table asymmetry for
   engine-never-emitted 2×2s (big-electric-pole, steel-furnace) — unreachable,
   one-line note if the vocabulary grows.*
+- *2026-07-20 — **Phase 3a-ii LANDED** (`e2fb777`/`5e37826`/`867deae`/`3481841`/`50408a3`;
+  full adversarial review APPROVE; geometry independently pre-verified by a
+  separate fork). The reactive repair mechanism works exactly as the RFP
+  designed — but the RFP's CENTRAL PREMISE is FALSIFIED and recorded: it
+  assumed a 3-belt-row cycle and concluded "only a substation's 18×18 can
+  reach these." The actual electronic-circuit dual-input rows have **2** input
+  belt rows, so widening the starved boundary by +2 lands the freed band
+  exactly 3 tiles above the deep inserters — inside a medium pole's ±3.
+  Independently verified from real tile maps: **2,167 inserters across the
+  four fixtures, zero beyond medium reach, ZERO substations placed**. All four
+  gating pins flip to 0 (EC@20 14→0, EC@60-red 60→0, PU-am3 20→0,
+  PU-am2-baseline 43→0), asserted EXACT — coverage is distance exactly 3,
+  zero margin, so the pins are the drift lock (a future 3→4 breaks a pin
+  loudly). Composition: PU-am2-baseline is the both-at-once case (junction
+  retry + substation-band widen), folded via `.max()` into one pass-2 —
+  neither preempts the other, junction baselines intact. Movement budget:
+  machines/inserters invariant, only y-widening + power/belt entities (EC@60
+  340→340 machines, +12 rows). Footprint deltas: EC@20 +2, PU-am3 +8,
+  PU-am2 +10, EC@60-red +12 rows. Interconnect: all-medium, 0 connector
+  poles, every fixture UNDER the 1.5× census-baseline ceiling. Selectivity:
+  only the four fixtures moved; kovarex byte-identical (its recirc inserters
+  have no stacked-cycle predecessor → `compute_substation_bands` skips them →
+  correctly left to 3b). **Substation machinery KEPT** (reviewer
+  recommendation) — hardness-gated fallback (fires only for inserters still
+  0/49-free after widening), unit-tested with a control case, zero
+  runtime cost, correct for genuinely deeper future geometry. Reviewer
+  corrections carried: (1) the convergence guard is the four exact pins, NOT
+  an explicit code check (the report mis-stated this; a genuinely-new future
+  starved case outside the corpus would ship uncovered without an alarm —
+  FOLLOWUP: make the reactive pass assert its own convergence); (2)
+  zero-margin distance-3 warrants a comment near `compute_substation_bands`
+  for template authors. Merged ff-only onto 1eddaee.*
+
+## Phase 3 remaining
+- **3b** — kovarex recirc geometry (correctly untriggered by 3a-ii; the row-0
+  predecessor-gap skip leaves it clean for a dedicated boundary-variant unit).
+- **3c** — re-census (trigger-(b) re-anchor to the post-3a corpus) + close-out
+  numbers into the parent RFP.
+- **Followups**: explicit convergence assertion in the reactive pass (so a
+  new starved case can't ship uncovered without a pin); zero-margin distance-3
+  code comment.
