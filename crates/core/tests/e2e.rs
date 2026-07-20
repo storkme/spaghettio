@@ -2849,6 +2849,29 @@ fn check_stress_scoreboard(test_name: &str, result: &E2EResult, baseline: Stress
         0.0
     };
 
+    // Phase 2 (RFP `docs/rfp-power-supply.md`): pole slack guardrail. Tally the
+    // per-pole PoleSlack events place_poles emits so the scoreboard surfaces
+    // power-placement fragility (zero-slack poles) in the golden diff — a
+    // future densification change that erodes pole slack moves these lines.
+    let mut pole_slacks: Vec<i32> = result
+        .trace_events
+        .iter()
+        .filter_map(|ev| match ev {
+            TraceEvent::PoleSlack { alternatives, .. } => Some(*alternatives),
+            _ => None,
+        })
+        .collect();
+    let total_poles = pole_slacks.len();
+    let zero_slack_poles = pole_slacks.iter().filter(|&&s| s == 0).count();
+    pole_slacks.sort_unstable();
+    let median_slack: f64 = if total_poles == 0 {
+        0.0
+    } else if total_poles % 2 == 1 {
+        pole_slacks[total_poles / 2] as f64
+    } else {
+        (pole_slacks[total_poles / 2 - 1] + pole_slacks[total_poles / 2]) as f64 / 2.0
+    };
+
     let total_warnings: usize = by_category.values().sum();
     let mut msg = format!(
         "\n=== {test_name} scoreboard ===\n\
@@ -2862,6 +2885,9 @@ fn check_stress_scoreboard(test_name: &str, result: &E2EResult, baseline: Stress
          mean gap:         {:.2}\n\
          max gap:          {}\n\
          max trunks/band:  {}\n\
+         total poles:      {}\n\
+         zero-slack poles: {}\n\
+         median slack:     {:.1}\n\
          warnings by category:\n",
         result.layout.entities.len(),
         total_warnings,
@@ -2875,6 +2901,9 @@ fn check_stress_scoreboard(test_name: &str, result: &E2EResult, baseline: Stress
         mean_gap,
         max_gap,
         band_trunks_max,
+        total_poles,
+        zero_slack_poles,
+        median_slack,
     );
     if by_category.is_empty() {
         msg.push_str("  (none)\n");

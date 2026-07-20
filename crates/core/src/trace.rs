@@ -764,6 +764,20 @@ pub enum TraceEvent {
         distinct_items: usize,
     },
 
+    /// Per-pole placement slack (RFP `docs/rfp-power-supply.md` Phase 2),
+    /// emitted once for every pole after `place_poles` finishes. `alternatives`
+    /// is the number of FREE tiles in the pole's own row within ±POLE_RANGE
+    /// (same y, Chebyshev x) excluding its own tile and every other pole — the
+    /// census's `local_alternatives`, measured live in-engine (on the final
+    /// pole set, so it matches the post-hoc census computation exactly) so the
+    /// stress scoreboard surfaces power-placement fragility (zero-slack poles)
+    /// in the golden diff whenever a future densification change erodes it.
+    PoleSlack {
+        x: i32,
+        y: i32,
+        alternatives: i32,
+    },
+
     // Ghost routing (Phase 2) — emitted by route_bus_ghost in ghost_router.rs
     GhostRoutingComplete {
         entity_count: usize,

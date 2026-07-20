@@ -1030,6 +1030,35 @@ fn place_poles(
     }
 
     repair_pole_connectivity(&mut entities, &placed, occupied);
+
+    // Phase 2 (RFP `docs/rfp-power-supply.md`): live slack instrumentation.
+    // Emit each pole's free-alternative count so the stress scoreboard tallies
+    // zero-slack / median / total-pole lines — a guardrail that makes any future
+    // densification change pay its power cost visibly in the golden diff.
+    // Zero-slack poles are "works but fragile"; the scoreboard also carries the
+    // Phase 3 triggers (solid-row zero-slack = trigger (a); per-case pole total
+    // vs the census baseline = trigger (b)).
+    //
+    // Measured on the FINAL pole set (after band placement + mop-up + repair) in
+    // the census's `local_alternatives` window — same y, x within ±POLE_RANGE,
+    // excluding the pole's own tile and every other pole. This deviates from the
+    // RFP brief's "at each pole's decision instant" framing on purpose: the
+    // ground-truth census computes slack post-hoc over the *complete* pole set,
+    // so a per-decision measure (which can't see poles the mop-up/repair place
+    // later) would diverge from it and fail the ±1 fixed-point criterion. This
+    // pass is still fully live — in-engine, on the real pole positions, no probe
+    // replay — so it matches the census by construction. Emitted per pole ENTITY
+    // (not per unique tile) so `total poles` is the true count and a future
+    // overlapping-pole regression can't hide inside a deduped set.
+    let all_poles: FxHashSet<(i32, i32)> = entities.iter().map(|e| (e.x, e.y)).collect();
+    for e in &entities {
+        let (px, py) = (e.x, e.y);
+        let alternatives = (px - POLE_RANGE..=px + POLE_RANGE)
+            .filter(|&x| x != px && !occupied.contains(&(x, py)) && !all_poles.contains(&(x, py)))
+            .count() as i32;
+        crate::trace::emit(crate::trace::TraceEvent::PoleSlack { x: px, y: py, alternatives });
+    }
+
     entities
 }
 
