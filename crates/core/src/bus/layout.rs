@@ -180,7 +180,7 @@ fn run_layout_with_retry_inner(
     // fired only under a trace guard and `build_bus_layout` was not a pure
     // function of its arguments (package #3). The event is still emitted for
     // the snapshot debugger; this reads the control-flow copy instead.
-    let (result_1, row_spans_1, cap_coords) =
+    let (result_1, row_spans_1, cap_coords, _uncovered_1) =
         layout_pass(solver_result, opts, None, explicit_plan)?;
 
     let retry_gaps = if cap_coords.is_empty() {
@@ -226,7 +226,7 @@ fn run_layout_with_retry_inner(
         recipes,
     });
 
-    let (result_2, _, _) = layout_pass(solver_result, opts, Some(&retry_gaps), explicit_plan)?;
+    let (result_2, _, _, _) = layout_pass(solver_result, opts, Some(&retry_gaps), explicit_plan)?;
     Ok(result_2)
 }
 
@@ -263,7 +263,9 @@ fn compute_retry_gaps(
 /// Takes an optional `retry_extra_gaps` map (row index → extra tiles)
 /// that the retry loop in `build_bus_layout` uses to widen specific
 /// row boundaries on a second pass. `None` on the first pass; `Some`
-/// on the retry. Returns `(layout, row_spans, cap_coords)`: the retry
+/// on the retry. Returns `(layout, row_spans, cap_coords, uncovered_inserters)`:
+/// `uncovered_inserters` is place_poles' give-up set, the RFP Phase 3a-ii
+/// reactive-substation trigger (empty for every non-starved layout). The retry
 /// loop maps `cap_coords` (junction-solver cap tiles, carried as data
 /// rather than scraped from the trace stream) back to row indices via
 /// `row_spans` to build the gap map.
@@ -272,7 +274,7 @@ fn layout_pass(
     opts: &LayoutOptions,
     retry_extra_gaps: Option<&FxHashMap<usize, i32>>,
     explicit_plan: Option<&crate::bus::partitioner::PartitionPlan>,
-) -> Result<(LayoutResult, Vec<RowSpan>, Vec<(i32, i32)>), String> {
+) -> Result<(LayoutResult, Vec<RowSpan>, Vec<(i32, i32)>, Vec<(i32, i32)>), String> {
     let max_belt_tier = opts.max_belt_tier.as_deref();
     let max_inserter_tier = opts.max_inserter_tier;
 
@@ -564,7 +566,11 @@ fn layout_pass(
     // mop-up now sees the true final occupancy, so coverage and hardness are
     // consistent by construction (RFP Phase 0f fix — restores the poles-last
     // invariant the pipeline had been violating).
-    let pole_entities: Vec<PlacedEntity> = {
+    // The pole block also yields the uncovered electric inserters place_poles
+    // gave up on (RFP Phase 3a-ii trigger), propagated out of layout_pass so
+    // the reactive substation pass can widen starved bands. Empty for every
+    // layout the two-band + mop-up covers.
+    let (pole_entities, uncovered_inserters_out): (Vec<PlacedEntity>, Vec<(i32, i32)>) = {
         let mut occupied: FxHashSet<(i32, i32)> = FxHashSet::default();
         let mut machines_for_poles: Vec<(i32, i32, i32)> = Vec::new();
         let mut inserters_for_poles: Vec<(i32, i32)> = Vec::new();
@@ -600,7 +606,7 @@ fn layout_pass(
             }
         }
         let pole_strategy = if machines_for_poles.is_empty() { "empty" } else { "rows" };
-        let poles = place_poles(&machines_for_poles, &inserters_for_poles, &occupied);
+        let (poles, uncovered) = place_poles(&machines_for_poles, &inserters_for_poles, &occupied);
         crate::trace::emit(crate::trace::TraceEvent::PolesPlaced {
             count: poles.len(),
             strategy: pole_strategy.to_string(),
@@ -614,7 +620,7 @@ fn layout_pass(
             phase: "poles_placed".into(),
             entity_count: poles.len(),
         });
-        poles
+        (poles, uncovered)
     };
 
     let width = row_width.max(actual_bw).max(merge_max_x);
@@ -719,6 +725,7 @@ fn layout_pass(
         },
         row_spans,
         cap_coords,
+        uncovered_inserters_out,
     ))
 }
 
@@ -854,11 +861,16 @@ fn compute_extra_gaps(families: &[LaneFamily]) -> FxHashMap<usize, i32> {
 /// `machines` entries are `(center_x, top_y, height)` — height (not width)
 /// because every use below (row grouping, below-row fallback y) is a
 /// vertical offset from the machine row.
+/// Places medium-electric-pole lines to cover the machine rows and their
+/// electric inserters. Returns `(poles, uncovered_inserters)` — the second
+/// element is the set of electric inserters no pole could reach (the `give_up`
+/// set), the reactive substation pass's trigger (RFP `docs/rfp-power-reservation.md`
+/// Phase 3a-ii). Empty for every layout the two-band + mop-up covers.
 fn place_poles(
     machines: &[(i32, i32, i32)],
     inserters: &[(i32, i32)],
     occupied: &FxHashSet<(i32, i32)>,
-) -> Vec<PlacedEntity> {
+) -> (Vec<PlacedEntity>, Vec<(i32, i32)>) {
     // Medium-pole supply half-extent on the tile grid, floored from the shared
     // `supply_area_distance` (RFP Phase 3a-i/3a-ii) so this placement radius and
     // the power validator's coverage radius can never drift. place_poles places
@@ -866,7 +878,7 @@ fn place_poles(
     let pole_range: i32 = crate::common::supply_area_distance("medium-electric-pole").floor() as i32;
 
     if machines.is_empty() {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     }
 
     // Group by (top_y, height). Rows of different-height machines get their
@@ -1062,7 +1074,9 @@ fn place_poles(
         crate::trace::emit(crate::trace::TraceEvent::PoleSlack { x: px, y: py, alternatives });
     }
 
-    entities
+    let mut uncovered: Vec<(i32, i32)> = give_up.into_iter().collect();
+    uncovered.sort_unstable();
+    (entities, uncovered)
 }
 
 /// After the row lines are placed, bridge any remaining disconnected pole
@@ -1564,7 +1578,7 @@ mod tests {
             ..Default::default()
         };
 
-        let (_layout, row_spans, cap_coords) =
+        let (_layout, row_spans, cap_coords, _uncovered) =
             layout_pass(&sr, &opts, None, None).expect("layout_pass");
 
         assert!(
