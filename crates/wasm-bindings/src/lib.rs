@@ -77,8 +77,8 @@ pub fn init() {
 
 /// Map the optional quality string from JS to a tier; unknown/absent →
 /// Normal, matching the `max_inserter_tier` unknown→default pattern
-/// (rfp-build-quality Phase 1). NOTE (Phase 1 guard rail): the web UI and
-/// URL codec must NOT set this yet — Phase 2 lands that surface.
+/// (rfp-build-quality). Set by the web UI / `q=` URL param since
+/// Phase 2 (`web/src/state.ts`, sidebar "Build quality" dropdown).
 fn quality_tier(quality: Option<String>) -> spaghettio_core::common::QualityTier {
     quality
         .as_deref()

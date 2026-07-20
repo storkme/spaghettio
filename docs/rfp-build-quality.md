@@ -287,8 +287,9 @@ The ladder's fast mover is the 1.x name `stack-inserter` (12/s in
 opaque and multiplies whatever base number the table returns, so this
 RFP neither fixes nor worsens the naming split — but the 2.0-import
 consequences compound with quality stamping, so the naming
-reconciliation must be tracked as its own follow-up and resolved
-before the in-game import anchor runs.
+reconciliation is tracked as
+[#313](https://github.com/storkme/spaghettio/issues/313) and must be
+resolved before the in-game import anchor runs.
 
 ### What this deliberately does not do
 
@@ -502,11 +503,48 @@ Per the CLAUDE.md layout-change protocol:
   lane-planner "consumer-clamped fan-in / multi-stage balancer not
   wired" refusal — machine-count collapse concentrates consumer trunks,
   so quality hits this wall far earlier than normal builds do (fixture
-  retuned to 4/s on red; the wall predates quality and needs its own
-  follow-up); (2) the all-candidates-failed error discarded every
+  retuned to 4/s on red; the wall predates quality — filed as
+  [#312](https://github.com/storkme/spaghettio/issues/312)); (2) the
+  all-candidates-failed error discarded every
   candidate's reason — `CandidateRun` now carries the error and the
   terminal message names each candidate's failure (observability fix,
   found because of (1)). Differential fixture
   `quality_differential_ec_normal_vs_legendary` green: exact per-tier
   counts, per-entity stamping asserted entity-by-entity, export→parse
   quality round-trip.*
+- *2026-07-20 — Phase 2 adversarial review (code + contract lenses)
+  and fixes. **Code review found one real bug**:
+  `repair_pole_connectivity` still hardcoded the Normal-tier medium
+  wire reach (9), silently inserting needless bridge poles at higher
+  tiers (and risking an unrepairable real gap >9 within true reach) —
+  fixed by unifying the wire-reach table into
+  `common::pole_wire_reach` (same single-source shape 3a-i used for
+  supply radii; validator delegates) and threading quality through the
+  repair; regression test
+  `repair_pole_connectivity_uses_quality_wire_reach` forces the repair
+  path at both tiers (Normal must bridge a 12-tile band gap, Legendary
+  must not, and the sparser legendary net must pass the validator's
+  own connectivity walk). Everything else: mechanical-edit integrity
+  verified across all ~40 threaded call sites; export lifetime/guard
+  logic confirmed (the Normal-filter is live for parsed-blueprint
+  re-export, not dead code); `q=`/`it=` codec letter overlap confirmed
+  collision-free; misindented regex insertions folded. **Contract
+  review: all functional claims verified under re-execution**; its
+  five process fixes landed here: kill 2c
+  (`SPAGHETTIO_STRESS_GOLDEN=check`) was run and is now RECORDED —
+  clean twice (the 52-test full-suite form and the reviewer's
+  independent 9/9 stress-golden form, against the shared host cache
+  that predates this RFP, so it is a legitimate same-host identity
+  check, not an empty-cache pass); browser eyeball: smoke-level pass
+  performed via scripted browser (the `q=l` URL loads, Build-quality
+  dropdown reads legendary, canvas renders, solver reports 92
+  machines = the hand-computed legendary count) — the FULL visual
+  pass stays with the user per standing feedback, held open below;
+  stack/bulk naming filed as
+  [#313](https://github.com/storkme/spaghettio/issues/313) (blocks
+  the in-game anchor);
+  [#312](https://github.com/storkme/spaghettio/issues/312) now linked
+  from the Phase 2 entry; the stale Phase-1 guard-rail comment in
+  `wasm-bindings/src/lib.rs` updated. Post-fix full suite 785/785.
+  **Held open for the user**: full browser eyeball of a legendary
+  layout, and the in-game import anchor (blocked on #313).*

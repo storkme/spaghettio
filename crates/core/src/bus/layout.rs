@@ -1023,7 +1023,7 @@ fn compute_extra_gaps(families: &[LaneFamily]) -> FxHashMap<usize, i32> {
 /// finds those gaps.
 ///
 /// Connectivity is guaranteed by construction:
-/// - Within a line: consecutive pole x-distance <= 6 < `WIRE_REACH` (9).
+/// - Within a line: consecutive pole x-distance <= 6 < the medium wire reach (9 at Normal).
 /// - Between lines: row cycle (row height + gap) is typically ~7 tiles <
 ///   wire-reach, so pole lines above consecutive rows connect vertically.
 ///
@@ -1304,7 +1304,7 @@ fn place_poles(
     // land >9 tiles (min(18,9) substation↔medium reach) from the medium network
     // with connector poles — counted in the stated pole cost. `occ` carries the
     // substation footprints so bridges never overlap a 2×2.
-    repair_pole_connectivity(&mut entities, &placed, &occ);
+    repair_pole_connectivity(&mut entities, &placed, &occ, quality);
 
     // Phase 2 (RFP `docs/rfp-power-supply.md`): live slack instrumentation.
     // Emit each pole's free-alternative count so the stress scoreboard tallies
@@ -1344,21 +1344,29 @@ fn place_poles(
 
 /// After the row lines are placed, bridge any remaining disconnected pole
 /// clusters. This only fires when two machine rows are further apart in Y
-/// than `WIRE_REACH` (e.g. oil-refinery row above a chemical-plant row with
+/// than the medium wire reach (e.g. oil-refinery row above a chemical-plant row with
 /// a pipe-routing gap between them). We walk intermediate poles down a
 /// free column between the two nearest clusters.
 fn repair_pole_connectivity(
     entities: &mut Vec<PlacedEntity>,
     placed: &FxHashSet<(i32, i32)>,
     occupied: &FxHashSet<(i32, i32)>,
+    quality: crate::common::QualityTier,
 ) {
-    /// Wire reach in tiles. Matches `validate::power::MEDIUM_POLE_WIRE_REACH`.
-    /// Two poles are connected iff `dx² + dy² ≤ WIRE_REACH²` (Euclidean) —
-    /// using Chebyshev here as a proxy is a near-miss bug: poles 7 right and
-    /// 6 down are Chebyshev=7 (looks connected) but Euclidean≈9.22 (actually
-    /// disconnected per the validator).
-    const WIRE_REACH: i32 = 9;
-    const WIRE_REACH_SQ: i32 = WIRE_REACH * WIRE_REACH;
+    // Medium-pole wire reach from the shared `common::pole_wire_reach`
+    // table — the SAME value the power validator's connectivity walk
+    // uses, so placement-time repair and validation can never disagree
+    // (rfp-build-quality Phase 2 review fix: this was a hardcoded 9,
+    // which at legendary mis-clustered poles that are genuinely within
+    // the real 19-tile reach and inserted needless bridge poles). The
+    // 9 + 2·level value is always integral for the medium pole. Two
+    // poles are connected iff `dx² + dy² ≤ reach²` (Euclidean) — using
+    // Chebyshev here as a proxy is a near-miss bug: poles 7 right and
+    // 6 down are Chebyshev=7 (looks connected) but Euclidean≈9.22
+    // (actually disconnected per the validator).
+    let wire_reach: i32 =
+        crate::common::pole_wire_reach("medium-electric-pole", quality).unwrap() as i32;
+    let wire_reach_sq: i32 = wire_reach * wire_reach;
 
     let mut all_occupied: FxHashSet<(i32, i32)> = occupied.iter().copied().collect();
     for &p in placed {
@@ -1371,7 +1379,7 @@ fn repair_pole_connectivity(
             return;
         }
 
-        // Union-find under Chebyshev distance <= WIRE_REACH.
+        // Union-find under Euclidean distance <= wire_reach.
         let n = positions.len();
         let mut parent: Vec<usize> = (0..n).collect();
         fn find(p: &mut [usize], mut x: usize) -> usize {
@@ -1385,7 +1393,7 @@ fn repair_pole_connectivity(
             for j in (i + 1)..n {
                 let dx = positions[i].0 - positions[j].0;
                 let dy = positions[i].1 - positions[j].1;
-                if dx * dx + dy * dy <= WIRE_REACH_SQ {
+                if dx * dx + dy * dy <= wire_reach_sq {
                     let ri = find(&mut parent, i);
                     let rj = find(&mut parent, j);
                     if ri != rj {
@@ -1441,7 +1449,7 @@ fn repair_pole_connectivity(
         // where the pa↔pb gap is ~32 tiles.
         let mid = ((pa.0 + pb.0) / 2, (pa.1 + pb.1) / 2);
         let mut bridge: Option<(i32, i32)> = None;
-        'scan: for r in 0i32..=WIRE_REACH {
+        'scan: for r in 0i32..=wire_reach {
             for dy in -r..=r {
                 for dx in -r..=r {
                     if dx.abs() != r && dy.abs() != r {
@@ -1455,7 +1463,7 @@ fn repair_pole_connectivity(
                     let near = |q: (i32, i32)| -> bool {
                         let dx = p.0 - q.0;
                         let dy = p.1 - q.1;
-                        dx * dx + dy * dy <= WIRE_REACH_SQ
+                        dx * dx + dy * dy <= wire_reach_sq
                     };
                     if near(pa) || near(pb) {
                         bridge = Some(p);
@@ -1646,6 +1654,53 @@ mod tests {
             place_poles(&machines, &[ins], &occupied, &[], crate::common::QualityTier::Normal);
         assert!(ent2.iter().all(|e| e.name != "substation"));
         assert_eq!(unc2, vec![ins], "no band ⇒ the deep inserter stays uncovered");
+    }
+
+    /// Phase 2 adversarial-review regression (rfp-build-quality decision
+    /// log 2026-07-20): `repair_pole_connectivity` hardcoded the
+    /// Normal-tier medium wire reach (9), so at legendary it
+    /// mis-clustered poles genuinely within the real 19-tile reach and
+    /// inserted needless bridge poles. Two machine rows whose pole bands
+    /// sit ~12 tiles apart: beyond Normal reach (bridges required),
+    /// within Legendary reach (bridges are pure waste). Also proves the
+    /// legendary result is genuinely connected under the validator's own
+    /// per-entity quality walk, not just "fewer poles".
+    #[test]
+    fn repair_pole_connectivity_uses_quality_wire_reach() {
+        use crate::common::QualityTier;
+        let machines = [(0, 0, 3), (0, 16, 3)];
+        let occupied: FxHashSet<(i32, i32)> = FxHashSet::default();
+
+        let (normal_poles, _) =
+            place_poles(&machines, &[], &occupied, &[], QualityTier::Normal);
+        let (leg_poles, _) =
+            place_poles(&machines, &[], &occupied, &[], QualityTier::Legendary);
+
+        let bridge_count = |poles: &[PlacedEntity]| {
+            poles.iter().filter(|e| e.y > 4 && e.y < 15).count()
+        };
+        assert!(
+            bridge_count(&normal_poles) > 0,
+            "Normal reach (9) must bridge the ~12-tile band gap"
+        );
+        assert_eq!(
+            bridge_count(&leg_poles),
+            0,
+            "Legendary reach (19) covers the gap — bridge poles are waste: {:?}",
+            leg_poles.iter().map(|e| (e.x, e.y)).collect::<Vec<_>>()
+        );
+        assert!(leg_poles.len() < normal_poles.len());
+
+        // The sparser legendary set must still validate as one connected
+        // network under the per-entity quality walk (stamp what the
+        // layout_pass stamp pass would).
+        let mut lr = crate::models::LayoutResult::default();
+        lr.entities = leg_poles;
+        for e in &mut lr.entities {
+            e.quality = Some(QualityTier::Legendary);
+        }
+        let issues = crate::validate::power::check_pole_network_connectivity(&lr);
+        assert!(issues.is_empty(), "legendary pole net must be connected: {issues:?}");
     }
 
     /// D2a (RFP Fulgora, `docs/rfp-fulgora-scrap.md`): a solid surplus

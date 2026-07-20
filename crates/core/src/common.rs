@@ -214,6 +214,31 @@ pub fn supply_area_distance(entity: &str, quality: QualityTier) -> f64 {
     base + f64::from(quality.level())
 }
 
+/// Copper-wire reach (tile distance between centers) for a
+/// power-distribution entity at a build-quality tier; `None` for
+/// non-pole names. THE ground-truth table both
+/// `validate::power::check_pole_network_connectivity` and
+/// `bus::layout::repair_pole_connectivity` consume — unified here after
+/// the Phase 2 adversarial review caught the repair pass still
+/// hardcoding the Normal-tier 9 while the validator scaled
+/// (rfp-build-quality decision log, 2026-07-20; same duplication shape
+/// 3a-i fixed for supply radii).
+///
+/// Quality adds **+2 wire reach per level** (kill-1 verified in-game):
+/// medium 9 → 19 legendary, substation 18 → 28. The substation's reach
+/// equals its supply *diameter* at every tier (zero margin — see
+/// [`supply_area_distance`]); mixed-tier pole pairs connect at
+/// `min(reach_a, reach_b)`, applied by the consumers, not here.
+pub fn pole_wire_reach(entity: &str, quality: QualityTier) -> Option<f64> {
+    let base = match entity {
+        "medium-electric-pole" => 9.0,
+        "small-electric-pole" => 7.5,
+        "substation" => 18.0,
+        _ => return None,
+    };
+    Some(base + 2.0 * f64::from(quality.level()))
+}
+
 /// Whether `entity` draws electricity from the power grid.
 ///
 /// The codebase's first energy-source fact (RFP `docs/rfp-power-supply.md`

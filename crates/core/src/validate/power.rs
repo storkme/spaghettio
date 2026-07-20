@@ -16,13 +16,13 @@ use crate::common::needs_electricity;
 use crate::models::LayoutResult;
 use crate::validate::{Severity, ValidationIssue};
 
-/// Wire reach (tile distance between centers) for each pole type.
-const MEDIUM_POLE_WIRE_REACH: f64 = 9.0;
-const SMALL_POLE_WIRE_REACH: f64 = 7.5;
-/// Substation-to-substation copper wire reach (RFP Phase 3a-i; draftsman
-/// `maximum_wire_distance = 18`). A substation-to-medium-pole connection uses
-/// `min(18, 9) = 9` via the `ar.min(br)` rule in the connectivity walk.
-const SUBSTATION_WIRE_REACH: f64 = 18.0;
+// Wire-reach values (medium 9, small 7.5, substation 18, +2/quality
+// level) live in `common::pole_wire_reach` — the shared table this
+// validator and `bus::layout::repair_pole_connectivity` both read, so
+// placement-time repair and validation-time connectivity can never
+// disagree (rfp-build-quality Phase 2 review fix). A
+// substation-to-medium connection uses `min(reach_a, reach_b)` via the
+// `ar.min(br)` rule in the connectivity walk.
 
 /// Center in tile-space of a power-distribution entity's footprint. medium /
 /// small-electric-poles are 1×1 (center +0.5); a substation is 2×2 (center
@@ -43,13 +43,7 @@ fn pole_center(name: &str, x: i32, y: i32) -> (f64, f64) {
 /// rule below is unchanged and applies per-entity, so mixed-quality pole
 /// pairs connect at the weaker pole's effective reach, matching the game.
 fn wire_reach(name: &str, quality: crate::common::QualityTier) -> Option<f64> {
-    let base = match name {
-        "medium-electric-pole" => MEDIUM_POLE_WIRE_REACH,
-        "small-electric-pole" => SMALL_POLE_WIRE_REACH,
-        "substation" => SUBSTATION_WIRE_REACH,
-        _ => return None,
-    };
-    Some(base + 2.0 * f64::from(quality.level()))
+    crate::common::pole_wire_reach(name, quality)
 }
 
 /// Check that all power poles form a single connected graph via copper wire.

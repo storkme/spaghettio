@@ -650,9 +650,7 @@ pub fn single_input_row(
             INPUT_BASELINE_DX,
             &input_extra_dx,
         );
-        emit_shortfall_trace(recipe, false, input_rate, &input_plan, mx, y_offset + 2, false,
-            quality,
-        );
+        emit_shortfall_trace(recipe, false, input_rate, &input_plan, mx, y_offset + 2, false, quality);
 
         // Machine
         entities.push(PlacedEntity {
@@ -722,9 +720,7 @@ pub fn single_input_row(
             out_baseline_dx,
             &out_extra_dx,
         );
-        emit_shortfall_trace(recipe, true, output_rate, &output_plan, mx, y_offset + 2, false,
-            quality,
-        );
+        emit_shortfall_trace(recipe, true, output_rate, &output_plan, mx, y_offset + 2, false, quality);
 
         // Output belt (machine_size tiles wide) — skip cols owned by
         // the bridge to avoid duplicate-tile stamps.
@@ -769,9 +765,7 @@ pub fn single_input_row(
                 segment_id: secondary_ins_seg.clone(),
                 ..Default::default()
             });
-            emit_shortfall_trace(recipe, true, sec_rate, &sec_plan, mx, y_offset + 2, false,
-            quality,
-        );
+            emit_shortfall_trace(recipe, true, sec_rate, &sec_plan, mx, y_offset + 2, false, quality);
             let sec_belt_y = out_belt_y + 1;
             for dx in 0..out_stop2 {
                 entities.push(PlacedEntity {
@@ -1023,9 +1017,7 @@ pub fn dual_input_row(
             NEAR_BASELINE_DX,
             &near_extra_dx,
         );
-        emit_shortfall_trace(recipe, false, near_rate, &near_plan, mx, y_offset + 3, far_wins,
-            quality,
-        );
+        emit_shortfall_trace(recipe, false, near_rate, &near_plan, mx, y_offset + 3, far_wins, quality);
 
         // Machine — placed at its north-input orientation so a fluid-output
         // foundry's outputs sit on the south face (mirror=true); unchanged
@@ -1087,9 +1079,7 @@ pub fn dual_input_row(
             out_baseline_dx,
             &out_extra_dx,
         );
-        emit_shortfall_trace(recipe, true, output_rate, &output_plan, mx, y_offset + 3, false,
-            quality,
-        );
+        emit_shortfall_trace(recipe, true, output_rate, &output_plan, mx, y_offset + 3, false, quality);
 
         // Output belt — skip cols owned by the bridge.
         for dx in 0..out_stop {
@@ -1465,9 +1455,7 @@ pub fn dual_input_row_horizontal(
             NEAR_BASELINE_DX,
             &near_extra_dx,
         );
-        emit_shortfall_trace(recipe, false, near_rate, &near_plan, mx, machine_y, far_wins,
-            quality,
-        );
+        emit_shortfall_trace(recipe, false, near_rate, &near_plan, mx, machine_y, far_wins, quality);
 
         // Far input (input1) — ladder-sized (reach-2 count-ladder).
         let far_plan = size_side(far_rate, Reach::Far, far_extra_dx.len(), max_inserter_tier, quality);
@@ -1519,9 +1507,7 @@ pub fn dual_input_row_horizontal(
             out_baseline_dx,
             &out_extra_dx,
         );
-        emit_shortfall_trace(recipe, true, output_rate, &output_plan, mx, machine_y, false,
-            quality,
-        );
+        emit_shortfall_trace(recipe, true, output_rate, &output_plan, mx, machine_y, false, quality);
     }
 
     // Output belt — single continuous east- (or west-) flowing belt
@@ -1865,9 +1851,7 @@ pub fn triple_input_row(
             in3_baseline_dx,
             &input3_extra_dx,
         );
-        emit_shortfall_trace(recipe, false, input3_rate, &input3_plan, mx, y_offset + 3, tile_exists && !input3_wins,
-            quality,
-        );
+        emit_shortfall_trace(recipe, false, input3_rate, &input3_plan, mx, y_offset + 3, tile_exists && !input3_wins, quality);
 
         // Output — ladder-sized.
         let output_plan = size_side(output_rate, Reach::Near, output_extra_dx.len(), max_inserter_tier, quality);
@@ -1882,9 +1866,7 @@ pub fn triple_input_row(
             1,
             &output_extra_dx,
         );
-        emit_shortfall_trace(recipe, true, output_rate, &output_plan, mx, y_offset + 3, input3_wins,
-            quality,
-        );
+        emit_shortfall_trace(recipe, true, output_rate, &output_plan, mx, y_offset + 3, input3_wins, quality);
 
         // Output belt — skip cols owned by the bridge.
         let out_belt_y = y_offset + 3 + msz + 1;
@@ -2246,9 +2228,7 @@ pub fn quad_input_row(
             1,
             &output_extra_dx,
         );
-        emit_shortfall_trace(recipe, true, output_rate, &output_plan, mx, machine_y, input4_wins,
-            quality,
-        );
+        emit_shortfall_trace(recipe, true, output_rate, &output_plan, mx, machine_y, input4_wins, quality);
 
         // South input4 — ladder-sized (reach-2 count-ladder). Baseline at
         // mx+2 (picks belt 4 at y+9, drops machine middle mx+2,y+5).
@@ -2264,9 +2244,7 @@ pub fn quad_input_row(
             2,
             &input4_extra_dx,
         );
-        emit_shortfall_trace(recipe, false, input4_rate, &input4_plan, mx, machine_y, !input4_wins,
-            quality,
-        );
+        emit_shortfall_trace(recipe, false, input4_rate, &input4_plan, mx, machine_y, !input4_wins, quality);
 
         // Output belt
         let out_dir = output_dir(output_east);
@@ -2502,9 +2480,7 @@ pub fn fluid_input_row(
                 inserter_dx,
                 &solid_extra_dx,
             );
-            emit_shortfall_trace(recipe, false, solid_rate, &solid_plan, mx, machine_y, false,
-            quality,
-        );
+            emit_shortfall_trace(recipe, false, solid_rate, &solid_plan, mx, machine_y, false, quality);
 
             // Machine — placed at its north-input orientation so the UG-out
             // above lands on a real fluid input port (RFP Phase 0e-i). Default
@@ -2552,9 +2528,7 @@ pub fn fluid_input_row(
                 out_baseline_dx,
                 &out_extra_dx,
             );
-            emit_shortfall_trace(recipe, true, output_rate, &output_plan, mx, machine_y, false,
-            quality,
-        );
+            emit_shortfall_trace(recipe, true, output_rate, &output_plan, mx, machine_y, false, quality);
 
             // Output belt — skip cols owned by the bridge.
             for dx in 0..out_stop {
@@ -2797,9 +2771,7 @@ pub fn fluid_dual_input_row(
             segment_id: inserter_in1_seg.clone(),
             ..Default::default()
         });
-        emit_shortfall_trace(recipe, false, far_rate, &far_plan, mx, machine_y, false,
-            quality,
-        );
+        emit_shortfall_trace(recipe, false, far_rate, &far_plan, mx, machine_y, false, quality);
 
         let near_plan = size_side(near_rate, Reach::Near, 0, max_inserter_tier, quality);
         entities.push(PlacedEntity {
@@ -2811,9 +2783,7 @@ pub fn fluid_dual_input_row(
             segment_id: inserter_in2_seg.clone(),
             ..Default::default()
         });
-        emit_shortfall_trace(recipe, false, near_rate, &near_plan, mx, machine_y, false,
-            quality,
-        );
+        emit_shortfall_trace(recipe, false, near_rate, &near_plan, mx, machine_y, false, quality);
 
         // Machine — placed at the orientation that puts its fluid input ports
         // on the north face the PTG tunnel delivers to (RFP Phase 0e-i): the
@@ -2876,9 +2846,7 @@ pub fn fluid_dual_input_row(
                 out_baseline_dx,
                 &out_extra_dx,
             );
-            emit_shortfall_trace(recipe, true, output_rate, &output_plan, mx, machine_y, false,
-            quality,
-        );
+            emit_shortfall_trace(recipe, true, output_rate, &output_plan, mx, machine_y, false, quality);
             let out_dir = output_dir(output_east);
             for dx in 0..out_stop {
                 let x = mx + dx;
@@ -3883,9 +3851,7 @@ pub fn fluid_multi_input_row(
                 out_baseline_dx,
                 &out_extra_dx,
             );
-            emit_shortfall_trace(recipe, true, output_rate, &output_plan, mx, y_offset + machine_row_idx, false,
-            quality,
-        );
+            emit_shortfall_trace(recipe, true, output_rate, &output_plan, mx, y_offset + machine_row_idx, false, quality);
             // Output belt row — skip cols owned by the bridge.
             let out_dir = output_dir(output_east);
             for dx in 0..msz {
