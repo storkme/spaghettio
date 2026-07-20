@@ -663,6 +663,21 @@ mod tests {
         assert_eq!(QualityTier::default(), QualityTier::Normal);
     }
 
+    /// Drift-pin between the THREE spellings of a tier: the serde derive
+    /// (`rename_all = "lowercase"`), `name()`, and `from_name()`. They are
+    /// independently maintained; this test is what keeps them one spelling
+    /// (adversarial-review finding, 2026-07-20 — same philosophy as the
+    /// inserter ladder's `constants_identity`).
+    #[test]
+    fn quality_serde_matches_name() {
+        for tier in QualityTier::ALL {
+            let json = serde_json::to_value(tier).unwrap();
+            assert_eq!(json, serde_json::Value::String(tier.name().into()), "{tier:?}");
+            let back: QualityTier = serde_json::from_value(json).unwrap();
+            assert_eq!(back, tier, "{tier:?}");
+        }
+    }
+
     #[test]
     fn space_age_machines_in_entity_list() {
         for name in ["electromagnetic-plant", "cryogenic-plant", "foundry", "biochamber"] {
