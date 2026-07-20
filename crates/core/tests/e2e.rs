@@ -597,7 +597,7 @@ const GOLDEN_HASHES: &[(&str, &str)] = &[
     // RFP rfp-inserter-sizing.md Phase 1: single_input_row rows ladder-sized, see note above.
     // RFP rfp-inserter-sizing.md Phase 2: dual_input_row ladder-sized + near/far reassigned.
     // RFP rfp-inserter-sizing.md Phase 3: far side's reach-2 count-ladder activated.
-    ("tier2_electronic_circuit_20s_from_ore", "186fe9f7c87f51368484337feada9d33d00aa832c176b6ea066f93f30c7a6b48"),
+    ("tier2_electronic_circuit_20s_from_ore", "7a23126d5f857d22db9374cc6269eb9ea2d7bdb2a69c6dc34f60f322cc63e134"),
     // RFP rfp-inserter-sizing.md Phase 2: dual_input_row's inserters are now
     // ladder-sized + near/far reassigned (this fixture's dual-input EC row
     // is exactly the template Phase 2 touches) — entity types/positions on
@@ -1102,16 +1102,17 @@ fn tier2_electronic_circuit_20s_from_ore() {
     // (iron-plate) sides, capped at one long-handed inserter; extending the far belt
     // one tile at each places the needed second inserter (2 -> 0).
     //
-    // RFP `docs/rfp-power-supply.md` Phase 0f (inserter power coverage): this
-    // is one of THREE strict-gating kill-criterion cases. At 20/s the EC
-    // dual_input_row input-inserter bands are saturated (machine below,
-    // ladder inserters across every column, belts above, zero-gap next row),
-    // leaving 14 inserters with a 7×7 neighbourhood that is 0/49 free of real
-    // post-routing entity footprints (exact AND conservative) — a hard pitch
-    // limit no pole can cover. Adjudicated hard, not a mop-up gap; pinned as
-    // an honest, visible red until Phase 3 substations. Fixtures for the
-    // substation design.
-    assert_warnings_exactly(&result, &[("power", 14)]);
+    // RFP `docs/rfp-power-reservation.md` Phase 3a-ii (reactive power repair):
+    // this was one of the strict-gating cases — at 20/s the EC dual_input_row
+    // input-inserter band was 0/49-free of post-routing footprints, so no pole
+    // could cover its 14 inserters (an honest red under Phase 0f). The reactive
+    // pass fixes it: place_poles reports the uncovered set, and the pipeline
+    // re-runs with +2 free rows inserted at the starved cycle boundary. The
+    // freed band lands 3 tiles above the (shifted) input-inserter row — inside a
+    // medium pole's ±3 supply, because the dual-input belt bundle is 2 rows, not
+    // 3 — so the existing medium mop-up now covers them. Substations (the RFP's
+    // planned hardware) are unnecessary here and stay dormant. 14 -> 0.
+    assert_warnings_exactly(&result, &[]);
     assert_produces(&result, "electronic-circuit", 20.0);
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier2_electronic_circuit_20s_from_ore");
@@ -2094,13 +2095,15 @@ fn tier5_processing_unit_from_ore_am3() {
     // last-in-row far sides capped at one long-handed inserter; extending the far belt
     // one tile clears them (5 -> 0) — this config is now fully clean (0 warnings).
     //
-    // RFP `docs/rfp-power-supply.md` Phase 0f (inserter power coverage): the
-    // deepest strict-gating kill-criterion case. The decomposed
-    // electronic-circuit input-inserter sub-rows stack with zero inter-row gap;
-    // 20 inserters (clusters x40-44 at y164/172/180/188) have a 0/49-free 7×7
-    // against real post-routing footprints — a hard pitch limit, verifier-
-    // confirmed. Pinned as an honest red; Phase 3 substation fixture.
-    assert_warnings_exactly(&result, &[("power", 20)]);
+    // RFP `docs/rfp-power-reservation.md` Phase 3a-ii (reactive power repair):
+    // the decomposed electronic-circuit input-inserter sub-rows stack with zero
+    // inter-row gap; 20 inserters (clusters x40-44 at y164/172/180/188) were
+    // 0/49-free of post-routing footprints — a hard pitch limit under Phase 0f.
+    // The reactive pass inserts +2 free rows at each starved cycle boundary; the
+    // freed band lands 3 tiles above each (shifted) input-inserter row, inside a
+    // medium pole's ±3 supply, so the medium mop-up covers them. Substations
+    // stay dormant (unneeded here). 20 -> 0.
+    assert_warnings_exactly(&result, &[]);
     assert_produces(&result, "processing-unit", 2.0);
     assert_round_trip(&result);
 }
@@ -4097,20 +4100,25 @@ fn processing_unit_2s_am2_fast_belts_validation_baseline() {
         unexpected.join(", "),
     );
 
-    // RFP `docs/rfp-power-supply.md` Phase 0f: this baseline tallies ERRORS
-    // only, which structurally masks inserter power-coverage WARNINGS. Pin the
-    // exact hard-limit count so the uncovered inserters are asserted, not
-    // invisible. All 43 are 0/49-free in the 7×7 vs real post-routing
-    // footprints (reviewer-scanned + re-scanned all-hard) — a genuine pitch
-    // limit; the fifth Phase 3 substation fixture.
+    // RFP `docs/rfp-power-reservation.md` Phase 3a-ii (reactive power repair):
+    // this baseline tallies ERRORS only, structurally masking inserter
+    // power-coverage WARNINGS, so pin the exact count. All 43 were 0/49-free in
+    // the 7×7 vs post-routing footprints (a genuine pitch limit). This is the
+    // BOTH-AT-ONCE fixture: it runs a junction retry AND needs substation bands,
+    // and the merged single pass-2 re-run must not preempt either. The reactive
+    // pass inserts +2 free rows at each of the 5 starved cycle boundaries (and
+    // still applies the junction gaps); the freed bands land within a medium
+    // pole's ±3 of the shifted input inserters, so the medium mop-up covers them
+    // — junction error baselines above stay intact, substations stay dormant.
+    // 43 -> 0.
     let power_warnings = result
         .issues
         .iter()
         .filter(|i| i.category == "power" && i.severity == Severity::Warning)
         .count();
     assert_eq!(
-        power_warnings, 43,
-        "expected exactly 43 hard-limit inserter power-coverage warnings"
+        power_warnings, 0,
+        "expected all inserter power-coverage warnings cleared by the reactive repair"
     );
 }
 
@@ -4211,12 +4219,14 @@ fn stress_electronic_circuit_60s_red_from_ore() {
         StressBaseline {
             max_errors: 1,
             // RFP rfp-lane-demand-flow.md Phase 1: was 0; +200 inserter-throughput.
-            // RFP `docs/rfp-power-supply.md` Phase 0f: this red variant's ONLY
-            // warnings are now the 60 hard-limit uncovered inserters (all 0/49
-            // free against real footprints — the biggest single trip population,
-            // adjudicated hard). Tightened 200 → 60 so those reds are EXPOSED
-            // and asserted, not swallowed by a loose ceiling. Phase 3 fixture.
-            max_warnings: 60,
+            // RFP `docs/rfp-power-reservation.md` Phase 3a-ii (reactive power
+            // repair): this red variant's only warnings were the 60 hard-limit
+            // uncovered inserters (6 starved EC input-inserter rows). The
+            // reactive pass inserts +2 free rows at each starved cycle boundary;
+            // the freed bands land within a medium pole's ±3 of the shifted
+            // inserters, so the medium mop-up covers them — 60 -> 0. Tightened
+            // 60 -> 0 so any regression re-exposes them; substations stay dormant.
+            max_warnings: 0,
             max_errors_by_category: Default::default(),
         },
     );
