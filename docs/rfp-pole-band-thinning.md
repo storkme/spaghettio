@@ -242,3 +242,14 @@ same shared helpers; only this one writes `place_poles`.
   discarded). Kovarex substation dormancy at Rare+ (pinned in #315's
   differential) removes the last thinning×substation interaction at
   qualifying tiers.*
+- *2026-07-20 — implementation adversarial review: **clean, zero
+  BUG/RISK findings**. Refactor fidelity verified statement-for-
+  statement against the pre-commit loop; unified-pass ordering matches
+  the RFP; the fallback-tile far-side x-gap and the top_y=0
+  empty-north edge both confirmed pre-existing/identical behavior, not
+  Phase-1 regressions; degenerate-path ordering sound (sorted
+  subsequence); gate-table boundaries hand-verified with no
+  off-by-ones; scope fence (kill 4) holds byte-for-byte on the
+  substation block. One accepted NIT: the ==30 pole pin is tighter
+  than kill-2's ≤48 bar — deliberate, consistent with house exact-pin
+  style. Safe to PR.*
