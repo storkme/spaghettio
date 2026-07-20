@@ -536,3 +536,32 @@ genuinely and cheaply deferred.
   `scripts/pole-census-2026-07-20-post3b.json` +
   `scripts/pole_census_analysis.py`. Validator-verified only; the in-game import
   anchor remains a user step.*
+- *2026-07-20 — **THE WIRES ARC — recorded out-of-band (arc review's biggest
+  record gap).** This arc happened between Phase 3a-ii and 3b and never had its
+  own RFP phase, so it lived only in commit messages until now. An **in-game
+  paste by the user** exposed the largest latent defect of the entire power
+  arc: **every blueprint this generator has ever exported encoded NO pole
+  copper wires.** The export emitted poles as bare entities with no `wires`
+  array, so a pasted factory's poles were **disconnected islands and the whole
+  layout was power-dead on arrival** — no matter how perfectly `place_poles` +
+  `repair_pole_connectivity` had arranged them geometrically. Fixed across four
+  commits: `a7d9a48` (blueprint-level `wires` array — `[a, 5, b, 5]`
+  pole-to-pole copper, connector id **5** = draftsman
+  `WireConnectorID.POLE_COPPER`, the Factorio 2.0 format; the old 1.x
+  per-entity `neighbours` array is not read by 2.0), `cdf71e8` (export /
+  round-trip tests + the corpus-wide single-connected-component invariant),
+  `6e21bd4` (medium-pole footprint correction + the 2.0 wires export rule
+  documented), and `57d43d1` (web power-connectivity overlay so the wire graph
+  is visible in the app). **A semantic change rides along:**
+  `check_pole_network_connectivity` was rewritten from a **geometric-proximity**
+  test (do poles sit within reach of each other?) to an **artifact-level** test
+  (is the graph in the *emitted* `wires` array one connected component?), now
+  reading the same `crate::power_wires` module the export and web overlay
+  consume — draftsman-verified, round-trip-locked. **This retroactively
+  reframes every earlier "single-component" / "pole network connected" claim in
+  this arc's log as GEOMETRIC-ONLY** — true of the pole positions, silent about
+  the then-absent wires. The discovery is the **single strongest argument this
+  project has for the in-game import anchor**: a defect that made 100% of
+  exports non-functional survived the whole 23-check validator suite, the
+  census, and every "0 power warnings" reading, because nothing short of a
+  human paste could see it.*
