@@ -248,3 +248,28 @@ helper is scoped as explicit 3a work — not assumed to exist.
   3a inherits the vestigial router pole-param deletion. Document is
   acceptance-ready; committed to docs/ when Phase 3's sequencing slot
   arrives.*
+
+## Decision log (Phase 3a-i)
+
+- *2026-07-20 — **Phase 3a-i LANDED** (`534f6ad`; adversarial review APPROVE,
+  one mandatory constraint carried to 3a-ii). Substation is now a first-class
+  generator entity: `common::entity_size` (2×2) and `common::pole_supply_range`
+  (medium 3, substation 9) are single sources both export and validators
+  consume; the two latent half-tile bugs are fixed and pinned by a hand-placed
+  round-trip test (bug #1 blueprint center x+0.5→x+1.0 via entity_size; bug #2
+  pole_center size-aware + corrected comment). Geometry draftsman-grounded: 2×2,
+  supply ±9 (18×18), wire 18, substation↔medium min(18,9)=9 — RFP numbers
+  confirmed. Non-layout-moving, corpus byte-identical (STRESSGOLD 9/9).
+  **CARRIED CONSTRAINT (review finding, corrects the implementer's
+  "conservative" label): the integer ±9-from-center coverage test is
+  DANGEROUS-direction for the even 2×2 footprint — it marks +x/+y edge index
+  ex+10/ey+10 as covered when the game powers only through ex+9/ey+9, a +1-tile
+  FALSE-ACCEPT (the 0f blind-spot class). Harmless in 3a-i (dead path), but
+  3a-ii MUST (a) replace the integer-Chebyshev coverage with a
+  continuous-coordinate check |subject_center − pole_center| ≤
+  supply_area_distance (subject_center = index + size/2 — keeps medium exact,
+  makes substation exact) BEFORE placing any substation, and (b) guarantee real
+  coverage at placement independently, never leaning on the validator bound.**
+  Non-blocking residual: export/parse footprint-table asymmetry for
+  engine-never-emitted 2×2s (big-electric-pole, steel-furnace) — unreachable,
+  one-line note if the vocabulary grows.*
