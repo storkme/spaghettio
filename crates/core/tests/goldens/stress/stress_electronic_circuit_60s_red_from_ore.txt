@@ -9,6 +9,9 @@ total gap tiles:  28
 mean gap:         9.33
 max gap:          11
 max trunks/band:  7
+total poles:      357
+zero-slack poles: 0
+median slack:     4.0
 warnings by category:
   power: 60
 errors by category:

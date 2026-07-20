@@ -9,6 +9,9 @@ total gap tiles:  26
 mean gap:         8.67
 max gap:          13
 max trunks/band:  14
+total poles:      259
+zero-slack poles: 0
+median slack:     4.0
 warnings by category:
   belt-flow-path: 25
   belt-flow-reachability: 121
