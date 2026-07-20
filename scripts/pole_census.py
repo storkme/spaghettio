@@ -62,7 +62,13 @@ import os
 import statistics as stats
 from collections import defaultdict, Counter
 
-SNAP_DIR = "/home/stork/code/fucktorio/.claude/worktrees/agent-ab1a93f51384ebc0e/crates/core/target/tmp"
+# Snapshot directory: override via SPAGHETTIO_SNAP_DIR; defaults to the
+# repo's own dump location (run the suite with SPAGHETTIO_DUMP_SNAPSHOTS=1
+# first — see the census decision-log entries in docs/rfp-power-supply.md).
+SNAP_DIR = os.environ.get(
+    "SPAGHETTIO_SNAP_DIR",
+    os.path.join(os.path.dirname(__file__), "..", "crates", "core", "target", "tmp"),
+)
 
 MACHINE_DIMS = {
     "assembling-machine-1": (3, 3),

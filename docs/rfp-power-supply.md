@@ -486,3 +486,31 @@ genuinely and cheaply deferred.
   future 5×5 fluid-only machine gets its gap automatically; the msz==4 arm
   is unreachable today and fails LOUD (coverage warning) if ever reached.
   Phase 2 dispatches next.*
+- *2026-07-20 — **Phase 2 LANDED** (`43c690b` instrumentation + `db2bcb9`
+  separable golden re-bless; light adversarial review APPROVE). Live
+  per-pole `PoleSlack` trace emission + three scoreboard lines per case
+  (total poles, zero-slack, median slack) — every future densification
+  change now pays its power cost visibly in the committed golden diff.
+  **Deviation ruled ACCEPT and recorded**: the RFP's Phase 2 spec was
+  internally inconsistent — "decision-time" emission cannot ±1-match a
+  census that computes slack post-hoc over the complete pole set (a
+  per-decision measure is blind to later mop-up/repair poles and would
+  systematically overcount slack). Resolved toward the falsifiable
+  requirement: post-placement-live over final positions, which is also the
+  semantically correct guardrail (densification must pay for FINAL-state
+  fragility). Fixed point verified twice (implementer 12 cases, reviewer 4
+  independent re-derivations): zero-slack matches EXACTLY everywhere; the
+  one total-count off-by-one (partitioned_5s 92 vs 93) demonstrated to be
+  the two-strategy fixture's pooled-vs-partitioned leg, not instrument
+  error. Layouts byte-identical (+3 golden lines/file only); suite +~4%
+  runtime, honest. Crash-recovery note: the implementer died 3× on
+  provider 500s mid-phase; a lead protective WIP commit preserved the
+  work, verified fully carried into the clean recommit (`git diff` empty
+  modulo documented upgrades). Merge-time fixes: `pole_census.py`'s
+  hardcoded snapshot path made env-overridable (reviewer finding 1).
+  Follow-up noted, not blocking: a solid/fluid split of the zero-slack
+  scoreboard line would make Phase 3 trigger (a) literally readable
+  (aggregate currently serves as a conservative tripwire). **Phases 0, 1,
+  and 2 of this RFP are all LANDED.** Remaining: Phase 3 (design accepted
+  and committed, docs/rfp-power-reservation.md) and the trim rider (in
+  flight).*
