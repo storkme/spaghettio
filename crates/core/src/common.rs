@@ -90,21 +90,24 @@ pub fn entity_size(entity: &str) -> (u32, u32) {
     }
 }
 
-/// Supply-area half-extent in tiles (Chebyshev, from the pole's center) for a
-/// power-distribution entity — THE shared value for the power validator's
-/// coverage check and `bus::layout::place_poles`, unifying the two formerly
-/// duplicated `POLE_RANGE = 3` constants (RFP Phase 3a-i).
+/// Supply-area distance (in tiles, from the entity's CENTER to the supply
+/// square's edge) for a power-distribution entity — THE ground-truth value both
+/// the power validator's coverage check and `bus::layout::place_poles` consume,
+/// unifying the two formerly duplicated `POLE_RANGE = 3` constants (RFP Phase
+/// 3a-i/3a-ii). Draftsman `supply_area_distance`: `medium-electric-pole` 3.5
+/// (7×7 supply), `substation` 9.0 (18×18). Any other name falls back to the
+/// medium value.
 ///
-/// `medium-electric-pole` is 3 (7×7 supply). `substation` is 9 (18×18 supply
-/// from its 2×2 center); because the footprint is even, an integer ±9 from the
-/// center tile reaches one tile past the exact supply on the + axis — a
-/// conservative bound for a coverage *guardrail*, and exact placement geometry
-/// is Phase 3a-ii's concern. Any other name falls back to the medium value (the
-/// coverage check only ever passes it a medium pole or a substation).
-pub fn pole_supply_range(entity: &str) -> i32 {
+/// Fractional by design: the validator compares it against continuous centers
+/// (`|subject_center − pole_center| ≤ supply_area_distance`, both centers
+/// `index + size/2` from [`entity_size`]) so coverage is EXACT for both the
+/// odd 1×1 medium pole and the even 2×2 substation — the integer-Chebyshev
+/// version 3a-i shipped false-accepted the substation's +x/+y edge by one tile.
+/// `place_poles`, which places on the tile grid, floors it (`.floor() as i32`).
+pub fn supply_area_distance(entity: &str) -> f64 {
     match entity {
-        "substation" => 9,
-        _ => 3,
+        "substation" => 9.0,
+        _ => 3.5,
     }
 }
 

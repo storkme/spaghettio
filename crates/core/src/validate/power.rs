@@ -12,7 +12,7 @@
 
 use std::collections::VecDeque;
 
-use crate::common::{is_machine_entity, machine_dims, needs_electricity};
+use crate::common::needs_electricity;
 use crate::models::LayoutResult;
 use crate::validate::{Severity, ValidationIssue};
 
@@ -112,27 +112,27 @@ pub fn check_pole_network_connectivity(layout: &LayoutResult) -> Vec<ValidationI
 pub fn check_power_coverage(layout_result: &LayoutResult) -> Vec<ValidationIssue> {
     let mut issues = Vec::new();
 
-    // Supply sources: (center_x, center_y, supply_range) for every power-
-    // distribution entity — medium-electric-poles (range 3) and substations
-    // (range 9), both from the shared `pole_supply_range` (RFP Phase 3a-i,
-    // unifying the former `POLE_RANGE = 3` constant with its layout.rs twin).
-    // Substations don't appear in generated layouts yet (3a-i is non-layout-
-    // moving), so this is byte-identical on the corpus.
-    let pole_positions: Vec<(i32, i32, i32)> = layout_result
+    // Supply sources: (center_x, center_y, supply_area_distance) in continuous
+    // tile-space for every power-distribution entity — medium-electric-poles
+    // (center +0.5, reach 3.5) and substations (center +1.0, reach 9.0), both
+    // from the shared `entity_size` + `supply_area_distance` (RFP Phase 3a-i/
+    // 3a-ii). Continuous coordinates make coverage EXACT for the even 2×2
+    // substation, not the +1-tile false-accept the integer version gave.
+    let poles: Vec<(f64, f64, f64)> = layout_result
         .entities
         .iter()
         .filter(|e| e.name == "medium-electric-pole" || e.name == "substation")
         .map(|e| {
             let (w, h) = crate::common::entity_size(&e.name);
             (
-                e.x + w as i32 / 2,
-                e.y + h as i32 / 2,
-                crate::common::pole_supply_range(&e.name),
+                e.x as f64 + w as f64 / 2.0,
+                e.y as f64 + h as f64 / 2.0,
+                crate::common::supply_area_distance(&e.name),
             )
         })
         .collect();
 
-    if pole_positions.is_empty() {
+    if poles.is_empty() {
         issues.push(ValidationIssue::new(
             Severity::Warning,
             "power",
@@ -154,17 +154,16 @@ pub fn check_power_coverage(layout_result: &LayoutResult) -> Vec<ValidationIssue
         if !needs_electricity(&e.name) {
             continue;
         }
-        let (cx, cy) = if is_machine_entity(&e.name) {
-            let (w, h) = machine_dims(&e.name);
-            (e.x + w as i32 / 2, e.y + h as i32 / 2)
-        } else {
-            // Electric inserter — 1×1, powered from its own tile.
-            (e.x, e.y)
-        };
+        // Subject center in continuous tile-space (index + size/2) from the
+        // shared `entity_size`: a machine's footprint center, a 1×1 inserter's
+        // tile center. Byte-identical to the old integer machine-center /
+        // own-tile split once paired with the pole's +0.5 center below.
+        let (w, h) = crate::common::entity_size(&e.name);
+        let (scx, scy) = (e.x as f64 + w as f64 / 2.0, e.y as f64 + h as f64 / 2.0);
 
-        let powered = pole_positions
+        let powered = poles
             .iter()
-            .any(|&(pcx, pcy, r)| (cx - pcx).abs() <= r && (cy - pcy).abs() <= r);
+            .any(|&(pcx, pcy, d)| (scx - pcx).abs() <= d && (scy - pcy).abs() <= d);
 
         if !powered {
             issues.push(ValidationIssue::with_pos(
@@ -222,6 +221,29 @@ mod tests {
             height: 20,
             ..Default::default()
         }
+    }
+
+    // --- Substation exact-coverage boundary (RFP Phase 3a-ii carried
+    // constraint: the continuous-coordinate check must be EXACT for the even
+    // 2×2 footprint, not the +1-tile false-accept the integer version gave) ---
+
+    fn inserter(x: i32, y: i32) -> PlacedEntity {
+        PlacedEntity { name: "inserter".to_string(), x, y, ..Default::default() }
+    }
+
+    #[test]
+    fn substation_coverage_is_exact_at_the_even_footprint_edge() {
+        // Substation top-left (0,0) → center (1.0,1.0), supply_area_distance 9.
+        // A 1×1 inserter's center is index+0.5, so it is covered iff
+        // |x+0.5 − 1| ≤ 9 → x ∈ [−8, 9]. The old integer ±9-from-center test
+        // covered x=10 too — a false-accept this check must not repeat.
+        let sub = PlacedEntity { name: "substation".to_string(), x: 0, y: 0, ..Default::default() };
+        assert!(
+            check_power_coverage(&layout(vec![sub.clone(), inserter(9, 1)])).is_empty(),
+            "inserter at the +9 supply edge must be covered"
+        );
+        let past = check_power_coverage(&layout(vec![sub.clone(), inserter(10, 1)]));
+        assert_eq!(past.len(), 1, "inserter one tile past the exact supply must be flagged");
     }
 
     // --- No poles at all ---

@@ -859,11 +859,11 @@ fn place_poles(
     inserters: &[(i32, i32)],
     occupied: &FxHashSet<(i32, i32)>,
 ) -> Vec<PlacedEntity> {
-    // Supply half-extent of a medium-electric-pole (Chebyshev, tiles), from the
-    // shared `pole_supply_range` (RFP Phase 3a-i) so this placement radius and
-    // the power validator's coverage radius can never drift. place_poles still
-    // only places medium poles in 3a-i, so the value is unchanged (3).
-    let pole_range: i32 = crate::common::pole_supply_range("medium-electric-pole");
+    // Medium-pole supply half-extent on the tile grid, floored from the shared
+    // `supply_area_distance` (RFP Phase 3a-i/3a-ii) so this placement radius and
+    // the power validator's coverage radius can never drift. place_poles places
+    // only medium poles here, so the value is unchanged (floor(3.5) = 3).
+    let pole_range: i32 = crate::common::supply_area_distance("medium-electric-pole").floor() as i32;
 
     if machines.is_empty() {
         return Vec::new();
