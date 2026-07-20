@@ -486,3 +486,27 @@ Per the CLAUDE.md layout-change protocol:
   with zero effect on any output; documented at the walk's doc
   comment. Phase 1 guard rail held: no URL codec entry, no UI
   surface.*
+- *2026-07-20 — Phase 2 core landed. Quality-aware `inserter_throughput`
+  + `supply_area_distance` (+1 radius/level) + `wire_reach` (+2/level,
+  per-entity); ladder/`capped_limit`/`contest_favors_far` take the
+  planning tier; `place_poles` cadence and the substation set-cover
+  bounds derive from the shared functions (Normal ⇒ the original 8/9
+  constants, bit-identical); functional-only **stamp pass** at the end
+  of `layout_pass` (one audit point, per-class-ready); validators rate
+  each entity by its own `entity.quality`; export emits `quality`;
+  six-hop UI plumbing (`q=` codec, sidebar dropdown, renderer badge).
+  Kill 2a now covers all three thirds (bit-identity sweeps for speed,
+  inserter, pole); kill 2b full suite 783/783 green. **Two findings
+  while landing the differential fixture**: (1) at EC@6/s legendary on
+  yellow, every decomposition candidate fails on the pre-existing
+  lane-planner "consumer-clamped fan-in / multi-stage balancer not
+  wired" refusal — machine-count collapse concentrates consumer trunks,
+  so quality hits this wall far earlier than normal builds do (fixture
+  retuned to 4/s on red; the wall predates quality and needs its own
+  follow-up); (2) the all-candidates-failed error discarded every
+  candidate's reason — `CandidateRun` now carries the error and the
+  terminal message names each candidate's failure (observability fix,
+  found because of (1)). Differential fixture
+  `quality_differential_ec_normal_vs_legendary` green: exact per-tier
+  counts, per-entity stamping asserted entity-by-entity, export→parse
+  quality round-trip.*

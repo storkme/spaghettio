@@ -84,6 +84,12 @@ pub struct LayoutOptions {
     /// semantics. Default `Stack`. Core field only in Phase 1 — not yet
     /// plumbed through wasm-bindings or the web UI (Phase 4).
     pub max_inserter_tier: InserterTier,
+    /// Build quality of the entities the engine places
+    /// (`docs/rfp-build-quality.md` Phase 2): scales the sizing ladder's
+    /// inserter ceilings and pole geometry, and is stamped onto
+    /// functional entities (machines/inserters/poles) for export.
+    /// Default `Normal` — a bit-exact no-op (kill criterion 2).
+    pub quality: crate::common::QualityTier,
     /// Enable the merge-and-tap trunk fallback for unstampable
     /// multi-producer/multi-consumer families (`docs/rfp-merge-tap-trunks.md`).
     /// Default `false` (byte-identical to pre-fallback layouts). Set only by
@@ -103,6 +109,7 @@ impl LayoutOptions {
             row_layout: RowLayout::default(),
             surplus_policy: SurplusPolicy::default(),
             max_inserter_tier: InserterTier::default(),
+            quality: crate::common::QualityTier::default(),
             merge_tap: false,
         }
     }
@@ -461,6 +468,7 @@ fn layout_pass(
         bus_header,
         max_belt_tier,
         max_inserter_tier,
+        opts.quality,
         Some(&final_output_items),
         retry_extra_gaps,
         opts.row_layout,
@@ -510,6 +518,7 @@ fn layout_pass(
                 bus_header,
                 max_belt_tier,
                 max_inserter_tier,
+                opts.quality,
                 Some(&final_output_items),
                 Some(&merged_gaps),
                 opts.row_layout,
@@ -752,6 +761,7 @@ fn layout_pass(
             &inserters_for_poles,
             &occupied,
             &substation_targets,
+            opts.quality,
         );
         crate::trace::emit(crate::trace::TraceEvent::PolesPlaced {
             count: poles.len(),
@@ -856,6 +866,22 @@ fn layout_pass(
             spec: rs.spec.clone(),
         })
         .collect();
+
+    // Stamp build quality on functional entities (rfp-build-quality
+    // Phase 2, functional-only stamping): machines, inserters, poles get
+    // the planning tier; logistics stay `None`. Skipped entirely at
+    // Normal — absent means normal everywhere downstream (export omits
+    // the field, validators default absent → Normal), so the default
+    // path is untouched (kill criterion 2). One post-pass here rather
+    // than at the ~400 construction sites: single place to audit, and
+    // Phase 3 per-class overrides become a per-class map lookup here.
+    if opts.quality != crate::common::QualityTier::Normal {
+        for e in &mut all_entities {
+            if crate::common::quality_affects_entity(&e.name) {
+                e.quality = Some(opts.quality);
+            }
+        }
+    }
 
     Ok((
         LayoutResult {
@@ -1021,12 +1047,14 @@ fn place_poles(
     inserters: &[(i32, i32)],
     occupied: &FxHashSet<(i32, i32)>,
     substation_targets: &[SubstationTarget],
+    quality: crate::common::QualityTier,
 ) -> (Vec<PlacedEntity>, Vec<(i32, i32)>) {
     // Medium-pole supply half-extent on the tile grid, floored from the shared
     // `supply_area_distance` (RFP Phase 3a-i/3a-ii) so this placement radius and
     // the power validator's coverage radius can never drift. place_poles places
     // only medium poles here, so the value is unchanged (floor(3.5) = 3).
-    let pole_range: i32 = crate::common::supply_area_distance("medium-electric-pole").floor() as i32;
+    let pole_range: i32 =
+        crate::common::supply_area_distance("medium-electric-pole", quality).floor() as i32;
 
     if machines.is_empty() {
         return (Vec::new(), Vec::new());
@@ -1052,10 +1080,14 @@ fn place_poles(
     // validator's exact even-footprint check — placement guarantees real
     // coverage, never leaning on the validator's word (the 3a-i carried
     // constraint).
-    const SUB_LO: i32 = 8;
-    const SUB_HI: i32 = 9;
-    let sub_covers = |sx: i32, sy: i32, ix: i32, iy: i32| -> bool {
-        ix >= sx - SUB_LO && ix <= sx + SUB_HI && iy >= sy - SUB_LO && iy <= sy + SUB_HI
+    // Quality-derived (rfp-build-quality Phase 2): supply distance d =
+    // 9 + level (always integral for the substation), giving ix ∈
+    // [sx−(d−1), sx+d]. At Normal d=9 → the original 8/9 constants,
+    // bit-identical placement (kill criterion 2).
+    let sub_d = crate::common::supply_area_distance("substation", quality) as i32;
+    let (sub_lo, sub_hi) = (sub_d - 1, sub_d);
+    let sub_covers = move |sx: i32, sy: i32, ix: i32, iy: i32| -> bool {
+        ix >= sx - sub_lo && ix <= sx + sub_hi && iy >= sy - sub_lo && iy <= sy + sub_hi
     };
     for target in substation_targets {
         // Greedy set-cover: drop the fewest 2×2 substations into the widened
@@ -1072,7 +1104,7 @@ fn place_poles(
             let mut sy = sy_lo;
             while sy <= sy_hi {
                 // Any sx whose 2×2 could touch a remaining inserter's reach.
-                for sx in (rx_min - SUB_HI)..=(rx_max + SUB_LO) {
+                for sx in (rx_min - sub_hi)..=(rx_max + sub_lo) {
                     let foot = [(sx, sy), (sx + 1, sy), (sx, sy + 1), (sx + 1, sy + 1)];
                     if foot.iter().any(|t| occ.contains(t) || placed.contains(t)) {
                         continue;
@@ -1596,7 +1628,8 @@ mod tests {
         // iy ∈ [23,40] ⊇ 40.
         let targets = [SubstationTarget { band_y0: 31, band_y1: 32, inserters: vec![ins] }];
 
-        let (entities, uncovered) = place_poles(&machines, &[ins], &occupied, &targets);
+        let (entities, uncovered) =
+            place_poles(&machines, &[ins], &occupied, &targets, crate::common::QualityTier::Normal);
         let subs: Vec<&PlacedEntity> = entities.iter().filter(|e| e.name == "substation").collect();
         assert_eq!(subs.len(), 1, "exactly one substation should cover the deep inserter");
         let s = subs[0];
@@ -1609,7 +1642,8 @@ mod tests {
 
         // Without the band, the same inserter is unreachable — proving the
         // substation, not medium, is what covered it.
-        let (ent2, unc2) = place_poles(&machines, &[ins], &occupied, &[]);
+        let (ent2, unc2) =
+            place_poles(&machines, &[ins], &occupied, &[], crate::common::QualityTier::Normal);
         assert!(ent2.iter().all(|e| e.name != "substation"));
         assert_eq!(unc2, vec![ins], "no band ⇒ the deep inserter stays uncovered");
     }

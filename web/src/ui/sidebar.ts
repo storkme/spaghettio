@@ -455,6 +455,26 @@ export function renderSidebar(
   });
   targetBody.appendChild(makeField("Inserter tier", inserterTierSelect));
 
+  // Build quality (`docs/rfp-build-quality.md`): quality of the entities
+  // the engine places — machines craft faster, inserters swing faster,
+  // poles cover more. Functional entities are stamped in the exported
+  // blueprint; belts/pipes stay normal (functional-only stamping).
+  const qualitySelect = document.createElement("select");
+  qualitySelect.className = "sb-select";
+  [
+    ["Normal (default)", ""],
+    ["Uncommon", "uncommon"],
+    ["Rare", "rare"],
+    ["Epic", "epic"],
+    ["Legendary", "legendary"],
+  ].forEach(([label, value]) => {
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = label;
+    qualitySelect.appendChild(opt);
+  });
+  targetBody.appendChild(makeField("Build quality", qualitySelect));
+
   // Layout strategy. Phase 0b of `rfp-modular-production` shipped the
   // dropdown; the surviving `partitioned-decomposed` variant produces
   // strictly ≤ Pooled errors on every case in the corpus. The deprecated
@@ -682,6 +702,7 @@ export function renderSidebar(
   if (urlState.strategy) strategySelect.value = urlState.strategy;
   if (urlState.rowLayout) rowLayoutSelect.value = urlState.rowLayout;
   if (urlState.inserterTier) inserterTierSelect.value = urlState.inserterTier;
+  if (urlState.quality) qualitySelect.value = urlState.quality;
   // Restore custom inputs from URL
   for (const item of urlState.customInputs) {
     if (itemSet.has(item) && !defaultInputSet.has(item) && !customInputs.includes(item)) {
@@ -753,6 +774,7 @@ export function renderSidebar(
       strategy: strategySelect.value || null,
       rowLayout: rowLayoutSelect.value || null,
       inserterTier: inserterTierSelect.value || null,
+      quality: qualitySelect.value || null,
       customInputs,
     });
 
@@ -770,6 +792,7 @@ export function renderSidebar(
         availableInputs,
         palette,
         palette.crafting ?? DEFAULT_MACHINES.crafting,
+        qualitySelect.value || undefined,
       );
     } catch (err) {
       if (gen !== solveGeneration) return;
@@ -820,8 +843,9 @@ export function renderSidebar(
       const strategy = strategySelect.value || undefined;
       const rowLayout = rowLayoutSelect.value || undefined;
       const maxInserterTier = inserterTierSelect.value || undefined;
+      const quality = qualitySelect.value || undefined;
       const onEvent = callbacks.startStreaming();
-      layout = await engine.buildLayoutStreaming(result, maxTier, strategy, rowLayout, maxInserterTier, onEvent);
+      layout = await engine.buildLayoutStreaming(result, maxTier, strategy, rowLayout, maxInserterTier, quality, onEvent);
     } catch (err) {
       if (gen !== solveGeneration) return;
       const errDiv = document.createElement("div");
@@ -857,6 +881,7 @@ export function renderSidebar(
   strategySelect.addEventListener("change", scheduleAutoSolve);
   rowLayoutSelect.addEventListener("change", scheduleAutoSolve);
   inserterTierSelect.addEventListener("change", scheduleAutoSolve);
+  qualitySelect.addEventListener("change", scheduleAutoSolve);
   checkboxes.forEach((cb) => cb.addEventListener("change", scheduleAutoSolve));
 
   runSolve().catch((err) => console.error("runSolve failed:", err));

@@ -48,6 +48,11 @@ struct BlueprintEntity<'a> {
     use_filters: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     filters: Option<Vec<BlueprintFilter<'a>>>,
+    /// Entity build quality (`quality :: string?` per lua-api
+    /// BlueprintEntity; rfp-build-quality Phase 2). Omitted at normal —
+    /// stamped upstream by the layout's functional-only stamp pass.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    quality: Option<&'static str>,
 }
 
 #[derive(Serialize)]
@@ -115,6 +120,10 @@ pub fn export(layout: &LayoutResult, label: &str) -> String {
                 output_priority: ent.output_priority.as_deref(),
                 use_filters: filters.is_some().then_some(true),
                 filters,
+                quality: ent
+                    .quality
+                    .filter(|q| *q != crate::common::QualityTier::Normal)
+                    .map(|q| q.name()),
             }
         })
         .collect();

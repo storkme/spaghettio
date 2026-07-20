@@ -30,6 +30,7 @@ fn layout_options(
     strategy: Option<String>,
     row_layout: Option<String>,
     max_inserter_tier: Option<String>,
+    quality: Option<String>,
 ) -> LayoutOptions {
     let strategy = match strategy.as_deref() {
         // `partitioned-per-consumer` is the deprecated P1 string; the
@@ -59,6 +60,9 @@ fn layout_options(
         row_layout,
         surplus_policy: SurplusPolicy::default(),
         max_inserter_tier,
+        // rfp-build-quality Phase 2: unknown/absent → Normal, same
+        // hard-cap fallback semantics as the two tiers above.
+        quality: quality_tier(quality),
         // The merge-tap fallback is chosen internally by the
         // decomposition search (`MergeTapCandidate`), never requested by the
         // web UI — always default-off at the public boundary.
@@ -151,10 +155,11 @@ pub fn layout(
     strategy: Option<String>,
     row_layout: Option<String>,
     max_inserter_tier: Option<String>,
+    quality: Option<String>,
 ) -> Result<LayoutResult, JsError> {
     build_bus_layout(
         &solver_result,
-        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier),
+        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality),
     )
     .map_err(|e| JsError::new(&e))
 }
@@ -170,10 +175,11 @@ pub fn layout_traced(
     strategy: Option<String>,
     row_layout: Option<String>,
     max_inserter_tier: Option<String>,
+    quality: Option<String>,
 ) -> Result<LayoutResult, JsError> {
     spaghettio_core::bus::layout::build_bus_layout_traced(
         &solver_result,
-        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier),
+        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality),
     )
     .map_err(|e| JsError::new(&e))
 }
@@ -233,6 +239,7 @@ pub fn layout_streaming(
     strategy: Option<String>,
     row_layout: Option<String>,
     max_inserter_tier: Option<String>,
+    quality: Option<String>,
     emit: &js_sys::Function,
 ) -> Result<LayoutResult, JsError> {
     let emit = emit.clone();
@@ -246,7 +253,7 @@ pub fn layout_streaming(
     });
     spaghettio_core::bus::layout::build_bus_layout_streaming(
         &solver_result,
-        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier),
+        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality),
         on_event,
     )
     .map_err(|e| JsError::new(&e))

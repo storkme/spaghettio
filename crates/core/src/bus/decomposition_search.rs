@@ -233,6 +233,7 @@ impl DecompositionCandidate for ModuleSizeSplit {
             row_layout: opts.row_layout,
             surplus_policy: opts.surplus_policy,
             max_inserter_tier: opts.max_inserter_tier,
+            quality: opts.quality,
             merge_tap: opts.merge_tap,
         };
         run_layout_with_retry(&transformed, &inner_opts)
@@ -576,6 +577,11 @@ pub fn score_layout(layout: &LayoutResult, solver_result: &SolverResult) -> Cand
 /// renderer (which surfaces the streaming sink).
 struct CandidateRun {
     outcome: Option<(LayoutResult, CandidateScore)>,
+    /// The candidate's layout error when it produced no outcome — kept so
+    /// the all-candidates-failed terminal message can say WHY instead of
+    /// the unactionable "no decomposition candidate produced a layout"
+    /// (observability gap found debugging rfp-build-quality Phase 2).
+    error: Option<String>,
     events: Vec<crate::trace::TraceEvent>,
 }
 
@@ -583,7 +589,7 @@ impl CandidateRun {
     /// A candidate that wasn't tried (e.g. gating predicate was false).
     /// No outcome, no events; the winner-selection code skips it.
     fn skipped(_name: &str) -> Self {
-        Self { outcome: None, events: Vec::new() }
+        Self { outcome: None, events: Vec::new(), error: None }
     }
 }
 
@@ -599,6 +605,7 @@ where
     let result = f(solver_result);
     let mut events = crate::trace::peek_events_since(start);
     crate::trace::truncate_events(start);
+    let mut error = None;
     let outcome = match result {
         Ok(layout) => {
             let score = score_layout(&layout, solver_result);
@@ -617,9 +624,12 @@ where
             });
             Some((layout, score))
         }
-        Err(_) => None,
+        Err(e) => {
+            error = Some(e);
+            None
+        }
     };
-    CandidateRun { outcome, events }
+    CandidateRun { outcome, events, error }
 }
 
 /// Like `run_candidate` but wraps the produce call in `catch_unwind`.
@@ -636,6 +646,7 @@ where
     let result = std::panic::catch_unwind(f);
     let mut events = crate::trace::peek_events_since(start);
     crate::trace::truncate_events(start);
+    let mut error = None;
     let outcome = match result {
         Ok(Ok(layout)) => {
             let score = score_layout(&layout, solver_result);
@@ -650,8 +661,12 @@ where
             });
             Some((layout, score))
         }
-        Ok(Err(_)) => None,
+        Ok(Err(e)) => {
+            error = Some(e);
+            None
+        }
         Err(_) => {
+            error = Some("panicked (caught)".to_string());
             events.push(crate::trace::TraceEvent::DecompositionCandidateScored {
                 name: name.to_string(),
                 density: 0.0,
@@ -664,7 +679,7 @@ where
             None
         }
     };
-    CandidateRun { outcome, events }
+    CandidateRun { outcome, events, error }
 }
 
 /// Run candidates and pick the winner.
@@ -826,6 +841,12 @@ pub fn select_best_decomposition(
     // layout — same behaviour as today's pipeline when shape-fix can't
     // resolve a (n, m) trap).
     // Index order MUST match NATIVE_IDX (0) / MERGE_TAP_IDX (3) above.
+    let (native_err, k1_err, split_err, merge_tap_err) = (
+        native_run.error.clone(),
+        k1_run.error.clone(),
+        split_run.error.clone(),
+        merge_tap_run.error.clone(),
+    );
     let candidates: [(Option<(LayoutResult, CandidateScore)>, Vec<crate::trace::TraceEvent>, &str); 4] = [
         (native_run.outcome, native_run.events, "native"),
         (k1_run.outcome, k1_run.events, "k1-shape-fix"),
@@ -859,7 +880,18 @@ pub fn select_best_decomposition(
         .or_else(|| candidates.iter().position(|(o, _, _)| o.is_some()));
 
     let Some(idx) = winner_idx else {
-        return Err("no decomposition candidate produced a layout".to_string());
+        let details: Vec<String> = candidates
+            .iter()
+            .map(|(_, _, name)| name.to_string())
+            .zip([&native_err, &k1_err, &split_err, &merge_tap_err])
+            .map(|(name, err)| {
+                format!("{name}: {}", err.as_deref().unwrap_or("did not run"))
+            })
+            .collect();
+        return Err(format!(
+            "no decomposition candidate produced a layout — {}",
+            details.join("; ")
+        ));
     };
 
     // Move winning entry out of the array; replay its captured trace

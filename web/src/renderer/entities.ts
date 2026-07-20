@@ -962,9 +962,36 @@ export function drawEntityGraphic(entity: PlacedEntity, ctx: DrawContext): Graph
   } else {
     g = drawGenericEntity();
   }
+  if (entity.quality && entity.quality !== "normal") {
+    addQualityBadge(g, entity.quality);
+  }
   g.x = (entity.x ?? 0) * TILE_PX;
   g.y = (entity.y ?? 0) * TILE_PX;
   return g;
+}
+
+/** Game-style quality tier colors (uncommon green, rare blue, epic
+ *  purple, legendary orange). */
+const QUALITY_BADGE_COLORS: Record<string, number> = {
+  uncommon: 0x4fca4f,
+  rare: 0x4f8bca,
+  epic: 0xa64fca,
+  legendary: 0xe8a33d,
+};
+
+/** Small corner diamond marking a quality-stamped entity — mirrors the
+ *  in-game badge position (bottom-left). Only functional entities carry
+ *  `quality` (rfp-build-quality functional-only stamping), so belts stay
+ *  clean automatically. */
+function addQualityBadge(g: Graphics, quality: string): void {
+  const color = QUALITY_BADGE_COLORS[quality];
+  if (color === undefined) return;
+  const r = TILE_PX * 0.14;
+  const cx = r + 1.5;
+  const cy = TILE_PX - r - 1.5;
+  g.poly([cx, cy - r, cx + r, cy, cx, cy + r, cx - r, cy])
+    .fill({ color, alpha: 0.95 })
+    .stroke({ color: 0x1a1a1a, width: 1, alpha: 0.8 });
 }
 
 /** Draw an UG tunnel stripe between a paired UG input and output.

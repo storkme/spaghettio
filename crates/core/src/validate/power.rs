@@ -34,14 +34,22 @@ fn pole_center(name: &str, x: i32, y: i32) -> (f64, f64) {
     (x as f64 + w as f64 / 2.0, y as f64 + h as f64 / 2.0)
 }
 
-/// Wire reach for a given pole name; returns `None` for unknown pole types.
-fn wire_reach(name: &str) -> Option<f64> {
-    match name {
-        "medium-electric-pole" => Some(MEDIUM_POLE_WIRE_REACH),
-        "small-electric-pole" => Some(SMALL_POLE_WIRE_REACH),
-        "substation" => Some(SUBSTATION_WIRE_REACH),
-        _ => None,
-    }
+/// Wire reach for a given pole name at a build-quality tier; returns
+/// `None` for unknown pole types. Quality adds **+2 wire reach per
+/// level** (rfp-build-quality; kill-1 verified in-game): medium 9 → 19
+/// legendary, substation 18 → 28. The substation's reach equals its
+/// supply *diameter* at every tier (zero margin — see
+/// `common::supply_area_distance`); the `min(reach_a, reach_b)` pairing
+/// rule below is unchanged and applies per-entity, so mixed-quality pole
+/// pairs connect at the weaker pole's effective reach, matching the game.
+fn wire_reach(name: &str, quality: crate::common::QualityTier) -> Option<f64> {
+    let base = match name {
+        "medium-electric-pole" => MEDIUM_POLE_WIRE_REACH,
+        "small-electric-pole" => SMALL_POLE_WIRE_REACH,
+        "substation" => SUBSTATION_WIRE_REACH,
+        _ => return None,
+    };
+    Some(base + 2.0 * f64::from(quality.level()))
 }
 
 /// Check that all power poles form a single connected graph via copper wire.
@@ -58,7 +66,7 @@ pub fn check_pole_network_connectivity(layout: &LayoutResult) -> Vec<ValidationI
         .entities
         .iter()
         .filter_map(|e| {
-            wire_reach(&e.name).map(|r| {
+            wire_reach(&e.name, e.quality.unwrap_or_default()).map(|r| {
                 let (cx, cy) = pole_center(&e.name, e.x, e.y);
                 (cx, cy, r)
             })
@@ -127,7 +135,7 @@ pub fn check_power_coverage(layout_result: &LayoutResult) -> Vec<ValidationIssue
             (
                 e.x as f64 + w as f64 / 2.0,
                 e.y as f64 + h as f64 / 2.0,
-                crate::common::supply_area_distance(&e.name),
+                crate::common::supply_area_distance(&e.name, e.quality.unwrap_or_default()),
             )
         })
         .collect();
@@ -181,6 +189,28 @@ pub fn check_power_coverage(layout_result: &LayoutResult) -> Vec<ValidationIssue
 
 #[cfg(test)]
 mod tests {
+    use crate::common::QualityTier;
+
+    /// The RFP's pole-margin table as an invariant (rfp-build-quality;
+    /// kill-1 verified in-game 2026-07-20): medium poles keep a strict
+    /// 2-tile margin between supply DIAMETER and wire reach at every
+    /// quality tier (7<9 ... 17<19), so coverage-spaced mediums can never
+    /// strand — while the substation has ZERO margin at every tier
+    /// (18=18 ... 28=28), so spacing logic may never assume its wire
+    /// reach exceeds its supply diameter. Equality asserted exactly so a
+    /// data-table typo can't hide.
+    #[test]
+    fn pole_margin_invariants_per_quality_tier() {
+        for tier in QualityTier::ALL {
+            let m_supply = 2.0 * crate::common::supply_area_distance("medium-electric-pole", tier);
+            let m_wire = wire_reach("medium-electric-pole", tier).unwrap();
+            assert_eq!(m_wire - m_supply, 2.0, "medium margin {tier:?}");
+            let s_supply = 2.0 * crate::common::supply_area_distance("substation", tier);
+            let s_wire = wire_reach("substation", tier).unwrap();
+            assert_eq!(s_wire, s_supply, "substation zero-margin {tier:?}");
+        }
+    }
+
     use super::*;
     use crate::models::{EntityDirection, PlacedEntity};
 

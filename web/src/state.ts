@@ -28,6 +28,10 @@ export interface FormState {
    * the un-set value IS the richest tier here (there's no cheaper
    * "auto"), so null means "no cap". See `docs/rfp-inserter-sizing.md`. */
   inserterTier: string | null;
+  /** Build quality of placed entities ("uncommon" | "rare" | "epic" |
+   * "legendary"). null = normal (today's default) — same null-is-default
+   * convention as `inserterTier`. See `docs/rfp-build-quality.md`. */
+  quality: string | null;
   /** User-added inputs beyond the DEFAULT_INPUTS list. */
   customInputs: string[];
 }
@@ -49,6 +53,11 @@ export const KNOWN_ROW_LAYOUTS = ["horizontal-stack"] as const;
  * absent — same convention as `KNOWN_STRATEGIES` omitting "pooled": the
  * default is represented by `null`, never an explicit value. */
 export const KNOWN_INSERTER_TIERS = ["regular", "fast"] as const;
+
+/** Build-quality values accepted on the URL and in `FormState.quality`.
+ * `"normal"` (the default) is intentionally absent — represented by
+ * `null`, same convention as `KNOWN_INSERTER_TIERS`. */
+export const KNOWN_QUALITIES = ["uncommon", "rare", "epic", "legendary"] as const;
 
 /** Full list of input pills rendered in the sidebar. */
 export const DEFAULT_INPUTS: string[] = [
@@ -135,6 +144,19 @@ const INSERTER_TIER_SHORT_TO_FULL: Record<string, string> = {
 const INSERTER_TIER_FULL_TO_SHORT: Record<string, string> = {
   regular: "r",
   fast: "f",
+};
+
+const QUALITY_SHORT_TO_FULL: Record<string, string> = {
+  u: "uncommon",
+  r: "rare",
+  e: "epic",
+  l: "legendary",
+};
+const QUALITY_FULL_TO_SHORT: Record<string, string> = {
+  uncommon: "u",
+  rare: "r",
+  epic: "e",
+  legendary: "l",
 };
 
 function slugToCode(slug: string): string {
@@ -229,6 +251,8 @@ function readHashState(): FormState | null {
   const rowLayout = rlShort ? ROW_LAYOUT_SHORT_TO_FULL[rlShort] ?? null : null;
   const itShort = extras.get("it");
   const inserterTier = itShort ? INSERTER_TIER_SHORT_TO_FULL[itShort] ?? null : null;
+  const qShort = extras.get("q");
+  const quality = qShort ? QUALITY_SHORT_TO_FULL[qShort] ?? null : null;
   const ciRaw = extras.get("ci");
   let customInputs: string[] = [];
   if (ciRaw) {
@@ -252,7 +276,7 @@ function readHashState(): FormState | null {
     machines[category] = slug;
   }
 
-  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, customInputs };
+  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, quality, customInputs };
 }
 
 function readQueryState(): FormState {
@@ -289,10 +313,15 @@ function readQueryState(): FormState {
     rawInserterTier && (KNOWN_INSERTER_TIERS as readonly string[]).includes(rawInserterTier)
       ? rawInserterTier
       : null;
+  const rawQuality = params.get("quality");
+  const quality =
+    rawQuality && (KNOWN_QUALITIES as readonly string[]).includes(rawQuality)
+      ? rawQuality
+      : null;
   const ciParam = params.get("ci");
   const customInputs = ciParam ? ciParam.split(",").filter((s) => s.length > 0) : [];
 
-  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, customInputs };
+  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, quality, customInputs };
 }
 
 export function readUrlState(): FormState {
@@ -359,6 +388,9 @@ function formatHashState(state: FormState): string {
   }
   if (state.inserterTier && INSERTER_TIER_FULL_TO_SHORT[state.inserterTier]) {
     extras.set("it", INSERTER_TIER_FULL_TO_SHORT[state.inserterTier]);
+  }
+  if (state.quality && QUALITY_FULL_TO_SHORT[state.quality]) {
+    extras.set("q", QUALITY_FULL_TO_SHORT[state.quality]);
   }
   if (state.customInputs.length > 0) {
     extras.set(

@@ -31,6 +31,7 @@ function makeState(overrides: Partial<FormState>): FormState {
     strategy: null,
     rowLayout: null,
     inserterTier: null,
+    quality: null,
     customInputs: [],
     ...overrides,
   };
@@ -47,6 +48,7 @@ describe("readUrlState — defaults", () => {
       strategy: null,
       rowLayout: null,
       inserterTier: null,
+      quality: null,
       customInputs: [],
     });
   });
@@ -115,6 +117,7 @@ describe("readUrlState — hash form", () => {
       strategy: null,
       rowLayout: null,
       inserterTier: null,
+      quality: null,
       customInputs: [],
     });
   });
@@ -200,6 +203,7 @@ describe("writeUrlState → readUrlState round-trip", () => {
       strategy: "partitioned-decomposed",
       rowLayout: "horizontal-stack",
       inserterTier: "regular",
+      quality: null,
       customInputs: ["iron-plate", "copper-plate"],
     });
     const back = roundTrip(state);
@@ -209,12 +213,36 @@ describe("writeUrlState → readUrlState round-trip", () => {
     expect(back.customInputs).toEqual(["iron-plate", "copper-plate"]);
   });
 
+  it("build quality round-trips via the q= short code; normal is omitted", () => {
+    const state = makeState({
+      item: "electronic-circuit",
+      rate: 4,
+      machines: { crafting: DEFAULT_MACHINES.crafting },
+      quality: "legendary",
+    });
+    writeUrlState(state);
+    expect(window.location.hash).toContain("q=l");
+    const back = readUrlState();
+    expect(back.quality).toBe("legendary");
+
+    const normal = makeState({
+      item: "electronic-circuit",
+      rate: 4,
+      machines: { crafting: DEFAULT_MACHINES.crafting },
+      quality: null,
+    });
+    writeUrlState(normal);
+    expect(window.location.hash).not.toContain("q=");
+    expect(readUrlState().quality).toBeNull();
+  });
+
   it("stack (default) inserter tier is omitted from the URL", () => {
     const state = makeState({
       item: "iron-gear-wheel",
       rate: 7,
       machines: { crafting: DEFAULT_MACHINES.crafting },
       inserterTier: null,
+      quality: null,
     });
     writeUrlState(state);
     expect(window.location.hash).toBe("#/l/igw/7");

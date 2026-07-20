@@ -197,11 +197,21 @@ pub fn entity_size(entity: &str) -> (u32, u32) {
 /// odd 1×1 medium pole and the even 2×2 substation — the integer-Chebyshev
 /// version 3a-i shipped false-accepted the substation's +x/+y edge by one tile.
 /// `place_poles`, which places on the tile grid, floors it (`.floor() as i32`).
-pub fn supply_area_distance(entity: &str) -> f64 {
-    match entity {
+///
+/// Quality adds **+1 supply radius per level** (rfp-build-quality; kill-1
+/// verified in-game 2026-07-20): medium 3.5 → 8.5 legendary (7×7 → 17×17),
+/// substation 9 → 14 (18×18 → 28×28). NOTE the substation's supply
+/// *diameter* equals its wire reach at EVERY tier (18=18 … 28=28, zero
+/// margin — see the RFP's pole-margin table); only medium poles keep a
+/// 2-tile margin, so spacing logic may never assume wire reach exceeds
+/// supply diameter for substations. Callers pass the entity's own tier
+/// (validator) or the planning tier (`place_poles`).
+pub fn supply_area_distance(entity: &str, quality: QualityTier) -> f64 {
+    let base = match entity {
         "substation" => 9.0,
         _ => 3.5,
-    }
+    };
+    base + f64::from(quality.level())
 }
 
 /// Whether `entity` draws electricity from the power grid.
@@ -416,6 +426,30 @@ pub fn balancer_seg_is_simple(seg: &str) -> bool {
     n <= 2 && m <= 2
 }
 
+/// Whether build quality functionally affects this entity — and therefore
+/// whether the export stamps it (rfp-build-quality "functional-only
+/// stamping"): machines (crafting speed — including the burner biochamber;
+/// quality scales speed regardless of energy source), inserters
+/// (rotation), poles (supply area + wire reach). Belts, undergrounds,
+/// splitters, and pipes are excluded: vanilla quality gives them health
+/// only, and demanding upcycle-only legendary logistics for zero function
+/// is the exact cost the RFP's stamping decision avoids.
+pub fn quality_affects_entity(name: &str) -> bool {
+    is_machine_entity(name)
+        || matches!(
+            name,
+            "inserter"
+                | "long-handed-inserter"
+                | "fast-inserter"
+                | "stack-inserter"
+                | "bulk-inserter"
+                | "small-electric-pole"
+                | "medium-electric-pole"
+                | "big-electric-pole"
+                | "substation"
+        )
+}
+
 /// Inserter reach: how many tiles away the pick-up / drop position is.
 pub fn inserter_reach(name: &str) -> i32 {
     if name == "long-handed-inserter" {
@@ -426,7 +460,8 @@ pub fn inserter_reach(name: &str) -> i32 {
 }
 
 /// Approximate steady-state throughput (items/second) of an inserter,
-/// from `docs/factorio-mechanics.md` table I8.
+/// from `docs/factorio-mechanics.md` table I8, scaled by build quality
+/// (`docs/rfp-build-quality.md` Phase 2).
 ///
 /// Assumption: **no inserter-capacity / stack-bonus research** — these are
 /// the base (unresearched) rates a fresh factory sees. Values are
@@ -436,15 +471,25 @@ pub fn inserter_reach(name: &str) -> i32 {
 /// the "long arm = slow" intuition is wrong, per I8), fast ~2.31/s,
 /// stack ~12/s base, bulk 2.4/s base. Unknown names fall back to the
 /// regular rate (conservative — never over-credits an unknown inserter).
-pub fn inserter_throughput(name: &str) -> f64 {
-    match name {
+///
+/// Quality multiplies rotation speed ×(1 + 0.3·level), applied linearly
+/// to these steady-state rates. In-game cycles are tick-quantized so
+/// linear is a few percent optimistic at some tiers — the same fidelity
+/// the base table already accepts. `Normal` is a bit-exact ×1.0 no-op
+/// (kill criterion 2a). Callers pass the *entity's own* tier
+/// (`PlacedEntity.quality`, validators) or the planning tier
+/// (`LayoutOptions.quality`, the sizing ladder) — there is deliberately
+/// no zero-arg form, so no site can silently default to Normal.
+pub fn inserter_throughput(name: &str, quality: QualityTier) -> f64 {
+    let base = match name {
         "inserter" => 0.84,
         "long-handed-inserter" => 1.2,
         "fast-inserter" => 2.31,
         "stack-inserter" => 12.0,
         "bulk-inserter" => 2.4,
         _ => 0.84,
-    }
+    };
+    base * quality.multiplier()
 }
 
 /// Map underground-belt entity name to its corresponding surface belt tier.
@@ -661,6 +706,23 @@ mod tests {
         assert_eq!(QualityTier::from_name("quality"), None);
         assert_eq!(QualityTier::from_name(""), None);
         assert_eq!(QualityTier::default(), QualityTier::Normal);
+    }
+
+    /// Kill 2a, pole third: `supply_area_distance` at Normal is
+    /// bit-identical to the pre-quality constants; +1 radius per level
+    /// (kill-1 verified in-game 2026-07-20).
+    #[test]
+    fn supply_area_distance_quality_scaling() {
+        assert_eq!(supply_area_distance("medium-electric-pole", QualityTier::Normal), 3.5);
+        assert_eq!(supply_area_distance("substation", QualityTier::Normal), 9.0);
+        assert_eq!(supply_area_distance("unknown-pole", QualityTier::Normal), 3.5);
+        assert_eq!(supply_area_distance("medium-electric-pole", QualityTier::Legendary), 8.5);
+        assert_eq!(supply_area_distance("substation", QualityTier::Legendary), 14.0);
+        for tier in QualityTier::ALL {
+            let lvl = f64::from(tier.level());
+            assert_eq!(supply_area_distance("substation", tier), 9.0 + lvl, "{tier:?}");
+            assert_eq!(supply_area_distance("medium-electric-pole", tier), 3.5 + lvl, "{tier:?}");
+        }
     }
 
     /// Drift-pin between the THREE spellings of a tier: the serde derive

@@ -311,6 +311,7 @@ fn run_e2e_inner(
             max_belt_tier: belt_tier.map(|s| s.to_string()),
             row_layout,
             max_inserter_tier: Default::default(),
+            quality: Default::default(),
             merge_tap: false,
         },
     )
@@ -1730,6 +1731,7 @@ fn tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing() {
             row_layout: RowLayout::HorizontalStack,
             surplus_policy: SurplusPolicy::default(),
             max_inserter_tier: Default::default(),
+            quality: Default::default(),
             merge_tap: false,
         },
     )
@@ -1875,6 +1877,7 @@ fn tier5_processing_unit_2s_horizontal_stack_iron_ore_pipe_bypass() {
             row_layout: RowLayout::HorizontalStack,
             surplus_policy: SurplusPolicy::default(),
             max_inserter_tier: Default::default(),
+            quality: Default::default(),
             merge_tap: false,
         },
     )
@@ -1981,6 +1984,7 @@ fn tier5_processing_unit_25s_horizontal_stack_pole_coverage() {
             row_layout: RowLayout::HorizontalStack,
             surplus_policy: SurplusPolicy::default(),
             max_inserter_tier: Default::default(),
+            quality: Default::default(),
             merge_tap: false,
         },
     )
@@ -6929,4 +6933,124 @@ fn census_science_pack_snapshots() {
             }
         }
     }
+}
+
+// ── Build quality (docs/rfp-build-quality.md Phase 2) ──────────────────
+
+/// Differential pair (RFP verification plan): the same recipe/shape at
+/// Normal vs Legendary, isolating quality as the only variable. EC@4/s
+/// from plates on AM3 is sized so the legendary variant contains
+/// single-machine rows (the small-N template regime the design section
+/// calls out) while staying inside the lane planner's consumer-clamped
+/// fan-in limit — at 6/s on yellow the legendary variant trips the
+/// pre-existing "multi-stage balancer not wired" refusal (2 ceil'd cable
+/// machines can push 25/s at one consumer trunk capped at 15/s; see the
+/// RFP decision log 2026-07-20). Red belts because EC-from-plates on
+/// yellow carries the known #65 lane-throughput errors at Normal. Asserts: both tiers 0 errors; the
+/// hand-computed machine counts (Normal EC 4/2.5=1.6, cable 12/5=2.4;
+/// Legendary EC 0.64, cable 0.96); functional-only stamping
+/// (machines/inserters/poles stamped, belts not); export emits
+/// `"quality":"legendary"` and the parser round-trips it.
+#[test]
+#[ntest::timeout(30000)]
+fn quality_differential_ec_normal_vs_legendary() {
+    use spaghettio_core::common::QualityTier;
+    use spaghettio_core::recipe_db::MachinePalette;
+
+    let inputs: FxHashSet<String> =
+        ["iron-plate", "copper-plate"].iter().map(|s| s.to_string()).collect();
+
+    let run = |quality: QualityTier| {
+        let solver_result = solver::solve_with_palette_exclusions_and_quality(
+            "electronic-circuit",
+            4.0,
+            &inputs,
+            &MachinePalette::default(),
+            "assembling-machine-3",
+            &FxHashSet::default(),
+            quality,
+        )
+        .unwrap_or_else(|e| panic!("{quality:?} solve: {e}"));
+        let layout = layout::build_bus_layout(
+            &solver_result,
+            layout::LayoutOptions {
+                strategy: Default::default(),
+                surplus_policy: Default::default(),
+                max_belt_tier: Some("fast-transport-belt".to_string()),
+                row_layout: Default::default(),
+                max_inserter_tier: Default::default(),
+                quality,
+                merge_tap: false,
+            },
+        )
+        .unwrap_or_else(|e| panic!("{quality:?} layout: {e}"));
+        let issues = validate::validate(&layout, Some(&solver_result), LayoutStyle::Bus)
+            .unwrap_or_else(|e| panic!("{quality:?} validate: {e}"));
+        (solver_result, layout, issues)
+    };
+
+    let count_of = |sr: &SolverResult, recipe: &str| {
+        sr.machines.iter().find(|m| m.recipe == recipe).map(|m| m.count).unwrap_or(0.0)
+    };
+
+    let (normal_sr, normal_layout, normal_issues) = run(QualityTier::Normal);
+    let (leg_sr, leg_layout, leg_issues) = run(QualityTier::Legendary);
+
+    for (label, issues) in [("normal", &normal_issues), ("legendary", &leg_issues)] {
+        let errors: Vec<_> =
+            issues.iter().filter(|i| i.severity == Severity::Error).collect();
+        assert!(errors.is_empty(), "{label}: expected 0 errors, got {errors:?}");
+    }
+
+    // Hand-computed solver counts (the quality multiplier is the ONLY
+    // difference between the two runs).
+    assert!((count_of(&normal_sr, "electronic-circuit") - 1.6).abs() < 1e-9);
+    assert!((count_of(&normal_sr, "copper-cable") - 2.4).abs() < 1e-9);
+    assert!((count_of(&leg_sr, "electronic-circuit") - 0.64).abs() < 1e-9);
+    assert!((count_of(&leg_sr, "copper-cable") - 0.96).abs() < 1e-9);
+
+    // Normal layout carries no quality stamps at all.
+    assert!(
+        normal_layout.entities.iter().all(|e| e.quality.is_none()),
+        "normal-quality layout must have zero quality stamps (kill criterion 2)"
+    );
+
+    // Functional-only stamping on the legendary layout: every machine /
+    // inserter / pole stamped Legendary; every belt-ish entity unstamped.
+    let mut stamped = 0;
+    for e in &leg_layout.entities {
+        if spaghettio_core::common::quality_affects_entity(&e.name) {
+            assert_eq!(
+                e.quality,
+                Some(QualityTier::Legendary),
+                "{} at ({},{}) should be stamped",
+                e.name,
+                e.x,
+                e.y
+            );
+            stamped += 1;
+        } else {
+            assert_eq!(
+                e.quality, None,
+                "{} at ({},{}) is logistics and must NOT be stamped",
+                e.name, e.x, e.y
+            );
+        }
+    }
+    assert!(stamped > 0, "legendary layout should contain stamped entities");
+
+    // Export → parse round-trip preserves the tier.
+    let bp = blueprint::export(&leg_layout, "quality-test");
+    assert!(!bp.is_empty());
+    let parsed = blueprint_parser::parse_blueprint_string(&bp)
+        .unwrap_or_else(|e| panic!("parse: {e}"));
+    let parsed_stamped = parsed
+        .entities
+        .iter()
+        .filter(|e| e.quality == Some(QualityTier::Legendary))
+        .count();
+    assert_eq!(
+        parsed_stamped, stamped,
+        "every stamped entity must round-trip through export+parse"
+    );
 }
