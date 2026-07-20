@@ -43,7 +43,17 @@ pub fn is_machine_entity(entity: &str) -> bool {
 /// geometry uses per-level tile bonuses (+1 supply radius, +2 wire
 /// reach), so consumers take the tier and derive what they need rather
 /// than sharing one multiplier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+///
+/// Serde form is the lowercase blueprint-JSON string (`"legendary"`),
+/// matching [`QualityTier::name`] — the same spelling flows through
+/// `PlacedEntity.quality`, blueprint export, and the URL param.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default,
+    serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "lowercase")]
 pub enum QualityTier {
     #[default]
     Normal,
