@@ -19,6 +19,7 @@ import type { SolverResult, LayoutResult, PlacedEntity, ValidationIssue, SatImpr
 import { renderTraceOverlay, getTracePhases, eventsUpToPhase, type TraceEvent, type PhaseSnapshot } from "./renderer/traceOverlay";
 import { renderValidationOverlay } from "./renderer/validationOverlay";
 import { renderStarvationHeatmap } from "./renderer/heatmapOverlay";
+import { renderPowerWiresOverlay } from "./renderer/powerWiresOverlay";
 import { renderRegionOverlayDetailed, type RegionOverlayItem } from "./renderer/regionOverlay";
 import { renderJunctionZoneOverlay } from "./renderer/junctionZoneOverlay";
 import { createSatZoneOverlay } from "./renderer/satZoneOverlay";
@@ -122,7 +123,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
 
   // --- Modules ---
   const overlayControls = createOverlayPanel(container);
-  const { debugCb, colorCb, heatmapCb, regionsCb, soloRegionsCb, ghostTilesCb, traceOverlayCb } = overlayControls;
+  const { debugCb, colorCb, heatmapCb, powerWiresCb, regionsCb, soloRegionsCb, ghostTilesCb, traceOverlayCb } = overlayControls;
   const retryPanel = createRetryPanel(container);
   // Sync the item-coloring flag with the persisted checkbox state so
   // a user who turned colours off stays off across reloads.
@@ -484,6 +485,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
   let cachedValidationIssues: ValidationIssue[] | null = null;
   let heatmapLayer: Container | null = null;
   let lastHeatmapIssues: ValidationIssue[] = [];
+  let powerWiresLayer: Container | null = null;
   let lastTileCtx: TileContext | null = null;
   let validationInFlightFor: LayoutResult | null = null;
 
@@ -649,6 +651,27 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       return;
     }
     heatmapLayer = renderStarvationHeatmap(lastHeatmapIssues, lastLayout.entities, entityLayer);
+    requestRender();
+  }
+
+  /** Power-connectivity overlay: draw the pole copper-wire network
+   *  (`layout.power_wires` — the exact graph the blueprint exports).
+   *  Rebuilt whenever a layout lands or the toggle changes. */
+  function updatePowerWiresOverlay(): void {
+    if (powerWiresLayer) {
+      entityLayer.removeChild(powerWiresLayer);
+      powerWiresLayer.destroy({ children: true });
+      powerWiresLayer = null;
+    }
+    if (!powerWiresCb.checked || !lastLayout?.power_wires?.length) {
+      requestRender();
+      return;
+    }
+    powerWiresLayer = renderPowerWiresOverlay(
+      lastLayout.power_wires,
+      lastLayout.entities,
+      entityLayer,
+    );
     requestRender();
   }
 
@@ -1284,6 +1307,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     updateValidationOverlay();
     updateRegionOverlay();
     updateGhostTilesOverlay();
+    updatePowerWiresOverlay();
     // External-input trunk labels (issue #196). Rebuilt on every layout
     // commit. Skips when there's no SolverResult — corpus / snapshot
     // load paths arrive without one and we don't fabricate labels there.
@@ -1435,6 +1459,9 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     });
     heatmapCb.addEventListener("change", () => {
       updateHeatmapOverlay();
+    });
+    powerWiresCb.addEventListener("change", () => {
+      updatePowerWiresOverlay();
     });
     regionsCb.addEventListener("change", () => {
       updateRegionOverlay();

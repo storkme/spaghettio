@@ -7,6 +7,7 @@ export interface OverlayPanelControls {
   debugCb: HTMLInputElement;
   colorCb: HTMLInputElement;
   heatmapCb: HTMLInputElement;
+  powerWiresCb: HTMLInputElement;
   regionsCb: HTMLInputElement;
   soloRegionsCb: HTMLInputElement;
   ghostTilesCb: HTMLInputElement;
@@ -38,6 +39,8 @@ export function createOverlayPanel(container: HTMLElement): OverlayPanelControls
   const colorCb = makeToggle(panel, "Item colours", state.itemColors);
   // User-facing (not under Debug): tint machines by delivered/needed.
   const heatmapCb = makeToggle(panel, "Starvation heatmap", state.heatmap);
+  // User-facing (not under Debug): draw the pole copper-wire network.
+  const powerWiresCb = makeToggle(panel, "Power wires", state.powerWires);
 
   const subPanel = document.createElement("div");
   subPanel.className = "overlay-sub-panel";
@@ -76,6 +79,9 @@ export function createOverlayPanel(container: HTMLElement): OverlayPanelControls
   heatmapCb.addEventListener("change", () => {
     debugState.set({ heatmap: heatmapCb.checked });
   });
+  powerWiresCb.addEventListener("change", () => {
+    debugState.set({ powerWires: powerWiresCb.checked });
+  });
 
   return {
     setDebugEnabled(on: boolean): void {
@@ -86,6 +92,7 @@ export function createOverlayPanel(container: HTMLElement): OverlayPanelControls
     debugCb,
     colorCb,
     heatmapCb,
+    powerWiresCb,
     regionsCb,
     soloRegionsCb,
     ghostTilesCb,
