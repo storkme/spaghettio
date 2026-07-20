@@ -7165,3 +7165,151 @@ fn quality_ec_45s_express_legendary_from_ore() {
         .iter()
         .any(|e| e.quality == Some(QualityTier::Legendary)));
 }
+
+/// Differential pair for GitHub issue #315 (quality support for the power
+/// arc — differential-verify 3b/3c at quality tiers): the kovarex self-loop
+/// fixture (`tier_kovarex_self_loop`'s exact params — uranium-235 @ 0.1/s,
+/// assembling-machine-3, input uranium-238, excluding uranium-processing so
+/// the solver has no choice but the self-loop recipe, belt tier unset) run
+/// at Normal vs Legendary. This is the one corpus case where the Phase 3b
+/// top-edge substation fallback fires (`docs/rfp-power-reservation.md`): at
+/// Normal a substation covers the 5-row-deep recirc inserter bank because no
+/// medium pole's ±3 reaches that far. Both tiers assert 0 errors; the
+/// hand-derived machine-count ratio (Normal 6 centrifuges ÷ 2.5 = Legendary
+/// 2.4); and functional-only stamping (machines/inserters/poles stamped
+/// Legendary, belts/underground-belts/splitters not). A bonus finding this
+/// pins: at Legendary a medium pole's ±8.5 supply now reaches the recirc
+/// bank on its own, so the substation fallback goes dormant (0 substations)
+/// — exactly the #310 pole-band-thinning interaction the issue's "Open sweep
+/// items" section 3 flags.
+#[test]
+#[ntest::timeout(30000)]
+fn quality_differential_kovarex_self_loop_normal_vs_legendary() {
+    use spaghettio_core::common::QualityTier;
+    use spaghettio_core::recipe_db::MachinePalette;
+
+    let inputs: FxHashSet<String> = ["uranium-238"].iter().map(|s| s.to_string()).collect();
+    let excluded: FxHashSet<String> =
+        ["uranium-processing"].iter().map(|s| s.to_string()).collect();
+
+    let run = |quality: QualityTier| {
+        let solver_result = solver::solve_with_palette_exclusions_and_quality(
+            "uranium-235",
+            0.1,
+            &inputs,
+            &MachinePalette::default(),
+            "assembling-machine-3",
+            &excluded,
+            quality,
+        )
+        .unwrap_or_else(|e| panic!("{quality:?} solve: {e}"));
+        let layout = layout::build_bus_layout(
+            &solver_result,
+            layout::LayoutOptions {
+                strategy: Default::default(),
+                surplus_policy: Default::default(),
+                max_belt_tier: None,
+                row_layout: Default::default(),
+                max_inserter_tier: Default::default(),
+                quality,
+                merge_tap: false,
+            },
+        )
+        .unwrap_or_else(|e| panic!("{quality:?} layout: {e}"));
+        let issues = validate::validate(&layout, Some(&solver_result), LayoutStyle::Bus)
+            .unwrap_or_else(|e| panic!("{quality:?} validate: {e}"));
+        (solver_result, layout, issues)
+    };
+
+    let count_of = |sr: &SolverResult, recipe: &str| {
+        sr.machines.iter().find(|m| m.recipe == recipe).map(|m| m.count).unwrap_or(0.0)
+    };
+
+    let (normal_sr, normal_layout, normal_issues) = run(QualityTier::Normal);
+    let (leg_sr, leg_layout, leg_issues) = run(QualityTier::Legendary);
+
+    for (label, issues) in [("normal", &normal_issues), ("legendary", &leg_issues)] {
+        let errors: Vec<_> =
+            issues.iter().filter(|i| i.severity == Severity::Error).collect();
+        assert!(errors.is_empty(), "{label}: expected 0 errors, got {errors:?}");
+    }
+    // Both tiers are fully clean (matches `tier_kovarex_self_loop`'s Normal
+    // pin) — the power arc introduces no warnings at either tier.
+    assert!(normal_issues.is_empty(), "normal: expected 0 issues, got {normal_issues:?}");
+    assert!(leg_issues.is_empty(), "legendary: expected 0 issues, got {leg_issues:?}");
+
+    // Hand-derived machine counts: the quality multiplier is the ONLY
+    // difference between the two runs. Normal = 6 (the hand-derived netting
+    // arithmetic `tier_kovarex_self_loop` pins); Legendary = 6 / 2.5.
+    let normal_count = count_of(&normal_sr, "kovarex-enrichment-process");
+    let leg_count = count_of(&leg_sr, "kovarex-enrichment-process");
+    assert!((normal_count - 6.0).abs() < 1e-9, "normal centrifuge count: {normal_count}");
+    assert!(
+        (normal_count / 2.5 - leg_count).abs() < 1e-6,
+        "machine-count ratio: normal {normal_count} / 2.5 should equal legendary {leg_count}"
+    );
+
+    // Normal layout carries no quality stamps at all.
+    assert!(
+        normal_layout.entities.iter().all(|e| e.quality.is_none()),
+        "normal-quality layout must have zero quality stamps (kill criterion 2)"
+    );
+
+    // Functional-only stamping on the legendary layout: every machine /
+    // inserter / pole stamped Legendary; every belt-ish entity unstamped.
+    let mut stamped = 0;
+    let mut substation_count = 0;
+    for e in &leg_layout.entities {
+        if e.name == "substation" {
+            substation_count += 1;
+        }
+        if spaghettio_core::common::quality_affects_entity(&e.name) {
+            assert_eq!(
+                e.quality,
+                Some(QualityTier::Legendary),
+                "{} at ({},{}) should be stamped",
+                e.name,
+                e.x,
+                e.y
+            );
+            stamped += 1;
+        } else {
+            assert_eq!(
+                e.quality, None,
+                "{} at ({},{}) is logistics and must NOT be stamped",
+                e.name, e.x, e.y
+            );
+        }
+    }
+    assert!(stamped > 0, "legendary layout should contain stamped entities");
+
+    // Bonus finding (issue #315 section 3 / #310 interaction): Normal needs
+    // the Phase 3b substation fallback (the recirc inserters sit 5 rows
+    // below the top edge, beyond a Normal medium pole's ±3); at Legendary a
+    // medium pole's ±8.5 supply reaches the same band on its own, so the
+    // fallback goes dormant. This is a real geometry outcome, not a fixed
+    // engine invariant — if a future layout change moves this fixture's
+    // recirc band, re-derive rather than loosen blindly.
+    let normal_substations =
+        normal_layout.entities.iter().filter(|e| e.name == "substation").count();
+    assert_eq!(normal_substations, 1, "normal: expected the Phase 3b substation fallback to fire");
+    assert_eq!(
+        substation_count, 0,
+        "legendary: expected the substation fallback to be dormant (medium reach now suffices)"
+    );
+
+    // Export → parse round-trip preserves the tier.
+    let bp = blueprint::export(&leg_layout, "kovarex-quality-test");
+    assert!(!bp.is_empty());
+    let parsed = blueprint_parser::parse_blueprint_string(&bp)
+        .unwrap_or_else(|e| panic!("parse: {e}"));
+    let parsed_stamped = parsed
+        .entities
+        .iter()
+        .filter(|e| e.quality == Some(QualityTier::Legendary))
+        .count();
+    assert_eq!(
+        parsed_stamped, stamped,
+        "every stamped entity must round-trip through export+parse"
+    );
+}
