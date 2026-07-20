@@ -14,6 +14,14 @@ use crate::common::needs_electricity;
 use crate::models::LayoutResult;
 use crate::validate::{Severity, ValidationIssue};
 
+// Wire-reach values (medium 9, small 7.5, substation 18, big 32, all
+// +2/quality level) live in `common::pole_wire_reach` — the shared table
+// `power_wires::compute_pole_wires` (export + this validator + the web
+// overlay) and `bus::layout::repair_pole_connectivity` all read, so
+// placement-time repair, the emitted artifact, and validation can never
+// disagree (rfp-build-quality Phase 2 review fix, merged with the
+// power-3c wires arc).
+
 /// Check that the EMITTED pole copper-wire graph is a single connected network.
 ///
 /// This validates the ARTIFACT, not mere geometry: it recomputes the exact
@@ -65,7 +73,7 @@ pub fn check_power_coverage(layout_result: &LayoutResult) -> Vec<ValidationIssue
             (
                 e.x as f64 + w as f64 / 2.0,
                 e.y as f64 + h as f64 / 2.0,
-                crate::common::supply_area_distance(&e.name),
+                crate::common::supply_area_distance(&e.name, e.quality.unwrap_or_default()),
             )
         })
         .collect();
@@ -119,6 +127,28 @@ pub fn check_power_coverage(layout_result: &LayoutResult) -> Vec<ValidationIssue
 
 #[cfg(test)]
 mod tests {
+    use crate::common::QualityTier;
+
+    /// The RFP's pole-margin table as an invariant (rfp-build-quality;
+    /// kill-1 verified in-game 2026-07-20): medium poles keep a strict
+    /// 2-tile margin between supply DIAMETER and wire reach at every
+    /// quality tier (7<9 ... 17<19), so coverage-spaced mediums can never
+    /// strand — while the substation has ZERO margin at every tier
+    /// (18=18 ... 28=28), so spacing logic may never assume its wire
+    /// reach exceeds its supply diameter. Equality asserted exactly so a
+    /// data-table typo can't hide.
+    #[test]
+    fn pole_margin_invariants_per_quality_tier() {
+        for tier in QualityTier::ALL {
+            let m_supply = 2.0 * crate::common::supply_area_distance("medium-electric-pole", tier);
+            let m_wire = crate::common::pole_wire_reach("medium-electric-pole", tier).unwrap();
+            assert_eq!(m_wire - m_supply, 2.0, "medium margin {tier:?}");
+            let s_supply = 2.0 * crate::common::supply_area_distance("substation", tier);
+            let s_wire = crate::common::pole_wire_reach("substation", tier).unwrap();
+            assert_eq!(s_wire, s_supply, "substation zero-margin {tier:?}");
+        }
+    }
+
     use super::*;
     use crate::models::{EntityDirection, PlacedEntity};
 

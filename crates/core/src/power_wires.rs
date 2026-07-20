@@ -46,25 +46,22 @@ use crate::models::PlacedEntity;
 /// `WireConnectorID.POLE_COPPER`).
 pub const POLE_COPPER: u32 = 5;
 
-/// Copper wire reach (tile distance between pole CENTERS) for a pole entity;
-/// `None` for anything that is not an electric pole. Values are draftsman
-/// `maximum_wire_distance`. This is the single wire-reach source the validator's
-/// connectivity check consumes too — do NOT confuse it with
+/// Copper wire reach (tile distance between pole CENTERS) for a pole entity
+/// at a build-quality tier; `None` for anything that is not an electric pole.
+/// Delegates to [`crate::common::pole_wire_reach`] — the ONE wire-reach table
+/// this module, the validator, and `bus::layout::repair_pole_connectivity`
+/// all read (base values are draftsman `maximum_wire_distance`; quality adds
+/// +2 per level, rfp-build-quality). Do NOT confuse it with
 /// [`crate::common::supply_area_distance`] (power COVERAGE radius: medium 3.5,
 /// substation 9), which is a different quantity.
-pub fn wire_reach(name: &str) -> Option<f64> {
-    match name {
-        "medium-electric-pole" => Some(9.0),
-        "small-electric-pole" => Some(7.5),
-        "substation" => Some(18.0),
-        "big-electric-pole" => Some(32.0),
-        _ => None,
-    }
+pub fn wire_reach(name: &str, quality: crate::common::QualityTier) -> Option<f64> {
+    crate::common::pole_wire_reach(name, quality)
 }
 
-/// Whether `name` is an electric pole (a copper-wire node).
+/// Whether `name` is an electric pole (a copper-wire node). Pole-ness is
+/// quality-independent.
 pub fn is_pole(name: &str) -> bool {
-    wire_reach(name).is_some()
+    wire_reach(name, crate::common::QualityTier::Normal).is_some()
 }
 
 /// Footprint center in continuous tile-space for a pole at top-left `(x, y)`,
@@ -90,7 +87,10 @@ pub fn compute_pole_wires(entities: &[PlacedEntity]) -> Vec<(u32, u32)> {
         .iter()
         .enumerate()
         .filter_map(|(i, e)| {
-            wire_reach(&e.name).map(|r| {
+            // Per-entity quality (rfp-build-quality): a legendary medium
+            // pole wires at 19, so quality layouts' sparser pole fields
+            // still emit a fully-connected artifact.
+            wire_reach(&e.name, e.quality.unwrap_or_default()).map(|r| {
                 let (cx, cy) = pole_center(&e.name, e.x, e.y);
                 (i as u32, cx, cy, r)
             })

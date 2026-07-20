@@ -84,6 +84,12 @@ pub struct LayoutOptions {
     /// semantics. Default `Stack`. Core field only in Phase 1 — not yet
     /// plumbed through wasm-bindings or the web UI (Phase 4).
     pub max_inserter_tier: InserterTier,
+    /// Build quality of the entities the engine places
+    /// (`docs/rfp-build-quality.md` Phase 2): scales the sizing ladder's
+    /// inserter ceilings and pole geometry, and is stamped onto
+    /// functional entities (machines/inserters/poles) for export.
+    /// Default `Normal` — a bit-exact no-op (kill criterion 2).
+    pub quality: crate::common::QualityTier,
     /// Enable the merge-and-tap trunk fallback for unstampable
     /// multi-producer/multi-consumer families (`docs/rfp-merge-tap-trunks.md`).
     /// Default `false` (byte-identical to pre-fallback layouts). Set only by
@@ -103,6 +109,7 @@ impl LayoutOptions {
             row_layout: RowLayout::default(),
             surplus_policy: SurplusPolicy::default(),
             max_inserter_tier: InserterTier::default(),
+            quality: crate::common::QualityTier::default(),
             merge_tap: false,
         }
     }
@@ -575,6 +582,7 @@ fn layout_pass(
         row_y_origin,
         max_belt_tier,
         max_inserter_tier,
+        opts.quality,
         Some(&final_output_items),
         retry_extra_gaps,
         opts.row_layout,
@@ -624,6 +632,7 @@ fn layout_pass(
                 row_y_origin,
                 max_belt_tier,
                 max_inserter_tier,
+                opts.quality,
                 Some(&final_output_items),
                 Some(&merged_gaps),
                 opts.row_layout,
@@ -899,6 +908,7 @@ fn layout_pass(
             &inserters_for_poles,
             &occupied,
             &substation_targets,
+            opts.quality,
         );
         crate::trace::emit(crate::trace::TraceEvent::PolesPlaced {
             count: poles.len(),
@@ -1004,10 +1014,28 @@ fn layout_pass(
         })
         .collect();
 
+    // Stamp build quality on functional entities (rfp-build-quality
+    // Phase 2, functional-only stamping): machines, inserters, poles get
+    // the planning tier; logistics stay `None`. Skipped entirely at
+    // Normal — absent means normal everywhere downstream (export omits
+    // the field, validators default absent → Normal), so the default
+    // path is untouched (kill criterion 2). One post-pass here rather
+    // than at the ~400 construction sites: single place to audit, and
+    // Phase 3 per-class overrides become a per-class map lookup here.
+    if opts.quality != crate::common::QualityTier::Normal {
+        for e in &mut all_entities {
+            if crate::common::quality_affects_entity(&e.name) {
+                e.quality = Some(opts.quality);
+            }
+        }
+    }
+
     // Pole copper wire graph for the web overlay — the SAME graph
     // `blueprint::export` re-derives and encodes in the blueprint `wires`
     // array. Computed from the final entity order so the `(a, b)` index pairs
-    // stay valid. See `crate::power_wires`.
+    // stay valid — and AFTER the quality stamp pass above, because wire
+    // reach is per-entity quality-aware (rfp-build-quality merge with the
+    // power-3c arc). See `crate::power_wires`.
     let power_wires = crate::power_wires::compute_pole_wires(&all_entities);
 
     Ok((
@@ -1159,6 +1187,14 @@ fn compute_extra_gaps(families: &[LaneFamily]) -> FxHashMap<usize, i32> {
 /// fallback at `cx±pole_range`, then advances past every machine the pole still
 /// covers.
 ///
+/// Connectivity is guaranteed by construction:
+/// - Within a line: consecutive pole x-distance <= 6 < the medium wire reach (9 at Normal).
+/// - Between lines: row cycle (row height + gap) is typically ~7 tiles <
+///   wire-reach, so pole lines above consecutive rows connect vertically.
+///
+/// The old greedy + centroid-bridge implementation produced clumpy, order-
+/// dependent output; this approach is deterministic, regular, and matches the
+/// row-based structure of the bus layout.
 /// `machines` entries are `(center_x, top_y, height)` — height (not width)
 /// because every use below (row grouping, below-row fallback y) is a vertical
 /// offset from the machine row. Returns `(poles, uncovered_inserters)` — the
@@ -1171,12 +1207,14 @@ fn place_poles(
     inserters: &[(i32, i32)],
     occupied: &FxHashSet<(i32, i32)>,
     substation_targets: &[SubstationTarget],
+    quality: crate::common::QualityTier,
 ) -> (Vec<PlacedEntity>, Vec<(i32, i32)>) {
     // Medium-pole supply half-extent on the tile grid, floored from the shared
     // `supply_area_distance` (RFP Phase 3a-i/3a-ii) so this placement radius and
     // the power validator's coverage radius can never drift. place_poles places
     // only medium poles here, so the value is unchanged (floor(3.5) = 3).
-    let pole_range: i32 = crate::common::supply_area_distance("medium-electric-pole").floor() as i32;
+    let pole_range: i32 =
+        crate::common::supply_area_distance("medium-electric-pole", quality).floor() as i32;
 
     if machines.is_empty() {
         return (Vec::new(), Vec::new());
@@ -1202,10 +1240,14 @@ fn place_poles(
     // validator's exact even-footprint check — placement guarantees real
     // coverage, never leaning on the validator's word (the 3a-i carried
     // constraint).
-    const SUB_LO: i32 = 8;
-    const SUB_HI: i32 = 9;
-    let sub_covers = |sx: i32, sy: i32, ix: i32, iy: i32| -> bool {
-        ix >= sx - SUB_LO && ix <= sx + SUB_HI && iy >= sy - SUB_LO && iy <= sy + SUB_HI
+    // Quality-derived (rfp-build-quality Phase 2): supply distance d =
+    // 9 + level (always integral for the substation), giving ix ∈
+    // [sx−(d−1), sx+d]. At Normal d=9 → the original 8/9 constants,
+    // bit-identical placement (kill criterion 2).
+    let sub_d = crate::common::supply_area_distance("substation", quality) as i32;
+    let (sub_lo, sub_hi) = (sub_d - 1, sub_d);
+    let sub_covers = move |sx: i32, sy: i32, ix: i32, iy: i32| -> bool {
+        ix >= sx - sub_lo && ix <= sx + sub_hi && iy >= sy - sub_lo && iy <= sy + sub_hi
     };
     for target in substation_targets {
         // Greedy set-cover: drop the fewest 2×2 substations into the widened
@@ -1222,7 +1264,7 @@ fn place_poles(
             let mut sy = sy_lo;
             while sy <= sy_hi {
                 // Any sx whose 2×2 could touch a remaining inserter's reach.
-                for sx in (rx_min - SUB_HI)..=(rx_max + SUB_LO) {
+                for sx in (rx_min - sub_hi)..=(rx_max + sub_lo) {
                     let foot = [(sx, sy), (sx + 1, sy), (sx, sy + 1), (sx + 1, sy + 1)];
                     if foot.iter().any(|t| occ.contains(t) || placed.contains(t)) {
                         continue;
@@ -1422,7 +1464,7 @@ fn place_poles(
     // land >9 tiles (min(18,9) substation↔medium reach) from the medium network
     // with connector poles — counted in the stated pole cost. `occ` carries the
     // substation footprints so bridges never overlap a 2×2.
-    repair_pole_connectivity(&mut entities, &placed, &occ);
+    repair_pole_connectivity(&mut entities, &placed, &occ, quality);
 
     // Phase 2 (RFP `docs/rfp-power-supply.md`): live slack instrumentation.
     // Emit each pole's free-alternative count so the stress scoreboard tallies
@@ -1476,17 +1518,25 @@ fn place_poles(
 /// call a pair connected that the emitted `wires` array left as two power-dead
 /// islands. Consuming `power_wires::{pole_center, wire_reach}` here makes repair
 /// and the emitted wire graph agree by construction.
+///
+/// Quality (rfp-build-quality): reaches are evaluated at the build-quality
+/// tier passed in — the same tier the functional stamp pass later writes onto
+/// every pole, so post-stamp `compute_pole_wires` (which reads per-entity
+/// `quality`) sees exactly the graph repair reasoned about. At legendary the
+/// medium reach is 19, so repair neither mis-clusters nor over-bridges.
 fn repair_pole_connectivity(
     entities: &mut Vec<PlacedEntity>,
     placed: &FxHashSet<(i32, i32)>,
     occupied: &FxHashSet<(i32, i32)>,
+    quality: crate::common::QualityTier,
 ) {
     use crate::power_wires::{pole_center, wire_reach};
 
-    // The bridge poles we drop are medium-electric-poles, so every reach test
-    // against a candidate bridge is min(medium, endpoint).
+    // The bridge poles we drop are medium-electric-poles (stamped at the build
+    // quality), so every reach test against a candidate bridge is
+    // min(medium@quality, endpoint@quality).
     let medium_reach =
-        wire_reach("medium-electric-pole").expect("medium pole has a wire reach");
+        wire_reach("medium-electric-pole", quality).expect("medium pole has a wire reach");
     // Search radius (in tiles) for a free bridge tile around the midpoint. Must
     // reach at least a medium's wire reach so that when the gap between
     // components is wider than `2 * reach`, the scan can step *back* toward an
@@ -1514,7 +1564,7 @@ fn repair_pole_connectivity(
             .iter()
             .map(|e| {
                 let (cx, cy) = pole_center(&e.name, e.x, e.y);
-                (cx, cy, wire_reach(&e.name).unwrap_or(medium_reach))
+                (cx, cy, wire_reach(&e.name, quality).unwrap_or(medium_reach))
             })
             .collect();
 
@@ -1794,7 +1844,8 @@ mod tests {
         // iy ∈ [23,40] ⊇ 40.
         let targets = [SubstationTarget { band_y0: 31, band_y1: 32, inserters: vec![ins] }];
 
-        let (entities, uncovered) = place_poles(&machines, &[ins], &occupied, &targets);
+        let (entities, uncovered) =
+            place_poles(&machines, &[ins], &occupied, &targets, crate::common::QualityTier::Normal);
         let subs: Vec<&PlacedEntity> = entities.iter().filter(|e| e.name == "substation").collect();
         assert_eq!(subs.len(), 1, "exactly one substation should cover the deep inserter");
         let s = subs[0];
@@ -1807,7 +1858,8 @@ mod tests {
 
         // Without the band, the same inserter is unreachable — proving the
         // substation, not medium, is what covered it.
-        let (ent2, unc2) = place_poles(&machines, &[ins], &occupied, &[]);
+        let (ent2, unc2) =
+            place_poles(&machines, &[ins], &occupied, &[], crate::common::QualityTier::Normal);
         assert!(ent2.iter().all(|e| e.name != "substation"));
         assert_eq!(unc2, vec![ins], "no band ⇒ the deep inserter stays uncovered");
     }
@@ -1821,7 +1873,7 @@ mod tests {
     /// > min(18,9)² = 81, so the EMITTED wire graph does NOT directly connect
     /// them (old repair's top-left d²=81 ≤ 81 wrongly called them connected and
     /// left two power-dead islands). Repair must drop a bridge pole so the
-    /// emitted graph is one component.
+    /// emitted graph is one component. (Reaches quoted at Normal quality.)
     #[test]
     fn repair_bridges_substation_medium_at_wire_boundary() {
         use crate::power_wires::{compute_pole_wires, count_disconnected_poles};
@@ -1846,7 +1898,12 @@ mod tests {
         }
         let placed: FxHashSet<(i32, i32)> = [(med.x, med.y)].into_iter().collect();
 
-        repair_pole_connectivity(&mut entities, &placed, &occupied);
+        repair_pole_connectivity(
+            &mut entities,
+            &placed,
+            &occupied,
+            crate::common::QualityTier::Normal,
+        );
 
         // Post-repair: a bridge pole was added and the EMITTED wire graph is now
         // a single connected component — repair and artifact agree.
@@ -1857,6 +1914,53 @@ mod tests {
             0,
             "after repair the emitted wire graph must be one connected component"
         );
+    }
+
+    /// Phase 2 adversarial-review regression (rfp-build-quality decision
+    /// log 2026-07-20): `repair_pole_connectivity` hardcoded the
+    /// Normal-tier medium wire reach (9), so at legendary it
+    /// mis-clustered poles genuinely within the real 19-tile reach and
+    /// inserted needless bridge poles. Two machine rows whose pole bands
+    /// sit ~12 tiles apart: beyond Normal reach (bridges required),
+    /// within Legendary reach (bridges are pure waste). Also proves the
+    /// legendary result is genuinely connected under the validator's own
+    /// per-entity quality walk, not just "fewer poles".
+    #[test]
+    fn repair_pole_connectivity_uses_quality_wire_reach() {
+        use crate::common::QualityTier;
+        let machines = [(0, 0, 3), (0, 16, 3)];
+        let occupied: FxHashSet<(i32, i32)> = FxHashSet::default();
+
+        let (normal_poles, _) =
+            place_poles(&machines, &[], &occupied, &[], QualityTier::Normal);
+        let (leg_poles, _) =
+            place_poles(&machines, &[], &occupied, &[], QualityTier::Legendary);
+
+        let bridge_count = |poles: &[PlacedEntity]| {
+            poles.iter().filter(|e| e.y > 4 && e.y < 15).count()
+        };
+        assert!(
+            bridge_count(&normal_poles) > 0,
+            "Normal reach (9) must bridge the ~12-tile band gap"
+        );
+        assert_eq!(
+            bridge_count(&leg_poles),
+            0,
+            "Legendary reach (19) covers the gap — bridge poles are waste: {:?}",
+            leg_poles.iter().map(|e| (e.x, e.y)).collect::<Vec<_>>()
+        );
+        assert!(leg_poles.len() < normal_poles.len());
+
+        // The sparser legendary set must still validate as one connected
+        // network under the per-entity quality walk (stamp what the
+        // layout_pass stamp pass would).
+        let mut lr = crate::models::LayoutResult::default();
+        lr.entities = leg_poles;
+        for e in &mut lr.entities {
+            e.quality = Some(QualityTier::Legendary);
+        }
+        let issues = crate::validate::power::check_pole_network_connectivity(&lr);
+        assert!(issues.is_empty(), "legendary pole net must be connected: {issues:?}");
     }
 
     /// D2a (RFP Fulgora, `docs/rfp-fulgora-scrap.md`): a solid surplus

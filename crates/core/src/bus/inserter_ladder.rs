@@ -18,7 +18,7 @@
 //! and the check can never disagree on what an inserter moves (see the
 //! `constants_identity` test below).
 
-use crate::common::inserter_throughput;
+use crate::common::{inserter_throughput, QualityTier};
 
 /// Inserter entity names the ladder places, by tier.
 pub const REGULAR: &str = "inserter";
@@ -87,11 +87,17 @@ pub struct SidePlan {
 /// every side already has (0 at the tightest positions, e.g. a
 /// sideload-bridge anchor's output face). `max_tier` caps the near-reach
 /// ladder; it has no effect on `Reach::Far` (see [`Reach`]).
-pub fn size_side(required: f64, reach: Reach, position_budget: usize, max_tier: InserterTier) -> SidePlan {
+pub fn size_side(
+    required: f64,
+    reach: Reach,
+    position_budget: usize,
+    max_tier: InserterTier,
+    quality: QualityTier,
+) -> SidePlan {
     let total_slots = position_budget + 1;
     match reach {
         Reach::Far => {
-            let rate = inserter_throughput(LONG_HANDED);
+            let rate = inserter_throughput(LONG_HANDED, quality);
             for n in 1..=total_slots {
                 let placed = n as f64 * rate;
                 if required <= placed + EPS {
@@ -111,7 +117,7 @@ pub fn size_side(required: f64, reach: Reach, position_budget: usize, max_tier: 
             // Rung 0/1: one inserter, cheapest tier that suffices
             // ("in-place tier swap" — zero extra columns spent).
             for &entity in tiers {
-                let rate = inserter_throughput(entity);
+                let rate = inserter_throughput(entity, quality);
                 if required <= rate + EPS {
                     return SidePlan { entity, count: 1, shortfall: None };
                 }
@@ -123,7 +129,7 @@ pub fn size_side(required: f64, reach: Reach, position_budget: usize, max_tier: 
             // any multi-stack).
             if total_slots > 1 {
                 for &entity in tiers {
-                    let rate = inserter_throughput(entity);
+                    let rate = inserter_throughput(entity, quality);
                     for n in 2..=total_slots {
                         let placed = n as f64 * rate;
                         if required <= placed + EPS {
@@ -136,7 +142,7 @@ pub fn size_side(required: f64, reach: Reach, position_budget: usize, max_tier: 
             // Best effort: every free column, richest tier the cap
             // allows, honest shortfall recorded.
             let entity = tiers.last().copied().unwrap_or(REGULAR);
-            let rate = inserter_throughput(entity);
+            let rate = inserter_throughput(entity, quality);
             let placed = total_slots as f64 * rate;
             SidePlan {
                 entity,
@@ -163,7 +169,12 @@ pub fn size_side(required: f64, reach: Reach, position_budget: usize, max_tier: 
 ///    near/far column, and the counterfactual (budget + 1 at the same
 ///    tier ceiling) would cover: the contest is the binding constraint.
 /// 3. `"geometry"` — the row shape offers no slot that would help.
-pub fn capped_limit(required: f64, plan: &SidePlan, lost_contest: bool) -> &'static str {
+pub fn capped_limit(
+    required: f64,
+    plan: &SidePlan,
+    lost_contest: bool,
+    quality: QualityTier,
+) -> &'static str {
     debug_assert!(plan.shortfall.is_some(), "capped_limit is only defined for capped plans");
     let budget = plan.count.saturating_sub(1);
     let (reach, tier_ceiling) = match plan.entity {
@@ -174,11 +185,11 @@ pub fn capped_limit(required: f64, plan: &SidePlan, lost_contest: bool) -> &'sta
     };
     if reach == Reach::Near
         && plan.entity != STACK
-        && size_side(required, Reach::Near, budget, InserterTier::Stack).shortfall.is_none()
+        && size_side(required, Reach::Near, budget, InserterTier::Stack, quality).shortfall.is_none()
     {
         return "tier-cap";
     }
-    if lost_contest && size_side(required, reach, budget + 1, tier_ceiling).shortfall.is_none() {
+    if lost_contest && size_side(required, reach, budget + 1, tier_ceiling, quality).shortfall.is_none() {
         return "column-contest";
     }
     "geometry"
@@ -220,12 +231,17 @@ pub fn reassign_near_far<T>(item0: T, rate0: f64, item1: T, rate1: f64) -> ((T, 
 /// is threaded yet (near always is; far's reach-2 ladder is Phase 3) is
 /// the caller's concern — a far win with no far ladder simply leaves the
 /// slot unused rather than handing it to near.
-pub fn contest_favors_far(near_required: f64, far_required: f64, far_eligible: bool) -> bool {
+pub fn contest_favors_far(
+    near_required: f64,
+    far_required: f64,
+    far_eligible: bool,
+    quality: QualityTier,
+) -> bool {
     if !far_eligible {
         return false;
     }
-    let near_ceiling = inserter_throughput(STACK);
-    let far_ceiling = inserter_throughput(LONG_HANDED);
+    let near_ceiling = inserter_throughput(STACK, quality);
+    let far_ceiling = inserter_throughput(LONG_HANDED, quality);
     let near_shortfall = (near_required - near_ceiling).max(0.0);
     let far_shortfall = (far_required - far_ceiling).max(0.0);
     let near_rel = if near_required > 0.0 { near_shortfall / near_required } else { 0.0 };
@@ -246,10 +262,25 @@ mod tests {
 
     #[test]
     fn constants_identity() {
-        assert_eq!(inserter_throughput(REGULAR), 0.84);
-        assert_eq!(inserter_throughput(FAST), 2.31);
-        assert_eq!(inserter_throughput(STACK), 12.0);
-        assert_eq!(inserter_throughput(LONG_HANDED), 1.2);
+        assert_eq!(inserter_throughput(REGULAR, QualityTier::Normal), 0.84);
+        assert_eq!(inserter_throughput(FAST, QualityTier::Normal), 2.31);
+        assert_eq!(inserter_throughput(STACK, QualityTier::Normal), 12.0);
+        assert_eq!(inserter_throughput(LONG_HANDED, QualityTier::Normal), 1.2);
+        // Per-tier scaling (rfp-build-quality kill 2a, inserter third):
+        // Normal is the bit-exact base above; legendary is ×2.5 exactly
+        // (0.3×5 = 1.5 is exact in f64). Mid-tiers approx-checked.
+        assert_eq!(inserter_throughput(STACK, QualityTier::Legendary), 30.0);
+        assert_eq!(inserter_throughput(LONG_HANDED, QualityTier::Legendary), 3.0);
+        assert_eq!(inserter_throughput(REGULAR, QualityTier::Legendary), 2.1);
+        for tier in QualityTier::ALL {
+            for name in [REGULAR, FAST, STACK, LONG_HANDED] {
+                let expect = inserter_throughput(name, QualityTier::Normal) * tier.multiplier();
+                assert!(
+                    (inserter_throughput(name, tier) - expect).abs() < 1e-12,
+                    "{name} {tier:?}"
+                );
+            }
+        }
     }
 
     // ── capped_limit derivation (RFP validation-explainability D2) ──────
@@ -261,10 +292,10 @@ mod tests {
     #[test]
     fn capped_limit_column_contest_matches_anchor() {
         let required = 1.4583333333333333;
-        let plan = size_side(required, Reach::Far, 0, InserterTier::Stack);
+        let plan = size_side(required, Reach::Far, 0, InserterTier::Stack, QualityTier::Normal);
         assert!(plan.shortfall.is_some());
-        assert_eq!(capped_limit(required, &plan, true), "column-contest");
-        assert_eq!(capped_limit(required, &plan, false), "geometry");
+        assert_eq!(capped_limit(required, &plan, true, QualityTier::Normal), "column-contest");
+        assert_eq!(capped_limit(required, &plan, false, QualityTier::Normal), "geometry");
     }
 
     /// Near side capped at Regular where a stack inserter at the SAME
@@ -272,13 +303,13 @@ mod tests {
     #[test]
     fn capped_limit_tier_cap() {
         let required = 2.0; // > 0.84 regular, < 12.0 stack
-        let plan = size_side(required, Reach::Near, 0, InserterTier::Regular);
+        let plan = size_side(required, Reach::Near, 0, InserterTier::Regular, QualityTier::Normal);
         assert!(plan.shortfall.is_some());
         assert_eq!(plan.entity, REGULAR);
-        assert_eq!(capped_limit(required, &plan, false), "tier-cap");
+        assert_eq!(capped_limit(required, &plan, false, QualityTier::Normal), "tier-cap");
         // tier-cap outranks contest: even a lost contest reports the
         // user-controllable knob first.
-        assert_eq!(capped_limit(required, &plan, true), "tier-cap");
+        assert_eq!(capped_limit(required, &plan, true, QualityTier::Normal), "tier-cap");
     }
 
     /// Demand beyond any single-column relief or tier upgrade → geometry,
@@ -286,36 +317,36 @@ mod tests {
     #[test]
     fn capped_limit_geometry_when_nothing_helps() {
         let required = 100.0;
-        let plan = size_side(required, Reach::Near, 0, InserterTier::Stack);
+        let plan = size_side(required, Reach::Near, 0, InserterTier::Stack, QualityTier::Normal);
         assert!(plan.shortfall.is_some());
         assert_eq!(plan.entity, STACK);
-        assert_eq!(capped_limit(required, &plan, true), "geometry");
+        assert_eq!(capped_limit(required, &plan, true, QualityTier::Normal), "geometry");
     }
 
     // ── rung boundaries (Near, Stack cap, single slot) ──────────────────
 
     #[test]
     fn rung0_regular_at_boundary() {
-        let plan = size_side(0.84, Reach::Near, 0, InserterTier::Stack);
+        let plan = size_side(0.84, Reach::Near, 0, InserterTier::Stack, QualityTier::Normal);
         assert_eq!(plan, SidePlan { entity: REGULAR, count: 1, shortfall: None });
     }
 
     #[test]
     fn rung0_regular_below_boundary() {
-        let plan = size_side(0.5, Reach::Near, 0, InserterTier::Stack);
+        let plan = size_side(0.5, Reach::Near, 0, InserterTier::Stack, QualityTier::Normal);
         assert_eq!(plan, SidePlan { entity: REGULAR, count: 1, shortfall: None });
     }
 
     #[test]
     fn rung1_fast_just_above_regular() {
         // Just over the regular ceiling — must NOT jump to stack.
-        let plan = size_side(0.8401, Reach::Near, 0, InserterTier::Stack);
+        let plan = size_side(0.8401, Reach::Near, 0, InserterTier::Stack, QualityTier::Normal);
         assert_eq!(plan, SidePlan { entity: FAST, count: 1, shortfall: None });
     }
 
     #[test]
     fn rung1_fast_at_boundary() {
-        let plan = size_side(2.31, Reach::Near, 0, InserterTier::Stack);
+        let plan = size_side(2.31, Reach::Near, 0, InserterTier::Stack, QualityTier::Normal);
         assert_eq!(plan, SidePlan { entity: FAST, count: 1, shortfall: None });
     }
 
@@ -323,13 +354,13 @@ mod tests {
     fn rung1_stack_just_above_fast() {
         // Just over the fast ceiling — must NOT skip straight past
         // without trying fast first (cheapest-sufficient).
-        let plan = size_side(2.311, Reach::Near, 0, InserterTier::Stack);
+        let plan = size_side(2.311, Reach::Near, 0, InserterTier::Stack, QualityTier::Normal);
         assert_eq!(plan, SidePlan { entity: STACK, count: 1, shortfall: None });
     }
 
     #[test]
     fn rung1_stack_at_boundary() {
-        let plan = size_side(12.0, Reach::Near, 0, InserterTier::Stack);
+        let plan = size_side(12.0, Reach::Near, 0, InserterTier::Stack, QualityTier::Normal);
         assert_eq!(plan, SidePlan { entity: STACK, count: 1, shortfall: None });
     }
 
@@ -338,7 +369,7 @@ mod tests {
     #[test]
     fn cheapest_sufficient_never_stack_when_fast_covers() {
         for required in [0.85, 1.0, 1.5, 2.0, 2.31] {
-            let plan = size_side(required, Reach::Near, 0, InserterTier::Stack);
+            let plan = size_side(required, Reach::Near, 0, InserterTier::Stack, QualityTier::Normal);
             assert_ne!(
                 plan.entity, STACK,
                 "required={required}: fast (2.31/s) covers this, must not place stack"
@@ -349,7 +380,7 @@ mod tests {
     #[test]
     fn cheapest_sufficient_never_fast_when_regular_covers() {
         for required in [0.1, 0.5, 0.84] {
-            let plan = size_side(required, Reach::Near, 0, InserterTier::Stack);
+            let plan = size_side(required, Reach::Near, 0, InserterTier::Stack, QualityTier::Normal);
             assert_eq!(plan.entity, REGULAR, "required={required}: regular alone covers this");
         }
     }
@@ -360,7 +391,7 @@ mod tests {
     fn rung2_multi_stack_within_budget() {
         // 13/s exceeds one stack inserter (12/s) but two cover it (24/s),
         // and a free column is available.
-        let plan = size_side(13.0, Reach::Near, 1, InserterTier::Stack);
+        let plan = size_side(13.0, Reach::Near, 1, InserterTier::Stack, QualityTier::Normal);
         assert_eq!(plan, SidePlan { entity: STACK, count: 2, shortfall: None });
     }
 
@@ -373,7 +404,7 @@ mod tests {
         // inserters would also fit the budget. 13.0/s exceeds 1 stack
         // (12/s) and needs 6 fast (13.86/s) within a 6-slot budget; 2
         // stack (24/s) would also fit but must not be reached first.
-        let plan = size_side(13.0, Reach::Near, 5, InserterTier::Stack);
+        let plan = size_side(13.0, Reach::Near, 5, InserterTier::Stack, QualityTier::Normal);
         assert_eq!(plan, SidePlan { entity: FAST, count: 6, shortfall: None });
     }
 
@@ -384,10 +415,10 @@ mod tests {
         // v1's bridge-anchor output ceiling (no fast/stack rung available
         // beyond fast, zero extra columns) was 2.31/s exactly — Fast-capped
         // v2 must reproduce that number.
-        let plan = size_side(2.31, Reach::Near, 0, InserterTier::Fast);
+        let plan = size_side(2.31, Reach::Near, 0, InserterTier::Fast, QualityTier::Normal);
         assert_eq!(plan, SidePlan { entity: FAST, count: 1, shortfall: None });
 
-        let plan = size_side(2.32, Reach::Near, 0, InserterTier::Fast);
+        let plan = size_side(2.32, Reach::Near, 0, InserterTier::Fast, QualityTier::Normal);
         assert_eq!(plan.entity, FAST);
         assert_eq!(plan.count, 1);
         assert!(plan.shortfall.is_some(), "above the fast-capped single-slot ceiling must shortfall, not escalate to stack");
@@ -396,7 +427,7 @@ mod tests {
     #[test]
     fn regular_cap_never_places_fast_or_stack() {
         for required in [0.5, 2.0, 5.0, 20.0] {
-            let plan = size_side(required, Reach::Near, 2, InserterTier::Regular);
+            let plan = size_side(required, Reach::Near, 2, InserterTier::Regular, QualityTier::Normal);
             assert_eq!(plan.entity, REGULAR, "required={required}: Regular cap must never place fast/stack");
         }
     }
@@ -405,7 +436,7 @@ mod tests {
     fn regular_cap_uses_extra_columns_before_shortfalling() {
         // 1.5/s exceeds one regular (0.84) but two regular (1.68) covers
         // it, and Regular-capped still gets to use its free column.
-        let plan = size_side(1.5, Reach::Near, 1, InserterTier::Regular);
+        let plan = size_side(1.5, Reach::Near, 1, InserterTier::Regular, QualityTier::Normal);
         assert_eq!(plan, SidePlan { entity: REGULAR, count: 2, shortfall: None });
     }
 
@@ -413,19 +444,19 @@ mod tests {
 
     #[test]
     fn far_single_long_handed_suffices() {
-        let plan = size_side(1.0, Reach::Far, 0, InserterTier::Stack);
+        let plan = size_side(1.0, Reach::Far, 0, InserterTier::Stack, QualityTier::Normal);
         assert_eq!(plan, SidePlan { entity: LONG_HANDED, count: 1, shortfall: None });
     }
 
     #[test]
     fn far_boundary_exact() {
-        let plan = size_side(1.2, Reach::Far, 0, InserterTier::Stack);
+        let plan = size_side(1.2, Reach::Far, 0, InserterTier::Stack, QualityTier::Normal);
         assert_eq!(plan, SidePlan { entity: LONG_HANDED, count: 1, shortfall: None });
     }
 
     #[test]
     fn far_count_ladder_within_budget() {
-        let plan = size_side(1.3, Reach::Far, 1, InserterTier::Stack);
+        let plan = size_side(1.3, Reach::Far, 1, InserterTier::Stack, QualityTier::Normal);
         assert_eq!(plan, SidePlan { entity: LONG_HANDED, count: 2, shortfall: None });
     }
 
@@ -433,8 +464,8 @@ mod tests {
     fn far_ignores_max_tier_cap() {
         // No fast/stack long-handed exists — max_tier must not change the
         // far-reach outcome at all.
-        let regular_capped = size_side(1.3, Reach::Far, 1, InserterTier::Regular);
-        let stack_capped = size_side(1.3, Reach::Far, 1, InserterTier::Stack);
+        let regular_capped = size_side(1.3, Reach::Far, 1, InserterTier::Regular, QualityTier::Normal);
+        let stack_capped = size_side(1.3, Reach::Far, 1, InserterTier::Stack, QualityTier::Normal);
         assert_eq!(regular_capped, stack_capped);
     }
 
@@ -442,7 +473,7 @@ mod tests {
 
     #[test]
     fn near_shortfall_beyond_budget_and_cap() {
-        let plan = size_side(50.0, Reach::Near, 0, InserterTier::Stack);
+        let plan = size_side(50.0, Reach::Near, 0, InserterTier::Stack, QualityTier::Normal);
         assert_eq!(plan.entity, STACK);
         assert_eq!(plan.count, 1);
         assert_eq!(plan.shortfall, Some(38.0));
@@ -450,7 +481,7 @@ mod tests {
 
     #[test]
     fn far_shortfall_beyond_budget() {
-        let plan = size_side(100.0, Reach::Far, 1, InserterTier::Stack);
+        let plan = size_side(100.0, Reach::Far, 1, InserterTier::Stack, QualityTier::Normal);
         assert_eq!(plan.entity, LONG_HANDED);
         assert_eq!(plan.count, 2);
         assert_eq!(plan.shortfall, Some(100.0 - 2.4));
@@ -458,7 +489,7 @@ mod tests {
 
     #[test]
     fn shortfall_none_when_sufficient() {
-        let plan = size_side(0.5, Reach::Near, 0, InserterTier::Stack);
+        let plan = size_side(0.5, Reach::Near, 0, InserterTier::Stack, QualityTier::Normal);
         assert!(plan.shortfall.is_none());
     }
 
@@ -470,7 +501,7 @@ mod tests {
         // resolves at rung 2+ (fast's count-ladder, per
         // `rung2_prefers_fast_count_over_stack_count`).
         for _ in 0..5 {
-            let plan = size_side(13.0, Reach::Near, 5, InserterTier::Stack);
+            let plan = size_side(13.0, Reach::Near, 5, InserterTier::Stack, QualityTier::Normal);
             assert_eq!(plan, SidePlan { entity: FAST, count: 6, shortfall: None });
         }
     }
@@ -513,27 +544,27 @@ mod tests {
     fn contest_far_wins_when_far_shortfall_larger() {
         // far: 5.0/s vs its 1.2/s ceiling -> large relative shortfall.
         // near: 2.0/s, comfortably under the 12.0/s stack ceiling -> zero.
-        assert!(contest_favors_far(2.0, 5.0, true));
+        assert!(contest_favors_far(2.0, 5.0, true, QualityTier::Normal));
     }
 
     #[test]
     fn contest_near_wins_when_near_shortfall_larger() {
         // near: 20.0/s vs its 12.0/s ceiling -> large relative shortfall.
         // far: 1.0/s, under the 1.2/s ceiling -> zero.
-        assert!(!contest_favors_far(20.0, 1.0, true));
+        assert!(!contest_favors_far(20.0, 1.0, true, QualityTier::Normal));
     }
 
     #[test]
     fn contest_tie_favors_far() {
         // Equal relative shortfall (both zero, well under their own
         // ceilings) -> tie breaks to far.
-        assert!(contest_favors_far(0.5, 0.5, true));
+        assert!(contest_favors_far(0.5, 0.5, true, QualityTier::Normal));
     }
 
     #[test]
     fn contest_far_ineligible_near_wins_unconditionally() {
         // Even a huge far requirement can't win when the position's own
         // geometry has excluded far from the tile (e.g. LastInRow).
-        assert!(!contest_favors_far(0.1, 100.0, false));
+        assert!(!contest_favors_far(0.1, 100.0, false, QualityTier::Normal));
     }
 }

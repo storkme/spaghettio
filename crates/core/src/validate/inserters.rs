@@ -227,7 +227,7 @@ pub fn check_inserter_throughput(
         let reach = inserter_reach(&ins.name);
         let drop_pos = (ins.x + dx * reach, ins.y + dy * reach);
         let pickup_pos = (ins.x - dx * reach, ins.y - dy * reach);
-        let rate = inserter_throughput(&ins.name);
+        let rate = inserter_throughput(&ins.name, ins.quality.unwrap_or_default());
 
         if let Some(&mpos) = machine_by_tile.get(&drop_pos) {
             *input_avail.entry(mpos).or_insert(0.0) += rate;
@@ -401,7 +401,7 @@ pub fn check_inserter_item_throughput(
         let reach = inserter_reach(&ins.name);
         let drop_pos = (ins.x + dx * reach, ins.y + dy * reach);
         let pickup_pos = (ins.x - dx * reach, ins.y - dy * reach);
-        let rate = inserter_throughput(&ins.name);
+        let rate = inserter_throughput(&ins.name, ins.quality.unwrap_or_default());
 
         if let Some(&mpos) = machine_by_tile.get(&drop_pos) {
             *input_avail.entry((mpos, item)).or_insert(0.0) += rate;

@@ -174,6 +174,21 @@ pub fn get_crafting_speed(entity: &str) -> f64 {
         .unwrap_or(1.0)
 }
 
+/// [`get_crafting_speed`] scaled by build quality — THE choke point for
+/// quality-aware machine math (`docs/rfp-build-quality.md` Phase 1).
+/// Both net-flow modes (free and compat) read speeds through this via
+/// `NetflowOptions.quality`; there is deliberately no `Normal` branch, so
+/// the default path exercises the same multiplication (kill criterion 2:
+/// `× 1.0` is bit-exact in IEEE 754, unit-tested in `quality_identity_*`).
+///
+/// The legacy tree walk does NOT call this: it is a recipe-*selection*
+/// oracle and selection is quality-invariant (JSON-first per item / cost
+/// table — neither consults speed); its counts are documented known-wrong
+/// and never reach a `SolverResult` callers use.
+pub fn effective_crafting_speed(entity: &str, quality: crate::common::QualityTier) -> f64 {
+    get_crafting_speed(entity) * quality.multiplier()
+}
+
 /// Reasons a chosen `(machine, recipe)` pair can't run as configured.
 ///
 /// Surfaced via [`SolverError::IncompatibleMachine`](crate::solver::SolverError)
@@ -441,6 +456,32 @@ mod tests {
             .collect();
         assert_eq!(iron_plate_ings.len(), 1);
         assert_eq!(iron_plate_ings[0].amount, 2.0);
+    }
+
+    /// Kill criterion 2a (rfp-build-quality): `effective_crafting_speed`
+    /// at Normal must be bit-identical to the raw speed for every known
+    /// machine (and the unknown-name fallback) — `×1.0` is an IEEE 754
+    /// no-op, and this pins the helper against ever growing a divergent
+    /// code path.
+    #[test]
+    fn effective_speed_normal_is_bit_identical() {
+        use crate::common::{QualityTier, MACHINE_ENTITY_NAMES};
+        for m in MACHINE_ENTITY_NAMES.iter().chain(&["nonexistent-machine"]) {
+            assert_eq!(
+                effective_crafting_speed(m, QualityTier::Normal).to_bits(),
+                get_crafting_speed(m).to_bits(),
+                "{m}"
+            );
+        }
+        // And the scaling itself, spot-checked on the RFP's anchor values.
+        assert_eq!(
+            effective_crafting_speed("assembling-machine-3", QualityTier::Legendary),
+            3.125
+        );
+        assert_eq!(
+            effective_crafting_speed("electric-furnace", QualityTier::Legendary),
+            5.0
+        );
     }
 
     #[test]

@@ -2,7 +2,7 @@ import { Container, Graphics } from "pixi.js";
 import { createApp, WORLD_SIZE } from "./renderer/app";
 import { drawGrid, updateGrid } from "./renderer/grid";
 import { drawGraph } from "./renderer/graph";
-import { initEntityIcons, preloadCarriesIcons, renderLayout, setItemColoring, TILE_PX, MACHINE_SIZES, SPLITTER_ENTITIES, splitterCompanionOffset, type HighlightController, extractCarriesFromEntities } from "./renderer/entities";
+import { initEntityIcons, preloadCarriesIcons, preloadQualityBadgeIcons, renderLayout, setItemColoring, TILE_PX, MACHINE_SIZES, SPLITTER_ENTITIES, splitterCompanionOffset, type HighlightController, extractCarriesFromEntities } from "./renderer/entities";
 import { createParticleScene, renderLayoutAsParticles } from "./renderer/particleLayout";
 import { renderInputLabels } from "./renderer/inputLabels";
 import { createSelectionController, type SelectionController } from "./renderer/selection";
@@ -57,6 +57,10 @@ async function main(): Promise<void> {
   // needed. See `web/src/shortIds.ts` and the Rust drift test
   // `short_ids::tests::snapshot_matches_algorithm`.
   await initEntityIcons(MACHINE_SLUGS);
+  // In-game quality badge textures (rfp-build-quality Phase 2): four
+  // small PNGs, loaded up front so badge sprites never race the first
+  // render (unlike carries icons, these are layout-independent).
+  await preloadQualityBadgeIcons();
   // Carries-icon preload is now scoped per-layout (see sidebar's solve flow
   // and renderLayoutOnCanvas). Pre-loading every producible item up front
   // gated first paint by ~5s on cold dev-server starts.

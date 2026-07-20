@@ -58,6 +58,13 @@ const INSERTER_COLORS: Record<string, number> = {
   inserter: 0x6a8e3e,
   "fast-inserter": 0x4a90d0,
   "long-handed-inserter": 0xd04040,
+  // Space Age stacking inserter — what the sizing ladder places as its
+  // top rung (12/s base, table I8). Was missing here, so our own stack
+  // inserters fell through to the generic-entity renderer (#313).
+  "stack-inserter": 0x3ec96a,
+  // 2.0 bulk inserter (1.x "stack inserter" renamed): never placed by
+  // the engine, recognized for parsed community blueprints.
+  "bulk-inserter": 0x2fa89a,
 };
 
 const PIPE_COLOR = 0x8a8a8a;
@@ -962,9 +969,73 @@ export function drawEntityGraphic(entity: PlacedEntity, ctx: DrawContext): Graph
   } else {
     g = drawGenericEntity();
   }
+  if (entity.quality && entity.quality !== "normal") {
+    addQualityBadge(g, entity.quality);
+  }
   g.x = (entity.x ?? 0) * TILE_PX;
   g.y = (entity.y ?? 0) * TILE_PX;
   return g;
+}
+
+/** Game-style quality tier colors (uncommon green, rare blue, epic
+ *  purple, legendary orange). Fallback only — the real in-game badge
+ *  icons are preferred (see [`addQualityBadge`]). */
+const QUALITY_BADGE_COLORS: Record<string, number> = {
+  uncommon: 0x4fca4f,
+  rare: 0x4f8bca,
+  epic: 0xa64fca,
+  legendary: 0xe8a33d,
+};
+
+/** The game's own tier badge icons, extracted from the `__quality__`
+ *  mod by `scripts/extract_icons.py` into `public/icons/`. "normal" is
+ *  deliberately absent — normal entities carry no badge, in-game or
+ *  here. */
+export const QUALITY_BADGE_SLUGS = [
+  "quality-uncommon",
+  "quality-rare",
+  "quality-epic",
+  "quality-legendary",
+] as const;
+
+/** Preload the four in-game quality badge textures. Must run before the
+ *  first render (same committed-particles caveat as carries icons:
+ *  sprites drawn before their texture arrives never pick it up). */
+export async function preloadQualityBadgeIcons(): Promise<void> {
+  const base = import.meta.env.BASE_URL;
+  await Promise.allSettled(
+    QUALITY_BADGE_SLUGS.map((s) => Assets.load(`${base}icons/${s}.png`)),
+  );
+}
+
+/** Badge marking a quality-stamped entity at the footprint's bottom-left,
+ *  mirroring the in-game badge position. Prefers the actual game icon
+ *  (`icons/quality-<tier>.png`); falls back to a tier-colored diamond if
+ *  the texture isn't cached (e.g. cold load race). Only functional
+ *  entities carry `quality` (rfp-build-quality functional-only
+ *  stamping), so belts stay clean automatically. */
+function addQualityBadge(g: Graphics, quality: string): void {
+  const bounds = g.getLocalBounds();
+  const pad = 1.5;
+  const tex = tryGetTexture(`${import.meta.env.BASE_URL}icons/quality-${quality}.png`);
+  if (tex) {
+    const size = TILE_PX * 0.42;
+    const badge = new Sprite(tex);
+    badge.width = size;
+    badge.height = size;
+    badge.x = bounds.minX + pad;
+    badge.y = bounds.maxY - size - pad;
+    g.addChild(badge);
+    return;
+  }
+  const color = QUALITY_BADGE_COLORS[quality];
+  if (color === undefined) return;
+  const r = TILE_PX * 0.14;
+  const cx = bounds.minX + r + pad;
+  const cy = bounds.maxY - r - pad;
+  g.poly([cx, cy - r, cx + r, cy, cx, cy + r, cx - r, cy])
+    .fill({ color, alpha: 0.95 })
+    .stroke({ color: 0x1a1a1a, width: 1, alpha: 0.8 });
 }
 
 /** Draw an UG tunnel stripe between a paired UG input and output.

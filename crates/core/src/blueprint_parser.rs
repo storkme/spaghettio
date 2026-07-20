@@ -188,6 +188,29 @@ struct BpEntity {
     /// `filters` array is sufficient to reconstruct `PlacedEntity.filters`.
     #[serde(default)]
     filters: Vec<BpFilter>,
+    /// Factorio 2.0 entity build quality (`quality :: string?` per
+    /// lua-api BlueprintEntity; absent = normal). Silently dropped before
+    /// `docs/rfp-build-quality.md` Phase 0, which misreported quality-built
+    /// community blueprints. Kept as the raw string here; the conversion
+    /// maps the five vanilla names via `QualityTier::from_name` (modded
+    /// quality names fall back to `None`/normal — vanilla-only fidelity).
+    /// Permissively deserialized: before Phase 0 this key was an *unknown
+    /// field* serde ignored wholesale, so a non-string value (corrupted /
+    /// modded JSON) must degrade to `None`, not fail the whole blueprint
+    /// parse (adversarial-review finding, 2026-07-20).
+    #[serde(default, deserialize_with = "de_quality_permissive")]
+    quality: Option<String>,
+}
+
+/// See `BpEntity.quality`: any valid JSON value is accepted; only strings
+/// carry through. Restores the pre-Phase-0 "garbage here never breaks the
+/// parse" behavior while still reading well-formed quality fields.
+fn de_quality_permissive<'de, D>(d: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(v.as_str().map(str::to_owned))
 }
 
 #[derive(Deserialize)]
@@ -333,6 +356,7 @@ fn bp_data_to_layout(bp_data: BpData) -> LayoutResult {
             input_priority: None,
             output_priority: None,
             filters,
+            quality: raw.quality.as_deref().and_then(crate::common::QualityTier::from_name),
         });
     }
 
@@ -470,6 +494,72 @@ mod tests {
     use super::*;
     use crate::blueprint;
     use crate::models::{EntityDirection, PlacedEntity};
+
+    /// Encode raw blueprint JSON into the `"0" + base64(zlib(JSON))`
+    /// envelope. Synthetic-fixture path for format fields our own export
+    /// doesn't emit yet (e.g. `quality` before rfp-build-quality Phase 2)
+    /// — parsing must not be blocked on finding a community artifact.
+    fn encode_envelope(json: &serde_json::Value) -> String {
+        use base64::Engine;
+        use std::io::Write;
+        let mut encoder =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(json.to_string().as_bytes()).unwrap();
+        let compressed = encoder.finish().unwrap();
+        format!(
+            "0{}",
+            base64::engine::general_purpose::STANDARD.encode(&compressed)
+        )
+    }
+
+    #[test]
+    fn parses_entity_quality() {
+        use crate::common::QualityTier;
+        // Per lua-api BlueprintEntity: `quality :: string?`, sibling to
+        // name/position; absent means normal.
+        let bp = encode_envelope(&serde_json::json!({
+            "blueprint": {
+                "item": "blueprint",
+                "version": 562949955518464u64,
+                "entities": [
+                    {"entity_number": 1, "name": "assembling-machine-3",
+                     "position": {"x": 1.5, "y": 1.5}, "quality": "legendary"},
+                    {"entity_number": 2, "name": "fast-inserter",
+                     "position": {"x": 3.5, "y": 0.5}, "quality": "rare"},
+                    {"entity_number": 3, "name": "transport-belt",
+                     "position": {"x": 4.5, "y": 0.5}},
+                    {"entity_number": 4, "name": "medium-electric-pole",
+                     "position": {"x": 4.5, "y": 1.5}, "quality": "modded-mythic"},
+                    {"entity_number": 5, "name": "small-electric-pole",
+                     "position": {"x": 4.5, "y": 2.5}, "quality": 5},
+                    {"entity_number": 6, "name": "long-handed-inserter",
+                     "position": {"x": 4.5, "y": 3.5}, "quality": {"name": "legendary"}},
+                ]
+            }
+        }));
+
+        let parsed = parse_blueprint_string(&bp).expect("should parse");
+        let by_name = |n: &str| {
+            parsed
+                .entities
+                .iter()
+                .find(|e| e.name == n)
+                .unwrap_or_else(|| panic!("missing {n}"))
+        };
+
+        assert_eq!(by_name("assembling-machine-3").quality, Some(QualityTier::Legendary));
+        assert_eq!(by_name("fast-inserter").quality, Some(QualityTier::Rare));
+        // Absent field = normal = None.
+        assert_eq!(by_name("transport-belt").quality, None);
+        // Modded quality names degrade to None (vanilla-only fidelity).
+        assert_eq!(by_name("medium-electric-pole").quality, None);
+        // Non-string quality values (corrupted/modded JSON) degrade to
+        // None instead of failing the whole parse — pre-Phase-0, this key
+        // was an ignored unknown field, and a malformed entity must not
+        // nuke an otherwise-parseable blueprint (analyzer robustness).
+        assert_eq!(by_name("small-electric-pole").quality, None);
+        assert_eq!(by_name("long-handed-inserter").quality, None);
+    }
 
     #[test]
     fn round_trip_simple() {

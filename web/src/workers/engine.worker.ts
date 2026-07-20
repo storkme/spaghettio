@@ -33,10 +33,11 @@ type Request =
       availableInputs: string[];
       palette: Record<string, string>;
       defaultMachine: string;
+      quality: string | null;
     }
-  | { id: number; method: "layout"; result: SolverResult; maxBeltTier: string | null; strategy: string | null; rowLayout: string | null; maxInserterTier: string | null }
-  | { id: number; method: "layoutTraced"; result: SolverResult; maxBeltTier: string | null; strategy: string | null; rowLayout: string | null; maxInserterTier: string | null }
-  | { id: number; method: "layoutStreaming"; result: SolverResult; maxBeltTier: string | null; strategy: string | null; rowLayout: string | null; maxInserterTier: string | null }
+  | { id: number; method: "layout"; result: SolverResult; maxBeltTier: string | null; strategy: string | null; rowLayout: string | null; maxInserterTier: string | null; quality: string | null }
+  | { id: number; method: "layoutTraced"; result: SolverResult; maxBeltTier: string | null; strategy: string | null; rowLayout: string | null; maxInserterTier: string | null; quality: string | null }
+  | { id: number; method: "layoutStreaming"; result: SolverResult; maxBeltTier: string | null; strategy: string | null; rowLayout: string | null; maxInserterTier: string | null; quality: string | null }
   | { id: number; method: "exportBlueprint"; layout: LayoutResult; label: string }
   | {
       id: number;
@@ -107,13 +108,14 @@ self.onmessage = async (e: MessageEvent<Request>) => {
           req.availableInputs,
           { by_category: req.palette },
           req.defaultMachine,
+          req.quality ?? undefined,
         );
         break;
       case "layout":
-        result = layout(req.result, req.maxBeltTier ?? undefined, req.strategy ?? undefined, req.rowLayout ?? undefined, req.maxInserterTier ?? undefined);
+        result = layout(req.result, req.maxBeltTier ?? undefined, req.strategy ?? undefined, req.rowLayout ?? undefined, req.maxInserterTier ?? undefined, req.quality ?? undefined);
         break;
       case "layoutTraced":
-        result = layout_traced(req.result, req.maxBeltTier ?? undefined, req.strategy ?? undefined, req.rowLayout ?? undefined, req.maxInserterTier ?? undefined);
+        result = layout_traced(req.result, req.maxBeltTier ?? undefined, req.strategy ?? undefined, req.rowLayout ?? undefined, req.maxInserterTier ?? undefined, req.quality ?? undefined);
         break;
       case "layoutStreaming": {
         const id = req.id;
@@ -156,7 +158,7 @@ self.onmessage = async (e: MessageEvent<Request>) => {
           if (batch.length >= BATCH_SIZE) flushBatch();
         };
         try {
-          result = layout_streaming(req.result, req.maxBeltTier ?? undefined, req.strategy ?? undefined, req.rowLayout ?? undefined, req.maxInserterTier ?? undefined, emit);
+          result = layout_streaming(req.result, req.maxBeltTier ?? undefined, req.strategy ?? undefined, req.rowLayout ?? undefined, req.maxInserterTier ?? undefined, req.quality ?? undefined, emit);
         } finally {
           flushBatch();
           if (TRACE_LOGS) {

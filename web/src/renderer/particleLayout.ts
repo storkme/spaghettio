@@ -94,6 +94,7 @@ const easeLinear = (t: number): number => t;
 interface HighlightAnimation {
   entityParticle: Particle;
   iconParticle: Particle | undefined;
+  badgeParticle: Particle | undefined;
   startAlpha: number;
   targetAlpha: number;
   startTime: number;
@@ -109,6 +110,9 @@ interface HighlightAnimation {
 interface ParticleEntry {
   entity: Particle;
   icon?: Particle;
+  /** In-game quality tier badge (rfp-build-quality) — per-entity, in the
+   *  icon layer; follows the entity's alpha everywhere `icon` does. */
+  badge?: Particle;
   revealAt: number;
   placedEntity: PlacedEntity;
 }
@@ -380,6 +384,13 @@ function drawPipeStubsForLayout(
  * to render on cache-miss.
  */
 function getEntityAtlasTexture(entity: PlacedEntity, ctx: DrawContext): Texture {
+  // Atlas textures are keyed by entity TYPE (name/direction/...) and shared
+  // by every instance — strip per-entity quality before baking, or the first
+  // instance's badge would leak onto every clone (rfp-build-quality: badges
+  // are separate per-entity particles in commitEntityAsParticle instead).
+  if (entity.quality) {
+    entity = { ...entity, quality: undefined };
+  }
   if (BELT_ENTITIES.has(entity.name)) {
     const turn = detectBeltTurnVariant(entity, ctx.tileMap);
     const key = beltAtlasKey(entity.name, entity.direction ?? "North", turn);
@@ -612,7 +623,35 @@ export function commitEntityAsParticle(
     scene.iconContainer.addParticle(iconParticle);
   }
 
-  particleMap.set(key, { entity: ep, icon: iconParticle, revealAt, placedEntity: entity });
+  // --- Quality badge particle (rfp-build-quality) ---
+  // The in-game tier badge at the entity footprint's bottom-left, mirroring
+  // the game's badge position. Per-entity by construction (never part of the
+  // shared entity atlas). Rides the icon layer so it z-sorts above machines.
+  let badgeParticle: Particle | undefined;
+  if (entity.quality && entity.quality !== "normal") {
+    const badgeTex = getItemIconTexture(`quality-${entity.quality}`);
+    const badgeSize = TILE_PX * 0.4;
+    let footH = 1;
+    if (MACHINE_ENTITIES.has(entity.name)) {
+      footH = (MACHINE_SIZES[entity.name] ?? [1, 1])[1];
+    } else if (entity.name === "substation") {
+      footH = 2;
+    }
+    const pad = 1.5;
+    badgeParticle = new Particle({
+      texture: badgeTex,
+      x: px + pad,
+      y: py + footH * TILE_PX - badgeSize - pad,
+      alpha: 0,
+      anchorX: 0,
+      anchorY: 0,
+      scaleX: badgeSize / CELL_PX,
+      scaleY: badgeSize / CELL_PX,
+    });
+    scene.iconContainer.addParticle(badgeParticle);
+  }
+
+  particleMap.set(key, { entity: ep, icon: iconParticle, badge: badgeParticle, revealAt, placedEntity: entity });
 }
 
 /**
@@ -823,6 +862,7 @@ export function applyParticleReveals(
     const alpha = Math.min(1, Math.max(0, (now - entry.revealAt) / FADE_IN_MS));
     entry.entity.alpha = alpha;
     if (entry.icon) entry.icon.alpha = alpha;
+    if (entry.badge) entry.badge.alpha = alpha;
   }
 }
 
@@ -834,9 +874,9 @@ export function applyParticleReveals(
  */
 export function* getParticleReveals(
   _scene: ParticleScene,
-): Iterable<{ particle: Particle; iconParticle: Particle | undefined; revealAt: number }> {
+): Iterable<{ particle: Particle; iconParticle: Particle | undefined; badgeParticle: Particle | undefined; revealAt: number }> {
   for (const entry of particleMap.values()) {
-    yield { particle: entry.entity, iconParticle: entry.icon, revealAt: entry.revealAt };
+    yield { particle: entry.entity, iconParticle: entry.icon, badgeParticle: entry.badge, revealAt: entry.revealAt };
   }
 }
 
@@ -881,6 +921,7 @@ function createHighlightAnimator(ticker: Ticker) {
 
       anim.entityParticle.alpha = alpha;
       if (anim.iconParticle) anim.iconParticle.alpha = alpha;
+      if (anim.badgeParticle) anim.badgeParticle.alpha = alpha;
 
       if (t >= 1) {
         animations.delete(key);
@@ -904,6 +945,7 @@ function createHighlightAnimator(ticker: Ticker) {
     key: EntityKey,
     entityParticle: Particle,
     iconParticle: Particle | undefined,
+    badgeParticle: Particle | undefined,
     targetAlpha: number,
   ): void {
     const existing = animations.get(key);
@@ -924,6 +966,7 @@ function createHighlightAnimator(ticker: Ticker) {
       animations.delete(key);
       entityParticle.alpha = targetAlpha;
       if (iconParticle) iconParticle.alpha = targetAlpha;
+      if (badgeParticle) badgeParticle.alpha = targetAlpha;
       return;
     }
 
@@ -931,6 +974,7 @@ function createHighlightAnimator(ticker: Ticker) {
     animations.set(key, {
       entityParticle,
       iconParticle,
+      badgeParticle,
       startAlpha: currentAlpha,
       targetAlpha,
       startTime: now,
@@ -947,6 +991,7 @@ function createHighlightAnimator(ticker: Ticker) {
     for (const entry of particleMap.values()) {
       entry.entity.alpha = alpha;
       if (entry.icon) entry.icon.alpha = alpha;
+      if (entry.badge) entry.badge.alpha = alpha;
     }
     stopTicker();
     requestRender();
@@ -1046,7 +1091,7 @@ export function renderLayoutAsParticles(
     for (const entry of particleMap.values()) {
       const key = tileEntityKey(entry.placedEntity);
       const target = targets.get(key) ?? HIGHLIGHT_FLOOR;
-      animator.animateTo(key, entry.entity, entry.icon, target);
+      animator.animateTo(key, entry.entity, entry.icon, entry.badge, target);
     }
   }
 
@@ -1059,7 +1104,7 @@ export function renderLayoutAsParticles(
         const chainKey = pe.carries ?? pe.recipe ?? null;
         const target = chainKey === item ? 1 : 0.15;
         const key = tileEntityKey(pe);
-        animator.animateTo(key, entry.entity, entry.icon, target);
+        animator.animateTo(key, entry.entity, entry.icon, entry.badge, target);
       }
     },
 
@@ -1078,7 +1123,7 @@ export function renderLayoutAsParticles(
       // animateTo picks the correct easing automatically (lowering alpha → linear).
       for (const entry of particleMap.values()) {
         const key = tileEntityKey(entry.placedEntity);
-        animator.animateTo(key, entry.entity, entry.icon, 1);
+        animator.animateTo(key, entry.entity, entry.icon, entry.badge, 1);
       }
     },
 
@@ -1097,6 +1142,7 @@ function createLegacyHighlightController(): HighlightController {
     for (const entry of particleMap.values()) {
       entry.entity.alpha = 1;
       if (entry.icon) entry.icon.alpha = 1;
+      if (entry.badge) entry.badge.alpha = 1;
     }
   }
 
@@ -1110,6 +1156,7 @@ function createLegacyHighlightController(): HighlightController {
         const alpha = chainKey === item ? 1 : 0.15;
         entry.entity.alpha = alpha;
         if (entry.icon) entry.icon.alpha = alpha;
+        if (entry.badge) entry.badge.alpha = alpha;
       }
     },
     highlightBeltNetwork(): void {
@@ -1154,7 +1201,7 @@ export function createParticleHighlightController(
     for (const entry of particleMap.values()) {
       const key = tileEntityKey(entry.placedEntity);
       const target = targets.get(key) ?? HIGHLIGHT_FLOOR;
-      animator.animateTo(key, entry.entity, entry.icon, target);
+      animator.animateTo(key, entry.entity, entry.icon, entry.badge, target);
     }
   }
 
@@ -1168,6 +1215,7 @@ export function createParticleHighlightController(
         const target = chainKey === item ? 1 : 0.15;
         entry.entity.alpha = target;
         if (entry.icon) entry.icon.alpha = target;
+        if (entry.badge) entry.badge.alpha = target;
       }
     },
 
@@ -1176,7 +1224,7 @@ export function createParticleHighlightController(
         // Animate back to full alpha.
         for (const entry of particleMap.values()) {
           const key = tileEntityKey(entry.placedEntity);
-          animator.animateTo(key, entry.entity, entry.icon, 1);
+          animator.animateTo(key, entry.entity, entry.icon, entry.badge, 1);
         }
         return;
       }
@@ -1186,7 +1234,7 @@ export function createParticleHighlightController(
     clearHighlight(): void {
       for (const entry of particleMap.values()) {
         const key = tileEntityKey(entry.placedEntity);
-        animator.animateTo(key, entry.entity, entry.icon, 1);
+        animator.animateTo(key, entry.entity, entry.icon, entry.badge, 1);
       }
     },
 

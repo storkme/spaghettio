@@ -6,7 +6,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::bus::inserter_ladder::{reassign_near_far, InserterTier};
 use crate::bus::layout::RowLayout;
-use crate::common::{belt_entity_for_rate, lane_capacity, machine_dims, utilization_for, BELT_TIERS};
+use crate::common::{belt_entity_for_rate, lane_capacity, machine_dims, utilization_for, QualityTier, BELT_TIERS};
 use crate::models::{EntityDirection, MachineSpec, PlacedEntity, SolverResult};
 
 /// Best available per-lane capacity across all belt tiers.
@@ -606,6 +606,7 @@ pub(crate) fn build_one_row(
     y_cursor: i32,
     max_belt_tier: Option<&str>,
     max_inserter_tier: InserterTier,
+    quality: QualityTier,
     output_east: bool,
     row_layout: RowLayout,
 ) -> (Vec<PlacedEntity>, RowSpan, i32) {
@@ -768,6 +769,7 @@ pub(crate) fn build_one_row(
                 near_rate,
                 output_rate_pm,
                 max_inserter_tier,
+                quality,
             );
             let machine_y = y_cursor + 5;
             let output_y = machine_y + mh as i32;
@@ -828,6 +830,7 @@ pub(crate) fn build_one_row(
                 solid_rate,
                 output_rate_pm,
                 max_inserter_tier,
+                quality,
             );
             fluid_port_ys = port_pipes.first().map(|&(_, _, py)| vec![py]).unwrap_or_default();
             fluid_port_pipes = port_pipes;
@@ -891,6 +894,7 @@ pub(crate) fn build_one_row(
                 output_rate,
                 secondary_rate,
                 max_inserter_tier,
+                quality,
             );
             fluid_output_port_pipes = out_port_pipes;
             let input_ys = vec![y_cursor];
@@ -938,6 +942,7 @@ pub(crate) fn build_one_row(
                 item2_rate,
                 output_rate_pm,
                 max_inserter_tier,
+                quality,
             );
             let input_ys: Vec<i32> = solid_inputs
                 .iter()
@@ -988,6 +993,7 @@ pub(crate) fn build_one_row(
                 item3_rate,
                 output_rate_pm,
                 max_inserter_tier,
+                quality,
             );
             // input_belt_y[i] is where lane planner taps off lane.item
             // matching solid_inputs[i]. Layout (msz=3): belt 1 at y+0,
@@ -1036,6 +1042,7 @@ pub(crate) fn build_one_row(
                 output_east,
                 output_rate_pm,
                 max_inserter_tier,
+                quality,
             );
             fluid_port_ys = in_port_pipes.iter().map(|&(_, _, py)| py).collect();
             fluid_port_ys.sort_unstable();
@@ -1122,6 +1129,7 @@ pub(crate) fn build_one_row(
                     far_rate_pm,
                     output_rate_pm,
                     max_inserter_tier,
+                    quality,
                 );
                 // Map each spec.solid_input (natural order) to its tap-off
                 // y position. High-demand (item0) sits on trunk 0 at y+0;
@@ -1176,6 +1184,7 @@ pub(crate) fn build_one_row(
                     near_rate,
                     output_rate_pm,
                     max_inserter_tier,
+                    quality,
                 );
                 fluid_output_port_pipes = out_port_pipes;
                 // Positional (far=y_cursor, near=y_cursor+1) mapped back to
@@ -1245,6 +1254,7 @@ pub(crate) fn build_one_row(
                 fluid_in,
                 max_belt_tier,
                 max_inserter_tier,
+                quality,
             );
             fluid_port_ys = fluid_input_port_pipes.first().map(|&(_, _, py)| vec![py]).unwrap_or_default();
             fluid_port_pipes = fluid_input_port_pipes;
@@ -1288,6 +1298,7 @@ pub(crate) fn build_one_row(
                 far_rate,
                 max_belt_tier,
                 max_inserter_tier,
+                quality,
             );
             // Mirrors `templates::voider_row`'s row-offset constants:
             // near/tap belt at dy=6 (bus tap-off lands here), far/recirc
@@ -1318,6 +1329,7 @@ pub(crate) fn build_one_row(
                 &sorted_items,
                 max_belt_tier,
                 max_inserter_tier,
+                quality,
             );
             sorted_output_belts = sorted_belts;
             // Scrap input belt at dy=0 (the bus tap lands here). The
@@ -1479,6 +1491,7 @@ pub fn place_rows(
     y_offset: i32,
     max_belt_tier: Option<&str>,
     max_inserter_tier: InserterTier,
+    quality: QualityTier,
     final_output_items: Option<&FxHashSet<String>>,
     extra_gap_after_row: Option<&FxHashMap<usize, i32>>,
     row_layout: RowLayout,
@@ -1591,6 +1604,7 @@ pub fn place_rows(
                 y_cursor,
                 max_belt_tier,
                 max_inserter_tier,
+                quality,
                 is_final,
                 row_layout,
             );
@@ -1626,6 +1640,7 @@ pub fn place_rows_from_result(
     y_offset: i32,
     max_belt_tier: Option<&str>,
     max_inserter_tier: InserterTier,
+    quality: QualityTier,
     final_output_items: Option<&FxHashSet<String>>,
     extra_gap_after_row: Option<&FxHashMap<usize, i32>>,
     row_layout: RowLayout,
@@ -1637,6 +1652,7 @@ pub fn place_rows_from_result(
         y_offset,
         max_belt_tier,
         max_inserter_tier,
+        quality,
         final_output_items,
         extra_gap_after_row,
         row_layout,
@@ -1927,7 +1943,7 @@ mod tests {
     fn place_rows_single_recipe_no_split() {
         let machines = vec![iron_plate_spec()];
         let dep_order = vec!["iron-plate".to_string()];
-        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), None, None, RowLayout::default());
+        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default());
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].machine_count, 1);
         assert_eq!(spans[0].spec.recipe, "iron-plate");
@@ -1937,7 +1953,7 @@ mod tests {
     fn place_rows_two_recipes_ordered() {
         let machines = vec![iron_gear_spec(), iron_plate_spec()];
         let dep_order = vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()];
-        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), None, None, RowLayout::default());
+        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default());
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0].spec.recipe, "iron-plate");
         assert_eq!(spans[1].spec.recipe, "iron-gear-wheel");
@@ -1948,7 +1964,7 @@ mod tests {
         // Second recipe starts at y_end_of_first + 2 (gap)
         let machines = vec![iron_plate_spec(), iron_gear_spec()];
         let dep_order = vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()];
-        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), None, None, RowLayout::default());
+        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default());
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[1].y_start, spans[0].y_end + 2);
     }
@@ -1957,7 +1973,7 @@ mod tests {
     fn place_rows_y_offset() {
         let machines = vec![iron_plate_spec()];
         let dep_order = vec!["iron-plate".to_string()];
-        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 5, None, InserterTier::default(), None, None, RowLayout::default());
+        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 5, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default());
         assert_eq!(spans[0].y_start, 5);
     }
 
@@ -1974,7 +1990,7 @@ mod tests {
             0,
             1,
             None,
-            InserterTier::default(),
+            InserterTier::default(), QualityTier::Normal,
             None,
             None,
             RowLayout::default(),
@@ -2036,7 +2052,7 @@ mod tests {
             0,
             0,
             Some("transport-belt"),
-            InserterTier::default(),
+            InserterTier::default(), QualityTier::Normal,
             None,
             None,
             RowLayout::default(),
@@ -2100,7 +2116,7 @@ mod tests {
             0,
             1,
             Some("transport-belt"),
-            InserterTier::default(),
+            InserterTier::default(), QualityTier::Normal,
             None,
             None,
             RowLayout::default(),
@@ -2123,7 +2139,7 @@ mod tests {
         let machines = vec![iron_plate_spec(), iron_gear_spec()];
         let dep_order = vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()];
         let (_, spans, _, total_height) =
-            place_rows(&machines, &dep_order, 5, 0, None, InserterTier::default(), None, None, RowLayout::default());
+            place_rows(&machines, &dep_order, 5, 0, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default());
 
         // Every span should have y_end > y_start
         for span in &spans {
@@ -2151,7 +2167,7 @@ mod tests {
         let dep_order = vec!["iron-plate".to_string()];
         let bus_width = 10;
         let (_, spans, max_width, _) =
-            place_rows(&machines, &dep_order, bus_width, 0, None, InserterTier::default(), None, None, RowLayout::default());
+            place_rows(&machines, &dep_order, bus_width, 0, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default());
 
         assert!(
             spans[0].row_width >= bus_width,
@@ -2174,12 +2190,12 @@ mod tests {
             0,
             0,
             None,
-            InserterTier::default(),
+            InserterTier::default(), QualityTier::Normal,
             None,
             Some(&extra_gaps),
             RowLayout::default(),
         );
-        let (_, spans_no_gap, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), None, None, RowLayout::default());
+        let (_, spans_no_gap, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default());
 
         // Second row should start 5 tiles later with gap
         assert_eq!(

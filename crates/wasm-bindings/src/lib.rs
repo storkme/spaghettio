@@ -30,6 +30,7 @@ fn layout_options(
     strategy: Option<String>,
     row_layout: Option<String>,
     max_inserter_tier: Option<String>,
+    quality: Option<String>,
 ) -> LayoutOptions {
     let strategy = match strategy.as_deref() {
         // `partitioned-per-consumer` is the deprecated P1 string; the
@@ -59,6 +60,9 @@ fn layout_options(
         row_layout,
         surplus_policy: SurplusPolicy::default(),
         max_inserter_tier,
+        // rfp-build-quality Phase 2: unknown/absent → Normal, same
+        // hard-cap fallback semantics as the two tiers above.
+        quality: quality_tier(quality),
         // The merge-tap fallback is chosen internally by the
         // decomposition search (`MergeTapCandidate`), never requested by the
         // web UI — always default-off at the public boundary.
@@ -71,16 +75,36 @@ pub fn init() {
     console_error_panic_hook::set_once();
 }
 
+/// Map the optional quality string from JS to a tier; unknown/absent →
+/// Normal, matching the `max_inserter_tier` unknown→default pattern
+/// (rfp-build-quality). Set by the web UI / `q=` URL param since
+/// Phase 2 (`web/src/state.ts`, sidebar "Build quality" dropdown).
+fn quality_tier(quality: Option<String>) -> spaghettio_core::common::QualityTier {
+    quality
+        .as_deref()
+        .and_then(spaghettio_core::common::QualityTier::from_name)
+        .unwrap_or_default()
+}
+
 #[wasm_bindgen]
 pub fn solve(
     target_item: &str,
     target_rate: f64,
     available_inputs: Vec<String>,
     machine_entity: &str,
+    quality: Option<String>,
 ) -> Result<SolverResult, JsError> {
     let inputs: FxHashSet<String> = available_inputs.into_iter().collect();
-    solver::solve(target_item, target_rate, &inputs, machine_entity)
-        .map_err(|e| JsError::new(&e.to_string()))
+    solver::solve_with_palette_exclusions_and_quality(
+        target_item,
+        target_rate,
+        &inputs,
+        &MachinePalette::default(),
+        machine_entity,
+        &FxHashSet::default(),
+        quality_tier(quality),
+    )
+    .map_err(|e| JsError::new(&e.to_string()))
 }
 
 /// Solve with a per-category machine palette. Categories absent from the
@@ -94,10 +118,19 @@ pub fn solve_with_palette(
     available_inputs: Vec<String>,
     palette: MachinePalette,
     default_machine: &str,
+    quality: Option<String>,
 ) -> Result<SolverResult, JsError> {
     let inputs: FxHashSet<String> = available_inputs.into_iter().collect();
-    solver::solve_with_palette(target_item, target_rate, &inputs, &palette, default_machine)
-        .map_err(|e| JsError::new(&e.to_string()))
+    solver::solve_with_palette_exclusions_and_quality(
+        target_item,
+        target_rate,
+        &inputs,
+        &palette,
+        default_machine,
+        &FxHashSet::default(),
+        quality_tier(quality),
+    )
+    .map_err(|e| JsError::new(&e.to_string()))
 }
 
 #[wasm_bindgen]
@@ -122,10 +155,11 @@ pub fn layout(
     strategy: Option<String>,
     row_layout: Option<String>,
     max_inserter_tier: Option<String>,
+    quality: Option<String>,
 ) -> Result<LayoutResult, JsError> {
     build_bus_layout(
         &solver_result,
-        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier),
+        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality),
     )
     .map_err(|e| JsError::new(&e))
 }
@@ -141,10 +175,11 @@ pub fn layout_traced(
     strategy: Option<String>,
     row_layout: Option<String>,
     max_inserter_tier: Option<String>,
+    quality: Option<String>,
 ) -> Result<LayoutResult, JsError> {
     spaghettio_core::bus::layout::build_bus_layout_traced(
         &solver_result,
-        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier),
+        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality),
     )
     .map_err(|e| JsError::new(&e))
 }
@@ -204,6 +239,7 @@ pub fn layout_streaming(
     strategy: Option<String>,
     row_layout: Option<String>,
     max_inserter_tier: Option<String>,
+    quality: Option<String>,
     emit: &js_sys::Function,
 ) -> Result<LayoutResult, JsError> {
     let emit = emit.clone();
@@ -217,7 +253,7 @@ pub fn layout_streaming(
     });
     spaghettio_core::bus::layout::build_bus_layout_streaming(
         &solver_result,
-        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier),
+        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality),
         on_event,
     )
     .map_err(|e| JsError::new(&e))

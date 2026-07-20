@@ -126,6 +126,7 @@ type Reveal = {
   kind: "particle";
   particle: Particle;
   iconParticle: Particle | undefined;
+  badgeParticle?: Particle | undefined;
   revealAt: number;
 };
 
@@ -668,8 +669,8 @@ export function createStreamingRenderer(
       // Build the scrub-mode reveals list from the particle map.
       const fallbackReveal = firstMs ?? 0;
       const list: Reveal[] = [];
-      for (const { particle, iconParticle, revealAt } of getParticleReveals(particleScene)) {
-        list.push({ kind: "particle", particle, iconParticle, revealAt });
+      for (const { particle, iconParticle, badgeParticle, revealAt } of getParticleReveals(particleScene)) {
+        list.push({ kind: "particle", particle, iconParticle, badgeParticle, revealAt });
       }
       // Any entities in layout.entities that never appeared in streamed events
       // (rare edge case) aren't in the particle map yet. Commit them now
@@ -687,9 +688,9 @@ export function createStreamingRenderer(
         // picking up anything not already in list (by checking against
         // the pre-built set).
         const alreadyInList = new Set(list.map(r => r.particle));
-        for (const { particle, iconParticle, revealAt } of getParticleReveals(particleScene)) {
+        for (const { particle, iconParticle, badgeParticle, revealAt } of getParticleReveals(particleScene)) {
           if (!alreadyInList.has(particle)) {
-            list.push({ kind: "particle", particle, iconParticle, revealAt });
+            list.push({ kind: "particle", particle, iconParticle, badgeParticle, revealAt });
           }
         }
       }
@@ -759,6 +760,7 @@ export function createStreamingRenderer(
         elapsed / FADE_IN_MS;
       r.particle.alpha = alpha;
       if (r.iconParticle) r.iconParticle.alpha = alpha;
+      if (r.badgeParticle) r.badgeParticle.alpha = alpha;
     }
     requestRender();
   }

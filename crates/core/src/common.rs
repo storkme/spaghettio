@@ -30,6 +30,99 @@ pub fn is_machine_entity(entity: &str) -> bool {
     MACHINE_ENTITY_NAMES.contains(&entity)
 }
 
+/// Factorio 2.0 quality tier of the entities the user builds with
+/// (`docs/rfp-build-quality.md`). Build quality only — this says nothing
+/// about the quality of *items produced* (quality-production is a
+/// separate future RFP).
+///
+/// The scaling anchor is [`QualityTier::level`], NOT the enum ordinal:
+/// vanilla skips level 4, so legendary is level **5** (FFF-375; verified
+/// against wiki.factorio.com 2026-07-20, in-game tooltip check tracked as
+/// RFP kill criterion 1). Most positive attributes scale
+/// `×(1 + 0.3·level)` — crafting speed, inserter rotation — while pole
+/// geometry uses per-level tile bonuses (+1 supply radius, +2 wire
+/// reach), so consumers take the tier and derive what they need rather
+/// than sharing one multiplier.
+///
+/// Serde form is the lowercase blueprint-JSON string (`"legendary"`),
+/// matching [`QualityTier::name`] — the same spelling flows through
+/// `PlacedEntity.quality`, blueprint export, and the URL param.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default,
+    serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum QualityTier {
+    #[default]
+    Normal,
+    Uncommon,
+    Rare,
+    Epic,
+    Legendary,
+}
+
+impl QualityTier {
+    /// Vanilla quality level — the number the scaling rules key off.
+    /// Legendary is 5, not 4: level 4 is reserved/unused in vanilla.
+    pub fn level(self) -> u8 {
+        match self {
+            QualityTier::Normal => 0,
+            QualityTier::Uncommon => 1,
+            QualityTier::Rare => 2,
+            QualityTier::Epic => 3,
+            QualityTier::Legendary => 5,
+        }
+    }
+
+    /// The `×(1 + 0.3·level)` attribute multiplier (crafting speed,
+    /// inserter rotation). At `Normal` this is exactly `1.0` — kill
+    /// criterion 2 (identity at Normal) depends on `×1.0` staying
+    /// bit-exact, which IEEE 754 guarantees.
+    pub fn multiplier(self) -> f64 {
+        1.0 + 0.3 * f64::from(self.level())
+    }
+
+    /// The blueprint-JSON string for this tier (entity-level
+    /// `quality :: string?` per lua-api BlueprintEntity). `Normal` is
+    /// named too, but exporters skip the field entirely at Normal.
+    pub fn name(self) -> &'static str {
+        match self {
+            QualityTier::Normal => "normal",
+            QualityTier::Uncommon => "uncommon",
+            QualityTier::Rare => "rare",
+            QualityTier::Epic => "epic",
+            QualityTier::Legendary => "legendary",
+        }
+    }
+
+    /// Parse the blueprint-JSON / URL-param string form. Unknown strings
+    /// map to `None` so callers choose their own fallback (the wasm
+    /// boundary defaults unknown → `Normal`, matching the
+    /// `max_inserter_tier` pattern).
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "normal" => Some(QualityTier::Normal),
+            "uncommon" => Some(QualityTier::Uncommon),
+            "rare" => Some(QualityTier::Rare),
+            "epic" => Some(QualityTier::Epic),
+            "legendary" => Some(QualityTier::Legendary),
+            _ => None,
+        }
+    }
+
+    /// All tiers, ascending — the sweep the per-tier unit tests and the
+    /// UI dropdown both iterate.
+    pub const ALL: [QualityTier; 5] = [
+        QualityTier::Normal,
+        QualityTier::Uncommon,
+        QualityTier::Rare,
+        QualityTier::Epic,
+        QualityTier::Legendary,
+    ];
+}
+
 /// Recycler direct-ejection tile (RFP Fulgora Phase 0 finding,
 /// `docs/rfp-fulgora-scrap.md`): the ONE tile a recycler credits its
 /// output onto directly, mining-drill-style — no output inserter, per
@@ -104,11 +197,47 @@ pub fn entity_size(entity: &str) -> (u32, u32) {
 /// odd 1×1 medium pole and the even 2×2 substation — the integer-Chebyshev
 /// version 3a-i shipped false-accepted the substation's +x/+y edge by one tile.
 /// `place_poles`, which places on the tile grid, floors it (`.floor() as i32`).
-pub fn supply_area_distance(entity: &str) -> f64 {
-    match entity {
+///
+/// Quality adds **+1 supply radius per level** (rfp-build-quality; kill-1
+/// verified in-game 2026-07-20): medium 3.5 → 8.5 legendary (7×7 → 17×17),
+/// substation 9 → 14 (18×18 → 28×28). NOTE the substation's supply
+/// *diameter* equals its wire reach at EVERY tier (18=18 … 28=28, zero
+/// margin — see the RFP's pole-margin table); only medium poles keep a
+/// 2-tile margin, so spacing logic may never assume wire reach exceeds
+/// supply diameter for substations. Callers pass the entity's own tier
+/// (validator) or the planning tier (`place_poles`).
+pub fn supply_area_distance(entity: &str, quality: QualityTier) -> f64 {
+    let base = match entity {
         "substation" => 9.0,
         _ => 3.5,
-    }
+    };
+    base + f64::from(quality.level())
+}
+
+/// Copper-wire reach (tile distance between centers) for a
+/// power-distribution entity at a build-quality tier; `None` for
+/// non-pole names. THE ground-truth table both
+/// `validate::power::check_pole_network_connectivity` and
+/// `bus::layout::repair_pole_connectivity` consume — unified here after
+/// the Phase 2 adversarial review caught the repair pass still
+/// hardcoding the Normal-tier 9 while the validator scaled
+/// (rfp-build-quality decision log, 2026-07-20; same duplication shape
+/// 3a-i fixed for supply radii).
+///
+/// Quality adds **+2 wire reach per level** (kill-1 verified in-game):
+/// medium 9 → 19 legendary, substation 18 → 28. The substation's reach
+/// equals its supply *diameter* at every tier (zero margin — see
+/// [`supply_area_distance`]); mixed-tier pole pairs connect at
+/// `min(reach_a, reach_b)`, applied by the consumers, not here.
+pub fn pole_wire_reach(entity: &str, quality: QualityTier) -> Option<f64> {
+    let base = match entity {
+        "medium-electric-pole" => 9.0,
+        "small-electric-pole" => 7.5,
+        "substation" => 18.0,
+        "big-electric-pole" => 32.0,
+        _ => return None,
+    };
+    Some(base + 2.0 * f64::from(quality.level()))
 }
 
 /// Whether `entity` draws electricity from the power grid.
@@ -255,8 +384,17 @@ pub const SPLITTER_ENTITIES: &[&str] =
     &["splitter", "fast-splitter", "express-splitter"];
 
 /// Inserter entity names.
+/// Electric inserters the engine and validators recognize. The ladder
+/// PLACES only regular/fast/stack (+ long-handed for reach-2); the 2.0
+/// `bulk-inserter` (base hand 2, research-scaled — table I8) is here for
+/// parsed community blueprints, which the per-entity validators rate via
+/// `inserter_throughput`. `burner-inserter` is deliberately absent:
+/// every member must be electric (see `needs_electricity`'s drift test).
+/// Naming note (#313, resolved 2026-07-20): `stack-inserter` IS the
+/// current Space Age stacking inserter — the engine's 12/s base matches
+/// its zero-research rate per I8; it is not a 1.x leftover.
 pub const INSERTER_ENTITIES: &[&str] =
-    &["inserter", "long-handed-inserter", "fast-inserter", "stack-inserter"];
+    &["inserter", "long-handed-inserter", "fast-inserter", "stack-inserter", "bulk-inserter"];
 
 /// Return `true` if `name` is a surface (above-ground) belt.
 pub fn is_surface_belt(name: &str) -> bool {
@@ -323,6 +461,30 @@ pub fn balancer_seg_is_simple(seg: &str) -> bool {
     n <= 2 && m <= 2
 }
 
+/// Whether build quality functionally affects this entity — and therefore
+/// whether the export stamps it (rfp-build-quality "functional-only
+/// stamping"): machines (crafting speed — including the burner biochamber;
+/// quality scales speed regardless of energy source), inserters
+/// (rotation), poles (supply area + wire reach). Belts, undergrounds,
+/// splitters, and pipes are excluded: vanilla quality gives them health
+/// only, and demanding upcycle-only legendary logistics for zero function
+/// is the exact cost the RFP's stamping decision avoids.
+pub fn quality_affects_entity(name: &str) -> bool {
+    is_machine_entity(name)
+        || matches!(
+            name,
+            "inserter"
+                | "long-handed-inserter"
+                | "fast-inserter"
+                | "stack-inserter"
+                | "bulk-inserter"
+                | "small-electric-pole"
+                | "medium-electric-pole"
+                | "big-electric-pole"
+                | "substation"
+        )
+}
+
 /// Inserter reach: how many tiles away the pick-up / drop position is.
 pub fn inserter_reach(name: &str) -> i32 {
     if name == "long-handed-inserter" {
@@ -333,7 +495,8 @@ pub fn inserter_reach(name: &str) -> i32 {
 }
 
 /// Approximate steady-state throughput (items/second) of an inserter,
-/// from `docs/factorio-mechanics.md` table I8.
+/// from `docs/factorio-mechanics.md` table I8, scaled by build quality
+/// (`docs/rfp-build-quality.md` Phase 2).
 ///
 /// Assumption: **no inserter-capacity / stack-bonus research** — these are
 /// the base (unresearched) rates a fresh factory sees. Values are
@@ -343,15 +506,25 @@ pub fn inserter_reach(name: &str) -> i32 {
 /// the "long arm = slow" intuition is wrong, per I8), fast ~2.31/s,
 /// stack ~12/s base, bulk 2.4/s base. Unknown names fall back to the
 /// regular rate (conservative — never over-credits an unknown inserter).
-pub fn inserter_throughput(name: &str) -> f64 {
-    match name {
+///
+/// Quality multiplies rotation speed ×(1 + 0.3·level), applied linearly
+/// to these steady-state rates. In-game cycles are tick-quantized so
+/// linear is a few percent optimistic at some tiers — the same fidelity
+/// the base table already accepts. `Normal` is a bit-exact ×1.0 no-op
+/// (kill criterion 2a). Callers pass the *entity's own* tier
+/// (`PlacedEntity.quality`, validators) or the planning tier
+/// (`LayoutOptions.quality`, the sizing ladder) — there is deliberately
+/// no zero-arg form, so no site can silently default to Normal.
+pub fn inserter_throughput(name: &str, quality: QualityTier) -> f64 {
+    let base = match name {
         "inserter" => 0.84,
         "long-handed-inserter" => 1.2,
         "fast-inserter" => 2.31,
         "stack-inserter" => 12.0,
         "bulk-inserter" => 2.4,
         _ => 0.84,
-    }
+    };
+    base * quality.multiplier()
 }
 
 /// Map underground-belt entity name to its corresponding surface belt tier.
@@ -524,6 +697,82 @@ mod tests {
     #[test]
     fn machine_dims_recycler_non_square() {
         assert_eq!(machine_dims("recycler"), (2, 4));
+    }
+
+    #[test]
+    fn quality_levels_skip_four() {
+        // Vanilla reserves level 4; legendary is 5. An ordinal-based
+        // implementation would produce [0,1,2,3,4] — the exact bug this
+        // sweep exists to catch (`docs/rfp-build-quality.md`).
+        let levels: Vec<u8> = QualityTier::ALL.iter().map(|q| q.level()).collect();
+        assert_eq!(levels, vec![0, 1, 2, 3, 5]);
+    }
+
+    #[test]
+    fn quality_multiplier_normal_is_exactly_one() {
+        // Kill criterion 2 (identity at Normal) leans on ×1.0 being a
+        // bit-exact no-op — the multiplier itself must be exactly 1.0,
+        // not merely close.
+        assert_eq!(QualityTier::Normal.multiplier(), 1.0);
+    }
+
+    #[test]
+    fn quality_multiplier_table() {
+        // Legendary: 0.3×5 = 1.5 is exact in f64, so 2.5 is exact too.
+        assert_eq!(QualityTier::Legendary.multiplier(), 2.5);
+        for (tier, expected) in [
+            (QualityTier::Uncommon, 1.3),
+            (QualityTier::Rare, 1.6),
+            (QualityTier::Epic, 1.9),
+        ] {
+            assert!(
+                (tier.multiplier() - expected).abs() < 1e-12,
+                "{tier:?}: {} vs {expected}",
+                tier.multiplier()
+            );
+        }
+    }
+
+    #[test]
+    fn quality_name_round_trip() {
+        for tier in QualityTier::ALL {
+            assert_eq!(QualityTier::from_name(tier.name()), Some(tier));
+        }
+        assert_eq!(QualityTier::from_name("quality"), None);
+        assert_eq!(QualityTier::from_name(""), None);
+        assert_eq!(QualityTier::default(), QualityTier::Normal);
+    }
+
+    /// Kill 2a, pole third: `supply_area_distance` at Normal is
+    /// bit-identical to the pre-quality constants; +1 radius per level
+    /// (kill-1 verified in-game 2026-07-20).
+    #[test]
+    fn supply_area_distance_quality_scaling() {
+        assert_eq!(supply_area_distance("medium-electric-pole", QualityTier::Normal), 3.5);
+        assert_eq!(supply_area_distance("substation", QualityTier::Normal), 9.0);
+        assert_eq!(supply_area_distance("unknown-pole", QualityTier::Normal), 3.5);
+        assert_eq!(supply_area_distance("medium-electric-pole", QualityTier::Legendary), 8.5);
+        assert_eq!(supply_area_distance("substation", QualityTier::Legendary), 14.0);
+        for tier in QualityTier::ALL {
+            let lvl = f64::from(tier.level());
+            assert_eq!(supply_area_distance("substation", tier), 9.0 + lvl, "{tier:?}");
+            assert_eq!(supply_area_distance("medium-electric-pole", tier), 3.5 + lvl, "{tier:?}");
+        }
+    }
+
+    /// Drift-pin between the THREE spellings of a tier: the serde derive
+    /// (`rename_all = "lowercase"`), `name()`, and `from_name()`. They are
+    /// independently maintained; this test is what keeps them one spelling
+    /// (adversarial-review finding, 2026-07-20 — same philosophy as the
+    /// inserter ladder's `constants_identity`).
+    #[test]
+    fn quality_serde_matches_name() {
+        for tier in QualityTier::ALL {
+            let json = serde_json::to_value(tier).unwrap();
+            assert_eq!(json, serde_json::Value::String(tier.name().into()), "{tier:?}");
+            let back: QualityTier = serde_json::from_value(json).unwrap();
+            assert_eq!(back, tier, "{tier:?}");
+        }
     }
 
     #[test]

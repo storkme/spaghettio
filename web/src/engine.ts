@@ -226,6 +226,7 @@ async function solve(
   availableInputs: string[],
   palette: Record<string, string>,
   defaultMachine: string,
+  quality?: string,
 ): Promise<SolverResult> {
   // If a streaming layout is in flight, the user has just typed a new target
   // and is waiting for feedback — kill the old WASM work so solve isn't
@@ -238,6 +239,7 @@ async function solve(
     availableInputs,
     palette,
     defaultMachine,
+    quality: quality ?? null,
   });
 }
 
@@ -249,7 +251,7 @@ function allProducerMachines(): string[] {
   return machinesCache;
 }
 
-function buildLayout(result: SolverResult, maxBeltTier?: string, strategy?: string, rowLayout?: string, maxInserterTier?: string): Promise<LayoutResult> {
+function buildLayout(result: SolverResult, maxBeltTier?: string, strategy?: string, rowLayout?: string, maxInserterTier?: string, quality?: string): Promise<LayoutResult> {
   return call<LayoutResult>({
     method: "layout",
     result,
@@ -257,10 +259,11 @@ function buildLayout(result: SolverResult, maxBeltTier?: string, strategy?: stri
     strategy: strategy ?? null,
     rowLayout: rowLayout ?? null,
     maxInserterTier: maxInserterTier ?? null,
+    quality: quality ?? null,
   });
 }
 
-function buildLayoutTraced(result: SolverResult, maxBeltTier?: string, strategy?: string, rowLayout?: string, maxInserterTier?: string): Promise<LayoutResult> {
+function buildLayoutTraced(result: SolverResult, maxBeltTier?: string, strategy?: string, rowLayout?: string, maxInserterTier?: string, quality?: string): Promise<LayoutResult> {
   return call<LayoutResult>({
     method: "layoutTraced",
     result,
@@ -268,6 +271,7 @@ function buildLayoutTraced(result: SolverResult, maxBeltTier?: string, strategy?
     strategy: strategy ?? null,
     rowLayout: rowLayout ?? null,
     maxInserterTier: maxInserterTier ?? null,
+    quality: quality ?? null,
   });
 }
 
@@ -293,6 +297,7 @@ async function buildLayoutStreaming(
   strategy: string | undefined,
   rowLayout: string | undefined,
   maxInserterTier: string | undefined,
+  quality: string | undefined,
   onEvent: (evt: TraceEvent) => void,
 ): Promise<LayoutResult> {
   if (activeStreamingId !== null) {
@@ -325,6 +330,7 @@ async function buildLayoutStreaming(
       strategy: strategy ?? null,
       rowLayout: rowLayout ?? null,
       maxInserterTier: maxInserterTier ?? null,
+      quality: quality ?? null,
       traceLogs,
     });
   });

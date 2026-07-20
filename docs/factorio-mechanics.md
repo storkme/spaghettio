@@ -118,6 +118,13 @@ Splitters compose into networks that route m input belts onto n output belts ("b
 
   Throughputs derived from `rotation_speed` × 60 × items_per_swing. Long-handed is **faster** than regular per cycle (rotation_speed 0.02 vs 0.014); the "long arm = slow" intuition is wrong. Actual throughput varies with pickup/drop distance and belt speed. Multiple inserters may be needed to saturate a belt lane (7.5/s yellow → need ~9 regular or ~4 fast per lane).
 
+- **I8 wiki cross-check (2026-07-20, #313):** current wiki lists the
+  Space Age stack inserter at base hand **6** (~14.4/s at 864°/s) and the
+  bulk inserter at base hand **2** (~4.8/s) — slightly above this table's
+  5/1. The table's values are kept as the engine's constants: conservative
+  under-crediting is the safe direction for the sizing ladder and the
+  throughput validator, and re-blessing every golden for ≤20% headroom
+  isn't worth the churn. Revisit only if a real import shows starvation.
 - **I8a.** **Reach is asymmetric across variants.** Only `long-handed-inserter` is reach-2 in vanilla 2.0. There is **no** long-handed equivalent of `fast-inserter`, `stack-inserter`, or `bulk-inserter` — all of those are reach-1 only. A reach-2 slot (e.g. the far side of a 2-input belt row) is therefore capped at **~1.2 items/s base** (long-handed). Layout consequence: in a 2-input row, the higher-rate input must go in the near slot if its per-machine demand exceeds 1.2/s, since the far slot can only deploy long-handed inserters.
 
 - **I9.** **Stack inserter**: picks/drops multiple items per swing (stack size depends on research, max 12). Higher throughput than regular inserters. *(Relevant for high-throughput designs.)*

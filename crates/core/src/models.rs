@@ -155,6 +155,12 @@ pub struct PlacedEntity {
     /// Item or fluid name this belt/pipe is currently carrying.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub carries: Option<String>,
+    /// Factorio 2.0 build-quality tier of this entity (`None` = normal,
+    /// omitted from export). Parsed from community blueprints since
+    /// Phase 0 of `docs/rfp-build-quality.md`; stamped on functional
+    /// entities (machines/inserters/poles) at export from Phase 2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality: Option<crate::common::QualityTier>,
     /// Factorio Space Age fluid-box mirroring. When `true`, flips fluid port
     /// positions along the entity's primary axis, giving 8 orientations (4
     /// rotations × 2 mirrors). Ignored in Factorio 1.1. See `CLAUDE.md`.
