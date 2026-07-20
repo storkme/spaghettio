@@ -2254,17 +2254,20 @@ mod tests {
 // check_entity_overlaps
 // ---------------------------------------------------------------------------
 
-/// Collect all tiles occupied by an entity. Splitters occupy 2 tiles;
-/// machines occupy an N×N footprint; everything else occupies 1 tile.
+/// Collect all tiles occupied by an entity. Splitters occupy 2 tiles (an anchor
+/// plus a direction-dependent companion); everything else is footprint-checked
+/// via the shared [`crate::common::entity_size`] — machines get their N×N (or
+/// non-square) footprint, a substation its 2×2, and 1×1 entities (belts,
+/// inserters, pipes, poles) collapse to their single tile. Routing the fallback
+/// through `entity_size` (rather than defaulting non-machines to 1×1) is what
+/// makes a substation's full 2×2 visible to the overlap check — and keeps any
+/// future multi-tile non-machine footprint-checked by construction.
 fn entity_tiles(e: &PlacedEntity) -> Vec<(i32, i32)> {
     if is_splitter(&e.name) {
         return vec![(e.x, e.y), splitter_second_tile(e)];
     }
-    if is_machine_entity(&e.name) {
-        let (w, h) = machine_dims(&e.name);
-        return machine_tiles(e.x, e.y, w, h);
-    }
-    vec![(e.x, e.y)]
+    let (w, h) = crate::common::entity_size(&e.name);
+    machine_tiles(e.x, e.y, w, h)
 }
 
 /// Check for entities that physically overlap on the same tile.
@@ -2412,6 +2415,29 @@ mod overlap_tests {
             belt(3, 0, EntityDirection::East),
         ]);
         assert!(check_entity_overlaps(&lr).is_empty());
+    }
+
+    #[test]
+    fn substation_footprint_overlap_with_belt() {
+        // A substation is a 2×2 footprint occupying (0,0),(1,0),(0,1),(1,1).
+        // A belt on the (1,1) interior tile physically overlaps it. Before the
+        // fallback routed through `common::entity_size`, `entity_tiles` treated
+        // every non-machine/non-splitter as 1×1, so the substation's other three
+        // tiles were invisible and this overlap reported 0 issues.
+        let lr = make_layout(vec![
+            PlacedEntity {
+                name: "substation".to_string(),
+                x: 0,
+                y: 0,
+                direction: EntityDirection::North,
+                ..Default::default()
+            },
+            belt(1, 1, EntityDirection::East),
+        ]);
+        let issues = check_entity_overlaps(&lr);
+        assert_eq!(issues.len(), 1, "Expected 1 overlap at (1,1); got: {issues:?}");
+        assert_eq!(issues[0].x, Some(1));
+        assert_eq!(issues[0].y, Some(1));
     }
 
     #[test]
