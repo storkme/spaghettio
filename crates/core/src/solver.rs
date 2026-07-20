@@ -178,6 +178,13 @@ pub fn solve_with_palette_and_exclusions(
 /// Compatibility mode (Phase 1 behavior): the legacy tree walk picks the
 /// recipe set (JSON-first per item), then the LP re-derives flows over
 /// exactly that set. Kept for A/B comparison and the parity harness.
+///
+/// No quality support (rfp-build-quality): this entry always solves at
+/// `Normal`. Selection is quality-invariant so the walk needs nothing;
+/// if a future caller needs quality-scaled *counts* in compat mode,
+/// thread `NetflowOptions.quality` into the `solve_netflow` call below —
+/// see `solve_with_palette_exclusions_and_quality` for the free-mode
+/// shape.
 pub fn solve_compat_with_palette_and_exclusions(
     target_item: &str,
     target_rate: f64,

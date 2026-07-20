@@ -169,6 +169,18 @@ exactly the kind of off-by-one the differential tests target.
    badge/tint on entities (`web/src/renderer/entities.ts`) —
    cosmetic, user validates visually per standing feedback.
 
+**Phase 2 design note (2026-07-20, pre-build):** the validators read
+quality from **each entity** (`entity.quality.unwrap_or_default()`),
+not from a global param. Placement (ladder, placer, `place_poles`)
+stamps `PlacedEntity.quality` on the functional entities it creates
+from `LayoutOptions.quality`; export then just serializes what's
+stamped, and the quality-aware checks (inserter throughput, pole
+supply/wire) rate each entity by its own tier. This keeps a single
+ground truth per entity, makes mixed-quality layouts (Phase 3
+per-class overrides) free at the validator layer, and — because the
+parser now populates the same field — means validation of *imported*
+community quality blueprints works with zero extra plumbing.
+
 ### Pole placement: what scales for free vs. what a redesign could exploit
 
 Scope boundary, made explicit (user question, 2026-07-20): this RFP
@@ -463,8 +475,10 @@ Per the CLAUDE.md layout-change protocol:
   `solve_with_palette_exclusions_and_quality` entry, wasm `solve` +
   `solve_with_palette` accept optional quality (unknown → Normal).
   Kill 2a evidence: bit-identity boundary sweep + per-machine
-  bit-equality tests green; per-tier counts match the RFP's hand math
-  (legendary EC@60/s → 9.6). **One deviation from the design text**:
+  bit-equality tests green — **machine-speed third only**; the
+  inserter-throughput and pole-geometry thirds of the 2a sweep land
+  with their helpers in Phase 2. Per-tier counts match the RFP's hand
+  math (legendary EC@60/s → 9.6). **One deviation from the design text**:
   the legacy tree walk stays quality-blind rather than sharing the
   helper — recipe selection is quality-invariant (JSON-first / cost
   table, never speed) and the walk's counts are documented
