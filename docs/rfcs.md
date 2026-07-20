@@ -54,5 +54,6 @@ backfill the status next time the doc is touched.
 | RFC-040 | 2026-07-19 | [`rfc-power-supply.md`](rfc-power-supply.md) | Complete |
 | RFC-041 | 2026-07-20 | [`rfc-build-quality.md`](rfc-build-quality.md) | Complete (in-game anchor open) |
 | RFC-042 | 2026-07-20 | [`rfc-power-reservation.md`](rfc-power-reservation.md) | Complete |
+| RFC-043 | 2026-07-20 | [`rfc-043-pole-band-thinning.md`](rfc-043-pole-band-thinning.md) | Complete (Phase 1; Phase 2 cross-row sharing deferred) |
 
-Next number: **RFC-043**.
+Next number: **RFC-044**.

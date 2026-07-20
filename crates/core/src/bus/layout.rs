@@ -1189,7 +1189,7 @@ fn compute_extra_gaps(families: &[LaneFamily]) -> FxHashMap<usize, i32> {
     extra
 }
 
-/// rfp-pole-band-thinning (#310): depth slack a single band has after
+/// rfc-043-pole-band-thinning (#310): depth slack a single band has after
 /// spanning from its candidate row to the OPPOSITE inserter row
 /// (`mh + 1` tiles away). Negative at Normal for every machine height
 /// (pole_range 3 < mh+1 ≥ 4) — the single-band gate (`budget >= 1`)
@@ -1269,7 +1269,7 @@ fn place_band_line(
     }
 }
 
-/// Single-band mode's unified pass (rfp-pole-band-thinning v2): tries
+/// Single-band mode's unified pass (rfc-043-pole-band-thinning v2): tries
 /// the truncated north window first, then the truncated south window —
 /// within the depth budget the two are coverage-INTERCHANGEABLE (a
 /// south pole at depth d covers the north inserter row by the same
@@ -1947,7 +1947,7 @@ mod tests {
         );
     }
 
-    /// Band-adequacy invariant (issue #315, `docs/rfp-build-quality.md`):
+    /// Band-adequacy invariant (issue #315, `docs/rfc-build-quality.md`):
     /// `compute_substation_bands`'s `SUBSTATION_BAND_TILES` geometry is tuned
     /// at Normal-tier reach — a fixed row-count constant that never changes
     /// with quality. What DOES change is the covering pole's own supply

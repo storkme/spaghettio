@@ -1,4 +1,4 @@
-# RFP: Quality-aware pole-band thinning (#310)
+# RFC-043: Quality-aware pole-band thinning (#310)
 
 Status: ACCEPTED-PENDING-IMPLEMENTATION v2 (2026-07-20) — Phase 0
 census done; adversarial review round 1 complete (one blocker + two
@@ -10,7 +10,7 @@ At build quality ≥ Uncommon, a single medium-pole band can cover BOTH
 of a machine row's inserter rows — the reason `place_poles` emits two
 bands per row is purely the Normal-tier radius (floor 3, which cannot
 span the `mh+1` distance from one band to the opposite inserter row).
-This RFP gates the south band off per row when the quality radius
+This RFC gates the south band off per row when the quality radius
 affords it **with at least one tile of depth slack** (`budget ≥ 1` —
 see the gate), one unified placement pass per qualifying row with
 per-target fallback, and the existing mop-up + reactive-substation
@@ -18,10 +18,10 @@ machinery unchanged as backstops. Normal-quality layouts are
 structurally untouched (the gate can never fire at radius 3), and the
 corpus's only live substation user is already dormant at every
 qualifying tier (kovarex 3b fallback fires at Normal only — pinned by
-`quality_differential_kovarex_self_loop_normal_vs_legendary`, #315). Follow-up to `docs/rfp-build-quality.md`; tracked as
+`quality_differential_kovarex_self_loop_normal_vs_legendary`, #315). Follow-up to `docs/rfc-build-quality.md`; tracked as
 [#310](https://github.com/storkme/spaghettio/issues/310); sibling
 thread [#315](https://github.com/storkme/spaghettio/issues/315)
-(power-arc quality verification) proceeds in parallel and this RFP must
+(power-arc quality verification) proceeds in parallel and this RFC must
 not touch its surface (see kill criterion 4).
 
 ## Motivation (Phase 0 census, 2026-07-20)
@@ -44,7 +44,7 @@ express (the build-quality reference config), measured via
 (The PU config carries non-power junction/belt errors at Rare+ — the
 documented machine-count-collapse gap, #135/#136/#312 — but its
 power-category results are clean at every tier, so its pole census is
-valid for this RFP's purposes.)
+valid for this RFC's purposes.)
 
 Every remaining pole row is one of a north/south pair whose partner is
 redundant at quality: a legendary pole's ±8 vertical reach covers a
@@ -53,7 +53,7 @@ depth to spare. Expected effect of thinning: roughly half the
 remaining poles at qualifying tiers (legendary ~60 → ~35 on the census
 config), zero effect at Normal. The user-visible symptom today is the
 browser eyeball: legendary layouts show doubled bands of nearly-idle
-poles (the exact trigger condition the build-quality RFP recorded for
+poles (the exact trigger condition the build-quality RFC recorded for
 pulling this work forward).
 
 ## Design
@@ -199,7 +199,7 @@ per-tier NET pole assertion catches any bridge-bloat wash.
 
 #315 (verification sweep) runs first/parallel on the UNthinned
 geometry, establishing the per-tier baseline the kill-3 differentials
-compare against. This RFP's changes land after the sweep's baseline is
+compare against. This RFC's changes land after the sweep's baseline is
 recorded, so any regression is attributable. Both threads read the
 same shared helpers; only this one writes `place_poles`.
 
@@ -245,7 +245,7 @@ same shared helpers; only this one writes `place_poles`.
 - *2026-07-20 — implementation adversarial review: **clean, zero
   BUG/RISK findings**. Refactor fidelity verified statement-for-
   statement against the pre-commit loop; unified-pass ordering matches
-  the RFP; the fallback-tile far-side x-gap and the top_y=0
+  the RFC; the fallback-tile far-side x-gap and the top_y=0
   empty-north edge both confirmed pre-existing/identical behavior, not
   Phase-1 regressions; degenerate-path ordering sound (sorted
   subsequence); gate-table boundaries hand-verified with no
