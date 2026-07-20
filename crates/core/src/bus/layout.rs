@@ -1135,41 +1135,37 @@ fn compute_extra_gaps(families: &[LaneFamily]) -> FxHashMap<usize, i32> {
     extra
 }
 
-/// Place medium electric poles for power coverage.
+/// Place power poles for grid coverage. Runs LAST in `build_bus_layout`, after
+/// `route_bus_ghost` — poles live on leftover tiles and are never router
+/// obstacles (invariant restored in Phase 0f, `docs/rfp-power-supply.md`).
 ///
-/// Strategy: one horizontal pole line per machine row. Within a line, poles
-/// are placed by greedy forward sweep — for each machine not yet covered, we
-/// choose the rightmost pole position that still covers it, then advance past
-/// every machine the new pole reaches. This guarantees edge machines are
-/// covered (which a fixed-stride approach cannot) while still producing
-/// regularly-spaced poles.
+/// For any `substation_targets` (RFP `docs/rfp-power-reservation.md` Phase
+/// 3a-ii/3b) a substation is dropped into each widened band FIRST, so its 18×18
+/// supply reaches the deep-packed inserter rows no medium pole can; every other
+/// row is covered by medium-electric-poles. `substation_targets` is empty for
+/// every layout the two-band + mop-up covers, keeping those byte-identical.
 ///
-/// Pole y for a row is `machine_row_y - 1` (one tile above the machine tops).
-/// With a 3-tile supply range that covers machine centers one tile below the
-/// pole line comfortably. The tile above the machine row is typically the
-/// inserter row, which has gaps every ~3 tiles between inserters — the probe
-/// finds those gaps.
+/// Medium-pole strategy (post-0f): for each machine row, seed TWO candidate
+/// bands from the shared `common::pole_candidate_ys` — a north band on the
+/// input-inserter row (covers the machine's north face) and a south band on the
+/// output-inserter row (south face) — and search each outward, AWAY from the
+/// machine, so a saturated inserter/belt band is still covered from the first
+/// free row beyond it. A single band would leave the opposite inserter row at
+/// Chebyshev distance `mh+1` (=4 for a 3×3 machine, one tile past the ±3 supply
+/// area) — the systemic 40-52% uncovered-inserter signature Phase 0c measured,
+/// now that electric inserters (not just machine centers) are coverage
+/// subjects. Within a band a greedy forward sweep places a pole in `cx-2..cx+2`
+/// (rightmost-first, covering the whole inserter footprint) with a center-only
+/// fallback at `cx±pole_range`, then advances past every machine the pole still
+/// covers.
 ///
-/// Connectivity is guaranteed by construction:
-/// - Within a line: consecutive pole x-distance <= 6 < `WIRE_REACH` (9).
-/// - Between lines: row cycle (row height + gap) is typically ~7 tiles <
-///   wire-reach, so pole lines above consecutive rows connect vertically.
-///
-/// The old greedy + centroid-bridge implementation produced clumpy, order-
-/// dependent output; this approach is deterministic, regular, and matches the
-/// row-based structure of the bus layout.
 /// `machines` entries are `(center_x, top_y, height)` — height (not width)
-/// because every use below (row grouping, below-row fallback y) is a
-/// vertical offset from the machine row.
-/// Places medium-electric-pole lines to cover the machine rows and their
-/// electric inserters — and, for any `substation_targets` (RFP
-/// `docs/rfp-power-reservation.md` Phase 3a-ii), drops substations into the
-/// widened bands FIRST so their 18×18 supply reaches the deep-packed inserter
-/// rows no medium pole can. Returns `(poles, uncovered_inserters)` — the second
-/// element is the set of electric inserters NEITHER a substation NOR a medium
-/// pole could reach (the `give_up` set), the reactive substation pass's trigger.
-/// `substation_targets` is empty for every layout the two-band + mop-up covers,
-/// keeping those byte-identical.
+/// because every use below (row grouping, below-row fallback y) is a vertical
+/// offset from the machine row. Returns `(poles, uncovered_inserters)` — the
+/// second element is the set of electric inserters NEITHER a substation NOR a
+/// medium pole could reach (the `give_up` set), the reactive substation pass's
+/// trigger; a final `repair_pole_connectivity` bridges any disconnected pole
+/// clusters.
 fn place_poles(
     machines: &[(i32, i32, i32)],
     inserters: &[(i32, i32)],

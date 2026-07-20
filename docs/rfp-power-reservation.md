@@ -400,17 +400,80 @@ helper is scoped as explicit 3a work — not assumed to exist.
   STRESSGOLD `=check` byte-identical (8/8 — no fixture moved), full suite green
   (lib + e2e 50), clippy lib clean, wasm target check clean.*
 
+- *2026-07-20 — **chemical@10 accounting closed (arc review).** The reservation
+  RFP promised "the gauntlet is run once for the non-gating pair," but the 3c
+  close-out accounted only USP — chemical-science-pack @ 10/s, the *other*
+  non-gating wall case, never made it onto the record. The arc reviewer ran it;
+  this unit re-ran it independently to confirm: **0 power-category issues** —
+  15777 entities, **998 poles (0 substations)**, the reactive band-widening
+  pass fired **once** (a single `LayoutRetried`) and **converged** (no
+  `ReactivePassNotConverged`; zero uncovered inserters), the widening alone
+  landing every freed inserter row within a medium pole's ±3 (no substation
+  needed). The layout carries **6 pre-existing non-power errors** (belt-loop,
+  lane-throughput, underground-belt, unresolved-junction) that are **out of
+  this arc's scope** — routing / junction quality on a 10/s chemical wall, not
+  power. So the power arc is clean on **both** non-gating wall cases, not just
+  the one the 3c close-out named.*
+
 ## Phase 3 complete
 All of Phase 3 (3a-i, 3a-ii, 3b, 3c) is landed. Reactive band-widening clears
 all five hard cases — EC@20, EC@60-red, PU-am3, PU-am2-baseline via medium poles
 (the substation premise falsified there), kovarex via the substation fallback
 (premise vindicated) — plus the non-gating USP via a second substation. The
-corpus sits at **zero pinned honest-red power warnings**; the substation
-machinery is exercised, not speculative; and both review followups (convergence
-assertion + zero-margin comment) are in. Trigger (a) is unchanged (18 solid
-zero-slack, already-activated) and trigger (b) is re-anchored to the 4251-pole
-post-3b baseline. No remaining Phase 3 followups.
+substation machinery is exercised, not speculative; and both 3c review followups
+(convergence assertion + zero-margin comment) are in. Trigger (a) is unchanged
+(18 solid zero-slack, already-activated) and trigger (b) is re-anchored to the
+4251-pole post-3b baseline.
+
+**Scope of "zero power warnings" (clarified 2026-07-20, arc review).** The
+"zero" is **power-category only** and covers two named scopes: the **census
+corpus** (the 45/49-case snapshot set) and the **pinned e2e fixtures** (the
+five gating pins + the non-gating `census_utility_science_pack`) all read 0
+power warnings/errors; the **gauntlet non-gating pair** — USP @ 1/s and
+chemical @ 10/s — likewise reads **0 power-category issues**, but those gauntlet
+layouts still carry *non-power* errors (chemical@10: 6 — belt-loop /
+lane-throughput / underground-belt / unresolved-junction) that are out of this
+arc's scope. It is NOT a claim that the whole corpus validates clean.
+
+**Remaining after the 2026-07-20 arc review.** The earlier "no remaining Phase
+3 followups" was wrong; the independent arc review found live gaps. The three
+code defects it raised are **fixed** on `arc-review-response` (F1 overlap
+footprint, F2 pole-repair metric ↔ emitted wires, F3 dead router pole param —
+see CLAUDE.md's file table / the fix commits). What **still remains**, none of
+it landed here:
+- **F4 — the footprint-table quartet is not unified.** `check_power_coverage`
+  (power.rs:62) hardcodes the supply-source filter to `medium-electric-pole ||
+  substation` (2 types), disagreeing with `power_wires::is_pole` (4 types:
+  medium / small / substation / big); and `common::supply_area_distance` falls
+  back to the medium value (3.5) for any non-substation, so a small pole (real
+  2.5) or big pole (real 2.0) would be given the wrong coverage radius AND be
+  skipped as a source entirely. `entity_size`, `supply_area_distance`,
+  `wire_reach`/`is_pole` should be unified behind one pole-attribute table with
+  a drift test, the way Phase 3a-i unified the two `POLE_RANGE = 3` constants.
+  Latent today (the generator only ever places medium + substation) but a trap
+  for any future pole tier.
+- **F5 — reactive-pass / census edge cases (not fixed here):** (a) the
+  `give_up` set ignores substation coverage of *non-target* inserters — a
+  substation placed for one band may already cover a neighbouring band's
+  inserter, but the give-up accounting doesn't credit it; (b) **machine**
+  starvation does not trigger the reactive pass (only uncovered *inserters*
+  do), so a genuinely uncovered machine would not widen; (c) the `PoleSlack`
+  trace's substation window disagrees with `pole_census.py`'s substation
+  handling (the census excludes the 2×2 substation from the ±3 medium-slack
+  analysis; the instrument's window does not match by construction); (d)
+  consider promoting `ReactivePassNotConverged` from a trace event to a
+  first-class `ValidationIssue` so non-convergence surfaces in the normal
+  validator output, not only in snapshots.
+- **USP's substation path is ignored-test-only.** The deep-geometry USP
+  fallback substation is exercised only by the `#[ignore]`d
+  `census_utility_science_pack` gauntlet case, not a promoted e2e regression
+  test — a future geometry change that silently re-routes its coverage would
+  not fail the default suite (only kovarex's substation is pinned by a
+  non-ignored test).
 
 **Open (out of Phase 3 scope):** the arc's ultimate anchor — in-game import of
 one starved layout — remains a user step, carried alongside the inserter-sizing
-RFP's KC5 anchors; validator-verified only until then.
+RFP's KC5 anchors; validator-verified only until then. **THE WIRES ARC** (the
+export encoded no pole copper wires until `a7d9a48`; every prior export pasted
+power-dead) is the strongest evidence yet that this anchor is not optional —
+recorded in full in `docs/rfp-power-supply.md`'s decision log (2026-07-20).

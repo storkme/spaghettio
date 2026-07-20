@@ -62,10 +62,12 @@ METHODOLOGY CAVEATS (read before trusting the numbers):
   - Occupancy for slack purposes mirrors bus/layout.rs's own construction
     exactly: machine footprints expanded via MACHINE_DIMS, splitters get
     their second tile via direction, everything else is a single tile.
-    Poles are modelled as single-tile (matches place_poles' own internal
-    collision check, `placed.insert((px, py))` -- NOT the pole's real 2x2
-    Factorio footprint). This is a deliberate fidelity-to-the-algorithm
-    choice, flagged here so it isn't mistaken for "true" occupancy.
+    Medium poles are modelled as single-tile, which is EXACT: a
+    medium-electric-pole is 1x1 in Factorio (`common::entity_size`), so the
+    single tile IS its true footprint and it matches place_poles' own internal
+    collision check (`placed.insert((px, py))`). (Substations are the only 2x2
+    pole; they are modelled at their real 2x2 footprint separately -- see the
+    substation handling below.)
 """
 import base64
 import gzip
