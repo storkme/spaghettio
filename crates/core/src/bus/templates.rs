@@ -1659,12 +1659,47 @@ pub fn triple_input_row(
     let gap_col: Option<i32> = bridge_anchor.map(|a| mxs[a] + pitch);
     let belt3_y = y_offset + 3 + msz + 2;
 
+    // Near/far contested-column baselines for the input1/input2 pair —
+    // identical geometry to `dual_input_row` (far long-hand picks at dx=0,
+    // near regular/stack at dx=2, the single dx=1 column between them
+    // shared). Hoisted above the loop so the last-in-row belt extension
+    // below can reason about the contested column before stamping belt 1.
+    const FAR_BASELINE_DX: i32 = 0;
+    const NEAR_BASELINE_DX: i32 = 2;
+
     for (mi, &mx) in mxs.iter().enumerate() {
         let is_last = mx == last_mx;
-        let in1_stop = if is_last { msz - in1_tail } else { msz };
         let in2_stop = if is_last { msz - in2_tail } else { msz };
         let in3_stop = if is_last { msz - in3_tail } else { msz };
         let out_stop = if is_last { msz - out_tail } else { msz };
+
+        // Far input belt (belt 1) span. Same last-in-row trim starvation as
+        // `dual_input_row`: at the last machine the far belt is trimmed to
+        // dx=0 (`in1_tail`), which strips the near/far contested column of a
+        // belt tile so the far side's long-handed ladder caps at one inserter
+        // and `place_poles` parks a pole in the vacated slot. When that cap is
+        // real, one extra belt column would let the ladder fully cover — the
+        // added column is a genuine free contested tile still under the near
+        // belt, and the near side itself needs no extra column — extend the
+        // far belt by exactly one tile. The existing contest + reach-2 ladder
+        // then place the second long-handed inserter and the pole relocates on
+        // its own. Mirrors `dual_input_row` (0d7132c); input3's own
+        // (full-width) belt is untouched. See `docs/rfp-inserter-sizing.md`.
+        let mut in1_stop = if is_last { msz - in1_tail } else { msz };
+        if is_last {
+            let new_dx = in1_stop; // first dx a one-tile extension would add
+            let contested =
+                new_dx > FAR_BASELINE_DX && new_dx < NEAR_BASELINE_DX && new_dx < in2_stop;
+            let far_capped =
+                size_side(far_rate, Reach::Far, 0, max_inserter_tier).shortfall.is_some();
+            let far_covered_extended =
+                size_side(far_rate, Reach::Far, 1, max_inserter_tier).shortfall.is_none();
+            let near_needs_no_extra =
+                size_side(near_rate, Reach::Near, 0, max_inserter_tier).shortfall.is_none();
+            if contested && far_capped && far_covered_extended && near_needs_no_extra {
+                in1_stop += 1;
+            }
+        }
 
         // Input belt 1 -- far belt (long-handed range)
         for dx in 0..in1_stop {
@@ -1696,10 +1731,10 @@ pub fn triple_input_row(
         // rationale as `dual_input_row`). Picks from y+0 (input1), drops
         // into machine at y+3.
         // Near/far contested column, same derivation as `dual_input_row`
-        // (identical belt/inserter geometry for this pair). `docs/rfp-
-        // inserter-sizing.md` Phase 3: far's reach-2 count-ladder is ACTIVE.
-        const FAR_BASELINE_DX: i32 = 0;
-        const NEAR_BASELINE_DX: i32 = 2;
+        // (identical belt/inserter geometry for this pair; `dx=1` at Interior,
+        // and also at LastInRow when the far belt was extended one tile above,
+        // otherwise near-only there). `docs/rfp-inserter-sizing.md` Phase 3:
+        // far's reach-2 count-ladder is ACTIVE.
         let far_candidates = free_extra_dx(in1_stop, &[FAR_BASELINE_DX, NEAR_BASELINE_DX]);
         let near_candidates = free_extra_dx(in2_stop, &[FAR_BASELINE_DX, NEAR_BASELINE_DX]);
         let near_far_eligible = !far_candidates.is_empty();
@@ -6165,6 +6200,94 @@ mod tests {
         // Output still gets its single regular (0.5/s, within 0.84/s).
         let out = assert_entity(&entities, 1, 6, "inserter");
         assert_eq!(out.carries.as_deref(), Some("advanced-circuit"));
+    }
+
+    #[test]
+    fn triple_input_row_far_capped_last_in_row_extends_belt_and_places_second_lhi() {
+        // Mirror of `dual_input_row`'s last-in-row far-belt extension
+        // (0d7132c) for the near/far pair of `triple_input_row`. Two
+        // machines (x=0 interior, x=3 last-in-row, no bridge). Far
+        // (copper-cable) at 2.0/s exceeds one long-handed inserter's 1.2/s
+        // ceiling but two cover it (2.4/s); near (plastic-bar) at 0.5/s
+        // needs no extra column. At the last machine the far belt would be
+        // trimmed to dx=0, starving the contested dx=1 column — the rider
+        // extends it one tile so the reach-2 ladder places the second LHI.
+        let (entities, _) = triple_input_row(
+            "advanced-circuit",
+            "assembling-machine-3",
+            3,
+            2,
+            0,
+            0,
+            ("copper-cable", "plastic-bar", "iron-plate"),
+            "advanced-circuit",
+            ("transport-belt", "transport-belt", "transport-belt"),
+            "transport-belt",
+            false, // lane_split
+            false, // west-flow output
+            2.0,   // far_rate (copper-cable) -- exceeds 1.2, two LHIs cover it
+            0.5,   // near_rate (plastic-bar) -- needs no extra column
+            0.5,   // input3_rate (iron-plate)
+            0.5,   // output_rate
+            InserterTier::default(),
+        );
+        // Last-in-row machine at mx=3. Far belt (y=0) extends one tile from
+        // its trimmed dx=0 baseline: x=3 AND x=4 present, x=5 still absent.
+        let b0 = assert_entity(&entities, 3, 0, "transport-belt");
+        assert_eq!(b0.carries.as_deref(), Some("copper-cable"));
+        let b1 = assert_entity(&entities, 4, 0, "transport-belt");
+        assert_eq!(b1.carries.as_deref(), Some("copper-cable"));
+        assert!(
+            entities.iter().find(|e| e.x == 5 && e.y == 0).is_none(),
+            "far belt must extend exactly one tile, not two"
+        );
+        // The reach-2 ladder places two long-handed inserters at the last
+        // machine: baseline dx=0 (x=3) and the freed contested dx=1 (x=4).
+        let far_lhis: Vec<_> = entities
+            .iter()
+            .filter(|e| {
+                e.y == 2
+                    && e.name == "long-handed-inserter"
+                    && e.carries.as_deref() == Some("copper-cable")
+                    && (e.x == 3 || e.x == 4)
+            })
+            .collect();
+        assert_eq!(far_lhis.len(), 2, "far should place 2 LHIs at the last machine: {far_lhis:?}");
+        // Near stays a single regular at its dx=2 baseline (x=5).
+        let near = assert_entity(&entities, 5, 2, "inserter");
+        assert_eq!(near.carries.as_deref(), Some("plastic-bar"));
+    }
+
+    #[test]
+    fn triple_input_row_far_capped_but_uncoverable_last_in_row_does_not_extend() {
+        // Guard symmetry with `dual_input_row`: when even a second LHI can't
+        // cover the far demand (2.4/s < far_rate), the rider must NOT extend
+        // the belt (no point adding a tile + inserter that still warns).
+        let (entities, _) = triple_input_row(
+            "advanced-circuit",
+            "assembling-machine-3",
+            3,
+            2,
+            0,
+            0,
+            ("copper-cable", "plastic-bar", "iron-plate"),
+            "advanced-circuit",
+            ("transport-belt", "transport-belt", "transport-belt"),
+            "transport-belt",
+            false,
+            false,
+            5.0, // far_rate -- 2 LHIs (2.4/s) still short, guard declines
+            0.5,
+            0.5,
+            0.5,
+            InserterTier::default(),
+        );
+        // Last machine mx=3: far belt stays trimmed to dx=0 (x=3 only).
+        assert!(entities.iter().any(|e| e.x == 3 && e.y == 0 && e.carries.as_deref() == Some("copper-cable")));
+        assert!(
+            entities.iter().find(|e| e.x == 4 && e.y == 0).is_none(),
+            "far belt must not extend when the extension can't cover the demand"
+        );
     }
 
     // ---- quad_input_row ----
