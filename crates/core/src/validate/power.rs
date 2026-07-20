@@ -19,12 +19,19 @@ use crate::validate::{Severity, ValidationIssue};
 /// Wire reach (tile distance between centers) for each pole type.
 const MEDIUM_POLE_WIRE_REACH: f64 = 9.0;
 const SMALL_POLE_WIRE_REACH: f64 = 7.5;
+/// Substation-to-substation copper wire reach (RFP Phase 3a-i; draftsman
+/// `maximum_wire_distance = 18`). A substation-to-medium-pole connection uses
+/// `min(18, 9) = 9` via the `ar.min(br)` rule in the connectivity walk.
+const SUBSTATION_WIRE_REACH: f64 = 18.0;
 
-/// Returns the center in tile-space for a pole at integer grid position.
-/// Both medium (2×2) and small (1×1) poles have their center at +0.5 from
-/// the top-left corner tile.
-fn pole_center(x: i32, y: i32) -> (f64, f64) {
-    (x as f64 + 0.5, y as f64 + 0.5)
+/// Center in tile-space of a power-distribution entity's footprint. medium /
+/// small-electric-poles are 1×1 (center +0.5); a substation is 2×2 (center
+/// +1.0). Size from the shared [`entity_size`] (RFP Phase 3a-i — the old
+/// hard-coded +0.5, and its comment calling the 1×1 medium pole "2×2", were
+/// both wrong for the substation).
+fn pole_center(name: &str, x: i32, y: i32) -> (f64, f64) {
+    let (w, h) = crate::common::entity_size(name);
+    (x as f64 + w as f64 / 2.0, y as f64 + h as f64 / 2.0)
 }
 
 /// Wire reach for a given pole name; returns `None` for unknown pole types.
@@ -32,6 +39,7 @@ fn wire_reach(name: &str) -> Option<f64> {
     match name {
         "medium-electric-pole" => Some(MEDIUM_POLE_WIRE_REACH),
         "small-electric-pole" => Some(SMALL_POLE_WIRE_REACH),
+        "substation" => Some(SUBSTATION_WIRE_REACH),
         _ => None,
     }
 }
@@ -51,7 +59,7 @@ pub fn check_pole_network_connectivity(layout: &LayoutResult) -> Vec<ValidationI
         .iter()
         .filter_map(|e| {
             wire_reach(&e.name).map(|r| {
-                let (cx, cy) = pole_center(e.x, e.y);
+                let (cx, cy) = pole_center(&e.name, e.x, e.y);
                 (cx, cy, r)
             })
         })
@@ -98,20 +106,30 @@ pub fn check_pole_network_connectivity(layout: &LayoutResult) -> Vec<ValidationI
     )]
 }
 
-/// Radius (in tiles) of a medium-electric-pole supply area.
-const POLE_RANGE: i32 = 3;
-
-/// Check that every machine is within range of a medium-electric-pole.
+/// Check that every electric entity is within a power pole's supply area.
 ///
 /// Returns a list of [`ValidationIssue`]s (all with severity `Warning`).
 pub fn check_power_coverage(layout_result: &LayoutResult) -> Vec<ValidationIssue> {
     let mut issues = Vec::new();
 
-    let pole_positions: Vec<(i32, i32)> = layout_result
+    // Supply sources: (center_x, center_y, supply_range) for every power-
+    // distribution entity — medium-electric-poles (range 3) and substations
+    // (range 9), both from the shared `pole_supply_range` (RFP Phase 3a-i,
+    // unifying the former `POLE_RANGE = 3` constant with its layout.rs twin).
+    // Substations don't appear in generated layouts yet (3a-i is non-layout-
+    // moving), so this is byte-identical on the corpus.
+    let pole_positions: Vec<(i32, i32, i32)> = layout_result
         .entities
         .iter()
-        .filter(|e| e.name == "medium-electric-pole")
-        .map(|e| (e.x, e.y))
+        .filter(|e| e.name == "medium-electric-pole" || e.name == "substation")
+        .map(|e| {
+            let (w, h) = crate::common::entity_size(&e.name);
+            (
+                e.x + w as i32 / 2,
+                e.y + h as i32 / 2,
+                crate::common::pole_supply_range(&e.name),
+            )
+        })
         .collect();
 
     if pole_positions.is_empty() {
@@ -146,7 +164,7 @@ pub fn check_power_coverage(layout_result: &LayoutResult) -> Vec<ValidationIssue
 
         let powered = pole_positions
             .iter()
-            .any(|(px, py)| (cx - px).abs() <= POLE_RANGE && (cy - py).abs() <= POLE_RANGE);
+            .any(|&(pcx, pcy, r)| (cx - pcx).abs() <= r && (cy - pcy).abs() <= r);
 
         if !powered {
             issues.push(ValidationIssue::with_pos(

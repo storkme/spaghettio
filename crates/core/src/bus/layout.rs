@@ -859,8 +859,11 @@ fn place_poles(
     inserters: &[(i32, i32)],
     occupied: &FxHashSet<(i32, i32)>,
 ) -> Vec<PlacedEntity> {
-    /// Supply range of a medium-electric-pole (Chebyshev, tiles).
-    const POLE_RANGE: i32 = 3;
+    // Supply half-extent of a medium-electric-pole (Chebyshev, tiles), from the
+    // shared `pole_supply_range` (RFP Phase 3a-i) so this placement radius and
+    // the power validator's coverage radius can never drift. place_poles still
+    // only places medium poles in 3a-i, so the value is unchanged (3).
+    let pole_range: i32 = crate::common::pole_supply_range("medium-electric-pole");
 
     if machines.is_empty() {
         return Vec::new();
@@ -900,7 +903,7 @@ fn place_poles(
         // line. Redundant machine-center coverage from the two lines is
         // fine; `repair_pole_connectivity` still bridges the row cluster.
         // Each band targets one inserter row and may place the pole up to
-        // POLE_RANGE tiles FURTHER from the machine than that row, so a
+        // pole_range tiles FURTHER from the machine than that row, so a
         // saturated inserter/belt band (high-throughput rows fill every
         // column of the input-inserter row and the belt rows above it) can
         // still be covered from the first free row beyond it. Ordered from
@@ -916,7 +919,7 @@ fn place_poles(
             .into_iter()
             .map(|cy| {
                 let dir = if cy < top_y { -1 } else { 1 };
-                (0..=POLE_RANGE)
+                (0..=pole_range)
                     .map(|d| cy + dir * d)
                     .filter(|&y| y >= 0)
                     .collect()
@@ -930,8 +933,8 @@ fn place_poles(
                 // cx-2..cx+2 (rightmost-first, for forward reach) covers the
                 // machine's whole inserter footprint. Try each candidate y
                 // (inserter row first), then the same y's with a center-only
-                // fallback tile (cx±POLE_RANGE) if the inserter-covering
-                // window is full. The old `cx + POLE_RANGE` alone left the
+                // fallback tile (cx±pole_range) if the inserter-covering
+                // window is full. The old `cx + pole_range` alone left the
                 // machine's own left inserter at distance 4.
                 let target_cx = cxs[i];
                 let mut placed_at: Option<(i32, i32)> = None;
@@ -945,7 +948,7 @@ fn place_poles(
                 }
                 if placed_at.is_none() {
                     'fallback: for &py in band_ys {
-                        for px in [target_cx + POLE_RANGE, target_cx - POLE_RANGE] {
+                        for px in [target_cx + pole_range, target_cx - pole_range] {
                             if !occupied.contains(&(px, py)) && !placed.contains(&(px, py)) {
                                 placed_at = Some((px, py));
                                 break 'fallback;
@@ -961,7 +964,7 @@ fn place_poles(
                         // Advance past every machine whose center this pole
                         // still covers (Chebyshev, x only).
                         i += 1;
-                        while i < cxs.len() && (cxs[i] - px).abs() <= POLE_RANGE {
+                        while i < cxs.len() && (cxs[i] - px).abs() <= pole_range {
                             i += 1;
                         }
                     }
@@ -979,7 +982,7 @@ fn place_poles(
     // Coverage-driven mop-up (RFP `docs/rfp-power-supply.md` Phase 0f): the
     // band lines above cover the standard input/output inserter rows, but
     // tall / HorizontalStack rows place inserters at offsets the bands don't
-    // reach. For any electric inserter still beyond POLE_RANGE of every
+    // reach. For any electric inserter still beyond pole_range of every
     // placed pole, place a pole at the free tile in its Chebyshev
     // neighbourhood that covers the most still-uncovered inserters (a greedy
     // set-cover step). Where no free tile exists in range, the inserter is
@@ -988,7 +991,7 @@ fn place_poles(
     let covered = |x: i32, y: i32, placed: &FxHashSet<(i32, i32)>| {
         placed
             .iter()
-            .any(|(px, py)| (x - px).abs() <= POLE_RANGE && (y - py).abs() <= POLE_RANGE)
+            .any(|(px, py)| (x - px).abs() <= pole_range && (y - py).abs() <= pole_range)
     };
     let mut give_up: FxHashSet<(i32, i32)> = FxHashSet::default();
     loop {
@@ -1000,18 +1003,18 @@ fn place_poles(
         let Some(&(ix, iy)) = uncovered.first() else {
             break;
         };
-        // Best free tile within POLE_RANGE of the target inserter, ranked by
+        // Best free tile within pole_range of the target inserter, ranked by
         // how many still-uncovered inserters it would also cover.
         let mut best: Option<((i32, i32), usize)> = None;
-        for dy in -POLE_RANGE..=POLE_RANGE {
-            for dx in -POLE_RANGE..=POLE_RANGE {
+        for dy in -pole_range..=pole_range {
+            for dx in -pole_range..=pole_range {
                 let (px, py) = (ix + dx, iy + dy);
                 if occupied.contains(&(px, py)) || placed.contains(&(px, py)) {
                     continue;
                 }
                 let n = uncovered
                     .iter()
-                    .filter(|&&(ux, uy)| (ux - px).abs() <= POLE_RANGE && (uy - py).abs() <= POLE_RANGE)
+                    .filter(|&&(ux, uy)| (ux - px).abs() <= pole_range && (uy - py).abs() <= pole_range)
                     .count();
                 if best.is_none_or(|(_, bn)| n > bn) {
                     best = Some(((px, py), n));
@@ -1040,7 +1043,7 @@ fn place_poles(
     // vs the census baseline = trigger (b)).
     //
     // Measured on the FINAL pole set (after band placement + mop-up + repair) in
-    // the census's `local_alternatives` window — same y, x within ±POLE_RANGE,
+    // the census's `local_alternatives` window — same y, x within ±pole_range,
     // excluding the pole's own tile and every other pole. This deviates from the
     // RFP brief's "at each pole's decision instant" framing on purpose: the
     // ground-truth census computes slack post-hoc over the *complete* pole set,
@@ -1053,7 +1056,7 @@ fn place_poles(
     let all_poles: FxHashSet<(i32, i32)> = entities.iter().map(|e| (e.x, e.y)).collect();
     for e in &entities {
         let (px, py) = (e.x, e.y);
-        let alternatives = (px - POLE_RANGE..=px + POLE_RANGE)
+        let alternatives = (px - pole_range..=px + pole_range)
             .filter(|&x| x != px && !occupied.contains(&(x, py)) && !all_poles.contains(&(x, py)))
             .count() as i32;
         crate::trace::emit(crate::trace::TraceEvent::PoleSlack { x: px, y: py, alternatives });

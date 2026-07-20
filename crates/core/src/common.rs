@@ -73,6 +73,41 @@ pub fn machine_dims(entity: &str) -> (u32, u32) {
     }
 }
 
+/// Footprint `(width, height)` in tiles for ANY placed entity — the single
+/// source both the blueprint center math and the power validator's pole
+/// geometry consult (RFP `docs/rfp-power-supply.md` Phase 3a-i). Machines defer
+/// to [`machine_dims`]; the substation is 2×2; everything else (medium/small
+/// poles, belts, inserters, pipes) is 1×1. Before this, `blueprint.rs` hard-
+/// coded `(1,1)` for every non-machine, so a substation would have exported at
+/// center `x+0.5` instead of `x+1.0`.
+pub fn entity_size(entity: &str) -> (u32, u32) {
+    if is_machine_entity(entity) {
+        machine_dims(entity)
+    } else if entity == "substation" {
+        (2, 2)
+    } else {
+        (1, 1)
+    }
+}
+
+/// Supply-area half-extent in tiles (Chebyshev, from the pole's center) for a
+/// power-distribution entity — THE shared value for the power validator's
+/// coverage check and `bus::layout::place_poles`, unifying the two formerly
+/// duplicated `POLE_RANGE = 3` constants (RFP Phase 3a-i).
+///
+/// `medium-electric-pole` is 3 (7×7 supply). `substation` is 9 (18×18 supply
+/// from its 2×2 center); because the footprint is even, an integer ±9 from the
+/// center tile reaches one tile past the exact supply on the + axis — a
+/// conservative bound for a coverage *guardrail*, and exact placement geometry
+/// is Phase 3a-ii's concern. Any other name falls back to the medium value (the
+/// coverage check only ever passes it a medium pole or a substation).
+pub fn pole_supply_range(entity: &str) -> i32 {
+    match entity {
+        "substation" => 9,
+        _ => 3,
+    }
+}
+
 /// Whether `entity` draws electricity from the power grid.
 ///
 /// The codebase's first energy-source fact (RFP `docs/rfp-power-supply.md`

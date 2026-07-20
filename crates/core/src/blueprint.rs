@@ -9,7 +9,6 @@ use flate2::write::ZlibEncoder;
 use flate2::Compression;
 use serde::Serialize;
 
-use crate::common::{is_machine_entity, machine_dims};
 use crate::models::LayoutResult;
 
 /// Factorio 2.0 inserter `filter_count` — every inserter type (`inserter`,
@@ -99,11 +98,10 @@ pub fn export(layout: &LayoutResult, label: &str) -> String {
                 entity_number: i + 1,
                 name: &ent.name,
                 position: {
-                    let (w, h) = if is_machine_entity(&ent.name) {
-                        machine_dims(&ent.name)
-                    } else {
-                        (1, 1)
-                    };
+                    // Footprint center from the shared `entity_size` (RFP
+                    // Phase 3a-i): a 2×2 substation exports at x+1.0, not the
+                    // x+0.5 the old machine-only lookup produced.
+                    let (w, h) = crate::common::entity_size(&ent.name);
                     Position {
                         x: ent.x as f64 + w as f64 / 2.0,
                         y: ent.y as f64 + h as f64 / 2.0,

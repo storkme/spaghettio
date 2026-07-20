@@ -1378,6 +1378,56 @@ fn phase0e1_biolubricant_biochamber() {
     assert_round_trip(&result);
 }
 
+// RFP `docs/rfp-power-supply.md` Phase 3a-i — substation as a first-class
+// entity. Non-layout-moving plumbing: the engine doesn't place substations yet
+// (3a-ii does), so this hand-places one and checks it powers, wires, exports,
+// and re-imports correctly. Guards the two latent bugs 3a-i fixed: blueprint
+// center math (2×2 → x+1.0, not x+0.5) and the size-aware pole geometry.
+#[test]
+fn phase3a_substation_first_class_entity() {
+    use spaghettio_core::models::{LayoutResult, PlacedEntity};
+    // A substation (2×2 at (0,0), supply center (1,1), ±9) powering an
+    // assembler at (3,3) (center (4,4), Chebyshev 3 ≤ 9) and wired to a
+    // medium-electric-pole at (5,0) (min(18,9)=9 reach; centers ~4.5 apart).
+    let layout = LayoutResult {
+        entities: vec![
+            PlacedEntity { name: "substation".into(), x: 0, y: 0, ..Default::default() },
+            PlacedEntity {
+                name: "assembling-machine-3".into(),
+                x: 3,
+                y: 3,
+                recipe: Some("iron-gear-wheel".into()),
+                ..Default::default()
+            },
+            PlacedEntity { name: "medium-electric-pole".into(), x: 5, y: 0, ..Default::default() },
+        ],
+        width: 14,
+        height: 14,
+        ..Default::default()
+    };
+
+    // The substation is a coverage source and a wire node.
+    let coverage = power::check_power_coverage(&layout);
+    assert!(coverage.is_empty(), "substation should power the assembler; got {coverage:?}");
+    let connectivity = power::check_pole_network_connectivity(&layout);
+    assert!(
+        connectivity.is_empty(),
+        "substation + medium pole should be one network; got {connectivity:?}"
+    );
+
+    // Round-trip: export writes the 2×2 center at (1.0,1.0); the parser (which
+    // already knew substation is 2×2) recovers the (0,0) top-left. The old
+    // machine-only export lookup wrote (0.5,0.5) → parsed back to (-1,-1).
+    let bp = blueprint::export(&layout, "phase3a-substation");
+    let parsed = blueprint_parser::parse_blueprint_string(&bp).expect("re-import");
+    let sub = parsed
+        .entities
+        .iter()
+        .find(|e| e.name == "substation")
+        .expect("substation present after round-trip");
+    assert_eq!((sub.x, sub.y), (0, 0), "substation top-left must round-trip exactly");
+}
+
 #[test]
 #[ntest::timeout(10000)]
 fn tier3_sulfuric_acid() {
