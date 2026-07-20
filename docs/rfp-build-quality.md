@@ -548,3 +548,9 @@ Per the CLAUDE.md layout-change protocol:
   `wasm-bindings/src/lib.rs` updated. Post-fix full suite 785/785.
   **Held open for the user**: full browser eyeball of a legendary
   layout, and the in-game import anchor (blocked on #313).*
+- *2026-07-20 — browser eyeball confirmed by the user ("badges look
+  good") after the in-game badge icons landed in the particle path
+  (`66589dd`; the first implementation only covered the Graphics
+  path — lesson recorded in `web/CLAUDE.md`). The only remaining open
+  verification item is the in-game import anchor, blocked on
+  [#313](https://github.com/storkme/spaghettio/issues/313).*
