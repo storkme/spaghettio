@@ -437,10 +437,16 @@ arc's scope. It is NOT a claim that the whole corpus validates clean.
 
 **Remaining after the 2026-07-20 arc review.** The earlier "no remaining Phase
 3 followups" was wrong; the independent arc review found live gaps. The three
-code defects it raised are **fixed** on `arc-review-response` (F1 overlap
-footprint, F2 pole-repair metric ↔ emitted wires, F3 dead router pole param —
-see CLAUDE.md's file table / the fix commits). What **still remains**, none of
+code defects it raised are **fixed** (F1 overlap footprint — `d5efe0b`
+"footprint-check multi-tile non-machines in overlap check"; F2 pole-repair
+metric ↔ emitted wires + F3 dead router pole param — `0398659` "align
+pole-repair metric with emitted wires; drop dead router pole param"). What **still remains**, none of
 it landed here:
+- **Kovarex's medium-pole count is unpinned.** The fixture pins
+  `substation_count == 1` and warnings-exactly-empty, but not the 6 medium
+  poles — the repair topology the F2 rewrite touched. A cheap
+  `assert_eq!(medium_count, 6)` beside the substation pin would lock it
+  (closure-check note, 2026-07-20); smaller cousin of the USP gap below.
 - **F4 — the footprint-table quartet is not unified.** `check_power_coverage`
   (power.rs:62) hardcodes the supply-source filter to `medium-electric-pole ||
   substation` (2 types), disagreeing with `power_wires::is_pole` (4 types:
