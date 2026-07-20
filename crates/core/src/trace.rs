@@ -616,6 +616,24 @@ pub enum TraceEvent {
         recipes: Vec<String>,
     },
 
+    /// The reactive power-repair pass (RFP `docs/rfp-power-reservation.md`
+    /// Phase 3a-ii / 3b) re-ran the full pipeline with widened substation bands,
+    /// but `place_poles` STILL reported uncovered electric inserters afterward —
+    /// the widen-plus-substation repair did NOT converge and this layout ships
+    /// power-broken. Every corpus fixture converges (the four gating pins +
+    /// kovarex + USP all reach zero uncovered), so this event firing means a
+    /// genuinely-new starved geometry with no pinning fixture. It is the loud,
+    /// release-surviving alarm the Phase 3a-ii review asked for: a
+    /// `debug_assert` would be skipped in release builds and ship the break
+    /// silently, so the non-convergence is surfaced as a trace event (lands in
+    /// snapshots / can drive a scoreboard) instead. No corpus case emits it.
+    ReactivePassNotConverged {
+        /// Electric inserters STILL uncovered after the repair pass.
+        uncovered_count: usize,
+        /// A capped, sorted sample of the still-uncovered inserter tiles for triage.
+        sample: Vec<(i32, i32)>,
+    },
+
     // A* route failure — a spec had no valid path after all iterations
     RouteFailure {
         /// The lane key (e.g. "tap:iron-plate:3:45" or "trunk:copper-wire:2")

@@ -259,8 +259,41 @@ fn run_layout_with_retry_inner(
     });
 
     let subs = (!substation_bands.is_empty()).then_some(substation_bands.as_slice());
-    let (result_2, _, _, _) =
+    let (result_2, _, _, uncovered_2) =
         layout_pass(solver_result, opts, Some(&merged_gaps), subs, top_widen, explicit_plan)?;
+
+    // Convergence guard (RFP `docs/rfp-power-reservation.md` Phase 3a-ii review
+    // followup). The reactive pass widened every starved band; if `place_poles`
+    // STILL gives up on any electric inserter, the repair did NOT converge and
+    // this layout ships power-broken. Every corpus fixture converges (the four
+    // gating pins + kovarex + USP all reach zero uncovered — the pins lock
+    // that), so a non-empty set here is a genuinely-new starved geometry with no
+    // pinning fixture. Emit a loud, release-surviving signal: a trace event
+    // (lands in snapshots / drives a scoreboard) plus an env-gated eprintln for
+    // local runs. NOT a `debug_assert` — release builds skip those and would
+    // ship the break silently, exactly the "new starved case ships uncovered
+    // without an alarm" hole the review flagged. This block is skipped whenever
+    // the set is empty (the converging path, i.e. the entire corpus), so it adds
+    // zero entities and leaves goldens byte-identical.
+    if !uncovered_2.is_empty() {
+        let mut sample = uncovered_2.clone();
+        sample.sort_unstable();
+        sample.truncate(16);
+        crate::trace::emit(crate::trace::TraceEvent::ReactivePassNotConverged {
+            uncovered_count: uncovered_2.len(),
+            sample,
+        });
+        if std::env::var("SPAGHETTIO_WARN_ON_STDERR").is_ok() {
+            eprintln!(
+                "spaghettio: reactive power-repair pass did NOT converge — {} electric \
+                 inserter(s) still uncovered after widening. This layout ships \
+                 power-broken; a new starved geometry needs a pinning fixture. See \
+                 docs/rfp-power-reservation.md Phase 3c. sample={:?}",
+                uncovered_2.len(),
+                uncovered_2.iter().take(8).collect::<Vec<_>>(),
+            );
+        }
+    }
     Ok(result_2)
 }
 
@@ -371,6 +404,21 @@ fn compute_substation_bands(
     // few tiles below. Held small on purpose — the freed rows are pure
     // y-translation cost (movement-budget criterion). Pinned by the four gating
     // fixtures + the kovarex self-loop.
+    //
+    // ZERO-MARGIN WARNING (RFP Phase 3a-ii close-out): this +2 widen was tuned
+    // so the four interior gating fixtures clear via ordinary MEDIUM poles, not
+    // substations — the freed band lands its covering pole at medium distance
+    // EXACTLY 3 (the electronic-circuit dual-input row has 2 belt rows, not the
+    // RFP-assumed 3, so +2 is just enough). That is edge-tight with ZERO margin:
+    // a template author who adds a belt row to a dual-input row, or shifts an
+    // inserter one tile deeper, tips distance 3→4 and re-uncovers those inserters
+    // — and 4 is outside the medium ±3, so the medium mop-up can't recover it.
+    // The only guard is the four `assert_warnings_exactly([(power, 0)])` pins
+    // (which flip loudly) plus the substation FALLBACK below (which fires only
+    // for inserters STILL 0/49-free after widening). If you change belt-row count
+    // or inserter depth in a dual-input template, re-run those pins and expect to
+    // re-derive this constant. Do NOT raise it blindly to buy margin: every extra
+    // tile is pure y-cost paid by the four fixtures whether or not they need it.
     const SUBSTATION_BAND_TILES: i32 = 2;
     let mut interior_rows_after: FxHashSet<usize> = FxHashSet::default();
     let mut top_edge_rows: FxHashSet<usize> = FxHashSet::default();
