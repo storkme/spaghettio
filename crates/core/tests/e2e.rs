@@ -7054,3 +7054,78 @@ fn quality_differential_ec_normal_vs_legendary() {
         "every stamped entity must round-trip through export+parse"
     );
 }
+
+/// Stress-scale legendary fixture (RFP kill criterion 5: capped at one
+/// blue belt, 45/s, until #311 closes — the 60/s headline re-lands
+/// after). EC from ore on express at Legendary: ~92 machines vs ~230 at
+/// Normal. 0 errors; the single warning is the known pre-existing
+/// input-rate-delivery demand-pull residual (same category CLAUDE.md
+/// documents on tier-4), pinned exactly so churn fails loudly. Kill 3
+/// check: no inserter-throughput warnings — every legendary side fits
+/// one column as predicted (tightest: cable 18.75/s vs legendary stack
+/// ~30/s).
+#[test]
+#[ntest::timeout(120000)]
+fn quality_ec_45s_express_legendary_from_ore() {
+    use spaghettio_core::common::QualityTier;
+    use spaghettio_core::recipe_db::MachinePalette;
+
+    let inputs: FxHashSet<String> =
+        ["iron-ore", "copper-ore"].iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "electronic-circuit",
+        45.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Legendary,
+    )
+    .unwrap_or_else(|e| panic!("solve: {e}"));
+
+    let count_of = |recipe: &str| {
+        sr.machines.iter().find(|m| m.recipe == recipe).map(|m| m.count).unwrap_or(0.0)
+    };
+    assert!((count_of("electronic-circuit") - 7.2).abs() < 1e-9);
+    assert!((count_of("copper-cable") - 10.8).abs() < 1e-9);
+    assert!((count_of("iron-plate") - 28.8).abs() < 1e-9);
+    assert!((count_of("copper-plate") - 43.2).abs() < 1e-9);
+
+    let layout_result = layout::build_bus_layout(
+        &sr,
+        layout::LayoutOptions {
+            strategy: Default::default(),
+            surplus_policy: Default::default(),
+            max_belt_tier: Some("express-transport-belt".to_string()),
+            row_layout: Default::default(),
+            max_inserter_tier: Default::default(),
+            quality: QualityTier::Legendary,
+            merge_tap: false,
+        },
+    )
+    .unwrap_or_else(|e| panic!("layout: {e}"));
+
+    let issues = validate::validate(&layout_result, Some(&sr), LayoutStyle::Bus)
+        .unwrap_or_else(|e| panic!("validate: {e}"));
+    let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
+    assert!(errors.is_empty(), "expected 0 errors, got {errors:?}");
+    for i in &issues {
+        assert_eq!(
+            i.category, "input-rate-delivery",
+            "only the known demand-pull residual is tolerated, got: [{}] {}",
+            i.category, i.message
+        );
+    }
+    assert!(
+        issues.len() <= 1,
+        "expected at most the single known input-rate-delivery residual, got {issues:?}"
+    );
+
+    // Functional entities stamped; logistics not (spot-check via export).
+    let bp = blueprint::export(&layout_result, "ec-45s-legendary");
+    let parsed = blueprint_parser::parse_blueprint_string(&bp).unwrap();
+    assert!(parsed
+        .entities
+        .iter()
+        .any(|e| e.quality == Some(QualityTier::Legendary)));
+}
