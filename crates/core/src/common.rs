@@ -383,8 +383,17 @@ pub const SPLITTER_ENTITIES: &[&str] =
     &["splitter", "fast-splitter", "express-splitter"];
 
 /// Inserter entity names.
+/// Electric inserters the engine and validators recognize. The ladder
+/// PLACES only regular/fast/stack (+ long-handed for reach-2); the 2.0
+/// `bulk-inserter` (base hand 2, research-scaled — table I8) is here for
+/// parsed community blueprints, which the per-entity validators rate via
+/// `inserter_throughput`. `burner-inserter` is deliberately absent:
+/// every member must be electric (see `needs_electricity`'s drift test).
+/// Naming note (#313, resolved 2026-07-20): `stack-inserter` IS the
+/// current Space Age stacking inserter — the engine's 12/s base matches
+/// its zero-research rate per I8; it is not a 1.x leftover.
 pub const INSERTER_ENTITIES: &[&str] =
-    &["inserter", "long-handed-inserter", "fast-inserter", "stack-inserter"];
+    &["inserter", "long-handed-inserter", "fast-inserter", "stack-inserter", "bulk-inserter"];
 
 /// Return `true` if `name` is a surface (above-ground) belt.
 pub fn is_surface_belt(name: &str) -> bool {

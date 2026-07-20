@@ -277,19 +277,31 @@ so its "0 errors" would otherwise inherit the blind spot — the precise
 trap CLAUDE.md's verification protocol warns about. Hence the Phase 2
 entry gate and kill criterion 5 below.
 
-### Pre-existing wrinkle, treated as out of scope
+### Naming wrinkle — RESOLVED 2026-07-20 (premise falsified, #313 closed)
 
-The ladder's fast mover is the 1.x name `stack-inserter` (12/s in
-`inserter_throughput`), while `blueprint.rs` also knows 2.0's
-`bulk-inserter` (2.4/s). In 2.0 the name `stack-inserter` denotes the
-*Space Age stacking inserter* (the 1.x entity was renamed
-`bulk-inserter` in 2.0.7 — verified). Quality treats entity names as
-opaque and multiplies whatever base number the table returns, so this
-RFP neither fixes nor worsens the naming split — but the 2.0-import
-consequences compound with quality stamping, so the naming
-reconciliation is tracked as
-[#313](https://github.com/storkme/spaghettio/issues/313) and must be
-resolved before the in-game import anchor runs.
+Earlier drafts of this section (and issue
+[#313](https://github.com/storkme/spaghettio/issues/313)) claimed the
+ladder's `stack-inserter` was a 1.x leftover whose 12/s modeled the
+2.0 `bulk-inserter`. The repo's own table I8
+(`docs/factorio-mechanics.md:116-117`) says otherwise, and the wiki
+confirms it: the engine's `stack-inserter` **is the current Space Age
+stacking inserter** (base hand ~5-6 via its built-in capacity bonus,
+~12-14/s at zero research, 864°/s — the top-throughput reach-1
+inserter), while `bulk-inserter` (the renamed 1.x stack inserter,
+base hand 2) is the strictly slower cousin the engine deliberately
+never places. Exports therefore import correctly into current Space
+Age as-is, and the in-game anchor was never actually blocked. The
+review chain half-verified this in both directions — the rename
+history is real, but nobody checked which entity the 12/s modeled
+until the user directed "use the most recent Space Age Factorio."
+Residual fixes that DID land: `bulk-inserter` added to the core and
+web recognition sets (parsed community blueprints validate/render it),
+and the web renderer gained a color entry for `stack-inserter` itself
+(our own top-rung inserters had been falling through to the
+generic-entity renderer). Belt *stacking* (the Space Age inserter's
+gimmick) remains unmodeled — at zero research it is inert, and with
+research it only makes real throughput exceed our plan, which is
+conservative in the safe direction.
 
 ### What this deliberately does not do
 
@@ -395,8 +407,9 @@ Per the CLAUDE.md layout-change protocol:
   fixture string into the lategame save; entities arrive at legendary
   (functional entities only — belts arrive normal, by design);
   spot-check a machine hits its planned rate. Held open in the
-  decision log until run. Blocked behind the stack/bulk naming
-  follow-up (see wrinkle above).
+  decision log until run. (Formerly listed as blocked behind a
+  stack/bulk naming follow-up — that premise was falsified and #313
+  closed; see the naming-wrinkle section. The anchor is unblocked.)
 
 ## Phasing
 
@@ -554,3 +567,15 @@ Per the CLAUDE.md layout-change protocol:
   path — lesson recorded in `web/CLAUDE.md`). The only remaining open
   verification item is the in-game import anchor, blocked on
   [#313](https://github.com/storkme/spaghettio/issues/313).*
+- *2026-07-20 — #313 resolved as premise-falsified (user directive:
+  "only use the most recent Space Age Factorio"). Table I8 + wiki
+  cross-check: the engine's `stack-inserter` IS the current Space Age
+  stacking inserter (~12/s base is its zero-research class, slightly
+  conservative vs the wiki's hand-6 numbers), and `bulk-inserter` is
+  the slower renamed 1.x entity the engine correctly never places —
+  exports import into current Space Age unchanged, so the in-game
+  anchor was never blocked. Landed: `bulk-inserter` added to core +
+  web inserter recognition sets, `stack-inserter` given a web renderer
+  color (it had been falling through to the generic renderer),
+  conservative-constants note added to I8. **The in-game import anchor
+  is now unblocked and is the RFP's sole open item.***

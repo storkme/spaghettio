@@ -58,6 +58,13 @@ const INSERTER_COLORS: Record<string, number> = {
   inserter: 0x6a8e3e,
   "fast-inserter": 0x4a90d0,
   "long-handed-inserter": 0xd04040,
+  // Space Age stacking inserter — what the sizing ladder places as its
+  // top rung (12/s base, table I8). Was missing here, so our own stack
+  // inserters fell through to the generic-entity renderer (#313).
+  "stack-inserter": 0x3ec96a,
+  // 2.0 bulk inserter (1.x "stack inserter" renamed): never placed by
+  // the engine, recognized for parsed community blueprints.
+  "bulk-inserter": 0x2fa89a,
 };
 
 const PIPE_COLOR = 0x8a8a8a;
