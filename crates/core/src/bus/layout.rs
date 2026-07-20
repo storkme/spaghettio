@@ -361,8 +361,11 @@ struct SubstationBand {
     /// rather than an `extra_gap_after_row` entry, and resolved to a
     /// `SubstationTarget` against the row's own input-inserter band (which sits
     /// deeper than the RFC-assumed `y_start..y_start+4` — the self-loop stacks
-    /// 5 belt/corridor rows above its inserters, so only a substation's ±9
-    /// supply reaches down from the top freed band).
+    /// 5 belt/corridor rows above its inserters, so only a substation's supply
+    /// reaches down from the top freed band (±9 at Normal, `common::
+    /// supply_area_distance("substation", quality)` at other tiers — quality
+    /// only ADDS reach per level, it never shrinks the Normal figure, so a
+    /// band that clears this at Normal clears it at every tier).
     top_edge: bool,
 }
 
@@ -395,8 +398,13 @@ struct SubstationTarget {
 ///   (`SubstationBand { row_after: 0, top_edge: true }`): a y-offset bump frees
 ///   rows between the bus header and row 0, and a substation dropped there
 ///   reaches DOWN over the row's input inserters (which the self-loop stacks
-///   5 belt/corridor rows below the top edge — beyond a medium pole's ±3, so
-///   only the substation's ±9 supply reaches them).
+///   5 belt/corridor rows below the top edge — beyond a medium pole's supply
+///   at every tier this constant was tuned against (±3 at Normal, growing
+///   +1/level), so only the substation's supply (±9 at Normal, likewise
+///   growing +1/level) reaches them). Per-tier note: quality can only widen
+///   both reaches, never narrow them, so this geometric argument holds at
+///   Normal and stays true — with growing slack — at every higher tier; see
+///   `substation_band_adequacy_widens_monotonically_per_quality_tier` below.
 ///
 /// One band per starved row; deduped and sorted. Empty for every layout the
 /// two-band + mop-up covers, so non-starved layouts never enter pass 2 on this
@@ -407,25 +415,43 @@ fn compute_substation_bands(
 ) -> Vec<SubstationBand> {
     // A substation is 2×2; two freed rows above the input belts give it a
     // footprint that routing rarely fully consumes, while keeping vertical
-    // supply reach (±9 from center) comfortably over the input-inserter row a
-    // few tiles below. Held small on purpose — the freed rows are pure
-    // y-translation cost (movement-budget criterion). Pinned by the four gating
-    // fixtures + the kovarex self-loop.
+    // supply reach comfortably over the input-inserter row a few tiles below
+    // (±9 at Normal — `common::supply_area_distance("substation", quality)`
+    // at other tiers; quality only widens this, see the per-tier note below).
+    // Held small on purpose — the freed rows are pure y-translation cost
+    // (movement-budget criterion). Pinned by the four gating fixtures + the
+    // kovarex self-loop.
     //
     // ZERO-MARGIN WARNING (RFC Phase 3a-ii close-out): this +2 widen was tuned
-    // so the four interior gating fixtures clear via ordinary MEDIUM poles, not
-    // substations — the freed band lands its covering pole at medium distance
-    // EXACTLY 3 (the electronic-circuit dual-input row has 2 belt rows, not the
-    // RFC-assumed 3, so +2 is just enough). That is edge-tight with ZERO margin:
-    // a template author who adds a belt row to a dual-input row, or shifts an
-    // inserter one tile deeper, tips distance 3→4 and re-uncovers those inserters
-    // — and 4 is outside the medium ±3, so the medium mop-up can't recover it.
-    // The only guard is the four `assert_warnings_exactly([(power, 0)])` pins
-    // (which flip loudly) plus the substation FALLBACK below (which fires only
-    // for inserters STILL 0/49-free after widening). If you change belt-row count
-    // or inserter depth in a dual-input template, re-run those pins and expect to
-    // re-derive this constant. Do NOT raise it blindly to buy margin: every extra
-    // tile is pure y-cost paid by the four fixtures whether or not they need it.
+    // AT NORMAL TIER so the four interior gating fixtures clear via ordinary
+    // MEDIUM poles, not substations — the freed band lands its covering pole
+    // at medium distance EXACTLY 3 (the electronic-circuit dual-input row has
+    // 2 belt rows, not the RFC-assumed 3, so +2 is just enough). That is
+    // edge-tight with ZERO margin AT NORMAL: a template author who adds a belt
+    // row to a dual-input row, or shifts an inserter one tile deeper, tips
+    // distance 3→4 and re-uncovers those inserters — and 4 is outside a
+    // NORMAL medium pole's ±3, so the medium mop-up can't recover it. The only
+    // guard is the four `assert_warnings_exactly([(power, 0)])` pins (which
+    // flip loudly) plus the substation FALLBACK below (which fires only for
+    // inserters STILL 0/49-free after widening). If you change belt-row count
+    // or inserter depth in a dual-input template, re-run those pins and expect
+    // to re-derive this constant. Do NOT raise it blindly to buy margin: every
+    // extra tile is pure y-cost paid by the four fixtures whether or not they
+    // need it.
+    //
+    // PER-TIER BEHAVIOR (rfc-build-quality / issue #315): `SUBSTATION_BAND_TILES`
+    // is a fixed row-count constant — the freed band's distance from the
+    // covered inserter row never changes with quality. What changes is the
+    // covering pole's own supply radius: `common::supply_area_distance` grows
+    // +1 tile per quality level (medium ±3 at Normal → ±4/±5/±6/±8 at
+    // Uncommon/Rare/Epic/Legendary; substation ±9 → ±10/±11/±12/±14). Higher
+    // quality can therefore only ADD slack to the zero-margin distance-3 case
+    // above — it can never make a Normal-adequate band inadequate. This is a
+    // one-directional (monotone) safety argument, not something the code
+    // re-derives per tier, so it is pinned by
+    // `substation_band_adequacy_widens_monotonically_per_quality_tier`
+    // (this module's test suite) rather than by re-running the constant's
+    // tuning at every tier.
     const SUBSTATION_BAND_TILES: i32 = 2;
     let mut interior_rows_after: FxHashSet<usize> = FxHashSet::default();
     let mut top_edge_rows: FxHashSet<usize> = FxHashSet::default();
@@ -1818,6 +1844,74 @@ mod tests {
                 SubstationBand { row_after: 0, extra: 2, top_edge: true },
             ],
         );
+    }
+
+    /// Band-adequacy invariant (issue #315, `docs/rfp-build-quality.md`):
+    /// `compute_substation_bands`'s `SUBSTATION_BAND_TILES` geometry is tuned
+    /// at Normal-tier reach — a fixed row-count constant that never changes
+    /// with quality. What DOES change is the covering pole's own supply
+    /// radius (`common::supply_area_distance`), which grows +1 tile per
+    /// quality level. This pins the resulting one-directional safety
+    /// argument: (a) every tier's substation supply distance is `>=`
+    /// Normal's, monotonically across ascending tiers; (b) a target inserter
+    /// that a substation band covers at Normal — the tightest, zero-margin
+    /// tier — stays covered, with an equal-or-wider window, at every higher
+    /// tier. Mirrors the `sub_covers` closure `place_poles` builds from the
+    /// same `supply_area_distance` call (`sub_lo = d-1, sub_hi = d`) without
+    /// reaching into that private closure.
+    #[test]
+    fn substation_band_adequacy_widens_monotonically_per_quality_tier() {
+        use crate::common::{supply_area_distance, QualityTier};
+
+        // (a) Supply distance is monotone non-decreasing across ascending
+        // tiers, and every tier is >= Normal's.
+        let normal_d = supply_area_distance("substation", QualityTier::Normal);
+        let mut prev_d = normal_d;
+        for tier in QualityTier::ALL {
+            let d = supply_area_distance("substation", tier);
+            assert!(
+                d >= normal_d,
+                "{tier:?}: supply_area_distance {d} must be >= Normal's {normal_d}"
+            );
+            assert!(
+                d >= prev_d,
+                "{tier:?}: supply distance must be monotone non-decreasing across ascending tiers"
+            );
+            prev_d = d;
+        }
+
+        // (b) The `sub_covers` coverage window (mirrors `place_poles`'s local
+        // closure: sub_lo = d-1, sub_hi = d) only widens as tier increases.
+        // Fix a substation position and an inserter position exactly at
+        // Normal's supply edge (ix = sx + 9): covered at Normal, and must
+        // stay covered — with a window that never shrinks — at every tier.
+        let (sx, sy) = (0, 0);
+        let (ix, iy) = (sx + 9, sy);
+        let window = |quality: QualityTier| -> (bool, i32, i32) {
+            let d = supply_area_distance("substation", quality) as i32;
+            let (lo, hi) = (d - 1, d);
+            let (lo_bound, hi_bound) = (sx - lo, sx + hi);
+            let covers = ix >= lo_bound && ix <= hi_bound && iy >= sy - lo && iy <= sy + hi;
+            (covers, lo_bound, hi_bound)
+        };
+
+        let (normal_covers, normal_lo, normal_hi) = window(QualityTier::Normal);
+        assert!(normal_covers, "sanity: target must be covered at Normal");
+
+        let (mut prev_lo, mut prev_hi) = (normal_lo, normal_hi);
+        for tier in QualityTier::ALL {
+            let (covers, lo, hi) = window(tier);
+            assert!(
+                covers,
+                "{tier:?}: a target covered at Normal must stay covered at every higher tier"
+            );
+            assert!(
+                lo <= prev_lo && hi >= prev_hi,
+                "{tier:?}: coverage window [{lo},{hi}] must widen or hold vs previous [{prev_lo},{prev_hi}], never shrink"
+            );
+            prev_lo = lo;
+            prev_hi = hi;
+        }
     }
 
     /// The substation FALLBACK branch: when an electric inserter is genuinely
