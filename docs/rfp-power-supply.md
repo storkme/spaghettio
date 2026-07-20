@@ -514,3 +514,25 @@ genuinely and cheaply deferred.
   and 2 of this RFP are all LANDED.** Remaining: Phase 3 (design accepted
   and committed, docs/rfp-power-reservation.md) and the trim rider (in
   flight).*
+- *2026-07-20 — **Phase 3 COMPLETE** (full arc in
+  `docs/rfp-power-reservation.md`: 3a-i, 3a-ii, 3b, 3c). Phase 3 delivered
+  **reactive band-widening** that clears all five hard cases — EC@20, EC@60-red,
+  PU-am3, PU-am2-baseline via **medium poles** (the freed +2 band lands the
+  covering pole at distance exactly 3), kovarex via the **substation fallback**
+  (its 5-row-deep top-edge recirc is beyond medium ±3). The RFP's
+  substation-necessity premise was **falsified for 4/5** (medium suffices
+  post-widen — the dual-input row has 2 belt rows, not the assumed 3) but
+  **vindicated for kovarex** and, as the post-3b re-census surfaced, for the
+  non-gating USP (a second deep-geometry substation case); the substation
+  machinery is thus **exercised in two real corpus cases, not dead code**. The
+  **corpus is at ZERO pinned honest-red power warnings** (the arc opened with 153
+  gating + 16 non-gating). Phase 3c re-anchored **trigger (b)** to the post-3b
+  49-case baseline (4251 poles; matched-45 growth +9 / +0.21%, every delta a
+  Phase-3 case, 40/45 cases byte-identical) and confirmed **trigger (a)**
+  unchanged (18 solid zero-slack, already-activated). Two review followups
+  landed: a `ReactivePassNotConverged` convergence signal (so a new starved case
+  can't ship uncovered without an alarm) and a zero-margin comment at the widen
+  constant. Re-census data + reproducible analysis:
+  `scripts/pole-census-2026-07-20-post3b.json` +
+  `scripts/pole_census_analysis.py`. Validator-verified only; the in-game import
+  anchor remains a user step.*
