@@ -321,7 +321,6 @@ pub fn route_bus_ghost(
     solver_result: &SolverResult,
     families: &[LaneFamily],
     row_entities: &[PlacedEntity],
-    pole_entities: &[PlacedEntity],
 ) -> Result<GhostRouteResult, String> {
     let mut entities: Vec<PlacedEntity> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
@@ -355,15 +354,6 @@ pub fn route_bus_ghost(
             hard.insert((e.x, e.y));
         }
     }
-    // Poles are placed before ghost routing but otherwise live outside the
-    // row_entities flow. Inject their 1×1 tiles into the hard set so SAT,
-    // ghost A*, and the junction solver all treat them as obstacles. Without
-    // this, SAT can stamp belts/UGs on top of a pole when it solves a
-    // junction whose grown bbox happens to overlap a pole tile.
-    for e in pole_entities {
-        hard.insert((e.x, e.y));
-    }
-
     // Reserve fluid lane tiles as hard obstacles (same logic as pole placer
     // in layout.rs: fluid lanes reserve the column from source_y to last tap_y).
     // Tracked in `fluid_reservations` too so the step-3.6 trunk emitter can
@@ -5608,7 +5598,7 @@ mod feeder_specs_skipped_tests {
 
         let _trace_guard = crate::trace::start_trace();
         let result = route_bus_ghost(
-            &lanes, &[], 50, 200, None, &solver_result, &[family], &[], &[],
+            &lanes, &[], 50, 200, None, &solver_result, &[family], &[],
         );
         let events = crate::trace::drain_events();
 
@@ -5663,7 +5653,7 @@ mod feeder_specs_skipped_tests {
 
         let _trace_guard = crate::trace::start_trace();
         let result = route_bus_ghost(
-            &lanes, &[], 50, 200, None, &solver_result, &[family], &[], &[],
+            &lanes, &[], 50, 200, None, &solver_result, &[family], &[],
         );
         let events = crate::trace::drain_events();
 
@@ -5704,7 +5694,7 @@ mod feeder_specs_skipped_tests {
 
         let _trace_guard = crate::trace::start_trace();
         let result = route_bus_ghost(
-            &lanes, &[], 50, 200, None, &solver_result, &[family], &[], &[],
+            &lanes, &[], 50, 200, None, &solver_result, &[family], &[],
         );
         let events = crate::trace::drain_events();
 

@@ -709,7 +709,6 @@ fn layout_pass(
         solver_result,
         &families,
         &row_entities,
-        &[], // poles are placed AFTER routing now — never a router obstacle
     )?;
     let bus_entities = ghost_result.entities;
     let max_y = ghost_result.max_y;
@@ -1466,22 +1465,40 @@ fn place_poles(
 }
 
 /// After the row lines are placed, bridge any remaining disconnected pole
-/// clusters. This only fires when two machine rows are further apart in Y
-/// than `WIRE_REACH` (e.g. oil-refinery row above a chemical-plant row with
-/// a pipe-routing gap between them). We walk intermediate poles down a
-/// free column between the two nearest clusters.
+/// clusters with medium-electric-poles. This fires when two pole clusters land
+/// further apart than their wire reach (e.g. an oil-refinery row above a
+/// chemical-plant row with a pipe-routing gap between them, or a substation
+/// that lands outside the medium network). We walk bridge poles between the two
+/// nearest clusters until the whole pole field is one connected component.
+///
+/// The connectivity metric MUST match the artifact the blueprint emits and the
+/// validator checks. [`crate::power_wires`] wires two poles iff the Euclidean
+/// distance between their footprint CENTERS is ≤ the *smaller* of the two poles'
+/// per-type wire reaches (min-of-both). Integer top-left deltas with one
+/// hardcoded reach diverged for substation↔medium pairs — a 2×2 substation's
+/// center is +1.0 and its reach 18, a medium's are +0.5 and 9 — so repair could
+/// call a pair connected that the emitted `wires` array left as two power-dead
+/// islands. Consuming `power_wires::{pole_center, wire_reach}` here makes repair
+/// and the emitted wire graph agree by construction.
 fn repair_pole_connectivity(
     entities: &mut Vec<PlacedEntity>,
     placed: &FxHashSet<(i32, i32)>,
     occupied: &FxHashSet<(i32, i32)>,
 ) {
-    /// Wire reach in tiles. Matches `validate::power::MEDIUM_POLE_WIRE_REACH`.
-    /// Two poles are connected iff `dx² + dy² ≤ WIRE_REACH²` (Euclidean) —
-    /// using Chebyshev here as a proxy is a near-miss bug: poles 7 right and
-    /// 6 down are Chebyshev=7 (looks connected) but Euclidean≈9.22 (actually
-    /// disconnected per the validator).
-    const WIRE_REACH: i32 = 9;
-    const WIRE_REACH_SQ: i32 = WIRE_REACH * WIRE_REACH;
+    use crate::power_wires::{pole_center, wire_reach};
+
+    // The bridge poles we drop are medium-electric-poles, so every reach test
+    // against a candidate bridge is min(medium, endpoint).
+    let medium_reach =
+        wire_reach("medium-electric-pole").expect("medium pole has a wire reach");
+    // Search radius (in tiles) for a free bridge tile around the midpoint. Must
+    // reach at least a medium's wire reach so that when the gap between
+    // components is wider than `2 * reach`, the scan can step *back* toward an
+    // endpoint and find a tile that's both free and within wire reach of `pa`
+    // or `pb`. With radius 6, gaps wider than 12 left the loop unable to drop a
+    // first bridge pole and the components stayed disconnected — see
+    // `tier4_advanced_circuit_from_ore_am2`, where the pa↔pb gap is ~32 tiles.
+    let scan_radius = medium_reach.ceil() as i32;
 
     let mut all_occupied: FxHashSet<(i32, i32)> = occupied.iter().copied().collect();
     for &p in placed {
@@ -1489,13 +1506,23 @@ fn repair_pole_connectivity(
     }
 
     for _ in 0..20 {
-        let positions: Vec<(i32, i32)> = entities.iter().map(|e| (e.x, e.y)).collect();
-        if positions.len() <= 1 {
+        let n = entities.len();
+        if n <= 1 {
             return;
         }
+        // Per-pole geometry: top-left (the bridge-midpoint seed) and the
+        // footprint center + per-type wire reach (the connectivity metric,
+        // identical to `power_wires::compute_pole_wires`).
+        let tops: Vec<(i32, i32)> = entities.iter().map(|e| (e.x, e.y)).collect();
+        let nodes: Vec<(f64, f64, f64)> = entities
+            .iter()
+            .map(|e| {
+                let (cx, cy) = pole_center(&e.name, e.x, e.y);
+                (cx, cy, wire_reach(&e.name).unwrap_or(medium_reach))
+            })
+            .collect();
 
-        // Union-find under Chebyshev distance <= WIRE_REACH.
-        let n = positions.len();
+        // Union-find over Euclidean center distance ≤ min-of-both reach.
         let mut parent: Vec<usize> = (0..n).collect();
         fn find(p: &mut [usize], mut x: usize) -> usize {
             while p[x] != x {
@@ -1506,9 +1533,11 @@ fn repair_pole_connectivity(
         }
         for i in 0..n {
             for j in (i + 1)..n {
-                let dx = positions[i].0 - positions[j].0;
-                let dy = positions[i].1 - positions[j].1;
-                if dx * dx + dy * dy <= WIRE_REACH_SQ {
+                let (ax, ay, ar) = nodes[i];
+                let (bx, by, br) = nodes[j];
+                let (dx, dy) = (ax - bx, ay - by);
+                let reach = ar.min(br);
+                if dx * dx + dy * dy <= reach * reach {
                     let ri = find(&mut parent, i);
                     let rj = find(&mut parent, j);
                     if ri != rj {
@@ -1518,53 +1547,48 @@ fn repair_pole_connectivity(
             }
         }
 
-        // Group by root component.
-        let mut by_comp: FxHashMap<usize, Vec<(i32, i32)>> = FxHashMap::default();
-        for (idx, &pos) in positions.iter().enumerate() {
+        // Group pole indices by root component.
+        let mut by_comp: FxHashMap<usize, Vec<usize>> = FxHashMap::default();
+        for idx in 0..n {
             let root = find(&mut parent, idx);
-            by_comp.entry(root).or_default().push(pos);
+            by_comp.entry(root).or_default().push(idx);
         }
         if by_comp.len() == 1 {
             return;
         }
 
-        // Find the closest inter-component pole pair.
-        let comps: Vec<&Vec<(i32, i32)>> = by_comp.values().collect();
-        // Squared Euclidean for closest-pair selection — order is identical to
-        // Euclidean and we avoid sqrt.
-        let mut best: Option<((i32, i32), (i32, i32), i32)> = None;
+        // Closest inter-component pole pair, by center distance (squared —
+        // order is identical to Euclidean and we avoid sqrt).
+        let comps: Vec<&Vec<usize>> = by_comp.values().collect();
+        let mut best: Option<(usize, usize, f64)> = None;
         for a in 0..comps.len() {
             for b in (a + 1)..comps.len() {
-                for &pa in comps[a] {
-                    for &pb in comps[b] {
-                        let dx = pa.0 - pb.0;
-                        let dy = pa.1 - pb.1;
+                for &ia in comps[a] {
+                    for &ib in comps[b] {
+                        let (ax, ay, _) = nodes[ia];
+                        let (bx, by, _) = nodes[ib];
+                        let (dx, dy) = (ax - bx, ay - by);
                         let d_sq = dx * dx + dy * dy;
                         if best.is_none_or(|(_, _, bd)| d_sq < bd) {
-                            best = Some((pa, pb, d_sq));
+                            best = Some((ia, ib, d_sq));
                         }
                     }
                 }
             }
         }
-        let Some((pa, pb, _)) = best else {
+        let Some((ia, ib, _)) = best else {
             return;
         };
+        let (pa, pb) = (tops[ia], tops[ib]);
 
-        // Pick a midpoint and walk outward in a small neighbourhood looking
-        // for a free tile to place a bridge pole. The search radius must
-        // reach at least `WIRE_REACH` so that for component pairs whose
-        // midpoint is more than `WIRE_REACH` away from both endpoints
-        // (i.e. when the gap between components is wider than `2 *
-        // WIRE_REACH`), the scan can step *back* toward an endpoint and
-        // find a tile that's both free and within wire reach of `pa` or
-        // `pb`. With radius 6, gaps wider than 12 left the loop unable
-        // to drop a first bridge pole and the components stayed
-        // disconnected — see `tier4_advanced_circuit_from_ore_am2`,
-        // where the pa↔pb gap is ~32 tiles.
+        // Seed the search at the top-left midpoint, then walk outward looking
+        // for a free tile within wire reach of one endpoint. A bridge is a
+        // medium pole at top-left `p` (center via `pole_center`, reach medium),
+        // so it wires to an endpoint iff their center distance ≤ min(medium,
+        // endpoint reach) — the exact test `power_wires` will apply.
         let mid = ((pa.0 + pb.0) / 2, (pa.1 + pb.1) / 2);
         let mut bridge: Option<(i32, i32)> = None;
-        'scan: for r in 0i32..=WIRE_REACH {
+        'scan: for r in 0i32..=scan_radius {
             for dy in -r..=r {
                 for dx in -r..=r {
                     if dx.abs() != r && dy.abs() != r {
@@ -1574,13 +1598,14 @@ fn repair_pole_connectivity(
                     if all_occupied.contains(&p) {
                         continue;
                     }
-                    // Must be within wire-reach of pa or pb for it to actually bridge.
-                    let near = |q: (i32, i32)| -> bool {
-                        let dx = p.0 - q.0;
-                        let dy = p.1 - q.1;
-                        dx * dx + dy * dy <= WIRE_REACH_SQ
+                    let (bcx, bcy) = pole_center("medium-electric-pole", p.0, p.1);
+                    let near = |node: (f64, f64, f64)| -> bool {
+                        let (nx, ny, nr) = node;
+                        let (dx, dy) = (bcx - nx, bcy - ny);
+                        let reach = medium_reach.min(nr);
+                        dx * dx + dy * dy <= reach * reach
                     };
-                    if near(pa) || near(pb) {
+                    if near(nodes[ia]) || near(nodes[ib]) {
                         bridge = Some(p);
                         break 'scan;
                     }
@@ -1789,6 +1814,53 @@ mod tests {
         let (ent2, unc2) = place_poles(&machines, &[ins], &occupied, &[]);
         assert!(ent2.iter().all(|e| e.name != "substation"));
         assert_eq!(unc2, vec![ins], "no band ⇒ the deep inserter stays uncovered");
+    }
+
+    /// F2 (arc review): `repair_pole_connectivity` must judge connectivity by
+    /// the SAME metric the blueprint emits and the validator checks —
+    /// `power_wires` (footprint centers, per-type min-of-both reach) — not
+    /// integer top-left deltas with one hardcoded reach. The divergent case: a
+    /// substation top-left (0,0) [center (1,1), reach 18] and a medium top-left
+    /// (-9,0) [center (-8.5,0.5), reach 9]. Center distance² = 9.5²+0.5² = 90.5
+    /// > min(18,9)² = 81, so the EMITTED wire graph does NOT directly connect
+    /// them (old repair's top-left d²=81 ≤ 81 wrongly called them connected and
+    /// left two power-dead islands). Repair must drop a bridge pole so the
+    /// emitted graph is one component.
+    #[test]
+    fn repair_bridges_substation_medium_at_wire_boundary() {
+        use crate::power_wires::{compute_pole_wires, count_disconnected_poles};
+
+        let sub = make_substation(0, 0);
+        let med = make_pole(-9, 0);
+        let mut entities = vec![sub.clone(), med.clone()];
+
+        // Pre-repair: the artifact-level wire graph leaves the boundary pair as
+        // two separate islands — exactly what the old top-left metric missed.
+        let wires = compute_pole_wires(&entities);
+        assert!(wires.is_empty(), "boundary pair must not directly wire; got {wires:?}");
+        assert_eq!(count_disconnected_poles(&entities, &wires), 1);
+
+        // `occupied` carries the substation's 2×2 footprint so a bridge never
+        // lands on it; `placed` carries the medium (mirrors the real caller).
+        let mut occupied: FxHashSet<(i32, i32)> = FxHashSet::default();
+        for dx in 0..2 {
+            for dy in 0..2 {
+                occupied.insert((sub.x + dx, sub.y + dy));
+            }
+        }
+        let placed: FxHashSet<(i32, i32)> = [(med.x, med.y)].into_iter().collect();
+
+        repair_pole_connectivity(&mut entities, &placed, &occupied);
+
+        // Post-repair: a bridge pole was added and the EMITTED wire graph is now
+        // a single connected component — repair and artifact agree.
+        assert!(entities.len() > 2, "repair must add at least one bridge pole");
+        let wires2 = compute_pole_wires(&entities);
+        assert_eq!(
+            count_disconnected_poles(&entities, &wires2),
+            0,
+            "after repair the emitted wire graph must be one connected component"
+        );
     }
 
     /// D2a (RFP Fulgora, `docs/rfp-fulgora-scrap.md`): a solid surplus
