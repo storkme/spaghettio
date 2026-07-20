@@ -6,7 +6,7 @@
 //! Mode D (`solve_synth_place` in `crates/balancer-gen/scripts/place.py`)
 //! synthesises splitters + belt routing in one CP-SAT solve for atomic
 //! shapes that don't decompose through the compose pipeline. Phase 2C
-//! of `docs/rfp-ug-sideload-prevention.md` ports our four UG-correctness
+//! of `docs/rfc-ug-sideload-prevention.md` ports our four UG-correctness
 //! constraints to Mode D; once that's done, we want an objective bar
 //! for "is Mode D output good enough?".
 //!
@@ -28,7 +28,7 @@
 //! ## Status
 //!
 //! Mode D doesn't have UG-correctness constraints yet — phase 2C work,
-//! tracked in the RFP. This test is scaffolded with `#[ignore]` and a
+//! tracked in the RFC. This test is scaffolded with `#[ignore]` and a
 //! TODO at the Mode D invocation site. When phase 2C lands, wire up
 //! `run_mode_d_for_shape` and remove the `#[ignore]`.
 //!
@@ -94,7 +94,7 @@ const COMPACTNESS_BARS: &[CompactnessBar] = &[
 ///     compare since it'll have sideloads.
 ///   - Convert the response into an `OwnedTemplate` and return it.
 ///
-/// See `docs/rfp-ug-sideload-prevention.md` § "Phase 2C: Mode D port".
+/// See `docs/rfc-ug-sideload-prevention.md` § "Phase 2C: Mode D port".
 fn run_mode_d_for_shape(_n: u32, _m: u32) -> Option<OwnedTemplate> {
     // TODO(phase 2c): wire up balancer-gen Mode D invocation.
     None
@@ -221,7 +221,7 @@ fn mode_d_matches_raynquist_baseline() {
             "Skipped {} shape(s) — run_mode_d_for_shape returned None: {skipped:?}",
             skipped.len()
         );
-        eprintln!("(this is expected until Phase 2C of rfp-ug-sideload-prevention.md is implemented.)");
+        eprintln!("(this is expected until Phase 2C of rfc-ug-sideload-prevention.md is implemented.)");
     }
 
     if !failures.is_empty() {

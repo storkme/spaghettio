@@ -94,10 +94,10 @@ pub(crate) fn balancer_origin_x(lane_xs: &[i32], output_tiles: &[(i32, i32)]) ->
 /// Build the `segment_id` string for a stamped balancer.
 ///
 /// Under `LayoutStrategy::Pooled` every family has `module_id == 0`,
-/// and the produced string is byte-identical to the pre-RFP format
+/// and the produced string is byte-identical to the pre-RFC format
 /// (`balancer:{item}:{n}x{m}` or `…:{group}` for decomposition). The
 /// `:mod{N}` suffix only appears when partitioning produced multiple
-/// modules per item — see `docs/rfp-modular-production.md`.
+/// modules per item — see `docs/rfc-modular-production.md`.
 fn format_segment_id(item: &str, module_id: u32, n: u32, m: u32, group: Option<usize>) -> String {
     let mut s = format!("balancer:{item}:{n}x{m}");
     if let Some(gi) = group {
@@ -135,7 +135,7 @@ pub(crate) fn is_passthrough_shape(n: u32, m: u32) -> bool {
 /// Used by the partitioner's shape-aware sharding decision: if a module's
 /// computed (n, m) shape isn't stampable, force-shard regardless of the
 /// usual lane-count threshold so the layout doesn't silently drop the
-/// producer→trunk handoff. See `docs/rfp-modular-production.md` and the
+/// producer→trunk handoff. See `docs/rfc-modular-production.md` and the
 /// PU@3/s ore red copper-plate (4, 9) bug for context.
 ///
 /// `n` is producer-row count, `m` is consumer lane count.
@@ -325,7 +325,7 @@ pub(crate) fn stamp_family_balancer(
 }
 
 /// Stamp a merge-and-tap family's `n → 1` splitter merge-tree at its trunk
-/// column (RFP `docs/rfp-merge-tap-trunks.md` D2). The merge-tree's single
+/// column (RFC `docs/rfc-merge-tap-trunks.md` D2). The merge-tree's single
 /// output is aligned onto `family.lane_xs[0]` exactly as a balancer's outputs
 /// align onto `lane_xs` (`balancer_origin_x`), so the trunk picks up below the
 /// merge-tree just like below a balancer block. Producer feeders are routed to

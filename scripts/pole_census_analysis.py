@@ -15,7 +15,7 @@ Env:
   SPAGHETTIO_CENSUS_OUT output path (default: scripts/pole-census-2026-07-20-post3b.json)
 
 Parts B/D/E operate on MEDIUM poles only (the ±3 densification subjects);
-part C's pole totals include substations (RFP Phase 3b). See pole_census.py's
+part C's pole totals include substations (RFC Phase 3b). See pole_census.py's
 module docstring for the substation-handling rationale + methodology caveats.
 """
 import json
@@ -239,7 +239,7 @@ def main():
 
     out = {
         "meta": {
-            "purpose": "POST-Phase-3b power re-census (docs/rfp-power-reservation.md Phase 3c)",
+            "purpose": "POST-Phase-3b power re-census (docs/rfc-power-reservation.md Phase 3c)",
             "commit": "ca8730e (Phase 3b landed; reactive band-widening 3a-ii + kovarex top-edge substation)",
             "generated": "2026-07-20",
             "n_snapshots": len(cases),
@@ -253,7 +253,7 @@ def main():
             ),
             "regeneration_commands": post0f["meta"]["regeneration_commands"],
             "substation_handling": (
-                "Substation (RFP Phase 3b) is a NEW pole TYPE: counted in part-C pole totals "
+                "Substation (RFC Phase 3b) is a NEW pole TYPE: counted in part-C pole totals "
                 "(real_pole_count = medium + substation) and modelled as a 2x2 slack obstacle, "
                 "but EXCLUDED from the part-B ±3 medium-pole slack analysis. pole_census.py was "
                 "extended for this (previously it counted medium-electric-pole only)."

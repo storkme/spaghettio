@@ -69,7 +69,7 @@ pub struct RowSpan {
     /// `LayoutStrategy::Pooled` and for non-partitioned items;
     /// `> 0` when the partitioner has split a producer into K sibling
     /// rows. Read by `lane_planner` to key on `(item, module_id)`.
-    /// See `docs/rfp-modular-production.md`.
+    /// See `docs/rfc-modular-production.md`.
     pub module_id: u32,
     pub input_belt_y: Vec<i32>,
     pub output_belt_y: i32,
@@ -91,19 +91,19 @@ pub struct RowSpan {
     pub output_belt_x_max: i32,
     /// `Some(_)` when this row uses `RowLayout::HorizontalStack`. The
     /// lane planner reads this to allocate K trunk lanes for the
-    /// row's high-demand input. See `docs/rfp-horizontal-trunks.md`.
+    /// row's high-demand input. See `docs/rfc-horizontal-trunks.md`.
     pub horizontal_stack: Option<HorizontalStackInfo>,
     /// `Some((item, y))` when this row's spec has a SECOND solid output
     /// beyond the primary (which owns `output_belt_y`) — e.g.
     /// uranium-processing's uranium-238 surplus alongside uranium-235's
     /// target belt. `y` is the secondary belt's row. Only
     /// `RowKind::SingleInput` rows with 2+ solid outputs populate this
-    /// today (RFP Fulgora D2b, `docs/rfp-fulgora-scrap.md`). Read by the
+    /// today (RFC Fulgora D2b, `docs/rfc-fulgora-scrap.md`). Read by the
     /// step-7 solid-surplus merger (`ghost_router` step 7b).
     pub secondary_output_belt: Option<(String, i32)>,
     /// Per-item output belt y for rows that emit MANY single-item output
-    /// belts, each at its own row (RFP Fulgora Phase 3,
-    /// `docs/rfp-fulgora-scrap.md` D3): the scrap-recycling sushi-sorter
+    /// belts, each at its own row (RFC Fulgora Phase 3,
+    /// `docs/rfc-fulgora-scrap.md` D3): the scrap-recycling sushi-sorter
     /// row lifts each of the recycler's ~12 mixed outputs onto its own
     /// east-flowing belt at a distinct y. Generalises
     /// `secondary_output_belt` from one extra belt to N. Empty for every
@@ -391,7 +391,7 @@ pub enum RowKind {
     /// 2+ distinct fluid inputs on a small (<5×5) machine, no solid input.
     /// Uses stacked-T pattern with UG-pipe-UG isolation flanks. Covers
     /// heavy-oil-cracking, light-oil-cracking, sulfur. See
-    /// `docs/archive/rfp-multi-fluid-rows.md`.
+    /// `docs/archive/rfc-multi-fluid-rows.md`.
     FluidMultiInput,
     /// Self-loop recipe (kovarex-class: an item appears on both sides of
     /// the recipe). `has_minor` is true for the 2-item shape (kovarex:
@@ -404,14 +404,14 @@ pub enum RowKind {
     /// fish-breeding's water) — only legal alongside `has_minor == false`.
     /// See `templates::self_loop_row`.
     SelfLoop { has_minor: bool, has_fluid: bool },
-    /// Layout-synthesized voider row (RFP Fulgora Phase 2,
-    /// `docs/rfp-fulgora-scrap.md` D1): a recycler bank that
+    /// Layout-synthesized voider row (RFC Fulgora Phase 2,
+    /// `docs/rfc-fulgora-scrap.md` D1): a recycler bank that
     /// self-consumes a solid surplus stream. `MachineSpec.voider ==
     /// true`. Non-square 2×4 machine, direct belt ejection (no output
     /// inserter), no declared bus output. See `templates::voider_row`.
     Voider,
-    /// Scrap-recycling sushi-sorter row (RFP Fulgora Phase 3,
-    /// `docs/rfp-fulgora-scrap.md` D3): a bank of `recycler`s running
+    /// Scrap-recycling sushi-sorter row (RFC Fulgora Phase 3,
+    /// `docs/rfc-fulgora-scrap.md` D3): a bank of `recycler`s running
     /// `scrap-recycling` ejects ~12 mixed products onto a `:sushi:` belt;
     /// a bank of filter inserters sorts each onto its own east-flowing
     /// output belt. Non-square 2×4 machine, direct belt ejection, one
@@ -469,7 +469,7 @@ impl RowKind {
 
 /// Classify a spec into a RowKind.
 fn row_kind(spec: &MachineSpec) -> RowKind {
-    // Voider rows (RFP Fulgora Phase 2, `docs/rfp-fulgora-scrap.md` D1)
+    // Voider rows (RFC Fulgora Phase 2, `docs/rfc-fulgora-scrap.md` D1)
     // short-circuit BEFORE the square-machine debug_assert below —
     // `recycler` is 2×4, non-square, and would trip that assert
     // (working as intended: any OTHER non-square machine reaching that
@@ -479,7 +479,7 @@ fn row_kind(spec: &MachineSpec) -> RowKind {
         return RowKind::Voider;
     }
 
-    // Scrap-recycling sushi-sorter rows (RFP Fulgora Phase 3) also
+    // Scrap-recycling sushi-sorter rows (RFC Fulgora Phase 3) also
     // short-circuit before the square-machine assert — `recycler` is 2×4,
     // non-square. A non-voider recycler is always a scrap-recycling
     // producer (voider recyclers are caught above).
@@ -566,7 +566,7 @@ fn can_lane_split(spec: &MachineSpec, count: usize) -> bool {
     if count < 2 {
         return false;
     }
-    // Rows with 2+ solid outputs (RFP Fulgora D2b: uranium-processing's
+    // Rows with 2+ solid outputs (RFC Fulgora D2b: uranium-processing's
     // U-235 target + U-238 surplus) need the sideload-bridge anchor's
     // columns at `output_row_dy - 1` for the secondary output's
     // long-handed extraction inserter — the bridge and the second
@@ -637,7 +637,7 @@ pub(crate) fn build_one_row(
         max_belt_tier,
     );
 
-    // Second solid output (RFP Fulgora D2b): only `solid_outputs[0]` owns
+    // Second solid output (RFC Fulgora D2b): only `solid_outputs[0]` owns
     // `output_belt_y` today. When a spec has a second solid output (e.g.
     // uranium-processing's uranium-235 target + uranium-238 surplus),
     // size a belt for it too — `RowKind::SingleInput` is the only arm
@@ -734,7 +734,7 @@ pub(crate) fn build_one_row(
             let solid_item0 = solid_inputs.first().map(|f| f.item.as_str()).unwrap_or("");
             let solid_item1 = solid_inputs.get(1).map(|f| f.item.as_str()).unwrap_or("");
             let fluid_item = fluid_inputs.first().map(|f| f.item.as_str()).unwrap_or("");
-            // v3 extension of the reassignment lever (`docs/rfp-inserter-
+            // v3 extension of the reassignment lever (`docs/rfc-inserter-
             // sizing.md`): same hungrier-item-to-near swap as DualInput/
             // TripleInput. Geometrically identical positional pick
             // (source-confirmed) — the fluid PTG's column depends only on
@@ -864,7 +864,7 @@ pub(crate) fn build_one_row(
             // jelly → lubricant on biochamber) needs its output piped, not
             // belted. Gated by the shared port table to machines whose fluid
             // output ports sit on the south face this template already
-            // occupies (RFP `docs/rfp-power-supply.md` Phase 0e-i item 5).
+            // occupies (RFC `docs/rfc-power-supply.md` Phase 0e-i item 5).
             // Machines with a non-south fluid-output face (an unmirrored
             // foundry's molten-metal, north) fail this gate and keep the old
             // path — foundry molten-metal is handled by the dual-input arm.
@@ -1155,7 +1155,7 @@ pub(crate) fn build_one_row(
                 let item0 = solid_inputs.first().map(|f| f.item.as_str()).unwrap_or("");
                 let item1 = solid_inputs.get(1).map(|f| f.item.as_str()).unwrap_or("");
                 // Utilization scaling: same convention as SingleInput
-                // above. Reassignment lever (`docs/rfp-inserter-sizing.md`
+                // above. Reassignment lever (`docs/rfc-inserter-sizing.md`
                 // lever (b)): hungrier item goes near, where the full
                 // tier ladder applies.
                 let utilization = utilization_for(spec);
@@ -1542,7 +1542,7 @@ pub fn place_rows(
         // single-lane until their templates grow bridges.
         let kind = row_kind(spec);
         let output_is_fluid = spec.outputs.iter().all(|f| f.is_fluid) && !spec.outputs.is_empty();
-        // Multi-solid-output rows (RFP Fulgora D2b) never lane-split —
+        // Multi-solid-output rows (RFC Fulgora D2b) never lane-split —
         // see the matching guard + comment in `can_lane_split`. Keep
         // this in sync with that function so `single_lane`'s belt-cap
         // math agrees with whether the template actually stamps a

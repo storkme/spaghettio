@@ -32,7 +32,7 @@ pub struct BusLane {
     pub item: String,
     /// Module index within the item: `0` under `LayoutStrategy::Pooled`
     /// (one lane family per item — today's behaviour). The
-    /// `rfp-modular-production` strategies distinguish multiple
+    /// `rfc-modular-production` strategies distinguish multiple
     /// `(item, module_id)` lanes per item under
     /// `PartitionedDecomposed`.
     pub module_id: u32,
@@ -78,7 +78,7 @@ pub struct BusLane {
     /// the producer's port. Set for both pure-surplus lanes (no
     /// consumers) and dual-purpose lanes (consumed AND surplus) — one
     /// lane per item, one physical network. Phase 2 of
-    /// docs/rfp-solver-net-flow.md.
+    /// docs/rfc-solver-net-flow.md.
     pub perimeter_exit_y: Option<i32>,
 }
 
@@ -131,9 +131,9 @@ pub struct LaneFamily {
     /// Item name shared by all lanes in this family.
     pub item: String,
     /// Module index within the item: `0` under `LayoutStrategy::Pooled`
-    /// (one family per item). Phase 1 of `rfp-modular-production`
+    /// (one family per item). Phase 1 of `rfc-modular-production`
     /// distinguishes multiple `(item, module_id)` families per item;
-    /// see the RFP for the partitioning algorithm.
+    /// see the RFC for the partitioning algorithm.
     pub module_id: u32,
     /// `(N producers, M lanes)` — the balancer shape.
     pub shape: (usize, usize),
@@ -147,8 +147,8 @@ pub struct LaneFamily {
     pub balancer_y_end: i32,
     /// Combined throughput across all lanes, used for belt tier selection.
     pub total_rate: f64,
-    /// When `true`, this family is a merge-and-tap fallback trunk (RFP
-    /// `docs/rfp-merge-tap-trunks.md`): `shape.0` producers merge onto its
+    /// When `true`, this family is a merge-and-tap fallback trunk (RFC
+    /// `docs/rfc-merge-tap-trunks.md`): `shape.0` producers merge onto its
     /// single output lane via a splitter merge-tree
     /// (`balancer_generate::merge_tree`) instead of an `(N, M)` balancer
     /// template, because `shape` was not stampable. `shape.1 == 1` always
@@ -200,7 +200,7 @@ pub fn plan_bus_lanes(
     // distinct `(item, k)` buckets here.
     let mut item_to_consumers: FxHashMap<(String, u32), Vec<usize>> = FxHashMap::default();
     for (idx, rs) in row_spans.iter().enumerate() {
-        // Voider rows (RFP Fulgora Phase 2, `docs/rfp-fulgora-scrap.md`
+        // Voider rows (RFC Fulgora Phase 2, `docs/rfc-fulgora-scrap.md`
         // D1) declare an `inputs` entry so `bus::placer::order_specs`
         // sorts them after their producer, but they're deliberately
         // invisible HERE: their producer row is typically EAST-flowing
@@ -268,7 +268,7 @@ pub fn plan_bus_lanes(
         let consumers = item_to_consumers.get(key).cloned().unwrap_or_default();
         // A lane with zero consumers is normally pointless — except for a
         // registered fluid surplus, whose lane exists purely to carry the
-        // byproduct to the perimeter exit (Phase 2, rfp-solver-net-flow).
+        // byproduct to the perimeter exit (Phase 2, rfc-solver-net-flow).
         if consumers.is_empty() && !surplus_fluid_items.contains(key.0.as_str()) {
             continue;
         }
@@ -277,7 +277,7 @@ pub fn plan_bus_lanes(
         let is_fluid = item_is_fluid.get(key).copied().unwrap_or(false);
         let (item, module_id) = key.clone();
         // A row with a D2b secondary solid output or a scrap-recycling
-        // sushi sorter (RFP Fulgora `docs/rfp-fulgora-scrap.md`) has
+        // sushi sorter (RFC Fulgora `docs/rfc-fulgora-scrap.md`) has
         // multiple physically distinct output belts at different y. Anchor
         // `source_y` at THIS item's own belt (via the shared
         // `output_belt_y_for` lookup) rather than the primary's
@@ -410,7 +410,7 @@ pub fn plan_bus_lanes(
     // columns: nothing routes west of the first lane column, so a surplus
     // trunk there crosses zero belts on its way to the south boundary —
     // sidestepping pipe×belt bridge junctions entirely (the mechanism
-    // rfp-pipe-belt-junctions documents as unfinished). Their east-branch
+    // rfc-pipe-belt-junctions documents as unfinished). Their east-branch
     // to the producer port reuses the ordinary step-3.7 branch machinery.
     // Dual-purpose lanes (consumers AND surplus) keep their optimized slot;
     // moving them would trade tap-off crossings for exit crossings.
@@ -624,8 +624,8 @@ impl Default for BusLane {
 
 
 /// Deterministic largest-first bin-packing of weighted `items` (each
-/// `(row_index, weight)`) into `k` bins by least-loaded-bin (RFP
-/// `docs/rfp-merge-tap-trunks.md` D1). Sorts by weight descending (ties broken
+/// `(row_index, weight)`) into `k` bins by least-loaded-bin (RFC
+/// `docs/rfc-merge-tap-trunks.md` D1). Sorts by weight descending (ties broken
 /// by original position), then greedily places each row into the currently
 /// least-loaded bin (ties → lowest bin index). Determinism is a hard project
 /// contract, so every tie is resolved by a stable index rule. With
@@ -820,7 +820,7 @@ fn split_overflowing_lanes(
             // the caller can then fall back to a candidate that does.
             // Fixing properly requires a multi-stage balancer in this
             // path; tracked as the unblocker for K-DS1-2 in
-            // `docs/rfp-decomposition-search.md`.
+            // `docs/rfc-decomposition-search.md`.
             if lane.rate > (consumer_trunk_count as f64) * full_belt_cap {
                 return Err(format!(
                     "lane_planner: consumer-clamped fan-in for item {item} needs total_rate \
@@ -910,7 +910,7 @@ fn split_overflowing_lanes(
             consumers_per_split.iter().filter(|c| !c.is_empty()).count()
         };
 
-        // Merge-and-tap fallback (RFP docs/rfp-merge-tap-trunks.md). If the
+        // Merge-and-tap fallback (RFC docs/rfc-merge-tap-trunks.md). If the
         // (N, M) balancer this lane would otherwise be given has no stampable
         // template, retire it to K = ceil(rate / full_belt_cap) shared trunks:
         // each trunk's producer group merges via a splitter merge-tree and its

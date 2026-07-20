@@ -252,7 +252,7 @@ fn run_e2e_with_exclusions(
 }
 
 /// Like `run_e2e_with_exclusions` but with a non-default `SurplusPolicy`
-/// (RFP Fulgora Phase 2, `docs/rfp-fulgora-scrap.md` D1). Used by the
+/// (RFC Fulgora Phase 2, `docs/rfc-fulgora-scrap.md` D1). Used by the
 /// voider fixtures to exercise `SurplusPolicy::Void`.
 #[allow(dead_code)]
 fn run_e2e_with_exclusions_and_surplus_policy(
@@ -451,7 +451,7 @@ fn assert_no_warnings_except(result: &E2EResult, skip_categories: &[&str]) {
 /// Assert the layout's warnings are EXACTLY the given `(category, count)`
 /// multiset — nothing more, nothing fewer — and that there are no errors.
 ///
-/// Used to re-bless fixtures under the RFP `rfp-lane-demand-flow.md` Phase 1
+/// Used to re-bless fixtures under the RFC `rfc-lane-demand-flow.md` Phase 1
 /// pair (demand-pull walker + inserter-throughput check): honest warning
 /// counts rise, so each fixture pins its *exact* expected breakdown by
 /// category rather than blanket-ignoring a category. The common case is a
@@ -529,7 +529,7 @@ fn golden_hash(layout: &spaghettio_core::models::LayoutResult) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-/// K0-1 regression gate from `docs/rfp-modular-production.md`. Asserts
+/// K0-1 regression gate from `docs/rfc-modular-production.md`. Asserts
 /// that the layout produced under `LayoutStrategy::Pooled` is
 /// byte-identical (over structural fields) to the committed baseline.
 /// To regenerate after an intentional layout change:
@@ -571,9 +571,9 @@ fn assert_golden_hash(result: &E2EResult, test_name: &str) {
 
 /// K0-1 byte-equality regression table. Entries are
 /// `(test_name, sha256_hex_of_entities)`. Captured under
-/// `LayoutStrategy::Pooled` on the pre-RFP baseline.
+/// `LayoutStrategy::Pooled` on the pre-RFC baseline.
 const GOLDEN_HASHES: &[(&str, &str)] = &[
-    // RFP rfp-inserter-sizing.md Phase 1: single_input_row's inserters are
+    // RFC rfc-inserter-sizing.md Phase 1: single_input_row's inserters are
     // now ladder-sized (regular -> fast -> stack in place), so hashes below
     // that cover single_input_row-shaped fixtures moved even though entity
     // COUNT and layout geometry (KC4) stayed byte-identical — only the
@@ -584,9 +584,9 @@ const GOLDEN_HASHES: &[(&str, &str)] = &[
     // Updated when `(m, m)` family balancers became passthroughs
     // (issue #268) — splitter blocks replaced by a single south-facing
     // belt per output column.
-    // RFP rfp-inserter-sizing.md Phase 1: single_input_row rows (iron-plate/
+    // RFC rfc-inserter-sizing.md Phase 1: single_input_row rows (iron-plate/
     // copper-plate) ladder-sized, see note above.
-    // RFP rfp-inserter-sizing.md Phase 2: dual_input_row (this fixture's EC
+    // RFC rfc-inserter-sizing.md Phase 2: dual_input_row (this fixture's EC
     // row is dual-input) is now ladder-sized + near/far reassigned.
     ("tier2_electronic_circuit_from_ore", "0ae4d39372e33cf6c82dc96404a5f05b5a3b9888c2cea1f65ef542caeb91f182"),
     // Hashes below changed when row inputs were switched to always
@@ -595,19 +595,19 @@ const GOLDEN_HASHES: &[(&str, &str)] = &[
     // Updated again when ghost-routed tap/ret/feeder horizontals were
     // upgraded to `max_belt_tier` at materialisation time, and again
     // when `(m, m)` family balancers became passthroughs (#268).
-    // RFP rfp-inserter-sizing.md Phase 1: single_input_row rows ladder-sized, see note above.
-    // RFP rfp-inserter-sizing.md Phase 2: dual_input_row ladder-sized + near/far reassigned.
-    // RFP rfp-inserter-sizing.md Phase 3: far side's reach-2 count-ladder activated.
+    // RFC rfc-inserter-sizing.md Phase 1: single_input_row rows ladder-sized, see note above.
+    // RFC rfc-inserter-sizing.md Phase 2: dual_input_row ladder-sized + near/far reassigned.
+    // RFC rfc-inserter-sizing.md Phase 3: far side's reach-2 count-ladder activated.
     ("tier2_electronic_circuit_20s_from_ore", "7a23126d5f857d22db9374cc6269eb9ea2d7bdb2a69c6dc34f60f322cc63e134"),
-    // RFP rfp-inserter-sizing.md Phase 2: dual_input_row's inserters are now
+    // RFC rfc-inserter-sizing.md Phase 2: dual_input_row's inserters are now
     // ladder-sized + near/far reassigned (this fixture's dual-input EC row
     // is exactly the template Phase 2 touches) — entity types/positions on
     // that row moved.
     ("tier2_electronic_circuit_splitter_stamp_regression", "8f1eaa38c9a8beeae052ff9fd63b5c4e7d68662e685d576e731c192694ba1d5f"),
-    // RFP rfp-inserter-sizing.md Phase 3: fluid_input_row's solid side
+    // RFC rfc-inserter-sizing.md Phase 3: fluid_input_row's solid side
     // (coal) is now ladder-sized. Reaches fully clean.
     ("tier3_plastic_bar", "bb1cccc422f0e44bfdb1d18ef59d870d71d8fe5d7147b659e7b388c79a526166"),
-    // RFP rfp-inserter-sizing.md Phase 3: fluid_input_row's solid side
+    // RFC rfc-inserter-sizing.md Phase 3: fluid_input_row's solid side
     // (iron-plate) is now ladder-sized — this fixture (sulfuric-acid:
     // iron-plate + water) is exactly that shape. Stays fully clean
     // (assert_no_warnings) — the ladder resolves the demand outright.
@@ -687,10 +687,10 @@ fn tier1_iron_gear_wheel() {
         .unwrap_or_else(|e| panic!("tier1_iron_gear_wheel: {e}"));
 
     assert_no_errors(&result);
-    // RFP rfp-lane-demand-flow.md Phase 1: 10 gear machines (AM1, 1 gear/s each
+    // RFC rfc-lane-demand-flow.md Phase 1: 10 gear machines (AM1, 1 gear/s each
     // for 10/s) × 2 inserter-bound sides — 2.0/s iron-plate in and 1.0/s gears out,
     // both over the 0.84/s regular-inserter cap. One regular inserter per side.
-    // RFP rfp-inserter-sizing.md Phase 1 re-bless: ladder-sized inserters clear single_input_row entirely (20 -> 0).
+    // RFC rfc-inserter-sizing.md Phase 1 re-bless: ladder-sized inserters clear single_input_row entirely (20 -> 0).
     assert_warnings_exactly(&result, &[]);
     assert_produces(&result, "iron-gear-wheel", 10.0);
     assert_round_trip(&result);
@@ -698,7 +698,7 @@ fn tier1_iron_gear_wheel() {
 }
 
 /// Smoke test for the decomposition-search layer
-/// (`docs/rfp-decomposition-search.md`). Confirms the layer is
+/// (`docs/rfc-decomposition-search.md`). Confirms the layer is
 /// actually exercising — not just compiling but emitting the
 /// `DecompositionCandidateScored` and `DecompositionChosen` trace
 /// events. With Phase 0's single `NativeCandidate`, exactly one of
@@ -742,7 +742,7 @@ fn decomposition_search_native_candidate_fires_trace_events() {
     assert_eq!(chosen[0], "native", "expected `native` to win; got {:?}", chosen[0]);
 }
 
-/// K-DS1-1 from `docs/rfp-decomposition-search.md`: on cases where
+/// K-DS1-1 from `docs/rfc-decomposition-search.md`: on cases where
 /// Native produces a clean layout (no `missing-balancer-template`
 /// warnings), the search must pick `NativeCandidate`. With sequential
 /// dispatch — Native runs first, search exits early if Native is
@@ -802,7 +802,7 @@ fn decomposition_search_picks_native_on_clean_partitioned_case() {
 }
 
 /// Deterministic merge-and-tap fallback fixture
-/// (`docs/rfp-merge-tap-trunks.md`). Drives `MergeTapCandidate::produce`
+/// (`docs/rfc-merge-tap-trunks.md`). Drives `MergeTapCandidate::produce`
 /// directly (not through the selector) on the smallest natural unstampable
 /// case — electronic-circuit@35/s from ore, AM2 yellow, whose copper-plate
 /// family is the coprime `(4, 9)` shape — and pins the fallback *mechanism*:
@@ -913,9 +913,9 @@ fn tier1_iron_gear_wheel_from_ore() {
     .unwrap_or_else(|e| panic!("tier1_iron_gear_wheel_from_ore: {e}"));
 
     assert_no_errors(&result);
-    // RFP Phase 1: 14 inserter-bound machine-sides (gear + from-ore smelting chain;
+    // RFC Phase 1: 14 inserter-bound machine-sides (gear + from-ore smelting chain;
     // every side's per-machine rate exceeds the 0.84/s regular-inserter cap).
-    // RFP rfp-inserter-sizing.md Phase 1 re-bless: ladder-sized inserters clear single_input_row entirely (14 -> 0).
+    // RFC rfc-inserter-sizing.md Phase 1 re-bless: ladder-sized inserters clear single_input_row entirely (14 -> 0).
     assert_warnings_exactly(&result, &[]);
     assert_produces(&result, "iron-gear-wheel", 10.0);
     assert_round_trip(&result);
@@ -930,9 +930,9 @@ fn tier1_iron_gear_wheel_20s() {
         .unwrap_or_else(|e| panic!("tier1_iron_gear_wheel_20s: {e}"));
 
     assert_no_errors(&result);
-    // RFP Phase 1: 28 inserter-bound machine-sides at 20/s (more gear machines than
+    // RFC Phase 1: 28 inserter-bound machine-sides at 20/s (more gear machines than
     // the 10/s case; each side > 0.84/s).
-    // RFP rfp-inserter-sizing.md Phase 1 re-bless: ladder-sized inserters clear single_input_row entirely (28 -> 0).
+    // RFC rfc-inserter-sizing.md Phase 1 re-bless: ladder-sized inserters clear single_input_row entirely (28 -> 0).
     assert_warnings_exactly(&result, &[]);
     assert_produces(&result, "iron-gear-wheel", 20.0);
     assert_round_trip(&result);
@@ -1025,9 +1025,9 @@ fn tier2_electronic_circuit() {
     .unwrap_or_else(|e| panic!("tier2_electronic_circuit: {e}"));
 
     assert_no_errors(&result);
-    // RFP Phase 1: 34 inserter-bound machine-sides (electronic-circuit chain —
+    // RFC Phase 1: 34 inserter-bound machine-sides (electronic-circuit chain —
     // copper-cable + EC assemblers, sides over the 0.84/s regular-inserter cap).
-    // RFP rfp-inserter-sizing.md Phase 1 re-bless: single_input_row (iron-plate/copper-cable rows) ladder-sized; the electronic-circuit dual_input_row itself is Phase 2 scope, residue remains (34 -> 14).
+    // RFC rfc-inserter-sizing.md Phase 1 re-bless: single_input_row (iron-plate/copper-cable rows) ladder-sized; the electronic-circuit dual_input_row itself is Phase 2 scope, residue remains (34 -> 14).
     // beltspan-lastinrow: the last residual (1) was the EC dual_input_row last-in-row
     // far (iron-plate) side, capped at one long-handed inserter because the far belt
     // was trimmed under the dx=1 contested column; extending it one tile clears it (1 -> 0).
@@ -1085,9 +1085,9 @@ fn tier2_electronic_circuit_from_ore() {
     .unwrap_or_else(|e| panic!("tier2_electronic_circuit_from_ore: {e}"));
 
     assert_no_errors(&result);
-    // RFP Phase 1: 50 inserter-bound machine-sides (EC fully from ore, incl. the
+    // RFC Phase 1: 50 inserter-bound machine-sides (EC fully from ore, incl. the
     // added iron/copper smelting rows; each side > 0.84/s).
-    // RFP rfp-inserter-sizing.md Phase 1 re-bless: single_input_row rows (iron-plate/copper-plate/copper-cable from ore) ladder-sized; electronic-circuit dual_input_row is Phase 2 scope, residue remains (50 -> 20).
+    // RFC rfc-inserter-sizing.md Phase 1 re-bless: single_input_row rows (iron-plate/copper-plate/copper-cable from ore) ladder-sized; electronic-circuit dual_input_row is Phase 2 scope, residue remains (50 -> 20).
     assert_warnings_exactly(&result, &[]);
     assert_produces(&result, "electronic-circuit", 10.0);
     assert_round_trip(&result);
@@ -1112,13 +1112,13 @@ fn tier2_electronic_circuit_20s_from_ore() {
     .unwrap_or_else(|e| panic!("tier2_electronic_circuit_20s_from_ore: {e}"));
 
     assert_no_errors(&result);
-    // RFP Phase 1: 68 inserter-bound machine-sides (EC from ore at 20/s).
-    // RFP rfp-inserter-sizing.md Phase 1 re-bless: single_input_row rows ladder-sized; electronic-circuit dual_input_row is Phase 2 scope, residue remains (68 -> 28).
+    // RFC Phase 1: 68 inserter-bound machine-sides (EC from ore at 20/s).
+    // RFC rfc-inserter-sizing.md Phase 1 re-bless: single_input_row rows ladder-sized; electronic-circuit dual_input_row is Phase 2 scope, residue remains (68 -> 28).
     // beltspan-lastinrow: the 2 residual were EC dual_input_row last-in-row far
     // (iron-plate) sides, capped at one long-handed inserter; extending the far belt
     // one tile at each places the needed second inserter (2 -> 0).
     //
-    // RFP `docs/rfp-power-reservation.md` Phase 3a-ii (reactive power repair):
+    // RFC `docs/rfc-power-reservation.md` Phase 3a-ii (reactive power repair):
     // this was one of the strict-gating cases — at 20/s the EC dual_input_row
     // input-inserter band was 0/49-free of post-routing footprints, so no pole
     // could cover its 14 inserters (an honest red under Phase 0f). The reactive
@@ -1126,7 +1126,7 @@ fn tier2_electronic_circuit_20s_from_ore() {
     // re-runs with +2 free rows inserted at the starved cycle boundary. The
     // freed band lands 3 tiles above the (shifted) input-inserter row — inside a
     // medium pole's ±3 supply, because the dual-input belt bundle is 2 rows, not
-    // 3 — so the existing medium mop-up now covers them. Substations (the RFP's
+    // 3 — so the existing medium mop-up now covers them. Substations (the RFC's
     // planned hardware) are unnecessary here and stay dormant. 14 -> 0.
     assert_warnings_exactly(&result, &[]);
     assert_produces(&result, "electronic-circuit", 20.0);
@@ -1204,7 +1204,7 @@ fn tier3_plastic_bar() {
             .unwrap_or_else(|e| panic!("tier3_plastic_bar: {e}"));
 
     assert_no_errors(&result);
-    // RFP Phase 1: 10 inserter-bound machine-sides (plastic-bar chemical plants —
+    // RFC Phase 1: 10 inserter-bound machine-sides (plastic-bar chemical plants —
     // petroleum arrives by pipe, but coal in and plastic out both exceed 0.84/s).
     assert_warnings_exactly(&result, &[]);
     assert_produces(&result, "plastic-bar", 10.0);
@@ -1224,7 +1224,7 @@ fn tier3_plastic_bar_from_crude() {
             .unwrap_or_else(|e| panic!("tier3_plastic_bar_from_crude: {e}"));
 
     assert_no_errors(&result);
-    // RFP Phase 1: 10 inserter-bound machine-sides (plastic-bar from crude — same
+    // RFC Phase 1: 10 inserter-bound machine-sides (plastic-bar from crude — same
     // chemical-plant sides over 0.84/s as the plate-fed variant).
     assert_warnings_exactly(&result, &[]);
     assert_produces(&result, "plastic-bar", 10.0);
@@ -1232,7 +1232,7 @@ fn tier3_plastic_bar_from_crude() {
 }
 
 // ---------------------------------------------------------------------------
-// RFP `docs/rfp-power-supply.md` Phase 0e-i — per-machine fluid port faces.
+// RFC `docs/rfc-power-supply.md` Phase 0e-i — per-machine fluid port faces.
 //
 // These four fixtures are the first corpus presence of the space-age fluid
 // machines whose ports don't face the bus template's default north-input /
@@ -1395,7 +1395,7 @@ fn phase0e1_biolubricant_biochamber() {
     assert_round_trip(&result);
 }
 
-// RFP `docs/rfp-power-supply.md` Phase 3a-i — substation as a first-class
+// RFC `docs/rfc-power-supply.md` Phase 3a-i — substation as a first-class
 // entity. Non-layout-moving plumbing: the engine doesn't place substations yet
 // (3a-ii does), so this hand-places one and checks it powers, wires, exports,
 // and re-imports correctly. Guards the two latent bugs 3a-i fixed: blueprint
@@ -1468,7 +1468,7 @@ fn tier3_sulfuric_acid() {
 fn tier3_heavy_oil_cracking() {
     // 2 distinct fluid inputs (water + heavy-oil) on a chemical-plant —
     // exercises the stacked-T multi-fluid row pattern. Primary regression
-    // signal for docs/archive/rfp-multi-fluid-rows.md.
+    // signal for docs/archive/rfc-multi-fluid-rows.md.
     //
     // Exclude advanced-oil-processing and coal-liquefaction so the solver
     // picks heavy-oil-cracking as the light-oil producer (in JSON order,
@@ -1632,14 +1632,14 @@ fn tier4_advanced_circuit_from_plates() {
     .unwrap_or_else(|e| panic!("tier4_advanced_circuit_from_plates: {e}"));
 
     assert_no_errors(&result);
-    // RFP Phase 1: 14 inserter-bound machine-sides (advanced-circuit @1/s chain).
-    // RFP rfp-inserter-sizing.md Phase 1 re-bless: single_input_row (copper-cable) ladder-sized; advanced-circuit triple_input_row + electronic-circuit dual_input_row are Phase 2/3 scope, residue remains (14 -> 6).
+    // RFC Phase 1: 14 inserter-bound machine-sides (advanced-circuit @1/s chain).
+    // RFC rfc-inserter-sizing.md Phase 1 re-bless: single_input_row (copper-cable) ladder-sized; advanced-circuit triple_input_row + electronic-circuit dual_input_row are Phase 2/3 scope, residue remains (14 -> 6).
     assert_warnings_exactly(&result, &[]);
     assert_produces(&result, "advanced-circuit", 1.0);
     assert_round_trip(&result);
 }
 
-/// K1-1 from `docs/rfp-modular-production.md`. Advanced-circuit with
+/// K1-1 from `docs/rfc-modular-production.md`. Advanced-circuit with
 /// `LayoutStrategy::PartitionedDecomposed` is the motivating case: copper-cable
 /// is consumed by both `electronic-circuit` and `advanced-circuit` recipes, so
 /// the partitioner allocates two modules and each module's lane count is sized
@@ -1685,7 +1685,7 @@ fn tier4_advanced_circuit_partitioned() {
          partitioner did not fire on the motivating case"
     );
     assert_no_errors(&result);
-    // RFP rfp-inserter-sizing.md Phase 1 pinned this to the check's
+    // RFC rfc-inserter-sizing.md Phase 1 pinned this to the check's
     // then-current output (8), not the frozen census contract's true
     // count (6) — 2 of those 8 were false positives. `apply_partition_plan`
     // splits copper-cable into two `MachineSpec` siblings sharing a recipe
@@ -1771,13 +1771,13 @@ fn tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing() {
     let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
     let warnings: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Warning).collect();
 
-    // RFP rfp-lane-demand-flow.md Phase 1: this belt-pipe SAT-zone regression
+    // RFC rfc-lane-demand-flow.md Phase 1: this belt-pipe SAT-zone regression
     // guards capped clusters + validation cleanliness, both orthogonal to the
     // new inserter-throughput check. Every machine here (chemical-plants at
     // 1.0/s in + 2.0/s out, etc.) is fed/drained by one ~0.84/s regular
     // inserter, so the honest warnings are all inserter-throughput. Assert the
     // SAT-zone concern first (no OTHER warning category, no errors, no caps),
-    // then pin the exact inserter-throughput count. RFP rfp-inserter-sizing.md
+    // then pin the exact inserter-throughput count. RFC rfc-inserter-sizing.md
     // Phase 2: the new per-item companion check (`inserter-item-throughput`)
     // is exempt for the same reason and pinned the same way below.
     let non_inserter_warnings: Vec<_> = warnings
@@ -1811,14 +1811,14 @@ fn tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing() {
         );
     }
 
-    // RFP rfp-inserter-sizing.md Phase 1 re-bless: single_input_row rows
+    // RFC rfc-inserter-sizing.md Phase 1 re-bless: single_input_row rows
     // (iron-plate/copper-plate/copper-cable) ladder-sized; the HorizontalStack
     // dual_input_row itself is Phase 2 scope, residue remains (82 -> 34). Not
     // part of the frozen Phase 0v2 census corpus (uses RowLayout::HorizontalStack,
     // which the census never exercised), so this has no frozen prediction to
     // check against -- verified directly: entity count/dims unchanged (KC4),
     // strategy is Pooled (no partition-collapse risk).
-    // RFP rfp-inserter-sizing.md Phase 2: dual_input_row_horizontal (this
+    // RFC rfc-inserter-sizing.md Phase 2: dual_input_row_horizontal (this
     // fixture's own row shape) is now ladder-sized + near/far reassigned;
     // 34 -> 14. Phase 3: reaches 0. Not part of the frozen Phase 0v2 census
     // corpus (HorizontalStack), verified directly against this test's own
@@ -1830,7 +1830,7 @@ fn tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing() {
         "{test_name}: expected exactly 0 inserter-throughput warnings"
     );
 
-    // RFP rfp-inserter-sizing.md Phase 2/3: per-item companion check pin,
+    // RFC rfc-inserter-sizing.md Phase 2/3: per-item companion check pin,
     // same rationale as above — not part of the frozen Phase 0v2 census
     // corpus (HorizontalStack), verified directly against this test's own
     // live run. 24 -> 0 once Phase 3 activated the far ladder here too.
@@ -2060,14 +2060,14 @@ fn tier4_advanced_circuit_from_ore_am2() {
     .unwrap_or_else(|e| panic!("tier4_advanced_circuit_from_ore_am2: {e}"));
 
     assert_no_errors(&result);
-    // RFP Phase 1: 58 inserter-bound machine-sides, PLUS 1 residual input-rate-delivery
+    // RFC Phase 1: 58 inserter-bound machine-sides, PLUS 1 residual input-rate-delivery
     // at (29,140) — a copper-cable machine needing 4.3/s (already inserter-bound: one
     // 0.84/s inserter) whose belt the demand-pull walker under-estimates at ~4.1/s.
     // This is the documented demand-pull limitation: backward demand slightly
     // over-inflates inside balancer feedback cycles, stealing from an adjacent
     // acyclic branch. Even-split delivered ≥4.3 here, so it is a modeling residual,
-    // not a real starvation. See report / rfp-lane-demand-flow.md.
-    // RFP rfp-inserter-sizing.md Phase 1 re-bless: single_input_row rows ladder-sized; remaining rows are Phase 2/3 scope, residue remains (58 -> 24). input-rate-delivery unrelated, unchanged.
+    // not a real starvation. See report / rfc-lane-demand-flow.md.
+    // RFC rfc-inserter-sizing.md Phase 1 re-bless: single_input_row rows ladder-sized; remaining rows are Phase 2/3 scope, residue remains (58 -> 24). input-rate-delivery unrelated, unchanged.
     // beltspan-lastinrow: the 4 residual inserter-item-throughput were dual_input_row
     // last-in-row far sides capped at one long-handed inserter; extending the far belt
     // one tile clears them (4 -> 0). The input-rate-delivery (1) is unrelated and unchanged.
@@ -2105,16 +2105,16 @@ fn tier5_processing_unit_from_ore_am3() {
     .unwrap_or_else(|e| panic!("tier5_processing_unit_from_ore_am3: {e}"));
 
     assert_no_errors(&result);
-    // RFP Phase 1: 129 inserter-bound machine-sides (processing-unit @2/s deep chain).
+    // RFC Phase 1: 129 inserter-bound machine-sides (processing-unit @2/s deep chain).
     // Demand-pull + the UG-crossing demand fix clear every prior belt-delivery false
     // positive across this layout's underground hops; the residual is purely
     // inserter-throughput.
-    // RFP rfp-inserter-sizing.md Phase 1 re-bless: single_input_row rows ladder-sized; remaining rows are Phase 2/3 scope, residue remains (129 -> 65).
+    // RFC rfc-inserter-sizing.md Phase 1 re-bless: single_input_row rows ladder-sized; remaining rows are Phase 2/3 scope, residue remains (129 -> 65).
     // beltspan-lastinrow: the 5 residual inserter-item-throughput were dual_input_row
     // last-in-row far sides capped at one long-handed inserter; extending the far belt
     // one tile clears them (5 -> 0) — this config is now fully clean (0 warnings).
     //
-    // RFP `docs/rfp-power-reservation.md` Phase 3a-ii (reactive power repair):
+    // RFC `docs/rfc-power-reservation.md` Phase 3a-ii (reactive power repair):
     // the decomposed electronic-circuit input-inserter sub-rows stack with zero
     // inter-row gap; 20 inserters (clusters x40-44 at y164/172/180/188) were
     // 0/49-free of post-routing footprints — a hard pitch limit under Phase 0f.
@@ -2127,8 +2127,8 @@ fn tier5_processing_unit_from_ore_am3() {
     assert_round_trip(&result);
 }
 
-/// Kovarex self-loop row template — the final piece of RFP Phase 2(c)
-/// (`docs/rfp-solver-net-flow.md`). kovarex-enrichment-process consumes
+/// Kovarex self-loop row template — the final piece of RFC Phase 2(c)
+/// (`docs/rfc-solver-net-flow.md`). kovarex-enrichment-process consumes
 /// AND produces both uranium-235 and uranium-238 (at different rates
 /// per machine), so the solver nets the raw per-machine rates into a
 /// single external input (uranium-238) and output (uranium-235), with
@@ -2160,14 +2160,14 @@ fn tier_kovarex_self_loop() {
     .unwrap_or_else(|e| panic!("tier_kovarex_self_loop: {e}"));
 
     assert_no_errors(&result);
-    // RFP `docs/rfp-power-reservation.md` Phase 3b (kovarex — the top-edge
+    // RFC `docs/rfc-power-reservation.md` Phase 3b (kovarex — the top-edge
     // substation boundary variant). The self-loop packs uranium-235/238 +
     // recirculation inserters across top_y-1 and top_y-2 with the machines
     // below, and stacks 5 belt/corridor rows ABOVE those inserters — leaving
     // 16 with a 0/49-free 7×7 against real footprints, all beyond a medium
     // pole's ±3 reach. 3a-ii could not clear them: its `compute_substation_bands`
     // widens a starved row's PREDECESSOR gap, but these inserters sit in row 0
-    // (no predecessor cycle) — the top-edge variant the RFP deferred to 3b.
+    // (no predecessor cycle) — the top-edge variant the RFC deferred to 3b.
     // 3b flags row 0's own top edge, the reactive pass frees +2 rows above the
     // layout (pure y-translation), and — because the inserters are 5+ rows deep,
     // beyond any medium pole — the dormant SUBSTATION path fires for the first
@@ -2199,14 +2199,14 @@ fn tier_kovarex_self_loop() {
         .count();
     assert_eq!(
         substation_count, 1,
-        "expected exactly one substation covering the recirc inserter bank (RFP Phase 3b), got {substation_count}"
+        "expected exactly one substation covering the recirc inserter bank (RFC Phase 3b), got {substation_count}"
     );
 
     assert_round_trip(&result);
 }
 
-/// Solid surplus export via the step-7 merger (RFP Fulgora D2a + D2b,
-/// `docs/rfp-fulgora-scrap.md`). uranium-processing's SAME recipe
+/// Solid surplus export via the step-7 merger (RFC Fulgora D2a + D2b,
+/// `docs/rfc-fulgora-scrap.md`). uranium-processing's SAME recipe
 /// produces uranium-235 (probability 0.007/craft) and uranium-238
 /// (probability 0.993/craft); kovarex-enrichment-process is excluded so
 /// its full absorption of the U-238 byproduct doesn't zero out
@@ -2294,7 +2294,7 @@ fn tier_uranium_processing_surplus_export() {
     );
 }
 
-/// Voider rows (RFP Fulgora Phase 2, D1, `docs/rfp-fulgora-scrap.md`).
+/// Voider rows (RFC Fulgora Phase 2, D1, `docs/rfc-fulgora-scrap.md`).
 /// Same solve as `tier_uranium_processing_surplus_export` — uranium-235
 /// @0.05/s, kovarex excluded so uranium-238 surplus (~7.09/s) survives —
 /// but laid out under `SurplusPolicy::Void` instead of `Export`.
@@ -2327,7 +2327,7 @@ fn tier_uranium_processing_voider() {
 
     // uranium-238 must be VOIDED, not exported — the whole point of the
     // policy switch. Note: `result.solver_result` is the TOP-LEVEL solve
-    // (unaware of layout policy — voiding is layout-only per the RFP's
+    // (unaware of layout policy — voiding is layout-only per the RFC's
     // D1 design), so it still legitimately reports uranium-238 in
     // `surplus_outputs`; `bus::voider::synthesize_voiders` only mutates
     // a layout-internal clone. The policy's effect is visible on the
@@ -2373,7 +2373,7 @@ fn tier_uranium_processing_voider() {
     assert!(synthesized, "expected a VoiderSynthesized trace event for uranium-238");
 }
 
-/// KC3 (voider purity, `docs/rfp-fulgora-scrap.md` kill criteria):
+/// KC3 (voider purity, `docs/rfc-fulgora-scrap.md` kill criteria):
 /// synthesized voider rows must not perturb ANY non-surplus item's
 /// solver-reported rate or physical placement. Builds the SAME solve
 /// under `Export` and `Void` and asserts every uranium-processing
@@ -2381,7 +2381,7 @@ fn tier_uranium_processing_voider() {
 /// identical entity/recipe/position in both layouts. Scoped to machine
 /// entities (not full entity-set equality) because bus width can
 /// legitimately shift once a solid item stops needing perimeter-export
-/// lane geometry — see the RFP's KC3 scoping note.
+/// lane geometry — see the RFC's KC3 scoping note.
 #[test]
 fn voider_purity() {
     let inputs: FxHashSet<String> = ["uranium-ore"].iter().map(|s| s.to_string()).collect();
@@ -2470,10 +2470,10 @@ fn tier_pentapod_egg_self_loop() {
     .unwrap_or_else(|e| panic!("tier_pentapod_egg_self_loop: {e}"));
 
     assert_no_errors(&result);
-    // RFP rfp-inserter-sizing.md Phase 3: pentapod-egg is the HasFluid
+    // RFC rfc-inserter-sizing.md Phase 3: pentapod-egg is the HasFluid
     // self-loop shape — near_item's inserter is a hard-0-budget LHI (both
     // free columns are structurally packed), a genuine geometric wall
-    // (`docs/rfp-inserter-sizing.md`'s accepted residue: nutrients demand
+    // (`docs/rfc-inserter-sizing.md`'s accepted residue: nutrients demand
     // ~3/s per machine vs the reach-2 ceiling). Permanent, honest residue
     // per the user-accepted DoD, not a bug — stays at 2/2 through Phase 3.
     assert_warnings_exactly(&result, &[("inserter-throughput", 2), ("inserter-item-throughput", 2)]);
@@ -2520,7 +2520,7 @@ fn tier_fish_breeding_self_loop() {
     .unwrap_or_else(|e| panic!("tier_fish_breeding_self_loop: {e}"));
 
     assert_no_errors(&result);
-    // RFP Phase 1: 1 inserter-bound machine-side (raw-fish self-loop).
+    // RFC Phase 1: 1 inserter-bound machine-side (raw-fish self-loop).
     assert_warnings_exactly(&result, &[("inserter-throughput", 1), ("inserter-item-throughput", 1)]);
     assert_produces(&result, "raw-fish", 0.15);
 
@@ -2581,7 +2581,7 @@ fn tier_bacteria_self_loop_regression() {
     .unwrap_or_else(|e| panic!("tier_bacteria_self_loop_regression: {e}"));
 
     assert_no_errors(&result);
-    // RFP rfp-inserter-sizing.md Phase 3: self_loop_row's near_item ladder
+    // RFC rfc-inserter-sizing.md Phase 3: self_loop_row's near_item ladder
     // (near_item = bioflux here) resolves the one remaining inserter-bound
     // side from Phase 1 — fully clean.
     assert_warnings_exactly(&result, &[]);
@@ -2675,7 +2675,7 @@ fn issue_136_no_balancer_template_warning_ac5_ore_yellow() {
 // ---------------------------------------------------------------------------
 // Strategy scoreboard — runs every tier case under both strategies and emits
 // a single line of (entities, density, validator) per (test, strategy). The
-// RFP's Observables section asks us to *report* the tradeoff between
+// RFC's Observables section asks us to *report* the tradeoff between
 // strategies, not to gate on it. Run with:
 //   cargo test --manifest-path crates/core/Cargo.toml --test e2e \
 //     scoreboard_strategy_sweep -- --ignored --nocapture
@@ -2725,7 +2725,7 @@ fn scoreboard_strategy_sweep() {
                     // Decomposition-search winner. Phase 0: always
                     // "native". Future-proofs the column for later
                     // phases when non-Native candidates can win. See
-                    // `docs/rfp-decomposition-search.md`.
+                    // `docs/rfc-decomposition-search.md`.
                     let chosen = r.trace_events.iter().find_map(|e| match e {
                         TraceEvent::DecompositionChosen { name, .. } => Some(name.clone()),
                         _ => None,
@@ -2942,7 +2942,7 @@ fn check_stress_scoreboard(test_name: &str, result: &E2EResult, baseline: Stress
         0.0
     };
 
-    // Phase 2 (RFP `docs/rfp-power-supply.md`): pole slack guardrail. Tally the
+    // Phase 2 (RFC `docs/rfc-power-supply.md`): pole slack guardrail. Tally the
     // per-pole PoleSlack events place_poles emits so the scoreboard surfaces
     // power-placement fragility (zero-slack poles) in the golden diff — a
     // future densification change that erodes pole slack moves these lines.
@@ -3125,7 +3125,7 @@ fn check_stress_scoreboard(test_name: &str, result: &E2EResult, baseline: Stress
 
 /// Baseline for `LayoutStrategy::PartitionedDecomposed` runs of stress
 /// cases. Adds the K1-2 / K1-3 ceilings on top of `StressBaseline`'s
-/// pass-fail mechanism. See `docs/rfp-modular-production.md`.
+/// pass-fail mechanism. See `docs/rfc-modular-production.md`.
 struct PartitionedStressBaseline {
     /// `StressBaseline.max_errors`-equivalent for the partitioned run.
     max_errors_partitioned: usize,
@@ -3141,7 +3141,7 @@ struct PartitionedStressBaseline {
     /// **K1-3 per-test**: maximum allowed
     /// `TraceEvent::PartitionRejectedByUtilization` events. `0` means
     /// the partitioner is comfortable with this case at this rate.
-    /// Across the corpus, the RFP wants this to fire on ≤ 20% of
+    /// Across the corpus, the RFC wants this to fire on ≤ 20% of
     /// cases at default rates — tracked by a separate corpus-level
     /// summary.
     max_partition_rejections: usize,
@@ -3237,7 +3237,7 @@ fn check_partitioned_stress_scoreboard(
         "{test_name}: K1-2 — PartitionedDecomposed warnings regressed: got {partitioned_warnings}, \
          baseline allows ≤ {}. If the 75%-utilization gate isn't tripping (see \
          partition_rejected events), this means the 'belts over-provisioned' assumption from \
-         the RFP is failing on this case.",
+         the RFC is failing on this case.",
         partitioned_baseline.max_warnings_partitioned,
     );
     assert!(
@@ -3278,7 +3278,7 @@ fn stress_electronic_circuit_30s_from_ore() {
             // fluid-reservation filter + promote_blocked_encountered +
             // perimeter-boundary check landed.
             max_errors: 0,
-            // RFP rfp-lane-demand-flow.md Phase 1: was 0; +104 inserter-throughput (100) + input-rate-delivery (4).
+            // RFC rfc-lane-demand-flow.md Phase 1: was 0; +104 inserter-throughput (100) + input-rate-delivery (4).
             max_warnings: 104,
             max_errors_by_category: Default::default(),
         },
@@ -3316,7 +3316,7 @@ fn stress_advanced_circuit_45s_from_plates() {
     );
 }
 
-/// **K1-2 / K1-3 stress case** from `docs/rfp-modular-production.md`.
+/// **K1-2 / K1-3 stress case** from `docs/rfc-modular-production.md`.
 /// advanced-circuit @ 5/s exercises the partitioner — copper-cable is
 /// consumed by both `electronic-circuit` and `advanced-circuit`
 /// recipes (K=2). Runs the case under both `Pooled` and
@@ -3384,7 +3384,7 @@ fn stress_advanced_circuit_partitioned_5s_from_plates() {
         &partitioned,
         StressBaseline {
             max_errors: 3,
-            // RFP rfp-lane-demand-flow.md Phase 1: was 1; now 58 inserter-throughput (prior 1 belt-model warning cleared by demand-pull).
+            // RFC rfc-lane-demand-flow.md Phase 1: was 1; now 58 inserter-throughput (prior 1 belt-model warning cleared by demand-pull).
             max_warnings: 58,
             max_errors_by_category: Default::default(),
         },
@@ -3397,7 +3397,7 @@ fn stress_advanced_circuit_partitioned_5s_from_plates() {
             // (input-rate-delivery warnings) and the pole-repair Chebyshev/
             // Euclidean mismatch left disconnected poles (power warnings). With
             // both fixed, post-fix actual count is 0.
-            // RFP rfp-lane-demand-flow.md Phase 1: 58 inserter-throughput (PartitionedDecomposed, same inserter-bound machines as Pooled).
+            // RFC rfc-lane-demand-flow.md Phase 1: 58 inserter-throughput (PartitionedDecomposed, same inserter-bound machines as Pooled).
             max_warnings_partitioned: 58,
             // 1 rejection: EC module hits 89% of per-side capacity on blue belt
             // at AC=5/s. Documented as expected behavior, not a violation.
@@ -3451,7 +3451,7 @@ fn stress_advanced_circuit_partitioned_4s_from_plates() {
         &partitioned,
         StressBaseline {
             max_errors: 1,
-            // RFP rfp-lane-demand-flow.md Phase 1: was 0; +48 inserter-throughput.
+            // RFC rfc-lane-demand-flow.md Phase 1: was 0; +48 inserter-throughput.
             max_warnings: 48,
             max_errors_by_category: Default::default(),
         },
@@ -3460,7 +3460,7 @@ fn stress_advanced_circuit_partitioned_4s_from_plates() {
             max_errors_by_category_partitioned: Default::default(),
             // Post-fix (clean-slate SAT zone + pole-repair Euclidean): 0.
             // The PR #207 baseline of 33 was probed before those landed.
-            // RFP rfp-lane-demand-flow.md Phase 1: 48 inserter-throughput (PartitionedDecomposed, same inserter-bound machines as Pooled).
+            // RFC rfc-lane-demand-flow.md Phase 1: 48 inserter-throughput (PartitionedDecomposed, same inserter-bound machines as Pooled).
             max_warnings_partitioned: 48,
             max_partition_rejections: 0,
         },
@@ -3555,7 +3555,7 @@ fn stress_advanced_circuit_partitioned_7s_from_plates() {
 }
 
 /// **Phase 2 (PartitionedDecomposed) K1-1 case** from
-/// `docs/rfp-modular-production.md`. Electronic-circuit @ 30/s from ore on
+/// `docs/rfc-modular-production.md`. Electronic-circuit @ 30/s from ore on
 /// yellow belts: copper-cable demand is 90/s = 12 lanes (over the 8-lane
 /// cap), and copper-cable has a single consumer (EC) so Phase 1's
 /// per-consumer partitioning has nothing to do (K=1). Phase 2 shards
@@ -4140,7 +4140,7 @@ fn processing_unit_2s_am2_fast_belts_validation_baseline() {
         unexpected.join(", "),
     );
 
-    // RFP `docs/rfp-power-reservation.md` Phase 3a-ii (reactive power repair):
+    // RFC `docs/rfc-power-reservation.md` Phase 3a-ii (reactive power repair):
     // this baseline tallies ERRORS only, structurally masking inserter
     // power-coverage WARNINGS, so pin the exact count. All 43 were 0/49-free in
     // the 7×7 vs post-routing footprints (a genuine pitch limit). This is the
@@ -4171,9 +4171,9 @@ fn processing_unit_2s_am2_fast_belts_validation_baseline() {
 /// solve needs for its UG-ins, and the commit filter (rightly) refuses
 /// to overwrite them. Phase 3 (SAT pipe-awareness in multi-cluster
 /// zones) is required to drive this to zero — see
-/// `docs/rfp-pipe-belt-junctions.md`.
+/// `docs/rfc-pipe-belt-junctions.md`.
 #[test]
-#[ignore = "Phase 3: belt×belt SAT cluster claims the tiles the adjacent belt×pipe bypass needs (see RFP doc)"]
+#[ignore = "Phase 3: belt×belt SAT cluster claims the tiles the adjacent belt×pipe bypass needs (see RFC doc)"]
 #[ntest::timeout(60000)]
 fn pipe_belt_processing_unit_1s_routes() {
     let inputs: FxHashSet<String> = ["iron-plate", "copper-plate", "plastic-bar", "sulfuric-acid"]
@@ -4258,8 +4258,8 @@ fn stress_electronic_circuit_60s_red_from_ore() {
         &result,
         StressBaseline {
             max_errors: 1,
-            // RFP rfp-lane-demand-flow.md Phase 1: was 0; +200 inserter-throughput.
-            // RFP `docs/rfp-power-reservation.md` Phase 3a-ii (reactive power
+            // RFC rfc-lane-demand-flow.md Phase 1: was 0; +200 inserter-throughput.
+            // RFC `docs/rfc-power-reservation.md` Phase 3a-ii (reactive power
             // repair): this red variant's only warnings were the 60 hard-limit
             // uncovered inserters (6 starved EC input-inserter rows). The
             // reactive pass inserts +2 free rows at each starved cycle boundary;
@@ -4300,8 +4300,8 @@ fn stress_electronic_circuit_22s_from_ore() {
         &result,
         StressBaseline {
             max_errors: 0,
-            // RFP rfp-lane-demand-flow.md Phase 1: was 1; now 74 inserter-throughput (prior belt-model warning cleared).
-            // RFP rfp-inserter-sizing.md Phase 2: +45 inserter-item-throughput (new per-item companion check) = 75.
+            // RFC rfc-lane-demand-flow.md Phase 1: was 1; now 74 inserter-throughput (prior belt-model warning cleared).
+            // RFC rfc-inserter-sizing.md Phase 2: +45 inserter-item-throughput (new per-item companion check) = 75.
             max_warnings: 75,
             max_errors_by_category: Default::default(),
         },
@@ -4327,8 +4327,8 @@ fn stress_electronic_circuit_23s_from_ore() {
         &result,
         StressBaseline {
             max_errors: 0,
-            // RFP rfp-lane-demand-flow.md Phase 1: was 1; now 78 inserter-throughput (prior belt-model warning cleared).
-            // RFP rfp-inserter-sizing.md Phase 2: +48 inserter-item-throughput (new per-item companion check) = 80.
+            // RFC rfc-lane-demand-flow.md Phase 1: was 1; now 78 inserter-throughput (prior belt-model warning cleared).
+            // RFC rfc-inserter-sizing.md Phase 2: +48 inserter-item-throughput (new per-item companion check) = 80.
             max_warnings: 80,
             max_errors_by_category: Default::default(),
         },
@@ -4364,8 +4364,8 @@ fn stress_electronic_circuit_35s_from_ore() {
             // present at this scoreboard for a long time. Tighten when
             // the upstream layout-pipeline bugs (e.g. #297) get fixed.
             max_errors: 4,
-            // RFP rfp-lane-demand-flow.md Phase 1: was 123 (88 belt-flow-reachability + 35 input-rate-delivery); now +118 inserter-throughput = 241.
-            // RFP rfp-inserter-sizing.md Phase 2: +72 inserter-item-throughput (new per-item companion check) = 243.
+            // RFC rfc-lane-demand-flow.md Phase 1: was 123 (88 belt-flow-reachability + 35 input-rate-delivery); now +118 inserter-throughput = 241.
+            // RFC rfc-inserter-sizing.md Phase 2: +72 inserter-item-throughput (new per-item companion check) = 243.
             max_warnings: 243,
             max_errors_by_category: [
                 ("belt-dead-end".to_string(), 4),
@@ -4450,7 +4450,7 @@ fn layout_retry_is_trace_independent() {
 }
 
 /// Measurement harness (not a gate): utility-science-pack@10/s AM3 through
-/// the public pipeline (build_bus_layout → selection) — the merge-tap RFP's
+/// the public pipeline (build_bus_layout → selection) — the merge-tap RFC's
 /// goal cell. Prints the shipped error count + category split and dumps a
 /// snapshot. Run with --ignored --nocapture; takes ~25 min. History:
 /// 175 (native) → 108 → 98 → 46 (STEP B re-land, 2026-07-14).
@@ -4509,8 +4509,8 @@ fn stress_electronic_circuit_40s_from_ore() {
             // for a long time. Tighten when the upstream layout-pipeline
             // bugs (e.g. #297) get fixed.
             max_errors: 13,
-            // RFP rfp-lane-demand-flow.md Phase 1: was 195; now +inserter-throughput = 329 (belt-flow-reachability + input-rate-delivery unchanged).
-            // RFP rfp-inserter-sizing.md Phase 2: +81 inserter-item-throughput (new per-item companion check) = 330.
+            // RFC rfc-lane-demand-flow.md Phase 1: was 195; now +inserter-throughput = 329 (belt-flow-reachability + input-rate-delivery unchanged).
+            // RFC rfc-inserter-sizing.md Phase 2: +81 inserter-item-throughput (new per-item companion check) = 330.
             max_warnings: 330,
             max_errors_by_category: [
                 ("belt-dead-end".to_string(), 13),
@@ -6785,7 +6785,7 @@ fn diag_decomposition_signature_match() {
 
 
 // ===========================================================================
-// Fulgora scrap sushi-sorter (RFP Fulgora Phase 3, docs/rfp-fulgora-scrap.md
+// Fulgora scrap sushi-sorter (RFC Fulgora Phase 3, docs/rfc-fulgora-scrap.md
 // D3). The recycler-bank + filter-inserter sushi sorter MECHANISM lands here
 // and is exercised end-to-end below. The full 0-error/0-warning fixture is
 // gated on the bus/merger routing at scale (12 single-item outputs dispersed
@@ -6797,7 +6797,7 @@ fn diag_decomposition_signature_match() {
 
 /// Solve a Fulgora scrap chain via the net-flow solver with
 /// `allow_recycling` (the public `solve_with_exclusions` path used by the
-/// other e2e fixtures does NOT plumb recycling — RFP D4, Phase 4). Mirrors
+/// other e2e fixtures does NOT plumb recycling — RFC D4, Phase 4). Mirrors
 /// `tests/solver_netflow_parity.rs::report_fulgora_spike`.
 fn solve_fulgora(target: &str, rate: f64) -> SolverResult {
     use spaghettio_core::netflow::{solve_netflow_with_options, CostTable, NetflowOptions, RecipeScope};
@@ -6892,7 +6892,7 @@ fn fulgora_scrap_sorter_mechanism_present() {
 }
 
 // ---------------------------------------------------------------------------
-// Census snapshot regeneration (RFP `docs/rfp-power-supply.md` Phase 0d)
+// Census snapshot regeneration (RFC `docs/rfc-power-supply.md` Phase 0d)
 // ---------------------------------------------------------------------------
 //
 // The 6 `census_*_science_pack` snapshots in the pole census
@@ -6911,7 +6911,7 @@ fn fulgora_scrap_sorter_mechanism_present() {
 //
 // Pack list, machine tiers, rate, and Nauvis input set are kept identical to
 // the `science_gauntlet` measurement test (crates/core/tests/science_gauntlet.rs)
-// so the census reproduces the same layouts the RFP measured. The snapshot
+// so the census reproduces the same layouts the RFC measured. The snapshot
 // file names (`snapshot-census_<pack>_science_pack.fls`) match the census
 // `path` fields exactly.
 //
@@ -6971,9 +6971,9 @@ fn census_science_pack_snapshots() {
     }
 }
 
-// ── Build quality (docs/rfp-build-quality.md Phase 2) ──────────────────
+// ── Build quality (docs/rfc-build-quality.md Phase 2) ──────────────────
 
-/// Differential pair (RFP verification plan): the same recipe/shape at
+/// Differential pair (RFC verification plan): the same recipe/shape at
 /// Normal vs Legendary, isolating quality as the only variable. EC@4/s
 /// from plates on AM3 is sized so the legendary variant contains
 /// single-machine rows (the small-N template regime the design section
@@ -6981,7 +6981,7 @@ fn census_science_pack_snapshots() {
 /// fan-in limit — at 6/s on yellow the legendary variant trips the
 /// pre-existing "multi-stage balancer not wired" refusal (2 ceil'd cable
 /// machines can push 25/s at one consumer trunk capped at 15/s; see the
-/// RFP decision log 2026-07-20). Red belts because EC-from-plates on
+/// RFC decision log 2026-07-20). Red belts because EC-from-plates on
 /// yellow carries the known #65 lane-throughput errors at Normal. Asserts: both tiers 0 errors; the
 /// hand-computed machine counts (Normal EC 4/2.5=1.6, cable 12/5=2.4;
 /// Legendary EC 0.64, cable 0.96); functional-only stamping
@@ -7091,7 +7091,7 @@ fn quality_differential_ec_normal_vs_legendary() {
     );
 }
 
-/// Stress-scale legendary fixture (RFP kill criterion 5: capped at one
+/// Stress-scale legendary fixture (RFC kill criterion 5: capped at one
 /// blue belt, 45/s, until #311 closes — the 60/s headline re-lands
 /// after). EC from ore on express at Legendary: ~92 machines vs ~230 at
 /// Normal. 0 errors; the single warning is the known pre-existing

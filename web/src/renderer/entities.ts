@@ -1012,7 +1012,7 @@ export async function preloadQualityBadgeIcons(): Promise<void> {
  *  mirroring the in-game badge position. Prefers the actual game icon
  *  (`icons/quality-<tier>.png`); falls back to a tier-colored diamond if
  *  the texture isn't cached (e.g. cold load race). Only functional
- *  entities carry `quality` (rfp-build-quality functional-only
+ *  entities carry `quality` (rfc-build-quality functional-only
  *  stamping), so belts stay clean automatically. */
 function addQualityBadge(g: Graphics, quality: string): void {
   const bounds = g.getLocalBounds();

@@ -13,7 +13,7 @@ export interface FormState {
   /** Max belt tier override, e.g. "transport-belt". null = auto. */
   belt: string | null;
   /** Layout strategy ("partitioned-decomposed").
-   * null = pooled (today's default). See `docs/rfp-modular-production.md`.
+   * null = pooled (today's default). See `docs/rfc-modular-production.md`.
    *
    * The legacy `"partitioned-per-consumer"` URL value is still accepted
    * on read (back-compat for bookmarked URLs) and normalised to
@@ -21,16 +21,16 @@ export interface FormState {
    * dominated by P2 across the diag corpus and was hard-deleted. */
   strategy: string | null;
   /** Row layout ("horizontal-stack"). null = vertical-split (today's default).
-   * See `docs/rfp-horizontal-trunks.md`. */
+   * See `docs/rfc-horizontal-trunks.md`. */
   rowLayout: string | null;
   /** Max inserter tier override ("regular" | "fast"). null = stack
    * (today's default) — mirrors `belt`'s "null = auto" semantics, except
    * the un-set value IS the richest tier here (there's no cheaper
-   * "auto"), so null means "no cap". See `docs/rfp-inserter-sizing.md`. */
+   * "auto"), so null means "no cap". See `docs/rfc-inserter-sizing.md`. */
   inserterTier: string | null;
   /** Build quality of placed entities ("uncommon" | "rare" | "epic" |
    * "legendary"). null = normal (today's default) — same null-is-default
-   * convention as `inserterTier`. See `docs/rfp-build-quality.md`. */
+   * convention as `inserterTier`. See `docs/rfc-build-quality.md`. */
   quality: string | null;
   /** User-added inputs beyond the DEFAULT_INPUTS list. */
   customInputs: string[];

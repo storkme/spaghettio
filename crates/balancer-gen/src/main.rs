@@ -1933,7 +1933,7 @@ fn compose_series(
         );
     }
 
-    // Two-budget search (RFP rfp-balancer-jh-search.md):
+    // Two-budget search (RFC rfc-balancer-jh-search.md):
     // - SHORT_TIMEOUT: fast infeasibility proof. INFEASIBLE under SHORT is a
     //   real CP-SAT proof; advance immediately without spending more time.
     // - LONG_TIMEOUT: used only when SHORT returns UNKNOWN (ambiguous). Retry

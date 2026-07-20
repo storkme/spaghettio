@@ -14,7 +14,7 @@ pub use fluids::{
 };
 
 // Fluid-port classification accessor for the `common` drift regression
-// (RFP `docs/rfp-power-supply.md` Phase 0b/0e-i). Test-only re-export; the
+// (RFC `docs/rfc-power-supply.md` Phase 0b/0e-i). Test-only re-export; the
 // tables now live in the shared `crate::fluid_ports` module.
 #[cfg(test)]
 pub(crate) use crate::fluid_ports::machine_has_fluid_ports;
@@ -68,7 +68,7 @@ impl Severity {
 /// Machine-readable payload for rate-shaped issues. The prose `message`
 /// already states these numbers; carrying them structurally lets the web
 /// UI compute severity ratios (starvation heatmap) without parsing text.
-/// See `docs/rfp-validation-explainability.md` (D1). Cause attribution
+/// See `docs/rfc-validation-explainability.md` (D1). Cause attribution
 /// deliberately does NOT live here — causes are stamp-time facts and ride
 /// the trace-event side (D2).
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
@@ -192,8 +192,8 @@ pub fn unresolved_region_tiles(layout: &LayoutResult) -> FxHashSet<(i32, i32)> {
 /// Whether a splitter output branch is a *priority branch* — one whose
 /// downstream belt is tagged either as a self-loop recirculation
 /// (`:selfloop:`, the kovarex / voider precedent) or as a merge-and-tap
-/// priority tap ([`crate::common::MERGE_TAP_SEGMENT_TAG`], RFP
-/// `docs/rfp-merge-tap-trunks.md` D4). Both walkers route a priority branch
+/// priority tap ([`crate::common::MERGE_TAP_SEGMENT_TAG`], RFC
+/// `docs/rfc-merge-tap-trunks.md` D4). Both walkers route a priority branch
 /// with the `loop_priority_rate` min(total, cap) law instead of the generic
 /// even split; the two tags share that one rate law and differ only in the
 /// demand source (the loop's recirculation rate vs the tap's consumer
@@ -212,7 +212,7 @@ pub(crate) fn segment_is_priority_branch(seg: Option<&str>) -> bool {
 /// for `recipe`, preferring `layout.effective_rows`'s position attribution
 /// over a recipe-name lookup — partition siblings share a recipe name but
 /// carry different utilizations, and a recipe-keyed lookup collapses them
-/// to whichever sibling iterated last (`docs/rfp-inserter-sizing.md` Phase 1
+/// to whichever sibling iterated last (`docs/rfc-inserter-sizing.md` Phase 1
 /// finding). Falls back to `fallback_spec` when no row attribution is
 /// available (hand-built `LayoutResult`s in tests, or spaghetti-style
 /// layouts that never populate `effective_rows`) — a byte-for-byte no-op
@@ -246,16 +246,16 @@ pub(crate) fn resolve_row_spec<'a>(
 /// top.
 /// Byproduct flows the solver could not credit against any demand and the
 /// layout cannot yet route anywhere (`SolverResult::surplus_outputs`). Until
-/// Phase 2 of docs/rfp-solver-net-flow.md lands surplus-to-perimeter
+/// Phase 2 of docs/rfc-solver-net-flow.md lands surplus-to-perimeter
 /// routing, every such flow is a machine output port that physically backs
 /// up in-game: the producing machine stalls once its internal buffer fills.
 /// Reported as an **error** (not a warning) by explicit decision — this is
-/// exactly the "validator-clean but game-dead" class the net-flow RFP
+/// exactly the "validator-clean but game-dead" class the net-flow RFC
 /// exists to eliminate, and it was previously invisible (the tree walk
 /// dropped these flows on the floor; e.g. utility-science-pack's AOP
 /// light-oil, stranded silently for as long as the chain has existed).
 ///
-/// Solid surplus routing (RFP Fulgora D2a/D2b, docs/rfp-fulgora-scrap.md)
+/// Solid surplus routing (RFC Fulgora D2a/D2b, docs/rfc-fulgora-scrap.md)
 /// extends the same entity-cross-checked acceptance fluids already had —
 /// the step-7 solid-surplus merger records an exit tile in
 /// `LayoutResult::surplus_exits` the same way the fluid trunk router does.
@@ -288,7 +288,7 @@ pub fn check_stranded_byproducts(
         })
     };
 
-    // RFP Fulgora Phase 2 (docs/rfp-fulgora-scrap.md D1): under
+    // RFC Fulgora Phase 2 (docs/rfc-fulgora-scrap.md D1): under
     // `SurplusPolicy::Void`, a solid surplus item may instead be
     // consumed by a layout-synthesized voider recycler bank —
     // `LayoutResult::voided_streams`, recorded first-class and
@@ -433,7 +433,7 @@ pub fn check_balancer_template_coverage(layout: &LayoutResult) -> Vec<Validation
 /// These warnings are emitted inline by `bus::layout::layout_pass` when a
 /// `LaneFamily`'s `(n, m)` shape has no direct template AND no gcd-
 /// decomposition path. Cheap proxy used by the decomposition-search
-/// hard-constraint check (`docs/rfp-decomposition-search.md`) — avoids
+/// hard-constraint check (`docs/rfc-decomposition-search.md`) — avoids
 /// running the full validator just to spot unstampable shapes.
 ///
 /// Reads `LayoutResult.warnings` directly (no trace dependency, unlike
@@ -592,7 +592,7 @@ mod tests {
         }
     }
 
-    // ── check_stranded_byproducts (solid surplus, RFP Fulgora D2a/D2b) ──────
+    // ── check_stranded_byproducts (solid surplus, RFC Fulgora D2a/D2b) ──────
 
     #[test]
     fn stranded_byproducts_solid_surplus_with_exit_and_belt_is_clean() {

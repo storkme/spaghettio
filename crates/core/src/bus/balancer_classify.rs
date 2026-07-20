@@ -976,7 +976,7 @@ mod tests {
     }
 
     /// Audit report: classify every template and print a markdown table
-    /// of `(m, n) → class`. Run with `--nocapture` to copy into the RFP
+    /// of `(m, n) → class`. Run with `--nocapture` to copy into the RFC
     /// decision log. This test only asserts the classifier doesn't panic;
     /// the report itself is the deliverable.
     #[test]

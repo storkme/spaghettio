@@ -1,5 +1,5 @@
 // Region classifier: takes a LayoutRegion and tries to assign it one of the
-// template classes from the junction solver RFP. Pure function, no state.
+// template classes from the junction solver RFC. Pure function, no state.
 //
 // The goal is educational: when the user hovers a region, show both what
 // the engine labelled it as (kind: junction_template / corridor_template /

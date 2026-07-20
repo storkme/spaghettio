@@ -1,14 +1,14 @@
 //! Demand-partitioning of multi-consumer items.
 //!
 //! Implements the outer pass of `LayoutStrategy::PartitionedDecomposed`
-//! from `docs/rfp-modular-production.md`. PR1 of Phase 1 introduced the
+//! from `docs/rfc-modular-production.md`. PR1 of Phase 1 introduced the
 //! dispatcher + utilization helpers; PR2 (this file's full algorithm)
 //! actually splits multi-consumer items into K modules at the
 //! `SolverResult` level, before placement and lane planning. Phase 2's
 //! decomposition pass adds subtree sharding when a single module still
 //! exceeds the 8-lane cap.
 //!
-//! Granularity note. The RFP defines a "consumer" as one consuming
+//! Granularity note. The RFC defines a "consumer" as one consuming
 //! recipe-row. PR2 partitions at *recipe* granularity instead — if a
 //! recipe is split across multiple rows by the placer's throughput
 //! heuristic, all those rows share the same module. This is a
@@ -20,9 +20,9 @@
 //!
 //! Fluids carve-out. Pipe networks merge freely; per-lane identity
 //! doesn't apply. The partitioner skips items with `is_fluid = true`
-//! (RFP "Fluids" section).
+//! (RFC "Fluids" section).
 //!
-//! See K0-1, K1-1, K1-2, K1-3, K1-4 in the RFP for the gates this code
+//! See K0-1, K1-1, K1-2, K1-3, K1-4 in the RFC for the gates this code
 //! upholds.
 
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -44,7 +44,7 @@ const PER_LANE_CAPACITY: &[(&str, f64)] = &[
     ("express-transport-belt", 22.5),
 ];
 
-/// The 75% over-provisioning ceiling from the RFP's "Load-bearing
+/// The 75% over-provisioning ceiling from the RFC's "Load-bearing
 /// assumption" section. Lanes above this fraction of belt capacity are
 /// assumed to suffer from per-machine timing jitter, and the
 /// partitioner refuses to allocate them.
@@ -135,7 +135,7 @@ pub struct ModuleAssignment {
     /// compared to the ceiling on a single side. `> 1.0` means at
     /// least one side busts the gate; the partitioner emits
     /// `PartitionRejectedByUtilization` and produces an invalid
-    /// layout. See K1-2 in the RFP.
+    /// layout. See K1-2 in the RFC.
     pub utilization: f64,
 }
 
@@ -206,7 +206,7 @@ impl PartitionPlan {
 ///   5. Utilization = rate / (lane_count * per_lane_capacity * 0.75).
 ///      The partitioner does *not* veto on overshoot — it produces
 ///      the plan and surfaces a `PartitionRejectedByUtilization`
-///      trace event so the user sees the strategy doesn't fit (RFP's
+///      trace event so the user sees the strategy doesn't fit (RFC's
 ///      "no silent downgrade" stance).
 pub fn plan_partitioning(
     solver_result: &SolverResult,
@@ -353,7 +353,7 @@ const SHARD_THRESHOLD_LANES: u32 = 10;
 /// Tuning rationale: above 3, the unsolved-junction count on the
 /// scoreboard's plates-yellow cases climbed faster than the
 /// balancer-template-availability won back. See PR #238 thread for
-/// the data; revisit when junction-solver capability work (RFP #241)
+/// the data; revisit when junction-solver capability work (RFC #241)
 /// changes the baseline.
 const MAX_SHARDS_PER_MODULE: u32 = 3;
 
@@ -784,7 +784,7 @@ pub fn apply_partition_plan(solver_result: &SolverResult, plan: &PartitionPlan) 
 /// remains contiguous.
 ///
 /// Used by `bus::decomposition_search::ModuleSizeSplit` (see
-/// `docs/rfp-decomposition-search.md`). Splitting `(item=copper-plate,
+/// `docs/rfc-decomposition-search.md`). Splitting `(item=copper-plate,
 /// recipe=electronic-circuit, rate=R, lane_count=L)` into `k=2` gives
 /// two modules with `rate=R/2` and `lane_count=ceil(R/2 / per_lane_cap)`,
 /// both serving the same consumer recipe. Producer-side, the existing

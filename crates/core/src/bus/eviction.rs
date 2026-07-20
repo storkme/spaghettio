@@ -12,7 +12,7 @@
 //! Eviction is never a complete solve on its own — if SAT comes back
 //! UNSAT on the reduced problem we move to the next recipe.
 //!
-//! See `docs/rfp-junction-solver-capability.md` for the design rationale.
+//! See `docs/rfc-junction-solver-capability.md` for the design rationale.
 
 use rustc_hash::{FxHashMap, FxHashSet};
 

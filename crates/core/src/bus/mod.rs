@@ -11,7 +11,7 @@
 //! - [`layout`] — orchestrator: rows + lane planning + poles + ghost routing → `LayoutResult`
 //! - [`placer`] — stacks assembly rows vertically in dependency order
 //! - [`templates`] — belt/inserter patterns stamped into each row
-//! - [`inserter_ladder`] — per-side inserter tier/count sizing (`docs/rfp-inserter-sizing.md`)
+//! - [`inserter_ladder`] — per-side inserter tier/count sizing (`docs/rfc-inserter-sizing.md`)
 //! - [`lane_planner`] — `BusLane` / `LaneFamily` types + `plan_bus_lanes` orchestration
 //! - [`lane_order`] — left-to-right lane ordering optimiser
 //! - [`balancer`] — N→M balancer block stamping (+ splitter/UG name helpers)

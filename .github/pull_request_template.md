@@ -8,7 +8,7 @@ explicitly rather than leaving them blank.
 ## Intent
 
 What problem this solves and why now. 1–3 sentences. If this implements an
-RFP or closes an issue, link it.
+RFC or closes an issue, link it.
 
 ## Scope
 
@@ -28,7 +28,7 @@ verification protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protocol-for-la
 
 ## Deviations from intent
 
-Anything that differs from what was discussed or RFP'd, judgement calls
+Anything that differs from what was discussed or RFC'd, judgement calls
 made mid-flight, things intentionally deferred. **"None" is a valid answer
 — write it explicitly so it's clear nothing was glossed over.**
 

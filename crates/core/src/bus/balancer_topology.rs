@@ -1,5 +1,5 @@
 //! Logical topology generators for balancer graphs (phase 3.0 of
-//! [`docs/rfp-balancer-graph-place.md`]).
+//! [`docs/rfc-balancer-graph-place.md`]).
 //!
 //! Emits [`SplitterGraph`] instances that describe an `(m, n)` balancer's
 //! splitter network *without* committing to a physical placement. The

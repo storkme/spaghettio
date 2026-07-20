@@ -1,4 +1,4 @@
-//! Voider row synthesis (RFP Fulgora Phase 2, `docs/rfp-fulgora-scrap.md`
+//! Voider row synthesis (RFC Fulgora Phase 2, `docs/rfc-fulgora-scrap.md`
 //! D1).
 //!
 //! Under `LayoutOptions::surplus_policy == SurplusPolicy::Void`, solid
@@ -10,7 +10,7 @@
 //! recipe data — no LP involvement. The solver keeps reporting surplus
 //! honestly at the frozen cost table; the LAYOUT decides what to do with
 //! it (export or void), the same way it already synthesizes balancers
-//! and output mergers without solver involvement. See the RFP's D1
+//! and output mergers without solver involvement. See the RFC's D1
 //! design rationale for why voiding lives here and not in the solver.
 //!
 //! Streams that don't resolve to a self-voider shape (multi-output

@@ -34,7 +34,7 @@ export interface JunctionMembership {
 /** A machine side the inserter ladder couldn't fully provision, keyed at
  *  the machine origin — the same tile rate-shaped validation warnings
  *  anchor at, so the inspector can explain a warning by plain lookup
- *  (RFP validation-explainability D2: join, never inference). */
+ *  (RFC validation-explainability D2: join, never inference). */
 export interface CappedSideAtTile {
   recipe: string;
   sideIsOutput: boolean;

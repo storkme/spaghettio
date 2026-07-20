@@ -175,7 +175,7 @@ pub fn get_crafting_speed(entity: &str) -> f64 {
 }
 
 /// [`get_crafting_speed`] scaled by build quality — THE choke point for
-/// quality-aware machine math (`docs/rfp-build-quality.md` Phase 1).
+/// quality-aware machine math (`docs/rfc-build-quality.md` Phase 1).
 /// Both net-flow modes (free and compat) read speeds through this via
 /// `NetflowOptions.quality`; there is deliberately no `Normal` branch, so
 /// the default path exercises the same multiplication (kill criterion 2:
@@ -313,7 +313,7 @@ fn category_machines(category: &str) -> &'static [&'static str] {
         "metallurgy" | "metallurgy-or-assembling" | "pressing" => &["foundry"],
         "organic" | "organic-or-assembling" => &["biochamber"],
         "centrifuging" => &["centrifuge"],
-        // Fulgora scrap economy (docs/rfp-solver-net-flow.md spike): both
+        // Fulgora scrap economy (docs/rfc-solver-net-flow.md spike): both
         // categories are excluded from normal solving by
         // EXCLUDED_CATEGORIES, so this mapping is inert on every default
         // path — it only matters once a caller opts in via
@@ -326,7 +326,7 @@ fn category_machines(category: &str) -> &'static [&'static str] {
 
 /// Categories that genuinely run on general-purpose assemblers. An explicit
 /// whitelist, not a fall-through: before Phase 1 of
-/// docs/rfp-solver-net-flow.md, *any* unmapped category (`centrifuging`,
+/// docs/rfc-solver-net-flow.md, *any* unmapped category (`centrifuging`,
 /// `rocket-building`, …) silently landed on an assembler at assembler speed
 /// — confidently wrong output with zero signal. Unknown categories now fail
 /// [`machine_handles_category`] for every machine, surfacing as a typed
@@ -458,7 +458,7 @@ mod tests {
         assert_eq!(iron_plate_ings[0].amount, 2.0);
     }
 
-    /// Kill criterion 2a (rfp-build-quality): `effective_crafting_speed`
+    /// Kill criterion 2a (rfc-build-quality): `effective_crafting_speed`
     /// at Normal must be bit-identical to the raw speed for every known
     /// machine (and the unknown-name fallback) — `×1.0` is an IEEE 754
     /// no-op, and this pins the helper against ever growing a divergent
@@ -473,7 +473,7 @@ mod tests {
                 "{m}"
             );
         }
-        // And the scaling itself, spot-checked on the RFP's anchor values.
+        // And the scaling itself, spot-checked on the RFC's anchor values.
         assert_eq!(
             effective_crafting_speed("assembling-machine-3", QualityTier::Legendary),
             3.125

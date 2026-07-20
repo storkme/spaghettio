@@ -190,7 +190,7 @@ struct BpEntity {
     filters: Vec<BpFilter>,
     /// Factorio 2.0 entity build quality (`quality :: string?` per
     /// lua-api BlueprintEntity; absent = normal). Silently dropped before
-    /// `docs/rfp-build-quality.md` Phase 0, which misreported quality-built
+    /// `docs/rfc-build-quality.md` Phase 0, which misreported quality-built
     /// community blueprints. Kept as the raw string here; the conversion
     /// maps the five vanilla names via `QualityTier::from_name` (modded
     /// quality names fall back to `None`/normal — vanilla-only fidelity).
@@ -497,7 +497,7 @@ mod tests {
 
     /// Encode raw blueprint JSON into the `"0" + base64(zlib(JSON))`
     /// envelope. Synthetic-fixture path for format fields our own export
-    /// doesn't emit yet (e.g. `quality` before rfp-build-quality Phase 2)
+    /// doesn't emit yet (e.g. `quality` before rfc-build-quality Phase 2)
     /// — parsing must not be blocked on finding a community artifact.
     fn encode_envelope(json: &serde_json::Value) -> String {
         use base64::Engine;

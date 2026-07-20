@@ -17,7 +17,7 @@ use crate::common::{is_inserter, is_machine_entity};
 use crate::bus::placer::{place_rows, RowSpan};
 
 /// Layout strategy. Selects the shape of the bus the engine produces.
-/// See `docs/rfp-modular-production.md` for the rationale.
+/// See `docs/rfc-modular-production.md` for the rationale.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum LayoutStrategy {
     /// One shared lane family per item, single balancer at the producer
@@ -27,14 +27,14 @@ pub enum LayoutStrategy {
     /// One lane family per consuming recipe-row, sized to that
     /// consumer's exact demand, no pool-balancer; plus subtree sharding
     /// when a single module's widest upstream recipe still exceeds 8
-    /// lanes. The Phase 1 + Phase 2 strategy from the RFP, merged into
+    /// lanes. The Phase 1 + Phase 2 strategy from the RFC, merged into
     /// a single variant after Phase 1's per-consumer-only mode was
     /// removed (it was strictly dominated by the decomposed pass across
     /// the diag corpus).
     PartitionedDecomposed,
 }
 
-/// Per-recipe row geometry. See `docs/rfp-horizontal-trunks.md`.
+/// Per-recipe row geometry. See `docs/rfc-horizontal-trunks.md`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum RowLayout {
     /// Today's behaviour: input-bottlenecked recipes split vertically
@@ -50,13 +50,13 @@ pub enum RowLayout {
 }
 
 /// What the layout does with solid byproduct surplus (`SolverResult::
-/// surplus_outputs`). See `docs/rfp-fulgora-scrap.md` D1 — voiding is a
+/// surplus_outputs`). See `docs/rfc-fulgora-scrap.md` D1 — voiding is a
 /// layout policy, not a solver objective, so this lives on
 /// `LayoutOptions` rather than anywhere in the solver.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum SurplusPolicy {
     /// Today's behaviour: solid surplus routes to the perimeter/merger
-    /// (RFP Fulgora D2a/D2b). Byte-identical to pre-Phase-2 output.
+    /// (RFC Fulgora D2a/D2b). Byte-identical to pre-Phase-2 output.
     #[default]
     Export,
     /// Solid surplus that resolves to a recognized self-voider recipe
@@ -80,18 +80,18 @@ pub struct LayoutOptions {
     pub row_layout: RowLayout,
     pub surplus_policy: SurplusPolicy,
     /// Hard cap on inserter tier the sizing ladder may place
-    /// (`docs/rfp-inserter-sizing.md`), mirroring `max_belt_tier`
+    /// (`docs/rfc-inserter-sizing.md`), mirroring `max_belt_tier`
     /// semantics. Default `Stack`. Core field only in Phase 1 — not yet
     /// plumbed through wasm-bindings or the web UI (Phase 4).
     pub max_inserter_tier: InserterTier,
     /// Build quality of the entities the engine places
-    /// (`docs/rfp-build-quality.md` Phase 2): scales the sizing ladder's
+    /// (`docs/rfc-build-quality.md` Phase 2): scales the sizing ladder's
     /// inserter ceilings and pole geometry, and is stamped onto
     /// functional entities (machines/inserters/poles) for export.
     /// Default `Normal` — a bit-exact no-op (kill criterion 2).
     pub quality: crate::common::QualityTier,
     /// Enable the merge-and-tap trunk fallback for unstampable
-    /// multi-producer/multi-consumer families (`docs/rfp-merge-tap-trunks.md`).
+    /// multi-producer/multi-consumer families (`docs/rfc-merge-tap-trunks.md`).
     /// Default `false` (byte-identical to pre-fallback layouts). Set only by
     /// `bus::decomposition_search::MergeTapCandidate`; never by the default
     /// `NativeCandidate`. Replaces the retired `MERGE_TAP_FALLBACK_ENABLED`
@@ -127,7 +127,7 @@ impl LayoutOptions {
 /// which evaluates each `DecompositionCandidate` against a scoring
 /// function and returns the winner. With Phase 0's single
 /// `NativeCandidate`, output is byte-identical to direct dispatch
-/// (K-DS0-1 inertness gate). See `docs/rfp-decomposition-search.md`.
+/// (K-DS0-1 inertness gate). See `docs/rfc-decomposition-search.md`.
 pub fn build_bus_layout(
     solver_result: &SolverResult,
     opts: LayoutOptions,
@@ -140,7 +140,7 @@ pub fn build_bus_layout(
 /// computes retry gaps, and runs a second pass if needed. Extracted
 /// from `build_bus_layout` so `NativeCandidate::produce` can call it
 /// directly without recursing through the search layer. See
-/// `docs/rfp-decomposition-search.md` §Design.
+/// `docs/rfc-decomposition-search.md` §Design.
 pub(crate) fn run_layout_with_retry(
     solver_result: &SolverResult,
     opts: &LayoutOptions,
@@ -190,7 +190,7 @@ fn run_layout_with_retry_inner(
     let (result_1, row_spans_1, cap_coords, uncovered_1) =
         layout_pass(solver_result, opts, None, None, 0, explicit_plan)?;
 
-    // Two independent gap sources feed ONE pass-2 re-run (RFP Phase 3a-ii).
+    // Two independent gap sources feed ONE pass-2 re-run (RFC Phase 3a-ii).
     // Junction-cap gaps (existing) widen rows the junction solver couldn't pack;
     // substation bands (new) widen the cycle boundary above a deep-packed
     // inserter row so a substation can reach it. Both derive from pass-1 data
@@ -232,7 +232,7 @@ fn run_layout_with_retry_inner(
     // Merge both INTERIOR gap sources into the single map. A row that needs both
     // takes the larger widening — a substation band's 2 tiles already give the
     // junction solver its ≥1 tile of extra room, so `max` (not sum) keeps the
-    // freed band tight while satisfying both. Top-edge bands (RFP Phase 3b) go
+    // freed band tight while satisfying both. Top-edge bands (RFC Phase 3b) go
     // through a separate channel — they have no `extra_gap_after_row` predecessor
     // to widen, so they bump `layout_pass`'s y-offset instead (below).
     let mut merged_gaps = junction_gaps.clone();
@@ -242,7 +242,7 @@ fn run_layout_with_retry_inner(
             .and_modify(|v| *v = (*v).max(b.extra))
             .or_insert(b.extra);
     }
-    // Top-edge widen (RFP Phase 3b): the largest top-edge band's extra rows are
+    // Top-edge widen (RFC Phase 3b): the largest top-edge band's extra rows are
     // inserted before row 0 as a y-offset bump. `max` because every top-edge
     // band anchors at row 0 (the only row with no predecessor); a single freed
     // band above the layout serves them all.
@@ -269,7 +269,7 @@ fn run_layout_with_retry_inner(
     let (result_2, _, _, uncovered_2) =
         layout_pass(solver_result, opts, Some(&merged_gaps), subs, top_widen, explicit_plan)?;
 
-    // Convergence guard (RFP `docs/rfp-power-reservation.md` Phase 3a-ii review
+    // Convergence guard (RFC `docs/rfc-power-reservation.md` Phase 3a-ii review
     // followup). The reactive pass widened every starved band; if `place_poles`
     // STILL gives up on any electric inserter, the repair did NOT converge and
     // this layout ships power-broken. Every corpus fixture converges (the four
@@ -295,7 +295,7 @@ fn run_layout_with_retry_inner(
                 "spaghettio: reactive power-repair pass did NOT converge — {} electric \
                  inserter(s) still uncovered after widening. This layout ships \
                  power-broken; a new starved geometry needs a pinning fixture. See \
-                 docs/rfp-power-reservation.md Phase 3c. sample={:?}",
+                 docs/rfc-power-reservation.md Phase 3c. sample={:?}",
                 uncovered_2.len(),
                 uncovered_2.iter().take(8).collect::<Vec<_>>(),
             );
@@ -333,7 +333,7 @@ fn compute_retry_gaps(
     out
 }
 
-/// A pass-2 substation band (RFP `docs/rfp-power-reservation.md` Phase 3a-ii):
+/// A pass-2 substation band (RFC `docs/rfc-power-reservation.md` Phase 3a-ii):
 /// widen the gap AFTER row `row_after` (row_spans index) by `extra` tiles so a
 /// substation can be dropped into the freed space to reach the deep-packed
 /// inserter row that follows — a row whose input inserters sit at distance ≥4
@@ -346,10 +346,10 @@ fn compute_retry_gaps(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SubstationBand {
     /// Row-spans index this band is anchored to. For an interior band
-    /// (`top_edge == false`, RFP Phase 3a-ii) it is the PREDECESSOR row whose
+    /// (`top_edge == false`, RFC Phase 3a-ii) it is the PREDECESSOR row whose
     /// successor gap is widened: the freed rows land between `row_after` and
     /// `row_after + 1`, powering `row_after + 1`'s deep input inserters. For a
-    /// top-edge band (`top_edge == true`, RFP Phase 3b — the kovarex self-loop)
+    /// top-edge band (`top_edge == true`, RFC Phase 3b — the kovarex self-loop)
     /// it is the STARVED row itself (row 0): the widen has no predecessor gap to
     /// consume, so it is applied as a y-offset bump and the freed rows land
     /// between the bus header and `row_after`'s top, powering `row_after`'s own
@@ -360,7 +360,7 @@ struct SubstationBand {
     /// usable predecessor cycle). Threaded to `layout_pass` as a y-offset bump
     /// rather than an `extra_gap_after_row` entry, and resolved to a
     /// `SubstationTarget` against the row's own input-inserter band (which sits
-    /// deeper than the RFP-assumed `y_start..y_start+4` — the self-loop stacks
+    /// deeper than the RFC-assumed `y_start..y_start+4` — the self-loop stacks
     /// 5 belt/corridor rows above its inserters, so only a substation's ±9
     /// supply reaches down from the top freed band).
     top_edge: bool,
@@ -379,14 +379,14 @@ struct SubstationTarget {
 }
 
 /// Map `place_poles`' pass-1 uncovered-inserter set to the cycle boundaries
-/// whose gap a substation band must widen (RFP Phase 3a-ii + 3b). For each
+/// whose gap a substation band must widen (RFC Phase 3a-ii + 3b). For each
 /// uncovered inserter, find the row that contains it and flag the gap BEFORE
 /// that row: inserting free rows there lifts a band above the row's input belts
 /// WITHOUT breaking pick adjacency (the free space lands at the cycle boundary,
 /// never between belts and inserters — inserting there would sever the inserter
 /// from the belt it picks from).
 ///
-/// Two variants (RFP `docs/rfp-power-reservation.md`):
+/// Two variants (RFC `docs/rfc-power-reservation.md`):
 /// - **Interior** (3a-ii): `target > 0` — widen the gap after `target-1`
 ///   (`SubstationBand { row_after: target-1, top_edge: false }`), lifting the
 ///   band above `target`'s input belts. Powers `target`'s deep inserters.
@@ -412,11 +412,11 @@ fn compute_substation_bands(
     // y-translation cost (movement-budget criterion). Pinned by the four gating
     // fixtures + the kovarex self-loop.
     //
-    // ZERO-MARGIN WARNING (RFP Phase 3a-ii close-out): this +2 widen was tuned
+    // ZERO-MARGIN WARNING (RFC Phase 3a-ii close-out): this +2 widen was tuned
     // so the four interior gating fixtures clear via ordinary MEDIUM poles, not
     // substations — the freed band lands its covering pole at medium distance
     // EXACTLY 3 (the electronic-circuit dual-input row has 2 belt rows, not the
-    // RFP-assumed 3, so +2 is just enough). That is edge-tight with ZERO margin:
+    // RFC-assumed 3, so +2 is just enough). That is edge-tight with ZERO margin:
     // a template author who adds a belt row to a dual-input row, or shifts an
     // inserter one tile deeper, tips distance 3→4 and re-uncovers those inserters
     // — and 4 is outside the medium ±3, so the medium mop-up can't recover it.
@@ -438,7 +438,7 @@ fn compute_substation_bands(
             // Interior: widen the gap before `target` (after `target-1`).
             interior_rows_after.insert(target - 1);
         } else {
-            // Top edge (RFP Phase 3b): row 0 has no predecessor gap — widen its
+            // Top edge (RFC Phase 3b): row 0 has no predecessor gap — widen its
             // own top edge instead of skipping it (which is what left the
             // kovarex self-loop's 16 recirc inserters uncovered through 3a-ii).
             top_edge_rows.insert(target);
@@ -463,13 +463,13 @@ fn compute_substation_bands(
 /// Takes an optional `retry_extra_gaps` map (row index → extra tiles)
 /// that the retry loop in `build_bus_layout` uses to widen specific
 /// row boundaries on a second pass. `None` on the first pass; `Some`
-/// on the retry. `top_widen` (RFP Phase 3b) inserts that many free rows BEFORE
+/// on the retry. `top_widen` (RFC Phase 3b) inserts that many free rows BEFORE
 /// row 0 by bumping the row y-offset — the top-edge substation band's channel,
 /// separate from the interior `extra_gap_after_row` map (row 0 has no
 /// predecessor gap to widen). `0` on the first pass and for every layout without
 /// a top-edge starved row. Returns
 /// `(layout, row_spans, cap_coords, uncovered_inserters)`:
-/// `uncovered_inserters` is place_poles' give-up set, the RFP Phase 3a-ii
+/// `uncovered_inserters` is place_poles' give-up set, the RFC Phase 3a-ii
 /// reactive-substation trigger (empty for every non-starved layout). The retry
 /// loop maps `cap_coords` (junction-solver cap tiles, carried as data
 /// rather than scraped from the trace stream) back to row indices via
@@ -485,7 +485,7 @@ fn layout_pass(
     let max_belt_tier = opts.max_belt_tier.as_deref();
     let max_inserter_tier = opts.max_inserter_tier;
 
-    // RFP Fulgora Phase 2 (docs/rfp-fulgora-scrap.md D1): under
+    // RFC Fulgora Phase 2 (docs/rfc-fulgora-scrap.md D1): under
     // `SurplusPolicy::Void`, synthesize recycler-bank voider rows for
     // solid surplus that resolves to a self-voider recipe BEFORE any
     // other pipeline stage runs, so `place_rows`/`plan_bus_lanes`/
@@ -545,7 +545,7 @@ fn layout_pass(
         .collect();
 
     let bus_header = 1;
-    // Row placement y-origin. On the top-edge substation retry (RFP Phase 3b)
+    // Row placement y-origin. On the top-edge substation retry (RFC Phase 3b)
     // `top_widen > 0` bumps it below `bus_header`, freeing `top_widen` rows
     // between the bus header and row 0 for a substation that reaches down over
     // the row's packed input inserters. `bus_header` itself stays the freed
@@ -699,7 +699,7 @@ fn layout_pass(
 
     // Power poles are placed LAST — after ghost routing — so they occupy only
     // tiles left free by the FINAL routed layout and can never obstruct a belt
-    // or pipe (RFP `docs/rfp-power-supply.md`: "poles are placed last and live
+    // or pipe (RFC `docs/rfc-power-supply.md`: "poles are placed last and live
     // off leftover tiles"). Phase 0f restored this invariant: pole-first meant
     // the doubled inserter-coverage poles won tile contests against the router
     // and broke belt routing (census_logistic_science_pack). See the
@@ -778,10 +778,10 @@ fn layout_pass(
     // entities + the routed bus (belts, undergrounds, pipes, splitters) — so a
     // pole can never sit under a belt/pipe or force the router around it. The
     // mop-up now sees the true final occupancy, so coverage and hardness are
-    // consistent by construction (RFP Phase 0f fix — restores the poles-last
+    // consistent by construction (RFC Phase 0f fix — restores the poles-last
     // invariant the pipeline had been violating).
     // The pole block also yields the uncovered electric inserters place_poles
-    // gave up on (RFP Phase 3a-ii trigger), propagated out of layout_pass so
+    // gave up on (RFC Phase 3a-ii trigger), propagated out of layout_pass so
     // the reactive substation pass can widen starved bands. Empty for every
     // layout the two-band + mop-up covers.
     let (pole_entities, uncovered_inserters_out): (Vec<PlacedEntity>, Vec<(i32, i32)>) = {
@@ -820,11 +820,11 @@ fn layout_pass(
             }
         }
         // Resolve each pass-2 substation band to concrete tile coordinates and
-        // the deep input-inserter band it must power (RFP Phase 3a-ii + 3b).
+        // the deep input-inserter band it must power (RFC Phase 3a-ii + 3b).
         // Empty for every non-starved layout, so `place_poles` stays
         // byte-identical there.
         // A tile is genuinely packed (medium-unreachable) iff its whole 7×7 is
-        // occupied against the routed layout — the RFP Phase 0f hardness
+        // occupied against the routed layout — the RFC Phase 0f hardness
         // signature. A substation is placed only for inserters STILL unreachable
         // after the boundary is widened.
         let is_packed = |ix: i32, iy: i32| -> bool {
@@ -842,7 +842,7 @@ fn layout_pass(
                 .iter()
                 .filter_map(|b| {
                     if b.top_edge {
-                        // Top-edge band (RFP Phase 3b, kovarex self-loop): the
+                        // Top-edge band (RFC Phase 3b, kovarex self-loop): the
                         // freed rows sit between the bus header and the starved
                         // row's top; the substation drops there and reaches DOWN
                         // over the row's OWN input inserters (which live ~5 rows
@@ -870,13 +870,13 @@ fn layout_pass(
                         }
                         Some(SubstationTarget { band_y0, band_y1, inserters })
                     } else {
-                        // Interior band (RFP Phase 3a-ii): the freed gap between
+                        // Interior band (RFC Phase 3a-ii): the freed gap between
                         // row `row_after` and its successor; the target inserters
                         // are the successor row's top inserter band (y_start..+4).
                         // On the current corpus this yields zero targets — the +2
                         // widen lands the freed rows exactly 3 tiles above the deep
                         // inserters (the dual-input belt bundle is 2 rows, not the
-                        // RFP-assumed 3), inside a medium pole's ±3, so the 7×7
+                        // RFC-assumed 3), inside a medium pole's ±3, so the 7×7
                         // gains a free tile and the medium mop-up covers them. The
                         // substation branch is the VERIFIED-CORRECT FALLBACK for
                         // genuinely deeper geometry where an inserter stays >3 from
@@ -978,7 +978,7 @@ fn layout_pass(
     all_entities.extend(pole_entities);
 
     // First-class, trace-independent ledger of voided solid surplus
-    // (RFP Fulgora Phase 2, D1/D6) — mirrors `surplus_exits`.
+    // (RFC Fulgora Phase 2, D1/D6) — mirrors `surplus_exits`.
     // `check_stranded_byproducts` cross-checks each entry against real
     // recycler entities rather than trusting this alone. Reconstructed
     // from the (possibly voider-synthesized) `solver_result` used by
@@ -1014,7 +1014,7 @@ fn layout_pass(
         })
         .collect();
 
-    // Stamp build quality on functional entities (rfp-build-quality
+    // Stamp build quality on functional entities (rfc-build-quality
     // Phase 2, functional-only stamping): machines, inserters, poles get
     // the planning tier; logistics stay `None`. Skipped entirely at
     // Normal — absent means normal everywhere downstream (export omits
@@ -1034,7 +1034,7 @@ fn layout_pass(
     // `blueprint::export` re-derives and encodes in the blueprint `wires`
     // array. Computed from the final entity order so the `(a, b)` index pairs
     // stay valid — and AFTER the quality stamp pass above, because wire
-    // reach is per-entity quality-aware (rfp-build-quality merge with the
+    // reach is per-entity quality-aware (rfc-build-quality merge with the
     // power-3c arc). See `crate::power_wires`.
     let power_wires = crate::power_wires::compute_pole_wires(&all_entities);
 
@@ -1165,9 +1165,9 @@ fn compute_extra_gaps(families: &[LaneFamily]) -> FxHashMap<usize, i32> {
 
 /// Place power poles for grid coverage. Runs LAST in `build_bus_layout`, after
 /// `route_bus_ghost` — poles live on leftover tiles and are never router
-/// obstacles (invariant restored in Phase 0f, `docs/rfp-power-supply.md`).
+/// obstacles (invariant restored in Phase 0f, `docs/rfc-power-supply.md`).
 ///
-/// For any `substation_targets` (RFP `docs/rfp-power-reservation.md` Phase
+/// For any `substation_targets` (RFC `docs/rfc-power-reservation.md` Phase
 /// 3a-ii/3b) a substation is dropped into each widened band FIRST, so its 18×18
 /// supply reaches the deep-packed inserter rows no medium pole can; every other
 /// row is covered by medium-electric-poles. `substation_targets` is empty for
@@ -1210,7 +1210,7 @@ fn place_poles(
     quality: crate::common::QualityTier,
 ) -> (Vec<PlacedEntity>, Vec<(i32, i32)>) {
     // Medium-pole supply half-extent on the tile grid, floored from the shared
-    // `supply_area_distance` (RFP Phase 3a-i/3a-ii) so this placement radius and
+    // `supply_area_distance` (RFC Phase 3a-i/3a-ii) so this placement radius and
     // the power validator's coverage radius can never drift. place_poles places
     // only medium poles here, so the value is unchanged (floor(3.5) = 3).
     let pole_range: i32 =
@@ -1233,14 +1233,14 @@ fn place_poles(
     // (its 9-tile supply, not the medium 3), so the mop-up set-cover skips them.
     let mut sub_covered: FxHashSet<(i32, i32)> = FxHashSet::default();
 
-    // === Substations first (RFP Phase 3a-ii) ===
+    // === Substations first (RFC Phase 3a-ii) ===
     // A substation top-left (sx,sy) → center (sx+1,sy+1); an inserter (ix,iy) →
     // center (ix+0.5,iy+0.5) is powered iff |ix+0.5−(sx+1)| ≤ 9 and likewise in
     // y, i.e. ix ∈ [sx−8, sx+9] and iy ∈ [sy−8, sy+9]. Identical to the
     // validator's exact even-footprint check — placement guarantees real
     // coverage, never leaning on the validator's word (the 3a-i carried
     // constraint).
-    // Quality-derived (rfp-build-quality Phase 2): supply distance d =
+    // Quality-derived (rfc-build-quality Phase 2): supply distance d =
     // 9 + level (always integral for the substation), giving ix ∈
     // [sx−(d−1), sx+d]. At Normal d=9 → the original 8/9 constants,
     // bit-identical placement (kill criterion 2).
@@ -1311,7 +1311,7 @@ fn place_poles(
         let (top_y, mh) = key;
         let cxs = &by_row[&key];
 
-        // Phase 0f (RFP `docs/rfp-power-supply.md`): place a pole line in
+        // Phase 0f (RFC `docs/rfc-power-supply.md`): place a pole line in
         // BOTH candidate bands, not just the preferred one. The north band
         // (top_y-1) sits on the row's input-inserter row and covers the
         // machine's north face; the south band (top_y+mh) sits on the
@@ -1400,7 +1400,7 @@ fn place_poles(
         }
     }
 
-    // Coverage-driven mop-up (RFP `docs/rfp-power-supply.md` Phase 0f): the
+    // Coverage-driven mop-up (RFC `docs/rfc-power-supply.md` Phase 0f): the
     // band lines above cover the standard input/output inserter rows, but
     // tall / HorizontalStack rows place inserters at offsets the bands don't
     // reach. For any electric inserter still beyond pole_range of every
@@ -1459,14 +1459,14 @@ fn place_poles(
         }
     }
 
-    // Interconnect (RFP Phase 3a-ii): substations are already in `entities`, so
+    // Interconnect (RFC Phase 3a-ii): substations are already in `entities`, so
     // the connectivity repair treats them as wire nodes and bridges any that
     // land >9 tiles (min(18,9) substation↔medium reach) from the medium network
     // with connector poles — counted in the stated pole cost. `occ` carries the
     // substation footprints so bridges never overlap a 2×2.
     repair_pole_connectivity(&mut entities, &placed, &occ, quality);
 
-    // Phase 2 (RFP `docs/rfp-power-supply.md`): live slack instrumentation.
+    // Phase 2 (RFC `docs/rfc-power-supply.md`): live slack instrumentation.
     // Emit each pole's free-alternative count so the stress scoreboard tallies
     // zero-slack / median / total-pole lines — a guardrail that makes any future
     // densification change pay its power cost visibly in the golden diff.
@@ -1477,7 +1477,7 @@ fn place_poles(
     // Measured on the FINAL pole set (after band placement + mop-up + repair) in
     // the census's `local_alternatives` window — same y, x within ±pole_range,
     // excluding the pole's own tile and every other pole. This deviates from the
-    // RFP brief's "at each pole's decision instant" framing on purpose: the
+    // RFC brief's "at each pole's decision instant" framing on purpose: the
     // ground-truth census computes slack post-hoc over the *complete* pole set,
     // so a per-decision measure (which can't see poles the mop-up/repair place
     // later) would diverge from it and fail the ±1 fixed-point criterion. This
@@ -1519,7 +1519,7 @@ fn place_poles(
 /// islands. Consuming `power_wires::{pole_center, wire_reach}` here makes repair
 /// and the emitted wire graph agree by construction.
 ///
-/// Quality (rfp-build-quality): reaches are evaluated at the build-quality
+/// Quality (rfc-build-quality): reaches are evaluated at the build-quality
 /// tier passed in — the same tier the functional stamp pass later writes onto
 /// every pole, so post-stamp `compute_pole_wires` (which reads per-entity
 /// `quality`) sees exactly the graph repair reasoned about. At legendary the
@@ -1734,8 +1734,8 @@ fn make_pole(x: i32, y: i32) -> PlacedEntity {
     }
 }
 
-/// Create a substation entity (2×2, 18×18 supply) at top-left `(x, y)` (RFP
-/// `docs/rfp-power-reservation.md` Phase 3a-ii). Shares the `"pole"` segment tag
+/// Create a substation entity (2×2, 18×18 supply) at top-left `(x, y)` (RFC
+/// `docs/rfc-power-reservation.md` Phase 3a-ii). Shares the `"pole"` segment tag
 /// so it groups with the power network in analysis/rendering; export centers it
 /// at `x+1.0` via the shared `entity_size` 2×2 entry.
 fn make_substation(x: i32, y: i32) -> PlacedEntity {
@@ -1777,7 +1777,7 @@ mod tests {
         assert!(extras.is_empty());
     }
 
-    // --- Reactive substation repair (RFP Phase 3a-ii + 3b) ---
+    // --- Reactive substation repair (RFC Phase 3a-ii + 3b) ---
 
     #[test]
     fn compute_substation_bands_flags_predecessor_gap_of_the_starved_row() {
@@ -1798,7 +1798,7 @@ mod tests {
 
     #[test]
     fn compute_substation_bands_flags_top_edge_for_row_zero_starvation() {
-        // RFP Phase 3b (kovarex self-loop): an uncovered inserter inside row 0
+        // RFC Phase 3b (kovarex self-loop): an uncovered inserter inside row 0
         // has no predecessor gap to widen, so 3a-ii SKIPPED it (leaving the
         // recirc inserters starved). 3b flags the row's OWN top edge instead — a
         // TOP-EDGE band anchored at row 0, threaded to `layout_pass` as a
@@ -1916,7 +1916,7 @@ mod tests {
         );
     }
 
-    /// Phase 2 adversarial-review regression (rfp-build-quality decision
+    /// Phase 2 adversarial-review regression (rfc-build-quality decision
     /// log 2026-07-20): `repair_pole_connectivity` hardcoded the
     /// Normal-tier medium wire reach (9), so at legendary it
     /// mis-clustered poles genuinely within the real 19-tile reach and
@@ -1963,7 +1963,7 @@ mod tests {
         assert!(issues.is_empty(), "legendary pole net must be connected: {issues:?}");
     }
 
-    /// D2a (RFP Fulgora, `docs/rfp-fulgora-scrap.md`): a solid surplus
+    /// D2a (RFC Fulgora, `docs/rfc-fulgora-scrap.md`): a solid surplus
     /// item whose producing row's FIRST (and only) solid output IS the
     /// surplus — distinct from D2b's secondary-belt shape
     /// (uranium-processing, `tier_uranium_processing_surplus_export` in

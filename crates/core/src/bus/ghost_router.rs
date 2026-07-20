@@ -18,7 +18,7 @@
 //! Returns a `GhostRouteResult` containing all placed entities, ghost crossing
 //! tiles, cluster info, and layout dimensions.
 //!
-//! See `docs/archive/rfp-ghost-cluster-routing.md` for the full design.
+//! See `docs/archive/rfc-ghost-cluster-routing.md` for the full design.
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -41,7 +41,7 @@ use crate::common::{
 use crate::models::{EntityDirection, LayoutRegion, PlacedEntity, SolverResult};
 // sat.rs is retained in the tree as a standalone library; route_bus_ghost
 // no longer uses it after the per-tile "unresolved" rewrite. The junction
-// solver (docs/archive/rfp-junction-solver.md) may reintroduce it as a T4
+// solver (docs/archive/rfc-junction-solver.md) may reintroduce it as a T4
 // fallback strategy, in which case reimport at that point.
 use crate::trace;
 
@@ -68,7 +68,7 @@ pub struct GhostRouteResult {
     /// that would hard-error in the default pipeline).
     pub warnings: Vec<String>,
     /// `(item, x, y)` perimeter exit tile per routed fluid surplus lane
-    /// (Phase 2 of rfp-solver-net-flow). First-class layout data — the
+    /// (Phase 2 of rfc-solver-net-flow). First-class layout data — the
     /// stranded-byproduct validator cross-checks these against physical
     /// pipe entities, and must work in the non-traced pipeline too.
     pub surplus_exits: Vec<(String, i32, i32)>,
@@ -127,7 +127,7 @@ struct BeltSpec {
 }
 
 /// A merge-and-tap trunk lane taps a shared trunk with PRIORITY splitters
-/// (RFP `docs/rfp-merge-tap-trunks.md` D4) — distinct from the generic
+/// (RFC `docs/rfc-merge-tap-trunks.md` D4) — distinct from the generic
 /// even-split `tapoff:` splitters on ordinary lanes, which stay untouched
 /// (KC2). Identified by the lane's family carrying `merge_tap`.
 fn lane_is_merge_tap(lane: &BusLane, families: &[LaneFamily]) -> bool {
@@ -187,7 +187,7 @@ enum FeederBridge {
 /// tile after); and because crossings are derived from the path, the dropped
 /// tiles never register as a crossing, so the (imbalanced, refused) crossing
 /// zone never forms. Prevention over cure — mirrors the output merger's
-/// `blocked_columns` UG-hop (RFP docs/rfp-merge-tap-trunks.md D4).
+/// `blocked_columns` UG-hop (RFC docs/rfc-merge-tap-trunks.md D4).
 ///
 /// A span is bridged when its kept endpoints are collinear (a straight
 /// perpendicular crossing) and the hop fits the belt tier's `reach`
@@ -226,7 +226,7 @@ fn bridge_feeder_under_foreign_trunks(
     //
     // Merge-tap stamps ONE family per K-trunk column (lane_planner), so
     // family-inequality and column-inequality coincide for merge-tap trunks
-    // (the v2 falsification in docs/rfp-merge-tap-trunks.md proved this a
+    // (the v2 falsification in docs/rfc-merge-tap-trunks.md proved this a
     // bijection: every same-item cross-column crossing is also cross-family).
     // Family identity is the semantically correct test — it does not treat two
     // columns of ONE native lane-split family as foreign — and falls back to
@@ -388,7 +388,7 @@ pub fn route_bus_ghost(
         if lane.tap_off_ys.len() > 1 {
             let splitter_name = splitter_for_belt(belt_name);
             let tapoff_seg_id = Some(format!("tapoff:{}", lane.item));
-            // Merge-and-tap trunks tap with PRIORITY splitters (RFP D4):
+            // Merge-and-tap trunks tap with PRIORITY splitters (RFC D4):
             // `output_priority` points at the east feed branch (the splitter's
             // south-facing second tile, which is "left" for a South splitter
             // under the left-hand-vector convention `priority_output_tile`
@@ -468,7 +468,7 @@ pub fn route_bus_ghost(
     for fam in families {
         let balancer_ents = if fam.merge_tap {
             // Merge-and-tap fallback: stamp an n→1 splitter merge-tree instead
-            // of an (N, M) balancer (RFP docs/rfp-merge-tap-trunks.md D2).
+            // of an (N, M) balancer (RFC docs/rfc-merge-tap-trunks.md D2).
             stamp_merge_tap_family(fam, max_belt_tier)
         } else {
             stamp_family_balancer(fam, max_belt_tier)
@@ -722,7 +722,7 @@ pub fn route_bus_ghost(
         }
         // Surplus byproduct lanes extend past their last port down to the
         // south boundary so the flow physically exits the layout (Phase 2
-        // of rfp-solver-net-flow). The anchor walk below stamps the extra
+        // of rfc-solver-net-flow). The anchor walk below stamps the extra
         // span with the same UG-pipe chain as any inter-tap gap.
         if let Some(exit_y) = lane.perimeter_exit_y {
             end_y = end_y.max(exit_y);
@@ -1338,7 +1338,7 @@ pub fn route_bus_ghost(
             continue;
         }
         if let Some(item) = &ent.carries {
-            // Fluid trunks stay pooled (RFP "Fluids" carve-out), so module_id
+            // Fluid trunks stay pooled (RFC "Fluids" carve-out), so module_id
             // is always 0 here. The `(item, 0)` tuple still distinguishes
             // them from any solid-trunk sibling at the same tile under the
             // crossing filter.
@@ -1367,7 +1367,7 @@ pub fn route_bus_ghost(
     // the inputs to steps 1-3 of this function. Step 3 of the rollout uses it
     // to mirror materialisation writes; Step 4+ will switch the template and
     // SAT phases over to it as the source of obstacle truth. See
-    // `docs/archive/rfp-ghost-occupancy-refactor.md`.
+    // `docs/archive/rfc-ghost-occupancy-refactor.md`.
     // -------------------------------------------------------------------------
     // Row template entities split by permeability: belts are
     // `RowEntity` (boundary ports may land on them); machines,
@@ -1464,8 +1464,8 @@ pub fn route_bus_ghost(
     //
     // `item` picks which of the row's (up to two) output belts to exit
     // from: a row with a D2b secondary solid output
-    // (`RowSpan::secondary_output_belt`, RFP Fulgora
-    // `docs/rfp-fulgora-scrap.md`) has TWO physically distinct belts at
+    // (`RowSpan::secondary_output_belt`, RFC Fulgora
+    // `docs/rfc-fulgora-scrap.md`) has TWO physically distinct belts at
     // different y — the primary (`output_belt_y`, item = the row's
     // first solid output) and the secondary (its own y, one row over).
     // Defaulting to `output_belt_y` unconditionally (as this helper did
@@ -1510,7 +1510,7 @@ pub fn route_bus_ghost(
                 // A merge-tap non-last feed branch carries MERGE_TAP_SEGMENT_TAG
                 // in its segment (rendered as "ghost:{key}") so the priority-tap
                 // validator and the lane-rate walkers recognise the feed half of
-                // the priority splitter above (RFP D4). The last tap has no
+                // the priority splitter above (RFC D4). The last tap has no
                 // splitter (the trunk terminates into it), so it stays untagged.
                 let tap_key = if is_merge_tap && !is_last {
                     format!("tap{}{}:{}:{}", MERGE_TAP_SEGMENT_TAG, lane.item, x, tap_y)
@@ -1562,7 +1562,7 @@ pub fn route_bus_ghost(
                 if start_x < goal_x {
                     continue;
                 }
-                // Phase 3 of `docs/rfp-unified-belt-specs.md`: ret specs are
+                // Phase 3 of `docs/rfc-unified-belt-specs.md`: ret specs are
                 // already one-spec-per-physical-belt (there is no spec
                 // handoff internal to a return path), so "unification" is
                 // cosmetic — rename the key to the unified `flow:` prefix
@@ -1604,7 +1604,7 @@ pub fn route_bus_ghost(
                 if start_x < goal_x {
                     continue;
                 }
-                // Phase 3 of `docs/rfp-unified-belt-specs.md`: ret specs are
+                // Phase 3 of `docs/rfc-unified-belt-specs.md`: ret specs are
                 // already one-spec-per-physical-belt (there is no spec
                 // handoff internal to a return path), so "unification" is
                 // cosmetic — rename the key to the unified `flow:` prefix
@@ -2189,7 +2189,7 @@ pub fn route_bus_ghost(
             };
             // All specs materialised here are tap/ret/feeder flows — trunks
             // are stamped directly by step 3.5 and never reach A*. Post-
-            // Phases 1-3 of `rfp-unified-belt-specs.md`, no spec key has a
+            // Phases 1-3 of `rfc-unified-belt-specs.md`, no spec key has a
             // `trunk:` prefix, so the segment id is always `ghost:...`.
             let spec_seg_id = Some(format!("ghost:{}", spec.key));
             let path_ents = render_path(
@@ -2394,7 +2394,7 @@ pub fn route_bus_ghost(
     // because the corridor-template pre-pass was removed; all
     // crossings now flow through the junction-solver cluster loop
     // below, which increments this counter for each solved cluster.
-    // See `docs/archive/rfp-remove-corridor-template.md` for the rationale.
+    // See `docs/archive/rfc-remove-corridor-template.md` for the rationale.
     let mut template_count: usize = 0;
     let mut template_regions: Vec<LayoutRegion> = Vec::new();
     let mut remaining_crossings: FxHashSet<(i32, i32)> = FxHashSet::default();
@@ -2439,7 +2439,7 @@ pub fn route_bus_ghost(
     // Parallel to spec_items / spec_belt_tiers. Distinguishes belt specs
     // (default) from fluid-trunk synth paths so downstream templates can
     // branch: a belt×pipe crossing must UG-bridge the belt without
-    // stamping anything on the pipe tile. See RFP `docs/rfp-pipe-belt-junctions.md`.
+    // stamping anything on the pipe tile. See RFC `docs/rfc-pipe-belt-junctions.md`.
     let mut spec_kinds: FxHashMap<String, crate::bus::junction::SpecKind> = specs
         .iter()
         .map(|s| (s.key.clone(), crate::bus::junction::SpecKind::Belt))
@@ -2503,7 +2503,7 @@ pub fn route_bus_ghost(
     }
 
     // -------------------------------------------------------------------------
-    // Phases 1+2 of `docs/rfp-unified-belt-specs.md`: unify trunk+last-tap
+    // Phases 1+2 of `docs/rfc-unified-belt-specs.md`: unify trunk+last-tap
     // flows into one `flow:{item}:{x}` entry in routed_paths and the three
     // spec_* maps. Presents the junction solver with a single coherent
     // flow rather than two specs that pin the handoff tile from both
@@ -3293,7 +3293,7 @@ pub fn route_bus_ghost(
     // one (surplus items start where the target items left off, per
     // `max_y` threading), leaving the earlier item's own tail stranded
     // mid-layout once the OVERALL `max_y` grows past it. Flushed south
-    // to the final `max_y` after both loops below (RFP Fulgora D2a/D2b —
+    // to the final `max_y` after both loops below (RFC Fulgora D2a/D2b —
     // this is the first scenario to actually exercise depth-mismatched
     // multi-item merges; single-target-item layouts are a no-op here).
     let mut merge_tails: Vec<PlacedEntity> = Vec::new();
@@ -3342,8 +3342,8 @@ pub fn route_bus_ghost(
     }
 
     // -------------------------------------------------------------------------
-    // Step 7b: Merge solid surplus streams (RFP Fulgora D2a/D2b,
-    // docs/rfp-fulgora-scrap.md)
+    // Step 7b: Merge solid surplus streams (RFC Fulgora D2a/D2b,
+    // docs/rfc-fulgora-scrap.md)
     // -------------------------------------------------------------------------
     // Reuses the same east-tiling merge-cursor + UG-hop machinery as the
     // target-item merge above (`merge_x_cursor`/`blocked_columns` already
@@ -3371,7 +3371,7 @@ pub fn route_bus_ghost(
         let mut output_rows: Vec<usize> = Vec::new();
         let mut output_ys: Vec<i32> = Vec::new();
         for (ri, rs) in row_spans.iter().enumerate() {
-            // A scrap-recycling sushi-sorter row (RFP Fulgora Phase 3)
+            // A scrap-recycling sushi-sorter row (RFC Fulgora Phase 3)
             // emits every one of its ~12 outputs on its own belt via
             // `sorted_output_belts`; that map is authoritative for it.
             if let Some((_, sy)) = rs.sorted_output_belts.iter().find(|(it, _)| it == item) {
@@ -3433,8 +3433,8 @@ pub fn route_bus_ghost(
     }
 
     // -------------------------------------------------------------------------
-    // Step 7c (gather): voided solid surplus streams (RFP Fulgora Phase 2,
-    // `docs/rfp-fulgora-scrap.md` D1) — synthesized voider rows
+    // Step 7c (gather): voided solid surplus streams (RFC Fulgora Phase 2,
+    // `docs/rfc-fulgora-scrap.md` D1) — synthesized voider rows
     // (`RowSpan.spec.voider`), not `solver_result.surplus_outputs` (the
     // item was already removed from there by
     // `bus::voider::synthesize_voiders` so Step 7b above skips it).
@@ -3514,7 +3514,7 @@ pub fn route_bus_ghost(
     }
 
     // -------------------------------------------------------------------------
-    // Voided-item corridor rows (RFP Fulgora Phase 2, D1): one south row
+    // Voided-item corridor rows (RFC Fulgora Phase 2, D1): one south row
     // per voided item, below the old `max_y`.
     // -------------------------------------------------------------------------
     // `check_belt_dead_ends` exempts a belt only when its NEXT tile is
@@ -3544,7 +3544,7 @@ pub fn route_bus_ghost(
 
     // -------------------------------------------------------------------------
     // South-flush: extend every merge cascade's tail belt down to the
-    // FINAL `max_y` (RFP Fulgora D2a/D2b).
+    // FINAL `max_y` (RFC Fulgora D2a/D2b).
     // -------------------------------------------------------------------------
     // `check_belt_dead_ends` exempts a belt only when its next tile is
     // OUT OF the layout's bounds (`layout.height == max_y`). Items
@@ -4033,7 +4033,7 @@ fn cluster_adjacent_crossings(
     // template's `bridge_belt_over_pipe` handles the 2-spec case directly.
     // Merging them with belt×belt neighbours produces multi-spec clusters
     // that neither the template (requires exactly 2 specs) nor SAT (guards
-    // against pipe-kind specs per Phase 3 in the RFP) can solve.
+    // against pipe-kind specs per Phase 3 in the RFC) can solve.
     let mut pipe_tiles: FxHashSet<usize> = FxHashSet::default();
     for (key, path) in routed_paths {
         if !matches!(spec_kinds.get(key.as_str()), Some(SpecKind::Pipe)) {
@@ -4378,7 +4378,7 @@ fn classify_crossing(
 /// with one `SpecCrossing` per crossing spec — so the long-term junction
 /// solver pass can consume the same internal shape.
 ///
-/// See `docs/archive/rfp-junction-solver.md` for the target replacement.
+/// See `docs/archive/rfc-junction-solver.md` for the target replacement.
 fn emit_unresolved_junctions(
     remaining: &FxHashSet<(i32, i32)>,
     routed_paths: &FxHashMap<String, Vec<(i32, i32)>>,
@@ -4608,7 +4608,7 @@ fn solve_perpendicular_template(
     // Pipe×belt short-circuit. The pipe is a fixed-surface entity that
     // belongs to a fluid-trunk column; the belt must UG-bypass it
     // without anything getting stamped on the pipe tile itself. See
-    // `docs/rfp-pipe-belt-junctions.md` for the full story.
+    // `docs/rfc-pipe-belt-junctions.md` for the full story.
     match (info.kind_a, info.kind_b) {
         (SpecKind::Pipe, SpecKind::Pipe) => return None,
         (SpecKind::Pipe, SpecKind::Belt) => {

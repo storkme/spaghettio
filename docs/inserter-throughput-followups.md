@@ -28,7 +28,7 @@ mechanism from the landed extension — do not reach for belt extension here.
 rail's stone side needs 2.5/s; the LHI ceiling is 2 × 1.2 = 2.4/s, so even
 the fully-extended interior machines warn. The extension guard correctly
 DECLINES the last machine (partial cover ≠ cover). Levers, in rough order:
-the ingredient-to-belt reassignment lever (see `rfp-inserter-sizing.md`), a
+the ingredient-to-belt reassignment lever (see `rfc-inserter-sizing.md`), a
 third slot (needs face space — interacts with the power arc's Phase 3
 band-widening machinery), or belt-tier change (user-controlled, never
 automatic). A partial-cover extension variant (extend even when shortfall
@@ -42,4 +42,4 @@ belts, "dead budget" by design) emit no `InserterSideCapped` events. If
 their demand ever exceeds 1.2/s the warning would be unattributed in the
 explainability tooling. Pick-up: add the emit call with a
 `hardcoded-single` limit tag (a Phase-2-style call-site addition per
-`rfp-validation-explainability.md`).
+`rfc-validation-explainability.md`).

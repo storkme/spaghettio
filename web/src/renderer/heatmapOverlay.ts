@@ -3,7 +3,7 @@ import { TILE_PX, MACHINE_SIZES } from "./entities";
 import type { ValidationIssue } from "./validationOverlay";
 import type { PlacedEntity } from "../engine";
 
-/** Starvation heatmap (RFP validation-explainability, D3 Phase 1).
+/** Starvation heatmap (RFC validation-explainability, D3 Phase 1).
  *
  *  Tints machines by how starved they are, using the structured
  *  `detail.delivered / detail.needed` pair carried on rate-shaped

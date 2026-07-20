@@ -138,7 +138,7 @@ pub fn check_inserter_direction(layout: &LayoutResult) -> Vec<ValidationIssue> {
         if !is_inserter(&e.name) {
             continue;
         }
-        // Sushi sort inserters (RFP Fulgora Phase 3) are belt-to-belt by
+        // Sushi sort inserters (RFC Fulgora Phase 3) are belt-to-belt by
         // design — they lift one item off a sushi belt onto its own lane
         // and touch no machine. The sushi boundary check owns their
         // correctness (`validate::sushi::check_sushi_boundary`).
@@ -176,7 +176,7 @@ pub fn check_inserter_direction(layout: &LayoutResult) -> Vec<ValidationIssue> {
 
 // ── check_inserter_throughput ─────────────────────────────────────────────────
 
-/// Per-machine-side inserter throughput check (RFP `rfp-lane-demand-flow.md`
+/// Per-machine-side inserter throughput check (RFC `rfc-lane-demand-flow.md`
 /// Phase 1, Component 2).
 ///
 /// Every bus template feeds and drains a machine with **one regular inserter
@@ -268,7 +268,7 @@ pub fn check_inserter_throughput(
         // Attribution: prefer the exact sibling `MachineSpec` the layout
         // pipeline actually placed at this machine's row — see
         // `resolve_row_spec`'s doc comment for the partition-sibling
-        // rationale (`docs/rfp-inserter-sizing.md` Phase 1 finding).
+        // rationale (`docs/rfc-inserter-sizing.md` Phase 1 finding).
         let spec = super::resolve_row_spec(layout, recipe, e.y, fallback_spec);
 
         // Utilization scaling: the same convention check_input_rate_delivery
@@ -336,7 +336,7 @@ pub fn check_inserter_throughput(
 // ── check_inserter_item_throughput ────────────────────────────────────────────
 
 /// Per-machine, per-solid-item inserter throughput check
-/// (`docs/rfp-inserter-sizing.md` Phase 2's delta-review blocker).
+/// (`docs/rfc-inserter-sizing.md` Phase 2's delta-review blocker).
 ///
 /// [`check_inserter_throughput`] is item-blind: it sums a machine side's
 /// inserters into one aggregate `avail` and compares that against one
@@ -355,13 +355,13 @@ pub fn check_inserter_throughput(
 ///
 /// Attribution mirrors [`check_inserter_throughput`] exactly: prefer the
 /// row-positioned sibling spec from `layout.effective_rows`
-/// (`docs/rfp-inserter-sizing.md` Phase 1 finding — partition siblings share
+/// (`docs/rfc-inserter-sizing.md` Phase 1 finding — partition siblings share
 /// a recipe name but carry different utilizations), falling back to the
 /// recipe-keyed spec when no row attribution is available (test scaffolding,
 /// spaghetti-style layouts). Recyclers are exempt on the output side (direct
 /// belt ejection, no output inserter — same knowledge
 /// `check_output_belt_coverage`/`check_inserter_throughput` key on).
-/// `:sushi-sort:` inserters are belt-to-belt by construction (RFP Fulgora
+/// `:sushi-sort:` inserters are belt-to-belt by construction (RFC Fulgora
 /// Phase 3) — neither their drop nor pickup side ever lands on a machine
 /// tile, so the same drop/pickup-vs-machine-tile matching this check shares
 /// with `check_inserter_throughput` excludes them with no special case,
@@ -1142,7 +1142,7 @@ mod tests {
     /// that share a recipe name but carry different per-machine rates.
     /// `sr.machines` here holds the single, collapsed/blended spec a
     /// recipe-name-keyed lookup would see (as `validate()` receives the
-    /// pre-partition `SolverResult` — docs/rfp-inserter-sizing.md's Phase 1
+    /// pre-partition `SolverResult` — docs/rfc-inserter-sizing.md's Phase 1
     /// finding). Row A's true demand (0.5/s in, within a regular
     /// inserter's 0.84/s) is deliberately far below the blended spec's
     /// 2.0/s, and row B's true demand (3.0/s in) is deliberately far
@@ -1315,7 +1315,7 @@ mod tests {
         }
     }
 
-    /// The RFP's canonical item-blindness failure: a near-slot inserter's
+    /// The RFC's canonical item-blindness failure: a near-slot inserter's
     /// spare capacity arithmetically "covers" a far-slot item's deficit in
     /// the AGGREGATE sum (`check_inserter_throughput` stays clean), while
     /// the far item is, in reality, starving — a reach-1 inserter cannot
@@ -1371,7 +1371,7 @@ mod tests {
         assert_eq!(warns.len(), 1, "{issues:?}");
         assert!(warns[0].message.contains("product"));
         assert!(warns[0].message.contains("out —"));
-        // RFP validation-explainability D1: structured pair mirrors the
+        // RFC validation-explainability D1: structured pair mirrors the
         // check's own comparison — needed is the 5.0/s product demand, and
         // delivered is what the single regular inserter moves (< needed).
         let detail = warns[0]

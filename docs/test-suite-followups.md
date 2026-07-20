@@ -78,7 +78,7 @@ their own copy.
 diffs against it, and a deliberate re-bless is "regenerate + commit", visible
 in the diff like any golden. Kills the before-leg entirely, makes baselines
 shared-by-construction across agents, and moves drift detection into git
-history. This is the best ergonomics payoff for the RFP team flow — do it
+history. This is the best ergonomics payoff for the RFC team flow — do it
 first.
 
 **LANDED 2026-07-19**: one golden per fixture under

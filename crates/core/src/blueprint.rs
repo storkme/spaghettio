@@ -13,7 +13,7 @@ use crate::models::LayoutResult;
 
 /// Factorio 2.0 inserter `filter_count` — every inserter type (`inserter`,
 /// `long-handed-inserter`, `bulk-inserter`, etc.) has exactly 5 filter
-/// slots. See docs/rfp-fulgora-scrap.md Phase 0 "Filter entities" findings.
+/// slots. See docs/rfc-fulgora-scrap.md Phase 0 "Filter entities" findings.
 const MAX_INSERTER_FILTERS: usize = 5;
 
 #[derive(Serialize)]
@@ -49,7 +49,7 @@ struct BlueprintEntity<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     filters: Option<Vec<BlueprintFilter<'a>>>,
     /// Entity build quality (`quality :: string?` per lua-api
-    /// BlueprintEntity; rfp-build-quality Phase 2). Omitted at normal —
+    /// BlueprintEntity; rfc-build-quality Phase 2). Omitted at normal —
     /// stamped upstream by the layout's functional-only stamp pass.
     #[serde(skip_serializing_if = "Option::is_none")]
     quality: Option<&'static str>,
@@ -110,7 +110,7 @@ pub fn export(layout: &LayoutResult, label: &str) -> String {
                 entity_number: i + 1,
                 name: &ent.name,
                 position: {
-                    // Footprint center from the shared `entity_size` (RFP
+                    // Footprint center from the shared `entity_size` (RFC
                     // Phase 3a-i): a 2×2 substation exports at x+1.0, not the
                     // x+0.5 the old machine-only lookup produced.
                     let (w, h) = crate::common::entity_size(&ent.name);
@@ -317,7 +317,7 @@ mod tests {
 
     #[test]
     fn recycler_position_uses_non_square_center() {
-        // Recycler is 2 wide × 4 tall (rfp-fulgora-scrap Phase 0). A
+        // Recycler is 2 wide × 4 tall (rfc-fulgora-scrap Phase 0). A
         // square-assuming position calc would center at (x+1, y+1) (using
         // width for both axes) or (x+2, y+2) (using height for both).
         let layout = LayoutResult {

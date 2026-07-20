@@ -110,7 +110,7 @@ interface HighlightAnimation {
 interface ParticleEntry {
   entity: Particle;
   icon?: Particle;
-  /** In-game quality tier badge (rfp-build-quality) — per-entity, in the
+  /** In-game quality tier badge (rfc-build-quality) — per-entity, in the
    *  icon layer; follows the entity's alpha everywhere `icon` does. */
   badge?: Particle;
   revealAt: number;
@@ -386,7 +386,7 @@ function drawPipeStubsForLayout(
 function getEntityAtlasTexture(entity: PlacedEntity, ctx: DrawContext): Texture {
   // Atlas textures are keyed by entity TYPE (name/direction/...) and shared
   // by every instance — strip per-entity quality before baking, or the first
-  // instance's badge would leak onto every clone (rfp-build-quality: badges
+  // instance's badge would leak onto every clone (rfc-build-quality: badges
   // are separate per-entity particles in commitEntityAsParticle instead).
   if (entity.quality) {
     entity = { ...entity, quality: undefined };
@@ -623,7 +623,7 @@ export function commitEntityAsParticle(
     scene.iconContainer.addParticle(iconParticle);
   }
 
-  // --- Quality badge particle (rfp-build-quality) ---
+  // --- Quality badge particle (rfc-build-quality) ---
   // The in-game tier badge at the entity footprint's bottom-left, mirroring
   // the game's badge position. Per-entity by construction (never part of the
   // shared entity atlas). Rides the icon layer so it z-sorts above machines.

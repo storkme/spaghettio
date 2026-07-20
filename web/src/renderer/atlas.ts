@@ -249,7 +249,7 @@ export function getItemIconTexture(itemSlug: string): Texture {
     (g) => {
       const cx = CELL_PX / 2;
       const cy = CELL_PX / 2;
-      const r = 7; // 14 px diameter per RFP
+      const r = 7; // 14 px diameter per RFC
       g.circle(cx, cy, r).fill({ color, alpha: 0.85 });
     },
   );

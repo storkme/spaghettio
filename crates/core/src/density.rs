@@ -199,7 +199,7 @@ mod tests {
 
     #[test]
     fn entity_footprint_recycler_is_non_square() {
-        // Fulgora recycler: 2 wide × 4 tall (rfp-fulgora-scrap Phase 0).
+        // Fulgora recycler: 2 wide × 4 tall (rfc-fulgora-scrap Phase 0).
         // A square-assuming footprint helper would return (4, 4) or (2, 2).
         let recycler = PlacedEntity {
             name: "recycler".into(),

@@ -182,7 +182,7 @@ pub fn truncate_events(len: usize) {
 /// keeping everything else. Used by `layout_pass`'s two-pass rows/lanes
 /// placement: when the width-corrected pass 2 runs, pass 1's capped-side
 /// events describe machines at coordinates that no longer exist and would
-/// mis-anchor the per-tile attribution join (RFP validation-explainability
+/// mis-anchor the per-tile attribution join (RFC validation-explainability
 /// D2). Other pass-1 events stay — the phase timeline deliberately shows
 /// both passes (see `place_rows_1`/`place_rows_2` PhaseTime events).
 pub fn remove_capped_events_since(start: usize) {
@@ -220,7 +220,7 @@ pub enum TraceEvent {
     /// Records which row-layout variant the placer picked for a given
     /// recipe row. Fires once per row when the placer decides between
     /// `VerticalSplit` (today's default) and `HorizontalStack`. See
-    /// `docs/rfp-horizontal-trunks.md` §Verification.
+    /// `docs/rfc-horizontal-trunks.md` §Verification.
     RowLayoutSelected {
         recipe: String,
         kind: String,
@@ -236,7 +236,7 @@ pub enum TraceEvent {
     /// `max_inserter_tier` allows. The layout still gets built (best-
     /// effort placement, no failure) and `check_inserter_throughput`
     /// keeps its honest warning — this event just names the cap that
-    /// caused it. See `docs/rfp-inserter-sizing.md` Design.
+    /// caused it. See `docs/rfc-inserter-sizing.md` Design.
     InserterSideCapped {
         recipe: String,
         side_is_output: bool,
@@ -245,7 +245,7 @@ pub enum TraceEvent {
         placed_count: usize,
         shortfall: f64,
         /// Machine origin, so validation warnings anchored at the machine
-        /// can join this event per-tile (RFP validation-explainability D2).
+        /// can join this event per-tile (RFC validation-explainability D2).
         machine_x: i32,
         machine_y: i32,
         /// Why the side capped: `"tier-cap"` (a richer tier at the same
@@ -267,7 +267,7 @@ pub enum TraceEvent {
     // `LayoutStrategy::PartitionedDecomposed` partitioned an item into
     // `modules` distinct lane families (one per consuming recipe-row).
     // Fires zero or one time per partitioned item; absent for items with
-    // K=1 consumer rows. See `docs/rfp-modular-production.md`.
+    // K=1 consumer rows. See `docs/rfc-modular-production.md`.
     ModulePartitioned {
         item: String,
         /// Number of `(item, module_id)` lane families allocated. Equal
@@ -293,7 +293,7 @@ pub enum TraceEvent {
     // `LayoutStrategy::PartitionedDecomposed` sharded an oversized
     // module into N sub-modules of ≤8 lanes each. Fires once per
     // sharded module. K2-1 / K2-2 instrumentation per
-    // `docs/rfp-modular-production.md`.
+    // `docs/rfc-modular-production.md`.
     ShardSplit {
         item: String,
         /// Recipe consuming from this module. For K=1 items not in
@@ -360,7 +360,7 @@ pub enum TraceEvent {
 
     // Decomposition produced shards whose lane count doesn't tile
     // cleanly with consumer demand (multi-consumer K2-2 case from the
-    // RFP). Fires when a consumer's tap from a shard is uneven —
+    // RFC). Fires when a consumer's tap from a shard is uneven —
     // e.g. a 7-lane consumer tapping from a (6, 6) shard split.
     // For single-consumer modules this never fires by construction
     // (uniform demand divides cleanly).
@@ -616,7 +616,7 @@ pub enum TraceEvent {
         recipes: Vec<String>,
     },
 
-    /// The reactive power-repair pass (RFP `docs/rfp-power-reservation.md`
+    /// The reactive power-repair pass (RFC `docs/rfc-power-reservation.md`
     /// Phase 3a-ii / 3b) re-ran the full pipeline with widened substation bands,
     /// but `place_poles` STILL reported uncovered electric inserters afterward —
     /// the widen-plus-substation repair did NOT converge and this layout ships
@@ -653,7 +653,7 @@ pub enum TraceEvent {
     },
 
     // Surplus byproduct lane physically extended to the layout perimeter
-    // (Phase 2 of rfp-solver-net-flow). Consumed by the stranded-byproduct
+    // (Phase 2 of rfc-solver-net-flow). Consumed by the stranded-byproduct
     // validator, which cross-checks a pipe entity actually exists at (x, y).
     SurplusRouted {
         item: String,
@@ -663,7 +663,7 @@ pub enum TraceEvent {
         y: i32,
     },
 
-    // RFP Fulgora Phase 2 (docs/rfp-fulgora-scrap.md D1): a solid surplus
+    // RFC Fulgora Phase 2 (docs/rfc-fulgora-scrap.md D1): a solid surplus
     // stream resolved to a self-voider recipe (`<item>-recycling`: X ->
     // fraction*X) and a recycler bank was synthesized to consume it.
     VoiderSynthesized {
@@ -701,7 +701,7 @@ pub enum TraceEvent {
     /// replaced it with `K = ceil(rate / full_belt_cap)` shared trunks: each
     /// trunk's producer group merges via a splitter merge-tree
     /// (`balancer_generate::merge_tree`) and its consumer group taps the trunk
-    /// with priority splitters (RFP `docs/rfp-merge-tap-trunks.md`). Emitted
+    /// with priority splitters (RFC `docs/rfc-merge-tap-trunks.md`). Emitted
     /// once per family that takes the fallback so the activation is
     /// one-grep diagnosable. `producers_per_trunk[i]` / `consumers_per_trunk[i]`
     /// are the bin-packing assignment counts for trunk `i`.
@@ -782,7 +782,7 @@ pub enum TraceEvent {
         distinct_items: usize,
     },
 
-    /// Per-pole placement slack (RFP `docs/rfp-power-supply.md` Phase 2),
+    /// Per-pole placement slack (RFC `docs/rfc-power-supply.md` Phase 2),
     /// emitted once for every pole after `place_poles` finishes. `alternatives`
     /// is the number of FREE tiles in the pole's own row within ±POLE_RANGE
     /// (same y, Chebyshev x) excluding its own tile and every other pole — the
@@ -1293,7 +1293,7 @@ pub enum TraceEvent {
         total_us: u64,
     },
 
-    // Decomposition-search layer (see `docs/rfp-decomposition-search.md`).
+    // Decomposition-search layer (see `docs/rfc-decomposition-search.md`).
     // The search-and-score loop scores each `DecompositionCandidate` it
     // evaluates and emits one of these per candidate; then a single
     // `DecompositionChosen` once the winner is selected. With Phase 0's
@@ -1319,7 +1319,7 @@ pub enum TraceEvent {
         score: f64,
     },
 
-    // `ModuleSizeSplit` candidate (see `docs/rfp-decomposition-search.md`)
+    // `ModuleSizeSplit` candidate (see `docs/rfc-decomposition-search.md`)
     // applied a k-way split to one module of the partition plan. Fires
     // once per split module per `produce()` call. With Phase 1's k=2,
     // a single original `(item, recipe)` module spawns two events with
@@ -1529,7 +1529,7 @@ pub struct FamilyInfo {
     pub item: String,
     /// `0` under `LayoutStrategy::Pooled`. Distinguishes multiple
     /// `(item, module_id)` families per item under the partitioning
-    /// strategies — see `docs/rfp-modular-production.md`.
+    /// strategies — see `docs/rfc-modular-production.md`.
     #[serde(default)]
     pub module_id: u32,
     pub shape: (usize, usize),
@@ -1570,7 +1570,7 @@ mod tests {
     /// `remove_capped_events_since` drops only `InserterSideCapped` at or
     /// after `start`, preserving order of everything else — the pass-2
     /// scrub must not disturb earlier events or non-capped pass-1 events
-    /// (RFP validation-explainability D2).
+    /// (RFC validation-explainability D2).
     #[test]
     fn remove_capped_events_since_is_selective() {
         let _guard = start_trace();

@@ -1,5 +1,5 @@
-//! Single source of truth for machine fluid-port geometry (RFP
-//! `docs/rfp-power-supply.md` Phase 0e-i).
+//! Single source of truth for machine fluid-port geometry (RFC
+//! `docs/rfc-power-supply.md` Phase 0e-i).
 //!
 //! The bus fluid-row templates and the fluid-connectivity validator must agree
 //! on where a machine's pipes sit, exactly as the power/fluid validators and

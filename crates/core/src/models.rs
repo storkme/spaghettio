@@ -24,7 +24,7 @@ pub struct ItemFlow {
     /// `LayoutStrategy::Pooled` (one module per item — today's
     /// behaviour). The solver always emits `0`; the lane planner /
     /// placer rewrites this in Phase 1+ when partitioning multi-consumer
-    /// items. See `docs/rfp-modular-production.md`.
+    /// items. See `docs/rfc-modular-production.md`.
     #[serde(default)]
     pub module_id: u32,
 }
@@ -36,7 +36,7 @@ pub struct ItemFlow {
 /// appears in exactly one of them, signed by its net direction — so the
 /// bus/lane/placer layers see an ordinary recipe. The raw row-internal
 /// recirculation lives in `self_loop` for the row template to size the
-/// loop-back belt. See docs/rfp-solver-net-flow.md Phase 2(c).
+/// loop-back belt. See docs/rfc-solver-net-flow.md Phase 2(c).
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,8 +50,8 @@ pub struct MachineSpec {
     /// ordinary recipes).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub self_loop: Vec<SelfLoopFlow>,
-    /// True for a layout-synthesized voider row (RFP Fulgora Phase 2,
-    /// `docs/rfp-fulgora-scrap.md` D1) — a recycler bank that
+    /// True for a layout-synthesized voider row (RFC Fulgora Phase 2,
+    /// `docs/rfc-fulgora-scrap.md` D1) — a recycler bank that
     /// self-consumes a solid surplus stream down to nothing. Never set
     /// by the solver (voiding is a layout policy, not a solver
     /// objective); set only by `bus::voider::synthesize_voiders`.
@@ -94,7 +94,7 @@ pub struct SolverResult {
     pub external_outputs: Vec<ItemFlow>,
     /// Byproduct produced beyond internal demand (net-flow solver only;
     /// always empty from the legacy tree walk). Routing these to the
-    /// perimeter is Phase 2 of docs/rfp-solver-net-flow.md — until then a
+    /// perimeter is Phase 2 of docs/rfc-solver-net-flow.md — until then a
     /// non-empty entry here means the layout physically strands the flow,
     /// which the port-extraction validator reports as an error.
     #[serde(default)]
@@ -157,7 +157,7 @@ pub struct PlacedEntity {
     pub carries: Option<String>,
     /// Factorio 2.0 build-quality tier of this entity (`None` = normal,
     /// omitted from export). Parsed from community blueprints since
-    /// Phase 0 of `docs/rfp-build-quality.md`; stamped on functional
+    /// Phase 0 of `docs/rfc-build-quality.md`; stamped on functional
     /// entities (machines/inserters/poles) at export from Phase 2.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quality: Option<crate::common::QualityTier>,
@@ -192,14 +192,14 @@ pub struct PlacedEntity {
     /// `min(total, loop_priority_rate)` and the export side the
     /// remainder, matching a priority-output splitter feeding a
     /// saturated recirculation belt. Set only by the self-loop row
-    /// template. See docs/rfp-solver-net-flow.md Phase 2(c).
+    /// template. See docs/rfc-solver-net-flow.md Phase 2(c).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loop_priority_rate: Option<f64>,
     /// Inserter item filter, whitelist mode only (v1 — no blacklist, no
     /// splitter `filter` field). Ordered item names, index 1-based when
     /// exported to the blueprint's `filters` array. Empty means the
     /// inserter has no filter (Factorio 2.0 default: `use_filters: false`,
-    /// no `filters` field emitted). See docs/rfp-fulgora-scrap.md Phase 0
+    /// no `filters` field emitted). See docs/rfc-fulgora-scrap.md Phase 0
     /// "Filter entities" findings.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub filters: Vec<String>,
@@ -333,8 +333,8 @@ pub struct LayoutResult {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub surplus_exits: Vec<(String, i32, i32)>,
     /// Solid surplus streams consumed by a synthesized voider row under
-    /// `SurplusPolicy::Void` (RFP Fulgora Phase 2,
-    /// `docs/rfp-fulgora-scrap.md` D1) — first-class, trace-independent,
+    /// `SurplusPolicy::Void` (RFC Fulgora Phase 2,
+    /// `docs/rfc-fulgora-scrap.md` D1) — first-class, trace-independent,
     /// like `surplus_exits`. `check_stranded_byproducts` cross-checks
     /// each entry against real recycler entities rather than trusting
     /// this ledger alone. Empty under `SurplusPolicy::Export` or when
@@ -376,7 +376,7 @@ pub struct VoidedStream {
 
 /// One physical machine row as actually placed by `bus::placer::place_rows`,
 /// pairing its `y` band with the exact `MachineSpec` sibling that produced
-/// it. Follow-up fix for `docs/rfp-inserter-sizing.md`'s Phase 1 finding:
+/// it. Follow-up fix for `docs/rfc-inserter-sizing.md`'s Phase 1 finding:
 /// under `LayoutStrategy::PartitionedDecomposed`, `apply_partition_plan`
 /// can split one recipe into multiple sibling `MachineSpec`s sharing a
 /// recipe name but carrying different `count`/utilization (and therefore

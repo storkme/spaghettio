@@ -140,7 +140,7 @@ pub fn check_belt_loops(layout: &LayoutResult) -> Vec<ValidationIssue> {
     // Balancer templates legitimately contain loops (splitter recirculation),
     // and so do self-loop rows (e.g. kovarex enrichment): a priority
     // splitter deliberately recirculates its loop-back branch. Voider
-    // rows (RFP Fulgora Phase 2, `docs/rfp-fulgora-scrap.md` D1) are the
+    // rows (RFC Fulgora Phase 2, `docs/rfc-fulgora-scrap.md` D1) are the
     // same shape without a splitter — a recycler bank recirculates its
     // own ejected output 100% back into its own input, a genuine
     // physical cycle. Exclude tiles belonging to any of the three from
@@ -262,8 +262,8 @@ pub(crate) fn priority_output_tile(e: &PlacedEntity) -> Option<(i32, i32)> {
     }
 }
 
-/// Structural direction check for merge-and-tap **priority taps** (RFP
-/// `docs/rfp-merge-tap-trunks.md` D4). An inline tap splitter on a shared
+/// Structural direction check for merge-and-tap **priority taps** (RFC
+/// `docs/rfc-merge-tap-trunks.md` D4). An inline tap splitter on a shared
 /// trunk sends one output to the consumer row (the *feed* branch, whose
 /// downstream belt is tagged [`MERGE_TAP_SEGMENT_TAG`]) and continues the bus
 /// on the other. Factorio 2.0 `output_priority` must point at the feed branch
@@ -581,7 +581,7 @@ pub fn check_belt_item_isolation(layout: &LayoutResult) -> Vec<ValidationIssue> 
     let mut belt_dir: FxHashMap<(i32, i32), EntityDirection> = FxHashMap::default();
     let mut belt_carry: FxHashMap<(i32, i32), Option<String>> = FxHashMap::default();
     let mut ug_inputs: FxHashSet<(i32, i32)> = FxHashSet::default();
-    // Sushi (mixed-item) belt tiles (RFP Fulgora Phase 3). A sushi↔sushi
+    // Sushi (mixed-item) belt tiles (RFC Fulgora Phase 3). A sushi↔sushi
     // adjacency legitimately carries multiple items and is exempt here; the
     // sushi boundary + saturation checks own it. This is a purely additive
     // skip — ordinary (non-sushi) adjacencies are unaffected (KC5).
@@ -776,7 +776,7 @@ pub fn check_output_belt_coverage(
         let my_tiles: FxHashSet<(i32, i32)> =
             (0..mw).flat_map(|dx| (0..mh).map(move |dy| (e.x + dx, e.y + dy))).collect();
 
-        // Recyclers (RFP Fulgora Phase 0/2, `docs/rfp-fulgora-scrap.md`)
+        // Recyclers (RFC Fulgora Phase 0/2, `docs/rfc-fulgora-scrap.md`)
         // eject directly onto a belt tile, mining-drill-style — no
         // output inserter, and none is wanted (Phase 0 physicals
         // finding). `recycler_eject_tile` returns `None` for the
@@ -905,8 +905,8 @@ pub type LaneRates = FxHashMap<(i32, i32), (f64, f64)>;
 /// preserving the input left/right ratio within each branch. Falls back
 /// to the symmetric split if `loop_priority_rate` is `None`, or if the
 /// priority branch can't be determined unambiguously (neither or both
-/// flagged) — see docs/rfp-solver-net-flow.md Phase 2(c) and
-/// docs/rfp-merge-tap-trunks.md D4.
+/// flagged) — see docs/rfc-solver-net-flow.md Phase 2(c) and
+/// docs/rfc-merge-tap-trunks.md D4.
 fn splitter_output_rates(
     pos_rates: (f64, f64),
     sib_rates: (f64, f64),
@@ -1046,7 +1046,7 @@ pub fn compute_lane_rates(layout: &LayoutResult, solver_result: &SolverResult) -
         };
         // Position-resolved via `effective_rows` — see
         // `super::resolve_row_spec`'s doc comment for the
-        // partition-sibling rationale (`docs/rfp-inserter-sizing.md`
+        // partition-sibling rationale (`docs/rfc-inserter-sizing.md`
         // Phase 1 finding).
         let spec = super::resolve_row_spec(layout, recipe, me.y, fallback_spec);
         let carried_item = match belt_carries.get(&drop_pos).and_then(|c| c.as_deref()) {
@@ -1942,7 +1942,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // check_tap_splitter_priority (RFP merge-tap-trunks D4)
+    // check_tap_splitter_priority (RFC merge-tap-trunks D4)
     // -----------------------------------------------------------------------
 
     /// Build a tagged merge-tap feed belt one tile downstream of `(x,y)`.

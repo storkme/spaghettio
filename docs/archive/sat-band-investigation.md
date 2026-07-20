@@ -1,11 +1,11 @@
 # SAT encoder: can we make it work for band-sized zones?
 
 **Status**: Investigation closed 2026-04-13. Answer: **No, not at useful performance**.
-**Related**: [`docs/rfp-band-regions.md`](rfp-band-regions.md), [`docs/rfp-junction-solver.md`](rfp-junction-solver.md)
+**Related**: [`docs/rfc-band-regions.md`](rfc-band-regions.md), [`docs/rfc-junction-solver.md`](rfc-junction-solver.md)
 
 ## What we were trying to do
 
-The band-regions RFP proposed replacing the three-phase ghost-crossing pipeline (corridor templates + per-tile templates + SAT clusters) with a single pass: one SAT region per horizontal band. The motivation was structural: every crossing in tier2/tier4 sits on a row's horizontal belt line, so bands partition crossings cleanly by geometry and eliminate the 22 overlap pairs the current pipeline produces.
+The band-regions RFC proposed replacing the three-phase ghost-crossing pipeline (corridor templates + per-tile templates + SAT clusters) with a single pass: one SAT region per horizontal band. The motivation was structural: every crossing in tier2/tier4 sits on a row's horizontal belt line, so bands partition crossings cleanly by geometry and eliminate the 22 overlap pairs the current pipeline produces.
 
 Before committing to the refactor we ran three gate checks. Gates 1 and 2 passed. Gate 3 — SAT performance — passed with a synthetic benchmark showing ~14 ms per tier2 band and ~40 ms per tier4 band. Looked great.
 
@@ -83,19 +83,19 @@ Unary-depth encoding (the only thing that would actually prevent all cycles) wou
 
 The SAT encoder was designed for small, heavily-constrained crossing zones, and the existing production use relies on `forced_empty` density for correctness rather than on the encoder itself being sound. For band-sized zones the encoder is not viable, and strengthening it within the SAT framework is either insufficient (partial constraints) or too expensive (unary depth).
 
-**Verdict**: SAT is not the right tool for band-sized crossing resolution. The right direction is the junction solver (`docs/rfp-junction-solver.md`): deterministic templates for common patterns, with SAT reserved as a last-resort fallback for genuinely complex clusters — the cases where today's small-zone reliance on `forced_empty` is already enough.
+**Verdict**: SAT is not the right tool for band-sized crossing resolution. The right direction is the junction solver (`docs/rfc-junction-solver.md`): deterministic templates for common patterns, with SAT reserved as a last-resort fallback for genuinely complex clusters — the cases where today's small-zone reliance on `forced_empty` is already enough.
 
 ## What lands from this investigation
 
 1. **The `ug_out → surface neighbor` item propagation fix in `encode_item_transport`** — real bug, strict correctness improvement, tier2 ghost improved by 1 error, no regressions. Lands.
 2. **Two ignored test cases in `sat::tests`**: `band_regions_sat_bench` and `validate_existing_small_tests`. These carry the trace-validator helpers (`validate_band_solution`, `trace_flow`, `render_band_solution`, `render_band_with_items`). They stay in the codebase as regression guards and as a way to re-run the investigation if future encoder changes need validation. Both are `#[ignore]` so they don't run in CI by default.
-3. **This document** — closes the investigation and points at the junction solver RFP.
+3. **This document** — closes the investigation and points at the junction solver RFC.
 
 ## What does not land
 
 - `pred[t]` / `inflow[t][d]` aux vars and the `encode_flow_constraints` method.
 - Per-tile predecessor constraint.
 - Explicit 4-cycle ban.
-- The band-regions RFP's "SAT is fast enough" conclusion (see doc update).
+- The band-regions RFC's "SAT is fast enough" conclusion (see doc update).
 
 The investigation code is reverted in the encoder. The `band_regions_sat_bench` test will fail (as invalid) if re-run against a band-sized zone — that's the intended state. The test exists to *prove* that SAT alone isn't sufficient for bands, not to pass.

@@ -1,6 +1,6 @@
 """Ground-truth + orientation-transform verification for machine fluid ports.
 
-Provenance for the `fluid_ports` shared tables (RFP `docs/rfp-power-supply.md`
+Provenance for the `fluid_ports` shared tables (RFC `docs/rfc-power-supply.md`
 Phase 0e-i). Extends `verify_fluid_ports_emag_cryo.py` (which only dumps the
 NORTH/unmirrored base) with the two orientation transforms the layout engine
 uses to bring a machine's fluid inputs onto the template's north face:

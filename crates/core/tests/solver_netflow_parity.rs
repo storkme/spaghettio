@@ -1,5 +1,5 @@
 //! Phase 0 parity harness for the net-flow solver.
-//! See docs/rfp-solver-net-flow.md — kill criteria 1–5 are evaluated here.
+//! See docs/rfc-solver-net-flow.md — kill criteria 1–5 are evaluated here.
 
 use rustc_hash::FxHashSet;
 use spaghettio_core::models::SolverResult;
@@ -204,8 +204,8 @@ fn netflow_flow_conservation_sweep() {
     }
 
     println!("solved {solved} items; {} typed refusals: {refusals:?}", refusals.len());
-    // KC5 census, evaluated 2026-07-10 (see RFP decision log); re-checked
-    // 2026-07-11 after solver-side self-loop netting landed (RFP Phase 2,
+    // KC5 census, evaluated 2026-07-10 (see RFC decision log); re-checked
+    // 2026-07-11 after solver-side self-loop netting landed (RFC Phase 2,
     // "Cycle policy"). Two known refusal families remain, both of which the
     // tree walk today "solves" with physically-broken output (nonsense
     // externals / stranded byproducts):
@@ -302,7 +302,7 @@ fn kc2_determinism_double_run() {
 }
 
 /// Golden: kovarex forced (exclude uranium-processing) now SOLVES via
-/// self-loop net flows (RFP Phase 2) instead of the typed refusal Phase 1
+/// self-loop net flows (RFC Phase 2) instead of the typed refusal Phase 1
 /// shipped. Free selection is also free to route the U-238 deficit through
 /// any other in-closure producer (here: nuclear-fuel-reprocessing from
 /// depleted-uranium-fuel-cell, which the LP finds cheaper than the tree
@@ -344,7 +344,7 @@ fn golden_kovarex_solves_as_self_loop() {
     assert_conservation("uranium-235", 1.0, &r);
 }
 
-/// Hand-derived kovarex netting math (RFP Phase 2): restrict the LP to
+/// Hand-derived kovarex netting math (RFC Phase 2): restrict the LP to
 /// kovarex alone (excluding uranium-processing AND any other producer of
 /// uranium-238, so there is no alternative for free selection to route
 /// through) so the only unknowns under test are the netting arithmetic
@@ -648,7 +648,7 @@ fn report_unpinned_deltas() {
 }
 
 // ============================================================================
-// Fulgora scrap-economy spike (RFP decision log, 2026-07-11 entries).
+// Fulgora scrap-economy spike (RFC decision log, 2026-07-11 entries).
 // Everything below is additive and behind `NetflowOptions`, which defaults
 // both flags to `false` — nothing above this point (or any other default
 // solve path) is affected.
@@ -733,7 +733,7 @@ fn print_machine_mix(r: &SolverResult) {
     }
 }
 
-/// Fulgora scrap-economy spike report (RFP decision log, 2026-07-11). Not a
+/// Fulgora scrap-economy spike report (RFC decision log, 2026-07-11). Not a
 /// kill-criterion gate — run explicitly:
 ///   cargo test --manifest-path crates/core/Cargo.toml --test solver_netflow_parity \
 ///       report_fulgora_spike -- --ignored --nocapture
@@ -748,7 +748,7 @@ fn report_fulgora_spike() {
     let opts_void = NetflowOptions { allow_recycling: true, allow_voiding: true, ..Default::default() };
 
     // Item names verified directly against draftsman 3.3.0 / Space Age data
-    // before writing this test (see the recipe_db exploration in the RFP
+    // before writing this test (see the recipe_db exploration in the RFC
     // spike session) — all three exist under these exact slugs.
     let targets: &[(&str, f64)] = &[
         ("holmium-plate", 1.0),
@@ -782,7 +782,7 @@ fn report_fulgora_spike() {
         println!("  scrap consumption: {scrap_rate:.4}/s");
 
         // KEY DELIVERABLE: with the frozen default CostTable, does
-        // allow_voiding change anything? Per the RFP's cost-table design
+        // allow_voiding change anything? Per the RFC's cost-table design
         // (w_available > eps_machine·time > eps_surplus), it must not —
         // surplus stays strictly cheaper than running a voider machine.
         let voider_ran =
@@ -832,7 +832,7 @@ fn report_fulgora_spike() {
                     print_machine_mix(&res);
                 }
                 Err(SolverError::UnsupportedCycle { recipes }) => {
-                    // Observed finding (see RFP decision log): admitting
+                    // Observed finding (see RFC decision log): admitting
                     // ~310 recycling recipes into the FULL free-selection
                     // graph, combined with a high enough eps_surplus,
                     // makes "craft an ordinary game entity purely to feed
@@ -876,7 +876,7 @@ fn report_fulgora_spike() {
     println!("\nGOLDEN: holmium-plate@1/s scrap rate = {scrap_rate:.4} (hand-derived: {hand_derived})");
 }
 
-/// Determinism (RFP Fulgora spike): double-run byte-compare, KC2's shape
+/// Determinism (RFC Fulgora spike): double-run byte-compare, KC2's shape
 /// scoped to the spike's actual solves (allow_recycling + allow_voiding,
 /// all three report targets, default AND spike-priced cost tables).
 #[test]

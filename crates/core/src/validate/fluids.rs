@@ -20,7 +20,7 @@ use super::{LayoutStyle, Severity, ValidationIssue};
 const PIPE_ENTITIES: &[&str] = &["pipe", "pipe-to-ground"];
 
 // Machine set: the canonical `common::MACHINE_ENTITY_NAMES` via
-// `is_machine_entity` (RFP `docs/rfp-power-supply.md` Phase 0b — no more
+// `is_machine_entity` (RFC `docs/rfc-power-supply.md` Phase 0b — no more
 // hand-synced fluids-local list). Machines with no fluid ports fall through
 // the `ports.is_empty()` guard below, so this checks exactly
 // `canonical ∩ has-fluid-ports`: AM2/AM3, chemical-plant, oil-refinery,
@@ -32,8 +32,8 @@ const PIPE_ENTITIES: &[&str] = &["pipe", "pipe-to-ground"];
 // Fluid port data
 // ---------------------------------------------------------------------------
 //
-// Port geometry lives in the shared `crate::fluid_ports` module (RFP
-// `docs/rfp-power-supply.md` Phase 0e-i) so the bus templates and this
+// Port geometry lives in the shared `crate::fluid_ports` module (RFC
+// `docs/rfc-power-supply.md` Phase 0e-i) so the bus templates and this
 // validator read the SAME tables — the geometry dual of the Phase 0b machine
 // list unification. `fluid_ports` is orientation-aware (mirror + direction);
 // the call site below passes each entity's actual `mirror`/`direction`, which
@@ -438,7 +438,7 @@ pub fn check_fluid_port_connectivity(
         // casting), cryogenic-plant (fusion-reactor, promethium-science). An
         // idle port has no pipe and must NOT be flagged.
         //
-        // Recipe-driven gating (RFP `docs/rfp-power-supply.md` Phase 0b)
+        // Recipe-driven gating (RFC `docs/rfc-power-supply.md` Phase 0b)
         // replaces the previous machine-allowlist guard: it is the input-side
         // dual of the long-standing `recipe_has_fluid_output` output gate, and
         // is correct for every machine — including foundry/cryogenic-plant

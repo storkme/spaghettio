@@ -30,7 +30,7 @@ pub enum SolverError {
         reason: MachineIncompatibility,
     },
     /// The optimal plan uses a self-loop recipe (an item on both sides)
-    /// outside v1's supported shapes (RFP Phase 2, "Cycle policy"; extended
+    /// outside v1's supported shapes (RFC Phase 2, "Cycle policy"; extended
     /// for the fluid-ingredient row variant): a fluid self-loop item
     /// (coal-liquefaction's heavy-oil — no template recirculates a fluid),
     /// more than one non-self-loop fluid ingredient, any non-self-loop
@@ -46,7 +46,7 @@ pub enum SolverError {
     UnsupportedSelfLoop { recipe: String },
     /// The optimal plan contains a multi-recipe cycle (e.g. the
     /// carbon ↔ coal-synthesis loop). Cross-row feedback routing is out of
-    /// scope for the net-flow RFP.
+    /// scope for the net-flow RFC.
     #[error("recipes form a production cycle ({recipes}) — cyclic chains are not supported")]
     UnsupportedCycle { recipes: String },
     /// The LP itself failed (infeasible/unbounded/internal). Should not
@@ -142,7 +142,7 @@ pub fn solve_with_exclusions(
 
 /// Combined variant: per-category palette + recipe exclusions.
 ///
-/// Since Phase 1 of docs/rfp-solver-net-flow.md this routes through the
+/// Since Phase 1 of docs/rfc-solver-net-flow.md this routes through the
 /// net-flow LP in **compatibility mode**: the legacy tree walk runs first
 /// to pick the recipe set (JSON-first per item, exclusions honored), then
 /// the LP re-derives flows over exactly that set — fixing byproduct
@@ -150,7 +150,7 @@ pub fn solve_with_exclusions(
 /// Cycle-shaped selections return typed errors instead of the walk's
 /// silent nonsense externals.
 ///
-/// Phase 3 (docs/rfp-solver-net-flow.md): free cost-based recipe
+/// Phase 3 (docs/rfc-solver-net-flow.md): free cost-based recipe
 /// selection is the default. All non-excluded recipes are candidate LP
 /// columns; the frozen cost table picks the mix — raw-input efficiency
 /// first, so e.g. advanced-oil-processing + cracking replaces
@@ -179,7 +179,7 @@ pub fn solve_with_palette_and_exclusions(
 /// recipe set (JSON-first per item), then the LP re-derives flows over
 /// exactly that set. Kept for A/B comparison and the parity harness.
 ///
-/// No quality support (rfp-build-quality): this entry always solves at
+/// No quality support (rfc-build-quality): this entry always solves at
 /// `Normal`. Selection is quality-invariant so the walk needs nothing;
 /// if a future caller needs quality-scaled *counts* in compat mode,
 /// thread `NetflowOptions.quality` into the `solve_netflow` call below —
@@ -242,7 +242,7 @@ pub fn solve_free_with_palette_and_exclusions(
 }
 
 /// Like [`solve_with_palette_and_exclusions`] with a build-quality tier
-/// (`docs/rfp-build-quality.md` Phase 1): machine counts shrink by the
+/// (`docs/rfc-build-quality.md` Phase 1): machine counts shrink by the
 /// quality crafting-speed multiplier. `Normal` is bit-identical to the
 /// plain entry points (same code path — the multiplier rides through
 /// `NetflowOptions`, whose default is `Normal`).
@@ -277,7 +277,7 @@ pub fn solve_with_palette_exclusions_and_quality(
 /// fleet double-counting) — do not add new callers; use [`solve`] /
 /// [`solve_with_palette_and_exclusions`] instead.
 ///
-/// Deliberately quality-blind (rfp-build-quality Phase 1): recipe
+/// Deliberately quality-blind (rfc-build-quality Phase 1): recipe
 /// *selection* is quality-invariant (JSON-first / cost table, never
 /// speed), and this walk's counts are oracle-only — see
 /// `recipe_db::effective_crafting_speed` for the quality choke point.
@@ -480,7 +480,7 @@ mod tests {
         assert_eq!(result.external_outputs[0].rate, 10.0);
     }
 
-    /// Kill criterion 2a (rfp-build-quality): the quality entry point at
+    /// Kill criterion 2a (rfc-build-quality): the quality entry point at
     /// `Normal` must be bit-identical to the plain entry point — same code
     /// path, `×1.0` multiplier. Swept across rates adjacent to
     /// whole-machine boundaries (EC on AM3: 2.5/s per machine), where any
@@ -526,7 +526,7 @@ mod tests {
         }
     }
 
-    /// Per-tier machine counts on the RFP's hand-computed cases:
+    /// Per-tier machine counts on the RFC's hand-computed cases:
     /// EC@60/s on AM3 (Normal 2.5/s → 24 machines; Legendary 6.25/s →
     /// 9.6) with cable scaling alongside (Normal 5/s → 36; Legendary
     /// 12.5/s → 14.4), and iron smelting on electric furnaces (Normal

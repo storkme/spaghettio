@@ -1,6 +1,6 @@
 //! Per-side inserter sizing ladder.
 //!
-//! `docs/rfp-inserter-sizing.md` — every row template used to place
+//! `docs/rfc-inserter-sizing.md` — every row template used to place
 //! exactly one regular inserter (~0.84/s) per machine side regardless of
 //! the planned rate, making machines inserter-bound engine-wide. This
 //! module picks the cheapest-sufficient inserter tier/count for a side's
@@ -153,7 +153,7 @@ pub fn size_side(
     }
 }
 
-/// Name the binding constraint behind a CAPPED side plan (RFP
+/// Name the binding constraint behind a CAPPED side plan (RFC
 /// validation-explainability D2 — the `limit` field of the
 /// `InserterSideCapped` trace event). Valid only when
 /// `plan.shortfall.is_some()`: a capped plan is best-effort, so it used
@@ -196,7 +196,7 @@ pub fn capped_limit(
 }
 
 /// Ingredient-to-belt assignment for `dual_input_row`/`triple_input_row`'s
-/// near/far pair (`docs/rfp-inserter-sizing.md`, lever (b)): the item with
+/// near/far pair (`docs/rfc-inserter-sizing.md`, lever (b)): the item with
 /// the higher per-machine rate goes to the NEAR (reach-1) belt, where the
 /// full regular→fast→stack ladder applies — no fast/stack long-handed
 /// inserter exists, so the FAR (reach-2) belt stays low-ceiling regardless,
@@ -216,7 +216,7 @@ pub fn reassign_near_far<T>(item0: T, rate0: f64, item1: T, rate1: f64) -> ((T, 
 /// Resolve an extra inserter column shared by two competing machine
 /// sides — dual/triple's near-vs-far input pair, triple's
 /// input3-vs-output tile, quad's south-input-vs-output tile
-/// (`docs/rfp-inserter-sizing.md`). Larger RELATIVE shortfall, measured
+/// (`docs/rfc-inserter-sizing.md`). Larger RELATIVE shortfall, measured
 /// against each side's own single-slot top-tier ceiling (stack for
 /// `Reach::Near`, one long-handed for `Reach::Far`), wins the shared
 /// slot; ties favor the far/reach-2 side. `far_eligible` is `false` when
@@ -266,7 +266,7 @@ mod tests {
         assert_eq!(inserter_throughput(FAST, QualityTier::Normal), 2.31);
         assert_eq!(inserter_throughput(STACK, QualityTier::Normal), 12.0);
         assert_eq!(inserter_throughput(LONG_HANDED, QualityTier::Normal), 1.2);
-        // Per-tier scaling (rfp-build-quality kill 2a, inserter third):
+        // Per-tier scaling (rfc-build-quality kill 2a, inserter third):
         // Normal is the bit-exact base above; legendary is ×2.5 exactly
         // (0.3×5 = 1.5 is exact in f64). Mid-tiers approx-checked.
         assert_eq!(inserter_throughput(STACK, QualityTier::Legendary), 30.0);
@@ -283,7 +283,7 @@ mod tests {
         }
     }
 
-    // ── capped_limit derivation (RFP validation-explainability D2) ──────
+    // ── capped_limit derivation (RFC validation-explainability D2) ──────
 
     /// The anchor mechanism: EC@35s far side needs 1.4583/s, one LHI moves
     /// 1.2/s. Lost the shared column → the budget+1 counterfactual (2.4/s)

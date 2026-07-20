@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Power re-census (docs/rfp-power-supply.md + docs/rfp-power-reservation.md).
+"""Power re-census (docs/rfc-power-supply.md + docs/rfc-power-reservation.md).
 
 Originally the post-Phase-0f re-census; re-run post-Phase-3b (commit ca8730e)
 to re-anchor the trigger-(b) pole-count baseline after 3a-ii's reactive
@@ -13,7 +13,7 @@ SPAGHETTIO_DUMP_SNAPSHOTS=1) and computes, per case and corpus-wide:
   D. in-span fraction
   E. fluid-row free-tile budget inputs
 
-SUBSTATION HANDLING (RFP Phase 3b — a pole TYPE the pre-3b census never saw):
+SUBSTATION HANDLING (RFC Phase 3b — a pole TYPE the pre-3b census never saw):
   substations are counted in the part-C pole totals (real_pole_count now =
   medium + substation) and modelled as 2x2 obstacles in the medium-pole slack
   occupancy, but are EXCLUDED from the part-B ±3 slack/densification analysis
@@ -36,7 +36,7 @@ METHODOLOGY CAVEATS (read before trusting the numbers):
       * local_slack: at the pole's own y (the specific ring it landed on),
         x in [px-3, px+3] (7 tiles, POLE_RANGE=3 each way) minus the pole's
         own tile -> up to 6 alternatives. This is the closest analogue to
-        the pre-0f single-band probe the RFP's Motivation section measured.
+        the pre-0f single-band probe the RFC's Motivation section measured.
       * band_slack: the same x-window, but summed across every y-ring in
         the pole's *entire* matched band (up to 4 rings: the seed candidate
         row out to POLE_RANGE further outward) -- a fuller picture of how
@@ -78,7 +78,7 @@ from collections import defaultdict, Counter
 
 # Snapshot directory: override via SPAGHETTIO_SNAP_DIR; defaults to the
 # repo's own dump location (run the suite with SPAGHETTIO_DUMP_SNAPSHOTS=1
-# first — see the census decision-log entries in docs/rfp-power-supply.md).
+# first — see the census decision-log entries in docs/rfc-power-supply.md).
 SNAP_DIR = os.environ.get(
     "SPAGHETTIO_SNAP_DIR",
     os.path.join(os.path.dirname(__file__), "..", "crates", "core", "target", "tmp"),
@@ -102,7 +102,7 @@ MACHINE_NAMES = set(MACHINE_DIMS.keys())
 INSERTER_NAMES = {"inserter", "long-handed-inserter", "fast-inserter", "stack-inserter"}
 SPLITTER_NAMES = {"splitter", "fast-splitter", "express-splitter"}
 POLE_RANGE = 3
-# Substation (RFP `docs/rfp-power-reservation.md` Phase 3b — kovarex top-edge
+# Substation (RFC `docs/rfc-power-reservation.md` Phase 3b — kovarex top-edge
 # band, plus the USP deep-geometry fallback): a NEW pole TYPE the pre-3b census
 # never saw. 2x2 footprint, ±9 supply (18x18) — a fundamentally different beast
 # from the medium pole's 1x1 / ±3, so it is COUNTED in the corpus pole totals
@@ -145,7 +145,7 @@ def build_occupied_base(entities):
     """Mirror bus/layout.rs's occupancy construction, excluding MEDIUM poles.
 
     Medium poles are handled separately as single-tile obstacles via `pole_set`
-    in the slack loop. Substations (RFP Phase 3b) are NOT medium poles, so they
+    in the slack loop. Substations (RFC Phase 3b) are NOT medium poles, so they
     stay in the occupancy set at their real 2x2 footprint — a medium pole cannot
     land on a substation tile."""
     occ = set()
@@ -265,7 +265,7 @@ def census_one(path):
     all_issue_cats = Counter((i["severity"], i["category"]) for i in issues)
 
     # `poles` = MEDIUM poles only — the subjects of the ±3 slack/densification
-    # analysis (parts B/D/E). Substations (RFP Phase 3b) are counted separately
+    # analysis (parts B/D/E). Substations (RFC Phase 3b) are counted separately
     # (part C pole totals) but are NOT ±3 slack subjects (they have ±9 supply and
     # a 2x2 footprint; a "single-tile slack window" is meaningless for them).
     poles = [(e["x"], e["y"]) for e in entities if e["name"] == "medium-electric-pole"]

@@ -57,7 +57,7 @@ async function main(): Promise<void> {
   // needed. See `web/src/shortIds.ts` and the Rust drift test
   // `short_ids::tests::snapshot_matches_algorithm`.
   await initEntityIcons(MACHINE_SLUGS);
-  // In-game quality badge textures (rfp-build-quality Phase 2): four
+  // In-game quality badge textures (rfc-build-quality Phase 2): four
   // small PNGs, loaded up front so badge sprites never race the first
   // render (unlike carries icons, these are layout-independent).
   await preloadQualityBadgeIcons();
@@ -638,7 +638,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     requestRender();
   }
 
-  /** Starvation heatmap (RFP validation-explainability Phase 1): tint
+  /** Starvation heatmap (RFC validation-explainability Phase 1): tint
    *  machines by the structured delivered/needed ratio on rate-shaped
    *  issues. Rebuilt whenever validation results or the toggle change;
    *  `lastHeatmapIssues` remembers the issue set so the toggle listener
