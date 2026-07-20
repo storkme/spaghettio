@@ -54,6 +54,13 @@ struct BlueprintEntity<'a> {
 struct Blueprint<'a> {
     icons: [(); 0],
     entities: Vec<BlueprintEntity<'a>>,
+    /// Blueprint-level copper wire graph: each entry is
+    /// `[entity_number_a, 5, entity_number_b, 5]` (connector 5 = pole copper).
+    /// WITHOUT this, pasted poles are unwired islands and the factory is
+    /// power-dead. Omitted entirely when there are <2 poles. See
+    /// `crate::power_wires`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    wires: Vec<[u32; 4]>,
     item: &'static str,
     version: u64,
     label: &'a str,
@@ -119,10 +126,28 @@ pub fn export(layout: &LayoutResult, label: &str) -> String {
         })
         .collect();
 
+    // Pole copper wires: `compute_pole_wires` returns 0-based entity index
+    // pairs; the blueprint numbers entities from 1, so entity_number = index+1.
+    // Connector id 5 on both ends = pole-to-pole copper. Recomputed from the
+    // same `layout.entities` the entity list above enumerates, so the indices
+    // line up exactly.
+    let wires: Vec<[u32; 4]> = crate::power_wires::compute_pole_wires(&layout.entities)
+        .into_iter()
+        .map(|(a, b)| {
+            [
+                a + 1,
+                crate::power_wires::POLE_COPPER,
+                b + 1,
+                crate::power_wires::POLE_COPPER,
+            ]
+        })
+        .collect();
+
     let wrapper = BlueprintWrapper {
         blueprint: Blueprint {
             icons: [],
             entities,
+            wires,
             item: "blueprint",
             version: 562949955518464,
             label,

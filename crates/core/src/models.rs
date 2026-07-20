@@ -341,6 +341,15 @@ pub struct LayoutResult {
     /// See [`EffectiveRow`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub effective_rows: Vec<EffectiveRow>,
+    /// Pole-to-pole copper wire graph as `(a, b)` index pairs into `entities`
+    /// (`a < b`), from [`crate::power_wires::compute_pole_wires`]. Tsify emits
+    /// `power_wires?: [number, number][]` for the web power-connectivity
+    /// overlay. This is the SAME graph `blueprint::export` encodes in the
+    /// blueprint-level `wires` array, so the overlay shows exactly what pastes.
+    /// Recomputed after any post-layout entity-reordering splice (see
+    /// `wasm-bindings::improve_region_streaming`). Empty when <2 poles.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub power_wires: Vec<(u32, u32)>,
 }
 
 /// One solid surplus stream consumed by a layout-synthesized voider

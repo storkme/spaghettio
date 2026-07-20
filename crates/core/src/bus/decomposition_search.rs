@@ -898,6 +898,7 @@ mod tests {
             surplus_exits: vec![],
             voided_streams: vec![],
             effective_rows: vec![],
+            power_wires: vec![],
         }
     }
 

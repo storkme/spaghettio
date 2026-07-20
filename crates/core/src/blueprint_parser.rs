@@ -42,6 +42,14 @@ struct BpBookEntry {
 struct BpData {
     #[serde(default)]
     entities: Vec<BpEntity>,
+    /// Blueprint-level wire graph. Each entry is
+    /// `[entity_number_a, connector_a, entity_number_b, connector_b]`.
+    /// Pole copper wires use connector 5 on both ends
+    /// ([`crate::power_wires::POLE_COPPER`]); circuit wires use other ids and
+    /// are ignored here. `Vec<Vec<i64>>` (not a fixed `[_; 4]`) so a malformed
+    /// entry in a community blueprint is skipped, not a hard parse error.
+    #[serde(default)]
+    wires: Vec<Vec<i64>>,
     #[serde(default)]
     label: Option<String>,
 }
@@ -160,6 +168,10 @@ struct BpFilter {
 
 #[derive(Deserialize)]
 struct BpEntity {
+    /// Factorio's explicit 1-based id, referenced by the blueprint `wires`
+    /// array. Absent in some hand-written JSON — falls back to array position.
+    #[serde(default)]
+    entity_number: Option<u64>,
     name: String,
     position: BpPosition,
     #[serde(default)]
@@ -274,9 +286,16 @@ fn decode_bp_string(bp: &str) -> Result<BpRoot, String> {
 
 /// Convert a `BpData` to a `LayoutResult`, normalizing positions to (0,0).
 fn bp_data_to_layout(bp_data: BpData) -> LayoutResult {
+    let wires_raw = bp_data.wires;
     let mut entities: Vec<PlacedEntity> = Vec::with_capacity(bp_data.entities.len());
+    // entity_number (explicit, else positional 1-based) → 0-based index in
+    // `entities`, so the `wires` array can be resolved to entity indices.
+    let mut num_to_idx: std::collections::HashMap<u64, usize> =
+        std::collections::HashMap::with_capacity(bp_data.entities.len());
 
-    for raw in bp_data.entities {
+    for (pos, raw) in bp_data.entities.into_iter().enumerate() {
+        let entity_number = raw.entity_number.unwrap_or((pos + 1) as u64);
+        num_to_idx.insert(entity_number, entities.len());
         let dir = parse_direction(raw.direction);
         let (w, h) = entity_footprint(&raw.name, dir);
 
@@ -347,10 +366,39 @@ fn bp_data_to_layout(bp_data: BpData) -> LayoutResult {
         .max()
         .unwrap_or(0);
 
+    // Resolve the blueprint `wires` array into pole-copper index pairs for
+    // `LayoutResult::power_wires`. Keep only copper (connector 5) edges whose
+    // endpoints are both electric poles; normalize to `(lo, hi)`, sorted +
+    // deduped so the result is deterministic regardless of source ordering.
+    let copper = crate::power_wires::POLE_COPPER as i64;
+    let mut power_wires: Vec<(u32, u32)> = Vec::new();
+    for w in &wires_raw {
+        if w.len() != 4 || w[1] != copper || w[3] != copper {
+            continue;
+        }
+        let (Ok(a_num), Ok(b_num)) = (u64::try_from(w[0]), u64::try_from(w[2])) else {
+            continue;
+        };
+        let (Some(&ia), Some(&ib)) = (num_to_idx.get(&a_num), num_to_idx.get(&b_num)) else {
+            continue;
+        };
+        if ia == ib
+            || !crate::power_wires::is_pole(&entities[ia].name)
+            || !crate::power_wires::is_pole(&entities[ib].name)
+        {
+            continue;
+        }
+        let (lo, hi) = if ia < ib { (ia, ib) } else { (ib, ia) };
+        power_wires.push((lo as u32, hi as u32));
+    }
+    power_wires.sort_unstable();
+    power_wires.dedup();
+
     LayoutResult {
         entities,
         width: max_x + 1,
         height: max_y + 1,
+        power_wires,
         ..Default::default()
     }
 }

@@ -857,6 +857,12 @@ fn layout_pass(
         })
         .collect();
 
+    // Pole copper wire graph for the web overlay — the SAME graph
+    // `blueprint::export` re-derives and encodes in the blueprint `wires`
+    // array. Computed from the final entity order so the `(a, b)` index pairs
+    // stay valid. See `crate::power_wires`.
+    let power_wires = crate::power_wires::compute_pole_wires(&all_entities);
+
     Ok((
         LayoutResult {
             entities: all_entities,
@@ -868,6 +874,7 @@ fn layout_pass(
             surplus_exits,
             voided_streams,
             effective_rows,
+            power_wires,
         },
         row_spans,
         cap_coords,

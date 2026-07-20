@@ -10,89 +10,27 @@
 //! wire (P6). Disconnected poles are a Warning, not an Error — they still
 //! function but require separate power sources.
 
-use std::collections::VecDeque;
-
 use crate::common::needs_electricity;
 use crate::models::LayoutResult;
 use crate::validate::{Severity, ValidationIssue};
 
-/// Wire reach (tile distance between centers) for each pole type.
-const MEDIUM_POLE_WIRE_REACH: f64 = 9.0;
-const SMALL_POLE_WIRE_REACH: f64 = 7.5;
-/// Substation-to-substation copper wire reach (RFP Phase 3a-i; draftsman
-/// `maximum_wire_distance = 18`). A substation-to-medium-pole connection uses
-/// `min(18, 9) = 9` via the `ar.min(br)` rule in the connectivity walk.
-const SUBSTATION_WIRE_REACH: f64 = 18.0;
-
-/// Center in tile-space of a power-distribution entity's footprint. medium /
-/// small-electric-poles are 1×1 (center +0.5); a substation is 2×2 (center
-/// +1.0). Size from the shared [`entity_size`] (RFP Phase 3a-i — the old
-/// hard-coded +0.5, and its comment calling the 1×1 medium pole "2×2", were
-/// both wrong for the substation).
-fn pole_center(name: &str, x: i32, y: i32) -> (f64, f64) {
-    let (w, h) = crate::common::entity_size(name);
-    (x as f64 + w as f64 / 2.0, y as f64 + h as f64 / 2.0)
-}
-
-/// Wire reach for a given pole name; returns `None` for unknown pole types.
-fn wire_reach(name: &str) -> Option<f64> {
-    match name {
-        "medium-electric-pole" => Some(MEDIUM_POLE_WIRE_REACH),
-        "small-electric-pole" => Some(SMALL_POLE_WIRE_REACH),
-        "substation" => Some(SUBSTATION_WIRE_REACH),
-        _ => None,
-    }
-}
-
-/// Check that all power poles form a single connected graph via copper wire.
+/// Check that the EMITTED pole copper-wire graph is a single connected network.
 ///
-/// Two poles are connected when the Euclidean distance between their centers
-/// is ≤ the wire reach of the *smaller* reach of the two poles (Factorio uses
-/// the minimum of both poles' wire reaches).
+/// This validates the ARTIFACT, not mere geometry: it recomputes the exact
+/// `wires` array [`crate::blueprint::export`] encodes (via
+/// [`crate::power_wires::compute_pole_wires`] — the single source of wire reach
+/// and footprint centers) and asserts every pole is reachable from the first
+/// pole through it. A geometry-only check could pass while the export omitted
+/// the wires entirely, pasting poles as disconnected islands — the bug this
+/// check now catches at the artifact level.
 ///
-/// Returns a single `Warning` issue if any pole is unreachable from the first
-/// pole in the layout.
+/// Wiring rule (in `compute_pole_wires`): two poles connect when the Euclidean
+/// distance between their footprint centers is ≤ the *smaller* of the two
+/// poles' wire reaches, with no per-pole connection cap (Factorio 2.0 removed
+/// it). Returns a single `Warning` when any pole is unreachable.
 pub fn check_pole_network_connectivity(layout: &LayoutResult) -> Vec<ValidationIssue> {
-    // Collect (center_x, center_y, wire_reach) for every known pole type.
-    let poles: Vec<(f64, f64, f64)> = layout
-        .entities
-        .iter()
-        .filter_map(|e| {
-            wire_reach(&e.name).map(|r| {
-                let (cx, cy) = pole_center(&e.name, e.x, e.y);
-                (cx, cy, r)
-            })
-        })
-        .collect();
-
-    if poles.len() <= 1 {
-        // 0 or 1 pole — trivially connected (or no poles, covered by check_power_coverage).
-        return vec![];
-    }
-
-    let mut visited = vec![false; poles.len()];
-    let mut queue = VecDeque::new();
-    queue.push_back(0usize);
-    visited[0] = true;
-
-    while let Some(i) = queue.pop_front() {
-        let (acx, acy, ar) = poles[i];
-        for (j, &(bcx, bcy, br)) in poles.iter().enumerate() {
-            if visited[j] {
-                continue;
-            }
-            let dx = acx - bcx;
-            let dy = acy - bcy;
-            let reach = ar.min(br);
-            // Compare squared distances to avoid sqrt.
-            if dx * dx + dy * dy <= reach * reach {
-                visited[j] = true;
-                queue.push_back(j);
-            }
-        }
-    }
-
-    let disconnected: usize = visited.iter().filter(|&&v| !v).count();
+    let wires = crate::power_wires::compute_pole_wires(&layout.entities);
+    let disconnected = crate::power_wires::count_disconnected_poles(&layout.entities, &wires);
     if disconnected == 0 {
         return vec![];
     }

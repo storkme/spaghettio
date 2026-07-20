@@ -372,6 +372,12 @@ pub fn improve_region_streaming(
         .retain(|e| !(in_bbox(e) && is_belt_or_ug(&e.name)));
     layout_result.entities.extend(pruned_final);
 
+    // The retain+extend above reorders `entities`, invalidating the index pairs
+    // in `power_wires`. Recompute so the field (and any downstream export /
+    // overlay) stays consistent with the new entity order.
+    layout_result.power_wires =
+        spaghettio_core::power_wires::compute_pole_wires(&layout_result.entities);
+
     Ok(layout_result)
 }
 
