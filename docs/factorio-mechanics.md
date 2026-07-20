@@ -12,9 +12,9 @@ Formal rules the layout engine must satisfy. Statements are numbered per section
 - **G4.** Each entity has a **direction**: one of NORTH, SOUTH, EAST, WEST (encoded 0, 4, 8, 12 in Factorio's coordinate system).
 - **G5.** Rotation changes the direction but does not change footprint dimensions for square entities (3x3, 5x5). Non-square entities (e.g. splitters, 2x1) swap W and H on rotation.
 - **G6.** Common entity sizes:
-  - 1x1: belt, underground belt, splitter half-tile, pipe, pipe-to-ground, inserter, electric pole (small)
+  - 1x1: belt, underground belt, splitter half-tile, pipe, pipe-to-ground, inserter, electric pole (small **and medium** — both are 1x1)
   - 2x1: splitter (perpendicular to facing direction)
-  - 2x2: medium electric pole
+  - 2x2: substation (the only 2x2 electric pole)
   - 3x3: assembling machine, chemical plant, electric mining drill
   - 5x5: oil refinery
 
@@ -171,10 +171,11 @@ Splitters compose into networks that route m input belts onto n output belts ("b
 - **P1.** All machines, inserters, and other active entities require electricity to operate. An unpowered entity does nothing.
 - **P2.** Electricity is delivered via **electric poles** that define a supply area.
 - **P3.** **Small electric pole**: 1x1 footprint, 5x5 supply area (centered), wire reach 7.5 tiles.
-- **P4.** **Medium electric pole**: 2x2 footprint, 7x7 supply area (centered), wire reach 9 tiles.
+- **P4.** **Medium electric pole**: **1x1** footprint (NOT 2x2 — only the substation is 2x2), 7x7 supply area (centered), wire reach 9 tiles. Footprint center is `+0.5` on each axis; a substation's is `+1.0`. Supply-area distance (center-to-edge) is 3.5 for a medium pole, 9.0 for a substation; wire reach (`maximum_wire_distance`) is 9 / 18 respectively — these are *different quantities*, do not conflate.
 - **P5.** An entity is powered if any tile of its footprint falls within at least one pole's supply area.
-- **P6.** Poles connect to each other via copper wire if within wire reach, forming the electric network. At least one pole must connect (directly or transitively) to a power source.
-- **P7.** For the generator, pole placement must ensure every machine and inserter is within a pole's supply area (P5), and all poles form a connected network (P6). *(Medium electric poles are the standard choice -- good coverage-to-footprint ratio.)*
+- **P6.** Poles connect to each other via copper wire if the Euclidean distance between their footprint centers is ≤ the *smaller* of the two poles' wire reaches, forming the electric network. Factorio 2.0 removed the per-pole copper connection cap (FFF-379 "Abstract rewiring"), so every in-reach pair is wired — there is no 5-connection limit. At least one pole must connect (directly or transitively) to a power source.
+- **P6a. (Export)** In a Factorio 2.0 blueprint, pole copper connections are stored in a **blueprint-level `wires` array**, each entry `[entity_number_a, 5, entity_number_b, 5]` (connector id 5 = pole copper). This is the ONLY encoding 2.0 reads — the 1.x per-entity `neighbours` list is ignored. **If the `wires` array is omitted, pasted poles are electrically disconnected islands and the whole factory is power-dead**, even when the poles are placed within wire reach. Our exporter emits this array from `crate::power_wires::compute_pole_wires`; the connectivity validator checks that emitted graph, not mere geometric proximity.
+- **P7.** For the generator, pole placement must ensure every machine and inserter is within a pole's supply area (P5), all poles form a connected network (P6), **and the export encodes that network in the `wires` array (P6a)**. *(Medium electric poles are the standard choice -- good coverage-to-footprint ratio.)*
 
 ---
 

@@ -22,6 +22,7 @@ pub mod fixture;
 pub mod fluid_ports;
 pub mod models;
 pub mod netflow;
+pub mod power_wires;
 pub mod recipe_db;
 pub mod sat;
 pub mod short_ids;

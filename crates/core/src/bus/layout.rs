@@ -188,7 +188,7 @@ fn run_layout_with_retry_inner(
     // function of its arguments (package #3). The event is still emitted for
     // the snapshot debugger; this reads the control-flow copy instead.
     let (result_1, row_spans_1, cap_coords, uncovered_1) =
-        layout_pass(solver_result, opts, None, None, explicit_plan)?;
+        layout_pass(solver_result, opts, None, None, 0, explicit_plan)?;
 
     // Two independent gap sources feed ONE pass-2 re-run (RFP Phase 3a-ii).
     // Junction-cap gaps (existing) widen rows the junction solver couldn't pack;
@@ -229,17 +229,29 @@ fn run_layout_with_retry_inner(
         crate::trace::swap_sink(Some(sink));
     }
 
-    // Merge both gap sources into the single map. A row that needs both takes
-    // the larger widening — a substation band's 2 tiles already give the
+    // Merge both INTERIOR gap sources into the single map. A row that needs both
+    // takes the larger widening — a substation band's 2 tiles already give the
     // junction solver its ≥1 tile of extra room, so `max` (not sum) keeps the
-    // freed band tight while satisfying both.
+    // freed band tight while satisfying both. Top-edge bands (RFP Phase 3b) go
+    // through a separate channel — they have no `extra_gap_after_row` predecessor
+    // to widen, so they bump `layout_pass`'s y-offset instead (below).
     let mut merged_gaps = junction_gaps.clone();
-    for b in &substation_bands {
+    for b in substation_bands.iter().filter(|b| !b.top_edge) {
         merged_gaps
             .entry(b.row_after)
             .and_modify(|v| *v = (*v).max(b.extra))
             .or_insert(b.extra);
     }
+    // Top-edge widen (RFP Phase 3b): the largest top-edge band's extra rows are
+    // inserted before row 0 as a y-offset bump. `max` because every top-edge
+    // band anchors at row 0 (the only row with no predecessor); a single freed
+    // band above the layout serves them all.
+    let top_widen: i32 = substation_bands
+        .iter()
+        .filter(|b| b.top_edge)
+        .map(|b| b.extra)
+        .max()
+        .unwrap_or(0);
 
     let mut gaps_vec: Vec<(usize, i32)> = merged_gaps.iter().map(|(k, v)| (*k, *v)).collect();
     gaps_vec.sort_by_key(|(k, _)| *k);
@@ -254,8 +266,41 @@ fn run_layout_with_retry_inner(
     });
 
     let subs = (!substation_bands.is_empty()).then_some(substation_bands.as_slice());
-    let (result_2, _, _, _) =
-        layout_pass(solver_result, opts, Some(&merged_gaps), subs, explicit_plan)?;
+    let (result_2, _, _, uncovered_2) =
+        layout_pass(solver_result, opts, Some(&merged_gaps), subs, top_widen, explicit_plan)?;
+
+    // Convergence guard (RFP `docs/rfp-power-reservation.md` Phase 3a-ii review
+    // followup). The reactive pass widened every starved band; if `place_poles`
+    // STILL gives up on any electric inserter, the repair did NOT converge and
+    // this layout ships power-broken. Every corpus fixture converges (the four
+    // gating pins + kovarex + USP all reach zero uncovered — the pins lock
+    // that), so a non-empty set here is a genuinely-new starved geometry with no
+    // pinning fixture. Emit a loud, release-surviving signal: a trace event
+    // (lands in snapshots / drives a scoreboard) plus an env-gated eprintln for
+    // local runs. NOT a `debug_assert` — release builds skip those and would
+    // ship the break silently, exactly the "new starved case ships uncovered
+    // without an alarm" hole the review flagged. This block is skipped whenever
+    // the set is empty (the converging path, i.e. the entire corpus), so it adds
+    // zero entities and leaves goldens byte-identical.
+    if !uncovered_2.is_empty() {
+        let mut sample = uncovered_2.clone();
+        sample.sort_unstable();
+        sample.truncate(16);
+        crate::trace::emit(crate::trace::TraceEvent::ReactivePassNotConverged {
+            uncovered_count: uncovered_2.len(),
+            sample,
+        });
+        if std::env::var("SPAGHETTIO_WARN_ON_STDERR").is_ok() {
+            eprintln!(
+                "spaghettio: reactive power-repair pass did NOT converge — {} electric \
+                 inserter(s) still uncovered after widening. This layout ships \
+                 power-broken; a new starved geometry needs a pinning fixture. See \
+                 docs/rfp-power-reservation.md Phase 3c. sample={:?}",
+                uncovered_2.len(),
+                uncovered_2.iter().take(8).collect::<Vec<_>>(),
+            );
+        }
+    }
     Ok(result_2)
 }
 
@@ -300,8 +345,25 @@ fn compute_retry_gaps(
 /// is carried, never inferred from a coordinate coincidence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SubstationBand {
+    /// Row-spans index this band is anchored to. For an interior band
+    /// (`top_edge == false`, RFP Phase 3a-ii) it is the PREDECESSOR row whose
+    /// successor gap is widened: the freed rows land between `row_after` and
+    /// `row_after + 1`, powering `row_after + 1`'s deep input inserters. For a
+    /// top-edge band (`top_edge == true`, RFP Phase 3b — the kovarex self-loop)
+    /// it is the STARVED row itself (row 0): the widen has no predecessor gap to
+    /// consume, so it is applied as a y-offset bump and the freed rows land
+    /// between the bus header and `row_after`'s top, powering `row_after`'s own
+    /// input inserters.
     row_after: usize,
     extra: i32,
+    /// True when this band widens the STARVED row's own top edge (row 0, no
+    /// usable predecessor cycle). Threaded to `layout_pass` as a y-offset bump
+    /// rather than an `extra_gap_after_row` entry, and resolved to a
+    /// `SubstationTarget` against the row's own input-inserter band (which sits
+    /// deeper than the RFP-assumed `y_start..y_start+4` — the self-loop stacks
+    /// 5 belt/corridor rows above its inserters, so only a substation's ±9
+    /// supply reaches down from the top freed band).
+    top_edge: bool,
 }
 
 /// A widened substation band resolved to pass-2 coordinates and the inserter
@@ -317,14 +379,28 @@ struct SubstationTarget {
 }
 
 /// Map `place_poles`' pass-1 uncovered-inserter set to the cycle boundaries
-/// whose gap a substation band must widen (RFP Phase 3a-ii). For each uncovered
-/// inserter, find the row that contains it and flag the gap BEFORE that row
-/// (i.e. after row `target-1`): inserting free rows there lifts a band above the
-/// row's input belts WITHOUT breaking pick adjacency (the free space lands at
-/// the cycle boundary, never between belts and inserters — inserting there would
-/// sever the inserter from the belt it picks from). One band per starved row;
-/// deduped and sorted. Empty for every layout the two-band + mop-up covers, so
-/// non-starved layouts never enter pass 2 on this account.
+/// whose gap a substation band must widen (RFP Phase 3a-ii + 3b). For each
+/// uncovered inserter, find the row that contains it and flag the gap BEFORE
+/// that row: inserting free rows there lifts a band above the row's input belts
+/// WITHOUT breaking pick adjacency (the free space lands at the cycle boundary,
+/// never between belts and inserters — inserting there would sever the inserter
+/// from the belt it picks from).
+///
+/// Two variants (RFP `docs/rfp-power-reservation.md`):
+/// - **Interior** (3a-ii): `target > 0` — widen the gap after `target-1`
+///   (`SubstationBand { row_after: target-1, top_edge: false }`), lifting the
+///   band above `target`'s input belts. Powers `target`'s deep inserters.
+/// - **Top edge** (3b, kovarex self-loop): `target == 0` — the starved row has
+///   no predecessor gap. Widen the row's OWN top edge
+///   (`SubstationBand { row_after: 0, top_edge: true }`): a y-offset bump frees
+///   rows between the bus header and row 0, and a substation dropped there
+///   reaches DOWN over the row's input inserters (which the self-loop stacks
+///   5 belt/corridor rows below the top edge — beyond a medium pole's ±3, so
+///   only the substation's ±9 supply reaches them).
+///
+/// One band per starved row; deduped and sorted. Empty for every layout the
+/// two-band + mop-up covers, so non-starved layouts never enter pass 2 on this
+/// account.
 fn compute_substation_bands(
     uncovered: &[(i32, i32)],
     row_spans: &[RowSpan],
@@ -334,26 +410,52 @@ fn compute_substation_bands(
     // supply reach (±9 from center) comfortably over the input-inserter row a
     // few tiles below. Held small on purpose — the freed rows are pure
     // y-translation cost (movement-budget criterion). Pinned by the four gating
-    // fixtures.
+    // fixtures + the kovarex self-loop.
+    //
+    // ZERO-MARGIN WARNING (RFP Phase 3a-ii close-out): this +2 widen was tuned
+    // so the four interior gating fixtures clear via ordinary MEDIUM poles, not
+    // substations — the freed band lands its covering pole at medium distance
+    // EXACTLY 3 (the electronic-circuit dual-input row has 2 belt rows, not the
+    // RFP-assumed 3, so +2 is just enough). That is edge-tight with ZERO margin:
+    // a template author who adds a belt row to a dual-input row, or shifts an
+    // inserter one tile deeper, tips distance 3→4 and re-uncovers those inserters
+    // — and 4 is outside the medium ±3, so the medium mop-up can't recover it.
+    // The only guard is the four `assert_warnings_exactly([(power, 0)])` pins
+    // (which flip loudly) plus the substation FALLBACK below (which fires only
+    // for inserters STILL 0/49-free after widening). If you change belt-row count
+    // or inserter depth in a dual-input template, re-run those pins and expect to
+    // re-derive this constant. Do NOT raise it blindly to buy margin: every extra
+    // tile is pure y-cost paid by the four fixtures whether or not they need it.
     const SUBSTATION_BAND_TILES: i32 = 2;
-    let mut rows_after: FxHashSet<usize> = FxHashSet::default();
+    let mut interior_rows_after: FxHashSet<usize> = FxHashSet::default();
+    let mut top_edge_rows: FxHashSet<usize> = FxHashSet::default();
     for &(_x, y) in uncovered {
         // The row that physically contains this inserter.
         let Some(target) = row_spans.iter().position(|s| y >= s.y_start && y < s.y_end) else {
             continue;
         };
-        // Widen the gap before `target` (after `target-1`). Row 0 has no
-        // predecessor gap — skip it (a packed sub-row's predecessor is the
-        // same-recipe row above, never row 0, but guard defensively).
         if target > 0 {
-            rows_after.insert(target - 1);
+            // Interior: widen the gap before `target` (after `target-1`).
+            interior_rows_after.insert(target - 1);
+        } else {
+            // Top edge (RFP Phase 3b): row 0 has no predecessor gap — widen its
+            // own top edge instead of skipping it (which is what left the
+            // kovarex self-loop's 16 recirc inserters uncovered through 3a-ii).
+            top_edge_rows.insert(target);
         }
     }
-    let mut bands: Vec<SubstationBand> = rows_after
+    let mut bands: Vec<SubstationBand> = interior_rows_after
         .into_iter()
-        .map(|row_after| SubstationBand { row_after, extra: SUBSTATION_BAND_TILES })
+        .map(|row_after| SubstationBand { row_after, extra: SUBSTATION_BAND_TILES, top_edge: false })
+        .chain(
+            top_edge_rows
+                .into_iter()
+                .map(|row_after| SubstationBand { row_after, extra: SUBSTATION_BAND_TILES, top_edge: true }),
+        )
         .collect();
-    bands.sort_by_key(|b| b.row_after);
+    // Sort by anchor row, top-edge bands last on ties (they use a distinct
+    // widen channel, so co-anchoring is harmless — deterministic ordering only).
+    bands.sort_by_key(|b| (b.row_after, b.top_edge));
     bands
 }
 
@@ -361,7 +463,12 @@ fn compute_substation_bands(
 /// Takes an optional `retry_extra_gaps` map (row index → extra tiles)
 /// that the retry loop in `build_bus_layout` uses to widen specific
 /// row boundaries on a second pass. `None` on the first pass; `Some`
-/// on the retry. Returns `(layout, row_spans, cap_coords, uncovered_inserters)`:
+/// on the retry. `top_widen` (RFP Phase 3b) inserts that many free rows BEFORE
+/// row 0 by bumping the row y-offset — the top-edge substation band's channel,
+/// separate from the interior `extra_gap_after_row` map (row 0 has no
+/// predecessor gap to widen). `0` on the first pass and for every layout without
+/// a top-edge starved row. Returns
+/// `(layout, row_spans, cap_coords, uncovered_inserters)`:
 /// `uncovered_inserters` is place_poles' give-up set, the RFP Phase 3a-ii
 /// reactive-substation trigger (empty for every non-starved layout). The retry
 /// loop maps `cap_coords` (junction-solver cap tiles, carried as data
@@ -372,6 +479,7 @@ fn layout_pass(
     opts: &LayoutOptions,
     retry_extra_gaps: Option<&FxHashMap<usize, i32>>,
     substation_bands: Option<&[SubstationBand]>,
+    top_widen: i32,
     explicit_plan: Option<&crate::bus::partitioner::PartitionPlan>,
 ) -> Result<(LayoutResult, Vec<RowSpan>, Vec<(i32, i32)>, Vec<(i32, i32)>), String> {
     let max_belt_tier = opts.max_belt_tier.as_deref();
@@ -437,6 +545,12 @@ fn layout_pass(
         .collect();
 
     let bus_header = 1;
+    // Row placement y-origin. On the top-edge substation retry (RFP Phase 3b)
+    // `top_widen > 0` bumps it below `bus_header`, freeing `top_widen` rows
+    // between the bus header and row 0 for a substation that reaches down over
+    // the row's packed input inserters. `bus_header` itself stays the freed
+    // band's top edge (`band_y0`) for the target-resolution below.
+    let row_y_origin = bus_header + top_widen;
 
     crate::trace::emit(crate::trace::TraceEvent::SolverCompleted {
         recipe_count: solver_result.machines.len(),
@@ -465,7 +579,7 @@ fn layout_pass(
         &solver_result.machines,
         &solver_result.dependency_order,
         temp_bw,
-        bus_header,
+        row_y_origin,
         max_belt_tier,
         max_inserter_tier,
         opts.quality,
@@ -515,7 +629,7 @@ fn layout_pass(
                 &solver_result.machines,
                 &solver_result.dependency_order,
                 actual_bw,
-                bus_header,
+                row_y_origin,
                 max_belt_tier,
                 max_inserter_tier,
                 opts.quality,
@@ -707,51 +821,85 @@ fn layout_pass(
             }
         }
         // Resolve each pass-2 substation band to concrete tile coordinates and
-        // the deep input-inserter band it must power (RFP Phase 3a-ii). The band
-        // is the freed gap between row `row_after` and its successor; the target
-        // inserters are the successor row's top inserter band (y_start..+4),
-        // exactly the input inserters no medium pole could reach. Empty for
-        // every non-starved layout, so `place_poles` stays byte-identical there.
+        // the deep input-inserter band it must power (RFP Phase 3a-ii + 3b).
+        // Empty for every non-starved layout, so `place_poles` stays
+        // byte-identical there.
+        // A tile is genuinely packed (medium-unreachable) iff its whole 7×7 is
+        // occupied against the routed layout — the RFP Phase 0f hardness
+        // signature. A substation is placed only for inserters STILL unreachable
+        // after the boundary is widened.
+        let is_packed = |ix: i32, iy: i32| -> bool {
+            (-3i32..=3).all(|dy| (-3i32..=3).all(|dx| occupied.contains(&(ix + dx, iy + dy))))
+        };
+        // Topmost machine row (row 0's machine top). Bounds the input-inserter
+        // band for a top-edge band — inserters above it are inputs, at/below it
+        // are the machines and their output inserters (already reachable from the
+        // south band). `None` only when there are no machines (place_poles then
+        // early-returns anyway).
+        let machine_top = machines_for_poles.iter().map(|&(_, ty, _)| ty).min();
         let substation_targets: Vec<SubstationTarget> = match substation_bands {
             None => Vec::new(),
             Some(bands) => bands
                 .iter()
                 .filter_map(|b| {
-                    let after = row_spans.get(b.row_after)?;
-                    let below = row_spans.get(b.row_after + 1)?;
-                    let band_y0 = after.y_end;
-                    let band_y1 = below.y_start - 1;
-                    if band_y1 < band_y0 {
-                        return None;
+                    if b.top_edge {
+                        // Top-edge band (RFP Phase 3b, kovarex self-loop): the
+                        // freed rows sit between the bus header and the starved
+                        // row's top; the substation drops there and reaches DOWN
+                        // over the row's OWN input inserters (which live ~5 rows
+                        // below the top edge — beyond a medium pole's ±3, exactly
+                        // why the top-edge variant needs the ±9 substation).
+                        let row = row_spans.get(b.row_after)?;
+                        let machine_top = machine_top?;
+                        let band_y0 = bus_header;
+                        let band_y1 = row.y_start - 1;
+                        if band_y1 < band_y0 {
+                            return None;
+                        }
+                        let inserters: Vec<(i32, i32)> = inserters_for_poles
+                            .iter()
+                            .copied()
+                            // Every input inserter of the starved row: above the
+                            // machine row, below the freed band. The self-loop's
+                            // recirc inserters span two of these rows (top_y-1/-2),
+                            // deeper than the interior band's y_start..+4 window.
+                            .filter(|&(_x, y)| y >= row.y_start && y < machine_top)
+                            .filter(|&(ix, iy)| is_packed(ix, iy))
+                            .collect();
+                        if inserters.is_empty() {
+                            return None;
+                        }
+                        Some(SubstationTarget { band_y0, band_y1, inserters })
+                    } else {
+                        // Interior band (RFP Phase 3a-ii): the freed gap between
+                        // row `row_after` and its successor; the target inserters
+                        // are the successor row's top inserter band (y_start..+4).
+                        // On the current corpus this yields zero targets — the +2
+                        // widen lands the freed rows exactly 3 tiles above the deep
+                        // inserters (the dual-input belt bundle is 2 rows, not the
+                        // RFP-assumed 3), inside a medium pole's ±3, so the 7×7
+                        // gains a free tile and the medium mop-up covers them. The
+                        // substation branch is the VERIFIED-CORRECT FALLBACK for
+                        // genuinely deeper geometry where an inserter stays >3 from
+                        // every free tile even after widening.
+                        let after = row_spans.get(b.row_after)?;
+                        let below = row_spans.get(b.row_after + 1)?;
+                        let band_y0 = after.y_end;
+                        let band_y1 = below.y_start - 1;
+                        if band_y1 < band_y0 {
+                            return None;
+                        }
+                        let inserters: Vec<(i32, i32)> = inserters_for_poles
+                            .iter()
+                            .copied()
+                            .filter(|&(_x, y)| y >= below.y_start && y < below.y_start + 4)
+                            .filter(|&(ix, iy)| is_packed(ix, iy))
+                            .collect();
+                        if inserters.is_empty() {
+                            return None;
+                        }
+                        Some(SubstationTarget { band_y0, band_y1, inserters })
                     }
-                    let inserters: Vec<(i32, i32)> = inserters_for_poles
-                        .iter()
-                        .copied()
-                        // Top inserter band of the row below the widened gap…
-                        .filter(|&(_x, y)| y >= below.y_start && y < below.y_start + 4)
-                        // …restricted to the genuinely packed ones: 0 free tiles
-                        // in the 7×7 against the routed occupancy (the RFP Phase
-                        // 0f hardness signature). A substation is placed only for
-                        // inserters STILL unreachable after the boundary is
-                        // widened. On the current corpus this yields zero targets:
-                        // the +2 widen lands the freed rows exactly 3 tiles above
-                        // the deep inserters (the dual-input belt bundle is 2 rows,
-                        // not the RFP-assumed 3), inside a medium pole's ±3, so the
-                        // 7×7 gains a free tile and the medium mop-up covers them.
-                        // The substation branch is the VERIFIED-CORRECT FALLBACK
-                        // for genuinely deeper geometry (a real 3-belt-row cycle,
-                        // a 5×5 fluid stack) where an inserter stays >3 from every
-                        // free tile even after widening — its gate runs on every
-                        // starved fixture; the body is unit-tested by construction.
-                        .filter(|&(ix, iy)| {
-                            (-3i32..=3)
-                                .all(|dy| (-3i32..=3).all(|dx| occupied.contains(&(ix + dx, iy + dy))))
-                        })
-                        .collect();
-                    if inserters.is_empty() {
-                        return None;
-                    }
-                    Some(SubstationTarget { band_y0, band_y1, inserters })
                 })
                 .collect(),
         };
@@ -883,6 +1031,14 @@ fn layout_pass(
         }
     }
 
+    // Pole copper wire graph for the web overlay — the SAME graph
+    // `blueprint::export` re-derives and encodes in the blueprint `wires`
+    // array. Computed from the final entity order so the `(a, b)` index pairs
+    // stay valid — and AFTER the quality stamp pass above, because wire
+    // reach is per-entity quality-aware (rfp-build-quality merge with the
+    // power-3c arc). See `crate::power_wires`.
+    let power_wires = crate::power_wires::compute_pole_wires(&all_entities);
+
     Ok((
         LayoutResult {
             entities: all_entities,
@@ -894,6 +1050,7 @@ fn layout_pass(
             surplus_exits,
             voided_streams,
             effective_rows,
+            power_wires,
         },
         row_spans,
         cap_coords,
@@ -1591,24 +1748,46 @@ mod tests {
         assert!(extras.is_empty());
     }
 
-    // --- Reactive substation repair (RFP Phase 3a-ii) ---
+    // --- Reactive substation repair (RFP Phase 3a-ii + 3b) ---
 
     #[test]
     fn compute_substation_bands_flags_predecessor_gap_of_the_starved_row() {
         // Rows: 0=[1,8) 1=[15,22) 2=[30,38). An uncovered inserter inside row 1
-        // widens the gap BEFORE row 1 (after row 0); one contained inside row 0
-        // yields no band (row 0 has no predecessor to widen).
+        // widens the gap BEFORE row 1 (after row 0) — an INTERIOR band.
         let rows = three_row_layout();
         let bands = compute_substation_bands(&[(5, 17)], &rows);
-        assert_eq!(bands, vec![SubstationBand { row_after: 0, extra: 2 }]);
-        assert!(compute_substation_bands(&[(5, 3)], &rows).is_empty());
+        assert_eq!(bands, vec![SubstationBand { row_after: 0, extra: 2, top_edge: false }]);
         // Two inserters in the same row collapse to one band; sorted by row.
         assert_eq!(
             compute_substation_bands(&[(5, 17), (7, 18), (2, 32)], &rows),
             vec![
-                SubstationBand { row_after: 0, extra: 2 },
-                SubstationBand { row_after: 1, extra: 2 },
+                SubstationBand { row_after: 0, extra: 2, top_edge: false },
+                SubstationBand { row_after: 1, extra: 2, top_edge: false },
             ]
+        );
+    }
+
+    #[test]
+    fn compute_substation_bands_flags_top_edge_for_row_zero_starvation() {
+        // RFP Phase 3b (kovarex self-loop): an uncovered inserter inside row 0
+        // has no predecessor gap to widen, so 3a-ii SKIPPED it (leaving the
+        // recirc inserters starved). 3b flags the row's OWN top edge instead — a
+        // TOP-EDGE band anchored at row 0, threaded to `layout_pass` as a
+        // y-offset bump.
+        let rows = three_row_layout();
+        assert_eq!(
+            compute_substation_bands(&[(5, 3)], &rows),
+            vec![SubstationBand { row_after: 0, extra: 2, top_edge: true }],
+        );
+        // Row-0 starvation AND a row-1 boundary: one top-edge band + one interior
+        // band, distinct channels (the top-edge sorts after the interior on the
+        // shared row-0 anchor).
+        assert_eq!(
+            compute_substation_bands(&[(5, 3), (5, 17)], &rows),
+            vec![
+                SubstationBand { row_after: 0, extra: 2, top_edge: false },
+                SubstationBand { row_after: 0, extra: 2, top_edge: true },
+            ],
         );
     }
 
@@ -1981,7 +2160,7 @@ mod tests {
         };
 
         let (_layout, row_spans, cap_coords, _uncovered) =
-            layout_pass(&sr, &opts, None, None, None).expect("layout_pass");
+            layout_pass(&sr, &opts, None, None, 0, None).expect("layout_pass");
 
         assert!(
             !cap_coords.is_empty(),

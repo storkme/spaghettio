@@ -649,6 +649,21 @@ fn assert_round_trip(result: &E2EResult) {
             parsed.name, parsed.x, parsed.y, parsed.direction
         );
     }
+
+    // The pole copper wire graph must survive export → parse. The exporter
+    // encodes `compute_pole_wires(layout.entities)` into the blueprint-level
+    // `wires` array (connector 5); the parser recovers it. Entity order is
+    // preserved through the round-trip, so the `(a, b)` index pairs must match
+    // exactly. Before the fix, export wrote NO `wires` array, so a layout with
+    // in-reach poles round-tripped to an empty `power_wires` — a power-dead
+    // paste. This is the corpus-wide regression guard for that bug.
+    assert_eq!(
+        result.layout.power_wires, result.parsed.power_wires,
+        "pole copper wires must round-trip through blueprint export/parse: \
+         layout emitted {} wire(s), parsed recovered {}",
+        result.layout.power_wires.len(),
+        result.parsed.power_wires.len(),
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -2145,14 +2160,20 @@ fn tier_kovarex_self_loop() {
     .unwrap_or_else(|e| panic!("tier_kovarex_self_loop: {e}"));
 
     assert_no_errors(&result);
-    // RFP `docs/rfp-power-supply.md` Phase 0f (inserter power coverage): the
-    // third strict-gating kill-criterion case, and a distinct structural
-    // cause from the electronic-circuit stacks — the kovarex self-loop packs
-    // uranium-235/238 + recirculation inserters across top_y-1 and top_y-2
-    // with the machines below, leaving 16 inserters with a 0/49-free 7×7
-    // against real footprints. Hard pitch limit; pinned as an honest red,
-    // Phase 3 substation fixture.
-    assert_warnings_exactly(&result, &[("power", 16)]);
+    // RFP `docs/rfp-power-reservation.md` Phase 3b (kovarex — the top-edge
+    // substation boundary variant). The self-loop packs uranium-235/238 +
+    // recirculation inserters across top_y-1 and top_y-2 with the machines
+    // below, and stacks 5 belt/corridor rows ABOVE those inserters — leaving
+    // 16 with a 0/49-free 7×7 against real footprints, all beyond a medium
+    // pole's ±3 reach. 3a-ii could not clear them: its `compute_substation_bands`
+    // widens a starved row's PREDECESSOR gap, but these inserters sit in row 0
+    // (no predecessor cycle) — the top-edge variant the RFP deferred to 3b.
+    // 3b flags row 0's own top edge, the reactive pass frees +2 rows above the
+    // layout (pure y-translation), and — because the inserters are 5+ rows deep,
+    // beyond any medium pole — the dormant SUBSTATION path fires for the first
+    // time on the corpus: one substation's ±9 supply reaches down over the
+    // recirc bank. 16 -> 0.
+    assert_warnings_exactly(&result, &[]);
     assert_produces(&result, "uranium-235", 0.1);
 
     let centrifuge_count = result
@@ -2164,6 +2185,21 @@ fn tier_kovarex_self_loop() {
     assert_eq!(
         centrifuge_count, 6,
         "expected 6 centrifuges in one row (hand-derived count for 0.1/s), got {centrifuge_count}"
+    );
+
+    // 3b closes via the substation fallback (medium can't reach 5 rows down),
+    // not the +2-and-medium path the four 3a-ii fixtures used. Pin exactly one
+    // substation so a future geometry change that silently re-routes coverage
+    // through a different (or absent) power entity fails loudly.
+    let substation_count = result
+        .layout
+        .entities
+        .iter()
+        .filter(|e| e.name == "substation")
+        .count();
+    assert_eq!(
+        substation_count, 1,
+        "expected exactly one substation covering the recirc inserter bank (RFP Phase 3b), got {substation_count}"
     );
 
     assert_round_trip(&result);

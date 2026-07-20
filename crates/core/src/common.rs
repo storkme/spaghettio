@@ -234,6 +234,7 @@ pub fn pole_wire_reach(entity: &str, quality: QualityTier) -> Option<f64> {
         "medium-electric-pole" => 9.0,
         "small-electric-pole" => 7.5,
         "substation" => 18.0,
+        "big-electric-pole" => 32.0,
         _ => return None,
     };
     Some(base + 2.0 * f64::from(quality.level()))

@@ -306,11 +306,111 @@ helper is scoped as explicit 3a work — not assumed to exist.
   zero-margin distance-3 warrants a comment near `compute_substation_bands`
   for template authors. Merged ff-only onto 1eddaee.*
 
-## Phase 3 remaining
-- **3b** — kovarex recirc geometry (correctly untriggered by 3a-ii; the row-0
-  predecessor-gap skip leaves it clean for a dedicated boundary-variant unit).
-- **3c** — re-census (trigger-(b) re-anchor to the post-3a corpus) + close-out
-  numbers into the parent RFP.
-- **Followups**: explicit convergence assertion in the reactive pass (so a
-  new starved case can't ship uncovered without a pin); zero-margin distance-3
-  code comment.
+- *2026-07-20 — **Phase 3b LANDED** (kovarex top-edge substation boundary
+  variant). The RFP's 3b hypothesis is CONFIRMED shape, and — unlike all four
+  3a-ii fixtures — this is the case where the dormant **substation path finally
+  fires**. Real tile map (pass 1): the self-loop packs its 16 recirc input
+  inserters at `top_y-1/-2` with **5 belt/corridor rows stacked ABOVE them**
+  (far-corridor return, descent, far belt, near belt, near2 belt) — so the
+  top-edge freed band lands 5+ rows up, beyond a medium pole's ±3; only the
+  substation's ±9 reaches down. `compute_substation_bands` now flags the
+  STARVED row's own top edge when it has no predecessor cycle (`target == 0`,
+  `top_edge: true`) instead of skipping it; the widen is applied as a
+  y-offset bump (`layout_pass`'s new `top_widen`, a distinct channel from the
+  interior `extra_gap_after_row` map) and the target-resolution powers the
+  row's own input-inserter band (deeper than the interior `y_start..+4`
+  window). Result: pin `[("power", 16)] → []`, **+2 rows** (row 0
+  `y_start 1→3`, layout `29x15 → 29x17`), **exactly 1 substation** at (11,1)
+  covering the recirc bank under the exact continuous ±9 check, medium poles
+  5→6 (one connectivity bridge), network one connected component, 0 footprint
+  overlaps. **Self-loop composition intact**: `assert_no_errors` +
+  `assert_round_trip` green, 6 centrifuges invariant, no belt-dead-end /
+  unresolved-junction introduced, and the substation landed IN the freed band
+  (routing did not consume it — the KC risk did not trip). Selectivity:
+  STRESSGOLD `=check` 8/8 byte-identical, four 3a-ii pins still 0, full suite
+  green (lib 695, e2e 50), clippy lib clean, wasm target check clean. New pin
+  asserts `substation_count == 1` so a future geometry change that re-routes
+  coverage through a different (or absent) power entity fails loudly.*
+
+- *2026-07-20 — **Phase 3c LANDED — arc close-out** (re-census + trigger-(b)
+  re-anchor + the two review followups). **Re-census** (post-3b, `ca8730e`, 49
+  snapshots — the 45-case post-0f corpus + the four `phase0e1_*` fixtures that
+  landed with 0e-i after that census; raw per-case census AND the parts A–E
+  summary are now BOTH reproducible from committed code —
+  `scripts/pole_census.py` + `scripts/pole_census_analysis.py`, data at
+  `scripts/pole-census-2026-07-20-post3b.json`, closing the post-0f census's
+  uncommitted-analysis gap):
+  - **(A) ZERO power warnings/errors corpus-wide.** All five gating pins
+    (EC@20 14, EC@60-red 60, PU-am3 20, PU-am2-baseline 43, kovarex 16) AND the
+    known-hard non-gating `census_utility_science_pack` (16) now read 0. The arc
+    opened with 153 gating + 16 non-gating honest-red uncovered-inserter
+    warnings; it closes at **0 pinned honest-red power warnings**.
+  - **(B) trigger (a) UNCHANGED — no state change.** Solid-row zero-local-slack
+    medium poles: **18** (post-0f: 18), same advanced-circuit / deep-AM
+    south-band character (15 advanced-circuit + 3 deep science-pack rows; the
+    exact pole set shifted 4 members from unrelated layout movement between the
+    two censuses, count identical). Trigger (a) was already TRUE post-0f with
+    Phase 3 already activated — still TRUE, still activated, reinforcing
+    evidence not a new trip. Fluid zero-slack 108 and solid/fluid medians 4/2 all
+    unchanged from post-0f.
+  - **(C) trigger (b) baseline re-anchored to 4251** (the new 49-case corpus
+    total; supersedes the post-0f 45-case anchor of 4226). Matched-45 growth is
+    **+9 poles (+0.21%)**, and every one is a Phase-3 case: EC@20 +1,
+    EC@60-red +4, PU-am2-baseline +1, kovarex +2 (+1 medium +1 substation),
+    USP +1 (substation); PU-am3 net 0 (its widening repositioned poles without
+    net-adding). **All other 40 matched cases: ZERO delta** — perfect
+    selectivity, exactly as designed, and nowhere near the >20% trip threshold.
+    The four new `phase0e1_*` fixtures add +16 (2/8/3/3), giving the 49-case
+    4251.
+  - **Substations counted for the first time.** `pole_census.py` counted only
+    `medium-electric-pole`; extended to count `substation` as a distinct pole
+    TYPE — part-C totals include it (`real_pole_count = medium + substation`),
+    the part-B ±3 slack analysis excludes it (a ±9-supply / 2×2 substation has no
+    meaningful single-tile slack window), and it is modelled as a 2×2 slack
+    obstacle for neighbouring mediums. **Two corpus substations:**
+    `tier_kovarex_self_loop` (top-edge band; 5→7 = +1 medium +1 substation) and
+    `census_utility_science_pack` (the deep-geometry FALLBACK — 278 medium
+    unchanged, +1 substation, which cleared its old 16 warnings). The substation
+    machinery is therefore exercised by **two** real corpus cases, not just
+    kovarex.
+  - **Substation-necessity premise — final tally.** The RFP's central premise
+    ("only a substation's 18×18 can reach a packed cycle") is FALSIFIED for the
+    four interior gating fixtures (medium poles suffice after the +2 widen —
+    the dual-input row has 2 belt rows, not the assumed 3) but VINDICATED for the
+    two genuinely-deep cases: kovarex's 5-row-deep top-edge recirc and USP's
+    deep-geometry fallback both need the ±9 substation. Not dead code; not
+    over-built either — it fires exactly where the geometry demands it.
+  **Convergence assertion** (review followup, real code): 3a-ii's reactive pass
+  discarded pass-2's uncovered set (`let (result_2, _, _, _)`), leaving the
+  per-fixture pins as the ONLY convergence guard — a genuinely-new starved case
+  outside the corpus would ship uncovered with no alarm. Now the pass captures
+  `uncovered_2` and, when non-empty, emits a `ReactivePassNotConverged` trace
+  event (lands in snapshots / can drive a scoreboard) plus an env-gated
+  (`SPAGHETTIO_WARN_ON_STDERR`) eprintln. Deliberately NOT a `debug_assert` —
+  release builds skip those and would ship the break silently, exactly the hole
+  the review flagged. The block is skipped on the converging path (every corpus
+  case reaches zero uncovered), so it adds zero entities and the corpus stays
+  byte-identical. **Zero-margin comment** (review followup): a warning at
+  `SUBSTATION_BAND_TILES` records that the +2 interior widen clears the four
+  gating fixtures via medium poles at distance EXACTLY 3 (zero margin) — a
+  template author adding a belt row or shifting an inserter one tile deeper tips
+  3→4 and re-uncovers (4 is outside medium ±3), caught only by the four exact
+  pins plus the substation fallback; the constant must be re-derived, not raised
+  blindly, if a dual-input template's belt-row count changes. **Gates:**
+  STRESSGOLD `=check` byte-identical (8/8 — no fixture moved), full suite green
+  (lib + e2e 50), clippy lib clean, wasm target check clean.*
+
+## Phase 3 complete
+All of Phase 3 (3a-i, 3a-ii, 3b, 3c) is landed. Reactive band-widening clears
+all five hard cases — EC@20, EC@60-red, PU-am3, PU-am2-baseline via medium poles
+(the substation premise falsified there), kovarex via the substation fallback
+(premise vindicated) — plus the non-gating USP via a second substation. The
+corpus sits at **zero pinned honest-red power warnings**; the substation
+machinery is exercised, not speculative; and both review followups (convergence
+assertion + zero-margin comment) are in. Trigger (a) is unchanged (18 solid
+zero-slack, already-activated) and trigger (b) is re-anchored to the 4251-pole
+post-3b baseline. No remaining Phase 3 followups.
+
+**Open (out of Phase 3 scope):** the arc's ultimate anchor — in-game import of
+one starved layout — remains a user step, carried alongside the inserter-sizing
+RFP's KC5 anchors; validator-verified only until then.
