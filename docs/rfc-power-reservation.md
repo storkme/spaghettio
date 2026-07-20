@@ -482,4 +482,22 @@ one starved layout — remains a user step, carried alongside the inserter-sizin
 RFC's KC5 anchors; validator-verified only until then. **THE WIRES ARC** (the
 export encoded no pole copper wires until `a7d9a48`; every prior export pasted
 power-dead) is the strongest evidence yet that this anchor is not optional —
+docs/rfc-power-reservation.md
 recorded in full in `docs/rfc-power-supply.md`'s decision log (2026-07-20).
+- *2026-07-20 — **issue #315 quality differential sweep complete** (post
+  rfc-build-quality merge): all five gating fixtures (four 3a-ii pins +
+  kovarex 3b) re-run at Normal/Rare/Legendary — **zero power-category
+  errors/warnings and zero reactive-repair trace activity at every
+  (fixture, tier) cell**; the power arc is quality-clean. Kovarex's
+  substation fallback (the corpus's one live substation user) is
+  Normal-only: at Rare/Legendary the medium pole's quality supply
+  radius reaches the recirc band itself, so the fallback goes dormant
+  (1→0→0) — the exact #310 pole-band-thinning interaction predicted,
+  now pinned by `quality_differential_kovarex_self_loop_normal_vs_legendary`.
+  `compute_substation_bands`' Normal-margin prose restated as a
+  one-directional per-tier safety argument, backed by
+  `substation_band_adequacy_widens_monotonically_per_quality_tier`.
+  Two non-gating PU fixtures develop **non-power** junction/belt-flow
+  errors at higher tiers — trace-decode-confirmed zero power
+  involvement; that is the machine-count-collapse capability gap
+  already tracked by #135/#136/#312, out of #315 scope.*
