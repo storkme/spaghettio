@@ -7157,6 +7157,17 @@ fn quality_ec_45s_express_legendary_from_ore() {
         "expected at most the single known input-rate-delivery residual, got {issues:?}"
     );
 
+    // rfc-043-pole-band-thinning kill criterion 2 pin: single-band mode at
+    // Legendary (budget 4) — 30 medium poles vs 60 unthinned (50%
+    // reduction; census 2026-07-20). Exact pin so any placement change
+    // renegotiates the number consciously.
+    let poles = layout_result
+        .entities
+        .iter()
+        .filter(|e| e.name == "medium-electric-pole")
+        .count();
+    assert_eq!(poles, 30, "kill-2 pole census pin (was 60 unthinned)");
+
     // Functional entities stamped; logistics not (spot-check via export).
     let bp = blueprint::export(&layout_result, "ec-45s-legendary");
     let parsed = blueprint_parser::parse_blueprint_string(&bp).unwrap();
@@ -7172,7 +7183,7 @@ fn quality_ec_45s_express_legendary_from_ore() {
 /// assembling-machine-3, input uranium-238, excluding uranium-processing so
 /// the solver has no choice but the self-loop recipe, belt tier unset) run
 /// at Normal vs Legendary. This is the one corpus case where the Phase 3b
-/// top-edge substation fallback fires (`docs/rfp-power-reservation.md`): at
+/// top-edge substation fallback fires (`docs/rfc-power-reservation.md`): at
 /// Normal a substation covers the 5-row-deep recirc inserter bank because no
 /// medium pole's ±3 reaches that far. Both tiers assert 0 errors; the
 /// hand-derived machine-count ratio (Normal 6 centrifuges ÷ 2.5 = Legendary

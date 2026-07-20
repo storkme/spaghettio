@@ -11,7 +11,7 @@ wasm = ["dep:tsify-next", "dep:wasm-bindgen"]
 base64 = "0.22"
 flate2 = "1"
 indexmap = { version = "2.13.1", features = ["serde"] }
-# LP backend for the net-flow solver (docs/rfp-solver-net-flow.md).
+# LP backend for the net-flow solver (docs/rfc-solver-net-flow.md).
 # Pure Rust, WASM-clean, deterministic pivoting. NOTE: LinearExpr panics on
 # duplicate variables in one constraint — coefficients must be netted per
 # (item, recipe) before insertion (see netflow.rs).

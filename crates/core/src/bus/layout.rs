@@ -1189,6 +1189,150 @@ fn compute_extra_gaps(families: &[LaneFamily]) -> FxHashMap<usize, i32> {
     extra
 }
 
+/// rfc-043-pole-band-thinning (#310): depth slack a single band has after
+/// spanning from its candidate row to the OPPOSITE inserter row
+/// (`mh + 1` tiles away). Negative at Normal for every machine height
+/// (pole_range 3 < mh+1 ≥ 4) — the single-band gate (`budget >= 1`)
+/// is structurally unreachable at default quality (kill criterion 1).
+/// The floor-based `pole_range` is EXACT against the validator's
+/// continuous `3.5 + level` bound: center distances are integral and
+/// the bound's fraction is a fixed .5, so no rounding slop exists.
+fn single_band_depth_budget(mh: i32, pole_range: i32) -> i32 {
+    pole_range - (mh + 1)
+}
+
+/// The two per-row pole band candidate y-lists (north then south),
+/// each seeded from the shared `pole_candidate_ys` and searched
+/// outward AWAY from the machine so a saturated inserter/belt band is
+/// still covered from the first free row beyond it (Phase 0f).
+fn band_y_lists(top_y: i32, mh: i32, pole_range: i32) -> Vec<Vec<i32>> {
+    crate::common::pole_candidate_ys(top_y, mh)
+        .into_iter()
+        .map(|cy| {
+            let dir = if cy < top_y { -1 } else { 1 };
+            (0..=pole_range).map(|d| cy + dir * d).filter(|&y| y >= 0).collect()
+        })
+        .collect()
+}
+
+/// Place one band's pole line along `cxs` (machine-center columns,
+/// sorted). A 3×3 machine's inserters span cx−1..cx+1, so a pole in
+/// cx−2..cx+2 (rightmost-first, for forward reach) covers the machine's
+/// whole inserter footprint; if that window is full at every candidate
+/// y, a center-only fallback tile at cx±pole_range is tried. A placed
+/// pole credits (skip-ahead) every subsequent machine center within
+/// `pole_range` in x. A target with no free tile is skipped — the
+/// power validator flags the resulting gap (mop-up may still cover it).
+fn place_band_line(
+    band_ys: &[i32],
+    cxs: &[i32],
+    pole_range: i32,
+    occ: &FxHashSet<(i32, i32)>,
+    placed: &mut FxHashSet<(i32, i32)>,
+    entities: &mut Vec<PlacedEntity>,
+) {
+    let mut i = 0;
+    while i < cxs.len() {
+        let target_cx = cxs[i];
+        let mut placed_at: Option<(i32, i32)> = None;
+        'find: for &py in band_ys {
+            for px in (target_cx - 2..=target_cx + 2).rev() {
+                if !occ.contains(&(px, py)) && !placed.contains(&(px, py)) {
+                    placed_at = Some((px, py));
+                    break 'find;
+                }
+            }
+        }
+        if placed_at.is_none() {
+            'fallback: for &py in band_ys {
+                for px in [target_cx + pole_range, target_cx - pole_range] {
+                    if !occ.contains(&(px, py)) && !placed.contains(&(px, py)) {
+                        placed_at = Some((px, py));
+                        break 'fallback;
+                    }
+                }
+            }
+        }
+        match placed_at {
+            Some((px, py)) => {
+                entities.push(make_pole(px, py));
+                placed.insert((px, py));
+                i += 1;
+                while i < cxs.len() && (cxs[i] - px).abs() <= pole_range {
+                    i += 1;
+                }
+            }
+            None => {
+                i += 1;
+            }
+        }
+    }
+}
+
+/// Single-band mode's unified pass (rfc-043-pole-band-thinning v2): tries
+/// the truncated north window first, then the truncated south window —
+/// within the depth budget the two are coverage-INTERCHANGEABLE (a
+/// south pole at depth d covers the north inserter row by the same
+/// `mh+1+d ≤ pole_range` bound), so the skip-ahead credit is
+/// band-agnostic and cannot leak un-credited poles (review finding 3).
+/// Returns the DEGENERATE targets (no free tile in either truncated
+/// window); the caller retries those with today's full two-band
+/// placement — strictly no worse than unthinned, per target.
+fn place_unified_band_line(
+    north_ys: &[i32],
+    south_ys: &[i32],
+    cxs: &[i32],
+    pole_range: i32,
+    occ: &FxHashSet<(i32, i32)>,
+    placed: &mut FxHashSet<(i32, i32)>,
+    entities: &mut Vec<PlacedEntity>,
+) -> Vec<i32> {
+    let mut degenerate = Vec::new();
+    let mut i = 0;
+    while i < cxs.len() {
+        let target_cx = cxs[i];
+        let mut placed_at: Option<(i32, i32)> = None;
+        'find: for ys in [north_ys, south_ys] {
+            for &py in ys {
+                for px in (target_cx - 2..=target_cx + 2).rev() {
+                    if !occ.contains(&(px, py)) && !placed.contains(&(px, py)) {
+                        placed_at = Some((px, py));
+                        break 'find;
+                    }
+                }
+            }
+        }
+        if placed_at.is_none() {
+            'fallback: for ys in [north_ys, south_ys] {
+                for &py in ys {
+                    for px in [target_cx + pole_range, target_cx - pole_range] {
+                        if !occ.contains(&(px, py)) && !placed.contains(&(px, py)) {
+                            placed_at = Some((px, py));
+                            break 'fallback;
+                        }
+                    }
+                }
+            }
+        }
+        match placed_at {
+            Some((px, py)) => {
+                entities.push(make_pole(px, py));
+                placed.insert((px, py));
+                i += 1;
+                while i < cxs.len() && (cxs[i] - px).abs() <= pole_range {
+                    i += 1;
+                }
+            }
+            None => {
+                degenerate.push(target_cx);
+                i += 1;
+            }
+        }
+    }
+    degenerate
+}
+
+
 /// Place power poles for grid coverage. Runs LAST in `build_bus_layout`, after
 /// `route_bus_ghost` — poles live on leftover tiles and are never router
 /// obstacles (invariant restored in Phase 0f, `docs/rfc-power-supply.md`).
@@ -1337,92 +1481,49 @@ fn place_poles(
         let (top_y, mh) = key;
         let cxs = &by_row[&key];
 
-        // Phase 0f (RFC `docs/rfc-power-supply.md`): place a pole line in
-        // BOTH candidate bands, not just the preferred one. The north band
-        // (top_y-1) sits on the row's input-inserter row and covers the
-        // machine's north face; the south band (top_y+mh) sits on the
-        // output-inserter row and covers the machine's south face. A single
-        // band leaves the opposite inserter row at Chebyshev distance mh+1
-        // (=4 for a 3×3 machine — one tile past the ±3 supply area), which
-        // was the systemic uncovered-inserter signature Phase 0c measured
-        // (40-52% of electric inserters). Both inserter rows are now
-        // coverage subjects (validate/power.rs), so both bands must carry a
-        // line. Redundant machine-center coverage from the two lines is
-        // fine; `repair_pole_connectivity` still bridges the row cluster.
-        // Each band targets one inserter row and may place the pole up to
-        // pole_range tiles FURTHER from the machine than that row, so a
-        // saturated inserter/belt band (high-throughput rows fill every
-        // column of the input-inserter row and the belt rows above it) can
-        // still be covered from the first free row beyond it. Ordered from
-        // the inserter row outward: the near tile also covers the machine,
-        // and one of the two bands always lands close enough to keep the
-        // machine center in range.
-        // Seed each band from the shared `pole_candidate_ys` (the row Phase 1
-        // reserves gap tiles in) and search outward from it, AWAY from the
-        // machine — north band (candidate above the machine) upward past the
-        // belts, south band (below) downward — so a saturated inserter/belt
-        // band is still covered from the first free row beyond it.
-        let band_y_lists: Vec<Vec<i32>> = crate::common::pole_candidate_ys(top_y, mh)
-            .into_iter()
-            .map(|cy| {
-                let dir = if cy < top_y { -1 } else { 1 };
-                (0..=pole_range)
-                    .map(|d| cy + dir * d)
-                    .filter(|&y| y >= 0)
-                    .collect()
-            })
-            .collect();
-
-        for band_ys in &band_y_lists {
-            let mut i = 0;
-            while i < cxs.len() {
-                // A 3×3 machine's inserters span cx-1..cx+1, so a pole in
-                // cx-2..cx+2 (rightmost-first, for forward reach) covers the
-                // machine's whole inserter footprint. Try each candidate y
-                // (inserter row first), then the same y's with a center-only
-                // fallback tile (cx±pole_range) if the inserter-covering
-                // window is full. The old `cx + pole_range` alone left the
-                // machine's own left inserter at distance 4.
-                let target_cx = cxs[i];
-                let mut placed_at: Option<(i32, i32)> = None;
-                'find: for &py in band_ys {
-                    for px in (target_cx - 2..=target_cx + 2).rev() {
-                        if !occ.contains(&(px, py)) && !placed.contains(&(px, py)) {
-                            placed_at = Some((px, py));
-                            break 'find;
-                        }
-                    }
-                }
-                if placed_at.is_none() {
-                    'fallback: for &py in band_ys {
-                        for px in [target_cx + pole_range, target_cx - pole_range] {
-                            if !occ.contains(&(px, py)) && !placed.contains(&(px, py)) {
-                                placed_at = Some((px, py));
-                                break 'fallback;
-                            }
-                        }
-                    }
-                }
-
-                match placed_at {
-                    Some((px, py)) => {
-                        entities.push(make_pole(px, py));
-                        placed.insert((px, py));
-                        // Advance past every machine whose center this pole
-                        // still covers (Chebyshev, x only).
-                        i += 1;
-                        while i < cxs.len() && (cxs[i] - px).abs() <= pole_range {
-                            i += 1;
-                        }
-                    }
-                    None => {
-                        // No free tile covers cxs[i] in this band — skip to
-                        // avoid an infinite loop; the power validator flags
-                        // the resulting inserter/machine coverage gap.
-                        i += 1;
-                    }
+        // Phase 0f (RFC `docs/rfc-power-supply.md`): by default place a pole
+        // line in BOTH candidate bands. The north band (top_y-1) sits on the
+        // row's input-inserter row; the south band (top_y+mh) on the
+        // output-inserter row. At Normal radius a single band leaves the
+        // opposite inserter row at Chebyshev distance mh+1 (= 4 for a 3×3
+        // machine — one past ±3), the systemic uncovered-inserter signature
+        // Phase 0c measured. Both inserter rows are coverage subjects
+        // (validate/power.rs), so both bands carry a line — EXCEPT when the
+        // quality radius makes one band sufficient:
+        //
+        // rfc-043-pole-band-thinning (#310) v2: when
+        // `single_band_depth_budget(mh, pole_range) >= 1`, one unified band
+        // covers both inserter rows AND the machine center
+        // (mh/2 + 0.5 < mh + 1). The gate is ≥1, not ≥0: fluid msz=3
+        // templates fully pack the north candidate row at d=0, and the
+        // ≥1 tiers' wire reach clears every row pitch with margin
+        // (adversarial-review findings 3/4/5). Qualification: mh=3 at
+        // Rare+, mh=4 at Epic+, mh=5 at Legendary; never at Normal or
+        // Uncommon (kill criterion 1 is structural).
+        let budget = single_band_depth_budget(mh, pole_range);
+        if budget >= 1 {
+            let north_ys: Vec<i32> =
+                (0..=budget).map(|d| (top_y - 1) - d).filter(|&y| y >= 0).collect();
+            let south_ys: Vec<i32> = (0..=budget).map(|d| (top_y + mh) + d).collect();
+            let degenerate = place_unified_band_line(
+                &north_ys,
+                &south_ys,
+                cxs,
+                pole_range,
+                &occ,
+                &mut placed,
+                &mut entities,
+            );
+            if !degenerate.is_empty() {
+                for band_ys in band_y_lists(top_y, mh, pole_range) {
+                    place_band_line(&band_ys, &degenerate, pole_range, &occ, &mut placed, &mut entities);
                 }
             }
+            continue;
+        }
+
+        for band_ys in band_y_lists(top_y, mh, pole_range) {
+            place_band_line(&band_ys, cxs, pole_range, &occ, &mut placed, &mut entities);
         }
     }
 
@@ -1846,7 +1947,7 @@ mod tests {
         );
     }
 
-    /// Band-adequacy invariant (issue #315, `docs/rfp-build-quality.md`):
+    /// Band-adequacy invariant (issue #315, `docs/rfc-build-quality.md`):
     /// `compute_substation_bands`'s `SUBSTATION_BAND_TILES` geometry is tuned
     /// at Normal-tier reach — a fixed row-count constant that never changes
     /// with quality. What DOES change is the covering pole's own supply
@@ -2008,6 +2109,83 @@ mod tests {
             0,
             "after repair the emitted wire graph must be one connected component"
         );
+    }
+
+    /// rfc-043-pole-band-thinning kill criterion 1: the single-band gate is
+    /// STRUCTURALLY unreachable at Normal and Uncommon, and activates
+    /// exactly per the v2 table — mh=3 at Rare+, mh=4 at Epic+, mh=5 at
+    /// Legendary only. Budget is computed from the same floor'd
+    /// pole_range `place_poles` uses; the floor is exact against the
+    /// validator's continuous `.5`-fraction bound (review finding 1).
+    #[test]
+    fn single_band_gate_table_per_mh_and_tier() {
+        use crate::common::QualityTier;
+        for tier in QualityTier::ALL {
+            let pole_range =
+                crate::common::supply_area_distance("medium-electric-pole", tier).floor() as i32;
+            for mh in [3, 4, 5] {
+                let budget = single_band_depth_budget(mh, pole_range);
+                let thins = budget >= 1;
+                let expected = match (mh, tier) {
+                    (_, QualityTier::Normal) | (_, QualityTier::Uncommon) => false,
+                    (3, t) => t >= QualityTier::Rare,
+                    (4, t) => t >= QualityTier::Epic,
+                    (5, t) => t == QualityTier::Legendary,
+                    _ => unreachable!(),
+                };
+                assert_eq!(thins, expected, "mh={mh} {tier:?} budget={budget}");
+                if tier == QualityTier::Normal {
+                    assert!(budget < 0, "Normal budget must be negative (mh={mh})");
+                }
+            }
+        }
+    }
+
+    /// rfc-043-pole-band-thinning: a qualifying tier emits ONE band per row
+    /// where Normal emits two, and the thinned field still covers both
+    /// inserter rows under the validator's own per-entity quality walk.
+    #[test]
+    fn single_band_mode_halves_row_bands_and_stays_covered() {
+        use crate::common::QualityTier;
+        let machines = [(5, 10, 3), (12, 10, 3)];
+        let occupied: FxHashSet<(i32, i32)> = FxHashSet::default();
+
+        let (normal_poles, _) =
+            place_poles(&machines, &[], &occupied, &[], QualityTier::Normal);
+        let (rare_poles, _) = place_poles(&machines, &[], &occupied, &[], QualityTier::Rare);
+
+        // Normal: two bands (y=9 and y=13). Rare (budget 1): one unified
+        // band, north-first → all poles on y ∈ {9, 8}.
+        let normal_ys: FxHashSet<i32> = normal_poles.iter().map(|e| e.y).collect();
+        assert!(normal_ys.contains(&9) && normal_ys.contains(&13), "{normal_ys:?}");
+        let rare_ys: FxHashSet<i32> = rare_poles.iter().map(|e| e.y).collect();
+        assert!(
+            rare_ys.iter().all(|&y| y == 9 || y == 8),
+            "rare must be single-band north: {rare_ys:?}"
+        );
+        assert!(rare_poles.len() < normal_poles.len());
+
+        // The thinned field must cover BOTH inserter rows (y=9 north,
+        // y=13 south) for both machines under the validator's exact
+        // continuous check, at the tier the poles will be stamped with.
+        let mut lr = crate::models::LayoutResult::default();
+        lr.entities = rare_poles;
+        for e in &mut lr.entities {
+            e.quality = Some(QualityTier::Rare);
+        }
+        for &(cx, iy) in &[(5, 9), (5, 13), (12, 9), (12, 13)] {
+            let mut ins = crate::models::PlacedEntity {
+                name: "inserter".to_string(),
+                x: cx,
+                y: iy,
+                quality: Some(QualityTier::Rare),
+                ..Default::default()
+            };
+            ins.direction = crate::models::EntityDirection::North;
+            lr.entities.push(ins);
+        }
+        let issues = crate::validate::power::check_power_coverage(&lr);
+        assert!(issues.is_empty(), "thinned Rare field must cover both inserter rows: {issues:?}");
     }
 
     /// Phase 2 adversarial-review regression (rfc-build-quality decision
