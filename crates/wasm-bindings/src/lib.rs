@@ -46,7 +46,7 @@ fn layout_options(
         Some("horizontal-stack") => RowLayout::HorizontalStack,
         _ => RowLayout::VerticalSplit,
     };
-    // Mirrors `max_belt_tier`'s hard-cap semantics (`docs/rfp-inserter-
+    // Mirrors `max_belt_tier`'s hard-cap semantics (`docs/rfc-inserter-
     // sizing.md`): unrecognized or absent values fall back to the
     // default (`Stack`), not an error.
     let max_inserter_tier = match max_inserter_tier.as_deref() {
@@ -60,7 +60,7 @@ fn layout_options(
         row_layout,
         surplus_policy: SurplusPolicy::default(),
         max_inserter_tier,
-        // rfp-build-quality Phase 2: unknown/absent → Normal, same
+        // rfc-build-quality Phase 2: unknown/absent → Normal, same
         // hard-cap fallback semantics as the two tiers above.
         quality: quality_tier(quality),
         // The merge-tap fallback is chosen internally by the
@@ -77,7 +77,7 @@ pub fn init() {
 
 /// Map the optional quality string from JS to a tier; unknown/absent →
 /// Normal, matching the `max_inserter_tier` unknown→default pattern
-/// (rfp-build-quality). Set by the web UI / `q=` URL param since
+/// (rfc-build-quality). Set by the web UI / `q=` URL param since
 /// Phase 2 (`web/src/state.ts`, sidebar "Build quality" dropdown).
 fn quality_tier(quality: Option<String>) -> spaghettio_core::common::QualityTier {
     quality

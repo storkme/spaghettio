@@ -319,7 +319,7 @@ fn replicate_horizontally(atom: &OwnedTemplate, count: u32) -> OwnedTemplate {
 }
 
 // ---------------------------------------------------------------------------
-// Merge-trees (n → 1) — RFP docs/rfp-merge-tap-trunks.md D2/D3
+// Merge-trees (n → 1) — RFC docs/rfc-merge-tap-trunks.md D2/D3
 // ---------------------------------------------------------------------------
 
 /// Build an `n → 1` splitter merge-tree: `n` producer input belts on the top
@@ -595,7 +595,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Merge-trees (RFP merge-tap-trunks D2/D3)
+    // Merge-trees (RFC merge-tap-trunks D2/D3)
     // -----------------------------------------------------------------------
 
     /// Expand a merge-tree's template entities into occupied tiles (splitters

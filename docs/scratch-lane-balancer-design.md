@@ -3,7 +3,7 @@
 > Drafted by a planning subagent on 2026-05-02 in response to phase-2's
 > rejection of `(1, 5)` and other coprime shapes. This is a working
 > document, not yet ratified — the user-facing kill criteria for this
-> phase live in `rfp-lane-aware-routing.md`.
+> phase live in `rfc-lane-aware-routing.md`.
 
 ## Problem recap
 
@@ -13,14 +13,14 @@ north up column 8, then west in row 0 to land at the merger's `in_1`
 approach tile `(x_merger + 1, 0) = (4, 0)`. Each route enters the row-7
 east channel from the **north side** (sideload from a south-flowing leaf
 belt onto an east belt). Per `_route_belts` line 218–220 and the
-sideload table in `rfp-lane-aware-routing.md`, sideload from north onto
+sideload table in `rfc-lane-aware-routing.md`, sideload from north onto
 an east belt lands on lane 0 (LEFT). Three routes ×
 `f_lane[(r, t, EAST, 0)] ≤ 1` is `3 ≤ 1` — UNSAT.
 
 This is structural, not a search failure: no permutation of the 3
 sideloads avoids the LEFT lane while feeding from the north. A splitter
 is the only Factorio mechanic that re-distributes a saturated lane to
-a half-rate two-lane stream (encoded in the RFP under "Splitter lane
+a half-rate two-lane stream (encoded in the RFC under "Splitter lane
 semantics").
 
 ## 1. Detection — recommendation: **static analysis of the route declarations**
@@ -213,7 +213,7 @@ Lane analysis at the row-8 east channel feeding port 0:
 2. **Grid growth cascades.** Adding rows for the balancer's footprint
    may push other splitters off-grid in tighter shapes. For `(1, 5)`
    the height grows from 8 to 9 (under the 12 cap from kill criterion
-   3 in the RFP).
+   3 in the RFC).
 3. **More than 3 sideloads from the same side.** Cascade balancers per
    `ceil((n_srcs - 2) / 2)`. `(1, 7)` (5 srcs) needs 2 balancers.
 4. **Cycle in routing.** Once the balancer enters the splitter list

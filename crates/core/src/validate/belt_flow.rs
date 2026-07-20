@@ -38,7 +38,7 @@ fn belt_dir_map_filtered(entities: &[PlacedEntity], skip_balancers: bool) -> FxH
         }
         if skip_balancers {
             if let Some(ref seg) = e.segment_id {
-                // Sushi (mixed-item) belts (RFP Fulgora Phase 3) are not
+                // Sushi (mixed-item) belts (RFC Fulgora Phase 3) are not
                 // single-item lanes — the sushi saturation check owns their
                 // throughput; the per-item lanes downstream of the filter
                 // inserters walk normally.
@@ -1814,8 +1814,8 @@ pub fn check_belt_inserter_conflict(layout: &LayoutResult) -> Vec<ValidationIssu
 /// and the other branch the remainder, preserving the input left/right
 /// ratio within each branch. Falls back to the symmetric split if
 /// `loop_priority_rate` is `None`, or the priority branch is ambiguous
-/// (neither or both flagged) — see docs/rfp-solver-net-flow.md Phase 2(c)
-/// and docs/rfp-merge-tap-trunks.md D4.
+/// (neither or both flagged) — see docs/rfc-solver-net-flow.md Phase 2(c)
+/// and docs/rfc-merge-tap-trunks.md D4.
 fn splitter_output_rates(
     pos_rates: (f64, f64),
     sib_rates: (f64, f64),
@@ -1857,8 +1857,8 @@ fn splitter_output_rates(
 ///
 /// `a_total` / `b_total` are each tile's already-summed (left + right)
 /// input contribution. The pooled `total` is split between the two output
-/// tiles by downstream **demand** ([`allocate_by_demand`], RFP
-/// `rfp-lane-demand-flow.md` Phase 1 Branch A) — modeling a splitter that
+/// tiles by downstream **demand** ([`allocate_by_demand`], RFC
+/// `rfc-lane-demand-flow.md` Phase 1 Branch A) — modeling a splitter that
 /// redistributes under backpressure toward the output whose consumers draw
 /// faster, capped per output by belt capacity `cap`. When the two outputs
 /// have equal or absent demand (`demand_a ≈ demand_b`, e.g. balancer
@@ -1905,7 +1905,7 @@ fn splitter_output_rates_mixed(
 }
 
 /// Allocate a splitter's total throughput `total` between its two output
-/// tiles by downstream demand (RFP `rfp-lane-demand-flow.md` Phase 1 Branch
+/// tiles by downstream demand (RFC `rfc-lane-demand-flow.md` Phase 1 Branch
 /// A). Returns `(out_a, out_b)` with `out_a + out_b == total` except when
 /// the input genuinely exceeds `2 × cap` (over-capacity, surfaced by the
 /// lane-throughput check).
@@ -1927,7 +1927,7 @@ fn splitter_output_rates_mixed(
 /// the demands are static, but `total` oscillates across iterations inside
 /// balancer feedback loops, and a kink at `total == demand_sum` there turns
 /// the forward fixed point into a limit cycle that never converges (observed
-/// on processing-unit@2/s — RFP kill-criterion-2 probe). Proportional
+/// on processing-unit@2/s — RFC kill-criterion-2 probe). Proportional
 /// splitting keeps the per-iteration map non-expansive, so the loop
 /// converges at the same rate as the legacy even-split model.
 fn allocate_by_demand(total: f64, demand_a: f64, demand_b: f64, cap: f64) -> (f64, f64) {
@@ -1955,8 +1955,8 @@ fn allocate_by_demand(total: f64, demand_a: f64, demand_b: f64, cap: f64) -> (f6
     (a, b)
 }
 
-/// Backward demand propagation for the lane-rate walker (RFP
-/// `rfp-lane-demand-flow.md` Phase 1). Returns, per belt tile, the total
+/// Backward demand propagation for the lane-rate walker (RFC
+/// `rfc-lane-demand-flow.md` Phase 1). Returns, per belt tile, the total
 /// downstream machine-input demand reachable by flowing forward from that
 /// tile — the weight [`allocate_by_demand`] uses to route splitter output.
 ///
@@ -2250,7 +2250,7 @@ fn compute_lane_rates_impl(
         };
         // Position-resolved via `effective_rows` — see
         // `super::resolve_row_spec`'s doc comment for the
-        // partition-sibling rationale (`docs/rfp-inserter-sizing.md`
+        // partition-sibling rationale (`docs/rfc-inserter-sizing.md`
         // Phase 1 finding).
         let spec = super::resolve_row_spec(layout, recipe, me.y, fallback_spec);
         let carried_item = match belt_carries.get(&drop_pos).and_then(|c| c.as_deref()) {
@@ -2720,7 +2720,7 @@ fn compute_lane_rates_impl(
         }
     }
 
-    // Backward demand pass (RFP rfp-lane-demand-flow.md Phase 1 Branch A).
+    // Backward demand pass (RFC rfc-lane-demand-flow.md Phase 1 Branch A).
     // Seed each machine-input-inserter pickup tile with its share of the
     // machine's utilization-scaled required rate, then propagate that demand
     // upstream so the splitter allocation below can route toward it instead
@@ -2783,7 +2783,7 @@ fn compute_lane_rates_impl(
         *base_demand.entry(*pickup).or_insert(0.0) += required / count as f64;
     }
 
-    // Convergence budget (RFP kill criterion 2): a HARD `3 × segment_count`,
+    // Convergence budget (RFC kill criterion 2): a HARD `3 × segment_count`,
     // bounding both the demand pass and the forward fixed-point pass. Here a
     // belt "segment" is one tile of the belt graph — the walker's actual
     // propagation unit. This is the reading under which the hard budget
@@ -2794,7 +2794,7 @@ fn compute_lane_rates_impl(
     // a well-conditioned fixed point converges in O(tiles) and only genuine
     // oscillation/divergence exceeds 3× that. Measured max across the corpus
     // is 313 iters on the 5118-tile utility layout (0.02 × its budget); the
-    // kill criterion fires nowhere. See docs/rfp-lane-demand-flow.md.
+    // kill criterion fires nowhere. See docs/rfc-lane-demand-flow.md.
     let segment_count = belt_dir_map.len().max(1);
     let budget = 3 * segment_count;
 
@@ -2979,7 +2979,7 @@ fn compute_lane_rates_impl(
         }
     }
 
-    // Instrumentation for RFP kill criterion 2. The demand-pull fixed point
+    // Instrumentation for RFC kill criterion 2. The demand-pull fixed point
     // must converge within the `3 × segment_count` budget on every corpus
     // layout; if the forward pass ever exhausts it without converging, the
     // iterative model is wrong (STOP and report — do not widen the budget).
@@ -3282,7 +3282,7 @@ pub fn check_input_rate_delivery(
         };
         // Position-resolved via `effective_rows` — see
         // `super::resolve_row_spec`'s doc comment for the
-        // partition-sibling rationale (`docs/rfp-inserter-sizing.md`
+        // partition-sibling rationale (`docs/rfc-inserter-sizing.md`
         // Phase 1 finding).
         let spec = super::resolve_row_spec(layout, recipe, me.y, fallback_spec);
         // spec.inputs[].rate is the per-machine input rate at full utilization.
@@ -4585,7 +4585,7 @@ mod tests {
         assert!(!issues.is_empty(), "expected warning for insufficient rate");
         assert!(issues.iter().any(|i| i.category == "input-rate-delivery"),
             "expected input-rate-delivery issue, got: {:?}", issues);
-        // RFP validation-explainability D1: the warning carries the exact
+        // RFC validation-explainability D1: the warning carries the exact
         // compared pair as structured numbers (delivered < needed).
         let detail = issues
             .iter()
@@ -4616,7 +4616,7 @@ mod tests {
     /// halves at `[3.75, 3.75]` (belt total 7.5/s = half of input). Total mass
     /// conserved: 15/s in, 15/s out across two output belts.
     ///
-    /// Under the demand-pull model (RFP rfp-lane-demand-flow.md) the outputs
+    /// Under the demand-pull model (RFC rfc-lane-demand-flow.md) the outputs
     /// here are bare belts with no downstream machine demand, so the split is
     /// the exact-even *symmetric-residual fallback* — the same `[3.75, 3.75]`
     /// the legacy 50/50 model produced. This pins that the fallback is
@@ -4744,7 +4744,7 @@ mod tests {
         );
     }
 
-    /// Merge-and-tap priority tap (RFP `docs/rfp-merge-tap-trunks.md` D4): the
+    /// Merge-and-tap priority tap (RFC `docs/rfc-merge-tap-trunks.md` D4): the
     /// feed branch (downstream tagged `MERGE_TAP_SEGMENT_TAG`) receives
     /// `min(total, loop_priority_rate)` and the trunk continuation the
     /// remainder — the same rate law the self-loop test above exercises, now
@@ -4926,7 +4926,7 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------------
-    // Demand-pull splitter model (RFP rfp-lane-demand-flow.md Phase 1 Branch A)
+    // Demand-pull splitter model (RFC rfc-lane-demand-flow.md Phase 1 Branch A)
     // ---------------------------------------------------------------------------
 
     /// Core allocation math. Pins each branch of [`allocate_by_demand`]: the

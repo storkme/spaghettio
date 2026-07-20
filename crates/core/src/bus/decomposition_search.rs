@@ -1,7 +1,7 @@
 //! Decomposition-search: pick the best layout among a set of
 //! candidate decompositions.
 //!
-//! See `docs/rfp-decomposition-search.md`. The search layer sits above
+//! See `docs/rfc-decomposition-search.md`. The search layer sits above
 //! the existing `LayoutStrategy` enum: each candidate produces a full
 //! `LayoutResult` via the existing pipeline (with whatever per-strategy
 //! and per-module shape-fix machinery applies), the layouts are scored,
@@ -74,7 +74,7 @@ pub trait DecompositionCandidate {
 /// The Phase 0 / no-op candidate: delegates to today's strategy
 /// dispatch. With this as the only candidate in the catalogue,
 /// `select_best_decomposition` returns byte-identical layouts to the
-/// pre-RFP `build_bus_layout` (K-DS0-1 inertness gate).
+/// pre-RFC `build_bus_layout` (K-DS0-1 inertness gate).
 pub struct NativeCandidate;
 
 impl DecompositionCandidate for NativeCandidate {
@@ -94,7 +94,7 @@ impl DecompositionCandidate for NativeCandidate {
 /// Pooled candidate: retire the unstampable (n, m) balancer a family would
 /// otherwise get to `K = ceil(rate / belt_cap)` shared trunks — producers
 /// merge in via splitter merge-trees, consumers tap with priority splitters
-/// (`docs/rfp-merge-tap-trunks.md`). This is the only place `merge_tap` is
+/// (`docs/rfc-merge-tap-trunks.md`). This is the only place `merge_tap` is
 /// turned on: it flips the runtime flag and re-runs the ordinary pipeline.
 ///
 /// Pooled-only. Under any other strategy the merge-tap fallback either
@@ -187,7 +187,7 @@ impl DecompositionCandidate for ModuleSizeSplit {
         // module doubles layout work without a shape-fix benefit, and
         // the doubled work busts the stress test time budget on
         // big partitioned cases (advanced-circuit / processing-unit
-        // at 5s+). The (4, 9) coprime trap that motivated this RFP
+        // at 5s+). The (4, 9) coprime trap that motivated this RFC
         // *is* unstampable, so the guard fires the split exactly where
         // it matters. Phase 1b will lift this guard once the per-
         // candidate event capture lands and runtime budget is
@@ -534,7 +534,7 @@ fn classify_errors(layout: &LayoutResult, solver_result: &SolverResult) -> Error
 /// Score a candidate's layout. Returns the soft score plus the input
 /// metrics so the trace event can report them. Hard constraint: layout
 /// must have zero `missing-balancer-template` warnings (the (n, m)
-/// coprime trap that motivated this RFP). Other validator categories
+/// coprime trap that motivated this RFC). Other validator categories
 /// are intentionally not gated here — they fire on harmless edge cases
 /// (pole connectivity, inserter chain near edges) and would break
 /// inertness on clean tier 1-3 layouts.
@@ -580,7 +580,7 @@ struct CandidateRun {
     /// The candidate's layout error when it produced no outcome — kept so
     /// the all-candidates-failed terminal message can say WHY instead of
     /// the unactionable "no decomposition candidate produced a layout"
-    /// (observability gap found debugging rfp-build-quality Phase 2).
+    /// (observability gap found debugging rfc-build-quality Phase 2).
     error: Option<String>,
     events: Vec<crate::trace::TraceEvent>,
 }
@@ -693,11 +693,11 @@ where
 /// stress tests).
 ///
 /// Trade-off: gives up the "score every candidate, pick best by
-/// density" framing the RFP committed to. The motivation: budget. The
+/// density" framing the RFC committed to. The motivation: budget. The
 /// stress test corpus busts the 600s timeout when partitioned cases
 /// run two full layouts. A predict-shape-before-layout guard would
 /// preserve the parallel framing but is harder to get right than this
-/// post-Native check (see decision log entry 2026-04-30 in the RFP).
+/// post-Native check (see decision log entry 2026-04-30 in the RFC).
 pub fn select_best_decomposition(
     solver_result: &SolverResult,
     opts: LayoutOptions,
@@ -758,7 +758,7 @@ pub fn select_best_decomposition(
         CandidateRun::skipped("size-split-2")
     };
 
-    // Merge-and-tap fallback candidate (`docs/rfp-merge-tap-trunks.md`).
+    // Merge-and-tap fallback candidate (`docs/rfc-merge-tap-trunks.md`).
     // Pooled-only, and only when Native left an unstampable shape — Native's
     // `accepted == false` is exactly the missing-balancer-template gate. This
     // construction gate is what keeps every currently-blessed Pooled golden

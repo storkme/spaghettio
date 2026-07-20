@@ -27,7 +27,7 @@ pub(crate) fn merge_output_rows(
         output_rows.len(),
         output_ys.len(),
         "merge_output_rows: output_rows and output_ys must be 1:1 — output_ys[idx] is the \
-         belt row for output_rows[idx] (RFP Fulgora D2a/D2b: primary rows use \
+         belt row for output_rows[idx] (RFC Fulgora D2a/D2b: primary rows use \
          `output_belt_y`, secondary-output rows use `secondary_output_belt`'s y)"
     );
     let mut entities: Vec<PlacedEntity> = Vec::new();
@@ -58,7 +58,7 @@ pub(crate) fn merge_output_rows(
     // of `min_merge_x` — the caller threads a running cursor across
     // successive per-item merges so two output items' splitter cascades and
     // south columns tile left-to-right instead of stamping the same tiles
-    // (multi-item solid output support, Phase 2 of rfp-solver-net-flow).
+    // (multi-item solid output support, Phase 2 of rfc-solver-net-flow).
     let merge_x = (output_rows.iter()
         .map(|&ri| if ri < row_spans.len() { row_spans[ri].row_width } else { 0 })
         .max()
@@ -267,7 +267,7 @@ mod tests {
     }
 
 
-    /// Phase 2 (rfp-solver-net-flow): two output items' merge blocks must
+    /// Phase 2 (rfc-solver-net-flow): two output items' merge blocks must
     /// tile east via the threaded cursor instead of stamping the same
     /// tiles. Regression for the review finding that per-item merge_x was
     /// computed independently.

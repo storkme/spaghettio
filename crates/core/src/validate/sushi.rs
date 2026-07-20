@@ -1,4 +1,4 @@
-//! Sushi-sorter validation (RFP Fulgora Phase 3, `docs/rfp-fulgora-scrap.md`
+//! Sushi-sorter validation (RFC Fulgora Phase 3, `docs/rfc-fulgora-scrap.md`
 //! D3 architecture (a), KC5 containment).
 //!
 //! The scrap-recycling row (`templates::scrap_recycling_row`) ejects ~12

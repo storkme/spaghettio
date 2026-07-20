@@ -436,7 +436,7 @@ export function renderSidebar(
   targetBody.appendChild(makeField("Belt", beltSelect));
 
   // Max inserter tier — hard cap on the per-side sizing ladder
-  // (`docs/rfp-inserter-sizing.md`), mirroring the belt-tier control's
+  // (`docs/rfc-inserter-sizing.md`), mirroring the belt-tier control's
   // semantics: a ceiling the ladder never exceeds, not a target. Default
   // is Stack (the richest tier, zero research) — capping to Fast or
   // Regular reproduces the pre-ladder geometry limits on affected sides,
@@ -455,7 +455,7 @@ export function renderSidebar(
   });
   targetBody.appendChild(makeField("Inserter tier", inserterTierSelect));
 
-  // Build quality (`docs/rfp-build-quality.md`): quality of the entities
+  // Build quality (`docs/rfc-build-quality.md`): quality of the entities
   // the engine places — machines craft faster, inserters swing faster,
   // poles cover more. Functional entities are stamped in the exported
   // blueprint; belts/pipes stay normal (functional-only stamping).
@@ -475,7 +475,7 @@ export function renderSidebar(
   });
   targetBody.appendChild(makeField("Build quality", qualitySelect));
 
-  // Layout strategy. Phase 0b of `rfp-modular-production` shipped the
+  // Layout strategy. Phase 0b of `rfc-modular-production` shipped the
   // dropdown; the surviving `partitioned-decomposed` variant produces
   // strictly ≤ Pooled errors on every case in the corpus. The deprecated
   // `partitioned-per-consumer` (P1) option was dropped from the UI when
@@ -494,15 +494,15 @@ export function renderSidebar(
   });
   targetBody.appendChild(makeField("Strategy", strategySelect));
 
-  // Row layout. See `docs/rfp-horizontal-trunks.md`. Default is the
+  // Row layout. See `docs/rfc-horizontal-trunks.md`. Default is the
   // existing vertical-split behaviour; horizontal-stack is being
-  // developed under that RFP and currently only handles dual-input
+  // developed under that RFC and currently only handles dual-input
   // solid recipes (other row kinds fall back to vertical-split).
   const rowLayoutSelect = document.createElement("select");
   rowLayoutSelect.className = "sb-select";
   ([
     ["Vertical split (today)", ""],
-    ["Horizontal stack (RFP)", "horizontal-stack"],
+    ["Horizontal stack (RFC)", "horizontal-stack"],
   ] as const).forEach(([label, value]) => {
     const opt = document.createElement("option");
     opt.value = value;
@@ -998,7 +998,7 @@ export function renderSidebar(
         const body = document.createElement("div");
         body.className = "sb-val-group-body";
 
-        // Cause rollup (RFP validation-explainability Phase 3b): for
+        // Cause rollup (RFC validation-explainability Phase 3b): for
         // rate-shaped issues (those carrying structured detail), join
         // each to its stamp-time cause and show counts per cause under
         // the group header. Issues with no matching stamp-time event

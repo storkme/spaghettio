@@ -5,7 +5,7 @@
 //! can all consult and mutate a single source of truth instead of each
 //! maintaining its own obstacle view.
 //!
-//! See `docs/archive/rfp-ghost-occupancy-refactor.md` for the design and rollout
+//! See `docs/archive/rfc-ghost-occupancy-refactor.md` for the design and rollout
 //! plan. This module corresponds to **Step 1**: the type lands in
 //! isolation with unit tests; nothing in `ghost_router.rs` consumes it
 //! yet.
@@ -104,7 +104,7 @@ impl Claim {
 pub(super) enum ClaimKindTag {
     /// Load-bearing claim — set by `Occupancy::new` (for row/trunk
     /// inits) or by the unit-test harness, never by `place()` in
-    /// production. Post-Phases 1-3 of `rfp-unified-belt-specs.md`
+    /// production. Post-Phases 1-3 of `rfc-unified-belt-specs.md`
     /// every A*-routed spec gets `GhostSurface`; trunks are
     /// installed directly via `permanent_inits`.
     #[allow(dead_code)]

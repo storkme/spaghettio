@@ -31,14 +31,14 @@ pub fn is_machine_entity(entity: &str) -> bool {
 }
 
 /// Factorio 2.0 quality tier of the entities the user builds with
-/// (`docs/rfp-build-quality.md`). Build quality only — this says nothing
+/// (`docs/rfc-build-quality.md`). Build quality only — this says nothing
 /// about the quality of *items produced* (quality-production is a
-/// separate future RFP).
+/// separate future RFC).
 ///
 /// The scaling anchor is [`QualityTier::level`], NOT the enum ordinal:
 /// vanilla skips level 4, so legendary is level **5** (FFF-375; verified
 /// against wiki.factorio.com 2026-07-20, in-game tooltip check tracked as
-/// RFP kill criterion 1). Most positive attributes scale
+/// RFC kill criterion 1). Most positive attributes scale
 /// `×(1 + 0.3·level)` — crafting speed, inserter rotation — while pole
 /// geometry uses per-level tile bonuses (+1 supply radius, +2 wire
 /// reach), so consumers take the tier and derive what they need rather
@@ -123,11 +123,11 @@ impl QualityTier {
     ];
 }
 
-/// Recycler direct-ejection tile (RFP Fulgora Phase 0 finding,
-/// `docs/rfp-fulgora-scrap.md`): the ONE tile a recycler credits its
+/// Recycler direct-ejection tile (RFC Fulgora Phase 0 finding,
+/// `docs/rfc-fulgora-scrap.md`): the ONE tile a recycler credits its
 /// output onto directly, mining-drill-style — no output inserter, per
 /// `vector_to_place_result`. Only NORTH and SOUTH facing are supported
-/// (matches `templates::voider_row` and the RFP's documented E/W
+/// (matches `templates::voider_row` and the RFC's documented E/W
 /// export-centering caveat — blueprint export doesn't swap width/height
 /// for rotated non-square machines). `(x, y)` is the entity's placement
 /// anchor (top-left tile of its 2×4 footprint). `None` for unsupported
@@ -151,7 +151,7 @@ pub fn recycler_eject_tile(entity: &str, x: i32, y: i32, direction: EntityDirect
 /// Return the footprint `(width, height)` in tiles for the given entity name.
 ///
 /// All machines today are square, except `recycler` (Fulgora scrap recycler:
-/// `tile_width=2, tile_height=4`, per `docs/rfp-fulgora-scrap.md` Phase 0
+/// `tile_width=2, tile_height=4`, per `docs/rfc-fulgora-scrap.md` Phase 0
 /// findings). There is deliberately no square-assuming wrapper around this —
 /// every call site must pick width or height explicitly so a non-square
 /// machine can't silently grab the wrong axis.
@@ -168,7 +168,7 @@ pub fn machine_dims(entity: &str) -> (u32, u32) {
 
 /// Footprint `(width, height)` in tiles for ANY placed entity — the single
 /// source both the blueprint center math and the power validator's pole
-/// geometry consult (RFP `docs/rfp-power-supply.md` Phase 3a-i). Machines defer
+/// geometry consult (RFC `docs/rfc-power-supply.md` Phase 3a-i). Machines defer
 /// to [`machine_dims`]; the substation is 2×2; everything else (medium/small
 /// poles, belts, inserters, pipes) is 1×1. Before this, `blueprint.rs` hard-
 /// coded `(1,1)` for every non-machine, so a substation would have exported at
@@ -186,7 +186,7 @@ pub fn entity_size(entity: &str) -> (u32, u32) {
 /// Supply-area distance (in tiles, from the entity's CENTER to the supply
 /// square's edge) for a power-distribution entity — THE ground-truth value both
 /// the power validator's coverage check and `bus::layout::place_poles` consume,
-/// unifying the two formerly duplicated `POLE_RANGE = 3` constants (RFP Phase
+/// unifying the two formerly duplicated `POLE_RANGE = 3` constants (RFC Phase
 /// 3a-i/3a-ii). Draftsman `supply_area_distance`: `medium-electric-pole` 3.5
 /// (7×7 supply), `substation` 9.0 (18×18). Any other name falls back to the
 /// medium value.
@@ -198,11 +198,11 @@ pub fn entity_size(entity: &str) -> (u32, u32) {
 /// version 3a-i shipped false-accepted the substation's +x/+y edge by one tile.
 /// `place_poles`, which places on the tile grid, floors it (`.floor() as i32`).
 ///
-/// Quality adds **+1 supply radius per level** (rfp-build-quality; kill-1
+/// Quality adds **+1 supply radius per level** (rfc-build-quality; kill-1
 /// verified in-game 2026-07-20): medium 3.5 → 8.5 legendary (7×7 → 17×17),
 /// substation 9 → 14 (18×18 → 28×28). NOTE the substation's supply
 /// *diameter* equals its wire reach at EVERY tier (18=18 … 28=28, zero
-/// margin — see the RFP's pole-margin table); only medium poles keep a
+/// margin — see the RFC's pole-margin table); only medium poles keep a
 /// 2-tile margin, so spacing logic may never assume wire reach exceeds
 /// supply diameter for substations. Callers pass the entity's own tier
 /// (validator) or the planning tier (`place_poles`).
@@ -221,7 +221,7 @@ pub fn supply_area_distance(entity: &str, quality: QualityTier) -> f64 {
 /// `bus::layout::repair_pole_connectivity` consume — unified here after
 /// the Phase 2 adversarial review caught the repair pass still
 /// hardcoding the Normal-tier 9 while the validator scaled
-/// (rfp-build-quality decision log, 2026-07-20; same duplication shape
+/// (rfc-build-quality decision log, 2026-07-20; same duplication shape
 /// 3a-i fixed for supply radii).
 ///
 /// Quality adds **+2 wire reach per level** (kill-1 verified in-game):
@@ -242,7 +242,7 @@ pub fn pole_wire_reach(entity: &str, quality: QualityTier) -> Option<f64> {
 
 /// Whether `entity` draws electricity from the power grid.
 ///
-/// The codebase's first energy-source fact (RFP `docs/rfp-power-supply.md`
+/// The codebase's first energy-source fact (RFC `docs/rfc-power-supply.md`
 /// Phase 0a). Every canonical crafting machine is electric **except**
 /// `biochamber`, which is burner-fueled — draftsman ground truth:
 /// `energy_source.type == "burner"`, `fuel_categories: ["nutrients"]`. A
@@ -251,7 +251,7 @@ pub fn pole_wire_reach(entity: &str, quality: QualityTier) -> Option<f64> {
 /// for a pure-biochamber row.
 ///
 /// Inserters are the one non-crafting-machine class that also draws grid
-/// power (RFP Phase 0f): every tier the engine places is electric, so they
+/// power (RFC Phase 0f): every tier the engine places is electric, so they
 /// are power-coverage subjects too. Folding them into this single predicate
 /// (rather than a parallel `is_inserter` check in the validator) keeps
 /// "draws grid power" in one place, drift-test covered.
@@ -288,8 +288,8 @@ pub fn needs_electricity(entity: &str) -> bool {
 /// the input-inserter band) and just below (`top_y+mh`, the output-inserter
 /// band). `top_y-1` is dropped when it would be negative (the topmost row).
 ///
-/// THE shared source of truth for where a row's poles sit (RFP
-/// `docs/rfp-power-supply.md`). `bus::layout::place_poles` seeds each band's
+/// THE shared source of truth for where a row's poles sit (RFC
+/// `docs/rfc-power-supply.md`). `bus::layout::place_poles` seeds each band's
 /// outward search from these rows; Phase 1's fluid-row reservation reserves
 /// gap tiles in exactly these rows — one function so the placer and the
 /// reservation can never drift (the geometry dual of the Phase 0b name-list
@@ -321,7 +321,7 @@ pub fn machine_tiles(x: i32, y: i32, w: u32, h: u32) -> Vec<(i32, i32)> {
 /// which sizes belts/inserters per machine) and validation (`validate::`,
 /// which must reconstruct the same effective rate to avoid false-positive
 /// starvation/overflow warnings on partitioned rows) — see
-/// `docs/rfp-inserter-sizing.md`'s honest-zero gate.
+/// `docs/rfc-inserter-sizing.md`'s honest-zero gate.
 pub fn utilization_for(spec: &MachineSpec) -> f64 {
     let effective_count = spec.count.ceil().max(1.0);
     (spec.count / effective_count).min(1.0)
@@ -462,13 +462,13 @@ pub fn balancer_seg_is_simple(seg: &str) -> bool {
 }
 
 /// Whether build quality functionally affects this entity — and therefore
-/// whether the export stamps it (rfp-build-quality "functional-only
+/// whether the export stamps it (rfc-build-quality "functional-only
 /// stamping"): machines (crafting speed — including the burner biochamber;
 /// quality scales speed regardless of energy source), inserters
 /// (rotation), poles (supply area + wire reach). Belts, undergrounds,
 /// splitters, and pipes are excluded: vanilla quality gives them health
 /// only, and demanding upcycle-only legendary logistics for zero function
-/// is the exact cost the RFP's stamping decision avoids.
+/// is the exact cost the RFC's stamping decision avoids.
 pub fn quality_affects_entity(name: &str) -> bool {
     is_machine_entity(name)
         || matches!(
@@ -496,7 +496,7 @@ pub fn inserter_reach(name: &str) -> i32 {
 
 /// Approximate steady-state throughput (items/second) of an inserter,
 /// from `docs/factorio-mechanics.md` table I8, scaled by build quality
-/// (`docs/rfp-build-quality.md` Phase 2).
+/// (`docs/rfc-build-quality.md` Phase 2).
 ///
 /// Assumption: **no inserter-capacity / stack-bonus research** — these are
 /// the base (unresearched) rates a fresh factory sees. Values are
@@ -632,7 +632,7 @@ pub const LANE_LEFT: &str = "left";
 pub const LANE_RIGHT: &str = "right";
 
 /// Segment-id marker for merge-and-tap **priority tap** branches
-/// (RFP `docs/rfp-merge-tap-trunks.md` D4). An inline splitter on a shared
+/// (RFC `docs/rfc-merge-tap-trunks.md` D4). An inline splitter on a shared
 /// trunk whose feed branch's downstream belt carries a segment id containing
 /// this tag is modeled by the lane-rate walkers with the priority rate law
 /// (`loop_priority_rate`: the feed branch receives `min(total, cap)`, the
@@ -703,7 +703,7 @@ mod tests {
     fn quality_levels_skip_four() {
         // Vanilla reserves level 4; legendary is 5. An ordinal-based
         // implementation would produce [0,1,2,3,4] — the exact bug this
-        // sweep exists to catch (`docs/rfp-build-quality.md`).
+        // sweep exists to catch (`docs/rfc-build-quality.md`).
         let levels: Vec<u8> = QualityTier::ALL.iter().map(|q| q.level()).collect();
         assert_eq!(levels, vec![0, 1, 2, 3, 5]);
     }
@@ -809,7 +809,7 @@ mod tests {
         assert!(!needs_electricity("transport-belt"));
     }
 
-    /// Drift regression (RFP `docs/rfp-power-supply.md` Phase 0b): every
+    /// Drift regression (RFC `docs/rfc-power-supply.md` Phase 0b): every
     /// machine in the canonical `MACHINE_ENTITY_NAMES` list must be
     /// classified for BOTH energy source (`needs_electricity`) and fluid
     /// ports (`validate::fluids::machine_has_fluid_ports`). Adding a machine
@@ -817,7 +817,7 @@ mod tests {
     /// this test (set-equality check), forcing an explicit, ground-truthed
     /// decision on both facts rather than letting a new machine silently
     /// inherit a `_ => false` / empty-port-table default — which is exactly
-    /// the twin validator blind spot this RFP closes.
+    /// the twin validator blind spot this RFC closes.
     #[test]
     fn machine_classification_no_drift() {
         // (name, needs_electricity, has_fluid_ports) — ground-truthed from
@@ -867,7 +867,7 @@ mod tests {
 
     #[test]
     fn inserters_are_electric_coverage_subjects() {
-        // RFP Phase 0f: every inserter tier the engine places draws grid
+        // RFC Phase 0f: every inserter tier the engine places draws grid
         // power and is folded into `needs_electricity`. Adding an inserter
         // name to `INSERTER_ENTITIES` without it being electric would strand
         // it from power coverage silently — this pins the whole list.

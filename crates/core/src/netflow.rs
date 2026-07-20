@@ -1,4 +1,4 @@
-//! Net-flow (LP) solver — see `docs/rfp-solver-net-flow.md`.
+//! Net-flow (LP) solver — see `docs/rfc-solver-net-flow.md`.
 //!
 //! Replaces the recursive tree walk's per-branch demand math with a single
 //! linear program over the recipe graph:
@@ -32,9 +32,9 @@ use crate::solver::SolverError;
 use microlp::{ComparisonOp, OptimizationDirection, Problem, Variable};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-/// Frozen cost table (docs/rfp-solver-net-flow.md, "Design → Formulation";
+/// Frozen cost table (docs/rfc-solver-net-flow.md, "Design → Formulation";
 /// revision 1 logged 2026-07-10). Kill criterion 3 forbids retuning these to
-/// pass cross-validation; any revision needs an RFP decision-log entry.
+/// pass cross-validation; any revision needs an RFC decision-log entry.
 ///
 /// Weight ordering is load-bearing:
 /// `w_default ≫ w_available ≫ eps_machine ≫ eps_surplus`.
@@ -72,7 +72,7 @@ impl Default for CostTable {
 const ACTIVE_TOL: f64 = 1e-9;
 
 /// Additive, opt-in options for the Fulgora scrap-economy spike (see
-/// docs/rfp-solver-net-flow.md decision log). Both default to `false`, so
+/// docs/rfc-solver-net-flow.md decision log). Both default to `false`, so
 /// every existing caller (`solve_netflow`, both `solve_*` entry points in
 /// `solver.rs`) is behaviorally unchanged.
 #[derive(Debug, Clone, Copy, Default)]
@@ -89,7 +89,7 @@ pub struct NetflowOptions {
     /// Requires `allow_recycling` to have any candidates to exempt.
     pub allow_voiding: bool,
     /// Build quality of the machines being planned
-    /// (`docs/rfp-build-quality.md` Phase 1). Scales every column's
+    /// (`docs/rfc-build-quality.md` Phase 1). Scales every column's
     /// crafting speed via [`effective_crafting_speed`] — `Normal`
     /// (default) multiplies by exactly 1.0, bit-identical to the
     /// pre-quality behavior.
@@ -98,13 +98,13 @@ pub struct NetflowOptions {
 
 /// True for both recycling-shaped categories in the bundled data.
 ///
-/// NOTE: the RFP's Fulgora spike brief assumed `scrap-recycling` itself was
+/// NOTE: the RFC's Fulgora spike brief assumed `scrap-recycling` itself was
 /// category `"recycling"`; draftsman 3.3.0 / Space Age data says its actual
 /// category is `"recycling-or-hand-crafting"` (verified via the extractor
 /// spike — see the recipes.json append). Both are admitted here so
 /// `allow_recycling` actually reaches scrap-recycling, the entry point for
 /// the whole scrap chain — `"crushing"` (the third `EXCLUDED_CATEGORIES`
-/// member) stays excluded regardless, per the RFP brief.
+/// member) stays excluded regardless, per the RFC brief.
 fn is_recycling_category(recipe: &Recipe) -> bool {
     matches!(recipe.category.as_str(), "recycling" | "recycling-or-hand-crafting")
 }
@@ -208,7 +208,7 @@ fn raw_net_per_craft(recipe: &Recipe, item: &str) -> f64 {
     produced - consumed
 }
 
-/// Self-loop support classification (RFP Phase 2, "Cycle policy"; extended
+/// Self-loop support classification (RFC Phase 2, "Cycle policy"; extended
 /// for the fluid-ingredient row variant). v1 supports pure-solid self-loops
 /// with 1 net-positive self-loop item (bacteria cultivations) or 2
 /// self-loop items with opposite net signs (kovarex: U-235 +1/craft, U-238
@@ -329,7 +329,7 @@ pub fn solve_netflow_with_options(
     costs: &CostTable,
     options: &NetflowOptions,
 ) -> Result<SolverResult, SolverError> {
-    // Acyclic-fallback loop (RFP "Cycle policy", amended after Phase 0
+    // Acyclic-fallback loop (RFC "Cycle policy", amended after Phase 0
     // found the fluoroketone coolant loop on cryogenic-science-pack): when
     // the optimum contains an unsupported cycle, deterministically exclude
     // the first cycle member whose demanded outputs all have alternative
@@ -498,7 +498,7 @@ fn solve_attempt(
         }
     }
 
-    // Pure-voider admission (RFP Fulgora spike, gated on allow_voiding):
+    // Pure-voider admission (RFC Fulgora spike, gated on allow_voiding):
     // a voider's only net coefficient is negative (it strictly destroys its
     // own item), so it can never satisfy `supplies_demand` above and would
     // never join the closure through the ordinary fixpoint. Admit it
@@ -572,7 +572,7 @@ fn solve_attempt(
                 }
             }
         }
-        // Quality-scaled (rfp-build-quality Phase 1); ×1.0 at Normal, so the
+        // Quality-scaled (rfc-build-quality Phase 1); ×1.0 at Normal, so the
         // `<= 0.0` guard sees the same sign as the raw speed.
         let crafting_speed = effective_crafting_speed(&machine, options.quality);
         if crafting_speed <= 0.0 {
@@ -707,7 +707,7 @@ fn solve_attempt(
     })?;
 
     // ---------------------------------------------------------------
-    // 4. Cycle policy over the ACTIVE recipe graph (RFP "Cycle policy").
+    // 4. Cycle policy over the ACTIVE recipe graph (RFC "Cycle policy").
     //
     // Offending members are reported to the outer fallback loop with the
     // first member that is safely excludable — i.e. every *demanded* item
@@ -791,7 +791,7 @@ fn solve_attempt(
     let o_of = |i: usize| snap(o_vars[i].map(|v| solution[v]).unwrap_or(0.0));
 
     // Builds one MachineSpec for column `c`. Factored out of the DFS below
-    // so the pure-voider post-pass (RFP Fulgora spike) can emit voider
+    // so the pure-voider post-pass (RFC Fulgora spike) can emit voider
     // machines the same way — voiders are demand-pulled sinks, not
     // producers, so they're structurally invisible to the producer-of-item
     // DFS and need their own emission pass (see the reachability-exemption
@@ -800,11 +800,11 @@ fn solve_attempt(
         let col = &columns[c];
         let crafts_per_sec_per_machine = col.crafting_speed / col.recipe.energy;
         let count = snap(x_of(c) / crafts_per_sec_per_machine);
-        // Self-loop items (RFP Phase 2): excluded from the ordinary
+        // Self-loop items (RFC Phase 2): excluded from the ordinary
         // ingredient/product mapping below and emitted instead as a
         // single net flow (into inputs or outputs, by sign) plus a
         // `self_loop` entry carrying the raw per-machine rates for
-        // the row template's loop-back belt sizing. Pure voiders (RFP
+        // the row template's loop-back belt sizing. Pure voiders (RFC
         // Fulgora spike) fall through this same machinery: their one
         // self-loop item nets negative, so it lands in `inputs` as a
         // netted consumption with empty `outputs` — exactly the "netted
@@ -957,7 +957,7 @@ fn solve_attempt(
         }
     }
 
-    // Pure-voider emission pass (RFP Fulgora spike, gated on allow_voiding).
+    // Pure-voider emission pass (RFC Fulgora spike, gated on allow_voiding).
     // Voiders are demand-pulled SINKS (their only net coefficient is
     // negative), so `producers_of` never lists them and the DFS above can
     // never discover them by walking producer→ingredient edges — the same

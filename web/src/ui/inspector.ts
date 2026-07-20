@@ -278,7 +278,7 @@ export function createInspector(container: HTMLElement): InspectorControls {
   pnJunctionBlock.append(pnJunctionLabel, pnJunctionOutcome);
   pinned.appendChild(pnJunctionBlock);
 
-  // Capped inserter sides at the pinned machine (RFP
+  // Capped inserter sides at the pinned machine (RFC
   // validation-explainability Phase 3a) — the expanded explanation
   // behind rate-shaped warnings: what the ladder placed, the shortfall,
   // and the binding constraint spelled out.
@@ -487,7 +487,7 @@ export function createInspector(container: HTMLElement): InspectorControls {
     return true;
   }
 
-  /** Capped inserter sides at this machine origin (RFP
+  /** Capped inserter sides at this machine origin (RFC
    *  validation-explainability D2) — the stamp-time cause behind
    *  rate-shaped warnings anchored here. One line per capped side:
    *  what was placed, what it moves vs what's needed, and the binding

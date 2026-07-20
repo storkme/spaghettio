@@ -24,7 +24,7 @@ graph and `verify_balancer` accepts it via the standard R7 +
 conservation flow. The trick is feeding M.in1 from both north
 (back-feed, lanes preserved) and east-side sideload (lane 0) via
 B's two outputs — yielding lanes 0.45 / 0.15 at M.in1, both within
-cap. See the RFP decision log for the full lane analysis.
+cap. See the RFC decision log for the full lane analysis.
 
 ## What's shipped
 
@@ -33,7 +33,7 @@ cap. See the RFP decision log for the full lane analysis.
 - `7eecf22` — lane-balancer splitter helper (`_add_lane_balancer_south`)
   for placement-only splitters that rebalance lanes after a
   perpendicular turn.
-- `a1b810b` — RFP decision-log entry documenting the `(1, 5)` layout
+- `a1b810b` — RFC decision-log entry documenting the `(1, 5)` layout
   wall and the three unblock directions considered.
 - `1e3d17c` — **underground-belt support in `_route_belts`**. Yellow
   tier (`UG_MAX_REACH = 4`), global (any route may use UG pairs).
@@ -72,7 +72,7 @@ shapes in 1..=10 × 1..=10):
      extended for 16-splitter trees with an L3 layer. Two paths:
      (a) hand-tune them like the original `(1, 5)`; (b) extend the
      generalised placer with deeper layout primitives. See
-     `docs/rfp-lane-aware-routing.md` decision log for why the 4-level
+     `docs/rfc-lane-aware-routing.md` decision log for why the 4-level
      head-on cascade is structurally harder.
 4. ⏳ Coprime coverage for the rest of the 20 missing shapes
 5. ⏳ Library regen, browser eyeball, cleanup
@@ -198,7 +198,7 @@ geometry is wrong — adjust splitter positions.
 - `crates/core/src/balancer/placement/cp_sat.rs` — Rust adapter; added
   `arc_throughputs` field to request.
 - `crates/core/tests/cp_sat_round_trip.rs` — bumped timeout to 60s.
-- `docs/rfp-lane-aware-routing.md` — decision log for `(1, 5)` wall
+- `docs/rfc-lane-aware-routing.md` — decision log for `(1, 5)` wall
   and unblock directions.
 
 ## Files to read first next session
@@ -206,7 +206,7 @@ geometry is wrong — adjust splitter positions.
 - `scripts/cp_sat_placer.py` — focus on `_route_belts` (UG model),
   `place_x_to_eight` (template for `place_one_to_five`), `_find_arc_rate`.
 - This handoff doc.
-- `docs/rfp-lane-aware-routing.md` decision log entries for context.
+- `docs/rfc-lane-aware-routing.md` decision log entries for context.
 
 ## Verification commands
 

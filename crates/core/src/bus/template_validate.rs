@@ -1,6 +1,6 @@
 //! Lane-aware validation of standalone balancer templates.
 //!
-//! Phase 1 of [`docs/rfp-balancer-bake-lane-validation.md`]. Synthesises a
+//! Phase 1 of [`docs/rfc-balancer-bake-lane-validation.md`]. Synthesises a
 //! minimal [`LayoutResult`] from a [`BalancerTemplateRef`] and runs the
 //! lane-aware validators from [`crate::validate::belt_flow`] against it.
 //! Catches lane-imbalance and underground-belt sideloading bugs that

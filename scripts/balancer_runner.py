@@ -2,7 +2,7 @@
 
 Phase 1 produces an append-only journal at ``scripts/balancer_journal.jsonl``.
 The runner NEVER writes to ``src/bus/balancer_library.py``. A separate commit
-script (Phase 2 of docs/rfp-balancer-runner.md) validates and merges journal
+script (Phase 2 of docs/rfc-balancer-runner.md) validates and merges journal
 entries into the library.
 
 Run:

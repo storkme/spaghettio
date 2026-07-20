@@ -34,7 +34,7 @@
 //! ≤ the *smaller* of the two poles' wire reaches (Factorio's min-of-both rule).
 //! Reaches are draftsman `maximum_wire_distance`: medium 9, small 7.5,
 //! substation 18, big 32. Footprint centers come from the shared
-//! [`crate::common::entity_size`] (RFP power-arc Phase 3a-i), the same source
+//! [`crate::common::entity_size`] (RFC power-arc Phase 3a-i), the same source
 //! `blueprint::export` uses to place each entity — so the wire graph's reach
 //! test uses the exact centers the blueprint encodes (a 2×2 substation at
 //! `+1.0`, a 1×1 medium pole at `+0.5`).
@@ -51,7 +51,7 @@ pub const POLE_COPPER: u32 = 5;
 /// Delegates to [`crate::common::pole_wire_reach`] — the ONE wire-reach table
 /// this module, the validator, and `bus::layout::repair_pole_connectivity`
 /// all read (base values are draftsman `maximum_wire_distance`; quality adds
-/// +2 per level, rfp-build-quality). Do NOT confuse it with
+/// +2 per level, rfc-build-quality). Do NOT confuse it with
 /// [`crate::common::supply_area_distance`] (power COVERAGE radius: medium 3.5,
 /// substation 9), which is a different quantity.
 pub fn wire_reach(name: &str, quality: crate::common::QualityTier) -> Option<f64> {
@@ -87,7 +87,7 @@ pub fn compute_pole_wires(entities: &[PlacedEntity]) -> Vec<(u32, u32)> {
         .iter()
         .enumerate()
         .filter_map(|(i, e)| {
-            // Per-entity quality (rfp-build-quality): a legendary medium
+            // Per-entity quality (rfc-build-quality): a legendary medium
             // pole wires at 19, so quality layouts' sparser pole fields
             // still emit a fully-connected artifact.
             wire_reach(&e.name, e.quality.unwrap_or_default()).map(|r| {

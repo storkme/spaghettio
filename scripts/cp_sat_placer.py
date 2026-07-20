@@ -72,7 +72,7 @@ _FACTORIO_DIR = (0, 2, 4, 6)
 # input boundary belt — its lane is unconstrained at the source. A
 # direction means the source tile is a splitter-output drop with the
 # upstream splitter facing that direction; source-lane forcing applies
-# per the table in `docs/rfp-lane-aware-routing.md`:
+# per the table in `docs/rfc-lane-aware-routing.md`:
 #   d_drop == splitter_dir          → head-on, items fill both lanes;
 #                                      construction emits 2 lane-routes
 #                                      per arc and the per-lane cap
@@ -117,7 +117,7 @@ def _make_solver(workers: int = 1):
 
     Honours the `timeout_ms` and `seed` fields of the request. Defaults
     to `num_search_workers = 1` for determinism (kill criterion #5 in
-    `rfp-cp-sat-placement.md`); larger problems can opt into parallel
+    `rfc-cp-sat-placement.md`); larger problems can opt into parallel
     workers via the `workers` arg, trading determinism for solve speed.
     """
     from ortools.sat.python import cp_model
@@ -1718,7 +1718,7 @@ def main() -> int:
     started = time.monotonic()
 
     # Map shape → geometry-emitting function. v1 uses hardcoded
-    # geometry; phase 2 of the placement RFP replaces this with a
+    # geometry; phase 2 of the placement RFC replaces this with a
     # real CP-SAT spatial model.
     geometry: dict[tuple[int, int], Any] = {
         (1, 1): place_one_to_one,

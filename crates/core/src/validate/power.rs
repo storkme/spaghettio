@@ -19,7 +19,7 @@ use crate::validate::{Severity, ValidationIssue};
 // `power_wires::compute_pole_wires` (export + this validator + the web
 // overlay) and `bus::layout::repair_pole_connectivity` all read, so
 // placement-time repair, the emitted artifact, and validation can never
-// disagree (rfp-build-quality Phase 2 review fix, merged with the
+// disagree (rfc-build-quality Phase 2 review fix, merged with the
 // power-3c wires arc).
 
 /// Check that the EMITTED pole copper-wire graph is a single connected network.
@@ -61,7 +61,7 @@ pub fn check_power_coverage(layout_result: &LayoutResult) -> Vec<ValidationIssue
     // Supply sources: (center_x, center_y, supply_area_distance) in continuous
     // tile-space for every power-distribution entity — medium-electric-poles
     // (center +0.5, reach 3.5) and substations (center +1.0, reach 9.0), both
-    // from the shared `entity_size` + `supply_area_distance` (RFP Phase 3a-i/
+    // from the shared `entity_size` + `supply_area_distance` (RFC Phase 3a-i/
     // 3a-ii). Continuous coordinates make coverage EXACT for the even 2×2
     // substation, not the +1-tile false-accept the integer version gave.
     let poles: Vec<(f64, f64, f64)> = layout_result
@@ -88,7 +88,7 @@ pub fn check_power_coverage(layout_result: &LayoutResult) -> Vec<ValidationIssue
     }
 
     for e in &layout_result.entities {
-        // Coverage subjects (RFP `docs/rfp-power-supply.md` Phase 0b + 0f):
+        // Coverage subjects (RFC `docs/rfc-power-supply.md` Phase 0b + 0f):
         // everything that draws grid power, via the single `needs_electricity`
         // fact — electric crafting machines (checked at their footprint
         // center) and electric inserters (1×1, checked at their own tile).
@@ -129,7 +129,7 @@ pub fn check_power_coverage(layout_result: &LayoutResult) -> Vec<ValidationIssue
 mod tests {
     use crate::common::QualityTier;
 
-    /// The RFP's pole-margin table as an invariant (rfp-build-quality;
+    /// The RFC's pole-margin table as an invariant (rfc-build-quality;
     /// kill-1 verified in-game 2026-07-20): medium poles keep a strict
     /// 2-tile margin between supply DIAMETER and wire reach at every
     /// quality tier (7<9 ... 17<19), so coverage-spaced mediums can never
@@ -191,7 +191,7 @@ mod tests {
         }
     }
 
-    // --- Substation exact-coverage boundary (RFP Phase 3a-ii carried
+    // --- Substation exact-coverage boundary (RFC Phase 3a-ii carried
     // constraint: the continuous-coordinate check must be EXACT for the even
     // 2×2 footprint, not the +1-tile false-accept the integer version gave) ---
 
@@ -352,7 +352,7 @@ mod tests {
     #[test]
     fn all_machine_types_checked() {
         // Every electric machine (canonical ∩ needs_electricity) is a
-        // power-coverage subject. Widened in RFP Phase 0b to add foundry,
+        // power-coverage subject. Widened in RFC Phase 0b to add foundry,
         // centrifuge, recycler, cryogenic-plant, electromagnetic-plant.
         let machine_names = [
             "assembling-machine-1",

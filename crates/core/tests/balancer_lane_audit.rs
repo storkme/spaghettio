@@ -1,5 +1,5 @@
 //! Audit of lane-correctness across the entire baked balancer
-//! library (`docs/rfp-balancer-bake-lane-validation.md`).
+//! library (`docs/rfc-balancer-bake-lane-validation.md`).
 //!
 //! For every `(m, n)` template in
 //! [`balancer_templates`](spaghettio_core::bus::balancer_library::balancer_templates),

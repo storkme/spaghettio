@@ -79,7 +79,7 @@ UG_MAX_REACH = 5
 # Pinning the seed makes solves deterministic and lets us choose a seed
 # whose portfolio assignment happens to be fast for the common shapes.
 # Override via env var SPAGHETTIO_CP_SAT_SEED=<int> (sweep / testing).
-# See docs/rfp-balancer-jh-search.md decision log for selection rationale.
+# See docs/rfc-balancer-jh-search.md decision log for selection rationale.
 DEFAULT_SEED: int = 42  # placeholder; updated after empirical sweep
 
 
@@ -844,7 +844,7 @@ def solve_synth_place(req: dict) -> dict:
                         model.AddBoolOr([arc1.Not(), ug_arcs[(ucx, ucy, d1, L2, e2)].Not()])
 
     # =========================================================================
-    # UG-correctness constraints (Phase 2C of rfp-ug-sideload-prevention.md).
+    # UG-correctness constraints (Phase 2C of rfc-ug-sideload-prevention.md).
     # Mirror the four constraints from `solve_pure_routing` adapted for Mode D.
     # All UGs in Mode D face south (d=facing=2); the d_ug iteration loops from
     # solve_pure_routing collapse to a single iteration here. Constraint 3
@@ -1718,7 +1718,7 @@ def solve_pure_routing(req: dict) -> dict:
     # to be either a south-belt or a south-facing UG-input — anything
     # else (east/west/north belt, or non-south UG-input) would be
     # sideloaded by stage1's south flow above (see
-    # `docs/rfp-ug-sideload-prevention.md`).
+    # `docs/rfc-ug-sideload-prevention.md`).
     for e_idx, src in enumerate(edge_src):
         sx, sy = src
         for d in range(4):
@@ -1934,14 +1934,14 @@ def solve_pure_routing_circuit(req: dict) -> dict:
     Cross-edge constraints (at-most-one entity per cell, UG pairing) are
     posted on top of the per-edge circuits.
 
-    Spatial pruning (RFP `docs/rfp-balancer-spatial-pruning.md`): per-edge
+    Spatial pruning (RFC `docs/rfc-balancer-spatial-pruning.md`): per-edge
     variables are restricted to cells inside a Manhattan-ellipse around
     (src, dst). slack defaults to `bounds height + 2` (the bake passes
     height = junction_height; this matches "jh + 2"). Override with
     `req["routing_slack"]` (an int) or pass JSON null to disable pruning
     entirely.
 
-    Fallback: the RFP originally specified a post-INFEASIBLE retry with
+    Fallback: the RFC originally specified a post-INFEASIBLE retry with
     full encoding to guard against false-INFEASIBLE from the heuristic.
     Verification (Decision log entry 2026-05-02) showed the retry never
     rescues anything in the bake context — `compose_series` in main.rs
@@ -1954,13 +1954,13 @@ def solve_pure_routing_circuit(req: dict) -> dict:
     expensive than the re-solve).
     """
     width, height = req["bounds"]
-    # Default slack = jh + 2 (RFP §design "Initial implementation").
+    # Default slack = jh + 2 (RFC §design "Initial implementation").
     default_slack = height + 2
     slack_arg = req.get("routing_slack", default_slack)
 
     out = _solve_pure_routing_circuit_inner(req, slack=slack_arg)
     # Fallback is OFF by default; opt in via SPAGHETTIO_ROUTING_FALLBACK=1.
-    # See docstring above + RFP decision log for why.
+    # See docstring above + RFC decision log for why.
     fallback_enabled = os.environ.get("SPAGHETTIO_ROUTING_FALLBACK") == "1"
     if (out.get("status") == "INFEASIBLE"
             and slack_arg is not None

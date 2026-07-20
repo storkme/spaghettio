@@ -25,7 +25,7 @@ use crate::common::QualityTier;
 /// The `dx` (relative to the machine's left edge) where the fluid-dual-input
 /// row's vertical PTG delivers the fluid — the machine's first north-facing
 /// fluid **input** port, read from the shared table at the machine's
-/// north-input orientation (RFP `docs/rfp-power-supply.md` Phase 0e-i). The
+/// north-input orientation (RFC `docs/rfc-power-supply.md` Phase 0e-i). The
 /// machine is placed at that same orientation (see the machine stamp below),
 /// so the delivered pipe lands on a real input port. Table-driven so it can
 /// never drift from the validator: AM2/3 -> 1, chemical-plant/biochamber -> 0,
@@ -45,7 +45,7 @@ fn output_dir(output_east: bool) -> EntityDirection {
 
 /// The column (relative to the machine's left edge) to leave free for a power
 /// pole in a fluid-only row's continuous input pipe strip — or `None` when the
-/// row needs no reservation (RFP `docs/rfp-power-supply.md` Phase 1).
+/// row needs no reservation (RFC `docs/rfc-power-supply.md` Phase 1).
 ///
 /// The continuous pipe strip sits on `pole_candidate_ys`' north band
 /// (`input_y == top_y - 1`), so it fills the one row a pole most wants. Whether
@@ -75,7 +75,7 @@ fn fluid_row_pole_gap_dx(msz: i32) -> Option<i32> {
 /// shared table) as bus tap points.
 ///
 /// Shared by `single_input_row`, `dual_input_row`, and `fluid_dual_input_row`
-/// (RFP `docs/rfp-power-supply.md` Phase 0e-i): the pipe-emission geometry is
+/// (RFC `docs/rfc-power-supply.md` Phase 0e-i): the pipe-emission geometry is
 /// the one thing those three fluid-output arms have in common; the per-template
 /// dispatch (row shape, where `out_y` sits) stays in each template. `mirror`/
 /// `dir` are the machine's placement orientation, so the registered columns
@@ -384,7 +384,7 @@ pub(crate) fn stamp_inline_bridge_b(
 /// stamped-range/occupancy variables the belts and bridge use (rather
 /// than a hardcoded budget table) means the ladder's column budget can
 /// never drift out of sync with the geometry that actually places
-/// entities — see `docs/rfp-inserter-sizing.md`'s free-column-budget
+/// entities — see `docs/rfc-inserter-sizing.md`'s free-column-budget
 /// table, which this reproduces for every `single_input_row` position.
 fn free_extra_dx(stamped_stop: i32, occupied: &[i32]) -> Vec<i32> {
     (0..stamped_stop).filter(|dx| !occupied.contains(dx)).collect()
@@ -477,7 +477,7 @@ fn emit_shortfall_trace(
 /// ```
 ///
 /// Each side's inserter count/tier is sized by
-/// `inserter_ladder::size_side` (`docs/rfp-inserter-sizing.md`):
+/// `inserter_ladder::size_side` (`docs/rfc-inserter-sizing.md`):
 /// in-place tier upgrade (regular → fast → stack) first, extra
 /// inserters into whatever free columns the position's own belt/bridge
 /// geometry leaves (via [`free_extra_dx`]) only if the tier ladder alone
@@ -491,7 +491,7 @@ fn emit_shortfall_trace(
 /// sideload bridge between them so the output belt uses both lanes.
 ///
 /// `secondary_output`, when `Some((item, belt))`, stamps a SECOND
-/// output belt one row south of the primary (RFP Fulgora D2b —
+/// output belt one row south of the primary (RFC Fulgora D2b —
 /// uranium-processing's uranium-235 target + uranium-238 surplus:
 /// `spec.outputs[1]`, which owns no belt otherwise). Extracted via a
 /// dedicated long-handed inserter (reach-2, sized against
@@ -523,7 +523,7 @@ pub fn single_input_row(
     // e.g. ice-melting: ice → water on a chemical-plant, or biolubricant:
     // jelly → lubricant on a biochamber). The output belt + inserter are
     // replaced by a south-face fluid output pipe row registered for the bus
-    // (RFP `docs/rfp-power-supply.md` Phase 0e). Strictly gated:
+    // (RFC `docs/rfc-power-supply.md` Phase 0e). Strictly gated:
     // `output_is_fluid == false` is byte-identical to the pre-Phase-0e
     // template. Only the SOUTH output face is handled here — the caller gates
     // this via `fluid_ports::output_ports_all_south`, so machines with a
@@ -542,7 +542,7 @@ pub fn single_input_row(
     debug_assert_eq!(
         crate::common::machine_dims(machine_entity),
         (machine_size, machine_size),
-        "single_input_row assumes square machines; see rfp-fulgora-scrap Phase 0"
+        "single_input_row assumes square machines; see rfc-fulgora-scrap Phase 0"
     );
     debug_assert!(
         !output_is_fluid
@@ -671,7 +671,7 @@ pub fn single_input_row(
         // secondary's own dedicated inserter).
         let out_ins_y = y_offset + 2 + msz;
 
-        // Fluid output (RFP `docs/rfp-power-supply.md` Phase 0e fulgora
+        // Fluid output (RFC `docs/rfc-power-supply.md` Phase 0e fulgora
         // unit): replace the solid output inserter + belt with a continuous
         // south pipe row spanning the machine width, carrying the fluid
         // product. Chemical-plant's two output fluid boxes sit at dx=0 and
@@ -740,7 +740,7 @@ pub fn single_input_row(
             });
         }
 
-        // Secondary output (RFP Fulgora D2b): dedicated long-handed
+        // Secondary output (RFC Fulgora D2b): dedicated long-handed
         // inserter at `mx+2`, same row as the primary output inserter —
         // reach 2 picks the machine's middle row (inside the footprint
         // for msz>=3) and drops onto a new belt one row south of the
@@ -823,7 +823,7 @@ pub fn single_input_row(
 /// share ONE extra column (`dx=1` at `y_offset+2`, free only when the far
 /// belt itself still covers it — trimmed away at `LastInRow`, see `in1_tail`
 /// below): `inserter_ladder::contest_favors_far` decides who's entitled to
-/// it. `docs/rfp-inserter-sizing.md` Phase 3: far's own reach-2 count-ladder
+/// it. `docs/rfc-inserter-sizing.md` Phase 3: far's own reach-2 count-ladder
 /// is now ACTIVE — a far win genuinely places a second long-handed inserter
 /// (no fast/stack long-handed exists, so `max_inserter_tier` never affects
 /// it; a far loss, or LastInRow ineligibility, hands the column to near
@@ -843,7 +843,7 @@ pub fn dual_input_row(
     // When true, the recipe's output is a fluid with no solid product
     // (foundry molten-iron/molten-copper: ore + calcite -> molten metal). The
     // solid output inserter + belt are replaced by a south-face fluid output
-    // pipe row (RFP `docs/rfp-power-supply.md` Phase 0e-i item 4). The foundry
+    // pipe row (RFC `docs/rfc-power-supply.md` Phase 0e-i item 4). The foundry
     // is placed mirror=true so its outputs sit on that south face. Strictly
     // gated: `output_is_fluid == false` is byte-identical to the pre-0e-i
     // template.
@@ -861,7 +861,7 @@ pub fn dual_input_row(
     debug_assert_eq!(
         crate::common::machine_dims(machine_entity),
         (machine_size, machine_size),
-        "dual_input_row assumes square machines; see rfp-fulgora-scrap Phase 0"
+        "dual_input_row assumes square machines; see rfc-fulgora-scrap Phase 0"
     );
     let msz = machine_size as i32;
     let pitch = msz;
@@ -923,7 +923,7 @@ pub fn dual_input_row(
         // extend the far belt by exactly one tile. The existing contest +
         // ladder then place the second long-handed inserter and the pole
         // relocates on its own. Scoped to `dual_input_row` last-in-row; see
-        // `docs/rfp-inserter-sizing.md`.
+        // `docs/rfc-inserter-sizing.md`.
         let mut in1_stop = if is_last { msz - in1_tail } else { msz };
         if is_last {
             let new_dx = in1_stop; // first dx a one-tile extension would add
@@ -969,7 +969,7 @@ pub fn dual_input_row(
         // Near/far contested column (dx=1 at Interior; also at LastInRow when
         // the far belt was extended one tile above, otherwise near-only there
         // — derived from each belt's own stamped range, excluding both
-        // baselines, rather than a lookup table). `docs/rfp-inserter-sizing.md`
+        // baselines, rather than a lookup table). `docs/rfc-inserter-sizing.md`
         // Phase 3: the far side's own reach-2 count-ladder is now ACTIVE — a
         // far win genuinely places a second long-handed inserter within budget.
         let far_candidates = free_extra_dx(in1_stop, &[FAR_BASELINE_DX, NEAR_BASELINE_DX]);
@@ -1116,7 +1116,7 @@ pub fn dual_input_row(
 }
 
 /// HorizontalStack variant of `dual_input_row` — see
-/// `docs/rfp-horizontal-trunks.md`. One long row with `k_trunks`
+/// `docs/rfc-horizontal-trunks.md`. One long row with `k_trunks`
 /// stacked east-flowing input₀ trunks on top, a single continuous
 /// input₁ belt, and machines packed into `block_size`-sized blocks
 /// with a 1-tile gap between blocks for trunk dives + low-demand
@@ -1150,7 +1150,7 @@ pub fn dual_input_row(
 /// Both belts cover every machine's full width (no per-machine LastInRow
 /// trim — HorizontalStack's belts are continuous across the row), so the
 /// near/far contested column (`dx=1` at `inserter_in_y`) is always eligible
-/// for both sides; `docs/rfp-inserter-sizing.md` Phase 3: far's reach-2
+/// for both sides; `docs/rfc-inserter-sizing.md` Phase 3: far's reach-2
 /// count-ladder is ACTIVE, same as `dual_input_row`. Output is ladder-sized
 /// `single_input_row`-output-shaped (2 free columns, bridge-anchor 0).
 #[allow(clippy::too_many_arguments)]
@@ -1177,7 +1177,7 @@ pub fn dual_input_row_horizontal(
     debug_assert_eq!(
         crate::common::machine_dims(machine_entity),
         (machine_size, machine_size),
-        "dual_input_row_horizontal assumes square machines; see rfp-fulgora-scrap Phase 0"
+        "dual_input_row_horizontal assumes square machines; see rfc-fulgora-scrap Phase 0"
     );
     let msz = machine_size as i32;
     let pitch = msz;
@@ -1434,7 +1434,7 @@ pub fn dual_input_row_horizontal(
         // ONE extra column (dx=1) is shared — both belts cover the full
         // row width for every machine (no LastInRow trim in
         // HorizontalStack), so it's always contested here, unlike
-        // `dual_input_row`'s LastInRow exception. `docs/rfp-inserter-
+        // `dual_input_row`'s LastInRow exception. `docs/rfc-inserter-
         // sizing.md` Phase 3: far's reach-2 count-ladder is ACTIVE.
         const NEAR_BASELINE_DX: i32 = 0;
         const FAR_BASELINE_DX: i32 = 2;
@@ -1582,7 +1582,7 @@ fn ug_belt_name(belt: &str) -> &str {
 /// (derived from belt coverage, see there). Input3's own reach-2 ladder
 /// and the near-far pair's far side are Phase 3 scope (unchanged,
 /// hardcoded) — only near and output are ladder-sized here. Output shares
-/// its own extra column with input3's slot (`docs/rfp-inserter-sizing.md`:
+/// its own extra column with input3's slot (`docs/rfc-inserter-sizing.md`:
 /// dx=0 at `ins_y`, free only when input3 hasn't shifted there at the
 /// bridge anchor, and dead entirely at the bridge-anchor successor where
 /// the bridge itself covers it — both derived from `bridge_x_set`, not a
@@ -1611,7 +1611,7 @@ pub fn triple_input_row(
     debug_assert_eq!(
         crate::common::machine_dims(machine_entity),
         (machine_size, machine_size),
-        "triple_input_row assumes square machines; see rfp-fulgora-scrap Phase 0"
+        "triple_input_row assumes square machines; see rfc-fulgora-scrap Phase 0"
     );
     let msz = machine_size as i32;
     let pitch = msz;
@@ -1693,7 +1693,7 @@ pub fn triple_input_row(
         // far belt by exactly one tile. The existing contest + reach-2 ladder
         // then place the second long-handed inserter and the pole relocates on
         // its own. Mirrors `dual_input_row` (0d7132c); input3's own
-        // (full-width) belt is untouched. See `docs/rfp-inserter-sizing.md`.
+        // (full-width) belt is untouched. See `docs/rfc-inserter-sizing.md`.
         let mut in1_stop = if is_last { msz - in1_tail } else { msz };
         if is_last {
             let new_dx = in1_stop; // first dx a one-tile extension would add
@@ -1742,7 +1742,7 @@ pub fn triple_input_row(
         // Near/far contested column, same derivation as `dual_input_row`
         // (identical belt/inserter geometry for this pair; `dx=1` at Interior,
         // and also at LastInRow when the far belt was extended one tile above,
-        // otherwise near-only there). `docs/rfp-inserter-sizing.md` Phase 3:
+        // otherwise near-only there). `docs/rfc-inserter-sizing.md` Phase 3:
         // far's reach-2 count-ladder is ACTIVE.
         let far_candidates = free_extra_dx(in1_stop, &[FAR_BASELINE_DX, NEAR_BASELINE_DX]);
         let near_candidates = free_extra_dx(in2_stop, &[FAR_BASELINE_DX, NEAR_BASELINE_DX]);
@@ -1824,7 +1824,7 @@ pub fn triple_input_row(
         // reaches into its dx=0. Belt3 covers the full row width at every
         // position (`in3_tail` is always 0 for msz=3 — its last-adjacency
         // dx=2 is already the last column), so the shared tile is always
-        // within input3's reach when it exists. `docs/rfp-inserter-
+        // within input3's reach when it exists. `docs/rfc-inserter-
         // sizing.md` Phase 3: input3's reach-2 count-ladder is now ACTIVE.
         let mut shared_occupied = vec![1i32, in3_baseline_dx];
         for dx in 0..msz {
@@ -1991,14 +1991,14 @@ pub fn triple_input_row(
 /// work; they just don't get a sideload bridge.
 ///
 /// Returns `(entities, row_height)`.
-/// Inputs 1/2 (north) are dead budget always (`docs/rfp-inserter-sizing.md`:
+/// Inputs 1/2 (north) are dead budget always (`docs/rfc-inserter-sizing.md`:
 /// "0 for 3 of 4 inputs, north rows fully packed") — hardcoded, unchanged.
 /// Input3 (the dual-baseline pair at `mx+0`/`mx+2`) upgrades both existing
 /// regular inserters to the SAME cheapest-sufficient tier for HALF the
 /// demand each (the row's two structural pickup points are never removed —
 /// "upgrade both", not count-laddered from a 1-inserter baseline). Output
 /// and input4 (south) share one extra column (`mx+0` at `south_ins_y`) —
-/// `docs/rfp-inserter-sizing.md` Phase 3: input4's reach-2 count-ladder is
+/// `docs/rfc-inserter-sizing.md` Phase 3: input4's reach-2 count-ladder is
 /// now ACTIVE, so a win genuinely places a second long-handed inserter.
 #[allow(clippy::too_many_arguments)]
 pub fn quad_input_row(
@@ -2026,7 +2026,7 @@ pub fn quad_input_row(
     debug_assert_eq!(
         crate::common::machine_dims(machine_entity),
         (machine_size, machine_size),
-        "quad_input_row assumes square machines; see rfp-fulgora-scrap Phase 0"
+        "quad_input_row assumes square machines; see rfc-fulgora-scrap Phase 0"
     );
     let msz = machine_size as i32;
     let pitch = msz;
@@ -2209,7 +2209,7 @@ pub fn quad_input_row(
         });
 
         // Output/input4 contested column (relative dx=0, i.e. `mx+0`).
-        // `docs/rfp-inserter-sizing.md` Phase 3: input4's reach-2 count-
+        // `docs/rfc-inserter-sizing.md` Phase 3: input4's reach-2 count-
         // ladder is now ACTIVE — a win genuinely places a second LHI.
         let input4_wins = contest_favors_far(output_rate, input4_rate, true, quality);
         let output_extra_dx: Vec<i32> = if input4_wins { vec![] } else { vec![0] };
@@ -2295,7 +2295,7 @@ pub fn quad_input_row(
 /// machines share one fluid, so there's no isolation concern) and the bus
 /// router just has to extend it west/east until it hits the fluid trunk
 /// column. Multi-fluid-per-side rows need the richer UG-pipe-UG isolation
-/// pattern; see `docs/archive/rfp-multi-fluid-rows.md` for that.
+/// pattern; see `docs/archive/rfc-multi-fluid-rows.md` for that.
 ///
 /// For other machines (assembling-machine-2/3 with fluid): uses a regular pipe
 /// at the port position:
@@ -2340,7 +2340,7 @@ pub fn fluid_input_row(
     debug_assert_eq!(
         crate::common::machine_dims(machine_entity),
         (machine_size, machine_size),
-        "fluid_input_row assumes square machines; see rfp-fulgora-scrap Phase 0"
+        "fluid_input_row assumes square machines; see rfc-fulgora-scrap Phase 0"
     );
     let msz = machine_size as i32;
     let pitch = msz;
@@ -2483,7 +2483,7 @@ pub fn fluid_input_row(
             emit_shortfall_trace(recipe, false, solid_rate, &solid_plan, mx, machine_y, false, quality);
 
             // Machine — placed at its north-input orientation so the UG-out
-            // above lands on a real fluid input port (RFP Phase 0e-i). Default
+            // above lands on a real fluid input port (RFC Phase 0e-i). Default
             // north for chemical-plant/AM; East-rotated for the
             // electromagnetic-plant, whose fluid ports otherwise face west/east
             // (`fluid_input_port_dx` reads the same orientation, so port and
@@ -2628,7 +2628,7 @@ pub fn fluid_dual_input_row(
     debug_assert_eq!(
         crate::common::machine_dims(machine_entity),
         (machine_size, machine_size),
-        "fluid_dual_input_row assumes square machines; see rfp-fulgora-scrap Phase 0"
+        "fluid_dual_input_row assumes square machines; see rfc-fulgora-scrap Phase 0"
     );
     let msz = machine_size as i32;
     let pitch = msz;
@@ -2786,7 +2786,7 @@ pub fn fluid_dual_input_row(
         emit_shortfall_trace(recipe, false, near_rate, &near_plan, mx, machine_y, false, quality);
 
         // Machine — placed at the orientation that puts its fluid input ports
-        // on the north face the PTG tunnel delivers to (RFP Phase 0e-i): the
+        // on the north face the PTG tunnel delivers to (RFC Phase 0e-i): the
         // default for chemical-plant/AM (already north inputs), mirror=true for
         // a 5x5 cryogenic-plant/foundry. Matches `fluid_input_port_dx` above.
         let (machine_mirror, machine_dir) =
@@ -2986,7 +2986,7 @@ fn fluid_only_row_staggered_3output(
     debug_assert_eq!(
         crate::common::machine_dims(machine_entity),
         (machine_size, machine_size),
-        "fluid_only_row_staggered_3output assumes square machines; see rfp-fulgora-scrap Phase 0"
+        "fluid_only_row_staggered_3output assumes square machines; see rfc-fulgora-scrap Phase 0"
     );
 
     let msz = machine_size as i32;
@@ -3344,7 +3344,7 @@ fn fluid_only_row_staggered_3output(
 /// When a side has ≥2 distinct fluids, we fall back to per-port isolated
 /// pipes — a continuous row would merge them and violate F3 (fluid isolation).
 /// The proper multi-fluid pattern is the stacked-T design (see
-/// `docs/archive/rfp-multi-fluid-rows.md`); until that lands, these rows will not
+/// `docs/archive/rfc-multi-fluid-rows.md`); until that lands, these rows will not
 /// connect to the bus.
 ///
 /// Returns `(entities, row_height, fluid_input_port_pipes, fluid_output_port_pipes)`.
@@ -3362,7 +3362,7 @@ pub fn fluid_only_row(
     debug_assert_eq!(
         crate::common::machine_dims(machine_entity),
         (machine_size, machine_size),
-        "fluid_only_row assumes square machines; see rfp-fulgora-scrap Phase 0"
+        "fluid_only_row assumes square machines; see rfc-fulgora-scrap Phase 0"
     );
     // Is this row carrying a single fluid on each side? The continuous-pipe
     // simplification only applies when a side has 0 or 1 fluid.
@@ -3406,7 +3406,7 @@ pub fn fluid_only_row(
     // The pole gap we reserve at `input_y` must land in the machine row's
     // `pole_candidate_ys` north band — the exact row `place_poles` seeds its
     // search from — so the reservation and the placer share one geometry and
-    // can never drift (RFP `docs/rfp-power-supply.md` Phase 1; the machine's
+    // can never drift (RFC `docs/rfc-power-supply.md` Phase 1; the machine's
     // top edge is `y_offset + 1`).
     debug_assert!(
         crate::common::pole_candidate_ys(y_offset + 1, msz).contains(&input_y),
@@ -3432,7 +3432,7 @@ pub fn fluid_only_row(
             // pipes so adjacent machines' strips connect on the surface.
             if let Some(&(_, item)) = fluid_inputs.first() {
                 let seg = Some(format!("row:{recipe}:belt-in:{item}"));
-                // RFP `docs/rfp-power-supply.md` Phase 1: reserve a pole gap in
+                // RFC `docs/rfc-power-supply.md` Phase 1: reserve a pole gap in
                 // the continuous input pipe row (a `pole_candidate_ys` band)
                 // whenever the machine footprint forces the covering pole INTO
                 // that band. A medium-electric-pole supplies its footprint ±3;
@@ -3553,7 +3553,7 @@ pub fn fluid_only_row(
 }
 
 /// Multi-fluid input row: machines that consume ≥2 distinct fluids on the
-/// same face. Uses the stacked-T pattern from `docs/archive/rfp-multi-fluid-rows.md`
+/// same face. Uses the stacked-T pattern from `docs/archive/rfc-multi-fluid-rows.md`
 /// with UG-pipe-UG isolation flanks.
 ///
 /// Currently handles **2 fluid inputs on a 3×3 chemical-plant** with no solid
@@ -3598,7 +3598,7 @@ pub fn fluid_only_row(
 /// Returns `(entities, row_height, fluid_input_port_pipes, fluid_output_port_pipes)`.
 /// 0 solid inputs by construction (`classify_row_kind`'s `FluidMultiInput`
 /// guard) — nothing to ladder on the input side. The solid output (when
-/// present) IS ladder-eligible (`docs/rfp-inserter-sizing.md` Phase 3, per
+/// present) IS ladder-eligible (`docs/rfc-inserter-sizing.md` Phase 3, per
 /// `phase_for`'s frozen mapping — not explicitly named in the phase
 /// prose, but the frozen mapping takes priority, same precedent as the
 /// Phase 2 far-ladder deviation). Unlike `single_input_row`'s output, this
@@ -3633,7 +3633,7 @@ pub fn fluid_multi_input_row(
     debug_assert_eq!(
         crate::common::machine_dims(machine_entity),
         (machine_size, machine_size),
-        "fluid_multi_input_row assumes square machines; see rfp-fulgora-scrap Phase 0"
+        "fluid_multi_input_row assumes square machines; see rfc-fulgora-scrap Phase 0"
     );
 
     let msz = machine_size as i32;
@@ -3922,7 +3922,7 @@ pub fn fluid_multi_input_row(
 /// production back into its own consumption, and the bus is tapped only
 /// for the net external demand.
 ///
-/// Two shapes are supported (`docs/rfp-solver-net-flow.md` Phase 2(c)):
+/// Two shapes are supported (`docs/rfc-solver-net-flow.md` Phase 2(c)):
 /// - **1-item** (bacteria cultivations): one self-loop item with net
 ///   production (`major_item`), plus an ordinary solid input
 ///   (nutrients-class, `near_item`) that is NOT self-referencing.
@@ -3990,12 +3990,12 @@ pub fn fluid_multi_input_row(
 /// element mirrors `fluid_input_row`'s convention (one `(item, x, y)` tap
 /// point per machine on the header row), empty when `fluid_input` is `None`.
 ///
-/// Ladder-eligible sides (`docs/rfp-inserter-sizing.md` Phase 3): only
+/// Ladder-eligible sides (`docs/rfc-inserter-sizing.md` Phase 3): only
 /// `near_item`'s own inserter and the output side(s) are check-visible
 /// (present in `spec.inputs`/`spec.outputs`) — major's INPUT demand
 /// (`major_consumed_rate`) and, in the has-minor shape, minor's INPUT
 /// demand both live in `spec.self_loop`, invisible to
-/// `check_inserter_throughput`'s required-rate math (the RFP's documented,
+/// `check_inserter_throughput`'s required-rate math (the RFC's documented,
 /// deliberately-unfixed known ceiling). Their inserters stay hardcoded.
 /// Near's reach varies by shape: `Reach::Near` (regular) in the no-fluid/
 /// no-minor shape, `Reach::Far` (LHI) in both the has-fluid and has-minor
@@ -4029,7 +4029,7 @@ pub fn self_loop_row(
     debug_assert_eq!(
         crate::common::machine_dims(machine_entity),
         (machine_size, machine_size),
-        "self_loop_row assumes square machines; see rfp-fulgora-scrap Phase 0"
+        "self_loop_row assumes square machines; see rfc-fulgora-scrap Phase 0"
     );
     let msz = machine_size as i32;
     let pitch = msz;
@@ -4942,7 +4942,7 @@ pub fn self_loop_row(
 }
 
 /// Voider row: a recycler bank that self-consumes a solid surplus stream
-/// (RFP Fulgora Phase 2, `docs/rfp-fulgora-scrap.md` D1). Inspired by
+/// (RFC Fulgora Phase 2, `docs/rfc-fulgora-scrap.md` D1). Inspired by
 /// `self_loop_row`'s vocabulary (loop corridor, recirculation, per-machine
 /// rate convention) but the plumbing inverts: recirculates the ENTIRE
 /// ejected stream (no export — there's no splitter at all), and is built
@@ -5022,7 +5022,7 @@ pub fn voider_row(
     debug_assert_eq!(
         crate::common::machine_dims("recycler"),
         (2, 4),
-        "voider_row is built around the recycler's real 2x4 footprint; see rfp-fulgora-scrap Phase 0"
+        "voider_row is built around the recycler's real 2x4 footprint; see rfc-fulgora-scrap Phase 0"
     );
     let count = machine_count.max(1) as i32;
     let near_total = (near_rate_per_machine * count as f64).max(1e-6);
@@ -5074,7 +5074,7 @@ pub fn voider_row(
     // `:voider:` — the closed recirculation loop (eject -> collect ->
     // descent -> far belt -> back into the machines). Tagged so
     // `check_belt_loops` can extend its `:selfloop:` exemption to cover
-    // this physically-legitimate cycle (RFP brief point 6).
+    // this physically-legitimate cycle (RFC brief point 6).
     let loop_seg = Some(format!("row:{recipe}:voider:{item}"));
 
     // ---- Recyclers ----
@@ -5270,8 +5270,8 @@ pub fn voider_row(
     (entities, row_height)
 }
 
-/// Scrap-recycling sushi-sorter row (RFP Fulgora Phase 3,
-/// `docs/rfp-fulgora-scrap.md` D3, architecture (a)).
+/// Scrap-recycling sushi-sorter row (RFC Fulgora Phase 3,
+/// `docs/rfc-fulgora-scrap.md` D3, architecture (a)).
 ///
 /// A bank of south-facing recyclers running `scrap-recycling` ejects its
 /// ~12 mixed products directly (mining-drill-style, `recycler_eject_tile`)
@@ -5325,7 +5325,7 @@ pub fn scrap_recycling_row(
         crate::common::machine_dims("recycler"),
         (2, 4),
         "scrap_recycling_row is built around the recycler's real 2x4 footprint; \
-         see rfp-fulgora-scrap Phase 0"
+         see rfc-fulgora-scrap Phase 0"
     );
 
     let count = machine_count.max(1) as i32;
@@ -5365,7 +5365,7 @@ pub fn scrap_recycling_row(
     // `:sushi:` — the mixed-item collection belt. Tagged so the validators
     // exempt sushi↔sushi adjacency from item-isolation and lane-walking,
     // and require every off-sushi transition to pass a filter inserter
-    // (RFP Fulgora Phase 3 KC5 containment).
+    // (RFC Fulgora Phase 3 KC5 containment).
     let sushi_seg = Some(format!("row:{recipe}:sushi:{input_item}"));
 
     let mut entities: Vec<PlacedEntity> = Vec::new();
@@ -5440,7 +5440,7 @@ pub fn scrap_recycling_row(
     // ---- Sort filter inserters + per-item fan-out output belts ----
     // Crossing-free staircase: westmost inserter turns east at the DEEPEST
     // y, eastmost at the shallowest, so no vertical drop crosses a
-    // horizontal run (see the RFP Phase 3 geometry note).
+    // horizontal run (see the RFC Phase 3 geometry note).
     let mut sorted_output_belts: Vec<(String, i32)> = Vec::new();
     for (j, (item, rate)) in sorted_items.iter().enumerate() {
         let jx = sort_cols[j];
@@ -5519,7 +5519,7 @@ mod tests {
 
     #[test]
     fn fluid_row_pole_gap_only_for_5x5() {
-        // RFP Phase 1: 5×5 fluid-only machines (oil-refinery, and a fluid-only
+        // RFC Phase 1: 5×5 fluid-only machines (oil-refinery, and a fluid-only
         // cryogenic-plant/foundry if one appears) force the pole into the pipe
         // strip → reserve the centre column. Smaller machines are covered from
         // the row above → no reservation.
@@ -5849,7 +5849,7 @@ mod tests {
         assert!(entities.iter().find(|e| e.x == 2 && e.y == 7).is_none());
     }
 
-    // ---- dual_input_row: ladder + reassignment (RFP Phase 2) ----
+    // ---- dual_input_row: ladder + reassignment (RFC Phase 2) ----
 
     #[test]
     fn dual_input_row_near_upgrades_to_stack_far_stays_single_lhi() {
@@ -6161,7 +6161,7 @@ mod tests {
         }
     }
 
-    // ---- triple_input_row: ladder (RFP Phase 2) ----
+    // ---- triple_input_row: ladder (RFC Phase 2) ----
 
     #[test]
     fn triple_input_row_near_upgrades_output_upgrades_input3_stays_single_lhi() {
@@ -6418,7 +6418,7 @@ mod tests {
         }
     }
 
-    // ---- quad_input_row: ladder (RFP Phase 2) ----
+    // ---- quad_input_row: ladder (RFC Phase 2) ----
 
     #[test]
     fn quad_input_row_input3_upgrades_both_slots_output_upgrades_input4_stays_single_lhi() {
@@ -7947,7 +7947,7 @@ mod tests {
         }
     }
 
-    // ---- scrap_recycling_row (RFP Fulgora Phase 3 sushi sorter) ----
+    // ---- scrap_recycling_row (RFC Fulgora Phase 3 sushi sorter) ----
 
     #[test]
     fn scrap_recycling_row_places_sorter_mechanism() {

@@ -9,7 +9,7 @@ Full reference table. The most-visited files are summarised in `CLAUDE.md`.
 | `models.rs` | Shared data models: `ItemFlow`, `MachineSpec`, `SolverResult`, `PlacedEntity`, `LayoutResult`, `EntityDirection` |
 | `common.rs` | Shared constants and helpers (belt tiers, entity sizes, direction utils, UG reach, `supply_area_distance`, `pole_candidate_ys`) |
 | `power_wires.rs` | THE single source of the pole-to-pole copper wire graph: `wire_reach` / `is_pole` / `pole_center`, `compute_pole_wires`, `count_disconnected_poles`. Consumed by blueprint export (`wires` array, connector 5), `validate::power` connectivity, `bus::layout::repair_pole_connectivity`, and the web power overlay |
-| `fluid_ports.rs` | Orientation-aware fluid-port geometry table (per-machine, direction + mirror); the shared source both `validate::fluids` and the bus fluid-row templates consume (RFP `docs/rfp-power-supply.md` Phase 0e-i) |
+| `fluid_ports.rs` | Orientation-aware fluid-port geometry table (per-machine, direction + mirror); the shared source both `validate::fluids` and the bus fluid-row templates consume (RFC `docs/rfc-power-supply.md` Phase 0e-i) |
 | `astar.rs` | `ghost_astar` — turn-penalty + per-axis cost A* used by the ghost router |
 | `solver.rs` | Recursive recipe resolution producing `SolverResult` |
 | `recipe_db.rs` | Recipe DB — loads `crates/core/data/recipes.json` via `include_str!` |

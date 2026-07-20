@@ -184,7 +184,7 @@ fn synth_n_to_m(n: u32, m: u32) -> BalancerGraph {
 /// Errors with [`SynthError::BenesNonPowerOfTwo`] if `n` is not a
 /// power of two; for `n = 1` returns the trivial passthrough.
 ///
-/// **No production caller yet.** Phase-4 prep for the placement RFP —
+/// **No production caller yet.** Phase-4 prep for the placement RFC —
 /// `(n, n)` Beneš shapes are deferred until UG-belt support lands in
 /// the placer. The fluid-balance correctness is covered by the unit
 /// tests below, so the construction can be validated independently.

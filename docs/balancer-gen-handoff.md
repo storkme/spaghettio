@@ -22,7 +22,7 @@ Phase 4 fully shipped; post-bake quality work landed on branch tip:
 | 4.4 | **done — verified MX3** | (4, 9) Clos via composition: junction_height=9, 284 entities, recovered topology classifies as `Balanced` |
 | 5 — L=1 UG fix | **done** | `solve_pure_routing` UG arcs now start at L=2; 6 broken templates removed + re-baked via circuit encoder |
 | 6 — lane gate | **done** | `bake_missing_shapes` now gates on `underground-belt` `Severity::Error` and retries with higher jh (up to 3 attempts) |
-| 7 — smarter jh search | in progress (ug-plumber) | Two-budget climb in `compose_series`; RFP at `docs/rfp-smarter-jh-search.md` |
+| 7 — smarter jh search | in progress (ug-plumber) | Two-budget climb in `compose_series`; RFC at `docs/rfc-smarter-jh-search.md` |
 
 ### The verified (4, 9) compose result
 
@@ -124,7 +124,7 @@ or `source ~/.bashrc`.
 
 ## Reading list (in order)
 
-1. `docs/rfp-balancer-place-routing.md` — full design history and
+1. `docs/rfc-balancer-place-routing.md` — full design history and
    decision log. The phase 3.3 stress test entry is the most recent
    substantive entry; phase 4 isn't yet documented there.
 2. `crates/balancer-gen/src/main.rs` — Rust spike runner. Skim
@@ -180,7 +180,7 @@ c0d56c5 phase 3.3 stress result — Mode D doesn't scale to (4, 9) Clos
    reproduces with our changes stashed. Not from this branch. User
    has acknowledged and is aware.
 
-2. **MX2b on (1, 3) with direction freedom**: documented in the RFP.
+2. **MX2b on (1, 3) with direction freedom**: documented in the RFC.
    User said pure-balancers (MX3) are a separate workstream so MX2b
    is acceptable. No action needed.
 
@@ -188,7 +188,7 @@ c0d56c5 phase 3.3 stress result — Mode D doesn't scale to (4, 9) Clos
    with `composed_width = max(top.width, bot.width)`. If `top` and
    `bot` have different widths, the narrower one trails empty cells.
    For (4, 9) Clos, both stages are 12 wide so no padding needed.
-   For other compositions, may need to revisit (RFP option: pad,
+   For other compositions, may need to revisit (RFC option: pad,
    re-layout, or shift).
 
 4. **Junction height search is linear from jh=1**:
@@ -214,7 +214,7 @@ crates/core/src/bus/
 ├── balancer_topology.rs  ← parallel, series_permuted, clos_interleave
 
 docs/
-├── rfp-balancer-place-routing.md  ← full design + decision log
+├── rfc-balancer-place-routing.md  ← full design + decision log
 ├── balancer-gen-handoff.md        ← this file
 ```
 

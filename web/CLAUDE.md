@@ -18,7 +18,7 @@ views and be **completely absent from the live generator**. When you
 add an entity-level visual, grep for how the same concept is handled in
 both paths (e.g. carries icons: `iconParticle` in `particleLayout.ts`
 vs the icon drawing in `entities.ts`). Design + perf background:
-`docs/rfp-renderer-particle-container.md`,
+`docs/rfc-renderer-particle-container.md`,
 `docs/web-render-perf-investigation.md`.
 
 ## Particle-path atlas textures are SHARED per entity type

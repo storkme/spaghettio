@@ -1,6 +1,6 @@
 """Validate journal entries and atomically merge them into the library.
 
-Phase 2 of docs/rfp-balancer-runner.md. The runner
+Phase 2 of docs/rfc-balancer-runner.md. The runner
 (``scripts/balancer_runner.py``) writes solves to
 ``scripts/balancer_journal.jsonl`` but never touches
 ``src/bus/balancer_library.py``. This script is the only thing that does.
