@@ -20,9 +20,10 @@ infrastructure RFC-046 deferred.
 ## Motivation
 
 RFC-046's Phase 2 differentials falsified full-belt ×S on tap-delivered
-flow: sideloads fill one lane (B8), inserter drops fill the near lane
-(I5), so a trunk or row-input belt fed that way carries everything on
-one physical lane. The S=1 fan-in wall had been *accidentally
+flow: sideloads fill one lane (B8), inserter drops fill one lane (the
+**far** lane — the recon corrected the mechanics doc's I5 here; the
+code was always right), so a trunk or row-input belt fed that way
+carries everything on one physical lane. The S=1 fan-in wall had been *accidentally
 shielding* the gap by refusing such configs before they laid out;
 scaling it ×S exposed walker-caught single-lane overloads (18/s on a
 15/s stacked yellow lane — probe-verified, see RFC-046's decision
@@ -54,27 +55,111 @@ Concrete failing cases today:
   which physically multiplies belt capacity ×4, currently cannot lift
   it at all.
 
-## Ground truth (delivery geometry today)
+## Ground truth (delivery geometry today — recon 2026-07-21, cited)
 
-*To be filled from the tap-geometry recon before the spec review:
-which tap forms exist (single-sideload, dual-sideload, splitter-tap,
-priority-splitter merge-tap), which fill both lanes, what the
-`full_belt_cap` assumption in the fan-in wall actually corresponds to
-geometrically, how row outputs join trunks, and what the walker's
-lane-attribution model already knows. Every Design decision below must
-cite this section.*
+The recon **inverted the draft's premise**: consumption-side taps were
+never the bottleneck; the production-side feed is.
+
+1. **Trunk→row tap-offs are real splitters, always.**
+   `find_tap_off_ys` (lane_planner.rs ~1174) plans exactly one tap y
+   per consumer row; ghost_router Step 2 (~390–453) stamps a genuine
+   2-tile splitter per non-last tap (50/50 for ordinary lanes;
+   PRIORITY splitter with `loop_priority_rate` = per-tap consumer
+   demand for merge-tap lanes), and the last tap is a lane-preserving
+   corner. No raw-sideload or dual-sideload (B10) tap form exists
+   anywhere — matching mechanics rule S9. **Taps are full-belt
+   capable today.**
+2. **Producer→trunk feeds are raw sideloads** (ghost_router
+   ~1549–1592: one `ret:` West-exiting belt per producer row,
+   perpendicular B8 merge into the South trunk = ONE lane) — *unless*
+   a family balancer exists. The balancer gate (lane_planner
+   ~1058–1079) fires only for `n_producers ≥ 1 && n_lanes_with_
+   consumers ≥ 2` and stamps a real SAT-generated splitter cascade
+   whose contract genuinely is full-belt-cap per trunk; the merge-tap
+   fallback (K shared trunks, n→1 merge trees + priority taps) is
+   equally full-belt-grounded.
+3. **Row-internal output balancing fills both lanes but it doesn't
+   survive the feed.** Every `lane_split` row stamps the midpoint
+   `sideload_bridge` (templates.rs ~273–320) filling both lanes of
+   the row's own output belt — then geometry class 2 collapses it
+   back to one lane at the trunk sideload (when no balancer).
+4. **The fan-in wall's `full_belt_cap` is grounded, not aspirational,
+   for ≥2-consumer-trunk shapes** (the balancer gate covers exactly
+   those). The unsound residue is the **single-consumer-trunk,
+   no-balancer shape**: clamping to `consumer_trunk_count == 1` fails
+   the balancer gate (`n_lanes_with_consumers >= 2`), the trunk falls
+   through to the sideload feed, yet the wall still credits
+   `1 × full_belt_cap`. This is precisely the shape of RFC-046's
+   observed 18/s-on-one-lane overload (EC@6 legendary yellow: one
+   cable trunk, sideload-fed). Candidate gap at S=1 too — not yet
+   confirmed live in the corpus (partition/pad logic may shield it).
+5. **The engine's own sizing convention already assumes single-lane
+   delivery as baseline**: trunk belts sized at `lane.rate * 2.0`
+   (ghost_router ~1502), final merge at `total_rate * 2.0`
+   (output_merger ~56) — full-belt-cap is opt-in where balancer/
+   merge-tap machinery explicitly backs it. Independent corroboration
+   of 1–4.
+6. **Two model bugs (verified against the game, three independent
+   sources), MUST fix before trusting verification here:**
+   - **I5 is backwards in the mechanics doc**: inserters drop on the
+     **far** lane, not the near lane. The code
+     (`common::inserter_target_lane`) is correct and says so; the doc
+     (and comments citing I5 for near-lane reasoning, e.g.
+     templates.rs ~276, and RFC-046's prose) have the wrong mental
+     model. Single-lane *conclusions* survive (it's still one lane —
+     the other one); the doc and citations need the sweep.
+   - **The walker's convergence-phase splitter model invents lane
+     mixing**: `splitter_output_rates_mixed` (belt_flow.rs ~1880,
+     used in the demand-pull convergence that drives final lane
+     rates) pools both input lanes and re-splits evenly — real
+     splitters never mix lanes (S4), and the codebase's *other*
+     splitter function models that correctly. Net effect: every
+     splitter acts as a free lane-rebalancer in validation, masking
+     genuine lane starvation downstream — exactly the defect class
+     this RFC verifies against.
+7. **Multi-stage balancer**: genuinely absent (balancer_library is
+   single-stage; `ModuleSizeSplit` routes *around* the wall by
+   re-partitioning, and its own RFC records K-DS1-2 unsatisfied). The
+   fan-in refusal is a real capacity wall, correctly placed.
 
 ## Design
 
-*Pending ground truth. Expected shape (to be confirmed/refuted by the
-recon): a per-delivery-edge lane-capacity model — each tap/feed edge
-declares how many lanes it can fill (1 or 2) from its geometry class;
-the fan-in wall and K-trunk retirement sum per-edge deliverable rate
-(`lanes × lane_capacity_stacked(tier, effective_S)`) instead of
-assuming `full_belt_cap` per trunk; planning prefers (or synthesizes)
-two-lane tap forms where a one-lane form would bind. Per-lane
-stackedness (RFC-046 Phase 3 rider) reuses the same edge model with
-per-item effective S.*
+Three legs, each grounded above:
+
+**Leg A — honest walker first (fix 6b, then trust it).** Replace the
+convergence-phase splitter pooling with the lane-preserving model the
+walker already has (`splitter_output_rates`), reconciling the two
+functions. This is a validator-semantics change: existing fixtures may
+gain honest lane-starvation warnings that pooling was masking — each
+flip is investigated (real starvation → layout issue filed/fixed;
+walker artifact → model corrected), never blanket-re-blessed. The I5
+doc fix + citation sweep (6a) rides along. Only after Leg A is the
+validator a trustworthy oracle for Legs B/C.
+
+**Leg B — ground the wall where it's false (fix 4).** The
+single-consumer-trunk no-balancer shape either (i) gets routed through
+the existing merge-tap machinery (n→1 merge tree + priority tap — the
+full-belt-grounded form that already exists, degenerate K=1 case), or
+(ii) keeps the sideload feed and the wall's credit drops to per-lane
+cap for that shape. Choose (i) when the wall would otherwise refuse or
+under-deliver, (ii) when per-lane suffices — decided by the planner
+from rates, never silently. This makes `full_belt_cap` universally
+grounded at S=1.
+
+**Leg C — the stacked lift.** With every wall credit
+geometry-grounded, scaling becomes sound: balancer/merge-tap-backed
+trunks carry `full_belt_cap × S` (stacks flow through splitters, BS4;
+inputs are stack-loaded row outputs under RFC-046's forcing), and
+sideload-fed shapes carry `lane_capacity × S`. The wall and K-trunk
+retirement sum per-shape deliverable rate instead of assuming one
+formula. RFC-046's parity fixture flips to the differential success it
+was written for; per-lane stackedness (the deferred rider) falls out
+of the same per-shape accounting using `StackingCtx::for_item`.
+
+Explicitly out of scope: a true multi-stage balancer generator (7) —
+Leg B reuses merge-tap trees instead; if a shape needs genuine
+multi-stage balancing beyond that, the refusal stays honest and the
+generator remains future work.
 
 ## Kill criteria
 
@@ -122,20 +207,42 @@ per-item effective S.*
 
 ## Phasing
 
-- **Phase 0 — ground truth + edge model spec.** Fold the recon into
-  the Ground-truth section; classify every existing delivery form by
-  lanes-filled; adversarial spec review of the completed Design.
-- **Phase 1 — edge model, planner-side.** Per-edge deliverable-rate
-  accounting behind the existing thresholds; identity gate (kill 1).
-- **Phase 2 — two-lane tap forms + the lift.** Prefer/synthesize
-  two-lane forms where one-lane binds; scale the wall by summed edge
-  capacity; fixture flips (kill 5).
-- **Phase 3 — riders.** Overshoot root-cause + fixtures (kill 4);
-  junction characterization (kill 3); per-lane stackedness on the edge
-  model.
+- **Phase 0 — model honesty (Leg A).** I5 doc correction (near→far) +
+  sweep of every I5-citing comment/doc; walker convergence-phase
+  splitter fix (lane-preserving model replaces pooling). Every fixture
+  the walker fix flips is investigated individually — real starvation
+  becomes a filed/fixed layout issue, walker artifacts become model
+  corrections; blanket re-blessing is forbidden. Only after Phase 0 is
+  validator output a trustworthy oracle for the rest.
+- **Phase 1 — ground the wall at S=1 (Leg B).** Single-consumer-trunk
+  no-balancer shapes routed through merge-tap (degenerate K=1) or
+  credited per-lane, planner-decided by rate; `full_belt_cap`
+  universally geometry-grounded; identity gates modulo Phase-0
+  documented flips (kill 1).
+- **Phase 2 — the stacked lift (Leg C).** Per-shape deliverable-rate
+  credits ×S; the RFC-046 parity fixture flips to differential
+  success; a ceiling fixture proves rate ceilings rise with S
+  (kill 5); per-lane stackedness rider on the same accounting.
+- **Phase 3 — bounded residuals.** Junction characterization
+  (kill 3); overshoot root-cause (kill 4 — first hypothesis to test:
+  whether the Phase-0 splitter fix already changes those lane rates).
 
 ## Decision log
 
+- **2026-07-21 — Recon folded; design set (three legs).** The recon
+  inverted the draft premise: taps are already splitter-based and
+  full-belt-capable; the raw-sideload producer→trunk feed is the
+  single-lane ceiling, and the fan-in wall's full-belt credit is
+  already grounded for ≥2-consumer-trunk shapes (balancer gate) —
+  the unsound residue is the single-consumer-trunk no-balancer shape,
+  which matches RFC-046's observed overload exactly. Two verified
+  model bugs became Phase 0: the mechanics doc's I5 lane direction is
+  backwards (code correct), and the walker's convergence-phase
+  splitter model pools lanes (physically false, masks the exact
+  defect class this RFC verifies). Design: honest walker first, then
+  ground the wall at S=1 via existing merge-tap machinery (no new
+  balancer generator), then the ×S lift on per-shape credits.
+  Multi-stage balancer generation explicitly out of scope.
 - **2026-07-21 — RFC drafted (skeleton).** Number claimed as RFC-047
   per registry. Ground-truth and Design sections deliberately held
   open for the tap-geometry recon — writing geometry claims from
