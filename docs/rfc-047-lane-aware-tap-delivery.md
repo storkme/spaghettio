@@ -146,6 +146,22 @@ under-deliver, (ii) when per-lane suffices — decided by the planner
 from rates, never silently. This makes `full_belt_cap` universally
 grounded at S=1.
 
+*Strategy scoping (spec-review finding)*: merge-tap is **Pooled-only**
+today (`MergeTapCandidate` refuses other strategies; the flag "fights
+the partitioner's module IDs"). Phase 1 therefore applies option (i)
+under Pooled only; under `PartitionedDecomposed` the shape gets option
+(ii) unless a Phase-1 census shows the single-trunk shape cannot arise
+there. Called out explicitly because the RFC's own proof fixtures are
+Pooled — the asymmetry would otherwise stay invisible until a
+Partitioned fixture regressed.
+
+*External-input lanes* (`n_producers == 0`) are **outside Leg B**: no
+producer rows exist to merge-tree, and their flow enters at the trunk
+head as a boundary condition rather than via a B8 feed (the
+`LaneConsolidated` mechanism, not this RFC's machinery). Phase 1
+verifies that moot-ness with a one-line census; if falsified, they get
+option (ii) per-lane credit — never option (i).
+
 **Leg C — the stacked lift.** With every wall credit
 geometry-grounded, scaling becomes sound: balancer/merge-tap-backed
 trunks carry `full_belt_cap × S` (stacks flow through splitters, BS4;
@@ -154,7 +170,23 @@ sideload-fed shapes carry `lane_capacity × S`. The wall and K-trunk
 retirement sum per-shape deliverable rate instead of assuming one
 formula. RFC-046's parity fixture flips to the differential success it
 was written for; per-lane stackedness (the deferred rider) falls out
-of the same per-shape accounting using `StackingCtx::for_item`.
+of the same per-shape accounting using `StackingCtx::for_item` (the
+per-ITEM exemption axis composes multiplicatively with the per-SHAPE
+lane axis: deliverable = lanes(shape) × lane_capacity(tier) ×
+for_item(item) — an exempt item stays ×1 regardless of shape).
+
+*Plan-time ordering (spec-review finding)*: the wall check currently
+runs **before** the balancer/merge-tap stamp decision resolves
+(`n_lanes_with_consumers` is computed downstream of the wall's own
+trunk-count clamp). Phase 2 restructures this as two passes: first
+classify the candidate trunk's machinery (balancer / merge-tap /
+sideload) as a **pure function** of the same inputs the stamp decision
+reads (producer count, consumer slots, rates); then evaluate the wall
+against that class's deliverable rate. If classification cannot be
+made a pure pre-stamp function — if a genuine fixed point emerges —
+stop and redesign the ordering; do not iterate to convergence inside
+the planner (the merge-tap RFC's shape/family-ordering history is the
+cautionary precedent).
 
 Explicitly out of scope: a true multi-stage balancer generator (7) —
 Leg B reuses merge-tap trees instead; if a shape needs genuine
@@ -194,6 +226,22 @@ generator remains future work.
    S=2) with the same per-tile physical audit discipline as RFC-046's
    headline — and at least one fixture where the *rate ceiling*
    (not just belt tier) demonstrably rises with S.
+6. **Phase-0 blast-radius bound** (spec-review addition; precedent:
+   the merge-tap RFC's census-first Phase 0). Before committing the
+   walker splitter fix, land it uncommitted and census the flips: one
+   full suite + STRESSGOLD check, counting flipped fixtures and golden
+   category-count changes (the stress goldens record warning counts,
+   so re-blesses are expected — the question is how many and why). If
+   **more than ~10** fixtures/goldens flip, or any flip requires
+   touching layout-generation code (rather than accepting new honest
+   warnings / filing layout issues) in **more than 2** places, this is
+   not a Phase-0-sized fix — stop: narrow the fix to the trunks Legs
+   B/C actually credit, or split the walker fix into its own RFC.
+   Note the mitigating structural fact (ground truth 5): sideload-fed
+   trunks were always tier-sized for single-lane delivery, so new
+   over-cap findings should concentrate on balancer-backed trunks
+   receiving contamination — if they appear elsewhere en masse, the
+   model of the fix is wrong, which is exactly what the bound catches.
 
 ## Verification plan
 
@@ -208,8 +256,11 @@ generator remains future work.
 ## Phasing
 
 - **Phase 0 — model honesty (Leg A).** I5 doc correction (near→far) +
-  sweep of every I5-citing comment/doc; walker convergence-phase
-  splitter fix (lane-preserving model replaces pooling). Every fixture
+  sweep of **every comment/doc asserting the old near-lane or
+  lane-mixing model**, not just literal I5 citations (the spec review
+  found belt_flow.rs ~2916 asserting lane-mixing as fact with no I5
+  cite); walker convergence-phase splitter fix (lane-preserving model
+  replaces pooling), gated by the kill-6 blast-radius census. Every fixture
   the walker fix flips is investigated individually — real starvation
   becomes a filed/fixed layout issue, walker artifacts become model
   corrections; blanket re-blessing is forbidden. Only after Phase 0 is
@@ -229,6 +280,30 @@ generator remains future work.
 
 ## Decision log
 
+- **2026-07-21 — Adversarial spec review: APPROVE-WITH-CHANGES; v2
+  folds all four required changes.** Every ground-truth citation
+  survived independent code-level verification, and both model-bug
+  claims were re-confirmed (I5 direction independently game-verified
+  a second time). The four folded changes: (1) kill 6 — a Phase-0
+  blast-radius bound with explicit flip-count/LOC circuit breakers
+  (the review's top finding: the walker fix is the highest-blast-
+  radius change here and had no census-first discipline, unlike the
+  merge-tap RFC precedent; STRESSGOLD goldens record warning counts,
+  so re-blesses are structurally expected); (2) Leg B strategy
+  scoping — merge-tap is Pooled-only, PartitionedDecomposed gets
+  per-lane credit pending a census, and external-input lanes are
+  explicitly out of Leg B (no producers to merge-tree; boundary-
+  condition delivery via LaneConsolidated); (3) Leg C — the plan-time
+  circularity (wall runs before the stamp decision) resolved as a
+  two-pass pure-function classification with a stop-and-redesign
+  trigger if a real fixed point emerges, plus kill-2 sub-item: tiles
+  Legs B/C introduce must carry `carries` attribution so the walker
+  never falls back to layout-wide stacking on them (contamination via
+  routing bugs is a proven failure class here — the foreign-trunk
+  hijack saga); (4) the Phase-0 sweep broadened beyond literal I5
+  citations to any lane-mixing assertion (belt_flow ~2916 found by
+  the review with no I5 cite). Also noted: exemption×shape axes
+  compose multiplicatively (one added sentence in Leg C).
 - **2026-07-21 — Recon folded; design set (three legs).** The recon
   inverted the draft premise: taps are already splitter-based and
   full-belt-capable; the raw-sideload producer→trunk feed is the
