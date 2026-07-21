@@ -7519,18 +7519,31 @@ fn stacking_ec_60s_red_one_belt_headline() {
     );
 }
 
-/// #312's exact repro config (see `quality_differential_ec_normal_vs_legendary`
-/// doc comment): EC@6/s legendary on yellow belts refuses at S=1 — the
-/// consumer-clamped fan-in wall. RFC-046 Phase 2 DELIBERATELY does not
-/// lift the wall: full-belt delivery thresholds stay unscaled because
-/// tap/sideload delivery fills one lane (B8/I5), so scaling them ×S
-/// produced single-lane overloads (decision log, 2026-07-21). This pins
-/// the conservative parity: S=2 refuses exactly like S=1. When Phase 3
-/// makes tap delivery lane-aware (with #312), flip this fixture to the
-/// differential success it was originally written as.
+/// RFC-047 Leg B/C lift differential (#312's exact repro config; see
+/// `quality_differential_ec_normal_vs_legendary`): EC@6/s legendary on
+/// yellow belts. copper-cable is 25/s (2 legendary AM3 machines @12.5/s)
+/// into a SINGLE EC consumer trunk — the consumer-clamped fan-in wall.
+///
+/// - **S=1 REFUSES**: 25/s > one full yellow belt (2 × 7.5 = 15/s). The
+///   wall holds honestly (no belt tier lifts it; only stacking can).
+/// - **S=2 LAYS OUT CLEAN**: with the 047-1b stacking-aware row-split
+///   cap the 2 cable machines collapse into ONE lane-split row (25 ≤ 30
+///   = stacked-yellow full belt), whose both-lane output CORNER-FEEDS
+///   the single trunk (trunk head == producer out_y, nothing north = a
+///   B11 corner, not a B8 sideload). Both trunk lanes carry ~12.5 each
+///   (consumer demand-pull ~9.4/lane), so 25/s fits `lane_cap × 2 = 30`
+///   at S=2 — the wall re-scale (047-1c) credits it soundly and the
+///   honest walker (post-Phase-0) sees zero single-lane overload.
+///
+/// This is the RFC-046 parity fixture flipped to the differential
+/// success it was originally written as (kill 5). Same per-tile physical
+/// audit discipline as `stacking_ec_60s_red_one_belt_headline`.
 #[test]
-fn stacking_fanin_wall_conservative_parity_ec6_yellow_legendary() {
-    use spaghettio_core::common::QualityTier;
+fn stacking_fanin_wall_lift_ec6_yellow_legendary() {
+    use spaghettio_core::common::{
+        belt_throughput_stacked, is_splitter, is_surface_belt, is_ug_belt,
+        splitter_to_surface_tier, ug_to_surface_tier, QualityTier,
+    };
     use spaghettio_core::recipe_db::MachinePalette;
 
     let inputs: FxHashSet<String> =
@@ -7558,14 +7571,53 @@ fn stacking_fanin_wall_conservative_parity_ec6_yellow_legendary() {
         stacking,
     };
 
+    // S=1: the fan-in wall holds — 25/s cable > 15/s full yellow.
     let s1 = layout::build_bus_layout(&sr, opts_with(1));
-    let s2 = layout::build_bus_layout(&sr, opts_with(2));
-    assert!(s1.is_err(), "S=1 must hit #312's fan-in refusal");
     assert!(
-        s2.is_err(),
-        "S=2 must refuse identically until tap delivery is lane-aware \
-         (RFC-046 Phase 3); if this now succeeds, verify per-lane honesty \
-         and flip this fixture to the differential success"
+        s1.is_err(),
+        "S=1 must hit #312's fan-in refusal (25/s cable > 15/s full yellow)"
+    );
+
+    // S=2: same config lays out physically valid end to end.
+    let l2 = layout::build_bus_layout(&sr, opts_with(2))
+        .unwrap_or_else(|e| panic!("S=2 must lay out with the stacked lift, got Err: {e}"));
+    assert_eq!(l2.stacking, 2, "layout must record its stack size");
+    let issues = validate::validate(&l2, Some(&sr), LayoutStyle::Bus)
+        .unwrap_or_else(|e| panic!("S=2 validate: {e:?}"));
+    let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
+    assert!(errors.is_empty(), "expected 0 errors at S=2, got {errors:?}");
+
+    // Per-tile physical audit: every rate-stamped belt-surface tile must be
+    // within its belt's stacked capacity at S=2 (mirrors the #311 headline).
+    let audit = |l: &spaghettio_core::models::LayoutResult, s: u8| -> Vec<String> {
+        l.entities
+            .iter()
+            .filter_map(|e| {
+                let tier = if is_surface_belt(&e.name) {
+                    e.name.as_str()
+                } else if is_ug_belt(&e.name) {
+                    ug_to_surface_tier(&e.name)
+                } else if is_splitter(&e.name) {
+                    splitter_to_surface_tier(&e.name)
+                } else {
+                    return None;
+                };
+                let rate = e.rate?;
+                let cap = belt_throughput_stacked(tier, s);
+                (rate > cap + 0.01)
+                    .then(|| format!("{} at ({},{}) rate {rate} > cap {cap}", e.name, e.x, e.y))
+            })
+            .collect()
+    };
+    let over2 = audit(&l2, 2);
+    assert!(over2.is_empty(), "tiles above physical stacked capacity at S=2: {over2:?}");
+
+    // Teeth: some belt genuinely carries more than one unstacked yellow belt
+    // (25/s cable trunk / row output > 15/s), proving the lift is real — the
+    // config is only buildable because stacking doubled the per-belt ceiling.
+    assert!(
+        l2.entities.iter().any(|e| e.rate.is_some_and(|r| r > 15.0)),
+        "no belt exceeds unstacked full-belt capacity — vacuous lift"
     );
 }
 

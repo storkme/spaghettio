@@ -801,17 +801,24 @@ fn split_overflowing_lanes(
         // runs at full-belt capacity, which only works if a balancer
         // family is stamped; without one, multiple producers fan-in via
         // `ret:` sideloads and the trunk's per-lane cap still applies.
-        // DELIBERATELY UNSCALED by stacking (RFC-046 decision log,
-        // Phase 2): full-belt thresholds assume both lanes fill, which
-        // holds for splitter-balanced flow but NOT for tap/sideload
-        // delivery (B8/I5: one lane). Scaling this ×S collapsed trunk
-        // counts and concentrated stacked flow on single lanes (walker-
-        // caught overloads at S=2). Until tap delivery is lane-aware
-        // (Phase 3, with #312), trunk-count geometry at S>1 matches S=1;
-        // stacking still buys tier selection, merger capacity, and
-        // forced-stack output throughput. `lane_cap` (per-lane, ×S)
-        // above remains scaled — per-lane semantics are sound.
-        let full_belt_cap = max_lane_cap * 2.0;
+        //
+        // SCALED by stacking (`lane_cap` = `max_lane_cap × for_item`),
+        // RFC-047 Leg B/C. A full stacked belt carries `2 × lane_cap`,
+        // and every path crediting this cap is now geometry-grounded at
+        // ×S: a ≥2-consumer-trunk shape is balancer/merge-tap-backed
+        // (both lanes = full-belt ×S, BS4); a single-consumer trunk is
+        // either single-producer (corner-fed from a stacked lane-split
+        // row output — the 047-1b row-split cap keeps it ONE row, so the
+        // topmost `ret:` corner-feeds the head on both lanes) or, if
+        // genuinely multi-producer, caught by the ghost_router late
+        // sideload check (rate > per-lane×S ⇒ named refusal, 047-2). The
+        // post-Phase-0 honest walker adjudicates the result (kill 2). At
+        // S=1, `for_item()==1` so `lane_cap == max_lane_cap` — this term
+        // is bit-identical to the pre-RFC `max_lane_cap × 2`. (Supersedes
+        // the RFC-046 Phase-2 freeze: full-belt ×S was frozen because
+        // tap/sideload delivery filled one lane; Leg B removes that
+        // unsoundness at the source, so the freeze lifts.)
+        let full_belt_cap = lane_cap * 2.0;
         let clamp_to_consumers =
             !is_external_input && !is_collector && n_splits > consumer_trunk_count;
 

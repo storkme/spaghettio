@@ -294,6 +294,39 @@ generator remains future work.
 
 ## Decision log
 
+- **2026-07-22 — Leg C step-3 (wall ×S re-scale) landed; parity fixture
+  flipped to the lift differential (kill 5 met).** Changed the fan-in
+  wall's `full_belt_cap` from `max_lane_cap × 2` to `lane_cap × 2`
+  (`lane_cap = max_lane_cap × for_item(item)`), so a full stacked belt's
+  `2 × lane_cap` credit is available where the geometry grounds it. Every
+  crediting path is now geometry-grounded at ×S (steps 1b/2 established
+  this); the post-Phase-0 honest walker adjudicates (kill 2). S=1
+  bit-identical (`for_item()==1` ⇒ `lane_cap == max_lane_cap`).
+  - **Parity fixture flipped**:
+    `stacking_fanin_wall_conservative_parity_ec6_yellow_legendary` →
+    `stacking_fanin_wall_lift_ec6_yellow_legendary`. S=1 still REFUSES
+    (25/s cable > 15/s full yellow — the wall holds honestly). S=2 now
+    LAYS OUT with **0 validation errors**, passes the per-tile stacked-
+    capacity audit (every rate-stamped belt/UG/splitter ≤
+    `belt_throughput_stacked(tier, 2) + 0.01`, mirroring
+    `stacking_ec_60s_red_one_belt_headline`), and the teeth assertion
+    (a 25/s belt tile > 15/s unstacked full yellow — the lift is real).
+  - **Walker-verified corner-feed (kill 2).** Probe (`probe_047`) on the
+    S=2 layout: the copper-cable is ONE lane-split producer row (2
+    legendary AM3 machines) whose both-lane output corner-feeds the
+    single trunk at its head; `compute_lane_rates` on the trunk column
+    (x=3, y=7..11) reports **left=9.00, right=9.00 on every tile** — both
+    lanes evenly loaded, well under the 15/s stacked-yellow per-lane cap.
+    Contrast the pre-047 experiment (2 fragmented producers): 18/s on ONE
+    lane. The credit is re-derivable by the walker, exactly as kill 2
+    requires — no #311-style unwitnessed credit.
+  - Gates: full suite green (e2e 58 / unit 773, one clean run),
+    STRESSGOLD `check` 9/9, clippy `-D warnings` clean. Landed as
+    `feat(047-1c)`. Ceiling fixture (a rate that refuses at S=1 and lays
+    out at S=2) is satisfied by this same fixture: it refuses at S=1 and
+    lifts at S=2. Junction/overshoot residuals (kills 3–4, Phase 3)
+    remain out of this leg.
+
 - **2026-07-22 — Leg B step-2 (late sideload check) landed; the Phase-1
   census's "no such shape live at S=1" claim ALSO falsified — the check
   exposes a real pre-existing S=1 overload.** Added the ghost_router
