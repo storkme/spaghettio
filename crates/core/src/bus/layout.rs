@@ -157,6 +157,17 @@ pub fn build_bus_layout(
     solver_result: &SolverResult,
     opts: LayoutOptions,
 ) -> Result<LayoutResult, String> {
+    // RFC-046: belts cannot stack without stack inserters (BS2), so a
+    // stacked layout under a lower inserter cap is an incoherent config —
+    // refuse by name, never degrade silently (the recorded
+    // `LayoutResult.stacking` and the placed hardware must agree).
+    if opts.stacking > 1 && opts.max_inserter_tier != InserterTier::Stack {
+        return Err(format!(
+            "belt stacking ×{} requires max_inserter_tier = stack \
+             (only stack inserters create belt stacks); got {:?}",
+            opts.stacking, opts.max_inserter_tier
+        ));
+    }
     crate::bus::decomposition_search::select_best_decomposition(solver_result, opts)
 }
 

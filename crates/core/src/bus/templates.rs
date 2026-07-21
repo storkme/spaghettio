@@ -10,7 +10,8 @@
 //! Port of `src/bus/templates.py`.
 
 use crate::bus::inserter_ladder::{
-    capped_limit, contest_favors_far, size_side, InserterTier, Reach, SidePlan,
+    capped_limit, contest_favors_far, size_belt_drop_side, size_side, InserterTier, Reach,
+    SidePlan,
 };
 use crate::bus::stacking_ctx::StackingCtx;
 use crate::models::{EntityDirection, PlacedEntity};
@@ -539,6 +540,7 @@ pub fn single_input_row(
     secondary_output_rate: Option<f64>,
     max_inserter_tier: InserterTier,
     quality: QualityTier,
+    stacking: u8,
 ) -> (Vec<PlacedEntity>, i32, Vec<(String, i32, i32)>) {
     debug_assert_eq!(
         crate::common::machine_dims(machine_entity),
@@ -709,7 +711,7 @@ pub fn single_input_row(
             out_occupied.push(2);
         }
         let out_extra_dx = free_extra_dx(out_stop, &out_occupied);
-        let output_plan = size_side(output_rate, Reach::Near, out_extra_dx.len(), max_inserter_tier, quality);
+        let output_plan = size_belt_drop_side(output_rate, Reach::Near, out_extra_dx.len(), max_inserter_tier, quality, stacking);
         stamp_side_inserters(
             &mut entities,
             &output_plan,
@@ -755,6 +757,11 @@ pub fn single_input_row(
         // exceeds long-handed's reach-2 ceiling.
         if let Some((sec_item, sec_belt)) = secondary_output {
             let sec_rate = secondary_output_rate.unwrap_or(0.0);
+            // RFC-046: not `size_belt_drop_side` — secondary solid outputs
+            // are stacking-exempt by derivation (StackingCtx: solid index
+            // ≥1 ⇒ reach-2 long-handed, cannot stack), so forcing would be
+            // a no-op passthrough here anyway; keeping `size_side` states
+            // the invariant instead of hiding it.
             let sec_plan = size_side(sec_rate, Reach::Far, 0, max_inserter_tier, quality);
             debug_assert_eq!(sec_plan.count, 1, "secondary output has no extra-column budget");
             entities.push(PlacedEntity {
@@ -858,6 +865,7 @@ pub fn dual_input_row(
     output_rate: f64,
     max_inserter_tier: InserterTier,
     quality: QualityTier,
+    stacking: u8,
 ) -> (Vec<PlacedEntity>, i32, Vec<(String, i32, i32)>) {
     debug_assert_eq!(
         crate::common::machine_dims(machine_entity),
@@ -1068,7 +1076,7 @@ pub fn dual_input_row(
             }
         }
         let out_extra_dx = free_extra_dx(out_stop, &out_occupied);
-        let output_plan = size_side(output_rate, Reach::Near, out_extra_dx.len(), max_inserter_tier, quality);
+        let output_plan = size_belt_drop_side(output_rate, Reach::Near, out_extra_dx.len(), max_inserter_tier, quality, stacking);
         stamp_side_inserters(
             &mut entities,
             &output_plan,
@@ -1174,6 +1182,7 @@ pub fn dual_input_row_horizontal(
     output_rate: f64,
     max_inserter_tier: InserterTier,
     quality: QualityTier,
+    stacking: u8,
 ) -> (Vec<PlacedEntity>, i32) {
     debug_assert_eq!(
         crate::common::machine_dims(machine_entity),
@@ -1496,7 +1505,7 @@ pub fn dual_input_row_horizontal(
             }
         }
         let out_extra_dx = free_extra_dx(msz, &out_occupied);
-        let output_plan = size_side(output_rate, Reach::Near, out_extra_dx.len(), max_inserter_tier, quality);
+        let output_plan = size_belt_drop_side(output_rate, Reach::Near, out_extra_dx.len(), max_inserter_tier, quality, stacking);
         stamp_side_inserters(
             &mut entities,
             &output_plan,
@@ -1608,6 +1617,7 @@ pub fn triple_input_row(
     output_rate: f64,
     max_inserter_tier: InserterTier,
     quality: QualityTier,
+    stacking: u8,
 ) -> (Vec<PlacedEntity>, i32) {
     debug_assert_eq!(
         crate::common::machine_dims(machine_entity),
@@ -1855,7 +1865,7 @@ pub fn triple_input_row(
         emit_shortfall_trace(recipe, false, input3_rate, &input3_plan, mx, y_offset + 3, tile_exists && !input3_wins, quality);
 
         // Output — ladder-sized.
-        let output_plan = size_side(output_rate, Reach::Near, output_extra_dx.len(), max_inserter_tier, quality);
+        let output_plan = size_belt_drop_side(output_rate, Reach::Near, output_extra_dx.len(), max_inserter_tier, quality, stacking);
         stamp_side_inserters(
             &mut entities,
             &output_plan,
@@ -2020,6 +2030,7 @@ pub fn quad_input_row(
     output_rate: f64,
     max_inserter_tier: InserterTier,
     quality: QualityTier,
+    stacking: u8,
 ) -> (Vec<PlacedEntity>, i32) {
     use crate::bus::balancer::underground_for_belt;
     use crate::common::inserter_throughput;
@@ -2217,7 +2228,7 @@ pub fn quad_input_row(
         let input4_extra_dx: Vec<i32> = if input4_wins { vec![0] } else { vec![] };
 
         // Output — ladder-sized.
-        let output_plan = size_side(output_rate, Reach::Near, output_extra_dx.len(), max_inserter_tier, quality);
+        let output_plan = size_belt_drop_side(output_rate, Reach::Near, output_extra_dx.len(), max_inserter_tier, quality, stacking);
         stamp_side_inserters(
             &mut entities,
             &output_plan,
@@ -2337,6 +2348,7 @@ pub fn fluid_input_row(
     output_rate: f64,
     max_inserter_tier: InserterTier,
     quality: QualityTier,
+    stacking: u8,
 ) -> (Vec<PlacedEntity>, i32, Vec<(String, i32, i32)>) {
     debug_assert_eq!(
         crate::common::machine_dims(machine_entity),
@@ -2517,7 +2529,7 @@ pub fn fluid_input_row(
                 }
             }
             let out_extra_dx = free_extra_dx(out_stop, &out_occupied);
-            let output_plan = size_side(output_rate, Reach::Near, out_extra_dx.len(), max_inserter_tier, quality);
+            let output_plan = size_belt_drop_side(output_rate, Reach::Near, out_extra_dx.len(), max_inserter_tier, quality, stacking);
             stamp_side_inserters(
                 &mut entities,
                 &output_plan,
@@ -2625,6 +2637,7 @@ pub fn fluid_dual_input_row(
     output_rate: f64,
     max_inserter_tier: InserterTier,
     quality: QualityTier,
+    stacking: u8,
 ) -> (Vec<PlacedEntity>, i32, Vec<(String, i32, i32)>, Vec<(String, i32, i32)>) {
     debug_assert_eq!(
         crate::common::machine_dims(machine_entity),
@@ -2835,7 +2848,7 @@ pub fn fluid_dual_input_row(
                 }
             }
             let out_extra_dx = free_extra_dx(out_stop, &out_occupied);
-            let output_plan = size_side(output_rate, Reach::Near, out_extra_dx.len(), max_inserter_tier, quality);
+            let output_plan = size_belt_drop_side(output_rate, Reach::Near, out_extra_dx.len(), max_inserter_tier, quality, stacking);
             stamp_side_inserters(
                 &mut entities,
                 &output_plan,
@@ -3625,6 +3638,7 @@ pub fn fluid_multi_input_row(
     output_rate: f64,
     max_inserter_tier: InserterTier,
     quality: QualityTier,
+    stacking: u8,
 ) -> (Vec<PlacedEntity>, i32, Vec<(String, i32, i32)>, Vec<(String, i32, i32)>) {
     assert!(fluid_inputs.len() >= 2, "fluid_multi_input_row requires ≥2 fluid inputs");
     assert!(
@@ -3840,7 +3854,7 @@ pub fn fluid_multi_input_row(
                 }
             }
             let out_extra_dx = free_extra_dx(msz, &out_occupied);
-            let output_plan = size_side(output_rate, Reach::Near, out_extra_dx.len(), max_inserter_tier, quality);
+            let output_plan = size_belt_drop_side(output_rate, Reach::Near, out_extra_dx.len(), max_inserter_tier, quality, stacking);
             stamp_side_inserters(
                 &mut entities,
                 &output_plan,
@@ -4416,6 +4430,10 @@ pub fn self_loop_row(
     // No-minor shapes: major is uncontested (2 free columns, dx=0/dx=2).
     // Has-minor shape: major (baseline dx=1) and minor's export (baseline
     // dx=0) share the ONE remaining free tile (dx=2) — contested.
+    // RFC-046: deliberately `size_side`, not `size_belt_drop_side` — every
+    // self-loop output item is stacking-exempt by derivation (StackingCtx:
+    // the minor shares the major's lane family), so the whole family plans
+    // unstacked and forcing would be a guaranteed passthrough.
     let minor_produced_rate = minor.map(|(_, p)| p).unwrap_or(0.0);
     for &mx in &mxs {
         if has_minor {
@@ -5582,6 +5600,7 @@ mod tests {
             0.5, // output_rate
             None,
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
         assert_eq!(height, 7);
         assert_eq!(entities.len(), 9 + 7);
@@ -5608,6 +5627,7 @@ mod tests {
             0.5,
             None,
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
 
         // Input belts at y=0: x=0,1 (x=2 is orphan east-tail, trimmed).
@@ -5666,6 +5686,7 @@ mod tests {
             0.5,
             None,
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
         assert_entity(&entities, 6, 12, "assembling-machine-3");
     }
@@ -5691,6 +5712,7 @@ mod tests {
             0.5,
             None,
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
         // Output belts at y=6 should face EAST
         for dx in 0..3_i32 {
@@ -5722,6 +5744,7 @@ mod tests {
             0.5,
             None,
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
         assert_eq!(height, 7);
 
@@ -5778,6 +5801,7 @@ mod tests {
             0.5,
             None,
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
         let (entities_no_split, _, _) = single_input_row(
             "iron-gear-wheel",
@@ -5798,6 +5822,7 @@ mod tests {
             0.5,
             None,
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
         assert_eq!(entities_split.len(), entities_no_split.len());
     }
@@ -5824,6 +5849,7 @@ mod tests {
             0.5,
             0.5,
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
         assert_eq!(height, 8);
 
@@ -5897,6 +5923,7 @@ mod tests {
             3.0, // near_rate (iron-plate)
             0.5, // output_rate
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
         let near = assert_entity(&entities, 2, 2, "stack-inserter");
         assert_eq!(near.carries.as_deref(), Some("iron-plate"));
@@ -5933,6 +5960,7 @@ mod tests {
             0.5, // near_rate (iron-plate)
             0.5, // output_rate
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
         let far_lhis: Vec<_> = entities
             .iter()
@@ -5967,6 +5995,7 @@ mod tests {
             0.5,
             1.5, // output_rate: exceeds regular (0.84), within fast (2.31)
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
         let out = assert_entity(&entities, 1, 6, "fast-inserter");
         assert_eq!(out.carries.as_deref(), Some("electronic-circuit"));
@@ -5994,6 +6023,7 @@ mod tests {
             5.0,
             0.5,
             InserterTier::Regular, QualityTier::Normal,
+            1,
         );
         let near = assert_entity(&entities, 2, 2, "inserter");
         assert_eq!(near.carries.as_deref(), Some("iron-plate"));
@@ -6022,6 +6052,7 @@ mod tests {
             0.5,
             0.5,
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
 
         // Machines packed tight at x=0, 3, 6, 9
@@ -6072,6 +6103,7 @@ mod tests {
             0.5,
             0.5,
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
         // Belt 1 (y=0) — only x=10 survives; x=11 and x=12 are orphan tail.
         assert!(entities.iter().any(|e| e.x == 10 && e.y == 0 && e.carries.as_deref() == Some("copper-cable")));
@@ -6109,6 +6141,7 @@ mod tests {
             0.5,
             0.5,
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
         // Output belt at y=7, x=10,11,12 — all three preserved.
         for dx in 0..3_i32 {
@@ -6139,6 +6172,7 @@ mod tests {
             0.5,
             0.5,
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
         assert_eq!(height, 9);
 
@@ -6202,6 +6236,7 @@ mod tests {
             0.5, // input3_rate (iron-plate) -- wins the output contest but doesn't need the extra
             1.5, // output_rate -- exceeds regular, needs fast
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
         let near = assert_entity(&entities, 2, 2, "stack-inserter");
         assert_eq!(near.carries.as_deref(), Some("plastic-bar"));
@@ -6242,6 +6277,7 @@ mod tests {
             2.0, // input3_rate -- exceeds 1.2, needs 2 LHIs
             0.5, // output_rate
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
         let in3_lhis: Vec<_> = entities
             .iter()
@@ -6284,6 +6320,7 @@ mod tests {
             0.5,   // input3_rate (iron-plate)
             0.5,   // output_rate
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
         // Last-in-row machine at mx=3. Far belt (y=0) extends one tile from
         // its trimmed dx=0 baseline: x=3 AND x=4 present, x=5 still absent.
@@ -6335,6 +6372,7 @@ mod tests {
             0.5,
             0.5,
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
         // Last machine mx=3: far belt stays trimmed to dx=0 (x=3 only).
         assert!(entities.iter().any(|e| e.x == 3 && e.y == 0 && e.carries.as_deref() == Some("copper-cable")));
@@ -6366,6 +6404,7 @@ mod tests {
             0.5,
             0.5,
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
         assert_eq!(height, 10);
 
@@ -6460,6 +6499,7 @@ mod tests {
             0.5, // input4_rate -- wins the output contest but doesn't need the extra
             1.5, // output_rate -- exceeds regular, needs fast
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
         for &dx in &[0i32, 2] {
             let e = assert_entity(&entities, dx, 3, "fast-inserter");
@@ -6496,6 +6536,7 @@ mod tests {
             2.0, // input4_rate -- exceeds 1.2, needs 2 LHIs
             0.5, // output_rate
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
         let in4_lhis: Vec<_> = entities
             .iter()
@@ -6531,6 +6572,7 @@ mod tests {
             0.5,
             0.5,
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
 
         // m1: UG-IN @ (0,2), LHI-A @ (1,2), UG-OUT @ (2,2).
@@ -6569,6 +6611,7 @@ mod tests {
             0.5,
             0.5,
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
         assert_eq!(h, crate::bus::placer::RowKind::QuadInput.row_height());
     }
@@ -6601,6 +6644,7 @@ mod tests {
             15.0, // solid_rate
             0.5,  // output_rate
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
         // Machine 0 (mx=0, Interior): 2 stack inserters at dx=1 (baseline)
         // and dx=2 (extra).
@@ -6649,6 +6693,7 @@ mod tests {
             0.5,
             0.5,
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
         assert_eq!(height, 9); // msz + 6 = 3 + 6
 
@@ -6736,6 +6781,7 @@ mod tests {
             0.5,
             0.5,
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
         use crate::bus::placer::RowKind;
         assert_eq!(height, RowKind::FluidInput.row_height());
@@ -6934,6 +6980,7 @@ mod tests {
             0.5,
             0.5,
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
         // T-junction pipe at (10, 5) — trunk row
         assert_entity(&entities, 10, 5, "pipe");
@@ -6977,6 +7024,7 @@ mod tests {
             0.5,
             0.5,
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
         // Unified T-junction height: msz + 6 = 9.
         assert_eq!(height, 9);
@@ -7051,6 +7099,7 @@ mod tests {
             20.0, // near_rate -- would need 2 stacks if a budget existed (>12)
             0.5,
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
         // Far: long-handed, exactly 1 per machine (best-effort + shortfall,
         // never a second inserter).
@@ -7083,6 +7132,7 @@ mod tests {
             0.5,
             0.5,
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
         assert_eq!(height, 10);
         assert_eq!(fluid_in_ports, vec![("fluid".to_string(), 0, 0)]);
@@ -7151,6 +7201,7 @@ mod tests {
             0.5,
             0.5,
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
         assert_eq!(height, 10);
         assert_eq!(fluid_in_ports, vec![("water".to_string(), 0, 0)]);
@@ -7188,6 +7239,7 @@ mod tests {
             0.5,
             0.5,
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
         // long-handed inserter at (2, 4), regular at (0, 4)
         let lh = assert_entity(&entities, 2, 4, "long-handed-inserter");
@@ -7221,6 +7273,7 @@ mod tests {
             0.5,
             0.5,
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
         // Machine 0 (mx=10) keeps all 3 tiles on every belt row.
         for dx in 0..3_i32 {
@@ -7273,6 +7326,7 @@ mod tests {
             0.5,
             0.5,
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
         // Non-last machine (mx=10) keeps all tiles.
         for dx in 0..3_i32 {
@@ -7646,6 +7700,7 @@ mod tests {
             true,
             0.5,
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
 
         // Row layout for N=2, msz=3, fluid output, with always-gap=1:
@@ -7725,6 +7780,7 @@ mod tests {
             false, // westward output
             0.5,
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
 
         // Row height = 10 with always-gap=1 (one extra for inserter + belt
@@ -7765,6 +7821,7 @@ mod tests {
             false,
             15.0, // output_rate
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
         let stacks: Vec<_> = entities
             .iter()
@@ -7793,6 +7850,7 @@ mod tests {
             true,
             0.5,
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
 
         // With always-gap=1, water (fi=0, inner) trunk_y=2; its right flank
@@ -7837,6 +7895,7 @@ mod tests {
             true,
             0.5,
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
 
         // Baseline layout (ports 2 apart) — same row_height under always-gap=1.
@@ -7852,6 +7911,7 @@ mod tests {
             true,
             0.5,
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
         assert_eq!(
             row_height_adj, row_height_base,
@@ -7912,6 +7972,7 @@ mod tests {
             true,
             0.5,
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
 
         // Second machine at mx=3. Its T-drop pipes should be at (3, 2) water (was y=1 pre-gap)
@@ -7946,6 +8007,7 @@ mod tests {
             false, // west-flow output
             0.5,
             InserterTier::default(), QualityTier::Normal,
+            1,
         );
 
         // Machines packed tight at x=0, 3. Machine y=5 (always-gap=1

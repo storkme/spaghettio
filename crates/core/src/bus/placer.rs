@@ -782,6 +782,7 @@ pub(crate) fn build_one_row(
                 output_rate_pm,
                 max_inserter_tier,
                 quality,
+                ctx.for_item(output_item),
             );
             let machine_y = y_cursor + 5;
             let output_y = machine_y + mh as i32;
@@ -843,6 +844,7 @@ pub(crate) fn build_one_row(
                 output_rate_pm,
                 max_inserter_tier,
                 quality,
+                ctx.for_item(output_item),
             );
             fluid_port_ys = port_pipes.first().map(|&(_, _, py)| vec![py]).unwrap_or_default();
             fluid_port_pipes = port_pipes;
@@ -907,6 +909,7 @@ pub(crate) fn build_one_row(
                 secondary_rate,
                 max_inserter_tier,
                 quality,
+                ctx.for_item(output_item),
             );
             fluid_output_port_pipes = out_port_pipes;
             let input_ys = vec![y_cursor];
@@ -955,6 +958,7 @@ pub(crate) fn build_one_row(
                 output_rate_pm,
                 max_inserter_tier,
                 quality,
+                ctx.for_item(output_item),
             );
             let input_ys: Vec<i32> = solid_inputs
                 .iter()
@@ -1006,6 +1010,7 @@ pub(crate) fn build_one_row(
                 output_rate_pm,
                 max_inserter_tier,
                 quality,
+                ctx.for_item(output_item),
             );
             // input_belt_y[i] is where lane planner taps off lane.item
             // matching solid_inputs[i]. Layout (msz=3): belt 1 at y+0,
@@ -1055,6 +1060,7 @@ pub(crate) fn build_one_row(
                 output_rate_pm,
                 max_inserter_tier,
                 quality,
+                ctx.for_item(output_item),
             );
             fluid_port_ys = in_port_pipes.iter().map(|&(_, _, py)| py).collect();
             fluid_port_ys.sort_unstable();
@@ -1142,6 +1148,7 @@ pub(crate) fn build_one_row(
                     output_rate_pm,
                     max_inserter_tier,
                     quality,
+                    ctx.for_item(output_item),
                 );
                 // Map each spec.solid_input (natural order) to its tap-off
                 // y position. High-demand (item0) sits on trunk 0 at y+0;
@@ -1197,6 +1204,7 @@ pub(crate) fn build_one_row(
                     output_rate_pm,
                     max_inserter_tier,
                     quality,
+                    ctx.for_item(output_item),
                 );
                 fluid_output_port_pipes = out_port_pipes;
                 // Positional (far=y_cursor, near=y_cursor+1) mapped back to
