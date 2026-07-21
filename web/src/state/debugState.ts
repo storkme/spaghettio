@@ -10,6 +10,9 @@ export interface DebugState {
   heatmap: boolean;
   /** Power connectivity: draw the pole copper-wire network. */
   powerWires: boolean;
+  /** Module slots (RFC-044 Phase 2): draw the in-game-style module slot
+   *  row on entities carrying `items`. */
+  moduleSlots: boolean;
 }
 
 type Subscriber = (state: DebugState) => void;
@@ -24,6 +27,7 @@ let state: DebugState = {
   traceOverlay: false,
   heatmap: false,
   powerWires: false,
+  moduleSlots: true,
 };
 
 const subs: Subscriber[] = [];
@@ -37,6 +41,7 @@ export function create(): void {
   const traceOverlayStored = localStorage.getItem("fk-trace-overlay") === "1";
   const heatmapStored = localStorage.getItem("fk-heatmap") === "1";
   const powerWiresStored = localStorage.getItem("fk-power-wires") === "1";
+  const moduleSlotsStored = localStorage.getItem("fk-module-slots");
   state = {
     ...state,
     master: fromParam || fromStorage,
@@ -46,6 +51,11 @@ export function create(): void {
     traceOverlay: traceOverlayStored,
     heatmap: heatmapStored,
     powerWires: powerWiresStored,
+    // Default ON (RFC-044 Phase 2) — the overlay only draws on entities
+    // that actually carry `items`, so a generated layout with no modules
+    // stays quiet by default; same "stored===null → default true"
+    // pattern as itemColors.
+    moduleSlots: moduleSlotsStored === null ? true : moduleSlotsStored === "1",
   };
 }
 
@@ -75,6 +85,9 @@ export function set(patch: Partial<DebugState>): void {
   }
   if ("powerWires" in patch) {
     localStorage.setItem("fk-power-wires", patch.powerWires ? "1" : "0");
+  }
+  if ("moduleSlots" in patch) {
+    localStorage.setItem("fk-module-slots", patch.moduleSlots ? "1" : "0");
   }
   for (const cb of subs) cb(state);
 }

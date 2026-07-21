@@ -114,6 +114,7 @@ function appendSatCacheRecord(recordBytes: Uint8Array): void {
 let itemsCache: string[] = [];
 let machinesCache: string[] = [];
 let defaultMachineCache = new Map<string, string>();
+let moduleSlotsCache = new Map<string, number>();
 
 let activeCountListeners = new Set<(active: number) => void>();
 let activeCount = 0;
@@ -218,6 +219,25 @@ export async function initEngine(): Promise<void> {
     fallback: "assembling-machine-3",
   });
   defaultMachineCache = new Map(defaults);
+
+  // module_slots is a static Rust table (RFC-044 Phase 2) — prefetch once
+  // and cache synchronously, mirroring `defaultMachineCache`. The extras
+  // beyond `machinesCache` are module hosts that aren't recipe-producing
+  // machines but appear in imported blueprints (beacons, labs, drills —
+  // drill slot counts land with RFC-044 Phase 1). Entity names outside
+  // this set fall back to 0 via `moduleSlots`.
+  const moduleSlotEntries = await call<[string, number][]>({
+    method: "moduleSlotsForEntities",
+    entities: [
+      ...machinesCache,
+      "beacon",
+      "lab",
+      "biolab",
+      "electric-mining-drill",
+      "big-mining-drill",
+    ],
+  });
+  moduleSlotsCache = new Map(moduleSlotEntries);
 }
 
 async function solve(
@@ -346,6 +366,14 @@ function exportBlueprint(layout: LayoutResult, label: string): Promise<string> {
 
 function defaultMachineForItem(item: string, fallback: string): string {
   return defaultMachineCache.get(item) ?? fallback;
+}
+
+/** Module slot count for a machine entity, from the `moduleSlotsCache`
+ *  prefetched in `initEngine`. Unknown entities → 0 (same as the Rust
+ *  table's own fallback). Synchronous so the module-slot overlay
+ *  (`renderer/moduleSlotsOverlay.ts`) can call it per-entity at draw time. */
+function moduleSlots(entity: string): number {
+  return moduleSlotsCache.get(entity) ?? 0;
 }
 
 function validateLayout(
@@ -579,6 +607,7 @@ export type Engine = {
   buildLayoutStreaming: typeof buildLayoutStreaming;
   exportBlueprint: typeof exportBlueprint;
   defaultMachineForItem: typeof defaultMachineForItem;
+  moduleSlots: typeof moduleSlots;
   validateLayout: typeof validateLayout;
   solveFixture: typeof solveFixture;
   improveRegion: typeof improveRegion;
@@ -596,6 +625,7 @@ export function getEngine(): Engine {
     buildLayoutStreaming,
     exportBlueprint,
     defaultMachineForItem,
+    moduleSlots,
     validateLayout,
     solveFixture,
     improveRegion,

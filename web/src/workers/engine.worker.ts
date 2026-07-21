@@ -11,6 +11,7 @@ import wasmInit, {
   layout,
   layout_traced,
   layout_streaming,
+  module_slots,
   parse_blueprint,
   seed_zone_cache,
   validate_layout,
@@ -25,6 +26,7 @@ type Request =
   | { id: number; method: "allProducibleItems" }
   | { id: number; method: "allProducerMachines" }
   | { id: number; method: "defaultMachinesForItems"; items: string[]; fallback: string }
+  | { id: number; method: "moduleSlotsForEntities"; entities: string[] }
   | {
       id: number;
       method: "solve";
@@ -97,6 +99,14 @@ self.onmessage = async (e: MessageEvent<Request>) => {
         const out: [string, string][] = [];
         for (const item of req.items) {
           out.push([item, default_machine_for_item(item, req.fallback)]);
+        }
+        result = out;
+        break;
+      }
+      case "moduleSlotsForEntities": {
+        const out: [string, number][] = [];
+        for (const entity of req.entities) {
+          out.push([entity, module_slots(entity)]);
         }
         result = out;
         break;
