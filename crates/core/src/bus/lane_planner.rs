@@ -801,7 +801,17 @@ fn split_overflowing_lanes(
         // runs at full-belt capacity, which only works if a balancer
         // family is stamped; without one, multiple producers fan-in via
         // `ret:` sideloads and the trunk's per-lane cap still applies.
-        let full_belt_cap = lane_cap * 2.0;
+        // DELIBERATELY UNSCALED by stacking (RFC-046 decision log,
+        // Phase 2): full-belt thresholds assume both lanes fill, which
+        // holds for splitter-balanced flow but NOT for tap/sideload
+        // delivery (B8/I5: one lane). Scaling this ×S collapsed trunk
+        // counts and concentrated stacked flow on single lanes (walker-
+        // caught overloads at S=2). Until tap delivery is lane-aware
+        // (Phase 3, with #312), trunk-count geometry at S>1 matches S=1;
+        // stacking still buys tier selection, merger capacity, and
+        // forced-stack output throughput. `lane_cap` (per-lane, ×S)
+        // above remains scaled — per-lane semantics are sound.
+        let full_belt_cap = max_lane_cap * 2.0;
         let clamp_to_consumers =
             !is_external_input && !is_collector && n_splits > consumer_trunk_count;
 

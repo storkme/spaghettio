@@ -343,6 +343,40 @@ import; the in-game anchor (kill criterion 5) is the final word.
 
 ## Decision log
 
+- **2026-07-21 — Phase 2 landed; second simplification falsified and
+  descoped (full-belt ×S on tap-delivered flow).** The first S=2
+  differential runs failed honestly: scaling the consumer-clamped
+  fan-in wall and the K-trunk retirement (both full-belt-cap-based)
+  collapsed trunk counts, and tap/sideload-delivered flow — which
+  fills ONE lane (B8/I5) — then exceeded per-lane stacked capacity
+  (walker-caught 18/s on a 15/s stacked yellow lane; probe-verified
+  the trunk and row-input belts carry everything on the near lane).
+  The S=1 fan-in wall had been accidentally *shielding* this
+  single-lane geometry gap by refusing such configs first. Resolution:
+  **full-belt delivery thresholds stay unscaled** (trunk-count
+  geometry at S>1 matches S=1); ×S remains on per-lane thresholds,
+  belt tier selection, merger capacity, and forced-stack output
+  throughput. The #312 wall lift is demoted to Phase 3 alongside
+  lane-aware tap delivery; a parity fixture pins the conservative
+  behavior and says exactly when to flip it. **Headline restated
+  accordingly**: the delivered fixture is the #311 stress config —
+  EC@60/s red from ore, whose committed golden stamps 60/s onto a
+  30/s merger belt with zero warnings — made *physically valid* at
+  S=2 (red stacked = 60/s): 0 errors, 0 warnings, and a kill-2 direct
+  audit of every rate-stamped belt tile against stacked capacity,
+  with the same audit proving its own teeth on the S=1 run (finds the
+  #311 overload) and a stack-inserter count differential (100 → 380)
+  proving the forcing engaged. The legendary-express@60 variant
+  remains gated by pre-existing high-rate residuals (a junction-solver
+  failure and ~3% walker overshoot on zero-headroom lanes at exact
+  tier boundaries) — characterized, out of scope, noted for the
+  Phase 3 pick-up. Also landed: `max_inserter_tier < Stack` refusal
+  fixture, kovarex family-exemption fixture (stack-inserter census
+  S=1 == S=2 on the exempt chain), forcing wired into the 8 stackable
+  output sites (exempt sites keep `size_side` with the invariant in
+  comments), and the wasm/web UX slice (URL `st=`, sidebar select,
+  worker bridge). Gates: suite 834/0/36 (one clean run), STRESSGOLD
+  9/9 bit-identical at S=1.
 - **2026-07-21 — Kill 3 tripped mid-Phase-2; design amended (v3).**
   The Fulgora D2b secondary output is a second reach-2 belt-drop the
   spec review's census missed; re-census (all `size_side` sites +
