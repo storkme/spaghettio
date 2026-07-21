@@ -124,6 +124,11 @@ pub enum EntityDirection {
 pub struct ModuleItem {
     pub item: String,
     pub count: u32,
+    /// Quality of the module itself (`None` = normal, omitted from
+    /// export). Parsed from the 2.0 insert-plan `id.quality` field;
+    /// scales the module's beneficial effects (RFC-044 game-rule model).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality: Option<crate::common::QualityTier>,
 }
 
 /// A single entity placed in the blueprint grid.

@@ -53,6 +53,43 @@ struct BlueprintEntity<'a> {
     /// stamped upstream by the layout's functional-only stamp pass.
     #[serde(skip_serializing_if = "Option::is_none")]
     quality: Option<&'static str>,
+    /// Modules in this entity, as 2.0 insert plans (RFC-044 Phase 0).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    items: Vec<BlueprintInsertPlan<'a>>,
+}
+
+/// Lua-api `BlueprintInsertPlan`: one entry per distinct module
+/// (item, quality) with explicit per-unit slot positions. This is the
+/// ONLY module encoding Factorio 2.0 honors in a 2.0-versioned envelope
+/// (which ours is — there is no 1.x-migration fallback for a name→count
+/// map here).
+#[derive(Serialize)]
+struct BlueprintInsertPlan<'a> {
+    id: BlueprintItemId<'a>,
+    items: ItemInventoryPositions,
+}
+
+/// Lua-api `ItemIDAndQualityIDPair`. Quality omitted at normal.
+#[derive(Serialize)]
+struct BlueprintItemId<'a> {
+    name: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    quality: Option<&'static str>,
+}
+
+#[derive(Serialize)]
+struct ItemInventoryPositions {
+    in_inventory: Vec<InventoryPosition>,
+}
+
+/// Lua-api `InventoryPosition`: `inventory` is the per-entity-class
+/// `defines.inventory` id from `common::module_inventory_id`; `stack` is
+/// the 0-based module slot. `count` is omitted (defaults to 1 — one
+/// entry per module unit, matching the game's own emission).
+#[derive(Serialize)]
+struct InventoryPosition {
+    inventory: u8,
+    stack: u32,
 }
 
 #[derive(Serialize)]
@@ -131,6 +168,34 @@ pub fn export(layout: &LayoutResult, label: &str) -> String {
                     .quality
                     .filter(|q| *q != crate::common::QualityTier::Normal)
                     .map(|q| q.name()),
+                items: {
+                    // Slot positions run sequentially across ALL modules
+                    // in the entity: module A ×2 takes stacks 0,1; the
+                    // next module starts at 2.
+                    let inventory = crate::common::module_inventory_id(&ent.name);
+                    let mut stack = 0u32;
+                    ent.items
+                        .iter()
+                        .map(|m| BlueprintInsertPlan {
+                            id: BlueprintItemId {
+                                name: &m.item,
+                                quality: m
+                                    .quality
+                                    .filter(|q| *q != crate::common::QualityTier::Normal)
+                                    .map(|q| q.name()),
+                            },
+                            items: ItemInventoryPositions {
+                                in_inventory: (0..m.count)
+                                    .map(|_| {
+                                        let p = InventoryPosition { inventory, stack };
+                                        stack += 1;
+                                        p
+                                    })
+                                    .collect(),
+                            },
+                        })
+                        .collect()
+                },
             }
         })
         .collect();
@@ -242,6 +307,151 @@ mod tests {
         assert!(ents[0].get("mirror").is_none());
         // recipe should be absent for belt
         assert!(ents[1].get("recipe").is_none());
+    }
+
+    /// The exported module encoding must match the game's own emission
+    /// byte-shape (draftsman 2.0.76 reference, RFC-044 Phase 0): one
+    /// insert-plan per module id, one `in_inventory` entry per module
+    /// unit with sequential 0-based stacks, NO `count` field, quality
+    /// omitted at normal, `inventory` per entity class.
+    #[test]
+    fn module_items_match_insert_plan_reference_shape() {
+        use crate::common::QualityTier;
+        use crate::models::ModuleItem;
+
+        let layout = LayoutResult {
+            entities: vec![PlacedEntity {
+                name: "assembling-machine-3".into(),
+                x: 0,
+                y: 0,
+                direction: EntityDirection::North,
+                recipe: Some("iron-gear-wheel".into()),
+                items: vec![ModuleItem {
+                    item: "productivity-module-3".into(),
+                    count: 4,
+                    quality: Some(QualityTier::Legendary),
+                }],
+                ..Default::default()
+            }],
+            width: 3,
+            height: 3,
+            ..Default::default()
+        };
+        let bp = decode_blueprint(&export(&layout, "ref"));
+        let items = &bp["entities"][0]["items"];
+
+        // Exact shape from the draftsman-emitted reference blueprint.
+        let expected = serde_json::json!([{
+            "id": {"name": "productivity-module-3", "quality": "legendary"},
+            "items": {"in_inventory": [
+                {"inventory": 4, "stack": 0},
+                {"inventory": 4, "stack": 1},
+                {"inventory": 4, "stack": 2},
+                {"inventory": 4, "stack": 3}
+            ]}
+        }]);
+        assert_eq!(items, &expected);
+    }
+
+    /// Export → parse round trip preserves modules (item, count, quality)
+    /// across three entity classes, and the raw JSON carries the
+    /// per-class inventory id (assembler=4, beacon=1, drill=2). NOTE:
+    /// the parser discards the inventory field, so only the raw-JSON leg
+    /// of this test sees a wrong id — and only for classes exercised
+    /// here; the in-game paste anchor (RFC-044 KC2) is the real gate.
+    #[test]
+    fn moduled_entities_round_trip_with_quality() {
+        use crate::common::QualityTier;
+        use crate::models::ModuleItem;
+
+        let mk = |name: &str, x: i32, items: Vec<ModuleItem>| PlacedEntity {
+            name: name.into(),
+            x,
+            y: 0,
+            direction: EntityDirection::North,
+            items,
+            ..Default::default()
+        };
+        let layout = LayoutResult {
+            entities: vec![
+                mk(
+                    "assembling-machine-3",
+                    0,
+                    vec![
+                        ModuleItem {
+                            item: "productivity-module-3".into(),
+                            count: 2,
+                            quality: Some(QualityTier::Legendary),
+                        },
+                        // Normal quality: `quality` key must be absent,
+                        // and stacks continue from the previous module.
+                        ModuleItem {
+                            item: "speed-module".into(),
+                            count: 1,
+                            quality: None,
+                        },
+                    ],
+                ),
+                mk(
+                    "beacon",
+                    4,
+                    vec![ModuleItem {
+                        item: "speed-module-3".into(),
+                        count: 2,
+                        quality: Some(QualityTier::Rare),
+                    }],
+                ),
+                mk(
+                    "electric-mining-drill",
+                    8,
+                    vec![ModuleItem {
+                        item: "efficiency-module".into(),
+                        count: 3,
+                        quality: None,
+                    }],
+                ),
+            ],
+            width: 11,
+            height: 3,
+            ..Default::default()
+        };
+        let s = export(&layout, "modtrip");
+
+        // Raw-JSON leg: per-class inventory ids + normal-quality omission
+        // + sequential stacks across modules within one entity.
+        let bp = decode_blueprint(&s);
+        let ents = bp["entities"].as_array().unwrap();
+        let asm = &ents[0]["items"];
+        assert_eq!(asm[0]["id"]["quality"], "legendary");
+        assert!(asm[1]["id"].get("quality").is_none());
+        assert_eq!(asm[1]["items"]["in_inventory"][0]["stack"], 2);
+        assert_eq!(asm[0]["items"]["in_inventory"][0]["inventory"], 4);
+        assert_eq!(ents[1]["items"][0]["items"]["in_inventory"][0]["inventory"], 1);
+        assert_eq!(ents[2]["items"][0]["items"]["in_inventory"][0]["inventory"], 2);
+
+        // Parser leg: everything the model holds survives the trip.
+        let parsed = crate::blueprint_parser::parse_blueprint_string(&s).unwrap();
+        let find = |name: &str| {
+            parsed
+                .entities
+                .iter()
+                .find(|e| e.name == name)
+                .unwrap_or_else(|| panic!("{name} missing after round trip"))
+        };
+        let asm = find("assembling-machine-3");
+        assert_eq!(asm.items.len(), 2);
+        assert_eq!(asm.items[0].item, "productivity-module-3");
+        assert_eq!(asm.items[0].count, 2);
+        assert_eq!(asm.items[0].quality, Some(QualityTier::Legendary));
+        assert_eq!(asm.items[1].item, "speed-module");
+        assert_eq!(asm.items[1].count, 1);
+        assert_eq!(asm.items[1].quality, None);
+        let beacon = find("beacon");
+        assert_eq!(beacon.items[0].count, 2);
+        assert_eq!(beacon.items[0].quality, Some(QualityTier::Rare));
+        let drill = find("electric-mining-drill");
+        assert_eq!(drill.items[0].count, 3);
+        assert_eq!(drill.items[0].quality, None);
     }
 
     /// Decode an exported blueprint string back to its JSON `blueprint` object.
