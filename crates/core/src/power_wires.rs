@@ -10,12 +10,18 @@
 //! disconnected islands and the whole factory is power-dead — the bug this
 //! module exists to prevent.
 //!
-//! [`compute_pole_wires`] is consumed by three call sites that MUST agree:
-//! - `blueprint::export` — emits the `wires` array (entity_number = index+1).
-//! - `validate::power::check_pole_network_connectivity` — asserts the emitted
-//!   graph is one connected component (checks the artifact, not mere geometry).
-//! - `bus::layout` / `blueprint_parser` — populate `LayoutResult::power_wires`
-//!   for the web power-connectivity overlay.
+//! RFC-044 stored-graph contract: the graph is computed ONCE
+//! (`bus::layout::layout_pass`, in `LayoutOptions::wire_mode` — dense
+//! mesh or deterministic spanning tree — recorded on
+//! `LayoutResult::wire_mode`) and stored in `LayoutResult::power_wires`;
+//! `blueprint::export` and
+//! `validate::power::check_pole_network_connectivity` both consume the
+//! STORED graph through [`wires_for`] (with a dense-derive fallback for
+//! layouts that never computed wires), and `blueprint_parser` preserves
+//! an imported blueprint's wires verbatim. The artifact, the validated
+//! graph, and the web overlay are therefore the same object by
+//! construction — the pre-RFC "N sites re-derive and must agree"
+//! convention is retired.
 //!
 //! ## Density: connect all in-reach pairs (no cap)
 //!

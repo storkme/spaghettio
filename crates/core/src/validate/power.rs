@@ -24,8 +24,10 @@ use crate::validate::{Severity, ValidationIssue};
 
 /// Check that the EMITTED pole copper-wire graph is a single connected network.
 ///
-/// This validates the ARTIFACT, not mere geometry: it recomputes the exact
-/// `wires` array [`crate::blueprint::export`] encodes (via
+/// This validates the ARTIFACT, not mere geometry: it reads the exact
+/// `wires` graph [`crate::blueprint::export`] encodes — the STORED
+/// `LayoutResult::power_wires` via [`crate::power_wires::wires_for`]
+/// (RFC-044; dense-derive fallback only for never-computed layouts, via
 /// [`crate::power_wires::compute_pole_wires`] — the single source of wire reach
 /// and footprint centers) and asserts every pole is reachable from the first
 /// pole through it. A geometry-only check could pass while the export omitted

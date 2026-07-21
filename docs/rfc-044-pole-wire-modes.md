@@ -261,14 +261,45 @@ default is inert). Registry: RFC-044, row added in this commit's
   `wire_mode` recorded on the layout and honored by the improve-region
   recompute (kill 6, wasm site + core contract pin). Only ONE
   exhaustive-literal site outside tests needed the Option migration.
-  Kill evidence: 818/818 full suite + STRESSGOLD clean (kill 1 — zero
+  Kill evidence: full suite green + STRESSGOLD clean (kill 1 — zero
   golden bytes moved at Dense; `export_stored_dense_equals_fallback_derivation`
   pins byte-equality directly); tie-heavy + order-permutation fixtures
   (kill 3); spanning-forest property + validator-scalar invariance on
   a two-cluster fixture (kill 4); tree round-trip is a FIXED POINT of
   export→parse→export (byte-identical re-export);
   `export_emits_pole_copper_wires` passes unmodified (the None-fallback
-  path). Web: `w=` codec + "Pole wiring" select; browser smoke — the
+  path). **Kill 6 was verified by a lighter substitute than the RFC's
+  letter**: a simulated splice (`recompute_in_recorded_mode_preserves_tree`
+  — reorder + recompute-in-recorded-mode) plus inspection of the 3-line
+  wasm site, NOT the literal crossing-zone improve-pass integration run
+  the criterion described; functionally covered because kill 3's
+  order-invariance makes any real SAT-produced reordering equivalent to
+  the simulated one, but recorded here as the deviation it is. Web: `w=` codec + "Pole wiring" select; browser smoke — the
   `q=l&w=t` URL solves (92 machines, known single warning), select
   reads `tree`, hash round-trips. Kill 5 held: zero
   placement/thinning/substation lines touched.*
+- *2026-07-21 — implementation adversarial review (code + contract
+  lenses). Code: SAFE TO MERGE, zero BUG/RISK — anchor-uniqueness of
+  the MST tiebreak proven via the unconditional entity-overlap check;
+  the order-permutation fixture hand-derived to be genuinely
+  discriminating (it fails under the v1 index tiebreak: forward and
+  reversed orders would bridge different columns); the
+  None-vs-Some(vec![]) round-trip symmetry traced as
+  correct-by-construction; committed wasm-pkg `.d.ts` diffed against a
+  fresh build — byte-identical. Contract: three honesty must-fixes,
+  all landed here — (a) the earlier "818/818" figure was an
+  aggregation bug (the gates log appended the STRESSGOLD re-run and
+  the tally double-counted its 9 stress tests); the true single-run
+  count at this commit is **810 passed / 0 failed / 36 ignored**
+  (also correcting the same double-count pattern in earlier
+  same-log-append reports); (b) kill 6's simulated-splice substitute
+  now disclosed above instead of reading as satisfied-as-specified;
+  (c) the verification plan's dropped legendary tree differential is
+  now DELIVERED, not disclosed away —
+  `quality_ec_45s_legendary_tree_wire_differential` pins tree == 29
+  edges on the 30-pole census fixture, dense strictly greater, edges
+  ⊆ dense candidates, validator scalar 0 in both modes, zero power
+  issues. Doc-staleness nits fixed: the `power_wires` module header
+  and the connectivity check's doc comment described the retired
+  re-derivation architecture. Registry status bumped Design →
+  Complete (browser eyeball open).*
