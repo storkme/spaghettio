@@ -475,6 +475,22 @@ export function renderSidebar(
   });
   targetBody.appendChild(makeField("Build quality", qualitySelect));
 
+  // Pole wiring mode (RFC-045): dense mesh (robust, default) vs a
+  // deterministic minimal spanning tree (fewest wires, visually clean;
+  // note deconstructing one pole in-game splits a tree network).
+  const wireModeSelect = document.createElement("select");
+  wireModeSelect.className = "sb-select";
+  [
+    ["Dense (default)", ""],
+    ["Minimal tree", "tree"],
+  ].forEach(([label, value]) => {
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = label;
+    wireModeSelect.appendChild(opt);
+  });
+  targetBody.appendChild(makeField("Pole wiring", wireModeSelect));
+
   // Layout strategy. Phase 0b of `rfc-modular-production` shipped the
   // dropdown; the surviving `partitioned-decomposed` variant produces
   // strictly ≤ Pooled errors on every case in the corpus. The deprecated
@@ -703,6 +719,7 @@ export function renderSidebar(
   if (urlState.rowLayout) rowLayoutSelect.value = urlState.rowLayout;
   if (urlState.inserterTier) inserterTierSelect.value = urlState.inserterTier;
   if (urlState.quality) qualitySelect.value = urlState.quality;
+  if (urlState.wireMode) wireModeSelect.value = urlState.wireMode;
   // Restore custom inputs from URL
   for (const item of urlState.customInputs) {
     if (itemSet.has(item) && !defaultInputSet.has(item) && !customInputs.includes(item)) {
@@ -775,6 +792,7 @@ export function renderSidebar(
       rowLayout: rowLayoutSelect.value || null,
       inserterTier: inserterTierSelect.value || null,
       quality: qualitySelect.value || null,
+      wireMode: wireModeSelect.value || null,
       customInputs,
     });
 
@@ -844,8 +862,9 @@ export function renderSidebar(
       const rowLayout = rowLayoutSelect.value || undefined;
       const maxInserterTier = inserterTierSelect.value || undefined;
       const quality = qualitySelect.value || undefined;
+      const wireMode = wireModeSelect.value || undefined;
       const onEvent = callbacks.startStreaming();
-      layout = await engine.buildLayoutStreaming(result, maxTier, strategy, rowLayout, maxInserterTier, quality, onEvent);
+      layout = await engine.buildLayoutStreaming(result, maxTier, strategy, rowLayout, maxInserterTier, quality, wireMode, onEvent);
     } catch (err) {
       if (gen !== solveGeneration) return;
       const errDiv = document.createElement("div");
@@ -882,6 +901,7 @@ export function renderSidebar(
   rowLayoutSelect.addEventListener("change", scheduleAutoSolve);
   inserterTierSelect.addEventListener("change", scheduleAutoSolve);
   qualitySelect.addEventListener("change", scheduleAutoSolve);
+  wireModeSelect.addEventListener("change", scheduleAutoSolve);
   checkboxes.forEach((cb) => cb.addEventListener("change", scheduleAutoSolve));
 
   runSolve().catch((err) => console.error("runSolve failed:", err));

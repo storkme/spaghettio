@@ -32,6 +32,7 @@ function makeState(overrides: Partial<FormState>): FormState {
     rowLayout: null,
     inserterTier: null,
     quality: null,
+    wireMode: null,
     customInputs: [],
     ...overrides,
   };
@@ -49,6 +50,7 @@ describe("readUrlState — defaults", () => {
       rowLayout: null,
       inserterTier: null,
       quality: null,
+      wireMode: null,
       customInputs: [],
     });
   });
@@ -118,6 +120,7 @@ describe("readUrlState — hash form", () => {
       rowLayout: null,
       inserterTier: null,
       quality: null,
+      wireMode: null,
       customInputs: [],
     });
   });
@@ -204,6 +207,7 @@ describe("writeUrlState → readUrlState round-trip", () => {
       rowLayout: "horizontal-stack",
       inserterTier: "regular",
       quality: null,
+      wireMode: null,
       customInputs: ["iron-plate", "copper-plate"],
     });
     const back = roundTrip(state);
@@ -219,6 +223,7 @@ describe("writeUrlState → readUrlState round-trip", () => {
       rate: 4,
       machines: { crafting: DEFAULT_MACHINES.crafting },
       quality: "legendary",
+      wireMode: null,
     });
     writeUrlState(state);
     expect(window.location.hash).toContain("q=l");
@@ -230,10 +235,33 @@ describe("writeUrlState → readUrlState round-trip", () => {
       rate: 4,
       machines: { crafting: DEFAULT_MACHINES.crafting },
       quality: null,
+      wireMode: null,
     });
     writeUrlState(normal);
     expect(window.location.hash).not.toContain("q=");
     expect(readUrlState().quality).toBeNull();
+  });
+
+  it("wire mode round-trips via the w= short code; dense is omitted", () => {
+    const state = makeState({
+      item: "electronic-circuit",
+      rate: 4,
+      machines: { crafting: DEFAULT_MACHINES.crafting },
+      wireMode: "tree",
+    });
+    writeUrlState(state);
+    expect(window.location.hash).toContain("w=t");
+    expect(readUrlState().wireMode).toBe("tree");
+
+    const dense = makeState({
+      item: "electronic-circuit",
+      rate: 4,
+      machines: { crafting: DEFAULT_MACHINES.crafting },
+      wireMode: null,
+    });
+    writeUrlState(dense);
+    expect(window.location.hash).not.toContain("w=");
+    expect(readUrlState().wireMode).toBeNull();
   });
 
   it("stack (default) inserter tier is omitted from the URL", () => {
@@ -243,6 +271,7 @@ describe("writeUrlState → readUrlState round-trip", () => {
       machines: { crafting: DEFAULT_MACHINES.crafting },
       inserterTier: null,
       quality: null,
+      wireMode: null,
     });
     writeUrlState(state);
     expect(window.location.hash).toBe("#/l/igw/7");

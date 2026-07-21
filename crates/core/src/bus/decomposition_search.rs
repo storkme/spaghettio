@@ -234,6 +234,7 @@ impl DecompositionCandidate for ModuleSizeSplit {
             surplus_policy: opts.surplus_policy,
             max_inserter_tier: opts.max_inserter_tier,
             quality: opts.quality,
+            wire_mode: opts.wire_mode,
             merge_tap: opts.merge_tap,
         };
         run_layout_with_retry(&transformed, &inner_opts)
@@ -930,7 +931,8 @@ mod tests {
             surplus_exits: vec![],
             voided_streams: vec![],
             effective_rows: vec![],
-            power_wires: vec![],
+            power_wires: None,
+            wire_mode: Default::default(),
         }
     }
 

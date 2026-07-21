@@ -31,6 +31,7 @@ fn layout_options(
     row_layout: Option<String>,
     max_inserter_tier: Option<String>,
     quality: Option<String>,
+    wire_mode: Option<String>,
 ) -> LayoutOptions {
     let strategy = match strategy.as_deref() {
         // `partitioned-per-consumer` is the deprecated P1 string; the
@@ -63,6 +64,12 @@ fn layout_options(
         // rfc-build-quality Phase 2: unknown/absent → Normal, same
         // hard-cap fallback semantics as the two tiers above.
         quality: quality_tier(quality),
+        // RFC-045: unknown/absent → Dense, same fallback semantics as the
+        // tiers above.
+        wire_mode: wire_mode
+            .as_deref()
+            .and_then(spaghettio_core::power_wires::WireMode::from_name)
+            .unwrap_or_default(),
         // The merge-tap fallback is chosen internally by the
         // decomposition search (`MergeTapCandidate`), never requested by the
         // web UI — always default-off at the public boundary.
@@ -156,10 +163,11 @@ pub fn layout(
     row_layout: Option<String>,
     max_inserter_tier: Option<String>,
     quality: Option<String>,
+    wire_mode: Option<String>,
 ) -> Result<LayoutResult, JsError> {
     build_bus_layout(
         &solver_result,
-        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality),
+        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode),
     )
     .map_err(|e| JsError::new(&e))
 }
@@ -176,10 +184,11 @@ pub fn layout_traced(
     row_layout: Option<String>,
     max_inserter_tier: Option<String>,
     quality: Option<String>,
+    wire_mode: Option<String>,
 ) -> Result<LayoutResult, JsError> {
     spaghettio_core::bus::layout::build_bus_layout_traced(
         &solver_result,
-        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality),
+        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode),
     )
     .map_err(|e| JsError::new(&e))
 }
@@ -240,6 +249,7 @@ pub fn layout_streaming(
     row_layout: Option<String>,
     max_inserter_tier: Option<String>,
     quality: Option<String>,
+    wire_mode: Option<String>,
     emit: &js_sys::Function,
 ) -> Result<LayoutResult, JsError> {
     let emit = emit.clone();
@@ -253,7 +263,7 @@ pub fn layout_streaming(
     });
     spaghettio_core::bus::layout::build_bus_layout_streaming(
         &solver_result,
-        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality),
+        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode),
         on_event,
     )
     .map_err(|e| JsError::new(&e))
@@ -410,9 +420,13 @@ pub fn improve_region_streaming(
 
     // The retain+extend above reorders `entities`, invalidating the index pairs
     // in `power_wires`. Recompute so the field (and any downstream export /
-    // overlay) stays consistent with the new entity order.
-    layout_result.power_wires =
-        spaghettio_core::power_wires::compute_pole_wires(&layout_result.entities);
+    // overlay) stays consistent with the new entity order — in the layout's
+    // OWN recorded wire mode (RFC-045 kill 6: a Tree layout must not come
+    // back silently re-densified).
+    layout_result.power_wires = Some(spaghettio_core::power_wires::compute_pole_wires(
+        &layout_result.entities,
+        layout_result.wire_mode,
+    ));
 
     Ok(layout_result)
 }

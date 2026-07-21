@@ -32,6 +32,9 @@ export interface FormState {
    * "legendary"). null = normal (today's default) — same null-is-default
    * convention as `inserterTier`. See `docs/rfc-build-quality.md`. */
   quality: string | null;
+  /** Pole wiring mode ("tree"). null = dense (today's default) — same
+   * null-is-default convention as `quality`. See RFC-045. */
+  wireMode: string | null;
   /** User-added inputs beyond the DEFAULT_INPUTS list. */
   customInputs: string[];
 }
@@ -58,6 +61,11 @@ export const KNOWN_INSERTER_TIERS = ["regular", "fast"] as const;
  * `"normal"` (the default) is intentionally absent — represented by
  * `null`, same convention as `KNOWN_INSERTER_TIERS`. */
 export const KNOWN_QUALITIES = ["uncommon", "rare", "epic", "legendary"] as const;
+
+/** Wire-mode values accepted on the URL and in `FormState.wireMode`.
+ * `"dense"` (the default) is intentionally absent — represented by
+ * `null`, same convention as `KNOWN_QUALITIES`. */
+export const KNOWN_WIRE_MODES = ["tree"] as const;
 
 /** Full list of input pills rendered in the sidebar. */
 export const DEFAULT_INPUTS: string[] = [
@@ -159,6 +167,9 @@ const QUALITY_FULL_TO_SHORT: Record<string, string> = {
   legendary: "l",
 };
 
+const WIRE_MODE_SHORT_TO_FULL: Record<string, string> = { t: "tree" };
+const WIRE_MODE_FULL_TO_SHORT: Record<string, string> = { tree: "t" };
+
 function slugToCode(slug: string): string {
   // Fall back to the slug itself if it's not in the table — keeps
   // serialization total (e.g. an unknown / modded item still produces a
@@ -253,6 +264,8 @@ function readHashState(): FormState | null {
   const inserterTier = itShort ? INSERTER_TIER_SHORT_TO_FULL[itShort] ?? null : null;
   const qShort = extras.get("q");
   const quality = qShort ? QUALITY_SHORT_TO_FULL[qShort] ?? null : null;
+  const wShort = extras.get("w");
+  const wireMode = wShort ? WIRE_MODE_SHORT_TO_FULL[wShort] ?? null : null;
   const ciRaw = extras.get("ci");
   let customInputs: string[] = [];
   if (ciRaw) {
@@ -276,7 +289,7 @@ function readHashState(): FormState | null {
     machines[category] = slug;
   }
 
-  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, quality, customInputs };
+  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, quality, wireMode, customInputs };
 }
 
 function readQueryState(): FormState {
@@ -313,6 +326,11 @@ function readQueryState(): FormState {
     rawInserterTier && (KNOWN_INSERTER_TIERS as readonly string[]).includes(rawInserterTier)
       ? rawInserterTier
       : null;
+  const rawWireMode = params.get("wire_mode");
+  const wireMode =
+    rawWireMode && (KNOWN_WIRE_MODES as readonly string[]).includes(rawWireMode)
+      ? rawWireMode
+      : null;
   const rawQuality = params.get("quality");
   const quality =
     rawQuality && (KNOWN_QUALITIES as readonly string[]).includes(rawQuality)
@@ -321,7 +339,7 @@ function readQueryState(): FormState {
   const ciParam = params.get("ci");
   const customInputs = ciParam ? ciParam.split(",").filter((s) => s.length > 0) : [];
 
-  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, quality, customInputs };
+  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, quality, wireMode, customInputs };
 }
 
 export function readUrlState(): FormState {
@@ -391,6 +409,9 @@ function formatHashState(state: FormState): string {
   }
   if (state.quality && QUALITY_FULL_TO_SHORT[state.quality]) {
     extras.set("q", QUALITY_FULL_TO_SHORT[state.quality]);
+  }
+  if (state.wireMode && WIRE_MODE_FULL_TO_SHORT[state.wireMode]) {
+    extras.set("w", WIRE_MODE_FULL_TO_SHORT[state.wireMode]);
   }
   if (state.customInputs.length > 0) {
     extras.set(

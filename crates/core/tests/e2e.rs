@@ -312,6 +312,7 @@ fn run_e2e_inner(
             row_layout,
             max_inserter_tier: Default::default(),
             quality: Default::default(),
+            wire_mode: Default::default(),
             merge_tap: false,
         },
     )
@@ -661,8 +662,8 @@ fn assert_round_trip(result: &E2EResult) {
         result.layout.power_wires, result.parsed.power_wires,
         "pole copper wires must round-trip through blueprint export/parse: \
          layout emitted {} wire(s), parsed recovered {}",
-        result.layout.power_wires.len(),
-        result.parsed.power_wires.len(),
+        result.layout.power_wires.as_deref().map_or(0, |w| w.len()),
+        result.parsed.power_wires.as_deref().map_or(0, |w| w.len()),
     );
 }
 
@@ -1747,6 +1748,7 @@ fn tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing() {
             surplus_policy: SurplusPolicy::default(),
             max_inserter_tier: Default::default(),
             quality: Default::default(),
+            wire_mode: Default::default(),
             merge_tap: false,
         },
     )
@@ -1893,6 +1895,7 @@ fn tier5_processing_unit_2s_horizontal_stack_iron_ore_pipe_bypass() {
             surplus_policy: SurplusPolicy::default(),
             max_inserter_tier: Default::default(),
             quality: Default::default(),
+            wire_mode: Default::default(),
             merge_tap: false,
         },
     )
@@ -2000,6 +2003,7 @@ fn tier5_processing_unit_25s_horizontal_stack_pole_coverage() {
             surplus_policy: SurplusPolicy::default(),
             max_inserter_tier: Default::default(),
             quality: Default::default(),
+            wire_mode: Default::default(),
             merge_tap: false,
         },
     )
@@ -7016,6 +7020,7 @@ fn quality_differential_ec_normal_vs_legendary() {
                 row_layout: Default::default(),
                 max_inserter_tier: Default::default(),
                 quality,
+                wire_mode: Default::default(),
                 merge_tap: false,
             },
         )
@@ -7136,6 +7141,7 @@ fn quality_ec_45s_express_legendary_from_ore() {
             row_layout: Default::default(),
             max_inserter_tier: Default::default(),
             quality: QualityTier::Legendary,
+            wire_mode: Default::default(),
             merge_tap: false,
         },
     )
@@ -7223,6 +7229,7 @@ fn quality_differential_kovarex_self_loop_normal_vs_legendary() {
                 row_layout: Default::default(),
                 max_inserter_tier: Default::default(),
                 quality,
+                wire_mode: Default::default(),
                 merge_tap: false,
             },
         )
@@ -7323,4 +7330,67 @@ fn quality_differential_kovarex_self_loop_normal_vs_legendary() {
         parsed_stamped, stamped,
         "every stamped entity must round-trip through export+parse"
     );
+}
+
+/// RFC-045 verification-plan differential (flagged as silently dropped by
+/// the implementation contract review — delivered here): the legendary
+/// census fixture wired in `Tree` mode vs `Dense`. 30 medium poles, one
+/// connected component → the tree is exactly 29 edges, strictly fewer
+/// than dense, every tree edge drawn from the dense candidate set, and
+/// the validator's scalar (0 disconnected) is identical in both modes.
+#[test]
+#[ntest::timeout(120000)]
+fn quality_ec_45s_legendary_tree_wire_differential() {
+    use spaghettio_core::common::QualityTier;
+    use spaghettio_core::power_wires::{compute_pole_wires, count_disconnected_poles, WireMode};
+    use spaghettio_core::recipe_db::MachinePalette;
+
+    let inputs: FxHashSet<String> =
+        ["iron-ore", "copper-ore"].iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "electronic-circuit",
+        45.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Legendary,
+    )
+    .unwrap_or_else(|e| panic!("solve: {e}"));
+    let layout_result = layout::build_bus_layout(
+        &sr,
+        layout::LayoutOptions {
+            strategy: Default::default(),
+            surplus_policy: Default::default(),
+            max_belt_tier: Some("express-transport-belt".to_string()),
+            row_layout: Default::default(),
+            max_inserter_tier: Default::default(),
+            quality: QualityTier::Legendary,
+            wire_mode: WireMode::Tree,
+            merge_tap: false,
+        },
+    )
+    .unwrap_or_else(|e| panic!("layout: {e}"));
+
+    let poles = layout_result
+        .entities
+        .iter()
+        .filter(|e| e.name == "medium-electric-pole")
+        .count();
+    assert_eq!(poles, 30, "census pin (rfc-043)");
+
+    let tree = layout_result.power_wires.as_deref().expect("stored wires").to_vec();
+    let dense = compute_pole_wires(&layout_result.entities, WireMode::Dense);
+    assert_eq!(tree.len(), 29, "spanning tree of one 30-pole component");
+    assert!(dense.len() > tree.len(), "dense {} must exceed tree {}", dense.len(), tree.len());
+    for e in &tree {
+        assert!(dense.contains(e), "tree edge {e:?} not in dense candidate set");
+    }
+    assert_eq!(count_disconnected_poles(&layout_result.entities, &tree), 0);
+    assert_eq!(count_disconnected_poles(&layout_result.entities, &dense), 0);
+
+    let issues = validate::validate(&layout_result, Some(&sr), LayoutStyle::Bus)
+        .unwrap_or_else(|e| panic!("validate: {e}"));
+    let power: Vec<_> = issues.iter().filter(|i| i.category == "power").collect();
+    assert!(power.is_empty(), "tree mode must introduce no power issues: {power:?}");
 }
