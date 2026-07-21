@@ -314,6 +314,7 @@ fn run_e2e_inner(
             quality: Default::default(),
             wire_mode: Default::default(),
             merge_tap: false,
+            stacking: 1,
         },
     )
         .map_err(|e| {
@@ -1750,6 +1751,7 @@ fn tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing() {
             quality: Default::default(),
             wire_mode: Default::default(),
             merge_tap: false,
+            stacking: 1,
         },
     )
     .unwrap_or_else(|e| panic!("{test_name}: layout: {e}"));
@@ -1897,6 +1899,7 @@ fn tier5_processing_unit_2s_horizontal_stack_iron_ore_pipe_bypass() {
             quality: Default::default(),
             wire_mode: Default::default(),
             merge_tap: false,
+            stacking: 1,
         },
     )
     .unwrap_or_else(|e| panic!("{test_name}: layout: {e}"));
@@ -2005,6 +2008,7 @@ fn tier5_processing_unit_25s_horizontal_stack_pole_coverage() {
             quality: Default::default(),
             wire_mode: Default::default(),
             merge_tap: false,
+            stacking: 1,
         },
     )
     .unwrap_or_else(|e| panic!("{test_name}: layout: {e}"));
@@ -7022,6 +7026,7 @@ fn quality_differential_ec_normal_vs_legendary() {
                 quality,
                 wire_mode: Default::default(),
                 merge_tap: false,
+                stacking: 1,
             },
         )
         .unwrap_or_else(|e| panic!("{quality:?} layout: {e}"));
@@ -7143,6 +7148,7 @@ fn quality_ec_45s_express_legendary_from_ore() {
             quality: QualityTier::Legendary,
             wire_mode: Default::default(),
             merge_tap: false,
+            stacking: 1,
         },
     )
     .unwrap_or_else(|e| panic!("layout: {e}"));
@@ -7231,6 +7237,7 @@ fn quality_differential_kovarex_self_loop_normal_vs_legendary() {
                 quality,
                 wire_mode: Default::default(),
                 merge_tap: false,
+                stacking: 1,
             },
         )
         .unwrap_or_else(|e| panic!("{quality:?} layout: {e}"));
@@ -7368,6 +7375,7 @@ fn quality_ec_45s_legendary_tree_wire_differential() {
             quality: QualityTier::Legendary,
             wire_mode: WireMode::Tree,
             merge_tap: false,
+            stacking: 1,
         },
     )
     .unwrap_or_else(|e| panic!("layout: {e}"));

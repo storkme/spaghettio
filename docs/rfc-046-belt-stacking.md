@@ -308,6 +308,29 @@ import; the in-game anchor (kill criterion 5) is the final word.
 
 ## Decision log
 
+- **2026-07-21 — Phase 1 landed (plumbing + validator honesty).**
+  `LayoutOptions.stacking` (manual `Default` impl so the neutral value
+  is literally 1) → recorded as `LayoutResult.stacking` (serde: skip
+  ≤1, missing = 1, so pre-RFC snapshots deserialize unstacked; the
+  derived-`Default` 0 on hand-built/parsed results is documented as
+  "≤1 = unstacked" and every consumer clamps). Validator sites
+  threaded: both `check_lane_throughput`s (belt_structural +
+  belt_flow) rate lanes at `lane_capacity_stacked(belt,
+  layout.stacking)`, the walker's splitter per-output cap uses
+  `belt_throughput_stacked` (BS4), and the two inserter-attribution
+  checks rate machine-extraction (belt-drop) sides via a new
+  `belt_drop_throughput` helper — flat I8 constant at S≤1 and for
+  non-stack inserters, `swings × belt-hand` decomposition for stack
+  inserters at S>1 (including the 9.6/s S=4 dip). `check_belt_throughput`'s
+  overlapping-route message was left unscaled: it reports tier
+  capacity in an overlap warning, no rate comparison. Wasm/UI
+  deliberately untouched (quality-Phase-1-style guard rail: no
+  deployed layout can set S≠1 yet). Kill-1 gate passed: full suite
+  820/0 (36 ignored, one clean invocation) + STRESSGOLD check 9/9
+  bit-identical. (A stale-artifact linker failure after two killed
+  background cargo runs was cleared with `cargo clean -p
+  spaghettio_core` — toolchain-internal undefined-symbol signature,
+  not a code fault; `target/tmp` zone cache untouched.)
 - **2026-07-21 — Phase 0 landed; kill 4 resolved on its conservative
   branch.** Recycler wiki page verified: recyclers DO stack onto belts
   mining-drill-style once stack-inserter tech is researched — but only

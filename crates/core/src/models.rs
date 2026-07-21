@@ -371,10 +371,28 @@ pub struct LayoutResult {
     /// default (old snapshots deserialize to `Dense`).
     #[serde(default, skip_serializing_if = "wire_mode_is_default")]
     pub wire_mode: crate::power_wires::WireMode,
+    /// Belt stack size this layout was planned at (RFC-046, BS1). The
+    /// layout records its own value so validators and post-layout
+    /// recomputes rate belts at the capacity the planner assumed.
+    /// **`0` and `1` both mean unstacked**: the derived `Default` (and
+    /// hand-built/parsed results, which have no research context) yield
+    /// `0`, and every consumer goes through the `common::*_stacked`
+    /// helpers, which clamp to 1..=4. Serde skips ≤1 and defaults
+    /// missing to 1, so pre-RFC snapshots deserialize unstacked.
+    #[serde(default = "stacking_default", skip_serializing_if = "stacking_is_default")]
+    pub stacking: u8,
 }
 
 fn wire_mode_is_default(m: &crate::power_wires::WireMode) -> bool {
     *m == crate::power_wires::WireMode::default()
+}
+
+fn stacking_default() -> u8 {
+    1
+}
+
+fn stacking_is_default(s: &u8) -> bool {
+    *s <= 1
 }
 
 /// One solid surplus stream consumed by a layout-synthesized voider

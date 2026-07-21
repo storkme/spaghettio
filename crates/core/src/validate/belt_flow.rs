@@ -13,10 +13,11 @@ use std::collections::VecDeque;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::common::{
-    belt_throughput, dir_to_vec, fluid_only_recipes, inserter_reach, inserter_target_lane,
-    is_belt_entity, is_inserter, is_machine_entity, is_splitter, is_surface_belt, is_ug_belt,
+    belt_throughput_stacked, dir_to_vec, fluid_only_recipes, inserter_reach,
+    inserter_target_lane, is_belt_entity, is_inserter, is_machine_entity, is_splitter,
+    is_surface_belt, is_ug_belt, lane_capacity_stacked, machine_dims, machine_tiles,
     splitter_second_tile, splitter_to_surface_tier, ug_max_reach, ug_to_surface_tier,
-    lane_capacity, machine_dims, machine_tiles, utilization_for, LANE_LEFT,
+    utilization_for, LANE_LEFT,
 };
 use crate::models::{EntityDirection, LayoutResult, PlacedEntity, SolverResult};
 
@@ -2130,7 +2131,9 @@ pub fn check_lane_throughput(
 
     for (&pos, &[left, right]) in &lane_rates {
         let belt_name = belt_name_map.get(&pos).copied().unwrap_or("transport-belt");
-        let cap = lane_capacity(belt_name);
+        // RFC-046: rate lanes at the stacked capacity the layout was
+        // planned at (`stacking` ≤ 1 is bit-identical to `lane_capacity`).
+        let cap = lane_capacity_stacked(belt_name, layout.stacking);
         for (lane_name, rate) in [("left", left), ("right", right)] {
             if rate > cap + 0.01 {
                 issues.push(ValidationIssue::with_pos(
@@ -2917,7 +2920,14 @@ fn compute_lane_rates_impl(
                 };
                 let cap = splitter_entity
                     .get(&a)
-                    .map(|e| belt_throughput(splitter_to_surface_tier(&e.name)))
+                    .map(|e| {
+                        // RFC-046: splitters are stack-preserving (BS4) —
+                        // their per-output cap scales with the layout's S.
+                        belt_throughput_stacked(
+                            splitter_to_surface_tier(&e.name),
+                            layout.stacking,
+                        )
+                    })
                     .unwrap_or(15.0);
                 let (a_out, b_out) = splitter_output_rates_mixed(
                     a_fc[0] + a_fc[1],

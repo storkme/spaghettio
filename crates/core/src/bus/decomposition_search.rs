@@ -236,6 +236,7 @@ impl DecompositionCandidate for ModuleSizeSplit {
             quality: opts.quality,
             wire_mode: opts.wire_mode,
             merge_tap: opts.merge_tap,
+            stacking: opts.stacking,
         };
         run_layout_with_retry(&transformed, &inner_opts)
     }
@@ -933,6 +934,7 @@ mod tests {
             effective_rows: vec![],
             power_wires: None,
             wire_mode: Default::default(),
+            stacking: 1,
         }
     }
 

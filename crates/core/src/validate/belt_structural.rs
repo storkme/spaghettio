@@ -16,8 +16,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::common::{
     belt_throughput, dir_to_vec, inserter_reach, inserter_target_lane, is_belt_entity,
     is_inserter, is_machine_entity, is_splitter, is_surface_belt, is_ug_belt,
-    splitter_second_tile, splitter_to_surface_tier, ug_to_surface_tier, lane_capacity,
-    machine_dims, machine_tiles, utilization_for, LANE_LEFT, LANE_RIGHT,
+    lane_capacity_stacked, machine_dims, machine_tiles, splitter_second_tile,
+    splitter_to_surface_tier, ug_to_surface_tier, utilization_for, LANE_LEFT, LANE_RIGHT,
     MERGE_TAP_SEGMENT_TAG,
 };
 use crate::models::{EntityDirection, LayoutResult, PlacedEntity, SolverResult};
@@ -1366,7 +1366,9 @@ pub fn check_lane_throughput(
     let mut issues = Vec::new();
     for ((x, y), (left, right)) in &lane_rates {
         let belt_name = belt_name_map.get(&(*x, *y)).copied().unwrap_or("transport-belt");
-        let cap = lane_capacity(belt_name);
+        // RFC-046: rate lanes at the stacked capacity the layout was
+        // planned at (`stacking` ≤ 1 is bit-identical to `lane_capacity`).
+        let cap = lane_capacity_stacked(belt_name, layout.stacking);
         for (lane_name, rate) in [("left", *left), ("right", *right)] {
             if rate > cap + 0.01 {
                 issues.push(ValidationIssue::with_pos(

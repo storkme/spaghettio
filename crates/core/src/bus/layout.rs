@@ -73,7 +73,7 @@ pub enum SurplusPolicy {
 /// Per-call options for `build_bus_layout`. New struct; absorbs the
 /// previous `max_belt_tier` parameter so future per-call options
 /// (strategy, escargio fold parameters, …) attach as additional fields.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct LayoutOptions {
     pub strategy: LayoutStrategy,
     pub max_belt_tier: Option<String>,
@@ -102,6 +102,31 @@ pub struct LayoutOptions {
     /// `NativeCandidate`. Replaces the retired `MERGE_TAP_FALLBACK_ENABLED`
     /// compile-time const.
     pub merge_tap: bool,
+    /// Belt stack size the layout plans at (RFC-046, BS1): 1 = off
+    /// (default, bit-identical to pre-RFC — kill 1), 2–4 = stacked.
+    /// User-specified, never inferred (same contract as `max_belt_tier`).
+    /// Values outside 1..=4 clamp in the `common::*_stacked` helpers.
+    /// Phase 1 core field only — not yet plumbed through wasm-bindings
+    /// or the web UI (Phase 2), so no deployed layout can set ≠1 yet.
+    pub stacking: u8,
+}
+
+impl Default for LayoutOptions {
+    /// Manual impl (not derived) solely because `stacking`'s neutral value
+    /// is `1`, not `u8::default()` — everything else is the type default.
+    fn default() -> Self {
+        Self {
+            strategy: LayoutStrategy::default(),
+            max_belt_tier: None,
+            row_layout: RowLayout::default(),
+            surplus_policy: SurplusPolicy::default(),
+            max_inserter_tier: InserterTier::default(),
+            quality: crate::common::QualityTier::default(),
+            wire_mode: crate::power_wires::WireMode::default(),
+            merge_tap: false,
+            stacking: 1,
+        }
+    }
 }
 
 impl LayoutOptions {
@@ -109,14 +134,8 @@ impl LayoutOptions {
     /// that only care about the belt tier.
     pub fn from_belt_tier(max_belt_tier: Option<&str>) -> Self {
         Self {
-            strategy: LayoutStrategy::default(),
             max_belt_tier: max_belt_tier.map(|s| s.to_string()),
-            row_layout: RowLayout::default(),
-            surplus_policy: SurplusPolicy::default(),
-            max_inserter_tier: InserterTier::default(),
-            quality: crate::common::QualityTier::default(),
-            wire_mode: crate::power_wires::WireMode::default(),
-            merge_tap: false,
+            ..Self::default()
         }
     }
 }
@@ -1085,6 +1104,7 @@ fn layout_pass(
             effective_rows,
             power_wires: Some(power_wires),
             wire_mode: opts.wire_mode,
+            stacking: opts.stacking,
         },
         row_spans,
         cap_coords,
