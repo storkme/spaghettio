@@ -247,6 +247,7 @@ async function solve(
   palette: Record<string, string>,
   defaultMachine: string,
   quality?: string,
+  modules?: string,
 ): Promise<SolverResult> {
   // If a streaming layout is in flight, the user has just typed a new target
   // and is waiting for feedback — kill the old WASM work so solve isn't
@@ -260,6 +261,7 @@ async function solve(
     palette,
     defaultMachine,
     quality: quality ?? null,
+    modules: modules ?? null,
   });
 }
 

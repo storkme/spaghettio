@@ -389,3 +389,50 @@ Works on imported blueprints immediately; no solver dependency.
   `allow_productivity` extraction against every recipe the community
   actually prod-modules; full suite green; KC1 safe by construction
   (generated layouts never populate `items`).*
+- *2026-07-21 — **KC2 CLOSED**: user pasted the four-class anchor in
+  Space Age and confirmed modules land in the module slots. The
+  insert-plan encoding + per-class inventory table are game-verified.
+  Phase 3 unblocked. (Phases 1 and 2 merged the same day: #323 after
+  corpus-driven adversarial review, #322 after lead diff review; both
+  bot-clean.)*
+- *2026-07-21 — Phase 3 landed (branch `rfc044-phase3-module-policy`)
+  after deep adversarial review (Fable; ACCEPT-WITH-CHANGES, all
+  findings folded in). `module_policy.rs` is the single source: policy
+  {kind, tier, module quality} → per-(machine, recipe)
+  `MachineModuleEffects`; netflow applies speed at the column
+  crafting-speed site and productivity at the three enumerated sites
+  (candidate net rebuilt from effective amounts pre-netting; per-machine
+  rates; self-loop rates — raw sign logic untouched); loadouts ride
+  `MachineSpec::game_modules` to a layout stamp post-pass; wasm `m=`
+  param + sidebar Modules/Module-quality selects. **base_effect
+  crediting corrected by the review**: the first draft gated the
+  foundry/biochamber/EMP built-in +50% on `allow_productivity` behind an
+  unsourced "no productivity bar" claim — the wiki is explicit the bonus
+  "applies even to items like belts", and fish-breeding's
+  `ignored_by_productivity` catalyst amounts exist precisely because
+  built-in prod reaches ineligible recipes; now credited ungated
+  whenever the policy is active (modules stay recipe-gated). This
+  supersedes the rev-2 "none-path followup" framing only in wording —
+  `policy = none` remains bit-identical (KC1) and the none-path
+  divergence remains the recorded followup. **Recipe flips observed and
+  accepted** (per the rev-2 decision): at p3, AC@5/s-from-ore (AM2) and
+  PU@2/s-from-ore (AM3) flip basic-oil-processing →
+  advanced-oil-processing + light-oil-cracking (prod economics favor the
+  richer route); s3 flips nothing on the checked configs. **Known
+  benign gap** (review MINOR 4): voider-synthesized recycler specs are
+  sized module-blind with empty loadouts; if a config ever runs BOTH an
+  active moduled recycling column and voider rows on the same recipe,
+  the (entity, recipe)-keyed stamp map would stamp voider entities with
+  modules their sizing never assumed — unreachable today (no module
+  policy co-occurs with allow_voiding), revisit if that changes.
+  Evidence (review-run, not self-reported): KC1 STRESSGOLD cross-branch
+  bit-identity vs pre-branch goldens; three-site flow-balance probe
+  <1e-6 across 8 configs incl. kovarex p3l and coal-liquefaction-class
+  catalysts; quality formula reproduces the wiki per-quality tables for
+  BOTH families; stamped EC@10 p3 layout: 16/16 machines stamped,
+  export→parse round-trip, validate() clean incl. the Phase 1 module
+  checks (self-consistency), and 0 total warnings vs 4 at none (slower
+  prod machines — honest improvement); s3 8 vs 4 (hotter machines —
+  honest movement). KC4 satisfied: prod fit the LP as per-column
+  constant coefficients, no split needed. KC5 both parts pinned by
+  tests.*

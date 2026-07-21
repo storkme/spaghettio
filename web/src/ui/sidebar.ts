@@ -475,6 +475,50 @@ export function renderSidebar(
   });
   targetBody.appendChild(makeField("Build quality", qualitySelect));
 
+  // Global module policy (RFC-044 Phase 3): fills every eligible
+  // machine's slots with one module family+tier; productivity falls
+  // back to no modules on ineligible (machine, recipe) pairs. The
+  // module-quality select scales the modules' beneficial effects and is
+  // only meaningful when a family is chosen.
+  const modulesSelect = document.createElement("select");
+  modulesSelect.className = "sb-select";
+  [
+    ["None (default)", ""],
+    ["Speed 1", "s1"],
+    ["Speed 2", "s2"],
+    ["Speed 3", "s3"],
+    ["Productivity 1", "p1"],
+    ["Productivity 2", "p2"],
+    ["Productivity 3", "p3"],
+  ].forEach(([label, value]) => {
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = label;
+    modulesSelect.appendChild(opt);
+  });
+  targetBody.appendChild(makeField("Modules", modulesSelect));
+
+  const moduleQualitySelect = document.createElement("select");
+  moduleQualitySelect.className = "sb-select";
+  [
+    ["Normal (default)", ""],
+    ["Uncommon", "u"],
+    ["Rare", "r"],
+    ["Epic", "e"],
+    ["Legendary", "l"],
+  ].forEach(([label, value]) => {
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = label;
+    moduleQualitySelect.appendChild(opt);
+  });
+  targetBody.appendChild(makeField("Module quality", moduleQualitySelect));
+
+  /** Compact `FormState.modules` value from the two selects ("p3l"),
+   *  or null when no family is chosen (module quality alone is inert). */
+  const modulesValue = (): string | null =>
+    modulesSelect.value ? `${modulesSelect.value}${moduleQualitySelect.value}` : null;
+
   // Pole wiring mode (RFC-045): dense mesh (robust, default) vs a
   // deterministic minimal spanning tree (fewest wires, visually clean;
   // note deconstructing one pole in-game splits a tree network).
@@ -719,6 +763,12 @@ export function renderSidebar(
   if (urlState.rowLayout) rowLayoutSelect.value = urlState.rowLayout;
   if (urlState.inserterTier) inserterTierSelect.value = urlState.inserterTier;
   if (urlState.quality) qualitySelect.value = urlState.quality;
+  if (urlState.modules) {
+    // Split the compact form back into the two selects: kind+tier
+    // ("p3") then the optional module-quality initial ("l").
+    modulesSelect.value = urlState.modules.slice(0, 2);
+    moduleQualitySelect.value = urlState.modules.slice(2);
+  }
   if (urlState.wireMode) wireModeSelect.value = urlState.wireMode;
   // Restore custom inputs from URL
   for (const item of urlState.customInputs) {
@@ -793,6 +843,7 @@ export function renderSidebar(
       inserterTier: inserterTierSelect.value || null,
       quality: qualitySelect.value || null,
       wireMode: wireModeSelect.value || null,
+      modules: modulesValue(),
       customInputs,
     });
 
@@ -811,6 +862,7 @@ export function renderSidebar(
         palette,
         palette.crafting ?? DEFAULT_MACHINES.crafting,
         qualitySelect.value || undefined,
+        modulesValue() ?? undefined,
       );
     } catch (err) {
       if (gen !== solveGeneration) return;
@@ -901,6 +953,8 @@ export function renderSidebar(
   rowLayoutSelect.addEventListener("change", scheduleAutoSolve);
   inserterTierSelect.addEventListener("change", scheduleAutoSolve);
   qualitySelect.addEventListener("change", scheduleAutoSolve);
+  modulesSelect.addEventListener("change", scheduleAutoSolve);
+  moduleQualitySelect.addEventListener("change", scheduleAutoSolve);
   wireModeSelect.addEventListener("change", scheduleAutoSolve);
   checkboxes.forEach((cb) => cb.addEventListener("change", scheduleAutoSolve));
 

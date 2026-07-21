@@ -36,6 +36,7 @@ type Request =
       palette: Record<string, string>;
       defaultMachine: string;
       quality: string | null;
+      modules: string | null;
     }
   | { id: number; method: "layout"; result: SolverResult; maxBeltTier: string | null; strategy: string | null; rowLayout: string | null; maxInserterTier: string | null; quality: string | null; wireMode: string | null }
   | { id: number; method: "layoutTraced"; result: SolverResult; maxBeltTier: string | null; strategy: string | null; rowLayout: string | null; maxInserterTier: string | null; quality: string | null; wireMode: string | null }
@@ -119,6 +120,7 @@ self.onmessage = async (e: MessageEvent<Request>) => {
           { by_category: req.palette },
           req.defaultMachine,
           req.quality ?? undefined,
+          req.modules ?? undefined,
         );
         break;
       case "layout":
