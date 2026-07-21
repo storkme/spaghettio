@@ -234,6 +234,29 @@ mod tests {
     use super::*;
     use crate::models::PlacedEntity;
 
+    /// RFC-046: `LayoutResult.stacking` serde contract — the kill-1
+    /// claim "pre-RFC snapshots deserialize unstacked" pinned directly:
+    /// a JSON without the field yields 1; ≤1 (including the derived-
+    /// `Default` 0) serializes to no field at all; >1 round-trips.
+    #[test]
+    fn layout_result_stacking_serde_contract() {
+        let json = serde_json::to_string(&LayoutResult::default()).unwrap();
+        assert!(!json.contains("stacking"), "derived-Default 0 must serialize fieldless");
+        let one = LayoutResult { stacking: 1, ..Default::default() };
+        assert!(!serde_json::to_string(&one).unwrap().contains("stacking"));
+
+        let pre_rfc: LayoutResult = serde_json::from_str(
+            r#"{"entities":[],"width":0,"height":0,"warnings":[]}"#,
+        )
+        .unwrap();
+        assert_eq!(pre_rfc.stacking, 1, "missing field must deserialize to 1");
+
+        let stacked = LayoutResult { stacking: 3, ..Default::default() };
+        let round: LayoutResult =
+            serde_json::from_str(&serde_json::to_string(&stacked).unwrap()).unwrap();
+        assert_eq!(round.stacking, 3, "S>1 must round-trip");
+    }
+
     fn test_snapshot() -> LayoutSnapshot {
         LayoutSnapshot::from_run(
             SnapshotSource::Test,

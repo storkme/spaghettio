@@ -370,6 +370,30 @@ import; the in-game anchor (kill criterion 5) is the final word.
 
 ## Decision log
 
+- **2026-07-21 — Code-lens implementation review:
+  APPROVE-WITH-CHANGES; MAJOR finding fixed.** The reviewer re-ran
+  every gate independently (suite, STRESSGOLD, all four fixtures,
+  wasm build + tsc + web tests), verified the full-belt descope's
+  completeness site-by-site (including that placer's HS trunk-count
+  geometry correctly stays frozen while only its belt-tier selection
+  scales), and confirmed all 8 forcing sites are genuine output
+  sides with no item cross-contamination. The MAJOR: both
+  `check_lane_throughput`s and the walker's splitter cap applied
+  blanket layout-wide ×S — trusting the planner's exemption
+  discipline instead of verifying it, precisely the fiction-agreement
+  trap scoped to exempt lanes. Fixed: the validators re-derive
+  `StackingCtx` from the SolverResult they already receive and key
+  each tile's cap by its `carries` item (`for_item`), falling back to
+  the layout-wide value only for unattributed tiles; an over-planned
+  exempt lane now rates at unstacked capacity no matter what the
+  planner believed. Also folded: the missing serde pin for
+  `LayoutResult.stacking` (`layout_result_stacking_serde_contract` —
+  missing field ⇒ 1, ≤1 fieldless, >1 round-trips). Acknowledged
+  without code change: the kovarex e2e fixture is a smoke test (the
+  exemption's real coverage is `stacking_ctx`'s unit tests; a
+  rate-stressed mixed-family fixture is Phase 3 material with
+  lane-aware taps). Post-fold gates: suite 835/0/36 (one clean run),
+  STRESSGOLD 9/9, lib clippy clean.
 - **2026-07-21 — Honesty-lens implementation review:
   APPROVE-WITH-CHANGES; all findings folded.** Every quantitative
   claim survived independent re-derivation (suite 834/0/36, STRESSGOLD
