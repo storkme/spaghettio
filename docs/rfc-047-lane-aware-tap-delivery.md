@@ -280,6 +280,29 @@ generator remains future work.
 
 ## Decision log
 
+- **2026-07-21 — Phase 0 (Leg A) landed; kill 6 census PASSED by a
+  wide margin.** Census (uncommitted scratch change + full gates): 1
+  flipped test / 2 balancer templates / 5 issues vs the >10 threshold;
+  STRESSGOLD 9/9 unchanged; zero layout-code touch points. The walker
+  fix landed as `splitter_output_rates_convergence` (per-lane pooled
+  totals, demand-allocated independently; priority-loop ratio computed
+  branch-level, applied per-lane), replacing the physically-false
+  lane-mixing model and its false code comment. The one honest
+  finding — balancer library shapes (7,3)/(7,4) genuinely
+  lane-imbalanced at saturation (worst 8.112/s on 7.5/s per-lane;
+  invisible to the old model structurally) — filed as #334 and carried
+  in `balancer_lane_audit` as a known-imbalanced carve-out with a
+  tripwire that fails when the shapes get re-baked (so the carve-out
+  cannot silently outlive the fix). I5 doc correction + sweep landed
+  (0a). Recorded simplifications (census ambiguities, for Phase 1-2
+  awareness): no per-lane demand signal exists (both lanes share the
+  scalar demand ratio); the asymmetric-branch per-lane cap (cap/2) was
+  moot in the census (all flips hit the uncapped symmetric branch) and
+  wants a merge-tap priority fixture before Leg B leans on it; the
+  priority-loop branch is measurement-unverified (no priority
+  splitters in the library corpus) — same fixture covers it. Gates:
+  suite 869/0/36 (one clean run), STRESSGOLD 9/9.
+
 - **2026-07-21 — Adversarial spec review: APPROVE-WITH-CHANGES; v2
   folds all four required changes.** Every ground-truth citation
   survived independent code-level verification, and both model-bug

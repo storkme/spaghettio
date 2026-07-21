@@ -1877,9 +1877,23 @@ fn splitter_output_rates(
 /// consumer taps). Falls back to the symmetric split under the same
 /// ambiguous-flagging conditions as [`splitter_output_rates`].
 #[allow(clippy::too_many_arguments)]
-fn splitter_output_rates_mixed(
-    a_total: f64,
-    b_total: f64,
+/// Convergence-phase splitter model (RFC-047 Phase 0, Leg A).
+///
+/// LANE-PRESERVING: real splitters never mix lanes (mechanics rule S4)
+/// — left-lane items stay left across whichever output they reach. The
+/// predecessor (`splitter_output_rates_mixed`) pooled both lanes into
+/// one scalar and re-split evenly, silently acting as a free lane
+/// rebalancer at every splitter and masking genuine lane starvation
+/// downstream (RFC-047 ground truth 6b). Now each lane's pooled total
+/// is demand-allocated independently. The priority-loop branch computes
+/// its loop/export ratio from the two-lane total (the loop cap is a
+/// branch-level demand ceiling, not per-lane physics) and applies it to
+/// each lane's own pool. Known simplification, recorded in the RFC's
+/// decision log: no per-lane demand signal exists yet, so both lanes
+/// share the same `demand_a/demand_b` ratio.
+fn splitter_output_rates_convergence(
+    a_rates: (f64, f64),
+    b_rates: (f64, f64),
     loop_priority_rate: Option<f64>,
     a_is_loop_branch: bool,
     b_is_loop_branch: bool,
@@ -1887,22 +1901,33 @@ fn splitter_output_rates_mixed(
     demand_b: f64,
     cap: f64,
 ) -> ([f64; 2], [f64; 2]) {
-    let total = a_total + b_total;
     if let Some(loop_cap) = loop_priority_rate {
         if a_is_loop_branch != b_is_loop_branch {
+            let total_left = a_rates.0 + b_rates.0;
+            let total_right = a_rates.1 + b_rates.1;
+            let total = total_left + total_right;
             let loop_share = total.min(loop_cap.max(0.0));
             let export_share = (total - loop_share).max(0.0);
-            let loop_half = [loop_share / 2.0, loop_share / 2.0];
-            let export_half = [export_share / 2.0, export_share / 2.0];
-            return if a_is_loop_branch {
-                (loop_half, export_half)
+            let (loop_ratio, export_ratio) = if total > f64::EPSILON {
+                (loop_share / total, export_share / total)
             } else {
-                (export_half, loop_half)
+                (0.0, 0.0)
+            };
+            let loop_out = [total_left * loop_ratio, total_right * loop_ratio];
+            let export_out = [total_left * export_ratio, total_right * export_ratio];
+            return if a_is_loop_branch {
+                (loop_out, export_out)
+            } else {
+                (export_out, loop_out)
             };
         }
     }
-    let (out_a, out_b) = allocate_by_demand(total, demand_a, demand_b, cap);
-    ([out_a / 2.0, out_a / 2.0], [out_b / 2.0, out_b / 2.0])
+    let lane_cap = cap / 2.0;
+    let (left_a, left_b) =
+        allocate_by_demand(a_rates.0 + b_rates.0, demand_a, demand_b, lane_cap);
+    let (right_a, right_b) =
+        allocate_by_demand(a_rates.1 + b_rates.1, demand_a, demand_b, lane_cap);
+    ([left_a, right_a], [left_b, right_b])
 }
 
 /// Allocate a splitter's total throughput `total` between its two output
@@ -2911,12 +2936,13 @@ fn compute_lane_rates_impl(
                 next.insert(pos, [seed[0] + fc[0], seed[1] + fc[1]]);
             }
 
-            // Phase 2: splitter pairs. Output = balanced average of pair's
-            // total feeder contribution, distributed evenly across all four
-            // output lanes (2 halves × 2 lanes per half). Real Factorio
-            // splitters mix lanes — input [L=15, R=0] becomes output
-            // [L=7.5, R=7.5] per half — so a lane-imbalanced sideload
-            // upstream gets re-balanced at the splitter, not propagated.
+            // Phase 2: splitter pairs. LANE-PRESERVING (RFC-047 Phase 0):
+            // real Factorio splitters never mix lanes (S4) — the previous
+            // comment here asserted the opposite as fact and the old model
+            // implemented it, silently re-balancing lane-imbalanced
+            // upstream flow at every splitter. Each lane's pooled feeder
+            // contribution is now distributed independently, so genuine
+            // one-lane skew propagates and can be caught downstream.
             //
             // Priority splitters (`loop_priority_rate` set) break that
             // symmetry: the loop-back branch draws `min(total, cap)` and
@@ -2952,9 +2978,9 @@ fn compute_lane_rates_impl(
                         belt_throughput_stacked(splitter_to_surface_tier(&e.name), s)
                     })
                     .unwrap_or(15.0);
-                let (a_out, b_out) = splitter_output_rates_mixed(
-                    a_fc[0] + a_fc[1],
-                    b_fc[0] + b_fc[1],
+                let (a_out, b_out) = splitter_output_rates_convergence(
+                    (a_fc[0], a_fc[1]),
+                    (b_fc[0], b_fc[1]),
                     loop_priority_rate,
                     is_priority_branch(a),
                     is_priority_branch(b),

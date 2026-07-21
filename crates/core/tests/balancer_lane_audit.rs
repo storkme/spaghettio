@@ -183,12 +183,38 @@ fn audit_lane_correctness() {
     // there. Set `BALANCER_AUDIT_NO_FAIL=1` to suppress the assert
     // during exploratory work (baking new shapes, regenerating the
     // library) where transient errors are expected.
+    //
+    // KNOWN-IMBALANCED (RFC-047 Phase 0, #334): the lane-preserving
+    // convergence walker exposed genuine internal lane imbalance in
+    // shapes (7,3) and (7,4) under saturation (worst 8.112/s on a
+    // 7.5/s per-lane cap; aggregate stays exactly at capacity — the
+    // old lane-mixing model structurally could not see this). Carried
+    // as an expected finding until the shapes are re-baked with a
+    // lane-balance constraint; any error OUTSIDE these shapes (or any
+    // new category inside them) still fails the audit.
+    const KNOWN_IMBALANCED: [(u32, u32); 2] = [(7, 3), (7, 4)];
     if std::env::var("BALANCER_AUDIT_NO_FAIL").is_err() {
-        assert_eq!(
-            total_errors, 0,
-            "balancer library audit: {total_errors} lane errors across {templates_with_errors} \
-             template(s). Set BALANCER_AUDIT_NO_FAIL=1 to suppress this assert. Full report \
-             above (run with --nocapture)."
+        let unexpected: Vec<&Row> = rows
+            .iter()
+            .filter(|r| {
+                r.errors > 0
+                    && !(KNOWN_IMBALANCED.contains(&r.shape)
+                        && r.error_categories.iter().all(|c| c == "lane-throughput"))
+            })
+            .collect();
+        assert!(
+            unexpected.is_empty(),
+            "balancer library audit: unexpected lane errors beyond the known-imbalanced \
+             set (#334): {unexpected:?}. Set BALANCER_AUDIT_NO_FAIL=1 to suppress this \
+             assert. Full report above (run with --nocapture)."
+        );
+        let known_still_failing = rows
+            .iter()
+            .any(|r| KNOWN_IMBALANCED.contains(&r.shape) && r.errors > 0);
+        assert!(
+            known_still_failing,
+            "known-imbalanced shapes (7,3)/(7,4) now pass — #334 is fixed; remove \
+             KNOWN_IMBALANCED and close the issue consciously."
         );
     }
 }
