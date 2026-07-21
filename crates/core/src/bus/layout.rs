@@ -595,6 +595,14 @@ fn layout_pass(
         .map(|ext| ext.item.clone())
         .collect();
 
+    // RFC-046 belt-stacking context: derived once here (both `opts` and the
+    // fully-transformed `solver_result` — post voider-synthesis, post
+    // partition-plan application — are in scope) and threaded down to every
+    // capacity/tier-selection site in `place_rows` / `plan_bus_lanes` /
+    // `route_bus_ghost`. At `opts.stacking <= 1` (default) `for_item` returns
+    // 1 for every item, so this is a behavior-neutral no-op (kill 1).
+    let stacking_ctx = crate::bus::stacking_ctx::StackingCtx::derive(solver_result, opts.stacking);
+
     let bus_header = 1;
     // Row placement y-origin. On the top-edge substation retry (RFC Phase 3b)
     // `top_widen > 0` bumps it below `bus_header`, freeing `top_widen` rows
@@ -637,14 +645,22 @@ fn layout_pass(
         Some(&final_output_items),
         retry_extra_gaps,
         opts.row_layout,
+        &stacking_ctx,
     );
     crate::trace::emit(crate::trace::TraceEvent::PhaseTime {
         phase: "place_rows_1".to_string(),
         duration_ms: t_place1.elapsed().as_millis() as u64,
     });
     let t_plan1 = web_time::Instant::now();
-    let (lanes_1, families_1) =
-        plan_bus_lanes(solver_result, &row_spans_1, max_belt_tier, plan_ref, total_height_1, opts.merge_tap)?;
+    let (lanes_1, families_1) = plan_bus_lanes(
+        solver_result,
+        &row_spans_1,
+        max_belt_tier,
+        plan_ref,
+        total_height_1,
+        opts.merge_tap,
+        &stacking_ctx,
+    )?;
     crate::trace::emit(crate::trace::TraceEvent::PhaseTime {
         phase: "plan_bus_lanes_1".to_string(),
         duration_ms: t_plan1.elapsed().as_millis() as u64,
@@ -687,6 +703,7 @@ fn layout_pass(
                 Some(&final_output_items),
                 Some(&merged_gaps),
                 opts.row_layout,
+                &stacking_ctx,
             );
             crate::trace::emit(crate::trace::TraceEvent::PhaseTime {
                 phase: "place_rows_2".to_string(),
@@ -697,7 +714,15 @@ fn layout_pass(
             // pass-invariant `MergeTapFallback` event, so suppress it here to
             // dedup the double-emit while keeping pass 2's other events.
             let (nl, nf) = crate::trace::with_merge_tap_fallback_suppressed(|| {
-                plan_bus_lanes(solver_result, &rs, max_belt_tier, plan_ref, th, opts.merge_tap)
+                plan_bus_lanes(
+                    solver_result,
+                    &rs,
+                    max_belt_tier,
+                    plan_ref,
+                    th,
+                    opts.merge_tap,
+                    &stacking_ctx,
+                )
             })?;
             crate::trace::emit(crate::trace::TraceEvent::PhaseTime {
                 phase: "plan_bus_lanes_2".to_string(),
@@ -769,6 +794,7 @@ fn layout_pass(
         solver_result,
         &families,
         &row_entities,
+        &stacking_ctx,
     )?;
     let bus_entities = ghost_result.entities;
     let max_y = ghost_result.max_y;
