@@ -62,7 +62,15 @@ For full build commands (WASM rebuild, release builds), see [`docs/build-systems
   [`.github/workflows/claude-code-review.yml`](.github/workflows/claude-code-review.yml)
   runs a Claude code review on every PR (opened/synchronized/reopened), and
   `clear-agent-reviewed.yml` drops the `agent-reviewed` label when new
-  commits land so the new SHA gets re-reviewed. Local adversarial review (an
+  commits land so the new SHA gets re-reviewed. **A green `claude-review`
+  check is NOT evidence a review happened — confirm the bot actually
+  posted comments.** From #305 through #327 the workflow ran with the
+  template's read-only permissions, so every review was silently
+  discarded after a permission denial while the check stayed green
+  (fixed 2026-07-21, PR #327); all substantive PR review feedback in
+  that window was session-side. The action also skips itself entirely
+  on any PR that modifies its own workflow file (anti-hijack guard) —
+  green-with-no-comments there is expected, not a regression. Local adversarial review (an
   independent agent that re-runs gates and probes the claims) is the
   fallback when a PR isn't in play — and it remains **required in addition
   to the bot** for layout-engine or validator-semantics changes: the bot
