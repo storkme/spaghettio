@@ -280,6 +280,30 @@ generator remains future work.
 
 ## Decision log
 
+- **2026-07-21 — Feed-geometry mechanism confirmed; Leg B design fork
+  identified.** ghost_router ~1565: a `ret:` sideload spec is SKIPPED
+  when the producer row's exit already covers the trunk column
+  (`start_x < goal_x` — "the row's own exit belt already covers it"),
+  i.e. **adjacency, not producer count, decides sideload-vs-direct
+  feed** — direct feeds carry the row bridge's both-lane fill, which
+  is why the live single-trunk-clamp corpus lanes stay walker-green.
+  Consequence: trunk-machinery classification at wall time cannot know
+  adjacency (column assignment happens later), so the two-pass "pure
+  function ahead of the stamp" plan hits its predicted ordering fork.
+  Candidate resolutions for Phase 1 (decide with fresh context, per
+  the Leg C stop-and-redesign rule): (a) conservative wall-time
+  classification (only balancer/merge-tap = full-belt) — REJECTED
+  as-is: it would refuse live, working corpus shapes (cable@30
+  single-trunk direct-fed); (b) grandfather S=1 wall semantics
+  unchanged and apply per-shape distinction only to the Phase-2 ×S
+  term — avoids regressions but splits the credit formula's honesty
+  story; (c) move the clamped-single-trunk wall evaluation
+  post-column-assignment where adjacency is known — an ordering move,
+  not a fixed point, but touches the planner's phase structure.
+  Leaning (c) with (b) as fallback; whichever is chosen, the walker
+  (post-Phase-0) independently checks the result, so a wrong choice
+  fails loudly, not silently.
+
 - **2026-07-21 — Phase 1 censuses run (probe committed, env-gated
   `SPAGHETTIO_047_CENSUS`).** (1) **External-input lanes confirmed
   moot**: they split by per-lane cap at construction
