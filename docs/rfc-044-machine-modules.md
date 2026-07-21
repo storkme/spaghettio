@@ -94,10 +94,13 @@ module tables; probe scripts recorded in the review.
   biochamber, EMP: +0.5). The per-recipe `maximum_productivity` cap
   (default 3.0) and research productivity never bind at module-only
   magnitudes in this RFC's scope — noted and ignored (non-goal).
-- **Eligibility is two-level**: per-recipe `allow_productivity` (122
-  recipes in our dataset) AND per-machine `allowed_effects` (recycler
-  forbids productivity; oil-refinery and rocket-silo forbid quality;
-  beacon forbids productivity and quality).
+- **Eligibility is two-level**: per-recipe `allow_productivity` (116
+  recipes in our dataset) AND per-machine `allowed_effects` — gated on
+  the module's BENEFICIAL effect only (corrected in the Phase 1 review:
+  speed modules carry a quality malus in 2.0, yet speed-in-beacon is
+  legal despite beacon forbidding quality — harmful side-effects never
+  gate). Recycler forbids productivity; oil-refinery, rocket-silo, and
+  pumpjack forbid quality; beacon forbids productivity and quality.
 - **Blueprint encoding** (2.0 insert-plan): `"items": [{"id": {"name": …,
   "quality": …?}, "items": {"in_inventory": [{"inventory": <class-id>,
   "stack": k}, …]}}]` — one `in_inventory` entry per module, `stack`
@@ -357,3 +360,32 @@ Works on imported blueprints immediately; no solver dependency.
   (`module_eligibility_data_is_bundled`). KC2 anchor string generated
   (`crates/core/examples/rfc044_anchor.rs`, local-only) covering all
   four inventory classes — **open, user-run**.*
+- *2026-07-21 — Phase 1 landed (branch `rfc044-phase1-module-validators`)
+  after deep local adversarial review (Fable, corpus-driven; verdict
+  ACCEPT-WITH-CHANGES, all findings folded in). Checks 24–25:
+  `module-slots` + `module-eligibility`, both WARNING severity by design
+  (an invalid loadout doesn't fail a paste — the requests are silently
+  unfulfilled; and imported blueprints must not be error-blocked by
+  module quirks). Calls made: non-module item requests (fuel/ammo)
+  classified out before counting; pre-2.0 `effectivity-module*` names
+  alias to the efficiency family (the game migrates them — 94
+  false-unknown warnings across the corpus otherwise); unknown modded
+  entities carry no slot claim (`common::module_slots_known` → `None`
+  skips the overflow warning — `se-recycling-facility` is not "0
+  slots"); pumpjack added (2 slots, forbids quality) alongside the
+  drills; rocket-silo + pumpjack join the beacon in the hand-tabled
+  `allowed_effects` fallback (labs/drills deliberately absent — nil
+  `allowed_effects` in game data means unrestricted, so skipping is
+  exact); **eligibility gates on the module's beneficial effect only**
+  (the rev-2 "effects ⊆ allowed_effects" rule was falsified by
+  draftsman data: speed modules carry a quality malus yet
+  speed-in-beacon is legal); slot-overflow issues carry no
+  `IssueDetail` (the web starvation heatmap reads detail pairs
+  category-blind). RFC-039 trace promise satisfied by the
+  `ValidationCompleted` rollup — no per-check emits (checks run under
+  rayon; thread-local trace would drop them), recorded as the
+  deviation. Evidence: 18 unit tests; full corpus sweep 198/198 files,
+  ZERO module warnings, with the census cross-validating Phase 0c's
+  `allow_productivity` extraction against every recipe the community
+  actually prod-modules; full suite green; KC1 safe by construction
+  (generated layouts never populate `items`).*

@@ -6,9 +6,10 @@
 //!   (`common::module_slots`), and module-shaped names we don't recognize
 //!   (modded tiers) warn as unratable.
 //! - **module-eligibility** — productivity modules require the recipe's
-//!   `allow_productivity`, and every effect of a module must be in the
-//!   machine's `allowed_effects` (recycler forbids productivity,
-//!   oil-refinery forbids quality, ...).
+//!   `allow_productivity`, and a module's BENEFICIAL effect must be in
+//!   the machine's `allowed_effects` (recycler forbids productivity,
+//!   oil-refinery forbids quality, ...). Harmful side-effects never gate
+//!   — see `module_gating_effect`.
 //!
 //! Both emit WARNINGS, not errors: an in-game paste doesn't fail on an
 //! invalid loadout — the offending module requests are silently never
@@ -20,51 +21,74 @@
 //! module-shaped names participate here — a coal request on a furnace is
 //! legitimate and ignored.
 
-use crate::common::module_slots;
+use crate::common::module_slots_known;
 use crate::models::LayoutResult;
 use crate::recipe_db::db;
 use crate::validate::{Severity, ValidationIssue};
 
-/// Full effect set of a module family — a module is insertable only when
-/// EVERY effect it carries is in the machine's `allowed_effects` (this is
-/// why prod modules are rejected by AM1 even though AM1 allows their
-/// pollution/speed/consumption components: `productivity` itself is
-/// missing from the list).
-fn module_effects(family: &str) -> &'static [&'static str] {
+/// The GATING effect of a module family. The game gates insertion on the
+/// module's BENEFICIAL effect only — harmful side-effects never gate
+/// (draftsman 2.0.76: speed modules carry a quality malus, yet
+/// speed-in-beacon is legal even though beacon's `allowed_effects` has no
+/// "quality"). So each family reduces to the one effect that must be in
+/// the machine's `allowed_effects`.
+fn module_gating_effect(family: &str) -> Option<&'static str> {
     match family {
-        "speed" => &["speed", "consumption"],
-        "productivity" => &["productivity", "speed", "consumption", "pollution"],
-        "efficiency" => &["consumption"],
-        "quality" => &["quality", "speed"],
-        _ => &[],
+        "speed" => Some("speed"),
+        "productivity" => Some("productivity"),
+        "efficiency" => Some("consumption"),
+        "quality" => Some("quality"),
+        _ => None,
     }
 }
 
-/// Classify an item-request name: `Some(family)` for the nine known
-/// module prototypes, `None` for non-module requests (fuel, ammo, ...).
-/// Module-SHAPED names outside the known nine (modded tiers like
-/// `speed-module-4`) return `Some("unknown")`.
+/// Classify an item-request name: `Some(family)` for known module
+/// prototypes, `None` for non-module requests (fuel, ammo, ...).
+/// The `effectivity-module*` names are the pre-2.0 spelling of
+/// `efficiency-module*` — the game migrates them on paste, and the
+/// community corpus is full of them, so they alias into the efficiency
+/// family rather than warning as unknown. Module-shaped names outside
+/// the known set (modded tiers like `speed-module-4`) return
+/// `Some("unknown")`; the shape test strips a trailing tier number and
+/// requires a `-module` SUFFIX so real items like `empty-module-slot`
+/// never match.
 fn module_family(name: &str) -> Option<&'static str> {
     match name {
         "speed-module" | "speed-module-2" | "speed-module-3" => Some("speed"),
         "productivity-module" | "productivity-module-2" | "productivity-module-3" => {
             Some("productivity")
         }
-        "efficiency-module" | "efficiency-module-2" | "efficiency-module-3" => Some("efficiency"),
+        "efficiency-module" | "efficiency-module-2" | "efficiency-module-3"
+        | "effectivity-module" | "effectivity-module-2" | "effectivity-module-3" => {
+            Some("efficiency")
+        }
         "quality-module" | "quality-module-2" | "quality-module-3" => Some("quality"),
-        _ if name.contains("-module") => Some("unknown"),
-        _ => None,
+        _ => {
+            let base = match name.rfind('-') {
+                Some(i) if name[i + 1..].chars().all(|c| c.is_ascii_digit()) => &name[..i],
+                _ => name,
+            };
+            if base.ends_with("-module") {
+                Some("unknown")
+            } else {
+                None
+            }
+        }
     }
 }
 
-/// `allowed_effects` for module hosts that aren't in the machines dict.
-/// Beacon is hand-tabled from the RFC-044 review (draftsman 2.0.76:
-/// beacon forbids productivity and quality). Labs and mining drills have
-/// no entry in either source — the machine-level check SKIPS them
-/// (documented gap; extend the extraction if it starts to matter).
+/// `allowed_effects` for module hosts that aren't in the machines dict,
+/// hand-tabled from draftsman 2.0.76. Labs and mining drills are
+/// deliberately ABSENT — their prototype `allowed_effects` is nil, which
+/// means "all effects allowed", so skipping them is exact, not a gap.
 fn fallback_allowed_effects(entity: &str) -> Option<&'static [&'static str]> {
     match entity {
+        // Forbids productivity and quality.
         "beacon" => Some(&["speed", "consumption", "pollution"]),
+        // Forbid quality only.
+        "rocket-silo" | "pumpjack" => {
+            Some(&["speed", "consumption", "pollution", "productivity"])
+        }
         _ => None,
     }
 }
@@ -81,7 +105,7 @@ pub fn check_module_slots(layout: &LayoutResult) -> Vec<ValidationIssue> {
         for it in &ent.items {
             match module_family(&it.item) {
                 None => {}
-                Some("unknown") => {
+                Some("unknown") if it.count > 0 => {
                     issues.push(ValidationIssue::with_pos(
                         Severity::Warning,
                         "module-slots",
@@ -95,31 +119,36 @@ pub fn check_module_slots(layout: &LayoutResult) -> Vec<ValidationIssue> {
                     ));
                     module_count += it.count;
                 }
+                Some("unknown") => {}
                 Some(_) => module_count += it.count,
             }
         }
-        let slots = module_slots(&ent.name);
+        // Unknown (modded) entities carry no slot claim we can check —
+        // asserting "0 slots" about se-recycling-facility would be wrong.
+        let Some(slots) = module_slots_known(&ent.name) else {
+            continue;
+        };
         if module_count > slots {
-            issues.push(
-                ValidationIssue::with_pos(
-                    Severity::Warning,
-                    "module-slots",
-                    format!(
-                        "{} at ({}, {}): {} modules requested but the machine \
-                         has {} module slot{} — the surplus requests are never \
-                         fulfilled in game",
-                        ent.name,
-                        ent.x,
-                        ent.y,
-                        module_count,
-                        slots,
-                        if slots == 1 { "" } else { "s" }
-                    ),
+            // No `.with_detail` here: IssueDetail is for rate-shaped
+            // issues, and the web starvation heatmap reads any detail
+            // pair category-blind — a slot overflow is not "80% starved".
+            issues.push(ValidationIssue::with_pos(
+                Severity::Warning,
+                "module-slots",
+                format!(
+                    "{} at ({}, {}): {} modules requested but the machine \
+                     has {} module slot{} — the surplus requests are never \
+                     fulfilled in game",
+                    ent.name,
                     ent.x,
                     ent.y,
-                )
-                .with_detail(slots as f64, module_count as f64),
-            );
+                    module_count,
+                    slots,
+                    if slots == 1 { "" } else { "s" }
+                ),
+                ent.x,
+                ent.y,
+            ));
         }
     }
     issues
@@ -145,25 +174,17 @@ pub fn check_module_eligibility(layout: &LayoutResult) -> Vec<ValidationIssue> {
                 _ => continue,
             };
 
-            // Machine-level: every effect of the module must be allowed.
-            if let Some(allowed) = &allowed {
-                let forbidden: Vec<&str> = module_effects(family)
-                    .iter()
-                    .filter(|e| !allowed.contains(*e))
-                    .copied()
-                    .collect();
-                if !forbidden.is_empty() {
+            // Machine-level: the module's beneficial (gating) effect must
+            // be in the machine's allowed_effects.
+            if let (Some(allowed), Some(gating)) = (&allowed, module_gating_effect(family)) {
+                if !allowed.contains(&gating) {
                     issues.push(ValidationIssue::with_pos(
                         Severity::Warning,
                         "module-eligibility",
                         format!(
                             "{} at ({}, {}): {} not insertable — machine \
                              forbids the '{}' effect",
-                            ent.name,
-                            ent.x,
-                            ent.y,
-                            it.item,
-                            forbidden.join("', '")
+                            ent.name, ent.x, ent.y, it.item, gating
                         ),
                         ent.x,
                         ent.y,
@@ -241,8 +262,8 @@ mod tests {
         let issues = check_module_slots(&l);
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].category, "module-slots");
-        let d = issues[0].detail.as_ref().unwrap();
-        assert_eq!((d.delivered, d.needed), (4.0, 5.0));
+        assert!(issues[0].message.contains("5 modules"));
+        assert!(issues[0].message.contains("4 module slots"));
     }
 
     #[test]
@@ -353,6 +374,81 @@ mod tests {
             vec![("productivity-module-3", 2)],
         )]);
         assert!(check_module_eligibility(&l).is_empty());
+    }
+
+    #[test]
+    fn effectivity_modules_alias_to_efficiency() {
+        // Pre-2.0 spelling, migrated by the game on paste; the corpus is
+        // full of it (review MAJOR-1: 94 false unknown-module warnings).
+        let l = layout(vec![entity(
+            "assembling-machine-2",
+            Some("iron-gear-wheel"),
+            vec![("effectivity-module", 2)],
+        )]);
+        assert!(check_module_slots(&l).is_empty());
+        assert!(check_module_eligibility(&l).is_empty());
+    }
+
+    #[test]
+    fn unknown_modded_entity_skips_slot_claim() {
+        // Review MAJOR-2: we know nothing about se-recycling-facility's
+        // slots — no overflow warning may be asserted.
+        let l = layout(vec![entity(
+            "se-recycling-facility",
+            None,
+            vec![("productivity-module-3", 4)],
+        )]);
+        assert!(check_module_slots(&l).is_empty());
+    }
+
+    #[test]
+    fn pumpjack_slots_and_quality_restriction() {
+        // Review MAJOR-3 + MINOR-6: pumpjack has 2 slots and forbids
+        // quality (draftsman 2.0.76).
+        let over = layout(vec![entity("pumpjack", None, vec![("speed-module-3", 3)])]);
+        assert_eq!(check_module_slots(&over).len(), 1);
+        let ok = layout(vec![entity("pumpjack", None, vec![("speed-module-3", 2)])]);
+        assert!(check_module_slots(&ok).is_empty());
+        let q = layout(vec![entity("pumpjack", None, vec![("quality-module", 1)])]);
+        assert_eq!(check_module_eligibility(&q).len(), 1);
+    }
+
+    #[test]
+    fn quality_in_rocket_silo_warns_via_fallback() {
+        let l = layout(vec![entity(
+            "rocket-silo",
+            None,
+            vec![("quality-module-3", 1)],
+        )]);
+        assert_eq!(check_module_eligibility(&l).len(), 1);
+    }
+
+    #[test]
+    fn empty_module_slot_item_is_not_a_module() {
+        // Review NIT-7: real hidden 2.0 item whose name contains
+        // "-module" but is not module-shaped (no `-module` suffix after
+        // tier-stripping).
+        let l = layout(vec![entity(
+            "assembling-machine-3",
+            None,
+            vec![("empty-module-slot", 1)],
+        )]);
+        assert!(check_module_slots(&l).is_empty());
+        assert!(check_module_eligibility(&l).is_empty());
+    }
+
+    #[test]
+    fn overflow_warning_carries_no_rate_detail() {
+        // Review MINOR-5: IssueDetail feeds the category-blind starvation
+        // heatmap; a slot overflow must not tint as starvation.
+        let l = layout(vec![entity(
+            "assembling-machine-3",
+            None,
+            vec![("speed-module", 5)],
+        )]);
+        let issues = check_module_slots(&l);
+        assert_eq!(issues.len(), 1);
+        assert!(issues[0].detail.is_none());
     }
 
     #[test]

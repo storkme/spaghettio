@@ -1058,24 +1058,38 @@ pub fn module_effect(name: &str) -> ModuleEffect {
     }
 }
 
-/// Number of module slots for a machine entity.
-pub fn module_slots(entity: &str) -> u32 {
+/// Number of module slots for a KNOWN machine entity; `None` for
+/// entities outside the table (modded machines) — the module-slots
+/// validator must not assert slot counts it doesn't know (a modded
+/// `se-recycling-facility` with 4 modules is not "0 slots, surplus
+/// never fulfilled").
+pub fn module_slots_known(entity: &str) -> Option<u32> {
     match entity {
-        "assembling-machine-1" | "stone-furnace" | "steel-furnace" => 0,
-        "assembling-machine-2" | "electric-furnace" | "centrifuge" | "crusher" | "lab" => 2,
-        "chemical-plant" | "oil-refinery" => 3,
+        "assembling-machine-1" | "stone-furnace" | "steel-furnace" | "burner-mining-drill" => {
+            Some(0)
+        }
+        "assembling-machine-2" | "electric-furnace" | "centrifuge" | "crusher" | "lab"
+        | "pumpjack" => Some(2),
+        "chemical-plant" | "oil-refinery" => Some(3),
         "assembling-machine-3" | "rocket-silo" | "foundry" | "biochamber" | "biolab"
-        | "recycler" => 4,
-        "electromagnetic-plant" => 5,
-        "cryogenic-plant" => 8,
-        "beacon" => 2,
-        // Drills (RFC-044 Phase 1): the generator never places them, but
-        // moduled drills are ubiquitous in imported community blueprints
-        // and the module-slots check rates them too. burner stays 0.
-        "electric-mining-drill" => 3,
-        "big-mining-drill" => 4,
-        _ => 0,
+        | "recycler" => Some(4),
+        "electromagnetic-plant" => Some(5),
+        "cryogenic-plant" => Some(8),
+        "beacon" => Some(2),
+        // Drills + pumpjack (RFC-044 Phase 1): the generator never places
+        // them, but moduled ones are ubiquitous in imported community
+        // blueprints and the module-slots check rates them too.
+        "electric-mining-drill" => Some(3),
+        "big-mining-drill" => Some(4),
+        _ => None,
     }
+}
+
+/// Number of module slots for a machine entity (0 for unknown entities —
+/// consumers that need to distinguish unknown from known-0 use
+/// [`module_slots_known`]).
+pub fn module_slots(entity: &str) -> u32 {
+    module_slots_known(entity).unwrap_or(0)
 }
 
 /// Factorio `defines.inventory` id for an entity's module slots — the
