@@ -19,10 +19,16 @@ jobs:
     #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
 
     runs-on: ubuntu-latest
+    # `pull-requests`/`issues` must be WRITE: the review agent posts its
+    # findings as a PR review + inline/summary comments. The stock
+    # template ships read-only, which silently discarded every review
+    # from #305 through #324 — the job green-checked after a single
+    # permission denial (~20s, "No buffered inline comments") and no
+    # review was ever posted. Diagnosed 2026-07-21 on PR #324.
     permissions:
       contents: read
-      pull-requests: read
-      issues: read
+      pull-requests: write
+      issues: write
       id-token: write
 
     steps:
