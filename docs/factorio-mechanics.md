@@ -43,6 +43,18 @@ Formal rules the layout engine must satisfy. Statements are numbered per section
 - **B11.** A 90-degree **turn** (belt A facing into the side of belt B, where B continues in the perpendicular direction) preserves both lanes. Inner-lane items stay on the inner lane, outer on outer. No items are lost or merged.
 - **B12.** **Belt weaving / underground crossing**: to cross one belt line over another without mixing items, use an underground belt pair. Place a UG input before the crossing belt, and a UG output after it. Items travel underground past the crossing belt (U4). This is the standard technique for bus tap-offs crossing adjacent trunk belts.
 
+### Belt stacking (Space Age)
+
+Wiki-verified 2026-07-21 ([Stack inserter](https://wiki.factorio.com/Stack_inserter), [Transport belt capacity](https://wiki.factorio.com/Transport_belt_capacity_(research)), [Recycler](https://wiki.factorio.com/Recycler)); modeled by `docs/rfc-046-belt-stacking.md`.
+
+- **BS1.** Belt **stack size S ∈ {1,2,3,4}** is a per-force research state, not a per-belt property: 1 base → **2** (granted by the stack-inserter tech itself, Gleba) → **3** / **4** (Transport belt capacity 1/2, each needing all seven sciences). All belt tiers stack alike; effective capacity is `tier throughput × S` (per-lane likewise ×S). Space Age exclusive.
+- **BS2.** **Stack creators**: stack inserters (when dropping onto belts only), big mining drills, and recyclers — wiki verbatim: "Only stack inserters, big mining drills and recyclers can create belt stacks." Inserter drops into machines/chests are exact-hand, never stacked.
+- **BS3.** **Belt-drop hand rounding**: when a stack inserter drops onto a belt, its hand is rounded **down** to a multiple of S. Base hand 6 (built-in capacity bonus) → per-swing on belts = **6, 6, 6, 4** at S = 1..4. Per-inserter belt throughput therefore *drops* at S=4 unless capacity research raises the hand (unmodeled; see I8's conservative-constants note).
+- **BS4.** **Stack-preserving elements**: splitters, sideloads, underground belts, and belt-to-belt merges all preserve stacks. No belt element destroys a stack; stacks persist until consumed.
+- **BS5.** **Non-stack inserters never stack**: a belt loaded by regular / fast / long-handed inserters carries S=1 flow regardless of research. There is no reach-2 stacking inserter (I8a), so a long-handed belt-drop side can never contribute stacked flow.
+- **BS6.** **Pickup from stacked belts** works for every inserter type and is still bounded by the inserter's own items/s (I8); input-side sizing is unaffected by stacking.
+- **BS7.** **Recycler ejection** stacks mining-drill-style, but only when ≥2 of an item type are buffered ("the recycler will output stacks of materials onto a belt if the stack inserter has been researched") — probabilistic multi-product outputs (scrap recycling) may under-stack per item. Quality scales inserter rotation speed only; stack size is research-only.
+
 ---
 
 ## Underground Belts
@@ -127,7 +139,7 @@ Splitters compose into networks that route m input belts onto n output belts ("b
   isn't worth the churn. Revisit only if a real import shows starvation.
 - **I8a.** **Reach is asymmetric across variants.** Only `long-handed-inserter` is reach-2 in vanilla 2.0. There is **no** long-handed equivalent of `fast-inserter`, `stack-inserter`, or `bulk-inserter` — all of those are reach-1 only. A reach-2 slot (e.g. the far side of a 2-input belt row) is therefore capped at **~1.2 items/s base** (long-handed). Layout consequence: in a 2-input row, the higher-rate input must go in the near slot if its per-machine demand exceeds 1.2/s, since the far slot can only deploy long-handed inserters.
 
-- **I9.** **Stack inserter**: picks/drops multiple items per swing (stack size depends on research, max 12). Higher throughput than regular inserters. *(Relevant for high-throughput designs.)*
+- **I9.** **Stack inserter**: picks/drops multiple items per swing (stack size depends on research, max 12). Higher throughput than regular inserters. When dropping onto belts it builds stacks — see the **Belt stacking** section (BS1–BS7) for stack sizes, hand rounding, and which entities can create stacks.
 - **I10.** An inserter dropping into a machine will only insert items that the machine's current recipe accepts. *(No explicit filter needed for recipe-locked machines.)*
 
 ---

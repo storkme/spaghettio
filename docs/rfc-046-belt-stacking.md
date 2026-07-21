@@ -308,6 +308,26 @@ import; the in-game anchor (kill criterion 5) is the final word.
 
 ## Decision log
 
+- **2026-07-21 — Phase 0 landed; kill 4 resolved on its conservative
+  branch.** Recycler wiki page verified: recyclers DO stack onto belts
+  mining-drill-style once stack-inserter tech is researched — but only
+  "if the recycler has more than one of an individual item type in its
+  inventory," which for probabilistic multi-product outputs (scrap
+  recycling) is not guaranteed per item. Full-S crediting there would
+  be fragile in the unsafe direction (plan > real), and no current
+  fixture comes near even unstacked capacity on a recycler output
+  belt — so **`voider_row` / `scrap_recycling_row` output belts keep
+  S=1 capacity** (kill 4's documented-conservatism branch, taken on
+  partial rather than failed verification). Revisit trigger: a real
+  Fulgora fixture that saturates an unstacked recycler output belt.
+  Mechanics rules landed as BS1–BS7 in `factorio-mechanics.md` (BS7
+  records the buffering caveat). Capacity helpers +
+  `stack_inserter_swings` / `stack_inserter_belt_hand` landed additive
+  and unconsumed with unit tests (S=1 identity sweep, headline tier
+  selections, the S=4 hand dip, quality composition, clamps).
+  `override_stack_size` import tolerance pinned by a parser unit test
+  (serde ignores unknown fields — no `deny_unknown_fields` anywhere in
+  the parser — but the test keeps it true).
 - **2026-07-21 — Adversarial spec review: APPROVE-WITH-CHANGES; v2
   folds all findings.** Two blockers, both accepted. (1) The hand
   5→6 recalibration was self-contradictory with kill 1 — the flat

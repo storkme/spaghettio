@@ -560,6 +560,29 @@ mod tests {
         assert_eq!(bp, bp2, "tree export must be a fixed point of export→parse→export");
     }
 
+    /// RFC-046 Phase 0 spot-check: the 2.0 `override_stack_size` field
+    /// (uint8, per-inserter hand-size override; lua-api BlueprintEntity)
+    /// is tolerated on import. We deliberately never emit it — exports
+    /// inherit the importing force's research — but community blueprints
+    /// carry it and must parse.
+    #[test]
+    fn override_stack_size_field_is_tolerated_on_import() {
+        let bp = encode_envelope(&serde_json::json!({
+            "blueprint": {
+                "item": "blueprint",
+                "version": 562949955518464u64,
+                "entities": [
+                    {"entity_number": 1, "name": "stack-inserter",
+                     "position": {"x": 0.5, "y": 0.5}, "direction": 4,
+                     "override_stack_size": 1},
+                ]
+            }
+        }));
+        let parsed = parse_blueprint_string(&bp).expect("should parse");
+        assert_eq!(parsed.entities.len(), 1);
+        assert_eq!(parsed.entities[0].name, "stack-inserter");
+    }
+
     #[test]
     fn parses_entity_quality() {
         use crate::common::QualityTier;
