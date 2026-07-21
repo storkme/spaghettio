@@ -106,8 +106,8 @@ pub struct LayoutOptions {
     /// (default, bit-identical to pre-RFC — kill 1), 2–4 = stacked.
     /// User-specified, never inferred (same contract as `max_belt_tier`).
     /// Values outside 1..=4 clamp in the `common::*_stacked` helpers.
-    /// Phase 1 core field only — not yet plumbed through wasm-bindings
-    /// or the web UI (Phase 2), so no deployed layout can set ≠1 yet.
+    /// Plumbed through wasm-bindings `layout*` and the web UI (URL
+    /// `st=`, sidebar "Belt stacking") since Phase 2.
     pub stacking: u8,
 }
 

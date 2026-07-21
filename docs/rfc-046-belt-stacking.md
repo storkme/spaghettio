@@ -1,6 +1,7 @@
 # RFC-046: Belt stacking (Space Age stacked belts)
 
-Registry: [`rfcs.md`](rfcs.md). Status: **Draft** (2026-07-21).
+Registry: [`rfcs.md`](rfcs.md). Status: **Complete** (2026-07-21;
+in-game anchor open, Phase 3 deferred).
 
 ## Summary
 
@@ -13,10 +14,15 @@ stack inserters on belt-dropping sides so the ×S credit is honest, and
 threads through layout options, the lane-rate validator, wasm, the URL
 codec, and the sidebar — the same single-source-of-truth shape as
 build quality (RFC-041). Solver untouched: stacking is pure logistics.
-Headline outcome: the original 60 EC/s legendary scenario fits **one**
-stacked express belt (45 × 2 = 90/s ≥ 60/s), clearing the cap that
-[#311](https://github.com/storkme/spaghettio/issues/311) imposed,
-without waiting for the output-merger rework.
+Delivered headline (restated during Phase 2 — see the decision log):
+the [#311](https://github.com/storkme/spaghettio/issues/311) stress
+config, **EC@60/s on red belts from ore** — whose committed golden
+stamps 60/s onto a physically-30/s merger belt with zero warnings —
+becomes physically valid end-to-end at S=2 (red stacked = 60/s), one
+belt, proven by a direct per-tile capacity audit. The originally
+drafted legendary-express@60 variant is NOT proven: it hits
+pre-existing high-rate residuals unrelated to stacking (Phase 3
+pick-up).
 
 ## Motivation
 
@@ -282,11 +288,14 @@ import; the in-game anchor (kill criterion 5) is the final word.
    the entire RFC** (achievable because nothing recalibrates — see "No
    recalibration"). Any S=1 diff is a threading bug — stop and fix
    before the phase proceeds. (Mirror of RFC-041 kill 2.)
-2. **No blind-spot laundering.** The 60 EC/s legendary headline counts
-   as delivered **only** with a decoded snapshot showing every
+2. **No blind-spot laundering.** The 60 EC/s one-stacked-belt headline
+   counts as delivered **only** with direct evidence that every
    final-output tile's stamped rate ≤ its belt's physical cap × S. If
    it "passes" only because #311's unvisited merger tiles hide the
    overload, the headline is NOT delivered and the RFC must say so.
+   *(Delivered: `stacking_ec_60s_red_one_belt_headline` audits every
+   rate-stamped belt tile in-test — and proves the audit's teeth by
+   running it on the S=1 layout, where it finds the #311 overload.)*
 3. **Unstackable-site census bound.** *(Tripped and resolved
    2026-07-21 — the criterion worked: the review census missed the
    Fulgora D2b secondary output; implementation stopped, re-ran the
@@ -306,18 +315,30 @@ import; the in-game anchor (kill criterion 5) is the final word.
 5. **In-game import anchor** (user-run, held open per RFC-037/041
    precedent — does not block merges): a stacked export imports into
    current Space Age and visibly builds stacks on belts at the
-   researched size; the 60 EC/s legendary layout sustains ≥ 59 EC/s.
+   researched size; the **EC@60/s red S=2** layout (the delivered
+   headline fixture's config: normal quality, AM2, from ores) sustains
+   ≥ 59 EC/s. Do NOT run the anchor on the legendary-express variant —
+   it fails today for pre-existing reasons unrelated to stacking
+   (Phase 3), and a failure there would misattribute.
 
 ## Verification plan
 
 - Full suite from one clean invocation (single-run counts) +
   `SPAGHETTIO_STRESS_GOLDEN=check`.
-- Differential fixtures: (a) EC 60/s legendary express S=2 — the
-  headline, snapshot-decoded per kill 2; (b) an S=4 case pinning the
-  hand-4 rounding (output inserter counts *rise* vs S=3 at equal
-  rate); (c) S=1 identity pair.
-- Browser eyeball (user): stacked layout renders sanely; trunk count
-  visibly shrinks vs S=1 at equal rate.
+- Differential fixtures *(as delivered — see decision log for the
+  headline restatement)*: (a) EC@60/s **red, normal, from ore** S=2 —
+  the headline, verified by an in-fixture per-tile capacity audit
+  (stronger than the originally planned one-off snapshot decode: it
+  re-runs on every suite run and proves its own teeth on the S=1
+  layout); (b) the S=4 hand-4 rounding pin — delivered as ladder
+  **unit tests** (`belt_drop_counts_track_hand_dip`: 20/s = 2
+  inserters at S=3 but 3 at S=4) rather than a full-layout e2e
+  differential, a documented granularity substitution; (c) S=1
+  identity via the STRESSGOLD bit-identity gates run at every phase.
+- Browser eyeball (user): stacked layout renders sanely. (Note: trunk
+  count does NOT shrink vs S=1 — that expectation died with the
+  full-belt descope; what changes visibly is belt tiers and the
+  forced stack inserters.)
 - In-game anchor: kill criterion 5 (user-run).
 
 ## Phasing
@@ -337,12 +358,37 @@ import; the in-game anchor (kill criterion 5) is the final word.
   self-loop minor-lane guard (kill 3); wasm `layout*` params, URL
   `s=`, sidebar dropdown; differential fixtures + headline snapshot
   (kill 2).
-- **Phase 3 — deferred.** Per-lane stackedness (mixed economies);
-  inserter capacity-bonus research axis; #312 composed fix; renderer
-  stack visuals.
+- **Phase 3 — deferred.** Lane-aware tap delivery + the #312 fan-in
+  wall lift at S>1 (demoted from Phase 2 — full-belt thresholds on
+  tap-delivered flow are unsound, see decision log); the
+  legendary-express@60 headline variant (blocked by pre-existing
+  high-rate residuals independent of stacking: a junction-solver
+  failure near dense crossings and ~3% lane-rate walker overshoot on
+  zero-headroom lanes at exact tier boundaries — no issue number yet,
+  file one at pick-up); per-lane stackedness (mixed economies);
+  inserter capacity-bonus research axis; renderer stack visuals.
 
 ## Decision log
 
+- **2026-07-21 — Honesty-lens implementation review:
+  APPROVE-WITH-CHANGES; all findings folded.** Every quantitative
+  claim survived independent re-derivation (suite 834/0/36, STRESSGOLD
+  9/9, empty golden diff, the 100→380 forcing differential and the
+  fan-in refusal both reproduced from scratch). The blocker was
+  narrative staleness: Summary/kill-2/kill-5/verification-plan still
+  described the superseded legendary-express headline as delivered —
+  exactly the quiet-weakening failure mode the lens exists for. Fixed:
+  Summary restated to the delivered red/normal headline; kill 5
+  rescoped so the user-run anchor targets the *verified* config (a
+  legendary-express in-game failure would misattribute); the 10-vs-8
+  forcing-site count bridged (2 self-loop major sites are
+  exemption-guaranteed passthroughs); status Draft→Complete (registry
+  + header); the stale Phase-1 field comment and headline-flavored
+  unit-test comment corrected; verification-plan items annotated with
+  their as-delivered granularity (in-fixture audit > one-off snapshot
+  decode; hand-dip pin as unit test); the legendary-express residual
+  promoted from log prose to a Phase 3 bullet. Code-correctness lens
+  review ran in parallel — see the following entry.
 - **2026-07-21 — Phase 2 landed; second simplification falsified and
   descoped (full-belt ×S on tap-delivered flow).** The first S=2
   differential runs failed honestly: scaling the consumer-clamped
@@ -392,8 +438,12 @@ import; the in-game anchor (kill criterion 5) is the final word.
   `max_inserter_tier < Stack` is an incoherent config → named refusal
   at layout entry, never silent degradation. Near-output forcing
   census: 10 `Reach::Near` output `size_side` sites across the row
-  templates get the belt-drop entry point; the 2 far-output sites and
-  the sushi sorters stay unforced (their families are exempt).
+  templates; 8 got the belt-drop entry point — the other 2 are
+  `self_loop_row`'s major-output sites, which stay on `size_side`
+  because the whole self-loop family (major and minor share the item)
+  is exemption-guaranteed a passthrough (stated in a comment at the
+  site). The 2 far-output sites and the sushi sorters likewise stay
+  unforced (their families are exempt).
 - **2026-07-21 — Phase 1 landed (plumbing + validator honesty).**
   `LayoutOptions.stacking` (manual `Default` impl so the neutral value
   is literally 1) → recorded as `LayoutResult.stacking` (serde: skip

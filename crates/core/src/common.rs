@@ -1047,9 +1047,9 @@ mod tests {
 
     #[test]
     fn belt_entity_for_rate_stacked_selection() {
-        // 60/s at S=2: red belt carries exactly 30 × 2 — cheapest wins
-        // (the RFC headline's express belt has 90/s headroom; selection
-        // itself is thrifty).
+        // 60/s at S=2: red belt carries exactly 30 × 2 — cheapest wins,
+        // and this is the delivered headline config (EC@60/s on one
+        // stacked red belt).
         assert_eq!(
             belt_entity_for_rate_stacked(60.0, None, 2),
             "fast-transport-belt"
