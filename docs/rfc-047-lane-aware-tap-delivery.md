@@ -39,7 +39,15 @@ Concrete failing cases today:
   crossing plus ~3% walker overshoot on zero-headroom lanes at exact
   tier boundaries (characterized in RFC-046's decision log; no issue
   number — this RFC files one if the junction half survives its
-  bounded investigation as a real, separable defect).
+  bounded investigation as a real, separable defect). **Probe evidence
+  (2026-07-21, `debug_overshoot_probe`): the junction failure is the
+  dominant defect, not a peer** — the unresolved 50-tile crossing at
+  (2,38) orphans ghost belts, every furnace bank in two full rows
+  reports `belt-flow-reachability` unreached, and ore input belts
+  deliver 0.0/s. The 15.4–15.5/s lane overloads (vs a 15/s stacked
+  yellow per-lane cap, tiles (24–25, 14/21/118)) are secondary. Kill 3
+  (junction) therefore gates the express variant; kill 4 (overshoot)
+  is a smaller residual on the same config.
 - More broadly: at high build quality, collapsed machine counts shrink
   consumer trunk counts while flows stay constant, so the wall bites
   configs that plain-quality builds handle (#312) — and stacking,
