@@ -601,11 +601,9 @@ const GOLDEN_HASHES: &[(&str, &str)] = &[
     // RFC rfc-inserter-sizing.md Phase 2: dual_input_row ladder-sized + near/far reassigned.
     // RFC rfc-inserter-sizing.md Phase 3: far side's reach-2 count-ladder activated.
     ("tier2_electronic_circuit_20s_from_ore", "7a23126d5f857d22db9374cc6269eb9ea2d7bdb2a69c6dc34f60f322cc63e134"),
-    // RFC rfc-inserter-sizing.md Phase 2: dual_input_row's inserters are now
-    // ladder-sized + near/far reassigned (this fixture's dual-input EC row
-    // is exactly the template Phase 2 touches) — entity types/positions on
-    // that row moved.
-    ("tier2_electronic_circuit_splitter_stamp_regression", "8f1eaa38c9a8beeae052ff9fd63b5c4e7d68662e685d576e731c192694ba1d5f"),
+    // (RFC-047 Leg B: `tier2_electronic_circuit_splitter_stamp_regression`
+    // no longer builds — it is now a named-refusal guard — so its golden
+    // hash entry was removed.)
     // RFC rfc-inserter-sizing.md Phase 3: fluid_input_row's solid side
     // (coal) is now ladder-sized. Reaches fully clean.
     ("tier3_plastic_bar", "bb1cccc422f0e44bfdb1d18ef59d870d71d8fe5d7147b659e7b388c79a526166"),
@@ -677,9 +675,10 @@ fn assert_round_trip(result: &E2EResult) {
 // the ghost router currently fails them — head-on belt collisions, dead-end
 // belts, item-isolation between adjacent trunks, etc. They are marked
 // `#[ignore]` with a one-line failure summary until ghost mode catches up.
-// The two passing ones (`tier3_sulfuric_acid`,
-// `tier2_electronic_circuit_splitter_stamp_regression`) stay live as the
-// new green-bar regression guards for ghost routing.
+// `tier3_sulfuric_acid` stays live as a green-bar regression guard for
+// ghost routing. `tier2_electronic_circuit_splitter_stamp_regression` was
+// also one until RFC-047 Leg B turned its config into a named refusal (it
+// now guards that refusal instead — see its doc comment).
 
 #[test]
 #[ntest::timeout(10000)]
@@ -1136,58 +1135,62 @@ fn tier2_electronic_circuit_20s_from_ore() {
     assert_golden_hash(&result, "tier2_electronic_circuit_20s_from_ore");
 }
 
-/// Regression test for the splitter-stamp sideload-into-UG-input bug that the
-/// user reported: `electronic-circuit` at 10/s, assembling-machine-1 with fast
-/// belts, generating from `{iron-plate, copper-plate}`. The bug class manifests
-/// as a `DroppedBridge` in the router — the foreign-trunk yield (UG bridge)
-/// for one lane's trunk couldn't be emitted because its UG output tile
-/// collided with the trunk's own tap-off. Before the retry-loop fix in
-/// `build_bus_layout`, this produced an invalid sideload into the tap-off's
-/// underground-belt-input first tile. The retry loop maps dropped bridges to
-/// `extra_gap_after_row` updates, pushing the colliding row down by 1 so the
-/// bridge becomes valid.
+/// RFC-047 Leg B named-refusal guard (was: splitter-stamp
+/// sideload-into-UG-input regression). This exact config — `electronic-circuit`
+/// @ 10/s, assembling-machine-1, fast (red) belts, from `{iron-plate,
+/// copper-plate}` — produces a copper-cable lane at 30/s fed by TWO fragmented
+/// producer rows into a SINGLE consumer trunk with no balancer. The topmost
+/// producer corner-feeds the trunk head (both lanes); every later producer
+/// B8-sideloads mid-trunk onto ONE physical lane, so the trunk's near lane
+/// carries 22/s against a 15/s red per-lane cap.
 ///
-/// This test specifically guards the retry feedback loop: if it ever stops
-/// firing (e.g. route_belt_lane stops pushing to dropped_bridges), this test
-/// fails because the sideload warning comes back.
+/// The pre-RFC-047 pipeline laid this out anyway — probe-verified 38 silent
+/// `lane-throughput` overload errors that no test ever asserted on (the old
+/// version of this test only checked for "sideloads into underground input"
+/// warnings, which this config never produced). RFC-047 Leg B step 2 (the
+/// ghost_router late-sideload check) now refuses it BY NAME rather than
+/// shipping a throttled, over-capacity trunk. Merge-tap can't rescue it (a
+/// single consumer fails the `n_lanes_with_consumers >= 2` gate; and Native's
+/// hard Err skips the merge-tap decomposition candidate — both verified), so a
+/// named refusal is the honest outcome here.
+///
+/// The historical sideload-into-UG-input retry-loop coverage this config once
+/// nominally provided is defunct on the current pipeline: the retry is now
+/// driven by junction `cap_coords` (`LayoutRetried`), not `DroppedBridge`, and
+/// neither event fires for EC AM1 fast at any rate 6..=10 (probe-verified). It
+/// is also moot here now that the config refuses upstream of routing. Fresh
+/// UG-retry regression coverage, if wanted, needs a config that actually emits
+/// `LayoutRetried`/`BridgeDropped`; tracked as a follow-up, out of RFC-047
+/// scope.
 #[test]
-// Bumped from 10s to 30s after the belt-permissive junction SAT change
-// — debug-mode SAT solves got slower with more boundaries per zone.
-// Release mode still completes in ~2.5s; debug closer to 10-15s.
+// Kept the 30s ceiling from the pre-047 build-and-validate era; the refusal
+// path returns far sooner, but the solve still runs.
 #[ntest::timeout(30000)]
 fn tier2_electronic_circuit_splitter_stamp_regression() {
     let inputs: FxHashSet<String> = ["iron-plate", "copper-plate"]
         .iter()
         .map(|s| s.to_string())
         .collect();
-    let result = run_e2e(
+    let outcome = run_e2e(
         "tier2_electronic_circuit_splitter_stamp_regression",
         "electronic-circuit",
         10.0,
         "assembling-machine-1",
         Some("fast-transport-belt"),
         &inputs,
-    )
-    .unwrap_or_else(|e| panic!("tier2_electronic_circuit_splitter_stamp_regression: {e}"));
-
-    // Specifically assert there's no sideload-into-UG-input warning, which
-    // is the precise bug class the retry loop addresses.
-    let sideload_issues: Vec<_> = result.issues.iter()
-        .filter(|i| i.message.contains("sideloads into underground input"))
-        .collect();
-    assert!(
-        sideload_issues.is_empty(),
-        "Expected no sideload-into-UG-input warnings, got {}:\n{}",
-        sideload_issues.len(),
-        sideload_issues.iter()
-            .map(|i| format!("  [{}] {} ({},{})", i.category, i.message,
-                i.x.unwrap_or(-1), i.y.unwrap_or(-1)))
-            .collect::<Vec<_>>()
-            .join("\n")
     );
-    // Ensure the layout can actually produce items (no solver/routing failure).
-    assert_produces(&result, "electronic-circuit", 10.0);
-    assert_golden_hash(&result, "tier2_electronic_circuit_splitter_stamp_regression");
+    let err = match outcome {
+        Err(e) => e,
+        Ok(_) => panic!(
+            "EC@10/s AM1 fast belts must refuse (RFC-047 Leg B late sideload \
+             check): copper-cable 30/s on a single sideload-fed red trunk \
+             overloads one lane to 22/s > 15/s red per-lane cap, but it built"
+        ),
+    };
+    assert!(
+        err.contains("lane-aware delivery") && err.contains("copper-cable"),
+        "expected the RFC-047 named lane-aware refusal for copper-cable, got: {err}"
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -294,6 +294,57 @@ generator remains future work.
 
 ## Decision log
 
+- **2026-07-22 — Leg B step-2 (late sideload check) landed; the Phase-1
+  census's "no such shape live at S=1" claim ALSO falsified — the check
+  exposes a real pre-existing S=1 overload.** Added the ghost_router
+  ret-spec-time refusal (RFC-047 Leg B (ii)): a single-consumer trunk
+  (`consumer_rows.len() == 1`) fed by `>= 2` producers with no balancer,
+  whose `lane.rate` exceeds one stacked lane's capacity
+  (`lane_capacity_stacked(horiz_belt, for_item(item))`), returns a named
+  `"lane-aware delivery: item X rate R exceeds per-lane capacity C on a
+  sideload-fed single trunk"` Err. Rationale: the topmost producer
+  corner-feeds the trunk head (both lanes, ground-truth 2), but every
+  later producer B8-sideloads mid-trunk onto ONE physical lane, so
+  `rate > per-lane×S` cannot be delivered.
+  - **Census falsification (credit: step-2 probe).** The Phase-1 census
+    inferred "the post-Phase-0 honest walker does NOT flag these live
+    single-trunk lanes" from suite-green — but the one fixture with this
+    shape (`tier2_electronic_circuit_splitter_stamp_regression` =
+    EC@10/s, AM1, fast/red belts, from plates) only ever asserted on
+    "sideloads into underground input" warnings, never lane-throughput.
+    Probing with the check disabled shows the config builds with **38
+    silent `lane-throughput` errors** — copper-cable 30/s from 2
+    fragmented producer rows into one red trunk, near lane 22/s vs a
+    15/s red per-lane cap. So the walker WAS flagging it; nothing
+    asserted on the flag. The shape is live at S=1 and was silently
+    broken; step 2 refuses it honestly. This is S=1-identical to base
+    5f838be (047-1b is S=1-inert), so the overload is pre-existing, not
+    introduced.
+  - **Merge-tap cannot rescue it (verified, answering the "transparent
+    fix?" question).** For EC@10/s AM1 red: (a) the in-plan merge-tap
+    gate needs `n_lanes_with_consumers >= 2`, but this shape has ONE
+    consumer → merge-tap never restructures it (probe: forcing
+    `merge_tap=true` still yields the 38-error plain sideload); (b) the
+    `MergeTapCandidate` decomposition fallback only runs when Native
+    produced an *unaccepted layout*, but step 2 makes Native hard-**Err**
+    (`outcome == None`) → the candidate is skipped ("merge-tap: did not
+    run"). A (2,1) single-consumer merge is genuinely unwired, so a
+    named refusal is the honest outcome, not a transparent fix.
+  - **Fixture handling (plan (b), coordinator-approved).**
+    `tier2_electronic_circuit_splitter_stamp_regression` is converted
+    from a (now-vacuous) sideload-into-UG retry guard into the RFC-047
+    named-refusal guard for this shape. The old retry-loop coverage was
+    already defunct on the current pipeline: the retry is driven by
+    junction `cap_coords` (`LayoutRetried`), not `DroppedBridge`, and
+    neither fires for EC AM1 fast at any rate 6..=10 (probe-verified). No
+    live coverage lost; its golden-hash entry removed (config no longer
+    builds). Fresh UG-retry regression coverage needs a config that
+    actually emits `LayoutRetried`/`BridgeDropped` — filed as a
+    follow-up, out of RFC-047 scope.
+  - Gates: full suite green (e2e 58 / unit 773, one clean run),
+    STRESSGOLD `check` 9/9, clippy `-D warnings` clean. Landed as
+    `feat(047-2)`.
+
 - **2026-07-22 — Leg B step-1 premise falsified during implementation;
   real root cause is a stacking-blind row-split cap, not a `ret:`
   sideload. Fix relocated from ghost_router to `place_rows`.** The
