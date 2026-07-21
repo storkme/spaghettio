@@ -12,6 +12,7 @@
 use crate::bus::inserter_ladder::{
     capped_limit, contest_favors_far, size_side, InserterTier, Reach, SidePlan,
 };
+use crate::bus::stacking_ctx::StackingCtx;
 use crate::models::{EntityDirection, PlacedEntity};
 use crate::common::QualityTier;
 
@@ -4022,9 +4023,10 @@ pub fn self_loop_row(
     max_belt_tier: Option<&str>,
     max_inserter_tier: InserterTier,
     quality: QualityTier,
+    ctx: &StackingCtx,
 ) -> (Vec<PlacedEntity>, i32, Vec<(String, i32, i32)>) {
     use crate::bus::balancer::{splitter_for_belt, underground_for_belt};
-    use crate::common::belt_entity_for_rate;
+    use crate::common::belt_entity_for_rate_stacked;
 
     debug_assert_eq!(
         crate::common::machine_dims(machine_entity),
@@ -4058,11 +4060,16 @@ pub fn self_loop_row(
     let near_total = (near_net_rate * count as f64).max(1e-6);
     let minor_total = minor.map(|(_, p)| p * count as f64).unwrap_or(0.0).max(1e-6);
 
-    let far_belt = belt_entity_for_rate(major_total, max_belt_tier);
-    let near_belt_name = belt_entity_for_rate(near_total, max_belt_tier);
-    let near2_belt = belt_entity_for_rate(minor_total, max_belt_tier);
-    let collector_belt = belt_entity_for_rate(major_total, max_belt_tier);
-    let minor_collector_belt = belt_entity_for_rate(minor_total, max_belt_tier);
+    // Self-loop items are always family-exempt (kovarex-class, RFC-046 —
+    // major_item and near_item's minor loop both land in `StackingCtx`'s
+    // exempt set via the `spec.self_loop` derivation), so these calls plan
+    // at ×1 regardless of `ctx.stacking()`; converted for uniformity with
+    // every other belt-tier site in the pipeline.
+    let far_belt = belt_entity_for_rate_stacked(major_total, max_belt_tier, ctx.for_item(major_item));
+    let near_belt_name = belt_entity_for_rate_stacked(near_total, max_belt_tier, ctx.for_item(near_item));
+    let near2_belt = belt_entity_for_rate_stacked(minor_total, max_belt_tier, ctx.for_item(near_item));
+    let collector_belt = belt_entity_for_rate_stacked(major_total, max_belt_tier, ctx.for_item(major_item));
+    let minor_collector_belt = belt_entity_for_rate_stacked(minor_total, max_belt_tier, ctx.for_item(near_item));
     let splitter_name = splitter_for_belt(collector_belt);
     let near2_ug = underground_for_belt(near2_belt);
 
@@ -5015,9 +5022,10 @@ pub fn voider_row(
     max_belt_tier: Option<&str>,
     max_inserter_tier: InserterTier,
     quality: QualityTier,
+    ctx: &StackingCtx,
 ) -> (Vec<PlacedEntity>, i32) {
     use crate::bus::balancer::underground_for_belt;
-    use crate::common::belt_entity_for_rate;
+    use crate::common::belt_entity_for_rate_stacked;
 
     debug_assert_eq!(
         crate::common::machine_dims("recycler"),
@@ -5028,8 +5036,12 @@ pub fn voider_row(
     let near_total = (near_rate_per_machine * count as f64).max(1e-6);
     let far_total = (far_rate_per_machine * count as f64).max(1e-6);
 
-    let near_belt = belt_entity_for_rate(near_total, max_belt_tier);
-    let recirc_belt = belt_entity_for_rate(far_total, max_belt_tier);
+    // `item` (the voided surplus item) is always exempt (RFC-046 kill 4:
+    // recycler direct belt ejection isn't guaranteed to stack), so both
+    // calls plan at ×1 regardless of `ctx.stacking()` — converted for
+    // uniformity.
+    let near_belt = belt_entity_for_rate_stacked(near_total, max_belt_tier, ctx.for_item(item));
+    let recirc_belt = belt_entity_for_rate_stacked(far_total, max_belt_tier, ctx.for_item(item));
     let near_ug = underground_for_belt(near_belt);
 
     // Prefix zone west of machine 0: 5 columns, two independent purposes
@@ -5318,8 +5330,9 @@ pub fn scrap_recycling_row(
     max_belt_tier: Option<&str>,
     max_inserter_tier: InserterTier,
     quality: QualityTier,
+    ctx: &StackingCtx,
 ) -> (Vec<PlacedEntity>, i32, Vec<(String, i32)>) {
-    use crate::common::belt_entity_for_rate;
+    use crate::common::belt_entity_for_rate_stacked;
 
     debug_assert_eq!(
         crate::common::machine_dims("recycler"),
@@ -5355,9 +5368,15 @@ pub fn scrap_recycling_row(
     // can pick up from the row's east edge.
     let east_x = sushi_east + 1;
 
-    let scrap_belt = belt_entity_for_rate(input_total_rate, max_belt_tier);
+    // `input_item` (scrap) is trunk-fed from stacked externals — NOT
+    // exempt, so this genuinely scales at S>1. The sushi belt physically
+    // carries the sorted OUTPUT items, which are all recycler-row exempt
+    // (RFC-046 kill 4); any one of them resolves `ctx.for_item` to the
+    // same answer, so the first is representative.
+    let scrap_belt = belt_entity_for_rate_stacked(input_total_rate, max_belt_tier, ctx.for_item(input_item));
     let sushi_total: f64 = sorted_items.iter().map(|(_, r)| *r).sum();
-    let sushi_belt = belt_entity_for_rate(sushi_total, max_belt_tier);
+    let sushi_item = sorted_items.first().map(|(it, _)| it.as_str()).unwrap_or(input_item);
+    let sushi_belt = belt_entity_for_rate_stacked(sushi_total, max_belt_tier, ctx.for_item(sushi_item));
 
     let machine_seg = Some(format!("row:{recipe}:machine"));
     let scrap_in_seg = Some(format!("row:{recipe}:belt-in:{input_item}"));
@@ -5446,7 +5465,7 @@ pub fn scrap_recycling_row(
         let jx = sort_cols[j];
         let rank = (k - 1) - j as i32; // westmost (j=0) => deepest
         let turn_dy = dy_lanes + rank;
-        let out_belt = belt_entity_for_rate(*rate * 2.0, max_belt_tier);
+        let out_belt = belt_entity_for_rate_stacked(*rate * 2.0, max_belt_tier, ctx.for_item(item));
         let out_seg = Some(format!("row:{recipe}:belt-out:{item}"));
         // `:sushi-sort:` marks the belt-to-belt filter inserter that lifts
         // one item off the sushi belt. Validators key on it:
@@ -6743,6 +6762,7 @@ mod tests {
             Some(("water", 8.0)),
             None, // max_belt_tier
             InserterTier::default(), QualityTier::Normal,
+            &StackingCtx::unstacked(),
         );
         use crate::bus::placer::RowKind;
         let expected = RowKind::SelfLoop { has_minor: false, has_fluid: true }.row_height();
@@ -6775,6 +6795,7 @@ mod tests {
             None,
             None,
             InserterTier::default(), QualityTier::Normal,
+            &StackingCtx::unstacked(),
         );
         // PREFIX=3 dead columns west of machine 0 -> mx0 = x_offset + 3 = 3.
         let near_stacks: Vec<_> = entities
@@ -6811,6 +6832,7 @@ mod tests {
             Some(("water", 8.0)),
             None,
             InserterTier::default(), QualityTier::Normal,
+            &StackingCtx::unstacked(),
         );
         let near_lhis: Vec<_> = entities
             .iter()
@@ -6841,6 +6863,7 @@ mod tests {
             None,
             None,
             InserterTier::default(), QualityTier::Normal,
+            &StackingCtx::unstacked(),
         );
         // dy_out_ins for the has-minor shape = dy_machine(6) + msz(3) = 9.
         // PREFIX=3 dead columns west of machine 0 -> mx0 = x_offset + 3 = 3;
@@ -6886,6 +6909,7 @@ mod tests {
             Some(("water", 1.0)),
             None,
             InserterTier::default(), QualityTier::Normal,
+            &StackingCtx::unstacked(),
         );
     }
 
@@ -7584,6 +7608,7 @@ mod tests {
             5.0,  // far_rate_per_machine -- exceeds LHI's 1.2/s
             None,
             InserterTier::default(), QualityTier::Normal,
+            &StackingCtx::unstacked(),
         );
         let near: Vec<_> = entities
             .iter()
@@ -7967,6 +7992,7 @@ mod tests {
             &items,
             Some("transport-belt"),
             InserterTier::default(), QualityTier::Normal,
+            &StackingCtx::unstacked(),
         );
 
         // Four south-facing recyclers at pitch 2, dy=2.
