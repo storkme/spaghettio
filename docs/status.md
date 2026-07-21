@@ -6,30 +6,157 @@ Update this file (not `CLAUDE.md`) when a tier's status changes or an RFC
 closes out. Per-topic backlogs stay in their own `*-followups.md` docs; this
 ledger is the cross-cutting view.
 
+Fully re-audited 2026-07-21 (fresh `science_gauntlet` run + default-suite
+sweep + issue-state check); per-row history trimmed to current status —
+the evidence trails live in the owning RFC decision logs.
+
+## Measurement protocol
+
+Layout results are only comparable with the SAT zone cache pinned:
+
+```bash
+SPAGHETTIO_ZONE_CACHE_PATH=$(pwd)/crates/core/data/sat-zones-ci.bin \
+    cargo test --manifest-path crates/core/Cargo.toml
+```
+
+This is what CI does (see the comment in `.github/workflows/ci.yml`). Without
+the pin, a fresh environment solves zones live under wall-clock budgets, and
+slow/loaded machines record spurious timeouts that then *cache*, producing
+deterministic-looking `unresolved-junction` errors that reproduce nothing
+about the code. (Verified 2026-07-21: an unpinned fresh container fails
+`tier4_advanced_circuit_from_ore_am2` and shows production/utility gauntlet
+FAILs; the same commit with the pin is green everywhere.) The gauntlet run
+writes newly-solved zones back to the pinned path — `git checkout` the pin
+file afterwards unless you're deliberately re-blessing it.
+
 ## Recipe complexity ladder
 
-Tracks which recipes produce zero-error bus blueprints. Moving up = real progress. Tests for each tier live in `crates/core/tests/e2e.rs`.
+Tracks which recipes produce zero-error bus blueprints. Moving up = real
+progress. Tests for each tier live in `crates/core/tests/e2e.rs`; all rows
+below are gated by the default (non-ignored) suite unless noted.
 
 | Tier | Recipe | Complexity | Bus status |
 |------|--------|-----------|-----|
-| 1 | `iron-gear-wheel` | 1 recipe, 1 solid input | SOLVED |
-| 2 | `electronic-circuit` | 2 recipes, 2 solid inputs | SOLVED (incl. from ores) |
-| 3 | `plastic-bar` | 1 recipe, 1 fluid + 1 solid input | SOLVED |
-| 4 | `advanced-circuit` | 5+ recipes, mixed solid/fluid | SOLVED (`tier4_advanced_circuit_from_ore_am2` green: AC@5/s ores AM2 yellow, 0 errors). Carries 1 input-rate-delivery (unrelated, pre-existing demand-pull modeling residual); inserter-item-throughput 0 since the last-in-row belt extension (`0d7132c`, 2026-07-19; was 4, and 58 masked sides pre-`rfc-inserter-sizing.md`). From plates still has lane-throughput warnings, [#65](https://github.com/storkme/spaghettio/issues/65). |
-| 5 | `processing-unit` | Deep chain, multiple fluids | SOLVED (`tier5_processing_unit_from_ore_am3` green: PU@2/s ores AM3 red, 0 errors, Pooled — fully clean, 0 warnings, since the last-in-row belt extension `0d7132c` 2026-07-19; was 5 inserter-item-throughput, and 129 masked sides pre-`rfc-inserter-sizing.md`). Higher rates / partitioned strategies still have junction + starvation issues — see `partition_strategy_scoreboard_extended`. |
-| 6 | `flying-robot-frame` | Adds lubricant: advanced-oil-processing refinery rows with 3 fluid outputs | SOLVED via the USP chain (0 errors). The 2026-07-11 "0 warnings" reading predates the per-item inserter-attribution check landing — see tier 7 and the corpus-wide note below. No dedicated FRF fixture yet. |
-| 7 | `utility-science-pack` | Very deep chain (LDS + PU + FRF) | SOLVED (`science_gauntlet` USP@1/s AM3: 0 errors, 6615 entities, 208×281). Utility itself fully clean since the last-in-row belt extension (`0d7132c`, 2026-07-19; was 2 inserter-item-throughput). Across the six packs the only residual is production-science: 8 inserter-item-throughput, likely the same last-in-row trim still present in the triple/quad/hstack templates (follow-up). Logistic/military science packs clean at 1/s (previously carried input-rate-delivery residue, since fixed). |
+| 1 | `iron-gear-wheel` | 1 recipe, 1 solid input | SOLVED — clean, incl. 20/s |
+| 2 | `electronic-circuit` | 2 recipes, 2 solid inputs | SOLVED — clean from ores; stress-gated at 20/22/23/30/35/40/s (yellow) and 60/s (red) from ore |
+| 3 | `plastic-bar` | 1 recipe, 1 fluid + 1 solid input | SOLVED — clean, incl. from crude; sulfuric-acid, heavy-oil cracking, and multi-machine advanced-oil-processing also gated at this tier |
+| 4 | `advanced-circuit` | 5+ recipes, mixed solid/fluid | SOLVED — from plates fully clean; from ore (AM2) green with 1 known input-rate-delivery warning (pre-existing demand-pull modeling residual). Partitioned 4/s + 5/s and horizontal-stack 7/s stress-gated. |
+| 5 | `processing-unit` | Deep chain, multiple fluids | SOLVED — from ore (AM3, 2/s) fully clean; horizontal-stack gated at 2/s (pipe bypass) and 25/s (pole coverage). Higher-rate partitioned strategies still have junction + starvation issues — `partition_strategy_scoreboard_extended`. |
+| 6 | `flying-robot-frame` | Adds lubricant: advanced-oil-processing refinery rows with 3 fluid outputs | SOLVED via the USP chain (0 errors). No dedicated FRF fixture yet. |
+| 7 | `utility-science-pack` | Very deep chain (LDS + PU + FRF) | SOLVED — fully clean at 1/s (gauntlet 2026-07-21: 0 errors, 0 warnings, 6796 entities, 208×285). |
+
+### Six-pack scoreboard (gauntlet run 2026-07-21, 1/s, CI-pinned cache)
+
+| Pack | Size | Entities | Result |
+|------|------|----------|--------|
+| automation | 39×36 | 281 | PASS |
+| logistic | 41×79 | 634 | PASS |
+| military | 45×91 | 1002 | PASS |
+| chemical | 83×137 | 2392 | PASS |
+| production | 227×156 | 4115 | WARN — 8 inserter-item-throughput (6 input3 contest-losses + 2 far-side rate walls; [`inserter-throughput-followups.md`](inserter-throughput-followups.md)) |
+| utility | 208×285 | 6796 | PASS |
+
+The only residual across all six packs is production-science's 8
+inserter-item-throughput warnings.
+
+### Beyond the ladder — capabilities the default suite also gates
+
+The tier table understates current capability; these are all regression-gated
+on every push:
+
+- **Self-loop / byproduct chains** (net-flow solver): Kovarex enrichment,
+  uranium processing (surplus export + voider variants, voider purity),
+  pentapod-egg, fish-breeding, and bacteria self-loops.
+- **Space Age machines**: electromagnetic plant (superconductor), cryogenic
+  plant (fusion power cell), foundry (molten iron), biochamber
+  (biolubricant); substation as a first-class entity.
+- **Fulgora**: scrap-sorting mechanism (multi-output recipe handling).
+- **Build quality** (normal→legendary): quality-aware machine counts,
+  inserter ladder, pole supply/wire reach; differential fixtures pin
+  Normal bit-equality; EC@45/s express-legendary-from-ore green with the
+  1 known input-rate-delivery residual.
+- **Rate headroom caveat**: final-product output above one belt's capacity
+  is currently over-committed onto a single merger belt and the
+  lane-throughput check doesn't visit merger tiles
+  ([#311](https://github.com/storkme/spaghettio/issues/311)) — so treat
+  >45/s "clean" results (e.g. the EC 60/s red stress fixture) as
+  routing-verified but not throughput-verified until #311 closes.
+
+### Scaling walls (scaling gauntlet run 2026-07-21, release, 180s/cell budget)
+
+`science_scaling_gauntlet` result matrix (rows = pack, columns = rate):
+
+| Pack | 1/s | 2/s | 5/s | 10/s |
+|------|-----|-----|-----|------|
+| automation | PASS | PASS | PASS | PASS |
+| logistic | PASS | PASS | WARN×3 | WARN×7 |
+| military | PASS | PASS | PASS | PASS |
+| chemical | PASS | PASS | PASS | FAIL×6 |
+| production | WARN×8 | WARN×14 | FAIL×4 | TIMEOUT |
+| utility | PASS | FAIL×2 | WARN×36 | TIMEOUT |
+
+First walls: logistic 5/s (inserter-item-throughput×3), chemical 10/s
+(belt-loop, lane-throughput×2, underground-belt, unresolved-junction×2),
+production 1/s (the known 8), utility 2/s (belt-loop, underground-belt,
+input-rate-delivery×5). Automation and military pass through 10/s.
+
+Caveat: cells beyond the CI pin's zone coverage solve live under wall-clock
+budgets, so the two TIMEOUTs and the unresolved-junction counts are
+machine-dependent (measured on a remote container). The belt-loop,
+underground-belt, and lane-throughput *errors* are genuine layout defects
+independent of solve budgets — utility@2/s FAIL×2 is the most reachable
+new fix target.
 
 ## Recent RFC close-outs
 
-**`rfc-inserter-sizing.md` close-out (2026-07-13)**: bus inserters are now sized to planned per-machine throughput via a shared regular→fast→stack ladder (long-handed count-ladder for reach-2 sides), with an ingredient-to-belt reassignment lever and a user-facing `max_inserter_tier` engine param (wasm-bindings + web UI, URL-encoded). `science_gauntlet` 1/s inserter-throughput/item-throughput warnings across the six packs: **140 → 12** at close-out (automation/logistic/military fully clean; chemical 1, production 9, utility 2 residual, all under the newer, stricter per-item check — the old aggregate check is at 0 everywhere), then **12 → 8** after the 2026-07-19 last-in-row belt extension (`0d7132c`: chemical and utility now clean; all 8 remaining are production-science). The "untouched triple/quad/hstack trims" hypothesis for those 8 was **falsified 2026-07-20** (`acd147e` extended the pattern to triple_input_row — quad/hstack are structurally immune — and the 8 turned out to be 6 input3 contest-losses + 2 genuine far-side rate walls; see [`inserter-throughput-followups.md`](inserter-throughput-followups.md)). This is **validator-verified only** — the RFC's two in-game blueprint-import anchors (kill criterion 5) remain open until the user runs them; see the decision log in [`rfc-inserter-sizing.md`](rfc-inserter-sizing.md) for the full phase-by-phase evidence trail.
+**`rfc-inserter-sizing.md` close-out (2026-07-13)**: bus inserters sized to
+planned per-machine throughput via a shared regular→fast→stack ladder
+(long-handed count-ladder for reach-2 sides), with an ingredient-to-belt
+reassignment lever and a user-facing `max_inserter_tier` engine param
+(wasm-bindings + web UI, URL-encoded). Six-pack warning trail: 140 → 12 at
+close-out → 8 after the last-in-row belt extension (`0d7132c`); the
+remaining 8 are production-science, root-caused 2026-07-20 (6 input3
+contest-losses + 2 genuine far-side rate walls — see
+[`inserter-throughput-followups.md`](inserter-throughput-followups.md)).
+Validator-verified only — the RFC's two in-game blueprint-import anchors
+(kill criterion 5) remain open until the user runs them; full trail in
+[`rfc-inserter-sizing.md`](rfc-inserter-sizing.md)'s decision log.
 
-**`rfc-build-quality.md` close-out (2026-07-20)**: user-facing **build quality** param (normal→legendary, `quality`/`q=` URL-encoded through wasm `solve`+`layout` and the sidebar). Solver machine counts scale ×(1+0.3·level) via `effective_crafting_speed`; the inserter ladder, pole supply radii (+1/level), and wire reach (+2/level, shared table `common::pole_wire_reach` consumed by placement, the emitted `wires` artifact, and the validator) are quality-aware; functional entities (machines/inserters/poles — never logistics) get `PlacedEntity.quality` stamped in one `layout_pass` post-pass, validators rate each entity by its own tier, and export emits the lua-api `quality` field (parser reads it too, so imported quality blueprints validate). Normal is bit-identical to pre-RFC (kill-criterion-2 gates: unit bit-equality sweeps + full suite + STRESSGOLD check). The 60 EC/s legendary headline is capped at 45/s (one blue belt) until [#311 output-merger capacity](https://github.com/storkme/spaghettio/issues/311) closes; [#312](https://github.com/storkme/spaghettio/issues/312) tracks the quality-magnified consumer-clamped fan-in wall; [#310 pole-band thinning](https://github.com/storkme/spaghettio/issues/310) is the designated next pick-up. **In-game import anchor still open** (user-run; unblocked — #313 resolved as premise-falsified: the engine's `stack-inserter` IS the current Space Age stacking inserter). Full trail: [`rfc-build-quality.md`](rfc-build-quality.md) decision log; renderer constraints learned en route: `web/CLAUDE.md`.
+**`rfc-build-quality.md` close-out (2026-07-20)**: user-facing **build
+quality** param (normal→legendary, `quality`/`q=` URL-encoded through wasm
+`solve`+`layout` and the sidebar). Solver machine counts scale
+×(1+0.3·level) via `effective_crafting_speed`; the inserter ladder, pole
+supply radii, and wire reach are quality-aware; functional entities get
+`PlacedEntity.quality` stamped; validators rate each entity by its own
+tier; export emits (and the parser reads) the lua-api `quality` field.
+Normal is bit-identical to pre-RFC. The 60 EC/s legendary headline stays
+capped at 45/s until [#311](https://github.com/storkme/spaghettio/issues/311)
+closes; [#312](https://github.com/storkme/spaghettio/issues/312) tracks the
+quality-magnified consumer-clamped fan-in wall. **In-game import anchor
+still open** (user-run). Full trail: [`rfc-build-quality.md`](rfc-build-quality.md)
+decision log; renderer constraints learned en route: `web/CLAUDE.md`.
+
+**`rfc-043-pole-band-thinning.md` close-out (2026-07-20)**: quality-aware
+pole-band thinning landed (Phase 1; Phase 2 cross-row sharing deferred) —
+closed [#310](https://github.com/storkme/spaghettio/issues/310) via PR #318.
+Registry: [`rfcs.md`](rfcs.md).
 
 ## Open tracking issues (layout quality)
 
-[#135 balancer templates are oversized](https://github.com/storkme/spaghettio/issues/135), [#136 missing coprime balancer shapes](https://github.com/storkme/spaghettio/issues/136), [#68 fluid row 3-tile pitch](https://github.com/storkme/spaghettio/issues/68) (design: [`rfc-fluid-dual-input-row.md`](rfc-fluid-dual-input-row.md)).
+- [#135 balancer templates are oversized](https://github.com/storkme/spaghettio/issues/135) — main compaction lever
+- [#311 output merger over-commits a single final belt; lane-throughput check never visits merger tiles](https://github.com/storkme/spaghettio/issues/311) — gates >45/s headline claims
+- [#312 consumer-clamped fan-in refusal bites much earlier at high build quality](https://github.com/storkme/spaghettio/issues/312)
+
+(Audited 2026-07-21: #65, #68, #136, #310 — previously cited here — are all
+closed.)
 
 ## Deferred tooling tasks
 
-Test-suite time recovery (audited 2026-07-19, pick-up notes per item in [`test-suite-followups.md`](test-suite-followups.md)): committed STRESSGOLD baseline goldens landed 2026-07-19 (`SPAGHETTIO_STRESS_GOLDEN=check|bless`, see `crates/core/tests/goldens/stress/README.md` — host-cache-relative, opt-in, not CI-enforced); CI nextest parallelism re-enable via timeout-ceiling bumps (~5 min/push, experiment already documented in `.config/nextest.toml`); `[profile.test]` opt experiment for SAT/A*-heavy tests (measure before adopting).
+Test-suite time recovery (audited 2026-07-19, pick-up notes per item in
+[`test-suite-followups.md`](test-suite-followups.md)): committed STRESSGOLD
+baseline goldens landed 2026-07-19 (`SPAGHETTIO_STRESS_GOLDEN=check|bless`,
+see `crates/core/tests/goldens/stress/README.md` — host-cache-relative,
+opt-in, not CI-enforced); CI nextest parallelism re-enable via
+timeout-ceiling bumps (~5 min/push, experiment already documented in
+`.config/nextest.toml`); `[profile.test]` opt experiment for SAT/A*-heavy
+tests (measure before adopting).
