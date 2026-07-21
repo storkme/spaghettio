@@ -125,30 +125,16 @@ Most-visited files. Full reference in [`docs/file-reference.md`](docs/file-refer
 | File | Purpose |
 |------|---------|
 | `crates/core/src/bus/layout.rs` | Top-level `build_bus_layout`: `place_rows` → `plan_bus_lanes` → `route_bus_ghost` → `place_poles` (poles are LAST — placed after routing, never router obstacles) |
-| `crates/core/src/bus/ghost_router.rs` | Ghost A* + negotiated congestion routing; junction solver integration; output merger call-site |
-| `crates/core/src/bus/lane_planner.rs` | `BusLane` / `LaneFamily` types, `plan_bus_lanes`, lane splitting + tap-off coordinate finding |
-| `crates/core/src/bus/lane_order.rs` | Left-to-right lane column order optimiser (exact search ≤7 lanes, hill-climb above) |
-| `crates/core/src/bus/balancer.rs` | `stamp_family_balancer` + splitter/UG name helpers |
-| `crates/core/src/bus/trunk_renderer.rs` | `render_path` (A* path → belts), `trunk_segments`, `is_intermediate` |
-| `crates/core/src/bus/output_merger.rs` | Final-product east-flowing output merger |
 | `crates/core/src/bus/placer.rs` | Row placement: group machines by recipe, split for throughput, `place_rows` geometry |
 | `crates/core/src/bus/templates.rs` | Belt/inserter row templates (single-input, dual-input, lane-splitting sideload bridges) |
-| `crates/core/src/bus/junction_solver.rs` | Region-growth junction solver framework (trait, growth loop) |
-| `crates/core/src/bus/junction_sat_strategy.rs` | SAT-backed `JunctionStrategy` fallback |
-| `crates/core/src/bus/ghost_occupancy.rs` | Typed `Occupancy` map (HardObstacle / RowEntity / Permanent / GhostSurface / Template / SatSolved) |
-| `crates/core/src/bus/balancer_library.rs` | Pre-generated N→M balancer templates (do not edit manually) |
+| `crates/core/src/bus/lane_planner.rs` | `BusLane` / `LaneFamily` types, `plan_bus_lanes`, lane splitting + tap-off coordinate finding |
+| `crates/core/src/bus/ghost_router.rs` | Ghost A* + negotiated congestion routing; junction solver integration; output merger call-site |
 | `crates/core/src/netflow.rs` | Net-flow LP solver (the default; byproduct crediting, typed cycle refusals). Legacy tree walk retained in `solver.rs` as the recipe-selection oracle. See `docs/rfc-solver-net-flow.md`. |
-| `crates/core/src/astar.rs` | `ghost_astar` + `astar_path` + `negotiate_lanes` pathfinder primitives |
-| `crates/core/src/sat.rs` | Varisat-backed crossing-zone SAT solver |
-| `crates/core/src/validate/belt_flow.rs` | Lane-rate walker (Kahn topo sort with splitter pairing and balancer feedback-loop handling) |
-| `crates/core/src/validate/` | Rest of the 23 checks: `belt_structural`, `fluids`, `inserters`, `power`, `underground` |
+| `crates/core/src/validate/` | The 23 functional checks, dispatched from `mod.rs` (`belt_flow` lane-rate walker, `belt_structural`, `fluids`, `inserters`, `power`, `underground`) |
 | `crates/core/src/trace.rs` | Thread-local trace event collector; `TraceEvent` variants drive the snapshot debugger and stress scoreboards |
 | `crates/core/src/snapshot.rs` | `.fls` snapshot reader/writer for the layout debugger |
 | `crates/core/tests/e2e.rs` | End-to-end test harness: tier regression tests and stress corpus with scoreboards |
 | `crates/wasm-bindings/src/lib.rs` | wasm-bindgen wrapper exposing `solve`, `layout`, `export_blueprint` to the browser |
-| `web/src/engine.ts` | WASM loader and typed wrappers |
-| `web/src/renderer/entities.ts` | PixiJS entity renderer (bus layout view) |
-| `web/src/ui/sidebar.ts` | Searchable item picker, rate input, live solve, URL state |
 
 ## Factorio game rules (constraints for the layout engine)
 
