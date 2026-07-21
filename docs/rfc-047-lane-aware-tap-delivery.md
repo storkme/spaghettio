@@ -78,6 +78,20 @@ never the bottleneck; the production-side feed is.
    whose contract genuinely is full-belt-cap per trunk; the merge-tap
    fallback (K shared trunks, n→1 merge trees + priority taps) is
    equally full-belt-grounded.
+   **Correction (2026-07-22 implementation, supersedes the "every
+   producer sideloads" reading):** only the **non-topmost** producers
+   B8-sideload. The trunk is stamped from `source_y = min producer
+   `output_belt_y`` down (ghost_router step 3.5), so the **topmost**
+   producer's `ret:` lands at the trunk *head* (`trunk start_y ==
+   source_y == that producer's out_y`, nothing north of it) and is a
+   lane-preserving **B11 corner**, not a sideload. Single-producer
+   intermediate lanes therefore already carry both lanes end-to-end
+   with no dead trunk-head tiles — which is why the live single-trunk
+   corpus lanes stay walker-green, and why the 2026-07-21 experiment
+   entry's prescribed "single-producer corner-feed" is a no-op (see
+   the 2026-07-22 decision-log entry). The genuine single-lane
+   overload is the **2nd+ producer of a fragmented multi-producer
+   trunk** sideloading mid-trunk.
 3. **Row-internal output balancing fills both lanes but it doesn't
    survive the feed.** Every `lane_split` row stamps the midpoint
    `sideload_bridge` (templates.rs ~273–320) filling both lanes of
@@ -279,6 +293,66 @@ generator remains future work.
   whether the Phase-0 splitter fix already changes those lane rates).
 
 ## Decision log
+
+- **2026-07-22 — Leg B step-1 premise falsified during implementation;
+  real root cause is a stacking-blind row-split cap, not a `ret:`
+  sideload. Fix relocated from ghost_router to `place_rows`.** The
+  2026-07-21 experiment entry (below) diagnosed the EC@6-legendary-yellow
+  S=2 overload as a *single-producer* row whose both-lane row-bridge fill
+  gets B8-collapsed by its `ret:` sideload, and prescribed a
+  ghost_router "single-producer corner-feed" (trim the dead trunk-head
+  tiles, corner the ret in). Implementation probing (`probe_047`
+  example; AM3-legendary makes copper-cable at 12.5/s **per machine**)
+  falsified both halves:
+  - The parity fixture's cable trunk is **two-producer, not one**.
+    `place_rows` fragments the 2 cable machines into 2 single-machine
+    rows (machines at y=3 and y=10), so producer-1 corner-feeds the
+    trunk head cleanly while **producer-2 sideloads mid-trunk** — that
+    B8 is the 18/s-on-one-lane overload (9 lane-throughput errors at
+    S=2). Not a single-producer bridge-collapse.
+  - The prescribed ghost_router corner-feed is a **no-op**. Single-
+    producer intermediate lanes already have `trunk start_y == source_y
+    == producer out_y`, so the topmost `ret:` already lands as a B11
+    corner (nothing above the head to trim). Verified: no dead trunk-
+    head tiles exist for the single-producer shape.
+  - **Root cause**: `placer::max_machines_for_belt_both_lanes` is
+    stacking-blind — it caps machines-per-row by `lane_capacity` (7.5
+    yellow) while the belt-tier choice at the *same* call site already
+    uses `belt_entity_for_rate_stacked`. Cable's 12.5/s per-machine
+    output > 7.5 forces `max_per_row = 1`, fragmenting a stacked
+    producer that would otherwise be one lane-split row. This is an
+    RFC-046 oversight (no doc/comment guards the unstacked cap), and it
+    re-introduces exactly the mid-trunk sideload this RFC set out to
+    remove. Leg C's own premise ("inputs are stack-loaded row outputs
+    under RFC-046's forcing") requires the row output to actually be one
+    stacked belt, which this fixes.
+  - **Fix**: thread `out_stack` (`StackingCtx::for_item`) into
+    `max_machines_for_belt_both_lanes` and cap by
+    `lane_capacity_stacked`. Collapses the cable to one lane-split row
+    whose both-lane output corner-feeds the trunk → both trunk lanes
+    carry ~9.4/s each; with the wall re-scale (below), the parity
+    fixture lays out at S=2 with **0 validation errors** (probe-
+    confirmed). **S=1 is bit-identical** (`for_item()==1` ⇒
+    `lane_capacity_stacked==lane_capacity`): full suite green
+    (e2e 58 / unit 773), STRESSGOLD `check` clean, zero golden shift.
+    Two invariants confirmed (spec-review asks): (a) `out_stack =
+    ctx.for_item(output_item)` respects the RFC-046 **family
+    exemption** — exempt items return `for_item()==1`, so an exempt
+    row's per-machine cap stays unstacked and never widens on stacked
+    credit (`stacking_kovarex_family_exempt_s2` covers it); (b) the
+    **single-lane** variant `max_machines_for_belt` is left stacking-
+    blind **deliberately** — its output is sideloaded onto ONE lane
+    (B8/I5), so crediting it ×S would just relocate the single-lane
+    overload; only the both-lanes (bridge+corner-feed) output
+    legitimately fills two lanes and so scales ×S. The asymmetry is
+    documented at both functions.
+  - Leg B's part (ii) **late sideload check** is kept as a genuine
+    multi-producer safety refusal (a still-fragmented multi-producer
+    single-consumer-trunk lane over per-lane×S cap is refused by name),
+    and part (iii) the wall ×S re-scale lands last. Part (i)
+    "single-producer corner-feed" is **withdrawn as a no-op** and
+    replaced by the row-split cap fix above. Landed as commit
+    `feat(047-1b)`.
 
 - **2026-07-21 — Leg B/C wall-lift experiment: the honest walker
   vetoed the optimistic credit, and the veto tells us exactly what to
