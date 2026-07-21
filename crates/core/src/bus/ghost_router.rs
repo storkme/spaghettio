@@ -34,9 +34,10 @@ use crate::bus::junction_solver::{
     self, JunctionSolution, JunctionStrategy, JunctionStrategyContext,
 };
 use crate::bus::placer::RowSpan;
+use crate::bus::stacking_ctx::StackingCtx;
 use crate::common::{
-    belt_entity_for_rate, is_machine_entity, machine_dims, machine_tiles, ug_max_reach,
-    LANE_LEFT, MERGE_TAP_SEGMENT_TAG,
+    belt_entity_for_rate, belt_entity_for_rate_stacked, is_machine_entity, machine_dims,
+    machine_tiles, ug_max_reach, LANE_LEFT, MERGE_TAP_SEGMENT_TAG,
 };
 use crate::models::{EntityDirection, LayoutRegion, PlacedEntity, SolverResult};
 // sat.rs is retained in the tree as a standalone library; route_bus_ghost
@@ -321,6 +322,7 @@ pub fn route_bus_ghost(
     solver_result: &SolverResult,
     families: &[LaneFamily],
     row_entities: &[PlacedEntity],
+    ctx: &StackingCtx,
 ) -> Result<GhostRouteResult, String> {
     let mut entities: Vec<PlacedEntity> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
@@ -380,7 +382,8 @@ pub fn route_bus_ghost(
 
         let lane_start = entities.len();
         let x = lane.x;
-        let belt_name = belt_entity_for_rate(lane.rate * 2.0, max_belt_tier);
+        let belt_name =
+            belt_entity_for_rate_stacked(lane.rate * 2.0, max_belt_tier, ctx.for_item(&lane.item));
         let trunk_seg_id = Some(format!("trunk:{}", lane.item));
         let last_tap_y = lane.tap_off_ys.iter().copied().max();
 
@@ -469,9 +472,9 @@ pub fn route_bus_ghost(
         let balancer_ents = if fam.merge_tap {
             // Merge-and-tap fallback: stamp an n→1 splitter merge-tree instead
             // of an (N, M) balancer (RFC docs/rfc-merge-tap-trunks.md D2).
-            stamp_merge_tap_family(fam, max_belt_tier)
+            stamp_merge_tap_family(fam, max_belt_tier, ctx)
         } else {
-            stamp_family_balancer(fam, max_belt_tier)
+            stamp_family_balancer(fam, max_belt_tier, ctx)
                 .map_err(|e| format!("ghost router: balancer stamp failed for {:?}: {}", fam.shape, e))?
         };
         crate::trace::emit(crate::trace::TraceEvent::BalancerStamped {
@@ -568,7 +571,8 @@ pub fn route_bus_ghost(
         }
         let lane_start = entities.len();
         let x = lane.x;
-        let belt_name = belt_entity_for_rate(lane.rate * 2.0, max_belt_tier);
+        let belt_name =
+            belt_entity_for_rate_stacked(lane.rate * 2.0, max_belt_tier, ctx.for_item(&lane.item));
         let trunk_seg_id = Some(format!("trunk:{}", lane.item));
         let last_tap_y = lane.tap_off_ys.iter().copied().max();
 
@@ -1495,7 +1499,8 @@ pub fn route_bus_ghost(
         let has_consumers = !lane.consumer_rows.is_empty();
         let has_producers = lane.producer_row.is_some() || !lane.extra_producer_rows.is_empty();
         let last_tap_y = lane.tap_off_ys.iter().copied().max();
-        let horiz_belt = belt_entity_for_rate(lane.rate * 2.0, max_belt_tier);
+        let horiz_belt =
+            belt_entity_for_rate_stacked(lane.rate * 2.0, max_belt_tier, ctx.for_item(&lane.item));
 
         // Tap-off specs
         if has_consumers {
@@ -1759,7 +1764,8 @@ pub fn route_bus_ghost(
                         // across the union of sub-stamp inputs.
                         input_xs.sort();
                         let origin_y = fam.balancer_y_start;
-                        let feeder_belt = belt_entity_for_rate(fam.total_rate, max_belt_tier);
+                        let feeder_belt =
+                            belt_entity_for_rate_stacked(fam.total_rate, max_belt_tier, ctx.for_item(&fam.item));
 
                         for (i, &pri) in fam.producer_rows.iter().enumerate() {
                             if pri >= row_spans.len() {
@@ -2461,8 +2467,12 @@ pub fn route_bus_ghost(
         } else {
             spec_belt_tiers.insert(
                 key.clone(),
-                BeltTier::from_name(belt_entity_for_rate(lane.rate * 2.0, max_belt_tier))
-                    .unwrap_or(BeltTier::Yellow),
+                BeltTier::from_name(belt_entity_for_rate_stacked(
+                    lane.rate * 2.0,
+                    max_belt_tier,
+                    ctx.for_item(&lane.item),
+                ))
+                .unwrap_or(BeltTier::Yellow),
             );
             spec_kinds.insert(key, crate::bus::junction::SpecKind::Belt);
         }
@@ -3316,6 +3326,7 @@ pub fn route_bus_ghost(
                 max_belt_tier,
                 merge_x_cursor,
                 &blocked_columns,
+                ctx,
             );
             blocked_columns.extend((item_merge_x - output_rows.len() as i32)..item_merge_x);
             merge_x_cursor = item_merge_x + 1;
@@ -3409,6 +3420,7 @@ pub fn route_bus_ghost(
             max_belt_tier,
             merge_x_cursor,
             &blocked_columns,
+            ctx,
         );
         blocked_columns.extend((item_merge_x - output_rows.len() as i32)..item_merge_x);
         merge_x_cursor = item_merge_x + 1;
@@ -3496,6 +3508,7 @@ pub fn route_bus_ghost(
             max_belt_tier,
             merge_x_cursor,
             &blocked_columns,
+            ctx,
         );
         blocked_columns.extend((item_merge_x - output_rows.len() as i32)..item_merge_x);
         merge_x_cursor = item_merge_x + 1;
@@ -3749,6 +3762,7 @@ pub fn route_bus_ghost(
     // the seam. Trunks (`trunk:` segment) and tap-off splitters
     // (`tapoff:` segment) keep their routing tier — they don't abut row
     // inputs.
+    // stacking-neutral: INFINITY selects the max tier regardless (RFC-046)
     let display_belt = belt_entity_for_rate(f64::INFINITY, max_belt_tier);
     let display_ug = underground_for_belt(display_belt);
     for ent in &mut entities {
@@ -3791,8 +3805,9 @@ pub fn route_bus_ghost(
         }
         let Some(fid) = lane.family_id else { continue };
         let Some(fam) = families.get(fid) else { continue };
-        let tier = belt_entity_for_rate(fam.total_rate, max_belt_tier);
-        let lane_tier = belt_entity_for_rate(lane.rate * 2.0, max_belt_tier);
+        let tier = belt_entity_for_rate_stacked(fam.total_rate, max_belt_tier, ctx.for_item(&fam.item));
+        let lane_tier =
+            belt_entity_for_rate_stacked(lane.rate * 2.0, max_belt_tier, ctx.for_item(&lane.item));
         if tier == lane_tier {
             continue; // Already at the right tier; skip the lookup insert.
         }
@@ -5598,7 +5613,7 @@ mod feeder_specs_skipped_tests {
 
         let _trace_guard = crate::trace::start_trace();
         let result = route_bus_ghost(
-            &lanes, &[], 50, 200, None, &solver_result, &[family], &[],
+            &lanes, &[], 50, 200, None, &solver_result, &[family], &[], &StackingCtx::unstacked(),
         );
         let events = crate::trace::drain_events();
 
@@ -5653,7 +5668,7 @@ mod feeder_specs_skipped_tests {
 
         let _trace_guard = crate::trace::start_trace();
         let result = route_bus_ghost(
-            &lanes, &[], 50, 200, None, &solver_result, &[family], &[],
+            &lanes, &[], 50, 200, None, &solver_result, &[family], &[], &StackingCtx::unstacked(),
         );
         let events = crate::trace::drain_events();
 
@@ -5694,7 +5709,7 @@ mod feeder_specs_skipped_tests {
 
         let _trace_guard = crate::trace::start_trace();
         let result = route_bus_ghost(
-            &lanes, &[], 50, 200, None, &solver_result, &[family], &[],
+            &lanes, &[], 50, 200, None, &solver_result, &[family], &[], &StackingCtx::unstacked(),
         );
         let events = crate::trace::drain_events();
 

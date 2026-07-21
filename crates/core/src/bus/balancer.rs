@@ -13,6 +13,7 @@
 
 use crate::models::{EntityDirection, PlacedEntity};
 use crate::bus::lane_planner::LaneFamily;
+use crate::bus::stacking_ctx::StackingCtx;
 
 /// Splitter name mapping by belt tier.
 const SPLITTER_MAP: &[(&str, &str)] = &[
@@ -184,9 +185,10 @@ pub(crate) fn shape_is_stampable(n: u32, m: u32) -> bool {
 pub(crate) fn stamp_family_balancer(
     family: &LaneFamily,
     max_belt_tier: Option<&str>,
+    ctx: &StackingCtx,
 ) -> Result<Vec<PlacedEntity>, String> {
     use crate::bus::balancer_library::balancer_templates;
-    use crate::common::belt_entity_for_rate;
+    use crate::common::belt_entity_for_rate_stacked;
 
     let templates = balancer_templates();
     let (n, m) = (family.shape.0 as u32, family.shape.1 as u32);
@@ -196,7 +198,8 @@ pub(crate) fn stamp_family_balancer(
         return Err(format!("LaneFamily for item {} has no lane_xs assigned", family.item));
     }
 
-    let belt_tier = belt_entity_for_rate(family.total_rate, max_belt_tier);
+    let belt_tier =
+        belt_entity_for_rate_stacked(family.total_rate, max_belt_tier, ctx.for_item(&family.item));
     let splitter_name = splitter_for_belt(belt_tier);
     let ug_name = underground_for_belt(belt_tier);
 
@@ -335,8 +338,9 @@ pub(crate) fn stamp_family_balancer(
 pub(crate) fn stamp_merge_tap_family(
     family: &LaneFamily,
     max_belt_tier: Option<&str>,
+    ctx: &StackingCtx,
 ) -> Vec<PlacedEntity> {
-    use crate::common::belt_entity_for_rate;
+    use crate::common::belt_entity_for_rate_stacked;
 
     let Some(&lane_x) = family.lane_xs.first() else {
         return Vec::new();
@@ -344,7 +348,8 @@ pub(crate) fn stamp_merge_tap_family(
     let n = family.shape.0 as u32;
     let tree = crate::bus::balancer_generate::merge_tree(n);
 
-    let belt_tier = belt_entity_for_rate(family.total_rate, max_belt_tier);
+    let belt_tier =
+        belt_entity_for_rate_stacked(family.total_rate, max_belt_tier, ctx.for_item(&family.item));
     let splitter_name = splitter_for_belt(belt_tier);
     let ug_name = underground_for_belt(belt_tier);
 
@@ -380,7 +385,7 @@ mod tests {
             merge_tap: false,
         };
 
-        let entities = stamp_family_balancer(&family, None);
+        let entities = stamp_family_balancer(&family, None, &StackingCtx::unstacked());
         assert!(entities.is_ok());
 
         let entities = entities.unwrap();
@@ -451,7 +456,8 @@ mod tests {
                     total_rate: 30.0,
                     merge_tap: false,
                 };
-                let entities = stamp_family_balancer(&family, None).unwrap_or_default();
+                let entities =
+                    stamp_family_balancer(&family, None, &StackingCtx::unstacked()).unwrap_or_default();
                 let actually_stamps = !entities.is_empty();
                 assert_eq!(
                     predicted, actually_stamps,

@@ -32,6 +32,7 @@ fn layout_options(
     max_inserter_tier: Option<String>,
     quality: Option<String>,
     wire_mode: Option<String>,
+    stacking: Option<u8>,
 ) -> LayoutOptions {
     let strategy = match strategy.as_deref() {
         // `partitioned-per-consumer` is the deprecated P1 string; the
@@ -74,6 +75,10 @@ fn layout_options(
         // decomposition search (`MergeTapCandidate`), never requested by the
         // web UI — always default-off at the public boundary.
         merge_tap: false,
+        // RFC-046 Phase 2: unknown/absent → 1 (off), same fallback
+        // semantics as the tiers above. `common::*_stacked` helpers clamp
+        // any out-of-range value, so no validation needed here.
+        stacking: stacking.unwrap_or(1),
     }
 }
 
@@ -249,10 +254,11 @@ pub fn layout(
     max_inserter_tier: Option<String>,
     quality: Option<String>,
     wire_mode: Option<String>,
+    stacking: Option<u8>,
 ) -> Result<LayoutResult, JsError> {
     build_bus_layout(
         &solver_result,
-        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode),
+        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking),
     )
     .map_err(|e| JsError::new(&e))
 }
@@ -270,10 +276,11 @@ pub fn layout_traced(
     max_inserter_tier: Option<String>,
     quality: Option<String>,
     wire_mode: Option<String>,
+    stacking: Option<u8>,
 ) -> Result<LayoutResult, JsError> {
     spaghettio_core::bus::layout::build_bus_layout_traced(
         &solver_result,
-        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode),
+        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking),
     )
     .map_err(|e| JsError::new(&e))
 }
@@ -335,6 +342,7 @@ pub fn layout_streaming(
     max_inserter_tier: Option<String>,
     quality: Option<String>,
     wire_mode: Option<String>,
+    stacking: Option<u8>,
     emit: &js_sys::Function,
 ) -> Result<LayoutResult, JsError> {
     let emit = emit.clone();
@@ -348,7 +356,7 @@ pub fn layout_streaming(
     });
     spaghettio_core::bus::layout::build_bus_layout_streaming(
         &solver_result,
-        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode),
+        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking),
         on_event,
     )
     .map_err(|e| JsError::new(&e))
@@ -498,6 +506,13 @@ pub fn improve_region_streaming(
         }
     }
 
+    // `layout_result.stacking` (RFC-046) needs no recompute here: the SAT
+    // crossing-zone descent above is purely topological (tile arrangement,
+    // not throughput), and the struct field itself survives the mutate-
+    // and-return below untouched, so a re-spliced zone keeps reporting the
+    // layout's own recorded stack size — same "honor what the layout was
+    // planned at" contract as `wire_mode`, just with no recompute needed
+    // on this particular field.
     layout_result
         .entities
         .retain(|e| !(in_bbox(e) && is_belt_or_ug(&e.name)));

@@ -35,6 +35,10 @@ export interface FormState {
   /** Pole wiring mode ("tree"). null = dense (today's default) — same
    * null-is-default convention as `quality`. See RFC-045. */
   wireMode: string | null;
+  /** Belt stack size ("2" | "3" | "4"). null = off/1 (today's default) —
+   * same null-is-default convention as `wireMode`. See
+   * `docs/rfc-046-belt-stacking.md`. */
+  stacking: string | null;
   /** Global module policy, compact form `<kind><tier><quality?>` —
    * `s`peed / `p`roductivity, tier 1–3, optional module-quality initial
    * (`u`/`r`/`e`/`l`), e.g. "s2", "p3l". null = no modules (today's
@@ -71,6 +75,13 @@ export const KNOWN_QUALITIES = ["uncommon", "rare", "epic", "legendary"] as cons
  * `"dense"` (the default) is intentionally absent — represented by
  * `null`, same convention as `KNOWN_QUALITIES`. */
 export const KNOWN_WIRE_MODES = ["tree"] as const;
+
+/** Belt-stacking values accepted on the URL and in `FormState.stacking`.
+ * `"1"` (the default/off) is intentionally absent — represented by
+ * `null`, same convention as `KNOWN_WIRE_MODES`. Values double as their
+ * own short codes (no letter remapping needed, unlike quality/wire mode).
+ * See `docs/rfc-046-belt-stacking.md`. */
+export const KNOWN_STACKING = ["2", "3", "4"] as const;
 
 /** Shape of `FormState.modules` / the `m=`/`modules=` URL value. The
  * compact form is its own short code — no long↔short map needed. */
@@ -179,6 +190,16 @@ const QUALITY_FULL_TO_SHORT: Record<string, string> = {
 const WIRE_MODE_SHORT_TO_FULL: Record<string, string> = { t: "tree" };
 const WIRE_MODE_FULL_TO_SHORT: Record<string, string> = { tree: "t" };
 
+// Belt stacking (RFC-046) — no short/full mapping table needed since the
+// values ("2"/"3"/"4") are already their own short codes. `docs/rfc-046-
+// belt-stacking.md`'s Parameter section names the extras key `s=`, but
+// that key is already `strategy`'s short code above (`s=pd`) — reusing it
+// would let a URL carrying both non-default strategy and stacking clobber
+// one of the two on write (`URLSearchParams` only keeps one value per
+// key) and silently drop it on read. Using `st=` instead avoids the
+// collision at the cost of one extra character.
+const STACKING_EXTRAS_KEY = "st";
+
 function slugToCode(slug: string): string {
   // Fall back to the slug itself if it's not in the table — keeps
   // serialization total (e.g. an unknown / modded item still produces a
@@ -275,6 +296,9 @@ function readHashState(): FormState | null {
   const quality = qShort ? QUALITY_SHORT_TO_FULL[qShort] ?? null : null;
   const wShort = extras.get("w");
   const wireMode = wShort ? WIRE_MODE_SHORT_TO_FULL[wShort] ?? null : null;
+  const stShort = extras.get(STACKING_EXTRAS_KEY);
+  const stacking =
+    stShort && (KNOWN_STACKING as readonly string[]).includes(stShort) ? stShort : null;
   const mShort = extras.get("m");
   const modules = mShort && MODULES_RE.test(mShort) ? mShort : null;
   const ciRaw = extras.get("ci");
@@ -300,7 +324,7 @@ function readHashState(): FormState | null {
     machines[category] = slug;
   }
 
-  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, quality, wireMode, modules, customInputs };
+  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, quality, wireMode, stacking, modules, customInputs };
 }
 
 function readQueryState(): FormState {
@@ -347,12 +371,17 @@ function readQueryState(): FormState {
     rawQuality && (KNOWN_QUALITIES as readonly string[]).includes(rawQuality)
       ? rawQuality
       : null;
+  const rawStacking = params.get("stacking");
+  const stacking =
+    rawStacking && (KNOWN_STACKING as readonly string[]).includes(rawStacking)
+      ? rawStacking
+      : null;
   const rawModules = params.get("modules");
   const modules = rawModules && MODULES_RE.test(rawModules) ? rawModules : null;
   const ciParam = params.get("ci");
   const customInputs = ciParam ? ciParam.split(",").filter((s) => s.length > 0) : [];
 
-  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, quality, wireMode, modules, customInputs };
+  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, quality, wireMode, stacking, modules, customInputs };
 }
 
 export function readUrlState(): FormState {
@@ -425,6 +454,9 @@ function formatHashState(state: FormState): string {
   }
   if (state.wireMode && WIRE_MODE_FULL_TO_SHORT[state.wireMode]) {
     extras.set("w", WIRE_MODE_FULL_TO_SHORT[state.wireMode]);
+  }
+  if (state.stacking && (KNOWN_STACKING as readonly string[]).includes(state.stacking)) {
+    extras.set(STACKING_EXTRAS_KEY, state.stacking);
   }
   if (state.modules && MODULES_RE.test(state.modules)) {
     extras.set("m", state.modules);

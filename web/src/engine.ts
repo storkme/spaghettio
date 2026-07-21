@@ -273,7 +273,7 @@ function allProducerMachines(): string[] {
   return machinesCache;
 }
 
-function buildLayout(result: SolverResult, maxBeltTier?: string, strategy?: string, rowLayout?: string, maxInserterTier?: string, quality?: string, wireMode?: string): Promise<LayoutResult> {
+function buildLayout(result: SolverResult, maxBeltTier?: string, strategy?: string, rowLayout?: string, maxInserterTier?: string, quality?: string, wireMode?: string, stacking?: string): Promise<LayoutResult> {
   return call<LayoutResult>({
     method: "layout",
     result,
@@ -283,10 +283,11 @@ function buildLayout(result: SolverResult, maxBeltTier?: string, strategy?: stri
     maxInserterTier: maxInserterTier ?? null,
     quality: quality ?? null,
     wireMode: wireMode ?? null,
+    stacking: stacking ?? null,
   });
 }
 
-function buildLayoutTraced(result: SolverResult, maxBeltTier?: string, strategy?: string, rowLayout?: string, maxInserterTier?: string, quality?: string, wireMode?: string): Promise<LayoutResult> {
+function buildLayoutTraced(result: SolverResult, maxBeltTier?: string, strategy?: string, rowLayout?: string, maxInserterTier?: string, quality?: string, wireMode?: string, stacking?: string): Promise<LayoutResult> {
   return call<LayoutResult>({
     method: "layoutTraced",
     result,
@@ -296,6 +297,7 @@ function buildLayoutTraced(result: SolverResult, maxBeltTier?: string, strategy?
     maxInserterTier: maxInserterTier ?? null,
     quality: quality ?? null,
     wireMode: wireMode ?? null,
+    stacking: stacking ?? null,
   });
 }
 
@@ -323,6 +325,7 @@ async function buildLayoutStreaming(
   maxInserterTier: string | undefined,
   quality: string | undefined,
   wireMode: string | undefined,
+  stacking: string | undefined,
   onEvent: (evt: TraceEvent) => void,
 ): Promise<LayoutResult> {
   if (activeStreamingId !== null) {
@@ -357,6 +360,7 @@ async function buildLayoutStreaming(
       maxInserterTier: maxInserterTier ?? null,
       quality: quality ?? null,
       wireMode: wireMode ?? null,
+      stacking: stacking ?? null,
       traceLogs,
     });
   });

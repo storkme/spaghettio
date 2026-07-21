@@ -13,10 +13,11 @@ use std::collections::VecDeque;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::common::{
-    belt_throughput, dir_to_vec, fluid_only_recipes, inserter_reach, inserter_target_lane,
-    is_belt_entity, is_inserter, is_machine_entity, is_splitter, is_surface_belt, is_ug_belt,
+    belt_throughput_stacked, dir_to_vec, fluid_only_recipes, inserter_reach,
+    inserter_target_lane, is_belt_entity, is_inserter, is_machine_entity, is_splitter,
+    is_surface_belt, is_ug_belt, lane_capacity_stacked, machine_dims, machine_tiles,
     splitter_second_tile, splitter_to_surface_tier, ug_max_reach, ug_to_surface_tier,
-    lane_capacity, machine_dims, machine_tiles, utilization_for, LANE_LEFT,
+    utilization_for, LANE_LEFT,
 };
 use crate::models::{EntityDirection, LayoutResult, PlacedEntity, SolverResult};
 
@@ -2118,19 +2119,38 @@ pub fn check_lane_throughput(
     if lane_rates.is_empty() {
         return issues;
     }
+    // Non-empty lane_rates implies `solver` was Some (the impl returns
+    // empty without it).
+    let Some(sr) = solver else { return issues };
 
+    // RFC-046: caps are per-ITEM stacking-aware, not blanket ×S — the
+    // validator re-derives the family exemption independently instead of
+    // trusting the planner's discipline (code-review finding, 2026-07-21).
+    let stacking_ctx = crate::bus::stacking_ctx::StackingCtx::derive(sr, layout.stacking);
     let mut belt_name_map: FxHashMap<(i32, i32), &str> = FxHashMap::default();
+    let mut carries_map: FxHashMap<(i32, i32), &str> = FxHashMap::default();
     for e in &layout.entities {
         if is_surface_belt(&e.name) {
             belt_name_map.insert((e.x, e.y), &e.name);
         } else if is_ug_belt(&e.name) && e.io_type.as_deref() == Some("output") {
             belt_name_map.insert((e.x, e.y), ug_to_surface_tier(&e.name));
+        } else {
+            continue;
+        }
+        if let Some(item) = e.carries.as_deref() {
+            carries_map.insert((e.x, e.y), item);
         }
     }
 
     for (&pos, &[left, right]) in &lane_rates {
         let belt_name = belt_name_map.get(&pos).copied().unwrap_or("transport-belt");
-        let cap = lane_capacity(belt_name);
+        // Tiles without a `carries` attribution fall back to the layout-
+        // wide value (pre-review behavior); engine-stamped belts all carry.
+        let tile_stacking = carries_map
+            .get(&pos)
+            .map(|item| stacking_ctx.for_item(item))
+            .unwrap_or(layout.stacking);
+        let cap = lane_capacity_stacked(belt_name, tile_stacking);
         for (lane_name, rate) in [("left", left), ("right", right)] {
             if rate > cap + 0.01 {
                 issues.push(ValidationIssue::with_pos(
@@ -2158,6 +2178,8 @@ fn compute_lane_rates_impl(
         Some(s) => s,
         None => return FxHashMap::default(),
     };
+    // RFC-046: item-effective stacking for exemption-aware splitter caps.
+    let rates_stacking_ctx = crate::bus::stacking_ctx::StackingCtx::derive(sr, layout.stacking);
 
     let mut belt_dir_map: FxHashMap<(i32, i32), EntityDirection> = FxHashMap::default();
     let mut ug_output_tiles: FxHashSet<(i32, i32)> = FxHashSet::default();
@@ -2917,7 +2939,18 @@ fn compute_lane_rates_impl(
                 };
                 let cap = splitter_entity
                     .get(&a)
-                    .map(|e| belt_throughput(splitter_to_surface_tier(&e.name)))
+                    .map(|e| {
+                        // RFC-046: splitters are stack-preserving (BS4) —
+                        // per-output cap scales with the ITEM-effective S
+                        // (exemption-aware, like the lane caps; falls back
+                        // to the layout-wide value without a `carries`).
+                        let s = e
+                            .carries
+                            .as_deref()
+                            .map(|item| rates_stacking_ctx.for_item(item))
+                            .unwrap_or(layout.stacking);
+                        belt_throughput_stacked(splitter_to_surface_tier(&e.name), s)
+                    })
                     .unwrap_or(15.0);
                 let (a_out, b_out) = splitter_output_rates_mixed(
                     a_fc[0] + a_fc[1],

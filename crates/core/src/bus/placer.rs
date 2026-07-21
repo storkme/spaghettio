@@ -6,7 +6,11 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::bus::inserter_ladder::{reassign_near_far, InserterTier};
 use crate::bus::layout::RowLayout;
-use crate::common::{belt_entity_for_rate, lane_capacity, machine_dims, utilization_for, QualityTier, BELT_TIERS};
+use crate::bus::stacking_ctx::StackingCtx;
+use crate::common::{
+    belt_entity_for_rate, belt_entity_for_rate_stacked, lane_capacity, machine_dims,
+    utilization_for, QualityTier, BELT_TIERS,
+};
 use crate::models::{EntityDirection, MachineSpec, PlacedEntity, SolverResult};
 
 /// Best available per-lane capacity across all belt tiers.
@@ -41,6 +45,7 @@ fn effective_in_lane_cap(max_belt_tier: Option<&str>) -> f64 {
 /// row throughput, which is acceptable since the user explicitly chose
 /// that tier as the cap.
 fn row_input_belt(max_belt_tier: Option<&str>) -> &'static str {
+    // stacking-neutral: INFINITY selects the max tier regardless (RFC-046)
     belt_entity_for_rate(f64::INFINITY, max_belt_tier)
 }
 
@@ -609,6 +614,7 @@ pub(crate) fn build_one_row(
     quality: QualityTier,
     output_east: bool,
     row_layout: RowLayout,
+    ctx: &StackingCtx,
 ) -> (Vec<PlacedEntity>, RowSpan, i32) {
     use crate::bus::templates;
 
@@ -632,9 +638,10 @@ pub(crate) fn build_one_row(
     };
 
     let output_rate = solid_outputs.first().map(|f| f.rate * count as f64).unwrap_or(0.0);
-    let out_belt = belt_entity_for_rate(
+    let out_belt = belt_entity_for_rate_stacked(
         output_rate * if lane_split { 1.0 } else { 2.0 },
         max_belt_tier,
+        ctx.for_item(output_item),
     );
 
     // Second solid output (RFC Fulgora D2b): only `solid_outputs[0]` owns
@@ -646,8 +653,13 @@ pub(crate) fn build_one_row(
     // `can_lane_split` already forces `lane_split == false` whenever
     // `solid_outputs.len() >= 2`, so this is always single-lane (×2).
     let secondary_solid_output = solid_outputs.get(1);
-    let secondary_belt_name: Option<&'static str> = secondary_solid_output
-        .map(|f| belt_entity_for_rate(f.rate * count as f64 * 2.0, max_belt_tier));
+    // Secondary solid outputs are always family-exempt (RFC-046: D2b index
+    // >=1 solids are a fixed long-handed extraction, cannot stack), so this
+    // resolves to ×1 regardless of `ctx.stacking()` — converted for
+    // uniformity with every other belt-tier site.
+    let secondary_belt_name: Option<&'static str> = secondary_solid_output.map(|f| {
+        belt_entity_for_rate_stacked(f.rate * count as f64 * 2.0, max_belt_tier, ctx.for_item(&f.item))
+    });
 
     let mut fluid_port_ys: Vec<i32> = vec![];
     let mut fluid_port_pipes: Vec<(String, i32, i32)> = vec![];
@@ -770,6 +782,7 @@ pub(crate) fn build_one_row(
                 output_rate_pm,
                 max_inserter_tier,
                 quality,
+                ctx.for_item(output_item),
             );
             let machine_y = y_cursor + 5;
             let output_y = machine_y + mh as i32;
@@ -831,6 +844,7 @@ pub(crate) fn build_one_row(
                 output_rate_pm,
                 max_inserter_tier,
                 quality,
+                ctx.for_item(output_item),
             );
             fluid_port_ys = port_pipes.first().map(|&(_, _, py)| vec![py]).unwrap_or_default();
             fluid_port_pipes = port_pipes;
@@ -895,6 +909,7 @@ pub(crate) fn build_one_row(
                 secondary_rate,
                 max_inserter_tier,
                 quality,
+                ctx.for_item(output_item),
             );
             fluid_output_port_pipes = out_port_pipes;
             let input_ys = vec![y_cursor];
@@ -943,6 +958,7 @@ pub(crate) fn build_one_row(
                 output_rate_pm,
                 max_inserter_tier,
                 quality,
+                ctx.for_item(output_item),
             );
             let input_ys: Vec<i32> = solid_inputs
                 .iter()
@@ -994,6 +1010,7 @@ pub(crate) fn build_one_row(
                 output_rate_pm,
                 max_inserter_tier,
                 quality,
+                ctx.for_item(output_item),
             );
             // input_belt_y[i] is where lane planner taps off lane.item
             // matching solid_inputs[i]. Layout (msz=3): belt 1 at y+0,
@@ -1043,6 +1060,7 @@ pub(crate) fn build_one_row(
                 output_rate_pm,
                 max_inserter_tier,
                 quality,
+                ctx.for_item(output_item),
             );
             fluid_port_ys = in_port_pipes.iter().map(|&(_, _, py)| py).collect();
             fluid_port_ys.sort_unstable();
@@ -1088,7 +1106,7 @@ pub(crate) fn build_one_row(
                     count
                 };
                 let k_trunks = count.div_ceil(block_size).max(1);
-                let in_belt1 = belt_entity_for_rate(belt_cap, max_belt_tier);
+                let in_belt1 = belt_entity_for_rate_stacked(belt_cap, max_belt_tier, ctx.for_item(item0));
                 let in_belt2 = row_input_belt(max_belt_tier);
                 crate::trace::emit(crate::trace::TraceEvent::RowLayoutSelected {
                     recipe: spec.recipe.clone(),
@@ -1130,6 +1148,7 @@ pub(crate) fn build_one_row(
                     output_rate_pm,
                     max_inserter_tier,
                     quality,
+                    ctx.for_item(output_item),
                 );
                 // Map each spec.solid_input (natural order) to its tap-off
                 // y position. High-demand (item0) sits on trunk 0 at y+0;
@@ -1185,6 +1204,7 @@ pub(crate) fn build_one_row(
                     output_rate_pm,
                     max_inserter_tier,
                     quality,
+                    ctx.for_item(output_item),
                 );
                 fluid_output_port_pipes = out_port_pipes;
                 // Positional (far=y_cursor, near=y_cursor+1) mapped back to
@@ -1255,6 +1275,7 @@ pub(crate) fn build_one_row(
                 max_belt_tier,
                 max_inserter_tier,
                 quality,
+                ctx,
             );
             fluid_port_ys = fluid_input_port_pipes.first().map(|&(_, _, py)| vec![py]).unwrap_or_default();
             fluid_port_pipes = fluid_input_port_pipes;
@@ -1299,6 +1320,7 @@ pub(crate) fn build_one_row(
                 max_belt_tier,
                 max_inserter_tier,
                 quality,
+                ctx,
             );
             // Mirrors `templates::voider_row`'s row-offset constants:
             // near/tap belt at dy=6 (bus tap-off lands here), far/recirc
@@ -1330,6 +1352,7 @@ pub(crate) fn build_one_row(
                 max_belt_tier,
                 max_inserter_tier,
                 quality,
+                ctx,
             );
             sorted_output_belts = sorted_belts;
             // Scrap input belt at dy=0 (the bus tap lands here). The
@@ -1495,6 +1518,7 @@ pub fn place_rows(
     final_output_items: Option<&FxHashSet<String>>,
     extra_gap_after_row: Option<&FxHashMap<usize, i32>>,
     row_layout: RowLayout,
+    ctx: &StackingCtx,
 ) -> (Vec<PlacedEntity>, Vec<RowSpan>, i32, i32) {
     let mut entities: Vec<PlacedEntity> = Vec::new();
     let mut row_spans: Vec<RowSpan> = Vec::new();
@@ -1525,12 +1549,9 @@ pub fn place_rows(
         };
 
         let solid_inputs_count = spec.inputs.iter().filter(|f| !f.is_fluid).count();
-        let first_solid_output_rate = spec
-            .outputs
-            .iter()
-            .find(|f| !f.is_fluid)
-            .map(|f| f.rate)
-            .unwrap_or(0.0);
+        let first_solid_output = spec.outputs.iter().find(|f| !f.is_fluid);
+        let first_solid_output_rate = first_solid_output.map(|f| f.rate).unwrap_or(0.0);
+        let first_solid_output_item = first_solid_output.map(|f| f.item.as_str()).unwrap_or("");
         let output_rate = first_solid_output_rate * total_count as f64;
         let has_fluid = spec.inputs.iter().any(|f| f.is_fluid);
 
@@ -1560,16 +1581,17 @@ pub fn place_rows(
         let _ = solid_inputs_count;
         let is_hs_dual = matches!(row_layout, RowLayout::HorizontalStack)
             && matches!(kind, RowKind::DualInput);
+        let out_stack = ctx.for_item(first_solid_output_item);
         let max_per_row = if single_lane {
-            let ob = belt_entity_for_rate(output_rate * 2.0, max_belt_tier);
+            let ob = belt_entity_for_rate_stacked(output_rate * 2.0, max_belt_tier, out_stack);
             max_machines_for_belt(spec, ob, max_belt_tier)
         } else if is_hs_dual {
             // HS feeds input₀ via K stacked trunks, so only output and
             // input₁ constrain machines per row.
-            let ob = belt_entity_for_rate(output_rate, max_belt_tier);
+            let ob = belt_entity_for_rate_stacked(output_rate, max_belt_tier, out_stack);
             max_machines_for_belt_horizontal_stack(spec, ob, max_belt_tier)
         } else {
-            let ob = belt_entity_for_rate(output_rate, max_belt_tier);
+            let ob = belt_entity_for_rate_stacked(output_rate, max_belt_tier, out_stack);
             max_machines_for_belt_both_lanes(spec, ob, max_belt_tier)
         };
 
@@ -1607,6 +1629,7 @@ pub fn place_rows(
                 quality,
                 is_final,
                 row_layout,
+                ctx,
             );
             let row_idx = row_spans.len();
             max_width = max_width.max(width);
@@ -1644,6 +1667,7 @@ pub fn place_rows_from_result(
     final_output_items: Option<&FxHashSet<String>>,
     extra_gap_after_row: Option<&FxHashMap<usize, i32>>,
     row_layout: RowLayout,
+    ctx: &StackingCtx,
 ) -> (Vec<PlacedEntity>, Vec<RowSpan>, i32, i32) {
     place_rows(
         &result.machines,
@@ -1656,6 +1680,7 @@ pub fn place_rows_from_result(
         final_output_items,
         extra_gap_after_row,
         row_layout,
+        ctx,
     )
 }
 
@@ -1943,7 +1968,7 @@ mod tests {
     fn place_rows_single_recipe_no_split() {
         let machines = vec![iron_plate_spec()];
         let dep_order = vec!["iron-plate".to_string()];
-        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default());
+        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default(), &StackingCtx::unstacked());
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].machine_count, 1);
         assert_eq!(spans[0].spec.recipe, "iron-plate");
@@ -1953,7 +1978,7 @@ mod tests {
     fn place_rows_two_recipes_ordered() {
         let machines = vec![iron_gear_spec(), iron_plate_spec()];
         let dep_order = vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()];
-        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default());
+        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default(), &StackingCtx::unstacked());
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0].spec.recipe, "iron-plate");
         assert_eq!(spans[1].spec.recipe, "iron-gear-wheel");
@@ -1964,7 +1989,7 @@ mod tests {
         // Second recipe starts at y_end_of_first + 2 (gap)
         let machines = vec![iron_plate_spec(), iron_gear_spec()];
         let dep_order = vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()];
-        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default());
+        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default(), &StackingCtx::unstacked());
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[1].y_start, spans[0].y_end + 2);
     }
@@ -1973,7 +1998,7 @@ mod tests {
     fn place_rows_y_offset() {
         let machines = vec![iron_plate_spec()];
         let dep_order = vec!["iron-plate".to_string()];
-        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 5, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default());
+        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 5, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default(), &StackingCtx::unstacked());
         assert_eq!(spans[0].y_start, 5);
     }
 
@@ -1994,6 +2019,7 @@ mod tests {
             None,
             None,
             RowLayout::default(),
+            &StackingCtx::unstacked(),
         );
 
         // 4 distinct recipes → 4 rows (no splitting for these small counts)
@@ -2056,6 +2082,7 @@ mod tests {
             None,
             None,
             RowLayout::default(),
+            &StackingCtx::unstacked(),
         );
         // 20 machines, max_per_row=14 → ceil(20/14) = 2 rows
         assert_eq!(spans.len(), 2, "Expected 2 rows due to belt lane capacity");
@@ -2120,6 +2147,7 @@ mod tests {
             None,
             None,
             RowLayout::default(),
+            &StackingCtx::unstacked(),
         );
 
         let gear_rows: Vec<_> = spans
@@ -2139,7 +2167,7 @@ mod tests {
         let machines = vec![iron_plate_spec(), iron_gear_spec()];
         let dep_order = vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()];
         let (_, spans, _, total_height) =
-            place_rows(&machines, &dep_order, 5, 0, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default());
+            place_rows(&machines, &dep_order, 5, 0, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default(), &StackingCtx::unstacked());
 
         // Every span should have y_end > y_start
         for span in &spans {
@@ -2167,7 +2195,7 @@ mod tests {
         let dep_order = vec!["iron-plate".to_string()];
         let bus_width = 10;
         let (_, spans, max_width, _) =
-            place_rows(&machines, &dep_order, bus_width, 0, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default());
+            place_rows(&machines, &dep_order, bus_width, 0, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default(), &StackingCtx::unstacked());
 
         assert!(
             spans[0].row_width >= bus_width,
@@ -2194,8 +2222,9 @@ mod tests {
             None,
             Some(&extra_gaps),
             RowLayout::default(),
+            &StackingCtx::unstacked(),
         );
-        let (_, spans_no_gap, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default());
+        let (_, spans_no_gap, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default(), &StackingCtx::unstacked());
 
         // Second row should start 5 tiles later with gap
         assert_eq!(

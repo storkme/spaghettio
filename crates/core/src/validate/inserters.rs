@@ -7,9 +7,26 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::common::{
     dir_to_vec, fluid_only_recipes, inserter_reach, inserter_throughput, is_inserter,
-    is_machine_entity, machine_dims, machine_tiles, recycler_eject_tile, utilization_for,
+    is_machine_entity, machine_dims, machine_tiles, recycler_eject_tile,
+    stack_inserter_belt_hand, stack_inserter_swings, utilization_for,
 };
-use crate::models::{LayoutResult, SolverResult};
+use crate::models::{LayoutResult, PlacedEntity, SolverResult};
+
+/// RFC-046: throughput an inserter delivers when dropping onto a **belt**.
+/// At the layout's belt stack size S > 1, a stack inserter's belt drops
+/// use the `swings × belt-hand` decomposition (BS3: hand 6 rounded down
+/// to a multiple of S — including the real 9.6/s dip at S=4). At S ≤ 1,
+/// and for every other inserter type, this is the flat I8 constant —
+/// bit-identical to pre-RFC behavior (kill 1). Machine drops never use
+/// this: they are exact-hand (BS2), always the flat constant.
+fn belt_drop_throughput(ins: &PlacedEntity, stacking: u8) -> f64 {
+    let quality = ins.quality.unwrap_or_default();
+    if stacking > 1 && ins.name == "stack-inserter" {
+        stack_inserter_swings(quality) * stack_inserter_belt_hand(stacking)
+    } else {
+        inserter_throughput(&ins.name, quality)
+    }
+}
 
 use super::{Severity, ValidationIssue};
 
@@ -238,6 +255,8 @@ pub fn check_inserter_throughput(
             // machine-internal inserter — ignore those (they don't extract
             // to a belt). Only count picks that actually leave the machine.
             if !machine_tiles_set.contains(&drop_pos) {
+                // Extraction drops onto a belt → belt-drop rating (RFC-046).
+                let rate = belt_drop_throughput(ins, layout.stacking);
                 *output_avail.entry(mpos).or_insert(0.0) += rate;
                 *output_count.entry(mpos).or_insert(0) += 1;
             }
@@ -408,6 +427,8 @@ pub fn check_inserter_item_throughput(
         }
         if let Some(&mpos) = machine_by_tile.get(&pickup_pos) {
             if !machine_tiles_set.contains(&drop_pos) {
+                // Extraction drops onto a belt → belt-drop rating (RFC-046).
+                let rate = belt_drop_throughput(ins, layout.stacking);
                 *output_avail.entry((mpos, item)).or_insert(0.0) += rate;
             }
         }
@@ -518,6 +539,39 @@ mod tests {
 
     fn fluid_flow(item: &str) -> ItemFlow {
         ItemFlow { item: item.to_string(), rate: 1.0, is_fluid: true, module_id: 0 }
+    }
+
+    // ── belt_drop_throughput (RFC-046) ───────────────────────────────────────
+
+    #[test]
+    fn belt_drop_throughput_flat_at_s1_decomposed_above() {
+        use crate::common::QualityTier;
+        let stack = PlacedEntity { name: "stack-inserter".into(), ..Default::default() };
+        let fast = PlacedEntity { name: "fast-inserter".into(), ..Default::default() };
+        // S ≤ 1 is the flat I8 constant, bit-identical to pre-RFC (kill 1)
+        // — including 0, the derived-Default sentinel on hand-built layouts.
+        assert_eq!(
+            belt_drop_throughput(&stack, 0),
+            inserter_throughput("stack-inserter", QualityTier::Normal)
+        );
+        assert_eq!(belt_drop_throughput(&stack, 1), 12.0);
+        // S=2,3: swings × hand 6 = 14.4/s; S=4: hand rounds down to 4 →
+        // the real 9.6/s dip (BS3).
+        assert!((belt_drop_throughput(&stack, 2) - 14.4).abs() < 1e-9);
+        assert!((belt_drop_throughput(&stack, 3) - 14.4).abs() < 1e-9);
+        assert!((belt_drop_throughput(&stack, 4) - 9.6).abs() < 1e-9);
+        // Non-stack inserters never stack (BS5) — flat at any S.
+        assert_eq!(
+            belt_drop_throughput(&fast, 4),
+            inserter_throughput("fast-inserter", QualityTier::Normal)
+        );
+        // Quality scales swings only (BS7): legendary ×2.5 at S=4 → 24/s.
+        let legendary = PlacedEntity {
+            name: "stack-inserter".into(),
+            quality: Some(QualityTier::Legendary),
+            ..Default::default()
+        };
+        assert!((belt_drop_throughput(&legendary, 4) - 24.0).abs() < 1e-9);
     }
 
     // ── check_inserter_direction ─────────────────────────────────────────────
