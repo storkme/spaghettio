@@ -348,7 +348,7 @@ pub struct LayoutResult {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub effective_rows: Vec<EffectiveRow>,
     /// Pole-to-pole copper wire graph as `(a, b)` index pairs into `entities`
-    /// (`a < b`), from [`crate::power_wires::compute_pole_wires`]. RFC-044
+    /// (`a < b`), from [`crate::power_wires::compute_pole_wires`]. RFC-045
     /// stored-graph contract: `Some` is AUTHORITATIVE — `blueprint::export`
     /// and the connectivity validator consume it verbatim via
     /// [`crate::power_wires::wires_for`] (so the overlay, the artifact, and
@@ -359,7 +359,7 @@ pub struct LayoutResult {
     /// in [`LayoutResult::wire_mode`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub power_wires: Option<Vec<(u32, u32)>>,
-    /// How this layout's `power_wires` were generated (RFC-044): the layout
+    /// How this layout's `power_wires` were generated (RFC-045): the layout
     /// records its own wiring policy so post-layout recomputes honor it —
     /// without this, an improve-region pass on a `Tree` layout would
     /// silently re-densify it. `Dense`-default, skipped in serde when

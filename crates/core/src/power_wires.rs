@@ -10,7 +10,7 @@
 //! disconnected islands and the whole factory is power-dead — the bug this
 //! module exists to prevent.
 //!
-//! RFC-044 stored-graph contract: the graph is computed ONCE
+//! RFC-045 stored-graph contract: the graph is computed ONCE
 //! (`bus::layout::layout_pass`, in `LayoutOptions::wire_mode` — dense
 //! mesh or deterministic spanning tree — recorded on
 //! `LayoutResult::wire_mode`) and stored in `LayoutResult::power_wires`;
@@ -49,7 +49,7 @@ use crate::common::entity_size;
 use crate::models::{LayoutResult, PlacedEntity};
 use std::borrow::Cow;
 
-/// User-facing pole wiring mode (RFC-044). `Dense` connects every
+/// User-facing pole wiring mode (RFC-045). `Dense` connects every
 /// in-reach pair (Factorio 2.0 has no copper connection cap) — the
 /// maximally robust artifact, and the default. `Tree` emits a
 /// deterministic minimum spanning forest over the SAME candidate set:
@@ -154,7 +154,7 @@ pub fn compute_pole_wires(entities: &[PlacedEntity], mode: WireMode) -> Vec<(u32
 }
 
 /// Deterministic minimum spanning forest over the dense candidate set
-/// (RFC-044 §2). Kruskal with edges totally ordered by the PHYSICAL key
+/// (RFC-045 §2). Kruskal with edges totally ordered by the PHYSICAL key
 /// `(squared_center_distance, min_endpoint_anchor, max_endpoint_anchor)`
 /// — anchors are the poles' integer `(x, y)` tile positions, so the
 /// selected wire SET is a unique function of the physical layout,
@@ -216,7 +216,7 @@ fn minimum_spanning_forest(
     out
 }
 
-/// The stored-graph accessor (RFC-044 §1): `Some` is authoritative and
+/// The stored-graph accessor (RFC-045 §1): `Some` is authoritative and
 /// consumed verbatim (even `Some(vec![])`); `None` means the layout
 /// never computed wires (hand-built `LayoutResult`s, pre-power-3c
 /// snapshots) and falls back to a dense derivation — exactly the
@@ -284,7 +284,7 @@ mod tests {
         PlacedEntity { name: name.to_string(), x, y, ..Default::default() }
     }
 
-    /// Kill 3 (RFC-044): tie-heavy determinism. An equidistant pole line
+    /// Kill 3 (RFC-045): tie-heavy determinism. An equidistant pole line
     /// ties every adjacent pair; the physical-key Kruskal must pick the
     /// SAME edge set every run, pinned exactly.
     #[test]
@@ -298,7 +298,7 @@ mod tests {
         assert_eq!(t1, vec![(0, 1), (1, 2), (2, 3), (3, 4)]);
     }
 
-    /// Kill 3 (RFC-044, review finding 6): the selected wire SET is a
+    /// Kill 3 (RFC-045, review finding 6): the selected wire SET is a
     /// function of the PHYSICAL layout, not entity-Vec order — the same
     /// poles constructed in reversed order must yield the same physical
     /// edges (entity order is non-canonical per the project's own
@@ -327,7 +327,7 @@ mod tests {
         assert_eq!(physical(&fwd, &t_fwd), physical(&rev, &t_rev));
     }
 
-    /// Kill 4 (RFC-044): tree property per component — `edges ==
+    /// Kill 4 (RFC-045): tree property per component — `edges ==
     /// poles − components`, every tree edge is a dense-candidate edge,
     /// and the validator's actual scalar (`count_disconnected_poles`)
     /// is identical between modes. Two clusters deliberately out of
@@ -355,7 +355,7 @@ mod tests {
         );
     }
 
-    /// RFC-044 kill 6 contract (core half): a recompute in the layout's
+    /// RFC-045 kill 6 contract (core half): a recompute in the layout's
     /// OWN recorded `wire_mode` — the exact call
     /// `improve_region_streaming` makes after its entity-reordering
     /// splice — must preserve tree-ness. Simulates the splice as a
@@ -380,7 +380,7 @@ mod tests {
         assert_eq!(w.len(), 3, "tree-ness must survive the recompute: {w:?}");
     }
 
-    /// RFC-044 kill 1: consuming the STORED dense graph must be
+    /// RFC-045 kill 1: consuming the STORED dense graph must be
     /// byte-indistinguishable from the `None`-fallback derivation at
     /// export time.
     #[test]

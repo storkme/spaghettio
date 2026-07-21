@@ -33,7 +33,7 @@ export interface FormState {
    * convention as `inserterTier`. See `docs/rfc-build-quality.md`. */
   quality: string | null;
   /** Pole wiring mode ("tree"). null = dense (today's default) — same
-   * null-is-default convention as `quality`. See RFC-044. */
+   * null-is-default convention as `quality`. See RFC-045. */
   wireMode: string | null;
   /** User-added inputs beyond the DEFAULT_INPUTS list. */
   customInputs: string[];

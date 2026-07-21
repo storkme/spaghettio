@@ -137,7 +137,7 @@ pub fn export(layout: &LayoutResult, label: &str) -> String {
 
     // Pole copper wires: 0-based entity index pairs; the blueprint numbers
     // entities from 1, so entity_number = index+1. Connector id 5 on both
-    // ends = pole-to-pole copper. RFC-044 stored-graph contract: the STORED
+    // ends = pole-to-pole copper. RFC-045 stored-graph contract: the STORED
     // `layout.power_wires` is authoritative (it indexes the same
     // `layout.entities` this export enumerates); `wires_for` falls back to
     // a dense derivation only for layouts that never computed wires.

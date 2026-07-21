@@ -512,7 +512,7 @@ mod tests {
         )
     }
 
-    /// RFC-044 round-trip: a Tree-mode wire graph survives export → parse
+    /// RFC-045 round-trip: a Tree-mode wire graph survives export → parse
     /// verbatim (the parser reads the artifact's wires array; it never
     /// recomputes), and re-export is byte-identical.
     #[test]

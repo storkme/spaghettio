@@ -7332,7 +7332,7 @@ fn quality_differential_kovarex_self_loop_normal_vs_legendary() {
     );
 }
 
-/// RFC-044 verification-plan differential (flagged as silently dropped by
+/// RFC-045 verification-plan differential (flagged as silently dropped by
 /// the implementation contract review — delivered here): the legendary
 /// census fixture wired in `Tree` mode vs `Dense`. 30 medium poles, one
 /// connected component → the tree is exactly 29 edges, strictly fewer

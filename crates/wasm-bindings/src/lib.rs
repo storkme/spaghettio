@@ -64,7 +64,7 @@ fn layout_options(
         // rfc-build-quality Phase 2: unknown/absent → Normal, same
         // hard-cap fallback semantics as the two tiers above.
         quality: quality_tier(quality),
-        // RFC-044: unknown/absent → Dense, same fallback semantics as the
+        // RFC-045: unknown/absent → Dense, same fallback semantics as the
         // tiers above.
         wire_mode: wire_mode
             .as_deref()
@@ -421,7 +421,7 @@ pub fn improve_region_streaming(
     // The retain+extend above reorders `entities`, invalidating the index pairs
     // in `power_wires`. Recompute so the field (and any downstream export /
     // overlay) stays consistent with the new entity order — in the layout's
-    // OWN recorded wire mode (RFC-044 kill 6: a Tree layout must not come
+    // OWN recorded wire mode (RFC-045 kill 6: a Tree layout must not come
     // back silently re-densified).
     layout_result.power_wires = Some(spaghettio_core::power_wires::compute_pole_wires(
         &layout_result.entities,

@@ -1,4 +1,4 @@
-# RFC-044: Pole wire modes — dense mesh vs deterministic minimal tree
+# RFC-045: Pole wire modes — dense mesh vs deterministic minimal tree
 
 Status: ACCEPTED v2 (2026-07-21) — adversarial review round 1
 complete; two must-fixes and two wording fixes folded in (decision
@@ -229,7 +229,7 @@ overlay draws whatever `power_wires` holds; only the TS type changes
 ## Sequencing
 
 One phase; UI ships with it (no guard-rail split needed — the engine
-default is inert). Registry: RFC-044, row added in this commit's
+default is inert). Registry: RFC-045, row added in this commit's
 `docs/rfcs.md`, next number bumped to RFC-045.
 
 ## Decision log

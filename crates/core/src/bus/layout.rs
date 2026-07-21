@@ -90,7 +90,7 @@ pub struct LayoutOptions {
     /// functional entities (machines/inserters/poles) for export.
     /// Default `Normal` — a bit-exact no-op (kill criterion 2).
     pub quality: crate::common::QualityTier,
-    /// Pole wiring mode (RFC-044): `Dense` (default — every in-reach
+    /// Pole wiring mode (RFC-045): `Dense` (default — every in-reach
     /// pair, maximally robust) or `Tree` (deterministic minimum spanning
     /// forest — fewest wires, visually clean). Purely an artifact-layer
     /// choice; placement is untouched.
@@ -1064,7 +1064,7 @@ fn layout_pass(
 
     // Pole copper wire graph for the web overlay — the SAME graph
     // `blueprint::export` and the connectivity validator consume this
-    // STORED graph verbatim (RFC-044 `wires_for` — one computation, all
+    // STORED graph verbatim (RFC-045 `wires_for` — one computation, all
     // readers). Computed from the final entity order so the `(a, b)` index
     // pairs stay valid — and AFTER the quality stamp pass above, because
     // wire reach is per-entity quality-aware. `opts.wire_mode` selects

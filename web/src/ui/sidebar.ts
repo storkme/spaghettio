@@ -475,7 +475,7 @@ export function renderSidebar(
   });
   targetBody.appendChild(makeField("Build quality", qualitySelect));
 
-  // Pole wiring mode (RFC-044): dense mesh (robust, default) vs a
+  // Pole wiring mode (RFC-045): dense mesh (robust, default) vs a
   // deterministic minimal spanning tree (fewest wires, visually clean;
   // note deconstructing one pole in-game splits a tree network).
   const wireModeSelect = document.createElement("select");
