@@ -254,3 +254,21 @@ default is inert). Registry: RFC-044, row added in this commit's
   `count_disconnected_poles`'s actual return; the union-find
   extraction dropped to resolve the kill-5 self-tension. Ready to
   implement.*
+- *2026-07-21 — **implemented and landed.** `WireMode` + physical-key
+  Kruskal in `power_wires`; `LayoutResult.power_wires` →
+  `Option<Vec<..>>` with `wires_for` as the single stored-or-derive
+  accessor consumed by export AND the connectivity validator;
+  `wire_mode` recorded on the layout and honored by the improve-region
+  recompute (kill 6, wasm site + core contract pin). Only ONE
+  exhaustive-literal site outside tests needed the Option migration.
+  Kill evidence: 818/818 full suite + STRESSGOLD clean (kill 1 — zero
+  golden bytes moved at Dense; `export_stored_dense_equals_fallback_derivation`
+  pins byte-equality directly); tie-heavy + order-permutation fixtures
+  (kill 3); spanning-forest property + validator-scalar invariance on
+  a two-cluster fixture (kill 4); tree round-trip is a FIXED POINT of
+  export→parse→export (byte-identical re-export);
+  `export_emits_pole_copper_wires` passes unmodified (the None-fallback
+  path). Web: `w=` codec + "Pole wiring" select; browser smoke — the
+  `q=l&w=t` URL solves (92 machines, known single warning), select
+  reads `tree`, hash round-trips. Kill 5 held: zero
+  placement/thinning/substation lines touched.*

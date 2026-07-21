@@ -90,6 +90,11 @@ pub struct LayoutOptions {
     /// functional entities (machines/inserters/poles) for export.
     /// Default `Normal` — a bit-exact no-op (kill criterion 2).
     pub quality: crate::common::QualityTier,
+    /// Pole wiring mode (RFC-044): `Dense` (default — every in-reach
+    /// pair, maximally robust) or `Tree` (deterministic minimum spanning
+    /// forest — fewest wires, visually clean). Purely an artifact-layer
+    /// choice; placement is untouched.
+    pub wire_mode: crate::power_wires::WireMode,
     /// Enable the merge-and-tap trunk fallback for unstampable
     /// multi-producer/multi-consumer families (`docs/rfc-merge-tap-trunks.md`).
     /// Default `false` (byte-identical to pre-fallback layouts). Set only by
@@ -110,6 +115,7 @@ impl LayoutOptions {
             surplus_policy: SurplusPolicy::default(),
             max_inserter_tier: InserterTier::default(),
             quality: crate::common::QualityTier::default(),
+            wire_mode: crate::power_wires::WireMode::default(),
             merge_tap: false,
         }
     }
@@ -1057,12 +1063,14 @@ fn layout_pass(
     }
 
     // Pole copper wire graph for the web overlay — the SAME graph
-    // `blueprint::export` re-derives and encodes in the blueprint `wires`
-    // array. Computed from the final entity order so the `(a, b)` index pairs
-    // stay valid — and AFTER the quality stamp pass above, because wire
-    // reach is per-entity quality-aware (rfc-build-quality merge with the
-    // power-3c arc). See `crate::power_wires`.
-    let power_wires = crate::power_wires::compute_pole_wires(&all_entities);
+    // `blueprint::export` and the connectivity validator consume this
+    // STORED graph verbatim (RFC-044 `wires_for` — one computation, all
+    // readers). Computed from the final entity order so the `(a, b)` index
+    // pairs stay valid — and AFTER the quality stamp pass above, because
+    // wire reach is per-entity quality-aware. `opts.wire_mode` selects
+    // dense mesh vs deterministic spanning tree; the mode is recorded on
+    // the result so post-layout recomputes honor it.
+    let power_wires = crate::power_wires::compute_pole_wires(&all_entities, opts.wire_mode);
 
     Ok((
         LayoutResult {
@@ -1075,7 +1083,8 @@ fn layout_pass(
             surplus_exits,
             voided_streams,
             effective_rows,
-            power_wires,
+            power_wires: Some(power_wires),
+            wire_mode: opts.wire_mode,
         },
         row_spans,
         cap_coords,
@@ -2079,7 +2088,7 @@ mod tests {
 
         // Pre-repair: the artifact-level wire graph leaves the boundary pair as
         // two separate islands — exactly what the old top-left metric missed.
-        let wires = compute_pole_wires(&entities);
+        let wires = compute_pole_wires(&entities, crate::power_wires::WireMode::Dense);
         assert!(wires.is_empty(), "boundary pair must not directly wire; got {wires:?}");
         assert_eq!(count_disconnected_poles(&entities, &wires), 1);
 
@@ -2103,7 +2112,7 @@ mod tests {
         // Post-repair: a bridge pole was added and the EMITTED wire graph is now
         // a single connected component — repair and artifact agree.
         assert!(entities.len() > 2, "repair must add at least one bridge pole");
-        let wires2 = compute_pole_wires(&entities);
+        let wires2 = compute_pole_wires(&entities, crate::power_wires::WireMode::Dense);
         assert_eq!(
             count_disconnected_poles(&entities, &wires2),
             0,

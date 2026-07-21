@@ -37,7 +37,7 @@ use crate::validate::{Severity, ValidationIssue};
 /// poles' wire reaches, with no per-pole connection cap (Factorio 2.0 removed
 /// it). Returns a single `Warning` when any pole is unreachable.
 pub fn check_pole_network_connectivity(layout: &LayoutResult) -> Vec<ValidationIssue> {
-    let wires = crate::power_wires::compute_pole_wires(&layout.entities);
+    let wires = crate::power_wires::wires_for(layout);
     let disconnected = crate::power_wires::count_disconnected_poles(&layout.entities, &wires);
     if disconnected == 0 {
         return vec![];

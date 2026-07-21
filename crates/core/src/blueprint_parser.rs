@@ -422,7 +422,7 @@ fn bp_data_to_layout(bp_data: BpData) -> LayoutResult {
         entities,
         width: max_x + 1,
         height: max_y + 1,
-        power_wires,
+        power_wires: Some(power_wires),
         ..Default::default()
     }
 }
@@ -510,6 +510,38 @@ mod tests {
             "0{}",
             base64::engine::general_purpose::STANDARD.encode(&compressed)
         )
+    }
+
+    /// RFC-044 round-trip: a Tree-mode wire graph survives export → parse
+    /// verbatim (the parser reads the artifact's wires array; it never
+    /// recomputes), and re-export is byte-identical.
+    #[test]
+    fn tree_wires_round_trip_through_export_and_parse() {
+        use crate::power_wires::{compute_pole_wires, WireMode};
+        let ents: Vec<PlacedEntity> = (0..4)
+            .map(|i| PlacedEntity {
+                name: "medium-electric-pole".to_string(),
+                x: i * 7,
+                y: 0,
+                ..Default::default()
+            })
+            .collect();
+        let mut layout = LayoutResult::default();
+        layout.width = 25;
+        layout.height = 1;
+        layout.entities = ents;
+        layout.wire_mode = WireMode::Tree;
+        layout.power_wires = Some(compute_pole_wires(&layout.entities, WireMode::Tree));
+        let tree = layout.power_wires.clone().unwrap();
+        assert_eq!(tree.len(), 3);
+
+        let bp = blueprint::export(&layout, "tree-mode");
+        let parsed = parse_blueprint_string(&bp).expect("should parse");
+        assert_eq!(parsed.power_wires.as_deref(), Some(tree.as_slice()));
+        // Re-export from the parsed layout: same wires bytes (parser stored
+        // Some, so export consumes it verbatim — no re-densify).
+        let bp2 = blueprint::export(&parsed, "tree-mode");
+        assert_eq!(bp, bp2, "tree export must be a fixed point of export→parse→export");
     }
 
     #[test]
@@ -633,15 +665,15 @@ mod tests {
             height: 1,
             ..Default::default()
         };
-        let emitted = crate::power_wires::compute_pole_wires(&layout.entities);
+        let emitted = crate::power_wires::compute_pole_wires(&layout.entities, crate::power_wires::WireMode::Dense);
         assert_eq!(emitted, vec![(0, 1), (1, 2)]);
 
         let bp_string = blueprint::export(&layout, "pole-wires");
         let parsed = parse_blueprint_string(&bp_string).expect("should parse");
         // Wires must survive export → parse (before the fix: empty).
-        assert_eq!(parsed.power_wires, emitted, "power_wires must round-trip");
+        assert_eq!(parsed.power_wires.as_deref(), Some(emitted.as_slice()), "power_wires must round-trip");
         assert_eq!(
-            crate::power_wires::count_disconnected_poles(&parsed.entities, &parsed.power_wires),
+            crate::power_wires::count_disconnected_poles(&parsed.entities, parsed.power_wires.as_deref().unwrap_or(&[])),
             0,
             "all three poles are one network after round-trip"
         );
@@ -667,7 +699,7 @@ mod tests {
         }
         let layout = LayoutResult { entities, width: 25, height: 25, ..Default::default() };
 
-        let emitted = crate::power_wires::compute_pole_wires(&layout.entities);
+        let emitted = crate::power_wires::compute_pole_wires(&layout.entities, crate::power_wires::WireMode::Dense);
         assert!(!emitted.is_empty(), "dense grid must wire");
         assert_eq!(
             crate::power_wires::count_disconnected_poles(&layout.entities, &emitted),
@@ -677,9 +709,9 @@ mod tests {
 
         let bp_string = blueprint::export(&layout, "dense-grid");
         let parsed = parse_blueprint_string(&bp_string).expect("should parse");
-        assert_eq!(parsed.power_wires, emitted, "dense wire set must round-trip");
+        assert_eq!(parsed.power_wires.as_deref(), Some(emitted.as_slice()), "dense wire set must round-trip");
         assert_eq!(
-            crate::power_wires::count_disconnected_poles(&parsed.entities, &parsed.power_wires),
+            crate::power_wires::count_disconnected_poles(&parsed.entities, parsed.power_wires.as_deref().unwrap_or(&[])),
             0,
             "the 25-pole network stays connected after round-trip"
         );

@@ -251,7 +251,7 @@ function allProducerMachines(): string[] {
   return machinesCache;
 }
 
-function buildLayout(result: SolverResult, maxBeltTier?: string, strategy?: string, rowLayout?: string, maxInserterTier?: string, quality?: string): Promise<LayoutResult> {
+function buildLayout(result: SolverResult, maxBeltTier?: string, strategy?: string, rowLayout?: string, maxInserterTier?: string, quality?: string, wireMode?: string): Promise<LayoutResult> {
   return call<LayoutResult>({
     method: "layout",
     result,
@@ -260,10 +260,11 @@ function buildLayout(result: SolverResult, maxBeltTier?: string, strategy?: stri
     rowLayout: rowLayout ?? null,
     maxInserterTier: maxInserterTier ?? null,
     quality: quality ?? null,
+    wireMode: wireMode ?? null,
   });
 }
 
-function buildLayoutTraced(result: SolverResult, maxBeltTier?: string, strategy?: string, rowLayout?: string, maxInserterTier?: string, quality?: string): Promise<LayoutResult> {
+function buildLayoutTraced(result: SolverResult, maxBeltTier?: string, strategy?: string, rowLayout?: string, maxInserterTier?: string, quality?: string, wireMode?: string): Promise<LayoutResult> {
   return call<LayoutResult>({
     method: "layoutTraced",
     result,
@@ -272,6 +273,7 @@ function buildLayoutTraced(result: SolverResult, maxBeltTier?: string, strategy?
     rowLayout: rowLayout ?? null,
     maxInserterTier: maxInserterTier ?? null,
     quality: quality ?? null,
+    wireMode: wireMode ?? null,
   });
 }
 
@@ -298,6 +300,7 @@ async function buildLayoutStreaming(
   rowLayout: string | undefined,
   maxInserterTier: string | undefined,
   quality: string | undefined,
+  wireMode: string | undefined,
   onEvent: (evt: TraceEvent) => void,
 ): Promise<LayoutResult> {
   if (activeStreamingId !== null) {
@@ -331,6 +334,7 @@ async function buildLayoutStreaming(
       rowLayout: rowLayout ?? null,
       maxInserterTier: maxInserterTier ?? null,
       quality: quality ?? null,
+      wireMode: wireMode ?? null,
       traceLogs,
     });
   });

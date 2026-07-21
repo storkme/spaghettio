@@ -135,13 +135,15 @@ pub fn export(layout: &LayoutResult, label: &str) -> String {
         })
         .collect();
 
-    // Pole copper wires: `compute_pole_wires` returns 0-based entity index
-    // pairs; the blueprint numbers entities from 1, so entity_number = index+1.
-    // Connector id 5 on both ends = pole-to-pole copper. Recomputed from the
-    // same `layout.entities` the entity list above enumerates, so the indices
-    // line up exactly.
-    let wires: Vec<[u32; 4]> = crate::power_wires::compute_pole_wires(&layout.entities)
-        .into_iter()
+    // Pole copper wires: 0-based entity index pairs; the blueprint numbers
+    // entities from 1, so entity_number = index+1. Connector id 5 on both
+    // ends = pole-to-pole copper. RFC-044 stored-graph contract: the STORED
+    // `layout.power_wires` is authoritative (it indexes the same
+    // `layout.entities` this export enumerates); `wires_for` falls back to
+    // a dense derivation only for layouts that never computed wires.
+    let wires: Vec<[u32; 4]> = crate::power_wires::wires_for(layout)
+        .iter()
+        .copied()
         .map(|(a, b)| {
             [
                 a + 1,
@@ -287,7 +289,7 @@ mod tests {
         }
         // The four poles are entity_numbers {1,3,4,5}; the wire graph must
         // connect all of them (compute_pole_wires drives both export + check).
-        let pw = crate::power_wires::compute_pole_wires(&layout.entities);
+        let pw = crate::power_wires::compute_pole_wires(&layout.entities, crate::power_wires::WireMode::Dense);
         assert_eq!(
             crate::power_wires::count_disconnected_poles(&layout.entities, &pw),
             0,

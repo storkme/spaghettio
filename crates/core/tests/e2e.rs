@@ -312,6 +312,7 @@ fn run_e2e_inner(
             row_layout,
             max_inserter_tier: Default::default(),
             quality: Default::default(),
+            wire_mode: Default::default(),
             merge_tap: false,
         },
     )
@@ -661,8 +662,8 @@ fn assert_round_trip(result: &E2EResult) {
         result.layout.power_wires, result.parsed.power_wires,
         "pole copper wires must round-trip through blueprint export/parse: \
          layout emitted {} wire(s), parsed recovered {}",
-        result.layout.power_wires.len(),
-        result.parsed.power_wires.len(),
+        result.layout.power_wires.as_deref().map_or(0, |w| w.len()),
+        result.parsed.power_wires.as_deref().map_or(0, |w| w.len()),
     );
 }
 
@@ -1747,6 +1748,7 @@ fn tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing() {
             surplus_policy: SurplusPolicy::default(),
             max_inserter_tier: Default::default(),
             quality: Default::default(),
+            wire_mode: Default::default(),
             merge_tap: false,
         },
     )
@@ -1893,6 +1895,7 @@ fn tier5_processing_unit_2s_horizontal_stack_iron_ore_pipe_bypass() {
             surplus_policy: SurplusPolicy::default(),
             max_inserter_tier: Default::default(),
             quality: Default::default(),
+            wire_mode: Default::default(),
             merge_tap: false,
         },
     )
@@ -2000,6 +2003,7 @@ fn tier5_processing_unit_25s_horizontal_stack_pole_coverage() {
             surplus_policy: SurplusPolicy::default(),
             max_inserter_tier: Default::default(),
             quality: Default::default(),
+            wire_mode: Default::default(),
             merge_tap: false,
         },
     )
@@ -7016,6 +7020,7 @@ fn quality_differential_ec_normal_vs_legendary() {
                 row_layout: Default::default(),
                 max_inserter_tier: Default::default(),
                 quality,
+                wire_mode: Default::default(),
                 merge_tap: false,
             },
         )
@@ -7136,6 +7141,7 @@ fn quality_ec_45s_express_legendary_from_ore() {
             row_layout: Default::default(),
             max_inserter_tier: Default::default(),
             quality: QualityTier::Legendary,
+            wire_mode: Default::default(),
             merge_tap: false,
         },
     )
@@ -7223,6 +7229,7 @@ fn quality_differential_kovarex_self_loop_normal_vs_legendary() {
                 row_layout: Default::default(),
                 max_inserter_tier: Default::default(),
                 quality,
+                wire_mode: Default::default(),
                 merge_tap: false,
             },
         )
