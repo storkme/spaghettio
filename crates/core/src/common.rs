@@ -1069,6 +1069,11 @@ pub fn module_slots(entity: &str) -> u32 {
         "electromagnetic-plant" => 5,
         "cryogenic-plant" => 8,
         "beacon" => 2,
+        // Drills (RFC-044 Phase 1): the generator never places them, but
+        // moduled drills are ubiquitous in imported community blueprints
+        // and the module-slots check rates them too. burner stays 0.
+        "electric-mining-drill" => 3,
+        "big-mining-drill" => 4,
         _ => 0,
     }
 }
