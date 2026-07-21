@@ -280,6 +280,29 @@ generator remains future work.
 
 ## Decision log
 
+- **2026-07-21 — Phase 1 censuses run (probe committed, env-gated
+  `SPAGHETTIO_047_CENSUS`).** (1) **External-input lanes confirmed
+  moot**: they split by per-lane cap at construction
+  (lane_planner ~724, `n_splits = ceil(rate / max_lane_cap)`), so no
+  external lane ever plans above one lane's capacity — Leg B correctly
+  excludes them. (2) **The single-trunk-clamp shape is LIVE in the
+  corpus** — `copper-cable rate=30 n_splits=2 plan=false` and
+  `copper-cable rate=20 n_splits=2 plan=true` (the latter proving it
+  arises under PartitionedDecomposed, where merge-tap option (i) is
+  unavailable — the spec review's asymmetry is real, not
+  hypothetical). (3) **Open geometric question for Phase 1**: the
+  post-Phase-0 honest walker does NOT flag these live single-trunk
+  lanes, so their delivery must exceed one lane — hypothesis: a
+  single-producer trunk is fed end-on (straight/corner, lane-
+  preserving, carrying the row bridge's both-lane fill) rather than
+  via the `ret:` B8 sideload, meaning the ground-truth-4 gap may be
+  narrower than "single-consumer-trunk": it may require BOTH multiple
+  producers (forcing sideload merges) AND a single consumer trunk.
+  Phase 1's classification function must distinguish producer-count
+  geometry, and the gap census needs per-fixture attribution (test
+  interleaving made the quick attribution fuzzy; use
+  `--test-threads=1` or per-test runs).
+
 - **2026-07-21 — Phase 0 (Leg A) landed; kill 6 census PASSED by a
   wide margin.** Census (uncommitted scratch change + full gates): 1
   flipped test / 2 balancer templates / 5 issues vs the >10 threshold;

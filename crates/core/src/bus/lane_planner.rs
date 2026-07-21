@@ -828,6 +828,27 @@ fn split_overflowing_lanes(
             .map(|lc| lc as usize)
             .unwrap_or(0);
 
+        // RFC-047 Phase 1 census probe (temporary, env-gated): log the
+        // single-consumer-trunk clamped shape and external-input
+        // over-lane-cap shapes across the corpus.
+        if std::env::var("SPAGHETTIO_047_CENSUS").is_ok() {
+            if clamp_to_consumers && consumer_trunk_count == 1 {
+                eprintln!(
+                    "047-CENSUS single-trunk-clamp item={} rate={:.2} n_splits={} plan={} ",
+                    lane.item,
+                    lane.rate,
+                    n_splits,
+                    plan.is_some()
+                );
+            }
+            if is_external_input && lane.rate > max_lane_cap {
+                eprintln!(
+                    "047-CENSUS external-over-lane item={} rate={:.2} splits={} ",
+                    lane.item, lane.rate, n_splits
+                );
+            }
+        }
+
         let effective_n_splits = if any_hs {
             // HS consumer(s) want a fixed total trunk count.
             consumer_trunk_count
