@@ -280,6 +280,32 @@ generator remains future work.
 
 ## Decision log
 
+- **2026-07-21 — Leg B/C wall-lift experiment: the honest walker
+  vetoed the optimistic credit, and the veto tells us exactly what to
+  build.** Experiment (run then reverted, branch green): re-scaled the
+  wall/K by effective stacking and flipped the parity fixture. Result:
+  EC@6-legendary-yellow S=2 lays out past the wall but validation
+  fails honestly — 18/s on the RIGHT lane of the cable trunk and row
+  input belt (identical tiles to RFC-046's original probe), because
+  this shape's `ret:` feed genuinely sideloads (start_x ≥ goal_x) and
+  B8 collapses the row bridge's both-lane fill into ONE trunk lane.
+  Kill 2 performed exactly as designed: the wrong credit failed
+  loudly, pre-merge. **Leg B implementation, now concrete:**
+  (i) **single-producer corner-feed** — when a lane has exactly one
+  producer and no flow enters the trunk above the ret junction, the
+  trunk-head tiles above the junction are dead: trim the trunk to
+  start AT the junction and turn the ret in as a B11 corner, which
+  preserves both lanes end-to-end (row bridge fill survives). This
+  unlocks the parity flip: 25/s cable ≤ 30/s stacked full-belt on a
+  corner-fed trunk. (ii) **late sideload check** for multi-producer
+  no-balancer single-trunk shapes at ret:-spec time (adjacency known):
+  sideload-fed rate above per-lane×S ⇒ named refusal. (iii) The wall's
+  early ×S re-scale then lands LAST, gated on (i)+(ii) being in place.
+  Merge-tap (option i-as-specced) is inapplicable to the single-
+  producer case (gate needs n_producers ≥ 2) — corner-feed replaces it
+  there; multi-producer single-trunk shapes still get merge-tap under
+  Pooled per the earlier scoping.
+
 - **2026-07-21 — Feed-geometry mechanism confirmed; Leg B design fork
   identified.** ghost_router ~1565: a `ret:` sideload spec is SKIPPED
   when the producer row's exit already covers the trunk column
