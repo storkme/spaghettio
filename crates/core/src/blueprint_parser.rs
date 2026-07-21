@@ -55,9 +55,12 @@ struct BpData {
 }
 
 /// Parsed module item. All three Factorio formats collapse into this.
+/// Only the 2.0 insert-plan format carries a quality; 1.x formats leave
+/// it `None` (= normal).
 struct BpEntityItem {
     item: String,
     count: u32,
+    quality: Option<String>,
 }
 
 /// Factorio uses multiple formats for items within an entity:
@@ -111,6 +114,7 @@ impl<'de> serde::Deserialize<'de> for BpEntityItems {
                     items.push(BpEntityItem {
                         item: key,
                         count: value,
+                        quality: None,
                     });
                 }
                 Ok(BpEntityItems(items))
@@ -134,10 +138,11 @@ fn parse_item_value(val: &serde_json::Value) -> Option<BpEntityItem> {
         return Some(BpEntityItem {
             item: item_name.to_string(),
             count,
+            quality: None,
         });
     }
 
-    // 2.0 format: {"id": {"name": "efficiency-module"}, "items": {...}}
+    // 2.0 format: {"id": {"name": "efficiency-module", "quality": "rare"?}, "items": {...}}
     if let Some(id_val) = obj.get("id") {
         if let Some(item_name) = extract_id(id_val) {
             // Count from nested items.in_inventory array length, or default 1
@@ -147,9 +152,14 @@ fn parse_item_value(val: &serde_json::Value) -> Option<BpEntityItem> {
                 .and_then(|v| v.as_array())
                 .map(|arr| arr.len() as u32)
                 .unwrap_or(1);
+            let quality = id_val
+                .get("quality")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
             return Some(BpEntityItem {
                 item: item_name,
                 count,
+                quality,
             });
         }
     }
@@ -333,6 +343,12 @@ fn bp_data_to_layout(bp_data: BpData) -> LayoutResult {
             .map(|it| crate::models::ModuleItem {
                 item: it.item,
                 count: it.count,
+                // Same permissiveness as entity quality: unknown (modded)
+                // quality names fall back to None/normal.
+                quality: it
+                    .quality
+                    .as_deref()
+                    .and_then(crate::common::QualityTier::from_name),
             })
             .collect();
 
@@ -853,5 +869,75 @@ mod tests {
         assert_eq!(machine.items.len(), 1);
         assert_eq!(machine.items[0].item, "productivity-module-3");
         assert_eq!(machine.items[0].count, 4);
+    }
+
+    #[test]
+    fn parses_insert_plan_items_with_quality() {
+        // 2.0 insert-plan format (BlueprintInsertPlan): count comes from
+        // the in_inventory array length, quality from id.quality. Also
+        // covers the bare-string id variant and explicit "normal".
+        use base64::Engine;
+        let bp_json = serde_json::json!({
+            "blueprint": {
+                "entities": [
+                    {
+                        "entity_number": 1,
+                        "name": "assembling-machine-3",
+                        "position": {"x": 1.5, "y": 1.5},
+                        "recipe": "iron-gear-wheel",
+                        "items": [
+                            {
+                                "id": {"name": "productivity-module-3", "quality": "legendary"},
+                                "items": {"in_inventory": [
+                                    {"inventory": 4, "stack": 0},
+                                    {"inventory": 4, "stack": 1}
+                                ]}
+                            },
+                            {
+                                "id": {"name": "speed-module-2", "quality": "normal"},
+                                "items": {"in_inventory": [{"inventory": 4, "stack": 2}]}
+                            },
+                            {
+                                "id": "speed-module",
+                                "items": {"in_inventory": [{"inventory": 4, "stack": 3}]}
+                            }
+                        ],
+                        "item": "blueprint"
+                    }
+                ],
+                "item": "blueprint",
+                "version": 562949954076673u64
+            }
+        });
+
+        let json_bytes = serde_json::to_vec(&bp_json).unwrap();
+        let mut encoder =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        std::io::Write::write_all(&mut encoder, &json_bytes).unwrap();
+        let compressed = encoder.finish().unwrap();
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&compressed);
+        let layout = parse_blueprint_string(&format!("0{}", b64)).unwrap();
+
+        let machine = &layout.entities[0];
+        assert_eq!(machine.items.len(), 3);
+
+        assert_eq!(machine.items[0].item, "productivity-module-3");
+        assert_eq!(machine.items[0].count, 2);
+        assert_eq!(
+            machine.items[0].quality,
+            Some(crate::common::QualityTier::Legendary)
+        );
+
+        assert_eq!(machine.items[1].item, "speed-module-2");
+        assert_eq!(machine.items[1].count, 1);
+        assert_eq!(
+            machine.items[1].quality,
+            Some(crate::common::QualityTier::Normal)
+        );
+
+        // Bare-string id: no quality information.
+        assert_eq!(machine.items[2].item, "speed-module");
+        assert_eq!(machine.items[2].count, 1);
+        assert_eq!(machine.items[2].quality, None);
     }
 }

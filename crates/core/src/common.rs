@@ -1073,6 +1073,24 @@ pub fn module_slots(entity: &str) -> u32 {
     }
 }
 
+/// Factorio `defines.inventory` id for an entity's module slots — the
+/// `in_inventory[].inventory` value in the 2.0 blueprint insert-plan
+/// format. Per entity CLASS, not a single constant: crafting machines /
+/// furnaces / rocket silo = 4, lab = 3, mining drills = 2, beacon = 1
+/// (RFC-044 game-rule model, verified against draftsman InventoryType).
+/// A wrong id fails SILENTLY on paste — modules request into the wrong
+/// inventory or an unfulfillable one — and the parser discards the field
+/// on import, so round-trip tests structurally cannot catch a regression
+/// here; the RFC-044 KC2 in-game paste anchor is the only gate.
+pub fn module_inventory_id(entity: &str) -> u8 {
+    match entity {
+        "beacon" => 1,
+        "electric-mining-drill" | "big-mining-drill" | "burner-mining-drill" => 2,
+        "lab" | "biolab" => 3,
+        _ => 4,
+    }
+}
+
 /// Beacon supply area distance (tiles from edge of 3×3 beacon).
 pub const BEACON_SUPPLY_DISTANCE: i32 = 3;
 

@@ -337,3 +337,23 @@ Works on imported blueprints immediately; no solver dependency.
   found to contain zero 2.0 insert-plan examples — draftsman-emitted
   reference promoted to primary byte-shape source. Script name corrected
   (`extract_factorio_data.py`).*
+- *2026-07-21 — Phase 0 landed (branch `rfc044-phase0-module-export`):
+  0a module quality in `ModuleItem` + parser (the 2.0 parse path gained
+  its first test coverage — it was live but untested); 0b insert-plan
+  export byte-matched against a regenerated draftsman reference, with
+  `common::module_inventory_id` as the per-class table and round-trip +
+  byte-shape tests; 0c data extraction. **Discovered en route**: a full
+  `extract_factorio_data.py` regeneration silently DROPS the ~300
+  surgically-appended recycling recipes (their categories are excluded on
+  the default path) — added an `--augment` in-place mode as the required
+  update path and diff-audited zero drift beyond the new keys. Bonus
+  catalysts surfaced by the data: coal-liquefaction heavy-oil (25),
+  pentapod-egg, fish-breeding, and the fluoroketone-hot returns on
+  quantum-processor / cryogenic-science-pack. KC1 evidence: full suite
+  green (34 e2e + lib), `SPAGHETTIO_STRESS_GOLDEN=check` clean (53
+  passed, every stress fixture matched its committed golden — check mode
+  panics on both missing-golden and drift, so a pass is non-vacuous).
+  KC3 now pinned by a bundled-data regression test
+  (`module_eligibility_data_is_bundled`). KC2 anchor string generated
+  (`crates/core/examples/rfc044_anchor.rs`, local-only) covering all
+  four inventory classes — **open, user-run**.*

@@ -762,6 +762,7 @@ mod tests {
                     items: vec![ModuleItem {
                         item: "productivity-module-3".into(),
                         count: 4,
+                        quality: None,
                     }],
                     ..Default::default()
                 },
@@ -773,6 +774,7 @@ mod tests {
                     items: vec![ModuleItem {
                         item: "speed-module-3".into(),
                         count: 2,
+                        quality: None,
                     }],
                     ..Default::default()
                 },

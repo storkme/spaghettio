@@ -1783,7 +1783,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "concrete": {
       "name": "concrete",
@@ -1932,7 +1933,8 @@
           "amount": 10,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "overgrowth-yumako-soil": {
       "name": "overgrowth-yumako-soil",
@@ -1971,7 +1973,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "artificial-jellynut-soil": {
       "name": "artificial-jellynut-soil",
@@ -2000,7 +2003,8 @@
           "amount": 10,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "overgrowth-jellynut-soil": {
       "name": "overgrowth-jellynut-soil",
@@ -2039,7 +2043,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "ice-platform": {
       "name": "ice-platform",
@@ -3670,7 +3675,8 @@
           "amount": 45,
           "type": "fluid"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "advanced-oil-processing": {
       "name": "advanced-oil-processing",
@@ -3704,7 +3710,8 @@
           "amount": 55,
           "type": "fluid"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "simple-coal-liquefaction": {
       "name": "simple-coal-liquefaction",
@@ -3733,7 +3740,8 @@
           "amount": 50,
           "type": "fluid"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "coal-liquefaction": {
       "name": "coal-liquefaction",
@@ -3760,7 +3768,8 @@
         {
           "name": "heavy-oil",
           "amount": 90,
-          "type": "fluid"
+          "type": "fluid",
+          "ignored_by_productivity": 25
         },
         {
           "name": "light-oil",
@@ -3772,7 +3781,8 @@
           "amount": 10,
           "type": "fluid"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "heavy-oil-cracking": {
       "name": "heavy-oil-cracking",
@@ -3796,7 +3806,8 @@
           "amount": 30,
           "type": "fluid"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "light-oil-cracking": {
       "name": "light-oil-cracking",
@@ -3820,7 +3831,8 @@
           "amount": 20,
           "type": "fluid"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "solid-fuel-from-petroleum-gas": {
       "name": "solid-fuel-from-petroleum-gas",
@@ -3839,7 +3851,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "solid-fuel-from-light-oil": {
       "name": "solid-fuel-from-light-oil",
@@ -3858,7 +3871,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "solid-fuel-from-heavy-oil": {
       "name": "solid-fuel-from-heavy-oil",
@@ -3877,7 +3891,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "lubricant": {
       "name": "lubricant",
@@ -3896,7 +3911,8 @@
           "amount": 10,
           "type": "fluid"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "sulfuric-acid": {
       "name": "sulfuric-acid",
@@ -3925,7 +3941,8 @@
           "amount": 50,
           "type": "fluid"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "acid-neutralisation": {
       "name": "acid-neutralisation",
@@ -3987,7 +4004,8 @@
           "amount": 20,
           "type": "fluid"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "iron-plate": {
       "name": "iron-plate",
@@ -4006,7 +4024,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "copper-plate": {
       "name": "copper-plate",
@@ -4025,7 +4044,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "steel-plate": {
       "name": "steel-plate",
@@ -4044,7 +4064,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "plastic-bar": {
       "name": "plastic-bar",
@@ -4068,7 +4089,8 @@
           "amount": 2,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "sulfur": {
       "name": "sulfur",
@@ -4092,7 +4114,8 @@
           "amount": 2,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "battery": {
       "name": "battery",
@@ -4121,7 +4144,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "explosives": {
       "name": "explosives",
@@ -4150,7 +4174,8 @@
           "amount": 2,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "carbon": {
       "name": "carbon",
@@ -4174,7 +4199,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "coal-synthesis": {
       "name": "coal-synthesis",
@@ -4203,7 +4229,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "water-barrel": {
       "name": "water-barrel",
@@ -4654,7 +4681,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "iron-stick": {
       "name": "iron-stick",
@@ -4673,7 +4701,8 @@
           "amount": 2,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "copper-cable": {
       "name": "copper-cable",
@@ -4692,7 +4721,8 @@
           "amount": 2,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "barrel": {
       "name": "barrel",
@@ -4711,7 +4741,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "electronic-circuit": {
       "name": "electronic-circuit",
@@ -4735,7 +4766,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "advanced-circuit": {
       "name": "advanced-circuit",
@@ -4764,7 +4796,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "processing-unit": {
       "name": "processing-unit",
@@ -4793,7 +4826,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "engine-unit": {
       "name": "engine-unit",
@@ -4822,7 +4856,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "electric-engine-unit": {
       "name": "electric-engine-unit",
@@ -4851,7 +4886,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "flying-robot-frame": {
       "name": "flying-robot-frame",
@@ -4885,7 +4921,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "low-density-structure": {
       "name": "low-density-structure",
@@ -4914,7 +4951,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "rocket-fuel": {
       "name": "rocket-fuel",
@@ -4938,7 +4976,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "uranium-processing": {
       "name": "uranium-processing",
@@ -4964,7 +5003,8 @@
           "type": "item",
           "probability": 0.993
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "uranium-fuel-cell": {
       "name": "uranium-fuel-cell",
@@ -4993,7 +5033,8 @@
           "amount": 10,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "nuclear-fuel-reprocessing": {
       "name": "nuclear-fuel-reprocessing",
@@ -5012,7 +5053,8 @@
           "amount": 3,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "kovarex-enrichment-process": {
       "name": "kovarex-enrichment-process",
@@ -5034,14 +5076,17 @@
         {
           "name": "uranium-235",
           "amount": 41,
-          "type": "item"
+          "type": "item",
+          "ignored_by_productivity": 40
         },
         {
           "name": "uranium-238",
           "amount": 2,
-          "type": "item"
+          "type": "item",
+          "ignored_by_productivity": 2
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "nuclear-fuel": {
       "name": "nuclear-fuel",
@@ -5065,7 +5110,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "molten-iron-from-lava": {
       "name": "molten-iron-from-lava",
@@ -5094,7 +5140,8 @@
           "amount": 10,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "molten-copper-from-lava": {
       "name": "molten-copper-from-lava",
@@ -5123,7 +5170,8 @@
           "amount": 15,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "molten-iron": {
       "name": "molten-iron",
@@ -5147,7 +5195,8 @@
           "amount": 500,
           "type": "fluid"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "molten-copper": {
       "name": "molten-copper",
@@ -5171,7 +5220,8 @@
           "amount": 500,
           "type": "fluid"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "casting-iron": {
       "name": "casting-iron",
@@ -5190,7 +5240,8 @@
           "amount": 2,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "casting-copper": {
       "name": "casting-copper",
@@ -5209,7 +5260,8 @@
           "amount": 2,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "casting-steel": {
       "name": "casting-steel",
@@ -5228,7 +5280,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "casting-iron-gear-wheel": {
       "name": "casting-iron-gear-wheel",
@@ -5247,7 +5300,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "casting-iron-stick": {
       "name": "casting-iron-stick",
@@ -5266,7 +5320,8 @@
           "amount": 4,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "casting-low-density-structure": {
       "name": "casting-low-density-structure",
@@ -5295,7 +5350,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "concrete-from-molten-iron": {
       "name": "concrete-from-molten-iron",
@@ -5324,7 +5380,8 @@
           "amount": 10,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "casting-copper-cable": {
       "name": "casting-copper-cable",
@@ -5343,7 +5400,8 @@
           "amount": 2,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "tungsten-carbide": {
       "name": "tungsten-carbide",
@@ -5372,7 +5430,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "tungsten-plate": {
       "name": "tungsten-plate",
@@ -5396,7 +5455,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "holmium-solution": {
       "name": "holmium-solution",
@@ -5425,7 +5485,8 @@
           "amount": 100,
           "type": "fluid"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "holmium-plate": {
       "name": "holmium-plate",
@@ -5444,7 +5505,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "superconductor": {
       "name": "superconductor",
@@ -5478,7 +5540,8 @@
           "amount": 2,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "electrolyte": {
       "name": "electrolyte",
@@ -5507,7 +5570,8 @@
           "amount": 10,
           "type": "fluid"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "supercapacitor": {
       "name": "supercapacitor",
@@ -5546,7 +5610,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "yumako-processing": {
       "name": "yumako-processing",
@@ -5571,7 +5636,8 @@
           "amount": 2,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "jellynut-processing": {
       "name": "jellynut-processing",
@@ -5596,7 +5662,8 @@
           "amount": 4,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "iron-bacteria": {
       "name": "iron-bacteria",
@@ -5621,7 +5688,8 @@
           "amount": 4,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "iron-bacteria-cultivation": {
       "name": "iron-bacteria-cultivation",
@@ -5645,7 +5713,8 @@
           "amount": 4,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "copper-bacteria": {
       "name": "copper-bacteria",
@@ -5670,7 +5739,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "copper-bacteria-cultivation": {
       "name": "copper-bacteria-cultivation",
@@ -5694,7 +5764,8 @@
           "amount": 4,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "nutrients-from-spoilage": {
       "name": "nutrients-from-spoilage",
@@ -5713,7 +5784,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "nutrients-from-yumako-mash": {
       "name": "nutrients-from-yumako-mash",
@@ -5732,7 +5804,8 @@
           "amount": 6,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "nutrients-from-bioflux": {
       "name": "nutrients-from-bioflux",
@@ -5751,7 +5824,8 @@
           "amount": 40,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "bioflux": {
       "name": "bioflux",
@@ -5775,7 +5849,8 @@
           "amount": 4,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "rocket-fuel-from-jelly": {
       "name": "rocket-fuel-from-jelly",
@@ -5804,7 +5879,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "biolubricant": {
       "name": "biolubricant",
@@ -5823,7 +5899,8 @@
           "amount": 20,
           "type": "fluid"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "bioplastic": {
       "name": "bioplastic",
@@ -5847,7 +5924,8 @@
           "amount": 3,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "biosulfur": {
       "name": "biosulfur",
@@ -5871,7 +5949,8 @@
           "amount": 2,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "carbon-fiber": {
       "name": "carbon-fiber",
@@ -5895,7 +5974,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "burnt-spoilage": {
       "name": "burnt-spoilage",
@@ -5914,7 +5994,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "biter-egg": {
       "name": "biter-egg",
@@ -5954,9 +6035,11 @@
         {
           "name": "pentapod-egg",
           "amount": 2,
-          "type": "item"
+          "type": "item",
+          "ignored_by_productivity": 1
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "wood-processing": {
       "name": "wood-processing",
@@ -5975,7 +6058,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "fish-breeding": {
       "name": "fish-breeding",
@@ -6002,7 +6086,8 @@
         {
           "name": "raw-fish",
           "amount": 3,
-          "type": "item"
+          "type": "item",
+          "ignored_by_productivity": 2
         }
       ]
     },
@@ -6042,7 +6127,8 @@
           "amount": 20,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "ammoniacal-solution-separation": {
       "name": "ammoniacal-solution-separation",
@@ -6066,7 +6152,8 @@
           "amount": 50,
           "type": "fluid"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "solid-fuel-from-ammonia": {
       "name": "solid-fuel-from-ammonia",
@@ -6090,7 +6177,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "ammonia-rocket-fuel": {
       "name": "ammonia-rocket-fuel",
@@ -6119,7 +6207,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "fluoroketone": {
       "name": "fluoroketone",
@@ -6153,7 +6242,8 @@
           "amount": 50,
           "type": "fluid"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "fluoroketone-cooling": {
       "name": "fluoroketone-cooling",
@@ -6201,7 +6291,8 @@
           "amount": 5,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "lithium-plate": {
       "name": "lithium-plate",
@@ -6220,7 +6311,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "quantum-processor": {
       "name": "quantum-processor",
@@ -6267,9 +6359,11 @@
         {
           "name": "fluoroketone-hot",
           "amount": 5,
-          "type": "fluid"
+          "type": "fluid",
+          "ignored_by_productivity": 5
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "fusion-power-cell": {
       "name": "fusion-power-cell",
@@ -6298,7 +6392,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "automation-science-pack": {
       "name": "automation-science-pack",
@@ -6322,7 +6417,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "logistic-science-pack": {
       "name": "logistic-science-pack",
@@ -6346,7 +6442,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "military-science-pack": {
       "name": "military-science-pack",
@@ -6375,7 +6472,8 @@
           "amount": 2,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "chemical-science-pack": {
       "name": "chemical-science-pack",
@@ -6404,7 +6502,8 @@
           "amount": 2,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "production-science-pack": {
       "name": "production-science-pack",
@@ -6433,7 +6532,8 @@
           "amount": 3,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "utility-science-pack": {
       "name": "utility-science-pack",
@@ -6462,7 +6562,8 @@
           "amount": 3,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "space-science-pack": {
       "name": "space-science-pack",
@@ -6491,7 +6592,8 @@
           "amount": 5,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "metallurgic-science-pack": {
       "name": "metallurgic-science-pack",
@@ -6520,7 +6622,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "agricultural-science-pack": {
       "name": "agricultural-science-pack",
@@ -6544,7 +6647,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "electromagnetic-science-pack": {
       "name": "electromagnetic-science-pack",
@@ -6578,7 +6682,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "cryogenic-science-pack": {
       "name": "cryogenic-science-pack",
@@ -6610,9 +6715,11 @@
         {
           "name": "fluoroketone-hot",
           "amount": 3,
-          "type": "fluid"
+          "type": "fluid",
+          "ignored_by_productivity": 3
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "promethium-science-pack": {
       "name": "promethium-science-pack",
@@ -6641,7 +6748,8 @@
           "amount": 10,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "rocket-silo": {
       "name": "rocket-silo",
@@ -6709,7 +6817,8 @@
           "amount": 1,
           "type": "item"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "cargo-landing-pad": {
       "name": "cargo-landing-pad",
@@ -6902,7 +7011,8 @@
           "amount": 75,
           "type": "fluid"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "advanced-thruster-fuel": {
       "name": "advanced-thruster-fuel",
@@ -6931,7 +7041,8 @@
           "amount": 1500,
           "type": "fluid"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "thruster-oxidizer": {
       "name": "thruster-oxidizer",
@@ -6955,7 +7066,8 @@
           "amount": 75,
           "type": "fluid"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "advanced-thruster-oxidizer": {
       "name": "advanced-thruster-oxidizer",
@@ -6984,7 +7096,8 @@
           "amount": 1500,
           "type": "fluid"
         }
-      ]
+      ],
+      "allow_productivity": true
     },
     "pistol": {
       "name": "pistol",
@@ -8856,70 +8969,80 @@
       "category": "parameters",
       "energy": 0.5,
       "ingredients": [],
-      "results": []
+      "results": [],
+      "allow_productivity": true
     },
     "parameter-1": {
       "name": "parameter-1",
       "category": "parameters",
       "energy": 0.5,
       "ingredients": [],
-      "results": []
+      "results": [],
+      "allow_productivity": true
     },
     "parameter-2": {
       "name": "parameter-2",
       "category": "parameters",
       "energy": 0.5,
       "ingredients": [],
-      "results": []
+      "results": [],
+      "allow_productivity": true
     },
     "parameter-3": {
       "name": "parameter-3",
       "category": "parameters",
       "energy": 0.5,
       "ingredients": [],
-      "results": []
+      "results": [],
+      "allow_productivity": true
     },
     "parameter-4": {
       "name": "parameter-4",
       "category": "parameters",
       "energy": 0.5,
       "ingredients": [],
-      "results": []
+      "results": [],
+      "allow_productivity": true
     },
     "parameter-5": {
       "name": "parameter-5",
       "category": "parameters",
       "energy": 0.5,
       "ingredients": [],
-      "results": []
+      "results": [],
+      "allow_productivity": true
     },
     "parameter-6": {
       "name": "parameter-6",
       "category": "parameters",
       "energy": 0.5,
       "ingredients": [],
-      "results": []
+      "results": [],
+      "allow_productivity": true
     },
     "parameter-7": {
       "name": "parameter-7",
       "category": "parameters",
       "energy": 0.5,
       "ingredients": [],
-      "results": []
+      "results": [],
+      "allow_productivity": true
     },
     "parameter-8": {
       "name": "parameter-8",
       "category": "parameters",
       "energy": 0.5,
       "ingredients": [],
-      "results": []
+      "results": [],
+      "allow_productivity": true
     },
     "parameter-9": {
       "name": "parameter-9",
       "category": "parameters",
       "energy": 0.5,
       "ingredients": [],
-      "results": []
+      "results": [],
+      "allow_productivity": true
     },
     "heat-interface": {
       "name": "heat-interface",
@@ -16765,11 +16888,23 @@
   },
   "machines": {
     "centrifuge": {
-      "crafting_speed": 1
+      "crafting_speed": 1,
+      "allowed_effects": [
+        "consumption",
+        "pollution",
+        "productivity",
+        "quality",
+        "speed"
+      ]
     },
     "assembling-machine-1": {
       "crafting_speed": 0.5,
-      "ingredient_slots": 2
+      "ingredient_slots": 2,
+      "allowed_effects": [
+        "consumption",
+        "pollution",
+        "speed"
+      ]
     },
     "assembling-machine-2": {
       "crafting_speed": 0.75,
@@ -16798,6 +16933,13 @@
           ],
           "production_type": "output"
         }
+      ],
+      "allowed_effects": [
+        "consumption",
+        "pollution",
+        "productivity",
+        "quality",
+        "speed"
       ]
     },
     "assembling-machine-3": {
@@ -16827,6 +16969,13 @@
           ],
           "production_type": "output"
         }
+      ],
+      "allowed_effects": [
+        "consumption",
+        "pollution",
+        "productivity",
+        "quality",
+        "speed"
       ]
     },
     "chemical-plant": {
@@ -16880,10 +17029,24 @@
           ],
           "production_type": "output"
         }
+      ],
+      "allowed_effects": [
+        "consumption",
+        "pollution",
+        "productivity",
+        "quality",
+        "speed"
       ]
     },
     "electric-furnace": {
-      "crafting_speed": 2
+      "crafting_speed": 2,
+      "allowed_effects": [
+        "consumption",
+        "pollution",
+        "productivity",
+        "quality",
+        "speed"
+      ]
     },
     "oil-refinery": {
       "crafting_speed": 1,
@@ -16948,13 +17111,29 @@
           ],
           "production_type": "output"
         }
+      ],
+      "allowed_effects": [
+        "consumption",
+        "pollution",
+        "productivity",
+        "speed"
       ]
     },
     "stone-furnace": {
-      "crafting_speed": 1
+      "crafting_speed": 1,
+      "allowed_effects": [
+        "consumption",
+        "pollution",
+        "speed"
+      ]
     },
     "steel-furnace": {
-      "crafting_speed": 2
+      "crafting_speed": 2,
+      "allowed_effects": [
+        "consumption",
+        "pollution",
+        "speed"
+      ]
     },
     "foundry": {
       "crafting_speed": 4,
@@ -17007,7 +17186,15 @@
           ],
           "production_type": "output"
         }
-      ]
+      ],
+      "allowed_effects": [
+        "consumption",
+        "pollution",
+        "productivity",
+        "quality",
+        "speed"
+      ],
+      "base_effect_productivity": 0.5
     },
     "electromagnetic-plant": {
       "crafting_speed": 2,
@@ -17060,7 +17247,15 @@
           ],
           "production_type": "output"
         }
-      ]
+      ],
+      "allowed_effects": [
+        "consumption",
+        "pollution",
+        "productivity",
+        "quality",
+        "speed"
+      ],
+      "base_effect_productivity": 0.5
     },
     "cryogenic-plant": {
       "crafting_speed": 2,
@@ -17137,6 +17332,13 @@
           ],
           "production_type": "output"
         }
+      ],
+      "allowed_effects": [
+        "consumption",
+        "pollution",
+        "productivity",
+        "quality",
+        "speed"
       ]
     },
     "biochamber": {
@@ -17190,13 +17392,34 @@
           ],
           "production_type": "output"
         }
-      ]
+      ],
+      "allowed_effects": [
+        "consumption",
+        "pollution",
+        "productivity",
+        "quality",
+        "speed"
+      ],
+      "base_effect_productivity": 0.5
     },
     "recycler": {
-      "crafting_speed": 0.5
+      "crafting_speed": 0.5,
+      "allowed_effects": [
+        "consumption",
+        "pollution",
+        "quality",
+        "speed"
+      ]
     },
     "crusher": {
-      "crafting_speed": 1
+      "crafting_speed": 1,
+      "allowed_effects": [
+        "consumption",
+        "pollution",
+        "productivity",
+        "quality",
+        "speed"
+      ]
     }
   }
 }
