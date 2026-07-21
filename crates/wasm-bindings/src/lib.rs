@@ -123,7 +123,47 @@ fn module_policy(spec: Option<String>) -> spaghettio_core::module_policy::Module
         Some('l') => QualityTier::Legendary,
         Some(_) => return ModulePolicy::default(),
     };
+    // Trailing garbage ("p3ll") fails closed, matching the TS-side
+    // MODULES_RE exactly (defense in depth — the web UI never sends it).
+    if chars.next().is_some() {
+        return ModulePolicy::default();
+    }
     ModulePolicy { kind, tier, quality }
+}
+
+#[cfg(test)]
+mod module_policy_parse_tests {
+    use super::module_policy;
+    use spaghettio_core::common::QualityTier;
+    use spaghettio_core::module_policy::{ModulePolicy, ModulePolicyKind};
+
+    #[test]
+    fn parses_valid_specs() {
+        assert_eq!(
+            module_policy(Some("s2".into())),
+            ModulePolicy { kind: ModulePolicyKind::Speed, tier: 2, quality: QualityTier::Normal }
+        );
+        assert_eq!(
+            module_policy(Some("p3l".into())),
+            ModulePolicy {
+                kind: ModulePolicyKind::Productivity,
+                tier: 3,
+                quality: QualityTier::Legendary
+            }
+        );
+    }
+
+    #[test]
+    fn malformed_specs_fail_closed() {
+        for bad in ["", "x1", "s0", "s4", "p3x", "p3ll", "p3lx", "s", "productivity"] {
+            assert_eq!(
+                module_policy(Some(bad.into())),
+                ModulePolicy::default(),
+                "{bad:?} must fail closed"
+            );
+        }
+        assert_eq!(module_policy(None), ModulePolicy::default());
+    }
 }
 
 #[wasm_bindgen]

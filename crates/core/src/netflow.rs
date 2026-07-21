@@ -487,6 +487,12 @@ fn solve_attempt(
     // Ensure the target item has a row even if nothing in scope touches it.
     let target_idx = items.intern(target_item, false);
 
+    // NOTE (RFC-044): the closure below runs on RAW nets, before module
+    // resolution. Productivity only ever increases product coefficients,
+    // so nothing admitted here can become inadmissible under a policy —
+    // but a recipe whose product side nets ≤0 raw and >0 only under prod
+    // would be missed as a producer. No recipe in the bundled data has
+    // that shape (Phase 3 review, NIT 5).
     // Demand closure over net-signed edges: a candidate joins when it
     // net-produces a demanded item; its net-consumed items become demanded.
     let mut demanded = vec![false; items.len()];

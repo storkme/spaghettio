@@ -48,8 +48,10 @@ pub struct MachineModuleEffects {
     /// `max(0.2, 1 + Σspeed)` — exactly `1.0` when no modules apply
     /// (KC1: the no-op path performs no float arithmetic).
     pub speed_multiplier: f64,
-    /// Σ module productivity + machine `base_effect` productivity, both
-    /// gated on the recipe's `allow_productivity`. `0.0` when none.
+    /// Σ module productivity (recipe-gated via `allow_productivity`)
+    /// plus the machine's built-in `base_effect` productivity, which is
+    /// UNGATED — it applies to every recipe the machine runs (see
+    /// [`resolve_machine_modules`]). `0.0` when none.
     pub prod_bonus: f64,
     /// The modules to stamp into placed machines (`PlacedEntity.items`).
     pub loadout: Vec<ModuleItem>,
@@ -91,26 +93,32 @@ fn game_module_name(kind: ModulePolicyKind, tier: u8) -> Option<String> {
 
 /// Resolve the policy for one (machine, recipe) pair.
 ///
-/// Eligibility (all data-driven from recipes.json, RFC-044 Phase 0c):
+/// Module eligibility (all data-driven from recipes.json, RFC-044
+/// Phase 0c):
 /// - the machine must have known module slots (> 0);
 /// - the policy family's beneficial effect must be in the machine's
 ///   `allowed_effects` (absent list = unrestricted);
 /// - productivity additionally requires the recipe's
-///   `allow_productivity` — which also gates the machine's built-in
-///   `base_effect` productivity (game rule: an ineligible recipe shows
-///   no productivity bar at all, e.g. foundry-cast pipes get no +50%).
+///   `allow_productivity`.
 ///
-/// Ineligible pairs return [`MachineModuleEffects::none`] — the exact
-/// no-op, bit-identical to a `None` policy (KC1).
+/// The machine's built-in `base_effect` productivity is credited
+/// UNGATED whenever the policy is active — independent of module
+/// eligibility AND of `allow_productivity`. The Phase 3 adversarial
+/// review falsified the earlier recipe-gated draft with wiki sources:
+/// the foundry's +50% "applies even to items like belts that don't
+/// benefit from productivity modules", and fish-breeding's
+/// `ignored_by_productivity` catalyst amounts exist precisely because
+/// built-in prod DOES reach ineligible recipes (the exemption would be
+/// redundant otherwise).
+///
+/// A `None` policy returns [`MachineModuleEffects::none`] before any
+/// lookup — the exact no-op (KC1).
 pub fn resolve_machine_modules(
     policy: &ModulePolicy,
     machine: &str,
     recipe: &Recipe,
 ) -> MachineModuleEffects {
     let Some(name) = game_module_name(policy.kind, policy.tier) else {
-        return MachineModuleEffects::none();
-    };
-    let Some(slots) = module_slots_known(machine).filter(|s| *s > 0) else {
         return MachineModuleEffects::none();
     };
 
@@ -123,48 +131,44 @@ pub fn resolve_machine_modules(
     };
     let base_effect = machine_data.map(|m| m.base_effect_productivity).unwrap_or(0.0);
 
-    let eligible = match policy.kind {
-        ModulePolicyKind::None => false,
-        ModulePolicyKind::Speed => allows("speed"),
-        ModulePolicyKind::Productivity => allows("productivity") && recipe.allow_productivity,
-    };
-    if !eligible {
-        return MachineModuleEffects::none();
-    }
+    let slots = module_slots_known(machine).unwrap_or(0);
+    let module_eligible = slots > 0
+        && match policy.kind {
+            ModulePolicyKind::None => false,
+            ModulePolicyKind::Speed => allows("speed"),
+            ModulePolicyKind::Productivity => allows("productivity") && recipe.allow_productivity,
+        };
 
-    let base = module_effect(&name);
-    let n = slots as f64;
-    let (speed_sum, prod_sum) = match policy.kind {
-        ModulePolicyKind::None => unreachable!("handled above"),
-        // Positive speed scales with quality; no productivity.
-        ModulePolicyKind::Speed => (n * quality_scaled(base.speed, policy.quality), 0.0),
-        // Positive productivity scales with quality; the speed PENALTY
-        // does not (harmful effects are quality-flat).
-        ModulePolicyKind::Productivity => {
-            (n * base.speed, n * quality_scaled(base.productivity, policy.quality))
-        }
-    };
-
-    // Recipe-gated built-in productivity joins the module sum. For
-    // productivity policies `recipe.allow_productivity` already held;
-    // for speed policies it gates here.
-    let prod_bonus = if recipe.allow_productivity {
-        prod_sum + base_effect
+    let (speed_sum, prod_sum, loadout) = if module_eligible {
+        let base = module_effect(&name);
+        let n = slots as f64;
+        let (speed_sum, prod_sum) = match policy.kind {
+            ModulePolicyKind::None => unreachable!("module_eligible is false for None"),
+            // Positive speed scales with quality; no productivity.
+            ModulePolicyKind::Speed => (n * quality_scaled(base.speed, policy.quality), 0.0),
+            // Positive productivity scales with quality; the speed
+            // PENALTY does not (harmful effects are quality-flat).
+            ModulePolicyKind::Productivity => {
+                (n * base.speed, n * quality_scaled(base.productivity, policy.quality))
+            }
+        };
+        let loadout = vec![ModuleItem {
+            item: name,
+            count: slots,
+            quality: (policy.quality != QualityTier::Normal).then_some(policy.quality),
+        }];
+        (speed_sum, prod_sum, loadout)
     } else {
-        prod_sum
+        (0.0, 0.0, Vec::new())
     };
 
     MachineModuleEffects {
         // The 20% floor: a full prod-3 loadout in an 8-slot cryo plant
         // is −120% speed — negative without this (review MAJOR finding
-        // on RFC rev 1).
+        // on RFC rev 1). 1.0 + 0.0 is IEEE-exact for the no-module case.
         speed_multiplier: (1.0 + speed_sum).max(0.2),
-        prod_bonus,
-        loadout: vec![ModuleItem {
-            item: name,
-            count: slots,
-            quality: (policy.quality != QualityTier::Normal).then_some(policy.quality),
-        }],
+        prod_bonus: prod_sum + base_effect,
+        loadout,
     }
 }
 
@@ -245,25 +249,28 @@ mod tests {
     }
 
     #[test]
-    fn foundry_base_effect_gated_by_recipe_eligibility() {
-        // casting-pipe is allow_productivity=false: no modules under a
-        // prod policy AND no base_effect credit — the game shows no
-        // productivity bar at all for ineligible recipes.
+    fn foundry_base_effect_is_ungated() {
+        // casting-pipe is allow_productivity=false: prod MODULES don't
+        // apply, but the foundry's built-in +50% does — the wiki is
+        // explicit that it "applies even to items like belts" (Phase 3
+        // adversarial review falsified the recipe-gated draft).
         let e = resolve_machine_modules(
             &policy(ModulePolicyKind::Productivity, 3, QualityTier::Normal),
             "foundry",
             recipe("casting-pipe"),
         );
-        assert_eq!(e, MachineModuleEffects::none());
+        assert!(e.loadout.is_empty());
+        assert!((e.prod_bonus - 0.5).abs() < 1e-12);
+        assert_eq!(e.speed_multiplier.to_bits(), 1.0f64.to_bits());
 
-        // Speed policy on the same pair: modules apply, base_effect
-        // still gated off.
+        // Speed policy on the same pair: speed modules apply AND the
+        // base_effect rides along.
         let e = resolve_machine_modules(
             &policy(ModulePolicyKind::Speed, 3, QualityTier::Normal),
             "foundry",
             recipe("casting-pipe"),
         );
-        assert_eq!(e.prod_bonus, 0.0);
+        assert!((e.prod_bonus - 0.5).abs() < 1e-12);
         assert!((e.speed_multiplier - 3.0).abs() < 1e-12); // 1 + 4×0.5
     }
 
