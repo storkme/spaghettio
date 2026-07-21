@@ -7095,8 +7095,9 @@ fn quality_differential_ec_normal_vs_legendary() {
 /// blue belt, 45/s, until #311 closes — the 60/s headline re-lands
 /// after). EC from ore on express at Legendary: ~92 machines vs ~230 at
 /// Normal. 0 errors; the single warning is the known pre-existing
-/// input-rate-delivery demand-pull residual (same category CLAUDE.md
-/// documents on tier-4), pinned exactly so churn fails loudly. Kill 3
+/// input-rate-delivery demand-pull residual (same category the tier-4
+/// row in docs/status.md documents), pinned exactly so churn fails
+/// loudly. Kill 3
 /// check: no inserter-throughput warnings — every legendary side fits
 /// one column as predicted (tightest: cable 18.75/s vs legendary stack
 /// ~30/s).
