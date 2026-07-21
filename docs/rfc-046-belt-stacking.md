@@ -94,8 +94,10 @@ Phase 0 (cited; in-game anchor confirms):
 
 `stacking: u8` (1..=4), default 1. **User-specified, never inferred or
 auto-escalated** — same contract as belt tier
-(`feedback_belt_tier_user_specified`). URL codec `s=2|3|4` (absent =
-1), sidebar dropdown "Belt stacking: Off / 2 / 3 / 4". Threaded:
+(`feedback_belt_tier_user_specified`). URL codec `st=2|3|4` (absent =
+1; `s=` was the spec'd key but is already claimed by `strategy` —
+implementation deviation, documented in `web/src/state.ts`), sidebar
+dropdown "Belt stacking: Off / ×2 / ×3 / ×4". Threaded:
 `LayoutOptions.stacking` → recorded on `LayoutResult.stacking`
 (skip-if-default serde, like `wire_mode`) so validation and
 improve-region recompute read the layout's own value. Imported /
