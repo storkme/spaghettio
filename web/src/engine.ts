@@ -221,15 +221,21 @@ export async function initEngine(): Promise<void> {
   defaultMachineCache = new Map(defaults);
 
   // module_slots is a static Rust table (RFC-044 Phase 2) — prefetch once
-  // for every producer machine plus "beacon" (not itself recipe-producing,
-  // so absent from `machinesCache`, but a legitimate module host in
-  // imported blueprints) and cache synchronously, mirroring
-  // `defaultMachineCache`. Entity names outside this set (e.g. mining
-  // drills — module_slots doesn't cover them yet, RFC-044 Phase 1
-  // territory) fall back to 0 via `moduleSlots`.
+  // and cache synchronously, mirroring `defaultMachineCache`. The extras
+  // beyond `machinesCache` are module hosts that aren't recipe-producing
+  // machines but appear in imported blueprints (beacons, labs, drills —
+  // drill slot counts land with RFC-044 Phase 1). Entity names outside
+  // this set fall back to 0 via `moduleSlots`.
   const moduleSlotEntries = await call<[string, number][]>({
     method: "moduleSlotsForEntities",
-    entities: [...machinesCache, "beacon"],
+    entities: [
+      ...machinesCache,
+      "beacon",
+      "lab",
+      "biolab",
+      "electric-mining-drill",
+      "big-mining-drill",
+    ],
   });
   moduleSlotsCache = new Map(moduleSlotEntries);
 }
