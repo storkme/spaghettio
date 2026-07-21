@@ -64,13 +64,21 @@ For full build commands (WASM rebuild, release builds), see [`docs/build-systems
   `clear-agent-reviewed.yml` drops the `agent-reviewed` label when new
   commits land so the new SHA gets re-reviewed. **A green `claude-review`
   check is NOT evidence a review happened — confirm the bot actually
-  posted comments.** From #305 through #327 the workflow ran with the
-  template's read-only permissions, so every review was silently
-  discarded after a permission denial while the check stayed green
-  (fixed 2026-07-21, PR #327); all substantive PR review feedback in
-  that window was session-side. The action also skips itself entirely
-  on any PR that modifies its own workflow file (anti-hijack guard) —
-  green-with-no-comments there is expected, not a regression. Local adversarial review (an
+  posted.** From #305 through #330 the bot posted *nothing*: three
+  stacked, each-sufficient causes — template read-only permissions
+  (fixed #327), the plugin's `--comment` flag never passed (its own
+  contract is "do not post" without it; fixed #329), and no
+  harness-level tool allowlist (`claude_args --allowedTools`), which
+  denied every posting/diff call (fixed #331). Validated 2026-07-21 via
+  a planted-bug canary (#330): the bot's first-ever comment correctly
+  flagged the bug inline with a committable fix. All substantive PR
+  review feedback before then was session-side. Expected behavior now:
+  inline comments on findings, or a "no issues" summary comment on
+  clean substantive PRs — a green check with *neither* on a
+  non-trivial PR means it's broken again. Known benign no-comment
+  cases: PRs that modify the workflow file itself (the action's
+  anti-hijack self-skip) and changes its triviality gate deems
+  obviously correct. Local adversarial review (an
   independent agent that re-runs gates and probes the claims) is the
   fallback when a PR isn't in play — and it remains **required in addition
   to the bot** for layout-engine or validator-semantics changes: the bot
