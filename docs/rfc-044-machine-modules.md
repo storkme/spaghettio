@@ -389,3 +389,9 @@ Works on imported blueprints immediately; no solver dependency.
   `allow_productivity` extraction against every recipe the community
   actually prod-modules; full suite green; KC1 safe by construction
   (generated layouts never populate `items`).*
+- *2026-07-21 — **KC2 CLOSED**: user pasted the four-class anchor in
+  Space Age and confirmed modules land in the module slots. The
+  insert-plan encoding + per-class inventory table are game-verified.
+  Phase 3 unblocked. (Phases 1 and 2 merged the same day: #323 after
+  corpus-driven adversarial review, #322 after lead diff review; both
+  bot-clean.)*

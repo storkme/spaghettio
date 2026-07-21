@@ -35,6 +35,11 @@ export interface FormState {
   /** Pole wiring mode ("tree"). null = dense (today's default) — same
    * null-is-default convention as `quality`. See RFC-045. */
   wireMode: string | null;
+  /** Global module policy, compact form `<kind><tier><quality?>` —
+   * `s`peed / `p`roductivity, tier 1–3, optional module-quality initial
+   * (`u`/`r`/`e`/`l`), e.g. "s2", "p3l". null = no modules (today's
+   * default). The string passes to WASM verbatim. RFC-044 Phase 3. */
+  modules: string | null;
   /** User-added inputs beyond the DEFAULT_INPUTS list. */
   customInputs: string[];
 }
@@ -66,6 +71,10 @@ export const KNOWN_QUALITIES = ["uncommon", "rare", "epic", "legendary"] as cons
  * `"dense"` (the default) is intentionally absent — represented by
  * `null`, same convention as `KNOWN_QUALITIES`. */
 export const KNOWN_WIRE_MODES = ["tree"] as const;
+
+/** Shape of `FormState.modules` / the `m=`/`modules=` URL value. The
+ * compact form is its own short code — no long↔short map needed. */
+export const MODULES_RE = /^[sp][1-3][urel]?$/;
 
 /** Full list of input pills rendered in the sidebar. */
 export const DEFAULT_INPUTS: string[] = [
@@ -266,6 +275,8 @@ function readHashState(): FormState | null {
   const quality = qShort ? QUALITY_SHORT_TO_FULL[qShort] ?? null : null;
   const wShort = extras.get("w");
   const wireMode = wShort ? WIRE_MODE_SHORT_TO_FULL[wShort] ?? null : null;
+  const mShort = extras.get("m");
+  const modules = mShort && MODULES_RE.test(mShort) ? mShort : null;
   const ciRaw = extras.get("ci");
   let customInputs: string[] = [];
   if (ciRaw) {
@@ -289,7 +300,7 @@ function readHashState(): FormState | null {
     machines[category] = slug;
   }
 
-  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, quality, wireMode, customInputs };
+  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, quality, wireMode, modules, customInputs };
 }
 
 function readQueryState(): FormState {
@@ -336,10 +347,12 @@ function readQueryState(): FormState {
     rawQuality && (KNOWN_QUALITIES as readonly string[]).includes(rawQuality)
       ? rawQuality
       : null;
+  const rawModules = params.get("modules");
+  const modules = rawModules && MODULES_RE.test(rawModules) ? rawModules : null;
   const ciParam = params.get("ci");
   const customInputs = ciParam ? ciParam.split(",").filter((s) => s.length > 0) : [];
 
-  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, quality, wireMode, customInputs };
+  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, quality, wireMode, modules, customInputs };
 }
 
 export function readUrlState(): FormState {
@@ -412,6 +425,9 @@ function formatHashState(state: FormState): string {
   }
   if (state.wireMode && WIRE_MODE_FULL_TO_SHORT[state.wireMode]) {
     extras.set("w", WIRE_MODE_FULL_TO_SHORT[state.wireMode]);
+  }
+  if (state.modules && MODULES_RE.test(state.modules)) {
+    extras.set("m", state.modules);
   }
   if (state.customInputs.length > 0) {
     extras.set(

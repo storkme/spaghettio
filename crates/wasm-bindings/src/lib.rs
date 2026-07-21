@@ -93,6 +93,39 @@ fn quality_tier(quality: Option<String>) -> spaghettio_core::common::QualityTier
         .unwrap_or_default()
 }
 
+/// Parse the compact module-policy string from JS (RFC-044 Phase 3;
+/// `m=` URL param): `<kind><tier><quality?>` where kind is `s`peed or
+/// `p`roductivity, tier is 1–3, and quality is a tier initial
+/// (`u`/`r`/`e`/`l`; absent = normal) — e.g. `"s2"`, `"p3l"`.
+/// Absent/unparseable → `None` policy, matching the quality
+/// unknown→default pattern.
+fn module_policy(spec: Option<String>) -> spaghettio_core::module_policy::ModulePolicy {
+    use spaghettio_core::common::QualityTier;
+    use spaghettio_core::module_policy::{ModulePolicy, ModulePolicyKind};
+    let Some(s) = spec else {
+        return ModulePolicy::default();
+    };
+    let mut chars = s.chars();
+    let kind = match chars.next() {
+        Some('s') => ModulePolicyKind::Speed,
+        Some('p') => ModulePolicyKind::Productivity,
+        _ => return ModulePolicy::default(),
+    };
+    let tier = match chars.next().and_then(|c| c.to_digit(10)) {
+        Some(t @ 1..=3) => t as u8,
+        _ => return ModulePolicy::default(),
+    };
+    let quality = match chars.next() {
+        None => QualityTier::Normal,
+        Some('u') => QualityTier::Uncommon,
+        Some('r') => QualityTier::Rare,
+        Some('e') => QualityTier::Epic,
+        Some('l') => QualityTier::Legendary,
+        Some(_) => return ModulePolicy::default(),
+    };
+    ModulePolicy { kind, tier, quality }
+}
+
 #[wasm_bindgen]
 pub fn solve(
     target_item: &str,
@@ -100,9 +133,10 @@ pub fn solve(
     available_inputs: Vec<String>,
     machine_entity: &str,
     quality: Option<String>,
+    modules: Option<String>,
 ) -> Result<SolverResult, JsError> {
     let inputs: FxHashSet<String> = available_inputs.into_iter().collect();
-    solver::solve_with_palette_exclusions_and_quality(
+    solver::solve_with_palette_exclusions_quality_and_modules(
         target_item,
         target_rate,
         &inputs,
@@ -110,6 +144,7 @@ pub fn solve(
         machine_entity,
         &FxHashSet::default(),
         quality_tier(quality),
+        module_policy(modules),
     )
     .map_err(|e| JsError::new(&e.to_string()))
 }
@@ -126,9 +161,10 @@ pub fn solve_with_palette(
     palette: MachinePalette,
     default_machine: &str,
     quality: Option<String>,
+    modules: Option<String>,
 ) -> Result<SolverResult, JsError> {
     let inputs: FxHashSet<String> = available_inputs.into_iter().collect();
-    solver::solve_with_palette_exclusions_and_quality(
+    solver::solve_with_palette_exclusions_quality_and_modules(
         target_item,
         target_rate,
         &inputs,
@@ -136,6 +172,7 @@ pub fn solve_with_palette(
         default_machine,
         &FxHashSet::default(),
         quality_tier(quality),
+        module_policy(modules),
     )
     .map_err(|e| JsError::new(&e.to_string()))
 }

@@ -1062,6 +1062,33 @@ fn layout_pass(
         }
     }
 
+    // Stamp planned GAME modules into machines (RFC-044 Phase 3). The
+    // solver already resolved eligibility per (machine, recipe) —
+    // `MachineSpec::game_modules` — so this pass only copies loadouts
+    // onto matching machine entities (machines are the only entities
+    // carrying `recipe`). Empty loadouts everywhere at policy `None` →
+    // entities untouched (KC1). Mirrors the quality stamp above: one
+    // post-pass, not ~400 construction sites.
+    {
+        let mut game_loadouts: rustc_hash::FxHashMap<(&str, &str), &Vec<crate::models::ModuleItem>> =
+            rustc_hash::FxHashMap::default();
+        for rs in &row_spans {
+            if !rs.spec.game_modules.is_empty() {
+                game_loadouts
+                    .insert((rs.spec.entity.as_str(), rs.spec.recipe.as_str()), &rs.spec.game_modules);
+            }
+        }
+        if !game_loadouts.is_empty() {
+            for e in &mut all_entities {
+                if let Some(recipe) = &e.recipe {
+                    if let Some(loadout) = game_loadouts.get(&(e.name.as_str(), recipe.as_str())) {
+                        e.items = (*loadout).clone();
+                    }
+                }
+            }
+        }
+    }
+
     // Pole copper wire graph for the web overlay — the SAME graph
     // `blueprint::export` and the connectivity validator consume this
     // STORED graph verbatim (RFC-045 `wires_for` — one computation, all
@@ -2265,7 +2292,7 @@ mod tests {
                 MachineSpec {
                     entity: "assembling-machine-3".to_string(),
                     recipe: "widget".to_string(),
-                    self_loop: vec![], voider: false,
+                    self_loop: vec![], voider: false, game_modules: Vec::new(),
                     count: 1.0,
                     inputs: vec![ItemFlow {
                         item: "iron-plate".to_string(),
@@ -2283,7 +2310,7 @@ mod tests {
                 MachineSpec {
                     entity: "assembling-machine-3".to_string(),
                     recipe: "gadget-scrap".to_string(),
-                    self_loop: vec![], voider: false,
+                    self_loop: vec![], voider: false, game_modules: Vec::new(),
                     count: 1.0,
                     inputs: vec![ItemFlow {
                         item: "iron-plate".to_string(),
@@ -2379,7 +2406,7 @@ mod tests {
             spec: MachineSpec {
                 entity: "assembling-machine-1".to_string(),
                 recipe: recipe.to_string(),
-                self_loop: vec![], voider: false,
+                self_loop: vec![], voider: false, game_modules: Vec::new(),
                 count: 1.0,
                 inputs: vec![],
                 outputs: vec![],
