@@ -35,7 +35,9 @@ Concrete failing cases today:
 - `stacking_fanin_wall_conservative_parity_ec6_yellow_legendary`
   (e2e): EC@6/s legendary yellow refuses at S=1 **and** S=2 — the
   fixture's own doc comment says to flip it to a differential success
-  when this RFC lands.
+  when this RFC lands. *(Done, Leg C — flipped to
+  `stacking_fanin_wall_lift_ec6_yellow_legendary`: S=1 refuses, S=2
+  lays out clean. See the 2026-07-22 step-3 decision-log entry.)*
 - EC@60/s legendary express S=2: junction-solver failure near a dense
   crossing plus ~3% walker overshoot on zero-headroom lanes at exact
   tier boundaries (characterized in RFC-046's decision log; no issue
