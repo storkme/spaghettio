@@ -5325,7 +5325,7 @@ fn diag_ghost_cluster_copper_cable_feeders() {
     eprintln!("producer rows and output_belt_ys: {:?}", producer_out_ys);
 
     // --- Synthesise feeder specs ---
-    // Mirrors bus_router.rs lines 2557-2597:
+    // Mirrors the feeder-spec synthesis in bus/ghost_router.rs (step 4):
     //   start = (bw-1, out_y)
     //   goal  = (input_x+1, out_y)
     // where input_x = min(lane_xs) + input_tile_dx.
