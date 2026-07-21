@@ -167,18 +167,49 @@ Rejected alternatives:
 - **Capacity-only change without forcing**: dishonest; killed on
   sight.
 
-**Known hole — reach-2 belt-drops (ground rule 5)**: the census is
-done (spec review, 2026-07-21) — the single long-handed belt-drop in
-active templates is `self_loop_row`'s minor output. **Decision:
-descope, guarded.** Kovarex-class minor-output rates are fractions of
-an item/s, so unstacked capacity is never the binding constraint
-today; rather than re-slotting the template or introducing per-lane
-stackedness for one lane, lane planning gains a **minor-lane guard**:
-if a self-loop minor-output lane ever plans above *unstacked* lane
-capacity, refuse with a named `CandidateRun.error` (same pattern as
-the #312 fan-in refusal) instead of silently over-crediting. The
-guard turns an in-principle-unsound uniform credit into a checked
-assumption. See kill criterion 3.
+**Known hole — unstackable belt-load sites (ground rule 5): census
+v2 and the family-exemption rule.** Kill criterion 3 tripped during
+Phase 2 implementation: the spec review's census (self_loop minor as
+the only far belt-drop) was incomplete. The re-census found **three**
+unstackable belt-load classes in active templates:
+
+1. `self_loop_row` minor output (templates.rs ~4436, `Reach::Far`) —
+   as reviewed;
+2. **Fulgora D2b secondary output** (templates.rs ~757, `Reach::Far`,
+   hard-0 budget) — a second long-handed belt-drop the review missed;
+3. **sushi sort inserters** (templates.rs ~5460, hardcoded
+   `fast-inserter`, belt-to-belt) — inside the recycler subgraph that
+   kill 4 already keeps unstacked, so consistent by construction.
+
+The v1 "guard the minor lane" idea is **unsound**, not just
+incomplete: kovarex's minor export is the *same item* as its stacked
+major output, so both merge into one lane family — and a trunk
+carrying mixed stacked + unstacked flow obeys fractional occupancy
+(`r_unstacked/cap + r_stacked/(S·cap) ≤ 1`), which uniform ×S
+crediting cannot express. Bounding only the unstacked tributary does
+not bound the mix.
+
+**Replacement rule — static family-level stacking exemption**: a lane
+family is *exempt* (plans at ×1 end-to-end: belt tier selection,
+split thresholds, fan-in caps) iff any of its producer rows is
+unstackable-classed — `self_loop` (minor ⇒ whole family, since major
+shares the item), secondary-output rows for the secondary item, and
+`voider`/`scrap_recycling` rows (kill 4). Exemption is derived
+statically from `SolverResult` specs before lane planning and carried
+as `effective_stacking` on the family/lane — no dynamic per-lane
+tracking (still deferred to Phase 3). Soundness: the planner caps
+exempt families at unstacked capacity, so their belts never *need*
+stacked headroom — the validator's uniform ×S credit can then never
+mask a real overload on them. Mixed trunks cannot arise because a
+family is exempt as a whole, and distinct items never share trunks.
+
+**`max_inserter_tier` conflict**: forcing belt-drop sides to
+stack-inserter at S>1 contradicts a user cap below `Stack`. Belts
+cannot stack without stack inserters, so the config is incoherent —
+resolved as a **named refusal at layout entry** (`stacking > 1`
+requires `max_inserter_tier = Stack`), consistent with the
+hard-constraint philosophy (`feedback_belt_tier_user_specified`):
+degrade never, refuse honestly.
 
 ### Validator
 
@@ -254,13 +285,15 @@ import; the in-game anchor (kill criterion 5) is the final word.
    final-output tile's stamped rate ≤ its belt's physical cap × S. If
    it "passes" only because #311's unvisited merger tiles hide the
    overload, the headline is NOT delivered and the RFC must say so.
-3. **Minor-lane guard bound.** The one reach-2 belt-drop
-   (`self_loop_row` minor output) is descoped-with-guard, not
-   re-slotted. If implementing the guard reveals more unstackable
-   belt-load sites than that one (i.e. the review census was
-   incomplete), stop and re-run the census before Phase 2 continues —
-   do not add per-site exemptions ad hoc, and do not redesign the
-   template system inside this RFC.
+3. **Unstackable-site census bound.** *(Tripped and resolved
+   2026-07-21 — the criterion worked: the review census missed the
+   Fulgora D2b secondary output; implementation stopped, re-ran the
+   census, found three unstackable classes and the kovarex
+   mixed-family soundness hole, and replaced the per-lane guard with
+   the family-exemption rule — see the Design section.)* Residual
+   bound: if the family-exemption rule itself needs per-site special
+   cases beyond the three census classes, stop — that is per-lane
+   stackedness by another name, and it belongs to Phase 3.
 4. **Recycler-ejection verification.** Phase 0 verifies (Recycler wiki
    page + in-game anchor) that recycler direct belt ejection stacks
    automatically at the researched S. If it does **not** — if it's
@@ -308,6 +341,23 @@ import; the in-game anchor (kill criterion 5) is the final word.
 
 ## Decision log
 
+- **2026-07-21 — Kill 3 tripped mid-Phase-2; design amended (v3).**
+  The Fulgora D2b secondary output is a second reach-2 belt-drop the
+  spec review's census missed; re-census (all `size_side` sites +
+  all direct inserter `PlacedEntity` pushes in templates.rs)
+  additionally surfaced the sushi sort inserters (already
+  kill-4-consistent) and, decisively, the kovarex **mixed-family
+  soundness hole**: minor export and stacked major share one item ⇒
+  one family ⇒ mixed stacked/unstacked trunks, where uniform ×S
+  crediting is arithmetically wrong (fractional occupancy). The v1
+  per-lane guard was replaced by the **static family-level stacking
+  exemption** (see Design), which restores uniform-credit soundness
+  by construction. Also resolved out-of-spec: `stacking > 1` with
+  `max_inserter_tier < Stack` is an incoherent config → named refusal
+  at layout entry, never silent degradation. Near-output forcing
+  census: 10 `Reach::Near` output `size_side` sites across the row
+  templates get the belt-drop entry point; the 2 far-output sites and
+  the sushi sorters stay unforced (their families are exempt).
 - **2026-07-21 — Phase 1 landed (plumbing + validator honesty).**
   `LayoutOptions.stacking` (manual `Default` impl so the neutral value
   is literally 1) → recorded as `LayoutResult.stacking` (serde: skip
