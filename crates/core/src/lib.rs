@@ -21,6 +21,7 @@ pub mod density;
 pub mod fixture;
 pub mod fluid_ports;
 pub mod models;
+pub mod module_policy;
 pub mod netflow;
 pub mod power_wires;
 pub mod recipe_db;

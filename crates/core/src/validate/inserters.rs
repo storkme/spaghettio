@@ -815,7 +815,7 @@ mod tests {
             machines: vec![MachineSpec {
                 entity: "oil-refinery".into(),
                 recipe: "basic-oil-processing".into(),
-                self_loop: vec![], voider: false,
+                self_loop: vec![], voider: false, game_modules: Vec::new(),
                 count: 1.0,
                 inputs: vec![fluid_flow("crude-oil")],
                 outputs: vec![fluid_flow("petroleum-gas")],
@@ -849,7 +849,7 @@ mod tests {
             machines: vec![MachineSpec {
                 entity: "chemical-plant".into(),
                 recipe: "plastic-bar".into(),
-                self_loop: vec![], voider: false,
+                self_loop: vec![], voider: false, game_modules: Vec::new(),
                 count: 1.0,
                 inputs: vec![solid_flow("coal"), fluid_flow("petroleum-gas")],
                 outputs: vec![solid_flow("plastic-bar")],
@@ -1002,6 +1002,7 @@ mod tests {
                 recipe: "iron-gear-wheel".into(),
                 self_loop: vec![],
                 voider: false,
+                game_modules: Vec::new(),
                 count,
                 inputs: vec![ItemFlow {
                     item: "iron-plate".into(),
@@ -1108,6 +1109,7 @@ mod tests {
             recipe: "iron-gear-wheel".into(),
             self_loop: vec![],
             voider: false,
+            game_modules: Vec::new(),
             count,
             inputs: vec![ItemFlow {
                 item: "iron-plate".into(),
@@ -1350,6 +1352,7 @@ mod tests {
                 recipe: "test-dual-recipe".into(),
                 self_loop: vec![],
                 voider: false,
+                game_modules: Vec::new(),
                 count,
                 inputs: vec![
                     ItemFlow { item: near_item.into(), rate: near_rate, is_fluid: false, module_id: 0 },

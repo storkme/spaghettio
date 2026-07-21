@@ -246,7 +246,7 @@ mod tests {
             spec: MachineSpec {
                 entity: "assembling-machine-3".to_string(),
                 recipe: recipe.to_string(),
-                self_loop: vec![], voider: false,
+                self_loop: vec![], voider: false, game_modules: Vec::new(),
                 count: machine_count as f64,
                 inputs,
                 outputs,

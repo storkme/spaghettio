@@ -1728,7 +1728,7 @@ mod tests {
             machines: vec![MachineSpec {
                 entity: "assembling-machine-3".to_string(),
                 recipe: "fluid-recipe".to_string(),
-                self_loop: vec![], voider: false,
+                self_loop: vec![], voider: false, game_modules: Vec::new(),
                 count: 1.0,
                 inputs: vec![],
                 outputs: vec![ItemFlow { item: "water".to_string(), rate: 10.0, is_fluid: true, module_id: 0 }],
@@ -1759,7 +1759,7 @@ mod tests {
             machines: vec![MachineSpec {
                 entity: "assembling-machine-3".to_string(),
                 recipe: "iron-gear-wheel".to_string(),
-                self_loop: vec![], voider: false,
+                self_loop: vec![], voider: false, game_modules: Vec::new(),
                 count: 1.0,
                 inputs: vec![ItemFlow { item: "iron-plate".to_string(), rate: 5.0, is_fluid: false, module_id: 0 }],
                 outputs: vec![ItemFlow {
@@ -1792,7 +1792,7 @@ mod tests {
             machines: vec![MachineSpec {
                 entity: "assembling-machine-3".to_string(),
                 recipe: "iron-gear-wheel".to_string(),
-                self_loop: vec![], voider: false,
+                self_loop: vec![], voider: false, game_modules: Vec::new(),
                 count: 2.0,
                 inputs: vec![ItemFlow { item: "iron-plate".to_string(), rate: 5.0, is_fluid: false, module_id: 0 }],
                 outputs: vec![ItemFlow {
@@ -1838,7 +1838,7 @@ mod tests {
                 machines: vec![MachineSpec {
                     entity: "assembling-machine-3".to_string(),
                     recipe: "transport-belt".to_string(),
-                    self_loop: vec![], voider: false,
+                    self_loop: vec![], voider: false, game_modules: Vec::new(),
                     count,
                     inputs: vec![],
                     outputs: vec![ItemFlow {
@@ -1892,7 +1892,7 @@ mod tests {
             machines: vec![MachineSpec {
                 entity: "assembling-machine-3".to_string(),
                 recipe: "kovarex-enrichment-process".to_string(),
-                self_loop: vec![], voider: false,
+                self_loop: vec![], voider: false, game_modules: Vec::new(),
                 count: 1.0,
                 inputs: vec![],
                 outputs: vec![ItemFlow {
@@ -2169,7 +2169,7 @@ mod tests {
             machines: vec![MachineSpec {
                 entity: "assembling-machine-3".to_string(),
                 recipe: "kovarex-enrichment-process".to_string(),
-                self_loop: vec![], voider: false,
+                self_loop: vec![], voider: false, game_modules: Vec::new(),
                 count: 1.0,
                 inputs: vec![],
                 outputs: vec![ItemFlow {
@@ -2230,7 +2230,7 @@ mod tests {
             machines: vec![MachineSpec {
                 entity: "assembling-machine-3".to_string(),
                 recipe: "kovarex-enrichment-process".to_string(),
-                self_loop: vec![], voider: false,
+                self_loop: vec![], voider: false, game_modules: Vec::new(),
                 count: 1.0,
                 inputs: vec![],
                 outputs: vec![ItemFlow {

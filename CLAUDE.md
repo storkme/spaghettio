@@ -110,7 +110,7 @@ For full build commands (WASM rebuild, release builds), see [`docs/build-systems
 1. **Solver** (`crates/core/src/solver.rs`) — Recursively resolves recipes, computes machine counts and flow rates. Loads `crates/core/data/recipes.json` via `include_str!`. Returns a `SolverResult`.
 2. **Bus layout** (`crates/core/src/bus/`) — Deterministic row-based layout. Machines group by recipe into rows, trunks run on parallel columns, tap-offs are routed via the ghost router (negotiated congestion A* + region-growth junction solver). See [`docs/ghost-pipeline-contracts.md`](docs/ghost-pipeline-contracts.md) for the phase-by-phase contracts the router promises.
 3. **Blueprint export** (`crates/core/src/blueprint.rs`) — Emits the JSON + zlib + base64 envelope directly (no draftsman dependency).
-4. **Validation** (`crates/core/src/validate/`) — 23 functional checks: pipe isolation, fluid port connectivity, inserter chains + direction, power coverage + pole connectivity, belt flow/structural, underground belt pairs + sideloading, lane throughput, input-rate delivery.
+4. **Validation** (`crates/core/src/validate/`) — 25 functional checks: pipe isolation, fluid port connectivity, inserter chains + direction, power coverage + pole connectivity, belt flow/structural, underground belt pairs + sideloading, lane throughput, input-rate delivery, module slots + eligibility.
 
 ## Key models (`crates/core/src/models.rs`)
 
@@ -143,7 +143,7 @@ Most-visited files. Full reference in [`docs/file-reference.md`](docs/file-refer
 | `crates/core/src/astar.rs` | `ghost_astar` + `astar_path` + `negotiate_lanes` pathfinder primitives |
 | `crates/core/src/sat.rs` | Varisat-backed crossing-zone SAT solver (see memory: `project_sat_crossing_solver`) |
 | `crates/core/src/validate/belt_flow.rs` | Lane-rate walker (Kahn topo sort with splitter pairing and balancer feedback-loop handling) |
-| `crates/core/src/validate/` | Rest of the 23 checks: `belt_structural`, `fluids`, `inserters`, `power`, `underground` |
+| `crates/core/src/validate/` | Rest of the 25 checks: `belt_structural`, `fluids`, `inserters`, `modules`, `power`, `underground` |
 | `crates/core/src/trace.rs` | Thread-local trace event collector; `TraceEvent` variants drive the snapshot debugger and stress scoreboards |
 | `crates/core/src/snapshot.rs` | `.fls` snapshot reader/writer for the layout debugger |
 | `crates/core/tests/e2e.rs` | End-to-end test harness: tier1–4 regression tests and stress corpus with scoreboards |
@@ -209,7 +209,7 @@ Layout bugs are easy to get wrong — zero validation errors can mean the check 
 | Balancer templates | `crates/core/src/bus/balancer_library.rs`. Regenerate: `python scripts/generate_balancer_library.py` (needs Factorio-SAT on `PATH`). |
 | Belt tier thresholds | `crates/core/src/common.rs` (`belt_entity_for_rate`, `ug_max_reach`) |
 | Entity sizes | `crates/core/src/common.rs` (`entity_size`) |
-| Validation checks | `crates/core/src/validate/` (23 checks, dispatched from `mod.rs`) |
+| Validation checks | `crates/core/src/validate/` (25 checks, dispatched from `mod.rs`) |
 | Snapshot format | `crates/core/src/snapshot.rs` + [`docs/layout-snapshot-debugger.md`](docs/layout-snapshot-debugger.md) |
 | Belt lane physics | [`docs/factorio-mechanics.md`](docs/factorio-mechanics.md) |
 | Ghost pipeline contracts | [`docs/ghost-pipeline-contracts.md`](docs/ghost-pipeline-contracts.md) |

@@ -129,6 +129,7 @@ mod tests {
             outputs,
             self_loop: vec![],
             voider: false,
+            game_modules: vec![],
         }
     }
 

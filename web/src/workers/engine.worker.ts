@@ -11,6 +11,7 @@ import wasmInit, {
   layout,
   layout_traced,
   layout_streaming,
+  module_slots,
   parse_blueprint,
   seed_zone_cache,
   validate_layout,
@@ -25,6 +26,7 @@ type Request =
   | { id: number; method: "allProducibleItems" }
   | { id: number; method: "allProducerMachines" }
   | { id: number; method: "defaultMachinesForItems"; items: string[]; fallback: string }
+  | { id: number; method: "moduleSlotsForEntities"; entities: string[] }
   | {
       id: number;
       method: "solve";
@@ -34,6 +36,7 @@ type Request =
       palette: Record<string, string>;
       defaultMachine: string;
       quality: string | null;
+      modules: string | null;
     }
   | { id: number; method: "layout"; result: SolverResult; maxBeltTier: string | null; strategy: string | null; rowLayout: string | null; maxInserterTier: string | null; quality: string | null; wireMode: string | null; stacking: string | null }
   | { id: number; method: "layoutTraced"; result: SolverResult; maxBeltTier: string | null; strategy: string | null; rowLayout: string | null; maxInserterTier: string | null; quality: string | null; wireMode: string | null; stacking: string | null }
@@ -101,6 +104,14 @@ self.onmessage = async (e: MessageEvent<Request>) => {
         result = out;
         break;
       }
+      case "moduleSlotsForEntities": {
+        const out: [string, number][] = [];
+        for (const entity of req.entities) {
+          out.push([entity, module_slots(entity)]);
+        }
+        result = out;
+        break;
+      }
       case "solve":
         result = solve_with_palette(
           req.targetItem,
@@ -109,6 +120,7 @@ self.onmessage = async (e: MessageEvent<Request>) => {
           { by_category: req.palette },
           req.defaultMachine,
           req.quality ?? undefined,
+          req.modules ?? undefined,
         );
         break;
       case "layout":

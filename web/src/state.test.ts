@@ -34,6 +34,7 @@ function makeState(overrides: Partial<FormState>): FormState {
     quality: null,
     wireMode: null,
     stacking: null,
+    modules: null,
     customInputs: [],
     ...overrides,
   };
@@ -53,6 +54,7 @@ describe("readUrlState — defaults", () => {
       quality: null,
       wireMode: null,
       stacking: null,
+      modules: null,
       customInputs: [],
     });
   });
@@ -124,6 +126,7 @@ describe("readUrlState — hash form", () => {
       quality: null,
       wireMode: null,
       stacking: null,
+      modules: null,
       customInputs: [],
     });
   });
@@ -211,6 +214,7 @@ describe("writeUrlState → readUrlState round-trip", () => {
       inserterTier: "regular",
       quality: null,
       wireMode: null,
+      modules: null,
       customInputs: ["iron-plate", "copper-plate"],
     });
     const back = roundTrip(state);
@@ -227,6 +231,7 @@ describe("writeUrlState → readUrlState round-trip", () => {
       machines: { crafting: DEFAULT_MACHINES.crafting },
       quality: "legendary",
       wireMode: null,
+      modules: null,
     });
     writeUrlState(state);
     expect(window.location.hash).toContain("q=l");
@@ -239,6 +244,7 @@ describe("writeUrlState → readUrlState round-trip", () => {
       machines: { crafting: DEFAULT_MACHINES.crafting },
       quality: null,
       wireMode: null,
+      modules: null,
     });
     writeUrlState(normal);
     expect(window.location.hash).not.toContain("q=");
@@ -251,6 +257,7 @@ describe("writeUrlState → readUrlState round-trip", () => {
       rate: 4,
       machines: { crafting: DEFAULT_MACHINES.crafting },
       wireMode: "tree",
+      modules: null,
     });
     writeUrlState(state);
     expect(window.location.hash).toContain("w=t");
@@ -261,6 +268,7 @@ describe("writeUrlState → readUrlState round-trip", () => {
       rate: 4,
       machines: { crafting: DEFAULT_MACHINES.crafting },
       wireMode: null,
+      modules: null,
     });
     writeUrlState(dense);
     expect(window.location.hash).not.toContain("w=");
@@ -275,6 +283,7 @@ describe("writeUrlState → readUrlState round-trip", () => {
       inserterTier: null,
       quality: null,
       wireMode: null,
+      modules: null,
     });
     writeUrlState(state);
     expect(window.location.hash).toBe("#/l/igw/7");
@@ -303,6 +312,23 @@ describe("writeUrlState → readUrlState round-trip", () => {
     // No machine/inputs/belt slots written when they're at default —
     // makes shared URLs read cleanly.
     expect(window.location.hash).toBe("#/l/igw/7");
+  });
+});
+
+describe("modules param (RFC-044 Phase 3)", () => {
+  it("round-trips the compact modules value through the hash form", () => {
+    setUrl("#/l/igw/10/etb?m=p3l");
+    expect(readUrlState().modules).toBe("p3l");
+  });
+  it("rejects malformed modules values", () => {
+    setUrl("#/l/igw/10/etb?m=x9");
+    expect(readUrlState().modules).toBe(null);
+    setUrl("?item=iron-gear-wheel&modules=p4");
+    expect(readUrlState().modules).toBe(null);
+  });
+  it("reads the query form", () => {
+    setUrl("?item=iron-gear-wheel&modules=s2");
+    expect(readUrlState().modules).toBe("s2");
   });
 });
 

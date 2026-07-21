@@ -94,10 +94,13 @@ module tables; probe scripts recorded in the review.
   biochamber, EMP: +0.5). The per-recipe `maximum_productivity` cap
   (default 3.0) and research productivity never bind at module-only
   magnitudes in this RFC's scope — noted and ignored (non-goal).
-- **Eligibility is two-level**: per-recipe `allow_productivity` (122
-  recipes in our dataset) AND per-machine `allowed_effects` (recycler
-  forbids productivity; oil-refinery and rocket-silo forbid quality;
-  beacon forbids productivity and quality).
+- **Eligibility is two-level**: per-recipe `allow_productivity` (116
+  recipes in our dataset) AND per-machine `allowed_effects` — gated on
+  the module's BENEFICIAL effect only (corrected in the Phase 1 review:
+  speed modules carry a quality malus in 2.0, yet speed-in-beacon is
+  legal despite beacon forbidding quality — harmful side-effects never
+  gate). Recycler forbids productivity; oil-refinery, rocket-silo, and
+  pumpjack forbid quality; beacon forbids productivity and quality.
 - **Blueprint encoding** (2.0 insert-plan): `"items": [{"id": {"name": …,
   "quality": …?}, "items": {"in_inventory": [{"inventory": <class-id>,
   "stack": k}, …]}}]` — one `in_inventory` entry per module, `stack`
@@ -357,3 +360,79 @@ Works on imported blueprints immediately; no solver dependency.
   (`module_eligibility_data_is_bundled`). KC2 anchor string generated
   (`crates/core/examples/rfc044_anchor.rs`, local-only) covering all
   four inventory classes — **open, user-run**.*
+- *2026-07-21 — Phase 1 landed (branch `rfc044-phase1-module-validators`)
+  after deep local adversarial review (Fable, corpus-driven; verdict
+  ACCEPT-WITH-CHANGES, all findings folded in). Checks 24–25:
+  `module-slots` + `module-eligibility`, both WARNING severity by design
+  (an invalid loadout doesn't fail a paste — the requests are silently
+  unfulfilled; and imported blueprints must not be error-blocked by
+  module quirks). Calls made: non-module item requests (fuel/ammo)
+  classified out before counting; pre-2.0 `effectivity-module*` names
+  alias to the efficiency family (the game migrates them — 94
+  false-unknown warnings across the corpus otherwise); unknown modded
+  entities carry no slot claim (`common::module_slots_known` → `None`
+  skips the overflow warning — `se-recycling-facility` is not "0
+  slots"); pumpjack added (2 slots, forbids quality) alongside the
+  drills; rocket-silo + pumpjack join the beacon in the hand-tabled
+  `allowed_effects` fallback (labs/drills deliberately absent — nil
+  `allowed_effects` in game data means unrestricted, so skipping is
+  exact); **eligibility gates on the module's beneficial effect only**
+  (the rev-2 "effects ⊆ allowed_effects" rule was falsified by
+  draftsman data: speed modules carry a quality malus yet
+  speed-in-beacon is legal); slot-overflow issues carry no
+  `IssueDetail` (the web starvation heatmap reads detail pairs
+  category-blind). RFC-039 trace promise satisfied by the
+  `ValidationCompleted` rollup — no per-check emits (checks run under
+  rayon; thread-local trace would drop them), recorded as the
+  deviation. Evidence: 18 unit tests; full corpus sweep 198/198 files,
+  ZERO module warnings, with the census cross-validating Phase 0c's
+  `allow_productivity` extraction against every recipe the community
+  actually prod-modules; full suite green; KC1 safe by construction
+  (generated layouts never populate `items`).*
+- *2026-07-21 — **KC2 CLOSED**: user pasted the four-class anchor in
+  Space Age and confirmed modules land in the module slots. The
+  insert-plan encoding + per-class inventory table are game-verified.
+  Phase 3 unblocked. (Phases 1 and 2 merged the same day: #323 after
+  corpus-driven adversarial review, #322 after lead diff review; both
+  bot-clean.)*
+- *2026-07-21 — Phase 3 landed (branch `rfc044-phase3-module-policy`)
+  after deep adversarial review (Fable; ACCEPT-WITH-CHANGES, all
+  findings folded in). `module_policy.rs` is the single source: policy
+  {kind, tier, module quality} → per-(machine, recipe)
+  `MachineModuleEffects`; netflow applies speed at the column
+  crafting-speed site and productivity at the three enumerated sites
+  (candidate net rebuilt from effective amounts pre-netting; per-machine
+  rates; self-loop rates — raw sign logic untouched); loadouts ride
+  `MachineSpec::game_modules` to a layout stamp post-pass; wasm `m=`
+  param + sidebar Modules/Module-quality selects. **base_effect
+  crediting corrected by the review**: the first draft gated the
+  foundry/biochamber/EMP built-in +50% on `allow_productivity` behind an
+  unsourced "no productivity bar" claim — the wiki is explicit the bonus
+  "applies even to items like belts", and fish-breeding's
+  `ignored_by_productivity` catalyst amounts exist precisely because
+  built-in prod reaches ineligible recipes; now credited ungated
+  whenever the policy is active (modules stay recipe-gated). This
+  supersedes the rev-2 "none-path followup" framing only in wording —
+  `policy = none` remains bit-identical (KC1) and the none-path
+  divergence remains the recorded followup. **Recipe flips observed and
+  accepted** (per the rev-2 decision): at p3, AC@5/s-from-ore (AM2) and
+  PU@2/s-from-ore (AM3) flip basic-oil-processing →
+  advanced-oil-processing + light-oil-cracking (prod economics favor the
+  richer route); s3 flips nothing on the checked configs. **Known
+  benign gap** (review MINOR 4): voider-synthesized recycler specs are
+  sized module-blind with empty loadouts; if a config ever runs BOTH an
+  active moduled recycling column and voider rows on the same recipe,
+  the (entity, recipe)-keyed stamp map would stamp voider entities with
+  modules their sizing never assumed — unreachable today (no module
+  policy co-occurs with allow_voiding), revisit if that changes.
+  Evidence (review-run, not self-reported): KC1 STRESSGOLD cross-branch
+  bit-identity vs pre-branch goldens; three-site flow-balance probe
+  <1e-6 across 8 configs incl. kovarex p3l and coal-liquefaction-class
+  catalysts; quality formula reproduces the wiki per-quality tables for
+  BOTH families; stamped EC@10 p3 layout: 16/16 machines stamped,
+  export→parse round-trip, validate() clean incl. the Phase 1 module
+  checks (self-consistency), and 0 total warnings vs 4 at none (slower
+  prod machines — honest improvement); s3 8 vs 4 (hotter machines —
+  honest movement). KC4 satisfied: prod fit the LP as per-column
+  constant coefficients, no split needed. KC5 both parts pinned by
+  tests.*

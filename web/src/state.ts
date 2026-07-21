@@ -39,6 +39,11 @@ export interface FormState {
    * same null-is-default convention as `wireMode`. See
    * `docs/rfc-046-belt-stacking.md`. */
   stacking: string | null;
+  /** Global module policy, compact form `<kind><tier><quality?>` —
+   * `s`peed / `p`roductivity, tier 1–3, optional module-quality initial
+   * (`u`/`r`/`e`/`l`), e.g. "s2", "p3l". null = no modules (today's
+   * default). The string passes to WASM verbatim. RFC-044 Phase 3. */
+  modules: string | null;
   /** User-added inputs beyond the DEFAULT_INPUTS list. */
   customInputs: string[];
 }
@@ -77,6 +82,10 @@ export const KNOWN_WIRE_MODES = ["tree"] as const;
  * own short codes (no letter remapping needed, unlike quality/wire mode).
  * See `docs/rfc-046-belt-stacking.md`. */
 export const KNOWN_STACKING = ["2", "3", "4"] as const;
+
+/** Shape of `FormState.modules` / the `m=`/`modules=` URL value. The
+ * compact form is its own short code — no long↔short map needed. */
+export const MODULES_RE = /^[sp][1-3][urel]?$/;
 
 /** Full list of input pills rendered in the sidebar. */
 export const DEFAULT_INPUTS: string[] = [
@@ -290,6 +299,8 @@ function readHashState(): FormState | null {
   const stShort = extras.get(STACKING_EXTRAS_KEY);
   const stacking =
     stShort && (KNOWN_STACKING as readonly string[]).includes(stShort) ? stShort : null;
+  const mShort = extras.get("m");
+  const modules = mShort && MODULES_RE.test(mShort) ? mShort : null;
   const ciRaw = extras.get("ci");
   let customInputs: string[] = [];
   if (ciRaw) {
@@ -313,7 +324,7 @@ function readHashState(): FormState | null {
     machines[category] = slug;
   }
 
-  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, quality, wireMode, stacking, customInputs };
+  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, quality, wireMode, stacking, modules, customInputs };
 }
 
 function readQueryState(): FormState {
@@ -365,10 +376,12 @@ function readQueryState(): FormState {
     rawStacking && (KNOWN_STACKING as readonly string[]).includes(rawStacking)
       ? rawStacking
       : null;
+  const rawModules = params.get("modules");
+  const modules = rawModules && MODULES_RE.test(rawModules) ? rawModules : null;
   const ciParam = params.get("ci");
   const customInputs = ciParam ? ciParam.split(",").filter((s) => s.length > 0) : [];
 
-  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, quality, wireMode, stacking, customInputs };
+  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, quality, wireMode, stacking, modules, customInputs };
 }
 
 export function readUrlState(): FormState {
@@ -444,6 +457,9 @@ function formatHashState(state: FormState): string {
   }
   if (state.stacking && (KNOWN_STACKING as readonly string[]).includes(state.stacking)) {
     extras.set(STACKING_EXTRAS_KEY, state.stacking);
+  }
+  if (state.modules && MODULES_RE.test(state.modules)) {
+    extras.set("m", state.modules);
   }
   if (state.customInputs.length > 0) {
     extras.set(

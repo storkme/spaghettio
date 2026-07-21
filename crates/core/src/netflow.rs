@@ -94,6 +94,17 @@ pub struct NetflowOptions {
     /// (default) multiplies by exactly 1.0, bit-identical to the
     /// pre-quality behavior.
     pub quality: crate::common::QualityTier,
+    /// Global module policy (RFC-044 Phase 3). Per eligible column:
+    /// crafting speed × the loadout's speed multiplier (floored at 0.2),
+    /// results scaled ×(1+prod) on the catalyst-exempt portion at all
+    /// three result sites (candidate net, per-machine rates, self-loop
+    /// rates), and the loadout emitted on `MachineSpec::game_modules`
+    /// for the layout stamp pass. `None` (default) resolves to the exact
+    /// no-op — bit-identical to pre-module behavior (KC1). NOTE: module
+    /// factors change LP column costs and coefficients, so a policy can
+    /// legitimately flip free-mode recipe selection (accepted; RFC-044
+    /// rev 2 decision log).
+    pub module_policy: crate::module_policy::ModulePolicy,
 }
 
 /// True for both recycling-shaped categories in the bundled data.
@@ -148,8 +159,16 @@ struct Column {
     machine: String,
     crafting_speed: f64,
     /// Netted per-craft coefficient per item index (products·probability
-    /// minus ingredients), exactly one entry per touched item.
+    /// minus ingredients), exactly one entry per touched item. Under a
+    /// productivity policy the product side uses EFFECTIVE amounts
+    /// (RFC-044 site 1: applied to gross products minus catalyst
+    /// exemptions BEFORE netting).
     net: Vec<(usize, f64)>,
+    /// Resolved module effects for this (machine, recipe) pair
+    /// (RFC-044 Phase 3). The speed multiplier is already folded into
+    /// `crafting_speed`; `prod_bonus` and `loadout` feed the
+    /// machine-spec build.
+    effects: crate::module_policy::MachineModuleEffects,
 }
 
 /// Item interner: index by name, tracking fluid-ness from the first typed
@@ -468,6 +487,12 @@ fn solve_attempt(
     // Ensure the target item has a row even if nothing in scope touches it.
     let target_idx = items.intern(target_item, false);
 
+    // NOTE (RFC-044): the closure below runs on RAW nets, before module
+    // resolution. Productivity only ever increases product coefficients,
+    // so nothing admitted here can become inadmissible under a policy —
+    // but a recipe whose product side nets ≤0 raw and >0 only under prod
+    // would be missed as a producer. No recipe in the bundled data has
+    // that shape (Phase 3 review, NIT 5).
     // Demand closure over net-signed edges: a candidate joins when it
     // net-produces a demanded item; its net-consumed items become demanded.
     let mut demanded = vec![false; items.len()];
@@ -580,11 +605,51 @@ fn solve_attempt(
                 entity: machine,
             }));
         }
+        // RFC-044 Phase 3: module effects per (machine, recipe). Speed
+        // folds into the column speed (× exactly 1.0 on the no-op path —
+        // KC1); productivity rewrites the netted product coefficients
+        // from EFFECTIVE amounts, applied to gross products minus the
+        // catalyst-exempt portion BEFORE netting (site 1 of 3 — the raw
+        // sign logic in `classify_self_loop` deliberately stays on raw
+        // amounts).
+        let effects =
+            crate::module_policy::resolve_machine_modules(&options.module_policy, &machine, recipe);
+        let crafting_speed = crafting_speed * effects.speed_multiplier;
+        let net = if effects.prod_bonus > 0.0 {
+            let mut net_map: FxHashMap<usize, f64> = FxHashMap::default();
+            let mut touch_order: Vec<usize> = Vec::new();
+            for p in &recipe.products {
+                let i = items.intern(&p.name, p.type_ == "fluid");
+                if !net_map.contains_key(&i) {
+                    touch_order.push(i);
+                }
+                *net_map.entry(i).or_insert(0.0) += crate::module_policy::effective_product_amount(
+                    p.amount,
+                    p.ignored_by_productivity,
+                    effects.prod_bonus,
+                ) * p.probability;
+            }
+            for ing in &recipe.ingredients {
+                let i = items.intern(&ing.name, ing.type_ == "fluid");
+                if !net_map.contains_key(&i) {
+                    touch_order.push(i);
+                }
+                *net_map.entry(i).or_insert(0.0) -= ing.amount;
+            }
+            touch_order
+                .into_iter()
+                .map(|i| (i, net_map[&i]))
+                .filter(|(_, c)| *c != 0.0)
+                .collect()
+        } else {
+            cand.net
+        };
         columns.push(Column {
             recipe,
             machine,
             crafting_speed,
-            net: cand.net,
+            net,
+            effects,
         });
     }
 
@@ -822,6 +887,12 @@ fn solve_attempt(
                 module_id: 0,
             })
             .collect();
+        // RFC-044 site 2 of 3: per-machine output rates use EFFECTIVE
+        // product amounts (catalyst-exempt prod scaling; exact
+        // passthrough at prod_bonus == 0.0). Desyncing this from the LP
+        // net (site 1) silently splits planned flows from the rates
+        // inserter sizing and the validators consume.
+        let prod_bonus = col.effects.prod_bonus;
         let mut outputs: Vec<ItemFlow> = col
             .recipe
             .products
@@ -829,7 +900,12 @@ fn solve_attempt(
             .filter(|p| !self_loop_names.contains(&p.name.as_str()))
             .map(|p| ItemFlow {
                 item: p.name.clone(),
-                rate: p.amount * p.probability * crafts_per_sec_per_machine,
+                rate: crate::module_policy::effective_product_amount(
+                    p.amount,
+                    p.ignored_by_productivity,
+                    prod_bonus,
+                ) * p.probability
+                    * crafts_per_sec_per_machine,
                 is_fluid: p.type_ == "fluid",
                 module_id: 0,
             })
@@ -844,12 +920,20 @@ fn solve_attempt(
                 .map(|i| i.amount)
                 .sum::<f64>()
                 * crafts_per_sec_per_machine;
+            // RFC-044 site 3 of 3: self-loop produced rates (kovarex's
+            // loop-back belt sizing) use the same effective amounts.
             let produced_rate = col
                 .recipe
                 .products
                 .iter()
                 .filter(|p| p.name == *name)
-                .map(|p| p.amount * p.probability)
+                .map(|p| {
+                    crate::module_policy::effective_product_amount(
+                        p.amount,
+                        p.ignored_by_productivity,
+                        prod_bonus,
+                    ) * p.probability
+                })
                 .sum::<f64>()
                 * crafts_per_sec_per_machine;
             let net_rate = produced_rate - consumed_rate;
@@ -895,6 +979,7 @@ fn solve_attempt(
             inputs,
             outputs,
             voider: false,
+            game_modules: col.effects.loadout.clone(),
         }
     };
 

@@ -3452,7 +3452,7 @@ mod tests {
             machines: vec![MachineSpec {
                 entity: "assembling-machine-3".to_string(),
                 recipe: "iron-gear-wheel".to_string(),
-                self_loop: vec![], voider: false,
+                self_loop: vec![], voider: false, game_modules: Vec::new(),
                 count: 1.0,
                 inputs: vec![ItemFlow {
                     item: "iron-plate".to_string(),
@@ -4232,7 +4232,7 @@ mod tests {
             machines: vec![MachineSpec {
                 entity: "assembling-machine-3".to_string(),
                 recipe: "iron-gear-wheel".to_string(),
-                self_loop: vec![], voider: false,
+                self_loop: vec![], voider: false, game_modules: Vec::new(),
                 count: 1.0,
                 inputs: vec![ItemFlow {
                     item: "iron-plate".to_string(),
@@ -4340,7 +4340,7 @@ mod tests {
                 MachineSpec {
                     entity: "electric-furnace".to_string(),
                     recipe: "iron-plate".to_string(),
-                    self_loop: vec![], voider: false,
+                    self_loop: vec![], voider: false, game_modules: Vec::new(),
                     count: 1.0,
                     inputs: vec![ItemFlow {
                         item: "iron-ore".to_string(),
@@ -4358,7 +4358,7 @@ mod tests {
                 MachineSpec {
                     entity: "assembling-machine-3".to_string(),
                     recipe: "iron-gear-wheel".to_string(),
-                    self_loop: vec![], voider: false,
+                    self_loop: vec![], voider: false, game_modules: Vec::new(),
                     count: 1.0,
                     inputs: vec![ItemFlow {
                         item: "iron-plate".to_string(),
@@ -4505,7 +4505,7 @@ mod tests {
                 MachineSpec {
                     entity: "electric-furnace".to_string(),
                     recipe: "iron-plate".to_string(),
-                    self_loop: vec![], voider: false,
+                    self_loop: vec![], voider: false, game_modules: Vec::new(),
                     count: 1.0,
                     inputs: vec![ItemFlow {
                         item: "iron-ore".to_string(),
@@ -4523,7 +4523,7 @@ mod tests {
                 MachineSpec {
                     entity: "assembling-machine-3".to_string(),
                     recipe: "iron-gear-wheel".to_string(),
-                    self_loop: vec![], voider: false,
+                    self_loop: vec![], voider: false, game_modules: Vec::new(),
                     count: 1.0,
                     inputs: vec![ItemFlow {
                         item: "iron-plate".to_string(),
@@ -4926,7 +4926,7 @@ mod tests {
             machines: vec![MachineSpec {
                 entity: "assembling-machine-3".to_string(),
                 recipe: "iron-plate-recycle".to_string(),
-                self_loop: vec![], voider: false,
+                self_loop: vec![], voider: false, game_modules: Vec::new(),
                 count: 1.0,
                 inputs: vec![],
                 outputs: vec![ItemFlow {
@@ -5025,6 +5025,7 @@ mod tests {
             recipe: recipe.to_string(),
             self_loop: vec![],
             voider: false,
+            game_modules: Vec::new(),
             count: 1.0,
             inputs: vec![ItemFlow {
                 item: item.to_string(),

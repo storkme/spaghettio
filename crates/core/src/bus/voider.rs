@@ -150,6 +150,7 @@ pub fn synthesize_voiders(solver_result: &SolverResult) -> SolverResult {
                     outputs: vec![],
                     self_loop: vec![],
                     voider: true,
+                    game_modules: Vec::new(),
                 };
                 out.dependency_order.push(spec.recipe.clone());
                 out.machines.push(spec);

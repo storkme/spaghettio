@@ -55,7 +55,7 @@ backfill the status next time the doc is touched.
 | RFC-041 | 2026-07-20 | [`rfc-build-quality.md`](rfc-build-quality.md) | Complete (in-game anchor open) |
 | RFC-042 | 2026-07-20 | [`rfc-power-reservation.md`](rfc-power-reservation.md) | Complete |
 | RFC-043 | 2026-07-20 | [`rfc-043-pole-band-thinning.md`](rfc-043-pole-band-thinning.md) | Complete (Phase 1; Phase 2 cross-row sharing deferred) |
-| RFC-044 | 2026-07-21 | [`rfc-044-machine-modules.md`](rfc-044-machine-modules.md) | Draft |
+| RFC-044 | 2026-07-21 | [`rfc-044-machine-modules.md`](rfc-044-machine-modules.md) | Complete (all 4 phases + KC2 in-game anchor; #321/#322/#323/#325) |
 | RFC-045 | 2026-07-21 | [`rfc-045-pole-wire-modes.md`](rfc-045-pole-wire-modes.md) | Complete (browser eyeball open) |
 | RFC-046 | 2026-07-21 | [`rfc-046-belt-stacking.md`](rfc-046-belt-stacking.md) | Complete (in-game anchor open; Phase 3 deferred) |
 

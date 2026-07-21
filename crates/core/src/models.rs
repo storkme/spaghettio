@@ -61,6 +61,14 @@ pub struct MachineSpec {
     /// classification in `bus::placer::row_kind`.
     #[serde(default)]
     pub voider: bool,
+    /// GAME modules planned for each machine of this spec (RFC-044
+    /// Phase 3; empty when the module policy is `None` or the
+    /// (machine, recipe) pair is ineligible). The layout's stamping
+    /// post-pass copies this into `PlacedEntity.items`. Named
+    /// `game_modules` to keep clear of the partition-module vocabulary
+    /// (`ItemFlow::module_id`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub game_modules: Vec<ModuleItem>,
 }
 
 /// One self-referencing item of a self-loop recipe: raw per-machine
@@ -120,7 +128,7 @@ pub enum EntityDirection {
 /// A module/item inserted into an entity (e.g. speed-module-3 × 2 in a beacon).
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModuleItem {
     pub item: String,
     pub count: u32,

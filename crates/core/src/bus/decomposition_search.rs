@@ -954,7 +954,7 @@ mod tests {
         solver.machines.push(MachineSpec {
             entity: "assembling-machine-1".to_string(),
             recipe: "iron-gear-wheel".to_string(),
-            self_loop: vec![], voider: false,
+            self_loop: vec![], voider: false, game_modules: Vec::new(),
             count: 1.0,
             inputs: vec![],
             outputs: vec![ItemFlow {
@@ -979,7 +979,7 @@ mod tests {
         solver.machines.push(MachineSpec {
             entity: "assembling-machine-1".to_string(),
             recipe: "iron-gear-wheel".to_string(),
-            self_loop: vec![], voider: false,
+            self_loop: vec![], voider: false, game_modules: Vec::new(),
             count: 2.0, // 2 machines × 1/s = 2/s production
             inputs: vec![],
             outputs: vec![ItemFlow {
@@ -1008,7 +1008,7 @@ mod tests {
         solver.machines.push(MachineSpec {
             entity: "electric-furnace".to_string(),
             recipe: "iron-plate".to_string(),
-            self_loop: vec![], voider: false,
+            self_loop: vec![], voider: false, game_modules: Vec::new(),
             count: 5.0, // big internal item — not external, doesn't count
             inputs: vec![],
             outputs: vec![ItemFlow {
