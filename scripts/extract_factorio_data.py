@@ -29,6 +29,10 @@ MACHINES = [
     "biochamber",
     "recycler",
     "crusher",
+    # RFC-044: kovarex host; crafting_speed 1.0 == the Rust-side default,
+    # so adding it is bit-identical for the solver — it's here for the
+    # module-eligibility fields below.
+    "centrifuge",
 ]
 
 
@@ -73,6 +77,11 @@ def extract_recipes(include_categories: set[str] | None = None) -> dict:
             prob = prod.get("probability", 1.0)
             if prob != 1.0:
                 entry["probability"] = prob
+            # RFC-044: catalyst portion exempt from productivity (e.g.
+            # kovarex: 40 of 41 U-235). Omitted when zero.
+            ignored = prod.get("ignored_by_productivity", 0)
+            if ignored:
+                entry["ignored_by_productivity"] = ignored
             results.append(entry)
 
         recipe = {
@@ -82,6 +91,10 @@ def extract_recipes(include_categories: set[str] | None = None) -> dict:
             "ingredients": ingredients,
             "results": results,
         }
+        # RFC-044: productivity-module eligibility whitelist. Omitted when
+        # false (the overwhelming majority) to keep the embedded file lean.
+        if raw.get("allow_productivity", False):
+            recipe["allow_productivity"] = True
         recipes[name] = recipe
 
     return recipes
@@ -98,6 +111,20 @@ def extract_machines() -> dict:
         entry = {
             "crafting_speed": raw.get("crafting_speed", 1.0),
         }
+
+        # RFC-044: machine-level module-effect restrictions (e.g. recycler
+        # forbids productivity). Absent = no restriction (game default).
+        allowed = raw.get("allowed_effects")
+        if allowed is not None:
+            entry["allowed_effects"] = sorted(allowed)
+
+        # RFC-044: built-in productivity (foundry/biochamber/EMP = 0.5).
+        # Omitted when absent/zero.
+        base_prod = (raw.get("effect_receiver") or {}).get("base_effect", {}).get(
+            "productivity", 0
+        )
+        if base_prod:
+            entry["base_effect_productivity"] = base_prod
 
         # Extract fluid box definitions if present
         fluid_boxes = raw.get("fluid_boxes")
@@ -140,6 +167,50 @@ def extract_machines() -> dict:
 RECYCLING_CATEGORIES = {"recycling", "recycling-or-hand-crafting"}
 
 
+def augment_in_place(path: Path) -> None:
+    """RFC-044: add module-eligibility fields to an EXISTING recipes.json
+    without regenerating it.
+
+    The committed recipes.json = default extraction + surgically-appended
+    recycling recipes (--recycling-out); a full regeneration DROPS the
+    appended recipes. This mode preserves the file's full recipe set and
+    only adds: per-recipe allow_productivity, per-result
+    ignored_by_productivity, per-machine allowed_effects +
+    base_effect_productivity, and the centrifuge machine entry.
+    """
+    data = json.load(open(path))
+
+    for name, recipe in data["recipes"].items():
+        raw = _recipes.raw.get(name)
+        if raw is None:
+            continue
+        if raw.get("allow_productivity", False):
+            recipe["allow_productivity"] = True
+        raw_results = raw.get("results", [])
+        for entry in recipe["results"]:
+            ignored = next(
+                (
+                    p.get("ignored_by_productivity", 0)
+                    for p in raw_results
+                    if p["name"] == entry["name"]
+                ),
+                0,
+            )
+            if ignored:
+                entry["ignored_by_productivity"] = ignored
+
+    fresh_machines = extract_machines()
+    for name, fresh in fresh_machines.items():
+        entry = data["machines"].setdefault(name, {"crafting_speed": fresh["crafting_speed"]})
+        for key in ("allowed_effects", "base_effect_productivity"):
+            if key in fresh:
+                entry[key] = fresh[key]
+
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+    print(f"Augmented {path} in place (RFC-044 module fields)")
+
+
 def main():
     import argparse
 
@@ -153,7 +224,23 @@ def main():
             "the main recipes.json write below."
         ),
     )
+    parser.add_argument(
+        "--augment",
+        action="store_true",
+        help=(
+            "Augment the existing recipes.json with RFC-044 module fields "
+            "instead of regenerating it. USE THIS, not the default mode, "
+            "while the recycling recipes remain a surgical append: a full "
+            "regeneration drops them."
+        ),
+    )
     args = parser.parse_args()
+
+    if args.augment:
+        augment_in_place(
+            Path(__file__).parent.parent / "crates" / "core" / "data" / "recipes.json"
+        )
+        return
 
     data = {
         "recipes": extract_recipes(),
