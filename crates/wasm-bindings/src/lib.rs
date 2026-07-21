@@ -155,6 +155,14 @@ pub fn default_machine_for_item(item: &str, fallback: &str) -> String {
     recipe_db::default_machine_for_item(item, fallback)
 }
 
+/// Module slot count for a machine entity, wrapping `common::module_slots`
+/// (RFC-044 Phase 2) — single source of truth for the web module-slot
+/// overlay, no duplicated TS table.
+#[wasm_bindgen]
+pub fn module_slots(entity: &str) -> u32 {
+    spaghettio_core::common::module_slots(entity)
+}
+
 #[wasm_bindgen]
 pub fn layout(
     solver_result: SolverResult,
