@@ -296,6 +296,28 @@ generator remains future work.
 
 ## Decision log
 
+- **2026-07-22 — Phase 3 residuals resolved; the ORIGINAL express
+  headline recovered.** Kill 3 (junction): the express@60-legendary-S2
+  junction failure is GONE — 047-1b's row consolidation removed the
+  50-tile crossing entirely; no junction-solver work was needed (the
+  bounded investigation closed at its first probe). Kill 4
+  (overshoot): root-caused, not margined — the 15.4–15.5/s tiles were
+  furnace-row OUTPUT belts sized at `output_rate` (assumes perfect
+  50/50 lanes) while the midpoint bridge splits ⌈n/2⌉/⌊n/2⌋, so odd
+  machine counts overload one lane at zero-headroom tier choices
+  (29.69/s planned on a 30/s stacked-yellow). Fix: lane-split rows
+  size their output belt by worst-lane rate (`2 × ⌈n/2⌉ ×
+  per-machine`); S=1-inert empirically (suite 869/0/36, STRESSGOLD
+  9/9, zero re-blesses — no live S=1 row sits at an odd-split
+  zero-headroom boundary). Result: **EC@60/s legendary EXPRESS S=2
+  now validates with zero errors** — the config RFC-046 demoted as
+  blocked is delivered, pinned by `stacking_ec_60s_express_legendary_s2`
+  (per-tile audit + teeth >45/s). Honest residual: 39 warnings — one
+  furnace bank's ore routing never materializes (19 reachability + 20
+  input-rate-delivery), a distinct defect the junction error had been
+  masking — filed as #335, out of scope here (routing, not delivery
+  accounting).
+
 - **2026-07-22 — Leg C step-3 (wall ×S re-scale) landed; parity fixture
   flipped to the lift differential (kill 5 met).** Changed the fan-in
   wall's `full_belt_cap` from `max_lane_cap × 2` to `lane_cap × 2`

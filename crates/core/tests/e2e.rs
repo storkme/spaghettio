@@ -7725,3 +7725,79 @@ fn stacking_kovarex_family_exempt_s2() {
         "family exemption must keep the self-loop chain's inserters unforced at S=2"
     );
 }
+
+/// RFC-047 close-out: the ORIGINAL build-quality headline — EC@60/s
+/// **legendary on express belts** — which RFC-046 demoted as "blocked by
+/// pre-existing high-rate residuals unrelated to stacking", now green:
+/// the junction failure died with the stacking-aware row-split cap
+/// (047-1b consolidation removed the 50-tile crossing) and the ±3%
+/// overshoot died with worst-lane output-belt sizing (kill-4 root cause:
+/// midpoint-bridge integer lane asymmetry at zero-headroom tiers).
+/// Kill-2 discipline: per-tile physical audit, not warning-count trust.
+#[test]
+fn stacking_ec_60s_express_legendary_s2() {
+    use spaghettio_core::common::{
+        belt_throughput_stacked, is_splitter, is_surface_belt, is_ug_belt,
+        splitter_to_surface_tier, ug_to_surface_tier, QualityTier,
+    };
+    use spaghettio_core::recipe_db::MachinePalette;
+
+    let inputs: FxHashSet<String> =
+        ["iron-ore", "copper-ore"].iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "electronic-circuit",
+        60.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Legendary,
+    )
+    .unwrap_or_else(|e| panic!("solve: {e}"));
+
+    let layout_result = layout::build_bus_layout(
+        &sr,
+        layout::LayoutOptions {
+            strategy: Default::default(),
+            surplus_policy: Default::default(),
+            max_belt_tier: Some("express-transport-belt".to_string()),
+            row_layout: Default::default(),
+            max_inserter_tier: Default::default(),
+            quality: QualityTier::Legendary,
+            wire_mode: Default::default(),
+            merge_tap: false,
+            stacking: 2,
+        },
+    )
+    .unwrap_or_else(|e| panic!("layout: {e}"));
+
+    let issues = validate::validate(&layout_result, Some(&sr), LayoutStyle::Bus)
+        .unwrap_or_else(|e| panic!("validate: {e}"));
+    let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
+    assert!(errors.is_empty(), "expected 0 errors, got {errors:?}");
+
+    let mut over: Vec<String> = Vec::new();
+    let mut max_seen = 0.0_f64;
+    for e in &layout_result.entities {
+        let tier = if is_surface_belt(&e.name) {
+            e.name.as_str()
+        } else if is_ug_belt(&e.name) {
+            ug_to_surface_tier(&e.name)
+        } else if is_splitter(&e.name) {
+            splitter_to_surface_tier(&e.name)
+        } else {
+            continue;
+        };
+        let Some(rate) = e.rate else { continue };
+        max_seen = max_seen.max(rate);
+        let cap = belt_throughput_stacked(tier, 2);
+        if rate > cap + 0.01 {
+            over.push(format!("{} at ({},{}) rate {rate} > stacked cap {cap}", e.name, e.x, e.y));
+        }
+    }
+    assert!(over.is_empty(), "tiles above physical stacked capacity: {over:?}");
+    assert!(
+        max_seen > 45.0,
+        "no belt above unstacked express capacity (max {max_seen}) — stacked credit never engaged"
+    );
+}

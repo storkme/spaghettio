@@ -660,8 +660,22 @@ pub(crate) fn build_one_row(
     };
 
     let output_rate = solid_outputs.first().map(|f| f.rate * count as f64).unwrap_or(0.0);
+    // RFC-047 kill-4 root cause: for lane-split rows the midpoint bridge
+    // divides `count` machines into ⌈n/2⌉/⌊n/2⌋ lane groups, so with an
+    // odd count one lane carries MORE than half the output. Sizing by
+    // `output_rate` alone assumes a perfect 50/50 lane balance and left
+    // zero headroom at exact tier boundaries (walker-caught 15.5/s on a
+    // 15/s stacked-yellow lane, express@60 probe 2026-07-22). Size by the
+    // worst lane instead: `2 × ⌈n/2⌉ × per-machine` — identical to
+    // `output_rate` for even counts, one machine's rate more for odd.
+    let out_effective_rate = if lane_split && count > 0 {
+        let per_machine = output_rate / count as f64;
+        2.0 * per_machine * ((count as f64) / 2.0).ceil()
+    } else {
+        output_rate * 2.0
+    };
     let out_belt = belt_entity_for_rate_stacked(
-        output_rate * if lane_split { 1.0 } else { 2.0 },
+        out_effective_rate,
         max_belt_tier,
         ctx.for_item(output_item),
     );
