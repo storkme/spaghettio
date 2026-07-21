@@ -436,3 +436,27 @@ Works on imported blueprints immediately; no solver dependency.
   honest movement). KC4 satisfied: prod fit the LP as per-column
   constant coefficients, no split needed. KC5 both parts pinned by
   tests.*
+- *2026-07-21 — **record correction + retro review.** The CI review bot
+  was silently broken across this entire arc (the #305–#327 window: the
+  check stayed green while reviews were discarded on a permission
+  denial — see CLAUDE.md). Every "bot-clean" claim in this log was
+  therefore vacuous; the REAL review coverage was: #319/#323/#325 —
+  independent Fable adversarial reviews (unaffected); #321/#322 —
+  merged on the phantom bot floor alone. A post-merge retro review of
+  both diffs (Fable) closed the gap: **#322 CLEAN**; **#321 one MAJOR**
+  — pumpjack's modules exported to inventory 4 instead of the
+  mining-drill class 2 (per-entity table gap; silent on paste,
+  structurally invisible to round-trips, and the KC2 anchor's drill
+  covered class 2 while pumpjack stayed wrong) — fixed same day in the
+  retro-fix PR along with: export-side filter so non-module item
+  requests (fuel/ammo) no longer re-emit into module inventories (a
+  #321 regression vs the old drop-them behavior; full fidelity tracked
+  in `docs/module-followups.md`), count-0 insert-plan suppression, the
+  shared `common::game_module_family` classifier, and web
+  prefetch/footprint entries for pumpjack + big-mining-drill. The retro
+  review also EXHAUSTIVELY re-verified the Phase 0c extraction against
+  draftsman (all 649 recipes, 1005 result entries, 15 machines — zero
+  mismatches), retroactively solidifying the data Phases 1/3 built on.
+  KC2 addendum: the anchor string gains a pumpjack so inventory class 2
+  is covered per-prototype-family, not just per-class — re-paste is a
+  cheap optional re-check.*

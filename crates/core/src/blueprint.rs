@@ -172,10 +172,23 @@ pub fn export(layout: &LayoutResult, label: &str) -> String {
                     // Slot positions run sequentially across ALL modules
                     // in the entity: module A ×2 takes stacks 0,1; the
                     // next module starts at 2.
+                    //
+                    // Only MODULE-shaped requests are emitted: the parser
+                    // collapses every item request (fuel, ammo) into
+                    // `items`, and re-emitting those into the MODULE
+                    // inventory would mis-target them (a coal request is
+                    // not a module — retro-review m1). Dropping them
+                    // matches pre-RFC-044 export behavior; full
+                    // inventory/count fidelity is a recorded followup
+                    // (docs/module-followups.md). count-0 entries carry
+                    // no slot positions and are skipped outright.
                     let inventory = crate::common::module_inventory_id(&ent.name);
                     let mut stack = 0u32;
                     ent.items
                         .iter()
+                        .filter(|m| {
+                            m.count > 0 && crate::common::game_module_family(&m.item).is_some()
+                        })
                         .map(|m| BlueprintInsertPlan {
                             id: BlueprintItemId {
                                 name: &m.item,
@@ -454,6 +467,66 @@ mod tests {
         let drill = find("electric-mining-drill");
         assert_eq!(drill.items[0].count, 3);
         assert_eq!(drill.items[0].quality, None);
+    }
+
+    /// Pumpjack is a mining-drill prototype: its modules export to
+    /// inventory 2, not the crafting default 4 (retro-review M1 — wrong
+    /// id fails silently on paste and round-trips can't see it).
+    #[test]
+    fn pumpjack_modules_export_to_drill_inventory() {
+        use crate::models::ModuleItem;
+        let layout = LayoutResult {
+            entities: vec![PlacedEntity {
+                name: "pumpjack".into(),
+                x: 0,
+                y: 0,
+                direction: EntityDirection::North,
+                items: vec![ModuleItem {
+                    item: "speed-module-3".into(),
+                    count: 2,
+                    quality: None,
+                }],
+                ..Default::default()
+            }],
+            width: 3,
+            height: 3,
+            ..Default::default()
+        };
+        let bp = decode_blueprint(&export(&layout, "pj"));
+        let positions = &bp["entities"][0]["items"][0]["items"]["in_inventory"];
+        assert_eq!(positions[0]["inventory"], 2);
+        assert_eq!(positions[1]["inventory"], 2);
+    }
+
+    /// Non-module item requests (fuel, ammo) parsed off imported
+    /// blueprints must NOT re-export as module-inventory insert plans —
+    /// a coal request is not a module (retro-review m1; dropping them
+    /// matches pre-RFC-044 behavior, full fidelity is a followup).
+    #[test]
+    fn non_module_item_requests_are_not_exported_as_modules() {
+        use crate::models::ModuleItem;
+        let layout = LayoutResult {
+            entities: vec![PlacedEntity {
+                name: "stone-furnace".into(),
+                x: 0,
+                y: 0,
+                direction: EntityDirection::North,
+                items: vec![
+                    ModuleItem { item: "coal".into(), count: 50, quality: None },
+                    // count-0 entries carry no positions; skipped too.
+                    ModuleItem { item: "speed-module".into(), count: 0, quality: None },
+                ],
+                ..Default::default()
+            }],
+            width: 2,
+            height: 2,
+            ..Default::default()
+        };
+        let bp = decode_blueprint(&export(&layout, "fuel"));
+        assert!(
+            bp["entities"][0].get("items").is_none(),
+            "fuel request leaked into module insert plans"
+        );
     }
 
     /// Decode an exported blueprint string back to its JSON `blueprint` object.
