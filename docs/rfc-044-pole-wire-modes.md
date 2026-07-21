@@ -1,7 +1,8 @@
 # RFC-044: Pole wire modes — dense mesh vs deterministic minimal tree
 
-Status: DRAFT (2026-07-21) — spec'd from the 2026-07-20 power-arc
-close-out; adversarial review pending.
+Status: ACCEPTED v2 (2026-07-21) — adversarial review round 1
+complete; two must-fixes and two wording fixes folded in (decision
+log). Ready to implement.
 
 ## Summary
 
@@ -89,7 +90,12 @@ sites 2–4 and kept in agreement forever. Instead:
 - The parser sets `Some(imported_graph)` (it already builds exactly
   this) and leaves `wire_mode` at `Dense`-default — the mode field
   describes how WE generate, not a claim about imports; imported
-  graphs are `Some` and therefore never regenerated regardless.
+  graphs are `Some` and therefore never regenerated in any reachable
+  path. (Precisely: the only regeneration site is the improve-region
+  recompute, and parsed layouts carry `regions: vec![]`, so
+  `optimizeAllRegions` finds no crossing zones and never invokes it —
+  review finding 5's reachability argument, stated here so a future
+  change to parser region derivation knows to revisit this.)
 
 Round-trip consequence, now guaranteed by construction: export a tree
 layout → parse it → `power_wires` is the tree again (the parser reads
@@ -113,24 +119,32 @@ pub fn compute_pole_wires(entities, mode: WireMode) -> Vec<(u32, u32)>
 
 `Tree` runs Kruskal over the SAME candidate edge set `Dense` produces
 (in-reach pairs under per-entity quality reach, min-of-both — the
-physics is mode-independent), with edges sorted by
+physics is mode-independent), with edges sorted by the **physical**
+key (v2, review finding 6):
 
 ```
-(squared_center_distance, a, b)      // full lexicographic order
+(squared_center_distance, min_endpoint_pos, max_endpoint_pos)
+// endpoint_pos = the pole's (x, y) anchor; endpoints canonically
+// ordered per edge; full lexicographic total order
 ```
 
 - **Squared** Euclidean center distance: centers are `k + 0.5` /
   `k + 1.0` grid values, so squared distances are exact in f64 at any
   realistic layout size — no sqrt, no rounding wobble.
-- The `(a, b)` index tiebreak makes the sort a total order, so the
-  Kruskal result is a **unique function of the input**, tie or no tie
-  — grid layouts tie constantly (equidistant band neighbors), and MST
-  uniqueness is NOT otherwise guaranteed. Determinism is a
+- The tiebreak is **position-derived, not entity-index-derived**: the
+  codebase deliberately treats entity Vec order as a non-canonical
+  implementation detail (`golden_hash` sorts before hashing), so a
+  tree keyed on indices would silently change shape under a
+  legitimate pipeline reordering. With the physical key, the selected
+  wire SET is a unique function of the physical layout; tie or no
+  tie, MST uniqueness follows from the total order. Determinism is a
   project-level contract (byte-identical output: URL state, `.fls`
-  snapshots, goldens).
-- Union-find: small local implementation (or extract the one inline
-  in `repair_pole_connectivity` — optional refactor, not required;
-  if extracted it must be behavior-identical there, golden-proven).
+  snapshots, goldens), and an order-permutation fixture (kill 3)
+  proves the invariance rather than assuming it.
+- Union-find: small local implementation. (v1 floated extracting the
+  one inline in `repair_pole_connectivity`; dropped — that function is
+  placement-time code and kill 5 fences placement off. A shared
+  union-find is a possible follow-up chore, not part of this RFC.)
 - Output re-sorted by `(a, b)` — same normalization and ordering
   convention as `Dense`, so downstream consumers see one format.
 - Disconnected pole fields (possible on degraded layouts) yield a
@@ -171,19 +185,38 @@ overlay draws whatever `power_wires` holds; only the TS type changes
    (equidistant pole line where every adjacent pair ties). A unit test
    constructs ≥3-way ties and pins the exact edge list.
 4. **Tree property.** On every fixture where `Tree` runs:
-   `edges == poles − components`, the validator's own walk reports the
-   same `components` count as `Dense` would (never fewer warnings),
-   and every edge is a member of the dense candidate set.
-5. **Scope fence.** No placement, thinning, or substation changes; if
-   the accessor/fallback design requires touching those, stop.
+   `edges == poles − components` (components counted by the test's
+   own union-find over the dense candidate set), every edge is a
+   member of the dense candidate set, and
+   `count_disconnected_poles(entities, tree)` equals
+   `count_disconnected_poles(entities, dense)` — the validator's
+   actual scalar, identical between modes by construction (v2
+   wording, review finding 7).
+5. **Scope fence.** No placement, thinning, or substation changes
+   (`repair_pole_connectivity` explicitly included — the v1 "optional
+   union-find extraction" is dropped); if the accessor/fallback
+   design requires touching those, stop.
+6. **No silent re-densify (v2, review finding 10).** A Tree-mode
+   layout passed through `improve_region_streaming` must come back
+   with `power_wires` still satisfying the tree property of kill 4 —
+   the recompute at `wasm-bindings/src/lib.rs:414` must honor
+   `layout.wire_mode`, and a test proves it (build a Tree layout with
+   ≥1 crossing-zone region, run the improve pass, assert tree-shaped
+   wires after). If the mode field cannot survive the wasm boundary
+   (contradicting the `trace`/`RegionKind` precedents), that is a
+   kill-2-style abandon signal for the stored-mode design.
 
 ## Verification plan
 
-- Unit: tie-heavy determinism fixture (kill 3); tree property per
-  component incl. a deliberately disconnected two-cluster fixture
-  (kill 4); `None`-fallback exports wires for a hand-built layout
-  (the existing `export_emits_pole_copper_wires` test covers exactly
-  this path — it must keep passing unmodified).
+- Unit: tie-heavy determinism fixture (kill 3) PLUS the
+  order-permutation fixture — the same physical poles constructed in
+  two different entity orders must select the same physical wire SET
+  (v2, review finding 6); tree property per component incl. a
+  deliberately disconnected two-cluster fixture (kill 4);
+  `None`-fallback exports wires for a hand-built layout (the existing
+  `export_emits_pole_copper_wires` test covers exactly this path — it
+  must keep passing unmodified); the kill-6 improve-region
+  re-densify test.
 - Round-trip: export `Tree` → parse → `power_wires` equals the tree
   edge set; re-export → byte-identical `wires` array.
 - Differential: 45/s legendary fixture — dense edge count vs tree
@@ -203,5 +236,21 @@ default is inert). Registry: RFC-044, row added in this commit's
 
 - *2026-07-21 — spec'd; the stored-graph contract chosen over
   param-threading (user decision, 2026-07-21: "the cleaner structural
-  fix"), with param-threading kept as kill-2's explicit fallback.
-  Adversarial review pending.*
+  fix"), with param-threading kept as kill-2's explicit fallback.*
+- *2026-07-21 — adversarial review round 1. Verified sound against
+  code: the Option migration (golden hashes provably never touch
+  `power_wires`; web already treats the field as optional; consumer
+  enumeration complete — `region_reimprove` reachable only via
+  `improve_region_streaming`), the wasm round-trip (working
+  precedents: `trace: Option<Vec<..>>`, `RegionKind` enums), and the
+  parser/optimize non-reachability of the imported-wire clobber. Two
+  must-fixes folded into v2: **tiebreak retargeted from entity index
+  to physical coordinates** (entity Vec order is non-canonical by the
+  project's own golden-hash convention; index-keyed ties would let a
+  legitimate reorder silently reshape trees) with an
+  order-permutation fixture added to kill 3; and **kill 6 added** for
+  the improve-region re-densify hazard the Design section named but
+  never tested. Wording fixes: kill 4 now asserts on
+  `count_disconnected_poles`'s actual return; the union-find
+  extraction dropped to resolve the kill-5 self-tension. Ready to
+  implement.*
