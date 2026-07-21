@@ -53,28 +53,7 @@ fn module_gating_effect(family: &str) -> Option<&'static str> {
 /// requires a `-module` SUFFIX so real items like `empty-module-slot`
 /// never match.
 fn module_family(name: &str) -> Option<&'static str> {
-    match name {
-        "speed-module" | "speed-module-2" | "speed-module-3" => Some("speed"),
-        "productivity-module" | "productivity-module-2" | "productivity-module-3" => {
-            Some("productivity")
-        }
-        "efficiency-module" | "efficiency-module-2" | "efficiency-module-3"
-        | "effectivity-module" | "effectivity-module-2" | "effectivity-module-3" => {
-            Some("efficiency")
-        }
-        "quality-module" | "quality-module-2" | "quality-module-3" => Some("quality"),
-        _ => {
-            let base = match name.rfind('-') {
-                Some(i) if name[i + 1..].chars().all(|c| c.is_ascii_digit()) => &name[..i],
-                _ => name,
-            };
-            if base.ends_with("-module") {
-                Some("unknown")
-            } else {
-                None
-            }
-        }
-    }
+    crate::common::game_module_family(name)
 }
 
 /// `allowed_effects` for module hosts that aren't in the machines dict,

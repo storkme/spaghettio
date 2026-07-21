@@ -235,6 +235,7 @@ export async function initEngine(): Promise<void> {
       "biolab",
       "electric-mining-drill",
       "big-mining-drill",
+      "pumpjack",
     ],
   });
   moduleSlotsCache = new Map(moduleSlotEntries);

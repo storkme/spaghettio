@@ -1217,6 +1217,40 @@ pub fn module_effect(name: &str) -> ModuleEffect {
     }
 }
 
+/// Classify an item-request name as a GAME module: `Some(family)` for
+/// known module prototypes ("speed" / "productivity" / "efficiency" /
+/// "quality"), `Some("unknown")` for module-shaped names outside the
+/// known set (modded tiers — tier-number-stripped `-module` suffix, so
+/// real items like `empty-module-slot` never match), `None` for
+/// non-module requests (fuel, ammo, ...). Pre-2.0 `effectivity-module*`
+/// spellings alias to the efficiency family (the game migrates them on
+/// paste). Shared by the module validators and the blueprint exporter's
+/// insert-plan filter.
+pub fn game_module_family(name: &str) -> Option<&'static str> {
+    match name {
+        "speed-module" | "speed-module-2" | "speed-module-3" => Some("speed"),
+        "productivity-module" | "productivity-module-2" | "productivity-module-3" => {
+            Some("productivity")
+        }
+        "efficiency-module" | "efficiency-module-2" | "efficiency-module-3"
+        | "effectivity-module" | "effectivity-module-2" | "effectivity-module-3" => {
+            Some("efficiency")
+        }
+        "quality-module" | "quality-module-2" | "quality-module-3" => Some("quality"),
+        _ => {
+            let base = match name.rfind('-') {
+                Some(i) if name[i + 1..].chars().all(|c| c.is_ascii_digit()) => &name[..i],
+                _ => name,
+            };
+            if base.ends_with("-module") {
+                Some("unknown")
+            } else {
+                None
+            }
+        }
+    }
+}
+
 /// Number of module slots for a KNOWN machine entity; `None` for
 /// entities outside the table (modded machines) — the module-slots
 /// validator must not assert slot counts it doesn't know (a modded
@@ -1263,7 +1297,11 @@ pub fn module_slots(entity: &str) -> u32 {
 pub fn module_inventory_id(entity: &str) -> u8 {
     match entity {
         "beacon" => 1,
-        "electric-mining-drill" | "big-mining-drill" | "burner-mining-drill" => 2,
+        // Pumpjack is a mining-drill prototype: inventory 2, NOT the
+        // crafting default — caught by the post-merge retro review
+        // (draftsman reference emission); the KC2 anchor's drill covered
+        // class 2 while this per-entity lookup stayed wrong.
+        "electric-mining-drill" | "big-mining-drill" | "burner-mining-drill" | "pumpjack" => 2,
         "lab" | "biolab" => 3,
         _ => 4,
     }

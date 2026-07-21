@@ -196,6 +196,8 @@ export const MACHINE_SIZES: Record<string, [number, number]> = {
   "big-electric-pole": [2, 2],
   substation: [2, 2],
   "electric-mining-drill": [3, 3],
+  "big-mining-drill": [5, 5],
+  pumpjack: [3, 3],
 };
 
 /** Convert a kebab-case slug to a display name: "assembling-machine-3" → "Assembling Machine 3" */
