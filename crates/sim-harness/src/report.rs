@@ -79,6 +79,11 @@ pub struct Report {
     pub fluid_fed: bool,
     pub uncalibrated_direction: bool,
     pub fluid_errors: BTreeMap<String, String>,
+    /// Boundary-kit self-audit failures (overlapping bank chests etc.).
+    /// Non-empty means the kit itself is compromised — measured rates are
+    /// meaningless (wrong-item cross-feeds poison the factory; #357) and
+    /// the overall verdict is forced to NO DATA.
+    pub kit_errors: Vec<String>,
     pub machine_census: BTreeMap<String, u64>,
     pub overall_verdict: Verdict,
     /// Manifest context (RFC-050: "config axes (quality/stacking/
@@ -212,11 +217,23 @@ pub fn compute(manifest: &Manifest, result: &serde_json::Value) -> Report {
     }
     items.sort_by(|a, b| b.is_target.cmp(&a.is_target).then_with(|| a.item.cmp(&b.item)));
 
-    let overall_verdict = items
-        .iter()
-        .filter(|i| i.is_target)
-        .map(|i| i.verdict.unwrap_or(Verdict::NoData))
-        .fold(Verdict::Pass, worst);
+    let kit_errors: Vec<String> = result
+        .get("kit_errors")
+        .and_then(|k| k.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.as_str().map(str::to_string))
+        .collect();
+
+    let overall_verdict = if kit_errors.is_empty() {
+        items
+            .iter()
+            .filter(|i| i.is_target)
+            .map(|i| i.verdict.unwrap_or(Verdict::NoData))
+            .fold(Verdict::Pass, worst)
+    } else {
+        Verdict::NoData
+    };
 
     let mut machine_census = BTreeMap::new();
     if let Some(obj) = result.get("machine_census").and_then(|c| c.as_object()) {
@@ -245,6 +262,7 @@ pub fn compute(manifest: &Manifest, result: &serde_json::Value) -> Report {
         fluid_fed: manifest.has_fluid_boundary(),
         uncalibrated_direction: manifest.has_uncalibrated_direction(),
         fluid_errors,
+        kit_errors,
         machine_census,
         overall_verdict,
         entities: manifest.entities,
@@ -314,6 +332,12 @@ pub fn print_human(report: &Report) {
         println!("fluid rig errors:");
         for (k, v) in &report.fluid_errors {
             println!("  {k}: {v}");
+        }
+    }
+    if !report.kit_errors.is_empty() {
+        println!("KIT ERRORS — boundary kit compromised, RUN INVALID (verdict forced NO DATA):");
+        for e in &report.kit_errors {
+            println!("  {e}");
         }
     }
     println!();
