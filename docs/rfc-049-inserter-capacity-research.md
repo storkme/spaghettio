@@ -207,6 +207,101 @@ table (Phase 3).
 
 ## Decision log
 
+- **2026-07-22 — Phase 2c landed (differential fixtures).** (i) e2e
+  `research_l7_thins_output_inserters_s4`: hazard-concrete @ 60/s on
+  assembling-machine-1 (per-machine output 20/s — above the 9.6/s L0
+  belt-drop rate, below the 38.4/s L7 rate), S=4, red belts. Output
+  stack-inserter count (filtered by `carries == output item`, isolating
+  the belt-drop side from level-invariant inputs) drops **L0=9 → L7=3, a
+  3× thinning** — the per-inserter belt-drop rate rises 9.6→38.4/s (4×),
+  realized as 3× because 20/s discretizes to 3 vs 1 inserters (3
+  machines × 3→1). Asserted `l7 < l0` and `l0 >= 3·l7` (the sharpness).
+  (ii) unit `belt_drop_intermediate_dip_non_monotonic_s4`: at S=4/20-s,
+  L4 places 2 stack inserters where L5 places 1 (L4 > L5) and L4 == L2 —
+  the mod-4 plateau (hands 8/9/10 all floor to 8 = 19.2/s, then L5 jumps
+  to 12 = 28.8/s); endpoints alone would miss it. (iii) L0 identity is
+  the kill-1 gate (goldens 8/8, `size_side_output_identity_at_l0`,
+  `belt_drop_identity_at_s1_l0`). No existing fixture weakened — the 5
+  `stacking_` fixtures and all 8 goldens are byte-unchanged. Gates: full
+  suite (lib 779 / e2e 60 / netflow parity 10, one clean run), STRESSGOLD
+  check 8/8 zero diffs, clippy `--lib -D warnings` clean (the `--tests`
+  target carries pre-existing clippy debt in junction_fixtures /
+  mode_d_baseline / e2e helpers, untouched by this work — the project
+  gates on `--lib`).
+
+- **2026-07-22 — Phase 2b landed (exempt-output scaling).** New
+  `size_side_output(required, reach, budget, max_tier, quality, level)`
+  for the class-(c) stacking-exempt outputs: it routes through the same
+  `size_side_rated` core at `belt_drop_rate(name, quality, 1, level)` —
+  the **unstacked** belt-drop rate scaled by research — so the far
+  long-handed ceiling rises 1.2→4.8/s and near tiers scale linearly,
+  WITHOUT stack-forcing (exemption intact; a low-rate near output still
+  gets the cheapest tier, never a forced stack). Chosen over a post-plan
+  scale because it reuses the shared ladder core and stays a drop-in for
+  the existing `size_side` call sites; at level 0 it is bit-identical to
+  `size_side`. Wired at the three class-(c) template sites: the D2b
+  secondary output (`single_input_row` ~772) and both self-loop major +
+  the minor output (`self_loop_row` 4464/4480/4497). `self_loop_row`
+  gained a `level` param (it already took `&StackingCtx` for per-item
+  exemption; `level` is the global research dimension, threaded from
+  `build_one_row` like the other 8 templates — kept as a plain param, not
+  folded into the ctx). Unit tests: L0 identity sweep, far-ceiling rise
+  (4.0/s shortfalls at L0, one LHI covers at L7), and the exemption
+  guard (near output never forces stack at max research). Gates: full
+  suite (e2e 59 / lib 778, one clean run), STRESSGOLD check 8/8 zero
+  diffs, clippy --lib clean. No first-pass census miss surfaced.
+
+- **2026-07-22 — Phase 2a landed (site census + belt-drop ladder).**
+  Explicit census of every `size_side` (29) + `size_belt_drop_side` (8)
+  site in `templates.rs`, plus the hardcoded inserter pushes and the
+  sushi sorter (RFC-046 DropTarget re-census discipline: call sites do
+  not self-identify their drop target). No first-pass miss surfaced —
+  the RFC-046 census had already mapped the exempt output sites, and
+  this census reconciled cleanly against them; still budgeting for a
+  later miss on the class-(c)/contest boundary.
+
+  | Class | Site(s) `templates.rs` | Role | RFC-049 treatment |
+  |---|---|---|---|
+  | (a) input | 645; 998/1018; 1458/1473; 1773/1793; 1855; 2172; 2249; 2486; 2780/2792; 4317/4378/4400; 5129/5144; 5431; hardcoded LHI 2143/2155/4304/4336/4358 | belt-pickup → machine-drop | **UNCHANGED** — flat `size_side`, no `level` (kill 2 L0 floor; input scaling needs measured data or the in-game anchor) |
+  | (b) output belt-drop | 715; 1080; 1510; 1870; 2233; 2534; 2853; 3859 (all `Reach::Near`) | machine-pickup → belt-drop, already on `size_belt_drop_side` | **level threaded** — S>1 forces stack at `belt_drop_rate(stack,q,S,level)`; S≤1&L>0 cheapest-tier ladder at research-scaled rates |
+  | (c) exempt output | 766 (D2b secondary, Far); 4447/4480 (self_loop major, Near); 4463 (self_loop minor, Far) — all `size_side` deliberately | stacking-exempt output (family plans unstacked) | **`size_side_output` (Phase 2b)** — linear `swings/throughput × hand(level)`, no stack-forcing; exemption intact |
+  | (d) probe/contest | 943/945/947, 1716/1718/1720 (far-capped/near shortfall probes on INPUT rates); `contest_favors_far` ×7 (992,1454,1768,1850,2228,4443); `capped_limit` (464) | shortfall probes + shared-column tie-break + trace-string | **NOT threaded** (verified, see below) |
+  | belt→belt | 5499 sushi sorter (hardcoded `fast-inserter`) | belt-pickup → belt-drop | **flat L0, no code change** — no measured scenario exists (ground truth 3, kill 2) |
+
+  **Ladder.** `common::belt_drop_rate(name, quality, stacking, level)` is
+  now the single source of truth for belt-drop rates, consumed by BOTH
+  the ladder and the validator's `belt_drop_throughput` (which became a
+  one-line wrapper) — constants-identity by construction, pinned by a new
+  `belt_drop_constants_identity` unit test. `size_belt_drop_side` gained
+  `level`; the S>1 forced-stack path count-ladders at
+  `belt_drop_rate(stack,…,level)`, the S≤1&L>0 near path and the Far path
+  route through a rate-parametric `size_side_rated` core (extracted from
+  `size_side`, which is now a thin flat-rate wrapper — golden path
+  byte-preserved: goldens 8/8, kill 1 held). Threading mechanism:
+  `level` is a `place_rows`/`build_one_row` parameter parallel to
+  `max_inserter_tier`/`quality` (an inserter-ladder input), fed from
+  `LayoutOptions.inserter_capacity` — NOT folded into `StackingCtx`,
+  which stays purely belt-stacking (validators derive it for belt
+  capacity and never want a level).
+
+  **`contest_favors_far` / `capped_limit` — verified NOT threaded (task's
+  "only if the math consumes a rate that changes").** Both consume only
+  `inserter_throughput` (the flat, level-INDEPENDENT I8 constants) and
+  `size_side` (likewise level-independent) — no rate in their math moves
+  at level>0, so threading `level` would be a literal no-op. This is
+  exactly RFC-046's disposition: it did NOT thread `stacking` into either,
+  even though the same contest sites (1850/2228 output-vs-input3/4,
+  4443 self_loop major-vs-minor) already pit belt-drop OUTPUT sides
+  against input sides. The residual approximation — the tie-break and the
+  shortfall-trace string use the flat machine-drop ceiling for output
+  sides, so at level>0 an output-near side with `required` in the narrow
+  band `(flat 12/s, level-scaled ceiling]` is treated as slightly more
+  constrained than it is — is pre-existing, conservative (never
+  under-provisions the actual sizing, which `size_belt_drop_side` does
+  separately), and cosmetic (column tie-break + trace explainability
+  only). Deferred with RFC-046's identical residual; noted here rather
+  than hidden.
+
 - **2026-07-22 — Phases 0+1 landed.** Phase 0: schedule re-verified
   in-session (two raw-wikitext extractions, identical — kill 3's bar
   met); `inserter_hand` + `stack_inserter_belt_hand_at` landed

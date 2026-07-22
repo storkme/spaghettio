@@ -18,9 +18,7 @@
 //! and the check can never disagree on what an inserter moves (see the
 //! `constants_identity` test below).
 
-use crate::common::{
-    inserter_throughput, stack_inserter_belt_hand, stack_inserter_swings, QualityTier,
-};
+use crate::common::{belt_drop_rate, inserter_throughput, QualityTier};
 
 /// Inserter entity names the ladder places, by tier.
 pub const REGULAR: &str = "inserter";
@@ -81,46 +79,45 @@ pub struct SidePlan {
     pub shortfall: Option<f64>,
 }
 
-/// Size one machine side.
-///
-/// `required` is the per-machine, utilization-scaled rate the side must
-/// move (items/s). `position_budget` is the number of EXTRA columns the
-/// caller's template geometry can spare beyond the one baseline slot
-/// every side already has (0 at the tightest positions, e.g. a
-/// sideload-bridge anchor's output face). `max_tier` caps the near-reach
-/// ladder; it has no effect on `Reach::Far` (see [`Reach`]).
-pub fn size_side(
+/// Single-tier count ladder: place 1..=`total_slots` copies of `entity`
+/// (each moving `rate` items/s), cheapest count that covers `required`;
+/// best-effort with an honest shortfall when even every slot falls short.
+/// The shared core of the reach-2 (long-handed) ladder and the S>1
+/// stack-forced belt-drop ladder.
+fn count_ladder(entity: &'static str, rate: f64, required: f64, total_slots: usize) -> SidePlan {
+    for n in 1..=total_slots {
+        if required <= n as f64 * rate + EPS {
+            return SidePlan { entity, count: n, shortfall: None };
+        }
+    }
+    let placed = total_slots as f64 * rate;
+    SidePlan { entity, count: total_slots, shortfall: Some((required - placed).max(0.0)) }
+}
+
+/// Size one machine side against an arbitrary per-entity `rate` table —
+/// the rate-parametric core of [`size_side`] (flat machine-drop) and the
+/// belt-drop entry points ([`size_belt_drop_side`] / [`size_side_output`],
+/// which pass `common::belt_drop_rate`). `rate(name)` returns the items/s
+/// one inserter of `name` moves on this side. Behavior is otherwise
+/// identical to the historical `size_side`; passing the flat
+/// `inserter_throughput` closure reproduces it bit-for-bit (kill 1).
+fn size_side_rated(
     required: f64,
     reach: Reach,
     position_budget: usize,
     max_tier: InserterTier,
-    quality: QualityTier,
+    rate: impl Fn(&str) -> f64,
 ) -> SidePlan {
     let total_slots = position_budget + 1;
     match reach {
-        Reach::Far => {
-            let rate = inserter_throughput(LONG_HANDED, quality);
-            for n in 1..=total_slots {
-                let placed = n as f64 * rate;
-                if required <= placed + EPS {
-                    return SidePlan { entity: LONG_HANDED, count: n, shortfall: None };
-                }
-            }
-            let placed = total_slots as f64 * rate;
-            SidePlan {
-                entity: LONG_HANDED,
-                count: total_slots,
-                shortfall: Some((required - placed).max(0.0)),
-            }
-        }
+        Reach::Far => count_ladder(LONG_HANDED, rate(LONG_HANDED), required, total_slots),
         Reach::Near => {
             let tiers = max_tier.allowed_near_entities();
 
             // Rung 0/1: one inserter, cheapest tier that suffices
             // ("in-place tier swap" — zero extra columns spent).
             for &entity in tiers {
-                let rate = inserter_throughput(entity, quality);
-                if required <= rate + EPS {
+                if required <= rate(entity) + EPS {
                     return SidePlan { entity, count: 1, shortfall: None };
                 }
             }
@@ -131,10 +128,9 @@ pub fn size_side(
             // any multi-stack).
             if total_slots > 1 {
                 for &entity in tiers {
-                    let rate = inserter_throughput(entity, quality);
+                    let r = rate(entity);
                     for n in 2..=total_slots {
-                        let placed = n as f64 * rate;
-                        if required <= placed + EPS {
+                        if required <= n as f64 * r + EPS {
                             return SidePlan { entity, count: n, shortfall: None };
                         }
                     }
@@ -144,8 +140,7 @@ pub fn size_side(
             // Best effort: every free column, richest tier the cap
             // allows, honest shortfall recorded.
             let entity = tiers.last().copied().unwrap_or(REGULAR);
-            let rate = inserter_throughput(entity, quality);
-            let placed = total_slots as f64 * rate;
+            let placed = total_slots as f64 * rate(entity);
             SidePlan {
                 entity,
                 count: total_slots,
@@ -155,24 +150,57 @@ pub fn size_side(
     }
 }
 
-/// Size a machine side that drops onto a **belt** (RFC-046).
+/// Size one machine side (belt-pickup → machine-drop INPUT sides, and any
+/// side with no belt-drop research/stacking scaling).
 ///
-/// At `stacking ≤ 1` this is exactly [`size_side`] — bit-identical
-/// pre-RFC behavior (kill 1). At S > 1:
+/// `required` is the per-machine, utilization-scaled rate the side must
+/// move (items/s). `position_budget` is the number of EXTRA columns the
+/// caller's template geometry can spare beyond the one baseline slot
+/// every side already has (0 at the tightest positions, e.g. a
+/// sideload-bridge anchor's output face). `max_tier` caps the near-reach
+/// ladder; it has no effect on `Reach::Far` (see [`Reach`]).
 ///
-/// - `Reach::Near` is **forced to stack-inserter** (BS2: only stack
-///   inserters create belt stacks; the ×S capacity credit on the fed
-///   belt is honest only if every loader stacks). Count-laddered at the
-///   belt-drop throughput `stack_inserter_swings(quality) ×
-///   stack_inserter_belt_hand(S)` (BS3 — note the S=4 hand dip: 9.6/s
-///   per inserter vs 14.4/s at S=2/3, so S=4 sides can need MORE
-///   inserters than S=3 at equal rate). Layout entry has already
-///   refused `stacking > 1` with `max_inserter_tier < Stack`, so the
-///   forcing never violates the user's cap (debug-asserted).
-/// - `Reach::Far` cannot stack (BS5: no reach-2 stacking inserter) and
-///   falls through to `size_side` unchanged. Callers only pass `Far`
-///   for stacking-exempt lanes (`StackingCtx::is_exempt`) — the family
-///   exemption guarantees those plan at unstacked capacity.
+/// Machine-drop (input) sides stay flat at every research level (RFC-049
+/// kill 2 — no linear extrapolation on belt-pickup sides without measured
+/// data), so this never takes a research `level`.
+pub fn size_side(
+    required: f64,
+    reach: Reach,
+    position_budget: usize,
+    max_tier: InserterTier,
+    quality: QualityTier,
+) -> SidePlan {
+    size_side_rated(required, reach, position_budget, max_tier, |name| {
+        inserter_throughput(name, quality)
+    })
+}
+
+/// Size a machine side that drops onto a **belt** (RFC-046 stacking +
+/// RFC-049 inserter-capacity research).
+///
+/// At `stacking ≤ 1 && level == 0` this is exactly [`size_side`] —
+/// bit-identical pre-RFC behavior (kill 1). Otherwise the per-tier rate
+/// comes from `common::belt_drop_rate` (the SAME table the validator's
+/// `belt_drop_throughput` reads):
+///
+/// - `Reach::Near` at **S > 1** is **forced to stack-inserter** (BS2: only
+///   stack inserters create belt stacks; the ×S capacity credit on the fed
+///   belt is honest only if every loader stacks). Count-laddered at
+///   `belt_drop_rate(stack, quality, S, level)` = `swings ×
+///   stack_inserter_belt_hand_at(level, S)` — note the mod-S hand dip
+///   (S=4/L0 = 9.6/s; healed to 38.4/s at L7 where 16 ≡ 0 mod 4, but
+///   REAPPEARING at L3/L4/L6, RFC-049). Layout entry already refused
+///   `stacking > 1` with `max_inserter_tier < Stack`, so the forcing never
+///   violates the user's cap (debug-asserted).
+/// - `Reach::Near` at **S ≤ 1 && level > 0**: no belt stacking to force —
+///   cheapest-sufficient tier ladder, but each tier's belt-drop rate is
+///   research-scaled (`belt_drop_rate` at `stacking = 1`).
+/// - `Reach::Far` cannot stack (BS5: no reach-2 stacking inserter), but its
+///   long-handed belt-drop ceiling still rises with research (hand 1→2→4),
+///   so it routes through the research-scaled rate too. Callers only pass
+///   `Far` for stacking-exempt lanes; at level 0 this collapses back to
+///   flat `size_side` behavior.
+#[allow(clippy::too_many_arguments)]
 pub fn size_belt_drop_side(
     required: f64,
     reach: Reach,
@@ -180,32 +208,56 @@ pub fn size_belt_drop_side(
     max_tier: InserterTier,
     quality: QualityTier,
     stacking: u8,
+    level: u8,
 ) -> SidePlan {
-    if stacking <= 1 {
+    // Kill 1: no stacking, no research → exactly the flat ladder.
+    if stacking <= 1 && level == 0 {
         return size_side(required, reach, position_budget, max_tier, quality);
     }
+    let rate = |name: &str| belt_drop_rate(name, quality, stacking, level);
     match reach {
-        Reach::Far => size_side(required, Reach::Far, position_budget, max_tier, quality),
-        Reach::Near => {
+        // Reach-2 can't stack (BS5); long-handed only, research-scaled.
+        Reach::Far => size_side_rated(required, Reach::Far, position_budget, max_tier, rate),
+        // S>1 forcing: only stack inserters create belt stacks.
+        Reach::Near if stacking > 1 => {
             debug_assert!(
                 max_tier == InserterTier::Stack,
                 "layout entry must refuse stacking>1 with max_inserter_tier < Stack"
             );
-            let rate = stack_inserter_swings(quality) * stack_inserter_belt_hand(stacking);
-            let total_slots = position_budget + 1;
-            for n in 1..=total_slots {
-                if required <= n as f64 * rate + EPS {
-                    return SidePlan { entity: STACK, count: n, shortfall: None };
-                }
-            }
-            let placed = total_slots as f64 * rate;
-            SidePlan {
-                entity: STACK,
-                count: total_slots,
-                shortfall: Some((required - placed).max(0.0)),
-            }
+            count_ladder(STACK, rate(STACK), required, position_budget + 1)
         }
+        // S≤1, L>0: no forcing; cheapest-sufficient tier ladder at the
+        // research-scaled belt-drop rates.
+        Reach::Near => size_side_rated(required, Reach::Near, position_budget, max_tier, rate),
     }
+}
+
+/// Size a **stacking-exempt** belt-drop OUTPUT side (RFC-049 class (c):
+/// Fulgora D2b secondary outputs, self-loop major/minor outputs — sites
+/// that deliberately stay on the flat ladder under RFC-046 because their
+/// lane family plans unstacked, so they must NOT be stack-forced).
+///
+/// The belt-drop hand still scales with inserter-capacity research (the
+/// far long-handed output ceiling rises 1→2→4; near tiers scale linearly
+/// too), so this is the cheapest-sufficient tier/count ladder at the
+/// **unstacked** belt-drop rate (`belt_drop_rate` with `stacking = 1`) —
+/// no stack-forcing, exemption intact. At `level == 0` it is bit-identical
+/// to [`size_side`] (kill 1); a stacking value is never taken because the
+/// family is exempt by construction.
+pub fn size_side_output(
+    required: f64,
+    reach: Reach,
+    position_budget: usize,
+    max_tier: InserterTier,
+    quality: QualityTier,
+    level: u8,
+) -> SidePlan {
+    if level == 0 {
+        return size_side(required, reach, position_budget, max_tier, quality);
+    }
+    size_side_rated(required, reach, position_budget, max_tier, |name| {
+        belt_drop_rate(name, quality, 1, level)
+    })
 }
 
 /// Name the binding constraint behind a CAPPED side plan (RFC
@@ -310,10 +362,11 @@ mod tests {
 
     // ── size_belt_drop_side (RFC-046) ───────────────────────────────────
 
-    /// S ≤ 1 is definitionally `size_side` — sweep rates, reaches,
-    /// budgets, caps (kill 1).
+    /// S ≤ 1 AND level 0 is definitionally `size_side` — sweep rates,
+    /// reaches, budgets, caps (kill 1: bit-identity floor across the
+    /// stacking sweep at zero research).
     #[test]
-    fn belt_drop_identity_at_s1() {
+    fn belt_drop_identity_at_s1_l0() {
         let q = QualityTier::Normal;
         for &s in &[0u8, 1u8] {
             for &required in &[0.3, 0.9, 2.5, 8.0, 13.0, 30.0] {
@@ -323,7 +376,7 @@ mod tests {
                             &[InserterTier::Regular, InserterTier::Fast, InserterTier::Stack]
                         {
                             assert_eq!(
-                                size_belt_drop_side(required, reach, budget, cap, q, s),
+                                size_belt_drop_side(required, reach, budget, cap, q, s, 0),
                                 size_side(required, reach, budget, cap, q),
                                 "required={required} reach={reach:?} budget={budget} cap={cap:?} s={s}"
                             );
@@ -340,7 +393,7 @@ mod tests {
     #[test]
     fn belt_drop_forces_stack_above_s1() {
         let q = QualityTier::Normal;
-        let plan = size_belt_drop_side(0.5, Reach::Near, 0, InserterTier::Stack, q, 2);
+        let plan = size_belt_drop_side(0.5, Reach::Near, 0, InserterTier::Stack, q, 2, 0);
         assert_eq!(plan.entity, STACK);
         assert_eq!(plan.count, 1);
         assert_eq!(plan.shortfall, None);
@@ -352,12 +405,12 @@ mod tests {
     #[test]
     fn belt_drop_counts_track_hand_dip() {
         let q = QualityTier::Normal;
-        let s3 = size_belt_drop_side(20.0, Reach::Near, 2, InserterTier::Stack, q, 3);
+        let s3 = size_belt_drop_side(20.0, Reach::Near, 2, InserterTier::Stack, q, 3, 0);
         assert_eq!((s3.entity, s3.count, s3.shortfall), (STACK, 2, None));
-        let s4 = size_belt_drop_side(20.0, Reach::Near, 2, InserterTier::Stack, q, 4);
+        let s4 = size_belt_drop_side(20.0, Reach::Near, 2, InserterTier::Stack, q, 4, 0);
         assert_eq!((s4.entity, s4.count, s4.shortfall), (STACK, 3, None));
         // Budget exhausted → honest shortfall at the belt-drop rate.
-        let capped = size_belt_drop_side(20.0, Reach::Near, 0, InserterTier::Stack, q, 4);
+        let capped = size_belt_drop_side(20.0, Reach::Near, 0, InserterTier::Stack, q, 4, 0);
         assert_eq!(capped.entity, STACK);
         assert_eq!(capped.count, 1);
         let sf = capped.shortfall.expect("must record shortfall");
@@ -370,7 +423,7 @@ mod tests {
     fn belt_drop_far_passthrough() {
         let q = QualityTier::Normal;
         assert_eq!(
-            size_belt_drop_side(1.0, Reach::Far, 1, InserterTier::Stack, q, 4),
+            size_belt_drop_side(1.0, Reach::Far, 1, InserterTier::Stack, q, 4, 0),
             size_side(1.0, Reach::Far, 1, InserterTier::Stack, q),
         );
     }
@@ -386,8 +439,75 @@ mod tests {
             InserterTier::Stack,
             QualityTier::Legendary,
             4,
+            0,
         );
         assert_eq!((plan.entity, plan.count, plan.shortfall), (STACK, 1, None));
+    }
+
+    /// RFC-049 non-monotonicity pin: at S=4 the researched belt-hand
+    /// rounds DOWN to a multiple of 4 (`stack_inserter_belt_hand_at`), so
+    /// L2/L3/L4 all plateau at hand 8 (19.2/s) — the naive "each research
+    /// level adds capacity" model is WRONG here — then L5 jumps to hand 12
+    /// (28.8/s). An intermediate level therefore places MORE inserters than
+    /// a higher one at equal rate: at 20/s, L4 needs 2 stack inserters where
+    /// L5 needs 1, and L4 == L2 (the dip/plateau, not just endpoints).
+    #[test]
+    fn belt_drop_intermediate_dip_non_monotonic_s4() {
+        let q = QualityTier::Normal;
+        let count_at = |level: u8| {
+            size_belt_drop_side(20.0, Reach::Near, 2, InserterTier::Stack, q, 4, level).count
+        };
+        let (l2, l4, l5) = (count_at(2), count_at(4), count_at(5));
+        assert_eq!(l4, 2, "L4/S=4 belt-hand floors to 8 (19.2/s) → 2 inserters for 20/s");
+        assert_eq!(l5, 1, "L5/S=4 belt-hand is 12 (28.8/s) → 1 inserter for 20/s");
+        assert!(l4 > l5, "the mod-4 dip: L4 places MORE than L5 at equal rate (2 > 1)");
+        assert_eq!(l4, l2, "plateau: L2=L3=L4 (hands 8/9/10 all floor to 8) — research gives no benefit until L5");
+    }
+
+    // ── size_side_output (RFC-049 class (c): stacking-exempt outputs) ────
+
+    /// Level 0 is definitionally `size_side` (kill 1) — sweep rates,
+    /// reaches, budgets, caps.
+    #[test]
+    fn size_side_output_identity_at_l0() {
+        let q = QualityTier::Normal;
+        for &required in &[0.3, 0.9, 2.5, 8.0, 13.0, 30.0] {
+            for &reach in &[Reach::Near, Reach::Far] {
+                for budget in 0..=2usize {
+                    for &cap in &[InserterTier::Regular, InserterTier::Fast, InserterTier::Stack] {
+                        assert_eq!(
+                            size_side_output(required, reach, budget, cap, q, 0),
+                            size_side(required, reach, budget, cap, q),
+                            "required={required} reach={reach:?} budget={budget} cap={cap:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// The far (long-handed) output ceiling genuinely rises with research
+    /// (hand 1→2→4): 4.0/s shortfalls on one LHI at L0 (1.2/s) but a
+    /// single LHI covers it at L7 (4.8/s) — no belt stacking involved.
+    #[test]
+    fn size_side_output_far_ceiling_rises_with_research() {
+        let q = QualityTier::Normal;
+        let l0 = size_side_output(4.0, Reach::Far, 0, InserterTier::Stack, q, 0);
+        assert_eq!(l0.entity, LONG_HANDED);
+        assert!(l0.shortfall.is_some(), "4.0/s exceeds one LHI (1.2/s) at L0");
+        let l7 = size_side_output(4.0, Reach::Far, 0, InserterTier::Stack, q, 7);
+        assert_eq!((l7.entity, l7.count, l7.shortfall), (LONG_HANDED, 1, None));
+    }
+
+    /// Exemption intact: a near output side is NEVER stack-forced (unlike
+    /// `size_belt_drop_side` at S>1) — a low rate still gets the cheapest
+    /// tier even at max research.
+    #[test]
+    fn size_side_output_near_never_forces_stack() {
+        let q = QualityTier::Normal;
+        let plan = size_side_output(0.5, Reach::Near, 0, InserterTier::Stack, q, 7);
+        assert_eq!(plan.entity, REGULAR, "0.5/s is covered by a regular inserter; exempt side must not force stack");
+        assert_eq!(plan.count, 1);
     }
 
     // ── constants identity ──────────────────────────────────────────────
@@ -418,6 +538,41 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The belt-drop path (RFC-046 stacking + RFC-049 research) must source
+    /// its per-inserter rate from `common::belt_drop_rate` — the SAME
+    /// function the validator's `belt_drop_throughput` reads — so the
+    /// ladder and the check can never disagree. This pins the values that
+    /// function currently returns at the load-bearing (name, S, level)
+    /// points; drift fails loudly here rather than silently splitting the
+    /// fix from the check.
+    #[test]
+    fn belt_drop_constants_identity() {
+        use crate::common::belt_drop_rate;
+        let q = QualityTier::Normal;
+        // L0 collapses to the flat I8 constant at every S≤1 (kill 1) and to
+        // the RFC-046 stack decomposition at S>1 (level-0 sibling baseline).
+        assert_eq!(belt_drop_rate(STACK, q, 1, 0), 12.0);
+        assert_eq!(belt_drop_rate(FAST, q, 1, 0), 2.31);
+        assert_eq!(belt_drop_rate(REGULAR, q, 1, 0), 0.84);
+        assert!((belt_drop_rate(STACK, q, 2, 0) - 14.4).abs() < 1e-9);
+        assert!((belt_drop_rate(STACK, q, 4, 0) - 9.6).abs() < 1e-9); // S=4 dip
+        // Research scales the stack belt-hand: L7/S=4 heals (16 ≡ 0 mod 4)
+        // to 38.4/s = 2.4 × 16; the intermediate dip levels plateau at
+        // 19.2/s (L2=L3=L4, hands 8/9/10 all floor to 8) then jump at L5.
+        assert!((belt_drop_rate(STACK, q, 4, 7) - 38.4).abs() < 1e-9);
+        assert!((belt_drop_rate(STACK, q, 4, 2) - 19.2).abs() < 1e-9);
+        assert!((belt_drop_rate(STACK, q, 4, 3) - 19.2).abs() < 1e-9);
+        assert!((belt_drop_rate(STACK, q, 4, 4) - 19.2).abs() < 1e-9);
+        assert!((belt_drop_rate(STACK, q, 4, 5) - 28.8).abs() < 1e-9);
+        // Non-bulk output ceilings rise linearly by hand (1→2→4): far
+        // long-handed goes 1.2 → 4.8 at L7; regular/fast scale likewise.
+        assert!((belt_drop_rate(LONG_HANDED, q, 1, 7) - 1.2 * 4.0).abs() < 1e-9);
+        assert!((belt_drop_rate(FAST, q, 1, 7) - 2.31 * 4.0).abs() < 1e-9);
+        assert!((belt_drop_rate(REGULAR, q, 1, 2) - 0.84 * 2.0).abs() < 1e-9);
+        // Bulk stays flat at every level (never placed; conservative floor).
+        assert_eq!(belt_drop_rate("bulk-inserter", q, 1, 7), inserter_throughput("bulk-inserter", q));
     }
 
     // ── capped_limit derivation (RFC validation-explainability D2) ──────
