@@ -1,11 +1,16 @@
 //! RFC-051 Phase B: the linear/fan-out chain auto-placer.
 //!
 //! Generalizes the Phase-1 hand composers: cells are engine-generated
-//! per chain recipe (K=1 — one cell per recipe sized by the chain
-//! solve's machine counts; ratio quantization is a later optimization),
-//! placed west→east in dependency order, wired with template corridors
-//! only (straight, corner, UG-hop, 2→1 merge splitter, 1→2 fan-out
-//! splitter). Fan-out past an intervening cell routes through a SOUTH
+//! per chain recipe, placed west→east in dependency order, wired with
+//! template corridors only (straight, corner, UG-hop, 2→1 merge
+//! splitter, 1→2 fan-out splitter). Chains are RATIO-QUANTIZED
+//! (`required_copies`): K identical side-by-side copies each at 1/K of
+//! the chain rate, so no corridor or feed column ever exceeds express
+//! capacity — the Phase-1 K=3 pair topology generalized as a CAPACITY
+//! mechanism (its quality claim was falsified — see `QUANTUM_RATE`).
+//! K=1 chains compose bit-identically to the pre-quantization placer
+//! (the registry hashes depend on it).
+//! Fan-out past an intervening cell routes through a SOUTH
 //! BYPASS lane below the cell band — the south side is empty except the
 //! final drain, so the only crossings are known corridor rows, each
 //! resolved by a local UG hop.
@@ -34,6 +39,52 @@ const CORRIDOR_GAP: i32 = 6;
 /// Vertical lanes reserved on the east side of each slot's feed block
 /// for bypass descents/ascents.
 const VLANES: i32 = 2;
+/// Ratio-quantization quantum: the max rate any single belt carries —
+/// produced items ride one express corridor per copy, external inputs
+/// one express feed column per copy, both capped at express capacity.
+/// This is a PHYSICAL cap, deliberately not a quality tuning knob: a
+/// 15/s "measured-exact" quantum was tried and falsified — the Phase-1
+/// K=3 pairs' exact measurement was an artifact of pre-#378 harness
+/// tech state (researched inserter bonuses), and under declared
+/// capacity small rows measure WORSE (−24% vs −8%) because the row
+/// template's long-handed input inserters concentrate their deficit
+/// (#383; the fix is RFC-049 Phase 3 inserter sizing, not geometry).
+const QUANTUM_RATE: f64 = 45.0;
+/// Copy-count bound. Beyond this the footprint cost stops being honest
+/// scaling and the chain should be decomposed differently; refuse
+/// loudly.
+const K_MAX: i32 = 12;
+
+/// Smallest K such that every produced item and every external input
+/// item runs at ≤ `QUANTUM_RATE` per copy. Chains under the cap stay
+/// K=1 and compose bit-identically to the pre-quantization placer —
+/// quantization only activates where the placer previously refused.
+pub fn required_copies(sr: &SolverResult) -> i32 {
+    let produced: FxHashSet<&str> = sr
+        .machines
+        .iter()
+        .flat_map(|m| m.outputs.iter().map(|o| o.item.as_str()))
+        .collect();
+    let mut k = 1i32;
+    for m in &sr.machines {
+        for o in &m.outputs {
+            let total = o.rate * m.count;
+            k = k.max(((total / QUANTUM_RATE) - 1e-9).ceil() as i32);
+        }
+    }
+    let mut ext: FxHashMap<&str, f64> = FxHashMap::default();
+    for m in &sr.machines {
+        for i in &m.inputs {
+            if !produced.contains(i.item.as_str()) {
+                *ext.entry(i.item.as_str()).or_default() += i.rate * m.count;
+            }
+        }
+    }
+    for total in ext.values() {
+        k = k.max(((total / QUANTUM_RATE) - 1e-9).ceil() as i32);
+    }
+    k
+}
 
 /// Why a solve is not chain-composable. Stable strings — the candidate
 /// reports these as its `accepted_reason`.
@@ -66,19 +117,14 @@ pub fn chain_eligible(sr: &SolverResult) -> Result<(), String> {
             return Err(format!("cells: {item} produced by {n} specs (need exactly 1)"));
         }
     }
-    // Corridor capacity: every produced item rides ONE express corridor
-    // (45/s). Run-matching (bundled corridors) is future work — refuse
-    // honestly past the cap.
-    for m in &sr.machines {
-        for o in &m.outputs {
-            let total = o.rate * m.count;
-            if total > 45.0 + 1e-9 {
-                return Err(format!(
-                    "cells: {} at {total:.1}/s exceeds single-corridor capacity 45/s (run matching unimplemented)",
-                    o.item
-                ));
-            }
-        }
+    // Corridor capacity: ratio quantization bounds every copy's
+    // corridors at QUANTUM_RATE, so high rates raise the copy count
+    // instead of overloading a belt. Refuse only past the copy bound.
+    let k = required_copies(sr);
+    if k > K_MAX {
+        return Err(format!(
+            "cells: chain needs {k} quantized copies (max {K_MAX} at quantum {QUANTUM_RATE}/s)"
+        ));
     }
     Ok(())
 }
@@ -92,6 +138,13 @@ struct Placed {
     /// Base x of this slot's vertical-lane strip (east of feed columns).
     vlane_base: i32,
     recipe: String,
+    /// Segment-id name: the recipe, suffixed `#<copy>` when K>1 so the
+    /// belt validators never see two disjoint runs sharing a segment.
+    /// Equals `recipe` at K=1 (bit-identity).
+    seg: String,
+    /// Which quantized chain copy this slot belongs to. Corridors only
+    /// connect producer→consumer within one copy.
+    copy: i32,
     ext_inputs: Vec<String>,
 }
 
@@ -297,12 +350,17 @@ impl Router {
     }
 }
 
-/// Compose an eligible chain solve into one layout. K=1: one cell per
-/// recipe at the chain rate. Returns the composed layout with boundary
-/// records populated (calibrated orientation: north feeds, south drain,
-/// west→east record order — #363).
+/// Compose an eligible chain solve into one layout: K quantized copies
+/// (`required_copies`) of the chain placed side by side west→east, each
+/// copy one cell per recipe at 1/K of the chain rate with its own
+/// feeds, corridors, and drain — the Phase-1 pair-topology shape.
+/// Returns the composed layout with boundary records populated
+/// (calibrated orientation: north feeds, south drains, west→east
+/// record order — #363).
 pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
     chain_eligible(sr)?;
+    let kq = required_copies(sr);
+    let scale = 1.0 / kq as f64;
 
     let produced: FxHashSet<&str> = sr
         .machines
@@ -350,59 +408,74 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
     let mut placed: Vec<Placed> = Vec::new();
     let mut cursor = 0i32;
 
-    for m in &specs {
-        let out_item = m
-            .outputs
-            .first()
-            .ok_or_else(|| format!("cells: {} has no output", m.recipe))?
-            .item
-            .clone();
-        // outputs[].rate is PER-MACHINE; the cell serves the whole spec.
-        let rate = m.outputs[0].rate * m.count;
-        let input_names: Vec<&str> = m.inputs.iter().map(|i| i.item.as_str()).collect();
-        let (_csr, cl) = generate_cell_layout(&out_item, rate, &input_names);
-        let cell = extract_cell(&cl);
-        let ext_inputs: Vec<String> = m
-            .inputs
-            .iter()
-            .filter(|i| !produced.contains(i.item.as_str()))
-            .map(|i| i.item.clone())
-            .collect();
-        let n_feed_ports = cell
-            .ports
-            .iter()
-            .filter(|q| q.inbound && ext_inputs.contains(&q.item))
-            .count() as i32;
+    // Copies are identical — generate each spec's cell once (the cell
+    // generator runs the full engine; K=12 must not run it 12×).
+    let mut cell_cache: Vec<Cell> = Vec::with_capacity(n);
+    for copy in 0..kq {
+        for (si, m) in specs.iter().enumerate() {
+            let out_item = m
+                .outputs
+                .first()
+                .ok_or_else(|| format!("cells: {} has no output", m.recipe))?
+                .item
+                .clone();
+            // outputs[].rate is PER-MACHINE; the cell serves the whole
+            // spec's share of this copy.
+            let rate = m.outputs[0].rate * m.count * scale;
+            if copy == 0 {
+                let input_names: Vec<&str> = m.inputs.iter().map(|i| i.item.as_str()).collect();
+                let (_csr, cl) = generate_cell_layout(&out_item, rate, &input_names);
+                cell_cache.push(extract_cell(&cl));
+            }
+            let cell = cell_cache[si].clone();
+            let ext_inputs: Vec<String> = m
+                .inputs
+                .iter()
+                .filter(|i| !produced.contains(i.item.as_str()))
+                .map(|i| i.item.clone())
+                .collect();
+            let n_feed_ports = cell
+                .ports
+                .iter()
+                .filter(|q| q.inbound && ext_inputs.contains(&q.item))
+                .count() as i32;
 
-        let n_out_runs = cell.ports.iter().filter(|q| !q.inbound).count() as i32;
-        let n_consumers = sr
-            .machines
-            .iter()
-            .filter(|c| c.inputs.iter().any(|i| i.item == out_item))
-            .count() as i32;
-        // Gap: base + 2 per extra merge stage + 2 per extra fan-out stage.
-        let gap = CORRIDOR_GAP + 2 * (n_out_runs - 1).max(0) + 2 * (n_consumers - 1).max(0);
-        let slot_x = cursor;
-        let feed_w = FEED_PITCH * n_feed_ports + 1;
-        let vlane0 = slot_x + feed_w;
-        let strip = VLANES + lane_demand[placed.len()];
-        let x = vlane0 + strip + 1;
-        cursor = x + cell.width + gap;
+            let n_out_runs = cell.ports.iter().filter(|q| !q.inbound).count() as i32;
+            let n_consumers = sr
+                .machines
+                .iter()
+                .filter(|c| c.inputs.iter().any(|i| i.item == out_item))
+                .count() as i32;
+            // Gap: base + 2 per extra merge stage + 2 per extra fan-out stage.
+            let gap = CORRIDOR_GAP + 2 * (n_out_runs - 1).max(0) + 2 * (n_consumers - 1).max(0);
+            let slot_x = cursor;
+            let feed_w = FEED_PITCH * n_feed_ports + 1;
+            let vlane0 = slot_x + feed_w;
+            let strip = VLANES + lane_demand[si];
+            let x = vlane0 + strip + 1;
+            cursor = x + cell.width + gap;
 
-        for e in &cell.entities {
-            let mut e = e.clone();
-            e.x += x;
-            e.y += CELL_Y;
-            entities.push(e);
+            for e in &cell.entities {
+                let mut e = e.clone();
+                e.x += x;
+                e.y += CELL_Y;
+                entities.push(e);
+            }
+            placed.push(Placed {
+                cell,
+                x,
+                slot_x,
+                vlane_base: vlane0,
+                recipe: m.recipe.clone(),
+                seg: if kq > 1 {
+                    format!("{}#{}", m.recipe, copy + 1)
+                } else {
+                    m.recipe.clone()
+                },
+                copy,
+                ext_inputs,
+            });
         }
-        placed.push(Placed {
-            cell,
-            x,
-            slot_x,
-            vlane_base: vlane0,
-            recipe: m.recipe.clone(),
-            ext_inputs,
-        });
     }
 
     let band_bottom = CELL_Y
@@ -438,7 +511,7 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
                 &[(col_x, 0), (col_x, *ty), (tx - 1, *ty)],
                 item,
                 "express-transport-belt",
-                &format!("feed:{item}:{}", p.recipe),
+                &format!("feed:{item}:{}", p.seg),
             );
             router.register_col(col_x, 0, *ty);
             router.register_row(*ty, col_x, tx - 1);
@@ -455,20 +528,21 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
 
     // Bypass rows sit between the band bottom and the drain row, so the
     // sim's drain rig (which builds south of the drain head) never
-    // collides with them. Count bypass edges up front.
-    let n_bypass: i32 = placed
+    // collides with them. Count bypass edges up front — PER COPY: the
+    // copies' x-ranges are disjoint, so every copy reuses the same rows.
+    let n_bypass: i32 = specs
         .iter()
         .enumerate()
-        .map(|(pi, _)| {
-            let out_item = &specs[pi].outputs[0].item;
-            placed
+        .map(|(pi, m)| {
+            let out_item = &m.outputs[0].item;
+            specs
                 .iter()
                 .enumerate()
                 .filter(|(ci, c)| {
                     *ci != pi
                         && *ci != pi + 1
-                        && specs[*ci].inputs.iter().any(|i| i.item == *out_item)
-                        && c.cell.ports.iter().any(|q| q.inbound && q.item == *out_item)
+                        && c.inputs.iter().any(|i| i.item == *out_item)
+                        && cell_cache[*ci].ports.iter().any(|q| q.inbound && q.item == *out_item)
                 })
                 .count() as i32
         })
@@ -477,7 +551,8 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
 
     // --- Chain corridors: producer out → merge (if 2 runs) → fan-out
     // split (if 2 consumers) → per-consumer routing via the Router.
-    let mut bypass_idx = 0i32;
+    // Bypass rows allocate per copy (disjoint x-ranges share rows).
+    let mut bypass_idx: FxHashMap<i32, i32> = FxHashMap::default();
     // Per-slot vertical-lane allocation: each bypass descent/ascent
     // claims a fresh lane in its slot's strip (two edges sharing a lane
     // was the mil5-ore overlap class).
@@ -489,13 +564,16 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
         x
     };
     for (pi, p) in placed.iter().enumerate() {
-        let out_item = specs[pi].outputs[0].item.clone();
+        let out_item = specs[pi % n].outputs[0].item.clone();
+        // Consumers within THIS copy only — the same item flows in every
+        // copy, and cross-copy corridors would defeat the quantization.
         let consumers: Vec<usize> = placed
             .iter()
             .enumerate()
             .filter(|(ci, c)| {
                 *ci != pi
-                    && specs[*ci].inputs.iter().any(|i| i.item == out_item)
+                    && c.copy == p.copy
+                    && specs[*ci % n].inputs.iter().any(|i| i.item == out_item)
                     && c.cell.ports.iter().any(|q| q.inbound && q.item == out_item)
             })
             .map(|(ci, _)| ci)
@@ -506,7 +584,7 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
             let o1 = outs.first().ok_or_else(|| format!("cells: {} has no out port", p.recipe))?;
             let (ox, oy) = port_abs(o1, p.x);
             let drain_x = ox + 2;
-            let seg = format!("out:{}", p.recipe);
+            let seg = format!("out:{}", p.seg);
             router.hrow(&mut entities, oy, ox + 1, drain_x - 1, &out_item,
                 "transport-belt", "underground-belt", &seg);
             entities.push(PlacedEntity {
@@ -537,12 +615,12 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
         let (acc_x0, acc_y) = port_abs(outs_sorted[0], p.x);
         let base_sx = p.x + p.cell.width + 2;
         router.hrow(&mut entities, acc_y, acc_x0 + 1, base_sx - 1, &out_item,
-            "express-transport-belt", "express-underground-belt", &format!("cc:a:{}", p.recipe));
+            "express-transport-belt", "express-underground-belt", &format!("cc:a:{}", p.seg));
         let mut run_x = base_sx;
         for (k, o) in outs_sorted.iter().enumerate().skip(1) {
             let (ox, oy) = port_abs(o, p.x);
             assert!(oy > acc_y + 1, "cells: merge assumes below-approach ({oy} vs {acc_y})");
-            let seg = format!("cc:b{k}:{}", p.recipe);
+            let seg = format!("cc:b{k}:{}", p.seg);
             router.hrow(&mut entities, oy, ox + 1, run_x - 2, &out_item,
                 "express-transport-belt", "express-underground-belt", &seg);
             router.corner_north(&mut entities, run_x - 1, oy, &out_item, "express-transport-belt", &seg);
@@ -553,12 +631,12 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
                 name: "express-splitter".into(), x: run_x, y: acc_y,
                 direction: EntityDirection::East,
                 carries: Some(out_item.clone()),
-                segment_id: Some(format!("cc:m{k}:{}", p.recipe)), ..Default::default()
+                segment_id: Some(format!("cc:m{k}:{}", p.seg)), ..Default::default()
             });
             run_x += 2;
             if k < outs_sorted.len() - 1 {
                 // Bridge to the next merge stage's input tile.
-                router.corner_east(&mut entities, run_x - 1, acc_y, &out_item, "fast-transport-belt", &format!("cc:a:{}", p.recipe));
+                router.corner_east(&mut entities, run_x - 1, acc_y, &out_item, "fast-transport-belt", &format!("cc:a:{}", p.seg));
             }
         }
         let run_y = acc_y;
@@ -578,11 +656,11 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
                 name: "express-splitter".into(), x: fx, y: run_y,
                 direction: EntityDirection::East,
                 carries: Some(out_item.clone()),
-                segment_id: Some(format!("fan{b}:{}", p.recipe)), ..Default::default()
+                segment_id: Some(format!("fan{b}:{}", p.seg)), ..Default::default()
             });
             branch_origins.push((fx + 1, run_y + 1));
             if b < n_branches - 1 {
-                router.corner_east(&mut entities, fx + 1, run_y, &out_item, "fast-transport-belt", &format!("fan:{}", p.recipe));
+                router.corner_east(&mut entities, fx + 1, run_y, &out_item, "fast-transport-belt", &format!("fan:{}", p.seg));
             }
             fx += 2;
         }
@@ -601,7 +679,7 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
                 .expect("consumer port checked in eligibility");
             let (tx, ty) = port_abs(port, c.x);
             let (bx, by) = branch_origins[bi];
-            let seg = format!("corr:{}:{}", p.recipe, c.recipe);
+            let seg = format!("corr:{}:{}", p.seg, c.seg);
             if *ci == pi + 1 {
                 if by == ty {
                     router.hrow(&mut entities, ty, bx, tx - 1, &out_item,
@@ -622,10 +700,15 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
                 }
             } else {
                 // South bypass below the cell band.
+                // In-copy by construction: the last slot of a copy is
+                // always the sink (dependency order), which has no
+                // consumers and never reaches this branch.
+                debug_assert_eq!(placed[pi + 1].copy, p.copy, "bypass descent lane must stay in-copy");
                 let lane_down = alloc_lane(&mut lane_next, pi + 1, placed[pi + 1].vlane_base);
                 let lane_up = alloc_lane(&mut lane_next, *ci, c.vlane_base);
-                let by_y = band_bottom + 1 + bypass_idx;
-                bypass_idx += 1;
+                let row = bypass_idx.entry(p.copy).or_insert(0);
+                let by_y = band_bottom + 1 + *row;
+                *row += 1;
                 router.hrow(&mut entities, by, bx, lane_down - 1, &out_item,
                     "express-transport-belt", "express-underground-belt", &seg);
                 router.vcol(&mut entities, lane_down, by, by_y - 1, &out_item,

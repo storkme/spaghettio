@@ -198,22 +198,30 @@ bit-identical to pre-RFC (zero golden re-blesses). Mechanics:
 ore-routing warnings persist on legendary-express). Full trail:
 [`rfc-046-belt-stacking.md`](rfc-046-belt-stacking.md) decision log.
 
-**`rfc-051-cell-composition-integration.md` close-out (2026-07-22)**:
-cell composition became a **production path** — a flag-gated
-`CellComposedCandidate` (default Off, bus bit-identical) competing
-unbiased in the decomposition search for solid tree-with-fan-out
-chains. The chain auto-placer generalizes the Phase-1 hand composers
-(engine-generated K=1 cells, two-registry crossing Router, fan-out
-splitter + south bypass). Gate passed: **AC-from-plates composed at
-0 errors / 0 warnings and ran at plan in headless Factorio (1.00/s,
-8/8 working)**; EC@15-from-plates — the
-[#336](https://github.com/storkme/spaghettio/issues/336) refusal —
-resolves under the flag at 0 errors (permanent gate pins both
-directions) and measured 15.0/s exactly. Differential scoreboard:
-composition wins where the bus refuses, bus wins on area where both
-succeed (1.5–3.1×) — the unbiased scorer therefore only ever picks
-composition on refusals. Flag flip deferred (browser eyeball, wasm
-plumbing, sim-verified registry). Full trail:
+**`rfc-051-cell-composition-integration.md` close-out (2026-07-22,
+updated 2026-07-23)**: cell composition is a **production path ON BY
+DEFAULT** — `CellComposedCandidate` (default Candidate since the flip;
+`cc=off` escape hatch) competes unbiased in the decomposition search
+for solid tree-with-fan-out chains; strictly additive (bus wins on
+area where both succeed, composition surfaces only on refusals; suite
++ goldens unchanged under the flipped default). The chain auto-placer:
+engine-generated cells, two-registry crossing Router, merge cascades,
+fan-out trees, south bypass, and **ratio quantization** (K side-by-side
+copies at 1/K rate so no corridor/feed exceeds express 45/s; K=1
+bit-identical, proven by the registered geometry hash). Composed
+coverage at the validator level: EC@15 (the
+[#336](https://github.com/storkme/spaghettio/issues/336) refusal),
+EC@15-from-ore (furnace cells), EC@30 and EC@60 (pre-quantization
+refusals; bus validation-fails ec60). Measured-at-plan claims live in
+the sim-verified registry (geometry-hashed, checked-in): currently
+AC-from-plates (1.00/s, 8/8 working). EC-row geometries measure −8%
+under tech-state parity — the validator's inserter-item-throughput
+warnings turned out RIGHT under declared capacity (the Phase-1 "15.0/s
+exact" was a pre-#378 researched-bonus artifact;
+[#383](https://github.com/storkme/spaghettio/issues/383) has the
+forensics) — re-measure after RFC-049 Phase 3 inserter sizing
+([#381](https://github.com/storkme/spaghettio/issues/381)). Full
+trail:
 [`rfc-051-cell-composition-integration.md`](rfc-051-cell-composition-integration.md).
 
 **`rfc-048-cell-composition.md` Phase-1 close-out (2026-07-22, PR #365)**:

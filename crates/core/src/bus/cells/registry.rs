@@ -42,7 +42,11 @@ fn registry() -> &'static [RegistryEntry] {
 
 /// Stable FNV-1a-64 over the sorted entity list. Deliberately NOT the
 /// std hasher (its output is not guaranteed stable across toolchains,
-/// and the registry is checked-in data).
+/// and the registry is checked-in data). Covers every field that
+/// changes measured behavior: name, position, direction, io role,
+/// carries, RECIPE, and module contents (#384 review finding 2 — a
+/// recipe reassignment or module change at the same tile must miss the
+/// registry, not keep a stale SIM-VERIFIED claim).
 pub fn geometry_hash(l: &LayoutResult) -> u64 {
     const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const PRIME: u64 = 0x0000_0100_0000_01b3;
@@ -50,14 +54,25 @@ pub fn geometry_hash(l: &LayoutResult) -> u64 {
         .entities
         .iter()
         .map(|e| {
+            let modules: String = {
+                let mut ms: Vec<String> = e
+                    .items
+                    .iter()
+                    .map(|m| format!("{}x{}", m.item, m.count))
+                    .collect();
+                ms.sort_unstable();
+                ms.join(",")
+            };
             format!(
-                "{}|{}|{}|{}|{}|{}",
+                "{}|{}|{}|{}|{}|{}|{}|{}",
                 e.name,
                 e.x,
                 e.y,
                 e.direction as u8,
                 e.io_type.as_deref().unwrap_or(""),
-                e.carries.as_deref().unwrap_or("")
+                e.carries.as_deref().unwrap_or(""),
+                e.recipe.as_deref().unwrap_or(""),
+                modules
             )
         })
         .collect();

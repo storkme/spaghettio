@@ -223,6 +223,71 @@ follow-ups.
 
 ## Decision log
 
+- *2026-07-22 — K-quantization + #383 ROOT CAUSE (the premise
+  falsified mid-implementation). Ratio quantization landed in
+  `compose_chain`: K identical side-by-side copies at 1/K rate
+  (`required_copies`), copies generated once and stamped K times,
+  producer→consumer matching restricted within a copy, per-copy segment
+  suffixes, bypass rows reused across copies (disjoint x), K_MAX=12.
+  K=1 is bit-identical to the pre-quantization placer — proven by the
+  registered chain-ac1 hash surviving unchanged. **The plan's premise
+  died on first sim contact**: quantum=15/s ("the measured-exact
+  Phase-1 rate") produced ec15 K=3 at −23.7% — WORSE than K=1's −8%.
+  Belt-dump forensics + tile diff against the hand-composed pair showed
+  identical cell geometry, iron arriving on both lanes, and the east
+  machine's single long-handed iron inserter delivering ~1.2/s against
+  a 2.5/s need — exactly the validator's inserter-item-throughput
+  warning. The hand-composed K=3's "15.0/s EXACT" and the K=1 fixture's
+  earlier PASS both predate #378 (tech-state parity: the sim now forces
+  bonuses to the layout's declared inserter_capacity=0); the PASS-era
+  report lacks the realized-bonus fields entirely. So: the warnings
+  were RIGHT under declared tech, the "sim-adjudicated conservatism"
+  verdict was a researched-bonus artifact, the package-2 log's
+  splitter-saturation-loss speculation is retired (fast and express
+  measured identical deltas), and small rows CONCENTRATE the
+  per-machine inserter deficit rather than fixing it. Quantum reshaped
+  to 45/s = express capacity — a physical cap, not a quality knob:
+  quantization now activates only where the placer previously refused,
+  so every K=1 geometry (ec15, ec15-ore, ac1, ac2, mil5-plates) is
+  bit-identical to the flip package. Verification: ec30 K=2 (each copy
+  ≡ the ec15 K=1 shape) predicted ≈−8% and measured **−8.0% exactly**
+  (WARN, 28/30 working) — the deficit is per-row, K-invariant, and
+  belongs to RFC-049 Phase 3 (#381, in flight), after which cells
+  regenerate with honest inserter counts, every registry hash trips,
+  and ec15/ec30 get re-measured for registration. Scoreboard: ec30
+  REFUSED→140×21 0 err/12 warn; ec60 REFUSED→280×21 0/24 (bus
+  validation-fails there); mil5-ore goes K=2 (stone feed 50/s exceeds
+  the per-copy feed cap) and its Router-class overlaps persist (8, was
+  5 at K=1) — still the named next target. No registry additions: the
+  registry carries measured-at-plan only. **Belt-tier guard**: the
+  eligibility lift exposed a latent flip-era hole — composed corridors
+  are express-only, and an eligible chain whose bus path fails under a
+  sub-express `max_belt_tier` would have won with express corridors,
+  violating the tier-is-a-user-constraint rule. The candidate now
+  refuses under any sub-express cap (gate:
+  `cell_candidate_respects_belt_tier_cap` proves flag-inertness there);
+  tier-parameterized corridors (quantum = allowed tier's capacity,
+  tier-matched belt entities) are the followup if tier-capped
+  composition is ever wanted. Stress goldens under the lifted
+  eligibility: 9 ran, 0 drift (bus wins all blessed fixtures on
+  density; the canonical `stress_` check-mode run). **Adversarial
+  review folds** (bot silent on both PRs — known-broken class; local
+  reviews ran instead): #384's review (no blockers) → registry hash
+  extended to cover machine recipe + module contents (chain-ac1 entry
+  re-encoded, geometry unchanged — proven by recomputing the OLD
+  algorithm on the new geometry). #387's review (no blockers; all five
+  probed claims verified by measurement, incl. dual-worktree
+  bit-identity diffs on ec5/gear15) → the candidate now SELF-VALIDATES
+  and refuses on Severity::Error: `score_layout.accepted` never runs
+  the full validator, so an error-laden composed "win" on a bus
+  refusal previously reached callers as a silently broken Ok
+  (mil5-ore, pre-existing on main, blast radius widened by the
+  eligibility lift). Gate `cell_candidate_refuses_error_laden_
+  composition` pins mil5-ore as Err-until-fixed; the reviewer's
+  in-copy bypass invariant is now a debug_assert. Followup candidates
+  noted, not taken here: structural additivity enforcement (ties
+  currently resolve toward cells), tier-parameterized corridors.*
+
 - *2026-07-22 — Coverage expansion (package 2, follows the flip). Caps
   lifted: n-run MERGE CASCADES (2→1 splitter chains, below-approach
   corner per stage) and FAN-OUT TREES (1→2 splitter chains) replace the
