@@ -62,5 +62,6 @@ backfill the status next time the doc is touched.
 | RFC-048 | 2026-07-22 | [`rfc-048-cell-composition.md`](rfc-048-cell-composition.md) | Spike (Phase 0 recon open; PR #341) |
 | RFC-049 | 2026-07-22 | [`rfc-049-inserter-capacity-research.md`](rfc-049-inserter-capacity-research.md) | Complete (in-game anchor open; input-side data gap #343) |
 | RFC-050 | 2026-07-22 | [`rfc-050-headless-sim-harness.md`](rfc-050-headless-sim-harness.md) | Complete (fluid feed CALIBRATED via #364 — first fluid factory PASS; fluid-pack sweep + #345 re-measure open) |
+| RFC-051 | 2026-07-22 | [`rfc-051-cell-composition-integration.md`](rfc-051-cell-composition-integration.md) | Draft (integration RFC commissioned by RFC-048 Phase 1 GO) |
 
-Next number: **RFC-051**.
+Next number: **RFC-052**.
