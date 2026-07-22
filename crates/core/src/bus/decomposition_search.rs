@@ -157,6 +157,30 @@ impl DecompositionCandidate for CellComposedCandidate {
             }
         }
         let mut l = crate::bus::cells::chain::compose_chain(solver_result)?;
+        // Self-validate before competing: `score_layout.accepted` never
+        // runs the full validator, so an error-laden composition that
+        // "wins" on a bus refusal would reach real callers as a
+        // silently broken Ok (#387 review; mil5-ore's Router-overlap
+        // class). Composition's contract is pre-verified cells +
+        // template corridors — errors refuse, surfacing the bus
+        // refusal instead. Warnings pass (the adjudicated categories).
+        let issues =
+            crate::validate::validate(&l, Some(solver_result), crate::validate::LayoutStyle::Bus)
+                .map_err(|e| {
+                    format!(
+                        "cell composition failed validation: {}",
+                        e.to_string().lines().next().unwrap_or("")
+                    )
+                })?;
+        let n_err = issues
+            .iter()
+            .filter(|i| i.severity == crate::validate::Severity::Error)
+            .count();
+        if n_err > 0 {
+            return Err(format!(
+                "cell composition carries {n_err} validation errors (refusing a broken layout)"
+            ));
+        }
         // Tier-1 verification annotation (RFC-051 registry): sim-verified
         // geometries carry their measurement; unverified ones say so.
         if let Some(t) = solver_result.external_outputs.first() {

@@ -530,6 +530,27 @@ fn cell_candidate_respects_belt_tier_cap() {
     layout::build_bus_layout(&sr, opts).expect("express-capped EC@15 must compose");
 }
 
+/// PERMANENT GATE (#387 review finding): a composed candidate that
+/// carries validation ERRORS must refuse — never win a bus refusal as
+/// a silently broken Ok (`score_layout.accepted` doesn't run the full
+/// validator). mil5-ore is the live specimen: bus refuses on lane
+/// capacity, composition carries the Router-overlap class, so the
+/// whole build must Err until one of them is fixed. If this gate fails
+/// with an Ok layout, either the overlaps got fixed (move mil5-ore to
+/// the positive gates — a capability win) or the self-validation
+/// regressed (a bug).
+#[test]
+fn cell_candidate_refuses_error_laden_composition() {
+    let inputs: FxHashSet<String> =
+        ["iron-ore", "copper-ore", "stone", "coal"].iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "military-science-pack", 5.0, &inputs, &MachinePalette::default(),
+        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+    ).unwrap();
+    let r = layout::build_bus_layout(&sr, layout::LayoutOptions::default());
+    assert!(r.is_err(), "mil5-ore must refuse (bus lane-capacity + composed overlaps), not return a broken layout");
+}
+
 #[test]
 #[ignore = "debug probe"]
 fn probe_mil5_errors() {

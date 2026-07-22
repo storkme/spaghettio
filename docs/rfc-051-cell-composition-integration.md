@@ -270,7 +270,23 @@ follow-ups.
   tier-matched belt entities) are the followup if tier-capped
   composition is ever wanted. Stress goldens under the lifted
   eligibility: 9 ran, 0 drift (bus wins all blessed fixtures on
-  density; the canonical `stress_` check-mode run).*
+  density; the canonical `stress_` check-mode run). **Adversarial
+  review folds** (bot silent on both PRs — known-broken class; local
+  reviews ran instead): #384's review (no blockers) → registry hash
+  extended to cover machine recipe + module contents (chain-ac1 entry
+  re-encoded, geometry unchanged — proven by recomputing the OLD
+  algorithm on the new geometry). #387's review (no blockers; all five
+  probed claims verified by measurement, incl. dual-worktree
+  bit-identity diffs on ec5/gear15) → the candidate now SELF-VALIDATES
+  and refuses on Severity::Error: `score_layout.accepted` never runs
+  the full validator, so an error-laden composed "win" on a bus
+  refusal previously reached callers as a silently broken Ok
+  (mil5-ore, pre-existing on main, blast radius widened by the
+  eligibility lift). Gate `cell_candidate_refuses_error_laden_
+  composition` pins mil5-ore as Err-until-fixed; the reviewer's
+  in-copy bypass invariant is now a debug_assert. Followup candidates
+  noted, not taken here: structural additivity enforcement (ties
+  currently resolve toward cells), tier-parameterized corridors.*
 
 - *2026-07-22 — Coverage expansion (package 2, follows the flip). Caps
   lifted: n-run MERGE CASCADES (2→1 splitter chains, below-approach

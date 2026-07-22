@@ -700,6 +700,10 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
                 }
             } else {
                 // South bypass below the cell band.
+                // In-copy by construction: the last slot of a copy is
+                // always the sink (dependency order), which has no
+                // consumers and never reaches this branch.
+                debug_assert_eq!(placed[pi + 1].copy, p.copy, "bypass descent lane must stay in-copy");
                 let lane_down = alloc_lane(&mut lane_next, pi + 1, placed[pi + 1].vlane_base);
                 let lane_up = alloc_lane(&mut lane_next, *ci, c.vlane_base);
                 let row = bypass_idx.entry(p.copy).or_insert(0);
