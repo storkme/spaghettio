@@ -355,12 +355,16 @@ its own.
 composed with straight runs, B11 corners, one 2→1 splitter, UG hops,
 and a pipe column — no negotiated congestion, no junction solving.
 
-**Gate (a) — sim verification:** EC ratio pair **SIM-VERIFIED AT
-PLAN**. Fluid cell: composition-clean (0/0), sim BLOCKED by the
-harness's fluid path — proven by controlled attribution (the
-engine's own plastic layout starves identically; #364, full
-diagnostic bundle attached). The fluid entry's stated purpose was to
-be the calibration forcing function: datum delivered. **Gate (b)**:
+**Gate (a) — sim verification: FULLY MET (amended post-#373).** EC
+ratio pair **SIM-VERIFIED AT PLAN**. Fluid cell: composition-clean
+(0/0); its sim run was blocked by what controlled attribution proved
+to be a shared-path fault (#364) — root-caused to the exporter's
+pipe-to-ground direction convention and fixed in #373, at which point
+the composed plastic cell **PASSED at plan** (produced 2.20/s vs 2.00
+planned, machine `working`, verified on this branch merged with
+post-#373 main). The fluid entry's stated purpose was to be the
+calibration forcing function: it forced out the single highest-impact
+export bug found to date. **Gate (b)**:
 delivered and measured. **Gate (c)**: variant-is-a-parameter verdict
 — the end-state is a plan.
 
@@ -381,6 +385,20 @@ rules (4-tile rig pitch, west→east record ordering) encoded in the
 composer until fixed harness-side.
 
 ## Decision log
+
+- *2026-07-22 — Gate (a) CLOSED IN FULL (post-#373). The #364 forcing
+  function worked better than designed: the blocked fluid sim was
+  root-caused (via the pipe-dump observability this RFC's entry
+  demanded) to the exporter emitting pipe-to-ground directions 180°
+  inverted vs the game — every fluid-bearing blueprint ever exported
+  had severed pipes in-game while validating clean. Fixed in #373
+  (artifact-boundary flip, the #348 inserter pattern). Composed
+  plastic cell re-verified on this branch + post-#373 main:
+  **produced 2.20/s vs 2.00 planned, delivered 2.13/s, machine
+  `working`, OVERALL PASS** — both Phase-1 catalog entries are now
+  sim-verified at plan. The close-out's gate (a) paragraph is amended
+  in place; kill evaluations unchanged (they never leaned on the
+  blocked half).*
 
 - *2026-07-22 — PR #365 review folded (deep session-side review;
   verdict approve-in-principle after rebase). Three artifact-decode
