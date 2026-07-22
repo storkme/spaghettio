@@ -13,6 +13,12 @@ export interface DebugState {
   /** Module slots (RFC-044 Phase 2): draw the in-game-style module slot
    *  row on entities carrying `items`. */
   moduleSlots: boolean;
+  /** Sim-state overlay (RFC-050 Phase 4): tint machines/belts/inserters
+   *  from a loaded `spaghettio-sim` report. The checkbox itself is
+   *  disabled in the DOM (`overlayPanel.ts`) whenever no report is
+   *  loaded — this flag just remembers the user's preference for next
+   *  time one is. */
+  simState: boolean;
 }
 
 type Subscriber = (state: DebugState) => void;
@@ -28,6 +34,7 @@ let state: DebugState = {
   heatmap: false,
   powerWires: false,
   moduleSlots: true,
+  simState: true,
 };
 
 const subs: Subscriber[] = [];
@@ -42,6 +49,7 @@ export function create(): void {
   const heatmapStored = localStorage.getItem("fk-heatmap") === "1";
   const powerWiresStored = localStorage.getItem("fk-power-wires") === "1";
   const moduleSlotsStored = localStorage.getItem("fk-module-slots");
+  const simStateStored = localStorage.getItem("fk-sim-state");
   state = {
     ...state,
     master: fromParam || fromStorage,
@@ -56,6 +64,11 @@ export function create(): void {
     // stays quiet by default; same "stored===null → default true"
     // pattern as itemColors.
     moduleSlots: moduleSlotsStored === null ? true : moduleSlotsStored === "1",
+    // Default ON (RFC-050 Phase 4) — same reasoning: the overlay only
+    // draws once a report is loaded (the DOM checkbox is disabled until
+    // then, see `overlayPanel.ts`), so defaulting true is quiet until
+    // it's meaningful.
+    simState: simStateStored === null ? true : simStateStored === "1",
   };
 }
 
@@ -88,6 +101,9 @@ export function set(patch: Partial<DebugState>): void {
   }
   if ("moduleSlots" in patch) {
     localStorage.setItem("fk-module-slots", patch.moduleSlots ? "1" : "0");
+  }
+  if ("simState" in patch) {
+    localStorage.setItem("fk-sim-state", patch.simState ? "1" : "0");
   }
   for (const cb of subs) cb(state);
 }
