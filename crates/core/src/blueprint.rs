@@ -156,7 +156,17 @@ pub fn export(layout: &LayoutResult, label: &str) -> String {
                         y: ent.y as f64 + h as f64 / 2.0,
                     }
                 },
-                direction: ent.direction as u8,
+                // GAME QUIRK (found by the RFC-050 harness, 2026-07-22):
+                // Factorio reads an INSERTER's direction as its PICKUP
+                // side ("inserters point backwards"), while the engine's
+                // convention is drop-side. Flip 180° at the artifact
+                // boundary — the parser un-flips on import — or every
+                // exported inserter runs backwards in-game.
+                direction: if ent.name.contains("inserter") {
+                    (ent.direction as u8 + 8) % 16
+                } else {
+                    ent.direction as u8
+                },
                 recipe: ent.recipe.as_deref(),
                 io_type: ent.io_type.as_deref(),
                 mirror: ent.mirror,
@@ -322,6 +332,77 @@ mod tests {
         assert!(ents[0].get("mirror").is_none());
         // recipe should be absent for belt
         assert!(ents[1].get("recipe").is_none());
+    }
+
+    /// Factorio reads an inserter's `direction` as its PICKUP side
+    /// ("inserters point backwards" — found by the RFC-050 harness when
+    /// every exported factory deadlocked in-sim: input inserters pulled
+    /// from empty machines, outputs from empty belts). The engine's
+    /// convention is drop-side, so export must flip 180° and ONLY for
+    /// inserters.
+    #[test]
+    fn inserter_directions_flip_to_game_convention() {
+        let layout = LayoutResult {
+            entities: vec![
+                PlacedEntity {
+                    name: "stack-inserter".into(),
+                    x: 0,
+                    y: 0,
+                    direction: EntityDirection::South,
+                    ..Default::default()
+                },
+                PlacedEntity {
+                    name: "long-handed-inserter".into(),
+                    x: 2,
+                    y: 0,
+                    direction: EntityDirection::North,
+                    ..Default::default()
+                },
+                PlacedEntity {
+                    name: "transport-belt".into(),
+                    x: 4,
+                    y: 0,
+                    direction: EntityDirection::South,
+                    ..Default::default()
+                },
+            ],
+            width: 5,
+            height: 1,
+            ..Default::default()
+        };
+        let bp = decode_blueprint(&export(&layout, "dirflip"));
+        let ents = bp["entities"].as_array().unwrap();
+        // Engine South (8) exports as game North (0) for inserters…
+        assert_eq!(ents[0]["direction"], 0);
+        // …engine North (0) as game South (8)…
+        assert_eq!(ents[1]["direction"], 8);
+        // …and non-inserters are untouched.
+        assert_eq!(ents[2]["direction"], 8);
+    }
+
+    /// The parser applies the inverse flip so imported game-convention
+    /// inserters read correctly under engine semantics, and round-trips
+    /// are identity.
+    #[test]
+    fn inserter_direction_round_trip_is_identity() {
+        let layout = LayoutResult {
+            entities: vec![PlacedEntity {
+                name: "fast-inserter".into(),
+                x: 0,
+                y: 0,
+                direction: EntityDirection::East,
+                ..Default::default()
+            }],
+            width: 1,
+            height: 1,
+            ..Default::default()
+        };
+        let s = export(&layout, "rt");
+        // Artifact carries the game convention (East 4 → West 12)…
+        assert_eq!(decode_blueprint(&s)["entities"][0]["direction"], 12);
+        // …and parsing restores the engine convention.
+        let parsed = crate::blueprint_parser::parse_blueprint_string(&s).unwrap();
+        assert_eq!(parsed.entities[0].direction, EntityDirection::East);
     }
 
     /// The exported module encoding must match the game's own emission
