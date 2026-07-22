@@ -1,6 +1,6 @@
 # RFC-049: Inserter capacity research (hand-size axis)
 
-Registry: [`rfcs.md`](rfcs.md). Status: **Complete** (2026-07-22; in-game anchor open — kill 4; input-side measured-data gap open — #343).
+Registry: [`rfcs.md`](rfcs.md). Status: **Complete** (2026-07-22; in-game anchor open — kill 4; input-side measured-data gap CLOSED same day — #343 via the Phase-2 calibration matrix, Phase 3 sizes to the measured rates).
 
 ## Summary
 
@@ -462,3 +462,12 @@ table (Phase 3).
   ec10 FAILS at L0-parity hands — the four #352 warnings were correct
   at the semantics they were computed under, confirming both the L0
   floor's honesty and the value of sizing to the declared level.
+
+- **2026-07-22 — Phase 3 review residual (recorded, non-blocking):**
+  `capped_limit` diagnoses every capped plan with `size_side`'s
+  machine-feed table, including plans that were sized by the belt-drop
+  ladder — pre-dating Phase 3, but at L≥3 the two tables now diverge in
+  a new direction (`belt_drop_rate(stack)` runs ahead of
+  `machine_feed_rate(stack)`), so belt-drop shortfall traces can
+  under-report actionable causes. Explainability-only (no sizing
+  impact); pick up with the trace/explainability work.
