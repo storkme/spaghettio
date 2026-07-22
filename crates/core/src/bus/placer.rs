@@ -1368,6 +1368,7 @@ pub(crate) fn build_one_row(
                 max_belt_tier,
                 max_inserter_tier,
                 quality,
+                inserter_capacity,
                 ctx,
             );
             // Mirrors `templates::voider_row`'s row-offset constants:
@@ -1400,6 +1401,7 @@ pub(crate) fn build_one_row(
                 max_belt_tier,
                 max_inserter_tier,
                 quality,
+                inserter_capacity,
                 ctx,
             );
             sorted_output_belts = sorted_belts;

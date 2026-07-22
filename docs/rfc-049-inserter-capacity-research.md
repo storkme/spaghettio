@@ -443,3 +443,22 @@ table (Phase 3).
   plus monotonicity. Review findings 2–4 (Lua-table drift guard,
   parity self-audit into kit_errors + report-surfaced bonuses,
   bless/check level-mismatch test) all landed in the same pass.*
+
+- **2026-07-22 — Phase 3: the sizing ladder honors the declared level.**
+  The Phase-2 close-out deferred L>0-aware placement as a user-facing
+  trade; decided jointly (user + session, 2026-07-22): the axis is
+  user-DECLARED, exactly like belt tier — honoring it is not
+  auto-escalation, and refusing to use it ignores the user's input.
+  Landed: `size_side` (input sizing) and `contest_favors_far` (near/far
+  slot contests) take the research level and rate through the measured
+  `machine_feed_rate`; `capped_limit` diagnoses counterfactuals in the
+  same level world; threaded through all template call sites,
+  `voider_row`/`scrap_recycling_row`, and the placer. At L0 bit-identical
+  (792 unit + 60 e2e green untouched). Differentials pinned: 3.0/s input
+  thins stack→single-regular at L7; far ceiling 1.2→4.8; a 13.0-near vs
+  1.0-far contest flips with the level. Sim verification of an
+  L7-thinned fixture through the parity harness queued behind the
+  running sweep. Corroborating datum from the same day's parity re-runs:
+  ec10 FAILS at L0-parity hands — the four #352 warnings were correct
+  at the semantics they were computed under, confirming both the L0
+  floor's honesty and the value of sizing to the declared level.
