@@ -1,6 +1,6 @@
 # RFC-048: Cell composition (city-block layout) — feasibility spike
 
-Registry: [`rfcs.md`](rfcs.md). Status: **Spike — Phase 0 (paper recon) open.**
+Registry: [`rfcs.md`](rfcs.md). Status: **Spike — Phase 0 complete (GO); Phase 1 not started.**
 
 ## Summary
 
@@ -180,7 +180,85 @@ item is a prerequisite-shaped refactor).
   mechanism) and to beacons (a beaconed cell is just another catalog
   entry).
 
+## Phase 0 findings (2026-07-22, picked up by the RFC-046/047/049 session)
+
+**F1 — the ratio-cell math in the Design section is WRONG (falsified by
+the solver).** "1 cable machine + 2 EC machines = 5 EC/s" under-supplies
+cable 3×: 5 EC/s consumes 15 cable/s and one AM3 cable machine makes
+5/s. The correct quantum is **3 cable + 2 EC machines = 5 EC/s**
+(solver-confirmed: EC@5 solves to cable ×3.00, EC ×2.00). Cell
+footprints below use the corrected ratio; kill criterion 1's variant
+budget is unaffected (the quantum is still one cell shape, just wider).
+
+**F2 — engine comparators frozen (kill 3).** EC@5/s from plates, AM3,
+normal, defaults: **13×25 = 325 tiles, 112 entities, 0 errors / 4
+warnings**. EC@15/s from plates: **the engine now REFUSES** — RFC-047's
+late sideload check fires ("copper-cable 45.00/s exceeds per-lane
+capacity 22.50/s on a sideload-fed single trunk (2 producers, no
+balancer)"), i.e. the #336 (n,1)-merge-tap gap on a mainstream config
+(no fixture covered it; pre-RFC-047 it built with silent physical
+overloads). **The spike's primary comparison case is therefore not
+"beat the engine's layout" but "exist where the engine honestly
+cannot"** — stronger motivation than the RFC's original framing, and
+kill 3's area comparison falls back to the EC@5 point plus per-cell
+arithmetic (3 cells ≈ 3× the cell footprint + corridors vs 325×3-ish).
+
+**F3 — the verification story upgrades: RFC-050's `spaghettio-sim` is
+live** (blessed baselines landed same-day). Cells are the natural unit
+for its boundary kit — feed W ports with tier-matched loaders (S=1) or
+stack-inserter banks (S>1, measured 179–186/s on S=4 express), drain E
+ports with count-and-clear chests, measure planned-vs-actual per cell
+ONCE at catalog time. "Pre-verified cell" can mean sim-verified, not
+just validator-verified, from the first catalog entry. (The harness's
+inserter-direction discovery — every historical export ran backwards
+in-game, fixed #348 — is also the strongest possible argument for the
+spike's pre-verification premise.)
+
+**F4 — port contract v2 (lane-aware; folds the PR #341 review's
+load-bearing finding).** A port is
+`(edge, y, kind, item, direction, lanes, per-lane rate ceiling)` with
+`lanes ∈ {1, 2}` and one hard composition rule: **corridors connect to
+ports only via lane-preserving forms** — straight feeds (B7), corners
+(B11), or splitter outputs (S4); sideloading into a port is forbidden
+(B8 halves the contract invisibly; the post-RFC-047 walker vetoes it).
+A `lanes: 2` in-port promises both lanes arrive loaded; a `lanes: 2`
+out-port promises the cell fills both (row bridges do this today —
+templates.rs midpoint bridge). Rate ceilings are per-lane so stacking
+composes multiplicatively later (per-lane × S), matching the engine's
+capacity layer.
+
+**F5 — corrected cell sketch (paper), EC ratio cell @ 5 EC/s:**
+- Cable row: 3 machines (single-input template, height 7, width 9) —
+  in: copper-plate 7.5/s, out: cable 15/s (both-lane via bridge).
+- EC row: 2 machines (dual-input template, height 8, width 6) — in:
+  iron-plate 5/s + cable 15/s, out: EC 5/s.
+- In-cell connection: cable out-belt corners into the EC row's far
+  input belt (lane-preserving, no trunk, no balancer, no sideload —
+  the geometry class RFC-047 proved sound).
+- Cell ≈ **11 wide × 17 tall (187 tiles)** incl. 1-tile port margins;
+  ports: W iron-plate in (1 lane, 5/s), W copper-plate in (1 lane,
+  7.5/s), E EC out (2 lanes, 2.5/s/lane). Power: internal medium pole
+  pair (or per-cell EEI under sim).
+- EC@15/s = 3 cells stacked vertically + 2 shared W feed corridors +
+  1 E collection corridor ≈ **13×55 ≈ 715 tiles** vs the engine's
+  refusal (and vs 3× the EC@5 engine footprint ≈ 975 tiles if it could
+  scale linearly). Within kill 3's 2× bound against the linear
+  extrapolation; catalog count stands at 2 variants (ratio cell +
+  collection corridor template) — far under kill 1's ~6.
+
+**Go/no-go: GO for Phase 1** (catalog + stamper + manual composition
+harness behind a test-only flag), with the corrected ratio, the
+lane-aware port contract, and sim-verification of the first two catalog
+entries as the Phase 1 gate.
+
 ## Decision log
+
+- *2026-07-22 — Phase 0 executed by the picking-up session (see
+  findings above): ratio-cell math corrected (F1, solver-falsified),
+  comparators frozen incl. the EC@15 honest-refusal discovery (F2 —
+  reported to #336), sim-harness verification woven in (F3), port
+  contract v2 lane-aware (F4, folding the PR #341 review), corrected
+  cell sketch + composed estimate (F5). Go decision recorded.*
 
 - *2026-07-22 — opened as a spike. Motivated by
   `architecture-audit-2026-07.md` §6-A (the audit's highest-value
