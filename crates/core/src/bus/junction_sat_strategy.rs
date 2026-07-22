@@ -141,7 +141,8 @@ fn entity_name_at(placed_entities: &[PlacedEntity], tile: (i32, i32)) -> Option<
 /// How to pick per-channel UG-reach caps when solving a zone.
 ///
 /// **Native** — each channel's reach equals its declared belt tier
-/// (yellow=5, red=7, blue=9). Forces SAT to pick UG pairs that fit
+/// (yellow=4, red=6, blue=8 underground gap tiles, matching
+/// `common::ug_max_reach`). Forces SAT to pick UG pairs that fit
 /// the tier of the external flow, so the solve-time entity names are
 /// automatically correct — no post-pass retyping needed. Fails on
 /// zones that genuinely need longer-than-native UG spans to route.

@@ -3243,7 +3243,7 @@ pub fn route_bus_ghost(
 
     if !remaining_crossings.is_empty() {
         warnings.push(format!(
-            "ghost router: {} unresolved crossings (junction solver not yet implemented)",
+            "ghost router: {} unresolved crossings (junction solver strategies exhausted)",
             remaining_crossings.len()
         ));
     }

@@ -260,9 +260,10 @@ impl std::fmt::Display for MachineIncompatibility {
 ///
 /// Returns `Ok(())` if the pair is buildable, otherwise the first
 /// incompatibility it hits (slot count → fluid → category). Unknown
-/// machines (not in the bundled data) are treated as unconstrained — the
-/// solver will hit `MissingCraftingSpeed` separately if the entity is
-/// completely unknown.
+/// machines (not in the bundled data) are treated as unconstrained —
+/// note `get_crafting_speed` defaults them to 1.0, so the solver never
+/// hits `MissingCraftingSpeed` for an unknown name; it silently solves
+/// at speed 1.0.
 pub fn machine_can_run_recipe(
     machine: &str,
     recipe: &Recipe,
@@ -745,8 +746,9 @@ mod tests {
 
     #[test]
     fn unknown_machine_passes_through() {
-        // Unknown entities are treated as unconstrained — the solver hits
-        // MissingCraftingSpeed separately for these.
+        // Unknown entities are treated as unconstrained — and since
+        // get_crafting_speed defaults unknown names to 1.0, they solve
+        // silently at speed 1.0 (MissingCraftingSpeed never fires).
         let recipe = make_recipe("crafting");
         machine_can_run_recipe("totally-made-up-machine", &recipe)
             .expect("unknown machines bypass the capability check");

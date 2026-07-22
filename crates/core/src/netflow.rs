@@ -148,8 +148,8 @@ pub enum RecipeScope<'a> {
     /// set the tree walk would have selected. Recipe *selection* deltas vs
     /// the walk are zero by construction; only flow accounting changes.
     Restricted(&'a FxHashSet<String>),
-    /// Free cost-based selection over all non-excluded recipes (Phase 0
-    /// reporting; becomes the default in Phase 3).
+    /// Free cost-based selection over all non-excluded recipes (the
+    /// default since Phase 3, 2026-07).
     Free,
 }
 
@@ -1033,7 +1033,8 @@ fn solve_attempt(
                 machines.push(build_machine_spec(c));
                 dependency_order.push(columns[c].recipe.name.clone());
                 // Recurse ingredients in declaration order (reversed for
-                // the stack), matching resolve()'s loop at solver.rs:257.
+                // the stack), matching the ingredient loop in
+                // `solver.rs::resolve`.
                 for ing in columns[c].recipe.ingredients.iter().rev() {
                     let i = items.index[ing.name.as_str()];
                     stack.push(Work::Item(i));
