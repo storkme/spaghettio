@@ -9,6 +9,19 @@ web/tests/docs) by subagent sweep, followed by per-claim verification and three
 targeted triage investigations (merge-tap flip, solver fidelity gaps, headless
 Factorio verification). All file:line citations verified against `main@d468c68`.
 
+**Addendum 2026-07-22 — RFC-047 (lane-aware tap delivery) landed Complete.**
+Checked against this audit's findings: it resolves the EC@60/s legendary-express
+junction failure (now `stacking_ec_60s_express_legendary_s2`, zero errors;
+ore-routing residual = #335) and lifts the #312 fan-in wall honestly
+(lane-aware taps; ×S under belt stacking). It does **not** change the
+structural findings: the 1-trunk-per-consumer intermediate split rule is
+explicitly retained (`lane_planner.rs:720-727`), so §8.1's merge-tap triage
+stands unchanged; the headless-harness case (§8.3), solver gaps (§8.2), and
+validator-honesty holes (§3.3) are untouched. The CLAUDE.md/audit claim that
+"full-belt delivery thresholds do NOT scale ×S" is superseded — that was
+RFC-046's deferral, which RFC-047 executed. Follow-ups filed by RFC-047:
+#334/#335/#336/#337.
+
 ---
 
 ## 1. Executive summary
