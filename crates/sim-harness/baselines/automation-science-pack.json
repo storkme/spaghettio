@@ -11,12 +11,12 @@
   "entities": 196,
   "produced": {
     "automation-science-pack": 1.0,
-    "copper-plate": 1.0,
-    "iron-gear-wheel": 0.8,
-    "iron-plate": 2.15
+    "copper-plate": 1.0033333333333334,
+    "iron-gear-wheel": 0.98,
+    "iron-plate": 2.01
   },
   "delivered": {
-    "automation-science-pack": 0.96
+    "automation-science-pack": 1.0133333333333334
   },
-  "overall_verdict": "WARN"
+  "overall_verdict": "PASS"
 }

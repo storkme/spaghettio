@@ -10,13 +10,13 @@
   "tech_state": "research_all_technologies",
   "entities": 805,
   "produced": {
-    "copper-cable": 15.6,
+    "copper-cable": 30.0,
     "copper-plate": 15.0,
-    "electronic-circuit": 5.0,
-    "iron-plate": 5.65
+    "electronic-circuit": 10.0,
+    "iron-plate": 10.0
   },
   "delivered": {
-    "electronic-circuit": 4.8
+    "electronic-circuit": 10.133333333333333
   },
-  "overall_verdict": "FAIL"
+  "overall_verdict": "PASS"
 }
