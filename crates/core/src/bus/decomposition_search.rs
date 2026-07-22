@@ -144,7 +144,13 @@ impl DecompositionCandidate for CellComposedCandidate {
         if opts.cell_composition != crate::bus::cells::CellComposition::Candidate {
             return Err("cell composition is Off".to_string());
         }
-        crate::bus::cells::chain::compose_chain(solver_result)
+        let mut l = crate::bus::cells::chain::compose_chain(solver_result)?;
+        // Tier-1 verification annotation (RFC-051 registry): sim-verified
+        // geometries carry their measurement; unverified ones say so.
+        if let Some(t) = solver_result.external_outputs.first() {
+            l.warnings.push(crate::bus::cells::registry::verification_note(&t.item, t.rate, &l));
+        }
+        Ok(l)
     }
 }
 

@@ -170,7 +170,7 @@ self.onmessage = async (e: MessageEvent<Request>) => {
           if (batch.length >= BATCH_SIZE) flushBatch();
         };
         try {
-          result = layout_streaming(req.result, req.maxBeltTier ?? undefined, req.strategy ?? undefined, req.rowLayout ?? undefined, req.maxInserterTier ?? undefined, req.quality ?? undefined, req.wireMode ?? undefined, req.stacking ? Number(req.stacking) : undefined, req.inserterCapacity ? Number(req.inserterCapacity) : undefined, emit);
+          result = layout_streaming(req.result, req.maxBeltTier ?? undefined, req.strategy ?? undefined, req.rowLayout ?? undefined, req.maxInserterTier ?? undefined, req.quality ?? undefined, req.wireMode ?? undefined, req.stacking ? Number(req.stacking) : undefined, req.inserterCapacity ? Number(req.inserterCapacity) : undefined, undefined, emit);
         } finally {
           flushBatch();
           if (TRACE_LOGS) {

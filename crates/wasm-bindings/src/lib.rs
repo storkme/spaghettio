@@ -26,6 +26,7 @@ use wasm_bindgen::prelude::*;
 /// row-layout, and inserter-tier strings passed in across the WASM
 /// boundary. The TS engine layer validates URL params, so unknown values
 /// fall back to defaults silently.
+#[allow(clippy::too_many_arguments)] // param-per-axis wasm surface
 fn layout_options(
     max_belt_tier: Option<String>,
     strategy: Option<String>,
@@ -35,6 +36,7 @@ fn layout_options(
     wire_mode: Option<String>,
     stacking: Option<u8>,
     inserter_capacity: Option<u8>,
+    cell_composition: Option<String>,
 ) -> LayoutOptions {
     let strategy = match strategy.as_deref() {
         // `partitioned-per-consumer` is the deprecated P1 string; the
@@ -84,7 +86,12 @@ fn layout_options(
         // RFC-049 Phase 2: unknown/absent → 0 (unresearched, bit-identical
         // to pre-RFC — kill 1), same fallback semantics as the tiers above.
         inserter_capacity: inserter_capacity.unwrap_or(0),
-        cell_composition: Default::default(),
+        // RFC-051 flip: absent/unknown → Candidate (the engine default).
+        // "off" is the escape hatch — bus refusals then stay refusals.
+        cell_composition: match cell_composition.as_deref() {
+            Some("off") => spaghettio_core::bus::cells::CellComposition::Off,
+            _ => spaghettio_core::bus::cells::CellComposition::Candidate,
+        },
     }
 }
 
@@ -263,10 +270,11 @@ pub fn layout(
     wire_mode: Option<String>,
     stacking: Option<u8>,
     inserter_capacity: Option<u8>,
+    cell_composition: Option<String>,
 ) -> Result<LayoutResult, JsError> {
     build_bus_layout(
         &solver_result,
-        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking, inserter_capacity),
+        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking, inserter_capacity, cell_composition),
     )
     .map_err(|e| JsError::new(&e))
 }
@@ -287,10 +295,11 @@ pub fn layout_traced(
     wire_mode: Option<String>,
     stacking: Option<u8>,
     inserter_capacity: Option<u8>,
+    cell_composition: Option<String>,
 ) -> Result<LayoutResult, JsError> {
     spaghettio_core::bus::layout::build_bus_layout_traced(
         &solver_result,
-        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking, inserter_capacity),
+        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking, inserter_capacity, cell_composition),
     )
     .map_err(|e| JsError::new(&e))
 }
@@ -355,6 +364,7 @@ pub fn layout_streaming(
     wire_mode: Option<String>,
     stacking: Option<u8>,
     inserter_capacity: Option<u8>,
+    cell_composition: Option<String>,
     emit: &js_sys::Function,
 ) -> Result<LayoutResult, JsError> {
     let emit = emit.clone();
@@ -368,7 +378,7 @@ pub fn layout_streaming(
     });
     spaghettio_core::bus::layout::build_bus_layout_streaming(
         &solver_result,
-        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking, inserter_capacity),
+        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking, inserter_capacity, cell_composition),
         on_event,
     )
     .map_err(|e| JsError::new(&e))

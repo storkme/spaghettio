@@ -137,7 +137,12 @@ impl Default for LayoutOptions {
             merge_tap: false,
             stacking: 1,
             inserter_capacity: 0,
-            cell_composition: Default::default(),
+            // FLIPPED to Candidate 2026-07-22 (RFC-051 flip decision,
+            // user-approved): strictly additive — the unbiased scorer
+            // picks composition only where the bus path refuses or
+            // fails acceptance; every bus-successful config is
+            // bit-identical (goldens gate this).
+            cell_composition: crate::bus::cells::CellComposition::Candidate,
         }
     }
 }

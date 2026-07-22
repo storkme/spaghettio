@@ -354,19 +354,67 @@ fn cell_candidate_resolves_ec15_refusal() {
         "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
     ).unwrap();
 
-    // Flag OFF: the refusal stands.
-    let off = layout::build_bus_layout(&sr, layout::LayoutOptions::default());
-    assert!(off.is_err(), "flag-Off must preserve the bus refusal");
-
-    // Flag ON: the composed candidate wins and validates clean.
-    let opts = layout::LayoutOptions {
-        cell_composition: CellComposition::Candidate,
+    // Flag OFF (explicit — the DEFAULT is Candidate since the flip
+    // decision): the bus refusal stands.
+    let off_opts = layout::LayoutOptions {
+        cell_composition: CellComposition::Off,
         ..Default::default()
     };
+    let off = layout::build_bus_layout(&sr, off_opts);
+    assert!(off.is_err(), "flag-Off must preserve the bus refusal");
+
+    // Flag ON (the default): the composed candidate wins, validates clean.
+    let opts = layout::LayoutOptions::default();
     let l = layout::build_bus_layout(&sr, opts).expect("candidate must resolve the refusal");
     let issues = validate::validate(&l, Some(&sr), LayoutStyle::Bus).unwrap();
     let errors = issues.iter().filter(|i| i.severity == Severity::Error).count();
     assert_eq!(errors, 0, "composed candidate errors: {issues:?}");
     assert!(issues.iter().all(|i| i.category == "inserter-item-throughput"),
         "only the adjudicated category tolerated: {issues:?}");
+}
+
+/// Print geometry hashes for registry seeding.
+#[test]
+#[ignore = "registry seeding probe"]
+fn probe_registry_hashes() {
+    use spaghettio_core::bus::cells::chain::compose_chain;
+    use spaghettio_core::bus::cells::registry::geometry_hash;
+    for (label, item, rate, inputs) in [
+        ("chain-ec15", "electronic-circuit", 15.0, &["iron-plate", "copper-plate"][..]),
+        ("chain-ac1", "advanced-circuit", 1.0, &["iron-plate", "copper-plate", "plastic-bar"][..]),
+    ] {
+        let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
+        let sr = solver::solve_with_palette_exclusions_and_quality(
+            item, rate, &inputs_set, &MachinePalette::default(),
+            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+        ).unwrap();
+        let l = compose_chain(&sr).unwrap();
+        println!("{label}: {:016x}", geometry_hash(&l));
+    }
+}
+
+/// PERMANENT GATE (RFC-051 registry): the seeded sim-verified entries
+/// still match freshly composed geometry. An engine change that alters
+/// these cells fails HERE — loudly — instead of silently decaying
+/// "sim-verified" into a stale verdict (#375 review finding 1). The
+/// fix when it fires: re-run the sim on the new geometry, then update
+/// the hash + measurement in cell-sim-registry.json.
+#[test]
+fn cell_registry_hashes_current() {
+    use spaghettio_core::bus::cells::chain::compose_chain;
+    use spaghettio_core::bus::cells::registry::{geometry_hash, lookup};
+    for (item, rate, inputs) in [
+        ("electronic-circuit", 15.0, &["iron-plate", "copper-plate"][..]),
+        ("advanced-circuit", 1.0, &["iron-plate", "copper-plate", "plastic-bar"][..]),
+    ] {
+        let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
+        let sr = solver::solve_with_palette_exclusions_and_quality(
+            item, rate, &inputs_set, &MachinePalette::default(),
+            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+        ).unwrap();
+        let l = compose_chain(&sr).unwrap();
+        let h = geometry_hash(&l);
+        assert!(lookup(item, rate, h).is_some(),
+            "{item}@{rate}: composed geometry (hash {h:016x}) no longer matches the sim-verified registry entry — re-verify in the sim and update cell-sim-registry.json");
+    }
 }
