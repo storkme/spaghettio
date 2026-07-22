@@ -72,7 +72,13 @@ For full build commands (WASM rebuild, release builds), see [`docs/build-systems
   denied every posting/diff call (fixed #331). Validated 2026-07-21 via
   a planted-bug canary (#330): the bot's first-ever comment correctly
   flagged the bug inline with a committable fix. All substantive PR
-  review feedback before then was session-side. Expected behavior now:
+  review feedback before then was session-side. **A fourth cause class
+  surfaced 2026-07-22: re-running `/install-github-app` overwrote both
+  workflow files with the stock template, silently wiping all three
+  fixes at once (plus `claude.yml`'s owner-only sender gate). Restored
+  in #369, re-validated via canary #368. If anyone reruns the installer,
+  diff the workflow files against main before merging its PR.**
+  Expected behavior now:
   inline comments on findings, or a "no issues" summary comment on
   clean substantive PRs — a green check with *neither* on a
   non-trivial PR means it's broken again. Known benign no-comment
