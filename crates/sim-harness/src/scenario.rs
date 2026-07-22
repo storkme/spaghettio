@@ -440,6 +440,18 @@ script.on_init(function()
   local BULK_BONUS = {1, 2, 3, 4, 5, 7, 9, 11}
   force.inserter_stack_size_bonus = NB_BONUS[INSERTER_CAPACITY + 1]
   force.bulk_inserter_capacity_bonus = BULK_BONUS[INSERTER_CAPACITY + 1]
+  -- Parity self-audit: read the fields back on the next tick's init
+  -- path is not available here, so verify immediately — if the engine
+  -- rejected or clamped the assignment, measured rates would be taken
+  -- in the wrong hand world; that invalidates the run exactly like a
+  -- compromised kit (review finding on #376: a verification channel
+  -- nobody checks is not a verification channel).
+  if force.inserter_stack_size_bonus ~= NB_BONUS[INSERTER_CAPACITY + 1]
+     or force.bulk_inserter_capacity_bonus ~= BULK_BONUS[INSERTER_CAPACITY + 1] then
+    table.insert(storage.kit_errors, "tech-state parity assignment did not take: nb="
+      .. force.inserter_stack_size_bonus .. " bulk=" .. force.bulk_inserter_capacity_bonus
+      .. " for level " .. INSERTER_CAPACITY)
+  end
   local s = game.create_surface("lab")
   s.generate_with_lab_tiles = true
   s.request_to_generate_chunks({0, 0}, 12)
@@ -742,6 +754,26 @@ mod tests {
         assert_eq!(default_warmup_ticks(0, 0), round_up_60(BASE_WARMUP_TICKS));
         // gear10: 53x34 -> base + 2*(87)*32 = 3600 + 5568 = 9168 -> round to 9180
         assert_eq!(default_warmup_ticks(53, 34), round_up_60(3600 + 2 * 87 * 32));
+    }
+
+    #[test]
+    fn parity_bonus_tables_and_level_are_emitted() {
+        // Pins the Lua NB_BONUS/BULK_BONUS tables (#370). These are a
+        // hand-copied projection of spaghettio_core's inserter_hand
+        // tables (non-bulk hand − 1; bulk hand − 1 ≡ stack hand − 5 —
+        // the two force fields cover all three tables); the harness
+        // deliberately doesn't depend on core, so this test is the
+        // drift guard. If core's I8b tables ever change, update BOTH
+        // and re-run the calibration matrix (RFC-049 decision log).
+        let m = fixture();
+        let params = RunParams::defaults_for(&m, "test".into(), 16, Some(18000));
+        let lua = build_control_lua(&m, "0eNBPFAKE", &params);
+        assert!(lua.contains("local NB_BONUS = {0, 0, 1, 1, 1, 1, 1, 3}"));
+        assert!(lua.contains("local BULK_BONUS = {1, 2, 3, 4, 5, 7, 9, 11}"));
+        assert!(lua.contains(&format!("local INSERTER_CAPACITY = {}", m.inserter_capacity)));
+        // The self-audit must reference kit_errors so a failed
+        // assignment invalidates the run rather than passing silently.
+        assert!(lua.contains("tech-state parity assignment did not take"));
     }
 
     #[test]

@@ -571,14 +571,28 @@ pub fn inserter_throughput(name: &str, quality: QualityTier) -> f64 {
 ///
 /// This closes RFC-049 kill 2 ("no linear extrapolation on belt-pickup
 /// sides without measured data") WITH the measured data: the 2026-07-22
-/// sim calibration matrix (5 types × L{0,2,7}, flooded express feed into
-/// a 37.5/s sink; RFC-049 decision log) measured hand-ratio scaling as
-/// conservative for every type — non-bulk measured/model 1.04–1.19,
-/// stack 12.6/20.8/34.3 vs this rule's 12/16/32. The swings×hand
-/// decomposition used on belt-DROP sides is ~12% optimistic for machine
-/// feeds and is deliberately not used here. At L0 the ratio is 1 for
-/// every type — bit-identical to the flat constant.
+/// sim calibration matrix (all 8 levels for stack/bulk, L{0,2,7} for
+/// non-bulk whose hand values {1,2,4} those cells fully cover; flooded
+/// express feed into a 37.5/s sink; RFC-049 decision log).
+///
+/// Non-bulk and bulk use hand-ratio scaling — conservative in every
+/// measured cell (non-bulk margins 1.04–1.19×, bulk 1.93–2.27×). The
+/// stack inserter does NOT: its measured machine-feed curve is
+/// non-monotone in hand size (dips at hands 7 and 14 — swing-cycle
+/// quantization), and hand-ratio over-credits at L1 (14.0 vs 12.38
+/// measured) and L6 (28.0 vs 23.88) — caught by the #376 adversarial
+/// review, confirmed by completing the matrix. Stack credits therefore
+/// come from a measured floor table: monotone, 3–8% under every
+/// measured cell, and exactly the flat 12.0 at L0 (bit-identity
+/// preserved). The belt-DROP swings×hand decomposition is ~12%
+/// optimistic for machine feeds and is deliberately not used here.
 pub fn machine_feed_rate(name: &str, quality: QualityTier, level: u8) -> f64 {
+    if name == "stack-inserter" {
+        // Measured intakes: 12.62, 12.38, 20.75, 20.75, 23.12, 24.00,
+        // 23.88, 34.25 (Normal quality). Floors below every cell.
+        const STACK_FEED: [f64; 8] = [12.0, 12.0, 19.2, 19.2, 21.6, 22.8, 22.8, 32.0];
+        return STACK_FEED[usize::from(level.min(7))] * quality.multiplier();
+    }
     inserter_throughput(name, quality) * inserter_hand(name, level) / inserter_hand(name, 0)
 }
 
@@ -875,12 +889,23 @@ mod tests {
         }
         assert!((machine_feed_rate("inserter", Normal, 7) - 0.84 * 4.0).abs() < 1e-9);
         assert!((machine_feed_rate("fast-inserter", Normal, 7) - 2.31 * 4.0).abs() < 1e-9);
-        assert!((machine_feed_rate("stack-inserter", Normal, 7) - 12.0 * 16.0 / 6.0).abs() < 1e-9);
-        // Credits stay below the sim-measured intake floors
-        // (calibration matrix 2026-07-22: stack measured 20.75 at L2,
-        // 34.25 at L7) — the check must never over-credit.
-        assert!(machine_feed_rate("stack-inserter", Normal, 2) <= 20.75);
-        assert!(machine_feed_rate("stack-inserter", Normal, 7) <= 34.25);
+        // Credits stay below the sim-measured intake floors at EVERY
+        // level (complete 8-level matrix, 2026-07-22 — the #376 review
+        // caught hand-ratio over-crediting stack at the unmeasured
+        // L1/L6 cells; measurements confirmed: the stack curve is
+        // non-monotone in hand). The check must never over-credit.
+        const STACK_MEASURED: [f64; 8] = [12.62, 12.38, 20.75, 20.75, 23.12, 24.00, 23.88, 34.25];
+        const BULK_MEASURED: [f64; 8] = [5.38, 8.00, 10.88, 13.00, 15.50, 20.75, 23.12, 27.75];
+        for l in 0..8u8 {
+            let s = machine_feed_rate("stack-inserter", Normal, l);
+            assert!(s <= STACK_MEASURED[l as usize], "stack L{l}: credit {s} > measured");
+            let b = machine_feed_rate("bulk-inserter", Normal, l);
+            assert!(b <= BULK_MEASURED[l as usize], "bulk L{l}: credit {b} > measured");
+            if l > 0 {
+                // Monotone: more research never credits less.
+                assert!(machine_feed_rate("stack-inserter", Normal, l) >= machine_feed_rate("stack-inserter", Normal, l - 1));
+            }
+        }
         assert!(machine_feed_rate("fast-inserter", Normal, 2) <= 5.38);
     }
 
