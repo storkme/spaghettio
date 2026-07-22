@@ -4,6 +4,8 @@ Reference doc for `spaghettio-sim` (RFC-050). What each reported number
 actually is, the measurement-artifact classes we have hit (each was found
 by challenging a number that looked decisive), and the forensic playbook
 that localizes a bad result. Keep current as the harness changes.
+Setup, CLI usage, and the concurrency/lock rules live in
+[`sim-harness.md`](sim-harness.md).
 
 ## What each number is
 
