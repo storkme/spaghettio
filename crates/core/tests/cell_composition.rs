@@ -259,23 +259,54 @@ fn stamp_path(
 /// (east), external plate/iron feeds extended to the west boundary.
 /// Returns the composed LayoutResult (5 EC/s planned).
 fn compose_ratio_pair() -> (spaghettio_core::models::SolverResult, LayoutResult) {
+    compose_pairs(1)
+}
+
+/// Compose N ratio pairs stacked vertically (5·N EC/s planned): each
+/// pair is the cable cell + corridor + EC cell from `compose_pairs`'s
+/// single-pair geometry, at y offset k·PAIR_PITCH; feeds and outputs
+/// run to the layout boundaries independently per pair (contract-clean;
+/// a collection corridor is a later refinement, not a gate need).
+fn compose_pairs(n: i32) -> (spaghettio_core::models::SolverResult, LayoutResult) {
     use spaghettio_core::models::PlacedEntity;
     let (_csr, cl) = generate_row_layout("copper-cable", 15.0, &["copper-plate"]);
-    let (esr, el) = generate_row_layout("electronic-circuit", 5.0, &["iron-plate", "copper-cable"]);
+    let (esr_one, el) = generate_row_layout("electronic-circuit", 5.0, &["iron-plate", "copper-cable"]);
     let cable = extract_cell(&cl);
     let ec = extract_cell(&el);
+    // Solver context for the COMPOSED total (validation's demand model);
+    // machine counts scale with n by construction of the ratio cell.
+    let esr = if n == 1 {
+        esr_one
+    } else {
+        let inputs: FxHashSet<String> =
+            ["iron-plate", "copper-cable"].iter().map(|s| s.to_string()).collect();
+        solver::solve_with_palette_exclusions_and_quality(
+            "electronic-circuit",
+            5.0 * n as f64,
+            &inputs,
+            &MachinePalette::default(),
+            "assembling-machine-3",
+            &FxHashSet::default(),
+            QualityTier::Normal,
+        )
+        .unwrap()
+    };
+    const PAIR_PITCH: i32 = 16;
 
     // Placement: 4-tile W feed margin; cable cell at x=4; corridor gap 6
     // wide; EC cell east of it, vertically centered on the cable cell.
     let cable_x = 4;
     let corridor_x = cable_x + cable.width; // corridor occupies [corridor_x, corridor_x+5]
     let ec_x = corridor_x + 6;
-    let ec_y = 3;
 
     let mut entities: Vec<PlacedEntity> = Vec::new();
+    for k in 0..n {
+    let dy = k * PAIR_PITCH;
+    let ec_y = 3 + dy;
     for e in &cable.entities {
         let mut e = e.clone();
         e.x += cable_x;
+        e.y += dy;
         entities.push(e);
     }
     for e in &ec.entities {
@@ -290,10 +321,10 @@ fn compose_ratio_pair() -> (spaghettio_core::models::SolverResult, LayoutResult)
     for port in cable.ports.iter().filter(|p| p.inbound) {
         stamp_path(
             &mut entities,
-            &[(0, port.y), (cable_x + port.x - 1, port.y)],
+            &[(0, port.y + dy), (cable_x + port.x - 1, port.y + dy)],
             &port.item,
             "express-transport-belt",
-            &format!("corridor:feed:{}:{}", port.item, port.y),
+            &format!("corridor:feed:{}:{}", port.item, port.y + dy),
         );
     }
     // EC iron feed: UG hop under the cable cell (B12 weaving) — entry
@@ -304,7 +335,7 @@ fn compose_ratio_pair() -> (spaghettio_core::models::SolverResult, LayoutResult)
         let port = ec.ports.iter().find(|p| p.inbound && p.item == "iron-plate").unwrap();
         let y = ec_y + port.y;
         stamp_path(&mut entities, &[(0, y), (cable_x - 2, y)], "iron-plate",
-            "express-transport-belt", "corridor:feed:iron-plate");
+            "express-transport-belt", &format!("corridor:feed:iron-plate:{k}"));
         for (x, io) in [(cable_x - 1, "input"), (cable_x + cable.width, "output")] {
             entities.push(PlacedEntity {
                 name: "express-underground-belt".to_string(),
@@ -313,12 +344,12 @@ fn compose_ratio_pair() -> (spaghettio_core::models::SolverResult, LayoutResult)
                 direction: EntityDirection::East,
                 io_type: Some(io.to_string()),
                 carries: Some("iron-plate".to_string()),
-                segment_id: Some("corridor:feed:iron-plate".to_string()),
+                segment_id: Some(format!("corridor:feed:iron-plate:{k}")),
                 ..Default::default()
             });
         }
         stamp_path(&mut entities, &[(cable_x + cable.width + 1, y), (ec_x + port.x - 1, y)],
-            "iron-plate", "express-transport-belt", "corridor:feed:iron-plate");
+            "iron-plate", "express-transport-belt", &format!("corridor:feed:iron-plate:{k}"));
     }
 
     // Cable corridor: two outs -> 2->1 splitter -> EC cable-in port.
@@ -330,19 +361,19 @@ fn compose_ratio_pair() -> (spaghettio_core::models::SolverResult, LayoutResult)
     let ec_cable_in_y = ec_y + ec_cable_port.y;
     // Splitter (ONE entity, 2-wide spanning y=o1.y, o1.y+1) at sx.
     let sx = corridor_x + 2;
-    stamp_path(&mut entities, &[(cable_x + o1.x + 1, o1.y), (sx - 1, o1.y)],
-        "copper-cable", "fast-transport-belt", "corridor:cable:a");
+    stamp_path(&mut entities, &[(cable_x + o1.x + 1, o1.y + dy), (sx - 1, o1.y + dy)],
+        "copper-cable", "fast-transport-belt", &format!("corridor:cable:a:{k}"));
     stamp_path(
         &mut entities,
-        &[(cable_x + o2.x + 1, o2.y), (sx - 1, o2.y), (sx - 1, o1.y + 1)],
+        &[(cable_x + o2.x + 1, o2.y + dy), (sx - 1, o2.y + dy), (sx - 1, o1.y + 1 + dy)],
         "copper-cable",
         "fast-transport-belt",
-        "corridor:cable:b",
+        &format!("corridor:cable:b:{k}"),
     );
     entities.push(spaghettio_core::models::PlacedEntity {
         name: "fast-splitter".to_string(),
         x: sx,
-        y: o1.y,
+        y: o1.y + dy,
         direction: spaghettio_core::models::EntityDirection::East,
         carries: Some("copper-cable".to_string()),
         segment_id: Some("corridor:cable:merge".to_string()),
@@ -351,32 +382,33 @@ fn compose_ratio_pair() -> (spaghettio_core::models::SolverResult, LayoutResult)
     // Merged run from splitter output to the EC cable-in terminal-1.
     stamp_path(
         &mut entities,
-        &[(sx + 1, o1.y), (sx + 2, o1.y), (sx + 2, ec_cable_in_y), (ec_x + ec_cable_port.x - 1, ec_cable_in_y)],
+        &[(sx + 1, o1.y + dy), (sx + 2, o1.y + dy), (sx + 2, ec_cable_in_y), (ec_x + ec_cable_port.x - 1, ec_cable_in_y)],
         "copper-cable",
         "fast-transport-belt",
-        "corridor:cable:c",
+        &format!("corridor:cable:c:{k}"),
     );
     // Final product: extend the EC out port to the east boundary.
     let ec_out = ec.ports.iter().find(|p| !p.inbound).unwrap();
     let out_x0 = ec_x + ec_out.x + 1;
     let out_y = ec_y + ec_out.y;
     stamp_path(&mut entities, &[(out_x0, out_y), (out_x0 + 3, out_y)],
-        "electronic-circuit", "transport-belt", "corridor:out:ec");
+        "electronic-circuit", "transport-belt", &format!("corridor:out:ec:{k}"));
 
     // Corridor pole stitch: cells carry their own poles; add a pole
     // column in the corridor so the network is connected.
-    let max_y = entities.iter().map(|e| e.y).max().unwrap_or(0);
-    for y in [0, 7, 14].iter().filter(|&&y| y <= max_y) {
+    for y in [dy, dy + 7, dy + 14] {
         entities.push(PlacedEntity {
             name: "medium-electric-pole".to_string(),
             x: sx + 4,
-            y: *y,
+            y,
             direction: spaghettio_core::models::EntityDirection::North,
             segment_id: Some("pole".to_string()),
             ..Default::default()
         });
     }
+    } // end pairs loop
 
+    let max_y = entities.iter().map(|e| e.y).max().unwrap_or(0);
     let width = entities.iter().map(|e| e.x).max().unwrap() + 1;
     let height = max_y + 1;
     let mut l = LayoutResult::default();
@@ -405,6 +437,32 @@ fn probe_compose_ratio_pair() {
         Err(er) => {
             let s = format!("{er}");
             for line in s.lines().take(15) {
+                println!("  {line}");
+            }
+        }
+    }
+}
+
+
+/// Gate probe: EC@15/s composed (3 ratio pairs), validated.
+#[test]
+#[ignore = "exploration probe while the composer stabilizes"]
+fn probe_compose_ec15() {
+    use spaghettio_core::validate::{self, LayoutStyle, Severity};
+    let (esr, l) = compose_pairs(3);
+    println!("composed EC@15: {}x{} = {} tiles, {} entities", l.width, l.height, l.width * l.height, l.entities.len());
+    match validate::validate(&l, Some(&esr), LayoutStyle::Bus) {
+        Ok(issues) => {
+            let e = issues.iter().filter(|i| i.severity == Severity::Error).count();
+            println!("validation Ok: {} errors / {} issues", e, issues.len());
+            for i in issues.iter().take(12) {
+                println!("  [{:?}] {} {}", i.severity, i.category, i.message);
+            }
+        }
+        Err(er) => {
+            let s = format!("{er}");
+            println!("validation FAILED:");
+            for line in s.lines().filter(|l| l.contains("[error]")).take(12) {
                 println!("  {line}");
             }
         }
