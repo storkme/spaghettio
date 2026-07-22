@@ -4,6 +4,7 @@
 //! pipeline), `check-data` (KC1 dump-data parity spot-check). See
 //! `docs/rfc-050-headless-sim-harness.md`.
 
+mod baseline;
 mod checkdata;
 mod fetch;
 mod manifest;
@@ -22,6 +23,8 @@ fn main() -> ExitCode {
         Some("fetch") => cmd_fetch(&args[1..]),
         Some("run") => cmd_run(&args[1..]),
         Some("check-data") => cmd_check_data(&args[1..]),
+        Some("bless") => cmd_bless(&args[1..]),
+        Some("check") => cmd_check(&args[1..]),
         Some("--help") | Some("-h") | None => {
             print_help();
             return ExitCode::SUCCESS;
@@ -47,12 +50,62 @@ USAGE:
   spaghettio-sim run --bp <file> --manifest <file> [--ticks N] [--speed N]
                       [--out report.json] [--timeout-secs N]
   spaghettio-sim check-data
+  spaghettio-sim bless --report <report.json> --baselines <dir>
+  spaghettio-sim check --report <report.json> --baselines <dir> [--tolerance 0.02]
 
 ENV:
   SPAGHETTIO_FACTORIO_DIR   Override the install dir (default:
                             ~/.cache/spaghettio-sim/factorio-2.0.76)
 "#
     );
+}
+
+fn cmd_bless(args: &[String]) -> Result<(), String> {
+    let report_path = flag_value(args, "--report").ok_or("bless requires --report <file>")?;
+    let dir = flag_value(args, "--baselines").ok_or("bless requires --baselines <dir>")?;
+    let raw = std::fs::read_to_string(report_path).map_err(|e| format!("{report_path}: {e}"))?;
+    let json: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+    let b = baseline::baseline_from_report(&json)?;
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let path = baseline::baseline_path(std::path::Path::new(dir), &b.label);
+    std::fs::write(&path, serde_json::to_string_pretty(&b).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    println!(
+        "blessed '{}' ({} items produced, {} delivered, verdict {}) -> {}",
+        b.label,
+        b.produced.len(),
+        b.delivered.len(),
+        b.overall_verdict,
+        path.display()
+    );
+    Ok(())
+}
+
+fn cmd_check(args: &[String]) -> Result<(), String> {
+    let report_path = flag_value(args, "--report").ok_or("check requires --report <file>")?;
+    let dir = flag_value(args, "--baselines").ok_or("check requires --baselines <dir>")?;
+    let tolerance: f64 = flag_value(args, "--tolerance").map_or(Ok(0.02), |t| {
+        t.parse().map_err(|_| format!("bad --tolerance '{t}'"))
+    })?;
+    let raw = std::fs::read_to_string(report_path).map_err(|e| format!("{report_path}: {e}"))?;
+    let json: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+    let fresh = baseline::baseline_from_report(&json)?;
+    let path = baseline::baseline_path(std::path::Path::new(dir), &fresh.label);
+    let blessed_raw = std::fs::read_to_string(&path)
+        .map_err(|e| format!("no blessed baseline for '{}' at {} ({e})", fresh.label, path.display()))?;
+    let blessed: baseline::Baseline =
+        serde_json::from_str(&blessed_raw).map_err(|e| e.to_string())?;
+    let drifts = baseline::check_against(&blessed, &json, tolerance);
+    if drifts.is_empty() {
+        println!("check: '{}' matches its blessed baseline (tolerance {:.1}%).", fresh.label, tolerance * 100.0);
+        Ok(())
+    } else {
+        eprintln!("check: '{}' DRIFTED from its blessed baseline:", fresh.label);
+        for d in &drifts {
+            eprintln!("  - {d}");
+        }
+        Err(format!("{} drift(s); re-bless deliberately if intended", drifts.len()))
+    }
 }
 
 fn flag_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
