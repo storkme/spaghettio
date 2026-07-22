@@ -1,6 +1,6 @@
 # RFC-051: Cell composition integration (production path)
 
-Registry: [`rfcs.md`](rfcs.md). Status: **Active — Phase A (lift) delivered; Phase B (candidate) next.**
+Registry: [`rfcs.md`](rfcs.md). Status: **Delivered — all phases complete (PRs #377 + Phase B/C); gate passed, kill criteria evaluated, flag default remains Off pending the flip decision.**
 
 ## Summary
 
@@ -167,7 +167,81 @@ value statement (see kill 3).
   at plan; kill 3/4 evaluated with the scoreboard; close-out with
   coverage datum and the flag-default decision.
 
+## Phase B/C close-out: kill-criteria evaluation and the flag decision (2026-07-22)
+
+**The gate (kill 4): PASS, same-session.** AC-from-plates (fan-out 2:
+cable → EC and AC; plastic external) composes through the production
+auto-placer at **0 errors / 0 warnings** and runs in headless Factorio
+at plan: **produced 1.00/s (−0.33%), 8/8 machines working, converged.**
+EC@15-from-plates (the #336 refusal config) through the same path:
+0 errors / 6 adjudicated warnings, sim **produced 15.0/s exactly
+(+0.0%), 15/15 working.**
+
+**Kill 1 (parallel stack): PASS.** Cells engine-generated; the
+auto-placer is placement arithmetic + the crossing Router (deterministic
+local span-3 UG hops — rows hop under registered columns, columns under
+registered rows); validation and scoring fully shared.
+
+**Kill 2 (corridor machinery): PASS.** The gate config used straight
+runs, corners, UG hops, one 2→1 merge splitter, one 1→2 fan-out
+splitter, and the south bypass — no negotiation, no growth, no junction
+solving. The Router is a fixed local rule, not a search.
+
+**Kill 3 (no-value): PASS via clause (a).** The differential scoreboard
+(all numbers from one probe run, in the decision log): EC@15-from-plates
+— bus REFUSES, composed delivers (now a permanent gate,
+`cell_candidate_resolves_ec15_refusal`, asserting BOTH directions:
+flag Off preserves the refusal, flag On resolves it). Clause (b)
+honestly untested as worded: EC@5 shows fewer composed warnings (2 vs
+4) but the strict-category-subset comparison wasn't run. Where both
+paths succeed, the bus wins on area (composed 1.5–3.1×) — recorded
+without spin; the unbiased scorer will pick the bus there, which is
+exactly the designed behavior.
+
+**Kill 5 (tripwire): coverage GREW.** Phase-1 baseline 2 chains → the
+auto-placer now composes gear@15, EC@5, EC@15, AC@1, AC@2 (three
+distinct chains) plus the hand-composed plastic geometry; EC@30
+refuses honestly (3 out-runs exceeds the merge cap — a known, named
+limitation, not a silent gap).
+
+**The flag decision: `Off` stays the default, deliberately.** Under
+`Candidate` the unbiased scorer would only ever pick composition where
+the bus refuses or fails acceptance (composed density is strictly worse
+where both succeed), so a flip is strictly additive — but the flip
+waits for: (1) the browser eyeball step of the house verification
+protocol on composed layouts, (2) wasm/web flag plumbing, (3) the
+Tier-1 sim-verified registry. Flipping is its own logged decision, with
+the user.
+
+**Deferred, honestly:** the geometry-hash sim-verified registry (Tier 1)
+is designed but not implemented — today's catalog is small enough that
+this RFC's decision log IS the registry (four sim-verified configs, all
+listed with their measurements). The mechanism becomes load-bearing at
+flag-flip or when the catalog outgrows the log; implement it then.
+EC@30's 3-run merge and ratio quantization (K>1 cells) are named
+follow-ups.
+
 ## Decision log
+
+- *2026-07-22 — Phase B/C delivered (same session as Phase A). The
+  chain auto-placer (`cells/chain.rs`): eligibility (solid
+  tree-with-fan-out, fan-out cap 2, one producer per item),
+  K=1 cells at spec rate × count, dependency-ordered west→east
+  placement, the two-registry crossing Router, early-jog corridors
+  (jog to the target port row in the producer's gap — where all rows
+  provably end before the splitter — so same-y row collisions are
+  structurally impossible), one feed column PER PORT (multi-row cells
+  taught this: a single-port find left second-row machines unfed and
+  belt-flow-reachability caught it), fan-out splitter + south bypass.
+  `CellComposedCandidate` competes unbiased in the decomposition
+  search, catch_unwind fail-soft, flag-gated. Differential scoreboard
+  (single probe run): gear15 bus 184 tiles/0/0 vs composed 462/0/0;
+  ec5 bus 325/0/4 vs composed 1008/0/2; ec15 bus REFUSED vs composed
+  1428/0/6; ec30 bus 1624/0/18 vs composed REFUSED (merge cap); ac1
+  bus 754/0/0 vs composed 1349/0/0; ac2 bus 1189/0/0 vs composed
+  1767/0/0. Sims: chain-ec15 15.0/s exactly, 15/15 working; chain-ac1
+  1.00/s (−0.33%), 8/8 working — both PASS, converged. Suite
+  889/0/48, goldens 8/8 (flag-Off inertness), clippy 0.*
 
 - *2026-07-22 — Phase A delivered (same session as the RFC's merge).
   The harness lifted verbatim into `src/bus/cells/{extract,compose}.rs`
