@@ -67,6 +67,17 @@ Blueprint strings come from the engine directly:
 `crates/core/examples/` is gitignored) or `rfc044_anchor` for the moduled
 four-class anchor.
 
+## Simulation speed (measured)
+
+`--benchmark saves/<built-factory>.zip --benchmark-ticks 20000` ran 20,000
+ticks (5.5 game-minutes) in **31.2 s wall — ~640 UPS, ~11× real time** —
+on a completely untuned first attempt. Treat as a floor: the save still
+carried a default-generated Nauvis surface (chunk gen + enemies burning
+time for nothing — a tuned harness save deletes every surface but the
+lab), and the factory was idle. Consistent with the audit's 200–400 UPS
+estimate at USP scale. `--benchmark-verbose` exists for per-update
+breakdowns when tuning.
+
 ## What remains for the real harness (unchanged from the audit's sketch)
 
 Power injection (`electric-energy-interface` per network), input feeding
