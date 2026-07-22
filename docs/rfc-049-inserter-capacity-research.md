@@ -389,3 +389,35 @@ table (Phase 3).
   the endpoint table internally consistent. Design reuses RFC-046's
   additive-only/no-recalibration pattern and its belt-drop
   decomposition, generalized by one dimension.
+
+- **2026-07-22 — Phase 2: kill 2 closed WITH measured data; input side
+  now level-aware.** Kill 2 ("no linear extrapolation on belt-pickup
+  sides without measured data") was written waiting for an instrument
+  that now exists. Prerequisite: sim tech-state parity (#370) — the
+  harness set `research_all`, granting bonus 7 regardless of the
+  fixture's `inserter_capacity`; the scenario now assigns the force
+  bonuses directly (probe-verified model: non-bulk hand = 1 +
+  `inserter_stack_size_bonus`, {bulk, stack} hands = {1, 5} +
+  `bulk_inserter_capacity_bonus` — the two fields reproduce all three
+  I8b tables exactly; tech un-research left non-bulk +1 via an
+  unidentified tech, so direct assignment). Calibration matrix (5
+  inserter types × L{0,2,7}, flooded express feed → quad-speed-3 AM3
+  stone-wall sink, 37.5/s ceiling, kit self-audit clean on all 15
+  cells), measured belt→machine intake vs `flat × hand(L)/hand(0)`:
+  regular 0.88/1.75/3.62 (model 0.84/1.68/3.36 — +4–8% margin),
+  long-handed 1.25/2.50/5.00 (1.20/2.40/4.80, +4%), fast
+  2.75/5.38/10.88 (2.31/4.62/9.24, +16–19%), stack 12.62/20.75/34.25
+  (12.0/16.0/32.0, +5–30%), bulk 5.38/10.88/27.75 (flat floor
+  retained — engine never places bulk). **Hand-ratio scaling is
+  conservative in every measured cell**; the belt-DROP swings×hand
+  decomposition is ~12% optimistic for machine feeds and is NOT used
+  on the input side. Landed: `common::machine_feed_rate` (bit-identical
+  flat at L0), both input-side call sites in the throughput checks
+  switched, unit test pins the L0 identity and the measured-floor
+  ceilings. Full suite green (787 unit + 60 e2e). NOT changed: the
+  sizing ladder stays L0-flat — letting placement exploit L>0 hands
+  means denser layouts that require research, a user-facing trade
+  explicitly deferred to its own decision. #352's four warnings are
+  hereby adjudicated: correct at the L0 semantics they were computed
+  under; the clean-kit sim PASS was measured at research-inflated
+  hands (pre-parity) and does not contradict them.

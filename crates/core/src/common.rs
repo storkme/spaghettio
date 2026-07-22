@@ -565,6 +565,23 @@ pub fn inserter_throughput(name: &str, quality: QualityTier) -> f64 {
     base * quality.multiplier()
 }
 
+/// Throughput of an inserter feeding a **machine** (belt→machine input
+/// side) at inserter-capacity research `level`: the flat I8 constant
+/// scaled by the hand-size ratio `hand(L)/hand(0)`.
+///
+/// This closes RFC-049 kill 2 ("no linear extrapolation on belt-pickup
+/// sides without measured data") WITH the measured data: the 2026-07-22
+/// sim calibration matrix (5 types × L{0,2,7}, flooded express feed into
+/// a 37.5/s sink; RFC-049 decision log) measured hand-ratio scaling as
+/// conservative for every type — non-bulk measured/model 1.04–1.19,
+/// stack 12.6/20.8/34.3 vs this rule's 12/16/32. The swings×hand
+/// decomposition used on belt-DROP sides is ~12% optimistic for machine
+/// feeds and is deliberately not used here. At L0 the ratio is 1 for
+/// every type — bit-identical to the flat constant.
+pub fn machine_feed_rate(name: &str, quality: QualityTier, level: u8) -> f64 {
+    inserter_throughput(name, quality) * inserter_hand(name, level) / inserter_hand(name, 0)
+}
+
 /// Stack-inserter swings per second (864°/s ÷ 360°, quality-scaled).
 ///
 /// Half of the RFC-046 belt-drop decomposition `swings × belt hand`,
@@ -845,6 +862,28 @@ pub fn inserter_target_lane(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn machine_feed_rate_flat_at_l0_and_hand_ratio_scaled_above() {
+        use super::{inserter_throughput, machine_feed_rate};
+        use crate::common::QualityTier::Normal;
+        for name in ["inserter", "long-handed-inserter", "fast-inserter", "stack-inserter", "bulk-inserter"] {
+            assert_eq!(
+                machine_feed_rate(name, Normal, 0),
+                inserter_throughput(name, Normal),
+                "{name} must be bit-identical to the flat constant at L0"
+            );
+        }
+        assert!((machine_feed_rate("inserter", Normal, 7) - 0.84 * 4.0).abs() < 1e-9);
+        assert!((machine_feed_rate("fast-inserter", Normal, 7) - 2.31 * 4.0).abs() < 1e-9);
+        assert!((machine_feed_rate("stack-inserter", Normal, 7) - 12.0 * 16.0 / 6.0).abs() < 1e-9);
+        // Credits stay below the sim-measured intake floors
+        // (calibration matrix 2026-07-22: stack measured 20.75 at L2,
+        // 34.25 at L7) — the check must never over-credit.
+        assert!(machine_feed_rate("stack-inserter", Normal, 2) <= 20.75);
+        assert!(machine_feed_rate("stack-inserter", Normal, 7) <= 34.25);
+        assert!(machine_feed_rate("fast-inserter", Normal, 2) <= 5.38);
+    }
+
     use super::*;
 
     #[test]
