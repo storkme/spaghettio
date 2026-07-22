@@ -61,5 +61,6 @@ backfill the status next time the doc is touched.
 | RFC-047 | 2026-07-21 | [`rfc-047-lane-aware-tap-delivery.md`](rfc-047-lane-aware-tap-delivery.md) | Complete (browser eyeball open) |
 | RFC-048 | 2026-07-22 | [`rfc-048-cell-composition.md`](rfc-048-cell-composition.md) | Draft (spike, PR #341 — other session) |
 | RFC-049 | 2026-07-22 | [`rfc-049-inserter-capacity-research.md`](rfc-049-inserter-capacity-research.md) | Complete (in-game anchor open; input-side data gap #343) |
+| RFC-050 | 2026-07-22 | [`rfc-050-headless-sim-harness.md`](rfc-050-headless-sim-harness.md) | Draft |
 
-Next number: **RFC-050**.
+Next number: **RFC-051**.
