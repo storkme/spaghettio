@@ -93,6 +93,12 @@ pub struct Report {
     pub stacking: u8,
     pub inserter_capacity: u8,
     pub external_inputs: Vec<(String, f64, bool)>,
+    /// Realized force capacity bonuses at finalize (tech-state parity,
+    /// #370) — surfaced so the parity the rates were measured under is
+    /// part of the report, not buried in raw_result. The scenario also
+    /// self-audits the assignment into `kit_errors` at init.
+    pub inserter_stack_size_bonus: f64,
+    pub bulk_inserter_capacity_bonus: f64,
 }
 
 fn get_u64(v: &serde_json::Value, key: &str) -> u64 {
@@ -273,6 +279,14 @@ pub fn compute(manifest: &Manifest, result: &serde_json::Value) -> Report {
             .iter()
             .map(|i| (i.item.clone(), i.rate, i.is_fluid))
             .collect(),
+        inserter_stack_size_bonus: result
+            .get("inserter_stack_size_bonus")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(-1.0),
+        bulk_inserter_capacity_bonus: result
+            .get("bulk_inserter_capacity_bonus")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(-1.0),
     }
 }
 
@@ -311,8 +325,12 @@ pub fn print_human(report: &Report) {
         report.final_tick, report.converged
     );
     println!(
-        "layout: {} entities, stacking={} inserter_capacity={}",
-        report.entities, report.stacking, report.inserter_capacity
+        "layout: {} entities, stacking={} inserter_capacity={} (realized bonuses: nb={} bulk={})",
+        report.entities,
+        report.stacking,
+        report.inserter_capacity,
+        report.inserter_stack_size_bonus,
+        report.bulk_inserter_capacity_bonus
     );
     if !report.external_inputs.is_empty() {
         let inputs: Vec<String> = report

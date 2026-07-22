@@ -389,3 +389,57 @@ table (Phase 3).
   the endpoint table internally consistent. Design reuses RFC-046's
   additive-only/no-recalibration pattern and its belt-drop
   decomposition, generalized by one dimension.
+
+- **2026-07-22 — Phase 2: kill 2 closed WITH measured data; input side
+  now level-aware.** Kill 2 ("no linear extrapolation on belt-pickup
+  sides without measured data") was written waiting for an instrument
+  that now exists. Prerequisite: sim tech-state parity (#370) — the
+  harness set `research_all`, granting bonus 7 regardless of the
+  fixture's `inserter_capacity`; the scenario now assigns the force
+  bonuses directly (probe-verified model: non-bulk hand = 1 +
+  `inserter_stack_size_bonus`, {bulk, stack} hands = {1, 5} +
+  `bulk_inserter_capacity_bonus` — the two fields reproduce all three
+  I8b tables exactly; tech un-research left non-bulk +1 via an
+  unidentified tech, so direct assignment). Calibration matrix (5
+  inserter types × L{0,2,7}, flooded express feed → quad-speed-3 AM3
+  stone-wall sink, 37.5/s ceiling, kit self-audit clean on all 15
+  cells), measured belt→machine intake vs `flat × hand(L)/hand(0)`:
+  regular 0.88/1.75/3.62 (model 0.84/1.68/3.36 — +4–8% margin),
+  long-handed 1.25/2.50/5.00 (1.20/2.40/4.80, +4%), fast
+  2.75/5.38/10.88 (2.31/4.62/9.24, +16–19%), stack 12.62/20.75/34.25
+  (12.0/16.0/32.0, +5–30%), bulk 5.38/10.88/27.75 (flat floor
+  retained — engine never places bulk). **Hand-ratio scaling is
+  conservative in every measured cell**; the belt-DROP swings×hand
+  decomposition is ~12% optimistic for machine feeds and is NOT used
+  on the input side. Landed: `common::machine_feed_rate` (bit-identical
+  flat at L0), both input-side call sites in the throughput checks
+  switched, unit test pins the L0 identity and the measured-floor
+  ceilings. Full suite green (787 unit + 60 e2e). NOT changed: the
+  sizing ladder stays L0-flat — letting placement exploit L>0 hands
+  means denser layouts that require research, a user-facing trade
+  explicitly deferred to its own decision. #352's four warnings are
+  hereby adjudicated: correct at the L0 semantics they were computed
+  under; the clean-kit sim PASS was measured at research-inflated
+  hands (pre-parity) and does not contradict them.
+
+- **2026-07-22 — Phase 2 amendment: the #376 adversarial review's
+  blocker was CONFIRMED BY MEASUREMENT; stack switched to a measured
+  floor table.** The review flagged that L1/L3–L6 were credited by
+  formula without measurement, against this RFC's own "never derived"
+  rule. Completing the matrix (all 8 levels for stack and bulk — 10
+  further cells, kit-audit clean) proved the objection empirically:
+  stack's measured machine-feed curve is **non-monotone in hand size**
+  (12.62, 12.38, 20.75, 20.75, 23.12, 24.00, 23.88, 34.25 across
+  L0–L7 — dips at hands 7 and 14, swing-cycle quantization), and
+  hand-ratio over-credited L1 (14.0 vs 12.38) and L6 (28.0 vs 23.88)
+  with L5 at exactly zero margin. A monotonicity argument would have
+  failed too — vindicating kill 2's "measured, never derived" in full.
+  Landed: `machine_feed_rate`'s stack branch uses the measured floor
+  table [12.0, 12.0, 19.2, 19.2, 21.6, 22.8, 22.8, 32.0] — monotone,
+  3–8% under every measured cell, flat-12.0 bit-identity at L0. Bulk
+  measured safe at all 8 levels under hand-ratio (margins 1.93–2.27×);
+  non-bulk hand values {1,2,4} were fully covered by the original
+  cells. Test pins credit ≤ measured at every level for both types
+  plus monotonicity. Review findings 2–4 (Lua-table drift guard,
+  parity self-audit into kit_errors + report-surfaced bonuses,
+  bless/check level-mismatch test) all landed in the same pass.*

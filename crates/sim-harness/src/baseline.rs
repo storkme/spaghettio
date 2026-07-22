@@ -67,11 +67,19 @@ pub fn baseline_from_report(report: &serde_json::Value) -> Result<Baseline, Stri
     if produced.is_empty() {
         return Err("report has no measured rates to bless".into());
     }
+    // Tech-state parity (#370): inserter-capacity research is rolled
+    // back to the fixture's level, so the level is part of the world
+    // the rates were measured in — key the baseline on it. A report
+    // missing the field (pre-parity or foreign) keys as L0: its
+    // tech_state string then mismatches any deliberately-leveled
+    // baseline loudly in check_against, which is the failure mode we
+    // want for stale artifacts.
+    let capacity = r.get("inserter_capacity").and_then(|v| v.as_u64()).unwrap_or(0);
     Ok(Baseline {
         label,
         game_version,
         mods: HARNESS_MODS.iter().map(|s| s.to_string()).collect(),
-        tech_state: HARNESS_TECH_STATE.into(),
+        tech_state: format!("{HARNESS_TECH_STATE};inserter_capacity<=L{capacity}"),
         entities: r.get("entities").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
         produced,
         delivered,
@@ -177,6 +185,22 @@ mod tests {
         let b = baseline_from_report(&report("gear", 10.0, 10.13, "2.0.76")).unwrap();
         let jitter = report("gear", 10.05, 10.0, "2.0.76");
         assert!(check_against(&b, &jitter, 0.02).is_empty());
+    }
+
+    #[test]
+    fn capacity_level_mismatch_is_flagged_via_tech_state() {
+        // #370: bless at one inserter-capacity level, check a run at
+        // another — must flag loudly, not silently compare rates
+        // measured in different hand worlds.
+        let mut at_l0 = report("gear", 10.0, 10.13, "2.0.76");
+        at_l0["report"]["inserter_capacity"] = serde_json::json!(0);
+        let mut at_l7 = report("gear", 10.0, 10.13, "2.0.76");
+        at_l7["report"]["inserter_capacity"] = serde_json::json!(7);
+        let blessed = baseline_from_report(&at_l0).unwrap();
+        assert!(blessed.tech_state.ends_with("inserter_capacity<=L0"));
+        let drifts = check_against(&blessed, &at_l7, 0.02);
+        assert_eq!(drifts.len(), 1, "{drifts:?}");
+        assert!(drifts[0].contains("tech state"));
     }
 
     #[test]

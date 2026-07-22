@@ -6,10 +6,11 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::common::{
-    dir_to_vec, fluid_only_recipes, inserter_reach, inserter_throughput,
-    is_inserter, is_machine_entity, machine_dims, machine_tiles, recycler_eject_tile,
-    utilization_for,
+    dir_to_vec, fluid_only_recipes, inserter_reach, is_inserter, is_machine_entity,
+    machine_dims, machine_tiles, recycler_eject_tile, utilization_for,
 };
+#[cfg(test)]
+use crate::common::inserter_throughput;
 use crate::models::{LayoutResult, PlacedEntity, SolverResult};
 
 /// RFC-046: throughput an inserter delivers when dropping onto a **belt**.
@@ -251,7 +252,15 @@ pub fn check_inserter_throughput(
         let reach = inserter_reach(&ins.name);
         let drop_pos = (ins.x + dx * reach, ins.y + dy * reach);
         let pickup_pos = (ins.x - dx * reach, ins.y - dy * reach);
-        let rate = inserter_throughput(&ins.name, ins.quality.unwrap_or_default());
+        // Input side (belt→machine): level-aware machine-feed rate
+        // (RFC-049 Phase 2 — hand-ratio scaling, sim-calibrated
+        // conservative; see common::machine_feed_rate). Output side
+        // shadows this with the belt-drop rating below.
+        let rate = crate::common::machine_feed_rate(
+            &ins.name,
+            ins.quality.unwrap_or_default(),
+            layout.inserter_capacity,
+        );
 
         if let Some(&mpos) = machine_by_tile.get(&drop_pos) {
             *input_avail.entry(mpos).or_insert(0.0) += rate;
@@ -427,7 +436,15 @@ pub fn check_inserter_item_throughput(
         let reach = inserter_reach(&ins.name);
         let drop_pos = (ins.x + dx * reach, ins.y + dy * reach);
         let pickup_pos = (ins.x - dx * reach, ins.y - dy * reach);
-        let rate = inserter_throughput(&ins.name, ins.quality.unwrap_or_default());
+        // Input side (belt→machine): level-aware machine-feed rate
+        // (RFC-049 Phase 2 — hand-ratio scaling, sim-calibrated
+        // conservative; see common::machine_feed_rate). Output side
+        // shadows this with the belt-drop rating below.
+        let rate = crate::common::machine_feed_rate(
+            &ins.name,
+            ins.quality.unwrap_or_default(),
+            layout.inserter_capacity,
+        );
 
         if let Some(&mpos) = machine_by_tile.get(&drop_pos) {
             *input_avail.entry((mpos, item)).or_insert(0.0) += rate;
