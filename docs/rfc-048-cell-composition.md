@@ -116,8 +116,12 @@ item is a prerequisite-shaped refactor).
   (fluids are Phase 2+ questions; the port contract has a `pipe` kind
   reserved).
 - Not a commitment to replace the bus engine. The spike's output is
-  evidence for a go/no-go; the bus engine remains the fallback for
-  whatever cells can't express.
+  evidence for a go/no-go; the bus engine remains the fallback —
+  *scoped by the 2026-07-22 end-state entry: fallback during catalog
+  growth, with no chain class structurally excluded (see the decision
+  log; the phase map for solids → oil mega-cell → catalog accretion
+  lives there too, superseding this section's Phase-2 fluids
+  assignment).*
 
 ## Kill criteria
 
