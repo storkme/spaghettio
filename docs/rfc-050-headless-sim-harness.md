@@ -379,5 +379,12 @@ design, so blessed measured baselines are **shareable** — keyed on
   clean verdicts were correct. RFC-051 (junction/allocation static
   check) not filed — motivating evidence gone. Baselines re-blessed.
   ec10 (#352) and automation-science clean-kit re-runs in flight; #345
-  r150 flagged for re-measurement.***
+  r150 flagged for re-measurement. Sweep re-validation complete same
+  day: ec10 10.00/s PASS (+0.0%; #352 closed — its four inserter
+  warnings remain undecided pending tech-state parity, filed #370) and
+  automation 1.00/s PASS (delivered +1.3%; the −4% quantization WARN
+  was kit-era, attribution item closed). All five solid baselines
+  re-blessed from clean-kit runs. The solid sweep is entirely green:
+  the engine's layouts perform at plan everywhere the sim can currently
+  measure.***
 
