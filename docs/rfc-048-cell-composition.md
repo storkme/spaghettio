@@ -246,6 +246,38 @@ capacity layer.
   extrapolation; catalog count stands at 2 variants (ratio cell +
   collection corridor template) — far under kill 1's ~6.
 
+**Review folds (2026-07-22, PR #359):**
+- *F1 addendum*: the corrected quantum makes the cell ~50% wider than
+  the original sketch assumed — every area number derived from the
+  1+2 design is discarded entirely, not adjusted.
+- *F2 addendum*: with EC@15-from-plates unable to serve as a
+  denominator, the approximate cross-check is EC@10/s **from ore**
+  (236 entities, 34×18 = 612 bbox tiles; approximate — different
+  input chain). And the sell is reframed: **cells win on warnings,
+  not area** — engine EC configs carry 4+ residual warnings
+  (inserter/demand-pull classes); a sim-verified cell carries zero by
+  construction. That is the Phase-1 reviewer's headline metric.
+- *F4 hardened*: the sideload prohibition is a **contract invariant**,
+  not a walker-compatibility note — sideloading silently turns a
+  `lanes: 2` promise into a `lanes: 1` reality with no detectable
+  contract violation; a corridor router adding a sideload shortcut
+  "because it fits" would be invisible until sim measurement. Ports
+  are lane-counted; sideloading violates the count. (That it also
+  trips the post-RFC-047 walker is defense-in-depth, not the reason.)
+- *F5 clarified*: the 11-wide estimate assumes one 3-machine
+  single-input row, which the existing engine templates DO emit
+  natively (row templates take a machine count and stamp per-machine
+  positions at 3-tile pitch; the placer's `max_per_row` governs the
+  split) — so the reuse path (F3, engine-as-cell-generator) covers it
+  without a new composite template. What Phase 1 must still verify:
+  the CROPPED row keeps its shared input-belt geometry intact at cell
+  boundaries (the belt stubs at the crop line become the port tiles).
+- *Phase-1 gate addition*: the second sim-verified catalog entry must
+  be a **fluid consumer** (plastic-bar class) — the harness's fluid
+  boundaries are uncalibrated, and catalog time is the right forcing
+  function; success converts Phase 2's fluids question from
+  blocked-on-calibration to integration.
+
 **Go/no-go: GO for Phase 1** (catalog + stamper + manual composition
 harness behind a test-only flag), with the corrected ratio, the
 lane-aware port contract, and sim-verification of the first two catalog
@@ -253,6 +285,13 @@ entries as the Phase 1 gate.
 
 ## Decision log
 
+- *2026-07-22 — PR #359 review folded (5 observations, verdict "Ship
+  it"): old-design area numbers discarded; EC@10-from-ore added as the
+  approximate comparator with the warnings-not-area reframing; the
+  sideload prohibition promoted to a contract invariant; the
+  multi-machine-row width accounting clarified (native template
+  capability; crop-boundary belt-stub question assigned to Phase 1);
+  fluid-consumer second catalog entry added to the Phase-1 gate.*
 - *2026-07-22 — Phase 0 executed by the picking-up session (see
   findings above): ratio-cell math corrected (F1, solver-falsified),
   comparators frozen incl. the EC@15 honest-refusal discovery (F2 —
