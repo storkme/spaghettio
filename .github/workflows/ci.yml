@@ -34,6 +34,30 @@ jobs:
             web:
               - 'web/**'
 
+  workflow-guard:
+    # The review bot has been silently broken four separate times (#327,
+    # #329, #331, #367 — the last by /install-github-app overwriting the
+    # workflow with the stock template). Each piece below is load-bearing
+    # and its absence produces a GREEN check with no review posted, so
+    # this guard is the only loud failure mode. See CLAUDE.md "Workflow".
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assert review-bot workflow keeps its load-bearing pieces
+        run: |
+          fail=0
+          f=.github/workflows/claude-code-review.yml
+          grep -q 'pull-requests: write' "$f" || { echo "::error file=$f::missing 'pull-requests: write' — review posting silently discarded (#327)"; fail=1; }
+          grep -q 'issues: write' "$f" || { echo "::error file=$f::missing 'issues: write' — review posting silently discarded (#327)"; fail=1; }
+          grep -q -- "--comment'" "$f" || { echo "::error file=$f::prompt missing --comment — plugin contract is 'do not post' without it (#329)"; fail=1; }
+          grep -q -- '--allowedTools' "$f" || { echo "::error file=$f::claude_args missing --allowedTools — every posting/diff call denied (#331)"; fail=1; }
+          g=.github/workflows/claude.yml
+          grep -q 'github.event.sender.login == github.repository_owner' "$g" || { echo "::error file=$g::missing owner-only sender gate — public repo, outsiders can burn tokens via @claude"; fail=1; }
+          if [ "$fail" -eq 1 ]; then
+            echo "::error::A Claude workflow lost required customizations — likely a stock-template overwrite (e.g. /install-github-app, see #367). Restore per CLAUDE.md before merging."
+          fi
+          exit "$fail"
+
   rust:
     needs: changes
     if: always() && needs.changes.outputs.rust == 'true'
