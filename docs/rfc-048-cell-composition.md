@@ -289,6 +289,22 @@ entries as the Phase 1 gate.
 
 ## Decision log
 
+- *2026-07-22 — FIRST COMPOSED PAIR VALIDATES AT 0 ERRORS (milestone).
+  One ratio pair (cable cell + corridor + EC cell, 29×14, 114
+  entities): external feeds attach at port terminals, the EC iron feed
+  UG-hops under the cable cell (express reach 8 = the cell width,
+  exactly), the two cable outs merge via a single 2→1 fast-splitter,
+  and the EC out extends to the boundary. Composer bugs found and
+  fixed en route: ports must carry terminal X (multi-row interiors
+  have per-row widths), splitters are ONE entity, feeds may not cross
+  cell footprints (UG weaving is the corridor form for that).
+  Residual: 2 warnings INHERITED from the engine-generated EC row
+  (iron input inserter-attribution, the pre-existing #65-class) — an
+  honest wrinkle for the "zero warnings" gate: generated cells inherit
+  generation-time residuals. Disposition deferred to the sim step —
+  measured delivery adjudicates whether the attribution warning is
+  real (RFC-050's purpose); the gate reading of "0 warnings" will be
+  resolved honestly against that evidence, not by quietly re-wording.*
 - *2026-07-22 — Extraction probe: EC cell extracts CLEAN (8×8, 32
   entities, 3 ports — iron/cable W-in at y=0/1, EC E-out at y=7,
   midpoint bridge intact). Cable@15 extracts as TWO internal rows (the
