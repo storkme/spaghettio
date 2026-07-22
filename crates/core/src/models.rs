@@ -139,6 +139,21 @@ pub struct ModuleItem {
     pub quality: Option<crate::common::QualityTier>,
 }
 
+/// One layout boundary point (RFC-050): where an external item enters or
+/// the target item exits, with the entity that sits there.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BoundaryRecord {
+    pub item: String,
+    pub x: i32,
+    pub y: i32,
+    pub direction: EntityDirection,
+    pub is_fluid: bool,
+    /// Entity prototype at the boundary tile (belt tier or pipe).
+    pub entity: String,
+}
+
 /// A single entity placed in the blueprint grid.
 ///
 /// Represents any game entity (belt, inserter, machine, pipe, pole, etc.) at a
@@ -162,7 +177,12 @@ pub struct PlacedEntity {
     /// Recipe assigned to crafting machines (`None` for belts, inserters, etc.).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recipe: Option<String>,
-    /// I/O role tag for bus entities: `"input"`, `"output"`, or `"passthrough"`.
+    /// Underground-belt half marker (`"input"` = entrance, `"output"` =
+    /// exit) — serialized as the Factorio blueprint `type` field. Set
+    /// ONLY on UG pairs (trunk renderer, ghost router, balancer library,
+    /// merger hops); despite the old docstring, it never tagged bus
+    /// boundary belts and `"passthrough"` was never assigned (RFC-050
+    /// review finding — the false claim it seeded cost a design cycle).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub io_type: Option<String>,
     /// Item or fluid name this belt/pipe is currently carrying.
@@ -345,6 +365,17 @@ pub struct LayoutResult {
     /// surplus. Populated by the bus pipeline regardless of tracing.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub surplus_exits: Vec<(String, i32, i32)>,
+    /// External-input entry points (RFC-050 Phase 0): one record per bus
+    /// lane with no producer row — the tile where the outside world must
+    /// deliver that item. Emitted by the engine from lane-planner
+    /// knowledge; heuristic reconstruction from the artifact was
+    /// falsified three ways (RFC-050 rev 2 decision log).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub boundary_inputs: Vec<BoundaryRecord>,
+    /// Target-item exit points (RFC-050 Phase 0): the merger-tail sink
+    /// belts where finished product leaves the layout.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub boundary_outputs: Vec<BoundaryRecord>,
     /// Solid surplus streams consumed by a synthesized voider row under
     /// `SurplusPolicy::Void` (RFC Fulgora Phase 2,
     /// `docs/rfc-fulgora-scrap.md` D1) — first-class, trace-independent,
@@ -389,6 +420,17 @@ pub struct LayoutResult {
     /// missing to 1, so pre-RFC snapshots deserialize unstacked.
     #[serde(default = "stacking_default", skip_serializing_if = "stacking_is_default")]
     pub stacking: u8,
+    /// Inserter-capacity research level this layout was planned at
+    /// (RFC-049, I8b): 0 = unresearched (default, bit-identical to
+    /// pre-RFC — kill 1), 1..=7 per the pinned schedule. Serde skips 0
+    /// and defaults missing to 0, so pre-RFC snapshots deserialize
+    /// unresearched; consumers clamp via `common::inserter_hand`.
+    #[serde(default, skip_serializing_if = "u8_is_zero")]
+    pub inserter_capacity: u8,
+}
+
+fn u8_is_zero(v: &u8) -> bool {
+    *v == 0
 }
 
 fn wire_mode_is_default(m: &crate::power_wires::WireMode) -> bool {

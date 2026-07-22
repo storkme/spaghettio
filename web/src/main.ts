@@ -21,6 +21,8 @@ import { renderValidationOverlay } from "./renderer/validationOverlay";
 import { renderStarvationHeatmap } from "./renderer/heatmapOverlay";
 import { renderPowerWiresOverlay } from "./renderer/powerWiresOverlay";
 import { renderModuleSlotsOverlay } from "./renderer/moduleSlotsOverlay";
+import { renderSimStateOverlay } from "./renderer/simStateOverlay";
+import { createSimReportPanel } from "./ui/simReportPanel";
 import { renderRegionOverlayDetailed, type RegionOverlayItem } from "./renderer/regionOverlay";
 import { renderJunctionZoneOverlay } from "./renderer/junctionZoneOverlay";
 import { createSatZoneOverlay } from "./renderer/satZoneOverlay";
@@ -128,8 +130,16 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
 
   // --- Modules ---
   const overlayControls = createOverlayPanel(container);
-  const { debugCb, colorCb, heatmapCb, powerWiresCb, moduleSlotsCb, regionsCb, soloRegionsCb, ghostTilesCb, traceOverlayCb } = overlayControls;
+  const { debugCb, colorCb, heatmapCb, powerWiresCb, moduleSlotsCb, regionsCb, soloRegionsCb, ghostTilesCb, traceOverlayCb, simReportFileInput, simStateCb } = overlayControls;
   const retryPanel = createRetryPanel(container);
+  // Sim report verdict banner + legend (RFC-050 Phase 4). onChange fires
+  // after every load/clear (including failed parses, with `null`): gate
+  // the otherwise-inert `sim-state` toggle on whether there's anything
+  // to show, and repaint the overlay either way.
+  const simReportPanel = createSimReportPanel(container, () => {
+    simStateCb.disabled = !simReportPanel.getReport();
+    updateSimStateOverlay();
+  });
   // Sync the item-coloring flag with the persisted checkbox state so
   // a user who turned colours off stays off across reloads.
   setItemColoring(colorCb.checked);
@@ -492,6 +502,7 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
   let lastHeatmapIssues: ValidationIssue[] = [];
   let powerWiresLayer: Container | null = null;
   let moduleSlotsLayer: Container | null = null;
+  let simStateLayer: Container | null = null;
   let lastTileCtx: TileContext | null = null;
   let validationInFlightFor: LayoutResult | null = null;
 
@@ -702,6 +713,28 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     requestRender();
   }
 
+  /** Sim-state overlay (RFC-050 Phase 4): tint machines/belts/inserters
+   *  from the loaded `spaghettio-sim` report. Rebuilt whenever a layout
+   *  lands, the toggle changes, or a report loads/clears — same shape
+   *  as `updatePowerWiresOverlay`. Gated on `lastLayout` existing (there
+   *  has to be something to overlay onto) but NOT on the mismatch guard
+   *  in `simReportPanel` — per RFC-050 Phase 4 deliverable D, a
+   *  dimension mismatch is a warning, not a render-blocker. */
+  function updateSimStateOverlay(): void {
+    if (simStateLayer) {
+      entityLayer.removeChild(simStateLayer);
+      simStateLayer.destroy({ children: true });
+      simStateLayer = null;
+    }
+    const report = simReportPanel.getReport();
+    if (!simStateCb.checked || !report || !lastLayout) {
+      requestRender();
+      return;
+    }
+    simStateLayer = renderSimStateOverlay(report.sim_state, entityLayer);
+    requestRender();
+  }
+
   function updateGhostTilesOverlay(): void {
     if (ghostTilesLayer) {
       viewport.removeChild(ghostTilesLayer);
@@ -833,6 +866,12 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
       updateValidationBadge(null);
       sidebarCtrl?.updateValidation([], panToTile);
       junctionDebugger.close();
+      // Sim report stays loaded across a snapshot clear (it's an
+      // independent artifact) — just drop the layout-size fact the
+      // mismatch guard was comparing against, and let the entityLayer
+      // wipe above take the overlay's Graphics with it.
+      simReportPanel.setLayoutInfo(null);
+      simStateLayer = null;
     },
   });
 
@@ -1336,6 +1375,8 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     updateGhostTilesOverlay();
     updatePowerWiresOverlay();
     updateModuleSlotsOverlay();
+    simReportPanel.setLayoutInfo({ entities: layout.entities?.length ?? 0 });
+    updateSimStateOverlay();
     // External-input trunk labels (issue #196). Rebuilt on every layout
     // commit. Skips when there's no SolverResult — corpus / snapshot
     // load paths arrive without one and we don't fabricate labels there.
@@ -1493,6 +1534,21 @@ async function initGenerator(engine: ReturnType<typeof getEngine>): Promise<void
     });
     moduleSlotsCb.addEventListener("change", () => {
       updateModuleSlotsOverlay();
+    });
+    simStateCb.addEventListener("change", () => {
+      updateSimStateOverlay();
+    });
+    simReportFileInput.addEventListener("change", () => {
+      const file = simReportFileInput.files?.[0];
+      // Allow re-selecting the same filename to reload it.
+      simReportFileInput.value = "";
+      if (!file) return;
+      file
+        .text()
+        .then((text) => simReportPanel.loadFromText(text))
+        .catch((err) => {
+          alert(`Failed to read sim report: ${err}`);
+        });
     });
     regionsCb.addEventListener("change", () => {
       updateRegionOverlay();

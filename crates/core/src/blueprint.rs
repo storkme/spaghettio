@@ -113,6 +113,58 @@ struct BlueprintWrapper<'a> {
     blueprint: Blueprint<'a>,
 }
 
+/// [`export`] plus the RFC-050 verification manifest: everything the
+/// simulation harness needs to feed, drain, and judge the factory —
+/// boundary records (engine-emitted, never reconstructed from the
+/// artifact), per-item planned rates from the solver, the layout bbox
+/// origin for world-offset anchoring, and surplus exits for fluid
+/// voiding. Returns `(blueprint_string, manifest_json)`.
+pub fn export_with_manifest(
+    layout: &LayoutResult,
+    solver: &crate::models::SolverResult,
+    label: &str,
+) -> (String, serde_json::Value) {
+    let bp = export(layout, label);
+    let bbox_min_x = layout.entities.iter().map(|e| e.x).min().unwrap_or(0);
+    let bbox_min_y = layout.entities.iter().map(|e| e.y).min().unwrap_or(0);
+    let mut planned: std::collections::BTreeMap<&str, f64> = Default::default();
+    for m in &solver.machines {
+        for o in &m.outputs {
+            *planned.entry(o.item.as_str()).or_default() += o.rate * m.count;
+        }
+    }
+    let boundary = |r: &crate::models::BoundaryRecord| {
+        serde_json::json!({
+            "item": r.item, "x": r.x, "y": r.y,
+            "direction": r.direction as u8,
+            "is_fluid": r.is_fluid, "entity": r.entity,
+        })
+    };
+    let manifest = serde_json::json!({
+        "label": label,
+        "targets": solver
+            .external_outputs
+            .iter()
+            .map(|o| serde_json::json!({"item": o.item, "rate": o.rate}))
+            .collect::<Vec<_>>(),
+        "external_inputs": solver
+            .external_inputs
+            .iter()
+            .map(|i| serde_json::json!({"item": i.item, "rate": i.rate, "is_fluid": i.is_fluid}))
+            .collect::<Vec<_>>(),
+        "planned_rates": planned,
+        "boundary_inputs": layout.boundary_inputs.iter().map(boundary).collect::<Vec<_>>(),
+        "boundary_outputs": layout.boundary_outputs.iter().map(boundary).collect::<Vec<_>>(),
+        "surplus_exits": layout.surplus_exits,
+        "bbox_min": [bbox_min_x, bbox_min_y],
+        "dims": [layout.width, layout.height],
+        "entities": layout.entities.len(),
+        "stacking": layout.stacking,
+        "inserter_capacity": layout.inserter_capacity,
+    });
+    (bp, manifest)
+}
+
 /// Convert a `LayoutResult` into an importable Factorio blueprint string.
 pub fn export(layout: &LayoutResult, label: &str) -> String {
     let entities: Vec<BlueprintEntity> = layout
@@ -150,13 +202,35 @@ pub fn export(layout: &LayoutResult, label: &str) -> String {
                     // Footprint center from the shared `entity_size` (RFC
                     // Phase 3a-i): a 2×2 substation exports at x+1.0, not the
                     // x+0.5 the old machine-only lookup produced.
-                    let (w, h) = crate::common::entity_size(&ent.name);
+                    //
+                    // Splitters are direction-dependent (2 wide perpendicular
+                    // to flow) and `entity_size` is direction-blind (1×1
+                    // fallback) — without this arm every exported splitter
+                    // sat half a tile off, the game snapped the ghost to an
+                    // adjacent column, and belt connectivity silently broke
+                    // in-game (found by the RFC-050 harness: the gear
+                    // fixture's merger splitter buffered 56 items into a
+                    // void). The shared `oriented_splitter_dims` covers the
+                    // exact 2-wide family — NOT `lane-splitter`, which is
+                    // 1×1 despite the name (PR #350 review).
+                    let (w, h) = crate::common::oriented_splitter_dims(&ent.name, ent.direction)
+                        .unwrap_or_else(|| crate::common::entity_size(&ent.name));
                     Position {
                         x: ent.x as f64 + w as f64 / 2.0,
                         y: ent.y as f64 + h as f64 / 2.0,
                     }
                 },
-                direction: ent.direction as u8,
+                // GAME QUIRK (found by the RFC-050 harness, 2026-07-22):
+                // Factorio reads an INSERTER's direction as its PICKUP
+                // side ("inserters point backwards"), while the engine's
+                // convention is drop-side. Flip 180° at the artifact
+                // boundary — the parser un-flips on import — or every
+                // exported inserter runs backwards in-game.
+                direction: if ent.name.contains("inserter") {
+                    (ent.direction as u8 + 8) % 16
+                } else {
+                    ent.direction as u8
+                },
                 recipe: ent.recipe.as_deref(),
                 io_type: ent.io_type.as_deref(),
                 mirror: ent.mirror,
@@ -260,6 +334,40 @@ mod tests {
     use std::io::Read;
 
     #[test]
+    fn manifest_boundaries_match_real_layout() {
+        // RFC-050 Phase 0: the engine's boundary records for the tier-1
+        // gear fixture must name the same trunk heads and merger exit
+        // the calibrated harness dogfood found empirically (heads at
+        // layout x=1,2 y=0 southbound; one merger sink).
+        use rustc_hash::FxHashSet;
+        let inputs: FxHashSet<String> = ["iron-ore"].iter().map(|s| s.to_string()).collect();
+        let solved = crate::solver::solve("iron-gear-wheel", 10.0, &inputs, "assembling-machine-3")
+            .expect("solve");
+        let layout = crate::bus::layout::build_bus_layout(
+            &solved,
+            crate::bus::layout::LayoutOptions {
+                max_belt_tier: Some("transport-belt".into()),
+                ..Default::default()
+            },
+        )
+        .expect("layout");
+        let (_bp, manifest) = export_with_manifest(&layout, &solved, "gear");
+
+        let feeds = manifest["boundary_inputs"].as_array().unwrap();
+        assert_eq!(feeds.len(), 2, "two external iron-ore lanes: {feeds:?}");
+        for f in feeds {
+            assert_eq!(f["item"], "iron-ore");
+            assert_eq!(f["y"], 0);
+            assert_eq!(f["direction"], 8, "trunk heads flow south");
+        }
+        let exits = manifest["boundary_outputs"].as_array().unwrap();
+        assert_eq!(exits.len(), 1, "one merger sink: {exits:?}");
+        assert_eq!(exits[0]["item"], "iron-gear-wheel");
+        assert_eq!(manifest["planned_rates"]["iron-gear-wheel"].as_f64().unwrap().round(), 10.0);
+        assert_eq!(manifest["bbox_min"][0], 1, "leftmost entity is the x=1 trunk head");
+    }
+
+    #[test]
     fn round_trip_small_fixture() {
         let layout = LayoutResult {
             entities: vec![
@@ -322,6 +430,144 @@ mod tests {
         assert!(ents[0].get("mirror").is_none());
         // recipe should be absent for belt
         assert!(ents[1].get("recipe").is_none());
+    }
+
+    /// Splitters are 2 tiles wide PERPENDICULAR to flow; the exporter's
+    /// center math must be direction-aware or every splitter sits half a
+    /// tile off and the game snaps it into the wrong column, silently
+    /// severing belt connectivity (found by the RFC-050 harness: the
+    /// gear fixture's merger splitter buffered items into a void; the
+    /// #345 fixture's balancers are full of these).
+    #[test]
+    fn splitter_export_center_is_direction_aware() {
+        for (dir, cx, cy) in [
+            (EntityDirection::South, 6.0, 3.5), // 2 wide, 1 tall
+            (EntityDirection::North, 6.0, 3.5),
+            (EntityDirection::East, 5.5, 4.0), // 1 wide, 2 tall
+            (EntityDirection::West, 5.5, 4.0),
+        ] {
+            let layout = LayoutResult {
+                entities: vec![PlacedEntity {
+                    name: "express-splitter".into(),
+                    x: 5,
+                    y: 3,
+                    direction: dir,
+                    ..Default::default()
+                }],
+                width: 8,
+                height: 6,
+                ..Default::default()
+            };
+            let bp = decode_blueprint(&export(&layout, "split"));
+            assert_eq!(bp["entities"][0]["position"]["x"], cx, "{dir:?}");
+            assert_eq!(bp["entities"][0]["position"]["y"], cy, "{dir:?}");
+        }
+    }
+
+    /// PR #350 review: the 2-wide family is exactly {splitter, fast-,
+    /// express-, turbo-}; `lane-splitter` is 1×1 despite the name and
+    /// must NOT be widened.
+    #[test]
+    fn splitter_family_subset_is_exact() {
+        let layout = LayoutResult {
+            entities: vec![
+                PlacedEntity {
+                    name: "turbo-splitter".into(),
+                    x: 0,
+                    y: 0,
+                    direction: EntityDirection::South,
+                    ..Default::default()
+                },
+                PlacedEntity {
+                    name: "lane-splitter".into(),
+                    x: 4,
+                    y: 0,
+                    direction: EntityDirection::South,
+                    ..Default::default()
+                },
+            ],
+            width: 6,
+            height: 2,
+            ..Default::default()
+        };
+        let bp = decode_blueprint(&export(&layout, "fam"));
+        // turbo: 2-wide → integer center on x.
+        assert_eq!(bp["entities"][0]["position"]["x"], 1.0);
+        assert_eq!(bp["entities"][0]["position"]["y"], 0.5);
+        // lane-splitter: 1×1 → half centers on both axes.
+        assert_eq!(bp["entities"][1]["position"]["x"], 4.5);
+        assert_eq!(bp["entities"][1]["position"]["y"], 0.5);
+    }
+
+    /// Factorio reads an inserter's `direction` as its PICKUP side
+    /// ("inserters point backwards" — found by the RFC-050 harness when
+    /// every exported factory deadlocked in-sim: input inserters pulled
+    /// from empty machines, outputs from empty belts). The engine's
+    /// convention is drop-side, so export must flip 180° and ONLY for
+    /// inserters.
+    #[test]
+    fn inserter_directions_flip_to_game_convention() {
+        let layout = LayoutResult {
+            entities: vec![
+                PlacedEntity {
+                    name: "stack-inserter".into(),
+                    x: 0,
+                    y: 0,
+                    direction: EntityDirection::South,
+                    ..Default::default()
+                },
+                PlacedEntity {
+                    name: "long-handed-inserter".into(),
+                    x: 2,
+                    y: 0,
+                    direction: EntityDirection::North,
+                    ..Default::default()
+                },
+                PlacedEntity {
+                    name: "transport-belt".into(),
+                    x: 4,
+                    y: 0,
+                    direction: EntityDirection::South,
+                    ..Default::default()
+                },
+            ],
+            width: 5,
+            height: 1,
+            ..Default::default()
+        };
+        let bp = decode_blueprint(&export(&layout, "dirflip"));
+        let ents = bp["entities"].as_array().unwrap();
+        // Engine South (8) exports as game North (0) for inserters…
+        assert_eq!(ents[0]["direction"], 0);
+        // …engine North (0) as game South (8)…
+        assert_eq!(ents[1]["direction"], 8);
+        // …and non-inserters are untouched.
+        assert_eq!(ents[2]["direction"], 8);
+    }
+
+    /// The parser applies the inverse flip so imported game-convention
+    /// inserters read correctly under engine semantics, and round-trips
+    /// are identity.
+    #[test]
+    fn inserter_direction_round_trip_is_identity() {
+        let layout = LayoutResult {
+            entities: vec![PlacedEntity {
+                name: "fast-inserter".into(),
+                x: 0,
+                y: 0,
+                direction: EntityDirection::East,
+                ..Default::default()
+            }],
+            width: 1,
+            height: 1,
+            ..Default::default()
+        };
+        let s = export(&layout, "rt");
+        // Artifact carries the game convention (East 4 → West 12)…
+        assert_eq!(decode_blueprint(&s)["entities"][0]["direction"], 12);
+        // …and parsing restores the engine convention.
+        let parsed = crate::blueprint_parser::parse_blueprint_string(&s).unwrap();
+        assert_eq!(parsed.entities[0].direction, EntityDirection::East);
     }
 
     /// The exported module encoding must match the game's own emission

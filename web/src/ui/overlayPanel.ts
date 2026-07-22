@@ -13,6 +13,11 @@ export interface OverlayPanelControls {
   soloRegionsCb: HTMLInputElement;
   ghostTilesCb: HTMLInputElement;
   traceOverlayCb: HTMLInputElement;
+  /** Sim-state overlay (RFC-050 Phase 4). Hidden file input behind the
+   *  "Load sim report…" button; `simStateCb` starts disabled — there's
+   *  nothing to show until a report loads (see `main.ts` wiring). */
+  simReportFileInput: HTMLInputElement;
+  simStateCb: HTMLInputElement;
 }
 
 function makeToggle(parent: HTMLElement, label: string, checked = false): HTMLInputElement {
@@ -46,6 +51,32 @@ export function createOverlayPanel(container: HTMLElement): OverlayPanelControls
   // (RFC-044 Phase 2). Default on — quiet on generated layouts since
   // nothing stamps modules yet; imported blueprints are today's data.
   const moduleSlotsCb = makeToggle(panel, "Module slots", state.moduleSlots);
+
+  // Sim-state overlay (RFC-050 Phase 4): a "Load sim report…" button
+  // (hidden file input, triggered by click — same one-button-drives-a-
+  // hidden-input shape as the Ctrl+O snapshot loader in `main.ts`) plus
+  // the toggle. The load affordance lives right above the toggle since
+  // the checkbox does nothing without a report loaded; `main.ts` starts
+  // it `disabled` and flips that on report load/clear.
+  const simReportRow = document.createElement("div");
+  simReportRow.className = "overlay-sim-report-row";
+  const simReportBtn = document.createElement("button");
+  simReportBtn.type = "button";
+  simReportBtn.textContent = "Load sim report…";
+  simReportBtn.className = "overlay-sim-report-btn";
+  const simReportFileInput = document.createElement("input");
+  simReportFileInput.type = "file";
+  simReportFileInput.accept = ".json,application/json";
+  simReportFileInput.style.display = "none";
+  simReportBtn.addEventListener("click", () => simReportFileInput.click());
+  simReportRow.appendChild(simReportBtn);
+  simReportRow.appendChild(simReportFileInput);
+  panel.appendChild(simReportRow);
+
+  const simStateCb = makeToggle(panel, "Sim state", state.simState);
+  // Nothing to overlay until a report is loaded — `main.ts` re-enables
+  // this once `simReportPanel`'s onChange fires with a report.
+  simStateCb.disabled = true;
 
   const subPanel = document.createElement("div");
   subPanel.className = "overlay-sub-panel";
@@ -90,6 +121,9 @@ export function createOverlayPanel(container: HTMLElement): OverlayPanelControls
   moduleSlotsCb.addEventListener("change", () => {
     debugState.set({ moduleSlots: moduleSlotsCb.checked });
   });
+  simStateCb.addEventListener("change", () => {
+    debugState.set({ simState: simStateCb.checked });
+  });
 
   return {
     setDebugEnabled(on: boolean): void {
@@ -106,5 +140,7 @@ export function createOverlayPanel(container: HTMLElement): OverlayPanelControls
     soloRegionsCb,
     ghostTilesCb,
     traceOverlayCb,
+    simReportFileInput,
+    simStateCb,
   };
 }

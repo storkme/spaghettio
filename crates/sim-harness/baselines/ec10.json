@@ -1,0 +1,22 @@
+{
+  "label": "ec10",
+  "game_version": "2.0.76",
+  "mods": [
+    "base",
+    "space-age",
+    "quality",
+    "elevated-rails"
+  ],
+  "tech_state": "research_all_technologies",
+  "entities": 805,
+  "produced": {
+    "copper-cable": 15.6,
+    "copper-plate": 15.0,
+    "electronic-circuit": 5.0,
+    "iron-plate": 5.65
+  },
+  "delivered": {
+    "electronic-circuit": 4.8
+  },
+  "overall_verdict": "FAIL"
+}

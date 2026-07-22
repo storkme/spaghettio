@@ -1,0 +1,26 @@
+{
+  "label": "logistic-science-pack",
+  "game_version": "2.0.76",
+  "mods": [
+    "base",
+    "space-age",
+    "quality",
+    "elevated-rails"
+  ],
+  "tech_state": "research_all_technologies",
+  "entities": 593,
+  "produced": {
+    "copper-cable": 1.6,
+    "copper-plate": 0.65,
+    "electronic-circuit": 0.4,
+    "inserter": 0.45,
+    "iron-gear-wheel": 1.1,
+    "iron-plate": 2.95,
+    "logistic-science-pack": 0.5966666666666667,
+    "transport-belt": 0.6
+  },
+  "delivered": {
+    "logistic-science-pack": 0.5866666666666667
+  },
+  "overall_verdict": "FAIL"
+}

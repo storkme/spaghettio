@@ -27,7 +27,7 @@ If any required param is missing, ask the user.
 
 Pick a **fixture slug** from the params. Convention:
 `tier<N>_<item_snake>_<variant>` where N is the complexity tier (see
-`CLAUDE.md`'s ladder) and the variant encodes what's distinctive —
+the ladder in `docs/status.md`) and the variant encodes what's distinctive —
 `_from_ore_am1`, `_20s_from_ore`, etc. Match the naming style of existing
 tests in `crates/core/tests/e2e.rs`. If unsure, grep for sibling tests and
 follow their convention.
@@ -122,7 +122,7 @@ open a task with `TaskCreate`:
 - subject: `Fix <fixture_slug>`
 - description: one-paragraph summary of the failure mode (error count by
   category, notable coordinates, snapshot path). Mention any prior related
-  issues if obvious (search `CLAUDE.md`'s tier ladder for linked GH issues
+  issues if obvious (search the tier ladder in `docs/status.md` for linked GH issues
   on the same recipe).
 
 ### 6. Report back

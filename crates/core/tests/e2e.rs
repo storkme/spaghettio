@@ -315,6 +315,7 @@ fn run_e2e_inner(
             wire_mode: Default::default(),
             merge_tap: false,
             stacking: 1,
+            inserter_capacity: 0,
         },
     )
         .map_err(|e| {
@@ -1755,6 +1756,7 @@ fn tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing() {
             wire_mode: Default::default(),
             merge_tap: false,
             stacking: 1,
+            inserter_capacity: 0,
         },
     )
     .unwrap_or_else(|e| panic!("{test_name}: layout: {e}"));
@@ -1903,6 +1905,7 @@ fn tier5_processing_unit_2s_horizontal_stack_iron_ore_pipe_bypass() {
             wire_mode: Default::default(),
             merge_tap: false,
             stacking: 1,
+            inserter_capacity: 0,
         },
     )
     .unwrap_or_else(|e| panic!("{test_name}: layout: {e}"));
@@ -2012,6 +2015,7 @@ fn tier5_processing_unit_25s_horizontal_stack_pole_coverage() {
             wire_mode: Default::default(),
             merge_tap: false,
             stacking: 1,
+            inserter_capacity: 0,
         },
     )
     .unwrap_or_else(|e| panic!("{test_name}: layout: {e}"));
@@ -7030,6 +7034,7 @@ fn quality_differential_ec_normal_vs_legendary() {
                 wire_mode: Default::default(),
                 merge_tap: false,
                 stacking: 1,
+                inserter_capacity: 0,
             },
         )
         .unwrap_or_else(|e| panic!("{quality:?} layout: {e}"));
@@ -7108,8 +7113,9 @@ fn quality_differential_ec_normal_vs_legendary() {
 /// blue belt, 45/s, until #311 closes — the 60/s headline re-lands
 /// after). EC from ore on express at Legendary: ~92 machines vs ~230 at
 /// Normal. 0 errors; the single warning is the known pre-existing
-/// input-rate-delivery demand-pull residual (same category CLAUDE.md
-/// documents on tier-4), pinned exactly so churn fails loudly. Kill 3
+/// input-rate-delivery demand-pull residual (same category the tier-4
+/// row in docs/status.md documents), pinned exactly so churn fails
+/// loudly. Kill 3
 /// check: no inserter-throughput warnings — every legendary side fits
 /// one column as predicted (tightest: cable 18.75/s vs legendary stack
 /// ~30/s).
@@ -7152,6 +7158,7 @@ fn quality_ec_45s_express_legendary_from_ore() {
             wire_mode: Default::default(),
             merge_tap: false,
             stacking: 1,
+            inserter_capacity: 0,
         },
     )
     .unwrap_or_else(|e| panic!("layout: {e}"));
@@ -7241,6 +7248,7 @@ fn quality_differential_kovarex_self_loop_normal_vs_legendary() {
                 wire_mode: Default::default(),
                 merge_tap: false,
                 stacking: 1,
+                inserter_capacity: 0,
             },
         )
         .unwrap_or_else(|e| panic!("{quality:?} layout: {e}"));
@@ -7379,6 +7387,7 @@ fn quality_ec_45s_legendary_tree_wire_differential() {
             wire_mode: WireMode::Tree,
             merge_tap: false,
             stacking: 1,
+            inserter_capacity: 0,
         },
     )
     .unwrap_or_else(|e| panic!("layout: {e}"));
@@ -7456,6 +7465,7 @@ fn stacking_ec_60s_red_one_belt_headline() {
                 wire_mode: Default::default(),
                 merge_tap: false,
                 stacking,
+                inserter_capacity: 0,
             },
         )
         .unwrap_or_else(|e| panic!("S={stacking} layout: {e}"));
@@ -7569,6 +7579,7 @@ fn stacking_fanin_wall_lift_ec6_yellow_legendary() {
         wire_mode: Default::default(),
         merge_tap: false,
         stacking,
+        inserter_capacity: 0,
     };
 
     // S=1: the fan-in wall holds — 25/s cable > 15/s full yellow.
@@ -7654,6 +7665,7 @@ fn stacking_refuses_low_inserter_cap() {
             wire_mode: Default::default(),
             merge_tap: false,
             stacking: 2,
+            inserter_capacity: 0,
         },
     )
     .expect_err("stacking=2 with max_inserter_tier=Fast must refuse");
@@ -7701,6 +7713,7 @@ fn stacking_kovarex_family_exempt_s2() {
                 wire_mode: Default::default(),
                 merge_tap: false,
                 stacking,
+                inserter_capacity: 0,
             },
         )
         .unwrap_or_else(|e| panic!("S={stacking} layout: {e}"));
@@ -7767,6 +7780,7 @@ fn stacking_ec_60s_express_legendary_s2() {
             wire_mode: Default::default(),
             merge_tap: false,
             stacking: 2,
+            inserter_capacity: 0,
         },
     )
     .unwrap_or_else(|e| panic!("layout: {e}"));
@@ -7799,5 +7813,82 @@ fn stacking_ec_60s_express_legendary_s2() {
     assert!(
         max_seen > 45.0,
         "no belt above unstacked express capacity (max {max_seen}) — stacked credit never engaged"
+    );
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// RFC-049 inserter-capacity research — differential fixtures
+// (docs/rfc-049-inserter-capacity-research.md)
+// ═════════════════════════════════════════════════════════════════════════
+
+/// RFC-049 headline differential: at S=4 a stack inserter belt-drops the
+/// researched hand rounded down to a multiple of 4 — 9.6/s at L0 (hand 6→4)
+/// but 38.4/s at L7 (hand 16, dip-free since 16 ≡ 0 mod 4). So the SAME
+/// layout at max research places far fewer OUTPUT stack inserters than at
+/// zero research, at identical throughput.
+///
+/// Config: hazard-concrete @ 60/s on assembling-machine-1 (per-machine
+/// output 40 × 0.5 = 20/s — deliberately above the 9.6/s L0 belt-drop rate
+/// so L0 needs multiple output inserters, but below the 38.4/s L7 rate so
+/// L7 needs one), S=4, red belts. Only the OUTPUT (belt-drop) side moves;
+/// input sides stay flat at every level (kill 2), so the whole delta is the
+/// research-scaled belt-drop hand.
+#[test]
+fn research_l7_thins_output_inserters_s4() {
+    use spaghettio_core::common::QualityTier;
+    use spaghettio_core::recipe_db::MachinePalette;
+
+    let inputs: FxHashSet<String> = ["concrete"].iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "hazard-concrete",
+        60.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-1",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap_or_else(|e| panic!("solve: {e}"));
+
+    let run = |level: u8| {
+        let layout = layout::build_bus_layout(
+            &sr,
+            layout::LayoutOptions {
+                strategy: Default::default(),
+                surplus_policy: Default::default(),
+                max_belt_tier: Some("fast-transport-belt".to_string()),
+                row_layout: Default::default(),
+                max_inserter_tier: Default::default(),
+                quality: QualityTier::Normal,
+                wire_mode: Default::default(),
+                merge_tap: false,
+                stacking: 4,
+                inserter_capacity: level,
+            },
+        )
+        .unwrap_or_else(|e| panic!("L={level} layout: {e}"));
+        // OUTPUT belt-drop stack inserters carry the recipe's output item;
+        // input inserters carry "concrete" (and are level-invariant anyway).
+        layout
+            .entities
+            .iter()
+            .filter(|e| e.name == "stack-inserter" && e.carries.as_deref() == Some("hazard-concrete"))
+            .count()
+    };
+
+    let l0 = run(0);
+    let l7 = run(7);
+    // Observed 2026-07-22: L0=9, L7=3 (3 machines × 3→1 output inserters) —
+    // a 3× thinning. The per-inserter belt-drop rate rises 9.6→38.4/s (4×),
+    // realized as 3× here because 20/s discretizes to 3 vs 1 inserters.
+    eprintln!("RFC-049 differential: output stack inserters L0={l0} L7={l7} (ratio {:.2}x)", l0 as f64 / l7.max(1) as f64);
+    assert!(l0 > 0, "L0 must place output stack inserters to have a differential");
+    assert!(
+        l7 < l0,
+        "L7 (belt-drop 38.4/s) must place FEWER output stack inserters than L0 (9.6/s): L0={l0} L7={l7}"
+    );
+    assert!(
+        l0 >= 3 * l7,
+        "the thinning must be SHARP (~3x observed): L0={l0} should be >= 3 x L7={l7}"
     );
 }

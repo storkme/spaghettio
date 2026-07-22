@@ -1,0 +1,19 @@
+{
+  "label": "gear",
+  "targets": [{"item": "iron-gear-wheel", "rate": 10.0}],
+  "external_inputs": [{"item": "iron-ore", "rate": 20.0, "is_fluid": false}],
+  "planned_rates": {"iron-gear-wheel": 10.0, "iron-ore": 20.0},
+  "boundary_inputs": [
+    {"item": "iron-ore", "x": 1, "y": 0, "direction": 8, "is_fluid": false, "entity": "transport-belt"},
+    {"item": "iron-ore", "x": 2, "y": 0, "direction": 8, "is_fluid": false, "entity": "transport-belt"}
+  ],
+  "boundary_outputs": [
+    {"item": "iron-gear-wheel", "x": 13, "y": 33, "direction": 8, "is_fluid": false, "entity": "transport-belt"}
+  ],
+  "surplus_exits": [],
+  "bbox_min": [1, 0],
+  "dims": [53, 34],
+  "entities": 428,
+  "stacking": 1,
+  "inserter_capacity": 0
+}

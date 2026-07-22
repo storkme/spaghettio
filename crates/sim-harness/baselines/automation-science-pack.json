@@ -1,0 +1,22 @@
+{
+  "label": "automation-science-pack",
+  "game_version": "2.0.76",
+  "mods": [
+    "base",
+    "space-age",
+    "quality",
+    "elevated-rails"
+  ],
+  "tech_state": "research_all_technologies",
+  "entities": 196,
+  "produced": {
+    "automation-science-pack": 1.0,
+    "copper-plate": 1.0,
+    "iron-gear-wheel": 0.8,
+    "iron-plate": 2.15
+  },
+  "delivered": {
+    "automation-science-pack": 0.96
+  },
+  "overall_verdict": "WARN"
+}
