@@ -10,8 +10,8 @@
 //! Port of `src/bus/templates.py`.
 
 use crate::bus::inserter_ladder::{
-    capped_limit, contest_favors_far, size_belt_drop_side, size_side, InserterTier, Reach,
-    SidePlan,
+    capped_limit, contest_favors_far, size_belt_drop_side, size_side, size_side_output,
+    InserterTier, Reach, SidePlan,
 };
 use crate::bus::stacking_ctx::StackingCtx;
 use crate::models::{EntityDirection, PlacedEntity};
@@ -762,9 +762,11 @@ pub fn single_input_row(
             // RFC-046: not `size_belt_drop_side` — secondary solid outputs
             // are stacking-exempt by derivation (StackingCtx: solid index
             // ≥1 ⇒ reach-2 long-handed, cannot stack), so forcing would be
-            // a no-op passthrough here anyway; keeping `size_side` states
-            // the invariant instead of hiding it.
-            let sec_plan = size_side(sec_rate, Reach::Far, 0, max_inserter_tier, quality);
+            // a no-op passthrough here anyway. RFC-049: `size_side_output`
+            // still scales the long-handed belt-drop hand with research
+            // (far ceiling 1.2→4.8/s across levels) WITHOUT stack-forcing,
+            // keeping the exemption; at level 0 it is exactly `size_side`.
+            let sec_plan = size_side_output(sec_rate, Reach::Far, 0, max_inserter_tier, quality, level);
             debug_assert_eq!(sec_plan.count, 1, "secondary output has no extra-column budget");
             entities.push(PlacedEntity {
                 name: sec_plan.entity.to_string(),
@@ -4047,6 +4049,11 @@ pub fn self_loop_row(
     max_belt_tier: Option<&str>,
     max_inserter_tier: InserterTier,
     quality: QualityTier,
+    // RFC-049 inserter-capacity research level: self-loop outputs are all
+    // stacking-exempt (class (c)), so they scale via `size_side_output`
+    // (research-scaled hand, no stack-forcing) rather than the ctx's
+    // per-item stacking.
+    level: u8,
     ctx: &StackingCtx,
 ) -> (Vec<PlacedEntity>, i32, Vec<(String, i32, i32)>) {
     use crate::bus::balancer::{splitter_for_belt, underground_for_belt};
@@ -4440,10 +4447,12 @@ pub fn self_loop_row(
     // No-minor shapes: major is uncontested (2 free columns, dx=0/dx=2).
     // Has-minor shape: major (baseline dx=1) and minor's export (baseline
     // dx=0) share the ONE remaining free tile (dx=2) — contested.
-    // RFC-046: deliberately `size_side`, not `size_belt_drop_side` — every
-    // self-loop output item is stacking-exempt by derivation (StackingCtx:
-    // the minor shares the major's lane family), so the whole family plans
-    // unstacked and forcing would be a guaranteed passthrough.
+    // RFC-046: deliberately not `size_belt_drop_side` — every self-loop
+    // output item is stacking-exempt by derivation (StackingCtx: the minor
+    // shares the major's lane family), so the whole family plans unstacked
+    // and forcing would be a guaranteed passthrough. RFC-049:
+    // `size_side_output` keeps that exemption (no stack-forcing) while
+    // scaling the belt-drop hand with research; level 0 == `size_side`.
     let minor_produced_rate = minor.map(|(_, p)| p).unwrap_or(0.0);
     for &mx in &mxs {
         if has_minor {
@@ -4452,7 +4461,7 @@ pub fn self_loop_row(
             let major_extra_dx: Vec<i32> = if minor_wins { vec![] } else { shared_dx.clone() };
             let minor_extra_dx: Vec<i32> = if minor_wins { shared_dx } else { vec![] };
 
-            let major_plan = size_side(major_produced_rate, Reach::Near, major_extra_dx.len(), max_inserter_tier, quality);
+            let major_plan = size_side_output(major_produced_rate, Reach::Near, major_extra_dx.len(), max_inserter_tier, quality, level);
             stamp_side_inserters(
                 &mut entities,
                 &major_plan,
@@ -4468,7 +4477,7 @@ pub fn self_loop_row(
             quality,
         );
 
-            let minor_plan = size_side(minor_produced_rate, Reach::Far, minor_extra_dx.len(), max_inserter_tier, quality);
+            let minor_plan = size_side_output(minor_produced_rate, Reach::Far, minor_extra_dx.len(), max_inserter_tier, quality, level);
             stamp_side_inserters(
                 &mut entities,
                 &minor_plan,
@@ -4485,7 +4494,7 @@ pub fn self_loop_row(
         );
         } else {
             let major_extra_dx = vec![0i32, 2i32];
-            let major_plan = size_side(major_produced_rate, Reach::Near, major_extra_dx.len(), max_inserter_tier, quality);
+            let major_plan = size_side_output(major_produced_rate, Reach::Near, major_extra_dx.len(), max_inserter_tier, quality, level);
             stamp_side_inserters(
                 &mut entities,
                 &major_plan,
@@ -6846,6 +6855,7 @@ mod tests {
             Some(("water", 8.0)),
             None, // max_belt_tier
             InserterTier::default(), QualityTier::Normal,
+            0,
             &StackingCtx::unstacked(),
         );
         use crate::bus::placer::RowKind;
@@ -6879,6 +6889,7 @@ mod tests {
             None,
             None,
             InserterTier::default(), QualityTier::Normal,
+            0,
             &StackingCtx::unstacked(),
         );
         // PREFIX=3 dead columns west of machine 0 -> mx0 = x_offset + 3 = 3.
@@ -6916,6 +6927,7 @@ mod tests {
             Some(("water", 8.0)),
             None,
             InserterTier::default(), QualityTier::Normal,
+            0,
             &StackingCtx::unstacked(),
         );
         let near_lhis: Vec<_> = entities
@@ -6947,6 +6959,7 @@ mod tests {
             None,
             None,
             InserterTier::default(), QualityTier::Normal,
+            0,
             &StackingCtx::unstacked(),
         );
         // dy_out_ins for the has-minor shape = dy_machine(6) + msz(3) = 9.
@@ -6993,6 +7006,7 @@ mod tests {
             Some(("water", 1.0)),
             None,
             InserterTier::default(), QualityTier::Normal,
+            0,
             &StackingCtx::unstacked(),
         );
     }

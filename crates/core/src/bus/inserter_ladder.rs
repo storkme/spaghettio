@@ -232,6 +232,34 @@ pub fn size_belt_drop_side(
     }
 }
 
+/// Size a **stacking-exempt** belt-drop OUTPUT side (RFC-049 class (c):
+/// Fulgora D2b secondary outputs, self-loop major/minor outputs — sites
+/// that deliberately stay on the flat ladder under RFC-046 because their
+/// lane family plans unstacked, so they must NOT be stack-forced).
+///
+/// The belt-drop hand still scales with inserter-capacity research (the
+/// far long-handed output ceiling rises 1→2→4; near tiers scale linearly
+/// too), so this is the cheapest-sufficient tier/count ladder at the
+/// **unstacked** belt-drop rate (`belt_drop_rate` with `stacking = 1`) —
+/// no stack-forcing, exemption intact. At `level == 0` it is bit-identical
+/// to [`size_side`] (kill 1); a stacking value is never taken because the
+/// family is exempt by construction.
+pub fn size_side_output(
+    required: f64,
+    reach: Reach,
+    position_budget: usize,
+    max_tier: InserterTier,
+    quality: QualityTier,
+    level: u8,
+) -> SidePlan {
+    if level == 0 {
+        return size_side(required, reach, position_budget, max_tier, quality);
+    }
+    size_side_rated(required, reach, position_budget, max_tier, |name| {
+        belt_drop_rate(name, quality, 1, level)
+    })
+}
+
 /// Name the binding constraint behind a CAPPED side plan (RFC
 /// validation-explainability D2 — the `limit` field of the
 /// `InserterSideCapped` trace event). Valid only when
@@ -414,6 +442,52 @@ mod tests {
             0,
         );
         assert_eq!((plan.entity, plan.count, plan.shortfall), (STACK, 1, None));
+    }
+
+    // ── size_side_output (RFC-049 class (c): stacking-exempt outputs) ────
+
+    /// Level 0 is definitionally `size_side` (kill 1) — sweep rates,
+    /// reaches, budgets, caps.
+    #[test]
+    fn size_side_output_identity_at_l0() {
+        let q = QualityTier::Normal;
+        for &required in &[0.3, 0.9, 2.5, 8.0, 13.0, 30.0] {
+            for &reach in &[Reach::Near, Reach::Far] {
+                for budget in 0..=2usize {
+                    for &cap in &[InserterTier::Regular, InserterTier::Fast, InserterTier::Stack] {
+                        assert_eq!(
+                            size_side_output(required, reach, budget, cap, q, 0),
+                            size_side(required, reach, budget, cap, q),
+                            "required={required} reach={reach:?} budget={budget} cap={cap:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// The far (long-handed) output ceiling genuinely rises with research
+    /// (hand 1→2→4): 4.0/s shortfalls on one LHI at L0 (1.2/s) but a
+    /// single LHI covers it at L7 (4.8/s) — no belt stacking involved.
+    #[test]
+    fn size_side_output_far_ceiling_rises_with_research() {
+        let q = QualityTier::Normal;
+        let l0 = size_side_output(4.0, Reach::Far, 0, InserterTier::Stack, q, 0);
+        assert_eq!(l0.entity, LONG_HANDED);
+        assert!(l0.shortfall.is_some(), "4.0/s exceeds one LHI (1.2/s) at L0");
+        let l7 = size_side_output(4.0, Reach::Far, 0, InserterTier::Stack, q, 7);
+        assert_eq!((l7.entity, l7.count, l7.shortfall), (LONG_HANDED, 1, None));
+    }
+
+    /// Exemption intact: a near output side is NEVER stack-forced (unlike
+    /// `size_belt_drop_side` at S>1) — a low rate still gets the cheapest
+    /// tier even at max research.
+    #[test]
+    fn size_side_output_near_never_forces_stack() {
+        let q = QualityTier::Normal;
+        let plan = size_side_output(0.5, Reach::Near, 0, InserterTier::Stack, q, 7);
+        assert_eq!(plan.entity, REGULAR, "0.5/s is covered by a regular inserter; exempt side must not force stack");
+        assert_eq!(plan.count, 1);
     }
 
     // ── constants identity ──────────────────────────────────────────────

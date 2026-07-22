@@ -1322,6 +1322,7 @@ pub(crate) fn build_one_row(
                 max_belt_tier,
                 max_inserter_tier,
                 quality,
+                inserter_capacity,
                 ctx,
             );
             fluid_port_ys = fluid_input_port_pipes.first().map(|&(_, _, py)| vec![py]).unwrap_or_default();

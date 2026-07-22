@@ -207,6 +207,28 @@ table (Phase 3).
 
 ## Decision log
 
+- **2026-07-22 — Phase 2b landed (exempt-output scaling).** New
+  `size_side_output(required, reach, budget, max_tier, quality, level)`
+  for the class-(c) stacking-exempt outputs: it routes through the same
+  `size_side_rated` core at `belt_drop_rate(name, quality, 1, level)` —
+  the **unstacked** belt-drop rate scaled by research — so the far
+  long-handed ceiling rises 1.2→4.8/s and near tiers scale linearly,
+  WITHOUT stack-forcing (exemption intact; a low-rate near output still
+  gets the cheapest tier, never a forced stack). Chosen over a post-plan
+  scale because it reuses the shared ladder core and stays a drop-in for
+  the existing `size_side` call sites; at level 0 it is bit-identical to
+  `size_side`. Wired at the three class-(c) template sites: the D2b
+  secondary output (`single_input_row` ~772) and both self-loop major +
+  the minor output (`self_loop_row` 4464/4480/4497). `self_loop_row`
+  gained a `level` param (it already took `&StackingCtx` for per-item
+  exemption; `level` is the global research dimension, threaded from
+  `build_one_row` like the other 8 templates — kept as a plain param, not
+  folded into the ctx). Unit tests: L0 identity sweep, far-ceiling rise
+  (4.0/s shortfalls at L0, one LHI covers at L7), and the exemption
+  guard (near output never forces stack at max research). Gates: full
+  suite (e2e 59 / lib 778, one clean run), STRESSGOLD check 8/8 zero
+  diffs, clippy --lib clean. No first-pass census miss surfaced.
+
 - **2026-07-22 — Phase 2a landed (site census + belt-drop ladder).**
   Explicit census of every `size_side` (29) + `size_belt_drop_side` (8)
   site in `templates.rs`, plus the hardcoded inserter pushes and the
