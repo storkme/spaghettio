@@ -353,7 +353,9 @@ fn bp_data_to_layout(bp_data: BpData) -> LayoutResult {
         // (E=2/W=6 both landed on the catch-all) and could overflow on
         // garbage bytes (PR #348 review).
         let parsed = parse_direction(raw.direction);
-        let dir = if raw.name.contains("inserter") {
+        // Pipe-to-ground shares the flip (#364): game direction is the
+        // surface-opening side, engine convention is the underground side.
+        let dir = if raw.name.contains("inserter") || raw.name == "pipe-to-ground" {
             flip180(parsed)
         } else {
             parsed
@@ -636,6 +638,32 @@ mod tests {
         assert_eq!(parsed.entities[0].direction, EntityDirection::West);
         assert_eq!(parsed.entities[1].direction, EntityDirection::East);
         assert_eq!(parsed.entities[2].direction, EntityDirection::East);
+    }
+
+    /// Pipe-to-ground un-flips on import (#364): a game pair faces AWAY
+    /// from each other (surface openings outward); engine convention is
+    /// the underground side, so both flip 180° — and plain pipes don't.
+    #[test]
+    fn pipe_to_ground_unflips_on_import() {
+        let bp = encode_envelope(&serde_json::json!({
+            "blueprint": {
+                "item": "blueprint",
+                "entities": [
+                    // Game North (surface up) → engine South (tunnel down).
+                    {"entity_number": 1, "name": "pipe-to-ground",
+                     "position": {"x": 0.5, "y": 0.5}, "direction": 0},
+                    // Game South (surface down) → engine North.
+                    {"entity_number": 2, "name": "pipe-to-ground",
+                     "position": {"x": 0.5, "y": 2.5}, "direction": 8},
+                    {"entity_number": 3, "name": "pipe",
+                     "position": {"x": 2.5, "y": 0.5}, "direction": 0},
+                ]
+            }
+        }));
+        let parsed = parse_blueprint_string(&bp).expect("should parse");
+        assert_eq!(parsed.entities[0].direction, EntityDirection::South);
+        assert_eq!(parsed.entities[1].direction, EntityDirection::North);
+        assert_eq!(parsed.entities[2].direction, EntityDirection::North);
     }
 
     /// PR #348 review MINOR: garbage direction bytes must not panic
