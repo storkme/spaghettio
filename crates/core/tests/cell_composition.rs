@@ -820,6 +820,12 @@ fn compose_pairs_calibrated(n: i32) -> (spaghettio_core::models::SolverResult, L
             x += 8;
         }
     }
+    // Sim-kit invariant (found live, see #363 comment): feed-rig depth
+    // grows with record ORDER and each rig's chest jog runs 12–18 tiles
+    // WEST at its depth row — a shallow rig's jog crosses the outward
+    // column of any head west of it. Ordering records west→east makes
+    // every deeper jog pass below all shorter columns.
+    b_in.sort_by_key(|r| r.x);
     let mut l = LayoutResult::default();
     l.entities = entities;
     l.width = width;

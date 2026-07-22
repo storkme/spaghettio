@@ -289,6 +289,24 @@ entries as the Phase 1 gate.
 
 ## Decision log
 
+- *2026-07-22 — **THE COMPOSED FACTORY RUNS AT PLAN (gate a/b sim
+  half, EC): all 15 machines `working`, converged, produced exactly
+  15.0 EC/s sustained** (delivered 14.4/s — out-corridor transit +
+  drain lag inside the 20s window; the crafting rate is the plan).
+  Two further harness gotchas were diagnosed from generated Lua and
+  the dump en route, both now #363 data + composition rules: feed
+  rigs need ≥4-tile lateral pitch (adjacent rigs collide at
+  construction), and boundary records must be ordered WEST→EAST
+  (rig depth grows with record order; each rig's 12–18-tile westward
+  chest-jog row crosses the outward column of any head west of it —
+  the deeper-jogs-pass-below-shorter-columns ordering fixes it).
+  **Inherited-warnings question ADJUDICATED**: the 6 validator
+  inserter-attribution warnings claimed iron under-delivery on
+  machines that measured at full plan rate — false positives at this
+  operating point, overridden by measurement per F3. The "0 errors /
+  0 warnings" gate reading: 0 errors and 0 REAL warnings (6
+  validator-conservatism warnings carried, each sim-disproven and
+  documented — never silently re-blessed).*
 - *2026-07-22 — FIRST SIM RUN FAILED HONESTLY, root cause harness-side:
   the composed layout fed EAST-facing boundary inputs, and
   scenario.rs's non-south rig geometry is UNCALIBRATED by its own
