@@ -173,6 +173,31 @@ pub fn machine_dims(entity: &str) -> (u32, u32) {
 /// poles, belts, inserters, pipes) is 1×1. Before this, `blueprint.rs` hard-
 /// coded `(1,1)` for every non-machine, so a substation would have exported at
 /// center `x+0.5` instead of `x+1.0`.
+/// Direction-aware footprint for the 2-wide splitter family — the ONE
+/// source both the blueprint exporter's center math and the parser's
+/// footprint table consume (PR #350 review: exporter and parser keeping
+/// divergent geometry tables has now caused three artifact-boundary
+/// bugs). Returns `None` for everything else, including `lane-splitter`
+/// which is genuinely 1×1 despite the name.
+pub fn oriented_splitter_dims(
+    entity: &str,
+    direction: crate::models::EntityDirection,
+) -> Option<(u32, u32)> {
+    match entity {
+        "splitter" | "fast-splitter" | "express-splitter" | "turbo-splitter" => {
+            Some(match direction {
+                crate::models::EntityDirection::North | crate::models::EntityDirection::South => {
+                    (2, 1)
+                }
+                crate::models::EntityDirection::East | crate::models::EntityDirection::West => {
+                    (1, 2)
+                }
+            })
+        }
+        _ => None,
+    }
+}
+
 pub fn entity_size(entity: &str) -> (u32, u32) {
     if is_machine_entity(entity) {
         machine_dims(entity)

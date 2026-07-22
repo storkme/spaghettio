@@ -254,12 +254,15 @@ fn entity_footprint(name: &str, direction: EntityDirection) -> (i32, i32) {
         "recycler" => (2, 4),
         "crusher" => (2, 3),
 
-        // Splitters: 2 tiles wide perpendicular to flow direction
-        "splitter" | "fast-splitter" | "express-splitter" => {
-            match direction {
-                EntityDirection::North | EntityDirection::South => (2, 1),
-                EntityDirection::East | EntityDirection::West => (1, 2),
-            }
+        // Splitters: 2 tiles wide perpendicular to flow direction. The
+        // shared helper covers turbo-splitter too (115 corpus instances
+        // were misparsed half a tile off before PR #350's review caught
+        // the exporter/parser table divergence) and correctly excludes
+        // the 1×1 lane-splitter.
+        "splitter" | "fast-splitter" | "express-splitter" | "turbo-splitter" => {
+            let (w, h) = crate::common::oriented_splitter_dims(name, direction)
+                .expect("splitter family covered by oriented_splitter_dims");
+            (w as i32, h as i32)
         }
 
         _ => (1, 1),
