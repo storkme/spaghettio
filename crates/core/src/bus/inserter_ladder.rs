@@ -444,6 +444,26 @@ mod tests {
         assert_eq!((plan.entity, plan.count, plan.shortfall), (STACK, 1, None));
     }
 
+    /// RFC-049 non-monotonicity pin: at S=4 the researched belt-hand
+    /// rounds DOWN to a multiple of 4 (`stack_inserter_belt_hand_at`), so
+    /// L2/L3/L4 all plateau at hand 8 (19.2/s) — the naive "each research
+    /// level adds capacity" model is WRONG here — then L5 jumps to hand 12
+    /// (28.8/s). An intermediate level therefore places MORE inserters than
+    /// a higher one at equal rate: at 20/s, L4 needs 2 stack inserters where
+    /// L5 needs 1, and L4 == L2 (the dip/plateau, not just endpoints).
+    #[test]
+    fn belt_drop_intermediate_dip_non_monotonic_s4() {
+        let q = QualityTier::Normal;
+        let count_at = |level: u8| {
+            size_belt_drop_side(20.0, Reach::Near, 2, InserterTier::Stack, q, 4, level).count
+        };
+        let (l2, l4, l5) = (count_at(2), count_at(4), count_at(5));
+        assert_eq!(l4, 2, "L4/S=4 belt-hand floors to 8 (19.2/s) → 2 inserters for 20/s");
+        assert_eq!(l5, 1, "L5/S=4 belt-hand is 12 (28.8/s) → 1 inserter for 20/s");
+        assert!(l4 > l5, "the mod-4 dip: L4 places MORE than L5 at equal rate (2 > 1)");
+        assert_eq!(l4, l2, "plateau: L2=L3=L4 (hands 8/9/10 all floor to 8) — research gives no benefit until L5");
+    }
+
     // ── size_side_output (RFC-049 class (c): stacking-exempt outputs) ────
 
     /// Level 0 is definitionally `size_side` (kill 1) — sweep rates,

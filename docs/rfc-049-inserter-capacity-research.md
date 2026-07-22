@@ -207,6 +207,28 @@ table (Phase 3).
 
 ## Decision log
 
+- **2026-07-22 — Phase 2c landed (differential fixtures).** (i) e2e
+  `research_l7_thins_output_inserters_s4`: hazard-concrete @ 60/s on
+  assembling-machine-1 (per-machine output 20/s — above the 9.6/s L0
+  belt-drop rate, below the 38.4/s L7 rate), S=4, red belts. Output
+  stack-inserter count (filtered by `carries == output item`, isolating
+  the belt-drop side from level-invariant inputs) drops **L0=9 → L7=3, a
+  3× thinning** — the per-inserter belt-drop rate rises 9.6→38.4/s (4×),
+  realized as 3× because 20/s discretizes to 3 vs 1 inserters (3
+  machines × 3→1). Asserted `l7 < l0` and `l0 >= 3·l7` (the sharpness).
+  (ii) unit `belt_drop_intermediate_dip_non_monotonic_s4`: at S=4/20-s,
+  L4 places 2 stack inserters where L5 places 1 (L4 > L5) and L4 == L2 —
+  the mod-4 plateau (hands 8/9/10 all floor to 8 = 19.2/s, then L5 jumps
+  to 12 = 28.8/s); endpoints alone would miss it. (iii) L0 identity is
+  the kill-1 gate (goldens 8/8, `size_side_output_identity_at_l0`,
+  `belt_drop_identity_at_s1_l0`). No existing fixture weakened — the 5
+  `stacking_` fixtures and all 8 goldens are byte-unchanged. Gates: full
+  suite (lib 779 / e2e 60 / netflow parity 10, one clean run), STRESSGOLD
+  check 8/8 zero diffs, clippy `--lib -D warnings` clean (the `--tests`
+  target carries pre-existing clippy debt in junction_fixtures /
+  mode_d_baseline / e2e helpers, untouched by this work — the project
+  gates on `--lib`).
+
 - **2026-07-22 — Phase 2b landed (exempt-output scaling).** New
   `size_side_output(required, reach, budget, max_tier, quality, level)`
   for the class-(c) stacking-exempt outputs: it routes through the same

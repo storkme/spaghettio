@@ -7814,3 +7814,80 @@ fn stacking_ec_60s_express_legendary_s2() {
         "no belt above unstacked express capacity (max {max_seen}) — stacked credit never engaged"
     );
 }
+
+// ═════════════════════════════════════════════════════════════════════════
+// RFC-049 inserter-capacity research — differential fixtures
+// (docs/rfc-049-inserter-capacity-research.md)
+// ═════════════════════════════════════════════════════════════════════════
+
+/// RFC-049 headline differential: at S=4 a stack inserter belt-drops the
+/// researched hand rounded down to a multiple of 4 — 9.6/s at L0 (hand 6→4)
+/// but 38.4/s at L7 (hand 16, dip-free since 16 ≡ 0 mod 4). So the SAME
+/// layout at max research places far fewer OUTPUT stack inserters than at
+/// zero research, at identical throughput.
+///
+/// Config: hazard-concrete @ 60/s on assembling-machine-1 (per-machine
+/// output 40 × 0.5 = 20/s — deliberately above the 9.6/s L0 belt-drop rate
+/// so L0 needs multiple output inserters, but below the 38.4/s L7 rate so
+/// L7 needs one), S=4, red belts. Only the OUTPUT (belt-drop) side moves;
+/// input sides stay flat at every level (kill 2), so the whole delta is the
+/// research-scaled belt-drop hand.
+#[test]
+fn research_l7_thins_output_inserters_s4() {
+    use spaghettio_core::common::QualityTier;
+    use spaghettio_core::recipe_db::MachinePalette;
+
+    let inputs: FxHashSet<String> = ["concrete"].iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "hazard-concrete",
+        60.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-1",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap_or_else(|e| panic!("solve: {e}"));
+
+    let run = |level: u8| {
+        let layout = layout::build_bus_layout(
+            &sr,
+            layout::LayoutOptions {
+                strategy: Default::default(),
+                surplus_policy: Default::default(),
+                max_belt_tier: Some("fast-transport-belt".to_string()),
+                row_layout: Default::default(),
+                max_inserter_tier: Default::default(),
+                quality: QualityTier::Normal,
+                wire_mode: Default::default(),
+                merge_tap: false,
+                stacking: 4,
+                inserter_capacity: level,
+            },
+        )
+        .unwrap_or_else(|e| panic!("L={level} layout: {e}"));
+        // OUTPUT belt-drop stack inserters carry the recipe's output item;
+        // input inserters carry "concrete" (and are level-invariant anyway).
+        layout
+            .entities
+            .iter()
+            .filter(|e| e.name == "stack-inserter" && e.carries.as_deref() == Some("hazard-concrete"))
+            .count()
+    };
+
+    let l0 = run(0);
+    let l7 = run(7);
+    // Observed 2026-07-22: L0=9, L7=3 (3 machines × 3→1 output inserters) —
+    // a 3× thinning. The per-inserter belt-drop rate rises 9.6→38.4/s (4×),
+    // realized as 3× here because 20/s discretizes to 3 vs 1 inserters.
+    eprintln!("RFC-049 differential: output stack inserters L0={l0} L7={l7} (ratio {:.2}x)", l0 as f64 / l7.max(1) as f64);
+    assert!(l0 > 0, "L0 must place output stack inserters to have a differential");
+    assert!(
+        l7 < l0,
+        "L7 (belt-drop 38.4/s) must place FEWER output stack inserters than L0 (9.6/s): L0={l0} L7={l7}"
+    );
+    assert!(
+        l0 >= 3 * l7,
+        "the thinning must be SHARP (~3x observed): L0={l0} should be >= 3 x L7={l7}"
+    );
+}
