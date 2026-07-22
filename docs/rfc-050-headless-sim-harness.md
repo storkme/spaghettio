@@ -372,5 +372,12 @@ design, so blessed measured baselines are **shareable** — keyed on
   a buffer-fill transient (`--warmup` steady-state probes). Method +
   playbook: [`sim-harness-forensics.md`](sim-harness-forensics.md).
   Clean-kit re-measurement of logistic/military running; #357 carries
-  the running attribution record and will get the corrected numbers.*
+  the running attribution record and will get the corrected numbers.
+  **Resolution (same day): clean-kit 1-game-hour steady runs — logistic
+  1.05/s PASS (+4.7%), military 1.00/s PASS (+0.0%). #357 closed as
+  harness artifact; the layouts were never broken and the validator's
+  clean verdicts were correct. RFC-051 (junction/allocation static
+  check) not filed — motivating evidence gone. Baselines re-blessed.
+  ec10 (#352) and automation-science clean-kit re-runs in flight; #345
+  r150 flagged for re-measurement.***
 
