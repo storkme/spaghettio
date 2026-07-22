@@ -66,16 +66,17 @@ pub fn chain_eligible(sr: &SolverResult) -> Result<(), String> {
             return Err(format!("cells: {item} produced by {n} specs (need exactly 1)"));
         }
     }
-    // Fan-out cap: one splitter = 2 consumers.
+    // Corridor capacity: every produced item rides ONE express corridor
+    // (45/s). Run-matching (bundled corridors) is future work — refuse
+    // honestly past the cap.
     for m in &sr.machines {
         for o in &m.outputs {
-            let consumers = sr
-                .machines
-                .iter()
-                .filter(|c| c.inputs.iter().any(|i| i.item == o.item))
-                .count();
-            if consumers > 2 {
-                return Err(format!("cells: {} feeds {consumers} recipes (fan-out cap 2)", o.item));
+            let total = o.rate * m.count;
+            if total > 45.0 + 1e-9 {
+                return Err(format!(
+                    "cells: {} at {total:.1}/s exceeds single-corridor capacity 45/s (run matching unimplemented)",
+                    o.item
+                ));
             }
         }
     }
@@ -88,8 +89,8 @@ struct Placed {
     x: i32,
     /// Absolute x of the slot's west edge (feed block start).
     slot_x: i32,
-    /// Vertical-lane x's available in this slot (east of feed columns).
-    vlanes: [i32; VLANES as usize],
+    /// Base x of this slot's vertical-lane strip (east of feed columns).
+    vlane_base: i32,
     recipe: String,
     ext_inputs: Vec<String>,
 }
@@ -154,12 +155,22 @@ impl Router {
                 });
             }
         };
-        let mut x = x0;
+        // Cluster columns closer than 3 tiles: independent per-column
+        // hops would share tiles (exit of one = entry of the next).
+        let mut clusters: Vec<(i32, i32)> = Vec::new();
         for c in cols {
-            if c - 2 >= x {
-                push_east(out, x, c - 2);
+            match clusters.last_mut() {
+                Some((_, hi)) if c - *hi < 3 => *hi = c,
+                _ => clusters.push((c, c)),
             }
-            for (hx, io) in [(c - 1, "input"), (c + 1, "output")] {
+        }
+        let mut x = x0;
+        for (lo2, hi2) in clusters {
+            assert!(hi2 - lo2 + 2 <= 9, "cells: hop cluster span exceeds express reach");
+            if lo2 - 2 >= x {
+                push_east(out, x, lo2 - 2);
+            }
+            for (hx, io) in [(lo2 - 1, "input"), (hi2 + 1, "output")] {
                 out.push(PlacedEntity {
                     name: ug.into(),
                     x: hx,
@@ -171,7 +182,7 @@ impl Router {
                     ..Default::default()
                 });
             }
-            x = c + 2;
+            x = hi2 + 2;
         }
         if x <= x1 {
             push_east(out, x, x1);
@@ -223,12 +234,20 @@ impl Router {
                 });
             }
         };
-        let mut y = y0;
+        let mut clusters: Vec<(i32, i32)> = Vec::new();
         for r in rows {
-            if (r - 2 * step - y) * step >= 0 {
-                push_v(out, y, r - 2 * step);
+            match clusters.last_mut() {
+                Some((_, last)) if (r - *last) * step < 3 => *last = r,
+                _ => clusters.push((r, r)),
             }
-            for (hy, io) in [(r - step, io_near), (r + step, io_far)] {
+        }
+        let mut y = y0;
+        for (first, last) in clusters {
+            assert!((last - first).abs() + 2 <= 9, "cells: hop cluster span exceeds express reach");
+            if (first - 2 * step - y) * step >= 0 {
+                push_v(out, y, first - 2 * step);
+            }
+            for (hy, io) in [(first - step, io_near), (last + step, io_far)] {
                 out.push(PlacedEntity {
                     name: ug.into(),
                     x,
@@ -240,12 +259,26 @@ impl Router {
                     ..Default::default()
                 });
             }
-            y = r + 2 * step;
+            y = last + 2 * step;
         }
         if (y1 - y) * step >= 0 {
             push_v(out, y, y1);
         }
         self.register_col(x, lo, hi);
+    }
+
+    /// North-facing corner belt at (x, y): single perpendicular input.
+    fn corner_north(&mut self, out: &mut Vec<PlacedEntity>, x: i32, y: i32, item: &str, belt: &str, seg: &str) {
+        out.push(PlacedEntity {
+            name: belt.into(),
+            x,
+            y,
+            direction: EntityDirection::North,
+            carries: Some(item.into()),
+            segment_id: Some(seg.into()),
+            ..Default::default()
+        });
+        self.register_col(x, y, y);
     }
 
     /// East-facing corner belt at (x, y): single perpendicular input =
@@ -292,6 +325,25 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
         None => (1, std::cmp::Reverse(usize::MAX)),
     });
 
+    // Per-slot vertical-lane demand, from the bypass edge list (an edge
+    // p→c descends in slot p+1 and ascends in slot c; sizing by the
+    // slot's own fan-out under-counted ascents — the mil5-ore overlap
+    // class).
+    let n = specs.len();
+    let mut lane_demand: Vec<i32> = vec![0; n];
+    for (pi, m) in specs.iter().enumerate() {
+        for o in &m.outputs {
+            for (ci, c) in specs.iter().enumerate() {
+                if ci != pi && c.inputs.iter().any(|i| i.item == o.item) && ci != pi + 1 {
+                    if pi + 1 < n {
+                        lane_demand[pi + 1] += 1;
+                    }
+                    lane_demand[ci] += 1;
+                }
+            }
+        }
+    }
+
     let mut entities: Vec<PlacedEntity> = Vec::new();
     let mut b_in: Vec<BoundaryRecord> = Vec::new();
     let mut b_out: Vec<BoundaryRecord> = Vec::new();
@@ -322,11 +374,20 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
             .filter(|q| q.inbound && ext_inputs.contains(&q.item))
             .count() as i32;
 
+        let n_out_runs = cell.ports.iter().filter(|q| !q.inbound).count() as i32;
+        let n_consumers = sr
+            .machines
+            .iter()
+            .filter(|c| c.inputs.iter().any(|i| i.item == out_item))
+            .count() as i32;
+        // Gap: base + 2 per extra merge stage + 2 per extra fan-out stage.
+        let gap = CORRIDOR_GAP + 2 * (n_out_runs - 1).max(0) + 2 * (n_consumers - 1).max(0);
         let slot_x = cursor;
         let feed_w = FEED_PITCH * n_feed_ports + 1;
         let vlane0 = slot_x + feed_w;
-        let x = vlane0 + VLANES + 1;
-        cursor = x + cell.width + CORRIDOR_GAP;
+        let strip = VLANES + lane_demand[placed.len()];
+        let x = vlane0 + strip + 1;
+        cursor = x + cell.width + gap;
 
         for e in &cell.entities {
             let mut e = e.clone();
@@ -338,7 +399,7 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
             cell,
             x,
             slot_x,
-            vlanes: [vlane0, vlane0 + 1],
+            vlane_base: vlane0,
             recipe: m.recipe.clone(),
             ext_inputs,
         });
@@ -417,6 +478,16 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
     // --- Chain corridors: producer out → merge (if 2 runs) → fan-out
     // split (if 2 consumers) → per-consumer routing via the Router.
     let mut bypass_idx = 0i32;
+    // Per-slot vertical-lane allocation: each bypass descent/ascent
+    // claims a fresh lane in its slot's strip (two edges sharing a lane
+    // was the mil5-ore overlap class).
+    let mut lane_next: FxHashMap<usize, i32> = FxHashMap::default();
+    let alloc_lane = |lane_next: &mut FxHashMap<usize, i32>, slot: usize, base: i32| -> i32 {
+        let n = lane_next.entry(slot).or_insert(0);
+        let x = base + *n;
+        *n += 1;
+        x
+    };
     for (pi, p) in placed.iter().enumerate() {
         let out_item = specs[pi].outputs[0].item.clone();
         let consumers: Vec<usize> = placed
@@ -457,62 +528,66 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
             continue;
         }
 
-        // Single collected run east of the cell: merge two out-runs via a
-        // splitter (Phase-1 geometry, generalized), else extend the one.
-        let sx = p.x + p.cell.width + 2;
-        let (run_x, run_y) = match outs.len() {
-            1 => {
-                let (ox, oy) = port_abs(outs[0], p.x);
-                stamp_path(&mut entities, &[(ox + 1, oy), (sx, oy)],
-                    &out_item, "fast-transport-belt", &format!("cc:a:{}", p.recipe));
-                router.register_row(oy, ox + 1, sx);
-                (sx + 1, oy)
-            }
-            2 => {
-                let (o1, o2) = if outs[0].y <= outs[1].y { (outs[0], outs[1]) } else { (outs[1], outs[0]) };
-                let (o1x, o1y) = port_abs(o1, p.x);
-                let (o2x, o2y) = port_abs(o2, p.x);
-                assert!(o2y > o1y + 1, "cells: merge assumes below-approach ({o2y} vs {o1y})");
-                stamp_path(&mut entities, &[(o1x + 1, o1y), (sx - 1, o1y)],
-                    &out_item, "fast-transport-belt", &format!("cc:a:{}", p.recipe));
-                router.register_row(o1y, o1x + 1, sx - 1);
-                stamp_path(&mut entities,
-                    &[(o2x + 1, o2y), (sx - 1, o2y), (sx - 1, o1y + 2)],
-                    &out_item, "fast-transport-belt", &format!("cc:b:{}", p.recipe));
-                router.register_row(o2y, o2x + 1, sx - 1);
-                router.register_col(sx - 1, o1y + 2, o2y);
-                entities.push(PlacedEntity {
-                    name: "fast-transport-belt".into(), x: sx - 1, y: o1y + 1,
-                    direction: EntityDirection::East,
-                    carries: Some(out_item.clone()),
-                    segment_id: Some(format!("cc:b:{}", p.recipe)), ..Default::default()
-                });
-                entities.push(PlacedEntity {
-                    name: "fast-splitter".into(), x: sx, y: o1y,
-                    direction: EntityDirection::East,
-                    carries: Some(out_item.clone()),
-                    segment_id: Some(format!("cc:m:{}", p.recipe)), ..Default::default()
-                });
-                (sx + 1, o1y)
-            }
-            n => return Err(format!("cells: {} has {n} out runs (max 2)", p.recipe)),
-        };
-
-        // Fan-out split point (if 2 consumers): a second splitter one
-        // tile east of the collected run.
-        let mut branch_origins: Vec<(i32, i32)> = Vec::new();
-        if consumers.len() == 2 {
+        // Collect the cell's out-runs into ONE eastbound run via a
+        // cascade of 2→1 splitters (below-approach corner idiom per
+        // stage; the Router hops any crossings). Runs sorted by y — the
+        // topmost is the accumulator row.
+        let mut outs_sorted = outs.clone();
+        outs_sorted.sort_by_key(|q| q.y);
+        let (acc_x0, acc_y) = port_abs(outs_sorted[0], p.x);
+        let base_sx = p.x + p.cell.width + 2;
+        router.hrow(&mut entities, acc_y, acc_x0 + 1, base_sx - 1, &out_item,
+            "express-transport-belt", "express-underground-belt", &format!("cc:a:{}", p.recipe));
+        let mut run_x = base_sx;
+        for (k, o) in outs_sorted.iter().enumerate().skip(1) {
+            let (ox, oy) = port_abs(o, p.x);
+            assert!(oy > acc_y + 1, "cells: merge assumes below-approach ({oy} vs {acc_y})");
+            let seg = format!("cc:b{k}:{}", p.recipe);
+            router.hrow(&mut entities, oy, ox + 1, run_x - 2, &out_item,
+                "express-transport-belt", "express-underground-belt", &seg);
+            router.corner_north(&mut entities, run_x - 1, oy, &out_item, "express-transport-belt", &seg);
+            router.vcol(&mut entities, run_x - 1, oy - 1, acc_y + 2, &out_item,
+                "express-transport-belt", "express-underground-belt", &seg);
+            router.corner_east(&mut entities, run_x - 1, acc_y + 1, &out_item, "express-transport-belt", &seg);
             entities.push(PlacedEntity {
-                name: "fast-splitter".into(), x: run_x, y: run_y,
+                name: "express-splitter".into(), x: run_x, y: acc_y,
                 direction: EntityDirection::East,
                 carries: Some(out_item.clone()),
-                segment_id: Some(format!("fan:{}", p.recipe)), ..Default::default()
+                segment_id: Some(format!("cc:m{k}:{}", p.recipe)), ..Default::default()
             });
-            branch_origins.push((run_x + 1, run_y));
-            branch_origins.push((run_x + 1, run_y + 1));
-        } else {
-            branch_origins.push((run_x, run_y));
+            run_x += 2;
+            if k < outs_sorted.len() - 1 {
+                // Bridge to the next merge stage's input tile.
+                router.corner_east(&mut entities, run_x - 1, acc_y, &out_item, "fast-transport-belt", &format!("cc:a:{}", p.recipe));
+            }
         }
+        let run_y = acc_y;
+        // After a merge cascade the collected flow's next free tile is
+        // run_x - 1 (the last splitter sits at run_x - 2); with a single
+        // out-run nothing was consumed east of the hrow, so it's run_x.
+        let pass_x = if outs_sorted.len() > 1 { run_x - 1 } else { run_x };
+
+        // Fan-out: a chain of 1→2 splitters, one per extra consumer.
+        // Branch b exits south at splitter b's (x+1, y+1); the last
+        // consumer takes the pass-through east output.
+        let n_branches = consumers.len();
+        let mut branch_origins: Vec<(i32, i32)> = Vec::new();
+        let mut fx = pass_x;
+        for b in 1..n_branches {
+            entities.push(PlacedEntity {
+                name: "express-splitter".into(), x: fx, y: run_y,
+                direction: EntityDirection::East,
+                carries: Some(out_item.clone()),
+                segment_id: Some(format!("fan{b}:{}", p.recipe)), ..Default::default()
+            });
+            branch_origins.push((fx + 1, run_y + 1));
+            if b < n_branches - 1 {
+                router.corner_east(&mut entities, fx + 1, run_y, &out_item, "fast-transport-belt", &format!("fan:{}", p.recipe));
+            }
+            fx += 2;
+        }
+        // Pass-through (or the only) branch.
+        branch_origins.push((if n_branches > 1 { fx - 1 } else { pass_x }, run_y));
 
         // Route each branch. Adjacent-east consumer: port-row corridor
         // (with a vertical jog on the consumer slot's first lane if the
@@ -525,12 +600,12 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
                 .find(|q| q.inbound && q.item == out_item)
                 .expect("consumer port checked in eligibility");
             let (tx, ty) = port_abs(port, c.x);
-            let (bx, by) = branch_origins[bi.min(branch_origins.len() - 1)];
+            let (bx, by) = branch_origins[bi];
             let seg = format!("corr:{}:{}", p.recipe, c.recipe);
             if *ci == pi + 1 {
                 if by == ty {
                     router.hrow(&mut entities, ty, bx, tx - 1, &out_item,
-                        "fast-transport-belt", "fast-underground-belt", &seg);
+                        "express-transport-belt", "express-underground-belt", &seg);
                 } else {
                     // Early jog: one east tile at the branch origin, then
                     // vertical at bx+1 down/up to the TARGET port row, then
@@ -538,37 +613,37 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
                     // fan-out branch's row clear of this jog column (it
                     // hops under it via the registry).
                     let vdir = (ty - by).signum();
-                    router.corner_east(&mut entities, bx, by, &out_item, "fast-transport-belt", &seg);
+                    router.corner_east(&mut entities, bx, by, &out_item, "express-transport-belt", &seg);
                     router.vcol(&mut entities, bx + 1, by, ty - vdir, &out_item,
-                        "fast-transport-belt", "fast-underground-belt", &seg);
-                    router.corner_east(&mut entities, bx + 1, ty, &out_item, "fast-transport-belt", &seg);
+                        "express-transport-belt", "express-underground-belt", &seg);
+                    router.corner_east(&mut entities, bx + 1, ty, &out_item, "express-transport-belt", &seg);
                     router.hrow(&mut entities, ty, bx + 2, tx - 1, &out_item,
-                        "fast-transport-belt", "fast-underground-belt", &seg);
+                        "express-transport-belt", "express-underground-belt", &seg);
                 }
             } else {
                 // South bypass below the cell band.
-                let lane_down = placed[pi + 1].vlanes[1];
-                let lane_up = c.vlanes[1];
+                let lane_down = alloc_lane(&mut lane_next, pi + 1, placed[pi + 1].vlane_base);
+                let lane_up = alloc_lane(&mut lane_next, *ci, c.vlane_base);
                 let by_y = band_bottom + 1 + bypass_idx;
                 bypass_idx += 1;
                 router.hrow(&mut entities, by, bx, lane_down - 1, &out_item,
-                    "fast-transport-belt", "fast-underground-belt", &seg);
+                    "express-transport-belt", "express-underground-belt", &seg);
                 router.vcol(&mut entities, lane_down, by, by_y - 1, &out_item,
-                    "fast-transport-belt", "fast-underground-belt", &seg);
-                router.corner_east(&mut entities, lane_down, by_y, &out_item, "fast-transport-belt", &seg);
+                    "express-transport-belt", "express-underground-belt", &seg);
+                router.corner_east(&mut entities, lane_down, by_y, &out_item, "express-transport-belt", &seg);
                 router.hrow(&mut entities, by_y, lane_down + 1, lane_up - 1, &out_item,
-                    "fast-transport-belt", "fast-underground-belt", &seg);
+                    "express-transport-belt", "express-underground-belt", &seg);
                 entities.push(PlacedEntity {
-                    name: "fast-transport-belt".into(), x: lane_up, y: by_y,
+                    name: "express-transport-belt".into(), x: lane_up, y: by_y,
                     direction: EntityDirection::North,
                     carries: Some(out_item.clone()),
                     segment_id: Some(seg.clone()), ..Default::default()
                 });
                 router.vcol(&mut entities, lane_up, by_y - 1, ty + 1, &out_item,
-                    "fast-transport-belt", "fast-underground-belt", &seg);
-                router.corner_east(&mut entities, lane_up, ty, &out_item, "fast-transport-belt", &seg);
+                    "express-transport-belt", "express-underground-belt", &seg);
+                router.corner_east(&mut entities, lane_up, ty, &out_item, "express-transport-belt", &seg);
                 router.hrow(&mut entities, ty, lane_up + 1, tx - 1, &out_item,
-                    "fast-transport-belt", "fast-underground-belt", &seg);
+                    "express-transport-belt", "express-underground-belt", &seg);
             }
         }
     }
