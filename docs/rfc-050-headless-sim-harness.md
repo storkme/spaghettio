@@ -336,3 +336,21 @@ design, so blessed measured baselines are **shareable** — keyed on
   pre-#348/#350 broken exports. Remaining phases: 2 (sweeps/anchor
   retirements), 3 (bless/check), 4 (web sim-state overlay — pulled
   forward at user request, 2026-07-22).*
+- *2026-07-22 — **IMPLEMENTATION COMPLETE; RFC closed out.** Phases 0
+  (#353 manifest), 1 (#354 crate — KC2 calibration gate passed), 3
+  (#355 bless/check), 4 (#356 web sim overlay, pulled forward at user
+  request) all merged same-day. Phase 2 sweep, solid fixtures: gear10
+  PASS +0.0%; ec10 FAIL −50% (#352); automation-science 1.00/s produced
+  (delivered −4%, quantization attribution open); logistic −40% and
+  military −48% — both VALIDATOR-CLEAN (#357), the confidence-chain
+  critique proven at gauntlet scale. Five baselines blessed into
+  `crates/sim-harness/baselines/` (FAILs deliberately included as
+  honest floors). Open items carried forward: fluid-path calibration
+  (blocks the chemical/production/utility sweep), non-south boundary
+  calibration, automation delivered-quantization attribution, #345
+  re-measurement through the released tool, USP-scale timing (KC4
+  formally unmeasured at USP size). Arc summary: the harness found two
+  artifact bugs that made every prior export inert (#348, #350), one
+  half-rate warning class (#352), and one clean-but-failing class
+  (#357) — four finding classes in its first two days.*
+

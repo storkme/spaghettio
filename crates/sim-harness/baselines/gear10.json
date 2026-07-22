@@ -1,0 +1,20 @@
+{
+  "label": "gear10",
+  "game_version": "2.0.76",
+  "mods": [
+    "base",
+    "space-age",
+    "quality",
+    "elevated-rails"
+  ],
+  "tech_state": "research_all_technologies",
+  "entities": 428,
+  "produced": {
+    "iron-gear-wheel": 10.0,
+    "iron-plate": 20.1
+  },
+  "delivered": {
+    "iron-gear-wheel": 10.133333333333333
+  },
+  "overall_verdict": "PASS"
+}
