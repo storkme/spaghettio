@@ -136,39 +136,33 @@ fixes must move the number and regressions can't hide. See
 [`crates/sim-harness/baselines/README.md`](../crates/sim-harness/baselines/README.md)
 for the blessed set and its (game pin, mod set) key.
 
-## Concurrency: one run at a time per install dir
+## Concurrency: runs are independent
 
-Two runs sharing an install dir cannot coexist:
+Concurrent `run` invocations against the same install **just work**:
+every run gets its own scratch write directory under the OS temp dir
+(`spaghettio-sim-runs/<scenario>-<pid>/`), wired via a generated
+per-run `config.ini` — `read-data` points at the shared install's
+`data/` (never written), `write-data` at the scratch dir. Factorio's
+exclusive write-dir lock, the scenario dir, and `script-output/` result
+files are all per-run; the scratch dir is deleted on success and kept
+(path printed) on failure for forensics. Validated with two
+simultaneous same-second runs against one install: both passed, with
+byte-identical (deterministic) reports and nothing written into the
+install.
 
-1. Factorio holds an **exclusive lock** on its write directory — the
-   second server dies at startup, surfacing as `factorio exited early
-   (status ...)`.
-2. Results land at **fixed filenames** (`script-output/harness-result.json`,
-   `sim-state.json`) which each run deletes at start and polls for — a
-   concurrent run that somehow got past the lock would silently pick up
-   the *other* run's report.
-
-To run sims concurrently (e.g. two agents), give each run its own
-install:
-
-```bash
-cp -r ~/.cache/spaghettio-sim/factorio-2.0.76 ~/.cache/spaghettio-sim/factorio-2.0.76-<name>
-SPAGHETTIO_FACTORIO_DIR=~/.cache/spaghettio-sim/factorio-2.0.76-<name> cargo run -p spaghettio_sim_harness -- run ...
-```
-
-The copy is one-time. A hardlink clone (`cp -al`) is tempting but
-**untested**: Factorio writes some files in place, and its write-dir
-exclusivity mechanism is uncharacterized — if it's an `flock` on a file
-that existed at clone time, hardlinked clones would share the very lock
-this workaround exists to avoid. Stick to `cp -r` until two concurrent
-clone runs have been smoke-tested. If another agent's sim is already
-running, wait or clone — never share the default install dir with a
-live run.
+Two residual exclusivities, both rare: `fetch` populates the install
+itself (don't fetch while runs are live against it), and `check-data`
+still dumps into the install's write dir (one at a time; it's a
+post-pin-bump check, not a routine step). The old workaround — `cp -r`
+the install and point `SPAGHETTIO_FACTORIO_DIR` at the clone — is no
+longer needed for concurrency, but remains the way to test a different
+install (e.g. a candidate pin bump) side by side.
 
 ## Troubleshooting
 
-- **`factorio exited early`** — lock contention (see above) or a real
-  crash: read the log at the path `run` printed.
+- **`factorio exited early`** — a real crash (bad blueprint string, Lua
+  error at startup): read the log at the path `run` printed; the kept
+  run dir has the generated `config.ini` and scenario for repro.
 - **Timeout waiting for `harness-result.json`** — the scenario never
   finished; check the log for Lua errors, or raise `--timeout-secs` on
   slow machines.
