@@ -126,6 +126,19 @@ impl RunParams {
             scenario_name,
         }
     }
+
+    /// Override the dim-scaled warmup (`--warmup`). The 2% stability
+    /// windows cannot distinguish a slow buffer-fill drift from real
+    /// convergence — deep-chain fixtures "converge" while trunk and tap
+    /// buffers are still filling — so steady-state probes need
+    /// measurement to start long after that transient. Rounded up to the
+    /// tick handler's 60-tick cadence; the ceiling is re-floored so the
+    /// run can still take one stability sample.
+    pub fn with_warmup(mut self, warmup: u32) -> RunParams {
+        self.warmup_ticks = round_up_60(warmup);
+        self.end_tick = self.end_tick.max(self.warmup_ticks + self.window_ticks);
+        self
+    }
 }
 
 /// A world-space cardinal vector, used only inside this module's Lua
@@ -622,6 +635,20 @@ mod tests {
         assert_eq!(default_warmup_ticks(0, 0), round_up_60(BASE_WARMUP_TICKS));
         // gear10: 53x34 -> base + 2*(87)*32 = 3600 + 5568 = 9168 -> round to 9180
         assert_eq!(default_warmup_ticks(53, 34), round_up_60(3600 + 2 * 87 * 32));
+    }
+
+    #[test]
+    fn warmup_override_rounds_to_cadence_and_lifts_ceiling() {
+        let p = RunParams {
+            end_tick: 10_000,
+            speed: 16,
+            warmup_ticks: 3600,
+            window_ticks: 1800,
+            scenario_name: "t".into(),
+        }
+        .with_warmup(216_001);
+        assert_eq!(p.warmup_ticks, 216_060);
+        assert_eq!(p.end_tick, 216_060 + 1800);
     }
 
     #[test]
