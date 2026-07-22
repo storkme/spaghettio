@@ -125,8 +125,8 @@ Splitters compose into networks that route m input belts onto n output belts ("b
   | Regular inserter (`inserter`) | 1 | 1 | ~0.84 | **~0.84/s** |
   | Long-handed inserter (`long-handed-inserter`) | **2** | 1 | ~1.2 | **~1.2/s** |
   | Fast inserter (`fast-inserter`) | 1 | 1 | ~2.4 | ~2.31/s (extension delay shaves it) |
-  | Stack inserter (`stack-inserter`, vanilla 2.0+) | 1 | 5 (base, +4 built-in bonus) | ~2.4 | ~12/s base, up to 27.7/s researched |
-  | Bulk inserter (`bulk-inserter`, was 1.x "stack inserter") | 1 | 1 (scales with research, max 12) | ~2.4 | 2.4/s base, up to 27.7/s researched |
+  | Stack inserter (`stack-inserter`, vanilla 2.0+) | 1 | 5 (base, +4 built-in bonus) | ~2.4 | ~12/s base, up to ~38.4/s researched (hand 16) |
+  | Bulk inserter (`bulk-inserter`, was 1.x "stack inserter") | 1 | 1 (scales with research, max 12) | ~2.4 | 2.4/s base, up to ~28.8/s researched (hand 12) |
 
   Throughputs derived from `rotation_speed` × 60 × items_per_swing. Long-handed is **faster** than regular per cycle (rotation_speed 0.02 vs 0.014); the "long arm = slow" intuition is wrong. Actual throughput varies with pickup/drop distance and belt speed. Multiple inserters may be needed to saturate a belt lane (7.5/s yellow → need ~9 regular or ~4 fast per lane).
 
@@ -137,6 +137,25 @@ Splitters compose into networks that route m input belts onto n output belts ("b
   under-crediting is the safe direction for the sizing ladder and the
   throughput validator, and re-blessing every golden for ≤20% headroom
   isn't worth the churn. Revisit only if a real import shows starvation.
+- **I8b.** **Inserter capacity research schedule** (RFC-049; raw-wikitext
+  extraction, 2-fetch reproduced, 2026-07-22 — the earlier "up to 27.7"
+  on both rows above was a copy-paste artifact, fixed same date). Hand
+  sizes by research level 0–7:
+  - **bulk chain** (bulk-inserter): 2, 3, 4, 5, 6, 8, 10, 12 (+1 at
+    L1–4, +2 at L5–7).
+  - **stack inserter** = bulk-class + 4 built-in (`stack_size_bonus: 4`
+    in the entity prototype): 6, 7, 8, 9, 10, 12, 14, 16.
+  - **non-bulk** (regular / long-handed / fast): 1, 1, 2, 2, 2, 2, 2 —
+    +1 at L2 and L7 only (→3); **Transport-belt-capacity-2 grants a
+    further literal "non-bulk inserter capacity +1"** → max 4 (bundled
+    at L7 in the engine's model; a max-research force has both).
+  - Belt-drop hand rounding (BS3) applies to the researched hand:
+    `floor(hand/S)×S` — healing is exactly `hand ≡ 0 (mod S)`, so the
+    S=4 dip vanishes at L2/L5/L7 but reappears at L3/L4/L6, and S=3
+    dips even at max research (16 mod 3 = 1).
+  - Belt-FED (pickup-from-belt) throughput is sub-linear in hand size
+    (hand fill wait) — measured-data-only per RFC-049 kill 2; the
+    engine's flat I8 constants remain the level-0 baseline.
 - **I8a.** **Reach is asymmetric across variants.** Only `long-handed-inserter` is reach-2 in vanilla 2.0. There is **no** long-handed equivalent of `fast-inserter`, `stack-inserter`, or `bulk-inserter` — all of those are reach-1 only. A reach-2 slot (e.g. the far side of a 2-input belt row) is therefore capped at **~1.2 items/s base** (long-handed). Layout consequence: in a 2-input row, the higher-rate input must go in the near slot if its per-machine demand exceeds 1.2/s, since the far slot can only deploy long-handed inserters.
 
 - **I9.** **Stack inserter**: picks/drops multiple items per swing (stack size depends on research, max 12). Higher throughput than regular inserters. When dropping onto belts it builds stacks — see the **Belt stacking** section (BS1–BS7) for stack sizes, hand rounding, and which entities can create stacks.

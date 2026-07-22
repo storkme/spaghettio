@@ -562,6 +562,50 @@ pub fn stack_inserter_belt_hand(stacking: u8) -> f64 {
     f64::from((6 / s) * s)
 }
 
+/// Hand size per inserter-capacity research level (RFC-049; level
+/// clamped to 0..=7). Schedule pinned 2026-07-22 from raw wikitext with
+/// 2-fetch reproducibility (spec-review corroboration: wiki moderator,
+/// dev forum post, in-game report):
+///
+/// - bulk chain: base 2, +1 at L1–4, +2 at L5–7 → 3,4,5,6,8,10,12.
+/// - stack inserter is bulk-CLASS with a built-in +4 (`stack_size_bonus`
+///   in the entity prototype) → 6,7,8,9,10,12,14,16.
+/// - non-bulk (regular / long-handed / fast): +1 at L2 and L7 only → 3
+///   via the chain; **L7 additionally bundles Transport-belt-capacity-2's
+///   literal "non-bulk inserter capacity +1" → 4** (a max-research force
+///   has both; RFC-049 kill 5, confirmed).
+///
+/// L0 values match the flat I8 model's implied hands — this table is
+/// additive ground truth, consumed only by research-aware paths
+/// (RFC-049 kill 1: level 0 is bit-identical to pre-RFC behavior).
+pub fn inserter_hand(name: &str, level: u8) -> f64 {
+    let l = usize::from(level.min(7));
+    const STACK: [f64; 8] = [6.0, 7.0, 8.0, 9.0, 10.0, 12.0, 14.0, 16.0];
+    const BULK: [f64; 8] = [2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0];
+    const NON_BULK: [f64; 8] = [1.0, 1.0, 2.0, 2.0, 2.0, 2.0, 2.0, 4.0];
+    match name {
+        "stack-inserter" => STACK[l],
+        "bulk-inserter" => BULK[l],
+        _ => NON_BULK[l],
+    }
+}
+
+/// Items a stack inserter moves per swing when dropping onto a belt, at
+/// belt stack size `stacking` AND inserter-capacity research `level`
+/// (RFC-049's generalization of [`stack_inserter_belt_hand`]): the
+/// researched hand rounded **down** to a multiple of S (BS3).
+///
+/// The dip heals exactly when `hand ≡ 0 (mod S)` — NOT monotonically
+/// (RFC-049 spec-review correction): at S=4 it is dip-free at L2/L5/L7
+/// but reappears at L3 (−1), L4 (−2), L6 (−2); at S=3 even max research
+/// still dips (16 mod 3 = 1). At level 0 this is bit-identical to
+/// `stack_inserter_belt_hand` for every S (kill 1).
+pub fn stack_inserter_belt_hand_at(level: u8, stacking: u8) -> f64 {
+    let s = u32::from(stacking.clamp(1, 4));
+    let hand = inserter_hand("stack-inserter", level) as u32;
+    f64::from((hand / s) * s)
+}
+
 /// Map underground-belt entity name to its corresponding surface belt tier.
 pub fn ug_to_surface_tier(ug_name: &str) -> &'static str {
     match ug_name {
@@ -1077,6 +1121,55 @@ mod tests {
             belt_entity_for_rate_stacked(90.0, None, 2),
             "express-transport-belt"
         );
+    }
+
+    /// RFC-049: pinned research schedule + kill-1 identity + the
+    /// non-monotonic dip matrix (spec-review-corrected: healing is
+    /// exactly hand ≡ 0 mod S).
+    #[test]
+    fn inserter_research_hand_schedule_and_dips() {
+        // Pinned endpoints and structure (stack = bulk + 4 at every level).
+        assert_eq!(inserter_hand("stack-inserter", 0), 6.0);
+        assert_eq!(inserter_hand("stack-inserter", 7), 16.0);
+        assert_eq!(inserter_hand("bulk-inserter", 0), 2.0);
+        assert_eq!(inserter_hand("bulk-inserter", 7), 12.0);
+        for l in 0..=7u8 {
+            assert_eq!(
+                inserter_hand("stack-inserter", l),
+                inserter_hand("bulk-inserter", l) + 4.0,
+                "stack is bulk-class + 4 built-in at every level"
+            );
+        }
+        // Non-bulk: +1 at L2 and L7 only (L7 bundles TBC2 → 4).
+        assert_eq!(inserter_hand("fast-inserter", 0), 1.0);
+        assert_eq!(inserter_hand("fast-inserter", 1), 1.0);
+        assert_eq!(inserter_hand("fast-inserter", 2), 2.0);
+        assert_eq!(inserter_hand("fast-inserter", 6), 2.0);
+        assert_eq!(inserter_hand("fast-inserter", 7), 4.0);
+        // Level clamps.
+        assert_eq!(inserter_hand("stack-inserter", 99), 16.0);
+
+        // Kill 1: L0 is bit-identical to the shipped RFC-046 helper at
+        // every stacking value.
+        for s in 0..=5u8 {
+            assert_eq!(
+                stack_inserter_belt_hand_at(0, s),
+                stack_inserter_belt_hand(s),
+                "L0 must reduce to stack_inserter_belt_hand at S={s}"
+            );
+        }
+
+        // Dip matrix at S=4 across the schedule: dip-free at L2/L5/L7,
+        // REAPPEARS at L3/L4/L6 (the corrected non-monotonic claim).
+        let belt = |l: u8| stack_inserter_belt_hand_at(l, 4);
+        assert_eq!(belt(2), 8.0); // hand 8, exact
+        assert_eq!(belt(3), 8.0); // hand 9 → dip −1
+        assert_eq!(belt(4), 8.0); // hand 10 → dip −2
+        assert_eq!(belt(5), 12.0); // hand 12, exact
+        assert_eq!(belt(6), 12.0); // hand 14 → dip −2
+        assert_eq!(belt(7), 16.0); // hand 16, exact — the L7/S4 heal
+        // S=3 at max research STILL dips: 16 → 15.
+        assert_eq!(stack_inserter_belt_hand_at(7, 3), 15.0);
     }
 
     #[test]
