@@ -238,6 +238,7 @@ impl DecompositionCandidate for ModuleSizeSplit {
             merge_tap: opts.merge_tap,
             stacking: opts.stacking,
             inserter_capacity: opts.inserter_capacity,
+            cell_composition: opts.cell_composition,
         };
         run_layout_with_retry(&transformed, &inner_opts)
     }

@@ -114,6 +114,12 @@ pub struct LayoutOptions {
     /// schedule (`common::inserter_hand`). User-specified like its
     /// sibling axes. Phase 1 core-only; wasm/web plumbing is Phase 2.
     pub inserter_capacity: u8,
+    /// Cell-composition mode (RFC-051): `Off` (default — the bus
+    /// pipeline is bit-identical, which is what lets the goldens stand)
+    /// or `Candidate` (Phase B: eligible solves also produce a
+    /// `CellComposedCandidate` in the decomposition search). Nothing
+    /// reads this in Phase A; it exists so options plumbing is stable.
+    pub cell_composition: crate::bus::cells::CellComposition,
 }
 
 impl Default for LayoutOptions {
@@ -131,6 +137,7 @@ impl Default for LayoutOptions {
             merge_tap: false,
             stacking: 1,
             inserter_capacity: 0,
+            cell_composition: Default::default(),
         }
     }
 }

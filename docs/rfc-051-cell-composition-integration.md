@@ -1,6 +1,6 @@
 # RFC-051: Cell composition integration (production path)
 
-Registry: [`rfcs.md`](rfcs.md). Status: **Draft — under review.**
+Registry: [`rfcs.md`](rfcs.md). Status: **Active — Phase A (lift) delivered; Phase B (candidate) next.**
 
 ## Summary
 
@@ -168,6 +168,23 @@ value statement (see kill 3).
   coverage datum and the flag-default decision.
 
 ## Decision log
+
+- *2026-07-22 — Phase A delivered (same session as the RFC's merge).
+  The harness lifted verbatim into `src/bus/cells/{extract,compose}.rs`
+  (engine-as-generator bootstrap, segment-crop extraction,
+  contiguity-port derivation, corridor stamping, both calibrated
+  composers); `LayoutOptions.cell_composition` added (`Off` default,
+  nothing reads it yet — plumbed through the 21 construction sites
+  incl. wasm-bindings). Tests became consumers, and the two permanent
+  gates now double as the parity proof with PINNED geometry: EC@15
+  asserts 110×22 / 461 entities (the sim-verified artifact), plastic
+  asserts 0 issues. The superseded east-feed composer + its two probes
+  were dropped in the lift (pre-#363 orientation; findings preserved
+  in the RFC-048 log). Panic policy documented in `extract.rs`:
+  generation panics like the harness did; Phase B converts to `Result`
+  at the candidate boundary where fail-soft is required. Suite
+  888/0/45, goldens 8/8 (flag Off = bus path bit-identical, as
+  designed), clippy 0, WASM builds.*
 
 - *2026-07-22 — Session-side design review folded (verdict: ship after
   two one-paragraph fixes; both made, plus three smaller items). (1)
