@@ -601,18 +601,18 @@ fn export_composed_plastic_for_sim() {
         .min_by_key(|e| e.x).unwrap();
     let (pt_x, pt_y) = (pipe_terminal.x + cx, pipe_terminal.y + cy);
     for y in 0..=pt_y {
-        entities.push(PlacedEntity { name: "pipe".into(), x: 3, y,
+        entities.push(PlacedEntity { name: "pipe".into(), x: 6, y,
             direction: EntityDirection::North,
             segment_id: Some("feed:petroleum".into()),
             carries: Some("petroleum-gas".into()), ..Default::default() });
     }
-    for x in 4..pt_x {
+    for x in 7..pt_x {
         entities.push(PlacedEntity { name: "pipe".into(), x, y: pt_y,
             direction: EntityDirection::North,
             segment_id: Some("feed:petroleum".into()),
             carries: Some("petroleum-gas".into()), ..Default::default() });
     }
-    b_in.push(BoundaryRecord { item: "petroleum-gas".into(), x: 3, y: 0,
+    b_in.push(BoundaryRecord { item: "petroleum-gas".into(), x: 6, y: 0,
         direction: EntityDirection::South, is_fluid: true, entity: "pipe".into() });
     // Output: corner South to the bottom edge.
     let out = cell.ports.iter().find(|p| !p.inbound).unwrap();
@@ -674,9 +674,15 @@ fn compose_pairs_calibrated(n: i32) -> (spaghettio_core::models::SolverResult, L
     // Vertical geometry inside a pair (shared by all pairs): feeds enter
     // at y=0; cells start at y=FEED_MARGIN.
     const FEED_MARGIN: i32 = 2;
+    // Feed columns need >=4 tiles of lateral separation: the sim kit's
+    // feed rig (chest + flanking stack inserters) is ~4 wide, and
+    // adjacent rigs collide at construction (observed live: only the
+    // last of three 1-tile-apart rigs survived; lanes 0/1 never fed).
+    const FEED_PITCH: i32 = 4;
     let cell_y = FEED_MARGIN + 1;
     let ec_y = cell_y + 3;
-    let pair_w = 3 /*feed cols*/ + 1 + cable.width + 6 /*corridor*/ + ec.width + 5 /*out+gap*/;
+    let feed_w = FEED_PITCH * 2 + 1; // three columns at 0, 4, 8
+    let pair_w = feed_w + 2 + cable.width + 6 /*corridor*/ + ec.width + 5 /*out+gap*/;
     let mut entities: Vec<PlacedEntity> = Vec::new();
     let mut b_in: Vec<BoundaryRecord> = Vec::new();
     let mut b_out: Vec<BoundaryRecord> = Vec::new();
@@ -684,7 +690,7 @@ fn compose_pairs_calibrated(n: i32) -> (spaghettio_core::models::SolverResult, L
 
     for k in 0..n {
         let px = k * pair_w; // pair origin x
-        let cable_x = px + 4;
+        let cable_x = px + feed_w + 2;
         let corridor_x = cable_x + cable.width;
         let ec_x = corridor_x + 6;
 
@@ -712,7 +718,7 @@ fn compose_pairs_calibrated(n: i32) -> (spaghettio_core::models::SolverResult, L
         targets.push((iron.item.clone(), ec_x + iron.x, ec_y + iron.y));
         targets.sort_by_key(|t| t.2);
         for (i, (item, tx, ty)) in targets.iter().enumerate() {
-            let col_x = px + 2 - i as i32; // inner column first (i=0 → px+2)
+            let col_x = px + feed_w - 1 - FEED_PITCH * i as i32; // inner column first (i=0 → px+8)
             if item == "iron-plate" {
                 // Corner row passes through the cable cell — UG hop
                 // under it (express reach 8 == cell width, exactly).
