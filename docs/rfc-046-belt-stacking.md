@@ -20,9 +20,11 @@ config, **EC@60/s on red belts from ore** — whose committed golden
 stamps 60/s onto a physically-30/s merger belt with zero warnings —
 becomes physically valid end-to-end at S=2 (red stacked = 60/s), one
 belt, proven by a direct per-tile capacity audit. The originally
-drafted legendary-express@60 variant is NOT proven: it hits
-pre-existing high-rate residuals unrelated to stacking (Phase 3
-pick-up).
+drafted legendary-express@60 variant was NOT proven here — it hit
+pre-existing high-rate residuals. *(SUPERSEDED 2026-07-22: RFC-047
+resolved both residuals and delivered it —
+`stacking_ec_60s_express_legendary_s2`, zero errors, #335 tracks the
+remaining ore-routing warnings.)*
 
 ## Motivation
 
@@ -317,9 +319,10 @@ import; the in-game anchor (kill criterion 5) is the final word.
    current Space Age and visibly builds stacks on belts at the
    researched size; the **EC@60/s red S=2** layout (the delivered
    headline fixture's config: normal quality, AM2, from ores) sustains
-   ≥ 59 EC/s. Do NOT run the anchor on the legendary-express variant —
-   it fails today for pre-existing reasons unrelated to stacking
-   (Phase 3), and a failure there would misattribute.
+   ≥ 59 EC/s. *(Updated 2026-07-22: the legendary-express variant is
+   now ALSO viable for the anchor — RFC-047 resolved its residuals
+   (zero errors; #335's ore-routing warnings affect one furnace bank,
+   so expect slightly-under-rate there until it closes).)*
 
 ## Verification plan
 
@@ -361,7 +364,8 @@ import; the in-game anchor (kill criterion 5) is the final word.
 - **Phase 3 — deferred.** Lane-aware tap delivery + the #312 fan-in
   wall lift at S>1 (demoted from Phase 2 — full-belt thresholds on
   tap-delivered flow are unsound, see decision log); the
-  legendary-express@60 headline variant (blocked by pre-existing
+  legendary-express@60 headline variant *(DONE in RFC-047,
+  2026-07-22)* (was blocked by pre-existing
   high-rate residuals independent of stacking: a junction-solver
   failure near dense crossings and ~3% lane-rate walker overshoot on
   zero-headroom lanes at exact tier boundaries — no issue number yet,

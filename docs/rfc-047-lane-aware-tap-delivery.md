@@ -1,6 +1,6 @@
 # RFC-047: Lane-aware tap delivery (stacked rate ceilings)
 
-Registry: [`rfcs.md`](rfcs.md). Status: **Draft** (2026-07-21).
+Registry: [`rfcs.md`](rfcs.md). Status: **Complete** (2026-07-22; browser eyeball of the flipped configs open — user-run; follow-ups #334/#335/#336/#337).
 
 ## Summary
 
@@ -50,7 +50,12 @@ Concrete failing cases today:
   deliver 0.0/s. The 15.4–15.5/s lane overloads (vs a 15/s stacked
   yellow per-lane cap, tiles (24–25, 14/21/118)) are secondary. Kill 3
   (junction) therefore gates the express variant; kill 4 (overshoot)
-  is a smaller residual on the same config.
+  is a smaller residual on the same config. *(RESOLVED 2026-07-22 —
+  both closed: the junction failure died with 047-1b's row
+  consolidation, the overshoot with worst-lane output-belt sizing;
+  the express config now validates with zero errors, pinned by
+  `stacking_ec_60s_express_legendary_s2`. See the decision log's
+  Phase 3 entry; residual ore-routing warnings are #335.)*
 - More broadly: at high build quality, collapsed machine counts shrink
   consumer trunk counts while flows stay constant, so the wall bites
   configs that plain-quality builds handle (#312) — and stacking,
