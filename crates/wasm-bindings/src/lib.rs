@@ -84,6 +84,7 @@ fn layout_options(
         // RFC-049 Phase 2: unknown/absent → 0 (unresearched, bit-identical
         // to pre-RFC — kill 1), same fallback semantics as the tiers above.
         inserter_capacity: inserter_capacity.unwrap_or(0),
+        cell_composition: Default::default(),
     }
 }
 
