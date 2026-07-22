@@ -72,7 +72,13 @@ For full build commands (WASM rebuild, release builds), see [`docs/build-systems
   denied every posting/diff call (fixed #331). Validated 2026-07-21 via
   a planted-bug canary (#330): the bot's first-ever comment correctly
   flagged the bug inline with a committable fix. All substantive PR
-  review feedback before then was session-side. Expected behavior now:
+  review feedback before then was session-side. **A fourth cause class
+  surfaced 2026-07-22: re-running `/install-github-app` overwrote both
+  workflow files with the stock template, silently wiping all three
+  fixes at once (plus `claude.yml`'s owner-only sender gate). Restored
+  in #369, re-validated via canary #368. If anyone reruns the installer,
+  diff the workflow files against main before merging its PR.**
+  Expected behavior now:
   inline comments on findings, or a "no issues" summary comment on
   clean substantive PRs — a green check with *neither* on a
   non-trivial PR means it's broken again. Known benign no-comment
@@ -117,7 +123,7 @@ For full build commands (WASM rebuild, release builds), see [`docs/build-systems
 ## Tooling
 
 - **Blueprint analyzer** — `cargo run -p spaghettio_mining --bin blueprint-analyze -- [file|--batch|--json]`. Useful for auditing community blueprints or spot-checking our own export round-trips.
-- **Sim harness** (RFC-050) — `cargo run -p spaghettio_sim_harness -- run --bp <file> --manifest <file>` runs a layout in a real headless Factorio server and reports planned-vs-measured rates (`fetch` once first; `bless`/`check` freeze and enforce measured baselines). Full how-to: [`docs/sim-harness.md`](docs/sim-harness.md). **One sim run at a time per install dir** — Factorio's write-dir lock plus fixed result filenames mean a concurrent second run dies at startup ("factorio exited early") or silently picks up the other run's report. To run concurrently, clone the install (`cp -r`) and point `SPAGHETTIO_FACTORIO_DIR` at the clone; never share the default install dir with a live run.
+- **Sim harness** (RFC-050) — `cargo run -p spaghettio_sim_harness -- run --bp <file> --manifest <file>` runs a layout in a real headless Factorio server and reports planned-vs-measured rates (`fetch` once first; `bless`/`check` freeze and enforce measured baselines). Full how-to: [`docs/sim-harness.md`](docs/sim-harness.md). Concurrent runs against one install just work (per-run scratch write dirs); only `fetch` and `check-data` still write into the install itself.
 - **Containerised Claude-Code runner** — `Dockerfile` + `docker-compose.yml` + `docker-entrypoint.sh` at the repo root. Ships a `node:24` image with Claude Code, `gh`, Rust, and the pi-coding-agent preinstalled. `docker compose run --rm claude-agent` drops into an interactive container with the workspace mounted and host creds (`~/.claude`, `~/.config/gh`) bind-mounted read-only. Used for one-shot / llama-backed watcher agent runs.
 
 ### Pipeline stages (all Rust)

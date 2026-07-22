@@ -535,7 +535,7 @@ local function stn(st)
 end
 
 local function dump_sim_state(s)
-  local belts, machines, inserters = {}, {}, {}
+  local belts, machines, inserters, pipes = {}, {}, {}, {}
   for _, b in pairs(s.find_entities_filtered{type = {"transport-belt", "underground-belt", "splitter"}}) do
     local n = 0
     -- Per-line item detail (line index -> {{name, count}, ...}). Belt
@@ -561,10 +561,28 @@ local function dump_sim_state(s)
                            math.floor(b.position.y - storage.offy) + LY0, n, det})
     end
   end
+  -- Pipe/fluid section (#364): every pipe-class entity with name,
+  -- direction, and fluid contents — fluids were invisible in the dump,
+  -- which is why the fluid-feed fault needed controlled attribution
+  -- instead of a five-minute read.
+  for _, p in pairs(s.find_entities_filtered{type = {"pipe", "pipe-to-ground", "infinity-pipe", "storage-tank", "pump"}}) do
+    local fl = {}
+    for fname, amt in pairs(p.get_fluid_contents()) do
+      table.insert(fl, {fname, math.floor(amt * 10) / 10})
+    end
+    table.insert(pipes, {math.floor(p.position.x - storage.offx) + LX0,
+                         math.floor(p.position.y - storage.offy) + LY0,
+                         p.name, p.direction, fl})
+  end
   for _, m in pairs(s.find_entities_filtered{type = {"assembling-machine", "furnace"}}) do
-    -- Input/output inventory contents: belts flush transient
-    -- contamination within seconds, machine inventories hold it until
-    -- consumed — the durable witness for wrong-item forensics (#357).
+    -- Fluid contents (main's fluid-calibration arc, position 5) plus
+    -- solid input/output inventory contents (#357 wrong-item forensics,
+    -- position 6): belts flush transient contamination within seconds,
+    -- machine inventories hold it until consumed.
+    local mfl = {}
+    for fname, amt in pairs(m.get_fluid_contents()) do
+      table.insert(mfl, {fname, math.floor(amt * 10) / 10})
+    end
     local inv = {}
     for _, invid in ipairs({defines.inventory.furnace_source, defines.inventory.assembling_machine_input,
                             defines.inventory.furnace_result, defines.inventory.assembling_machine_output}) do
@@ -577,7 +595,7 @@ local function dump_sim_state(s)
       end
     end
     table.insert(machines, {math.floor(m.position.x - storage.offx) + LX0,
-                            math.floor(m.position.y - storage.offy) + LY0, m.name, stn(m.status), inv})
+                            math.floor(m.position.y - storage.offy) + LY0, m.name, stn(m.status), mfl, inv})
   end
   for _, i in pairs(s.find_entities_filtered{type = "inserter"}) do
     table.insert(inserters, {math.floor(i.position.x - storage.offx) + LX0,
@@ -617,7 +635,7 @@ local function dump_sim_state(s)
   end
   helpers.write_file("sim-state.json", helpers.table_to_json{
     offx = storage.offx, offy = storage.offy, fed = storage.fed_total,
-    belts = belts, machines = machines, inserters = inserters,
+    belts = belts, machines = machines, inserters = inserters, pipes = pipes,
     ugs = ugs, splitters = splitters, chests = chests}, false)
 end
 

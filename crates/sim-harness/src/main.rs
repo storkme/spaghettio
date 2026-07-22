@@ -166,12 +166,13 @@ fn cmd_run(args: &[String]) -> Result<(), String> {
     }
     let lua = scenario::build_control_lua(&manifest, &bp, &params);
 
-    orchestrate::write_scenario(&install_dir, &scenario_name, &lua)?;
+    let run_dir = orchestrate::prepare_run_dir(&install_dir, &scenario_name)?;
+    orchestrate::write_scenario(&run_dir, &scenario_name, &lua)?;
     println!(
         "Launching scenario '{scenario_name}' (warmup={} window={} ceiling={} speed={})...",
         params.warmup_ticks, params.window_ticks, params.end_tick, params.speed
     );
-    let outcome = orchestrate::launch_and_wait(&install_dir, &scenario_name, timeout_secs)?;
+    let outcome = orchestrate::launch_and_wait(&install_dir, &run_dir, &scenario_name, timeout_secs)?;
 
     let rpt = report::compute(&manifest, &outcome.result);
     report::print_human(&rpt);
