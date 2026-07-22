@@ -6,9 +6,8 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::common::{
-    dir_to_vec, fluid_only_recipes, inserter_hand, inserter_reach, inserter_throughput,
+    dir_to_vec, fluid_only_recipes, inserter_reach, inserter_throughput,
     is_inserter, is_machine_entity, machine_dims, machine_tiles, recycler_eject_tile,
-    stack_inserter_belt_hand_at, stack_inserter_swings,
     utilization_for,
 };
 use crate::models::{LayoutResult, PlacedEntity, SolverResult};
@@ -30,14 +29,10 @@ use crate::models::{LayoutResult, PlacedEntity, SolverResult};
 /// constant). Bulk inserters stay flat at every level — the engine
 /// never places them and parsed blueprints get the conservative floor.
 fn belt_drop_throughput(ins: &PlacedEntity, stacking: u8, level: u8) -> f64 {
-    let quality = ins.quality.unwrap_or_default();
-    if ins.name == "stack-inserter" && (stacking > 1 || level > 0) {
-        stack_inserter_swings(quality) * stack_inserter_belt_hand_at(level, stacking)
-    } else if level > 0 && ins.name != "bulk-inserter" {
-        inserter_throughput(&ins.name, quality) * inserter_hand(&ins.name, level)
-    } else {
-        inserter_throughput(&ins.name, quality)
-    }
+    // Single source of truth shared with the sizing ladder — see
+    // `common::belt_drop_rate` (constants-identity discipline: the ladder
+    // and this check must never disagree on a belt-dropping inserter's rate).
+    crate::common::belt_drop_rate(&ins.name, ins.quality.unwrap_or_default(), stacking, level)
 }
 
 use super::{Severity, ValidationIssue};

@@ -606,6 +606,46 @@ pub fn stack_inserter_belt_hand_at(level: u8, stacking: u8) -> f64 {
     f64::from((hand / s) * s)
 }
 
+/// Items/s an inserter moves when dropping onto a **belt** (machine-pickup
+/// → belt-drop OUTPUT sides), composing belt stacking (RFC-046) and
+/// inserter-capacity research (RFC-049). This is the **single source of
+/// truth** shared by the sizing ladder (`bus::inserter_ladder`) and the
+/// validator (`validate::inserters::belt_drop_throughput`) — they consume
+/// this function directly so the fix and the check can never disagree on
+/// what a belt-dropping inserter moves (the constants-identity discipline).
+///
+/// Belt-drop is **swing-limited** (RFC-049 ground truth 3): linear in the
+/// inserter's hand, `swings × hand_on_belt`, RFC-046's stack decomposition
+/// generalized by the research dimension:
+///
+/// - **stack inserters** at S>1 OR level>0: `stack_inserter_swings(quality)
+///   × stack_inserter_belt_hand_at(level, stacking)` — the researched hand
+///   rounded down to a multiple of S (BS3 dip, which heals iff
+///   `hand ≡ 0 mod S`, not monotonically — see [`stack_inserter_belt_hand_at`]).
+/// - **non-bulk** (regular / long-handed / fast) at level>0: flat throughput
+///   × `inserter_hand(name, level)` — the far-side (long-handed) output
+///   ceiling genuinely rises 1→2→4 across levels.
+/// - **bulk inserters**: always flat — the engine never places one; parsed
+///   blueprints get the conservative I8 floor.
+///
+/// At `stacking ≤ 1 && level == 0` every branch collapses to the flat I8
+/// `inserter_throughput` (RFC-049 kill 1: bit-identical to pre-RFC), and at
+/// `level == 0` alone it collapses to the RFC-046 `stack_inserter_belt_hand`
+/// path — so both siblings' baselines are structurally preserved.
+///
+/// NB: machine-DROP (input) sides never use this — they are exact-hand and
+/// stay flat at every level (RFC-049 kill 2: no linear extrapolation on
+/// belt-pickup sides without measured data).
+pub fn belt_drop_rate(name: &str, quality: QualityTier, stacking: u8, level: u8) -> f64 {
+    if name == "stack-inserter" && (stacking > 1 || level > 0) {
+        stack_inserter_swings(quality) * stack_inserter_belt_hand_at(level, stacking)
+    } else if level > 0 && name != "bulk-inserter" {
+        inserter_throughput(name, quality) * inserter_hand(name, level)
+    } else {
+        inserter_throughput(name, quality)
+    }
+}
+
 /// Map underground-belt entity name to its corresponding surface belt tier.
 pub fn ug_to_surface_tier(ug_name: &str) -> &'static str {
     match ug_name {
