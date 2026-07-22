@@ -160,6 +160,7 @@ Splitters compose into networks that route m input belts onto n output belts ("b
 
 - **I9.** **Stack inserter**: picks/drops multiple items per swing (stack size depends on research, max 12). Higher throughput than regular inserters. When dropping onto belts it builds stacks — see the **Belt stacking** section (BS1–BS7) for stack sizes, hand rounding, and which entities can create stacks.
 - **I10.** An inserter dropping into a machine will only insert items that the machine's current recipe accepts. *(No explicit filter needed for recipe-locked machines.)*
+- **I11.** The same filtering applies on the **pickup** side: an inserter will not pick an item its destination cannot accept. **Poison-plug corollary**: on a dead-end feed belt the inserter is the only exit, so a single wrong item reaching the front tile plugs that lane *permanently* — the machine starves beside a "full" belt. One contaminant item suffices and it never clears. *(Sim-verified 2026-07-22, #357 forensics — ~17 stray copper plates capped a whole factory. Layout consequence: dead-end row feed belts have zero tolerance for item cross-contamination; any upstream mixing risk needs a filter or a non-dead-end escape.)*
 
 ---
 

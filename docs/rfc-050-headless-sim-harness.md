@@ -353,4 +353,24 @@ design, so blessed measured baselines are **shareable** — keyed on
   artifact bugs that made every prior export inert (#348, #350), one
   half-rate warning class (#352), and one clean-but-failing class
   (#357) — four finding classes in its first two days.*
+- *2026-07-22 (post-close-out) — **KIT CONTAMINATION FOUND; multi-input
+  sweep measurements invalidated pending re-run.** #357 forensics traced
+  the logistic fixture's "starved" rows to wrong-item plugs: the feed
+  rigs' `depth 4+4*idx` stagger put adjacent rigs' bank-chest rows on
+  the same tile, `create_entity` (script mode) stacked two chests
+  silently, and a bank inserter latched the wrong item's chest —
+  cross-feeding copper ore into the iron feed. Iron furnaces smelt it;
+  the copper plates plug dead-end belt-ins permanently (inserters
+  refuse items the machine can't accept — mechanics I11). **Scope**:
+  every multi-belt-input fixture measured before the fix (logistic,
+  military, automation-science, ec10/#352) is suspect; single-input
+  gear10 — the calibration anchor — is immune, so the instrument's
+  +0.0% calibration stands. Fix on #362: 6-per-idx depth stagger + Lua
+  overlap audit → `kit_errors` forces NO DATA. Along the way, two more
+  measurement artifacts were fixed: intermediate rates were 20-second
+  snapshots (now trailing-window), and deep-chain "convergence" can be
+  a buffer-fill transient (`--warmup` steady-state probes). Method +
+  playbook: [`sim-harness-forensics.md`](sim-harness-forensics.md).
+  Clean-kit re-measurement of logistic/military running; #357 carries
+  the running attribution record and will get the corrected numbers.*
 

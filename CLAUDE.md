@@ -188,6 +188,7 @@ Layout bugs are easy to get wrong — zero validation errors can mean the check 
 | Entity sizes | `crates/core/src/common.rs` (`entity_size`) |
 | Validation checks | `crates/core/src/validate/` (34 checks, dispatched from `mod.rs`) |
 | Snapshot format | `crates/core/src/snapshot.rs` + [`docs/layout-snapshot-debugger.md`](docs/layout-snapshot-debugger.md) |
+| Sim measurement semantics + forensics | [`docs/sim-harness-forensics.md`](docs/sim-harness-forensics.md) (what each spaghettio-sim number means, artifact classes, debug playbook) |
 | Belt lane physics | [`docs/factorio-mechanics.md`](docs/factorio-mechanics.md) |
 | Ghost pipeline contracts | [`docs/ghost-pipeline-contracts.md`](docs/ghost-pipeline-contracts.md) |
 | Walker-veto debugging | [`docs/walker-veto-debugging.md`](docs/walker-veto-debugging.md) |
