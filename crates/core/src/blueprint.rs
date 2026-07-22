@@ -158,18 +158,11 @@ pub fn export(layout: &LayoutResult, label: &str) -> String {
                     // adjacent column, and belt connectivity silently broke
                     // in-game (found by the RFC-050 harness: the gear
                     // fixture's merger splitter buffered 56 items into a
-                    // void). The parser's `entity_footprint` was already
-                    // direction-aware, so round-trips never saw it.
-                    let (w, h) = if ent.name.ends_with("splitter") {
-                        match ent.direction {
-                            crate::models::EntityDirection::North
-                            | crate::models::EntityDirection::South => (2, 1),
-                            crate::models::EntityDirection::East
-                            | crate::models::EntityDirection::West => (1, 2),
-                        }
-                    } else {
-                        crate::common::entity_size(&ent.name)
-                    };
+                    // void). The shared `oriented_splitter_dims` covers the
+                    // exact 2-wide family — NOT `lane-splitter`, which is
+                    // 1×1 despite the name (PR #350 review).
+                    let (w, h) = crate::common::oriented_splitter_dims(&ent.name, ent.direction)
+                        .unwrap_or_else(|| crate::common::entity_size(&ent.name));
                     Position {
                         x: ent.x as f64 + w as f64 / 2.0,
                         y: ent.y as f64 + h as f64 / 2.0,
@@ -383,6 +376,41 @@ mod tests {
             assert_eq!(bp["entities"][0]["position"]["x"], cx, "{dir:?}");
             assert_eq!(bp["entities"][0]["position"]["y"], cy, "{dir:?}");
         }
+    }
+
+    /// PR #350 review: the 2-wide family is exactly {splitter, fast-,
+    /// express-, turbo-}; `lane-splitter` is 1×1 despite the name and
+    /// must NOT be widened.
+    #[test]
+    fn splitter_family_subset_is_exact() {
+        let layout = LayoutResult {
+            entities: vec![
+                PlacedEntity {
+                    name: "turbo-splitter".into(),
+                    x: 0,
+                    y: 0,
+                    direction: EntityDirection::South,
+                    ..Default::default()
+                },
+                PlacedEntity {
+                    name: "lane-splitter".into(),
+                    x: 4,
+                    y: 0,
+                    direction: EntityDirection::South,
+                    ..Default::default()
+                },
+            ],
+            width: 6,
+            height: 2,
+            ..Default::default()
+        };
+        let bp = decode_blueprint(&export(&layout, "fam"));
+        // turbo: 2-wide → integer center on x.
+        assert_eq!(bp["entities"][0]["position"]["x"], 1.0);
+        assert_eq!(bp["entities"][0]["position"]["y"], 0.5);
+        // lane-splitter: 1×1 → half centers on both axes.
+        assert_eq!(bp["entities"][1]["position"]["x"], 4.5);
+        assert_eq!(bp["entities"][1]["position"]["y"], 0.5);
     }
 
     /// Factorio reads an inserter's `direction` as its PICKUP side
