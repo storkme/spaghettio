@@ -207,6 +207,25 @@ table (Phase 3).
 
 ## Decision log
 
+- **2026-07-22 — Phases 0+1 landed.** Phase 0: schedule re-verified
+  in-session (two raw-wikitext extractions, identical — kill 3's bar
+  met); `inserter_hand` + `stack_inserter_belt_hand_at` landed
+  additive/unconsumed with the dip-matrix unit test (L2/L5/L7 heal at
+  S=4, L3/L4/L6 dip, S=3 dips at max research) and the L0-reduces-to-
+  RFC-046 identity sweep; I8b added to the mechanics doc and the
+  pre-existing 27.7 copy-paste on the stack row fixed (→ ~38.4).
+  Phase 1: `LayoutOptions.inserter_capacity` → recorded on
+  `LayoutResult` (serde skip-0/default-0 — pre-RFC snapshots
+  deserialize unresearched); `belt_drop_throughput` grew the level
+  dimension (stack: swings × belt_hand_at whenever either axis is
+  active; non-bulk belt-drops: flat × hand, L0-reduces-to-flat; bulk:
+  flat always — never placed, conservative floor for parsed
+  blueprints). Kill-1 gate: suite 871/0/36 (one clean run), stress
+  suite green, goldens 8/8 zero diffs, zero re-blesses. Input sides
+  untouched (kill-2 L0 floor stands until measured data or the
+  anchor). Note: the branch is named `rfc-048-inserter-research` from
+  before the renumber — cosmetic; the PR will note it.
+
 - **2026-07-22 — Adversarial spec review: APPROVE-WITH-CHANGES; v2
   folds all 16 findings.** The review out-sourced the spike: its
   raw-wikitext API method (2-fetch reproducibility) pinned the full

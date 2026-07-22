@@ -6,9 +6,10 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::common::{
-    dir_to_vec, fluid_only_recipes, inserter_reach, inserter_throughput, is_inserter,
-    is_machine_entity, machine_dims, machine_tiles, recycler_eject_tile,
-    stack_inserter_belt_hand, stack_inserter_swings, utilization_for,
+    dir_to_vec, fluid_only_recipes, inserter_hand, inserter_reach, inserter_throughput,
+    is_inserter, is_machine_entity, machine_dims, machine_tiles, recycler_eject_tile,
+    stack_inserter_belt_hand_at, stack_inserter_swings,
+    utilization_for,
 };
 use crate::models::{LayoutResult, PlacedEntity, SolverResult};
 
@@ -19,10 +20,21 @@ use crate::models::{LayoutResult, PlacedEntity, SolverResult};
 /// and for every other inserter type, this is the flat I8 constant —
 /// bit-identical to pre-RFC behavior (kill 1). Machine drops never use
 /// this: they are exact-hand (BS2), always the flat constant.
-fn belt_drop_throughput(ins: &PlacedEntity, stacking: u8) -> f64 {
+/// RFC-049 extends this with the inserter-capacity research `level`
+/// (from `LayoutResult.inserter_capacity`): stack inserters use the
+/// swings × researched-belt-hand decomposition whenever EITHER axis is
+/// active (S>1 or L>0 — `stack_inserter_belt_hand_at(0, S)` reduces to
+/// the RFC-046 helper, so the S-only path is bit-identical); non-bulk
+/// belt-drops at L>0 scale linearly by hand (machine pickup is
+/// swing-limited; `inserter_hand(non-bulk, 0) == 1` makes L0 the flat
+/// constant). Bulk inserters stay flat at every level — the engine
+/// never places them and parsed blueprints get the conservative floor.
+fn belt_drop_throughput(ins: &PlacedEntity, stacking: u8, level: u8) -> f64 {
     let quality = ins.quality.unwrap_or_default();
-    if stacking > 1 && ins.name == "stack-inserter" {
-        stack_inserter_swings(quality) * stack_inserter_belt_hand(stacking)
+    if ins.name == "stack-inserter" && (stacking > 1 || level > 0) {
+        stack_inserter_swings(quality) * stack_inserter_belt_hand_at(level, stacking)
+    } else if level > 0 && ins.name != "bulk-inserter" {
+        inserter_throughput(&ins.name, quality) * inserter_hand(&ins.name, level)
     } else {
         inserter_throughput(&ins.name, quality)
     }
@@ -256,7 +268,7 @@ pub fn check_inserter_throughput(
             // to a belt). Only count picks that actually leave the machine.
             if !machine_tiles_set.contains(&drop_pos) {
                 // Extraction drops onto a belt → belt-drop rating (RFC-046).
-                let rate = belt_drop_throughput(ins, layout.stacking);
+                let rate = belt_drop_throughput(ins, layout.stacking, layout.inserter_capacity);
                 *output_avail.entry(mpos).or_insert(0.0) += rate;
                 *output_count.entry(mpos).or_insert(0) += 1;
             }
@@ -428,7 +440,7 @@ pub fn check_inserter_item_throughput(
         if let Some(&mpos) = machine_by_tile.get(&pickup_pos) {
             if !machine_tiles_set.contains(&drop_pos) {
                 // Extraction drops onto a belt → belt-drop rating (RFC-046).
-                let rate = belt_drop_throughput(ins, layout.stacking);
+                let rate = belt_drop_throughput(ins, layout.stacking, layout.inserter_capacity);
                 *output_avail.entry((mpos, item)).or_insert(0.0) += rate;
             }
         }
@@ -551,18 +563,18 @@ mod tests {
         // S ≤ 1 is the flat I8 constant, bit-identical to pre-RFC (kill 1)
         // — including 0, the derived-Default sentinel on hand-built layouts.
         assert_eq!(
-            belt_drop_throughput(&stack, 0),
+            belt_drop_throughput(&stack, 0, 0),
             inserter_throughput("stack-inserter", QualityTier::Normal)
         );
-        assert_eq!(belt_drop_throughput(&stack, 1), 12.0);
+        assert_eq!(belt_drop_throughput(&stack, 1, 0), 12.0);
         // S=2,3: swings × hand 6 = 14.4/s; S=4: hand rounds down to 4 →
         // the real 9.6/s dip (BS3).
-        assert!((belt_drop_throughput(&stack, 2) - 14.4).abs() < 1e-9);
-        assert!((belt_drop_throughput(&stack, 3) - 14.4).abs() < 1e-9);
-        assert!((belt_drop_throughput(&stack, 4) - 9.6).abs() < 1e-9);
+        assert!((belt_drop_throughput(&stack, 2, 0) - 14.4).abs() < 1e-9);
+        assert!((belt_drop_throughput(&stack, 3, 0) - 14.4).abs() < 1e-9);
+        assert!((belt_drop_throughput(&stack, 4, 0) - 9.6).abs() < 1e-9);
         // Non-stack inserters never stack (BS5) — flat at any S.
         assert_eq!(
-            belt_drop_throughput(&fast, 4),
+            belt_drop_throughput(&fast, 4, 0),
             inserter_throughput("fast-inserter", QualityTier::Normal)
         );
         // Quality scales swings only (BS7): legendary ×2.5 at S=4 → 24/s.
@@ -571,7 +583,19 @@ mod tests {
             quality: Some(QualityTier::Legendary),
             ..Default::default()
         };
-        assert!((belt_drop_throughput(&legendary, 4) - 24.0).abs() < 1e-9);
+        assert!((belt_drop_throughput(&legendary, 4, 0) - 24.0).abs() < 1e-9);
+
+        // RFC-049: research dimension. L7/S=4 heals the dip: 2.4×16 = 38.4.
+        assert!((belt_drop_throughput(&stack, 4, 7) - 38.4).abs() < 1e-9);
+        // L3/S=4 dips (hand 9 → 8): 2.4×8 = 19.2.
+        assert!((belt_drop_throughput(&stack, 4, 3) - 19.2).abs() < 1e-9);
+        // L>0 without stacking still decomposes: L7/S=1 → 2.4×16.
+        assert!((belt_drop_throughput(&stack, 1, 7) - 38.4).abs() < 1e-9);
+        // Non-bulk belt-drop scales linearly by hand: fast L7 = 2.31×4.
+        assert!((belt_drop_throughput(&fast, 1, 7) - 2.31 * 4.0).abs() < 1e-9);
+        // Bulk stays flat at every level (conservative floor).
+        let bulk = PlacedEntity { name: "bulk-inserter".into(), ..Default::default() };
+        assert_eq!(belt_drop_throughput(&bulk, 1, 7), inserter_throughput("bulk-inserter", QualityTier::Normal));
     }
 
     // ── check_inserter_direction ─────────────────────────────────────────────
