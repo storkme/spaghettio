@@ -287,6 +287,18 @@ fn parse_direction(d: u8) -> EntityDirection {
     }
 }
 
+/// 180° rotation in `EntityDirection` space — the inserter
+/// pickup-vs-drop convention flip (see the import site and the
+/// exporter's mirror-image flip).
+fn flip180(d: EntityDirection) -> EntityDirection {
+    match d {
+        EntityDirection::North => EntityDirection::South,
+        EntityDirection::East => EntityDirection::West,
+        EntityDirection::South => EntityDirection::North,
+        EntityDirection::West => EntityDirection::East,
+    }
+}
+
 // ---- Public API ----
 
 /// A parsed blueprint with an optional label.
@@ -333,10 +345,15 @@ fn bp_data_to_layout(bp_data: BpData) -> LayoutResult {
         // direction is the PICKUP side; the engine's convention is
         // drop-side. Un-flip on import so imported inserters read
         // correctly under engine semantics (the exporter flips back).
+        // The flip happens AFTER parsing, in EntityDirection space —
+        // raw-byte arithmetic would destroy legacy v0/v1 8-way values
+        // (E=2/W=6 both landed on the catch-all) and could overflow on
+        // garbage bytes (PR #348 review).
+        let parsed = parse_direction(raw.direction);
         let dir = if raw.name.contains("inserter") {
-            parse_direction((raw.direction + 8) % 16)
+            flip180(parsed)
         } else {
-            parse_direction(raw.direction)
+            parsed
         };
         let (w, h) = entity_footprint(&raw.name, dir);
 
@@ -589,6 +606,51 @@ mod tests {
         let parsed = parse_blueprint_string(&bp).expect("should parse");
         assert_eq!(parsed.entities.len(), 1);
         assert_eq!(parsed.entities[0].name, "stack-inserter");
+    }
+
+    /// PR #348 review MAJOR: the pickup→drop un-flip must happen in
+    /// EntityDirection space, after legacy 8-way decoding — raw-byte
+    /// `+8` collapsed legacy E(2)/W(6) onto the catch-all.
+    #[test]
+    fn legacy_8way_inserters_unflip_correctly() {
+        let bp = encode_envelope(&serde_json::json!({
+            "blueprint": {
+                "item": "blueprint",
+                "entities": [
+                    // Legacy East (2): game pickup=east → engine drop-side = West.
+                    {"entity_number": 1, "name": "fast-inserter",
+                     "position": {"x": 0.5, "y": 0.5}, "direction": 2},
+                    // Legacy West (6) → engine East.
+                    {"entity_number": 2, "name": "inserter",
+                     "position": {"x": 2.5, "y": 0.5}, "direction": 6},
+                    // Legacy East belt stays East (no flip for non-inserters).
+                    {"entity_number": 3, "name": "transport-belt",
+                     "position": {"x": 4.5, "y": 0.5}, "direction": 2},
+                ]
+            }
+        }));
+        let parsed = parse_blueprint_string(&bp).expect("should parse");
+        assert_eq!(parsed.entities[0].direction, EntityDirection::West);
+        assert_eq!(parsed.entities[1].direction, EntityDirection::East);
+        assert_eq!(parsed.entities[2].direction, EntityDirection::East);
+    }
+
+    /// PR #348 review MINOR: garbage direction bytes must not panic
+    /// (the old raw `+8` overflowed u8 for values ≥ 248 in debug).
+    #[test]
+    fn garbage_direction_bytes_do_not_panic() {
+        let bp = encode_envelope(&serde_json::json!({
+            "blueprint": {
+                "item": "blueprint",
+                "entities": [
+                    {"entity_number": 1, "name": "inserter",
+                     "position": {"x": 0.5, "y": 0.5}, "direction": 250},
+                ]
+            }
+        }));
+        let parsed = parse_blueprint_string(&bp).expect("should parse");
+        // Catch-all North, flipped to engine South.
+        assert_eq!(parsed.entities[0].direction, EntityDirection::South);
     }
 
     #[test]
