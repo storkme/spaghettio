@@ -289,6 +289,19 @@ entries as the Phase 1 gate.
 
 ## Decision log
 
+- *2026-07-22 — Extraction probe: EC cell extracts CLEAN (8×8, 32
+  entities, 3 ports — iron/cable W-in at y=0/1, EC E-out at y=7,
+  midpoint bridge intact). Cable@15 extracts as TWO internal rows (the
+  placer splits 3 machines 2+1), which is contractually fine — cell
+  interiors are opaque — but broke naive per-SEGMENT port derivation
+  (both rows share `row:copper-cable:*` segment names, so terminal
+  picking collapsed across rows). Design decision: ports derive from
+  CONTIGUOUS BELT RUNS within a segment, one port per run terminating
+  at a cell edge; the cable cell therefore exposes two W plate-in and
+  two E cable-out ports, and the corridor merges the two outs via a
+  2→1 splitter (lane-preserving, allowed by contract F4). Multi-row
+  interiors are inevitable at scale, so run-contiguity is the general
+  mechanism, not a workaround.*
 - *2026-07-22 — Phase 1 started (branch rfc-048-phase1; goal-driven).
   Environment verified: Factorio 2.0.76 cached from the RFC-050
   dogfood, spaghettio-sim invocable, export_with_manifest present.
