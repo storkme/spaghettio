@@ -139,6 +139,21 @@ pub struct ModuleItem {
     pub quality: Option<crate::common::QualityTier>,
 }
 
+/// One layout boundary point (RFC-050): where an external item enters or
+/// the target item exits, with the entity that sits there.
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BoundaryRecord {
+    pub item: String,
+    pub x: i32,
+    pub y: i32,
+    pub direction: EntityDirection,
+    pub is_fluid: bool,
+    /// Entity prototype at the boundary tile (belt tier or pipe).
+    pub entity: String,
+}
+
 /// A single entity placed in the blueprint grid.
 ///
 /// Represents any game entity (belt, inserter, machine, pipe, pole, etc.) at a
@@ -350,6 +365,17 @@ pub struct LayoutResult {
     /// surplus. Populated by the bus pipeline regardless of tracing.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub surplus_exits: Vec<(String, i32, i32)>,
+    /// External-input entry points (RFC-050 Phase 0): one record per bus
+    /// lane with no producer row — the tile where the outside world must
+    /// deliver that item. Emitted by the engine from lane-planner
+    /// knowledge; heuristic reconstruction from the artifact was
+    /// falsified three ways (RFC-050 rev 2 decision log).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub boundary_inputs: Vec<BoundaryRecord>,
+    /// Target-item exit points (RFC-050 Phase 0): the merger-tail sink
+    /// belts where finished product leaves the layout.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub boundary_outputs: Vec<BoundaryRecord>,
     /// Solid surplus streams consumed by a synthesized voider row under
     /// `SurplusPolicy::Void` (RFC Fulgora Phase 2,
     /// `docs/rfc-fulgora-scrap.md` D1) — first-class, trace-independent,

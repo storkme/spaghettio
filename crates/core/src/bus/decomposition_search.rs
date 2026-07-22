@@ -927,6 +927,8 @@ mod tests {
             entities: vec![],
             width: 0,
             height: 0,
+            boundary_inputs: vec![],
+            boundary_outputs: vec![],
             warnings: vec![],
             regions: vec![],
             trace: None,
