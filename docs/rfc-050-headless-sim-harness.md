@@ -353,4 +353,38 @@ design, so blessed measured baselines are **shareable** — keyed on
   artifact bugs that made every prior export inert (#348, #350), one
   half-rate warning class (#352), and one clean-but-failing class
   (#357) — four finding classes in its first two days.*
+- *2026-07-22 (post-close-out) — **KIT CONTAMINATION FOUND; multi-input
+  sweep measurements invalidated pending re-run.** #357 forensics traced
+  the logistic fixture's "starved" rows to wrong-item plugs: the feed
+  rigs' `depth 4+4*idx` stagger put adjacent rigs' bank-chest rows on
+  the same tile, `create_entity` (script mode) stacked two chests
+  silently, and a bank inserter latched the wrong item's chest —
+  cross-feeding copper ore into the iron feed. Iron furnaces smelt it;
+  the copper plates plug dead-end belt-ins permanently (inserters
+  refuse items the machine can't accept — mechanics I11). **Scope**:
+  every multi-belt-input fixture measured before the fix (logistic,
+  military, automation-science, ec10/#352) is suspect; single-input
+  gear10 — the calibration anchor — is immune, so the instrument's
+  +0.0% calibration stands. Fix on #362: 6-per-idx depth stagger + Lua
+  overlap audit → `kit_errors` forces NO DATA. Along the way, two more
+  measurement artifacts were fixed: intermediate rates were 20-second
+  snapshots (now trailing-window), and deep-chain "convergence" can be
+  a buffer-fill transient (`--warmup` steady-state probes). Method +
+  playbook: [`sim-harness-forensics.md`](sim-harness-forensics.md).
+  Clean-kit re-measurement of logistic/military running; #357 carries
+  the running attribution record and will get the corrected numbers.
+  **Resolution (same day): clean-kit 1-game-hour steady runs — logistic
+  1.05/s PASS (+4.7%), military 1.00/s PASS (+0.0%). #357 closed as
+  harness artifact; the layouts were never broken and the validator's
+  clean verdicts were correct. RFC-051 (junction/allocation static
+  check) not filed — motivating evidence gone. Baselines re-blessed.
+  ec10 (#352) and automation-science clean-kit re-runs in flight; #345
+  r150 flagged for re-measurement. Sweep re-validation complete same
+  day: ec10 10.00/s PASS (+0.0%; #352 closed — its four inserter
+  warnings remain undecided pending tech-state parity, filed #370) and
+  automation 1.00/s PASS (delivered +1.3%; the −4% quantization WARN
+  was kit-era, attribution item closed). All five solid baselines
+  re-blessed from clean-kit runs. The solid sweep is entirely green:
+  the engine's layouts perform at plan everywhere the sim can currently
+  measure.***
 

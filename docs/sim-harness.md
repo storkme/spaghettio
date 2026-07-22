@@ -90,13 +90,17 @@ Knobs (defaults in parentheses):
   sim_state, run_params, game_version}`. This file is what `bless`,
   `check`, and the web overlay consume — always pass it for anything you
   might want to keep.
+- `--warmup N` (derived from manifest dims) — override the warmup before
+  measurement starts. Use for **steady-state probes** on deep chains:
+  the 2% stability windows cannot distinguish a slow buffer-fill drift
+  from real convergence, so a run can "converge" while trunk buffers are
+  still filling (intermediates at or above plan are the tell). One game
+  hour (`--warmup 216000`) settled the #357 fixtures.
 
-Warmup (ticks before measurement starts) is not a flag: it is derived
-from the manifest's dimensions. An explicit `--warmup` override for
-steady-state probes — the 2% stability windows cannot distinguish a slow
-buffer-fill drift from real convergence on deep chains — exists on the
-unmerged `sim-warmup-override` branch; add it to the knob list above
-when it lands.
+Reading and debugging the resulting numbers — what each rate actually
+measures, the known measurement-artifact classes, and the forensic
+playbook (per-lane belt dumps, machine inventories, kit chest census) —
+is covered in [`sim-harness-forensics.md`](sim-harness-forensics.md).
 
 ## Reading the report
 
@@ -163,6 +167,11 @@ install (e.g. a candidate pin bump) side by side.
 - **`factorio exited early`** — a real crash (bad blueprint string, Lua
   error at startup): read the log at the path `run` printed; the kept
   run dir has the generated `config.ini` and scenario for repro.
+- **`KIT ERRORS` in the report** — the boundary kit's self-audit failed
+  (e.g. overlapping bank chests); the run is invalid and the verdict is
+  forced NO DATA. Never interpret rates from such a run — see the kit
+  -contamination artifact class in
+  [`sim-harness-forensics.md`](sim-harness-forensics.md).
 - **Timeout waiting for `harness-result.json`** — the scenario never
   finished; check the log for Lua errors, or raise `--timeout-secs` on
   slow machines.

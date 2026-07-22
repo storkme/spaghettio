@@ -126,6 +126,19 @@ impl RunParams {
             scenario_name,
         }
     }
+
+    /// Override the dim-scaled warmup (`--warmup`). The 2% stability
+    /// windows cannot distinguish a slow buffer-fill drift from real
+    /// convergence — deep-chain fixtures "converge" while trunk and tap
+    /// buffers are still filling — so steady-state probes need
+    /// measurement to start long after that transient. Rounded up to the
+    /// tick handler's 60-tick cadence; the ceiling is re-floored so the
+    /// run can still take one stability sample.
+    pub fn with_warmup(mut self, warmup: u32) -> RunParams {
+        self.warmup_ticks = round_up_60(warmup);
+        self.end_tick = self.end_tick.max(self.warmup_ticks + self.window_ticks);
+        self
+    }
 }
 
 /// A world-space cardinal vector, used only inside this module's Lua
@@ -293,7 +306,17 @@ fn feed_call(out: &mut String, idx: usize, rec: &BoundaryRecord) {
     let into = rec.direction().vector();
     let outward = neg(into);
     let lateral = rot90(into);
-    let depth = 4 + 4 * (idx as i32);
+    // Depth stagger must exceed the bank's ±2 lateral chest offset, or
+    // adjacent rigs' chest rows land on the same tile — create_entity in
+    // script mode stacks entities silently, and a shared bank tile
+    // cross-feeds ores (two overlapping chests at one tile poisoned the
+    // logistic fixture's iron system with copper plates; #357 forensics
+    // 2026-07-22). 4+4*idx put rig 0's chest row (depth+2) exactly on
+    // rig 1's (depth-2); 6 per step keeps every rig's occupied band
+    // [depth-2, depth+2] disjoint. The Lua-side overlap audit backstops
+    // geometries this spacing can't save (heads 10-12 tiles apart put a
+    // rig's outward column through a neighbor's bank).
+    let depth = 4 + 6 * (idx as i32);
     let _ = writeln!(
         out,
         "  do\n    local head_x, head_y = {x} - LX0 + storage.offx, {y} - LY0 + storage.offy",
@@ -392,6 +415,7 @@ script.on_init(function()
   storage.drains, storage.drained_total = {}, {}
   storage.samples, storage.checkpoints = {}, {}
   storage.fluid_errors = {}
+  storage.kit_errors = {}
   storage.finalized = false
   storage.converged = false
   game.speed = "#,
@@ -489,7 +513,21 @@ script.on_init(function()
     }
 
     out.push_str(
-        r#"end)
+        r#"  -- Kit overlap audit (#357): create_entity in script mode stacks
+  -- entities silently; overlapping bank chests cross-feed items and
+  -- poison the factory with wrong-item plugs. Any overlap invalidates
+  -- the run — record it loudly.
+  do
+    local seen = {}
+    for _, c in pairs(s.find_entities_filtered{name = "steel-chest"}) do
+      local key = math.floor(c.position.x) .. "," .. math.floor(c.position.y)
+      if seen[key] then
+        table.insert(storage.kit_errors, "overlapping kit chests at (" .. key .. ")")
+      end
+      seen[key] = true
+    end
+  end
+end)
 
 local function stn(st)
   for k, v in pairs(defines.entity_status) do if v == st then return k end end
@@ -500,12 +538,27 @@ local function dump_sim_state(s)
   local belts, machines, inserters, pipes = {}, {}, {}, {}
   for _, b in pairs(s.find_entities_filtered{type = {"transport-belt", "underground-belt", "splitter"}}) do
     local n = 0
+    -- Per-line item detail (line index -> {{name, count}, ...}). Belt
+    -- counts alone are ambiguous exactly when it matters: an inserter
+    -- refusing a "full" belt usually means wrong item or wrong lane,
+    -- and neither is visible from a bare total (#357 recon).
+    local det = {}
     for li = 1, b.get_max_transport_line_index() do
-      n = n + b.get_transport_line(li).get_item_count()
+      local tl = b.get_transport_line(li)
+      n = n + tl.get_item_count()
+      local lane = {}
+      for k, v in pairs(tl.get_contents()) do
+        if type(v) == "table" then
+          lane[#lane + 1] = {v.name or tostring(k), v.count or 0}
+        else
+          lane[#lane + 1] = {tostring(k), v}
+        end
+      end
+      det[li] = lane
     end
     if n > 0 then
       table.insert(belts, {math.floor(b.position.x - storage.offx) + LX0,
-                           math.floor(b.position.y - storage.offy) + LY0, n})
+                           math.floor(b.position.y - storage.offy) + LY0, n, det})
     end
   end
   -- Pipe/fluid section (#364): every pipe-class entity with name,
@@ -522,20 +575,68 @@ local function dump_sim_state(s)
                          p.name, p.direction, fl})
   end
   for _, m in pairs(s.find_entities_filtered{type = {"assembling-machine", "furnace"}}) do
+    -- Fluid contents (main's fluid-calibration arc, position 5) plus
+    -- solid input/output inventory contents (#357 wrong-item forensics,
+    -- position 6): belts flush transient contamination within seconds,
+    -- machine inventories hold it until consumed.
     local mfl = {}
     for fname, amt in pairs(m.get_fluid_contents()) do
       table.insert(mfl, {fname, math.floor(amt * 10) / 10})
     end
+    local inv = {}
+    for _, invid in ipairs({defines.inventory.furnace_source, defines.inventory.assembling_machine_input,
+                            defines.inventory.furnace_result, defines.inventory.assembling_machine_output}) do
+      local i = m.get_inventory(invid)
+      if i then
+        for _, it in pairs(i.get_contents()) do
+          local nm = it.name or "?"
+          inv[nm] = (inv[nm] or 0) + (it.count or 0)
+        end
+      end
+    end
     table.insert(machines, {math.floor(m.position.x - storage.offx) + LX0,
-                            math.floor(m.position.y - storage.offy) + LY0, m.name, stn(m.status), mfl})
+                            math.floor(m.position.y - storage.offy) + LY0, m.name, stn(m.status), mfl, inv})
   end
   for _, i in pairs(s.find_entities_filtered{type = "inserter"}) do
     table.insert(inserters, {math.floor(i.position.x - storage.offx) + LX0,
                              math.floor(i.position.y - storage.offy) + LY0, stn(i.status)})
   end
+  -- UG pairing as the GAME resolved it (mis-pairs teleport items across
+  -- lines) and splitter priority/filter state as revived — wrong-item
+  -- forensics needs both (#357).
+  local ugs, splitters = {}, {}
+  for _, u in pairs(s.find_entities_filtered{type = "underground-belt"}) do
+    local rec = {math.floor(u.position.x - storage.offx) + LX0,
+                 math.floor(u.position.y - storage.offy) + LY0, u.belt_to_ground_type}
+    local n = u.neighbours
+    if n and n.valid then
+      rec[4] = math.floor(n.position.x - storage.offx) + LX0
+      rec[5] = math.floor(n.position.y - storage.offy) + LY0
+    end
+    table.insert(ugs, rec)
+  end
+  for _, sp in pairs(s.find_entities_filtered{type = "splitter"}) do
+    table.insert(splitters, {math.floor(sp.position.x - storage.offx) + LX0,
+                             math.floor(sp.position.y - storage.offy) + LY0,
+                             tostring(sp.splitter_output_priority), tostring(sp.splitter_input_priority),
+                             sp.splitter_filter and sp.splitter_filter.name or ""})
+  end
+  -- Kit chest census: overlapping feed chests on a contested bank tile
+  -- are invisible on belts (each rig's refill keeps its own item topped
+  -- up) but poison whichever inserter latches the wrong chest (#357).
+  local chests = {}
+  for _, c in pairs(s.find_entities_filtered{name = "steel-chest"}) do
+    local contents = {}
+    for _, it in pairs(c.get_inventory(defines.inventory.chest).get_contents()) do
+      contents[it.name or "?"] = (contents[it.name or "?"] or 0) + (it.count or 0)
+    end
+    table.insert(chests, {math.floor(c.position.x - storage.offx) + LX0,
+                          math.floor(c.position.y - storage.offy) + LY0, contents})
+  end
   helpers.write_file("sim-state.json", helpers.table_to_json{
     offx = storage.offx, offy = storage.offy, fed = storage.fed_total,
-    belts = belts, machines = machines, inserters = inserters, pipes = pipes}, false)
+    belts = belts, machines = machines, inserters = inserters, pipes = pipes,
+    ugs = ugs, splitters = splitters, chests = chests}, false)
 end
 
 local function finalize(s, converged)
@@ -555,7 +656,7 @@ local function finalize(s, converged)
     proxies_fulfilled = storage.proxies_fulfilled,
     samples = storage.samples, checkpoints = storage.checkpoints,
     machine_census = census, converged = storage.converged, final_tick = game.tick,
-    fluid_errors = storage.fluid_errors}, false)
+    fluid_errors = storage.fluid_errors, kit_errors = storage.kit_errors}, false)
   print("HARNESS_DONE")
   script.on_nth_tick(60, nil)
 end
@@ -642,6 +743,20 @@ mod tests {
     }
 
     #[test]
+    fn warmup_override_rounds_to_cadence_and_lifts_ceiling() {
+        let p = RunParams {
+            end_tick: 10_000,
+            speed: 16,
+            warmup_ticks: 3600,
+            window_ticks: 1800,
+            scenario_name: "t".into(),
+        }
+        .with_warmup(216_001);
+        assert_eq!(p.warmup_ticks, 216_060);
+        assert_eq!(p.end_tick, 216_060 + 1800);
+    }
+
+    #[test]
     fn window_floors_at_min_and_scales_inversely_with_rate() {
         // 10 items/s -> 300/10 = 30s = 1800 ticks
         assert_eq!(default_window_ticks(10.0), 1800);
@@ -658,7 +773,9 @@ mod tests {
         // south-facing feed: outward=(0,-1), lateral=(1,0) -- matches the
         // literal gen_harness_scenario.py call shape (o=north, l=east).
         assert!(lua.contains("add_feed(s, force, head_x, head_y, 0, -1, 1, 0, 4, \"iron-ore\", \"transport-belt\")"));
-        assert!(lua.contains("add_feed(s, force, head_x, head_y, 0, -1, 1, 0, 8, \"iron-ore\", \"transport-belt\")"));
+        // Second rig at depth 10 (6-per-idx stagger, > the bank's ±2
+        // chest offset — see feed_call's collision comment / #357).
+        assert!(lua.contains("add_feed(s, force, head_x, head_y, 0, -1, 1, 0, 10, \"iron-ore\", \"transport-belt\")"));
         // head world-position translation, anchored to the manifest bbox_min
         assert!(lua.contains("local head_x, head_y = 1 - LX0 + storage.offx, 0 - LY0 + storage.offy"));
         assert!(lua.contains("local head_x, head_y = 2 - LX0 + storage.offx, 0 - LY0 + storage.offy"));

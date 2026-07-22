@@ -10,17 +10,17 @@
   "tech_state": "research_all_technologies",
   "entities": 593,
   "produced": {
-    "copper-cable": 1.6,
-    "copper-plate": 0.65,
-    "electronic-circuit": 0.4,
-    "inserter": 0.45,
-    "iron-gear-wheel": 1.1,
-    "iron-plate": 2.95,
-    "logistic-science-pack": 0.5966666666666667,
-    "transport-belt": 0.6
+    "copper-cable": 3.1,
+    "copper-plate": 1.5666666666666669,
+    "electronic-circuit": 1.0166666666666666,
+    "inserter": 1.0266666666666666,
+    "iron-gear-wheel": 1.3766666666666667,
+    "iron-plate": 5.213333333333333,
+    "logistic-science-pack": 1.0466666666666666,
+    "transport-belt": 1.0
   },
   "delivered": {
-    "logistic-science-pack": 0.5866666666666667
+    "logistic-science-pack": 1.0666666666666669
   },
-  "overall_verdict": "FAIL"
+  "overall_verdict": "PASS"
 }

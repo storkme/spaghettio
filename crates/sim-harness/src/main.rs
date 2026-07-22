@@ -48,7 +48,7 @@ fn print_help() {
 USAGE:
   spaghettio-sim fetch [--force]
   spaghettio-sim run --bp <file> --manifest <file> [--ticks N] [--speed N]
-                      [--out report.json] [--timeout-secs N]
+                      [--warmup N] [--out report.json] [--timeout-secs N]
   spaghettio-sim check-data
   spaghettio-sim bless --report <report.json> --baselines <dir> [--label <name>]
   spaghettio-sim check --report <report.json> --baselines <dir> [--tolerance 0.02]
@@ -134,6 +134,11 @@ fn cmd_run(args: &[String]) -> Result<(), String> {
     let ticks: Option<u32> = flag_value(args, "--ticks")
         .map(|s| s.parse().map_err(|_| format!("--ticks must be an integer, got '{s}'")))
         .transpose()?;
+    // Steady-state probe knob: delay measurement past slow buffer-fill
+    // transients that the stability windows would misread as convergence.
+    let warmup: Option<u32> = flag_value(args, "--warmup")
+        .map(|s| s.parse().map_err(|_| format!("--warmup must be an integer, got '{s}'")))
+        .transpose()?;
     let speed: u32 = flag_value(args, "--speed")
         .map(|s| s.parse().map_err(|_| format!("--speed must be an integer, got '{s}'")))
         .transpose()?
@@ -155,7 +160,10 @@ fn cmd_run(args: &[String]) -> Result<(), String> {
     let manifest = manifest::Manifest::from_str(&manifest_str)?;
 
     let scenario_name = sanitize_scenario_name(&manifest.label);
-    let params = scenario::RunParams::defaults_for(&manifest, scenario_name.clone(), speed, ticks);
+    let mut params = scenario::RunParams::defaults_for(&manifest, scenario_name.clone(), speed, ticks);
+    if let Some(w) = warmup {
+        params = params.with_warmup(w);
+    }
     let lua = scenario::build_control_lua(&manifest, &bp, &params);
 
     let run_dir = orchestrate::prepare_run_dir(&install_dir, &scenario_name)?;

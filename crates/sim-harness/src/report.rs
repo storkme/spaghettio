@@ -79,6 +79,11 @@ pub struct Report {
     pub fluid_fed: bool,
     pub uncalibrated_direction: bool,
     pub fluid_errors: BTreeMap<String, String>,
+    /// Boundary-kit self-audit failures (overlapping bank chests etc.).
+    /// Non-empty means the kit itself is compromised — measured rates are
+    /// meaningless (wrong-item cross-feeds poison the factory; #357) and
+    /// the overall verdict is forced to NO DATA.
+    pub kit_errors: Vec<String>,
     pub machine_census: BTreeMap<String, u64>,
     pub overall_verdict: Verdict,
     /// Manifest context (RFC-050: "config axes (quality/stacking/
@@ -116,13 +121,26 @@ fn sample_series(result: &serde_json::Value, item: &str) -> Vec<(f64, f64)> {
         .collect()
 }
 
-/// Rate from the last two entries of a `(tick, cumulative_count)` series.
-fn rate_from_last_two(series: &[(f64, f64)]) -> Option<f64> {
-    if series.len() < 2 {
-        return None;
-    }
-    let (t0, v0) = series[series.len() - 2];
-    let (t1, v1) = series[series.len() - 1];
+/// Rate over the trailing measurement window: from the sample at or
+/// before `window_start` (the second-to-last checkpoint's tick — the
+/// same window the target rate is measured over) to the last sample.
+///
+/// Falls back to the last two samples when no checkpoint window exists.
+/// The last two samples span only 20 game-seconds, which is badly
+/// aliased for bursty intermediate producers: the #357 recon caught a
+/// gear machine (crafting in bursts between plate deliveries) reported
+/// at 0.40/s on the 20s snapshot vs 0.80/s over the real window.
+fn rate_over_window(series: &[(f64, f64)], window_start: Option<f64>) -> Option<f64> {
+    let (t1, v1) = *series.last()?;
+    let (t0, v0) = match window_start {
+        Some(ws) => series
+            .iter()
+            .rev()
+            .find(|(t, _)| *t <= ws)
+            .copied()
+            .or_else(|| series.first().copied()),
+        None => (series.len() >= 2).then(|| series[series.len() - 2]),
+    }?;
     let dt = (t1 - t0) / 60.0;
     if dt <= 0.0 {
         None
@@ -168,6 +186,9 @@ pub fn compute(manifest: &Manifest, result: &serde_json::Value) -> Report {
     } else {
         (None, None)
     };
+    // Intermediates measure over the same trailing window as the target.
+    let window_start = (checkpoint_series.len() >= 2)
+        .then(|| checkpoint_series[checkpoint_series.len() - 2].0);
 
     let mut items = Vec::new();
     for (item, planned_rate) in &manifest.planned_rates {
@@ -175,7 +196,7 @@ pub fn compute(manifest: &Manifest, result: &serde_json::Value) -> Report {
         let measured_produced_rate = if is_target && target_produced_rate.is_some() {
             target_produced_rate
         } else {
-            rate_from_last_two(&sample_series(result, item))
+            rate_over_window(&sample_series(result, item), window_start)
         };
         let measured_delivered_rate = if is_target { target_delivered_rate } else { None };
         let verdict = if is_target {
@@ -196,11 +217,23 @@ pub fn compute(manifest: &Manifest, result: &serde_json::Value) -> Report {
     }
     items.sort_by(|a, b| b.is_target.cmp(&a.is_target).then_with(|| a.item.cmp(&b.item)));
 
-    let overall_verdict = items
-        .iter()
-        .filter(|i| i.is_target)
-        .map(|i| i.verdict.unwrap_or(Verdict::NoData))
-        .fold(Verdict::Pass, worst);
+    let kit_errors: Vec<String> = result
+        .get("kit_errors")
+        .and_then(|k| k.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.as_str().map(str::to_string))
+        .collect();
+
+    let overall_verdict = if kit_errors.is_empty() {
+        items
+            .iter()
+            .filter(|i| i.is_target)
+            .map(|i| i.verdict.unwrap_or(Verdict::NoData))
+            .fold(Verdict::Pass, worst)
+    } else {
+        Verdict::NoData
+    };
 
     let mut machine_census = BTreeMap::new();
     if let Some(obj) = result.get("machine_census").and_then(|c| c.as_object()) {
@@ -229,6 +262,7 @@ pub fn compute(manifest: &Manifest, result: &serde_json::Value) -> Report {
         fluid_fed: manifest.has_fluid_boundary(),
         uncalibrated_direction: manifest.has_uncalibrated_direction(),
         fluid_errors,
+        kit_errors,
         machine_census,
         overall_verdict,
         entities: manifest.entities,
@@ -298,6 +332,12 @@ pub fn print_human(report: &Report) {
         println!("fluid rig errors:");
         for (k, v) in &report.fluid_errors {
             println!("  {k}: {v}");
+        }
+    }
+    if !report.kit_errors.is_empty() {
+        println!("KIT ERRORS — boundary kit compromised, RUN INVALID (verdict forced NO DATA):");
+        for e in &report.kit_errors {
+            println!("  {e}");
         }
     }
     println!();
@@ -390,6 +430,20 @@ mod tests {
         assert!((target.measured_delivered_rate.unwrap() - 9.8666666667).abs() < 1e-6);
         assert_eq!(target.verdict, Some(Verdict::Pass));
         assert_eq!(report.overall_verdict, Verdict::Pass);
+    }
+
+    #[test]
+    fn intermediate_rates_use_the_checkpoint_window_not_the_last_sample_pair() {
+        // Bursty producer: 30 items in the first 20s of the window, none
+        // in the last 20s. Last-two-samples reads 0.0/s; the honest
+        // window rate is 30 items / 60s = 0.5/s.
+        let series = vec![(9000.0, 100.0), (10200.0, 130.0), (11400.0, 130.0), (12600.0, 130.0)];
+        assert_eq!(rate_over_window(&series, Some(9000.0)), Some(30.0 / 60.0));
+        // Fallback without a window: the old 20s snapshot behavior.
+        assert_eq!(rate_over_window(&series, None), Some(0.0));
+        // Window start before the first sample clamps to the first sample.
+        assert_eq!(rate_over_window(&series, Some(0.0)), Some(30.0 / 60.0));
+        assert_eq!(rate_over_window(&[], Some(9000.0)), None);
     }
 
     #[test]
