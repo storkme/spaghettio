@@ -285,6 +285,23 @@ entries as the Phase 1 gate.
 
 ## Decision log
 
+- *2026-07-22 — End-state definition set (user steer, post-#359): the
+  method is not "done" with structural exemptions. Revised target: NO
+  chain class structurally excluded — the existing tier ladder
+  (through the refinery tiers) reachable by composition, phased:
+  solids with AC-from-plates as the Phase-2 gate; the oil complex as
+  an opaque pipe-ported MEGA-CELL (fluid loops are cell INTERIORS —
+  the boundary contract is simple even when the inside is stateful;
+  gated on the harness's fluid calibration, which is why the Phase-1
+  fluid entry is an enabler, not a side quest); high rates via
+  pre-verified CORRIDOR/DISTRIBUTION cells (the (N,M) problem at
+  corridor granularity is shape-chosen, so it stays template-driven —
+  and RFC-046 stacking makes belt-count growth slow: one S=4 express
+  corridor = 180/s). The two PERMANENT disciplines (contract rules,
+  not exemptions): distribution stays fixed-shape templates (kill 5
+  applied to corridors), and fluid loops never cross cell boundaries.
+  The bus engine's role: fallback during catalog growth, not
+  permanent owner of the hard chains.*
 - *2026-07-22 — PR #359 review folded (5 observations, verdict "Ship
   it"): old-design area numbers discarded; EC@10-from-ore added as the
   approximate comparator with the warnings-not-area reframing; the
