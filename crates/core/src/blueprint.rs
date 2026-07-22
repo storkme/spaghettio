@@ -113,6 +113,58 @@ struct BlueprintWrapper<'a> {
     blueprint: Blueprint<'a>,
 }
 
+/// [`export`] plus the RFC-050 verification manifest: everything the
+/// simulation harness needs to feed, drain, and judge the factory —
+/// boundary records (engine-emitted, never reconstructed from the
+/// artifact), per-item planned rates from the solver, the layout bbox
+/// origin for world-offset anchoring, and surplus exits for fluid
+/// voiding. Returns `(blueprint_string, manifest_json)`.
+pub fn export_with_manifest(
+    layout: &LayoutResult,
+    solver: &crate::models::SolverResult,
+    label: &str,
+) -> (String, serde_json::Value) {
+    let bp = export(layout, label);
+    let bbox_min_x = layout.entities.iter().map(|e| e.x).min().unwrap_or(0);
+    let bbox_min_y = layout.entities.iter().map(|e| e.y).min().unwrap_or(0);
+    let mut planned: std::collections::BTreeMap<&str, f64> = Default::default();
+    for m in &solver.machines {
+        for o in &m.outputs {
+            *planned.entry(o.item.as_str()).or_default() += o.rate * m.count;
+        }
+    }
+    let boundary = |r: &crate::models::BoundaryRecord| {
+        serde_json::json!({
+            "item": r.item, "x": r.x, "y": r.y,
+            "direction": r.direction as u8,
+            "is_fluid": r.is_fluid, "entity": r.entity,
+        })
+    };
+    let manifest = serde_json::json!({
+        "label": label,
+        "targets": solver
+            .external_outputs
+            .iter()
+            .map(|o| serde_json::json!({"item": o.item, "rate": o.rate}))
+            .collect::<Vec<_>>(),
+        "external_inputs": solver
+            .external_inputs
+            .iter()
+            .map(|i| serde_json::json!({"item": i.item, "rate": i.rate, "is_fluid": i.is_fluid}))
+            .collect::<Vec<_>>(),
+        "planned_rates": planned,
+        "boundary_inputs": layout.boundary_inputs.iter().map(boundary).collect::<Vec<_>>(),
+        "boundary_outputs": layout.boundary_outputs.iter().map(boundary).collect::<Vec<_>>(),
+        "surplus_exits": layout.surplus_exits,
+        "bbox_min": [bbox_min_x, bbox_min_y],
+        "dims": [layout.width, layout.height],
+        "entities": layout.entities.len(),
+        "stacking": layout.stacking,
+        "inserter_capacity": layout.inserter_capacity,
+    });
+    (bp, manifest)
+}
+
 /// Convert a `LayoutResult` into an importable Factorio blueprint string.
 pub fn export(layout: &LayoutResult, label: &str) -> String {
     let entities: Vec<BlueprintEntity> = layout
@@ -280,6 +332,40 @@ mod tests {
     use super::*;
     use crate::models::{EntityDirection, PlacedEntity};
     use std::io::Read;
+
+    #[test]
+    fn manifest_boundaries_match_real_layout() {
+        // RFC-050 Phase 0: the engine's boundary records for the tier-1
+        // gear fixture must name the same trunk heads and merger exit
+        // the calibrated harness dogfood found empirically (heads at
+        // layout x=1,2 y=0 southbound; one merger sink).
+        use rustc_hash::FxHashSet;
+        let inputs: FxHashSet<String> = ["iron-ore"].iter().map(|s| s.to_string()).collect();
+        let solved = crate::solver::solve("iron-gear-wheel", 10.0, &inputs, "assembling-machine-3")
+            .expect("solve");
+        let layout = crate::bus::layout::build_bus_layout(
+            &solved,
+            crate::bus::layout::LayoutOptions {
+                max_belt_tier: Some("transport-belt".into()),
+                ..Default::default()
+            },
+        )
+        .expect("layout");
+        let (_bp, manifest) = export_with_manifest(&layout, &solved, "gear");
+
+        let feeds = manifest["boundary_inputs"].as_array().unwrap();
+        assert_eq!(feeds.len(), 2, "two external iron-ore lanes: {feeds:?}");
+        for f in feeds {
+            assert_eq!(f["item"], "iron-ore");
+            assert_eq!(f["y"], 0);
+            assert_eq!(f["direction"], 8, "trunk heads flow south");
+        }
+        let exits = manifest["boundary_outputs"].as_array().unwrap();
+        assert_eq!(exits.len(), 1, "one merger sink: {exits:?}");
+        assert_eq!(exits[0]["item"], "iron-gear-wheel");
+        assert_eq!(manifest["planned_rates"]["iron-gear-wheel"].as_f64().unwrap().round(), 10.0);
+        assert_eq!(manifest["bbox_min"][0], 1, "leftmost entity is the x=1 trunk head");
+    }
 
     #[test]
     fn round_trip_small_fixture() {

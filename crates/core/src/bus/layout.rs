@@ -1163,6 +1163,87 @@ fn layout_pass(
     // the result so post-layout recomputes honor it.
     let power_wires = crate::power_wires::compute_pole_wires(&all_entities, opts.wire_mode);
 
+    // Boundary records (RFC-050 Phase 0): the engine states its own I/O
+    // points instead of making downstream tooling reconstruct them from
+    // the artifact (heuristics were falsified three independent ways —
+    // rev 2 decision log).
+    //
+    // Inputs: one record per bus lane with no producer row — the outside
+    // world delivers that item at (lane.x, lane.source_y). Outputs: the
+    // target-carrying sink belts on merger segments (a sink belt whose
+    // output tile holds no belt — ret:-class dead-ends are row segments
+    // and excluded by the merger filter).
+    let entity_at = |x: i32, y: i32| all_entities.iter().find(|e| e.x == x && e.y == y);
+    // `producer_row: None` alone over-matches: balancer family SIBLING
+    // lanes of intermediates also carry it — gate on the solver's
+    // external-input set too.
+    let external_items: rustc_hash::FxHashSet<&str> = solver_result
+        .external_inputs
+        .iter()
+        .map(|i| i.item.as_str())
+        .collect();
+    let boundary_inputs: Vec<crate::models::BoundaryRecord> = lanes
+        .iter()
+        .filter(|l| l.producer_row.is_none() && external_items.contains(l.item.as_str()))
+        .filter_map(|l| {
+            entity_at(l.x, l.source_y).map(|e| crate::models::BoundaryRecord {
+                item: l.item.clone(),
+                x: l.x,
+                y: l.source_y,
+                direction: e.direction,
+                is_fluid: l.is_fluid,
+                entity: e.name.clone(),
+            })
+        })
+        .collect();
+    let mut belt_tiles: rustc_hash::FxHashSet<(i32, i32)> = Default::default();
+    for e in &all_entities {
+        if e.name.ends_with("transport-belt")
+            || e.name.ends_with("underground-belt")
+            || e.name.ends_with("splitter")
+        {
+            // Splitters cover two tiles — record both, or the second
+            // tile's upstream belt false-positives as a sink.
+            let (w, h) = crate::common::oriented_splitter_dims(&e.name, e.direction)
+                .unwrap_or((1, 1));
+            for dx in 0..w as i32 {
+                for dy in 0..h as i32 {
+                    belt_tiles.insert((e.x + dx, e.y + dy));
+                }
+            }
+        }
+    }
+    let dirvec = |d: crate::models::EntityDirection| match d {
+        crate::models::EntityDirection::North => (0, -1),
+        crate::models::EntityDirection::East => (1, 0),
+        crate::models::EntityDirection::South => (0, 1),
+        crate::models::EntityDirection::West => (-1, 0),
+    };
+    let boundary_outputs: Vec<crate::models::BoundaryRecord> = all_entities
+        .iter()
+        .filter(|e| {
+            e.name.ends_with("transport-belt")
+                && e.segment_id
+                    .as_deref()
+                    .map(|s| s.starts_with("merger:") || s.starts_with("output:"))
+                    .unwrap_or(false)
+                && {
+                    let (dx, dy) = dirvec(e.direction);
+                    !belt_tiles.contains(&(e.x + dx, e.y + dy))
+                }
+        })
+        .filter_map(|e| {
+            e.carries.as_ref().map(|item| crate::models::BoundaryRecord {
+                item: item.clone(),
+                x: e.x,
+                y: e.y,
+                direction: e.direction,
+                is_fluid: false,
+                entity: e.name.clone(),
+            })
+        })
+        .collect();
+
     Ok((
         LayoutResult {
             entities: all_entities,
@@ -1178,6 +1259,8 @@ fn layout_pass(
             wire_mode: opts.wire_mode,
             stacking: opts.stacking,
             inserter_capacity: opts.inserter_capacity,
+            boundary_inputs,
+            boundary_outputs,
         },
         row_spans,
         cap_coords,
