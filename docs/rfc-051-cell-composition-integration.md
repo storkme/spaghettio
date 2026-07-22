@@ -58,7 +58,13 @@ splits into production modules and thin test consumers:
   attachment emits ordinary `boundary_inputs`/`boundary_outputs` records
   at the layout edge, same contract as bus layouts. A
   `calibrated_for_sim` mode keeps the rig-compatible geometry for
-  verification runs.
+  verification runs, under a stated and **asserted invariant** (review
+  fold, 2026-07-22): a production layout and its calibrated twin are
+  **bit-identical in every non-boundary entity** — cell interiors,
+  corridor topology, port attachment — differing only in the boundary
+  scaffolding outside the ports. A parity test diffs the two entity
+  sets minus boundary segments; verification provenance holds only as
+  long as that diff is empty, so it fails the build, not a hope.
 - Solver→cell rounding: per-chain ratio quantum from solver machine
   counts (e.g. 3 cable : 2 EC = 5 EC/s), K copies rounded up, headroom
   explicit in the candidate's metadata.
@@ -87,12 +93,19 @@ value statement (see kill 3).
 
 - Tier 0 (every layout, free): the 34 validator checks on the composed
   result.
-- Tier 1 (per cell config, cached): a sim-verified registry — config
-  hash (recipe, tier, modules, quality, rate quantum) → sim verdict —
-  checked in as data, grown deliberately (CI cannot run the sim;
-  goldens stay host-cache-relative per the standing rule). Scoring may
-  prefer sim-verified cells; absence is a warning-level note, not a
-  refusal.
+- Tier 1 (per cell config, cached): a sim-verified registry — key →
+  sim verdict — checked in as data, grown deliberately (CI cannot run
+  the sim; goldens stay host-cache-relative per the standing rule).
+  **The key includes a hash of the generated cell's entity list**
+  (review fold, 2026-07-22), not just the config tuple (recipe, tier,
+  modules, quality, rate quantum): cells regenerate from the live
+  engine, so a config-only key would let row-template/placer/inserter
+  changes silently decay "pre-verified" into "unverified with a stale
+  verdict" — the exact drift class the method exists to kill. The
+  geometry hash is self-maintaining: any engine change that alters the
+  cell changes the key, and the verdict simply doesn't match until
+  re-verified. Scoring may prefer sim-verified cells; absence is a
+  warning-level note, not a refusal.
 
 ## Kill criteria
 
@@ -104,9 +117,15 @@ value statement (see kill 3).
    like negotiated congestion or junction solving between cells) — stop.
 3. **No-value kill**: if, on the fixture ladder, the composed candidate
    neither (a) produces a 0-error layout for at least one config the bus
-   engine refuses, nor (b) wins the existing scorer on warnings for at
-   least one config both paths handle — integration adds maintenance
-   surface without value — stop and keep composition as a harness.
+   engine refuses, nor (b) reaches a strictly better **acceptance
+   class** (fewer validation errors, or the same errors with a strict
+   subset of warning categories) than the bus candidate on at least one
+   config both paths handle — integration adds maintenance surface
+   without value — stop and keep composition as a harness. *(Worded in
+   acceptance-class terms because `CandidateScore` has no warnings term
+   today — review fold, 2026-07-22. If Phase B adds one, it is shared
+   scoring machinery for ALL candidates, logged as its own decision,
+   and 3(b) may then be restated in score terms.)*
 4. **Gate kill**: AC-from-plates composed at 0 errors + sim PASS within
    two working sessions of Phase C starting — else stop and escalate
    with the partial evidence.
@@ -134,7 +153,14 @@ value statement (see kill 3).
 ## Phasing
 
 - **Phase A — lift.** Harness → `src/bus/cells/` behind the flag; tests
-  become consumers; parity proven. No search integration yet.
+  become consumers; parity proven. No search integration yet. Parity
+  means parity with the **post-review-fold** Phase-1 results: the two
+  fragilities the #365 review caught were already fixed there (the
+  splitter merge's approach geometry generalized with an
+  `o2.y > o1.y + 1` assert and sim re-verified at plan; the petroleum
+  column derived from the cell terminal with an adjacency assert) — the
+  lift carries those asserts into production code, and enshrines
+  neither original defect.
 - **Phase B — candidate.** Eligibility check, `CellComposedCandidate`,
   scorer integration, differential scoreboard over the ladder.
 - **Phase C — gate.** AC-from-plates (fan-out 2) composed + sim-verified
@@ -142,6 +168,22 @@ value statement (see kill 3).
   coverage datum and the flag-default decision.
 
 ## Decision log
+
+- *2026-07-22 — Session-side design review folded (verdict: ship after
+  two one-paragraph fixes; both made, plus three smaller items). (1)
+  **Registry key gains a cell-geometry hash** — config-only keys decay
+  under engine evolution; the entity-list hash is self-maintaining. (2)
+  **Calibrated-twin invariant stated and made assertable**: production
+  and sim geometries share all non-boundary entities bit-identically,
+  enforced by a diff test, or verification provenance is void. (3)
+  Kill 3(b) reworded to acceptance-class terms — `CandidateScore` has
+  no warnings term; adding one is shared machinery and its own logged
+  decision. (4) Phase-A parity clarified as parity with post-fold
+  Phase-1 results — both review-caught fragilities were already fixed
+  and asserted on #365; the lift carries the asserts. (5) RFC-048
+  registry row backfilled per the registry's backfill-on-touch rule,
+  using byte-identical text to #365's own edit so the branches merge
+  cleanly in either order.*
 
 - *2026-07-22 — RFC authored (number claimed after fresh
   origin/registry + open-PR collision check). Scope decisions from the
