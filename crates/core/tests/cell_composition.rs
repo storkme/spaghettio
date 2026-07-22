@@ -417,6 +417,9 @@ fn probe_registry_hashes() {
 /// fix when it fires: re-run the sim on the new geometry, then update
 /// the hash + measurement in cell-sim-registry.json.
 #[test]
+// The registry currently carries one entry; the loop shape stays for
+// the ec15/ec30 entries that re-register after #381 (see below).
+#[allow(clippy::single_element_loop)]
 fn cell_registry_hashes_current() {
     use spaghettio_core::bus::cells::chain::compose_chain;
     use spaghettio_core::bus::cells::registry::{geometry_hash, lookup};
