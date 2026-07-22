@@ -205,6 +205,20 @@ table (Phase 3).
 
 ## Decision log
 
+- **2026-07-22 — Code-lens review: APPROVE, zero correctness findings;
+  both hygiene items folded.** The reviewer re-ran every gate, hand-
+  traced `belt_drop_rate` against the schedule (confirming the
+  L2/L3/L4 plateau, L6 dip, and S=3-dips-at-L7), independently
+  re-derived the census with zero missed sites, verified the
+  `size_side_rated` refactor byte-preserving, confirmed the
+  contest/capped_limit non-threading (and that the residual is real,
+  conservative, honestly documented, and identical to RFC-046's), and
+  traced the wasm/web param ordering end-to-end. Folded: the stale
+  status text (already fixed by the honesty fold) and the ungated
+  wasm-bindings clippy debt — `#[allow(too_many_arguments)]` added to
+  the 4 param-per-axis wasm surface fns (debt was pre-existing since
+  RFC-046 and gated nowhere; now clean rather than growing).
+
 - **2026-07-22 — Honesty-review fold: UX phase logged, wasm-break
   disclosed, staleness swept.** (1) The `049-2-ux` phase (commit
   36fc266) landed wasm-bindings + `ir=` codec + the sidebar select and

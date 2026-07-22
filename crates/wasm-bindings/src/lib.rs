@@ -21,6 +21,7 @@ use rustc_hash::FxHashSet;
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
+#[allow(clippy::too_many_arguments)] // param-per-axis wasm surface (quality/wire/stacking/research)
 /// Build `LayoutOptions` from the optional belt-tier, strategy,
 /// row-layout, and inserter-tier strings passed in across the WASM
 /// boundary. The TS engine layer validates URL params, so unknown values
@@ -249,6 +250,7 @@ pub fn module_slots(entity: &str) -> u32 {
     spaghettio_core::common::module_slots(entity)
 }
 
+#[allow(clippy::too_many_arguments)] // param-per-axis wasm surface (quality/wire/stacking/research)
 #[wasm_bindgen]
 pub fn layout(
     solver_result: SolverResult,
@@ -268,6 +270,7 @@ pub fn layout(
     .map_err(|e| JsError::new(&e))
 }
 
+#[allow(clippy::too_many_arguments)] // param-per-axis wasm surface (quality/wire/stacking/research)
 /// Traced variant of `layout()`. Returns the same `LayoutResult` plus
 /// the structured `trace` events that drive the debug overlays. Ghost
 /// routing is the only routing path — the legacy direct router was
@@ -333,6 +336,7 @@ fn streamable(evt: &spaghettio_core::trace::TraceEvent) -> bool {
     )
 }
 
+#[allow(clippy::too_many_arguments)] // param-per-axis wasm surface (quality/wire/stacking/research)
 /// Streaming variant — invokes `emit` synchronously for every filtered trace
 /// event during the layout run. The JS callback fires on the worker thread;
 /// use it to `postMessage` events to the main thread as the engine emits
