@@ -1,0 +1,21 @@
+[package]
+name = "spaghettio_sim_harness"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "spaghettio-sim"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Deliberately no HTTP/tar/xz crate: `fetch` shells out to the system
+# `curl` and `tar` binaries (see docs/headless-verification-discovery.md's
+# own repro, which does the same) rather than adding a TLS stack + archive
+# dependency to an offline engineer tool that runs a handful of times.
+# Deliberately no dependency on spaghettio_core: this crate consumes the
+# `export_with_manifest` JSON schema only (RFC-050 Phase 0/1 constraint) —
+# Phase 1 wiring (generating bp+manifest from a fixture name in-process)
+# is a later phase.

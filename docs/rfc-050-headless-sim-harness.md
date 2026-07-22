@@ -271,3 +271,68 @@ design, so blessed measured baselines are **shareable** — keyed on
   #348 with operational proof, and produced the sim-state debug tooling
   now specced as a deliverable. The measured #345 numbers land when the
   dogfood reruns on the fixed exporter.*
+- *2026-07-22 — Phase 0/1 crate landed (`crates/sim-harness`, branch
+  `rfc050-sim-harness-crate`): `fetch`/`run`/`check-data` subcommands,
+  the scenario templating generalized from the calibrated south-only
+  prototype to all four cardinal directions via outward/lateral vector
+  rotation (every formula checked tile-by-tile against the literal
+  prototype numbers), and dim-scaled warmup + loop-until-stable
+  measurement windows. **KC1 exercised live**: `check-data` against a
+  freshly fetched real 2.0.76 install passed clean, but only after
+  fixing two dump-parsing traps the tool itself caught by running the
+  real dump instead of reasoning about the schema — (1) a bare
+  first-name-match prototype scan non-deterministically resolved to a
+  same-named `item` prototype instead of the intended `recipe`/machine
+  prototype for every one of the 4 probe recipes (fixed: require a
+  disambiguating field per lookup — `crafting_speed` for machines,
+  `ingredients` for recipes); (2) the dump OMITS `energy_required`
+  entirely when it equals Factorio's 0.5s default (iron-gear-wheel,
+  electronic-circuit, and copper-cable all hit this — only iron-plate's
+  non-default 3.2s energy dumps explicitly), which a naive "field
+  missing = mismatch" read would have reported as 3 false-positive KC1
+  trips. **KC2 gear@10/s PASS on a live server**: freshly generated
+  gear10 bp+manifest (`export_with_manifest` on
+  `rfc050-phase0-manifest`), measured 10.13/s delivered vs 10.0/s
+  planned (+1.3%, well inside the 0.98× floor), 428/428 ghosts revived,
+  36/36 machines `working`, loop-until-stable converged — matching the
+  RFC's own gear10 PASS precedent. **EC@10/s (AM1, yellow, from ore)
+  found and fixed a real power-siting bug**: the factory-network EEI
+  placement (ported verbatim from `gen_harness_scenario.py`'s
+  west-of-min-x-pole `can_place_entity` scan) placed successfully by
+  its own collision check but left the entity out of wire reach on the
+  bigger, denser 84×90/1110-entity fixture — 60/65 machines came back
+  `no_power`, 0 measured. Root-caused with an isolated probe (single
+  pole + machine: hidden-EEI-at-pole-position worked correctly) and a
+  targeted probe against the real EC10 factory (confirmed one true
+  74-pole electric network, `no_power` only when placement used the
+  west-scan). Fixed per the RFC's own empirical-base note — swapped the
+  factory-network scan for a `hidden-electric-energy-interface` placed
+  directly AT (0×0 collision, always placeable) a representative pole's
+  own position, guaranteeing wire-reach adjacency regardless of layout
+  density. Confirmed no regression: gear10 re-measured identically
+  (10.13/s, PASS) on the fixed code. **EC10 still measured -20% short
+  after the power fix** (8.0/s vs 10.0/s, `converged=true`, 4 machines
+  `full_output`, a jammed 144-item belt tile visible in the sim-state
+  dump) — open per KC2's own fork ("harness-boundary artifact" vs "real
+  engine defect"); not resolved in this session, left for whoever closes
+  out Phase 1's calibration gate. Quality-scoped-statistics question
+  (KC2's other Phase 1 exit item) not investigated this session — no
+  quality>normal fixture was run.*
+- *2026-07-22 — **Phase 1 calibration gate (KC2) PASSED; Phase-1 exit
+  items resolved.** Lead reconciliation runs with the released tool on
+  the merged Phase-0 manifest: gear@10/s **PASS** (10.00/s produced
+  +0.0%, 10.13/s delivered, 36/36 working, converged) — now verified on
+  two independent implementations (python prototype + Rust crate).
+  EC@10/s **FAIL −50%** (5.00/s), matching the prototype's dogfood
+  number exactly; the crate agent's interim −20% came from a
+  differently-configured fixture (1110 vs 805 entities). Per-item
+  attribution seals the KC2 fork as REAL ENGINE DEFECT: copper-plate
+  produces at exactly plan (feeds proven good) while iron-plate −43.5%
+  and copper-cable −48% are the starved stages — #352 stands, and the
+  constraint web is wider than the four warned EC machines. The
+  quality-scoped-statistics question is RESOLVED as a non-issue: the
+  r150 legendary-machine run reported production stats correctly
+  (18.8/s); the earlier zeros were genuine zero production under the
+  pre-#348/#350 broken exports. Remaining phases: 2 (sweeps/anchor
+  retirements), 3 (bless/check), 4 (web sim-state overlay — pulled
+  forward at user request, 2026-07-22).*
