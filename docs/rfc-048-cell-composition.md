@@ -1,6 +1,6 @@
 # RFC-048: Cell composition (city-block layout) — feasibility spike
 
-Registry: [`rfcs.md`](rfcs.md). Status: **Spike — Phase 0 complete (GO); Phase 1 not started.**
+Registry: [`rfcs.md`](rfcs.md). Status: **Phase 1 complete (PR #365) — all five kill criteria PASS, composed EC@15 sim-verified at plan; GO for the Phase-2 integration RFC.**
 
 ## Summary
 
@@ -297,6 +297,17 @@ whether the end-state entry is a plan or a hope.
 
 ## Phase 1 close-out: kill-criteria evaluation and go/no-go (2026-07-22)
 
+The Phase-1 gates, as set at the go/no-go above and amended by the
+#361 fold (letters used throughout this close-out):
+
+- **(a)** sim-verify the first two catalog entries — the EC ratio
+  pair AND a fluid-consumer cell — in headless Factorio;
+- **(b)** compose EC@15/s-from-plates from catalog cells at 0
+  validator errors;
+- **(c)** the config-axis growth measurement (one cell regenerated
+  across a config axis, measuring what varies and the marginal cost
+  of a variant), with a plan-or-hope verdict on the end-state.
+
 **Kill 1 (catalog blow-up, ~6-variant bound): PASS.** Variants used
 across the full Phase 1: EC ratio pair cells (cable, EC), the plastic
 fluid cell, the AM2 EC variant (axis measurement), plus two corridor
@@ -308,22 +319,32 @@ parameters (engine-generated), not projects.
 exceeded.** EC@15 composed at 0 errors (now a permanent gate test,
 `cell_composed_ec15_zero_errors`), and beyond the criterion's
 validator bar: **the composed factory RUNS AT PLAN in headless
-Factorio — 15/15 machines working, 15.0 EC/s produced, converged** —
-on the config the bus engine refuses (#336). The plastic cell
+Factorio — 15/15 machines working, produced 15.00/s (+0.0%),
+delivered 15.20/s, converged** (post-review re-verification of the
+corrected splitter-merge geometry; see the 2026-07-22 review-fold
+log entry for the full report block) — on the config the bus engine
+refuses (#336). The plastic cell
 composes at 0 errors / 0 warnings. Oracle limit found honestly:
 corridor pipe runs are outside the fluid checks' model (a
 discontinuous pipe validated clean; only the sim caught it) — the
 strongest evidence yet that sim-verification at catalog time is
 load-bearing, not optional.
 
-**Kill 3 (area blow-out >2× without compensating win): PASS.**
-Composed EC@15 = 1958 bbox tiles (calibrated orientation) vs the
-engine's EC@5 × 3 linear extrapolation (975): 2.0× at the boundary —
-but the compensating wins are decisive: the engine cannot produce
-this config at all, and the composed one is measured-at-plan.
-(Warnings comparison: 6 carried, ALL sim-disproven attribution
-conservatism; the engine's comparator carries its 4 warnings
-unadjudicated.)
+**Kill 3 (area blow-out >2× without compensating win): PASS on the
+compensating-win clause — over the boundary, not at it.** Composed
+EC@15 (calibrated orientation) = 110×22 = **2420 bbox tiles, 461
+entities**, vs the engine's EC@5 × 3 linear extrapolation (975):
+**2.48×**. (An earlier draft recorded 89×22 = 1958 / 2.0×; those
+numbers predated the 4-tile feed-pitch fix and were corrected by the
+PR #365 review's artifact decode.) The criterion's own text spares a
+>2× layout only with a compensating win, and here the wins are
+decisive: the engine cannot produce this config at all, and the
+composed one is measured-at-plan. Sizing context, not excuse: the
+sim-kit's 4-tile rig pitch (#363) forces 9 of each pair's 38 columns
+of width; adjacent feed columns would put the ratio near 2.1×, still
+over the bound. (Warnings
+comparison: 6 carried, ALL sim-disproven attribution conservatism;
+the engine's comparator carries its 4 warnings unadjudicated.)
 
 **Kill 4 (parallel layout stack): PASS.** Cells are engine-generated
 (one layout stack); the harness is test-only; composition machinery
@@ -343,6 +364,14 @@ be the calibration forcing function: datum delivered. **Gate (b)**:
 delivered and measured. **Gate (c)**: variant-is-a-parameter verdict
 — the end-state is a plan.
 
+**Never-finishing tripwire datum (#361 fold requires this at every
+phase close-out):** fixture-ladder catalog coverage at Phase-1 close
+is **2 chains** — EC-from-plates (ratio-pair cells, sim-verified) and
+the plastic fluid-consumer geometry (composition-verified) — out of
+the tier-1..4 ladder; every other fixture chain remains bus-owned.
+This is the baseline; the coverage clock starts here, and the next
+phase close-out must show growth or trip the keep/kill escalation.
+
 **GO for Phase 2** (integration RFC: CellComposedCandidate in the
 decomposition search with warnings-aware scoring, automatic placement
 for linear chains, solver→cell rounding), with two carried
@@ -352,6 +381,41 @@ rules (4-tile rig pitch, west→east record ordering) encoded in the
 composer until fixed harness-side.
 
 ## Decision log
+
+- *2026-07-22 — PR #365 review folded (deep session-side review;
+  verdict approve-in-principle after rebase). Three artifact-decode
+  findings, all confirmed and fixed: (1) **kill-3 numbers were
+  stale** — 89×22/1958 predated the feed-pitch fix; the sim-verified
+  artifact is 110×22 = 2420 tiles / 461 entities = 2.48×, and the
+  close-out now evaluates kill 3 honestly as over-the-boundary,
+  passing on the compensating-win clause. (2) **The "2→1 splitter
+  merge" was built as a sideload** — the b-run's northward column
+  ended facing the a-run's tail one tile west of the splitter, so the
+  splitter's second input/output were dark and the merge happened by
+  sideload (the exact lane-degradation shape F4 exists to catch, in a
+  corridor). Fixed: the column stops one tile below the splitter row
+  and a single east-facing belt (one perpendicular input = a
+  lane-preserving corner) feeds the splitter's south half; an
+  `assert!(o2.y > o1.y + 1)` pins the approach-from-below assumption.
+  (3) **The petroleum feed column connected by coincidence** —
+  hardcoded x=6 happened to equal the cell terminal's absolute x, and
+  no oracle could catch drift (fluid checks are corridor-blind, sim
+  blocked by #364). Fixed: column x derived from the terminal +
+  adjacency assert. Gate hardening from the same review: warning
+  count pinned ≤6 (more same-category warnings would be NEW
+  unadjudicated claims), and the plastic gate split from the artifact
+  producer so suite runs write nothing. **The corrected geometry was
+  re-verified in the sim — the real splitter merge runs at plan,
+  delivery slightly better than the sideload version** (14.4 → 15.2
+  delivered). Report (spaghettio-sim, scenario
+  rfc048-ec15-composed-1784750006, speed 16, 461/461 ghosts revived):*
+
+  ```
+  item                 planned/s  produced/s      d%  delivered/s      d%  verdict
+  electronic-circuit       15.00       15.00   +0.0%        15.20   +1.3%     PASS
+  machine census: working: 15 | converged: true | OVERALL: PASS
+  ```
+
 
 
 - *2026-07-22 — Whole-RFC review folded (strong GO on Phase 1; three

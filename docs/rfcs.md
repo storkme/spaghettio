@@ -59,7 +59,7 @@ backfill the status next time the doc is touched.
 | RFC-045 | 2026-07-21 | [`rfc-045-pole-wire-modes.md`](rfc-045-pole-wire-modes.md) | Complete (browser eyeball open) |
 | RFC-046 | 2026-07-21 | [`rfc-046-belt-stacking.md`](rfc-046-belt-stacking.md) | Complete (in-game anchor open; Phase 3 deferred) |
 | RFC-047 | 2026-07-21 | [`rfc-047-lane-aware-tap-delivery.md`](rfc-047-lane-aware-tap-delivery.md) | Complete (browser eyeball open) |
-| RFC-048 | 2026-07-22 | [`rfc-048-cell-composition.md`](rfc-048-cell-composition.md) | Spike (Phase 0 recon open; PR #341) |
+| RFC-048 | 2026-07-22 | [`rfc-048-cell-composition.md`](rfc-048-cell-composition.md) | Phase 1 complete (PR #365) — GO for Phase-2 integration RFC |
 | RFC-049 | 2026-07-22 | [`rfc-049-inserter-capacity-research.md`](rfc-049-inserter-capacity-research.md) | Complete (in-game anchor open; input-side data gap #343) |
 | RFC-050 | 2026-07-22 | [`rfc-050-headless-sim-harness.md`](rfc-050-headless-sim-harness.md) | Complete (fluid-path calibration + fluid-pack sweep open; #345 re-measure pending) |
 
