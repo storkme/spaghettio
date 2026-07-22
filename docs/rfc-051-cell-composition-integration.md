@@ -223,6 +223,44 @@ follow-ups.
 
 ## Decision log
 
+- *2026-07-22 — K-quantization + #383 ROOT CAUSE (the premise
+  falsified mid-implementation). Ratio quantization landed in
+  `compose_chain`: K identical side-by-side copies at 1/K rate
+  (`required_copies`), copies generated once and stamped K times,
+  producer→consumer matching restricted within a copy, per-copy segment
+  suffixes, bypass rows reused across copies (disjoint x), K_MAX=12.
+  K=1 is bit-identical to the pre-quantization placer — proven by the
+  registered chain-ac1 hash surviving unchanged. **The plan's premise
+  died on first sim contact**: quantum=15/s ("the measured-exact
+  Phase-1 rate") produced ec15 K=3 at −23.7% — WORSE than K=1's −8%.
+  Belt-dump forensics + tile diff against the hand-composed pair showed
+  identical cell geometry, iron arriving on both lanes, and the east
+  machine's single long-handed iron inserter delivering ~1.2/s against
+  a 2.5/s need — exactly the validator's inserter-item-throughput
+  warning. The hand-composed K=3's "15.0/s EXACT" and the K=1 fixture's
+  earlier PASS both predate #378 (tech-state parity: the sim now forces
+  bonuses to the layout's declared inserter_capacity=0); the PASS-era
+  report lacks the realized-bonus fields entirely. So: the warnings
+  were RIGHT under declared tech, the "sim-adjudicated conservatism"
+  verdict was a researched-bonus artifact, the package-2 log's
+  splitter-saturation-loss speculation is retired (fast and express
+  measured identical deltas), and small rows CONCENTRATE the
+  per-machine inserter deficit rather than fixing it. Quantum reshaped
+  to 45/s = express capacity — a physical cap, not a quality knob:
+  quantization now activates only where the placer previously refused,
+  so every K=1 geometry (ec15, ec15-ore, ac1, ac2, mil5-plates) is
+  bit-identical to the flip package. Verification: ec30 K=2 (each copy
+  ≡ the ec15 K=1 shape) predicted ≈−8% and measured **−8.0% exactly**
+  (WARN, 28/30 working) — the deficit is per-row, K-invariant, and
+  belongs to RFC-049 Phase 3 (#381, in flight), after which cells
+  regenerate with honest inserter counts, every registry hash trips,
+  and ec15/ec30 get re-measured for registration. Scoreboard: ec30
+  REFUSED→140×21 0 err/12 warn; ec60 REFUSED→280×21 0/24 (bus
+  validation-fails there); mil5-ore goes K=2 (stone feed 50/s exceeds
+  the per-copy feed cap) and its Router-class overlaps persist (8, was
+  5 at K=1) — still the named next target. No registry additions: the
+  registry carries measured-at-plan only.*
+
 - *2026-07-22 — Coverage expansion (package 2, follows the flip). Caps
   lifted: n-run MERGE CASCADES (2→1 splitter chains, below-approach
   corner per stage) and FAN-OUT TREES (1→2 splitter chains) replace the

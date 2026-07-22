@@ -20,10 +20,13 @@ use spaghettio_core::solver;
 /// PERMANENT GATE (RFC-048 Phase 1; Phase-A parity pin): EC@15/s — the
 /// config the bus engine refuses (#336) — composes from
 /// engine-generated cells at 0 validation errors. The 6 carried
-/// warnings are validator-attribution conservatism DISPROVEN by
-/// measurement (sim: 15/15 machines working, produced exactly 15.0/s —
-/// see the RFC decision log 2026-07-22). Dims/entity count pinned to
-/// the sim-verified artifact (110×22, 461 entities).
+/// warnings measured harmless under the PRE-#378 harness (15/15
+/// working, 15.0/s exact) — but that run realized researched inserter
+/// bonuses; under tech-state parity (declared capacity 0) the same
+/// warnings are REAL long-handed-inserter shortfalls (#383). The
+/// warnings stay tolerated at the validator level; the fix is RFC-049
+/// Phase 3 inserter sizing (#381), after which they should vanish.
+/// Dims/entity count pinned to the sim artifact (110×22, 461 entities).
 #[test]
 fn cell_composed_ec15_zero_errors() {
     use spaghettio_core::validate::{self, LayoutStyle, Severity};
@@ -270,6 +273,7 @@ fn export_chain_fixtures_for_sim() {
     for (label, item, rate, inputs) in [
         ("chain-ec15", "electronic-circuit", 15.0, &["iron-plate", "copper-plate"][..]),
         ("chain-ac1", "advanced-circuit", 1.0, &["iron-plate", "copper-plate", "plastic-bar"][..]),
+        ("chain-ec30", "electronic-circuit", 30.0, &["iron-plate", "copper-plate"][..]),
     ] {
         let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
         let sr = solver::solve_with_palette_exclusions_and_quality(
@@ -394,6 +398,7 @@ fn probe_registry_hashes() {
     for (label, item, rate, inputs) in [
         ("chain-ec15", "electronic-circuit", 15.0, &["iron-plate", "copper-plate"][..]),
         ("chain-ac1", "advanced-circuit", 1.0, &["iron-plate", "copper-plate", "plastic-bar"][..]),
+        ("chain-ec30", "electronic-circuit", 30.0, &["iron-plate", "copper-plate"][..]),
     ] {
         let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
         let sr = solver::solve_with_palette_exclusions_and_quality(
@@ -415,9 +420,13 @@ fn probe_registry_hashes() {
 fn cell_registry_hashes_current() {
     use spaghettio_core::bus::cells::chain::compose_chain;
     use spaghettio_core::bus::cells::registry::{geometry_hash, lookup};
-    // chain-ec15 is deliberately absent: its K=1 geometry measured -8%
-    // in the sim (#381) — the registry only carries measured-at-plan
-    // geometries, and the gate only pins what the registry claims.
+    // chain-ec15 is deliberately absent: under tech-state parity
+    // (declared inserter_capacity 0, #378) its long-handed input
+    // inserters genuinely under-deliver iron (#383, -8%) — the registry
+    // only carries measured-at-plan geometries. Re-measure and register
+    // once RFC-049 Phase 3 inserter sizing (#381) lands; chain-ac1's
+    // tiny rates never hit the bound, so its entry stands (re-verified
+    // PASS under the parity harness).
     for (item, rate, inputs) in [
         ("advanced-circuit", 1.0, &["iron-plate", "copper-plate", "plastic-bar"][..]),
     ] {
@@ -431,6 +440,46 @@ fn cell_registry_hashes_current() {
         assert!(lookup(item, rate, h).is_some(),
             "{item}@{rate}: composed geometry (hash {h:016x}) no longer matches the sim-verified registry entry — re-verify in the sim and update cell-sim-registry.json");
     }
+}
+
+/// PERMANENT GATE (RFC-051 K-quantization): the copy count is the
+/// smallest K putting every produced item AND every external input at
+/// ≤45/s (express capacity) per copy — a physical belt cap, not a
+/// quality knob (a 15/s "measured-exact" quantum was falsified: the
+/// Phase-1 exact measurement was pre-#378 harness tech state, and
+/// under declared capacity small rows measure WORSE — #383). Pins the
+/// ladder's K values: chains under the cap stay K=1 bit-identical
+/// (the registered chain-ac1 hash depends on it); ec30/ec60 — the
+/// pre-quantization corridor-cap refusals — now compose; K_MAX=12
+/// refuses loudly.
+#[test]
+fn cell_quantization_copy_counts() {
+    use spaghettio_core::bus::cells::chain::{chain_eligible, required_copies};
+    for (label, item, rate, inputs, want_k) in [
+        ("ec15", "electronic-circuit", 15.0, &["iron-plate", "copper-plate"][..], 1),
+        ("ac1", "advanced-circuit", 1.0, &["iron-plate", "copper-plate", "plastic-bar"][..], 1),
+        ("ec5", "electronic-circuit", 5.0, &["iron-plate", "copper-plate"][..], 1),
+        // pre-quantization these two REFUSED on the 45/s corridor cap
+        ("ec30", "electronic-circuit", 30.0, &["iron-plate", "copper-plate"][..], 2),
+        ("ec60", "electronic-circuit", 60.0, &["iron-plate", "copper-plate"][..], 4),
+    ] {
+        let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
+        let sr = solver::solve_with_palette_exclusions_and_quality(
+            item, rate, &inputs_set, &MachinePalette::default(),
+            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+        ).unwrap();
+        assert_eq!(required_copies(&sr), want_k, "{label}: copy count");
+        assert!(chain_eligible(&sr).is_ok(), "{label}: must be chain-eligible");
+    }
+    // Past K_MAX=12 the chain refuses loudly (ec600 → cable 1800/s → K=40).
+    let inputs_set: FxHashSet<String> =
+        ["iron-plate", "copper-plate"].iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "electronic-circuit", 600.0, &inputs_set, &MachinePalette::default(),
+        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+    ).unwrap();
+    let err = chain_eligible(&sr).unwrap_err();
+    assert!(err.contains("quantized copies"), "K_MAX refusal, got: {err}");
 }
 
 #[test]
