@@ -273,7 +273,8 @@ fn sideload_bridge(
 // ─── inline output-bridge helpers ─────────────────────────────────────────────
 //
 // All row templates with a `lane_split` flag share the same lane-balance
-// problem: south-facing output inserters drop on the near lane only
+// problem: south-facing output inserters drop on ONE lane only (the
+// far lane — I5, direction corrected 2026-07-21)
 // (rule I5/B8), so a single-row recipe runs at half belt capacity until
 // items are sideloaded onto the far lane somewhere along the row. The
 // 6-tile `sideload_bridge` solves this by lifting items up to a bridge
@@ -1405,8 +1406,9 @@ pub fn dual_input_row_horizontal(
     }
 
     // Output lane-balance bridge: with output inserters all dropping
-    // South onto the output belt, only the near lane is filled (rule
-    // I5/B8). Stamp a 6-tile sideload bridge halfway through the row
+    // South onto the output belt, only ONE lane is filled (the far
+    // lane — I5, direction corrected 2026-07-21; B8 for the bridge's
+    // own sideload). Stamp a 6-tile sideload bridge halfway through the row
     // so both lanes are utilised on the merger-pickup side. Skip when
     // there's only 1 machine — no room to bridge without widening the
     // row, and a 1-machine row at half throughput is acceptable.

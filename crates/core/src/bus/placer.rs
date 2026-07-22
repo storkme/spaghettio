@@ -8,8 +8,8 @@ use crate::bus::inserter_ladder::{reassign_near_far, InserterTier};
 use crate::bus::layout::RowLayout;
 use crate::bus::stacking_ctx::StackingCtx;
 use crate::common::{
-    belt_entity_for_rate, belt_entity_for_rate_stacked, lane_capacity, machine_dims,
-    utilization_for, QualityTier, BELT_TIERS,
+    belt_entity_for_rate, belt_entity_for_rate_stacked, lane_capacity, lane_capacity_stacked,
+    machine_dims, utilization_for, QualityTier, BELT_TIERS,
 };
 use crate::models::{EntityDirection, MachineSpec, PlacedEntity, SolverResult};
 
@@ -162,6 +162,17 @@ impl RowSpan {
 /// lanes (I6), giving an effective input capacity equal to the full belt
 /// throughput. Because `in_lane_cap` is a per-lane figure, the factor of 2
 /// converts it to total throughput: `in_lane_cap * 2.0 == belt_throughput`.
+///
+/// **Deliberately NOT stacking-aware on the output side** (RFC-047 Leg B):
+/// unlike `max_machines_for_belt_both_lanes` (which was made stacking-aware
+/// because its bridge+corner-feed output genuinely fills BOTH lanes and so
+/// legitimately carries full-belt ×S), this variant's output is
+/// **sideloaded onto one lane** (B8/I5). A stack inserter dropping stacks
+/// onto that single lane still concentrates all flow on ONE physical lane,
+/// so crediting it ×S would just relocate the single-lane overload this RFC
+/// exists to prevent. Capping the output at the unstacked per-lane figure is
+/// the conservative-correct choice; the asymmetry with the both-lanes
+/// variant is intentional.
 pub(crate) fn max_machines_for_belt(
     spec: &MachineSpec,
     belt_name: &str,
@@ -207,12 +218,23 @@ pub(crate) fn max_machines_for_belt(
 /// The trunk tap-off runs at the same y as the row's input belt and connects
 /// to its west end (B7 straight feed), so both lanes carry items. Factor of 2
 /// converts per-lane capacity to full belt throughput, matching the output side.
+///
+/// `out_stack` is the output item's effective belt stack size
+/// (`StackingCtx::for_item`): a stack-loaded output belt carries `×S` per
+/// lane, so the per-row machine cap must scale with it (RFC-047 Leg B —
+/// the row-split cap was stacking-blind while the belt-tier choice at the
+/// same call site was already stacking-aware, which forced stacked
+/// producers to fragment into single-machine rows and re-introduced the
+/// mid-trunk sideload the RFC set out to remove). At `S == 1`
+/// (`for_item` returns 1) `lane_capacity_stacked == lane_capacity`, so
+/// this is bit-identical to the pre-RFC behaviour for the default corpus.
 pub(crate) fn max_machines_for_belt_both_lanes(
     spec: &MachineSpec,
     belt_name: &str,
     max_belt_tier: Option<&str>,
+    out_stack: u8,
 ) -> usize {
-    let out_lane_cap = lane_capacity(belt_name);
+    let out_lane_cap = lane_capacity_stacked(belt_name, out_stack);
     let in_lane_cap = effective_in_lane_cap(max_belt_tier);
     let mut max_m: f64 = 999.0;
 
@@ -638,8 +660,22 @@ pub(crate) fn build_one_row(
     };
 
     let output_rate = solid_outputs.first().map(|f| f.rate * count as f64).unwrap_or(0.0);
+    // RFC-047 kill-4 root cause: for lane-split rows the midpoint bridge
+    // divides `count` machines into ⌈n/2⌉/⌊n/2⌋ lane groups, so with an
+    // odd count one lane carries MORE than half the output. Sizing by
+    // `output_rate` alone assumes a perfect 50/50 lane balance and left
+    // zero headroom at exact tier boundaries (walker-caught 15.5/s on a
+    // 15/s stacked-yellow lane, express@60 probe 2026-07-22). Size by the
+    // worst lane instead: `2 × ⌈n/2⌉ × per-machine` — identical to
+    // `output_rate` for even counts, one machine's rate more for odd.
+    let out_effective_rate = if lane_split && count > 0 {
+        let per_machine = output_rate / count as f64;
+        2.0 * per_machine * ((count as f64) / 2.0).ceil()
+    } else {
+        output_rate * 2.0
+    };
     let out_belt = belt_entity_for_rate_stacked(
-        output_rate * if lane_split { 1.0 } else { 2.0 },
+        out_effective_rate,
         max_belt_tier,
         ctx.for_item(output_item),
     );
@@ -1592,7 +1628,7 @@ pub fn place_rows(
             max_machines_for_belt_horizontal_stack(spec, ob, max_belt_tier)
         } else {
             let ob = belt_entity_for_rate_stacked(output_rate, max_belt_tier, out_stack);
-            max_machines_for_belt_both_lanes(spec, ob, max_belt_tier)
+            max_machines_for_belt_both_lanes(spec, ob, max_belt_tier, out_stack)
         };
 
         let is_final = spec
@@ -1862,7 +1898,7 @@ mod tests {
         // per_lane = floor(7.5 / 1.0) = 7, both lanes = 14
         let spec = iron_plate_spec();
         assert_eq!(
-            max_machines_for_belt_both_lanes(&spec, "transport-belt", None),
+            max_machines_for_belt_both_lanes(&spec, "transport-belt", None, 1),
             14
         );
     }
@@ -1907,7 +1943,7 @@ mod tests {
         // Output is the bottleneck → 30
         let spec = iron_plate_spec();
         assert_eq!(
-            max_machines_for_belt_both_lanes(&spec, "fast-transport-belt", None),
+            max_machines_for_belt_both_lanes(&spec, "fast-transport-belt", None, 1),
             30
         );
     }

@@ -36,8 +36,8 @@ use crate::bus::junction_solver::{
 use crate::bus::placer::RowSpan;
 use crate::bus::stacking_ctx::StackingCtx;
 use crate::common::{
-    belt_entity_for_rate, belt_entity_for_rate_stacked, is_machine_entity, machine_dims,
-    machine_tiles, ug_max_reach, LANE_LEFT, MERGE_TAP_SEGMENT_TAG,
+    belt_entity_for_rate, belt_entity_for_rate_stacked, is_machine_entity, lane_capacity_stacked,
+    machine_dims, machine_tiles, ug_max_reach, LANE_LEFT, MERGE_TAP_SEGMENT_TAG,
 };
 use crate::models::{EntityDirection, LayoutRegion, PlacedEntity, SolverResult};
 // sat.rs is retained in the tree as a standalone library; route_bus_ghost
@@ -1552,6 +1552,34 @@ pub fn route_bus_ghost(
                 all_producers.push(pr);
             }
             all_producers.extend(&lane.extra_producer_rows);
+
+            // RFC-047 Leg B (ii): late sideload check. A single-consumer
+            // trunk fed by >=2 producers with no balancer sideloads its
+            // NON-topmost producers mid-trunk (B8 = one lane): the topmost
+            // producer corner-feeds the trunk head (ground-truth 2), but
+            // every later producer's `ret:` merges onto one physical lane.
+            // If the lane's total rate exceeds a single stacked lane's
+            // capacity, that mid-trunk sideload would overload the lane —
+            // refuse by name rather than lay out a broken trunk. Adjacency
+            // is known here (post column-assignment), and the 047-1b
+            // row-split cap fix collapses same-recipe stacked producers into
+            // ONE lane-split row, so this fires only for genuinely
+            // irreducible multi-producer fan-ins. Census: no such shape is
+            // live at S=1, so this is inert on the default corpus.
+            if lane.consumer_rows.len() == 1 && all_producers.len() >= 2 {
+                let lane_cap = lane_capacity_stacked(horiz_belt, ctx.for_item(&lane.item));
+                if lane.rate > lane_cap + 1e-6 {
+                    return Err(format!(
+                        "lane-aware delivery: item {} rate {:.2}/s exceeds per-lane \
+                         capacity {:.2}/s on a sideload-fed single trunk ({} producers, \
+                         no balancer)",
+                        lane.item,
+                        lane.rate,
+                        lane_cap,
+                        all_producers.len(),
+                    ));
+                }
+            }
 
             for &pri in &all_producers {
                 if pri >= row_spans.len() {
