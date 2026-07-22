@@ -21,26 +21,28 @@ For full build commands (WASM rebuild, release builds), see [`docs/build-systems
 ## Development conventions
 
 - **Primary workflow**: edit Rust, run `cargo test`, then rebuild WASM and hit the web app to eyeball the layout.
-- **WASM rebuild**: `wasm-pack build crates/wasm-bindings --target web --out-dir "$(pwd)/web/src/wasm-pkg"`. Always pass an absolute `--out-dir` (see memory: `feedback_wasmpack_outdir`).
+- **WASM rebuild**: `wasm-pack build crates/wasm-bindings --target web --out-dir "$(pwd)/web/src/wasm-pkg"`. Always pass an absolute `--out-dir`.
 - **Pre-commit hooks**: in `.githooks/pre-commit`, activate with `git config core.hooksPath .githooks`. Runs `cargo clippy` on staged Rust and `tsc` on staged TS. Bypass with `--no-verify` only for genuine emergencies.
 - **Scripts**: put exploratory snippets in `scripts/` rather than inline one-liners. Rust debug scripts go in `crates/core/examples/` or as `#[test] #[ignore]` benchmarks.
 - **Snapshots**: `SPAGHETTIO_DUMP_SNAPSHOTS=1 cargo test ...` writes `.fls` files under `crates/core/target/tmp/`. Decode with `tail -c +5 <file> | base64 -d | gunzip`. See [`docs/layout-snapshot-debugger.md`](docs/layout-snapshot-debugger.md).
-- **Docs taxonomy** (official as of 2026-07-20; everything in `docs/` is one of these):
-  - **RFCs** (`rfc-*.md`) — spec docs plus context: design, **kill criteria**
-    (required — the dominant rework shape here is exploration that overruns
-    its evidence), verification plan, and a **decision log**, which is the
-    canonical record of every call made while the work ran. Template:
-    [`docs/rfc-template.md`](docs/rfc-template.md). (Standard industry sense —
-    a design doc circulated for review; these were called "RFPs" here before
-    2026-07-20, renamed because that term means something else entirely. The
-    decision log is the part that matters.) **Numbered**: the
-    registry at [`docs/rfcs.md`](docs/rfcs.md) assigns `RFC-NNN` to every RFC
-    chronologically; existing files keep their names (numbers live in the
-    registry), new RFCs are named `rfc-NNN-short-name.md` and get a registry
-    row in the same commit. Rejected/obsolete RFCs move to `docs/archive/`.
+- **Docs taxonomy** (everything in `docs/` is one of these):
+  - **RFCs** (`rfc-*.md`) — design docs circulated for review: design,
+    **kill criteria** (required — the dominant rework shape here is
+    exploration that overruns its evidence), verification plan, and a
+    **decision log**, the canonical record of every call made while the work
+    ran. Template: [`docs/rfc-template.md`](docs/rfc-template.md).
+    **Numbered**: the registry at [`docs/rfcs.md`](docs/rfcs.md) assigns
+    `RFC-NNN` chronologically; existing files keep their names (numbers live
+    in the registry), new RFCs are named `rfc-NNN-short-name.md` and get a
+    registry row in the same commit. Rejected/obsolete RFCs move to
+    `docs/archive/`.
   - **Followups** (`*-followups.md`) — deferred-work backlogs with pick-up
     notes. Named for what they track, not the session that produced them;
     status line at the top so a cold pick-up knows what's open.
+  - **Status ledger** ([`docs/status.md`](docs/status.md)) — the
+    cross-cutting capability record: recipe complexity ladder, residual
+    warnings, RFC close-outs, open tracking issues. Update it when status
+    changes; don't record status here in `CLAUDE.md`.
   - **Reference** — evergreen how-things-work docs (`factorio-mechanics.md`,
     `build-systems.md`, `file-reference.md`, `ghost-pipeline-contracts.md`,
     the debugger guides). Kept current when the subject changes; no
@@ -54,9 +56,7 @@ For full build commands (WASM rebuild, release builds), see [`docs/build-systems
 - **Branches + PRs by default.** Don't work directly on `main` unless
   explicitly agreed for the task at hand. Work on a feature branch and open a
   PR to get code onto `main`. Besides review, this serializes `main` across
-  the multiple concurrent Claude sessions that share this repo — interleaved
-  direct commits from two sessions in one checkout caused real branch
-  tangles (2026-07-20).
+  the multiple concurrent Claude sessions that share this repo.
 - **Adversarial review before anything is commit-ready** — code *and*
   documentation. Preferred: the CI review bot —
   [`.github/workflows/claude-code-review.yml`](.github/workflows/claude-code-review.yml)
@@ -83,12 +83,10 @@ For full build commands (WASM rebuild, release builds), see [`docs/build-systems
   fallback when a PR isn't in play — and it remains **required in addition
   to the bot** for layout-engine or validator-semantics changes: the bot
   reviews the diff, but it cannot run STRESSGOLD, decode snapshots, or do
-  tile-level verification, and every materially wrong claim caught in the
-  2026-07 power arc was caught by that deeper class of review.
+  tile-level verification.
 - **Keep `origin/main` current** — push promptly after merging. Worktree
   agents branch from `origin/main`; a stale origin hands every spawned agent
-  a stale base (35 unpushed commits once sent an agent rebuilding a fix
-  against a pre-arc tree).
+  a stale base.
 - **Review freeze**: once a branch/PR is under review, no branch surgery
   (rebase, delete, cherry-pick) until the verdict lands — route
   restructuring through whoever is coordinating, who retargets the reviewer
@@ -114,12 +112,12 @@ For full build commands (WASM rebuild, release builds), see [`docs/build-systems
 - **`crates/wasm-bindings/`** — thin wasm-bindgen wrapper exposing `solve`, `layout`, `export_blueprint`, and recipe lookups to the browser. Consumed by `web/src/engine.ts`.
 - **`crates/mining-cli/`** — `blueprint-analyze` native binary for dissecting community blueprint strings (stdin / file / `--batch` / `--json`). Uses `spaghettio_core::analysis` to expand books and report entity counts, recipes, and shape summaries.
 
-**Web app** (`web/`) is the primary interactive interface. Vite + vanilla TS + PixiJS v8 + pixi-viewport. Runs the full solver → layout → blueprint pipeline client-side via WASM. URL state encodes the recipe, rate, machine tier, external inputs, and belt tier, so links reproduce layouts exactly.
+**Web app** (`web/`) is the primary interactive interface. Vite + vanilla TS + PixiJS v8 + pixi-viewport. Runs the full solver → layout → blueprint pipeline client-side via WASM. URL state encodes the recipe, rate, machine tier, external inputs, and belt tier, so links reproduce layouts exactly. Renderer-specific constraints live in `web/CLAUDE.md`.
 
 ## Tooling
 
 - **Blueprint analyzer** — `cargo run -p spaghettio_mining --bin blueprint-analyze -- [file|--batch|--json]`. Useful for auditing community blueprints or spot-checking our own export round-trips.
-- **Containerised Claude-Code runner** — `Dockerfile` + `docker-compose.yml` + `docker-entrypoint.sh` at the repo root. Ships a `node:24` image with Claude Code, `gh`, Rust, and the pi-coding-agent preinstalled. `docker compose run --rm claude-agent` drops into an interactive container with the workspace mounted and host creds (`~/.claude`, `~/.config/gh`) bind-mounted read-only. Used for one-shot / llama-backed watcher agent runs — see commit `56e2eeb`.
+- **Containerised Claude-Code runner** — `Dockerfile` + `docker-compose.yml` + `docker-entrypoint.sh` at the repo root. Ships a `node:24` image with Claude Code, `gh`, Rust, and the pi-coding-agent preinstalled. `docker compose run --rm claude-agent` drops into an interactive container with the workspace mounted and host creds (`~/.claude`, `~/.config/gh`) bind-mounted read-only. Used for one-shot / llama-backed watcher agent runs.
 
 ### Pipeline stages (all Rust)
 
@@ -142,31 +140,17 @@ Most-visited files. Full reference in [`docs/file-reference.md`](docs/file-refer
 
 | File | Purpose |
 |------|---------|
-| `crates/core/src/bus/layout.rs` | Top-level `build_bus_layout`: `place_rows` → `plan_bus_lanes` → `route_bus_ghost` → `place_poles` (poles are LAST — placed after routing, never router obstacles; invariant restored 2026-07-19, see `docs/rfc-power-supply.md` Phase 0f) |
-| `crates/core/src/bus/ghost_router.rs` | Ghost A* + negotiated congestion routing; junction solver integration; output merger call-site |
-| `crates/core/src/bus/lane_planner.rs` | `BusLane` / `LaneFamily` types, `plan_bus_lanes`, lane splitting + tap-off coordinate finding |
-| `crates/core/src/bus/lane_order.rs` | Left-to-right lane column order optimiser (exact search ≤7 lanes, hill-climb above) |
-| `crates/core/src/bus/balancer.rs` | `stamp_family_balancer` + splitter/UG name helpers |
-| `crates/core/src/bus/trunk_renderer.rs` | `render_path` (A* path → belts), `trunk_segments`, `is_intermediate` |
-| `crates/core/src/bus/output_merger.rs` | Final-product east-flowing output merger |
+| `crates/core/src/bus/layout.rs` | Top-level `build_bus_layout`: `place_rows` → `plan_bus_lanes` → `route_bus_ghost` → `place_poles` (poles are LAST — placed after routing, never router obstacles) |
 | `crates/core/src/bus/placer.rs` | Row placement: group machines by recipe, split for throughput, `place_rows` geometry |
 | `crates/core/src/bus/templates.rs` | Belt/inserter row templates (single-input, dual-input, lane-splitting sideload bridges) |
-| `crates/core/src/bus/junction_solver.rs` | Region-growth junction solver framework (trait, growth loop) |
-| `crates/core/src/bus/junction_sat_strategy.rs` | SAT-backed `JunctionStrategy` fallback |
-| `crates/core/src/bus/ghost_occupancy.rs` | Typed `Occupancy` map (HardObstacle / RowEntity / Permanent / GhostSurface / Template / SatSolved) |
-| `crates/core/src/bus/balancer_library.rs` | Pre-generated N→M balancer templates (do not edit manually) |
+| `crates/core/src/bus/lane_planner.rs` | `BusLane` / `LaneFamily` types, `plan_bus_lanes`, lane splitting + tap-off coordinate finding |
+| `crates/core/src/bus/ghost_router.rs` | Ghost A* + negotiated congestion routing; junction solver integration; output merger call-site |
 | `crates/core/src/netflow.rs` | Net-flow LP solver (default since 2026-07, compatibility mode; byproduct crediting, typed cycle refusals). Legacy tree walk retained in `solver.rs` as the recipe-selection oracle. See `docs/rfc-solver-net-flow.md`. |
-| `crates/core/src/astar.rs` | `ghost_astar` pathfinder primitive (the negotiated-congestion loop lives in `bus/ghost_router.rs`) |
-| `crates/core/src/sat.rs` | Varisat-backed crossing-zone SAT solver (see memory: `project_sat_crossing_solver`) |
-| `crates/core/src/validate/belt_flow.rs` | Lane-rate walker (Kahn topo sort with splitter pairing and balancer feedback-loop handling) |
-| `crates/core/src/validate/` | Rest of the 34 checks: `belt_structural`, `fluids`, `inserters`, `modules`, `power`, `underground` |
+| `crates/core/src/validate/` | The 34 functional checks, dispatched from `mod.rs` (`belt_flow` lane-rate walker, `belt_structural`, `fluids`, `inserters`, `modules`, `power`, `underground`) |
 | `crates/core/src/trace.rs` | Thread-local trace event collector; `TraceEvent` variants drive the snapshot debugger and stress scoreboards |
 | `crates/core/src/snapshot.rs` | `.fls` snapshot reader/writer for the layout debugger |
-| `crates/core/tests/e2e.rs` | End-to-end test harness: tier1–4 regression tests and stress corpus with scoreboards |
+| `crates/core/tests/e2e.rs` | End-to-end test harness: tier regression tests and stress corpus with scoreboards |
 | `crates/wasm-bindings/src/lib.rs` | wasm-bindgen wrapper exposing `solve`, `layout`, `export_blueprint` to the browser |
-| `web/src/engine.ts` | WASM loader and typed wrappers |
-| `web/src/renderer/entities.ts` | PixiJS entity renderer (bus layout view) |
-| `web/src/ui/sidebar.ts` | Searchable item picker, rate input, live solve, URL state |
 
 ## Factorio game rules (constraints for the layout engine)
 
@@ -181,34 +165,6 @@ Physical rules the layout engine must satisfy:
 - **Entities** cannot overlap.
 - **Power** — machines need electricity; medium-electric-pole covers a 7×7 area.
 - **Belt lane mechanics** — sideloading, UG lane rules, splitter behavior — detailed in [`docs/factorio-mechanics.md`](docs/factorio-mechanics.md).
-
-## Recipe complexity ladder
-
-Tracks which recipes produce zero-error bus blueprints. Moving up = real progress. Tests for each tier live in `crates/core/tests/e2e.rs`.
-
-| Tier | Recipe | Complexity | Bus status |
-|------|--------|-----------|-----|
-| 1 | `iron-gear-wheel` | 1 recipe, 1 solid input | SOLVED |
-| 2 | `electronic-circuit` | 2 recipes, 2 solid inputs | SOLVED (incl. from ores) |
-| 3 | `plastic-bar` | 1 recipe, 1 fluid + 1 solid input | SOLVED |
-| 4 | `advanced-circuit` | 5+ recipes, mixed solid/fluid | SOLVED (`tier4_advanced_circuit_from_ore_am2` green: AC@5/s ores AM2 yellow, 0 errors). Carries 1 input-rate-delivery (unrelated, pre-existing demand-pull modeling residual); inserter-item-throughput 0 since the last-in-row belt extension (`0d7132c`, 2026-07-19; was 4, and 58 masked sides pre-`rfc-inserter-sizing.md`). From plates still has lane-throughput warnings, [#65](https://github.com/storkme/spaghettio/issues/65). |
-| 5 | `processing-unit` | Deep chain, multiple fluids | SOLVED (`tier5_processing_unit_from_ore_am3` green: PU@2/s ores AM3 red, 0 errors, Pooled — fully clean, 0 warnings, since the last-in-row belt extension `0d7132c` 2026-07-19; was 5 inserter-item-throughput, and 129 masked sides pre-`rfc-inserter-sizing.md`). Higher rates / partitioned strategies still have junction + starvation issues — see `partition_strategy_scoreboard_extended`. |
-| 6 | `flying-robot-frame` | Adds lubricant: advanced-oil-processing refinery rows with 3 fluid outputs | SOLVED via the USP chain (0 errors). The 2026-07-11 "0 warnings" reading predates the per-item inserter-attribution check landing — see tier 7 and the corpus-wide note below. No dedicated FRF fixture yet. |
-| 7 | `utility-science-pack` | Very deep chain (LDS + PU + FRF) | SOLVED (`science_gauntlet` USP@1/s AM3: 0 errors, 6615 entities, 208×281). Utility itself fully clean since the last-in-row belt extension (`0d7132c`, 2026-07-19; was 2 inserter-item-throughput). Across the six packs the only residual is production-science: 8 inserter-item-throughput, likely the same last-in-row trim still present in the triple/quad/hstack templates (follow-up). Logistic/military science packs clean at 1/s (previously carried input-rate-delivery residue, since fixed). |
-
-**`rfc-inserter-sizing.md` close-out (2026-07-13)**: bus inserters are now sized to planned per-machine throughput via a shared regular→fast→stack ladder (long-handed count-ladder for reach-2 sides), with an ingredient-to-belt reassignment lever and a user-facing `max_inserter_tier` engine param (wasm-bindings + web UI, URL-encoded). `science_gauntlet` 1/s inserter-throughput/item-throughput warnings across the six packs: **140 → 12** at close-out (automation/logistic/military fully clean; chemical 1, production 9, utility 2 residual, all under the newer, stricter per-item check — the old aggregate check is at 0 everywhere), then **12 → 8** after the 2026-07-19 last-in-row belt extension (`0d7132c`: chemical and utility now clean; all 8 remaining are production-science). The "untouched triple/quad/hstack trims" hypothesis for those 8 was **falsified 2026-07-20** (`acd147e` extended the pattern to triple_input_row — quad/hstack are structurally immune — and the 8 turned out to be 6 input3 contest-losses + 2 genuine far-side rate walls; see [`docs/inserter-throughput-followups.md`](docs/inserter-throughput-followups.md)). This is **validator-verified only** — the RFC's two in-game blueprint-import anchors (kill criterion 5) remain open until the user runs them; see the decision log in `docs/rfc-inserter-sizing.md` for the full phase-by-phase evidence trail.
-
-**`rfc-build-quality.md` close-out (2026-07-20)**: user-facing **build quality** param (normal→legendary, `quality`/`q=` URL-encoded through wasm `solve`+`layout` and the sidebar). Solver machine counts scale ×(1+0.3·level) via `effective_crafting_speed`; the inserter ladder, pole supply radii (+1/level), and wire reach (+2/level, shared table `common::pole_wire_reach` consumed by placement, the emitted `wires` artifact, and the validator) are quality-aware; functional entities (machines/inserters/poles — never logistics) get `PlacedEntity.quality` stamped in one `layout_pass` post-pass, validators rate each entity by its own tier, and export emits the lua-api `quality` field (parser reads it too, so imported quality blueprints validate). Normal is bit-identical to pre-RFC (kill-criterion-2 gates: unit bit-equality sweeps + full suite + STRESSGOLD check). The 60 EC/s legendary headline is capped at 45/s (one blue belt) until [#311 output-merger capacity](https://github.com/storkme/spaghettio/issues/311) closes; [#312](https://github.com/storkme/spaghettio/issues/312) tracks the quality-magnified consumer-clamped fan-in wall; [#310 pole-band thinning](https://github.com/storkme/spaghettio/issues/310) is the designated next pick-up. **In-game import anchor still open** (user-run; unblocked — #313 resolved as premise-falsified: the engine's `stack-inserter` IS the current Space Age stacking inserter). Full trail: `docs/rfc-build-quality.md` decision log; renderer constraints learned en route: `web/CLAUDE.md`.
-
-**`rfc-046-belt-stacking.md` close-out (2026-07-21)**: user-facing **belt stacking** param (off/×2/×3/×4 = Space Age belt stack size research, `stacking`/`st=` URL-encoded through wasm `layout*` and the sidebar; solver untouched). Belt tier selection, lane caps, merger capacity, and the validators scale ×S via `common::*_stacked` helpers; belt-dropping output sides are **forced to stack inserters** at S>1 (`size_belt_drop_side`, modeling the belt-drop hand rounding incl. the S=4 dip: 9.6/s vs 14.4/s per inserter); a **static family-level exemption** (`bus/stacking_ctx.rs`) keeps uniform ×S sound for unstackable producers (self-loop/kovarex, D2b secondary outputs, recycler ejection — validators re-derive it independently, per-tile). Full-belt delivery thresholds initially did NOT scale (tap/sideload flow fills one lane) — *superseded by RFC-047 (2026-07-22), which grounded and scaled them.* Headline: the #311 stress config (EC@60/s red from ore, whose golden stamps a physically-impossible 60/s merger belt) is **physically valid end-to-end at S=2** (red stacked = 60/s), proven by an in-fixture per-tile capacity audit. S=1 is bit-identical to pre-RFC (zero golden re-blesses). Mechanics: `factorio-mechanics.md` BS1–BS7. In-game import anchor open (user-run — red/normal headline config, or legendary-express since RFC-047 resolved its residuals; #335's one-bank ore-routing warnings persist there). Full trail: `docs/rfc-046-belt-stacking.md` decision log.
-
-**`rfc-047-lane-aware-tap-delivery.md` close-out (2026-07-22)**: made delivery **lane-aware** so belt stacking raises rate CEILINGS, not just belt tiers. Leg A: the lane-rate walker's convergence-phase splitter model was physically false (pooled lanes — real splitters preserve them, S4) — replaced by `splitter_output_rates_convergence`, exposing #334 (two lane-imbalanced balancer-library shapes, carved out with a fix tripwire); the mechanics doc's I5 was backwards (inserters drop the FAR lane — code was always right). Leg B: RFC-046's stacking-blind row-split cap was fragmenting rows at S>1 and manufacturing sideload overloads — fixed at the root; a late sideload check now refuses multi-producer single-trunk over-cap shapes by name (exposed 38 pre-existing SILENT S=1 overload errors in a fixture that never asserted on them; (n,1) merge-tap is unwired, #336). Leg C: the fan-in wall scales ×S on geometry-grounded credits — EC@6/s legendary yellow refuses at S=1 and builds clean at S=2 (`stacking_fanin_wall_lift_...`), and the **original legendary-express@60 headline landed** (`stacking_ec_60s_express_legendary_s2`: junction failure died with the row consolidation, ±3% overshoot died with worst-lane output-belt sizing; #335 tracks one unreached furnace bank). Three falsified premises decision-logged. Zero golden re-blesses across the arc. Full trail: `docs/rfc-047-lane-aware-tap-delivery.md`.
-
-**`rfc-049-inserter-capacity-research.md` close-out (2026-07-22)**: user-facing **inserter capacity research** param (level 0–7, `inserter_capacity`/`ir=` URL-encoded, sidebar "Inserter research"). Schedule pinned from raw wikitext with 2-fetch reproducibility (bulk 2→12; stack = bulk+4 → 6→16; non-bulk 1→3 via the chain +1 from Transport-belt-capacity-2 → 4) — summarized wiki fetches are BANNED as constant sources (two contradicted each other; the failure mode reproduced live in review). `common::belt_drop_rate(name, quality, stacking, level)` is the single source of truth consumed by both the ladder and the validator; output belt-drop sides scale linearly (swings × researched hand, with BS3 rounding — healing is exactly `hand ≡ 0 mod S`, non-monotonic: I8b), input (belt-pickup) sides stay at the L0 conservative floor pending measured data (#343 — belt-fed throughput is sub-linear and the wiki tables don't reproduce). L0 bit-identical to pre-RFC (zero golden re-blesses). Headline: at S=4/L7 the per-inserter belt-drop rate is 38.4/s (96/s legendary) vs 9.6/24 before — output stack inserters thin 9→3 in the differential fixture. In-game anchor open (user-run; a legendary S=4/L7 export validates RFC-046/047/049 in one import). Full trail: `docs/rfc-049-inserter-capacity-research.md` decision log.
-
-Open tracking issues for layout quality: [#135 balancer templates are oversized](https://github.com/storkme/spaghettio/issues/135), [#136 missing coprime balancer shapes](https://github.com/storkme/spaghettio/issues/136), [#68 fluid row 3-tile pitch](https://github.com/storkme/spaghettio/issues/68) (design: [`docs/rfc-fluid-dual-input-row.md`](docs/rfc-fluid-dual-input-row.md)).
-
-Deferred tooling tasks — test-suite time recovery (audited 2026-07-19, pick-up notes per item in [`docs/test-suite-followups.md`](docs/test-suite-followups.md)): committed STRESSGOLD baseline goldens landed 2026-07-19 (`SPAGHETTIO_STRESS_GOLDEN=check|bless`, see `crates/core/tests/goldens/stress/README.md` — host-cache-relative, opt-in, not CI-enforced); CI nextest parallelism re-enable via timeout-ceiling bumps (~5 min/push, experiment already documented in `.config/nextest.toml`); `[profile.test]` opt experiment for SAT/A*-heavy tests (measure before adopting).
 
 ## Verification protocol for layout engine changes
 
@@ -225,6 +181,7 @@ Layout bugs are easy to get wrong — zero validation errors can mean the check 
 
 | Looking for | Location |
 |-------------|----------|
+| Project status (complexity ladder, residual warnings, open issues) | [`docs/status.md`](docs/status.md) |
 | Recipe data | `crates/core/data/recipes.json` (embedded via `include_str!`) |
 | Balancer templates | `crates/core/src/bus/balancer_library.rs`. Regenerate: `python scripts/generate_balancer_library.py` (needs Factorio-SAT on `PATH`). |
 | Belt tier thresholds | `crates/core/src/common.rs` (`belt_entity_for_rate`, `ug_max_reach`) |

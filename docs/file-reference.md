@@ -11,7 +11,9 @@ Full reference table. The most-visited files are summarised in `CLAUDE.md`.
 | `power_wires.rs` | THE single source of the pole-to-pole copper wire graph: `wire_reach` / `is_pole` / `pole_center`, `compute_pole_wires`, `count_disconnected_poles`. Consumed by blueprint export (`wires` array, connector 5), `validate::power` connectivity, `bus::layout::repair_pole_connectivity`, and the web power overlay |
 | `fluid_ports.rs` | Orientation-aware fluid-port geometry table (per-machine, direction + mirror); the shared source both `validate::fluids` and the bus fluid-row templates consume (RFC `docs/rfc-power-supply.md` Phase 0e-i) |
 | `astar.rs` | `ghost_astar` — turn-penalty + per-axis cost A* used by the ghost router |
-| `solver.rs` | Recursive recipe resolution producing `SolverResult` |
+| `solver.rs` | Recipe resolution front-end producing `SolverResult`; legacy tree walk retained as the recipe-selection oracle |
+| `netflow.rs` | Net-flow LP solver (the default; byproduct crediting, typed cycle refusals). See `docs/rfc-solver-net-flow.md` |
+| `module_policy.rs` | Global module policy → per-machine loadouts and effect factors (RFC-044) |
 | `recipe_db.rs` | Recipe DB — loads `crates/core/data/recipes.json` via `include_str!` |
 | `blueprint.rs` | Blueprint exporter (JSON + zlib + base64 envelope) |
 | `blueprint_parser.rs` | Blueprint string → `LayoutResult` (reverse of `blueprint.rs`) |
@@ -40,6 +42,7 @@ Full reference table. The most-visited files are summarised in `CLAUDE.md`.
 | `junction_solver.rs` | Region-growth outer loop + `JunctionStrategy` trait |
 | `junction_sat_strategy.rs` | SAT-backed `JunctionStrategy` fallback |
 | `tapoff_search.rs` | Brute-force search for optimal tap-off tile patterns (test/generation only) |
+| `stacking_ctx.rs` | RFC-046 belt-stacking context: stack size + statically derived stacking-exempt item families |
 
 ### Validation (`crates/core/src/validate/`)
 
@@ -51,6 +54,7 @@ Full reference table. The most-visited files are summarised in `CLAUDE.md`.
 | `fluids.rs` | Pipe isolation and fluid port connectivity |
 | `power.rs` | Power coverage and pole network connectivity |
 | `underground.rs` | Underground belt pair and sideloading checks |
+| `modules.rs` | Module loadout checks: slot counts + (machine, recipe) eligibility (RFC-044) |
 
 ## Bindings and CLIs
 
@@ -118,7 +122,7 @@ UI panels (`web/src/ui/`):
 
 | File | Purpose |
 |------|---------|
-| `crates/core/tests/e2e.rs` | End-to-end test harness: tier 1–4 regression tests + stress corpus with scoreboards |
+| `crates/core/tests/e2e.rs` | End-to-end test harness: tier regression tests + stress corpus with scoreboards |
 | `crates/core/examples/diagnose_junctions.rs` | Offline diagnostic: runs tier 2/3/4 layouts and dumps junction-solver breakdown + balancer stamps |
 | `crates/core/examples/trace_junction.rs` | Replays a single junction and prints its trace timeline |
 | `crates/core/examples/replay_region_trace.rs` | Replays a region-routing trace for offline inspection |
