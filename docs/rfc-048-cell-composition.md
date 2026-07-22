@@ -285,10 +285,39 @@ capacity layer.
 **Go/no-go: GO for Phase 1** (catalog + stamper + manual composition
 harness behind a test-only flag), with the corrected ratio, the
 lane-aware port contract, and sim-verification of the first two catalog
-entries as the Phase 1 gate.
+entries as the Phase 1 gate — **plus one explicit catalog-growth
+measurement across a config axis** (whole-RFC review, 2026-07-22): the
+EC ratio cell at two machine tiers (or with/without modules), measuring
+what actually varies between axis points (footprint, port contract,
+machine count) and the marginal cost of a variant (procedural via
+engine-as-generator vs hand work). Corridor cells solve belt-count
+growth; they do not touch config-axis growth (recipe × tier × modules ×
+quality × rate band) — this measurement is the number that decides
+whether the end-state entry is a plan or a hope.
 
 ## Decision log
 
+- *2026-07-22 — Whole-RFC review folded (strong GO on Phase 1; three
+  skepticisms recorded as guards rather than dismissed). (1)
+  **Config-axis catalog growth** added to the Phase-1 gate (see the
+  go/no-go above) — the friendliest-slice concern is real: kill 1's
+  variant budget measured one chain's rate bands only. If the answer
+  is procedural generation, kill 4's no-parallel-stack discipline is
+  the thing to watch. (2) **The oil mega-cell boundary rule is
+  provisional**: cracking ratios are demand-dependent — interior state
+  shifts with what the ports draw — so "fluid loops never cross cell
+  boundaries" needs a careful loop-vs-balancing-feed definition before
+  Phase 3 leans on it; the fluid-calibration gate stands, and the oil
+  complex may legitimately end up as several cells with defined
+  inter-cell feeds rather than one opaque block. (3) **A
+  never-finishing tripwire** (the reviewed failure mode nothing
+  guarded: two live layout stacks drifting forever if the catalog
+  stalls at partial coverage): at each phase close-out, measure
+  catalog coverage of the fixture ladder; if coverage does not grow
+  across two consecutive phase close-outs while both stacks carry
+  maintenance burden, escalate a keep/kill decision on the composition
+  path — quiet permanence of a second stack is the failure mode, and
+  it must trip loudly, not accrete.*
 - *2026-07-22 — End-state definition set (user steer, post-#359): the
   method is not "done" with structural exemptions. Revised target: NO
   chain class structurally excluded — the existing tier ladder
