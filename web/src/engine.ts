@@ -274,7 +274,7 @@ function allProducerMachines(): string[] {
   return machinesCache;
 }
 
-function buildLayout(result: SolverResult, maxBeltTier?: string, strategy?: string, rowLayout?: string, maxInserterTier?: string, quality?: string, wireMode?: string, stacking?: string): Promise<LayoutResult> {
+function buildLayout(result: SolverResult, maxBeltTier?: string, strategy?: string, rowLayout?: string, maxInserterTier?: string, quality?: string, wireMode?: string, stacking?: string, inserterCapacity?: string): Promise<LayoutResult> {
   return call<LayoutResult>({
     method: "layout",
     result,
@@ -285,10 +285,11 @@ function buildLayout(result: SolverResult, maxBeltTier?: string, strategy?: stri
     quality: quality ?? null,
     wireMode: wireMode ?? null,
     stacking: stacking ?? null,
+    inserterCapacity: inserterCapacity ?? null,
   });
 }
 
-function buildLayoutTraced(result: SolverResult, maxBeltTier?: string, strategy?: string, rowLayout?: string, maxInserterTier?: string, quality?: string, wireMode?: string, stacking?: string): Promise<LayoutResult> {
+function buildLayoutTraced(result: SolverResult, maxBeltTier?: string, strategy?: string, rowLayout?: string, maxInserterTier?: string, quality?: string, wireMode?: string, stacking?: string, inserterCapacity?: string): Promise<LayoutResult> {
   return call<LayoutResult>({
     method: "layoutTraced",
     result,
@@ -299,6 +300,7 @@ function buildLayoutTraced(result: SolverResult, maxBeltTier?: string, strategy?
     quality: quality ?? null,
     wireMode: wireMode ?? null,
     stacking: stacking ?? null,
+    inserterCapacity: inserterCapacity ?? null,
   });
 }
 
@@ -327,6 +329,7 @@ async function buildLayoutStreaming(
   quality: string | undefined,
   wireMode: string | undefined,
   stacking: string | undefined,
+  inserterCapacity: string | undefined,
   onEvent: (evt: TraceEvent) => void,
 ): Promise<LayoutResult> {
   if (activeStreamingId !== null) {
@@ -362,6 +365,7 @@ async function buildLayoutStreaming(
       quality: quality ?? null,
       wireMode: wireMode ?? null,
       stacking: stacking ?? null,
+      inserterCapacity: inserterCapacity ?? null,
       traceLogs,
     });
   });

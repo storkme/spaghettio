@@ -39,6 +39,10 @@ export interface FormState {
    * same null-is-default convention as `wireMode`. See
    * `docs/rfc-046-belt-stacking.md`. */
   stacking: string | null;
+  /** Inserter-capacity research level ("1".."7"). null = unresearched
+   * (today's default) — same null-is-default convention as `stacking`.
+   * See `docs/rfc-049-inserter-capacity-research.md`. */
+  inserterCapacity: string | null;
   /** Global module policy, compact form `<kind><tier><quality?>` —
    * `s`peed / `p`roductivity, tier 1–3, optional module-quality initial
    * (`u`/`r`/`e`/`l`), e.g. "s2", "p3l". null = no modules (today's
@@ -82,6 +86,12 @@ export const KNOWN_WIRE_MODES = ["tree"] as const;
  * own short codes (no letter remapping needed, unlike quality/wire mode).
  * See `docs/rfc-046-belt-stacking.md`. */
 export const KNOWN_STACKING = ["2", "3", "4"] as const;
+
+/** Inserter-capacity-research values accepted on the URL and in
+ * `FormState.inserterCapacity`. `"0"` (the default/unresearched) is
+ * intentionally absent — represented by `null`, same convention as
+ * `KNOWN_STACKING`. See `docs/rfc-049-inserter-capacity-research.md`. */
+export const KNOWN_INSERTER_CAPACITY = ["1", "2", "3", "4", "5", "6", "7"] as const;
 
 /** Shape of `FormState.modules` / the `m=`/`modules=` URL value. The
  * compact form is its own short code — no long↔short map needed. */
@@ -200,6 +210,13 @@ const WIRE_MODE_FULL_TO_SHORT: Record<string, string> = { tree: "t" };
 // collision at the cost of one extra character.
 const STACKING_EXTRAS_KEY = "st";
 
+// Inserter-capacity research (RFC-049) — the natural short code `ic` is
+// one transposition away from the already-claimed `ci` (custom inputs), a
+// near-miss collision the RFC's spec review flagged as worse than a literal
+// one (nothing forces you to notice a swapped pair of letters). `ir=`
+// ("inserter research") sidesteps it entirely.
+const INSERTER_CAPACITY_EXTRAS_KEY = "ir";
+
 function slugToCode(slug: string): string {
   // Fall back to the slug itself if it's not in the table — keeps
   // serialization total (e.g. an unknown / modded item still produces a
@@ -299,6 +316,9 @@ function readHashState(): FormState | null {
   const stShort = extras.get(STACKING_EXTRAS_KEY);
   const stacking =
     stShort && (KNOWN_STACKING as readonly string[]).includes(stShort) ? stShort : null;
+  const irShort = extras.get(INSERTER_CAPACITY_EXTRAS_KEY);
+  const inserterCapacity =
+    irShort && (KNOWN_INSERTER_CAPACITY as readonly string[]).includes(irShort) ? irShort : null;
   const mShort = extras.get("m");
   const modules = mShort && MODULES_RE.test(mShort) ? mShort : null;
   const ciRaw = extras.get("ci");
@@ -324,7 +344,7 @@ function readHashState(): FormState | null {
     machines[category] = slug;
   }
 
-  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, quality, wireMode, stacking, modules, customInputs };
+  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, quality, wireMode, stacking, inserterCapacity, modules, customInputs };
 }
 
 function readQueryState(): FormState {
@@ -376,12 +396,17 @@ function readQueryState(): FormState {
     rawStacking && (KNOWN_STACKING as readonly string[]).includes(rawStacking)
       ? rawStacking
       : null;
+  const rawInserterCapacity = params.get("inserter_capacity");
+  const inserterCapacity =
+    rawInserterCapacity && (KNOWN_INSERTER_CAPACITY as readonly string[]).includes(rawInserterCapacity)
+      ? rawInserterCapacity
+      : null;
   const rawModules = params.get("modules");
   const modules = rawModules && MODULES_RE.test(rawModules) ? rawModules : null;
   const ciParam = params.get("ci");
   const customInputs = ciParam ? ciParam.split(",").filter((s) => s.length > 0) : [];
 
-  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, quality, wireMode, stacking, modules, customInputs };
+  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, quality, wireMode, stacking, inserterCapacity, modules, customInputs };
 }
 
 export function readUrlState(): FormState {
@@ -457,6 +482,12 @@ function formatHashState(state: FormState): string {
   }
   if (state.stacking && (KNOWN_STACKING as readonly string[]).includes(state.stacking)) {
     extras.set(STACKING_EXTRAS_KEY, state.stacking);
+  }
+  if (
+    state.inserterCapacity &&
+    (KNOWN_INSERTER_CAPACITY as readonly string[]).includes(state.inserterCapacity)
+  ) {
+    extras.set(INSERTER_CAPACITY_EXTRAS_KEY, state.inserterCapacity);
   }
   if (state.modules && MODULES_RE.test(state.modules)) {
     extras.set("m", state.modules);

@@ -33,6 +33,7 @@ fn layout_options(
     quality: Option<String>,
     wire_mode: Option<String>,
     stacking: Option<u8>,
+    inserter_capacity: Option<u8>,
 ) -> LayoutOptions {
     let strategy = match strategy.as_deref() {
         // `partitioned-per-consumer` is the deprecated P1 string; the
@@ -79,6 +80,9 @@ fn layout_options(
         // semantics as the tiers above. `common::*_stacked` helpers clamp
         // any out-of-range value, so no validation needed here.
         stacking: stacking.unwrap_or(1),
+        // RFC-049 Phase 2: unknown/absent → 0 (unresearched, bit-identical
+        // to pre-RFC — kill 1), same fallback semantics as the tiers above.
+        inserter_capacity: inserter_capacity.unwrap_or(0),
     }
 }
 
@@ -255,10 +259,11 @@ pub fn layout(
     quality: Option<String>,
     wire_mode: Option<String>,
     stacking: Option<u8>,
+    inserter_capacity: Option<u8>,
 ) -> Result<LayoutResult, JsError> {
     build_bus_layout(
         &solver_result,
-        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking),
+        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking, inserter_capacity),
     )
     .map_err(|e| JsError::new(&e))
 }
@@ -277,10 +282,11 @@ pub fn layout_traced(
     quality: Option<String>,
     wire_mode: Option<String>,
     stacking: Option<u8>,
+    inserter_capacity: Option<u8>,
 ) -> Result<LayoutResult, JsError> {
     spaghettio_core::bus::layout::build_bus_layout_traced(
         &solver_result,
-        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking),
+        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking, inserter_capacity),
     )
     .map_err(|e| JsError::new(&e))
 }
@@ -343,6 +349,7 @@ pub fn layout_streaming(
     quality: Option<String>,
     wire_mode: Option<String>,
     stacking: Option<u8>,
+    inserter_capacity: Option<u8>,
     emit: &js_sys::Function,
 ) -> Result<LayoutResult, JsError> {
     let emit = emit.clone();
@@ -356,7 +363,7 @@ pub fn layout_streaming(
     });
     spaghettio_core::bus::layout::build_bus_layout_streaming(
         &solver_result,
-        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking),
+        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking, inserter_capacity),
         on_event,
     )
     .map_err(|e| JsError::new(&e))
