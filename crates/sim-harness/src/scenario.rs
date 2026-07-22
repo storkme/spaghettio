@@ -435,34 +435,40 @@ script.on_init(function()
 
   storage.proxies_fulfilled = fulfill_module_proxies(s)
 
-  -- power every factory pole network: EEI just west of each network's
-  -- min-x pole (can_place scan across a few candidate offsets to dodge
-  -- dense layouts).
+  -- Power every factory pole network: one hidden-electric-energy-
+  -- interface placed AT (overlapping) a representative pole's own
+  -- position. hidden-EEI has a 0x0 collision box, so this ALWAYS
+  -- succeeds regardless of how densely packed the surrounding tiles are,
+  -- and 0-distance-from-a-real-pole guarantees the auto-wire connection
+  -- lands in the right network.
+  --
+  -- LIVE FINDING (this harness, EC10@84x90 fixture): the west-of-pole
+  -- can_place scan this replaced (ported verbatim from
+  -- gen_harness_scenario.py, which only ever ran on the small, sparse
+  -- gear10 fixture) found SOME empty tile in a big dense layout and
+  -- reported success, but the placed substation/EEI pair wasn't
+  -- necessarily within wire reach of anything real -- 60 machines came
+  -- back `no_power`, 0 items measured. The RFC's own empirical base
+  -- names the fix directly: "hidden-electric-energy-interface -- 0x0
+  -- collision box, placeable AT a pole's position -- avoids the 2x2
+  -- siting problem in dense layouts". Adopted here after the scan
+  -- version failed live; the boundary-kit feed/drain rigs' OWN local
+  -- power islands (regular EEI+substation, built in open space the rig
+  -- constructs itself) are unaffected -- they measured correctly on the
+  -- gear10 PASS run.
   local nets = {}
   for _, p in pairs(s.find_entities_filtered{type = "electric-pole"}) do
     local id = p.electric_network_id
-    if id and (not nets[id] or p.position.x < nets[id].position.x) then nets[id] = p end
+    if id then nets[id] = p end
   end
   storage.net_count, storage.factory_eeis = 0, 0
   for _, pole in pairs(nets) do
     storage.net_count = storage.net_count + 1
-    local placed = false
-    for _, dy in ipairs({0, 4, -4, 8, -8}) do
-      if placed then break end
-      for dx = -4, -16, -1 do
-        local spos = {pole.position.x + dx, pole.position.y + dy}
-        local epos = {pole.position.x + dx - 3, pole.position.y + dy}
-        if s.can_place_entity{name = "substation", position = spos, force = force}
-           and s.can_place_entity{name = "electric-energy-interface", position = epos, force = force} then
-          s.create_entity{name = "substation", position = spos, force = force, quality = "legendary"}
-          local eei = s.create_entity{name = "electric-energy-interface", position = epos, force = force}
-          eei.electric_buffer_size = 1e13
-          table.insert(storage.eeis, eei)
-          storage.factory_eeis = storage.factory_eeis + 1
-          placed = true
-          break
-        end
-      end
+    local eei = s.create_entity{name = "hidden-electric-energy-interface", position = pole.position, force = force}
+    if eei then
+      eei.electric_buffer_size = 1e13
+      table.insert(storage.eeis, eei)
+      storage.factory_eeis = storage.factory_eeis + 1
     end
   end
 

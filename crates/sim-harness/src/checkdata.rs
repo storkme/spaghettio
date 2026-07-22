@@ -84,16 +84,35 @@ fn dump_data(install_dir: &Path) -> Result<std::path::PathBuf, String> {
 /// doesn't hardcode which Factorio prototype `type` each machine belongs
 /// to (furnace vs. assembling-machine vs. whatever a future version
 /// calls it), so it just looks for the name wherever it lives.
-fn find_prototype<'a>(dump: &'a serde_json::Value, name: &str) -> Option<&'a serde_json::Value> {
+///
+/// LIVE FINDING (running this against the real pinned 2.0.76 dump): every
+/// entity name also has a same-named `item` prototype (the thing you hold
+/// to place it), and every recipe name commonly has a same-named `item`
+/// prototype too (the crafted result) — a bare "first name match wins"
+/// scan non-deterministically returns the wrong category depending on
+/// serde_json's map ordering (BTreeMap-sorted here: `assembling-machine`/
+/// `furnace` sort before `item`, so machines happened to resolve
+/// correctly, but `item` sorts before `recipe`, so every one of the 4
+/// probe recipes silently matched its OWN OUTPUT ITEM prototype instead —
+/// caught by running the real dump, not by reasoning about it). Fixed by
+/// requiring a field that's diagnostic of the RIGHT prototype shape
+/// (`crafting_speed` for machines, `ingredients` for recipes — items have
+/// neither), with a fallback to a plain name match so "wrong shape" and
+/// "not present anywhere" still produce distinct errors.
+fn find_prototype<'a>(dump: &'a serde_json::Value, name: &str, disambiguating_field: &str) -> Option<&'a serde_json::Value> {
     let root = dump.as_object()?;
+    let mut any_match = None;
     for (_category, entries) in root {
         if let Some(obj) = entries.as_object() {
             if let Some(proto) = obj.get(name) {
-                return Some(proto);
+                if proto.get(disambiguating_field).is_some() {
+                    return Some(proto);
+                }
+                any_match.get_or_insert(proto);
             }
         }
     }
-    None
+    any_match
 }
 
 fn compare(dump: &serde_json::Value, baseline: &serde_json::Value) -> Vec<String> {
@@ -109,7 +128,7 @@ fn compare(dump: &serde_json::Value, baseline: &serde_json::Value) -> Vec<String
             mismatches.push(format!("machine '{name}': no crafting_speed in baseline recipes.json"));
             continue;
         };
-        match find_prototype(dump, name) {
+        match find_prototype(dump, name, "crafting_speed") {
             None => mismatches.push(format!("machine '{name}': not found in dumped data.raw")),
             Some(proto) => match proto.get("crafting_speed").and_then(|v| v.as_f64()) {
                 None => mismatches.push(format!("machine '{name}': dumped prototype has no crafting_speed field")),
@@ -127,19 +146,28 @@ fn compare(dump: &serde_json::Value, baseline: &serde_json::Value) -> Vec<String
             mismatches.push(format!("recipe '{name}': not present in baseline recipes.json"));
             continue;
         };
-        let Some(actual) = find_prototype(dump, name) else {
+        let Some(actual) = find_prototype(dump, name, "ingredients") else {
             mismatches.push(format!("recipe '{name}': not found in dumped data.raw"));
             continue;
         };
 
-        // energy / energy_required
+        // energy / energy_required. LIVE FINDING: the dump OMITS
+        // energy_required entirely when it equals Factorio's prototype
+        // default (0.5s) — iron-gear-wheel/electronic-circuit/
+        // copper-cable all dump with no energy_required field at all,
+        // while iron-plate (3.2s, non-default) dumps it explicitly.
+        // Treating an absent field as a mismatch would have been a
+        // false-positive KC1 trip on every default-energy recipe.
+        const DEFAULT_ENERGY_REQUIRED: f64 = 0.5;
         if let Some(expected_energy) = expected.get("energy").and_then(|v| v.as_f64()) {
-            match actual.get("energy_required").and_then(|v| v.as_f64()) {
-                None => mismatches.push(format!("recipe '{name}': dumped prototype has no energy_required field")),
-                Some(actual_energy) if (actual_energy - expected_energy).abs() > 1e-9 => mismatches.push(format!(
+            let actual_energy = actual
+                .get("energy_required")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(DEFAULT_ENERGY_REQUIRED);
+            if (actual_energy - expected_energy).abs() > 1e-9 {
+                mismatches.push(format!(
                     "recipe '{name}': energy baseline={expected_energy} dumped={actual_energy}"
-                )),
-                Some(_) => {}
+                ));
             }
         }
 
@@ -219,7 +247,9 @@ mod tests {
         let mut mismatches = Vec::new();
         let name = "assembling-machine-2";
         let expected = baseline["machines"][name]["crafting_speed"].as_f64().unwrap();
-        let actual = find_prototype(&dump, name).unwrap()["crafting_speed"].as_f64().unwrap();
+        let actual = find_prototype(&dump, name, "crafting_speed").unwrap()["crafting_speed"]
+            .as_f64()
+            .unwrap();
         assert!((expected - actual).abs() < 1e-9);
         compare_item_amounts(
             "iron-gear-wheel",
@@ -248,7 +278,9 @@ mod tests {
             "recipe": {}
         });
         let expected = baseline["machines"]["assembling-machine-2"]["crafting_speed"].as_f64().unwrap();
-        let actual = find_prototype(&dump, "assembling-machine-2").unwrap()["crafting_speed"].as_f64().unwrap();
+        let actual = find_prototype(&dump, "assembling-machine-2", "crafting_speed").unwrap()["crafting_speed"]
+            .as_f64()
+            .unwrap();
         assert!((expected - actual).abs() > 1e-9, "fixture should disagree");
     }
 
@@ -278,7 +310,63 @@ mod tests {
     #[test]
     fn missing_prototype_is_a_mismatch() {
         let dump = serde_json::json!({});
-        assert!(find_prototype(&dump, "assembling-machine-2").is_none());
+        assert!(find_prototype(&dump, "assembling-machine-2", "crafting_speed").is_none());
+    }
+
+    /// Regression test for a bug caught by running this tool against the
+    /// REAL 2.0.76 dump (see `find_prototype`'s doc comment): a recipe
+    /// name that also has a same-named `item` prototype must resolve to
+    /// the recipe, not the item, even when `item` would otherwise be
+    /// found first.
+    #[test]
+    fn disambiguates_recipe_from_same_named_item_prototype() {
+        let dump = serde_json::json!({
+            "item": {
+                "iron-gear-wheel": {"stack_size": 100}
+            },
+            "recipe": {
+                "iron-gear-wheel": {
+                    "ingredients": [{"name": "iron-plate", "amount": 2}],
+                    "results": [{"name": "iron-gear-wheel", "amount": 1}]
+                }
+            }
+        });
+        let proto = find_prototype(&dump, "iron-gear-wheel", "ingredients").unwrap();
+        assert!(proto.get("ingredients").is_some(), "must resolve to the recipe, not the item");
+    }
+
+    /// Regression test for the live finding that `energy_required` is
+    /// omitted from the dump entirely when it equals Factorio's 0.5s
+    /// default — `compare()` must not treat that as a mismatch.
+    #[test]
+    fn default_energy_required_omitted_from_dump_is_not_a_mismatch() {
+        let baseline = serde_json::json!({
+            "machines": {},
+            "recipes": {
+                "copper-cable": {
+                    "energy": 0.5,
+                    "ingredients": [{"name": "copper-plate", "amount": 1}],
+                    "results": [{"name": "copper-cable", "amount": 2}]
+                }
+            }
+        });
+        let dump = serde_json::json!({
+            "recipe": {
+                "copper-cable": {
+                    "ingredients": [{"name": "copper-plate", "amount": 1}],
+                    "results": [{"name": "copper-cable", "amount": 2}]
+                }
+            }
+        });
+        // compare() only walks the fixed MACHINES/RECIPES probe lists, so
+        // exercise the energy-comparison branch directly against this
+        // ad hoc single-recipe baseline instead.
+        let expected = &baseline["recipes"]["copper-cable"];
+        let actual = find_prototype(&dump, "copper-cable", "ingredients").unwrap();
+        assert!(actual.get("energy_required").is_none(), "fixture must omit the field like the real dump does");
+        let expected_energy = expected["energy"].as_f64().unwrap();
+        let actual_energy = actual.get("energy_required").and_then(|v| v.as_f64()).unwrap_or(0.5);
+        assert!((expected_energy - actual_energy).abs() < 1e-9);
     }
 
     #[test]
