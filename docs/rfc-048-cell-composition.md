@@ -289,6 +289,23 @@ entries as the Phase 1 gate.
 
 ## Decision log
 
+- *2026-07-22 — EC@15 composes at 0 errors (3 pairs, 29×47 = 1363
+  tiles, 345 entities — 1.4× the engine's EC@5 linear extrapolation,
+  inside kill 3's 2× bound, vs an engine that REFUSES the config; the
+  only warnings are the 2 inherited row residuals ×3, zero
+  composition-new). Boundary records wired into the composer →
+  export_with_manifest produces sim artifacts (9 feeds / 3 drains).
+  AXIS MEASUREMENT (gate c): the EC cell at AM2 regenerates as a valid
+  cell (14×9, 4 machines, ports auto-derived at shifted positions) from
+  the same call with one changed string — **a variant is a parameter,
+  not a project**; marginal authoring cost ≈ 0, the real axis cost is
+  sim-verifying variants actually used. Verdict: the end-state is a
+  PLAN. FLUID CELL (gate a, second half): plastic-bar extracts with
+  pipe segments intact; pipe-kind ports added to derivation; the
+  composed fluid cell (coal belt + petroleum boundary pipe + out belt)
+  validates at **0 errors / 0 warnings**. Sim runs queued behind the
+  shared Factorio install lock (another session mid-run — retry loop
+  standing).*
 - *2026-07-22 — FIRST COMPOSED PAIR VALIDATES AT 0 ERRORS (milestone).
   One ratio pair (cable cell + corridor + EC cell, 29×14, 114
   entities): external feeds attach at port terminals, the EC iron feed

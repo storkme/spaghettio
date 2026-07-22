@@ -125,7 +125,10 @@ fn extract_cell(l: &LayoutResult) -> Cell {
         Default::default();
     for e in &entities {
         if let Some(seg) = e.segment_id.as_deref() {
-            if is_belt_entity(&e.name) && (seg.contains(":belt-in") || seg.contains(":belt-out")) {
+            let is_pipe = e.name == "pipe" || e.name == "pipe-to-ground";
+            if (is_belt_entity(&e.name) || is_pipe)
+                && (seg.contains(":belt-in") || seg.contains(":belt-out"))
+            {
                 segs.entry(seg.to_string()).or_default().push(e);
             }
         }
@@ -300,6 +303,8 @@ fn compose_pairs(n: i32) -> (spaghettio_core::models::SolverResult, LayoutResult
     let ec_x = corridor_x + 6;
 
     let mut entities: Vec<PlacedEntity> = Vec::new();
+    let mut boundary_inputs: Vec<spaghettio_core::models::BoundaryRecord> = Vec::new();
+    let mut boundary_outputs: Vec<spaghettio_core::models::BoundaryRecord> = Vec::new();
     for k in 0..n {
     let dy = k * PAIR_PITCH;
     let ec_y = 3 + dy;
@@ -326,6 +331,14 @@ fn compose_pairs(n: i32) -> (spaghettio_core::models::SolverResult, LayoutResult
             "express-transport-belt",
             &format!("corridor:feed:{}:{}", port.item, port.y + dy),
         );
+        boundary_inputs.push(spaghettio_core::models::BoundaryRecord {
+            item: port.item.clone(),
+            x: 0,
+            y: port.y + dy,
+            direction: spaghettio_core::models::EntityDirection::East,
+            is_fluid: false,
+            entity: "express-transport-belt".to_string(),
+        });
     }
     // EC iron feed: UG hop under the cable cell (B12 weaving) — entry
     // west of the cell, exit east of it (express reach 8 covers the
@@ -336,6 +349,14 @@ fn compose_pairs(n: i32) -> (spaghettio_core::models::SolverResult, LayoutResult
         let y = ec_y + port.y;
         stamp_path(&mut entities, &[(0, y), (cable_x - 2, y)], "iron-plate",
             "express-transport-belt", &format!("corridor:feed:iron-plate:{k}"));
+        boundary_inputs.push(spaghettio_core::models::BoundaryRecord {
+            item: "iron-plate".to_string(),
+            x: 0,
+            y,
+            direction: EntityDirection::East,
+            is_fluid: false,
+            entity: "express-transport-belt".to_string(),
+        });
         for (x, io) in [(cable_x - 1, "input"), (cable_x + cable.width, "output")] {
             entities.push(PlacedEntity {
                 name: "express-underground-belt".to_string(),
@@ -393,6 +414,14 @@ fn compose_pairs(n: i32) -> (spaghettio_core::models::SolverResult, LayoutResult
     let out_y = ec_y + ec_out.y;
     stamp_path(&mut entities, &[(out_x0, out_y), (out_x0 + 3, out_y)],
         "electronic-circuit", "transport-belt", &format!("corridor:out:ec:{k}"));
+    boundary_outputs.push(spaghettio_core::models::BoundaryRecord {
+        item: "electronic-circuit".to_string(),
+        x: out_x0 + 3,
+        y: out_y,
+        direction: spaghettio_core::models::EntityDirection::East,
+        is_fluid: false,
+        entity: "transport-belt".to_string(),
+    });
 
     // Corridor pole stitch: cells carry their own poles; add a pole
     // column in the corridor so the network is connected.
@@ -416,6 +445,8 @@ fn compose_pairs(n: i32) -> (spaghettio_core::models::SolverResult, LayoutResult
     l.width = width;
     l.height = height;
     l.stacking = 1;
+    l.boundary_inputs = boundary_inputs;
+    l.boundary_outputs = boundary_outputs;
     (esr, l)
 }
 
@@ -467,4 +498,142 @@ fn probe_compose_ec15() {
             }
         }
     }
+}
+
+
+/// Export the composed EC@15 layout + manifest for spaghettio-sim
+/// (writes to target/tmp; run the harness manually or via the wrapper
+/// scripts — this test only produces the artifacts).
+#[test]
+#[ignore = "artifact producer for the sim step"]
+fn export_composed_ec15_for_sim() {
+    let (esr, l) = compose_pairs(3);
+    let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(&l, &esr, "rfc048-ec15-composed");
+    std::fs::create_dir_all("target/tmp").unwrap();
+    std::fs::write("target/tmp/rfc048-ec15.bp", &bp).unwrap();
+    std::fs::write(
+        "target/tmp/rfc048-ec15.manifest.json",
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    println!(
+        "wrote target/tmp/rfc048-ec15.bp ({} chars) + manifest ({} boundary in / {} out)",
+        bp.len(),
+        l.boundary_inputs.len(),
+        l.boundary_outputs.len()
+    );
+}
+
+
+/// Gate (c): config-axis growth measurement — the EC cell at two
+/// machine tiers. What varies, and is a variant a parameter or a
+/// project? (RFC-048 Phase-1 gate; the plan-or-hope number.)
+#[test]
+#[ignore = "measurement probe"]
+fn probe_axis_growth_machine_tier() {
+    for machine in ["assembling-machine-2", "assembling-machine-3"] {
+        let inputs: FxHashSet<String> =
+            ["iron-plate", "copper-cable"].iter().map(|s| s.to_string()).collect();
+        let sr = solver::solve_with_palette_exclusions_and_quality(
+            "electronic-circuit", 5.0, &inputs, &MachinePalette::default(),
+            machine, &FxHashSet::default(), QualityTier::Normal,
+        ).unwrap();
+        let l = layout::build_bus_layout(&sr, layout::LayoutOptions::default()).unwrap();
+        let c = extract_cell(&l);
+        println!("== {machine}: cell {}x{}, {} entities ==", c.width, c.height, c.entities.len());
+        for m in &sr.machines { println!("   spec {} x{:.2}", m.recipe, m.count); }
+        for p in &c.ports {
+            println!("   port {} ({},{}) {} {}", p.edge, p.x, p.y, p.item, if p.inbound { "IN" } else { "OUT" });
+        }
+    }
+}
+
+
+/// Fluid-consumer probe: plastic-bar cell (petroleum + coal), the
+/// fluid-boundary calibration entry. Dump segment structure to design
+/// pipe-port extraction.
+#[test]
+#[ignore = "exploration probe"]
+fn probe_fluid_cell_geometry() {
+    let (sr, l) = generate_row_layout("plastic-bar", 2.0, &["petroleum-gas", "coal"]);
+    let c = extract_cell(&l);
+    println!("== plastic cell {}x{}, {} entities ==", c.width, c.height, c.entities.len());
+    for m in &sr.machines { println!("   spec {} x{:.2}", m.recipe, m.count); }
+    for port in &c.ports { println!("   port {} ({},{}) {} {}", port.edge, port.x, port.y, port.item, if port.inbound { "IN" } else { "OUT" }); }
+    let mut segs: std::collections::BTreeSet<String> = Default::default();
+    for e in &c.entities {
+        if let Some(seg) = e.segment_id.as_deref() { segs.insert(format!("{seg} [{}]", e.name)); }
+    }
+    for s in &segs { println!("   seg {s}"); }
+}
+
+
+/// Compose the plastic cell with boundary feeds (coal belt + petroleum
+/// pipe) and export for the sim — the fluid-boundary calibration entry.
+#[test]
+#[ignore = "artifact producer for the fluid sim step"]
+fn export_composed_plastic_for_sim() {
+    use spaghettio_core::models::{BoundaryRecord, EntityDirection, PlacedEntity};
+    let (sr, l) = generate_row_layout("plastic-bar", 2.0, &["petroleum-gas", "coal"]);
+    let cell = extract_cell(&l);
+    let cx = 4;
+    let mut entities: Vec<PlacedEntity> = Vec::new();
+    for e in &cell.entities {
+        let mut e = e.clone();
+        e.x += cx;
+        entities.push(e);
+    }
+    let mut b_in: Vec<BoundaryRecord> = Vec::new();
+    let mut b_out: Vec<BoundaryRecord> = Vec::new();
+    // Coal feed to the belt port.
+    let coal = cell.ports.iter().find(|p| p.inbound && p.item == "coal").unwrap();
+    stamp_path(&mut entities, &[(0, coal.y), (cx + coal.x - 1, coal.y)],
+        "coal", "express-transport-belt", "corridor:feed:coal");
+    b_in.push(BoundaryRecord { item: "coal".into(), x: 0, y: coal.y,
+        direction: EntityDirection::East, is_fluid: false, entity: "express-transport-belt".into() });
+    // Petroleum pipe: find the cell's westmost pipe tile and run pipes west.
+    let pipe_terminal = cell.entities.iter()
+        .filter(|e| (e.name == "pipe" || e.name == "pipe-to-ground")
+            && e.segment_id.as_deref().map(|s| s.contains("petroleum")).unwrap_or(false))
+        .min_by_key(|e| e.x).unwrap();
+    let (py_x, py_y) = (pipe_terminal.x + cx, pipe_terminal.y);
+    for x in 0..py_x {
+        entities.push(PlacedEntity { name: "pipe".into(), x, y: py_y,
+            direction: EntityDirection::North,
+            segment_id: Some("corridor:feed:petroleum-gas".into()),
+            carries: Some("petroleum-gas".into()), ..Default::default() });
+    }
+    b_in.push(BoundaryRecord { item: "petroleum-gas".into(), x: 0, y: py_y,
+        direction: EntityDirection::East, is_fluid: true, entity: "pipe".into() });
+    // Output extension to the boundary.
+    let out = cell.ports.iter().find(|p| !p.inbound).unwrap();
+    stamp_path(&mut entities, &[(cx + out.x + 1, out.y), (cx + out.x + 4, out.y)],
+        "plastic-bar", "transport-belt", "corridor:out:plastic");
+    b_out.push(BoundaryRecord { item: "plastic-bar".into(), x: cx + out.x + 4, y: out.y,
+        direction: EntityDirection::East, is_fluid: false, entity: "transport-belt".into() });
+
+    let width = entities.iter().map(|e| e.x).max().unwrap() + 1;
+    let height = entities.iter().map(|e| e.y).max().unwrap() + 1;
+    let mut comp = LayoutResult::default();
+    comp.entities = entities;
+    comp.width = width;
+    comp.height = height;
+    comp.stacking = 1;
+    comp.boundary_inputs = b_in;
+    comp.boundary_outputs = b_out;
+
+    // Validate before export — the composed fluid cell must be clean.
+    let issues = spaghettio_core::validate::validate(&comp, Some(&sr),
+        spaghettio_core::validate::LayoutStyle::Bus).unwrap_or_else(|e| panic!("validate: {e}"));
+    let errors = issues.iter().filter(|i| i.severity == spaghettio_core::validate::Severity::Error).count();
+    println!("composed plastic: {}x{}, {} entities, {} errors / {} issues",
+        width, height, comp.entities.len(), errors, issues.len());
+    assert_eq!(errors, 0);
+
+    let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(&comp, &sr, "rfc048-plastic-composed");
+    std::fs::create_dir_all("target/tmp").unwrap();
+    std::fs::write("target/tmp/rfc048-plastic.bp", &bp).unwrap();
+    std::fs::write("target/tmp/rfc048-plastic.manifest.json",
+        serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
+    println!("wrote target/tmp/rfc048-plastic.bp + manifest");
 }
