@@ -63,7 +63,7 @@ Full reference table. The most-visited files are summarised in `CLAUDE.md`.
 | `crates/wasm-bindings/src/lib.rs` | wasm-bindgen wrapper: `solve`, `layout`, `layout_traced`, `export_blueprint`, `validate_layout`, `solve_fixture`, recipe lookups |
 | `crates/mining-cli/src/main.rs` | `blueprint-analyze` native CLI — reads blueprint strings from stdin/file, `--batch`/`--json` modes, expands books, prints shape summaries via `spaghettio_core::analysis` |
 | `crates/sim-harness/src/main.rs` | `spaghettio-sim` CLI — `fetch`/`run`/`check-data`/`bless`/`check` subcommands (RFC-050); see [`docs/sim-harness.md`](sim-harness.md) |
-| `crates/sim-harness/src/orchestrate.rs` | Launch headless Factorio on an ephemeral port, poll `script-output/` for the result, tear down. One run per install dir (write-dir lock + fixed result filenames) |
+| `crates/sim-harness/src/orchestrate.rs` | Per-run scratch write dir (`config.ini` read/write split — concurrency-safe), launch headless Factorio on an ephemeral port, poll the run dir's `script-output/`, tear down |
 | `crates/sim-harness/src/scenario.rs` | Scenario `control.lua` codegen: paste + superforce-build + revive, feed/drain boundary kit, warmup/window/stability run params |
 | `crates/sim-harness/src/report.rs` | Planned-vs-measured report; one-sided PASS≥98% / WARN≥90% / FAIL verdicts (RFC-050 KC2) |
 | `crates/sim-harness/src/baseline.rs` | Measured-baseline freeze/drift-check backing `bless`/`check`; blessed set in `crates/sim-harness/baselines/` |
