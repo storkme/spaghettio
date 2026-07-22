@@ -24,7 +24,9 @@ Downloads the **pinned Factorio 2.0.76** headless build (via system
 settings (`auto_pause: false`, autosaves off — a paused or saving server
 breaks the measurement loop) plus the Space Age mod-list. Override the
 install location with `SPAGHETTIO_FACTORIO_DIR`. The pin is load-bearing
-(2.0.77 changed prototypes); never point fetch at `latest`.
+(`latest` has already drifted to 2.1.12, which adds a `recycler`
+prototype module our `recipes.json` baseline doesn't have); never point
+fetch at `latest`.
 
 `cargo run -p spaghettio_sim_harness -- check-data` spot-checks the
 pinned install's dumped prototype data against `recipes.json` (RFC-050
@@ -46,9 +48,14 @@ tracked way to produce the pair. Usage of the local example, where
 present:
 
 ```bash
-# writes $SIM_PROBE_OUT/bp.txt + manifest.json (default /tmp)
+# writes $SIM_PROBE_OUT/bp.txt + manifest-real.json (default /tmp)
 cargo run --example sim_probe_export <item> <rate> <stacking> <inserter_cap> [quality] [belt]
 ```
+
+Pass **`manifest-real.json`** to `run` — it's the `export_with_manifest`
+output the harness parses. The example also writes a sibling
+`manifest.json` in a stale pre-Phase-0 ad hoc shape (no `label` field);
+the harness will reject it with a missing-field error.
 
 In-process generation from a fixture name is deferred Phase 1 wiring
 (see the dependency note in `crates/sim-harness/Cargo.toml`); until then,
@@ -67,8 +74,9 @@ the blueprint, superforce-builds it, revives ghosts, attaches feed/drain
 boundary infrastructure at the manifest's coordinates), launches the
 server on an ephemeral port, and polls `script-output/` for the result;
 the server is killed as soon as the result lands (or on timeout). The
-Factorio log is kept at `/tmp/spaghettio-sim-<scenario>.log` — first stop
-for any failure.
+Factorio log is kept in the OS temp dir (`$TMPDIR`, usually `/tmp`) as
+`spaghettio-sim-<scenario>.log`, and `run` prints the exact path at the
+end — first stop for any failure.
 
 Knobs (defaults in parentheses):
 
@@ -77,15 +85,18 @@ Knobs (defaults in parentheses):
 - `--ticks N` (derived) — hard ceiling tick, the **one** thing that
   force-finalizes a run that never stabilizes. Default is derived from
   warmup + 4 measurement windows, rounded up to the 60-tick cadence.
-- `--warmup N` (dim-scaled from the manifest) — ticks before measurement
-  starts. The 2% stability windows cannot distinguish a slow buffer-fill
-  drift from real convergence, so deep-chain fixtures need a generous
-  explicit warmup for steady-state probes. Rounded up to 60-tick cadence.
 - `--timeout-secs N` (900) — wall-clock bound on the whole launch.
 - `--out FILE` — write the full JSON artifact: `{report, raw_result,
   sim_state, run_params, game_version}`. This file is what `bless`,
   `check`, and the web overlay consume — always pass it for anything you
   might want to keep.
+
+Warmup (ticks before measurement starts) is not a flag: it is derived
+from the manifest's dimensions. An explicit `--warmup` override for
+steady-state probes — the 2% stability windows cannot distinguish a slow
+buffer-fill drift from real convergence on deep chains — exists on the
+unmerged `sim-warmup-override` branch; add it to the knob list above
+when it lands.
 
 ## Reading the report
 
@@ -95,7 +106,9 @@ Per item: planned rate, measured produced rate, measured delivered rate
 
 - **PASS** — measured ≥ 98% of planned (overshoot is still PASS)
 - **WARN** — ≥ 90%
-- **FAIL** — below 90% (or no data)
+- **FAIL** — below 90%
+- **NO DATA** — no measurement reached a checkpoint; ranks between WARN
+  and FAIL for the overall (worst-of-targets) verdict
 
 Overall verdict is the worst target verdict. Non-target intermediates are
 informational — a two-sided tolerance would spuriously fail honest
@@ -139,22 +152,26 @@ To run sims concurrently (e.g. two agents), give each run its own
 install:
 
 ```bash
-cp -al ~/.cache/spaghettio-sim/factorio-2.0.76 ~/.cache/spaghettio-sim/factorio-2.0.76-<name>
+cp -r ~/.cache/spaghettio-sim/factorio-2.0.76 ~/.cache/spaghettio-sim/factorio-2.0.76-<name>
 SPAGHETTIO_FACTORIO_DIR=~/.cache/spaghettio-sim/factorio-2.0.76-<name> cargo run -p spaghettio_sim_harness -- run ...
 ```
 
-The hardlink clone is cheap; per-run writes replace files rather than
-editing in place, so the shared link targets stay intact (use `cp -r` if
-in doubt). If another agent's sim is already running, wait or clone —
-never share the default install dir with a live run.
+The copy is one-time. A hardlink clone (`cp -al`) is tempting but
+**untested**: Factorio writes some files in place, and its write-dir
+exclusivity mechanism is uncharacterized — if it's an `flock` on a file
+that existed at clone time, hardlinked clones would share the very lock
+this workaround exists to avoid. Stick to `cp -r` until two concurrent
+clone runs have been smoke-tested. If another agent's sim is already
+running, wait or clone — never share the default install dir with a
+live run.
 
 ## Troubleshooting
 
 - **`factorio exited early`** — lock contention (see above) or a real
-  crash: read the log at `/tmp/spaghettio-sim-<scenario>.log`.
+  crash: read the log at the path `run` printed.
 - **Timeout waiting for `harness-result.json`** — the scenario never
-  finished; check the log for Lua errors, or raise `--timeout-secs` /
-  lower `--speed` on slow machines.
+  finished; check the log for Lua errors, or raise `--timeout-secs` on
+  slow machines.
 - **Determinism** — Factorio's lockstep sim is deterministic: two
   identical runs produce identical reports. A report that changes across
   runs of the same artifacts means the artifacts (or pin) changed.
