@@ -62,6 +62,11 @@ pub struct Product {
     pub type_: String,
     #[serde(default = "default_probability")]
     pub probability: f64,
+    /// Catalyst portion exempt from productivity crediting (RFC-044;
+    /// e.g. kovarex: 40 of the 41 U-235). Productivity applies to
+    /// `amount - ignored_by_productivity` only. 0 = fully eligible.
+    #[serde(default)]
+    pub ignored_by_productivity: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,11 +80,30 @@ pub struct Recipe {
     pub ingredients: Vec<Ingredient>,
     #[serde(default, alias = "results")]
     pub products: Vec<Product>,
+    /// Productivity-module eligibility whitelist (RFC-044). Omitted =
+    /// false in the data file; prod modules are forbidden on this recipe.
+    #[serde(default)]
+    pub allow_productivity: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MachineData {
     pub crafting_speed: f64,
+    /// Machine-level module-effect restrictions (RFC-044): the set of
+    /// effect names this machine accepts (`"productivity"`, `"speed"`,
+    /// `"quality"`, `"consumption"`, `"pollution"`). `None` = no
+    /// restriction (the game default when the prototype omits it).
+    /// Recycler notably forbids `productivity`; oil-refinery forbids
+    /// `quality`.
+    #[serde(default)]
+    pub allowed_effects: Option<Vec<String>>,
+    /// Built-in productivity from `effect_receiver.base_effect`
+    /// (RFC-044): foundry / biochamber / electromagnetic-plant = 0.5.
+    /// NOT yet credited by the solver — see RFC-044 Phase 3 for the
+    /// gating (module-aware path only) and the recorded none-path
+    /// followup.
+    #[serde(default)]
+    pub base_effect_productivity: f64,
     /// Maximum number of solid+fluid ingredient slots. `None` = unbounded
     /// (Factorio represents this as `-1` on prototypes; we treat absence in
     /// the data file as unbounded). Today only `assembling-machine-1` has a
@@ -236,9 +260,10 @@ impl std::fmt::Display for MachineIncompatibility {
 ///
 /// Returns `Ok(())` if the pair is buildable, otherwise the first
 /// incompatibility it hits (slot count → fluid → category). Unknown
-/// machines (not in the bundled data) are treated as unconstrained — the
-/// solver will hit `MissingCraftingSpeed` separately if the entity is
-/// completely unknown.
+/// machines (not in the bundled data) are treated as unconstrained —
+/// note `get_crafting_speed` defaults them to 1.0, so the solver never
+/// hits `MissingCraftingSpeed` for an unknown name; it silently solves
+/// at speed 1.0.
 pub fn machine_can_run_recipe(
     machine: &str,
     recipe: &Recipe,
@@ -515,6 +540,7 @@ mod tests {
             energy: 1.0,
             ingredients: vec![],
             products: vec![],
+            allow_productivity: false,
         };
         assert_eq!(machine_for_recipe(&recipe, "assembling-machine-3"), "electromagnetic-plant");
 
@@ -566,6 +592,7 @@ mod tests {
             energy: 1.0,
             ingredients: vec![],
             products: vec![],
+            allow_productivity: false,
         }
     }
 
@@ -654,6 +681,7 @@ mod tests {
                 },
             ],
             products: vec![],
+            allow_productivity: false,
         };
         let err = machine_can_run_recipe("assembling-machine-1", &synthetic).unwrap_err();
         assert!(matches!(err, MachineIncompatibility::FluidNotSupported { .. }));
@@ -685,10 +713,42 @@ mod tests {
             .expect("stone-furnace handles smelting");
     }
 
+    /// RFC-044 KC3 regression gate: the module-eligibility extraction
+    /// must be present in the bundled recipes.json. Pins the four facts
+    /// the adversarial review verified against Factorio 2.0.76 data.
+    #[test]
+    fn module_eligibility_data_is_bundled() {
+        // Recipe whitelist landed (116 eligible recipes in our set).
+        let eligible = db().recipes.values().filter(|r| r.allow_productivity).count();
+        assert!(eligible > 100, "allow_productivity extraction missing: {eligible}");
+        assert!(db().recipes["kovarex-enrichment-process"].allow_productivity);
+        assert!(!db().recipes["iron-chest"].allow_productivity);
+
+        // Kovarex catalyst amounts: prod credits only the net +1 U-235.
+        let kov = &db().recipes["kovarex-enrichment-process"];
+        let u235 = kov.products.iter().find(|p| p.name == "uranium-235").unwrap();
+        assert_eq!((u235.amount, u235.ignored_by_productivity), (41.0, 40.0));
+        let u238 = kov.products.iter().find(|p| p.name == "uranium-238").unwrap();
+        assert_eq!((u238.amount, u238.ignored_by_productivity), (2.0, 2.0));
+
+        // Machine-level restrictions: recycler forbids productivity.
+        let recycler = &db().machines["recycler"];
+        let effects = recycler.allowed_effects.as_ref().unwrap();
+        assert!(!effects.iter().any(|e| e == "productivity"));
+        assert!(effects.iter().any(|e| e == "speed"));
+
+        // Built-in productivity on the three Space Age machines.
+        for m in ["foundry", "biochamber", "electromagnetic-plant"] {
+            assert_eq!(db().machines[m].base_effect_productivity, 0.5, "{m}");
+        }
+        assert_eq!(db().machines["assembling-machine-3"].base_effect_productivity, 0.0);
+    }
+
     #[test]
     fn unknown_machine_passes_through() {
-        // Unknown entities are treated as unconstrained — the solver hits
-        // MissingCraftingSpeed separately for these.
+        // Unknown entities are treated as unconstrained — and since
+        // get_crafting_speed defaults unknown names to 1.0, they solve
+        // silently at speed 1.0 (MissingCraftingSpeed never fires).
         let recipe = make_recipe("crafting");
         machine_can_run_recipe("totally-made-up-machine", &recipe)
             .expect("unknown machines bypass the capability check");

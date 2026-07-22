@@ -364,6 +364,19 @@ pub fn lane_capacity(belt: &str) -> f64 {
     belt_throughput(belt) / 2.0
 }
 
+/// Full belt throughput at belt stack size `stacking` (BS1: capacity is
+/// `tier throughput × S`). `stacking` is clamped to the physical 1..=4 —
+/// the user-facing param is validated upstream; clamping keeps the math
+/// total. `stacking = 1` is bit-exact `belt_throughput` (RFC-046 kill 1).
+pub fn belt_throughput_stacked(belt: &str, stacking: u8) -> f64 {
+    belt_throughput(belt) * f64::from(stacking.clamp(1, 4))
+}
+
+/// Per-lane capacity at belt stack size `stacking` (BS1).
+pub fn lane_capacity_stacked(belt: &str, stacking: u8) -> f64 {
+    belt_throughput_stacked(belt, stacking) / 2.0
+}
+
 // ---------------------------------------------------------------------------
 // Entity classification helpers (shared across validation modules)
 // ---------------------------------------------------------------------------
@@ -527,6 +540,28 @@ pub fn inserter_throughput(name: &str, quality: QualityTier) -> f64 {
     base * quality.multiplier()
 }
 
+/// Stack-inserter swings per second (864°/s ÷ 360°, quality-scaled).
+///
+/// Half of the RFC-046 belt-drop decomposition `swings × belt hand`,
+/// which models the wiki's hand-6 figures on the belt-drop path ONLY
+/// (14.4/s = 2.4 × 6). The flat `inserter_throughput` 12.0 above stays
+/// the deliberately conservative I8 constant for every existing call
+/// site — see rfc-046 "No recalibration": the two paths intentionally
+/// disagree, each conservative in its own regime.
+pub fn stack_inserter_swings(quality: QualityTier) -> f64 {
+    2.4 * quality.multiplier()
+}
+
+/// Items a stack inserter moves per swing when dropping onto a belt at
+/// belt stack size `stacking`: base hand 6 rounded **down** to a multiple
+/// of S (BS3) — 6, 6, 6, 4 at S = 1..4. The S=4 dip is real and load-
+/// bearing: crediting 6/swing there would over-plan (RFC-046 ground
+/// rule 3).
+pub fn stack_inserter_belt_hand(stacking: u8) -> f64 {
+    let s = u32::from(stacking.clamp(1, 4));
+    f64::from((6 / s) * s)
+}
+
 /// Map underground-belt entity name to its corresponding surface belt tier.
 pub fn ug_to_surface_tier(ug_name: &str) -> &'static str {
     match ug_name {
@@ -595,6 +630,38 @@ pub fn belt_entity_for_rate(rate: f64, max_tier: Option<&str>) -> &'static str {
             break;
         }
         if rate <= throughput {
+            return name;
+        }
+    }
+    BELT_TIERS[max_idx].0
+}
+
+/// Stack-aware belt tier selection: cheapest tier whose **stacked**
+/// throughput (BS1: `tier throughput × S`) is `>= rate`, with the same
+/// `max_tier` cap semantics as `belt_entity_for_rate`. Compares against
+/// `throughput × S` directly (not `rate / S`) so tier boundaries stay
+/// float-exact. At `stacking = 1` this is bit-identical to
+/// `belt_entity_for_rate` (RFC-046 kill 1).
+pub fn belt_entity_for_rate_stacked(
+    rate: f64,
+    max_tier: Option<&str>,
+    stacking: u8,
+) -> &'static str {
+    let s = f64::from(stacking.clamp(1, 4));
+    let max_idx = if let Some(max) = max_tier {
+        BELT_TIERS
+            .iter()
+            .position(|(name, _)| *name == max)
+            .unwrap_or(BELT_TIERS.len() - 1)
+    } else {
+        BELT_TIERS.len() - 1
+    };
+
+    for (i, &(name, throughput)) in BELT_TIERS.iter().enumerate() {
+        if i > max_idx {
+            break;
+        }
+        if rate <= throughput * s {
             return name;
         }
     }
@@ -947,6 +1014,98 @@ mod tests {
         assert_eq!(lane_capacity("express-transport-belt"), 22.5);
     }
 
+    /// RFC-046 kill 1: every stacked helper at S=1 is bit-identical to its
+    /// unstacked counterpart, across all tiers and a rate sweep.
+    #[test]
+    fn stacked_helpers_identity_at_s1() {
+        for &(belt, _) in BELT_TIERS {
+            assert_eq!(belt_throughput_stacked(belt, 1), belt_throughput(belt));
+            assert_eq!(lane_capacity_stacked(belt, 1), lane_capacity(belt));
+        }
+        for rate in [0.5, 7.5, 15.0, 20.0, 30.0, 44.9, 45.0, 60.0, 200.0] {
+            for max_tier in [None, Some("transport-belt"), Some("fast-transport-belt")] {
+                assert_eq!(
+                    belt_entity_for_rate_stacked(rate, max_tier, 1),
+                    belt_entity_for_rate(rate, max_tier),
+                    "rate={rate} max_tier={max_tier:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn stacked_capacity_values() {
+        // BS1: capacity = tier × S.
+        assert_eq!(belt_throughput_stacked("transport-belt", 4), 60.0);
+        assert_eq!(belt_throughput_stacked("express-transport-belt", 2), 90.0);
+        assert_eq!(lane_capacity_stacked("transport-belt", 4), 30.0);
+        assert_eq!(lane_capacity_stacked("express-transport-belt", 2), 45.0);
+        // Out-of-range stacking clamps to the physical 1..=4.
+        assert_eq!(belt_throughput_stacked("transport-belt", 0), 15.0);
+        assert_eq!(belt_throughput_stacked("transport-belt", 7), 60.0);
+    }
+
+    #[test]
+    fn belt_entity_for_rate_stacked_selection() {
+        // 60/s at S=2: red belt carries exactly 30 × 2 — cheapest wins,
+        // and this is the delivered headline config (EC@60/s on one
+        // stacked red belt).
+        assert_eq!(
+            belt_entity_for_rate_stacked(60.0, None, 2),
+            "fast-transport-belt"
+        );
+        // 61/s at S=2 tips it to express …
+        assert_eq!(
+            belt_entity_for_rate_stacked(61.0, None, 2),
+            "express-transport-belt"
+        );
+        // … and 60/s fits even one yellow belt at S=4.
+        assert_eq!(belt_entity_for_rate_stacked(60.0, None, 4), "transport-belt");
+        // Unstacked 60/s exceeds every tier → falls back to best allowed.
+        assert_eq!(
+            belt_entity_for_rate_stacked(60.0, None, 1),
+            "express-transport-belt"
+        );
+        // max_tier cap still binds: 100/s at S=2 on a yellow cap stays
+        // yellow (insufficient, best-allowed fallback), never escalates.
+        assert_eq!(
+            belt_entity_for_rate_stacked(100.0, Some("transport-belt"), 2),
+            "transport-belt"
+        );
+        // Exact boundary is inclusive: 90.0 == 45 × 2.
+        assert_eq!(
+            belt_entity_for_rate_stacked(90.0, None, 2),
+            "express-transport-belt"
+        );
+    }
+
+    #[test]
+    fn stack_inserter_belt_drop_decomposition() {
+        // BS3: hand 6 rounded down to a multiple of S → 6, 6, 6, 4.
+        assert_eq!(stack_inserter_belt_hand(1), 6.0);
+        assert_eq!(stack_inserter_belt_hand(2), 6.0);
+        assert_eq!(stack_inserter_belt_hand(3), 6.0);
+        assert_eq!(stack_inserter_belt_hand(4), 4.0);
+        assert_eq!(stack_inserter_belt_hand(0), 6.0); // clamps to S=1
+        assert_eq!(stack_inserter_belt_hand(9), 4.0); // clamps to S=4
+
+        // swings × hand: wiki-accurate 14.4/s at S≤3, the real 9.6/s dip
+        // at S=4 (crediting 14.4 there would over-plan).
+        let normal = QualityTier::Normal;
+        assert!((stack_inserter_swings(normal) - 2.4).abs() < 1e-9);
+        assert!(
+            (stack_inserter_swings(normal) * stack_inserter_belt_hand(3) - 14.4).abs() < 1e-9
+        );
+        assert!(
+            (stack_inserter_swings(normal) * stack_inserter_belt_hand(4) - 9.6).abs() < 1e-9
+        );
+        // Quality scales swings only (BS7): legendary ×2.5 → 24/s at S=4.
+        let legendary = QualityTier::Legendary;
+        assert!(
+            (stack_inserter_swings(legendary) * stack_inserter_belt_hand(4) - 24.0).abs() < 1e-9
+        );
+    }
+
     #[test]
     fn dir_roundtrip() {
         for dir in [
@@ -1058,18 +1217,93 @@ pub fn module_effect(name: &str) -> ModuleEffect {
     }
 }
 
-/// Number of module slots for a machine entity.
-pub fn module_slots(entity: &str) -> u32 {
+/// Classify an item-request name as a GAME module: `Some(family)` for
+/// known module prototypes ("speed" / "productivity" / "efficiency" /
+/// "quality"), `Some("unknown")` for module-shaped names outside the
+/// known set (modded tiers — tier-number-stripped `-module` suffix, so
+/// real items like `empty-module-slot` never match), `None` for
+/// non-module requests (fuel, ammo, ...). Pre-2.0 `effectivity-module*`
+/// spellings alias to the efficiency family (the game migrates them on
+/// paste). Shared by the module validators and the blueprint exporter's
+/// insert-plan filter.
+pub fn game_module_family(name: &str) -> Option<&'static str> {
+    match name {
+        "speed-module" | "speed-module-2" | "speed-module-3" => Some("speed"),
+        "productivity-module" | "productivity-module-2" | "productivity-module-3" => {
+            Some("productivity")
+        }
+        "efficiency-module" | "efficiency-module-2" | "efficiency-module-3"
+        | "effectivity-module" | "effectivity-module-2" | "effectivity-module-3" => {
+            Some("efficiency")
+        }
+        "quality-module" | "quality-module-2" | "quality-module-3" => Some("quality"),
+        _ => {
+            let base = match name.rfind('-') {
+                Some(i) if name[i + 1..].chars().all(|c| c.is_ascii_digit()) => &name[..i],
+                _ => name,
+            };
+            if base.ends_with("-module") {
+                Some("unknown")
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// Number of module slots for a KNOWN machine entity; `None` for
+/// entities outside the table (modded machines) — the module-slots
+/// validator must not assert slot counts it doesn't know (a modded
+/// `se-recycling-facility` with 4 modules is not "0 slots, surplus
+/// never fulfilled").
+pub fn module_slots_known(entity: &str) -> Option<u32> {
     match entity {
-        "assembling-machine-1" | "stone-furnace" | "steel-furnace" => 0,
-        "assembling-machine-2" | "electric-furnace" | "centrifuge" | "crusher" | "lab" => 2,
-        "chemical-plant" | "oil-refinery" => 3,
+        "assembling-machine-1" | "stone-furnace" | "steel-furnace" | "burner-mining-drill" => {
+            Some(0)
+        }
+        "assembling-machine-2" | "electric-furnace" | "centrifuge" | "crusher" | "lab"
+        | "pumpjack" => Some(2),
+        "chemical-plant" | "oil-refinery" => Some(3),
         "assembling-machine-3" | "rocket-silo" | "foundry" | "biochamber" | "biolab"
-        | "recycler" => 4,
-        "electromagnetic-plant" => 5,
-        "cryogenic-plant" => 8,
-        "beacon" => 2,
-        _ => 0,
+        | "recycler" => Some(4),
+        "electromagnetic-plant" => Some(5),
+        "cryogenic-plant" => Some(8),
+        "beacon" => Some(2),
+        // Drills + pumpjack (RFC-044 Phase 1): the generator never places
+        // them, but moduled ones are ubiquitous in imported community
+        // blueprints and the module-slots check rates them too.
+        "electric-mining-drill" => Some(3),
+        "big-mining-drill" => Some(4),
+        _ => None,
+    }
+}
+
+/// Number of module slots for a machine entity (0 for unknown entities —
+/// consumers that need to distinguish unknown from known-0 use
+/// [`module_slots_known`]).
+pub fn module_slots(entity: &str) -> u32 {
+    module_slots_known(entity).unwrap_or(0)
+}
+
+/// Factorio `defines.inventory` id for an entity's module slots — the
+/// `in_inventory[].inventory` value in the 2.0 blueprint insert-plan
+/// format. Per entity CLASS, not a single constant: crafting machines /
+/// furnaces / rocket silo = 4, lab = 3, mining drills = 2, beacon = 1
+/// (RFC-044 game-rule model, verified against draftsman InventoryType).
+/// A wrong id fails SILENTLY on paste — modules request into the wrong
+/// inventory or an unfulfillable one — and the parser discards the field
+/// on import, so round-trip tests structurally cannot catch a regression
+/// here; the RFC-044 KC2 in-game paste anchor is the only gate.
+pub fn module_inventory_id(entity: &str) -> u8 {
+    match entity {
+        "beacon" => 1,
+        // Pumpjack is a mining-drill prototype: inventory 2, NOT the
+        // crafting default — caught by the post-merge retro review
+        // (draftsman reference emission); the KC2 anchor's drill covered
+        // class 2 while this per-entity lookup stayed wrong.
+        "electric-mining-drill" | "big-mining-drill" | "burner-mining-drill" | "pumpjack" => 2,
+        "lab" | "biolab" => 3,
+        _ => 4,
     }
 }
 

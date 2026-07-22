@@ -6,7 +6,11 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::bus::inserter_ladder::{reassign_near_far, InserterTier};
 use crate::bus::layout::RowLayout;
-use crate::common::{belt_entity_for_rate, lane_capacity, machine_dims, utilization_for, QualityTier, BELT_TIERS};
+use crate::bus::stacking_ctx::StackingCtx;
+use crate::common::{
+    belt_entity_for_rate, belt_entity_for_rate_stacked, lane_capacity, lane_capacity_stacked,
+    machine_dims, utilization_for, QualityTier, BELT_TIERS,
+};
 use crate::models::{EntityDirection, MachineSpec, PlacedEntity, SolverResult};
 
 /// Best available per-lane capacity across all belt tiers.
@@ -41,6 +45,7 @@ fn effective_in_lane_cap(max_belt_tier: Option<&str>) -> f64 {
 /// row throughput, which is acceptable since the user explicitly chose
 /// that tier as the cap.
 fn row_input_belt(max_belt_tier: Option<&str>) -> &'static str {
+    // stacking-neutral: INFINITY selects the max tier regardless (RFC-046)
     belt_entity_for_rate(f64::INFINITY, max_belt_tier)
 }
 
@@ -157,6 +162,17 @@ impl RowSpan {
 /// lanes (I6), giving an effective input capacity equal to the full belt
 /// throughput. Because `in_lane_cap` is a per-lane figure, the factor of 2
 /// converts it to total throughput: `in_lane_cap * 2.0 == belt_throughput`.
+///
+/// **Deliberately NOT stacking-aware on the output side** (RFC-047 Leg B):
+/// unlike `max_machines_for_belt_both_lanes` (which was made stacking-aware
+/// because its bridge+corner-feed output genuinely fills BOTH lanes and so
+/// legitimately carries full-belt ×S), this variant's output is
+/// **sideloaded onto one lane** (B8/I5). A stack inserter dropping stacks
+/// onto that single lane still concentrates all flow on ONE physical lane,
+/// so crediting it ×S would just relocate the single-lane overload this RFC
+/// exists to prevent. Capping the output at the unstacked per-lane figure is
+/// the conservative-correct choice; the asymmetry with the both-lanes
+/// variant is intentional.
 pub(crate) fn max_machines_for_belt(
     spec: &MachineSpec,
     belt_name: &str,
@@ -202,12 +218,23 @@ pub(crate) fn max_machines_for_belt(
 /// The trunk tap-off runs at the same y as the row's input belt and connects
 /// to its west end (B7 straight feed), so both lanes carry items. Factor of 2
 /// converts per-lane capacity to full belt throughput, matching the output side.
+///
+/// `out_stack` is the output item's effective belt stack size
+/// (`StackingCtx::for_item`): a stack-loaded output belt carries `×S` per
+/// lane, so the per-row machine cap must scale with it (RFC-047 Leg B —
+/// the row-split cap was stacking-blind while the belt-tier choice at the
+/// same call site was already stacking-aware, which forced stacked
+/// producers to fragment into single-machine rows and re-introduced the
+/// mid-trunk sideload the RFC set out to remove). At `S == 1`
+/// (`for_item` returns 1) `lane_capacity_stacked == lane_capacity`, so
+/// this is bit-identical to the pre-RFC behaviour for the default corpus.
 pub(crate) fn max_machines_for_belt_both_lanes(
     spec: &MachineSpec,
     belt_name: &str,
     max_belt_tier: Option<&str>,
+    out_stack: u8,
 ) -> usize {
-    let out_lane_cap = lane_capacity(belt_name);
+    let out_lane_cap = lane_capacity_stacked(belt_name, out_stack);
     let in_lane_cap = effective_in_lane_cap(max_belt_tier);
     let mut max_m: f64 = 999.0;
 
@@ -609,6 +636,7 @@ pub(crate) fn build_one_row(
     quality: QualityTier,
     output_east: bool,
     row_layout: RowLayout,
+    ctx: &StackingCtx,
 ) -> (Vec<PlacedEntity>, RowSpan, i32) {
     use crate::bus::templates;
 
@@ -632,9 +660,24 @@ pub(crate) fn build_one_row(
     };
 
     let output_rate = solid_outputs.first().map(|f| f.rate * count as f64).unwrap_or(0.0);
-    let out_belt = belt_entity_for_rate(
-        output_rate * if lane_split { 1.0 } else { 2.0 },
+    // RFC-047 kill-4 root cause: for lane-split rows the midpoint bridge
+    // divides `count` machines into ⌈n/2⌉/⌊n/2⌋ lane groups, so with an
+    // odd count one lane carries MORE than half the output. Sizing by
+    // `output_rate` alone assumes a perfect 50/50 lane balance and left
+    // zero headroom at exact tier boundaries (walker-caught 15.5/s on a
+    // 15/s stacked-yellow lane, express@60 probe 2026-07-22). Size by the
+    // worst lane instead: `2 × ⌈n/2⌉ × per-machine` — identical to
+    // `output_rate` for even counts, one machine's rate more for odd.
+    let out_effective_rate = if lane_split && count > 0 {
+        let per_machine = output_rate / count as f64;
+        2.0 * per_machine * ((count as f64) / 2.0).ceil()
+    } else {
+        output_rate * 2.0
+    };
+    let out_belt = belt_entity_for_rate_stacked(
+        out_effective_rate,
         max_belt_tier,
+        ctx.for_item(output_item),
     );
 
     // Second solid output (RFC Fulgora D2b): only `solid_outputs[0]` owns
@@ -646,8 +689,13 @@ pub(crate) fn build_one_row(
     // `can_lane_split` already forces `lane_split == false` whenever
     // `solid_outputs.len() >= 2`, so this is always single-lane (×2).
     let secondary_solid_output = solid_outputs.get(1);
-    let secondary_belt_name: Option<&'static str> = secondary_solid_output
-        .map(|f| belt_entity_for_rate(f.rate * count as f64 * 2.0, max_belt_tier));
+    // Secondary solid outputs are always family-exempt (RFC-046: D2b index
+    // >=1 solids are a fixed long-handed extraction, cannot stack), so this
+    // resolves to ×1 regardless of `ctx.stacking()` — converted for
+    // uniformity with every other belt-tier site.
+    let secondary_belt_name: Option<&'static str> = secondary_solid_output.map(|f| {
+        belt_entity_for_rate_stacked(f.rate * count as f64 * 2.0, max_belt_tier, ctx.for_item(&f.item))
+    });
 
     let mut fluid_port_ys: Vec<i32> = vec![];
     let mut fluid_port_pipes: Vec<(String, i32, i32)> = vec![];
@@ -770,6 +818,7 @@ pub(crate) fn build_one_row(
                 output_rate_pm,
                 max_inserter_tier,
                 quality,
+                ctx.for_item(output_item),
             );
             let machine_y = y_cursor + 5;
             let output_y = machine_y + mh as i32;
@@ -831,6 +880,7 @@ pub(crate) fn build_one_row(
                 output_rate_pm,
                 max_inserter_tier,
                 quality,
+                ctx.for_item(output_item),
             );
             fluid_port_ys = port_pipes.first().map(|&(_, _, py)| vec![py]).unwrap_or_default();
             fluid_port_pipes = port_pipes;
@@ -895,6 +945,7 @@ pub(crate) fn build_one_row(
                 secondary_rate,
                 max_inserter_tier,
                 quality,
+                ctx.for_item(output_item),
             );
             fluid_output_port_pipes = out_port_pipes;
             let input_ys = vec![y_cursor];
@@ -943,6 +994,7 @@ pub(crate) fn build_one_row(
                 output_rate_pm,
                 max_inserter_tier,
                 quality,
+                ctx.for_item(output_item),
             );
             let input_ys: Vec<i32> = solid_inputs
                 .iter()
@@ -994,6 +1046,7 @@ pub(crate) fn build_one_row(
                 output_rate_pm,
                 max_inserter_tier,
                 quality,
+                ctx.for_item(output_item),
             );
             // input_belt_y[i] is where lane planner taps off lane.item
             // matching solid_inputs[i]. Layout (msz=3): belt 1 at y+0,
@@ -1043,6 +1096,7 @@ pub(crate) fn build_one_row(
                 output_rate_pm,
                 max_inserter_tier,
                 quality,
+                ctx.for_item(output_item),
             );
             fluid_port_ys = in_port_pipes.iter().map(|&(_, _, py)| py).collect();
             fluid_port_ys.sort_unstable();
@@ -1088,7 +1142,7 @@ pub(crate) fn build_one_row(
                     count
                 };
                 let k_trunks = count.div_ceil(block_size).max(1);
-                let in_belt1 = belt_entity_for_rate(belt_cap, max_belt_tier);
+                let in_belt1 = belt_entity_for_rate_stacked(belt_cap, max_belt_tier, ctx.for_item(item0));
                 let in_belt2 = row_input_belt(max_belt_tier);
                 crate::trace::emit(crate::trace::TraceEvent::RowLayoutSelected {
                     recipe: spec.recipe.clone(),
@@ -1130,6 +1184,7 @@ pub(crate) fn build_one_row(
                     output_rate_pm,
                     max_inserter_tier,
                     quality,
+                    ctx.for_item(output_item),
                 );
                 // Map each spec.solid_input (natural order) to its tap-off
                 // y position. High-demand (item0) sits on trunk 0 at y+0;
@@ -1185,6 +1240,7 @@ pub(crate) fn build_one_row(
                     output_rate_pm,
                     max_inserter_tier,
                     quality,
+                    ctx.for_item(output_item),
                 );
                 fluid_output_port_pipes = out_port_pipes;
                 // Positional (far=y_cursor, near=y_cursor+1) mapped back to
@@ -1255,6 +1311,7 @@ pub(crate) fn build_one_row(
                 max_belt_tier,
                 max_inserter_tier,
                 quality,
+                ctx,
             );
             fluid_port_ys = fluid_input_port_pipes.first().map(|&(_, _, py)| vec![py]).unwrap_or_default();
             fluid_port_pipes = fluid_input_port_pipes;
@@ -1299,6 +1356,7 @@ pub(crate) fn build_one_row(
                 max_belt_tier,
                 max_inserter_tier,
                 quality,
+                ctx,
             );
             // Mirrors `templates::voider_row`'s row-offset constants:
             // near/tap belt at dy=6 (bus tap-off lands here), far/recirc
@@ -1330,6 +1388,7 @@ pub(crate) fn build_one_row(
                 max_belt_tier,
                 max_inserter_tier,
                 quality,
+                ctx,
             );
             sorted_output_belts = sorted_belts;
             // Scrap input belt at dy=0 (the bus tap lands here). The
@@ -1495,6 +1554,7 @@ pub fn place_rows(
     final_output_items: Option<&FxHashSet<String>>,
     extra_gap_after_row: Option<&FxHashMap<usize, i32>>,
     row_layout: RowLayout,
+    ctx: &StackingCtx,
 ) -> (Vec<PlacedEntity>, Vec<RowSpan>, i32, i32) {
     let mut entities: Vec<PlacedEntity> = Vec::new();
     let mut row_spans: Vec<RowSpan> = Vec::new();
@@ -1525,12 +1585,9 @@ pub fn place_rows(
         };
 
         let solid_inputs_count = spec.inputs.iter().filter(|f| !f.is_fluid).count();
-        let first_solid_output_rate = spec
-            .outputs
-            .iter()
-            .find(|f| !f.is_fluid)
-            .map(|f| f.rate)
-            .unwrap_or(0.0);
+        let first_solid_output = spec.outputs.iter().find(|f| !f.is_fluid);
+        let first_solid_output_rate = first_solid_output.map(|f| f.rate).unwrap_or(0.0);
+        let first_solid_output_item = first_solid_output.map(|f| f.item.as_str()).unwrap_or("");
         let output_rate = first_solid_output_rate * total_count as f64;
         let has_fluid = spec.inputs.iter().any(|f| f.is_fluid);
 
@@ -1560,17 +1617,18 @@ pub fn place_rows(
         let _ = solid_inputs_count;
         let is_hs_dual = matches!(row_layout, RowLayout::HorizontalStack)
             && matches!(kind, RowKind::DualInput);
+        let out_stack = ctx.for_item(first_solid_output_item);
         let max_per_row = if single_lane {
-            let ob = belt_entity_for_rate(output_rate * 2.0, max_belt_tier);
+            let ob = belt_entity_for_rate_stacked(output_rate * 2.0, max_belt_tier, out_stack);
             max_machines_for_belt(spec, ob, max_belt_tier)
         } else if is_hs_dual {
             // HS feeds input₀ via K stacked trunks, so only output and
             // input₁ constrain machines per row.
-            let ob = belt_entity_for_rate(output_rate, max_belt_tier);
+            let ob = belt_entity_for_rate_stacked(output_rate, max_belt_tier, out_stack);
             max_machines_for_belt_horizontal_stack(spec, ob, max_belt_tier)
         } else {
-            let ob = belt_entity_for_rate(output_rate, max_belt_tier);
-            max_machines_for_belt_both_lanes(spec, ob, max_belt_tier)
+            let ob = belt_entity_for_rate_stacked(output_rate, max_belt_tier, out_stack);
+            max_machines_for_belt_both_lanes(spec, ob, max_belt_tier, out_stack)
         };
 
         let is_final = spec
@@ -1607,6 +1665,7 @@ pub fn place_rows(
                 quality,
                 is_final,
                 row_layout,
+                ctx,
             );
             let row_idx = row_spans.len();
             max_width = max_width.max(width);
@@ -1644,6 +1703,7 @@ pub fn place_rows_from_result(
     final_output_items: Option<&FxHashSet<String>>,
     extra_gap_after_row: Option<&FxHashMap<usize, i32>>,
     row_layout: RowLayout,
+    ctx: &StackingCtx,
 ) -> (Vec<PlacedEntity>, Vec<RowSpan>, i32, i32) {
     place_rows(
         &result.machines,
@@ -1656,6 +1716,7 @@ pub fn place_rows_from_result(
         final_output_items,
         extra_gap_after_row,
         row_layout,
+        ctx,
     )
 }
 
@@ -1668,7 +1729,7 @@ mod tests {
         MachineSpec {
             entity: "assembling-machine-2".to_string(),
             recipe: "iron-plate".to_string(),
-            self_loop: vec![], voider: false,
+            self_loop: vec![], voider: false, game_modules: Vec::new(),
             count: 1.0,
             inputs: vec![ItemFlow {
                 item: "iron-ore".to_string(),
@@ -1689,7 +1750,7 @@ mod tests {
         MachineSpec {
             entity: "assembling-machine-2".to_string(),
             recipe: "iron-gear-wheel".to_string(),
-            self_loop: vec![], voider: false,
+            self_loop: vec![], voider: false, game_modules: Vec::new(),
             count: 1.0,
             inputs: vec![ItemFlow {
                 item: "iron-plate".to_string(),
@@ -1715,7 +1776,7 @@ mod tests {
                 MachineSpec {
                     entity: "assembling-machine-2".to_string(),
                     recipe: "electronic-circuit".to_string(),
-                    self_loop: vec![], voider: false,
+                    self_loop: vec![], voider: false, game_modules: Vec::new(),
                     count: 3.0,
                     inputs: vec![
                         ItemFlow {
@@ -1741,7 +1802,7 @@ mod tests {
                 MachineSpec {
                     entity: "assembling-machine-2".to_string(),
                     recipe: "copper-cable".to_string(),
-                    self_loop: vec![], voider: false,
+                    self_loop: vec![], voider: false, game_modules: Vec::new(),
                     count: 3.0,
                     inputs: vec![ItemFlow {
                         item: "copper-plate".to_string(),
@@ -1759,7 +1820,7 @@ mod tests {
                 MachineSpec {
                     entity: "electric-furnace".to_string(),
                     recipe: "iron-plate".to_string(),
-                    self_loop: vec![], voider: false,
+                    self_loop: vec![], voider: false, game_modules: Vec::new(),
                     count: 1.0,
                     inputs: vec![ItemFlow {
                         item: "iron-ore".to_string(),
@@ -1777,7 +1838,7 @@ mod tests {
                 MachineSpec {
                     entity: "electric-furnace".to_string(),
                     recipe: "copper-plate".to_string(),
-                    self_loop: vec![], voider: false,
+                    self_loop: vec![], voider: false, game_modules: Vec::new(),
                     count: 2.0,
                     inputs: vec![ItemFlow {
                         item: "copper-ore".to_string(),
@@ -1837,7 +1898,7 @@ mod tests {
         // per_lane = floor(7.5 / 1.0) = 7, both lanes = 14
         let spec = iron_plate_spec();
         assert_eq!(
-            max_machines_for_belt_both_lanes(&spec, "transport-belt", None),
+            max_machines_for_belt_both_lanes(&spec, "transport-belt", None, 1),
             14
         );
     }
@@ -1848,7 +1909,7 @@ mod tests {
         let spec = MachineSpec {
             entity: "assembling-machine-2".to_string(),
             recipe: "test".to_string(),
-            self_loop: vec![], voider: false,
+            self_loop: vec![], voider: false, game_modules: Vec::new(),
             count: 1.0,
             inputs: vec![],
             outputs: vec![ItemFlow {
@@ -1882,7 +1943,7 @@ mod tests {
         // Output is the bottleneck → 30
         let spec = iron_plate_spec();
         assert_eq!(
-            max_machines_for_belt_both_lanes(&spec, "fast-transport-belt", None),
+            max_machines_for_belt_both_lanes(&spec, "fast-transport-belt", None, 1),
             30
         );
     }
@@ -1905,7 +1966,7 @@ mod tests {
         let spec_a = MachineSpec {
             entity: "assembling-machine-2".to_string(),
             recipe: "recipe-a".to_string(),
-            self_loop: vec![], voider: false,
+            self_loop: vec![], voider: false, game_modules: Vec::new(),
             count: 1.0,
             inputs: vec![],
             outputs: vec![ItemFlow {
@@ -1918,7 +1979,7 @@ mod tests {
         let spec_b = MachineSpec {
             entity: "assembling-machine-2".to_string(),
             recipe: "recipe-b".to_string(),
-            self_loop: vec![], voider: false,
+            self_loop: vec![], voider: false, game_modules: Vec::new(),
             count: 1.0,
             inputs: vec![],
             outputs: vec![ItemFlow {
@@ -1943,7 +2004,7 @@ mod tests {
     fn place_rows_single_recipe_no_split() {
         let machines = vec![iron_plate_spec()];
         let dep_order = vec!["iron-plate".to_string()];
-        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default());
+        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default(), &StackingCtx::unstacked());
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].machine_count, 1);
         assert_eq!(spans[0].spec.recipe, "iron-plate");
@@ -1953,7 +2014,7 @@ mod tests {
     fn place_rows_two_recipes_ordered() {
         let machines = vec![iron_gear_spec(), iron_plate_spec()];
         let dep_order = vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()];
-        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default());
+        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default(), &StackingCtx::unstacked());
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0].spec.recipe, "iron-plate");
         assert_eq!(spans[1].spec.recipe, "iron-gear-wheel");
@@ -1964,7 +2025,7 @@ mod tests {
         // Second recipe starts at y_end_of_first + 2 (gap)
         let machines = vec![iron_plate_spec(), iron_gear_spec()];
         let dep_order = vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()];
-        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default());
+        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default(), &StackingCtx::unstacked());
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[1].y_start, spans[0].y_end + 2);
     }
@@ -1973,7 +2034,7 @@ mod tests {
     fn place_rows_y_offset() {
         let machines = vec![iron_plate_spec()];
         let dep_order = vec!["iron-plate".to_string()];
-        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 5, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default());
+        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 5, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default(), &StackingCtx::unstacked());
         assert_eq!(spans[0].y_start, 5);
     }
 
@@ -1994,6 +2055,7 @@ mod tests {
             None,
             None,
             RowLayout::default(),
+            &StackingCtx::unstacked(),
         );
 
         // 4 distinct recipes → 4 rows (no splitting for these small counts)
@@ -2029,7 +2091,7 @@ mod tests {
         let spec = MachineSpec {
             entity: "assembling-machine-2".to_string(),
             recipe: "iron-plate".to_string(),
-            self_loop: vec![], voider: false,
+            self_loop: vec![], voider: false, game_modules: Vec::new(),
             count: 20.0,
             inputs: vec![ItemFlow {
                 item: "iron-ore".to_string(),
@@ -2056,6 +2118,7 @@ mod tests {
             None,
             None,
             RowLayout::default(),
+            &StackingCtx::unstacked(),
         );
         // 20 machines, max_per_row=14 → ceil(20/14) = 2 rows
         assert_eq!(spans.len(), 2, "Expected 2 rows due to belt lane capacity");
@@ -2074,7 +2137,7 @@ mod tests {
         let spec = MachineSpec {
             entity: "assembling-machine-2".to_string(),
             recipe: "iron-gear-wheel".to_string(),
-            self_loop: vec![], voider: false,
+            self_loop: vec![], voider: false, game_modules: Vec::new(),
             count: 16.0, // Forces a 2-row split with yellow belt
             inputs: vec![ItemFlow {
                 item: "iron-plate".to_string(),
@@ -2093,7 +2156,7 @@ mod tests {
         let plate_spec = MachineSpec {
             entity: "electric-furnace".to_string(),
             recipe: "iron-plate".to_string(),
-            self_loop: vec![], voider: false,
+            self_loop: vec![], voider: false, game_modules: Vec::new(),
             count: 4.0,
             inputs: vec![ItemFlow {
                 item: "iron-ore".to_string(),
@@ -2120,6 +2183,7 @@ mod tests {
             None,
             None,
             RowLayout::default(),
+            &StackingCtx::unstacked(),
         );
 
         let gear_rows: Vec<_> = spans
@@ -2139,7 +2203,7 @@ mod tests {
         let machines = vec![iron_plate_spec(), iron_gear_spec()];
         let dep_order = vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()];
         let (_, spans, _, total_height) =
-            place_rows(&machines, &dep_order, 5, 0, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default());
+            place_rows(&machines, &dep_order, 5, 0, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default(), &StackingCtx::unstacked());
 
         // Every span should have y_end > y_start
         for span in &spans {
@@ -2167,7 +2231,7 @@ mod tests {
         let dep_order = vec!["iron-plate".to_string()];
         let bus_width = 10;
         let (_, spans, max_width, _) =
-            place_rows(&machines, &dep_order, bus_width, 0, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default());
+            place_rows(&machines, &dep_order, bus_width, 0, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default(), &StackingCtx::unstacked());
 
         assert!(
             spans[0].row_width >= bus_width,
@@ -2194,8 +2258,9 @@ mod tests {
             None,
             Some(&extra_gaps),
             RowLayout::default(),
+            &StackingCtx::unstacked(),
         );
-        let (_, spans_no_gap, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default());
+        let (_, spans_no_gap, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default(), &StackingCtx::unstacked());
 
         // Second row should start 5 tiles later with gap
         assert_eq!(
@@ -2216,7 +2281,7 @@ mod tests {
         let spec = MachineSpec {
             entity: "assembling-machine-2".to_string(),
             recipe: "electronic-circuit".to_string(),
-            self_loop: vec![], voider: false,
+            self_loop: vec![], voider: false, game_modules: Vec::new(),
             count: 1.0,
             inputs: vec![
                 ItemFlow {
@@ -2247,7 +2312,7 @@ mod tests {
         let spec = MachineSpec {
             entity: "chemical-plant".to_string(),
             recipe: "plastic-bar".to_string(),
-            self_loop: vec![], voider: false,
+            self_loop: vec![], voider: false, game_modules: Vec::new(),
             count: 1.0,
             inputs: vec![
                 ItemFlow {
@@ -2278,7 +2343,7 @@ mod tests {
         let spec = MachineSpec {
             entity: "oil-refinery".to_string(),
             recipe: "basic-oil-processing".to_string(),
-            self_loop: vec![], voider: false,
+            self_loop: vec![], voider: false, game_modules: Vec::new(),
             count: 1.0,
             inputs: vec![ItemFlow {
                 item: "crude-oil".to_string(),
@@ -2301,7 +2366,7 @@ mod tests {
         let spec = MachineSpec {
             entity: "chemical-plant".to_string(),
             recipe: "heavy-oil-cracking".to_string(),
-            self_loop: vec![], voider: false,
+            self_loop: vec![], voider: false, game_modules: Vec::new(),
             count: 1.0,
             inputs: vec![
                 ItemFlow { item: "water".to_string(), rate: 30.0, is_fluid: true, module_id: 0 },
@@ -2322,7 +2387,7 @@ mod tests {
         let spec = MachineSpec {
             entity: "chemical-plant".to_string(),
             recipe: "sulfur".to_string(),
-            self_loop: vec![], voider: false,
+            self_loop: vec![], voider: false, game_modules: Vec::new(),
             count: 1.0,
             inputs: vec![
                 ItemFlow { item: "water".to_string(), rate: 30.0, is_fluid: true, module_id: 0 },
@@ -2344,7 +2409,7 @@ mod tests {
         let spec = MachineSpec {
             entity: "foundry".to_string(),
             recipe: "molten-iron".to_string(),
-            self_loop: vec![], voider: false,
+            self_loop: vec![], voider: false, game_modules: Vec::new(),
             count: 1.0,
             inputs: vec![ItemFlow {
                 item: "iron-ore".to_string(),
@@ -2368,7 +2433,7 @@ mod tests {
         let spec = MachineSpec {
             entity: "foundry".to_string(),
             recipe: "iron-plate".to_string(),
-            self_loop: vec![], voider: false,
+            self_loop: vec![], voider: false, game_modules: Vec::new(),
             count: 1.0,
             inputs: vec![ItemFlow {
                 item: "iron-ore".to_string(),
@@ -2391,7 +2456,7 @@ mod tests {
         let spec = MachineSpec {
             entity: "assembling-machine-2".to_string(),
             recipe: "electronic-circuit".to_string(),
-            self_loop: vec![], voider: false,
+            self_loop: vec![], voider: false, game_modules: Vec::new(),
             count: 3.0,
             inputs: vec![
                 ItemFlow {
@@ -2426,7 +2491,7 @@ mod tests {
         let spec = MachineSpec {
             entity: "chemical-plant".to_string(),
             recipe: "plastic-bar".to_string(),
-            self_loop: vec![], voider: false,
+            self_loop: vec![], voider: false, game_modules: Vec::new(),
             count: 3.0,
             inputs: vec![
                 ItemFlow {
@@ -2462,7 +2527,7 @@ mod tests {
         let spec = MachineSpec {
             entity: "assembling-machine-2".to_string(),
             recipe: "example".to_string(),
-            self_loop: vec![], voider: false,
+            self_loop: vec![], voider: false, game_modules: Vec::new(),
             count: 3.0,
             inputs: vec![
                 ItemFlow { item: "widget".to_string(), rate: 1.0, is_fluid: false, module_id: 0 },
@@ -2484,7 +2549,7 @@ mod tests {
         let cable = MachineSpec {
             entity: "assembling-machine-2".to_string(),
             recipe: "copper-cable".to_string(),
-            self_loop: vec![], voider: false,
+            self_loop: vec![], voider: false, game_modules: Vec::new(),
             count: 4.0,
             inputs: vec![ItemFlow { item: "copper-plate".to_string(), rate: 1.0, is_fluid: false, module_id: 0 }],
             outputs: vec![ItemFlow { item: "copper-cable".to_string(), rate: 2.0, is_fluid: false, module_id: 0 }],
@@ -2492,7 +2557,7 @@ mod tests {
         let ec_a = MachineSpec {
             entity: "assembling-machine-2".to_string(),
             recipe: "electronic-circuit".to_string(),
-            self_loop: vec![], voider: false,
+            self_loop: vec![], voider: false, game_modules: Vec::new(),
             count: 5.0,
             inputs: vec![ItemFlow { item: "copper-cable".to_string(), rate: 3.0, is_fluid: false, module_id: 0 }],
             outputs: vec![ItemFlow { item: "electronic-circuit".to_string(), rate: 1.0, is_fluid: false, module_id: 0 }],
@@ -2500,7 +2565,7 @@ mod tests {
         let ec_b = MachineSpec {
             entity: "assembling-machine-2".to_string(),
             recipe: "electronic-circuit".to_string(),
-            self_loop: vec![], voider: false,
+            self_loop: vec![], voider: false, game_modules: Vec::new(),
             count: 7.0,
             inputs: vec![ItemFlow { item: "copper-cable".to_string(), rate: 3.0, is_fluid: false, module_id: 1 }],
             outputs: vec![ItemFlow { item: "electronic-circuit".to_string(), rate: 1.0, is_fluid: false, module_id: 0 }],

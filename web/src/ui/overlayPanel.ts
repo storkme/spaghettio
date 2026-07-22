@@ -8,6 +8,7 @@ export interface OverlayPanelControls {
   colorCb: HTMLInputElement;
   heatmapCb: HTMLInputElement;
   powerWiresCb: HTMLInputElement;
+  moduleSlotsCb: HTMLInputElement;
   regionsCb: HTMLInputElement;
   soloRegionsCb: HTMLInputElement;
   ghostTilesCb: HTMLInputElement;
@@ -41,6 +42,10 @@ export function createOverlayPanel(container: HTMLElement): OverlayPanelControls
   const heatmapCb = makeToggle(panel, "Starvation heatmap", state.heatmap);
   // User-facing (not under Debug): draw the pole copper-wire network.
   const powerWiresCb = makeToggle(panel, "Power wires", state.powerWires);
+  // User-facing (not under Debug): draw module slots on machines
+  // (RFC-044 Phase 2). Default on — quiet on generated layouts since
+  // nothing stamps modules yet; imported blueprints are today's data.
+  const moduleSlotsCb = makeToggle(panel, "Module slots", state.moduleSlots);
 
   const subPanel = document.createElement("div");
   subPanel.className = "overlay-sub-panel";
@@ -82,6 +87,9 @@ export function createOverlayPanel(container: HTMLElement): OverlayPanelControls
   powerWiresCb.addEventListener("change", () => {
     debugState.set({ powerWires: powerWiresCb.checked });
   });
+  moduleSlotsCb.addEventListener("change", () => {
+    debugState.set({ moduleSlots: moduleSlotsCb.checked });
+  });
 
   return {
     setDebugEnabled(on: boolean): void {
@@ -93,6 +101,7 @@ export function createOverlayPanel(container: HTMLElement): OverlayPanelControls
     colorCb,
     heatmapCb,
     powerWiresCb,
+    moduleSlotsCb,
     regionsCb,
     soloRegionsCb,
     ghostTilesCb,

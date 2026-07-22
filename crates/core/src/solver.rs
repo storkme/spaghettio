@@ -81,8 +81,9 @@ impl SolveState {
 
 /// Compute machines needed to produce `target_item` at `target_rate` items/sec.
 ///
-/// Recursively resolves intermediate recipes until hitting items in
-/// `available_inputs` (which the caller must supply externally).
+/// Solves via the net-flow LP with free cost-based recipe selection (the
+/// default since Phase 3, 2026-07 — see `docs/rfc-solver-net-flow.md`);
+/// items in `available_inputs` are treated as externally supplied.
 pub fn solve(
     target_item: &str,
     target_rate: f64,
@@ -121,8 +122,9 @@ pub fn solve_with_palette(
 /// Like [`solve`] but skips recipes listed in `excluded_recipes`.
 ///
 /// Useful when several recipes produce the same item and the caller wants to
-/// steer the solver away from some of them (e.g. exclude `coal-liquefaction`
-/// to avoid pulling in the whole oil chain for `plastic-bar`).
+/// steer the solver away from some of them (e.g. exclude
+/// `basic-oil-processing` to force the advanced-oil-processing + cracking
+/// chain for `plastic-bar`).
 pub fn solve_with_exclusions(
     target_item: &str,
     target_rate: f64,
@@ -218,9 +220,10 @@ pub fn solve_compat_with_palette_and_exclusions(
 /// candidate columns and the frozen cost table picks the mix (raw-input
 /// efficiency first — e.g. advanced-oil-processing + cracking replaces
 /// basic-oil-processing wherever byproducts can be credited, typically
-/// with zero surplus). Solver-level behavior is fully verified (parity
-/// harness); the LAYOUT of dense oil complexes still has a known fluid-
-/// lane stagger gap, so this is opt-in until that closes.
+/// with zero surplus). This is the default path every public entry point
+/// routes through; the compat (tree-walk-selected) mode is the opt-in A/B
+/// path. Solver-level behavior is fully verified (parity harness); the
+/// LAYOUT of dense oil complexes still has a known fluid-lane stagger gap.
 pub fn solve_free_with_palette_and_exclusions(
     target_item: &str,
     target_rate: f64,
@@ -255,6 +258,36 @@ pub fn solve_with_palette_exclusions_and_quality(
     excluded_recipes: &FxHashSet<String>,
     quality: crate::common::QualityTier,
 ) -> Result<SolverResult, SolverError> {
+    solve_with_palette_exclusions_quality_and_modules(
+        target_item,
+        target_rate,
+        available_inputs,
+        palette,
+        default_machine,
+        excluded_recipes,
+        quality,
+        crate::module_policy::ModulePolicy::default(),
+    )
+}
+
+/// Like [`solve_with_palette_exclusions_and_quality`] with a global
+/// module policy (RFC-044 Phase 3): eligible machines are planned with
+/// full loadouts — speed/productivity factors flow through machine
+/// counts and rates, and the loadout rides `MachineSpec::game_modules`
+/// to the layout stamp pass. `ModulePolicy::default()` (kind `None`) is
+/// bit-identical to the plain entry points (KC1 — the no-op path
+/// multiplies by exactly 1.0 and rewrites nothing).
+#[allow(clippy::too_many_arguments)]
+pub fn solve_with_palette_exclusions_quality_and_modules(
+    target_item: &str,
+    target_rate: f64,
+    available_inputs: &FxHashSet<String>,
+    palette: &MachinePalette,
+    default_machine: &str,
+    excluded_recipes: &FxHashSet<String>,
+    quality: crate::common::QualityTier,
+    module_policy: crate::module_policy::ModulePolicy,
+) -> Result<SolverResult, SolverError> {
     crate::netflow::solve_netflow_with_options(
         target_item,
         target_rate,
@@ -266,6 +299,7 @@ pub fn solve_with_palette_exclusions_and_quality(
         &crate::netflow::CostTable::default(),
         &crate::netflow::NetflowOptions {
             quality,
+            module_policy,
             ..Default::default()
         },
     )
@@ -413,7 +447,7 @@ fn resolve(
         state.machines.push(MachineSpec {
             entity,
             recipe: recipe.name.clone(),
-            self_loop: vec![], voider: false,
+            self_loop: vec![], voider: false, game_modules: Vec::new(),
             count,
             inputs: input_flows,
             outputs: output_flows,

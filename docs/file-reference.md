@@ -13,6 +13,7 @@ Full reference table. The most-visited files are summarised in `CLAUDE.md`.
 | `astar.rs` | `ghost_astar` — turn-penalty + per-axis cost A* used by the ghost router |
 | `solver.rs` | Recipe resolution front-end producing `SolverResult`; legacy tree walk retained as the recipe-selection oracle |
 | `netflow.rs` | Net-flow LP solver (the default; byproduct crediting, typed cycle refusals). See `docs/rfc-solver-net-flow.md` |
+| `module_policy.rs` | Global module policy → per-machine loadouts and effect factors (RFC-044) |
 | `recipe_db.rs` | Recipe DB — loads `crates/core/data/recipes.json` via `include_str!` |
 | `blueprint.rs` | Blueprint exporter (JSON + zlib + base64 envelope) |
 | `blueprint_parser.rs` | Blueprint string → `LayoutResult` (reverse of `blueprint.rs`) |
@@ -41,6 +42,7 @@ Full reference table. The most-visited files are summarised in `CLAUDE.md`.
 | `junction_solver.rs` | Region-growth outer loop + `JunctionStrategy` trait |
 | `junction_sat_strategy.rs` | SAT-backed `JunctionStrategy` fallback |
 | `tapoff_search.rs` | Brute-force search for optimal tap-off tile patterns (test/generation only) |
+| `stacking_ctx.rs` | RFC-046 belt-stacking context: stack size + statically derived stacking-exempt item families |
 
 ### Validation (`crates/core/src/validate/`)
 
@@ -52,6 +54,7 @@ Full reference table. The most-visited files are summarised in `CLAUDE.md`.
 | `fluids.rs` | Pipe isolation and fluid port connectivity |
 | `power.rs` | Power coverage and pole network connectivity |
 | `underground.rs` | Underground belt pair and sideloading checks |
+| `modules.rs` | Module loadout checks: slot counts + (machine, recipe) eligibility (RFC-044) |
 
 ## Bindings and CLIs
 

@@ -61,6 +61,14 @@ pub struct MachineSpec {
     /// classification in `bus::placer::row_kind`.
     #[serde(default)]
     pub voider: bool,
+    /// GAME modules planned for each machine of this spec (RFC-044
+    /// Phase 3; empty when the module policy is `None` or the
+    /// (machine, recipe) pair is ineligible). The layout's stamping
+    /// post-pass copies this into `PlacedEntity.items`. Named
+    /// `game_modules` to keep clear of the partition-module vocabulary
+    /// (`ItemFlow::module_id`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub game_modules: Vec<ModuleItem>,
 }
 
 /// One self-referencing item of a self-loop recipe: raw per-machine
@@ -120,10 +128,15 @@ pub enum EntityDirection {
 /// A module/item inserted into an entity (e.g. speed-module-3 × 2 in a beacon).
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModuleItem {
     pub item: String,
     pub count: u32,
+    /// Quality of the module itself (`None` = normal, omitted from
+    /// export). Parsed from the 2.0 insert-plan `id.quality` field;
+    /// scales the module's beneficial effects (RFC-044 game-rule model).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality: Option<crate::common::QualityTier>,
 }
 
 /// A single entity placed in the blueprint grid.
@@ -348,14 +361,46 @@ pub struct LayoutResult {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub effective_rows: Vec<EffectiveRow>,
     /// Pole-to-pole copper wire graph as `(a, b)` index pairs into `entities`
-    /// (`a < b`), from [`crate::power_wires::compute_pole_wires`]. Tsify emits
-    /// `power_wires?: [number, number][]` for the web power-connectivity
-    /// overlay. This is the SAME graph `blueprint::export` encodes in the
-    /// blueprint-level `wires` array, so the overlay shows exactly what pastes.
-    /// Recomputed after any post-layout entity-reordering splice (see
-    /// `wasm-bindings::improve_region_streaming`). Empty when <2 poles.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub power_wires: Vec<(u32, u32)>,
+    /// (`a < b`), from [`crate::power_wires::compute_pole_wires`]. RFC-045
+    /// stored-graph contract: `Some` is AUTHORITATIVE — `blueprint::export`
+    /// and the connectivity validator consume it verbatim via
+    /// [`crate::power_wires::wires_for`] (so the overlay, the artifact, and
+    /// the validated graph are the same object); `None` means "never
+    /// computed" (hand-built results, pre-power-3c snapshots) and consumers
+    /// fall back to a dense derivation. Recomputed after any post-layout
+    /// entity-reordering splice (see `wasm-bindings::improve_region_streaming`)
+    /// in [`LayoutResult::wire_mode`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub power_wires: Option<Vec<(u32, u32)>>,
+    /// How this layout's `power_wires` were generated (RFC-045): the layout
+    /// records its own wiring policy so post-layout recomputes honor it —
+    /// without this, an improve-region pass on a `Tree` layout would
+    /// silently re-densify it. `Dense`-default, skipped in serde when
+    /// default (old snapshots deserialize to `Dense`).
+    #[serde(default, skip_serializing_if = "wire_mode_is_default")]
+    pub wire_mode: crate::power_wires::WireMode,
+    /// Belt stack size this layout was planned at (RFC-046, BS1). The
+    /// layout records its own value so validators and post-layout
+    /// recomputes rate belts at the capacity the planner assumed.
+    /// **`0` and `1` both mean unstacked**: the derived `Default` (and
+    /// hand-built/parsed results, which have no research context) yield
+    /// `0`, and every consumer goes through the `common::*_stacked`
+    /// helpers, which clamp to 1..=4. Serde skips ≤1 and defaults
+    /// missing to 1, so pre-RFC snapshots deserialize unstacked.
+    #[serde(default = "stacking_default", skip_serializing_if = "stacking_is_default")]
+    pub stacking: u8,
+}
+
+fn wire_mode_is_default(m: &crate::power_wires::WireMode) -> bool {
+    *m == crate::power_wires::WireMode::default()
+}
+
+fn stacking_default() -> u8 {
+    1
+}
+
+fn stacking_is_default(s: &u8) -> bool {
+    *s <= 1
 }
 
 /// One solid surplus stream consumed by a layout-synthesized voider

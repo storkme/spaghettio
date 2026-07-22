@@ -62,7 +62,23 @@ For full build commands (WASM rebuild, release builds), see [`docs/build-systems
   [`.github/workflows/claude-code-review.yml`](.github/workflows/claude-code-review.yml)
   runs a Claude code review on every PR (opened/synchronized/reopened), and
   `clear-agent-reviewed.yml` drops the `agent-reviewed` label when new
-  commits land so the new SHA gets re-reviewed. Local adversarial review (an
+  commits land so the new SHA gets re-reviewed. **A green `claude-review`
+  check is NOT evidence a review happened — confirm the bot actually
+  posted.** From #305 through #330 the bot posted *nothing*: three
+  stacked, each-sufficient causes — template read-only permissions
+  (fixed #327), the plugin's `--comment` flag never passed (its own
+  contract is "do not post" without it; fixed #329), and no
+  harness-level tool allowlist (`claude_args --allowedTools`), which
+  denied every posting/diff call (fixed #331). Validated 2026-07-21 via
+  a planted-bug canary (#330): the bot's first-ever comment correctly
+  flagged the bug inline with a committable fix. All substantive PR
+  review feedback before then was session-side. Expected behavior now:
+  inline comments on findings, or a "no issues" summary comment on
+  clean substantive PRs — a green check with *neither* on a
+  non-trivial PR means it's broken again. Known benign no-comment
+  cases: PRs that modify the workflow file itself (the action's
+  anti-hijack self-skip) and changes its triviality gate deems
+  obviously correct. Local adversarial review (an
   independent agent that re-runs gates and probes the claims) is the
   fallback when a PR isn't in play — and it remains **required in addition
   to the bot** for layout-engine or validator-semantics changes: the bot
@@ -105,10 +121,10 @@ For full build commands (WASM rebuild, release builds), see [`docs/build-systems
 
 ### Pipeline stages (all Rust)
 
-1. **Solver** (`crates/core/src/solver.rs` + `crates/core/src/netflow.rs`) — Resolves recipes, computes machine counts and flow rates. Loads `crates/core/data/recipes.json` via `include_str!`. Returns a `SolverResult`.
+1. **Solver** (`crates/core/src/solver.rs`) — Resolves recipe dependencies via the net-flow LP in `netflow.rs` (free cost-based recipe selection, default since 2026-07; legacy recursive tree walk retained as the compat/parity oracle), computes machine counts and flow rates. Loads `crates/core/data/recipes.json` via `include_str!`. Returns a `SolverResult`.
 2. **Bus layout** (`crates/core/src/bus/`) — Deterministic row-based layout. Machines group by recipe into rows, trunks run on parallel columns, tap-offs are routed via the ghost router (negotiated congestion A* + region-growth junction solver). See [`docs/ghost-pipeline-contracts.md`](docs/ghost-pipeline-contracts.md) for the phase-by-phase contracts the router promises.
 3. **Blueprint export** (`crates/core/src/blueprint.rs`) — Emits the JSON + zlib + base64 envelope directly (no draftsman dependency).
-4. **Validation** (`crates/core/src/validate/`) — 23 functional checks: pipe isolation, fluid port connectivity, inserter chains + direction, power coverage + pole connectivity, belt flow/structural, underground belt pairs + sideloading, lane throughput, input-rate delivery.
+4. **Validation** (`crates/core/src/validate/`) — 34 functional checks: pipe isolation, fluid port connectivity, inserter chains + direction, power coverage + pole connectivity, belt flow/structural, underground belt pairs + sideloading, lane throughput, input-rate delivery, module slots + eligibility.
 
 ## Key models (`crates/core/src/models.rs`)
 
@@ -129,8 +145,8 @@ Most-visited files. Full reference in [`docs/file-reference.md`](docs/file-refer
 | `crates/core/src/bus/templates.rs` | Belt/inserter row templates (single-input, dual-input, lane-splitting sideload bridges) |
 | `crates/core/src/bus/lane_planner.rs` | `BusLane` / `LaneFamily` types, `plan_bus_lanes`, lane splitting + tap-off coordinate finding |
 | `crates/core/src/bus/ghost_router.rs` | Ghost A* + negotiated congestion routing; junction solver integration; output merger call-site |
-| `crates/core/src/netflow.rs` | Net-flow LP solver (the default; byproduct crediting, typed cycle refusals). Legacy tree walk retained in `solver.rs` as the recipe-selection oracle. See `docs/rfc-solver-net-flow.md`. |
-| `crates/core/src/validate/` | The 23 functional checks, dispatched from `mod.rs` (`belt_flow` lane-rate walker, `belt_structural`, `fluids`, `inserters`, `power`, `underground`) |
+| `crates/core/src/netflow.rs` | Net-flow LP solver (default since 2026-07, compatibility mode; byproduct crediting, typed cycle refusals). Legacy tree walk retained in `solver.rs` as the recipe-selection oracle. See `docs/rfc-solver-net-flow.md`. |
+| `crates/core/src/validate/` | The 34 functional checks, dispatched from `mod.rs` (`belt_flow` lane-rate walker, `belt_structural`, `fluids`, `inserters`, `modules`, `power`, `underground`) |
 | `crates/core/src/trace.rs` | Thread-local trace event collector; `TraceEvent` variants drive the snapshot debugger and stress scoreboards |
 | `crates/core/src/snapshot.rs` | `.fls` snapshot reader/writer for the layout debugger |
 | `crates/core/tests/e2e.rs` | End-to-end test harness: tier regression tests and stress corpus with scoreboards |
@@ -154,10 +170,10 @@ Physical rules the layout engine must satisfy:
 
 Layout bugs are easy to get wrong — zero validation errors can mean the check was wrong, not that the layout is. Follow this protocol:
 
-1. **Run the full e2e suite** — `cargo test --manifest-path crates/core/Cargo.toml`. All non-ignored tests must stay green.
+1. **Run the full e2e suite** — `cargo test --manifest-path crates/core/Cargo.toml`. All non-ignored tests across `crates/core/tests/` must stay green.
 2. **Load the case in the browser** — start the dev server, open the URL for the recipe you changed, and look at the layout with your eyes. A zero-warning layout that visibly has disconnected belts is a validator bug, not a success.
 3. **Check the snapshot for the exact bug you intended to fix** — `SPAGHETTIO_DUMP_SNAPSHOTS=1 cargo test ... --nocapture <test>` then decode with the snippet in [`docs/layout-snapshot-debugger.md`](docs/layout-snapshot-debugger.md). Inspect entities at the suspect coordinates, not just the warning count.
-4. **Trace events are reliable signals** — `RouteFailure`, `BridgeDropped`, `CrossingZoneSkipped`, `BalancerStamped` are emitted by the pipeline and land in the snapshot's `trace.events`. Use them to confirm the specific failure mode before theorizing.
+4. **Trace events are reliable signals** — `JunctionGrowthCapped`, `JunctionStrategyAttempt`, `GhostSpecFailed`, `CrossingZoneSkipped`, `BalancerStamped`, `TapBridgeUnbridgeable`, `LayoutRetried` are emitted by the pipeline and land in the snapshot's `trace.events`. Use them to confirm the specific failure mode before theorizing. (`RouteFailure` and `BridgeDropped` are declared in `trace.rs` but never emitted — don't wait for them.)
 5. **Don't trust an error-count drop alone** — if warnings go 5 → 0, ask *why*. Does the topology still make sense? Were belts actually re-routed, or did a check get silently skipped? Check the specific change caused the fix you wanted.
 6. **Clippy + WASM builds are checks, not nits** — a layout change that clippy-fails or breaks the WASM build is not done.
 
@@ -170,7 +186,7 @@ Layout bugs are easy to get wrong — zero validation errors can mean the check 
 | Balancer templates | `crates/core/src/bus/balancer_library.rs`. Regenerate: `python scripts/generate_balancer_library.py` (needs Factorio-SAT on `PATH`). |
 | Belt tier thresholds | `crates/core/src/common.rs` (`belt_entity_for_rate`, `ug_max_reach`) |
 | Entity sizes | `crates/core/src/common.rs` (`entity_size`) |
-| Validation checks | `crates/core/src/validate/` (23 checks, dispatched from `mod.rs`) |
+| Validation checks | `crates/core/src/validate/` (34 checks, dispatched from `mod.rs`) |
 | Snapshot format | `crates/core/src/snapshot.rs` + [`docs/layout-snapshot-debugger.md`](docs/layout-snapshot-debugger.md) |
 | Belt lane physics | [`docs/factorio-mechanics.md`](docs/factorio-mechanics.md) |
 | Ghost pipeline contracts | [`docs/ghost-pipeline-contracts.md`](docs/ghost-pipeline-contracts.md) |

@@ -234,7 +234,9 @@ impl DecompositionCandidate for ModuleSizeSplit {
             surplus_policy: opts.surplus_policy,
             max_inserter_tier: opts.max_inserter_tier,
             quality: opts.quality,
+            wire_mode: opts.wire_mode,
             merge_tap: opts.merge_tap,
+            stacking: opts.stacking,
         };
         run_layout_with_retry(&transformed, &inner_opts)
     }
@@ -930,7 +932,9 @@ mod tests {
             surplus_exits: vec![],
             voided_streams: vec![],
             effective_rows: vec![],
-            power_wires: vec![],
+            power_wires: None,
+            wire_mode: Default::default(),
+            stacking: 1,
         }
     }
 
@@ -950,7 +954,7 @@ mod tests {
         solver.machines.push(MachineSpec {
             entity: "assembling-machine-1".to_string(),
             recipe: "iron-gear-wheel".to_string(),
-            self_loop: vec![], voider: false,
+            self_loop: vec![], voider: false, game_modules: Vec::new(),
             count: 1.0,
             inputs: vec![],
             outputs: vec![ItemFlow {
@@ -975,7 +979,7 @@ mod tests {
         solver.machines.push(MachineSpec {
             entity: "assembling-machine-1".to_string(),
             recipe: "iron-gear-wheel".to_string(),
-            self_loop: vec![], voider: false,
+            self_loop: vec![], voider: false, game_modules: Vec::new(),
             count: 2.0, // 2 machines × 1/s = 2/s production
             inputs: vec![],
             outputs: vec![ItemFlow {
@@ -1004,7 +1008,7 @@ mod tests {
         solver.machines.push(MachineSpec {
             entity: "electric-furnace".to_string(),
             recipe: "iron-plate".to_string(),
-            self_loop: vec![], voider: false,
+            self_loop: vec![], voider: false, game_modules: Vec::new(),
             count: 5.0, // big internal item — not external, doesn't count
             inputs: vec![],
             outputs: vec![ItemFlow {

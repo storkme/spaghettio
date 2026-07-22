@@ -16,8 +16,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::common::{
     belt_throughput, dir_to_vec, inserter_reach, inserter_target_lane, is_belt_entity,
     is_inserter, is_machine_entity, is_splitter, is_surface_belt, is_ug_belt,
-    splitter_second_tile, splitter_to_surface_tier, ug_to_surface_tier, lane_capacity,
-    machine_dims, machine_tiles, utilization_for, LANE_LEFT, LANE_RIGHT,
+    lane_capacity_stacked, machine_dims, machine_tiles, splitter_second_tile,
+    splitter_to_surface_tier, ug_to_surface_tier, utilization_for, LANE_LEFT, LANE_RIGHT,
     MERGE_TAP_SEGMENT_TAG,
 };
 use crate::models::{EntityDirection, LayoutResult, PlacedEntity, SolverResult};
@@ -1350,23 +1350,48 @@ pub fn check_lane_throughput(
         return vec![];
     }
 
+    // RFC-046: caps are per-ITEM stacking-aware, not blanket ×S — the
+    // validator re-derives the family exemption independently instead of
+    // trusting the planner's discipline (code-review finding, 2026-07-21):
+    // an exempt lane (self-loop / D2b secondary / recycler subgraph) is
+    // rated at unstacked capacity, so a planner bug over-planning one can
+    // never hide behind the layout-wide stack credit.
+    let stacking_ctx = crate::bus::stacking_ctx::StackingCtx::derive(sr, layout.stacking);
     let mut belt_name_map: FxHashMap<(i32, i32), &str> = FxHashMap::default();
+    let mut carries_map: FxHashMap<(i32, i32), &str> = FxHashMap::default();
     for e in &layout.entities {
-        if is_surface_belt(&e.name) {
-            belt_name_map.insert((e.x, e.y), &e.name);
+        let tier = if is_surface_belt(&e.name) {
+            Some(e.name.as_str())
         } else if is_ug_belt(&e.name) && e.io_type.as_deref() == Some("output") {
-            belt_name_map.insert((e.x, e.y), ug_to_surface_tier(&e.name));
+            Some(ug_to_surface_tier(&e.name))
         } else if is_splitter(&e.name) {
-            let tier = splitter_to_surface_tier(&e.name);
-            belt_name_map.insert((e.x, e.y), tier);
+            Some(splitter_to_surface_tier(&e.name))
+        } else {
+            None
+        };
+        let Some(tier) = tier else { continue };
+        belt_name_map.insert((e.x, e.y), tier);
+        if let Some(item) = e.carries.as_deref() {
+            carries_map.insert((e.x, e.y), item);
+        }
+        if is_splitter(&e.name) {
             belt_name_map.insert(splitter_second_tile(e), tier);
+            if let Some(item) = e.carries.as_deref() {
+                carries_map.insert(splitter_second_tile(e), item);
+            }
         }
     }
 
     let mut issues = Vec::new();
     for ((x, y), (left, right)) in &lane_rates {
         let belt_name = belt_name_map.get(&(*x, *y)).copied().unwrap_or("transport-belt");
-        let cap = lane_capacity(belt_name);
+        // Tiles without a `carries` attribution fall back to the layout-
+        // wide value (pre-review behavior); engine-stamped belts all carry.
+        let tile_stacking = carries_map
+            .get(&(*x, *y))
+            .map(|item| stacking_ctx.for_item(item))
+            .unwrap_or(layout.stacking);
+        let cap = lane_capacity_stacked(belt_name, tile_stacking);
         for (lane_name, rate) in [("left", *left), ("right", *right)] {
             if rate > cap + 0.01 {
                 issues.push(ValidationIssue::with_pos(
@@ -1703,7 +1728,7 @@ mod tests {
             machines: vec![MachineSpec {
                 entity: "assembling-machine-3".to_string(),
                 recipe: "fluid-recipe".to_string(),
-                self_loop: vec![], voider: false,
+                self_loop: vec![], voider: false, game_modules: Vec::new(),
                 count: 1.0,
                 inputs: vec![],
                 outputs: vec![ItemFlow { item: "water".to_string(), rate: 10.0, is_fluid: true, module_id: 0 }],
@@ -1734,7 +1759,7 @@ mod tests {
             machines: vec![MachineSpec {
                 entity: "assembling-machine-3".to_string(),
                 recipe: "iron-gear-wheel".to_string(),
-                self_loop: vec![], voider: false,
+                self_loop: vec![], voider: false, game_modules: Vec::new(),
                 count: 1.0,
                 inputs: vec![ItemFlow { item: "iron-plate".to_string(), rate: 5.0, is_fluid: false, module_id: 0 }],
                 outputs: vec![ItemFlow {
@@ -1767,7 +1792,7 @@ mod tests {
             machines: vec![MachineSpec {
                 entity: "assembling-machine-3".to_string(),
                 recipe: "iron-gear-wheel".to_string(),
-                self_loop: vec![], voider: false,
+                self_loop: vec![], voider: false, game_modules: Vec::new(),
                 count: 2.0,
                 inputs: vec![ItemFlow { item: "iron-plate".to_string(), rate: 5.0, is_fluid: false, module_id: 0 }],
                 outputs: vec![ItemFlow {
@@ -1813,7 +1838,7 @@ mod tests {
                 machines: vec![MachineSpec {
                     entity: "assembling-machine-3".to_string(),
                     recipe: "transport-belt".to_string(),
-                    self_loop: vec![], voider: false,
+                    self_loop: vec![], voider: false, game_modules: Vec::new(),
                     count,
                     inputs: vec![],
                     outputs: vec![ItemFlow {
@@ -1867,7 +1892,7 @@ mod tests {
             machines: vec![MachineSpec {
                 entity: "assembling-machine-3".to_string(),
                 recipe: "kovarex-enrichment-process".to_string(),
-                self_loop: vec![], voider: false,
+                self_loop: vec![], voider: false, game_modules: Vec::new(),
                 count: 1.0,
                 inputs: vec![],
                 outputs: vec![ItemFlow {
@@ -2144,7 +2169,7 @@ mod tests {
             machines: vec![MachineSpec {
                 entity: "assembling-machine-3".to_string(),
                 recipe: "kovarex-enrichment-process".to_string(),
-                self_loop: vec![], voider: false,
+                self_loop: vec![], voider: false, game_modules: Vec::new(),
                 count: 1.0,
                 inputs: vec![],
                 outputs: vec![ItemFlow {
@@ -2205,7 +2230,7 @@ mod tests {
             machines: vec![MachineSpec {
                 entity: "assembling-machine-3".to_string(),
                 recipe: "kovarex-enrichment-process".to_string(),
-                self_loop: vec![], voider: false,
+                self_loop: vec![], voider: false, game_modules: Vec::new(),
                 count: 1.0,
                 inputs: vec![],
                 outputs: vec![ItemFlow {

@@ -15,6 +15,7 @@ use crate::models::SolverResult;
 use crate::bus::lane_order::optimize_lane_order;
 use crate::bus::partitioner::PartitionPlan;
 use crate::bus::placer::RowSpan;
+use crate::bus::stacking_ctx::StackingCtx;
 
 const LANE_CAPACITY_TABLE: &[(&str, f64)] = &[
     ("transport-belt", 7.5),
@@ -172,6 +173,7 @@ pub fn plan_bus_lanes(
     plan: Option<&PartitionPlan>,
     total_height: i32,
     merge_tap: bool,
+    ctx: &StackingCtx,
 ) -> Result<(Vec<BusLane>, Vec<LaneFamily>), String> {
     // Fluid surplus items AND fluid targets must physically exit at the
     // south boundary (`total_height`) — see `BusLane::perimeter_exit_y`.
@@ -301,7 +303,8 @@ pub fn plan_bus_lanes(
     }
 
     // Split lanes that exceed max belt tier capacity
-    let (mut lanes, mut families) = split_overflowing_lanes(&lanes, row_spans, max_belt_tier, plan, merge_tap)?;
+    let (mut lanes, mut families) =
+        split_overflowing_lanes(&lanes, row_spans, max_belt_tier, plan, merge_tap, ctx)?;
 
     // Pre-compute tap-off ys before sorting
     for lane in &mut lanes {
@@ -674,6 +677,7 @@ fn split_overflowing_lanes(
     max_belt_tier: Option<&str>,
     plan: Option<&PartitionPlan>,
     merge_tap: bool,
+    ctx: &StackingCtx,
 ) -> Result<(Vec<BusLane>, Vec<LaneFamily>), String> {
     let default_cap = LANE_CAPACITY_TABLE.last().map(|(_, c)| *c).unwrap_or(15.0);
     let max_lane_cap = if let Some(tier) = max_belt_tier {
@@ -694,8 +698,15 @@ fn split_overflowing_lanes(
             continue;
         }
 
-        let n_splits = if lane.rate > max_lane_cap {
-            ((lane.rate / max_lane_cap).ceil() as usize).max(1)
+        // Per-lane effective cap: stacking-exempt items (RFC-046 family
+        // exemption) plan at ×1 regardless of the layout's stack size;
+        // everything else scales by `ctx.for_item`. Computed per-lane
+        // (never as a shared/global scale) because exemption is
+        // item-keyed and different lanes in this loop can carry
+        // different items.
+        let lane_cap = max_lane_cap * f64::from(ctx.for_item(&lane.item));
+        let n_splits = if lane.rate > lane_cap {
+            ((lane.rate / lane_cap).ceil() as usize).max(1)
         } else {
             1
         };
@@ -790,7 +801,24 @@ fn split_overflowing_lanes(
         // runs at full-belt capacity, which only works if a balancer
         // family is stamped; without one, multiple producers fan-in via
         // `ret:` sideloads and the trunk's per-lane cap still applies.
-        let full_belt_cap = max_lane_cap * 2.0;
+        //
+        // SCALED by stacking (`lane_cap` = `max_lane_cap × for_item`),
+        // RFC-047 Leg B/C. A full stacked belt carries `2 × lane_cap`,
+        // and every path crediting this cap is now geometry-grounded at
+        // ×S: a ≥2-consumer-trunk shape is balancer/merge-tap-backed
+        // (both lanes = full-belt ×S, BS4); a single-consumer trunk is
+        // either single-producer (corner-fed from a stacked lane-split
+        // row output — the 047-1b row-split cap keeps it ONE row, so the
+        // topmost `ret:` corner-feeds the head on both lanes) or, if
+        // genuinely multi-producer, caught by the ghost_router late
+        // sideload check (rate > per-lane×S ⇒ named refusal, 047-2). The
+        // post-Phase-0 honest walker adjudicates the result (kill 2). At
+        // S=1, `for_item()==1` so `lane_cap == max_lane_cap` — this term
+        // is bit-identical to the pre-RFC `max_lane_cap × 2`. (Supersedes
+        // the RFC-046 Phase-2 freeze: full-belt ×S was frozen because
+        // tap/sideload delivery filled one lane; Leg B removes that
+        // unsoundness at the source, so the freeze lifts.)
+        let full_belt_cap = lane_cap * 2.0;
         let clamp_to_consumers =
             !is_external_input && !is_collector && n_splits > consumer_trunk_count;
 
@@ -806,6 +834,27 @@ fn split_overflowing_lanes(
             .and_then(|p| p.lane_count_override(&lane.item, lane.module_id))
             .map(|lc| lc as usize)
             .unwrap_or(0);
+
+        // RFC-047 Phase 1 census probe (temporary, env-gated): log the
+        // single-consumer-trunk clamped shape and external-input
+        // over-lane-cap shapes across the corpus.
+        if std::env::var("SPAGHETTIO_047_CENSUS").is_ok() {
+            if clamp_to_consumers && consumer_trunk_count == 1 {
+                eprintln!(
+                    "047-CENSUS single-trunk-clamp item={} rate={:.2} n_splits={} plan={} ",
+                    lane.item,
+                    lane.rate,
+                    n_splits,
+                    plan.is_some()
+                );
+            }
+            if is_external_input && lane.rate > max_lane_cap {
+                eprintln!(
+                    "047-CENSUS external-over-lane item={} rate={:.2} splits={} ",
+                    lane.item, lane.rate, n_splits
+                );
+            }
+        }
 
         let effective_n_splits = if any_hs {
             // HS consumer(s) want a fixed total trunk count.
@@ -1221,7 +1270,7 @@ mod tests {
             spec: MachineSpec {
                 entity: "assembling-machine-3".to_string(),
                 recipe: recipe.to_string(),
-                self_loop: vec![], voider: false,
+                self_loop: vec![], voider: false, game_modules: Vec::new(),
                 count: machine_count as f64,
                 inputs,
                 outputs,
@@ -1313,7 +1362,7 @@ mod tests {
             machines: vec![MachineSpec {
                 entity: "assembling-machine-3".to_string(),
                 recipe: "iron-gear-wheel".to_string(),
-                self_loop: vec![], voider: false,
+                self_loop: vec![], voider: false, game_modules: Vec::new(),
                 count: 1.0,
                 inputs: vec![ItemFlow { item: "iron-plate".to_string(), rate: 2.0, is_fluid: false, module_id: 0 }],
                 outputs: vec![ItemFlow { item: "iron-gear-wheel".to_string(), rate: 1.0, is_fluid: false, module_id: 0 }],
@@ -1330,7 +1379,7 @@ mod tests {
             machines: vec![MachineSpec {
                 entity: "assembling-machine-3".to_string(),
                 recipe: "plastic-bar".to_string(),
-                self_loop: vec![], voider: false,
+                self_loop: vec![], voider: false, game_modules: Vec::new(),
                 count: 1.0,
                 inputs: vec![
                     ItemFlow { item: "coal".to_string(), rate: 1.5, is_fluid: false, module_id: 0 },
@@ -1362,7 +1411,7 @@ mod tests {
             vec![6],  // input belt at y=6
         );
 
-        let (lanes, families) = plan_bus_lanes(&sr, &[row_span], None, None, 40, false)
+        let (lanes, families) = plan_bus_lanes(&sr, &[row_span], None, None, 40, false, &StackingCtx::unstacked())
             .expect("plan_bus_lanes should succeed for iron-gear-wheel");
 
         // Should have exactly 1 lane for iron-plate
@@ -1388,7 +1437,7 @@ mod tests {
             vec![6],
         );
 
-        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None, None, 40, false).unwrap();
+        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None, None, 40, false, &StackingCtx::unstacked()).unwrap();
 
         // iron-gear-wheel is the final output, not consumed internally, so no lane for it
         // Only iron-plate (the external input) needs a lane
@@ -1413,7 +1462,7 @@ mod tests {
             vec![6, 7],  // two input belt y positions
         );
 
-        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None, None, 40, false)
+        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None, None, 40, false, &StackingCtx::unstacked())
             .expect("plan_bus_lanes should succeed for plastic-bar");
 
         // Should have lanes for coal and petroleum-gas (plastic-bar is final output)
@@ -1449,7 +1498,7 @@ mod tests {
             vec![6, 7],
         );
 
-        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None, None, 40, false).unwrap();
+        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None, None, 40, false, &StackingCtx::unstacked()).unwrap();
 
         // optimize_lane_order puts solid before fluid
         let fluid_indices: Vec<usize> = lanes.iter().enumerate()
@@ -1481,7 +1530,7 @@ mod tests {
             vec![6],
         );
 
-        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None, None, 40, false).unwrap();
+        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None, None, 40, false, &StackingCtx::unstacked()).unwrap();
 
         // The iron-plate lane has consumer row 0, so it should have a tap-off y
         let iron_plate_lane = lanes.iter().find(|l| l.item == "iron-plate").unwrap();
@@ -1533,7 +1582,7 @@ mod tests {
             }
         }).collect();
 
-        let (lanes, _families) = plan_bus_lanes(&sr, &row_spans, None, None, 40, false)
+        let (lanes, _families) = plan_bus_lanes(&sr, &row_spans, None, None, 40, false, &StackingCtx::unstacked())
             .expect("plan_bus_lanes should succeed");
 
         // Must have at least one lane

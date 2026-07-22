@@ -24,8 +24,10 @@ use crate::validate::{Severity, ValidationIssue};
 
 /// Check that the EMITTED pole copper-wire graph is a single connected network.
 ///
-/// This validates the ARTIFACT, not mere geometry: it recomputes the exact
-/// `wires` array [`crate::blueprint::export`] encodes (via
+/// This validates the ARTIFACT, not mere geometry: it reads the exact
+/// `wires` graph [`crate::blueprint::export`] encodes — the STORED
+/// `LayoutResult::power_wires` via [`crate::power_wires::wires_for`]
+/// (RFC-045; dense-derive fallback only for never-computed layouts, via
 /// [`crate::power_wires::compute_pole_wires`] — the single source of wire reach
 /// and footprint centers) and asserts every pole is reachable from the first
 /// pole through it. A geometry-only check could pass while the export omitted
@@ -37,7 +39,7 @@ use crate::validate::{Severity, ValidationIssue};
 /// poles' wire reaches, with no per-pole connection cap (Factorio 2.0 removed
 /// it). Returns a single `Warning` when any pole is unreachable.
 pub fn check_pole_network_connectivity(layout: &LayoutResult) -> Vec<ValidationIssue> {
-    let wires = crate::power_wires::compute_pole_wires(&layout.entities);
+    let wires = crate::power_wires::wires_for(layout);
     let disconnected = crate::power_wires::count_disconnected_poles(&layout.entities, &wires);
     if disconnected == 0 {
         return vec![];

@@ -5,6 +5,7 @@
 pub mod belt_flow;
 pub mod inserters;
 mod fluids;
+pub mod modules;
 pub mod power;
 pub mod sushi;
 pub mod underground;
@@ -513,6 +514,8 @@ pub fn validate(
         Box::new(|| belt_structural::check_lane_throughput(layout, solver)),
         Box::new(|| check_input_rate_delivery(layout, solver)),
         Box::new(|| check_balancer_template_coverage(layout)),
+        Box::new(|| modules::check_module_slots(layout)),
+        Box::new(|| modules::check_module_eligibility(layout)),
     ];
 
     let issues: Vec<ValidationIssue> = checks.par_iter().flat_map(|f| f()).collect();

@@ -75,12 +75,17 @@ on every push:
   inserter ladder, pole supply/wire reach; differential fixtures pin
   Normal bit-equality; EC@45/s express-legendary-from-ore green with the
   1 known input-rate-delivery residual.
-- **Rate headroom caveat**: final-product output above one belt's capacity
-  is currently over-committed onto a single merger belt and the
-  lane-throughput check doesn't visit merger tiles
-  ([#311](https://github.com/storkme/spaghettio/issues/311)) — so treat
-  >45/s "clean" results (e.g. the EC 60/s red stress fixture) as
-  routing-verified but not throughput-verified until #311 closes.
+- **Belt stacking** (RFC-046, S∈{1..4}) and **lane-aware delivery**
+  (RFC-047): rate ceilings scale ×S; the EC@60/s red-from-ore config is
+  physically valid end-to-end at S=2 (in-fixture per-tile capacity audit),
+  and the legendary-express@60 headline is gated
+  (`stacking_ec_60s_express_legendary_s2`).
+- **Rate headroom caveat (S=1 only)**: *unstacked* final-product output
+  above one belt's capacity is still over-committed onto a single merger
+  belt and the lane-throughput check doesn't visit merger tiles
+  ([#311](https://github.com/storkme/spaghettio/issues/311)) — treat
+  unstacked >45/s "clean" results as routing-verified but not
+  throughput-verified until #311 closes.
 
 ### Scaling walls (scaling gauntlet run 2026-07-21, release, 180s/cell budget)
 
@@ -141,11 +146,56 @@ pole-band thinning landed (Phase 1; Phase 2 cross-row sharing deferred) —
 closed [#310](https://github.com/storkme/spaghettio/issues/310) via PR #318.
 Registry: [`rfcs.md`](rfcs.md).
 
+**`rfc-046-belt-stacking.md` close-out (2026-07-21)**: user-facing **belt
+stacking** param (off/×2/×3/×4 = Space Age belt stack size research,
+`stacking`/`st=` URL-encoded through wasm `layout*` and the sidebar; solver
+untouched). Belt tier selection, lane caps, merger capacity, and the
+validators scale ×S via `common::*_stacked` helpers; belt-dropping output
+sides are forced to stack inserters at S>1 (`size_belt_drop_side`); a
+static family-level exemption (`bus/stacking_ctx.rs`) keeps uniform ×S
+sound for unstackable producers (self-loop/kovarex, D2b secondary outputs,
+recycler ejection — validators re-derive it independently, per-tile).
+Full-belt delivery thresholds initially did NOT scale — *superseded by
+RFC-047 (2026-07-22), which grounded and scaled them.* Headline: the #311
+stress config (EC@60/s red from ore) is **physically valid end-to-end at
+S=2**, proven by an in-fixture per-tile capacity audit. S=1 is
+bit-identical to pre-RFC (zero golden re-blesses). Mechanics:
+`factorio-mechanics.md` BS1–BS7. In-game import anchor open (user-run;
+[#335](https://github.com/storkme/spaghettio/issues/335)'s one-bank
+ore-routing warnings persist on legendary-express). Full trail:
+[`rfc-046-belt-stacking.md`](rfc-046-belt-stacking.md) decision log.
+
+**`rfc-047-lane-aware-tap-delivery.md` close-out (2026-07-22)**: made
+delivery **lane-aware** so belt stacking raises rate CEILINGS, not just
+belt tiers. Leg A: the lane-rate walker's convergence-phase splitter model
+was physically false (pooled lanes — real splitters preserve them) —
+replaced by `splitter_output_rates_convergence`, exposing
+[#334](https://github.com/storkme/spaghettio/issues/334) (two
+lane-imbalanced balancer-library shapes, carved out with a fix tripwire);
+the mechanics doc's I5 was backwards (inserters drop the FAR lane — code
+was always right). Leg B: RFC-046's stacking-blind row-split cap was
+fragmenting rows at S>1 and manufacturing sideload overloads — fixed at
+the root; a late sideload check now refuses multi-producer single-trunk
+over-cap shapes by name (exposed 38 pre-existing silent S=1 overload
+errors in a fixture that never asserted on them; (n,1) merge-tap is
+unwired, [#336](https://github.com/storkme/spaghettio/issues/336)).
+Leg C: the fan-in wall scales ×S on geometry-grounded credits — EC@6/s
+legendary yellow refuses at S=1 and builds clean at S=2, and the original
+legendary-express@60 headline landed
+(`stacking_ec_60s_express_legendary_s2`;
+[#335](https://github.com/storkme/spaghettio/issues/335) tracks one
+unreached furnace bank). Three falsified premises decision-logged. Zero
+golden re-blesses across the arc. Full trail:
+[`rfc-047-lane-aware-tap-delivery.md`](rfc-047-lane-aware-tap-delivery.md).
+
 ## Open tracking issues (layout quality)
 
 - [#135 balancer templates are oversized](https://github.com/storkme/spaghettio/issues/135) — main compaction lever
 - [#311 output merger over-commits a single final belt; lane-throughput check never visits merger tiles](https://github.com/storkme/spaghettio/issues/311) — gates >45/s headline claims
-- [#312 consumer-clamped fan-in refusal bites much earlier at high build quality](https://github.com/storkme/spaghettio/issues/312)
+- [#312 consumer-clamped fan-in refusal bites much earlier at high build quality](https://github.com/storkme/spaghettio/issues/312) — S=1; the wall now scales ×S with stacking (RFC-047 Leg C)
+- [#334 two lane-imbalanced balancer-library shapes](https://github.com/storkme/spaghettio/issues/334) — carved out of the RFC-047 convergence walker with a fix tripwire
+- [#335 one unreached furnace bank in the legendary-express@60 fixture](https://github.com/storkme/spaghettio/issues/335)
+- [#336 (n,1) merge-tap unwired; late sideload check refuses those shapes by name](https://github.com/storkme/spaghettio/issues/336)
 
 (Audited 2026-07-21: #65, #68, #136, #310 — previously cited here — are all
 closed.)

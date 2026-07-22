@@ -4,7 +4,7 @@ This is the load-bearing reference for `crates/core/src/bus/`. It lists
 every phase the layout pipeline runs, what each phase consumes, what it
 produces, and what invariants it promises to the next phase. Read this
 before changing anything in `layout.rs`, `ghost_router.rs`, or
-`bus_router.rs`.
+`lane_planner.rs`.
 
 This is **not** a tutorial or a design doc. It is a contract. When a
 phase silently breaks an invariant the next phase relies on, that is a
@@ -14,8 +14,15 @@ broken state.
 ## Top-level pipeline (layout.rs)
 
 `build_bus_layout(solver_result, max_belt_tier)` is the only public
-entry point. The flow is single-pass — no retry loop, no two-pass A*
-with extra-gap feedback, no direct/ghost mode switch. Just:
+entry point. It runs up to four decomposition candidates
+(`decomposition_search::select_best_decomposition`: native, k1-shape-fix,
+size-split-2, merge-tap) and scores the winner. Each candidate runs
+`layout_pass` up to twice: if the junction solver reports capped regions
+(`JunctionGrowthCapped`) or poles can't cover every inserter, the rows
+before the capped coordinates get +1 tile of gap (and substation bands
+get widened) and a second pass runs (`LayoutRetried`). There is no third
+pass — a still-broken second pass ships with
+`ReactivePassNotConverged`. Inside one `layout_pass`:
 
 ```
 estimate_bus_width
@@ -31,11 +38,11 @@ compute_extra_gaps  (balancer height reservation)
   ↓
   plan_bus_lanes  (pass 2)
   ↓
-place_poles
-  ↓
 route_bus_ghost
   ↓
 splitter overlap filter  (drop row entities under bus splitters)
+  ↓
+place_poles  (LAST — after routing, never router obstacles)
   ↓
 missing-balancer warnings
   ↓
@@ -340,7 +347,7 @@ load-bearing segment-id prefixes (`ghost:`, `trunk:`, `tapoff:`,
 this for the first three; the rest are anchored by the place-loop in
 step 6a (skip + don't push, never push + skip).
 
-### `BusLane` (`bus_router.rs`)
+### `BusLane` (`lane_planner.rs`)
 
 One per item that needs trunk routing.
 - `x`: trunk column.
@@ -353,7 +360,7 @@ One per item that needs trunk routing.
   trunk must skip over.
 - `is_fluid`: true means trunk is pipe-based, not belt.
 
-### `LaneFamily` (`bus_router.rs`)
+### `LaneFamily` (`lane_planner.rs`)
 
 One N→M balancer block.
 - `item`: the item all member lanes carry.

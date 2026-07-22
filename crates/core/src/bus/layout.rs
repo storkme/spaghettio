@@ -73,7 +73,7 @@ pub enum SurplusPolicy {
 /// Per-call options for `build_bus_layout`. New struct; absorbs the
 /// previous `max_belt_tier` parameter so future per-call options
 /// (strategy, escargio fold parameters, …) attach as additional fields.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct LayoutOptions {
     pub strategy: LayoutStrategy,
     pub max_belt_tier: Option<String>,
@@ -90,6 +90,11 @@ pub struct LayoutOptions {
     /// functional entities (machines/inserters/poles) for export.
     /// Default `Normal` — a bit-exact no-op (kill criterion 2).
     pub quality: crate::common::QualityTier,
+    /// Pole wiring mode (RFC-045): `Dense` (default — every in-reach
+    /// pair, maximally robust) or `Tree` (deterministic minimum spanning
+    /// forest — fewest wires, visually clean). Purely an artifact-layer
+    /// choice; placement is untouched.
+    pub wire_mode: crate::power_wires::WireMode,
     /// Enable the merge-and-tap trunk fallback for unstampable
     /// multi-producer/multi-consumer families (`docs/rfc-merge-tap-trunks.md`).
     /// Default `false` (byte-identical to pre-fallback layouts). Set only by
@@ -97,6 +102,31 @@ pub struct LayoutOptions {
     /// `NativeCandidate`. Replaces the retired `MERGE_TAP_FALLBACK_ENABLED`
     /// compile-time const.
     pub merge_tap: bool,
+    /// Belt stack size the layout plans at (RFC-046, BS1): 1 = off
+    /// (default, bit-identical to pre-RFC — kill 1), 2–4 = stacked.
+    /// User-specified, never inferred (same contract as `max_belt_tier`).
+    /// Values outside 1..=4 clamp in the `common::*_stacked` helpers.
+    /// Plumbed through wasm-bindings `layout*` and the web UI (URL
+    /// `st=`, sidebar "Belt stacking") since Phase 2.
+    pub stacking: u8,
+}
+
+impl Default for LayoutOptions {
+    /// Manual impl (not derived) solely because `stacking`'s neutral value
+    /// is `1`, not `u8::default()` — everything else is the type default.
+    fn default() -> Self {
+        Self {
+            strategy: LayoutStrategy::default(),
+            max_belt_tier: None,
+            row_layout: RowLayout::default(),
+            surplus_policy: SurplusPolicy::default(),
+            max_inserter_tier: InserterTier::default(),
+            quality: crate::common::QualityTier::default(),
+            wire_mode: crate::power_wires::WireMode::default(),
+            merge_tap: false,
+            stacking: 1,
+        }
+    }
 }
 
 impl LayoutOptions {
@@ -104,13 +134,8 @@ impl LayoutOptions {
     /// that only care about the belt tier.
     pub fn from_belt_tier(max_belt_tier: Option<&str>) -> Self {
         Self {
-            strategy: LayoutStrategy::default(),
             max_belt_tier: max_belt_tier.map(|s| s.to_string()),
-            row_layout: RowLayout::default(),
-            surplus_policy: SurplusPolicy::default(),
-            max_inserter_tier: InserterTier::default(),
-            quality: crate::common::QualityTier::default(),
-            merge_tap: false,
+            ..Self::default()
         }
     }
 }
@@ -132,6 +157,17 @@ pub fn build_bus_layout(
     solver_result: &SolverResult,
     opts: LayoutOptions,
 ) -> Result<LayoutResult, String> {
+    // RFC-046: belts cannot stack without stack inserters (BS2), so a
+    // stacked layout under a lower inserter cap is an incoherent config —
+    // refuse by name, never degrade silently (the recorded
+    // `LayoutResult.stacking` and the placed hardware must agree).
+    if opts.stacking > 1 && opts.max_inserter_tier != InserterTier::Stack {
+        return Err(format!(
+            "belt stacking ×{} requires max_inserter_tier = stack \
+             (only stack inserters create belt stacks); got {:?}",
+            opts.stacking, opts.max_inserter_tier
+        ));
+    }
     crate::bus::decomposition_search::select_best_decomposition(solver_result, opts)
 }
 
@@ -570,6 +606,14 @@ fn layout_pass(
         .map(|ext| ext.item.clone())
         .collect();
 
+    // RFC-046 belt-stacking context: derived once here (both `opts` and the
+    // fully-transformed `solver_result` — post voider-synthesis, post
+    // partition-plan application — are in scope) and threaded down to every
+    // capacity/tier-selection site in `place_rows` / `plan_bus_lanes` /
+    // `route_bus_ghost`. At `opts.stacking <= 1` (default) `for_item` returns
+    // 1 for every item, so this is a behavior-neutral no-op (kill 1).
+    let stacking_ctx = crate::bus::stacking_ctx::StackingCtx::derive(solver_result, opts.stacking);
+
     let bus_header = 1;
     // Row placement y-origin. On the top-edge substation retry (RFC Phase 3b)
     // `top_widen > 0` bumps it below `bus_header`, freeing `top_widen` rows
@@ -612,14 +656,22 @@ fn layout_pass(
         Some(&final_output_items),
         retry_extra_gaps,
         opts.row_layout,
+        &stacking_ctx,
     );
     crate::trace::emit(crate::trace::TraceEvent::PhaseTime {
         phase: "place_rows_1".to_string(),
         duration_ms: t_place1.elapsed().as_millis() as u64,
     });
     let t_plan1 = web_time::Instant::now();
-    let (lanes_1, families_1) =
-        plan_bus_lanes(solver_result, &row_spans_1, max_belt_tier, plan_ref, total_height_1, opts.merge_tap)?;
+    let (lanes_1, families_1) = plan_bus_lanes(
+        solver_result,
+        &row_spans_1,
+        max_belt_tier,
+        plan_ref,
+        total_height_1,
+        opts.merge_tap,
+        &stacking_ctx,
+    )?;
     crate::trace::emit(crate::trace::TraceEvent::PhaseTime {
         phase: "plan_bus_lanes_1".to_string(),
         duration_ms: t_plan1.elapsed().as_millis() as u64,
@@ -662,6 +714,7 @@ fn layout_pass(
                 Some(&final_output_items),
                 Some(&merged_gaps),
                 opts.row_layout,
+                &stacking_ctx,
             );
             crate::trace::emit(crate::trace::TraceEvent::PhaseTime {
                 phase: "place_rows_2".to_string(),
@@ -672,7 +725,15 @@ fn layout_pass(
             // pass-invariant `MergeTapFallback` event, so suppress it here to
             // dedup the double-emit while keeping pass 2's other events.
             let (nl, nf) = crate::trace::with_merge_tap_fallback_suppressed(|| {
-                plan_bus_lanes(solver_result, &rs, max_belt_tier, plan_ref, th, opts.merge_tap)
+                plan_bus_lanes(
+                    solver_result,
+                    &rs,
+                    max_belt_tier,
+                    plan_ref,
+                    th,
+                    opts.merge_tap,
+                    &stacking_ctx,
+                )
             })?;
             crate::trace::emit(crate::trace::TraceEvent::PhaseTime {
                 phase: "plan_bus_lanes_2".to_string(),
@@ -744,6 +805,7 @@ fn layout_pass(
         solver_result,
         &families,
         &row_entities,
+        &stacking_ctx,
     )?;
     let bus_entities = ghost_result.entities;
     let max_y = ghost_result.max_y;
@@ -1056,13 +1118,42 @@ fn layout_pass(
         }
     }
 
+    // Stamp planned GAME modules into machines (RFC-044 Phase 3). The
+    // solver already resolved eligibility per (machine, recipe) —
+    // `MachineSpec::game_modules` — so this pass only copies loadouts
+    // onto matching machine entities (machines are the only entities
+    // carrying `recipe`). Empty loadouts everywhere at policy `None` →
+    // entities untouched (KC1). Mirrors the quality stamp above: one
+    // post-pass, not ~400 construction sites.
+    {
+        let mut game_loadouts: rustc_hash::FxHashMap<(&str, &str), &Vec<crate::models::ModuleItem>> =
+            rustc_hash::FxHashMap::default();
+        for rs in &row_spans {
+            if !rs.spec.game_modules.is_empty() {
+                game_loadouts
+                    .insert((rs.spec.entity.as_str(), rs.spec.recipe.as_str()), &rs.spec.game_modules);
+            }
+        }
+        if !game_loadouts.is_empty() {
+            for e in &mut all_entities {
+                if let Some(recipe) = &e.recipe {
+                    if let Some(loadout) = game_loadouts.get(&(e.name.as_str(), recipe.as_str())) {
+                        e.items = (*loadout).clone();
+                    }
+                }
+            }
+        }
+    }
+
     // Pole copper wire graph for the web overlay — the SAME graph
-    // `blueprint::export` re-derives and encodes in the blueprint `wires`
-    // array. Computed from the final entity order so the `(a, b)` index pairs
-    // stay valid — and AFTER the quality stamp pass above, because wire
-    // reach is per-entity quality-aware (rfc-build-quality merge with the
-    // power-3c arc). See `crate::power_wires`.
-    let power_wires = crate::power_wires::compute_pole_wires(&all_entities);
+    // `blueprint::export` and the connectivity validator consume this
+    // STORED graph verbatim (RFC-045 `wires_for` — one computation, all
+    // readers). Computed from the final entity order so the `(a, b)` index
+    // pairs stay valid — and AFTER the quality stamp pass above, because
+    // wire reach is per-entity quality-aware. `opts.wire_mode` selects
+    // dense mesh vs deterministic spanning tree; the mode is recorded on
+    // the result so post-layout recomputes honor it.
+    let power_wires = crate::power_wires::compute_pole_wires(&all_entities, opts.wire_mode);
 
     Ok((
         LayoutResult {
@@ -1075,7 +1166,9 @@ fn layout_pass(
             surplus_exits,
             voided_streams,
             effective_rows,
-            power_wires,
+            power_wires: Some(power_wires),
+            wire_mode: opts.wire_mode,
+            stacking: opts.stacking,
         },
         row_spans,
         cap_coords,
@@ -2079,7 +2172,7 @@ mod tests {
 
         // Pre-repair: the artifact-level wire graph leaves the boundary pair as
         // two separate islands — exactly what the old top-left metric missed.
-        let wires = compute_pole_wires(&entities);
+        let wires = compute_pole_wires(&entities, crate::power_wires::WireMode::Dense);
         assert!(wires.is_empty(), "boundary pair must not directly wire; got {wires:?}");
         assert_eq!(count_disconnected_poles(&entities, &wires), 1);
 
@@ -2103,7 +2196,7 @@ mod tests {
         // Post-repair: a bridge pole was added and the EMITTED wire graph is now
         // a single connected component — repair and artifact agree.
         assert!(entities.len() > 2, "repair must add at least one bridge pole");
-        let wires2 = compute_pole_wires(&entities);
+        let wires2 = compute_pole_wires(&entities, crate::power_wires::WireMode::Dense);
         assert_eq!(
             count_disconnected_poles(&entities, &wires2),
             0,
@@ -2256,7 +2349,7 @@ mod tests {
                 MachineSpec {
                     entity: "assembling-machine-3".to_string(),
                     recipe: "widget".to_string(),
-                    self_loop: vec![], voider: false,
+                    self_loop: vec![], voider: false, game_modules: Vec::new(),
                     count: 1.0,
                     inputs: vec![ItemFlow {
                         item: "iron-plate".to_string(),
@@ -2274,7 +2367,7 @@ mod tests {
                 MachineSpec {
                     entity: "assembling-machine-3".to_string(),
                     recipe: "gadget-scrap".to_string(),
-                    self_loop: vec![], voider: false,
+                    self_loop: vec![], voider: false, game_modules: Vec::new(),
                     count: 1.0,
                     inputs: vec![ItemFlow {
                         item: "iron-plate".to_string(),
@@ -2370,7 +2463,7 @@ mod tests {
             spec: MachineSpec {
                 entity: "assembling-machine-1".to_string(),
                 recipe: recipe.to_string(),
-                self_loop: vec![], voider: false,
+                self_loop: vec![], voider: false, game_modules: Vec::new(),
                 count: 1.0,
                 inputs: vec![],
                 outputs: vec![],

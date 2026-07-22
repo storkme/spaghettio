@@ -9,6 +9,7 @@
 use crate::models::{EntityDirection, PlacedEntity};
 use crate::bus::balancer::splitter_for_belt;
 use crate::bus::placer::RowSpan;
+use crate::bus::stacking_ctx::StackingCtx;
 
 pub(crate) fn merge_output_rows(
     output_rows: &[usize],
@@ -19,9 +20,10 @@ pub(crate) fn merge_output_rows(
     max_belt_tier: Option<&str>,
     min_merge_x: i32,
     blocked_columns: &[i32],
+    ctx: &StackingCtx,
 ) -> (Vec<PlacedEntity>, i32, i32) {
     use crate::bus::balancer::underground_for_belt;
-    use crate::common::{belt_entity_for_rate, ug_max_reach};
+    use crate::common::{belt_entity_for_rate_stacked, ug_max_reach};
 
     debug_assert_eq!(
         output_rows.len(),
@@ -51,7 +53,7 @@ pub(crate) fn merge_output_rows(
         })
         .sum::<f64>();
 
-    let belt_name = belt_entity_for_rate(total_rate * 2.0, max_belt_tier);
+    let belt_name = belt_entity_for_rate_stacked(total_rate * 2.0, max_belt_tier, ctx.for_item(item));
     let splitter_name = splitter_for_belt(belt_name);
 
     // Column position: east of the widest participating row, but never west
@@ -244,7 +246,7 @@ mod tests {
             spec: MachineSpec {
                 entity: "assembling-machine-3".to_string(),
                 recipe: recipe.to_string(),
-                self_loop: vec![], voider: false,
+                self_loop: vec![], voider: false, game_modules: Vec::new(),
                 count: machine_count as f64,
                 inputs,
                 outputs,
@@ -291,10 +293,10 @@ mod tests {
             vec![5],
         );
         let rows = [row0, row1];
-        let (a_ents, a_end_y, a_max_x) = merge_output_rows(&[0], &[rows[0].output_belt_y], "iron-gear-wheel", &rows, 15, None, 11, &[]);
+        let (a_ents, a_end_y, a_max_x) = merge_output_rows(&[0], &[rows[0].output_belt_y], "iron-gear-wheel", &rows, 15, None, 11, &[], &StackingCtx::unstacked());
         // Caller threads: next min_merge_x = returned max_x + 1, start_y = max_y.
         let blocked: Vec<i32> = ((a_max_x - 1)..a_max_x).collect();
-        let (b_ents, _b_end_y, b_max_x) = merge_output_rows(&[1], &[rows[1].output_belt_y], "iron-stick", &rows, a_end_y.max(15), None, a_max_x + 1, &blocked);
+        let (b_ents, _b_end_y, b_max_x) = merge_output_rows(&[1], &[rows[1].output_belt_y], "iron-stick", &rows, a_end_y.max(15), None, a_max_x + 1, &blocked, &StackingCtx::unstacked());
         assert!(b_max_x > a_max_x);
         let a_tiles: FxHashSet<(i32, i32)> = a_ents.iter().map(|e| (e.x, e.y)).collect();
         let overlap: Vec<(i32, i32)> = b_ents
@@ -304,7 +306,7 @@ mod tests {
             .collect();
         assert!(overlap.is_empty(), "merge blocks overlap at {overlap:?}");
         // And without the cursor they WOULD overlap (guard the guard):
-        let (c_ents, _c_end_y, _c) = merge_output_rows(&[1], &[rows[1].output_belt_y], "iron-stick", &rows, 15, None, 0, &[]);
+        let (c_ents, _c_end_y, _c) = merge_output_rows(&[1], &[rows[1].output_belt_y], "iron-stick", &rows, 15, None, 0, &[], &StackingCtx::unstacked());
         let c_overlap = c_ents.iter().map(|e| (e.x, e.y)).any(|t| a_tiles.contains(&t));
         assert!(c_overlap, "expected uncursored merges to collide — geometry changed?");
     }
@@ -322,7 +324,7 @@ mod tests {
 
         let output_rows = vec![0];
         let output_ys = vec![row_span.output_belt_y];
-        let (entities, _end_y, _merge_max_x) = merge_output_rows(&output_rows, &output_ys, "iron-plate", &[row_span], 20, None, 0, &[]);
+        let (entities, _end_y, _merge_max_x) = merge_output_rows(&output_rows, &output_ys, "iron-plate", &[row_span], 20, None, 0, &[], &StackingCtx::unstacked());
 
         // Single row should extend EAST and SOUTH without splitters
         assert!(!entities.is_empty());
@@ -350,7 +352,7 @@ mod tests {
 
         let output_rows = vec![0, 1];
         let output_ys = vec![row_span1.output_belt_y, row_span2.output_belt_y];
-        let (entities, _end_y, _merge_max_x) = merge_output_rows(&output_rows, &output_ys, "iron-plate", &[row_span1, row_span2], 20, None, 0, &[]);
+        let (entities, _end_y, _merge_max_x) = merge_output_rows(&output_rows, &output_ys, "iron-plate", &[row_span1, row_span2], 20, None, 0, &[], &StackingCtx::unstacked());
 
         // Multiple rows should include splitters
         let splitters = entities.iter().filter(|e| e.name.contains("splitter")).count();
@@ -398,6 +400,7 @@ mod tests {
             None,
             0,
             &[],
+            &StackingCtx::unstacked(),
         );
 
         // Splitters must be present
@@ -452,6 +455,7 @@ mod tests {
             None,
             0,
             &[],
+            &StackingCtx::unstacked(),
         );
 
         let splitters: Vec<_> = entities.iter().filter(|e| e.name.contains("splitter")).collect();

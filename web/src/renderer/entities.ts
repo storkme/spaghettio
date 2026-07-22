@@ -196,6 +196,8 @@ export const MACHINE_SIZES: Record<string, [number, number]> = {
   "big-electric-pole": [2, 2],
   substation: [2, 2],
   "electric-mining-drill": [3, 3],
+  "big-mining-drill": [5, 5],
+  pumpjack: [3, 3],
 };
 
 /** Convert a kebab-case slug to a display name: "assembling-machine-3" → "Assembling Machine 3" */
@@ -979,8 +981,10 @@ export function drawEntityGraphic(entity: PlacedEntity, ctx: DrawContext): Graph
 
 /** Game-style quality tier colors (uncommon green, rare blue, epic
  *  purple, legendary orange). Fallback only — the real in-game badge
- *  icons are preferred (see [`addQualityBadge`]). */
-const QUALITY_BADGE_COLORS: Record<string, number> = {
+ *  icons are preferred (see [`addQualityBadge`]). Exported so other
+ *  overlays needing the same tier→color convention (e.g. module quality
+ *  tints in `moduleSlotsOverlay.ts`) share one table. */
+export const QUALITY_BADGE_COLORS: Record<string, number> = {
   uncommon: 0x4fca4f,
   rare: 0x4f8bca,
   epic: 0xa64fca,

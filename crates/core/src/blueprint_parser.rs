@@ -55,9 +55,12 @@ struct BpData {
 }
 
 /// Parsed module item. All three Factorio formats collapse into this.
+/// Only the 2.0 insert-plan format carries a quality; 1.x formats leave
+/// it `None` (= normal).
 struct BpEntityItem {
     item: String,
     count: u32,
+    quality: Option<String>,
 }
 
 /// Factorio uses multiple formats for items within an entity:
@@ -111,6 +114,7 @@ impl<'de> serde::Deserialize<'de> for BpEntityItems {
                     items.push(BpEntityItem {
                         item: key,
                         count: value,
+                        quality: None,
                     });
                 }
                 Ok(BpEntityItems(items))
@@ -134,10 +138,11 @@ fn parse_item_value(val: &serde_json::Value) -> Option<BpEntityItem> {
         return Some(BpEntityItem {
             item: item_name.to_string(),
             count,
+            quality: None,
         });
     }
 
-    // 2.0 format: {"id": {"name": "efficiency-module"}, "items": {...}}
+    // 2.0 format: {"id": {"name": "efficiency-module", "quality": "rare"?}, "items": {...}}
     if let Some(id_val) = obj.get("id") {
         if let Some(item_name) = extract_id(id_val) {
             // Count from nested items.in_inventory array length, or default 1
@@ -147,9 +152,14 @@ fn parse_item_value(val: &serde_json::Value) -> Option<BpEntityItem> {
                 .and_then(|v| v.as_array())
                 .map(|arr| arr.len() as u32)
                 .unwrap_or(1);
+            let quality = id_val
+                .get("quality")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
             return Some(BpEntityItem {
                 item: item_name,
                 count,
+                quality,
             });
         }
     }
@@ -333,6 +343,12 @@ fn bp_data_to_layout(bp_data: BpData) -> LayoutResult {
             .map(|it| crate::models::ModuleItem {
                 item: it.item,
                 count: it.count,
+                // Same permissiveness as entity quality: unknown (modded)
+                // quality names fall back to None/normal.
+                quality: it
+                    .quality
+                    .as_deref()
+                    .and_then(crate::common::QualityTier::from_name),
             })
             .collect();
 
@@ -422,7 +438,7 @@ fn bp_data_to_layout(bp_data: BpData) -> LayoutResult {
         entities,
         width: max_x + 1,
         height: max_y + 1,
-        power_wires,
+        power_wires: Some(power_wires),
         ..Default::default()
     }
 }
@@ -510,6 +526,61 @@ mod tests {
             "0{}",
             base64::engine::general_purpose::STANDARD.encode(&compressed)
         )
+    }
+
+    /// RFC-045 round-trip: a Tree-mode wire graph survives export → parse
+    /// verbatim (the parser reads the artifact's wires array; it never
+    /// recomputes), and re-export is byte-identical.
+    #[test]
+    fn tree_wires_round_trip_through_export_and_parse() {
+        use crate::power_wires::{compute_pole_wires, WireMode};
+        let ents: Vec<PlacedEntity> = (0..4)
+            .map(|i| PlacedEntity {
+                name: "medium-electric-pole".to_string(),
+                x: i * 7,
+                y: 0,
+                ..Default::default()
+            })
+            .collect();
+        let mut layout = LayoutResult::default();
+        layout.width = 25;
+        layout.height = 1;
+        layout.entities = ents;
+        layout.wire_mode = WireMode::Tree;
+        layout.power_wires = Some(compute_pole_wires(&layout.entities, WireMode::Tree));
+        let tree = layout.power_wires.clone().unwrap();
+        assert_eq!(tree.len(), 3);
+
+        let bp = blueprint::export(&layout, "tree-mode");
+        let parsed = parse_blueprint_string(&bp).expect("should parse");
+        assert_eq!(parsed.power_wires.as_deref(), Some(tree.as_slice()));
+        // Re-export from the parsed layout: same wires bytes (parser stored
+        // Some, so export consumes it verbatim — no re-densify).
+        let bp2 = blueprint::export(&parsed, "tree-mode");
+        assert_eq!(bp, bp2, "tree export must be a fixed point of export→parse→export");
+    }
+
+    /// RFC-046 Phase 0 spot-check: the 2.0 `override_stack_size` field
+    /// (uint8, per-inserter hand-size override; lua-api BlueprintEntity)
+    /// is tolerated on import. We deliberately never emit it — exports
+    /// inherit the importing force's research — but community blueprints
+    /// carry it and must parse.
+    #[test]
+    fn override_stack_size_field_is_tolerated_on_import() {
+        let bp = encode_envelope(&serde_json::json!({
+            "blueprint": {
+                "item": "blueprint",
+                "version": 562949955518464u64,
+                "entities": [
+                    {"entity_number": 1, "name": "stack-inserter",
+                     "position": {"x": 0.5, "y": 0.5}, "direction": 4,
+                     "override_stack_size": 1},
+                ]
+            }
+        }));
+        let parsed = parse_blueprint_string(&bp).expect("should parse");
+        assert_eq!(parsed.entities.len(), 1);
+        assert_eq!(parsed.entities[0].name, "stack-inserter");
     }
 
     #[test]
@@ -633,15 +704,15 @@ mod tests {
             height: 1,
             ..Default::default()
         };
-        let emitted = crate::power_wires::compute_pole_wires(&layout.entities);
+        let emitted = crate::power_wires::compute_pole_wires(&layout.entities, crate::power_wires::WireMode::Dense);
         assert_eq!(emitted, vec![(0, 1), (1, 2)]);
 
         let bp_string = blueprint::export(&layout, "pole-wires");
         let parsed = parse_blueprint_string(&bp_string).expect("should parse");
         // Wires must survive export → parse (before the fix: empty).
-        assert_eq!(parsed.power_wires, emitted, "power_wires must round-trip");
+        assert_eq!(parsed.power_wires.as_deref(), Some(emitted.as_slice()), "power_wires must round-trip");
         assert_eq!(
-            crate::power_wires::count_disconnected_poles(&parsed.entities, &parsed.power_wires),
+            crate::power_wires::count_disconnected_poles(&parsed.entities, parsed.power_wires.as_deref().unwrap_or(&[])),
             0,
             "all three poles are one network after round-trip"
         );
@@ -667,7 +738,7 @@ mod tests {
         }
         let layout = LayoutResult { entities, width: 25, height: 25, ..Default::default() };
 
-        let emitted = crate::power_wires::compute_pole_wires(&layout.entities);
+        let emitted = crate::power_wires::compute_pole_wires(&layout.entities, crate::power_wires::WireMode::Dense);
         assert!(!emitted.is_empty(), "dense grid must wire");
         assert_eq!(
             crate::power_wires::count_disconnected_poles(&layout.entities, &emitted),
@@ -677,9 +748,9 @@ mod tests {
 
         let bp_string = blueprint::export(&layout, "dense-grid");
         let parsed = parse_blueprint_string(&bp_string).expect("should parse");
-        assert_eq!(parsed.power_wires, emitted, "dense wire set must round-trip");
+        assert_eq!(parsed.power_wires.as_deref(), Some(emitted.as_slice()), "dense wire set must round-trip");
         assert_eq!(
-            crate::power_wires::count_disconnected_poles(&parsed.entities, &parsed.power_wires),
+            crate::power_wires::count_disconnected_poles(&parsed.entities, parsed.power_wires.as_deref().unwrap_or(&[])),
             0,
             "the 25-pole network stays connected after round-trip"
         );
@@ -821,5 +892,75 @@ mod tests {
         assert_eq!(machine.items.len(), 1);
         assert_eq!(machine.items[0].item, "productivity-module-3");
         assert_eq!(machine.items[0].count, 4);
+    }
+
+    #[test]
+    fn parses_insert_plan_items_with_quality() {
+        // 2.0 insert-plan format (BlueprintInsertPlan): count comes from
+        // the in_inventory array length, quality from id.quality. Also
+        // covers the bare-string id variant and explicit "normal".
+        use base64::Engine;
+        let bp_json = serde_json::json!({
+            "blueprint": {
+                "entities": [
+                    {
+                        "entity_number": 1,
+                        "name": "assembling-machine-3",
+                        "position": {"x": 1.5, "y": 1.5},
+                        "recipe": "iron-gear-wheel",
+                        "items": [
+                            {
+                                "id": {"name": "productivity-module-3", "quality": "legendary"},
+                                "items": {"in_inventory": [
+                                    {"inventory": 4, "stack": 0},
+                                    {"inventory": 4, "stack": 1}
+                                ]}
+                            },
+                            {
+                                "id": {"name": "speed-module-2", "quality": "normal"},
+                                "items": {"in_inventory": [{"inventory": 4, "stack": 2}]}
+                            },
+                            {
+                                "id": "speed-module",
+                                "items": {"in_inventory": [{"inventory": 4, "stack": 3}]}
+                            }
+                        ],
+                        "item": "blueprint"
+                    }
+                ],
+                "item": "blueprint",
+                "version": 562949954076673u64
+            }
+        });
+
+        let json_bytes = serde_json::to_vec(&bp_json).unwrap();
+        let mut encoder =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        std::io::Write::write_all(&mut encoder, &json_bytes).unwrap();
+        let compressed = encoder.finish().unwrap();
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&compressed);
+        let layout = parse_blueprint_string(&format!("0{}", b64)).unwrap();
+
+        let machine = &layout.entities[0];
+        assert_eq!(machine.items.len(), 3);
+
+        assert_eq!(machine.items[0].item, "productivity-module-3");
+        assert_eq!(machine.items[0].count, 2);
+        assert_eq!(
+            machine.items[0].quality,
+            Some(crate::common::QualityTier::Legendary)
+        );
+
+        assert_eq!(machine.items[1].item, "speed-module-2");
+        assert_eq!(machine.items[1].count, 1);
+        assert_eq!(
+            machine.items[1].quality,
+            Some(crate::common::QualityTier::Normal)
+        );
+
+        // Bare-string id: no quality information.
+        assert_eq!(machine.items[2].item, "speed-module");
+        assert_eq!(machine.items[2].count, 1);
+        assert_eq!(machine.items[2].quality, None);
     }
 }

@@ -31,6 +31,8 @@ fn layout_options(
     row_layout: Option<String>,
     max_inserter_tier: Option<String>,
     quality: Option<String>,
+    wire_mode: Option<String>,
+    stacking: Option<u8>,
 ) -> LayoutOptions {
     let strategy = match strategy.as_deref() {
         // `partitioned-per-consumer` is the deprecated P1 string; the
@@ -63,10 +65,20 @@ fn layout_options(
         // rfc-build-quality Phase 2: unknown/absent → Normal, same
         // hard-cap fallback semantics as the two tiers above.
         quality: quality_tier(quality),
+        // RFC-045: unknown/absent → Dense, same fallback semantics as the
+        // tiers above.
+        wire_mode: wire_mode
+            .as_deref()
+            .and_then(spaghettio_core::power_wires::WireMode::from_name)
+            .unwrap_or_default(),
         // The merge-tap fallback is chosen internally by the
         // decomposition search (`MergeTapCandidate`), never requested by the
         // web UI — always default-off at the public boundary.
         merge_tap: false,
+        // RFC-046 Phase 2: unknown/absent → 1 (off), same fallback
+        // semantics as the tiers above. `common::*_stacked` helpers clamp
+        // any out-of-range value, so no validation needed here.
+        stacking: stacking.unwrap_or(1),
     }
 }
 
@@ -86,6 +98,79 @@ fn quality_tier(quality: Option<String>) -> spaghettio_core::common::QualityTier
         .unwrap_or_default()
 }
 
+/// Parse the compact module-policy string from JS (RFC-044 Phase 3;
+/// `m=` URL param): `<kind><tier><quality?>` where kind is `s`peed or
+/// `p`roductivity, tier is 1–3, and quality is a tier initial
+/// (`u`/`r`/`e`/`l`; absent = normal) — e.g. `"s2"`, `"p3l"`.
+/// Absent/unparseable → `None` policy, matching the quality
+/// unknown→default pattern.
+fn module_policy(spec: Option<String>) -> spaghettio_core::module_policy::ModulePolicy {
+    use spaghettio_core::common::QualityTier;
+    use spaghettio_core::module_policy::{ModulePolicy, ModulePolicyKind};
+    let Some(s) = spec else {
+        return ModulePolicy::default();
+    };
+    let mut chars = s.chars();
+    let kind = match chars.next() {
+        Some('s') => ModulePolicyKind::Speed,
+        Some('p') => ModulePolicyKind::Productivity,
+        _ => return ModulePolicy::default(),
+    };
+    let tier = match chars.next().and_then(|c| c.to_digit(10)) {
+        Some(t @ 1..=3) => t as u8,
+        _ => return ModulePolicy::default(),
+    };
+    let quality = match chars.next() {
+        None => QualityTier::Normal,
+        Some('u') => QualityTier::Uncommon,
+        Some('r') => QualityTier::Rare,
+        Some('e') => QualityTier::Epic,
+        Some('l') => QualityTier::Legendary,
+        Some(_) => return ModulePolicy::default(),
+    };
+    // Trailing garbage ("p3ll") fails closed, matching the TS-side
+    // MODULES_RE exactly (defense in depth — the web UI never sends it).
+    if chars.next().is_some() {
+        return ModulePolicy::default();
+    }
+    ModulePolicy { kind, tier, quality }
+}
+
+#[cfg(test)]
+mod module_policy_parse_tests {
+    use super::module_policy;
+    use spaghettio_core::common::QualityTier;
+    use spaghettio_core::module_policy::{ModulePolicy, ModulePolicyKind};
+
+    #[test]
+    fn parses_valid_specs() {
+        assert_eq!(
+            module_policy(Some("s2".into())),
+            ModulePolicy { kind: ModulePolicyKind::Speed, tier: 2, quality: QualityTier::Normal }
+        );
+        assert_eq!(
+            module_policy(Some("p3l".into())),
+            ModulePolicy {
+                kind: ModulePolicyKind::Productivity,
+                tier: 3,
+                quality: QualityTier::Legendary
+            }
+        );
+    }
+
+    #[test]
+    fn malformed_specs_fail_closed() {
+        for bad in ["", "x1", "s0", "s4", "p3x", "p3ll", "p3lx", "s", "productivity"] {
+            assert_eq!(
+                module_policy(Some(bad.into())),
+                ModulePolicy::default(),
+                "{bad:?} must fail closed"
+            );
+        }
+        assert_eq!(module_policy(None), ModulePolicy::default());
+    }
+}
+
 #[wasm_bindgen]
 pub fn solve(
     target_item: &str,
@@ -93,9 +178,10 @@ pub fn solve(
     available_inputs: Vec<String>,
     machine_entity: &str,
     quality: Option<String>,
+    modules: Option<String>,
 ) -> Result<SolverResult, JsError> {
     let inputs: FxHashSet<String> = available_inputs.into_iter().collect();
-    solver::solve_with_palette_exclusions_and_quality(
+    solver::solve_with_palette_exclusions_quality_and_modules(
         target_item,
         target_rate,
         &inputs,
@@ -103,6 +189,7 @@ pub fn solve(
         machine_entity,
         &FxHashSet::default(),
         quality_tier(quality),
+        module_policy(modules),
     )
     .map_err(|e| JsError::new(&e.to_string()))
 }
@@ -119,9 +206,10 @@ pub fn solve_with_palette(
     palette: MachinePalette,
     default_machine: &str,
     quality: Option<String>,
+    modules: Option<String>,
 ) -> Result<SolverResult, JsError> {
     let inputs: FxHashSet<String> = available_inputs.into_iter().collect();
-    solver::solve_with_palette_exclusions_and_quality(
+    solver::solve_with_palette_exclusions_quality_and_modules(
         target_item,
         target_rate,
         &inputs,
@@ -129,6 +217,7 @@ pub fn solve_with_palette(
         default_machine,
         &FxHashSet::default(),
         quality_tier(quality),
+        module_policy(modules),
     )
     .map_err(|e| JsError::new(&e.to_string()))
 }
@@ -148,6 +237,14 @@ pub fn default_machine_for_item(item: &str, fallback: &str) -> String {
     recipe_db::default_machine_for_item(item, fallback)
 }
 
+/// Module slot count for a machine entity, wrapping `common::module_slots`
+/// (RFC-044 Phase 2) — single source of truth for the web module-slot
+/// overlay, no duplicated TS table.
+#[wasm_bindgen]
+pub fn module_slots(entity: &str) -> u32 {
+    spaghettio_core::common::module_slots(entity)
+}
+
 #[wasm_bindgen]
 pub fn layout(
     solver_result: SolverResult,
@@ -156,10 +253,12 @@ pub fn layout(
     row_layout: Option<String>,
     max_inserter_tier: Option<String>,
     quality: Option<String>,
+    wire_mode: Option<String>,
+    stacking: Option<u8>,
 ) -> Result<LayoutResult, JsError> {
     build_bus_layout(
         &solver_result,
-        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality),
+        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking),
     )
     .map_err(|e| JsError::new(&e))
 }
@@ -176,10 +275,12 @@ pub fn layout_traced(
     row_layout: Option<String>,
     max_inserter_tier: Option<String>,
     quality: Option<String>,
+    wire_mode: Option<String>,
+    stacking: Option<u8>,
 ) -> Result<LayoutResult, JsError> {
     spaghettio_core::bus::layout::build_bus_layout_traced(
         &solver_result,
-        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality),
+        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking),
     )
     .map_err(|e| JsError::new(&e))
 }
@@ -240,6 +341,8 @@ pub fn layout_streaming(
     row_layout: Option<String>,
     max_inserter_tier: Option<String>,
     quality: Option<String>,
+    wire_mode: Option<String>,
+    stacking: Option<u8>,
     emit: &js_sys::Function,
 ) -> Result<LayoutResult, JsError> {
     let emit = emit.clone();
@@ -253,7 +356,7 @@ pub fn layout_streaming(
     });
     spaghettio_core::bus::layout::build_bus_layout_streaming(
         &solver_result,
-        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality),
+        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking),
         on_event,
     )
     .map_err(|e| JsError::new(&e))
@@ -403,6 +506,13 @@ pub fn improve_region_streaming(
         }
     }
 
+    // `layout_result.stacking` (RFC-046) needs no recompute here: the SAT
+    // crossing-zone descent above is purely topological (tile arrangement,
+    // not throughput), and the struct field itself survives the mutate-
+    // and-return below untouched, so a re-spliced zone keeps reporting the
+    // layout's own recorded stack size — same "honor what the layout was
+    // planned at" contract as `wire_mode`, just with no recompute needed
+    // on this particular field.
     layout_result
         .entities
         .retain(|e| !(in_bbox(e) && is_belt_or_ug(&e.name)));
@@ -410,9 +520,13 @@ pub fn improve_region_streaming(
 
     // The retain+extend above reorders `entities`, invalidating the index pairs
     // in `power_wires`. Recompute so the field (and any downstream export /
-    // overlay) stays consistent with the new entity order.
-    layout_result.power_wires =
-        spaghettio_core::power_wires::compute_pole_wires(&layout_result.entities);
+    // overlay) stays consistent with the new entity order — in the layout's
+    // OWN recorded wire mode (RFC-045 kill 6: a Tree layout must not come
+    // back silently re-densified).
+    layout_result.power_wires = Some(spaghettio_core::power_wires::compute_pole_wires(
+        &layout_result.entities,
+        layout_result.wire_mode,
+    ));
 
     Ok(layout_result)
 }

@@ -312,7 +312,9 @@ fn run_e2e_inner(
             row_layout,
             max_inserter_tier: Default::default(),
             quality: Default::default(),
+            wire_mode: Default::default(),
             merge_tap: false,
+            stacking: 1,
         },
     )
         .map_err(|e| {
@@ -599,11 +601,9 @@ const GOLDEN_HASHES: &[(&str, &str)] = &[
     // RFC rfc-inserter-sizing.md Phase 2: dual_input_row ladder-sized + near/far reassigned.
     // RFC rfc-inserter-sizing.md Phase 3: far side's reach-2 count-ladder activated.
     ("tier2_electronic_circuit_20s_from_ore", "7a23126d5f857d22db9374cc6269eb9ea2d7bdb2a69c6dc34f60f322cc63e134"),
-    // RFC rfc-inserter-sizing.md Phase 2: dual_input_row's inserters are now
-    // ladder-sized + near/far reassigned (this fixture's dual-input EC row
-    // is exactly the template Phase 2 touches) — entity types/positions on
-    // that row moved.
-    ("tier2_electronic_circuit_splitter_stamp_regression", "8f1eaa38c9a8beeae052ff9fd63b5c4e7d68662e685d576e731c192694ba1d5f"),
+    // (RFC-047 Leg B: `tier2_electronic_circuit_splitter_stamp_regression`
+    // no longer builds — it is now a named-refusal guard — so its golden
+    // hash entry was removed.)
     // RFC rfc-inserter-sizing.md Phase 3: fluid_input_row's solid side
     // (coal) is now ladder-sized. Reaches fully clean.
     ("tier3_plastic_bar", "bb1cccc422f0e44bfdb1d18ef59d870d71d8fe5d7147b659e7b388c79a526166"),
@@ -661,8 +661,8 @@ fn assert_round_trip(result: &E2EResult) {
         result.layout.power_wires, result.parsed.power_wires,
         "pole copper wires must round-trip through blueprint export/parse: \
          layout emitted {} wire(s), parsed recovered {}",
-        result.layout.power_wires.len(),
-        result.parsed.power_wires.len(),
+        result.layout.power_wires.as_deref().map_or(0, |w| w.len()),
+        result.parsed.power_wires.as_deref().map_or(0, |w| w.len()),
     );
 }
 
@@ -675,9 +675,10 @@ fn assert_round_trip(result: &E2EResult) {
 // the ghost router currently fails them — head-on belt collisions, dead-end
 // belts, item-isolation between adjacent trunks, etc. They are marked
 // `#[ignore]` with a one-line failure summary until ghost mode catches up.
-// The two passing ones (`tier3_sulfuric_acid`,
-// `tier2_electronic_circuit_splitter_stamp_regression`) stay live as the
-// new green-bar regression guards for ghost routing.
+// `tier3_sulfuric_acid` stays live as a green-bar regression guard for
+// ghost routing. `tier2_electronic_circuit_splitter_stamp_regression` was
+// also one until RFC-047 Leg B turned its config into a named refusal (it
+// now guards that refusal instead — see its doc comment).
 
 #[test]
 #[ntest::timeout(10000)]
@@ -1134,58 +1135,62 @@ fn tier2_electronic_circuit_20s_from_ore() {
     assert_golden_hash(&result, "tier2_electronic_circuit_20s_from_ore");
 }
 
-/// Regression test for the splitter-stamp sideload-into-UG-input bug that the
-/// user reported: `electronic-circuit` at 10/s, assembling-machine-1 with fast
-/// belts, generating from `{iron-plate, copper-plate}`. The bug class manifests
-/// as a `DroppedBridge` in the router — the foreign-trunk yield (UG bridge)
-/// for one lane's trunk couldn't be emitted because its UG output tile
-/// collided with the trunk's own tap-off. Before the retry-loop fix in
-/// `build_bus_layout`, this produced an invalid sideload into the tap-off's
-/// underground-belt-input first tile. The retry loop maps dropped bridges to
-/// `extra_gap_after_row` updates, pushing the colliding row down by 1 so the
-/// bridge becomes valid.
+/// RFC-047 Leg B named-refusal guard (was: splitter-stamp
+/// sideload-into-UG-input regression). This exact config — `electronic-circuit`
+/// @ 10/s, assembling-machine-1, fast (red) belts, from `{iron-plate,
+/// copper-plate}` — produces a copper-cable lane at 30/s fed by TWO fragmented
+/// producer rows into a SINGLE consumer trunk with no balancer. The topmost
+/// producer corner-feeds the trunk head (both lanes); every later producer
+/// B8-sideloads mid-trunk onto ONE physical lane, so the trunk's near lane
+/// carries 22/s against a 15/s red per-lane cap.
 ///
-/// This test specifically guards the retry feedback loop: if it ever stops
-/// firing (e.g. route_belt_lane stops pushing to dropped_bridges), this test
-/// fails because the sideload warning comes back.
+/// The pre-RFC-047 pipeline laid this out anyway — probe-verified 38 silent
+/// `lane-throughput` overload errors that no test ever asserted on (the old
+/// version of this test only checked for "sideloads into underground input"
+/// warnings, which this config never produced). RFC-047 Leg B step 2 (the
+/// ghost_router late-sideload check) now refuses it BY NAME rather than
+/// shipping a throttled, over-capacity trunk. Merge-tap can't rescue it (a
+/// single consumer fails the `n_lanes_with_consumers >= 2` gate; and Native's
+/// hard Err skips the merge-tap decomposition candidate — both verified), so a
+/// named refusal is the honest outcome here.
+///
+/// The historical sideload-into-UG-input retry-loop coverage this config once
+/// nominally provided is defunct on the current pipeline: the retry is now
+/// driven by junction `cap_coords` (`LayoutRetried`), not `DroppedBridge`, and
+/// neither event fires for EC AM1 fast at any rate 6..=10 (probe-verified). It
+/// is also moot here now that the config refuses upstream of routing. Fresh
+/// UG-retry regression coverage, if wanted, needs a config that actually emits
+/// `LayoutRetried`/`BridgeDropped`; tracked as a follow-up, out of RFC-047
+/// scope.
 #[test]
-// Bumped from 10s to 30s after the belt-permissive junction SAT change
-// — debug-mode SAT solves got slower with more boundaries per zone.
-// Release mode still completes in ~2.5s; debug closer to 10-15s.
+// Kept the 30s ceiling from the pre-047 build-and-validate era; the refusal
+// path returns far sooner, but the solve still runs.
 #[ntest::timeout(30000)]
 fn tier2_electronic_circuit_splitter_stamp_regression() {
     let inputs: FxHashSet<String> = ["iron-plate", "copper-plate"]
         .iter()
         .map(|s| s.to_string())
         .collect();
-    let result = run_e2e(
+    let outcome = run_e2e(
         "tier2_electronic_circuit_splitter_stamp_regression",
         "electronic-circuit",
         10.0,
         "assembling-machine-1",
         Some("fast-transport-belt"),
         &inputs,
-    )
-    .unwrap_or_else(|e| panic!("tier2_electronic_circuit_splitter_stamp_regression: {e}"));
-
-    // Specifically assert there's no sideload-into-UG-input warning, which
-    // is the precise bug class the retry loop addresses.
-    let sideload_issues: Vec<_> = result.issues.iter()
-        .filter(|i| i.message.contains("sideloads into underground input"))
-        .collect();
-    assert!(
-        sideload_issues.is_empty(),
-        "Expected no sideload-into-UG-input warnings, got {}:\n{}",
-        sideload_issues.len(),
-        sideload_issues.iter()
-            .map(|i| format!("  [{}] {} ({},{})", i.category, i.message,
-                i.x.unwrap_or(-1), i.y.unwrap_or(-1)))
-            .collect::<Vec<_>>()
-            .join("\n")
     );
-    // Ensure the layout can actually produce items (no solver/routing failure).
-    assert_produces(&result, "electronic-circuit", 10.0);
-    assert_golden_hash(&result, "tier2_electronic_circuit_splitter_stamp_regression");
+    let err = match outcome {
+        Err(e) => e,
+        Ok(_) => panic!(
+            "EC@10/s AM1 fast belts must refuse (RFC-047 Leg B late sideload \
+             check): copper-cable 30/s on a single sideload-fed red trunk \
+             overloads one lane to 22/s > 15/s red per-lane cap, but it built"
+        ),
+    };
+    assert!(
+        err.contains("lane-aware delivery") && err.contains("copper-cable"),
+        "expected the RFC-047 named lane-aware refusal for copper-cable, got: {err}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1747,7 +1752,9 @@ fn tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing() {
             surplus_policy: SurplusPolicy::default(),
             max_inserter_tier: Default::default(),
             quality: Default::default(),
+            wire_mode: Default::default(),
             merge_tap: false,
+            stacking: 1,
         },
     )
     .unwrap_or_else(|e| panic!("{test_name}: layout: {e}"));
@@ -1893,7 +1900,9 @@ fn tier5_processing_unit_2s_horizontal_stack_iron_ore_pipe_bypass() {
             surplus_policy: SurplusPolicy::default(),
             max_inserter_tier: Default::default(),
             quality: Default::default(),
+            wire_mode: Default::default(),
             merge_tap: false,
+            stacking: 1,
         },
     )
     .unwrap_or_else(|e| panic!("{test_name}: layout: {e}"));
@@ -2000,7 +2009,9 @@ fn tier5_processing_unit_25s_horizontal_stack_pole_coverage() {
             surplus_policy: SurplusPolicy::default(),
             max_inserter_tier: Default::default(),
             quality: Default::default(),
+            wire_mode: Default::default(),
             merge_tap: false,
+            stacking: 1,
         },
     )
     .unwrap_or_else(|e| panic!("{test_name}: layout: {e}"));
@@ -5317,7 +5328,7 @@ fn diag_ghost_cluster_copper_cable_feeders() {
     eprintln!("producer rows and output_belt_ys: {:?}", producer_out_ys);
 
     // --- Synthesise feeder specs ---
-    // Mirrors bus_router.rs lines 2557-2597:
+    // Mirrors the feeder-spec synthesis in bus/ghost_router.rs (step 4):
     //   start = (bw-1, out_y)
     //   goal  = (input_x+1, out_y)
     // where input_x = min(lane_xs) + input_tile_dx.
@@ -7016,7 +7027,9 @@ fn quality_differential_ec_normal_vs_legendary() {
                 row_layout: Default::default(),
                 max_inserter_tier: Default::default(),
                 quality,
+                wire_mode: Default::default(),
                 merge_tap: false,
+                stacking: 1,
             },
         )
         .unwrap_or_else(|e| panic!("{quality:?} layout: {e}"));
@@ -7137,7 +7150,9 @@ fn quality_ec_45s_express_legendary_from_ore() {
             row_layout: Default::default(),
             max_inserter_tier: Default::default(),
             quality: QualityTier::Legendary,
+            wire_mode: Default::default(),
             merge_tap: false,
+            stacking: 1,
         },
     )
     .unwrap_or_else(|e| panic!("layout: {e}"));
@@ -7224,7 +7239,9 @@ fn quality_differential_kovarex_self_loop_normal_vs_legendary() {
                 row_layout: Default::default(),
                 max_inserter_tier: Default::default(),
                 quality,
+                wire_mode: Default::default(),
                 merge_tap: false,
+                stacking: 1,
             },
         )
         .unwrap_or_else(|e| panic!("{quality:?} layout: {e}"));
@@ -7323,5 +7340,465 @@ fn quality_differential_kovarex_self_loop_normal_vs_legendary() {
     assert_eq!(
         parsed_stamped, stamped,
         "every stamped entity must round-trip through export+parse"
+    );
+}
+
+/// RFC-045 verification-plan differential (flagged as silently dropped by
+/// the implementation contract review — delivered here): the legendary
+/// census fixture wired in `Tree` mode vs `Dense`. 30 medium poles, one
+/// connected component → the tree is exactly 29 edges, strictly fewer
+/// than dense, every tree edge drawn from the dense candidate set, and
+/// the validator's scalar (0 disconnected) is identical in both modes.
+#[test]
+#[ntest::timeout(120000)]
+fn quality_ec_45s_legendary_tree_wire_differential() {
+    use spaghettio_core::common::QualityTier;
+    use spaghettio_core::power_wires::{compute_pole_wires, count_disconnected_poles, WireMode};
+    use spaghettio_core::recipe_db::MachinePalette;
+
+    let inputs: FxHashSet<String> =
+        ["iron-ore", "copper-ore"].iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "electronic-circuit",
+        45.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Legendary,
+    )
+    .unwrap_or_else(|e| panic!("solve: {e}"));
+    let layout_result = layout::build_bus_layout(
+        &sr,
+        layout::LayoutOptions {
+            strategy: Default::default(),
+            surplus_policy: Default::default(),
+            max_belt_tier: Some("express-transport-belt".to_string()),
+            row_layout: Default::default(),
+            max_inserter_tier: Default::default(),
+            quality: QualityTier::Legendary,
+            wire_mode: WireMode::Tree,
+            merge_tap: false,
+            stacking: 1,
+        },
+    )
+    .unwrap_or_else(|e| panic!("layout: {e}"));
+
+    let poles = layout_result
+        .entities
+        .iter()
+        .filter(|e| e.name == "medium-electric-pole")
+        .count();
+    assert_eq!(poles, 30, "census pin (rfc-043)");
+
+    let tree = layout_result.power_wires.as_deref().expect("stored wires").to_vec();
+    let dense = compute_pole_wires(&layout_result.entities, WireMode::Dense);
+    assert_eq!(tree.len(), 29, "spanning tree of one 30-pole component");
+    assert!(dense.len() > tree.len(), "dense {} must exceed tree {}", dense.len(), tree.len());
+    for e in &tree {
+        assert!(dense.contains(e), "tree edge {e:?} not in dense candidate set");
+    }
+    assert_eq!(count_disconnected_poles(&layout_result.entities, &tree), 0);
+    assert_eq!(count_disconnected_poles(&layout_result.entities, &dense), 0);
+
+    let issues = validate::validate(&layout_result, Some(&sr), LayoutStyle::Bus)
+        .unwrap_or_else(|e| panic!("validate: {e}"));
+    let power: Vec<_> = issues.iter().filter(|i| i.category == "power").collect();
+    assert!(power.is_empty(), "tree mode must introduce no power issues: {power:?}");
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// RFC-046 belt stacking — differential fixtures (docs/rfc-046-belt-stacking.md)
+// ═════════════════════════════════════════════════════════════════════════
+
+/// RFC-046 headline: the #311 stress config (EC@60/s red from ore) —
+/// whose committed S=1 golden stamps 60/s onto a 30/s red merger belt
+/// with zero warnings (the validator blind spot, snapshot-proven
+/// 2026-07-20) — becomes PHYSICALLY VALID at S=2: red stacked carries
+/// 30 × 2 = 60/s, so the whole plan fits one stacked belt.
+///
+/// Kill-criterion-2 discipline: "0 errors" is NOT trusted alone this
+/// close to #311's blind spot (the lane walker never visits merger
+/// tiles). Every rate-stamped belt-surface tile is audited directly
+/// against physical stacked capacity — and the S=1 run is audited with
+/// the same probe to prove it has teeth: at S=1 the identical layout
+/// carries tiles ABOVE unstacked capacity (that is #311), at S=2 zero.
+#[test]
+fn stacking_ec_60s_red_one_belt_headline() {
+    use spaghettio_core::common::{
+        belt_throughput_stacked, is_splitter, is_surface_belt, is_ug_belt,
+        splitter_to_surface_tier, ug_to_surface_tier, QualityTier,
+    };
+    use spaghettio_core::recipe_db::MachinePalette;
+
+    let inputs: FxHashSet<String> =
+        ["iron-ore", "copper-ore"].iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "electronic-circuit",
+        60.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-2",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap_or_else(|e| panic!("solve: {e}"));
+
+    let run = |stacking: u8| {
+        let layout = layout::build_bus_layout(
+            &sr,
+            layout::LayoutOptions {
+                strategy: Default::default(),
+                surplus_policy: Default::default(),
+                max_belt_tier: Some("fast-transport-belt".to_string()),
+                row_layout: Default::default(),
+                max_inserter_tier: Default::default(),
+                quality: QualityTier::Normal,
+                wire_mode: Default::default(),
+                merge_tap: false,
+                stacking,
+            },
+        )
+        .unwrap_or_else(|e| panic!("S={stacking} layout: {e}"));
+        let issues = validate::validate(&layout, Some(&sr), LayoutStyle::Bus)
+            .unwrap_or_else(|e| panic!("S={stacking} validate: {e}"));
+        (layout, issues)
+    };
+
+    // Physical audit: rate-stamped belt-surface tiles above the belt's
+    // stacked capacity at stack size `s`.
+    let audit = |l: &spaghettio_core::models::LayoutResult, s: u8| -> Vec<String> {
+        l.entities
+            .iter()
+            .filter_map(|e| {
+                let tier = if is_surface_belt(&e.name) {
+                    e.name.as_str()
+                } else if is_ug_belt(&e.name) {
+                    ug_to_surface_tier(&e.name)
+                } else if is_splitter(&e.name) {
+                    splitter_to_surface_tier(&e.name)
+                } else {
+                    return None;
+                };
+                let rate = e.rate?;
+                let cap = belt_throughput_stacked(tier, s);
+                (rate > cap + 0.01).then(|| {
+                    format!("{} at ({},{}) rate {rate} > cap {cap}", e.name, e.x, e.y)
+                })
+            })
+            .collect()
+    };
+
+    // S=1: the committed-golden behavior — 0 validation errors, but the
+    // direct audit finds tiles above unstacked capacity. That IS #311.
+    let (l1, issues1) = run(1);
+    let errors1: Vec<_> = issues1.iter().filter(|i| i.severity == Severity::Error).collect();
+    assert!(errors1.is_empty(), "S=1 baseline drifted from the stress golden: {errors1:?}");
+    let over1 = audit(&l1, 1);
+    assert!(
+        !over1.is_empty(),
+        "S=1 audit found nothing above unstacked capacity — #311 got fixed; \
+         update this fixture (and close the issue) consciously"
+    );
+
+    // S=2: same plan, physically valid end to end.
+    let (l2, issues2) = run(2);
+    assert_eq!(l2.stacking, 2, "layout must record its stack size");
+    let errors2: Vec<_> = issues2.iter().filter(|i| i.severity == Severity::Error).collect();
+    assert!(errors2.is_empty(), "expected 0 errors at S=2, got {errors2:?}");
+    let over2 = audit(&l2, 2);
+    assert!(over2.is_empty(), "tiles above physical stacked capacity at S=2: {over2:?}");
+
+    // Teeth: some belt genuinely carries more than its unstacked cap
+    // (the 60/s merger on red), and the forcing rule placed the stack
+    // inserters that make that physically real.
+    assert!(!audit(&l2, 1).is_empty(), "no belt exceeds unstacked capacity — vacuous headline");
+    assert!(
+        l2.entities.iter().filter(|e| e.name == "stack-inserter").count()
+            > l1.entities.iter().filter(|e| e.name == "stack-inserter").count(),
+        "S=2 must force stack inserters beyond the ladder's S=1 choices"
+    );
+}
+
+/// RFC-047 Leg B/C lift differential (#312's exact repro config; see
+/// `quality_differential_ec_normal_vs_legendary`): EC@6/s legendary on
+/// yellow belts. copper-cable is 25/s (2 legendary AM3 machines @12.5/s)
+/// into a SINGLE EC consumer trunk — the consumer-clamped fan-in wall.
+///
+/// - **S=1 REFUSES**: 25/s > one full yellow belt (2 × 7.5 = 15/s). The
+///   wall holds honestly (no belt tier lifts it; only stacking can).
+/// - **S=2 LAYS OUT CLEAN**: with the 047-1b stacking-aware row-split
+///   cap the 2 cable machines collapse into ONE lane-split row (25 ≤ 30
+///   = stacked-yellow full belt), whose both-lane output CORNER-FEEDS
+///   the single trunk (trunk head == producer out_y, nothing north = a
+///   B11 corner, not a B8 sideload). Both trunk lanes carry ~12.5 each
+///   (consumer demand-pull ~9.4/lane), so 25/s fits `lane_cap × 2 = 30`
+///   at S=2 — the wall re-scale (047-1c) credits it soundly and the
+///   honest walker (post-Phase-0) sees zero single-lane overload.
+///
+/// This is the RFC-046 parity fixture flipped to the differential
+/// success it was originally written as (kill 5). Same per-tile physical
+/// audit discipline as `stacking_ec_60s_red_one_belt_headline`.
+#[test]
+fn stacking_fanin_wall_lift_ec6_yellow_legendary() {
+    use spaghettio_core::common::{
+        belt_throughput_stacked, is_splitter, is_surface_belt, is_ug_belt,
+        splitter_to_surface_tier, ug_to_surface_tier, QualityTier,
+    };
+    use spaghettio_core::recipe_db::MachinePalette;
+
+    let inputs: FxHashSet<String> =
+        ["iron-plate", "copper-plate"].iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "electronic-circuit",
+        6.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Legendary,
+    )
+    .unwrap_or_else(|e| panic!("solve: {e}"));
+
+    let opts_with = |stacking: u8| layout::LayoutOptions {
+        strategy: Default::default(),
+        surplus_policy: Default::default(),
+        max_belt_tier: Some("transport-belt".to_string()),
+        row_layout: Default::default(),
+        max_inserter_tier: Default::default(),
+        quality: QualityTier::Legendary,
+        wire_mode: Default::default(),
+        merge_tap: false,
+        stacking,
+    };
+
+    // S=1: the fan-in wall holds — 25/s cable > 15/s full yellow.
+    let s1 = layout::build_bus_layout(&sr, opts_with(1));
+    assert!(
+        s1.is_err(),
+        "S=1 must hit #312's fan-in refusal (25/s cable > 15/s full yellow)"
+    );
+
+    // S=2: same config lays out physically valid end to end.
+    let l2 = layout::build_bus_layout(&sr, opts_with(2))
+        .unwrap_or_else(|e| panic!("S=2 must lay out with the stacked lift, got Err: {e}"));
+    assert_eq!(l2.stacking, 2, "layout must record its stack size");
+    let issues = validate::validate(&l2, Some(&sr), LayoutStyle::Bus)
+        .unwrap_or_else(|e| panic!("S=2 validate: {e:?}"));
+    let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
+    assert!(errors.is_empty(), "expected 0 errors at S=2, got {errors:?}");
+
+    // Per-tile physical audit: every rate-stamped belt-surface tile must be
+    // within its belt's stacked capacity at S=2 (mirrors the #311 headline).
+    let audit = |l: &spaghettio_core::models::LayoutResult, s: u8| -> Vec<String> {
+        l.entities
+            .iter()
+            .filter_map(|e| {
+                let tier = if is_surface_belt(&e.name) {
+                    e.name.as_str()
+                } else if is_ug_belt(&e.name) {
+                    ug_to_surface_tier(&e.name)
+                } else if is_splitter(&e.name) {
+                    splitter_to_surface_tier(&e.name)
+                } else {
+                    return None;
+                };
+                let rate = e.rate?;
+                let cap = belt_throughput_stacked(tier, s);
+                (rate > cap + 0.01)
+                    .then(|| format!("{} at ({},{}) rate {rate} > cap {cap}", e.name, e.x, e.y))
+            })
+            .collect()
+    };
+    let over2 = audit(&l2, 2);
+    assert!(over2.is_empty(), "tiles above physical stacked capacity at S=2: {over2:?}");
+
+    // Teeth: some belt genuinely carries more than one unstacked yellow belt
+    // (25/s cable trunk / row output > 15/s), proving the lift is real — the
+    // config is only buildable because stacking doubled the per-belt ceiling.
+    assert!(
+        l2.entities.iter().any(|e| e.rate.is_some_and(|r| r > 15.0)),
+        "no belt exceeds unstacked full-belt capacity — vacuous lift"
+    );
+}
+
+/// RFC-046: `stacking > 1` under an inserter cap below Stack is an
+/// incoherent config (belts cannot stack without stack inserters, BS2)
+/// — refused by name at layout entry, never silently degraded.
+#[test]
+fn stacking_refuses_low_inserter_cap() {
+    use spaghettio_core::bus::inserter_ladder::InserterTier;
+    use spaghettio_core::common::QualityTier;
+    use spaghettio_core::recipe_db::MachinePalette;
+
+    let inputs: FxHashSet<String> = ["iron-plate"].iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "iron-gear-wheel",
+        1.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-1",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap_or_else(|e| panic!("solve: {e}"));
+
+    let err = layout::build_bus_layout(
+        &sr,
+        layout::LayoutOptions {
+            strategy: Default::default(),
+            surplus_policy: Default::default(),
+            max_belt_tier: None,
+            row_layout: Default::default(),
+            max_inserter_tier: InserterTier::Fast,
+            quality: QualityTier::Normal,
+            wire_mode: Default::default(),
+            merge_tap: false,
+            stacking: 2,
+        },
+    )
+    .expect_err("stacking=2 with max_inserter_tier=Fast must refuse");
+    assert!(
+        err.contains("requires max_inserter_tier"),
+        "refusal must name the conflict, got: {err}"
+    );
+}
+
+/// RFC-046 family exemption: kovarex-class self-loop rows are
+/// stacking-exempt (the reach-2 minor export shares the major's item ⇒
+/// one family ⇒ must plan unstacked to keep uniform ×S sound). The same
+/// config as the S=1 kovarex differential lays out clean at S=2, and
+/// the self-loop row's output inserters stay UNforced (no stack
+/// inserter appears that the S=1 layout didn't already place).
+#[test]
+fn stacking_kovarex_family_exempt_s2() {
+    use spaghettio_core::common::QualityTier;
+    use spaghettio_core::recipe_db::MachinePalette;
+
+    let inputs: FxHashSet<String> = ["uranium-238"].iter().map(|s| s.to_string()).collect();
+    let excluded: FxHashSet<String> =
+        ["uranium-processing"].iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "uranium-235",
+        0.1,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &excluded,
+        QualityTier::Normal,
+    )
+    .unwrap_or_else(|e| panic!("solve: {e}"));
+
+    let run = |stacking: u8| {
+        let layout = layout::build_bus_layout(
+            &sr,
+            layout::LayoutOptions {
+                strategy: Default::default(),
+                surplus_policy: Default::default(),
+                max_belt_tier: None,
+                row_layout: Default::default(),
+                max_inserter_tier: Default::default(),
+                quality: QualityTier::Normal,
+                wire_mode: Default::default(),
+                merge_tap: false,
+                stacking,
+            },
+        )
+        .unwrap_or_else(|e| panic!("S={stacking} layout: {e}"));
+        let issues = validate::validate(&layout, Some(&sr), LayoutStyle::Bus)
+            .unwrap_or_else(|e| panic!("S={stacking} validate: {e}"));
+        let errors: Vec<_> =
+            issues.iter().filter(|i| i.severity == Severity::Error).cloned().collect();
+        (layout, errors)
+    };
+
+    let (l1, e1) = run(1);
+    let (l2, e2) = run(2);
+    assert!(e1.is_empty(), "S=1 kovarex errors: {e1:?}");
+    assert!(e2.is_empty(), "S=2 kovarex errors: {e2:?}");
+
+    let stack_count = |l: &spaghettio_core::models::LayoutResult| {
+        l.entities.iter().filter(|e| e.name == "stack-inserter").count()
+    };
+    assert_eq!(
+        stack_count(&l1),
+        stack_count(&l2),
+        "family exemption must keep the self-loop chain's inserters unforced at S=2"
+    );
+}
+
+/// RFC-047 close-out: the ORIGINAL build-quality headline — EC@60/s
+/// **legendary on express belts** — which RFC-046 demoted as "blocked by
+/// pre-existing high-rate residuals unrelated to stacking", now green:
+/// the junction failure died with the stacking-aware row-split cap
+/// (047-1b consolidation removed the 50-tile crossing) and the ±3%
+/// overshoot died with worst-lane output-belt sizing (kill-4 root cause:
+/// midpoint-bridge integer lane asymmetry at zero-headroom tiers).
+/// Kill-2 discipline: per-tile physical audit, not warning-count trust.
+#[test]
+fn stacking_ec_60s_express_legendary_s2() {
+    use spaghettio_core::common::{
+        belt_throughput_stacked, is_splitter, is_surface_belt, is_ug_belt,
+        splitter_to_surface_tier, ug_to_surface_tier, QualityTier,
+    };
+    use spaghettio_core::recipe_db::MachinePalette;
+
+    let inputs: FxHashSet<String> =
+        ["iron-ore", "copper-ore"].iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "electronic-circuit",
+        60.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Legendary,
+    )
+    .unwrap_or_else(|e| panic!("solve: {e}"));
+
+    let layout_result = layout::build_bus_layout(
+        &sr,
+        layout::LayoutOptions {
+            strategy: Default::default(),
+            surplus_policy: Default::default(),
+            max_belt_tier: Some("express-transport-belt".to_string()),
+            row_layout: Default::default(),
+            max_inserter_tier: Default::default(),
+            quality: QualityTier::Legendary,
+            wire_mode: Default::default(),
+            merge_tap: false,
+            stacking: 2,
+        },
+    )
+    .unwrap_or_else(|e| panic!("layout: {e}"));
+
+    let issues = validate::validate(&layout_result, Some(&sr), LayoutStyle::Bus)
+        .unwrap_or_else(|e| panic!("validate: {e}"));
+    let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
+    assert!(errors.is_empty(), "expected 0 errors, got {errors:?}");
+
+    let mut over: Vec<String> = Vec::new();
+    let mut max_seen = 0.0_f64;
+    for e in &layout_result.entities {
+        let tier = if is_surface_belt(&e.name) {
+            e.name.as_str()
+        } else if is_ug_belt(&e.name) {
+            ug_to_surface_tier(&e.name)
+        } else if is_splitter(&e.name) {
+            splitter_to_surface_tier(&e.name)
+        } else {
+            continue;
+        };
+        let Some(rate) = e.rate else { continue };
+        max_seen = max_seen.max(rate);
+        let cap = belt_throughput_stacked(tier, 2);
+        if rate > cap + 0.01 {
+            over.push(format!("{} at ({},{}) rate {rate} > stacked cap {cap}", e.name, e.x, e.y));
+        }
+    }
+    assert!(over.is_empty(), "tiles above physical stacked capacity: {over:?}");
+    assert!(
+        max_seen > 45.0,
+        "no belt above unstacked express capacity (max {max_seen}) — stacked credit never engaged"
     );
 }
