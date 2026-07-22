@@ -1,6 +1,6 @@
 # RFC-048: Cell composition (city-block layout) — feasibility spike
 
-Registry: [`rfcs.md`](rfcs.md). Status: **Spike — Phase 0 (paper recon) open.**
+Registry: [`rfcs.md`](rfcs.md). Status: **Spike — Phase 0 complete (GO); Phase 1 not started.**
 
 ## Summary
 
@@ -180,7 +180,124 @@ item is a prerequisite-shaped refactor).
   mechanism) and to beacons (a beaconed cell is just another catalog
   entry).
 
+## Phase 0 findings (2026-07-22, picked up by the RFC-046/047/049 session)
+
+**F1 — the ratio-cell math in the Design section is WRONG (falsified by
+the solver).** "1 cable machine + 2 EC machines = 5 EC/s" under-supplies
+cable 3×: 5 EC/s consumes 15 cable/s and one AM3 cable machine makes
+5/s. The correct quantum is **3 cable + 2 EC machines = 5 EC/s**
+(solver-confirmed: EC@5 solves to cable ×3.00, EC ×2.00). Cell
+footprints below use the corrected ratio; kill criterion 1's variant
+budget is unaffected (the quantum is still one cell shape, just wider).
+
+**F2 — engine comparators frozen (kill 3).** EC@5/s from plates, AM3,
+normal, defaults: **13×25 = 325 tiles, 112 entities, 0 errors / 4
+warnings**. EC@15/s from plates: **the engine now REFUSES** — RFC-047's
+late sideload check fires ("copper-cable 45.00/s exceeds per-lane
+capacity 22.50/s on a sideload-fed single trunk (2 producers, no
+balancer)"), i.e. the #336 (n,1)-merge-tap gap on a mainstream config
+(no fixture covered it; pre-RFC-047 it built with silent physical
+overloads). **The spike's primary comparison case is therefore not
+"beat the engine's layout" but "exist where the engine honestly
+cannot"** — stronger motivation than the RFC's original framing, and
+kill 3's area comparison falls back to the EC@5 point plus per-cell
+arithmetic (3 cells ≈ 3× the cell footprint + corridors vs 325×3-ish).
+
+**F3 — the verification story upgrades: RFC-050's `spaghettio-sim` is
+live** (blessed baselines landed same-day). Cells are the natural unit
+for its boundary kit — feed W ports with tier-matched loaders (S=1) or
+stack-inserter banks (S>1, measured 179–186/s on S=4 express), drain E
+ports with count-and-clear chests, measure planned-vs-actual per cell
+ONCE at catalog time. "Pre-verified cell" can mean sim-verified, not
+just validator-verified, from the first catalog entry. (The harness's
+inserter-direction discovery — every historical export ran backwards
+in-game, fixed #348 — is also the strongest possible argument for the
+spike's pre-verification premise.)
+
+**F4 — port contract v2 (lane-aware; folds the PR #341 review's
+load-bearing finding).** A port is
+`(edge, y, kind, item, direction, lanes, per-lane rate ceiling)` with
+`lanes ∈ {1, 2}` and one hard composition rule: **corridors connect to
+ports only via lane-preserving forms** — straight feeds (B7), corners
+(B11), or splitter outputs (S4); sideloading into a port is forbidden
+(B8 halves the contract invisibly; the post-RFC-047 walker vetoes it).
+A `lanes: 2` in-port promises both lanes arrive loaded; a `lanes: 2`
+out-port promises the cell fills both (row bridges do this today —
+templates.rs midpoint bridge). Rate ceilings are per-lane so stacking
+composes multiplicatively later (per-lane × S), matching the engine's
+capacity layer.
+
+**F5 — corrected cell sketch (paper), EC ratio cell @ 5 EC/s:**
+- Cable row: 3 machines (single-input template, height 7, width 9) —
+  in: copper-plate 7.5/s, out: cable 15/s (both-lane via bridge).
+- EC row: 2 machines (dual-input template, height 8, width 6) — in:
+  iron-plate 5/s + cable 15/s, out: EC 5/s.
+- In-cell connection: cable out-belt corners into the EC row's far
+  input belt (lane-preserving, no trunk, no balancer, no sideload —
+  the geometry class RFC-047 proved sound).
+- Cell ≈ **11 wide × 17 tall (187 tiles)** incl. 1-tile port margins;
+  ports: W iron-plate in (1 lane, 5/s), W copper-plate in (1 lane,
+  7.5/s), E EC out (2 lanes, 2.5/s/lane). Power: internal medium pole
+  pair (or per-cell EEI under sim).
+- EC@15/s = 3 cells stacked vertically + 2 shared W feed corridors +
+  1 E collection corridor ≈ **13×55 ≈ 715 tiles** vs the engine's
+  refusal (and vs 3× the EC@5 engine footprint ≈ 975 tiles if it could
+  scale linearly). Within kill 3's 2× bound against the linear
+  extrapolation; catalog count stands at 2 variants (ratio cell +
+  collection corridor template) — far under kill 1's ~6.
+
+**Review folds (2026-07-22, PR #359):**
+- *F1 addendum*: the corrected quantum makes the cell ~50% wider than
+  the original sketch assumed — every area number derived from the
+  1+2 design is discarded entirely, not adjusted.
+- *F2 addendum*: with EC@15-from-plates unable to serve as a
+  denominator, the approximate cross-check is EC@10/s **from ore**
+  (236 entities, 34×18 = 612 bbox tiles; approximate — different
+  input chain). And the sell is reframed: **cells win on warnings,
+  not area** — engine EC configs carry 4+ residual warnings
+  (inserter/demand-pull classes); a sim-verified cell carries zero by
+  construction. That is the Phase-1 reviewer's headline metric.
+- *F4 hardened*: the sideload prohibition is a **contract invariant**,
+  not a walker-compatibility note — sideloading silently turns a
+  `lanes: 2` promise into a `lanes: 1` reality with no detectable
+  contract violation; a corridor router adding a sideload shortcut
+  "because it fits" would be invisible until sim measurement. Ports
+  are lane-counted; sideloading violates the count. (That it also
+  trips the post-RFC-047 walker is defense-in-depth, not the reason.)
+- *F5 clarified*: the 11-wide estimate assumes one 3-machine
+  single-input row, which the existing engine templates DO emit
+  natively (row templates take a machine count and stamp per-machine
+  positions at 3-tile pitch; the placer's `max_per_row` governs the
+  split) — so the reuse path (F3, engine-as-cell-generator) covers it
+  without a new composite template. What Phase 1 must still verify:
+  the CROPPED row keeps its shared input-belt geometry intact at cell
+  boundaries (the belt stubs at the crop line become the port tiles).
+- *Phase-1 gate addition*: the second sim-verified catalog entry must
+  be a **fluid consumer** (plastic-bar class) — the harness's fluid
+  boundaries are uncalibrated, and catalog time is the right forcing
+  function; success converts Phase 2's fluids question from
+  blocked-on-calibration to integration.
+
+**Go/no-go: GO for Phase 1** (catalog + stamper + manual composition
+harness behind a test-only flag), with the corrected ratio, the
+lane-aware port contract, and sim-verification of the first two catalog
+entries as the Phase 1 gate.
+
 ## Decision log
+
+- *2026-07-22 — PR #359 review folded (5 observations, verdict "Ship
+  it"): old-design area numbers discarded; EC@10-from-ore added as the
+  approximate comparator with the warnings-not-area reframing; the
+  sideload prohibition promoted to a contract invariant; the
+  multi-machine-row width accounting clarified (native template
+  capability; crop-boundary belt-stub question assigned to Phase 1);
+  fluid-consumer second catalog entry added to the Phase-1 gate.*
+- *2026-07-22 — Phase 0 executed by the picking-up session (see
+  findings above): ratio-cell math corrected (F1, solver-falsified),
+  comparators frozen incl. the EC@15 honest-refusal discovery (F2 —
+  reported to #336), sim-harness verification woven in (F3), port
+  contract v2 lane-aware (F4, folding the PR #341 review), corrected
+  cell sketch + composed estimate (F5). Go decision recorded.*
 
 - *2026-07-22 — opened as a spike. Motivated by
   `architecture-audit-2026-07.md` §6-A (the audit's highest-value
