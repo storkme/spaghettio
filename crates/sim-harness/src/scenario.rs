@@ -497,7 +497,7 @@ local function stn(st)
 end
 
 local function dump_sim_state(s)
-  local belts, machines, inserters = {}, {}, {}
+  local belts, machines, inserters, pipes = {}, {}, {}, {}
   for _, b in pairs(s.find_entities_filtered{type = {"transport-belt", "underground-belt", "splitter"}}) do
     local n = 0
     for li = 1, b.get_max_transport_line_index() do
@@ -508,9 +508,26 @@ local function dump_sim_state(s)
                            math.floor(b.position.y - storage.offy) + LY0, n})
     end
   end
+  -- Pipe/fluid section (#364): every pipe-class entity with name,
+  -- direction, and fluid contents — fluids were invisible in the dump,
+  -- which is why the fluid-feed fault needed controlled attribution
+  -- instead of a five-minute read.
+  for _, p in pairs(s.find_entities_filtered{type = {"pipe", "pipe-to-ground", "infinity-pipe", "storage-tank", "pump"}}) do
+    local fl = {}
+    for fname, amt in pairs(p.get_fluid_contents()) do
+      table.insert(fl, {fname, math.floor(amt * 10) / 10})
+    end
+    table.insert(pipes, {math.floor(p.position.x - storage.offx) + LX0,
+                         math.floor(p.position.y - storage.offy) + LY0,
+                         p.name, p.direction, fl})
+  end
   for _, m in pairs(s.find_entities_filtered{type = {"assembling-machine", "furnace"}}) do
+    local mfl = {}
+    for fname, amt in pairs(m.get_fluid_contents()) do
+      table.insert(mfl, {fname, math.floor(amt * 10) / 10})
+    end
     table.insert(machines, {math.floor(m.position.x - storage.offx) + LX0,
-                            math.floor(m.position.y - storage.offy) + LY0, m.name, stn(m.status)})
+                            math.floor(m.position.y - storage.offy) + LY0, m.name, stn(m.status), mfl})
   end
   for _, i in pairs(s.find_entities_filtered{type = "inserter"}) do
     table.insert(inserters, {math.floor(i.position.x - storage.offx) + LX0,
@@ -518,7 +535,7 @@ local function dump_sim_state(s)
   end
   helpers.write_file("sim-state.json", helpers.table_to_json{
     offx = storage.offx, offy = storage.offy, fed = storage.fed_total,
-    belts = belts, machines = machines, inserters = inserters}, false)
+    belts = belts, machines = machines, inserters = inserters, pipes = pipes}, false)
 end
 
 local function finalize(s, converged)

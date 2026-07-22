@@ -226,7 +226,14 @@ pub fn export(layout: &LayoutResult, label: &str) -> String {
                 // convention is drop-side. Flip 180° at the artifact
                 // boundary — the parser un-flips on import — or every
                 // exported inserter runs backwards in-game.
-                direction: if ent.name.contains("inserter") {
+                //
+                // PIPE-TO-GROUND is the same class (#364, sim-measured
+                // 2026-07-22): the game's blueprint direction is the
+                // SURFACE-opening side, while the engine's convention
+                // (F5) is the underground-run side — exported pairs
+                // faced each other and never connected, severing every
+                // fluid feed in-game while validating clean.
+                direction: if ent.name.contains("inserter") || ent.name == "pipe-to-ground" {
                     (ent.direction as u8 + 8) % 16
                 } else {
                     ent.direction as u8
@@ -543,6 +550,55 @@ mod tests {
         assert_eq!(ents[1]["direction"], 8);
         // …and non-inserters are untouched.
         assert_eq!(ents[2]["direction"], 8);
+    }
+
+    /// Pipe-to-ground shares the artifact-boundary flip (#364): the game's
+    /// blueprint direction is the SURFACE-opening side; the engine's (F5)
+    /// is the underground side. The engine's vertical drop pair (top
+    /// "input" South tunneling down to bottom "output" North) must export
+    /// facing AWAY from each other — top North (0), bottom South (8) — or
+    /// the pair never connects in-game (sim-measured: both PTGs empty
+    /// beside a full header pipe, machine fluid-starved).
+    #[test]
+    fn pipe_to_ground_directions_flip_to_game_convention() {
+        let layout = LayoutResult {
+            entities: vec![
+                PlacedEntity {
+                    name: "pipe-to-ground".into(),
+                    x: 0,
+                    y: 0,
+                    direction: EntityDirection::South,
+                    io_type: Some("input".into()),
+                    ..Default::default()
+                },
+                PlacedEntity {
+                    name: "pipe-to-ground".into(),
+                    x: 0,
+                    y: 2,
+                    direction: EntityDirection::North,
+                    io_type: Some("output".into()),
+                    ..Default::default()
+                },
+                PlacedEntity {
+                    name: "pipe".into(),
+                    x: 1,
+                    y: 0,
+                    direction: EntityDirection::North,
+                    ..Default::default()
+                },
+            ],
+            width: 2,
+            height: 3,
+            ..Default::default()
+        };
+        let bp = decode_blueprint(&export(&layout, "ptgflip"));
+        let ents = bp["entities"].as_array().unwrap();
+        // Engine South (tunnel down) exports as game North (surface up)…
+        assert_eq!(ents[0]["direction"], 0);
+        // …engine North (faces the input) as game South (surface down)…
+        assert_eq!(ents[1]["direction"], 8);
+        // …and plain pipes are untouched.
+        assert_eq!(ents[2]["direction"], 0);
     }
 
     /// The parser applies the inverse flip so imported game-convention
