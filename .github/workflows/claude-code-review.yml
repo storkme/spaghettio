@@ -19,16 +19,10 @@ jobs:
     #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
 
     runs-on: ubuntu-latest
-    # `pull-requests`/`issues` must be WRITE: the review agent posts its
-    # findings as a PR review + inline/summary comments. The stock
-    # template ships read-only, which silently discarded every review
-    # from #305 through #324 — the job green-checked after a single
-    # permission denial (~20s, "No buffered inline comments") and no
-    # review was ever posted. Diagnosed 2026-07-21 on PR #324.
     permissions:
       contents: read
-      pull-requests: write
-      issues: write
+      pull-requests: read
+      issues: read
       id-token: write
 
     steps:
@@ -44,20 +38,7 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
-          # `--comment` is LOAD-BEARING: the code-review plugin's own
-          # contract is "if --comment was NOT provided, stop here. Do not
-          # post any GitHub comments." Without it the review runs, prints
-          # to the action log, and posts nothing — which (together with
-          # the read-only perms fixed in #327) is why no PR ever received
-          # a bot review from #305 to #328.
-          prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }} --comment'
-          # Third load-bearing piece (with write perms #327 and --comment
-          # #329): the harness-level tool allowlist. Without it the agent
-          # runs the review but every posting/diff tool call is denied
-          # (11 denials on the #330 canary run). Mirrors the plugin's
-          # frontmatter allowed-tools + the action's own examples.
-          claude_args: |
-            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*)"
+          prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
 
