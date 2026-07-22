@@ -253,7 +253,7 @@ Every claim below was verified against the code by a dedicated sweep. **A–J, L
 are doc/comment fixes** (safe). **K and O are code changes** (dead code removal —
 needs test run). Verdicts: TRUE = stale as claimed.
 
-**Status 2026-07-21:** A–J, L, N, P fixed on branch `docs/audit-doc-rot` (plus
+**Status 2026-07-21:** A–J, L, N, P, Q fixed on branch `docs/audit-doc-rot` (plus
 two bonus finds: CLAUDE.md pipeline stage 1 "Recursively resolves", and a stale
 `bus_router.rs` comment in `tests/e2e.rs`). M was already fixed on main by the
 RFC-046 merge. K and O remain open (code changes, deferred to a follow-up PR).

@@ -43,7 +43,7 @@ If the question goes beyond what's documented, use your knowledge of Factorio me
 
 ### Inserters
 - Pickup: grabs from BOTH lanes of a belt (rule I6)
-- Drop: places on NEAR lane of target belt (rule I5)
+- Drop: places on FAR lane of target belt (rule I5)
 - Throughput per type (approximate, depends on distance and stack size):
   - Regular inserter: ~0.83 items/s (one item per swing)
   - Fast inserter: ~2.31 items/s
