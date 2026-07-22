@@ -117,6 +117,7 @@ For full build commands (WASM rebuild, release builds), see [`docs/build-systems
 ## Tooling
 
 - **Blueprint analyzer** — `cargo run -p spaghettio_mining --bin blueprint-analyze -- [file|--batch|--json]`. Useful for auditing community blueprints or spot-checking our own export round-trips.
+- **Sim harness** (RFC-050) — `cargo run -p spaghettio_sim_harness -- run --bp <file> --manifest <file>` runs a layout in a real headless Factorio server and reports planned-vs-measured rates (`fetch` once first; `bless`/`check` freeze and enforce measured baselines). Full how-to: [`docs/sim-harness.md`](docs/sim-harness.md). **One sim run at a time per install dir** — Factorio's write-dir lock plus fixed result filenames mean a concurrent second run dies at startup ("factorio exited early") or silently picks up the other run's report. To run concurrently, clone the install (`cp -r`) and point `SPAGHETTIO_FACTORIO_DIR` at the clone; never share the default install dir with a live run.
 - **Containerised Claude-Code runner** — `Dockerfile` + `docker-compose.yml` + `docker-entrypoint.sh` at the repo root. Ships a `node:24` image with Claude Code, `gh`, Rust, and the pi-coding-agent preinstalled. `docker compose run --rm claude-agent` drops into an interactive container with the workspace mounted and host creds (`~/.claude`, `~/.config/gh`) bind-mounted read-only. Used for one-shot / llama-backed watcher agent runs.
 
 ### Pipeline stages (all Rust)
@@ -189,6 +190,7 @@ Layout bugs are easy to get wrong — zero validation errors can mean the check 
 | Validation checks | `crates/core/src/validate/` (34 checks, dispatched from `mod.rs`) |
 | Snapshot format | `crates/core/src/snapshot.rs` + [`docs/layout-snapshot-debugger.md`](docs/layout-snapshot-debugger.md) |
 | Belt lane physics | [`docs/factorio-mechanics.md`](docs/factorio-mechanics.md) |
+| Sim harness (headless Factorio measurement runs) | [`docs/sim-harness.md`](docs/sim-harness.md) |
 | Ghost pipeline contracts | [`docs/ghost-pipeline-contracts.md`](docs/ghost-pipeline-contracts.md) |
 | Walker-veto debugging | [`docs/walker-veto-debugging.md`](docs/walker-veto-debugging.md) |
 | Build commands | [`docs/build-systems.md`](docs/build-systems.md) |
