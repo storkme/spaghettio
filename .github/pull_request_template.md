@@ -35,5 +35,5 @@ made mid-flight, things intentionally deferred. **"None" is a valid answer
 ## Models / contracts touched
 
 Which abstraction this affects (e.g. `ghost-pipeline-contracts.md`,
-`factorio-mechanics.md`, the tier ladder in `CLAUDE.md`). If a contract
+`factorio-mechanics.md`, the tier ladder in `docs/status.md`). If a contract
 changed, the doc update is part of this PR. "None" is fine for chores.
