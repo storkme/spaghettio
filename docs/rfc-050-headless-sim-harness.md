@@ -318,3 +318,21 @@ design, so blessed measured baselines are **shareable** — keyed on
   out Phase 1's calibration gate. Quality-scoped-statistics question
   (KC2's other Phase 1 exit item) not investigated this session — no
   quality>normal fixture was run.*
+- *2026-07-22 — **Phase 1 calibration gate (KC2) PASSED; Phase-1 exit
+  items resolved.** Lead reconciliation runs with the released tool on
+  the merged Phase-0 manifest: gear@10/s **PASS** (10.00/s produced
+  +0.0%, 10.13/s delivered, 36/36 working, converged) — now verified on
+  two independent implementations (python prototype + Rust crate).
+  EC@10/s **FAIL −50%** (5.00/s), matching the prototype's dogfood
+  number exactly; the crate agent's interim −20% came from a
+  differently-configured fixture (1110 vs 805 entities). Per-item
+  attribution seals the KC2 fork as REAL ENGINE DEFECT: copper-plate
+  produces at exactly plan (feeds proven good) while iron-plate −43.5%
+  and copper-cable −48% are the starved stages — #352 stands, and the
+  constraint web is wider than the four warned EC machines. The
+  quality-scoped-statistics question is RESOLVED as a non-issue: the
+  r150 legendary-machine run reported production stats correctly
+  (18.8/s); the earlier zeros were genuine zero production under the
+  pre-#348/#350 broken exports. Remaining phases: 2 (sweeps/anchor
+  retirements), 3 (bless/check), 4 (web sim-state overlay — pulled
+  forward at user request, 2026-07-22).*
