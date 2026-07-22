@@ -289,6 +289,23 @@ entries as the Phase 1 gate.
 
 ## Decision log
 
+- *2026-07-22 — FIRST SIM RUN FAILED HONESTLY, root cause harness-side:
+  the composed layout fed EAST-facing boundary inputs, and
+  scenario.rs's non-south rig geometry is UNCALIBRATED by its own
+  module doc — empirically the east feed rigs misassemble (1 of 9
+  lanes fed, 50 feeder inserters waiting_for_space; #363 filed with
+  the datum). The sim-state dump proved the COMPOSITION itself flowed
+  correctly wherever fed: cable ran cell→corridor→splitter→EC-cell
+  end-to-end (belts full), row-1 machines crafted to full_output.
+  RESPONSE: composer reworked to the CALIBRATED orientation —
+  horizontal pair stacking, north-edge feed columns cornering east
+  per-pair (inner column to topmost port, no crossings; iron still
+  UG-hops under the cable cell), south-edge drains. Calibrated EC@15:
+  89×22 = 1958 tiles, 422 entities, 0 errors / 6 inherited warnings
+  (pole-network stitching needed a nudge-not-skip spanning line —
+  skipped poles broke the chain). Plastic cell reworked likewise
+  (9×16, 0 errors / 0 warnings). Both sims queued behind the shared
+  install lock.*
 - *2026-07-22 — EC@15 composes at 0 errors (3 pairs, 29×47 = 1363
   tiles, 345 entities — 1.4× the engine's EC@5 linear extrapolation,
   inside kill 3's 2× bound, vs an engine that REFUSES the config; the

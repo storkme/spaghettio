@@ -507,7 +507,7 @@ fn probe_compose_ec15() {
 #[test]
 #[ignore = "artifact producer for the sim step"]
 fn export_composed_ec15_for_sim() {
-    let (esr, l) = compose_pairs(3);
+    let (esr, l) = compose_pairs_calibrated(3);
     let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(&l, &esr, "rfc048-ec15-composed");
     std::fs::create_dir_all("target/tmp").unwrap();
     std::fs::write("target/tmp/rfc048-ec15.bp", &bp).unwrap();
@@ -577,43 +577,54 @@ fn export_composed_plastic_for_sim() {
     let (sr, l) = generate_row_layout("plastic-bar", 2.0, &["petroleum-gas", "coal"]);
     let cell = extract_cell(&l);
     let cx = 4;
+    let cy = 3;
     let mut entities: Vec<PlacedEntity> = Vec::new();
     for e in &cell.entities {
         let mut e = e.clone();
         e.x += cx;
+        e.y += cy;
         entities.push(e);
     }
     let mut b_in: Vec<BoundaryRecord> = Vec::new();
     let mut b_out: Vec<BoundaryRecord> = Vec::new();
-    // Coal feed to the belt port.
+    // Coal: north-edge column (calibrated South direction), corner East.
     let coal = cell.ports.iter().find(|p| p.inbound && p.item == "coal").unwrap();
-    stamp_path(&mut entities, &[(0, coal.y), (cx + coal.x - 1, coal.y)],
-        "coal", "express-transport-belt", "corridor:feed:coal");
-    b_in.push(BoundaryRecord { item: "coal".into(), x: 0, y: coal.y,
-        direction: EntityDirection::East, is_fluid: false, entity: "express-transport-belt".into() });
-    // Petroleum pipe: find the cell's westmost pipe tile and run pipes west.
+    stamp_path(&mut entities, &[(1, 0), (1, cy + coal.y), (cx + coal.x - 1, cy + coal.y)],
+        "coal", "express-transport-belt", "feed:coal");
+    b_in.push(BoundaryRecord { item: "coal".into(), x: 1, y: 0,
+        direction: EntityDirection::South, is_fluid: false, entity: "express-transport-belt".into() });
+    // Petroleum: pipe column from the north edge, then east to the cell's
+    // westmost petroleum pipe tile (pipes connect omnidirectionally).
     let pipe_terminal = cell.entities.iter()
         .filter(|e| (e.name == "pipe" || e.name == "pipe-to-ground")
             && e.segment_id.as_deref().map(|s| s.contains("petroleum")).unwrap_or(false))
         .min_by_key(|e| e.x).unwrap();
-    let (py_x, py_y) = (pipe_terminal.x + cx, pipe_terminal.y);
-    for x in 0..py_x {
-        entities.push(PlacedEntity { name: "pipe".into(), x, y: py_y,
+    let (pt_x, pt_y) = (pipe_terminal.x + cx, pipe_terminal.y + cy);
+    for y in 0..=pt_y {
+        entities.push(PlacedEntity { name: "pipe".into(), x: 3, y,
             direction: EntityDirection::North,
-            segment_id: Some("corridor:feed:petroleum-gas".into()),
+            segment_id: Some("feed:petroleum".into()),
             carries: Some("petroleum-gas".into()), ..Default::default() });
     }
-    b_in.push(BoundaryRecord { item: "petroleum-gas".into(), x: 0, y: py_y,
-        direction: EntityDirection::East, is_fluid: true, entity: "pipe".into() });
-    // Output extension to the boundary.
+    for x in 4..pt_x {
+        entities.push(PlacedEntity { name: "pipe".into(), x, y: pt_y,
+            direction: EntityDirection::North,
+            segment_id: Some("feed:petroleum".into()),
+            carries: Some("petroleum-gas".into()), ..Default::default() });
+    }
+    b_in.push(BoundaryRecord { item: "petroleum-gas".into(), x: 3, y: 0,
+        direction: EntityDirection::South, is_fluid: true, entity: "pipe".into() });
+    // Output: corner South to the bottom edge.
     let out = cell.ports.iter().find(|p| !p.inbound).unwrap();
-    stamp_path(&mut entities, &[(cx + out.x + 1, out.y), (cx + out.x + 4, out.y)],
-        "plastic-bar", "transport-belt", "corridor:out:plastic");
-    b_out.push(BoundaryRecord { item: "plastic-bar".into(), x: cx + out.x + 4, y: out.y,
-        direction: EntityDirection::East, is_fluid: false, entity: "transport-belt".into() });
+    let (ox, oy) = (cx + out.x + 1, cy + out.y);
+    let bottom = oy + 4;
+    stamp_path(&mut entities, &[(ox, oy), (ox + 1, oy), (ox + 1, bottom)],
+        "plastic-bar", "transport-belt", "out:plastic");
+    b_out.push(BoundaryRecord { item: "plastic-bar".into(), x: ox + 1, y: bottom,
+        direction: EntityDirection::South, is_fluid: false, entity: "transport-belt".into() });
 
     let width = entities.iter().map(|e| e.x).max().unwrap() + 1;
-    let height = entities.iter().map(|e| e.y).max().unwrap() + 1;
+    let height = (entities.iter().map(|e| e.y).max().unwrap() + 1).max(bottom + 1);
     let mut comp = LayoutResult::default();
     comp.entities = entities;
     comp.width = width;
@@ -622,11 +633,10 @@ fn export_composed_plastic_for_sim() {
     comp.boundary_inputs = b_in;
     comp.boundary_outputs = b_out;
 
-    // Validate before export — the composed fluid cell must be clean.
     let issues = spaghettio_core::validate::validate(&comp, Some(&sr),
         spaghettio_core::validate::LayoutStyle::Bus).unwrap_or_else(|e| panic!("validate: {e}"));
     let errors = issues.iter().filter(|i| i.severity == spaghettio_core::validate::Severity::Error).count();
-    println!("composed plastic: {}x{}, {} entities, {} errors / {} issues",
+    println!("composed plastic (calibrated): {}x{}, {} entities, {} errors / {} issues",
         width, height, comp.entities.len(), errors, issues.len());
     assert_eq!(errors, 0);
 
@@ -636,4 +646,212 @@ fn export_composed_plastic_for_sim() {
     std::fs::write("target/tmp/rfc048-plastic.manifest.json",
         serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
     println!("wrote target/tmp/rfc048-plastic.bp + manifest");
+}
+
+
+/// Compose N ratio pairs stacked HORIZONTALLY with north-edge feeds and
+/// south-edge drains — the sim harness's CALIBRATED boundary directions
+/// (scenario.rs: only south-facing feed rigs are calibrated; the
+/// east-facing attempt misassembled — #363). Per pair: three feed
+/// columns at the pair's west margin drop South and corner East into
+/// the ports (inner column corners first — no crossings); the EC out
+/// corners South to the bottom edge.
+fn compose_pairs_calibrated(n: i32) -> (spaghettio_core::models::SolverResult, LayoutResult) {
+    use spaghettio_core::models::{BoundaryRecord, EntityDirection, PlacedEntity};
+    let (_csr, cl) = generate_row_layout("copper-cable", 15.0, &["copper-plate"]);
+    let (esr_one, el) = generate_row_layout("electronic-circuit", 5.0, &["iron-plate", "copper-cable"]);
+    let cable = extract_cell(&cl);
+    let ec = extract_cell(&el);
+    let esr = if n == 1 { esr_one } else {
+        let inputs: FxHashSet<String> =
+            ["iron-plate", "copper-cable"].iter().map(|s| s.to_string()).collect();
+        solver::solve_with_palette_exclusions_and_quality(
+            "electronic-circuit", 5.0 * n as f64, &inputs, &MachinePalette::default(),
+            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+        ).unwrap()
+    };
+
+    // Vertical geometry inside a pair (shared by all pairs): feeds enter
+    // at y=0; cells start at y=FEED_MARGIN.
+    const FEED_MARGIN: i32 = 2;
+    let cell_y = FEED_MARGIN + 1;
+    let ec_y = cell_y + 3;
+    let pair_w = 3 /*feed cols*/ + 1 + cable.width + 6 /*corridor*/ + ec.width + 5 /*out+gap*/;
+    let mut entities: Vec<PlacedEntity> = Vec::new();
+    let mut b_in: Vec<BoundaryRecord> = Vec::new();
+    let mut b_out: Vec<BoundaryRecord> = Vec::new();
+    let mut bottom = 0;
+
+    for k in 0..n {
+        let px = k * pair_w; // pair origin x
+        let cable_x = px + 4;
+        let corridor_x = cable_x + cable.width;
+        let ec_x = corridor_x + 6;
+
+        // cells
+        for e in &cable.entities {
+            let mut e = e.clone();
+            e.x += cable_x;
+            e.y += cell_y;
+            entities.push(e);
+        }
+        for e in &ec.entities {
+            let mut e = e.clone();
+            e.x += ec_x;
+            e.y += ec_y;
+            entities.push(e);
+        }
+
+        // Feeds: three ports, sorted by target y ASC; inner (eastmost)
+        // column serves the topmost port.
+        let mut targets: Vec<(String, i32, i32)> = Vec::new(); // (item, port_terminal_x, y)
+        for port in cable.ports.iter().filter(|p| p.inbound) {
+            targets.push((port.item.clone(), cable_x + port.x, cell_y + port.y));
+        }
+        let iron = ec.ports.iter().find(|p| p.inbound && p.item == "iron-plate").unwrap();
+        targets.push((iron.item.clone(), ec_x + iron.x, ec_y + iron.y));
+        targets.sort_by_key(|t| t.2);
+        for (i, (item, tx, ty)) in targets.iter().enumerate() {
+            let col_x = px + 2 - i as i32; // inner column first (i=0 → px+2)
+            if item == "iron-plate" {
+                // Corner row passes through the cable cell — UG hop
+                // under it (express reach 8 == cell width, exactly).
+                stamp_path(&mut entities, &[(col_x, 0), (col_x, *ty), (cable_x - 2, *ty)],
+                    item, "express-transport-belt", &format!("corridor:feed:{item}:{k}:{i}"));
+                for (x, io) in [(cable_x - 1, "input"), (cable_x + cable.width, "output")] {
+                    entities.push(PlacedEntity {
+                        name: "express-underground-belt".into(), x, y: *ty,
+                        direction: EntityDirection::East,
+                        io_type: Some(io.to_string()),
+                        carries: Some(item.clone()),
+                        segment_id: Some(format!("corridor:feed:{item}:{k}:{i}")),
+                        ..Default::default()
+                    });
+                }
+                stamp_path(&mut entities, &[(cable_x + cable.width + 1, *ty), (tx - 1, *ty)],
+                    item, "express-transport-belt", &format!("corridor:feed:{item}:{k}:{i}b"));
+            } else {
+                stamp_path(
+                    &mut entities,
+                    &[(col_x, 0), (col_x, *ty), (tx - 1, *ty)],
+                    item,
+                    "express-transport-belt",
+                    &format!("corridor:feed:{item}:{k}:{i}"),
+                );
+            }
+            b_in.push(BoundaryRecord {
+                item: item.clone(), x: col_x, y: 0,
+                direction: EntityDirection::South, is_fluid: false,
+                entity: "express-transport-belt".into(),
+            });
+        }
+
+        // Cable corridor: identical to the validated pair geometry.
+        let outs: Vec<&Port> = cable.ports.iter().filter(|p| !p.inbound).collect();
+        let (o1, o2) = (outs[0], outs[1]);
+        let ec_cable_port = ec.ports.iter().find(|p| p.inbound && p.item == "copper-cable").unwrap();
+        let ec_cable_in_y = ec_y + ec_cable_port.y;
+        let sx = corridor_x + 2;
+        stamp_path(&mut entities, &[(cable_x + o1.x + 1, cell_y + o1.y), (sx - 1, cell_y + o1.y)],
+            "copper-cable", "fast-transport-belt", &format!("cc:a:{k}"));
+        stamp_path(&mut entities,
+            &[(cable_x + o2.x + 1, cell_y + o2.y), (sx - 1, cell_y + o2.y), (sx - 1, cell_y + o1.y + 1)],
+            "copper-cable", "fast-transport-belt", &format!("cc:b:{k}"));
+        entities.push(PlacedEntity {
+            name: "fast-splitter".into(), x: sx, y: cell_y + o1.y,
+            direction: EntityDirection::East,
+            carries: Some("copper-cable".into()),
+            segment_id: Some(format!("cc:m:{k}")), ..Default::default()
+        });
+        stamp_path(&mut entities,
+            &[(sx + 1, cell_y + o1.y), (sx + 2, cell_y + o1.y), (sx + 2, ec_cable_in_y), (ec_x + ec_cable_port.x - 1, ec_cable_in_y)],
+            "copper-cable", "fast-transport-belt", &format!("cc:c:{k}"));
+
+        // Output: corner SOUTH to the bottom edge (calibrated drain dir).
+        let ec_out = ec.ports.iter().find(|p| !p.inbound).unwrap();
+        let ox = ec_x + ec_out.x + 1;
+        let oy = ec_y + ec_out.y;
+        let out_bottom = cell_y + cable.height + 4;
+        stamp_path(&mut entities,
+            &[(ox, oy), (ox + 1, oy), (ox + 1, out_bottom)],
+            "electronic-circuit", "transport-belt", &format!("out:{k}"));
+        b_out.push(BoundaryRecord {
+            item: "electronic-circuit".into(), x: ox + 1, y: out_bottom,
+            direction: EntityDirection::South, is_fluid: false,
+            entity: "transport-belt".into(),
+        });
+        bottom = bottom.max(out_bottom);
+
+        // Pole stitch along the corridor.
+        for y in [cell_y, cell_y + 7, cell_y + 14] {
+            entities.push(PlacedEntity {
+                name: "medium-electric-pole".into(), x: sx + 4, y,
+                direction: EntityDirection::North,
+                segment_id: Some("pole".into()), ..Default::default()
+            });
+        }
+    }
+
+    let width = entities.iter().map(|e| e.x).max().unwrap() + 1;
+    let height = (entities.iter().map(|e| e.y).max().unwrap() + 1).max(bottom + 1);
+    // Spanning pole line (wire reach 9 > pitch 8) so per-pair pole
+    // islands join one network.
+    {
+        let y = bottom;
+        let mut x = 1;
+        while x < width {
+            // Nudge to the nearest free tile rather than skipping — a
+            // skipped pole breaks the chain (wire reach 9, pitch 8).
+            if let Some(px) = (0..=4).map(|d| x + d).find(|&cx| {
+                cx < width && !entities.iter().any(|e| e.x == cx && e.y == y)
+            }) {
+                entities.push(PlacedEntity {
+                    name: "medium-electric-pole".into(), x: px, y,
+                    direction: EntityDirection::North,
+                    segment_id: Some("pole".into()), ..Default::default()
+                });
+            }
+            x += 8;
+        }
+    }
+    let mut l = LayoutResult::default();
+    l.entities = entities;
+    l.width = width;
+    l.height = height;
+    l.stacking = 1;
+    l.boundary_inputs = b_in;
+    l.boundary_outputs = b_out;
+    (esr, l)
+}
+
+/// Gate: EC@15 in the calibrated orientation — 0 errors required.
+#[test]
+#[ignore = "gate probe"]
+fn probe_compose_ec15_calibrated() {
+    use spaghettio_core::validate::{self, LayoutStyle, Severity};
+    let (esr, l) = compose_pairs_calibrated(3);
+    println!("calibrated EC@15: {}x{} = {} tiles, {} entities", l.width, l.height, l.width * l.height, l.entities.len());
+    match validate::validate(&l, Some(&esr), LayoutStyle::Bus) {
+        Ok(issues) => {
+            let e = issues.iter().filter(|i| i.severity == Severity::Error).count();
+            println!("validation Ok: {} errors / {} issues", e, issues.len());
+            for i in issues.iter().take(10) { println!("  [{:?}] {} {}", i.severity, i.category, i.message); }
+        }
+        Err(er) => {
+            println!("validation FAILED:");
+            for line in format!("{er}").lines().filter(|l| l.contains("[error]")).take(10) { println!("  {line}"); }
+        }
+    }
+}
+
+
+#[test]
+#[ignore = "probe"]
+fn probe_pole_positions() {
+    let (_sr, l) = compose_pairs_calibrated(3);
+    for e in &l.entities {
+        if e.name.contains("pole") {
+            println!("pole ({},{})", e.x, e.y);
+        }
+    }
 }
