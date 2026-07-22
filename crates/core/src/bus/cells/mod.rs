@@ -6,6 +6,7 @@
 //! flag until Phase B wires `CellComposedCandidate` into the
 //! decomposition search.
 
+pub mod chain;
 pub mod compose;
 pub mod extract;
 

@@ -223,3 +223,150 @@ fn export_engine_plastic_for_sim() {
         serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
     println!("wrote engine plastic artifacts ({} boundary in)", l.boundary_inputs.len());
 }
+
+/// Phase-B dev probe: the chain auto-placer on the two dev fixtures.
+#[test]
+#[ignore = "exploration probe while the auto-placer stabilizes"]
+fn probe_chain_autoplace() {
+    use spaghettio_core::bus::cells::chain::compose_chain;
+    use spaghettio_core::validate::{self, LayoutStyle, Severity};
+    for (label, item, rate, inputs) in [
+        ("ec15", "electronic-circuit", 15.0, &["iron-plate", "copper-plate"][..]),
+        ("ac1", "advanced-circuit", 1.0, &["iron-plate", "copper-plate", "plastic-bar"][..]),
+    ] {
+        let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
+        let sr = solver::solve_with_palette_exclusions_and_quality(
+            item, rate, &inputs_set, &MachinePalette::default(),
+            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+        ).unwrap();
+        println!("== {label}: {} specs ==", sr.machines.len());
+        for m in &sr.machines { println!("   {} x{:.2} out {:.2}/s", m.recipe, m.count, m.outputs[0].rate); }
+        match compose_chain(&sr) {
+            Ok(l) => {
+                println!("   composed {}x{} = {} tiles, {} entities", l.width, l.height, l.width * l.height, l.entities.len());
+                match validate::validate(&l, Some(&sr), LayoutStyle::Bus) {
+                    Ok(issues) => {
+                        let e = issues.iter().filter(|i| i.severity == Severity::Error).count();
+                        println!("   validation: {} errors / {} issues", e, issues.len());
+                        for i in issues.iter().take(15) {
+                            println!("     [{:?}] {} {}", i.severity, i.category, i.message);
+                        }
+                    }
+                    Err(er) => {
+                        for line in format!("{er}").lines().take(12) { println!("     {line}"); }
+                    }
+                }
+            }
+            Err(e) => println!("   REFUSED: {e}"),
+        }
+    }
+}
+
+/// Artifact producers for the chain auto-placer's sim runs (Phase B/C).
+#[test]
+#[ignore = "artifact producer"]
+fn export_chain_fixtures_for_sim() {
+    use spaghettio_core::bus::cells::chain::compose_chain;
+    for (label, item, rate, inputs) in [
+        ("chain-ec15", "electronic-circuit", 15.0, &["iron-plate", "copper-plate"][..]),
+        ("chain-ac1", "advanced-circuit", 1.0, &["iron-plate", "copper-plate", "plastic-bar"][..]),
+    ] {
+        let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
+        let sr = solver::solve_with_palette_exclusions_and_quality(
+            item, rate, &inputs_set, &MachinePalette::default(),
+            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+        ).unwrap();
+        let l = compose_chain(&sr).unwrap();
+        let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(&l, &sr, label);
+        std::fs::create_dir_all("target/tmp").unwrap();
+        std::fs::write(format!("target/tmp/{label}.bp"), &bp).unwrap();
+        std::fs::write(format!("target/tmp/{label}.manifest.json"),
+            serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
+        println!("wrote target/tmp/{label}.bp ({} boundary in / {} out)", l.boundary_inputs.len(), l.boundary_outputs.len());
+    }
+}
+
+/// Phase-B differential scoreboard (kill-3 evidence): composed vs bus
+/// on every chain-eligible ladder fixture. Prints errors / warnings /
+/// area / refusals per path.
+#[test]
+#[ignore = "measurement probe — output goes to the RFC decision log"]
+fn probe_differential_scoreboard() {
+    use spaghettio_core::bus::cells::chain::{chain_eligible, compose_chain};
+    use spaghettio_core::validate::{self, LayoutStyle, Severity};
+    let fixtures: &[(&str, &str, f64, &[&str])] = &[
+        ("gear15", "iron-gear-wheel", 15.0, &["iron-plate"]),
+        ("ec5", "electronic-circuit", 5.0, &["iron-plate", "copper-plate"]),
+        ("ec15", "electronic-circuit", 15.0, &["iron-plate", "copper-plate"]),
+        ("ec30", "electronic-circuit", 30.0, &["iron-plate", "copper-plate"]),
+        ("ac1", "advanced-circuit", 1.0, &["iron-plate", "copper-plate", "plastic-bar"]),
+        ("ac2", "advanced-circuit", 2.0, &["iron-plate", "copper-plate", "plastic-bar"]),
+    ];
+    for (label, item, rate, inputs) in fixtures {
+        let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
+        let sr = solver::solve_with_palette_exclusions_and_quality(
+            item, *rate, &inputs_set, &MachinePalette::default(),
+            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+        ).unwrap();
+        let bus = std::panic::catch_unwind(|| layout::build_bus_layout(&sr, layout::LayoutOptions::default()));
+        let bus_desc = match &bus {
+            Ok(Ok(l)) => match validate::validate(l, Some(&sr), LayoutStyle::Bus) {
+                Ok(issues) => {
+                    let e = issues.iter().filter(|i| i.severity == Severity::Error).count();
+                    format!("{}x{}={} tiles, {} errors / {} warnings", l.width, l.height, l.width * l.height, e, issues.len() - e)
+                }
+                Err(er) => format!("validate() Err: {}", format!("{er}").lines().next().unwrap_or("")),
+            },
+            Ok(Err(e)) => format!("REFUSED: {}", e.lines().next().unwrap_or("")),
+            Err(_) => "PANICKED".into(),
+        };
+        let comp_desc = match chain_eligible(&sr) {
+            Err(e) => format!("INELIGIBLE: {e}"),
+            Ok(()) => match compose_chain(&sr) {
+                Ok(l) => match validate::validate(&l, Some(&sr), LayoutStyle::Bus) {
+                    Ok(issues) => {
+                        let e = issues.iter().filter(|i| i.severity == Severity::Error).count();
+                        format!("{}x{}={} tiles, {} errors / {} warnings", l.width, l.height, l.width * l.height, e, issues.len() - e)
+                    }
+                    Err(er) => format!("validate() Err: {}", format!("{er}").lines().next().unwrap_or("")),
+                },
+                Err(e) => format!("REFUSED: {e}"),
+            },
+        };
+        println!("{label:8} bus:      {bus_desc}");
+        println!("{label:8} composed: {comp_desc}");
+    }
+}
+
+/// PERMANENT GATE (RFC-051 Phase B): with the flag ON, the decomposition
+/// search resolves EC@15-from-plates — the config the bus engine refuses
+/// outright (#336) — via the cell-composed candidate, at 0 errors with
+/// only the sim-adjudicated warning category. With the flag OFF
+/// (default) the refusal stands (inertness: the bus path is untouched).
+#[test]
+fn cell_candidate_resolves_ec15_refusal() {
+    use spaghettio_core::bus::cells::CellComposition;
+    use spaghettio_core::validate::{self, LayoutStyle, Severity};
+    let inputs: FxHashSet<String> =
+        ["iron-plate", "copper-plate"].iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "electronic-circuit", 15.0, &inputs, &MachinePalette::default(),
+        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+    ).unwrap();
+
+    // Flag OFF: the refusal stands.
+    let off = layout::build_bus_layout(&sr, layout::LayoutOptions::default());
+    assert!(off.is_err(), "flag-Off must preserve the bus refusal");
+
+    // Flag ON: the composed candidate wins and validates clean.
+    let opts = layout::LayoutOptions {
+        cell_composition: CellComposition::Candidate,
+        ..Default::default()
+    };
+    let l = layout::build_bus_layout(&sr, opts).expect("candidate must resolve the refusal");
+    let issues = validate::validate(&l, Some(&sr), LayoutStyle::Bus).unwrap();
+    let errors = issues.iter().filter(|i| i.severity == Severity::Error).count();
+    assert_eq!(errors, 0, "composed candidate errors: {issues:?}");
+    assert!(issues.iter().all(|i| i.category == "inserter-item-throughput"),
+        "only the adjudicated category tolerated: {issues:?}");
+}

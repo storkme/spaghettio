@@ -198,6 +198,24 @@ bit-identical to pre-RFC (zero golden re-blesses). Mechanics:
 ore-routing warnings persist on legendary-express). Full trail:
 [`rfc-046-belt-stacking.md`](rfc-046-belt-stacking.md) decision log.
 
+**`rfc-051-cell-composition-integration.md` close-out (2026-07-22)**:
+cell composition became a **production path** — a flag-gated
+`CellComposedCandidate` (default Off, bus bit-identical) competing
+unbiased in the decomposition search for solid tree-with-fan-out
+chains. The chain auto-placer generalizes the Phase-1 hand composers
+(engine-generated K=1 cells, two-registry crossing Router, fan-out
+splitter + south bypass). Gate passed: **AC-from-plates composed at
+0 errors / 0 warnings and ran at plan in headless Factorio (1.00/s,
+8/8 working)**; EC@15-from-plates — the
+[#336](https://github.com/storkme/spaghettio/issues/336) refusal —
+resolves under the flag at 0 errors (permanent gate pins both
+directions) and measured 15.0/s exactly. Differential scoreboard:
+composition wins where the bus refuses, bus wins on area where both
+succeed (1.5–3.1×) — the unbiased scorer therefore only ever picks
+composition on refusals. Flag flip deferred (browser eyeball, wasm
+plumbing, sim-verified registry). Full trail:
+[`rfc-051-cell-composition-integration.md`](rfc-051-cell-composition-integration.md).
+
 **`rfc-048-cell-composition.md` Phase-1 close-out (2026-07-22, PR #365)**:
 the cell-composition method delivered its existence proof — a composed
 EC@15/s-from-plates factory (engine-generated cells, segment-crop
