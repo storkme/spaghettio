@@ -1,4 +1,4 @@
-# RFC-048: Inserter capacity research (hand-size axis)
+# RFC-049: Inserter capacity research (hand-size axis)
 
 Registry: [`rfcs.md`](rfcs.md). Status: **Draft** (2026-07-22).
 

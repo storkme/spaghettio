@@ -59,6 +59,7 @@ backfill the status next time the doc is touched.
 | RFC-045 | 2026-07-21 | [`rfc-045-pole-wire-modes.md`](rfc-045-pole-wire-modes.md) | Complete (browser eyeball open) |
 | RFC-046 | 2026-07-21 | [`rfc-046-belt-stacking.md`](rfc-046-belt-stacking.md) | Complete (in-game anchor open; Phase 3 deferred) |
 | RFC-047 | 2026-07-21 | [`rfc-047-lane-aware-tap-delivery.md`](rfc-047-lane-aware-tap-delivery.md) | Complete (browser eyeball open) |
-| RFC-048 | 2026-07-22 | [`rfc-048-inserter-capacity-research.md`](rfc-048-inserter-capacity-research.md) | Draft (spike; awaiting implementation go) |
+| RFC-048 | 2026-07-22 | [`rfc-048-cell-composition.md`](rfc-048-cell-composition.md) | Draft (spike, PR #341 — other session) |
+| RFC-049 | 2026-07-22 | [`rfc-049-inserter-capacity-research.md`](rfc-049-inserter-capacity-research.md) | Draft (spike; awaiting implementation go) |
 
-Next number: **RFC-049**.
+Next number: **RFC-050**.
