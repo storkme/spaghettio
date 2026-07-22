@@ -632,6 +632,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "spaghettio_sim_harness"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "spaghettio_wasm"
 version = "0.1.0"
 dependencies = [
