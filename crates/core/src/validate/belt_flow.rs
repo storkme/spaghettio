@@ -1850,32 +1850,6 @@ fn splitter_output_rates(
     ((half_left, half_right), (half_left, half_right))
 }
 
-/// Full-lane-mixing variant of [`splitter_output_rates`], for the
-/// iterate-to-convergence phase of [`compute_lane_rates_impl`], which
-/// models a splitter as merging both input lanes into one pool before
-/// redistributing (real Factorio splitter behavior: `[L=15, R=0]` in
-/// becomes `[L=7.5, R=7.5]` per output half).
-///
-/// `a_total` / `b_total` are each tile's already-summed (left + right)
-/// input contribution. The pooled `total` is split between the two output
-/// tiles by downstream **demand** ([`allocate_by_demand`], RFC
-/// `rfc-lane-demand-flow.md` Phase 1 Branch A) — modeling a splitter that
-/// redistributes under backpressure toward the output whose consumers draw
-/// faster, capped per output by belt capacity `cap`. When the two outputs
-/// have equal or absent demand (`demand_a ≈ demand_b`, e.g. balancer
-/// internals whose halves reach the same consumers, or demand-free belt
-/// stubs), the allocation is an exact even split — bit-for-bit equivalent
-/// to the pre-existing `total / 4.0` formula, so those cases see zero
-/// behavior change. Each output tile's scalar allocation is then spread
-/// evenly across its own two lanes (the lane-mixing model).
-///
-/// When `loop_priority_rate` is `Some(loop_cap)` and exactly one of
-/// `a_is_loop_branch` / `b_is_loop_branch` is `true`, the priority branch
-/// instead receives `min(total, loop_cap)` (split evenly across its own two
-/// lanes) and the other branch the remainder — this **overrides**
-/// demand-pull (priority splitters: self-loop/voider rows and merge-and-tap
-/// consumer taps). Falls back to the symmetric split under the same
-/// ambiguous-flagging conditions as [`splitter_output_rates`].
 #[allow(clippy::too_many_arguments)]
 /// Convergence-phase splitter model (RFC-047 Phase 0, Leg A).
 ///
@@ -2362,7 +2336,7 @@ fn compute_lane_rates_impl(
 
     let mut splitter_sibling: FxHashMap<(i32, i32), (i32, i32)> = FxHashMap::default();
     // Owning splitter entity for each of its two tiles, so the
-    // priority-loop model in `splitter_output_rates`/`splitter_output_rates_mixed`
+    // priority-loop model in `splitter_output_rates`/`splitter_output_rates_convergence`
     // can look up `loop_priority_rate`.
     let mut splitter_entity: FxHashMap<(i32, i32), &PlacedEntity> = FxHashMap::default();
     for e in &layout.entities {
@@ -2947,7 +2921,7 @@ fn compute_lane_rates_impl(
             // Priority splitters (`loop_priority_rate` set) break that
             // symmetry: the loop-back branch draws `min(total, cap)` and
             // the export branch gets the remainder, via
-            // `splitter_output_rates_mixed`.
+            // `splitter_output_rates_convergence` (per-lane, RFC-047).
             for &(a, b) in &pair_set {
                 let a_fc = feeder_contributions_for_tile(a, &prev, &feeders, &belt_dir_map);
                 let b_fc = feeder_contributions_for_tile(b, &prev, &feeders, &belt_dir_map);

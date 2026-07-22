@@ -301,6 +301,28 @@ generator remains future work.
 
 ## Decision log
 
+- **2026-07-22 — Dual-lens implementation review: code APPROVE,
+  honesty APPROVE-WITH-CHANGES; all findings folded.** Honesty lens
+  re-derived every numeric claim (several to the exact decimal,
+  including reproducing kill-4's failure by selectively reverting only
+  the fix); its findings were documentation hygiene, folded: status →
+  Complete, Motivation express bullet annotated, RFC-046 + CLAUDE.md
+  supersession sweep, follow-ups filed as #336/#337. Code lens traced
+  the math by hand and approved; folded: the stale lane-mixing doc
+  block above the convergence function deleted (rustdoc was rendering
+  BOTH models as documentation), two stale symbol references fixed,
+  and the horizontal-stack row cap's identical stacking-blindness —
+  found by the reviewer's own probe, currently dormant — filed as
+  #338. **Correction (code-lens finding): this log's repeated
+  "STRESSGOLD 9/9" is a miscount** — the golden-gated corpus is 8
+  fixtures (`goldens/stress/*.txt`); the stress invocation runs 9
+  tests (all green throughout), but only 8 are golden-pinned. Every
+  "9/9" above should read "stress suite green; goldens 8/8, zero
+  diffs" — the substantive zero-re-bless claim holds unchanged.
+  Reviewer also flagged a live shared-checkout observation during
+  review; verified benign from the coordinating side (branch advance
+  was the honesty fold landing; working tree clean, nothing lost).
+
 - **2026-07-22 — Phase 3 residuals resolved; the ORIGINAL express
   headline recovered.** Kill 3 (junction): the express@60-legendary-S2
   junction failure is GONE — 047-1b's row consolidation removed the
