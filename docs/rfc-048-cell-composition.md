@@ -287,7 +287,64 @@ harness behind a test-only flag), with the corrected ratio, the
 lane-aware port contract, and sim-verification of the first two catalog
 entries as the Phase 1 gate.
 
+## Phase 1 close-out: kill-criteria evaluation and go/no-go (2026-07-22)
+
+**Kill 1 (catalog blow-up, ~6-variant bound): PASS.** Variants used
+across the full Phase 1: EC ratio pair cells (cable, EC), the plastic
+fluid cell, the AM2 EC variant (axis measurement), plus two corridor
+forms (belt polyline w/ UG weaving + splitter merge; pipe column) —
+under the bound, and the axis measurement showed variants are
+parameters (engine-generated), not projects.
+
+**Kill 2 (contract failure, 0 validator errors in budget): PASS,
+exceeded.** EC@15 composed at 0 errors (now a permanent gate test,
+`cell_composed_ec15_zero_errors`), and beyond the criterion's
+validator bar: **the composed factory RUNS AT PLAN in headless
+Factorio — 15/15 machines working, 15.0 EC/s produced, converged** —
+on the config the bus engine refuses (#336). The plastic cell
+composes at 0 errors / 0 warnings. Oracle limit found honestly:
+corridor pipe runs are outside the fluid checks' model (a
+discontinuous pipe validated clean; only the sim caught it) — the
+strongest evidence yet that sim-verification at catalog time is
+load-bearing, not optional.
+
+**Kill 3 (area blow-out >2× without compensating win): PASS.**
+Composed EC@15 = 1958 bbox tiles (calibrated orientation) vs the
+engine's EC@5 × 3 linear extrapolation (975): 2.0× at the boundary —
+but the compensating wins are decisive: the engine cannot produce
+this config at all, and the composed one is measured-at-plan.
+(Warnings comparison: 6 carried, ALL sim-disproven attribution
+conservatism; the engine's comparator carries its 4 warnings
+unadjudicated.)
+
+**Kill 4 (parallel layout stack): PASS.** Cells are engine-generated
+(one layout stack); the harness is test-only; composition machinery
+is corridors + placement arithmetic, no inserter/power/belt logic of
+its own.
+
+**Kill 5 (corridor machinery beyond templates): PASS.** Everything
+composed with straight runs, B11 corners, one 2→1 splitter, UG hops,
+and a pipe column — no negotiated congestion, no junction solving.
+
+**Gate (a) — sim verification:** EC ratio pair **SIM-VERIFIED AT
+PLAN**. Fluid cell: composition-clean (0/0), sim BLOCKED by the
+harness's fluid path — proven by controlled attribution (the
+engine's own plastic layout starves identically; #364, full
+diagnostic bundle attached). The fluid entry's stated purpose was to
+be the calibration forcing function: datum delivered. **Gate (b)**:
+delivered and measured. **Gate (c)**: variant-is-a-parameter verdict
+— the end-state is a plan.
+
+**GO for Phase 2** (integration RFC: CellComposedCandidate in the
+decomposition search with warnings-aware scoring, automatic placement
+for linear chains, solver→cell rounding), with two carried
+dependencies: #364 (fluid sim path — harness-side) before any
+fluid-cell catalog entry is called verified, and #363's composition
+rules (4-tile rig pitch, west→east record ordering) encoded in the
+composer until fixed harness-side.
+
 ## Decision log
+
 
 - *2026-07-22 — **THE COMPOSED FACTORY RUNS AT PLAN (gate a/b sim
   half, EC): all 15 machines `working`, converged, produced exactly

@@ -571,7 +571,6 @@ fn probe_fluid_cell_geometry() {
 /// Compose the plastic cell with boundary feeds (coal belt + petroleum
 /// pipe) and export for the sim — the fluid-boundary calibration entry.
 #[test]
-#[ignore = "artifact producer for the fluid sim step"]
 fn export_composed_plastic_for_sim() {
     use spaghettio_core::models::{BoundaryRecord, EntityDirection, PlacedEntity};
     let (sr, l) = generate_row_layout("plastic-bar", 2.0, &["petroleum-gas", "coal"]);
@@ -598,16 +597,10 @@ fn export_composed_plastic_for_sim() {
     let pipe_terminal = cell.entities.iter()
         .filter(|e| (e.name == "pipe" || e.name == "pipe-to-ground")
             && e.segment_id.as_deref().map(|s| s.contains("petroleum")).unwrap_or(false))
-        .min_by_key(|e| e.x).unwrap();
-    let (pt_x, pt_y) = (pipe_terminal.x + cx, pipe_terminal.y + cy);
-    for y in 0..=pt_y {
+        .max_by_key(|e| e.x).unwrap();
+    let pt_y = pipe_terminal.y + cy; // column x=6 sits over the cell's top pipe row
+    for y in 0..pt_y {
         entities.push(PlacedEntity { name: "pipe".into(), x: 6, y,
-            direction: EntityDirection::North,
-            segment_id: Some("feed:petroleum".into()),
-            carries: Some("petroleum-gas".into()), ..Default::default() });
-    }
-    for x in 7..pt_x {
-        entities.push(PlacedEntity { name: "pipe".into(), x, y: pt_y,
             direction: EntityDirection::North,
             segment_id: Some("feed:petroleum".into()),
             carries: Some("petroleum-gas".into()), ..Default::default() });
@@ -836,24 +829,24 @@ fn compose_pairs_calibrated(n: i32) -> (spaghettio_core::models::SolverResult, L
     (esr, l)
 }
 
-/// Gate: EC@15 in the calibrated orientation — 0 errors required.
+/// PERMANENT GATE (RFC-048 Phase 1): EC@15/s — the config the bus
+/// engine refuses (#336) — composes from engine-generated cells at 0
+/// validation errors. The 6 carried warnings are validator-attribution
+/// conservatism DISPROVEN by measurement (sim: 15/15 machines working,
+/// produced exactly 15.0/s — see the RFC decision log 2026-07-22).
 #[test]
-#[ignore = "gate probe"]
-fn probe_compose_ec15_calibrated() {
+fn cell_composed_ec15_zero_errors() {
     use spaghettio_core::validate::{self, LayoutStyle, Severity};
     let (esr, l) = compose_pairs_calibrated(3);
     println!("calibrated EC@15: {}x{} = {} tiles, {} entities", l.width, l.height, l.width * l.height, l.entities.len());
-    match validate::validate(&l, Some(&esr), LayoutStyle::Bus) {
-        Ok(issues) => {
-            let e = issues.iter().filter(|i| i.severity == Severity::Error).count();
-            println!("validation Ok: {} errors / {} issues", e, issues.len());
-            for i in issues.iter().take(10) { println!("  [{:?}] {} {}", i.severity, i.category, i.message); }
-        }
-        Err(er) => {
-            println!("validation FAILED:");
-            for line in format!("{er}").lines().filter(|l| l.contains("[error]")).take(10) { println!("  {line}"); }
-        }
-    }
+    let issues = validate::validate(&l, Some(&esr), LayoutStyle::Bus)
+        .unwrap_or_else(|e| panic!("composed EC@15 must validate: {e}"));
+    let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
+    assert!(errors.is_empty(), "composed EC@15 errors: {errors:?}");
+    assert!(
+        issues.iter().all(|i| i.category == "inserter-item-throughput"),
+        "only the sim-disproven attribution warnings are tolerated: {issues:?}"
+    );
 }
 
 
@@ -866,4 +859,33 @@ fn probe_pole_positions() {
             println!("pole ({},{})", e.x, e.y);
         }
     }
+}
+
+
+#[test]
+#[ignore = "probe"]
+fn probe_plastic_pipes() {
+    let (_sr, l) = generate_row_layout("plastic-bar", 2.0, &["petroleum-gas", "coal"]);
+    let c = extract_cell(&l);
+    for e in &c.entities {
+        if e.name.contains("pipe") {
+            println!("{} ({},{}) dir={:?} io={:?} seg={:?}", e.name, e.x, e.y, e.direction, e.io_type, e.segment_id);
+        }
+    }
+}
+
+
+/// Attribution experiment: the ENGINE's own plastic layout through the
+/// sim — if this also fluid-starves, the fault is the harness/exporter
+/// fluid path (RFC-050's open calibration), not cell composition.
+#[test]
+#[ignore = "artifact producer"]
+fn export_engine_plastic_for_sim() {
+    let (sr, l) = generate_row_layout("plastic-bar", 2.0, &["petroleum-gas", "coal"]);
+    let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(&l, &sr, "rfc048-engine-plastic");
+    std::fs::create_dir_all("target/tmp").unwrap();
+    std::fs::write("target/tmp/rfc048-engine-plastic.bp", &bp).unwrap();
+    std::fs::write("target/tmp/rfc048-engine-plastic.manifest.json",
+        serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
+    println!("wrote engine plastic artifacts ({} boundary in)", l.boundary_inputs.len());
 }
