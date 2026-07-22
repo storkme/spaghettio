@@ -45,7 +45,7 @@ below are gated by the default (non-ignored) suite unless noted.
 | 6 | `flying-robot-frame` | Adds lubricant: advanced-oil-processing refinery rows with 3 fluid outputs | SOLVED via the USP chain (0 errors). No dedicated FRF fixture yet. |
 | 7 | `utility-science-pack` | Very deep chain (LDS + PU + FRF) | SOLVED — fully clean at 1/s (gauntlet 2026-07-21: 0 errors, 0 warnings, 6796 entities, 208×285). |
 
-### Six-pack scoreboard (gauntlet run 2026-07-21, 1/s, CI-pinned cache)
+### Six-pack scoreboard (gauntlet run 2026-07-21, 1/s, CI-pinned cache; re-verified bit-identical 2026-07-22 on the post-RFC-044..047 tree)
 
 | Pack | Size | Entities | Result |
 |------|------|----------|--------|
@@ -87,7 +87,7 @@ on every push:
   unstacked >45/s "clean" results as routing-verified but not
   throughput-verified until #311 closes.
 
-### Scaling walls (scaling gauntlet run 2026-07-21, release, 180s/cell budget)
+### Scaling walls (scaling gauntlet run 2026-07-22 post-RFC-047, release, 180s/cell budget)
 
 `science_scaling_gauntlet` result matrix (rows = pack, columns = rate):
 
@@ -95,22 +95,31 @@ on every push:
 |------|-----|-----|-----|------|
 | automation | PASS | PASS | PASS | PASS |
 | logistic | PASS | PASS | WARN×3 | WARN×7 |
-| military | PASS | PASS | PASS | PASS |
-| chemical | PASS | PASS | PASS | FAIL×6 |
-| production | WARN×8 | WARN×14 | FAIL×4 | TIMEOUT |
+| military | PASS | PASS | LAYOUT-ERR | PASS |
+| chemical | PASS | PASS | PASS | FAIL×4 |
+| production | WARN×8 | WARN×14 | FAIL×4 | LAYOUT-ERR |
 | utility | PASS | FAIL×2 | WARN×36 | TIMEOUT |
 
-First walls: logistic 5/s (inserter-item-throughput×3), chemical 10/s
-(belt-loop, lane-throughput×2, underground-belt, unresolved-junction×2),
-production 1/s (the known 8), utility 2/s (belt-loop, underground-belt,
-input-rate-delivery×5). Automation and military pass through 10/s.
+First walls: logistic 5/s (inserter-item-throughput×3), military 5/s
+(honest refusal: RFC-047's late sideload check names a stone-brick
+25/s-over-22.5/s sideload-fed single trunk; the (n,1) merge-tap fallback
+that would fix it is [#336](https://github.com/storkme/spaghettio/issues/336)
+— note 10/s passes, the wall is shape-specific, not monotone), chemical
+10/s (belt-loop, underground-belt, unresolved-junction×2), production 1/s
+(the known 8), utility 2/s (belt-loop, underground-belt,
+input-rate-delivery×5). Automation passes through 10/s.
 
-Caveat: cells beyond the CI pin's zone coverage solve live under wall-clock
-budgets, so the two TIMEOUTs and the unresolved-junction counts are
-machine-dependent (measured on a remote container). The belt-loop,
-underground-belt, and lane-throughput *errors* are genuine layout defects
-independent of solve budgets — utility@2/s FAIL×2 is the most reachable
-new fix target.
+Drift vs the pre-RFC-047 run (2026-07-21): military 5/s PASS →
+LAYOUT-ERR and production 10/s TIMEOUT → LAYOUT-ERR are the new checks
+converting silently-broken/timeout outcomes into named refusals;
+chemical 10/s improved FAIL×6 → FAIL×4 (its two lane-throughput errors
+died with the RFC-047 row consolidation).
+
+Caveat: cells beyond the CI pin's zone coverage solve live under
+wall-clock budgets, so the TIMEOUT and unresolved-junction counts are
+machine-dependent (measured on a remote container). The belt-loop and
+underground-belt *errors* are genuine layout defects independent of solve
+budgets — utility@2/s FAIL×2 is the most reachable new fix target.
 
 ## Recent RFC close-outs
 
