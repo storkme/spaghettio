@@ -75,6 +75,10 @@ on every push:
   inserter ladder, pole supply/wire reach; differential fixtures pin
   Normal bit-equality; EC@45/s express-legendary-from-ore green with the
   1 known input-rate-delivery residual.
+- **Machine modules** (RFC-044): global speed/productivity policy →
+  per-machine loadouts, effect-scaled machine counts, 2.0 insert-plan
+  export, slot/eligibility validators, web slot overlay. In-game paste
+  anchor CLOSED (user-verified, four inventory classes).
 - **Belt stacking** (RFC-046, S∈{1..4}) and **lane-aware delivery**
   (RFC-047): rate ceilings scale ×S; the EC@60/s red-from-ore config is
   physically valid end-to-end at S=2 (in-fixture per-tile capacity audit),
@@ -154,6 +158,26 @@ decision log; renderer constraints learned en route: `web/CLAUDE.md`.
 pole-band thinning landed (Phase 1; Phase 2 cross-row sharing deferred) —
 closed [#310](https://github.com/storkme/spaghettio/issues/310) via PR #318.
 Registry: [`rfcs.md`](rfcs.md).
+
+**`rfc-044-machine-modules.md` close-out (2026-07-21, all 4 phases)**:
+user-facing **module policy** param (speed/productivity × tier 1–3 ×
+optional module quality, compact `m=`/`modules=` URL form e.g. `p3l`,
+through wasm solve/layout and the sidebar). `module_policy.rs` is the
+single source: one global policy resolves to per-machine loadouts and
+effect factors; ineligible (machine, recipe) pairs get NO modules (prod
+falls back to empty, not speed); netflow machine counts scale by the
+1%-floored effect formula. Export emits the Factorio 2.0 insert-plan
+encoding with the per-class inventory table (parser reads it back).
+Validator checks 24–25 (`module-slots`, `module-eligibility`) are
+WARNING severity by design — invalid loadouts don't fail a paste;
+eligibility gates on the module's *beneficial* effect only (the
+"effects ⊆ allowed_effects" rule was falsified by draftsman data). Web
+slot overlay ships alongside. Corpus evidence: 198/198 community files
+sweep with zero module warnings. **In-game anchor CLOSED** (KC2:
+user-pasted four-inventory-class anchor verified in Space Age) — the
+only recent arc with its game anchor closed. Full trail:
+[`rfc-044-machine-modules.md`](rfc-044-machine-modules.md) decision log
+(PRs #321/#322/#323/#325).
 
 **`rfc-046-belt-stacking.md` close-out (2026-07-21)**: user-facing **belt
 stacking** param (off/×2/×3/×4 = Space Age belt stack size research,
