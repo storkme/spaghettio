@@ -329,7 +329,15 @@ fn bp_data_to_layout(bp_data: BpData) -> LayoutResult {
     for (pos, raw) in bp_data.entities.into_iter().enumerate() {
         let entity_number = raw.entity_number.unwrap_or((pos + 1) as u64);
         num_to_idx.insert(entity_number, entities.len());
-        let dir = parse_direction(raw.direction);
+        // GAME QUIRK (RFC-050 harness, 2026-07-22): Factorio's inserter
+        // direction is the PICKUP side; the engine's convention is
+        // drop-side. Un-flip on import so imported inserters read
+        // correctly under engine semantics (the exporter flips back).
+        let dir = if raw.name.contains("inserter") {
+            parse_direction((raw.direction + 8) % 16)
+        } else {
+            parse_direction(raw.direction)
+        };
         let (w, h) = entity_footprint(&raw.name, dir);
 
         // Factorio stores center position; convert to top-left tile

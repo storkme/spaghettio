@@ -162,7 +162,12 @@ pub struct PlacedEntity {
     /// Recipe assigned to crafting machines (`None` for belts, inserters, etc.).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recipe: Option<String>,
-    /// I/O role tag for bus entities: `"input"`, `"output"`, or `"passthrough"`.
+    /// Underground-belt half marker (`"input"` = entrance, `"output"` =
+    /// exit) — serialized as the Factorio blueprint `type` field. Set
+    /// ONLY on UG pairs (trunk renderer, ghost router, balancer library,
+    /// merger hops); despite the old docstring, it never tagged bus
+    /// boundary belts and `"passthrough"` was never assigned (RFC-050
+    /// review finding — the false claim it seeded cost a design cycle).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub io_type: Option<String>,
     /// Item or fluid name this belt/pipe is currently carrying.
