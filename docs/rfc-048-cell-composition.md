@@ -116,8 +116,12 @@ item is a prerequisite-shaped refactor).
   (fluids are Phase 2+ questions; the port contract has a `pipe` kind
   reserved).
 - Not a commitment to replace the bus engine. The spike's output is
-  evidence for a go/no-go; the bus engine remains the fallback for
-  whatever cells can't express.
+  evidence for a go/no-go; the bus engine remains the fallback —
+  *scoped by the 2026-07-22 end-state entry: fallback during catalog
+  growth, with no chain class structurally excluded (see the decision
+  log; the phase map for solids → oil mega-cell → catalog accretion
+  lives there too, superseding this section's Phase-2 fluids
+  assignment).*
 
 ## Kill criteria
 
@@ -281,10 +285,56 @@ capacity layer.
 **Go/no-go: GO for Phase 1** (catalog + stamper + manual composition
 harness behind a test-only flag), with the corrected ratio, the
 lane-aware port contract, and sim-verification of the first two catalog
-entries as the Phase 1 gate.
+entries as the Phase 1 gate — **plus one explicit catalog-growth
+measurement across a config axis** (whole-RFC review, 2026-07-22): the
+EC ratio cell at two machine tiers (or with/without modules), measuring
+what actually varies between axis points (footprint, port contract,
+machine count) and the marginal cost of a variant (procedural via
+engine-as-generator vs hand work). Corridor cells solve belt-count
+growth; they do not touch config-axis growth (recipe × tier × modules ×
+quality × rate band) — this measurement is the number that decides
+whether the end-state entry is a plan or a hope.
 
 ## Decision log
 
+- *2026-07-22 — Whole-RFC review folded (strong GO on Phase 1; three
+  skepticisms recorded as guards rather than dismissed). (1)
+  **Config-axis catalog growth** added to the Phase-1 gate (see the
+  go/no-go above) — the friendliest-slice concern is real: kill 1's
+  variant budget measured one chain's rate bands only. If the answer
+  is procedural generation, kill 4's no-parallel-stack discipline is
+  the thing to watch. (2) **The oil mega-cell boundary rule is
+  provisional**: cracking ratios are demand-dependent — interior state
+  shifts with what the ports draw — so "fluid loops never cross cell
+  boundaries" needs a careful loop-vs-balancing-feed definition before
+  Phase 3 leans on it; the fluid-calibration gate stands, and the oil
+  complex may legitimately end up as several cells with defined
+  inter-cell feeds rather than one opaque block. (3) **A
+  never-finishing tripwire** (the reviewed failure mode nothing
+  guarded: two live layout stacks drifting forever if the catalog
+  stalls at partial coverage): at each phase close-out, measure
+  catalog coverage of the fixture ladder; if coverage does not grow
+  across two consecutive phase close-outs while both stacks carry
+  maintenance burden, escalate a keep/kill decision on the composition
+  path — quiet permanence of a second stack is the failure mode, and
+  it must trip loudly, not accrete.*
+- *2026-07-22 — End-state definition set (user steer, post-#359): the
+  method is not "done" with structural exemptions. Revised target: NO
+  chain class structurally excluded — the existing tier ladder
+  (through the refinery tiers) reachable by composition, phased:
+  solids with AC-from-plates as the Phase-2 gate; the oil complex as
+  an opaque pipe-ported MEGA-CELL (fluid loops are cell INTERIORS —
+  the boundary contract is simple even when the inside is stateful;
+  gated on the harness's fluid calibration, which is why the Phase-1
+  fluid entry is an enabler, not a side quest); high rates via
+  pre-verified CORRIDOR/DISTRIBUTION cells (the (N,M) problem at
+  corridor granularity is shape-chosen, so it stays template-driven —
+  and RFC-046 stacking makes belt-count growth slow: one S=4 express
+  corridor = 180/s). The two PERMANENT disciplines (contract rules,
+  not exemptions): distribution stays fixed-shape templates (kill 5
+  applied to corridors), and fluid loops never cross cell boundaries.
+  The bus engine's role: fallback during catalog growth, not
+  permanent owner of the hard chains.*
 - *2026-07-22 — PR #359 review folded (5 observations, verdict "Ship
   it"): old-design area numbers discarded; EC@10-from-ore added as the
   approximate comparator with the warnings-not-area reframing; the
