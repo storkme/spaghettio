@@ -7,16 +7,16 @@
     "quality",
     "elevated-rails"
   ],
-  "tech_state": "research_all_technologies",
+  "tech_state": "research_all_technologies;inserter_capacity<=L0",
   "entities": 196,
   "produced": {
     "automation-science-pack": 1.0,
-    "copper-plate": 1.0033333333333334,
-    "iron-gear-wheel": 0.98,
-    "iron-plate": 2.01
+    "copper-plate": 0.9966666666666668,
+    "iron-gear-wheel": 1.0,
+    "iron-plate": 2.0033333333333334
   },
   "delivered": {
-    "automation-science-pack": 1.0133333333333334
+    "automation-science-pack": 1.0
   },
   "overall_verdict": "PASS"
 }
