@@ -530,6 +530,36 @@ fn cell_candidate_respects_belt_tier_cap() {
     layout::build_bus_layout(&sr, opts).expect("express-capped EC@15 must compose");
 }
 
+/// PERMANENT GATE (#384 review finding 4): the additive contract —
+/// where the BUS succeeds, the bus wins; composition surfaces only on
+/// refusals. This was empirically true (density margin 2–5×) but not
+/// pinned, and the selection tie-break used to point at cell-composed.
+/// Asserts native wins every chain-eligible fixture where both paths
+/// succeed, via the observable marker: composed winners carry the
+/// "cell-composed:" registry annotation in warnings; bus winners never
+/// do.
+#[test]
+fn cell_candidate_never_displaces_a_succeeding_bus() {
+    for (label, item, rate, inputs) in [
+        ("gear15", "iron-gear-wheel", 15.0, &["iron-plate"][..]),
+        ("ec5", "electronic-circuit", 5.0, &["iron-plate", "copper-plate"][..]),
+        ("ac1", "advanced-circuit", 1.0, &["iron-plate", "copper-plate", "plastic-bar"][..]),
+        ("ac2", "advanced-circuit", 2.0, &["iron-plate", "copper-plate", "plastic-bar"][..]),
+    ] {
+        let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
+        let sr = solver::solve_with_palette_exclusions_and_quality(
+            item, rate, &inputs_set, &MachinePalette::default(),
+            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+        ).unwrap();
+        let l = layout::build_bus_layout(&sr, layout::LayoutOptions::default())
+            .unwrap_or_else(|e| panic!("{label}: bus-succeeding fixture must lay out: {e}"));
+        assert!(
+            !l.warnings.iter().any(|w| w.starts_with("cell-composed:")),
+            "{label}: composition displaced a succeeding bus layout"
+        );
+    }
+}
+
 /// PERMANENT GATE (#387 review finding): a composed candidate that
 /// carries validation ERRORS must refuse — never win a bus refusal as
 /// a silently broken Ok (`score_layout.accepted` doesn't run the full
