@@ -144,6 +144,18 @@ impl DecompositionCandidate for CellComposedCandidate {
         if opts.cell_composition != crate::bus::cells::CellComposition::Candidate {
             return Err("cell composition is Off".to_string());
         }
+        // Belt tier is a USER constraint, never a strategy knob: the
+        // composed corridors are express-only (quantization caps them
+        // at express capacity), so a lower tier cap refuses instead of
+        // silently exceeding it. Tier-parameterized corridors (quantum
+        // = allowed tier's capacity) are a followup.
+        if let Some(t) = opts.max_belt_tier.as_deref() {
+            if t != "express-transport-belt" {
+                return Err(format!(
+                    "cell composition uses express corridors, over the max belt tier {t}"
+                ));
+            }
+        }
         let mut l = crate::bus::cells::chain::compose_chain(solver_result)?;
         // Tier-1 verification annotation (RFC-051 registry): sim-verified
         // geometries carry their measurement; unverified ones say so.
@@ -755,6 +767,10 @@ pub fn select_best_decomposition(
     // eligibility-gated, and catch_unwind — the composer's internal
     // asserts must degrade to the bus candidates, never abort the solve.
     let try_cells = opts.cell_composition == crate::bus::cells::CellComposition::Candidate
+        && opts
+            .max_belt_tier
+            .as_deref()
+            .is_none_or(|t| t == "express-transport-belt")
         && crate::bus::cells::chain::chain_eligible(solver_result).is_ok();
     let cells_run = if try_cells {
         run_candidate_catch_unwind("cell-composed", solver_result, || {

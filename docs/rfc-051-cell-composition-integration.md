@@ -259,7 +259,18 @@ follow-ups.
   validation-fails there); mil5-ore goes K=2 (stone feed 50/s exceeds
   the per-copy feed cap) and its Router-class overlaps persist (8, was
   5 at K=1) — still the named next target. No registry additions: the
-  registry carries measured-at-plan only.*
+  registry carries measured-at-plan only. **Belt-tier guard**: the
+  eligibility lift exposed a latent flip-era hole — composed corridors
+  are express-only, and an eligible chain whose bus path fails under a
+  sub-express `max_belt_tier` would have won with express corridors,
+  violating the tier-is-a-user-constraint rule. The candidate now
+  refuses under any sub-express cap (gate:
+  `cell_candidate_respects_belt_tier_cap` proves flag-inertness there);
+  tier-parameterized corridors (quantum = allowed tier's capacity,
+  tier-matched belt entities) are the followup if tier-capped
+  composition is ever wanted. Stress goldens under the lifted
+  eligibility: 9 ran, 0 drift (bus wins all blessed fixtures on
+  density; the canonical `stress_` check-mode run).*
 
 - *2026-07-22 — Coverage expansion (package 2, follows the flip). Caps
   lifted: n-run MERGE CASCADES (2→1 splitter chains, below-approach

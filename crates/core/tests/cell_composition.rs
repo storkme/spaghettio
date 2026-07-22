@@ -482,6 +482,51 @@ fn cell_quantization_copy_counts() {
     assert!(err.contains("quantized copies"), "K_MAX refusal, got: {err}");
 }
 
+/// PERMANENT GATE (belt-tier constraint): composed corridors are
+/// express-only, and belt tier is a USER constraint — under any lower
+/// max_belt_tier the candidate must be INERT: whatever the bus does
+/// (succeed, as it happens to here, or refuse), the Candidate flag
+/// changes nothing, and no express entity ever appears. (Latent from
+/// the flip until K-quantization surfaced it: an eligible chain whose
+/// bus path fails under a sub-express cap would have won with express
+/// corridors.)
+#[test]
+fn cell_candidate_respects_belt_tier_cap() {
+    use spaghettio_core::bus::cells::registry::geometry_hash;
+    use spaghettio_core::bus::cells::CellComposition;
+    let inputs: FxHashSet<String> =
+        ["iron-plate", "copper-plate"].iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "electronic-circuit", 15.0, &inputs, &MachinePalette::default(),
+        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+    ).unwrap();
+    // EC@15 is chain-eligible, so only the tier guard keeps the
+    // candidate out under a red cap.
+    let build = |cc: CellComposition| {
+        layout::build_bus_layout(&sr, layout::LayoutOptions {
+            max_belt_tier: Some("fast-transport-belt".into()),
+            cell_composition: cc,
+            ..Default::default()
+        })
+    };
+    match (build(CellComposition::Candidate), build(CellComposition::Off)) {
+        (Ok(on), Ok(off)) => {
+            assert_eq!(geometry_hash(&on), geometry_hash(&off),
+                "sub-express cap: Candidate must be inert (bit-identical to Off)");
+            assert!(!on.entities.iter().any(|e| e.name.starts_with("express")),
+                "sub-express cap: no express entity may appear");
+        }
+        (on, off) => assert_eq!(on.is_err(), off.is_err(),
+            "sub-express cap: Candidate must not flip a refusal"),
+    }
+    // Express cap (explicit) still composes the #336 refusal.
+    let opts = layout::LayoutOptions {
+        max_belt_tier: Some("express-transport-belt".into()),
+        ..Default::default()
+    };
+    layout::build_bus_layout(&sr, opts).expect("express-capped EC@15 must compose");
+}
+
 #[test]
 #[ignore = "debug probe"]
 fn probe_mil5_errors() {
