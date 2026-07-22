@@ -389,6 +389,7 @@ pub fn build_control_lua(manifest: &Manifest, bp: &str, params: &RunParams) -> S
     let _ = writeln!(out, "local STABILITY_TOL = {STABILITY_TOLERANCE}");
     let _ = writeln!(out, "local LX0, LY0 = {}, {}", manifest.bbox_min[0], manifest.bbox_min[1]);
     let _ = writeln!(out, "local DIMS_X, DIMS_Y = {}, {}", manifest.dims[0], manifest.dims[1]);
+    let _ = writeln!(out, "local INSERTER_CAPACITY = {}", manifest.inserter_capacity);
     {
         let items: Vec<String> = manifest.planned_rates.keys().map(|k| format!("\"{k}\"")).collect();
         let _ = writeln!(out, "local PLANNED_ITEMS = {{{}}}", items.join(", "));
@@ -424,6 +425,21 @@ script.on_init(function()
     out.push_str(
         r#"  local force = game.forces.player
   force.research_all_technologies()
+  -- Tech-state parity (#370): the engine models inserter hands at the
+  -- fixture's inserter_capacity level; research_all grants bonus 7 and
+  -- out-provisions that assumption, masking genuine L-level shortfalls
+  -- (and making inserter-throughput warnings untestable — #352). Set
+  -- the force bonuses directly to the level's values — the two fields
+  -- reproduce all three I8b hand tables exactly (probe-verified
+  -- 2026-07-22): non-bulk hand = 1 + stack_size_bonus, bulk hand =
+  -- 1 + bulk_bonus, stack-inserter hand = 5 + bulk_bonus. Direct
+  -- assignment beats un-researching capacity techs, which left
+  -- non-bulk one step high (an unidentified tech grants +1). The
+  -- realized bonuses are dumped into the result for verification.
+  local NB_BONUS = {0, 0, 1, 1, 1, 1, 1, 3}
+  local BULK_BONUS = {1, 2, 3, 4, 5, 7, 9, 11}
+  force.inserter_stack_size_bonus = NB_BONUS[INSERTER_CAPACITY + 1]
+  force.bulk_inserter_capacity_bonus = BULK_BONUS[INSERTER_CAPACITY + 1]
   local s = game.create_surface("lab")
   s.generate_with_lab_tiles = true
   s.request_to_generate_chunks({0, 0}, 12)
@@ -638,7 +654,11 @@ local function finalize(s, converged)
     proxies_fulfilled = storage.proxies_fulfilled,
     samples = storage.samples, checkpoints = storage.checkpoints,
     machine_census = census, converged = storage.converged, final_tick = game.tick,
-    fluid_errors = storage.fluid_errors, kit_errors = storage.kit_errors}, false)
+    fluid_errors = storage.fluid_errors, kit_errors = storage.kit_errors,
+    -- Realized capacity bonuses after tech-state parity (#370) — the
+    -- verification channel that the tech rollback actually took effect.
+    inserter_stack_size_bonus = game.forces.player.inserter_stack_size_bonus,
+    bulk_inserter_capacity_bonus = game.forces.player.bulk_inserter_capacity_bonus}, false)
   print("HARNESS_DONE")
   script.on_nth_tick(60, nil)
 end

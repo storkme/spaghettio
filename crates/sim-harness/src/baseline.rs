@@ -67,11 +67,15 @@ pub fn baseline_from_report(report: &serde_json::Value) -> Result<Baseline, Stri
     if produced.is_empty() {
         return Err("report has no measured rates to bless".into());
     }
+    // Tech-state parity (#370): inserter-capacity research is rolled
+    // back to the fixture's level, so the level is part of the world
+    // the rates were measured in — key the baseline on it.
+    let capacity = r.get("inserter_capacity").and_then(|v| v.as_u64()).unwrap_or(0);
     Ok(Baseline {
         label,
         game_version,
         mods: HARNESS_MODS.iter().map(|s| s.to_string()).collect(),
-        tech_state: HARNESS_TECH_STATE.into(),
+        tech_state: format!("{HARNESS_TECH_STATE};inserter_capacity<=L{capacity}"),
         entities: r.get("entities").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
         produced,
         delivered,
