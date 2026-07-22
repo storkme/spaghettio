@@ -50,7 +50,7 @@ USAGE:
   spaghettio-sim run --bp <file> --manifest <file> [--ticks N] [--speed N]
                       [--out report.json] [--timeout-secs N]
   spaghettio-sim check-data
-  spaghettio-sim bless --report <report.json> --baselines <dir>
+  spaghettio-sim bless --report <report.json> --baselines <dir> [--label <name>]
   spaghettio-sim check --report <report.json> --baselines <dir> [--tolerance 0.02]
 
 ENV:
@@ -65,7 +65,12 @@ fn cmd_bless(args: &[String]) -> Result<(), String> {
     let dir = flag_value(args, "--baselines").ok_or("bless requires --baselines <dir>")?;
     let raw = std::fs::read_to_string(report_path).map_err(|e| format!("{report_path}: {e}"))?;
     let json: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
-    let b = baseline::baseline_from_report(&json)?;
+    let mut b = baseline::baseline_from_report(&json)?;
+    // Optional relabel: report labels come from the exporter and may not
+    // be unique per fixture (the baseline file is keyed on label).
+    if let Some(label) = flag_value(args, "--label") {
+        b.label = label.to_string();
+    }
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let path = baseline::baseline_path(std::path::Path::new(dir), &b.label);
     std::fs::write(&path, serde_json::to_string_pretty(&b).map_err(|e| e.to_string())?)

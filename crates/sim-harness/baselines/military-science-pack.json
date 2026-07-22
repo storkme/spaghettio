@@ -1,0 +1,27 @@
+{
+  "label": "military-science-pack",
+  "game_version": "2.0.76",
+  "mods": [
+    "base",
+    "space-age",
+    "quality",
+    "elevated-rails"
+  ],
+  "tech_state": "research_all_technologies",
+  "entities": 919,
+  "produced": {
+    "copper-plate": 0.6,
+    "firearm-magazine": 0.25,
+    "grenade": 0.6,
+    "iron-plate": 5.35,
+    "military-science-pack": 0.52,
+    "piercing-rounds-magazine": 0.3,
+    "steel-plate": 0.3,
+    "stone-brick": 5.1,
+    "stone-wall": 0.95
+  },
+  "delivered": {
+    "military-science-pack": 0.5333333333333333
+  },
+  "overall_verdict": "FAIL"
+}
