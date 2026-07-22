@@ -122,6 +122,32 @@ impl DecompositionCandidate for MergeTapCandidate {
     }
 }
 
+/// RFC-051 Phase B: the cell-composition candidate. Runs only under
+/// `LayoutOptions.cell_composition == Candidate` (default Off) on
+/// chain-eligible solves (solid tree-with-fan-out; `cells::chain::
+/// chain_eligible`). Deliberately UNBIASED: it competes on the same
+/// score/acceptance machinery as every other candidate — if it only
+/// wins where the bus engine refuses, that is the honest value
+/// statement (RFC-051 kill 3).
+pub struct CellComposedCandidate;
+
+impl DecompositionCandidate for CellComposedCandidate {
+    fn name(&self) -> &str {
+        "cell-composed"
+    }
+
+    fn produce(
+        &self,
+        solver_result: &SolverResult,
+        opts: &LayoutOptions,
+    ) -> Result<LayoutResult, String> {
+        if opts.cell_composition != crate::bus::cells::CellComposition::Candidate {
+            return Err("cell composition is Off".to_string());
+        }
+        crate::bus::cells::chain::compose_chain(solver_result)
+    }
+}
+
 /// Phase 1 candidate: split each multi-producer module into `k` sibling
 /// sub-modules, each with halved rate and independent bus presence.
 /// Targets coprime balancer shapes like `(4, 9)` on PU@3/s ore-red
@@ -719,6 +745,19 @@ pub fn select_best_decomposition(
         NativeCandidate.produce(s, &opts)
     });
 
+    // Cell-composition candidate (RFC-051 Phase B): flag-gated,
+    // eligibility-gated, and catch_unwind — the composer's internal
+    // asserts must degrade to the bus candidates, never abort the solve.
+    let try_cells = opts.cell_composition == crate::bus::cells::CellComposition::Candidate
+        && crate::bus::cells::chain::chain_eligible(solver_result).is_ok();
+    let cells_run = if try_cells {
+        run_candidate_catch_unwind("cell-composed", solver_result, || {
+            CellComposedCandidate.produce(solver_result, &opts)
+        })
+    } else {
+        CandidateRun::skipped("cell-composed")
+    };
+
     // K=1 shape-fix follow-up. When Native's layout has missing-balancer
     // warnings on K=1 items (the (4, 9) coprime trap on PU@3/s ore-red
     // copper-plate), enroll those items in the partition plan with a
@@ -832,6 +871,7 @@ pub fn select_best_decomposition(
         &k1_run.events,
         &split_run.events,
         &merge_tap_run.events,
+        &cells_run.events,
     ] {
         for ev in events {
             if matches!(ev, crate::trace::TraceEvent::DecompositionCandidateScored { .. }) {
@@ -845,17 +885,19 @@ pub fn select_best_decomposition(
     // layout — same behaviour as today's pipeline when shape-fix can't
     // resolve a (n, m) trap).
     // Index order MUST match NATIVE_IDX (0) / MERGE_TAP_IDX (3) above.
-    let (native_err, k1_err, split_err, merge_tap_err) = (
+    let (native_err, k1_err, split_err, merge_tap_err, cells_err) = (
         native_run.error.clone(),
         k1_run.error.clone(),
         split_run.error.clone(),
         merge_tap_run.error.clone(),
+        cells_run.error.clone(),
     );
-    let candidates: [(Option<(LayoutResult, CandidateScore)>, Vec<crate::trace::TraceEvent>, &str); 4] = [
+    let candidates: [(Option<(LayoutResult, CandidateScore)>, Vec<crate::trace::TraceEvent>, &str); 5] = [
         (native_run.outcome, native_run.events, "native"),
         (k1_run.outcome, k1_run.events, "k1-shape-fix"),
         (split_run.outcome, split_run.events, "size-split-2"),
         (merge_tap_run.outcome, merge_tap_run.events, "merge-tap"),
+        (cells_run.outcome, cells_run.events, "cell-composed"),
     ];
 
     // Find best accepted candidate (highest score).
@@ -887,7 +929,7 @@ pub fn select_best_decomposition(
         let details: Vec<String> = candidates
             .iter()
             .map(|(_, _, name)| name.to_string())
-            .zip([&native_err, &k1_err, &split_err, &merge_tap_err])
+            .zip([&native_err, &k1_err, &split_err, &merge_tap_err, &cells_err])
             .map(|(name, err)| {
                 format!("{name}: {}", err.as_deref().unwrap_or("did not run"))
             })
