@@ -1,6 +1,6 @@
 # RFC-049: Inserter capacity research (hand-size axis)
 
-Registry: [`rfcs.md`](rfcs.md). Status: **Draft** (2026-07-22).
+Registry: [`rfcs.md`](rfcs.md). Status: **Complete** (2026-07-22; in-game anchor open — kill 4; input-side measured-data gap open — #343).
 
 ## Summary
 
@@ -87,9 +87,7 @@ tight position budgets (the contest machinery) feel that directly.
   is one transposition from the already-claimed `ci` (custom inputs);
   a near-miss collision class the spec review flagged as worse than a
   literal one because nothing forces you to notice it. Sidebar select
-  next to Build quality / Belt stacking; whether all 8 levels surface
-  or just Off/Max is a Phase-2 UX decision (the Motivation's own "mid
-  levels are completeness, not need").
+  next to Build quality / Belt stacking; RESOLVED in 049-2-ux: the full Off/1–7 select shipped (decision log, 2026-07-22).
 - **Constants**: `common::inserter_hand(name, level) -> f64` (per-
   class schedule table, Phase-0-pinned endpoints 4/12/16) and
   `inserter_belt_pickup_throughput(name, level, quality)` for input
@@ -206,6 +204,27 @@ table (Phase 3).
   completeness if Phase 0 degraded to {Off, Max}.
 
 ## Decision log
+
+- **2026-07-22 — Honesty-review fold: UX phase logged, wasm-break
+  disclosed, staleness swept.** (1) The `049-2-ux` phase (commit
+  36fc266) landed wasm-bindings + `ir=` codec + the sidebar select and
+  had no log entry — recorded now, including the consequential call it
+  quietly made: **the levels-vs-Off/Max UX question resolved as the
+  full Off/1–7 select** (all levels surface; the mid-levels are real
+  research states and the pinned schedule makes them cheap). Design/
+  Phasing prose updated to match. (2) Disclosure the Phase-0+1 entry
+  omitted: Phase 1's commit (40fd48d) transiently broke the
+  wasm-bindings build (core `LayoutOptions` gained the field; wasm's
+  struct literal wasn't updated — CLAUDE.md treats WASM builds as a
+  hard check). Fixed ~7 minutes later by 36fc266 in the same session;
+  no other phase landed on the broken base. (3) Status Draft→Complete
+  (header + registry); RFC-046 ground truth 3 and mechanics BS3 gain
+  "modeled since RFC-049 — see I8b" pointers; the input-side
+  measured-data gap is now durably tracked as #343. All six findings
+  from the honesty lens folded; every numeric claim survived its
+  independent re-derivation (schedule re-fetched raw, census
+  recounted, fixtures re-run, per-commit suite counts checked out at
+  three historical SHAs).
 
 - **2026-07-22 — Phase 2c landed (differential fixtures).** (i) e2e
   `research_l7_thins_output_inserters_s4`: hazard-concrete @ 60/s on
