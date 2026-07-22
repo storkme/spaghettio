@@ -237,7 +237,7 @@ Verdict: **GO for the Phase-2 integration RFC.** Full trail:
 [`rfc-048-cell-composition.md`](rfc-048-cell-composition.md) decision
 log + Phase-1 close-out section.
 
-**`rfc-049-inserter-capacity-research.md` close-out (2026-07-22)**: user-facing **inserter capacity research** param (level 0–7, `inserter_capacity`/`ir=` URL-encoded, sidebar "Inserter research"). Schedule pinned from raw wikitext with 2-fetch reproducibility (bulk 2→12; stack = bulk+4 → 6→16; non-bulk 1→3 via the chain +1 from Transport-belt-capacity-2 → 4) — summarized wiki fetches are BANNED as constant sources (two contradicted each other; the failure mode reproduced live in review). `common::belt_drop_rate(name, quality, stacking, level)` is the single source of truth consumed by both the ladder and the validator; output belt-drop sides scale linearly (swings × researched hand, with BS3 rounding — healing is exactly `hand ≡ 0 mod S`, non-monotonic: I8b), input (belt-pickup) sides stay at the L0 conservative floor pending measured data (#343 — belt-fed throughput is sub-linear and the wiki tables don't reproduce). L0 bit-identical to pre-RFC (zero golden re-blesses). Headline: at S=4/L7 the per-inserter belt-drop rate is 38.4/s (96/s legendary) vs 9.6/24 before — output stack inserters thin 9→3 in the differential fixture. In-game anchor open (user-run; a legendary S=4/L7 export validates RFC-046/047/049 in one import). Full trail: `docs/rfc-049-inserter-capacity-research.md` decision log.
+**`rfc-049-inserter-capacity-research.md` close-out (2026-07-22)**: user-facing **inserter capacity research** param (level 0–7, `inserter_capacity`/`ir=` URL-encoded, sidebar "Inserter research"). Schedule pinned from raw wikitext with 2-fetch reproducibility (bulk 2→12; stack = bulk+4 → 6→16; non-bulk 1→3 via the chain +1 from Transport-belt-capacity-2 → 4) — summarized wiki fetches are BANNED as constant sources (two contradicted each other; the failure mode reproduced live in review). `common::belt_drop_rate(name, quality, stacking, level)` is the single source of truth consumed by both the ladder and the validator; output belt-drop sides scale linearly (swings × researched hand, with BS3 rounding — healing is exactly `hand ≡ 0 mod S`, non-monotonic: I8b), input (belt-pickup) sides stayed at the L0 floor pending measured data — **closed 2026-07-22 (Phase 2, PR #378, #343)**: a 25-cell sim calibration matrix (tech-state-parity harness, all 8 levels for stack/bulk) measured belt→machine intake; `common::machine_feed_rate` now credits hand-ratio rates for non-bulk/bulk (measured conservative, 1.04–2.27× margins) and a measured floor table for stack (its real curve is non-monotone in hand size — dips at hands 7/14 — caught by the #376 adversarial review and confirmed by measurement). L0 bit-identical; the sizing ladder deliberately stays L0 (user-facing density-vs-research trade, undecided). L0 bit-identical to pre-RFC (zero golden re-blesses). Headline: at S=4/L7 the per-inserter belt-drop rate is 38.4/s (96/s legendary) vs 9.6/24 before — output stack inserters thin 9→3 in the differential fixture. In-game anchor open (user-run; a legendary S=4/L7 export validates RFC-046/047/049 in one import). Full trail: `docs/rfc-049-inserter-capacity-research.md` decision log.
 
 **`rfc-047-lane-aware-tap-delivery.md` close-out (2026-07-22)**: made
 delivery **lane-aware** so belt stacking raises rate CEILINGS, not just
@@ -284,3 +284,21 @@ opt-in, not CI-enforced); CI nextest parallelism re-enable via
 timeout-ceiling bumps (~5 min/push, experiment already documented in
 `.config/nextest.toml`); `[profile.test]` opt experiment for SAT/A*-heavy
 tests (measure before adopting).
+
+## Sim-harness measurement integrity (2026-07-22)
+
+The #357 investigation inverted itself: **every "clean-but-failing" sweep
+fixture was a harness artifact, not a layout defect.** Root cause: feed-rig
+bank chests from adjacent rigs overlapped on one tile (`create_entity` in
+script mode stacks entities silently) and cross-fed ores; iron furnaces
+smelted the stray copper and the wrong-item plates permanently plugged
+dead-end belt-ins (mechanics **I11**: inserters refuse items the destination
+can't accept — one contaminant item plugs a lane forever). With the kit
+fixed (PR #362): logistic 1.05/s, military 1.00/s, ec10 10.00/s, automation
+1.00/s — **the whole solid sweep PASSES at plan** and #352/#357 closed. Two
+further artifact classes fixed en route: buffer-fill transients read as
+convergence (`--warmup` steady-state probes) and 20-second snapshot rates
+for intermediates (trailing-window). The kit now self-audits
+(`kit_errors` ⇒ verdict NO DATA); measurement semantics + forensic playbook:
+[`sim-harness-forensics.md`](sim-harness-forensics.md). Baselines re-blessed
+clean-kit; a parity re-bless (post-#378 tech-state keying) is in flight.
