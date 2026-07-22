@@ -556,6 +556,32 @@ export function renderSidebar(
   });
   targetBody.appendChild(makeField("Belt stacking", stackingSelect));
 
+  // Inserter capacity research (`docs/rfc-049-inserter-capacity-research.md`):
+  // the hand-size research chain. Composes with build quality (swings) and
+  // belt stacking (belt-drop rounding) — at max research a legendary stack
+  // inserter belt-drops a full stack even at high stack sizes, so the engine
+  // needs far fewer output inserters for a max-research player.
+  const inserterCapacitySelect = document.createElement("select");
+  inserterCapacitySelect.className = "sb-select";
+  inserterCapacitySelect.title =
+    "Inserter capacity bonus research level: raises inserter hand sizes";
+  [
+    ["Off (default)", ""],
+    ["Level 1", "1"],
+    ["Level 2", "2"],
+    ["Level 3", "3"],
+    ["Level 4", "4"],
+    ["Level 5", "5"],
+    ["Level 6", "6"],
+    ["Level 7 (max)", "7"],
+  ].forEach(([label, value]) => {
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = label;
+    inserterCapacitySelect.appendChild(opt);
+  });
+  targetBody.appendChild(makeField("Inserter research", inserterCapacitySelect));
+
   // Layout strategy. Phase 0b of `rfc-modular-production` shipped the
   // dropdown; the surviving `partitioned-decomposed` variant produces
   // strictly ≤ Pooled errors on every case in the corpus. The deprecated
@@ -792,6 +818,7 @@ export function renderSidebar(
   }
   if (urlState.wireMode) wireModeSelect.value = urlState.wireMode;
   if (urlState.stacking) stackingSelect.value = urlState.stacking;
+  if (urlState.inserterCapacity) inserterCapacitySelect.value = urlState.inserterCapacity;
   // Restore custom inputs from URL
   for (const item of urlState.customInputs) {
     if (itemSet.has(item) && !defaultInputSet.has(item) && !customInputs.includes(item)) {
@@ -866,6 +893,7 @@ export function renderSidebar(
       quality: qualitySelect.value || null,
       wireMode: wireModeSelect.value || null,
       stacking: stackingSelect.value || null,
+      inserterCapacity: inserterCapacitySelect.value || null,
       modules: modulesValue(),
       customInputs,
     });
@@ -939,8 +967,9 @@ export function renderSidebar(
       const quality = qualitySelect.value || undefined;
       const wireMode = wireModeSelect.value || undefined;
       const stacking = stackingSelect.value || undefined;
+      const inserterCapacity = inserterCapacitySelect.value || undefined;
       const onEvent = callbacks.startStreaming();
-      layout = await engine.buildLayoutStreaming(result, maxTier, strategy, rowLayout, maxInserterTier, quality, wireMode, stacking, onEvent);
+      layout = await engine.buildLayoutStreaming(result, maxTier, strategy, rowLayout, maxInserterTier, quality, wireMode, stacking, inserterCapacity, onEvent);
     } catch (err) {
       if (gen !== solveGeneration) return;
       const errDiv = document.createElement("div");
@@ -981,6 +1010,7 @@ export function renderSidebar(
   moduleQualitySelect.addEventListener("change", scheduleAutoSolve);
   wireModeSelect.addEventListener("change", scheduleAutoSolve);
   stackingSelect.addEventListener("change", scheduleAutoSolve);
+  inserterCapacitySelect.addEventListener("change", scheduleAutoSolve);
   checkboxes.forEach((cb) => cb.addEventListener("change", scheduleAutoSolve));
 
   runSolve().catch((err) => console.error("runSolve failed:", err));

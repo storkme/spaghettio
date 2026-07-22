@@ -75,8 +75,8 @@ Phase 0 (cited; in-game anchor confirms):
    rounded **down** to a multiple of S. Wiki base hand is **6**
    (built-in capacity bonus): per-swing on belts = 6 at S∈{1,2,3},
    **4 at S=4**. So per-inserter belt throughput *drops* at S=4 unless
-   capacity research raises the hand — which we don't model (deferred,
-   Phase 3). Modeling the rounding is mandatory: crediting 6/swing at
+   capacity research raises the hand — *(SUPERSEDED: modeled since
+   RFC-049 — see I8b; the dip heals exactly when hand ≡ 0 mod S.)* Modeling the rounding is mandatory: crediting 6/swing at
    S=4 would over-plan (real < plan — the unsafe direction).
 4. **Stack-preserving elements**: splitters, sideloading, underground
    belts, belt-to-belt merges. No engine element destroys stacks.

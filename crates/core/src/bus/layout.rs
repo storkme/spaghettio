@@ -109,6 +109,11 @@ pub struct LayoutOptions {
     /// Plumbed through wasm-bindings `layout*` and the web UI (URL
     /// `st=`, sidebar "Belt stacking") since Phase 2.
     pub stacking: u8,
+    /// Inserter-capacity research level (RFC-049): 0 = unresearched
+    /// (default; bit-identical to pre-RFC — kill 1), 1..=7 pinned
+    /// schedule (`common::inserter_hand`). User-specified like its
+    /// sibling axes. Phase 1 core-only; wasm/web plumbing is Phase 2.
+    pub inserter_capacity: u8,
 }
 
 impl Default for LayoutOptions {
@@ -125,6 +130,7 @@ impl Default for LayoutOptions {
             wire_mode: crate::power_wires::WireMode::default(),
             merge_tap: false,
             stacking: 1,
+            inserter_capacity: 0,
         }
     }
 }
@@ -653,6 +659,7 @@ fn layout_pass(
         max_belt_tier,
         max_inserter_tier,
         opts.quality,
+        opts.inserter_capacity,
         Some(&final_output_items),
         retry_extra_gaps,
         opts.row_layout,
@@ -711,6 +718,7 @@ fn layout_pass(
                 max_belt_tier,
                 max_inserter_tier,
                 opts.quality,
+                opts.inserter_capacity,
                 Some(&final_output_items),
                 Some(&merged_gaps),
                 opts.row_layout,
@@ -1169,6 +1177,7 @@ fn layout_pass(
             power_wires: Some(power_wires),
             wire_mode: opts.wire_mode,
             stacking: opts.stacking,
+            inserter_capacity: opts.inserter_capacity,
         },
         row_spans,
         cap_coords,

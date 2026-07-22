@@ -389,6 +389,17 @@ pub struct LayoutResult {
     /// missing to 1, so pre-RFC snapshots deserialize unstacked.
     #[serde(default = "stacking_default", skip_serializing_if = "stacking_is_default")]
     pub stacking: u8,
+    /// Inserter-capacity research level this layout was planned at
+    /// (RFC-049, I8b): 0 = unresearched (default, bit-identical to
+    /// pre-RFC — kill 1), 1..=7 per the pinned schedule. Serde skips 0
+    /// and defaults missing to 0, so pre-RFC snapshots deserialize
+    /// unresearched; consumers clamp via `common::inserter_hand`.
+    #[serde(default, skip_serializing_if = "u8_is_zero")]
+    pub inserter_capacity: u8,
+}
+
+fn u8_is_zero(v: &u8) -> bool {
+    *v == 0
 }
 
 fn wire_mode_is_default(m: &crate::power_wires::WireMode) -> bool {

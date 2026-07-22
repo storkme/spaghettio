@@ -626,6 +626,7 @@ fn can_lane_split(spec: &MachineSpec, count: usize) -> bool {
 /// Build one row of machines. Returns (entities, span, row_width).
 ///
 /// Calls into the templates module to stamp the actual machine/inserter/belt entities.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_one_row(
     spec: &MachineSpec,
     count: usize,
@@ -634,6 +635,8 @@ pub(crate) fn build_one_row(
     max_belt_tier: Option<&str>,
     max_inserter_tier: InserterTier,
     quality: QualityTier,
+    // RFC-049 inserter-capacity research level (see `place_rows`).
+    inserter_capacity: u8,
     output_east: bool,
     row_layout: RowLayout,
     ctx: &StackingCtx,
@@ -819,6 +822,7 @@ pub(crate) fn build_one_row(
                 max_inserter_tier,
                 quality,
                 ctx.for_item(output_item),
+                inserter_capacity,
             );
             let machine_y = y_cursor + 5;
             let output_y = machine_y + mh as i32;
@@ -881,6 +885,7 @@ pub(crate) fn build_one_row(
                 max_inserter_tier,
                 quality,
                 ctx.for_item(output_item),
+                inserter_capacity,
             );
             fluid_port_ys = port_pipes.first().map(|&(_, _, py)| vec![py]).unwrap_or_default();
             fluid_port_pipes = port_pipes;
@@ -946,6 +951,7 @@ pub(crate) fn build_one_row(
                 max_inserter_tier,
                 quality,
                 ctx.for_item(output_item),
+                inserter_capacity,
             );
             fluid_output_port_pipes = out_port_pipes;
             let input_ys = vec![y_cursor];
@@ -995,6 +1001,7 @@ pub(crate) fn build_one_row(
                 max_inserter_tier,
                 quality,
                 ctx.for_item(output_item),
+                inserter_capacity,
             );
             let input_ys: Vec<i32> = solid_inputs
                 .iter()
@@ -1047,6 +1054,7 @@ pub(crate) fn build_one_row(
                 max_inserter_tier,
                 quality,
                 ctx.for_item(output_item),
+                inserter_capacity,
             );
             // input_belt_y[i] is where lane planner taps off lane.item
             // matching solid_inputs[i]. Layout (msz=3): belt 1 at y+0,
@@ -1097,6 +1105,7 @@ pub(crate) fn build_one_row(
                 max_inserter_tier,
                 quality,
                 ctx.for_item(output_item),
+                inserter_capacity,
             );
             fluid_port_ys = in_port_pipes.iter().map(|&(_, _, py)| py).collect();
             fluid_port_ys.sort_unstable();
@@ -1185,6 +1194,7 @@ pub(crate) fn build_one_row(
                     max_inserter_tier,
                     quality,
                     ctx.for_item(output_item),
+                    inserter_capacity,
                 );
                 // Map each spec.solid_input (natural order) to its tap-off
                 // y position. High-demand (item0) sits on trunk 0 at y+0;
@@ -1241,6 +1251,7 @@ pub(crate) fn build_one_row(
                     max_inserter_tier,
                     quality,
                     ctx.for_item(output_item),
+                    inserter_capacity,
                 );
                 fluid_output_port_pipes = out_port_pipes;
                 // Positional (far=y_cursor, near=y_cursor+1) mapped back to
@@ -1311,6 +1322,7 @@ pub(crate) fn build_one_row(
                 max_belt_tier,
                 max_inserter_tier,
                 quality,
+                inserter_capacity,
                 ctx,
             );
             fluid_port_ys = fluid_input_port_pipes.first().map(|&(_, _, py)| vec![py]).unwrap_or_default();
@@ -1543,6 +1555,7 @@ pub(crate) fn build_one_row(
 /// an EARLIER call) to extra tile rows to insert south of that row.
 ///
 /// Returns `(entities, row_spans, total_width, total_height)`.
+#[allow(clippy::too_many_arguments)]
 pub fn place_rows(
     machines: &[MachineSpec],
     dependency_order: &[String],
@@ -1551,6 +1564,11 @@ pub fn place_rows(
     max_belt_tier: Option<&str>,
     max_inserter_tier: InserterTier,
     quality: QualityTier,
+    // Inserter-capacity research level 0..=7 (RFC-049,
+    // `LayoutOptions.inserter_capacity`) — an inserter-ladder input parallel
+    // to `max_inserter_tier`/`quality`; consumed only by belt-drop (output)
+    // sizing, level 0 is bit-identical to pre-RFC.
+    inserter_capacity: u8,
     final_output_items: Option<&FxHashSet<String>>,
     extra_gap_after_row: Option<&FxHashMap<usize, i32>>,
     row_layout: RowLayout,
@@ -1663,6 +1681,7 @@ pub fn place_rows(
                 max_belt_tier,
                 max_inserter_tier,
                 quality,
+                inserter_capacity,
                 is_final,
                 row_layout,
                 ctx,
@@ -1693,6 +1712,7 @@ pub fn place_rows(
 }
 
 /// Convenience wrapper that takes a `SolverResult` directly.
+#[allow(clippy::too_many_arguments)]
 pub fn place_rows_from_result(
     result: &SolverResult,
     bus_width: i32,
@@ -1700,6 +1720,7 @@ pub fn place_rows_from_result(
     max_belt_tier: Option<&str>,
     max_inserter_tier: InserterTier,
     quality: QualityTier,
+    inserter_capacity: u8,
     final_output_items: Option<&FxHashSet<String>>,
     extra_gap_after_row: Option<&FxHashMap<usize, i32>>,
     row_layout: RowLayout,
@@ -1713,6 +1734,7 @@ pub fn place_rows_from_result(
         max_belt_tier,
         max_inserter_tier,
         quality,
+        inserter_capacity,
         final_output_items,
         extra_gap_after_row,
         row_layout,
@@ -2004,7 +2026,7 @@ mod tests {
     fn place_rows_single_recipe_no_split() {
         let machines = vec![iron_plate_spec()];
         let dep_order = vec!["iron-plate".to_string()];
-        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default(), &StackingCtx::unstacked());
+        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), &StackingCtx::unstacked());
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].machine_count, 1);
         assert_eq!(spans[0].spec.recipe, "iron-plate");
@@ -2014,7 +2036,7 @@ mod tests {
     fn place_rows_two_recipes_ordered() {
         let machines = vec![iron_gear_spec(), iron_plate_spec()];
         let dep_order = vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()];
-        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default(), &StackingCtx::unstacked());
+        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), &StackingCtx::unstacked());
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0].spec.recipe, "iron-plate");
         assert_eq!(spans[1].spec.recipe, "iron-gear-wheel");
@@ -2025,7 +2047,7 @@ mod tests {
         // Second recipe starts at y_end_of_first + 2 (gap)
         let machines = vec![iron_plate_spec(), iron_gear_spec()];
         let dep_order = vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()];
-        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default(), &StackingCtx::unstacked());
+        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), &StackingCtx::unstacked());
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[1].y_start, spans[0].y_end + 2);
     }
@@ -2034,7 +2056,7 @@ mod tests {
     fn place_rows_y_offset() {
         let machines = vec![iron_plate_spec()];
         let dep_order = vec!["iron-plate".to_string()];
-        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 5, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default(), &StackingCtx::unstacked());
+        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 5, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), &StackingCtx::unstacked());
         assert_eq!(spans[0].y_start, 5);
     }
 
@@ -2052,6 +2074,7 @@ mod tests {
             1,
             None,
             InserterTier::default(), QualityTier::Normal,
+            0,
             None,
             None,
             RowLayout::default(),
@@ -2115,6 +2138,7 @@ mod tests {
             0,
             Some("transport-belt"),
             InserterTier::default(), QualityTier::Normal,
+            0,
             None,
             None,
             RowLayout::default(),
@@ -2180,6 +2204,7 @@ mod tests {
             1,
             Some("transport-belt"),
             InserterTier::default(), QualityTier::Normal,
+            0,
             None,
             None,
             RowLayout::default(),
@@ -2203,7 +2228,7 @@ mod tests {
         let machines = vec![iron_plate_spec(), iron_gear_spec()];
         let dep_order = vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()];
         let (_, spans, _, total_height) =
-            place_rows(&machines, &dep_order, 5, 0, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default(), &StackingCtx::unstacked());
+            place_rows(&machines, &dep_order, 5, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), &StackingCtx::unstacked());
 
         // Every span should have y_end > y_start
         for span in &spans {
@@ -2231,7 +2256,7 @@ mod tests {
         let dep_order = vec!["iron-plate".to_string()];
         let bus_width = 10;
         let (_, spans, max_width, _) =
-            place_rows(&machines, &dep_order, bus_width, 0, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default(), &StackingCtx::unstacked());
+            place_rows(&machines, &dep_order, bus_width, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), &StackingCtx::unstacked());
 
         assert!(
             spans[0].row_width >= bus_width,
@@ -2255,12 +2280,13 @@ mod tests {
             0,
             None,
             InserterTier::default(), QualityTier::Normal,
+            0,
             None,
             Some(&extra_gaps),
             RowLayout::default(),
             &StackingCtx::unstacked(),
         );
-        let (_, spans_no_gap, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, None, None, RowLayout::default(), &StackingCtx::unstacked());
+        let (_, spans_no_gap, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), &StackingCtx::unstacked());
 
         // Second row should start 5 tiles later with gap
         assert_eq!(

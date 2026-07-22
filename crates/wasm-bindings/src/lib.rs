@@ -21,6 +21,7 @@ use rustc_hash::FxHashSet;
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
+#[allow(clippy::too_many_arguments)] // param-per-axis wasm surface (quality/wire/stacking/research)
 /// Build `LayoutOptions` from the optional belt-tier, strategy,
 /// row-layout, and inserter-tier strings passed in across the WASM
 /// boundary. The TS engine layer validates URL params, so unknown values
@@ -33,6 +34,7 @@ fn layout_options(
     quality: Option<String>,
     wire_mode: Option<String>,
     stacking: Option<u8>,
+    inserter_capacity: Option<u8>,
 ) -> LayoutOptions {
     let strategy = match strategy.as_deref() {
         // `partitioned-per-consumer` is the deprecated P1 string; the
@@ -79,6 +81,9 @@ fn layout_options(
         // semantics as the tiers above. `common::*_stacked` helpers clamp
         // any out-of-range value, so no validation needed here.
         stacking: stacking.unwrap_or(1),
+        // RFC-049 Phase 2: unknown/absent → 0 (unresearched, bit-identical
+        // to pre-RFC — kill 1), same fallback semantics as the tiers above.
+        inserter_capacity: inserter_capacity.unwrap_or(0),
     }
 }
 
@@ -245,6 +250,7 @@ pub fn module_slots(entity: &str) -> u32 {
     spaghettio_core::common::module_slots(entity)
 }
 
+#[allow(clippy::too_many_arguments)] // param-per-axis wasm surface (quality/wire/stacking/research)
 #[wasm_bindgen]
 pub fn layout(
     solver_result: SolverResult,
@@ -255,14 +261,16 @@ pub fn layout(
     quality: Option<String>,
     wire_mode: Option<String>,
     stacking: Option<u8>,
+    inserter_capacity: Option<u8>,
 ) -> Result<LayoutResult, JsError> {
     build_bus_layout(
         &solver_result,
-        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking),
+        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking, inserter_capacity),
     )
     .map_err(|e| JsError::new(&e))
 }
 
+#[allow(clippy::too_many_arguments)] // param-per-axis wasm surface (quality/wire/stacking/research)
 /// Traced variant of `layout()`. Returns the same `LayoutResult` plus
 /// the structured `trace` events that drive the debug overlays. Ghost
 /// routing is the only routing path — the legacy direct router was
@@ -277,10 +285,11 @@ pub fn layout_traced(
     quality: Option<String>,
     wire_mode: Option<String>,
     stacking: Option<u8>,
+    inserter_capacity: Option<u8>,
 ) -> Result<LayoutResult, JsError> {
     spaghettio_core::bus::layout::build_bus_layout_traced(
         &solver_result,
-        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking),
+        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking, inserter_capacity),
     )
     .map_err(|e| JsError::new(&e))
 }
@@ -327,6 +336,7 @@ fn streamable(evt: &spaghettio_core::trace::TraceEvent) -> bool {
     )
 }
 
+#[allow(clippy::too_many_arguments)] // param-per-axis wasm surface (quality/wire/stacking/research)
 /// Streaming variant — invokes `emit` synchronously for every filtered trace
 /// event during the layout run. The JS callback fires on the worker thread;
 /// use it to `postMessage` events to the main thread as the engine emits
@@ -343,6 +353,7 @@ pub fn layout_streaming(
     quality: Option<String>,
     wire_mode: Option<String>,
     stacking: Option<u8>,
+    inserter_capacity: Option<u8>,
     emit: &js_sys::Function,
 ) -> Result<LayoutResult, JsError> {
     let emit = emit.clone();
@@ -356,7 +367,7 @@ pub fn layout_streaming(
     });
     spaghettio_core::bus::layout::build_bus_layout_streaming(
         &solver_result,
-        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking),
+        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking, inserter_capacity),
         on_event,
     )
     .map_err(|e| JsError::new(&e))
