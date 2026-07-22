@@ -569,9 +569,8 @@ fn probe_fluid_cell_geometry() {
 
 
 /// Compose the plastic cell with boundary feeds (coal belt + petroleum
-/// pipe) and export for the sim — the fluid-boundary calibration entry.
-#[test]
-fn export_composed_plastic_for_sim() {
+/// pipe) — the fluid-boundary calibration geometry.
+fn compose_plastic_calibrated() -> (spaghettio_core::models::SolverResult, LayoutResult) {
     use spaghettio_core::models::{BoundaryRecord, EntityDirection, PlacedEntity};
     let (sr, l) = generate_row_layout("plastic-bar", 2.0, &["petroleum-gas", "coal"]);
     let cell = extract_cell(&l);
@@ -592,20 +591,32 @@ fn export_composed_plastic_for_sim() {
         "coal", "express-transport-belt", "feed:coal");
     b_in.push(BoundaryRecord { item: "coal".into(), x: 1, y: 0,
         direction: EntityDirection::South, is_fluid: false, entity: "express-transport-belt".into() });
-    // Petroleum: pipe column from the north edge, then east to the cell's
-    // westmost petroleum pipe tile (pipes connect omnidirectionally).
+    // Petroleum: pipe column from the north edge, ending one tile above
+    // the cell's eastmost petroleum pipe (pipes connect omnidirectionally,
+    // so adjacency joins them). The column x is DERIVED from the terminal
+    // — a hardcoded x connected only by coincidence, and the fluid checks
+    // can't catch a drifted column (corridor pipe runs are outside their
+    // model; only the sim could, and it's blocked by #364).
     let pipe_terminal = cell.entities.iter()
         .filter(|e| (e.name == "pipe" || e.name == "pipe-to-ground")
             && e.segment_id.as_deref().map(|s| s.contains("petroleum")).unwrap_or(false))
         .max_by_key(|e| e.x).unwrap();
-    let pt_y = pipe_terminal.y + cy; // column x=6 sits over the cell's top pipe row
+    let pt_x = pipe_terminal.x + cx;
+    let pt_y = pipe_terminal.y + cy;
+    assert!(pt_y > 0, "petroleum terminal must sit below the north edge");
     for y in 0..pt_y {
-        entities.push(PlacedEntity { name: "pipe".into(), x: 6, y,
+        entities.push(PlacedEntity { name: "pipe".into(), x: pt_x, y,
             direction: EntityDirection::North,
             segment_id: Some("feed:petroleum".into()),
             carries: Some("petroleum-gas".into()), ..Default::default() });
     }
-    b_in.push(BoundaryRecord { item: "petroleum-gas".into(), x: 6, y: 0,
+    // Guard the adjacency the geometry relies on: the column's last tile
+    // sits directly north of a petroleum-segment pipe tile of the cell.
+    assert!(entities.iter().any(|e| e.x == pt_x && e.y == pt_y
+            && (e.name == "pipe" || e.name == "pipe-to-ground")
+            && e.segment_id.as_deref().map(|s| s.contains("petroleum")).unwrap_or(false)),
+        "petroleum feed column must terminate adjacent to the cell's petroleum pipe");
+    b_in.push(BoundaryRecord { item: "petroleum-gas".into(), x: pt_x, y: 0,
         direction: EntityDirection::South, is_fluid: true, entity: "pipe".into() });
     // Output: corner South to the bottom edge.
     let out = cell.ports.iter().find(|p| !p.inbound).unwrap();
@@ -626,13 +637,30 @@ fn export_composed_plastic_for_sim() {
     comp.boundary_inputs = b_in;
     comp.boundary_outputs = b_out;
 
-    let issues = spaghettio_core::validate::validate(&comp, Some(&sr),
-        spaghettio_core::validate::LayoutStyle::Bus).unwrap_or_else(|e| panic!("validate: {e}"));
-    let errors = issues.iter().filter(|i| i.severity == spaghettio_core::validate::Severity::Error).count();
-    println!("composed plastic (calibrated): {}x{}, {} entities, {} errors / {} issues",
-        width, height, comp.entities.len(), errors, issues.len());
-    assert_eq!(errors, 0);
+    (sr, comp)
+}
 
+/// PERMANENT GATE (RFC-048 Phase 1): the fluid-consumer cell composes
+/// at 0 errors AND 0 warnings. Sim verification of this geometry is
+/// blocked by the harness fluid path (#364) — until that lands, this
+/// gate plus the adjacency assert in the composer are the only guards.
+#[test]
+fn cell_composed_plastic_zero_issues() {
+    use spaghettio_core::validate::{self, LayoutStyle};
+    let (sr, comp) = compose_plastic_calibrated();
+    let issues = validate::validate(&comp, Some(&sr), LayoutStyle::Bus)
+        .unwrap_or_else(|e| panic!("composed plastic must validate: {e}"));
+    println!("composed plastic (calibrated): {}x{}, {} entities, {} issues",
+        comp.width, comp.height, comp.entities.len(), issues.len());
+    assert!(issues.is_empty(), "composed plastic issues: {issues:?}");
+}
+
+/// Artifact producer for the sim (blocked on #364): writes the
+/// blueprint + boundary manifest under target/tmp.
+#[test]
+#[ignore = "artifact producer — run explicitly when exporting for the sim"]
+fn export_composed_plastic_for_sim() {
+    let (sr, comp) = compose_plastic_calibrated();
     let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(&comp, &sr, "rfc048-plastic-composed");
     std::fs::create_dir_all("target/tmp").unwrap();
     std::fs::write("target/tmp/rfc048-plastic.bp", &bp).unwrap();
@@ -753,9 +781,23 @@ fn compose_pairs_calibrated(n: i32) -> (spaghettio_core::models::SolverResult, L
         let sx = corridor_x + 2;
         stamp_path(&mut entities, &[(cable_x + o1.x + 1, cell_y + o1.y), (sx - 1, cell_y + o1.y)],
             "copper-cable", "fast-transport-belt", &format!("cc:a:{k}"));
+        // b-run must approach the splitter's south half EASTWARD: ending
+        // the northward column at o1.y+1 facing north would sideload into
+        // the a-run's tail instead of feeding the splitter (found by
+        // tile-level review of the sim artifact). Column stops one tile
+        // below the splitter row; a single east-facing belt there has
+        // exactly one (perpendicular) input, so it's a lane-preserving
+        // corner feeding the splitter — not a sideload.
+        assert!(o2.y > o1.y + 1, "b-run approaches from below: {} vs {}", o2.y, o1.y);
         stamp_path(&mut entities,
-            &[(cable_x + o2.x + 1, cell_y + o2.y), (sx - 1, cell_y + o2.y), (sx - 1, cell_y + o1.y + 1)],
+            &[(cable_x + o2.x + 1, cell_y + o2.y), (sx - 1, cell_y + o2.y), (sx - 1, cell_y + o1.y + 2)],
             "copper-cable", "fast-transport-belt", &format!("cc:b:{k}"));
+        entities.push(PlacedEntity {
+            name: "fast-transport-belt".into(), x: sx - 1, y: cell_y + o1.y + 1,
+            direction: EntityDirection::East,
+            carries: Some("copper-cable".into()),
+            segment_id: Some(format!("cc:b:{k}")), ..Default::default()
+        });
         entities.push(PlacedEntity {
             name: "fast-splitter".into(), x: sx, y: cell_y + o1.y,
             direction: EntityDirection::East,
@@ -847,6 +889,9 @@ fn cell_composed_ec15_zero_errors() {
         issues.iter().all(|i| i.category == "inserter-item-throughput"),
         "only the sim-disproven attribution warnings are tolerated: {issues:?}"
     );
+    // The 6 specific warnings were sim-adjudicated; more of the same
+    // category would be NEW unadjudicated claims — trip on growth.
+    assert!(issues.len() <= 6, "warning count grew past the adjudicated 6: {issues:?}");
 }
 
 
