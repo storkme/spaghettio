@@ -301,6 +301,12 @@ fn probe_differential_scoreboard() {
         ("ec30", "electronic-circuit", 30.0, &["iron-plate", "copper-plate"]),
         ("ac1", "advanced-circuit", 1.0, &["iron-plate", "copper-plate", "plastic-bar"]),
         ("ac2", "advanced-circuit", 2.0, &["iron-plate", "copper-plate", "plastic-bar"]),
+        // Package-2 targets: the scaling-wall class + from-ore chains
+        // (furnace cells; fan-out >2 on shared plates).
+        ("ec15-ore", "electronic-circuit", 15.0, &["iron-ore", "copper-ore"]),
+        ("mil5-plates", "military-science-pack", 5.0, &["iron-plate", "copper-plate", "steel-plate", "stone-brick", "coal"]),
+        ("mil5-ore", "military-science-pack", 5.0, &["iron-ore", "copper-ore", "stone", "coal"]),
+        ("ec60", "electronic-circuit", 60.0, &["iron-plate", "copper-plate"]),
     ];
     for (label, item, rate, inputs) in fixtures {
         let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
@@ -308,7 +314,13 @@ fn probe_differential_scoreboard() {
             item, *rate, &inputs_set, &MachinePalette::default(),
             "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
         ).unwrap();
-        let bus = std::panic::catch_unwind(|| layout::build_bus_layout(&sr, layout::LayoutOptions::default()));
+        // Explicit Off — the DEFAULT is Candidate post-flip, and the bus
+        // column must measure the bus.
+        let bus_opts = layout::LayoutOptions {
+            cell_composition: spaghettio_core::bus::cells::CellComposition::Off,
+            ..Default::default()
+        };
+        let bus = std::panic::catch_unwind(|| layout::build_bus_layout(&sr, bus_opts));
         let bus_desc = match &bus {
             Ok(Ok(l)) => match validate::validate(l, Some(&sr), LayoutStyle::Bus) {
                 Ok(issues) => {
@@ -403,8 +415,10 @@ fn probe_registry_hashes() {
 fn cell_registry_hashes_current() {
     use spaghettio_core::bus::cells::chain::compose_chain;
     use spaghettio_core::bus::cells::registry::{geometry_hash, lookup};
+    // chain-ec15 is deliberately absent: its K=1 geometry measured -8%
+    // in the sim (#381) — the registry only carries measured-at-plan
+    // geometries, and the gate only pins what the registry claims.
     for (item, rate, inputs) in [
-        ("electronic-circuit", 15.0, &["iron-plate", "copper-plate"][..]),
         ("advanced-circuit", 1.0, &["iron-plate", "copper-plate", "plastic-bar"][..]),
     ] {
         let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
@@ -416,5 +430,34 @@ fn cell_registry_hashes_current() {
         let h = geometry_hash(&l);
         assert!(lookup(item, rate, h).is_some(),
             "{item}@{rate}: composed geometry (hash {h:016x}) no longer matches the sim-verified registry entry — re-verify in the sim and update cell-sim-registry.json");
+    }
+}
+
+#[test]
+#[ignore = "debug probe"]
+fn probe_mil5_errors() {
+    use spaghettio_core::bus::cells::chain::compose_chain;
+    use spaghettio_core::validate::{self, LayoutStyle};
+    for (label, item, rate, inputs) in [
+        ("mil5-ore", "military-science-pack", 5.0, &["iron-ore", "copper-ore", "stone", "coal"][..]),
+        ("ec30", "electronic-circuit", 30.0, &["iron-plate", "copper-plate"][..]),
+    ] {
+        let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
+        let sr = solver::solve_with_palette_exclusions_and_quality(
+            item, rate, &inputs_set, &MachinePalette::default(),
+            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+        ).unwrap();
+        println!("== {label}: {} specs ==", sr.machines.len());
+        match compose_chain(&sr) {
+            Ok(l) => match validate::validate(&l, Some(&sr), LayoutStyle::Bus) {
+                Ok(_) => println!("   validates OK"),
+                Err(er) => {
+                    for line in format!("{er}").lines().filter(|l| l.contains("error")).take(8) {
+                        println!("   {line}");
+                    }
+                }
+            },
+            Err(e) => println!("   REFUSED: {e}"),
+        }
     }
 }

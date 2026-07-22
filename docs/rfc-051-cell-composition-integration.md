@@ -223,6 +223,47 @@ follow-ups.
 
 ## Decision log
 
+- *2026-07-22 — Coverage expansion (package 2, follows the flip). Caps
+  lifted: n-run MERGE CASCADES (2→1 splitter chains, below-approach
+  corner per stage) and FAN-OUT TREES (1→2 splitter chains) replace the
+  fixed 2-run/2-consumer limits; Router hops now cluster crossings
+  closer than 3 tiles (independent per-column hops shared tiles);
+  vertical lanes allocate per bypass edge with strips sized by edge
+  in/out-degree (sizing by a slot's own fan-out under-counted ascents).
+  Corridors upgraded to EXPRESS with an honest eligibility cap: any
+  produced item over 45/s refuses ("run matching unimplemented") — this
+  replaced a silent physical overload (ec30's 90/s cable on a 30/s
+  belt) with a named refusal, and it also retro-tightened ec15's
+  corridor (45/s on red was over per-lane capacity; express is correct
+  and the geometry was re-sim-verified after the change). **New
+  scoreboard rows: EC@15-FROM-ORE — furnace cells work — composes at
+  0 errors / 14 warnings where the bus refuses** (270×22; the first
+  composed chain with smelting). mil5-ore (9 specs, the scaling-wall
+  fixture) is 5 overlap errors from clean — the residuals are the same
+  local crossing class, named as the next target. mil5-plates carries
+  bus-side validation errors too (both paths fail it today). ec30/ec60
+  refuse honestly at the corridor cap; K>1 ratio quantization and full
+  run matching are the follow-ups that would lift it. **SIM-CAUGHT
+  SATURATION DEFECT (validator-blind class):** the express upgrade made
+  ec15's merged corridor run at exactly 45/45 = 100% capacity — 0
+  validator errors, and the sim measured produced −8% (real belts lose
+  a few percent through splitters at saturation; the earlier
+  fast-corridor PASS at 15.0 exact is retro-suspect for the same
+  reason — its window likely rode buffer drain). A 2×2 balancer
+  run-matching fix was designed and implemented, then REMOVED as
+  falsified-for-this-fixture: the K=1 EC cell is a single 6-machine
+  dual-input row with ONE cable port, so the 2×2 case never triggers
+  and the −8% persists through the mandatory merge (identical delta on
+  both corridor geometries). The deficit sits between a 2-run 45/s
+  producer and a single saturated port — root cause open (#383 carries
+  both sim reports and the candidate hypotheses: saturation loss vs
+  #343-class input-inserter limits). Registry consequence: chain-ac1
+  re-registered (PASS at −0.33%); chain-ec15's entry REMOVED — the
+  refusal-resolution gate (validator-level) stands, but measured-at-
+  plan is only claimed for geometries the sim passed; the K=3 pair
+  topology (Phase 1) remains the measured-exact form and K>1
+  quantization is the likely fix.*
+
 - *2026-07-22 — Phase B/C delivered (same session as Phase A). The
   chain auto-placer (`cells/chain.rs`): eligibility (solid
   tree-with-fan-out, fan-out cap 2, one producer per item),

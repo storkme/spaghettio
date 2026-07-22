@@ -1,20 +1,11 @@
 [
   {
-    "target": "electronic-circuit",
-    "rate": 15.0,
-    "geometry_hash": "2ef56d1ee5508ba3",
-    "verdict": "PASS",
-    "produced_per_s": 15.0,
-    "scenario": "spaghettio-sim chain-ec15 (Factorio 2.0.76, 15/15 working, converged, +0.0%)",
-    "date": "2026-07-22"
-  },
-  {
     "target": "advanced-circuit",
     "rate": 1.0,
-    "geometry_hash": "61a92635a353745c",
+    "geometry_hash": "583cff7b2201de46",
     "verdict": "PASS",
     "produced_per_s": 1.0,
-    "scenario": "spaghettio-sim chain-ac1 (Factorio 2.0.76, 8/8 working, converged, -0.33%)",
+    "scenario": "spaghettio-sim chain-ac1 v3 (Factorio 2.0.76, 8/8 working, converged, +0.33%)",
     "date": "2026-07-22"
   }
 ]
