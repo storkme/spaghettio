@@ -198,6 +198,27 @@ bit-identical to pre-RFC (zero golden re-blesses). Mechanics:
 ore-routing warnings persist on legendary-express). Full trail:
 [`rfc-046-belt-stacking.md`](rfc-046-belt-stacking.md) decision log.
 
+**`rfc-048-cell-composition.md` Phase-1 close-out (2026-07-22, PR #365)**:
+the cell-composition method delivered its existence proof — a composed
+EC@15/s-from-plates factory (engine-generated cells, segment-crop
+extraction, contract-ported corridors) **runs at plan in headless
+Factorio**: 15/15 machines working, produced 15.00/s, converged — on
+the exact config the bus engine refuses
+([#336](https://github.com/storkme/spaghettio/issues/336)). All five
+kill criteria PASS (kill 3 over its 2× area boundary at 2.48×, spared
+by the criterion's compensating-win clause: the engine has no layout
+here at all). Permanent gates: `cell_composed_ec15_zero_errors` (0
+errors, warnings pinned ≤6 sim-adjudicated) and
+`cell_composed_plastic_zero_issues` (fluid-consumer composition, 0/0).
+Fluid sim verification blocked harness-side
+([#364](https://github.com/storkme/spaghettio/issues/364) — the
+infinity-pipe feed path delivers nothing for ANY layout, proven by
+controlled attribution); sim-kit composition rules learned en route
+live in [#363](https://github.com/storkme/spaghettio/issues/363).
+Verdict: **GO for the Phase-2 integration RFC.** Full trail:
+[`rfc-048-cell-composition.md`](rfc-048-cell-composition.md) decision
+log + Phase-1 close-out section.
+
 **`rfc-049-inserter-capacity-research.md` close-out (2026-07-22)**: user-facing **inserter capacity research** param (level 0–7, `inserter_capacity`/`ir=` URL-encoded, sidebar "Inserter research"). Schedule pinned from raw wikitext with 2-fetch reproducibility (bulk 2→12; stack = bulk+4 → 6→16; non-bulk 1→3 via the chain +1 from Transport-belt-capacity-2 → 4) — summarized wiki fetches are BANNED as constant sources (two contradicted each other; the failure mode reproduced live in review). `common::belt_drop_rate(name, quality, stacking, level)` is the single source of truth consumed by both the ladder and the validator; output belt-drop sides scale linearly (swings × researched hand, with BS3 rounding — healing is exactly `hand ≡ 0 mod S`, non-monotonic: I8b), input (belt-pickup) sides stay at the L0 conservative floor pending measured data (#343 — belt-fed throughput is sub-linear and the wiki tables don't reproduce). L0 bit-identical to pre-RFC (zero golden re-blesses). Headline: at S=4/L7 the per-inserter belt-drop rate is 38.4/s (96/s legendary) vs 9.6/24 before — output stack inserters thin 9→3 in the differential fixture. In-game anchor open (user-run; a legendary S=4/L7 export validates RFC-046/047/049 in one import). Full trail: `docs/rfc-049-inserter-capacity-research.md` decision log.
 
 **`rfc-047-lane-aware-tap-delivery.md` close-out (2026-07-22)**: made

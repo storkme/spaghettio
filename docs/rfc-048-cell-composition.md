@@ -1,6 +1,6 @@
 # RFC-048: Cell composition (city-block layout) — feasibility spike
 
-Registry: [`rfcs.md`](rfcs.md). Status: **Spike — Phase 0 complete (GO); Phase 1 not started.**
+Registry: [`rfcs.md`](rfcs.md). Status: **Phase 1 complete (PR #365) — all five kill criteria PASS, composed EC@15 sim-verified at plan; GO for the Phase-2 integration RFC.**
 
 ## Summary
 
@@ -295,7 +295,146 @@ growth; they do not touch config-axis growth (recipe × tier × modules ×
 quality × rate band) — this measurement is the number that decides
 whether the end-state entry is a plan or a hope.
 
+## Phase 1 close-out: kill-criteria evaluation and go/no-go (2026-07-22)
+
+The Phase-1 gates, as set at the go/no-go above and amended by the
+#361 fold (letters used throughout this close-out):
+
+- **(a)** sim-verify the first two catalog entries — the EC ratio
+  pair AND a fluid-consumer cell — in headless Factorio;
+- **(b)** compose EC@15/s-from-plates from catalog cells at 0
+  validator errors;
+- **(c)** the config-axis growth measurement (one cell regenerated
+  across a config axis, measuring what varies and the marginal cost
+  of a variant), with a plan-or-hope verdict on the end-state.
+
+**Kill 1 (catalog blow-up, ~6-variant bound): PASS.** Variants used
+across the full Phase 1: EC ratio pair cells (cable, EC), the plastic
+fluid cell, the AM2 EC variant (axis measurement), plus two corridor
+forms (belt polyline w/ UG weaving + splitter merge; pipe column) —
+under the bound, and the axis measurement showed variants are
+parameters (engine-generated), not projects.
+
+**Kill 2 (contract failure, 0 validator errors in budget): PASS,
+exceeded.** EC@15 composed at 0 errors (now a permanent gate test,
+`cell_composed_ec15_zero_errors`), and beyond the criterion's
+validator bar: **the composed factory RUNS AT PLAN in headless
+Factorio — 15/15 machines working, produced 15.00/s (+0.0%),
+delivered 15.20/s, converged** (post-review re-verification of the
+corrected splitter-merge geometry; see the 2026-07-22 review-fold
+log entry for the full report block) — on the config the bus engine
+refuses (#336). The plastic cell
+composes at 0 errors / 0 warnings. Oracle limit found honestly:
+corridor pipe runs are outside the fluid checks' model (a
+discontinuous pipe validated clean; only the sim caught it) — the
+strongest evidence yet that sim-verification at catalog time is
+load-bearing, not optional.
+
+**Kill 3 (area blow-out >2× without compensating win): PASS on the
+compensating-win clause — over the boundary, not at it.** Composed
+EC@15 (calibrated orientation) = 110×22 = **2420 bbox tiles, 461
+entities**, vs the engine's EC@5 × 3 linear extrapolation (975):
+**2.48×**. (An earlier draft recorded 89×22 = 1958 / 2.0×; those
+numbers predated the 4-tile feed-pitch fix and were corrected by the
+PR #365 review's artifact decode.) The criterion's own text spares a
+>2× layout only with a compensating win, and here the wins are
+decisive: the engine cannot produce this config at all, and the
+composed one is measured-at-plan. Sizing context, not excuse: the
+sim-kit's 4-tile rig pitch (#363) forces 9 of each pair's 38 columns
+of width; adjacent feed columns would put the ratio near 2.1×, still
+over the bound. (Warnings
+comparison: 6 carried, ALL sim-disproven attribution conservatism;
+the engine's comparator carries its 4 warnings unadjudicated.)
+
+**Kill 4 (parallel layout stack): PASS.** Cells are engine-generated
+(one layout stack); the harness is test-only; composition machinery
+is corridors + placement arithmetic, no inserter/power/belt logic of
+its own.
+
+**Kill 5 (corridor machinery beyond templates): PASS.** Everything
+composed with straight runs, B11 corners, one 2→1 splitter, UG hops,
+and a pipe column — no negotiated congestion, no junction solving.
+
+**Gate (a) — sim verification: FULLY MET (amended post-#373).** EC
+ratio pair **SIM-VERIFIED AT PLAN**. Fluid cell: composition-clean
+(0/0); its sim run was blocked by what controlled attribution proved
+to be a shared-path fault (#364) — root-caused to the exporter's
+pipe-to-ground direction convention and fixed in #373, at which point
+the composed plastic cell **PASSED at plan** (produced 2.20/s vs 2.00
+planned, machine `working`, verified on this branch merged with
+post-#373 main). The fluid entry's stated purpose was to be the
+calibration forcing function: it forced out the single highest-impact
+export bug found to date. **Gate (b)**:
+delivered and measured. **Gate (c)**: variant-is-a-parameter verdict
+— the end-state is a plan.
+
+**Never-finishing tripwire datum (#361 fold requires this at every
+phase close-out):** fixture-ladder catalog coverage at Phase-1 close
+is **2 chains** — EC-from-plates (ratio-pair cells, sim-verified) and
+the plastic fluid-consumer geometry (composition-verified) — out of
+the tier-1..4 ladder; every other fixture chain remains bus-owned.
+This is the baseline; the coverage clock starts here, and the next
+phase close-out must show growth or trip the keep/kill escalation.
+
+**GO for Phase 2** (integration RFC: CellComposedCandidate in the
+decomposition search with warnings-aware scoring, automatic placement
+for linear chains, solver→cell rounding), with two carried
+dependencies: #364 (fluid sim path — harness-side) before any
+fluid-cell catalog entry is called verified, and #363's composition
+rules (4-tile rig pitch, west→east record ordering) encoded in the
+composer until fixed harness-side.
+
 ## Decision log
+
+- *2026-07-22 — Gate (a) CLOSED IN FULL (post-#373). The #364 forcing
+  function worked better than designed: the blocked fluid sim was
+  root-caused (via the pipe-dump observability this RFC's entry
+  demanded) to the exporter emitting pipe-to-ground directions 180°
+  inverted vs the game — every fluid-bearing blueprint ever exported
+  had severed pipes in-game while validating clean. Fixed in #373
+  (artifact-boundary flip, the #348 inserter pattern). Composed
+  plastic cell re-verified on this branch + post-#373 main:
+  **produced 2.20/s vs 2.00 planned, delivered 2.13/s, machine
+  `working`, OVERALL PASS** — both Phase-1 catalog entries are now
+  sim-verified at plan. The close-out's gate (a) paragraph is amended
+  in place; kill evaluations unchanged (they never leaned on the
+  blocked half).*
+
+- *2026-07-22 — PR #365 review folded (deep session-side review;
+  verdict approve-in-principle after rebase). Three artifact-decode
+  findings, all confirmed and fixed: (1) **kill-3 numbers were
+  stale** — 89×22/1958 predated the feed-pitch fix; the sim-verified
+  artifact is 110×22 = 2420 tiles / 461 entities = 2.48×, and the
+  close-out now evaluates kill 3 honestly as over-the-boundary,
+  passing on the compensating-win clause. (2) **The "2→1 splitter
+  merge" was built as a sideload** — the b-run's northward column
+  ended facing the a-run's tail one tile west of the splitter, so the
+  splitter's second input/output were dark and the merge happened by
+  sideload (the exact lane-degradation shape F4 exists to catch, in a
+  corridor). Fixed: the column stops one tile below the splitter row
+  and a single east-facing belt (one perpendicular input = a
+  lane-preserving corner) feeds the splitter's south half; an
+  `assert!(o2.y > o1.y + 1)` pins the approach-from-below assumption.
+  (3) **The petroleum feed column connected by coincidence** —
+  hardcoded x=6 happened to equal the cell terminal's absolute x, and
+  no oracle could catch drift (fluid checks are corridor-blind, sim
+  blocked by #364). Fixed: column x derived from the terminal +
+  adjacency assert. Gate hardening from the same review: warning
+  count pinned ≤6 (more same-category warnings would be NEW
+  unadjudicated claims), and the plastic gate split from the artifact
+  producer so suite runs write nothing. **The corrected geometry was
+  re-verified in the sim — the real splitter merge runs at plan,
+  delivery slightly better than the sideload version** (14.4 → 15.2
+  delivered). Report (spaghettio-sim, scenario
+  rfc048-ec15-composed-1784750006, speed 16, 461/461 ghosts revived):*
+
+  ```
+  item                 planned/s  produced/s      d%  delivered/s      d%  verdict
+  electronic-circuit       15.00       15.00   +0.0%        15.20   +1.3%     PASS
+  machine census: working: 15 | converged: true | OVERALL: PASS
+  ```
+
+
 
 - *2026-07-22 — Whole-RFC review folded (strong GO on Phase 1; three
   skepticisms recorded as guards rather than dismissed). (1)
@@ -318,6 +457,99 @@ whether the end-state entry is a plan or a hope.
   maintenance burden, escalate a keep/kill decision on the composition
   path — quiet permanence of a second stack is the failure mode, and
   it must trip loudly, not accrete.*
+- *2026-07-22 — **THE COMPOSED FACTORY RUNS AT PLAN (gate a/b sim
+  half, EC): all 15 machines `working`, converged, produced exactly
+  15.0 EC/s sustained** (delivered 14.4/s — out-corridor transit +
+  drain lag inside the 20s window; the crafting rate is the plan).
+  Two further harness gotchas were diagnosed from generated Lua and
+  the dump en route, both now #363 data + composition rules: feed
+  rigs need ≥4-tile lateral pitch (adjacent rigs collide at
+  construction), and boundary records must be ordered WEST→EAST
+  (rig depth grows with record order; each rig's 12–18-tile westward
+  chest-jog row crosses the outward column of any head west of it —
+  the deeper-jogs-pass-below-shorter-columns ordering fixes it).
+  **Inherited-warnings question ADJUDICATED**: the 6 validator
+  inserter-attribution warnings claimed iron under-delivery on
+  machines that measured at full plan rate — false positives at this
+  operating point, overridden by measurement per F3. The "0 errors /
+  0 warnings" gate reading: 0 errors and 0 REAL warnings (6
+  validator-conservatism warnings carried, each sim-disproven and
+  documented — never silently re-blessed).*
+- *2026-07-22 — FIRST SIM RUN FAILED HONESTLY, root cause harness-side:
+  the composed layout fed EAST-facing boundary inputs, and
+  scenario.rs's non-south rig geometry is UNCALIBRATED by its own
+  module doc — empirically the east feed rigs misassemble (1 of 9
+  lanes fed, 50 feeder inserters waiting_for_space; #363 filed with
+  the datum). The sim-state dump proved the COMPOSITION itself flowed
+  correctly wherever fed: cable ran cell→corridor→splitter→EC-cell
+  end-to-end (belts full), row-1 machines crafted to full_output.
+  RESPONSE: composer reworked to the CALIBRATED orientation —
+  horizontal pair stacking, north-edge feed columns cornering east
+  per-pair (inner column to topmost port, no crossings; iron still
+  UG-hops under the cable cell), south-edge drains. Calibrated EC@15:
+  89×22 = 1958 tiles, 422 entities, 0 errors / 6 inherited warnings
+  (pole-network stitching needed a nudge-not-skip spanning line —
+  skipped poles broke the chain). Plastic cell reworked likewise
+  (9×16, 0 errors / 0 warnings). Both sims queued behind the shared
+  install lock.*
+- *2026-07-22 — EC@15 composes at 0 errors (3 pairs, 29×47 = 1363
+  tiles, 345 entities — 1.4× the engine's EC@5 linear extrapolation,
+  inside kill 3's 2× bound, vs an engine that REFUSES the config; the
+  only warnings are the 2 inherited row residuals ×3, zero
+  composition-new). Boundary records wired into the composer →
+  export_with_manifest produces sim artifacts (9 feeds / 3 drains).
+  AXIS MEASUREMENT (gate c): the EC cell at AM2 regenerates as a valid
+  cell (14×9, 4 machines, ports auto-derived at shifted positions) from
+  the same call with one changed string — **a variant is a parameter,
+  not a project**; marginal authoring cost ≈ 0, the real axis cost is
+  sim-verifying variants actually used. Verdict: the end-state is a
+  PLAN. FLUID CELL (gate a, second half): plastic-bar extracts with
+  pipe segments intact; pipe-kind ports added to derivation; the
+  composed fluid cell (coal belt + petroleum boundary pipe + out belt)
+  validates at **0 errors / 0 warnings**. Sim runs queued behind the
+  shared Factorio install lock (another session mid-run — retry loop
+  standing).*
+- *2026-07-22 — FIRST COMPOSED PAIR VALIDATES AT 0 ERRORS (milestone).
+  One ratio pair (cable cell + corridor + EC cell, 29×14, 114
+  entities): external feeds attach at port terminals, the EC iron feed
+  UG-hops under the cable cell (express reach 8 = the cell width,
+  exactly), the two cable outs merge via a single 2→1 fast-splitter,
+  and the EC out extends to the boundary. Composer bugs found and
+  fixed en route: ports must carry terminal X (multi-row interiors
+  have per-row widths), splitters are ONE entity, feeds may not cross
+  cell footprints (UG weaving is the corridor form for that).
+  Residual: 2 warnings INHERITED from the engine-generated EC row
+  (iron input inserter-attribution, the pre-existing #65-class) — an
+  honest wrinkle for the "zero warnings" gate: generated cells inherit
+  generation-time residuals. Disposition deferred to the sim step —
+  measured delivery adjudicates whether the attribution warning is
+  real (RFC-050's purpose); the gate reading of "0 warnings" will be
+  resolved honestly against that evidence, not by quietly re-wording.*
+- *2026-07-22 — Extraction probe: EC cell extracts CLEAN (8×8, 32
+  entities, 3 ports — iron/cable W-in at y=0/1, EC E-out at y=7,
+  midpoint bridge intact). Cable@15 extracts as TWO internal rows (the
+  placer splits 3 machines 2+1), which is contractually fine — cell
+  interiors are opaque — but broke naive per-SEGMENT port derivation
+  (both rows share `row:copper-cable:*` segment names, so terminal
+  picking collapsed across rows). Design decision: ports derive from
+  CONTIGUOUS BELT RUNS within a segment, one port per run terminating
+  at a cell edge; the cable cell therefore exposes two W plate-in and
+  two E cable-out ports, and the corridor merges the two outs via a
+  2→1 splitter (lane-preserving, allowed by contract F4). Multi-row
+  interiors are inevitable at scale, so run-contiguity is the general
+  mechanism, not a workaround.*
+- *2026-07-22 — Phase 1 started (branch rfc-048-phase1; goal-driven).
+  Environment verified: Factorio 2.0.76 cached from the RFC-050
+  dogfood, spaghettio-sim invocable, export_with_manifest present.
+  Harness home: crates/core/tests/cell_composition.rs (test-only,
+  kill-4-compliant: cells generated by the live engine). First
+  geometry probe finding: SEGMENT IDS ARE THE CROP MECHANISM —
+  `row:*` segments are the cell interior; `trunk:/tapoff:/ghost:/
+  merger:*` are precisely the bus machinery to shed (cable@15
+  grows an output-merger cascade, EC@5 is nearly clean). Ports
+  derive from the kept belts' terminal stubs. Open detail: the EC
+  dual-input row's cable in-belt didn't surface in the edge survey —
+  full-inventory dump next.*
 - *2026-07-22 — End-state definition set (user steer, post-#359): the
   method is not "done" with structural exemptions. Revised target: NO
   chain class structurally excluded — the existing tier ladder
