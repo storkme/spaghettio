@@ -68,6 +68,12 @@ fn belt_tier_by_tile(layout: &LayoutResult) -> FxHashMap<(i32, i32), &str> {
             continue;
         };
         by_tile.insert((e.x, e.y), tier);
+        // Splitters span two tiles; register the second one too (review
+        // finding on #394 — every other tile-map builder does this via
+        // the same helper).
+        if is_splitter(&e.name) {
+            by_tile.insert(crate::common::splitter_second_tile(e), tier);
+        }
     }
     by_tile
 }
