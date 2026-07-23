@@ -426,6 +426,13 @@ fn probe_registry_hashes() {
         let l = compose_chain(&sr).unwrap();
         println!("{label}: {:016x}", geometry_hash(&l));
     }
+    for (label, item, rate, inputs) in [
+        ("mega-plastic2", "plastic-bar", 2.0, &["crude-oil", "water", "coal"][..]),
+        ("mega-sulfur2", "sulfur", 2.0, &["crude-oil", "water"][..]),
+    ] {
+        let (_sr, l) = spaghettio_core::bus::cells::mega::compose_mega_calibrated(item, rate, inputs).unwrap();
+        println!("{label}: {:016x}", geometry_hash(&l));
+    }
 }
 
 /// PERMANENT GATE (RFC-051 registry): every seeded sim-verified entry

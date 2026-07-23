@@ -355,7 +355,19 @@ fn bp_data_to_layout(bp_data: BpData) -> LayoutResult {
         let parsed = parse_direction(raw.direction);
         // Pipe-to-ground shares the flip (#364): game direction is the
         // surface-opening side, engine convention is the underground side.
+        // Mirrored fluid machines share it too (#400): the engine's
+        // "mirror" is a front-back port flip the game cannot express as
+        // its (left-right) `mirror` flag; export encodes it as a 180°
+        // rotation with mirror:false, so a rotated import maps back to
+        // the engine's (unrotated, mirror:true) placement. Tile-identical
+        // either way (x-symmetric ports).
+        let mirror_rot = matches!(
+            raw.name.as_str(),
+            "oil-refinery" | "foundry" | "cryogenic-plant"
+        ) && matches!(parsed, EntityDirection::South | EntityDirection::West);
         let dir = if raw.name.contains("inserter") || raw.name == "pipe-to-ground" {
+            flip180(parsed)
+        } else if mirror_rot {
             flip180(parsed)
         } else {
             parsed
@@ -395,7 +407,7 @@ fn bp_data_to_layout(bp_data: BpData) -> LayoutResult {
             recipe: raw.recipe,
             io_type: raw.io_type,
             carries: None,
-            mirror: false,
+            mirror: mirror_rot,
             segment_id: None,
             rate: None,
             items,

@@ -140,6 +140,47 @@ feeds and the composed layout must pass the pipe-isolation validators
 
 ## Decision log
 
+- *2026-07-23 — #400 FIXED, gate (a) fully MET: the first working
+  refineries in the project's history. Three stacked defects, each
+  found by the sim and fixed at its proper layer: (1) TEMPLATE — the
+  fluid-only row's pole reservation bridged the strip with a UG pair
+  whose mouths sat exactly ON the two input-port tiles; the strip is
+  now continuous surface pipe (ports connected) and the two template
+  tests re-pinned to the real port columns. (2) POWER — with a full
+  strip no medium pole can reach a 5×5 center, so `place_poles` now
+  reports uncoverable machine centers of FLUID-ONLY rows into the
+  Phase-3a-ii reactive channel, and the substation-band targets accept
+  machine centers for rows with no inserters; scoped twice by
+  regression evidence (EC@20-from-ore golden caught eager substations
+  on mixed rows; two AC-partitioned stress goldens caught center-driven
+  bands on inserter-covered rows — mixed rows keep pre-#400 behavior
+  bit-identically). The two AC-partitioned stress goldens re-blessed
+  deliberately: they are the only golden-pinned refinery-bearing
+  fixtures, and the new geometry improves pole slack (zero-slack 9→1).
+  (3) ARTIFACT BOUNDARY (the #348/#364 class, third instance) — the
+  engine's "mirror" models a front-back port flip, but the game's
+  mirror flag flips LEFT-RIGHT: an exported (North, mirror) refinery
+  still has inputs on the south in-game, so crude sat ON the intended
+  port tiles and never entered. For the x-symmetric port layouts
+  (refinery/foundry/cryo) the y-flip is tile-identical to a 180°
+  rotation, so export encodes (direction+8, mirror:false) and the
+  parser reverses it — engine geometry and all registry hashes
+  untouched. The earlier direction-8 patch experiment failed because
+  it KEPT mirror:true, which misdirected the first diagnosis toward
+  the strip alone (recorded so the next reader distrusts single-factor
+  experiments on compound defects). Sim: mega-plastic2 PASS (delivered
+  2.20/s vs 2.00 planned, 4/4 working — the +10% matches RFC-048's
+  known chem-plant planning conservatism), mega-sulfur2 PASS (produced
+  2.00/s EXACT, 5/5 working, two-fluid adjacency-planned feeds). Both
+  registered with world fields. The adapter also gained
+  descending-tail joins en route (post-#400 raw trunk heads are PTG
+  mouths whose sides don't connect — the adapter now descends past the
+  band boundary until an honest plain-pipe join materializes, and its
+  join predicate applies #400's own lesson recursively: plain pipes
+  join on any side, PTGs only at their axis opening). Suite 906/0/52;
+  goldens 9 ran / 0 drift post-re-bless; harness 44/44; WASM clean.
+  Phase B (fluid-subgraph partition + AC-from-raw flagship) is GO.*
+
 - *2026-07-23 — Phase A: validator half of gate (a) MET; sim half
   BLOCKED by a discovery bigger than the phase. Delivered:
   `cells/mega.rs` (`compose_mega_calibrated` — uncropped engine

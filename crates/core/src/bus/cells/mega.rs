@@ -131,12 +131,16 @@ pub fn adapt_boundaries(l: LayoutResult) -> Result<LayoutResult, String> {
     // SAME-fluid pipe (the join). Planned paths also register here so
     // records check against each other.
     let mut fluid_at: rustc_hash::FxHashMap<(i32, i32), String> = rustc_hash::FxHashMap::default();
+    let mut plain_pipe_at: FxHashSet<(i32, i32)> = FxHashSet::default();
     let mut solid_at: FxHashSet<(i32, i32)> = FxHashSet::default();
     for e in &entities {
         let is_pipe = e.name == "pipe" || e.name == "pipe-to-ground";
         if is_pipe {
             if let Some(f) = e.carries.as_deref() {
                 fluid_at.insert((e.x, e.y), f.to_string());
+                if e.name == "pipe" {
+                    plain_pipe_at.insert((e.x, e.y));
+                }
             }
         } else {
             solid_at.insert((e.x, e.y));
@@ -156,60 +160,97 @@ pub fn adapt_boundaries(l: LayoutResult) -> Result<LayoutResult, String> {
             // orthogonal neighbor carries a different fluid, and the
             // path ends adjacent to a same-fluid pipe.
             let mut chosen: Option<Vec<(i32, i32)>> = None;
+            // A join partner must genuinely CONNECT (#400's own lesson,
+            // recursively applied to the adapter): a plain pipe joins on
+            // any side; a pipe-to-ground only at its axis opening — we
+            // accept one directly BELOW the terminus (the trunk-head
+            // mouth pattern), never sideways.
             'cand: for dx in [0i32, 1, -1, 2, -2] {
                 let tail_x = p.orig_x + dx;
-                let mut tiles: Vec<(i32, i32)> = Vec::new();
-                for y in 0..=p.lane_row {
-                    tiles.push((p.head_x, y));
-                }
-                let (lo, hi) = (p.head_x.min(tail_x), p.head_x.max(tail_x));
-                for x in lo..=hi {
-                    if x != p.head_x {
-                        tiles.push((x, p.lane_row));
+                // The tail may descend past the band boundary into free
+                // layout space until a join materializes — post-#400 raw
+                // trunk heads are PTG mouths whose sides don't connect,
+                // so the band-boundary join can be unreachable while the
+                // strip a few tiles deeper is an honest plain-pipe join.
+                for tail_depth in 0..=8i32 {
+                    let mut tiles: Vec<(i32, i32)> = Vec::new();
+                    for y in 0..=p.lane_row {
+                        tiles.push((p.head_x, y));
                     }
-                }
-                for y in (p.lane_row + 1)..margin {
-                    tiles.push((tail_x, y));
-                }
-                if dx != 0 {
-                    tiles.push((tail_x, margin));
-                }
-                let tile_set: FxHashSet<(i32, i32)> = tiles.iter().copied().collect();
-                for &(x, y) in &tiles {
-                    if solid_at.contains(&(x, y)) || fluid_at.contains_key(&(x, y)) {
-                        continue 'cand;
-                    }
-                    for n in neighbors(x, y) {
-                        if tile_set.contains(&n) {
-                            continue;
+                    let (lo, hi) = (p.head_x.min(tail_x), p.head_x.max(tail_x));
+                    for x in lo..=hi {
+                        if x != p.head_x {
+                            tiles.push((x, p.lane_row));
                         }
-                        if let Some(f) = fluid_at.get(&n) {
-                            if f != &r.item {
-                                continue 'cand;
+                    }
+                    let tail_end = if dx != 0 || tail_depth > 0 {
+                        margin + tail_depth
+                    } else {
+                        margin - 1
+                    };
+                    for y in (p.lane_row + 1)..=tail_end.min(margin - 1 + tail_depth + 1) {
+                        if y >= margin && dx == 0 && tail_depth == 0 {
+                            break;
+                        }
+                        tiles.push((tail_x, y));
+                    }
+                    let tile_set: FxHashSet<(i32, i32)> = tiles.iter().copied().collect();
+                    let mut valid = true;
+                    'check: for &(x, y) in &tiles {
+                        if solid_at.contains(&(x, y)) || fluid_at.contains_key(&(x, y)) {
+                            valid = false;
+                            break 'check;
+                        }
+                        for n in neighbors(x, y) {
+                            if tile_set.contains(&n) {
+                                continue;
+                            }
+                            if let Some(f) = fluid_at.get(&n) {
+                                if f != &r.item {
+                                    valid = false;
+                                    break 'check;
+                                }
                             }
                         }
                     }
+                    if !valid {
+                        // A blocked deeper tail cannot unblock by going
+                        // deeper still through the same tile — but a
+                        // DIFFERENT depth may stop before the blocker;
+                        // simplest sound policy: abandon this dx.
+                        continue 'cand;
+                    }
+                    // The join candidate is the path's geometric
+                    // TERMINUS (deepest tail tile), NOT tiles.last() —
+                    // push order puts a lateral tile last whenever a
+                    // bend exists (#401 review finding 1). Join
+                    // partners: same-fluid PLAIN pipe on any side, or a
+                    // same-fluid pipe-to-ground DIRECTLY BELOW (its
+                    // axis opening) — a PTG side never connects.
+                    let terminus = *tiles.last().unwrap_or(&(tail_x, p.lane_row));
+                    let terminus = if tiles.iter().any(|&t| t.0 == tail_x && t.1 > p.lane_row) {
+                        (tail_x, tiles.iter().filter(|t| t.0 == tail_x).map(|t| t.1).max().unwrap())
+                    } else {
+                        terminus
+                    };
+                    let joins = neighbors(terminus.0, terminus.1).iter().any(|n| {
+                        if tile_set.contains(n) {
+                            return false;
+                        }
+                        let Some(f) = fluid_at.get(n) else { return false };
+                        if f != &r.item {
+                            return false;
+                        }
+                        let is_plain = plain_pipe_at.contains(n);
+                        let directly_below = *n == (terminus.0, terminus.1 + 1);
+                        is_plain || directly_below
+                    });
+                    if !joins {
+                        continue;
+                    }
+                    chosen = Some(tiles);
+                    break 'cand;
                 }
-                // The join candidate is the path's geometric TERMINUS
-                // (deepest tile on the tail column), NOT tiles.last() —
-                // push order puts a lateral tile last whenever a bend
-                // exists, which spuriously rejected the dx=0 candidate
-                // for the final record (#401 review finding 1).
-                let terminus = if p.lane_row + 1 < margin {
-                    (tail_x, margin - 1)
-                } else if dx != 0 {
-                    (tail_x, margin)
-                } else {
-                    (tail_x, p.lane_row)
-                };
-                let joins = neighbors(terminus.0, terminus.1).iter().any(|n| {
-                    !tile_set.contains(n) && fluid_at.get(n).map(|f| f == &r.item).unwrap_or(false)
-                });
-                if !joins {
-                    continue 'cand;
-                }
-                chosen = Some(tiles);
-                break;
             }
             let tiles = chosen.ok_or_else(|| {
                 format!(
@@ -219,6 +260,7 @@ pub fn adapt_boundaries(l: LayoutResult) -> Result<LayoutResult, String> {
             })?;
             for &(x, y) in &tiles {
                 fluid_at.insert((x, y), r.item.clone());
+                plain_pipe_at.insert((x, y));
                 entities.push(PlacedEntity {
                     name: "pipe".into(),
                     x,
@@ -314,6 +356,9 @@ pub fn adapt_boundaries(l: LayoutResult) -> Result<LayoutResult, String> {
         inserter_capacity: l.inserter_capacity,
         boundary_inputs: b_in,
         boundary_outputs: b_out,
+        // The engine's warnings survive the adaptation — dropping them
+        // hid the ships-uncovered power note during #400's diagnosis.
+        warnings: l.warnings.clone(),
         ..Default::default()
     })
 }
