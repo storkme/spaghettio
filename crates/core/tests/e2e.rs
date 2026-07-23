@@ -1034,7 +1034,12 @@ fn tier2_electronic_circuit() {
     // beltspan-lastinrow: the last residual (1) was the EC dual_input_row last-in-row
     // far (iron-plate) side, capped at one long-handed inserter because the far belt
     // was trimmed under the dx=1 contested column; extending it one tile clears it (1 -> 0).
-    assert_warnings_exactly(&result, &[]);
+    // 2026-07-23 (#385 second half): un-restricted belt tier here lets the
+    // copper-cable row land on fast (red) belts — its 30.0/s demand still
+    // exceeds a bridged red belt-out's 2-lane realizable cap (25.5/s), a
+    // genuine sim-calibrated finding the new check now surfaces (was
+    // silently under-delivered before).
+    assert_warnings_exactly(&result, &[("row-output-lane-budget", 1)]);
     assert_produces(&result, "electronic-circuit", 10.0);
     assert_round_trip(&result);
 }
@@ -1091,7 +1096,17 @@ fn tier2_electronic_circuit_from_ore() {
     // RFC Phase 1: 50 inserter-bound machine-sides (EC fully from ore, incl. the
     // added iron/copper smelting rows; each side > 0.84/s).
     // RFC rfc-inserter-sizing.md Phase 1 re-bless: single_input_row rows (iron-plate/copper-plate/copper-cable from ore) ladder-sized; electronic-circuit dual_input_row is Phase 2 scope, residue remains (50 -> 20).
-    assert_warnings_exactly(&result, &[]);
+    // 2026-07-23 (#385 second half): this is the RFC-049 decision log's
+    // own acceptance-matrix config — sim-measured (`docs/sim-harness-
+    // forensics.md`) a row fed by inserter drops alone realizes only
+    // ~0.85 × one lane regardless of inserter type/count/research; this
+    // fixture's copper-plate row (single physical row, 24 machines, a
+    // genuine bridge present) needs 15.0/s but a bridged yellow belt-out
+    // realizes at most 12.75/s (`LANE_UTILIZATION × lane_capacity_stacked
+    // × 2 lanes`) — the exact gap #385's second half exists to catch,
+    // previously silent (this fixture's in-game delivery has been
+    // measured short of plan). Not tuned away.
+    assert_warnings_exactly(&result, &[("row-output-lane-budget", 1)]);
     assert_produces(&result, "electronic-circuit", 10.0);
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier2_electronic_circuit_from_ore");
@@ -1131,7 +1146,13 @@ fn tier2_electronic_circuit_20s_from_ore() {
     // medium pole's ±3 supply, because the dual-input belt bundle is 2 rows, not
     // 3 — so the existing medium mop-up now covers them. Substations (the RFC's
     // planned hardware) are unnecessary here and stay dormant. 14 -> 0.
-    assert_warnings_exactly(&result, &[]);
+    // 2026-07-23 (#385 second half): un-restricted belt tier lets
+    // copper-cable/copper-plate land on fast (red) belts at 20/s scale;
+    // 2 copper-cable rows + 1 copper-plate row each need 30.0/s, over a
+    // bridged red belt-out's 25.5/s 2-lane realizable cap — same
+    // sim-calibrated structural finding as the 10/s from-ore fixture,
+    // scaled up.
+    assert_warnings_exactly(&result, &[("row-output-lane-budget", 3)]);
     assert_produces(&result, "electronic-circuit", 20.0);
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier2_electronic_circuit_20s_from_ore");
@@ -1791,9 +1812,18 @@ fn tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing() {
     // then pin the exact inserter-throughput count. RFC rfc-inserter-sizing.md
     // Phase 2: the new per-item companion check (`inserter-item-throughput`)
     // is exempt for the same reason and pinned the same way below.
+    // 2026-07-23 (#385 second half): `row-output-lane-budget` also exempt
+    // and pinned — the electronic-circuit intermediate row here (a
+    // genuine bridge present, 14.0/s demand) exceeds yellow's 2-lane
+    // budget (12.75/s), the same structural cap the new check exists to
+    // surface, orthogonal to this test's own SAT-zone concern.
     let non_inserter_warnings: Vec<_> = warnings
         .iter()
-        .filter(|i| i.category != "inserter-throughput" && i.category != "inserter-item-throughput")
+        .filter(|i| {
+            i.category != "inserter-throughput"
+                && i.category != "inserter-item-throughput"
+                && i.category != "row-output-lane-budget"
+        })
         .copied()
         .collect();
 
@@ -1850,6 +1880,17 @@ fn tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing() {
     assert_eq!(
         inserter_item_throughput_count, 0,
         "{test_name}: expected exactly 0 inserter-item-throughput warnings"
+    );
+
+    // 2026-07-23 (#385 second half): pin the one row-output-lane-budget
+    // warning the new check raises here (electronic-circuit's row, 14.0/s
+    // demand on a bridged yellow belt-out whose 2-lane realizable cap is
+    // 12.75/s) — a genuine, sim-calibrated finding, not tuned away.
+    let row_output_lane_budget_count =
+        warnings.iter().filter(|i| i.category == "row-output-lane-budget").count();
+    assert_eq!(
+        row_output_lane_budget_count, 1,
+        "{test_name}: expected exactly 1 row-output-lane-budget warning"
     );
 }
 
@@ -2141,7 +2182,13 @@ fn tier5_processing_unit_from_ore_am3() {
     // freed band lands 3 tiles above each (shifted) input-inserter row, inside a
     // medium pole's ±3 supply, so the medium mop-up covers them. Substations
     // stay dormant (unneeded here). 20 -> 0.
-    assert_warnings_exactly(&result, &[]);
+    // 2026-07-23 (#385 second half): processing-unit's deep chain still
+    // bottoms out at copper-cable (2 rows) and copper-plate (3 rows)
+    // feeding electronic-circuit — the same sim-calibrated structural
+    // cap found across every EC-chain fixture: bridged fast-belt-out
+    // rows here need 30.0/26.88/26.25/s against a 25.5/s 2-lane
+    // realizable ceiling.
+    assert_warnings_exactly(&result, &[("row-output-lane-budget", 5)]);
     assert_produces(&result, "processing-unit", 2.0);
     assert_round_trip(&result);
 }
@@ -4285,7 +4332,12 @@ fn stress_electronic_circuit_60s_red_from_ore() {
             // the freed bands land within a medium pole's ±3 of the shifted
             // inserters, so the medium mop-up covers them — 60 -> 0. Tightened
             // 60 -> 0 so any regression re-exposes them; substations stay dormant.
-            max_warnings: 0,
+            // 2026-07-23 (#385 second half): +11 row-output-lane-budget — at
+            // 60/s on red belts, this deep EC-from-ore chain's copper-cable/
+            // copper-plate rows exceed a bridged red belt-out's 25.5/s 2-lane
+            // realizable cap, the same sim-calibrated structural finding as
+            // every other EC-chain fixture at this scale (0 -> 11).
+            max_warnings: 11,
             max_errors_by_category: Default::default(),
         },
     );
