@@ -1,35 +1,60 @@
 //! RFC-051: the sim-verified registry (Tier-1 verification cache).
 //!
 //! Key = chain config + a GEOMETRY HASH of the composed layout's
-//! entities (#375 review, finding 1): cells regenerate from the live
-//! engine, so a config-only key would let row-template/placer/inserter
-//! changes silently decay "sim-verified" into "unverified with a stale
-//! verdict". The hash is self-maintaining: any engine change that
-//! alters the composed geometry changes the hash, the lookup misses,
-//! and the layout is annotated NOT-verified until someone re-runs the
-//! sim and re-registers. `cell_registry_hashes_current` (tests) turns a
-//! silent miss into a loud one for the seeded entries.
+//! entities (#375 review, finding 1) + the DECLARED WORLD the
+//! measurement ran in (#391): cells regenerate from the live engine,
+//! so a config-only key would let row-template/placer/inserter changes
+//! silently decay "sim-verified" into "unverified with a stale
+//! verdict" — and #390 proved the same decay exists on the WORLD axis
+//! (the stacking-parity change retired every pre-#390 measurement
+//! without tripping a single geometry hash). The hash is
+//! self-maintaining for geometry; the declared-world fields make the
+//! instrument part of the claim: an entry only reads as fully verified
+//! for a layout declaring the same `inserter_capacity` and `stacking`
+//! it was measured under. A hash-matching entry from a DIFFERENT
+//! declared world is reported as a scoped claim, not silently reused
+//! (#383: EC rows measure at plan only above declared capacity 0
+//! until RFC-049 Phase 3 sizing lands).
 //!
 //! Data: `crates/core/data/cell-sim-registry.json`, embedded via
 //! `include_str!` like the recipe DB. Grown deliberately — an entry is
-//! added only with a real sim PASS behind it (scenario + date recorded).
+//! added only with a real sim PASS behind it (scenario + date + the
+//! harness's realized-world line recorded).
 
 use std::sync::OnceLock;
 
 use crate::models::LayoutResult;
 use serde::Deserialize;
 
-/// One sim-verified composed geometry.
+/// One sim-verified composed geometry, in one declared world.
 #[derive(Debug, Clone, Deserialize)]
 pub struct RegistryEntry {
     pub target: String,
     pub rate: f64,
     /// Hex FNV-1a-64 of the composed layout's entity list.
     pub geometry_hash: String,
+    /// The `inserter_capacity` the measured layout DECLARED — the sim
+    /// forces research bonuses to this level (#378), so the verdict is
+    /// scoped to it.
+    #[serde(default)]
+    pub declared_inserter_capacity: u8,
+    /// The `stacking` the measured layout declared (#390: the sim
+    /// world matches declared stacking).
+    #[serde(default = "default_stacking")]
+    pub declared_stacking: u8,
+    /// The harness's realized-world line from the measurement report
+    /// (provenance prose, e.g. "nb=0 bulk=1, S=1" — not matched on;
+    /// the declared fields above are the checked key).
+    #[serde(default)]
+    pub harness_world: String,
     pub verdict: String,
     pub produced_per_s: f64,
     pub scenario: String,
     pub date: String,
+}
+
+fn default_stacking() -> u8 {
+    1
 }
 
 fn registry() -> &'static [RegistryEntry] {
@@ -38,6 +63,12 @@ fn registry() -> &'static [RegistryEntry] {
         serde_json::from_str(include_str!("../../../data/cell-sim-registry.json"))
             .expect("cell-sim-registry.json must parse")
     })
+}
+
+/// All registry entries — the gate iterates these so every seeded
+/// claim is re-derived, not just a hardcoded list.
+pub fn entries() -> &'static [RegistryEntry] {
+    registry()
 }
 
 /// Stable FNV-1a-64 over the sorted entity list. Deliberately NOT the
@@ -89,21 +120,42 @@ pub fn geometry_hash(l: &LayoutResult) -> u64 {
     h
 }
 
-/// Look up a composed layout's verification status.
+/// Look up a composed layout's verification status by geometry. May
+/// return an entry measured under a DIFFERENT declared world than the
+/// caller's layout — `verification_note` surfaces that distinction;
+/// callers doing their own matching must compare the declared fields.
 pub fn lookup(target: &str, rate: f64, hash: u64) -> Option<&'static RegistryEntry> {
     let hex = format!("{hash:016x}");
-    registry().iter().find(|e| {
-        e.target == target && (e.rate - rate).abs() < 1e-9 && e.geometry_hash == hex
-    })
+    registry()
+        .iter()
+        .find(|e| e.target == target && (e.rate - rate).abs() < 1e-9 && e.geometry_hash == hex)
 }
 
 /// The annotation `CellComposedCandidate` attaches to its layouts.
+/// Three tiers: full match (geometry + declared world), scoped match
+/// (geometry verified, but in a different declared world than this
+/// layout's), and no match.
 pub fn verification_note(target: &str, rate: f64, l: &LayoutResult) -> String {
     let hash = geometry_hash(l);
     match lookup(target, rate, hash) {
+        Some(e)
+            if e.declared_inserter_capacity == l.inserter_capacity
+                && e.declared_stacking == l.stacking =>
+        {
+            format!(
+                "cell-composed: geometry SIM-VERIFIED at plan ({} — {} produced {:.2}/s at declared capacity {}, {})",
+                e.scenario, e.verdict, e.produced_per_s, e.declared_inserter_capacity, e.date
+            )
+        }
         Some(e) => format!(
-            "cell-composed: geometry SIM-VERIFIED at plan ({} — {} produced {:.2}/s, {})",
-            e.scenario, e.verdict, e.produced_per_s, e.date
+            "cell-composed: geometry sim-verified at plan ONLY under declared capacity {} / stacking {} ({} produced {:.2}/s, {}); this layout declares capacity {} / stacking {} — measured-at-plan does NOT transfer (#383)",
+            e.declared_inserter_capacity,
+            e.declared_stacking,
+            e.verdict,
+            e.produced_per_s,
+            e.date,
+            l.inserter_capacity,
+            l.stacking
         ),
         None => format!(
             "cell-composed: geometry NOT sim-verified (hash {hash:016x}) — run spaghettio-sim and add the entry to cell-sim-registry.json"

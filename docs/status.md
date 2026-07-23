@@ -218,16 +218,23 @@ PR #393 fixed the Router's boundary-blind hops and added westward
 bypass support after the placement order proved consumers can sit
 west of producers). mil5-from-plates' composed candidate is 0/0 but
 the search still returns the broken native layout there
-([#392](https://github.com/storkme/spaghettio/issues/392) — accepted
-never runs full validation). Measured-at-plan claims live in
-the sim-verified registry (geometry-hashed, checked-in): currently
-AC-from-plates (1.00/s, 8/8 working). EC-row geometries measure −8%
-under tech-state parity — the validator's inserter-item-throughput
-warnings turned out RIGHT under declared capacity (the Phase-1 "15.0/s
-exact" was a pre-#378 researched-bonus artifact;
-[#383](https://github.com/storkme/spaghettio/issues/383) has the
-forensics) — re-measure after RFC-049 Phase 3 inserter sizing
-([#381](https://github.com/storkme/spaghettio/issues/381)). Full
+([#392](https://github.com/storkme/spaghettio/issues/392) — resolved:
+validation-tiered selection). Measured-at-plan claims live in the
+sim-verified registry (geometry-hashed AND world-keyed per #391 —
+declared capacity/stacking are checked fields): currently
+AC-from-plates (PASS −0.3%) and mil5-from-plates (PASS, delivered
+5.00/s exact — first physical validation of the westward bypasses),
+both at declared capacity 0 in the post-#390 honest world. EC-row
+geometries stay unregistered: a declared-capacity sweep (1→7) shrank
+the deficit −8.0%→−5.3% then went level-invariant with the input
+bound cleared at nb=3 — the residual is the
+[#385](https://github.com/storkme/spaghettio/issues/385) output-side
+belt-drop class and/or 45/45 corridor saturation
+([#383](https://github.com/storkme/spaghettio/issues/383) has the
+sweep table); mil5-from-ore FAILs flat at −28.7% (firearm rows'
+inserter COUNT). Re-measure after
+[#394](https://github.com/storkme/spaghettio/pull/394) →
+[#381](https://github.com/storkme/spaghettio/issues/381) land. Full
 trail:
 [`rfc-051-cell-composition-integration.md`](rfc-051-cell-composition-integration.md).
 

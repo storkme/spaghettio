@@ -265,28 +265,44 @@ fn probe_chain_autoplace() {
     }
 }
 
-/// Artifact producers for the chain auto-placer's sim runs (Phase B/C).
+/// Artifact producers for the chain auto-placer's sim runs. Each
+/// fixture exports at one or more DECLARED inserter-capacity levels
+/// (the `-dN` suffix): the declaration changes zero geometry pre-#381,
+/// only the world the parity harness builds — the declaration package
+/// registers each geometry at the lowest level that measures at plan.
 #[test]
 #[ignore = "artifact producer"]
 fn export_chain_fixtures_for_sim() {
     use spaghettio_core::bus::cells::chain::compose_chain;
-    for (label, item, rate, inputs) in [
-        ("chain-ec15", "electronic-circuit", 15.0, &["iron-plate", "copper-plate"][..]),
-        ("chain-ac1", "advanced-circuit", 1.0, &["iron-plate", "copper-plate", "plastic-bar"][..]),
-        ("chain-ec30", "electronic-circuit", 30.0, &["iron-plate", "copper-plate"][..]),
+    for (label, item, rate, inputs, levels) in [
+        ("chain-ac1", "advanced-circuit", 1.0,
+         &["iron-plate", "copper-plate", "plastic-bar"][..], &[0u8][..]),
+        ("chain-ec15", "electronic-circuit", 15.0,
+         &["iron-plate", "copper-plate"][..], &[1, 2, 3, 5, 7][..]),
+        ("chain-ec30", "electronic-circuit", 30.0,
+         &["iron-plate", "copper-plate"][..], &[1, 2, 3, 5, 7][..]),
+        ("chain-mil5ore", "military-science-pack", 5.0,
+         &["iron-ore", "copper-ore", "stone", "coal"][..], &[0, 2, 3, 7][..]),
+        ("chain-mil5plates", "military-science-pack", 5.0,
+         &["iron-plate", "copper-plate", "steel-plate", "stone-brick", "coal"][..], &[0, 2][..]),
     ] {
         let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
         let sr = solver::solve_with_palette_exclusions_and_quality(
             item, rate, &inputs_set, &MachinePalette::default(),
             "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
         ).unwrap();
-        let l = compose_chain(&sr).unwrap();
-        let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(&l, &sr, label);
-        std::fs::create_dir_all("target/tmp").unwrap();
-        std::fs::write(format!("target/tmp/{label}.bp"), &bp).unwrap();
-        std::fs::write(format!("target/tmp/{label}.manifest.json"),
-            serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
-        println!("wrote target/tmp/{label}.bp ({} boundary in / {} out)", l.boundary_inputs.len(), l.boundary_outputs.len());
+        for &lvl in levels {
+            let mut l = compose_chain(&sr).unwrap();
+            l.inserter_capacity = lvl;
+            let tag = format!("{label}-d{lvl}");
+            let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(&l, &sr, &tag);
+            std::fs::create_dir_all("target/tmp").unwrap();
+            std::fs::write(format!("target/tmp/{tag}.bp"), &bp).unwrap();
+            std::fs::write(format!("target/tmp/{tag}.manifest.json"),
+                serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
+            println!("wrote target/tmp/{tag}.bp ({} boundary in / {} out)",
+                l.boundary_inputs.len(), l.boundary_outputs.len());
+        }
     }
 }
 
@@ -399,6 +415,8 @@ fn probe_registry_hashes() {
         ("chain-ec15", "electronic-circuit", 15.0, &["iron-plate", "copper-plate"][..]),
         ("chain-ac1", "advanced-circuit", 1.0, &["iron-plate", "copper-plate", "plastic-bar"][..]),
         ("chain-ec30", "electronic-circuit", 30.0, &["iron-plate", "copper-plate"][..]),
+        ("chain-mil5ore", "military-science-pack", 5.0, &["iron-ore", "copper-ore", "stone", "coal"][..]),
+        ("chain-mil5plates", "military-science-pack", 5.0, &["iron-plate", "copper-plate", "steel-plate", "stone-brick", "coal"][..]),
     ] {
         let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
         let sr = solver::solve_with_palette_exclusions_and_quality(
@@ -410,38 +428,50 @@ fn probe_registry_hashes() {
     }
 }
 
-/// PERMANENT GATE (RFC-051 registry): the seeded sim-verified entries
-/// still match freshly composed geometry. An engine change that alters
-/// these cells fails HERE — loudly — instead of silently decaying
-/// "sim-verified" into a stale verdict (#375 review finding 1). The
-/// fix when it fires: re-run the sim on the new geometry, then update
-/// the hash + measurement in cell-sim-registry.json.
+/// PERMANENT GATE (RFC-051 registry): every seeded sim-verified entry
+/// still matches freshly composed geometry — iterated from the
+/// registry itself, so adding an entry without a re-derivable fixture
+/// config fails loudly here, and an engine change that alters any
+/// registered cell fails here instead of silently decaying
+/// "sim-verified" into a stale verdict (#375 review finding 1; world
+/// axes added per #391 — declared fields are checked data, recorded at
+/// measurement time). The fix when it fires: re-run the sim on the new
+/// geometry, then update the hash + measurement in
+/// cell-sim-registry.json.
 #[test]
-// The registry currently carries one entry; the loop shape stays for
-// the ec15/ec30 entries that re-register after #381 (see below).
-#[allow(clippy::single_element_loop)]
 fn cell_registry_hashes_current() {
     use spaghettio_core::bus::cells::chain::compose_chain;
-    use spaghettio_core::bus::cells::registry::{geometry_hash, lookup};
-    // chain-ec15 is deliberately absent: under tech-state parity
-    // (declared inserter_capacity 0, #378) its long-handed input
-    // inserters genuinely under-deliver iron (#383, -8%) — the registry
-    // only carries measured-at-plan geometries. Re-measure and register
-    // once RFC-049 Phase 3 inserter sizing (#381) lands; chain-ac1's
-    // tiny rates never hit the bound, so its entry stands (re-verified
-    // PASS under the parity harness).
-    for (item, rate, inputs) in [
-        ("advanced-circuit", 1.0, &["iron-plate", "copper-plate", "plastic-bar"][..]),
-    ] {
-        let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
-        let sr = solver::solve_with_palette_exclusions_and_quality(
-            item, rate, &inputs_set, &MachinePalette::default(),
-            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
-        ).unwrap();
-        let l = compose_chain(&sr).unwrap();
-        let h = geometry_hash(&l);
-        assert!(lookup(item, rate, h).is_some(),
-            "{item}@{rate}: composed geometry (hash {h:016x}) no longer matches the sim-verified registry entry — re-verify in the sim and update cell-sim-registry.json");
+    use spaghettio_core::bus::cells::registry::{entries, geometry_hash};
+    // Fixture configs the registry may reference, keyed by (target,
+    // rate); same-key configs (mil5 ore vs plates) disambiguate by
+    // hash.
+    let configs: &[(&str, f64, &[&str])] = &[
+        ("advanced-circuit", 1.0, &["iron-plate", "copper-plate", "plastic-bar"]),
+        ("electronic-circuit", 15.0, &["iron-plate", "copper-plate"]),
+        ("electronic-circuit", 30.0, &["iron-plate", "copper-plate"]),
+        ("military-science-pack", 5.0, &["iron-ore", "copper-ore", "stone", "coal"]),
+        ("military-science-pack", 5.0, &["iron-plate", "copper-plate", "steel-plate", "stone-brick", "coal"]),
+    ];
+    assert!(!entries().is_empty(), "registry must not be empty");
+    for e in entries() {
+        let candidates: Vec<String> = configs
+            .iter()
+            .filter(|(t, r, _)| *t == e.target && (r - e.rate).abs() < 1e-9)
+            .map(|(t, r, inputs)| {
+                let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
+                let sr = solver::solve_with_palette_exclusions_and_quality(
+                    t, *r, &inputs_set, &MachinePalette::default(),
+                    "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+                ).unwrap();
+                format!("{:016x}", geometry_hash(&compose_chain(&sr).unwrap()))
+            })
+            .collect();
+        assert!(!candidates.is_empty(),
+            "{}@{}: registry entry has no re-derivable fixture config in this gate — add it",
+            e.target, e.rate);
+        assert!(candidates.contains(&e.geometry_hash),
+            "{}@{} (declared capacity {}): composed geometry no longer matches the registered hash {} (fresh: {:?}) — re-verify in the sim and update cell-sim-registry.json",
+            e.target, e.rate, e.declared_inserter_capacity, e.geometry_hash, candidates);
     }
 }
 

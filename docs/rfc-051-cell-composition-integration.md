@@ -223,6 +223,38 @@ follow-ups.
 
 ## Decision log
 
+- *2026-07-23 — Declaration package (post-#390 honest world; #391
+  world-axis hardening landed with it). Method: `inserter_capacity`
+  declarations change zero geometry pre-#381, only the world the
+  parity harness builds — so each composed geometry was swept across
+  declared levels and registered at the lowest level measuring at
+  plan. Registry entries now carry CHECKED world fields
+  (declared_inserter_capacity, declared_stacking, harness_world
+  provenance); `verification_note` distinguishes full matches from
+  scoped ones ("verified only under declared capacity N"); the gate
+  iterates the registry and re-derives every entry. **Registered
+  (both at declared 0, honest world)**: chain-ac1 (PASS −0.3%) and —
+  first measurement ever — chain-mil5plates (PASS, delivered 5.00/s
+  exact, 46/46 working: the westward bypasses and feed UG retrofits
+  physically work). **The declaration hypothesis HALF-FALSIFIED, and
+  the falsified half is the finding**: ec15/ec30 deficits shrink
+  −8.0% → −5.3% as declared capacity rises, then go LEVEL-INVARIANT
+  (d2..d7 identical at −5.3% produced; d7 realizes nb=3, hand 4 ≈
+  4.8/s — the input-inserter bound is definitively cleared). The
+  residual is a SECOND bound: the #385 output-side belt-drop class
+  (cable rows' output stacks at measured-not-credited rates) and/or
+  corridor saturation at 45/45 — Lane B's #394 constants are the fix
+  vehicle, and this sweep hands #385 input-side-excluded
+  corroboration. ec30's intermittent PASSes (d2, d5) are
+  delivered-window artifacts (produced −3..−6% every run): verdicts
+  that flicker with the measurement window do not register —
+  measured-at-plan means PRODUCED at plan. mil5-ore FAILs flat
+  (−28.7%) at every level: firearm-magazine rows need ~5 iron/s per
+  machine and the inserter COUNT is the bound — RFC-049 Phase 3
+  ladder territory (#381), not declarable-around. No EC or mil5-ore
+  entries; re-measure when #394/#381 land (every hash trips then by
+  design).*
+
 - *2026-07-23 — Validation-tiered selection (#392; SHARED SCORING
   MACHINERY — logged per the kill-3(b) rule). `accepted` never ran the
   full validator, so an error-laden native could outscore a clean
