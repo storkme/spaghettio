@@ -7,7 +7,7 @@
     "quality",
     "elevated-rails"
   ],
-  "tech_state": "research_all_technologies;inserter_capacity<=L0",
+  "tech_state": "research_all_technologies;inserter_capacity<=L0;belt_stacking<=S1",
   "entities": 196,
   "produced": {
     "automation-science-pack": 1.0,

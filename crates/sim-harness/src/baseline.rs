@@ -75,11 +75,12 @@ pub fn baseline_from_report(report: &serde_json::Value) -> Result<Baseline, Stri
     // baseline loudly in check_against, which is the failure mode we
     // want for stale artifacts.
     let capacity = r.get("inserter_capacity").and_then(|v| v.as_u64()).unwrap_or(0);
+    let stacking = r.get("stacking").and_then(|v| v.as_u64()).unwrap_or(1);
     Ok(Baseline {
         label,
         game_version,
         mods: HARNESS_MODS.iter().map(|s| s.to_string()).collect(),
-        tech_state: format!("{HARNESS_TECH_STATE};inserter_capacity<=L{capacity}"),
+        tech_state: format!("{HARNESS_TECH_STATE};inserter_capacity<=L{capacity};belt_stacking<=S{stacking}"),
         entities: r.get("entities").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
         produced,
         delivered,
@@ -197,8 +198,21 @@ mod tests {
         let mut at_l7 = report("gear", 10.0, 10.13, "2.0.76");
         at_l7["report"]["inserter_capacity"] = serde_json::json!(7);
         let blessed = baseline_from_report(&at_l0).unwrap();
-        assert!(blessed.tech_state.ends_with("inserter_capacity<=L0"));
+        assert!(blessed.tech_state.contains("inserter_capacity<=L0"));
         let drifts = check_against(&blessed, &at_l7, 0.02);
+        assert_eq!(drifts.len(), 1, "{drifts:?}");
+        assert!(drifts[0].contains("tech state"));
+    }
+
+    #[test]
+    fn stacking_mismatch_is_flagged_via_tech_state() {
+        let mut s1 = report("gear", 10.0, 10.13, "2.0.76");
+        s1["report"]["stacking"] = serde_json::json!(1);
+        let mut s4 = report("gear", 10.0, 10.13, "2.0.76");
+        s4["report"]["stacking"] = serde_json::json!(4);
+        let blessed = baseline_from_report(&s1).unwrap();
+        assert!(blessed.tech_state.ends_with("belt_stacking<=S1"));
+        let drifts = check_against(&blessed, &s4, 0.02);
         assert_eq!(drifts.len(), 1, "{drifts:?}");
         assert!(drifts[0].contains("tech state"));
     }

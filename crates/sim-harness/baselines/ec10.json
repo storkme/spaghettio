@@ -7,16 +7,16 @@
     "quality",
     "elevated-rails"
   ],
-  "tech_state": "research_all_technologies;inserter_capacity<=L0",
+  "tech_state": "research_all_technologies;inserter_capacity<=L0;belt_stacking<=S1",
   "entities": 805,
   "produced": {
-    "copper-cable": 22.4,
-    "copper-plate": 11.275,
-    "electronic-circuit": 7.5,
-    "iron-plate": 7.5
+    "copper-cable": 15.25,
+    "copper-plate": 7.5,
+    "electronic-circuit": 5.0,
+    "iron-plate": 5.0
   },
   "delivered": {
-    "electronic-circuit": 7.6
+    "electronic-circuit": 5.0
   },
   "overall_verdict": "FAIL"
 }

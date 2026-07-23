@@ -7,21 +7,21 @@
     "quality",
     "elevated-rails"
   ],
-  "tech_state": "research_all_technologies;inserter_capacity<=L0",
+  "tech_state": "research_all_technologies;inserter_capacity<=L0;belt_stacking<=S1",
   "entities": 919,
   "produced": {
-    "copper-plate": 0.5466666666666666,
-    "firearm-magazine": 0.5233333333333333,
-    "grenade": 0.5533333333333333,
-    "iron-plate": 6.233333333333333,
-    "military-science-pack": 0.9933333333333332,
-    "piercing-rounds-magazine": 0.5133333333333333,
-    "steel-plate": 0.2733333333333333,
-    "stone-brick": 4.986666666666666,
+    "copper-plate": 0.6,
+    "firearm-magazine": 0.61,
+    "grenade": 0.5,
+    "iron-plate": 6.266666666666667,
+    "military-science-pack": 1.0133333333333334,
+    "piercing-rounds-magazine": 0.6066666666666667,
+    "steel-plate": 0.27666666666666667,
+    "stone-brick": 5.0,
     "stone-wall": 1.0
   },
   "delivered": {
-    "military-science-pack": 0.98
+    "military-science-pack": 1.0
   },
   "overall_verdict": "PASS"
 }
