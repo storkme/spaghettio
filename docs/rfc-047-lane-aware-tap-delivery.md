@@ -1,6 +1,6 @@
 # RFC-047: Lane-aware tap delivery (stacked rate ceilings)
 
-Registry: [`rfcs.md`](rfcs.md). Status: **Complete** (2026-07-22; browser eyeball of the flipped configs open — user-run; follow-ups #334/#335/#336/#337).
+Registry: [`rfcs.md`](rfcs.md). Status: **Complete** (2026-07-22; browser eyeball of the flipped configs open — user-run; follow-ups #334/#335/#336/#337). **2026-07-23 (#385 second half): the row-output-side lane-aware gap this RFC's own delivery-side work left open closed with `validate::inserters::check_row_output_lane_budget`, sim-calibrated — see the decision log's newest entry.**
 
 ## Summary
 
@@ -300,6 +300,96 @@ generator remains future work.
   whether the Phase-0 splitter fix already changes those lane rates).
 
 ## Decision log
+
+- **2026-07-23 — #385's second half landed: `check_row_output_lane_budget`
+  completes this RFC's lane-aware delivery story on the OUTPUT side,
+  sim-calibrated.** RFC-046/049 sized individual belt-dropping
+  inserters against the belt's own physical lane cap (`common::
+  belt_drop_rate`'s min-form, #385 first half); this RFC's own lane-
+  aware work covers trunk↔row delivery; what remained open was a
+  row's AGGREGATE output — the recipe's planned production for that
+  row vs. what its belt-out can physically realize, independent of
+  how many individual inserters feed it. Sim measurement
+  (`docs/sim-harness-forensics.md`): a row fed by inserter drops alone
+  (no bridge) realizes ~0.85 × ONE lane × S regardless of inserter
+  type/count/research (measured 7.4/s on yellow at S=1 vs the 15/s
+  both-lane nominal); a row with a midpoint sideload bridge rebalances
+  onto both lanes (~2 lanes). New check in `validate::inserters`:
+  `realizable = LANE_UTILIZATION × lane_capacity_stacked(tier,
+  stacking) × lanes_loaded`, `lanes_loaded` from bridge detection
+  (belt-out tiles' perpendicular spread), compared against the row's
+  planned inflow (`per-machine rate × spec.count`, scaled by that
+  row's share of the recipe's total physical machines).
+
+  **Row identification was the hard part, revised twice against real
+  fixtures.** `row:<recipe>:machine`/`:belt-out` segment tags are
+  purely recipe-keyed with no per-row instance token, and a recipe
+  needing more than one physical row (width-driven splitting, not just
+  solver partitioning) places every row under the identical literal
+  string — confirmed on `electronic-circuit@10/s`: copper-cable places
+  3 physical rows of 5 machines each, and `LayoutResult::effective_rows`
+  clones the SAME blended spec (`count: 15`, the recipe's full total)
+  into all 3 entries, so trusting `effective_rows[i].spec.count` as
+  "this row's share" over-credits every row the recipe's full total
+  (first draft's bug, caught by the acceptance matrix's own copper-
+  cable warning showing "needs 30.00/s" instead of a per-row split).
+  Fix: derive each row's share independently from **physical machine
+  counts**, not from `effective_rows`' per-sibling spec.
+
+  That still needed a way to split physically distinct rows sharing one
+  segment string. A first attempt used `effective_rows` y-bands purely
+  for spatial disambiguation (not rate) — but the cell-composition
+  pipeline (`bus::cells`) never populates `effective_rows` at all,
+  confirmed on the composed EC@15 fixture (3 independent cells, tens of
+  tiles apart, sharing `row:electronic-circuit:belt-out`,
+  `effective_rows.len() == 0`) — this silently merged 3 cells' 5.0/s
+  each into one 15.0/s bucket and FALSE-POSITIVED on
+  `cell_composed_ec15_zero_errors`, a PERMANENT GATE whose geometry
+  IS sim-verified clean (15/15 working, 15.0/s exact, pre-#378
+  harness). Per this task's own protocol ("if a sim-proven-clean
+  fixture now fires, fix the check, not the test"), the check was
+  redesigned: physical rows are split by **tile adjacency**
+  (`cluster_tiles_by_adjacency`, 4-connected BFS over each recipe's
+  belt-out tiles) — real construction never places two unrelated
+  rows'/cells' tiles edge-adjacent, while a row's own main line and its
+  midpoint sideload bridge (one tile off-axis) genuinely ARE
+  edge-adjacent, so adjacency is a pipeline-independent proxy needing
+  no per-pipeline plumbing. Machines are then attributed to a row via
+  their OWN output inserter's drop tile (physical connectivity, traced
+  the same way `check_inserter_throughput` traces pickup/drop) rather
+  than nearest-cluster-by-distance — a nearest-distance draft was ALSO
+  falsified empirically: `place_rows` spaces rows uniformly, so a
+  middle row's machines can sit exactly equidistant between its own
+  belt-out and the previous row's, a tie no distance heuristic breaks
+  correctly, but inserter connectivity has none.
+
+  **Acceptance matrix (empirical, not assumed):** `electronic-circuit
+  @10/s S1L0/L7 transport-belt` (the RFC-049 decision log's own
+  headline config) fires — but on the **copper-plate** row (single
+  physical row, 24 machines, needs 15.0/s; even WITH a genuine bridge
+  present, 2-lane yellow realizes only 12.75/s), not copper-cable as
+  originally guessed (copper-cable's 3 rows each land at 10.0/s,
+  comfortably under 12.75/s WITH their own bridges) — the guess
+  pre-dated running the check; the empirical result still satisfies
+  "must fire" and is the more interesting finding (a bridge-covered row
+  still over budget). `iron-gear-wheel@10`, `automation-science-
+  pack@1`, `logistic-science-pack@1` (fast belt), `military-science-
+  pack@1` — all silent, matching their sim-clean status. Full suite
+  (lib 811 / e2e 60 / netflow parity 10 / cell_composition 10, one
+  clean run each) required updating 6 fixtures' warning-count
+  assertions (`tier2_electronic_circuit`,
+  `tier2_electronic_circuit_from_ore`,
+  `tier2_electronic_circuit_20s_from_ore`,
+  `tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing`,
+  `stress_electronic_circuit_60s_red_from_ore`,
+  `tier5_processing_unit_from_ore_am3`) plus
+  `cell_candidate_resolves_ec15_refusal` (a genuinely different,
+  single-row EC@15 composition geometry, unrelated to the sim-verified
+  pairs geometry, with no sim-proof of its own — tolerated as
+  plausible-but-unproven per the check's own protocol) — every one is
+  the same structural finding (a bridged or unbridged row's demand
+  exceeds `LANE_UTILIZATION`-capped belt-out capacity), documented
+  inline at each site, none silenced by tuning the check.
 
 - **2026-07-22 — Dual-lens implementation review: code APPROVE,
   honesty APPROVE-WITH-CHANGES; all findings folded.** Honesty lens

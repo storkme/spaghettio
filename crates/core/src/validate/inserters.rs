@@ -12,7 +12,7 @@ use crate::common::{
 };
 #[cfg(test)]
 use crate::common::inserter_throughput;
-use crate::models::{LayoutResult, PlacedEntity, SolverResult};
+use crate::models::{EntityDirection, LayoutResult, MachineSpec, PlacedEntity, SolverResult};
 
 /// RFC-046: throughput an inserter delivers when dropping onto a **belt**.
 /// At the layout's belt stack size S > 1, a stack inserter's belt drops
@@ -586,6 +586,342 @@ pub fn check_inserter_item_throughput(
     }
 
     issues
+}
+
+// ── check_row_output_lane_budget ─────────────────────────────────────────────
+
+/// #385's second half: a machine row's belt-out realizes at most
+/// `LANE_UTILIZATION × lane_capacity_stacked(tier, stacking)` **per lane
+/// actually loaded** — inserter drops fill only the far lane (I5), so a
+/// row whose belt-out has no midpoint sideload bridge realizes ONE lane
+/// regardless of how many inserters/machines feed it, no matter the
+/// inserter type, count, or research level (sim-measured 2026-07-23,
+/// `docs/sim-harness-forensics.md`: 7.4/s realized on yellow at S=1 vs
+/// the 15/s both-lane nominal). A bridge (BS4: splitters/sideloads/UGs
+/// preserve stacks, and the bridge's lift-across-then-drop trick
+/// genuinely redistributes flow across both physical lanes) lifts the
+/// ceiling to TWO lanes.
+///
+/// This is the row-AGGREGATE counterpart to `belt_drop_throughput`'s
+/// #385 per-inserter lane cap: [`check_inserter_throughput`] and
+/// [`check_inserter_item_throughput`] already cap each individual
+/// inserter's own credit at the lane rate, but a row's PLANNED output
+/// (the recipe's demand-driven production, independent of how many
+/// inserters happen to feed the belt) can still exceed what the belt
+/// itself physically carries even when every individual inserter's own
+/// credit looks fine in isolation — the residual #385's decision log
+/// (`docs/rfc-049-inserter-capacity-research.md`, 2026-07-23 entry)
+/// flagged as still open: the regenerated ec10-L7 fixture measures
+/// clean per-machine but the ROW aggregate (Σ of a row's belt-drops vs
+/// the belt-out's realizable capacity) was never checked.
+///
+/// **Row identification.** Bus row templates (`bus::templates`) tag
+/// every row's machines `row:<recipe>:machine` and its primary output
+/// belt `row:<recipe>:belt-out` — but a recipe with enough machines to
+/// need more than one physical row shares that exact literal segment
+/// string across every row (confirmed empirically on `electronic-circuit
+/// @10/s`: copper-cable places 3 physical rows of 5 machines each, ALL
+/// tagged `row:copper-cable:machine`/`row:copper-cable:belt-out`), and
+/// the cell-composition pipeline (`bus::cells`) never populates
+/// `LayoutResult::effective_rows` at all (confirmed on the composed
+/// EC@15 fixture: 3 independent cells' belt-out runs, tens of tiles
+/// apart, all sharing the literal `row:electronic-circuit:belt-out`
+/// string) — so a validator can't lean on `effective_rows` here the way
+/// `resolve_row_spec` does elsewhere in this file.
+///
+/// Instead, each recipe's belt-out tiles are split into physical rows by
+/// **tile adjacency** ([`cluster_tiles_by_adjacency`]): real construction
+/// never places two unrelated rows'/cells' tiles edge-adjacent (always
+/// several tiles of gap), while a row's own main line + midpoint
+/// sideload bridge genuinely ARE edge-adjacent (the bridge's lift/drop
+/// tiles touch the main line directly) — so adjacency is a robust,
+/// pipeline-independent proxy for "same physical row" that needs no
+/// per-pipeline plumbing.
+///
+/// Each machine is then attributed to a physical row via its OWN output
+/// inserter's drop tile — the actual physical connection, not a
+/// geometric proxy: for every inserter whose pickup side touches a
+/// machine, if its drop side lands on one of THIS recipe's belt-out
+/// clusters, that machine belongs to that row. (An earlier
+/// nearest-cluster-by-distance draft was falsified empirically:
+/// `place_rows` spaces rows uniformly, so a middle row's machines can
+/// sit EXACTLY equidistant between its own belt-out and the previous
+/// row's — ties a distance heuristic cannot break correctly. Physical
+/// inserter connectivity has no such ambiguity.)
+///
+/// **Row inflow.** `recipe_to_spec` (keyed from `SolverResult::machines`,
+/// always the pre-partition, blended, one-entry-per-recipe view per
+/// `docs/rfc-inserter-sizing.md` Phase 1) gives the recipe's true total:
+/// `per-machine rate × spec.count`. Each row's share of that total is
+/// `(machines attributed to this row's belt-out cluster) / (total such
+/// machines counted for the recipe across every cluster)` — the ratio
+/// the placer's own row-splitting (for throughput, not just solver
+/// partitioning) actually places, so this is exact regardless of which
+/// mechanism produced multiple physical rows. Multi-output recipes: only
+/// the primary item (whatever the belt-out tiles' `carries` field names)
+/// is checked — the secondary output rides a separate `belt-out2`
+/// segment this check never selects, and a machine whose only traceable
+/// output inserter feeds THAT segment (not the primary belt-out) is
+/// simply not attributed anywhere — never observed in practice, since
+/// every machine has a primary-item output inserter. A cluster with zero
+/// attributed machines is skipped rather than guessing a share.
+///
+/// **Bridge detection.** A row's belt-out tiles span exactly one
+/// perpendicular coordinate (the single output-belt line) UNLESS a
+/// midpoint sideload bridge is present, which stamps its own line one
+/// tile off-axis (`bus::templates::sideload_bridge`'s `bridge_y =
+/// output_row_dy - 1`) — verified against the logistic-science-pack
+/// fixture's iron row (bridge tiles at y=24, main line at y=25). The
+/// majority direction among the row's surface-belt tiles gives the
+/// row's own travel axis; `lanes_loaded = 2` iff the tiles span more
+/// than one value in the coordinate perpendicular to that axis
+/// (y for a horizontal row, x for a vertical one), else `1`.
+pub fn check_row_output_lane_budget(
+    layout: &LayoutResult,
+    solver_result: Option<&SolverResult>,
+) -> Vec<ValidationIssue> {
+    let sr = match solver_result {
+        Some(s) => s,
+        None => return Vec::new(),
+    };
+
+    let recipe_to_spec: FxHashMap<&str, &MachineSpec> =
+        sr.machines.iter().map(|s| (s.recipe.as_str(), s)).collect();
+
+    let mut belt_out_by_recipe: FxHashMap<&str, Vec<&PlacedEntity>> = FxHashMap::default();
+    for e in &layout.entities {
+        let Some(seg) = e.segment_id.as_deref() else {
+            continue;
+        };
+        // Exact match only — `row:<recipe>:belt-out`, never the
+        // `:belt-out2:<item>` secondary-output segment (multi-output
+        // rows' secondary item is a different, always-single-lane
+        // long-handed drop, out of this check's scope).
+        if let Some(recipe) = seg.strip_prefix("row:").and_then(|s| s.strip_suffix(":belt-out")) {
+            belt_out_by_recipe.entry(recipe).or_default().push(e);
+        }
+    }
+
+    let mut recipes: Vec<&str> = belt_out_by_recipe.keys().copied().collect();
+    recipes.sort_unstable();
+
+    // Split each recipe's belt-out tiles into physical rows (clusters),
+    // and index every tile to its cluster for the inserter-tracing pass
+    // below.
+    struct RecipeClusters<'a> {
+        clusters: Vec<Vec<&'a PlacedEntity>>,
+        tile_to_cluster: FxHashMap<(i32, i32), usize>,
+    }
+    let mut by_recipe: FxHashMap<&str, RecipeClusters> = FxHashMap::default();
+    for &recipe in &recipes {
+        let belt_tiles_all = &belt_out_by_recipe[recipe];
+        let positions: Vec<(i32, i32)> = belt_tiles_all.iter().map(|e| (e.x, e.y)).collect();
+        let components = cluster_tiles_by_adjacency(&positions);
+        let num_clusters = components.iter().copied().max().map_or(0, |m| m + 1);
+        let mut clusters: Vec<Vec<&PlacedEntity>> = vec![Vec::new(); num_clusters];
+        let mut tile_to_cluster = FxHashMap::default();
+        for (i, &e) in belt_tiles_all.iter().enumerate() {
+            clusters[components[i]].push(e);
+            tile_to_cluster.insert((e.x, e.y), components[i]);
+        }
+        by_recipe.insert(recipe, RecipeClusters { clusters, tile_to_cluster });
+    }
+
+    // Attribute each machine to a physical row via its own output
+    // inserter's drop tile (see doc comment — physical connectivity, not
+    // a distance heuristic).
+    let machine_origin = machine_origin_by_tile(layout);
+    let mut machine_recipe: FxHashMap<(i32, i32), &str> = FxHashMap::default();
+    for e in &layout.entities {
+        if is_machine_entity(&e.name) {
+            if let Some(r) = e.recipe.as_deref() {
+                machine_recipe.insert((e.x, e.y), r);
+            }
+        }
+    }
+
+    let mut machine_counts: FxHashMap<&str, Vec<usize>> = FxHashMap::default();
+    let mut counted: FxHashSet<(&str, (i32, i32))> = FxHashSet::default();
+    for ins in &layout.entities {
+        if !is_inserter(&ins.name) {
+            continue;
+        }
+        let (dx, dy) = dir_to_vec(ins.direction);
+        let reach = inserter_reach(&ins.name);
+        let pickup = (ins.x - dx * reach, ins.y - dy * reach);
+        let drop = (ins.x + dx * reach, ins.y + dy * reach);
+        let Some(&origin) = machine_origin.get(&pickup) else {
+            continue;
+        };
+        let Some(&recipe) = machine_recipe.get(&origin) else {
+            continue;
+        };
+        let Some(rc) = by_recipe.get(recipe) else {
+            continue;
+        };
+        let Some(&cluster_idx) = rc.tile_to_cluster.get(&drop) else {
+            continue;
+        };
+        if counted.insert((recipe, origin)) {
+            machine_counts
+                .entry(recipe)
+                .or_insert_with(|| vec![0; rc.clusters.len()])[cluster_idx] += 1;
+        }
+    }
+
+    const EPSILON: f64 = 0.02;
+    let mut issues = Vec::new();
+    for &recipe in &recipes {
+        let Some(spec) = recipe_to_spec.get(recipe) else {
+            continue;
+        };
+        let rc = &by_recipe[recipe];
+        let Some(counts) = machine_counts.get(recipe) else {
+            continue;
+        };
+        let total_machines: usize = counts.iter().sum();
+        if total_machines == 0 {
+            continue;
+        }
+
+        for (idx, belt_tiles) in rc.clusters.iter().enumerate() {
+            let mcount = counts[idx];
+            if mcount == 0 {
+                continue;
+            }
+
+            // Primary output item: whatever this row's belt-out tiles
+            // actually carry.
+            let Some(item) = belt_tiles.iter().find_map(|e| e.carries.as_deref()) else {
+                continue;
+            };
+            let Some(flow) = spec.outputs.iter().find(|f| !f.is_fluid && f.item == item) else {
+                continue;
+            };
+            let total_recipe_rate = flow.rate * spec.count;
+            let row_share = mcount as f64 / total_machines as f64;
+            let inflow = total_recipe_rate * row_share;
+
+            let belts: Vec<&PlacedEntity> = belt_tiles
+                .iter()
+                .copied()
+                .filter(|e| crate::common::is_surface_belt(&e.name))
+                .collect();
+            if belts.is_empty() {
+                continue;
+            }
+
+            let tier = row_belt_tier(&belts);
+            let lanes_loaded = row_lanes_loaded(&belts);
+
+            let realizable = crate::common::LANE_UTILIZATION
+                * crate::common::lane_capacity_stacked(tier, layout.stacking)
+                * lanes_loaded as f64;
+
+            if inflow > realizable + EPSILON {
+                let (ax, ay) = belts.iter().map(|e| (e.x, e.y)).min().unwrap();
+                issues.push(
+                    ValidationIssue::with_pos(
+                        Severity::Warning,
+                        "row-output-lane-budget",
+                        format!(
+                            "{} row output ({}) needs {:.2}/s but {} lane{} of {} inserter-drop \
+                             delivery realizes only {:.2}/s — needs both-lane loading (a midpoint \
+                             sideload bridge) or a split output",
+                            recipe,
+                            item,
+                            inflow,
+                            lanes_loaded,
+                            if lanes_loaded == 1 { "" } else { "s" },
+                            tier,
+                            realizable,
+                        ),
+                        ax,
+                        ay,
+                    )
+                    .with_detail(realizable, inflow),
+                );
+            }
+        }
+    }
+
+    issues
+}
+
+/// Splits `positions` into connected components under 4-adjacency
+/// (sharing a tile edge), returning each position's component id by
+/// index. Used to tell apart physically distinct rows/cells that
+/// happen to share a segment-id string (see the caller's doc comment):
+/// real layouts never place two unrelated rows' tiles edge-adjacent,
+/// while a row's own main line and its midpoint sideload bridge (one
+/// tile off-axis, touching the main line directly) always are.
+fn cluster_tiles_by_adjacency(positions: &[(i32, i32)]) -> Vec<usize> {
+    let index: FxHashMap<(i32, i32), usize> =
+        positions.iter().enumerate().map(|(i, &p)| (p, i)).collect();
+    let mut component = vec![usize::MAX; positions.len()];
+    let mut next_id = 0usize;
+    for start in 0..positions.len() {
+        if component[start] != usize::MAX {
+            continue;
+        }
+        let id = next_id;
+        next_id += 1;
+        let mut stack = vec![start];
+        component[start] = id;
+        while let Some(i) = stack.pop() {
+            let (x, y) = positions[i];
+            for (dx, dy) in [(0, 1), (0, -1), (1, 0), (-1, 0)] {
+                if let Some(&j) = index.get(&(x + dx, y + dy)) {
+                    if component[j] == usize::MAX {
+                        component[j] = id;
+                        stack.push(j);
+                    }
+                }
+            }
+        }
+    }
+    component
+}
+
+/// Most common surface-belt tier among a row's belt-out tiles (uniform
+/// in practice — main line and bridge share one belt entity type).
+/// Defaults to the conservative yellow tier if somehow mixed/empty.
+fn row_belt_tier(belts: &[&PlacedEntity]) -> &'static str {
+    let mut counts: FxHashMap<&str, usize> = FxHashMap::default();
+    for e in belts {
+        *counts.entry(e.name.as_str()).or_insert(0) += 1;
+    }
+    match counts.into_iter().max_by_key(|(_, c)| c.to_owned()).map(|(n, _)| n) {
+        Some("fast-transport-belt") => "fast-transport-belt",
+        Some("express-transport-belt") => "express-transport-belt",
+        _ => "transport-belt",
+    }
+}
+
+/// Whether a row's belt-out spans one physical lane or two. The
+/// majority travel direction among the row's surface-belt tiles gives
+/// the row's own axis (horizontal East/West for every bus row template
+/// today); `2` iff the tiles span more than one coordinate perpendicular
+/// to that axis (a midpoint sideload bridge stamps its own line one tile
+/// off-axis — see this function's caller doc comment), else `1`.
+fn row_lanes_loaded(belts: &[&PlacedEntity]) -> u8 {
+    let (mut north, mut east, mut south, mut west) = (0usize, 0usize, 0usize, 0usize);
+    for e in belts {
+        match e.direction {
+            EntityDirection::North => north += 1,
+            EntityDirection::East => east += 1,
+            EntityDirection::South => south += 1,
+            EntityDirection::West => west += 1,
+        }
+    }
+    let horizontal = (east + west) >= (north + south);
+    let spread: FxHashSet<i32> =
+        belts.iter().map(|e| if horizontal { e.y } else { e.x }).collect();
+    if spread.len() > 1 {
+        2
+    } else {
+        1
+    }
 }
 
 /// Map each machine tile → the machine's origin `(x, y)`.
@@ -1624,5 +1960,347 @@ mod tests {
         assert!(warns[0].message.contains("(0,10)"), "the warning must land on row B's machine: {warns:?}");
         assert!(warns[0].message.contains("iron-plate"));
         assert!(warns[0].message.contains("in —"));
+    }
+
+    // ── check_row_output_lane_budget (#385 second half) ─────────────────────
+
+    fn lane_budget_warnings(issues: &[ValidationIssue]) -> Vec<&ValidationIssue> {
+        issues
+            .iter()
+            .filter(|i| i.category == "row-output-lane-budget")
+            .collect()
+    }
+
+    fn row_output_spec(recipe: &str, item: &str, rate_per_machine: f64, count: f64) -> SolverResult {
+        SolverResult {
+            machines: vec![MachineSpec {
+                entity: "assembling-machine-1".into(),
+                recipe: recipe.into(),
+                self_loop: vec![],
+                voider: false,
+                game_modules: Vec::new(),
+                count,
+                inputs: vec![],
+                outputs: vec![ItemFlow {
+                    item: item.into(),
+                    rate: rate_per_machine,
+                    is_fluid: false,
+                    module_id: 0,
+                }],
+            }],
+            external_inputs: vec![],
+            external_outputs: vec![],
+            surplus_outputs: vec![],
+            dependency_order: vec![],
+        }
+    }
+
+    /// A single-lane belt-out run: `count` tiles heading WEST at row `y`,
+    /// all tagged `row:<recipe>:belt-out` and carrying `item`.
+    fn belt_out_row(recipe: &str, item: &str, y: i32, count: i32, belt: &str) -> Vec<PlacedEntity> {
+        (0..count)
+            .map(|i| PlacedEntity {
+                name: belt.into(),
+                x: i,
+                y,
+                direction: EntityDirection::West,
+                carries: Some(item.into()),
+                segment_id: Some(format!("row:{recipe}:belt-out")),
+                ..Default::default()
+            })
+            .collect()
+    }
+
+    /// Same as [`belt_out_row`] plus one tile at `y - 1` — the minimal
+    /// synthetic stand-in for a midpoint sideload bridge's off-axis line
+    /// (real bridges stamp 6 tiles; only the perpendicular-spread signal
+    /// matters to `row_lanes_loaded`, so one extra tile at the bridge's
+    /// row suffices).
+    fn belt_out_row_bridged(recipe: &str, item: &str, y: i32, count: i32, belt: &str) -> Vec<PlacedEntity> {
+        let mut v = belt_out_row(recipe, item, y, count, belt);
+        v.push(PlacedEntity {
+            name: belt.into(),
+            x: 0,
+            y: y - 1,
+            direction: EntityDirection::West,
+            carries: Some(item.into()),
+            segment_id: Some(format!("row:{recipe}:belt-out")),
+            ..Default::default()
+        });
+        v
+    }
+
+    /// `count` machines (origin at `x = i*4`, `y = machine_y`) tagged
+    /// `row:<recipe>:machine`, each wired to a South-facing, reach-1
+    /// output inserter whose pickup lands on the machine's own origin
+    /// tile and whose drop lands at `(i*4, machine_y + 2)`. This is the
+    /// exact physical connection `check_row_output_lane_budget` traces
+    /// to attribute a machine to its row (see the check's doc comment:
+    /// inserter connectivity, not a distance heuristic) — a synthetic
+    /// row needs this wiring, not just co-located tiles, for the check
+    /// to count it at all. Callers must place their belt-out tiles
+    /// (`belt_out_row`) at `y = machine_y + 2`, wide enough to cover
+    /// every `i*4` drop x.
+    fn machine_row_with_output_inserters(recipe: &str, machine_y: i32, count: i32) -> Vec<PlacedEntity> {
+        let mut v = Vec::new();
+        for i in 0..count {
+            let x = i * 4;
+            v.push(PlacedEntity {
+                name: "assembling-machine-1".into(),
+                x,
+                y: machine_y,
+                recipe: Some(recipe.into()),
+                segment_id: Some(format!("row:{recipe}:machine")),
+                ..Default::default()
+            });
+            v.push(PlacedEntity {
+                name: "inserter".into(),
+                x,
+                y: machine_y + 1,
+                direction: EntityDirection::South,
+                ..Default::default()
+            });
+        }
+        v
+    }
+
+    #[test]
+    fn row_lane_budget_fires_when_inflow_exceeds_single_lane_yellow() {
+        // 2 machines × 5.0/s = 10.0/s inflow onto one lane of yellow
+        // (6.375/s realizable) — the ec10 copper-plate shape from #385
+        // (single row, no room on a bridge either since 15.0 > 12.75, but
+        // this synthetic case isolates the single-lane, no-bridge path).
+        let sr = row_output_spec("test-widget", "test-widget", 5.0, 2.0);
+        let mut entities = machine_row_with_output_inserters("test-widget", 0, 2); // drops at x=0,4, y=2
+        entities.extend(belt_out_row("test-widget", "test-widget", 2, 8, "transport-belt"));
+        let lr = LayoutResult { entities, width: 20, height: 20, stacking: 1, ..Default::default() };
+        let issues = check_row_output_lane_budget(&lr, Some(&sr));
+        let warns = lane_budget_warnings(&issues);
+        assert_eq!(warns.len(), 1, "{issues:?}");
+        assert!(warns[0].message.contains("test-widget"));
+        assert!(warns[0].message.contains("1 lane"));
+        assert!(warns[0].message.contains("transport-belt"));
+        let detail = warns[0].detail.as_ref().expect("must carry IssueDetail");
+        assert!((detail.needed - 10.0).abs() < 1e-9, "{detail:?}");
+        assert!((detail.delivered - 6.375).abs() < 1e-9, "{detail:?}");
+    }
+
+    #[test]
+    fn row_lane_budget_silent_within_single_lane_budget() {
+        // 1 machine × 6.0/s = 6.0/s ≤ 6.375/s realizable — clean.
+        let sr = row_output_spec("test-widget", "test-widget", 6.0, 1.0);
+        let mut entities = machine_row_with_output_inserters("test-widget", 0, 1); // drop at x=0, y=2
+        entities.extend(belt_out_row("test-widget", "test-widget", 2, 4, "transport-belt"));
+        let lr = LayoutResult { entities, width: 20, height: 20, stacking: 1, ..Default::default() };
+        let issues = check_row_output_lane_budget(&lr, Some(&sr));
+        assert!(lane_budget_warnings(&issues).is_empty(), "{issues:?}");
+    }
+
+    #[test]
+    fn row_lane_budget_bridge_doubles_budget_to_silence_same_inflow() {
+        // Identical 10.0/s inflow to the firing test above, but the
+        // belt-out now has a second off-axis line (bridge) — two lanes
+        // realize 12.75/s, which covers it.
+        let sr = row_output_spec("test-widget", "test-widget", 5.0, 2.0);
+        let mut entities = machine_row_with_output_inserters("test-widget", 0, 2); // drops at x=0,4, y=2
+        entities.extend(belt_out_row_bridged("test-widget", "test-widget", 2, 8, "transport-belt"));
+        let lr = LayoutResult { entities, width: 20, height: 20, stacking: 1, ..Default::default() };
+        let issues = check_row_output_lane_budget(&lr, Some(&sr));
+        assert!(
+            lane_budget_warnings(&issues).is_empty(),
+            "bridged row should realize 2 lanes (12.75/s ≥ 10.0/s): {issues:?}"
+        );
+    }
+
+    #[test]
+    fn row_lane_budget_epsilon_boundary() {
+        // Exactly at the realizable figure (6.375/s) plus the check's own
+        // 0.02 epsilon must NOT fire; a hair over must.
+        let mut entities = machine_row_with_output_inserters("test-widget", 0, 1); // drop at x=0, y=2
+        entities.extend(belt_out_row("test-widget", "test-widget", 2, 4, "transport-belt"));
+        let lr = LayoutResult { entities, width: 20, height: 20, stacking: 1, ..Default::default() };
+
+        let at_boundary = row_output_spec("test-widget", "test-widget", 6.395, 1.0); // 6.375 + 0.02
+        let issues = check_row_output_lane_budget(&lr, Some(&at_boundary));
+        assert!(
+            lane_budget_warnings(&issues).is_empty(),
+            "exactly realizable+epsilon must not fire: {issues:?}"
+        );
+
+        let past_boundary = row_output_spec("test-widget", "test-widget", 6.40, 1.0); // 6.375 + 0.025
+        let issues = check_row_output_lane_budget(&lr, Some(&past_boundary));
+        assert_eq!(
+            lane_budget_warnings(&issues).len(),
+            1,
+            "just past realizable+epsilon must fire: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn row_lane_budget_ignores_secondary_belt_out2_segment() {
+        // A `belt-out2` (secondary-output) segment must never be picked up
+        // as a primary belt-out — no group, no issue, regardless of how
+        // far its own flow would exceed a lane budget. (No `machine`
+        // wiring needed: absent a `row:<recipe>:belt-out` entry at all,
+        // the recipe is never even considered.)
+        let sr = row_output_spec("test-widget", "byproduct", 50.0, 1.0);
+        let entities = vec![PlacedEntity {
+            name: "transport-belt".into(),
+            x: 0,
+            y: 5,
+            direction: EntityDirection::West,
+            carries: Some("byproduct".into()),
+            segment_id: Some("row:test-widget:belt-out2:byproduct".into()),
+            ..Default::default()
+        }];
+        let lr = LayoutResult { entities, width: 20, height: 20, stacking: 1, ..Default::default() };
+        let issues = check_row_output_lane_budget(&lr, Some(&sr));
+        assert!(lane_budget_warnings(&issues).is_empty(), "{issues:?}");
+    }
+
+    #[test]
+    fn row_lane_budget_adjacency_disambiguates_same_recipe_rows_no_effective_rows() {
+        // Two physical `copper-cable` rows sharing the literal segment
+        // string `row:copper-cable:belt-out`/`:machine`, with NO
+        // `effective_rows` populated at all — the cell-composition
+        // pipeline shape confirmed on the real composed EC@15 fixture
+        // (3 independent cells, tens of tiles apart, sharing one segment
+        // string, `effective_rows.len() == 0`). Row A gets 1 of 6 total
+        // machines (small share, stays clean); row B gets the other 5
+        // (large share, must warn). Both rows' tiles must be split by
+        // TILE ADJACENCY (`cluster_tiles_by_adjacency`) into distinct
+        // physical rows — not merged into one recipe-wide bucket, which
+        // would either double-count inflow or misdetect bridge geometry
+        // across the two rows' unrelated, far-apart y-coordinates.
+        let sr = row_output_spec("copper-cable", "copper-cable", 2.0, 6.0); // 12.0/s total
+
+        // Row A: 1 machine, drop at (0, 4).
+        let mut entities = machine_row_with_output_inserters("copper-cable", 2, 1);
+        entities.extend(belt_out_row("copper-cable", "copper-cable", 4, 4, "transport-belt"));
+        // Row B: 5 machines, drops at (0,4,8,12,16, y=24) — far from row A.
+        entities.extend(machine_row_with_output_inserters("copper-cable", 22, 5));
+        entities.extend(belt_out_row("copper-cable", "copper-cable", 24, 20, "transport-belt"));
+
+        // Deliberately no `effective_rows` — proves the adjacency path,
+        // not a fallback to some other row-band mechanism, did the split.
+        let lr = LayoutResult { entities, width: 20, height: 40, stacking: 1, ..Default::default() };
+
+        let issues = check_row_output_lane_budget(&lr, Some(&sr));
+        let warns = lane_budget_warnings(&issues);
+        assert_eq!(
+            warns.len(),
+            1,
+            "row A (1/6 share = 2.0/s) stays clean, row B (5/6 share = 10.0/s) warns: {issues:?}"
+        );
+        assert!(warns[0].y == Some(24), "warning must anchor to row B's own tiles: {warns:?}");
+        let detail = warns[0].detail.as_ref().expect("must carry IssueDetail");
+        assert!((detail.needed - 10.0).abs() < 1e-9, "{detail:?}");
+    }
+
+    #[test]
+    fn row_lane_budget_ignores_separate_cell_at_different_x_same_y() {
+        // The exact composed-EC@15 false-positive shape (RFC-051/048):
+        // two "cells" at the SAME y but far apart in x, sharing the
+        // literal `row:widget:belt-out`/`:machine` strings, no
+        // `effective_rows`. Each cell's own demand (5.0/s) sits
+        // comfortably under a single lane's 6.375/s budget — merging
+        // them (10.0/s combined) would wrongly fire. Confirms adjacency
+        // splits on x-gaps too, not just y-gaps, and that machine
+        // attribution (via inserter drop tracing) stays local to each
+        // cell rather than nearest-cluster guessing.
+        let sr = row_output_spec("widget", "widget", 5.0, 2.0); // 10.0/s total, 2 machines
+        let mut entities = machine_row_with_output_inserters("widget", 9, 1); // cell A: drop (0,11)
+        entities.extend(belt_out_row("widget", "widget", 11, 4, "transport-belt")); // cell A belt-out x=0..3, y=11
+        entities.extend({
+            // cell B: same y=9/11 as cell A, but 40 tiles east — never
+            // tile-adjacent to cell A's run.
+            let mut m = machine_row_with_output_inserters("widget", 9, 1);
+            for e in &mut m {
+                e.x += 40;
+            }
+            let mut b = belt_out_row("widget", "widget", 11, 4, "transport-belt");
+            for e in &mut b {
+                e.x += 40;
+            }
+            m.extend(b);
+            m
+        });
+        let lr = LayoutResult { entities, width: 60, height: 20, stacking: 1, ..Default::default() };
+
+        let issues = check_row_output_lane_budget(&lr, Some(&sr));
+        assert!(
+            lane_budget_warnings(&issues).is_empty(),
+            "each cell's own 5.0/s sits under the 6.375/s single-lane budget: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn cluster_tiles_by_adjacency_bridge_merges_far_rows_split() {
+        // A row's main line + its one-tile-offset bridge line must land
+        // in ONE component; a second, far-away run must be a SEPARATE
+        // component — exactly the two invariants the caller's row split
+        // depends on.
+        let tiles: Vec<PlacedEntity> = belt_out_row_bridged("x", "x", 5, 4, "transport-belt");
+        let mut positions: Vec<(i32, i32)> = tiles.iter().map(|e| (e.x, e.y)).collect();
+        let main_and_bridge_len = positions.len();
+        positions.push((100, 100)); // far, unconnected
+        let components = cluster_tiles_by_adjacency(&positions);
+        let first_component = components[0];
+        assert!(
+            components[..main_and_bridge_len].iter().all(|&c| c == first_component),
+            "main line + bridge must be one component: {components:?}"
+        );
+        assert_ne!(
+            components[main_and_bridge_len], first_component,
+            "a far, unconnected tile must be its own component: {components:?}"
+        );
+    }
+
+    #[test]
+    fn row_lane_budget_no_solver_result_is_noop() {
+        let mut entities = machine_row_with_output_inserters("test-widget", 0, 2);
+        entities.extend(belt_out_row("test-widget", "test-widget", 2, 8, "transport-belt"));
+        let lr = LayoutResult { entities, width: 20, height: 20, stacking: 1, ..Default::default() };
+        assert!(check_row_output_lane_budget(&lr, None).is_empty());
+    }
+
+    #[test]
+    fn row_lane_budget_no_machine_tiles_is_skipped() {
+        // Belt-out tiles with no matching machine anywhere feeding them
+        // via an output inserter — the check can't attribute a share, so
+        // it must not guess (rather than, say, defaulting to the full
+        // recipe total).
+        let sr = row_output_spec("test-widget", "test-widget", 50.0, 1.0);
+        let lr = LayoutResult {
+            entities: belt_out_row("test-widget", "test-widget", 5, 4, "transport-belt"),
+            width: 20,
+            height: 20,
+            stacking: 1,
+            ..Default::default()
+        };
+        let issues = check_row_output_lane_budget(&lr, Some(&sr));
+        assert!(lane_budget_warnings(&issues).is_empty(), "{issues:?}");
+    }
+
+    #[test]
+    fn row_belt_tier_picks_majority_name() {
+        let a = PlacedEntity { name: "fast-transport-belt".into(), ..Default::default() };
+        let b = PlacedEntity { name: "fast-transport-belt".into(), ..Default::default() };
+        let c = PlacedEntity { name: "transport-belt".into(), ..Default::default() };
+        assert_eq!(row_belt_tier(&[&a, &b, &c]), "fast-transport-belt");
+    }
+
+    #[test]
+    fn row_lanes_loaded_single_line_is_one() {
+        let tiles: Vec<PlacedEntity> = belt_out_row("x", "x", 5, 4, "transport-belt");
+        let refs: Vec<&PlacedEntity> = tiles.iter().collect();
+        assert_eq!(row_lanes_loaded(&refs), 1);
+    }
+
+    #[test]
+    fn row_lanes_loaded_bridge_is_two() {
+        let tiles: Vec<PlacedEntity> = belt_out_row_bridged("x", "x", 5, 4, "transport-belt");
+        let refs: Vec<&PlacedEntity> = tiles.iter().collect();
+        assert_eq!(row_lanes_loaded(&refs), 2);
     }
 }
