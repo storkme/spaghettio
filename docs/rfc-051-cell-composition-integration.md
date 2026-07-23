@@ -223,6 +223,24 @@ follow-ups.
 
 ## Decision log
 
+- *2026-07-23 — Validation-tiered selection (#392; SHARED SCORING
+  MACHINERY — logged per the kill-3(b) rule). `accepted` never ran the
+  full validator, so an error-laden native could outscore a clean
+  sibling on density and reach callers as a broken Ok. The fix is a
+  selection TIER, deliberately not accepted-gating: among accepted
+  candidates, the best-scoring one whose layout validates with zero
+  errors wins; if none is clean, today's pick stands (callers still
+  see the errors — no new refusals), and candidate GATING is untouched
+  (no extra k1/size-split runs, no solve-time change). The
+  single-layout common case skips validation entirely. mil5-from-
+  plates flips to the composed 0/0 layout (gate:
+  `cell_candidate_wins_mil5_plates_over_broken_native`); goldens 9
+  ran / 0 drift — no stress fixture has a clean sibling, so bus-land
+  outcomes are unchanged. Not taken: gating `accepted` itself on
+  validation (would re-trigger the heavy fallback candidates on every
+  errored native and shift stress outcomes — a bigger, separate
+  decision if ever wanted).*
+
 - *2026-07-23 — mil5-ore COMPOSES (the Router overlap classes fixed;
   gate flipped to positive). Diagnosis: all 26 overlapping tiles were
   BOUNDARY BLINDNESS — the two-registry Router hops strict interiors

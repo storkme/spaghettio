@@ -594,6 +594,31 @@ fn cell_candidate_composes_mil5_ore() {
     assert!(errors.is_empty(), "composed mil5-ore errors: {errors:?}");
 }
 
+/// PERMANENT GATE (#392): validation-tiered selection — when the
+/// best-scoring accepted candidate hard-fails validation and a CLEAN
+/// accepted sibling exists, the clean one wins. mil5-from-plates is
+/// the live specimen: the native bus layout fails validation while the
+/// composed candidate is 0 errors / 0 warnings; pre-#392 the search
+/// returned the broken native as Ok.
+#[test]
+fn cell_candidate_wins_mil5_plates_over_broken_native() {
+    use spaghettio_core::validate::{self, LayoutStyle, Severity};
+    let inputs: FxHashSet<String> =
+        ["iron-plate", "copper-plate", "steel-plate", "stone-brick", "coal"]
+            .iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "military-science-pack", 5.0, &inputs, &MachinePalette::default(),
+        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+    ).unwrap();
+    let l = layout::build_bus_layout(&sr, layout::LayoutOptions::default())
+        .expect("mil5-plates must lay out");
+    assert!(l.warnings.iter().any(|w| w.starts_with("cell-composed:")),
+        "the clean composed candidate must win over the validation-broken native");
+    let issues = validate::validate(&l, Some(&sr), LayoutStyle::Bus).unwrap();
+    let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
+    assert!(errors.is_empty(), "winner must validate clean: {errors:?}");
+}
+
 #[test]
 #[ignore = "debug probe"]
 fn probe_mil5_errors() {

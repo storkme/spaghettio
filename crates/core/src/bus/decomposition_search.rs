@@ -972,12 +972,58 @@ pub fn select_best_decomposition(
         })
         .map(|(i, _)| i);
 
+    // Validation-tiered selection (#392): `accepted` never runs the
+    // full validator, so an error-laden native could outscore a CLEAN
+    // sibling on density and reach callers as a silently broken Ok
+    // (mil5-from-plates: native hard-fails validation while the
+    // composed candidate is 0/0). When more than one candidate holds a
+    // layout, prefer the best-scoring accepted candidate whose layout
+    // validates with ZERO errors; if none does, fall through to
+    // today's pick (still returns the error-laden best rather than
+    // refusing — callers see the errors, behavior unchanged). The
+    // single-layout common case skips validation entirely (the winner
+    // is fixed regardless), so the fast path costs nothing.
+    let n_layouts = candidates.iter().filter(|(o, _, _)| o.is_some()).count();
+    let best_error_free_idx = if merge_tap_choice.is_none() && n_layouts > 1 {
+        candidates
+            .iter()
+            .enumerate()
+            .filter_map(|(i, (outcome, _, _))| {
+                outcome.as_ref().and_then(|(l, score)| {
+                    if !score.accepted {
+                        return None;
+                    }
+                    let clean = match crate::validate::validate(
+                        l,
+                        Some(solver_result),
+                        crate::validate::LayoutStyle::Bus,
+                    ) {
+                        Ok(issues) => issues
+                            .iter()
+                            .all(|i| i.severity != crate::validate::Severity::Error),
+                        Err(_) => false,
+                    };
+                    if clean { Some((i, score.score)) } else { None }
+                })
+            })
+            .max_by(|(ia, a), (ib, b)| {
+                a.partial_cmp(b)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then(ib.cmp(ia))
+            })
+            .map(|(i, _)| i)
+    } else {
+        None
+    };
+
     // The scoped Pooled merge-tap decision (error-count metric, ties → Native)
-    // overrides the generic accepted-by-score pick when it ran; otherwise fall
-    // back to best-accepted, then to the first candidate that produced a
-    // layout (Native preferred — earliest in the array). Same degraded
-    // behaviour as today's pipeline when shape-fix can't resolve a (n, m) trap.
+    // overrides the generic accepted-by-score pick when it ran; then the
+    // error-free tier; then best-accepted; then the first candidate that
+    // produced a layout (Native preferred — earliest in the array). Same
+    // degraded behaviour as today's pipeline when shape-fix can't resolve
+    // a (n, m) trap.
     let winner_idx = merge_tap_choice
+        .or(best_error_free_idx)
         .or(best_accepted_idx)
         .or_else(|| candidates.iter().position(|(o, _, _)| o.is_some()));
 
