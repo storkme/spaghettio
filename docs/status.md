@@ -212,7 +212,14 @@ bit-identical, proven by the registered geometry hash). Composed
 coverage at the validator level: EC@15 (the
 [#336](https://github.com/storkme/spaghettio/issues/336) refusal),
 EC@15-from-ore (furnace cells), EC@30 and EC@60 (pre-quantization
-refusals; bus validation-fails ec60). Measured-at-plan claims live in
+refusals; bus validation-fails ec60), and **mil5-from-ore** (9 specs,
+K=2, 0 errors — the military 5/s scaling wall's #336-class refusal;
+PR #393 fixed the Router's boundary-blind hops and added westward
+bypass support after the placement order proved consumers can sit
+west of producers). mil5-from-plates' composed candidate is 0/0 but
+the search still returns the broken native layout there
+([#392](https://github.com/storkme/spaghettio/issues/392) — accepted
+never runs full validation). Measured-at-plan claims live in
 the sim-verified registry (geometry-hashed, checked-in): currently
 AC-from-plates (1.00/s, 8/8 working). EC-row geometries measure −8%
 under tech-state parity — the validator's inserter-item-throughput
