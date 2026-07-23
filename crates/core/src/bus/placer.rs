@@ -1368,6 +1368,7 @@ pub(crate) fn build_one_row(
                 max_belt_tier,
                 max_inserter_tier,
                 quality,
+                inserter_capacity,
                 ctx,
             );
             // Mirrors `templates::voider_row`'s row-offset constants:
@@ -1400,6 +1401,7 @@ pub(crate) fn build_one_row(
                 max_belt_tier,
                 max_inserter_tier,
                 quality,
+                inserter_capacity,
                 ctx,
             );
             sorted_output_belts = sorted_belts;
@@ -1566,8 +1568,10 @@ pub fn place_rows(
     quality: QualityTier,
     // Inserter-capacity research level 0..=7 (RFC-049,
     // `LayoutOptions.inserter_capacity`) — an inserter-ladder input parallel
-    // to `max_inserter_tier`/`quality`; consumed only by belt-drop (output)
-    // sizing, level 0 is bit-identical to pre-RFC.
+    // to `max_inserter_tier`/`quality`; consumed by belt-drop (output)
+    // sizing AND, since Phase 3, input-side sizing + near/far contests
+    // (sim-measured `machine_feed_rate`). Level 0 is bit-identical to
+    // pre-RFC.
     inserter_capacity: u8,
     final_output_items: Option<&FxHashSet<String>>,
     extra_gap_after_row: Option<&FxHashMap<usize, i32>>,
