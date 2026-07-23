@@ -365,9 +365,7 @@ fn bp_data_to_layout(bp_data: BpData) -> LayoutResult {
             raw.name.as_str(),
             "oil-refinery" | "foundry" | "cryogenic-plant"
         ) && matches!(parsed, EntityDirection::South | EntityDirection::West);
-        let dir = if raw.name.contains("inserter") || raw.name == "pipe-to-ground" {
-            flip180(parsed)
-        } else if mirror_rot {
+        let dir = if raw.name.contains("inserter") || raw.name == "pipe-to-ground" || mirror_rot {
             flip180(parsed)
         } else {
             parsed
