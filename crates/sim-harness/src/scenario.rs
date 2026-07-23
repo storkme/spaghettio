@@ -390,6 +390,7 @@ pub fn build_control_lua(manifest: &Manifest, bp: &str, params: &RunParams) -> S
     let _ = writeln!(out, "local LX0, LY0 = {}, {}", manifest.bbox_min[0], manifest.bbox_min[1]);
     let _ = writeln!(out, "local DIMS_X, DIMS_Y = {}, {}", manifest.dims[0], manifest.dims[1]);
     let _ = writeln!(out, "local INSERTER_CAPACITY = {}", manifest.inserter_capacity);
+    let _ = writeln!(out, "local STACKING = {}", manifest.stacking);
     {
         let items: Vec<String> = manifest.planned_rates.keys().map(|k| format!("\"{k}\"")).collect();
         let _ = writeln!(out, "local PLANNED_ITEMS = {{{}}}", items.join(", "));
@@ -451,6 +452,18 @@ script.on_init(function()
     table.insert(storage.kit_errors, "tech-state parity assignment did not take: nb="
       .. force.inserter_stack_size_bonus .. " bulk=" .. force.bulk_inserter_capacity_bonus
       .. " for level " .. INSERTER_CAPACITY)
+  end
+  -- Belt-stacking parity (option A, decided 2026-07-23 with user: the
+  -- sim's world matches the fixture's declared axes — early-game
+  -- layouts with low tech and no stacking are a real deployment
+  -- target, and research_all let stack inserters create 4-stacks on
+  -- belts declared stacking=1, inflating every stack belt-drop
+  -- measurement; #385 forensics). Same direct-assignment pattern as
+  -- inserter capacity: belt stack size = 1 + belt_stack_size_bonus.
+  force.belt_stack_size_bonus = STACKING - 1
+  if force.belt_stack_size_bonus ~= STACKING - 1 then
+    table.insert(storage.kit_errors, "belt-stacking parity assignment did not take: bonus="
+      .. force.belt_stack_size_bonus .. " for declared S=" .. STACKING)
   end
   local s = game.create_surface("lab")
   s.generate_with_lab_tiles = true
@@ -688,7 +701,8 @@ local function finalize(s, converged)
     -- Realized capacity bonuses after tech-state parity (#370) — the
     -- verification channel that the tech rollback actually took effect.
     inserter_stack_size_bonus = game.forces.player.inserter_stack_size_bonus,
-    bulk_inserter_capacity_bonus = game.forces.player.bulk_inserter_capacity_bonus}, false)
+    bulk_inserter_capacity_bonus = game.forces.player.bulk_inserter_capacity_bonus,
+    belt_stack_size_bonus = game.forces.player.belt_stack_size_bonus}, false)
   print("HARNESS_DONE")
   script.on_nth_tick(60, nil)
 end
@@ -792,6 +806,11 @@ mod tests {
         // The self-audit must reference kit_errors so a failed
         // assignment invalidates the run rather than passing silently.
         assert!(lua.contains("tech-state parity assignment did not take"));
+        // Belt-stacking parity (option A): declared S drives the force
+        // bonus; the self-audit must be able to invalidate the run.
+        assert!(lua.contains(&format!("local STACKING = {}", m.stacking)));
+        assert!(lua.contains("force.belt_stack_size_bonus = STACKING - 1"));
+        assert!(lua.contains("belt-stacking parity assignment did not take"));
     }
 
     #[test]
