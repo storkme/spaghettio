@@ -238,6 +238,14 @@ table (Phase 3).
   kill 2 already established for the input side, extended to the output
   side this RFC had left on the flat/decomposed model.
 
+  **Scope honesty (bot-review addition): this is the first half of #385
+  only.** The regenerated ec10-L7 fixture still measures 5.00/10 with 0
+  warnings on these corrected constants — per-machine demand sits under
+  every honest per-inserter credit, so the confirmed residual is the ROW
+  aggregate (Σ of a row's belt-drops vs the belt-out's one-lane-realizable
+  capacity), tracked as #385's second half and the #381 blocker. These
+  constants are true independently of that residual.
+
   **Deliberate breaks** (documented, not hidden — none silently patched
   over): a stack inserter's flat 12.0/s belt-drop credit onto a plain
   yellow belt (S=1, L=0 — this RFC's own L0 identity baseline) now
