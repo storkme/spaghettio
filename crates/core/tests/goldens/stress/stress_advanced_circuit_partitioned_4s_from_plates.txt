@@ -1,5 +1,5 @@
 === stress_advanced_circuit_partitioned_4s_from_plates scoreboard ===
-entities:         1159
+entities:         1178
 total warnings:   0
 zones solved:     0
 zones skipped:    0
@@ -9,11 +9,11 @@ total gap tiles:  8
 mean gap:         2.00
 max gap:          2
 max trunks/band:  4
-total poles:      75
-zero-slack poles: 9
-median slack:     2.0
+total poles:      78
+zero-slack poles: 1
+median slack:     3.0
 warnings by category:
   (none)
 errors by category:
   (none)
-layout hash: 3d94fd0dbc344e2a2e4aa3529a5bdc14717d07f8c437a1f6e17292c247493bfd
+layout hash: e1233415fbd7b518e456b35cfb4eda85cdf71a25801d8d777de13a232237b301

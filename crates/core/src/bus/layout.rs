@@ -973,10 +973,31 @@ fn layout_pass(
                             .filter(|&(_x, y)| y >= row.y_start && y < machine_top)
                             .filter(|&(ix, iy)| is_packed(ix, iy))
                             .collect();
-                        if inserters.is_empty() {
+                        // #400: machine CENTERS become substation subjects
+                        // ONLY for rows with no inserters at all (fluid-only
+                        // rows, e.g. refineries) — their centers are
+                        // unreachable by any medium band when both pipe
+                        // strips are full. Mixed rows keep the old
+                        // medium-first behavior: their centers get covered
+                        // by the widened bands (EC@20-from-ore regression
+                        // guard — eager substations there changed a layout
+                        // mediums handle fine).
+                        let row_has_inserters = inserters_for_poles
+                            .iter()
+                            .any(|&(_x, y)| y >= row.y_start && y < row.y_end);
+                        let mut subjects = inserters;
+                        if !row_has_inserters {
+                            subjects.extend(
+                                machines_for_poles
+                                    .iter()
+                                    .filter(|&&(_, ty, _)| ty >= row.y_start && ty < row.y_end)
+                                    .map(|&(cx, ty, mh)| (cx, ty + mh / 2)),
+                            );
+                        }
+                        if subjects.is_empty() {
                             return None;
                         }
-                        Some(SubstationTarget { band_y0, band_y1, inserters })
+                        Some(SubstationTarget { band_y0, band_y1, inserters: subjects })
                     } else {
                         // Interior band (RFC Phase 3a-ii): the freed gap between
                         // row `row_after` and its successor; the target inserters
@@ -1002,10 +1023,24 @@ fn layout_pass(
                             .filter(|&(_x, y)| y >= below.y_start && y < below.y_start + 4)
                             .filter(|&(ix, iy)| is_packed(ix, iy))
                             .collect();
-                        if inserters.is_empty() {
+                        // #400: same fluid-only-row machine-center
+                        // extension as the top-edge branch.
+                        let row_has_inserters = inserters_for_poles
+                            .iter()
+                            .any(|&(_x, y)| y >= below.y_start && y < below.y_end);
+                        let mut subjects = inserters;
+                        if !row_has_inserters {
+                            subjects.extend(
+                                machines_for_poles
+                                    .iter()
+                                    .filter(|&&(_, ty, _)| ty >= below.y_start && ty < below.y_end)
+                                    .map(|&(cx, ty, mh)| (cx, ty + mh / 2)),
+                            );
+                        }
+                        if subjects.is_empty() {
                             return None;
                         }
-                        Some(SubstationTarget { band_y0, band_y1, inserters })
+                        Some(SubstationTarget { band_y0, band_y1, inserters: subjects })
                     }
                 })
                 .collect(),
@@ -1564,10 +1599,11 @@ fn place_unified_band_line(
 /// row-based structure of the bus layout.
 /// `machines` entries are `(center_x, top_y, height)` — height (not width)
 /// because every use below (row grouping, below-row fallback y) is a vertical
-/// offset from the machine row. Returns `(poles, uncovered_inserters)` — the
-/// second element is the set of electric inserters NEITHER a substation NOR a
-/// medium pole could reach (the `give_up` set), the reactive substation pass's
-/// trigger; a final `repair_pole_connectivity` bridges any disconnected pole
+/// offset from the machine row. Returns `(poles, uncovered_subjects)` — the
+/// second element is the set of electric inserters AND machine centers (#400:
+/// fluid-only rows have no inserters, so centers must report themselves)
+/// NEITHER a substation NOR a medium pole could reach (the `give_up` set),
+/// the reactive substation pass's trigger; a final `repair_pole_connectivity` bridges any disconnected pole
 /// clusters.
 fn place_poles(
     machines: &[(i32, i32, i32)],
@@ -1780,6 +1816,41 @@ fn place_poles(
             None => {
                 give_up.insert((ix, iy));
             }
+        }
+    }
+
+    // #400: machine CENTERS are coverage subjects too. Fluid-only 5×5
+    // rows have no inserters and (post-#400) a fully continuous input
+    // pipe strip — the strip's former pole gap put UG mouths on the
+    // input-port tiles, which is why it was removed — so nothing above
+    // places a pole that reaches those centers. Report uncoverable
+    // centers into the same reactive channel the substation bands
+    // consume (Phase 3a-ii) instead of shipping a silently unpowered
+    // machine row.
+    let subs: Vec<(i32, i32)> = entities
+        .iter()
+        .filter(|e| e.name == "substation")
+        .map(|e| (e.x, e.y))
+        .collect();
+    for &(cx, top_y, mh) in machines {
+        // FLUID-ONLY rows only (#400): a row with inserters keeps the
+        // pre-#400 behavior bit-identically — its center was never a
+        // reported subject, its coverage rides the inserter-driven
+        // bands, and the validator still warns if it ends uncovered
+        // (two stress goldens drifted when mixed-row centers added
+        // bands of their own). Rows are vertical partitions, so "no
+        // inserter in this row's y-range" identifies fluid-only rows.
+        let row_has_inserters = inserters
+            .iter()
+            .any(|&(_ix, iy)| iy >= top_y - 2 && iy <= top_y + mh + 1);
+        if row_has_inserters {
+            continue;
+        }
+        let cy = top_y + mh / 2;
+        let ok = covered(cx, cy, &placed)
+            || subs.iter().any(|&(sx, sy)| sub_covers(sx, sy, cx, cy));
+        if !ok {
+            give_up.insert((cx, cy));
         }
     }
 
