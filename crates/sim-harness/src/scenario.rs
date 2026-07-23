@@ -754,7 +754,7 @@ script.on_nth_tick(60, function(ev)
   end
 
   if ev.tick >= WARMUP_TICKS and ev.tick % WINDOW_TICKS == 0 then
-    local cp = {tick = ev.tick, produced = stats.get_input_count(TARGET),
+    local cp = {tick = ev.tick, produced = produced_count(TARGET),
       delivered = storage.drained_total[TARGET] or 0}
     table.insert(storage.checkpoints, cp)
     local n = #storage.checkpoints

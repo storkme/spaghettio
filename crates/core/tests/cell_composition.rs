@@ -700,16 +700,24 @@ fn selection_tier_validation_never_leaks_trace_events() {
 fn mega_cell_plastic_from_crude_zero_issues() {
     use spaghettio_core::bus::cells::mega::compose_mega_calibrated;
     use spaghettio_core::validate::{self, LayoutStyle};
-    let (sr, l) = compose_mega_calibrated("plastic-bar", 2.0, &["crude-oil", "water", "coal"])
-        .expect("mega plastic must compose");
-    // Kit-pitch invariant: boundary heads >= 4 apart, all at y=0,
-    // sorted west→east (#363).
-    let xs: Vec<i32> = l.boundary_inputs.iter().map(|b| b.x).collect();
-    assert!(xs.windows(2).all(|w| w[1] - w[0] >= 4), "feed heads must sit at >=4 pitch: {xs:?}");
-    assert!(l.boundary_inputs.iter().all(|b| b.y == 0), "feed heads at the north edge");
-    let issues = validate::validate(&l, Some(&sr), LayoutStyle::Bus)
-        .unwrap_or_else(|e| panic!("mega plastic must validate: {e}"));
-    assert!(issues.is_empty(), "mega plastic issues: {issues:?}");
+    // All three Phase-A fixtures gate here (#401 review note: probe-only
+    // coverage of plastic@5/sulfur@2 wouldn't catch a regression).
+    for (label, item, rate, inputs) in [
+        ("plastic@2", "plastic-bar", 2.0, &["crude-oil", "water", "coal"][..]),
+        ("plastic@5", "plastic-bar", 5.0, &["crude-oil", "water", "coal"][..]),
+        ("sulfur@2", "sulfur", 2.0, &["crude-oil", "water"][..]),
+    ] {
+        let (sr, l) = compose_mega_calibrated(item, rate, inputs)
+            .unwrap_or_else(|e| panic!("{label}: mega must compose: {e}"));
+        // Kit-pitch invariant: boundary heads >= 4 apart, all at y=0,
+        // sorted west→east (#363).
+        let xs: Vec<i32> = l.boundary_inputs.iter().map(|b| b.x).collect();
+        assert!(xs.windows(2).all(|w| w[1] - w[0] >= 4), "{label}: feed heads must sit at >=4 pitch: {xs:?}");
+        assert!(l.boundary_inputs.iter().all(|b| b.y == 0), "{label}: feed heads at the north edge");
+        let issues = validate::validate(&l, Some(&sr), LayoutStyle::Bus)
+            .unwrap_or_else(|e| panic!("{label}: mega must validate: {e}"));
+        assert!(issues.is_empty(), "{label}: mega issues: {issues:?}");
+    }
 }
 
 /// Artifact producer for RFC-052 mega-cell sim runs (declared 0).

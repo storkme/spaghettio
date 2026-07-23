@@ -190,8 +190,19 @@ pub fn adapt_boundaries(l: LayoutResult) -> Result<LayoutResult, String> {
                         }
                     }
                 }
-                let last = *tiles.last().unwrap();
-                let joins = neighbors(last.0, last.1).iter().any(|n| {
+                // The join candidate is the path's geometric TERMINUS
+                // (deepest tile on the tail column), NOT tiles.last() —
+                // push order puts a lateral tile last whenever a bend
+                // exists, which spuriously rejected the dx=0 candidate
+                // for the final record (#401 review finding 1).
+                let terminus = if p.lane_row + 1 < margin {
+                    (tail_x, margin - 1)
+                } else if dx != 0 {
+                    (tail_x, margin)
+                } else {
+                    (tail_x, p.lane_row)
+                };
+                let joins = neighbors(terminus.0, terminus.1).iter().any(|n| {
                     !tile_set.contains(n) && fluid_at.get(n).map(|f| f == &r.item).unwrap_or(false)
                 });
                 if !joins {
@@ -223,7 +234,44 @@ pub fn adapt_boundaries(l: LayoutResult) -> Result<LayoutResult, String> {
             // lane-preserving corner toward the original x, then a
             // corner south and a tail column into the original head
             // (south belt feeding a south belt joins head-on).
-            let mut push = |x: i32, y: i32, dir: EntityDirection| {
+            // Plan-then-stamp with an occupancy check, like the fluid
+            // branch — the pre-check can't see fluid records'
+            // dx-shifted tails, so belts verify their tiles too and
+            // refuse loudly on conflict (#401 review finding 2).
+            let mut path: Vec<(i32, i32, EntityDirection)> = Vec::new();
+            if p.head_x == p.orig_x {
+                for y in 0..margin {
+                    path.push((p.head_x, y, EntityDirection::South));
+                }
+            } else {
+                for y in 0..p.lane_row {
+                    path.push((p.head_x, y, EntityDirection::South));
+                }
+                let toward = if p.orig_x < p.head_x {
+                    EntityDirection::West
+                } else {
+                    EntityDirection::East
+                };
+                let step = if p.orig_x < p.head_x { -1 } else { 1 };
+                let mut x = p.head_x;
+                while x != p.orig_x {
+                    path.push((x, p.lane_row, toward));
+                    x += step;
+                }
+                path.push((p.orig_x, p.lane_row, EntityDirection::South));
+                for y in (p.lane_row + 1)..margin {
+                    path.push((p.orig_x, y, EntityDirection::South));
+                }
+            }
+            for &(x, y, _) in &path {
+                if solid_at.contains(&(x, y)) || fluid_at.contains_key(&(x, y)) {
+                    return Err(format!(
+                        "mega: belt feed path for {} collides at ({x},{y}) — adapter v1 refuses",
+                        r.item
+                    ));
+                }
+            }
+            for (x, y, dir) in path {
                 solid_at.insert((x, y));
                 entities.push(PlacedEntity {
                     name: r.entity.clone(),
@@ -234,30 +282,6 @@ pub fn adapt_boundaries(l: LayoutResult) -> Result<LayoutResult, String> {
                     segment_id: Some(seg.clone()),
                     ..Default::default()
                 });
-            };
-            if p.head_x == p.orig_x {
-                for y in 0..margin {
-                    push(p.head_x, y, EntityDirection::South);
-                }
-            } else {
-                for y in 0..p.lane_row {
-                    push(p.head_x, y, EntityDirection::South);
-                }
-                let toward = if p.orig_x < p.head_x {
-                    EntityDirection::West
-                } else {
-                    EntityDirection::East
-                };
-                let step = if p.orig_x < p.head_x { -1 } else { 1 };
-                let mut x = p.head_x;
-                while x != p.orig_x {
-                    push(x, p.lane_row, toward);
-                    x += step;
-                }
-                push(p.orig_x, p.lane_row, EntityDirection::South);
-                for y in (p.lane_row + 1)..margin {
-                    push(p.orig_x, y, EntityDirection::South);
-                }
             }
         }
         b_in.push(BoundaryRecord {
