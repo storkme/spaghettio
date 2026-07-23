@@ -3,9 +3,24 @@
     "target": "advanced-circuit",
     "rate": 1.0,
     "geometry_hash": "d7f2ea7165028274",
+    "declared_inserter_capacity": 0,
+    "declared_stacking": 1,
+    "harness_world": "nb=0 bulk=1, S=1 (post-#390 stacking parity)",
     "verdict": "PASS",
     "produced_per_s": 1.0,
-    "scenario": "spaghettio-sim chain-ac1 v3 (Factorio 2.0.76, 8/8 working, converged, +0.33%); hash re-encoded 2026-07-23 (recipe+modules added to geometry_hash, geometry unchanged)",
-    "date": "2026-07-22"
+    "scenario": "spaghettio-sim chain-ac1-d0 (Factorio 2.0.76, 7/8 working +1 transient shortage, converged, -0.3%; declaration-package re-measure in the honest world)",
+    "date": "2026-07-23"
+  },
+  {
+    "target": "military-science-pack",
+    "rate": 5.0,
+    "geometry_hash": "1b49c80c03e04947",
+    "declared_inserter_capacity": 0,
+    "declared_stacking": 1,
+    "harness_world": "nb=0 bulk=1, S=1 (post-#390 stacking parity)",
+    "verdict": "PASS",
+    "produced_per_s": 4.83,
+    "scenario": "spaghettio-sim chain-mil5plates-d0 (Factorio 2.0.76, 46/46 working, converged, delivered 5.00/s exact, produced -3.3% within pass band; first measurement of westward bypasses + feed retrofits)",
+    "date": "2026-07-23"
   }
 ]
