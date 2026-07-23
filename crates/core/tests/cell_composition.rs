@@ -442,16 +442,6 @@ fn probe_registry_hashes() {
         ).unwrap();
         println!("mega-chain-ac2raw: {:016x}", geometry_hash(&compose_chain(&sr).unwrap()));
     }
-    {
-        use spaghettio_core::bus::cells::chain::compose_chain;
-        let inputs_set: FxHashSet<String> =
-            ["iron-ore", "copper-ore", "crude-oil", "water", "coal"].iter().map(|s| s.to_string()).collect();
-        let sr = solver::solve_with_palette_exclusions_and_quality(
-            "advanced-circuit", 2.0, &inputs_set, &MachinePalette::default(),
-            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
-        ).unwrap();
-        println!("mega-chain-ac2raw: {:016x}", geometry_hash(&compose_chain(&sr).unwrap()));
-    }
 }
 
 /// PERMANENT GATE (RFC-051 registry): every seeded sim-verified entry

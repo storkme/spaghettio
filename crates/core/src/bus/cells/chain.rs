@@ -65,6 +65,17 @@ pub fn required_copies(sr: &SolverResult) -> i32 {
         .iter()
         .flat_map(|m| m.outputs.iter().map(|o| o.item.as_str()))
         .collect();
+    // Items internal to a mega subgraph never ride chain belts either:
+    // a solid intermediate produced AND consumed inside the block
+    // (sulfur→sulfuric-acid in a chem-pack chain) is the block's own
+    // business — counting it would force a spurious chain-wide K split
+    // (#405 review finding 2). No-op for solid-only chains.
+    let mega = super::mega::mega_subgraph(sr).ok().flatten();
+    let mega_exports: FxHashSet<&str> = mega
+        .as_ref()
+        .map(|p| p.outputs.iter().map(|(i, _)| i.as_str()).collect())
+        .unwrap_or_default();
+    let is_member = |recipe: &str| mega.as_ref().is_some_and(|p| p.members.contains(recipe));
     let mut k = 1i32;
     for m in &sr.machines {
         for o in &m.outputs {
@@ -72,6 +83,9 @@ pub fn required_copies(sr: &SolverResult) -> i32 {
             // per-pipe rate falloff, so they never drive the quantum
             // (RFC-052 Phase B; no-op for solid-only chains).
             if o.is_fluid {
+                continue;
+            }
+            if is_member(&m.recipe) && !mega_exports.contains(o.item.as_str()) {
                 continue;
             }
             let total = o.rate * m.count;
@@ -978,16 +992,30 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
                 *row += 1;
                 router.vcol(&mut entities, dx0, dy0 + 1, by_y - 1, &d_item,
                     "express-transport-belt", "express-underground-belt", &seg);
-                router.corner_east(&mut entities, dx0, by_y, &d_item, "express-transport-belt", &seg);
-                router.hrow(&mut entities, by_y, dx0 + 1, lane_up - 1, &d_item,
-                    "express-transport-belt", "express-underground-belt", &seg);
-                router.occ.insert((lane_up, by_y));
-                entities.push(PlacedEntity {
-                    name: "express-transport-belt".into(), x: lane_up, y: by_y,
-                    direction: EntityDirection::North,
-                    carries: Some(d_item.clone()),
-                    segment_id: Some(seg.clone()), ..Default::default()
-                });
+                if lane_up < dx0 {
+                    // WESTWARD consumer (#405 review finding 1): the
+                    // dependency-position invariant makes this
+                    // analytically unreachable today, but an eastward
+                    // hrow with x0>x1 stamps NOTHING silently (the
+                    // mil5-ore landmine class) — mirror the solid
+                    // bypass path's guard instead of trusting the
+                    // invariant forever.
+                    router.corner_west(&mut entities, dx0, by_y, &d_item, "express-transport-belt", &seg);
+                    router.hrow_west(&mut entities, by_y, dx0 - 1, lane_up + 1, &d_item,
+                        "express-transport-belt", "express-underground-belt", &seg);
+                    router.corner_north(&mut entities, lane_up, by_y, &d_item, "express-transport-belt", &seg);
+                } else {
+                    router.corner_east(&mut entities, dx0, by_y, &d_item, "express-transport-belt", &seg);
+                    router.hrow(&mut entities, by_y, dx0 + 1, lane_up - 1, &d_item,
+                        "express-transport-belt", "express-underground-belt", &seg);
+                    router.occ.insert((lane_up, by_y));
+                    entities.push(PlacedEntity {
+                        name: "express-transport-belt".into(), x: lane_up, y: by_y,
+                        direction: EntityDirection::North,
+                        carries: Some(d_item.clone()),
+                        segment_id: Some(seg.clone()), ..Default::default()
+                    });
+                }
                 if router.occ.contains(&(lane_up, ty + 1)) {
                     retrofit_feed_hop(&mut entities, &mut router, lane_up, ty + 1)?;
                 }
