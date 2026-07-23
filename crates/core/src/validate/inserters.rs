@@ -590,17 +590,17 @@ pub fn check_inserter_item_throughput(
 
 // ── check_row_output_lane_budget ─────────────────────────────────────────────
 
-/// #385's second half: a machine row's belt-out realizes at most
-/// `LANE_UTILIZATION × lane_capacity_stacked(tier, stacking)` **per lane
-/// actually loaded** — inserter drops fill only the far lane (I5), so a
-/// row whose belt-out has no midpoint sideload bridge realizes ONE lane
-/// regardless of how many inserters/machines feed it, no matter the
-/// inserter type, count, or research level (sim-measured 2026-07-23,
-/// the RFC-047 decision log's 2026-07-23 row-calibration table: 7.4/s realized on yellow at S=1 vs
-/// the 15/s both-lane nominal). A bridge (BS4: splitters/sideloads/UGs
-/// preserve stacks, and the bridge's lift-across-then-drop trick
-/// genuinely redistributes flow across both physical lanes) lifts the
-/// ceiling to TWO lanes.
+/// #385's second half: a machine row's belt-out realizes a sim-MEASURED
+/// fraction of its lane capacity, not the nominal both-lane figure —
+/// inserter drops fill only the far lane (I5), so an unbridged row
+/// realizes ~0.95 × one lane regardless of inserter type, count, or
+/// research level (7.40/s measured on yellow at S=1, parity world; the
+/// constants and their calibration cells live at the computation site
+/// below and in the RFC-047 decision log's 2026-07-23 row-calibration
+/// entry). A midpoint sideload bridge redistributes flow across both
+/// physical lanes and lifts the measured ceiling to ≥1.733 lanes
+/// (13.00/s delivered at plan on yellow — the measured FLOOR; the band
+/// up to the 2-lane nominal is unproven either way).
 ///
 /// This is the row-AGGREGATE counterpart to `belt_drop_throughput`'s
 /// #385 per-inserter lane cap: [`check_inserter_throughput`] and
