@@ -619,6 +619,32 @@ fn cell_candidate_wins_mil5_plates_over_broken_native() {
     assert!(errors.is_empty(), "winner must validate clean: {errors:?}");
 }
 
+/// PERMANENT GATE (#396 review, blocking finding): the selection
+/// tier's validate() calls must never leak trace events into the
+/// winner's replayed stream — the web timing log reads the FIRST
+/// ValidationCompleted event, so a leaked loser-candidate validation
+/// makes the browser report a broken layout for a clean one. Exactly
+/// one ValidationCompleted may appear: the winning cells candidate's
+/// own self-check replay.
+#[test]
+fn selection_tier_validation_never_leaks_trace_events() {
+    let inputs: FxHashSet<String> =
+        ["iron-plate", "copper-plate", "steel-plate", "stone-brick", "coal"]
+            .iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "military-science-pack", 5.0, &inputs, &MachinePalette::default(),
+        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+    ).unwrap();
+    let l = layout::build_bus_layout_traced(&sr, layout::LayoutOptions::default())
+        .expect("mil5-plates must lay out");
+    let n_validation_events = l.trace.as_ref().expect("traced build carries trace")
+        .iter()
+        .filter(|e| matches!(e, spaghettio_core::trace::TraceEvent::ValidationCompleted { .. }))
+        .count();
+    assert_eq!(n_validation_events, 1,
+        "only the winner's own validation may appear in the trace (leaked tier validations corrupt the web timing log)");
+}
+
 #[test]
 #[ignore = "debug probe"]
 fn probe_mil5_errors() {

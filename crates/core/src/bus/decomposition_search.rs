@@ -901,6 +901,47 @@ pub fn select_best_decomposition(
         }
     });
 
+    // Validation-tiered selection (#392), part 1: the per-candidate
+    // clean flags. `validate()` emits a `ValidationCompleted` trace
+    // event per call, so this MUST run before the sink reattach below,
+    // with peek/truncate discarding the emissions — otherwise every
+    // examined candidate's validation (including the losers') leaks
+    // into the winner's replayed stream and the web timing log /
+    // snapshot debugger report the wrong layout's error counts (#396
+    // review, blocking finding; same pattern as merge_tap_choice's
+    // classify_errors above). Lazy: the single-layout common case and
+    // merge-tap-decided solves skip validation entirely.
+    let tier_outcomes = [
+        native_run.outcome.as_ref(),
+        k1_run.outcome.as_ref(),
+        split_run.outcome.as_ref(),
+        merge_tap_run.outcome.as_ref(),
+        cells_run.outcome.as_ref(),
+    ];
+    let n_layouts = tier_outcomes.iter().filter(|o| o.is_some()).count();
+    let clean_flags: [Option<bool>; 5] = if merge_tap_choice.is_none() && n_layouts > 1 {
+        let start = crate::trace::peek_events_len();
+        let flags = tier_outcomes.map(|o| {
+            o.map(|(l, score)| {
+                score.accepted
+                    && match crate::validate::validate(
+                        l,
+                        Some(solver_result),
+                        crate::validate::LayoutStyle::Bus,
+                    ) {
+                        Ok(issues) => issues
+                            .iter()
+                            .all(|i| i.severity != crate::validate::Severity::Error),
+                        Err(_) => false,
+                    }
+            })
+        });
+        crate::trace::truncate_events(start);
+        flags
+    } else {
+        [None; 5]
+    };
+
     // Re-attach the sink before replaying the winner's events. Score
     // events for *every* candidate that actually ran are emitted (so
     // telemetry/snapshot debugger see what was tried), then the winner's
@@ -972,49 +1013,30 @@ pub fn select_best_decomposition(
         })
         .map(|(i, _)| i);
 
-    // Validation-tiered selection (#392): `accepted` never runs the
-    // full validator, so an error-laden native could outscore a CLEAN
-    // sibling on density and reach callers as a silently broken Ok
-    // (mil5-from-plates: native hard-fails validation while the
-    // composed candidate is 0/0). When more than one candidate holds a
-    // layout, prefer the best-scoring accepted candidate whose layout
-    // validates with ZERO errors; if none does, fall through to
+    // Validation-tiered selection (#392), part 2: `accepted` never
+    // runs the full validator, so an error-laden native could outscore
+    // a CLEAN sibling on density and reach callers as a silently
+    // broken Ok (mil5-from-plates: native hard-fails validation while
+    // the composed candidate is 0/0). Prefer the best-scoring accepted
+    // candidate whose layout validated with ZERO errors (clean_flags,
+    // computed pre-reattach above); if none is clean, fall through to
     // today's pick (still returns the error-laden best rather than
-    // refusing — callers see the errors, behavior unchanged). The
-    // single-layout common case skips validation entirely (the winner
-    // is fixed regardless), so the fast path costs nothing.
-    let n_layouts = candidates.iter().filter(|(o, _, _)| o.is_some()).count();
-    let best_error_free_idx = if merge_tap_choice.is_none() && n_layouts > 1 {
-        candidates
-            .iter()
-            .enumerate()
-            .filter_map(|(i, (outcome, _, _))| {
-                outcome.as_ref().and_then(|(l, score)| {
-                    if !score.accepted {
-                        return None;
-                    }
-                    let clean = match crate::validate::validate(
-                        l,
-                        Some(solver_result),
-                        crate::validate::LayoutStyle::Bus,
-                    ) {
-                        Ok(issues) => issues
-                            .iter()
-                            .all(|i| i.severity != crate::validate::Severity::Error),
-                        Err(_) => false,
-                    };
-                    if clean { Some((i, score.score)) } else { None }
-                })
-            })
-            .max_by(|(ia, a), (ib, b)| {
-                a.partial_cmp(b)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                    .then(ib.cmp(ia))
-            })
-            .map(|(i, _)| i)
-    } else {
-        None
-    };
+    // refusing — callers see the errors, behavior unchanged).
+    let best_error_free_idx = candidates
+        .iter()
+        .enumerate()
+        .filter_map(|(i, (outcome, _, _))| {
+            if clean_flags[i] != Some(true) {
+                return None;
+            }
+            outcome.as_ref().map(|(_, score)| (i, score.score))
+        })
+        .max_by(|(ia, a), (ib, b)| {
+            a.partial_cmp(b)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(ib.cmp(ia))
+        })
+        .map(|(i, _)| i);
 
     // The scoped Pooled merge-tap decision (error-count metric, ties → Native)
     // overrides the generic accepted-by-score pick when it ran; then the
