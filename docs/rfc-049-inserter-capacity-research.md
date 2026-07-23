@@ -553,3 +553,16 @@ table (Phase 3).
   `machine_feed_rate(stack)`), so belt-drop shortfall traces can
   under-report actionable causes. Explainability-only (no sizing
   impact); pick up with the trace/explainability work.
+
+- **2026-07-24 — Phase 3 verification gate: closed under the
+  honest-or-at-plan criterion.** The regenerated ec10-L7 fixture (Phase-3
+  ladder + #394 constants + #402 lane-budget check) generates with
+  exactly one warning — `row-output-lane-budget` on the copper-plate row
+  (15.00/s needed vs the 13.00/s measured bridged ceiling) — and the
+  parity sim measures 5.00/10, the same floor three prior runs found.
+  The validator and the game now tell the same story: the L7 layout is
+  no longer clean-but-failing but priced. Merging Phase 3 is therefore
+  safe: L>0 sizing uses measured rates, and any layout the thinning
+  cannot serve is warned at generation time. The plate row's actual FIX
+  (a second belt-out or both-lane loading) is engine-improvement work
+  tracked outside this RFC.*
