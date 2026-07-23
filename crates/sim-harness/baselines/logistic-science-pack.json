@@ -7,20 +7,20 @@
     "quality",
     "elevated-rails"
   ],
-  "tech_state": "research_all_technologies",
+  "tech_state": "research_all_technologies;inserter_capacity<=L0;belt_stacking<=S1",
   "entities": 593,
   "produced": {
-    "copper-cable": 3.1,
-    "copper-plate": 1.5666666666666669,
-    "electronic-circuit": 1.0166666666666666,
-    "inserter": 1.0266666666666666,
-    "iron-gear-wheel": 1.3766666666666667,
+    "copper-cable": 3.14,
+    "copper-plate": 1.5633333333333332,
+    "electronic-circuit": 1.0466666666666666,
+    "inserter": 1.0433333333333332,
+    "iron-gear-wheel": 1.393333333333333,
     "iron-plate": 5.213333333333333,
-    "logistic-science-pack": 1.0466666666666666,
-    "transport-belt": 1.0
+    "logistic-science-pack": 1.04,
+    "transport-belt": 1.04
   },
   "delivered": {
-    "logistic-science-pack": 1.0666666666666669
+    "logistic-science-pack": 1.04
   },
   "overall_verdict": "PASS"
 }

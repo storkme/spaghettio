@@ -20,10 +20,13 @@ use spaghettio_core::solver;
 /// PERMANENT GATE (RFC-048 Phase 1; Phase-A parity pin): EC@15/s — the
 /// config the bus engine refuses (#336) — composes from
 /// engine-generated cells at 0 validation errors. The 6 carried
-/// warnings are validator-attribution conservatism DISPROVEN by
-/// measurement (sim: 15/15 machines working, produced exactly 15.0/s —
-/// see the RFC decision log 2026-07-22). Dims/entity count pinned to
-/// the sim-verified artifact (110×22, 461 entities).
+/// warnings measured harmless under the PRE-#378 harness (15/15
+/// working, 15.0/s exact) — but that run realized researched inserter
+/// bonuses; under tech-state parity (declared capacity 0) the same
+/// warnings are REAL long-handed-inserter shortfalls (#383). The
+/// warnings stay tolerated at the validator level; the fix is RFC-049
+/// Phase 3 inserter sizing (#381), after which they should vanish.
+/// Dims/entity count pinned to the sim artifact (110×22, 461 entities).
 #[test]
 fn cell_composed_ec15_zero_errors() {
     use spaghettio_core::validate::{self, LayoutStyle, Severity};
@@ -222,4 +225,582 @@ fn export_engine_plastic_for_sim() {
     std::fs::write("target/tmp/rfc048-engine-plastic.manifest.json",
         serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
     println!("wrote engine plastic artifacts ({} boundary in)", l.boundary_inputs.len());
+}
+
+/// Phase-B dev probe: the chain auto-placer on the two dev fixtures.
+#[test]
+#[ignore = "exploration probe while the auto-placer stabilizes"]
+fn probe_chain_autoplace() {
+    use spaghettio_core::bus::cells::chain::compose_chain;
+    use spaghettio_core::validate::{self, LayoutStyle, Severity};
+    for (label, item, rate, inputs) in [
+        ("ec15", "electronic-circuit", 15.0, &["iron-plate", "copper-plate"][..]),
+        ("ac1", "advanced-circuit", 1.0, &["iron-plate", "copper-plate", "plastic-bar"][..]),
+    ] {
+        let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
+        let sr = solver::solve_with_palette_exclusions_and_quality(
+            item, rate, &inputs_set, &MachinePalette::default(),
+            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+        ).unwrap();
+        println!("== {label}: {} specs ==", sr.machines.len());
+        for m in &sr.machines { println!("   {} x{:.2} out {:.2}/s", m.recipe, m.count, m.outputs[0].rate); }
+        match compose_chain(&sr) {
+            Ok(l) => {
+                println!("   composed {}x{} = {} tiles, {} entities", l.width, l.height, l.width * l.height, l.entities.len());
+                match validate::validate(&l, Some(&sr), LayoutStyle::Bus) {
+                    Ok(issues) => {
+                        let e = issues.iter().filter(|i| i.severity == Severity::Error).count();
+                        println!("   validation: {} errors / {} issues", e, issues.len());
+                        for i in issues.iter().take(15) {
+                            println!("     [{:?}] {} {}", i.severity, i.category, i.message);
+                        }
+                    }
+                    Err(er) => {
+                        for line in format!("{er}").lines().take(12) { println!("     {line}"); }
+                    }
+                }
+            }
+            Err(e) => println!("   REFUSED: {e}"),
+        }
+    }
+}
+
+/// Artifact producers for the chain auto-placer's sim runs. Each
+/// fixture exports at one or more DECLARED inserter-capacity levels
+/// (the `-dN` suffix): the declaration changes zero geometry pre-#381,
+/// only the world the parity harness builds — the declaration package
+/// registers each geometry at the lowest level that measures at plan.
+#[test]
+#[ignore = "artifact producer"]
+fn export_chain_fixtures_for_sim() {
+    use spaghettio_core::bus::cells::chain::compose_chain;
+    for (label, item, rate, inputs, levels) in [
+        ("chain-ac1", "advanced-circuit", 1.0,
+         &["iron-plate", "copper-plate", "plastic-bar"][..], &[0u8][..]),
+        ("chain-ec15", "electronic-circuit", 15.0,
+         &["iron-plate", "copper-plate"][..], &[1, 2, 3, 5, 7][..]),
+        ("chain-ec30", "electronic-circuit", 30.0,
+         &["iron-plate", "copper-plate"][..], &[1, 2, 3, 5, 7][..]),
+        ("chain-mil5ore", "military-science-pack", 5.0,
+         &["iron-ore", "copper-ore", "stone", "coal"][..], &[0, 2, 3, 7][..]),
+        ("chain-mil5plates", "military-science-pack", 5.0,
+         &["iron-plate", "copper-plate", "steel-plate", "stone-brick", "coal"][..], &[0, 2][..]),
+    ] {
+        let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
+        let sr = solver::solve_with_palette_exclusions_and_quality(
+            item, rate, &inputs_set, &MachinePalette::default(),
+            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+        ).unwrap();
+        for &lvl in levels {
+            let mut l = compose_chain(&sr).unwrap();
+            l.inserter_capacity = lvl;
+            let tag = format!("{label}-d{lvl}");
+            let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(&l, &sr, &tag);
+            std::fs::create_dir_all("target/tmp").unwrap();
+            std::fs::write(format!("target/tmp/{tag}.bp"), &bp).unwrap();
+            std::fs::write(format!("target/tmp/{tag}.manifest.json"),
+                serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
+            println!("wrote target/tmp/{tag}.bp ({} boundary in / {} out)",
+                l.boundary_inputs.len(), l.boundary_outputs.len());
+        }
+    }
+}
+
+/// Phase-B differential scoreboard (kill-3 evidence): composed vs bus
+/// on every chain-eligible ladder fixture. Prints errors / warnings /
+/// area / refusals per path.
+#[test]
+#[ignore = "measurement probe — output goes to the RFC decision log"]
+fn probe_differential_scoreboard() {
+    use spaghettio_core::bus::cells::chain::{chain_eligible, compose_chain};
+    use spaghettio_core::validate::{self, LayoutStyle, Severity};
+    let fixtures: &[(&str, &str, f64, &[&str])] = &[
+        ("gear15", "iron-gear-wheel", 15.0, &["iron-plate"]),
+        ("ec5", "electronic-circuit", 5.0, &["iron-plate", "copper-plate"]),
+        ("ec15", "electronic-circuit", 15.0, &["iron-plate", "copper-plate"]),
+        ("ec30", "electronic-circuit", 30.0, &["iron-plate", "copper-plate"]),
+        ("ac1", "advanced-circuit", 1.0, &["iron-plate", "copper-plate", "plastic-bar"]),
+        ("ac2", "advanced-circuit", 2.0, &["iron-plate", "copper-plate", "plastic-bar"]),
+        // Package-2 targets: the scaling-wall class + from-ore chains
+        // (furnace cells; fan-out >2 on shared plates).
+        ("ec15-ore", "electronic-circuit", 15.0, &["iron-ore", "copper-ore"]),
+        ("mil5-plates", "military-science-pack", 5.0, &["iron-plate", "copper-plate", "steel-plate", "stone-brick", "coal"]),
+        ("mil5-ore", "military-science-pack", 5.0, &["iron-ore", "copper-ore", "stone", "coal"]),
+        ("ec60", "electronic-circuit", 60.0, &["iron-plate", "copper-plate"]),
+    ];
+    for (label, item, rate, inputs) in fixtures {
+        let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
+        let sr = solver::solve_with_palette_exclusions_and_quality(
+            item, *rate, &inputs_set, &MachinePalette::default(),
+            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+        ).unwrap();
+        // Explicit Off — the DEFAULT is Candidate post-flip, and the bus
+        // column must measure the bus.
+        let bus_opts = layout::LayoutOptions {
+            cell_composition: spaghettio_core::bus::cells::CellComposition::Off,
+            ..Default::default()
+        };
+        let bus = std::panic::catch_unwind(|| layout::build_bus_layout(&sr, bus_opts));
+        let bus_desc = match &bus {
+            Ok(Ok(l)) => match validate::validate(l, Some(&sr), LayoutStyle::Bus) {
+                Ok(issues) => {
+                    let e = issues.iter().filter(|i| i.severity == Severity::Error).count();
+                    format!("{}x{}={} tiles, {} errors / {} warnings", l.width, l.height, l.width * l.height, e, issues.len() - e)
+                }
+                Err(er) => format!("validate() Err: {}", format!("{er}").lines().next().unwrap_or("")),
+            },
+            Ok(Err(e)) => format!("REFUSED: {}", e.lines().next().unwrap_or("")),
+            Err(_) => "PANICKED".into(),
+        };
+        let comp_desc = match chain_eligible(&sr) {
+            Err(e) => format!("INELIGIBLE: {e}"),
+            Ok(()) => match compose_chain(&sr) {
+                Ok(l) => match validate::validate(&l, Some(&sr), LayoutStyle::Bus) {
+                    Ok(issues) => {
+                        let e = issues.iter().filter(|i| i.severity == Severity::Error).count();
+                        format!("{}x{}={} tiles, {} errors / {} warnings", l.width, l.height, l.width * l.height, e, issues.len() - e)
+                    }
+                    Err(er) => format!("validate() Err: {}", format!("{er}").lines().next().unwrap_or("")),
+                },
+                Err(e) => format!("REFUSED: {e}"),
+            },
+        };
+        println!("{label:8} bus:      {bus_desc}");
+        println!("{label:8} composed: {comp_desc}");
+    }
+}
+
+/// PERMANENT GATE (RFC-051 Phase B): with the flag ON, the decomposition
+/// search resolves EC@15-from-plates — the config the bus engine refuses
+/// outright (#336) — via the cell-composed candidate, at 0 errors with
+/// only the sim-adjudicated warning category. With the flag OFF
+/// (default) the refusal stands (inertness: the bus path is untouched).
+#[test]
+fn cell_candidate_resolves_ec15_refusal() {
+    use spaghettio_core::bus::cells::CellComposition;
+    use spaghettio_core::validate::{self, LayoutStyle, Severity};
+    let inputs: FxHashSet<String> =
+        ["iron-plate", "copper-plate"].iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "electronic-circuit", 15.0, &inputs, &MachinePalette::default(),
+        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+    ).unwrap();
+
+    // Flag OFF (explicit — the DEFAULT is Candidate since the flip
+    // decision): the bus refusal stands.
+    let off_opts = layout::LayoutOptions {
+        cell_composition: CellComposition::Off,
+        ..Default::default()
+    };
+    let off = layout::build_bus_layout(&sr, off_opts);
+    assert!(off.is_err(), "flag-Off must preserve the bus refusal");
+
+    // Flag ON (the default): the composed candidate wins, validates clean.
+    let opts = layout::LayoutOptions::default();
+    let l = layout::build_bus_layout(&sr, opts).expect("candidate must resolve the refusal");
+    let issues = validate::validate(&l, Some(&sr), LayoutStyle::Bus).unwrap();
+    let errors = issues.iter().filter(|i| i.severity == Severity::Error).count();
+    assert_eq!(errors, 0, "composed candidate errors: {issues:?}");
+    assert!(issues.iter().all(|i| i.category == "inserter-item-throughput"),
+        "only the adjudicated category tolerated: {issues:?}");
+}
+
+/// Print geometry hashes for registry seeding.
+#[test]
+#[ignore = "registry seeding probe"]
+fn probe_registry_hashes() {
+    use spaghettio_core::bus::cells::chain::compose_chain;
+    use spaghettio_core::bus::cells::registry::geometry_hash;
+    for (label, item, rate, inputs) in [
+        ("chain-ec15", "electronic-circuit", 15.0, &["iron-plate", "copper-plate"][..]),
+        ("chain-ac1", "advanced-circuit", 1.0, &["iron-plate", "copper-plate", "plastic-bar"][..]),
+        ("chain-ec30", "electronic-circuit", 30.0, &["iron-plate", "copper-plate"][..]),
+        ("chain-mil5ore", "military-science-pack", 5.0, &["iron-ore", "copper-ore", "stone", "coal"][..]),
+        ("chain-mil5plates", "military-science-pack", 5.0, &["iron-plate", "copper-plate", "steel-plate", "stone-brick", "coal"][..]),
+    ] {
+        let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
+        let sr = solver::solve_with_palette_exclusions_and_quality(
+            item, rate, &inputs_set, &MachinePalette::default(),
+            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+        ).unwrap();
+        let l = compose_chain(&sr).unwrap();
+        println!("{label}: {:016x}", geometry_hash(&l));
+    }
+    for (label, item, rate, inputs) in [
+        ("mega-plastic2", "plastic-bar", 2.0, &["crude-oil", "water", "coal"][..]),
+        ("mega-sulfur2", "sulfur", 2.0, &["crude-oil", "water"][..]),
+    ] {
+        let (_sr, l) = spaghettio_core::bus::cells::mega::compose_mega_calibrated(item, rate, inputs).unwrap();
+        println!("{label}: {:016x}", geometry_hash(&l));
+    }
+}
+
+/// PERMANENT GATE (RFC-051 registry): every seeded sim-verified entry
+/// still matches freshly composed geometry — iterated from the
+/// registry itself, so adding an entry without a re-derivable fixture
+/// config fails loudly here, and an engine change that alters any
+/// registered cell fails here instead of silently decaying
+/// "sim-verified" into a stale verdict (#375 review finding 1; world
+/// axes added per #391 — declared fields are checked data, recorded at
+/// measurement time). The fix when it fires: re-run the sim on the new
+/// geometry, then update the hash + measurement in
+/// cell-sim-registry.json.
+#[test]
+fn cell_registry_hashes_current() {
+    use spaghettio_core::bus::cells::chain::compose_chain;
+    use spaghettio_core::bus::cells::registry::{entries, geometry_hash};
+    // Fixture configs the registry may reference, keyed by (target,
+    // rate); same-key configs (mil5 ore vs plates) disambiguate by
+    // hash.
+    // kind: "chain" re-derives via compose_chain; "mega" via the
+    // RFC-052 uncropped mega-cell composer.
+    let configs: &[(&str, f64, &[&str], &str)] = &[
+        ("advanced-circuit", 1.0, &["iron-plate", "copper-plate", "plastic-bar"], "chain"),
+        ("electronic-circuit", 15.0, &["iron-plate", "copper-plate"], "chain"),
+        ("electronic-circuit", 30.0, &["iron-plate", "copper-plate"], "chain"),
+        ("military-science-pack", 5.0, &["iron-ore", "copper-ore", "stone", "coal"], "chain"),
+        ("military-science-pack", 5.0, &["iron-plate", "copper-plate", "steel-plate", "stone-brick", "coal"], "chain"),
+        ("plastic-bar", 2.0, &["crude-oil", "water", "coal"], "mega"),
+        ("sulfur", 2.0, &["crude-oil", "water"], "mega"),
+    ];
+    assert!(!entries().is_empty(), "registry must not be empty");
+    for e in entries() {
+        let candidates: Vec<String> = configs
+            .iter()
+            .filter(|(t, r, _, _)| *t == e.target && (r - e.rate).abs() < 1e-9)
+            .map(|(t, r, inputs, kind)| {
+                let l = match *kind {
+                    "mega" => {
+                        spaghettio_core::bus::cells::mega::compose_mega_calibrated(t, *r, inputs)
+                            .unwrap().1
+                    }
+                    _ => {
+                        let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
+                        let sr = solver::solve_with_palette_exclusions_and_quality(
+                            t, *r, &inputs_set, &MachinePalette::default(),
+                            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+                        ).unwrap();
+                        compose_chain(&sr).unwrap()
+                    }
+                };
+                format!("{:016x}", geometry_hash(&l))
+            })
+            .collect();
+        assert!(!candidates.is_empty(),
+            "{}@{}: registry entry has no re-derivable fixture config in this gate — add it",
+            e.target, e.rate);
+        assert!(candidates.contains(&e.geometry_hash),
+            "{}@{} (declared capacity {}): composed geometry no longer matches the registered hash {} (fresh: {:?}) — re-verify in the sim and update cell-sim-registry.json",
+            e.target, e.rate, e.declared_inserter_capacity, e.geometry_hash, candidates);
+    }
+}
+
+/// PERMANENT GATE (RFC-051 K-quantization): the copy count is the
+/// smallest K putting every produced item AND every external input at
+/// ≤45/s (express capacity) per copy — a physical belt cap, not a
+/// quality knob (a 15/s "measured-exact" quantum was falsified: the
+/// Phase-1 exact measurement was pre-#378 harness tech state, and
+/// under declared capacity small rows measure WORSE — #383). Pins the
+/// ladder's K values: chains under the cap stay K=1 bit-identical
+/// (the registered chain-ac1 hash depends on it); ec30/ec60 — the
+/// pre-quantization corridor-cap refusals — now compose; K_MAX=12
+/// refuses loudly.
+#[test]
+fn cell_quantization_copy_counts() {
+    use spaghettio_core::bus::cells::chain::{chain_eligible, required_copies};
+    for (label, item, rate, inputs, want_k) in [
+        ("ec15", "electronic-circuit", 15.0, &["iron-plate", "copper-plate"][..], 1),
+        ("ac1", "advanced-circuit", 1.0, &["iron-plate", "copper-plate", "plastic-bar"][..], 1),
+        ("ec5", "electronic-circuit", 5.0, &["iron-plate", "copper-plate"][..], 1),
+        // pre-quantization these two REFUSED on the 45/s corridor cap
+        ("ec30", "electronic-circuit", 30.0, &["iron-plate", "copper-plate"][..], 2),
+        ("ec60", "electronic-circuit", 60.0, &["iron-plate", "copper-plate"][..], 4),
+    ] {
+        let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
+        let sr = solver::solve_with_palette_exclusions_and_quality(
+            item, rate, &inputs_set, &MachinePalette::default(),
+            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+        ).unwrap();
+        assert_eq!(required_copies(&sr), want_k, "{label}: copy count");
+        assert!(chain_eligible(&sr).is_ok(), "{label}: must be chain-eligible");
+    }
+    // Past K_MAX=12 the chain refuses loudly (ec600 → cable 1800/s → K=40).
+    let inputs_set: FxHashSet<String> =
+        ["iron-plate", "copper-plate"].iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "electronic-circuit", 600.0, &inputs_set, &MachinePalette::default(),
+        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+    ).unwrap();
+    let err = chain_eligible(&sr).unwrap_err();
+    assert!(err.contains("quantized copies"), "K_MAX refusal, got: {err}");
+}
+
+/// PERMANENT GATE (belt-tier constraint): composed corridors are
+/// express-only, and belt tier is a USER constraint — under any lower
+/// max_belt_tier the candidate must be INERT: whatever the bus does
+/// (succeed, as it happens to here, or refuse), the Candidate flag
+/// changes nothing, and no express entity ever appears. (Latent from
+/// the flip until K-quantization surfaced it: an eligible chain whose
+/// bus path fails under a sub-express cap would have won with express
+/// corridors.)
+#[test]
+fn cell_candidate_respects_belt_tier_cap() {
+    use spaghettio_core::bus::cells::registry::geometry_hash;
+    use spaghettio_core::bus::cells::CellComposition;
+    let inputs: FxHashSet<String> =
+        ["iron-plate", "copper-plate"].iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "electronic-circuit", 15.0, &inputs, &MachinePalette::default(),
+        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+    ).unwrap();
+    // EC@15 is chain-eligible, so only the tier guard keeps the
+    // candidate out under a red cap.
+    let build = |cc: CellComposition| {
+        layout::build_bus_layout(&sr, layout::LayoutOptions {
+            max_belt_tier: Some("fast-transport-belt".into()),
+            cell_composition: cc,
+            ..Default::default()
+        })
+    };
+    match (build(CellComposition::Candidate), build(CellComposition::Off)) {
+        (Ok(on), Ok(off)) => {
+            assert_eq!(geometry_hash(&on), geometry_hash(&off),
+                "sub-express cap: Candidate must be inert (bit-identical to Off)");
+            assert!(!on.entities.iter().any(|e| e.name.starts_with("express")),
+                "sub-express cap: no express entity may appear");
+        }
+        (on, off) => assert_eq!(on.is_err(), off.is_err(),
+            "sub-express cap: Candidate must not flip a refusal"),
+    }
+    // Express cap (explicit) still composes the #336 refusal.
+    let opts = layout::LayoutOptions {
+        max_belt_tier: Some("express-transport-belt".into()),
+        ..Default::default()
+    };
+    layout::build_bus_layout(&sr, opts).expect("express-capped EC@15 must compose");
+}
+
+/// PERMANENT GATE (#384 review finding 4): the additive contract —
+/// where the BUS succeeds, the bus wins; composition surfaces only on
+/// refusals. This was empirically true (density margin 2–5×) but not
+/// pinned, and the selection tie-break used to point at cell-composed.
+/// Asserts native wins every chain-eligible fixture where both paths
+/// succeed, via the observable marker: composed winners carry the
+/// "cell-composed:" registry annotation in warnings; bus winners never
+/// do.
+#[test]
+fn cell_candidate_never_displaces_a_succeeding_bus() {
+    for (label, item, rate, inputs) in [
+        ("gear15", "iron-gear-wheel", 15.0, &["iron-plate"][..]),
+        ("ec5", "electronic-circuit", 5.0, &["iron-plate", "copper-plate"][..]),
+        ("ac1", "advanced-circuit", 1.0, &["iron-plate", "copper-plate", "plastic-bar"][..]),
+        ("ac2", "advanced-circuit", 2.0, &["iron-plate", "copper-plate", "plastic-bar"][..]),
+    ] {
+        let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
+        let sr = solver::solve_with_palette_exclusions_and_quality(
+            item, rate, &inputs_set, &MachinePalette::default(),
+            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+        ).unwrap();
+        let l = layout::build_bus_layout(&sr, layout::LayoutOptions::default())
+            .unwrap_or_else(|e| panic!("{label}: bus-succeeding fixture must lay out: {e}"));
+        assert!(
+            !l.warnings.iter().any(|w| w.starts_with("cell-composed:")),
+            "{label}: composition displaced a succeeding bus layout"
+        );
+    }
+}
+
+/// PERMANENT GATE (flipped 2026-07-23 — the capability win its
+/// predecessor anticipated): mil5-ore COMPOSES. The Router's overlap
+/// classes (boundary-blind hops, 1-pitch bypass rows/lanes) and the
+/// silent east-only bypass assumption (reversed-dependency placement
+/// can put consumers WEST of producers) are fixed, so the 9-spec
+/// scaling-wall fixture the bus refuses (stone-brick lane capacity,
+/// #336-class) now wins via composition at 0 validation errors. The
+/// self-validation contract (#387 review) stands behind it: if this
+/// geometry ever regresses to errors, the candidate refuses and this
+/// gate fails on the refusal — never on a silently broken Ok.
+#[test]
+fn cell_candidate_composes_mil5_ore() {
+    use spaghettio_core::validate::{self, LayoutStyle, Severity};
+    let inputs: FxHashSet<String> =
+        ["iron-ore", "copper-ore", "stone", "coal"].iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "military-science-pack", 5.0, &inputs, &MachinePalette::default(),
+        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+    ).unwrap();
+    // Bus-only arm still refuses — composition is doing the winning.
+    let off = layout::build_bus_layout(&sr, layout::LayoutOptions {
+        cell_composition: spaghettio_core::bus::cells::CellComposition::Off,
+        ..Default::default()
+    });
+    assert!(off.is_err(), "bus-only mil5-ore must still refuse (else move this fixture to the bus ladder)");
+    let l = layout::build_bus_layout(&sr, layout::LayoutOptions::default())
+        .expect("mil5-ore must compose");
+    assert!(l.warnings.iter().any(|w| w.starts_with("cell-composed:")),
+        "the composed candidate must be the winner");
+    let issues = validate::validate(&l, Some(&sr), LayoutStyle::Bus).unwrap();
+    let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
+    assert!(errors.is_empty(), "composed mil5-ore errors: {errors:?}");
+}
+
+/// PERMANENT GATE (#392): validation-tiered selection — when the
+/// best-scoring accepted candidate hard-fails validation and a CLEAN
+/// accepted sibling exists, the clean one wins. mil5-from-plates is
+/// the live specimen: the native bus layout fails validation while the
+/// composed candidate is 0 errors / 0 warnings; pre-#392 the search
+/// returned the broken native as Ok.
+#[test]
+fn cell_candidate_wins_mil5_plates_over_broken_native() {
+    use spaghettio_core::validate::{self, LayoutStyle, Severity};
+    let inputs: FxHashSet<String> =
+        ["iron-plate", "copper-plate", "steel-plate", "stone-brick", "coal"]
+            .iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "military-science-pack", 5.0, &inputs, &MachinePalette::default(),
+        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+    ).unwrap();
+    let l = layout::build_bus_layout(&sr, layout::LayoutOptions::default())
+        .expect("mil5-plates must lay out");
+    assert!(l.warnings.iter().any(|w| w.starts_with("cell-composed:")),
+        "the clean composed candidate must win over the validation-broken native");
+    let issues = validate::validate(&l, Some(&sr), LayoutStyle::Bus).unwrap();
+    let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
+    assert!(errors.is_empty(), "winner must validate clean: {errors:?}");
+}
+
+/// PERMANENT GATE (#396 review, blocking finding): the selection
+/// tier's validate() calls must never leak trace events into the
+/// winner's replayed stream — the web timing log reads the FIRST
+/// ValidationCompleted event, so a leaked loser-candidate validation
+/// makes the browser report a broken layout for a clean one. Exactly
+/// one ValidationCompleted may appear: the winning cells candidate's
+/// own self-check replay.
+#[test]
+fn selection_tier_validation_never_leaks_trace_events() {
+    let inputs: FxHashSet<String> =
+        ["iron-plate", "copper-plate", "steel-plate", "stone-brick", "coal"]
+            .iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "military-science-pack", 5.0, &inputs, &MachinePalette::default(),
+        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+    ).unwrap();
+    let l = layout::build_bus_layout_traced(&sr, layout::LayoutOptions::default())
+        .expect("mil5-plates must lay out");
+    let n_validation_events = l.trace.as_ref().expect("traced build carries trace")
+        .iter()
+        .filter(|e| matches!(e, spaghettio_core::trace::TraceEvent::ValidationCompleted { .. }))
+        .count();
+    assert_eq!(n_validation_events, 1,
+        "only the winner's own validation may appear in the trace (leaked tier validations corrupt the web timing log)");
+}
+
+/// PERMANENT GATE (RFC-052 Phase A, gate (a) validator half): the oil
+/// mega-cell — the UNCROPPED engine layout for a fluid subgraph,
+/// boundary-adapted to the calibrated form by the generic re-pitching
+/// adapter — composes at 0 errors / 0 warnings. plastic-from-crude is
+/// the fixture (refinery → chem plant, one fluid intermediate; the
+/// crop would sever its petroleum trunk, which is the whole reason
+/// mega-cells are uncropped — RFC-052 decision log). The sim half of
+/// gate (a) lives in the registry entry.
+#[test]
+fn mega_cell_plastic_from_crude_zero_issues() {
+    use spaghettio_core::bus::cells::mega::compose_mega_calibrated;
+    use spaghettio_core::validate::{self, LayoutStyle};
+    // All three Phase-A fixtures gate here (#401 review note: probe-only
+    // coverage of plastic@5/sulfur@2 wouldn't catch a regression).
+    for (label, item, rate, inputs) in [
+        ("plastic@2", "plastic-bar", 2.0, &["crude-oil", "water", "coal"][..]),
+        ("plastic@5", "plastic-bar", 5.0, &["crude-oil", "water", "coal"][..]),
+        ("sulfur@2", "sulfur", 2.0, &["crude-oil", "water"][..]),
+    ] {
+        let (sr, l) = compose_mega_calibrated(item, rate, inputs)
+            .unwrap_or_else(|e| panic!("{label}: mega must compose: {e}"));
+        // Kit-pitch invariant: boundary heads >= 4 apart, all at y=0,
+        // sorted west→east (#363).
+        let xs: Vec<i32> = l.boundary_inputs.iter().map(|b| b.x).collect();
+        assert!(xs.windows(2).all(|w| w[1] - w[0] >= 4), "{label}: feed heads must sit at >=4 pitch: {xs:?}");
+        assert!(l.boundary_inputs.iter().all(|b| b.y == 0), "{label}: feed heads at the north edge");
+        let issues = validate::validate(&l, Some(&sr), LayoutStyle::Bus)
+            .unwrap_or_else(|e| panic!("{label}: mega must validate: {e}"));
+        assert!(issues.is_empty(), "{label}: mega issues: {issues:?}");
+    }
+}
+
+/// Artifact producer for RFC-052 mega-cell sim runs (declared 0).
+#[test]
+#[ignore = "artifact producer"]
+fn export_mega_fixtures_for_sim() {
+    use spaghettio_core::bus::cells::mega::compose_mega_calibrated;
+    for (label, item, rate, inputs) in [
+        ("mega-plastic2", "plastic-bar", 2.0, &["crude-oil", "water", "coal"][..]),
+        ("mega-sulfur2", "sulfur", 2.0, &["crude-oil", "water"][..]),
+    ] {
+        let (sr, l) = compose_mega_calibrated(item, rate, inputs).unwrap();
+        let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(&l, &sr, label);
+        std::fs::create_dir_all("target/tmp").unwrap();
+        std::fs::write(format!("target/tmp/{label}.bp"), &bp).unwrap();
+        std::fs::write(format!("target/tmp/{label}.manifest.json"),
+            serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
+        println!("wrote target/tmp/{label}.bp ({} in / {} out)",
+            l.boundary_inputs.len(), l.boundary_outputs.len());
+    }
+}
+
+#[test]
+#[ignore = "exploration probe"]
+fn probe_mega_cells() {
+    use spaghettio_core::bus::cells::mega::compose_mega_calibrated;
+    use spaghettio_core::validate::{self, LayoutStyle, Severity};
+    for (label, item, rate, inputs) in [
+        ("plastic2", "plastic-bar", 2.0, &["crude-oil", "water", "coal"][..]),
+        ("plastic5", "plastic-bar", 5.0, &["crude-oil", "water", "coal"][..]),
+        ("sulfur2", "sulfur", 2.0, &["crude-oil", "water"][..]),
+    ] {
+        match compose_mega_calibrated(item, rate, inputs) {
+            Ok((sr, l)) => {
+                let d = validate::validate(&l, Some(&sr), LayoutStyle::Bus);
+                match d {
+                    Ok(is) => {
+                        let e = is.iter().filter(|i| i.severity == Severity::Error).count();
+                        println!("{label}: {}x{} {} entities, {} errors / {} warnings; feeds {:?}",
+                            l.width, l.height, l.entities.len(), e, is.len() - e,
+                            l.boundary_inputs.iter().map(|b| (b.item.clone(), b.x)).collect::<Vec<_>>());
+                        for i in is.iter().take(8) { println!("   [{:?}] {} {}", i.severity, i.category, i.message); }
+                    }
+                    Err(er) => println!("{label}: validate ERR {}", format!("{er}").lines().next().unwrap_or("")),
+                }
+            }
+            Err(e) => println!("{label}: REFUSED {e}"),
+        }
+    }
+}
+
+#[test]
+#[ignore = "debug probe"]
+fn probe_mil5_errors() {
+    use spaghettio_core::bus::cells::chain::compose_chain;
+    use spaghettio_core::validate::{self, LayoutStyle};
+    for (label, item, rate, inputs) in [
+        ("mil5-ore", "military-science-pack", 5.0, &["iron-ore", "copper-ore", "stone", "coal"][..]),
+        ("ec30", "electronic-circuit", 30.0, &["iron-plate", "copper-plate"][..]),
+    ] {
+        let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
+        let sr = solver::solve_with_palette_exclusions_and_quality(
+            item, rate, &inputs_set, &MachinePalette::default(),
+            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+        ).unwrap();
+        println!("== {label}: {} specs ==", sr.machines.len());
+        match compose_chain(&sr) {
+            Ok(l) => match validate::validate(&l, Some(&sr), LayoutStyle::Bus) {
+                Ok(_) => println!("   validates OK"),
+                Err(er) => {
+                    for line in format!("{er}").lines().filter(|l| l.contains("error")).take(8) {
+                        println!("   {line}");
+                    }
+                }
+            },
+            Err(e) => println!("   REFUSED: {e}"),
+        }
+    }
 }

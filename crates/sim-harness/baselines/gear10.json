@@ -7,14 +7,14 @@
     "quality",
     "elevated-rails"
   ],
-  "tech_state": "research_all_technologies",
+  "tech_state": "research_all_technologies;inserter_capacity<=L0;belt_stacking<=S1",
   "entities": 428,
   "produced": {
     "iron-gear-wheel": 10.0,
-    "iron-plate": 20.1
+    "iron-plate": 20.0
   },
   "delivered": {
-    "iron-gear-wheel": 10.133333333333333
+    "iron-gear-wheel": 10.0
   },
   "overall_verdict": "PASS"
 }

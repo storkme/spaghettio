@@ -200,7 +200,7 @@ local function add_feed(s, force, head_x, head_y, ox, oy, lx, ly, depth, item, b
   eei.electric_buffer_size = 1e13
   table.insert(storage.eeis, eei)
   storage.feeds[item] = storage.feeds[item] or {}
-  for _, c in ipairs(chests) do table.insert(storage.feeds[item], c) end
+  table.insert(storage.feeds[item], {chests = chests, fed = 0})
 end
 
 -- Fluid FEED: infinity-pipe adjacent to the boundary tile, auto-maintained
@@ -332,6 +332,18 @@ fn feed_call(out: &mut String, idx: usize, rec: &BoundaryRecord) {
             item = rec.item,
         );
     } else {
+        // A boundary head can be a splitter (the engine's record names
+        // the entity at the head tile); the rig's own belts must be the
+        // matching SURFACE BELT tier — building a jog out of 2-tile
+        // splitter entities silently delivers nothing (#345: r150's
+        // third copper spine was fed by a dead splitter-bodied rig).
+        let belt = match rec.entity.as_str() {
+            "splitter" => "transport-belt",
+            "fast-splitter" => "fast-transport-belt",
+            "express-splitter" => "express-transport-belt",
+            "turbo-splitter" => "turbo-transport-belt",
+            other => other,
+        };
         let _ = writeln!(
             out,
             "    add_feed(s, force, head_x, head_y, {ox}, {oy}, {lx}, {ly}, {depth}, \"{item}\", \"{belt}\")",
@@ -341,7 +353,7 @@ fn feed_call(out: &mut String, idx: usize, rec: &BoundaryRecord) {
             ly = lateral.1,
             depth = depth,
             item = rec.item,
-            belt = rec.entity,
+            belt = belt,
         );
     }
     let _ = writeln!(out, "  end -- feed[{idx}] {} at ({},{})", rec.item, rec.x, rec.y);
@@ -390,6 +402,7 @@ pub fn build_control_lua(manifest: &Manifest, bp: &str, params: &RunParams) -> S
     let _ = writeln!(out, "local LX0, LY0 = {}, {}", manifest.bbox_min[0], manifest.bbox_min[1]);
     let _ = writeln!(out, "local DIMS_X, DIMS_Y = {}, {}", manifest.dims[0], manifest.dims[1]);
     let _ = writeln!(out, "local INSERTER_CAPACITY = {}", manifest.inserter_capacity);
+    let _ = writeln!(out, "local STACKING = {}", manifest.stacking);
     {
         let items: Vec<String> = manifest.planned_rates.keys().map(|k| format!("\"{k}\"")).collect();
         let _ = writeln!(out, "local PLANNED_ITEMS = {{{}}}", items.join(", "));
@@ -451,6 +464,18 @@ script.on_init(function()
     table.insert(storage.kit_errors, "tech-state parity assignment did not take: nb="
       .. force.inserter_stack_size_bonus .. " bulk=" .. force.bulk_inserter_capacity_bonus
       .. " for level " .. INSERTER_CAPACITY)
+  end
+  -- Belt-stacking parity (option A, decided 2026-07-23 with user: the
+  -- sim's world matches the fixture's declared axes — early-game
+  -- layouts with low tech and no stacking are a real deployment
+  -- target, and research_all let stack inserters create 4-stacks on
+  -- belts declared stacking=1, inflating every stack belt-drop
+  -- measurement; #385 forensics). Same direct-assignment pattern as
+  -- inserter capacity: belt stack size = 1 + belt_stack_size_bonus.
+  force.belt_stack_size_bonus = STACKING - 1
+  if force.belt_stack_size_bonus ~= STACKING - 1 then
+    table.insert(storage.kit_errors, "belt-stacking parity assignment did not take: bonus="
+      .. force.belt_stack_size_bonus .. " for declared S=" .. STACKING)
   end
   local s = game.create_surface("lab")
   s.generate_with_lab_tiles = true
@@ -670,6 +695,19 @@ end
 local function finalize(s, converged)
   storage.finalized = true
   storage.converged = converged
+  -- Dead-rig audit (#345): a rig whose chest bank never drained beyond
+  -- the initial fill moved nothing onto its belt — the rig body is
+  -- broken (r150's splitter-bodied copper rig delivered zero for a
+  -- whole steady-state run while its two siblings masked it in the
+  -- per-item totals). 2600 > 6 chests x 400 initial fill.
+  for item, banks in pairs(storage.feeds) do
+    for bi, bank in ipairs(banks) do
+      if bank.fed <= 2600 and game.tick > 7200 then
+        table.insert(storage.kit_errors, "feed rig " .. bi .. " for '" .. item
+          .. "' never drained past its initial fill (" .. bank.fed .. ") — rig dead (#345 class)")
+      end
+    end
+  end
   dump_sim_state(s)
   local census = {}
   for _, m in pairs(s.find_entities_filtered{type = {"assembling-machine", "furnace"}}) do
@@ -688,7 +726,8 @@ local function finalize(s, converged)
     -- Realized capacity bonuses after tech-state parity (#370) — the
     -- verification channel that the tech rollback actually took effect.
     inserter_stack_size_bonus = game.forces.player.inserter_stack_size_bonus,
-    bulk_inserter_capacity_bonus = game.forces.player.bulk_inserter_capacity_bonus}, false)
+    bulk_inserter_capacity_bonus = game.forces.player.bulk_inserter_capacity_bonus,
+    belt_stack_size_bonus = game.forces.player.belt_stack_size_bonus}, false)
   print("HARNESS_DONE")
   script.on_nth_tick(60, nil)
 end
@@ -696,13 +735,16 @@ end
 script.on_nth_tick(60, function(ev)
   if storage.finalized then return end
   for _, e in ipairs(storage.eeis) do if e.valid then e.energy = 1e13 end end
-  for item, chests in pairs(storage.feeds) do
-    for _, c in ipairs(chests) do
-      if c.valid then
-        local n = c.get_item_count(item)
-        if n < 400 then
-          local got = c.insert{name = item, count = 400 - n}
-          storage.fed_total[item] = (storage.fed_total[item] or 0) + got
+  for item, banks in pairs(storage.feeds) do
+    for _, bank in ipairs(banks) do
+      for _, c in ipairs(bank.chests) do
+        if c.valid then
+          local n = c.get_item_count(item)
+          if n < 400 then
+            local got = c.insert{name = item, count = 400 - n}
+            storage.fed_total[item] = (storage.fed_total[item] or 0) + got
+            bank.fed = bank.fed + got
+          end
         end
       end
     end
@@ -720,16 +762,27 @@ script.on_nth_tick(60, function(ev)
 
   local s = game.get_surface("lab")
   local stats = game.forces.player.get_item_production_statistics(s)
+  local fstats = game.forces.player.get_fluid_production_statistics(s)
+  -- Fluid intermediates (mega-cells, RFC-052) live in the fluid
+  -- statistics; get_input_count on the ITEM stats crashes with
+  -- "Unknown item name" for them. Names that are only fluid
+  -- prototypes route to fluid stats.
+  local function produced_count(name)
+    if prototypes.fluid[name] and not prototypes.item[name] then
+      return fstats.get_input_count(name)
+    end
+    return stats.get_input_count(name)
+  end
 
   if ev.tick % 1200 == 0 then
     local produced = {}
-    for _, item in ipairs(PLANNED_ITEMS) do produced[item] = stats.get_input_count(item) end
+    for _, item in ipairs(PLANNED_ITEMS) do produced[item] = produced_count(item) end
     table.insert(storage.samples, {tick = ev.tick, drained = storage.drained_total,
       produced = produced, fed = storage.fed_total})
   end
 
   if ev.tick >= WARMUP_TICKS and ev.tick % WINDOW_TICKS == 0 then
-    local cp = {tick = ev.tick, produced = stats.get_input_count(TARGET),
+    local cp = {tick = ev.tick, produced = produced_count(TARGET),
       delivered = storage.drained_total[TARGET] or 0}
     table.insert(storage.checkpoints, cp)
     local n = #storage.checkpoints
@@ -792,6 +845,11 @@ mod tests {
         // The self-audit must reference kit_errors so a failed
         // assignment invalidates the run rather than passing silently.
         assert!(lua.contains("tech-state parity assignment did not take"));
+        // Belt-stacking parity (option A): declared S drives the force
+        // bonus; the self-audit must be able to invalidate the run.
+        assert!(lua.contains(&format!("local STACKING = {}", m.stacking)));
+        assert!(lua.contains("force.belt_stack_size_bonus = STACKING - 1"));
+        assert!(lua.contains("belt-stacking parity assignment did not take"));
     }
 
     #[test]

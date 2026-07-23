@@ -62,6 +62,7 @@ backfill the status next time the doc is touched.
 | RFC-048 | 2026-07-22 | [`rfc-048-cell-composition.md`](rfc-048-cell-composition.md) | Phase 1 complete (PR #365) — GO for Phase-2 integration RFC |
 | RFC-049 | 2026-07-22 | [`rfc-049-inserter-capacity-research.md`](rfc-049-inserter-capacity-research.md) | Complete (in-game anchor open; input-side data gap #343) |
 | RFC-050 | 2026-07-22 | [`rfc-050-headless-sim-harness.md`](rfc-050-headless-sim-harness.md) | Complete (fluid feed CALIBRATED via #364 — first fluid factory PASS; fluid-pack sweep + #345 re-measure open) |
-| RFC-051 | 2026-07-22 | [`rfc-051-cell-composition-integration.md`](rfc-051-cell-composition-integration.md) | Draft (integration RFC commissioned by RFC-048 Phase 1 GO) |
+| RFC-051 | 2026-07-22 | [`rfc-051-cell-composition-integration.md`](rfc-051-cell-composition-integration.md) | Complete — default Candidate; sim registry; K-quantization (corridor-cap); EC-row re-measure waits on #381 |
+| RFC-052 | 2026-07-23 | [`rfc-052-oil-mega-cell.md`](rfc-052-oil-mega-cell.md) | Design (circulated for review) |
 
-Next number: **RFC-052**.
+Next number: **RFC-053**.

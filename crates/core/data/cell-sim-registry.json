@@ -1,0 +1,50 @@
+[
+  {
+    "target": "advanced-circuit",
+    "rate": 1.0,
+    "geometry_hash": "d7f2ea7165028274",
+    "declared_inserter_capacity": 0,
+    "declared_stacking": 1,
+    "harness_world": "nb=0 bulk=1, S=1 (post-#390 stacking parity)",
+    "verdict": "PASS",
+    "produced_per_s": 1.0,
+    "scenario": "spaghettio-sim chain-ac1-d0 (Factorio 2.0.76, 7/8 working +1 transient shortage, converged, -0.3%; declaration-package re-measure in the honest world)",
+    "date": "2026-07-23"
+  },
+  {
+    "target": "military-science-pack",
+    "rate": 5.0,
+    "geometry_hash": "1b49c80c03e04947",
+    "declared_inserter_capacity": 0,
+    "declared_stacking": 1,
+    "harness_world": "nb=0 bulk=1, S=1 (post-#390 stacking parity)",
+    "verdict": "PASS",
+    "produced_per_s": 4.83,
+    "scenario": "spaghettio-sim chain-mil5plates-d0 (Factorio 2.0.76, 46/46 working, converged, delivered 5.00/s exact, produced -3.3% within pass band; first measurement of westward bypasses + feed retrofits)",
+    "date": "2026-07-23"
+  },
+  {
+    "target": "plastic-bar",
+    "rate": 2.0,
+    "geometry_hash": "163148334829655d",
+    "declared_inserter_capacity": 0,
+    "declared_stacking": 1,
+    "harness_world": "nb=0 bulk=1, S=1 (post-#390 stacking parity)",
+    "verdict": "PASS",
+    "produced_per_s": 2.2,
+    "scenario": "spaghettio-sim mega-plastic2 (Factorio 2.0.76, 4/4 working, converged, delivered 2.20/s vs 2.00 planned; FIRST working refineries \u2014 #400 fixed: port-connected strip + reactive substation + mirror-as-rotation export)",
+    "date": "2026-07-23"
+  },
+  {
+    "target": "sulfur",
+    "rate": 2.0,
+    "geometry_hash": "21e4634c9a86cd4f",
+    "declared_inserter_capacity": 0,
+    "declared_stacking": 1,
+    "harness_world": "nb=0 bulk=1, S=1 (post-#390 stacking parity)",
+    "verdict": "PASS",
+    "produced_per_s": 2.0,
+    "scenario": "spaghettio-sim mega-sulfur2 (Factorio 2.0.76, 5/5 working, converged, produced 2.00/s EXACT; two-fluid mega-cell with adjacency-planned feeds)",
+    "date": "2026-07-23"
+  }
+]

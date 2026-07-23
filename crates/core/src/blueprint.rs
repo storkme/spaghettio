@@ -28,6 +28,14 @@ struct BlueprintFilter<'a> {
     name: &'a str,
 }
 
+/// Machines whose engine-side "mirror" is a front-back port flip that the
+/// GAME cannot express as `mirror` (game mirror = left-right). Their port
+/// layouts are x-symmetric, so the flip is tile-identical to a 180°
+/// rotation — the artifact boundary encodes it that way (#400).
+fn mirror_is_rotation(name: &str) -> bool {
+    matches!(name, "oil-refinery" | "foundry" | "cryogenic-plant")
+}
+
 #[derive(Serialize)]
 struct BlueprintEntity<'a> {
     entity_number: usize,
@@ -235,12 +243,35 @@ pub fn export(layout: &LayoutResult, label: &str) -> String {
                 // fluid feed in-game while validating clean.
                 direction: if ent.name.contains("inserter") || ent.name == "pipe-to-ground" {
                     (ent.direction as u8 + 8) % 16
+                } else if mirror_is_rotation(&ent.name) && ent.mirror {
+                    // MIRRORED FLUID MACHINES are the same artifact-boundary
+                    // class (#400, sim-measured 2026-07-23): the engine's
+                    // "mirror" models a FRONT-BACK (y) port flip, but the
+                    // game's `mirror` flag flips LEFT-RIGHT across the facing
+                    // axis — an exported (North, mirror) refinery still has
+                    // its inputs on the south in-game, so crude sat ON the
+                    // engine's intended port tiles and never entered (total
+                    // stall, first refinery measurement). For the engine's
+                    // own (North, mirror) placements the y-flip is
+                    // tile-identical to a 180° rotation — port POSITIONS
+                    // coincide because the layouts are x-symmetric — so
+                    // export encodes (direction+8, mirror:false) and the
+                    // parser reverses it. Two recorded caveats (#403
+                    // review): the wire form collides with genuinely
+                    // rotated-unmirrored placements (parser trade-off,
+                    // pinned there), and per-fluidbox IDENTITY (crude vs
+                    // water) swaps sides under rotation-vs-mirror — inert
+                    // for single-fluid basic processing, a Phase-C
+                    // precondition for advanced-oil (RFC-052 decision
+                    // log; the game itself warns about this exact
+                    // confusion in FFF #394).
+                    (ent.direction as u8 + 8) % 16
                 } else {
                     ent.direction as u8
                 },
                 recipe: ent.recipe.as_deref(),
                 io_type: ent.io_type.as_deref(),
-                mirror: ent.mirror,
+                mirror: ent.mirror && !mirror_is_rotation(&ent.name),
                 input_priority: ent.input_priority.as_deref(),
                 output_priority: ent.output_priority.as_deref(),
                 use_filters: filters.is_some().then_some(true),

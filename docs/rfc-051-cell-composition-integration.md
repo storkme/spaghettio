@@ -1,6 +1,6 @@
 # RFC-051: Cell composition integration (production path)
 
-Registry: [`rfcs.md`](rfcs.md). Status: **Active — Phase A (lift) delivered; Phase B (candidate) next.**
+Registry: [`rfcs.md`](rfcs.md). Status: **Delivered — all phases complete (PRs #377 + Phase B/C); gate passed, kill criteria evaluated, flag default remains Off pending the flip decision.**
 
 ## Summary
 
@@ -167,7 +167,274 @@ value statement (see kill 3).
   at plan; kill 3/4 evaluated with the scoreboard; close-out with
   coverage datum and the flag-default decision.
 
+## Phase B/C close-out: kill-criteria evaluation and the flag decision (2026-07-22)
+
+**The gate (kill 4): PASS, same-session.** AC-from-plates (fan-out 2:
+cable → EC and AC; plastic external) composes through the production
+auto-placer at **0 errors / 0 warnings** and runs in headless Factorio
+at plan: **produced 1.00/s (−0.33%), 8/8 machines working, converged.**
+EC@15-from-plates (the #336 refusal config) through the same path:
+0 errors / 6 adjudicated warnings, sim **produced 15.0/s exactly
+(+0.0%), 15/15 working.**
+
+**Kill 1 (parallel stack): PASS.** Cells engine-generated; the
+auto-placer is placement arithmetic + the crossing Router (deterministic
+local span-3 UG hops — rows hop under registered columns, columns under
+registered rows); validation and scoring fully shared.
+
+**Kill 2 (corridor machinery): PASS.** The gate config used straight
+runs, corners, UG hops, one 2→1 merge splitter, one 1→2 fan-out
+splitter, and the south bypass — no negotiation, no growth, no junction
+solving. The Router is a fixed local rule, not a search.
+
+**Kill 3 (no-value): PASS via clause (a).** The differential scoreboard
+(all numbers from one probe run, in the decision log): EC@15-from-plates
+— bus REFUSES, composed delivers (now a permanent gate,
+`cell_candidate_resolves_ec15_refusal`, asserting BOTH directions:
+flag Off preserves the refusal, flag On resolves it). Clause (b)
+honestly untested as worded: EC@5 shows fewer composed warnings (2 vs
+4) but the strict-category-subset comparison wasn't run. Where both
+paths succeed, the bus wins on area (composed 1.5–3.1×) — recorded
+without spin; the unbiased scorer will pick the bus there, which is
+exactly the designed behavior.
+
+**Kill 5 (tripwire): coverage GREW.** Phase-1 baseline 2 chains → the
+auto-placer now composes gear@15, EC@5, EC@15, AC@1, AC@2 (three
+distinct chains) plus the hand-composed plastic geometry; EC@30
+refuses honestly (3 out-runs exceeds the merge cap — a known, named
+limitation, not a silent gap).
+
+**The flag decision: `Off` stays the default, deliberately.** Under
+`Candidate` the unbiased scorer would only ever pick composition where
+the bus refuses or fails acceptance (composed density is strictly worse
+where both succeed), so a flip is strictly additive — but the flip
+waits for: (1) the browser eyeball step of the house verification
+protocol on composed layouts, (2) wasm/web flag plumbing, (3) the
+Tier-1 sim-verified registry. Flipping is its own logged decision, with
+the user.
+
+**Deferred, honestly:** the geometry-hash sim-verified registry (Tier 1)
+is designed but not implemented — today's catalog is small enough that
+this RFC's decision log IS the registry (four sim-verified configs, all
+listed with their measurements). The mechanism becomes load-bearing at
+flag-flip or when the catalog outgrows the log; implement it then.
+EC@30's 3-run merge and ratio quantization (K>1 cells) are named
+follow-ups.
+
 ## Decision log
+
+- *2026-07-23 — Declaration package (post-#390 honest world; #391
+  world-axis hardening landed with it). Method: `inserter_capacity`
+  declarations change zero geometry pre-#381, only the world the
+  parity harness builds — so each composed geometry was swept across
+  declared levels and registered at the lowest level measuring at
+  plan. Registry entries now carry CHECKED world fields
+  (declared_inserter_capacity, declared_stacking, harness_world
+  provenance); `verification_note` distinguishes full matches from
+  scoped ones ("verified only under declared capacity N"); the gate
+  iterates the registry and re-derives every entry. **Registered
+  (both at declared 0, honest world)**: chain-ac1 (PASS −0.3%) and —
+  first measurement ever — chain-mil5plates (PASS, delivered 5.00/s
+  exact, 46/46 working: the westward bypasses and feed UG retrofits
+  physically work). **The declaration hypothesis HALF-FALSIFIED, and
+  the falsified half is the finding**: ec15/ec30 deficits shrink
+  −8.0% → −5.3% as declared capacity rises, then go LEVEL-INVARIANT
+  (d2..d7 identical at −5.3% produced; d7 realizes nb=3, hand 4 ≈
+  4.8/s — the input-inserter bound is definitively cleared). The
+  residual is a SECOND bound: the #385 output-side belt-drop class
+  (cable rows' output stacks at measured-not-credited rates) and/or
+  corridor saturation at 45/45 — Lane B's #394 constants are the fix
+  vehicle, and this sweep hands #385 input-side-excluded
+  corroboration. ec30's intermittent PASSes (d2, d5) are
+  delivered-window artifacts (produced −3..−6% every run): verdicts
+  that flicker with the measurement window do not register —
+  measured-at-plan means PRODUCED at plan. mil5-ore FAILs flat
+  (−28.7%) at every level: firearm-magazine rows need ~5 iron/s per
+  machine and the inserter COUNT is the bound — RFC-049 Phase 3
+  ladder territory (#381), not declarable-around. No EC or mil5-ore
+  entries; re-measure when #394/#381 land (every hash trips then by
+  design).*
+
+- *2026-07-23 — Validation-tiered selection (#392; SHARED SCORING
+  MACHINERY — logged per the kill-3(b) rule). `accepted` never ran the
+  full validator, so an error-laden native could outscore a clean
+  sibling on density and reach callers as a broken Ok. The fix is a
+  selection TIER, deliberately not accepted-gating: among accepted
+  candidates, the best-scoring one whose layout validates with zero
+  errors wins; if none is clean, today's pick stands (callers still
+  see the errors — no new refusals), and candidate GATING is untouched
+  (no extra k1/size-split runs, no solve-time change). The
+  single-layout common case skips validation entirely. mil5-from-
+  plates flips to the composed 0/0 layout (gate:
+  `cell_candidate_wins_mil5_plates_over_broken_native`); goldens 9
+  ran / 0 drift — no stress fixture has a clean sibling, so bus-land
+  outcomes are unchanged. Not taken: gating `accepted` itself on
+  validation (would re-trigger the heavy fallback candidates on every
+  errored native and shift stress outcomes — a bigger, separate
+  decision if ever wanted).*
+
+- *2026-07-23 — mil5-ore COMPOSES (the Router overlap classes fixed;
+  gate flipped to positive). Diagnosis: all 26 overlapping tiles were
+  BOUNDARY BLINDNESS — the two-registry Router hops strict interiors
+  of crossing runs, while corners, vcol terminals, and hop mouths sit
+  exactly on boundary tiles of other runs. Three structural causes,
+  each fixed collision-triggered so every clean fixture stays
+  bit-identical (the registered chain-ac1 hash is the enforced proof;
+  we cannot re-measure until #390 lands): (1) sibling fan-out bypass
+  entries share the branch row → occupancy-checked stamping
+  (`is_row_stampable`, which exempts hoppable interior crossings —
+  the naive version broke ac1 by counting feed columns the legacy
+  path legitimately hops) with an IN-GAP EARLY DESCENT fallback;
+  (2) 1-pitch bypass rows leave no legal hop (mouths land at R±1 =
+  other rows, a descent's terminal at its own row−1) → pitch 3
+  (pitch 2 still fails: adjacent rows cluster into one hop whose
+  mouths jump to the next row); n_bypass ≤ 1 keeps the old geometry
+  exactly; (3) 1-pitch strip lanes put corner/hrow-start tiles on
+  neighbor columns → pitch 2 in multi-edge strips only. Behind the
+  overlaps hid the REAL defect, pre-dating quantization: the bypass
+  machinery silently assumed eastward flow, but the
+  reversed-dependency placement puts consumers WEST of producers for
+  items consumed at several depths (mil5's iron sits east of grenade
+  and steel) — the westward `hrow(x0>x1)` stamped NOTHING, leaving
+  dead-end corners. Fixed with a westward bypass variant (`hrow_west`
+  + west/south corners, in-gap descent, north-corner entry into the
+  consumer strip). Results: mil5-ore 720×34, 0 errors / 1 warning,
+  composed candidate wins over the bus refusal
+  (`cell_candidate_composes_mil5_ore`); mil5-plates' composed
+  candidate went 0/0 (225×22) as a side effect — but the SEARCH still
+  returns the broken native layout there (accepted never runs full
+  validation; native outscores on density) — filed as #392, shared
+  scoring machinery, its own decision. Ascent-terminal-on-feed-row
+  gets a local feed UG retrofit (`retrofit_feed_hop`, fires on
+  collision only; refuses loudly on unrecognized shapes). Registry
+  world-axis gap filed as #391 (fold into the post-#390 declaration
+  package).*
+
+- *2026-07-22 — K-quantization + #383 ROOT CAUSE (the premise
+  falsified mid-implementation). Ratio quantization landed in
+  `compose_chain`: K identical side-by-side copies at 1/K rate
+  (`required_copies`), copies generated once and stamped K times,
+  producer→consumer matching restricted within a copy, per-copy segment
+  suffixes, bypass rows reused across copies (disjoint x), K_MAX=12.
+  K=1 is bit-identical to the pre-quantization placer — proven by the
+  registered chain-ac1 hash surviving unchanged. **The plan's premise
+  died on first sim contact**: quantum=15/s ("the measured-exact
+  Phase-1 rate") produced ec15 K=3 at −23.7% — WORSE than K=1's −8%.
+  Belt-dump forensics + tile diff against the hand-composed pair showed
+  identical cell geometry, iron arriving on both lanes, and the east
+  machine's single long-handed iron inserter delivering ~1.2/s against
+  a 2.5/s need — exactly the validator's inserter-item-throughput
+  warning. The hand-composed K=3's "15.0/s EXACT" and the K=1 fixture's
+  earlier PASS both predate #378 (tech-state parity: the sim now forces
+  bonuses to the layout's declared inserter_capacity=0); the PASS-era
+  report lacks the realized-bonus fields entirely. So: the warnings
+  were RIGHT under declared tech, the "sim-adjudicated conservatism"
+  verdict was a researched-bonus artifact, the package-2 log's
+  splitter-saturation-loss speculation is retired (fast and express
+  measured identical deltas), and small rows CONCENTRATE the
+  per-machine inserter deficit rather than fixing it. Quantum reshaped
+  to 45/s = express capacity — a physical cap, not a quality knob:
+  quantization now activates only where the placer previously refused,
+  so every K=1 geometry (ec15, ec15-ore, ac1, ac2, mil5-plates) is
+  bit-identical to the flip package. Verification: ec30 K=2 (each copy
+  ≡ the ec15 K=1 shape) predicted ≈−8% and measured **−8.0% exactly**
+  (WARN, 28/30 working) — the deficit is per-row, K-invariant, and
+  belongs to RFC-049 Phase 3 (#381, in flight), after which cells
+  regenerate with honest inserter counts, every registry hash trips,
+  and ec15/ec30 get re-measured for registration. Scoreboard: ec30
+  REFUSED→140×21 0 err/12 warn; ec60 REFUSED→280×21 0/24 (bus
+  validation-fails there); mil5-ore goes K=2 (stone feed 50/s exceeds
+  the per-copy feed cap) and its Router-class overlaps persist (8, was
+  5 at K=1) — still the named next target. No registry additions: the
+  registry carries measured-at-plan only. **Belt-tier guard**: the
+  eligibility lift exposed a latent flip-era hole — composed corridors
+  are express-only, and an eligible chain whose bus path fails under a
+  sub-express `max_belt_tier` would have won with express corridors,
+  violating the tier-is-a-user-constraint rule. The candidate now
+  refuses under any sub-express cap (gate:
+  `cell_candidate_respects_belt_tier_cap` proves flag-inertness there);
+  tier-parameterized corridors (quantum = allowed tier's capacity,
+  tier-matched belt entities) are the followup if tier-capped
+  composition is ever wanted. Stress goldens under the lifted
+  eligibility: 9 ran, 0 drift (bus wins all blessed fixtures on
+  density; the canonical `stress_` check-mode run). **Adversarial
+  review folds** (bot silent on both PRs — known-broken class; local
+  reviews ran instead): #384's review (no blockers) → registry hash
+  extended to cover machine recipe + module contents (chain-ac1 entry
+  re-encoded, geometry unchanged — proven by recomputing the OLD
+  algorithm on the new geometry). #387's review (no blockers; all five
+  probed claims verified by measurement, incl. dual-worktree
+  bit-identity diffs on ec5/gear15) → the candidate now SELF-VALIDATES
+  and refuses on Severity::Error: `score_layout.accepted` never runs
+  the full validator, so an error-laden composed "win" on a bus
+  refusal previously reached callers as a silently broken Ok
+  (mil5-ore, pre-existing on main, blast radius widened by the
+  eligibility lift). Gate `cell_candidate_refuses_error_laden_
+  composition` pins mil5-ore as Err-until-fixed; the reviewer's
+  in-copy bypass invariant is now a debug_assert. Followup candidates
+  noted, not taken here: structural additivity enforcement (ties
+  currently resolve toward cells), tier-parameterized corridors.*
+
+- *2026-07-22 — Coverage expansion (package 2, follows the flip). Caps
+  lifted: n-run MERGE CASCADES (2→1 splitter chains, below-approach
+  corner per stage) and FAN-OUT TREES (1→2 splitter chains) replace the
+  fixed 2-run/2-consumer limits; Router hops now cluster crossings
+  closer than 3 tiles (independent per-column hops shared tiles);
+  vertical lanes allocate per bypass edge with strips sized by edge
+  in/out-degree (sizing by a slot's own fan-out under-counted ascents).
+  Corridors upgraded to EXPRESS with an honest eligibility cap: any
+  produced item over 45/s refuses ("run matching unimplemented") — this
+  replaced a silent physical overload (ec30's 90/s cable on a 30/s
+  belt) with a named refusal, and it also retro-tightened ec15's
+  corridor (45/s on red was over per-lane capacity; express is correct
+  and the geometry was re-sim-verified after the change). **New
+  scoreboard rows: EC@15-FROM-ORE — furnace cells work — composes at
+  0 errors / 14 warnings where the bus refuses** (270×22; the first
+  composed chain with smelting). mil5-ore (9 specs, the scaling-wall
+  fixture) is 5 overlap errors from clean — the residuals are the same
+  local crossing class, named as the next target. mil5-plates carries
+  bus-side validation errors too (both paths fail it today). ec30/ec60
+  refuse honestly at the corridor cap; K>1 ratio quantization and full
+  run matching are the follow-ups that would lift it. **SIM-CAUGHT
+  SATURATION DEFECT (validator-blind class):** the express upgrade made
+  ec15's merged corridor run at exactly 45/45 = 100% capacity — 0
+  validator errors, and the sim measured produced −8% (real belts lose
+  a few percent through splitters at saturation; the earlier
+  fast-corridor PASS at 15.0 exact is retro-suspect for the same
+  reason — its window likely rode buffer drain). A 2×2 balancer
+  run-matching fix was designed and implemented, then REMOVED as
+  falsified-for-this-fixture: the K=1 EC cell is a single 6-machine
+  dual-input row with ONE cable port, so the 2×2 case never triggers
+  and the −8% persists through the mandatory merge (identical delta on
+  both corridor geometries). The deficit sits between a 2-run 45/s
+  producer and a single saturated port — root cause open (#383 carries
+  both sim reports and the candidate hypotheses: saturation loss vs
+  #343-class input-inserter limits). Registry consequence: chain-ac1
+  re-registered (PASS at −0.33%); chain-ec15's entry REMOVED — the
+  refusal-resolution gate (validator-level) stands, but measured-at-
+  plan is only claimed for geometries the sim passed; the K=3 pair
+  topology (Phase 1) remains the measured-exact form and K>1
+  quantization is the likely fix.*
+
+- *2026-07-22 — Phase B/C delivered (same session as Phase A). The
+  chain auto-placer (`cells/chain.rs`): eligibility (solid
+  tree-with-fan-out, fan-out cap 2, one producer per item),
+  K=1 cells at spec rate × count, dependency-ordered west→east
+  placement, the two-registry crossing Router, early-jog corridors
+  (jog to the target port row in the producer's gap — where all rows
+  provably end before the splitter — so same-y row collisions are
+  structurally impossible), one feed column PER PORT (multi-row cells
+  taught this: a single-port find left second-row machines unfed and
+  belt-flow-reachability caught it), fan-out splitter + south bypass.
+  `CellComposedCandidate` competes unbiased in the decomposition
+  search, catch_unwind fail-soft, flag-gated. Differential scoreboard
+  (single probe run): gear15 bus 184 tiles/0/0 vs composed 462/0/0;
+  ec5 bus 325/0/4 vs composed 1008/0/2; ec15 bus REFUSED vs composed
+  1428/0/6; ec30 bus 1624/0/18 vs composed REFUSED (merge cap); ac1
+  bus 754/0/0 vs composed 1349/0/0; ac2 bus 1189/0/0 vs composed
+  1767/0/0. Sims: chain-ec15 15.0/s exactly, 15/15 working; chain-ac1
+  1.00/s (−0.33%), 8/8 working — both PASS, converged. Suite
+  889/0/48, goldens 8/8 (flag-Off inertness), clippy 0.*
 
 - *2026-07-22 — Phase A delivered (same session as the RFC's merge).
   The harness lifted verbatim into `src/bus/cells/{extract,compose}.rs`

@@ -6,8 +6,11 @@
 //! flag until Phase B wires `CellComposedCandidate` into the
 //! decomposition search.
 
+pub mod chain;
 pub mod compose;
 pub mod extract;
+pub mod mega;
+pub mod registry;
 
 /// Cell-composition mode (RFC-051). `Off` = production pipeline
 /// untouched (default). `Candidate` = eligible solves also produce a

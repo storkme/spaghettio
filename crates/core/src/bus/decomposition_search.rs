@@ -122,6 +122,74 @@ impl DecompositionCandidate for MergeTapCandidate {
     }
 }
 
+/// RFC-051 Phase B: the cell-composition candidate. Runs only under
+/// `LayoutOptions.cell_composition == Candidate` (default Off) on
+/// chain-eligible solves (solid tree-with-fan-out; `cells::chain::
+/// chain_eligible`). Deliberately UNBIASED: it competes on the same
+/// score/acceptance machinery as every other candidate — if it only
+/// wins where the bus engine refuses, that is the honest value
+/// statement (RFC-051 kill 3).
+pub struct CellComposedCandidate;
+
+impl DecompositionCandidate for CellComposedCandidate {
+    fn name(&self) -> &str {
+        "cell-composed"
+    }
+
+    fn produce(
+        &self,
+        solver_result: &SolverResult,
+        opts: &LayoutOptions,
+    ) -> Result<LayoutResult, String> {
+        if opts.cell_composition != crate::bus::cells::CellComposition::Candidate {
+            return Err("cell composition is Off".to_string());
+        }
+        // Belt tier is a USER constraint, never a strategy knob: the
+        // composed corridors are express-only (quantization caps them
+        // at express capacity), so a lower tier cap refuses instead of
+        // silently exceeding it. Tier-parameterized corridors (quantum
+        // = allowed tier's capacity) are a followup.
+        if let Some(t) = opts.max_belt_tier.as_deref() {
+            if t != "express-transport-belt" {
+                return Err(format!(
+                    "cell composition uses express corridors, over the max belt tier {t}"
+                ));
+            }
+        }
+        let mut l = crate::bus::cells::chain::compose_chain(solver_result)?;
+        // Self-validate before competing: `score_layout.accepted` never
+        // runs the full validator, so an error-laden composition that
+        // "wins" on a bus refusal would reach real callers as a
+        // silently broken Ok (#387 review; mil5-ore's Router-overlap
+        // class). Composition's contract is pre-verified cells +
+        // template corridors — errors refuse, surfacing the bus
+        // refusal instead. Warnings pass (the adjudicated categories).
+        let issues =
+            crate::validate::validate(&l, Some(solver_result), crate::validate::LayoutStyle::Bus)
+                .map_err(|e| {
+                    format!(
+                        "cell composition failed validation: {}",
+                        e.to_string().lines().next().unwrap_or("")
+                    )
+                })?;
+        let n_err = issues
+            .iter()
+            .filter(|i| i.severity == crate::validate::Severity::Error)
+            .count();
+        if n_err > 0 {
+            return Err(format!(
+                "cell composition carries {n_err} validation errors (refusing a broken layout)"
+            ));
+        }
+        // Tier-1 verification annotation (RFC-051 registry): sim-verified
+        // geometries carry their measurement; unverified ones say so.
+        if let Some(t) = solver_result.external_outputs.first() {
+            l.warnings.push(crate::bus::cells::registry::verification_note(&t.item, t.rate, &l));
+        }
+        Ok(l)
+    }
+}
+
 /// Phase 1 candidate: split each multi-producer module into `k` sibling
 /// sub-modules, each with halved rate and independent bus presence.
 /// Targets coprime balancer shapes like `(4, 9)` on PU@3/s ore-red
@@ -719,6 +787,23 @@ pub fn select_best_decomposition(
         NativeCandidate.produce(s, &opts)
     });
 
+    // Cell-composition candidate (RFC-051 Phase B): flag-gated,
+    // eligibility-gated, and catch_unwind — the composer's internal
+    // asserts must degrade to the bus candidates, never abort the solve.
+    let try_cells = opts.cell_composition == crate::bus::cells::CellComposition::Candidate
+        && opts
+            .max_belt_tier
+            .as_deref()
+            .is_none_or(|t| t == "express-transport-belt")
+        && crate::bus::cells::chain::chain_eligible(solver_result).is_ok();
+    let cells_run = if try_cells {
+        run_candidate_catch_unwind("cell-composed", solver_result, || {
+            CellComposedCandidate.produce(solver_result, &opts)
+        })
+    } else {
+        CandidateRun::skipped("cell-composed")
+    };
+
     // K=1 shape-fix follow-up. When Native's layout has missing-balancer
     // warnings on K=1 items (the (4, 9) coprime trap on PU@3/s ore-red
     // copper-plate), enroll those items in the partition plan with a
@@ -816,6 +901,47 @@ pub fn select_best_decomposition(
         }
     });
 
+    // Validation-tiered selection (#392), part 1: the per-candidate
+    // clean flags. `validate()` emits a `ValidationCompleted` trace
+    // event per call, so this MUST run before the sink reattach below,
+    // with peek/truncate discarding the emissions — otherwise every
+    // examined candidate's validation (including the losers') leaks
+    // into the winner's replayed stream and the web timing log /
+    // snapshot debugger report the wrong layout's error counts (#396
+    // review, blocking finding; same pattern as merge_tap_choice's
+    // classify_errors above). Lazy: the single-layout common case and
+    // merge-tap-decided solves skip validation entirely.
+    let tier_outcomes = [
+        native_run.outcome.as_ref(),
+        k1_run.outcome.as_ref(),
+        split_run.outcome.as_ref(),
+        merge_tap_run.outcome.as_ref(),
+        cells_run.outcome.as_ref(),
+    ];
+    let n_layouts = tier_outcomes.iter().filter(|o| o.is_some()).count();
+    let clean_flags: [Option<bool>; 5] = if merge_tap_choice.is_none() && n_layouts > 1 {
+        let start = crate::trace::peek_events_len();
+        let flags = tier_outcomes.map(|o| {
+            o.map(|(l, score)| {
+                score.accepted
+                    && match crate::validate::validate(
+                        l,
+                        Some(solver_result),
+                        crate::validate::LayoutStyle::Bus,
+                    ) {
+                        Ok(issues) => issues
+                            .iter()
+                            .all(|i| i.severity != crate::validate::Severity::Error),
+                        Err(_) => false,
+                    }
+            })
+        });
+        crate::trace::truncate_events(start);
+        flags
+    } else {
+        [None; 5]
+    };
+
     // Re-attach the sink before replaying the winner's events. Score
     // events for *every* candidate that actually ran are emitted (so
     // telemetry/snapshot debugger see what was tried), then the winner's
@@ -832,6 +958,7 @@ pub fn select_best_decomposition(
         &k1_run.events,
         &split_run.events,
         &merge_tap_run.events,
+        &cells_run.events,
     ] {
         for ev in events {
             if matches!(ev, crate::trace::TraceEvent::DecompositionCandidateScored { .. }) {
@@ -845,20 +972,28 @@ pub fn select_best_decomposition(
     // layout — same behaviour as today's pipeline when shape-fix can't
     // resolve a (n, m) trap).
     // Index order MUST match NATIVE_IDX (0) / MERGE_TAP_IDX (3) above.
-    let (native_err, k1_err, split_err, merge_tap_err) = (
+    let (native_err, k1_err, split_err, merge_tap_err, cells_err) = (
         native_run.error.clone(),
         k1_run.error.clone(),
         split_run.error.clone(),
         merge_tap_run.error.clone(),
+        cells_run.error.clone(),
     );
-    let candidates: [(Option<(LayoutResult, CandidateScore)>, Vec<crate::trace::TraceEvent>, &str); 4] = [
+    let candidates: [(Option<(LayoutResult, CandidateScore)>, Vec<crate::trace::TraceEvent>, &str); 5] = [
         (native_run.outcome, native_run.events, "native"),
         (k1_run.outcome, k1_run.events, "k1-shape-fix"),
         (split_run.outcome, split_run.events, "size-split-2"),
         (merge_tap_run.outcome, merge_tap_run.events, "merge-tap"),
+        (cells_run.outcome, cells_run.events, "cell-composed"),
     ];
 
-    // Find best accepted candidate (highest score).
+    // Find best accepted candidate (highest score). The candidates
+    // array is a PREFERENCE ranking (native first, cell-composed
+    // last), so exact score ties resolve to the EARLIEST index — a
+    // bare `max_by` keeps the last maximum, which would hand a tie to
+    // cell-composed and silently break the additive contract (#384
+    // review finding 4: additivity rested on an empirical score
+    // margin, with the tie-break pointing the wrong way).
     let best_accepted_idx = candidates
         .iter()
         .enumerate()
@@ -871,15 +1006,46 @@ pub fn select_best_decomposition(
                 }
             })
         })
-        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+        .max_by(|(ia, a), (ib, b)| {
+            a.partial_cmp(b)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(ib.cmp(ia))
+        })
+        .map(|(i, _)| i);
+
+    // Validation-tiered selection (#392), part 2: `accepted` never
+    // runs the full validator, so an error-laden native could outscore
+    // a CLEAN sibling on density and reach callers as a silently
+    // broken Ok (mil5-from-plates: native hard-fails validation while
+    // the composed candidate is 0/0). Prefer the best-scoring accepted
+    // candidate whose layout validated with ZERO errors (clean_flags,
+    // computed pre-reattach above); if none is clean, fall through to
+    // today's pick (still returns the error-laden best rather than
+    // refusing — callers see the errors, behavior unchanged).
+    let best_error_free_idx = candidates
+        .iter()
+        .enumerate()
+        .filter_map(|(i, (outcome, _, _))| {
+            if clean_flags[i] != Some(true) {
+                return None;
+            }
+            outcome.as_ref().map(|(_, score)| (i, score.score))
+        })
+        .max_by(|(ia, a), (ib, b)| {
+            a.partial_cmp(b)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(ib.cmp(ia))
+        })
         .map(|(i, _)| i);
 
     // The scoped Pooled merge-tap decision (error-count metric, ties → Native)
-    // overrides the generic accepted-by-score pick when it ran; otherwise fall
-    // back to best-accepted, then to the first candidate that produced a
-    // layout (Native preferred — earliest in the array). Same degraded
-    // behaviour as today's pipeline when shape-fix can't resolve a (n, m) trap.
+    // overrides the generic accepted-by-score pick when it ran; then the
+    // error-free tier; then best-accepted; then the first candidate that
+    // produced a layout (Native preferred — earliest in the array). Same
+    // degraded behaviour as today's pipeline when shape-fix can't resolve
+    // a (n, m) trap.
     let winner_idx = merge_tap_choice
+        .or(best_error_free_idx)
         .or(best_accepted_idx)
         .or_else(|| candidates.iter().position(|(o, _, _)| o.is_some()));
 
@@ -887,7 +1053,7 @@ pub fn select_best_decomposition(
         let details: Vec<String> = candidates
             .iter()
             .map(|(_, _, name)| name.to_string())
-            .zip([&native_err, &k1_err, &split_err, &merge_tap_err])
+            .zip([&native_err, &k1_err, &split_err, &merge_tap_err, &cells_err])
             .map(|(name, err)| {
                 format!("{name}: {}", err.as_deref().unwrap_or("did not run"))
             })
