@@ -35,12 +35,14 @@ pub struct RegistryEntry {
     pub geometry_hash: String,
     /// The `inserter_capacity` the measured layout DECLARED — the sim
     /// forces research bonuses to this level (#378), so the verdict is
-    /// scoped to it.
-    #[serde(default)]
+    /// scoped to it. REQUIRED, no serde default: a default would equal
+    /// production's declared values exactly, so an entry omitting the
+    /// field would fail OPEN (silent full-match) instead of failing
+    /// loudly at parse (#397 review note).
     pub declared_inserter_capacity: u8,
     /// The `stacking` the measured layout declared (#390: the sim
-    /// world matches declared stacking).
-    #[serde(default = "default_stacking")]
+    /// world matches declared stacking). REQUIRED — same fail-closed
+    /// reasoning as above.
     pub declared_stacking: u8,
     /// The harness's realized-world line from the measurement report
     /// (provenance prose, e.g. "nb=0 bulk=1, S=1" — not matched on;
@@ -51,10 +53,6 @@ pub struct RegistryEntry {
     pub produced_per_s: f64,
     pub scenario: String,
     pub date: String,
-}
-
-fn default_stacking() -> u8 {
-    1
 }
 
 fn registry() -> &'static [RegistryEntry] {
