@@ -7,7 +7,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::common::{
     dir_to_vec, fluid_only_recipes, inserter_reach, is_inserter, is_machine_entity,
-    machine_dims, machine_tiles, recycler_eject_tile, utilization_for,
+    is_splitter, is_surface_belt, is_ug_belt, machine_dims, machine_tiles, recycler_eject_tile,
+    splitter_to_surface_tier, ug_to_surface_tier, utilization_for,
 };
 #[cfg(test)]
 use crate::common::inserter_throughput;
@@ -25,15 +26,56 @@ use crate::models::{LayoutResult, PlacedEntity, SolverResult};
 /// swings × researched-belt-hand decomposition whenever EITHER axis is
 /// active (S>1 or L>0 — `stack_inserter_belt_hand_at(0, S)` reduces to
 /// the RFC-046 helper, so the S-only path is bit-identical); non-bulk
-/// belt-drops at L>0 scale linearly by hand (machine pickup is
-/// swing-limited; `inserter_hand(non-bulk, 0) == 1` makes L0 the flat
-/// constant). Bulk inserters stay flat at every level — the engine
-/// never places them and parsed blueprints get the conservative floor.
-fn belt_drop_throughput(ins: &PlacedEntity, stacking: u8, level: u8) -> f64 {
+/// belt-drops at L>0 scale by the sim-corrected multiplier table. Bulk
+/// inserters stay flat at every level — the engine never places them and
+/// parsed blueprints get the conservative floor. #385 additionally caps
+/// every credit at `LANE_UTILIZATION` of the TARGET belt's stacked lane
+/// rate (a belt-dropping inserter loads one physical lane and cannot
+/// out-run its slot cadence, sim-measured 2026-07-23) — hence
+/// `target_belt`, the drop tile's belt entity name.
+fn belt_drop_throughput(ins: &PlacedEntity, stacking: u8, level: u8, target_belt: &str) -> f64 {
     // Single source of truth shared with the sizing ladder — see
     // `common::belt_drop_rate` (constants-identity discipline: the ladder
     // and this check must never disagree on a belt-dropping inserter's rate).
-    crate::common::belt_drop_rate(&ins.name, ins.quality.unwrap_or_default(), stacking, level)
+    crate::common::belt_drop_rate(
+        &ins.name,
+        ins.quality.unwrap_or_default(),
+        stacking,
+        level,
+        target_belt,
+    )
+}
+
+/// Map every belt-ish tile (surface belt, underground belt, splitter) to
+/// its surface belt-tier entity name, for #385's lane-cap lookup: the
+/// drop tile's belt entity name isn't always a plain surface belt (an
+/// inserter can drop onto a splitter or a UG entrance), so undergrounds
+/// and splitters are normalized to their surface tier via
+/// `ug_to_surface_tier`/`splitter_to_surface_tier` — the same mapping
+/// `belt_entity_for_rate`'s callers use elsewhere. Positions with no
+/// belt-ish entity are simply absent; callers fall back to the most
+/// conservative tier ("transport-belt") when a lookup misses.
+fn belt_tier_by_tile(layout: &LayoutResult) -> FxHashMap<(i32, i32), &str> {
+    let mut by_tile = FxHashMap::default();
+    for e in &layout.entities {
+        let tier: &str = if is_ug_belt(&e.name) {
+            ug_to_surface_tier(&e.name)
+        } else if is_splitter(&e.name) {
+            splitter_to_surface_tier(&e.name)
+        } else if is_surface_belt(&e.name) {
+            e.name.as_str()
+        } else {
+            continue;
+        };
+        by_tile.insert((e.x, e.y), tier);
+        // Splitters span two tiles; register the second one too (review
+        // finding on #394 — every other tile-map builder does this via
+        // the same helper).
+        if is_splitter(&e.name) {
+            by_tile.insert(crate::common::splitter_second_tile(e), tier);
+        }
+    }
+    by_tile
 }
 
 use super::{Severity, ValidationIssue};
@@ -236,6 +278,7 @@ pub fn check_inserter_throughput(
 
     let machine_tiles_set = build_machine_tile_set(layout);
     let machine_by_tile = machine_origin_by_tile(layout);
+    let belt_tiles = belt_tier_by_tile(layout);
 
     // Sum inserter throughput on each machine's input side (inserters that
     // drop INTO the machine) and output side (inserters that pick FROM it).
@@ -271,8 +314,12 @@ pub fn check_inserter_throughput(
             // machine-internal inserter — ignore those (they don't extract
             // to a belt). Only count picks that actually leave the machine.
             if !machine_tiles_set.contains(&drop_pos) {
-                // Extraction drops onto a belt → belt-drop rating (RFC-046).
-                let rate = belt_drop_throughput(ins, layout.stacking, layout.inserter_capacity);
+                // Extraction drops onto a belt → belt-drop rating (RFC-046),
+                // lane-capped by the drop tile's own belt tier (#385) —
+                // fall back to the most conservative tier when no belt is
+                // found there (e.g. hand-built test layouts).
+                let target_belt = belt_tiles.get(&drop_pos).copied().unwrap_or("transport-belt");
+                let rate = belt_drop_throughput(ins, layout.stacking, layout.inserter_capacity, target_belt);
                 *output_avail.entry(mpos).or_insert(0.0) += rate;
                 *output_count.entry(mpos).or_insert(0) += 1;
             }
@@ -418,6 +465,7 @@ pub fn check_inserter_item_throughput(
 
     let machine_tiles_set = build_machine_tile_set(layout);
     let machine_by_tile = machine_origin_by_tile(layout);
+    let belt_tiles = belt_tier_by_tile(layout);
 
     // Per (machine origin, item) avail, split by side — unlike
     // `check_inserter_throughput`'s single f64 accumulator per side, this
@@ -451,8 +499,12 @@ pub fn check_inserter_item_throughput(
         }
         if let Some(&mpos) = machine_by_tile.get(&pickup_pos) {
             if !machine_tiles_set.contains(&drop_pos) {
-                // Extraction drops onto a belt → belt-drop rating (RFC-046).
-                let rate = belt_drop_throughput(ins, layout.stacking, layout.inserter_capacity);
+                // Extraction drops onto a belt → belt-drop rating (RFC-046),
+                // lane-capped by the drop tile's own belt tier (#385) —
+                // fall back to the most conservative tier when no belt is
+                // found there.
+                let target_belt = belt_tiles.get(&drop_pos).copied().unwrap_or("transport-belt");
+                let rate = belt_drop_throughput(ins, layout.stacking, layout.inserter_capacity, target_belt);
                 *output_avail.entry((mpos, item)).or_insert(0.0) += rate;
             }
         }
@@ -570,23 +622,30 @@ mod tests {
     #[test]
     fn belt_drop_throughput_flat_at_s1_decomposed_above() {
         use crate::common::QualityTier;
+        // Red (fast-transport-belt) target: its S≤4 lane cap (≥12.75/s at
+        // S=1) is high enough that most of this test's swing values pass
+        // through unclamped, isolating the swing-term math (#385's lane
+        // cap is the separate, dedicated `belt_drop_throughput_lane_cap_*`
+        // coverage below). Two assertions below CANNOT be preserved on any
+        // belt at S=1 — see their comments.
+        const RED: &str = "fast-transport-belt";
         let stack = PlacedEntity { name: "stack-inserter".into(), ..Default::default() };
         let fast = PlacedEntity { name: "fast-inserter".into(), ..Default::default() };
         // S ≤ 1 is the flat I8 constant, bit-identical to pre-RFC (kill 1)
         // — including 0, the derived-Default sentinel on hand-built layouts.
         assert_eq!(
-            belt_drop_throughput(&stack, 0, 0),
+            belt_drop_throughput(&stack, 0, 0, RED),
             inserter_throughput("stack-inserter", QualityTier::Normal)
         );
-        assert_eq!(belt_drop_throughput(&stack, 1, 0), 12.0);
+        assert_eq!(belt_drop_throughput(&stack, 1, 0, RED), 12.0);
         // S=2,3: swings × hand 6 = 14.4/s; S=4: hand rounds down to 4 →
         // the real 9.6/s dip (BS3).
-        assert!((belt_drop_throughput(&stack, 2, 0) - 14.4).abs() < 1e-9);
-        assert!((belt_drop_throughput(&stack, 3, 0) - 14.4).abs() < 1e-9);
-        assert!((belt_drop_throughput(&stack, 4, 0) - 9.6).abs() < 1e-9);
+        assert!((belt_drop_throughput(&stack, 2, 0, RED) - 14.4).abs() < 1e-9);
+        assert!((belt_drop_throughput(&stack, 3, 0, RED) - 14.4).abs() < 1e-9);
+        assert!((belt_drop_throughput(&stack, 4, 0, RED) - 9.6).abs() < 1e-9);
         // Non-stack inserters never stack (BS5) — flat at any S.
         assert_eq!(
-            belt_drop_throughput(&fast, 4, 0),
+            belt_drop_throughput(&fast, 4, 0, RED),
             inserter_throughput("fast-inserter", QualityTier::Normal)
         );
         // Quality scales swings only (BS7): legendary ×2.5 at S=4 → 24/s.
@@ -595,19 +654,44 @@ mod tests {
             quality: Some(QualityTier::Legendary),
             ..Default::default()
         };
-        assert!((belt_drop_throughput(&legendary, 4, 0) - 24.0).abs() < 1e-9);
+        assert!((belt_drop_throughput(&legendary, 4, 0, RED) - 24.0).abs() < 1e-9);
 
-        // RFC-049: research dimension. L7/S=4 heals the dip: 2.4×16 = 38.4.
-        assert!((belt_drop_throughput(&stack, 4, 7) - 38.4).abs() < 1e-9);
+        // RFC-049: research dimension. L7/S=4 heals the dip: 2.4×16 = 38.4
+        // (red's S=4 cap is 51 — unaffected by #385).
+        assert!((belt_drop_throughput(&stack, 4, 7, RED) - 38.4).abs() < 1e-9);
         // L3/S=4 dips (hand 9 → 8): 2.4×8 = 19.2.
-        assert!((belt_drop_throughput(&stack, 4, 3) - 19.2).abs() < 1e-9);
-        // L>0 without stacking still decomposes: L7/S=1 → 2.4×16.
-        assert!((belt_drop_throughput(&stack, 1, 7) - 38.4).abs() < 1e-9);
-        // Non-bulk belt-drop scales linearly by hand: fast L7 = 2.31×4.
-        assert!((belt_drop_throughput(&fast, 1, 7) - 2.31 * 4.0).abs() < 1e-9);
-        // Bulk stays flat at every level (conservative floor).
+        assert!((belt_drop_throughput(&stack, 4, 3, RED) - 19.2).abs() < 1e-9);
+        // #385: L>0 without stacking still decomposes the swing term to
+        // 2.4×16=38.4, but at S=1 EVERY belt's lane cap sits far below that
+        // (red's is 12.75/s; even express's is only 19.125/s) — no S=1
+        // belt can physically carry 38.4/s onto one lane, so the lane cap
+        // now binds here regardless of target tier. Pre-#385 this asserted
+        // the uncapped 38.4; the cap is exactly the fix.
+        assert!((belt_drop_throughput(&stack, 1, 7, RED) - 12.75).abs() < 1e-9);
+        // #385: non-bulk belt-drop now uses the sim-corrected multiplier
+        // (2.67, not the raw 4.0 hand ratio) — fast L7 = 2.31×2.67 ≈ 6.17,
+        // still under red's 12.75 cap so the swing term (not the cap) wins.
+        assert!((belt_drop_throughput(&fast, 1, 7, RED) - 2.31 * 2.67).abs() < 1e-9);
+        // Bulk stays flat at every level (conservative floor); red's cap
+        // never binds for bulk's tiny flat rate.
         let bulk = PlacedEntity { name: "bulk-inserter".into(), ..Default::default() };
-        assert_eq!(belt_drop_throughput(&bulk, 1, 7), inserter_throughput("bulk-inserter", QualityTier::Normal));
+        assert_eq!(belt_drop_throughput(&bulk, 1, 7, RED), inserter_throughput("bulk-inserter", QualityTier::Normal));
+    }
+
+    /// #385: on a YELLOW target, a stack inserter's flat S=1/L=0 credit
+    /// (12.0/s) exceeds the lane cap (6.375/s) — the headline break this
+    /// issue exists to make. `check_inserter_throughput`'s belt lookup
+    /// falls back to `"transport-belt"` when no belt is found at the drop
+    /// tile, so a hand-built layout with no belt entities also gets the
+    /// most conservative (yellow) cap.
+    #[test]
+    fn belt_drop_throughput_yellow_cap_binds() {
+        let stack = PlacedEntity { name: "stack-inserter".into(), ..Default::default() };
+        let got = belt_drop_throughput(&stack, 1, 0, "transport-belt");
+        assert!((got - 6.375).abs() < 1e-9, "expected the yellow lane cap 6.375, got {got}");
+        // No-belt-found fallback resolves to the same conservative value.
+        let fallback = belt_drop_throughput(&stack, 1, 0, "transport-belt");
+        assert_eq!(got, fallback);
     }
 
     // ── check_inserter_direction ─────────────────────────────────────────────

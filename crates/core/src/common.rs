@@ -662,44 +662,98 @@ pub fn stack_inserter_belt_hand_at(level: u8, stacking: u8) -> f64 {
     f64::from((hand / s) * s)
 }
 
+/// Fraction of a belt lane's stacked slot rate a belt-dropping inserter can
+/// actually sustain (#385, `docs/sim-harness-forensics.md` +
+/// `docs/rfc-049-inserter-capacity-research.md`'s 2026-07-22/23 decision
+/// log). Sim-measured on yellow: hand≥4 stack-inserter drops converge at
+/// 6.4–7.1/s against a 7.5/s lane rate, never at the raw lane cap — an
+/// inserter physically loads ONE lane and cannot keep it saturated every
+/// tick. `0.85 × 7.5 = 6.375` sits under every measured cell (see
+/// [`belt_drop_rate`]'s doc comment for the full calibration table).
+pub const LANE_UTILIZATION: f64 = 0.85;
+
+/// Sim-measured swing-term multiplier for non-bulk (regular / long-handed /
+/// fast) belt-drops at inserter-capacity research levels 0–7 (#385). Matches
+/// `inserter_hand`'s NON_BULK schedule `[1,1,2,2,2,2,2,4]` at every level
+/// EXCEPT L7, where the raw hand-ratio (4.0) is replaced by the sim-measured
+/// ratio **2.67** = 6.40 / 2.40 (fast-inserter solo onto yellow at hand 4 /
+/// hand 1, 2026-07-23 calibration matrix). The uncorrected linear model
+/// (9.24/s) over-credits a fast inserter's real L7 rate (measured 6.40/s) on
+/// any belt whose lane cap doesn't already floor it (red/express); applied
+/// uniformly to every non-bulk inserter for simplicity (only fast was
+/// measured, so this is a documented conservative generalization, not a
+/// per-type fit).
+const NON_BULK_SWING_MULT: [f64; 8] = [1.0, 1.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.67];
+
 /// Items/s an inserter moves when dropping onto a **belt** (machine-pickup
-/// → belt-drop OUTPUT sides), composing belt stacking (RFC-046) and
-/// inserter-capacity research (RFC-049). This is the **single source of
-/// truth** shared by the sizing ladder (`bus::inserter_ladder`) and the
-/// validator (`validate::inserters::belt_drop_throughput`) — they consume
-/// this function directly so the fix and the check can never disagree on
-/// what a belt-dropping inserter moves (the constants-identity discipline).
+/// → belt-drop OUTPUT sides), composing belt stacking (RFC-046), inserter-
+/// capacity research (RFC-049), and the physical lane cap (#385). This is
+/// the **single source of truth** shared by the sizing ladder
+/// (`bus::inserter_ladder`) and the validator
+/// (`validate::inserters::belt_drop_throughput`) — they consume this
+/// function directly so the fix and the check can never disagree on what a
+/// belt-dropping inserter moves (the constants-identity discipline).
 ///
-/// Belt-drop is **swing-limited** (RFC-049 ground truth 3): linear in the
-/// inserter's hand, `swings × hand_on_belt`, RFC-046's stack decomposition
-/// generalized by the research dimension:
+/// **Min-form (#385):** `min(swing_term, LANE_UTILIZATION ×
+/// lane_capacity_stacked(target_belt, stacking))`. The swing term is
+/// RFC-049's decomposition, unchanged except for the L7 non-bulk floor
+/// correction below; the lane-cap term is new — the physical bound that no
+/// inserter, however fast its swing math says it is, can out-load a single
+/// belt lane's own slot rate. This SUPERSEDES RFC-046/049's "no
+/// recalibration" pattern for the belt-drop path specifically: the
+/// 2026-07-23 option-A decision (RFC-049 decision log) closed that gap with
+/// measurement rather than continuing to ship the uncorrected swing term.
 ///
+/// Swing term:
 /// - **stack inserters** at S>1 OR level>0: `stack_inserter_swings(quality)
 ///   × stack_inserter_belt_hand_at(level, stacking)` — the researched hand
 ///   rounded down to a multiple of S (BS3 dip, which heals iff
 ///   `hand ≡ 0 mod S`, not monotonically — see [`stack_inserter_belt_hand_at`]).
 /// - **non-bulk** (regular / long-handed / fast) at level>0: flat throughput
-///   × `inserter_hand(name, level)` — the far-side (long-handed) output
-///   ceiling genuinely rises 1→2→4 across levels.
+///   × `NON_BULK_SWING_MULT[level]` — identical to RFC-049's
+///   `inserter_hand`-derived ratio except at L7 (see that constant's doc
+///   comment for the measured correction).
 /// - **bulk inserters**: always flat — the engine never places one; parsed
 ///   blueprints get the conservative I8 floor.
 ///
-/// At `stacking ≤ 1 && level == 0` every branch collapses to the flat I8
-/// `inserter_throughput` (RFC-049 kill 1: bit-identical to pre-RFC), and at
-/// `level == 0` alone it collapses to the RFC-046 `stack_inserter_belt_hand`
-/// path — so both siblings' baselines are structurally preserved.
+/// Calibration table (2026-07-23, true-S1 world, solo inserter onto yellow,
+/// Normal quality): stack 6.50/6.50/7.10 at L0/L2/L7 vs the OLD swing-only
+/// credits 12.0/19.2/38.4; fast 2.40/4.80/6.40 at L0/L2/L7 vs OLD
+/// 2.31/4.62/9.24 (fast L0/L2 sit under the 6.375 cap already, unchanged by
+/// it; fast L7's 9.24 is over both the cap AND the measured value, hence the
+/// NON_BULK_SWING_MULT correction above). Every credit from the min-form
+/// stays at or below its measured cell.
+///
+/// At `stacking ≤ 1 && level == 0`, the swing term alone still collapses to
+/// the flat I8 `inserter_throughput` / RFC-046 `stack_inserter_belt_hand`
+/// baselines exactly as before — but the OUTER min-form no longer reduces
+/// to that flat value once the target belt's lane cap binds (e.g. a stack
+/// inserter's flat 12.0/s onto a plain yellow belt now credits 6.375/s).
+/// This deliberately breaks RFC-049 kill 1's universal "S≤1/L=0 is bit-
+/// identical to pre-RFC" claim for belt-drop specifically — the flat 12.0
+/// credit was never physically real (sim-measured 6.50), so #385 corrects
+/// it rather than preserving it.
 ///
 /// NB: machine-DROP (input) sides never use this — they are exact-hand and
 /// stay flat at every level (RFC-049 kill 2: no linear extrapolation on
-/// belt-pickup sides without measured data).
-pub fn belt_drop_rate(name: &str, quality: QualityTier, stacking: u8, level: u8) -> f64 {
-    if name == "stack-inserter" && (stacking > 1 || level > 0) {
+/// belt-pickup sides without measured data), and are not subject to a lane
+/// cap (a machine's input port is not a belt lane).
+pub fn belt_drop_rate(
+    name: &str,
+    quality: QualityTier,
+    stacking: u8,
+    level: u8,
+    target_belt: &str,
+) -> f64 {
+    let swing_term = if name == "stack-inserter" && (stacking > 1 || level > 0) {
         stack_inserter_swings(quality) * stack_inserter_belt_hand_at(level, stacking)
     } else if level > 0 && name != "bulk-inserter" {
-        inserter_throughput(name, quality) * inserter_hand(name, level)
+        inserter_throughput(name, quality) * NON_BULK_SWING_MULT[usize::from(level.min(7))]
     } else {
         inserter_throughput(name, quality)
-    }
+    };
+    let lane_cap_term = LANE_UTILIZATION * lane_capacity_stacked(target_belt, stacking);
+    swing_term.min(lane_cap_term)
 }
 
 /// Map underground-belt entity name to its corresponding surface belt tier.
@@ -1410,6 +1464,124 @@ mod tests {
     fn dir_from_vec_diagonal_returns_none() {
         assert_eq!(dir_from_vec(1, 1), None);
         assert_eq!(dir_from_vec(0, 0), None);
+    }
+
+    // ── belt_drop_rate min-form (#385) ───────────────────────────────────
+
+    /// Onto yellow at S=1, a stack inserter's flat 12.0/s credit is now
+    /// lane-capped to `0.85 × 7.5 = 6.375` — the headline break: the old
+    /// 12.0 credit was never physically real (sim-measured 6.50).
+    #[test]
+    fn belt_drop_rate_yellow_cap_binds_at_s1_l0() {
+        let q = QualityTier::Normal;
+        assert_eq!(
+            belt_drop_rate("stack-inserter", q, 1, 0, "transport-belt"),
+            LANE_UTILIZATION * 7.5
+        );
+        assert!((belt_drop_rate("stack-inserter", q, 1, 0, "transport-belt") - 6.375).abs() < 1e-9);
+    }
+
+    /// Onto express at S=1, the same flat 12.0/s swing term stays under
+    /// express's much larger lane cap (0.85 × 22.5 = 19.125) — the swing
+    /// term wins, unchanged from pre-#385 behavior.
+    #[test]
+    fn belt_drop_rate_express_swing_wins_at_s1_l0() {
+        let q = QualityTier::Normal;
+        assert_eq!(belt_drop_rate("stack-inserter", q, 1, 0, "express-transport-belt"), 12.0);
+    }
+
+    /// Fast inserter at L7 (hand 4): the sim-measured floor correction
+    /// (2.67× instead of the raw 4.0× hand ratio) already lands under
+    /// yellow's lane cap, so onto yellow the CLAMPED swing term
+    /// (2.31 × 2.67 ≈ 6.1677) wins over the cap (6.375) — both are
+    /// conservative under the measured 6.40/s, but the swing term is
+    /// smaller here so it is what's actually returned.
+    #[test]
+    fn belt_drop_rate_fast_l7_onto_yellow() {
+        let q = QualityTier::Normal;
+        let got = belt_drop_rate("fast-inserter", q, 1, 7, "transport-belt");
+        let clamped_swing = 2.31 * 2.67;
+        assert!((got - clamped_swing).abs() < 1e-9, "got {got}, expected clamped swing {clamped_swing}");
+        assert!(got < 6.375, "clamped swing term must win under yellow's 6.375 cap: got {got}");
+        assert!(got < 6.40 + 1e-9, "must stay at/under the measured 6.40/s cell: got {got}");
+    }
+
+    /// Fast inserter at L7 onto express: the lane cap (0.85 × 22.5 =
+    /// 19.125) is nowhere near binding, so the clamped swing term
+    /// (2.31 × 2.67 ≈ 6.17) is what's credited — demonstrating the L7
+    /// correction fires independently of the lane-cap mechanism.
+    #[test]
+    fn belt_drop_rate_fast_l7_onto_express_clamped_swing_wins() {
+        let q = QualityTier::Normal;
+        let got = belt_drop_rate("fast-inserter", q, 1, 7, "express-transport-belt");
+        let expect = 2.31 * 2.67;
+        assert!((got - expect).abs() < 1e-9, "got {got}, expected {expect}");
+    }
+
+    /// Measured-floor pins (2026-07-23 calibration matrix, true-S1 world,
+    /// solo inserter onto yellow, Normal quality): every belt_drop_rate
+    /// credit must sit AT or BELOW its measured cell. Stack:
+    /// 6.50/6.50/7.10 at L0/L2/L7; fast: 2.40/4.80/6.40 at L0/L2/L7.
+    #[test]
+    fn belt_drop_rate_measured_floor_pins() {
+        let q = QualityTier::Normal;
+        let yellow = "transport-belt";
+        let stack_measured = [(0u8, 6.50), (2, 6.50), (7, 7.10)];
+        for (level, measured) in stack_measured {
+            let got = belt_drop_rate("stack-inserter", q, 1, level, yellow);
+            assert!(got <= measured + 1e-9, "stack L{level}: got {got} > measured {measured}");
+        }
+        let fast_measured = [(0u8, 2.40), (2, 4.80), (7, 6.40)];
+        for (level, measured) in fast_measured {
+            let got = belt_drop_rate("fast-inserter", q, 1, level, yellow);
+            assert!(got <= measured + 1e-9, "fast L{level}: got {got} > measured {measured}");
+        }
+    }
+
+    /// Monotonicity: for a fixed inserter/quality/stacking/level,
+    /// `belt_drop_rate` must never DECREASE as the target belt tier rises
+    /// (a bigger belt only relaxes the lane cap, never tightens it), and
+    /// must never decrease as `level` rises for a fixed belt (the swing
+    /// term's own non-monotonicity, e.g. the S=4 stack dip, is a separate,
+    /// already-tested concern — this only sweeps the level axis for
+    /// inserters/stacking combinations where the swing term is
+    /// monotonically non-decreasing, i.e. stacking ≤ 1).
+    #[test]
+    fn belt_drop_rate_monotonic_in_belt_tier() {
+        let q = QualityTier::Normal;
+        let tiers = ["transport-belt", "fast-transport-belt", "express-transport-belt"];
+        for name in ["stack-inserter", "fast-inserter", "long-handed-inserter", "inserter"] {
+            for stacking in 1..=4u8 {
+                for level in 0..=7u8 {
+                    let mut prev = 0.0;
+                    for &tier in &tiers {
+                        let rate = belt_drop_rate(name, q, stacking, level, tier);
+                        assert!(
+                            rate >= prev - 1e-9,
+                            "{name} S={stacking} L={level}: {tier} ({rate}) < previous tier ({prev})"
+                        );
+                        prev = rate;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Monotonicity in research level for the non-bulk swing term at
+    /// stacking ≤ 1 on a belt whose lane cap never binds (express) —
+    /// isolates the swing-term schedule itself: `[1,1,2,2,2,2,2,2.67]` is
+    /// non-decreasing.
+    #[test]
+    fn belt_drop_rate_monotonic_in_level_non_bulk() {
+        let q = QualityTier::Normal;
+        for name in ["inserter", "long-handed-inserter", "fast-inserter"] {
+            let mut prev = 0.0;
+            for level in 0..=7u8 {
+                let rate = belt_drop_rate(name, q, 1, level, "express-transport-belt");
+                assert!(rate >= prev - 1e-9, "{name} L={level}: {rate} < previous L ({prev})");
+                prev = rate;
+            }
+        }
     }
 }
 

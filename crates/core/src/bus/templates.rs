@@ -713,7 +713,7 @@ pub fn single_input_row(
             out_occupied.push(2);
         }
         let out_extra_dx = free_extra_dx(out_stop, &out_occupied);
-        let output_plan = size_belt_drop_side(output_rate, Reach::Near, out_extra_dx.len(), max_inserter_tier, quality, stacking, level);
+        let output_plan = size_belt_drop_side(output_rate, Reach::Near, out_extra_dx.len(), max_inserter_tier, quality, stacking, level, output_belt);
         stamp_side_inserters(
             &mut entities,
             &output_plan,
@@ -766,7 +766,7 @@ pub fn single_input_row(
             // still scales the long-handed belt-drop hand with research
             // (far ceiling 1.2→4.8/s across levels) WITHOUT stack-forcing,
             // keeping the exemption; at level 0 it is exactly `size_side`.
-            let sec_plan = size_side_output(sec_rate, Reach::Far, 0, max_inserter_tier, quality, level);
+            let sec_plan = size_side_output(sec_rate, Reach::Far, 0, max_inserter_tier, quality, level, sec_belt);
             debug_assert_eq!(sec_plan.count, 1, "secondary output has no extra-column budget");
             entities.push(PlacedEntity {
                 name: sec_plan.entity.to_string(),
@@ -1081,7 +1081,7 @@ pub fn dual_input_row(
             }
         }
         let out_extra_dx = free_extra_dx(out_stop, &out_occupied);
-        let output_plan = size_belt_drop_side(output_rate, Reach::Near, out_extra_dx.len(), max_inserter_tier, quality, stacking, level);
+        let output_plan = size_belt_drop_side(output_rate, Reach::Near, out_extra_dx.len(), max_inserter_tier, quality, stacking, level, output_belt);
         stamp_side_inserters(
             &mut entities,
             &output_plan,
@@ -1512,7 +1512,7 @@ pub fn dual_input_row_horizontal(
             }
         }
         let out_extra_dx = free_extra_dx(msz, &out_occupied);
-        let output_plan = size_belt_drop_side(output_rate, Reach::Near, out_extra_dx.len(), max_inserter_tier, quality, stacking, level);
+        let output_plan = size_belt_drop_side(output_rate, Reach::Near, out_extra_dx.len(), max_inserter_tier, quality, stacking, level, output_belt);
         stamp_side_inserters(
             &mut entities,
             &output_plan,
@@ -1873,7 +1873,7 @@ pub fn triple_input_row(
         emit_shortfall_trace(recipe, false, input3_rate, &input3_plan, mx, y_offset + 3, tile_exists && !input3_wins, quality);
 
         // Output — ladder-sized.
-        let output_plan = size_belt_drop_side(output_rate, Reach::Near, output_extra_dx.len(), max_inserter_tier, quality, stacking, level);
+        let output_plan = size_belt_drop_side(output_rate, Reach::Near, output_extra_dx.len(), max_inserter_tier, quality, stacking, level, output_belt);
         stamp_side_inserters(
             &mut entities,
             &output_plan,
@@ -2237,7 +2237,7 @@ pub fn quad_input_row(
         let input4_extra_dx: Vec<i32> = if input4_wins { vec![0] } else { vec![] };
 
         // Output — ladder-sized.
-        let output_plan = size_belt_drop_side(output_rate, Reach::Near, output_extra_dx.len(), max_inserter_tier, quality, stacking, level);
+        let output_plan = size_belt_drop_side(output_rate, Reach::Near, output_extra_dx.len(), max_inserter_tier, quality, stacking, level, output_belt);
         stamp_side_inserters(
             &mut entities,
             &output_plan,
@@ -2539,7 +2539,7 @@ pub fn fluid_input_row(
                 }
             }
             let out_extra_dx = free_extra_dx(out_stop, &out_occupied);
-            let output_plan = size_belt_drop_side(output_rate, Reach::Near, out_extra_dx.len(), max_inserter_tier, quality, stacking, level);
+            let output_plan = size_belt_drop_side(output_rate, Reach::Near, out_extra_dx.len(), max_inserter_tier, quality, stacking, level, output_belt);
             stamp_side_inserters(
                 &mut entities,
                 &output_plan,
@@ -2859,7 +2859,7 @@ pub fn fluid_dual_input_row(
                 }
             }
             let out_extra_dx = free_extra_dx(out_stop, &out_occupied);
-            let output_plan = size_belt_drop_side(output_rate, Reach::Near, out_extra_dx.len(), max_inserter_tier, quality, stacking, level);
+            let output_plan = size_belt_drop_side(output_rate, Reach::Near, out_extra_dx.len(), max_inserter_tier, quality, stacking, level, output_belt);
             stamp_side_inserters(
                 &mut entities,
                 &output_plan,
@@ -3866,7 +3866,7 @@ pub fn fluid_multi_input_row(
                 }
             }
             let out_extra_dx = free_extra_dx(msz, &out_occupied);
-            let output_plan = size_belt_drop_side(output_rate, Reach::Near, out_extra_dx.len(), max_inserter_tier, quality, stacking, level);
+            let output_plan = size_belt_drop_side(output_rate, Reach::Near, out_extra_dx.len(), max_inserter_tier, quality, stacking, level, belt_name);
             stamp_side_inserters(
                 &mut entities,
                 &output_plan,
@@ -4461,7 +4461,7 @@ pub fn self_loop_row(
             let major_extra_dx: Vec<i32> = if minor_wins { vec![] } else { shared_dx.clone() };
             let minor_extra_dx: Vec<i32> = if minor_wins { shared_dx } else { vec![] };
 
-            let major_plan = size_side_output(major_produced_rate, Reach::Near, major_extra_dx.len(), max_inserter_tier, quality, level);
+            let major_plan = size_side_output(major_produced_rate, Reach::Near, major_extra_dx.len(), max_inserter_tier, quality, level, collector_belt);
             stamp_side_inserters(
                 &mut entities,
                 &major_plan,
@@ -4477,7 +4477,7 @@ pub fn self_loop_row(
             quality,
         );
 
-            let minor_plan = size_side_output(minor_produced_rate, Reach::Far, minor_extra_dx.len(), max_inserter_tier, quality, level);
+            let minor_plan = size_side_output(minor_produced_rate, Reach::Far, minor_extra_dx.len(), max_inserter_tier, quality, level, minor_collector_belt);
             stamp_side_inserters(
                 &mut entities,
                 &minor_plan,
@@ -4494,7 +4494,7 @@ pub fn self_loop_row(
         );
         } else {
             let major_extra_dx = vec![0i32, 2i32];
-            let major_plan = size_side_output(major_produced_rate, Reach::Near, major_extra_dx.len(), max_inserter_tier, quality, level);
+            let major_plan = size_side_output(major_produced_rate, Reach::Near, major_extra_dx.len(), max_inserter_tier, quality, level, collector_belt);
             stamp_side_inserters(
                 &mut entities,
                 &major_plan,
@@ -7867,8 +7867,11 @@ mod tests {
 
     #[test]
     fn fluid_multi_input_sulfur_output_uses_extra_column() {
-        // output_rate=15.0 exceeds one stack inserter's 12.0/s ceiling;
-        // this row never trims its output belt by position (no `is_last`
+        // output_rate=15.0 exceeds one stack inserter's ceiling onto this
+        // row's declared YELLOW output belt (#385: the lane-capped
+        // 6.375/s, not the pre-#385 flat 12.0/s — 15.0/s now needs THREE
+        // stack inserters, not two: 2×6.375=12.75 < 15.0 ≤ 3×6.375=19.125).
+        // This row never trims its output belt by position (no `is_last`
         // logic exists anywhere in the template), so both extra columns
         // (dx=0, dx=2) are available uncontested at every position.
         let (entities, _, _, _) = fluid_multi_input_row(
@@ -7890,9 +7893,9 @@ mod tests {
             .iter()
             .filter(|e| e.y == 8 && e.name == "stack-inserter" && e.carries.as_deref() == Some("sulfur"))
             .collect();
-        assert_eq!(stacks.len(), 2, "should use one extra column: {stacks:?}");
+        assert_eq!(stacks.len(), 3, "yellow's lane cap (#385) needs both extra columns: {stacks:?}");
         let xs: Vec<i32> = stacks.iter().map(|e| e.x).collect();
-        assert!(xs.contains(&1) && (xs.contains(&0) || xs.contains(&2)), "baseline dx=1 + one extra: {xs:?}");
+        assert!(xs.contains(&0) && xs.contains(&1) && xs.contains(&2), "baseline dx=1 + both extras: {xs:?}");
     }
 
     #[test]
