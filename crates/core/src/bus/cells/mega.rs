@@ -64,13 +64,27 @@ pub fn compose_mega_calibrated(
 /// fixtures; the Router's hop machinery is the Phase-B answer if a
 /// real subgraph ever needs it).
 pub fn adapt_boundaries(l: LayoutResult) -> Result<LayoutResult, String> {
+    // Lane spacing 1 first — bit-identical to the original adapter for
+    // every fixture it could route (the registered hashes depend on
+    // it). Spacing 2 unlocks 3+-fluid-feed blocks (the chem-pack
+    // class), where a lateral otherwise passes directly under an
+    // earlier head column with no clearance row.
+    match adapt_with_spacing(&l, 1) {
+        Ok(adapted) => Ok(adapted),
+        Err(e1) => adapt_with_spacing(&l, 2).map_err(|e2| {
+            format!("{e1}; at spacing 2: {e2}")
+        }),
+    }
+}
+
+fn adapt_with_spacing(l: &LayoutResult, spacing: i32) -> Result<LayoutResult, String> {
     let n_in = l.boundary_inputs.len() as i32;
     if n_in == 0 {
         return Err("mega: layout has no boundary inputs".into());
     }
-    // One lateral lane per input + a clearance row above the original
-    // north edge.
-    let margin = n_in + 1;
+    // One lateral lane per input (pitch `spacing`) + a clearance row
+    // above the original north edge.
+    let margin = (n_in - 1) * spacing + 2;
 
     let mut entities: Vec<PlacedEntity> = l.entities.clone();
     for e in &mut entities {
@@ -100,7 +114,7 @@ pub fn adapt_boundaries(l: LayoutResult) -> Result<LayoutResult, String> {
         .map(|(i, r)| Plan {
             head_x: head0 + FEED_PITCH * i as i32,
             orig_x: r.x,
-            lane_row: 1 + i as i32,
+            lane_row: 1 + spacing * i as i32,
             is_fluid: r.is_fluid,
         })
         .collect();
@@ -147,117 +161,88 @@ pub fn adapt_boundaries(l: LayoutResult) -> Result<LayoutResult, String> {
         }
     }
 
-    let neighbors = |x: i32, y: i32| [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)];
-
-    let mut b_in: Vec<BoundaryRecord> = Vec::new();
-    for (r, p) in records.iter().zip(plans.iter()) {
-        let seg = format!("megafeed:{}", r.item);
-        if p.is_fluid {
-            // Plan the path with a candidate tail x: head column to the
-            // lane row, lateral to tail_x, tail down to margin-1, plus a
-            // JOIN tile at (tail_x, margin) when the tail is shifted off
-            // the original head. Valid iff every tile is free, no
-            // orthogonal neighbor carries a different fluid, and the
-            // path ends adjacent to a same-fluid pipe.
-            let mut chosen: Option<Vec<(i32, i32)>> = None;
-            // A join partner must genuinely CONNECT (#400's own lesson,
-            // recursively applied to the adapter): a plain pipe joins on
-            // any side; a pipe-to-ground only at its axis opening — we
-            // accept one directly BELOW the terminus (the trunk-head
-            // mouth pattern), never sideways.
-            'cand: for dx in [0i32, 1, -1, 2, -2] {
-                let tail_x = p.orig_x + dx;
-                // The tail may descend past the band boundary into free
-                // layout space until a join materializes — post-#400 raw
-                // trunk heads are PTG mouths whose sides don't connect,
-                // so the band-boundary join can be unreachable while the
-                // strip a few tiles deeper is an honest plain-pipe join.
-                for tail_depth in 0..=8i32 {
-                    let mut tiles: Vec<(i32, i32)> = Vec::new();
-                    for y in 0..=p.lane_row {
-                        tiles.push((p.head_x, y));
-                    }
-                    let (lo, hi) = (p.head_x.min(tail_x), p.head_x.max(tail_x));
-                    for x in lo..=hi {
-                        if x != p.head_x {
-                            tiles.push((x, p.lane_row));
+    // Joint fluid planning (RFC-052 Phase B): with 3+ fluid feeds the
+    // per-record greedy dead-ends — a shifted tail can land inside a
+    // later record's lateral span (the chem-pack water refusal). Search
+    // the dx-vector product across fluid records (≤5^F, F small),
+    // evaluating sequentially against accumulated occupancy with early
+    // abort; dx=0 first keeps the single/two-fluid fixtures on their
+    // historical greedy solutions.
+    let fluid_idx: Vec<usize> = plans
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.is_fluid)
+        .map(|(i, _)| i)
+        .collect();
+    let mut fluid_tiles: rustc_hash::FxHashMap<usize, Vec<(i32, i32)>> =
+        rustc_hash::FxHashMap::default();
+    if !fluid_idx.is_empty() {
+        const DXS: [i32; 5] = [0, 1, -1, 2, -2];
+        let nf = fluid_idx.len();
+        let mut combo = vec![0usize; nf];
+        let mut found = false;
+        'search: loop {
+            // Evaluate this dx-vector sequentially.
+            let mut trial_fluid = fluid_at.clone();
+            let mut trial_plain = plain_pipe_at.clone();
+            let mut trial_tiles: rustc_hash::FxHashMap<usize, Vec<(i32, i32)>> =
+                rustc_hash::FxHashMap::default();
+            let mut ok = true;
+            for (k, &ri) in fluid_idx.iter().enumerate() {
+                let r = &records[ri];
+                let p = &plans[ri];
+                match try_fluid_path(
+                    &r.item, p.head_x, p.orig_x, p.lane_row, DXS[combo[k]], margin,
+                    &solid_at, &trial_fluid, &trial_plain,
+                ) {
+                    Some(tiles) => {
+                        for &(x, y) in &tiles {
+                            trial_fluid.insert((x, y), r.item.clone());
+                            trial_plain.insert((x, y));
                         }
+                        trial_tiles.insert(ri, tiles);
                     }
-                    let tail_end = if dx != 0 || tail_depth > 0 {
-                        margin + tail_depth
-                    } else {
-                        margin - 1
-                    };
-                    for y in (p.lane_row + 1)..=tail_end.min(margin - 1 + tail_depth + 1) {
-                        if y >= margin && dx == 0 && tail_depth == 0 {
-                            break;
-                        }
-                        tiles.push((tail_x, y));
+                    None => {
+                        ok = false;
+                        break;
                     }
-                    let tile_set: FxHashSet<(i32, i32)> = tiles.iter().copied().collect();
-                    let mut valid = true;
-                    'check: for &(x, y) in &tiles {
-                        if solid_at.contains(&(x, y)) || fluid_at.contains_key(&(x, y)) {
-                            valid = false;
-                            break 'check;
-                        }
-                        for n in neighbors(x, y) {
-                            if tile_set.contains(&n) {
-                                continue;
-                            }
-                            if let Some(f) = fluid_at.get(&n) {
-                                if f != &r.item {
-                                    valid = false;
-                                    break 'check;
-                                }
-                            }
-                        }
-                    }
-                    if !valid {
-                        // A blocked deeper tail cannot unblock by going
-                        // deeper still through the same tile — but a
-                        // DIFFERENT depth may stop before the blocker;
-                        // simplest sound policy: abandon this dx.
-                        continue 'cand;
-                    }
-                    // The join candidate is the path's geometric
-                    // TERMINUS (deepest tail tile), NOT tiles.last() —
-                    // push order puts a lateral tile last whenever a
-                    // bend exists (#401 review finding 1). Join
-                    // partners: same-fluid PLAIN pipe on any side, or a
-                    // same-fluid pipe-to-ground DIRECTLY BELOW (its
-                    // axis opening) — a PTG side never connects.
-                    let terminus = *tiles.last().unwrap_or(&(tail_x, p.lane_row));
-                    let terminus = if tiles.iter().any(|&t| t.0 == tail_x && t.1 > p.lane_row) {
-                        (tail_x, tiles.iter().filter(|t| t.0 == tail_x).map(|t| t.1).max().unwrap())
-                    } else {
-                        terminus
-                    };
-                    let joins = neighbors(terminus.0, terminus.1).iter().any(|n| {
-                        if tile_set.contains(n) {
-                            return false;
-                        }
-                        let Some(f) = fluid_at.get(n) else { return false };
-                        if f != &r.item {
-                            return false;
-                        }
-                        let is_plain = plain_pipe_at.contains(n);
-                        let directly_below = *n == (terminus.0, terminus.1 + 1);
-                        is_plain || directly_below
-                    });
-                    if !joins {
-                        continue;
-                    }
-                    chosen = Some(tiles);
-                    break 'cand;
                 }
             }
-            let tiles = chosen.ok_or_else(|| {
-                format!(
-                    "mega: no isolation-safe fluid feed path for {} (orig x {}, head x {}) — adapter v1 refuses",
-                    r.item, p.orig_x, p.head_x
-                )
-            })?;
+            if ok {
+                fluid_tiles = trial_tiles;
+                found = true;
+                break 'search;
+            }
+            // Next combo (odometer).
+            let mut k = nf;
+            loop {
+                if k == 0 {
+                    break 'search;
+                }
+                k -= 1;
+                combo[k] += 1;
+                if combo[k] < DXS.len() {
+                    break;
+                }
+                combo[k] = 0;
+            }
+        }
+        if !found {
+            let items: Vec<&str> = fluid_idx.iter().map(|&i| records[i].item.as_str()).collect();
+            return Err(format!(
+                "mega: no isolation-safe joint routing for fluid feeds {items:?} — adapter refuses"
+            ));
+        }
+    }
+
+    let mut b_in: Vec<BoundaryRecord> = Vec::new();
+    for (ri, (r, p)) in records.iter().zip(plans.iter()).enumerate() {
+        let seg = format!("megafeed:{}", r.item);
+        if p.is_fluid {
+            // Path planned by the joint search above.
+            let tiles = fluid_tiles
+                .remove(&ri)
+                .ok_or_else(|| format!("mega: fluid path for {} missing from joint plan", r.item))?;
             for &(x, y) in &tiles {
                 fluid_at.insert((x, y), r.item.clone());
                 plain_pipe_at.insert((x, y));
@@ -361,4 +346,294 @@ pub fn adapt_boundaries(l: LayoutResult) -> Result<LayoutResult, String> {
         warnings: l.warnings.clone(),
         ..Default::default()
     })
+}
+
+/// One fluid feed path candidate for the joint planner: head column to
+/// the lane row, lateral to `orig_x + dx`, tail descending (past the
+/// band boundary when needed, up to 8 tiles) until an honest join —
+/// same-fluid PLAIN pipe on any side, or a same-fluid pipe-to-ground
+/// directly below (its axis opening; a PTG side never connects, #400's
+/// lesson applied recursively). Valid iff every tile is free and no
+/// orthogonal neighbor carries a DIFFERENT fluid.
+#[allow(clippy::too_many_arguments)]
+fn try_fluid_path(
+    item: &str,
+    head_x: i32,
+    orig_x: i32,
+    lane_row: i32,
+    dx: i32,
+    margin: i32,
+    solid_at: &FxHashSet<(i32, i32)>,
+    fluid_at: &rustc_hash::FxHashMap<(i32, i32), String>,
+    plain_pipe_at: &FxHashSet<(i32, i32)>,
+) -> Option<Vec<(i32, i32)>> {
+    let neighbors = |x: i32, y: i32| [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)];
+    let tail_x = orig_x + dx;
+    for tail_depth in 0..=8i32 {
+        let mut tiles: Vec<(i32, i32)> = Vec::new();
+        for y in 0..=lane_row {
+            tiles.push((head_x, y));
+        }
+        let (lo, hi) = (head_x.min(tail_x), head_x.max(tail_x));
+        for x in lo..=hi {
+            if x != head_x {
+                tiles.push((x, lane_row));
+            }
+        }
+        let deepest = if dx != 0 || tail_depth > 0 {
+            margin + tail_depth - 1
+        } else {
+            margin - 1
+        };
+        for y in (lane_row + 1)..=deepest {
+            tiles.push((tail_x, y));
+        }
+        let tile_set: FxHashSet<(i32, i32)> = tiles.iter().copied().collect();
+        let mut valid = true;
+        'check: for &(x, y) in &tiles {
+            if solid_at.contains(&(x, y)) || fluid_at.contains_key(&(x, y)) {
+                valid = false;
+                break 'check;
+            }
+            for n in neighbors(x, y) {
+                if tile_set.contains(&n) {
+                    continue;
+                }
+                if let Some(f) = fluid_at.get(&n) {
+                    if f != item {
+                        valid = false;
+                        break 'check;
+                    }
+                }
+            }
+        }
+        if !valid {
+            // A deeper tail passes through the same blocked tile —
+            // abandon this dx entirely.
+            return None;
+        }
+        let terminus = (tail_x, deepest.max(lane_row));
+        let joins = neighbors(terminus.0, terminus.1).iter().any(|n| {
+            if tile_set.contains(n) {
+                return false;
+            }
+            let Some(f) = fluid_at.get(n) else { return false };
+            if f != item {
+                return false;
+            }
+            plain_pipe_at.contains(n) || *n == (terminus.0, terminus.1 + 1)
+        });
+        if joins {
+            return Some(tiles);
+        }
+    }
+    None
+}
+
+/// RFC-052 Phase B: the fluid-subgraph partition. Identifies the
+/// chain's fluid-touching specs and validates the v1 collapse rules:
+/// one weakly-connected subgraph, solid-only edges to the rest of the
+/// chain, external-only inputs, and exactly one solid output item
+/// leaving it. Returns the mega sub-solve parameters or a named
+/// refusal.
+#[derive(Debug, Clone)]
+pub struct MegaPlan {
+    /// The subgraph's PRIMARY solid product (the sub-solve target —
+    /// the highest-rate exported solid; the sub-solve pulls the other
+    /// exports along as the same chain).
+    pub target: String,
+    /// Total chain rate of the target (per-machine rate × count).
+    pub rate: f64,
+    /// ALL solid items leaving the subgraph, with their chain rates —
+    /// each gets its own drain/corridor (multi-output support: the
+    /// chem-pack class exports plastic AND sulfur).
+    pub outputs: Vec<(String, f64)>,
+    /// External inputs the subgraph consumes (fluids + solids).
+    pub inputs: Vec<String>,
+    /// Recipes collapsed into the mega-cell.
+    pub members: rustc_hash::FxHashSet<String>,
+}
+
+pub fn mega_subgraph(sr: &crate::models::SolverResult) -> Result<Option<MegaPlan>, String> {
+    use rustc_hash::FxHashMap;
+    let fluid_specs: Vec<&crate::models::MachineSpec> = sr
+        .machines
+        .iter()
+        .filter(|m| {
+            m.inputs.iter().any(|i| i.is_fluid) || m.outputs.iter().any(|o| o.is_fluid)
+        })
+        .collect();
+    if fluid_specs.is_empty() {
+        return Ok(None);
+    }
+    let members: FxHashSet<String> = fluid_specs.iter().map(|m| m.recipe.clone()).collect();
+    let produced_anywhere: FxHashMap<&str, &str> = sr
+        .machines
+        .iter()
+        .flat_map(|m| m.outputs.iter().map(move |o| (o.item.as_str(), m.recipe.as_str())))
+        .collect();
+    let in_subgraph =
+        |recipe: &str| members.contains(recipe);
+
+    // Weak connectivity over shared items among members.
+    if fluid_specs.len() > 1 {
+        let mut reached: FxHashSet<&str> = FxHashSet::default();
+        let mut stack = vec![fluid_specs[0].recipe.as_str()];
+        while let Some(r) = stack.pop() {
+            if !reached.insert(r) {
+                continue;
+            }
+            let spec = sr.machines.iter().find(|m| m.recipe == r).unwrap();
+            for item in spec
+                .inputs
+                .iter()
+                .map(|i| i.item.as_str())
+                .chain(spec.outputs.iter().map(|o| o.item.as_str()))
+            {
+                for m in &fluid_specs {
+                    if m.recipe != r
+                        && (m.inputs.iter().any(|i| i.item == item)
+                            || m.outputs.iter().any(|o| o.item == item))
+                    {
+                        stack.push(m.recipe.as_str());
+                    }
+                }
+            }
+        }
+        if reached.len() != fluid_specs.len() {
+            return Err(format!(
+                "mega: {} fluid specs form {}+ disconnected subgraphs (v1 collapses exactly one)",
+                fluid_specs.len(),
+                2
+            ));
+        }
+    }
+
+    // Edges out must be solid; inputs from inside the chain refuse
+    // (v1: the sub-solve must be self-contained on externals).
+    let mut inputs: Vec<String> = Vec::new();
+    let mut solid_outputs: Vec<(&str, f64)> = Vec::new();
+    for m in &fluid_specs {
+        for i in &m.inputs {
+            match produced_anywhere.get(i.item.as_str()) {
+                Some(producer) if in_subgraph(producer) => {} // internal
+                Some(producer) => {
+                    return Err(format!(
+                        "mega: subgraph input {} is produced by non-member {} (v1 requires external-only inputs)",
+                        i.item, producer
+                    ));
+                }
+                None => {
+                    if !inputs.iter().any(|x| x == &i.item) {
+                        inputs.push(i.item.clone());
+                    }
+                }
+            }
+        }
+        for o in &m.outputs {
+            let consumed_outside = sr.machines.iter().any(|c| {
+                !in_subgraph(&c.recipe) && c.inputs.iter().any(|ci| ci.item == o.item)
+            });
+            let exported = sr.external_outputs.iter().any(|e| e.item == o.item);
+            if consumed_outside || exported {
+                if o.is_fluid {
+                    return Err(format!(
+                        "mega: fluid {} leaves the subgraph (fluids never cross cell boundaries)",
+                        o.item
+                    ));
+                }
+                solid_outputs.push((o.item.as_str(), o.rate * m.count));
+            }
+        }
+    }
+    if solid_outputs.is_empty() {
+        return Err("mega: fluid subgraph has no solid output".into());
+    }
+    solid_outputs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    Ok(Some(MegaPlan {
+        target: solid_outputs[0].0.to_string(),
+        rate: solid_outputs[0].1,
+        outputs: solid_outputs
+            .iter()
+            .map(|(i, r)| (i.to_string(), *r))
+            .collect(),
+        inputs,
+        members,
+    }))
+}
+
+/// Phase-B block composer: the adapted mega layout at a rate share,
+/// for placement as one chain slot. Generated from the PARENT chain's
+/// OWN member specs (counts × scale) rather than a fresh single-target
+/// re-solve — machine counts stay identical to the parent by
+/// construction, and multi-output subgraphs (plastic AND sulfur
+/// leaving one oil complex) get every export laid out and drained.
+/// The block carries its own margin band and feed heads at its local
+/// y=0.
+pub fn compose_mega_block(
+    sr: &crate::models::SolverResult,
+    plan: &MegaPlan,
+    scale: f64,
+) -> Result<(crate::models::SolverResult, LayoutResult), String> {
+    let machines: Vec<crate::models::MachineSpec> = sr
+        .machines
+        .iter()
+        .filter(|m| plan.members.contains(&m.recipe))
+        .map(|m| crate::models::MachineSpec {
+            count: m.count * scale,
+            ..m.clone()
+        })
+        .collect();
+    let produced: FxHashSet<&str> = machines
+        .iter()
+        .flat_map(|m| m.outputs.iter().map(|o| o.item.as_str()))
+        .collect();
+    // External inputs of the SUBGRAPH at the scaled rate (per-machine
+    // rates × scaled counts).
+    let mut ext_in: rustc_hash::FxHashMap<String, (f64, bool)> = Default::default();
+    for m in &machines {
+        for i in &m.inputs {
+            if !produced.contains(i.item.as_str()) {
+                let e = ext_in.entry(i.item.clone()).or_insert((0.0, i.is_fluid));
+                e.0 += i.rate * m.count;
+            }
+        }
+    }
+    let sub = crate::models::SolverResult {
+        machines,
+        external_inputs: ext_in
+            .into_iter()
+            .map(|(item, (rate, is_fluid))| crate::models::ItemFlow {
+                item,
+                rate,
+                is_fluid,
+                module_id: 0,
+            })
+            .collect(),
+        external_outputs: plan
+            .outputs
+            .iter()
+            .map(|(item, rate)| crate::models::ItemFlow {
+                item: item.clone(),
+                rate: rate * scale,
+                is_fluid: false,
+                module_id: 0,
+            })
+            .collect(),
+        surplus_outputs: Vec::new(),
+        dependency_order: sr
+            .dependency_order
+            .iter()
+            .filter(|r| plan.members.contains(*r))
+            .cloned()
+            .collect(),
+    };
+    let opts = crate::bus::layout::LayoutOptions {
+        cell_composition: super::CellComposition::Off,
+        ..Default::default()
+    };
+    let l = crate::bus::layout::build_bus_layout(&sub, opts)
+        .map_err(|e| format!("mega: block layout: {}", e.lines().next().unwrap_or("")))?;
+    let adapted = adapt_boundaries(l)?;
+    Ok((sub, adapted))
 }

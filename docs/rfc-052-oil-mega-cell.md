@@ -140,6 +140,40 @@ feeds and the composed layout must pass the pipe-isolation validators
 
 ## Decision log
 
+- *2026-07-24 — Phase B DELIVERED: gate (b) MET — the flagship runs.
+  `mega_subgraph` partitions fluid-touching specs (one weakly-connected
+  subgraph, solid-only edges out, external-only inputs, v1 single
+  consumer per exported item); the chain placer collapses it into a
+  SUPER-SPEC whose placed form is the boundary-adapted mega block
+  (generated from the parent chain's OWN member specs — counts match
+  by construction, and multi-output subgraphs get every export laid
+  out); mega corridors ride their own bypass rows from each drain head.
+  Solid-only chains are bit-identical (registry gate). **Sim:
+  mega-chain-ac2raw PASS — advanced circuits delivered at 2.00/s EXACT
+  from fully raw inputs (iron ore, copper ore, crude, water, coal),
+  45/45 machines working**; registered. The composed ladder is honest:
+  AC@1/2/4 compose 0/0; above 4 the plastic sub-solve outgrows the
+  engine's own oil layout and the candidate self-refuses. KILL-2
+  STATUS: the bus covers AC-from-raw clean through 8/s (denser, wins
+  the search — composition never displaces it in production), and the
+  configs where the bus GENUINELY FAILS (chem-pack@5/10: junction
+  crossings; PU@2–4: split sulfuric networks) are blocked by two NAMED
+  adapter/eligibility increments, not by the architecture: (1) the
+  chem block needs vertical PTG hops through foreign fluid bands (its
+  water trunk is sandwiched — crude column west, petroleum row below;
+  the joint dx-search + adaptive lane spacing added this phase widen
+  the adapter but cannot clear column-adjacency without hops); (2) the
+  PU class needs chain-fed mega inputs (its fluid subgraph swallows
+  the PU spec itself, which consumes chain-produced EC/AC). Kill-2 is
+  therefore NOT invoked — the frontier is reachable with named work —
+  but the verdict is explicitly deferred to those increments: if BOTH
+  fail, the chain-integration machinery has no bus-refusal win and the
+  criterion applies with this sweep as its record. En route: the joint
+  fluid planner exposed and fixed a residual terminus bug in the
+  no-tail path (the registered plastic geometry pinned it; re-measured
+  PASS and re-registered), and `required_copies` now exempts fluids
+  from the belt quantum (no-op for solid chains).*
+
 - *2026-07-23 — #403 review folds (no blockers; both findings are
   verification-rigor gaps, not live bugs): (1) the mirror-as-rotation
   wire encoding COLLIDES with genuinely South/West-unmirrored

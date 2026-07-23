@@ -433,6 +433,25 @@ fn probe_registry_hashes() {
         let (_sr, l) = spaghettio_core::bus::cells::mega::compose_mega_calibrated(item, rate, inputs).unwrap();
         println!("{label}: {:016x}", geometry_hash(&l));
     }
+    {
+        let inputs_set: FxHashSet<String> =
+            ["iron-ore", "copper-ore", "crude-oil", "water", "coal"].iter().map(|s| s.to_string()).collect();
+        let sr = solver::solve_with_palette_exclusions_and_quality(
+            "advanced-circuit", 2.0, &inputs_set, &MachinePalette::default(),
+            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+        ).unwrap();
+        println!("mega-chain-ac2raw: {:016x}", geometry_hash(&compose_chain(&sr).unwrap()));
+    }
+    {
+        use spaghettio_core::bus::cells::chain::compose_chain;
+        let inputs_set: FxHashSet<String> =
+            ["iron-ore", "copper-ore", "crude-oil", "water", "coal"].iter().map(|s| s.to_string()).collect();
+        let sr = solver::solve_with_palette_exclusions_and_quality(
+            "advanced-circuit", 2.0, &inputs_set, &MachinePalette::default(),
+            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+        ).unwrap();
+        println!("mega-chain-ac2raw: {:016x}", geometry_hash(&compose_chain(&sr).unwrap()));
+    }
 }
 
 /// PERMANENT GATE (RFC-051 registry): every seeded sim-verified entry
@@ -462,6 +481,7 @@ fn cell_registry_hashes_current() {
         ("military-science-pack", 5.0, &["iron-plate", "copper-plate", "steel-plate", "stone-brick", "coal"], "chain"),
         ("plastic-bar", 2.0, &["crude-oil", "water", "coal"], "mega"),
         ("sulfur", 2.0, &["crude-oil", "water"], "mega"),
+        ("advanced-circuit", 2.0, &["iron-ore", "copper-ore", "crude-oil", "water", "coal"], "chain"),
     ];
     assert!(!entries().is_empty(), "registry must not be empty");
     for e in entries() {
@@ -745,6 +765,55 @@ fn export_mega_fixtures_for_sim() {
         println!("wrote target/tmp/{label}.bp ({} in / {} out)",
             l.boundary_inputs.len(), l.boundary_outputs.len());
     }
+}
+
+/// PERMANENT GATE (RFC-052 Phase B, gate (b) validator half): the
+/// FLAGSHIP — advanced circuits from fully raw inputs (iron ore,
+/// copper ore, crude oil, water, coal) — composes at 0 errors /
+/// 0 warnings across the honest ladder (the plastic sub-solve outgrows
+/// the engine's own oil layout above AC@4; the candidate self-refuses
+/// there). The fluid subgraph (refinery + plastic chem) collapses into
+/// one mega slot; the mega corridor rides its own bypass row from the
+/// drain head to the AC cell.
+#[test]
+fn mega_chain_ac_from_raw_zero_issues() {
+    use spaghettio_core::bus::cells::chain::compose_chain;
+    use spaghettio_core::validate::{self, LayoutStyle};
+    for rate in [1.0, 2.0, 4.0] {
+        let inputs: FxHashSet<String> =
+            ["iron-ore", "copper-ore", "crude-oil", "water", "coal"]
+                .iter().map(|s| s.to_string()).collect();
+        let sr = solver::solve_with_palette_exclusions_and_quality(
+            "advanced-circuit", rate, &inputs, &MachinePalette::default(),
+            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+        ).unwrap();
+        let l = compose_chain(&sr).unwrap_or_else(|e| panic!("AC@{rate} from raw must compose: {e}"));
+        let issues = validate::validate(&l, Some(&sr), LayoutStyle::Bus)
+            .unwrap_or_else(|e| panic!("AC@{rate} from raw must validate: {e}"));
+        assert!(issues.is_empty(), "AC@{rate} from raw issues: {issues:?}");
+    }
+}
+
+/// Artifact producer for the Phase-B flagship sim run.
+#[test]
+#[ignore = "artifact producer"]
+fn export_mega_chain_for_sim() {
+    use spaghettio_core::bus::cells::chain::compose_chain;
+    let inputs: FxHashSet<String> =
+        ["iron-ore", "copper-ore", "crude-oil", "water", "coal"]
+            .iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "advanced-circuit", 2.0, &inputs, &MachinePalette::default(),
+        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+    ).unwrap();
+    let l = compose_chain(&sr).unwrap();
+    let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(&l, &sr, "mega-chain-ac2raw");
+    std::fs::create_dir_all("target/tmp").unwrap();
+    std::fs::write("target/tmp/mega-chain-ac2raw.bp", &bp).unwrap();
+    std::fs::write("target/tmp/mega-chain-ac2raw.manifest.json",
+        serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
+    println!("wrote target/tmp/mega-chain-ac2raw.bp ({} in / {} out)",
+        l.boundary_inputs.len(), l.boundary_outputs.len());
 }
 
 #[test]
