@@ -200,7 +200,7 @@ local function add_feed(s, force, head_x, head_y, ox, oy, lx, ly, depth, item, b
   eei.electric_buffer_size = 1e13
   table.insert(storage.eeis, eei)
   storage.feeds[item] = storage.feeds[item] or {}
-  for _, c in ipairs(chests) do table.insert(storage.feeds[item], c) end
+  table.insert(storage.feeds[item], {chests = chests, fed = 0})
 end
 
 -- Fluid FEED: infinity-pipe adjacent to the boundary tile, auto-maintained
@@ -332,6 +332,18 @@ fn feed_call(out: &mut String, idx: usize, rec: &BoundaryRecord) {
             item = rec.item,
         );
     } else {
+        // A boundary head can be a splitter (the engine's record names
+        // the entity at the head tile); the rig's own belts must be the
+        // matching SURFACE BELT tier — building a jog out of 2-tile
+        // splitter entities silently delivers nothing (#345: r150's
+        // third copper spine was fed by a dead splitter-bodied rig).
+        let belt = match rec.entity.as_str() {
+            "splitter" => "transport-belt",
+            "fast-splitter" => "fast-transport-belt",
+            "express-splitter" => "express-transport-belt",
+            "turbo-splitter" => "turbo-transport-belt",
+            other => other,
+        };
         let _ = writeln!(
             out,
             "    add_feed(s, force, head_x, head_y, {ox}, {oy}, {lx}, {ly}, {depth}, \"{item}\", \"{belt}\")",
@@ -341,7 +353,7 @@ fn feed_call(out: &mut String, idx: usize, rec: &BoundaryRecord) {
             ly = lateral.1,
             depth = depth,
             item = rec.item,
-            belt = rec.entity,
+            belt = belt,
         );
     }
     let _ = writeln!(out, "  end -- feed[{idx}] {} at ({},{})", rec.item, rec.x, rec.y);
@@ -683,6 +695,19 @@ end
 local function finalize(s, converged)
   storage.finalized = true
   storage.converged = converged
+  -- Dead-rig audit (#345): a rig whose chest bank never drained beyond
+  -- the initial fill moved nothing onto its belt — the rig body is
+  -- broken (r150's splitter-bodied copper rig delivered zero for a
+  -- whole steady-state run while its two siblings masked it in the
+  -- per-item totals). 2600 > 6 chests x 400 initial fill.
+  for item, banks in pairs(storage.feeds) do
+    for bi, bank in ipairs(banks) do
+      if bank.fed <= 2600 and game.tick > 7200 then
+        table.insert(storage.kit_errors, "feed rig " .. bi .. " for '" .. item
+          .. "' never drained past its initial fill (" .. bank.fed .. ") — rig dead (#345 class)")
+      end
+    end
+  end
   dump_sim_state(s)
   local census = {}
   for _, m in pairs(s.find_entities_filtered{type = {"assembling-machine", "furnace"}}) do
@@ -710,13 +735,16 @@ end
 script.on_nth_tick(60, function(ev)
   if storage.finalized then return end
   for _, e in ipairs(storage.eeis) do if e.valid then e.energy = 1e13 end end
-  for item, chests in pairs(storage.feeds) do
-    for _, c in ipairs(chests) do
-      if c.valid then
-        local n = c.get_item_count(item)
-        if n < 400 then
-          local got = c.insert{name = item, count = 400 - n}
-          storage.fed_total[item] = (storage.fed_total[item] or 0) + got
+  for item, banks in pairs(storage.feeds) do
+    for _, bank in ipairs(banks) do
+      for _, c in ipairs(bank.chests) do
+        if c.valid then
+          local n = c.get_item_count(item)
+          if n < 400 then
+            local got = c.insert{name = item, count = 400 - n}
+            storage.fed_total[item] = (storage.fed_total[item] or 0) + got
+            bank.fed = bank.fed + got
+          end
         end
       end
     end
