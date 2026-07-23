@@ -263,6 +263,32 @@ log + Phase-1 close-out section.
 
 **#385 belt-drop min-form (2026-07-23)**: the RFC-049 belt-drop swing term (`swings × researched hand`) was never checked against the belt's own physical throughput — sim-measured onto yellow (true-S1 world) found stack credited 2–5× over the real 6.50/6.50/7.10/s (L0/L2/L7) and fast over-credited 44% at L7 (9.24 vs measured 6.40). `common::belt_drop_rate(name, quality, stacking, level, target_belt)` gained a `target_belt` param and now returns `min(swing_term, 0.85 × lane_capacity_stacked(target_belt, stacking))` — a stack inserter's flat 12.0/s credit onto a plain yellow belt (S=1, L=0) now credits 6.375/s, and non-bulk's L7 multiplier is sim-corrected 4.0→2.67. This deliberately breaks RFC-049's own L0-identity baseline for belt-drop (the 12.0 credit was never physically real) and RFC-046/049's "no recalibration" pattern for the output side specifically — the same "measured, never derived" discipline kill 2 already required for the input side. Threaded through the ladder (`size_belt_drop_side`/`size_side_output`, which lost their now-incorrect `stacking≤1 && level==0` shortcut) and the validator (`belt_drop_throughput`, which derives the drop tile's belt tier from the layout, falling back to yellow when none is found). One e2e fixture's expected inserter count changed (2→3 stack inserters, `fluid_multi_input_sulfur_output_uses_extra_column`); two constants-identity assertions updated (L7 non-bulk ×4.0→×2.67). Full suite clean (lib 798 / e2e 60 / netflow parity 10), clippy `--lib` clean, WASM rebuild clean, zero golden re-blesses. Full trail: `docs/rfc-049-inserter-capacity-research.md` decision log (2026-07-23 entry) and `docs/sim-harness-forensics.md`.
 
+**#385 second half — row-output lane budget (2026-07-23)**: closed the
+residual noted just above (the `[#385](https://github.com/storkme/spaghettio/issues/385)
+output-side belt-drop class`) with a new check,
+`validate::inserters::check_row_output_lane_budget` — a row's PLANNED
+output (recipe demand × its share of the recipe's physical machines,
+attributed via each machine's own output-inserter drop tile) compared
+against what its belt-out can physically realize:
+`LANE_UTILIZATION × lane_capacity_stacked(tier, stacking) × lanes_loaded`,
+`lanes_loaded` 2 only with a genuine midpoint sideload bridge (tile-
+adjacency detected — bridge and main line are edge-adjacent, unrelated
+rows never are). Fires on `electronic-circuit@10/s`'s copper-plate row
+(needs 15.0/s, a bridged yellow belt-out realizes 12.75/s) — the
+sim-measured 7.4/s-per-lane gap now has a validator voice instead of
+silently under-delivering (this fixture's in-game delivery has been
+measured short of plan). Confirmed clean on `iron-gear-wheel@10`,
+all three from-ore science packs. 6 e2e fixtures + 1 cell-composition
+fixture gained the same structural warning (documented inline, not
+tuned away); one cell-composition config
+(`cell_composed_ec15_zero_errors`) briefly false-positived when the
+check merged 3 independently sim-verified cells sharing one segment
+string — fixed by switching row identification to tile-adjacency
+clustering (pipeline-independent) rather than `LayoutResult::
+effective_rows`, which the cell-composition pipeline never populates.
+Full trail: `docs/rfc-047-lane-aware-tap-delivery.md` decision log
+(2026-07-23 entry).
+
 **`rfc-047-lane-aware-tap-delivery.md` close-out (2026-07-22)**: made
 delivery **lane-aware** so belt stacking raises rate CEILINGS, not just
 belt tiers. Leg A: the lane-rate walker's convergence-phase splitter model
