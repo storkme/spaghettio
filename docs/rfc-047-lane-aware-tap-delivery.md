@@ -718,3 +718,25 @@ generator remains future work.
   open for the tap-geometry recon — writing geometry claims from
   memory is how RFC-046's spec review found a falsified census; this
   RFC starts from cited geometry instead.
+
+- **2026-07-23 — row-output lane-budget constants: two adversarial
+  rounds, ending fully measured.** Round 1 (review blocker): the check
+  shipped an unmeasured ×2 bridge multiplier and a broken citation —
+  valid objection, "asserted from geometry." Round 2 (own goal caught
+  mid-fix): the interim ×1.5 was derived from ec10's plate row at
+  11.28/s — a CONSUMPTION-limited cell, a floor mistaken for a ceiling.
+  Dedicated ceiling cells settled it: an engine-midpoint-bridged single
+  row (cable@13/s uncommon, yellow S1, parity world) delivers **13.00/s
+  at plan in-game** → bridged factor = 13.0/7.5 ≈ 1.733 lanes (measured
+  floor; the 13→15 band is unproven — the >13 probe config
+  generation-errors before it can run). Unbridged rows: 7.40/s ≈ 0.95
+  lanes (multiple cells, any inserter type/level at parity; the 15.0/s
+  "stack rows escape the cap" review evidence was from the pre-parity
+  S=4-contaminated cells — at declared S=1 stack rows also cap at 7.4,
+  so the check stays deliberately inserter-type-blind). The measured
+  floor resolved all four e2e disputes without manual adjudication.
+  Spin-offs measured en route: cable14's 2-row merge delivers 12.45/14
+  (the #311 merger-over-commit class, first measured cell), and
+  cable13u exposes lane-throughput ERROR false positives on bridged
+  rows (walker attributes the full 13/s to one lane; the game runs it
+  at plan) — filed separately.*

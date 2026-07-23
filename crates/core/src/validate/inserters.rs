@@ -596,7 +596,7 @@ pub fn check_inserter_item_throughput(
 /// row whose belt-out has no midpoint sideload bridge realizes ONE lane
 /// regardless of how many inserters/machines feed it, no matter the
 /// inserter type, count, or research level (sim-measured 2026-07-23,
-/// `docs/sim-harness-forensics.md`: 7.4/s realized on yellow at S=1 vs
+/// the RFC-047 decision log's 2026-07-23 row-calibration table: 7.4/s realized on yellow at S=1 vs
 /// the 15/s both-lane nominal). A bridge (BS4: splitters/sideloads/UGs
 /// preserve stacks, and the bridge's lift-across-then-drop trick
 /// genuinely redistributes flow across both physical lanes) lifts the
@@ -814,9 +814,28 @@ pub fn check_row_output_lane_budget(
             let tier = row_belt_tier(&belts);
             let lanes_loaded = row_lanes_loaded(&belts);
 
-            let realizable = crate::common::LANE_UTILIZATION
-                * crate::common::lane_capacity_stacked(tier, layout.stacking)
-                * lanes_loaded as f64;
+            // Row-level realizable factors are sim-MEASURED (2026-07-23,
+            // parity world; two adversarial-review rounds — the first
+            // version's unmeasured ×2 was challenged, an interim ×1.5
+            // derived from a consumption-limited cell was then itself
+            // falsified by a dedicated ceiling cell):
+            // - unbridged 3-machine row onto yellow: 7.40/s realized of
+            //   the 7.5 lane rate, any inserter type/level → 0.95/lane.
+            // - engine-midpoint-bridged single row (cable@13 uncommon,
+            //   yellow S1): delivers 13.00/s at plan in-game →
+            //   ≥ 1.733 lanes. 13.0 is the measured FLOOR; the band up
+            //   to the 2-lane nominal is unproven either way (the
+            //   probe above 13 generation-errors before it can run).
+            // Both constants are floors at or under their measured cell.
+            const ROW_LANE_FACTOR_UNBRIDGED: f64 = 0.95;
+            const ROW_LANE_FACTOR_BRIDGED: f64 = 13.0 / 7.5; // 1.7333 measured floor
+            let lane_factor = if lanes_loaded >= 2 {
+                ROW_LANE_FACTOR_BRIDGED
+            } else {
+                ROW_LANE_FACTOR_UNBRIDGED
+            };
+            let realizable =
+                crate::common::lane_capacity_stacked(tier, layout.stacking) * lane_factor;
 
             if inflow > realizable + EPSILON {
                 let (ax, ay) = belts.iter().map(|e| (e.x, e.y)).min().unwrap();
@@ -825,15 +844,15 @@ pub fn check_row_output_lane_budget(
                         Severity::Warning,
                         "row-output-lane-budget",
                         format!(
-                            "{} row output ({}) needs {:.2}/s but {} lane{} of {} inserter-drop \
-                             delivery realizes only {:.2}/s — needs both-lane loading (a midpoint \
-                             sideload bridge) or a split output",
+                            "{} row output ({}) needs {:.2}/s but inserter-drop delivery onto {} \
+                             ({} lane{} loaded) realizes only {:.2}/s measured — needs a midpoint \
+                             bridge (measured 13.0/s floor on yellow) or a split output",
                             recipe,
                             item,
                             inflow,
+                            tier,
                             lanes_loaded,
                             if lanes_loaded == 1 { "" } else { "s" },
-                            tier,
                             realizable,
                         ),
                         ax,
@@ -2067,8 +2086,8 @@ mod tests {
     #[test]
     fn row_lane_budget_fires_when_inflow_exceeds_single_lane_yellow() {
         // 2 machines × 5.0/s = 10.0/s inflow onto one lane of yellow
-        // (6.375/s realizable) — the ec10 copper-plate shape from #385
-        // (single row, no room on a bridge either since 15.0 > 12.75, but
+        // (7.125/s realizable) — the ec10 copper-plate shape from #385
+        // (single row, no room on a bridge either since 15.0 > 13.0, but
         // this synthetic case isolates the single-lane, no-bridge path).
         let sr = row_output_spec("test-widget", "test-widget", 5.0, 2.0);
         let mut entities = machine_row_with_output_inserters("test-widget", 0, 2); // drops at x=0,4, y=2
@@ -2082,12 +2101,12 @@ mod tests {
         assert!(warns[0].message.contains("transport-belt"));
         let detail = warns[0].detail.as_ref().expect("must carry IssueDetail");
         assert!((detail.needed - 10.0).abs() < 1e-9, "{detail:?}");
-        assert!((detail.delivered - 6.375).abs() < 1e-9, "{detail:?}");
+        assert!((detail.delivered - 7.125).abs() < 1e-9, "{detail:?}");
     }
 
     #[test]
     fn row_lane_budget_silent_within_single_lane_budget() {
-        // 1 machine × 6.0/s = 6.0/s ≤ 6.375/s realizable — clean.
+        // 1 machine × 6.0/s = 6.0/s ≤ 7.125/s realizable — clean.
         let sr = row_output_spec("test-widget", "test-widget", 6.0, 1.0);
         let mut entities = machine_row_with_output_inserters("test-widget", 0, 1); // drop at x=0, y=2
         entities.extend(belt_out_row("test-widget", "test-widget", 2, 4, "transport-belt"));
@@ -2100,7 +2119,7 @@ mod tests {
     fn row_lane_budget_bridge_doubles_budget_to_silence_same_inflow() {
         // Identical 10.0/s inflow to the firing test above, but the
         // belt-out now has a second off-axis line (bridge) — two lanes
-        // realize 12.75/s, which covers it.
+        // realize 13.0/s (measured bridged floor), which covers it.
         let sr = row_output_spec("test-widget", "test-widget", 5.0, 2.0);
         let mut entities = machine_row_with_output_inserters("test-widget", 0, 2); // drops at x=0,4, y=2
         entities.extend(belt_out_row_bridged("test-widget", "test-widget", 2, 8, "transport-belt"));
@@ -2108,26 +2127,26 @@ mod tests {
         let issues = check_row_output_lane_budget(&lr, Some(&sr));
         assert!(
             lane_budget_warnings(&issues).is_empty(),
-            "bridged row should realize 2 lanes (12.75/s ≥ 10.0/s): {issues:?}"
+            "bridged row should realize the 13.0/s measured floor (≥ 10.0/s): {issues:?}"
         );
     }
 
     #[test]
     fn row_lane_budget_epsilon_boundary() {
-        // Exactly at the realizable figure (6.375/s) plus the check's own
+        // Exactly at the realizable figure (7.125/s) plus the check's own
         // 0.02 epsilon must NOT fire; a hair over must.
         let mut entities = machine_row_with_output_inserters("test-widget", 0, 1); // drop at x=0, y=2
         entities.extend(belt_out_row("test-widget", "test-widget", 2, 4, "transport-belt"));
         let lr = LayoutResult { entities, width: 20, height: 20, stacking: 1, ..Default::default() };
 
-        let at_boundary = row_output_spec("test-widget", "test-widget", 6.395, 1.0); // 6.375 + 0.02
+        let at_boundary = row_output_spec("test-widget", "test-widget", 7.145, 1.0); // 7.125 + 0.02
         let issues = check_row_output_lane_budget(&lr, Some(&at_boundary));
         assert!(
             lane_budget_warnings(&issues).is_empty(),
             "exactly realizable+epsilon must not fire: {issues:?}"
         );
 
-        let past_boundary = row_output_spec("test-widget", "test-widget", 6.40, 1.0); // 6.375 + 0.025
+        let past_boundary = row_output_spec("test-widget", "test-widget", 7.15, 1.0); // 7.125 + 0.025
         let issues = check_row_output_lane_budget(&lr, Some(&past_boundary));
         assert_eq!(
             lane_budget_warnings(&issues).len(),
@@ -2203,7 +2222,7 @@ mod tests {
         // two "cells" at the SAME y but far apart in x, sharing the
         // literal `row:widget:belt-out`/`:machine` strings, no
         // `effective_rows`. Each cell's own demand (5.0/s) sits
-        // comfortably under a single lane's 6.375/s budget — merging
+        // comfortably under a single lane's 7.125/s budget — merging
         // them (10.0/s combined) would wrongly fire. Confirms adjacency
         // splits on x-gaps too, not just y-gaps, and that machine
         // attribution (via inserter drop tracing) stays local to each
@@ -2230,7 +2249,7 @@ mod tests {
         let issues = check_row_output_lane_budget(&lr, Some(&sr));
         assert!(
             lane_budget_warnings(&issues).is_empty(),
-            "each cell's own 5.0/s sits under the 6.375/s single-lane budget: {issues:?}"
+            "each cell's own 5.0/s sits under the 7.125/s single-lane budget: {issues:?}"
         );
     }
 
