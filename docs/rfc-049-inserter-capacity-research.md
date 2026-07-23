@@ -1,6 +1,6 @@
 # RFC-049: Inserter capacity research (hand-size axis)
 
-Registry: [`rfcs.md`](rfcs.md). Status: **Complete** (2026-07-22; in-game anchor open — kill 4; input-side measured-data gap open — #343).
+Registry: [`rfcs.md`](rfcs.md). Status: **Complete** (2026-07-22; in-game anchor open — kill 4; input-side measured-data gap open — #343). **2026-07-23 (#385): the belt-drop (output-side) swing term is superseded by a sim-measured min-form — see the decision log's newest entry; this RFC's own belt-drop decomposition is now one half of `common::belt_drop_rate`'s `min(swing_term, lane_cap_term)`, not the whole model.**
 
 ## Summary
 
@@ -204,6 +204,79 @@ table (Phase 3).
   completeness if Phase 0 degraded to {Off, Max}.
 
 ## Decision log
+
+- **2026-07-23 — #385: belt-drop model replaced with the sim-measured
+  min-form; supersedes this RFC's "no recalibration" pattern for the
+  belt-drop (output) path specifically.** `common::belt_drop_rate` gained
+  a fifth parameter, `target_belt: &str`, and now returns
+  `min(swing_term, LANE_UTILIZATION × lane_capacity_stacked(target_belt,
+  stacking))` with `LANE_UTILIZATION = 0.85`.
+
+  **Motivation.** The flat swing-term-only model (this RFC's own
+  belt-drop decomposition, `swings × hand`) was never checked against
+  the belt's own physical throughput — a max-hand legendary stack
+  inserter could be credited 38.4/s onto a single lane of a plain,
+  unstacked yellow belt (raw lane capacity 7.5/s!), an order-of-magnitude
+  over-credit that predates this RFC (RFC-046's flat 12.0/s stack credit
+  at S=1 already had the same problem; RFC-049 generalized the swing
+  term across research levels without revisiting the belt-physical
+  bound). `docs/sim-harness-forensics.md`'s harness gave the instrument:
+  solo-inserter belt-drop calibration onto yellow (true-S1 world, Normal
+  quality) measured stack at 6.50/6.50/7.10 (L0/L2/L7) against the
+  swing-only model's 12.0/19.2/38.4 — a 2–5× over-credit — and fast at
+  2.40/4.80/6.40 against 2.31/4.62/9.24 (fast L0/L2 were already
+  conservative; L7's 9.24 over-credited the measured 6.40 by 44%).
+  `LANE_UTILIZATION × lane_capacity_stacked("transport-belt", 1) =
+  6.375` sits under every measured stack cell. The non-bulk swing term
+  additionally gained a sim-measured floor correction at L7 (multiplier
+  2.67 = 6.40/2.40, replacing the raw hand-ratio 4.0) so red/express
+  targets — whose lane cap is too generous to floor the over-credit on
+  its own — don't inherit it. This is the 2026-07-23 option-A decision:
+  close the gap with measurement rather than continue shipping the
+  uncorrected swing term now that the sim harness (RFC-050) makes the
+  measurement cheap — the same "measured, never derived" discipline
+  kill 2 already established for the input side, extended to the output
+  side this RFC had left on the flat/decomposed model.
+
+  **Deliberate breaks** (documented, not hidden — none silently patched
+  over): a stack inserter's flat 12.0/s belt-drop credit onto a plain
+  yellow belt (S=1, L=0 — this RFC's own L0 identity baseline) now
+  credits 6.375/s; `size_belt_drop_side` and `size_side_output` lost
+  their `stacking≤1 && level==0` shortcut to the flat ladder (exact
+  pre-#385, wrong whenever the lane cap binds, so every call now routes
+  through `belt_drop_rate`); one e2e fixture's expected inserter count
+  changed (`fluid_multi_input_sulfur_output_uses_extra_column`: 2→3
+  stack inserters at 15/s onto yellow — 2×6.375=12.75 < 15 ≤
+  3×6.375=19.125); two ladder/validator constants-identity assertions
+  changed (fast/long-handed at L7: ×4.0 → ×2.67, reflecting the measured
+  floor correction above). Full suite re-run clean after every fix (lib
+  798 / e2e 60 / netflow parity 10, one clean run each; clippy `--lib -D
+  warnings` clean; WASM rebuild clean). The `stacking_fanin_wall_lift_
+  ec6_yellow_legendary` fixture (S=2, legendary, yellow) was the most at
+  risk — its stack-inserter belt-drop swing term (36.0/s) is nearly 3×
+  its new yellow/S=2 lane cap (12.75/s) — but stayed green with zero new
+  warnings: every belt-drop OUTPUT side there is a single machine's own
+  modest per-machine rate, comfortably under 12.75/s even lane-capped
+  (verified with an ad-hoc reproduction, not just the fixture's own
+  error-only assertion).
+
+  **Threading.** `belt_drop_rate` gained `target_belt: &str`; the sizing
+  ladder's `size_belt_drop_side` / `size_side_output`
+  (`bus::inserter_ladder`) and the validator's `belt_drop_throughput`
+  (`validate::inserters`) all thread it through. Ladder call sites
+  (`bus::templates`) pass the row's own declared output-belt variable —
+  `output_belt`, `sec_belt` (single_input_row's secondary output),
+  `belt_name` (fluid_multi_input_row's `Option<&str>`-derived belt),
+  `collector_belt` / `minor_collector_belt` (self_loop_row's major/minor
+  collector belts) — one per template call site, all already in scope;
+  no template gained a new function parameter. The validator has no such
+  variable in hand, so it builds a `(x,y) → belt-tier` map from the
+  layout's own placed belt/UG/splitter entities (normalizing UGs and
+  splitters to their surface tier via `ug_to_surface_tier` /
+  `splitter_to_surface_tier`) and falls back to `"transport-belt"` — the
+  most conservative tier — when the drop tile has no belt-ish entity
+  (hand-built test layouts only; no real-pipeline call site hit the
+  fallback in testing).
 
 - **2026-07-22 — Code-lens review: APPROVE, zero correctness findings;
   both hygiene items folded.** The reviewer re-ran every gate, hand-
