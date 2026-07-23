@@ -359,8 +359,14 @@ fn bp_data_to_layout(bp_data: BpData) -> LayoutResult {
         // "mirror" is a front-back port flip the game cannot express as
         // its (left-right) `mirror` flag; export encodes it as a 180°
         // rotation with mirror:false, so a rotated import maps back to
-        // the engine's (unrotated, mirror:true) placement. Tile-identical
-        // either way (x-symmetric ports).
+        // the engine's (unrotated, mirror:true) placement. KNOWN
+        // TRADE-OFF (#403 review): the wire forms (South, unmirrored)
+        // and (North, mirrored) COLLIDE — this reverse map is exact for
+        // everything spaghettio exports, but a community blueprint with
+        // a genuinely South/West-unmirrored refinery/foundry/cryo
+        // imports as the engine's mirrored form, whose INPUT face is
+        // 180° away. Pinned by
+        // `south_unmirrored_refinery_import_maps_to_mirrored_north`.
         let mirror_rot = matches!(
             raw.name.as_str(),
             "oil-refinery" | "foundry" | "cryogenic-plant"
@@ -648,6 +654,29 @@ mod tests {
         assert_eq!(parsed.entities[0].direction, EntityDirection::West);
         assert_eq!(parsed.entities[1].direction, EntityDirection::East);
         assert_eq!(parsed.entities[2].direction, EntityDirection::East);
+    }
+
+    /// #400/#403: the mirror-as-rotation wire encoding COLLIDES with a
+    /// genuinely South-unmirrored refinery — the parser maps both wire
+    /// forms to the engine's (North, mirror:true) placement. Exact for
+    /// spaghettio's own round-trips; a deliberate, PINNED trade-off for
+    /// community imports (the input face lands 180° from the original
+    /// there — #403 review enumeration).
+    #[test]
+    fn south_unmirrored_refinery_import_maps_to_mirrored_north() {
+        let bp = encode_envelope(&serde_json::json!({
+            "blueprint": {
+                "item": "blueprint",
+                "entities": [
+                    {"entity_number": 1, "name": "oil-refinery",
+                     "position": {"x": 2.5, "y": 2.5}, "direction": 8}
+                ]
+            }
+        }));
+        let parsed = parse_blueprint_string(&bp).expect("should parse");
+        assert_eq!(parsed.entities[0].direction, EntityDirection::North);
+        assert!(parsed.entities[0].mirror,
+            "South-unmirrored wire form maps to the engine's mirrored-North placement");
     }
 
     /// Pipe-to-ground un-flips on import (#364): a game pair faces AWAY

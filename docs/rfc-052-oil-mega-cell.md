@@ -140,6 +140,22 @@ feeds and the composed layout must pass the pipe-isolation validators
 
 ## Decision log
 
+- *2026-07-23 — #403 review folds (no blockers; both findings are
+  verification-rigor gaps, not live bugs): (1) the mirror-as-rotation
+  wire encoding COLLIDES with genuinely South/West-unmirrored
+  placements — the parser maps both to the engine's mirrored-North
+  form, exact for our own round-trips but input-face-180°-wrong for
+  such community imports (12/24 enumeration cases; overclaiming
+  comments corrected, trade-off pinned by a parser unit test).
+  (2) KNOWN GAP, Phase-C precondition: per-fluidbox IDENTITY (crude vs
+  water) swaps sides under rotation-vs-mirror — the game itself warns
+  about this exact confusion (FFF #394). Inert for basic processing
+  (single fluid; both sim PASSes confirmed unexercised by decoding the
+  fixtures' entity lists), but advanced-oil-processing on a mirrored
+  refinery is UNVERIFIED for fluid identity until Phase C measures it;
+  `verify_fluid_ports_transforms.py` checks positional SET equality
+  only and cannot catch identity swaps.*
+
 - *2026-07-23 — #400 FIXED, gate (a) fully MET: the first working
   refineries in the project's history. Three stacked defects, each
   found by the sim and fixed at its proper layer: (1) TEMPLATE — the

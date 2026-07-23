@@ -251,11 +251,20 @@ pub fn export(layout: &LayoutResult, label: &str) -> String {
                     // axis — an exported (North, mirror) refinery still has
                     // its inputs on the south in-game, so crude sat ON the
                     // engine's intended port tiles and never entered (total
-                    // stall, first refinery measurement). For x-symmetric
-                    // port layouts (refinery/foundry/cryo — asserted by the
-                    // fluid_ports provenance script) the engine's y-flip is
-                    // TILE-IDENTICAL to a 180° rotation, so export encodes it
-                    // as (direction+8, mirror:false); the parser reverses it.
+                    // stall, first refinery measurement). For the engine's
+                    // own (North, mirror) placements the y-flip is
+                    // tile-identical to a 180° rotation — port POSITIONS
+                    // coincide because the layouts are x-symmetric — so
+                    // export encodes (direction+8, mirror:false) and the
+                    // parser reverses it. Two recorded caveats (#403
+                    // review): the wire form collides with genuinely
+                    // rotated-unmirrored placements (parser trade-off,
+                    // pinned there), and per-fluidbox IDENTITY (crude vs
+                    // water) swaps sides under rotation-vs-mirror — inert
+                    // for single-fluid basic processing, a Phase-C
+                    // precondition for advanced-oil (RFC-052 decision
+                    // log; the game itself warns about this exact
+                    // confusion in FFF #394).
                     (ent.direction as u8 + 8) % 16
                 } else {
                     ent.direction as u8
