@@ -762,16 +762,27 @@ script.on_nth_tick(60, function(ev)
 
   local s = game.get_surface("lab")
   local stats = game.forces.player.get_item_production_statistics(s)
+  local fstats = game.forces.player.get_fluid_production_statistics(s)
+  -- Fluid intermediates (mega-cells, RFC-052) live in the fluid
+  -- statistics; get_input_count on the ITEM stats crashes with
+  -- "Unknown item name" for them. Names that are only fluid
+  -- prototypes route to fluid stats.
+  local function produced_count(name)
+    if prototypes.fluid[name] and not prototypes.item[name] then
+      return fstats.get_input_count(name)
+    end
+    return stats.get_input_count(name)
+  end
 
   if ev.tick % 1200 == 0 then
     local produced = {}
-    for _, item in ipairs(PLANNED_ITEMS) do produced[item] = stats.get_input_count(item) end
+    for _, item in ipairs(PLANNED_ITEMS) do produced[item] = produced_count(item) end
     table.insert(storage.samples, {tick = ev.tick, drained = storage.drained_total,
       produced = produced, fed = storage.fed_total})
   end
 
   if ev.tick >= WARMUP_TICKS and ev.tick % WINDOW_TICKS == 0 then
-    local cp = {tick = ev.tick, produced = stats.get_input_count(TARGET),
+    local cp = {tick = ev.tick, produced = produced_count(TARGET),
       delivered = storage.drained_total[TARGET] or 0}
     table.insert(storage.checkpoints, cp)
     local n = #storage.checkpoints

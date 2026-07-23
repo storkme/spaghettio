@@ -140,6 +140,33 @@ feeds and the composed layout must pass the pipe-isolation validators
 
 ## Decision log
 
+- *2026-07-23 — Phase A: validator half of gate (a) MET; sim half
+  BLOCKED by a discovery bigger than the phase. Delivered:
+  `cells/mega.rs` (`compose_mega_calibrated` — uncropped engine
+  layout + generic boundary re-pitching adapter with per-record band
+  lanes and ADJACENCY-AWARE fluid paths: the sulfur fixture
+  immediately proved naive tails merge foreign fluid networks, so
+  fluid feed routes plan against a fluid-occupancy map, shift their
+  tails sideways, and join their own trunk by adjacency — refusing
+  loudly when no isolation-safe path exists). plastic@2, plastic@5,
+  sulfur@2 all compose 0 errors / 0 warnings
+  (`mega_cell_plastic_from_crude_zero_issues` gates it). En route the
+  harness could not measure fluid INTERMEDIATES at all (scenario Lua
+  crashed on `get_input_count("petroleum-gas")`) — fixed by routing
+  fluid-only prototype names to fluid production statistics. Then the
+  sim delivered the real finding: the FIRST refinery measurement ever
+  (no blessed baseline contains one) shows crude never enters the
+  refineries — the trunk's UG hops sit exactly on the input-port
+  tiles while its connector pipes sit on non-port columns; the
+  `fluid_ports.rs` table is RIGHT and the trunk stamper contradicts
+  it; the engine's own validator accepts what the game rejects
+  (#348/#364 validator-blind class; direction-flip experiments ruled
+  out export orientation). Filed as #400 — oil-ladder-wide (chemical
+  pack, FRF, USP), blocks this RFC's sim gates, and re-litigates
+  OIL_MIRROR's "in-game-validated" comment. No registry entries
+  (measured-at-plan only; both mega fixtures FAIL honestly until
+  #400).*
+
 - *2026-07-23 — RFC authored (number claimed after fresh origin/main
   registry + open-PR collision check). Scoping probe
   (`debug_oil_cell_probe`, local example): (1) the solver picks

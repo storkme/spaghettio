@@ -445,25 +445,38 @@ fn cell_registry_hashes_current() {
     // Fixture configs the registry may reference, keyed by (target,
     // rate); same-key configs (mil5 ore vs plates) disambiguate by
     // hash.
-    let configs: &[(&str, f64, &[&str])] = &[
-        ("advanced-circuit", 1.0, &["iron-plate", "copper-plate", "plastic-bar"]),
-        ("electronic-circuit", 15.0, &["iron-plate", "copper-plate"]),
-        ("electronic-circuit", 30.0, &["iron-plate", "copper-plate"]),
-        ("military-science-pack", 5.0, &["iron-ore", "copper-ore", "stone", "coal"]),
-        ("military-science-pack", 5.0, &["iron-plate", "copper-plate", "steel-plate", "stone-brick", "coal"]),
+    // kind: "chain" re-derives via compose_chain; "mega" via the
+    // RFC-052 uncropped mega-cell composer.
+    let configs: &[(&str, f64, &[&str], &str)] = &[
+        ("advanced-circuit", 1.0, &["iron-plate", "copper-plate", "plastic-bar"], "chain"),
+        ("electronic-circuit", 15.0, &["iron-plate", "copper-plate"], "chain"),
+        ("electronic-circuit", 30.0, &["iron-plate", "copper-plate"], "chain"),
+        ("military-science-pack", 5.0, &["iron-ore", "copper-ore", "stone", "coal"], "chain"),
+        ("military-science-pack", 5.0, &["iron-plate", "copper-plate", "steel-plate", "stone-brick", "coal"], "chain"),
+        ("plastic-bar", 2.0, &["crude-oil", "water", "coal"], "mega"),
+        ("sulfur", 2.0, &["crude-oil", "water"], "mega"),
     ];
     assert!(!entries().is_empty(), "registry must not be empty");
     for e in entries() {
         let candidates: Vec<String> = configs
             .iter()
-            .filter(|(t, r, _)| *t == e.target && (r - e.rate).abs() < 1e-9)
-            .map(|(t, r, inputs)| {
-                let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
-                let sr = solver::solve_with_palette_exclusions_and_quality(
-                    t, *r, &inputs_set, &MachinePalette::default(),
-                    "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
-                ).unwrap();
-                format!("{:016x}", geometry_hash(&compose_chain(&sr).unwrap()))
+            .filter(|(t, r, _, _)| *t == e.target && (r - e.rate).abs() < 1e-9)
+            .map(|(t, r, inputs, kind)| {
+                let l = match *kind {
+                    "mega" => {
+                        spaghettio_core::bus::cells::mega::compose_mega_calibrated(t, *r, inputs)
+                            .unwrap().1
+                    }
+                    _ => {
+                        let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
+                        let sr = solver::solve_with_palette_exclusions_and_quality(
+                            t, *r, &inputs_set, &MachinePalette::default(),
+                            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+                        ).unwrap();
+                        compose_chain(&sr).unwrap()
+                    }
+                };
+                format!("{:016x}", geometry_hash(&l))
             })
             .collect();
         assert!(!candidates.is_empty(),
@@ -673,6 +686,87 @@ fn selection_tier_validation_never_leaks_trace_events() {
         .count();
     assert_eq!(n_validation_events, 1,
         "only the winner's own validation may appear in the trace (leaked tier validations corrupt the web timing log)");
+}
+
+/// PERMANENT GATE (RFC-052 Phase A, gate (a) validator half): the oil
+/// mega-cell — the UNCROPPED engine layout for a fluid subgraph,
+/// boundary-adapted to the calibrated form by the generic re-pitching
+/// adapter — composes at 0 errors / 0 warnings. plastic-from-crude is
+/// the fixture (refinery → chem plant, one fluid intermediate; the
+/// crop would sever its petroleum trunk, which is the whole reason
+/// mega-cells are uncropped — RFC-052 decision log). The sim half of
+/// gate (a) lives in the registry entry.
+#[test]
+fn mega_cell_plastic_from_crude_zero_issues() {
+    use spaghettio_core::bus::cells::mega::compose_mega_calibrated;
+    use spaghettio_core::validate::{self, LayoutStyle};
+    // All three Phase-A fixtures gate here (#401 review note: probe-only
+    // coverage of plastic@5/sulfur@2 wouldn't catch a regression).
+    for (label, item, rate, inputs) in [
+        ("plastic@2", "plastic-bar", 2.0, &["crude-oil", "water", "coal"][..]),
+        ("plastic@5", "plastic-bar", 5.0, &["crude-oil", "water", "coal"][..]),
+        ("sulfur@2", "sulfur", 2.0, &["crude-oil", "water"][..]),
+    ] {
+        let (sr, l) = compose_mega_calibrated(item, rate, inputs)
+            .unwrap_or_else(|e| panic!("{label}: mega must compose: {e}"));
+        // Kit-pitch invariant: boundary heads >= 4 apart, all at y=0,
+        // sorted west→east (#363).
+        let xs: Vec<i32> = l.boundary_inputs.iter().map(|b| b.x).collect();
+        assert!(xs.windows(2).all(|w| w[1] - w[0] >= 4), "{label}: feed heads must sit at >=4 pitch: {xs:?}");
+        assert!(l.boundary_inputs.iter().all(|b| b.y == 0), "{label}: feed heads at the north edge");
+        let issues = validate::validate(&l, Some(&sr), LayoutStyle::Bus)
+            .unwrap_or_else(|e| panic!("{label}: mega must validate: {e}"));
+        assert!(issues.is_empty(), "{label}: mega issues: {issues:?}");
+    }
+}
+
+/// Artifact producer for RFC-052 mega-cell sim runs (declared 0).
+#[test]
+#[ignore = "artifact producer"]
+fn export_mega_fixtures_for_sim() {
+    use spaghettio_core::bus::cells::mega::compose_mega_calibrated;
+    for (label, item, rate, inputs) in [
+        ("mega-plastic2", "plastic-bar", 2.0, &["crude-oil", "water", "coal"][..]),
+        ("mega-sulfur2", "sulfur", 2.0, &["crude-oil", "water"][..]),
+    ] {
+        let (sr, l) = compose_mega_calibrated(item, rate, inputs).unwrap();
+        let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(&l, &sr, label);
+        std::fs::create_dir_all("target/tmp").unwrap();
+        std::fs::write(format!("target/tmp/{label}.bp"), &bp).unwrap();
+        std::fs::write(format!("target/tmp/{label}.manifest.json"),
+            serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
+        println!("wrote target/tmp/{label}.bp ({} in / {} out)",
+            l.boundary_inputs.len(), l.boundary_outputs.len());
+    }
+}
+
+#[test]
+#[ignore = "exploration probe"]
+fn probe_mega_cells() {
+    use spaghettio_core::bus::cells::mega::compose_mega_calibrated;
+    use spaghettio_core::validate::{self, LayoutStyle, Severity};
+    for (label, item, rate, inputs) in [
+        ("plastic2", "plastic-bar", 2.0, &["crude-oil", "water", "coal"][..]),
+        ("plastic5", "plastic-bar", 5.0, &["crude-oil", "water", "coal"][..]),
+        ("sulfur2", "sulfur", 2.0, &["crude-oil", "water"][..]),
+    ] {
+        match compose_mega_calibrated(item, rate, inputs) {
+            Ok((sr, l)) => {
+                let d = validate::validate(&l, Some(&sr), LayoutStyle::Bus);
+                match d {
+                    Ok(is) => {
+                        let e = is.iter().filter(|i| i.severity == Severity::Error).count();
+                        println!("{label}: {}x{} {} entities, {} errors / {} warnings; feeds {:?}",
+                            l.width, l.height, l.entities.len(), e, is.len() - e,
+                            l.boundary_inputs.iter().map(|b| (b.item.clone(), b.x)).collect::<Vec<_>>());
+                        for i in is.iter().take(8) { println!("   [{:?}] {} {}", i.severity, i.category, i.message); }
+                    }
+                    Err(er) => println!("{label}: validate ERR {}", format!("{er}").lines().next().unwrap_or("")),
+                }
+            }
+            Err(e) => println!("{label}: REFUSED {e}"),
+        }
+    }
 }
 
 #[test]
