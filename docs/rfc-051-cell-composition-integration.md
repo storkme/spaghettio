@@ -223,6 +223,43 @@ follow-ups.
 
 ## Decision log
 
+- *2026-07-23 — mil5-ore COMPOSES (the Router overlap classes fixed;
+  gate flipped to positive). Diagnosis: all 26 overlapping tiles were
+  BOUNDARY BLINDNESS — the two-registry Router hops strict interiors
+  of crossing runs, while corners, vcol terminals, and hop mouths sit
+  exactly on boundary tiles of other runs. Three structural causes,
+  each fixed collision-triggered so every clean fixture stays
+  bit-identical (the registered chain-ac1 hash is the enforced proof;
+  we cannot re-measure until #390 lands): (1) sibling fan-out bypass
+  entries share the branch row → occupancy-checked stamping
+  (`is_row_stampable`, which exempts hoppable interior crossings —
+  the naive version broke ac1 by counting feed columns the legacy
+  path legitimately hops) with an IN-GAP EARLY DESCENT fallback;
+  (2) 1-pitch bypass rows leave no legal hop (mouths land at R±1 =
+  other rows, a descent's terminal at its own row−1) → pitch 3
+  (pitch 2 still fails: adjacent rows cluster into one hop whose
+  mouths jump to the next row); n_bypass ≤ 1 keeps the old geometry
+  exactly; (3) 1-pitch strip lanes put corner/hrow-start tiles on
+  neighbor columns → pitch 2 in multi-edge strips only. Behind the
+  overlaps hid the REAL defect, pre-dating quantization: the bypass
+  machinery silently assumed eastward flow, but the
+  reversed-dependency placement puts consumers WEST of producers for
+  items consumed at several depths (mil5's iron sits east of grenade
+  and steel) — the westward `hrow(x0>x1)` stamped NOTHING, leaving
+  dead-end corners. Fixed with a westward bypass variant (`hrow_west`
+  + west/south corners, in-gap descent, north-corner entry into the
+  consumer strip). Results: mil5-ore 720×34, 0 errors / 1 warning,
+  composed candidate wins over the bus refusal
+  (`cell_candidate_composes_mil5_ore`); mil5-plates' composed
+  candidate went 0/0 (225×22) as a side effect — but the SEARCH still
+  returns the broken native layout there (accepted never runs full
+  validation; native outscores on density) — filed as #392, shared
+  scoring machinery, its own decision. Ascent-terminal-on-feed-row
+  gets a local feed UG retrofit (`retrofit_feed_hop`, fires on
+  collision only; refuses loudly on unrecognized shapes). Registry
+  world-axis gap filed as #391 (fold into the post-#390 declaration
+  package).*
+
 - *2026-07-22 — K-quantization + #383 ROOT CAUSE (the premise
   falsified mid-implementation). Ratio quantization landed in
   `compose_chain`: K identical side-by-side copies at 1/K rate

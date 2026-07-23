@@ -560,25 +560,38 @@ fn cell_candidate_never_displaces_a_succeeding_bus() {
     }
 }
 
-/// PERMANENT GATE (#387 review finding): a composed candidate that
-/// carries validation ERRORS must refuse — never win a bus refusal as
-/// a silently broken Ok (`score_layout.accepted` doesn't run the full
-/// validator). mil5-ore is the live specimen: bus refuses on lane
-/// capacity, composition carries the Router-overlap class, so the
-/// whole build must Err until one of them is fixed. If this gate fails
-/// with an Ok layout, either the overlaps got fixed (move mil5-ore to
-/// the positive gates — a capability win) or the self-validation
-/// regressed (a bug).
+/// PERMANENT GATE (flipped 2026-07-23 — the capability win its
+/// predecessor anticipated): mil5-ore COMPOSES. The Router's overlap
+/// classes (boundary-blind hops, 1-pitch bypass rows/lanes) and the
+/// silent east-only bypass assumption (reversed-dependency placement
+/// can put consumers WEST of producers) are fixed, so the 9-spec
+/// scaling-wall fixture the bus refuses (stone-brick lane capacity,
+/// #336-class) now wins via composition at 0 validation errors. The
+/// self-validation contract (#387 review) stands behind it: if this
+/// geometry ever regresses to errors, the candidate refuses and this
+/// gate fails on the refusal — never on a silently broken Ok.
 #[test]
-fn cell_candidate_refuses_error_laden_composition() {
+fn cell_candidate_composes_mil5_ore() {
+    use spaghettio_core::validate::{self, LayoutStyle, Severity};
     let inputs: FxHashSet<String> =
         ["iron-ore", "copper-ore", "stone", "coal"].iter().map(|s| s.to_string()).collect();
     let sr = solver::solve_with_palette_exclusions_and_quality(
         "military-science-pack", 5.0, &inputs, &MachinePalette::default(),
         "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
     ).unwrap();
-    let r = layout::build_bus_layout(&sr, layout::LayoutOptions::default());
-    assert!(r.is_err(), "mil5-ore must refuse (bus lane-capacity + composed overlaps), not return a broken layout");
+    // Bus-only arm still refuses — composition is doing the winning.
+    let off = layout::build_bus_layout(&sr, layout::LayoutOptions {
+        cell_composition: spaghettio_core::bus::cells::CellComposition::Off,
+        ..Default::default()
+    });
+    assert!(off.is_err(), "bus-only mil5-ore must still refuse (else move this fixture to the bus ladder)");
+    let l = layout::build_bus_layout(&sr, layout::LayoutOptions::default())
+        .expect("mil5-ore must compose");
+    assert!(l.warnings.iter().any(|w| w.starts_with("cell-composed:")),
+        "the composed candidate must be the winner");
+    let issues = validate::validate(&l, Some(&sr), LayoutStyle::Bus).unwrap();
+    let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
+    assert!(errors.is_empty(), "composed mil5-ore errors: {errors:?}");
 }
 
 #[test]
