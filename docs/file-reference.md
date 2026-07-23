@@ -22,6 +22,7 @@ Full reference table. The most-visited files are summarised in `CLAUDE.md`.
 | `sat.rs` | Varisat-backed SAT solver for bus crossing zones |
 | `zone_cache.rs` | On-disk memo for expensive SAT solves (native only) |
 | `analysis.rs` | Post-layout analytics used by tests + snapshot tooling |
+| `classify.rs` | Strategy feature extraction (`classify()` — archetype, chain level, direct insertion, belt/pipe/pole networks, periodicity) over a parsed layout; community-blueprint mining for the strategy-gap map. Attached to `BlueprintAnalysis.features` |
 
 ### Bus layout subsystem (`crates/core/src/bus/`)
 

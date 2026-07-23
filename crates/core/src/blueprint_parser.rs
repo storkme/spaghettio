@@ -170,10 +170,14 @@ fn parse_item_value(val: &serde_json::Value) -> Option<BpEntityItem> {
 /// Factorio 2.0 `filters` array entry: `{"index": 1, "name": "iron-plate"}`.
 /// 1-indexed; order is not guaranteed by the format so entries are sorted
 /// by `index` before being collapsed into `PlacedEntity.filters`.
+/// `name` is optional: 2.0 also allows quality-only filter conditions
+/// (`{"index":1,"quality":"legendary","comparator":"="}` — no item name),
+/// which carry no item information and are dropped on collapse rather than
+/// failing the whole blueprint parse (community-corpus finding, 2026-07-22).
 #[derive(Deserialize)]
 struct BpFilter {
     index: u32,
-    name: String,
+    name: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -384,7 +388,7 @@ fn bp_data_to_layout(bp_data: BpData) -> LayoutResult {
 
         let mut raw_filters = raw.filters;
         raw_filters.sort_by_key(|f| f.index);
-        let filters: Vec<String> = raw_filters.into_iter().map(|f| f.name).collect();
+        let filters: Vec<String> = raw_filters.into_iter().filter_map(|f| f.name).collect();
 
         entities.push(PlacedEntity {
             name: raw.name,
@@ -931,6 +935,34 @@ mod tests {
             .find(|e| e.name == "inserter")
             .expect("plain inserter entity");
         assert!(plain.filters.is_empty());
+    }
+
+    #[test]
+    fn quality_only_filters_do_not_break_parse() {
+        // Factorio 2.0 allows filter conditions with no item `name`
+        // (quality-only: {"index":1,"quality":"legendary","comparator":"="}).
+        // Observed in the wild (vulcanus mall, community corpus 2026-07-22):
+        // a required `name` rejected the whole blueprint. The condition
+        // carries no item information, so it is dropped, keeping named ones.
+        let bp = encode_envelope(&serde_json::json!({
+            "blueprint": {
+                "entities": [
+                    {"entity_number": 1, "name": "bulk-inserter",
+                     "position": {"x": 0.5, "y": 0.5},
+                     "filters": [
+                        {"index": 1, "name": "iron-plate"},
+                        {"index": 2, "quality": "legendary", "comparator": "="},
+                        {"index": 3, "name": "copper-plate"}
+                     ],
+                     "use_filters": true}
+                ]
+            }
+        }));
+        let parsed = parse_blueprint_string(&bp).expect("quality-only filter must not break parse");
+        assert_eq!(
+            parsed.entities[0].filters,
+            vec!["iron-plate".to_string(), "copper-plate".to_string()]
+        );
     }
 
     #[test]

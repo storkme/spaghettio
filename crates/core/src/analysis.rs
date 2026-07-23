@@ -161,6 +161,10 @@ pub struct BlueprintAnalysis {
 
     // Machines without known recipes (entity had recipe field but we can't look it up)
     pub unknown_recipes: Vec<String>,
+
+    /// Strategy features (HOW the blueprint is built, not what it makes) —
+    /// see [`crate::classify`].
+    pub features: crate::classify::BlueprintFeatures,
 }
 
 /// Collect all smelting-category recipes from the DB.
@@ -496,7 +500,7 @@ pub fn analyze(layout: &LayoutResult) -> BlueprintAnalysis {
         0.0
     };
 
-    BlueprintAnalysis {
+    let mut result = BlueprintAnalysis {
         final_products,
         recipe_count: recipe_machines.len(),
         machine_count,
@@ -516,7 +520,10 @@ pub fn analyze(layout: &LayoutResult) -> BlueprintAnalysis {
         chain_depth,
         throughput_estimates,
         unknown_recipes,
-    }
+        features: crate::classify::BlueprintFeatures::default(),
+    };
+    result.features = crate::classify::classify(layout, &result);
+    result
 }
 
 /// Build a production chain by walking recipe dependencies depth-first.
