@@ -946,7 +946,13 @@ pub fn select_best_decomposition(
         (cells_run.outcome, cells_run.events, "cell-composed"),
     ];
 
-    // Find best accepted candidate (highest score).
+    // Find best accepted candidate (highest score). The candidates
+    // array is a PREFERENCE ranking (native first, cell-composed
+    // last), so exact score ties resolve to the EARLIEST index — a
+    // bare `max_by` keeps the last maximum, which would hand a tie to
+    // cell-composed and silently break the additive contract (#384
+    // review finding 4: additivity rested on an empirical score
+    // margin, with the tie-break pointing the wrong way).
     let best_accepted_idx = candidates
         .iter()
         .enumerate()
@@ -959,7 +965,11 @@ pub fn select_best_decomposition(
                 }
             })
         })
-        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+        .max_by(|(ia, a), (ib, b)| {
+            a.partial_cmp(b)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(ib.cmp(ia))
+        })
         .map(|(i, _)| i);
 
     // The scoped Pooled merge-tap decision (error-count metric, ties → Native)
