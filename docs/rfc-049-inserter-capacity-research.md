@@ -1,7 +1,6 @@
 # RFC-049: Inserter capacity research (hand-size axis)
 
-Registry: [`rfcs.md`](rfcs.md). Status: **Complete** (2026-07-22; in-game anchor open — kill 4; input-side measured-data gap open — #343). **2026-07-23 (#385): the belt-drop (output-side) swing term is superseded by a sim-measured min-form — see the decision log's newest entry; this RFC's own belt-drop decomposition is now one half of `common::belt_drop_rate`'s `min(swing_term, lane_cap_term)`, not the whole model.**
-Registry: [`rfcs.md`](rfcs.md). Status: **Complete** (2026-07-22; in-game anchor open — kill 4; input-side measured-data gap CLOSED same day — #343 via the Phase-2 calibration matrix, Phase 3 sizes to the measured rates).
+Registry: [`rfcs.md`](rfcs.md). Status: **Complete, all three phases** (2026-07-24; in-game anchor open — kill 4). Input-side measured-data gap CLOSED via the Phase-2 calibration matrix (#343/#378); the belt-drop (output-side) swing term superseded 2026-07-23 by the sim-measured min-form (#385/#394 — this RFC's decomposition is one half of `belt_drop_rate`'s `min(swing_term, lane_cap_term)`); Phase 3 (the ladder sizes to the declared level) merged with its gate closed under the honest-or-at-plan criterion — see the decision log.
 
 ## Summary
 
