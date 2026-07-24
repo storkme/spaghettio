@@ -9,7 +9,7 @@ use crate::bus::layout::RowLayout;
 use crate::bus::stacking_ctx::StackingCtx;
 use crate::common::{
     belt_entity_for_rate, belt_entity_for_rate_stacked, lane_capacity, lane_capacity_stacked,
-    machine_dims, utilization_for, QualityTier, BELT_TIERS,
+    machine_dims, utilization_for_leveled, QualityTier, BELT_TIERS,
 };
 use crate::models::{EntityDirection, MachineSpec, PlacedEntity, SolverResult};
 
@@ -822,7 +822,7 @@ pub(crate) fn build_one_row(
             // `port_dx` (machine type), never on which solid item is
             // passed as input1/input2, so swapping the far/near role
             // never touches the fluid port.
-            let utilization = utilization_for(spec);
+            let utilization = utilization_for_leveled(spec, inserter_capacity);
             let item0_rate = solid_inputs.first().map(|f| f.rate).unwrap_or(0.0) * utilization;
             let item1_rate = solid_inputs.get(1).map(|f| f.rate).unwrap_or(0.0) * utilization;
             let output_rate_pm = solid_outputs.first().map(|f| f.rate).unwrap_or(0.0) * utilization;
@@ -891,7 +891,7 @@ pub(crate) fn build_one_row(
         RowKind::FluidInput => {
             let solid_item = solid_inputs.first().map(|f| f.item.as_str()).unwrap_or("");
             let fluid_item = fluid_inputs.first().map(|f| f.item.as_str()).unwrap_or("");
-            let utilization = utilization_for(spec);
+            let utilization = utilization_for_leveled(spec, inserter_capacity);
             let solid_rate = solid_inputs.first().map(|f| f.rate).unwrap_or(0.0) * utilization;
             let output_rate_pm = solid_outputs.first().map(|f| f.rate).unwrap_or(0.0) * utilization;
             let in_belt = row_input_belt(max_belt_tier);
@@ -939,7 +939,7 @@ pub(crate) fn build_one_row(
             // this exact per-machine rate, or a fractional-count spec's
             // inserter picks would silently disagree with what the
             // validator checks against.
-            let utilization = utilization_for(spec);
+            let utilization = utilization_for_leveled(spec, inserter_capacity);
             let input_rate = solid_inputs.first().map(|f| f.rate).unwrap_or(0.0) * utilization;
             let output_rate = solid_outputs.first().map(|f| f.rate).unwrap_or(0.0) * utilization;
             let secondary_rate = secondary_solid_output.map(|f| f.rate * utilization);
@@ -1000,7 +1000,7 @@ pub(crate) fn build_one_row(
             // Same reassignment lever as DualInput: item0/item1 are the
             // near-far pair (hungrier -> near); item2 (input3) is fixed
             // reach-2, never reassigned.
-            let utilization = utilization_for(spec);
+            let utilization = utilization_for_leveled(spec, inserter_capacity);
             let item0_rate = solid_inputs.first().map(|f| f.rate).unwrap_or(0.0) * utilization;
             let item1_rate = solid_inputs.get(1).map(|f| f.rate).unwrap_or(0.0) * utilization;
             let item2_rate = solid_inputs.get(2).map(|f| f.rate).unwrap_or(0.0) * utilization;
@@ -1056,7 +1056,7 @@ pub(crate) fn build_one_row(
             // No reassignment lever here — QuadInput's near-far pairing
             // isn't item-swappable (inputs 1/2 are structurally north,
             // input3 dual-baseline, input4 structurally south).
-            let utilization = utilization_for(spec);
+            let utilization = utilization_for_leveled(spec, inserter_capacity);
             let item2_rate = solid_inputs.get(2).map(|f| f.rate).unwrap_or(0.0) * utilization;
             let item3_rate = solid_inputs.get(3).map(|f| f.rate).unwrap_or(0.0) * utilization;
             let output_rate_pm = solid_outputs.first().map(|f| f.rate).unwrap_or(0.0) * utilization;
@@ -1116,7 +1116,7 @@ pub(crate) fn build_one_row(
                 .map(|f| (1i32, f.item.as_str()))
                 .collect();
             let solid_out = solid_outputs.first().map(|f| f.item.as_str());
-            let utilization = utilization_for(spec);
+            let utilization = utilization_for_leveled(spec, inserter_capacity);
             let output_rate_pm = solid_outputs.first().map(|f| f.rate).unwrap_or(0.0) * utilization;
             let (ents, rh, in_port_pipes, out_port_pipes) = templates::fluid_multi_input_row(
                 &spec.recipe,
@@ -1161,7 +1161,7 @@ pub(crate) fn build_one_row(
                 // convention as the other branches) — kept separate from
                 // `item0_per_machine` above, which drives belt-capacity
                 // math and must stay the raw per-machine rate.
-                let utilization = utilization_for(spec);
+                let utilization = utilization_for_leveled(spec, inserter_capacity);
                 let near_rate_pm = item0_per_machine * utilization;
                 let far_rate_pm = ranked.get(1).map(|f| f.rate).unwrap_or(0.0) * utilization;
                 let output_rate_pm = solid_outputs.first().map(|f| f.rate).unwrap_or(0.0) * utilization;
@@ -1253,7 +1253,7 @@ pub(crate) fn build_one_row(
                 // above. Reassignment lever (`docs/rfc-inserter-sizing.md`
                 // lever (b)): hungrier item goes near, where the full
                 // tier ladder applies.
-                let utilization = utilization_for(spec);
+                let utilization = utilization_for_leveled(spec, inserter_capacity);
                 let item0_rate = solid_inputs.first().map(|f| f.rate).unwrap_or(0.0) * utilization;
                 let item1_rate = solid_inputs.get(1).map(|f| f.rate).unwrap_or(0.0) * utilization;
                 let output_rate_pm = solid_outputs.first().map(|f| f.rate).unwrap_or(0.0) * utilization;
@@ -1334,7 +1334,7 @@ pub(crate) fn build_one_row(
             // too (harmless: their inserters are hardcoded, unaffected
             // by this factor) to avoid touching the existing belt-sizing
             // rates this call site's other locals still depend on.
-            let utilization = utilization_for(spec);
+            let utilization = utilization_for_leveled(spec, inserter_capacity);
             let (ents, rh, fluid_input_port_pipes) = templates::self_loop_row(
                 &spec.recipe,
                 &spec.entity,
@@ -1633,7 +1633,12 @@ pub fn place_rows(
         let total_count = {
             let c = spec.count;
             let snapped = if (c - c.round()).abs() < 1e-9 { c.round() } else { c.ceil() };
-            (snapped as usize).max(1)
+            // Feed-bound raise (#383): shares effective_machine_count
+            // with utilization_for_leveled so per-machine template
+            // rates derate to exactly what the placed bank feeds.
+            let feed_bound =
+                crate::common::effective_machine_count(spec, inserter_capacity) as usize;
+            (snapped as usize).max(1).max(feed_bound)
         };
 
         let solid_inputs_count = spec.inputs.iter().filter(|f| !f.is_fluid).count();

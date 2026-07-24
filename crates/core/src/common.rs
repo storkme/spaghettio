@@ -362,6 +362,55 @@ pub fn utilization_for(spec: &MachineSpec) -> f64 {
     (spec.count / effective_count).min(1.0)
 }
 
+/// Long-handed slots available to the FAR (reach-2) input side of a
+/// dual/triple-solid-input row: the 3-tile input face hosts the near
+/// item's inserter plus at most TWO long-handed — sim-census-verified
+/// on chain-ec15 (#383 forensics, 2026-07-24). Geometric, not a
+/// ladder policy: no third LH fits.
+pub const FAR_SIDE_SLOTS: f64 = 2.0;
+
+/// Effective machine count for placement AND validation (#383): when a
+/// spec's FAR-side ingredient demand per machine exceeds what the
+/// reach-2 long-handed bank can feed at the declared research level
+/// (measured `machine_feed_rate`, Normal-quality floor — conservative
+/// for quality worlds), the count rises so per-machine demand fits the
+/// feasible feed; the `utilization` derate then sizes every template
+/// and validator expectation to the same reduced per-machine rate.
+/// chain-ec15-d1's stubborn −8% was exactly this: EC's iron side needs
+/// 2.5/s/machine, two long-handed at the declared-L1 world feed 2.4 —
+/// one extra machine (7 × 2.14) delivers at plan. Single source shared
+/// by `bus::placer` (total_count) and [`utilization_for_leveled`].
+pub fn effective_machine_count(spec: &MachineSpec, level: u8) -> f64 {
+    let base = spec.count.ceil().max(1.0);
+    let solids: Vec<&crate::models::ItemFlow> =
+        spec.inputs.iter().filter(|f| !f.is_fluid).collect();
+    if solids.len() < 2 {
+        return base;
+    }
+    // The LOWER-rate ingredient rides the far belt
+    // (`inserter_ladder::reassign_near_far` — the hungrier goes near).
+    let far_rate_pm = solids
+        .iter()
+        .map(|f| f.rate)
+        .fold(f64::INFINITY, f64::min);
+    let far_cap =
+        FAR_SIDE_SLOTS * machine_feed_rate("long-handed-inserter", QualityTier::Normal, level);
+    if far_rate_pm <= far_cap + 1e-9 {
+        return base;
+    }
+    base.max((spec.count * far_rate_pm / far_cap).ceil())
+}
+
+/// Level-aware [`utilization_for`]: same fraction, but against the
+/// feed-bound [`effective_machine_count`]. Placement passes
+/// `LayoutOptions::inserter_capacity`; validators pass
+/// `LayoutResult::inserter_capacity` — both sides reconstruct the same
+/// per-machine rates by construction.
+pub fn utilization_for_leveled(spec: &MachineSpec, level: u8) -> f64 {
+    let effective_count = effective_machine_count(spec, level);
+    (spec.count / effective_count).min(1.0)
+}
+
 /// Belt throughput tiers: (entity name, items-per-second capacity).
 pub const BELT_TIERS: &[(&str, f64)] = &[
     ("transport-belt", 15.0),

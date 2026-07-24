@@ -8,7 +8,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::common::{
     dir_to_vec, fluid_only_recipes, inserter_reach, is_inserter, is_machine_entity,
     is_splitter, is_surface_belt, is_ug_belt, machine_dims, machine_tiles, recycler_eject_tile,
-    splitter_to_surface_tier, ug_to_surface_tier, utilization_for,
+    splitter_to_surface_tier, ug_to_surface_tier, utilization_for_leveled,
 };
 #[cfg(test)]
 use crate::common::inserter_throughput;
@@ -356,7 +356,7 @@ pub fn check_inserter_throughput(
         // Utilization scaling: the same convention check_input_rate_delivery
         // uses — a spec placed as ceil(count) physical machines runs each at
         // count/ceil(count).
-        let utilization = utilization_for(spec);
+        let utilization = utilization_for_leveled(spec, layout.inserter_capacity);
 
         let required_in: f64 = spec
             .inputs
@@ -535,7 +535,7 @@ pub fn check_inserter_item_throughput(
         // `check_inserter_throughput` — see `resolve_row_spec`'s doc
         // comment for the partition-sibling rationale.
         let spec = super::resolve_row_spec(layout, recipe, e.y, fallback_spec);
-        let utilization = utilization_for(spec);
+        let utilization = utilization_for_leveled(spec, layout.inserter_capacity);
 
         for f in spec.inputs.iter().filter(|f| !f.is_fluid) {
             let required = f.rate * utilization;

@@ -753,7 +753,7 @@ pub fn check_fluid_network_connectivity(
                         // demand before this). Same convention as every
                         // other rate check — see `resolve_row_spec`.
                         let spec = super::resolve_row_spec(layout_result, recipe, e.y, fallback_spec);
-                        let utilization = crate::common::utilization_for(spec);
+                        let utilization = crate::common::utilization_for_leveled(spec, layout_result.inserter_capacity);
                         let out_rate = spec
                             .outputs
                             .iter()

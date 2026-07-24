@@ -17,7 +17,7 @@ use crate::common::{
     inserter_target_lane, is_belt_entity, is_inserter, is_machine_entity, is_splitter,
     is_surface_belt, is_ug_belt, lane_capacity_stacked, machine_dims, machine_tiles,
     splitter_second_tile, splitter_to_surface_tier, ug_max_reach, ug_to_surface_tier,
-    utilization_for, LANE_LEFT,
+    utilization_for_leveled, LANE_LEFT,
 };
 use crate::models::{EntityDirection, LayoutResult, PlacedEntity, SolverResult};
 
@@ -2295,7 +2295,7 @@ fn compute_lane_rates_impl(
         // scales demand, or a fast machine at fractional count overstates
         // the lane rate (e.g. a 0.06-count foundry pressing transport-belt
         // at 16/s nominal seeds 16/s onto a lane that actually carries 1/s).
-        let utilization = utilization_for(spec);
+        let utilization = utilization_for_leveled(spec, layout.inserter_capacity);
         let rate = spec
             .outputs
             .iter()
@@ -2811,7 +2811,7 @@ fn compute_lane_rates_impl(
         // Same position-resolved attribution as the injection loop above —
         // see `super::resolve_row_spec`'s doc comment.
         let spec = super::resolve_row_spec(layout, recipe, me.y, fallback_spec);
-        let utilization = utilization_for(spec);
+        let utilization = utilization_for_leveled(spec, layout.inserter_capacity);
         let required = spec
             .inputs
             .iter()
@@ -3348,7 +3348,7 @@ pub fn check_input_rate_delivery(
         // accordingly or the check is too strict by up to 10× when the solver
         // needs a fractional machine (e.g. sulfuric-acid at 5/s wants only 0.1
         // machines but the physical machine runs at 10% speed).
-        let utilization = utilization_for(spec);
+        let utilization = utilization_for_leveled(spec, layout.inserter_capacity);
         let required_rate = spec
             .inputs
             .iter()
