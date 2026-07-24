@@ -1663,6 +1663,7 @@ pub(crate) fn prune_dangling_sat_entities(
     // ---- keep intersection ----
 
     let total = entities.len();
+    let entities_dbg = entities.clone();
     let pruned: Vec<PlacedEntity> = entities
         .into_iter()
         .filter(|e| {
@@ -1673,6 +1674,22 @@ pub(crate) fn prune_dangling_sat_entities(
     let kept = pruned.len();
 
     if kept < total {
+        if std::env::var("SPAGHETTIO_MEGA_DEBUG").is_ok() {
+            for e in entities_dbg
+                .iter()
+                .filter(|e| {
+                    let t = (e.x, e.y);
+                    !(reachable_from_input.contains(&t) && reachable_to_output.contains(&t))
+                })
+            {
+                eprintln!(
+                    "PRUNED zone({zone_x},{zone_y}): ({},{}) {} dir={:?} io={:?} {:?} from_in={} to_out={}",
+                    e.x, e.y, e.name, e.direction, e.io_type, e.carries,
+                    reachable_from_input.contains(&(e.x, e.y)),
+                    reachable_to_output.contains(&(e.x, e.y)),
+                );
+            }
+        }
         trace::emit(trace::TraceEvent::SatPruned { zone_x, zone_y, total, kept });
     }
 

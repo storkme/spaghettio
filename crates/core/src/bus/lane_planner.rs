@@ -173,6 +173,7 @@ pub fn plan_bus_lanes(
     plan: Option<&PartitionPlan>,
     total_height: i32,
     merge_tap: bool,
+    splitter_tap_spacers: bool,
     ctx: &StackingCtx,
 ) -> Result<(Vec<BusLane>, Vec<LaneFamily>), String> {
     // Fluid surplus items AND fluid targets must physically exit at the
@@ -429,10 +430,52 @@ pub fn plan_bus_lanes(
     // pipe columns of different fluids would merge (F1).
     // `bus_width_for_lanes` derives width from max x, so the spacers are
     // accounted for in bus width and pass-2 row placement.
+    // A multi-tap SOLID lane's tap splitters occupy (x+1, tap_y-1) —
+    // when the EAST neighbor lane's trunk span covers such a row, the
+    // splitter's second tile lands ON the neighbor's live trunk: the
+    // neighbor's flow enters the splitter and items mix (the USP mega
+    // sub-solve, where every lane sources at y=0 so all spans overlap;
+    // organic buses rarely collide because producer rows stagger the
+    // spans — every 0-error golden is span-disjoint and stays
+    // bit-identical). Insert a spacer column so the second tile lands
+    // in empty space instead.
+    let neighbor_overlaps_splitter = |cur: &BusLane, next: &BusLane| -> bool {
+        if cur.is_fluid || cur.tap_off_ys.len() <= 1 || next.is_fluid {
+            return false;
+        }
+        let last = cur.tap_off_ys.iter().copied().max();
+        let next_start = next.source_y;
+        let next_end = next
+            .tap_off_ys
+            .iter()
+            .copied()
+            .max()
+            .unwrap_or(next.source_y);
+        cur.tap_off_ys.iter().any(|&ty| {
+            Some(ty) != last && (next_start..=next_end).contains(&(ty - 1))
+        })
+    };
+    // Opt-in (mega blocks set `splitter_tap_spacers`): two main-line
+    // fixtures (PU@2-AM2, EC35-from-ore) HAVE overlapping spans whose
+    // zone machinery successfully bridges the splitter-passthrough —
+    // the spacer's geometry shift breaks them, while the mega
+    // sub-solve's zones do NOT bridge and need the spacer. The
+    // underlying pitch-1 splitter-passthrough class stays tracked in
+    // the RFC-052 decision log.
+    let spacer_after: Vec<bool> = (0..lanes.len())
+        .map(|i| {
+            splitter_tap_spacers
+                && i + 1 < lanes.len()
+                && neighbor_overlaps_splitter(&lanes[i], &lanes[i + 1])
+        })
+        .collect();
     let mut extra = 0i32;
     for (i, lane) in lanes.iter_mut().enumerate() {
         lane.x = (i + 1) as i32 + extra;
         if lane.perimeter_exit_y.is_some() && lane.consumer_rows.is_empty() {
+            extra += 1;
+        }
+        if spacer_after[i] {
             extra += 1;
         }
     }
@@ -1411,7 +1454,7 @@ mod tests {
             vec![6],  // input belt at y=6
         );
 
-        let (lanes, families) = plan_bus_lanes(&sr, &[row_span], None, None, 40, false, &StackingCtx::unstacked())
+        let (lanes, families) = plan_bus_lanes(&sr, &[row_span], None, None, 40, false, false, &StackingCtx::unstacked())
             .expect("plan_bus_lanes should succeed for iron-gear-wheel");
 
         // Should have exactly 1 lane for iron-plate
@@ -1437,7 +1480,7 @@ mod tests {
             vec![6],
         );
 
-        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None, None, 40, false, &StackingCtx::unstacked()).unwrap();
+        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None, None, 40, false, false, &StackingCtx::unstacked()).unwrap();
 
         // iron-gear-wheel is the final output, not consumed internally, so no lane for it
         // Only iron-plate (the external input) needs a lane
@@ -1462,7 +1505,7 @@ mod tests {
             vec![6, 7],  // two input belt y positions
         );
 
-        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None, None, 40, false, &StackingCtx::unstacked())
+        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None, None, 40, false, false, &StackingCtx::unstacked())
             .expect("plan_bus_lanes should succeed for plastic-bar");
 
         // Should have lanes for coal and petroleum-gas (plastic-bar is final output)
@@ -1498,7 +1541,7 @@ mod tests {
             vec![6, 7],
         );
 
-        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None, None, 40, false, &StackingCtx::unstacked()).unwrap();
+        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None, None, 40, false, false, &StackingCtx::unstacked()).unwrap();
 
         // optimize_lane_order puts solid before fluid
         let fluid_indices: Vec<usize> = lanes.iter().enumerate()
@@ -1530,7 +1573,7 @@ mod tests {
             vec![6],
         );
 
-        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None, None, 40, false, &StackingCtx::unstacked()).unwrap();
+        let (lanes, _families) = plan_bus_lanes(&sr, &[row_span], None, None, 40, false, false, &StackingCtx::unstacked()).unwrap();
 
         // The iron-plate lane has consumer row 0, so it should have a tap-off y
         let iron_plate_lane = lanes.iter().find(|l| l.item == "iron-plate").unwrap();
@@ -1582,7 +1625,7 @@ mod tests {
             }
         }).collect();
 
-        let (lanes, _families) = plan_bus_lanes(&sr, &row_spans, None, None, 40, false, &StackingCtx::unstacked())
+        let (lanes, _families) = plan_bus_lanes(&sr, &row_spans, None, None, 40, false, false, &StackingCtx::unstacked())
             .expect("plan_bus_lanes should succeed");
 
         // Must have at least one lane

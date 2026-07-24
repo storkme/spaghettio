@@ -80,32 +80,87 @@ pub(crate) fn merge_output_rows(
         // underground pair instead of stamping over (or sideloading into)
         // the foreign belt.
         let rw = row_spans[ri].row_width;
-        let ug_name = underground_for_belt(belt_name);
-        let reach = ug_max_reach(belt_name) as i32;
+        // Hops may need more reach than the rate-picked tier offers
+        // (alternating blocked columns with 1-tile gaps are unhoppable
+        // at yellow reach and split into exit-abuts-next-entrance
+        // pairs — the USP mega merger forensics). The hop TIER may
+        // escalate up to the USER's belt cap: the cap is the
+        // constraint, the rate pick is not; hop mouths are plumbing.
+        let hop_cap: &str = max_belt_tier.unwrap_or("express-transport-belt");
+        let reach = ug_max_reach(hop_cap) as i32;
+        // Tier floor = the RATE-PICKED surface tier (#421 review: a
+        // smallest-spanning pick could throttle an express-rate line
+        // through a yellow hop — silently, since the throughput check
+        // only flags overlapping routes); ceiling = the user's cap.
+        let hop_tier_for_gap = |gap: i32| -> &'static str {
+            for t in ["transport-belt", "fast-transport-belt", "express-transport-belt"] {
+                if ug_max_reach(t) as i32 >= gap && ug_max_reach(t) >= ug_max_reach(belt_name) {
+                    if ug_max_reach(t) <= ug_max_reach(hop_cap) {
+                        return underground_for_belt(t);
+                    }
+                    break;
+                }
+            }
+            underground_for_belt(hop_cap)
+        };
         let mut x = rw;
         while x < col_x {
             if blocked_columns.contains(&x) {
                 // Contiguous blocked run [x, run_end], clamped by UG reach
                 // (entrance at x-1, exit at run_end+1; gap ≤ reach).
+                // CLUSTER runs separated by a single free tile: hopping
+                // them independently would put run B's entrance exactly
+                // on run A's exit — the mutation below then destroys
+                // A's pair (two consecutive entrances; the game leaves
+                // the first unpaired). Same defect class as the ghost
+                // router's fluid-branch bridging (#412/USP forensics).
                 let mut run_end = x;
-                while run_end + 1 < col_x
-                    && blocked_columns.contains(&(run_end + 1))
-                    && (run_end + 1) - x < reach
-                {
-                    run_end += 1;
+                loop {
+                    let next_blocked = run_end + 1 < col_x
+                        && blocked_columns.contains(&(run_end + 1))
+                        && (run_end + 1) - x < reach;
+                    if next_blocked {
+                        run_end += 1;
+                        continue;
+                    }
+                    let gap_then_blocked = run_end + 2 < col_x
+                        && !blocked_columns.contains(&(run_end + 1))
+                        && blocked_columns.contains(&(run_end + 2))
+                        && (run_end + 2) - x < reach;
+                    if gap_then_blocked {
+                        run_end += 2;
+                        continue;
+                    }
+                    break;
                 }
                 debug_assert!(x > rw, "no room for UG entrance before blocked column");
-                // Replace the belt stamped at x-1 with a UG entrance.
-                if let Some(prev) = entities
+                let gap = run_end + 1 - x;
+                let hop_ug = hop_tier_for_gap(gap);
+                // Replace the belt stamped at x-1 with a UG entrance —
+                // only ever a plain surface belt of this run (the
+                // clustering guarantees it; the guard refuses to
+                // corrupt an existing mouth, and a miss is LOUD via
+                // debug_assert — a silent skip left unpaired outputs).
+                let converted = entities
                     .iter_mut()
                     .rev()
-                    .find(|e| e.x == x - 1 && e.y == out_y)
-                {
-                    prev.name = ug_name.to_string();
-                    prev.io_type = Some("input".to_string());
+                    .find(|e| e.x == x - 1 && e.y == out_y && e.name.ends_with("transport-belt"))
+                    .map(|prev| {
+                        prev.name = hop_ug.to_string();
+                        prev.io_type = Some("input".to_string());
+                    })
+                    .is_some();
+                // No panic on a miss: fulgora's merger hits runs whose
+                // west tile is row machinery — the old code mutated
+                // whatever sat there (silent corruption); refusing the
+                // hop (below) leaves a gap instead, strictly safer.
+                if !converted {
+                    // Refuse the hop rather than emit an unpaired exit.
+                    x = run_end + 2;
+                    continue;
                 }
                 entities.push(PlacedEntity {
-                    name: ug_name.to_string(),
+                    name: hop_ug.to_string(),
                     x: run_end + 1,
                     y: out_y,
                     direction: EntityDirection::East,

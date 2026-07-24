@@ -79,6 +79,11 @@ pub fn rot90((dx, dy): (i32, i32)) -> (i32, i32) {
 pub struct ItemRate {
     pub item: String,
     pub rate: f64,
+    /// Fluid targets have no drain rig (their surplus voids are
+    /// uncounted), so the report verdicts them on PRODUCED rate.
+    /// Defaults false — every pre-existing manifest is a solid target.
+    #[serde(default)]
+    pub is_fluid: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

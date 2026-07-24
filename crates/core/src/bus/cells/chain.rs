@@ -144,20 +144,11 @@ pub fn chain_eligible(sr: &SolverResult) -> Result<(), String> {
     }
     if let Some(plan) = &mega {
         // Each mega output competes for corridor capacity like any
-        // produced item, and each routes ONE corridor (v1: a single
-        // consumer per exported item).
+        // produced item. Multi-consumer exports fan out on the drain's
+        // bypass row (Phase C) — same splitter-chain idiom as solid
+        // cells, so no consumer-count refusal remains.
         for (item, _rate) in &plan.outputs {
             *producers.entry(item.as_str()).or_default() += 1;
-            let consumers = sr
-                .machines
-                .iter()
-                .filter(|c| !is_member(&c.recipe) && c.inputs.iter().any(|i| i.item == *item))
-                .count();
-            if consumers > 1 {
-                return Err(format!(
-                    "mega: {item} feeds {consumers} consumers (v1 routes a single corridor per mega output)"
-                ));
-            }
         }
     }
     for (item, n) in &producers {
@@ -570,6 +561,21 @@ fn retrofit_feed_hop(
     x: i32,
     y: i32,
 ) -> Result<(), String> {
+    // Any horizontal surface-belt run may host the hop: feed rows
+    // (eastbound) and corridor/fan rows (either direction — Phase C:
+    // USP's ascent terminal landed on the mega's own fan branch). The
+    // three tiles must be same-direction plain belts of one row
+    // segment class; anything else refuses loudly.
+    let row_dir = entities
+        .iter()
+        .find(|e| e.x == x && e.y == y)
+        .map(|e| e.direction)
+        .unwrap_or(EntityDirection::East);
+    if row_dir != EntityDirection::East && row_dir != EntityDirection::West {
+        return Err(format!(
+            "cells: ascent terminal collision at ({x},{y}) is not a horizontal belt run"
+        ));
+    }
     let mut idxs = [usize::MAX; 3];
     for (k, cx) in [x - 1, x, x + 1].iter().enumerate() {
         let i = entities
@@ -577,12 +583,28 @@ fn retrofit_feed_hop(
             .position(|e| {
                 e.x == *cx
                     && e.y == y
-                    && e.direction == EntityDirection::East
+                    && e.direction == row_dir
                     && e.name.ends_with("transport-belt")
-                    && e.segment_id.as_deref().is_some_and(|s| s.starts_with("feed:"))
+                    && e.segment_id.as_deref().is_some_and(|s| {
+                        s.starts_with("feed:") || s.starts_with("corr:") || s.starts_with("fan")
+                    })
             })
             .ok_or_else(|| {
-                format!("cells: ascent terminal collision at ({x},{y}) is not a plain feed row (tile x={cx})")
+                let blocker = entities
+                    .iter()
+                    .find(|e| e.x == *cx && e.y == y)
+                    .map(|e| {
+                        format!(
+                            "{} dir={:?} seg={}",
+                            e.name,
+                            e.direction,
+                            e.segment_id.as_deref().unwrap_or("-")
+                        )
+                    })
+                    .unwrap_or_else(|| "empty".into());
+                format!(
+                    "cells: ascent terminal collision at ({x},{y}) is not a hoppable belt row (tile x={cx}: {blocker})"
+                )
             })?;
         idxs[k] = i;
     }
@@ -592,13 +614,23 @@ fn retrofit_feed_hop(
         "transport-belt" => "underground-belt",
         other => return Err(format!("cells: unexpected feed belt tier {other}")),
     };
-    for (k, io) in [(0usize, "input"), (2usize, "output")] {
-        entities[idxs[k]].name = ug.into();
-        entities[idxs[k]].io_type = Some(io.into());
+    // Entrance = upstream side of the run's flow direction.
+    let (in_k, out_k) = if row_dir == EntityDirection::East {
+        (0usize, 2usize)
+    } else {
+        (2usize, 0usize)
+    };
+    for (k, io) in [(in_k, "input"), (out_k, "output")] {
+        entities[k_idx(&idxs, k)].name = ug.into();
+        entities[k_idx(&idxs, k)].io_type = Some(io.into());
     }
     entities.remove(idxs[1]);
     router.occ.remove(&(x, y));
     Ok(())
+}
+
+fn k_idx(idxs: &[usize; 3], k: usize) -> usize {
+    idxs[k]
 }
 
 /// Compose an eligible chain solve into one layout: K quantized copies
@@ -733,9 +765,24 @@ pub fn compose_chain_with_capacity(
         for o in &m.outputs {
             for (ci, c) in specs.iter().enumerate() {
                 if pi_mega && ci != pi && c.inputs.iter().any(|i| i.item == o.item) {
-                    // Mega corridors always ride the bypass row (the
-                    // drain exits south) — ascent lane only.
+                    // Mega corridors ride the bypass row (the drain
+                    // exits south) — ascent lane always; fanned
+                    // outputs (>=2 consumers) ALSO drop each branch
+                    // through a lane in the next slot's strip, like
+                    // solid bypass descents (ad-hoc splitter-column
+                    // drops collided with consumer ascent lanes —
+                    // USP@2 head-on/loop cluster).
                     lane_demand[ci] += 1;
+                    let consumers_of_o = specs
+                        .iter()
+                        .enumerate()
+                        .filter(|(cj, cc)| {
+                            *cj != pi && cc.inputs.iter().any(|i| i.item == o.item)
+                        })
+                        .count();
+                    if consumers_of_o >= 2 && pi + 1 < n {
+                        lane_demand[pi + 1] += 1;
+                    }
                     continue;
                 }
                 if ci != pi && c.inputs.iter().any(|i| i.item == o.item) && ci != pi + 1 {
@@ -973,7 +1020,7 @@ pub fn compose_chain_with_capacity(
                 if pi_mega { &m.outputs } else { &m.outputs[..1] };
             outs.iter()
                 .map(|o| {
-                    specs
+                    let edges = specs
                         .iter()
                         .enumerate()
                         .filter(|(ci, c)| {
@@ -985,7 +1032,11 @@ pub fn compose_chain_with_capacity(
                                     .iter()
                                     .any(|q| q.inbound && q.item == o.item)
                         })
-                        .count() as i32
+                        .count() as i32;
+                    // A fanned mega output (>=2 consumers, Phase C)
+                    // spends one extra row hosting the splitter chain
+                    // before the per-branch rows.
+                    if pi_mega && edges >= 2 { edges + 1 } else { edges }
                 })
                 .sum::<i32>()
         })
@@ -1040,12 +1091,166 @@ pub fn compose_chain_with_capacity(
         // Outputs with no consumer stay chain exports at their drain.
         if !p.mega_drains.is_empty() {
             for (dx0, dy0, d_item) in p.mega_drains.clone() {
-                let consumer = placed.iter().enumerate().find(|(ci, c)| {
-                    *ci != pi
-                        && c.copy == p.copy
-                        && specs[*ci % n].inputs.iter().any(|i| i.item == d_item)
-                        && c.cell.ports.iter().any(|q| q.inbound && q.item == d_item)
-                });
+                let drain_consumers: Vec<usize> = placed
+                    .iter()
+                    .enumerate()
+                    .filter(|(ci, c)| {
+                        *ci != pi
+                            && c.copy == p.copy
+                            && specs[*ci % n].inputs.iter().any(|i| i.item == d_item)
+                            && c.cell.ports.iter().any(|q| q.inbound && q.item == d_item)
+                    })
+                    .map(|(ci, _)| ci)
+                    .collect();
+                // Fan path (Phase C): >=2 consumers split on the drain's
+                // own bypass row, then each branch drops to a fresh row
+                // and rides to its consumer via the shared delivery
+                // idiom. The single-consumer path below is byte-identical
+                // to Phase B (registry gate).
+                if drain_consumers.len() >= 2 {
+                    let row = bypass_idx.entry(p.copy).or_insert(0);
+                    let fan_y = band_bottom + 1 + 3 * *row;
+                    *row += 1;
+                    let seg0 = format!("fan:{}:{}", d_item, p.seg);
+                    router.vcol(&mut entities, dx0, dy0 + 1, fan_y - 1, &d_item,
+                        "express-transport-belt", "express-underground-belt", &seg0);
+                    router.corner_east(&mut entities, dx0, fan_y, &d_item, "express-transport-belt", &seg0);
+                    let mut ordered = drain_consumers.clone();
+                    ordered.sort_by_key(|ci| placed[*ci].x);
+                    // Splitter chain east of the corner; branch b exits
+                    // south at (sx+1, fan_y+1); the last branch is the
+                    // pass-through at (sx_last+1, fan_y).
+                    let n_br = ordered.len();
+                    // Splitter/branch columns must dodge the OTHER
+                    // drains' head columns — each of those descends
+                    // from the block bottom through every bypass row,
+                    // and a branch drop on the same x overlaps it (the
+                    // USP@2 overlap cluster at x=272).
+                    let reserved: FxHashSet<i32> = p
+                        .mega_drains
+                        .iter()
+                        .filter(|(ox, _, oi)| *ox != dx0 || oi != &d_item)
+                        .map(|(ox, _, _)| *ox)
+                        .collect();
+                    let mut branch_origins: Vec<(i32, i32)> = Vec::new();
+                    let mut cursor = dx0 + 1;
+                    for b in 1..n_br {
+                        let mut sx = cursor;
+                        while reserved.contains(&sx) || reserved.contains(&(sx + 1)) {
+                            sx += 1;
+                        }
+                        // Bridge from the previous chain tile to the
+                        // splitter input with plain belts.
+                        for xx in cursor..sx {
+                            router.corner_east(&mut entities, xx, fan_y, &d_item,
+                                "express-transport-belt", &format!("fan:{}:{}", d_item, p.seg));
+                        }
+                        router.occ.insert((sx, fan_y));
+                        router.occ.insert((sx, fan_y + 1));
+                        entities.push(PlacedEntity {
+                            name: "express-splitter".into(), x: sx, y: fan_y,
+                            direction: EntityDirection::East,
+                            carries: Some(d_item.clone()),
+                            segment_id: Some(format!("fan{b}:{}:{}", d_item, p.seg)),
+                            ..Default::default()
+                        });
+                        branch_origins.push((sx + 1, fan_y + 1));
+                        if b < n_br - 1 {
+                            router.corner_east(&mut entities, sx + 1, fan_y, &d_item,
+                                "express-transport-belt", &format!("fan:{}:{}", d_item, p.seg));
+                        }
+                        cursor = sx + 2;
+                    }
+                    // Pass-through: step EAST off the last splitter's
+                    // output column (branch n-1 drops at sx+1 from the
+                    // south output; sharing that column overlapped the
+                    // two descents) to its own reserved-dodged column.
+                    let mut pt_x = cursor;
+                    while reserved.contains(&pt_x) {
+                        pt_x += 1;
+                    }
+                    for xx in (cursor - 1)..pt_x {
+                        router.corner_east(&mut entities, xx, fan_y, &d_item,
+                            "express-transport-belt", &format!("fan:{}:{}", d_item, p.seg));
+                    }
+                    branch_origins.push((pt_x, fan_y));
+                    for (bi, ci) in ordered.iter().enumerate() {
+                        let c = &placed[*ci];
+                        let port = c
+                            .cell
+                            .ports
+                            .iter()
+                            .find(|q| q.inbound && q.item == d_item)
+                            .expect("consumer port checked in eligibility");
+                        let (tx, ty) = port_abs(port, c.x, c.y_off);
+                        let (bx, by) = branch_origins[bi];
+                        let seg = format!("corr:{}:{}", p.seg, c.seg);
+                        let up_demand = lane_demand[*ci % n];
+                        let lane_up = alloc_lane(&mut lane_next, *ci, c.vlane_base, lane_step(up_demand));
+                        let row = bypass_idx.entry(p.copy).or_insert(0);
+                        let by_y = band_bottom + 1 + 3 * *row;
+                        *row += 1;
+                        // Drop from the branch origin to this branch's
+                        // own row THROUGH an allocated lane in the next
+                        // slot's strip (sized via lane_demand above) —
+                        // ad-hoc drops at splitter columns collided
+                        // with consumer ascent lanes. Falls back to an
+                        // in-place corner drop when the run east is not
+                        // stampable (the solid path's in-gap idiom).
+                        let (drop_x, drop_top) = if pi + 1 < placed.len() {
+                            let down_demand = lane_demand[(pi + 1) % n];
+                            let cand = placed[pi + 1].vlane_base
+                                + *lane_next.get(&(pi + 1)).unwrap_or(&0)
+                                    * lane_step(down_demand);
+                            if cand > bx && router.is_row_stampable(by, bx, cand - 1) {
+                                let lane_down = alloc_lane(
+                                    &mut lane_next,
+                                    pi + 1,
+                                    placed[pi + 1].vlane_base,
+                                    lane_step(down_demand),
+                                );
+                                router.hrow(&mut entities, by, bx, lane_down - 1, &d_item,
+                                    "express-transport-belt", "express-underground-belt", &seg);
+                                (lane_down, by)
+                            } else {
+                                router.corner_south(&mut entities, bx, by, &d_item, "express-transport-belt", &seg);
+                                (bx, by + 1)
+                            }
+                        } else {
+                            router.corner_south(&mut entities, bx, by, &d_item, "express-transport-belt", &seg);
+                            (bx, by + 1)
+                        };
+                        router.vcol(&mut entities, drop_x, drop_top, by_y - 1, &d_item,
+                            "express-transport-belt", "express-underground-belt", &seg);
+                        if lane_up < drop_x {
+                            router.corner_west(&mut entities, drop_x, by_y, &d_item, "express-transport-belt", &seg);
+                            router.hrow_west(&mut entities, by_y, drop_x - 1, lane_up + 1, &d_item,
+                                "express-transport-belt", "express-underground-belt", &seg);
+                            router.corner_north(&mut entities, lane_up, by_y, &d_item, "express-transport-belt", &seg);
+                        } else {
+                            router.corner_east(&mut entities, drop_x, by_y, &d_item, "express-transport-belt", &seg);
+                            router.hrow(&mut entities, by_y, drop_x + 1, lane_up - 1, &d_item,
+                                "express-transport-belt", "express-underground-belt", &seg);
+                            router.occ.insert((lane_up, by_y));
+                            entities.push(PlacedEntity {
+                                name: "express-transport-belt".into(), x: lane_up, y: by_y,
+                                direction: EntityDirection::North,
+                                carries: Some(d_item.clone()),
+                                segment_id: Some(seg.clone()), ..Default::default()
+                            });
+                        }
+                        if router.occ.contains(&(lane_up, ty + 1)) {
+                            retrofit_feed_hop(&mut entities, &mut router, lane_up, ty + 1)?;
+                        }
+                        router.vcol(&mut entities, lane_up, by_y - 1, ty + 1, &d_item,
+                            "express-transport-belt", "express-underground-belt", &seg);
+                        router.corner_east(&mut entities, lane_up, ty, &d_item, "express-transport-belt", &seg);
+                        router.hrow(&mut entities, ty, lane_up + 1, tx - 1, &d_item,
+                            "express-transport-belt", "express-underground-belt", &seg);
+                    }
+                    continue;
+                }
+                let consumer = drain_consumers.first().map(|&ci| (ci, &placed[ci]));
                 let Some((ci, c)) = consumer else {
                     // Consumer-less export: extend the drain to the
                     // chain's drain row like the solid final-product
@@ -1321,7 +1526,7 @@ pub fn compose_chain_with_capacity(
 
     // --- Poles: per-cell trio down the corridor gap + a spanning line
     // along the band bottom (nudge-not-skip — Phase-1 pole lesson).
-    let occupied: FxHashSet<(i32, i32)> = entities.iter().map(|e| (e.x, e.y)).collect();
+    let mut occupied: FxHashSet<(i32, i32)> = entities.iter().map(|e| (e.x, e.y)).collect();
     for p in &placed {
         let px = p.x + p.cell.width + CORRIDOR_GAP - 1;
         for y in [CELL_Y, CELL_Y + 7, CELL_Y + 14] {
@@ -1330,6 +1535,11 @@ pub fn compose_chain_with_capacity(
                 while occupied.contains(&(px, yy)) {
                     yy += 1;
                 }
+                // The snapshot must learn each placement — two trio
+                // members sliding down one congested column otherwise
+                // land on the SAME first-free tile (USP@2 pole-pole
+                // overlaps).
+                occupied.insert((px, yy));
                 entities.push(PlacedEntity {
                     name: "medium-electric-pole".into(), x: px, y: yy,
                     direction: EntityDirection::North,

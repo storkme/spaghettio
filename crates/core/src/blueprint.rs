@@ -153,7 +153,7 @@ pub fn export_with_manifest(
         "targets": solver
             .external_outputs
             .iter()
-            .map(|o| serde_json::json!({"item": o.item, "rate": o.rate}))
+            .map(|o| serde_json::json!({"item": o.item, "rate": o.rate, "is_fluid": o.is_fluid}))
             .collect::<Vec<_>>(),
         "external_inputs": solver
             .external_inputs
