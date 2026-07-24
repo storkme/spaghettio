@@ -725,6 +725,26 @@ pub fn stack_inserter_belt_hand_at(level: u8, stacking: u8) -> f64 {
 /// [`belt_drop_rate`]'s doc comment for the full calibration table).
 pub const LANE_UTILIZATION: f64 = 0.85;
 
+/// Default declared inserter-capacity research level for layouts whose
+/// caller doesn't specify one (`LayoutOptions::default`, `compose_chain`,
+/// the wasm boundary). **Not L0.** RFC-049 shipped with a conservative
+/// L0 default (kill 1: "L0 is bit-identical to pre-RFC"); the level 0
+/// *model* invariant still holds, but the *default world* moves here to
+/// L2 (2026-07-24, decision log in `rfc-049-inserter-capacity-research.md`).
+///
+/// Rationale (sim-measured, #383): a machine row that starves at L0
+/// (non-bulk hand 1) delivers full plan the moment capacity research
+/// reaches L2 (hand 2). Faithful `chain-ec15` measurement, Factorio
+/// 2.0.76 headless, yellow S1: produced 13.8/s (−8%) at L0/L1 →
+/// **15.0/s (0%) at L2**, flat through L7. "Inserter capacity bonus 2"
+/// costs only automation + logistic science (red + green) — a first-hour
+/// tech every real factory has — so assuming it over-promises for no
+/// realistic player, while L0 under-provisions every layout by ~8% for a
+/// research state nobody occupies. Callers wanting the raw unresearched
+/// world pass 0 explicitly (the science gauntlet still pins L0 to keep
+/// the honest-zero inserter warnings visible).
+pub const DEFAULT_INSERTER_CAPACITY: u8 = 2;
+
 /// Sim-measured swing-term multiplier for non-bulk (regular / long-handed /
 /// fast) belt-drops at inserter-capacity research levels 0–7 (#385). Matches
 /// `inserter_hand`'s NON_BULK schedule `[1,1,2,2,2,2,2,4]` at every level

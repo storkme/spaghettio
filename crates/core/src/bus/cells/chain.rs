@@ -641,12 +641,14 @@ fn k_idx(idxs: &[usize; 3], k: usize) -> usize {
 /// (calibrated orientation: north feeds, south drains, west→east
 /// record order — #363).
 pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
-    compose_chain_with_capacity(sr, 0)
+    compose_chain_with_capacity(sr, crate::common::DEFAULT_INSERTER_CAPACITY)
 }
 
 /// `compose_chain` with the declared inserter-capacity level threaded to
 /// every member cell's generation (#415). Capacity 0 is byte-identical
-/// to `compose_chain` by construction.
+/// to the pre-RFC-049 chain output by construction; the no-argument
+/// `compose_chain` now defaults to `common::DEFAULT_INSERTER_CAPACITY`
+/// (L2), so pass 0 explicitly for the raw unresearched world.
 pub fn compose_chain_with_capacity(
     sr: &SolverResult,
     inserter_capacity: u8,
@@ -659,18 +661,18 @@ pub fn compose_chain_with_capacity(
     // take mega_plan = None and every branch below is bit-identical to
     // the pre-Phase-B placer (the registry gate enforces it).
     let mega_plan = super::mega::mega_subgraph(sr)?;
-    // #415 stop-gap (#422 review finding 1): the mega bootstrap
-    // (`mega.rs` generate path) does not yet thread capacity — a
-    // mega-containing chain at L>0 would size its solid cells at the
-    // declared level but its mega interior at L0, then DECLARE the
-    // whole layout at L>0. Refuse loudly instead of declaring a mixed
-    // world; threading the mega path is the recorded follow-up that
-    // unblocks this.
-    if inserter_capacity != 0 && mega_plan.is_some() {
-        return Err(format!(
-            "declared inserter capacity L{inserter_capacity} is not yet threaded into              mega-cell interiors (#415 follow-up) — refusing a mixed-world declaration"
-        ));
-    }
+    // Mega-containing chains honor their DECLARED capacity. #415 is closed
+    // (COMPLETED by #422): the non-mega cells thread it via
+    // `generate_cell_layout_with_capacity` below, and the mega INTERIOR
+    // bootstrap (`compose_mega_block`) is inherently L0 — it takes no
+    // capacity argument and pins `inserter_capacity: 0` internally. So a
+    // mega chain at L>0 sizes its solid cells at the declared level while
+    // the interior stays conservatively L0 (over-provisioned = the safe
+    // direction, real ≥ plan), and the layout declares the real level.
+    // History: a hard `Err` refusal (pre-#383, #422 stop-gap) → a
+    // whole-chain L0 clamp (#383 initial) → dropped here once #422 landed
+    // (2026-07-24, PR #431 review coordination). The interior's L0 pin is
+    // honest until it too threads capacity; drop the `mega.rs` pins then.
     const MEGA_PREFIX: &str = "mega:";
 
     let produced: FxHashSet<&str> = sr
