@@ -343,7 +343,11 @@ pub fn classify(layout: &LayoutResult, analysis: &BlueprintAnalysis) -> Blueprin
                 // when the belt there sits on a THROUGH line — i.e. it has a
                 // same-direction upstream continuation behind it. Without
                 // that gate a plain L-corner (turned belt, no parent line)
-                // matches the same pattern and inflates the count.
+                // matches the same pattern and inflates the count. Known
+                // false negative: a perpendicular feed into the very FIRST
+                // tile of a line has no upstream continuation to check, so
+                // it scores 0 — accepted tradeoff against the L-corner
+                // false-positive class (review #389).
                 if (fdx, fdy) != (dx, dy)
                     && belt_at.get(&(tx + dx - fdx, ty + dy - fdy)).is_some_and(|b| {
                         common::is_surface_belt(b.name.as_str())
@@ -437,12 +441,13 @@ pub fn classify(layout: &LayoutResult, analysis: &BlueprintAnalysis) -> Blueprin
     // Sources and subjects mirror `validate::power::check_power_coverage`:
     // subjects are everything that draws grid power (`needs_electricity` —
     // electric machines AND inserters, excluding the burner biochamber);
-    // sources are poles with a real supply area (medium/small/substation —
-    // the big pole is wire-only, `supply_area_distance` 0). Extended beyond
-    // the validator's medium/substation-only set with the small pole's real
-    // 5×5 area, since community blueprints use all tiers. Quality bonuses
-    // (+1 supply radius / +2 wire reach per level) come from each pole's
-    // parsed `quality`, same as the validator.
+    // sources are all four pole tiers with their real supply areas
+    // (medium 3.5 / small 2.5 / substation 9.0 / big 2.0 — the big pole's
+    // 4×4-over-2×2 is tiny but real, wiki-verified; the validator's
+    // medium/substation-only set is extended because community blueprints
+    // use all tiers). Quality bonuses (+1 supply radius / +2 wire reach
+    // per level) come from each pole's parsed `quality`, same as the
+    // validator.
     let poles: Vec<&PlacedEntity> = ents.iter().filter(|e| is_pole_entity(e.name.as_str())).collect();
     let consumers: Vec<&PlacedEntity> = ents
         .iter()
@@ -458,9 +463,6 @@ pub fn classify(layout: &LayoutResult, analysis: &BlueprintAnalysis) -> Blueprin
                         p.name.as_str(),
                         p.quality.unwrap_or_default(),
                     );
-                    if sd <= 0.0 {
-                        return false; // wire-only pole (big) supplies nothing
-                    }
                     let (px, py) = center(p);
                     (mx - px).abs() <= sd && (my - py).abs() <= sd
                 })
@@ -744,13 +746,22 @@ mod tests {
     }
 
     #[test]
-    fn big_pole_is_wire_only_and_supplies_nothing() {
-        let f = classify_only(vec![
-            machine("assembling-machine-3", 0, 0, "iron-gear-wheel"),
-            ent("big-electric-pole", 3, 1, EntityDirection::North),
+    fn big_pole_supplies_its_tiny_area() {
+        // big pole is 2×2 with a real 4×4 supply (sd 2.0, wiki-verified):
+        // its center (3.0,2.0) covers the inserter at (2,0) (center
+        // (2.5,0.5) — dx 0.5, dy 1.5 ≤ 2.0) but not the one at (6,0)
+        // (dx 3.5 > 2.0).
+        let near = classify_only(vec![
+            ent("big-electric-pole", 2, 1, EntityDirection::North),
+            ent("fast-inserter", 2, 0, EntityDirection::North),
         ]);
-        assert_eq!(f.machines_powered_fraction, Some(0.0));
-        assert!(!f.self_powered);
+        assert_eq!(near.machines_powered_fraction, Some(1.0));
+        let far = classify_only(vec![
+            ent("big-electric-pole", 2, 1, EntityDirection::North),
+            ent("fast-inserter", 6, 0, EntityDirection::North),
+        ]);
+        assert_eq!(far.machines_powered_fraction, Some(0.0));
+        assert!(!far.self_powered);
     }
 
     #[test]
