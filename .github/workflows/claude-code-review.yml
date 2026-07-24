@@ -78,33 +78,65 @@ jobs:
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
         run: |
-          set -euo pipefail
-          if [ "$(gh pr view "$PR" -R "$REPO" --json isDraft --jq .isDraft)" = "true" ]; then
+          set -uo pipefail
+          # Fail-open on API errors: the guard is a safety net, and its own
+          # flakiness must never block a merge. It fails ONLY on confirmed
+          # zero-coverage abandonment.
+          if ! draft=$(gh pr view "$PR" -R "$REPO" --json isDraft --jq .isDraft); then
+            echo "::warning::guard: gh pr view failed (transient?) — failing open."; exit 0
+          fi
+          if [ "$draft" = "true" ]; then
             echo "Draft PR — plugin gate skips these by design; guard not applicable."
             exit 0
           fi
-          wf_files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate --jq '[.[] | select(.filename | startswith(".github/workflows/"))] | length' | awk '{s+=$1} END {print s+0}')
+          # Deliberately broader than the action's actual self-skip (which
+          # keys on the executing workflow file): over-carving fails safe,
+          # because workflow-file PRs get session-side review by repo rule.
+          if ! wf_files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate --jq '[.[] | select(.filename | startswith(".github/workflows/"))] | length' | awk '{s+=$1} END {print s+0}'); then
+            echo "::warning::guard: files query failed — failing open."; exit 0
+          fi
           if [ "$wf_files" -gt 0 ]; then
             echo "PR touches workflow files — action self-skips these (anti-hijack); guard not applicable."
             exit 0
           fi
-          changed=$(gh pr view "$PR" -R "$REPO" --json additions,deletions --jq '.additions + .deletions')
+          changed=$(gh pr view "$PR" -R "$REPO" --json additions,deletions --jq '.additions + .deletions') || changed=""
+          case "$changed" in ''|*[!0-9]*)
+            echo "::warning::guard: could not determine diff size — failing open."; exit 0;;
+          esac
           if [ "$changed" -lt 20 ]; then
             echo "Diff is $changed changed lines (<20) — triviality-gate territory; guard not applicable."
             exit 0
           fi
           # Coverage = any PR review (bot or session-side), any inline review
           # comment, or a bot summary comment. Session-side reviews count:
-          # the guard guarantees the PR was reviewed, not who reviewed it —
-          # the plugin's own gate skips already-reviewed PRs, and that skip
-          # is legitimate.
-          reviews=$(gh api "repos/$REPO/pulls/$PR/reviews" --paginate --jq 'length' | awk '{s+=$1} END {print s+0}')
-          inline=$(gh api "repos/$REPO/pulls/$PR/comments" --paginate --jq 'length' | awk '{s+=$1} END {print s+0}')
-          bot_summaries=$(gh api "repos/$REPO/issues/$PR/comments" --paginate --jq '[.[] | select(.user.login | test("claude"; "i"))] | length' | awk '{s+=$1} END {print s+0}')
+          # the guard guarantees the PR was reviewed, not who reviewed it.
+          # Coverage is PR-lifetime, not per-SHA — deliberate: the plugin's
+          # own gate declines to re-review a PR Claude already commented on,
+          # so per-SHA enforcement would permanently red every follow-up
+          # push. Per-SHA freshness is the agent-reviewed label's job
+          # (clear-agent-reviewed.yml). See docs/review-bot.md.
+          if ! reviews=$(gh api "repos/$REPO/pulls/$PR/reviews" --paginate --jq 'length' | awk '{s+=$1} END {print s+0}'); then
+            echo "::warning::guard: reviews query failed — failing open."; exit 0
+          fi
+          if ! inline=$(gh api "repos/$REPO/pulls/$PR/comments" --paginate --jq 'length' | awk '{s+=$1} END {print s+0}'); then
+            echo "::warning::guard: inline-comments query failed — failing open."; exit 0
+          fi
+          if ! bot_summaries=$(gh api "repos/$REPO/issues/$PR/comments" --paginate --jq '[.[] | select(.user.login == "claude[bot]" or .user.login == "claude")] | length' | awk '{s+=$1} END {print s+0}'); then
+            echo "::warning::guard: issue-comments query failed — failing open."; exit 0
+          fi
           echo "coverage: reviews=$reviews inline=$inline bot_summaries=$bot_summaries"
           if [ "$reviews" -gt 0 ] || [ "$inline" -gt 0 ] || [ "$bot_summaries" -gt 0 ]; then
             echo "Review coverage exists — OK."
             exit 0
           fi
-          echo "::error title=Silent review no-op::claude-review exited green but PR #$PR ($changed changed lines) has zero reviews, zero inline comments, and no bot summary. This is the silent no-op failure class — download the claude-execution-output artifact for the transcript and see docs/review-bot.md."
+          # Zero coverage. Distinguish a conscious plugin gate-skip (cheap,
+          # few turns: ~2-6 observed) from mid-review abandonment (the
+          # class-5 signature: 16-20 turns, then nothing). Threshold 8 sits
+          # between the observed clusters; see docs/review-bot.md.
+          turns=$(grep -o '"num_turns"[[:space:]]*:[[:space:]]*[0-9]*' "${RUNNER_TEMP}/claude-execution-output.json" 2>/dev/null | tail -1 | grep -o '[0-9]*$' || true)
+          if [ -n "$turns" ] && [ "$turns" -le 8 ]; then
+            echo "No coverage, but the transcript shows a cheap conscious run (num_turns=$turns <= 8) — plugin gate-skip signature, not abandonment. Passing."
+            exit 0
+          fi
+          echo "::error title=Silent review no-op::claude-review exited green but PR #$PR ($changed changed lines) has zero reviews, zero inline comments, and no bot summary (transcript turns: ${turns:-unknown}). This is the silent no-op failure class — see docs/review-bot.md. Escape hatch if the skip was legitimate: re-run this job (runs are stochastic), or post a review and re-run the check."
           exit 1

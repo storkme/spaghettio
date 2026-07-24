@@ -63,7 +63,8 @@ For full build commands (WASM rebuild, release builds), see [`docs/build-systems
   reviews every PR; expect inline comments on findings or a "no issues"
   summary comment. Its historical silent-failure mode is now loud: the
   `claude-review` check FAILS when a non-trivial PR ends with zero review
-  activity (benign skips: drafts, workflow-file PRs, <20-line diffs).
+  activity (benign skips: drafts, workflow-file PRs, small diffs, and
+  cheap runs bearing the plugin's conscious gate-skip signature).
   Live trap: re-running `/install-github-app` overwrites the repaired
   workflow files with the stock template — diff them against main before
   merging its PR. Failure-class history and forensics playbook:

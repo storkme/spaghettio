@@ -40,7 +40,9 @@ summary comment**. Designed silences (no post, and that's correct):
 
 Any other green check with nothing posted is a failure. Since the guard
 step landed (2026-07-24), that combination fails the check outright on
-non-draft PRs with ≥20 changed lines and zero review activity.
+non-draft PRs with ≥20 changed lines, zero review activity, and a
+transcript that doesn't bear the cheap gate-skip signature (see Guard
+semantics below).
 
 ## Failure-class history
 
@@ -100,12 +102,38 @@ nothing posted).
 ## Guard semantics
 
 The final workflow step fails the check when a PR has **zero** review
-activity (no PR reviews from anyone, no inline comments, no bot summary
-comment) despite being non-trivial. Carve-outs, in order: draft PRs;
-PRs touching `.github/workflows/**`; diffs under 20 changed lines.
-Session-side reviews count as coverage — the guard guarantees *a* review
-happened, not that the bot did it. The 20-line threshold is a judgment
-call: below it the plugin's triviality gate is plausibly right; above it,
-silence on a PR nobody reviewed is exactly what we want to catch. Doc-only
-PRs are deliberately NOT carved out — documentation gets adversarial
-review in this repo.
+activity (no PR reviews from anyone, no inline comments, no
+`claude[bot]`/`claude` summary comment — exact login match) despite being
+non-trivial. Carve-outs, in order: draft PRs; PRs touching
+`.github/workflows/**` (deliberately broader than the action's actual
+self-skip — over-carving fails safe because workflow PRs get session-side
+review by repo rule); diffs under 20 changed lines; and, when coverage is
+zero, a transcript whose `num_turns ≤ 8` — the conscious gate-skip
+signature (observed skips run 2–6 turns; observed abandonments 16–20), so
+a plugin that *looked and declined* passes while a run that *died
+mid-review* fails.
+
+Design decisions worth knowing:
+
+- **Coverage is PR-lifetime, not per-SHA.** Deliberate: the plugin's gate
+  declines to re-review a PR Claude already commented on, so per-SHA
+  enforcement would permanently red every follow-up push. Per-SHA
+  freshness is owned by the `agent-reviewed` label flow
+  (`clear-agent-reviewed.yml`), not the guard. Consequence: a bot no-op on
+  push N of an already-reviewed PR does not fail the check — the guard
+  catches never-reviewed PRs, not staleness.
+- **Fail-open on API errors.** Any transient GitHub API failure warns and
+  passes; the guard reds only on *confirmed* zero coverage. A safety net
+  must not be a new flake surface.
+- **Session-side reviews count** — the guard guarantees *a* review
+  happened, not that the bot did it.
+- **Doc-only PRs are NOT carved out** — documentation gets adversarial
+  review in this repo.
+- **Escape hatch** for a false red (e.g. the gate judged a ≥20-line PR
+  trivial but the transcript heuristic disagreed): re-run the job (runs
+  are stochastic), or post a review and re-run the check.
+
+Related tripwire: `ci.yml`'s `workflow-guard` job asserts the
+claude-code-review workflow keeps its load-bearing pieces (write perms,
+`--comment` on the invocation line, `--allowedTools`, claude.yml's sender
+gate) — the anti-regression net for classes 1–4.
