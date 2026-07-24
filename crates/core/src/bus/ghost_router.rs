@@ -676,7 +676,11 @@ pub fn route_bus_ghost(
     // places fluid lanes east of solids, so horizontal branches don't have
     // to cross foreign solid trunks — straight surface pipes suffice.
     // -------------------------------------------------------------------------
-    // Max distance between a UG-in and its partner UG-out (per F4, vanilla).
+    // Max ENTITY-TO-ENTITY distance between a UG-in and its partner
+    // UG-out. The game prototype's max_underground_distance: 10 caps the
+    // pair at 10 apart (gap 9) — belt max_distance semantics. The old
+    // "+1" usage stamped 11-apart pairs, which the first fluid-chain sim
+    // measurement proved never connect in-game (#407).
     const FLUID_UG_MAX_DISTANCE: i32 = 10;
 
     // Per-lane tap_ys (consumer + producer port rows). Used by the gap-fill
@@ -1008,9 +1012,10 @@ pub fn route_bus_ghost(
 
             while let Some(in_y) = head_in_y {
                 // UG-N output: prefer the farthest reach within the gap.
-                // FLUID_UG_MAX_DISTANCE is the inclusive count of tiles
-                // between UG-in and UG-out (F4), so the farthest valid
-                // UG-out sits at in_y + max_distance + 1. Two cases:
+                // FLUID_UG_MAX_DISTANCE caps the UG-in→UG-out entity
+                // distance (game max_underground_distance semantics), so
+                // the farthest valid UG-out sits at in_y + max_distance.
+                // Two cases:
                 //   - Max reach lands at or past y1-1: aim for y1-1 so
                 //     the chain closes this pair (mouth at y1 merges F5
                 //     with the next surface anchor).
@@ -1021,7 +1026,7 @@ pub fn route_bus_ghost(
                 // landing UG-N at y1-2 (which would leave a single tile
                 // for the next UG-S at y1-1 with no room for its
                 // partner UG-N).
-                let max_reach = in_y + FLUID_UG_MAX_DISTANCE + 1;
+                let max_reach = in_y + FLUID_UG_MAX_DISTANCE;
                 let upper = if max_reach >= y1 - 1 {
                     y1 - 1
                 } else {

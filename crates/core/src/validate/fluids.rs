@@ -158,15 +158,19 @@ pub fn check_pipe_isolation(layout_result: &LayoutResult) -> Vec<ValidationIssue
 ///
 /// Mirrors Factorio's pairing semantics (per F4): an input pairs with the
 /// **nearest unpaired output** on the same axis whose direction is opposite,
-/// within the max underground distance (vanilla pipe-to-ground: 10 tiles
-/// gap between input and output, so a max axis distance of 11 between the
-/// two entities). Iteration-order matching would cascade incorrect pairs
+/// within the max underground distance. Vanilla pipe-to-ground has
+/// `max_underground_distance: 10`, which — like the belt `max_distance`
+/// family — caps the ENTITY-TO-ENTITY axis distance at 10 (gap ≤ 9).
+/// The old model here said gap 10 / distance 11; the first fluid-chain
+/// sim measurement falsified it (an 11-apart trunk pair carried
+/// nothing — #407). Iteration-order matching would cascade incorrect pairs
 /// when entities are emitted out of y-order (e.g. junction-solver pipes
 /// added after the main trunk emission).
 fn find_ptg_pairs(layout_result: &LayoutResult) -> FxHashMap<(i32, i32), (i32, i32)> {
-    // Per F4: vanilla pipe-to-ground has max underground distance of 10
-    // tiles (gap), so the entity-to-entity distance cap is 11.
-    const MAX_PIPE_PTG_DISTANCE: i32 = 11;
+    // Game-measured (#407): entities at most 10 apart connect; 11 does
+    // not. Mirrors belt max_distance semantics (yellow UG belt
+    // max_distance=5 = gap 4 = our ug_max_reach).
+    const MAX_PIPE_PTG_DISTANCE: i32 = 10;
 
     // Collect inputs and outputs separately
     let mut inputs: Vec<&PlacedEntity> = Vec::new();
