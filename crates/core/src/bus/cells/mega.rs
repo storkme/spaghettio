@@ -432,11 +432,17 @@ fn adapt_with_spacing(
                     }
                 }
                 let mut x = 0;
+                let ug_gap = crate::common::ug_max_reach(&r.entity) as i32;
                 for (lo2, hi2) in clusters {
-                    if hi2 - lo2 + 2 > 9 {
+                    // Mouths at lo2-1 / hi2+1 → underground gap =
+                    // hi2-lo2+1, capped by the RECORD's belt tier (the
+                    // mouths stamp that tier — a hardcoded express cap
+                    // would let a yellow record plan a pair the game
+                    // never connects; #411 review).
+                    if hi2 - lo2 + 1 > ug_gap {
                         return Err(format!(
-                            "mega: chain-fed {} lateral hop cluster {}..{} exceeds express reach",
-                            r.item, lo2, hi2
+                            "mega: chain-fed {} lateral hop cluster {}..{} exceeds {} reach",
+                            r.item, lo2, hi2, r.entity
                         ));
                     }
                     if lo2 - 1 < 1 {

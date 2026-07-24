@@ -140,6 +140,25 @@ feeds and the composed layout must pass the pipe-isolation validators
 
 ## Decision log
 
+- *2026-07-24 — #411 adversarial review folds (APPROVE-WITH-NITS; both
+  bus-refusal claims independently re-verified, retrofit guards probed
+  and held, full battery re-run clean). Folds: (1) the chain-fed hop
+  reach guard now derives from the RECORD's belt tier via
+  `ug_max_reach` instead of a hardcoded express cap — the mouths stamp
+  the record's tier, so a yellow record with a 6..9-tile span would
+  have planned a pair the game never connects (latent,
+  validator-backstopped, not triggered by any current fixture);
+  (2) origin/main merged into the branch — the review's one MAJOR was
+  merge hygiene, not code: the stale base made the two-dot diff show
+  #410's review-bot guard as phantom reverts (three-dot diff touches
+  only the 5 real files; 0 contested commits). Bot review's
+  CLAUDE.md-compliance finding (skipped browser step) resolved by
+  DOING the step: composed PU@4 verified in the web pipeline (0
+  errors / 81 warnings, candidate selected) and eyeballed at three
+  zoom levels; the "session convention" carve-out is memory-side, not
+  CLAUDE.md — future layout PRs do the step or cite sim coverage
+  explicitly.*
+
 - *2026-07-24 — Increment 2 DELIVERED (chain-fed mega inputs) and
   KILL-2 RESOLVED: NOT INVOKED. `mega_subgraph` now collects inputs
   produced by non-member chain specs as `plan.chain_fed` instead of
