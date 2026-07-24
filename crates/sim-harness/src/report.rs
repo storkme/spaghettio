@@ -199,14 +199,39 @@ pub fn compute(manifest: &Manifest, result: &serde_json::Value) -> Report {
     let mut items = Vec::new();
     for (item, planned_rate) in &manifest.planned_rates {
         let is_target = target_items.contains(&item.as_str());
-        let measured_produced_rate = if is_target && target_produced_rate.is_some() {
+        // The scenario's checkpoint tracks ONE scalar — the FIRST
+        // target's counters. Applying it to every target collapsed a
+        // 5/9/11 advanced-oil triple to a uniform first-target rate
+        // (Phase C identity probes, 2026-07-24); non-first targets
+        // measure from their own sample series over the same window.
+        let is_first_target = target_items.first() == Some(&item.as_str());
+        let measured_produced_rate = if is_first_target && target_produced_rate.is_some() {
             target_produced_rate
         } else {
             rate_over_window(&sample_series(result, item), window_start)
         };
-        let measured_delivered_rate = if is_target { target_delivered_rate } else { None };
+        let is_fluid_target = manifest
+            .targets
+            .iter()
+            .any(|t| t.item == *item && t.is_fluid);
+        let measured_delivered_rate = if is_first_target && !is_fluid_target {
+            target_delivered_rate
+        } else {
+            None
+        };
         let verdict = if is_target {
-            Some(verdict_for_ratio(measured_delivered_rate.map(|m| m / planned_rate)))
+            if is_fluid_target {
+                // Fluid targets have no drain rig (voids are
+                // uncounted): verdict on PRODUCED rate, honestly
+                // labeled by the missing delivered column.
+                Some(verdict_for_ratio(measured_produced_rate.map(|m| m / planned_rate)))
+            } else if is_first_target {
+                Some(verdict_for_ratio(measured_delivered_rate.map(|m| m / planned_rate)))
+            } else {
+                // Non-first SOLID targets have no per-item drain
+                // attribution either; verdict on produced.
+                Some(verdict_for_ratio(measured_produced_rate.map(|m| m / planned_rate)))
+            }
         } else {
             None
         };

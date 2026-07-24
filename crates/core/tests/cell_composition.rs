@@ -942,6 +942,66 @@ fn mega_chain_pu4_resolves_bus_failure() {
     );
 }
 
+/// RFC-052 Phase C flagship: utility-science-pack@2 from fully raw
+/// inputs. The BUS hard-fails (belt-loop + underground-belt); the
+/// mega swallows the ENTIRE oil complex — 10 members including BOTH
+/// oil processings, cracking, and lubricant, with 4 solid exports
+/// (multi-consumer fan-out) and 5 chain-fed inputs. Composes at ZERO
+/// errors.
+#[test]
+fn mega_chain_usp2_resolves_bus_failure() {
+    use spaghettio_core::bus::cells::chain::compose_chain;
+    use spaghettio_core::validate::{self, LayoutStyle, Severity};
+    let inputs: FxHashSet<String> =
+        ["iron-ore", "copper-ore", "crude-oil", "water", "coal", "stone"]
+            .iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "utility-science-pack", 2.0, &inputs, &MachinePalette::default(),
+        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+    ).unwrap();
+    let plan = spaghettio_core::bus::cells::mega::mega_subgraph(&sr)
+        .expect("subgraph")
+        .expect("USP chain has a fluid subgraph");
+    assert!(
+        plan.members.contains("advanced-oil-processing")
+            && plan.members.iter().any(|r| r.contains("cracking")),
+        "flagship must exercise the advanced complex, got {:?}",
+        plan.members
+    );
+    assert!(
+        plan.outputs.len() >= 2 && !plan.chain_fed.is_empty(),
+        "flagship must exercise multi-export fan + chain-fed inputs"
+    );
+    let l = compose_chain(&sr).expect("USP@2 from raw must compose");
+    let issues = match validate::validate(&l, Some(&sr), LayoutStyle::Bus) {
+        Ok(v) => v,
+        Err(e) => e.issues,
+    };
+    let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
+    assert!(errors.is_empty(), "USP@2 errors: {errors:?}");
+}
+
+/// Artifact producer for the Phase C flagship sim run.
+#[test]
+#[ignore = "artifact producer"]
+fn export_mega_usp_for_sim() {
+    use spaghettio_core::bus::cells::chain::compose_chain;
+    let inputs: FxHashSet<String> =
+        ["iron-ore", "copper-ore", "crude-oil", "water", "coal", "stone"]
+            .iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "utility-science-pack", 2.0, &inputs, &MachinePalette::default(),
+        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+    ).unwrap();
+    let l = compose_chain(&sr).unwrap();
+    let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(&l, &sr, "mega-chain-usp2raw");
+    std::fs::create_dir_all("target/tmp").unwrap();
+    std::fs::write("target/tmp/mega-chain-usp2raw.bp", &bp).unwrap();
+    std::fs::write("target/tmp/mega-chain-usp2raw.manifest.json",
+        serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
+    println!("wrote mega-chain-usp2raw.bp ({} in / {} out)", l.boundary_inputs.len(), l.boundary_outputs.len());
+}
+
 /// Artifact producer for the increment-2 sim run.
 #[test]
 #[ignore = "artifact producer"]

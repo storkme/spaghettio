@@ -56,7 +56,34 @@ pub(crate) fn merge_output_rows(
         })
         .sum::<f64>();
     let belt_name = belt_entity_for_rate_stacked(total_rate * 2.0, max_belt_tier, ctx.for_item(item));
-    let reach = ug_max_reach(belt_name) as i32;
+    // Hops may need more reach than the rate-picked tier offers
+    // (alternating blocked columns with 1-tile gaps are unhoppable
+    // at yellow reach and split into exit-abuts-next-entrance
+    // pairs — the USP mega merger forensics). The hop TIER may
+    // escalate up to the USER's belt cap: the cap is the
+    // constraint, the rate pick is not; hop mouths are plumbing.
+    // Function-scoped (not per-row): `hop_cap` depends only on
+    // `max_belt_tier`, so every row in this merge shares one reach
+    // budget — including the #309 headroom pre-pass below, which
+    // needs the SAME reach the placement loop will end up using to
+    // predict where each row's hop actually lands.
+    let hop_cap: &str = max_belt_tier.unwrap_or("express-transport-belt");
+    let reach = ug_max_reach(hop_cap) as i32;
+    // Tier floor = the RATE-PICKED surface tier (#421 review: a
+    // smallest-spanning pick could throttle an express-rate line
+    // through a yellow hop — silently, since the throughput check
+    // only flags overlapping routes); ceiling = the user's cap.
+    let hop_tier_for_gap = |gap: i32| -> &'static str {
+        for t in ["transport-belt", "fast-transport-belt", "express-transport-belt"] {
+            if ug_max_reach(t) as i32 >= gap && ug_max_reach(t) >= ug_max_reach(belt_name) {
+                if ug_max_reach(t) <= ug_max_reach(hop_cap) {
+                    return underground_for_belt(t);
+                }
+                break;
+            }
+        }
+        underground_for_belt(hop_cap)
+    };
     let splitter_name = splitter_for_belt(belt_name);
 
     // Column position: east of the widest participating row, but never west
@@ -94,12 +121,30 @@ pub(crate) fn merge_output_rows(
         if !(blocked_columns.contains(&rw) || existing_tiles.contains(&(rw, out_y))) {
             continue;
         }
+        // Mirrors the placement loop's clustering walk below (single-gap
+        // runs joined across a free tile) so this predicts the SAME
+        // `run_end` the real walk will reach once `col_x` is resolved —
+        // an under-estimate here would silently reopen the exit/south-
+        // column collision for a clustered blocked pattern.
         let mut run_end = rw;
-        while (blocked_columns.contains(&(run_end + 1))
-            || existing_tiles.contains(&(run_end + 1, out_y)))
-            && (run_end + 1) - rw < reach
-        {
-            run_end += 1;
+        loop {
+            let next_blocked = (blocked_columns.contains(&(run_end + 1))
+                || existing_tiles.contains(&(run_end + 1, out_y)))
+                && (run_end + 1) - rw < reach;
+            if next_blocked {
+                run_end += 1;
+                continue;
+            }
+            let gap_then_blocked = !(blocked_columns.contains(&(run_end + 1))
+                || existing_tiles.contains(&(run_end + 1, out_y)))
+                && (blocked_columns.contains(&(run_end + 2))
+                    || existing_tiles.contains(&(run_end + 2, out_y)))
+                && (run_end + 2) - rw < reach;
+            if gap_then_blocked {
+                run_end += 2;
+                continue;
+            }
+            break;
         }
         // This row's column sits at `merge_x + (n - 1 - idx)`; need that
         // to be `>= run_end + 2` (strictly past the exit at `run_end + 1`).
@@ -127,20 +172,44 @@ pub(crate) fn merge_output_rows(
         // underground pair instead of stamping over (or sideloading
         // into) the foreign belt.
         let rw = row_spans[ri].row_width;
-        let ug_name = underground_for_belt(belt_name);
         let mut x = rw;
         while x < col_x {
             if blocked_columns.contains(&x) || existing_tiles.contains(&(x, out_y)) {
                 // Contiguous blocked run [x, run_end], clamped by UG reach
                 // (entrance at x-1, exit at run_end+1; gap ≤ reach).
+                // CLUSTER runs separated by a single free tile: hopping
+                // them independently would put run B's entrance exactly
+                // on run A's exit — the mutation below then destroys
+                // A's pair (two consecutive entrances; the game leaves
+                // the first unpaired). Same defect class as the ghost
+                // router's fluid-branch bridging (#412/USP forensics).
+                // ALSO clamped by `existing_tiles` (#309: Step 4-6
+                // residue — a dual-fate item's `ret` belt) alongside
+                // `blocked_columns`, everywhere the latter is checked.
                 let mut run_end = x;
-                while run_end + 1 < col_x
-                    && (blocked_columns.contains(&(run_end + 1))
-                        || existing_tiles.contains(&(run_end + 1, out_y)))
-                    && (run_end + 1) - x < reach
-                {
-                    run_end += 1;
+                loop {
+                    let next_blocked = run_end + 1 < col_x
+                        && (blocked_columns.contains(&(run_end + 1))
+                            || existing_tiles.contains(&(run_end + 1, out_y)))
+                        && (run_end + 1) - x < reach;
+                    if next_blocked {
+                        run_end += 1;
+                        continue;
+                    }
+                    let gap_then_blocked = run_end + 2 < col_x
+                        && !(blocked_columns.contains(&(run_end + 1))
+                            || existing_tiles.contains(&(run_end + 1, out_y)))
+                        && (blocked_columns.contains(&(run_end + 2))
+                            || existing_tiles.contains(&(run_end + 2, out_y)))
+                        && (run_end + 2) - x < reach;
+                    if gap_then_blocked {
+                        run_end += 2;
+                        continue;
+                    }
+                    break;
                 }
+                let gap = run_end + 1 - x;
+                let hop_ug = hop_tier_for_gap(gap);
                 if x == rw {
                     // No local tile to convert — the row's own last belt
                     // tile at (x-1, out_y) is placed by `place_rows` long
@@ -156,10 +225,12 @@ pub(crate) fn merge_output_rows(
                     // by #309 to any override reported here), so the
                     // row's now-stale plain belt at (x-1, out_y) is
                     // filtered out of the final layout rather than
-                    // double-placed alongside this entrance.
+                    // double-placed alongside this entrance. Distinct
+                    // from the "refuse" branch below: this tile is KNOWN
+                    // to be the row's own belt, not an ambiguous miss.
                     row_tile_overrides.insert((x - 1, out_y));
                     entities.push(PlacedEntity {
-                        name: ug_name.to_string(),
+                        name: hop_ug.to_string(),
                         x: x - 1,
                         y: out_y,
                         direction: EntityDirection::East,
@@ -169,17 +240,32 @@ pub(crate) fn merge_output_rows(
                         rate: Some(total_rate),
                         ..Default::default()
                     });
-                } else if let Some(prev) = entities
-                    .iter_mut()
-                    .rev()
-                    .find(|e| e.x == x - 1 && e.y == out_y)
-                {
-                    // Replace the belt stamped at x-1 with a UG entrance.
-                    prev.name = ug_name.to_string();
-                    prev.io_type = Some("input".to_string());
+                } else {
+                    // Replace the belt stamped at x-1 with a UG entrance —
+                    // only ever a plain surface belt of this run (the
+                    // clustering guarantees it; the guard refuses to
+                    // corrupt an existing mouth).
+                    let converted = entities
+                        .iter_mut()
+                        .rev()
+                        .find(|e| e.x == x - 1 && e.y == out_y && e.name.ends_with("transport-belt"))
+                        .map(|prev| {
+                            prev.name = hop_ug.to_string();
+                            prev.io_type = Some("input".to_string());
+                        })
+                        .is_some();
+                    // No panic on a miss: fulgora's merger hits runs whose
+                    // west tile is row machinery — the old code mutated
+                    // whatever sat there (silent corruption); refusing the
+                    // hop (below) leaves a gap instead, strictly safer.
+                    if !converted {
+                        // Refuse the hop rather than emit an unpaired exit.
+                        x = run_end + 2;
+                        continue;
+                    }
                 }
                 entities.push(PlacedEntity {
-                    name: ug_name.to_string(),
+                    name: hop_ug.to_string(),
                     x: run_end + 1,
                     y: out_y,
                     direction: EntityDirection::East,

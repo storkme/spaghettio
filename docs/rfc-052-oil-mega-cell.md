@@ -1,6 +1,6 @@
 # RFC-052: Oil mega-cells — fluid subgraphs as uncropped composed units
 
-**Status**: Design (circulated for review)
+**Status**: Landed (Phases A/B/C delivered; close-out 2026-07-24 — see the status ledger and the decision log's close-out entry)
 
 ## Summary
 
@@ -139,6 +139,180 @@ feeds and the composed layout must pass the pipe-isolation validators
   Own go/no-go on Phase A/B evidence.
 
 ## Decision log
+
+- *2026-07-24 — CLOSE-OUT (#421 merged). All three phases delivered;
+  every kill criterion resolved without firing: (1)
+  generic-attachment held — the mega attaches through boundary
+  records, the generic corridor machinery, and the (new) fan/west-
+  entry idioms, no per-recipe hand-composition; (2) value-existence
+  proven three times over (chem5, PU@4, USP@2 — each composes 0
+  errors where the bus hard-fails, permanently gated); (3) sim-gate
+  escape clause satisfied at every rung — deficits attribute to the
+  #383 solid declared-bound class shared with solid chains, and NO
+  fluid-specific deficit class ever appeared (kit and fluid errors
+  empty in every measurement); (4) isolation clean on every composed
+  fixture. Registration of chem5/PU4/USP2 waits on #383 lifting the
+  smelter bound (registry records measured PASS baselines).
+  Remaining tracked threads: #423 (pitch-1 splitter-passthrough —
+  the one engine class Phase C worked AROUND rather than through),
+  #409 landed independently and the flagship re-verified against it,
+  and the harness drained-counter window semantics oddity noted in
+  the #421 review. Phase C's answer to the RFC's own question: the
+  uncropped approach scales to the advanced complex, by
+  measurement.*
+
+- *2026-07-24 (flagship) — **USP@2-from-raw COMPOSES AT ZERO ERRORS**
+  (2232×193, 48k entities; gate
+  `mega_chain_usp2_resolves_bus_failure`). The crossing-zone probe
+  resolved the residual 18 through three engine fixes: (1) tapoff
+  splitters SURVIVE zone release when an interior boundary anchors on
+  them — the #295 prose ("SAT models splitters as fixed structure and
+  never re-stamps them") was implemented for balancer segments only;
+  released-but-uncovered splitters were dropped by the Step-6 retain,
+  leaving the trunk hole (prune_dangling was probed FIRST per the
+  standing lesson and exonerated — its drops were other candidates'
+  tiles; the killer was the release/retain pair). Zones that route
+  AROUND a splitter (no interior boundary) keep the release,
+  byte-identical. (2) merger hops TIER-ESCALATE within the user's
+  belt cap (alternating blocked columns at 1-tile gaps are unhoppable
+  at yellow reach; the entrance conversion accepts any surface-belt
+  tier and refuses loudly-safely instead of mutating row machinery —
+  fulgora's latent case). (3) splitter-tap SPACERS are a
+  LayoutOptions opt-in set only by compose_mega_block: mega
+  sub-solves pack every trunk span from y=0 so tap splitters land on
+  live neighbor trunks and the zones don't bridge them; PU@2-AM2 and
+  EC35-from-ore have the same overlap but their zone machinery
+  bridges it and the spacer's geometry shift broke them — hence
+  opt-in, main-line byte-identical (the pitch-1 splitter-passthrough
+  class remains tracked here). Process note: an interim "suite green"
+  read was VOID — a test target failed to compile and printed no
+  result lines; re-verified from one clean invocation (the
+  single-run-counts lesson generalizes to compile failures).
+  Env-gated forensic tracing (SPAGHETTIO_MEGA_DEBUG) kept in the
+  adapter and SAT prune (failure/prune paths only; the merger's
+  per-hop probe removed after use, #421 review). **Flagship sim verdict
+  (48,366/48,366 revived, zero kit/fluid errors, 394 machines
+  working — the deepest measurement ever, 21 items)**: USP 0.84/2.00
+  at the ceiling, PRODUCED-rate trend still rising at cutoff
+  (0.70→0.88 over the final windows, from the produced-counter
+  deltas — the drained counters are flat and their window semantics
+  are unresolved, #421 review), attributed by time-series forensics
+  to copper-plate supply as the ROOT constraint: it settles at
+  ~70/s vs 99.7 planned (−30%) — the #383 smelter-cell
+  declared-bound class (PU4's plates were −21%; USP@2's per-copy
+  copper rates are higher). PG/EC deficits (−27%/−9%) read as
+  demand-coupled cascades of that root, not independent bounds: the
+  oil complex DEMONSTRATED capacity above plan during the buffer-fill
+  transient (PG 240/s vs 203 planned; steady state is below plan
+  under the throttled demand), and the 2 fluid-starved-census
+  machines are the cracking plants during the demand transition.
+  Single-root framing is the parsimonious read, not a proof. Kill-3's escape clause SATISFIED: deficit
+  attributed to the named engine-wide solid bound solid chains
+  share; NO new fluid-specific deficit class. Not registered
+  (registry records measured PASS baselines); registers when #383's
+  template sizing lifts the bound. Phase C architecture verdict: the
+  uncropped approach SCALES to the advanced complex — the RFC's own
+  question, answered by measurement.*
+
+- *2026-07-24 (latest) — residual-18 diagnosis SHARPENED; one fix
+  attempt made and REVERTED. The trunk emitter's silent
+  `hard-tile continue` was bridged with in-segment South UG pairs —
+  scoped first to all hard tiles (regressed two e2e baselines:
+  downstream machinery like crossing zones owns some of those
+  skips), then to splitter-second-tiles only (still: mouths land on
+  tap rows/own hard tiles → asymmetric stamping → unpaired inputs;
+  PU@2-AM2 baseline stayed red; block errors shifted 6→8 not
+  improved). REVERTED cleanly — baselines green again. The sharpened
+  truth: at PITCH-1 trunks with trunks on BOTH sides, a tap-off
+  SPLITTER's second tile has no hostable position at all — the
+  horizontal interactions (feed rows crossing neighbor columns) are
+  already solved by the crossing zones; only the 2-tile splitter
+  entity is unresolvable by routing. CORRECTION on candidate fixes:
+  ALL bus lanes are pitch-1 (`lane_planner` assigns x = i+1) and
+  main-line fixtures with splitter taps are CLEAN — so the
+  neighbor-trunk gap is normally bridged by the CROSSING-ZONE / SAT
+  machinery, and the (a)-(c) lane-geometry ideas are misdirected.
+  The real defect: the crossing zone at block-local rows 13 did not
+  cover/bridge the row-12 gap in the engine-unit trunk. Next probe
+  per the standing lesson: prune_dangling first (diff raw SAT output
+  vs sol.entities for that zone before theorising about
+  clustering/growth/encoder); then zone scoping (why the zone
+  excluded row 12). Merger unpaired-output
+  at block-local (73,39) still separate and undiagnosed. Both
+  reproduce standalone: compose_mega_block(USP@2 sub-solve, scale
+  0.5) → 6 errors.*
+
+- *2026-07-24 (later) — C3 LANDED, C2 LANDED, USP@2 composes
+  end-to-end (2232×193, 48k entities — the largest layout ever
+  composed); error ladder 71 → 44 → 27 → 18 through five fixes, each
+  a named class: (1) fan splitter/branch columns dodge other drain
+  descents; (2) pole trio nudge learns its own placements; (3) the
+  OUTPUT MERGER had the same blocked-free-blocked pair-destroyer as
+  the ghost router's fluid bridging (second instance of the class —
+  runs now cluster across 1-tile gaps, mutation guards on plain
+  belts); (4) fan pass-through takes its own dodged column; (5) fan
+  branches descend via ALLOCATED lanes in slot pi+1 (lane_demand
+  sizes them) instead of ad-hoc splitter columns that collided
+  head-on with consumer ascents. REMAINING 18 = 6 × 3 copies, ALL
+  engine-internal to the mega sub-layout (not Phase-C machinery),
+  two bugs: (a) a trunk tap-off SPLITTER's second tile lands on the
+  adjacent pitch-1 trunk column; the neighbor lane SKIPS that hard
+  tile but emits no UG bridge across the skip (a crossing zone paves
+  one row; the dangling surface belts feed the foreign splitter →
+  items mix). Suspect: the trunk segmenter treats a FOREIGN
+  splitter tile like an own-tap row (flow-through), but foreign
+  splitters don't pass a different item — the skip needs a bridge.
+  Block-local (4,12)/(5,11..13), trunk:engine-unit vs
+  tapoff:iron-plate. (b) merger unpaired UG output at block-local
+  (73,39) (east, no matching input) beside the electric-engine-unit
+  merger run. Both reproduce standalone via compose_mega_block on
+  the USP@2 sub-solve at scale 0.5 (debug_usp_block example,
+  gitignored). C3's landed machinery: PTG spans stopped blocking
+  surface crossings (span map, same-axis-only interference); fluid
+  head slots dodge foreign fluid columns as retry rung 2/4;
+  un-hoppable chain-fed clusters vertical-retrofit every column;
+  entry mouth may sit at the west-edge entry tile; +1 margin row for
+  cf blocks. C2: ascent-terminal retrofit generalizes to corr:/fan
+  rows both directions.*
+
+- *2026-07-24 — Phase C OPENED; the identity precondition is
+  DISCHARGED BY MEASUREMENT and it falsified the engine. Eight
+  single-refinery sim probes (A–H2: starve-vs-craft discrimination +
+  a pipe-contents census on dead-end stubs) measured the full port
+  identity table for advanced-oil-processing: recipe fluids bind
+  x-ASCENDING on the unmirrored refinery (water/crude in W→E;
+  heavy/light/PG out W→E — pure prototype box order) and x-DESCENDING
+  on the engine-mirrored (dir+8 exported) form (crude WEST + water
+  EAST; PG/light/heavy W→E) — the 180° rotation reverses port
+  x-order while identities stay glued to their boxes, exactly the
+  FFF #394 trap. The engine's ascending-always zip STARVED mirrored
+  refineries in-game (probe A). Fix: the placer reverses the fluid
+  list for mirrored rows (single-fluid sides reverse to themselves —
+  every registered fixture bit-identical, hash gate green);
+  `fluid_ports::port_fluid_assignment` is the shared measured rule
+  with a pin test; foundry/cryo inherit the geometric rule with the
+  refinery as measured anchor. The new tap arrangement immediately
+  flushed out a LATENT ROUTER BUG: horizontal fluid-branch bridging
+  mutated a previous hop's EXIT mouth into the next hop's entrance on
+  blocked-free-blocked patterns (pair destroyed, branch stitched onto
+  the foreign network west of it) — runs now cluster across 1-tile
+  gaps within reach, and the conversion guards on plain-pipe.
+  Harness: the multi-fluid-target report collapse fixed (checkpoint
+  scalar is first-target-only; fluid targets verdict on PRODUCED —
+  they have no drain rig). Frontier mapped (probe): lubricant targets
+  are fluid exports (composition refuses by design); FRF@0.5/1 bus is
+  CLEAN (no win there) but compose hits the C2 ascent-terminal
+  collision (terminal lands on a corr: row; refusal now names the
+  blocker); **USP@2 is the Phase C flagship — bus hard-fails
+  (belt-loop + underground-belt), the mega swallows the full oil
+  complex (10 members incl. BOTH oil processings + cracking +
+  lubricant, 4 solid exports, 5 chain-fed inputs)**, eligibility now
+  passes after C1 (multi-consumer export fan on the drain bypass row,
+  splitter-chain idiom, single-consumer path byte-identical), and the
+  remaining blocker is C3: the joint fluid planner cannot route
+  crude+water feeds on the 10-member block at either spacing. Named
+  increments: C2 (ascent congestion), C3 (adapter routing for the
+  advanced complex).*
 
 - *2026-07-24 — #411 adversarial review folds (APPROVE-WITH-NITS; both
   bus-refusal claims independently re-verified, retrofit guards probed

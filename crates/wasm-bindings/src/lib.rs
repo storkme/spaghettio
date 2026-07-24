@@ -21,7 +21,6 @@ use rustc_hash::FxHashSet;
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
-#[allow(clippy::too_many_arguments)] // param-per-axis wasm surface (quality/wire/stacking/research)
 /// Build `LayoutOptions` from the optional belt-tier, strategy,
 /// row-layout, and inserter-tier strings passed in across the WASM
 /// boundary. The TS engine layer validates URL params, so unknown values
@@ -79,6 +78,9 @@ fn layout_options(
         // decomposition search (`MergeTapCandidate`), never requested by the
         // web UI — always default-off at the public boundary.
         merge_tap: false,
+        // Phase C: set only by the mega-block sub-solve internally,
+        // never at the public boundary.
+        splitter_tap_spacers: false,
         // RFC-046 Phase 2: unknown/absent → 1 (off), same fallback
         // semantics as the tiers above. `common::*_stacked` helpers clamp
         // any out-of-range value, so no validation needed here.

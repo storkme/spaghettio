@@ -754,14 +754,22 @@ pub(crate) fn build_one_row(
                 };
                 (in_dxs, out_dxs)
             };
+            // Port-identity rule (sim-measured, #412 / fluid_ports::
+            // port_fluid_assignment): recipe fluids bind x-ASCENDING on
+            // the unmirrored form and x-DESCENDING on the mirrored form
+            // (the 180°-rotation export encoding reverses port x-order;
+            // the old ascending-always zip starved advanced-oil
+            // refineries in-game). fluid_only_row places mirrored, so
+            // the FLUID list reverses here; single-fluid sides reverse
+            // to themselves — every registered fixture is bit-identical.
             let in_port_assignments: Vec<(i32, &str)> = input_dxs
                 .iter()
-                .zip(fluid_inputs.iter())
+                .zip(fluid_inputs.iter().rev())
                 .map(|(&dx, f)| (dx, f.item.as_str()))
                 .collect();
             let out_port_assignments: Vec<(i32, &str)> = output_dxs
                 .iter()
-                .zip(fluid_outputs.iter())
+                .zip(fluid_outputs.iter().rev())
                 .map(|(&dx, f)| (dx, f.item.as_str()))
                 .collect();
             let (ents, rh, in_port_pipes, out_port_pipes) = templates::fluid_only_row(

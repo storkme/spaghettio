@@ -195,6 +195,48 @@ pub fn north_input_orientation(entity: &str) -> (bool, EntityDirection) {
     }
 }
 
+/// SIM-MEASURED port-identity rule (#412 probes, 2026-07-24): recipe
+/// fluids bind to a machine's same-direction ports in X-ASCENDING
+/// order on the unmirrored form, and in X-DESCENDING order on the
+/// engine-mirrored form — the (direction+8, mirror:false) export
+/// encoding is a 180° rotation, which reverses the ports' x-order
+/// while the fluid-box identities stay glued to their boxes.
+/// Measured on oil-refinery/advanced-oil-processing (census probe:
+/// mirrored = crude WEST + water EAST in, PG/light/heavy west→east
+/// out; engine's old recipe-order-ascending assignment starved the
+/// machine in-game). Foundry/cryogenic-plant share the geometry rule
+/// by construction (same mirror-as-rotation encoding); the refinery
+/// is the measured anchor.
+///
+/// `fluids` must be the recipe's fluid names for ONE direction
+/// ("input" or "output") in RECIPE ORDER. Returns `(dx, dy, item)`
+/// per port, table order (x-ascending).
+pub fn port_fluid_assignment<'a>(
+    entity: &str,
+    mirror: bool,
+    direction: EntityDirection,
+    io: &str,
+    fluids: &[&'a str],
+) -> Vec<(i32, i32, &'a str)> {
+    let ports: Vec<(i32, i32)> = fluid_ports(entity, mirror, direction)
+        .iter()
+        .filter(|&&(_, _, pt)| pt == io)
+        .map(|&(x, y, _)| (x, y))
+        .collect();
+    let n = fluids.len().min(ports.len());
+    let mut out = Vec::with_capacity(n);
+    for (k, &(px, py)) in ports.iter().take(n).enumerate() {
+        let item = if mirror {
+            fluids[n - 1 - k]
+        } else {
+            fluids[k]
+        };
+        out.push((px, py, item));
+    }
+    out
+}
+
+
 /// The `dx` offsets (relative to the machine's left edge) of the input-port
 /// pipes on the NORTH face (`dy == -1`), for `entity` at the given orientation.
 /// This is where a template's north fluid-input pipe must sit to feed the
@@ -267,6 +309,31 @@ mod tests {
         assert_eq!(
             fluid_ports("electromagnetic-plant", false, EntityDirection::North),
             &[(-1, 2, "input"), (4, 1, "input"), (2, 4, "output"), (1, -1, "output")]
+        );
+    }
+
+    #[test]
+    fn port_identity_matches_sim_measured_truth() {
+        // Sim-measured 2026-07-24 (Phase C precondition probes A-H2,
+        // rfc-052 decision log): advanced-oil-processing fluids bind
+        // x-ASCENDING in recipe order on the unmirrored refinery and
+        // x-DESCENDING on the engine-mirrored (dir+8 exported) form.
+        // The engine's old ascending-always zip STARVED mirrored
+        // refineries in-game.
+        let ins = ["water", "crude-oil"];
+        let outs = ["heavy-oil", "light-oil", "petroleum-gas"];
+        // Unmirrored: box order, x-ascending (census probe H2).
+        let a = port_fluid_assignment("oil-refinery", false, EntityDirection::North, "input", &ins);
+        assert_eq!(a, vec![(1, 5, "water"), (3, 5, "crude-oil")]);
+        let a = port_fluid_assignment("oil-refinery", false, EntityDirection::North, "output", &outs);
+        assert_eq!(a, vec![(0, -1, "heavy-oil"), (2, -1, "light-oil"), (4, -1, "petroleum-gas")]);
+        // Mirrored: reversed (probes A vs B/D/E + census probe G).
+        let a = port_fluid_assignment("oil-refinery", true, EntityDirection::North, "input", &ins);
+        assert_eq!(a, vec![(1, -1, "crude-oil"), (3, -1, "water")]);
+        let a = port_fluid_assignment("oil-refinery", true, EntityDirection::North, "output", &outs);
+        assert_eq!(
+            a,
+            vec![(0, 5, "petroleum-gas"), (2, 5, "light-oil"), (4, 5, "heavy-oil")]
         );
     }
 

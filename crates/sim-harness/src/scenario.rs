@@ -44,6 +44,7 @@
 //! south-case numbers in this module's tests.
 
 use crate::manifest::{rot90, BoundaryRecord, Manifest};
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 /// Baseline warmup before stability windows start (ticks). Chosen to match
@@ -299,10 +300,57 @@ end
     );
 }
 
+/// Assigns each solid (non-fluid) feed record a small "slot" index
+/// (0, 1, 2, ...), grouped by direction and ordered along the LATERAL
+/// axis — NOT by raw manifest order. `feed_call` turns a record's slot
+/// into its `add_feed` depth stagger (`4 + 6*slot`).
+///
+/// #363's second live datum: `add_feed`'s westward jog belt row runs
+/// `lateral*[1..12]` tiles out from its own corner (chest bank on
+/// `[10..12]`), and a rig's own head->corner "outward column" collides
+/// with a same-direction NEIGHBOR's jog row whenever that neighbor sits
+/// within the jog's lateral reach and has depth >= the crossing rig's
+/// jog height. Depth used to be `4 + 6*idx` on raw manifest order, so a
+/// manifest that didn't happen to list heads in the jog's own travel
+/// direction (west->east for south-facing heads, since
+/// `lateral = rot90(south) = east`) could put a deep rig's jog row
+/// directly over a shallower neighbor's column — `create_entity` in
+/// script mode stacks silently there instead of failing loudly, so the
+/// shadowed lanes just never fed (issue: "only the first-ordered rig per
+/// group worked, at both 1-tile and 4-tile column spacing").
+///
+/// Sorting each direction group ascending along `lateral` before
+/// slotting means every neighbor further "upstream" along the jog's own
+/// travel direction always gets a strictly SMALLER depth than rigs
+/// further along it, so no column can ever reach a jog row's height —
+/// the issue's proven consumer-side workaround ("order boundary_inputs
+/// west->east") becomes the harness's own default instead of a caller
+/// obligation. Fluid records don't jog (a single adjacent infinity-pipe
+/// tile — see `add_fluid_feed`) so they're excluded and don't consume a
+/// slot.
+fn feed_slots(records: &[BoundaryRecord]) -> Vec<i32> {
+    let mut by_dir: BTreeMap<u8, Vec<usize>> = BTreeMap::new();
+    for (i, rec) in records.iter().enumerate() {
+        if !rec.is_fluid {
+            by_dir.entry(rec.direction).or_default().push(i);
+        }
+    }
+    let mut slots = vec![0i32; records.len()];
+    for idxs in by_dir.into_values() {
+        let lateral = rot90(records[idxs[0]].direction().vector());
+        let mut idxs = idxs;
+        idxs.sort_by_key(|&i| records[i].x * lateral.0 + records[i].y * lateral.1);
+        for (slot, i) in idxs.into_iter().enumerate() {
+            slots[i] = slot as i32;
+        }
+    }
+    slots
+}
+
 /// One `add_feed`/`add_fluid_feed` call site, with all the outward/lateral
 /// vector arithmetic resolved at Rust-codegen time (only the runtime-only
 /// `storage.offx`/`storage.offy` piece stays symbolic in the emitted Lua).
-fn feed_call(out: &mut String, idx: usize, rec: &BoundaryRecord) {
+fn feed_call(out: &mut String, idx: usize, slot: i32, rec: &BoundaryRecord) {
     let into = rec.direction().vector();
     let outward = neg(into);
     let lateral = rot90(into);
@@ -311,12 +359,14 @@ fn feed_call(out: &mut String, idx: usize, rec: &BoundaryRecord) {
     // script mode stacks entities silently, and a shared bank tile
     // cross-feeds ores (two overlapping chests at one tile poisoned the
     // logistic fixture's iron system with copper plates; #357 forensics
-    // 2026-07-22). 4+4*idx put rig 0's chest row (depth+2) exactly on
+    // 2026-07-22). 4+4*slot put rig 0's chest row (depth+2) exactly on
     // rig 1's (depth-2); 6 per step keeps every rig's occupied band
-    // [depth-2, depth+2] disjoint. The Lua-side overlap audit backstops
-    // geometries this spacing can't save (heads 10-12 tiles apart put a
-    // rig's outward column through a neighbor's bank).
-    let depth = 4 + 6 * (idx as i32);
+    // [depth-2, depth+2] disjoint. `slot` (not raw manifest order — see
+    // `feed_slots`) also keeps same-direction rigs' jog rows from
+    // crossing a shallower neighbor's outward column (#363). The
+    // Lua-side overlap audit backstops geometries this spacing can't
+    // save.
+    let depth = 4 + 6 * slot;
     let _ = writeln!(
         out,
         "  do\n    local head_x, head_y = {x} - LX0 + storage.offx, {y} - LY0 + storage.offy",
@@ -559,8 +609,9 @@ script.on_init(function()
 "#,
     );
 
+    let feed_depth_slots = feed_slots(&manifest.boundary_inputs);
     for (idx, rec) in manifest.boundary_inputs.iter().enumerate() {
-        feed_call(&mut out, idx, rec);
+        feed_call(&mut out, idx, feed_depth_slots[idx], rec);
     }
     for (idx, rec) in manifest.boundary_outputs.iter().enumerate() {
         drain_call(&mut out, idx, rec);
@@ -896,6 +947,127 @@ mod tests {
         // head world-position translation, anchored to the manifest bbox_min
         assert!(lua.contains("local head_x, head_y = 1 - LX0 + storage.offx, 0 - LY0 + storage.offy"));
         assert!(lua.contains("local head_x, head_y = 2 - LX0 + storage.offx, 0 - LY0 + storage.offy"));
+    }
+
+    /// #363 regression: manifest_gear10.json's two south-facing iron-ore
+    /// feeds are already listed west->east (x=1 then x=2), so the OLD
+    /// idx-based depth happened to work on this fixture by accident. This
+    /// test reverses the manifest order (x=2 first, x=1 second) — the
+    /// same shape as the issue's second live datum ("depth grows with
+    /// record order" instead of position) — and asserts the west head
+    /// (x=1) still gets the SMALLER depth (4) and the east head (x=2)
+    /// still gets the BIGGER depth (10), unchanged from forward order.
+    /// Checks depth and head position as an adjacent two-line block (not
+    /// independent substrings) so the assertion can't pass by each head
+    /// merely appearing somewhere with some depth.
+    #[test]
+    fn feed_depth_follows_lateral_position_not_manifest_order() {
+        let mut m = fixture();
+        m.boundary_inputs.reverse();
+        assert_eq!(m.boundary_inputs[0].x, 2, "sanity: manifest now lists east before west");
+        assert_eq!(m.boundary_inputs[1].x, 1);
+
+        let params = RunParams::defaults_for(&m, "test-gear-rev".into(), 16, Some(18000));
+        let lua = build_control_lua(&m, "0eNBPFAKE", &params);
+
+        let west_block = "    local head_x, head_y = 1 - LX0 + storage.offx, 0 - LY0 + storage.offy\n    \
+            add_feed(s, force, head_x, head_y, 0, -1, 1, 0, 4, \"iron-ore\", \"transport-belt\")";
+        assert!(lua.contains(west_block), "west head (x=1) must keep the smaller depth after reordering:\n{lua}");
+
+        let east_block = "    local head_x, head_y = 2 - LX0 + storage.offx, 0 - LY0 + storage.offy\n    \
+            add_feed(s, force, head_x, head_y, 0, -1, 1, 0, 10, \"iron-ore\", \"transport-belt\")";
+        assert!(lua.contains(east_block), "east head (x=2) must keep the bigger depth after reordering:\n{lua}");
+    }
+
+    /// Mirrors `add_feed`'s Lua tile placement (see the module docs above)
+    /// so geometry can be checked for overlap without a live server.
+    /// Belts, chests, and stack-inserters are all 1x1 in Factorio, so a
+    /// tile-position set catches every real collision the shape #363's
+    /// second datum describes ("the later create_entity calls fail
+    /// silently"). The substation/EEI power island (further out along the
+    /// jog than the chest bank) isn't included — it's never the colliding
+    /// entity class in the issue's datum.
+    fn feed_footprint(head: (i32, i32), into: (i32, i32), depth: i32) -> std::collections::HashSet<(i32, i32)> {
+        let outward = neg(into);
+        let lateral = rot90(into);
+        let neg_lateral = neg(lateral);
+        let corner = (head.0 + outward.0 * depth, head.1 + outward.1 * depth);
+        let mut tiles = std::collections::HashSet::new();
+        for t in 1..=depth {
+            tiles.insert((head.0 + outward.0 * t, head.1 + outward.1 * t));
+        }
+        for k in 1..=12 {
+            tiles.insert((corner.0 + neg_lateral.0 * k, corner.1 + neg_lateral.1 * k));
+        }
+        for k in 10..=12 {
+            let b = (corner.0 + neg_lateral.0 * k, corner.1 + neg_lateral.1 * k);
+            for side in [-1, 1] {
+                tiles.insert((b.0 + into.0 * 2 * side, b.1 + into.1 * 2 * side));
+                tiles.insert((b.0 + into.0 * side, b.1 + into.1 * side));
+            }
+        }
+        tiles
+    }
+
+    fn south_feed(item: &str, x: i32) -> BoundaryRecord {
+        BoundaryRecord {
+            item: item.into(),
+            x,
+            y: 0,
+            direction: 8, // south
+            is_fluid: false,
+            entity: "transport-belt".into(),
+        }
+    }
+
+    /// Asserts every record's `feed_footprint` (using the depth `feed_slots`
+    /// assigns it) is pairwise disjoint from every other's — the direct
+    /// geometry-level check for #363's "rigs self-collide" datum.
+    fn assert_feed_footprints_disjoint(records: &[BoundaryRecord]) {
+        let slots = feed_slots(records);
+        let mut occupied: std::collections::HashSet<(i32, i32)> = std::collections::HashSet::new();
+        for (i, rec) in records.iter().enumerate() {
+            let into = rec.direction().vector();
+            let depth = 4 + 6 * slots[i];
+            let footprint = feed_footprint((rec.x, rec.y), into, depth);
+            for tile in &footprint {
+                assert!(
+                    !occupied.contains(tile),
+                    "rig for '{}' (x={}, slot={}, depth={}) collides with an earlier rig at tile {:?}",
+                    rec.item,
+                    rec.x,
+                    slots[i],
+                    depth,
+                    tile
+                );
+            }
+            occupied.extend(footprint);
+        }
+    }
+
+    /// #363 second live datum, 1-tile lateral pitch, listed worst-case
+    /// (east-to-west — adversarial to the old idx-based depth): "only the
+    /// first-ordered rig per group worked, at both 1-tile and 4-tile
+    /// column spacing".
+    #[test]
+    fn feed_footprints_disjoint_at_1_tile_pitch_reverse_order() {
+        let records = vec![south_feed("a", 2), south_feed("b", 1), south_feed("c", 0)];
+        assert_feed_footprints_disjoint(&records);
+    }
+
+    /// Same datum at the issue's other measured pitch (4 tiles).
+    #[test]
+    fn feed_footprints_disjoint_at_4_tile_pitch_reverse_order() {
+        let records = vec![south_feed("a", 8), south_feed("b", 4), south_feed("c", 0)];
+        assert_feed_footprints_disjoint(&records);
+    }
+
+    /// Forward order (already west->east) must also stay collision-free —
+    /// the fix must not depend on which order happens to be adversarial.
+    #[test]
+    fn feed_footprints_disjoint_at_1_tile_pitch_forward_order() {
+        let records = vec![south_feed("a", 0), south_feed("b", 1), south_feed("c", 2)];
+        assert_feed_footprints_disjoint(&records);
     }
 
     #[test]

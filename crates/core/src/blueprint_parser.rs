@@ -52,6 +52,14 @@ struct BpData {
     wires: Vec<Vec<i64>>,
     #[serde(default)]
     label: Option<String>,
+    /// Factorio's packed version u64 — four 16-bit fields (major, minor,
+    /// patch, dev), most significant first. Distinguishes pre-2.0 8-way
+    /// direction encoding from 2.0+'s 16-way (#349). `#[serde(default)]`
+    /// gives 0 for blueprints that omit the field entirely; see
+    /// `blueprint_major_version` for why that's treated as "modern" rather
+    /// than a real major-0 version.
+    #[serde(default)]
+    version: u64,
 }
 
 /// Parsed module item. All three Factorio formats collapse into this.
@@ -237,57 +245,58 @@ struct BpPosition {
 
 /// Returns (width_tiles, height_tiles) for entities that aren't 1×1.
 /// Direction is needed for splitters (2 tiles perpendicular to flow).
+///
+/// Delegates entirely to `common::entity_size` (machines, poles, and the
+/// #351 non-machine multi-tile table) plus `common::oriented_splitter_dims`
+/// for the direction-dependent splitter family — the single shared source
+/// both this parser and the blueprint exporter consult, so the two can no
+/// longer drift apart the way they did before #351 (parser knew beacon/lab/
+/// storage-tank/electric-mining-drill/steel-furnace/rocket-silo/crusher/
+/// biolab as multi-tile; the exporter treated them all as 1×1).
 fn entity_footprint(name: &str, direction: EntityDirection) -> (i32, i32) {
-    match name {
-        "assembling-machine-1"
-        | "assembling-machine-2"
-        | "assembling-machine-3"
-        | "chemical-plant"
-        | "electric-furnace"
-        | "centrifuge"
-        | "lab"
-        | "beacon"
-        | "storage-tank"
-        | "electric-mining-drill"
-        | "biochamber" => (3, 3),
-
-        "oil-refinery" | "foundry" | "biolab" | "cryogenic-plant" => (5, 5),
-        "rocket-silo" => (9, 9),
-        "big-electric-pole" | "substation" | "steel-furnace" => (2, 2),
-        "electromagnetic-plant" => (4, 4),
-        "recycler" => (2, 4),
-        "crusher" => (2, 3),
-
-        // Splitters: 2 tiles wide perpendicular to flow direction. The
-        // shared helper covers turbo-splitter too (115 corpus instances
-        // were misparsed half a tile off before PR #350's review caught
-        // the exporter/parser table divergence) and correctly excludes
-        // the 1×1 lane-splitter.
-        "splitter" | "fast-splitter" | "express-splitter" | "turbo-splitter" => {
-            let (w, h) = crate::common::oriented_splitter_dims(name, direction)
-                .expect("splitter family covered by oriented_splitter_dims");
-            (w as i32, h as i32)
-        }
-
-        _ => (1, 1),
+    if let Some((w, h)) = crate::common::oriented_splitter_dims(name, direction) {
+        return (w as i32, h as i32);
     }
+    let (w, h) = crate::common::entity_size(name);
+    (w as i32, h as i32)
 }
 
 // ---- Direction parsing ----
 
-/// Map Factorio direction integer to EntityDirection.
+/// Decode the major version component from Factorio's packed blueprint
+/// `version` u64: four 16-bit fields (major, minor, patch, dev), most
+/// significant first (major in the high bits).
 ///
-/// Modern Factorio (≥0.17) uses 0/4/8/12 for N/E/S/W.
-/// Older versions (0-7 eight-way): 0=N, 2=E, 4=S, 6=W.
-/// We handle both by treating even values in 0-6 range as old-format
-/// and values 8/12 as unambiguously modern.
-fn parse_direction(d: u8) -> EntityDirection {
+/// Real Factorio versions always have a nonzero low 48 bits — even pre-1.0
+/// releases like 0.17.79 carry a nonzero minor — so a literal packed `0` is
+/// never a genuine version. That value is what `#[serde(default)]` produces
+/// for a blueprint with no `version` key at all, so it's reserved as an
+/// "absent" sentinel (`None`) rather than decoded as a real major-0 version.
+fn blueprint_major_version(packed: u64) -> Option<u16> {
+    if packed == 0 {
+        None
+    } else {
+        Some((packed >> 48) as u16)
+    }
+}
+
+/// Map Factorio direction integer to EntityDirection, version-aware (#349).
+///
+/// Factorio < 2.0 blueprints encode direction 8-way: 0=N, 2=E, 4=S, 6=W.
+/// 2.0+ encodes 16-way: 0=N, 4=E, 8=S, 12=W. Raw `4` is the ambiguous case
+/// — South under the legacy encoding, East under the modern one — which is
+/// what this issue is about; `is_legacy` disambiguates it. Raw `2`/`6` are
+/// decoded as East/West unconditionally: they only appear as legacy
+/// cardinals for the entity kinds this parser handles (2.0 buildings that
+/// don't support diagonal placement — belts, inserters, machines — only
+/// ever emit multiples of 4), so there's no modern case to conflict with.
+fn parse_direction(d: u8, is_legacy: bool) -> EntityDirection {
     match d {
         0 => EntityDirection::North,
+        4 if is_legacy => EntityDirection::South,
         4 => EntityDirection::East,
-        8 => EntityDirection::South,
-        12 => EntityDirection::West,
-        // Old 8-way format
+        8 if !is_legacy => EntityDirection::South,
+        12 if !is_legacy => EntityDirection::West,
         2 => EntityDirection::East,
         6 => EntityDirection::West,
         _ => EntityDirection::North,
@@ -339,6 +348,11 @@ fn decode_bp_string(bp: &str) -> Result<BpRoot, String> {
 /// Convert a `BpData` to a `LayoutResult`, normalizing positions to (0,0).
 fn bp_data_to_layout(bp_data: BpData) -> LayoutResult {
     let wires_raw = bp_data.wires;
+    // #349: < 2.0 blueprints (including major-0 pre-1.0 releases) use the
+    // legacy 8-way direction encoding; a missing version field (packed 0,
+    // see `blueprint_major_version`) fails toward "modern" to keep prior
+    // behavior for blueprints that don't carry a version at all.
+    let is_legacy = matches!(blueprint_major_version(bp_data.version), Some(major) if major < 2);
     let mut entities: Vec<PlacedEntity> = Vec::with_capacity(bp_data.entities.len());
     // entity_number (explicit, else positional 1-based) → 0-based index in
     // `entities`, so the `wires` array can be resolved to entity indices.
@@ -356,7 +370,7 @@ fn bp_data_to_layout(bp_data: BpData) -> LayoutResult {
         // raw-byte arithmetic would destroy legacy v0/v1 8-way values
         // (E=2/W=6 both landed on the catch-all) and could overflow on
         // garbage bytes (PR #348 review).
-        let parsed = parse_direction(raw.direction);
+        let parsed = parse_direction(raw.direction, is_legacy);
         // Pipe-to-ground shares the flip (#364): game direction is the
         // surface-opening side, engine convention is the underground side.
         // Mirrored fluid machines share it too (#400): the engine's
@@ -658,6 +672,125 @@ mod tests {
         assert_eq!(parsed.entities[0].direction, EntityDirection::West);
         assert_eq!(parsed.entities[1].direction, EntityDirection::East);
         assert_eq!(parsed.entities[2].direction, EntityDirection::East);
+    }
+
+    /// #349: packed-`version` u64 decode. Real released version constants —
+    /// 1.1.104 (final 1.1 stable, major 1) and 2.0.28 (a 2.0 stable, major
+    /// 2) — built from the documented (major, minor, patch, dev) packing
+    /// rather than hand-computed magic numbers. The all-zero packed value
+    /// is reserved as the "field absent" sentinel and must decode to
+    /// `None`, not a real major-0 version.
+    #[test]
+    fn blueprint_major_version_decodes_packed_u64() {
+        let v1_1_104 = (1u64 << 48) | (1u64 << 32) | (104u64 << 16);
+        let v2_0_28 = (2u64 << 48) | (28u64 << 16);
+        assert_eq!(blueprint_major_version(v1_1_104), Some(1));
+        assert_eq!(blueprint_major_version(v2_0_28), Some(2));
+        assert_eq!(
+            blueprint_major_version(0),
+            None,
+            "packed 0 is the serde-default sentinel for a missing version field, not a real 0.0.0.0 version"
+        );
+    }
+
+    /// #349: raw direction `4` is ambiguous between the legacy 8-way (South)
+    /// and modern 16-way (East) encodings. A blueprint carrying an explicit
+    /// pre-2.0 `version` must decode it as South.
+    #[test]
+    fn legacy_v1_raw4_direction_is_south() {
+        let legacy_version = (1u64 << 48) | (1u64 << 32) | (104u64 << 16);
+        let bp = encode_envelope(&serde_json::json!({
+            "blueprint": {
+                "item": "blueprint",
+                "version": legacy_version,
+                "entities": [
+                    {"entity_number": 1, "name": "transport-belt",
+                     "position": {"x": 0.5, "y": 0.5}, "direction": 4},
+                ]
+            }
+        }));
+        let parsed = parse_blueprint_string(&bp).expect("should parse");
+        assert_eq!(parsed.entities[0].direction, EntityDirection::South);
+    }
+
+    /// #349: the same raw `4`, but under an explicit 2.0+ `version`, must
+    /// decode as East (16-way) — the modern corpus must not regress.
+    #[test]
+    fn modern_v2_raw4_direction_is_east() {
+        let modern_version = (2u64 << 48) | (28u64 << 16);
+        let bp = encode_envelope(&serde_json::json!({
+            "blueprint": {
+                "item": "blueprint",
+                "version": modern_version,
+                "entities": [
+                    {"entity_number": 1, "name": "transport-belt",
+                     "position": {"x": 0.5, "y": 0.5}, "direction": 4},
+                ]
+            }
+        }));
+        let parsed = parse_blueprint_string(&bp).expect("should parse");
+        assert_eq!(parsed.entities[0].direction, EntityDirection::East);
+    }
+
+    /// #349: a blueprint with no `version` key at all must fail toward the
+    /// pre-fix (modern) behavior — raw 4 = East — rather than being treated
+    /// as a legacy major-0 version. Byte-identical to the pre-#349 result
+    /// for the large slice of the corpus (and every synthetic fixture in
+    /// this file) that never set `version`.
+    #[test]
+    fn missing_version_field_treated_as_modern() {
+        let bp = encode_envelope(&serde_json::json!({
+            "blueprint": {
+                "item": "blueprint",
+                "entities": [
+                    {"entity_number": 1, "name": "transport-belt",
+                     "position": {"x": 0.5, "y": 0.5}, "direction": 4},
+                ]
+            }
+        }));
+        let parsed = parse_blueprint_string(&bp).expect("should parse");
+        assert_eq!(parsed.entities[0].direction, EntityDirection::East);
+    }
+
+    /// #349: a genuinely pre-1.0 version (major 0, e.g. 0.17.79) is still
+    /// legacy 8-way — must NOT be confused with the packed-0 "absent"
+    /// sentinel, since its packed value is nonzero (minor/patch bits set).
+    #[test]
+    fn pre_1_0_major_zero_version_is_still_legacy() {
+        let v0_17_79 = (17u64 << 32) | (79u64 << 16);
+        assert_eq!(blueprint_major_version(v0_17_79), Some(0));
+        let bp = encode_envelope(&serde_json::json!({
+            "blueprint": {
+                "item": "blueprint",
+                "version": v0_17_79,
+                "entities": [
+                    {"entity_number": 1, "name": "transport-belt",
+                     "position": {"x": 0.5, "y": 0.5}, "direction": 4},
+                ]
+            }
+        }));
+        let parsed = parse_blueprint_string(&bp).expect("should parse");
+        assert_eq!(parsed.entities[0].direction, EntityDirection::South);
+    }
+
+    /// #349: the version-aware South decode composes correctly with the
+    /// separate pickup→drop inserter flip (#348) — legacy South pickup
+    /// flips to North drop-side, not the pre-fix East-turned-West.
+    #[test]
+    fn legacy_inserter_raw4_flips_after_version_aware_south_decode() {
+        let legacy_version = (1u64 << 48) | (1u64 << 32) | (104u64 << 16);
+        let bp = encode_envelope(&serde_json::json!({
+            "blueprint": {
+                "item": "blueprint",
+                "version": legacy_version,
+                "entities": [
+                    {"entity_number": 1, "name": "inserter",
+                     "position": {"x": 0.5, "y": 0.5}, "direction": 4},
+                ]
+            }
+        }));
+        let parsed = parse_blueprint_string(&bp).expect("should parse");
+        assert_eq!(parsed.entities[0].direction, EntityDirection::North);
     }
 
     /// #400/#403: the mirror-as-rotation wire encoding COLLIDES with a
@@ -1134,5 +1267,46 @@ mod tests {
         assert_eq!(machine.items[2].item, "speed-module");
         assert_eq!(machine.items[2].count, 1);
         assert_eq!(machine.items[2].quality, None);
+    }
+
+    /// #351: `entity_footprint` (this parser) and `common::entity_size`
+    /// (the blueprint exporter) must agree on every multi-tile entity's
+    /// dims, or re-exporting an imported blueprint shifts that entity.
+    /// Both now delegate to the same shared tables (`machine_dims`,
+    /// `non_machine_multi_tile_dims`, the pole arm), so this test mostly
+    /// pins the actual expected values against silent drift in those
+    /// shared tables — not just self-consistency between the two call
+    /// sites, which the delegation already guarantees structurally.
+    #[test]
+    fn entity_footprint_matches_entity_size_for_every_known_multi_tile_entity() {
+        let mut cases: Vec<(&str, (u32, u32))> = crate::common::MACHINE_ENTITY_NAMES
+            .iter()
+            .map(|&name| (name, crate::common::machine_dims(name)))
+            .collect();
+        cases.extend([
+            ("substation", (2, 2)),
+            ("big-electric-pole", (2, 2)),
+            ("beacon", (3, 3)),
+            ("storage-tank", (3, 3)),
+            ("electric-mining-drill", (3, 3)),
+            ("lab", (3, 3)),
+            ("biolab", (5, 5)),
+            ("rocket-silo", (9, 9)),
+            ("steel-furnace", (2, 2)),
+            ("crusher", (2, 3)),
+        ]);
+
+        for (name, (w, h)) in cases {
+            assert_eq!(
+                crate::common::entity_size(name),
+                (w, h),
+                "entity_size({name}) drifted from the expected dims"
+            );
+            assert_eq!(
+                entity_footprint(name, EntityDirection::North),
+                (w as i32, h as i32),
+                "entity_footprint({name}) disagrees with entity_size — parser/exporter drift"
+            );
+        }
     }
 }

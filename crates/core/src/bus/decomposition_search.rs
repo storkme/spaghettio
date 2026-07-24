@@ -307,6 +307,7 @@ impl DecompositionCandidate for ModuleSizeSplit {
             stacking: opts.stacking,
             inserter_capacity: opts.inserter_capacity,
             cell_composition: opts.cell_composition,
+            splitter_tap_spacers: opts.splitter_tap_spacers,
         };
         run_layout_with_retry(&transformed, &inner_opts)
     }
