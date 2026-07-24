@@ -2896,6 +2896,40 @@ mod tests {
             );
         }
 
+        // ITEM-KEYED belt resolution: both ends of every bridge must touch a
+        // belt actually carrying the DI'd item. EC is a DualInput consumer
+        // (iron-plate + copper-cable), so a positional lookup (`.last()`, or
+        // the row's primary output belt) is a coin flip that happens to land
+        // right for this recipe order — this pins the item-keyed behaviour so
+        // a recipe/ingredient reorder can't silently mis-target the bridge.
+        {
+            use crate::common::{dir_to_vec, inserter_reach};
+            let belt_item: std::collections::HashMap<(i32, i32), &str> = layout
+                .entities
+                .iter()
+                .filter(|e| crate::common::is_belt_entity(&e.name))
+                .filter_map(|e| e.carries.as_deref().map(|c| ((e.x, e.y), c)))
+                .collect();
+            for ins in &di_inserters {
+                let (dx, dy) = dir_to_vec(ins.direction);
+                let r = inserter_reach(&ins.name);
+                let pick = (ins.x - dx * r, ins.y - dy * r);
+                let drop = (ins.x + dx * r, ins.y + dy * r);
+                assert_eq!(
+                    belt_item.get(&pick).copied(),
+                    Some("copper-cable"),
+                    "bridge at ({},{}) must PICK from a copper-cable belt, got {:?}",
+                    ins.x, ins.y, belt_item.get(&pick)
+                );
+                assert_eq!(
+                    belt_item.get(&drop).copied(),
+                    Some("copper-cable"),
+                    "bridge at ({},{}) must DROP onto a copper-cable belt, got {:?}",
+                    ins.x, ins.y, belt_item.get(&drop)
+                );
+            }
+        }
+
         // Validator DI-awareness: the belt-to-belt bridge inserters must not
         // trip the two checks that assume every inserter touches a machine
         // and every machine output flows onward. (Other categories — e.g.

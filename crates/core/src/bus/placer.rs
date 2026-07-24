@@ -1632,17 +1632,32 @@ fn stamp_di_bridge(
 ) -> Vec<PlacedEntity> {
     use crate::bus::inserter_ladder::{size_side, Reach};
 
-    let producer_belt_y = producer.output_belt_y;
+    // Both belt lookups are ITEM-KEYED. Getting this wrong is silent: the
+    // bridge would pick from (or drop onto) whichever belt happened to be
+    // first/last, which for a DualInput consumer like electronic-circuit
+    // is a coin flip between the iron-plate and copper-cable belts.
+    let producer_belt_y = producer.output_belt_y_for(item);
 
-    // Find the consumer's input belt y for the DI'd item. The consumer
-    // may have multiple input belts (DualInput, TripleInput); find the
-    // one carrying `item`.
-    let consumer_belt_y = consumer
-        .input_belt_y
+    // The consumer's input belts are indexed parallel to its SOLID inputs
+    // (`input_belt_y[i]` serves `solid_inputs[i]`) — the same convention
+    // `lane_planner`'s tap-off resolution uses. Refuse the bridge if the
+    // item isn't a solid input of this consumer, rather than guessing.
+    let solid_idx = consumer_spec
+        .inputs
         .iter()
-        .copied()
-        .last()
-        .unwrap_or(consumer.y_start);
+        .filter(|f| !f.is_fluid)
+        .position(|f| f.item == item);
+    let Some(consumer_belt_y) = solid_idx.and_then(|i| consumer.input_belt_y.get(i).copied())
+    else {
+        crate::trace::emit(crate::trace::TraceEvent::GhostSpecFailed {
+            spec_key: format!("di-bridge:{item}:no-input-belt"),
+            from_x: 0,
+            from_y: producer_belt_y,
+            to_x: 0,
+            to_y: consumer.y_start,
+        });
+        return Vec::new();
+    };
 
     // The gap is 2 tiles: producer.y_end and producer.y_end + 1.
     // The bridge inserter sits at the SECOND gap tile (producer.y_end + 1)
@@ -1806,7 +1821,13 @@ pub fn place_rows(
     }
     // Track the row index of the last-placed row for each recipe, so the
     // DI consumer can reference its producer's RowSpan.
-    let mut recipe_last_row_idx: FxHashMap<&str, usize> = FxHashMap::default();
+    // EVERY row a recipe placed, not just the last. A recipe whose machine
+    // count exceeds `max_per_row` is split into several sub-rows; keeping
+    // only the last would let a DI consumer mark the item bus-skipped
+    // (`di_input`) while bridging just one of them — the other sub-rows'
+    // output would then have nowhere to go and the consumer would be
+    // under-fed. See the multi-row refusal at the marking site below.
+    let mut recipe_row_idxs: FxHashMap<&str, Vec<usize>> = FxHashMap::default();
 
     for (spec_idx, spec) in ordered.iter().enumerate() {
         // The inter-recipe gap is always present — for DI pairs, the gap
@@ -1928,7 +1949,25 @@ pub fn place_rows(
             if is_di_consumer {
                 if let Some(couplings) = di_lookup.get(spec.recipe.as_str()) {
                     for &(item, producer_recipe) in couplings {
-                        let Some(&p_idx) = recipe_last_row_idx.get(producer_recipe) else {
+                        let Some(p_rows) = recipe_row_idxs.get(producer_recipe) else {
+                            continue;
+                        };
+                        // Multi-row producer: only the row physically
+                        // adjacent to the consumer is within reach, so
+                        // bridging it while marking the item bus-skipped
+                        // would strand every other sub-row's output and
+                        // starve the consumer. Refuse DI for this coupling
+                        // and let the bus carry it — honest, and correct at
+                        // any machine count. (Serving split producers needs
+                        // a multi-band cell; RFC-053 Phase 3.)
+                        let [p_idx] = p_rows[..] else {
+                            crate::trace::emit(crate::trace::TraceEvent::GhostSpecFailed {
+                                spec_key: format!("di-bridge:{item}:producer-split-{}", p_rows.len()),
+                                from_x: 0,
+                                from_y: 0,
+                                to_x: 0,
+                                to_y: span.y_start,
+                            });
                             continue;
                         };
                         let producer_span = &row_spans[p_idx];
@@ -1950,7 +1989,7 @@ pub fn place_rows(
                     }
                 }
             }
-            recipe_last_row_idx.insert(spec.recipe.as_str(), row_idx);
+            recipe_row_idxs.entry(spec.recipe.as_str()).or_default().push(row_idx);
             let y_end = span.y_end;
             entities.extend(row_ents);
             row_spans.push(span);
