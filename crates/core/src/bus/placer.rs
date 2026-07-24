@@ -687,8 +687,20 @@ pub(crate) fn build_one_row(
     } else {
         output_rate * 2.0
     };
+    // Pick the tier by its MEASURED loadable budget, not the nominal
+    // capacity (#383): a bridged row loads 1.733/2 of the belt's
+    // nominal and a single-lane row 0.95 of one lane — requesting the
+    // inflated rate returns the tier the row can actually deliver on
+    // (cable@30 stamped red under the nominal model and measured
+    // 25.5/s; the same shared constants drive the split math and the
+    // row-output-lane-budget check).
+    let measured_request = if lane_split {
+        out_effective_rate * 2.0 / crate::common::ROW_LANE_FACTOR_BRIDGED
+    } else {
+        out_effective_rate / crate::common::ROW_LANE_FACTOR_UNBRIDGED
+    };
     let out_belt = belt_entity_for_rate_stacked(
-        out_effective_rate,
+        measured_request,
         max_belt_tier,
         ctx.for_item(output_item),
     );

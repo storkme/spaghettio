@@ -593,7 +593,7 @@ const GOLDEN_HASHES: &[(&str, &str)] = &[
     // copper-plate) ladder-sized, see note above.
     // RFC rfc-inserter-sizing.md Phase 2: dual_input_row (this fixture's EC
     // row is dual-input) is now ladder-sized + near/far reassigned.
-    ("tier2_electronic_circuit_from_ore", "0ae4d39372e33cf6c82dc96404a5f05b5a3b9888c2cea1f65ef542caeb91f182"),
+    ("tier2_electronic_circuit_from_ore", "a3ea7ce0308a55a2680e084b2c31740a6748e8bed6d1bec2896e2313d73cfc50"),
     // Hashes below changed when row inputs were switched to always
     // use `max_belt_tier` instead of per-row consumption rate (fixes
     // tier-mismatch seam where bus tap-off feeds row belt-in).
@@ -603,7 +603,7 @@ const GOLDEN_HASHES: &[(&str, &str)] = &[
     // RFC rfc-inserter-sizing.md Phase 1: single_input_row rows ladder-sized, see note above.
     // RFC rfc-inserter-sizing.md Phase 2: dual_input_row ladder-sized + near/far reassigned.
     // RFC rfc-inserter-sizing.md Phase 3: far side's reach-2 count-ladder activated.
-    ("tier2_electronic_circuit_20s_from_ore", "7a23126d5f857d22db9374cc6269eb9ea2d7bdb2a69c6dc34f60f322cc63e134"),
+    ("tier2_electronic_circuit_20s_from_ore", "b612e980ebedfa3b35d7610ea41bb12c7efb0d768f9ec304ae91b793422c07c9"),
     // (RFC-047 Leg B: `tier2_electronic_circuit_splitter_stamp_regression`
     // no longer builds — it is now a named-refusal guard — so its golden
     // hash entry was removed.)
@@ -809,9 +809,9 @@ fn decomposition_search_picks_native_on_clean_partitioned_case() {
 /// (`docs/rfc-merge-tap-trunks.md`). Drives `MergeTapCandidate::produce`
 /// directly (not through the selector) on the smallest natural unstampable
 /// case — electronic-circuit@35/s from ore, AM2 yellow, whose copper-plate
-/// family is the coprime `(4, 9)` shape — and pins the fallback *mechanism*:
+/// family is the coprime `(5, 9)` shape (post-#383 measured splits) — and pins the fallback *mechanism*:
 ///
-///   * the `MergeTapFallback` trace fires for copper-plate with shape `(4, 9)`
+///   * the `MergeTapFallback` trace fires for copper-plate with shape `(5, 9)`
 ///     and the throughput-sized trunk count `K = ceil(35·1.5 / 15) clamped =
 ///     4`;
 ///   * the consumer taps are priority splitters (>=1 splitter carries
@@ -854,7 +854,9 @@ fn merge_tap_fallback_fires_with_correct_k_and_priority_taps() {
     let events = trace::drain_events();
     drop(guard);
 
-    // K correct: the unstampable copper-plate (4, 9) family is retired to K=4
+    // K correct: the unstampable copper-plate family — (5, 9) after
+    // #383's measured row splits added a plate row; still coprime, the
+    // same unstampable class — is retired to K=4
     // throughput trunks. MergeTapFallback is deduped to one event per fallback
     // family per layout_pass (the two-pass plan_bus_lanes previously
     // double-emitted; see trace::with_merge_tap_fallback_suppressed). A
@@ -868,8 +870,8 @@ fn merge_tap_fallback_fires_with_correct_k_and_priority_taps() {
     });
     assert_eq!(
         fb,
-        Some(((4, 9), 4)),
-        "expected copper-plate (4, 9) K=4 merge-tap fallback; got {fb:?}"
+        Some(((5, 9), 4)),
+        "expected copper-plate (5, 9) K=4 merge-tap fallback; got {fb:?}"
     );
 
     // Taps priority-correct: >=1 splitter carries output_priority and the
@@ -1035,12 +1037,11 @@ fn tier2_electronic_circuit() {
     // beltspan-lastinrow: the last residual (1) was the EC dual_input_row last-in-row
     // far (iron-plate) side, capped at one long-handed inserter because the far belt
     // was trimmed under the dx=1 contested column; extending it one tile clears it (1 -> 0).
-    // 2026-07-23 (#385 second half): un-restricted belt tier here lets the
-    // copper-cable row land on fast (red) belts — its 30.0/s demand still
-    // exceeds a bridged red belt-out's 2-lane realizable cap (25.5/s), a
-    // genuine sim-calibrated finding the new check now surfaces (was
-    // silently under-delivered before).
-    assert_warnings_exactly(&result, &[("row-output-lane-budget", 1)]);
+    // #383 close: the measured-budget tier pick now steps the cable
+    // row's belt-out up a tier (its 30.0/s demand exceeds a bridged
+    // red's 25.5/s realizable), so the historical lane-budget warning
+    // this pin carried is genuinely GONE — the row delivers at plan.
+    assert_warnings_exactly(&result, &[]);
     assert_produces(&result, "electronic-circuit", 10.0);
     assert_round_trip(&result);
 }
@@ -1102,12 +1103,12 @@ fn tier2_electronic_circuit_from_ore() {
     // forensics.md`) a row fed by inserter drops alone realizes only
     // ~0.85 × one lane regardless of inserter type/count/research; this
     // fixture's copper-plate row (single physical row, 24 machines, a
-    // genuine bridge present) needs 15.0/s but a bridged yellow belt-out
-    // realizes at most 12.75/s (`LANE_UTILIZATION × lane_capacity_stacked
-    // × 2 lanes`) — the exact gap #385's second half exists to catch,
-    // previously silent (this fixture's in-game delivery has been
-    // measured short of plan). Not tuned away.
-    assert_warnings_exactly(&result, &[("row-output-lane-budget", 1)]);
+    // #383 close: the split thresholds now consume the measured
+    // bridged budget, so the row that needed 15.0/s onto a yellow
+    // realizing 12.75/s splits (or its belt steps up a tier) and the
+    // historical warning is genuinely gone — the shape now delivers
+    // at plan instead of carrying a declared deficit.
+    assert_warnings_exactly(&result, &[]);
     assert_produces(&result, "electronic-circuit", 10.0);
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier2_electronic_circuit_from_ore");
@@ -1149,11 +1150,9 @@ fn tier2_electronic_circuit_20s_from_ore() {
     // planned hardware) are unnecessary here and stay dormant. 14 -> 0.
     // 2026-07-23 (#385 second half): un-restricted belt tier lets
     // copper-cable/copper-plate land on fast (red) belts at 20/s scale;
-    // 2 copper-cable rows + 1 copper-plate row each need 30.0/s, over a
-    // bridged red belt-out's 25.5/s 2-lane realizable cap — same
-    // sim-calibrated structural finding as the 10/s from-ore fixture,
-    // scaled up.
-    assert_warnings_exactly(&result, &[("row-output-lane-budget", 3)]);
+    // #383 close: same measured-budget re-derivation as the 10/s
+    // fixture, scaled up — the three lane-budget warnings are gone.
+    assert_warnings_exactly(&result, &[]);
     assert_produces(&result, "electronic-circuit", 20.0);
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier2_electronic_circuit_20s_from_ore");
@@ -2190,9 +2189,10 @@ fn tier5_processing_unit_from_ore_am3() {
     // bottoms out at copper-cable (2 rows) and copper-plate (3 rows)
     // feeding electronic-circuit — the same sim-calibrated structural
     // cap found across every EC-chain fixture: bridged fast-belt-out
-    // rows here need 30.0/26.88/26.25/s against a 25.5/s 2-lane
-    // realizable ceiling.
-    assert_warnings_exactly(&result, &[("row-output-lane-budget", 5)]);
+    // #383 close: the five rows that needed 30.0/26.88/26.25/s
+    // against a 25.5/s realizable ceiling now step up a tier or
+    // split — the declared deficits are gone.
+    assert_warnings_exactly(&result, &[]);
     assert_produces(&result, "processing-unit", 2.0);
     assert_round_trip(&result);
 }
