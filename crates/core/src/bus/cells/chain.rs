@@ -561,6 +561,21 @@ fn retrofit_feed_hop(
     x: i32,
     y: i32,
 ) -> Result<(), String> {
+    // Any horizontal surface-belt run may host the hop: feed rows
+    // (eastbound) and corridor/fan rows (either direction — Phase C:
+    // USP's ascent terminal landed on the mega's own fan branch). The
+    // three tiles must be same-direction plain belts of one row
+    // segment class; anything else refuses loudly.
+    let row_dir = entities
+        .iter()
+        .find(|e| e.x == x && e.y == y)
+        .map(|e| e.direction)
+        .unwrap_or(EntityDirection::East);
+    if row_dir != EntityDirection::East && row_dir != EntityDirection::West {
+        return Err(format!(
+            "cells: ascent terminal collision at ({x},{y}) is not a horizontal belt run"
+        ));
+    }
     let mut idxs = [usize::MAX; 3];
     for (k, cx) in [x - 1, x, x + 1].iter().enumerate() {
         let i = entities
@@ -568,9 +583,11 @@ fn retrofit_feed_hop(
             .position(|e| {
                 e.x == *cx
                     && e.y == y
-                    && e.direction == EntityDirection::East
+                    && e.direction == row_dir
                     && e.name.ends_with("transport-belt")
-                    && e.segment_id.as_deref().is_some_and(|s| s.starts_with("feed:"))
+                    && e.segment_id.as_deref().is_some_and(|s| {
+                        s.starts_with("feed:") || s.starts_with("corr:") || s.starts_with("fan")
+                    })
             })
             .ok_or_else(|| {
                 let blocker = entities
@@ -586,7 +603,7 @@ fn retrofit_feed_hop(
                     })
                     .unwrap_or_else(|| "empty".into());
                 format!(
-                    "cells: ascent terminal collision at ({x},{y}) is not a plain feed row (tile x={cx}: {blocker})"
+                    "cells: ascent terminal collision at ({x},{y}) is not a hoppable belt row (tile x={cx}: {blocker})"
                 )
             })?;
         idxs[k] = i;
@@ -597,13 +614,23 @@ fn retrofit_feed_hop(
         "transport-belt" => "underground-belt",
         other => return Err(format!("cells: unexpected feed belt tier {other}")),
     };
-    for (k, io) in [(0usize, "input"), (2usize, "output")] {
-        entities[idxs[k]].name = ug.into();
-        entities[idxs[k]].io_type = Some(io.into());
+    // Entrance = upstream side of the run's flow direction.
+    let (in_k, out_k) = if row_dir == EntityDirection::East {
+        (0usize, 2usize)
+    } else {
+        (2usize, 0usize)
+    };
+    for (k, io) in [(in_k, "input"), (out_k, "output")] {
+        entities[k_idx(&idxs, k)].name = ug.into();
+        entities[k_idx(&idxs, k)].io_type = Some(io.into());
     }
     entities.remove(idxs[1]);
     router.occ.remove(&(x, y));
     Ok(())
+}
+
+fn k_idx(idxs: &[usize; 3], k: usize) -> usize {
+    idxs[k]
 }
 
 /// Compose an eligible chain solve into one layout: K quantized copies
@@ -1057,9 +1084,30 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
                     // south at (sx+1, fan_y+1); the last branch is the
                     // pass-through at (sx_last+1, fan_y).
                     let n_br = ordered.len();
+                    // Splitter/branch columns must dodge the OTHER
+                    // drains' head columns — each of those descends
+                    // from the block bottom through every bypass row,
+                    // and a branch drop on the same x overlaps it (the
+                    // USP@2 overlap cluster at x=272).
+                    let reserved: FxHashSet<i32> = p
+                        .mega_drains
+                        .iter()
+                        .filter(|(ox, _, oi)| *ox != dx0 || oi != &d_item)
+                        .map(|(ox, _, _)| *ox)
+                        .collect();
                     let mut branch_origins: Vec<(i32, i32)> = Vec::new();
-                    let mut sx = dx0 + 1;
+                    let mut cursor = dx0 + 1;
                     for b in 1..n_br {
+                        let mut sx = cursor;
+                        while reserved.contains(&sx) || reserved.contains(&(sx + 1)) {
+                            sx += 1;
+                        }
+                        // Bridge from the previous chain tile to the
+                        // splitter input with plain belts.
+                        for xx in cursor..sx {
+                            router.corner_east(&mut entities, xx, fan_y, &d_item,
+                                "express-transport-belt", &format!("fan:{}:{}", d_item, p.seg));
+                        }
                         router.occ.insert((sx, fan_y));
                         router.occ.insert((sx, fan_y + 1));
                         entities.push(PlacedEntity {
@@ -1074,9 +1122,21 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
                             router.corner_east(&mut entities, sx + 1, fan_y, &d_item,
                                 "express-transport-belt", &format!("fan:{}:{}", d_item, p.seg));
                         }
-                        sx += 2;
+                        cursor = sx + 2;
                     }
-                    branch_origins.push((sx - 1, fan_y));
+                    // Pass-through: step EAST off the last splitter's
+                    // output column (branch n-1 drops at sx+1 from the
+                    // south output; sharing that column overlapped the
+                    // two descents) to its own reserved-dodged column.
+                    let mut pt_x = cursor;
+                    while reserved.contains(&pt_x) {
+                        pt_x += 1;
+                    }
+                    for xx in (cursor - 1)..pt_x {
+                        router.corner_east(&mut entities, xx, fan_y, &d_item,
+                            "express-transport-belt", &format!("fan:{}:{}", d_item, p.seg));
+                    }
+                    branch_origins.push((pt_x, fan_y));
                     for (bi, ci) in ordered.iter().enumerate() {
                         let c = &placed[*ci];
                         let port = c
@@ -1404,7 +1464,7 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
 
     // --- Poles: per-cell trio down the corridor gap + a spanning line
     // along the band bottom (nudge-not-skip — Phase-1 pole lesson).
-    let occupied: FxHashSet<(i32, i32)> = entities.iter().map(|e| (e.x, e.y)).collect();
+    let mut occupied: FxHashSet<(i32, i32)> = entities.iter().map(|e| (e.x, e.y)).collect();
     for p in &placed {
         let px = p.x + p.cell.width + CORRIDOR_GAP - 1;
         for y in [CELL_Y, CELL_Y + 7, CELL_Y + 14] {
@@ -1413,6 +1473,11 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
                 while occupied.contains(&(px, yy)) {
                     yy += 1;
                 }
+                // The snapshot must learn each placement — two trio
+                // members sliding down one congested column otherwise
+                // land on the SAME first-free tile (USP@2 pole-pole
+                // overlaps).
+                occupied.insert((px, yy));
                 entities.push(PlacedEntity {
                     name: "medium-electric-pole".into(), x: px, y: yy,
                     direction: EntityDirection::North,
