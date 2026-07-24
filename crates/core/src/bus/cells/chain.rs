@@ -144,20 +144,11 @@ pub fn chain_eligible(sr: &SolverResult) -> Result<(), String> {
     }
     if let Some(plan) = &mega {
         // Each mega output competes for corridor capacity like any
-        // produced item, and each routes ONE corridor (v1: a single
-        // consumer per exported item).
+        // produced item. Multi-consumer exports fan out on the drain's
+        // bypass row (Phase C) — same splitter-chain idiom as solid
+        // cells, so no consumer-count refusal remains.
         for (item, _rate) in &plan.outputs {
             *producers.entry(item.as_str()).or_default() += 1;
-            let consumers = sr
-                .machines
-                .iter()
-                .filter(|c| !is_member(&c.recipe) && c.inputs.iter().any(|i| i.item == *item))
-                .count();
-            if consumers > 1 {
-                return Err(format!(
-                    "mega: {item} feeds {consumers} consumers (v1 routes a single corridor per mega output)"
-                ));
-            }
         }
     }
     for (item, n) in &producers {

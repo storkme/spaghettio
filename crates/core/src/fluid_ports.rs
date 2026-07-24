@@ -183,6 +183,18 @@ pub fn fluid_ports(entity: &str, mirror: bool, direction: EntityDirection) -> &'
 ///
 /// - AM2 / chemical-plant / biochamber already have north inputs → default
 ///   `(false, North)`.
+/// - oil-refinery / foundry / cryogenic-plant → `(true, North)` (mirror y-flip).
+/// - electromagnetic-plant → `(false, East)` (rotation; only its inputs reach
+///   the north face — the outputs land west/east, so this orientation is only
+///   correct for solid-output recipes).
+pub fn north_input_orientation(entity: &str) -> (bool, EntityDirection) {
+    match entity {
+        "oil-refinery" | "foundry" | "cryogenic-plant" => (true, EntityDirection::North),
+        "electromagnetic-plant" => (false, EntityDirection::East),
+        _ => (false, EntityDirection::North),
+    }
+}
+
 /// SIM-MEASURED port-identity rule (#412 probes, 2026-07-24): recipe
 /// fluids bind to a machine's same-direction ports in X-ASCENDING
 /// order on the unmirrored form, and in X-DESCENDING order on the
@@ -224,17 +236,6 @@ pub fn port_fluid_assignment<'a>(
     out
 }
 
-/// - oil-refinery / foundry / cryogenic-plant → `(true, North)` (mirror y-flip).
-/// - electromagnetic-plant → `(false, East)` (rotation; only its inputs reach
-///   the north face — the outputs land west/east, so this orientation is only
-///   correct for solid-output recipes).
-pub fn north_input_orientation(entity: &str) -> (bool, EntityDirection) {
-    match entity {
-        "oil-refinery" | "foundry" | "cryogenic-plant" => (true, EntityDirection::North),
-        "electromagnetic-plant" => (false, EntityDirection::East),
-        _ => (false, EntityDirection::North),
-    }
-}
 
 /// The `dx` offsets (relative to the machine's left edge) of the input-port
 /// pipes on the NORTH face (`dy == -1`), for `entity` at the given orientation.
@@ -308,6 +309,31 @@ mod tests {
         assert_eq!(
             fluid_ports("electromagnetic-plant", false, EntityDirection::North),
             &[(-1, 2, "input"), (4, 1, "input"), (2, 4, "output"), (1, -1, "output")]
+        );
+    }
+
+    #[test]
+    fn port_identity_matches_sim_measured_truth() {
+        // Sim-measured 2026-07-24 (Phase C precondition probes A-H2,
+        // rfc-052 decision log): advanced-oil-processing fluids bind
+        // x-ASCENDING in recipe order on the unmirrored refinery and
+        // x-DESCENDING on the engine-mirrored (dir+8 exported) form.
+        // The engine's old ascending-always zip STARVED mirrored
+        // refineries in-game.
+        let ins = ["water", "crude-oil"];
+        let outs = ["heavy-oil", "light-oil", "petroleum-gas"];
+        // Unmirrored: box order, x-ascending (census probe H2).
+        let a = port_fluid_assignment("oil-refinery", false, EntityDirection::North, "input", &ins);
+        assert_eq!(a, vec![(1, 5, "water"), (3, 5, "crude-oil")]);
+        let a = port_fluid_assignment("oil-refinery", false, EntityDirection::North, "output", &outs);
+        assert_eq!(a, vec![(0, -1, "heavy-oil"), (2, -1, "light-oil"), (4, -1, "petroleum-gas")]);
+        // Mirrored: reversed (probes A vs B/D/E + census probe G).
+        let a = port_fluid_assignment("oil-refinery", true, EntityDirection::North, "input", &ins);
+        assert_eq!(a, vec![(1, -1, "crude-oil"), (3, -1, "water")]);
+        let a = port_fluid_assignment("oil-refinery", true, EntityDirection::North, "output", &outs);
+        assert_eq!(
+            a,
+            vec![(0, 5, "petroleum-gas"), (2, 5, "light-oil"), (4, 5, "heavy-oil")]
         );
     }
 

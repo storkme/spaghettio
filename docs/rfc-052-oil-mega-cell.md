@@ -140,6 +140,45 @@ feeds and the composed layout must pass the pipe-isolation validators
 
 ## Decision log
 
+- *2026-07-24 — Phase C OPENED; the identity precondition is
+  DISCHARGED BY MEASUREMENT and it falsified the engine. Eight
+  single-refinery sim probes (A–H2: starve-vs-craft discrimination +
+  a pipe-contents census on dead-end stubs) measured the full port
+  identity table for advanced-oil-processing: recipe fluids bind
+  x-ASCENDING on the unmirrored refinery (water/crude in W→E;
+  heavy/light/PG out W→E — pure prototype box order) and x-DESCENDING
+  on the engine-mirrored (dir+8 exported) form (crude WEST + water
+  EAST; PG/light/heavy W→E) — the 180° rotation reverses port
+  x-order while identities stay glued to their boxes, exactly the
+  FFF #394 trap. The engine's ascending-always zip STARVED mirrored
+  refineries in-game (probe A). Fix: the placer reverses the fluid
+  list for mirrored rows (single-fluid sides reverse to themselves —
+  every registered fixture bit-identical, hash gate green);
+  `fluid_ports::port_fluid_assignment` is the shared measured rule
+  with a pin test; foundry/cryo inherit the geometric rule with the
+  refinery as measured anchor. The new tap arrangement immediately
+  flushed out a LATENT ROUTER BUG: horizontal fluid-branch bridging
+  mutated a previous hop's EXIT mouth into the next hop's entrance on
+  blocked-free-blocked patterns (pair destroyed, branch stitched onto
+  the foreign network west of it) — runs now cluster across 1-tile
+  gaps within reach, and the conversion guards on plain-pipe.
+  Harness: the multi-fluid-target report collapse fixed (checkpoint
+  scalar is first-target-only; fluid targets verdict on PRODUCED —
+  they have no drain rig). Frontier mapped (probe): lubricant targets
+  are fluid exports (composition refuses by design); FRF@0.5/1 bus is
+  CLEAN (no win there) but compose hits the C2 ascent-terminal
+  collision (terminal lands on a corr: row; refusal now names the
+  blocker); **USP@2 is the Phase C flagship — bus hard-fails
+  (belt-loop + underground-belt), the mega swallows the full oil
+  complex (10 members incl. BOTH oil processings + cracking +
+  lubricant, 4 solid exports, 5 chain-fed inputs)**, eligibility now
+  passes after C1 (multi-consumer export fan on the drain bypass row,
+  splitter-chain idiom, single-consumer path byte-identical), and the
+  remaining blocker is C3: the joint fluid planner cannot route
+  crude+water feeds on the 10-member block at either spacing. Named
+  increments: C2 (ascent congestion), C3 (adapter routing for the
+  advanced complex).*
+
 - *2026-07-24 — #411 adversarial review folds (APPROVE-WITH-NITS; both
   bus-refusal claims independently re-verified, retrofit guards probed
   and held, full battery re-run clean). Folds: (1) the chain-fed hop
