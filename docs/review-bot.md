@@ -139,6 +139,14 @@ Design decisions worth knowing:
 - **Escape hatch** for a false red (e.g. the gate judged a ≥20-line PR
   trivial but the transcript heuristic disagreed): re-run the job (runs
   are stochastic), or post a review and re-run the check.
+- **Known guard false-positive mode** (observed 2026-07-24, PR #419):
+  a conscious skip that reads the full diff first can take ~20 turns —
+  indistinguishable from class-5/6 abandonment by the turns heuristic.
+  Mitigated the same day: the prompt now requires a one-line skip
+  comment for every conscious no-review decision, so conscious skips
+  produce coverage signal and the turns heuristic is a fallback only.
+  A red on a silent ≥8-turn run after that prompt change is
+  presumptively real.
 
 Related tripwire: `ci.yml`'s `workflow-guard` job asserts the
 claude-code-review workflow keeps its load-bearing pieces (write perms,
