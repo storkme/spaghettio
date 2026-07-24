@@ -11,7 +11,7 @@ use crate::paths::{self, PINNED_VERSION};
 use std::path::Path;
 use std::process::Command;
 
-const DOWNLOAD_URL: &str = "https://factorio.com/get-download/2.0.76/headless/linux64";
+const DOWNLOAD_URL: &str = "https://factorio.com/get-download/2.0.77/headless/linux64";
 
 /// The server settings the RFC's empirical base requires: `auto_pause`
 /// false (dedicated servers otherwise never tick with no players
@@ -183,7 +183,7 @@ mod tests {
 
     #[test]
     fn download_url_is_pinned_never_latest() {
-        assert!(DOWNLOAD_URL.contains("2.0.76"));
+        assert!(DOWNLOAD_URL.contains("2.0.77"));
         assert!(!DOWNLOAD_URL.contains("latest"));
     }
 }

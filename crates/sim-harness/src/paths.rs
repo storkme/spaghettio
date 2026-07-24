@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-pub const PINNED_VERSION: &str = "2.0.76";
+pub const PINNED_VERSION: &str = "2.0.77";
 
 /// Default cache dir: `~/.cache/spaghettio-sim/factorio-2.0.76`.
 pub fn default_install_dir() -> Result<PathBuf, String> {
