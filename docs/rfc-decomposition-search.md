@@ -388,3 +388,43 @@ Per the [verification protocol](../CLAUDE.md#verification-protocol-for-layout-en
   the family. Both are tractable but are their own pieces of work.
   Tracking K-DS1-2 as **blocked on shape-fix-for-K1** for the next
   chunk.*
+
+- *2026-07-24 — **Phase 3 (`DirectInsertion`) first step landed (PR #432),
+  with deviations recorded here per CLAUDE.md's autonomy rule.** Solver
+  detects DI-eligible couplings (`SolverResult.di_couplings`,
+  `DICoupling`); the placer co-locates the pair and stamps bridge
+  inserters. `LayoutOptions.direct_insertion` defaults **false** — goldens
+  byte-identical when off.*
+  - ***Deviation 1 — the bridge is belt→belt, not machine→machine.*** The
+    RFC's premise ("skip the bus entirely via co-located inserter-coupled
+    rows") is only partly delivered: both row belts remain and a
+    long-handed inserter spans the gap between them, so the item path is
+    producer→inserter→belt→BRIDGE→belt→inserter→consumer — **three**
+    inserter hops where the bus uses two. It removes the trunk lane (a
+    real density win) but pays both belt-interface taxes and adds a
+    reach-2 hop. Consequence: the coupling is capped by the long-handed
+    ceiling (I8a — the only reach-2 inserter; 1.2/s at L0, 4.8/s at L7)
+    against copper-cable's 7.5/s per EC machine, so it needs two bridge
+    inserters per consumer and only clears `input-rate-delivery` at L7
+    (measured: 3 warnings at L0, 1 at L2, 0 at L7). **The
+    machine→machine topology the premise actually describes is scoped
+    separately as RFC-053**, which retains this bridge as a fallback.*
+  - ***Deviation 2 — the inter-recipe gap is preserved, not suppressed.***
+    The 2-tile gap houses the bridge inserter; without it the belts are
+    too close for any inserter to span.*
+  - ***Deviation 3 — DI and cell-composition are mutually exclusive*** in
+    this pass (`decomposition_search.rs`): DI needs both rows in one
+    `place_rows` call, and the cell composer splits them into separate
+    sub-solves. Reconciling them is future work.*
+  - ***Bridge column budget is deliberately NOT the machine width.*** The
+    gap row is contested space (the ghost router threads tap belts
+    through it; poles land there). Measured: giving the bridge all three
+    columns of a 3-wide machine fills the gap row edge-to-edge, routing
+    fails, and the retry moves the consumer row out of exact-2 reach —
+    **silently disabling DI**, which presents as every warning clearing.
+    Capped at two inserters per machine (`BRIDGE_EXTRA_COLS = 1`).*
+  - ***Multi-row producers refuse DI.*** When a producer recipe splits
+    across sub-rows only the adjacent one is reachable; bridging it while
+    marking the item bus-skipped would strand the other sub-rows' output.
+    The coupling falls back to the bus with a trace event rather than
+    under-feeding the consumer.*

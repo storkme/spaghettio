@@ -1093,6 +1093,21 @@ pub fn check_belt_flow_reachability(
         }
     }
 
+    // DI bridge pickup tiles: a direct-insertion bridge inserter lifts the
+    // coupled item off the producer's output belt (its pickup tile) and
+    // carries it to the consumer — a valid sink for that belt, even though
+    // the items never flow onward to a boundary or a machine's input belt.
+    let di_bridge_pickup_tiles: FxHashSet<(i32, i32)> = layout
+        .entities
+        .iter()
+        .filter(|e| is_inserter(&e.name) && super::is_di_bridge_inserter(e.segment_id.as_deref()))
+        .map(|e| {
+            let (dx, dy) = dir_to_vec(e.direction);
+            let reach = inserter_reach(&e.name);
+            (e.x - dx * reach, e.y - dy * reach)
+        })
+        .collect();
+
     // Output check
     checked.clear();
     for e in &layout.entities {
@@ -1123,7 +1138,11 @@ pub fn check_belt_flow_reachability(
             || downstream_beyond
                 .intersection(&input_belt_tiles)
                 .next()
-                .is_some();
+                .is_some()
+            // DI: the output belt (or a tile downstream of it) is picked
+            // from by a direct-insertion bridge inserter — the items leave
+            // via the bridge, not by flowing onward.
+            || !downstream.is_disjoint(&di_bridge_pickup_tiles);
         if !reaches_sink {
             issues.push(ValidationIssue::with_pos(
                 severity,
@@ -3323,6 +3342,63 @@ pub fn check_input_rate_delivery(
         });
     }
 
+    // DI bridge deliveries: a direct-insertion bridge inserter drops the
+    // coupled item onto the consumer's input belt in place of a bus lane.
+    // Credit its REAL throughput (at the declared capacity) so the belt is
+    // not seen as unfed — but at the actual rate, so an under-provisioned
+    // bridge (a single reach-2 long-handed inserter cannot sustain a
+    // high-rate coupling like copper-cable) still warns honestly instead of
+    // being rubber-stamped.
+    // The credit follows the BELT, not just the drop tile: a bridge drops
+    // upstream of the consumer inserters' pickup tiles and the belt carries
+    // the items down to them (on the cable→EC row the bridge drops at x=5
+    // on an east-flowing belt whose pickups are x=6,9,…). So each bridge
+    // credits every tile downstream of its drop. Approximation, stated:
+    // consumption by an upstream machine is not subtracted, so this is an
+    // upper bound on what arrives at a downstream tile — the same
+    // simplification the surrounding lane-rate comparison makes.
+    let mut di_bridge_delivery: FxHashMap<((i32, i32), String), f64> = FxHashMap::default();
+    {
+        let di_bridges: Vec<&PlacedEntity> = layout
+            .entities
+            .iter()
+            .filter(|e| {
+                is_inserter(&e.name) && super::is_di_bridge_inserter(e.segment_id.as_deref())
+            })
+            .collect();
+        if !di_bridges.is_empty() {
+            let belt_dir_map = belt_dir_map_from(&layout.entities);
+            let ug_pairs = build_ug_pairs(layout);
+            let splitter_siblings = build_splitter_siblings(layout);
+            for ins in di_bridges {
+                let Some(item) = ins.carries.clone() else {
+                    continue;
+                };
+                let (dx, dy) = dir_to_vec(ins.direction);
+                let reach = inserter_reach(&ins.name);
+                let drop_pos = (ins.x + dx * reach, ins.y + dy * reach);
+                let rate = crate::common::machine_feed_rate(
+                    &ins.name,
+                    ins.quality.unwrap_or_default(),
+                    layout.inserter_capacity,
+                );
+                let starts: FxHashSet<(i32, i32)> = std::iter::once(drop_pos).collect();
+                let reached = bfs_belt_downstream(
+                    &starts,
+                    &belt_dir_map,
+                    Some(&ug_pairs),
+                    Some(&splitter_siblings),
+                );
+                // `bfs_belt_downstream` already includes the start tile when
+                // it is a belt; when the drop is not onto a belt at all the
+                // set is empty and this bridge credits no belt (correct).
+                for tile in &reached {
+                    *di_bridge_delivery.entry((*tile, item.clone())).or_insert(0.0) += rate;
+                }
+            }
+        }
+    }
+
     // Second pass: check each inserter's available rate vs its share of the required rate.
     for ins in &inserters {
         let me = match machine_entity.get(&ins.machine_pos) {
@@ -3361,10 +3437,16 @@ pub fn check_input_rate_delivery(
         let count = inserter_count.get(&(ins.machine_pos, ins.carried_item.clone())).copied().unwrap_or(1);
         let per_inserter_rate = required_rate / count as f64;
 
-        let available = match lane_rates.get(&ins.pickup_pos) {
+        let mut available = match lane_rates.get(&ins.pickup_pos) {
             Some(&[left, right]) => left + right,
             None => 0.0,
         };
+        // A DI bridge feeding this input belt adds its delivery on top of any
+        // bus-lane rate (usually there is no lane — the DI'd item skips the
+        // bus). Under-provisioned bridges still fall short and warn.
+        if let Some(&r) = di_bridge_delivery.get(&(ins.pickup_pos, ins.carried_item.clone())) {
+            available += r;
+        }
 
         if available < per_inserter_rate - 0.02 {
             issues.push(ValidationIssue::with_pos(
@@ -3505,6 +3587,7 @@ mod tests {
             }],
             surplus_outputs: vec![],
             dependency_order: vec!["iron-gear-wheel".to_string()],
+            ..Default::default()
         }
     }
 
@@ -4285,6 +4368,7 @@ mod tests {
             }],
             surplus_outputs: vec![],
             dependency_order: vec!["iron-gear-wheel".to_string()],
+            ..Default::default()
         };
 
         let entities = vec![
@@ -4412,6 +4496,7 @@ mod tests {
             }],
             surplus_outputs: vec![],
             dependency_order: vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()],
+            ..Default::default()
         };
 
         // Layout:
@@ -4572,6 +4657,7 @@ mod tests {
             }],
             surplus_outputs: vec![],
             dependency_order: vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()],
+            ..Default::default()
         };
 
         let entities = vec![
@@ -4712,6 +4798,7 @@ mod tests {
             external_outputs: vec![],
             surplus_outputs: vec![],
             dependency_order: vec![],
+            ..Default::default()
         };
         let rates = compute_lane_rates(&layout, Some(&solver));
         let r0 = rates.get(&(0, 1)).copied().unwrap_or([0.0, 0.0]);
@@ -4787,6 +4874,7 @@ mod tests {
             external_outputs: vec![],
             surplus_outputs: vec![],
             dependency_order: vec![],
+            ..Default::default()
         };
         let rates = compute_lane_rates(&layout, Some(&solver));
         let loop_total: f64 = rates.get(&(0, 1)).copied().unwrap_or([0.0, 0.0]).iter().sum();
@@ -4850,6 +4938,7 @@ mod tests {
             external_outputs: vec![],
             surplus_outputs: vec![],
             dependency_order: vec![],
+            ..Default::default()
         };
         let rates = compute_lane_rates(&layout, Some(&solver));
         let feed_total: f64 = rates.get(&(0, 1)).copied().unwrap_or([0.0, 0.0]).iter().sum();
@@ -4969,6 +5058,7 @@ mod tests {
             external_outputs: vec![],
             surplus_outputs: vec![],
             dependency_order: vec!["iron-plate-recycle".to_string()],
+            ..Default::default()
         };
         let rates = compute_lane_rates(&layout, Some(&solver));
         let ug_out = rates.get(&(0, 4)).copied().unwrap_or([0.0, 0.0]);
@@ -5075,6 +5165,7 @@ mod tests {
             external_outputs: vec![],
             surplus_outputs: vec![],
             dependency_order: vec![],
+            ..Default::default()
         };
         (layout, solver)
     }

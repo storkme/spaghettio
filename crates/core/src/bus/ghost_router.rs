@@ -5672,6 +5672,7 @@ mod feeder_specs_skipped_tests {
             external_outputs: Vec::new(),
             surplus_outputs: Vec::new(),
             dependency_order: Vec::new(),
+            ..Default::default()
         }
     }
 

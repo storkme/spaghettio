@@ -1761,6 +1761,7 @@ mod tests {
             external_outputs: vec![],
             surplus_outputs: vec![],
             dependency_order: vec![],
+            ..Default::default()
         };
         let lr = layout(vec![machine("assembling-machine-3", 0, 0, "fluid-recipe")]);
         assert!(check_output_belt_coverage(&lr, Some(&sr)).is_empty());
@@ -1797,6 +1798,7 @@ mod tests {
             external_outputs: vec![],
             surplus_outputs: vec![],
             dependency_order: vec![],
+            ..Default::default()
         };
         let entities = vec![
             machine("assembling-machine-3", 3, 0, "iron-gear-wheel"),
@@ -1830,6 +1832,7 @@ mod tests {
             external_outputs: vec![],
             surplus_outputs: vec![],
             dependency_order: vec![],
+            ..Default::default()
         };
         let mut entities = vec![
             machine("assembling-machine-3", 0, 0, "iron-gear-wheel"),
@@ -1876,6 +1879,7 @@ mod tests {
                 external_outputs: vec![],
                 surplus_outputs: vec![],
                 dependency_order: vec![],
+                ..Default::default()
             };
             let entities = vec![
                 machine("assembling-machine-3", 3, 0, "transport-belt"),
@@ -1937,6 +1941,7 @@ mod tests {
                 external_outputs: vec![],
                 surplus_outputs: vec![],
                 dependency_order: vec![],
+                ..Default::default()
             };
             let entities = vec![
                 machine("assembling-machine-3", 3, 0, "copper-cable"),
@@ -1994,6 +1999,7 @@ mod tests {
             external_outputs: vec![],
             surplus_outputs: vec![],
             dependency_order: vec![],
+            ..Default::default()
         };
         let item = "electronic-circuit";
         let entities = vec![
@@ -2069,6 +2075,7 @@ mod tests {
             external_outputs: vec![],
             surplus_outputs: vec![],
             dependency_order: vec![],
+            ..Default::default()
         };
         let splitter_entity = PlacedEntity {
             loop_priority_rate: Some(4.0),
@@ -2346,6 +2353,7 @@ mod tests {
             external_outputs: vec![],
             surplus_outputs: vec![],
             dependency_order: vec![],
+            ..Default::default()
         };
         let splitter_entity = PlacedEntity {
             loop_priority_rate: Some(4.0),
@@ -2407,6 +2415,7 @@ mod tests {
             external_outputs: vec![],
             surplus_outputs: vec![],
             dependency_order: vec![],
+            ..Default::default()
         };
         let splitter_entity = PlacedEntity {
             loop_priority_rate: Some(4.0),

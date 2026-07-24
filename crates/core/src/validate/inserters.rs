@@ -212,6 +212,15 @@ pub fn check_inserter_direction(layout: &LayoutResult) -> Vec<ValidationIssue> {
         if super::sushi::is_sushi_sort_inserter(e.segment_id.as_deref()) {
             continue;
         }
+        // DI bridge inserters (RFC decomposition-search Phase 3) are
+        // belt-to-belt by design — they carry the direct-inserted item from
+        // the producer's output belt to the consumer's input belt and touch
+        // no machine. The DI coupling / delivery checks own their
+        // correctness; this direction check would otherwise flag every one
+        // as "neither side touches a machine".
+        if super::is_di_bridge_inserter(e.segment_id.as_deref()) {
+            continue;
+        }
 
         let (dx, dy) = dir_to_vec(e.direction);
         let (odx, ody) = (-dx, -dy);
@@ -1322,6 +1331,7 @@ mod tests {
             external_outputs: vec![],
             surplus_outputs: vec![],
             dependency_order: vec![],
+            ..Default::default()
         };
         let lr = LayoutResult {
             entities: vec![PlacedEntity {
@@ -1356,6 +1366,7 @@ mod tests {
             external_outputs: vec![],
             surplus_outputs: vec![],
             dependency_order: vec![],
+            ..Default::default()
         };
         let lr = LayoutResult {
             entities: vec![PlacedEntity {
@@ -1519,6 +1530,7 @@ mod tests {
             external_outputs: vec![],
             surplus_outputs: vec![],
             dependency_order: vec![],
+            ..Default::default()
         }
     }
 
@@ -1713,6 +1725,7 @@ mod tests {
             external_outputs: vec![],
             surplus_outputs: vec![],
             dependency_order: vec![],
+            ..Default::default()
         };
 
         let mut entities = gear_machine_entities_at(0); // row A: y in [0, 3)
@@ -1867,6 +1880,7 @@ mod tests {
             external_outputs: vec![],
             surplus_outputs: vec![],
             dependency_order: vec![],
+            ..Default::default()
         }
     }
 
@@ -1953,6 +1967,7 @@ mod tests {
             external_outputs: vec![],
             surplus_outputs: vec![],
             dependency_order: vec![],
+            ..Default::default()
         };
 
         let mut entities = gear_machine_entities_at(0); // row A: y in [0, 3)
@@ -2034,6 +2049,7 @@ mod tests {
             external_outputs: vec![],
             surplus_outputs: vec![],
             dependency_order: vec![],
+            ..Default::default()
         }
     }
 

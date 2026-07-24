@@ -125,6 +125,14 @@ pub struct LayoutOptions {
     /// `CellComposedCandidate` in the decomposition search). Nothing
     /// reads this in Phase A; it exists so options plumbing is stable.
     pub cell_composition: crate::bus::cells::CellComposition,
+    /// Direct-insertion layout (RFC decomposition-search Phase 3):
+    /// when `true`, the placer co-locates producer↔consumer pairs
+    /// flagged by the solver's `di_couplings` — placing them adjacent
+    /// (no inter-row gap) so the ghost router's trunk segment is
+    /// minimal. Default `false` (byte-identical to pre-DI layouts).
+    /// The solver always populates `di_couplings`; this flag only
+    /// controls whether the placer acts on them.
+    pub direct_insertion: bool,
 }
 
 impl Default for LayoutOptions {
@@ -153,6 +161,7 @@ impl Default for LayoutOptions {
             // fails acceptance; every bus-successful config is
             // bit-identical (goldens gate this).
             cell_composition: crate::bus::cells::CellComposition::Candidate,
+            direct_insertion: false,
         }
     }
 }
@@ -685,6 +694,8 @@ fn layout_pass(
         Some(&final_output_items),
         retry_extra_gaps,
         opts.row_layout,
+        opts.direct_insertion,
+        &solver_result.di_couplings,
         &stacking_ctx,
     );
     crate::trace::emit(crate::trace::TraceEvent::PhaseTime {
@@ -745,6 +756,8 @@ fn layout_pass(
                 Some(&final_output_items),
                 Some(&merged_gaps),
                 opts.row_layout,
+                opts.direct_insertion,
+                &solver_result.di_couplings,
                 &stacking_ctx,
             );
             crate::trace::emit(crate::trace::TraceEvent::PhaseTime {
@@ -2179,6 +2192,7 @@ mod tests {
             external_outputs: vec![],
             surplus_outputs: vec![],
             dependency_order: vec![],
+            ..Default::default()
         };
         let bw = estimate_bus_width(&sr);
         assert!(bw >= 2);
@@ -2595,6 +2609,7 @@ mod tests {
                 module_id: 0,
             }],
             dependency_order: vec!["widget".to_string(), "gadget-scrap".to_string()],
+            ..Default::default()
         };
 
         let layout = build_bus_layout(&sr, LayoutOptions::default())
@@ -2675,6 +2690,7 @@ mod tests {
             horizontal_stack: None,
             secondary_output_belt: None,
             sorted_output_belts: Vec::new(),
+            di_input: Vec::new(),
         }
     }
 
@@ -2814,4 +2830,196 @@ mod tests {
         );
     }
 
+    /// End-to-end DI: solving EC from plates with `direct_insertion: true`
+    /// produces a layout where:
+    /// 1. The cable→EC coupling is detected by the solver
+    /// 2. `order_specs` co-locates cable immediately before EC
+    /// 3. The copper-cable bus lane is skipped (lane planner)
+    /// 4. Bridge inserters are stamped in the inter-recipe gap
+    ///
+    /// The validator recognizes belt-to-belt DI bridge inserters: neither
+    /// `inserter-direction` (which would otherwise flag them as touching no
+    /// machine) nor `belt-flow-reachability` (which would otherwise call the
+    /// producer's bridge-consumed output belt a dead-end) fires on them.
+    #[test]
+    fn di_full_pipeline_ec_from_plates() {
+        let inputs: FxHashSet<String> =
+            ["iron-plate", "copper-plate"].iter().map(|s| s.to_string()).collect();
+        let sr = crate::solver::solve_with_exclusions(
+            "electronic-circuit",
+            10.0,
+            &inputs,
+            "assembling-machine-3",
+            &FxHashSet::default(),
+        )
+        .expect("solve electronic-circuit@10/s");
+
+        // Solver detected the coupling.
+        assert!(
+            sr.di_couplings.iter().any(|c|
+                c.producer_recipe == "copper-cable"
+                && c.consumer_recipe == "electronic-circuit"
+                && c.item == "copper-cable"
+            ),
+            "solver should detect cable→EC DI coupling, got {:?}",
+            sr.di_couplings
+        );
+
+        let opts = LayoutOptions {
+            direct_insertion: true,
+            ..Default::default()
+        };
+        let layout = build_bus_layout(&sr, opts).expect("layout should succeed");
+
+        // The layout should contain bridge inserters carrying copper-cable.
+        let di_inserters: Vec<_> = layout
+            .entities
+            .iter()
+            .filter(|e| {
+                e.carries.as_deref() == Some("copper-cable")
+                    && e.segment_id.as_deref().map_or(false, |s| s.starts_with("di-bridge:"))
+            })
+            .collect();
+        assert!(
+            !di_inserters.is_empty(),
+            "layout should contain DI bridge inserters carrying copper-cable"
+        );
+        // Two bridge inserters per EC machine (4 machines = 8). The bridge
+        // spans a 2-tile gap so it must be long-handed — the only reach-2
+        // inserter (I8a) — capped at 1.2/s (L0) to 4.8/s (L7), while each EC
+        // machine wants 7.5/s of cable. The ladder therefore fills the
+        // bridge's column budget; `BRIDGE_EXTRA_COLS` caps that at 2 per
+        // machine so the gap row stays routable (see `stamp_di_bridge`).
+        assert_eq!(
+            di_inserters.len(),
+            8,
+            "expected 8 DI bridge inserters (two per EC machine), got {}",
+            di_inserters.len()
+        );
+        // All facing south (pick from producer belt north, drop to consumer belt south).
+        for ins in &di_inserters {
+            assert_eq!(
+                ins.direction,
+                crate::models::EntityDirection::South,
+                "DI bridge inserter at ({},{}) should face south",
+                ins.x, ins.y
+            );
+        }
+
+        // ITEM-KEYED belt resolution: both ends of every bridge must touch a
+        // belt actually carrying the DI'd item. EC is a DualInput consumer
+        // (iron-plate + copper-cable), so a positional lookup (`.last()`, or
+        // the row's primary output belt) is a coin flip that happens to land
+        // right for this recipe order — this pins the item-keyed behaviour so
+        // a recipe/ingredient reorder can't silently mis-target the bridge.
+        {
+            use crate::common::{dir_to_vec, inserter_reach};
+            let belt_item: std::collections::HashMap<(i32, i32), &str> = layout
+                .entities
+                .iter()
+                .filter(|e| crate::common::is_belt_entity(&e.name))
+                .filter_map(|e| e.carries.as_deref().map(|c| ((e.x, e.y), c)))
+                .collect();
+            for ins in &di_inserters {
+                let (dx, dy) = dir_to_vec(ins.direction);
+                let r = inserter_reach(&ins.name);
+                let pick = (ins.x - dx * r, ins.y - dy * r);
+                let drop = (ins.x + dx * r, ins.y + dy * r);
+                assert_eq!(
+                    belt_item.get(&pick).copied(),
+                    Some("copper-cable"),
+                    "bridge at ({},{}) must PICK from a copper-cable belt, got {:?}",
+                    ins.x, ins.y, belt_item.get(&pick)
+                );
+                assert_eq!(
+                    belt_item.get(&drop).copied(),
+                    Some("copper-cable"),
+                    "bridge at ({},{}) must DROP onto a copper-cable belt, got {:?}",
+                    ins.x, ins.y, belt_item.get(&drop)
+                );
+            }
+        }
+
+        // Validator DI-awareness: the belt-to-belt bridge inserters must not
+        // trip the two checks that assume every inserter touches a machine
+        // and every machine output flows onward. (Other categories — e.g.
+        // input-rate-delivery, which honestly reports the under-provisioned
+        // single reach-2 bridge — are out of scope for THIS assertion.)
+        let dir_issues =
+            crate::validate::inserters::check_inserter_direction(&layout);
+        assert!(
+            dir_issues.is_empty(),
+            "DI bridge inserters must not trip inserter-direction: {dir_issues:?}"
+        );
+        let reach_issues = crate::validate::belt_flow::check_belt_flow_reachability(
+            &layout,
+            Some(&sr),
+            crate::validate::LayoutStyle::Bus,
+        );
+        assert!(
+            reach_issues.is_empty(),
+            "DI producer's bridge-consumed output belt must not trip \
+             belt-flow-reachability: {reach_issues:?}"
+        );
+    }
+
+    /// The DI bridge's reach-2 ceiling is real and research-dependent: the
+    /// bridge must be long-handed (I8a — the only reach-2 inserter), so each
+    /// bridge inserter moves 1.2/s at L0 and 4.8/s at L7 while an EC machine
+    /// wants 7.5/s of copper-cable. With two bridge inserters per machine
+    /// (the routable column budget) the coupling is under-fed at low research
+    /// and fully fed at L7 — so `input-rate-delivery` must warn honestly at
+    /// L0 and be CLEAN at L7. Guards both directions: a regression that
+    /// silently disables DI (bridge not stamped → item quietly rerouted over
+    /// the bus) shows up as L0 going clean.
+    #[test]
+    fn di_bridge_feeds_cable_only_at_high_research() {
+        let inputs: FxHashSet<String> =
+            ["iron-plate", "copper-plate"].iter().map(|s| s.to_string()).collect();
+        let sr = crate::solver::solve_with_exclusions(
+            "electronic-circuit",
+            10.0,
+            &inputs,
+            "assembling-machine-3",
+            &FxHashSet::default(),
+        )
+        .expect("solve electronic-circuit@10/s");
+
+        let delivery_warnings = |level: u8| -> usize {
+            let layout = build_bus_layout(
+                &sr,
+                LayoutOptions {
+                    direct_insertion: true,
+                    inserter_capacity: level,
+                    ..Default::default()
+                },
+            )
+            .expect("layout should succeed");
+            // The bridge must actually exist — otherwise "no delivery
+            // warnings" would just mean DI silently fell back to the bus.
+            let bridges = layout
+                .entities
+                .iter()
+                .filter(|e| {
+                    e.segment_id.as_deref().is_some_and(|s| s.starts_with("di-bridge:"))
+                })
+                .count();
+            assert_eq!(bridges, 8, "L{level}: DI bridge must be stamped (got {bridges})");
+            crate::validate::belt_flow::check_input_rate_delivery(&layout, Some(&sr))
+                .iter()
+                .filter(|i| i.message.contains("copper-cable"))
+                .count()
+        };
+
+        assert!(
+            delivery_warnings(0) > 0,
+            "L0: two long-handed bridges (2.4/s) cannot feed 7.5/s of cable — \
+             this must warn, not pass silently"
+        );
+        assert_eq!(
+            delivery_warnings(7),
+            0,
+            "L7: two long-handed bridges (9.6/s) cover the 7.5/s cable demand"
+        );
+    }
 }

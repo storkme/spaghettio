@@ -425,6 +425,7 @@ mod tests {
             horizontal_stack: None,
             secondary_output_belt: None,
             sorted_output_belts: Vec::new(),
+            di_input: Vec::new(),
         }
     }
 

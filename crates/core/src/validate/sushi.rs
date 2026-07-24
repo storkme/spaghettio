@@ -344,6 +344,7 @@ mod tests {
             external_outputs: vec![],
             surplus_outputs: vec![],
             dependency_order: vec![],
+            ..Default::default()
         };
         // 4*(0.5+0.1) = 2.4/s on a yellow belt (15/s) — fine.
         let lr = LayoutResult {
@@ -370,6 +371,7 @@ mod tests {
             external_outputs: vec![],
             surplus_outputs: vec![],
             dependency_order: vec![],
+            ..Default::default()
         };
         // 40*0.5 = 20/s > yellow 15/s.
         let lr = LayoutResult {

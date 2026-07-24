@@ -269,6 +269,25 @@ pub fn plan_bus_lanes(
             continue;
         }
         let consumers = item_to_consumers.get(key).cloned().unwrap_or_default();
+        // DI-coupled consumers: when a consumer's `di_input` matches this
+        // item AND the producer row is directly above the consumer (no
+        // gap), the item is fed by a direct bridge — skip the lane. When
+        // the rows are NOT adjacent (other dependencies sit between them),
+        // keep the lane — the ghost router routes normally. A future
+        // `order_specs` enhancement will co-locate DI pairs so this
+        // adjacency check always passes (RFC decomposition-search Phase 3).
+        let consumers: Vec<usize> = consumers
+            .into_iter()
+            .filter(|&c_idx| {
+                // DI'd consumer: drop it from this lane's consumer set for
+                // any item a bridge inserter feeds directly (the gap bridge
+                // takes it off the producer's output belt — no bus lane
+                // needed). A consumer may have several DI'd inputs, so match
+                // against all of them; an empty list keeps the consumer.
+                let di = &row_spans[c_idx].di_input;
+                !di.iter().any(|(item, _)| item == &key.0)
+            })
+            .collect();
         // A lane with zero consumers is normally pointless — except for a
         // registered fluid surplus, whose lane exists purely to carry the
         // byproduct to the perimeter exit (Phase 2, rfc-solver-net-flow).
@@ -1332,6 +1351,7 @@ mod tests {
             horizontal_stack: None,
             secondary_output_belt: None,
             sorted_output_belts: Vec::new(),
+            di_input: Vec::new(),
         }
     }
 
@@ -1414,6 +1434,7 @@ mod tests {
             external_outputs: vec![ItemFlow { item: "iron-gear-wheel".to_string(), rate: 1.0, is_fluid: false, module_id: 0 }],
             surplus_outputs: vec![],
             dependency_order: vec!["iron-gear-wheel".to_string()],
+            ..Default::default()
         }
     }
 
@@ -1437,6 +1458,7 @@ mod tests {
             external_outputs: vec![ItemFlow { item: "plastic-bar".to_string(), rate: 2.0, is_fluid: false, module_id: 0 }],
             surplus_outputs: vec![],
             dependency_order: vec!["plastic-bar".to_string()],
+            ..Default::default()
         }
     }
 
@@ -1622,6 +1644,7 @@ mod tests {
                 horizontal_stack: None,
                 secondary_output_belt: None,
                 sorted_output_belts: Vec::new(),
+                di_input: Vec::new()
             }
         }).collect();
 

@@ -98,6 +98,7 @@ fn layout_options(
             Some("off") => spaghettio_core::bus::cells::CellComposition::Off,
             _ => spaghettio_core::bus::cells::CellComposition::Candidate,
         },
+        ..Default::default()
     }
 }
 

@@ -1052,6 +1052,7 @@ pub fn compose_mega_block(
             .filter(|r| plan.members.contains(*r))
             .cloned()
             .collect(),
+        ..Default::default()
     };
     let opts = crate::bus::layout::LayoutOptions {
         cell_composition: super::CellComposition::Off,

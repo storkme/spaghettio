@@ -63,7 +63,13 @@ pub struct BlueprintFeatures {
     pub pipe_networks: usize,
 
     // power structure
-    pub machines_powered_fraction: Option<f64>,
+    /// Fraction of electric consumers (machines AND inserters, per the
+    /// validator's `needs_electricity` subject set) covered by a pole's
+    /// supply area. Named `powered_fraction` not `machines_powered_fraction`
+    /// because inserters draw grid power too — the field measures all
+    /// consumers, not just machines. Burner biochambers are excluded (no
+    /// grid draw) — a layout with only biochambers yields `None`.
+    pub powered_fraction: Option<f64>,
     pub pole_networks: usize,
     pub self_powered: bool,
 
@@ -248,7 +254,7 @@ pub fn classify(layout: &LayoutResult, analysis: &BlueprintAnalysis) -> Blueprin
         ug_pairs: 0,
         mixed_belt_networks: 0,
         pipe_networks: 0,
-        machines_powered_fraction: None,
+        powered_fraction: None,
         pole_networks: 0,
         self_powered: false,
         pitch: 0,
@@ -347,11 +353,19 @@ pub fn classify(layout: &LayoutResult, analysis: &BlueprintAnalysis) -> Blueprin
                 // when the belt there sits on a THROUGH line — i.e. it has a
                 // same-direction upstream continuation behind it. Without
                 // that gate a plain L-corner (turned belt, no parent line)
-                // matches the same pattern and inflates the count. Known
-                // false negative: a perpendicular feed into the very FIRST
-                // tile of a line has no upstream continuation to check, so
-                // it scores 0 — accepted tradeoff against the L-corner
-                // false-positive class (review #389).
+                // matches the same pattern and inflates the count.
+                //
+                // Known false negative: a perpendicular feed into the very
+                // FIRST tile of a line has no upstream continuation to check,
+                // so it scores 0. This is a genuine structural ambiguity, not
+                // a heuristic shortcut: an L-corner and a head-of-line
+                // sideload have identical topology (perpendicular feed,
+                // downstream continuation, no upstream) — only item-flow
+                // analysis could tell them apart, which is out of scope for
+                // position arithmetic. Checking downstream continuation
+                // instead re-introduces the L-corner false positive (the
+                // corner belt has a downstream continuation too), so the
+                // upstream gate is the correct tradeoff (review #389).
                 if (fdx, fdy) != (dx, dy)
                     && belt_at.get(&(tx + dx - fdx, ty + dy - fdy)).is_some_and(|b| {
                         common::is_surface_belt(b.name.as_str())
@@ -472,7 +486,7 @@ pub fn classify(layout: &LayoutResult, analysis: &BlueprintAnalysis) -> Blueprin
                 })
             })
             .count();
-        f.machines_powered_fraction =
+        f.powered_fraction =
             Some((covered as f64 / consumers.len() as f64 * 100.0).round() / 100.0);
     }
     // pole networks via wire reach (index-keyed DSU over pole centers)
@@ -511,7 +525,7 @@ pub fn classify(layout: &LayoutResult, analysis: &BlueprintAnalysis) -> Blueprin
     }
     f.self_powered = !consumers.is_empty()
         && !poles.is_empty()
-        && f.machines_powered_fraction.unwrap_or(0.0) >= 0.95;
+        && f.powered_fraction.unwrap_or(0.0) >= 0.95;
 
     // ---- periodicity: repeated same-name rows/columns at a fixed pitch ----
     let machines: Vec<&PlacedEntity> = ents.iter().filter(|e| is_machine(e)).collect();
@@ -741,12 +755,12 @@ mod tests {
             machine("assembling-machine-3", 0, 0, "iron-gear-wheel"),
             ent("small-electric-pole", 4, 1, EntityDirection::North),
         ]);
-        assert_eq!(small.machines_powered_fraction, Some(0.0));
+        assert_eq!(small.powered_fraction, Some(0.0));
         let medium = classify_only(vec![
             machine("assembling-machine-3", 0, 0, "iron-gear-wheel"),
             ent("medium-electric-pole", 4, 1, EntityDirection::North),
         ]);
-        assert_eq!(medium.machines_powered_fraction, Some(1.0));
+        assert_eq!(medium.powered_fraction, Some(1.0));
     }
 
     #[test]
@@ -759,12 +773,12 @@ mod tests {
             ent("big-electric-pole", 2, 1, EntityDirection::North),
             ent("fast-inserter", 2, 0, EntityDirection::North),
         ]);
-        assert_eq!(near.machines_powered_fraction, Some(1.0));
+        assert_eq!(near.powered_fraction, Some(1.0));
         let far = classify_only(vec![
             ent("big-electric-pole", 2, 1, EntityDirection::North),
             ent("fast-inserter", 6, 0, EntityDirection::North),
         ]);
-        assert_eq!(far.machines_powered_fraction, Some(0.0));
+        assert_eq!(far.powered_fraction, Some(0.0));
         assert!(!far.self_powered);
     }
 
@@ -778,10 +792,10 @@ mod tests {
             ent("medium-electric-pole", 4, 1, EntityDirection::North),
             ent("fast-inserter", 8, 1, EntityDirection::North),
         ]);
-        assert_eq!(f.machines_powered_fraction, Some(0.5));
+        assert_eq!(f.powered_fraction, Some(0.5));
         // burner biochamber draws no grid power: no consumers at all -> None
         let bio = classify_only(vec![machine("biochamber", 0, 0, "nutrients")]);
-        assert_eq!(bio.machines_powered_fraction, None);
+        assert_eq!(bio.powered_fraction, None);
     }
 
     #[test]
@@ -806,14 +820,14 @@ mod tests {
             machine("assembling-machine-3", 0, 0, "iron-gear-wheel"),
             ent("medium-electric-pole", 4, 1, EntityDirection::North),
         ]);
-        assert_eq!(powered.machines_powered_fraction, Some(1.0));
+        assert_eq!(powered.powered_fraction, Some(1.0));
         assert!(powered.self_powered);
 
         let grid = classify_only(vec![
             machine("assembling-machine-3", 0, 0, "iron-gear-wheel"),
             ent("medium-electric-pole", 40, 1, EntityDirection::North),
         ]);
-        assert_eq!(grid.machines_powered_fraction, Some(0.0));
+        assert_eq!(grid.powered_fraction, Some(0.0));
         assert!(!grid.self_powered);
     }
 

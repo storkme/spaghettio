@@ -209,6 +209,17 @@ pub(crate) fn segment_is_priority_branch(seg: Option<&str>) -> bool {
     })
 }
 
+/// A direct-insertion bridge inserter (RFC decomposition-search Phase 3):
+/// belt-to-belt by design, it lifts the DI'd item off the producer's output
+/// belt and drops it onto the consumer's input belt, touching no machine.
+/// The placer tags these `di-bridge:<item>:<recipe>` (see
+/// `bus::placer::stamp_di_bridge`); the direction / delivery / reachability
+/// checks recognize them so belt-to-belt DI is not mistaken for a
+/// misdirected inserter, an unfed input, or an unreachable dead-end.
+pub(crate) fn is_di_bridge_inserter(seg: Option<&str>) -> bool {
+    seg.is_some_and(|s| s.starts_with("di-bridge:"))
+}
+
 /// Resolve the exact `MachineSpec` sibling the layout pipeline placed at `y`
 /// for `recipe`, preferring `layout.effective_rows`'s position attribution
 /// over a recipe-name lookup — partition siblings share a recipe name but
@@ -593,6 +604,7 @@ mod tests {
                 module_id: 0,
             }],
             dependency_order: vec![],
+            ..Default::default()
         }
     }
 
