@@ -677,11 +677,13 @@ and 3 wait on its artifacts as marked. Phase 3 is the long pole.
   shared one tile) a real head-on belt conflict where the row's own
   east-facing exit meets the ret belt's west-facing bend, 4 new
   `belt-junction` errors, confirmed via git-stash diff against the
-  pre-fix baseline to be new. This is the SAME class of general-belt-
-  validator noise the sushi region already generates (belt-loop /
-  underground-belt, ~100 instances, `fulgora_scrap_sorter_mechanism_present`'s
-  own comment) — the fix only asserts zero entity-overlap, deliberately
-  not zero belt-junction. The AM3 single-exit-bus cluster #309 also
+  pre-fix baseline to be new. `check_belt_junctions` (head-on) is a
+  separate check from `check_belt_loops` / `check_underground_belts` —
+  these new errors are a SIBLING of the belt-loop/underground-belt
+  false positives the sushi region already generates
+  (`fulgora_scrap_sorter_mechanism_present`'s own comment, ~100
+  instances), not literally the same check firing — the fix only
+  asserts zero entity-overlap, deliberately not zero belt-junction. The AM3 single-exit-bus cluster #309 also
   reports (holmium-plate row, zero output inserters) is a THIRD,
   unrelated defect in row/template generation upstream of ghost
   routing — confirmed pre-existing and untouched by this fix via the

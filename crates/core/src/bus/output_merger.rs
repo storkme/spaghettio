@@ -13,37 +13,6 @@ use crate::bus::balancer::splitter_for_belt;
 use crate::bus::placer::RowSpan;
 use crate::bus::stacking_ctx::StackingCtx;
 
-/// Total rate + belt/underground tier for an item's merge cascade — split
-/// out so a caller can compute it once and reuse it, though today only
-/// [`merge_output_rows`] itself calls it.
-pub(crate) fn merger_rate_and_tier(
-    output_rows: &[usize],
-    item: &str,
-    row_spans: &[RowSpan],
-    max_belt_tier: Option<&str>,
-    ctx: &StackingCtx,
-) -> (f64, &'static str, &'static str, u32) {
-    use crate::bus::balancer::underground_for_belt;
-    use crate::common::{belt_entity_for_rate_stacked, ug_max_reach};
-
-    let total_rate = output_rows.iter()
-        .map(|&ri| {
-            if ri >= row_spans.len() {
-                0.0
-            } else {
-                row_spans[ri].spec.outputs.iter()
-                    .filter(|o| o.item == item)
-                    .map(|o| o.rate * row_spans[ri].machine_count as f64)
-                    .sum::<f64>()
-            }
-        })
-        .sum::<f64>();
-    let belt_name = belt_entity_for_rate_stacked(total_rate * 2.0, max_belt_tier, ctx.for_item(item));
-    let ug_name = underground_for_belt(belt_name);
-    let reach = ug_max_reach(belt_name);
-    (total_rate, belt_name, ug_name, reach)
-}
-
 pub(crate) fn merge_output_rows(
     output_rows: &[usize],
     output_ys: &[i32],
@@ -58,7 +27,7 @@ pub(crate) fn merge_output_rows(
     row_tile_overrides: &mut FxHashSet<(i32, i32)>,
 ) -> (Vec<PlacedEntity>, i32, i32) {
     use crate::bus::balancer::underground_for_belt;
-    use crate::common::ug_max_reach;
+    use crate::common::{belt_entity_for_rate_stacked, ug_max_reach};
 
     debug_assert_eq!(
         output_rows.len(),
@@ -74,8 +43,20 @@ pub(crate) fn merge_output_rows(
     }
     let merger_seg_id = Some(format!("merger:{}", item));
 
-    let (total_rate, belt_name, _ug_name, _reach) =
-        merger_rate_and_tier(output_rows, item, row_spans, max_belt_tier, ctx);
+    let total_rate = output_rows.iter()
+        .map(|&ri| {
+            if ri >= row_spans.len() {
+                0.0
+            } else {
+                row_spans[ri].spec.outputs.iter()
+                    .filter(|o| o.item == item)
+                    .map(|o| o.rate * row_spans[ri].machine_count as f64)
+                    .sum::<f64>()
+            }
+        })
+        .sum::<f64>();
+    let belt_name = belt_entity_for_rate_stacked(total_rate * 2.0, max_belt_tier, ctx.for_item(item));
+    let reach = ug_max_reach(belt_name) as i32;
     let splitter_name = splitter_for_belt(belt_name);
 
     // Column position: east of the widest participating row, but never west
@@ -83,11 +64,48 @@ pub(crate) fn merge_output_rows(
     // successive per-item merges so two output items' splitter cascades and
     // south columns tile left-to-right instead of stamping the same tiles
     // (multi-item solid output support, Phase 2 of rfc-solver-net-flow).
-    let merge_x = (output_rows.iter()
+    let mut merge_x = (output_rows.iter()
         .map(|&ri| if ri < row_spans.len() { row_spans[ri].row_width } else { 0 })
         .max()
         .unwrap_or(0) + 1)
         .max(min_merge_x);
+
+    // #309 review finding: a row whose east extension starts blocked (its
+    // own `row_width` tile occupied by Step 4-6 residue — a dual-fate
+    // item's `ret` belt) needs the underground bridge's EXIT tile placed
+    // before the south column starts. The formula above doesn't know
+    // about that yet, so a tight `min_merge_x` (e.g. this is the only /
+    // first item processed) can put `col_x` exactly where the exit would
+    // land — the exit and the south column's own top tile would then
+    // double-place on the same coordinate. Mirror the main loop's
+    // blocked-run walk here (unbounded by `col_x`, which isn't known
+    // yet — bounded only by `reach`, same as the walk will end up doing
+    // once `col_x` is resolved, so they agree on where each run ends)
+    // and widen `merge_x` just enough that every row's exit — bridged or
+    // not — lands strictly before its own column. A no-op (same `merge_x`
+    // as before) for every row whose `row_width` tile isn't blocked,
+    // which is every layout except this one.
+    for (idx, &ri) in output_rows.iter().enumerate() {
+        if ri >= row_spans.len() {
+            continue;
+        }
+        let out_y = output_ys[idx];
+        let rw = row_spans[ri].row_width;
+        if !(blocked_columns.contains(&rw) || existing_tiles.contains(&(rw, out_y))) {
+            continue;
+        }
+        let mut run_end = rw;
+        while (blocked_columns.contains(&(run_end + 1))
+            || existing_tiles.contains(&(run_end + 1, out_y)))
+            && (run_end + 1) - rw < reach
+        {
+            run_end += 1;
+        }
+        // This row's column sits at `merge_x + (n - 1 - idx)`; need that
+        // to be `>= run_end + 2` (strictly past the exit at `run_end + 1`).
+        let needed = run_end + 2 - (n as i32 - 1 - idx as i32);
+        merge_x = merge_x.max(needed);
+    }
 
     for (idx, &ri) in output_rows.iter().enumerate() {
         if ri >= row_spans.len() {
@@ -110,7 +128,6 @@ pub(crate) fn merge_output_rows(
         // into) the foreign belt.
         let rw = row_spans[ri].row_width;
         let ug_name = underground_for_belt(belt_name);
-        let reach = ug_max_reach(belt_name) as i32;
         let mut x = rw;
         while x < col_x {
             if blocked_columns.contains(&x) || existing_tiles.contains(&(x, out_y)) {
@@ -572,6 +589,20 @@ mod tests {
             entities.iter().all(|e| (e.x, e.y) != (row_width, out_y)),
             "no entity may be placed on the pre-occupied tile: {entities:#?}"
         );
+        // Tile-uniqueness, not just the pre-occupied tile: a review finding
+        // on this exact fixture shape caught a SECOND, latent collision —
+        // when `col_x` (the south column) landed adjacent to the bridge's
+        // exit tile, both the exit and the south column's own top tile got
+        // placed at the same coordinate. The narrower "not on the blocked
+        // tile" check above can't see that; only a full uniqueness sweep
+        // over every emitted entity does.
+        let mut seen: FxHashSet<(i32, i32)> = FxHashSet::default();
+        let dups: Vec<(i32, i32)> = entities
+            .iter()
+            .map(|e| (e.x, e.y))
+            .filter(|&tile| !seen.insert(tile))
+            .collect();
+        assert!(dups.is_empty(), "duplicate tile(s) among emitted entities {dups:?}: {entities:#?}");
         assert!(
             row_tile_overrides.contains(&(row_width - 1, out_y)),
             "the row's own last belt tile must be reported for eviction: {row_tile_overrides:?}"
