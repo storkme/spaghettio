@@ -118,10 +118,16 @@ Design decisions worth knowing:
 - **Coverage is PR-lifetime, not per-SHA.** Deliberate: the plugin's gate
   declines to re-review a PR Claude already commented on, so per-SHA
   enforcement would permanently red every follow-up push. Per-SHA
-  freshness is owned by the `agent-reviewed` label flow
-  (`clear-agent-reviewed.yml`), not the guard. Consequence: a bot no-op on
-  push N of an already-reviewed PR does not fail the check — the guard
-  catches never-reviewed PRs, not staleness.
+  freshness is owned by the `agent-reviewed` label flow, not the guard:
+  `clear-agent-reviewed.yml` drops the label on new commits, and the
+  containerised watcher agent re-reviews PRs missing it
+  (`scripts/agent-reviewer.sh`; see
+  [`docs/agent-container.md`](agent-container.md#pr-review-queue)) — a
+  separate reviewer from this workflow's plugin. Caveat: the watcher is
+  an on-demand container, so while it isn't running, per-SHA staleness on
+  already-reviewed PRs is an accepted gap. Consequence either way: a bot
+  no-op on push N of an already-reviewed PR does not fail the check — the
+  guard catches never-reviewed PRs, not staleness.
 - **Fail-open on API errors.** Any transient GitHub API failure warns and
   passes; the guard reds only on *confirmed* zero coverage. A safety net
   must not be a new flake surface.
