@@ -743,9 +743,24 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
         for o in &m.outputs {
             for (ci, c) in specs.iter().enumerate() {
                 if pi_mega && ci != pi && c.inputs.iter().any(|i| i.item == o.item) {
-                    // Mega corridors always ride the bypass row (the
-                    // drain exits south) — ascent lane only.
+                    // Mega corridors ride the bypass row (the drain
+                    // exits south) — ascent lane always; fanned
+                    // outputs (>=2 consumers) ALSO drop each branch
+                    // through a lane in the next slot's strip, like
+                    // solid bypass descents (ad-hoc splitter-column
+                    // drops collided with consumer ascent lanes —
+                    // USP@2 head-on/loop cluster).
                     lane_demand[ci] += 1;
+                    let consumers_of_o = specs
+                        .iter()
+                        .enumerate()
+                        .filter(|(cj, cc)| {
+                            *cj != pi && cc.inputs.iter().any(|i| i.item == o.item)
+                        })
+                        .count();
+                    if consumers_of_o >= 2 && pi + 1 < n {
+                        lane_demand[pi + 1] += 1;
+                    }
                     continue;
                 }
                 if ci != pi && c.inputs.iter().any(|i| i.item == o.item) && ci != pi + 1 {
@@ -1154,20 +1169,45 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
                         let by_y = band_bottom + 1 + 3 * *row;
                         *row += 1;
                         // Drop from the branch origin to this branch's
-                        // own row. Branch origins on fan_y+1 curve
-                        // south from the splitter's south output; the
-                        // pass-through origin on fan_y corners south.
-                        router.corner_south(&mut entities, bx, by, &d_item, "express-transport-belt", &seg);
-                        router.vcol(&mut entities, bx, by + 1, by_y - 1, &d_item,
+                        // own row THROUGH an allocated lane in the next
+                        // slot's strip (sized via lane_demand above) —
+                        // ad-hoc drops at splitter columns collided
+                        // with consumer ascent lanes. Falls back to an
+                        // in-place corner drop when the run east is not
+                        // stampable (the solid path's in-gap idiom).
+                        let (drop_x, drop_top) = if pi + 1 < placed.len() {
+                            let down_demand = lane_demand[(pi + 1) % n];
+                            let cand = placed[pi + 1].vlane_base
+                                + *lane_next.get(&(pi + 1)).unwrap_or(&0)
+                                    * lane_step(down_demand);
+                            if cand > bx && router.is_row_stampable(by, bx, cand - 1) {
+                                let lane_down = alloc_lane(
+                                    &mut lane_next,
+                                    pi + 1,
+                                    placed[pi + 1].vlane_base,
+                                    lane_step(down_demand),
+                                );
+                                router.hrow(&mut entities, by, bx, lane_down - 1, &d_item,
+                                    "express-transport-belt", "express-underground-belt", &seg);
+                                (lane_down, by)
+                            } else {
+                                router.corner_south(&mut entities, bx, by, &d_item, "express-transport-belt", &seg);
+                                (bx, by + 1)
+                            }
+                        } else {
+                            router.corner_south(&mut entities, bx, by, &d_item, "express-transport-belt", &seg);
+                            (bx, by + 1)
+                        };
+                        router.vcol(&mut entities, drop_x, drop_top, by_y - 1, &d_item,
                             "express-transport-belt", "express-underground-belt", &seg);
-                        if lane_up < bx {
-                            router.corner_west(&mut entities, bx, by_y, &d_item, "express-transport-belt", &seg);
-                            router.hrow_west(&mut entities, by_y, bx - 1, lane_up + 1, &d_item,
+                        if lane_up < drop_x {
+                            router.corner_west(&mut entities, drop_x, by_y, &d_item, "express-transport-belt", &seg);
+                            router.hrow_west(&mut entities, by_y, drop_x - 1, lane_up + 1, &d_item,
                                 "express-transport-belt", "express-underground-belt", &seg);
                             router.corner_north(&mut entities, lane_up, by_y, &d_item, "express-transport-belt", &seg);
                         } else {
-                            router.corner_east(&mut entities, bx, by_y, &d_item, "express-transport-belt", &seg);
-                            router.hrow(&mut entities, by_y, bx + 1, lane_up - 1, &d_item,
+                            router.corner_east(&mut entities, drop_x, by_y, &d_item, "express-transport-belt", &seg);
+                            router.hrow(&mut entities, by_y, drop_x + 1, lane_up - 1, &d_item,
                                 "express-transport-belt", "express-underground-belt", &seg);
                             router.occ.insert((lane_up, by_y));
                             entities.push(PlacedEntity {

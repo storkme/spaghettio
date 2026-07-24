@@ -87,19 +87,40 @@ pub(crate) fn merge_output_rows(
             if blocked_columns.contains(&x) {
                 // Contiguous blocked run [x, run_end], clamped by UG reach
                 // (entrance at x-1, exit at run_end+1; gap ≤ reach).
+                // CLUSTER runs separated by a single free tile: hopping
+                // them independently would put run B's entrance exactly
+                // on run A's exit — the mutation below then destroys
+                // A's pair (two consecutive entrances; the game leaves
+                // the first unpaired). Same defect class as the ghost
+                // router's fluid-branch bridging (#412/USP forensics).
                 let mut run_end = x;
-                while run_end + 1 < col_x
-                    && blocked_columns.contains(&(run_end + 1))
-                    && (run_end + 1) - x < reach
-                {
-                    run_end += 1;
+                loop {
+                    let next_blocked = run_end + 1 < col_x
+                        && blocked_columns.contains(&(run_end + 1))
+                        && (run_end + 1) - x < reach;
+                    if next_blocked {
+                        run_end += 1;
+                        continue;
+                    }
+                    let gap_then_blocked = run_end + 2 < col_x
+                        && !blocked_columns.contains(&(run_end + 1))
+                        && blocked_columns.contains(&(run_end + 2))
+                        && (run_end + 2) - x < reach;
+                    if gap_then_blocked {
+                        run_end += 2;
+                        continue;
+                    }
+                    break;
                 }
                 debug_assert!(x > rw, "no room for UG entrance before blocked column");
-                // Replace the belt stamped at x-1 with a UG entrance.
+                // Replace the belt stamped at x-1 with a UG entrance —
+                // only ever a plain surface belt of this run (the
+                // clustering guarantees it; the guard refuses to
+                // corrupt an existing mouth).
                 if let Some(prev) = entities
                     .iter_mut()
                     .rev()
-                    .find(|e| e.x == x - 1 && e.y == out_y)
+                    .find(|e| e.x == x - 1 && e.y == out_y && e.name == belt_name)
                 {
                     prev.name = ug_name.to_string();
                     prev.io_type = Some("input".to_string());
