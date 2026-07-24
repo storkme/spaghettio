@@ -2241,6 +2241,16 @@ fn compute_lane_rates_impl(
         }
     }
 
+    // Pass 1: qualifying output inserters, keyed by (machine origin, item).
+    // A machine's production is SHARED by all its output inserters — the
+    // sizing ladder adds a second hand when one can't keep up (common at
+    // low capacity research / high quality). Injecting the full per-machine
+    // rate once per inserter double-counts such machines: #404's "bridged
+    // row" false positives were really a 2-inserter machine seeding 2×6.5/s
+    // onto a 13/s row (the bridge model itself was and is correct). Collect
+    // first, then inject rate / n_inserters.
+    let mut qualifying: Vec<((i32, i32), &str, ((i32, i32), &str), f64)> = Vec::new();
+    let mut inserters_per_output: FxHashMap<((i32, i32), &str), u32> = FxHashMap::default();
     let mut lane_injections: FxHashMap<(i32, i32), [f64; 2]> = FxHashMap::default();
     for ins in &layout.entities {
         if !is_inserter(&ins.name) {
@@ -2297,11 +2307,25 @@ fn compute_lane_rates_impl(
         }
         let belt_d = belt_dir_map[&drop_pos];
         let lane = inserter_target_lane(ins.x, ins.y, drop_pos.0, drop_pos.1, belt_d);
+        let key = (mpos, carried_item);
+        *inserters_per_output.entry(key).or_insert(0) += 1;
+        qualifying.push((drop_pos, lane, key, rate));
+    }
+    // Pass 2: each machine's per-item output rate is split evenly across
+    // its qualifying output inserters (identical hands drain a shared
+    // buffer — the even split is the steady state the planner sizes for).
+    // ASSUMPTION GUARD (#414 review): relies on the sizer emitting ONE
+    // uniform plan per side and output templates confining a machine's
+    // hands to one belt run; if the placer ever mixes hand tiers per
+    // (machine, item) or fans hands across separate runs, revisit —
+    // even-split would then under-state the faster hand's lane.
+    for (drop_pos, lane, key, rate) in qualifying {
+        let n = inserters_per_output[&key] as f64;
         let entry = lane_injections.entry(drop_pos).or_insert([0.0, 0.0]);
         if lane == LANE_LEFT {
-            entry[0] += rate;
+            entry[0] += rate / n;
         } else {
-            entry[1] += rate;
+            entry[1] += rate / n;
         }
     }
 
