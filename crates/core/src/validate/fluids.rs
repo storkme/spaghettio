@@ -363,6 +363,40 @@ fn recipe_has_fluid_input(recipe_name: &str) -> bool {
 // check_fluid_port_connectivity
 // ---------------------------------------------------------------------------
 
+/// Fluid SUPPLY tiles: pipes sitting on a fluid boundary-input record
+/// (external supply by definition) or on a machine's fluid OUTPUT port
+/// (internal production). Shared by the connectivity check (as bus
+/// members) and the split-network check (a component containing one is
+/// independently supplied — multi-copy composed layouts legitimately
+/// run one network per copy; only UNSUPPLIED fragments are severed
+/// trunks). RFC-052 Phase-B increment.
+fn fluid_supply_tiles(
+    layout_result: &LayoutResult,
+    pipe_tiles: &FxHashSet<(i32, i32)>,
+) -> FxHashSet<(i32, i32)> {
+    let mut supply: FxHashSet<(i32, i32)> = FxHashSet::default();
+    for r in layout_result.boundary_inputs.iter().filter(|r| r.is_fluid) {
+        if pipe_tiles.contains(&(r.x, r.y)) {
+            supply.insert((r.x, r.y));
+        }
+    }
+    for e in &layout_result.entities {
+        if !is_machine_entity(&e.name) {
+            continue;
+        }
+        let Some(recipe) = e.recipe.as_deref() else { continue };
+        if !recipe_has_fluid_output(recipe) {
+            continue;
+        }
+        for &(rx, ry, pt) in fluid_ports(e.name.as_str(), e.mirror, e.direction) {
+            if pt == "output" && pipe_tiles.contains(&(e.x + rx, e.y + ry)) {
+                supply.insert((e.x + rx, e.y + ry));
+            }
+        }
+    }
+    supply
+}
+
 /// Check that every machine's fluid ports have connected pipes.
 ///
 /// For each machine with fluid ports, verifies:
@@ -412,6 +446,25 @@ pub fn check_fluid_port_connectivity(
         }
     } else {
         FxHashSet::default()
+    };
+    // The west-of-leftmost-machine heuristic above assumes a single
+    // west-edge bus, which is false for multi-copy composed layouts
+    // (RFC-052: a K=2 chain's second copy has its feed heads and
+    // internal producers east of the first copy's machines, and every
+    // fluid machine in it flunked connectivity despite fully-connected
+    // pipes). Two purely-additive supply sources widen the set:
+    // (1) pipes ON a fluid boundary-input record — external supply by
+    // definition; (2) pipes ON a machine's fluid OUTPUT port — an
+    // input network containing a connected producer is supplied
+    // internally (petroleum has no boundary record anywhere; the old
+    // check only passed such machines when a trunk happened to poke
+    // west of the leftmost machine).
+    let bus_pipes: FxHashSet<(i32, i32)> = if layout_style == LayoutStyle::Bus {
+        let mut b = bus_pipes;
+        b.extend(fluid_supply_tiles(layout_result, &pipe_tiles));
+        b
+    } else {
+        bus_pipes
     };
 
     for e in &layout_result.entities {
@@ -604,14 +657,29 @@ pub fn check_fluid_network_connectivity(
         }
 
         if components.len() > 1 {
-            // Sort components by their representative tile for stable output.
-            let mut reps: Vec<(i32, i32)> = components
+            // Independently SUPPLIED components are legitimate — a K>1
+            // composed chain runs one network per copy (RFC-052). Only
+            // unsupplied fragments are severed trunks. When every
+            // component is unsupplied (no records, no producers — the
+            // synthetic-fixture case), keep the historical all-but-one
+            // reporting.
+            let supply = fluid_supply_tiles(layout_result, &tile_set);
+            let unsupplied: Vec<&FxHashSet<(i32, i32)>> = components
+                .iter()
+                .filter(|c| c.is_disjoint(&supply))
+                .collect();
+            let flagged: Vec<&FxHashSet<(i32, i32)>> = if unsupplied.len() == components.len() {
+                components.iter().skip(1).collect()
+            } else {
+                unsupplied
+            };
+            let mut reps: Vec<(i32, i32)> = flagged
                 .iter()
                 .map(|c| c.iter().copied().min().unwrap_or((0, 0)))
                 .collect();
             reps.sort_unstable();
             let n_components = components.len();
-            for (x, y) in reps.iter().skip(1) {
+            for (x, y) in reps.iter() {
                 issues.push(ValidationIssue::with_pos(
                     Severity::Error,
                     "fluid-network",

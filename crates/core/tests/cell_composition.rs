@@ -823,6 +823,58 @@ fn mega_chain_ac_from_raw_zero_issues() {
     }
 }
 
+/// PERMANENT GATE (RFC-052 kill-2): chemical-science-pack@5 from raw —
+/// a config whose BUS layout hard-fails validation (junction-solver
+/// crossing) — composes at 0 errors. The fluid subgraph (refinery +
+/// plastic + sulfur, two exports) collapses into a mega block whose
+/// packed feeds route via the PTG-tail joint planner; the chain
+/// quantizes K=2 (cable 60/s), exercising per-copy mega replication.
+/// Tolerated warning categories only: the #383-class inserter
+/// attribution and the multi-block pole-network note.
+#[test]
+fn mega_chain_chem5_resolves_bus_failure() {
+    use spaghettio_core::bus::cells::chain::compose_chain;
+    use spaghettio_core::validate::{self, LayoutStyle, Severity};
+    let inputs: FxHashSet<String> =
+        ["iron-ore", "copper-ore", "crude-oil", "water", "coal",
+         "iron-plate", "copper-plate", "steel-plate"]
+            .iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "chemical-science-pack", 5.0, &inputs, &MachinePalette::default(),
+        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+    ).unwrap();
+    let l = compose_chain(&sr).expect("chem5 from raw must compose");
+    let issues = validate::validate(&l, Some(&sr), LayoutStyle::Bus).expect("must validate");
+    let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
+    assert!(errors.is_empty(), "chem5 errors: {errors:?}");
+    assert!(
+        issues.iter().all(|i| matches!(i.category.as_str(), "inserter-item-throughput" | "power")),
+        "only adjudicated categories tolerated: {issues:?}"
+    );
+}
+
+/// Artifact producer for the kill-2 sim run.
+#[test]
+#[ignore = "artifact producer"]
+fn export_mega_chem_for_sim() {
+    use spaghettio_core::bus::cells::chain::compose_chain;
+    let inputs: FxHashSet<String> =
+        ["iron-ore", "copper-ore", "crude-oil", "water", "coal",
+         "iron-plate", "copper-plate", "steel-plate"]
+            .iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "chemical-science-pack", 5.0, &inputs, &MachinePalette::default(),
+        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+    ).unwrap();
+    let l = compose_chain(&sr).unwrap();
+    let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(&l, &sr, "mega-chain-chem5raw");
+    std::fs::create_dir_all("target/tmp").unwrap();
+    std::fs::write("target/tmp/mega-chain-chem5raw.bp", &bp).unwrap();
+    std::fs::write("target/tmp/mega-chain-chem5raw.manifest.json",
+        serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
+    println!("wrote mega-chain-chem5raw.bp ({} in / {} out)", l.boundary_inputs.len(), l.boundary_outputs.len());
+}
+
 /// Artifact producer for the Phase-B flagship sim run.
 #[test]
 #[ignore = "artifact producer"]

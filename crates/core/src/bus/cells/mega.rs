@@ -146,6 +146,11 @@ fn adapt_with_spacing(l: &LayoutResult, spacing: i32) -> Result<LayoutResult, St
     // records check against each other.
     let mut fluid_at: rustc_hash::FxHashMap<(i32, i32), String> = rustc_hash::FxHashMap::default();
     let mut plain_pipe_at: FxHashSet<(i32, i32)> = FxHashSet::default();
+    // Pipe-to-ground tiles are SIDE-SAFE: a mouth connects only along
+    // its axis, so foreign-fluid adjacency against one is legal — the
+    // original trunk heads are exactly such mouths (missing this made
+    // the planner refuse approaches beside them).
+    let mut ptg_at: FxHashSet<(i32, i32)> = FxHashSet::default();
     let mut solid_at: FxHashSet<(i32, i32)> = FxHashSet::default();
     for e in &entities {
         let is_pipe = e.name == "pipe" || e.name == "pipe-to-ground";
@@ -154,6 +159,8 @@ fn adapt_with_spacing(l: &LayoutResult, spacing: i32) -> Result<LayoutResult, St
                 fluid_at.insert((e.x, e.y), f.to_string());
                 if e.name == "pipe" {
                     plain_pipe_at.insert((e.x, e.y));
+                } else {
+                    ptg_at.insert((e.x, e.y));
                 }
             }
         } else {
@@ -174,33 +181,50 @@ fn adapt_with_spacing(l: &LayoutResult, spacing: i32) -> Result<LayoutResult, St
         .filter(|(_, p)| p.is_fluid)
         .map(|(i, _)| i)
         .collect();
-    let mut fluid_tiles: rustc_hash::FxHashMap<usize, Vec<(i32, i32)>> =
+    let mut fluid_paths: rustc_hash::FxHashMap<usize, FluidPath> =
         rustc_hash::FxHashMap::default();
     if !fluid_idx.is_empty() {
-        const DXS: [i32; 5] = [0, 1, -1, 2, -2];
+        // Candidate space per fluid record: 5 dx shifts × {plain, PTG
+        // tail}. Plain variants come FIRST so every previously-solvable
+        // block keeps its exact historical geometry (bit-identity).
+        const CANDS: [(i32, bool); 10] = [
+            (0, false), (1, false), (-1, false), (2, false), (-2, false),
+            (0, true), (1, true), (-1, true), (2, true), (-2, true),
+        ];
         let nf = fluid_idx.len();
         let mut combo = vec![0usize; nf];
         let mut found = false;
         'search: loop {
-            // Evaluate this dx-vector sequentially.
+            // Evaluate this candidate-vector sequentially.
             let mut trial_fluid = fluid_at.clone();
             let mut trial_plain = plain_pipe_at.clone();
-            let mut trial_tiles: rustc_hash::FxHashMap<usize, Vec<(i32, i32)>> =
+            let mut trial_ptg = ptg_at.clone();
+            let mut trial_paths: rustc_hash::FxHashMap<usize, FluidPath> =
                 rustc_hash::FxHashMap::default();
             let mut ok = true;
             for (k, &ri) in fluid_idx.iter().enumerate() {
                 let r = &records[ri];
                 let p = &plans[ri];
+                let (dx, ptg) = CANDS[combo[k]];
                 match try_fluid_path(
-                    &r.item, p.head_x, p.orig_x, p.lane_row, DXS[combo[k]], margin,
-                    &solid_at, &trial_fluid, &trial_plain,
+                    &r.item, p.head_x, p.orig_x, p.lane_row, dx, ptg, margin,
+                    &solid_at, &trial_fluid, &trial_plain, &trial_ptg,
                 ) {
-                    Some(tiles) => {
-                        for &(x, y) in &tiles {
+                    Some(path) => {
+                        for &(x, y) in &path.pipes {
                             trial_fluid.insert((x, y), r.item.clone());
                             trial_plain.insert((x, y));
                         }
-                        trial_tiles.insert(ri, tiles);
+                        if let Some((top, bot)) = path.ptg_pair {
+                            // Mouths + reserved span occupy tiles but are
+                            // NOT plain (no side joins for later records)
+                            // and ARE side-safe.
+                            for y in top.1..=bot.1 {
+                                trial_fluid.insert((top.0, y), r.item.clone());
+                                trial_ptg.insert((top.0, y));
+                            }
+                        }
+                        trial_paths.insert(ri, path);
                     }
                     None => {
                         ok = false;
@@ -209,7 +233,7 @@ fn adapt_with_spacing(l: &LayoutResult, spacing: i32) -> Result<LayoutResult, St
                 }
             }
             if ok {
-                fluid_tiles = trial_tiles;
+                fluid_paths = trial_paths;
                 found = true;
                 break 'search;
             }
@@ -221,7 +245,7 @@ fn adapt_with_spacing(l: &LayoutResult, spacing: i32) -> Result<LayoutResult, St
                 }
                 k -= 1;
                 combo[k] += 1;
-                if combo[k] < DXS.len() {
+                if combo[k] < CANDS.len() {
                     break;
                 }
                 combo[k] = 0;
@@ -240,10 +264,10 @@ fn adapt_with_spacing(l: &LayoutResult, spacing: i32) -> Result<LayoutResult, St
         let seg = format!("megafeed:{}", r.item);
         if p.is_fluid {
             // Path planned by the joint search above.
-            let tiles = fluid_tiles
+            let path = fluid_paths
                 .remove(&ri)
                 .ok_or_else(|| format!("mega: fluid path for {} missing from joint plan", r.item))?;
-            for &(x, y) in &tiles {
+            for &(x, y) in &path.pipes {
                 fluid_at.insert((x, y), r.item.clone());
                 plain_pipe_at.insert((x, y));
                 entities.push(PlacedEntity {
@@ -255,6 +279,31 @@ fn adapt_with_spacing(l: &LayoutResult, spacing: i32) -> Result<LayoutResult, St
                     segment_id: Some(seg.clone()),
                     ..Default::default()
                 });
+            }
+            if let Some((top, bot)) = path.ptg_pair {
+                // Vertical PTG pair, engine convention (#364: direction
+                // = the underground-run side; the exporter flips to the
+                // game's surface-opening form). Flow enters the top
+                // mouth from the corner pipe above and exits
+                // mouth-to-mouth into the trunk head below — the same
+                // South-in/North-out pattern the fluid row templates
+                // stamp.
+                for ((x, y), dir, io) in [
+                    (top, EntityDirection::South, "input"),
+                    (bot, EntityDirection::North, "output"),
+                ] {
+                    fluid_at.insert((x, y), r.item.clone());
+                    entities.push(PlacedEntity {
+                        name: "pipe-to-ground".into(),
+                        x,
+                        y,
+                        direction: dir,
+                        io_type: Some(io.into()),
+                        carries: Some(r.item.clone()),
+                        segment_id: Some(seg.clone()),
+                        ..Default::default()
+                    });
+                }
             }
         } else {
             // Belts: south column to the lane row; if re-pitched, a
@@ -355,6 +404,16 @@ fn adapt_with_spacing(l: &LayoutResult, spacing: i32) -> Result<LayoutResult, St
 /// directly below (its axis opening; a PTG side never connects, #400's
 /// lesson applied recursively). Valid iff every tile is free and no
 /// orthogonal neighbor carries a DIFFERENT fluid.
+/// A planned fluid feed: surface pipe tiles plus an optional vertical
+/// PTG pair on the tail (mouths only; the underground span stays
+/// entity-free but is reserved in the planner).
+pub struct FluidPath {
+    pub pipes: Vec<(i32, i32)>,
+    /// (top mouth, bottom mouth) of a downward PTG pair, when the tail
+    /// is rendered underground.
+    pub ptg_pair: Option<((i32, i32), (i32, i32))>,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn try_fluid_path(
     item: &str,
@@ -362,22 +421,24 @@ fn try_fluid_path(
     orig_x: i32,
     lane_row: i32,
     dx: i32,
+    ptg_tail: bool,
     margin: i32,
     solid_at: &FxHashSet<(i32, i32)>,
     fluid_at: &rustc_hash::FxHashMap<(i32, i32), String>,
     plain_pipe_at: &FxHashSet<(i32, i32)>,
-) -> Option<Vec<(i32, i32)>> {
+    ptg_at: &FxHashSet<(i32, i32)>,
+) -> Option<FluidPath> {
     let neighbors = |x: i32, y: i32| [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)];
     let tail_x = orig_x + dx;
     for tail_depth in 0..=8i32 {
-        let mut tiles: Vec<(i32, i32)> = Vec::new();
+        let mut pipes: Vec<(i32, i32)> = Vec::new();
         for y in 0..=lane_row {
-            tiles.push((head_x, y));
+            pipes.push((head_x, y));
         }
         let (lo, hi) = (head_x.min(tail_x), head_x.max(tail_x));
         for x in lo..=hi {
             if x != head_x {
-                tiles.push((x, lane_row));
+                pipes.push((x, lane_row));
             }
         }
         let deepest = if dx != 0 || tail_depth > 0 {
@@ -385,22 +446,70 @@ fn try_fluid_path(
         } else {
             margin - 1
         };
-        for y in (lane_row + 1)..=deepest {
-            tiles.push((tail_x, y));
+        // Tail rows lane_row+1..=deepest: plain pipes, or a vertical
+        // PTG pair (RFC-052 PTG-hop increment). A PTG mouth has NO
+        // side connections — sitting beside a foreign fluid column is
+        // legal, which is exactly what unlocks blocks whose trunk
+        // heads pack adjacent (the chem-pack class). Pair needs >= 2
+        // tail rows; flow enters the top mouth from the corner pipe
+        // above and exits mouth-to-mouth into the trunk head below.
+        let tail_rows: Vec<i32> = ((lane_row + 1)..=deepest).collect();
+        let mut ptg_pair: Option<((i32, i32), (i32, i32))> = None;
+        if ptg_tail {
+            if tail_rows.len() < 2 {
+                return None;
+            }
+            // Underground reach: mouths at the extremes; span must be
+            // within any tier's 10-tile reach.
+            if tail_rows.len() as i32 > 10 {
+                return None;
+            }
+            ptg_pair = Some((
+                (tail_x, tail_rows[0]),
+                (tail_x, *tail_rows.last().unwrap()),
+            ));
+        } else {
+            for &y in &tail_rows {
+                pipes.push((tail_x, y));
+            }
         }
-        let tile_set: FxHashSet<(i32, i32)> = tiles.iter().copied().collect();
+        let mouth_tiles: Vec<(i32, i32)> = ptg_pair
+            .map(|(a, b)| vec![a, b])
+            .unwrap_or_default();
+        // All occupied tiles (surface pipes + mouths + reserved
+        // underground span).
+        let mut all_tiles: Vec<(i32, i32)> = pipes.clone();
+        if ptg_pair.is_some() {
+            for &y in &tail_rows {
+                all_tiles.push((tail_x, y));
+            }
+        }
+        let tile_set: FxHashSet<(i32, i32)> = all_tiles.iter().copied().collect();
         let mut valid = true;
-        'check: for &(x, y) in &tiles {
+        'check: for &(x, y) in &all_tiles {
             if solid_at.contains(&(x, y)) || fluid_at.contains_key(&(x, y)) {
                 valid = false;
                 break 'check;
+            }
+            let is_surface_pipe = pipes.contains(&(x, y));
+            if !is_surface_pipe && !mouth_tiles.contains(&(x, y)) {
+                // Reserved underground span — no adjacency semantics.
+                continue;
+            }
+            if mouth_tiles.contains(&(x, y)) {
+                // Mouths connect axis-wise only; side adjacency to a
+                // foreign fluid is legal.
+                continue;
             }
             for n in neighbors(x, y) {
                 if tile_set.contains(&n) {
                     continue;
                 }
                 if let Some(f) = fluid_at.get(&n) {
-                    if f != item {
+                    // Foreign PLAIN pipes merge on side contact; foreign
+                    // PTG tiles (mouths/spans, incl. the original trunk
+                    // heads) are side-safe.
+                    if f != item && !ptg_at.contains(&n) {
                         valid = false;
                         break 'check;
                     }
@@ -421,10 +530,16 @@ fn try_fluid_path(
             if f != item {
                 return false;
             }
+            // A PTG-tail terminus is the bottom MOUTH: it joins only
+            // along its axis (directly below). Plain termini join a
+            // plain pipe on any side or a PTG directly below.
+            if ptg_pair.is_some() {
+                return *n == (terminus.0, terminus.1 + 1);
+            }
             plain_pipe_at.contains(n) || *n == (terminus.0, terminus.1 + 1)
         });
         if joins {
-            return Some(tiles);
+            return Some(FluidPath { pipes, ptg_pair });
         }
     }
     None
