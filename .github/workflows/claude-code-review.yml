@@ -3,28 +3,14 @@ name: Claude Code Review
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened]
-    # Optional: Only run on specific file changes
-    # paths:
-    #   - "src/**/*.ts"
-    #   - "src/**/*.tsx"
-    #   - "src/**/*.js"
-    #   - "src/**/*.jsx"
 
 jobs:
   claude-review:
-    # Optional: Filter by PR author
-    # if: |
-    #   github.event.pull_request.user.login == 'external-contributor' ||
-    #   github.event.pull_request.user.login == 'new-developer' ||
-    #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
-
     runs-on: ubuntu-latest
     # `pull-requests`/`issues` must be WRITE: the review agent posts its
-    # findings as a PR review + inline/summary comments. The stock
-    # template ships read-only, which silently discarded every review
-    # from #305 through #324 — the job green-checked after a single
-    # permission denial (~20s, "No buffered inline comments") and no
-    # review was ever posted. Diagnosed 2026-07-21 on PR #324.
+    # findings as a PR review + inline/summary comments. The stock template
+    # ships read-only, which silently discarded every review (failure
+    # class 1 in docs/review-bot.md).
     permissions:
       contents: read
       pull-requests: write
@@ -37,6 +23,14 @@ jobs:
         with:
           fetch-depth: 1
 
+      # Three load-bearing pieces below, each individually sufficient to
+      # silently disable the bot when lost (classes 1-4 in
+      # docs/review-bot.md — the installer overwrite wiped all of them at
+      # once): write perms above, the `--comment` flag in the prompt, and
+      # the harness allowlist in claude_args. The prompt's harness note
+      # addresses class 5 (shape-sensitive denial starvation): denials of
+      # improvised command shapes (env prefixes, $(...), cd-chains, gh api)
+      # made runs abandon mid-review without posting.
       - name: Run Claude Code Review
         id: claude-review
         uses: anthropics/claude-code-action@v1
@@ -44,20 +38,105 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
-          # `--comment` is LOAD-BEARING: the code-review plugin's own
-          # contract is "if --comment was NOT provided, stop here. Do not
-          # post any GitHub comments." Without it the review runs, prints
-          # to the action log, and posts nothing — which (together with
-          # the read-only perms fixed in #327) is why no PR ever received
-          # a bot review from #305 to #328.
-          prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }} --comment'
-          # Third load-bearing piece (with write perms #327 and --comment
-          # #329): the harness-level tool allowlist. Without it the agent
-          # runs the review but every posting/diff tool call is denied
-          # (11 denials on the #330 canary run). Mirrors the plugin's
-          # frontmatter allowed-tools + the action's own examples.
+          prompt: >-
+            /code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }} --comment
+            — Harness note for you and EVERY subagent you launch: tool
+            permissions here match command SHAPES, not intent. Run gh
+            commands as plain single invocations — no env-var prefixes
+            (`GH_PAGER= gh ...`), no command substitution `$(...)`, no
+            `cd ... &&` chaining, no `gh api` — only plain `gh pr
+            view/diff/comment`, `gh issue view/list`, `gh search`. A
+            permission denial means your command shape missed the
+            allowlist, NOT that tools are broken: re-issue the same
+            command in plain allowed form and continue the review. Never
+            abandon the review because of denials; if you have findings
+            or a no-issues verdict, exhaust plain `gh pr comment` before
+            giving up on posting.
           claude_args: |
             --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*)"
-          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
-          # or https://code.claude.com/docs/en/cli-reference for available options
 
+      # Full session transcript (includes every permission denial) — the
+      # difference between forensics and guesswork when a run misbehaves.
+      - name: Upload execution transcript
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: claude-execution-output
+          path: ${{ runner.temp }}/claude-execution-output.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      # Historically a green check only meant "the session exited cleanly"
+      # — five separate failure classes ended with nothing posted and a
+      # green check (docs/review-bot.md). This step makes silence loud: a
+      # non-trivial PR with zero review activity fails the check. Carve-outs
+      # mirror the plugin's designed skips (drafts, workflow-file PRs via
+      # the action's anti-hijack self-skip, tiny diffs, already-reviewed).
+      - name: Guard — silent no-op must not green-check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -uo pipefail
+          # Fail-open on API errors: the guard is a safety net, and its own
+          # flakiness must never block a merge. It fails ONLY on confirmed
+          # zero-coverage abandonment.
+          if ! draft=$(gh pr view "$PR" -R "$REPO" --json isDraft --jq .isDraft); then
+            echo "::warning::guard: gh pr view failed (transient?) — failing open."; exit 0
+          fi
+          if [ "$draft" = "true" ]; then
+            echo "Draft PR — plugin gate skips these by design; guard not applicable."
+            exit 0
+          fi
+          # Deliberately broader than the action's actual self-skip (which
+          # keys on the executing workflow file): over-carving fails safe,
+          # because workflow-file PRs get session-side review by repo rule.
+          if ! wf_files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate --jq '[.[] | select(.filename | startswith(".github/workflows/"))] | length' | awk '{s+=$1} END {print s+0}'); then
+            echo "::warning::guard: files query failed — failing open."; exit 0
+          fi
+          if [ "$wf_files" -gt 0 ]; then
+            echo "PR touches workflow files — action self-skips these (anti-hijack); guard not applicable."
+            exit 0
+          fi
+          changed=$(gh pr view "$PR" -R "$REPO" --json additions,deletions --jq '.additions + .deletions') || changed=""
+          case "$changed" in ''|*[!0-9]*)
+            echo "::warning::guard: could not determine diff size — failing open."; exit 0;;
+          esac
+          if [ "$changed" -lt 20 ]; then
+            echo "Diff is $changed changed lines (<20) — triviality-gate territory; guard not applicable."
+            exit 0
+          fi
+          # Coverage = any PR review (bot or session-side), any inline review
+          # comment, or a bot summary comment. Session-side reviews count:
+          # the guard guarantees the PR was reviewed, not who reviewed it.
+          # Coverage is PR-lifetime, not per-SHA — deliberate: the plugin's
+          # own gate declines to re-review a PR Claude already commented on,
+          # so per-SHA enforcement would permanently red every follow-up
+          # push. Per-SHA freshness is the agent-reviewed label's job
+          # (clear-agent-reviewed.yml). See docs/review-bot.md.
+          if ! reviews=$(gh api "repos/$REPO/pulls/$PR/reviews" --paginate --jq 'length' | awk '{s+=$1} END {print s+0}'); then
+            echo "::warning::guard: reviews query failed — failing open."; exit 0
+          fi
+          if ! inline=$(gh api "repos/$REPO/pulls/$PR/comments" --paginate --jq 'length' | awk '{s+=$1} END {print s+0}'); then
+            echo "::warning::guard: inline-comments query failed — failing open."; exit 0
+          fi
+          if ! bot_summaries=$(gh api "repos/$REPO/issues/$PR/comments" --paginate --jq '[.[] | select(.user.login == "claude[bot]" or .user.login == "claude")] | length' | awk '{s+=$1} END {print s+0}'); then
+            echo "::warning::guard: issue-comments query failed — failing open."; exit 0
+          fi
+          echo "coverage: reviews=$reviews inline=$inline bot_summaries=$bot_summaries"
+          if [ "$reviews" -gt 0 ] || [ "$inline" -gt 0 ] || [ "$bot_summaries" -gt 0 ]; then
+            echo "Review coverage exists — OK."
+            exit 0
+          fi
+          # Zero coverage. Distinguish a conscious plugin gate-skip (cheap,
+          # few turns: ~2-6 observed) from mid-review abandonment (the
+          # class-5 signature: 16-20 turns, then nothing). Threshold 8 sits
+          # between the observed clusters; see docs/review-bot.md.
+          turns=$(grep -o '"num_turns"[[:space:]]*:[[:space:]]*[0-9]*' "${RUNNER_TEMP}/claude-execution-output.json" 2>/dev/null | tail -1 | grep -o '[0-9]*$' || true)
+          if [ -n "$turns" ] && [ "$turns" -le 8 ]; then
+            echo "No coverage, but the transcript shows a cheap conscious run (num_turns=$turns <= 8) — plugin gate-skip signature, not abandonment. Passing."
+            exit 0
+          fi
+          echo "::error title=Silent review no-op::claude-review exited green but PR #$PR ($changed changed lines) has zero reviews, zero inline comments, and no bot summary (transcript turns: ${turns:-unknown}). This is the silent no-op failure class — see docs/review-bot.md. Escape hatch if the skip was legitimate: re-run this job (runs are stochastic), or post a review and re-run the check."
+          exit 1
