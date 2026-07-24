@@ -128,7 +128,7 @@ fn main() {
             let mut v: Vec<_> = g.into_iter().collect();
             v.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
             println!("{want_p} -> {want_c}: geometry distribution");
-            println!("{:>7}  {:<22} {:>5} {:>9}  {}", "count", "inserter", "gap", "lateral", "axis");
+            println!("{:>7}  {:<22} {:>5} {:>9}  axis", "count", "inserter", "gap", "lateral");
             for ((ins, gap, lat, vert), n) in v.iter().take(25) {
                 println!(
                     "{n:>7}  {ins:<22} {gap:>5} {lat:>9}  {}",
