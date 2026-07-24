@@ -204,8 +204,8 @@ struct Placed {
     ext_inputs: Vec<String>,
 }
 
-fn port_abs(p: &Port, cell_x: i32) -> (i32, i32) {
-    (cell_x + p.x, CELL_Y + p.y)
+fn port_abs(p: &Port, cell_x: i32, cell_y: i32) -> (i32, i32) {
+    (cell_x + p.x, cell_y + p.y)
 }
 
 /// Crossing-aware corridor stamper. Horizontal runs hop under
@@ -638,13 +638,25 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
                 .cloned()
                 .collect();
             // Synthetic super-spec: one "machine" producing the
-            // subgraph's terminal solid at the full chain rate; no
-            // chain-side inputs (v1: external-only, self-fed block).
+            // subgraph's terminal solid at the full chain rate.
+            // Chain-fed inputs (increment 2) are DECLARED so the
+            // generic consumer/corridor machinery routes their
+            // producers here; true externals stay off the spec (they
+            // arrive via the block's own boundary heads).
             v.push(crate::models::MachineSpec {
                 entity: "mega-cell".into(),
                 recipe: format!("{MEGA_PREFIX}{}", plan.target),
                 count: 1.0,
-                inputs: Vec::new(),
+                inputs: plan
+                    .chain_fed
+                    .iter()
+                    .map(|(item, rate)| crate::models::ItemFlow {
+                        item: item.clone(),
+                        rate: *rate,
+                        is_fluid: false,
+                        module_id: 0,
+                    })
+                    .collect(),
                 outputs: plan
                     .outputs
                     .iter()
@@ -667,15 +679,19 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
         .map(|(i, r)| (r.clone(), i))
         .collect();
     if let Some(plan) = &mega_plan {
-        // The super-spec inherits its DEEPEST member's dependency
-        // position, so it places before its consumer like the member
-        // rows would have.
-        let best = plan
-            .members
-            .iter()
-            .filter_map(|r| pos.get(r).copied())
-            .max();
-        if let Some(i) = best {
+        // Source-only subgraph (no chain-fed inputs): inherit the
+        // DEEPEST member's dependency position, so it places before
+        // its consumer like the member rows would have. Chain-fed
+        // subgraph (increment 2): inherit the MOST-DOWNSTREAM
+        // member's position — the member that consumes the chain-fed
+        // items governs, so the mega places AFTER its producers (for
+        // the PU class that member is the chain target itself).
+        let picked = if plan.chain_fed.is_empty() {
+            plan.members.iter().filter_map(|r| pos.get(r).copied()).max()
+        } else {
+            plan.members.iter().filter_map(|r| pos.get(r).copied()).min()
+        };
+        if let Some(i) = picked {
             pos.insert(format!("{MEGA_PREFIX}{}", plan.target), i);
         }
     }
@@ -737,10 +753,45 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
                     let plan = mega_plan.as_ref().expect("mega spec implies plan");
                     let (_msr, block) = super::mega::compose_mega_block(sr, plan, scale)?;
                     mega_block_cache = Some(block.clone());
+                    // Chain-fed inputs (increment 2): each adapter
+                    // west-edge entry becomes an inbound PORT — an
+                    // east-facing belt at (0, lane_row), so the
+                    // corridor's eastbound approach is a straight
+                    // merge (both lanes). v1: one entry per chain-fed
+                    // item (multi-entry re-pitches would need a fan-in
+                    // the corridor can't provide).
+                    let mut ports: Vec<Port> = Vec::new();
+                    for (item, _) in &plan.chain_fed {
+                        let heads: Vec<_> = block
+                            .boundary_inputs
+                            .iter()
+                            .filter(|r| &r.item == item)
+                            .collect();
+                        match heads.as_slice() {
+                            [h] => ports.push(Port {
+                                edge: "W",
+                                x: h.x,
+                                y: h.y,
+                                item: item.clone(),
+                                inbound: true,
+                            }),
+                            [] => {
+                                return Err(format!(
+                                    "mega: chain-fed {item} has no block feed head"
+                                ))
+                            }
+                            _ => {
+                                return Err(format!(
+                                    "mega: chain-fed {item} has {} feed heads (v1 routes one corridor)",
+                                    heads.len()
+                                ))
+                            }
+                        }
+                    }
                     cell_cache.push(Cell {
                         width: block.width,
                         height: block.height,
-                        ports: Vec::new(),
+                        ports,
                         entities: block.entities,
                     });
                 } else {
@@ -794,6 +845,13 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
                 // records at the placed offset; each drain head anchors
                 // one outgoing corridor.
                 for r in &block.boundary_inputs {
+                    // Chain-fed heads are supplied by chain corridors,
+                    // not the outside world — they are ports, not
+                    // chain boundary records (increment 2).
+                    let cf = &mega_plan.as_ref().expect("mega spec implies plan").chain_fed;
+                    if cf.iter().any(|(i, _)| i == &r.item) {
+                        continue;
+                    }
                     b_in.push(BoundaryRecord { x: r.x + x, ..r.clone() });
                 }
                 if block.boundary_outputs.is_empty() {
@@ -845,7 +903,7 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
         for item in &p.ext_inputs {
             let mut found = false;
             for port in p.cell.ports.iter().filter(|q| q.inbound && q.item == *item) {
-                let (tx, ty) = port_abs(port, p.x);
+                let (tx, ty) = port_abs(port, p.x, p.y_off);
                 targets.push((item.clone(), tx, ty));
                 found = true;
             }
@@ -967,10 +1025,18 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
                         && c.cell.ports.iter().any(|q| q.inbound && q.item == d_item)
                 });
                 let Some((ci, c)) = consumer else {
+                    // Consumer-less export: extend the drain to the
+                    // chain's drain row like the solid final-product
+                    // path — a b_out mid-layout leaves a dead-end belt
+                    // (the exemption is bounds-based) and puts the sim
+                    // rig at a nonuniform depth (#363).
+                    let seg = format!("out:{}", p.seg);
+                    router.vcol(&mut entities, dx0, dy0 + 1, drain_row, &d_item,
+                        "transport-belt", "underground-belt", &seg);
                     b_out.push(BoundaryRecord {
                         item: d_item.clone(),
                         x: dx0,
-                        y: dy0,
+                        y: drain_row,
                         direction: EntityDirection::South,
                         is_fluid: false,
                         entity: "transport-belt".into(),
@@ -983,7 +1049,7 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
                     .iter()
                     .find(|q| q.inbound && q.item == d_item)
                     .expect("consumer port checked in eligibility");
-                let (tx, ty) = port_abs(port, c.x);
+                let (tx, ty) = port_abs(port, c.x, c.y_off);
                 let seg = format!("corr:{}:{}", p.seg, c.seg);
                 let up_demand = lane_demand[ci % n];
                 let lane_up = alloc_lane(&mut lane_next, ci, c.vlane_base, lane_step(up_demand));
@@ -1031,7 +1097,7 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
         if consumers.is_empty() {
             // Final product: corner south past the band, drain record.
             let o1 = outs.first().ok_or_else(|| format!("cells: {} has no out port", p.recipe))?;
-            let (ox, oy) = port_abs(o1, p.x);
+            let (ox, oy) = port_abs(o1, p.x, p.y_off);
             let drain_x = ox + 2;
             let seg = format!("out:{}", p.seg);
             router.hrow(&mut entities, oy, ox + 1, drain_x - 1, &out_item,
@@ -1062,13 +1128,13 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
         // topmost is the accumulator row.
         let mut outs_sorted = outs.clone();
         outs_sorted.sort_by_key(|q| q.y);
-        let (acc_x0, acc_y) = port_abs(outs_sorted[0], p.x);
+        let (acc_x0, acc_y) = port_abs(outs_sorted[0], p.x, p.y_off);
         let base_sx = p.x + p.cell.width + 2;
         router.hrow(&mut entities, acc_y, acc_x0 + 1, base_sx - 1, &out_item,
             "express-transport-belt", "express-underground-belt", &format!("cc:a:{}", p.seg));
         let mut run_x = base_sx;
         for (k, o) in outs_sorted.iter().enumerate().skip(1) {
-            let (ox, oy) = port_abs(o, p.x);
+            let (ox, oy) = port_abs(o, p.x, p.y_off);
             assert!(oy > acc_y + 1, "cells: merge assumes below-approach ({oy} vs {acc_y})");
             let seg = format!("cc:b{k}:{}", p.seg);
             router.hrow(&mut entities, oy, ox + 1, run_x - 2, &out_item,
@@ -1131,7 +1197,7 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
             let port = c.cell.ports.iter()
                 .find(|q| q.inbound && q.item == out_item)
                 .expect("consumer port checked in eligibility");
-            let (tx, ty) = port_abs(port, c.x);
+            let (tx, ty) = port_abs(port, c.x, c.y_off);
             let (bx, by) = branch_origins[bi];
             let seg = format!("corr:{}:{}", p.seg, c.seg);
             if *ci == pi + 1 {
