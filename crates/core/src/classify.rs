@@ -99,6 +99,19 @@ fn is_power_gen(name: &str) -> bool {
             | "heating-tower"
     )
 }
+/// 2.0 logistic-chest family (renamed from 1.x's `logistic-chest-*`). The
+/// target corpus is 2.0-era Factorio Prints, so only the modern names
+/// occur; legacy names are deliberately not matched.
+fn is_logistic_chest(name: &str) -> bool {
+    matches!(
+        name,
+        "active-provider-chest"
+            | "passive-provider-chest"
+            | "requester-chest"
+            | "buffer-chest"
+            | "storage-chest"
+    )
+}
 fn is_pole_entity(name: &str) -> bool {
     common::pole_wire_reach(name, QualityTier::Normal).is_some()
 }
@@ -216,7 +229,7 @@ pub fn classify(layout: &LayoutResult, analysis: &BlueprintAnalysis) -> Blueprin
         train_stops: ents.iter().filter(|e| e.name == "train-stop").count(),
         combinators: ents.iter().filter(|e| is_combinator(e.name.as_str())).count(),
         roboports: ents.iter().filter(|e| e.name == "roboport").count(),
-        logistic_chests: ents.iter().filter(|e| e.name.starts_with("logistic-chest")).count(),
+        logistic_chests: ents.iter().filter(|e| is_logistic_chest(e.name.as_str())).count(),
         power_gen: ents.iter().filter(|e| is_power_gen(e.name.as_str())).count(),
         distinct_recipes: analysis.recipe_count,
         fluid_recipes: 0,
@@ -283,7 +296,7 @@ pub fn classify(layout: &LayoutResult, analysis: &BlueprintAnalysis) -> Blueprin
             continue;
         }
         let (dx, dy) = common::dir_to_vec(e.direction);
-        let reach = if e.name == "long-handed-inserter" { 2 } else { 1 };
+        let reach = common::inserter_reach(e.name.as_str());
         let drop = occ.get(&(e.x + dx * reach, e.y + dy * reach));
         let pick = occ.get(&(e.x - dx * reach, e.y - dy * reach));
         if let (Some(&(d, _)), Some(&(p, _))) = (drop, pick) {
@@ -326,7 +339,17 @@ pub fn classify(layout: &LayoutResult, analysis: &BlueprintAnalysis) -> Blueprin
         if let Some(&fwd) = belt_at.get(&(tx + dx, ty + dy)) {
             if common::is_surface_belt(fwd.name.as_str()) {
                 let (fdx, fdy) = common::dir_to_vec(fwd.direction);
-                if (fdx, fdy) != (dx, dy) {
+                // A direction change at the forward tile is only a sideload
+                // when the belt there sits on a THROUGH line — i.e. it has a
+                // same-direction upstream continuation behind it. Without
+                // that gate a plain L-corner (turned belt, no parent line)
+                // matches the same pattern and inflates the count.
+                if (fdx, fdy) != (dx, dy)
+                    && belt_at.get(&(tx + dx - fdx, ty + dy - fdy)).is_some_and(|b| {
+                        common::is_surface_belt(b.name.as_str())
+                            && common::dir_to_vec(b.direction) == (fdx, fdy)
+                    })
+                {
                     f.sideloads += 1;
                 }
             }
@@ -373,7 +396,7 @@ pub fn classify(layout: &LayoutResult, analysis: &BlueprintAnalysis) -> Blueprin
             continue;
         }
         let (dx, dy) = common::dir_to_vec(e.direction);
-        let reach = if e.name == "long-handed-inserter" { 2 } else { 1 };
+        let reach = common::inserter_reach(e.name.as_str());
         let net = net_of.get(&(e.x + dx * reach, e.y + dy * reach));
         let pick = occ.get(&(e.x - dx * reach, e.y - dy * reach));
         if let (Some(&net), Some(&(p, _))) = (net, pick) {
@@ -410,23 +433,41 @@ pub fn classify(layout: &LayoutResult, analysis: &BlueprintAnalysis) -> Blueprin
     }
     f.pipe_networks = if f.pipes > 0 { pipe_dsu.groups().len() } else { 0 };
 
-    // ---- power: machine coverage + pole networks ----
+    // ---- power: coverage + pole networks (validator-aligned) ----
+    // Sources and subjects mirror `validate::power::check_power_coverage`:
+    // subjects are everything that draws grid power (`needs_electricity` —
+    // electric machines AND inserters, excluding the burner biochamber);
+    // sources are poles with a real supply area (medium/small/substation —
+    // the big pole is wire-only, `supply_area_distance` 0). Extended beyond
+    // the validator's medium/substation-only set with the small pole's real
+    // 5×5 area, since community blueprints use all tiers. Quality bonuses
+    // (+1 supply radius / +2 wire reach per level) come from each pole's
+    // parsed `quality`, same as the validator.
     let poles: Vec<&PlacedEntity> = ents.iter().filter(|e| is_pole_entity(e.name.as_str())).collect();
-    let machines: Vec<&PlacedEntity> = ents.iter().filter(|e| is_machine(e)).collect();
-    if !machines.is_empty() {
-        let covered = machines
+    let consumers: Vec<&PlacedEntity> = ents
+        .iter()
+        .filter(|e| common::needs_electricity(e.name.as_str()))
+        .collect();
+    if !consumers.is_empty() {
+        let covered = consumers
             .iter()
             .filter(|m| {
                 let (mx, my) = center(m);
                 poles.iter().any(|p| {
+                    let sd = common::supply_area_distance(
+                        p.name.as_str(),
+                        p.quality.unwrap_or_default(),
+                    );
+                    if sd <= 0.0 {
+                        return false; // wire-only pole (big) supplies nothing
+                    }
                     let (px, py) = center(p);
-                    let sd = common::supply_area_distance(p.name.as_str(), QualityTier::Normal);
                     (mx - px).abs() <= sd && (my - py).abs() <= sd
                 })
             })
             .count();
         f.machines_powered_fraction =
-            Some((covered as f64 / machines.len() as f64 * 100.0).round() / 100.0);
+            Some((covered as f64 / consumers.len() as f64 * 100.0).round() / 100.0);
     }
     // pole networks via wire reach (index-keyed DSU over pole centers)
     {
@@ -448,8 +489,8 @@ pub fn classify(layout: &LayoutResult, analysis: &BlueprintAnalysis) -> Blueprin
             for j in i + 1..poles.len() {
                 let (ax, ay) = center(poles[i]);
                 let (bx, by) = center(poles[j]);
-                let ra = common::pole_wire_reach(poles[i].name.as_str(), QualityTier::Normal).unwrap_or(0.0);
-                let rb = common::pole_wire_reach(poles[j].name.as_str(), QualityTier::Normal).unwrap_or(0.0);
+                let ra = common::pole_wire_reach(poles[i].name.as_str(), poles[i].quality.unwrap_or_default()).unwrap_or(0.0);
+                let rb = common::pole_wire_reach(poles[j].name.as_str(), poles[j].quality.unwrap_or_default()).unwrap_or(0.0);
                 let dist = ((ax - bx).powi(2) + (ay - by).powi(2)).sqrt();
                 if dist <= ra.min(rb) {
                     let (ri, rj) = (find(&mut idx_parent, i), find(&mut idx_parent, j));
@@ -462,11 +503,12 @@ pub fn classify(layout: &LayoutResult, analysis: &BlueprintAnalysis) -> Blueprin
         let roots: FxHashSet<usize> = (0..poles.len()).map(|i| find(&mut idx_parent, i)).collect();
         f.pole_networks = roots.len();
     }
-    f.self_powered = !machines.is_empty()
+    f.self_powered = !consumers.is_empty()
         && !poles.is_empty()
         && f.machines_powered_fraction.unwrap_or(0.0) >= 0.95;
 
     // ---- periodicity: repeated same-name rows/columns at a fixed pitch ----
+    let machines: Vec<&PlacedEntity> = ents.iter().filter(|e| is_machine(e)).collect();
     {
         let mut best_pitch = 0;
         let mut best_score = 0.0f64;
@@ -604,7 +646,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_insertion_reversed_inserter_is_not_counted() {
+    fn direct_insertion_reversed_inserter_still_counted() {
         // inserter facing WEST: drops at (2,1) into the cable machine,
         // picks from the EC machine at (4,1) — still machine->machine,
         // still DI (the pair direction is wrong for the recipe but the
@@ -649,13 +691,82 @@ mod tests {
 
     #[test]
     fn sideload_detected() {
-        // north-flowing belt at (1,1) feeding the side of an east belt at (1,0)
+        // east through-line (0,0)->(1,0)->(2,0) with a north belt at (1,1)
+        // feeding the side of the join tile: the parent line continues
+        // upstream of the junction, so this is a true sideload.
         let f = classify_only(vec![
+            ent("transport-belt", 0, 0, EntityDirection::East),
             ent("transport-belt", 1, 0, EntityDirection::East),
             ent("transport-belt", 2, 0, EntityDirection::East),
             ent("transport-belt", 1, 1, EntityDirection::North),
         ]);
         assert_eq!(f.sideloads, 1);
+    }
+
+    #[test]
+    fn l_corner_is_not_a_sideload() {
+        // north belt at (1,1) turning east at (1,0) with no parent line
+        // behind the turn: normal turn-flow, not a sideload.
+        let f = classify_only(vec![
+            ent("transport-belt", 1, 0, EntityDirection::East),
+            ent("transport-belt", 2, 0, EntityDirection::East),
+            ent("transport-belt", 1, 1, EntityDirection::North),
+        ]);
+        assert_eq!(f.sideloads, 0);
+    }
+
+    #[test]
+    fn logistic_chests_use_2_0_names() {
+        let f = classify_only(vec![
+            ent("requester-chest", 0, 0, EntityDirection::North),
+            ent("storage-chest", 1, 0, EntityDirection::North),
+            ent("active-provider-chest", 2, 0, EntityDirection::North),
+            // legacy 1.x spelling — outside the 2.0-only corpus, not counted
+            ent("logistic-chest-requester", 3, 0, EntityDirection::North),
+        ]);
+        assert_eq!(f.logistic_chests, 3);
+    }
+
+    #[test]
+    fn small_pole_supplies_its_own_smaller_area() {
+        // machine center (1.5,1.5); pole at (4,1) center (4.5,1.5) is dx=3.0
+        // away: inside a medium pole's 3.5 but outside the small pole's 2.5.
+        let small = classify_only(vec![
+            machine("assembling-machine-3", 0, 0, "iron-gear-wheel"),
+            ent("small-electric-pole", 4, 1, EntityDirection::North),
+        ]);
+        assert_eq!(small.machines_powered_fraction, Some(0.0));
+        let medium = classify_only(vec![
+            machine("assembling-machine-3", 0, 0, "iron-gear-wheel"),
+            ent("medium-electric-pole", 4, 1, EntityDirection::North),
+        ]);
+        assert_eq!(medium.machines_powered_fraction, Some(1.0));
+    }
+
+    #[test]
+    fn big_pole_is_wire_only_and_supplies_nothing() {
+        let f = classify_only(vec![
+            machine("assembling-machine-3", 0, 0, "iron-gear-wheel"),
+            ent("big-electric-pole", 3, 1, EntityDirection::North),
+        ]);
+        assert_eq!(f.machines_powered_fraction, Some(0.0));
+        assert!(!f.self_powered);
+    }
+
+    #[test]
+    fn inserters_are_coverage_subjects_biochambers_are_not() {
+        // validator subject set: inserters draw grid power, so an uncovered
+        // inserter halves the fraction (pole at (4,1) covers the machine but
+        // not the inserter at (8,1), dx=4.0 > 3.5).
+        let f = classify_only(vec![
+            machine("assembling-machine-3", 0, 0, "iron-gear-wheel"),
+            ent("medium-electric-pole", 4, 1, EntityDirection::North),
+            ent("fast-inserter", 8, 1, EntityDirection::North),
+        ]);
+        assert_eq!(f.machines_powered_fraction, Some(0.5));
+        // burner biochamber draws no grid power: no consumers at all -> None
+        let bio = classify_only(vec![machine("biochamber", 0, 0, "nutrients")]);
+        assert_eq!(bio.machines_powered_fraction, None);
     }
 
     #[test]

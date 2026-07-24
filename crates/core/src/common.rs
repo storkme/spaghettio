@@ -231,9 +231,19 @@ pub fn entity_size(entity: &str) -> (u32, u32) {
 /// 2-tile margin, so spacing logic may never assume wire reach exceeds
 /// supply diameter for substations. Callers pass the entity's own tier
 /// (validator) or the planning tier (`place_poles`).
+///
+/// The small pole (2.5, 5×5) and big pole are explicit arms for
+/// corpus-analysis callers that meet them in community blueprints (the
+/// validator and `place_poles` only ever pass medium/substation). The big
+/// pole is **wire-only**: supply 0 at every tier — quality is NOT added,
+/// since a wire-only pole has no supply area to scale (the +1/level rule
+/// was kill-1-verified only for medium/substation). Any other name falls
+/// back to the medium value.
 pub fn supply_area_distance(entity: &str, quality: QualityTier) -> f64 {
     let base = match entity {
         "substation" => 9.0,
+        "small-electric-pole" => 2.5,
+        "big-electric-pole" => return 0.0,
         _ => 3.5,
     };
     base + f64::from(quality.level())
@@ -993,10 +1003,17 @@ mod tests {
         assert_eq!(supply_area_distance("unknown-pole", QualityTier::Normal), 3.5);
         assert_eq!(supply_area_distance("medium-electric-pole", QualityTier::Legendary), 8.5);
         assert_eq!(supply_area_distance("substation", QualityTier::Legendary), 14.0);
+        // small pole has a real (smaller) supply area; the big pole is
+        // wire-only — 0 at every tier, quality does not grant one.
+        assert_eq!(supply_area_distance("small-electric-pole", QualityTier::Normal), 2.5);
+        assert_eq!(supply_area_distance("big-electric-pole", QualityTier::Normal), 0.0);
+        assert_eq!(supply_area_distance("big-electric-pole", QualityTier::Legendary), 0.0);
         for tier in QualityTier::ALL {
             let lvl = f64::from(tier.level());
             assert_eq!(supply_area_distance("substation", tier), 9.0 + lvl, "{tier:?}");
             assert_eq!(supply_area_distance("medium-electric-pole", tier), 3.5 + lvl, "{tier:?}");
+            assert_eq!(supply_area_distance("small-electric-pole", tier), 2.5 + lvl, "{tier:?}");
+            assert_eq!(supply_area_distance("big-electric-pole", tier), 0.0, "{tier:?}");
         }
     }
 
