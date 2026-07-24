@@ -223,6 +223,22 @@ follow-ups.
 
 ## Decision log
 
+- *2026-07-24 — registry policy widened (user-approved, #383): entries
+  may now record a WARN verdict when the deficit is BOTH priced by a
+  generation-time validator warning on the exact geometry AND
+  sim-measured at the warned magnitude. Rationale: the registry's job
+  is catching drift; an unregistered cell catches nothing, and the
+  "honest-or-at-plan" criterion is the same bar #381's merge gate used.
+  `RegistryEntry.known_residual` carries the attribution;
+  `verification_note` renders these "SIM-VERIFIED AS WARNED", never "at
+  plan", and now prefers the entry matching the layout's declared world
+  (multi-world same-hash entries exist precisely because capacity never
+  reaches composed cells until #415). First admissions: chain-ec15-d1
+  (13.80/15, -8.0%), chain-ec15-d7 (14.20/15, -5.3%), chain-ec30-d1
+  (27.70/30, -7.7%) — all attributed to the EC-row yellow output-belt
+  ceiling (row-output-lane-budget) plus, at L1, the #415 input bound.
+  They re-register at plan when the EC-row output template work lands.*
+
 - *2026-07-23 — Declaration package (post-#390 honest world; #391
   world-axis hardening landed with it). Method: `inserter_capacity`
   declarations change zero geometry pre-#381, only the world the
