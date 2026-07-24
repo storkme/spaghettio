@@ -686,6 +686,21 @@ pub fn stack_inserter_belt_hand_at(level: u8, stacking: u8) -> f64 {
 /// [`belt_drop_rate`]'s doc comment for the full calibration table).
 pub const LANE_UTILIZATION: f64 = 0.85;
 
+/// Row-level realizable OUTPUT factors, sim-MEASURED (2026-07-23 parity
+/// world; two adversarial-review rounds — see
+/// `validate::inserters`' row-output-lane-budget check, which consumed
+/// these as local constants first). Shared here so the PLACER's
+/// row-split thresholds and the validator's budget check can never
+/// disagree (#383: the split used theoretical belt capacity, packing
+/// 6-machine EC rows whose bridged output measures 13.0/s against a
+/// 15.0/s plan — a deficit no inserter research can close).
+/// - Unbridged single-lane row: 0.95 × lane rate (measured 7.40/7.5).
+/// - Midpoint-bridged both-lane row: 13.0/7.5 ≈ 1.733 × lane rate
+///   (13.0 is the measured floor; the band up to the 2-lane nominal is
+///   unproven).
+pub const ROW_LANE_FACTOR_UNBRIDGED: f64 = 0.95;
+pub const ROW_LANE_FACTOR_BRIDGED: f64 = 13.0 / 7.5;
+
 /// Sim-measured swing-term multiplier for non-bulk (regular / long-handed /
 /// fast) belt-drops at inserter-capacity research levels 0–7 (#385). Matches
 /// `inserter_hand`'s NON_BULK schedule `[1,1,2,2,2,2,2,4]` at every level

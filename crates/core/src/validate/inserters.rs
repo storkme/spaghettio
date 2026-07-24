@@ -827,12 +827,10 @@ pub fn check_row_output_lane_budget(
             //   to the 2-lane nominal is unproven either way (the
             //   probe above 13 generation-errors before it can run).
             // Both constants are floors at or under their measured cell.
-            const ROW_LANE_FACTOR_UNBRIDGED: f64 = 0.95;
-            const ROW_LANE_FACTOR_BRIDGED: f64 = 13.0 / 7.5; // 1.7333 measured floor
             let lane_factor = if lanes_loaded >= 2 {
-                ROW_LANE_FACTOR_BRIDGED
+                crate::common::ROW_LANE_FACTOR_BRIDGED
             } else {
-                ROW_LANE_FACTOR_UNBRIDGED
+                crate::common::ROW_LANE_FACTOR_UNBRIDGED
             };
             let realizable =
                 crate::common::lane_capacity_stacked(tier, layout.stacking) * lane_factor;

@@ -184,7 +184,11 @@ pub(crate) fn max_machines_for_belt(
 
     for out in &spec.outputs {
         if !out.is_fluid && out.rate > 0.0 {
-            max_m = max_m.min((out_lane_cap / out.rate).floor());
+            // MEASURED single-lane budget, not the theoretical lane
+            // rate — the sizing and the row-output-lane-budget check
+            // share these constants (#383).
+            max_m = max_m
+                .min((crate::common::ROW_LANE_FACTOR_UNBRIDGED * out_lane_cap / out.rate).floor());
         }
     }
     for inp in &spec.inputs {
@@ -240,7 +244,13 @@ pub(crate) fn max_machines_for_belt_both_lanes(
 
     for out in &spec.outputs {
         if !out.is_fluid && out.rate > 0.0 {
-            max_m = max_m.min((out_lane_cap / out.rate).floor() * 2.0);
+            // MEASURED bridged both-lane budget (13.0/7.5 ≈ 1.733×),
+            // not the theoretical ×2 — the theoretical cap packed
+            // 6-machine EC@15 rows whose bridged output delivers
+            // 13.0/s in-game, a deficit no research closes (#383).
+            // Shared constant with the row-output-lane-budget check.
+            max_m = max_m
+                .min((crate::common::ROW_LANE_FACTOR_BRIDGED * out_lane_cap / out.rate).floor());
         }
     }
     for inp in &spec.inputs {
@@ -1648,8 +1658,22 @@ pub fn place_rows(
         let is_hs_dual = matches!(row_layout, RowLayout::HorizontalStack)
             && matches!(kind, RowKind::DualInput);
         let out_stack = ctx.for_item(first_solid_output_item);
+        // The output-belt tier pick shares the MEASURED loadable
+        // budgets with the split math below (#383): requesting the
+        // raw rate picked tiers whose theoretical capacity fits
+        // EXACTLY (cable@30 on red = 10 machines at ×2 nominal) but
+        // whose measured budget does not (red bridged loads 26/s) —
+        // the resulting split then lands on unprovisioned multi-
+        // producer trunk shapes. Inflating the request by the
+        // measured factor picks the tier the row can actually load;
+        // the user's belt cap still bounds the pick (capped configs
+        // split instead — the cap is a hard constraint).
         let max_per_row = if single_lane {
-            let ob = belt_entity_for_rate_stacked(output_rate * 2.0, max_belt_tier, out_stack);
+            let ob = belt_entity_for_rate_stacked(
+                output_rate * 2.0 / crate::common::ROW_LANE_FACTOR_UNBRIDGED,
+                max_belt_tier,
+                out_stack,
+            );
             max_machines_for_belt(spec, ob, max_belt_tier)
         } else if is_hs_dual {
             // HS feeds input₀ via K stacked trunks, so only output and
@@ -1657,7 +1681,11 @@ pub fn place_rows(
             let ob = belt_entity_for_rate_stacked(output_rate, max_belt_tier, out_stack);
             max_machines_for_belt_horizontal_stack(spec, ob, max_belt_tier)
         } else {
-            let ob = belt_entity_for_rate_stacked(output_rate, max_belt_tier, out_stack);
+            let ob = belt_entity_for_rate_stacked(
+                output_rate * 2.0 / crate::common::ROW_LANE_FACTOR_BRIDGED,
+                max_belt_tier,
+                out_stack,
+            );
             max_machines_for_belt_both_lanes(spec, ob, max_belt_tier, out_stack)
         };
 
@@ -1929,11 +1957,13 @@ mod tests {
 
     #[test]
     fn max_machines_both_lanes_doubles_capacity() {
-        // per_lane = floor(7.5 / 1.0) = 7, both lanes = 14
+        // MEASURED bridged budget (#383): floor(1.7333 × 7.5 / 1.0) = 13
+        // (was floor(7.5)×2 = 14 under the theoretical model — the
+        // 14th machine's output physically never fit).
         let spec = iron_plate_spec();
         assert_eq!(
             max_machines_for_belt_both_lanes(&spec, "transport-belt", None, 1),
-            14
+            13
         );
     }
 
@@ -1958,27 +1988,27 @@ mod tests {
 
     #[test]
     fn test_max_machines_red_belt() {
-        // rate=1.0/machine, lane_cap=15.0 → floor(15.0/1.0)=15 machines
+        // MEASURED single-lane budget (#383): floor(0.95 × 15.0) = 14.
         let spec = iron_plate_spec();
-        assert_eq!(max_machines_for_belt(&spec, "fast-transport-belt", None), 15);
+        assert_eq!(max_machines_for_belt(&spec, "fast-transport-belt", None), 14);
     }
 
     #[test]
     fn test_max_machines_blue_belt() {
-        // rate=1.0/machine, lane_cap=22.5 → floor(22.5/1.0)=22 machines
+        // MEASURED single-lane budget (#383): floor(0.95 × 22.5) = 21.
         let spec = iron_plate_spec();
-        assert_eq!(max_machines_for_belt(&spec, "express-transport-belt", None), 22);
+        assert_eq!(max_machines_for_belt(&spec, "express-transport-belt", None), 21);
     }
 
     #[test]
     fn test_max_machines_both_lanes_red_belt() {
-        // Output (both lanes): floor(15.0 / 1.0) * 2 = 30
-        // Input (both lanes, max_belt_tier=None → blue cap 22.5): floor(22.5 / 1.0) * 2 = 44
-        // Output is the bottleneck → 30
+        // Output (MEASURED bridged, #383): floor(13.0/7.5 × 15.0) = 26
+        // Input (both lanes, max_belt_tier=None → blue cap 22.5): floor(22.5)×2 = 44
+        // Output is the bottleneck → 25
         let spec = iron_plate_spec();
         assert_eq!(
             max_machines_for_belt_both_lanes(&spec, "fast-transport-belt", None, 1),
-            30
+            26
         );
     }
 
