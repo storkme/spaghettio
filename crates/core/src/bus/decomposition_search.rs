@@ -308,6 +308,7 @@ impl DecompositionCandidate for ModuleSizeSplit {
             inserter_capacity: opts.inserter_capacity,
             cell_composition: opts.cell_composition,
             splitter_tap_spacers: opts.splitter_tap_spacers,
+            ..Default::default()
         };
         run_layout_with_retry(&transformed, &inner_opts)
     }
@@ -1117,6 +1118,7 @@ mod tests {
             external_outputs: vec![],
             surplus_outputs: vec![],
             dependency_order: vec![],
+            ..Default::default()
         }
     }
 

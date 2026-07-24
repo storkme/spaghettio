@@ -3505,6 +3505,7 @@ mod tests {
             }],
             surplus_outputs: vec![],
             dependency_order: vec!["iron-gear-wheel".to_string()],
+            ..Default::default()
         }
     }
 
@@ -4285,6 +4286,7 @@ mod tests {
             }],
             surplus_outputs: vec![],
             dependency_order: vec!["iron-gear-wheel".to_string()],
+            ..Default::default()
         };
 
         let entities = vec![
@@ -4412,6 +4414,7 @@ mod tests {
             }],
             surplus_outputs: vec![],
             dependency_order: vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()],
+            ..Default::default()
         };
 
         // Layout:
@@ -4572,6 +4575,7 @@ mod tests {
             }],
             surplus_outputs: vec![],
             dependency_order: vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()],
+            ..Default::default()
         };
 
         let entities = vec![
@@ -4712,6 +4716,7 @@ mod tests {
             external_outputs: vec![],
             surplus_outputs: vec![],
             dependency_order: vec![],
+            ..Default::default()
         };
         let rates = compute_lane_rates(&layout, Some(&solver));
         let r0 = rates.get(&(0, 1)).copied().unwrap_or([0.0, 0.0]);
@@ -4787,6 +4792,7 @@ mod tests {
             external_outputs: vec![],
             surplus_outputs: vec![],
             dependency_order: vec![],
+            ..Default::default()
         };
         let rates = compute_lane_rates(&layout, Some(&solver));
         let loop_total: f64 = rates.get(&(0, 1)).copied().unwrap_or([0.0, 0.0]).iter().sum();
@@ -4850,6 +4856,7 @@ mod tests {
             external_outputs: vec![],
             surplus_outputs: vec![],
             dependency_order: vec![],
+            ..Default::default()
         };
         let rates = compute_lane_rates(&layout, Some(&solver));
         let feed_total: f64 = rates.get(&(0, 1)).copied().unwrap_or([0.0, 0.0]).iter().sum();
@@ -4969,6 +4976,7 @@ mod tests {
             external_outputs: vec![],
             surplus_outputs: vec![],
             dependency_order: vec!["iron-plate-recycle".to_string()],
+            ..Default::default()
         };
         let rates = compute_lane_rates(&layout, Some(&solver));
         let ug_out = rates.get(&(0, 4)).copied().unwrap_or([0.0, 0.0]);
@@ -5075,6 +5083,7 @@ mod tests {
             external_outputs: vec![],
             surplus_outputs: vec![],
             dependency_order: vec![],
+            ..Default::default()
         };
         (layout, solver)
     }

@@ -106,6 +106,7 @@ pub fn validate_template_lanes_at(
         external_outputs: Vec::new(),
         surplus_outputs: vec![],
         dependency_order: Vec::new(),
+        ..Default::default()
     };
 
     let mut issues = Vec::new();
@@ -142,6 +143,7 @@ pub fn compute_template_lane_rates(
         external_outputs: Vec::new(),
         surplus_outputs: vec![],
         dependency_order: Vec::new(),
+        ..Default::default()
     };
     compute_lane_rates(&layout, Some(&solver))
 }
@@ -400,6 +402,7 @@ fn run_partial_scenario(
         external_outputs: Vec::new(),
         surplus_outputs: vec![],
         dependency_order: Vec::new(),
+        ..Default::default()
     };
 
     let lane_rates = compute_lane_rates(&layout, Some(&solver));

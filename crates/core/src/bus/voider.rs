@@ -229,6 +229,7 @@ mod tests {
                 module_id: 0,
             }],
             dependency_order: vec![],
+            ..Default::default()
         };
         let out = synthesize_voiders(&sr);
         assert!(out.surplus_outputs.iter().all(|f| f.item != "uranium-238"));
@@ -259,6 +260,7 @@ mod tests {
                 module_id: 0,
             }],
             dependency_order: vec![],
+            ..Default::default()
         };
         let out = synthesize_voiders(&sr);
         assert_eq!(out.surplus_outputs.len(), 1);
@@ -279,6 +281,7 @@ mod tests {
                 module_id: 0,
             }],
             dependency_order: vec![],
+            ..Default::default()
         };
         let out = synthesize_voiders(&sr);
         assert_eq!(out.surplus_outputs.len(), 1);

@@ -843,14 +843,7 @@ fn solve_attempt(
     // the layout's ceil, or flip a 15/s belt-tier threshold. Real
     // fractional plans (e.g. 1.06 refineries) are far outside the snap
     // window.
-    let snap = |v: f64| -> f64 {
-        let r = v.round();
-        if (v - r).abs() < 1e-9 * r.abs().max(1.0) {
-            r
-        } else {
-            v
-        }
-    };
+    let snap = snap_value;
     let x_of = |c: usize| snap(solution[x_vars[c]]);
     let s_of = |i: usize| snap(s_vars[i].map(|v| solution[v]).unwrap_or(0.0));
     let o_of = |i: usize| snap(o_vars[i].map(|v| solution[v]).unwrap_or(0.0));
@@ -1098,6 +1091,24 @@ fn solve_attempt(
         .collect();
 
     let target_is_fluid = items.is_fluid[target_idx];
+
+    // Direct-insertion coupling detection (RFC decomposition-search Phase 3).
+    // For each item with exactly one active producer and one active consumer,
+    // no external supply, no surplus, and matching supply↔demand rates, emit a
+    // coupling. Fluids are excluded (inserter DI only; pipe adjacency is a
+    // separate concern). Voider columns are excluded as consumers (they
+    // destroy items, they don't use them to make something). Self-loop items
+    // within a single recipe are not producer↔consumer pairs.
+    let di_couplings = detect_di_couplings(
+        &columns,
+        &active,
+        &producers_of,
+        &items,
+        &|i| s_of(i),
+        &|i| o_of(i),
+        &|c| x_of(c),
+    );
+
     Ok(SolverResult {
         machines,
         external_inputs,
@@ -1109,7 +1120,133 @@ fn solve_attempt(
         }],
         surplus_outputs,
         dependency_order,
+        di_couplings,
     })
+}
+
+/// Snap a fractional value to the nearest integer when within tolerance
+/// (1e-9 of the rounded magnitude). Used to clean LP solutions so e.g.
+/// 2.000000001 reads as 2.0.
+fn snap_value(v: f64) -> f64 {
+    let r = v.round();
+    if (v - r).abs() < 1e-9 * r.abs().max(1.0) {
+        r
+    } else {
+        v
+    }
+}
+
+/// Detect direct-insertion couplings: producer↔consumer pairs where the
+/// producer's entire output of an item flows to exactly one consumer with
+/// no branching, no surplus, and no external supply.
+///
+/// Eligibility criteria (see `docs/rfc-decomposition-search.md` Phase 3):
+/// - exactly one active producer column for the item (net > 0)
+/// - exactly one active consumer column for the item (net < 0)
+/// - the consumer is not a voider (voiders destroy, they don't produce)
+/// - no external supply (`s_of(i)` ≈ 0)
+/// - no surplus (`o_of(i)` ≈ 0)
+/// - the item is not a fluid (inserter DI only; pipe DI is separate)
+/// - supply rate ≈ demand rate (producer's output matches consumer's input)
+///
+/// Emits one `DICoupling` per qualifying (producer, consumer, item) triple.
+/// The placer MAY use these; presence does not force DI layout.
+fn detect_di_couplings(
+    columns: &[Column],
+    active: &[usize],
+    producers_of: &FxHashMap<usize, Vec<usize>>,
+    items: &Items,
+    s_of: &dyn Fn(usize) -> f64,
+    o_of: &dyn Fn(usize) -> f64,
+    x_of: &dyn Fn(usize) -> f64,
+) -> Vec<crate::models::DICoupling> {
+    // Build consumers_of: item → active columns with net < 0 for that item.
+    let mut consumers_of: FxHashMap<usize, Vec<usize>> = FxHashMap::default();
+    for &c in active {
+        for &(i, coeff) in &columns[c].net {
+            if coeff < 0.0 {
+                consumers_of.entry(i).or_default().push(c);
+            }
+        }
+    }
+
+    let mut couplings = Vec::new();
+    for (&i, producers) in producers_of {
+        // Must be exactly one producer and one consumer.
+        let consumers = match consumers_of.get(&i) {
+            Some(cs) if cs.len() == 1 => &cs[..],
+            _ => continue,
+        };
+        if producers.len() != 1 {
+            continue;
+        }
+        let producer = producers[0];
+        let consumer = consumers[0];
+
+        // Voider columns are sinks, not real consumers — skip.
+        if is_pure_voider(columns[consumer].recipe) {
+            continue;
+        }
+        // Fluid items need pipe adjacency, not inserter DI — skip.
+        if items.is_fluid[i] {
+            continue;
+        }
+        // No external supply — the item is entirely internally produced.
+        if s_of(i) > ACTIVE_TOL {
+            continue;
+        }
+        // No surplus — the producer's output exactly satisfies the consumer.
+        if o_of(i) > ACTIVE_TOL {
+            continue;
+        }
+
+        // Supply = x[producer] * net_coeff (positive); demand = x[consumer] *
+        // |net_coeff| (negative, negated). Check they match within tolerance.
+        let supply = x_of(producer)
+            * columns[producer]
+                .net
+                .iter()
+                .find(|&&(j, _)| j == i)
+                .map(|&(_, c)| c)
+                .unwrap_or(0.0);
+        let demand = x_of(consumer)
+            * columns[consumer]
+                .net
+                .iter()
+                .find(|&&(j, _)| j == i)
+                .map(|&(_, c)| -c)
+                .unwrap_or(0.0);
+        if (supply - demand).abs() > ACTIVE_TOL * supply.max(1.0).max(demand) {
+            continue;
+        }
+
+        // Machine counts (same computation as build_machine_spec).
+        let producer_count = snap_machine_count(x_of(producer), &columns[producer]);
+        let consumer_count = snap_machine_count(x_of(consumer), &columns[consumer]);
+
+        couplings.push(crate::models::DICoupling {
+            producer_recipe: columns[producer].recipe.name.to_string(),
+            consumer_recipe: columns[consumer].recipe.name.to_string(),
+            item: items.names[i].to_string(),
+            producer_count,
+            consumer_count,
+        });
+    }
+
+    // Deterministic order: by recipe DB declaration order (column index).
+    couplings.sort_by(|a, b| {
+        let pa = active.iter().position(|&c| columns[c].recipe.name == a.producer_recipe);
+        let pb = active.iter().position(|&c| columns[c].recipe.name == b.producer_recipe);
+        pa.cmp(&pb)
+    });
+    couplings
+}
+
+/// Snap a fractional machine count to the nearest integer (same logic as
+/// `build_machine_spec`'s `snap(x / (speed / energy))`).
+fn snap_machine_count(x_of_c: f64, col: &Column) -> f64 {
+    let crafts_per_sec = col.crafting_speed / col.recipe.energy;
+    snap_value(x_of_c / crafts_per_sec)
 }
 
 /// Find a multi-recipe cycle among the active columns, if any. Returns the

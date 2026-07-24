@@ -775,6 +775,7 @@ pub fn apply_partition_plan(solver_result: &SolverResult, plan: &PartitionPlan) 
         external_outputs: solver_result.external_outputs.clone(),
         surplus_outputs: solver_result.surplus_outputs.clone(),
         dependency_order: solver_result.dependency_order.clone(),
+        ..Default::default()
     }
 }
 
@@ -1043,6 +1044,7 @@ mod tests {
             external_outputs: vec![flow("advanced-circuit", 1.0)],
             surplus_outputs: vec![],
             dependency_order: vec!["copper-cable".to_string(), "electronic-circuit".to_string(), "advanced-circuit".to_string()],
+            ..Default::default()
         };
         let plan = plan_partitioning(&solver_result, LayoutStrategy::Pooled, None);
         assert!(plan.is_empty());
@@ -1059,6 +1061,7 @@ mod tests {
             external_outputs: vec![flow("iron-gear-wheel", 5.0)],
             surplus_outputs: vec![],
             dependency_order: vec!["iron-gear-wheel".to_string()],
+            ..Default::default()
         };
         let plan = plan_partitioning(&solver_result, LayoutStrategy::PartitionedDecomposed, None);
         assert!(plan.is_empty(), "K=1 should not partition");
@@ -1080,6 +1083,7 @@ mod tests {
             external_outputs: vec![flow("advanced-circuit", 2.0)],
             surplus_outputs: vec![],
             dependency_order: vec!["copper-cable".to_string(), "electronic-circuit".to_string(), "advanced-circuit".to_string()],
+            ..Default::default()
         };
         let plan = plan_partitioning(&solver_result, LayoutStrategy::PartitionedDecomposed, Some("transport-belt"));
         let cu_modules: Vec<_> = plan.modules.iter().filter(|m| m.item == "copper-cable").collect();
@@ -1109,6 +1113,7 @@ mod tests {
             external_outputs: vec![flow("plastic-bar", 8.0), fluid("sulfuric-acid", 100.0), flow("explosives", 1.0)],
             surplus_outputs: vec![],
             dependency_order: vec![],
+            ..Default::default()
         };
         let plan = plan_partitioning(&solver_result, LayoutStrategy::PartitionedDecomposed, None);
         // water has 2 consumers but is fluid → not partitioned.
@@ -1132,6 +1137,7 @@ mod tests {
             external_outputs: vec![flow("advanced-circuit", 2.0)],
             surplus_outputs: vec![],
             dependency_order: vec![],
+            ..Default::default()
         };
         let plan = plan_partitioning(&solver_result, LayoutStrategy::PartitionedDecomposed, Some("transport-belt"));
         let partitioned = apply_partition_plan(&solver_result, &plan);
@@ -1172,6 +1178,7 @@ mod tests {
             external_outputs: vec![flow("iron-gear-wheel", 60.0)],
             surplus_outputs: vec![],
             dependency_order: vec!["iron-gear-wheel".to_string()],
+            ..Default::default()
         };
         // PartitionedDecomposed: K=1 with 16 lanes → shard into 2 of 8.
         let p2 = plan_partitioning(&solver_result, LayoutStrategy::PartitionedDecomposed, Some("transport-belt"));
@@ -1203,6 +1210,7 @@ mod tests {
             external_outputs: vec![flow("advanced-circuit", 7.5)],
             surplus_outputs: vec![],
             dependency_order: vec!["copper-cable".to_string(), "electronic-circuit".to_string(), "advanced-circuit".to_string()],
+            ..Default::default()
         };
         let plan = plan_partitioning(&solver_result, LayoutStrategy::PartitionedDecomposed, Some("transport-belt"));
         let cu_modules: Vec<_> = plan.modules.iter().filter(|m| m.item == "copper-cable").collect();
@@ -1242,6 +1250,7 @@ mod tests {
             external_outputs: vec![flow("advanced-circuit", 7.5)],
             surplus_outputs: vec![],
             dependency_order: vec![],
+            ..Default::default()
         };
         let plan = plan_partitioning(&solver_result, LayoutStrategy::PartitionedDecomposed, Some("transport-belt"));
         let partitioned = apply_partition_plan(&solver_result, &plan);

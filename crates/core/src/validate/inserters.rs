@@ -1299,6 +1299,7 @@ mod tests {
             external_outputs: vec![],
             surplus_outputs: vec![],
             dependency_order: vec![],
+            ..Default::default()
         };
         let lr = LayoutResult {
             entities: vec![PlacedEntity {
@@ -1333,6 +1334,7 @@ mod tests {
             external_outputs: vec![],
             surplus_outputs: vec![],
             dependency_order: vec![],
+            ..Default::default()
         };
         let lr = LayoutResult {
             entities: vec![PlacedEntity {
@@ -1496,6 +1498,7 @@ mod tests {
             external_outputs: vec![],
             surplus_outputs: vec![],
             dependency_order: vec![],
+            ..Default::default()
         }
     }
 
@@ -1690,6 +1693,7 @@ mod tests {
             external_outputs: vec![],
             surplus_outputs: vec![],
             dependency_order: vec![],
+            ..Default::default()
         };
 
         let mut entities = gear_machine_entities_at(0); // row A: y in [0, 3)
@@ -1844,6 +1848,7 @@ mod tests {
             external_outputs: vec![],
             surplus_outputs: vec![],
             dependency_order: vec![],
+            ..Default::default()
         }
     }
 
@@ -1930,6 +1935,7 @@ mod tests {
             external_outputs: vec![],
             surplus_outputs: vec![],
             dependency_order: vec![],
+            ..Default::default()
         };
 
         let mut entities = gear_machine_entities_at(0); // row A: y in [0, 3)
@@ -2011,6 +2017,7 @@ mod tests {
             external_outputs: vec![],
             surplus_outputs: vec![],
             dependency_order: vec![],
+            ..Default::default()
         }
     }
 

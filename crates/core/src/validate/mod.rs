@@ -593,6 +593,7 @@ mod tests {
                 module_id: 0,
             }],
             dependency_order: vec![],
+            ..Default::default()
         }
     }
 

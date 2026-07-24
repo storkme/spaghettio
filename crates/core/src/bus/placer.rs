@@ -117,6 +117,14 @@ pub struct RowSpan {
     /// `row_exit_origin`, and the step-7b surplus merger. The helper
     /// [`RowSpan::output_belt_y_for`] centralises the lookup.
     pub sorted_output_belts: Vec<(String, i32)>,
+    /// `Some((item, producer_row_idx))` when this row's input for `item`
+    /// is fed by direct insertion from the producer row at `producer_row_idx`
+    /// instead of a bus trunk lane. The lane planner reads this to skip
+    /// lane creation for that `(item, consumer_row)` pair. Set only when
+    /// `LayoutOptions.direct_insertion` is true and the solver detected a
+    /// `DICoupling` for this pair. See `docs/rfc-decomposition-search.md`
+    /// Phase 3.
+    pub di_input: Option<(String, usize)>,
 }
 
 impl RowSpan {
@@ -1551,9 +1559,28 @@ pub(crate) fn build_one_row(
         horizontal_stack,
         secondary_output_belt,
         sorted_output_belts,
+        di_input: None,
     };
 
     (row_ents, span, row_width)
+}
+
+/// Check if the spec at `spec_idx` in `ordered` is a DI consumer whose
+/// producer recipe is the immediately preceding spec in `ordered`.
+fn prev_was_producer(
+    spec: &MachineSpec,
+    ordered: &[&MachineSpec],
+    spec_idx: usize,
+    di_lookup: &FxHashMap<&str, (&str, &str)>,
+) -> bool {
+    if spec_idx == 0 {
+        return false;
+    }
+    let prev = ordered[spec_idx - 1];
+    match di_lookup.get(spec.recipe.as_str()) {
+        Some(&(_, producer_recipe)) => prev.recipe.as_str() == producer_recipe,
+        None => false,
+    }
 }
 
 /// Place assembly rows stacked vertically.
@@ -1584,6 +1611,8 @@ pub fn place_rows(
     final_output_items: Option<&FxHashSet<String>>,
     extra_gap_after_row: Option<&FxHashMap<usize, i32>>,
     row_layout: RowLayout,
+    direct_insertion: bool,
+    di_couplings: &[crate::models::DICoupling],
     ctx: &StackingCtx,
 ) -> (Vec<PlacedEntity>, Vec<RowSpan>, i32, i32) {
     let mut entities: Vec<PlacedEntity> = Vec::new();
@@ -1597,8 +1626,34 @@ pub fn place_rows(
     let empty_gaps: FxHashMap<usize, i32> = FxHashMap::default();
     let extra_gaps = extra_gap_after_row.unwrap_or(&empty_gaps);
 
+    // DI coupling lookup: consumer_recipe → (item, producer_recipe).
+    // Built once; consulted in the loop to suppress the inter-row gap
+    // and mark the consumer's RowSpan.
+    let di_lookup: FxHashMap<&str, (&str, &str)> = if direct_insertion {
+        di_couplings
+            .iter()
+            .map(|c| (c.consumer_recipe.as_str(), (c.item.as_str(), c.producer_recipe.as_str())))
+            .collect()
+    } else {
+        FxHashMap::default()
+    };
+    // Track the row index of the last-placed row for each recipe, so the
+    // DI consumer can reference its producer's RowSpan.
+    let mut recipe_last_row_idx: FxHashMap<&str, usize> = FxHashMap::default();
+
     for (spec_idx, spec) in ordered.iter().enumerate() {
-        if spec_idx > 0 {
+        // Suppress the inter-recipe gap when this spec is a DI consumer
+        // whose producer was the immediately preceding recipe. The gap
+        // normally reserves space for lane balancers; with DI the trunk
+        // segment is minimal and no balancer is needed. (When the
+        // producer is NOT the immediately preceding recipe — e.g. the
+        // consumer has another dependency between them — the gap is
+        // preserved; a future `order_specs` enhancement will co-locate
+        // DI pairs.)
+        let is_di_consumer = direct_insertion && di_lookup.contains_key(spec.recipe.as_str());
+        if spec_idx > 0 && is_di_consumer && prev_was_producer(spec, &ordered, spec_idx, &di_lookup) {
+            // No gap — DI producer is directly above.
+        } else if spec_idx > 0 {
             y_cursor += 2; // gap between recipes for lane balancers
         }
         // Snap to nearest integer when within float drift of one — solver
@@ -1685,7 +1740,7 @@ pub fn place_rows(
 
         for ri in 0..n_rows {
             let chunk = ((remaining as f64) / (n_rows - ri) as f64).ceil() as usize;
-            let (row_ents, span, width) = build_one_row(
+            let (row_ents, mut span, width) = build_one_row(
                 spec,
                 chunk,
                 bus_width,
@@ -1700,6 +1755,16 @@ pub fn place_rows(
             );
             let row_idx = row_spans.len();
             max_width = max_width.max(width);
+            // Mark DI consumers: set `di_input` so the lane planner
+            // skips the bus lane for this item.
+            if is_di_consumer {
+                if let Some(&(item, producer_recipe)) = di_lookup.get(spec.recipe.as_str()) {
+                    if let Some(&p_idx) = recipe_last_row_idx.get(producer_recipe) {
+                        span.di_input = Some((item.to_string(), p_idx));
+                    }
+                }
+            }
+            recipe_last_row_idx.insert(spec.recipe.as_str(), row_idx);
             let y_end = span.y_end;
             entities.extend(row_ents);
             row_spans.push(span);
@@ -1736,6 +1801,7 @@ pub fn place_rows_from_result(
     final_output_items: Option<&FxHashSet<String>>,
     extra_gap_after_row: Option<&FxHashMap<usize, i32>>,
     row_layout: RowLayout,
+    direct_insertion: bool,
     ctx: &StackingCtx,
 ) -> (Vec<PlacedEntity>, Vec<RowSpan>, i32, i32) {
     place_rows(
@@ -1750,6 +1816,8 @@ pub fn place_rows_from_result(
         final_output_items,
         extra_gap_after_row,
         row_layout,
+        direct_insertion,
+        &result.di_couplings,
         ctx,
     )
 }
@@ -1915,6 +1983,7 @@ mod tests {
                 "copper-cable".to_string(),
                 "electronic-circuit".to_string(),
             ],
+            ..Default::default()
         }
     }
 
@@ -2038,7 +2107,7 @@ mod tests {
     fn place_rows_single_recipe_no_split() {
         let machines = vec![iron_plate_spec()];
         let dep_order = vec!["iron-plate".to_string()];
-        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), &StackingCtx::unstacked());
+        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), false, &[], &StackingCtx::unstacked());
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].machine_count, 1);
         assert_eq!(spans[0].spec.recipe, "iron-plate");
@@ -2048,7 +2117,7 @@ mod tests {
     fn place_rows_two_recipes_ordered() {
         let machines = vec![iron_gear_spec(), iron_plate_spec()];
         let dep_order = vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()];
-        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), &StackingCtx::unstacked());
+        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), false, &[], &StackingCtx::unstacked());
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0].spec.recipe, "iron-plate");
         assert_eq!(spans[1].spec.recipe, "iron-gear-wheel");
@@ -2059,7 +2128,7 @@ mod tests {
         // Second recipe starts at y_end_of_first + 2 (gap)
         let machines = vec![iron_plate_spec(), iron_gear_spec()];
         let dep_order = vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()];
-        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), &StackingCtx::unstacked());
+        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), false, &[], &StackingCtx::unstacked());
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[1].y_start, spans[0].y_end + 2);
     }
@@ -2068,7 +2137,7 @@ mod tests {
     fn place_rows_y_offset() {
         let machines = vec![iron_plate_spec()];
         let dep_order = vec!["iron-plate".to_string()];
-        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 5, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), &StackingCtx::unstacked());
+        let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 5, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), false, &[], &StackingCtx::unstacked());
         assert_eq!(spans[0].y_start, 5);
     }
 
@@ -2090,7 +2159,9 @@ mod tests {
             None,
             None,
             RowLayout::default(),
-            &StackingCtx::unstacked(),
+            false,
+            &[],
+&StackingCtx::unstacked(),
         );
 
         // 4 distinct recipes → 4 rows (no splitting for these small counts)
@@ -2114,6 +2185,81 @@ mod tests {
         assert!(cp_pos < cc_pos, "copper-plate should come before copper-cable");
         // iron-plate → electronic-circuit (solid dep)
         assert!(ip_pos < ec_pos, "iron-plate should come before electronic-circuit");
+    }
+
+    /// DI: when `direct_insertion` is true and a coupling exists, the
+    /// consumer's RowSpan carries `di_input` marking the coupling. When
+    /// the producer happens to be the immediately preceding recipe, the
+    /// inter-recipe gap is also suppressed (rows adjacent). When other
+    /// dependencies sit between them (e.g. iron-plate between cable and
+    /// EC), the gap is preserved and the bus lane handles routing —
+    /// a future `order_specs` enhancement will co-locate DI pairs.
+    #[test]
+    fn place_rows_di_marks_consumer() {
+        let result = electronic_circuit_solver_result();
+        let couplings = vec![crate::models::DICoupling {
+            producer_recipe: "copper-cable".to_string(),
+            consumer_recipe: "electronic-circuit".to_string(),
+            item: "copper-cable".to_string(),
+            producer_count: 3.0,
+            consumer_count: 3.0,
+        }];
+        let (_, spans, _, _) = place_rows(
+            &result.machines,
+            &result.dependency_order,
+            0,
+            1,
+            None,
+            InserterTier::default(), QualityTier::Normal,
+            0,
+            None,
+            None,
+            RowLayout::default(),
+            true, // direct_insertion ON
+            &couplings,
+            &StackingCtx::unstacked(),
+        );
+
+        let recipe_order: Vec<&str> = spans.iter().map(|s| s.spec.recipe.as_str()).collect();
+        let ec_pos = recipe_order.iter().position(|&r| r == "electronic-circuit").unwrap();
+
+        // The EC row should carry di_input marking the cable coupling.
+        assert_eq!(
+            spans[ec_pos].di_input.as_ref().unwrap().0, "copper-cable",
+            "EC row should be marked with DI input for copper-cable"
+        );
+    }
+
+    /// DI off (default): di_input is None. Bit-identical to pre-DI layouts.
+    #[test]
+    fn place_rows_di_disabled_no_marking() {
+        let result = electronic_circuit_solver_result();
+        let couplings = vec![crate::models::DICoupling {
+            producer_recipe: "copper-cable".to_string(),
+            consumer_recipe: "electronic-circuit".to_string(),
+            item: "copper-cable".to_string(),
+            producer_count: 3.0,
+            consumer_count: 3.0,
+        }];
+        let (_, spans, _, _) = place_rows(
+            &result.machines,
+            &result.dependency_order,
+            0,
+            1,
+            None,
+            InserterTier::default(), QualityTier::Normal,
+            0,
+            None,
+            None,
+            RowLayout::default(),
+            false, // direct_insertion OFF
+            &couplings,
+            &StackingCtx::unstacked(),
+        );
+
+        for span in &spans {
+            assert!(span.di_input.is_none(), "DI off → no di_input on any row");
+        }
     }
 
     #[test]
@@ -2154,7 +2300,9 @@ mod tests {
             None,
             None,
             RowLayout::default(),
-            &StackingCtx::unstacked(),
+            false,
+            &[],
+&StackingCtx::unstacked(),
         );
         // 20 machines, max_per_row=14 → ceil(20/14) = 2 rows
         assert_eq!(spans.len(), 2, "Expected 2 rows due to belt lane capacity");
@@ -2220,7 +2368,9 @@ mod tests {
             None,
             None,
             RowLayout::default(),
-            &StackingCtx::unstacked(),
+            false,
+            &[],
+&StackingCtx::unstacked(),
         );
 
         let gear_rows: Vec<_> = spans
@@ -2240,7 +2390,7 @@ mod tests {
         let machines = vec![iron_plate_spec(), iron_gear_spec()];
         let dep_order = vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()];
         let (_, spans, _, total_height) =
-            place_rows(&machines, &dep_order, 5, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), &StackingCtx::unstacked());
+            place_rows(&machines, &dep_order, 5, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), false, &[], &StackingCtx::unstacked());
 
         // Every span should have y_end > y_start
         for span in &spans {
@@ -2268,7 +2418,7 @@ mod tests {
         let dep_order = vec!["iron-plate".to_string()];
         let bus_width = 10;
         let (_, spans, max_width, _) =
-            place_rows(&machines, &dep_order, bus_width, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), &StackingCtx::unstacked());
+            place_rows(&machines, &dep_order, bus_width, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), false, &[], &StackingCtx::unstacked());
 
         assert!(
             spans[0].row_width >= bus_width,
@@ -2296,9 +2446,11 @@ mod tests {
             None,
             Some(&extra_gaps),
             RowLayout::default(),
-            &StackingCtx::unstacked(),
+            false,
+            &[],
+&StackingCtx::unstacked(),
         );
-        let (_, spans_no_gap, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), &StackingCtx::unstacked());
+        let (_, spans_no_gap, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), false, &[], &StackingCtx::unstacked());
 
         // Second row should start 5 tiles later with gap
         assert_eq!(

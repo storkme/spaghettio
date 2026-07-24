@@ -125,6 +125,14 @@ pub struct LayoutOptions {
     /// `CellComposedCandidate` in the decomposition search). Nothing
     /// reads this in Phase A; it exists so options plumbing is stable.
     pub cell_composition: crate::bus::cells::CellComposition,
+    /// Direct-insertion layout (RFC decomposition-search Phase 3):
+    /// when `true`, the placer co-locates producer↔consumer pairs
+    /// flagged by the solver's `di_couplings` — placing them adjacent
+    /// (no inter-row gap) so the ghost router's trunk segment is
+    /// minimal. Default `false` (byte-identical to pre-DI layouts).
+    /// The solver always populates `di_couplings`; this flag only
+    /// controls whether the placer acts on them.
+    pub direct_insertion: bool,
 }
 
 impl Default for LayoutOptions {
@@ -149,6 +157,7 @@ impl Default for LayoutOptions {
             // fails acceptance; every bus-successful config is
             // bit-identical (goldens gate this).
             cell_composition: crate::bus::cells::CellComposition::Candidate,
+            direct_insertion: false,
         }
     }
 }
@@ -681,6 +690,8 @@ fn layout_pass(
         Some(&final_output_items),
         retry_extra_gaps,
         opts.row_layout,
+        opts.direct_insertion,
+        &solver_result.di_couplings,
         &stacking_ctx,
     );
     crate::trace::emit(crate::trace::TraceEvent::PhaseTime {
@@ -741,6 +752,8 @@ fn layout_pass(
                 Some(&final_output_items),
                 Some(&merged_gaps),
                 opts.row_layout,
+                opts.direct_insertion,
+                &solver_result.di_couplings,
                 &stacking_ctx,
             );
             crate::trace::emit(crate::trace::TraceEvent::PhaseTime {
@@ -2169,6 +2182,7 @@ mod tests {
             external_outputs: vec![],
             surplus_outputs: vec![],
             dependency_order: vec![],
+            ..Default::default()
         };
         let bw = estimate_bus_width(&sr);
         assert!(bw >= 2);
@@ -2585,6 +2599,7 @@ mod tests {
                 module_id: 0,
             }],
             dependency_order: vec!["widget".to_string(), "gadget-scrap".to_string()],
+            ..Default::default()
         };
 
         let layout = build_bus_layout(&sr, LayoutOptions::default())
@@ -2665,6 +2680,7 @@ mod tests {
             horizontal_stack: None,
             secondary_output_belt: None,
             sorted_output_belts: Vec::new(),
+            di_input: None,
         }
     }
 

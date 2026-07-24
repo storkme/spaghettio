@@ -11,6 +11,9 @@ build/
 blueprint_viz.html
 test_viz/
 
+# Local cargo toolchain config (hermetic cc wrapper on boxes without system cc)
+.cargo/
+
 # Claude Code worktrees
 .claude/worktrees/
 misc/

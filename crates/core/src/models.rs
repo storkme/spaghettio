@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 /// An item flowing at a certain rate.
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ItemFlow {
     pub item: String,
     pub rate: f64,
@@ -39,7 +39,7 @@ pub struct ItemFlow {
 /// loop-back belt. See docs/rfc-solver-net-flow.md Phase 2(c).
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MachineSpec {
     pub entity: String,
     pub recipe: String,
@@ -76,7 +76,7 @@ pub struct MachineSpec {
 /// spec's `inputs`/`outputs`).
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SelfLoopFlow {
     pub item: String,
     pub is_fluid: bool,
@@ -89,10 +89,31 @@ pub struct SelfLoopFlow {
     pub net_rate: f64,
 }
 
+/// A direct-insertion coupling detected by the solver: the producer's
+/// entire output of `item` flows to exactly one consumer (no branching,
+/// no external supply, no surplus). The placer may co-locate these rows
+/// and bridge them with inserters instead of routing the item through a
+/// bus lane. See `docs/rfc-decomposition-search.md` Phase 3.
+///
+/// `producer_count` / `consumer_count` are the snapped machine counts
+/// (same values as the corresponding `MachineSpec.count`); their ratio
+/// determines the inserter geometry (e.g. 2:1 cable→EC = two producer
+/// machines per consumer machine).
+#[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct DICoupling {
+    pub producer_recipe: String,
+    pub consumer_recipe: String,
+    pub item: String,
+    pub producer_count: f64,
+    pub consumer_count: f64,
+}
+
 /// Everything the solver produces — no positional data.
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SolverResult {
     pub machines: Vec<MachineSpec>,
     pub external_inputs: Vec<ItemFlow>,
@@ -108,6 +129,15 @@ pub struct SolverResult {
     #[serde(default)]
     pub surplus_outputs: Vec<ItemFlow>,
     pub dependency_order: Vec<String>,
+    /// Direct-insertion couplings detected post-solve: producer↔consumer
+    /// pairs where the producer's entire output of an item flows to one
+    /// consumer with no branching, surplus, or external supply. The placer
+    /// MAY use these to co-locate rows and skip the bus lane; presence
+    /// here does not force DI (the placer gates on geometric
+    /// feasibility). Empty under the legacy tree walk and when no pair
+    /// qualifies. See `docs/rfc-decomposition-search.md` Phase 3.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub di_couplings: Vec<DICoupling>,
 }
 
 /// Matches Factorio's 16-way direction constants (we only use 4).
@@ -128,7 +158,7 @@ pub enum EntityDirection {
 /// A module/item inserted into an entity (e.g. speed-module-3 × 2 in a beacon).
 #[cfg_attr(feature = "wasm", derive(tsify_next::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ModuleItem {
     pub item: String,
     pub count: u32,
