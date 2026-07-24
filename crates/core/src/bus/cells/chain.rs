@@ -965,7 +965,7 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
                 if pi_mega { &m.outputs } else { &m.outputs[..1] };
             outs.iter()
                 .map(|o| {
-                    specs
+                    let edges = specs
                         .iter()
                         .enumerate()
                         .filter(|(ci, c)| {
@@ -977,7 +977,11 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
                                     .iter()
                                     .any(|q| q.inbound && q.item == o.item)
                         })
-                        .count() as i32
+                        .count() as i32;
+                    // A fanned mega output (>=2 consumers, Phase C)
+                    // spends one extra row hosting the splitter chain
+                    // before the per-branch rows.
+                    if pi_mega && edges >= 2 { edges + 1 } else { edges }
                 })
                 .sum::<i32>()
         })
@@ -1032,12 +1036,108 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
         // Outputs with no consumer stay chain exports at their drain.
         if !p.mega_drains.is_empty() {
             for (dx0, dy0, d_item) in p.mega_drains.clone() {
-                let consumer = placed.iter().enumerate().find(|(ci, c)| {
-                    *ci != pi
-                        && c.copy == p.copy
-                        && specs[*ci % n].inputs.iter().any(|i| i.item == d_item)
-                        && c.cell.ports.iter().any(|q| q.inbound && q.item == d_item)
-                });
+                let drain_consumers: Vec<usize> = placed
+                    .iter()
+                    .enumerate()
+                    .filter(|(ci, c)| {
+                        *ci != pi
+                            && c.copy == p.copy
+                            && specs[*ci % n].inputs.iter().any(|i| i.item == d_item)
+                            && c.cell.ports.iter().any(|q| q.inbound && q.item == d_item)
+                    })
+                    .map(|(ci, _)| ci)
+                    .collect();
+                // Fan path (Phase C): >=2 consumers split on the drain's
+                // own bypass row, then each branch drops to a fresh row
+                // and rides to its consumer via the shared delivery
+                // idiom. The single-consumer path below is byte-identical
+                // to Phase B (registry gate).
+                if drain_consumers.len() >= 2 {
+                    let row = bypass_idx.entry(p.copy).or_insert(0);
+                    let fan_y = band_bottom + 1 + 3 * *row;
+                    *row += 1;
+                    let seg0 = format!("fan:{}:{}", d_item, p.seg);
+                    router.vcol(&mut entities, dx0, dy0 + 1, fan_y - 1, &d_item,
+                        "express-transport-belt", "express-underground-belt", &seg0);
+                    router.corner_east(&mut entities, dx0, fan_y, &d_item, "express-transport-belt", &seg0);
+                    let mut ordered = drain_consumers.clone();
+                    ordered.sort_by_key(|ci| placed[*ci].x);
+                    // Splitter chain east of the corner; branch b exits
+                    // south at (sx+1, fan_y+1); the last branch is the
+                    // pass-through at (sx_last+1, fan_y).
+                    let n_br = ordered.len();
+                    let mut branch_origins: Vec<(i32, i32)> = Vec::new();
+                    let mut sx = dx0 + 1;
+                    for b in 1..n_br {
+                        router.occ.insert((sx, fan_y));
+                        router.occ.insert((sx, fan_y + 1));
+                        entities.push(PlacedEntity {
+                            name: "express-splitter".into(), x: sx, y: fan_y,
+                            direction: EntityDirection::East,
+                            carries: Some(d_item.clone()),
+                            segment_id: Some(format!("fan{b}:{}:{}", d_item, p.seg)),
+                            ..Default::default()
+                        });
+                        branch_origins.push((sx + 1, fan_y + 1));
+                        if b < n_br - 1 {
+                            router.corner_east(&mut entities, sx + 1, fan_y, &d_item,
+                                "express-transport-belt", &format!("fan:{}:{}", d_item, p.seg));
+                        }
+                        sx += 2;
+                    }
+                    branch_origins.push((sx - 1, fan_y));
+                    for (bi, ci) in ordered.iter().enumerate() {
+                        let c = &placed[*ci];
+                        let port = c
+                            .cell
+                            .ports
+                            .iter()
+                            .find(|q| q.inbound && q.item == d_item)
+                            .expect("consumer port checked in eligibility");
+                        let (tx, ty) = port_abs(port, c.x, c.y_off);
+                        let (bx, by) = branch_origins[bi];
+                        let seg = format!("corr:{}:{}", p.seg, c.seg);
+                        let up_demand = lane_demand[*ci % n];
+                        let lane_up = alloc_lane(&mut lane_next, *ci, c.vlane_base, lane_step(up_demand));
+                        let row = bypass_idx.entry(p.copy).or_insert(0);
+                        let by_y = band_bottom + 1 + 3 * *row;
+                        *row += 1;
+                        // Drop from the branch origin to this branch's
+                        // own row. Branch origins on fan_y+1 curve
+                        // south from the splitter's south output; the
+                        // pass-through origin on fan_y corners south.
+                        router.corner_south(&mut entities, bx, by, &d_item, "express-transport-belt", &seg);
+                        router.vcol(&mut entities, bx, by + 1, by_y - 1, &d_item,
+                            "express-transport-belt", "express-underground-belt", &seg);
+                        if lane_up < bx {
+                            router.corner_west(&mut entities, bx, by_y, &d_item, "express-transport-belt", &seg);
+                            router.hrow_west(&mut entities, by_y, bx - 1, lane_up + 1, &d_item,
+                                "express-transport-belt", "express-underground-belt", &seg);
+                            router.corner_north(&mut entities, lane_up, by_y, &d_item, "express-transport-belt", &seg);
+                        } else {
+                            router.corner_east(&mut entities, bx, by_y, &d_item, "express-transport-belt", &seg);
+                            router.hrow(&mut entities, by_y, bx + 1, lane_up - 1, &d_item,
+                                "express-transport-belt", "express-underground-belt", &seg);
+                            router.occ.insert((lane_up, by_y));
+                            entities.push(PlacedEntity {
+                                name: "express-transport-belt".into(), x: lane_up, y: by_y,
+                                direction: EntityDirection::North,
+                                carries: Some(d_item.clone()),
+                                segment_id: Some(seg.clone()), ..Default::default()
+                            });
+                        }
+                        if router.occ.contains(&(lane_up, ty + 1)) {
+                            retrofit_feed_hop(&mut entities, &mut router, lane_up, ty + 1)?;
+                        }
+                        router.vcol(&mut entities, lane_up, by_y - 1, ty + 1, &d_item,
+                            "express-transport-belt", "express-underground-belt", &seg);
+                        router.corner_east(&mut entities, lane_up, ty, &d_item, "express-transport-belt", &seg);
+                        router.hrow(&mut entities, ty, lane_up + 1, tx - 1, &d_item,
+                            "express-transport-belt", "express-underground-belt", &seg);
+                    }
+                    continue;
+                }
+                let consumer = drain_consumers.first().map(|&ci| (ci, &placed[ci]));
                 let Some((ci, c)) = consumer else {
                     // Consumer-less export: extend the drain to the
                     // chain's drain row like the solid final-product

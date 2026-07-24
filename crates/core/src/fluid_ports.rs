@@ -183,6 +183,47 @@ pub fn fluid_ports(entity: &str, mirror: bool, direction: EntityDirection) -> &'
 ///
 /// - AM2 / chemical-plant / biochamber already have north inputs → default
 ///   `(false, North)`.
+/// SIM-MEASURED port-identity rule (#412 probes, 2026-07-24): recipe
+/// fluids bind to a machine's same-direction ports in X-ASCENDING
+/// order on the unmirrored form, and in X-DESCENDING order on the
+/// engine-mirrored form — the (direction+8, mirror:false) export
+/// encoding is a 180° rotation, which reverses the ports' x-order
+/// while the fluid-box identities stay glued to their boxes.
+/// Measured on oil-refinery/advanced-oil-processing (census probe:
+/// mirrored = crude WEST + water EAST in, PG/light/heavy west→east
+/// out; engine's old recipe-order-ascending assignment starved the
+/// machine in-game). Foundry/cryogenic-plant share the geometry rule
+/// by construction (same mirror-as-rotation encoding); the refinery
+/// is the measured anchor.
+///
+/// `fluids` must be the recipe's fluid names for ONE direction
+/// ("input" or "output") in RECIPE ORDER. Returns `(dx, dy, item)`
+/// per port, table order (x-ascending).
+pub fn port_fluid_assignment<'a>(
+    entity: &str,
+    mirror: bool,
+    direction: EntityDirection,
+    io: &str,
+    fluids: &[&'a str],
+) -> Vec<(i32, i32, &'a str)> {
+    let ports: Vec<(i32, i32)> = fluid_ports(entity, mirror, direction)
+        .iter()
+        .filter(|&&(_, _, pt)| pt == io)
+        .map(|&(x, y, _)| (x, y))
+        .collect();
+    let n = fluids.len().min(ports.len());
+    let mut out = Vec::with_capacity(n);
+    for (k, &(px, py)) in ports.iter().take(n).enumerate() {
+        let item = if mirror {
+            fluids[n - 1 - k]
+        } else {
+            fluids[k]
+        };
+        out.push((px, py, item));
+    }
+    out
+}
+
 /// - oil-refinery / foundry / cryogenic-plant → `(true, North)` (mirror y-flip).
 /// - electromagnetic-plant → `(false, East)` (rotation; only its inputs reach
 ///   the north face — the outputs land west/east, so this orientation is only

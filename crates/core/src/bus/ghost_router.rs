@@ -1241,23 +1241,50 @@ pub fn route_bus_ghost(
                         continue;
                     }
                     // Blocked run [bx, run_end], capped by pipe UG reach (F4).
+                    // CLUSTER runs separated by a single free tile: hopping
+                    // them independently lands run A's EXIT exactly where
+                    // run B wants its entrance, and the entrance conversion
+                    // below would mutate A's exit mouth into B's entrance —
+                    // destroying A's pair and stitching this fluid's mouth
+                    // onto whatever foreign network sits west of it (found
+                    // via the #412 identity fix: the reversed advanced-oil
+                    // tap arrangement produced blocked-free-blocked at the
+                    // light column + PG port UG, and the heavy branch
+                    // merged into the light trunk).
                     let mut run_end = bx;
-                    while run_end + 1 < branch_end
-                        && is_blocked_tile((run_end + 1, py), &existing_belts, &hard)
-                        && (run_end + 1 - bx) < crate::common::UG_PIPE_REACH as i32
-                    {
-                        run_end += 1;
+                    loop {
+                        let next_blocked = run_end + 1 < branch_end
+                            && is_blocked_tile((run_end + 1, py), &existing_belts, &hard)
+                            && (run_end + 1 - bx) < crate::common::UG_PIPE_REACH as i32;
+                        if next_blocked {
+                            run_end += 1;
+                            continue;
+                        }
+                        // Single free tile followed by another blocked tile,
+                        // still within reach: swallow both into this run.
+                        let gap_then_blocked = run_end + 2 < branch_end
+                            && !is_blocked_tile((run_end + 1, py), &existing_belts, &hard)
+                            && is_blocked_tile((run_end + 2, py), &existing_belts, &hard)
+                            && (run_end + 2 - bx) < crate::common::UG_PIPE_REACH as i32;
+                        if gap_then_blocked {
+                            run_end += 2;
+                            continue;
+                        }
+                        break;
                     }
                     let exit_x = run_end + 1;
                     let exit_open = exit_x < branch_end
                         && !is_blocked_tile((exit_x, py), &existing_belts, &hard);
                     match (prev_surface_idx, exit_open) {
-                        (Some(prev), true) => {
+                        (Some(prev), true) if entities[prev].name == "pipe" => {
                             // Convert the previous surface pipe into the UG
                             // entrance (East: tunnel runs east, surface
                             // connection stays on its west side) and emit
                             // the West-facing exit — the same partner
                             // convention as the stacked-T flank case above.
+                            // The `== "pipe"` guard refuses to mutate an
+                            // existing PTG mouth (a silent pair-destroyer);
+                            // clustering above should make that unreachable.
                             entities[prev].name = "pipe-to-ground".to_string();
                             entities[prev].direction = EntityDirection::East;
                             entities[prev].io_type = Some("input".to_string());
