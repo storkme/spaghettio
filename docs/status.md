@@ -225,17 +225,19 @@ declared capacity/stacking are checked fields): currently
 AC-from-plates (PASS −0.3%) and mil5-from-plates (PASS, delivered
 5.00/s exact — first physical validation of the westward bypasses),
 both at declared capacity 0 in the post-#390 honest world. EC-row
-geometries stay unregistered: a declared-capacity sweep (1→7) shrank
-the deficit −8.0%→−5.3% then went level-invariant with the input
-bound cleared at nb=3 — the residual is the
-[#385](https://github.com/storkme/spaghettio/issues/385) output-side
-belt-drop class and/or 45/45 corridor saturation
-([#383](https://github.com/storkme/spaghettio/issues/383) has the
-sweep table); mil5-from-ore FAILs flat at −28.7% (firearm rows'
-inserter COUNT). Re-measure after
-[#394](https://github.com/storkme/spaghettio/pull/394) →
-[#381](https://github.com/storkme/spaghettio/issues/381) land. Full
-trail:
+geometries are REGISTERED AS WARNED (policy 2026-07-24, user-approved
+on [#383](https://github.com/storkme/spaghettio/issues/383)): the
+post-#394/#381 re-measurement reproduced the sweep bit-identically
+(−8.0% d1 / −5.3% d7 / −7.7% ec30-d1) and fully attributed it — the
+level-invariant residual is the EC-row yellow output-belt ceiling
+(row-output-lane-budget warns on the exact geometry at generation),
+plus at L1 the input bound, which #381 cannot reach on the composed
+path until [#415](https://github.com/storkme/spaghettio/issues/415)
+threads `inserter_capacity` through `generate_cell_layout`. Entries
+carry `known_residual` and render "SIM-VERIFIED AS WARNED", never "at
+plan"; they graduate at plan when the EC-row output template work
+lands. mil5-from-ore FAILs flat at −28.7% (firearm rows' inserter
+COUNT) and stays unregistered. Full trail:
 [`rfc-051-cell-composition-integration.md`](rfc-051-cell-composition-integration.md).
 
 **`rfc-048-cell-composition.md` Phase-1 close-out (2026-07-22, PR #365)**:
