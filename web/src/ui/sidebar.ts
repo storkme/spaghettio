@@ -566,7 +566,8 @@ export function renderSidebar(
   inserterCapacitySelect.title =
     "Inserter capacity bonus research level: raises inserter hand sizes";
   [
-    ["Off (default)", ""],
+    ["Default (L2, red+green)", ""],
+    ["Unresearched (L0)", "0"],
     ["Level 1", "1"],
     ["Level 2", "2"],
     ["Level 3", "3"],

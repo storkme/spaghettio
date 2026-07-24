@@ -383,13 +383,16 @@ fn probe_differential_scoreboard() {
 /// demand onto one yellow belt-out — distinct from
 /// `cell_composed_ec15_zero_errors`'s sim-verified geometry
 /// (`compose_pairs_calibrated`'s 3 independent 5.0/s pairs, each well
-/// under budget). Even with the bridge's 2-lane realization
-/// (`0.85 × 15.0/s × 2 lanes = 12.75/s`), 15.0/s exceeds it — a `row-
-/// output-lane-budget` warning the new check correctly raises here. This
-/// specific geometry has no sim-verification either way (the "15/15
-/// working, 15.0/s exact" proof belongs to the pairs geometry, not this
-/// one), so per the check's own acceptance protocol this is tolerated as
-/// a plausible-but-unproven finding, not silently tuned away.
+/// under budget).
+///
+/// **2026-07-24 (#383/#431 recalibration):** the bridged budget this row
+/// was warned against (1.733 × 7.5 = 13.0/s) was measured through an
+/// input-bound cell — #431's level sweep shows bridged yellow delivering
+/// the full 15.00/s exactly at L2+ with zero `full_output` at every
+/// level. At the recalibrated `ROW_LANE_FACTOR_BRIDGED = 2.0` the budget
+/// is exactly 15.0/s and the warning correctly no longer fires: the
+/// finding this pin tolerated as plausible-but-unproven is now
+/// measured-resolved in the geometry's favor.
 #[test]
 fn cell_candidate_resolves_ec15_refusal() {
     use spaghettio_core::bus::cells::CellComposition;
@@ -417,17 +420,16 @@ fn cell_candidate_resolves_ec15_refusal() {
     let errors = issues.iter().filter(|i| i.severity == Severity::Error).count();
     assert_eq!(errors, 0, "composed candidate errors: {issues:?}");
     assert!(
-        issues.iter().all(|i| i.category == "inserter-item-throughput"
-            || i.category == "row-output-lane-budget"),
-        "only the adjudicated categories tolerated: {issues:?}"
+        issues.iter().all(|i| i.category == "inserter-item-throughput"),
+        "only the adjudicated category tolerated: {issues:?}"
     );
-    // The single-row-overflow finding above is exactly one warning
-    // (the electronic-circuit row); more of the same category would be
-    // a new, unadjudicated claim — trip on growth.
+    // Post-#431 recalibration the row sits exactly at the bridged
+    // budget (2.0 × 7.5 = 15.0/s) — any lane-budget warning here would
+    // be a new, unadjudicated claim.
     assert_eq!(
         issues.iter().filter(|i| i.category == "row-output-lane-budget").count(),
-        1,
-        "row-output-lane-budget warning count grew past the adjudicated 1: {issues:?}"
+        0,
+        "row-output-lane-budget should not fire at the recalibrated budget: {issues:?}"
     );
 }
 
@@ -496,12 +498,14 @@ fn chain_capacity_reaches_the_placer() {
         "electronic-circuit", 15.0, &inputs, &MachinePalette::default(),
         "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
     ).unwrap();
-    let l0 = compose_chain(&sr).unwrap();
-    let l0_explicit = compose_chain_with_capacity(&sr, 0).unwrap();
+    let plain = compose_chain(&sr).unwrap();
+    let default_explicit =
+        compose_chain_with_capacity(&sr, spaghettio_core::common::DEFAULT_INSERTER_CAPACITY).unwrap();
     assert_eq!(
-        geometry_hash(&l0), geometry_hash(&l0_explicit),
-        "capacity 0 must be byte-identical to the plain path"
+        geometry_hash(&plain), geometry_hash(&default_explicit),
+        "plain compose_chain must equal the DEFAULT_INSERTER_CAPACITY build"
     );
+    let l0 = compose_chain_with_capacity(&sr, 0).unwrap();
     let l7 = compose_chain_with_capacity(&sr, 7).unwrap();
     assert_eq!(l7.inserter_capacity, 7, "composed layout must declare its capacity");
     assert_ne!(
@@ -510,11 +514,68 @@ fn chain_capacity_reaches_the_placer() {
     );
 }
 
-/// #422 review finding 1: mega-containing chains must REFUSE nonzero
-/// declared capacity until the mega bootstrap threads it too — an L7
-/// declaration over an L0-sized mega interior is a mixed-world lie.
+/// #383 (2026-07-24): the EC@15 chain — the canonical #383 fixture —
+/// carries input-inserter-throughput warnings at the raw L0 world but
+/// composes inserter-clean at the L2 engine default (the input bind
+/// clears at non-bulk hand 2). Guards the default-level fix: sim-measured
+/// at 13.8/s (−8%) at L0 vs 15.0/s (full plan) at L2.
 #[test]
-fn mega_chain_refuses_nonzero_capacity() {
+fn ec15_chain_inserter_clean_at_default_capacity() {
+    use spaghettio_core::bus::cells::chain::{compose_chain, compose_chain_with_capacity};
+    use spaghettio_core::bus::cells::registry::geometry_hash;
+    use spaghettio_core::common::DEFAULT_INSERTER_CAPACITY;
+    use spaghettio_core::validate::{self, LayoutStyle, Severity};
+    let inputs: FxHashSet<String> =
+        ["iron-plate", "copper-plate"].iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "electronic-circuit", 15.0, &inputs, &MachinePalette::default(),
+        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+    ).unwrap();
+    // Geometry-regression lock on the L2 DEFAULT path — the geometry
+    // production actually builds, which the registry gate (rebuilt at
+    // explicit L0) does not cover (PR #431 review finding). Not sim-blessed
+    // (there is no L2 sim baseline); a self-consistency golden. Re-bless
+    // deliberately if a change legitimately reshapes the default geometry.
+    assert_eq!(
+        format!("{:016x}", geometry_hash(&compose_chain(&sr).unwrap())),
+        "eb9e1796a1f53695",
+        "EC@15 default (L2) geometry changed — re-verify and re-bless"
+    );
+    let inserter_warns = |cap: u8| -> usize {
+        let l = compose_chain_with_capacity(&sr, cap).unwrap();
+        let issues =
+            validate::validate(&l, Some(&sr), LayoutStyle::Bus).unwrap_or_else(|e| e.issues);
+        assert!(
+            issues.iter().all(|i| i.severity != Severity::Error),
+            "EC@15 L{cap} must have no errors: {issues:?}"
+        );
+        issues
+            .iter()
+            .filter(|i| i.category.contains("inserter") || i.category == "input-rate-delivery")
+            .count()
+    };
+    // L0 (raw unresearched) still shows the #383 input bind — guards the
+    // premise: if L0 stops warning, this test no longer proves anything.
+    assert!(
+        inserter_warns(0) > 0,
+        "L0 must still exhibit the #383 input-inserter bind"
+    );
+    // The L2 engine default (red+green research) clears them all.
+    assert_eq!(
+        inserter_warns(DEFAULT_INSERTER_CAPACITY),
+        0,
+        "EC@15 chain must be inserter-clean at the engine default (#383 fix)"
+    );
+}
+
+/// #383 / #415 (#422 landed): a mega-containing chain composes at its
+/// DECLARED capacity. #422 threads capacity into the non-mega cells; the
+/// mega INTERIOR bootstrap (`compose_mega_block`) stays conservatively L0
+/// (it takes no capacity argument). No refusal, no whole-chain clamp.
+/// History: hard `Err` refusal (pre-#383) → whole-chain L0 clamp (#383
+/// initial) → dropped once #422 landed (PR #431 review coordination).
+#[test]
+fn mega_chain_composes_at_declared_capacity() {
     use spaghettio_core::bus::cells::chain::compose_chain_with_capacity;
     let inputs: FxHashSet<String> =
         ["iron-ore", "copper-ore", "crude-oil", "water", "coal"].iter().map(|s| s.to_string()).collect();
@@ -522,14 +583,20 @@ fn mega_chain_refuses_nonzero_capacity() {
         "advanced-circuit", 2.0, &inputs, &MachinePalette::default(),
         "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
     ).unwrap();
-    let err = compose_chain_with_capacity(&sr, 7).expect_err("mixed world must refuse");
-    assert!(err.contains("mega-cell interiors"), "refusal must cite the gap: {err}");
-    compose_chain_with_capacity(&sr, 0).expect("L0 mega chain still composes");
+    // L7 composes (no refusal, no clamp) and DECLARES its requested level —
+    // the non-mega cells thread it; the mega interior stays L0 internally.
+    let l7 = compose_chain_with_capacity(&sr, 7).expect("mega chain composes at L7");
+    assert_eq!(
+        l7.inserter_capacity, 7,
+        "mega chain must declare its requested capacity (#422 threaded non-mega cells)"
+    );
+    let l0 = compose_chain_with_capacity(&sr, 0).expect("L0 mega chain composes");
+    assert_eq!(l0.inserter_capacity, 0);
 }
 
 #[test]
 fn cell_registry_hashes_current() {
-    use spaghettio_core::bus::cells::chain::compose_chain;
+    use spaghettio_core::bus::cells::chain::compose_chain_with_capacity;
     use spaghettio_core::bus::cells::registry::{entries, geometry_hash};
     // Fixture configs the registry may reference, keyed by (target,
     // rate); same-key configs (mil5 ore vs plates) disambiguate by
@@ -563,7 +630,16 @@ fn cell_registry_hashes_current() {
                             t, *r, &inputs_set, &MachinePalette::default(),
                             "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
                         ).unwrap();
-                        compose_chain(&sr).unwrap()
+                        // Re-derive at explicit L0, NOT the engine default. Every
+                        // registry entry's geometry_hash is an L0-GEOMETRY baseline:
+                        // these fixtures were blessed when the chain path hardcoded
+                        // L0 (pre-#422), so d1 and d7 share one hash — the byte-
+                        // identical L0 geometry, differing only in the harness WORLD
+                        // (`declared_inserter_capacity`), not the built geometry. The
+                        // default moved to L2 (2026-07-24, #383); the L0 baselines
+                        // are unchanged, so reproduce at L0 to validate them. A future
+                        // entry blessed with non-L0 geometry will extend this gate.
+                        compose_chain_with_capacity(&sr, 0).unwrap()
                     }
                 };
                 format!("{:016x}", geometry_hash(&l))
@@ -855,18 +931,14 @@ fn mega_chain_ac_from_raw_zero_issues() {
             .unwrap_or_else(|e| panic!("AC@{rate} from raw must validate: {e}"));
         let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
         assert!(errors.is_empty(), "AC@{rate} from raw errors: {errors:?}");
-        if rate < 4.0 {
-            assert!(issues.is_empty(), "AC@{rate} from raw issues: {issues:?}");
-        } else {
-            // AC@4's cable cell outputs 40/s against a MEASURED 39/s
-            // inserter-drop realization (#394's row-output-lane-budget,
-            // landed mid-Phase-B) — the honest 1/s shortfall is warned,
-            // not hidden; only that adjudicated category is tolerated.
-            assert!(
-                issues.iter().all(|i| i.category == "row-output-lane-budget"),
-                "AC@{rate}: only the measured lane-budget warning tolerated: {issues:?}"
-            );
-        }
+        // AC@4's cable cell outputs 40/s. Under the old bridged express
+        // budget (1.733 × 22.5 = 39.0/s) that was a 1/s shortfall and
+        // raised one row-output-lane-budget warning; the 2026-07-24
+        // #383/#431 recalibration (ROW_LANE_FACTOR_BRIDGED = 2.0 → 45.0/s
+        // on express) clears it. Every rung now asserts a plain zero:
+        // keeping the old tolerated-category branch would pass VACUOUSLY,
+        // since the category it filters for can no longer fire here.
+        assert!(issues.is_empty(), "AC@{rate} from raw issues: {issues:?}");
     }
 }
 
@@ -948,7 +1020,21 @@ fn mega_chain_pu4_resolves_bus_failure() {
 /// oil processings, cracking, and lubricant, with 4 solid exports
 /// (multi-consumer fan-out) and 5 chain-fed inputs. Composes at ZERO
 /// errors.
+///
+/// **2026-07-24 — moved to opt-in.** This is the single heaviest test
+/// in the suite: >6 min of LIVE SAT solving because USP's 10-member
+/// oil complex generates crossing zones absent from the baked cache
+/// (`crates/core/data/sat-zones.bin`), so every zone re-solves each
+/// run. Its sibling `mega_chain_chem5_resolves_bus_failure` does the
+/// same class of work in 0.67s purely because ITS zones are cached —
+/// i.e. the cost is uncached-zone artifact, not intrinsic. It held the
+/// whole `cell_composition` binary at ~1378s. The in-loop mega gates
+/// (chem5, pu4, ac-from-raw) keep the mega path covered on every run;
+/// this flagship stays runnable opt-in. To restore it to the default
+/// loop cheaply, bake its zones into the cache (the chem5 route) rather
+/// than un-ignoring it as-is. See #433-adjacent perf note / RFC-052.
 #[test]
+#[ignore = "RFC-052 USP@2 mega gate: >6min live SAT (uncached zones); opt in with --ignored, or bake its zones into sat-zones.bin"]
 fn mega_chain_usp2_resolves_bus_failure() {
     use spaghettio_core::bus::cells::chain::compose_chain;
     use spaghettio_core::validate::{self, LayoutStyle, Severity};

@@ -6,6 +6,8 @@
 //! the bottom-right of the layout. Called once per final product at
 //! the end of `route_bus_ghost` (Step 7).
 
+use rustc_hash::FxHashSet;
+
 use crate::models::{EntityDirection, PlacedEntity};
 use crate::bus::balancer::splitter_for_belt;
 use crate::bus::placer::RowSpan;
@@ -21,6 +23,8 @@ pub(crate) fn merge_output_rows(
     min_merge_x: i32,
     blocked_columns: &[i32],
     ctx: &StackingCtx,
+    existing_tiles: &FxHashSet<(i32, i32)>,
+    row_tile_overrides: &mut FxHashSet<(i32, i32)>,
 ) -> (Vec<PlacedEntity>, i32, i32) {
     use crate::bus::balancer::underground_for_belt;
     use crate::common::{belt_entity_for_rate_stacked, ug_max_reach};
@@ -39,7 +43,6 @@ pub(crate) fn merge_output_rows(
     }
     let merger_seg_id = Some(format!("merger:{}", item));
 
-    // Calculate total rate
     let total_rate = output_rows.iter()
         .map(|&ri| {
             if ri >= row_spans.len() {
@@ -52,8 +55,35 @@ pub(crate) fn merge_output_rows(
             }
         })
         .sum::<f64>();
-
     let belt_name = belt_entity_for_rate_stacked(total_rate * 2.0, max_belt_tier, ctx.for_item(item));
+    // Hops may need more reach than the rate-picked tier offers
+    // (alternating blocked columns with 1-tile gaps are unhoppable
+    // at yellow reach and split into exit-abuts-next-entrance
+    // pairs — the USP mega merger forensics). The hop TIER may
+    // escalate up to the USER's belt cap: the cap is the
+    // constraint, the rate pick is not; hop mouths are plumbing.
+    // Function-scoped (not per-row): `hop_cap` depends only on
+    // `max_belt_tier`, so every row in this merge shares one reach
+    // budget — including the #309 headroom pre-pass below, which
+    // needs the SAME reach the placement loop will end up using to
+    // predict where each row's hop actually lands.
+    let hop_cap: &str = max_belt_tier.unwrap_or("express-transport-belt");
+    let reach = ug_max_reach(hop_cap) as i32;
+    // Tier floor = the RATE-PICKED surface tier (#421 review: a
+    // smallest-spanning pick could throttle an express-rate line
+    // through a yellow hop — silently, since the throughput check
+    // only flags overlapping routes); ceiling = the user's cap.
+    let hop_tier_for_gap = |gap: i32| -> &'static str {
+        for t in ["transport-belt", "fast-transport-belt", "express-transport-belt"] {
+            if ug_max_reach(t) as i32 >= gap && ug_max_reach(t) >= ug_max_reach(belt_name) {
+                if ug_max_reach(t) <= ug_max_reach(hop_cap) {
+                    return underground_for_belt(t);
+                }
+                break;
+            }
+        }
+        underground_for_belt(hop_cap)
+    };
     let splitter_name = splitter_for_belt(belt_name);
 
     // Column position: east of the widest participating row, but never west
@@ -61,11 +91,66 @@ pub(crate) fn merge_output_rows(
     // successive per-item merges so two output items' splitter cascades and
     // south columns tile left-to-right instead of stamping the same tiles
     // (multi-item solid output support, Phase 2 of rfc-solver-net-flow).
-    let merge_x = (output_rows.iter()
+    let mut merge_x = (output_rows.iter()
         .map(|&ri| if ri < row_spans.len() { row_spans[ri].row_width } else { 0 })
         .max()
         .unwrap_or(0) + 1)
         .max(min_merge_x);
+
+    // #309 review finding: a row whose east extension starts blocked (its
+    // own `row_width` tile occupied by Step 4-6 residue — a dual-fate
+    // item's `ret` belt) needs the underground bridge's EXIT tile placed
+    // before the south column starts. The formula above doesn't know
+    // about that yet, so a tight `min_merge_x` (e.g. this is the only /
+    // first item processed) can put `col_x` exactly where the exit would
+    // land — the exit and the south column's own top tile would then
+    // double-place on the same coordinate. Mirror the main loop's
+    // blocked-run walk here (unbounded by `col_x`, which isn't known
+    // yet — bounded only by `reach`, same as the walk will end up doing
+    // once `col_x` is resolved, so they agree on where each run ends)
+    // and widen `merge_x` just enough that every row's exit — bridged or
+    // not — lands strictly before its own column. A no-op (same `merge_x`
+    // as before) for every row whose `row_width` tile isn't blocked,
+    // which is every layout except this one.
+    for (idx, &ri) in output_rows.iter().enumerate() {
+        if ri >= row_spans.len() {
+            continue;
+        }
+        let out_y = output_ys[idx];
+        let rw = row_spans[ri].row_width;
+        if !(blocked_columns.contains(&rw) || existing_tiles.contains(&(rw, out_y))) {
+            continue;
+        }
+        // Mirrors the placement loop's clustering walk below (single-gap
+        // runs joined across a free tile) so this predicts the SAME
+        // `run_end` the real walk will reach once `col_x` is resolved —
+        // an under-estimate here would silently reopen the exit/south-
+        // column collision for a clustered blocked pattern.
+        let mut run_end = rw;
+        loop {
+            let next_blocked = (blocked_columns.contains(&(run_end + 1))
+                || existing_tiles.contains(&(run_end + 1, out_y)))
+                && (run_end + 1) - rw < reach;
+            if next_blocked {
+                run_end += 1;
+                continue;
+            }
+            let gap_then_blocked = !(blocked_columns.contains(&(run_end + 1))
+                || existing_tiles.contains(&(run_end + 1, out_y)))
+                && (blocked_columns.contains(&(run_end + 2))
+                    || existing_tiles.contains(&(run_end + 2, out_y)))
+                && (run_end + 2) - rw < reach;
+            if gap_then_blocked {
+                run_end += 2;
+                continue;
+            }
+            break;
+        }
+        // This row's column sits at `merge_x + (n - 1 - idx)`; need that
+        // to be `>= run_end + 2` (strictly past the exit at `run_end + 1`).
+        let needed = run_end + 2 - (n as i32 - 1 - idx as i32);
+        merge_x = merge_x.max(needed);
+    }
 
     for (idx, &ri) in output_rows.iter().enumerate() {
         if ri >= row_spans.len() {
@@ -75,37 +160,21 @@ pub(crate) fn merge_output_rows(
         let col_x = merge_x + (n - 1 - idx) as i32; // first row rightmost, last row at merge_x
 
         // Extend EAST belts from the row's rightmost tile to the merge
-        // column. Earlier items' south columns (`blocked_columns`) lie in
-        // this run's path — bridge each contiguous blocked range with an
-        // underground pair instead of stamping over (or sideloading into)
-        // the foreign belt.
+        // column. Earlier items' south columns (`blocked_columns`) AND
+        // tiles Step 4-6 (ghost-routed lanes) already claimed there
+        // (`existing_tiles` — #309: a DUAL-FATE byproduct, produced by a
+        // row and BOTH partly consumed internally AND registered surplus,
+        // `docs/rfc-fulgora-scrap.md` 2026-07-11 decision log: stone/ice
+        // on the scrap-recycling sushi row, gets an ordinary
+        // intermediate-lane `ret` belt walking the consumed portion back
+        // to its bus trunk from this exact row-exit tile) lie in this
+        // run's path — bridge each contiguous blocked range with an
+        // underground pair instead of stamping over (or sideloading
+        // into) the foreign belt.
         let rw = row_spans[ri].row_width;
-        // Hops may need more reach than the rate-picked tier offers
-        // (alternating blocked columns with 1-tile gaps are unhoppable
-        // at yellow reach and split into exit-abuts-next-entrance
-        // pairs — the USP mega merger forensics). The hop TIER may
-        // escalate up to the USER's belt cap: the cap is the
-        // constraint, the rate pick is not; hop mouths are plumbing.
-        let hop_cap: &str = max_belt_tier.unwrap_or("express-transport-belt");
-        let reach = ug_max_reach(hop_cap) as i32;
-        // Tier floor = the RATE-PICKED surface tier (#421 review: a
-        // smallest-spanning pick could throttle an express-rate line
-        // through a yellow hop — silently, since the throughput check
-        // only flags overlapping routes); ceiling = the user's cap.
-        let hop_tier_for_gap = |gap: i32| -> &'static str {
-            for t in ["transport-belt", "fast-transport-belt", "express-transport-belt"] {
-                if ug_max_reach(t) as i32 >= gap && ug_max_reach(t) >= ug_max_reach(belt_name) {
-                    if ug_max_reach(t) <= ug_max_reach(hop_cap) {
-                        return underground_for_belt(t);
-                    }
-                    break;
-                }
-            }
-            underground_for_belt(hop_cap)
-        };
         let mut x = rw;
         while x < col_x {
-            if blocked_columns.contains(&x) {
+            if blocked_columns.contains(&x) || existing_tiles.contains(&(x, out_y)) {
                 // Contiguous blocked run [x, run_end], clamped by UG reach
                 // (entrance at x-1, exit at run_end+1; gap ≤ reach).
                 // CLUSTER runs separated by a single free tile: hopping
@@ -114,18 +183,24 @@ pub(crate) fn merge_output_rows(
                 // A's pair (two consecutive entrances; the game leaves
                 // the first unpaired). Same defect class as the ghost
                 // router's fluid-branch bridging (#412/USP forensics).
+                // ALSO clamped by `existing_tiles` (#309: Step 4-6
+                // residue — a dual-fate item's `ret` belt) alongside
+                // `blocked_columns`, everywhere the latter is checked.
                 let mut run_end = x;
                 loop {
                     let next_blocked = run_end + 1 < col_x
-                        && blocked_columns.contains(&(run_end + 1))
+                        && (blocked_columns.contains(&(run_end + 1))
+                            || existing_tiles.contains(&(run_end + 1, out_y)))
                         && (run_end + 1) - x < reach;
                     if next_blocked {
                         run_end += 1;
                         continue;
                     }
                     let gap_then_blocked = run_end + 2 < col_x
-                        && !blocked_columns.contains(&(run_end + 1))
-                        && blocked_columns.contains(&(run_end + 2))
+                        && !(blocked_columns.contains(&(run_end + 1))
+                            || existing_tiles.contains(&(run_end + 1, out_y)))
+                        && (blocked_columns.contains(&(run_end + 2))
+                            || existing_tiles.contains(&(run_end + 2, out_y)))
                         && (run_end + 2) - x < reach;
                     if gap_then_blocked {
                         run_end += 2;
@@ -133,31 +208,61 @@ pub(crate) fn merge_output_rows(
                     }
                     break;
                 }
-                debug_assert!(x > rw, "no room for UG entrance before blocked column");
                 let gap = run_end + 1 - x;
                 let hop_ug = hop_tier_for_gap(gap);
-                // Replace the belt stamped at x-1 with a UG entrance —
-                // only ever a plain surface belt of this run (the
-                // clustering guarantees it; the guard refuses to
-                // corrupt an existing mouth, and a miss is LOUD via
-                // debug_assert — a silent skip left unpaired outputs).
-                let converted = entities
-                    .iter_mut()
-                    .rev()
-                    .find(|e| e.x == x - 1 && e.y == out_y && e.name.ends_with("transport-belt"))
-                    .map(|prev| {
-                        prev.name = hop_ug.to_string();
-                        prev.io_type = Some("input".to_string());
-                    })
-                    .is_some();
-                // No panic on a miss: fulgora's merger hits runs whose
-                // west tile is row machinery — the old code mutated
-                // whatever sat there (silent corruption); refusing the
-                // hop (below) leaves a gap instead, strictly safer.
-                if !converted {
-                    // Refuse the hop rather than emit an unpaired exit.
-                    x = run_end + 2;
-                    continue;
+                if x == rw {
+                    // No local tile to convert — the row's own last belt
+                    // tile at (x-1, out_y) is placed by `place_rows` long
+                    // before this function runs, and lives in the
+                    // CALLER's `row_entities`: an immutable slice this
+                    // module never sees, merged with the routed bus
+                    // entities only after `route_bus_ghost` returns
+                    // (`bus/layout.rs`). Push a FRESH entrance there
+                    // instead and record the override — `layout.rs`
+                    // already drops a `row_entities` tile whenever a
+                    // routed bus entity claims the same coordinate (the
+                    // existing splitter-eviction mechanism, generalized
+                    // by #309 to any override reported here), so the
+                    // row's now-stale plain belt at (x-1, out_y) is
+                    // filtered out of the final layout rather than
+                    // double-placed alongside this entrance. Distinct
+                    // from the "refuse" branch below: this tile is KNOWN
+                    // to be the row's own belt, not an ambiguous miss.
+                    row_tile_overrides.insert((x - 1, out_y));
+                    entities.push(PlacedEntity {
+                        name: hop_ug.to_string(),
+                        x: x - 1,
+                        y: out_y,
+                        direction: EntityDirection::East,
+                        io_type: Some("input".to_string()),
+                        carries: Some(item.to_string()),
+                        segment_id: merger_seg_id.clone(),
+                        rate: Some(total_rate),
+                        ..Default::default()
+                    });
+                } else {
+                    // Replace the belt stamped at x-1 with a UG entrance —
+                    // only ever a plain surface belt of this run (the
+                    // clustering guarantees it; the guard refuses to
+                    // corrupt an existing mouth).
+                    let converted = entities
+                        .iter_mut()
+                        .rev()
+                        .find(|e| e.x == x - 1 && e.y == out_y && e.name.ends_with("transport-belt"))
+                        .map(|prev| {
+                            prev.name = hop_ug.to_string();
+                            prev.io_type = Some("input".to_string());
+                        })
+                        .is_some();
+                    // No panic on a miss: fulgora's merger hits runs whose
+                    // west tile is row machinery — the old code mutated
+                    // whatever sat there (silent corruption); refusing the
+                    // hop (below) leaves a gap instead, strictly safer.
+                    if !converted {
+                        // Refuse the hop rather than emit an unpaired exit.
+                        x = run_end + 2;
+                        continue;
+                    }
                 }
                 entities.push(PlacedEntity {
                     name: hop_ug.to_string(),
@@ -349,10 +454,10 @@ mod tests {
             vec![5],
         );
         let rows = [row0, row1];
-        let (a_ents, a_end_y, a_max_x) = merge_output_rows(&[0], &[rows[0].output_belt_y], "iron-gear-wheel", &rows, 15, None, 11, &[], &StackingCtx::unstacked());
+        let (a_ents, a_end_y, a_max_x) = merge_output_rows(&[0], &[rows[0].output_belt_y], "iron-gear-wheel", &rows, 15, None, 11, &[], &StackingCtx::unstacked(), &FxHashSet::default(), &mut FxHashSet::default());
         // Caller threads: next min_merge_x = returned max_x + 1, start_y = max_y.
         let blocked: Vec<i32> = ((a_max_x - 1)..a_max_x).collect();
-        let (b_ents, _b_end_y, b_max_x) = merge_output_rows(&[1], &[rows[1].output_belt_y], "iron-stick", &rows, a_end_y.max(15), None, a_max_x + 1, &blocked, &StackingCtx::unstacked());
+        let (b_ents, _b_end_y, b_max_x) = merge_output_rows(&[1], &[rows[1].output_belt_y], "iron-stick", &rows, a_end_y.max(15), None, a_max_x + 1, &blocked, &StackingCtx::unstacked(), &FxHashSet::default(), &mut FxHashSet::default());
         assert!(b_max_x > a_max_x);
         let a_tiles: FxHashSet<(i32, i32)> = a_ents.iter().map(|e| (e.x, e.y)).collect();
         let overlap: Vec<(i32, i32)> = b_ents
@@ -362,7 +467,7 @@ mod tests {
             .collect();
         assert!(overlap.is_empty(), "merge blocks overlap at {overlap:?}");
         // And without the cursor they WOULD overlap (guard the guard):
-        let (c_ents, _c_end_y, _c) = merge_output_rows(&[1], &[rows[1].output_belt_y], "iron-stick", &rows, 15, None, 0, &[], &StackingCtx::unstacked());
+        let (c_ents, _c_end_y, _c) = merge_output_rows(&[1], &[rows[1].output_belt_y], "iron-stick", &rows, 15, None, 0, &[], &StackingCtx::unstacked(), &FxHashSet::default(), &mut FxHashSet::default());
         let c_overlap = c_ents.iter().map(|e| (e.x, e.y)).any(|t| a_tiles.contains(&t));
         assert!(c_overlap, "expected uncursored merges to collide — geometry changed?");
     }
@@ -380,7 +485,7 @@ mod tests {
 
         let output_rows = vec![0];
         let output_ys = vec![row_span.output_belt_y];
-        let (entities, _end_y, _merge_max_x) = merge_output_rows(&output_rows, &output_ys, "iron-plate", &[row_span], 20, None, 0, &[], &StackingCtx::unstacked());
+        let (entities, _end_y, _merge_max_x) = merge_output_rows(&output_rows, &output_ys, "iron-plate", &[row_span], 20, None, 0, &[], &StackingCtx::unstacked(), &FxHashSet::default(), &mut FxHashSet::default());
 
         // Single row should extend EAST and SOUTH without splitters
         assert!(!entities.is_empty());
@@ -408,7 +513,7 @@ mod tests {
 
         let output_rows = vec![0, 1];
         let output_ys = vec![row_span1.output_belt_y, row_span2.output_belt_y];
-        let (entities, _end_y, _merge_max_x) = merge_output_rows(&output_rows, &output_ys, "iron-plate", &[row_span1, row_span2], 20, None, 0, &[], &StackingCtx::unstacked());
+        let (entities, _end_y, _merge_max_x) = merge_output_rows(&output_rows, &output_ys, "iron-plate", &[row_span1, row_span2], 20, None, 0, &[], &StackingCtx::unstacked(), &FxHashSet::default(), &mut FxHashSet::default());
 
         // Multiple rows should include splitters
         let splitters = entities.iter().filter(|e| e.name.contains("splitter")).count();
@@ -457,6 +562,8 @@ mod tests {
             0,
             &[],
             &StackingCtx::unstacked(),
+            &FxHashSet::default(),
+            &mut FxHashSet::default(),
         );
 
         // Splitters must be present
@@ -512,12 +619,88 @@ mod tests {
             0,
             &[],
             &StackingCtx::unstacked(),
+            &FxHashSet::default(),
+            &mut FxHashSet::default(),
         );
 
         let splitters: Vec<_> = entities.iter().filter(|e| e.name.contains("splitter")).collect();
         for s in &splitters {
             assert_eq!(s.direction, EntityDirection::South, "Merger splitters should face SOUTH");
         }
+    }
+
+    /// #309 regression: when something Step 4-6 already placed (a
+    /// dual-fate item's intermediate-lane `ret` belt) occupies the row's
+    /// own exit tile — `row_width`, the FIRST tile this function's east
+    /// extension would otherwise stamp a plain belt onto — the row-exit
+    /// bridge must detour underground around it instead of colliding
+    /// (issue #309's illegal entity overlaps). No entity may land on the
+    /// occupied tile, and the row's own last belt tile (`row_width - 1`,
+    /// owned by the caller's `row_entities` — this function never places
+    /// it) must be reported via `row_tile_overrides` so the caller drops
+    /// it before merging, rather than double-placing it alongside the
+    /// fresh UG entrance this function pushes there.
+    #[test]
+    fn test_merge_output_rows_bridges_pre_occupied_row_exit() {
+        let row = make_test_row_span(
+            "iron-plate",
+            0,
+            vec![],
+            vec![ItemFlow { item: "iron-plate".to_string(), rate: 1.0, is_fluid: false, module_id: 0 }],
+            1,
+            vec![],
+        );
+        let out_y = row.output_belt_y;
+        let row_width = row.row_width;
+        // Simulate a `ret` belt already sitting on the row's own exit
+        // tile — exactly the #309 collision.
+        let mut existing_tiles: FxHashSet<(i32, i32)> = FxHashSet::default();
+        existing_tiles.insert((row_width, out_y));
+        let mut row_tile_overrides: FxHashSet<(i32, i32)> = FxHashSet::default();
+
+        let (entities, _end_y, _merge_max_x) = merge_output_rows(
+            &[0],
+            &[out_y],
+            "iron-plate",
+            &[row],
+            20,
+            None,
+            0,
+            &[],
+            &StackingCtx::unstacked(),
+            &existing_tiles,
+            &mut row_tile_overrides,
+        );
+
+        assert!(
+            entities.iter().all(|e| (e.x, e.y) != (row_width, out_y)),
+            "no entity may be placed on the pre-occupied tile: {entities:#?}"
+        );
+        // Tile-uniqueness, not just the pre-occupied tile: a review finding
+        // on this exact fixture shape caught a SECOND, latent collision —
+        // when `col_x` (the south column) landed adjacent to the bridge's
+        // exit tile, both the exit and the south column's own top tile got
+        // placed at the same coordinate. The narrower "not on the blocked
+        // tile" check above can't see that; only a full uniqueness sweep
+        // over every emitted entity does.
+        let mut seen: FxHashSet<(i32, i32)> = FxHashSet::default();
+        let dups: Vec<(i32, i32)> = entities
+            .iter()
+            .map(|e| (e.x, e.y))
+            .filter(|&tile| !seen.insert(tile))
+            .collect();
+        assert!(dups.is_empty(), "duplicate tile(s) among emitted entities {dups:?}: {entities:#?}");
+        assert!(
+            row_tile_overrides.contains(&(row_width - 1, out_y)),
+            "the row's own last belt tile must be reported for eviction: {row_tile_overrides:?}"
+        );
+        let entrance = entities
+            .iter()
+            .find(|e| (e.x, e.y) == (row_width - 1, out_y))
+            .expect("a fresh UG entrance must replace the row's own last belt tile");
+        assert_eq!(entrance.name, "underground-belt");
+        assert_eq!(entrance.io_type.as_deref(), Some("input"));
+        assert_eq!(entrance.direction, EntityDirection::East);
     }
 
     // -----------------------------------------------------------------------

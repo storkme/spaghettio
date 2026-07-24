@@ -150,7 +150,11 @@ impl Default for LayoutOptions {
             merge_tap: false,
             splitter_tap_spacers: false,
             stacking: 1,
-            inserter_capacity: 0,
+            // Default assumes L2 research (red+green science), not the raw
+            // unresearched world — see `common::DEFAULT_INSERTER_CAPACITY`
+            // (2026-07-24, #383). RFC-049's "L0 == pre-RFC" model invariant
+            // is unaffected; only the default level moves.
+            inserter_capacity: crate::common::DEFAULT_INSERTER_CAPACITY,
             // FLIPPED to Candidate 2026-07-22 (RFC-051 flip decision,
             // user-approved): strictly additive — the unbiased scorer
             // picks composition only where the bus path refuses or
@@ -861,6 +865,7 @@ fn layout_pass(
     // stream) so `run_layout_with_retry_inner` detects caps whether or not a
     // trace collector is active — see that function and package #3.
     let cap_coords = ghost_result.cap_coords;
+    let row_tile_overrides = ghost_result.row_tile_overrides;
     crate::trace::emit(crate::trace::TraceEvent::PhaseTime {
         phase: "ghost_routing".to_string(),
         duration_ms: t_ghost.elapsed().as_millis() as u64,
@@ -897,6 +902,11 @@ fn layout_pass(
             }
         }
     }
+    // Dual-fate byproduct row exits (RFC Fulgora, #309): `merge_output_rows`'s
+    // row-exit bridging spliced a UG entrance over the row's own last belt
+    // tile so the row's stale plain belt there doesn't double-place
+    // alongside it — same eviction mechanism as the splitter case above.
+    bus_occupied.extend(row_tile_overrides);
     let row_entities: Vec<PlacedEntity> = if bus_occupied.is_empty() {
         row_entities
     } else {

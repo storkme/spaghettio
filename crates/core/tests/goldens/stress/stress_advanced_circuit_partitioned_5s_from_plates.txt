@@ -1,6 +1,6 @@
 === stress_advanced_circuit_partitioned_5s_from_plates scoreboard ===
 entities:         1496
-total warnings:   1
+total warnings:   0
 zones solved:     0
 zones skipped:    0
 bridges dropped:  0
@@ -13,7 +13,7 @@ total poles:      91
 zero-slack poles: 1
 median slack:     2.0
 warnings by category:
-  row-output-lane-budget: 1
+  (none)
 errors by category:
   (none)
 layout hash: cb24dca4abb90c9441959e59e8114744a223f9a83cc1c939f0e07d8afc7626a6

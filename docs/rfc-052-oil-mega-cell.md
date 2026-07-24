@@ -140,6 +140,22 @@ feeds and the composed layout must pass the pipe-isolation validators
 
 ## Decision log
 
+- *2026-07-24 (#434) — `mega_chain_usp2_resolves_bus_failure` moved to
+  `#[ignore]` (opt-in). This is a PERFORMANCE opt-out, not a weakening
+  of the gate: the test still passes (re-verified opt-in, 0 errors),
+  and the two in-loop mega gates it sits beside — `mega_chain_chem5`
+  and `mega_chain_pu4` — keep the mega path covered on every run. USP's
+  10-member oil complex generates crossing zones absent from the baked
+  `sat-zones.bin`, so it re-solves them live every run (>6 min under
+  cold-cache 16-way contention; its sibling chem5 does the same class
+  of work in 0.67s purely because ITS zones are cached). It alone held
+  the `cell_composition` binary at ~1378s. Trade recorded per the #434
+  review: the opt-in also drops it from the default CI lane; the
+  cheapest restore-to-loop is to bake its zones into `sat-zones.bin`
+  (the chem5 route), NOT to un-ignore it as-is. Supersedes this log's
+  earlier "permanently gated" framing for USP@2 specifically (the gate
+  stands; only its run cadence changed).*
+
 - *2026-07-24 — CLOSE-OUT (#421 merged). All three phases delivered;
   every kill criterion resolved without firing: (1)
   generic-attachment held — the mega attaches through boundary
