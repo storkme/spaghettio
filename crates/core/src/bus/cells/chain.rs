@@ -65,9 +65,29 @@ pub fn required_copies(sr: &SolverResult) -> i32 {
         .iter()
         .flat_map(|m| m.outputs.iter().map(|o| o.item.as_str()))
         .collect();
+    // Items internal to a mega subgraph never ride chain belts either:
+    // a solid intermediate produced AND consumed inside the block
+    // (sulfur→sulfuric-acid in a chem-pack chain) is the block's own
+    // business — counting it would force a spurious chain-wide K split
+    // (#405 review finding 2). No-op for solid-only chains.
+    let mega = super::mega::mega_subgraph(sr).ok().flatten();
+    let mega_exports: FxHashSet<&str> = mega
+        .as_ref()
+        .map(|p| p.outputs.iter().map(|(i, _)| i.as_str()).collect())
+        .unwrap_or_default();
+    let is_member = |recipe: &str| mega.as_ref().is_some_and(|p| p.members.contains(recipe));
     let mut k = 1i32;
     for m in &sr.machines {
         for o in &m.outputs {
+            // Fluids ride pipes, not belts — 2.0's segment model has no
+            // per-pipe rate falloff, so they never drive the quantum
+            // (RFC-052 Phase B; no-op for solid-only chains).
+            if o.is_fluid {
+                continue;
+            }
+            if is_member(&m.recipe) && !mega_exports.contains(o.item.as_str()) {
+                continue;
+            }
             let total = o.rate * m.count;
             k = k.max(((total / QUANTUM_RATE) - 1e-9).ceil() as i32);
         }
@@ -75,7 +95,7 @@ pub fn required_copies(sr: &SolverResult) -> i32 {
     let mut ext: FxHashMap<&str, f64> = FxHashMap::default();
     for m in &sr.machines {
         for i in &m.inputs {
-            if !produced.contains(i.item.as_str()) {
+            if !i.is_fluid && !produced.contains(i.item.as_str()) {
                 *ext.entry(i.item.as_str()).or_default() += i.rate * m.count;
             }
         }
@@ -92,24 +112,52 @@ pub fn chain_eligible(sr: &SolverResult) -> Result<(), String> {
     if sr.machines.is_empty() {
         return Err("cells: empty chain".into());
     }
+    // RFC-052 Phase B: fluid-touching specs collapse into ONE mega-cell
+    // (or refuse with the partition's named reason). Members are exempt
+    // from the solid per-spec checks — the mega sub-solve owns them.
+    let mega = super::mega::mega_subgraph(sr)?;
+    let is_member = |recipe: &str| {
+        mega.as_ref().is_some_and(|p| p.members.contains(recipe))
+    };
     let mut producers: FxHashMap<&str, usize> = FxHashMap::default();
     for m in &sr.machines {
         if m.count <= 0.0 {
             return Err(format!("cells: zero-count spec {}", m.recipe));
         }
+        if is_member(&m.recipe) {
+            continue;
+        }
         for o in &m.outputs {
             if o.is_fluid {
-                return Err(format!("cells: fluid output {} (solid-only Phase B)", o.item));
+                return Err(format!("cells: fluid output {} outside the mega subgraph", o.item));
             }
             *producers.entry(o.item.as_str()).or_default() += 1;
         }
         for i in &m.inputs {
             if i.is_fluid {
-                return Err(format!("cells: fluid input {} (solid-only Phase B)", i.item));
+                return Err(format!("cells: fluid input {} outside the mega subgraph", i.item));
             }
         }
         if !m.self_loop.is_empty() {
             return Err(format!("cells: self-loop recipe {}", m.recipe));
+        }
+    }
+    if let Some(plan) = &mega {
+        // Each mega output competes for corridor capacity like any
+        // produced item, and each routes ONE corridor (v1: a single
+        // consumer per exported item).
+        for (item, _rate) in &plan.outputs {
+            *producers.entry(item.as_str()).or_default() += 1;
+            let consumers = sr
+                .machines
+                .iter()
+                .filter(|c| !is_member(&c.recipe) && c.inputs.iter().any(|i| i.item == *item))
+                .count();
+            if consumers > 1 {
+                return Err(format!(
+                    "mega: {item} feeds {consumers} consumers (v1 routes a single corridor per mega output)"
+                ));
+            }
         }
     }
     for (item, n) in &producers {
@@ -133,6 +181,14 @@ struct Placed {
     cell: Cell,
     /// Absolute x of the cell's west edge.
     x: i32,
+    /// Vertical placement offset: `CELL_Y` for ordinary cells, 0 for a
+    /// mega block (it carries its own margin band with feed heads at
+    /// its local y=0 = the chain boundary row).
+    y_off: i32,
+    /// The mega block's drain heads in ABSOLUTE coords (x, y, item) —
+    /// each solid output exits SOUTH at its own head; corridors to the
+    /// consumers start below them. Empty for ordinary cells.
+    mega_drains: Vec<(i32, i32, String)>,
     /// Absolute x of the slot's west edge (feed block start).
     slot_x: i32,
     /// Base x of this slot's vertical-lane strip (east of feed columns).
@@ -556,6 +612,12 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
     chain_eligible(sr)?;
     let kq = required_copies(sr);
     let scale = 1.0 / kq as f64;
+    // RFC-052 Phase B: fluid specs collapse into one SUPER-SPEC whose
+    // placed form is the boundary-adapted mega block. Solid-only chains
+    // take mega_plan = None and every branch below is bit-identical to
+    // the pre-Phase-B placer (the registry gate enforces it).
+    let mega_plan = super::mega::mega_subgraph(sr)?;
+    const MEGA_PREFIX: &str = "mega:";
 
     let produced: FxHashSet<&str> = sr
         .machines
@@ -566,13 +628,57 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
     // Place producers-first, west→east. `sr.dependency_order` is
     // TARGET-FIRST (the solver's DFS pushes a recipe before recursing
     // into its ingredients), so reverse it; unlisted recipes go last.
-    let mut specs: Vec<&crate::models::MachineSpec> = sr.machines.iter().collect();
-    let pos: FxHashMap<&str, usize> = sr
+    let mut specs: Vec<crate::models::MachineSpec> = match &mega_plan {
+        None => sr.machines.to_vec(),
+        Some(plan) => {
+            let mut v: Vec<crate::models::MachineSpec> = sr
+                .machines
+                .iter()
+                .filter(|m| !plan.members.contains(&m.recipe))
+                .cloned()
+                .collect();
+            // Synthetic super-spec: one "machine" producing the
+            // subgraph's terminal solid at the full chain rate; no
+            // chain-side inputs (v1: external-only, self-fed block).
+            v.push(crate::models::MachineSpec {
+                entity: "mega-cell".into(),
+                recipe: format!("{MEGA_PREFIX}{}", plan.target),
+                count: 1.0,
+                inputs: Vec::new(),
+                outputs: plan
+                    .outputs
+                    .iter()
+                    .map(|(item, rate)| crate::models::ItemFlow {
+                        item: item.clone(),
+                        rate: *rate,
+                        is_fluid: false,
+                        module_id: 0,
+                    })
+                    .collect(),
+                ..sr.machines[0].clone()
+            });
+            v
+        }
+    };
+    let mut pos: FxHashMap<String, usize> = sr
         .dependency_order
         .iter()
         .enumerate()
-        .map(|(i, r)| (r.as_str(), i))
+        .map(|(i, r)| (r.clone(), i))
         .collect();
+    if let Some(plan) = &mega_plan {
+        // The super-spec inherits its DEEPEST member's dependency
+        // position, so it places before its consumer like the member
+        // rows would have.
+        let best = plan
+            .members
+            .iter()
+            .filter_map(|r| pos.get(r).copied())
+            .max();
+        if let Some(i) = best {
+            pos.insert(format!("{MEGA_PREFIX}{}", plan.target), i);
+        }
+    }
     specs.sort_by_key(|m| match pos.get(m.recipe.as_str()) {
         Some(&i) => (0, std::cmp::Reverse(i)),
         None => (1, std::cmp::Reverse(usize::MAX)),
@@ -585,8 +691,15 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
     let n = specs.len();
     let mut lane_demand: Vec<i32> = vec![0; n];
     for (pi, m) in specs.iter().enumerate() {
+        let pi_mega = m.recipe.starts_with(MEGA_PREFIX);
         for o in &m.outputs {
             for (ci, c) in specs.iter().enumerate() {
+                if pi_mega && ci != pi && c.inputs.iter().any(|i| i.item == o.item) {
+                    // Mega corridors always ride the bypass row (the
+                    // drain exits south) — ascent lane only.
+                    lane_demand[ci] += 1;
+                    continue;
+                }
                 if ci != pi && c.inputs.iter().any(|i| i.item == o.item) && ci != pi + 1 {
                     if pi + 1 < n {
                         lane_demand[pi + 1] += 1;
@@ -606,6 +719,7 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
     // Copies are identical — generate each spec's cell once (the cell
     // generator runs the full engine; K=12 must not run it 12×).
     let mut cell_cache: Vec<Cell> = Vec::with_capacity(n);
+    let mut mega_block_cache: Option<LayoutResult> = None;
     for copy in 0..kq {
         for (si, m) in specs.iter().enumerate() {
             let out_item = m
@@ -614,13 +728,26 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
                 .ok_or_else(|| format!("cells: {} has no output", m.recipe))?
                 .item
                 .clone();
+            let is_mega = m.recipe.starts_with(MEGA_PREFIX);
             // outputs[].rate is PER-MACHINE; the cell serves the whole
             // spec's share of this copy.
             let rate = m.outputs[0].rate * m.count * scale;
             if copy == 0 {
-                let input_names: Vec<&str> = m.inputs.iter().map(|i| i.item.as_str()).collect();
-                let (_csr, cl) = generate_cell_layout(&out_item, rate, &input_names);
-                cell_cache.push(extract_cell(&cl));
+                if is_mega {
+                    let plan = mega_plan.as_ref().expect("mega spec implies plan");
+                    let (_msr, block) = super::mega::compose_mega_block(sr, plan, scale)?;
+                    mega_block_cache = Some(block.clone());
+                    cell_cache.push(Cell {
+                        width: block.width,
+                        height: block.height,
+                        ports: Vec::new(),
+                        entities: block.entities,
+                    });
+                } else {
+                    let input_names: Vec<&str> = m.inputs.iter().map(|i| i.item.as_str()).collect();
+                    let (_csr, cl) = generate_cell_layout(&out_item, rate, &input_names);
+                    cell_cache.push(extract_cell(&cl));
+                }
             }
             let cell = cell_cache[si].clone();
             let ext_inputs: Vec<String> = m
@@ -654,15 +781,37 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
             let x = vlane0 + strip + 1;
             cursor = x + cell.width + gap;
 
+            let y_off = if is_mega { 0 } else { CELL_Y };
             for e in &cell.entities {
                 let mut e = e.clone();
                 e.x += x;
-                e.y += CELL_Y;
+                e.y += y_off;
                 entities.push(e);
             }
+            let mega_drains = if is_mega {
+                let block = mega_block_cache.as_ref().expect("block cached");
+                // Boundary feeds of the block become CHAIN boundary
+                // records at the placed offset; each drain head anchors
+                // one outgoing corridor.
+                for r in &block.boundary_inputs {
+                    b_in.push(BoundaryRecord { x: r.x + x, ..r.clone() });
+                }
+                if block.boundary_outputs.is_empty() {
+                    return Err("mega: block has no drain record".to_string());
+                }
+                block
+                    .boundary_outputs
+                    .iter()
+                    .map(|d| (d.x + x, d.y + y_off, d.item.clone()))
+                    .collect()
+            } else {
+                Vec::new()
+            };
             placed.push(Placed {
                 cell,
                 x,
+                y_off,
+                mega_drains,
                 slot_x,
                 vlane_base: vlane0,
                 recipe: m.recipe.clone(),
@@ -677,8 +826,11 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
         }
     }
 
-    let band_bottom = CELL_Y
-        + placed.iter().map(|p| p.cell.height).max().unwrap_or(0)
+    let band_bottom = placed
+        .iter()
+        .map(|p| p.y_off + p.cell.height)
+        .max()
+        .unwrap_or(CELL_Y)
         + 1;
 
     // --- External feeds: per cell, columns west of it (pitch 4), north
@@ -733,17 +885,29 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
         .iter()
         .enumerate()
         .map(|(pi, m)| {
-            let out_item = &m.outputs[0].item;
-            specs
-                .iter()
-                .enumerate()
-                .filter(|(ci, c)| {
-                    *ci != pi
-                        && *ci != pi + 1
-                        && c.inputs.iter().any(|i| i.item == *out_item)
-                        && cell_cache[*ci].ports.iter().any(|q| q.inbound && q.item == *out_item)
+            let pi_mega = m.recipe.starts_with(MEGA_PREFIX);
+            // Mega specs count every output's edge (one bypass row per
+            // drained corridor); solid specs keep the historical
+            // primary-output count exactly (bit-identity).
+            let outs: &[crate::models::ItemFlow] =
+                if pi_mega { &m.outputs } else { &m.outputs[..1] };
+            outs.iter()
+                .map(|o| {
+                    specs
+                        .iter()
+                        .enumerate()
+                        .filter(|(ci, c)| {
+                            *ci != pi
+                                && (pi_mega || *ci != pi + 1)
+                                && c.inputs.iter().any(|i| i.item == o.item)
+                                && cell_cache[*ci]
+                                    .ports
+                                    .iter()
+                                    .any(|q| q.inbound && q.item == o.item)
+                        })
+                        .count() as i32
                 })
-                .count() as i32
+                .sum::<i32>()
         })
         .sum();
     // Bypass rows sit at PITCH 3 (band_bottom+1, +4, +7, ...): at
@@ -789,6 +953,80 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
             })
             .map(|(ci, _)| ci)
             .collect();
+        // Mega producer (RFC-052 Phase B): each solid output exits
+        // SOUTH at its own drain head — no merge/fan machinery, and
+        // each corridor rides its own bypass row from directly below
+        // its drain to its (single, eligibility-enforced) consumer.
+        // Outputs with no consumer stay chain exports at their drain.
+        if !p.mega_drains.is_empty() {
+            for (dx0, dy0, d_item) in p.mega_drains.clone() {
+                let consumer = placed.iter().enumerate().find(|(ci, c)| {
+                    *ci != pi
+                        && c.copy == p.copy
+                        && specs[*ci % n].inputs.iter().any(|i| i.item == d_item)
+                        && c.cell.ports.iter().any(|q| q.inbound && q.item == d_item)
+                });
+                let Some((ci, c)) = consumer else {
+                    b_out.push(BoundaryRecord {
+                        item: d_item.clone(),
+                        x: dx0,
+                        y: dy0,
+                        direction: EntityDirection::South,
+                        is_fluid: false,
+                        entity: "transport-belt".into(),
+                    });
+                    continue;
+                };
+                let port = c
+                    .cell
+                    .ports
+                    .iter()
+                    .find(|q| q.inbound && q.item == d_item)
+                    .expect("consumer port checked in eligibility");
+                let (tx, ty) = port_abs(port, c.x);
+                let seg = format!("corr:{}:{}", p.seg, c.seg);
+                let up_demand = lane_demand[ci % n];
+                let lane_up = alloc_lane(&mut lane_next, ci, c.vlane_base, lane_step(up_demand));
+                let row = bypass_idx.entry(p.copy).or_insert(0);
+                let by_y = band_bottom + 1 + 3 * *row;
+                *row += 1;
+                router.vcol(&mut entities, dx0, dy0 + 1, by_y - 1, &d_item,
+                    "express-transport-belt", "express-underground-belt", &seg);
+                if lane_up < dx0 {
+                    // WESTWARD consumer (#405 review finding 1): the
+                    // dependency-position invariant makes this
+                    // analytically unreachable today, but an eastward
+                    // hrow with x0>x1 stamps NOTHING silently (the
+                    // mil5-ore landmine class) — mirror the solid
+                    // bypass path's guard instead of trusting the
+                    // invariant forever.
+                    router.corner_west(&mut entities, dx0, by_y, &d_item, "express-transport-belt", &seg);
+                    router.hrow_west(&mut entities, by_y, dx0 - 1, lane_up + 1, &d_item,
+                        "express-transport-belt", "express-underground-belt", &seg);
+                    router.corner_north(&mut entities, lane_up, by_y, &d_item, "express-transport-belt", &seg);
+                } else {
+                    router.corner_east(&mut entities, dx0, by_y, &d_item, "express-transport-belt", &seg);
+                    router.hrow(&mut entities, by_y, dx0 + 1, lane_up - 1, &d_item,
+                        "express-transport-belt", "express-underground-belt", &seg);
+                    router.occ.insert((lane_up, by_y));
+                    entities.push(PlacedEntity {
+                        name: "express-transport-belt".into(), x: lane_up, y: by_y,
+                        direction: EntityDirection::North,
+                        carries: Some(d_item.clone()),
+                        segment_id: Some(seg.clone()), ..Default::default()
+                    });
+                }
+                if router.occ.contains(&(lane_up, ty + 1)) {
+                    retrofit_feed_hop(&mut entities, &mut router, lane_up, ty + 1)?;
+                }
+                router.vcol(&mut entities, lane_up, by_y - 1, ty + 1, &d_item,
+                    "express-transport-belt", "express-underground-belt", &seg);
+                router.corner_east(&mut entities, lane_up, ty, &d_item, "express-transport-belt", &seg);
+                router.hrow(&mut entities, ty, lane_up + 1, tx - 1, &d_item,
+                    "express-transport-belt", "express-underground-belt", &seg);
+            }
+            continue;
+        }
         let outs: Vec<&Port> = p.cell.ports.iter().filter(|q| !q.inbound).collect();
         if consumers.is_empty() {
             // Final product: corner south past the band, drain record.

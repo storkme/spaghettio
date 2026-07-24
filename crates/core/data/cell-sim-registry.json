@@ -26,14 +26,14 @@
   {
     "target": "plastic-bar",
     "rate": 2.0,
-    "geometry_hash": "163148334829655d",
+    "geometry_hash": "cb595779d2d4e2b2",
     "declared_inserter_capacity": 0,
     "declared_stacking": 1,
     "harness_world": "nb=0 bulk=1, S=1 (post-#390 stacking parity)",
     "verdict": "PASS",
     "produced_per_s": 2.2,
-    "scenario": "spaghettio-sim mega-plastic2 (Factorio 2.0.76, 4/4 working, converged, delivered 2.20/s vs 2.00 planned; FIRST working refineries \u2014 #400 fixed: port-connected strip + reactive substation + mirror-as-rotation export)",
-    "date": "2026-07-23"
+    "scenario": "spaghettio-sim mega-plastic2 (Factorio 2.0.76, 4/4 working, converged, delivered 2.20/s vs 2.00 planned; re-measured 2026-07-24 after the Phase-B joint fluid planner corrected the feed path \u2014 the prior geometry pinned a residual terminus bug)",
+    "date": "2026-07-24"
   },
   {
     "target": "sulfur",
@@ -46,5 +46,17 @@
     "produced_per_s": 2.0,
     "scenario": "spaghettio-sim mega-sulfur2 (Factorio 2.0.76, 5/5 working, converged, produced 2.00/s EXACT; two-fluid mega-cell with adjacency-planned feeds)",
     "date": "2026-07-23"
+  },
+  {
+    "target": "advanced-circuit",
+    "rate": 2.0,
+    "geometry_hash": "f0603696e228079e",
+    "declared_inserter_capacity": 0,
+    "declared_stacking": 1,
+    "harness_world": "nb=0 bulk=1, S=1 (post-#390 stacking parity)",
+    "verdict": "PASS",
+    "produced_per_s": 2.01,
+    "scenario": "spaghettio-sim mega-chain-ac2raw (Factorio 2.0.76, 45/45 working, converged, delivered 2.00/s EXACT from fully raw inputs \u2014 the RFC-052 Phase B flagship: smelting cells + oil mega-cell + circuit cells in one composed chain)",
+    "date": "2026-07-24"
   }
 ]
