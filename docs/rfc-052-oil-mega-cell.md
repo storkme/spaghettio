@@ -140,6 +140,26 @@ feeds and the composed layout must pass the pipe-isolation validators
 
 ## Decision log
 
+- *2026-07-24 — Increment 1 (chem class) unblocked by a GAME-RULE
+  falsification, not adapter work (#407): the chem5 sim TOTAL STALL
+  traced to an 11-apart vertical PTG pair in the RAW engine block —
+  the game's `max_underground_distance: 10` caps the UG-in/UG-out
+  ENTITY distance at 10 (gap 9), belt `max_distance` semantics; the
+  engine read it as gap 10 in BOTH the trunk stamper
+  (`FLUID_UG_MAX_DISTANCE` +1 formula) and the validator
+  (`MAX_PIPE_PTG_DISTANCE = 11`), so the validator blessed pairs the
+  game never connects (same validator-blind class as #348/#364/#400).
+  Fixed everywhere + F4 corrected; full suite green, registry hashes
+  unchanged (no registered geometry had an over-reach pair), stress
+  drift identical to the known #406 set. Post-fix sim: chem5 goes
+  0.00 → 4.50/5.00 packs/s with ZERO fluid shortages (PG +5.6%) — the
+  mega fluid architecture is sim-proven for the chem class; residual
+  −10% is solid-side (plastic→cable→EC→AC starvation chain) and does
+  NOT match the layout's declared inserter-item-throughput warnings
+  (those name iron-plate feeds that measure 100%), so it is being
+  forensically attributed (kit vs #383-class) before any registry
+  claim.*
+
 - *2026-07-24 — Phase B DELIVERED: gate (b) MET — the flagship runs.
   `mega_subgraph` partitions fluid-touching specs (one weakly-connected
   subgraph, solid-only edges out, external-only inputs, v1 single
