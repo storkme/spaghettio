@@ -245,40 +245,20 @@ struct BpPosition {
 
 /// Returns (width_tiles, height_tiles) for entities that aren't 1×1.
 /// Direction is needed for splitters (2 tiles perpendicular to flow).
+///
+/// Delegates entirely to `common::entity_size` (machines, poles, and the
+/// #351 non-machine multi-tile table) plus `common::oriented_splitter_dims`
+/// for the direction-dependent splitter family — the single shared source
+/// both this parser and the blueprint exporter consult, so the two can no
+/// longer drift apart the way they did before #351 (parser knew beacon/lab/
+/// storage-tank/electric-mining-drill/steel-furnace/rocket-silo/crusher/
+/// biolab as multi-tile; the exporter treated them all as 1×1).
 fn entity_footprint(name: &str, direction: EntityDirection) -> (i32, i32) {
-    match name {
-        "assembling-machine-1"
-        | "assembling-machine-2"
-        | "assembling-machine-3"
-        | "chemical-plant"
-        | "electric-furnace"
-        | "centrifuge"
-        | "lab"
-        | "beacon"
-        | "storage-tank"
-        | "electric-mining-drill"
-        | "biochamber" => (3, 3),
-
-        "oil-refinery" | "foundry" | "biolab" | "cryogenic-plant" => (5, 5),
-        "rocket-silo" => (9, 9),
-        "big-electric-pole" | "substation" | "steel-furnace" => (2, 2),
-        "electromagnetic-plant" => (4, 4),
-        "recycler" => (2, 4),
-        "crusher" => (2, 3),
-
-        // Splitters: 2 tiles wide perpendicular to flow direction. The
-        // shared helper covers turbo-splitter too (115 corpus instances
-        // were misparsed half a tile off before PR #350's review caught
-        // the exporter/parser table divergence) and correctly excludes
-        // the 1×1 lane-splitter.
-        "splitter" | "fast-splitter" | "express-splitter" | "turbo-splitter" => {
-            let (w, h) = crate::common::oriented_splitter_dims(name, direction)
-                .expect("splitter family covered by oriented_splitter_dims");
-            (w as i32, h as i32)
-        }
-
-        _ => (1, 1),
+    if let Some((w, h)) = crate::common::oriented_splitter_dims(name, direction) {
+        return (w as i32, h as i32);
     }
+    let (w, h) = crate::common::entity_size(name);
+    (w as i32, h as i32)
 }
 
 // ---- Direction parsing ----
@@ -1287,5 +1267,46 @@ mod tests {
         assert_eq!(machine.items[2].item, "speed-module");
         assert_eq!(machine.items[2].count, 1);
         assert_eq!(machine.items[2].quality, None);
+    }
+
+    /// #351: `entity_footprint` (this parser) and `common::entity_size`
+    /// (the blueprint exporter) must agree on every multi-tile entity's
+    /// dims, or re-exporting an imported blueprint shifts that entity.
+    /// Both now delegate to the same shared tables (`machine_dims`,
+    /// `non_machine_multi_tile_dims`, the pole arm), so this test mostly
+    /// pins the actual expected values against silent drift in those
+    /// shared tables — not just self-consistency between the two call
+    /// sites, which the delegation already guarantees structurally.
+    #[test]
+    fn entity_footprint_matches_entity_size_for_every_known_multi_tile_entity() {
+        let mut cases: Vec<(&str, (u32, u32))> = crate::common::MACHINE_ENTITY_NAMES
+            .iter()
+            .map(|&name| (name, crate::common::machine_dims(name)))
+            .collect();
+        cases.extend([
+            ("substation", (2, 2)),
+            ("big-electric-pole", (2, 2)),
+            ("beacon", (3, 3)),
+            ("storage-tank", (3, 3)),
+            ("electric-mining-drill", (3, 3)),
+            ("lab", (3, 3)),
+            ("biolab", (5, 5)),
+            ("rocket-silo", (9, 9)),
+            ("steel-furnace", (2, 2)),
+            ("crusher", (2, 3)),
+        ]);
+
+        for (name, (w, h)) in cases {
+            assert_eq!(
+                crate::common::entity_size(name),
+                (w, h),
+                "entity_size({name}) drifted from the expected dims"
+            );
+            assert_eq!(
+                entity_footprint(name, EntityDirection::North),
+                (w as i32, h as i32),
+                "entity_footprint({name}) disagrees with entity_size — parser/exporter drift"
+            );
+        }
     }
 }

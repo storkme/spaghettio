@@ -166,13 +166,6 @@ pub fn machine_dims(entity: &str) -> (u32, u32) {
     }
 }
 
-/// Footprint `(width, height)` in tiles for ANY placed entity — the single
-/// source both the blueprint center math and the power validator's pole
-/// geometry consult (RFC `docs/rfc-power-supply.md` Phase 3a-i). Machines defer
-/// to [`machine_dims`]; the substation is 2×2; everything else (medium/small
-/// poles, belts, inserters, pipes) is 1×1. Before this, `blueprint.rs` hard-
-/// coded `(1,1)` for every non-machine, so a substation would have exported at
-/// center `x+0.5` instead of `x+1.0`.
 /// Direction-aware footprint for the 2-wide splitter family — the ONE
 /// source both the blueprint exporter's center math and the parser's
 /// footprint table consume (PR #350 review: exporter and parser keeping
@@ -198,13 +191,59 @@ pub fn oriented_splitter_dims(
     }
 }
 
+/// Direction-agnostic footprint for non-machine, non-pole, non-splitter
+/// multi-tile entities — everything the parser's `entity_footprint` knows
+/// about that isn't already routed through [`machine_dims`],
+/// [`oriented_splitter_dims`], or the substation/big-electric-pole arm of
+/// [`entity_size`]. `None` for anything else (defaults to 1×1).
+///
+/// #351: before this table existed, `entity_size` treated every one of
+/// these as 1×1 while the parser's `entity_footprint` already knew their
+/// real size, so re-exporting an imported blueprint containing any of them
+/// shifted the entity (measured: 8 of 39 corpus round-trips translation-
+/// drift for this reason). Dims verified against `entity_footprint`, the
+/// parser's source-of-truth table (itself draftsman-derived).
+///
+/// None of these are reachable from engine-generated layouts: none appear
+/// in [`MACHINE_ENTITY_NAMES`] or `recipe_db::category_machines`,
+/// `crusher`'s only recipe category (`"crushing"`) is permanently excluded
+/// from solving (`recipe_db::EXCLUDED_CATEGORIES` / `is_excluded_recipe`),
+/// and the web UI's furnace picker never offers `steel-furnace` as a
+/// selectable option (only `electric-furnace` is enabled; `stone-furnace`
+/// is disabled and `steel-furnace` isn't even listed) — so extending this
+/// table only changes behavior for imported-blueprint round-trips, never
+/// for engine-generated output.
+pub fn non_machine_multi_tile_dims(entity: &str) -> Option<(u32, u32)> {
+    match entity {
+        "beacon" | "storage-tank" | "electric-mining-drill" | "lab" => Some((3, 3)),
+        "biolab" => Some((5, 5)),
+        "rocket-silo" => Some((9, 9)),
+        "steel-furnace" => Some((2, 2)),
+        "crusher" => Some((2, 3)),
+        _ => None,
+    }
+}
+
+/// Footprint `(width, height)` in tiles for ANY placed entity — the single
+/// source both the blueprint center math and the power validator's pole
+/// geometry consult (RFC `docs/rfc-power-supply.md` Phase 3a-i). Machines
+/// defer to [`machine_dims`]; the substation and big pole are 2×2; the
+/// remaining non-machine multi-tile entities the parser recognizes defer to
+/// [`non_machine_multi_tile_dims`]; everything else (medium/small poles,
+/// belts, inserters, pipes) is 1×1. Direction-dependent entities (the
+/// splitter family) are NOT covered here — callers with a direction consult
+/// [`oriented_splitter_dims`] first. Before the pole fix, `blueprint.rs`
+/// hard-coded `(1,1)` for every non-machine, so a substation would have
+/// exported at center `x+0.5` instead of `x+1.0`; before #351, the same was
+/// true for beacon/storage-tank/electric-mining-drill/lab/biolab/rocket-
+/// silo/steel-furnace/crusher.
 pub fn entity_size(entity: &str) -> (u32, u32) {
     if is_machine_entity(entity) {
         machine_dims(entity)
     } else if entity == "substation" || entity == "big-electric-pole" {
         (2, 2)
     } else {
-        (1, 1)
+        non_machine_multi_tile_dims(entity).unwrap_or((1, 1))
     }
 }
 
