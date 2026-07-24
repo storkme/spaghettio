@@ -60,31 +60,15 @@ For full build commands (WASM rebuild, release builds), see [`docs/build-systems
 - **Adversarial review before anything is commit-ready** — code *and*
   documentation. Preferred: the CI review bot —
   [`.github/workflows/claude-code-review.yml`](.github/workflows/claude-code-review.yml)
-  runs a Claude code review on every PR (opened/synchronized/reopened), and
-  `clear-agent-reviewed.yml` drops the `agent-reviewed` label when new
-  commits land so the new SHA gets re-reviewed. **A green `claude-review`
-  check is NOT evidence a review happened — confirm the bot actually
-  posted.** From #305 through #330 the bot posted *nothing*: three
-  stacked, each-sufficient causes — template read-only permissions
-  (fixed #327), the plugin's `--comment` flag never passed (its own
-  contract is "do not post" without it; fixed #329), and no
-  harness-level tool allowlist (`claude_args --allowedTools`), which
-  denied every posting/diff call (fixed #331). Validated 2026-07-21 via
-  a planted-bug canary (#330): the bot's first-ever comment correctly
-  flagged the bug inline with a committable fix. All substantive PR
-  review feedback before then was session-side. **A fourth cause class
-  surfaced 2026-07-22: re-running `/install-github-app` overwrote both
-  workflow files with the stock template, silently wiping all three
-  fixes at once (plus `claude.yml`'s owner-only sender gate). Restored
-  in #369, re-validated via canary #368. If anyone reruns the installer,
-  diff the workflow files against main before merging its PR.**
-  Expected behavior now:
-  inline comments on findings, or a "no issues" summary comment on
-  clean substantive PRs — a green check with *neither* on a
-  non-trivial PR means it's broken again. Known benign no-comment
-  cases: PRs that modify the workflow file itself (the action's
-  anti-hijack self-skip) and changes its triviality gate deems
-  obviously correct. Local adversarial review (an
+  reviews every PR; expect inline comments on findings or a "no issues"
+  summary comment. Its historical silent-failure mode is now loud: the
+  `claude-review` check FAILS when a non-trivial PR ends with zero review
+  activity (benign skips: drafts, workflow-file PRs, small diffs, and
+  cheap runs bearing the plugin's conscious gate-skip signature).
+  Live trap: re-running `/install-github-app` overwrites the repaired
+  workflow files with the stock template — diff them against main before
+  merging its PR. Failure-class history and forensics playbook:
+  [`docs/review-bot.md`](docs/review-bot.md). Local adversarial review (an
   independent agent that re-runs gates and probes the claims) is the
   fallback when a PR isn't in play — and it remains **required in addition
   to the bot** for layout-engine or validator-semantics changes: the bot
