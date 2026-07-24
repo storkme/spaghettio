@@ -6947,7 +6947,7 @@ fn fulgora_scrap_sorter_mechanism_present() {
     // are out of this unit's scope; reported separately.)
     let mut fluid_errors: Vec<&ValidationIssue> = Vec::new();
     let fp = validate::check_fluid_port_connectivity(&layout, LayoutStyle::Bus);
-    let fn_ = validate::check_fluid_network_connectivity(&layout);
+    let fn_ = validate::check_fluid_network_connectivity(&layout, None);
     let fi = validate::check_pipe_isolation(&layout);
     for issue in fp.iter().chain(fn_.iter()).chain(fi.iter()) {
         if issue.severity == Severity::Error {
