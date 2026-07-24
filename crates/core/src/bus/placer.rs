@@ -298,9 +298,17 @@ pub(crate) fn max_machines_for_belt_horizontal_stack(
 /// Performs a topological sort on solid-input dependencies so every producer
 /// row sits above every consumer row (bus flow is SOUTH). Fluid dependencies
 /// are ignored. Ties are broken by the solver's `dependency_order` (reversed).
+///
+/// When `di_couplings` is non-empty, a DI producer that is followed by its
+/// coupled consumer in the dependency graph is emitted back-to-back — the
+/// consumer is pulled forward to immediately follow the producer, so the
+/// placer can suppress the inter-recipe gap and the lane planner can skip
+/// the bus lane. The consumer is only pulled forward if ALL its other solid
+/// deps are already satisfied; otherwise it stays in normal topo order.
 pub(crate) fn order_specs<'a>(
     machines: &'a [MachineSpec],
     dependency_order: &[String],
+    di_couplings: &[crate::models::DICoupling],
 ) -> Vec<&'a MachineSpec> {
     // A single recipe may have multiple `MachineSpec`s when the partitioner
     // splits a producer into per-module siblings (same recipe, distinct
@@ -369,6 +377,15 @@ pub(crate) fn order_specs<'a>(
         .filter(|(r, _)| all_recipes.contains(r))
         .collect();
 
+    // DI: producer_recipe → consumer_recipe. When the producer is emitted,
+    // greedily try to emit the consumer immediately after (if its other deps
+    // are satisfied). This co-locates DI pairs so the placer can suppress the
+    // inter-recipe gap and the lane planner can skip the bus lane.
+    let di_consumer_of: FxHashMap<&str, &str> = di_couplings
+        .iter()
+        .map(|c| (c.producer_recipe.as_str(), c.consumer_recipe.as_str()))
+        .collect();
+
     let mut emitted: Vec<&str> = Vec::new();
 
     while !remaining.is_empty() {
@@ -389,6 +406,23 @@ pub(crate) fn order_specs<'a>(
         remaining.remove(r);
         for deps_set in remaining.values_mut() {
             deps_set.remove(r);
+        }
+
+        // DI co-location: if this recipe is a DI producer, try to emit
+        // its consumer immediately after (before the normal loop picks
+        // something else). Only if the consumer's remaining deps are all
+        // satisfied (i.e. it's ready NOW) — otherwise it stays in normal
+        // topo order and the gap is preserved.
+        if let Some(&consumer) = di_consumer_of.get(r) {
+            if let Some(consumer_deps) = remaining.get(consumer) {
+                if consumer_deps.is_empty() {
+                    emitted.push(consumer);
+                    remaining.remove(consumer);
+                    for deps_set in remaining.values_mut() {
+                        deps_set.remove(consumer);
+                    }
+                }
+            }
         }
     }
 
@@ -1620,7 +1654,13 @@ pub fn place_rows(
     let mut y_cursor = y_offset;
     let mut max_width: i32 = 0;
 
-    let ordered = order_specs(machines, dependency_order);
+    let ordered = if direct_insertion {
+        order_specs(machines, dependency_order, di_couplings)
+    } else {
+        // DI off: pass empty couplings so order_specs is byte-identical
+        // to the pre-DI Kahn sort (no greedy consumer pull-forward).
+        order_specs(machines, dependency_order, &[])
+    };
     let empty_final: FxHashSet<String> = FxHashSet::default();
     let final_items = final_output_items.unwrap_or(&empty_final);
     let empty_gaps: FxHashMap<usize, i32> = FxHashMap::default();
@@ -2057,7 +2097,7 @@ mod tests {
     fn order_specs_producer_before_consumer() {
         let machines = vec![iron_gear_spec(), iron_plate_spec()];
         let dep_order = vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()];
-        let ordered = order_specs(&machines, &dep_order);
+        let ordered = order_specs(&machines, &dep_order, &[]);
         assert_eq!(ordered.len(), 2);
         assert_eq!(ordered[0].recipe, "iron-plate");
         assert_eq!(ordered[1].recipe, "iron-gear-wheel");
@@ -2096,7 +2136,7 @@ mod tests {
         // dependency_order: a then b → reversed: b then a → rank: b=0, a=1
         // → a should come after b
         let dep_order = vec!["recipe-a".to_string(), "recipe-b".to_string()];
-        let ordered = order_specs(&machines, &dep_order);
+        let ordered = order_specs(&machines, &dep_order, &[]);
         assert_eq!(ordered[0].recipe, "recipe-b");
         assert_eq!(ordered[1].recipe, "recipe-a");
     }
@@ -2188,42 +2228,43 @@ mod tests {
     }
 
     /// DI: when `direct_insertion` is true and a coupling exists, the
-    /// consumer's RowSpan carries `di_input` marking the coupling. When
-    /// the producer happens to be the immediately preceding recipe, the
-    /// inter-recipe gap is also suppressed (rows adjacent). When other
-    /// dependencies sit between them (e.g. iron-plate between cable and
-    /// EC), the gap is preserved and the bus lane handles routing —
-    /// a future `order_specs` enhancement will co-locate DI pairs.
+    /// consumer's RowSpan carries `di_input` marking the coupling, and
+    /// when the producer is immediately adjacent (co-located by
+    /// `order_specs`), the inter-recipe gap is suppressed.
     #[test]
     fn place_rows_di_marks_consumer() {
-        let result = electronic_circuit_solver_result();
-        let couplings = vec![crate::models::DICoupling {
-            producer_recipe: "copper-cable".to_string(),
-            consumer_recipe: "electronic-circuit".to_string(),
-            item: "copper-cable".to_string(),
-            producer_count: 3.0,
-            consumer_count: 3.0,
-        }];
+        use crate::solver::solve;
+        use rustc_hash::FxHashSet;
+        let available: FxHashSet<String> = ["iron-plate", "copper-plate"]
+            .iter().map(|s| s.to_string()).collect();
+        let result = solve("electronic-circuit", 10.0, &available, "assembling-machine-3").unwrap();
+        assert!(!result.di_couplings.is_empty(), "solver should detect DI");
+
         let (_, spans, _, _) = place_rows(
             &result.machines,
             &result.dependency_order,
-            0,
-            1,
+            0, 0,
             None,
             InserterTier::default(), QualityTier::Normal,
-            0,
-            None,
-            None,
+            0, None, None,
             RowLayout::default(),
             true, // direct_insertion ON
-            &couplings,
+            &result.di_couplings,
             &StackingCtx::unstacked(),
         );
 
         let recipe_order: Vec<&str> = spans.iter().map(|s| s.spec.recipe.as_str()).collect();
+        let cc_pos = recipe_order.iter().position(|&r| r == "copper-cable").unwrap();
         let ec_pos = recipe_order.iter().position(|&r| r == "electronic-circuit").unwrap();
 
-        // The EC row should carry di_input marking the cable coupling.
+        // Co-location: EC should be immediately after cable.
+        assert_eq!(ec_pos, cc_pos + 1, "EC should be immediately after cable");
+        // Gap suppressed: EC starts at cable's y_end (no +2 gap).
+        assert_eq!(
+            spans[ec_pos].y_start, spans[cc_pos].y_end,
+            "DI consumer should start at producer's y_end (no +2 gap)"
+        );
+        // di_input marking.
         assert_eq!(
             spans[ec_pos].di_input.as_ref().unwrap().0, "copper-cable",
             "EC row should be marked with DI input for copper-cable"
@@ -2762,7 +2803,7 @@ mod tests {
         };
         let machines = vec![cable, ec_a, ec_b];
         let dep_order: Vec<String> = vec!["copper-cable".into(), "electronic-circuit".into()];
-        let ordered = order_specs(&machines, &dep_order);
+        let ordered = order_specs(&machines, &dep_order, &[]);
 
         assert_eq!(ordered.len(), 3, "all input specs must be preserved through topo sort");
         assert_eq!(ordered[0].recipe, "copper-cable");

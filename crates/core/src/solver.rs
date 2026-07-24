@@ -778,6 +778,36 @@ mod tests {
         );
     }
 
+    /// The full pipeline: solving EC from plates with
+    /// `direct_insertion: true` produces a DI coupling for cable→EC, and
+    /// `order_specs` co-locates them (cable immediately before EC, no
+    /// other recipe between them).
+    #[test]
+    fn di_order_specs_co_locates_cable_and_ec() {
+        use crate::bus::placer::order_specs;
+        let available = inputs_of(&["iron-plate", "copper-plate"]);
+        let result = solve("electronic-circuit", 10.0, &available, "assembling-machine-3")
+            .unwrap();
+        assert!(
+            result
+                .di_couplings
+                .iter()
+                .any(|c| c.producer_recipe == "copper-cable"
+                    && c.consumer_recipe == "electronic-circuit"),
+            "solver should detect cable→EC coupling"
+        );
+        let ordered = order_specs(&result.machines, &result.dependency_order, &result.di_couplings);
+        let recipes: Vec<&str> = ordered.iter().map(|m| m.recipe.as_str()).collect();
+        let cc = recipes.iter().position(|&r| r == "copper-cable");
+        let ec = recipes.iter().position(|&r| r == "electronic-circuit");
+        assert!(cc.is_some() && ec.is_some(), "both cable and EC should be present");
+        assert_eq!(
+            ec.unwrap(),
+            cc.unwrap() + 1,
+            "EC should be immediately after cable (DI co-location)"
+        );
+    }
+
     /// The legacy tree walk has no per-pair flow data and must emit empty
     /// di_couplings. This is the compatibility-mode contract.
     #[test]
