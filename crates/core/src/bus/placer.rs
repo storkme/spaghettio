@@ -117,14 +117,18 @@ pub struct RowSpan {
     /// `row_exit_origin`, and the step-7b surplus merger. The helper
     /// [`RowSpan::output_belt_y_for`] centralises the lookup.
     pub sorted_output_belts: Vec<(String, i32)>,
-    /// `Some((item, producer_row_idx))` when this row's input for `item`
-    /// is fed by direct insertion from the producer row at `producer_row_idx`
-    /// instead of a bus trunk lane. The lane planner reads this to skip
-    /// lane creation for that `(item, consumer_row)` pair. Set only when
-    /// `LayoutOptions.direct_insertion` is true and the solver detected a
-    /// `DICoupling` for this pair. See `docs/rfc-decomposition-search.md`
-    /// Phase 3.
-    pub di_input: Option<(String, usize)>,
+    /// One `(item, producer_row_idx)` per input of this row that is fed by
+    /// direct insertion from the producer row at `producer_row_idx` instead
+    /// of a bus trunk lane. The lane planner reads this to skip lane creation
+    /// for each `(item, consumer_row)` pair. A consumer can have more than
+    /// one DI'd input (e.g. a recipe whose two ingredients are each
+    /// single-producer coupled), so this is a list, not a single option.
+    /// Populated only when `LayoutOptions.direct_insertion` is true, the
+    /// solver detected a `DICoupling`, AND the bridge was geometrically
+    /// feasible (an infeasible bridge leaves the item off this list so the
+    /// bus lane feeds it — see `stamp_di_bridge`). See
+    /// `docs/rfc-decomposition-search.md` Phase 3.
+    pub di_input: Vec<(String, usize)>,
 }
 
 impl RowSpan {
@@ -1593,7 +1597,7 @@ pub(crate) fn build_one_row(
         horizontal_stack,
         secondary_output_belt,
         sorted_output_belts,
-        di_input: None,
+        di_input: Vec::new(),
     };
 
     (row_ents, span, row_width)
@@ -1646,14 +1650,17 @@ fn stamp_di_bridge(
     // output belt to the consumer's input belt.
     let bridge_y = producer.y_end + 1;
 
-    // Verify the reach is feasible. The distance from bridge_y to
-    // producer_belt_y and to consumer_belt_y must each be ≤ 2 (long-handed
-    // reach). If not, skip the bridge (the bus lane will handle it — but
-    // the lane planner already skipped it, so this is a layout error we
-    // should log).
+    // Verify the reach is feasible. The bridge inserter is long-handed
+    // (`Reach::Far`), whose pickup and drop tiles are at EXACTLY 2 tiles
+    // from its own position — not "up to 2". A belt one tile away is
+    // reached PAST (to the empty tile beyond), so the pick/drop distances
+    // must each equal 2, not merely be ≤ 2. When they don't, return empty:
+    // the caller leaves `di_input` unset for this item, so the bus lane
+    // feeds the consumer normally (graceful fallback). The trace records
+    // the geometry that couldn't be bridged.
     let pick_dist = (bridge_y - producer_belt_y).abs();
     let drop_dist = (consumer_belt_y - bridge_y).abs();
-    if pick_dist > 2 || drop_dist > 2 {
+    if pick_dist != 2 || drop_dist != 2 {
         crate::trace::emit(crate::trace::TraceEvent::GhostSpecFailed {
             spec_key: format!("di-bridge:{item}"),
             from_x: 0,
@@ -1758,17 +1765,19 @@ pub fn place_rows(
     let empty_gaps: FxHashMap<usize, i32> = FxHashMap::default();
     let extra_gaps = extra_gap_after_row.unwrap_or(&empty_gaps);
 
-    // DI coupling lookup: consumer_recipe → (item, producer_recipe).
-    // Built once; consulted in the loop to suppress the inter-row gap
-    // and mark the consumer's RowSpan.
-    let di_lookup: FxHashMap<&str, (&str, &str)> = if direct_insertion {
-        di_couplings
-            .iter()
-            .map(|c| (c.consumer_recipe.as_str(), (c.item.as_str(), c.producer_recipe.as_str())))
-            .collect()
-    } else {
-        FxHashMap::default()
-    };
+    // DI coupling lookup: consumer_recipe → [(item, producer_recipe)].
+    // A consumer can be coupled on more than one input, so the value is a
+    // list — a plain map keyed by consumer_recipe would silently drop all
+    // but the last coupling for such a consumer.
+    let mut di_lookup: FxHashMap<&str, Vec<(&str, &str)>> = FxHashMap::default();
+    if direct_insertion {
+        for c in di_couplings {
+            di_lookup
+                .entry(c.consumer_recipe.as_str())
+                .or_default()
+                .push((c.item.as_str(), c.producer_recipe.as_str()));
+        }
+    }
     // Track the row index of the last-placed row for each recipe, so the
     // DI consumer can reference its producer's RowSpan.
     let mut recipe_last_row_idx: FxHashMap<&str, usize> = FxHashMap::default();
@@ -1881,16 +1890,21 @@ pub fn place_rows(
             );
             let row_idx = row_spans.len();
             max_width = max_width.max(width);
-            // Mark DI consumers: set `di_input` so the lane planner
-            // skips the bus lane for this item.
+            // DI consumers: for each coupled input, stamp the bridge FIRST
+            // and only commit to DI (mark `di_input` so the lane planner
+            // skips the bus lane for that item) when the bridge is actually
+            // stamped. `stamp_di_bridge` returns empty when the bridge is
+            // geometrically infeasible; leaving `di_input` unset for that
+            // item then routes it through the bus lane (a real fallback,
+            // not a starved consumer). Iterating all couplings — rather than
+            // one lookup — is what lets a multiply-coupled consumer bridge
+            // every coupled input instead of silently dropping all but one.
             if is_di_consumer {
-                if let Some(&(item, producer_recipe)) = di_lookup.get(spec.recipe.as_str()) {
-                    if let Some(&p_idx) = recipe_last_row_idx.get(producer_recipe) {
-                        span.di_input = Some((item.to_string(), p_idx));
-                        // Stamp bridge inserters from the producer's output
-                        // belt to this consumer's input belt. The bridge
-                        // lives in the inter-recipe gap (2 tiles between
-                        // producer.y_end and consumer.y_start).
+                if let Some(couplings) = di_lookup.get(spec.recipe.as_str()) {
+                    for &(item, producer_recipe) in couplings {
+                        let Some(&p_idx) = recipe_last_row_idx.get(producer_recipe) else {
+                            continue;
+                        };
                         let producer_span = &row_spans[p_idx];
                         let bridge_ents = stamp_di_bridge(
                             producer_span,
@@ -1903,7 +1917,10 @@ pub fn place_rows(
                             inserter_capacity,
                             ctx,
                         );
-                        entities.extend(bridge_ents);
+                        if !bridge_ents.is_empty() {
+                            span.di_input.push((item.to_string(), p_idx));
+                            entities.extend(bridge_ents);
+                        }
                     }
                 }
             }
@@ -2367,10 +2384,12 @@ mod tests {
             spans[ec_pos].y_start, spans[cc_pos].y_end + 2,
             "DI gap is preserved for the bridge inserter"
         );
-        // di_input marking.
-        assert_eq!(
-            spans[ec_pos].di_input.as_ref().unwrap().0, "copper-cable",
-            "EC row should be marked with DI input for copper-cable"
+        // di_input marking: the bridge was stamped (feasible geometry), so
+        // copper-cable is committed to DI on the EC row.
+        assert!(
+            spans[ec_pos].di_input.iter().any(|(item, _)| item == "copper-cable"),
+            "EC row should be marked with DI input for copper-cable, got {:?}",
+            spans[ec_pos].di_input
         );
     }
 
@@ -2402,7 +2421,7 @@ mod tests {
         );
 
         for span in &spans {
-            assert!(span.di_input.is_none(), "DI off → no di_input on any row");
+            assert!(span.di_input.is_empty(), "DI off → no di_input on any row");
         }
     }
 

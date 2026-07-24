@@ -1093,6 +1093,21 @@ pub fn check_belt_flow_reachability(
         }
     }
 
+    // DI bridge pickup tiles: a direct-insertion bridge inserter lifts the
+    // coupled item off the producer's output belt (its pickup tile) and
+    // carries it to the consumer — a valid sink for that belt, even though
+    // the items never flow onward to a boundary or a machine's input belt.
+    let di_bridge_pickup_tiles: FxHashSet<(i32, i32)> = layout
+        .entities
+        .iter()
+        .filter(|e| is_inserter(&e.name) && super::is_di_bridge_inserter(e.segment_id.as_deref()))
+        .map(|e| {
+            let (dx, dy) = dir_to_vec(e.direction);
+            let reach = inserter_reach(&e.name);
+            (e.x - dx * reach, e.y - dy * reach)
+        })
+        .collect();
+
     // Output check
     checked.clear();
     for e in &layout.entities {
@@ -1123,7 +1138,11 @@ pub fn check_belt_flow_reachability(
             || downstream_beyond
                 .intersection(&input_belt_tiles)
                 .next()
-                .is_some();
+                .is_some()
+            // DI: the output belt (or a tile downstream of it) is picked
+            // from by a direct-insertion bridge inserter — the items leave
+            // via the bridge, not by flowing onward.
+            || !downstream.is_disjoint(&di_bridge_pickup_tiles);
         if !reaches_sink {
             issues.push(ValidationIssue::with_pos(
                 severity,
@@ -3323,6 +3342,32 @@ pub fn check_input_rate_delivery(
         });
     }
 
+    // DI bridge deliveries: a direct-insertion bridge inserter drops the
+    // coupled item onto the consumer's input belt in place of a bus lane.
+    // Credit its REAL throughput (at the declared capacity) so the belt is
+    // not seen as unfed — but at the actual rate, so an under-provisioned
+    // bridge (a single reach-2 long-handed inserter cannot sustain a
+    // high-rate coupling like copper-cable) still warns honestly instead of
+    // being rubber-stamped.
+    let mut di_bridge_delivery: FxHashMap<((i32, i32), String), f64> = FxHashMap::default();
+    for ins in &layout.entities {
+        if !is_inserter(&ins.name) || !super::is_di_bridge_inserter(ins.segment_id.as_deref()) {
+            continue;
+        }
+        let Some(item) = ins.carries.clone() else {
+            continue;
+        };
+        let (dx, dy) = dir_to_vec(ins.direction);
+        let reach = inserter_reach(&ins.name);
+        let drop_pos = (ins.x + dx * reach, ins.y + dy * reach);
+        let rate = crate::common::machine_feed_rate(
+            &ins.name,
+            ins.quality.unwrap_or_default(),
+            layout.inserter_capacity,
+        );
+        *di_bridge_delivery.entry((drop_pos, item)).or_insert(0.0) += rate;
+    }
+
     // Second pass: check each inserter's available rate vs its share of the required rate.
     for ins in &inserters {
         let me = match machine_entity.get(&ins.machine_pos) {
@@ -3361,10 +3406,16 @@ pub fn check_input_rate_delivery(
         let count = inserter_count.get(&(ins.machine_pos, ins.carried_item.clone())).copied().unwrap_or(1);
         let per_inserter_rate = required_rate / count as f64;
 
-        let available = match lane_rates.get(&ins.pickup_pos) {
+        let mut available = match lane_rates.get(&ins.pickup_pos) {
             Some(&[left, right]) => left + right,
             None => 0.0,
         };
+        // A DI bridge feeding this input belt adds its delivery on top of any
+        // bus-lane rate (usually there is no lane — the DI'd item skips the
+        // bus). Under-provisioned bridges still fall short and warn.
+        if let Some(&r) = di_bridge_delivery.get(&(ins.pickup_pos, ins.carried_item.clone())) {
+            available += r;
+        }
 
         if available < per_inserter_rate - 0.02 {
             issues.push(ValidationIssue::with_pos(

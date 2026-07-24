@@ -279,14 +279,13 @@ pub fn plan_bus_lanes(
         let consumers: Vec<usize> = consumers
             .into_iter()
             .filter(|&c_idx| {
+                // DI'd consumer: drop it from this lane's consumer set for
+                // any item a bridge inserter feeds directly (the gap bridge
+                // takes it off the producer's output belt — no bus lane
+                // needed). A consumer may have several DI'd inputs, so match
+                // against all of them; an empty list keeps the consumer.
                 let di = &row_spans[c_idx].di_input;
-                if let Some((item, _)) = di {
-                    // DI'd consumer: skip — the bridge inserter in the
-                    // inter-recipe gap feeds this item directly from the
-                    // producer's output belt. No bus lane needed.
-                    return item != &key.0;
-                }
-                true
+                !di.iter().any(|(item, _)| item == &key.0)
             })
             .collect();
         // A lane with zero consumers is normally pointless — except for a
@@ -1352,7 +1351,7 @@ mod tests {
             horizontal_stack: None,
             secondary_output_belt: None,
             sorted_output_belts: Vec::new(),
-            di_input: None,
+            di_input: Vec::new(),
         }
     }
 
@@ -1645,7 +1644,7 @@ mod tests {
                 horizontal_stack: None,
                 secondary_output_belt: None,
                 sorted_output_belts: Vec::new(),
-                di_input: None
+                di_input: Vec::new()
             }
         }).collect();
 

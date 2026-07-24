@@ -2680,7 +2680,7 @@ mod tests {
             horizontal_stack: None,
             secondary_output_belt: None,
             sorted_output_belts: Vec::new(),
-            di_input: None,
+            di_input: Vec::new(),
         }
     }
 
@@ -2827,9 +2827,10 @@ mod tests {
     /// 3. The copper-cable bus lane is skipped (lane planner)
     /// 4. Bridge inserters are stamped in the inter-recipe gap
     ///
-    /// The validator's inserter-direction check does not yet recognize
-    /// belt-to-belt DI bridge inserters (it expects every inserter to
-    /// touch a machine on at least one side) — that's a known follow-up.
+    /// The validator recognizes belt-to-belt DI bridge inserters: neither
+    /// `inserter-direction` (which would otherwise flag them as touching no
+    /// machine) nor `belt-flow-reachability` (which would otherwise call the
+    /// producer's bridge-consumed output belt a dead-end) fires on them.
     #[test]
     fn di_full_pipeline_ec_from_plates() {
         let inputs: FxHashSet<String> =
@@ -2889,5 +2890,27 @@ mod tests {
                 ins.x, ins.y
             );
         }
+
+        // Validator DI-awareness: the belt-to-belt bridge inserters must not
+        // trip the two checks that assume every inserter touches a machine
+        // and every machine output flows onward. (Other categories — e.g.
+        // input-rate-delivery, which honestly reports the under-provisioned
+        // single reach-2 bridge — are out of scope for THIS assertion.)
+        let dir_issues =
+            crate::validate::inserters::check_inserter_direction(&layout);
+        assert!(
+            dir_issues.is_empty(),
+            "DI bridge inserters must not trip inserter-direction: {dir_issues:?}"
+        );
+        let reach_issues = crate::validate::belt_flow::check_belt_flow_reachability(
+            &layout,
+            Some(&sr),
+            crate::validate::LayoutStyle::Bus,
+        );
+        assert!(
+            reach_issues.is_empty(),
+            "DI producer's bridge-consumed output belt must not trip \
+             belt-flow-reachability: {reach_issues:?}"
+        );
     }
 }
