@@ -79,6 +79,9 @@ fn layout_options(
         // decomposition search (`MergeTapCandidate`), never requested by the
         // web UI — always default-off at the public boundary.
         merge_tap: false,
+        // Phase C: set only by the mega-block sub-solve internally,
+        // never at the public boundary.
+        splitter_tap_spacers: false,
         // RFC-046 Phase 2: unknown/absent → 1 (off), same fallback
         // semantics as the tiers above. `common::*_stacked` helpers clamp
         // any out-of-range value, so no validation needed here.

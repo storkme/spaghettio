@@ -140,6 +140,37 @@ feeds and the composed layout must pass the pipe-isolation validators
 
 ## Decision log
 
+- *2026-07-24 (flagship) — **USP@2-from-raw COMPOSES AT ZERO ERRORS**
+  (2232×193, 48k entities; gate
+  `mega_chain_usp2_resolves_bus_failure`). The crossing-zone probe
+  resolved the residual 18 through three engine fixes: (1) tapoff
+  splitters SURVIVE zone release when an interior boundary anchors on
+  them — the #295 prose ("SAT models splitters as fixed structure and
+  never re-stamps them") was implemented for balancer segments only;
+  released-but-uncovered splitters were dropped by the Step-6 retain,
+  leaving the trunk hole (prune_dangling was probed FIRST per the
+  standing lesson and exonerated — its drops were other candidates'
+  tiles; the killer was the release/retain pair). Zones that route
+  AROUND a splitter (no interior boundary) keep the release,
+  byte-identical. (2) merger hops TIER-ESCALATE within the user's
+  belt cap (alternating blocked columns at 1-tile gaps are unhoppable
+  at yellow reach; the entrance conversion accepts any surface-belt
+  tier and refuses loudly-safely instead of mutating row machinery —
+  fulgora's latent case). (3) splitter-tap SPACERS are a
+  LayoutOptions opt-in set only by compose_mega_block: mega
+  sub-solves pack every trunk span from y=0 so tap splitters land on
+  live neighbor trunks and the zones don't bridge them; PU@2-AM2 and
+  EC35-from-ore have the same overlap but their zone machinery
+  bridges it and the spacer's geometry shift broke them — hence
+  opt-in, main-line byte-identical (the pitch-1 splitter-passthrough
+  class remains tracked here). Process note: an interim "suite green"
+  read was VOID — a test target failed to compile and printed no
+  result lines; re-verified from one clean invocation (the
+  single-run-counts lesson generalizes to compile failures).
+  Env-gated forensic tracing (SPAGHETTIO_MEGA_DEBUG) kept in the
+  adapter, merger, and SAT prune. Flagship sim run launched;
+  registry decision follows its verdict.*
+
 - *2026-07-24 (latest) — residual-18 diagnosis SHARPENED; one fix
   attempt made and REVERTED. The trunk emitter's silent
   `hard-tile continue` was bridged with in-segment South UG pairs —
