@@ -651,3 +651,43 @@ and 3 wait on its artifacts as marked. Phase 3 is the long pole.
   test assertion); (3) reconsider architecture (d) chest-buffering
   for the resume, which deletes the exemption surface instead of
   hardening it.*
+- *2026-07-24 — issue #309's illegal entity overlaps were exactly the
+  "dual-fate split-feed" collision recorded above (stone/ice: an
+  ordinary intermediate lane's `ret` belt and the surplus merger's east
+  extension both claim the row's own exit tile, since neither knows
+  about the other). Fixed the GEOMETRIC collision only, not the
+  full split this entry calls for: `merge_output_rows`
+  (`output_merger.rs`) now treats any tile Step 4-6 already claimed
+  the same way it already treats another item's south column —
+  bridge underground around it — with a `row_tile_overrides` escape
+  hatch (`GhostRouteResult`, folded into `layout.rs`'s existing
+  splitter-eviction filter) for the one case where the tile to
+  convert into a UG entrance belongs to the row's own immutable
+  `row_entities`, not this module's local list. Zero entity-overlap
+  errors on the holmium-plate fixture now (was 2-3, host-dependent).
+  **Explicitly NOT fixed**: the consumed fraction still never reaches
+  its real consumer — `check_input_rate_delivery` warns 0.0/s
+  delivered against the item's true demand (0.05/s stone, 0.025/s
+  ice) both before and after this change, byte-identical. The `ret`
+  lane's rate is still sized off the ROW's full production (`item_to_rate`
+  sums the whole row, `lane_planner.rs`), not the true downstream
+  demand, and fixing the overlap surfaced (did not introduce — same
+  geometry, previously masked because the two colliding entities'
+  directions weren't both visible to `check_belt_junctions` when they
+  shared one tile) a real head-on belt conflict where the row's own
+  east-facing exit meets the ret belt's west-facing bend, 4 new
+  `belt-junction` errors, confirmed via git-stash diff against the
+  pre-fix baseline to be new. This is the SAME class of general-belt-
+  validator noise the sushi region already generates (belt-loop /
+  underground-belt, ~100 instances, `fulgora_scrap_sorter_mechanism_present`'s
+  own comment) — the fix only asserts zero entity-overlap, deliberately
+  not zero belt-junction. The AM3 single-exit-bus cluster #309 also
+  reports (holmium-plate row, zero output inserters) is a THIRD,
+  unrelated defect in row/template generation upstream of ghost
+  routing — confirmed pre-existing and untouched by this fix via the
+  same git-stash comparison; not investigated to a fix here, tracked
+  on #309. Real resolution of the dual-fate split still needs the
+  physical flow-split this entry already calls for (a splitter at the
+  sort point, sending the consumed sub-rate one way and the surplus
+  remainder the other) — this fix buys back the illegal-blueprint
+  defect without attempting that redesign.*

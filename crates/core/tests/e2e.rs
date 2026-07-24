@@ -6943,8 +6943,9 @@ fn fulgora_scrap_sorter_mechanism_present() {
     // saturation/boundary checks above exist precisely to replace them.
     // The ice-melting defect is a fluid defect, so the fluid validators are
     // the faithful gate for this arc. (Full validate() also surfaces
-    // pre-existing non-fluid fulgora issues — entity-overlap etc. — that
-    // are out of this unit's scope; reported separately.)
+    // pre-existing non-fluid fulgora issues out of this unit's scope — an
+    // AM3 single-exit-bus cluster at the holmium-plate row, tracked on
+    // #309 — that this test still doesn't assert on.)
     let mut fluid_errors: Vec<&ValidationIssue> = Vec::new();
     let fp = validate::check_fluid_port_connectivity(&layout, LayoutStyle::Bus);
     let fn_ = validate::check_fluid_network_connectivity(&layout, None);
@@ -6959,6 +6960,25 @@ fn fulgora_scrap_sorter_mechanism_present() {
         "fulgora layout has {} fluid error(s) (ice-melting output regression?): {:#?}",
         fluid_errors.len(),
         fluid_errors
+    );
+
+    // #309: the scrap-recycling row's DUAL-FATE byproducts (stone, ice —
+    // partly consumed internally via a real recipe, partly surplus and
+    // exported through the merger) used to collide: an intermediate
+    // lane's `ret` belt and the surplus merger's east extension both
+    // claimed the row's own exit tile, producing illegal entity overlaps
+    // (a real blueprint-import defect — Factorio silently drops one of
+    // the colliding entities). `merge_output_rows` (`output_merger.rs`)
+    // now bridges its east extension underground past any tile Step 4-6
+    // already claimed there, so this narrow class — entity-overlap only,
+    // not the general belt-loop/underground-belt false positives excluded
+    // above — must stay clean.
+    let overlaps = belt_structural::check_entity_overlaps(&layout);
+    assert!(
+        overlaps.is_empty(),
+        "fulgora layout has {} illegal entity overlap(s) (#309 regression?): {:#?}",
+        overlaps.len(),
+        overlaps
     );
 }
 

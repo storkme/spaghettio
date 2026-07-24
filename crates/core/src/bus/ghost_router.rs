@@ -81,6 +81,15 @@ pub struct GhostRouteResult {
     /// the old path made retries fire only under a trace guard. The trace
     /// event is still emitted for the debugger; this is the control-flow copy.
     pub cap_coords: Vec<(i32, i32)>,
+    /// Tiles a routed bus entity claims that used to belong to a row
+    /// entity (`bus/placer.rs`'s `row_entities`, which this module never
+    /// sees — it's merged into the final layout by the caller). Populated
+    /// by `output_merger::merge_output_rows`'s row-exit bridging (RFC
+    /// Fulgora dual-fate items, #309): the row's now-stale tile there
+    /// must be dropped rather than double-placed alongside the new one.
+    /// `bus/layout.rs` folds this into its existing splitter-eviction
+    /// filter over `row_entities`.
+    pub row_tile_overrides: FxHashSet<(i32, i32)>,
 }
 
 /// A spec for one connecting belt run.
@@ -3304,6 +3313,21 @@ pub fn route_bus_ghost(
         true
     });
 
+    // Snapshot of every tile Step 4-6 (+ the `retain` cleanup above) has
+    // already claimed, threaded into every `merge_output_rows` call below
+    // as its `existing_tiles` param — a dual-fate byproduct's `ret` belt
+    // (an intermediate lane's producer connection, #309) can land on the
+    // exact row-exit tile Step 7's east extension is about to start from.
+    // Taken once here; Step 7's OWN entities (target/surplus/voider merges
+    // below) don't need to be visible to each other through this set —
+    // `blocked_columns` already covers that ordering within this step.
+    let existing_tiles: FxHashSet<(i32, i32)> = entities.iter().map(|e| (e.x, e.y)).collect();
+    // Tiles `merge_output_rows`'s row-exit bridging overrides — a row
+    // entity the caller must drop before merging `row_entities` with this
+    // function's returned `entities` (see
+    // `GhostRouteResult::row_tile_overrides`).
+    let mut row_tile_overrides: FxHashSet<(i32, i32)> = FxHashSet::default();
+
     // -------------------------------------------------------------------------
     // Step 7: Merge output rows for final products
     // -------------------------------------------------------------------------
@@ -3360,6 +3384,8 @@ pub fn route_bus_ghost(
                 merge_x_cursor,
                 &blocked_columns,
                 ctx,
+                &existing_tiles,
+                &mut row_tile_overrides,
             );
             blocked_columns.extend((item_merge_x - output_rows.len() as i32)..item_merge_x);
             merge_x_cursor = item_merge_x + 1;
@@ -3454,6 +3480,8 @@ pub fn route_bus_ghost(
             merge_x_cursor,
             &blocked_columns,
             ctx,
+            &existing_tiles,
+            &mut row_tile_overrides,
         );
         blocked_columns.extend((item_merge_x - output_rows.len() as i32)..item_merge_x);
         merge_x_cursor = item_merge_x + 1;
@@ -3542,6 +3570,8 @@ pub fn route_bus_ghost(
             merge_x_cursor,
             &blocked_columns,
             ctx,
+            &existing_tiles,
+            &mut row_tile_overrides,
         );
         blocked_columns.extend((item_merge_x - output_rows.len() as i32)..item_merge_x);
         merge_x_cursor = item_merge_x + 1;
@@ -3968,6 +3998,7 @@ pub fn route_bus_ghost(
         warnings,
         surplus_exits,
         cap_coords,
+        row_tile_overrides,
     })
 }
 

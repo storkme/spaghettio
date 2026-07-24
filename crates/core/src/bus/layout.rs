@@ -840,6 +840,7 @@ fn layout_pass(
     // stream) so `run_layout_with_retry_inner` detects caps whether or not a
     // trace collector is active — see that function and package #3.
     let cap_coords = ghost_result.cap_coords;
+    let row_tile_overrides = ghost_result.row_tile_overrides;
     crate::trace::emit(crate::trace::TraceEvent::PhaseTime {
         phase: "ghost_routing".to_string(),
         duration_ms: t_ghost.elapsed().as_millis() as u64,
@@ -876,6 +877,11 @@ fn layout_pass(
             }
         }
     }
+    // Dual-fate byproduct row exits (RFC Fulgora, #309): `merge_output_rows`'s
+    // row-exit bridging spliced a UG entrance over the row's own last belt
+    // tile so the row's stale plain belt there doesn't double-place
+    // alongside it — same eviction mechanism as the splitter case above.
+    bus_occupied.extend(row_tile_overrides);
     let row_entities: Vec<PlacedEntity> = if bus_occupied.is_empty() {
         row_entities
     } else {

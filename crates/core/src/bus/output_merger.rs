@@ -6,10 +6,43 @@
 //! the bottom-right of the layout. Called once per final product at
 //! the end of `route_bus_ghost` (Step 7).
 
+use rustc_hash::FxHashSet;
+
 use crate::models::{EntityDirection, PlacedEntity};
 use crate::bus::balancer::splitter_for_belt;
 use crate::bus::placer::RowSpan;
 use crate::bus::stacking_ctx::StackingCtx;
+
+/// Total rate + belt/underground tier for an item's merge cascade — split
+/// out so a caller can compute it once and reuse it, though today only
+/// [`merge_output_rows`] itself calls it.
+pub(crate) fn merger_rate_and_tier(
+    output_rows: &[usize],
+    item: &str,
+    row_spans: &[RowSpan],
+    max_belt_tier: Option<&str>,
+    ctx: &StackingCtx,
+) -> (f64, &'static str, &'static str, u32) {
+    use crate::bus::balancer::underground_for_belt;
+    use crate::common::{belt_entity_for_rate_stacked, ug_max_reach};
+
+    let total_rate = output_rows.iter()
+        .map(|&ri| {
+            if ri >= row_spans.len() {
+                0.0
+            } else {
+                row_spans[ri].spec.outputs.iter()
+                    .filter(|o| o.item == item)
+                    .map(|o| o.rate * row_spans[ri].machine_count as f64)
+                    .sum::<f64>()
+            }
+        })
+        .sum::<f64>();
+    let belt_name = belt_entity_for_rate_stacked(total_rate * 2.0, max_belt_tier, ctx.for_item(item));
+    let ug_name = underground_for_belt(belt_name);
+    let reach = ug_max_reach(belt_name);
+    (total_rate, belt_name, ug_name, reach)
+}
 
 pub(crate) fn merge_output_rows(
     output_rows: &[usize],
@@ -21,9 +54,11 @@ pub(crate) fn merge_output_rows(
     min_merge_x: i32,
     blocked_columns: &[i32],
     ctx: &StackingCtx,
+    existing_tiles: &FxHashSet<(i32, i32)>,
+    row_tile_overrides: &mut FxHashSet<(i32, i32)>,
 ) -> (Vec<PlacedEntity>, i32, i32) {
     use crate::bus::balancer::underground_for_belt;
-    use crate::common::{belt_entity_for_rate_stacked, ug_max_reach};
+    use crate::common::ug_max_reach;
 
     debug_assert_eq!(
         output_rows.len(),
@@ -39,21 +74,8 @@ pub(crate) fn merge_output_rows(
     }
     let merger_seg_id = Some(format!("merger:{}", item));
 
-    // Calculate total rate
-    let total_rate = output_rows.iter()
-        .map(|&ri| {
-            if ri >= row_spans.len() {
-                0.0
-            } else {
-                row_spans[ri].spec.outputs.iter()
-                    .filter(|o| o.item == item)
-                    .map(|o| o.rate * row_spans[ri].machine_count as f64)
-                    .sum::<f64>()
-            }
-        })
-        .sum::<f64>();
-
-    let belt_name = belt_entity_for_rate_stacked(total_rate * 2.0, max_belt_tier, ctx.for_item(item));
+    let (total_rate, belt_name, _ug_name, _reach) =
+        merger_rate_and_tier(output_rows, item, row_spans, max_belt_tier, ctx);
     let splitter_name = splitter_for_belt(belt_name);
 
     // Column position: east of the widest participating row, but never west
@@ -75,32 +97,67 @@ pub(crate) fn merge_output_rows(
         let col_x = merge_x + (n - 1 - idx) as i32; // first row rightmost, last row at merge_x
 
         // Extend EAST belts from the row's rightmost tile to the merge
-        // column. Earlier items' south columns (`blocked_columns`) lie in
-        // this run's path — bridge each contiguous blocked range with an
-        // underground pair instead of stamping over (or sideloading into)
-        // the foreign belt.
+        // column. Earlier items' south columns (`blocked_columns`) AND
+        // tiles Step 4-6 (ghost-routed lanes) already claimed there
+        // (`existing_tiles` — #309: a DUAL-FATE byproduct, produced by a
+        // row and BOTH partly consumed internally AND registered surplus,
+        // `docs/rfc-fulgora-scrap.md` 2026-07-11 decision log: stone/ice
+        // on the scrap-recycling sushi row, gets an ordinary
+        // intermediate-lane `ret` belt walking the consumed portion back
+        // to its bus trunk from this exact row-exit tile) lie in this
+        // run's path — bridge each contiguous blocked range with an
+        // underground pair instead of stamping over (or sideloading
+        // into) the foreign belt.
         let rw = row_spans[ri].row_width;
         let ug_name = underground_for_belt(belt_name);
         let reach = ug_max_reach(belt_name) as i32;
         let mut x = rw;
         while x < col_x {
-            if blocked_columns.contains(&x) {
+            if blocked_columns.contains(&x) || existing_tiles.contains(&(x, out_y)) {
                 // Contiguous blocked run [x, run_end], clamped by UG reach
                 // (entrance at x-1, exit at run_end+1; gap ≤ reach).
                 let mut run_end = x;
                 while run_end + 1 < col_x
-                    && blocked_columns.contains(&(run_end + 1))
+                    && (blocked_columns.contains(&(run_end + 1))
+                        || existing_tiles.contains(&(run_end + 1, out_y)))
                     && (run_end + 1) - x < reach
                 {
                     run_end += 1;
                 }
-                debug_assert!(x > rw, "no room for UG entrance before blocked column");
-                // Replace the belt stamped at x-1 with a UG entrance.
-                if let Some(prev) = entities
+                if x == rw {
+                    // No local tile to convert — the row's own last belt
+                    // tile at (x-1, out_y) is placed by `place_rows` long
+                    // before this function runs, and lives in the
+                    // CALLER's `row_entities`: an immutable slice this
+                    // module never sees, merged with the routed bus
+                    // entities only after `route_bus_ghost` returns
+                    // (`bus/layout.rs`). Push a FRESH entrance there
+                    // instead and record the override — `layout.rs`
+                    // already drops a `row_entities` tile whenever a
+                    // routed bus entity claims the same coordinate (the
+                    // existing splitter-eviction mechanism, generalized
+                    // by #309 to any override reported here), so the
+                    // row's now-stale plain belt at (x-1, out_y) is
+                    // filtered out of the final layout rather than
+                    // double-placed alongside this entrance.
+                    row_tile_overrides.insert((x - 1, out_y));
+                    entities.push(PlacedEntity {
+                        name: ug_name.to_string(),
+                        x: x - 1,
+                        y: out_y,
+                        direction: EntityDirection::East,
+                        io_type: Some("input".to_string()),
+                        carries: Some(item.to_string()),
+                        segment_id: merger_seg_id.clone(),
+                        rate: Some(total_rate),
+                        ..Default::default()
+                    });
+                } else if let Some(prev) = entities
                     .iter_mut()
                     .rev()
                     .find(|e| e.x == x - 1 && e.y == out_y)
                 {
+                    // Replace the belt stamped at x-1 with a UG entrance.
                     prev.name = ug_name.to_string();
                     prev.io_type = Some("input".to_string());
                 }
@@ -293,10 +350,10 @@ mod tests {
             vec![5],
         );
         let rows = [row0, row1];
-        let (a_ents, a_end_y, a_max_x) = merge_output_rows(&[0], &[rows[0].output_belt_y], "iron-gear-wheel", &rows, 15, None, 11, &[], &StackingCtx::unstacked());
+        let (a_ents, a_end_y, a_max_x) = merge_output_rows(&[0], &[rows[0].output_belt_y], "iron-gear-wheel", &rows, 15, None, 11, &[], &StackingCtx::unstacked(), &FxHashSet::default(), &mut FxHashSet::default());
         // Caller threads: next min_merge_x = returned max_x + 1, start_y = max_y.
         let blocked: Vec<i32> = ((a_max_x - 1)..a_max_x).collect();
-        let (b_ents, _b_end_y, b_max_x) = merge_output_rows(&[1], &[rows[1].output_belt_y], "iron-stick", &rows, a_end_y.max(15), None, a_max_x + 1, &blocked, &StackingCtx::unstacked());
+        let (b_ents, _b_end_y, b_max_x) = merge_output_rows(&[1], &[rows[1].output_belt_y], "iron-stick", &rows, a_end_y.max(15), None, a_max_x + 1, &blocked, &StackingCtx::unstacked(), &FxHashSet::default(), &mut FxHashSet::default());
         assert!(b_max_x > a_max_x);
         let a_tiles: FxHashSet<(i32, i32)> = a_ents.iter().map(|e| (e.x, e.y)).collect();
         let overlap: Vec<(i32, i32)> = b_ents
@@ -306,7 +363,7 @@ mod tests {
             .collect();
         assert!(overlap.is_empty(), "merge blocks overlap at {overlap:?}");
         // And without the cursor they WOULD overlap (guard the guard):
-        let (c_ents, _c_end_y, _c) = merge_output_rows(&[1], &[rows[1].output_belt_y], "iron-stick", &rows, 15, None, 0, &[], &StackingCtx::unstacked());
+        let (c_ents, _c_end_y, _c) = merge_output_rows(&[1], &[rows[1].output_belt_y], "iron-stick", &rows, 15, None, 0, &[], &StackingCtx::unstacked(), &FxHashSet::default(), &mut FxHashSet::default());
         let c_overlap = c_ents.iter().map(|e| (e.x, e.y)).any(|t| a_tiles.contains(&t));
         assert!(c_overlap, "expected uncursored merges to collide — geometry changed?");
     }
@@ -324,7 +381,7 @@ mod tests {
 
         let output_rows = vec![0];
         let output_ys = vec![row_span.output_belt_y];
-        let (entities, _end_y, _merge_max_x) = merge_output_rows(&output_rows, &output_ys, "iron-plate", &[row_span], 20, None, 0, &[], &StackingCtx::unstacked());
+        let (entities, _end_y, _merge_max_x) = merge_output_rows(&output_rows, &output_ys, "iron-plate", &[row_span], 20, None, 0, &[], &StackingCtx::unstacked(), &FxHashSet::default(), &mut FxHashSet::default());
 
         // Single row should extend EAST and SOUTH without splitters
         assert!(!entities.is_empty());
@@ -352,7 +409,7 @@ mod tests {
 
         let output_rows = vec![0, 1];
         let output_ys = vec![row_span1.output_belt_y, row_span2.output_belt_y];
-        let (entities, _end_y, _merge_max_x) = merge_output_rows(&output_rows, &output_ys, "iron-plate", &[row_span1, row_span2], 20, None, 0, &[], &StackingCtx::unstacked());
+        let (entities, _end_y, _merge_max_x) = merge_output_rows(&output_rows, &output_ys, "iron-plate", &[row_span1, row_span2], 20, None, 0, &[], &StackingCtx::unstacked(), &FxHashSet::default(), &mut FxHashSet::default());
 
         // Multiple rows should include splitters
         let splitters = entities.iter().filter(|e| e.name.contains("splitter")).count();
@@ -401,6 +458,8 @@ mod tests {
             0,
             &[],
             &StackingCtx::unstacked(),
+            &FxHashSet::default(),
+            &mut FxHashSet::default(),
         );
 
         // Splitters must be present
@@ -456,12 +515,74 @@ mod tests {
             0,
             &[],
             &StackingCtx::unstacked(),
+            &FxHashSet::default(),
+            &mut FxHashSet::default(),
         );
 
         let splitters: Vec<_> = entities.iter().filter(|e| e.name.contains("splitter")).collect();
         for s in &splitters {
             assert_eq!(s.direction, EntityDirection::South, "Merger splitters should face SOUTH");
         }
+    }
+
+    /// #309 regression: when something Step 4-6 already placed (a
+    /// dual-fate item's intermediate-lane `ret` belt) occupies the row's
+    /// own exit tile — `row_width`, the FIRST tile this function's east
+    /// extension would otherwise stamp a plain belt onto — the row-exit
+    /// bridge must detour underground around it instead of colliding
+    /// (issue #309's illegal entity overlaps). No entity may land on the
+    /// occupied tile, and the row's own last belt tile (`row_width - 1`,
+    /// owned by the caller's `row_entities` — this function never places
+    /// it) must be reported via `row_tile_overrides` so the caller drops
+    /// it before merging, rather than double-placing it alongside the
+    /// fresh UG entrance this function pushes there.
+    #[test]
+    fn test_merge_output_rows_bridges_pre_occupied_row_exit() {
+        let row = make_test_row_span(
+            "iron-plate",
+            0,
+            vec![],
+            vec![ItemFlow { item: "iron-plate".to_string(), rate: 1.0, is_fluid: false, module_id: 0 }],
+            1,
+            vec![],
+        );
+        let out_y = row.output_belt_y;
+        let row_width = row.row_width;
+        // Simulate a `ret` belt already sitting on the row's own exit
+        // tile — exactly the #309 collision.
+        let mut existing_tiles: FxHashSet<(i32, i32)> = FxHashSet::default();
+        existing_tiles.insert((row_width, out_y));
+        let mut row_tile_overrides: FxHashSet<(i32, i32)> = FxHashSet::default();
+
+        let (entities, _end_y, _merge_max_x) = merge_output_rows(
+            &[0],
+            &[out_y],
+            "iron-plate",
+            &[row],
+            20,
+            None,
+            0,
+            &[],
+            &StackingCtx::unstacked(),
+            &existing_tiles,
+            &mut row_tile_overrides,
+        );
+
+        assert!(
+            entities.iter().all(|e| (e.x, e.y) != (row_width, out_y)),
+            "no entity may be placed on the pre-occupied tile: {entities:#?}"
+        );
+        assert!(
+            row_tile_overrides.contains(&(row_width - 1, out_y)),
+            "the row's own last belt tile must be reported for eviction: {row_tile_overrides:?}"
+        );
+        let entrance = entities
+            .iter()
+            .find(|e| (e.x, e.y) == (row_width - 1, out_y))
+            .expect("a fresh UG entrance must replace the row's own last belt tile");
+        assert_eq!(entrance.name, "underground-belt");
+        assert_eq!(entrance.io_type.as_deref(), Some("input"));
+        assert_eq!(entrance.direction, EntityDirection::East);
     }
 
     // -----------------------------------------------------------------------
