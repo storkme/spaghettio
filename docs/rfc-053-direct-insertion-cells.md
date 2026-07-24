@@ -229,16 +229,23 @@ own handling; it is not covered by the ratio analysis above.
 A producer row, a one-tile inserter band, a consumer row:
 
 ```
-   x: 0     3     6     9    12    15
-      ┌────┐┌────┐┌────┐┌────┐┌────┐┌────┐
- y0-2 │cab1││cab2││cab3││cab4││cab5││cab6│   6 × copper-cable (3×3)
-      └────┘└────┘└────┘└────┘└────┘└────┘
- y3      S  S    S  S       S  S    S  S     8 × stack inserter, reach 1
-          ┌────┐┌────┐      ┌────┐┌────┐
- y4-6     │ EC1││ EC2│      │ EC3││ EC4│     4 × electronic-circuit
-          └────┘└────┘      └────┘└────┘
-         x=1    x=5        x=10   x=14
+ y0-2   [ copper-cable machines ]      6 × 3×3, pitch 3
+ y3       S   S    S   S   ...         stack inserters, reach 1
+ y4-6     [ EC machines ]              4 × 3×3, offset to straddle
 ```
+
+*Schematic only — not to tile scale.* The authoritative geometry is the
+column table below; an earlier draft carried a tile-aligned ASCII drawing
+whose boxes disagreed with their own `x=` labels, and the derivation
+depends on exact columns, so the numbers live in tables from here on.
+
+**Column spans** (every machine 3 wide, so a machine at `x` occupies
+`x..x+2`):
+
+| row | machines (column span) |
+|---|---|
+| producers | `cab1` 0–2 · `cab2` 3–5 · `cab3` 6–8 · `cab4` 9–11 · `cab5` 12–14 · `cab6` 15–17 |
+| consumers | `EC1` 1–3 · `EC2` 5–7 · `EC3` 10–12 · `EC4` 14–16 |
 
 **Source-limited, not inserter-limited.** One stack inserter could move
 12/s, but the cable machine behind it only *makes* 5/s. An EC machine
@@ -257,11 +264,17 @@ all machines 3 wide, so `EC1` spans columns 1–3, `cab1` spans 0–2,
 | cab2 → EC1 | 3 | **1** | 2.5/s |
 | cab2 → EC2 | 5 | 1 | 2.5/s |
 | cab3 → EC2 | 6, 7 | 2 | 5.0/s |
+| cab4 → EC3 | 10, 11 | 2 | 5.0/s |
+| cab5 → EC3 | 12 | 1 | 2.5/s |
+| cab5 → EC4 | 14 | 1 | 2.5/s |
+| cab6 → EC4 | 15, 16 | 2 | 5.0/s |
 
-…mirrored on the right half. Eight directed producer→consumer edges,
-hence eight inserters at Stack tier (one per edge suffices there);
-producers each ship exactly 5.0/s, consumers each receive exactly
-7.5/s, total 30.0/s both sides.
+Eight directed producer→consumer edges, hence eight inserters at Stack
+tier (one per edge suffices there). Balance check: each producer ships
+exactly 5.0/s (`cab2` = 2.5 + 2.5; `cab1` = 5.0), each consumer receives
+exactly 7.5/s (`EC1` = 5.0 + 2.5), totalling **30.0/s on both sides**.
+`cab1` and `cab6` are the row's end machines and feed a single consumer
+each, which is why the spans are not uniformly pitched.
 
 **The per-edge slot count is the real budget** — not the machine's
 3-column width. An inserter draws from exactly one producer, so edges
@@ -404,7 +417,8 @@ caveat.
    its non-DI flows (iron in + EC out) within its tile budget at
    **≤ L2** `inserter_capacity` (i.e. the cell is only feasible at max
    research), the topology is under-scoped — stop.
-2b. **Tier-cap degradation.** `max_inserter_tier` is a hard user cap,
+
+   **2b. Tier-cap degradation.** `max_inserter_tier` is a hard user cap,
    orthogonal to research level. If, at the engine defaults
    (`Stack`, L2), the canonical coupling needs **more than one inserter
    per producer→consumer edge**, the per-edge slot budget derived above
