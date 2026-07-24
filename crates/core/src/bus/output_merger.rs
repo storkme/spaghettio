@@ -80,9 +80,31 @@ pub(crate) fn merge_output_rows(
         // underground pair instead of stamping over (or sideloading into)
         // the foreign belt.
         let rw = row_spans[ri].row_width;
-        let ug_name = underground_for_belt(belt_name);
-        let reach = ug_max_reach(belt_name) as i32;
+        // Hops may need more reach than the rate-picked tier offers
+        // (alternating blocked columns with 1-tile gaps are unhoppable
+        // at yellow reach and split into exit-abuts-next-entrance
+        // pairs — the USP mega merger forensics). The hop TIER may
+        // escalate up to the USER's belt cap: the cap is the
+        // constraint, the rate pick is not; hop mouths are plumbing.
+        let hop_cap: &str = max_belt_tier.unwrap_or("express-transport-belt");
+        let reach = ug_max_reach(hop_cap) as i32;
+        let hop_tier_for_gap = |gap: i32| -> &'static str {
+            for t in ["transport-belt", "fast-transport-belt", "express-transport-belt"] {
+                if ug_max_reach(t) as i32 >= gap {
+                    if ug_max_reach(t) <= ug_max_reach(hop_cap) {
+                        return underground_for_belt(t);
+                    }
+                    break;
+                }
+            }
+            underground_for_belt(hop_cap)
+        };
         let mut x = rw;
+        if std::env::var("SPAGHETTIO_MEGA_DEBUG").is_ok() {
+            let mut bc: Vec<_> = blocked_columns.to_vec();
+            bc.sort_unstable();
+            eprintln!("MERGER {item} out_y={out_y} rw={rw} col_x={col_x} blocked={bc:?} reach={reach}");
+        }
         while x < col_x {
             if blocked_columns.contains(&x) {
                 // Contiguous blocked run [x, run_end], clamped by UG reach
@@ -113,20 +135,33 @@ pub(crate) fn merge_output_rows(
                     break;
                 }
                 debug_assert!(x > rw, "no room for UG entrance before blocked column");
+                let gap = run_end + 1 - x;
+                let hop_ug = hop_tier_for_gap(gap);
                 // Replace the belt stamped at x-1 with a UG entrance —
                 // only ever a plain surface belt of this run (the
                 // clustering guarantees it; the guard refuses to
-                // corrupt an existing mouth).
-                if let Some(prev) = entities
+                // corrupt an existing mouth, and a miss is LOUD via
+                // debug_assert — a silent skip left unpaired outputs).
+                let converted = entities
                     .iter_mut()
                     .rev()
-                    .find(|e| e.x == x - 1 && e.y == out_y && e.name == belt_name)
-                {
-                    prev.name = ug_name.to_string();
-                    prev.io_type = Some("input".to_string());
+                    .find(|e| e.x == x - 1 && e.y == out_y && e.name.ends_with("transport-belt"))
+                    .map(|prev| {
+                        prev.name = hop_ug.to_string();
+                        prev.io_type = Some("input".to_string());
+                    })
+                    .is_some();
+                // No panic on a miss: fulgora's merger hits runs whose
+                // west tile is row machinery — the old code mutated
+                // whatever sat there (silent corruption); refusing the
+                // hop (below) leaves a gap instead, strictly safer.
+                if !converted {
+                    // Refuse the hop rather than emit an unpaired exit.
+                    x = run_end + 2;
+                    continue;
                 }
                 entities.push(PlacedEntity {
-                    name: ug_name.to_string(),
+                    name: hop_ug.to_string(),
                     x: run_end + 1,
                     y: out_y,
                     direction: EntityDirection::East,

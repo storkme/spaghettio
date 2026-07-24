@@ -3135,7 +3135,35 @@ pub fn route_bus_ghost(
             .as_ref()
             .map(|snap| snap.forced_empty.iter().copied().collect())
             .unwrap_or_default();
-        let preserve_balancer_tiles: rustc_hash::FxHashSet<(i32, i32)> =
+        // Preserve balancer tiles (unconditional — pre-existing #295
+        // behavior) AND tapoff-splitter tiles the SOLUTION DOES NOT
+        // COVER: the #295 prose ("splitters must survive — SAT models
+        // them as fixed structure via interior boundaries and never
+        // re-stamps them") was only implemented for balancers;
+        // released-but-uncovered tapoff splitters were dropped by the
+        // Step-6 retain with nothing re-covering their tiles, leaving
+        // a trunk hole that dead-ends the lane above and orphans the
+        // flow below (USP mega sub-solve forensics, EC trunk at the
+        // zone edge). Solutions that DO cover the splitter tiles keep
+        // the release — byte-identical to the old behavior there.
+        // A tapoff tile is preserved iff an INTERIOR boundary anchors
+        // on it — the strategy's explicit "this Permanent is a
+        // legitimate item-matched flow source/sink" marker. Zones that
+        // instead routed AROUND a released splitter (UG arcs, no
+        // interior boundary) keep the release — byte-identical to the
+        // old behavior there.
+        let interior_tiles: rustc_hash::FxHashSet<(i32, i32)> = sol
+            .sat_zone
+            .as_ref()
+            .map(|snap| {
+                snap.boundaries
+                    .iter()
+                    .filter(|b| b.interior)
+                    .map(|b| (b.x, b.y))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let preserve_fixed_tiles: rustc_hash::FxHashSet<(i32, i32)> =
             forced_empty_set
                 .iter()
                 .filter(|tile| {
@@ -3145,16 +3173,20 @@ pub fn route_bus_ghost(
                             if occupancy
                                 .entity_at(**tile)
                                 .and_then(|e| e.segment_id.as_deref())
-                                .is_some_and(|seg| seg.starts_with("balancer:"))
+                                .is_some_and(|seg| {
+                                    seg.starts_with("balancer:")
+                                        || (seg.starts_with("tapoff:")
+                                            && interior_tiles.contains(*tile))
+                                })
                                 && { let _ = entity_idx; true }
                     )
                 })
                 .copied()
                 .collect();
-        let preserve_ref = if preserve_balancer_tiles.is_empty() {
+        let preserve_ref = if preserve_fixed_tiles.is_empty() {
             None
         } else {
-            Some(&preserve_balancer_tiles)
+            Some(&preserve_fixed_tiles)
         };
         let released_count = occupancy.release_for_pertile_template(
             &release_rect,

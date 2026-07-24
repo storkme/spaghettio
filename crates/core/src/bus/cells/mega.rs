@@ -450,7 +450,7 @@ fn adapt_with_spacing(
                 // (x=0): the delivery corridor then feeds the UG
                 // entrance head-on — a straight feed, both lanes.
                 let hoppable = |lo2: i32, hi2: i32| {
-                    lo2 - 1 >= 0 && hi2 + 1 < p.orig_x && hi2 - lo2 + 1 <= ug_gap
+                    lo2 >= 1 && hi2 + 1 < p.orig_x && hi2 - lo2 < ug_gap
                 };
                 let mut freed: FxHashSet<i32> = FxHashSet::default();
                 for &(lo2, hi2) in &clusters {
@@ -1048,6 +1048,11 @@ pub fn compose_mega_block(
     };
     let opts = crate::bus::layout::LayoutOptions {
         cell_composition: super::CellComposition::Off,
+        // Mega sub-solves pack every trunk span from y=0 (all inputs
+        // are boundary heads), so tap splitters land on live neighbor
+        // trunks and the zones don't bridge them — the spacer is the
+        // fix (Phase C; main-line default stays off).
+        splitter_tap_spacers: true,
         ..Default::default()
     };
     let l = crate::bus::layout::build_bus_layout(&sub, opts)

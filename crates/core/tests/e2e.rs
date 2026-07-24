@@ -317,6 +317,7 @@ fn run_e2e_inner(
             stacking: 1,
             inserter_capacity: 0,
             cell_composition: Default::default(),
+            splitter_tap_spacers: false,
         },
     )
         .map_err(|e| {
@@ -1780,6 +1781,7 @@ fn tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing() {
             stacking: 1,
             inserter_capacity: 0,
             cell_composition: Default::default(),
+            splitter_tap_spacers: false,
         },
     )
     .unwrap_or_else(|e| panic!("{test_name}: layout: {e}"));
@@ -1950,6 +1952,7 @@ fn tier5_processing_unit_2s_horizontal_stack_iron_ore_pipe_bypass() {
             stacking: 1,
             inserter_capacity: 0,
             cell_composition: Default::default(),
+            splitter_tap_spacers: false,
         },
     )
     .unwrap_or_else(|e| panic!("{test_name}: layout: {e}"));
@@ -2061,6 +2064,7 @@ fn tier5_processing_unit_25s_horizontal_stack_pole_coverage() {
             stacking: 1,
             inserter_capacity: 0,
             cell_composition: Default::default(),
+            splitter_tap_spacers: false,
         },
     )
     .unwrap_or_else(|e| panic!("{test_name}: layout: {e}"));
@@ -7092,6 +7096,7 @@ fn quality_differential_ec_normal_vs_legendary() {
                 stacking: 1,
                 inserter_capacity: 0,
                 cell_composition: Default::default(),
+            splitter_tap_spacers: false,
             },
         )
         .unwrap_or_else(|e| panic!("{quality:?} layout: {e}"));
@@ -7217,6 +7222,7 @@ fn quality_ec_45s_express_legendary_from_ore() {
             stacking: 1,
             inserter_capacity: 0,
             cell_composition: Default::default(),
+            splitter_tap_spacers: false,
         },
     )
     .unwrap_or_else(|e| panic!("layout: {e}"));
@@ -7308,6 +7314,7 @@ fn quality_differential_kovarex_self_loop_normal_vs_legendary() {
                 stacking: 1,
                 inserter_capacity: 0,
                 cell_composition: Default::default(),
+            splitter_tap_spacers: false,
             },
         )
         .unwrap_or_else(|e| panic!("{quality:?} layout: {e}"));
@@ -7448,6 +7455,7 @@ fn quality_ec_45s_legendary_tree_wire_differential() {
             stacking: 1,
             inserter_capacity: 0,
             cell_composition: Default::default(),
+            splitter_tap_spacers: false,
         },
     )
     .unwrap_or_else(|e| panic!("layout: {e}"));
@@ -7527,6 +7535,7 @@ fn stacking_ec_60s_red_one_belt_headline() {
                 stacking,
                 inserter_capacity: 0,
                 cell_composition: Default::default(),
+            splitter_tap_spacers: false,
             },
         )
         .unwrap_or_else(|e| panic!("S={stacking} layout: {e}"));
@@ -7642,6 +7651,7 @@ fn stacking_fanin_wall_lift_ec6_yellow_legendary() {
         stacking,
         inserter_capacity: 0,
         cell_composition: Default::default(),
+            splitter_tap_spacers: false,
     };
 
     // S=1: the fan-in wall holds — 25/s cable > 15/s full yellow.
@@ -7729,6 +7739,7 @@ fn stacking_refuses_low_inserter_cap() {
             stacking: 2,
             inserter_capacity: 0,
             cell_composition: Default::default(),
+            splitter_tap_spacers: false,
         },
     )
     .expect_err("stacking=2 with max_inserter_tier=Fast must refuse");
@@ -7778,6 +7789,7 @@ fn stacking_kovarex_family_exempt_s2() {
                 stacking,
                 inserter_capacity: 0,
                 cell_composition: Default::default(),
+            splitter_tap_spacers: false,
             },
         )
         .unwrap_or_else(|e| panic!("S={stacking} layout: {e}"));
@@ -7846,6 +7858,7 @@ fn stacking_ec_60s_express_legendary_s2() {
             stacking: 2,
             inserter_capacity: 0,
             cell_composition: Default::default(),
+            splitter_tap_spacers: false,
         },
     )
     .unwrap_or_else(|e| panic!("layout: {e}"));
@@ -7930,6 +7943,7 @@ fn research_l7_thins_output_inserters_s4() {
                 stacking: 4,
                 inserter_capacity: level,
                 cell_composition: Default::default(),
+            splitter_tap_spacers: false,
             },
         )
         .unwrap_or_else(|e| panic!("L={level} layout: {e}"));

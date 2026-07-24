@@ -76,6 +76,11 @@ pub enum SurplusPolicy {
 #[derive(Clone, Debug)]
 pub struct LayoutOptions {
     pub strategy: LayoutStrategy,
+    /// Insert a spacer column east of multi-tap solid lanes whose east
+    /// neighbor's trunk span covers a splitter row (Phase C mega
+    /// blocks; default false — main-line zone machinery bridges the
+    /// overlap and the geometry shift would break it).
+    pub splitter_tap_spacers: bool,
     pub max_belt_tier: Option<String>,
     pub row_layout: RowLayout,
     pub surplus_policy: SurplusPolicy,
@@ -135,6 +140,7 @@ impl Default for LayoutOptions {
             quality: crate::common::QualityTier::default(),
             wire_mode: crate::power_wires::WireMode::default(),
             merge_tap: false,
+            splitter_tap_spacers: false,
             stacking: 1,
             inserter_capacity: 0,
             // FLIPPED to Candidate 2026-07-22 (RFC-051 flip decision,
@@ -689,6 +695,7 @@ fn layout_pass(
         plan_ref,
         total_height_1,
         opts.merge_tap,
+        opts.splitter_tap_spacers,
         &stacking_ctx,
     )?;
     crate::trace::emit(crate::trace::TraceEvent::PhaseTime {
@@ -752,6 +759,7 @@ fn layout_pass(
                     plan_ref,
                     th,
                     opts.merge_tap,
+                    opts.splitter_tap_spacers,
                     &stacking_ctx,
                 )
             })?;
