@@ -740,3 +740,15 @@ generator remains future work.
   cable13u exposes lane-throughput ERROR false positives on bridged
   rows (walker attributes the full 13/s to one lane; the game runs it
   at plan) — filed separately.*
+
+- *2026-07-24 — #404 closed: the cable13u false positives were NOT a
+  bridge-model gap. Both lane-rate walkers (belt_structural's dispatched
+  `check_lane_throughput` and belt_flow's `compute_lane_rates`) seeded
+  the per-machine output rate once PER OUTPUT INSERTER — a two-hand
+  machine (ladder-sized at low capacity / high quality) injected 2×6.5/s
+  onto a 13/s row. The bridge/sideload lane transfer was verified correct
+  en route (east-bridge repro splits 6.5/6.5 pre-fix). Fix: per-(machine,
+  item) rate shared evenly across qualifying hands; pinned by
+  `lane_rates_multi_inserter_machine_splits_rate_across_hands` (unit) and
+  `cable13u_bridged_row_lane_throughput_clean` (e2e, the sim-proven
+  fixture).*

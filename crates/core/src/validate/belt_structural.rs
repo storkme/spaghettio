@@ -1016,6 +1016,8 @@ pub fn compute_lane_rates(layout: &LayoutResult, solver_result: &SolverResult) -
 
     // Seed lane injection rates from output inserters.
     let mut lane_injections: FxHashMap<(i32, i32), (f64, f64)> = FxHashMap::default();
+    let mut qualifying: Vec<((i32, i32), &str, ((i32, i32), &str), f64)> = Vec::new();
+    let mut inserters_per_output: FxHashMap<((i32, i32), &str), u32> = FxHashMap::default();
     for ins in &layout.entities {
         if !is_inserter(&ins.name) {
             continue;
@@ -1066,8 +1068,24 @@ pub fn compute_lane_rates(layout: &LayoutResult, solver_result: &SolverResult) -
         }
         let belt_d = belt_dir_map[&drop_pos];
         let lane = inserter_target_lane(ins.x, ins.y, drop_pos.0, drop_pos.1, belt_d);
+        // Collect only — a machine's per-item output is SHARED by all its
+        // qualifying output inserters (the sizing ladder adds a second hand
+        // when one can't keep up, common at low capacity research / high
+        // quality). Injecting the full per-machine rate once per inserter
+        // double-counts such machines: #404's "bridged row" lane-throughput
+        // false positives were a 2-inserter machine seeding 2×6.5/s onto a
+        // 13/s row — the bridge/sideload model was already correct.
+        let key = (mpos, carried_item);
+        *inserters_per_output.entry(key).or_insert(0) += 1;
+        qualifying.push((drop_pos, lane, key, rate));
+    }
+    // Each machine's per-item rate splits evenly across its qualifying
+    // output inserters (identical hands drain a shared buffer — the even
+    // split is the steady state the planner sizes for).
+    for (drop_pos, lane, key, rate) in qualifying {
+        let n = inserters_per_output[&key] as f64;
         let entry = lane_injections.entry(drop_pos).or_insert((0.0, 0.0));
-        if lane == "left" { entry.0 += rate; } else { entry.1 += rate; }
+        if lane == "left" { entry.0 += rate / n; } else { entry.1 += rate / n; }
     }
 
     let feeders = classify_belt_feeders(&belt_dir_map, &ug_output_tiles);
@@ -1875,6 +1893,69 @@ mod tests {
             fractional.is_empty(),
             "count=0.06 must seed utilization-scaled 0.96/s, got: {:?}",
             fractional.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn lane_rates_multi_inserter_machine_splits_rate_across_hands() {
+        // #404: a machine whose output is served by TWO inserters (the
+        // sizing ladder adds a hand when one can't keep up — low capacity
+        // research / high quality worlds) must seed its per-machine rate
+        // ONCE, split across the hands, not once per hand. The field
+        // symptom was lane-throughput ERROR false positives on bridged
+        // rows (a 13/s row read as 13/s on one lane; the game runs it at
+        // plan — RFC-047 decision log, cable13u) but the defect is the
+        // per-inserter duplication, not the bridge model.
+        //
+        // Two legs, same geometry: per-machine 6.5/s over two hands is
+        // 3.25/s each → downstream lane carries 6.5 < 7.5, must NOT flag
+        // (pre-fix it read 13.0 and flagged). Per-machine 16/s over two
+        // hands is 8/s each → 16 total on the lane, MUST flag (proves the
+        // geometry seeds and the split doesn't silently under-count).
+        let run = |rate: f64| {
+            let sr = SolverResult {
+                machines: vec![MachineSpec {
+                    entity: "assembling-machine-3".to_string(),
+                    recipe: "copper-cable".to_string(),
+                    self_loop: vec![], voider: false, game_modules: Vec::new(),
+                    count: 1.0,
+                    inputs: vec![],
+                    outputs: vec![ItemFlow {
+                        item: "copper-cable".to_string(),
+                        rate,
+                        is_fluid: false,
+                        module_id: 0,
+                    }],
+                }],
+                external_inputs: vec![],
+                external_outputs: vec![],
+                surplus_outputs: vec![],
+                dependency_order: vec![],
+            };
+            let entities = vec![
+                machine("assembling-machine-3", 3, 0, "copper-cable"),
+                // Two hands off ONE machine: pickups (4,2)/(5,2) inside the
+                // machine, drops (4,4)/(5,4) on the same eastbound run.
+                inserter(4, 3, EntityDirection::South),
+                inserter(5, 3, EntityDirection::South),
+                belt_carrying(4, 4, EntityDirection::East, "copper-cable"),
+                belt_carrying(5, 4, EntityDirection::East, "copper-cable"),
+                belt_carrying(6, 4, EntityDirection::East, "copper-cable"),
+            ];
+            check_lane_throughput(&layout(entities), Some(&sr))
+        };
+
+        let over = run(16.0);
+        assert!(
+            over.iter().any(|i| i.category == "lane-throughput"),
+            "16/s over two hands is 16 on the lane and must flag (seed sanity), got: {:?}",
+            over.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+        let split = run(6.5);
+        assert!(
+            split.is_empty(),
+            "6.5/s over two hands must seed 3.25 each (6.5 on the lane, under 7.5 cap), got: {:?}",
+            split.iter().map(|i| &i.message).collect::<Vec<_>>()
         );
     }
 
