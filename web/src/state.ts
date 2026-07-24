@@ -39,9 +39,11 @@ export interface FormState {
    * same null-is-default convention as `wireMode`. See
    * `docs/rfc-046-belt-stacking.md`. */
   stacking: string | null;
-  /** Inserter-capacity research level ("1".."7"). null = unresearched
-   * (today's default) — same null-is-default convention as `stacking`.
-   * See `docs/rfc-049-inserter-capacity-research.md`. */
+  /** Inserter-capacity research level ("0".."7"). null = engine default
+   * (L2 — red+green research; `common::DEFAULT_INSERTER_CAPACITY`), NOT
+   * unresearched; "0" is the explicit unresearched world. See
+   * `docs/rfc-049-inserter-capacity-research.md` and the 2026-07-24 #383
+   * default change. */
   inserterCapacity: string | null;
   /** Global module policy, compact form `<kind><tier><quality?>` —
    * `s`peed / `p`roductivity, tier 1–3, optional module-quality initial
@@ -88,10 +90,13 @@ export const KNOWN_WIRE_MODES = ["tree"] as const;
 export const KNOWN_STACKING = ["2", "3", "4"] as const;
 
 /** Inserter-capacity-research values accepted on the URL and in
- * `FormState.inserterCapacity`. `"0"` (the default/unresearched) is
- * intentionally absent — represented by `null`, same convention as
- * `KNOWN_STACKING`. See `docs/rfc-049-inserter-capacity-research.md`. */
-export const KNOWN_INSERTER_CAPACITY = ["1", "2", "3", "4", "5", "6", "7"] as const;
+ * `FormState.inserterCapacity`. `null` (absent) means the engine DEFAULT
+ * — L2, "Inserter capacity bonus 2" (red+green science), matching
+ * `common::DEFAULT_INSERTER_CAPACITY` — NOT unresearched. `"0"` is the
+ * explicit unresearched world, kept selectable for the conservative view.
+ * See `docs/rfc-049-inserter-capacity-research.md` and the 2026-07-24 #383
+ * default change. */
+export const KNOWN_INSERTER_CAPACITY = ["0", "1", "2", "3", "4", "5", "6", "7"] as const;
 
 /** Shape of `FormState.modules` / the `m=`/`modules=` URL value. The
  * compact form is its own short code — no long↔short map needed. */

@@ -142,7 +142,11 @@ impl Default for LayoutOptions {
             merge_tap: false,
             splitter_tap_spacers: false,
             stacking: 1,
-            inserter_capacity: 0,
+            // Default assumes L2 research (red+green science), not the raw
+            // unresearched world — see `common::DEFAULT_INSERTER_CAPACITY`
+            // (2026-07-24, #383). RFC-049's "L0 == pre-RFC" model invariant
+            // is unaffected; only the default level moves.
+            inserter_capacity: crate::common::DEFAULT_INSERTER_CAPACITY,
             // FLIPPED to Candidate 2026-07-22 (RFC-051 flip decision,
             // user-approved): strictly additive — the unbiased scorer
             // picks composition only where the bus path refuses or

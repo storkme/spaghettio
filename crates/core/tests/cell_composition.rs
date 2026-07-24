@@ -496,12 +496,14 @@ fn chain_capacity_reaches_the_placer() {
         "electronic-circuit", 15.0, &inputs, &MachinePalette::default(),
         "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
     ).unwrap();
-    let l0 = compose_chain(&sr).unwrap();
-    let l0_explicit = compose_chain_with_capacity(&sr, 0).unwrap();
+    let plain = compose_chain(&sr).unwrap();
+    let default_explicit =
+        compose_chain_with_capacity(&sr, spaghettio_core::common::DEFAULT_INSERTER_CAPACITY).unwrap();
     assert_eq!(
-        geometry_hash(&l0), geometry_hash(&l0_explicit),
-        "capacity 0 must be byte-identical to the plain path"
+        geometry_hash(&plain), geometry_hash(&default_explicit),
+        "plain compose_chain must equal the DEFAULT_INSERTER_CAPACITY build"
     );
+    let l0 = compose_chain_with_capacity(&sr, 0).unwrap();
     let l7 = compose_chain_with_capacity(&sr, 7).unwrap();
     assert_eq!(l7.inserter_capacity, 7, "composed layout must declare its capacity");
     assert_ne!(
@@ -510,26 +512,78 @@ fn chain_capacity_reaches_the_placer() {
     );
 }
 
-/// #422 review finding 1: mega-containing chains must REFUSE nonzero
-/// declared capacity until the mega bootstrap threads it too — an L7
-/// declaration over an L0-sized mega interior is a mixed-world lie.
+/// #383 (2026-07-24): the EC@15 chain — the canonical #383 fixture —
+/// carries input-inserter-throughput warnings at the raw L0 world but
+/// composes inserter-clean at the L2 engine default (the input bind
+/// clears at non-bulk hand 2). Guards the default-level fix: sim-measured
+/// at 13.8/s (−8%) at L0 vs 15.0/s (full plan) at L2.
 #[test]
-fn mega_chain_refuses_nonzero_capacity() {
+fn ec15_chain_inserter_clean_at_default_capacity() {
     use spaghettio_core::bus::cells::chain::compose_chain_with_capacity;
+    use spaghettio_core::common::DEFAULT_INSERTER_CAPACITY;
+    use spaghettio_core::validate::{self, LayoutStyle, Severity};
+    let inputs: FxHashSet<String> =
+        ["iron-plate", "copper-plate"].iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "electronic-circuit", 15.0, &inputs, &MachinePalette::default(),
+        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+    ).unwrap();
+    let inserter_warns = |cap: u8| -> usize {
+        let l = compose_chain_with_capacity(&sr, cap).unwrap();
+        let issues =
+            validate::validate(&l, Some(&sr), LayoutStyle::Bus).unwrap_or_else(|e| e.issues);
+        assert!(
+            issues.iter().all(|i| i.severity != Severity::Error),
+            "EC@15 L{cap} must have no errors: {issues:?}"
+        );
+        issues
+            .iter()
+            .filter(|i| i.category.contains("inserter") || i.category == "input-rate-delivery")
+            .count()
+    };
+    // L0 (raw unresearched) still shows the #383 input bind — guards the
+    // premise: if L0 stops warning, this test no longer proves anything.
+    assert!(
+        inserter_warns(0) > 0,
+        "L0 must still exhibit the #383 input-inserter bind"
+    );
+    // The L2 engine default (red+green research) clears them all.
+    assert_eq!(
+        inserter_warns(DEFAULT_INSERTER_CAPACITY),
+        0,
+        "EC@15 chain must be inserter-clean at the engine default (#383 fix)"
+    );
+}
+
+/// #383 (2026-07-24): mega-containing chains pin their WHOLE self to L0
+/// until #415 threads capacity into the mega interior — so a nonzero
+/// declared level is CLAMPED to L0 (the layout declares 0), replacing the
+/// pre-#383 hard refusal. This keeps the L2 engine default from breaking
+/// mega chains while preserving their conservative geometry unchanged.
+#[test]
+fn mega_chain_clamps_capacity_to_l0() {
+    use spaghettio_core::bus::cells::chain::compose_chain_with_capacity;
+    use spaghettio_core::bus::cells::registry::geometry_hash;
     let inputs: FxHashSet<String> =
         ["iron-ore", "copper-ore", "crude-oil", "water", "coal"].iter().map(|s| s.to_string()).collect();
     let sr = solver::solve_with_palette_exclusions_and_quality(
         "advanced-circuit", 2.0, &inputs, &MachinePalette::default(),
         "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
     ).unwrap();
-    let err = compose_chain_with_capacity(&sr, 7).expect_err("mixed world must refuse");
-    assert!(err.contains("mega-cell interiors"), "refusal must cite the gap: {err}");
-    compose_chain_with_capacity(&sr, 0).expect("L0 mega chain still composes");
+    // A mega chain requested at L7 composes, clamped to L0 — not a refusal,
+    // not a mixed-world declaration.
+    let l7 = compose_chain_with_capacity(&sr, 7).expect("mega chain composes (clamped to L0)");
+    assert_eq!(l7.inserter_capacity, 0, "mega chain must clamp declared capacity to L0 (#415)");
+    let l0 = compose_chain_with_capacity(&sr, 0).expect("L0 mega chain composes");
+    assert_eq!(
+        geometry_hash(&l7), geometry_hash(&l0),
+        "clamped L7 must be byte-identical to explicit L0 — mega geometry is capacity-invariant"
+    );
 }
 
 #[test]
 fn cell_registry_hashes_current() {
-    use spaghettio_core::bus::cells::chain::compose_chain;
+    use spaghettio_core::bus::cells::chain::compose_chain_with_capacity;
     use spaghettio_core::bus::cells::registry::{entries, geometry_hash};
     // Fixture configs the registry may reference, keyed by (target,
     // rate); same-key configs (mil5 ore vs plates) disambiguate by
@@ -563,7 +617,16 @@ fn cell_registry_hashes_current() {
                             t, *r, &inputs_set, &MachinePalette::default(),
                             "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
                         ).unwrap();
-                        compose_chain(&sr).unwrap()
+                        // Re-derive at explicit L0, NOT the engine default. Every
+                        // registry entry's geometry_hash is an L0-GEOMETRY baseline:
+                        // these fixtures were blessed when the chain path hardcoded
+                        // L0 (pre-#422), so d1 and d7 share one hash — the byte-
+                        // identical L0 geometry, differing only in the harness WORLD
+                        // (`declared_inserter_capacity`), not the built geometry. The
+                        // default moved to L2 (2026-07-24, #383); the L0 baselines
+                        // are unchanged, so reproduce at L0 to validate them. A future
+                        // entry blessed with non-L0 geometry will extend this gate.
+                        compose_chain_with_capacity(&sr, 0).unwrap()
                     }
                 };
                 format!("{:016x}", geometry_hash(&l))

@@ -641,12 +641,14 @@ fn k_idx(idxs: &[usize; 3], k: usize) -> usize {
 /// (calibrated orientation: north feeds, south drains, west→east
 /// record order — #363).
 pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
-    compose_chain_with_capacity(sr, 0)
+    compose_chain_with_capacity(sr, crate::common::DEFAULT_INSERTER_CAPACITY)
 }
 
 /// `compose_chain` with the declared inserter-capacity level threaded to
 /// every member cell's generation (#415). Capacity 0 is byte-identical
-/// to `compose_chain` by construction.
+/// to the pre-RFC-049 chain output by construction; the no-argument
+/// `compose_chain` now defaults to `common::DEFAULT_INSERTER_CAPACITY`
+/// (L2), so pass 0 explicitly for the raw unresearched world.
 pub fn compose_chain_with_capacity(
     sr: &SolverResult,
     inserter_capacity: u8,
@@ -660,17 +662,16 @@ pub fn compose_chain_with_capacity(
     // the pre-Phase-B placer (the registry gate enforces it).
     let mega_plan = super::mega::mega_subgraph(sr)?;
     // #415 stop-gap (#422 review finding 1): the mega bootstrap
-    // (`mega.rs` generate path) does not yet thread capacity — a
-    // mega-containing chain at L>0 would size its solid cells at the
-    // declared level but its mega interior at L0, then DECLARE the
-    // whole layout at L>0. Refuse loudly instead of declaring a mixed
-    // world; threading the mega path is the recorded follow-up that
-    // unblocks this.
-    if inserter_capacity != 0 && mega_plan.is_some() {
-        return Err(format!(
-            "declared inserter capacity L{inserter_capacity} is not yet threaded into              mega-cell interiors (#415 follow-up) — refusing a mixed-world declaration"
-        ));
-    }
+    // (`mega.rs` generate path) does not yet thread capacity, so a
+    // mega-containing chain cannot honor a declared level in its mega
+    // interior. Rather than declare a mixed world, pin the WHOLE chain
+    // to L0 — the exact conservative geometry it had before the
+    // 2026-07-24 default→L2 change (#383), so mega behavior is
+    // unchanged. The clamp is reflected in the layout's declared
+    // capacity (not silent), and #415 threading the mega interior is the
+    // recorded follow-up that lifts it. (Was a hard `return Err` pre-#383;
+    // softened to a clamp so the L2 default doesn't break mega chains.)
+    let inserter_capacity = if mega_plan.is_some() { 0 } else { inserter_capacity };
     const MEGA_PREFIX: &str = "mega:";
 
     let produced: FxHashSet<&str> = sr
