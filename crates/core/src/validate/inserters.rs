@@ -827,8 +827,19 @@ pub fn check_row_output_lane_budget(
             //   to the 2-lane nominal is unproven either way (the
             //   probe above 13 generation-errors before it can run).
             // Both constants are floors at or under their measured cell.
+            // RE-calibrated 2026-07-24 (#383/#431): the original
+            // 13.0/7.5 bridged "floor" was measured through an
+            // INPUT-bound cell — the instrument bound one layer
+            // deeper. The #431 independent sweep (single 6-machine EC
+            // row, bridged yellow, declared L0..L7) measured the
+            // bridged output delivering the FULL 2.0 lanes (15.00/s
+            // at plan, zero output-blocked machines at every level)
+            // once the input bind clears at L2. The unbridged 0.95
+            // (7.40/7.5 solo-row cell) is UNFALSIFIED but shares the
+            // suspect setup — kept conservative pending a dedicated
+            // L2 re-measure.
             const ROW_LANE_FACTOR_UNBRIDGED: f64 = 0.95;
-            const ROW_LANE_FACTOR_BRIDGED: f64 = 13.0 / 7.5; // 1.7333 measured floor
+            const ROW_LANE_FACTOR_BRIDGED: f64 = 2.0; // full both-lane nominal (#431 sweep)
             let lane_factor = if lanes_loaded >= 2 {
                 ROW_LANE_FACTOR_BRIDGED
             } else {

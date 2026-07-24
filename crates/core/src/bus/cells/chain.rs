@@ -754,46 +754,7 @@ pub fn compose_chain_with_capacity(
         None => (1, std::cmp::Reverse(usize::MAX)),
     });
 
-    // Per-slot vertical-lane demand, from the bypass edge list (an edge
-    // p→c descends in slot p+1 and ascends in slot c; sizing by the
-    // slot's own fan-out under-counted ascents — the mil5-ore overlap
-    // class).
     let n = specs.len();
-    let mut lane_demand: Vec<i32> = vec![0; n];
-    for (pi, m) in specs.iter().enumerate() {
-        let pi_mega = m.recipe.starts_with(MEGA_PREFIX);
-        for o in &m.outputs {
-            for (ci, c) in specs.iter().enumerate() {
-                if pi_mega && ci != pi && c.inputs.iter().any(|i| i.item == o.item) {
-                    // Mega corridors ride the bypass row (the drain
-                    // exits south) — ascent lane always; fanned
-                    // outputs (>=2 consumers) ALSO drop each branch
-                    // through a lane in the next slot's strip, like
-                    // solid bypass descents (ad-hoc splitter-column
-                    // drops collided with consumer ascent lanes —
-                    // USP@2 head-on/loop cluster).
-                    lane_demand[ci] += 1;
-                    let consumers_of_o = specs
-                        .iter()
-                        .enumerate()
-                        .filter(|(cj, cc)| {
-                            *cj != pi && cc.inputs.iter().any(|i| i.item == o.item)
-                        })
-                        .count();
-                    if consumers_of_o >= 2 && pi + 1 < n {
-                        lane_demand[pi + 1] += 1;
-                    }
-                    continue;
-                }
-                if ci != pi && c.inputs.iter().any(|i| i.item == o.item) && ci != pi + 1 {
-                    if pi + 1 < n {
-                        lane_demand[pi + 1] += 1;
-                    }
-                    lane_demand[ci] += 1;
-                }
-            }
-        }
-    }
 
     let mut entities: Vec<PlacedEntity> = Vec::new();
     let mut b_in: Vec<BoundaryRecord> = Vec::new();
@@ -803,21 +764,24 @@ pub fn compose_chain_with_capacity(
 
     // Copies are identical — generate each spec's cell once (the cell
     // generator runs the full engine; K=12 must not run it 12×).
+    // Cells generate ONCE in a pre-pass (they are x-independent local
+    // geometries): the lane-demand sizing below needs each consumer's
+    // PORT COUNT — multi-row cells take one delivery branch per port
+    // (#383: a feed-bound count raise split the EC cell into two rows
+    // and the single-port corridor left row 2 cable-dead).
     let mut cell_cache: Vec<Cell> = Vec::with_capacity(n);
     let mut mega_block_cache: Option<LayoutResult> = None;
-    for copy in 0..kq {
-        for (si, m) in specs.iter().enumerate() {
-            let out_item = m
-                .outputs
-                .first()
-                .ok_or_else(|| format!("cells: {} has no output", m.recipe))?
-                .item
-                .clone();
-            let is_mega = m.recipe.starts_with(MEGA_PREFIX);
-            // outputs[].rate is PER-MACHINE; the cell serves the whole
-            // spec's share of this copy.
-            let rate = m.outputs[0].rate * m.count * scale;
-            if copy == 0 {
+    for m in specs.iter() {
+        let out_item = m
+            .outputs
+            .first()
+            .ok_or_else(|| format!("cells: {} has no output", m.recipe))?
+            .item
+            .clone();
+        let is_mega = m.recipe.starts_with(MEGA_PREFIX);
+        let rate = m.outputs[0].rate * m.count * scale;
+        {
+            {
                 if is_mega {
                     let plan = mega_plan.as_ref().expect("mega spec implies plan");
                     let (_msr, block) = super::mega::compose_mega_block(sr, plan, scale)?;
@@ -869,6 +833,75 @@ pub fn compose_chain_with_capacity(
                     cell_cache.push(extract_cell(&cl));
                 }
             }
+        }
+    }
+    // Per-slot vertical-lane demand, from the bypass edge list (an edge
+    // p→c descends in slot p+1 and ascends in slot c; sizing by the
+    // slot's own fan-out under-counted ascents — the mil5-ore overlap
+    // class). PORT-AWARE (#383): a consumer takes one delivery branch
+    // PER matching inbound port (multi-row cells), so each edge counts
+    // the consumer's port multiplicity on both the ascent and the
+    // descent side.
+    let mut lane_demand: Vec<i32> = vec![0; n];
+    for (pi, m) in specs.iter().enumerate() {
+        let pi_mega = m.recipe.starts_with(MEGA_PREFIX);
+        for o in &m.outputs {
+            for (ci, c) in specs.iter().enumerate() {
+                if ci == pi || !c.inputs.iter().any(|i| i.item == o.item) {
+                    continue;
+                }
+                let ports = cell_cache[ci]
+                    .ports
+                    .iter()
+                    .filter(|q| q.inbound && q.item == o.item)
+                    .count()
+                    .max(1) as i32;
+                if pi_mega {
+                    // Mega corridors ride the bypass row (the drain
+                    // exits south) — ascent lanes always; fanned
+                    // outputs (>=2 branches) ALSO drop each branch
+                    // through a lane in the next slot's strip, like
+                    // solid bypass descents.
+                    lane_demand[ci] += ports;
+                    let branches: usize = specs
+                        .iter()
+                        .enumerate()
+                        .filter(|(cj, cc)| {
+                            *cj != pi && cc.inputs.iter().any(|i| i.item == o.item)
+                        })
+                        .map(|(cj, _)| {
+                            cell_cache[cj]
+                                .ports
+                                .iter()
+                                .filter(|q| q.inbound && q.item == o.item)
+                                .count()
+                                .max(1)
+                        })
+                        .sum();
+                    if branches >= 2 && pi + 1 < n {
+                        lane_demand[pi + 1] += ports;
+                    }
+                    continue;
+                }
+                if ci != pi + 1 {
+                    if pi + 1 < n {
+                        lane_demand[pi + 1] += ports;
+                    }
+                    lane_demand[ci] += ports;
+                }
+            }
+        }
+    }
+
+    for copy in 0..kq {
+        for (si, m) in specs.iter().enumerate() {
+            let out_item = m
+                .outputs
+                .first()
+                .ok_or_else(|| format!("cells: {} has no output", m.recipe))?
+                .item
+                .clone();
+            let is_mega = m.recipe.starts_with(MEGA_PREFIX);
             let cell = cell_cache[si].clone();
             let ext_inputs: Vec<String> = m
                 .inputs
@@ -1020,20 +1053,26 @@ pub fn compose_chain_with_capacity(
                 if pi_mega { &m.outputs } else { &m.outputs[..1] };
             outs.iter()
                 .map(|o| {
-                    let edges = specs
+                    // PORT-multiplicity (#383): one bypass row per
+                    // (consumer, inbound port) branch — multi-row
+                    // cells take one branch per row.
+                    let edges: i32 = specs
                         .iter()
                         .enumerate()
                         .filter(|(ci, c)| {
                             *ci != pi
                                 && (pi_mega || *ci != pi + 1)
                                 && c.inputs.iter().any(|i| i.item == o.item)
-                                && cell_cache[*ci]
-                                    .ports
-                                    .iter()
-                                    .any(|q| q.inbound && q.item == o.item)
                         })
-                        .count() as i32;
-                    // A fanned mega output (>=2 consumers, Phase C)
+                        .map(|(ci, _)| {
+                            cell_cache[ci]
+                                .ports
+                                .iter()
+                                .filter(|q| q.inbound && q.item == o.item)
+                                .count() as i32
+                        })
+                        .sum();
+                    // A fanned mega output (>=2 branches, Phase C)
                     // spends one extra row hosting the splitter chain
                     // before the per-branch rows.
                     if pi_mega && edges >= 2 { edges + 1 } else { edges }
@@ -1073,16 +1112,31 @@ pub fn compose_chain_with_capacity(
         let out_item = specs[pi % n].outputs[0].item.clone();
         // Consumers within THIS copy only — the same item flows in every
         // copy, and cross-copy corridors would defeat the quantization.
-        let consumers: Vec<usize> = placed
+        // One delivery branch PER (consumer, inbound port): multi-row
+        // cells expose one port per row and every row needs its own
+        // feed — the single-port delivery left second rows starved
+        // (#383's feed-bound raise made this reachable; same class as
+        // the mega gates' second-row misses).
+        let consumers: Vec<(usize, usize)> = placed
             .iter()
             .enumerate()
             .filter(|(ci, c)| {
                 *ci != pi
                     && c.copy == p.copy
                     && specs[*ci % n].inputs.iter().any(|i| i.item == out_item)
-                    && c.cell.ports.iter().any(|q| q.inbound && q.item == out_item)
             })
-            .map(|(ci, _)| ci)
+            .flat_map(|(ci, c)| {
+                let mut ports: Vec<(usize, usize)> = c
+                    .cell
+                    .ports
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, q)| q.inbound && q.item == out_item)
+                    .map(|(qi, _)| (ci, qi))
+                    .collect();
+                ports.sort_by_key(|&(_, qi)| c.cell.ports[qi].y);
+                ports
+            })
             .collect();
         // Mega producer (RFC-052 Phase B): each solid output exits
         // SOUTH at its own drain head — no merge/fan machinery, and
@@ -1091,16 +1145,28 @@ pub fn compose_chain_with_capacity(
         // Outputs with no consumer stay chain exports at their drain.
         if !p.mega_drains.is_empty() {
             for (dx0, dy0, d_item) in p.mega_drains.clone() {
-                let drain_consumers: Vec<usize> = placed
+                // (consumer, port) pairs — one branch per inbound
+                // port, multi-row cells included (#383).
+                let drain_consumers: Vec<(usize, usize)> = placed
                     .iter()
                     .enumerate()
                     .filter(|(ci, c)| {
                         *ci != pi
                             && c.copy == p.copy
                             && specs[*ci % n].inputs.iter().any(|i| i.item == d_item)
-                            && c.cell.ports.iter().any(|q| q.inbound && q.item == d_item)
                     })
-                    .map(|(ci, _)| ci)
+                    .flat_map(|(ci, c)| {
+                        let mut ports: Vec<(usize, usize)> = c
+                            .cell
+                            .ports
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, q)| q.inbound && q.item == d_item)
+                            .map(|(qi, _)| (ci, qi))
+                            .collect();
+                        ports.sort_by_key(|&(_, qi)| c.cell.ports[qi].y);
+                        ports
+                    })
                     .collect();
                 // Fan path (Phase C): >=2 consumers split on the drain's
                 // own bypass row, then each branch drops to a fresh row
@@ -1116,7 +1182,7 @@ pub fn compose_chain_with_capacity(
                         "express-transport-belt", "express-underground-belt", &seg0);
                     router.corner_east(&mut entities, dx0, fan_y, &d_item, "express-transport-belt", &seg0);
                     let mut ordered = drain_consumers.clone();
-                    ordered.sort_by_key(|ci| placed[*ci].x);
+                    ordered.sort_by_key(|(ci, qi)| (placed[*ci].x, placed[*ci].cell.ports[*qi].y));
                     // Splitter chain east of the corner; branch b exits
                     // south at (sx+1, fan_y+1); the last branch is the
                     // pass-through at (sx_last+1, fan_y).
@@ -1174,14 +1240,9 @@ pub fn compose_chain_with_capacity(
                             "express-transport-belt", &format!("fan:{}:{}", d_item, p.seg));
                     }
                     branch_origins.push((pt_x, fan_y));
-                    for (bi, ci) in ordered.iter().enumerate() {
+                    for (bi, (ci, qi)) in ordered.iter().enumerate() {
                         let c = &placed[*ci];
-                        let port = c
-                            .cell
-                            .ports
-                            .iter()
-                            .find(|q| q.inbound && q.item == d_item)
-                            .expect("consumer port checked in eligibility");
+                        let port = &c.cell.ports[*qi];
                         let (tx, ty) = port_abs(port, c.x, c.y_off);
                         let (bx, by) = branch_origins[bi];
                         let seg = format!("corr:{}:{}", p.seg, c.seg);
@@ -1250,8 +1311,8 @@ pub fn compose_chain_with_capacity(
                     }
                     continue;
                 }
-                let consumer = drain_consumers.first().map(|&ci| (ci, &placed[ci]));
-                let Some((ci, c)) = consumer else {
+                let consumer = drain_consumers.first().map(|&(ci, qi)| (ci, qi, &placed[ci]));
+                let Some((ci, qi, c)) = consumer else {
                     // Consumer-less export: extend the drain to the
                     // chain's drain row like the solid final-product
                     // path — a b_out mid-layout leaves a dead-end belt
@@ -1270,12 +1331,7 @@ pub fn compose_chain_with_capacity(
                     });
                     continue;
                 };
-                let port = c
-                    .cell
-                    .ports
-                    .iter()
-                    .find(|q| q.inbound && q.item == d_item)
-                    .expect("consumer port checked in eligibility");
+                let port = &c.cell.ports[qi];
                 let (tx, ty) = port_abs(port, c.x, c.y_off);
                 let seg = format!("corr:{}:{}", p.seg, c.seg);
                 let up_demand = lane_demand[ci % n];
@@ -1411,19 +1467,33 @@ pub fn compose_chain_with_capacity(
             }
             fx += 2;
         }
-        // Pass-through (or the only) branch.
-        branch_origins.push((if n_branches > 1 { fx - 1 } else { pass_x }, run_y));
+        // Pass-through (or the only) branch. When two branches serve
+        // the SAME consumer (multi-row ports, #383) the pass-through
+        // must step EAST off the splitter column — shared-x origins
+        // put the second branch's bridge across the first's corner
+        // (the mega-fan lesson). Distinct-consumer fans keep the
+        // historical origin, bit-identical.
+        let multi_port_fan = {
+            let mut cis: Vec<usize> = consumers.iter().map(|&(ci, _)| ci).collect();
+            cis.sort_unstable();
+            cis.windows(2).any(|w| w[0] == w[1])
+        };
+        if n_branches > 1 && multi_port_fan {
+            router.corner_east(&mut entities, fx - 1, run_y, &out_item,
+                "express-transport-belt", &format!("fan:{}", p.seg));
+            branch_origins.push((fx, run_y));
+        } else {
+            branch_origins.push((if n_branches > 1 { fx - 1 } else { pass_x }, run_y));
+        }
 
         // Route each branch. Adjacent-east consumer: port-row corridor
         // (with a vertical jog on the consumer slot's first lane if the
         // rows differ). Farther consumer: south bypass under the band.
         let mut ordered = consumers.clone();
-        ordered.sort_by_key(|ci| placed[*ci].x);
-        for (bi, ci) in ordered.iter().enumerate() {
+        ordered.sort_by_key(|(ci, qi)| (placed[*ci].x, placed[*ci].cell.ports[*qi].y));
+        for (bi, (ci, qi)) in ordered.iter().enumerate() {
             let c = &placed[*ci];
-            let port = c.cell.ports.iter()
-                .find(|q| q.inbound && q.item == out_item)
-                .expect("consumer port checked in eligibility");
+            let port = &c.cell.ports[*qi];
             let (tx, ty) = port_abs(port, c.x, c.y_off);
             let (bx, by) = branch_origins[bi];
             let seg = format!("corr:{}:{}", p.seg, c.seg);
@@ -1432,17 +1502,31 @@ pub fn compose_chain_with_capacity(
                     router.hrow(&mut entities, ty, bx, tx - 1, &out_item,
                         "express-transport-belt", "express-underground-belt", &seg);
                 } else {
-                    // Early jog: one east tile at the branch origin, then
-                    // vertical at bx+1 down/up to the TARGET port row, then
-                    // east all the way. The stagger keeps a sibling
-                    // fan-out branch's row clear of this jog column (it
-                    // hops under it via the registry).
+                    // Early jog: east from the branch origin, then
+                    // vertical at the JOG COLUMN down/up to the TARGET
+                    // port row, then east all the way. The stagger keeps
+                    // a sibling fan-out branch's row clear of this jog
+                    // column (it hops under it via the registry). The
+                    // jog column starts at bx+1 and SLIDES EAST past
+                    // tiles another branch already occupies (#383: two
+                    // branches to one multi-row adjacent consumer share
+                    // origin x — the second's vcol overlapped the
+                    // first's; bit-identical when no collision).
                     let vdir = (ty - by).signum();
+                    let (lo_y, hi_y) = if by < ty { (by, ty - 1) } else { (ty + 1, by) };
+                    let mut jog_x = bx + 1;
+                    while (lo_y..=hi_y).any(|y| router.occ.contains(&(jog_x, y)))
+                        || router.occ.contains(&(jog_x, ty))
+                    {
+                        jog_x += 1;
+                    }
                     router.corner_east(&mut entities, bx, by, &out_item, "express-transport-belt", &seg);
-                    router.vcol(&mut entities, bx + 1, by, ty - vdir, &out_item,
+                    router.hrow(&mut entities, by, bx + 1, jog_x - 1, &out_item,
                         "express-transport-belt", "express-underground-belt", &seg);
-                    router.corner_east(&mut entities, bx + 1, ty, &out_item, "express-transport-belt", &seg);
-                    router.hrow(&mut entities, ty, bx + 2, tx - 1, &out_item,
+                    router.vcol(&mut entities, jog_x, by, ty - vdir, &out_item,
+                        "express-transport-belt", "express-underground-belt", &seg);
+                    router.corner_east(&mut entities, jog_x, ty, &out_item, "express-transport-belt", &seg);
+                    router.hrow(&mut entities, ty, jog_x + 1, tx - 1, &out_item,
                         "express-transport-belt", "express-underground-belt", &seg);
                 }
             } else {
