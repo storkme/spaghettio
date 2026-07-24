@@ -269,9 +269,9 @@ fn print_analysis(a: &BlueprintAnalysis, quiet: bool) {
             String::new()
         },
     );
-    if let Some(pf) = f.machines_powered_fraction {
+    if let Some(pf) = f.powered_fraction {
         println!(
-            "  Power: {:.0}% machines covered{}",
+            "  Power: {:.0}% consumers covered{}",
             pf * 100.0,
             if f.self_powered { " (self-powered)" } else { "" },
         );
