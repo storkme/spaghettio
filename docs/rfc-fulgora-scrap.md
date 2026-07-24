@@ -685,8 +685,22 @@ and 3 wait on its artifacts as marked. Phase 3 is the long pole.
   reports (holmium-plate row, zero output inserters) is a THIRD,
   unrelated defect in row/template generation upstream of ghost
   routing — confirmed pre-existing and untouched by this fix via the
-  same git-stash comparison; not investigated to a fix here, tracked
-  on #309. Real resolution of the dual-fate split still needs the
+  same git-stash comparison. Root-caused (not fixed): `row_kind()`
+  (`placer.rs` ~561) classifies any `solid_inputs==0, fluid_inputs==1,
+  machine_size<5` row as `RowKind::OilRefinery` → `fluid_only_row`
+  (hard-coded fluid-in/fluid-out, no solid-output path) without
+  checking `solid_outputs` — holmium-plate (fluid in, solid out) is
+  apparently the first Fulgora recipe shaped that way. The obvious
+  guard fix (route to `RowKind::FluidInput` instead) does NOT work:
+  `fluid_input_row` (`templates.rs:2316`) unconditionally requires a
+  solid *input* too (places its own inserter+belt from a mandatory
+  `solid_item` param) — holmium-plate has none, so redirecting there
+  would place a disconnected bogus inserter, not fix anything. Needs a
+  genuinely new template variant (fluid-input-only + the solid-output
+  tail `fluid_input_row` already has at y+7/y+8), which touches a
+  template function shared by every non-Fulgora fluid+solid recipe —
+  correctly out of this PR's blast radius; tracked on #309. Real
+  resolution of the dual-fate split still needs the
   physical flow-split this entry already calls for (a splitter at the
   sort point, sending the consumed sub-rate one way and the surplus
   remainder the other) — this fix buys back the illegal-blueprint
