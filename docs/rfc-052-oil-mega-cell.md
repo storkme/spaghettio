@@ -140,6 +140,39 @@ feeds and the composed layout must pass the pipe-isolation validators
 
 ## Decision log
 
+- *2026-07-24 (later) — C3 LANDED, C2 LANDED, USP@2 composes
+  end-to-end (2232×193, 48k entities — the largest layout ever
+  composed); error ladder 71 → 44 → 27 → 18 through five fixes, each
+  a named class: (1) fan splitter/branch columns dodge other drain
+  descents; (2) pole trio nudge learns its own placements; (3) the
+  OUTPUT MERGER had the same blocked-free-blocked pair-destroyer as
+  the ghost router's fluid bridging (second instance of the class —
+  runs now cluster across 1-tile gaps, mutation guards on plain
+  belts); (4) fan pass-through takes its own dodged column; (5) fan
+  branches descend via ALLOCATED lanes in slot pi+1 (lane_demand
+  sizes them) instead of ad-hoc splitter columns that collided
+  head-on with consumer ascents. REMAINING 18 = 6 × 3 copies, ALL
+  engine-internal to the mega sub-layout (not Phase-C machinery),
+  two bugs: (a) a trunk tap-off SPLITTER's second tile lands on the
+  adjacent pitch-1 trunk column; the neighbor lane SKIPS that hard
+  tile but emits no UG bridge across the skip (a crossing zone paves
+  one row; the dangling surface belts feed the foreign splitter →
+  items mix). Suspect: the trunk segmenter treats a FOREIGN
+  splitter tile like an own-tap row (flow-through), but foreign
+  splitters don't pass a different item — the skip needs a bridge.
+  Block-local (4,12)/(5,11..13), trunk:engine-unit vs
+  tapoff:iron-plate. (b) merger unpaired UG output at block-local
+  (73,39) (east, no matching input) beside the electric-engine-unit
+  merger run. Both reproduce standalone via compose_mega_block on
+  the USP@2 sub-solve at scale 0.5 (debug_usp_block example,
+  gitignored). C3's landed machinery: PTG spans stopped blocking
+  surface crossings (span map, same-axis-only interference); fluid
+  head slots dodge foreign fluid columns as retry rung 2/4;
+  un-hoppable chain-fed clusters vertical-retrofit every column;
+  entry mouth may sit at the west-edge entry tile; +1 margin row for
+  cf blocks. C2: ascent-terminal retrofit generalizes to corr:/fan
+  rows both directions.*
+
 - *2026-07-24 — Phase C OPENED; the identity precondition is
   DISCHARGED BY MEASUREMENT and it falsified the engine. Eight
   single-refinery sim probes (A–H2: starve-vs-craft discrimination +
