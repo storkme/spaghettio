@@ -140,6 +140,24 @@ feeds and the composed layout must pass the pipe-isolation validators
 
 ## Decision log
 
+- *2026-07-24 — #408 adversarial review folds (APPROVE-WITH-NITS; the
+  reviewer independently re-derived the reach semantics from game data
+  and re-ran the full battery). The one MAJOR is SIGNED OFF as a
+  deliberate trade: the supply-aware split-network check no longer
+  flags a severed network whose fragments each retain a supply tile —
+  the alternative flagged every legitimate multi-copy composed layout;
+  the documented router failure modes it was built for still fire on
+  their (supply-less) fixtures. Tracked for tightening in #409
+  (component-count-vs-K or per-component supply-vs-demand). Folds: the
+  adapter's PTG-tail length check now cites `UG_PIPE_REACH`
+  (behavior-identical — deliberately one tile conservative to keep
+  registered geometry stable), the candidate-space comment corrected
+  (10^F not 5^F), the mouth-adjacency construction guarantee
+  documented in the 'check loop, probe scripts got purpose headers.
+  Review also strengthened the #406 attribution: the drifting stress
+  golden's LAYOUT HASH is identical — drift is warning-category only,
+  in belt validators this PR doesn't touch.*
+
 - *2026-07-24 — Increment 1 (chem class) unblocked by a GAME-RULE
   falsification, not adapter work (#407): the chem5 sim TOTAL STALL
   traced to an 11-apart vertical PTG pair in the RAW engine block —

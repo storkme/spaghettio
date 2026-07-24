@@ -171,7 +171,7 @@ fn adapt_with_spacing(l: &LayoutResult, spacing: i32) -> Result<LayoutResult, St
     // Joint fluid planning (RFC-052 Phase B): with 3+ fluid feeds the
     // per-record greedy dead-ends — a shifted tail can land inside a
     // later record's lateral span (the chem-pack water refusal). Search
-    // the dx-vector product across fluid records (≤5^F, F small),
+    // the dx-vector product across fluid records (≤10^F, F small),
     // evaluating sequentially against accumulated occupancy with early
     // abort; dx=0 first keeps the single/two-fluid fixtures on their
     // historical greedy solutions.
@@ -459,9 +459,13 @@ fn try_fluid_path(
             if tail_rows.len() < 2 {
                 return None;
             }
-            // Underground reach: mouths at the extremes; span must be
-            // within any tier's 10-tile reach.
-            if tail_rows.len() as i32 > 10 {
+            // Underground reach: mouths at the extremes, so entity
+            // distance = len-1. Refusing at distance > UG_PIPE_REACH
+            // (the GAP cap, 9) is deliberately one tile conservative —
+            // identical to the pre-#407 behavior, keeping registered
+            // geometry stable while staying inside the game's
+            // entity-distance-10 limit.
+            if tail_rows.len() as i32 - 1 > crate::common::UG_PIPE_REACH as i32 {
                 return None;
             }
             ptg_pair = Some((
@@ -498,7 +502,12 @@ fn try_fluid_path(
             }
             if mouth_tiles.contains(&(x, y)) {
                 // Mouths connect axis-wise only; side adjacency to a
-                // foreign fluid is legal.
+                // foreign fluid is legal. The AXIS neighbors (a mouth's
+                // surface-connection side) are not re-checked here:
+                // construction guarantees them — the top mouth connects
+                // up into this record's own corner pipe and the bottom
+                // mouth's join is gated by the `joins` predicate below,
+                // both same-fluid by definition (#408 review).
                 continue;
             }
             for n in neighbors(x, y) {
