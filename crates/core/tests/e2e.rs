@@ -1880,15 +1880,21 @@ fn tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing() {
         "{test_name}: expected exactly 0 inserter-item-throughput warnings"
     );
 
-    // 2026-07-23 (#385 second half): pin the one row-output-lane-budget
-    // warning the new check raises here (electronic-circuit's row, 14.0/s
-    // demand on a bridged yellow belt-out whose 2-lane realizable cap is
-    // 12.75/s) — a genuine, sim-calibrated finding, not tuned away.
+    // 2026-07-23 (#385 second half): the new check raised one
+    // row-output-lane-budget warning here (electronic-circuit's row,
+    // 14.0/s demand) against the bridged yellow budget then believed to
+    // be 12.75/s (0.85 × 15).
+    // 2026-07-24 (#383/#431 recalibration): that budget was measured
+    // through an input-bound cell — #431's level sweep shows bridged
+    // yellow delivering the full 15.00/s exactly at L2+. At the
+    // recalibrated ROW_LANE_FACTOR_BRIDGED = 2.0 the budget is 15.0/s,
+    // so this row's 14.0/s demand fits and the warning correctly no
+    // longer fires.
     let row_output_lane_budget_count =
         warnings.iter().filter(|i| i.category == "row-output-lane-budget").count();
     assert_eq!(
-        row_output_lane_budget_count, 1,
-        "{test_name}: expected exactly 1 row-output-lane-budget warning"
+        row_output_lane_budget_count, 0,
+        "{test_name}: row-output-lane-budget should not fire at the recalibrated budget"
     );
 }
 
