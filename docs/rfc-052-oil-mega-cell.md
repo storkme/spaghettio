@@ -1,6 +1,6 @@
 # RFC-052: Oil mega-cells — fluid subgraphs as uncropped composed units
 
-**Status**: Design (circulated for review)
+**Status**: Landed (Phases A/B/C delivered; close-out 2026-07-24 — see the status ledger and the decision log's close-out entry)
 
 ## Summary
 
@@ -139,6 +139,27 @@ feeds and the composed layout must pass the pipe-isolation validators
   Own go/no-go on Phase A/B evidence.
 
 ## Decision log
+
+- *2026-07-24 — CLOSE-OUT (#421 merged). All three phases delivered;
+  every kill criterion resolved without firing: (1)
+  generic-attachment held — the mega attaches through boundary
+  records, the generic corridor machinery, and the (new) fan/west-
+  entry idioms, no per-recipe hand-composition; (2) value-existence
+  proven three times over (chem5, PU@4, USP@2 — each composes 0
+  errors where the bus hard-fails, permanently gated); (3) sim-gate
+  escape clause satisfied at every rung — deficits attribute to the
+  #383 solid declared-bound class shared with solid chains, and NO
+  fluid-specific deficit class ever appeared (kit and fluid errors
+  empty in every measurement); (4) isolation clean on every composed
+  fixture. Registration of chem5/PU4/USP2 waits on #383 lifting the
+  smelter bound (registry records measured PASS baselines).
+  Remaining tracked threads: #423 (pitch-1 splitter-passthrough —
+  the one engine class Phase C worked AROUND rather than through),
+  #409 landed independently and the flagship re-verified against it,
+  and the harness drained-counter window semantics oddity noted in
+  the #421 review. Phase C's answer to the RFC's own question: the
+  uncropped approach scales to the advanced complex, by
+  measurement.*
 
 - *2026-07-24 (flagship) — **USP@2-from-raw COMPOSES AT ZERO ERRORS**
   (2232×193, 48k entities; gate

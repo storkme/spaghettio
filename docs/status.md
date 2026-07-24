@@ -127,6 +127,26 @@ budgets — utility@2/s FAIL×2 is the most reachable new fix target.
 
 ## Recent RFC close-outs
 
+**`rfc-052-oil-mega-cell.md` close-out (2026-07-24, Phases A/B/C —
+PRs #401/#403/#405/#408/#411/#421)**: fluid subgraphs compose as
+UNCROPPED mega-cells inside solid chains. Delivered: the first
+working refineries in project history (#400's three stacked defects),
+the game-faithful pipe-UG reach model (#407: entity-distance 10, not
+gap 10 — sim-falsified), sim-measured fluid PORT IDENTITY (mirrored
+refineries bind fluids x-DESCENDING; the old ascending zip starved
+them in-game — FFF #394 class, pin-tested), chain-fed mega inputs,
+multi-consumer export fans, and three latent engine-bug classes fixed
+(hop pair-destroyer ×2, tapoff release/retain hole). Bus-refusal wins
+gated at chem-pack@5, PU@4, USP@2 (each composes 0 errors where the
+bus hard-fails; USP@2 = 48k entities, the largest layout produced).
+Sim evidence: plastic/sulfur/AC-from-raw PASS and registered; PU@4
+and USP@2 measured end-to-end (deepest chains ever run — zero
+kit/fluid errors) with deficits attributed to the #383 smelter
+declared-bound class; they register when #383 lifts. Tracked
+follow-ups: #383 (bound lift), #409 (landed independently), #423
+(pitch-1 splitter-passthrough). Full trail:
+[`rfc-052-oil-mega-cell.md`](rfc-052-oil-mega-cell.md) decision log.
+
 **`rfc-inserter-sizing.md` close-out (2026-07-13)**: bus inserters sized to
 planned per-machine throughput via a shared regular→fast→stack ladder
 (long-handed count-ladder for reach-2 sides), with an ingredient-to-belt
