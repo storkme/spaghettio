@@ -23,6 +23,23 @@ pub fn generate_cell_layout(
     rate: f64,
     inputs: &[&str],
 ) -> (crate::models::SolverResult, LayoutResult) {
+    generate_cell_layout_with_capacity(item, rate, inputs, 0)
+}
+
+/// `generate_cell_layout` with the caller's declared inserter-capacity
+/// research level threaded through (#415): without this the chain path
+/// always sized cells at L0 and #381's ladder was structurally inert on
+/// composed layouts (#383's measured input bound). Capacity 0 is
+/// byte-identical to the plain fn by construction (registry gate
+/// enforces). Follow-up audit (#415): quality / max inserter tier are
+/// plausibly placement-relevant too — extend deliberately, with the
+/// same L0-bit-identity discipline, when a measurement needs them.
+pub fn generate_cell_layout_with_capacity(
+    item: &str,
+    rate: f64,
+    inputs: &[&str],
+    inserter_capacity: u8,
+) -> (crate::models::SolverResult, LayoutResult) {
     let inputs: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
     let sr = solver::solve_with_palette_exclusions_and_quality(
         item,
@@ -40,6 +57,7 @@ pub fn generate_cell_layout(
     // overflow the moment the default flipped).
     let opts = layout::LayoutOptions {
         cell_composition: super::CellComposition::Off,
+        inserter_capacity,
         ..Default::default()
     };
     let l = layout::build_bus_layout(&sr, opts)

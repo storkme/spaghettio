@@ -156,7 +156,7 @@ impl DecompositionCandidate for CellComposedCandidate {
                 ));
             }
         }
-        let mut l = crate::bus::cells::chain::compose_chain(solver_result)?;
+        let mut l = crate::bus::cells::chain::compose_chain_with_capacity(solver_result, opts.inserter_capacity)?;
         // Self-validate before competing: `score_layout.accepted` never
         // runs the full validator, so an error-laden composition that
         // "wins" on a bus refusal would reach real callers as a
