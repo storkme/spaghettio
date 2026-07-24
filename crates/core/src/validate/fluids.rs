@@ -606,6 +606,7 @@ pub fn check_fluid_port_connectivity(
 /// lexicographically smallest tile of that component for stable output.
 pub fn check_fluid_network_connectivity(
     layout_result: &LayoutResult,
+    solver: Option<&crate::models::SolverResult>,
 ) -> Vec<ValidationIssue> {
     let pipe_info = build_pipe_info_map(layout_result);
     let ptg_pairs = find_ptg_pairs(layout_result);
@@ -672,7 +673,8 @@ pub fn check_fluid_network_connectivity(
                 .iter()
                 .filter(|c| c.is_disjoint(&supply))
                 .collect();
-            let flagged: Vec<&FxHashSet<(i32, i32)>> = if unsupplied.len() == components.len() {
+            let all_unsupplied = unsupplied.len() == components.len();
+            let flagged: Vec<&FxHashSet<(i32, i32)>> = if all_unsupplied {
                 components.iter().skip(1).collect()
             } else {
                 unsupplied
@@ -693,6 +695,186 @@ pub fn check_fluid_network_connectivity(
                     *x,
                     *y,
                 ));
+            }
+
+            // #409 tightening: a SUPPLIED component can still be a severed
+            // fragment — having *a* producer or boundary tile says nothing
+            // about having *enough*. With the solver's rates, flag any
+            // component whose attached consumer demand exceeds the supply
+            // reachable inside it (producer machines' fluid output rate +
+            // this fluid's share of external input, split evenly across
+            // its boundary tiles like belt_flow's external seeding).
+            // Independently-supplied balanced components — one network per
+            // copy in K>1 composed chains (RFC-052) — stay legitimate:
+            // their books balance. Skipped on the historical all-unsupplied
+            // path (synthetic fixtures; already fully reported above) and
+            // without a solver (no rates to account with).
+            if let Some(sr) = solver {
+                if !all_unsupplied {
+                    let recipe_to_spec: FxHashMap<&str, &crate::models::MachineSpec> =
+                        sr.machines.iter().map(|s| (s.recipe.as_str(), s)).collect();
+                    let external_rate: f64 = sr
+                        .external_inputs
+                        .iter()
+                        .find(|f| f.is_fluid && f.item == fluid)
+                        .map(|f| f.rate)
+                        .unwrap_or(0.0);
+                    let boundary_tiles: Vec<(i32, i32)> = layout_result
+                        .boundary_inputs
+                        .iter()
+                        .filter(|r| r.is_fluid && r.item == fluid && tile_set.contains(&(r.x, r.y)))
+                        .map(|r| (r.x, r.y))
+                        .collect();
+                    let per_boundary_rate = if boundary_tiles.is_empty() {
+                        0.0
+                    } else {
+                        external_rate / boundary_tiles.len() as f64
+                    };
+                    let comp_of =
+                        |t: (i32, i32)| components.iter().position(|c| c.contains(&t));
+
+                    let mut supply_rates = vec![0.0f64; components.len()];
+                    let mut demand_rates = vec![0.0f64; components.len()];
+                    for &bt in &boundary_tiles {
+                        if let Some(i) = comp_of(bt) {
+                            supply_rates[i] += per_boundary_rate;
+                        }
+                    }
+                    for e in &layout_result.entities {
+                        if !is_machine_entity(&e.name) {
+                            continue;
+                        }
+                        let Some(recipe) = e.recipe.as_deref() else { continue };
+                        let Some(&fallback_spec) = recipe_to_spec.get(recipe) else { continue };
+                        // Position-resolved spec: composed/partitioned rows
+                        // carry per-copy specs in `effective_rows`, and the
+                        // whole-solve spec massively misattributes rates per
+                        // copy (a K=8 chain read 8x the per-copy water
+                        // demand before this). Same convention as every
+                        // other rate check — see `resolve_row_spec`.
+                        let spec = super::resolve_row_spec(layout_result, recipe, e.y, fallback_spec);
+                        let utilization = crate::common::utilization_for(spec);
+                        let out_rate = spec
+                            .outputs
+                            .iter()
+                            .find(|o| o.is_fluid && o.item == fluid)
+                            .map(|o| o.rate * utilization)
+                            .unwrap_or(0.0);
+                        let in_rate = spec
+                            .inputs
+                            .iter()
+                            .find(|i| i.is_fluid && i.item == fluid)
+                            .map(|i| i.rate * utilization)
+                            .unwrap_or(0.0);
+                        if out_rate <= 0.0 && in_rate <= 0.0 {
+                            continue;
+                        }
+                        // A producer's output ports may touch several
+                        // components (severed at the machine) — share its
+                        // rate across them rather than double-count. A
+                        // consumer draws its full need from the first
+                        // component holding one of its input ports.
+                        let mut out_comps: Vec<usize> = Vec::new();
+                        let mut in_comp: Option<usize> = None;
+                        for &(rx, ry, pt) in fluid_ports(e.name.as_str(), e.mirror, e.direction)
+                        {
+                            let t = (e.x + rx, e.y + ry);
+                            if !tile_set.contains(&t) {
+                                continue;
+                            }
+                            match pt {
+                                "output" if out_rate > 0.0 => {
+                                    if let Some(i) = comp_of(t) {
+                                        if !out_comps.contains(&i) {
+                                            out_comps.push(i);
+                                        }
+                                    }
+                                }
+                                "input" if in_rate > 0.0 && in_comp.is_none() => {
+                                    in_comp = comp_of(t);
+                                }
+                                _ => {}
+                            }
+                        }
+                        if !out_comps.is_empty() {
+                            let share = out_rate / out_comps.len() as f64;
+                            for i in out_comps {
+                                supply_rates[i] += share;
+                            }
+                        }
+                        if let Some(i) = in_comp {
+                            demand_rates[i] += in_rate;
+                        }
+                    }
+
+                    // Normalize both books to the SOLVER's totals before
+                    // comparing. Placement rounds machine counts up per
+                    // copy (K-quantization: 8 copies x ceil(22/8) = 24
+                    // machines for a 22-count spec), and mega-cell
+                    // interiors aren't in `effective_rows`, so per-machine
+                    // attribution systematically overstates totals. The
+                    // solver's books are the ground truth; scaling each
+                    // side to them cancels uniform rounding while
+                    // preserving exactly what a real sever creates:
+                    // ASYMMETRY between components (a fragment stranded
+                    // without its producer stays near zero supply under
+                    // any uniform scale).
+                    let solver_demand_total: f64 = sr
+                        .machines
+                        .iter()
+                        .flat_map(|m| m.inputs.iter().map(move |i| (i, m.count)))
+                        .filter(|(i, _)| i.is_fluid && i.item == fluid)
+                        .map(|(i, count)| i.rate * count)
+                        .sum();
+                    let solver_supply_total: f64 = sr
+                        .machines
+                        .iter()
+                        .flat_map(|m| m.outputs.iter().map(move |o| (o, m.count)))
+                        .filter(|(o, _)| o.is_fluid && o.item == fluid)
+                        .map(|(o, count)| o.rate * count)
+                        .sum::<f64>()
+                        + external_rate;
+                    let attributed_demand: f64 = demand_rates.iter().sum();
+                    let attributed_supply: f64 = supply_rates.iter().sum();
+                    if attributed_demand > 0.0 && solver_demand_total > 0.0 {
+                        let k = solver_demand_total / attributed_demand;
+                        for d in demand_rates.iter_mut() {
+                            *d *= k;
+                        }
+                    }
+                    if attributed_supply > 0.0 && solver_supply_total > 0.0 {
+                        let k = solver_supply_total / attributed_supply;
+                        for v in supply_rates.iter_mut() {
+                            *v *= k;
+                        }
+                    }
+
+                    let already: FxHashSet<(i32, i32)> = reps.iter().copied().collect();
+                    for (i, c) in components.iter().enumerate() {
+                        let rep = c.iter().copied().min().unwrap_or((0, 0));
+                        if already.contains(&rep) {
+                            continue; // unsupplied — reported above
+                        }
+                        let demand = demand_rates[i];
+                        let supply = supply_rates[i];
+                        // 1% + absolute epsilon: rate-model tolerance, so
+                        // this stays an honest structural signal and not a
+                        // rounding trap (#404's lesson on Error-severity
+                        // rate checks).
+                        if demand > supply + (demand * 0.01).max(0.01) {
+                            issues.push(ValidationIssue::with_pos(
+                                Severity::Error,
+                                "fluid-network",
+                                format!(
+                                    "{fluid} pipe network is split into {n_components} components and the component at ({},{}) is under-supplied: attached consumers need {demand:.2}/s but reachable supply is {supply:.2}/s — likely a severed trunk (#409)",
+                                    rep.0, rep.1
+                                ),
+                                rep.0,
+                                rep.1,
+                            ));
+                        }
+                    }
+                }
             }
         }
     }
@@ -1082,7 +1264,7 @@ mod tests {
             pipe(1, 0, Some("water")),
             pipe(2, 0, Some("water")),
         ]);
-        assert!(check_fluid_network_connectivity(&lr).is_empty());
+        assert!(check_fluid_network_connectivity(&lr, None).is_empty());
     }
 
     #[test]
@@ -1094,7 +1276,7 @@ mod tests {
             ptg(0, 1, EntityDirection::South, "input", Some("water")),
             pipe(1, 1, Some("water")),
         ]);
-        let issues = check_fluid_network_connectivity(&lr);
+        let issues = check_fluid_network_connectivity(&lr, None);
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].category, "fluid-network");
         assert_eq!(issues[0].severity, Severity::Error);
@@ -1109,7 +1291,7 @@ mod tests {
             // gap at (0, 1)
             pipe(0, 2, Some("water")),
         ]);
-        let issues = check_fluid_network_connectivity(&lr);
+        let issues = check_fluid_network_connectivity(&lr, None);
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].category, "fluid-network");
     }
@@ -1125,7 +1307,7 @@ mod tests {
             ptg(0, 3, EntityDirection::North, "output", Some("water")),
             pipe(0, 4, Some("water")),
         ]);
-        assert!(check_fluid_network_connectivity(&lr).is_empty(),
+        assert!(check_fluid_network_connectivity(&lr, None).is_empty(),
             "UG-paired same-fluid network should be one component");
     }
 
@@ -1138,7 +1320,117 @@ mod tests {
             pipe(0, 5, Some("crude-oil")),
             pipe(1, 5, Some("crude-oil")),
         ]);
-        assert!(check_fluid_network_connectivity(&lr).is_empty());
+        assert!(check_fluid_network_connectivity(&lr, None).is_empty());
+    }
+
+    /// #409 fixture builder: fragment A = real producer (sulfuric-acid
+    /// recipe → structural supply marker holds) piped to one consumer;
+    /// fragment B = boundary-supplied pipe column to another consumer.
+    /// Both fragments are structurally SUPPLIED, so pre-#409 the split
+    /// passed silently regardless of rates. Port tiles are computed from
+    /// the shared `fluid_ports` table, not hardcoded.
+    fn severed_supplied_fixture(external_acid_rate: f64) -> (LayoutResult, crate::models::SolverResult) {
+        use crate::models::{BoundaryRecord, ItemFlow, MachineSpec, SolverResult};
+        let ports = fluid_ports("chemical-plant", false, EntityDirection::North);
+        let &(ox, oy, _) = ports.iter().find(|p| p.2 == "output").expect("chem output port");
+        let &(ix, iy, _) = ports.iter().find(|p| p.2 == "input").expect("chem input port");
+
+        let acid = "sulfuric-acid";
+        let mut ents = Vec::new();
+        // Fragment A: producer at (0,0); consumer aligned so its input
+        // port shares the producer output port's column.
+        ents.push(machine("chemical-plant", 0, 0, "sulfuric-acid", false));
+        let ca_x = ox - ix;
+        ents.push(machine("chemical-plant", ca_x, 8, "battery", false));
+        let a_col = ox;
+        let a_top = oy; // producer output port tile y (machine at y=0)
+        let a_bot = 8 + iy; // consumer input port tile y
+        for y in a_top..=a_bot {
+            ents.push(pipe(a_col, y, Some(acid)));
+        }
+        // Fragment B: boundary-supplied column at x=10 to a consumer.
+        let cb_x = 10 - ix;
+        ents.push(machine("chemical-plant", cb_x, 8, "battery", false));
+        let b_bot = 8 + iy;
+        for y in 0..=b_bot {
+            ents.push(pipe(10, y, Some(acid)));
+        }
+        let mut lr = layout(ents);
+        lr.boundary_inputs = vec![BoundaryRecord {
+            item: acid.to_string(),
+            x: 10,
+            y: 0,
+            direction: EntityDirection::North,
+            is_fluid: true,
+            entity: "pipe".to_string(),
+        }];
+
+        let sr = SolverResult {
+            machines: vec![
+                MachineSpec {
+                    entity: "chemical-plant".to_string(),
+                    recipe: "sulfuric-acid".to_string(),
+                    self_loop: vec![], voider: false, game_modules: Vec::new(),
+                    count: 1.0,
+                    inputs: vec![],
+                    outputs: vec![ItemFlow {
+                        item: acid.to_string(), rate: 10.0, is_fluid: true, module_id: 0,
+                    }],
+                },
+                MachineSpec {
+                    entity: "chemical-plant".to_string(),
+                    recipe: "battery".to_string(),
+                    self_loop: vec![], voider: false, game_modules: Vec::new(),
+                    count: 2.0,
+                    inputs: vec![ItemFlow {
+                        item: acid.to_string(), rate: 5.0, is_fluid: true, module_id: 0,
+                    }],
+                    outputs: vec![ItemFlow {
+                        item: "battery".to_string(), rate: 1.0, is_fluid: false, module_id: 0,
+                    }],
+                },
+            ],
+            external_inputs: vec![ItemFlow {
+                item: acid.to_string(), rate: external_acid_rate, is_fluid: true, module_id: 0,
+            }],
+            external_outputs: vec![],
+            surplus_outputs: vec![],
+            dependency_order: vec![],
+        };
+        (lr, sr)
+    }
+
+    #[test]
+    fn fluid_network_supplied_but_undersupplied_fragment_flags() {
+        // Boundary feeds fragment B only 4/s against its consumer's 5/s
+        // — a severed trunk whose fragments each "have a supply" but
+        // whose books don't balance. Pre-#409: silent pass.
+        let (lr, sr) = severed_supplied_fixture(4.0);
+        let issues = check_fluid_network_connectivity(&lr, Some(&sr));
+        assert_eq!(
+            issues.len(), 1,
+            "exactly the under-supplied fragment must flag: {:?}",
+            issues.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+        assert!(
+            issues[0].message.contains("under-supplied"),
+            "message must carry the accounting: {}",
+            issues[0].message
+        );
+    }
+
+    #[test]
+    fn fluid_network_balanced_split_components_pass() {
+        // Same severed topology, but every fragment's books balance
+        // (boundary 6/s ≥ 5/s demand) — the legitimate one-network-per-
+        // copy shape (K>1 composed chains) must stay clean.
+        let (lr, sr) = severed_supplied_fixture(6.0);
+        let issues = check_fluid_network_connectivity(&lr, Some(&sr));
+        assert!(
+            issues.is_empty(),
+            "balanced independent components are legitimate: {:?}",
+            issues.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
     }
 
     #[test]

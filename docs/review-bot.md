@@ -46,7 +46,7 @@ semantics below).
 
 ## Failure-class history
 
-Five classes, each individually sufficient to produce the same symptom —
+Six classes, each individually sufficient to produce the same symptom —
 green check, nothing posted:
 
 | # | Cause | Symptom signature | Fixed |
@@ -56,6 +56,7 @@ green check, nothing posted:
 | 3 | No harness `--allowedTools` — every posting/diff call denied | 11 denials on the #330 canary | #331 |
 | 4 | Re-running `/install-github-app` overwrote both workflow files with the stock template — wiped fixes 1–3 at once (plus `claude.yml`'s owner-only sender gate) | all of the above, after a period of working fine | #369 (canary #368) |
 | 5 | Shape-sensitive denial starvation — the allowlist admits plain `gh pr/issue` commands but denies improvised *shapes* (env prefixes `GH_PAGER= gh …`, command substitution `$(…)`, `cd … &&` chains, `gh api`); enough denials and the orchestrator abandons mid-review without posting. Stochastic per run, worse on large PRs (more context wanted → more improvised commands). Diagnosed 2026-07-24 on PR #389 (two consecutive silent no-ops; PR #405 succeeded through 31 denials the same day) | mid-cost, mid-duration run: more than a gate-skip, far less than a full review; see signature table below | prompt hardening + guard step (introduced with this doc) |
+| 6 | Async-wait abandonment — the plugin orchestrator fans out its reviewer subagents, then parks via `ScheduleWakeup` to "wait" for them; in a one-shot headless run the wakeup never fires and the session ends mid-wait. First caught live by the guard 2026-07-24 on PR #416 — transcript artifact showed 26 tool calls, near-zero denials, 4 parallel reviewers spawned, `ScheduleWakeup(180s)` then end at 10 turns/$1.08 with nothing posted. NOT a denial problem: the class-5 prompt note was propagating into every subagent and reads worked fine | mid-cost short run like class 5, but transcript shows `ScheduleWakeup` + spawned agents with unconsumed results | prompt note extended: one-shot/headless, never park, consume subagent results synchronously |
 
 Validation history: planted-bug canary #330 (2026-07-21) — first-ever bot
 comment correctly flagged the bug inline with a committable fix; canary
@@ -138,6 +139,14 @@ Design decisions worth knowing:
 - **Escape hatch** for a false red (e.g. the gate judged a ≥20-line PR
   trivial but the transcript heuristic disagreed): re-run the job (runs
   are stochastic), or post a review and re-run the check.
+- **Known guard false-positive mode** (observed 2026-07-24, PR #419):
+  a conscious skip that reads the full diff first can take ~20 turns —
+  indistinguishable from class-5/6 abandonment by the turns heuristic.
+  Mitigated the same day: the prompt now requires a one-line skip
+  comment for every conscious no-review decision, so conscious skips
+  produce coverage signal and the turns heuristic is a fallback only.
+  A red on a silent ≥8-turn run after that prompt change is
+  presumptively real.
 
 Related tripwire: `ci.yml`'s `workflow-guard` job asserts the
 claude-code-review workflow keeps its load-bearing pieces (write perms,

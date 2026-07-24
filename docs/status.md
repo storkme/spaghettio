@@ -225,17 +225,19 @@ declared capacity/stacking are checked fields): currently
 AC-from-plates (PASS −0.3%) and mil5-from-plates (PASS, delivered
 5.00/s exact — first physical validation of the westward bypasses),
 both at declared capacity 0 in the post-#390 honest world. EC-row
-geometries stay unregistered: a declared-capacity sweep (1→7) shrank
-the deficit −8.0%→−5.3% then went level-invariant with the input
-bound cleared at nb=3 — the residual is the
-[#385](https://github.com/storkme/spaghettio/issues/385) output-side
-belt-drop class and/or 45/45 corridor saturation
-([#383](https://github.com/storkme/spaghettio/issues/383) has the
-sweep table); mil5-from-ore FAILs flat at −28.7% (firearm rows'
-inserter COUNT). Re-measure after
-[#394](https://github.com/storkme/spaghettio/pull/394) →
-[#381](https://github.com/storkme/spaghettio/issues/381) land. Full
-trail:
+geometries are REGISTERED AS WARNED (policy 2026-07-24, user-approved
+on [#383](https://github.com/storkme/spaghettio/issues/383)): the
+post-#394/#381 re-measurement reproduced the sweep bit-identically
+(−8.0% d1 / −5.3% d7 / −7.7% ec30-d1) and fully attributed it — the
+level-invariant residual is the EC-row yellow output-belt ceiling
+(row-output-lane-budget warns on the exact geometry at generation),
+plus at L1 the input bound, which #381 cannot reach on the composed
+path until [#415](https://github.com/storkme/spaghettio/issues/415)
+threads `inserter_capacity` through `generate_cell_layout`. Entries
+carry `known_residual` and render "SIM-VERIFIED AS WARNED", never "at
+plan"; they graduate at plan when the EC-row output template work
+lands. mil5-from-ore FAILs flat at −28.7% (firearm rows' inserter
+COUNT) and stays unregistered. Full trail:
 [`rfc-051-cell-composition-integration.md`](rfc-051-cell-composition-integration.md).
 
 **`rfc-048-cell-composition.md` Phase-1 close-out (2026-07-22, PR #365)**:
@@ -317,12 +319,14 @@ golden re-blesses across the arc. Full trail:
 - [#135 balancer templates are oversized](https://github.com/storkme/spaghettio/issues/135) — main compaction lever
 - [#311 output merger over-commits a single final belt; lane-throughput check never visits merger tiles](https://github.com/storkme/spaghettio/issues/311) — gates >45/s headline claims
 - [#312 consumer-clamped fan-in refusal bites much earlier at high build quality](https://github.com/storkme/spaghettio/issues/312) — S=1; the wall now scales ×S with stacking (RFC-047 Leg C)
-- [#334 two lane-imbalanced balancer-library shapes](https://github.com/storkme/spaghettio/issues/334) — carved out of the RFC-047 convergence walker with a fix tripwire
 - [#335 one unreached furnace bank in the legendary-express@60 fixture](https://github.com/storkme/spaghettio/issues/335)
 - [#336 (n,1) merge-tap unwired; late sideload check refuses those shapes by name](https://github.com/storkme/spaghettio/issues/336)
 
 (Audited 2026-07-21: #65, #68, #136, #310 — previously cited here — are all
-closed.)
+closed. 2026-07-24: #334 closed — the (7,3)/(7,4) lane skew is ACCEPTED as a
+documented limitation (user call), guarded by `balancer_lane_audit`'s
+KNOWN_IMBALANCED tripwire; #266's (5,8) MX1 limit accepted the same way,
+guarded in `balancer_classify`. Both revocable on re-bake or field failure.)
 
 ## Deferred tooling tasks
 

@@ -6951,7 +6951,7 @@ fn fulgora_scrap_sorter_mechanism_present() {
     // are out of this unit's scope; reported separately.)
     let mut fluid_errors: Vec<&ValidationIssue> = Vec::new();
     let fp = validate::check_fluid_port_connectivity(&layout, LayoutStyle::Bus);
-    let fn_ = validate::check_fluid_network_connectivity(&layout);
+    let fn_ = validate::check_fluid_network_connectivity(&layout, None);
     let fi = validate::check_pipe_isolation(&layout);
     for issue in fp.iter().chain(fn_.iter()).chain(fi.iter()) {
         if issue.severity == Severity::Error {
@@ -7168,6 +7168,54 @@ fn quality_differential_ec_normal_vs_legendary() {
     assert_eq!(
         parsed_stamped, stamped,
         "every stamped entity must round-trip through export+parse"
+    );
+}
+
+/// #404 regression: the sim-proven cable13u fixture — a single engine-
+/// midpoint-bridged row (2 uncommon AM3s à 6.5/s, yellow belts) — measured
+/// 13.00/13 at plan in-game (RFC-047 decision log, 2026-07-23) yet raised
+/// 3 lane-throughput ERRORs: the walker seeded the per-machine rate once
+/// per output inserter, and the two-hand machine injected 2×6.5/s. The
+/// bridge/sideload lane model itself was correct. Pins zero
+/// lane-throughput issues on the honest fixture.
+#[test]
+#[ntest::timeout(120000)]
+fn cable13u_bridged_row_lane_throughput_clean() {
+    use spaghettio_core::common::QualityTier;
+    use spaghettio_core::recipe_db::MachinePalette;
+
+    let inputs: FxHashSet<String> = ["copper-plate"].iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "copper-cable",
+        13.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Uncommon,
+    )
+    .unwrap_or_else(|e| panic!("solve: {e}"));
+
+    let layout_result = layout::build_bus_layout(
+        &sr,
+        layout::LayoutOptions {
+            max_belt_tier: Some("transport-belt".to_string()),
+            quality: QualityTier::Uncommon,
+            ..Default::default()
+        },
+    )
+    .unwrap_or_else(|e| panic!("layout: {e}"));
+
+    let issues = match validate::validate(&layout_result, Some(&sr), LayoutStyle::Bus) {
+        Ok(i) => i,
+        Err(e) => e.issues,
+    };
+    let lane_issues: Vec<_> =
+        issues.iter().filter(|i| i.category == "lane-throughput").collect();
+    assert!(
+        lane_issues.is_empty(),
+        "cable13u runs at plan in-game; lane-throughput must not flag it: {:?}",
+        lane_issues.iter().map(|i| &i.message).collect::<Vec<_>>()
     );
 }
 
