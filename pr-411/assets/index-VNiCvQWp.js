@@ -1,4 +1,4 @@
-const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["assets/browserAll-DrhNsp1H.js","assets/webworkerAll-DR9PkxYj.js","assets/Filter-UK8pfqqp.js","assets/WebGPURenderer-cS4Hq2Zr.js","assets/BufferResource-DFHKwZ97.js","assets/RenderTargetSystem-Dm6KfFe9.js","assets/WebGLRenderer-DYm4JiOO.js","assets/CanvasRenderer-7UD2GPCh.js"])))=>i.map(i=>d[i]);
+const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["assets/browserAll-D5tFugev.js","assets/webworkerAll-DCcX2l0g.js","assets/Filter-BM7Z6j86.js","assets/WebGPURenderer-CvZyfEIm.js","assets/BufferResource-t4wDF2B4.js","assets/RenderTargetSystem-CuAurYiW.js","assets/WebGLRenderer-XE-I9-Xk.js","assets/CanvasRenderer-DpbDUH9w.js"])))=>i.map(i=>d[i]);
 let Nh, ya, rr, Wt, Lm, hn, Tf, wi, ns, ks, ue, se, Jt, ei, Ah, Ct, ht, mt, Yt, br, S, ge, zy, $g, wr, Eg, vn, vr, dr, $t, id, Bo, Gt, Jn, ci, Rt, Pp, Pm, Bs, Rd, rd, _i, qf, Uf, gd, Om, ag, cg, gg, fg, yg, Ml, tr, fa, ed, Le, ga, og, lg, mg, ug, gp, xg, Te, Eh, Re, gr, ul, Ge, xx, Vp, fl, Gr, ml, Xp, kh, Cr, Dn, Ar, u1, or, ma, Lt, Tt, qo, ts, fn, Xo, Wi, qt, ze, Od, Nd, ai, Fe, d1, ax, ne, Xy, ie, Zt, Mt;
 let __tla = (async () => {
   (function() {
@@ -148,7 +148,7 @@ let __tla = (async () => {
     },
     test: () => true,
     load: async () => {
-      await Ln(() => import("./browserAll-DrhNsp1H.js"), __vite__mapDeps([0,1,2]));
+      await Ln(() => import("./browserAll-D5tFugev.js"), __vite__mapDeps([0,1,2]));
     }
   };
   rp = {
@@ -159,7 +159,7 @@ let __tla = (async () => {
     },
     test: () => typeof self < "u" && self.WorkerGlobalScope !== void 0,
     load: async () => {
-      await Ln(() => import("./webworkerAll-DR9PkxYj.js"), __vite__mapDeps([1,2]));
+      await Ln(() => import("./webworkerAll-DCcX2l0g.js"), __vite__mapDeps([1,2]));
     }
   };
   class me {
@@ -5189,7 +5189,7 @@ ${n}`;
       const o = t[r];
       if (o === "webgpu" && await Vf()) {
         const { WebGPURenderer: a } = await Ln(async () => {
-          const { WebGPURenderer: l } = await import("./WebGPURenderer-cS4Hq2Zr.js");
+          const { WebGPURenderer: l } = await import("./WebGPURenderer-CvZyfEIm.js");
           return {
             WebGPURenderer: l
           };
@@ -5201,7 +5201,7 @@ ${n}`;
         break;
       } else if (o === "webgl" && Yf(n.failIfMajorPerformanceCaveat ?? id.defaultOptions.failIfMajorPerformanceCaveat)) {
         const { WebGLRenderer: a } = await Ln(async () => {
-          const { WebGLRenderer: l } = await import("./WebGLRenderer-DYm4JiOO.js");
+          const { WebGLRenderer: l } = await import("./WebGLRenderer-XE-I9-Xk.js");
           return {
             WebGLRenderer: l
           };
@@ -5213,7 +5213,7 @@ ${n}`;
         break;
       } else if (o === "canvas") {
         const { CanvasRenderer: a } = await Ln(async () => {
-          const { CanvasRenderer: l } = await import("./CanvasRenderer-7UD2GPCh.js");
+          const { CanvasRenderer: l } = await import("./CanvasRenderer-DpbDUH9w.js");
           return {
             CanvasRenderer: l
           };
@@ -5523,7 +5523,7 @@ ${n}`;
       }
       const [l, { BitmapFont: c }] = await Promise.all([
         e.load(o),
-        Ln(() => import("./BitmapFont-DBbUcwvc.js"), [])
+        Ln(() => import("./BitmapFont-4DvlLp2W.js"), [])
       ]), h = o.map((u) => l[u.src]);
       return new c({
         data: s,
@@ -18236,7 +18236,7 @@ fn mainFragment(
   }
   async function Ou() {
     if (We) return;
-    if (We = new Worker(new URL("/spaghettio/pr-411/assets/engine.worker-p7vrxv8Q.js", import.meta.url), {
+    if (We = new Worker(new URL("/spaghettio/pr-411/assets/engine.worker-pMwVsNsF.js", import.meta.url), {
       type: "module",
       name: "spaghettio-engine"
     }), We.onmessage = (e) => {
@@ -19451,7 +19451,7 @@ fn mainFragment(
     const w = new Wt();
     v.addChild(w), v.fit(true, b * 1.15, x * 1.2), v.moveCenter(b / 2, x / 2);
     const { renderLayoutAnimated: C } = await Ln(async () => {
-      const { renderLayoutAnimated: T } = await import("./animated-Bkl8sUbv.js");
+      const { renderLayoutAnimated: T } = await import("./animated-Ce9iSUl3.js");
       return {
         renderLayoutAnimated: T
       };
@@ -23613,7 +23613,7 @@ ${R}` : et, tt();
     const t = document.getElementById("app"), e = window.location.hash, s = new URLSearchParams(window.location.search);
     if (e.startsWith("#/balancers")) {
       const { renderBalancerShowcase: r } = await Ln(async () => {
-        const { renderBalancerShowcase: o } = await import("./balancers-BRpGk8do.js");
+        const { renderBalancerShowcase: o } = await import("./balancers-BT3L7_oE.js");
         return {
           renderBalancerShowcase: o
         };
