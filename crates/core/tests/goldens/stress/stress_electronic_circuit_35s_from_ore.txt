@@ -1,6 +1,6 @@
 === stress_electronic_circuit_35s_from_ore scoreboard ===
 entities:         6353
-total warnings:   123
+total warnings:   127
 zones solved:     0
 zones skipped:    0
 bridges dropped:  0
@@ -15,6 +15,7 @@ median slack:     4.0
 warnings by category:
   belt-flow-reachability: 88
   input-rate-delivery: 35
+  row-output-lane-budget: 4
 errors by category:
   belt-dead-end: 4
 layout hash: 18116e5daf58a7f01fba2a09dd293735378e4e0810a17243658c867df7d7688b
