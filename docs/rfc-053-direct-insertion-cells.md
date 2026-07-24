@@ -87,8 +87,14 @@ spans a 2-tile gap, so it *must* be long-handed (**I8a**: the only
 reach-2 inserter in vanilla), and long-handed tops out at 4.8/s against
 a 7.5/s demand.
 
-**The corpus says humans don't build that** (mined 2026-07-24,
-`crates/core/examples/di_mine.rs`, 172 corpus files, 98 containing DI):
+**The corpus says humans don't build that.** Mined 2026-07-24 with the
+tracked `di-patterns` tool (16,507 DI observations across 172 parsed
+corpus files, 98 containing DI) — reproduce with:
+
+```bash
+cargo run --release -p spaghettio_mining --bin di-patterns -- \
+    geometry scripts/blueprints copper-cable electronic-circuit
+```
 
 | count | inserter | machine gap | lateral offset | axis |
 |---|---|---|---|---|
@@ -163,7 +169,8 @@ from the library.
 ## Phase 0 results (run 2026-07-24) — KC1 passes, **KC6 fires**
 
 Census of the corpus's top-10 DI pairs, with both kill criteria evaluated
-(`crates/core/examples/di_phase0.rs`, gitignored):
+(pair counts reproducible via `di-patterns census`; the ratio arithmetic
+was run in a scratch example):
 
 | pair | instances | gap* | fluid-touching | need/s | verdict @ (Stack, L2) |
 |---|---|---|---|---|---|
@@ -476,10 +483,15 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
 - **Phase 0 — mine + feasibility. ✅ COMPLETE (2026-07-24).** Census
   delivered above: KC1 passes with margin (worst case 2.50/s vs 19.2/s
   available at defaults); **KC6 fired and forced the pipes re-scope**.
-  Remaining Phase-0 debt carried into Phase 1: emit the canonicalized,
-  version-gated `di_pattern_library.rs` (the census currently lives in a
-  gitignored example), and close the furnace→furnace recipe-resolution
-  gap noted above.
+  The miner is now the **tracked** `di-patterns` binary
+  (`crates/mining-cli/src/bin/di_patterns.rs`), so every corpus figure in
+  this RFC is reproducible from a clean checkout — it was written as a
+  gitignored example, which would have left the RFC's central evidence
+  unverifiable. Remaining Phase-0 debt carried into Phase 1: emit the
+  canonicalized, version-gated `di_pattern_library.rs` (deliberately
+  deferred until Phase 1 has a consumer for it — committing a generated
+  file nothing references is dead code), and close the furnace→furnace
+  recipe-resolution gap noted above.
 - **Phase 1 — the DI cell.** `bus::di_cell` for the simplest shape: one
   producer recipe, one consumer recipe, consumer's only solid input is
   the DI'd item. Straddle offsets + min-cost-flow assignment.

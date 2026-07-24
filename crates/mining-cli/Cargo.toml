@@ -7,6 +7,10 @@ edition = "2021"
 name = "blueprint-analyze"
 path = "src/main.rs"
 
+[[bin]]
+name = "di-patterns"
+path = "src/bin/di_patterns.rs"
+
 [dependencies]
 spaghettio_core = { path = "../core" }
 serde = { version = "1", features = ["derive"] }
