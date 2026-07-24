@@ -168,19 +168,24 @@ feeds and the composed layout must pass the pipe-isolation validators
   result lines; re-verified from one clean invocation (the
   single-run-counts lesson generalizes to compile failures).
   Env-gated forensic tracing (SPAGHETTIO_MEGA_DEBUG) kept in the
-  adapter, merger, and SAT prune. **Flagship sim verdict
+  adapter and SAT prune (failure/prune paths only; the merger's
+  per-hop probe removed after use, #421 review). **Flagship sim verdict
   (48,366/48,366 revived, zero kit/fluid errors, 394 machines
   working — the deepest measurement ever, 21 items)**: USP 0.84/2.00
-  at the ceiling, STILL CONVERGING (0.70→0.88 trend at cutoff),
-  attributed by time-series forensics to a SINGLE binding
-  constraint: copper-plate supply settles at ~70/s vs 99.7 planned
-  (−30%) — the #383 smelter-cell declared-bound class (PU4's plates
-  were −21%; USP@2's per-copy copper rates are higher). The oil
-  complex ran ABOVE plan early (PG 240/s vs 203 planned) and its
-  steady-state throttle is demand-coupled (LDS starves on copper →
-  plastic demand falls → refineries throttle); the 2
-  fluid-starved-census machines are the cracking plants during the
-  demand transition. Kill-3's escape clause SATISFIED: deficit
+  at the ceiling, PRODUCED-rate trend still rising at cutoff
+  (0.70→0.88 over the final windows, from the produced-counter
+  deltas — the drained counters are flat and their window semantics
+  are unresolved, #421 review), attributed by time-series forensics
+  to copper-plate supply as the ROOT constraint: it settles at
+  ~70/s vs 99.7 planned (−30%) — the #383 smelter-cell
+  declared-bound class (PU4's plates were −21%; USP@2's per-copy
+  copper rates are higher). PG/EC deficits (−27%/−9%) read as
+  demand-coupled cascades of that root, not independent bounds: the
+  oil complex DEMONSTRATED capacity above plan during the buffer-fill
+  transient (PG 240/s vs 203 planned; steady state is below plan
+  under the throttled demand), and the 2 fluid-starved-census
+  machines are the cracking plants during the demand transition.
+  Single-root framing is the parsimonious read, not a proof. Kill-3's escape clause SATISFIED: deficit
   attributed to the named engine-wide solid bound solid chains
   share; NO new fluid-specific deficit class. Not registered
   (registry records measured PASS baselines); registers when #383's

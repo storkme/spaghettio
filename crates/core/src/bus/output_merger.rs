@@ -88,9 +88,13 @@ pub(crate) fn merge_output_rows(
         // constraint, the rate pick is not; hop mouths are plumbing.
         let hop_cap: &str = max_belt_tier.unwrap_or("express-transport-belt");
         let reach = ug_max_reach(hop_cap) as i32;
+        // Tier floor = the RATE-PICKED surface tier (#421 review: a
+        // smallest-spanning pick could throttle an express-rate line
+        // through a yellow hop — silently, since the throughput check
+        // only flags overlapping routes); ceiling = the user's cap.
         let hop_tier_for_gap = |gap: i32| -> &'static str {
             for t in ["transport-belt", "fast-transport-belt", "express-transport-belt"] {
-                if ug_max_reach(t) as i32 >= gap {
+                if ug_max_reach(t) as i32 >= gap && ug_max_reach(t) >= ug_max_reach(belt_name) {
                     if ug_max_reach(t) <= ug_max_reach(hop_cap) {
                         return underground_for_belt(t);
                     }
@@ -100,11 +104,6 @@ pub(crate) fn merge_output_rows(
             underground_for_belt(hop_cap)
         };
         let mut x = rw;
-        if std::env::var("SPAGHETTIO_MEGA_DEBUG").is_ok() {
-            let mut bc: Vec<_> = blocked_columns.to_vec();
-            bc.sort_unstable();
-            eprintln!("MERGER {item} out_y={out_y} rw={rw} col_x={col_x} blocked={bc:?} reach={reach}");
-        }
         while x < col_x {
             if blocked_columns.contains(&x) {
                 // Contiguous blocked run [x, run_end], clamped by UG reach

@@ -21,7 +21,6 @@ use rustc_hash::FxHashSet;
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
-#[allow(clippy::too_many_arguments)] // param-per-axis wasm surface (quality/wire/stacking/research)
 /// Build `LayoutOptions` from the optional belt-tier, strategy,
 /// row-layout, and inserter-tier strings passed in across the WASM
 /// boundary. The TS engine layer validates URL params, so unknown values
