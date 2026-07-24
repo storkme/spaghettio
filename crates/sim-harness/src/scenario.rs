@@ -479,8 +479,15 @@ script.on_init(function()
   end
   local s = game.create_surface("lab")
   s.generate_with_lab_tiles = true
-  s.request_to_generate_chunks({0, 0}, 12)
-  s.request_to_generate_chunks({DIMS_X, DIMS_Y}, 12)
+  -- The paste is CENTERED on {0,0}, so generated chunks must cover
+  -- the layout's HALF-span plus rig margin in every direction. The
+  -- old fixed radius (12 chunks = 384 tiles) silently truncated any
+  -- fixture wider than ~768 tiles: build_blueprint creates no ghosts
+  -- on ungenerated chunks, and the PU@4 chain (2704 tiles wide) lost
+  -- 2/3 of its entities that way — dead feed rigs, NO DATA (#345
+  -- adjacent, RFC-052 increment 2 forensics).
+  local gen_radius = math.max(12, math.ceil((math.max(DIMS_X, DIMS_Y) / 2 + 64) / 32) + 1)
+  s.request_to_generate_chunks({0, 0}, gen_radius)
   s.force_generate_chunk_requests()
 
   local inv = game.create_inventory(1)

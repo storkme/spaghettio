@@ -64,20 +64,35 @@ pub fn compose_mega_calibrated(
 /// fixtures; the Router's hop machinery is the Phase-B answer if a
 /// real subgraph ever needs it).
 pub fn adapt_boundaries(l: LayoutResult) -> Result<LayoutResult, String> {
+    adapt_boundaries_chain_fed(l, &FxHashSet::default())
+}
+
+/// `chain_fed` (increment 2): items supplied by chain corridors, not
+/// the outside world. Their records get NO head column — instead a
+/// west-edge entry at (0, lane_row), each on its own lane row, so the
+/// chain's delivery corridors approach on distinct rows.
+pub fn adapt_boundaries_chain_fed(
+    l: LayoutResult,
+    chain_fed: &FxHashSet<String>,
+) -> Result<LayoutResult, String> {
     // Lane spacing 1 first — bit-identical to the original adapter for
     // every fixture it could route (the registered hashes depend on
     // it). Spacing 2 unlocks 3+-fluid-feed blocks (the chem-pack
     // class), where a lateral otherwise passes directly under an
     // earlier head column with no clearance row.
-    match adapt_with_spacing(&l, 1) {
+    match adapt_with_spacing(&l, 1, chain_fed) {
         Ok(adapted) => Ok(adapted),
-        Err(e1) => adapt_with_spacing(&l, 2).map_err(|e2| {
+        Err(e1) => adapt_with_spacing(&l, 2, chain_fed).map_err(|e2| {
             format!("{e1}; at spacing 2: {e2}")
         }),
     }
 }
 
-fn adapt_with_spacing(l: &LayoutResult, spacing: i32) -> Result<LayoutResult, String> {
+fn adapt_with_spacing(
+    l: &LayoutResult,
+    spacing: i32,
+    chain_fed: &FxHashSet<String>,
+) -> Result<LayoutResult, String> {
     let n_in = l.boundary_inputs.len() as i32;
     if n_in == 0 {
         return Err("mega: layout has no boundary inputs".into());
@@ -93,8 +108,18 @@ fn adapt_with_spacing(l: &LayoutResult, spacing: i32) -> Result<LayoutResult, St
 
     // Records sorted west→east (#363 rig-depth rule); heads assigned
     // at 4-pitch starting from the westmost original head.
+    // Chain-fed records (increment 2) sort LAST, eastmost-orig first:
+    // they take the DEEPEST lanes, so no external head or tail column
+    // (all of which bottom out at shallower external lane rows) ever
+    // descends into a chain-fed lateral's row, and no chain-fed tail
+    // (short: deep row to margin) reaches an external lateral. Every
+    // residual crossing is a chain-fed LATERAL (always a solid belt)
+    // over some column — resolved by UG hops at stamp time. Among
+    // chain-fed records, east→west = shallow→deep keeps their own
+    // (short) tails east of every deeper chain-fed lateral's span.
     let mut records = l.boundary_inputs.clone();
-    records.sort_by_key(|r| r.x);
+    let is_cf = |r: &BoundaryRecord| chain_fed.contains(&r.item);
+    records.sort_by_key(|r| if is_cf(r) { (1, -r.x) } else { (0, r.x) });
     let head0 = records.first().map(|r| r.x).unwrap_or(1);
 
     // Plan first, stamp second: refuse crossings before emitting
@@ -107,18 +132,36 @@ fn adapt_with_spacing(l: &LayoutResult, spacing: i32) -> Result<LayoutResult, St
         orig_x: i32,
         lane_row: i32,
         is_fluid: bool,
+        west_entry: bool,
     }
+    let mut n_heads = 0i32;
     let plans: Vec<Plan> = records
         .iter()
         .enumerate()
-        .map(|(i, r)| Plan {
-            head_x: head0 + FEED_PITCH * i as i32,
-            orig_x: r.x,
-            lane_row: 1 + spacing * i as i32,
-            is_fluid: r.is_fluid,
+        .map(|(i, r)| {
+            let west_entry = is_cf(r);
+            let head_x = if west_entry {
+                0
+            } else {
+                let h = head0 + FEED_PITCH * n_heads;
+                n_heads += 1;
+                h
+            };
+            Plan {
+                head_x,
+                orig_x: r.x,
+                lane_row: 1 + spacing * i as i32,
+                is_fluid: r.is_fluid,
+                west_entry,
+            }
         })
         .collect();
     for (i, p) in plans.iter().enumerate() {
+        if p.west_entry {
+            // Chain-fed laterals resolve crossings with UG hops at
+            // stamp time instead of refusing here.
+            continue;
+        }
         let (lo, hi) = (p.head_x.min(p.orig_x), p.head_x.max(p.orig_x));
         for (j, q) in plans.iter().enumerate() {
             if i == j {
@@ -315,7 +358,113 @@ fn adapt_with_spacing(l: &LayoutResult, spacing: i32) -> Result<LayoutResult, St
             // dx-shifted tails, so belts verify their tiles too and
             // refuse loudly on conflict (#401 review finding 2).
             let mut path: Vec<(i32, i32, EntityDirection)> = Vec::new();
-            if p.head_x == p.orig_x {
+            let mut ug_mouths: Vec<(i32, i32, &str)> = Vec::new();
+            if p.west_entry {
+                // Chain-fed (increment 2): no head column. West-edge
+                // entry at (0, lane_row) running east to the original
+                // column, corner south, tail into the original head.
+                // The chain corridor's eastbound approach into the
+                // entry tile is a straight merge — both lanes. The
+                // lateral UG-hops under every occupied column it
+                // crosses (external tails, fluid tails, earlier
+                // chain-fed tails — a solid belt hops under any of
+                // them), same clustering as the chain Router.
+                let occupied = |x: i32| {
+                    solid_at.contains(&(x, p.lane_row))
+                        || fluid_at.contains_key(&(x, p.lane_row))
+                };
+                let mut cols: Vec<i32> = (1..p.orig_x).filter(|&x| occupied(x)).collect();
+                // A crossing at orig_x-1 leaves no room for the hop's
+                // exit mouth (it would land ON our tail corner).
+                // Retrofit that column VERTICALLY instead: convert its
+                // south belts at our-row±1 into a South UG pair and
+                // free our row — the retrofit_feed_hop idiom. Solid
+                // columns only; interior rows only (never a corner or
+                // the engine head tile).
+                if cols.last() == Some(&(p.orig_x - 1)) {
+                    let c = p.orig_x - 1;
+                    let row = p.lane_row;
+                    let owner = plans.iter().find(|q| q.orig_x == c && q.lane_row < row);
+                    let interior = owner.is_some_and(|q| row - 1 > q.lane_row) && row + 1 < margin;
+                    let is_solid_col = solid_at.contains(&(c, row));
+                    if !(interior && is_solid_col) {
+                        return Err(format!(
+                            "mega: chain-fed {} crossing at x={c} abuts its tail and cannot be retrofitted",
+                            r.item
+                        ));
+                    }
+                    let mut converted = 0;
+                    let mut removed = None;
+                    for (idx, e) in entities.iter_mut().enumerate() {
+                        if e.x != c || !e.name.contains("transport-belt") {
+                            continue;
+                        }
+                        if e.y == row && e.direction == EntityDirection::South {
+                            removed = Some(idx);
+                        } else if (e.y == row - 1 || e.y == row + 1)
+                            && e.direction == EntityDirection::South
+                        {
+                            e.name = e.name.replace("transport-belt", "underground-belt");
+                            e.io_type =
+                                Some(if e.y == row - 1 { "input" } else { "output" }.into());
+                            converted += 1;
+                        }
+                    }
+                    match (converted, removed) {
+                        (2, Some(idx)) => {
+                            entities.remove(idx);
+                            solid_at.remove(&(c, row));
+                            cols.pop();
+                        }
+                        _ => {
+                            return Err(format!(
+                                "mega: chain-fed {} vertical retrofit at x={c} found {converted} belts (need 2) — adapter refuses",
+                                r.item
+                            ));
+                        }
+                    }
+                }
+                let mut clusters: Vec<(i32, i32)> = Vec::new();
+                for c in cols {
+                    match clusters.last_mut() {
+                        Some((_, hi)) if c - *hi < 3 => *hi = c,
+                        _ => clusters.push((c, c)),
+                    }
+                }
+                let mut x = 0;
+                let ug_gap = crate::common::ug_max_reach(&r.entity) as i32;
+                for (lo2, hi2) in clusters {
+                    // Mouths at lo2-1 / hi2+1 → underground gap =
+                    // hi2-lo2+1, capped by the RECORD's belt tier (the
+                    // mouths stamp that tier — a hardcoded express cap
+                    // would let a yellow record plan a pair the game
+                    // never connects; #411 review).
+                    if hi2 - lo2 + 1 > ug_gap {
+                        return Err(format!(
+                            "mega: chain-fed {} lateral hop cluster {}..{} exceeds {} reach",
+                            r.item, lo2, hi2, r.entity
+                        ));
+                    }
+                    if lo2 - 1 < 1 {
+                        return Err(format!(
+                            "mega: chain-fed {} lateral crossing at x={} leaves no entry tile",
+                            r.item, lo2
+                        ));
+                    }
+                    for xx in x..=(lo2 - 2) {
+                        path.push((xx, p.lane_row, EntityDirection::East));
+                    }
+                    ug_mouths.push((lo2 - 1, p.lane_row, "input"));
+                    ug_mouths.push((hi2 + 1, p.lane_row, "output"));
+                    x = hi2 + 2;
+                }
+                for xx in x..p.orig_x {
+                    path.push((xx, p.lane_row, EntityDirection::East));
+                }
+                for y in p.lane_row..margin {
+                    path.push((p.orig_x, y, EntityDirection::South));
+                }
+            } else if p.head_x == p.orig_x {
                 for y in 0..margin {
                     path.push((p.head_x, y, EntityDirection::South));
                 }
@@ -347,6 +496,14 @@ fn adapt_with_spacing(l: &LayoutResult, spacing: i32) -> Result<LayoutResult, St
                     ));
                 }
             }
+            for &(x, y, _) in &ug_mouths {
+                if solid_at.contains(&(x, y)) || fluid_at.contains_key(&(x, y)) {
+                    return Err(format!(
+                        "mega: chain-fed {} hop mouth collides at ({x},{y}) — adapter refuses",
+                        r.item
+                    ));
+                }
+            }
             for (x, y, dir) in path {
                 solid_at.insert((x, y));
                 entities.push(PlacedEntity {
@@ -359,12 +516,29 @@ fn adapt_with_spacing(l: &LayoutResult, spacing: i32) -> Result<LayoutResult, St
                     ..Default::default()
                 });
             }
+            for (x, y, io) in ug_mouths {
+                solid_at.insert((x, y));
+                entities.push(PlacedEntity {
+                    name: r.entity.replace("transport-belt", "underground-belt"),
+                    x,
+                    y,
+                    direction: EntityDirection::East,
+                    io_type: Some(io.into()),
+                    carries: Some(r.item.clone()),
+                    segment_id: Some(seg.clone()),
+                    ..Default::default()
+                });
+            }
         }
         b_in.push(BoundaryRecord {
             item: r.item.clone(),
             x: p.head_x,
-            y: 0,
-            direction: EntityDirection::South,
+            y: if p.west_entry { p.lane_row } else { 0 },
+            direction: if p.west_entry {
+                EntityDirection::East
+            } else {
+                EntityDirection::South
+            },
             is_fluid: r.is_fluid,
             entity: if p.is_fluid { "pipe".into() } else { r.entity.clone() },
         });
@@ -574,6 +748,12 @@ pub struct MegaPlan {
     pub outputs: Vec<(String, f64)>,
     /// External inputs the subgraph consumes (fluids + solids).
     pub inputs: Vec<String>,
+    /// Solid inputs produced elsewhere in the CHAIN, with their total
+    /// subgraph consumption rates (increment 2: the PU class — the
+    /// subgraph swallows a spec that consumes chain-produced
+    /// EC/AC/plates). Each becomes a chain corridor into the block's
+    /// adapter feed head instead of an external.
+    pub chain_fed: Vec<(String, f64)>,
     /// Recipes collapsed into the mega-cell.
     pub members: rustc_hash::FxHashSet<String>,
 }
@@ -636,16 +816,26 @@ pub fn mega_subgraph(sr: &crate::models::SolverResult) -> Result<Option<MegaPlan
     // Edges out must be solid; inputs from inside the chain refuse
     // (v1: the sub-solve must be self-contained on externals).
     let mut inputs: Vec<String> = Vec::new();
+    let mut chain_fed: Vec<(String, f64)> = Vec::new();
     let mut solid_outputs: Vec<(&str, f64)> = Vec::new();
     for m in &fluid_specs {
         for i in &m.inputs {
             match produced_anywhere.get(i.item.as_str()) {
                 Some(producer) if in_subgraph(producer) => {} // internal
-                Some(producer) => {
-                    return Err(format!(
-                        "mega: subgraph input {} is produced by non-member {} (v1 requires external-only inputs)",
-                        i.item, producer
-                    ));
+                Some(_) => {
+                    // Produced by a non-member chain spec (increment 2):
+                    // fed by a chain corridor into the block's adapter
+                    // head. Fluids never cross the boundary.
+                    if i.is_fluid {
+                        return Err(format!(
+                            "mega: chain-fed input {} is a fluid (fluids never cross cell boundaries)",
+                            i.item
+                        ));
+                    }
+                    match chain_fed.iter_mut().find(|(x, _)| x == &i.item) {
+                        Some((_, r)) => *r += i.rate * m.count,
+                        None => chain_fed.push((i.item.clone(), i.rate * m.count)),
+                    }
                 }
                 None => {
                     if !inputs.iter().any(|x| x == &i.item) {
@@ -682,6 +872,7 @@ pub fn mega_subgraph(sr: &crate::models::SolverResult) -> Result<Option<MegaPlan
             .map(|(i, r)| (i.to_string(), *r))
             .collect(),
         inputs,
+        chain_fed,
         members,
     }))
 }
@@ -758,6 +949,7 @@ pub fn compose_mega_block(
     };
     let l = crate::bus::layout::build_bus_layout(&sub, opts)
         .map_err(|e| format!("mega: block layout: {}", e.lines().next().unwrap_or("")))?;
-    let adapted = adapt_boundaries(l)?;
+    let cf: FxHashSet<String> = plan.chain_fed.iter().map(|(i, _)| i.clone()).collect();
+    let adapted = adapt_boundaries_chain_fed(l, &cf)?;
     Ok((sub, adapted))
 }

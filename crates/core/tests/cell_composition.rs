@@ -853,6 +853,69 @@ fn mega_chain_chem5_resolves_bus_failure() {
     );
 }
 
+/// RFC-052 increment 2 (chain-fed mega inputs): processing-unit@4
+/// from raw — the fluid subgraph swallows the PU spec, which consumes
+/// chain-produced EC/AC/iron-plate. The BUS path hard-fails here
+/// (unresolved junctions); the chain must compose with zero errors,
+/// tolerating only the adjudicated categories. (@2 is both-paths-clean
+/// since #408's reach fix shifted junction geometry — the bus-refusal
+/// win for this class lives at 4/s.)
+#[test]
+fn mega_chain_pu4_resolves_bus_failure() {
+    use spaghettio_core::bus::cells::chain::compose_chain;
+    use spaghettio_core::validate::{self, LayoutStyle, Severity};
+    let inputs: FxHashSet<String> =
+        ["iron-ore", "copper-ore", "crude-oil", "water", "coal"]
+            .iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "processing-unit", 4.0, &inputs, &MachinePalette::default(),
+        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+    ).unwrap();
+    let plan = spaghettio_core::bus::cells::mega::mega_subgraph(&sr)
+        .expect("subgraph")
+        .expect("PU chain has a fluid subgraph");
+    assert!(
+        !plan.chain_fed.is_empty(),
+        "PU class must exercise chain-fed inputs, got {:?}",
+        plan.chain_fed
+    );
+    let l = compose_chain(&sr).expect("PU@4 from raw must compose");
+    let issues = match validate::validate(&l, Some(&sr), LayoutStyle::Bus) {
+        Ok(v) => v,
+        Err(e) => e.issues,
+    };
+    let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
+    assert!(errors.is_empty(), "PU@4 errors: {errors:?}");
+    assert!(
+        issues.iter().all(|i| matches!(
+            i.category.as_str(),
+            "inserter-item-throughput" | "inserter-throughput" | "power" | "row-output-lane-budget"
+        )),
+        "only adjudicated categories tolerated: {issues:?}"
+    );
+}
+
+/// Artifact producer for the increment-2 sim run.
+#[test]
+#[ignore = "artifact producer"]
+fn export_mega_pu_for_sim() {
+    use spaghettio_core::bus::cells::chain::compose_chain;
+    let inputs: FxHashSet<String> =
+        ["iron-ore", "copper-ore", "crude-oil", "water", "coal"]
+            .iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "processing-unit", 4.0, &inputs, &MachinePalette::default(),
+        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+    ).unwrap();
+    let l = compose_chain(&sr).unwrap();
+    let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(&l, &sr, "mega-chain-pu4raw");
+    std::fs::create_dir_all("target/tmp").unwrap();
+    std::fs::write("target/tmp/mega-chain-pu4raw.bp", &bp).unwrap();
+    std::fs::write("target/tmp/mega-chain-pu4raw.manifest.json",
+        serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
+    println!("wrote mega-chain-pu4raw.bp ({} in / {} out)", l.boundary_inputs.len(), l.boundary_outputs.len());
+}
+
 /// Artifact producer for the kill-2 sim run.
 #[test]
 #[ignore = "artifact producer"]
