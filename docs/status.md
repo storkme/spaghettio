@@ -245,19 +245,26 @@ declared capacity/stacking are checked fields): currently
 AC-from-plates (PASS −0.3%) and mil5-from-plates (PASS, delivered
 5.00/s exact — first physical validation of the westward bypasses),
 both at declared capacity 0 in the post-#390 honest world. EC-row
-geometries are RESOLVED (supersedes the 2026-07-24 "REGISTERED AS
-WARNED" policy on
-[#383](https://github.com/storkme/spaghettio/issues/383)). The −8% was
-fully attributed to the INPUT side — a long-handed inserter bind at
-hand 1 (2 LH × 1.2 = 2.4/s < 2.5/s demand), NOT an output-belt ceiling.
-[#431](https://github.com/storkme/spaghettio/issues/431) made inserter
-capacity L2 the engine default, clearing the bind, and its declared-
-level sweep falsified the output ceiling outright: the same byte-
-identical bridged EC row delivers the FULL 15.00/s at L2+ with zero
-output-blocked machines at every level. [PR #434] then recalibrated
-`ROW_LANE_FACTOR_BRIDGED` 1.733 → 2.0 (full both-lane nominal), so the
-`row-output-lane-budget` warnings on those geometries no longer fire —
-they validate clean at the L2 default and register at plan. mil5-from-ore FAILs flat at −28.7% (firearm rows' inserter
+geometries are RE-ATTRIBUTED but still WARN (revises the 2026-07-24
+policy on
+[#383](https://github.com/storkme/spaghettio/issues/383)). The output
+half of the old attribution is falsified:
+[#431](https://github.com/storkme/spaghettio/issues/431)'s declared-
+level sweep ran the same byte-identical bridged EC row at L0..L7 and
+measured it delivering the FULL 15.00/s at L2+ with zero output-blocked
+machines at every level, so the belt was never the bind; [PR
+#434](https://github.com/storkme/spaghettio/pull/434) recalibrated
+`ROW_LANE_FACTOR_BRIDGED` 1.733 → 2.0 accordingly and those warnings no
+longer fire. But the composed chain does NOT reach plan. Measured
+2026-07-24 at the L2 default: chain-ec15 14.10/15.00 (−6.0%),
+chain-ec30 28.40/30.00 (−5.3%), and the declared sweep PLATEAUS
+(d1 −8.0% → d2 −6.0% → d7 −5.3%) with an identical census at every
+level (1 output-blocked, 1 ingredient-starved, 13 working). So the
+deficit is two things: a research-bound input component that L2 clears,
+plus a **level-invariant ~5.3% structural residual that is neither
+research-reachable nor the row's output belt — currently unattributed
+and, since the recalibration, unwarned** ([#435](https://github.com/storkme/spaghettio/issues/435)). Entries stay WARN with the
+corrected attribution; they do not graduate to at-plan. mil5-from-ore FAILs flat at −28.7% (firearm rows' inserter
 COUNT) and stays unregistered. Full trail:
 [`rfc-051-cell-composition-integration.md`](rfc-051-cell-composition-integration.md).
 

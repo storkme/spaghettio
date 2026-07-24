@@ -231,19 +231,41 @@ follow-ups.
   declared-level sweep ran the SAME byte-identical bridged EC row at
   L0..L7 and measured the belt delivering the FULL 15.00/s at L2+, with
   **zero output-blocked machines at every level** — the belt was never
-  the bind. The whole deficit was the INPUT side (long-handed inserters
-  at hand 1: 2 × 1.2 = 2.4/s < 2.5/s demand), which is why it cleared
-  when #431 made inserter capacity L2 the engine default. The old
-  reading was instrument-bound: the calibration cell that produced the
-  13.0/s "floor" was itself input-starved, so it measured its own
-  inserters, not the belt. Consequences: `ROW_LANE_FACTOR_BRIDGED`
-  recalibrated 1.733 → 2.0 (full both-lane nominal — owning calibration
-  entry in RFC-047's log), the `row-output-lane-budget` warnings on
-  those geometries no longer fire, and the three entries stop being
-  "SIM-VERIFIED AS WARNED" — they re-measure and register AT PLAN at
-  the L2 default. The general lesson, worth more than this entry: a
-  calibration inherits its instrument's bounds, so sweep the declared
-  axis before believing a number is a property of the subject.*
+  the bind. A large part of the deficit was the INPUT side (long-handed
+  inserters at hand 1: 2 × 1.2 = 2.4/s < 2.5/s demand), which is why it
+  partially cleared when #431 made inserter capacity L2 the engine
+  default. The old reading was instrument-bound: the calibration cell
+  that produced the 13.0/s "floor" was itself input-starved, so it
+  measured its own inserters, not the belt. Consequence:
+  `ROW_LANE_FACTOR_BRIDGED` recalibrated 1.733 → 2.0 (full both-lane
+  nominal — owning calibration entry in RFC-047's log), so the
+  `row-output-lane-budget` warnings on those geometries no longer fire.*
+
+- *2026-07-24 (#434, MEASURED) — **the re-measure does NOT reach plan;
+  a level-invariant residual survives and is now UNWARNED.** An earlier
+  draft of the entry above predicted these entries would re-register at
+  plan once the input bind cleared. Measured, they do not. chain-ec15 at
+  the L2 default produces 14.10/15.00 (−6.0%), and the declared sweep
+  PLATEAUS rather than closing: d1 −8.0% → d2 −6.0% → d7 −5.3%
+  (14.20/s), with an identical census at every level (1 machine
+  output-blocked, 1 ingredient-starved, 13 working). chain-ec30 at d2
+  matches the shape (28.40/30.00, −5.3%). The d7 figure reproduces the
+  ORIGINAL sweep's d7 exactly, so this is a stable effect, not run
+  noise. So the deficit decomposes into TWO parts, not one: a
+  research-bound input component (~2.7 points) that L2 genuinely
+  clears, plus a **level-invariant ~5.3% structural residual that is
+  neither research-reachable nor the EC row's output belt** (#431
+  measured that row in isolation at 15.00/s exact, zero output-blocked
+  machines, at every level). The old warning was therefore firing at
+  roughly the right MAGNITUDE for the WRONG REASON; removing it is
+  correct, but doing so leaves the real residual with no validator
+  signal — tracked in #435 rather than left implied. Registry
+  consequence: the three entries stay WARN, to be re-blessed against
+  the L2 world with the corrected attribution, NOT promoted to at-plan.
+  Two lessons, the second learned the hard way here: a calibration
+  inherits its instrument's bounds (sweep the declared axis before
+  believing a number is a property of the subject); and do not write
+  down what a fix WILL produce — measure first, then write.*
 
 - *2026-07-24 — registry policy widened (user-approved, #383): entries
   may now record a WARN verdict when the deficit is BOTH priced by a
