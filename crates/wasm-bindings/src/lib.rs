@@ -85,9 +85,13 @@ fn layout_options(
         // semantics as the tiers above. `common::*_stacked` helpers clamp
         // any out-of-range value, so no validation needed here.
         stacking: stacking.unwrap_or(1),
-        // RFC-049 Phase 2: unknown/absent → 0 (unresearched, bit-identical
-        // to pre-RFC — kill 1), same fallback semantics as the tiers above.
-        inserter_capacity: inserter_capacity.unwrap_or(0),
+        // Unknown/absent → the engine default (L2, red+green research),
+        // matching `LayoutOptions::default` — see
+        // `common::DEFAULT_INSERTER_CAPACITY` (2026-07-24, #383). RFC-049's
+        // "L0 == pre-RFC" model invariant is unaffected; only the default
+        // level moves off 0. The UI passes an explicit level when the user
+        // picks one, and 0 for the raw unresearched world.
+        inserter_capacity: inserter_capacity.unwrap_or(spaghettio_core::common::DEFAULT_INSERTER_CAPACITY),
         // RFC-051 flip: absent/unknown → Candidate (the engine default).
         // "off" is the escape hatch — bus refusals then stay refusals.
         cell_composition: match cell_composition.as_deref() {
