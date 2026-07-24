@@ -154,11 +154,21 @@ feeds and the composed layout must pass the pipe-isolation validators
   drift identical to the known #406 set. Post-fix sim: chem5 goes
   0.00 → 4.50/5.00 packs/s with ZERO fluid shortages (PG +5.6%) — the
   mega fluid architecture is sim-proven for the chem class; residual
-  −10% is solid-side (plastic→cable→EC→AC starvation chain) and does
-  NOT match the layout's declared inserter-item-throughput warnings
-  (those name iron-plate feeds that measure 100%), so it is being
-  forensically attributed (kit vs #383-class) before any registry
-  claim.*
+  −10% is solid-side and forensically attributed: `kit_errors` and
+  `fluid_errors` both EMPTY; the single bottleneck is the layout's OWN
+  declared inserter-item-throughput warnings on the EC iron-plate
+  feeds (declared cap 6.0/7.5 per copy predicts EC ≤ 12.0/s, measured
+  12.60; plastic's consumption-limited signature is exact — AC 6.35/s
+  × 2/craft = 12.7 ≈ 12.62 measured; cable/plastic throttle via
+  full_output backpressure, sulfur/PG buffer). That bound is the #383
+  template-sizing class owned by Lane B. INCREMENT-1 VERDICT: the
+  chem class's bus-refusal win is REAL — compose 0 errors where the
+  bus hard-fails, fluids sim-proven end-to-end, solids at the
+  declared bound. NOT registered: registry entries record measured
+  PASS baselines, and chem5 measures −10% vs plan; it registers when
+  #383's template sizing lifts the declared EC bound. chem10 sim
+  deferred (same solid bound would dominate; the reach fix is already
+  exercised by chem5's tall block).*
 
 - *2026-07-24 — Phase B DELIVERED: gate (b) MET — the flagship runs.
   `mega_subgraph` partitions fluid-touching specs (one weakly-connected
