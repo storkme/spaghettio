@@ -57,7 +57,11 @@ jobs:
             the review is lost (observed 2026-07-24, PR #416: the
             orchestrator scheduled a wakeup to wait for its subagents
             and ended mid-wait). Launch subagents and consume their
-            results synchronously within this run.
+            results synchronously within this run. If you consciously
+            decide NOT to review (triviality gate, out-of-scope diff,
+            already reviewed), do not end silently — post a one-line
+            `gh pr comment` stating the skip and the reason. A silent
+            end is indistinguishable from a crash and fails the check.
           claude_args: |
             --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*)"
 
