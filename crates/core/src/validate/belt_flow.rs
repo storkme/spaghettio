@@ -2314,6 +2314,11 @@ fn compute_lane_rates_impl(
     // Pass 2: each machine's per-item output rate is split evenly across
     // its qualifying output inserters (identical hands drain a shared
     // buffer — the even split is the steady state the planner sizes for).
+    // ASSUMPTION GUARD (#414 review): relies on the sizer emitting ONE
+    // uniform plan per side and output templates confining a machine's
+    // hands to one belt run; if the placer ever mixes hand tiers per
+    // (machine, item) or fans hands across separate runs, revisit —
+    // even-split would then under-state the faster hand's lane.
     for (drop_pos, lane, key, rate) in qualifying {
         let n = inserters_per_output[&key] as f64;
         let entry = lane_injections.entry(drop_pos).or_insert([0.0, 0.0]);

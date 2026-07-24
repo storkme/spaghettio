@@ -1081,7 +1081,13 @@ pub fn compute_lane_rates(layout: &LayoutResult, solver_result: &SolverResult) -
     }
     // Each machine's per-item rate splits evenly across its qualifying
     // output inserters (identical hands drain a shared buffer — the even
-    // split is the steady state the planner sizes for).
+    // split is the steady state the planner sizes for). ASSUMPTION GUARD
+    // (#414 review): this relies on the sizer emitting ONE uniform plan
+    // per side (`size_belt_drop_side`/`size_side_output`) and the output
+    // templates confining a machine's hands to adjacent tiles of one
+    // belt run. If the placer ever mixes hand tiers per (machine, item)
+    // or fans one machine's hands across separate runs, revisit —
+    // even-split would then under-state the faster hand's lane.
     for (drop_pos, lane, key, rate) in qualifying {
         let n = inserters_per_output[&key] as f64;
         let entry = lane_injections.entry(drop_pos).or_insert((0.0, 0.0));
@@ -1956,6 +1962,82 @@ mod tests {
             split.is_empty(),
             "6.5/s over two hands must seed 3.25 each (6.5 on the lane, under 7.5 cap), got: {:?}",
             split.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn lane_rates_midpoint_bridge_swaps_lane_and_conserves_flow() {
+        // #404 companion pin: the bridge/sideload lane model was CORRECT
+        // all along — the false positives came from per-hand seed
+        // duplication, not the bridge. This pins the bridge half
+        // independently: two single-hand machines around an engine-style
+        // midpoint bridge (jog up, two bridge tiles, sideload back onto a
+        // through-belt). Upstream flow must cross the bridge onto the
+        // OPPOSITE lane (sideload collapse), downstream's hand fills the
+        // near lane, and total flow is conserved — 6.5/6.5 on a 13/s run,
+        // no lane over 7.5, zero lane-throughput issues.
+        let sr = SolverResult {
+            machines: vec![MachineSpec {
+                entity: "assembling-machine-3".to_string(),
+                recipe: "electronic-circuit".to_string(),
+                self_loop: vec![], voider: false, game_modules: Vec::new(),
+                count: 2.0,
+                inputs: vec![],
+                outputs: vec![ItemFlow {
+                    item: "electronic-circuit".to_string(),
+                    rate: 6.5,
+                    is_fluid: false,
+                    module_id: 0,
+                }],
+            }],
+            external_inputs: vec![],
+            external_outputs: vec![],
+            surplus_outputs: vec![],
+            dependency_order: vec![],
+        };
+        let item = "electronic-circuit";
+        let entities = vec![
+            machine("assembling-machine-3", 0, 0, item),
+            machine("assembling-machine-3", 8, 0, item),
+            // One hand each: A picks (1,2), drops (1,4); B picks (9,2), drops (9,4).
+            inserter(1, 3, EntityDirection::South),
+            inserter(9, 3, EntityDirection::South),
+            // Upstream run, jog, bridge row, and the through-belt it
+            // sideloads back onto (engine sideload_bridge geometry).
+            belt_carrying(1, 4, EntityDirection::East, item),
+            belt_carrying(2, 4, EntityDirection::East, item),
+            belt_carrying(3, 4, EntityDirection::North, item), // jog up
+            belt_carrying(3, 3, EntityDirection::East, item),  // bridge
+            belt_carrying(4, 3, EntityDirection::East, item),  // bridge
+            belt_carrying(5, 3, EntityDirection::South, item), // drop back
+            belt_carrying(4, 4, EntityDirection::East, item),  // filler (fresh through-belt)
+            belt_carrying(5, 4, EntityDirection::East, item),  // sideload target
+            belt_carrying(6, 4, EntityDirection::East, item),
+            belt_carrying(7, 4, EntityDirection::East, item),
+            belt_carrying(8, 4, EntityDirection::East, item),
+            belt_carrying(9, 4, EntityDirection::East, item),  // B's drop
+            belt_carrying(10, 4, EntityDirection::East, item), // tail
+        ];
+        let lr = layout(entities);
+
+        let issues = check_lane_throughput(&lr, Some(&sr));
+        assert!(
+            issues.is_empty(),
+            "bridged 13/s run at 6.5/lane must not flag: {:?}",
+            issues.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+
+        let rates = compute_lane_rates(&lr, &sr);
+        let (l, r) = rates[&(10, 4)];
+        let total = l + r;
+        assert!(
+            (total - 13.0).abs() < 1e-6,
+            "flow must be conserved through jog corners + sideload (got L={l} R={r})"
+        );
+        assert!(
+            (l - 6.5).abs() < 1e-6 && (r - 6.5).abs() < 1e-6,
+            "bridge must land upstream flow on the opposite lane from the \
+             downstream hand's drops (got L={l} R={r})"
         );
     }
 
