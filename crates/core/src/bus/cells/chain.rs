@@ -26,7 +26,7 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 use crate::models::{BoundaryRecord, EntityDirection, LayoutResult, PlacedEntity, SolverResult};
 
-use super::extract::{extract_cell, generate_cell_layout, Cell, Port};
+use super::extract::{extract_cell, Cell, Port};
 use super::compose::stamp_path;
 
 /// Feed columns need >=4 tiles of lateral separation (#363: sim-kit
@@ -609,6 +609,16 @@ fn retrofit_feed_hop(
 /// (calibrated orientation: north feeds, south drains, west→east
 /// record order — #363).
 pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
+    compose_chain_with_capacity(sr, 0)
+}
+
+/// `compose_chain` with the declared inserter-capacity level threaded to
+/// every member cell's generation (#415). Capacity 0 is byte-identical
+/// to `compose_chain` by construction.
+pub fn compose_chain_with_capacity(
+    sr: &SolverResult,
+    inserter_capacity: u8,
+) -> Result<LayoutResult, String> {
     chain_eligible(sr)?;
     let kq = required_copies(sr);
     let scale = 1.0 / kq as f64;
@@ -796,7 +806,7 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
                     });
                 } else {
                     let input_names: Vec<&str> = m.inputs.iter().map(|i| i.item.as_str()).collect();
-                    let (_csr, cl) = generate_cell_layout(&out_item, rate, &input_names);
+                    let (_csr, cl) = super::extract::generate_cell_layout_with_capacity(&out_item, rate, &input_names, inserter_capacity);
                     cell_cache.push(extract_cell(&cl));
                 }
             }
@@ -1339,6 +1349,9 @@ pub fn compose_chain(sr: &SolverResult) -> Result<LayoutResult, String> {
         width,
         height,
         stacking: 1,
+        // The composed layout DECLARES the capacity its cells were sized
+        // at — registry world-matching (`verification_note`) reads this.
+        inserter_capacity,
         boundary_inputs: {
             let mut b = b_in;
             b.sort_by_key(|r| r.x); // west→east (#363 rig-depth rule)

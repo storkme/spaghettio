@@ -480,6 +480,36 @@ fn probe_registry_hashes() {
 /// measurement time). The fix when it fires: re-run the sim on the new
 /// geometry, then update the hash + measurement in
 /// cell-sim-registry.json.
+/// #415: the declared inserter-capacity level must actually REACH the
+/// composed cells' placer. L0 stays byte-identical to `compose_chain`
+/// (the registry gate enforces that side); a nonzero level must change
+/// the geometry — #381's ladder sizes hands differently — or the option
+/// silently died on the way down again (#383's original symptom: d1/d7
+/// fixtures with byte-identical blueprints).
+#[test]
+fn chain_capacity_reaches_the_placer() {
+    use spaghettio_core::bus::cells::chain::{compose_chain, compose_chain_with_capacity};
+    use spaghettio_core::bus::cells::registry::geometry_hash;
+    let inputs: FxHashSet<String> =
+        ["iron-plate", "copper-plate"].iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "electronic-circuit", 15.0, &inputs, &MachinePalette::default(),
+        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+    ).unwrap();
+    let l0 = compose_chain(&sr).unwrap();
+    let l0_explicit = compose_chain_with_capacity(&sr, 0).unwrap();
+    assert_eq!(
+        geometry_hash(&l0), geometry_hash(&l0_explicit),
+        "capacity 0 must be byte-identical to the plain path"
+    );
+    let l7 = compose_chain_with_capacity(&sr, 7).unwrap();
+    assert_eq!(l7.inserter_capacity, 7, "composed layout must declare its capacity");
+    assert_ne!(
+        geometry_hash(&l0), geometry_hash(&l7),
+        "declared L7 must change composed geometry (ladder-resized hands) —          identical hashes mean the option died on the way to the placer again (#383)"
+    );
+}
+
 #[test]
 fn cell_registry_hashes_current() {
     use spaghettio_core::bus::cells::chain::compose_chain;
