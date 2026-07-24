@@ -519,7 +519,8 @@ fn chain_capacity_reaches_the_placer() {
 /// at 13.8/s (−8%) at L0 vs 15.0/s (full plan) at L2.
 #[test]
 fn ec15_chain_inserter_clean_at_default_capacity() {
-    use spaghettio_core::bus::cells::chain::compose_chain_with_capacity;
+    use spaghettio_core::bus::cells::chain::{compose_chain, compose_chain_with_capacity};
+    use spaghettio_core::bus::cells::registry::geometry_hash;
     use spaghettio_core::common::DEFAULT_INSERTER_CAPACITY;
     use spaghettio_core::validate::{self, LayoutStyle, Severity};
     let inputs: FxHashSet<String> =
@@ -528,6 +529,16 @@ fn ec15_chain_inserter_clean_at_default_capacity() {
         "electronic-circuit", 15.0, &inputs, &MachinePalette::default(),
         "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
     ).unwrap();
+    // Geometry-regression lock on the L2 DEFAULT path — the geometry
+    // production actually builds, which the registry gate (rebuilt at
+    // explicit L0) does not cover (PR #431 review finding). Not sim-blessed
+    // (there is no L2 sim baseline); a self-consistency golden. Re-bless
+    // deliberately if a change legitimately reshapes the default geometry.
+    assert_eq!(
+        format!("{:016x}", geometry_hash(&compose_chain(&sr).unwrap())),
+        "eb9e1796a1f53695",
+        "EC@15 default (L2) geometry changed — re-verify and re-bless"
+    );
     let inserter_warns = |cap: u8| -> usize {
         let l = compose_chain_with_capacity(&sr, cap).unwrap();
         let issues =
@@ -555,30 +566,30 @@ fn ec15_chain_inserter_clean_at_default_capacity() {
     );
 }
 
-/// #383 (2026-07-24): mega-containing chains pin their WHOLE self to L0
-/// until #415 threads capacity into the mega interior — so a nonzero
-/// declared level is CLAMPED to L0 (the layout declares 0), replacing the
-/// pre-#383 hard refusal. This keeps the L2 engine default from breaking
-/// mega chains while preserving their conservative geometry unchanged.
+/// #383 / #415 (#422 landed): a mega-containing chain composes at its
+/// DECLARED capacity. #422 threads capacity into the non-mega cells; the
+/// mega INTERIOR bootstrap (`compose_mega_block`) stays conservatively L0
+/// (it takes no capacity argument). No refusal, no whole-chain clamp.
+/// History: hard `Err` refusal (pre-#383) → whole-chain L0 clamp (#383
+/// initial) → dropped once #422 landed (PR #431 review coordination).
 #[test]
-fn mega_chain_clamps_capacity_to_l0() {
+fn mega_chain_composes_at_declared_capacity() {
     use spaghettio_core::bus::cells::chain::compose_chain_with_capacity;
-    use spaghettio_core::bus::cells::registry::geometry_hash;
     let inputs: FxHashSet<String> =
         ["iron-ore", "copper-ore", "crude-oil", "water", "coal"].iter().map(|s| s.to_string()).collect();
     let sr = solver::solve_with_palette_exclusions_and_quality(
         "advanced-circuit", 2.0, &inputs, &MachinePalette::default(),
         "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
     ).unwrap();
-    // A mega chain requested at L7 composes, clamped to L0 — not a refusal,
-    // not a mixed-world declaration.
-    let l7 = compose_chain_with_capacity(&sr, 7).expect("mega chain composes (clamped to L0)");
-    assert_eq!(l7.inserter_capacity, 0, "mega chain must clamp declared capacity to L0 (#415)");
-    let l0 = compose_chain_with_capacity(&sr, 0).expect("L0 mega chain composes");
+    // L7 composes (no refusal, no clamp) and DECLARES its requested level —
+    // the non-mega cells thread it; the mega interior stays L0 internally.
+    let l7 = compose_chain_with_capacity(&sr, 7).expect("mega chain composes at L7");
     assert_eq!(
-        geometry_hash(&l7), geometry_hash(&l0),
-        "clamped L7 must be byte-identical to explicit L0 — mega geometry is capacity-invariant"
+        l7.inserter_capacity, 7,
+        "mega chain must declare its requested capacity (#422 threaded non-mega cells)"
     );
+    let l0 = compose_chain_with_capacity(&sr, 0).expect("L0 mega chain composes");
+    assert_eq!(l0.inserter_capacity, 0);
 }
 
 #[test]

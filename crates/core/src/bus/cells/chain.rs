@@ -661,17 +661,18 @@ pub fn compose_chain_with_capacity(
     // take mega_plan = None and every branch below is bit-identical to
     // the pre-Phase-B placer (the registry gate enforces it).
     let mega_plan = super::mega::mega_subgraph(sr)?;
-    // #415 stop-gap (#422 review finding 1): the mega bootstrap
-    // (`mega.rs` generate path) does not yet thread capacity, so a
-    // mega-containing chain cannot honor a declared level in its mega
-    // interior. Rather than declare a mixed world, pin the WHOLE chain
-    // to L0 — the exact conservative geometry it had before the
-    // 2026-07-24 default→L2 change (#383), so mega behavior is
-    // unchanged. The clamp is reflected in the layout's declared
-    // capacity (not silent), and #415 threading the mega interior is the
-    // recorded follow-up that lifts it. (Was a hard `return Err` pre-#383;
-    // softened to a clamp so the L2 default doesn't break mega chains.)
-    let inserter_capacity = if mega_plan.is_some() { 0 } else { inserter_capacity };
+    // Mega-containing chains honor their DECLARED capacity. #415 is closed
+    // (COMPLETED by #422): the non-mega cells thread it via
+    // `generate_cell_layout_with_capacity` below, and the mega INTERIOR
+    // bootstrap (`compose_mega_block`) is inherently L0 — it takes no
+    // capacity argument and pins `inserter_capacity: 0` internally. So a
+    // mega chain at L>0 sizes its solid cells at the declared level while
+    // the interior stays conservatively L0 (over-provisioned = the safe
+    // direction, real ≥ plan), and the layout declares the real level.
+    // History: a hard `Err` refusal (pre-#383, #422 stop-gap) → a
+    // whole-chain L0 clamp (#383 initial) → dropped here once #422 landed
+    // (2026-07-24, PR #431 review coordination). The interior's L0 pin is
+    // honest until it too threads capacity; drop the `mega.rs` pins then.
     const MEGA_PREFIX: &str = "mega:";
 
     let produced: FxHashSet<&str> = sr

@@ -583,13 +583,25 @@ table (Phase 3).
   player occupies. This also settles #383: the EC deficit was never the
   output belt (measured 2.0 lanes / 15.0 s⁻¹ on yellow; zero output
   blocking) but the input-inserter bind, which the L2 default clears with
-  no geometry change. **Scope-around (option A, user-chosen):** mega-cell
-  interiors don't thread capacity yet (#415), so the mega composer
-  (`mega.rs`) and mega-containing chains (`compose_chain`) are **pinned to
-  L0** — their exact pre-change behavior — until #415 lands and lifts the
-  pin. The science gauntlet keeps its explicit L0 pin (honest-zero
-  inserter warnings stay visible); callers wanting the raw unresearched
-  world pass 0 explicitly (web UI: the "Unresearched (L0)" option).
-  Registry gate builds each entry at explicit L0 (all current baselines
-  are L0-geometry, blessed pre-#422). Verified: full core suite green
-  (845 + all binaries); wasm + tsc clean.*
+  no geometry change. **Mega-cell handling (evolved during PR #431
+  review):** #415 is closed (COMPLETED by #422) — #422 threads capacity
+  into the non-mega cells (`generate_cell_layout_with_capacity`), while
+  the mega INTERIOR bootstrap (`compose_mega_block`, `compose_mega_calibrated`)
+  is inherently L0 (takes no capacity; pins `inserter_capacity: 0`
+  internally). So a mega chain composes at its declared level with the
+  interior conservatively L0 (over-provisioned = safe, real ≥ plan). The
+  mechanism went through three states in this PR — a hard `Err` refusal
+  (the pre-existing #422 stop-gap, which broke the L2 default for mega
+  chains), a whole-chain L0 **clamp** (initial #383 fix — softened the
+  `Err` to `Ok`+downgrade; assumption: no caller relied on the `Err` to
+  detect an unsupported request, true across the tree), then the clamp
+  **dropped** once the composition lane confirmed #422 had landed (mega
+  chains now honor their declared level; only the interior stays L0 via
+  the `mega.rs` pins, to be lifted when the interior bootstrap threads
+  capacity too). The science gauntlet keeps its explicit L0 pin
+  (honest-zero inserter warnings stay visible); callers wanting the raw
+  unresearched world pass 0 explicitly (web UI: the "Unresearched (L0)"
+  option). Registry gate builds each entry at explicit L0 (all current
+  baselines are L0-geometry, blessed pre-#422); the L2 default geometry is
+  regression-locked separately by `ec15_chain_inserter_clean_at_default_capacity`.
+  Verified: full core suite green (845 + all binaries); wasm + tsc clean.*
