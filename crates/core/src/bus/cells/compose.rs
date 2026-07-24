@@ -240,12 +240,23 @@ pub fn compose_pairs_calibrated(n: i32) -> (crate::models::SolverResult, LayoutR
             });
         }
 
-        // Cable corridor: identical to the validated pair geometry.
+        // Cable corridor: the validated pair geometry, generalized to
+        // a SINGLE out-run (#383: the measured-budget tier pick gives
+        // the cable spec one row on the next belt tier where the
+        // theoretical model packed two runs — one run needs no merge
+        // splitter, just the direct approach into the EC port).
         let outs: Vec<&Port> = cable.ports.iter().filter(|p| !p.inbound).collect();
-        let (o1, o2) = (outs[0], outs[1]);
+        let o1 = outs[0];
         let ec_cable_port = ec.ports.iter().find(|p| p.inbound && p.item == "copper-cable").unwrap();
         let ec_cable_in_y = ec_y + ec_cable_port.y;
         let sx = corridor_x + 2;
+        if outs.len() == 1 {
+            stamp_path(&mut entities,
+                &[(cable_x + o1.x + 1, cell_y + o1.y), (sx + 2, cell_y + o1.y),
+                  (sx + 2, ec_cable_in_y), (ec_x + ec_cable_port.x - 1, ec_cable_in_y)],
+                "copper-cable", "fast-transport-belt", &format!("cc:a:{k}"));
+        } else {
+        let o2 = outs[1];
         stamp_path(&mut entities, &[(cable_x + o1.x + 1, cell_y + o1.y), (sx - 1, cell_y + o1.y)],
             "copper-cable", "fast-transport-belt", &format!("cc:a:{k}"));
         // b-run must approach the splitter's south half EASTWARD: ending
@@ -274,6 +285,7 @@ pub fn compose_pairs_calibrated(n: i32) -> (crate::models::SolverResult, LayoutR
         stamp_path(&mut entities,
             &[(sx + 1, cell_y + o1.y), (sx + 2, cell_y + o1.y), (sx + 2, ec_cable_in_y), (ec_x + ec_cable_port.x - 1, ec_cable_in_y)],
             "copper-cable", "fast-transport-belt", &format!("cc:c:{k}"));
+        }
 
         // Output: corner SOUTH to the bottom edge (calibrated drain dir).
         let ec_out = ec.ports.iter().find(|p| !p.inbound).unwrap();
