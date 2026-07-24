@@ -188,10 +188,15 @@ fn audit_lane_correctness() {
     // convergence walker exposed genuine internal lane imbalance in
     // shapes (7,3) and (7,4) under saturation (worst 8.112/s on a
     // 7.5/s per-lane cap; aggregate stays exactly at capacity — the
-    // old lane-mixing model structurally could not see this). Carried
-    // as an expected finding until the shapes are re-baked with a
-    // lane-balance constraint; any error OUTSIDE these shapes (or any
-    // new category inside them) still fails the audit.
+    // old lane-mixing model structurally could not see this). ACCEPTED
+    // 2026-07-24 (#334 closed, user call): months in production with no
+    // correlated field failure; the skew is a documented limitation of
+    // these two shapes, not pending work. Acceptance is revocable — a
+    // re-bake with a lane-balance constraint that fixes them should
+    // remove them from this list (the assert below fires to force that
+    // bookkeeping), and a field failure implicating either shape
+    // reopens #334. Any error OUTSIDE these shapes (or any new category
+    // inside them) still fails the audit.
     const KNOWN_IMBALANCED: [(u32, u32); 2] = [(7, 3), (7, 4)];
     if std::env::var("BALANCER_AUDIT_NO_FAIL").is_err() {
         let unexpected: Vec<&Row> = rows
@@ -213,8 +218,9 @@ fn audit_lane_correctness() {
             .any(|r| KNOWN_IMBALANCED.contains(&r.shape) && r.errors > 0);
         assert!(
             known_still_failing,
-            "known-imbalanced shapes (7,3)/(7,4) now pass — #334 is fixed; remove \
-             KNOWN_IMBALANCED and close the issue consciously."
+            "known-imbalanced shapes (7,3)/(7,4) now pass — a re-bake fixed the \
+             accepted #334 skew; remove KNOWN_IMBALANCED and note the fix on the \
+             closed issue."
         );
     }
 }

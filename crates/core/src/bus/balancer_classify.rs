@@ -1067,14 +1067,20 @@ mod tests {
         assert_eq!(r.class, BalancerClass::Balanced);
     }
 
-    /// Tripwire for #266: pin the library's known throughput-limited (MX1)
-    /// shapes, so a re-bake can't silently regress a template into MX1 or
-    /// silently "fix" a known one without the issue being consciously
-    /// closed. Mirrors `balancer_lane_audit`'s KNOWN_IMBALANCED pattern.
+    /// Tripwire for #266 (CLOSED — skew accepted 2026-07-24, user call):
+    /// pin the library's known throughput-limited (MX1) shapes, so a
+    /// re-bake can't silently regress a template into MX1 or silently
+    /// "fix" the accepted one without bookkeeping. Mirrors
+    /// `balancer_lane_audit`'s KNOWN_IMBALANCED pattern.
     ///
     /// History: #266 originally listed (5, 8) AND (8, 6); the 2026-07-24
     /// audit found (8, 6) already classifies MX3 balanced on main (fixed by
-    /// a later library re-bake), so only (5, 8) is pinned here.
+    /// a later library re-bake), so only (5, 8) is pinned. The (5, 8)
+    /// throughput limit (saturated inputs {1,2} realize 1 belt, not 2) is
+    /// an accepted, documented limitation — revocable: a re-bake that
+    /// fixes it should empty this list (the second assert forces that
+    /// bookkeeping), and a field failure implicating the shape reopens
+    /// the issue.
     #[test]
     fn known_throughput_limited_shapes_are_pinned() {
         const KNOWN_THROUGHPUT_LIMITED: [(u32, u32); 1] = [(5, 8)];
@@ -1105,7 +1111,7 @@ mod tests {
             KNOWN_THROUGHPUT_LIMITED.len(),
             "a KNOWN_THROUGHPUT_LIMITED shape no longer classifies MX1 (found only \
              {still_limited:?}). If a re-bake fixed it, remove it from the list and \
-             close #266 consciously."
+             note the fix on closed #266."
         );
     }
 }

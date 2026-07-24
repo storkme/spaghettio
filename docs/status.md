@@ -319,12 +319,14 @@ golden re-blesses across the arc. Full trail:
 - [#135 balancer templates are oversized](https://github.com/storkme/spaghettio/issues/135) — main compaction lever
 - [#311 output merger over-commits a single final belt; lane-throughput check never visits merger tiles](https://github.com/storkme/spaghettio/issues/311) — gates >45/s headline claims
 - [#312 consumer-clamped fan-in refusal bites much earlier at high build quality](https://github.com/storkme/spaghettio/issues/312) — S=1; the wall now scales ×S with stacking (RFC-047 Leg C)
-- [#334 two lane-imbalanced balancer-library shapes](https://github.com/storkme/spaghettio/issues/334) — carved out of the RFC-047 convergence walker with a fix tripwire
 - [#335 one unreached furnace bank in the legendary-express@60 fixture](https://github.com/storkme/spaghettio/issues/335)
 - [#336 (n,1) merge-tap unwired; late sideload check refuses those shapes by name](https://github.com/storkme/spaghettio/issues/336)
 
 (Audited 2026-07-21: #65, #68, #136, #310 — previously cited here — are all
-closed.)
+closed. 2026-07-24: #334 closed — the (7,3)/(7,4) lane skew is ACCEPTED as a
+documented limitation (user call), guarded by `balancer_lane_audit`'s
+KNOWN_IMBALANCED tripwire; #266's (5,8) MX1 limit accepted the same way,
+guarded in `balancer_classify`. Both revocable on re-bake or field failure.)
 
 ## Deferred tooling tasks
 
