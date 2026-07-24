@@ -223,6 +223,28 @@ follow-ups.
 
 ## Decision log
 
+- *2026-07-24 (#434) — **ATTRIBUTION REVERSED for the three WARN
+  admissions below.** The entry immediately following attributes
+  chain-ec15-d1/-d7 and chain-ec30-d1 to "the EC-row yellow output-belt
+  ceiling (row-output-lane-budget) plus, at L1, the #415 input bound."
+  Measurement has since falsified the output half: #431's
+  declared-level sweep ran the SAME byte-identical bridged EC row at
+  L0..L7 and measured the belt delivering the FULL 15.00/s at L2+, with
+  **zero output-blocked machines at every level** — the belt was never
+  the bind. The whole deficit was the INPUT side (long-handed inserters
+  at hand 1: 2 × 1.2 = 2.4/s < 2.5/s demand), which is why it cleared
+  when #431 made inserter capacity L2 the engine default. The old
+  reading was instrument-bound: the calibration cell that produced the
+  13.0/s "floor" was itself input-starved, so it measured its own
+  inserters, not the belt. Consequences: `ROW_LANE_FACTOR_BRIDGED`
+  recalibrated 1.733 → 2.0 (full both-lane nominal — owning calibration
+  entry in RFC-047's log), the `row-output-lane-budget` warnings on
+  those geometries no longer fire, and the three entries stop being
+  "SIM-VERIFIED AS WARNED" — they re-measure and register AT PLAN at
+  the L2 default. The general lesson, worth more than this entry: a
+  calibration inherits its instrument's bounds, so sweep the declared
+  axis before believing a number is a property of the subject.*
+
 - *2026-07-24 — registry policy widened (user-approved, #383): entries
   may now record a WARN verdict when the deficit is BOTH priced by a
   generation-time validator warning on the exact geometry AND

@@ -85,6 +85,12 @@ jobs:
       - run: cargo nextest run -p spaghettio_core --profile ci
         env:
           SPAGHETTIO_ZONE_CACHE_PATH: ${{ github.workspace }}/crates/core/data/sat-zones-ci.bin
+      # The non-core crates were UNTESTED in CI until 2026-07-24 (#434):
+      # a broken `sim-harness` unit test shipped green because every gate
+      # here was `-p spaghettio_core`. Kept as its own step so the tuned
+      # core run above (ci profile, zone-cache pin, junit path) is
+      # untouched; these are fast and need no zone cache.
+      - run: cargo nextest run -p spaghettio_sim_harness -p spaghettio_mining
       - name: Generate test summary
         if: always()
         run: |
@@ -134,7 +140,10 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy -p spaghettio_core -- -D warnings
+      # Workspace-wide since 2026-07-24 (#434) — was `-p spaghettio_core`,
+      # leaving sim-harness/mining/wasm-bindings unlinted. Lib-only on
+      # purpose: `--all-targets` trips pre-existing test/example debt.
+      - run: cargo clippy --workspace -- -D warnings
 
   web:
     needs: changes

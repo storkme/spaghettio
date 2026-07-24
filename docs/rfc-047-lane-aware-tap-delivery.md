@@ -301,6 +301,28 @@ generator remains future work.
 
 ## Decision log
 
+- **2026-07-24 (#434) — `ROW_LANE_FACTOR_BRIDGED` RE-CALIBRATED
+  1.733 → 2.0; the bridged half of the entry below is superseded.**
+  That entry's bridged figure ("~2 lanes", implemented as the
+  `13.0/7.5 = 1.733` *measured floor*) came from a calibration cell
+  that was itself INPUT-bound — long-handed inserters at hand 1
+  delivering 2.4/s against 2.5/s demand — so the run measured its own
+  inserter provisioning, not the belt's carry. #431's independent
+  declared-level sweep re-ran the same byte-identical bridged EC row
+  at L0..L7: 13.80/s at L0/L1 (the input bind) and **15.00/s exactly
+  at L2+, with zero output-blocked machines at every level**. A
+  midpoint-bridged row therefore realizes the belt's FULL both-lane
+  nominal (2.0 × 7.5 = 15.0/s on yellow), not a 1.733 floor. Two
+  caveats recorded with the change: the measurement is a LOWER bound
+  (produced == plan == nominal proves the belt reaches its rated
+  carry, not that headroom exists above it, so the check has zero
+  margin beyond EPSILON at demand == budget), and it was measured on
+  YELLOW — the extension to red/express rides the tier-invariant carry
+  argument, not a direct measure. The UNBRIDGED 0.95 is left untouched
+  but is now suspect for the same reason (same confounded setup); a
+  dedicated L2 re-measure is queued. Attribution consequences for the
+  registry live in RFC-051's log.**
+
 - **2026-07-23 — #385's second half landed: `check_row_output_lane_budget`
   completes this RFC's lane-aware delivery story on the OUTPUT side,
   sim-calibrated.** RFC-046/049 sized individual belt-dropping

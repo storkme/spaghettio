@@ -1097,8 +1097,11 @@ mod tests {
         let lua = build_control_lua(&m, "0eNBPFAKE", &params);
 
         // south-facing exit: flow=(0,1), lateral=(1,0) -- matches
-        // gen_harness_scenario.py's drain (fx=south, lx=east), ext_len=5.
-        assert!(lua.contains("add_drain(s, force, exit_x, exit_y, 0, 1, 1, 0, 5, \"iron-gear-wheel\")"));
+        // gen_harness_scenario.py's drain (fx=south, lx=east). ext_len
+        // is 11 + 2*idx (idx=0 here): widened 2026-07-24 from 5 so the
+        // bank spans 9 positions (`t = ext_len - 8, ext_len`) / 18
+        // inserters, keeping every chest outside the layout.
+        assert!(lua.contains("add_drain(s, force, exit_x, exit_y, 0, 1, 1, 0, 11, \"iron-gear-wheel\")"));
         assert!(lua.contains("local exit_x, exit_y = 13 - LX0 + storage.offx, 33 - LY0 + storage.offy"));
     }
 
