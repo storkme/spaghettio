@@ -373,8 +373,23 @@ fn probe_differential_scoreboard() {
 /// PERMANENT GATE (RFC-051 Phase B): with the flag ON, the decomposition
 /// search resolves EC@15-from-plates — the config the bus engine refuses
 /// outright (#336) — via the cell-composed candidate, at 0 errors with
-/// only the sim-adjudicated warning category. With the flag OFF
+/// only the sim-adjudicated warning categories. With the flag OFF
 /// (default) the refusal stands (inertness: the bus path is untouched).
+///
+/// **2026-07-23 (#385 second half):** this candidate's geometry is a
+/// SINGLE 6-machine electronic-circuit row (confirmed via a manual
+/// entity dump: all 6 machines at y=7, one belt-out cluster at y=10/11
+/// with a genuine midpoint sideload bridge) producing the full 15.0/s
+/// demand onto one yellow belt-out — distinct from
+/// `cell_composed_ec15_zero_errors`'s sim-verified geometry
+/// (`compose_pairs_calibrated`'s 3 independent 5.0/s pairs, each well
+/// under budget). Even with the bridge's 2-lane realization
+/// (`0.85 × 15.0/s × 2 lanes = 12.75/s`), 15.0/s exceeds it — a `row-
+/// output-lane-budget` warning the new check correctly raises here. This
+/// specific geometry has no sim-verification either way (the "15/15
+/// working, 15.0/s exact" proof belongs to the pairs geometry, not this
+/// one), so per the check's own acceptance protocol this is tolerated as
+/// a plausible-but-unproven finding, not silently tuned away.
 #[test]
 fn cell_candidate_resolves_ec15_refusal() {
     use spaghettio_core::bus::cells::CellComposition;
@@ -401,8 +416,19 @@ fn cell_candidate_resolves_ec15_refusal() {
     let issues = validate::validate(&l, Some(&sr), LayoutStyle::Bus).unwrap();
     let errors = issues.iter().filter(|i| i.severity == Severity::Error).count();
     assert_eq!(errors, 0, "composed candidate errors: {issues:?}");
-    assert!(issues.iter().all(|i| i.category == "inserter-item-throughput"),
-        "only the adjudicated category tolerated: {issues:?}");
+    assert!(
+        issues.iter().all(|i| i.category == "inserter-item-throughput"
+            || i.category == "row-output-lane-budget"),
+        "only the adjudicated categories tolerated: {issues:?}"
+    );
+    // The single-row-overflow finding above is exactly one warning
+    // (the electronic-circuit row); more of the same category would be
+    // a new, unadjudicated claim — trip on growth.
+    assert_eq!(
+        issues.iter().filter(|i| i.category == "row-output-lane-budget").count(),
+        1,
+        "row-output-lane-budget warning count grew past the adjudicated 1: {issues:?}"
+    );
 }
 
 /// Print geometry hashes for registry seeding.

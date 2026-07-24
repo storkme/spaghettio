@@ -476,6 +476,7 @@ pub fn validate(
         Box::new(|| inserters::check_inserter_direction(layout)),
         Box::new(|| inserters::check_inserter_throughput(layout, solver)),
         Box::new(|| inserters::check_inserter_item_throughput(layout, solver)),
+        Box::new(|| inserters::check_row_output_lane_budget(layout, solver)),
         Box::new(|| check_pipe_isolation(layout)),
         Box::new(|| check_fluid_port_connectivity(layout, layout_style)),
         Box::new(|| check_fluid_network_connectivity(layout)),

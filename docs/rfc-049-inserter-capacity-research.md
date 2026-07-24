@@ -1,6 +1,6 @@
 # RFC-049: Inserter capacity research (hand-size axis)
 
-Registry: [`rfcs.md`](rfcs.md). Status: **Complete** (2026-07-22; in-game anchor open — kill 4; input-side measured-data gap open — #343). **2026-07-23 (#385): the belt-drop (output-side) swing term is superseded by a sim-measured min-form — see the decision log's newest entry; this RFC's own belt-drop decomposition is now one half of `common::belt_drop_rate`'s `min(swing_term, lane_cap_term)`, not the whole model.**
+Registry: [`rfcs.md`](rfcs.md). Status: **Complete, all three phases** (2026-07-24; in-game anchor open — kill 4). Input-side measured-data gap CLOSED via the Phase-2 calibration matrix (#343/#378); the belt-drop (output-side) swing term superseded 2026-07-23 by the sim-measured min-form (#385/#394 — this RFC's decomposition is one half of `belt_drop_rate`'s `min(swing_term, lane_cap_term)`); Phase 3 (the ladder sizes to the declared level) merged with its gate closed under the honest-or-at-plan criterion — see the decision log.
 
 ## Summary
 
@@ -524,3 +524,44 @@ table (Phase 3).
   plus monotonicity. Review findings 2–4 (Lua-table drift guard,
   parity self-audit into kit_errors + report-surfaced bonuses,
   bless/check level-mismatch test) all landed in the same pass.*
+
+- **2026-07-22 — Phase 3: the sizing ladder honors the declared level.**
+  The Phase-2 close-out deferred L>0-aware placement as a user-facing
+  trade; decided jointly (user + session, 2026-07-22): the axis is
+  user-DECLARED, exactly like belt tier — honoring it is not
+  auto-escalation, and refusing to use it ignores the user's input.
+  Landed: `size_side` (input sizing) and `contest_favors_far` (near/far
+  slot contests) take the research level and rate through the measured
+  `machine_feed_rate`; `capped_limit` diagnoses counterfactuals in the
+  same level world; threaded through all template call sites,
+  `voider_row`/`scrap_recycling_row`, and the placer. At L0 bit-identical
+  (792 unit + 60 e2e green untouched). Differentials pinned: 3.0/s input
+  thins stack→single-regular at L7; far ceiling 1.2→4.8; a 13.0-near vs
+  1.0-far contest flips with the level. Sim verification of an
+  L7-thinned fixture through the parity harness queued behind the
+  running sweep. Corroborating datum from the same day's parity re-runs:
+  ec10 FAILS at L0-parity hands — the four #352 warnings were correct
+  at the semantics they were computed under, confirming both the L0
+  floor's honesty and the value of sizing to the declared level.
+
+- **2026-07-22 — Phase 3 review residual (recorded, non-blocking):**
+  `capped_limit` diagnoses every capped plan with `size_side`'s
+  machine-feed table, including plans that were sized by the belt-drop
+  ladder — pre-dating Phase 3, but at L≥3 the two tables now diverge in
+  a new direction (`belt_drop_rate(stack)` runs ahead of
+  `machine_feed_rate(stack)`), so belt-drop shortfall traces can
+  under-report actionable causes. Explainability-only (no sizing
+  impact); pick up with the trace/explainability work.
+
+- **2026-07-24 — Phase 3 verification gate: closed under the
+  honest-or-at-plan criterion.** The regenerated ec10-L7 fixture (Phase-3
+  ladder + #394 constants + #402 lane-budget check) generates with
+  exactly one warning — `row-output-lane-budget` on the copper-plate row
+  (15.00/s needed vs the 13.00/s measured bridged ceiling) — and the
+  parity sim measures 5.00/10, the same floor three prior runs found.
+  The validator and the game now tell the same story: the L7 layout is
+  no longer clean-but-failing but priced. Merging Phase 3 is therefore
+  safe: L>0 sizing uses measured rates, and any layout the thinning
+  cannot serve is warned at generation time. The plate row's actual FIX
+  (a second belt-out or both-lane loading) is engine-improvement work
+  tracked outside this RFC.*
