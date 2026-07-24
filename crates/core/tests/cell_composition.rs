@@ -510,6 +510,23 @@ fn chain_capacity_reaches_the_placer() {
     );
 }
 
+/// #422 review finding 1: mega-containing chains must REFUSE nonzero
+/// declared capacity until the mega bootstrap threads it too — an L7
+/// declaration over an L0-sized mega interior is a mixed-world lie.
+#[test]
+fn mega_chain_refuses_nonzero_capacity() {
+    use spaghettio_core::bus::cells::chain::compose_chain_with_capacity;
+    let inputs: FxHashSet<String> =
+        ["iron-ore", "copper-ore", "crude-oil", "water", "coal"].iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "advanced-circuit", 2.0, &inputs, &MachinePalette::default(),
+        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+    ).unwrap();
+    let err = compose_chain_with_capacity(&sr, 7).expect_err("mixed world must refuse");
+    assert!(err.contains("mega-cell interiors"), "refusal must cite the gap: {err}");
+    compose_chain_with_capacity(&sr, 0).expect("L0 mega chain still composes");
+}
+
 #[test]
 fn cell_registry_hashes_current() {
     use spaghettio_core::bus::cells::chain::compose_chain;

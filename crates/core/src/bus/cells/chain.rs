@@ -627,6 +627,18 @@ pub fn compose_chain_with_capacity(
     // take mega_plan = None and every branch below is bit-identical to
     // the pre-Phase-B placer (the registry gate enforces it).
     let mega_plan = super::mega::mega_subgraph(sr)?;
+    // #415 stop-gap (#422 review finding 1): the mega bootstrap
+    // (`mega.rs` generate path) does not yet thread capacity — a
+    // mega-containing chain at L>0 would size its solid cells at the
+    // declared level but its mega interior at L0, then DECLARE the
+    // whole layout at L>0. Refuse loudly instead of declaring a mixed
+    // world; threading the mega path is the recorded follow-up that
+    // unblocks this.
+    if inserter_capacity != 0 && mega_plan.is_some() {
+        return Err(format!(
+            "declared inserter capacity L{inserter_capacity} is not yet threaded into              mega-cell interiors (#415 follow-up) — refusing a mixed-world declaration"
+        ));
+    }
     const MEGA_PREFIX: &str = "mega:";
 
     let produced: FxHashSet<&str> = sr
