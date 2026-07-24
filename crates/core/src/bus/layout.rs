@@ -2874,11 +2874,16 @@ mod tests {
             !di_inserters.is_empty(),
             "layout should contain DI bridge inserters carrying copper-cable"
         );
-        // One bridge inserter per EC machine (4 machines = 4 inserters).
+        // Two bridge inserters per EC machine (4 machines = 8). The bridge
+        // spans a 2-tile gap so it must be long-handed — the only reach-2
+        // inserter (I8a) — capped at 1.2/s (L0) to 4.8/s (L7), while each EC
+        // machine wants 7.5/s of cable. The ladder therefore fills the
+        // bridge's column budget; `BRIDGE_EXTRA_COLS` caps that at 2 per
+        // machine so the gap row stays routable (see `stamp_di_bridge`).
         assert_eq!(
             di_inserters.len(),
-            4,
-            "expected 4 DI bridge inserters (one per EC machine), got {}",
+            8,
+            "expected 8 DI bridge inserters (two per EC machine), got {}",
             di_inserters.len()
         );
         // All facing south (pick from producer belt north, drop to consumer belt south).
@@ -2911,6 +2916,66 @@ mod tests {
             reach_issues.is_empty(),
             "DI producer's bridge-consumed output belt must not trip \
              belt-flow-reachability: {reach_issues:?}"
+        );
+    }
+
+    /// The DI bridge's reach-2 ceiling is real and research-dependent: the
+    /// bridge must be long-handed (I8a — the only reach-2 inserter), so each
+    /// bridge inserter moves 1.2/s at L0 and 4.8/s at L7 while an EC machine
+    /// wants 7.5/s of copper-cable. With two bridge inserters per machine
+    /// (the routable column budget) the coupling is under-fed at low research
+    /// and fully fed at L7 — so `input-rate-delivery` must warn honestly at
+    /// L0 and be CLEAN at L7. Guards both directions: a regression that
+    /// silently disables DI (bridge not stamped → item quietly rerouted over
+    /// the bus) shows up as L0 going clean.
+    #[test]
+    fn di_bridge_feeds_cable_only_at_high_research() {
+        let inputs: FxHashSet<String> =
+            ["iron-plate", "copper-plate"].iter().map(|s| s.to_string()).collect();
+        let sr = crate::solver::solve_with_exclusions(
+            "electronic-circuit",
+            10.0,
+            &inputs,
+            "assembling-machine-3",
+            &FxHashSet::default(),
+        )
+        .expect("solve electronic-circuit@10/s");
+
+        let delivery_warnings = |level: u8| -> usize {
+            let layout = build_bus_layout(
+                &sr,
+                LayoutOptions {
+                    direct_insertion: true,
+                    inserter_capacity: level,
+                    ..Default::default()
+                },
+            )
+            .expect("layout should succeed");
+            // The bridge must actually exist — otherwise "no delivery
+            // warnings" would just mean DI silently fell back to the bus.
+            let bridges = layout
+                .entities
+                .iter()
+                .filter(|e| {
+                    e.segment_id.as_deref().is_some_and(|s| s.starts_with("di-bridge:"))
+                })
+                .count();
+            assert_eq!(bridges, 8, "L{level}: DI bridge must be stamped (got {bridges})");
+            crate::validate::belt_flow::check_input_rate_delivery(&layout, Some(&sr))
+                .iter()
+                .filter(|i| i.message.contains("copper-cable"))
+                .count()
+        };
+
+        assert!(
+            delivery_warnings(0) > 0,
+            "L0: two long-handed bridges (2.4/s) cannot feed 7.5/s of cable — \
+             this must warn, not pass silently"
+        );
+        assert_eq!(
+            delivery_warnings(7),
+            0,
+            "L7: two long-handed bridges (9.6/s) cover the 7.5/s cable demand"
         );
     }
 }

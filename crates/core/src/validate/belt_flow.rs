@@ -3349,23 +3349,54 @@ pub fn check_input_rate_delivery(
     // bridge (a single reach-2 long-handed inserter cannot sustain a
     // high-rate coupling like copper-cable) still warns honestly instead of
     // being rubber-stamped.
+    // The credit follows the BELT, not just the drop tile: a bridge drops
+    // upstream of the consumer inserters' pickup tiles and the belt carries
+    // the items down to them (on the cable→EC row the bridge drops at x=5
+    // on an east-flowing belt whose pickups are x=6,9,…). So each bridge
+    // credits every tile downstream of its drop. Approximation, stated:
+    // consumption by an upstream machine is not subtracted, so this is an
+    // upper bound on what arrives at a downstream tile — the same
+    // simplification the surrounding lane-rate comparison makes.
     let mut di_bridge_delivery: FxHashMap<((i32, i32), String), f64> = FxHashMap::default();
-    for ins in &layout.entities {
-        if !is_inserter(&ins.name) || !super::is_di_bridge_inserter(ins.segment_id.as_deref()) {
-            continue;
+    {
+        let di_bridges: Vec<&PlacedEntity> = layout
+            .entities
+            .iter()
+            .filter(|e| {
+                is_inserter(&e.name) && super::is_di_bridge_inserter(e.segment_id.as_deref())
+            })
+            .collect();
+        if !di_bridges.is_empty() {
+            let belt_dir_map = belt_dir_map_from(&layout.entities);
+            let ug_pairs = build_ug_pairs(layout);
+            let splitter_siblings = build_splitter_siblings(layout);
+            for ins in di_bridges {
+                let Some(item) = ins.carries.clone() else {
+                    continue;
+                };
+                let (dx, dy) = dir_to_vec(ins.direction);
+                let reach = inserter_reach(&ins.name);
+                let drop_pos = (ins.x + dx * reach, ins.y + dy * reach);
+                let rate = crate::common::machine_feed_rate(
+                    &ins.name,
+                    ins.quality.unwrap_or_default(),
+                    layout.inserter_capacity,
+                );
+                let starts: FxHashSet<(i32, i32)> = std::iter::once(drop_pos).collect();
+                let reached = bfs_belt_downstream(
+                    &starts,
+                    &belt_dir_map,
+                    Some(&ug_pairs),
+                    Some(&splitter_siblings),
+                );
+                // `bfs_belt_downstream` already includes the start tile when
+                // it is a belt; when the drop is not onto a belt at all the
+                // set is empty and this bridge credits no belt (correct).
+                for tile in &reached {
+                    *di_bridge_delivery.entry((*tile, item.clone())).or_insert(0.0) += rate;
+                }
+            }
         }
-        let Some(item) = ins.carries.clone() else {
-            continue;
-        };
-        let (dx, dy) = dir_to_vec(ins.direction);
-        let reach = inserter_reach(&ins.name);
-        let drop_pos = (ins.x + dx * reach, ins.y + dy * reach);
-        let rate = crate::common::machine_feed_rate(
-            &ins.name,
-            ins.quality.unwrap_or_default(),
-            layout.inserter_capacity,
-        );
-        *di_bridge_delivery.entry((drop_pos, item)).or_insert(0.0) += rate;
     }
 
     // Second pass: check each inserter's available rate vs its share of the required rate.

@@ -1683,24 +1683,50 @@ fn stamp_di_bridge(
     let di_input = consumer_spec.inputs.iter().find(|f| f.item == item);
     let rate_per_machine = di_input.map(|f| f.rate * utilization).unwrap_or(0.0);
 
-    // Size the inserter: Reach::Far (long-handed, reach 2) with 0 extra
-    // columns (one inserter per machine at the dx=1 slot).
+    // Size the inserter: Reach::Far — the bridge spans a 2-tile gap, and
+    // long-handed is the ONLY reach-2 inserter in vanilla (I8a: no fast or
+    // stack long-handed exists), so the per-inserter ceiling is 1.2/s at L0
+    // rising to 4.8/s at L7. A single inserter therefore cannot carry a
+    // high-rate coupling (copper-cable into EC needs 7.5/s per machine), so
+    // give the ladder the machine's REAL free-column budget instead of a
+    // hardcoded 0: the gap row is otherwise empty across the machine's own
+    // span, so `mw` slots are available (`mw - 1` beyond the first). Rates
+    // the budget still can't cover stay honestly warned by
+    // `input-rate-delivery` rather than silently under-fed.
+    // Column budget: NOT the machine's full width. The gap row is CONTESTED
+    // space — the ghost router threads tap belts through it and `place_poles`
+    // lands poles there. Measured (EC@10/s from plates): giving the bridge
+    // every column of a 3-wide machine fills the gap row edge-to-edge, the
+    // router can no longer cross it, and the retry that follows moves the
+    // consumer row two tiles down — out of the long-handed inserter's
+    // exact-2 reach — which silently disables DI altogether (the fallback
+    // then routes the item over the bus). One extra column (two inserters
+    // per machine) leaves a free column per machine and places cleanly with
+    // no retry.
+    const BRIDGE_EXTRA_COLS: usize = 1;
+    let slots = (mw.max(1) as usize).min(1 + BRIDGE_EXTRA_COLS);
     let plan = size_side(
         rate_per_machine,
         Reach::Far,
-        0,
+        slots.saturating_sub(1),
         max_inserter_tier,
         quality,
         level,
     );
 
+    // Column order within the machine's own span: dx=1 first (the standard
+    // inserter column, so the one-inserter case is positionally unchanged),
+    // then outward. Staying inside `0..mw` keeps a multi-inserter bridge
+    // from spilling into the neighbouring machine's columns.
+    let dxs: Vec<i32> = std::iter::once(1)
+        .chain((0..slots as i32).filter(|&d| d != 1))
+        .take(plan.count.max(1))
+        .collect();
+
     let mut entities = Vec::new();
     let seg = Some(format!("di-bridge:{item}:{}", consumer_spec.recipe));
     for &mx in &mxs {
-        // Stamp `plan.count` inserters at this machine's columns.
-        // Baseline at dx=1 (the standard inserter column).
-        for n in 0..plan.count.max(1) {
-            let dx = 1 + n as i32;
+        for &dx in &dxs {
             entities.push(PlacedEntity {
                 name: plan.entity.to_string(),
                 x: mx + dx,
