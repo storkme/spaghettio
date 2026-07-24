@@ -140,6 +140,32 @@ feeds and the composed layout must pass the pipe-isolation validators
 
 ## Decision log
 
+- *2026-07-24 (latest) — residual-18 diagnosis SHARPENED; one fix
+  attempt made and REVERTED. The trunk emitter's silent
+  `hard-tile continue` was bridged with in-segment South UG pairs —
+  scoped first to all hard tiles (regressed two e2e baselines:
+  downstream machinery like crossing zones owns some of those
+  skips), then to splitter-second-tiles only (still: mouths land on
+  tap rows/own hard tiles → asymmetric stamping → unpaired inputs;
+  PU@2-AM2 baseline stayed red; block errors shifted 6→8 not
+  improved). REVERTED cleanly — baselines green again. The sharpened
+  truth: at PITCH-1 trunks with trunks on BOTH sides, a tap-off
+  SPLITTER's second tile has no hostable position at all — the
+  horizontal interactions (feed rows crossing neighbor columns) are
+  already solved by the crossing zones; only the 2-tile splitter
+  entity is unresolvable by routing. Candidate fixes for the next
+  unit, in rough preference order: (a) lane planner gives interior
+  multi-tap solid lanes a free east neighbor column (pitch bump only
+  when a splitter tap will land — narrow blast radius vs global
+  pitch change); (b) splitter side-flip when exactly one neighbor
+  column is free; (c) tap strategy avoids splitter taps on
+  both-sides-blocked lanes (single-tap/direct arrangements);
+  (d) mouth-tile-aware bridging (the reverted approach hardened —
+  most machinery-entangled, least preferred). Merger unpaired-output
+  at block-local (73,39) still separate and undiagnosed. Both
+  reproduce standalone: compose_mega_block(USP@2 sub-solve, scale
+  0.5) → 6 errors.*
+
 - *2026-07-24 (later) — C3 LANDED, C2 LANDED, USP@2 composes
   end-to-end (2232×193, 48k entities — the largest layout ever
   composed); error ladder 71 → 44 → 27 → 18 through five fixes, each
