@@ -130,16 +130,20 @@ fn ug_reach(name: &str) -> i32 {
 
 /// Footprint tiles covered by an entity (top-left + oriented dims).
 fn tiles_of(e: &PlacedEntity) -> Vec<(i32, i32)> {
-    let (mut w, mut h) = if common::is_splitter(e.name.as_str()) {
+    // Splitter dims come back already direction-oriented (E/W → (1, 2));
+    // re-applying the E/W rotation below would undo that (#389 review bot
+    // finding). Only `entity_size` results are unoriented.
+    let (w, h) = if common::is_splitter(e.name.as_str()) {
         common::oriented_splitter_dims(e.name.as_str(), e.direction)
             .unwrap_or((2, 1))
     } else {
-        common::entity_size(e.name.as_str())
+        let (mut w, mut h) = common::entity_size(e.name.as_str());
+        // rotate non-square footprints for E/W orientation
+        if matches!(e.direction, EntityDirection::East | EntityDirection::West) && w != h {
+            std::mem::swap(&mut w, &mut h);
+        }
+        (w, h)
     };
-    // rotate non-square footprints for E/W orientation
-    if matches!(e.direction, EntityDirection::East | EntityDirection::West) && w != h {
-        std::mem::swap(&mut w, &mut h);
-    }
     let mut out = Vec::with_capacity((w * h) as usize);
     for dx in 0..w as i32 {
         for dy in 0..h as i32 {
@@ -822,6 +826,25 @@ mod tests {
         ]);
         assert_eq!(f.archetype, "balancer");
         assert_eq!(f.chain_level, "none");
+    }
+
+    /// #389 review-bot finding: `tiles_of` double-rotated E/W splitter
+    /// footprints — `oriented_splitter_dims` already returns oriented dims
+    /// (east → (1, 2)), and the extra E/W swap turned them back horizontal,
+    /// emitting (x+1, y) instead of (x, y+1). Pin via network bridging: a
+    /// probe belt at (2, 2) only joins the splitter's network through its
+    /// second tile at (2, 1).
+    #[test]
+    fn east_splitter_second_tile_is_vertical() {
+        let f = classify_only(vec![
+            ent("splitter", 2, 0, EntityDirection::East),
+            ent("transport-belt", 2, 2, EntityDirection::East),
+        ]);
+        assert_eq!(
+            f.belt_networks, 1,
+            "probe belt at (2,2) must bridge to the east splitter's second tile (2,1); \
+             2 networks means the footprint was emitted horizontally (double rotation)"
+        );
     }
 
     #[test]
