@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 pub const PINNED_VERSION: &str = "2.0.77";
 
-/// Default cache dir: `~/.cache/spaghettio-sim/factorio-2.0.76`.
+/// Default cache dir: `~/.cache/spaghettio-sim/factorio-2.0.77`.
 pub fn default_install_dir() -> Result<PathBuf, String> {
     let home = std::env::var("HOME").map_err(|_| "HOME is not set; cannot resolve the default cache dir (set SPAGHETTIO_FACTORIO_DIR instead)".to_string())?;
     Ok(PathBuf::from(home)

@@ -245,18 +245,19 @@ declared capacity/stacking are checked fields): currently
 AC-from-plates (PASS −0.3%) and mil5-from-plates (PASS, delivered
 5.00/s exact — first physical validation of the westward bypasses),
 both at declared capacity 0 in the post-#390 honest world. EC-row
-geometries are REGISTERED AS WARNED (policy 2026-07-24, user-approved
-on [#383](https://github.com/storkme/spaghettio/issues/383)): the
-post-#394/#381 re-measurement reproduced the sweep bit-identically
-(−8.0% d1 / −5.3% d7 / −7.7% ec30-d1) and fully attributed it — the
-level-invariant residual is the EC-row yellow output-belt ceiling
-(row-output-lane-budget warns on the exact geometry at generation),
-plus at L1 the input bound, which #381 cannot reach on the composed
-path until [#415](https://github.com/storkme/spaghettio/issues/415)
-threads `inserter_capacity` through `generate_cell_layout`. Entries
-carry `known_residual` and render "SIM-VERIFIED AS WARNED", never "at
-plan"; they graduate at plan when the EC-row output template work
-lands. mil5-from-ore FAILs flat at −28.7% (firearm rows' inserter
+geometries are RESOLVED (supersedes the 2026-07-24 "REGISTERED AS
+WARNED" policy on
+[#383](https://github.com/storkme/spaghettio/issues/383)). The −8% was
+fully attributed to the INPUT side — a long-handed inserter bind at
+hand 1 (2 LH × 1.2 = 2.4/s < 2.5/s demand), NOT an output-belt ceiling.
+[#431](https://github.com/storkme/spaghettio/issues/431) made inserter
+capacity L2 the engine default, clearing the bind, and its declared-
+level sweep falsified the output ceiling outright: the same byte-
+identical bridged EC row delivers the FULL 15.00/s at L2+ with zero
+output-blocked machines at every level. [PR #434] then recalibrated
+`ROW_LANE_FACTOR_BRIDGED` 1.733 → 2.0 (full both-lane nominal), so the
+`row-output-lane-budget` warnings on those geometries no longer fire —
+they validate clean at the L2 default and register at plan. mil5-from-ore FAILs flat at −28.7% (firearm rows' inserter
 COUNT) and stays unregistered. Full trail:
 [`rfc-051-cell-composition-integration.md`](rfc-051-cell-composition-integration.md).
 
