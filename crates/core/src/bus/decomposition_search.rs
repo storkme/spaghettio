@@ -308,7 +308,7 @@ impl DecompositionCandidate for ModuleSizeSplit {
             inserter_capacity: opts.inserter_capacity,
             cell_composition: opts.cell_composition,
             splitter_tap_spacers: opts.splitter_tap_spacers,
-            ..Default::default()
+            direct_insertion: opts.direct_insertion,
         };
         run_layout_with_retry(&transformed, &inner_opts)
     }
@@ -793,6 +793,7 @@ pub fn select_best_decomposition(
     // eligibility-gated, and catch_unwind — the composer's internal
     // asserts must degrade to the bus candidates, never abort the solve.
     let try_cells = opts.cell_composition == crate::bus::cells::CellComposition::Candidate
+        && !opts.direct_insertion // DI needs both rows in one place_rows call
         && opts
             .max_belt_tier
             .as_deref()

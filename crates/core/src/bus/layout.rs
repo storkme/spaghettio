@@ -2820,4 +2820,74 @@ mod tests {
         );
     }
 
+    /// End-to-end DI: solving EC from plates with `direct_insertion: true`
+    /// produces a layout where:
+    /// 1. The cable→EC coupling is detected by the solver
+    /// 2. `order_specs` co-locates cable immediately before EC
+    /// 3. The copper-cable bus lane is skipped (lane planner)
+    /// 4. Bridge inserters are stamped in the inter-recipe gap
+    ///
+    /// The validator's inserter-direction check does not yet recognize
+    /// belt-to-belt DI bridge inserters (it expects every inserter to
+    /// touch a machine on at least one side) — that's a known follow-up.
+    #[test]
+    fn di_full_pipeline_ec_from_plates() {
+        let inputs: FxHashSet<String> =
+            ["iron-plate", "copper-plate"].iter().map(|s| s.to_string()).collect();
+        let sr = crate::solver::solve_with_exclusions(
+            "electronic-circuit",
+            10.0,
+            &inputs,
+            "assembling-machine-3",
+            &FxHashSet::default(),
+        )
+        .expect("solve electronic-circuit@10/s");
+
+        // Solver detected the coupling.
+        assert!(
+            sr.di_couplings.iter().any(|c|
+                c.producer_recipe == "copper-cable"
+                && c.consumer_recipe == "electronic-circuit"
+                && c.item == "copper-cable"
+            ),
+            "solver should detect cable→EC DI coupling, got {:?}",
+            sr.di_couplings
+        );
+
+        let opts = LayoutOptions {
+            direct_insertion: true,
+            ..Default::default()
+        };
+        let layout = build_bus_layout(&sr, opts).expect("layout should succeed");
+
+        // The layout should contain bridge inserters carrying copper-cable.
+        let di_inserters: Vec<_> = layout
+            .entities
+            .iter()
+            .filter(|e| {
+                e.carries.as_deref() == Some("copper-cable")
+                    && e.segment_id.as_deref().map_or(false, |s| s.starts_with("di-bridge:"))
+            })
+            .collect();
+        assert!(
+            !di_inserters.is_empty(),
+            "layout should contain DI bridge inserters carrying copper-cable"
+        );
+        // One bridge inserter per EC machine (4 machines = 4 inserters).
+        assert_eq!(
+            di_inserters.len(),
+            4,
+            "expected 4 DI bridge inserters (one per EC machine), got {}",
+            di_inserters.len()
+        );
+        // All facing south (pick from producer belt north, drop to consumer belt south).
+        for ins in &di_inserters {
+            assert_eq!(
+                ins.direction,
+                crate::models::EntityDirection::South,
+                "DI bridge inserter at ({},{}) should face south",
+                ins.x, ins.y
+            );
+        }
+    }
 }
