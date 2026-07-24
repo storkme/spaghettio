@@ -140,6 +140,43 @@ feeds and the composed layout must pass the pipe-isolation validators
 
 ## Decision log
 
+- *2026-07-24 — Increment 2 DELIVERED (chain-fed mega inputs) and
+  KILL-2 RESOLVED: NOT INVOKED. `mega_subgraph` now collects inputs
+  produced by non-member chain specs as `plan.chain_fed` instead of
+  refusing; the super-spec DECLARES them, so the generic
+  consumer/fan-out/corridor machinery routes producers into the mega
+  like any consumer cell. Geometry: chain-fed records take the
+  adapter's DEEPEST lanes with west-edge entries at (0, lane_row) —
+  one east-facing port per record, distinct approach rows, straight
+  merges; residual crossings consolidate onto the (always-solid)
+  chain-fed lateral, resolved by UG hops under any occupied column,
+  with the orig-adjacent case retrofitting the crossing solid tail
+  into a vertical UG pair. Consumer-less mega drains extend to the
+  chain drain row (latent dead-end + rig-depth gap, exposed by PU
+  whose export has no chain consumer). Honesty note: the bus no
+  longer hard-fails PU@2 (junction geometry shifted under #408) — the
+  class's bus-refusal win lives at PU@4 (unresolved junctions), which
+  composes 0 errors (gate `mega_chain_pu4_resolves_bus_failure`).
+  **Sim (after a harness fix — the scenario's fixed radius-12 chunk
+  pregeneration truncated any fixture wider than ~768 tiles;
+  build_blueprint creates no ghosts on ungenerated chunks, so the
+  2704-wide PU@4 chain lost 2/3 of its entities and reported dead
+  feed rigs/NO DATA; radius now derives from manifest dims):
+  27498/27498 revived, CONVERGED, zero kit/fluid errors — the deepest
+  chain ever measured, raw ore → plates → cable/EC → AC + oil →
+  sulfur → acid → PU across 8 quantized copies. PU 3.17/s of 4.00
+  (−20%)**, and the chain-fed machinery is NOT the bottleneck: AC (a
+  chain-fed input) overproduces +4.1%, plastic +10%, PG −4.7%
+  demand-limited; the deficit originates at the plate/sulfur cells'
+  DECLARED inserter/lane bounds (#383 class — plates −21% at the
+  source, sulfur output inserter declared 0.84/1.00). Not registered
+  (registry records measured PASS baselines); registers when #383's
+  template sizing lifts the declared bounds. With both named
+  increments landed — chem (validator + fluid-proven sim) and PU
+  (validator + converged sim) — the deferred kill-2 criterion
+  resolves: the chain-integration machinery has real bus-refusal
+  wins; the architecture stands.*
+
 - *2026-07-24 — #408 adversarial review folds (APPROVE-WITH-NITS; the
   reviewer independently re-derived the reach semantics from game data
   and re-ran the full battery). The one MAJOR is SIGNED OFF as a
