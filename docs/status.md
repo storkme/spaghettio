@@ -127,6 +127,32 @@ budgets — utility@2/s FAIL×2 is the most reachable new fix target.
 
 ## Recent RFC close-outs
 
+**`rfc-053-direct-insertion-cells.md` Phase 0 (2026-07-25, PR #436 —
+RFC ACTIVE, not closed)**: machine→inserter→machine DI, the topology
+#429 asked for and the corpus overwhelmingly builds. Evidence is now
+reproducible from a clean checkout via the tracked `di-patterns`
+miner (`cargo run --release -p spaghettio_mining --bin di-patterns`):
+16,507 DI observations, 4,116 of them `copper-cable →
+electronic-circuit`, of whose top-20 geometry patterns (3,866) all but
+one use a **1-tile gap**. **KC1 (ratio feasibility) PASSED with
+margin** — the worst case across the corpus top-10 is the canonical
+cable→EC at 2.50/s per inserter slot against 19.2/s available from a
+stack inserter at the L2 default; the feasibility rule reduces to
+`machine_feed_rate ≥ 2.5/s`, satisfied at engine defaults and for a
+`Fast`-capped user. **KC6 (fluid coverage) FIRED (5/10 vs a threshold
+of 2)** and was diagnosed as a criterion-specification defect —
+it conflated a *fluid coupling* (impossible: inserters cannot move
+fluid) with a *fluid-adjacent machine* (common), and counted pairs
+unweighted where its rationale was demand (solids-only actually covers
+**69.4%** of top-10 instances, and the dominant pair is fully solid).
+Resolution was the criterion's own prescribed action — **re-scope, not
+reprieve**: pipes moved out of Non-goals into required Phase 2 scope.
+Phases 1–4 remain; **Phase 1 is blocked on #432** (`DICoupling` and
+`direct_insertion` do not exist on `main`). Recorded data gap:
+`electric-furnace → electric-furnace` is the 2nd-commonest DI pair
+(1,585) but is invisible to recipe-keyed analysis — furnaces carry no
+explicit recipe.
+
 **`rfc-052-oil-mega-cell.md` close-out (2026-07-24, Phases A/B/C —
 PRs #401/#403/#405/#408/#411/#421)**: fluid subgraphs compose as
 UNCROPPED mega-cells inside solid chains. Delivered: the first
