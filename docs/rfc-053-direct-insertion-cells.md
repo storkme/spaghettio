@@ -496,7 +496,19 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   recipe-resolution gap noted above.
 - **Phase 1 — the DI cell.** `bus::di_cell` for the simplest shape: one
   producer recipe, one consumer recipe, consumer's only solid input is
-  the DI'd item. Straddle offsets + min-cost-flow assignment.
+  the DI'd item.
+  - **1a ✅ LANDED — straddle geometry + edge assignment.**
+    `bus::di_cell::plan_straddle` is the algorithmic core: producer and
+    consumer machine positions, the producer→consumer edge set, per-edge
+    inserter slots, and the cell's binding `required_rate()`. Pure
+    geometry + flow, no entity placement. Independently reproduces this
+    RFC's worked example (positions `[1,5,10,14]`, the eight-edge set
+    with 2/1 slot splits, `required_rate == 2.5/s`) — the construction
+    was derived from flow-interval overlap and landed on the
+    hand-derived geometry without being fitted to it.
+  - **1b — placer wiring** (remaining): suppress the coupled item's row
+    belts, place the two rows one tile apart, stamp reach-1 inserters
+    from the planned edges, and teach the lane planner to skip the item.
 - **Phase 2 — face allocation, now including fluids (re-scoped by the
   KC6 trip).** The consumer's remaining flows on the opposite face,
   mixed reach (reach-2 stepping over a near belt), **plus pipe placement
@@ -596,3 +608,24 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   - *Phase-0 debt carried to Phase 1: emit the canonicalized,
     version-gated `di_pattern_library.rs` (the census currently lives in
     a gitignored example) and close the furnace recipe-resolution gap.*
+
+- *2026-07-25 — **Phase 1a landed: `bus::di_cell::plan_straddle`.** The
+  straddle is derived from FLOW-INTERVAL OVERLAP — producer `i` owns
+  `[i·prod, (i+1)·prod)` of the item stream, consumer `j` owns
+  `[j·demand, (j+1)·demand)`, and their intersection is the flow that
+  must cross that edge — then each consumer is positioned so its column
+  overlaps split in proportion to those flows. That construction
+  reproduces the RFC's published geometry exactly (consumer origins
+  `[1,5,10,14]`, eight edges alternating 5.0/2.5 across 2/1 slots,
+  `required_rate` 2.5/s) WITHOUT being fitted to it, which is meaningful
+  corroboration that the hand-derived Design-section example was right.
+  Also pinned: both-sides balance (every producer ships exactly 5.0/s,
+  every consumer receives exactly 7.5/s), the tier×level feasibility
+  matrix against the real `machine_feed_rate` table, 1:1 couplings
+  needing no offset, and non-overlap of consumer machines. Deliberate
+  refusals rather than approximations: unbalanced couplings (the surplus
+  has to reach the bus — not a DI cell), and consumers straddling more
+  than two producers (Phase 3's multi-band cell). 8 unit tests; full
+  suite 863 lib + 61 e2e green, clippy clean. Remaining for Phase 1b is
+  the placer wiring — belt suppression, 1-tile row gap, reach-1 inserter
+  stamping from the planned edges, lane-planner skip.*
