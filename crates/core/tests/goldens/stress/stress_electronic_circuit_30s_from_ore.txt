@@ -1,6 +1,6 @@
 === stress_electronic_circuit_30s_from_ore scoreboard ===
 entities:         4966
-total warnings:   5
+total warnings:   0
 zones solved:     0
 zones skipped:    0
 bridges dropped:  0
@@ -13,7 +13,7 @@ total poles:      196
 zero-slack poles: 0
 median slack:     4.0
 warnings by category:
-  row-output-lane-budget: 5
+  (none)
 errors by category:
   (none)
 layout hash: fcb254ed8d57dadf978ea4b2210da4349a3ceeb6e9a8c8a6cc6fca1ecd1641ce

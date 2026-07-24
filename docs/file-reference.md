@@ -68,9 +68,9 @@ Full reference table. The most-visited files are summarised in `CLAUDE.md`.
 | `crates/sim-harness/src/scenario.rs` | Scenario `control.lua` codegen: paste + superforce-build + revive, feed/drain boundary kit, warmup/window/stability run params |
 | `crates/sim-harness/src/report.rs` | Planned-vs-measured report; one-sided PASS≥98% / WARN≥90% / FAIL verdicts (RFC-050 KC2) |
 | `crates/sim-harness/src/baseline.rs` | Measured-baseline freeze/drift-check backing `bless`/`check`; blessed set in `crates/sim-harness/baselines/` |
-| `crates/sim-harness/src/fetch.rs` | Pinned 2.0.76 headless download via system curl/tar; harness server settings + SA mod-list |
+| `crates/sim-harness/src/fetch.rs` | Pinned 2.0.77 headless download via system curl/tar; harness server settings + SA mod-list |
 | `crates/sim-harness/src/manifest.rs` | Parser for the `export_with_manifest` JSON schema (feeds/drains, bbox, dims, planned rates) |
-| `crates/sim-harness/src/paths.rs` | Install-dir resolution: `SPAGHETTIO_FACTORIO_DIR` override, default `~/.cache/spaghettio-sim/factorio-2.0.76` |
+| `crates/sim-harness/src/paths.rs` | Install-dir resolution: `SPAGHETTIO_FACTORIO_DIR` override, default `~/.cache/spaghettio-sim/factorio-2.0.77` |
 | `crates/sim-harness/src/checkdata.rs` | `check-data`: pinned install's dumped prototype data vs `recipes.json` parity (RFC-050 KC1) |
 
 ## Web app (`web/src/`)

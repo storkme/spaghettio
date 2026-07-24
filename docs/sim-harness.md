@@ -18,9 +18,9 @@ are opt-in, like STRESSGOLD.
 cargo run -p spaghettio_sim_harness -- fetch
 ```
 
-Downloads the **pinned Factorio 2.0.76** headless build (via system
+Downloads the **pinned Factorio 2.0.77** headless build (via system
 `curl`/`tar` — deliberately no HTTP/archive crates) into
-`~/.cache/spaghettio-sim/factorio-2.0.76`, and writes the harness server
+`~/.cache/spaghettio-sim/factorio-2.0.77`, and writes the harness server
 settings (`auto_pause: false`, autosaves off — a paused or saving server
 breaks the measurement loop) plus the Space Age mod-list. Override the
 install location with `SPAGHETTIO_FACTORIO_DIR`. The pin is load-bearing

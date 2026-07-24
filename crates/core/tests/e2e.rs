@@ -1035,12 +1035,11 @@ fn tier2_electronic_circuit() {
     // beltspan-lastinrow: the last residual (1) was the EC dual_input_row last-in-row
     // far (iron-plate) side, capped at one long-handed inserter because the far belt
     // was trimmed under the dx=1 contested column; extending it one tile clears it (1 -> 0).
-    // 2026-07-23 (#385 second half): un-restricted belt tier here lets the
-    // copper-cable row land on fast (red) belts — its 30.0/s demand still
-    // exceeds a bridged red belt-out's 2-lane realizable cap (25.5/s), a
-    // genuine sim-calibrated finding the new check now surfaces (was
-    // silently under-delivered before).
-    assert_warnings_exactly(&result, &[("row-output-lane-budget", 1)]);
+    // Re-calibrated 2026-07-24 (#383/#431): a bridged belt-out delivers
+    // its FULL 2-lane nominal (the old 1.733 floor was measured through
+    // an input-bound cell), so the cable row's 30.0/s on red is within
+    // budget and the historical warning is gone.
+    assert_warnings_exactly(&result, &[]);
     assert_produces(&result, "electronic-circuit", 10.0);
     assert_round_trip(&result);
 }
@@ -1102,12 +1101,11 @@ fn tier2_electronic_circuit_from_ore() {
     // forensics.md`) a row fed by inserter drops alone realizes only
     // ~0.85 × one lane regardless of inserter type/count/research; this
     // fixture's copper-plate row (single physical row, 24 machines, a
-    // genuine bridge present) needs 15.0/s but a bridged yellow belt-out
-    // realizes at most 12.75/s (`LANE_UTILIZATION × lane_capacity_stacked
-    // × 2 lanes`) — the exact gap #385's second half exists to catch,
-    // previously silent (this fixture's in-game delivery has been
-    // measured short of plan). Not tuned away.
-    assert_warnings_exactly(&result, &[("row-output-lane-budget", 1)]);
+    // Re-calibrated 2026-07-24 (#383/#431): bridged yellow delivers the
+    // full 15.0/s 2-lane nominal (measured at plan, zero output-blocked
+    // machines, once the L2 input bind clears) — the old floor was
+    // confounded by the input side. Warning legitimately gone.
+    assert_warnings_exactly(&result, &[]);
     assert_produces(&result, "electronic-circuit", 10.0);
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier2_electronic_circuit_from_ore");
@@ -1149,11 +1147,9 @@ fn tier2_electronic_circuit_20s_from_ore() {
     // planned hardware) are unnecessary here and stay dormant. 14 -> 0.
     // 2026-07-23 (#385 second half): un-restricted belt tier lets
     // copper-cable/copper-plate land on fast (red) belts at 20/s scale;
-    // 2 copper-cable rows + 1 copper-plate row each need 30.0/s, over a
-    // bridged red belt-out's 25.5/s 2-lane realizable cap — same
-    // sim-calibrated structural finding as the 10/s from-ore fixture,
-    // scaled up.
-    assert_warnings_exactly(&result, &[("row-output-lane-budget", 3)]);
+    // Re-calibrated 2026-07-24 (#383/#431): full 2-lane nominal — the
+    // three historical warnings are gone (see the 10/s fixture).
+    assert_warnings_exactly(&result, &[]);
     assert_produces(&result, "electronic-circuit", 20.0);
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier2_electronic_circuit_20s_from_ore");
@@ -1884,15 +1880,21 @@ fn tier4_advanced_circuit_7s_horizontal_stack_belt_pipe_crossing() {
         "{test_name}: expected exactly 0 inserter-item-throughput warnings"
     );
 
-    // 2026-07-23 (#385 second half): pin the one row-output-lane-budget
-    // warning the new check raises here (electronic-circuit's row, 14.0/s
-    // demand on a bridged yellow belt-out whose 2-lane realizable cap is
-    // 12.75/s) — a genuine, sim-calibrated finding, not tuned away.
+    // 2026-07-23 (#385 second half): the new check raised one
+    // row-output-lane-budget warning here (electronic-circuit's row,
+    // 14.0/s demand) against the bridged yellow budget then believed to
+    // be 12.75/s (0.85 × 15).
+    // 2026-07-24 (#383/#431 recalibration): that budget was measured
+    // through an input-bound cell — #431's level sweep shows bridged
+    // yellow delivering the full 15.00/s exactly at L2+. At the
+    // recalibrated ROW_LANE_FACTOR_BRIDGED = 2.0 the budget is 15.0/s,
+    // so this row's 14.0/s demand fits and the warning correctly no
+    // longer fires.
     let row_output_lane_budget_count =
         warnings.iter().filter(|i| i.category == "row-output-lane-budget").count();
     assert_eq!(
-        row_output_lane_budget_count, 1,
-        "{test_name}: expected exactly 1 row-output-lane-budget warning"
+        row_output_lane_budget_count, 0,
+        "{test_name}: row-output-lane-budget should not fire at the recalibrated budget"
     );
 }
 
@@ -2190,9 +2192,9 @@ fn tier5_processing_unit_from_ore_am3() {
     // bottoms out at copper-cable (2 rows) and copper-plate (3 rows)
     // feeding electronic-circuit — the same sim-calibrated structural
     // cap found across every EC-chain fixture: bridged fast-belt-out
-    // rows here need 30.0/26.88/26.25/s against a 25.5/s 2-lane
-    // realizable ceiling.
-    assert_warnings_exactly(&result, &[("row-output-lane-budget", 5)]);
+    // Re-calibrated 2026-07-24 (#383/#431): full 2-lane nominal covers
+    // all five rows — the historical warnings are gone.
+    assert_warnings_exactly(&result, &[]);
     assert_produces(&result, "processing-unit", 2.0);
     assert_round_trip(&result);
 }
@@ -4338,10 +4340,15 @@ fn stress_electronic_circuit_60s_red_from_ore() {
             // 60 -> 0 so any regression re-exposes them; substations stay dormant.
             // 2026-07-23 (#385 second half): +11 row-output-lane-budget — at
             // 60/s on red belts, this deep EC-from-ore chain's copper-cable/
-            // copper-plate rows exceed a bridged red belt-out's 25.5/s 2-lane
-            // realizable cap, the same sim-calibrated structural finding as
-            // every other EC-chain fixture at this scale (0 -> 11).
-            max_warnings: 11,
+            // copper-plate rows were judged to exceed a bridged red belt-out's
+            // then-believed 25.5/s 2-lane realizable cap (0 -> 11).
+            // 2026-07-24 (#383/#431 recalibration): that cap was
+            // instrument-bound. At ROW_LANE_FACTOR_BRIDGED = 2.0 a bridged red
+            // belt-out realizes the full 30.0/s nominal, which covers every
+            // row here, so all 11 warnings correctly stop firing — this
+            // fixture is back to a clean zero. Tightened 11 -> 0 (matching the
+            // re-blessed golden) so any regression re-exposes them.
+            max_warnings: 0,
             max_errors_by_category: Default::default(),
         },
     );

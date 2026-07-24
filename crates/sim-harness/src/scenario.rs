@@ -227,8 +227,14 @@ local function add_drain(s, force, exit_x, exit_y, fx, fy, lx, ly, ext_len, item
     s.create_entity{name = "express-transport-belt", position = {exit_x + fx * t, exit_y + fy * t},
                     direction = dir_from_vec(fx, fy), force = force}
   end
+  -- Rig capacity must comfortably exceed the drained rate: SIX
+  -- pickup inserters at a low declared world pull ~13.8/s from the
+  -- belt — EXACTLY the plateau chain-ec15-d1 measured, and the
+  -- d-sweep's level-shape tracks the rig's own bulk bonus (#383
+  -- re-attribution, 2026-07-24). Twelve positions doubles the bank;
+  -- pickup-side headroom is cheap and never inflates a measurement.
   local chests = {}
-  for t = ext_len - 2, ext_len do
+  for t = ext_len - 8, ext_len do
     local bx, by = exit_x + fx * t, exit_y + fy * t
     for _, side in ipairs({-1, 1}) do
       local cx, cy = bx + lx * 2 * side, by + ly * 2 * side
@@ -412,7 +418,9 @@ fn feed_call(out: &mut String, idx: usize, slot: i32, rec: &BoundaryRecord) {
 fn drain_call(out: &mut String, idx: usize, rec: &BoundaryRecord) {
     let flow = rec.direction().vector();
     let lateral = rot90(flow);
-    let ext_len = 5 + 2 * (idx as i32);
+    // Base 11 (was 5): the widened 9-position drain bank needs
+    // ext_len-8 >= 3 so every chest/inserter sits outside the layout.
+    let ext_len = 11 + 2 * (idx as i32);
     let _ = writeln!(
         out,
         "  do\n    local exit_x, exit_y = {x} - LX0 + storage.offx, {y} - LY0 + storage.offy",
@@ -474,6 +482,18 @@ end
 
     out.push_str(
         r#"
+-- Pairing support: a joining player spawns on nauvis, but the paste
+-- lives on the "lab" surface — teleport them there, centered on the
+-- layout. Observation only; the measurement never reads player state.
+script.on_event(defines.events.on_player_joined_game, function(ev)
+  local p = game.get_player(ev.player_index)
+  local s = game.get_surface("lab")
+  if p and s then
+    p.teleport({0, 0}, s)
+    game.print("[spaghettio-sim] teleported " .. p.name .. " to the lab surface")
+  end
+end)
+
 script.on_init(function()
   storage.eeis, storage.feeds, storage.fed_total = {}, {}, {}
   storage.drains, storage.drained_total = {}, {}
@@ -1077,8 +1097,11 @@ mod tests {
         let lua = build_control_lua(&m, "0eNBPFAKE", &params);
 
         // south-facing exit: flow=(0,1), lateral=(1,0) -- matches
-        // gen_harness_scenario.py's drain (fx=south, lx=east), ext_len=5.
-        assert!(lua.contains("add_drain(s, force, exit_x, exit_y, 0, 1, 1, 0, 5, \"iron-gear-wheel\")"));
+        // gen_harness_scenario.py's drain (fx=south, lx=east). ext_len
+        // is 11 + 2*idx (idx=0 here): widened 2026-07-24 from 5 so the
+        // bank spans 9 positions (`t = ext_len - 8, ext_len`) / 18
+        // inserters, keeping every chest outside the layout.
+        assert!(lua.contains("add_drain(s, force, exit_x, exit_y, 0, 1, 1, 0, 11, \"iron-gear-wheel\")"));
         assert!(lua.contains("local exit_x, exit_y = 13 - LX0 + storage.offx, 33 - LY0 + storage.offy"));
     }
 

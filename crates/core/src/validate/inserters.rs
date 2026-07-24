@@ -598,9 +598,10 @@ pub fn check_inserter_item_throughput(
 /// constants and their calibration cells live at the computation site
 /// below and in the RFC-047 decision log's 2026-07-23 row-calibration
 /// entry). A midpoint sideload bridge redistributes flow across both
-/// physical lanes and lifts the measured ceiling to ≥1.733 lanes
-/// (13.00/s delivered at plan on yellow — the measured FLOOR; the band
-/// up to the 2-lane nominal is unproven either way).
+/// physical lanes and lifts the ceiling to the belt's full both-lane
+/// nominal (2.0 × 7.5 = 15.00/s on yellow — the original 1.733/13.00
+/// "floor" was instrument-bound; re-calibrated 2026-07-24 from #431's
+/// declared-level sweep, see the computation site below).
 ///
 /// This is the row-AGGREGATE counterpart to `belt_drop_throughput`'s
 /// #385 per-inserter lane cap: [`check_inserter_throughput`] and
@@ -821,14 +822,36 @@ pub fn check_row_output_lane_budget(
             // falsified by a dedicated ceiling cell):
             // - unbridged 3-machine row onto yellow: 7.40/s realized of
             //   the 7.5 lane rate, any inserter type/level → 0.95/lane.
-            // - engine-midpoint-bridged single row (cable@13 uncommon,
-            //   yellow S1): delivers 13.00/s at plan in-game →
-            //   ≥ 1.733 lanes. 13.0 is the measured FLOOR; the band up
-            //   to the 2-lane nominal is unproven either way (the
-            //   probe above 13 generation-errors before it can run).
-            // Both constants are floors at or under their measured cell.
+            // - engine-midpoint-bridged single row: a midpoint sideload
+            //   bridge redistributes flow across BOTH physical lanes, so
+            //   the row delivers the belt's full both-lane nominal
+            //   (2.0 × 7.5 = 15.00/s on yellow).
+            // RE-calibrated 2026-07-24 (#383/#431): the original
+            // 13.0/7.5 bridged "floor" was measured through an
+            // INPUT-bound cell — the instrument bound one layer
+            // deeper. The #431 independent sweep (single 6-machine EC
+            // row, bridged yellow, declared L0..L7, byte-identical BP
+            // per level) measured the bridged output delivering the
+            // FULL 2.0 lanes (15.00/s at plan, zero output-blocked
+            // machines at EVERY level) once the input bind clears at
+            // L2. The unbridged 0.95 (7.40/7.5 solo-row cell) is
+            // UNFALSIFIED but shares the suspect setup — kept
+            // conservative pending a dedicated L2 re-measure.
+            //
+            // Two caveats on the 2.0, recorded per the adversarial
+            // review of #434:
+            //  - The #431 measurement is a LOWER bound: produced ==
+            //    plan == nominal, so it proves the belt REACHES its
+            //    rated carry, not that there's headroom above it. At
+            //    demand == 15.0 == budget the check has zero margin
+            //    beyond EPSILON — defensible (nominal is the hard
+            //    physical carry ceiling), but the fragile spot.
+            //  - #431 measured YELLOW. The 2.0 is applied to all tiers;
+            //    the extension to red/express rides the tier-invariant
+            //    carry argument (a bridged belt at 100% of nominal is
+            //    tier-independent), not a direct red/express measure.
             const ROW_LANE_FACTOR_UNBRIDGED: f64 = 0.95;
-            const ROW_LANE_FACTOR_BRIDGED: f64 = 13.0 / 7.5; // 1.7333 measured floor
+            const ROW_LANE_FACTOR_BRIDGED: f64 = 2.0; // full both-lane nominal (#431 sweep)
             let lane_factor = if lanes_loaded >= 2 {
                 ROW_LANE_FACTOR_BRIDGED
             } else {
@@ -845,8 +868,8 @@ pub fn check_row_output_lane_budget(
                         "row-output-lane-budget",
                         format!(
                             "{} row output ({}) needs {:.2}/s but inserter-drop delivery onto {} \
-                             ({} lane{} loaded) realizes only {:.2}/s measured — needs a midpoint \
-                             bridge (measured 13.0/s floor on yellow) or a split output",
+                             ({} lane{} loaded) realizes only {:.2}/s — needs a midpoint \
+                             bridge (redistributes to both lanes → full belt nominal) or a split output",
                             recipe,
                             item,
                             inflow,
@@ -2119,7 +2142,7 @@ mod tests {
     fn row_lane_budget_bridge_doubles_budget_to_silence_same_inflow() {
         // Identical 10.0/s inflow to the firing test above, but the
         // belt-out now has a second off-axis line (bridge) — two lanes
-        // realize 13.0/s (measured bridged floor), which covers it.
+        // realize the full 15.0/s belt nominal, which covers it.
         let sr = row_output_spec("test-widget", "test-widget", 5.0, 2.0);
         let mut entities = machine_row_with_output_inserters("test-widget", 0, 2); // drops at x=0,4, y=2
         entities.extend(belt_out_row_bridged("test-widget", "test-widget", 2, 8, "transport-belt"));
@@ -2127,7 +2150,7 @@ mod tests {
         let issues = check_row_output_lane_budget(&lr, Some(&sr));
         assert!(
             lane_budget_warnings(&issues).is_empty(),
-            "bridged row should realize the 13.0/s measured floor (≥ 10.0/s): {issues:?}"
+            "bridged row should realize the full 15.0/s belt nominal (≥ 10.0/s): {issues:?}"
         );
     }
 

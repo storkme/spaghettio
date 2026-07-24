@@ -383,13 +383,16 @@ fn probe_differential_scoreboard() {
 /// demand onto one yellow belt-out — distinct from
 /// `cell_composed_ec15_zero_errors`'s sim-verified geometry
 /// (`compose_pairs_calibrated`'s 3 independent 5.0/s pairs, each well
-/// under budget). Even with the bridge's 2-lane realization
-/// (`0.85 × 15.0/s × 2 lanes = 12.75/s`), 15.0/s exceeds it — a `row-
-/// output-lane-budget` warning the new check correctly raises here. This
-/// specific geometry has no sim-verification either way (the "15/15
-/// working, 15.0/s exact" proof belongs to the pairs geometry, not this
-/// one), so per the check's own acceptance protocol this is tolerated as
-/// a plausible-but-unproven finding, not silently tuned away.
+/// under budget).
+///
+/// **2026-07-24 (#383/#431 recalibration):** the bridged budget this row
+/// was warned against (1.733 × 7.5 = 13.0/s) was measured through an
+/// input-bound cell — #431's level sweep shows bridged yellow delivering
+/// the full 15.00/s exactly at L2+ with zero `full_output` at every
+/// level. At the recalibrated `ROW_LANE_FACTOR_BRIDGED = 2.0` the budget
+/// is exactly 15.0/s and the warning correctly no longer fires: the
+/// finding this pin tolerated as plausible-but-unproven is now
+/// measured-resolved in the geometry's favor.
 #[test]
 fn cell_candidate_resolves_ec15_refusal() {
     use spaghettio_core::bus::cells::CellComposition;
@@ -417,17 +420,16 @@ fn cell_candidate_resolves_ec15_refusal() {
     let errors = issues.iter().filter(|i| i.severity == Severity::Error).count();
     assert_eq!(errors, 0, "composed candidate errors: {issues:?}");
     assert!(
-        issues.iter().all(|i| i.category == "inserter-item-throughput"
-            || i.category == "row-output-lane-budget"),
-        "only the adjudicated categories tolerated: {issues:?}"
+        issues.iter().all(|i| i.category == "inserter-item-throughput"),
+        "only the adjudicated category tolerated: {issues:?}"
     );
-    // The single-row-overflow finding above is exactly one warning
-    // (the electronic-circuit row); more of the same category would be
-    // a new, unadjudicated claim — trip on growth.
+    // Post-#431 recalibration the row sits exactly at the bridged
+    // budget (2.0 × 7.5 = 15.0/s) — any lane-budget warning here would
+    // be a new, unadjudicated claim.
     assert_eq!(
         issues.iter().filter(|i| i.category == "row-output-lane-budget").count(),
-        1,
-        "row-output-lane-budget warning count grew past the adjudicated 1: {issues:?}"
+        0,
+        "row-output-lane-budget should not fire at the recalibrated budget: {issues:?}"
     );
 }
 
@@ -929,18 +931,14 @@ fn mega_chain_ac_from_raw_zero_issues() {
             .unwrap_or_else(|e| panic!("AC@{rate} from raw must validate: {e}"));
         let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
         assert!(errors.is_empty(), "AC@{rate} from raw errors: {errors:?}");
-        if rate < 4.0 {
-            assert!(issues.is_empty(), "AC@{rate} from raw issues: {issues:?}");
-        } else {
-            // AC@4's cable cell outputs 40/s against a MEASURED 39/s
-            // inserter-drop realization (#394's row-output-lane-budget,
-            // landed mid-Phase-B) — the honest 1/s shortfall is warned,
-            // not hidden; only that adjudicated category is tolerated.
-            assert!(
-                issues.iter().all(|i| i.category == "row-output-lane-budget"),
-                "AC@{rate}: only the measured lane-budget warning tolerated: {issues:?}"
-            );
-        }
+        // AC@4's cable cell outputs 40/s. Under the old bridged express
+        // budget (1.733 × 22.5 = 39.0/s) that was a 1/s shortfall and
+        // raised one row-output-lane-budget warning; the 2026-07-24
+        // #383/#431 recalibration (ROW_LANE_FACTOR_BRIDGED = 2.0 → 45.0/s
+        // on express) clears it. Every rung now asserts a plain zero:
+        // keeping the old tolerated-category branch would pass VACUOUSLY,
+        // since the category it filters for can no longer fire here.
+        assert!(issues.is_empty(), "AC@{rate} from raw issues: {issues:?}");
     }
 }
 
@@ -1022,7 +1020,21 @@ fn mega_chain_pu4_resolves_bus_failure() {
 /// oil processings, cracking, and lubricant, with 4 solid exports
 /// (multi-consumer fan-out) and 5 chain-fed inputs. Composes at ZERO
 /// errors.
+///
+/// **2026-07-24 — moved to opt-in.** This is the single heaviest test
+/// in the suite: >6 min of LIVE SAT solving because USP's 10-member
+/// oil complex generates crossing zones absent from the baked cache
+/// (`crates/core/data/sat-zones.bin`), so every zone re-solves each
+/// run. Its sibling `mega_chain_chem5_resolves_bus_failure` does the
+/// same class of work in 0.67s purely because ITS zones are cached —
+/// i.e. the cost is uncached-zone artifact, not intrinsic. It held the
+/// whole `cell_composition` binary at ~1378s. The in-loop mega gates
+/// (chem5, pu4, ac-from-raw) keep the mega path covered on every run;
+/// this flagship stays runnable opt-in. To restore it to the default
+/// loop cheaply, bake its zones into the cache (the chem5 route) rather
+/// than un-ignoring it as-is. See #433-adjacent perf note / RFC-052.
 #[test]
+#[ignore = "RFC-052 USP@2 mega gate: >6min live SAT (uncached zones); opt in with --ignored, or bake its zones into sat-zones.bin"]
 fn mega_chain_usp2_resolves_bus_failure() {
     use spaghettio_core::bus::cells::chain::compose_chain;
     use spaghettio_core::validate::{self, LayoutStyle, Severity};
