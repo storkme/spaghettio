@@ -27,26 +27,27 @@ reach/throughput/adjacency constraints. **Phase 1 is solids-only
 the original "no pipes at all" cut tripped kill criterion 6 in Phase 0
 and was widened (see Phase 0 results).
 
-## Prerequisite: #432 must merge first
+## Prerequisite: #432 — ✅ MERGED 2026-07-25 (`4df8b0a7`)
 
-**This RFC builds on types that do not exist on `main` yet.**
+This RFC builds on types that landed with PR
+[#432](https://github.com/storkme/spaghettio/pull/432):
 `SolverResult.di_couplings`, the `DICoupling` struct,
-`LayoutOptions.direct_insertion` and `validate::is_di_bridge_inserter`
-all live on `feat/strategy-gap-analysis` (PR
-[#432](https://github.com/storkme/spaghettio/pull/432), open at time of
-writing). `main` has only `classify::direct_insertion`, which *counts*
-DI in parsed community blueprints and is unrelated to producing it.
+`LayoutOptions.direct_insertion` (default `false`) and
+`validate::is_di_bridge_inserter` are all on `main` now, verified after
+the merge. **Phase 1 is unblocked.**
 
-Consequences, stated so nobody trips over them:
+Notes carried forward from when this was a live blocker:
 
-- The Motivation's "reproducible today" case reproduces **on #432's
-  branch** (`a50c45cf`), not on `main`.
-- Phase 1 cannot start until #432 lands. Phase 0 (mining + feasibility)
-  has no such dependency and can run immediately.
-- **Rebase drift is a live risk**: if #432's `DICoupling` shape changes
-  before merge, this RFC's integration section moves with it. Phase 0's
-  deliverable must be re-checked against the merged shape rather than
-  the branch shape.
+- The Motivation's "reproducible today" case was measured on #432's
+  branch at `a50c45cf`; it reproduces on `main` from `4df8b0a7`.
+- The rebase-drift risk is **closed** — the merged `DICoupling` shape is
+  the one this RFC's integration section describes (re-verified against
+  `main`, not the branch).
+- #432 also merged `main` in before landing, so it carries the L2
+  inserter-capacity default (#431) and the recalibrated bridged floor
+  (#434). The `input-rate-delivery` figures quoted below (3 warnings at
+  L0 / 1 at L2 / 0 at L7) predate those and should be re-measured in
+  Phase 1 rather than trusted verbatim.
 
 ## Motivation
 
@@ -483,6 +484,7 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
 - **Phase 0 — mine + feasibility. ✅ COMPLETE (2026-07-24).** Census
   delivered above: KC1 passes with margin (worst case 2.50/s vs 19.2/s
   available at defaults); **KC6 fired and forced the pipes re-scope**.
+  **#432 merged 2026-07-25 (`4df8b0a7`), so Phase 1 is ready to start.**
   The miner is now the **tracked** `di-patterns` binary
   (`crates/mining-cli/src/bin/di_patterns.rs`), so every corpus figure in
   this RFC is reproducible from a clean checkout — it was written as a
