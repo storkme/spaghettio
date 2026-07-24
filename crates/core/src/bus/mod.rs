@@ -32,6 +32,7 @@ pub mod balancer_generate;
 pub mod balancer_library;
 pub mod balancer_topology;
 pub mod decomposition_search;
+pub mod di_cell;
 pub(crate) mod ghost_occupancy;
 pub mod ghost_router;
 pub(crate) mod eviction;
