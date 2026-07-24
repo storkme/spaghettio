@@ -1066,4 +1066,46 @@ mod tests {
         let r = classify(t).unwrap();
         assert_eq!(r.class, BalancerClass::Balanced);
     }
+
+    /// Tripwire for #266: pin the library's known throughput-limited (MX1)
+    /// shapes, so a re-bake can't silently regress a template into MX1 or
+    /// silently "fix" a known one without the issue being consciously
+    /// closed. Mirrors `balancer_lane_audit`'s KNOWN_IMBALANCED pattern.
+    ///
+    /// History: #266 originally listed (5, 8) AND (8, 6); the 2026-07-24
+    /// audit found (8, 6) already classifies MX3 balanced on main (fixed by
+    /// a later library re-bake), so only (5, 8) is pinned here.
+    #[test]
+    fn known_throughput_limited_shapes_are_pinned() {
+        const KNOWN_THROUGHPUT_LIMITED: [(u32, u32); 1] = [(5, 8)];
+
+        let mut unexpected: Vec<(u32, u32)> = Vec::new();
+        let mut still_limited: Vec<(u32, u32)> = Vec::new();
+        for ((m, n), t) in balancer_templates() {
+            let Ok(r) = classify(t) else { continue };
+            if matches!(r.class, BalancerClass::ThroughputLimited) {
+                if KNOWN_THROUGHPUT_LIMITED.contains(&(*m, *n)) {
+                    still_limited.push((*m, *n));
+                } else {
+                    unexpected.push((*m, *n));
+                }
+            }
+        }
+
+        unexpected.sort_unstable();
+        assert!(
+            unexpected.is_empty(),
+            "template(s) {unexpected:?} classify as MX1 throughput-limited but are \
+             not in KNOWN_THROUGHPUT_LIMITED — a library re-bake regressed them. \
+             Fix the templates (or, if the skew is consciously accepted, add them \
+             to the list and note it on #266)."
+        );
+        assert_eq!(
+            still_limited.len(),
+            KNOWN_THROUGHPUT_LIMITED.len(),
+            "a KNOWN_THROUGHPUT_LIMITED shape no longer classifies MX1 (found only \
+             {still_limited:?}). If a re-bake fixed it, remove it from the list and \
+             close #266 consciously."
+        );
+    }
 }
