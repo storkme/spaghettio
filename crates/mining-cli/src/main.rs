@@ -250,6 +250,33 @@ fn print_analysis(a: &BlueprintAnalysis, quiet: bool) {
         a.pole_count
     );
 
+    // Strategy features (classify)
+    let f = &a.features;
+    println!(
+        "  Strategy: {} / {}  rate:{} ({})  DI:{}  sideloads:{}  nets:{} belts/{} pipes/{} poles{}",
+        f.archetype,
+        f.chain_level,
+        f.top_rate,
+        f.rate_band,
+        f.direct_insertion,
+        f.sideloads,
+        f.belt_networks,
+        f.pipe_networks,
+        f.pole_networks,
+        if f.tileable_geom {
+            format!("  tileable:p{}@{:.2}", f.pitch, f.pitch_score)
+        } else {
+            String::new()
+        },
+    );
+    if let Some(pf) = f.machines_powered_fraction {
+        println!(
+            "  Power: {:.0}% machines covered{}",
+            pf * 100.0,
+            if f.self_powered { " (self-powered)" } else { "" },
+        );
+    }
+
     // Recipes
     if !a.recipe_groups.is_empty() {
         println!("  Recipes ({}):", a.recipe_count);

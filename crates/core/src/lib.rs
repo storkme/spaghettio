@@ -16,6 +16,7 @@ pub mod balancer;
 pub mod blueprint;
 pub mod blueprint_parser;
 pub mod bus;
+pub mod classify;
 pub mod common;
 pub mod density;
 pub mod fixture;
