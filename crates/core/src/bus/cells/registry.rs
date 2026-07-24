@@ -19,7 +19,13 @@
 //! Data: `crates/core/data/cell-sim-registry.json`, embedded via
 //! `include_str!` like the recipe DB. Grown deliberately — an entry is
 //! added only with a real sim PASS behind it (scenario + date + the
-//! harness's realized-world line recorded).
+//! harness's realized-world line recorded), OR — policy decision
+//! 2026-07-24 (#383, user-approved) — a WARN verdict whose deficit is
+//! BOTH priced by a generation-time validator warning on the exact
+//! geometry AND sim-measured at the warned magnitude. Such entries
+//! carry `known_residual` with the attribution and are rendered
+//! "SIM-VERIFIED AS WARNED", never "at plan": the registry's job is
+//! catching drift, and an unregistered cell catches nothing.
 
 use std::sync::OnceLock;
 
@@ -51,6 +57,12 @@ pub struct RegistryEntry {
     pub harness_world: String,
     pub verdict: String,
     pub produced_per_s: f64,
+    /// Present only on entries admitted under the "honestly warned +
+    /// sim-confirmed" bar (#383 policy, 2026-07-24): the attribution of
+    /// a known, generation-time-warned deficit that the sim measured at
+    /// the warned magnitude. `None` = measured at plan.
+    #[serde(default)]
+    pub known_residual: Option<String>,
     pub scenario: String,
     pub date: String,
 }
@@ -132,21 +144,38 @@ pub fn lookup(target: &str, rate: f64, hash: u64) -> Option<&'static RegistryEnt
 /// The annotation `CellComposedCandidate` attaches to its layouts.
 /// Three tiers: full match (geometry + declared world), scoped match
 /// (geometry verified, but in a different declared world than this
-/// layout's), and no match.
+/// layout's), and no match. Warned entries (`known_residual`) render
+/// "AS WARNED", never "at plan" — the claim is exactly as strong as
+/// the measurement.
 pub fn verification_note(target: &str, rate: f64, l: &LayoutResult) -> String {
     let hash = geometry_hash(l);
-    match lookup(target, rate, hash) {
-        Some(e)
-            if e.declared_inserter_capacity == l.inserter_capacity
-                && e.declared_stacking == l.stacking =>
-        {
-            format!(
+    let hex = format!("{hash:016x}");
+    let matches: Vec<&RegistryEntry> = registry()
+        .iter()
+        .filter(|e| e.target == target && (e.rate - rate).abs() < 1e-9 && e.geometry_hash == hex)
+        .collect();
+    // Prefer the entry measured under THIS layout's declared world. The
+    // same geometry can be registered under several declared worlds
+    // (#383: capacity never reaches composed cells until #415, so d1/d7
+    // share a hash) — first-in-file order must not decide which world
+    // the note reports.
+    let full = matches.iter().find(|e| {
+        e.declared_inserter_capacity == l.inserter_capacity && e.declared_stacking == l.stacking
+    });
+    match (full, matches.first()) {
+        (Some(e), _) => match &e.known_residual {
+            None => format!(
                 "cell-composed: geometry SIM-VERIFIED at plan ({} — {} produced {:.2}/s at declared capacity {}, {})",
                 e.scenario, e.verdict, e.produced_per_s, e.declared_inserter_capacity, e.date
-            )
-        }
-        Some(e) => format!(
-            "cell-composed: geometry sim-verified at plan ONLY under declared capacity {} / stacking {} ({} produced {:.2}/s, {}); this layout declares capacity {} / stacking {} — measured-at-plan does NOT transfer (#383)",
+            ),
+            Some(res) => format!(
+                "cell-composed: geometry SIM-VERIFIED AS WARNED, not at plan — {res} ({} — {} produced {:.2}/s at declared capacity {}, {})",
+                e.scenario, e.verdict, e.produced_per_s, e.declared_inserter_capacity, e.date
+            ),
+        },
+        (None, Some(e)) => format!(
+            "cell-composed: geometry sim-verified {} ONLY under declared capacity {} / stacking {} ({} produced {:.2}/s, {}); this layout declares capacity {} / stacking {} — measurements do NOT transfer across worlds (#383)",
+            if e.known_residual.is_some() { "as warned" } else { "at plan" },
             e.declared_inserter_capacity,
             e.declared_stacking,
             e.verdict,
@@ -155,8 +184,8 @@ pub fn verification_note(target: &str, rate: f64, l: &LayoutResult) -> String {
             l.inserter_capacity,
             l.stacking
         ),
-        None => format!(
-            "cell-composed: geometry NOT sim-verified (hash {hash:016x}) — run spaghettio-sim and add the entry to cell-sim-registry.json"
+        (None, None) => format!(
+            "cell-composed: geometry NOT sim-verified (hash {hex}) — run spaghettio-sim and add the entry to cell-sim-registry.json"
         ),
     }
 }
