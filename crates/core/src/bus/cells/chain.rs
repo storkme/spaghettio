@@ -582,7 +582,21 @@ fn retrofit_feed_hop(
                     && e.segment_id.as_deref().is_some_and(|s| s.starts_with("feed:"))
             })
             .ok_or_else(|| {
-                format!("cells: ascent terminal collision at ({x},{y}) is not a plain feed row (tile x={cx})")
+                let blocker = entities
+                    .iter()
+                    .find(|e| e.x == *cx && e.y == y)
+                    .map(|e| {
+                        format!(
+                            "{} dir={:?} seg={}",
+                            e.name,
+                            e.direction,
+                            e.segment_id.as_deref().unwrap_or("-")
+                        )
+                    })
+                    .unwrap_or_else(|| "empty".into());
+                format!(
+                    "cells: ascent terminal collision at ({x},{y}) is not a plain feed row (tile x={cx}: {blocker})"
+                )
             })?;
         idxs[k] = i;
     }
