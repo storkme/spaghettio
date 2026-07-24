@@ -153,15 +153,17 @@ feeds and the composed layout must pass the pipe-isolation validators
   SPLITTER's second tile has no hostable position at all — the
   horizontal interactions (feed rows crossing neighbor columns) are
   already solved by the crossing zones; only the 2-tile splitter
-  entity is unresolvable by routing. Candidate fixes for the next
-  unit, in rough preference order: (a) lane planner gives interior
-  multi-tap solid lanes a free east neighbor column (pitch bump only
-  when a splitter tap will land — narrow blast radius vs global
-  pitch change); (b) splitter side-flip when exactly one neighbor
-  column is free; (c) tap strategy avoids splitter taps on
-  both-sides-blocked lanes (single-tap/direct arrangements);
-  (d) mouth-tile-aware bridging (the reverted approach hardened —
-  most machinery-entangled, least preferred). Merger unpaired-output
+  entity is unresolvable by routing. CORRECTION on candidate fixes:
+  ALL bus lanes are pitch-1 (`lane_planner` assigns x = i+1) and
+  main-line fixtures with splitter taps are CLEAN — so the
+  neighbor-trunk gap is normally bridged by the CROSSING-ZONE / SAT
+  machinery, and the (a)-(c) lane-geometry ideas are misdirected.
+  The real defect: the crossing zone at block-local rows 13 did not
+  cover/bridge the row-12 gap in the engine-unit trunk. Next probe
+  per the standing lesson: prune_dangling first (diff raw SAT output
+  vs sol.entities for that zone before theorising about
+  clustering/growth/encoder); then zone scoping (why the zone
+  excluded row 12). Merger unpaired-output
   at block-local (73,39) still separate and undiagnosed. Both
   reproduce standalone: compose_mega_block(USP@2 sub-solve, scale
   0.5) → 6 errors.*
