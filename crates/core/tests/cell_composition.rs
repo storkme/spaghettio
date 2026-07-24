@@ -931,18 +931,14 @@ fn mega_chain_ac_from_raw_zero_issues() {
             .unwrap_or_else(|e| panic!("AC@{rate} from raw must validate: {e}"));
         let errors: Vec<_> = issues.iter().filter(|i| i.severity == Severity::Error).collect();
         assert!(errors.is_empty(), "AC@{rate} from raw errors: {errors:?}");
-        if rate < 4.0 {
-            assert!(issues.is_empty(), "AC@{rate} from raw issues: {issues:?}");
-        } else {
-            // AC@4's cable cell outputs 40/s against a MEASURED 39/s
-            // inserter-drop realization (#394's row-output-lane-budget,
-            // landed mid-Phase-B) — the honest 1/s shortfall is warned,
-            // not hidden; only that adjudicated category is tolerated.
-            assert!(
-                issues.iter().all(|i| i.category == "row-output-lane-budget"),
-                "AC@{rate}: only the measured lane-budget warning tolerated: {issues:?}"
-            );
-        }
+        // AC@4's cable cell outputs 40/s. Under the old bridged express
+        // budget (1.733 × 22.5 = 39.0/s) that was a 1/s shortfall and
+        // raised one row-output-lane-budget warning; the 2026-07-24
+        // #383/#431 recalibration (ROW_LANE_FACTOR_BRIDGED = 2.0 → 45.0/s
+        // on express) clears it. Every rung now asserts a plain zero:
+        // keeping the old tolerated-category branch would pass VACUOUSLY,
+        // since the category it filters for can no longer fire here.
+        assert!(issues.is_empty(), "AC@{rate} from raw issues: {issues:?}");
     }
 }
 

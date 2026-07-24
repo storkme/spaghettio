@@ -4340,10 +4340,15 @@ fn stress_electronic_circuit_60s_red_from_ore() {
             // 60 -> 0 so any regression re-exposes them; substations stay dormant.
             // 2026-07-23 (#385 second half): +11 row-output-lane-budget — at
             // 60/s on red belts, this deep EC-from-ore chain's copper-cable/
-            // copper-plate rows exceed a bridged red belt-out's 25.5/s 2-lane
-            // realizable cap, the same sim-calibrated structural finding as
-            // every other EC-chain fixture at this scale (0 -> 11).
-            max_warnings: 11,
+            // copper-plate rows were judged to exceed a bridged red belt-out's
+            // then-believed 25.5/s 2-lane realizable cap (0 -> 11).
+            // 2026-07-24 (#383/#431 recalibration): that cap was
+            // instrument-bound. At ROW_LANE_FACTOR_BRIDGED = 2.0 a bridged red
+            // belt-out realizes the full 30.0/s nominal, which covers every
+            // row here, so all 11 warnings correctly stop firing — this
+            // fixture is back to a clean zero. Tightened 11 -> 0 (matching the
+            // re-blessed golden) so any regression re-exposes them.
+            max_warnings: 0,
             max_errors_by_category: Default::default(),
         },
     );
