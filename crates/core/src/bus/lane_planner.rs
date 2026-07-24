@@ -280,13 +280,11 @@ pub fn plan_bus_lanes(
             .into_iter()
             .filter(|&c_idx| {
                 let di = &row_spans[c_idx].di_input;
-                if let Some((item, producer_idx)) = di {
-                    if item == &key.0 {
-                        // Only skip if producer is directly above (adjacent).
-                        let p = &row_spans[*producer_idx];
-                        let c = &row_spans[c_idx];
-                        return p.y_end != c.y_start;
-                    }
+                if let Some((item, _)) = di {
+                    // DI'd consumer: skip — the bridge inserter in the
+                    // inter-recipe gap feeds this item directly from the
+                    // producer's output belt. No bus lane needed.
+                    return item != &key.0;
                 }
                 true
             })

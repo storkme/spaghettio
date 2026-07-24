@@ -1599,22 +1599,114 @@ pub(crate) fn build_one_row(
     (row_ents, span, row_width)
 }
 
-/// Check if the spec at `spec_idx` in `ordered` is a DI consumer whose
-/// producer recipe is the immediately preceding spec in `ordered`.
-fn prev_was_producer(
-    spec: &MachineSpec,
-    ordered: &[&MachineSpec],
-    spec_idx: usize,
-    di_lookup: &FxHashMap<&str, (&str, &str)>,
-) -> bool {
-    if spec_idx == 0 {
-        return false;
+/// Stamp bridge inserters from a DI producer's output belt to the
+/// consumer's input belt, spanning the 2-tile inter-recipe gap.
+///
+/// Geometry (SingleInput producer, DualInput consumer, msz=3):
+/// ```text
+///   producer y+msz+3: output belt (carries the DI'd item, westward)
+///   gap y+0:           (empty)
+///   gap y+1:           bridge inserter (long-handed, south-facing)
+///   consumer y+0:      far input belt (other item)
+///   consumer y+1:      near input belt (DI'd item)
+/// ```
+///
+/// The long-handed inserter at gap y+1 picks from the producer's output
+/// belt (reach 2 north) and drops onto the consumer's near input belt
+/// (reach 2 south). One inserter per consumer machine, sized via the
+/// standard inserter ladder.
+fn stamp_di_bridge(
+    producer: &RowSpan,
+    consumer: &RowSpan,
+    item: &str,
+    consumer_spec: &MachineSpec,
+    consumer_count: usize,
+    max_inserter_tier: InserterTier,
+    quality: QualityTier,
+    level: u8,
+    ctx: &StackingCtx,
+) -> Vec<PlacedEntity> {
+    use crate::bus::inserter_ladder::{size_side, Reach};
+
+    let producer_belt_y = producer.output_belt_y;
+
+    // Find the consumer's input belt y for the DI'd item. The consumer
+    // may have multiple input belts (DualInput, TripleInput); find the
+    // one carrying `item`.
+    let consumer_belt_y = consumer
+        .input_belt_y
+        .iter()
+        .copied()
+        .last()
+        .unwrap_or(consumer.y_start);
+
+    // The gap is 2 tiles: producer.y_end and producer.y_end + 1.
+    // The bridge inserter sits at the SECOND gap tile (producer.y_end + 1)
+    // so a long-handed inserter (reach 2) can span from the producer's
+    // output belt to the consumer's input belt.
+    let bridge_y = producer.y_end + 1;
+
+    // Verify the reach is feasible. The distance from bridge_y to
+    // producer_belt_y and to consumer_belt_y must each be ≤ 2 (long-handed
+    // reach). If not, skip the bridge (the bus lane will handle it — but
+    // the lane planner already skipped it, so this is a layout error we
+    // should log).
+    let pick_dist = (bridge_y - producer_belt_y).abs();
+    let drop_dist = (consumer_belt_y - bridge_y).abs();
+    if pick_dist > 2 || drop_dist > 2 {
+        crate::trace::emit(crate::trace::TraceEvent::GhostSpecFailed {
+            spec_key: format!("di-bridge:{item}"),
+            from_x: 0,
+            from_y: producer_belt_y,
+            to_x: 0,
+            to_y: consumer_belt_y,
+        });
+        return Vec::new();
     }
-    let prev = ordered[spec_idx - 1];
-    match di_lookup.get(spec.recipe.as_str()) {
-        Some(&(_, producer_recipe)) => prev.recipe.as_str() == producer_recipe,
-        None => false,
+
+    // Machine x positions for the consumer.
+    let (mw, _mh) = machine_dims(&consumer_spec.entity);
+    let pitch = mw as i32;
+    let mxs: Vec<i32> = (0..consumer_count as i32)
+        .map(|i| consumer.output_belt_x_min + i * pitch)
+        .collect();
+
+    // Per-machine rate for the DI'd item.
+    let utilization = utilization_for(consumer_spec);
+    let di_input = consumer_spec.inputs.iter().find(|f| f.item == item);
+    let rate_per_machine = di_input.map(|f| f.rate * utilization).unwrap_or(0.0);
+
+    // Size the inserter: Reach::Far (long-handed, reach 2) with 0 extra
+    // columns (one inserter per machine at the dx=1 slot).
+    let plan = size_side(
+        rate_per_machine,
+        Reach::Far,
+        0,
+        max_inserter_tier,
+        quality,
+        level,
+    );
+
+    let mut entities = Vec::new();
+    let seg = Some(format!("di-bridge:{item}:{}", consumer_spec.recipe));
+    for &mx in &mxs {
+        // Stamp `plan.count` inserters at this machine's columns.
+        // Baseline at dx=1 (the standard inserter column).
+        for n in 0..plan.count.max(1) {
+            let dx = 1 + n as i32;
+            entities.push(PlacedEntity {
+                name: plan.entity.to_string(),
+                x: mx + dx,
+                y: bridge_y,
+                direction: EntityDirection::South,
+                carries: Some(item.to_string()),
+                segment_id: seg.clone(),
+                ..Default::default()
+            });
+        }
     }
+    let _ = ctx; // stacking not yet wired for DI bridges
+    entities
 }
 
 /// Place assembly rows stacked vertically.
@@ -1682,19 +1774,13 @@ pub fn place_rows(
     let mut recipe_last_row_idx: FxHashMap<&str, usize> = FxHashMap::default();
 
     for (spec_idx, spec) in ordered.iter().enumerate() {
-        // Suppress the inter-recipe gap when this spec is a DI consumer
-        // whose producer was the immediately preceding recipe. The gap
-        // normally reserves space for lane balancers; with DI the trunk
-        // segment is minimal and no balancer is needed. (When the
-        // producer is NOT the immediately preceding recipe — e.g. the
-        // consumer has another dependency between them — the gap is
-        // preserved; a future `order_specs` enhancement will co-locate
-        // DI pairs.)
+        // The inter-recipe gap is always present — for DI pairs, the gap
+        // houses the bridge inserter that spans from the producer's output
+        // belt to the consumer's input belt. Without the gap, the belts
+        // are too close for any inserter to bridge them.
         let is_di_consumer = direct_insertion && di_lookup.contains_key(spec.recipe.as_str());
-        if spec_idx > 0 && is_di_consumer && prev_was_producer(spec, &ordered, spec_idx, &di_lookup) {
-            // No gap — DI producer is directly above.
-        } else if spec_idx > 0 {
-            y_cursor += 2; // gap between recipes for lane balancers
+        if spec_idx > 0 {
+            y_cursor += 2; // gap between recipes for lane balancers / DI bridge
         }
         // Snap to nearest integer when within float drift of one — solver
         // math accumulates ulps in recursive ratio chains, so a recipe that
@@ -1801,6 +1887,23 @@ pub fn place_rows(
                 if let Some(&(item, producer_recipe)) = di_lookup.get(spec.recipe.as_str()) {
                     if let Some(&p_idx) = recipe_last_row_idx.get(producer_recipe) {
                         span.di_input = Some((item.to_string(), p_idx));
+                        // Stamp bridge inserters from the producer's output
+                        // belt to this consumer's input belt. The bridge
+                        // lives in the inter-recipe gap (2 tiles between
+                        // producer.y_end and consumer.y_start).
+                        let producer_span = &row_spans[p_idx];
+                        let bridge_ents = stamp_di_bridge(
+                            producer_span,
+                            &span,
+                            item,
+                            spec,
+                            chunk,
+                            max_inserter_tier,
+                            quality,
+                            inserter_capacity,
+                            ctx,
+                        );
+                        entities.extend(bridge_ents);
                     }
                 }
             }
@@ -2259,10 +2362,10 @@ mod tests {
 
         // Co-location: EC should be immediately after cable.
         assert_eq!(ec_pos, cc_pos + 1, "EC should be immediately after cable");
-        // Gap suppressed: EC starts at cable's y_end (no +2 gap).
+        // Gap is preserved (houses the bridge inserter).
         assert_eq!(
-            spans[ec_pos].y_start, spans[cc_pos].y_end,
-            "DI consumer should start at producer's y_end (no +2 gap)"
+            spans[ec_pos].y_start, spans[cc_pos].y_end + 2,
+            "DI gap is preserved for the bridge inserter"
         );
         // di_input marking.
         assert_eq!(
