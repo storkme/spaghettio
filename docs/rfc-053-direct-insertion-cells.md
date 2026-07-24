@@ -27,11 +27,37 @@ explicitly out of scope** (that RFC's own reason: fluid ports are
 prototype-fixed per orientation and misplacement is hard-infeasibility,
 not cost).
 
+## Prerequisite: #432 must merge first
+
+**This RFC builds on types that do not exist on `main` yet.**
+`SolverResult.di_couplings`, the `DICoupling` struct,
+`LayoutOptions.direct_insertion` and `validate::is_di_bridge_inserter`
+all live on `feat/strategy-gap-analysis` (PR
+[#432](https://github.com/storkme/spaghettio/pull/432), open at time of
+writing). `main` has only `classify::direct_insertion`, which *counts*
+DI in parsed community blueprints and is unrelated to producing it.
+
+Consequences, stated so nobody trips over them:
+
+- The Motivation's "reproducible today" case reproduces **on #432's
+  branch** (`a50c45cf`), not on `main`.
+- Phase 1 cannot start until #432 lands. Phase 0 (mining + feasibility)
+  has no such dependency and can run immediately.
+- **Rebase drift is a live risk**: if #432's `DICoupling` shape changes
+  before merge, this RFC's integration section moves with it. Phase 0's
+  deliverable must be re-checked against the merged shape rather than
+  the branch shape.
+
 ## Motivation
 
 **DI is the dominant human strategy the engine cannot produce.** #429's
 corpus sweep: 17,009 DI inserters across 793 of 6,038 blueprint members
-(13.1%), with cable→EC the single most common pair in the game.
+(13.1%), with cable→EC the single most common pair in the game. (That
+sweep's Node extractor put cable→EC at 3,887; this RFC's Rust miner puts
+it at 4,116 — a ~6% divergence of the same class #389 already recorded
+between the two implementations. Neither number is load-bearing here;
+the *geometry distribution* is, and it is reproduced below from the Rust
+miner alone.)
 
 **#432 built a different, lesser thing.** Its "DI bridge" is
 belt→belt: the producer's output belt and the consumer's input belt both
@@ -75,16 +101,31 @@ a 7.5/s demand.
 | … | … | | | |
 | 200 | long-handed | **2** | 0 | horizontal |
 
-`gap=1` (reach-1, machines one tile apart) dominates; the `gap=2`
-long-handed shape #432 implements is a ~5% minority. Lateral offsets of
+`gap=1` (reach-1, machines one tile apart) dominates. Lateral offsets of
 0, ±1, ±2 are all common — the empirical signature of consumers
 straddling two producers (see Design).
 
+**Read the `gap=2` rows correctly** (corrected 2026-07-24 — the first
+draft got this wrong). The miner only records a pair when **both** the
+pickup and the drop tile resolve to a machine, so every one of the 4,116
+instances is machine→machine. The 200 `gap=2` long-handed rows are
+therefore **not** #432's bridge — they are a legitimate *third* DI
+variant: long-handed machine→machine, leaving one spare tile between the
+machines that a belt or pole can thread through (routing bought with
+throughput). #432's belt→belt shape is structurally *uncountable* by this
+miner — its pickup is a belt tile — so the corpus contains **zero**
+instances of it, rather than the "~5% minority" the first draft claimed.
+Both the `gap=1` and `gap=2` machine→machine variants belong in the
+pattern library.
+
 Other DI pairs the same sweep found, i.e. the catalogue this generalizes
 to: `electric-furnace → electric-furnace` (1,585 — smelting columns),
-`solid-fuel → rocket-fuel` (652), `engine-unit → electric-engine-unit`
-(547), `casting-copper-cable → electronic-circuit` (544, Space Age
-foundry), `iron-stick → rail` (351).
+`solid-fuel-from-light-oil → rocket-fuel` (652 — note the specific
+recipe variant; vanilla has three solid-fuel recipes),
+`engine-unit → electric-engine-unit` (547),
+`casting-copper-cable → electronic-circuit` (544, Space Age foundry —
+fluid-adjacent, the known borderline case for kill criterion 6),
+`iron-stick → rail` (351).
 
 ## Ground truth
 
@@ -141,10 +182,61 @@ A producer row, a one-tile inserter band, a consumer row:
 12/s, but the cable machine behind it only *makes* 5/s. An EC machine
 needing 7.5/s must therefore draw from **two** producers — which forces
 the consumer row off the producer row's pitch so every consumer straddles
-a producer boundary. Flow for the drawing above: `cab1→EC1 5.0`,
-`cab2→EC1 2.5` + `cab2→EC2 2.5`, `cab3→EC2 5.0`, mirrored on the right.
-Every consumer receives exactly 7.5/s; every producer ships exactly
-5.0/s. **The corpus's non-zero lateral offsets are this same straddle.**
+a producer boundary. **The corpus's non-zero lateral offsets are this
+same straddle.**
+
+Derivation (why 8 inserters and not 12), from the x-positions above —
+all machines 3 wide, so `EC1` spans columns 1–3, `cab1` spans 0–2,
+`cab2` spans 3–5:
+
+| edge | overlapping columns | = inserter slots | flow |
+|---|---|---|---|
+| cab1 → EC1 | 1, 2 | **2** | 5.0/s |
+| cab2 → EC1 | 3 | **1** | 2.5/s |
+| cab2 → EC2 | 5 | 1 | 2.5/s |
+| cab3 → EC2 | 6, 7 | 2 | 5.0/s |
+
+…mirrored on the right half. Eight directed producer→consumer edges,
+hence eight inserters at Stack tier (one per edge suffices there);
+producers each ship exactly 5.0/s, consumers each receive exactly
+7.5/s, total 30.0/s both sides.
+
+**The per-edge slot count is the real budget** — not the machine's
+3-column width. An inserter draws from exactly one producer, so edges
+cannot pool slots. Feasibility for the canonical case is therefore:
+`2 slots × rate ≥ 5.0` **and** `1 slot × rate ≥ 2.5`, which both reduce
+to the same clean condition:
+
+> **A DI straddle is feasible iff `machine_feed_rate ≥ 2.5/s`.**
+
+### `max_inserter_tier` — the axis the first draft missed
+
+`LayoutOptions.max_inserter_tier` is an existing **user-facing hard cap**
+(`Regular | Fast | Stack`, default `Stack`) that the ladder never
+exceeds — the same never-auto-escalate contract as `max_belt_tier`
+(`rfc-inserter-sizing.md`). It is **orthogonal** to
+`inserter_capacity` (the 0–7 research level); the first draft conflated
+them. Applying the `≥ 2.5/s` rule across both axes (the ladder places
+only `inserter`/`fast-inserter`/`stack-inserter` — bulk is deliberately
+not in its catalogue):
+
+| `max_inserter_tier` | L0 | L2 (engine default) | L7 |
+|---|---|---|---|
+| `Regular` (0.84 / 1.68 / 3.36) | ✗ | ✗ | ✓ |
+| `Fast` (2.31 / 4.62 / 9.24) | ✗ (2.31 < 2.5) | ✓ | ✓ |
+| **`Stack`** (12.0 / 19.2 / 32.0) — default | ✓ | ✓ | ✓ |
+
+So **at engine defaults (Stack, L2) the canonical coupling is feasible
+with one inserter per edge**, and it stays feasible for a `Fast`-capped
+user at the default research level. It is infeasible only for a
+`Regular`-capped user below L7, and for anyone at true L0 without stack
+inserters — where the shortfalls are brutal but narrow (`fast` misses by
+0.19/s, `bulk` would miss by 0.10/s were it in the catalogue).
+
+**When infeasible, DI is refused for that coupling** and the item falls
+back — to #432's bridge where geometry permits, otherwise to the bus —
+with an honest warning. DI is never silently under-fed (the #432 lesson:
+a silently-disabled DI looked like a clean layout).
 
 ### Face allocation
 
@@ -238,8 +330,16 @@ caveat.
    consumers.
 2. **Face contention.** If the consumer's remaining face cannot carry
    its non-DI flows (iron in + EC out) within its tile budget at
-   **≤ L2** research (i.e. the cell is only feasible at max research),
-   the topology is under-scoped — stop.
+   **≤ L2** `inserter_capacity` (i.e. the cell is only feasible at max
+   research), the topology is under-scoped — stop.
+2b. **Tier-cap degradation.** `max_inserter_tier` is a hard user cap,
+   orthogonal to research level. If, at the engine defaults
+   (`Stack`, L2), the canonical coupling needs **more than one inserter
+   per producer→consumer edge**, the per-edge slot budget derived above
+   is wrong and the straddle geometry must be re-derived — stop. And if
+   a `Fast`-capped user cannot get a feasible cell at the **default**
+   research level, DI is too fragile to ship default-on — it stays an
+   opt-in strategy with an honest refusal, not a silent degradation.
 3. **Honest throughput.** If a DI cell validates clean but the sim
    harness measures **< 98% of plan** on the canonical fixture, the
    model is wrong and the checks are lying — stop everything. (This is
@@ -252,8 +352,15 @@ caveat.
    top-10 DI pairs infeasible, escalate to Tier 2 — but if CP-SAT
    cannot place a single pair within **500 ms**, stop: too slow for the
    layout loop, and the constructive path is the answer we ship.
-6. **Scope integrity.** If any canonical case requires pipes/fluids to
-   work, stop — that is the full face-allocation effort, not this RFC.
+6. **Scope integrity.** Sharpened so it can actually fire: if **more
+   than 2 of the corpus's top-10 DI pairs** turn out to have a
+   fluid-touching producer or consumer (making them unreachable without
+   pipe placement), then "solids only" excludes too much of the real
+   demand to be a useful first cut — stop and re-scope toward full face
+   allocation rather than shipping a DI that covers a rump of the
+   corpus. (Phase 0 measures this; `casting-copper-cable → EC` at 544
+   instances is the known borderline case — foundry casting is
+   fluid-adjacent.)
 
 ## Verification plan
 
@@ -309,3 +416,43 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   lesser mechanism (3 hops, 2 belts) that is correct and honestly
   validated as a trunk-lane-removal optimization, and is retained here
   as a fallback rather than deleted. Pending review.*
+
+- *2026-07-24 — **adversarial review: REVISE; both MAJOR findings
+  incorporated, plus one self-caught error.** The reviewer independently
+  re-derived every numeric claim (the `machine_feed_rate` table traced
+  through `inserter_throughput`/`inserter_hand`, the recipe ratios from
+  `recipes.json`, the 3:2 machine split), re-derived the straddle
+  column-overlap from the stated x-positions, and **re-ran the corpus
+  miner in release mode — reproducing the geometry table byte-for-byte**
+  (172 files parsed, 98 with DI, 4,116 cable→EC, top-20 summing to
+  3,866). No error found in any of those. Fixes applied:*
+  - ***MAJOR 1 — the `#432` dependency was stated as present-tense
+    fact.*** `DICoupling` / `di_couplings` / `direct_insertion` /
+    `is_di_bridge_inserter` do not exist on `main`; they live on the open
+    PR #432. New "Prerequisite" section states the dependency, scopes
+    Phase 0 as the only phase that can start now, and records
+    rebase-drift risk.
+  - ***MAJOR 2 — `max_inserter_tier` was never addressed.*** The design
+    is stack-load-bearing, but that tier cap is an existing hard user
+    constraint *orthogonal* to `inserter_capacity`; the draft conflated
+    the two axes. Added the per-edge slot derivation (the real budget is
+    per-edge, not the machine's 3 columns), the resulting clean
+    feasibility rule **`machine_feed_rate ≥ 2.5/s`**, the tier×level
+    matrix, and kill criterion 2b. Outcome: feasible at engine defaults
+    (Stack, L2) *and* for a `Fast`-capped user at default research —
+    infeasible only for `Regular` below L7 or true L0 without stack
+    inserters, where DI is refused with an honest warning rather than
+    silently under-fed.
+  - ***Self-caught (surfaced by the user asking about 2× long-handed):
+    the `gap=2` corpus rows were mischaracterized.*** The miner requires
+    BOTH pickup and drop to resolve to machine tiles, so all 4,116
+    instances are machine→machine — the 200 `gap=2` rows are a
+    legitimate long-handed machine→machine variant (one spare tile for
+    routing), and #432's belt→belt shape is uncountable by the miner,
+    appearing **zero** times rather than as a "~5% minority". Corrected,
+    and the `gap=2` variant is now a first-class library pattern.
+  - *Minor: reconciled the 4,116-vs-3,887 corpus divergence (Rust vs
+    Node extractors, the #389 tolerance class); corrected
+    `solid-fuel` → `solid-fuel-from-light-oil`; sharpened kill
+    criterion 6 from a Non-goals restatement into a measurable
+    fluid-coverage threshold. Pending user approval.*
