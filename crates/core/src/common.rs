@@ -372,8 +372,12 @@ pub fn ug_max_reach(belt: &str) -> u32 {
 /// Cost multiplier for underground belt tiles vs surface.
 pub const UG_COST_MULTIPLIER: u32 = 5;
 
-/// Pipe-to-ground max reach (tiles between entry and exit, exclusive).
-pub const UG_PIPE_REACH: u32 = 10;
+/// Pipe-to-ground max GAP (free tiles between entry and exit). The game
+/// prototype's `max_underground_distance: 10` caps the ENTITY-TO-ENTITY
+/// distance at 10 — belt `max_distance` semantics — so the gap is 9.
+/// The old value 10 (gap) allowed 11-apart pairs, which the first
+/// fluid-chain sim measurement proved dead in-game (#407).
+pub const UG_PIPE_REACH: u32 = 9;
 
 /// Full belt throughput (both lanes combined) for the given belt entity.
 pub fn belt_throughput(belt: &str) -> f64 {
