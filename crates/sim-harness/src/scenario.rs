@@ -96,7 +96,7 @@ const WINDOW_TICK_CAP_FACTOR: u32 = 4;
 ///
 /// Three windows compared as a group (widest-vs-narrowest, not
 /// pairwise) rejects that: a ramp accumulates its steps across the span
-/// (+8.2% for chem5) while genuine noise cancels. This is also the
+/// (+8.3% for chem5) while genuine noise cancels. This is also the
 /// answer to the second question in #454 — convergence `true` at 160k
 /// and `false` at 480k on identical geometry was one ramp measured at
 /// two points, not an unstable factory.
@@ -982,7 +982,7 @@ script.on_nth_tick(60, function(ev)
         -- passed by any decelerating ramp, and passes it BELOW the
         -- asymptote: chem5 certified 4.62 -> 4.92 -> 5.00/s and reported
         -- the last window as steady state. Across a span a ramp keeps
-        -- accumulating (+8.2% there) while real noise cancels, so the
+        -- accumulating (+8.3% there) while real noise cancels, so the
         -- group comparison rejects what the pairwise one waved through.
         if n >= STABILITY_WINDOWS + 1 then
           local lo, hi, ok = nil, nil, true

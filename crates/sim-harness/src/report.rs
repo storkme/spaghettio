@@ -663,7 +663,7 @@ mod tests {
     /// +1.63%, under the 2% tolerance, so the old last-two-windows test
     /// called it converged and reported the trailing window as
     /// "5.00/s EXACT at plan" — while the measured span averaged 4.84/s.
-    /// Compared as a group the spread is +8.2%, correctly rejected.
+    /// Compared as a group the spread is +8.3%, correctly rejected.
     #[test]
     fn a_decelerating_ramp_is_not_mistaken_for_a_steady_state() {
         let m = fixture_manifest();
