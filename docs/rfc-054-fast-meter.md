@@ -1,0 +1,386 @@
+# RFC-054: The fast meter — a native item-level factory simulator
+
+Registry: [`rfcs.md`](rfcs.md). Status: **Draft (circulated for review)**.
+
+## Summary
+
+Build `spaghettio-meter`: a native, item-level discrete simulator that
+takes **the exported blueprint string plus the sim manifest** — the same
+two artifacts [`spaghettio-sim`](sim-harness.md) takes — moves items
+around at tick granularity, and reports **measured** per-item rates and a
+per-machine census. Three orders of magnitude cheaper than headless
+Factorio, so it runs in CI and, eventually, inside the layout candidate
+search.
+
+It is **not** a validator and must not become one. A validator returns a
+verdict; a meter returns a number. The difference is the whole point: you
+cannot optimize against "0 errors", but you can optimize against
+"14.20/s against a plan of 15.00/s". Its output is `produced_per_s` and a
+machine census, never an `Issue`.
+
+RFC-050 gave the project an oracle. This RFC builds the cheap instrument
+that the oracle makes it possible to trust.
+
+## Motivation
+
+### The defect class the validator structurally cannot see
+
+[#448](https://github.com/storkme/spaghettio/issues/448) found one
+mechanism behind three separately-diagnosed failures: an intermediate
+item is **simultaneously backed up at its producers and absent at its
+consumers**, with starvation concentrated at the *tail* of the consuming
+row. On `chain-ec15` the per-machine dump reads:
+
+```
+EC row:  (46,8) cable 42 | (49,8) 34 | (52,8) 20 | (55,8) 6 | (58,8) 22 | (61,8) cable 2  <- SHORTAGE
+cable cell: (19,6) FULL_OUTPUT, copper-cable 32 stuck
+```
+
+The tail machine is short of cable with **20 iron plates idle beside
+it** — not output-blocked, short exactly one ingredient — while a
+producer cannot push into the belt at all.
+
+The mechanism is a *flux* deficit, not a storage one, which is why time
+does not resolve it:
+
+1. A belt's nominal rate (15/30/45) is the flux past a point on a fully
+   compressed, freely-moving belt with nothing taken off it.
+2. Inserter extraction punches gaps. **Gaps on a free-flowing belt do not
+   heal** — items travel at uniform speed and only compress against a
+   blockage.
+3. Inserter throughput degrades on a gappy belt: the hand arrives ready
+   and finds nothing, and multi-item hands need *consecutive* items.
+4. At exactly-100% provisioning the flux arriving at the last machine
+   equals its entire demand, so it must extract **100% of what passes**.
+   From a gappy belt, it cannot.
+5. The dead-end that would normally back up and re-compress never does,
+   because re-compression needs *surplus* reaching the end and the
+   starving tail consumes everything that arrives. The rescue mechanism
+   is disabled by the starvation it would rescue.
+
+Every step there is time-domain: gap propagation, buffer depth, inserter
+burst size, consumer order along a belt. The validator's model is flow
+conservation on a static graph, and in that language `supply == demand`
+is **correct**. This is not a missing check. It is a dimension the model
+does not have.
+
+Corroboration that it is flux and not storage: the deficit is stable
+across a one-game-hour steady run and **identical at every research level
+from d1 to d7** ([#435](https://github.com/storkme/spaghettio/issues/435)).
+No inserter capacity helps a machine with nothing under its pickup tile.
+
+### The cost of only having a slow instrument
+
+`spaghettio-sim` is ~25–45 s per blueprint at USP scale plus ~10 s
+startup, needs a Factorio install, and cannot run in CI. So it is a
+close-out ritual. Consequences visible in the backlog today:
+
+- Real deficits are invisible until someone runs a job by hand:
+  `chain-ec15` −5.3%, `mega-chain-pu4raw` −27.3%
+  ([#437](https://github.com/storkme/spaghettio/issues/437)),
+  `mega-chain-usp2raw` −57.0%
+  ([#453](https://github.com/storkme/spaghettio/issues/453)),
+  `chain-mil5ore` −28.7%.
+- The response to each is a hand-written check for that shape
+  (`row-output-lane-budget`, then `row-input-belt-margin`). #453 states
+  plainly that three of the four failing fixtures remain **unattributed**
+  — margin is available and nobody knows what binds them. Hand-written
+  checks do not scale to defects nobody has root-caused.
+- #448's threshold sits at *exactly* 100% and says so, because 100% is
+  the only condition anyone has measured failing. The check is an
+  explicit **lower bound**; the true required margin is unknown and
+  almost certainly varies with row length, inserter tier and research,
+  belt tier, stacking, and consumer order. Finding it means sweeping
+  hundreds of variants of one row — a weekend of compute for a native
+  sim, a week of hand-run Factorio jobs otherwise.
+
+### Why now, and not before RFC-050
+
+A homemade simulator is normally untrustworthy because nothing checks it.
+That objection is now answered: there are **14 committed measured
+configurations** (5 blessed baselines + 9 registry entries) plus **3
+more quantified in issues**, spanning clean passes, marginal ~5% shortfalls,
+and outright failures. The calibration set exists, is committed, and
+predates this RFC — so the kill criteria cannot be tuned to.
+
+**This is a different proposal from the audit's §6-D**
+([`architecture-audit-2026-07.md`](architecture-audit-2026-07.md)), which
+suggested black-box search "with validators as fitness". Validators are
+precisely what is blind to this class. §6-D is superseded by this RFC.
+
+## Design
+
+### Placement: a separate crate, deliberately
+
+`crates/meter/` (`spaghettio_meter`), a new workspace member with a
+`spaghettio-meter` binary.
+
+It depends on `spaghettio_core` for **exactly two things**:
+`blueprint_parser::parse_blueprint_string` and `recipe_db` (ingredients,
+craft times, machine crafting speeds). Both are *data*. Everything
+physical is the meter's own.
+
+**The load-bearing rule — the meter may not import the engine's derived
+rate model.** Specifically banned: `machine_feed_rate`, `belt_drop_rate`,
+`lane_capacity*`, `utilization_for`, `LANE_UTILIZATION`,
+`ROW_LANE_FACTOR_*`, and anything else in `common.rs` that is a
+hand-calibrated *estimate* rather than a game constant.
+
+This distinction is the entire integrity argument:
+
+| | Sharing is | Why |
+|---|---|---|
+| Belt speed, inserter swing time, recipe ingredients, machine crafting speed | **fine** | facts about Factorio |
+| `machine_feed_rate`, `belt_drop_rate`, lane capacity, utilization factors | **fatal** | the engine's *beliefs*, hand-calibrated |
+
+If the meter imported `machine_feed_rate` it would reproduce the engine's
+estimate instead of measuring one, and its agreement would be circular —
+the exact failure that made `carries` labels worthless as ground truth
+(audit §3.3 #17) and that let the backwards-inserter bug survive for the
+project's entire history behind three artifacts that all shared the
+engine's direction convention. A separate crate makes this a *compiler*
+boundary rather than a matter of discipline, and KC4 tests it.
+
+### Input: the artifact, not the IR
+
+```
+spaghettio-meter run --bp <file.bp> --manifest <file.manifest.json>
+```
+
+Byte-identical invocation shape to `spaghettio-sim`. The meter reads the
+same exported blueprint string Factorio would read, and the same manifest
+for boundary sources/sinks and planned rates. It never sees
+`LayoutResult`, `carries`, segment ids, or any rate annotation.
+
+Two payoffs beyond integrity: A/B against the real harness is a one-line
+change, and an export-level bug (the #348 class) is *reachable* by the
+meter rather than invisible to it.
+
+### Physics: items, not rates
+
+**This is the one decision that determines whether the RFC is worth
+executing.** A rate-based belt model is another flow model and will
+reproduce the validator's blindness exactly. The model must be
+item-level.
+
+- **Belts** — each lane is a sequence of discrete slots at Factorio's
+  item spacing. Each tick an item advances iff the slot ahead is free.
+  This cellular-automaton form gives the three properties the defect
+  needs *for free*: compression only occurs against a blockage, gaps do
+  not heal on a moving belt, and order is FIFO. Nothing about tail
+  starvation is written into the model; it falls out.
+- **Underground belts** — pair endpoints, lane preserved.
+- **Splitters** — alternating output, lane behaviour and priority per
+  [`factorio-mechanics.md`](factorio-mechanics.md) §Splitters.
+- **Inserters** — an explicit state machine: `idle → swing-to-pickup →
+  grab → swing-to-drop → release`, with swing time from entity data and
+  hand size from tier + declared research level. Pickup draws from
+  **both lanes** under the pickup tile (mechanics **I6**) and **stalls
+  when the slots are empty**; drops go to the **far lane** (**I5**).
+  Density-dependent throughput is therefore *derived*, not modelled —
+  which is precisely why the meter can see what `machine_feed_rate`
+  cannot. Note I6's own wording already concedes the point this RFC
+  turns on: effective pickup rate is limited by what is physically on
+  the belt, and only a fully loaded belt delivers full throughput.
+- **Machines** — ingredient buffers with Factorio's insertion limit, a
+  craft timer of `recipe_time / effective_crafting_speed`, and a capped
+  output slot. States map onto the harness's existing census vocabulary
+  (`working`, `full_output`, `item_ingredient_shortage`) so reports are
+  directly comparable and `scripts/sim-capture-state.sh` forensics
+  transfer unchanged.
+- **Boundary** — manifest `boundary_inputs` are infinite sources,
+  `boundary_outputs` infinite sinks. No feed rigs, no drain banks, hence
+  none of the kit-contamination artifact classes
+  ([`sim-harness-forensics.md`](sim-harness-forensics.md)).
+
+**Stated approximations** (each a candidate divergence, all logged):
+Factorio's real transport lines are continuous-position, not slotted;
+inserter swings are modelled as fixed-duration rather than
+distance-dependent; power is assumed present everywhere; **fluids and
+pipes are out of scope for Phases 0–2** (see Phasing).
+
+### Output: a measurement, not a verdict
+
+```rust
+pub struct MeterReport {
+    pub produced_per_s: BTreeMap<String, f64>,
+    pub delivered_per_s: BTreeMap<String, f64>,
+    pub machine_census: BTreeMap<MachineState, usize>,
+    pub machines: Vec<MachineDetail>,   // position, state, inventory
+    pub belts: Vec<BeltDetail>,         // per-segment density + item counts
+    pub converged: bool,
+    pub ticks: u64,
+}
+```
+
+No `Issue`, no `Severity`, no verdict field. Callers (a test, a gate, the
+candidate search) decide what a number means. Warmup and steady-state
+detection mirror `spaghettio-sim --warmup`, since buffer-fill transients
+reading as convergence is an artifact class the harness already learned
+the hard way.
+
+### Integration (Phase 2, deliberately not Phase 1)
+
+`decomposition_search.rs` already scores candidates on issue kinds and
+area. Phase 2 adds a measured-throughput term. Nothing about Phase 1
+presumes this lands — the meter is worth having as a CI gate even if
+in-loop scoring never happens.
+
+**Note this is the first thing in the project that can gate on measured
+rate in CI.** The real harness cannot; the baselines are committed and
+the meter is native and fast, so `meter_agrees_with_blessed_corpus` is an
+ordinary `cargo test`.
+
+### Rejected alternatives
+
+- **More validator checks.** Two exist for this class already; #453 says
+  three of four fixtures are still unattributed. Checks require a
+  root-caused mechanism per shape; the failures are outrunning the
+  analysis.
+- **A rate/flow model with a "density" correction factor.** This is
+  `machine_feed_rate` again — another hand-calibrated constant with the
+  same drift and Goodhart exposure, and it cannot express order-dependence
+  along a row at all.
+- **Only speeding up `spaghettio-sim`.** The floor is Factorio's own UPS
+  plus process startup. Parallelism helps throughput, not the ~35 s
+  latency that keeps it out of any loop.
+- **Full-fidelity Factorio reimplementation.** Unbounded, and unnecessary:
+  search needs *rank correlation*, not absolute accuracy (KC1).
+
+## Kill criteria
+
+The calibration corpus is **frozen and committed before this RFC**: 5
+baselines in `crates/sim-harness/baselines/` (tech state
+`research_all_technologies;inserter_capacity<=L0;belt_stacking<=S1`) and 9
+geometry-hashed entries in `crates/core/data/cell-sim-registry.json`, plus
+3 measured failures recorded in issues. These numbers cannot be tuned to
+because they already exist. In three bands:
+
+| band | n | configs |
+|---|---|---|
+| **PASS** (at plan) | 10 | gear10, automation, logistic, military, chem5@5, AC@1, AC@2, mil5-from-plates, sulfur@2, plastic@2 |
+| **MARGINAL** (−5% to −8%) | 3 | chain-ec15 @d1 (13.8/15), chain-ec15 @d7 (14.2/15), chain-ec30 (27.7/30) |
+| **FAIL** | 4 | ec10 @L0 (−50%), PU@4 (−27.3%, [#437](https://github.com/storkme/spaghettio/issues/437)), USP@2 (−57.0%, [#453](https://github.com/storkme/spaghettio/issues/453)), mil5-from-ore (−28.7%) |
+
+**KC1 — discrimination first, magnitude second.** Replay the meter over
+the corpus.
+- *Rank*: **zero inversions between bands.** Every FAIL must score below
+  every MARGINAL, and every MARGINAL below every PASS. The MARGINAL band
+  is the real test — separating −5.3% from at-plan is the resolution an
+  in-loop score actually needs, and it is where a rate-shaped model will
+  fail.
+- *Magnitude*: meter `produced_per_s` within **±10 percentage points** of
+  the real measurement on **≥80%** of the corpus.
+
+  **If any between-band inversion survives the Phase-1 calibration
+  budget, stop.** An instrument that cannot order known-good above
+  known-bad cannot steer a search, and magnitude accuracy is worthless
+  without it.
+
+**KC2 — the phenomenon must emerge, not be programmed.** Two conjuncts,
+both on `chain-ec15`, both with **no rule, check, or fudge written to
+produce the outcome**:
+
+- *(a) The gradient.* Reproduce the monotone head→tail depletion and
+  place the tail machine in `item_ingredient_shortage`.
+- *(b) The level-invariance.* The two committed ec15 registry entries are
+  the **same geometry hash** (`cde5f2fcb0f5ef21`) measured at declared
+  levels d1 and d7, moving only 13.8 → 14.2. The meter must reproduce
+  that near-flatness. This is the sharper of the two: every rate-shaped
+  model predicts research helps, and the measurement says it does not.
+
+If either requires special-casing, the meter is a validator in a sim
+costume and delivers nothing the existing checks don't — stop.
+
+**KC3 — speed, and it is the premise.** A 5,000-entity layout must reach
+detected steady state in **≤2 s wall, single-threaded**, on the dev box.
+If it cannot beat **5 s**, in-loop scoring (Phase 2) is dead and the RFC
+degrades to a CI gate — a materially weaker proposition. At >5 s:
+re-scope to CI-gate-only *as an explicit decision-log entry*, or stop.
+
+**KC4 — independence, mechanically enforced.** A test greps the meter
+crate's sources for the banned symbol list (`machine_feed_rate`,
+`belt_drop_rate`, `lane_capacity*`, `utilization_for`,
+`LANE_UTILIZATION`, `ROW_LANE_FACTOR_*`) and fails on any hit. **If
+passing KC1 turns out to require importing one of them, the meter's
+agreement is circular — stop and record it loudly.** This is the
+Goodhart guard made mechanical rather than aspirational.
+
+**KC5 — complexity ceiling.** If the belt + inserter + machine core
+exceeds **~3,000 LOC** before KC1 passes, the fidelity target is too
+ambitious for an approximation. Re-scope to a coarser model or stop.
+
+## Verification plan
+
+Per [`CLAUDE.md`](../CLAUDE.md#verification-protocol-for-layout-engine-changes),
+noting the protocol's own warning that a number moving is not evidence
+the right thing moved.
+
+1. **Phase 0 microbenchmark, real-sim anchored.** Before any full-layout
+   work: a purpose-built single-row fixture (one belt, N inserters, one
+   producer) measured in *real* Factorio across a margin sweep, then
+   replayed in the meter. This tests the core hypothesis — the slotted
+   belt model — in isolation, where a divergence is attributable.
+2. **Corpus replay** (KC1), as `meter_agrees_with_blessed_corpus`. CI-run,
+   unlike every other measured gate this project has.
+3. **KC2 as a named test** — `meter_reproduces_row_tail_starvation`,
+   asserting on the gradient shape, not a rate.
+4. **Divergence log**, `docs/meter-divergence.md`: every fast-vs-real
+   disagreement with its config and magnitude. This maps the meter's
+   trusted envelope and is the artifact that keeps it honest over time. A
+   log that fills with "meter missed X" is the RFC failing in slow motion
+   and should be read as such.
+5. **Clippy clean, no WASM impact** (the meter is a native binary and must
+   not enter the WASM build).
+
+## Phasing
+
+- **Phase 0 — belt physics, anchored.** Entity-constant extraction; the
+  slotted belt + inserter core; the margin microbenchmark above.
+  **Ships value even if everything after it is killed**: it produces the
+  real margin number #448 asked for and could not derive, replacing that
+  check's admitted lower bound with a measured one.
+- **Phase 1 — full solid meter.** Machines, splitters, undergrounds,
+  boundary, convergence. KC1–KC5 evaluated here. Gate: the corpus replay.
+- **Phase 2 — in-loop.** Measured-throughput term in the decomposition
+  search. Gated on KC3.
+- **Phase 3 — fluids.** Pipes and fluid boxes. Deliberately last: the
+  solid sweep is where the sim's evidence is strongest, and the fluid
+  feed path was harness-blocked until recently
+  ([#364](https://github.com/storkme/spaghettio/issues/364)).
+
+## Non-goals
+
+- **Replacing `spaghettio-sim`.** Real Factorio remains the oracle. The
+  meter is a cheap proxy whose licence to be believed is continuously
+  renewed by agreement with it. If the two disagree, the meter is wrong
+  by definition.
+- **Emitting validation issues.** Ever. See Summary.
+- **Full Factorio fidelity.** Rank correlation is the requirement.
+- **Modelling power, pollution, bots, trains, or spoilage.**
+
+## Decision log
+
+- *2026-07-25 — drafted. Commissioned by a project-direction review that
+  scored the four post-audit initiatives (sim harness, direct insertion,
+  cell composition, corpus mining) and found the sim harness had created
+  an unexploited asymmetry: a trustworthy slow oracle makes a cheap fast
+  approximation buildable, and nobody had cashed it. Recorded there and
+  restated here: the project now has **two complexity ladders** —
+  validator-solved (`status.md`: tiers 1–7 SOLVED) and sim-solved
+  (composed/mega chains 27–57% short) — and the ledger leads with the
+  first. Sim-keying the ladder is proposed as separate, cheaper work; it
+  is not in this RFC's scope.*
+- *2026-07-25 — two design decisions pinned before review, as the RFC's
+  whole risk surface: (a) **items, not rates** for the belt model — a
+  rate model reproduces the validator's blindness by construction; (b)
+  **the exported blueprint string as input**, with the engine's derived
+  rate model banned by crate boundary and KC4 — because the failure this
+  instrument exists to prevent (three artifacts agreeing because they
+  share one assumption) is one this project has already suffered twice,
+  in `carries` labels and in the backwards-inserter export bug.*
+- *2026-07-25 — audit §6-D ("simulator-in-the-loop search", scored with
+  **validators** as fitness) is superseded: validators are blind to the
+  motivating class.*
+</content>
+</invoke>

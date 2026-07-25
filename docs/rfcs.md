@@ -65,5 +65,6 @@ backfill the status next time the doc is touched.
 | RFC-051 | 2026-07-22 | [`rfc-051-cell-composition-integration.md`](rfc-051-cell-composition-integration.md) | Complete — default Candidate; sim registry; K-quantization (corridor-cap); EC-row re-measure waits on #381 |
 | RFC-052 | 2026-07-23 | [`rfc-052-oil-mega-cell.md`](rfc-052-oil-mega-cell.md) | Design (circulated for review) |
 | RFC-053 | 2026-07-24 | [`rfc-053-direct-insertion-cells.md`](rfc-053-direct-insertion-cells.md) | Active — Phase 0 complete (KC1 passed; KC6 fired → pipes re-scoped into Phase 2). #432 merged; Phase 1 ready. |
+| RFC-054 | 2026-07-25 | [`rfc-054-fast-meter.md`](rfc-054-fast-meter.md) | Design (circulated for review) |
 
-Next number: **RFC-054**.
+Next number: **RFC-055**.
