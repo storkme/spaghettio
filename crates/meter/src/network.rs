@@ -566,7 +566,16 @@ impl NetworkBuilder {
             }
             let tdir = net.tiles[target].dir;
             let lanes = if is_back_feed(tdir, ahead, pos) {
+                // U6 / B-straight: a straight feed loads both lanes.
                 LaneMap::Straight
+            } else if net.tiles[target].kind == TileKind::UgInput {
+                // **U7**, and it is the opposite of B8: sideloading onto an
+                // underground INPUT fills only the **far** lane. There is no
+                // B11 curve exception here — U8 states that feeding straight
+                // from behind is the *only* way to load both lanes of a UG
+                // input, so a lone side-feeder does not render as a turn the
+                // way it would onto plain belt.
+                LaneMap::OntoLane(1 - near_lane_from(tdir, ahead, pos))
             } else {
                 let only_feeder = feeders.get(&target).map(|v| v.len() == 1).unwrap_or(false);
                 if only_feeder {
@@ -856,6 +865,57 @@ fn orphan_splitter_half_does_not_panic_when_stepped() {
             matches!(side.lanes, LaneMap::OntoLane(_)),
             "side feed must sideload, got {:?}",
             side.lanes
+        );
+    }
+
+    /// **U7**: sideloading onto an underground INPUT fills the **far**
+    /// lane, the opposite of B8's near-lane rule for plain belt.
+    ///
+    /// Both directions are asserted, because a single-side test passes
+    /// under the old near-lane code for whichever side happens to match:
+    /// the defect is a sign error, and a sign error is only visible from
+    /// both sides. Feeding from the west and from the east must land on
+    /// *different* lanes, and each must be the opposite of the plain-belt
+    /// answer for the same geometry.
+    #[test]
+    fn sideload_onto_ug_input_fills_the_far_lane() {
+        for (fx, fy, feeder_dir) in [(1, -1, Dir::South), (1, 1, Dir::North)] {
+            let ents = vec![
+                belt("transport-belt", 0, 0, Dir::East), // back feed into the UG input
+                belt("transport-belt", fx, fy, feeder_dir), // side feed into it
+                ug("underground-belt", 1, 0, Dir::East, "input"),
+                ug("underground-belt", 4, 0, Dir::East, "output"),
+            ];
+            let net = NetworkBuilder::build(&ents);
+            let side = net.tiles[net.tile_at((fx, fy)).unwrap()].downstream.unwrap();
+            let near = near_lane_from(Dir::East, (1, 0), (fx, fy));
+            assert_eq!(
+                side.lanes,
+                LaneMap::OntoLane(1 - near),
+                "U7: side feed from {:?} onto a UG input must fill the FAR lane \
+                 (near={near}), got {:?}",
+                (fx, fy),
+                side.lanes
+            );
+        }
+    }
+
+    /// U8: a *lone* side feeder onto a UG input is still a far-lane
+    /// sideload — the B11 curve rule does not apply, because feeding
+    /// straight from behind is the only way to load both lanes.
+    #[test]
+    fn lone_side_feed_onto_ug_input_is_not_a_curve() {
+        let ents = vec![
+            belt("transport-belt", 1, -1, Dir::South),
+            ug("underground-belt", 1, 0, Dir::East, "input"),
+            ug("underground-belt", 4, 0, Dir::East, "output"),
+        ];
+        let net = NetworkBuilder::build(&ents);
+        let side = net.tiles[net.tile_at((1, -1)).unwrap()].downstream.unwrap();
+        assert_eq!(
+            side.lanes,
+            LaneMap::OntoLane(1 - near_lane_from(Dir::East, (1, 0), (1, -1))),
+            "a lone side feed onto a UG input must NOT keep both lanes (U8)"
         );
     }
 
