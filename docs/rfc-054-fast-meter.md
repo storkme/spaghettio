@@ -598,3 +598,58 @@ the right thing moved.
   test with the frozen baselines as fixtures, which is PR 4. Four configs
   of one family agreeing is encouraging, not a verdict — and two other
   families disagree.*
+- *2026-07-25 — **PR 4: KC1 EVALUATED. IT TRIPS.** Reporting the trip
+  rather than re-scoping around it, because rewriting a kill criterion
+  after seeing it fire is the exact failure kill criteria exist to prevent
+  (cf. RFC-053's KC6 disclosure).*
+
+  | config | band | real | meter | gap |
+  |---|---|---|---|---|
+  | chain-ec15-d1 | Marginal | −8.0% | −7.7% | **0.3pp** |
+  | chain-ec15-d7 | Marginal | −5.3% | −5.6% | **0.3pp** |
+  | chain-ec30-d2 | Marginal | −5.3% | −5.6% | **0.3pp** |
+  | chain-mil5plates-d0 | Pass | −3.3% | −61.1% | **57.8pp** |
+  | chain-mil5ore-d2 | Fail | −28.7% | −66.2% | **37.5pp** |
+  | *fluid-dependent (7)* | — | — | mostly −100% | 43–110pp |
+
+  ***Verdict: both halves of KC1 fail on solid chains.*** *Rank — three
+  inversions, all from `chain-mil5plates-d0`, a real-measured PASS the
+  meter puts at −61.1%, ranking it below every Marginal EC config.
+  Magnitude — 3/5 within 10pp against a bar of 4/5.*
+
+  **Two distinct causes, and only one is excused:**
+
+  1. ***Fluids (excused, phased).*** *Every `mega-*` chain reads −100%: the
+     meter holds fluid-fed machines in shortage, so an early fluid step
+     stops everything downstream. This is the RFC's own Phase 3 boundary
+     behaving as designed — under-report honestly, never over-report. But
+     it exposes a **defect in this RFC's plan**: KC1's corpus is majority
+     fluid-dependent (7 of 12 reachable), and the phasing put KC1's
+     evaluation before fluids existed. The criterion and the phase order
+     were mutually inconsistent from the start. Recorded as a planning
+     error, not discovered as a surprise.*
+  2. ***The military family (NOT excused).*** `chain-mil5plates` *is a
+     **solid** chain measured PASS in game and −61.1% here, and it alone
+     causes every rank inversion.* `chain-mil5ore` *is 37.5pp off in the
+     same direction. Fluids explain neither. This is a genuine defect in
+     the belt/inserter/machine model, unattributed, and it is the thing
+     that must be fixed before KC1 can be re-evaluated honestly.*
+
+  ***What survives, and it is not nothing.*** *On the EC family — the
+  MARGINAL band, which the RFC named as "the real test... where a
+  rate-shaped model will fail" — agreement is **0.3pp across all three
+  configs**, and the level-invariance is reproduced unprogrammed. That is
+  the hardest discrimination KC1 asks for, and the meter does it. The
+  instrument is not wrong everywhere; it is wrong somewhere specific.*
+
+  *The two gate tests stay in the tree, exact, marked `#[ignore]` with the
+  trip documented at the assertion. Not deleted (that is rewriting),
+  not loosened (same), and not left red in the default suite (that trains
+  people to ignore red). Runnable on demand.*
+
+  ***Recommended next step is attribution, not more building***: find why
+  the military family under-reports. It is solid, it is small enough to
+  dump per-machine, and the answer decides whether the belt model has a
+  real hole or the fixture wiring does. Building Phase 3 fluids on top of
+  an unexplained 57.8pp error would be exactly the "exploration that
+  overruns its evidence" this project names as its dominant rework shape.*
