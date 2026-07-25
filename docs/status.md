@@ -165,10 +165,15 @@ multi-consumer export fans, and three latent engine-bug classes fixed
 (hop pair-destroyer ×2, tapoff release/retain hole). Bus-refusal wins
 gated at chem-pack@5, PU@4, USP@2 (each composes 0 errors where the
 bus hard-fails; USP@2 = 48k entities, the largest layout produced).
-Sim evidence: plastic/sulfur/AC-from-raw PASS and registered; PU@4
-and USP@2 measured end-to-end (deepest chains ever run — zero
-kit/fluid errors) with deficits attributed to the #383 smelter
-declared-bound class; they register when #383 lifts. Tracked
+Sim evidence (re-measured 2026-07-24 at the post-#431 L2 default):
+plastic/sulfur/AC-from-raw PASS and registered; **chem-pack@5 now
+PASSES at plan (5.00/5.00 exact, 172/172 working) and is REGISTERED**
+— it never carried the #383 deficit class. **PU@4 FAILS at −27.3%**
+and stays unregistered ([#437](https://github.com/storkme/spaghettio/issues/437));
+its original inserter attribution was disproven (the warnings are a
+validator utilization artifact on composed layouts — each of K=8
+replicas is charged the whole chain's demand), so the deficit is real
+but unattributed. USP@2 not yet re-measured. Tracked
 follow-ups: #383 (bound lift), #409 (landed independently), #423
 (pitch-1 splitter-passthrough). Full trail:
 [`rfc-052-oil-mega-cell.md`](rfc-052-oil-mega-cell.md) decision log.
@@ -344,6 +349,62 @@ clustering (pipeline-independent) rather than `LayoutResult::
 effective_rows`, which the cell-composition pipeline never populates.
 Full trail: `docs/rfc-047-lane-aware-tap-delivery.md` decision log
 (2026-07-23 entry).
+
+**#448 — row-input belt margin (2026-07-25)**: the INPUT-side
+counterpart, and it looks like the attribution
+[#435](https://github.com/storkme/spaghettio/issues/435) was missing.
+A row of N consumers sharing one input belt provisioned at *exactly*
+its aggregate demand starves its TAIL machine permanently: inserters
+pick greedily head-first, every machine buffers deeply, and at 100%
+belt utilization there is no surplus left to reach the end of the row.
+Per-machine sim dumps on `chain-ec15` show the EC row (6 machines ×
+7.5/s copper-cable = **45.00/s** against an express belt's **45.0/s**
+nominal) holding cable 42 → 34 → 20 → 6 → … → 2, the tail machine in
+`item_ingredient_shortage` with 20 iron plates idle beside it, and an
+upstream cable producer `full_output` with 32 cable stuck — i.e. the
+exact "1 output-blocked, 1 ingredient-starved, 13 working" census the
+declared-level sweep reported at EVERY level, and the exact ~5.3%
+level-invariant residual recorded above as "currently unattributed and,
+since the recalibration, unwarned". It is now warned:
+`validate::inserters::check_row_input_belt_margin`
+(`row-input-belt-margin`, Warning) groups input inserters by the
+`row:<recipe>:belt-in:<item>` segment they pick from (tile-adjacency
+clustering, machines attributed through their own inserter — the same
+identification `check_row_output_lane_budget` uses), sums
+`resolve_row_spec` × `utilization_for` demand across the row, and
+compares against the belt's full both-lane stacked nominal.
+**Threshold `demand >= capacity - EPSILON`, grounded exactly at 100%
+because that is the measured-failing condition** — no "safe margin"
+percentage was invented, so the check is a stated LOWER bound on the
+true requirement; a margin sweep (the #431 sweep shape, varying
+provisioned margin instead of research level) would tighten it.
+Scoped to shared belts (≥2 consumers: with one machine there is no head
+and no tail) and to `belt-in` segments only (the k-trunk
+`row:<recipe>:trunk:<item>` path provisions k parallel belts, which a
+single-belt comparison would systematically false-positive).
+A whole-suite sweep (instrumented run over every test) puts it at **32
+rows across 8 fixture configs**, every one the identical zero-margin
+shape and every one judged genuine: chain-ec15's copper-cable row
+(45.00 vs 45.0 express, n=6; shared by three cell-composition tests),
+`tier2_electronic_circuit_from_ore` (1 row, 24 electric furnaces ×
+0.625 = 15.00 vs 15.0 yellow), the EC-from-ore stress fixtures 30s (5),
+30s_decomposed (7), 40s (4), 60s_red (5, n=48 × 0.625 = 30.00 vs 30.0
+red), `stacking_ec_60s_red_one_belt_headline` (5) and
+`partition_strategy_scoreboard` (4, EC rows at 30.00 vs 30.0 red).
+Discriminating, not blanket: sibling rows at 91.7%, 90%, 87.5%, 80%,
+60%, 40% stay silent in the same layouts. Zero layout-hash change (3
+stress goldens re-blessed for warning counts only).
+**Root cause is one comparison operator**: `common::belt_entity_for_rate`
+picks the cheapest tier with `rate <= throughput`, so any demand landing
+exactly on a tier boundary (15/30/45 at S=1) is provisioned with zero
+margin by construction — which is why every single finding reads
+`demand == capacity` to the penny. The engine-side fix (strict `<`, or a
+measured margin) is deliberately NOT in this change: it needs the margin
+sweep first, and it would move geometry everywhere.
+NOT caught: the `chain-mil5ore` and `mega-chain-pu4raw` tail-starvation
+instances — their belts sit at 5.5% and 27% utilization, so whatever
+starves those rows is a different binding constraint and is still
+unattributed.
 
 **`rfc-047-lane-aware-tap-delivery.md` close-out (2026-07-22)**: made
 delivery **lane-aware** so belt stacking raises rate CEILINGS, not just
