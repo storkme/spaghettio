@@ -470,3 +470,40 @@ the right thing moved.
   [#453](https://github.com/storkme/spaghettio/issues/453)'s finding that
   three of the four failing fixtures starve **with margin available**, and
   are still unattributed.*
+- *2026-07-25 — PR 1 review (bot, PR #458): two findings, both valid, both
+  applied — and the second one's **hypothesis was tested and falsified**,
+  which is recorded here because the distinction matters.*
+
+  *(1) **Inserter cycle timer was assigned, not accumulated.** `cycle_timer
+  = cycle_ticks()` discarded the previous cycle's negative overshoot,
+  quantising the period up to `ceil(cycle_ticks)` — 72 ticks instead of
+  71.43 for a regular inserter, i.e. 0.8333/s against I8's 0.84/s, a
+  systematic −0.79%. Every other periodic accumulator in the crate
+  (`Lane::tick`, `Source::tick`, `Chest::tick`) carries its remainder
+  forward; this was the one that didn't, while its own doc comment claimed
+  the timer was "never rounded". Fixed to `+=`. The test that exists to
+  catch exactly this had a **5% tolerance**, which is why it didn't —
+  tightened to 1%.*
+
+  *(2) **`Chest::accept` was all-or-nothing.** It rejected an entire hand
+  whenever the hand did not wholly fit, where a real Factorio inserter
+  performs a partial insert — transferring what fits and retaining the
+  remainder, stalling fully only when nothing fits. Fixed: `accept` now
+  drains what fits and returns the count, and `Inserter::tick` holds the
+  remainder and retries.*
+
+  ***The reviewer's attached hypothesis — that this all-or-nothing rule was
+  "a plausible undisclosed contributor to the non-monotonic
+  starvation-vs-margin behavior" — is FALSIFIED.*** *Re-running the margin
+  probe after the fix gives rates identical to the pre-fix run at every
+  margin (1.02 → 5.50/6.20; 1.05 → 7.12/5.25/7.13; 1.10 → 6.00). Only the
+  buffers moved — they now top up to 39 rather than stalling at 32–37,
+  which confirms the fix genuinely changed behaviour and that the
+  non-monotonicity is not caused by it. The phase-aliasing reading stands,
+  and PR 2's anchored sweep remains the way to settle it.*
+
+  *Worth stating plainly since this RFC is about instruments that do not
+  launder assumptions: a correct fix arriving with a plausible causal story
+  attached is not evidence for the story. The fix was applied on its own
+  merits (it is what the game does); the story was checked separately and
+  did not survive.*

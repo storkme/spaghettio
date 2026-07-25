@@ -75,21 +75,33 @@ impl Chest {
         }
     }
 
-    /// Returns false when the buffer cannot take the whole hand — the
-    /// inserter then holds position, which is what an output-blocked
-    /// inserter does in game.
-    fn accept(&mut self, items: &[ItemId]) -> bool {
-        if let Some(cap) = self.capacity {
-            if self.buffer as usize + items.len() > cap as usize {
-                return false;
-            }
+    /// Insert as much of `hand` as fits, draining what was taken and
+    /// leaving the remainder. Returns the number accepted.
+    ///
+    /// **Partial insert is the game's behaviour, and modelling it
+    /// all-or-nothing was a real defect** (review, PR #458). A Factorio
+    /// inserter transfers as many items as the destination accepts and
+    /// keeps the rest in hand, stalling fully only when *nothing* fits.
+    /// Rejecting a whole hand whenever it doesn't entirely fit made
+    /// consumers block and release in whole-hand quanta once `buffer` came
+    /// within `hand_size` of `capacity` — a quantised cadence capable of
+    /// beating against the source period, i.e. a candidate cause of the
+    /// non-monotonic margin behaviour this crate reports.
+    fn accept(&mut self, hand: &mut Vec<ItemId>) -> usize {
+        let space = match self.capacity {
+            Some(cap) => (cap.saturating_sub(self.buffer)) as usize,
+            None => hand.len(),
+        };
+        let n = space.min(hand.len());
+        if n == 0 {
+            return 0;
         }
-        self.buffer += items.len() as u32;
-        self.received += items.len() as u64;
-        for it in items {
+        for it in hand.drain(..n) {
             *self.by_item.entry(it.0).or_insert(0) += 1;
         }
-        true
+        self.buffer += n as u32;
+        self.received += n as u64;
+        n
     }
 
     fn tick(&mut self) {

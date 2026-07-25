@@ -124,10 +124,14 @@ impl Inserter {
     ///
     /// `grab` is invoked only at the moment the hand is actually over the
     /// source, which is what makes lost swings possible.
+    /// `deposit` inserts as much of the hand as fits, draining what it
+    /// took, and returns the count accepted. A partial return means the
+    /// inserter keeps the remainder and retries — which is what the game
+    /// does, and is not the same as being blocked.
     pub fn tick<G, D>(&mut self, mut grab: G, mut deposit: D)
     where
         G: FnMut(u32, &mut Vec<ItemId>),
-        D: FnMut(&mut Vec<ItemId>) -> bool,
+        D: FnMut(&mut Vec<ItemId>) -> usize,
     {
         if self.phase == Phase::WaitingForSource {
             let want = self.hand_size();
@@ -145,7 +149,14 @@ impl Inserter {
             // fill it. Count the shortfall — the density penalty the
             // engine's flat rate cannot express.
             self.short_hand_items += (want as u64).saturating_sub(self.hand.len() as u64);
-            self.cycle_timer = self.cycle_ticks();
+            // ACCUMULATE, never assign. The previous cycle ended with the
+            // timer slightly below zero; that overshoot is the fractional
+            // part of the true period and must carry forward. A hard
+            // assignment quantises the period up to `ceil(cycle_ticks)` —
+            // for a regular inserter, 72 ticks instead of 71.43, i.e.
+            // 0.8333/s against I8's 0.84/s. Same discipline as
+            // `Lane::tick`, `Source::tick` and `Chest::tick`.
+            self.cycle_timer += self.cycle_ticks();
             self.dropped = false;
             self.phase = Phase::Cycling;
             // Fall through: the grab tick is part of the cycle, not extra.
@@ -157,13 +168,14 @@ impl Inserter {
         // The drop happens at the halfway crossing (pickup → drop is half
         // a turn), the return over the remaining half.
         if !self.dropped && self.cycle_timer <= self.cycle_ticks() / 2.0 {
-            if deposit(&mut self.hand) {
-                self.delivered += self.hand.len() as u64;
-                self.hand.clear();
+            self.delivered += deposit(&mut self.hand) as u64;
+            if self.hand.is_empty() {
                 self.swings += 1;
                 self.dropped = true;
             } else {
-                // Destination full: hold position. Give back the tick so a
+                // Nothing fit, or only part of the hand did. Hold position
+                // with the remainder and retry next tick — the game's
+                // partial-insert behaviour. Give back the tick so a
                 // blocked inserter does not silently complete its cycle.
                 self.cycle_timer += 1.0;
                 return;
@@ -196,7 +208,7 @@ mod tests {
                         hand.push(IRON);
                     }
                 },
-                |_hand| true,
+                |hand| { let n = hand.len(); hand.clear(); n },
             );
         }
         ins
@@ -214,9 +226,14 @@ mod tests {
             let ticks = 36_000;
             let ins = run_saturated(kind, 0, ticks);
             let got = ins.rate_per_second(ticks);
+            // 1%, not 5%. A 5% band hid a real defect: the cycle timer was
+            // hard-assigned rather than accumulated, quantising a regular
+            // inserter's period from 71.43 to 72 ticks (0.8333/s vs 0.84,
+            // −0.79%) — invisible at 5%, caught by review instead of by
+            // the test that exists to catch it.
             assert!(
-                (got - want).abs() / want < 0.05,
-                "{kind:?}: derived {got:.3}/s, I8 says {want}"
+                (got - want).abs() / want < 0.01,
+                "{kind:?}: derived {got:.4}/s, I8 says {want}"
             );
         }
     }
@@ -255,7 +272,7 @@ mod tests {
                         hand.push(IRON);
                     }
                 },
-                |_hand| true,
+                |hand| { let n = hand.len(); hand.clear(); n },
             );
         }
         let full = run_saturated(InserterKind::Stack, 0, ticks);
@@ -280,7 +297,7 @@ mod tests {
             0,
         );
         for _ in 0..ticks {
-            ins.tick(|_want, _hand| {}, |_hand| true);
+            ins.tick(|_want, _hand| {}, |hand| { let n = hand.len(); hand.clear(); n });
         }
         assert_eq!(ins.delivered, 0);
         assert_eq!(ins.starved_ticks, ticks);
