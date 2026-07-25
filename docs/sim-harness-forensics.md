@@ -77,6 +77,17 @@ Setup, CLI usage, and the concurrency/lock rules live in
    settled. Cure: read the `NOT CONVERGED` line and its window-rate
    series before believing any number; **never compare rates across
    runs that did not converge.**
+5b. **A ramp certified as convergence** — the same artifact reaching
+   *converged* runs, and the nastier half. The stability test compared
+   only the last two windows, which any decelerating ramp passes once
+   its slope flattens under 2%, at a point short of its asymptote.
+   chem5 (registered PASS) was certified on 4.62 → 4.92 → 5.00/s and
+   published the trailing window as "5.00/s EXACT at plan" while the
+   measured span averaged 4.84/s. Signature: a monotone window-rate
+   series in a run marked `converged: true`. Cure: convergence now
+   compares the trailing three windows as a group; a `converged` run
+   whose `drift_pct` is near the tolerance still deserves a longer
+   `--warmup` before its number is blessed.
 6. **A budget that cannot fit the test.** `--warmup` used to re-floor the
    tick ceiling at warmup + ONE window while convergence needs three
    checkpoints, so any warmup past the default ceiling reported

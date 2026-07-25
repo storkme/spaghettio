@@ -83,14 +83,33 @@ pub const WINDOW_ITEM_FLOOR: f64 = 300.0;
 /// into a verdict.
 const WINDOW_TICK_CAP_FACTOR: u32 = 4;
 
-/// Checkpoints needed before the convergence test can run at all: three
-/// (a->b is window 1, b->c is window 2, and it compares those two). A
-/// tick ceiling that cannot fit three makes convergence *structurally*
-/// impossible — which is what `with_warmup` used to produce, re-flooring
-/// the ceiling at `warmup + ONE window`. Every `--warmup` override past
-/// the default ceiling therefore reported `converged: false` as a
-/// property of the harness, not of the factory (#454).
-const MIN_CHECKPOINTS: u32 = 3;
+/// Consecutive windows that must all agree before the run is called
+/// converged.
+///
+/// This was 2 — "the last step was small" — which a **decelerating ramp
+/// always eventually passes**, at a point systematically short of its
+/// asymptote. chem5 (a registered PASS) certified convergence on
+/// 4.62 -> 4.92 -> 5.00/s: monotone, still climbing, and the final +1.6%
+/// step slipped under the 2% tolerance. The trailing window then got
+/// reported as "5.00/s EXACT at plan" when the whole measured span
+/// averaged 4.84/s.
+///
+/// Three windows compared as a group (widest-vs-narrowest, not
+/// pairwise) rejects that: a ramp accumulates its steps across the span
+/// (+8.2% for chem5) while genuine noise cancels. This is also the
+/// answer to the second question in #454 — convergence `true` at 160k
+/// and `false` at 480k on identical geometry was one ramp measured at
+/// two points, not an unstable factory.
+pub const STABILITY_WINDOWS: u32 = 3;
+
+/// Checkpoints needed before the convergence test can run at all: one
+/// opening checkpoint plus `STABILITY_WINDOWS` closes. A tick ceiling
+/// that cannot fit them makes convergence *structurally* impossible —
+/// which is what `with_warmup` used to produce, re-flooring the ceiling
+/// at `warmup + ONE window`. Every `--warmup` override past the default
+/// ceiling therefore reported `converged: false` as a property of the
+/// harness, not of the factory (#454).
+const MIN_CHECKPOINTS: u32 = STABILITY_WINDOWS + 1;
 
 /// Two consecutive stability windows must agree within this fraction to
 /// call the run converged (RFC: "loop-until-stable ... within tolerance" —
@@ -127,11 +146,11 @@ pub fn window_tick_cap(window_ticks: u32) -> u32 {
 }
 
 /// Smallest ceiling that can still fit `MIN_CHECKPOINTS` checkpoints —
-/// one opening checkpoint at warmup plus two worst-case (cap-length)
-/// windows. Below this the convergence test never runs and the verdict
-/// says nothing about the factory (#454).
+/// one opening checkpoint at warmup plus `STABILITY_WINDOWS` worst-case
+/// (cap-length) windows. Below this the convergence test never runs and
+/// the verdict says nothing about the factory (#454).
 fn viable_end_tick(warmup: u32, window: u32) -> u32 {
-    round_up_60(warmup + window_tick_cap(window) * (MIN_CHECKPOINTS - 1))
+    round_up_60(warmup + window_tick_cap(window) * STABILITY_WINDOWS)
 }
 
 fn round_up_60(t: u32) -> u32 {
@@ -161,10 +180,13 @@ impl RunParams {
         let target_rate = manifest.targets.first().map(|t| t.rate).unwrap_or(1.0);
         let window = default_window_ticks(target_rate);
         // Ceiling must clear warmup plus enough worst-case windows to run
-        // the convergence test with room to spare; an explicit `--ticks`
+        // the convergence test with room to spare — a factory typically
+        // needs several windows before the trailing group goes flat, and
+        // at plan each window closes at its nominal length rather than
+        // the cap, so this budget is rarely spent. An explicit `--ticks`
         // is still floored at viability, since a ceiling that cannot fit
         // `MIN_CHECKPOINTS` reports non-convergence by construction.
-        let default_ceiling = round_up_60(warmup + window_tick_cap(window) * (MIN_CHECKPOINTS + 1));
+        let default_ceiling = round_up_60(warmup + window_tick_cap(window) * MIN_CHECKPOINTS * 2);
         RunParams {
             end_tick: end_tick.unwrap_or(default_ceiling).max(viable_end_tick(warmup, window)),
             speed,
@@ -517,6 +539,7 @@ pub fn build_control_lua(manifest: &Manifest, bp: &str, params: &RunParams) -> S
         window_tick_cap(params.window_ticks)
     );
     let _ = writeln!(out, "local STABILITY_TOL = {STABILITY_TOLERANCE}");
+    let _ = writeln!(out, "local STABILITY_WINDOWS = {STABILITY_WINDOWS}");
     let _ = writeln!(out, "local LX0, LY0 = {}, {}", manifest.bbox_min[0], manifest.bbox_min[1]);
     let _ = writeln!(out, "local DIMS_X, DIMS_Y = {}, {}", manifest.dims[0], manifest.dims[1]);
     let _ = writeln!(out, "local INSERTER_CAPACITY = {}", manifest.inserter_capacity);
@@ -952,15 +975,29 @@ script.on_nth_tick(60, function(ev)
           delivered = delivered, window_ticks = d_ticks, window_items = d_items,
           short_sampled = not by_items})
         n = n + 1
-        -- Need two consecutive windows to compare (three checkpoints:
-        -- a->b is window 1, b->c is window 2) -- "loop-until-stable",
-        -- not a single retry.
-        if n >= 3 then
-          local a, b, c = storage.checkpoints[n - 2], storage.checkpoints[n - 1], storage.checkpoints[n]
-          local dt1, dt2 = (b.tick - a.tick) / 60, (c.tick - b.tick) / 60
-          local rate1 = dt1 > 0 and (b.produced - a.produced) / dt1 or 0
-          local rate2 = dt2 > 0 and (c.produced - b.produced) / dt2 or 0
-          if rate1 > 0 and math.abs(rate2 - rate1) / rate1 <= STABILITY_TOL then
+        -- Convergence = the trailing STABILITY_WINDOWS window rates all
+        -- agree, compared widest-vs-narrowest rather than pairwise.
+        --
+        -- Comparing only the LAST TWO -- "the last step was small" -- is
+        -- passed by any decelerating ramp, and passes it BELOW the
+        -- asymptote: chem5 certified 4.62 -> 4.92 -> 5.00/s and reported
+        -- the last window as steady state. Across a span a ramp keeps
+        -- accumulating (+8.2% there) while real noise cancels, so the
+        -- group comparison rejects what the pairwise one waved through.
+        if n >= STABILITY_WINDOWS + 1 then
+          local lo, hi, ok = nil, nil, true
+          for i = n - STABILITY_WINDOWS + 1, n do
+            local a, b = storage.checkpoints[i - 1], storage.checkpoints[i]
+            local dt = (b.tick - a.tick) / 60
+            local r = dt > 0 and (b.produced - a.produced) / dt or 0
+            if r <= 0 then
+              ok = false
+              break
+            end
+            if lo == nil or r < lo then lo = r end
+            if hi == nil or r > hi then hi = r end
+          end
+          if ok and lo and lo > 0 and (hi - lo) / lo <= STABILITY_TOL then
             finalize(s, true)
             return
           end
@@ -1035,7 +1072,10 @@ mod tests {
         // window: `+ window_ticks` left room for a single checkpoint
         // where the test needs three, so a --warmup override reported
         // `converged: false` by construction (#454).
-        assert_eq!(p.end_tick, 216_060 + window_tick_cap(1800) * 2);
+        assert_eq!(
+            p.end_tick,
+            216_060 + window_tick_cap(1800) * STABILITY_WINDOWS
+        );
     }
 
     /// #454 regression. `mega-chain-usp2raw --warmup 480000` finished
@@ -1050,12 +1090,11 @@ mod tests {
             for explicit in [None, Some(1_000), Some(12_000)] {
                 let p = RunParams::defaults_for(&m, "t".into(), 16, explicit).with_warmup(warmup);
                 let measurable = p.end_tick - p.warmup_ticks;
-                let worst_case_windows = window_tick_cap(p.window_ticks) * (MIN_CHECKPOINTS - 1);
+                let worst_case_windows = window_tick_cap(p.window_ticks) * STABILITY_WINDOWS;
                 assert!(
                     measurable >= worst_case_windows,
                     "warmup={warmup} explicit={explicit:?}: only {measurable} ticks after \
-                     warmup, need {worst_case_windows} to close {} windows",
-                    MIN_CHECKPOINTS - 1
+                     warmup, need {worst_case_windows} to close {STABILITY_WINDOWS} windows"
                 );
             }
         }
@@ -1090,6 +1129,12 @@ mod tests {
         );
         // A capped window must be reportable as short-sampled.
         assert!(lua.contains("short_sampled = not by_items"));
+        // Convergence compares a GROUP of windows widest-vs-narrowest,
+        // not the last pair — a decelerating ramp passes any
+        // last-step test once its slope flattens under tolerance.
+        assert!(lua.contains(&format!("local STABILITY_WINDOWS = {STABILITY_WINDOWS}")));
+        assert!(lua.contains("if n >= STABILITY_WINDOWS + 1 then"));
+        assert!(lua.contains("(hi - lo) / lo <= STABILITY_TOL"));
     }
 
     #[test]

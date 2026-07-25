@@ -121,9 +121,26 @@ below it, sample size fell in proportion and the run failed closed to
 NO DATA. The rule of thumb that fell out: **the worse a factory
 performed, the less measurable it became** (#454).
 
+### What "converged" means
+
+Convergence requires the **trailing three window rates to agree as a
+group** (widest vs narrowest within 2%), not just the last two.
+
+Comparing the last two only asks "was the last step small", and *any
+decelerating ramp eventually passes that* — at a point systematically
+short of where it is heading. chem5, a registered PASS, was certified on
+4.62 → 4.92 → 5.00/s: monotone, still climbing, final step +1.6%. The
+trailing window got published as "5.00/s EXACT at plan" while the whole
+measured span averaged 4.84/s. Across a group a ramp keeps accumulating
+(+8.3% there) while genuine noise cancels.
+
+This is also the answer to #454's second question — `converged: true` at
+160k ticks and `false` at 480k on identical geometry was one long ramp
+sampled at two points, not an unstable factory.
+
 Every report prints a `measurement:` line — window length, achieved
-items against the 300 floor, checkpoint count, and drift between the
-last two window rates — plus an explicit warning for each way the number
+items against the 300 floor, checkpoint count, and the drift across the
+stability group — plus an explicit warning for each way the number
 can mislead:
 
 - **fewer than 3 checkpoints** — the convergence test never ran;
