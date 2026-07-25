@@ -14,8 +14,11 @@
 //! offsets of 0, ±1, ±2 dominate real cable→EC builds (see the
 //! `di-patterns` miner).
 //!
-//! This module is pure geometry + flow: it does not place entities. The
-//! placer consumes a [`StraddlePlan`] to stamp the cell.
+//! Two halves: [`plan_straddle`] works out the geometry and the
+//! producer→consumer edges (pure flow + columns, no entities), and
+//! [`stamp_di_cell`] turns a plan into placed machines and inserters.
+//! Wiring the cell into `place_rows` — belt suppression for the coupled
+//! item and the lane-planner skip — is the remaining Phase 1 step.
 
 /// One producer→consumer coupling in a planned cell.
 #[derive(Debug, Clone, PartialEq)]
@@ -326,6 +329,250 @@ mod tests {
             for w in p.consumer_xs.windows(2) {
                 assert!(w[1] - w[0] >= 3, "consumers overlap: {:?}", p.consumer_xs);
             }
+        }
+    }
+}
+
+// ── cell stamping ───────────────────────────────────────────────────────────
+
+use crate::models::{EntityDirection, PlacedEntity};
+
+/// Everything the stamper needs beyond the geometry: which entities to
+/// place and how they're labelled.
+#[derive(Debug, Clone)]
+pub struct DiCellSpec<'a> {
+    pub producer_entity: &'a str,
+    pub consumer_entity: &'a str,
+    pub producer_recipe: &'a str,
+    pub consumer_recipe: &'a str,
+    /// The directly-inserted item.
+    pub item: &'a str,
+    /// Inserter entity for the coupling — chosen by the caller's ladder
+    /// against [`StraddlePlan::required_rate`]. Must be reach-1: the cell
+    /// puts the rows one tile apart, so a long-handed inserter would
+    /// reach straight past both machines.
+    pub inserter: &'a str,
+    /// What one of those inserters moves, items/s, machine→machine.
+    pub inserter_rate: f64,
+}
+
+/// Stamp a planned DI cell as entities, with its top-left at `(x0, y0)`.
+///
+/// Layout, for machines `h` tiles tall:
+/// ```text
+///   y0 .. y0+h-1     producer machines
+///   y0+h             inserter band (reach 1: picks north, drops south)
+///   y0+h+1 .. +h     consumer machines
+/// ```
+///
+/// The inserter band is exactly ONE tile — that is the whole point of the
+/// cell. It is what lets a reach-1 inserter (and therefore a stack
+/// inserter, the only high-rate reach-1 class) couple the machines
+/// directly, with **no belt for the coupled item on either side**.
+///
+/// Returns `None` if `machine_h` is non-positive, or if any edge cannot be
+/// served within the inserter slots it owns — the caller must then fall
+/// back (bridge or bus) rather than emit an under-fed cell.
+pub fn stamp_di_cell(
+    plan: &StraddlePlan,
+    spec: &DiCellSpec<'_>,
+    x0: i32,
+    y0: i32,
+    machine_h: i32,
+) -> Option<Vec<PlacedEntity>> {
+    let rate_usable = spec.inserter_rate.is_finite() && spec.inserter_rate > 0.0;
+    if machine_h <= 0 || !rate_usable {
+        return None;
+    }
+    let band_y = y0 + machine_h;
+    let consumer_y = band_y + 1;
+    let seg = format!("di-cell:{}:{}", spec.item, spec.consumer_recipe);
+
+    let mut out = Vec::new();
+    for &px in &plan.producer_xs {
+        out.push(PlacedEntity {
+            name: spec.producer_entity.to_string(),
+            x: x0 + px,
+            y: y0,
+            direction: EntityDirection::North,
+            recipe: Some(spec.producer_recipe.to_string()),
+            segment_id: Some(format!("{seg}:producer")),
+            ..Default::default()
+        });
+    }
+    for &cx in &plan.consumer_xs {
+        out.push(PlacedEntity {
+            name: spec.consumer_entity.to_string(),
+            x: x0 + cx,
+            y: consumer_y,
+            direction: EntityDirection::North,
+            recipe: Some(spec.consumer_recipe.to_string()),
+            segment_id: Some(format!("{seg}:consumer")),
+            ..Default::default()
+        });
+    }
+
+    // One inserter per slot needed, drawn from the columns that edge owns.
+    // Edges cannot borrow each other's columns: an inserter picks from
+    // exactly one producer.
+    for edge in &plan.edges {
+        let needed = (edge.flow / spec.inserter_rate).ceil() as usize;
+        if needed > edge.columns.len() {
+            return None;
+        }
+        for &col in edge.columns.iter().take(needed) {
+            out.push(PlacedEntity {
+                name: spec.inserter.to_string(),
+                x: x0 + col,
+                y: band_y,
+                // South = picks from the tile north (producer), drops to
+                // the tile south (consumer), at reach 1.
+                direction: EntityDirection::South,
+                carries: Some(spec.item.to_string()),
+                segment_id: Some(seg.clone()),
+                ..Default::default()
+            });
+        }
+    }
+    Some(out)
+}
+
+#[cfg(test)]
+mod stamp_tests {
+    use super::*;
+    use crate::common::{dir_to_vec, entity_size, inserter_reach, machine_feed_rate, QualityTier};
+    use rustc_hash::FxHashMap;
+
+    fn canonical() -> (StraddlePlan, f64) {
+        let p = plan_straddle(6, 4, 5.0, 7.5, 3).unwrap();
+        let rate = machine_feed_rate("stack-inserter", QualityTier::Normal, 0);
+        (p, rate)
+    }
+
+    fn spec(rate: f64) -> DiCellSpec<'static> {
+        DiCellSpec {
+            producer_entity: "assembling-machine-3",
+            consumer_entity: "assembling-machine-3",
+            producer_recipe: "copper-cable",
+            consumer_recipe: "electronic-circuit",
+            item: "copper-cable",
+            inserter: "stack-inserter",
+            inserter_rate: rate,
+        }
+    }
+
+    /// THE defining property of a DI cell: every inserter picks from a
+    /// PRODUCER machine tile and drops into a CONSUMER machine tile — no
+    /// belt on either side. This is the same test `classify.rs` applies
+    /// when counting direct insertion in community blueprints, so passing
+    /// it means the engine now emits what the corpus is full of.
+    #[test]
+    fn every_inserter_couples_machine_to_machine() {
+        let (plan, rate) = canonical();
+        let ents = stamp_di_cell(&plan, &spec(rate), 0, 0, 3).expect("canonical cell must stamp");
+
+        let mut machine_at: FxHashMap<(i32, i32), &str> = FxHashMap::default();
+        for e in ents.iter().filter(|e| e.name.starts_with("assembling-machine")) {
+            let (w, h) = entity_size(&e.name);
+            let role = if e.recipe.as_deref() == Some("copper-cable") { "producer" } else { "consumer" };
+            for dx in 0..w as i32 {
+                for dy in 0..h as i32 {
+                    machine_at.insert((e.x + dx, e.y + dy), role);
+                }
+            }
+        }
+
+        let inserters: Vec<_> = ents.iter().filter(|e| e.name.contains("inserter")).collect();
+        assert!(!inserters.is_empty());
+        for ins in &inserters {
+            let (dx, dy) = dir_to_vec(ins.direction);
+            let r = inserter_reach(&ins.name);
+            assert_eq!(r, 1, "the 1-tile band requires a reach-1 inserter");
+            let pick = (ins.x - dx * r, ins.y - dy * r);
+            let drop = (ins.x + dx * r, ins.y + dy * r);
+            assert_eq!(
+                machine_at.get(&pick).copied(),
+                Some("producer"),
+                "inserter at {:?} must pick from a producer machine",
+                (ins.x, ins.y)
+            );
+            assert_eq!(
+                machine_at.get(&drop).copied(),
+                Some("consumer"),
+                "inserter at {:?} must drop into a consumer machine",
+                (ins.x, ins.y)
+            );
+        }
+    }
+
+    /// No belt entity is emitted for the coupled item — the cell removes
+    /// the interface rather than bridging it (the distinction from #432).
+    #[test]
+    fn cell_emits_no_belts() {
+        let (plan, rate) = canonical();
+        let ents = stamp_di_cell(&plan, &spec(rate), 0, 0, 3).unwrap();
+        assert!(
+            !ents.iter().any(|e| e.name.contains("belt") || e.name.contains("splitter")),
+            "a DI cell must contain no belt for the coupled item"
+        );
+    }
+
+    /// Geometry: 3-tall machines, a ONE-tile inserter band, consumers
+    /// directly below — 7 tiles for the whole coupling.
+    #[test]
+    fn cell_is_seven_tiles_tall_with_a_one_tile_band() {
+        let (plan, rate) = canonical();
+        let ents = stamp_di_cell(&plan, &spec(rate), 0, 0, 3).unwrap();
+        let prod_y = ents.iter().find(|e| e.recipe.as_deref() == Some("copper-cable")).unwrap().y;
+        let band_y = ents.iter().find(|e| e.name.contains("inserter")).unwrap().y;
+        let cons_y = ents.iter().find(|e| e.recipe.as_deref() == Some("electronic-circuit")).unwrap().y;
+        assert_eq!((prod_y, band_y, cons_y), (0, 3, 4));
+        let bottom = cons_y + 3;
+        assert_eq!(bottom - prod_y, 7, "coupling height");
+    }
+
+    /// At stack tier one inserter per edge suffices (12/s vs a 5.0/s
+    /// worst edge), so the canonical cell is exactly 8 inserters — the
+    /// count RFC-053's Design section predicts.
+    #[test]
+    fn canonical_cell_uses_eight_inserters_at_stack_tier() {
+        let (plan, rate) = canonical();
+        let ents = stamp_di_cell(&plan, &spec(rate), 0, 0, 3).unwrap();
+        assert_eq!(ents.iter().filter(|e| e.name.contains("inserter")).count(), 8);
+        assert_eq!(ents.iter().filter(|e| e.name.starts_with("assembling")).count(), 10);
+    }
+
+    /// A weaker inserter needs more slots per edge — and the cell still
+    /// stamps while the edges' own columns can hold them. Fast at the L2
+    /// engine default: the 5.0/s edge needs 2 of its 2 slots.
+    #[test]
+    fn weaker_inserters_fill_more_slots_per_edge() {
+        let plan = plan_straddle(6, 4, 5.0, 7.5, 3).unwrap();
+        let rate = machine_feed_rate("fast-inserter", QualityTier::Normal, 2);
+        let ents = stamp_di_cell(&plan, &spec(rate), 0, 0, 3).unwrap();
+        // 4 big edges × 2 + 4 small edges × 1
+        assert_eq!(ents.iter().filter(|e| e.name.contains("inserter")).count(), 12);
+    }
+
+    /// Below the cell's required rate the stamper REFUSES rather than
+    /// emitting an under-fed cell — the caller falls back to bridge/bus.
+    #[test]
+    fn under_rate_inserter_refuses_to_stamp() {
+        let plan = plan_straddle(6, 4, 5.0, 7.5, 3).unwrap();
+        let weak = machine_feed_rate("inserter", QualityTier::Normal, 0); // 0.84/s
+        assert!(weak < plan.required_rate());
+        assert!(stamp_di_cell(&plan, &spec(weak), 0, 0, 3).is_none());
+    }
+
+    /// Origin offset shifts the whole cell rigidly.
+    #[test]
+    fn cell_translates_with_origin() {
+        let (plan, rate) = canonical();
+        let a = stamp_di_cell(&plan, &spec(rate), 0, 0, 3).unwrap();
+        let b = stamp_di_cell(&plan, &spec(rate), 10, 20, 3).unwrap();
+        assert_eq!(a.len(), b.len());
+        for (p, q) in a.iter().zip(b.iter()) {
+            assert_eq!((q.x - p.x, q.y - p.y), (10, 20));
         }
     }
 }
