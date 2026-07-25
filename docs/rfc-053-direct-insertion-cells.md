@@ -500,6 +500,36 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
 - **Phase 1 — the DI cell.** `bus::di_cell` for the simplest shape: one
   producer recipe, one consumer recipe, consumer's only solid input is
   the DI'd item.
+
+  **⚠️ The worked example in this RFC is NOT a Phase 1 shape (found
+  2026-07-25).** `electronic-circuit` takes `[iron-plate,
+  copper-cable]` — *two* solid inputs — so `copper-cable → EC`, the pair
+  every geometry figure above is derived from, fails Phase 1's own scope
+  line. The consumer's north face is spent on the DI band and its south
+  face on the output inserter, so the second input has nowhere to land
+  until Phase 2's face allocation. The geometry stays valid (the
+  straddle math is rate-driven and item-agnostic — that is why 1a could
+  reproduce `[1,5,10,14]`), but the **wiring target** must be a
+  single-solid-input consumer. From `recipes.json`, discounting
+  `*-recycling`, the in-scope pairs are:
+
+  | producer → consumer | note |
+  |---|---|
+  | `iron-plate → steel-plate` | furnace→furnace; the corpus's 1,585-instance shape |
+  | `iron-plate → iron-gear-wheel` | canonical assembler cell |
+  | `iron-plate → pipe`, `→ iron-stick` | same shape |
+  | `copper-plate → copper-cable` | producer is the smelter |
+  | `stone → stone-brick` | furnace→furnace |
+
+  **This gate must live in the placer, not the solver.**
+  `netflow::detect_di_couplings` gates on one-producer / one-consumer /
+  no-external-supply / no-surplus / not-fluid — it does **not** look at
+  the consumer's input count. So it *will* emit a `copper-cable →
+  electronic-circuit` coupling, and Phase 1c wiring that trusts the
+  coupling list would build a cell whose EC machines never receive
+  iron-plate: a layout that validates clean and starves, which is
+  exactly the #383/#432 failure mode this RFC's own verification note
+  warns about.
   - **1a ✅ LANDED — straddle geometry + edge assignment.**
     `bus::di_cell::plan_straddle` is the algorithmic core: producer and
     consumer machine positions, the producer→consumer edge set, per-edge
@@ -548,21 +578,52 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
       belt) and returns a `DiCellLayout` carrying `input_belt_y` /
       `output_belt_y` / x-extent, i.e. exactly the fields a `RowSpan`
       needs. What remains of this step is constructing the `RowSpan`
-      itself and hanging it off a `RowKind`. **Open contract question,
-      narrowed 2026-07-25**: the producer row in a cell has NO solid
-      output belt (its output leaves by inserter), but `RowSpan`'s
-      `output_belt_y` is a plain `i32`, not an `Option`. Evidence that
-      this is benign: `lane_planner` only reads
-      `output_belt_y_for(item)` while *constructing a lane*, and the
-      coupled item's lane is dropped before that point because the
-      consumer carries `di_input` for it (zero surviving consumers ⇒
-      lane skipped). So the field should never be read for the DI'd
-      item — but that is currently an INFERENCE from reading the code,
-      not a verified property. Confirm it empirically (build a cell
-      layout, run the validator) before relying on it, or give the
-      producer's `output_belt_y` a deliberately invalid sentinel so a
-      stray read fails loudly instead of silently pointing at a tile
-      that isn't a belt; (2) intercept the producer/consumer spec pair
+      itself and hanging it off a `RowKind`. **Contract question —
+      RESOLVED 2026-07-25, by design change rather than by either
+      prescribed remedy.** The question was whether a cell's producer
+      row can safely carry a plain-`i32` `output_belt_y` when it owns no
+      output belt. Two things were established:
+
+      - *The premise it rested on was wrong.* #447 recorded that
+        "`lane_planner` only reads `output_belt_y_for(item)`". There are
+        in fact **11 bare `output_belt_y` reads** across
+        `lane_planner`, `lane_order` and `ghost_router`. Auditing every
+        one: eight index through a `BusLane`
+        (`all_producers()` / `producer_row` / `extra_producer_rows`, or
+        `all_producer_rows` during lane construction), so the
+        `di_input` argument does cover them; but the three
+        output-merger sites (`ghost_router.rs:3435`, `:3519`, `:3603`)
+        index rows by **`rs.spec.outputs` containing the item**, not
+        through any lane. A row is reachable there regardless of what
+        the lane planner did, so the original inference was not merely
+        unverified — it was insufficient.
+      - *The fix is to remove the hazard, not detect it.* A cell emits
+        **one fused `RowSpan`**, not two. Its `spec` carries the
+        producer's inputs and the consumer's outputs (the cell really is
+        a composite machine: it eats iron-ore off a belt and emits gears
+        onto one), and its `output_belt_y` is the cell's real output
+        belt. **The producer never gets a row of its own**, so no row
+        with a phantom output belt is ever constructed and all 11 read
+        sites are correct by construction. This also spares every
+        downstream consumer — lane planner, output merger, validators —
+        from special-casing cells.
+
+      **What the audit does and does not establish.** It shows #447's
+      *argument* was insufficient — three sites are reachable by a path
+      `di_input` does not guard. It does **not** show the property
+      itself is false. In fact the property probably does hold today,
+      via a guard #447 never cited: the merger loops iterate
+      `output_items`, built from `solver_result.external_outputs`, and
+      `detect_di_couplings` only couples an item with **no surplus**, so
+      a coupled item is never an external output and the producer row is
+      never selected there. Both #447 remedies were therefore
+      *reasonable*; an empirical check would have been a valid way to
+      test the claim. The fused row is preferred not because they were
+      wrong-headed but because it **stops depending on the question**:
+      its correctness rests on the row owning a real belt, not on a
+      solver-side invariant ("coupled items never carry surplus") that
+      Phase 3 could plausibly relax; (2) intercept the producer/consumer
+      spec pair
       in `place_rows` — note this restructures the main placement loop
       (skipping a spec, custom `y_cursor` accounting, `module_id` and
       stacking-context threading), which is the highest-risk part of
@@ -726,3 +787,58 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   the module); 870 lib + 61 e2e green, clippy clean. Remaining: Phase 1c,
   the placer wiring — nothing calls these functions yet, so engine
   behaviour is still unchanged.*
+
+- *2026-07-25 — **The Phase 1c contract question is resolved, and the
+  premise it rested on was false.** #447 recorded the open question as
+  "does anything read a cell producer row's `output_belt_y`?", with the
+  supporting inference that `lane_planner` only ever reads
+  `output_belt_y_for(item)` during lane construction. Auditing all
+  **11** bare `output_belt_y` reads killed that inference: three of them
+  (`ghost_router.rs:3435/:3519/:3603`, the output merger) select rows by
+  `rs.spec.outputs`, never touching a `BusLane`, so `di_input` cannot
+  protect them. **Corrected after review (#449):** the first draft of
+  this entry escalated that into "the property is false, so both #447
+  remedies were aimed at the wrong target" — an overclaim the audit does
+  not support. Reachability by an unguarded path is not the same as a
+  phantom value actually being read. The property probably *does* hold
+  today, via a guard #447 never cited: the merger iterates
+  `output_items`, built from `solver_result.external_outputs`, and
+  `detect_di_couplings` only couples items with **no surplus**, so a
+  coupled item never appears there. An empirical check would have been a
+  perfectly valid way to test it. What the audit actually establishes is
+  narrower and still worth having: #447's stated *argument* did not
+  cover all the read sites, and the real guard is a different, narrower
+  one than the entry claimed. **Resolved instead by
+  design**: a cell emits ONE fused `RowSpan` (producer's inputs +
+  consumer's outputs, cell's real output belt) rather than two, so no
+  row with a phantom output belt exists to be read. Recorded because the
+  general lesson is cheap and repeatable: an inference about a field's
+  read-paths is only as good as an exhaustive grep for that field, and
+  #447's was a partial one. The **second** lesson came from the review
+  bot catching this entry's first draft overclaiming — "incomplete
+  argument" was evidence-backed, "false property" was not, and the two
+  are easy to conflate when you have just found a gap in someone's
+  reasoning. The fused row's real virtue is that it needs neither
+  question settled: it depends on the row owning a real belt, not on a
+  solver-side invariant that Phase 3 could relax.*
+
+- *2026-07-25 — **Phase 1's wiring target is retargeted off the RFC's own
+  worked example.** `electronic-circuit` has two solid inputs
+  (`iron-plate`, `copper-cable`), so `copper-cable → EC` — the pair every
+  geometry figure in this RFC is derived from — violates Phase 1's stated
+  scope ("consumer's only solid input is the DI'd item"): the consumer's
+  two usable faces are already spent on the DI band and the output
+  inserter, leaving the iron-plate feed nowhere to land until Phase 2.
+  The geometry work is unaffected (`plan_straddle` is rate-driven and
+  item-agnostic), but 1c must be built and tested against a
+  single-solid-input pair — `iron-plate → iron-gear-wheel` for the
+  assembler case, `iron-plate → steel-plate` for the furnace→furnace
+  shape that dominates the corpus at 1,585 instances. **The eligibility
+  gate belongs in the placer**: `detect_di_couplings` gates on
+  one-producer/one-consumer/no-surplus/not-fluid and never inspects the
+  consumer's input count, so it emits the cable→EC coupling regardless;
+  1c wiring that trusted the coupling list would emit a clean-validating,
+  starving cell. Caught by checking the recipe DB before writing the
+  wiring rather than after — the RFC had carried the contradiction
+  since the first draft because prose scope and worked example were
+  never cross-checked.*
