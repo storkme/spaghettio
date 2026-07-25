@@ -34,11 +34,13 @@
 //! replay that actually evaluates KC1–KC3 is PR 4. Tracking: #457.
 
 pub mod belt;
+pub mod blueprint_in;
 pub mod entity_data;
 pub mod inserter;
 pub mod world;
 
 pub use belt::{BeltRun, ItemId, Lane, RunEnd};
+pub use blueprint_in::{decode, Dir, RawEntity};
 pub use entity_data::{BeltTier, InserterKind};
 pub use inserter::{DropTarget, Inserter, PickupTarget};
 pub use world::{Chest, ItemInterner, RowFixture, Source, World};

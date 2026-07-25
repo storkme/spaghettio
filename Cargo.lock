@@ -626,6 +626,8 @@ dependencies = [
 name = "spaghettio_meter"
 version = "0.1.0"
 dependencies = [
+ "base64",
+ "flate2",
  "rustc-hash 2.1.2",
  "serde",
  "serde_json",
