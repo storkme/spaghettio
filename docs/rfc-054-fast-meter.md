@@ -874,3 +874,76 @@ the right thing moved.
   form of the repo's adversarial-review rule, and finding #1 is precisely
   the kind of thing an independent reviewer is better placed to catch. It
   was found here by re-running the numbers, not by reading the code.*
+- *2026-07-25 — **The review bot came back on the third run and found four
+  real defects, three of which no fixture would ever have caught.** After
+  two abandonments it completed and posted inline. Every finding was valid;
+  all four are fixed. This is the strongest argument yet for the bot being
+  worth its failure rate — the session-side review that preceded it found
+  three issues and **missed all four of these**.*
+
+  ***1. Unguarded sentinel index — a live panic.*** `TileKind::Splitter`
+  *carried* `partner: usize` *initialised to* `usize::MAX`*, patched only
+  when both halves were placed.* `step_splitter_exit` *indexed it
+  unconditionally, so the first tick over an orphan half panicked.
+  Reproduced with a three-entity fixture before fixing. Now
+  `partner: Option<usize>`, and an unpaired half degrades to plain-belt
+  behaviour — closer to the truth than either panicking or dropping items,
+  and the* `OrphanSplitterHalf` *note already warns that its rates are
+  suspect. The sentinel was the defect; making it an* `Option` *makes the
+  case unrepresentable rather than merely handled.*
+
+  ***2. Long-handed inserters dropped on the wrong lane.*** `near_lane_from`
+  *decided the near lane by* **exact tile equality** *against the single
+  tile one step to the left. That can only ever match a reach-1 hand; a
+  long-handed inserter stands two tiles away, so the test failed
+  unconditionally, `near` came back 1 every time, and `far = 1 - near` put
+  every reach-2 drop on lane 0 whichever side it came from. Now decided by
+  the sign of the perpendicular projection, which holds at any distance and
+  reproduces the old answers exactly at distance 1 (so the belt-to-belt
+  sideload caller is untouched).*
+
+  ***The corpus does not move — and that is the finding, not an excuse.***
+  *Every headline number is identical after the fix: ec15 d1/d2/d7
+  −7.4/−5.6/−5.6, ec30-d2 −5.6, logistic −68.3, mil5plates −59.6, mil5ore
+  −64.0. The bot predicted exactly this ("corrupts lane-sensitive behaviour
+  ... even though aggregate throughput often survives") and was right. A
+  wrong lane assignment that leaves throughput unchanged is invisible to
+  every aggregate check the meter has; it would have surfaced only as an
+  inexplicable sideload or splitter result much later. **The regression test
+  was verified against the old code** — it fails at* `dist 2` *and passes at*
+  `dist 1`*, the bug's exact shape. An unverified regression test is not one.*
+
+  ***3. Probabilistic products over-credited while claiming expectation.***
+  `(amount * probability).round().max(1.0)` *credited a whole unit per craft
+  no matter how small the probability — 4× for a p=0.25 recycling product,
+  ~143× for uranium-235 at p=0.007 — directly above a comment asserting
+  "credited at expectation". Products are now* `f64` *expectations with a
+  per-product fractional accumulator that emits whole units as the carry
+  crosses 1.0, so the long-run rate is the expectation and nothing invents a
+  fraction of an item. (Simply dropping* `.max(1.0)` *would have credited 0
+  forever for anything under 0.5 — the bot flagged that too.) No corpus
+  fixture uses a probabilistic recipe, which is exactly why it survived: the
+  meter's own tests cannot catch what its fixtures never exercise.*
+
+  ***4. A vacuous assertion in the KC1 gate.*** `meter = got/planned − 1`
+  *with* `got ≥ 0` *and* `planned > 0` *is bounded below by exactly −1.0, so
+  the sanity check* `meter > −1.001` **could not fail for any input** *—
+  including the "produced literally nothing" case it claimed to catch.
+  Tightened to −0.999 and scoped to solids: the fluid chains genuinely sit
+  at −100% because fluids are unimplemented, so asserting over them would
+  red the suite for a documented gap. Their count is still printed.*
+
+  ***The pattern from earlier in this log now has a counterexample worth
+  recording.*** *Twice before, the bot's defect identification was right and
+  its causal attribution wrong. This round, three of four came with
+  explanations that survived checking, and finding 2's prediction about
+  aggregate throughput was confirmed exactly. The habit stands — fix on
+  merit, test the story separately — but "the bot's stories are unreliable"
+  would be the wrong generalisation to carry forward.*
+
+  ***And the uncomfortable one:*** *findings 1–4 are all in code the
+  session-side review had just read and pronounced sound. Author
+  self-review found the stale number and two readability traps; it did not
+  find a reachable panic, an inverted lane, a 143× over-credit, or a
+  tautological assertion. That is the case for the independent reviewer,
+  made concrete.*

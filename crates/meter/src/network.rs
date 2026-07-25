@@ -57,7 +57,14 @@ pub enum TileKind {
     /// Underground exit.
     UgOutput,
     /// One half of a splitter (each splitter occupies two tiles).
-    Splitter { partner: usize, id: usize },
+    ///
+    /// `partner` is `None` when the other half
+    /// could not be created — its cell was already occupied — which is
+    /// recorded as `TopologyNote::OrphanSplitterHalf`. Modelled as an
+    /// `Option` rather than a sentinel index: the sentinel (`usize::MAX`)
+    /// was indexed unguarded in `step_splitter_exit` and panicked the
+    /// first time such a tile was stepped.
+    Splitter { partner: Option<usize>, id: usize },
 }
 
 /// How lanes map when items cross from one tile to the next.
@@ -298,7 +305,15 @@ impl BeltNetwork {
             TileKind::Splitter { partner, .. } => partner,
             _ => return,
         };
-        let outs = [self.tiles[id].downstream, self.tiles[partner].downstream];
+        // An unpaired half has no second output. It still moves items —
+        // degrading to plain-belt behaviour is closer to the truth than
+        // either panicking or dropping the item on the floor — and the
+        // topology note already tells the caller this tile's rates are
+        // not to be trusted.
+        let outs = [
+            self.tiles[id].downstream,
+            partner.map(|p| self.tiles[p].downstream).unwrap_or(None),
+        ];
         for lane_ix in 0..2 {
             let Some(item) = self.tiles[id].lanes[lane_ix].peek_exit() else {
                 continue;
@@ -337,10 +352,25 @@ impl BeltNetwork {
 
 /// Which lane of a tile facing `dir` at `pos` is nearest to `from`.
 /// 0 = left, 1 = right (**B3**).
+///
+/// Decided by the **sign of the perpendicular projection**, so it holds at
+/// any distance. An earlier version tested `from == pos + left_of(dir)` —
+/// exact equality against the single tile one step to the left — which is
+/// only ever true for a reach-1 hand. A **long-handed inserter sits two
+/// tiles away**, so the comparison failed unconditionally, `near` came back
+/// 1 every time, and `far = 1 - near` put every reach-2 drop on lane 0
+/// regardless of which side the inserter was actually on. Right by
+/// coincidence on one side, wrong on the other, and invisible in aggregate
+/// throughput while corrupting anything lane-sensitive (sideload
+/// occupancy, splitter lane routing).
+///
+/// Strictly generalizes the old behaviour: at distance 1 on the left the
+/// projection is `+1`, on the right `-1`, so belt-to-belt sideload callers
+/// are unaffected.
 fn near_lane_from(dir: Dir, pos: (i32, i32), from: (i32, i32)) -> usize {
     let (lx, ly) = left_of(dir).delta();
-    let left_tile = (pos.0 + lx, pos.1 + ly);
-    if from == left_tile {
+    let (dx, dy) = (from.0 - pos.0, from.1 - pos.1);
+    if dx * lx + dy * ly > 0 {
         0
     } else {
         1
@@ -396,7 +426,7 @@ impl NetworkBuilder {
                 }
             } else if is_splitter {
                 TileKind::Splitter {
-                    partner: usize::MAX,
+                    partner: None,
                     id: splitter_id,
                 }
             } else {
@@ -426,11 +456,11 @@ impl NetworkBuilder {
                 if made.len() == 2 {
                     if let TileKind::Splitter { id: sid, .. } = kind {
                         net.tiles[made[0]].kind = TileKind::Splitter {
-                            partner: made[1],
+                            partner: Some(made[1]),
                             id: sid,
                         };
                         net.tiles[made[1]].kind = TileKind::Splitter {
-                            partner: made[0],
+                            partner: Some(made[0]),
                             id: sid,
                         };
                     }
@@ -673,8 +703,8 @@ mod tests {
                     TileKind::Splitter { partner: pa, id: ia },
                     TileKind::Splitter { partner: pb, id: ib },
                 ) => {
-                    assert_eq!(pa, b, "{dir:?}: partner links must be mutual");
-                    assert_eq!(pb, a, "{dir:?}: partner links must be mutual");
+                    assert_eq!(pa, Some(b), "{dir:?}: partner links must be mutual");
+                    assert_eq!(pb, Some(a), "{dir:?}: partner links must be mutual");
                     assert_eq!(ia, ib, "{dir:?}: both halves share one splitter id");
                 }
                 other => panic!("{dir:?}: expected two splitter halves, got {other:?}"),
@@ -707,6 +737,64 @@ mod tests {
             let id = net.tile_at(out).unwrap();
             let fed = net.tiles.iter().any(|t| t.downstream.is_some_and(|d| d.tile == id));
             assert!(fed, "belt at {out:?} must have an upstream feeder");
+        }
+    }
+
+#[test]
+fn orphan_splitter_half_does_not_panic_when_stepped() {
+    // A splitter whose second cell is already occupied by a belt: the
+    // second half is never created, so `partner` stays at its sentinel.
+    let ents = vec![
+        belt("transport-belt", 11, 5, Dir::South), // occupies the splitter's 2nd cell
+        splitter(10, 5, Dir::South),
+        belt("transport-belt", 10, 6, Dir::South),
+    ];
+    let mut net = NetworkBuilder::build(&ents);
+    assert!(
+        net.notes
+            .iter()
+            .any(|n| matches!(n, TopologyNote::OrphanSplitterHalf { .. })),
+        "expected an orphan note, got {:?}",
+        net.notes
+    );
+    // The real assertion: stepping must not panic.
+    for _ in 0..10 {
+        net.tick();
+    }
+}
+
+
+    /// **I5**: an inserter drops on the FAR lane — the one on the opposite
+    /// side from where it stands. Asserted at reach 1 *and* reach 2,
+    /// because the reach-2 case is where this was wrong: exact-tile
+    /// equality against the one-step-left tile can only ever match a
+    /// reach-1 hand, so every long-handed drop landed on lane 0 whichever
+    /// side it came from.
+    #[test]
+    fn drops_land_on_the_far_lane_at_both_reaches() {
+        for dist in [1, 2] {
+            // Belt at (10,5) facing south. Left of south is east (+x),
+            // so a dropper to the EAST is on the near side (lane 0) and
+            // its item must land on lane 1, and vice versa.
+            let mut net = NetworkBuilder::build(&[belt("transport-belt", 10, 5, Dir::South)]);
+            let tile = net.tile_at((10, 5)).unwrap();
+            let item = ItemId(1);
+
+            assert!(net.drop_onto_tile(tile, (10 + dist, 5), item), "east drop, dist {dist}");
+            assert_eq!(
+                net.tiles[tile].lanes[1].occupancy(), 1,
+                "dist {dist}: a dropper on the east (near) side must fill the FAR lane 1"
+            );
+            assert_eq!(net.tiles[tile].lanes[0].occupancy(), 0, "dist {dist}");
+
+            let mut net = NetworkBuilder::build(&[belt("transport-belt", 10, 5, Dir::South)]);
+            let tile = net.tile_at((10, 5)).unwrap();
+            assert!(net.drop_onto_tile(tile, (10 - dist, 5), item), "west drop, dist {dist}");
+            assert_eq!(
+                net.tiles[tile].lanes[0].occupancy(), 1,
+                "dist {dist}: a dropper on the west (far-side) must fill lane 0"
+            );
+            assert_eq!(net.tiles[tile].lanes[1].occupancy(), 0, "dist {dist}");
         }
     }
 

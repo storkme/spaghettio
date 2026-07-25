@@ -373,11 +373,24 @@ fn kc1_full_corpus_status() {
         mean(&fluid),
         fluid.len()
     );
-    // Sanity only: every replayed config must have produced something, or
+    // Sanity: every replayed SOLID config must have produced something, or
     // the "agreement" would be an artifact of measuring nothing.
-    for r in &results {
+    //
+    // The threshold is load-bearing and was wrong. `meter = got/planned - 1`
+    // with `got >= 0` and `planned > 0` is bounded below by exactly −1.0, so
+    // the original `> -1.001` could not fail for any input — a vacuous
+    // assertion that read like a real floor. −0.999 is just inside the
+    // actual bound, so "produced literally nothing" now trips it.
+    //
+    // Restricted to solids in the same breath, and not as a convenience:
+    // the fluid chains genuinely sit at −100% because fluids are
+    // unimplemented (RFC Phase 3), so asserting over them would red the
+    // suite for a gap that is documented, expected, and not a build
+    // failure. Their count is printed above, so they cannot vanish
+    // unnoticed.
+    for r in &solid {
         assert!(
-            r.meter > -1.001,
+            r.meter > -0.999,
             "{} produced nothing at all — that is a build failure, not a measurement",
             r.label
         );

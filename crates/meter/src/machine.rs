@@ -74,9 +74,13 @@ pub struct Machine {
     progress: f64,
     /// (item, per-craft amount) — solids only; fluids are PR-3 out of scope.
     pub ingredients: Vec<(ItemId, u32)>,
-    pub products: Vec<(ItemId, u32)>,
+    /// Products per craft, as **expected** amounts — fractional for
+    /// probabilistic recipes. Whole units are emitted via `product_debt`.
+    pub products: Vec<(ItemId, f64)>,
     /// Ingredients on hand.
     pub input: FxHashMap<u16, u32>,
+    /// Fractional carry per product, for probabilistic recipes.
+    product_debt: FxHashMap<u16, f64>,
     /// Finished products awaiting an output inserter.
     pub output: FxHashMap<u16, u32>,
     /// Per-ingredient buffer ceiling.
@@ -127,12 +131,18 @@ impl Machine {
             if p.type_ == "fluid" {
                 continue;
             }
-            // Probabilistic products are credited at expectation, matching
-            // the solver's convention; the meter does not roll dice,
-            // because a stochastic meter cannot be compared tick-for-tick
-            // against a deterministic baseline.
-            let amount = (p.amount * p.probability).round().max(1.0) as u32;
-            products.push((items.intern(&p.name), amount));
+            // Probabilistic products are credited at **expectation**, and
+            // the meter does not roll dice: a stochastic meter cannot be
+            // compared tick-for-tick against a deterministic baseline.
+            //
+            // Kept as an f64 expectation rather than a rounded integer.
+            // `(amount * probability).round().max(1.0)` -- the first
+            // version -- credited a whole unit per craft no matter how
+            // small the probability, so a p=0.25 recycling product was
+            // over-credited 4x and uranium-235 at p=0.007 by ~143x, while
+            // the comment above it claimed expectation. No corpus fixture
+            // exercises a probabilistic recipe, so nothing caught it.
+            products.push((items.intern(&p.name), p.amount * p.probability));
         }
 
         Some(Machine {
@@ -144,6 +154,7 @@ impl Machine {
             progress: 0.0,
             ingredients,
             products,
+            product_debt: FxHashMap::default(),
             input: FxHashMap::default(),
             output: FxHashMap::default(),
             buffer_cap,
@@ -240,8 +251,18 @@ impl Machine {
         self.state = MachineState::Working;
         self.progress -= 1.0;
         if self.progress <= 0.0 {
+            // Fractional expectations accumulate and emit whole units as
+            // they cross 1.0, so the long-run rate is the expectation
+            // without ever inventing a fraction of an item. Rounding per
+            // craft instead would credit 0 forever for anything under 0.5.
             for (id, amount) in &self.products {
-                *self.output.entry(id.0).or_insert(0) += amount;
+                let debt = self.product_debt.entry(id.0).or_insert(0.0);
+                *debt += *amount;
+                let whole = debt.floor();
+                if whole >= 1.0 {
+                    *debt -= whole;
+                    *self.output.entry(id.0).or_insert(0) += whole as u32;
+                }
             }
             self.crafts += 1;
         }
@@ -251,6 +272,46 @@ impl Machine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+
+    /// A probabilistic product must be credited at **expectation over many
+    /// crafts**, not a whole unit per craft. The first version rounded up
+    /// to `.max(1.0)`, so p=0.25 read 4x high and p=0.007 ~143x high while
+    /// claiming expectation in its own comment.
+    #[test]
+    fn probabilistic_products_accumulate_to_expectation() {
+        let mut items = ItemInterner::default();
+        let id = items.intern("scrap-output");
+        let mut m = Machine {
+            name: "test".into(),
+            recipe: "test".into(),
+            pos: (0, 0),
+            size: (3, 3),
+            craft_ticks: 1.0,
+            progress: 0.0,
+            ingredients: Vec::new(),
+            products: vec![(id, 0.25)],
+            product_debt: FxHashMap::default(),
+            input: FxHashMap::default(),
+            output: FxHashMap::default(),
+            buffer_cap: FxHashMap::default(),
+            output_cap: u32::MAX,
+            crafts: 0,
+            state: MachineState::Working,
+            fluid_ingredients: Vec::new(),
+        };
+        // output_cap is unbounded here, so nothing blocks and the machine
+        // crafts every tick.
+        for _ in 0..400 {
+            m.tick();
+        }
+        assert_eq!(m.crafts, 400, "sanity: one craft per tick at craft_ticks=1");
+        let produced = m.output.get(&id.0).copied().unwrap_or(0);
+        assert_eq!(
+            produced, 100,
+            "400 crafts at p=0.25 must credit 100 whole units, not 400"
+        );
+    }
 
     fn ec_machine(items: &mut ItemInterner) -> Machine {
         Machine::new(
@@ -286,7 +347,7 @@ mod tests {
         let amounts: Vec<u32> = m.ingredients.iter().map(|(_, a)| *a).collect();
         assert!(amounts.contains(&1) && amounts.contains(&3), "{amounts:?}");
         assert_eq!(m.products.len(), 1);
-        assert_eq!(m.products[0].1, 1);
+        assert_eq!(m.products[0].1, 1.0);
     }
 
     /// A fed machine must produce at exactly the rate the prototype data
