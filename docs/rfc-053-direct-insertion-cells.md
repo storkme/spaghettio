@@ -438,10 +438,13 @@ caveat.
    harness measures **< 98% of plan** on the canonical fixture, the
    model is wrong and the checks are lying — stop everything. (This is
    the #383 lesson: validator-clean concealed a real starve for weeks.)
-4. **Density premise.** If a DI cell is not **strictly smaller** than
-   the equivalent bus rows on the canonical fixture, the entire premise
-   is falsified — stop. (Expected: ~7 tiles of coupling height against
-   ~13 for #432's bridge.)
+4. **Density premise. ✅ EVALUATED 2026-07-25 — PASSES.** Measured on
+   the canonical fixture (EC@10/s from plates, DI off) against the real
+   engine: the bus places `copper-cable` at y1–7 and `electronic-circuit`
+   at y10–17 with a `copper-cable` trunk lane at y7–9 — a **17-tile**
+   combined vertical extent. The Phase-1a/1b cell is machines + a
+   one-tile band + machines = **7 tiles**. Cell is strictly smaller by
+   59%, so the density premise holds and this criterion does not fire.
 5. **Solver escalation bound.** If Tier 1 leaves > 20% of the corpus's
    top-10 DI pairs infeasible, escalate to Tier 2 — but if CP-SAT
    cannot place a single pair within **500 ms**, stop: too slow for the
@@ -661,6 +664,19 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   suite 863 lib + 61 e2e green, clippy clean. Remaining for Phase 1b is
   the placer wiring — belt suppression, 1-tile row gap, reach-1 inserter
   stamping from the planned edges, lane-planner skip.*
+
+- *2026-07-25 — **KC4 (density premise) evaluated: PASSES.** Measured
+  rather than asserted: on the canonical fixture the bus needs a
+  17-tile vertical extent for the cable→EC coupling (cable row y1–7, EC
+  row y10–17, plus the copper-cable trunk lane at y7–9), against the
+  cell's 7 tiles. 59% smaller, so the premise the RFC rests on is
+  confirmed against the real engine rather than the drawing. **With
+  this, every kill criterion evaluable without the placer wiring has
+  been evaluated and the RFC survives all of them**: KC1 passed with
+  margin, KC4 passes here, KC6 fired and was resolved by its own
+  prescribed re-scope. KC2/KC3/KC5 are inherently post-wiring (face
+  contention, sim-measured throughput, solver escalation) and remain
+  open against Phase 1c+.*
 
 - *2026-07-25 — **Phase 1b landed: `bus::di_cell::stamp_di_cell`.** Turns
   a `StraddlePlan` into entities — producer row, ONE-tile inserter band,
