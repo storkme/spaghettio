@@ -8103,9 +8103,13 @@ fn research_l7_thins_output_inserters_s4() {
 #[ignore]
 fn di_cell_kc3_export() {
     use spaghettio_core::bus::layout;
-    let inputs: FxHashSet<String> = ["iron-ore".to_string()].into_iter().collect();
-    let sr = solver::solve("steel-plate", 2.0, &inputs, "assembling-machine-2")
-        .expect("solve steel-plate from ore");
+    let target = std::env::var("KC3_ITEM").unwrap_or_else(|_| "steel-plate".into());
+    let rate: f64 = std::env::var("KC3_RATE").ok().and_then(|r| r.parse().ok()).unwrap_or(2.0);
+    let inputs: FxHashSet<String> = std::env::var("KC3_INPUTS")
+        .unwrap_or_else(|_| "iron-ore".into())
+        .split(',').map(|s| s.to_string()).collect();
+    let sr = solver::solve(&target, rate, &inputs, "assembling-machine-3")
+        .unwrap_or_else(|e| panic!("solve {target}: {e:?}"));
     println!("machines:");
     for m in &sr.machines {
         println!("  {} x{:.2} on {} in={:?} out={:?}", m.recipe, m.count, m.entity,
@@ -8121,13 +8125,19 @@ fn di_cell_kc3_export() {
     let di = std::env::var("SPAGHETTIO_KC3_DI").as_deref() != Ok("0");
     let opts = layout::LayoutOptions {
         direct_insertion: di,
-        max_belt_tier: Some("transport-belt".to_string()),
+        max_belt_tier: Some(
+            std::env::var("KC3_BELT").unwrap_or_else(|_| "transport-belt".into()),
+        ),
         ..Default::default()
     };
     let l = layout::build_bus_layout(&sr, opts).expect("layout");
     let cell_ents = l.entities.iter()
         .filter(|e| e.segment_id.as_deref().is_some_and(|s| s.starts_with("di-cell:")))
         .count();
+    let row_ents = l.entities.iter()
+        .filter(|e| e.segment_id.as_deref().is_some_and(|s| s.starts_with("di-row:")))
+        .count();
+    println!("di-row entities: {row_ents}");
     let bridge_ents = l.entities.iter()
         .filter(|e| e.segment_id.as_deref().is_some_and(|s| s.starts_with("di-bridge:")))
         .count();
@@ -8149,6 +8159,9 @@ fn di_cell_kc3_export() {
         let mut by_cat: std::collections::BTreeMap<&str, usize> = Default::default();
         for i in &e.issues { *by_cat.entry(i.category.as_str()).or_default() += 1; }
         for (c, n) in &by_cat { println!("  {c}: {n}"); }
+        for i in e.issues.iter().filter(|i| format!("{:?}", i.severity) == "Error").take(6) {
+            println!("  ERR {}: {}", i.category, i.message);
+        }
         e.issues.len()
     });
     println!("validation issues: {warnings}");
@@ -8213,7 +8226,7 @@ fn di_cell_coverage_sweep() {
         };
         let cells = l.entities.iter()
             .filter_map(|e| e.segment_id.as_deref())
-            .filter(|s| s.starts_with("di-cell:"))
+            .filter(|s| s.starts_with("di-cell:") || s.starts_with("di-row:"))
             .count();
         let bridges = l.entities.iter()
             .filter_map(|e| e.segment_id.as_deref())

@@ -1759,6 +1759,35 @@ fn stamp_di_bridge(
 
 // ---- RFC-053 Phase 1: direct-insertion cells ----
 
+
+/// Can this pair's ratio actually be arranged, as opposed to merely being
+/// eligible? Eligibility is about recipe SHAPE; this is about whether the
+/// straddle geometry exists at these machine counts.
+///
+/// Separating the two matters: a consumer with several couplings claims a
+/// producer at selection time, and claiming on shape alone lets an
+/// unbuildable coupling block a buildable one. Concretely, at EC@10/s the
+/// `iron-plate -> electronic-circuit` coupling is shape-eligible but is a
+/// 16:4 straddle (4 producers per consumer, refused), and claiming it
+/// starved the `copper-cable -> electronic-circuit` coupling that does work.
+fn pair_is_arrangeable(producer: &MachineSpec, consumer: &MachineSpec, item: &str, row: bool) -> bool {
+    let snap = |c: f64| -> usize {
+        let s = if (c - c.round()).abs() < 1e-9 { c.round() } else { c.ceil() };
+        (s as usize).max(1)
+    };
+    let (pc, cc) = (snap(producer.count), snap(consumer.count));
+    let (mw, _) = machine_dims(&consumer.entity);
+    let Some(pr) = producer.outputs.iter().find(|f| f.item == item) else { return false };
+    let Some(cr) = consumer.inputs.iter().find(|f| f.item == item) else { return false };
+    let pr = pr.rate * utilization_for(producer);
+    let cr = cr.rate * utilization_for(consumer);
+    if row {
+        crate::bus::di_cell::plan_row_straddle(pc, cc, pr, cr, mw as i32).is_some()
+    } else {
+        crate::bus::di_cell::plan_straddle(pc, cc, pr, cr, mw as i32).is_some()
+    }
+}
+
 /// Is this producer/consumer pair a **Phase 1** DI cell?
 ///
 /// A cell fuses both rows into ONE structure with the coupled item never
@@ -2033,6 +2062,209 @@ fn try_build_cell(
     Some((cell.entities, span, width))
 }
 
+
+/// Is this pair a **Phase 2 horizontal row cell**?
+///
+/// Looser than [`cell_eligible`] in exactly one way, which is the whole
+/// point: the consumer may have a SECOND solid input. In a row cell the
+/// consumer is coupled east/west, leaving its north and south faces free
+/// for an ordinary input belt and output belt — so the second input has
+/// somewhere to land, which is what the stacked cell could not offer.
+/// This is the corpus's dominant shape (`di-patterns faces`: 177 of 2,039
+/// cable->EC consumers).
+fn row_cell_eligible(producer: &MachineSpec, consumer: &MachineSpec, item: &str) -> bool {
+    if producer.voider || consumer.voider {
+        return false;
+    }
+    if !producer.self_loop.is_empty() || !consumer.self_loop.is_empty() {
+        return false;
+    }
+    if !producer.game_modules.is_empty() || !consumer.game_modules.is_empty() {
+        return false;
+    }
+    let any_fluid = |s: &MachineSpec| s.inputs.iter().chain(&s.outputs).any(|f| f.is_fluid);
+    if any_fluid(producer) || any_fluid(consumer) {
+        return false;
+    }
+    let solids = |fs: &[ItemFlow]| -> Vec<String> {
+        fs.iter().filter(|f| !f.is_fluid).map(|f| f.item.clone()).collect()
+    };
+    let (p_in, p_out) = (solids(&producer.inputs), solids(&producer.outputs));
+    let (c_in, c_out) = (solids(&consumer.inputs), solids(&consumer.outputs));
+    if p_out.len() != 1 || p_out[0] != item || p_in.len() != 1 || c_out.len() != 1 {
+        return false;
+    }
+    // Exactly two solid inputs: the coupled item plus one belt-fed other.
+    if c_in.len() != 2 || !c_in.iter().any(|i| i == item) {
+        return false;
+    }
+    // The producer's belt-fed input and the consumer's must be DIFFERENT
+    // items. Same item on both would put two entries for one item in the
+    // fused spec at two different y, and both `lane_planner` and
+    // `ghost_router` break on the FIRST matching solid input — so the
+    // second belt would never be tapped and its machines would starve
+    // silently. Refuse; see the RFC decision log.
+    let c_other = c_in.iter().find(|i| *i != item).cloned().unwrap_or_default();
+    if c_other == p_in[0] {
+        return false;
+    }
+    machine_dims(&producer.entity) == machine_dims(&consumer.entity)
+}
+
+/// Build a Phase 2 horizontal row cell, or `None` to fall back.
+#[allow(clippy::too_many_arguments)]
+fn try_build_row_cell(
+    producer: &MachineSpec,
+    consumer: &MachineSpec,
+    item: &str,
+    bus_width: i32,
+    y_cursor: i32,
+    max_belt_tier: Option<&str>,
+    max_inserter_tier: InserterTier,
+    quality: QualityTier,
+    level: u8,
+    ctx: &StackingCtx,
+) -> Option<(Vec<PlacedEntity>, RowSpan, i32)> {
+    use crate::bus::di_cell::{plan_row_straddle, stamp_row_cell, RowCellSpec};
+    use crate::bus::inserter_ladder::{size_belt_drop_side, size_side, Reach};
+
+    let snap = |c: f64| -> usize {
+        let s = if (c - c.round()).abs() < 1e-9 { c.round() } else { c.ceil() };
+        (s as usize).max(1)
+    };
+    let (p_count, c_count) = (snap(producer.count), snap(consumer.count));
+    let (mw, mh) = machine_dims(&consumer.entity);
+    let (mw, mh) = (mw as i32, mh as i32);
+    let p_util = utilization_for(producer);
+    let c_util = utilization_for(consumer);
+
+    let producer_rate = producer.outputs.iter().find(|f| f.item == item)?.rate * p_util;
+    let consumer_rate = consumer.inputs.iter().find(|f| f.item == item)?.rate * c_util;
+    let plan = plan_row_straddle(p_count, c_count, producer_rate, consumer_rate, mw)?;
+
+    // Coupler sits in a 1-tile gap, so reach-1 is a constraint (I8a).
+    let coupler = size_side(plan.required_rate(), Reach::Near, 0, max_inserter_tier, quality, level);
+    let coupler_rate = crate::common::machine_feed_rate(coupler.entity, quality, level);
+    if coupler.count > 1 || coupler.shortfall.is_some() {
+        return None;
+    }
+
+    let p_in = producer.inputs.iter().find(|f| !f.is_fluid)?;
+    let c_in = consumer.inputs.iter().find(|f| !f.is_fluid && f.item != item)?;
+    let out = consumer.outputs.iter().find(|f| !f.is_fluid)?;
+
+    let p_total = p_in.rate * p_util * p_count as f64;
+    let c_total = c_in.rate * c_util * c_count as f64;
+    let out_total = out.rate * c_util * c_count as f64;
+
+    // Both input belts are bus tap-off targets, so they take the TRUNK
+    // tier (`row_input_belt`), never a locally-sized one — same seam
+    // argument as every other row. Inserters pick from both lanes (I6),
+    // so full belt capacity is available on the input side.
+    let in_belt = row_input_belt(max_belt_tier);
+    let in_stack = ctx.for_item(&p_in.item);
+    let cap = lane_capacity_stacked(in_belt, in_stack) * 2.0;
+    if cap + 1e-9 < p_total || cap + 1e-9 < c_total {
+        return None;
+    }
+    // The output belt is single-lane (every output inserter shares a y and
+    // a facing, so all drops land in the far lane), hence the * 2.0.
+    let out_stack = ctx.for_item(&out.item);
+    let out_belt = belt_entity_for_rate_stacked(out_total * 2.0, max_belt_tier, out_stack);
+    if lane_capacity_stacked(out_belt, out_stack) + 1e-9 < out_total {
+        return None;
+    }
+
+    // Face plan. The producer's belt is NORTH at reach-1 — putting it on
+    // a reach-2 hop would reintroduce long-handed's 2.40/s ceiling, which
+    // is the very thing the row shape avoids. The consumer's two flows
+    // share the SOUTH row: feed at reach-1 off the inner belt, output at
+    // reach-2 stepping over it (long-handed is the only reach-2 inserter,
+    // I8a). Output therefore routinely needs TWO columns at L2, so give
+    // these faces real column budgets instead of forcing one each.
+    let budget = (mw.max(1) as usize).saturating_sub(1);
+    let p_feed = size_side(p_in.rate * p_util, Reach::Near, budget, max_inserter_tier, quality, level);
+    let c_feed = size_side(c_in.rate * c_util, Reach::Near, budget, max_inserter_tier, quality, level);
+    let drop = size_belt_drop_side(
+        out.rate * c_util, Reach::Far, budget, max_inserter_tier, quality, out_stack, level, out_belt,
+    );
+    if p_feed.shortfall.is_some() || c_feed.shortfall.is_some() || drop.shortfall.is_some() {
+        return None;
+    }
+    // The consumer's south row holds BOTH its feed and its output, so the
+    // two together must fit the machine's width.
+    if c_feed.count + drop.count > mw.max(1) as usize || p_feed.count > mw.max(1) as usize {
+        return None;
+    }
+
+    let cell = stamp_row_cell(
+        &plan,
+        &RowCellSpec {
+            producer_entity: &producer.entity,
+            consumer_entity: &consumer.entity,
+            producer_recipe: &producer.recipe,
+            consumer_recipe: &consumer.recipe,
+            item,
+            coupler: coupler.entity,
+            coupler_rate,
+            producer_input: (&p_in.item, in_belt, p_feed.entity),
+            consumer_input: (&c_in.item, in_belt, c_feed.entity),
+            output_item: &out.item,
+            output_belt: out_belt,
+            out_inserter: drop.entity,
+            producer_feed_count: p_feed.count,
+            consumer_feed_count: c_feed.count,
+            out_count: drop.count,
+        },
+        bus_width,
+        y_cursor,
+        mw,
+        mh,
+    )?;
+
+    // Fused spec: producer's belt-fed input FIRST, then the consumer's —
+    // the order MUST match `input_belt_ys`, because both `lane_planner`
+    // and `ghost_router` resolve tap-off by indexing solid inputs
+    // positionally. Getting it wrong makes both wrong identically, so
+    // they agree with each other and yield a self-consistent bad layout.
+    let scale = p_count as f64 / c_count.max(1) as f64;
+    let fused = MachineSpec {
+        entity: consumer.entity.clone(),
+        recipe: consumer.recipe.clone(),
+        self_loop: Vec::new(),
+        voider: false,
+        game_modules: Vec::new(),
+        count: c_count as f64,
+        inputs: vec![
+            ItemFlow { item: p_in.item.clone(), rate: p_in.rate * scale, is_fluid: false, module_id: p_in.module_id },
+            ItemFlow { item: c_in.item.clone(), rate: c_in.rate, is_fluid: false, module_id: c_in.module_id },
+        ],
+        outputs: consumer.outputs.clone(),
+    };
+    let width = cell.x_max + 1;
+    let span = RowSpan {
+        y_start: cell.input_belt_ys[0],
+        y_end: cell.output_belt_y + 1,
+        spec: fused,
+        machine_count: c_count,
+        module_id: consumer.outputs.first().map(|o| o.module_id).unwrap_or(0),
+        input_belt_y: cell.input_belt_ys.clone(),
+        output_belt_y: cell.output_belt_y,
+        row_width: width,
+        fluid_port_ys: Vec::new(),
+        fluid_port_pipes: Vec::new(),
+        fluid_output_port_pipes: Vec::new(),
+        output_east: true,
+        output_belt_x_min: cell.x_min,
+        output_belt_x_max: cell.x_max,
+        horizontal_stack: None,
+        secondary_output_belt: None,
+        sorted_output_belts: Vec::new(),
+        di_input: Vec::new(),
+    };
+    Some((cell.entities, span, width))
+}
+
 /// Place assembly rows stacked vertically.
 ///
 /// When a recipe needs more machines than a single belt can handle,
@@ -2116,28 +2348,57 @@ pub fn place_rows(
     // producer spread over several rows would leave every row but one
     // stranded. That is the same refusal the bridge makes for split
     // producers, and it is Phase 3 work (the multi-band cell).
-    let mut cell_pairs: FxHashMap<usize, (usize, &str)> = FxHashMap::default();
+    // producer spec idx -> (consumer spec idx, coupled item, is_row_cell).
+    // The variant is carried DELIBERATELY: `try_build_cell` does not
+    // re-check `cell_eligible`, so dispatching on anything other than the
+    // approved variant silently bypasses the gate that stops a two-solid-
+    // input consumer being fused into a stacked cell (which cannot feed
+    // its second input at all).
+    let mut cell_pairs: FxHashMap<usize, (usize, &str, bool)> = FxHashMap::default();
+    let mut claimed: FxHashSet<usize> = FxHashSet::default();
     if direct_insertion {
         for (c_idx, c_spec) in ordered.iter().enumerate() {
             let Some(couplings) = di_lookup.get(c_spec.recipe.as_str()) else {
                 continue;
             };
-            // A consumer coupled on two items cannot be a Phase-1 cell:
-            // its second input has no free face.
-            let [(item, producer_recipe)] = couplings[..] else {
-                continue;
-            };
-            let same_recipe = |r: &str| ordered.iter().filter(|s| s.recipe == r).count();
-            if same_recipe(producer_recipe) != 1 || same_recipe(&c_spec.recipe) != 1 {
-                continue;
+            // Try every coupling this consumer has, not just a lone one.
+            // A consumer coupled on two items cannot be a Phase-1 STACKED
+            // cell (its second input has no free face) — but that is
+            // exactly the case a Phase-2 ROW cell exists to serve, since
+            // coupling east/west leaves both the north and south faces
+            // free for ordinary belts. Requiring a single coupling here
+            // silently excluded `electronic-circuit`, i.e. the corpus's
+            // most common DI consumer, from ever being considered.
+            for &(item, producer_recipe) in couplings {
+                let same_recipe = |r: &str| ordered.iter().filter(|s| s.recipe == r).count();
+                if same_recipe(producer_recipe) != 1 || same_recipe(&c_spec.recipe) != 1 {
+                    continue;
+                }
+                let Some(p_idx) = ordered.iter().position(|s| s.recipe == producer_recipe) else {
+                    continue;
+                };
+                if p_idx >= c_idx {
+                    continue;
+                }
+                // A spec may only be fused once. Without this, a producer
+                // that is itself a DI consumer could be claimed by two
+                // different cells and placed twice.
+                if claimed.contains(&p_idx) || claimed.contains(&c_idx) {
+                    continue;
+                }
+                let stacked_ok = couplings.len() == 1
+                    && cell_eligible(ordered[p_idx], c_spec, item)
+                    && pair_is_arrangeable(ordered[p_idx], c_spec, item, false);
+                let row_ok = row_cell_eligible(ordered[p_idx], c_spec, item)
+                    && pair_is_arrangeable(ordered[p_idx], c_spec, item, true);
+                if !(stacked_ok || row_ok) {
+                    continue;
+                }
+                claimed.insert(p_idx);
+                claimed.insert(c_idx);
+                cell_pairs.insert(p_idx, (c_idx, item, !stacked_ok));
+                break;
             }
-            let Some(p_idx) = ordered.iter().position(|s| s.recipe == producer_recipe) else {
-                continue;
-            };
-            if p_idx >= c_idx || !cell_eligible(ordered[p_idx], c_spec, item) {
-                continue;
-            }
-            cell_pairs.insert(p_idx, (c_idx, item));
         }
     }
     // Consumer specs already absorbed into a cell; skipped by the loop.
@@ -2167,19 +2428,19 @@ pub fn place_rows(
         // RFC-053 Phase 1: fuse an eligible pair into one cell row. On any
         // refusal fall through to the normal path, where the #432 bridge
         // (and failing that, the bus) still serves the coupling.
-        if let Some(&(c_idx, item)) = cell_pairs.get(&spec_idx) {
-            if let Some((cell_ents, span, width)) = try_build_cell(
-                spec,
-                ordered[c_idx],
-                item,
-                bus_width,
-                y_cursor,
-                max_belt_tier,
-                max_inserter_tier,
-                quality,
-                inserter_capacity,
-                ctx,
-            ) {
+        if let Some(&(c_idx, item, is_row)) = cell_pairs.get(&spec_idx) {
+            let built = if is_row {
+                try_build_row_cell(
+                    spec, ordered[c_idx], item, bus_width, y_cursor, max_belt_tier,
+                    max_inserter_tier, quality, inserter_capacity, ctx,
+                )
+            } else {
+                try_build_cell(
+                    spec, ordered[c_idx], item, bus_width, y_cursor, max_belt_tier,
+                    max_inserter_tier, quality, inserter_capacity, ctx,
+                )
+            };
+            if let Some((cell_ents, span, width)) = built {
                 fused_specs.insert(c_idx);
                 max_width = max_width.max(width);
                 let row_idx = row_spans.len();

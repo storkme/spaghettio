@@ -1090,3 +1090,346 @@ mod row_straddle_tests {
         assert_eq!(p.edges.len(), 4, "1:1 needs exactly one edge per pair");
     }
 }
+
+/// Entities and row geometry for a stamped [`RowCellPlan`].
+#[derive(Debug, Clone)]
+pub struct RowCellLayout {
+    pub entities: Vec<PlacedEntity>,
+    /// Input belt rows, parallel to the caller's solid-input order.
+    pub input_belt_ys: Vec<i32>,
+    pub machine_y: i32,
+    pub output_belt_y: i32,
+    pub x_min: i32,
+    pub x_max: i32,
+}
+
+/// Everything the row stamper needs beyond the plan.
+pub struct RowCellSpec<'a> {
+    pub producer_entity: &'a str,
+    pub consumer_entity: &'a str,
+    pub producer_recipe: &'a str,
+    pub consumer_recipe: &'a str,
+    /// The directly-inserted item.
+    pub item: &'a str,
+    /// Coupling inserter — reach-1, sits in the 1-tile gap.
+    pub coupler: &'a str,
+    pub coupler_rate: f64,
+    /// `(item, belt_entity, feed_inserter)` for the producer's belt-fed
+    /// input, then the consumer's. The producer's belt is the OUTER row
+    /// (reached by a reach-2 inserter stepping over the inner belt), the
+    /// consumer's is the inner row at reach 1.
+    pub producer_input: (&'a str, &'a str, &'a str),
+    pub consumer_input: (&'a str, &'a str, &'a str),
+    /// Inserters per machine face. The output face needs reach-2 (it steps
+    /// over the consumer's input belt), and long-handed is the only
+    /// reach-2 inserter (I8a) at 2.40/s at L2 — under the 2.5/s an EC
+    /// machine emits — so more than one column is the NORMAL case here,
+    /// not an edge case. Ignoring these counts silently under-feeds.
+    pub producer_feed_count: usize,
+    pub consumer_feed_count: usize,
+    pub out_count: usize,
+    pub output_item: &'a str,
+    pub output_belt: &'a str,
+    pub out_inserter: &'a str,
+}
+
+/// Stamp a horizontal row cell with its belts.
+///
+/// ```text
+///   y0                  producer input belt   (outer, reach-2 feed)
+///   y1                  consumer input belt   (inner, reach-1 feed)
+///   y2                  feed inserters
+///   y3 .. y3+h-1        machines, interleaved P/C at plan.xs
+///   y3+h                output inserters
+///   y3+h+1              output belt
+/// ```
+///
+/// Couplers sit in the gap columns BETWEEN machines, at reach 1 — the
+/// property that makes this DI at all. Returns `None` if the coupler
+/// cannot carry the busiest edge, rather than emitting an under-fed row.
+pub fn stamp_row_cell(
+    plan: &RowCellPlan,
+    spec: &RowCellSpec<'_>,
+    x0: i32,
+    y0: i32,
+    machine_w: i32,
+    machine_h: i32,
+) -> Option<RowCellLayout> {
+    if machine_w <= 0 || machine_h <= 0 {
+        return None;
+    }
+    if plan.required_rate() > spec.coupler_rate + 1e-9 {
+        return None;
+    }
+    // The producer's belt is NORTH at reach-1; both consumer flows go
+    // SOUTH. Putting the producer's feed on a reach-2 hop instead would
+    // reintroduce the long-handed 2.40/s ceiling the row shape exists to
+    // avoid, and it is the arrangement the corpus shows
+    // (`DI@E+W | S:in1 S:out1`, the top cable->EC face plan).
+    //
+    //   y0                  producer input belt   (north)
+    //   y1                  producer feed         reach-1
+    //   y2 .. y2+h-1        machines, interleaved
+    //   y2+h                face row: consumer feed (reach-1, picks the
+    //                       belt below) + output (reach-2, steps over it)
+    //   y2+h+1              consumer input belt
+    //   y2+h+2              output belt
+    let p_belt_y = y0;
+    let p_feed_y = y0 + 1;
+    let machine_y = y0 + 2;
+    let face_y = machine_y + machine_h;
+    let c_belt_y = face_y + 1;
+    let output_belt_y = face_y + 2;
+    let x_min = x0;
+    let x_max = x0 + plan.width(machine_w) - 1;
+    let seg = format!("di-row:{}:{}", spec.item, spec.consumer_recipe);
+    let mut ents = Vec::new();
+
+    let belt_run = |ents: &mut Vec<PlacedEntity>, y: i32, name: &str, carries: &str| {
+        for x in x_min..=x_max {
+            ents.push(PlacedEntity {
+                name: name.to_string(),
+                x,
+                y,
+                direction: EntityDirection::East,
+                carries: Some(carries.to_string()),
+                segment_id: Some(seg.clone()),
+                ..Default::default()
+            });
+        }
+    };
+    belt_run(&mut ents, p_belt_y, spec.producer_input.1, spec.producer_input.0);
+    belt_run(&mut ents, c_belt_y, spec.consumer_input.1, spec.consumer_input.0);
+    belt_run(&mut ents, output_belt_y, spec.output_belt, spec.output_item);
+
+    // Columns available on a face, innermost first so single-inserter
+    // faces keep the natural centre-ish position.
+    let cols = |n: usize| -> Vec<i32> { (0..machine_w).take(n).collect() };
+
+    for (k, &is_producer) in plan.sequence.iter().enumerate() {
+        let mx = x0 + plan.xs[k];
+        ents.push(PlacedEntity {
+            name: if is_producer { spec.producer_entity } else { spec.consumer_entity }.to_string(),
+            x: mx,
+            y: machine_y,
+            direction: EntityDirection::North,
+            recipe: Some(
+                if is_producer { spec.producer_recipe } else { spec.consumer_recipe }.to_string(),
+            ),
+            segment_id: Some(seg.clone()),
+            ..Default::default()
+        });
+        if is_producer {
+            // North face, reach-1: picks the belt above, drops into the machine.
+            for dx in cols(spec.producer_feed_count.max(1)) {
+                ents.push(PlacedEntity {
+                    name: spec.producer_input.2.to_string(),
+                    x: mx + dx,
+                    y: p_feed_y,
+                    direction: EntityDirection::South,
+                    carries: Some(spec.producer_input.0.to_string()),
+                    segment_id: Some(seg.clone()),
+                    ..Default::default()
+                });
+            }
+        } else {
+            // South face shares one row: reach-1 feeds from the inner belt,
+            // reach-2 outputs over it. Feed takes the low columns, output
+            // the high ones, so they never contend for a tile.
+            let nf = spec.consumer_feed_count.max(1);
+            let no = spec.out_count.max(1);
+            if nf + no > machine_w as usize {
+                return None;
+            }
+            for dx in 0..nf as i32 {
+                ents.push(PlacedEntity {
+                    name: spec.consumer_input.2.to_string(),
+                    x: mx + dx,
+                    y: face_y,
+                    direction: EntityDirection::North,
+                    carries: Some(spec.consumer_input.0.to_string()),
+                    segment_id: Some(seg.clone()),
+                    ..Default::default()
+                });
+            }
+            for j in 0..no as i32 {
+                ents.push(PlacedEntity {
+                    name: spec.out_inserter.to_string(),
+                    x: mx + nf as i32 + j,
+                    y: face_y,
+                    direction: EntityDirection::South,
+                    carries: Some(spec.output_item.to_string()),
+                    segment_id: Some(seg.clone()),
+                    ..Default::default()
+                });
+            }
+        }
+    }
+
+    for &(ps, cs, _) in &plan.edges {
+        let (gap_x, dir) = if cs == ps + 1 {
+            (x0 + plan.xs[ps] + machine_w, EntityDirection::East)
+        } else {
+            (x0 + plan.xs[cs] + machine_w, EntityDirection::West)
+        };
+        ents.push(PlacedEntity {
+            name: spec.coupler.to_string(),
+            x: gap_x,
+            y: machine_y + machine_h / 2,
+            direction: dir,
+            carries: Some(spec.item.to_string()),
+            segment_id: Some(seg.clone()),
+            ..Default::default()
+        });
+    }
+
+    Some(RowCellLayout {
+        entities: ents,
+        input_belt_ys: vec![p_belt_y, c_belt_y],
+        machine_y,
+        output_belt_y,
+        x_min,
+        x_max,
+    })
+}
+
+#[cfg(test)]
+mod row_stamp_tests {
+    use super::*;
+    use crate::common::{dir_to_vec, inserter_reach};
+
+    fn spec() -> RowCellSpec<'static> {
+        RowCellSpec {
+            producer_entity: "assembling-machine-3",
+            consumer_entity: "assembling-machine-3",
+            producer_recipe: "copper-cable",
+            consumer_recipe: "electronic-circuit",
+            item: "copper-cable",
+            coupler: "stack-inserter",
+            coupler_rate: 12.0,
+            producer_input: ("copper-plate", "transport-belt", "long-handed-inserter"),
+            consumer_input: ("iron-plate", "transport-belt", "fast-inserter"),
+            output_item: "electronic-circuit",
+            output_belt: "transport-belt",
+            out_inserter: "long-handed-inserter",
+            producer_feed_count: 1,
+            consumer_feed_count: 1,
+            out_count: 2,
+        }
+    }
+
+    fn stamped() -> (RowCellPlan, RowCellLayout) {
+        let plan = plan_row_straddle(6, 4, 5.0, 7.5, 3).unwrap();
+        let l = stamp_row_cell(&plan, &spec(), 0, 0, 3, 3).unwrap();
+        (plan, l)
+    }
+
+    /// THE defining DI property, the same predicate `classify.rs` applies
+    /// to community blueprints: every coupler picks from a machine tile
+    /// and drops into a machine tile, at reach 1, and no belt anywhere
+    /// carries the coupled item.
+    #[test]
+    fn couplers_are_machine_to_machine_and_the_item_never_hits_a_belt() {
+        let (_, l) = stamped();
+        let mtiles: std::collections::HashSet<(i32, i32)> = l
+            .entities
+            .iter()
+            .filter(|e| e.name.starts_with("assembling-machine"))
+            .flat_map(|e| {
+                (0..3).flat_map(move |dx| (0..3).map(move |dy| (e.x + dx, e.y + dy)))
+            })
+            .collect();
+        let couplers: Vec<_> = l
+            .entities
+            .iter()
+            .filter(|e| e.carries.as_deref() == Some("copper-cable"))
+            .collect();
+        assert_eq!(couplers.len(), 8, "6:4 straddle has 8 edges");
+        for c in &couplers {
+            assert!(c.name.contains("inserter"), "coupled item must move by inserter");
+            let r = inserter_reach(&c.name);
+            assert_eq!(r, 1, "coupler must be reach-1 (it sits in a 1-tile gap)");
+            let (dx, dy) = dir_to_vec(c.direction);
+            let pick = (c.x - dx * r, c.y - dy * r);
+            let drop = (c.x + dx * r, c.y + dy * r);
+            assert!(mtiles.contains(&pick), "coupler {:?} picks off a machine", (c.x, c.y));
+            assert!(mtiles.contains(&drop), "coupler {:?} drops into a machine", (c.x, c.y));
+        }
+        assert!(
+            !l.entities.iter().any(|e| e.name.contains("transport-belt")
+                && e.carries.as_deref() == Some("copper-cable")),
+            "no belt may carry the DI'd item"
+        );
+    }
+
+    /// Producers put nothing on the output belt; only consumers do.
+    #[test]
+    fn only_consumers_reach_the_output_belt() {
+        let (plan, l) = stamped();
+        let n_consumers = plan.sequence.iter().filter(|&&p| !p).count();
+        let out_ins = l
+            .entities
+            .iter()
+            .filter(|e| e.carries.as_deref() == Some("electronic-circuit") && e.name.contains("inserter"))
+            .count();
+        assert_eq!(out_ins, n_consumers);
+    }
+
+    /// Feed inserters must actually reach their belts: the consumer's is
+    /// reach-1 off the inner belt, the producer's reach-2 over it.
+    #[test]
+    fn feed_inserters_reach_their_belts() {
+        let (_, l) = stamped();
+        let belt_at: std::collections::HashMap<(i32, i32), String> = l
+            .entities
+            .iter()
+            .filter(|e| e.name.contains("transport-belt"))
+            .map(|e| ((e.x, e.y), e.carries.clone().unwrap_or_default()))
+            .collect();
+        for e in l.entities.iter().filter(|e| {
+            e.name.contains("inserter")
+                && matches!(e.carries.as_deref(), Some("copper-plate") | Some("iron-plate"))
+        }) {
+            let r = inserter_reach(&e.name);
+            let (dx, dy) = dir_to_vec(e.direction);
+            let pick = (e.x - dx * r, e.y - dy * r);
+            let carried = e.carries.as_deref().unwrap();
+            assert_eq!(
+                belt_at.get(&pick).map(String::as_str),
+                Some(carried),
+                "feed inserter at {:?} must pick {carried} off its belt",
+                (e.x, e.y)
+            );
+        }
+    }
+
+    /// No two entities may share a tile.
+    #[test]
+    fn row_cell_has_no_overlaps() {
+        let (_, l) = stamped();
+        let mut seen = std::collections::HashSet::new();
+        for e in &l.entities {
+            let (w, h) = if e.name.starts_with("assembling-machine") { (3, 3) } else { (1, 1) };
+            for dx in 0..w {
+                for dy in 0..h {
+                    assert!(
+                        seen.insert((e.x + dx, e.y + dy)),
+                        "overlap at {:?} from {}",
+                        (e.x + dx, e.y + dy),
+                        e.name
+                    );
+                }
+            }
+        }
+    }
+
+    /// Under-rate couplers refuse rather than under-feed.
+    #[test]
+    fn under_rate_coupler_refuses() {
+        let plan = plan_row_straddle(6, 4, 5.0, 7.5, 3).unwrap();
+        let mut s = spec();
+        s.coupler = "inserter";
+        s.coupler_rate = 0.84;
+        assert!(stamp_row_cell(&plan, &s, 0, 0, 3, 3).is_none());
+    }
+}

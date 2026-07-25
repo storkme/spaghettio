@@ -235,7 +235,11 @@ pub(crate) fn is_di_bridge_inserter(seg: Option<&str>) -> bool {
 /// reach 1, with no belt for the coupled item) own the cell's correctness,
 /// and RFC-053 KC3 sim-measured the shape at 112% of plan.
 pub(crate) fn is_di_cell_entity(seg: Option<&str>) -> bool {
-    seg.is_some_and(|s| s.starts_with("di-cell:"))
+    // `di-cell:` is the Phase 1 stacked cell, `di-row:` the Phase 2
+    // horizontal row cell. Both couple machine-to-machine and both leave
+    // their producers without a belt-bound output hand, so both need the
+    // same exemptions.
+    seg.is_some_and(|s| s.starts_with("di-cell:") || s.starts_with("di-row:"))
 }
 
 /// Resolve the exact `MachineSpec` sibling the layout pipeline placed at `y`
