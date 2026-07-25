@@ -31,6 +31,24 @@ pub enum DropTarget {
     Chest(usize),
 }
 
+/// One side of an inserter's work, dispatched to the caller.
+///
+/// Both arms carry the hand by mutable reference, so the caller decides
+/// what a "grab" or a "deposit" means for the endpoint it resolved.
+#[derive(Debug)]
+pub enum Io<'a> {
+    /// Fill the hand with up to `want` items from the pickup side. Return
+    /// value ignored; take what is physically there and no more.
+    Grab {
+        want: u32,
+        hand: &'a mut Vec<ItemId>,
+    },
+    /// Move as much of the hand as fits into the drop side, draining what
+    /// was taken. Return the count moved — a short return leaves the
+    /// inserter holding the remainder, which is the game's partial insert.
+    Deposit { hand: &'a mut Vec<ItemId> },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
     /// Hand empty, waiting for something to appear under the pickup tile.
@@ -99,6 +117,21 @@ impl Inserter {
         }
     }
 
+    /// An inserter whose endpoints the caller resolves itself.
+    ///
+    /// `Inserter` is driven entirely through the `grab`/`deposit` closures
+    /// in [`Inserter::tick`]; the `pickup`/`drop` fields exist for the PR-1
+    /// `RowFixture` path, which resolves targets by index. The factory
+    /// builder resolves belt-vs-machine endpoints itself, so it uses this.
+    pub fn detached(kind: InserterKind, capacity_level: u8) -> Self {
+        Inserter::new(
+            kind,
+            PickupTarget::BeltTile { run: 0, tile: 0 },
+            DropTarget::Chest(0),
+            capacity_level,
+        )
+    }
+
     pub fn hand_size(&self) -> u32 {
         self.kind.hand_size(self.capacity_level)
     }
@@ -120,22 +153,32 @@ impl Inserter {
         self.delivered as f64 / (ticks as f64 / 60.0)
     }
 
-    /// Called each tick with the items the pickup tile could supply.
+    /// Called each tick with a single I/O callback.
     ///
-    /// `grab` is invoked only at the moment the hand is actually over the
-    /// source, which is what makes lost swings possible.
-    /// `deposit` inserts as much of the hand as fits, draining what it
-    /// took, and returns the count accepted. A partial return means the
-    /// inserter keeps the remainder and retries — which is what the game
-    /// does, and is not the same as being blocked.
-    pub fn tick<G, D>(&mut self, mut grab: G, mut deposit: D)
+    /// **One closure, not two.** An earlier signature took separate `grab`
+    /// and `deposit` closures, which worked only while the two endpoints
+    /// were disjoint (belt on one side, chest on the other). A real
+    /// inserter can have a belt or a machine on *either* side, so both
+    /// callbacks need the same state and the borrow checker rightly
+    /// refuses. Dispatching on an [`Io`] action lets the caller borrow what
+    /// it likes inside one closure.
+    ///
+    /// `Io::Grab` is invoked only at the moment the hand is actually over
+    /// the source, which is what makes lost swings possible. `Io::Deposit`
+    /// must move as much as fits, drain what it took, and return the count
+    /// — a partial return means the inserter keeps the remainder and
+    /// retries, which is what the game does and is not the same as being
+    /// blocked.
+    pub fn tick<F>(&mut self, mut io: F)
     where
-        G: FnMut(u32, &mut Vec<ItemId>),
-        D: FnMut(&mut Vec<ItemId>) -> usize,
+        F: FnMut(Io<'_>) -> usize,
     {
         if self.phase == Phase::WaitingForSource {
             let want = self.hand_size();
-            grab(want, &mut self.hand);
+            io(Io::Grab {
+                want,
+                hand: &mut self.hand,
+            });
             if self.hand.is_empty() {
                 // Nothing under the pickup tile this tick. A real inserter
                 // simply waits here; the swing is lost. This is the
@@ -168,7 +211,9 @@ impl Inserter {
         // The drop happens at the halfway crossing (pickup → drop is half
         // a turn), the return over the remaining half.
         if !self.dropped && self.cycle_timer <= self.cycle_ticks() / 2.0 {
-            self.delivered += deposit(&mut self.hand) as u64;
+            self.delivered += io(Io::Deposit {
+                hand: &mut self.hand,
+            }) as u64;
             if self.hand.is_empty() {
                 self.swings += 1;
                 self.dropped = true;
@@ -202,14 +247,19 @@ mod tests {
             level,
         );
         for _ in 0..ticks {
-            ins.tick(
-                |want, hand| {
+            ins.tick(|io| match io {
+                Io::Grab { want, hand } => {
                     for _ in 0..want {
                         hand.push(IRON);
                     }
-                },
-                |hand| { let n = hand.len(); hand.clear(); n },
-            );
+                    0
+                }
+                Io::Deposit { hand } => {
+                    let n = hand.len();
+                    hand.clear();
+                    n
+                }
+            });
         }
         ins
     }
@@ -266,14 +316,19 @@ mod tests {
         );
         // Source can only ever supply 2 items per grab.
         for _ in 0..ticks {
-            ins.tick(
-                |want, hand| {
+            ins.tick(|io| match io {
+                Io::Grab { want, hand } => {
                     for _ in 0..want.min(2) {
                         hand.push(IRON);
                     }
-                },
-                |hand| { let n = hand.len(); hand.clear(); n },
-            );
+                    0
+                }
+                Io::Deposit { hand } => {
+                    let n = hand.len();
+                    hand.clear();
+                    n
+                }
+            });
         }
         let full = run_saturated(InserterKind::Stack, 0, ticks);
         assert!(
@@ -297,7 +352,14 @@ mod tests {
             0,
         );
         for _ in 0..ticks {
-            ins.tick(|_want, _hand| {}, |hand| { let n = hand.len(); hand.clear(); n });
+            ins.tick(|io| match io {
+                Io::Grab { .. } => 0,
+                Io::Deposit { hand } => {
+                    let n = hand.len();
+                    hand.clear();
+                    n
+                }
+            });
         }
         assert_eq!(ins.delivered, 0);
         assert_eq!(ins.starved_ticks, ticks);

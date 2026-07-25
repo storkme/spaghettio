@@ -85,6 +85,18 @@ pub struct BeltTile {
     pub downstream: Option<Downstream>,
     /// Items that left this tile with nowhere to go (layout edge).
     pub exited: u64,
+    /// True only for tiles the manifest names as boundary outputs.
+    ///
+    /// **A belt with no downstream is a DEAD END, not a drain.** Draining
+    /// every unlinked tile silently deletes items, which manufactures
+    /// throughput and — worse — removes the backpressure that makes a dead
+    /// end re-compress its lane. That backpressure is the exact mechanism
+    /// #448 turns on, so getting this wrong would have hidden the
+    /// phenomenon the meter exists to measure. Found by the first
+    /// end-to-end run: copper-cable read 45.00/s at plan while
+    /// electronic-circuit sat at -57.8%, because cable was falling off an
+    /// interior belt end instead of backing up.
+    pub is_sink: bool,
 }
 
 impl BeltTile {
@@ -117,6 +129,9 @@ pub struct BeltNetwork {
     progress: [f64; 4],
     /// Round-robin state per splitter id.
     splitter_toggle: Vec<bool>,
+    /// Items that left the network at a tile with no downstream, since the
+    /// caller last drained this. Boundary outputs are counted from here.
+    pub exited_log: Vec<(usize, ItemId)>,
     pub notes: Vec<TopologyNote>,
 }
 
@@ -225,11 +240,17 @@ impl BeltNetwork {
                 continue;
             };
             match downstream {
-                None => {
-                    // Layout edge: items leave the world and are counted.
+                None if self.tiles[id].is_sink => {
+                    // A designated boundary output drains, so backpressure
+                    // cannot falsify the measurement — the same reason the
+                    // harness uses remove-mode chests.
                     self.tiles[id].lanes[lane_ix].take_exit();
                     self.tiles[id].exited += 1;
+                    self.exited_log.push((id, item));
                 }
+                // Interior dead end: hold. The lane backs up, which is what
+                // lets it re-compress.
+                None => {}
                 Some(d) => {
                     let target_lane = match d.lanes {
                         LaneMap::Straight => lane_ix,
@@ -262,11 +283,13 @@ impl BeltNetwork {
             for probe in 0..2 {
                 let which = (first + probe) % 2;
                 match outs[which] {
-                    None => {
+                    None if self.tiles[id].is_sink => {
                         self.tiles[id].lanes[lane_ix].take_exit();
                         self.tiles[id].exited += 1;
+                        self.exited_log.push((id, item));
                         placed = true;
                     }
+                    None => {}
                     Some(d) => {
                         let target_lane = match d.lanes {
                             LaneMap::Straight => lane_ix,
@@ -353,6 +376,7 @@ impl NetworkBuilder {
                     lanes: [Lane::new(SLOTS_PER_TILE), Lane::new(SLOTS_PER_TILE)],
                     downstream: None,
                     exited: 0,
+                    is_sink: false,
                 });
                 net.index.insert(pos, id);
                 made.push(id);

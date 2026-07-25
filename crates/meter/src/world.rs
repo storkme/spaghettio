@@ -257,26 +257,29 @@ impl World {
             let chests = &mut self.chests;
             let pickup = ins.pickup;
             let drop = ins.drop;
-            ins.tick(
-                |want, hand| match pickup {
-                    PickupTarget::BeltTile { run, tile } => {
-                        let run = &mut runs[run];
-                        // Both lanes (factorio-mechanics.md I6).
-                        let mut remaining = want;
-                        for lane in run.lanes.iter_mut() {
-                            if remaining == 0 {
-                                break;
+            ins.tick(|io| match io {
+                crate::inserter::Io::Grab { want, hand } => {
+                    match pickup {
+                        PickupTarget::BeltTile { run, tile } => {
+                            let run = &mut runs[run];
+                            // Both lanes (factorio-mechanics.md I6).
+                            let mut remaining = want;
+                            for lane in run.lanes.iter_mut() {
+                                if remaining == 0 {
+                                    break;
+                                }
+                                let before = hand.len();
+                                lane.take_from_tile(tile, remaining, hand);
+                                remaining -= (hand.len() - before) as u32;
                             }
-                            let before = hand.len();
-                            lane.take_from_tile(tile, remaining, hand);
-                            remaining -= (hand.len() - before) as u32;
                         }
                     }
-                },
-                |hand| match drop {
+                    0
+                }
+                crate::inserter::Io::Deposit { hand } => match drop {
                     DropTarget::Chest(idx) => chests[idx].accept(hand),
                 },
-            );
+            });
         }
         self.inserters = inserters;
     }

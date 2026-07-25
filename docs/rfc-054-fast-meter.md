@@ -547,3 +547,54 @@ the right thing moved.
   (two for two). Both fixes were taken on their own merits; neither
   explanation survived being checked. The non-monotonicity remains
   unattributed and remains PR 2's first question.*
+- *2026-07-25 — **PR 3: the meter runs a real factory, and on the EC family
+  it agrees with Factorio to within ~0.4 percentage points.** Machines,
+  blueprint ingestion, boundary handling and `MeterReport` landed; the
+  first end-to-end measurements are below. This supersedes PR 1's negative
+  result as the RFC's best evidence, and it arrived without Factorio —
+  fixtures are generated locally by the engine and compared against
+  measurements already frozen in the repo, which is exactly the property
+  the "Why now, and not before RFC-050" section rested on.*
+
+  | config | real Factorio | meter | Δ |
+  |---|---|---|---|
+  | chain-ec15 @d1 | −8.0% | −7.7% | 0.3pp |
+  | chain-ec15 @d2 | −6.0% | −5.6% | 0.4pp |
+  | chain-ec15 @d7 | −5.3% | −5.6% | 0.3pp |
+  | chain-ec30 @d2 | −5.3% | −5.6% | 0.3pp |
+
+  ***KC2(b) is met on this family***: the meter reproduces the
+  **level-invariance** unprogrammed — d2 through d7 sit flat at −5.6%
+  while d1 is worse at −7.7%, the same shape #435 measured and the same
+  shape every rate-based model predicts wrongly. Nothing in the code knows
+  about research levels except the hand-size table.*
+
+  ***KC3 looks comfortable***: `chain-mil5ore` — 3,754 belt tiles, 146
+  machines, 360 inserters — simulates 18,000 ticks in **0.34 s wall**.
+  KC3's bar is ≤2 s at 5k entities.*
+
+  ***The first end-to-end run immediately found a modelling error, and it
+  was the one that mattered most.*** *The network drained ANY tile with no
+  downstream, so items fell off interior belt ends instead of backing up.
+  Symptom: copper-cable read 45.00/45.00 exactly at plan while
+  electronic-circuit sat at **−57.8%**. Only manifest-designated boundary
+  outputs may drain; an unlinked interior tile is a **dead end** and must
+  hold. That backpressure is precisely the mechanism #448 turns on — the
+  bug would have deleted the phenomenon the meter exists to measure. Fixed,
+  and EC moved −57.8% → −5.6%.*
+
+  **Known disagreements, both under-reporting:**
+  - *`chain-ac1-d0`: meter −42.8% against a real **PASS** at −0.3%. This is
+    the disclosed PR-3 fluid limitation doing its job — fluid-fed machines
+    are held in shortage rather than allowed to craft from nothing, so an
+    on-site plastic-bar step starves the chain. Honest under-report, not a
+    silent wrong number. Resolves when fluids land.*
+  - *`chain-mil5ore`: meter −66.2% against a real −28.7%. **Unexplained.**
+    Its solid intermediates (iron-plate −0.0%, stone-brick 0.0%) are at
+    plan while the pack itself is not, so the loss is downstream of
+    smelting. First candidate for the divergence log.*
+
+  *Not yet claimed: KC1 proper. That needs the full 17-config replay as a
+  test with the frozen baselines as fixtures, which is PR 4. Four configs
+  of one family agreeing is encouraging, not a verdict — and two other
+  families disagree.*
