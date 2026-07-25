@@ -175,6 +175,28 @@ impl Lane {
         false
     }
 
+    /// Take up to `max` items the predicate accepts, most-downstream
+    /// first. Items it rejects are left in place — an inserter that will
+    /// not take an item does not disturb it (mechanics I11).
+    pub fn take_matching<F>(&mut self, max: u32, accept: &mut F, out: &mut Vec<ItemId>)
+    where
+        F: FnMut(ItemId) -> bool,
+    {
+        let mut taken = 0u32;
+        for idx in (0..self.slots.len()).rev() {
+            if taken >= max {
+                break;
+            }
+            let Some(item) = self.slots[idx] else { continue };
+            if !accept(item) {
+                continue;
+            }
+            self.slots[idx] = None;
+            out.push(item);
+            taken += 1;
+        }
+    }
+
     /// Take up to `max` items, most-downstream first.
     pub fn take_all(&mut self, max: u32, out: &mut Vec<ItemId>) {
         let mut taken = 0u32;

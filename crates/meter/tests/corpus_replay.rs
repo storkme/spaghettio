@@ -51,7 +51,10 @@ struct Entry {
     /// Real-Factorio measured delta, as a fraction (−0.06 = −6%).
     measured: f64,
     band: Band,
-    /// Where the number comes from — every one is checkable.
+    /// Where the number comes from — every one is checkable. Kept for
+    /// provenance even though the assertions do not read it: a baseline
+    /// whose origin is not written down is a baseline nobody can re-derive.
+    #[allow(dead_code)]
     source: &'static str,
     /// True when the chain contains an on-site fluid step. The meter holds
     /// fluid-fed machines in shortage (PR-3 scope; fluids are the RFC's
@@ -229,8 +232,8 @@ fn corpus_replay_reports() {
     }
 
     println!(
-        "\n{:<24} {:>8} {:>9} {:>9} {:>8}  {}",
-        "config", "band", "real", "meter", "gap pp", "fluid?"
+        "\n{:<24} {:>8} {:>9} {:>9} {:>8}  fluid?",
+        "config", "band", "real", "meter", "gap pp"
     );
     for r in &results {
         println!(

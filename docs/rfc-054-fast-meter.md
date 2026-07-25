@@ -653,3 +653,51 @@ the right thing moved.
   real hole or the fixture wiring does. Building Phase 3 fluids on top of
   an unexplained 57.8pp error would be exactly the "exploration that
   overruns its evidence" this project names as its dominant rework shape.*
+- *2026-07-25 — **KC1 attribution, round 1: one real defect found and
+  fixed; the military deficit narrowed but NOT closed.** Recording a
+  partial result rather than a clean one, because the remaining gap is the
+  thing that matters and it is still open.*
+
+  ***Found and fixed: inserters grabbed blind (mechanics I11).*** *The
+  meter's inserters took whatever was under the hand without checking
+  whether the destination would accept it. On a mixed belt the first
+  foreign item jams the hand permanently — `insert` returns 0, the hand
+  never empties, and the inserter stops forever. Real inserters check the
+  destination before swinging; **I11** says so explicitly ("inserters
+  refuse items the destination can't accept"), and the same mechanic is
+  what plugged the sim harness's own feed rigs in the #357 forensics.
+  `take_from_tile_filtered` now applies the destination's `room_for` as a
+  pickup predicate. **Effect: mil5plates −61.1% → −59.6%.** Real, correct,
+  and nowhere near sufficient — which is worth stating plainly, because a
+  fix that moves 1.5pp against a 56pp gap is not the explanation.*
+
+  ***Where the remaining defect lives, narrowed by measurement:*** *the
+  grenade row of `chain-mil5plates`. Per-machine dump after warmup:*
+
+  ```
+  grenade at (35,7)  iron-plate=70/5  coal=9/10     <- iron buffer CAPPED
+  grenade at (38,7)  iron-plate=70/5  coal=9/10
+  ...                                    8,8,7,7,6,6
+  grenade at (62,7)  iron-plate=70/5  coal=5/10     <- declining head->tail
+  ```
+
+  *Boundary injection against plan: stone-brick **25.00/25.0 exact**, coal
+  **13.45/25.0**, iron 15.69/22.5. So one input arrives at plan and coal
+  does not — while the coal belt reads full on **78% of ticks**. Coal is
+  on the belt, near the head, and not reaching the tail. Iron backing up to
+  its cap is a *consequence* (grenades cannot craft without coal), not a
+  second fault.*
+
+  *That is the #448 signature — head-full, tail-starved, monotone gradient
+  — but far more severe than the game shows for the same layout. So the
+  meter is not inventing the phenomenon; it is **over-applying** something.
+  Remaining suspects, in order: the belt-drop model
+  (`drop_onto_tile` places on the far lane via `try_insert_anywhere`), the
+  tap-off splitter, and the sideload lane restriction (**B8**) firing where
+  the game would curve (**B11**).*
+
+  ***Not chased further this session.*** *The honest state is: KC1 remains
+  tripped, the cause is localized to one row's coal delivery on one
+  fixture, and the next step is a tile-level dump of that row's belt
+  occupancy rather than more model-building. Recorded here so a cold
+  pick-up starts from the measurement, not from the theory.*

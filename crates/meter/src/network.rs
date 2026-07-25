@@ -164,6 +164,31 @@ impl BeltNetwork {
 
     /// Take up to `max` items from a tile, both lanes (**I6**).
     pub fn take_from_tile(&mut self, tile: usize, max: u32, out: &mut Vec<ItemId>) {
+        self.take_from_tile_filtered(tile, max, |_| true, out)
+    }
+
+    /// Take up to `max` items the predicate accepts, both lanes.
+    ///
+    /// **The filter is not an optimisation — it is mechanics I11.** A real
+    /// inserter checks its destination before swinging and refuses items
+    /// the destination cannot accept. Modelling it as "grab whatever is
+    /// under the hand" deadlocks the inserter the first time a mixed belt
+    /// presents a foreign item: the hand can never be emptied, so the
+    /// inserter stops forever.
+    ///
+    /// That is not a hypothetical. It is what made `chain-mil5plates`
+    /// read −61.1% against a real-measured PASS: grenade machines sat with
+    /// iron-plate buffers capped full and coal at 5/10, on a coal belt that
+    /// was full 78% of the time. Found by per-machine attribution, PR 4.
+    pub fn take_from_tile_filtered<F>(
+        &mut self,
+        tile: usize,
+        max: u32,
+        mut accept: F,
+        out: &mut Vec<ItemId>,
+    ) where
+        F: FnMut(ItemId) -> bool,
+    {
         let mut remaining = max;
         let t = &mut self.tiles[tile];
         for lane in t.lanes.iter_mut() {
@@ -171,7 +196,7 @@ impl BeltNetwork {
                 break;
             }
             let before = out.len();
-            lane.take_all(remaining, out);
+            lane.take_matching(remaining, &mut accept, out);
             remaining -= (out.len() - before) as u32;
         }
     }

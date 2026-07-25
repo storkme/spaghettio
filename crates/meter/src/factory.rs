@@ -55,8 +55,12 @@ pub struct BoundaryFeed {
     pub tile: usize,
     pub pos: (i32, i32),
     pub item: ItemId,
+    /// Ticks on which a push was attempted.
     pub offered: u64,
+    /// Ticks on which neither lane had room.
     pub refused: u64,
+    /// ITEMS actually placed — the number that matters.
+    pub injected: u64,
 }
 
 #[derive(Debug, Default, Clone, Serialize)]
@@ -214,6 +218,7 @@ impl Factory {
                     item: items.intern(&b.item),
                     offered: 0,
                     refused: 0,
+                    injected: 0,
                 }),
                 None => notes.push(format!(
                     "boundary input for {} at ({},{}) is not a belt tile",
@@ -277,13 +282,14 @@ impl Factory {
         for f in &mut self.feeds {
             f.offered += 1;
             // Saturated feed: push onto both lanes' entry slots.
-            let mut placed = false;
+            let mut placed = 0;
             for lane in 0..2 {
                 if self.net.tiles[f.tile].lanes[lane].try_insert_entry(f.item) {
-                    placed = true;
+                    placed += 1;
                 }
             }
-            if !placed {
+            f.injected += placed;
+            if placed == 0 {
                 f.refused += 1;
             }
         }
@@ -297,10 +303,19 @@ impl Factory {
             let (pickup, drop, pos) = (w.pickup, w.drop, w.pos);
             w.core.tick(|io| match io {
                 crate::inserter::Io::Grab { want, hand } => {
-                    match pickup {
-                        Endpoint::Belt(t) => net.take_from_tile(t, want, hand),
-                        Endpoint::Machine(m) => machines[m].take_output(want, hand),
-                        Endpoint::Nothing => {}
+                    // Only take what the DROP side will accept — mechanics
+                    // I11. Grabbing blind deadlocks the inserter on the
+                    // first foreign item from a mixed belt, because the
+                    // hand can then never be emptied.
+                    match (pickup, drop) {
+                        (Endpoint::Belt(t), Endpoint::Machine(m)) => {
+                            let dest = &machines[m];
+                            let accept = |item| dest.room_for(item) > 0;
+                            net.take_from_tile_filtered(t, want, accept, hand);
+                        }
+                        (Endpoint::Belt(t), _) => net.take_from_tile(t, want, hand),
+                        (Endpoint::Machine(m), _) => machines[m].take_output(want, hand),
+                        (Endpoint::Nothing, _) => {}
                     }
                     0
                 }
@@ -371,6 +386,7 @@ impl Factory {
         for f in &mut self.feeds {
             f.refused = 0;
             f.offered = 0;
+            f.injected = 0;
         }
         self.ticks = 0;
     }
