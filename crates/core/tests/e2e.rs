@@ -8158,3 +8158,64 @@ fn di_cell_kc3_export() {
     .expect("write manifest");
     println!("wrote /tmp/{tag}.bp ({} bytes, di={di})", bp.len());
 }
+
+/// RFC-053 Phase 1 **coverage sweep** — how often does an eligible
+/// coupling actually become a cell, rather than being refused into the
+/// bridge/bus fallback? Phase 1 added five refusal gates (modules,
+/// multi-inserter faces, both belt capacities, eligibility); if they
+/// collectively refuse nearly everything, "Phase 1 complete" is hollow.
+/// Ignored — reporting tool, not an assertion.
+///
+/// ```bash
+/// cargo test --manifest-path crates/core/Cargo.toml --test e2e -- \
+///     di_cell_coverage_sweep --exact --ignored --nocapture
+/// ```
+#[test]
+#[ignore]
+fn di_cell_coverage_sweep() {
+    use spaghettio_core::bus::layout;
+    let cases: &[(&str, &[&str], f64)] = &[
+        ("steel-plate", &["iron-ore"], 1.0),
+        ("steel-plate", &["iron-ore"], 2.0),
+        ("steel-plate", &["iron-ore"], 5.0),
+        ("steel-plate", &["iron-ore"], 10.0),
+        ("steel-plate", &["iron-ore"], 20.0),
+        ("iron-gear-wheel", &["iron-ore"], 5.0),
+        ("iron-stick", &["iron-ore"], 5.0),
+        ("pipe", &["iron-ore"], 5.0),
+        ("copper-cable", &["copper-ore"], 5.0),
+        ("electronic-circuit", &["iron-ore", "copper-ore"], 5.0),
+        ("stone-brick", &["stone"], 5.0),
+    ];
+    println!("{:<22} {:>6}  {:>9} {:>8} {:>8}  {}", "target", "rate", "couplings", "cells", "bridges", "verdict");
+    for (item, ins, rate) in cases {
+        let inputs: FxHashSet<String> = ins.iter().map(|s| s.to_string()).collect();
+        let Ok(sr) = solver::solve(item, *rate, &inputs, "assembling-machine-2") else {
+            println!("{item:<22} {rate:>6}  {:>9} {:>8} {:>8}  SOLVER-REFUSED", "-", "-", "-");
+            continue;
+        };
+        let ncoup = sr.di_couplings.len();
+        let opts = layout::LayoutOptions {
+            direct_insertion: true,
+            max_belt_tier: Some(
+                std::env::var("SWEEP_BELT").unwrap_or_else(|_| "transport-belt".into()),
+            ),
+            ..Default::default()
+        };
+        let Ok(l) = layout::build_bus_layout(&sr, opts) else {
+            println!("{item:<22} {rate:>6}  {ncoup:>9} {:>8} {:>8}  LAYOUT-REFUSED", "-", "-");
+            continue;
+        };
+        let cells = l.entities.iter()
+            .filter_map(|e| e.segment_id.as_deref())
+            .filter(|s| s.starts_with("di-cell:"))
+            .count();
+        let bridges = l.entities.iter()
+            .filter_map(|e| e.segment_id.as_deref())
+            .filter(|s| s.starts_with("di-bridge:"))
+            .count();
+        let verdict = if cells > 0 { "CELL" } else if bridges > 0 { "bridge" }
+            else if ncoup > 0 { "refused -> bus" } else { "no coupling" };
+        println!("{item:<22} {rate:>6}  {ncoup:>9} {cells:>8} {bridges:>8}  {verdict}");
+    }
+}

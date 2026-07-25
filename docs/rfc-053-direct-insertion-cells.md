@@ -1008,3 +1008,28 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   on this PR"), so a green `claude-review` on the fixed SHA is not
   evidence the fixes were reviewed — the CLAUDE.md warning applies to
   re-reviews too, not just first passes.*
+
+- *2026-07-25 — **Phase 1 coverage measured, so "Phase 1 complete" isn't
+  taken on faith.** Five refusal gates landed during the #450 review
+  fold-in; if they collectively refuse almost everything, the phase is
+  hollow. `di_cell_coverage_sweep` (ignored, in `tests/e2e.rs`) reports
+  cell-vs-fallback across 11 real targets. At yellow: **4 build cells**
+  (`steel-plate` at 1 and 2/s, `iron-stick`, `pipe`, `copper-cable`),
+  and every refusal has an explicable cause rather than a silent one —
+  `electronic-circuit` is Phase 2 (two solid inputs), `iron-gear-wheel`
+  is out on ratio (~4.8 furnaces per gear machine, straddle > 2),
+  `stone-brick` yields no coupling at all, and the high-rate
+  `steel-plate` cases hit belt capacity. **The capacity refusals track
+  real belt limits, verified by re-sweeping at each tier**:
+  `steel-plate@5` needs 25/s of iron-plate, so it refuses on yellow
+  (15/s) and builds on red (30/s); `steel-plate@10` needs 50/s and
+  refuses even on express (45/s), which is correct — one belt cannot
+  feed it. That last case is the real Phase 1 ceiling and it is a
+  **fan-in** limit, not a DI limit: the ordinary path would split the
+  recipe across rows, and a cell cannot (its machines sit at
+  `StraddlePlan` positions), so high-rate couplings need the Phase 3
+  multi-band cell. Recorded as a measurement rather than a guess because
+  the gates were added under review pressure and their aggregate effect
+  was not obvious from any individual one. NB the sweep only varies
+  `max_belt_tier` to characterise the ceiling — the engine must never
+  auto-escalate tier, which stays a hard user-specified constraint.*
