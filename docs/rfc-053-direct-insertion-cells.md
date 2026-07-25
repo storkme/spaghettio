@@ -1744,3 +1744,44 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   the row's one north belt, and its lubricant is a fluid the producer
   does not draw — two independent blockers, either sufficient. Recorded
   so the next reader does not re-derive it.*
+
+- *2026-07-25 — **#462 review: four findings, all real, all folded in.**
+  The bot skipped the fresh PR on its first attempt (`num_turns: 2`, no
+  comments) — most likely because the PR body I wrote said "#459 was
+  reviewed at `03df0eb1`" and "Prior review thread", which reads to a
+  duplication gate as ALREADY REVIEWED. Rewording it to state plainly
+  that the PR had never been reviewed produced a full review. Worth
+  knowing: **how you describe a PR can suppress its own review.***
+
+  | finding | verdict |
+  |---|---|
+  | `y_start` below the cell's true top | real — my `.or_else()` fallback was dead code |
+  | producer feed budgeted against the CONSUMER's width | real — wrong in both directions once footprints differ |
+  | producer shorter than consumer breaks feed + pipe rows | real — dormant, but eligibility advertised it |
+  | a comment describing a fix that isn't in the code | real — I reverted `merge_x_cursor` and left its comment |
+
+  ***The `y_start` finding is the one that stings.*** *I had already
+  noticed it, written it into this log as "a smell, not a finding", and
+  moved on — on the strength of a 3-row layout validating 0/0. That was
+  not evidence: the consumers the reviewer named (row attribution in
+  `layout.rs`, pole banding) were never what I checked. The fallback I
+  did write turned out never to execute, because `input_belt_ys` is
+  non-empty for the shipped shape. **Recording a suspicion is not the
+  same as testing it, and a validator pass is not a test of a value
+  nothing validates.***
+
+  *Fixed by giving `RowCellLayout` a `y_top` measured over the stamped
+  entities, so the span cannot disagree with the geometry. Canaried
+  old-vs-new across four configurations: **byte-identical layouts, same
+  pole positions, same hash** — old `y_start` was 11, new is 4, and
+  nothing currently consults the difference. Kept regardless, on the same
+  ground as the fluid-rate sum: a `RowSpan` whose `y_start` sits below
+  its own machines is wrong data in a shared struct, and the next reader
+  will not know that. Pinned by
+  `y_top_is_the_pipe_row_when_the_producer_is_piped`.*
+
+  *The producer-shorter-than-consumer case is fixed by REFUSING it rather
+  than inventing geometry: bottom-alignment pushes a shorter producer's
+  north face into the machine band, and its feed belt is a full-width run
+  that cannot dodge into the producer's columns. No corpus pair wants it;
+  the shipped ones are foundry(5)-over-assembler(3) and equal-height.*

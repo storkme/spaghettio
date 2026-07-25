@@ -1114,6 +1114,14 @@ pub struct RowCellLayout {
     /// `RowSpan.fluid_port_pipes`. The lane planner taps fluids through
     /// these, NOT through `input_belt_y`.
     pub fluid_port_pipes: Vec<(String, i32, i32)>,
+    /// Topmost row the cell actually occupies, measured over the stamped
+    /// entities. `RowSpan.y_start` must come from HERE and not from
+    /// `input_belt_ys[0]`: the cell's top is a belt row only when the
+    /// producer is belt-fed, and is the pipe row when it is piped —
+    /// deriving it from the belt list puts `y_start` below the machines
+    /// and silently shrinks the span used for row attribution and pole
+    /// banding.
+    pub y_top: i32,
     pub machine_y: i32,
     pub output_belt_y: i32,
     pub x_min: i32,
@@ -1420,9 +1428,11 @@ pub fn stamp_row_cell(
     if spec.consumer_input.is_some() {
         input_belt_ys.push(c_belt_y);
     }
+    let y_top = ents.iter().map(|e| e.y).min().unwrap_or(y0);
     Some(RowCellLayout {
         entities: ents,
         input_belt_ys,
+        y_top,
         fluid_port_ys,
         fluid_port_pipes: fluid_ports,
         machine_y,
@@ -1496,6 +1506,38 @@ mod row_stamp_tests {
             producer_feed_count: 0,
             consumer_feed_count: 0,
             out_count: 1,
+        }
+    }
+
+    /// `y_top` is the cell's real top, which for a piped producer is the
+    /// PIPE row — not `input_belt_ys[0]`, which is then the consumer's belt
+    /// below the machines. `RowSpan.y_start` reads this; deriving it from
+    /// the belt list understated the span by the whole machine band.
+    #[test]
+    fn y_top_is_the_pipe_row_when_the_producer_is_piped() {
+        let plan = plan_row_straddle(4, 4, 1.0, 1.0, 3, 3).unwrap();
+        let l = stamp_row_cell(&plan, &shared_fluid_spec(), 0, 0, 3, 3, 3, 3).unwrap();
+        let pipe_y = l
+            .entities
+            .iter()
+            .filter(|e| e.name == "pipe")
+            .map(|e| e.y)
+            .min()
+            .expect("piped producer must get a run");
+        assert_eq!(l.y_top, pipe_y, "cell top is the pipe row");
+        assert!(
+            l.y_top < l.machine_y,
+            "cell top {} must be above the machines at {}",
+            l.y_top,
+            l.machine_y
+        );
+        for &b in &l.input_belt_ys {
+            assert!(
+                b > l.y_top,
+                "every input belt ({b}) sits below the cell top ({}) here, which is \
+                 exactly why y_start must not come from input_belt_ys",
+                l.y_top
+            );
         }
     }
 

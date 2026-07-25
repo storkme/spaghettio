@@ -2159,10 +2159,24 @@ fn row_cell_eligible(producer: &MachineSpec, consumer: &MachineSpec, item: &str)
     if p_in.first().is_some_and(|p| *p == c_other) {
         return false;
     }
-    // Footprints may DIFFER — the row cell bottom-aligns the two roles and
-    // paces x by each machine's own width, so a 5x5 foundry beside a 3x3
-    // assembler is fine. (The stacked cell still requires equal dims: its
-    // straddle geometry is derived from a single machine width.)
+    // WIDTHS may differ freely — the row paces x by each machine's own
+    // width. HEIGHTS may differ only in the direction the geometry
+    // actually supports: the producer must be at least as tall as the
+    // consumer.
+    //
+    // Bottom-alignment puts the two roles' south faces on one row (that is
+    // what lets a coupler reach both), so a SHORTER producer has its north
+    // face pushed down INTO the machine band. Its feed inserter row and
+    // its pipe run would then have to sit on a row the taller consumer's
+    // body already occupies, and the feed belt is a full-width run, so it
+    // cannot simply dodge into the producer's columns. Rather than invent
+    // geometry for a shape with no corpus demand, refuse it — the shipped
+    // pairs are foundry(5) over assembler(3) and equal-height, both fine.
+    // (The stacked cell still requires equal dims outright: its straddle
+    // is derived from a single machine width.)
+    if machine_dims(&producer.entity).1 < machine_dims(&consumer.entity).1 {
+        return false;
+    }
     true
 }
 
@@ -2215,7 +2229,6 @@ fn try_build_row_cell(
     let (pmw, pmh) = machine_dims(&producer.entity);
     let (cmw, cmh) = machine_dims(&consumer.entity);
     let (pmw, pmh, cmw, cmh) = (pmw as i32, pmh as i32, cmw as i32, cmh as i32);
-    let mw = cmw;
     let p_util = utilization_for(producer);
     let c_util = utilization_for(consumer);
 
@@ -2277,14 +2290,22 @@ fn try_build_row_cell(
     // reach-2 stepping over it (long-handed is the only reach-2 inserter,
     // I8a). Output therefore routinely needs TWO columns at L2, so give
     // these faces real column budgets instead of forcing one each.
-    let budget = (mw.max(1) as usize).saturating_sub(1);
+    //
+    // Each face is budgeted against ITS OWN machine's width. Footprints may
+    // differ, so a shared budget is wrong in both directions: taken from the
+    // consumer it under-budgets a wider producer (refusing cells that fit),
+    // and from a wider consumer it over-budgets a narrower producer — which
+    // `stamp_row_cell`'s `cols(producer_w, n)` would then silently truncate
+    // into an under-fed face rather than refuse.
+    let p_budget = (pmw.max(1) as usize).saturating_sub(1);
+    let c_budget = (cmw.max(1) as usize).saturating_sub(1);
     let p_feed = match p_in {
-        Some(f) => size_side(f.rate * p_util, Reach::Near, budget, max_inserter_tier, quality, level),
+        Some(f) => size_side(f.rate * p_util, Reach::Near, p_budget, max_inserter_tier, quality, level),
         // No solid feed face to size — the pipe carries it.
         None => crate::bus::inserter_ladder::SidePlan { entity: "inserter", count: 0, shortfall: None },
     };
     let c_feed = match c_in {
-        Some(f) => size_side(f.rate * c_util, Reach::Near, budget, max_inserter_tier, quality, level),
+        Some(f) => size_side(f.rate * c_util, Reach::Near, c_budget, max_inserter_tier, quality, level),
         // Nothing belt-fed to size; the coupling supplies every solid.
         None => crate::bus::inserter_ladder::SidePlan { entity: "inserter", count: 0, shortfall: None },
     };
@@ -2293,14 +2314,15 @@ fn try_build_row_cell(
     // face and reach-1 applies, which lifts the long-handed 2.40/s ceiling.
     let out_reach = if c_in.is_some() { Reach::Far } else { Reach::Near };
     let drop = size_belt_drop_side(
-        out.rate * c_util, out_reach, budget, max_inserter_tier, quality, out_stack, level, out_belt,
+        out.rate * c_util, out_reach, c_budget, max_inserter_tier, quality, out_stack, level, out_belt,
     );
     if p_feed.shortfall.is_some() || c_feed.shortfall.is_some() || drop.shortfall.is_some() {
         return None;
     }
     // The consumer's south row holds BOTH its feed and its output, so the
-    // two together must fit the machine's width.
-    if c_feed.count + drop.count > mw.max(1) as usize || p_feed.count > mw.max(1) as usize {
+    // two together must fit the CONSUMER's width; the producer's feed face
+    // is bounded by the PRODUCER's.
+    if c_feed.count + drop.count > cmw.max(1) as usize || p_feed.count > pmw.max(1) as usize {
         return None;
     }
 
@@ -2400,15 +2422,12 @@ fn try_build_row_cell(
     };
     let width = cell.x_max + 1;
     let span = RowSpan {
-        // Falls back to the pipe row only when the cell taps no solid at
-        // all (piped producer, coupling-fed consumer) and so has no input
-        // belt to start from.
-        y_start: cell
-            .input_belt_ys
-            .first()
-            .copied()
-            .or_else(|| cell.fluid_port_ys.first().copied())
-            .unwrap_or(cell.machine_y),
+        // The cell's OWN top, not `input_belt_ys[0]`. For a piped producer
+        // the first input belt is the CONSUMER's, which sits below the
+        // machines — taking `y_start` from it shrank the span to the last
+        // couple of rows and dropped everything above out of row
+        // attribution and pole banding.
+        y_start: cell.y_top,
         y_end: cell.output_belt_y + 1,
         spec: fused,
         machine_count: c_count,

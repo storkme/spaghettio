@@ -3406,17 +3406,21 @@ pub fn route_bus_ghost(
     // ones) so south columns never clip a wider foreign row, and record
     // placed column x-positions so later items' east extension runs can
     // UG-hop across them.
-    // The widest row, ALWAYS — not only when several items merge. The
-    // single-item path used to start at 0 and let `merge_output_rows`
-    // derive its start from the participating rows alone, which is only
-    // safe while the output-producing row is also the widest. That holds
-    // for ordinary layouts (the final row sits at the end of the chain
-    // and is typically largest) but not for an RFC-053 row cell, which
-    // fuses two recipes into one comparatively narrow row: at EC@10/s the
-    // cell is `bus+39` wide against the iron-plate row's `bus+48`, and
-    // the merger drove a column straight through it (7 entity-overlap
-    // errors). The comment above already stated this invariant; only the
-    // multi-item branch implemented it.
+    // NOTE: the single-item path deliberately still starts at 0, and the
+    // invariant stated above is therefore only enforced on the multi-item
+    // branch. RFC-053 tried widening it unconditionally for row cells —
+    // which are narrower than the rows they sit among (at EC@10/s the cell
+    // is `bus+39` against the iron-plate row's `bus+48`) — on the theory
+    // that the merger was driving a column through the cell. Two things
+    // killed it: the unconditional form regressed
+    // `mega_chain_ac_from_raw_zero_issues`, and the cell-scoped form never
+    // fired at all (it tested this function's own local `entities`
+    // accumulator, which never holds placer-authored row entities). The
+    // overlap it was chasing turned out to be a symptom of emitting the
+    // fused cell at the producer's slot instead of the consumer's; fixing
+    // that ordering removed the overlaps with this branch untouched. Do
+    // not re-derive the "fix" without first reproducing an overlap that
+    // the ordering fix does not already cover.
     let mut merge_x_cursor: i32 = if output_items.len() > 1 {
         row_spans.iter().map(|rs| rs.row_width).max().unwrap_or(0) + 1
     } else {
