@@ -1321,7 +1321,26 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   observed `full_output: 46`. Next session: check whether
   `merge_output_rows` extends a participating row's output belt east from
   `output_belt_x_max` (ordinary rows must rely on this), and if it does,
-  why the cell row is excluded. Note the cell row is NARROWER than a
-  non-participating row, which is the same asymmetry that caused the
-  original overlap — the merger appears to assume the output row is
-  widest in more than one place.*
+  why the cell row is excluded.*
+
+  ***That is disproven too.*** *The EC output belt (y=17, x=6..44) IS
+  joined east to the merger at x=45..48 (`merger:electronic-circuit`).
+  Both inputs are tapped and the output is merged; the cell is fully
+  connected on all three belts.*
+
+  ***The census localises it exactly, and it is the Phase 2 input.***
+  *50 machines: 40 furnaces + 6 cable + 4 EC. `full_output: 46` = the 40
+  furnaces plus the 6 cable machines; `item_ingredient_shortage: 4` =
+  exactly the 4 EC machines. So the EC machines cannot craft for want of
+  an ingredient; their coupled cable input then fills, the couplers
+  stall, the cable machines back up, and the backpressure reaches the
+  furnaces. Copper-cable arrives by DI and its couplers are stalled
+  BECAUSE EC cannot consume — so the missing ingredient is **iron-plate,
+  the consumer's belt-fed second input**. That is precisely the flow
+  Phase 2 exists to add and that Phase 1 never had to serve, so the
+  defect is in the new south-face plan (consumer feed at `face_y`,
+  reach-1, picking the belt at `face_y+1`), not in the coupling, the
+  taps, or the merge. **Start there next session: verify a consumer feed
+  inserter exists per consumer and actually picks iron-plate off y=16.**
+  Three hypotheses have now been proposed and two killed by probing —
+  probe this one before changing anything.*

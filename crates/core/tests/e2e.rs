@@ -8192,7 +8192,11 @@ fn di_cell_kc3_export() {
                 .filter(|e| e.y == *y && e.x == xmin - 1)
                 .map(|e| e.segment_id.as_deref().unwrap_or("?"))
                 .collect();
-            println!("CELLBELT y={y} item={item} x={xmin}..{xmax}  west_neighbour={west:?}");
+            let east: Vec<String> = l.entities.iter()
+                .filter(|e| e.y == *y && e.x > *xmax && e.x <= *xmax + 4)
+                .map(|e| format!("x{}:{}", e.x, e.segment_id.as_deref().unwrap_or("?")))
+                .collect();
+            println!("CELLBELT y={y} item={item} x={xmin}..{xmax}  west={west:?} east={east:?}");
         }
     }
     if std::env::var("KC3_PROBE").is_ok() {
