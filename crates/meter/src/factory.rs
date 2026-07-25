@@ -202,13 +202,21 @@ impl Factory {
         let level = manifest.inserter_capacity;
         let mut inserters = Vec::new();
         for e in entities {
+            // Gate on the NAME first, mirroring the machine loop's
+            // `is_crafting_machine`. `entities` is every decoded entity —
+            // belts, poles, pipes, machines — so testing
+            // `from_entity_name` alone would note ~250 non-inserters on a
+            // 292-entity fixture and bury the signal below.
+            if !e.name.ends_with("inserter") {
+                continue;
+            }
             let Some(kind) = InserterKind::from_entity_name(&e.name) else {
-                // Not modelled, and it MUST be said. `footprint_checked`'s
-                // generic `*-inserter` arm lets names this constructor does
-                // not know (burner and filter variants) through `decode`'s
-                // otherwise-hard unknown-entity gate, so a silent `continue`
-                // here under-reports throughput with an empty `notes` — the
-                // one failure mode a meter must never have.
+                // A real inserter this constructor does not know. It MUST be
+                // said: `footprint_checked`'s generic `*-inserter` arm lets
+                // burner and filter variants through `decode`'s otherwise-hard
+                // unknown-entity gate, so a silent `continue` under-reports
+                // throughput with an empty `notes` — the one failure mode a
+                // meter must never have.
                 notes.push(format!("{} at ({},{}) not modelled", e.name, e.x, e.y));
                 continue;
             };
@@ -259,7 +267,7 @@ impl Factory {
         }
 
         Ok(Factory {
-            checkpoints: Vec::new(),
+            checkpoints: vec![(0, 0)],
             net,
             machines,
             inserters,
@@ -429,8 +437,12 @@ impl Factory {
         self.crafted.clear();
         self.delivered.clear();
         // Checkpoints describe the window we just discarded; keeping them
-        // would let a pre-warmup transient decide `converged`.
+        // would let a pre-warmup transient decide `converged`. The window's
+        // OWN start is a sample though — cumulative zero at tick zero — and
+        // seeding it is what makes an N-checkpoint window yield N deltas
+        // rather than N-1.
         self.checkpoints.clear();
+        self.checkpoints.push((0, 0));
         for m in &mut self.machines {
             m.crafts = 0;
         }
@@ -557,5 +569,101 @@ mod convergence_tests {
     fn small_jitter_is_still_converged() {
         // 180/181/179/180 — within the 2% tolerance.
         assert!(converged_from(&ticks(&[0, 180, 361, 540, 720])));
+    }
+
+    /// The detector must be able to fire under the window the callers
+    /// ACTUALLY ship, not merely under hand-built checkpoint arrays.
+    ///
+    /// The first version of this detector required 4 checkpoints while
+    /// `corpus_replay` and `examples/measure` both use a 3-game-minute
+    /// window, which produces exactly 3 — so `converged` was
+    /// unconditionally false, a hardcoded `true` swapped for an
+    /// effectively hardcoded `false`. Every unit test above still passed,
+    /// because they construct checkpoints directly and never exercise the
+    /// schedule `run_for` generates. Same lesson this RFC already learned
+    /// twice: a test that samples the rule is not testing the wiring.
+    #[test]
+    fn the_shipped_measurement_window_can_converge() {
+        const WINDOW: u64 = 60 * 60 * 3; // corpus_replay.rs / measure.rs
+        // Replay exactly what reset_counters + run_for record for a
+        // perfectly steady factory.
+        let mut cps = vec![(0u64, 0u64)];
+        let mut delivered = 0u64;
+        for t in 1..=WINDOW {
+            delivered += 3;
+            if t.is_multiple_of(CHECKPOINT_TICKS) {
+                cps.push((t, delivered));
+            }
+        }
+        assert!(
+            cps.len() > CONVERGENCE_WINDOWS,
+            "the shipped {WINDOW}-tick window yields {} checkpoints; the detector needs {}",
+            cps.len(),
+            CONVERGENCE_WINDOWS + 1
+        );
+        assert!(
+            converged_from(&cps),
+            "a perfectly steady factory must read as converged in the shipped window"
+        );
+    }
+}
+
+#[cfg(test)]
+mod note_tests {
+    use super::*;
+    use crate::blueprint_in::Dir;
+
+    fn ent(name: &str, x: i32, y: i32) -> RawEntity {
+        RawEntity {
+            name: name.into(),
+            x,
+            y,
+            direction: Dir::North,
+            recipe: None,
+            io_type: None,
+        }
+    }
+
+    /// Only genuine inserters may produce an "unmodelled inserter" note.
+    ///
+    /// The build loop walks EVERY decoded entity, so testing
+    /// `InserterKind::from_entity_name` without a name gate first noted
+    /// every belt, pole and pipe in the blueprint — roughly 250 spurious
+    /// notes on a 292-entity fixture, burying the one signal the note
+    /// exists to carry. A diagnostic that fires on everything is worse
+    /// than no diagnostic.
+    #[test]
+    fn ordinary_entities_do_not_produce_unmodelled_notes() {
+        let ents = vec![
+            ent("transport-belt", 0, 0),
+            ent("express-transport-belt", 1, 0),
+            ent("underground-belt", 2, 0),
+            ent("splitter", 3, 0),
+            ent("medium-electric-pole", 4, 0),
+            ent("inserter", 5, 0),
+            ent("long-handed-inserter", 6, 0),
+        ];
+        let f = Factory::from_entities(&ents, Manifest::default()).expect("builds");
+        let spurious: Vec<&String> =
+            f.notes.iter().filter(|n| n.contains("not modelled")).collect();
+        assert!(
+            spurious.is_empty(),
+            "no ordinary entity may be reported as an unmodelled inserter, got {spurious:?}"
+        );
+    }
+
+    /// ...but a real inserter this crate cannot model MUST be reported.
+    /// `burner-inserter` passes `decode`'s unknown-entity gate through
+    /// `footprint_checked`'s generic `*-inserter` arm, so without a note
+    /// its transfers vanish silently and throughput under-reports.
+    #[test]
+    fn an_unmodelled_inserter_is_reported() {
+        let ents = vec![ent("burner-inserter", 0, 0)];
+        let f = Factory::from_entities(&ents, Manifest::default()).expect("builds");
+        assert!(
+            f.notes.iter().any(|n| n.contains("burner-inserter") && n.contains("not modelled")),
+            "an inserter variant the meter cannot model must be noted, got {:?}",
+            f.notes
+        );
     }
 }
