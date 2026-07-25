@@ -3406,11 +3406,19 @@ pub fn route_bus_ghost(
     // ones) so south columns never clip a wider foreign row, and record
     // placed column x-positions so later items' east extension runs can
     // UG-hop across them.
-    let mut merge_x_cursor: i32 = if output_items.len() > 1 {
-        row_spans.iter().map(|rs| rs.row_width).max().unwrap_or(0) + 1
-    } else {
-        0
-    };
+    // The widest row, ALWAYS — not only when several items merge. The
+    // single-item path used to start at 0 and let `merge_output_rows`
+    // derive its start from the participating rows alone, which is only
+    // safe while the output-producing row is also the widest. That holds
+    // for ordinary layouts (the final row sits at the end of the chain
+    // and is typically largest) but not for an RFC-053 row cell, which
+    // fuses two recipes into one comparatively narrow row: at EC@10/s the
+    // cell is `bus+39` wide against the iron-plate row's `bus+48`, and
+    // the merger drove a column straight through it (7 entity-overlap
+    // errors). The comment above already stated this invariant; only the
+    // multi-item branch implemented it.
+    let mut merge_x_cursor: i32 =
+        row_spans.iter().map(|rs| rs.row_width).max().unwrap_or(0) + 1;
     let mut blocked_columns: Vec<i32> = Vec::new();
     // Tail tiles of every merge cascade stamped below (target items AND
     // solid surplus, Step 7b) — the LAST entity `merge_output_rows`

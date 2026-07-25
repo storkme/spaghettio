@@ -1244,3 +1244,40 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   is a genuine regression — cable→EC now forms a row cell where that test
   pins bridge behaviour. Decide whether it should assert the row cell or
   pin DI off.*
+
+- *2026-07-25 — **A latent output-merger bug, found by the row cell; and
+  a KC3-CANDIDATE TRIP that needs sim forensics before it can be
+  called.** Two things, one good and one that must not be waved through.*
+
+  ***(1) `merge_x_cursor` never honoured its own stated invariant for
+  single-output layouts.*** *The comment says "Start east of EVERY row
+  (not just the participating ones) so south columns never clip a wider
+  foreign row" — but only the `output_items.len() > 1` branch did that;
+  the single-item branch started at `0` and let `merge_output_rows`
+  derive its start from the participating rows alone. Safe only while
+  the output-producing row is also the widest, which is true of ordinary
+  layouts and false for a row cell: at EC@10/s the cell is `bus+39` wide
+  against the iron-plate row's `bus+48`, so the merger drove a column
+  straight through it — 7 `entity-overlap` errors, plus knock-on
+  reachability and isolation failures. Fixed by applying the max
+  unconditionally. **Verified pre-existing, not introduced**: the same
+  target with `direct_insertion: false` validated at 0 issues, and the
+  fix adds no new test failures (895 pass, same 5 known ones). This bug
+  was reachable before RFC-053 by any layout whose final row is narrower
+  than an intermediate one; the row cell just made it easy to hit.*
+
+  ***(2) cable→EC now VALIDATES CLEAN but SIMS AT ZERO.*** *After the
+  merger fix the layout has **no validation errors** (8 warnings), so
+  goal clause (b) holds. The sim says: `electronic-circuit` 0.00/s
+  against 10.00/s planned, `converged=false`, and at a 60,000-tick
+  warmup it degrades to "NO DATA" with every item at 0.00 — including
+  `copper-plate` and `iron-plate`, which come from ORDINARY rows, not
+  cells. **This is the exact shape KC3 exists to catch** ("validates
+  clean but the sim measures < 98% — the model is wrong and the checks
+  are lying"). It is NOT yet a confirmed trip: universal zeros plus
+  "NO DATA" plus starved non-cell rows is also the documented signature
+  of a sim-KIT problem (`docs/sim-harness-forensics.md`; audit
+  `kit_errors` and the chest census before blaming geometry). Those two
+  diagnoses have opposite consequences — one kills the Phase 2 shape,
+  the other is a harness artifact — so the forensics must be run before
+  either is recorded as fact. **Do that first next session.***

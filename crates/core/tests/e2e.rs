@@ -8166,6 +8166,19 @@ fn di_cell_kc3_export() {
     });
     println!("validation issues: {warnings}");
 
+    if std::env::var("KC3_PROBE").is_ok() {
+        let (px, y0, y1) = (46i32, 18i32, 28i32);
+        println!("--- entities at x={px}, y={y0}..{y1} ---");
+        let mut rows: Vec<_> = l.entities.iter()
+            .filter(|e| e.x == px && e.y >= y0 && e.y <= y1)
+            .collect();
+        rows.sort_by_key(|e| e.y);
+        for e in rows {
+            println!("  ({},{}) {:<26} seg={:?} carries={:?}",
+                e.x, e.y, e.name, e.segment_id, e.carries);
+        }
+    }
+
     let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(&l, &sr, "di-cell-kc3");
     let tag = if di { "di_cell_kc3" } else { "di_cell_kc3_control" };
     std::fs::write(format!("/tmp/{tag}.bp"), &bp).expect("write bp");
