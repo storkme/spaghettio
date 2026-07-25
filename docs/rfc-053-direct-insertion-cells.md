@@ -515,9 +515,32 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
     when counting DI in community blueprints). Refuses rather than
     under-feeding when the chosen inserter can't cover an edge within
     the slots that edge owns.
-  - **1c — placer wiring** (remaining): call the planner/stamper from
-    `place_rows`, suppress the coupled item's row belts, and teach the
-    lane planner to skip the item.
+  - **1c — placer wiring** (remaining, and the invasive step). Pick-up
+    notes, so this doesn't need re-deriving:
+    - **Seam**: `bus::placer::place_rows`, the DI branch that currently
+      calls `stamp_di_bridge` (search `is_di_consumer` / `di_lookup`).
+      Today that branch fires *after* both rows already exist.
+    - **Why it is not a small change**: a cell REPLACES both row
+      emissions rather than decorating them. `build_one_row` gives a row
+      its own belts and pitch; a cell needs the producer and consumer
+      machines at `StraddlePlan` positions, one tile apart, with **no
+      belt for the coupled item** — so the two specs must be intercepted
+      *before* `build_one_row`, while still getting the producer's other
+      input belts and the consumer's output belt from the template
+      system. Expect a new `RowKind` (cell-shaped) rather than a
+      post-hoc stamp.
+    - **Order of work**: (1) `RowKind` + template that emits a cell band
+      via `stamp_di_cell`; (2) intercept the producer/consumer spec pair
+      in `place_rows`; (3) lane-planner skip for the coupled item —
+      `di_input` already exists and is item-keyed, so reuse it rather
+      than inventing a second mechanism; (4) fall back to the existing
+      bridge, then the bus, whenever `plan_straddle` returns `None` or
+      the ladder cannot supply `required_rate()`.
+    - **Verification this step needs** (the earlier phases did not, being
+      pure functions): the full layout-engine protocol — snapshot
+      inspection at the cell's coordinates and a browser eyeball, not
+      just a green suite. A DI cell that validates clean but starves is
+      exactly the #383/#432 failure mode.
 - **Phase 2 — face allocation, now including fluids (re-scoped by the
   KC6 trip).** The consumer's remaining flows on the opposite face,
   mixed reach (reach-2 stepping over a near belt), **plus pipe placement
