@@ -548,9 +548,25 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
       belt) and returns a `DiCellLayout` carrying `input_belt_y` /
       `output_belt_y` / x-extent, i.e. exactly the fields a `RowSpan`
       needs. What remains of this step is constructing the `RowSpan`
-      itself and hanging it off a `RowKind`; (2) intercept the
-      producer/consumer spec pair in `place_rows`; (3) lane-planner skip
-      for the coupled item —
+      itself and hanging it off a `RowKind`. **Open contract question,
+      narrowed 2026-07-25**: the producer row in a cell has NO solid
+      output belt (its output leaves by inserter), but `RowSpan`'s
+      `output_belt_y` is a plain `i32`, not an `Option`. Evidence that
+      this is benign: `lane_planner` only reads
+      `output_belt_y_for(item)` while *constructing a lane*, and the
+      coupled item's lane is dropped before that point because the
+      consumer carries `di_input` for it (zero surviving consumers ⇒
+      lane skipped). So the field should never be read for the DI'd
+      item — but that is currently an INFERENCE from reading the code,
+      not a verified property. Confirm it empirically (build a cell
+      layout, run the validator) before relying on it, or give the
+      producer's `output_belt_y` a deliberately invalid sentinel so a
+      stray read fails loudly instead of silently pointing at a tile
+      that isn't a belt; (2) intercept the producer/consumer spec pair
+      in `place_rows` — note this restructures the main placement loop
+      (skipping a spec, custom `y_cursor` accounting, `module_id` and
+      stacking-context threading), which is the highest-risk part of
+      this step; (3) lane-planner skip for the coupled item —
       `di_input` already exists and is item-keyed, so reuse it rather
       than inventing a second mechanism; (4) fall back to the existing
       bridge, then the bus, whenever `plan_straddle` returns `None` or
