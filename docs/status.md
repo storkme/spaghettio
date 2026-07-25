@@ -167,7 +167,30 @@ margin**, 1 near + 2 far = 3 of 3 columns, which constrains Phase 2's
 design. Coverage measured rather than assumed: 4 of 11 real targets
 build cells, every refusal with a named cause, and the ceiling is a
 **fan-in belt limit** (one belt cannot feed a high-rate cell), not a DI
-limit. Corpus `fan` analysis redirected Phase 3: fan-in >2 is only 2.1%
+limit.
+
+**`rfc-053` Phases 2 + 4 landed (2026-07-25, PR #459)**: the
+horizontal ROW cell — producers and consumers interleaved in one row,
+coupled east/west in the 1-tile gaps — chosen on corpus evidence
+(`di-patterns faces`: the dominant real shape is `DI@E+W | S:in1 S:out1`,
+both remaining flows on one face at reach-1, opposite face free). It
+needs **no reach-2 inserter and no research** (stack moves 12.0/s at L0
+against a 5.0/s requirement) and reuses `place_rows` rather than
+replacing it. **Both TOP corpus DI pairs now build, validate at 0 issues
+and sim at/above plan**: `copper-cable → electronic-circuit` (#1, 4,116
+instances) 101.3% delivered, 50/50 machines working;
+`electric-furnace → electric-furnace` (#2, 1,585) 109.5%, 32/32. Phase 4
+threads `direct_insertion` through wasm, the worker, URL state (`di=1`)
+and a sidebar checkbox — **still off by default**, since a pair the
+engine cannot serve as a cell falls back to the bridge and then the bus.
+Open against this RFC: **pipes/fluids were re-scoped INTO Phase 2 by KC6
+and did NOT ship** (fluid-touching pairs still refuse, ~30% of top-10
+demand); modules refuse (the module post-pass keys `(entity, recipe)` off
+`row_spans` and a fused row contributes only the consumer's recipe); KC5
+(solver escalation bound) is still unevaluated; and `merge_x_cursor`'s
+fix is narrowed to cell layouts because the unconditional form — the
+one its own comment prescribes — regressed
+`mega_chain_ac_from_raw_zero_issues`. Corpus `fan` analysis redirected Phase 3: fan-in >2 is only 2.1%
 of the corpus and neither dominant shape uses stacked bands, so
 multi-band is a small tail and **Phase 2 (face allocation) should come
 first**. Open tracking items: the ~10% electric-furnace steel rate
