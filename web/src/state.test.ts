@@ -35,6 +35,7 @@ function makeState(overrides: Partial<FormState>): FormState {
     wireMode: null,
     stacking: null,
     inserterCapacity: null,
+    directInsertion: false,
     modules: null,
     customInputs: [],
     ...overrides,
@@ -56,6 +57,7 @@ describe("readUrlState — defaults", () => {
       wireMode: null,
       stacking: null,
       inserterCapacity: null,
+      directInsertion: false,
       modules: null,
       customInputs: [],
     });
@@ -129,6 +131,7 @@ describe("readUrlState — hash form", () => {
       wireMode: null,
       stacking: null,
       inserterCapacity: null,
+      directInsertion: false,
       modules: null,
       customInputs: [],
     });
