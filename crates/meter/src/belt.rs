@@ -60,7 +60,7 @@ pub struct Lane {
 }
 
 impl Lane {
-    fn new(slot_count: usize) -> Self {
+    pub fn new(slot_count: usize) -> Self {
         Lane {
             slots: vec![None; slot_count],
             progress: 0.0,
@@ -130,6 +130,101 @@ impl Lane {
             if let Some(item) = self.slots[idx].take() {
                 out.push(item);
                 taken += 1;
+            }
+        }
+    }
+
+    // --- Tile-graph API (crate::network) --------------------------------
+    //
+    // The linear `BeltRun` above treats a lane as one long strip; the tile
+    // graph treats each tile's lane as its own short strip and moves items
+    // across tile boundaries explicitly. Same slot physics, different
+    // granularity — deliberately one `Lane` type rather than two, since
+    // duplicated state is this repo's named recurring hazard.
+
+    /// Read-only view of the raw slots, for diagnostics.
+    pub fn slots_debug(&self) -> &[Option<ItemId>] {
+        &self.slots
+    }
+
+    /// The exit slot's contents, if any (the downstream end).
+    pub fn peek_exit(&self) -> Option<ItemId> {
+        self.slots.last().copied().flatten()
+    }
+
+    /// Remove and return the exit slot's item.
+    pub fn take_exit(&mut self) -> Option<ItemId> {
+        self.slots.last_mut().and_then(|s| s.take())
+    }
+
+    /// Insert at the entry (upstream) end. False when it is occupied,
+    /// which is how a backed-up lane refuses its feeder.
+    pub fn try_insert_entry(&mut self, item: ItemId) -> bool {
+        self.try_insert(item)
+    }
+
+    /// Insert into any free slot, preferring the entry end.
+    ///
+    /// Used for inserter drops. A real inserter drops at a specific point
+    /// on the tile; approximating that as "the first free slot" is a stated
+    /// simplification — it can place an item marginally further along than
+    /// the game would, which slightly *favours* throughput. Candidate
+    /// `docs/meter-divergence.md` entry.
+    pub fn try_insert_anywhere(&mut self, item: ItemId) -> bool {
+        for slot in self.slots.iter_mut() {
+            if slot.is_none() {
+                *slot = Some(item);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Take up to `max` items the predicate accepts, most-downstream
+    /// first. Items it rejects are left in place — an inserter that will
+    /// not take an item does not disturb it (mechanics I11).
+    pub fn take_matching<F>(&mut self, max: u32, accept: &mut F, out: &mut Vec<ItemId>)
+    where
+        F: FnMut(ItemId) -> bool,
+    {
+        let mut taken = 0u32;
+        for idx in (0..self.slots.len()).rev() {
+            if taken >= max {
+                break;
+            }
+            let Some(item) = self.slots[idx] else { continue };
+            if !accept(item) {
+                continue;
+            }
+            self.slots[idx] = None;
+            out.push(item);
+            taken += 1;
+        }
+    }
+
+    /// Take up to `max` items, most-downstream first.
+    pub fn take_all(&mut self, max: u32, out: &mut Vec<ItemId>) {
+        let mut taken = 0u32;
+        for idx in (0..self.slots.len()).rev() {
+            if taken >= max {
+                break;
+            }
+            if let Some(item) = self.slots[idx].take() {
+                out.push(item);
+                taken += 1;
+            }
+        }
+    }
+
+    /// Shift items one slot toward the exit, downstream-first, without
+    /// touching the exit slot itself (the caller hands that off first).
+    pub fn shift_forward(&mut self) {
+        if self.slots.is_empty() {
+            return;
+        }
+        for idx in (1..self.slots.len()).rev() {
+            if self.slots[idx].is_none() {
+                self.slots[idx] = self.slots[idx - 1].take();
             }
         }
     }
