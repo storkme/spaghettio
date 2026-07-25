@@ -8199,6 +8199,15 @@ fn di_cell_kc3_export() {
             println!("CELLBELT y={y} item={item} x={xmin}..{xmax}  west={west:?} east={east:?}");
         }
     }
+    if std::env::var("KC3_FACE").is_ok() {
+        for y in 14..=17 {
+            let v: Vec<String> = l.entities.iter()
+                .filter(|e| e.y == y && e.segment_id.as_deref().is_some_and(|s| s.starts_with("di-row:")))
+                .map(|e| format!("x{}:{}:{}", e.x, e.name, e.carries.clone().unwrap_or_default()))
+                .collect();
+            println!("FACE y={y} n={} {:?}", v.len(), &v[..v.len().min(8)]);
+        }
+    }
     if std::env::var("KC3_PROBE").is_ok() {
         let (px, y0, y1) = (46i32, 18i32, 28i32);
         println!("--- entities at x={px}, y={y0}..{y1} ---");

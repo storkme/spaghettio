@@ -1344,3 +1344,24 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   inserter exists per consumer and actually picks iron-plate off y=16.**
   Three hypotheses have now been proposed and two killed by probing —
   probe this one before changing anything.*
+
+  ***Probed; the face is correct too — fourth hypothesis eliminated.***
+  *y=15 holds 12 inserters, exactly 4 consumers x (1 `fast-inserter`
+  carrying iron-plate + 2 `long-handed-inserter` carrying EC), at the
+  consumer x-positions 10/18/30/38, with the iron-plate belt at y=16 and
+  the EC belt at y=17 beneath them. Reach arithmetic verified for all
+  three roles.*
+
+  ***Conclusion after four eliminations: the cell is STRUCTURALLY SOUND
+  and the defect is DYNAMIC.*** *Taps connected, output merged, face
+  inserters present and correctly placed — so this is not a placement
+  bug. It is a flow problem: iron-plate is most likely never arriving on
+  y=16 even though the tap SEGMENT exists at x=5. The next probe is
+  whether that tap connects to its trunk at the FAR (west) end, and
+  whether the iron-plate trunk is routed at all — note the iron-plate
+  furnaces are themselves at `full_output`, which is consistent with
+  their output having nowhere to go rather than with a full belt
+  downstream. Do not change placement code: four structural hypotheses
+  have now been proposed and all four killed by probing, which is
+  itself the finding — the remaining fault is in routing/flow, not
+  geometry.*
