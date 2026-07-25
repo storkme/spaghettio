@@ -1365,3 +1365,45 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   have now been proposed and all four killed by probing, which is
   itself the finding — the remaining fault is in routing/flow, not
   geometry.*
+
+- *2026-07-25 — **PHASE 2 WORKS: both top corpus DI pairs now build,
+  validate clean and sim at or above plan.** The root cause of the EC
+  starve was ORDERING, not geometry — the fifth hypothesis after four
+  structural ones were probed to destruction. A fused cell consumes the
+  union of both halves' belt-fed inputs, so it must be placed where all
+  of them are available: at the CONSUMER's slot in the topological order,
+  not the producer's. Emitting at the producer's slot put the cell north
+  of its own iron-plate supply (iron's row landed at y=22 against the
+  cell at y=10–17), breaking the lanes-run-south invariant; the router
+  could only answer with a 1-entity "return path", iron never arrived,
+  the EC machines were ingredient-short and the whole chain backed up.*
+
+  | pair | uses DI | validates | sim delivered |
+  |---|---|---|---|
+  | `copper-cable → electronic-circuit` (#1, 4,116) | 153 `di-row` | **0 issues** | **101.3%**, 50/50 working |
+  | `electric-furnace → electric-furnace` (#2, 1,585) | 176 `di-cell` | **0 issues** | **109.5%**, 32/32 working |
+
+  *Two further bugs fell out of that fix and are worth keeping: skipping
+  the producer lazily was too late (it sorts earlier, so it had already
+  been placed — its own output belt was stamped over the cell's
+  iron-plate belt), so `fused_specs` is pre-populated from `cell_pairs`;
+  and pre-populating made an unbuildable claim FATAL, because the
+  producer would be skipped while the cell then refused, dropping its
+  production silently — so selection now does a trial build at `y=0`
+  (every refusal is y-independent) and only claims pairs that will
+  actually build.*
+
+  ***Followup, deliberately narrowed not dropped:*** *the `merge_x_cursor`
+  fix is scoped to layouts containing a fused cell row. The unconditional
+  form is the more principled reading of the invariant its own comment
+  states, but it regressed `mega_chain_ac_from_raw_zero_issues`, and
+  diagnosing why mega chains depend on the old cursor was out of scope.
+  Scoping keeps every pre-existing layout bit-identical. **The
+  unconditional form remains the right long-term fix** once that
+  interaction is understood.*
+
+  *Method note: five hypotheses, four disproven by probing before any
+  code changed. The four eliminations (taps connected, output merged,
+  face inserters correct, geometry sound) are what made the fifth
+  findable — each had been committed to this log as a diagnosis and then
+  retracted. Probing before fixing was the whole difference.*

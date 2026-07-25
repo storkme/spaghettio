@@ -1307,7 +1307,8 @@ mod row_stamp_tests {
             item: "copper-cable",
             coupler: "stack-inserter",
             coupler_rate: 12.0,
-            producer_input: ("copper-plate", "transport-belt", "long-handed-inserter"),
+            // Reach-1: the producer's belt is the NORTH face, adjacent.
+            producer_input: ("copper-plate", "transport-belt", "fast-inserter"),
             consumer_input: ("iron-plate", "transport-belt", "fast-inserter"),
             output_item: "electronic-circuit",
             output_belt: "transport-belt",
@@ -1366,7 +1367,10 @@ mod row_stamp_tests {
     #[test]
     fn only_consumers_reach_the_output_belt() {
         let (plan, l) = stamped();
-        let n_consumers = plan.sequence.iter().filter(|&&p| !p).count();
+        // Two long-handed output inserters per consumer: EC emits 2.5/s
+        // and long-handed belt-drop is 2.40/s at L2, so one column cannot
+        // cover a consumer's output.
+        let n_consumers = plan.sequence.iter().filter(|&&p| !p).count() * 2;
         let out_ins = l
             .entities
             .iter()

@@ -2348,7 +2348,18 @@ pub fn place_rows(
     // producer spread over several rows would leave every row but one
     // stranded. That is the same refusal the bridge makes for split
     // producers, and it is Phase 3 work (the multi-band cell).
-    // producer spec idx -> (consumer spec idx, coupled item, is_row_cell).
+    // CONSUMER spec idx -> (producer spec idx, coupled item, is_row_cell).
+    //
+    // Keyed by the CONSUMER, deliberately. A fused cell consumes the
+    // union of both halves' belt-fed inputs, so it must be placed where
+    // ALL of them are already available — i.e. at the consumer's slot in
+    // the topological order, not the producer's. Emitting at the
+    // producer's slot put the cell NORTH of its own iron-plate supply at
+    // EC@10/s (iron-plate's row landed at y=22 against the cell at
+    // y=10..17), breaking the lanes-run-south invariant: the router could
+    // only answer with a 1-entity "return path", iron never arrived, the
+    // EC machines were ingredient-short, and the whole chain backed up
+    // (`full_output: 46`).
     // The variant is carried DELIBERATELY: `try_build_cell` does not
     // re-check `cell_eligible`, so dispatching on anything other than the
     // approved variant silently bypasses the gate that stops a two-solid-
@@ -2386,23 +2397,57 @@ pub fn place_rows(
                 if claimed.contains(&p_idx) || claimed.contains(&c_idx) {
                     continue;
                 }
+                // Buildability, not merely eligibility — and the FULL
+                // builder, not just the straddle. `fused_specs` is
+                // pre-populated from this map, so a pair claimed here has
+                // its producer skipped unconditionally; if the cell then
+                // failed to build at emit time the producer would be
+                // dropped from the layout entirely and its production
+                // would silently vanish. Every refusal in the builders
+                // (rates, belt capacity, inserter counts, straddle) is
+                // independent of `y_cursor`, so a trial build at y=0
+                // answers exactly the question that matters.
+                let trial = |row: bool| {
+                    if row {
+                        try_build_row_cell(
+                            ordered[p_idx], c_spec, item, bus_width, 0, max_belt_tier,
+                            max_inserter_tier, quality, inserter_capacity, ctx,
+                        )
+                    } else {
+                        try_build_cell(
+                            ordered[p_idx], c_spec, item, bus_width, 0, max_belt_tier,
+                            max_inserter_tier, quality, inserter_capacity, ctx,
+                        )
+                    }
+                    .is_some()
+                };
                 let stacked_ok = couplings.len() == 1
                     && cell_eligible(ordered[p_idx], c_spec, item)
-                    && pair_is_arrangeable(ordered[p_idx], c_spec, item, false);
+                    && pair_is_arrangeable(ordered[p_idx], c_spec, item, false)
+                    && trial(false);
                 let row_ok = row_cell_eligible(ordered[p_idx], c_spec, item)
-                    && pair_is_arrangeable(ordered[p_idx], c_spec, item, true);
+                    && pair_is_arrangeable(ordered[p_idx], c_spec, item, true)
+                    && trial(true);
                 if !(stacked_ok || row_ok) {
                     continue;
                 }
                 claimed.insert(p_idx);
                 claimed.insert(c_idx);
-                cell_pairs.insert(p_idx, (c_idx, item, !stacked_ok));
+                cell_pairs.insert(c_idx, (p_idx, item, !stacked_ok));
                 break;
             }
         }
     }
-    // Consumer specs already absorbed into a cell; skipped by the loop.
-    let mut fused_specs: FxHashSet<usize> = FxHashSet::default();
+    // PRODUCER specs absorbed into a cell; skipped by the loop.
+    //
+    // Pre-populated from `cell_pairs` BEFORE the loop runs, not as each
+    // cell is emitted. The cell is emitted at the CONSUMER's slot, and a
+    // producer always sorts earlier — so marking it lazily would be too
+    // late and the producer would already have been placed as an ordinary
+    // row. That is exactly what happened: `copper-cable`'s own output
+    // belt was stamped over the cell's iron-plate belt at y=16, leaving a
+    // West-facing belt dead-ending into a tile the cell had claimed.
+    let mut fused_specs: FxHashSet<usize> = cell_pairs.values().map(|&(p, _, _)| p).collect();
 
     for (spec_idx, spec) in ordered.iter().enumerate() {
         // Before the inter-recipe gap, so an absorbed consumer leaves no
@@ -2428,28 +2473,29 @@ pub fn place_rows(
         // RFC-053 Phase 1: fuse an eligible pair into one cell row. On any
         // refusal fall through to the normal path, where the #432 bridge
         // (and failing that, the bus) still serves the coupling.
-        if let Some(&(c_idx, item, is_row)) = cell_pairs.get(&spec_idx) {
+        if let Some(&(p_idx, item, is_row)) = cell_pairs.get(&spec_idx) {
+            let (producer, consumer) = (ordered[p_idx], spec);
             let built = if is_row {
                 try_build_row_cell(
-                    spec, ordered[c_idx], item, bus_width, y_cursor, max_belt_tier,
+                    producer, consumer, item, bus_width, y_cursor, max_belt_tier,
                     max_inserter_tier, quality, inserter_capacity, ctx,
                 )
             } else {
                 try_build_cell(
-                    spec, ordered[c_idx], item, bus_width, y_cursor, max_belt_tier,
+                    producer, consumer, item, bus_width, y_cursor, max_belt_tier,
                     max_inserter_tier, quality, inserter_capacity, ctx,
                 )
             };
             if let Some((cell_ents, span, width)) = built {
-                fused_specs.insert(c_idx);
+                fused_specs.insert(p_idx);
                 max_width = max_width.max(width);
                 let row_idx = row_spans.len();
                 // Register under BOTH recipes: the cell is the producer's
                 // only placement, so a later consumer looking up the
                 // producer's rows must find this one rather than nothing.
-                recipe_row_idxs.entry(spec.recipe.as_str()).or_default().push(row_idx);
+                recipe_row_idxs.entry(consumer.recipe.as_str()).or_default().push(row_idx);
                 recipe_row_idxs
-                    .entry(ordered[c_idx].recipe.as_str())
+                    .entry(producer.recipe.as_str())
                     .or_default()
                     .push(row_idx);
                 let y_end = span.y_end;
@@ -3745,17 +3791,22 @@ mod tests {
             producer_count: 3.0,
             consumer_count: 2.0,
         }];
-        let (_, spans, _, _) = place_rows(
+        let (ents, _spans, _, _) = place_rows(
             &machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal,
             crate::common::DEFAULT_INSERTER_CAPACITY, None, None, RowLayout::default(),
             true, &couplings, &StackingCtx::unstacked(),
         );
-        // Row-splitting can push this past two rows; what matters is that
-        // the producer still owns a row of its own, i.e. nothing fused.
+        // Since Phase 2 this pair legitimately fuses as a ROW cell (the
+        // consumer is coupled east/west, leaving both faces free for its
+        // second input). The invariant that survives, and the one
+        // `cell_eligible` exists for, is that it must never become a
+        // STACKED cell — that shape cannot feed iron-plate at all.
         assert!(
-            spans.iter().any(|s| s.spec.recipe == "copper-cable"),
-            "producer must keep its own row (no fusion); got {:?}",
-            spans.iter().map(|s| s.spec.recipe.as_str()).collect::<Vec<_>>()
+            !ents.iter().any(|e| e
+                .segment_id
+                .as_deref()
+                .is_some_and(|s| s.starts_with("di-cell:"))),
+            "a two-solid-input consumer must never be fused into a STACKED cell"
         );
     }
 

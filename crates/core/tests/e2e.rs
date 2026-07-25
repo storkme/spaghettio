@@ -8208,6 +8208,27 @@ fn di_cell_kc3_export() {
             println!("FACE y={y} n={} {:?}", v.len(), &v[..v.len().min(8)]);
         }
     }
+    if std::env::var("KC3_TILE").is_ok() {
+        for (x, y) in [(4,16),(5,16),(6,16),(7,16),(8,16)] {
+            for e in l.entities.iter().filter(|e| e.x == x && e.y == y) {
+                println!("TILE ({x},{y}) {:<24} dir={:?} seg={:?}", e.name, e.direction, e.segment_id);
+            }
+        }
+    }
+    if std::env::var("KC3_TRUNK").is_ok() {
+        use std::collections::BTreeMap;
+        let mut segs: BTreeMap<String, (i32,i32,i32,i32,usize)> = BTreeMap::new();
+        for e in &l.entities {
+            let Some(sg) = e.segment_id.as_deref() else { continue };
+            if !(sg.contains("iron-plate") || sg.contains("copper-plate")) { continue }
+            let en = segs.entry(sg.to_string()).or_insert((i32::MAX,i32::MIN,i32::MAX,i32::MIN,0));
+            en.0 = en.0.min(e.x); en.1 = en.1.max(e.x);
+            en.2 = en.2.min(e.y); en.3 = en.3.max(e.y); en.4 += 1;
+        }
+        for (k,(x0,x1,y0,y1,n)) in &segs {
+            println!("SEG {k:<44} n={n:<4} x={x0}..{x1} y={y0}..{y1}");
+        }
+    }
     if std::env::var("KC3_PROBE").is_ok() {
         let (px, y0, y1) = (46i32, 18i32, 28i32);
         println!("--- entities at x={px}, y={y0}..{y1} ---");

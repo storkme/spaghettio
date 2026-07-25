@@ -2877,12 +2877,17 @@ mod tests {
             .iter()
             .filter(|e| {
                 e.carries.as_deref() == Some("copper-cable")
-                    && e.segment_id.as_deref().map_or(false, |s| s.starts_with("di-bridge:"))
+                    && e.segment_id.as_deref().map_or(false, |s| {
+                        // Phase 2 serves this pair with a row cell; the
+                        // bridge remains the fallback for pairs a cell
+                        // cannot arrange.
+                        s.starts_with("di-bridge:") || s.starts_with("di-row:")
+                    })
             })
             .collect();
         assert!(
             !di_inserters.is_empty(),
-            "layout should contain DI bridge inserters carrying copper-cable"
+            "layout should contain DI inserters carrying copper-cable"
         );
         // Two bridge inserters per EC machine (4 machines = 8). The bridge
         // spans a 2-tile gap so it must be long-handed — the only reach-2
@@ -2893,16 +2898,21 @@ mod tests {
         assert_eq!(
             di_inserters.len(),
             8,
-            "expected 8 DI bridge inserters (two per EC machine), got {}",
+            "expected 8 DI inserters carrying copper-cable, got {}",
             di_inserters.len()
         );
-        // All facing south (pick from producer belt north, drop to consumer belt south).
+        // Orientation depends on which DI shape served the pair. #432's
+        // bridge is vertical — south-facing, picking off the producer's
+        // output belt and dropping onto the consumer's input belt. RFC-053
+        // Phase 2's row cell couples HORIZONTALLY, producer beside
+        // consumer, so its couplers face east or west. Both are valid DI;
+        // what must never appear is any other orientation.
         for ins in &di_inserters {
-            assert_eq!(
-                ins.direction,
-                crate::models::EntityDirection::South,
-                "DI bridge inserter at ({},{}) should face south",
-                ins.x, ins.y
+            use crate::models::EntityDirection as D;
+            assert!(
+                matches!(ins.direction, D::South | D::East | D::West),
+                "DI inserter at ({},{}) has orientation {:?}, expected south (bridge) or east/west (row cell)",
+                ins.x, ins.y, ins.direction
             );
         }
 
@@ -2920,23 +2930,54 @@ mod tests {
                 .filter(|e| crate::common::is_belt_entity(&e.name))
                 .filter_map(|e| e.carries.as_deref().map(|c| ((e.x, e.y), c)))
                 .collect();
+            let machine_tiles: std::collections::HashSet<(i32, i32)> = layout
+                .entities
+                .iter()
+                .filter(|e| crate::common::is_machine_entity(&e.name))
+                .flat_map(|e| {
+                    let (w, h) = crate::common::machine_dims(&e.name);
+                    (0..w as i32)
+                        .flat_map(move |dx| (0..h as i32).map(move |dy| (e.x + dx, e.y + dy)))
+                })
+                .collect();
             for ins in &di_inserters {
                 let (dx, dy) = dir_to_vec(ins.direction);
                 let r = inserter_reach(&ins.name);
                 let pick = (ins.x - dx * r, ins.y - dy * r);
                 let drop = (ins.x + dx * r, ins.y + dy * r);
-                assert_eq!(
-                    belt_item.get(&pick).copied(),
-                    Some("copper-cable"),
-                    "bridge at ({},{}) must PICK from a copper-cable belt, got {:?}",
-                    ins.x, ins.y, belt_item.get(&pick)
-                );
-                assert_eq!(
-                    belt_item.get(&drop).copied(),
-                    Some("copper-cable"),
-                    "bridge at ({},{}) must DROP onto a copper-cable belt, got {:?}",
-                    ins.x, ins.y, belt_item.get(&drop)
-                );
+                let is_row_cell = ins
+                    .segment_id
+                    .as_deref()
+                    .is_some_and(|s| s.starts_with("di-row:"));
+                if is_row_cell {
+                    // TRUE direct insertion: machine to machine, with NO
+                    // belt for the coupled item anywhere. This is the same
+                    // predicate `classify.rs` uses to count DI in community
+                    // blueprints, and it is the property #432's bridge
+                    // could not achieve.
+                    assert!(
+                        machine_tiles.contains(&pick) && machine_tiles.contains(&drop),
+                        "row-cell coupler at ({},{}) must couple machine->machine, got pick={:?} drop={:?}",
+                        ins.x, ins.y, belt_item.get(&pick), belt_item.get(&drop)
+                    );
+                } else {
+                    // #432's bridge is belt-to-belt, and ITEM-KEYED at both
+                    // ends: EC is a DualInput consumer, so a positional
+                    // lookup is a coin flip that happens to land right for
+                    // this recipe order.
+                    assert_eq!(
+                        belt_item.get(&pick).copied(),
+                        Some("copper-cable"),
+                        "bridge at ({},{}) must PICK from a copper-cable belt, got {:?}",
+                        ins.x, ins.y, belt_item.get(&pick)
+                    );
+                    assert_eq!(
+                        belt_item.get(&drop).copied(),
+                        Some("copper-cable"),
+                        "bridge at ({},{}) must DROP onto a copper-cable belt, got {:?}",
+                        ins.x, ins.y, belt_item.get(&drop)
+                    );
+                }
             }
         }
 
@@ -2995,16 +3036,24 @@ mod tests {
                 },
             )
             .expect("layout should succeed");
-            // The bridge must actually exist — otherwise "no delivery
-            // warnings" would just mean DI silently fell back to the bus.
-            let bridges = layout
+            // DI must actually happen — otherwise "no delivery warnings"
+            // would just mean it silently fell back to the bus. Since
+            // RFC-053 Phase 2 this pair is served by a ROW CELL rather
+            // than #432's belt-to-belt bridge: the cell couples the
+            // machines directly at reach 1, so a stack inserter (12.0/s at
+            // zero research) carries it instead of a long-handed bridge
+            // capped at 2.4/s. That is why the delivery result below is now
+            // research-INDEPENDENT for cable, where the bridge needed L7.
+            let di = layout
                 .entities
                 .iter()
                 .filter(|e| {
-                    e.segment_id.as_deref().is_some_and(|s| s.starts_with("di-bridge:"))
+                    e.segment_id.as_deref().is_some_and(|s| {
+                        s.starts_with("di-bridge:") || s.starts_with("di-row:")
+                    })
                 })
                 .count();
-            assert_eq!(bridges, 8, "L{level}: DI bridge must be stamped (got {bridges})");
+            assert!(di > 0, "L{level}: DI must be stamped (got {di})");
             crate::validate::belt_flow::check_input_rate_delivery(&layout, Some(&sr))
                 .iter()
                 .filter(|i| i.message.contains("copper-cable"))
