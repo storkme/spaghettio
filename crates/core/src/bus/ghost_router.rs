@@ -3393,16 +3393,6 @@ pub fn route_bus_ghost(
     // Deterministic Vec order (not a set): with multiple output items the
     // iteration order decides merge-column positions, and FxHashSet order
     // is arbitrary. Dedup by seen-set, first occurrence wins.
-    // A fused RFC-053 cell row is present when any already-placed entity
-    // carries a cell segment id. Cell rows can be NARROWER than an
-    // ordinary row (they fuse two recipes into one), which breaks the
-    // merger's implicit assumption that the output-producing row is the
-    // widest — see the cursor comment below.
-    let cell_rows_present = entities.iter().any(|e| {
-        e.segment_id
-            .as_deref()
-            .is_some_and(|s| s.starts_with("di-cell:") || s.starts_with("di-row:"))
-    });
     let mut seen_output_items: FxHashSet<&str> = FxHashSet::default();
     let output_items: Vec<String> = solver_result
         .external_outputs
@@ -3427,17 +3417,7 @@ pub fn route_bus_ghost(
     // the merger drove a column straight through it (7 entity-overlap
     // errors). The comment above already stated this invariant; only the
     // multi-item branch implemented it.
-    //
-    // NARROWED DELIBERATELY: applied only when a fused DI cell row is
-    // present. Applying it unconditionally is the more principled reading
-    // of the invariant, but it regressed `mega_chain_ac_from_raw_zero_issues`
-    // (a previously zero-issue layout gained issues), and diagnosing why
-    // mega chains depend on the old cursor is out of scope here. Scoping
-    // it to cell layouts fixes the case that needs it and leaves every
-    // pre-existing layout bit-identical. The unconditional form is the
-    // right long-term fix once the mega-chain interaction is understood —
-    // tracked as a followup, NOT silently dropped.
-    let mut merge_x_cursor: i32 = if output_items.len() > 1 || cell_rows_present {
+    let mut merge_x_cursor: i32 = if output_items.len() > 1 {
         row_spans.iter().map(|rs| rs.row_width).max().unwrap_or(0) + 1
     } else {
         0

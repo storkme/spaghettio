@@ -2182,9 +2182,15 @@ fn try_build_row_cell(
     // argument as every other row. Inserters pick from both lanes (I6),
     // so full belt capacity is available on the input side.
     let in_belt = row_input_belt(max_belt_tier);
-    let in_stack = p_in.map(|f| ctx.for_item(&f.item)).unwrap_or(1);
-    let cap = lane_capacity_stacked(in_belt, in_stack) * 2.0;
-    if cap + 1e-9 < p_total || cap + 1e-9 < c_total {
+    // Capacity is checked PER ITEM. `StackingCtx::for_item` is item-keyed
+    // and `row_cell_eligible` guarantees the two inputs are different
+    // items, so gating the consumer's belt on the producer item's
+    // stacking factor would silently mis-size whenever they differ.
+    let p_cap = p_in
+        .map(|f| lane_capacity_stacked(in_belt, ctx.for_item(&f.item)) * 2.0)
+        .unwrap_or(f64::INFINITY);
+    let c_cap = lane_capacity_stacked(in_belt, ctx.for_item(&c_in.item)) * 2.0;
+    if p_cap + 1e-9 < p_total || c_cap + 1e-9 < c_total {
         return None;
     }
     // The output belt is single-lane (every output inserter shares a y and

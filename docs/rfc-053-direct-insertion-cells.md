@@ -1506,3 +1506,33 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   kept rather than reverted because it is small, correct and pinned by a
   test — but it is honestly unreachable today, and **anyone picking this
   up should do footprints first**.*
+
+- *2026-07-25 — **The `merge_x_cursor` "fix" was treating a symptom and is
+  REVERTED.** #459's review found that `cell_rows_present` inspected
+  `route_bus_ghost`'s own local entity accumulator — router-authored
+  segments only — so it could never see placer-authored cell entities and
+  the branch never fired. Tested rather than argued: forcing it `false`
+  leaves BOTH pairs at 0 validation issues. The overlap it was written to
+  cure was a symptom of the ORDERING bug (cell emitted at the producer's
+  slot instead of the consumer's); once ordering was fixed the merger
+  change became inert. Reverted to the original, which also retires the
+  "narrowed followup" recorded earlier — there is nothing to narrow.*
+
+  *The underlying observation still stands and is now the ONLY claim
+  made: `merge_x_cursor`'s comment says it starts east of every row, but
+  only the multi-output branch implements that. No layout is known to hit
+  it. Left alone deliberately — the unconditional form regressed
+  `mega_chain_ac_from_raw_zero_issues`, and a fix with no reproducing
+  case is not worth that risk.*
+
+  *Also from the same review: the row cell's input-belt capacity check
+  derived its stacking factor from the PRODUCER's item and then gated the
+  CONSUMER's belt with it, although `row_cell_eligible` guarantees the
+  two items differ and `StackingCtx::for_item` is item-keyed. Now checked
+  per item.*
+
+  *Lesson worth keeping: two of this session's "fixes" — the merger
+  cursor and the first pipe scoping — were confidently reasoned, landed,
+  and later shown to do nothing. Both were caught by an experiment that
+  took minutes (force the flag false; attempt an end-to-end build). The
+  cheap experiment beat the careful argument every time it was run.*
