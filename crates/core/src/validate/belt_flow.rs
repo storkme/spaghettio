@@ -310,12 +310,21 @@ pub fn check_belt_connectivity(
     let mut issues = Vec::new();
 
     let fluid_only = fluid_only_recipes(solver);
+    let fluid_fed = crate::common::fluid_input_only_recipes(solver);
     let belt_tiles = build_belt_tile_set(&layout.entities);
     let ug_pairs = build_ug_pairs(layout);
     let inserter_positions: FxHashSet<(i32, i32)> = layout
         .entities
         .iter()
         .filter(|e| is_inserter(&e.name))
+        .map(|e| (e.x, e.y))
+        .collect();
+    // Inserters that belong to a direct-insertion cell. An adjacent one is
+    // proof a machine's product has somewhere to go without a belt.
+    let coupler_positions: FxHashSet<(i32, i32)> = layout
+        .entities
+        .iter()
+        .filter(|e| is_inserter(&e.name) && super::is_di_cell_entity(e.segment_id.as_deref()))
         .map(|e| (e.x, e.y))
         .collect();
 
@@ -363,6 +372,20 @@ pub fn check_belt_connectivity(
                     adjacent_inserters.push(pos);
                 }
             }
+        }
+
+        // A fluid-fed producer inside a direct-insertion cell takes its
+        // ingredients through a pipe and hands its solid product straight
+        // to the neighbouring machine, so no inserter of its ever touches a
+        // belt (RFC-053 pipe cut). Deliberately narrow: it needs a coupler
+        // adjacent (proof the product has a route) AND no solid ingredient
+        // (nothing left that a belt would have had to deliver), so a cell
+        // machine that fails to get a real belt is still caught.
+        if crate::validate::is_di_cell_entity(e.segment_id.as_deref())
+            && e.recipe.as_deref().is_some_and(|r| fluid_fed.contains(r))
+            && adjacent_inserters.iter().any(|p| coupler_positions.contains(p))
+        {
+            continue;
         }
 
         // Check if any inserter has a belt on its non-machine side

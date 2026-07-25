@@ -1564,3 +1564,50 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   cleared. Worth stating plainly in case a fourth is hiding behind the
   third: the corpus tells us what shape to build, but it does not tell us
   what our own engine will refuse, and only an end-to-end attempt does.*
+
+  > **RETRACTED 2026-07-25 (same day).** *The ratio claim above is wrong,
+  > and the "run the experiment" lesson it was written to illustrate is
+  > exactly what it failed to do. See the next entry.*
+
+- *2026-07-25 — **There was no ratio prerequisite. `casting-* → EC` was
+  blocked on a validator false positive, and both pairs now build and
+  validate clean.** The entry above computed the straddle from the raw
+  per-machine rates — a foundry's 8.0 cable/s against an assembler's
+  7.5/s, hence the 16:15 arithmetic. That is not what the caller passes.
+  `try_build_row_cell` scales both rates by `utilization_for`, and
+  utilization is precisely the fraction that makes a fractional machine
+  count integral: 8.0 × 0.9375 = 7.5. The pair lands exactly 1:1 at every
+  rate, and `plan_row_straddle` has always accepted it.*
+
+  *The real blocker was `check_belt_connectivity`. A fluid-fed producer
+  in a row cell takes its ingredients through a pipe and hands its
+  product straight to the neighbouring machine, so no inserter of its
+  ever touches a belt — which the check reported as
+  `"no inserter connects to a belt"`, one error per foundry, at every
+  rate. `fluid_only_recipes` did not cover it: `casting-copper-cable` has
+  a fluid input but a SOLID output. Added `fluid_input_only_recipes` and
+  a deliberately narrow exemption — the machine must be in a DI cell,
+  have an adjacent COUPLER (proof its product has a route), and have no
+  solid ingredient (nothing a belt would have had to deliver) — so a cell
+  machine that fails to get a real belt is still caught. Pinned by
+  `di_row_cell_fluid_fed_producer_validates_clean`, which was canaried:
+  it fails with the exemption forced off.*
+
+  | pair | corpus | result |
+  |---|---|---|
+  | `casting-copper-cable → EC` | 544 | cell at 2.5–20/s, **0 errors 0 warnings** throughout |
+  | `casting-iron → EC` | 339 | cell at 2.5–15/s, **0 errors 0 warnings** throughout |
+
+  *Above those rates the cell refuses honestly — the consumer's OTHER
+  input (60/s of cable into 8 EC machines) exceeds an express belt's
+  45/s. A DI-off control run confirms the refusal is not a regression:
+  without the cell neither pair lays out at all today (4–32 errors, the
+  foundry left with no adjacent inserter and no pipe), so the cell is
+  currently the only path by which a fluid-fed producer works at all.*
+
+  ***The lesson from the retracted entry stands, sharpened: I wrote
+  "cheap experiments beat careful arguments" and then, in the very next
+  paragraph, blocked a 544-instance pair on an argument I never ran.***
+  *The probe that overturned it took one file and one `cargo run`. When
+  the engine refuses, print what the caller actually passes before
+  reasoning about why.*

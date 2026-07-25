@@ -8082,6 +8082,71 @@ fn research_l7_thins_output_inserters_s4() {
     );
 }
 
+/// RFC-053 — a **fluid-fed producer** in a row cell: `casting-copper-cable`
+/// (molten copper in, cable out, on a 5×5 foundry) direct-inserting into a
+/// 3×3 assembler making `electronic-circuit`. The corpus's #3 DI pair, 544
+/// instances, and the pair that exercises all three of the Phase 2
+/// extensions at once: the pipe cut, heterogeneous footprints, and the
+/// `belt-connectivity` exemption for a machine whose only route out is a
+/// coupling inserter.
+///
+/// Guards a false positive that made this pair unbuildable: the foundry
+/// takes its ingredients through a pipe and hands its product straight to
+/// its neighbour, so no inserter of its ever touches a belt, and
+/// `check_belt_connectivity` used to call that an error.
+///
+/// Not a DI-vs-bus comparison on purpose. Off the cell this pair does not
+/// lay out at all today (the bus leaves the foundry with no adjacent
+/// inserter and no pipe), but that is a pre-existing bus gap — asserting on
+/// it here would make this test fail the day someone fixes it.
+#[test]
+fn di_row_cell_fluid_fed_producer_validates_clean() {
+    use spaghettio_core::bus::layout;
+    let inputs: FxHashSet<String> = ["molten-copper", "iron-plate"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let sr = solver::solve("electronic-circuit", 10.0, &inputs, "assembling-machine-3")
+        .expect("solve EC from molten copper");
+    assert!(
+        sr.machines.iter().any(|m| m.recipe == "casting-copper-cable"),
+        "scenario must actually route cable through the foundry, got {:?}",
+        sr.machines.iter().map(|m| &m.recipe).collect::<Vec<_>>()
+    );
+
+    let layout = layout::build_bus_layout(
+        &sr,
+        layout::LayoutOptions {
+            direct_insertion: true,
+            max_belt_tier: Some("express-transport-belt".into()),
+            ..Default::default()
+        },
+    )
+    .expect("layout must build");
+
+    let in_cell = |e: &spaghettio_core::models::PlacedEntity| {
+        e.segment_id.as_deref().is_some_and(|s| s.starts_with("di-row:"))
+    };
+    let foundries = layout.entities.iter().filter(|e| in_cell(e) && e.name == "foundry").count();
+    let assemblers = layout
+        .entities
+        .iter()
+        .filter(|e| in_cell(e) && e.name == "assembling-machine-3")
+        .count();
+    assert_eq!(foundries, 4, "all four foundries belong to the cell");
+    assert_eq!(assemblers, 4, "all four assemblers belong to the cell");
+
+    let issues = match validate::validate(&layout, Some(&sr), LayoutStyle::Bus) {
+        Ok(v) => v,
+        Err(e) => e.issues,
+    };
+    assert!(
+        issues.is_empty(),
+        "fluid-fed row cell must validate clean, got {:#?}",
+        issues
+    );
+}
+
 /// RFC-053 **KC3 fixture** — export a DI-cell layout + manifest for the sim
 /// harness. Ignored: it writes artifacts and is driven by hand.
 ///
