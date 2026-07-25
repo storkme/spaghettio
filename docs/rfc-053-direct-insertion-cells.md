@@ -532,6 +532,16 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
       input belts and the consumer's output belt from the template
       system. Expect a new `RowKind` (cell-shaped) rather than a
       post-hoc stamp.
+    - **Foreclosed shortcut (verified 2026-07-25, don't retry it)**: you
+      cannot get a cell by passing the consumer row a different
+      `x_offset`. Row templates place machines at a UNIFORM pitch, and no
+      uniform offset serves the canonical straddle — 4 consumers at pitch
+      3 span 12 tiles against the producers' 18, so producers 5 and 6 are
+      unreachable at *every* offset (checked exhaustively). The straddle
+      needs PER-MACHINE x positions (`StraddlePlan::consumer_xs` is
+      `[1,5,10,14]` — non-uniform gaps of 4/5/4), which no existing
+      template can express. That is the concrete reason 1c needs a new
+      `RowKind` rather than a parameter.
     - **Order of work**: (1) `RowKind` + template that emits a cell band
       via `stamp_di_cell`; (2) intercept the producer/consumer spec pair
       in `place_rows`; (3) lane-planner skip for the coupled item —
