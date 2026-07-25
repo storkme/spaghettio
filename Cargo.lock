@@ -623,6 +623,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "spaghettio_meter"
+version = "0.1.0"
+dependencies = [
+ "rustc-hash 2.1.2",
+ "serde",
+ "serde_json",
+ "spaghettio_core",
+]
+
+[[package]]
 name = "spaghettio_mining"
 version = "0.1.0"
 dependencies = [
