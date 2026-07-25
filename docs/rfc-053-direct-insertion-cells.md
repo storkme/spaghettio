@@ -1478,3 +1478,31 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
     fluid `ItemFlow` and the row must populate those fields, or the
     molten-copper lane will never be tapped — the same class of silent
     starve that the iron-plate ordering bug produced.*
+
+- *2026-07-25 — **CORRECTION: the pipe cut is built and unit-tested, and
+  it unlocks NOTHING yet. The scoping above was wrong.*** *The stamper and
+  eligibility changes landed (`fluid_producer_gets_a_pipe_run_on_a_free_north_face`
+  pins the geometry), but every pair the pipe analysis claimed is blocked
+  by a DIFFERENT prerequisite — found only by attempting an end-to-end
+  build:*
+
+  | pair | real blocker |
+  |---|---|
+  | `casting-copper-cable → EC` (544) | **foundry is 5×5, assembler 3×3** — heterogeneous footprints. `row_cell_eligible` requires equal dims because `plan_row_straddle` takes a single `machine_w`. |
+  | `casting-iron → EC` (339) | same |
+  | `solid-fuel-from-light-oil → rocket-fuel` (652) | **fluid on BOTH sides** — `rocket-fuel` takes light-oil as well as solid-fuel, so it is the fluid-CONSUMER shape that was explicitly scoped out. |
+
+  *What went wrong, recorded because it is a repeatable mistake: the
+  mining measured pipe ADJACENCY and recipe INPUTS, and both answers were
+  correct. It never checked machine FOOTPRINTS, and it checked
+  `electric-engine-unit`'s fluid needs (correctly excluding it) while not
+  checking `rocket-fuel`'s. **Measuring the thing you thought of is not
+  the same as measuring the thing that blocks you** — a build attempt
+  found in minutes what three rounds of corpus mining had missed.*
+
+  ***The real prerequisite for fluid DI is heterogeneous machine
+  footprints, not pipes.*** *Two of the three pairs need only that; the
+  third additionally needs the fluid-consumer face plan. The pipe code is
+  kept rather than reverted because it is small, correct and pinned by a
+  test — but it is honestly unreachable today, and **anyone picking this
+  up should do footprints first**.*
