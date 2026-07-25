@@ -183,14 +183,36 @@ instances) 101.3% delivered, 50/50 machines working;
 threads `direct_insertion` through wasm, the worker, URL state (`di=1`)
 and a sidebar checkbox — **still off by default**, since a pair the
 engine cannot serve as a cell falls back to the bridge and then the bus.
-Open against this RFC: **pipes/fluids were re-scoped INTO Phase 2 by KC6
-and did NOT ship** (fluid-touching pairs still refuse, ~30% of top-10
-demand); modules refuse (the module post-pass keys `(entity, recipe)` off
-`row_spans` and a fused row contributes only the consumer's recipe); KC5
-(solver escalation bound) is still unevaluated; and `merge_x_cursor`'s
-fix is narrowed to cell layouts because the unconditional form — the
-one its own comment prescribes — regressed
-`mega_chain_ac_from_raw_zero_issues`. Corpus `fan` analysis redirected Phase 3: fan-in >2 is only 2.1%
+**Fluid-fed PRODUCERS now ship too (2026-07-25, same PR)**: both
+`casting-*` → EC pairs (#3 at 544 instances and #4 at 339) build a row
+cell, validate **0 errors 0 warnings** across 2.5–20/s, and sim at
+**101.3% delivered / 100.0% produced**. They needed three things, each
+found only by attempting an end-to-end build: the pipe cut, heterogeneous
+footprints (5×5 foundry beside a 3×3 assembler, bottom-aligned), and a
+`belt-connectivity` exemption — a piped producer hands its product
+straight to its neighbour, so no inserter of its ever touches a belt.
+Without the cell neither pair lays out at all today, so this is the only
+path by which a fluid-fed producer works. A fourth prerequisite ("ratio
+tolerance") was **claimed and then disproved**: it came from feeding
+`plan_row_straddle` raw per-machine rates, where the caller passes
+utilization-scaled ones.
+
+The fluid-drawing CONSUMER shape is **built but unreachable**, and the
+sim is the only reason we know:
+`solid-fuel-from-light-oil → rocket-fuel` (652 instances) produced a
+cell validating 0/0 that made **literally nothing** — the solver
+resolves `rocket-fuel` to a burner `biochamber` and nothing in the
+engine delivers burner fuel. `cell_machines_are_powerable` now refuses
+non-electric roles; the engine-wide gap is **issue #461**.
+
+Open against this RFC: modules refuse (the module post-pass keys
+`(entity, recipe)` off `row_spans` and a fused row contributes only the
+consumer's recipe); KC5 (solver escalation bound) is still unevaluated;
+and the row cell's rate ceiling is bounded by ratio **alignment** — at
+P30:C23 the flow intervals put three producers against one consumer,
+while P20:C15 (exactly 4:3) is fine at any scale.
+
+Corpus `fan` analysis redirected Phase 3: fan-in >2 is only 2.1%
 of the corpus and neither dominant shape uses stacked bands, so
 multi-band is a small tail and **Phase 2 (face allocation) should come
 first**. Open tracking items: the ~10% electric-furnace steel rate
