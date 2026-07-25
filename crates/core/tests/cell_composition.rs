@@ -419,9 +419,33 @@ fn cell_candidate_resolves_ec15_refusal() {
     let issues = validate::validate(&l, Some(&sr), LayoutStyle::Bus).unwrap();
     let errors = issues.iter().filter(|i| i.severity == Severity::Error).count();
     assert_eq!(errors, 0, "composed candidate errors: {issues:?}");
+    // **2026-07-25 (#448):** `row-input-belt-margin` joins the tolerated
+    // set, and this fixture is the check's own motivating measurement —
+    // not a tolerated unknown. This row's copper-cable INPUT belt is 6
+    // machines × 7.5/s = 45.00/s aggregate against an express belt whose
+    // both-lane nominal is exactly 45.0/s. Per-machine sim dumps show the
+    // row holding cable 42 → 34 → 20 → 6 → … → 2, the tail machine parked
+    // in `item_ingredient_shortage` with 20 iron plates idle beside it,
+    // and an upstream cable producer `full_output` with 32 cable stuck —
+    // ~5.3% of the row's throughput lost, research-invariant. It is a
+    // real defect this layout has; the warning is the point. Note the
+    // symmetry with the OUTPUT-side note above: the belt-out at exactly
+    // 15.0/s of a 15.0/s bridged budget is measured FINE (#431 sweep),
+    // while the belt-in at exactly 45.0/s of 45.0/s is measured BROKEN —
+    // the asymmetry is real (an output belt is filled by inserters that
+    // simply stall when it is full; an input belt is drained head-first
+    // by consumers who buffer).
     assert!(
-        issues.iter().all(|i| i.category == "inserter-item-throughput"),
-        "only the adjudicated category tolerated: {issues:?}"
+        issues
+            .iter()
+            .all(|i| i.category == "inserter-item-throughput"
+                || i.category == "row-input-belt-margin"),
+        "only the adjudicated categories tolerated: {issues:?}"
+    );
+    assert_eq!(
+        issues.iter().filter(|i| i.category == "row-input-belt-margin").count(),
+        1,
+        "expected exactly the one measured copper-cable input finding: {issues:?}"
     );
     // Post-#431 recalibration the row sits exactly at the bridged
     // budget (2.0 × 7.5 = 15.0/s) — any lane-budget warning here would

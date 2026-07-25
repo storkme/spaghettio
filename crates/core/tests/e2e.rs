@@ -1106,7 +1106,15 @@ fn tier2_electronic_circuit_from_ore() {
     // full 15.0/s 2-lane nominal (measured at plan, zero output-blocked
     // machines, once the L2 input bind clears) — the old floor was
     // confounded by the input side. Warning legitimately gone.
-    assert_warnings_exactly(&result, &[]);
+    // 2026-07-25 (#448): the same copper-plate row's INPUT side is a new,
+    // genuine finding — 24 electric furnaces × 0.625/s copper-ore = 15.00/s
+    // aggregate against ONE yellow belt whose both-lane nominal is exactly
+    // 15.0/s. Zero margin means the head furnaces absorb the entire belt
+    // and the tail furnace starves in a converged steady state (the
+    // mechanism sim-measured per-machine on chain-ec15). Every other
+    // belt-in group in this same fixture sits at 80% or below and stays
+    // silent, so this is a discriminating hit, not a blanket trip.
+    assert_warnings_exactly(&result, &[("row-input-belt-margin", 1)]);
     assert_produces(&result, "electronic-circuit", 10.0);
     assert_round_trip(&result);
     assert_golden_hash(&result, "tier2_electronic_circuit_from_ore");
@@ -4352,7 +4360,19 @@ fn stress_electronic_circuit_60s_red_from_ore() {
             // row here, so all 11 warnings correctly stop firing — this
             // fixture is back to a clean zero. Tightened 11 -> 0 (matching the
             // re-blessed golden) so any regression re-exposes them.
-            max_warnings: 0,
+            // 2026-07-25 (#448): +5 row-input-belt-margin, the new
+            // shared-input-belt zero-margin check. Every one is the
+            // measured-defect shape and none is a threshold artifact —
+            // three copper-plate smelter rows of 48 electric furnaces
+            // (48 x 0.625 = 30.00/s copper-ore) and two iron-plate rows
+            // of 48 (30.00/s iron-ore), each fed by ONE red belt whose
+            // nominal both-lane carry is exactly 30.0/s. At 100% the head
+            // furnaces absorb the whole belt and the tail furnaces starve
+            // in a converged steady state (per-machine sim dumps on
+            // chain-ec15/mega-chain-pu4raw). Neighbouring rows in the same
+            // fixture sit at 90%/75%/50% and correctly stay silent, so
+            // this is not a blanket trip. 0 -> 5.
+            max_warnings: 5,
             max_errors_by_category: Default::default(),
         },
     );

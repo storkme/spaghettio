@@ -899,6 +899,271 @@ pub fn check_row_output_lane_budget(
     issues
 }
 
+// ── check_row_input_belt_margin ──────────────────────────────────────────────
+
+/// Issue #448: a row of N consumer machines sharing ONE input belt whose
+/// aggregate demand meets or exceeds the belt's carrying capacity starves
+/// its TAIL machine — permanently, not transiently.
+///
+/// **The mechanism (sim-measured, not theorized).** Inserters along a
+/// shared input belt pick greedily head-first and every machine buffers
+/// its ingredients deeply. At <100% belt utilization the head machines'
+/// buffers fill and stop absorbing, and the surplus flows on to the tail.
+/// At exactly 100% there is no surplus: the head absorbs every item the
+/// belt can carry as fast as it arrives, and the row converges to a
+/// stable state in which the last machine is permanently short. It is a
+/// converged steady state, not a start-up transient — the sim run holds
+/// it indefinitely.
+///
+/// **Measured instance (`chain-ec15`).** The electronic-circuit row is 6
+/// machines × 7.5/s copper-cable = 45.00/s aggregate, fed by one express
+/// belt whose nominal carry is exactly 45.0/s. Per-machine sim dumps show
+/// the row holding cable 42 → 34 → 20 → 6 → … → 2 down its length, the
+/// tail machine parked in `item_ingredient_shortage` with 20 iron plates
+/// idle beside it, and an upstream copper-cable producer sitting
+/// `full_output` with 32 cable stuck in it. Cost: ~5.3% of the row's
+/// throughput (one of six machines at ~68% duty), and it is
+/// research-invariant — no inserter-capacity level clears it, because the
+/// binding constraint is the belt, not the inserters.
+///
+/// **Why the existing checks miss it.**
+/// [`crate::validate::belt_structural::check_lane_throughput`] compares
+/// demand against capacity and 45 ≤ 45 passes.
+/// [`crate::validate::belt_flow::check_input_rate_delivery`] compares each
+/// machine's pickup-tile lane rate against that machine's OWN requirement
+/// — but the lane-rate propagation never subtracts what upstream machines
+/// on the same belt have already consumed, so the tail machine "sees" the
+/// full 45/s and looks fed. This check is the row-AGGREGATE counterpart:
+/// it never asks what any single machine sees, only whether the belt has
+/// any margin left over for the tail at all.
+///
+/// **Threshold: `aggregate_demand >= capacity - EPSILON`.** Grounded
+/// exactly at 100% utilization because that is the *measured-failing*
+/// condition (ec15 at 45.00 vs 45.0) and nothing weaker is measured. We
+/// deliberately do NOT invent a "safe margin" percentage — no measurement
+/// supports one yet, and load-bearing constants in this repo are
+/// sim-derived, never theoretical (the RFC-047/049 calibration
+/// discipline; see `ROW_LANE_FACTOR_BRIDGED`'s history above for what
+/// happens to a number that isn't). This makes the threshold a **lower
+/// bound on the true requirement**: a belt at 98% may well starve its
+/// tail too, and this check stays silent there. A margin sweep — the same
+/// declared-level sweep shape #431 used, varying provisioned belt margin
+/// instead of research level, and reading the tail machine's duty cycle —
+/// would tighten it to the real number. Until that runs, only the
+/// zero-margin case is claimed.
+///
+/// **Scope: `row:<recipe>:belt-in:<item>` segments only.** That tag is the
+/// bus/cell templates' own name for "this row's dedicated input belt for
+/// this item", the exact input-side mirror of the `belt-out` tag
+/// [`check_row_output_lane_budget`] keys on. The `k`-trunk template's
+/// `row:<recipe>:trunk:<item>` / `current-feed` / `trunk-dive` input path
+/// is deliberately EXCLUDED: it provisions `k` parallel belts for one
+/// item, so comparing that row's whole demand against a single belt's
+/// capacity would be a systematic false positive. Multi-belt input
+/// provisioning is a separate check, not a tweak to this one.
+///
+/// **Scope: SHARED belts only (≥ 2 consumers).** The mechanism is
+/// head-hogging along a shared belt: with one consumer there is no head
+/// and no tail, and a single machine sitting at exactly its belt's carry
+/// is limited by its inserters (already
+/// [`check_inserter_throughput`]'s and
+/// [`check_inserter_item_throughput`]'s business), not by anything this
+/// check measures. Empirically this is not hypothetical: the
+/// `tier_fish_breeding_self_loop` fixture is one chemical plant at 15.00/s
+/// against a 15.0/s yellow belt, and both inserter checks already warn on
+/// it. Note this is a SCOPE bound on the mechanism, not a softening of the
+/// threshold — the 100% line itself is untouched.
+///
+/// **Row identification** is `check_row_output_lane_budget`'s, for its
+/// reasons: a recipe needing more than one physical row shares the exact
+/// same literal segment string across every row, and the cell-composition
+/// pipeline never populates `LayoutResult::effective_rows` at all — so
+/// tiles are split into physical rows by adjacency
+/// ([`cluster_tiles_by_adjacency`]) and each machine is attributed to a
+/// row through its OWN input inserter's pickup tile (physical
+/// connectivity, not a distance heuristic). An input run interrupted by an
+/// underground belt splits into two clusters at the gap; each then carries
+/// only its own consumers' demand, which is conservative (under-reports)
+/// rather than false-positive.
+///
+/// **Demand** is `super::resolve_row_spec` + `utilization_for` per
+/// attributed machine — the same pair `check_input_rate_delivery` uses, so
+/// the number this check prints is the same number the rest of the
+/// validator reasons with. **Capacity** is the belt's full both-lane
+/// stacked nominal (`2 × lane_capacity_stacked`, per-item stacking via
+/// `StackingCtx` exactly as `check_lane_throughput` derives it): a bus tap
+/// feeds an input belt straight, loading both lanes, and inserters pick
+/// from both — so the generous both-lane figure is the honest ceiling
+/// here, and using it keeps the check silent on anything but a genuinely
+/// saturated belt.
+///
+/// Severity is Warning: the layout is physically valid and mostly works —
+/// it just cannot reach its planned rate.
+pub fn check_row_input_belt_margin(
+    layout: &LayoutResult,
+    solver_result: Option<&SolverResult>,
+) -> Vec<ValidationIssue> {
+    let sr = match solver_result {
+        Some(s) => s,
+        None => return Vec::new(),
+    };
+
+    let recipe_to_spec: FxHashMap<&str, &MachineSpec> =
+        sr.machines.iter().map(|s| (s.recipe.as_str(), s)).collect();
+
+    // `row:<recipe>:belt-in:<item>` — exact shape only (see doc comment
+    // for why `trunk`/`current-feed`/`trunk-dive` are excluded).
+    const BELT_IN: &str = ":belt-in:";
+    let mut belt_in: FxHashMap<(&str, &str), Vec<&PlacedEntity>> = FxHashMap::default();
+    for e in &layout.entities {
+        let Some(seg) = e.segment_id.as_deref() else {
+            continue;
+        };
+        let Some(rest) = seg.strip_prefix("row:") else {
+            continue;
+        };
+        let Some(idx) = rest.find(BELT_IN) else {
+            continue;
+        };
+        let recipe = &rest[..idx];
+        let item = &rest[idx + BELT_IN.len()..];
+        if recipe.is_empty() || item.is_empty() {
+            continue;
+        }
+        belt_in.entry((recipe, item)).or_default().push(e);
+    }
+    if belt_in.is_empty() {
+        return Vec::new();
+    }
+
+    let mut keys: Vec<(&str, &str)> = belt_in.keys().copied().collect();
+    keys.sort_unstable();
+
+    let machine_origin = machine_origin_by_tile(layout);
+    let mut machine_at_origin: FxHashMap<(i32, i32), &PlacedEntity> = FxHashMap::default();
+    for e in &layout.entities {
+        if is_machine_entity(&e.name) {
+            machine_at_origin.insert((e.x, e.y), e);
+        }
+    }
+
+    let stacking_ctx = crate::bus::stacking_ctx::StackingCtx::derive(sr, layout.stacking);
+
+    // Same tolerance the surrounding rate comparisons use.
+    const EPSILON: f64 = 0.02;
+    let mut issues = Vec::new();
+
+    for (recipe, item) in keys {
+        let tiles = &belt_in[&(recipe, item)];
+        let positions: Vec<(i32, i32)> = tiles.iter().map(|e| (e.x, e.y)).collect();
+        let components = cluster_tiles_by_adjacency(&positions);
+        let num_clusters = components.iter().copied().max().map_or(0, |m| m + 1);
+        let mut clusters: Vec<Vec<&PlacedEntity>> = vec![Vec::new(); num_clusters];
+        let mut tile_to_cluster: FxHashMap<(i32, i32), usize> = FxHashMap::default();
+        for (i, &e) in tiles.iter().enumerate() {
+            clusters[components[i]].push(e);
+            tile_to_cluster.insert((e.x, e.y), components[i]);
+        }
+
+        // Attribute machines to clusters through their own input
+        // inserter: pickup on one of this item's belt-in tiles, drop onto
+        // a machine running THIS recipe.
+        let mut consumers: Vec<FxHashSet<(i32, i32)>> =
+            vec![FxHashSet::default(); num_clusters];
+        for ins in &layout.entities {
+            if !is_inserter(&ins.name) {
+                continue;
+            }
+            let (dx, dy) = dir_to_vec(ins.direction);
+            let reach = inserter_reach(&ins.name);
+            let pickup = (ins.x - dx * reach, ins.y - dy * reach);
+            let drop = (ins.x + dx * reach, ins.y + dy * reach);
+            let Some(&cluster_idx) = tile_to_cluster.get(&pickup) else {
+                continue;
+            };
+            let Some(&origin) = machine_origin.get(&drop) else {
+                continue;
+            };
+            let Some(m) = machine_at_origin.get(&origin) else {
+                continue;
+            };
+            if m.recipe.as_deref() != Some(recipe) {
+                continue;
+            }
+            consumers[cluster_idx].insert(origin);
+        }
+
+        let Some(&fallback_spec) = recipe_to_spec.get(recipe) else {
+            continue;
+        };
+
+        for (idx, cluster) in clusters.iter().enumerate() {
+            // ≥ 2: the defect is head-hogging along a SHARED belt, which
+            // needs a head and a tail to exist at all (see doc comment).
+            let mcount = consumers[idx].len();
+            if mcount < 2 {
+                continue;
+            }
+            // Sum per-machine demand rather than multiplying one rate by
+            // the count: partition siblings share a recipe name but carry
+            // different utilizations, and `resolve_row_spec` resolves each
+            // machine's own sibling by its y.
+            let mut demand = 0.0;
+            for &(_mx, my) in &consumers[idx] {
+                let spec = super::resolve_row_spec(layout, recipe, my, fallback_spec);
+                let utilization = utilization_for(spec);
+                demand += spec
+                    .inputs
+                    .iter()
+                    .find(|f| !f.is_fluid && f.item == item)
+                    .map(|f| f.rate * utilization)
+                    .unwrap_or(0.0);
+            }
+            if demand <= 0.0 {
+                continue;
+            }
+
+            let belts: Vec<&PlacedEntity> = cluster
+                .iter()
+                .copied()
+                .filter(|e| is_surface_belt(&e.name))
+                .collect();
+            if belts.is_empty() {
+                continue;
+            }
+            let tier = row_belt_tier(&belts);
+            // Both physical lanes: a bus tap feeds an input belt straight
+            // (loading both lanes) and inserters pick from both.
+            let capacity =
+                crate::common::lane_capacity_stacked(tier, stacking_ctx.for_item(item)) * 2.0;
+
+            if demand >= capacity - EPSILON {
+                let (ax, ay) = belts.iter().map(|e| (e.x, e.y)).min().unwrap();
+                issues.push(
+                    ValidationIssue::with_pos(
+                        Severity::Warning,
+                        "row-input-belt-margin",
+                        format!(
+                            "{recipe} row input belt at ({ax},{ay}) carries {item} for \
+                             {mcount} machine{plural} demanding {demand:.2}/s against a \
+                             {tier} carrying only {capacity:.2}/s — zero margin, so the \
+                             head machines absorb the whole belt and the TAIL machine \
+                             starves in a converged steady state (#448); widen the belt \
+                             tier or split the row",
+                            plural = if mcount == 1 { "" } else { "s" },
+                        ),
+                        ax,
+                        ay,
+                    )
+                    .with_detail(capacity, demand),
+                );
+            }
+        }
+    }
+
+    issues
+}
+
 /// Splits `positions` into connected components under 4-adjacency
 /// (sharing a tile edge), returning each position's component id by
 /// index. Used to tell apart physically distinct rows/cells that
@@ -2360,5 +2625,197 @@ mod tests {
         let tiles: Vec<PlacedEntity> = belt_out_row_bridged("x", "x", 5, 4, "transport-belt");
         let refs: Vec<&PlacedEntity> = tiles.iter().collect();
         assert_eq!(row_lanes_loaded(&refs), 2);
+    }
+
+    // ── check_row_input_belt_margin (#448) ──────────────────────────────────
+
+    fn input_margin_warnings(issues: &[ValidationIssue]) -> Vec<&ValidationIssue> {
+        issues
+            .iter()
+            .filter(|i| i.category == "row-input-belt-margin")
+            .collect()
+    }
+
+    fn row_input_spec(recipe: &str, item: &str, rate_per_machine: f64, count: f64) -> SolverResult {
+        SolverResult {
+            machines: vec![MachineSpec {
+                entity: "assembling-machine-1".into(),
+                recipe: recipe.into(),
+                self_loop: vec![],
+                voider: false,
+                game_modules: Vec::new(),
+                count,
+                inputs: vec![ItemFlow {
+                    item: item.into(),
+                    rate: rate_per_machine,
+                    is_fluid: false,
+                    module_id: 0,
+                }],
+                outputs: vec![],
+            }],
+            external_inputs: vec![],
+            external_outputs: vec![],
+            surplus_outputs: vec![],
+            dependency_order: vec![],
+            ..Default::default()
+        }
+    }
+
+    /// A single input-belt run: `count` tiles heading EAST at row `y`, all
+    /// tagged `row:<recipe>:belt-in:<item>` and carrying `item`.
+    fn belt_in_row(
+        recipe: &str,
+        item: &str,
+        y: i32,
+        count: i32,
+        belt: &str,
+    ) -> Vec<PlacedEntity> {
+        (0..count)
+            .map(|i| PlacedEntity {
+                name: belt.into(),
+                x: i,
+                y,
+                direction: EntityDirection::East,
+                carries: Some(item.into()),
+                segment_id: Some(format!("row:{recipe}:belt-in:{item}")),
+                ..Default::default()
+            })
+            .collect()
+    }
+
+    /// `count` machines (origin at `x = i*4`, `y = machine_y`), each with a
+    /// South-facing reach-1 INPUT inserter that picks up from the belt-in
+    /// line at `y = machine_y - 2` and drops onto the machine's own origin
+    /// tile — the physical connection `check_row_input_belt_margin` traces
+    /// to attribute a machine to its input belt. Callers must place their
+    /// `belt_in_row` at `y = machine_y - 2`, wide enough to cover every
+    /// `i*4` pickup x.
+    fn machine_row_with_input_inserters(
+        recipe: &str,
+        machine_y: i32,
+        count: i32,
+    ) -> Vec<PlacedEntity> {
+        let mut v = Vec::new();
+        for i in 0..count {
+            let x = i * 4;
+            v.push(PlacedEntity {
+                name: "assembling-machine-1".into(),
+                x,
+                y: machine_y,
+                recipe: Some(recipe.into()),
+                segment_id: Some(format!("row:{recipe}:machine")),
+                ..Default::default()
+            });
+            v.push(PlacedEntity {
+                name: "inserter".into(),
+                x,
+                y: machine_y - 1,
+                direction: EntityDirection::South,
+                ..Default::default()
+            });
+        }
+        v
+    }
+
+    #[test]
+    fn row_input_margin_fires_at_exactly_full_belt() {
+        // The measured chain-ec15 shape in miniature: 6 machines sharing
+        // one input belt, aggregate demand EXACTLY the belt's both-lane
+        // nominal (6 × 2.5 = 15.0 on yellow). Zero margin for the tail.
+        let sr = row_input_spec("test-widget", "test-input", 2.5, 6.0);
+        let mut entities = machine_row_with_input_inserters("test-widget", 2, 6);
+        entities.extend(belt_in_row("test-widget", "test-input", 0, 24, "transport-belt"));
+        let lr = LayoutResult { entities, width: 40, height: 20, stacking: 1, ..Default::default() };
+        let issues = check_row_input_belt_margin(&lr, Some(&sr));
+        let warns = input_margin_warnings(&issues);
+        assert_eq!(warns.len(), 1, "{issues:?}");
+        assert!(warns[0].message.contains("test-input"), "{:?}", warns[0]);
+        assert!(warns[0].message.contains("6 machines"), "{:?}", warns[0]);
+        assert!(warns[0].message.contains("#448"), "{:?}", warns[0]);
+        let detail = warns[0].detail.as_ref().expect("must carry IssueDetail");
+        assert!((detail.needed - 15.0).abs() < 1e-9, "{detail:?}");
+        assert!((detail.delivered - 15.0).abs() < 1e-9, "{detail:?}");
+    }
+
+    #[test]
+    fn row_input_margin_silent_with_real_margin() {
+        // Same six-machine row, demand 12.0/s against yellow's 15.0/s —
+        // 20% headroom, the head machines' buffers fill and the surplus
+        // reaches the tail. Must stay silent.
+        let sr = row_input_spec("test-widget", "test-input", 2.0, 6.0);
+        let mut entities = machine_row_with_input_inserters("test-widget", 2, 6);
+        entities.extend(belt_in_row("test-widget", "test-input", 0, 24, "transport-belt"));
+        let lr = LayoutResult { entities, width: 40, height: 20, stacking: 1, ..Default::default() };
+        let issues = check_row_input_belt_margin(&lr, Some(&sr));
+        assert!(input_margin_warnings(&issues).is_empty(), "{issues:?}");
+    }
+
+    #[test]
+    fn row_input_margin_no_solver_result_is_noop() {
+        let mut entities = machine_row_with_input_inserters("test-widget", 2, 6);
+        entities.extend(belt_in_row("test-widget", "test-input", 0, 24, "transport-belt"));
+        let lr = LayoutResult { entities, width: 40, height: 20, stacking: 1, ..Default::default() };
+        assert!(check_row_input_belt_margin(&lr, None).is_empty());
+    }
+
+    #[test]
+    fn row_input_margin_epsilon_boundary() {
+        // A hair UNDER the belt nominal minus epsilon must stay silent;
+        // reaching nominal-minus-epsilon must fire. The threshold is
+        // `demand >= capacity - EPSILON`, deliberately pinned at 100%
+        // utilization (#448) — no invented safety margin.
+        let mut entities = machine_row_with_input_inserters("test-widget", 2, 2);
+        entities.extend(belt_in_row("test-widget", "test-input", 0, 8, "transport-belt"));
+        let lr = LayoutResult { entities, width: 40, height: 20, stacking: 1, ..Default::default() };
+
+        // 2 × 7.485 = 14.97 < 15.0 - 0.02 = 14.98
+        let under = row_input_spec("test-widget", "test-input", 7.485, 2.0);
+        assert!(
+            input_margin_warnings(&check_row_input_belt_margin(&lr, Some(&under))).is_empty(),
+            "just under capacity-epsilon must not fire"
+        );
+        // 2 × 7.495 = 14.99 >= 14.98
+        let at = row_input_spec("test-widget", "test-input", 7.495, 2.0);
+        assert_eq!(
+            input_margin_warnings(&check_row_input_belt_margin(&lr, Some(&at))).len(),
+            1,
+            "at capacity-epsilon must fire"
+        );
+    }
+
+    #[test]
+    fn row_input_margin_single_consumer_is_out_of_scope() {
+        // One machine at exactly its belt's carry: no head, no tail, so
+        // the #448 mechanism cannot occur. (The real
+        // `tier_fish_breeding_self_loop` fixture is exactly this — one
+        // chemical plant at 15.00/s on yellow — and both inserter-
+        // throughput checks already warn on it.)
+        let sr = row_input_spec("test-widget", "test-input", 15.0, 1.0);
+        let mut entities = machine_row_with_input_inserters("test-widget", 2, 1);
+        entities.extend(belt_in_row("test-widget", "test-input", 0, 8, "transport-belt"));
+        let lr = LayoutResult { entities, width: 40, height: 20, stacking: 1, ..Default::default() };
+        let issues = check_row_input_belt_margin(&lr, Some(&sr));
+        assert!(input_margin_warnings(&issues).is_empty(), "{issues:?}");
+    }
+
+    #[test]
+    fn row_input_margin_ignores_multi_trunk_input_segments() {
+        // `row:<recipe>:trunk:<item>` provisions k PARALLEL belts for one
+        // item, so a single-belt capacity comparison would be a systematic
+        // false positive there. The check must not select that segment
+        // even when its row is far past one belt's carry.
+        let sr = row_input_spec("test-widget", "test-input", 20.0, 6.0);
+        let mut entities = machine_row_with_input_inserters("test-widget", 2, 6);
+        entities.extend(
+            belt_in_row("test-widget", "test-input", 0, 24, "transport-belt")
+                .into_iter()
+                .map(|mut e| {
+                    e.segment_id = Some("row:test-widget:trunk:test-input".into());
+                    e
+                }),
+        );
+        let lr = LayoutResult { entities, width: 40, height: 20, stacking: 1, ..Default::default() };
+        let issues = check_row_input_belt_margin(&lr, Some(&sr));
+        assert!(input_margin_warnings(&issues).is_empty(), "{issues:?}");
     }
 }
