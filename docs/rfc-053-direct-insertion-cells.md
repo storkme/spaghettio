@@ -1206,3 +1206,41 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   the opposite face free. They remain relevant only to the stacked
   variant, which the corpus puts second (190 combined vs 177 for the top
   single plan).*
+
+- *2026-07-25 — **Phase 2 row cell builds cable→EC end to end; 9
+  validation errors remain, and they are OURS.** `stamp_row_cell` +
+  `try_build_row_cell` produce a horizontal row cell for
+  `copper-cable → electronic-circuit` at 10/s from ore (153 `di-row`
+  entities, express belts) — the corpus's #1 DI pair, and the first time
+  the engine has used DI for it. **Not merged**: on
+  `wip/rfc053-phase2-row-cell`, off #452's branch, which stays green.*
+
+  ***The control run is the load-bearing datum.*** *The identical target
+  with `direct_insertion: false` validates at **0 issues**, so all 9
+  errors are caused by the row cell rather than being pre-existing. No
+  need to re-establish that next session.*
+
+  *Blocking error, diagnosed: a vertical `fast-transport-belt` at x=46 is
+  routed through occupied tiles at y=20–25, colliding with an
+  `electric-furnace` (from the copper-plate producer row) and with cell
+  entities. The row cell is ~39 tiles wide at pitch `machine_w + 1`,
+  wider than any ordinary row, and something in lane/return routing is
+  not respecting occupancy across that span. Ruled out already: the
+  `input_belt_y` ordering contract holds (fused inputs are
+  `[copper-plate, iron-plate]`, belts are `[y0, face_y+1]`, matching).*
+
+  *Four bugs fixed reaching this point, each a silent mis-build:
+  `cell_pairs` required exactly one coupling per consumer, excluding
+  `electronic-circuit` (coupled on two items) entirely; claiming a pair
+  on eligibility alone let the unbuildable 16:4 `iron-plate → EC`
+  coupling block the workable `copper-cable → EC` one; the build path
+  called `try_build_cell` unconditionally, bypassing the gate that stops
+  a two-solid-input consumer being fused into a STACKED cell; and the
+  producer's feed was reach-2, reintroducing long-handed's 2.40/s ceiling
+  that the row shape exists to avoid.*
+
+  *Also outstanding: 2 of the new `row_stamp` tests still assert the
+  pre-rework geometry, and `di_bridge_feeds_cable_only_at_high_research`
+  is a genuine regression — cable→EC now forms a row cell where that test
+  pins bridge behaviour. Decide whether it should assert the row cell or
+  pin DI off.*
