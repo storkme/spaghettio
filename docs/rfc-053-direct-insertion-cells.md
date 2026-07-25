@@ -1407,3 +1407,49 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   face inserters correct, geometry sound) are what made the fifth
   findable — each had been committed to this log as a diagnosis and then
   retracted. Probing before fixing was the whole difference.*
+
+- *2026-07-25 — **Pipe scope (the KC6 re-scope) measured, and it is much
+  smaller than feared.** New `di-patterns fluid` subcommand reports, per
+  DI machine, which sides carry an adjacent pipe. Two representative
+  pairs:*
+
+  | pair | producer | consumer |
+  |---|---|---|
+  | `casting-copper-cable → EC` (592 machines) | piped: S 85, E 58, W 53, N 25 | **NO PIPE ×298** |
+  | `engine-unit → electric-engine-unit` (1,094) | **NO PIPE ×440** | piped: S 128, W 125, N 84 |
+
+  ***Three findings.*** *(1) **Only ONE machine per pair is
+  fluid-touching**, and cleanly so — the other never has a pipe.
+  Inserters cannot move fluid, so the coupled item is always solid by
+  construction; the fluid is a SIDE input. (2) **There is no canonical
+  pipe face** — all four sides occur with comparable frequency, so the
+  engine is free to choose rather than having to match a convention.
+  (3) Decisively, from `recipes.json`: `casting-copper-cable`
+  (molten-copper → copper-cable), `casting-iron` (molten-iron →
+  iron-plate) and `solid-fuel-from-light-oil` (light-oil → solid-fuel)
+  all take **only a fluid** and emit a solid.*
+
+  ***Consequence: the fluid producer has NO solid input, so its north
+  face — where a solid producer's feed belt and inserters sit — is
+  entirely free, and the pipe goes exactly where the belt would have
+  been.*** *That explains finding (2): there is no contention to force a
+  canonical face. The change is therefore small and local: relax
+  `row_cell_eligible`/`cell_eligible` to admit a producer whose inputs
+  are all fluid, and have the stampers emit a pipe run adjacent to the
+  machine row instead of a belt + feed inserters.*
+
+  *Coverage: **1,535 corpus instances** across three top-12 pairs, and
+  they split across BOTH cell variants — `casting-* → EC` is a ROW cell
+  (EC has two solid inputs) while `solid-fuel-from-light-oil →
+  rocket-fuel` is a STACKED cell (rocket-fuel's only solid input is
+  solid-fuel). Both stampers need the treatment.*
+
+  ***Out of scope for that first cut, deliberately:*** *the mirror shape,
+  a fluid-touching CONSUMER (`electric-engine-unit` = engine-unit +
+  electronic-circuit + lubricant, 547 instances). Its south face already
+  carries a solid input and the output, so a pipe needs a face the row
+  cell does not have spare — genuinely harder, and worth doing only after
+  the easy 1,535 land. Verify the exact fluid-port tile against the
+  existing `fluid_port_pipes` machinery before stamping: ports are
+  prototype-fixed per direction, so a pipe run that merely LOOKS adjacent
+  may not connect.*

@@ -150,6 +150,37 @@ fn main() {
                 );
             }
         }
+        "fluid" => {
+            // RFC-053 Phase 2 pipe scope (the KC6 re-scope). Inserters
+            // cannot move fluid, so every mined DI coupling is solid by
+            // construction — the fluid is always a SIDE input to one of the
+            // two machines. This reports, for each DI machine in a pair,
+            // which sides carry a pipe, so the cell's pipe plan is designed
+            // against what people build rather than guessed.
+            let (want_p, want_c) = (
+                args.get(3).cloned().unwrap_or_else(|| "casting-copper-cable".into()),
+                args.get(4).cloned().unwrap_or_else(|| "electronic-circuit".into()),
+            );
+            let obs2 = mine_fluid(&dir, &want_p, &want_c);
+            let mut hist: BTreeMap<String, usize> = BTreeMap::new();
+            for (role, sides) in &obs2 {
+                let mut sv = sides.clone();
+                sv.sort_unstable();
+                sv.dedup();
+                let key = if sv.is_empty() {
+                    format!("{role}: NO PIPE")
+                } else {
+                    format!("{role}: {}", sv.join("+"))
+                };
+                *hist.entry(key).or_insert(0) += 1;
+            }
+            println!("pipe adjacency for {want_p} -> {want_c} ({} machines)", obs2.len());
+            let mut hv: Vec<_> = hist.into_iter().collect();
+            hv.sort_by_key(|(_, c)| std::cmp::Reverse(*c));
+            for (k, c) in hv {
+                println!("  {c:>6}  {k}");
+            }
+        }
         "faces" => {
             // RFC-053 Phase 2 evidence. The `geometry` view looks at a DI
             // pair in isolation; this asks the question Phase 2 actually
@@ -430,6 +461,77 @@ fn mine_faces(dir: &str, want_p: &str, want_c: &str) -> Vec<FacePlan> {
                     });
                 }
                 out.push(FacePlan { di_sides: di_sides.clone(), others });
+            }
+        }
+    }
+    out
+}
+
+
+/// Which sides of each DI machine carry an adjacent pipe.
+/// Returns `(role, sides)` per machine, role being "producer" or "consumer".
+fn mine_fluid(dir: &str, want_p: &str, want_c: &str) -> Vec<(&'static str, Vec<&'static str>)> {
+    let is_pipe = |n: &str| {
+        n == "pipe" || n == "pipe-to-ground" || n.ends_with("-pipe") || n == "storage-tank"
+    };
+    let mut out = Vec::new();
+    let Ok(rd) = std::fs::read_dir(dir) else { return out };
+    for ent in rd.flatten() {
+        let Ok(txt) = std::fs::read_to_string(ent.path()) else { continue };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&txt) else { continue };
+        let Some(bp) = v.get("blueprintString").and_then(|s| s.as_str()) else { continue };
+        let Ok(analyses) = analysis::analyze_blueprint_string_any(bp) else { continue };
+        for na in &analyses {
+            let ents = &na.layout.entities;
+            let mut occ: HashMap<(i32, i32), usize> = HashMap::new();
+            let mut pipes: BTreeSet<(i32, i32)> = BTreeSet::new();
+            for (i, m) in ents.iter().enumerate() {
+                if is_pipe(&m.name) {
+                    let (w, h) = entity_size(&m.name);
+                    for dx in 0..w as i32 {
+                        for dy in 0..h as i32 {
+                            pipes.insert((m.x + dx, m.y + dy));
+                        }
+                    }
+                }
+                if !is_machine_entity(&m.name) { continue }
+                let (w, h) = entity_size(&m.name);
+                for dx in 0..w as i32 {
+                    for dy in 0..h as i32 {
+                        occ.insert((m.x + dx, m.y + dy), i);
+                    }
+                }
+            }
+            let mut seen: BTreeSet<usize> = BTreeSet::new();
+            for ins in ents {
+                if !is_inserter(&ins.name) { continue }
+                let (dx, dy) = dir_to_vec(ins.direction);
+                let r = inserter_reach(&ins.name);
+                let (Some(&di), Some(&si)) = (
+                    occ.get(&(ins.x + dx * r, ins.y + dy * r)),
+                    occ.get(&(ins.x - dx * r, ins.y - dy * r)),
+                ) else { continue };
+                if di == si { continue }
+                let (p, c) = (&ents[si], &ents[di]);
+                let pn = p.recipe.clone().unwrap_or_else(|| p.name.clone());
+                let cn = c.recipe.clone().unwrap_or_else(|| c.name.clone());
+                if pn != want_p || cn != want_c { continue }
+                for (idx, role) in [(si, "producer"), (di, "consumer")] {
+                    if !seen.insert(idx) { continue }
+                    let m = &ents[idx];
+                    let (w, h) = entity_size(&m.name);
+                    let (w, h) = (w as i32, h as i32);
+                    let mut sides: Vec<&'static str> = Vec::new();
+                    for t in 0..w {
+                        if pipes.contains(&(m.x + t, m.y - 1)) { sides.push("N") }
+                        if pipes.contains(&(m.x + t, m.y + h)) { sides.push("S") }
+                    }
+                    for t in 0..h {
+                        if pipes.contains(&(m.x - 1, m.y + t)) { sides.push("W") }
+                        if pipes.contains(&(m.x + w, m.y + t)) { sides.push("E") }
+                    }
+                    out.push((role, sides));
+                }
             }
         }
     }
