@@ -84,7 +84,11 @@ Knobs (defaults in parentheses):
   machine can't keep up.
 - `--ticks N` (derived) — hard ceiling tick, the **one** thing that
   force-finalizes a run that never stabilizes. Default is derived from
-  warmup + 4 measurement windows, rounded up to the 60-tick cadence.
+  warmup + 4 worst-case measurement windows, rounded up to the 60-tick
+  cadence. An explicit value is **floored at viability**: a ceiling that
+  cannot fit three checkpoints makes convergence structurally impossible,
+  so `converged: false` would describe the budget rather than the factory
+  (#454).
 - `--timeout-secs N` (900) — wall-clock bound on the whole launch.
 - `--out FILE` — write the full JSON artifact: `{report, raw_result,
   sim_state, run_params, game_version}`. This file is what `bless`,
@@ -101,6 +105,35 @@ Reading and debugging the resulting numbers — what each rate actually
 measures, the known measurement-artifact classes, and the forensic
 playbook (per-lane belt dumps, machine inventories, kit chest census) —
 is covered in [`sim-harness-forensics.md`](sim-harness-forensics.md).
+
+### How a measurement window is chosen
+
+Rates are the **trailing window** between the last two checkpoints, so
+what that window contains decides what the number is worth. Windows
+close on **accumulated items** (300, the sample size the 2% stability
+tolerance is built around), bounded by a tick cap at 4× the nominal
+at-plan length. A factory below plan therefore gets a *longer* window
+rather than a thinner sample.
+
+Windows used to be sized from the *planned* rate and closed on a fixed
+tick count, which is the same thing only when the factory runs at plan;
+below it, sample size fell in proportion and the run failed closed to
+NO DATA. The rule of thumb that fell out: **the worse a factory
+performed, the less measurable it became** (#454).
+
+Every report prints a `measurement:` line — window length, achieved
+items against the 300 floor, checkpoint count, and drift between the
+last two window rates — plus an explicit warning for each way the number
+can mislead:
+
+- **fewer than 3 checkpoints** — the convergence test never ran;
+  `converged` describes the tick budget, not the factory.
+- **`short_sampled`** — the window hit the tick cap without filling,
+  so the rate is quantization-noisy.
+- **NOT CONVERGED** — the rate is a point on a transient. The printed
+  window-rate series shows whether it was ramping or decaying; a
+  monotone series is not noise, and a single number off it should not
+  be compared against another run's.
 
 ## Reading the report
 

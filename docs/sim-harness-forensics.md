@@ -58,6 +58,31 @@ Setup, CLI usage, and the concurrency/lock rules live in
    plus depth-staggered rigs. **When a sim result shows wrong-item or
    inexplicable starvation signatures, suspect the kit before the
    layout.**
+4. **Underperformance-proportional undersampling** (#454, fixed
+   2026-07-25). Windows were sized from the *planned* rate and closed on
+   a fixed tick count, so a factory at 40% of plan got 40% of the
+   intended 300-item sample and the 2% agreement test became
+   unreachable — **the worse a factory performed, the less measurable it
+   became**, failing closed to NO DATA. Signature: `converged: false` or
+   NO DATA on exactly the fixtures that underperform, with the deficit
+   tracking layout *size* rather than any intervention you made. Cure:
+   windows now close on accumulated items; check the `measurement:` line
+   for `short_sampled` and the checkpoint count.
+5. **A transient reported as a steady state.** The reported rate is the
+   trailing window whether or not the run converged, so a
+   non-converged run publishes a point on a slope as a two-decimal
+   number. Signature: a monotone window-rate series — usp2-sup120
+   climbed 0.70 → 0.74 → 0.88 while usp2-shortrows decayed 0.86 → 0.80
+   → 0.72, and the two were compared against each other as if both were
+   settled. Cure: read the `NOT CONVERGED` line and its window-rate
+   series before believing any number; **never compare rates across
+   runs that did not converge.**
+6. **A budget that cannot fit the test.** `--warmup` used to re-floor the
+   tick ceiling at warmup + ONE window while convergence needs three
+   checkpoints, so any warmup past the default ceiling reported
+   `converged: false` by construction. Signature: fewer than 3
+   checkpoints, `final_tick` ≈ warmup + one window. Cure: fixed in
+   `viable_end_tick`; the report now warns when checkpoints < 3.
 
 ## The poison-plug mechanic (game truth, mechanics rule I11)
 

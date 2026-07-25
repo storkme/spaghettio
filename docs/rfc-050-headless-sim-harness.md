@@ -388,3 +388,36 @@ design, so blessed measured baselines are **shareable** — keyed on
   the engine's layouts perform at plan everywhere the sim can currently
   measure.***
 
+
+- *2026-07-25 — **instrument fix: stability windows are item-driven, not
+  planned-rate-driven** (#454). Rev 2's "item-floored windows
+  (quantization at 1/s rates)" was implemented as a window sized from the
+  PLANNED rate and closed on a fixed tick count. That is only equivalent to
+  an item floor when the factory runs at plan: a factory at 40% of plan got
+  40% of the intended sample, so the 2% agreement test became unreachable and
+  **the worse a factory performed, the less measurable it became** — failing
+  closed to NO DATA rather than to a wide error bar. Two further defects sat
+  under it. (a) `with_warmup` re-floored the tick ceiling at `warmup + ONE
+  window` while the convergence test needs THREE checkpoints, so every
+  `--warmup` override past the default ceiling reported `converged: false`
+  structurally — `mega-chain-usp2raw --warmup 480000` finished with exactly
+  one checkpoint and that verdict was read as evidence about the layout.
+  (b) Checkpoints landed on multiples of the window length in ABSOLUTE tick
+  phase, so measurement began at an arbitrary offset after warmup that moved
+  with `--warmup`. **Resolution**: windows close on accumulated items bounded
+  by a 4x tick cap; ceilings floor at `viable_end_tick` (warmup + enough
+  worst-case windows to run the test); windows open exactly at warmup; and
+  reports carry a `measurement` block (window length, achieved items vs
+  floor, checkpoint count, drift between the last two window rates) that
+  prints a named warning for each way the number can be untrustworthy.
+  **Scope**: the reported rate is the trailing window whether or not the run
+  converged, so any non-converged run published a point on a transient as a
+  two-decimal steady-state number. The #453 usp2 fix comparison was exactly
+  that — sup120 climbing 0.70 -> 0.74 -> 0.88 while shortrows decayed 0.86 ->
+  0.80 -> 0.72 — so those four "refuted" candidate fixes were never actually
+  benchmarked. Converged runs are unaffected: at plan the item floor closes a
+  window at the same length the planned-rate formula chose. **Third
+  instrument artifact of this arc**, after the 13.0/s bridged floor
+  (#383/#431) and #383's inserter attribution — the standing lesson being
+  that a calibration inherits its instrument's bounds, so sweep the
+  declared axis before believing a number is a property of the subject.*

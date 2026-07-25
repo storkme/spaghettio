@@ -55,7 +55,7 @@ USAGE:
 
 ENV:
   SPAGHETTIO_FACTORIO_DIR   Override the install dir (default:
-                            ~/.cache/spaghettio-sim/factorio-2.0.76)
+                            ~/.cache/spaghettio-sim/factorio-2.0.77)
 "#
     );
 }
