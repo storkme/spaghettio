@@ -414,3 +414,136 @@ the right thing moved.
   originally worded. "Monotone" dropped; this was the most serious of the
   five, since an unsatisfiable kill criterion is worse than none. (5) Two
   stray tool-call closing tags were committed at end-of-file; removed.*
+- *2026-07-25 — **ACCEPTED** (user), merged as PR #455. Implementation
+  tracked in [#457](https://github.com/storkme/spaghettio/issues/457),
+  split into four PRs rather than one so that PR 2 (the anchored margin
+  sweep) is a designed kill point for the belt model at ~1k LOC rather
+  than after machines, boundary and convergence are built on top of it.*
+- *2026-07-25 — **PR 1 landed the physics core, and it does NOT reproduce
+  #448.** This is the RFC's first real result and it is negative, so it
+  belongs here and not only in a PR body.*
+
+  *What works — every belt-level property the design claimed. Gaps do not
+  heal on a moving lane, dead ends back up, compressed lanes move at full
+  speed, and both belt throughput (B5: 15/30/45) and inserter rates (I8:
+  0.84/1.20/2.40) are **derived** from speed × spacing and `rotation_speed`
+  rather than read from a table. Partial hands and lost swings make
+  density-dependent inserter throughput emergent, with no
+  `machine_feed_rate` anywhere. KC4 is green and was guarded from the
+  first commit, not retrofitted.*
+
+  *What does not — with a **smooth** boundary supply at exactly aggregate
+  demand and bounded consumer buffers, a 6-consumer express row delivers
+  `[7.50 × 6]`. No tail starvation. The conservation intuition simply
+  holds in that configuration. Worse, a margin sweep is **non-monotonic**:
+  margin 1.02 starves where 1.00 does not, recovering by 1.25
+  (`cargo run -p spaghettio_meter --example row_probe`). In a fully
+  deterministic simulator with periodic sources and periodic inserter
+  swings, that is the signature of **phase aliasing** between the two
+  cadences, not a physical effect.*
+
+  *Two modelling bugs were caught by the crate's own derivation tests
+  before any of that: the inserter cycle lost a tick to the grab and
+  `round()`ed its half-cycles, under-crediting a fast inserter by ~8%
+  (2.222/s against I8's 2.40); and an unbounded consumer let a row's head
+  pull 16.2/s against a 7.5/s demand, which both overstated head-hogging
+  and made added margin actively **worse**. The second is why `Chest`
+  gained a buffer cap and a demand rate — a machine's input side, minus
+  the crafting.*
+
+  *Deliberately NOT done: adding burstiness to the supply. A real
+  row-input belt is fed by a producer cell's output inserters — discrete,
+  bursty drops — and real consumers draw in craft batches; adding either
+  would plausibly produce the starvation. That is exactly why it must not
+  be added before PR 2's anchor exists. Choosing mechanisms until the
+  answer matches the expected one is how an instrument acquires the quirks
+  it was built to detect, and this RFC's whole integrity argument is about
+  not doing that. The negative result is pinned by
+  `smooth_supply_at_zero_margin_does_not_starve_the_row` so that a later
+  change cannot make the row starve silently.*
+
+  *Consequence for PR 2: its first question is no longer "what is the
+  margin number" but **"does real Factorio starve this configuration at
+  all"**. If it does, the belt model is missing something and the sweep
+  attributes it. If it does not, then #448's zero-margin attribution needs
+  revisiting — which would connect directly to
+  [#453](https://github.com/storkme/spaghettio/issues/453)'s finding that
+  three of the four failing fixtures starve **with margin available**, and
+  are still unattributed.*
+- *2026-07-25 — PR 1 review (bot, PR #458): two findings, both valid, both
+  applied — and the second one's **hypothesis was tested and falsified**,
+  which is recorded here because the distinction matters.*
+
+  *(1) **Inserter cycle timer was assigned, not accumulated.** `cycle_timer
+  = cycle_ticks()` discarded the previous cycle's negative overshoot,
+  quantising the period up to `ceil(cycle_ticks)` — 72 ticks instead of
+  71.43 for a regular inserter, i.e. 0.8333/s against I8's 0.84/s, a
+  systematic −0.79%. Every other periodic accumulator in the crate
+  (`Lane::tick`, `Source::tick`, `Chest::tick`) carries its remainder
+  forward; this was the one that didn't, while its own doc comment claimed
+  the timer was "never rounded". Fixed to `+=`. The test that exists to
+  catch exactly this had a **5% tolerance**, which is why it didn't —
+  tightened to 1%.*
+
+  *(2) **`Chest::accept` was all-or-nothing.** It rejected an entire hand
+  whenever the hand did not wholly fit, where a real Factorio inserter
+  performs a partial insert — transferring what fits and retaining the
+  remainder, stalling fully only when nothing fits. Fixed: `accept` now
+  drains what fits and returns the count, and `Inserter::tick` holds the
+  remainder and retries.*
+
+  ***The reviewer's attached hypothesis — that this all-or-nothing rule was
+  "a plausible undisclosed contributor to the non-monotonic
+  starvation-vs-margin behavior" — is FALSIFIED.*** *Re-running the margin
+  probe after the fix gives rates identical to the pre-fix run at every
+  margin (1.02 → 5.50/6.20; 1.05 → 7.12/5.25/7.13; 1.10 → 6.00). Only the
+  buffers moved — they now top up to 39 rather than stalling at 32–37,
+  which confirms the fix genuinely changed behaviour and that the
+  non-monotonicity is not caused by it. The phase-aliasing reading stands,
+  and PR 2's anchored sweep remains the way to settle it.*
+
+  *Worth stating plainly since this RFC is about instruments that do not
+  launder assumptions: a correct fix arriving with a plausible causal story
+  attached is not evidence for the story. The fix was applied on its own
+  merits (it is what the game does); the story was checked separately and
+  did not survive.*
+- *2026-07-25 — PR 1 review round 2 (bot, PR #458): one finding, valid,
+  applied — and again its **impact claim was falsified by measurement**.
+  Recording the pattern, not just the fix.*
+
+  *The finding: `InserterKind::hand_size` mis-transcribed I8b on both
+  branches. Bulk read `2,4,5,6,7,9,11,12` against I8b's
+  `2,3,4,5,6,8,10,12` (L1–L6 each over-credited by +1), and the non-bulk
+  closed form `1 + level.saturating_sub(2).min(2)` evaluated to
+  `1,1,1,2,3,3,3,3` against I8b's `1,1,2,2,2,2,2,3` (L2 under, L4–L6
+  over). Verified against `factorio-mechanics.md` directly before
+  applying. Both ladders are now **literal tables** — neither is
+  expressible as a clean closed form, and deriving them is what produced
+  the error. Transcribe, don't derive.*
+
+  *The test was the real failure. It asserted L0/L2/L7 only; the endpoints
+  happened to be correct, so it **pinned a mis-transcribed middle rather
+  than catching it** — and its one middle assertion
+  (`Stack.hand_size(2) == 9`) was itself the wrong value. Replaced with an
+  exhaustive level-by-level ladder assertion. Sampling a table is not
+  testing it, and this is the second constants-defect in two rounds that a
+  loose test let through (the first being the 5% tolerance over the cycle
+  timer).*
+
+  ***The load-bearing claim is FALSIFIED.*** *The reviewer argued the wrong
+  value changes the headline, since `RowFixture` runs at `capacity_level =
+  2` where stack should be 8 rather than 9. Re-running the sweep after the
+  correction gives byte-identical rates at every margin. The reason is
+  structural, not luck: a single belt tile holds at most **8** items (4
+  slots × 2 lanes), so `take_from_tile` caps any grab at 8 — hands of 8
+  and 9 saturate the same ceiling. The reviewer's supporting argument
+  (that 8 is where the BS3 S=4 belt-drop dip vanishes) also does not
+  apply here: the fixture runs unstacked at S=1, and BS3 governs drops
+  *onto belts*, whereas these inserters drop into consumers.*
+
+  *Pattern worth naming after two rounds: the bot's defect identification
+  has been accurate every time (three real bugs, all applied), and its
+  causal attribution to the headline finding has been wrong every time
+  (two for two). Both fixes were taken on their own merits; neither
+  explanation survived being checked. The non-monotonicity remains
+  unattributed and remains PR 2's first question.*
