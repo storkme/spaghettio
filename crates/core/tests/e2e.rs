@@ -8090,10 +8090,15 @@ fn research_l7_thins_output_inserters_s4() {
 ///     di_cell_kc3_export --exact --ignored --nocapture
 /// ```
 ///
-/// Target is `iron-gear-wheel` from `iron-ore`, NOT the RFC's cable→EC
-/// worked example: EC has two solid inputs and is a Phase 2 shape (#449).
-/// Gears are the canonical single-solid-input consumer, so the coupling
-/// clears `cell_eligible`.
+/// Target is `steel-plate` from `iron-ore` (16:16 furnace→furnace), NOT
+/// the RFC's cable→EC worked example: EC has two solid inputs and is a
+/// Phase 2 shape (#449). Furnace pairs are the corpus's dominant DI shape
+/// (1,585 instances) and balance exactly 1:1, so the coupling clears both
+/// `cell_eligible` and `plan_straddle`.
+///
+/// `iron-gear-wheel` from ore was the first target tried and does NOT
+/// work: a gear machine needs ~4.8 furnaces, so the straddle exceeds 2
+/// and `plan_straddle` refuses it (Phase 3 territory).
 #[test]
 #[ignore]
 fn di_cell_kc3_export() {

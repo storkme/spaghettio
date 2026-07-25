@@ -147,11 +147,33 @@ unweighted where its rationale was demand (solids-only actually covers
 **69.4%** of top-10 instances, and the dominant pair is fully solid).
 Resolution was the criterion's own prescribed action — **re-scope, not
 reprieve**: pipes moved out of Non-goals into required Phase 2 scope.
-Phases 1–4 remain; **Phase 1 is blocked on #432** (`DICoupling` and
-`direct_insertion` do not exist on `main`). Recorded data gap:
-`electric-furnace → electric-furnace` is the 2nd-commonest DI pair
-(1,585) but is invisible to recipe-keyed analysis — furnaces carry no
-explicit recipe.
+Recorded data gap: `electric-furnace → electric-furnace` is the
+2nd-commonest DI pair (1,585) but is invisible to recipe-keyed analysis
+— furnaces carry no explicit recipe.
+
+**`rfc-053` Phase 1 COMPLETE (2026-07-25, PR #452 — RFC still ACTIVE,
+Phases 2–4 remain)**: `place_rows` fuses an eligible producer/consumer
+pair into ONE cell row, so the engine emits true
+machine→inserter→machine DI for the first time. **Inert by default**
+(`direct_insertion: false`) — no existing layout moved. Three more kill
+criteria evaluated, all passing: **KC3 (honest throughput)** —
+sim-measured 2.24/s delivered against 2.00/s planned (112%), 0
+validation issues, 32/32 machines working, *with a DI-off control on the
+same target* that delivers the identical 2.24/s, attributing the +12%
+overshoot to a solver rate-model artifact rather than to DI; **KC4
+(density)** re-confirmed end-to-end at 213 entities vs the bus control's
+335 (−36%); **KC2 (face contention)** — passes at L2 but with **zero
+margin**, 1 near + 2 far = 3 of 3 columns, which constrains Phase 2's
+design. Coverage measured rather than assumed: 4 of 11 real targets
+build cells, every refusal with a named cause, and the ceiling is a
+**fan-in belt limit** (one belt cannot feed a high-rate cell), not a DI
+limit. Corpus `fan` analysis redirected Phase 3: fan-in >2 is only 2.1%
+of the corpus and neither dominant shape uses stacked bands, so
+multi-band is a small tail and **Phase 2 (face allocation) should come
+first**. Open tracking items: the ~10% electric-furnace steel rate
+under-prediction the KC3 control exposed (orthogonal to this RFC), and
+`ci.yml`'s `pull_request: branches: [main]` base filter, which silently
+gives any **stacked PR zero CI**.
 
 **`rfc-052-oil-mega-cell.md` close-out (2026-07-24, Phases A/B/C —
 PRs #401/#403/#405/#408/#411/#421)**: fluid subgraphs compose as

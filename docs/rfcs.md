@@ -64,6 +64,6 @@ backfill the status next time the doc is touched.
 | RFC-050 | 2026-07-22 | [`rfc-050-headless-sim-harness.md`](rfc-050-headless-sim-harness.md) | Complete (fluid feed CALIBRATED via #364 — first fluid factory PASS; fluid-pack sweep + #345 re-measure open) |
 | RFC-051 | 2026-07-22 | [`rfc-051-cell-composition-integration.md`](rfc-051-cell-composition-integration.md) | Complete — default Candidate; sim registry; K-quantization (corridor-cap); EC-row re-measure waits on #381 |
 | RFC-052 | 2026-07-23 | [`rfc-052-oil-mega-cell.md`](rfc-052-oil-mega-cell.md) | Design (circulated for review) |
-| RFC-053 | 2026-07-24 | [`rfc-053-direct-insertion-cells.md`](rfc-053-direct-insertion-cells.md) | Active — Phase 0 complete (KC1 passed; KC6 fired → pipes re-scoped into Phase 2). #432 merged; Phase 1 ready. |
+| RFC-053 | 2026-07-24 | [`rfc-053-direct-insertion-cells.md`](rfc-053-direct-insertion-cells.md) | Active — **Phases 0 + 1 complete**; engine emits fused DI cells, inert by default. KC1/KC2/KC3/KC4 all evaluated and passing (KC6 fired → pipes re-scoped into Phase 2). Next: Phase 2 face allocation — corpus `fan` data reordered it ahead of Phase 3. |
 
 Next number: **RFC-054**.
