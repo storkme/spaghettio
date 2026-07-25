@@ -8,9 +8,11 @@ Build `spaghettio-meter`: a native, item-level discrete simulator that
 takes **the exported blueprint string plus the sim manifest** — the same
 two artifacts [`spaghettio-sim`](sim-harness.md) takes — moves items
 around at tick granularity, and reports **measured** per-item rates and a
-per-machine census. Three orders of magnitude cheaper than headless
-Factorio, so it runs in CI and, eventually, inside the layout candidate
-search.
+per-machine census. Roughly **20× cheaper** than headless Factorio and
+with no install, no server and no process startup — enough to run in CI
+and, if KC3 holds, inside the layout candidate search. (Concretely:
+`spaghettio-sim` is ~25–45 s plus ~10 s startup; KC3 sets the meter's bar
+at ≤2 s and its kill threshold at 5 s.)
 
 It is **not** a validator and must not become one. A validator returns a
 verdict; a meter returns a number. The difference is the whole point: you
@@ -36,9 +38,13 @@ EC row:  (46,8) cable 42 | (49,8) 34 | (52,8) 20 | (55,8) 6 | (58,8) 22 | (61,8)
 cable cell: (19,6) FULL_OUTPUT, copper-cable 32 stuck
 ```
 
-The tail machine is short of cable with **20 iron plates idle beside
-it** — not output-blocked, short exactly one ingredient — while a
-producer cannot push into the belt at all.
+The tail machine at `(61,8)` holds 2 cable and is in
+`item_ingredient_shortage`, while a producer cannot push into the belt at
+all. #448's own narrative adds the detail that makes it diagnostic (not
+visible in the excerpt above, which carries only cable counts): that tail
+machine has **20 iron plates idle beside it**. So it is not
+output-blocked and not generally starved — it is short of exactly one
+ingredient, the one whose belt runs the length of the row.
 
 The mechanism is a *flux* deficit, not a storage one, which is why time
 does not resolve it:
@@ -65,9 +71,13 @@ is **correct**. This is not a missing check. It is a dimension the model
 does not have.
 
 Corroboration that it is flux and not storage: the deficit is stable
-across a one-game-hour steady run and **identical at every research level
-from d1 to d7** ([#435](https://github.com/storkme/spaghettio/issues/435)).
-No inserter capacity helps a machine with nothing under its pickup tile.
+across a one-game-hour steady run, and across research levels d1 → d7 it
+**barely moves** — −8.0% → −6.0% → −5.3%, with an *identical machine
+census* at every level (1 output-blocked, 1 ingredient-starved, 13
+working) ([#435](https://github.com/storkme/spaghettio/issues/435)). The
+d1 → d2 step is a separate input-side bind that L2 clears; from d2 to d7,
+five research levels buy 0.1/s. No inserter capacity helps a machine with
+nothing under its pickup tile.
 
 ### The cost of only having a slow instrument
 
@@ -281,8 +291,12 @@ the corpus.
 both on `chain-ec15`, both with **no rule, check, or fudge written to
 produce the outcome**:
 
-- *(a) The gradient.* Reproduce the monotone head→tail depletion and
-  place the tail machine in `item_ingredient_shortage`.
+- *(a) The gradient.* Reproduce the head→tail depletion and place the
+  tail machine in `item_ingredient_shortage`. Deliberately **not**
+  "monotone": the measured dump is `42 | 34 | 20 | 6 | 22 | 2`, which
+  rises at the fifth machine. The assertion is on the head-to-tail trend
+  and the terminal shortage, not on a strictly decreasing sequence — a
+  meter faithfully reproducing the real measurement must pass.
 - *(b) The level-invariance.* The two committed ec15 registry entries are
   the **same geometry hash** (`cde5f2fcb0f5ef21`) measured at declared
   levels d1 and d7, moving only 13.8 → 14.2. The meter must reproduce
@@ -382,5 +396,21 @@ the right thing moved.
 - *2026-07-25 — audit §6-D ("simulator-in-the-loop search", scored with
   **validators** as fitness) is superseded: validators are blind to the
   motivating class.*
-</content>
-</invoke>
+- *2026-07-25 — review round 1 (bot, PR #455): five findings, all valid,
+  all applied. Four were the draft claiming more than its own cited data
+  supported, which is worth recording given this RFC is about not doing
+  that. (1) "Three orders of magnitude cheaper" was contradicted by KC3's
+  own ≤2 s / 5 s thresholds against a 35–55 s harness — the real figure is
+  ~20×, now stated with both numbers. (2) The "20 iron plates idle beside
+  it" detail is real but comes from #448's narrative, not from the dump
+  excerpt quoted directly above it, which carries only cable counts; now
+  attributed explicitly. (3) "Identical at every research level" was
+  wrong for the **rate** (−8.0% → −6.0% → −5.3%) and right for the
+  **census** — the draft conflated them; corrected, and the d1→d2
+  input-side bind is now separated from the flat d2→d7 tail. (4) **KC2(a)
+  required a shape the real data does not have** — the measured dump
+  `42 | 34 | 20 | 6 | 22 | 2` rises at the fifth machine, so a meter
+  faithfully reproducing it would have FAILED the kill criterion as
+  originally worded. "Monotone" dropped; this was the most serious of the
+  five, since an unsatisfiable kill criterion is worse than none. (5) Two
+  stray tool-call closing tags were committed at end-of-file; removed.*
