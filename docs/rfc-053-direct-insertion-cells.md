@@ -1593,10 +1593,26 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   `di_row_cell_fluid_fed_producer_validates_clean`, which was canaried:
   it fails with the exemption forced off.*
 
-  | pair | corpus | result |
-  |---|---|---|
-  | `casting-copper-cable → EC` | 544 | cell at 2.5–20/s, **0 errors 0 warnings** throughout |
-  | `casting-iron → EC` | 339 | cell at 2.5–15/s, **0 errors 0 warnings** throughout |
+  | pair | corpus | result | sim @10/s |
+  |---|---|---|---|
+  | `casting-copper-cable → EC` | 544 | cell at 2.5–20/s, **0 errors 0 warnings** throughout | produced 100.0%, delivered **101.3%** — PASS |
+  | `casting-iron → EC` | 339 | cell at 2.5–15/s, **0 errors 0 warnings** throughout | produced 100.0%, delivered **101.3%** — PASS |
+
+  *Both sim runs converged. They are the FIRST fixtures ever to exercise
+  the harness's infinity-pipe fluid feed, which RFC-050 declares
+  uncalibrated — worth stating, though the risk runs one way: an
+  uncalibrated feed could under-supply and show a false FAILURE, it
+  cannot inflate EC output past what the cell's own belts and inserters
+  carry, and produced matched planned exactly in both runs.*
+
+  *Also checked, because a cell alone in a layout proves little: with a
+  smelting row placed alongside (`iron-ore` instead of `iron-plate` as
+  the external input) both rates still validate 0/0. The cell's
+  `RowSpan.y_start` is taken from `input_belt_ys[0]`, which for a
+  fluid-fed producer is the CONSUMER's belt — below the machines and
+  below the pipe row, so the span understates the cell's extent. No
+  observable effect in a 3-row layout; recorded as a smell, not a
+  finding.*
 
   *Above those rates the cell refuses honestly — the consumer's OTHER
   input (60/s of cable into 8 EC machines) exceeds an express belt's
