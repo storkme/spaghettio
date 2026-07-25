@@ -1097,3 +1097,37 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   honest ordering is **Phase 2 before Phase 3**, and Phase 3's scope
   should be rewritten around the fan-in belt limit rather than around
   multi-producer straddle, which is largely already solved.*
+
+- *2026-07-25 — **Phase 2's input-belt contract, checked before building:
+  one question discharged, one sharpened, one found.** The Phase 2 cell
+  puts a second input belt (iron-plate) BELOW its consumers, a shape no
+  existing row template produces, so the worry was that something derives
+  tap-off position from row geometry rather than reading it. **It does
+  not.** Both consumers — `lane_planner.rs:1292` and
+  `ghost_router.rs:163` — use the identical form: filter `spec.inputs` to
+  non-fluid, enumerate, match on item, then read `input_belt_y[idx]`
+  literally. No `y_start` arithmetic, no "first belt row", no comparison
+  against machine y. An input belt below its machines is fine.*
+
+  *So the whole contract reduces to: **`input_belt_y[i]` is the belt for
+  the i-th non-fluid entry of `spec.inputs`, in spec order.** Violating it
+  makes BOTH consumers wrong identically, so they agree with each other
+  and yield a self-consistent wrong layout — there is no disagreement for
+  a check to catch.*
+
+  ***The trap the grep actually found.*** *Both consumers `break` on the
+  first item match, and `ghost_router` documents the assumption inline:
+  "assumes one input slot per item per recipe." A Phase 2 fused spec is
+  producer's inputs + consumer's non-coupled inputs, and nothing prevents
+  those being the SAME item (producer eats iron-plate, consumer also eats
+  iron-plate). Then `spec.inputs` holds two iron-plate entries at
+  different y, both consumers match the first and break, and **the second
+  belt is never tapped** — built, never fed, machines starve, and no lane
+  is ever routed to it to warn about. Merging the two is not available:
+  they sit at different y by construction (one above the producers, one
+  below the consumers). Phase 2 must therefore either refuse such a pair
+  outright — the Phase 1-style honest answer, and the default unless
+  measurement says the shape matters — or teach tap-off resolution to sum
+  across matching slots, which means editing that documented assumption in
+  two files. Invisible in the canonical cable→EC case (copper-plate vs
+  iron-plate are distinct), so it would have shipped and bitten later.*
