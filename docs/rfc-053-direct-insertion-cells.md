@@ -1280,4 +1280,27 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   `kit_errors` and the chest census before blaming geometry). Those two
   diagnoses have opposite consequences — one kills the Phase 2 shape,
   the other is a harness artifact — so the forensics must be run before
-  either is recorded as fact. **Do that first next session.***
+  either is recorded as fact.*
+
+  ***Forensics run; it is NEITHER.*** *The machine census settles it:
+  **`full_output: 46`, `item_ingredient_shortage: 4`**. Forty-six
+  machines are backed up with a FULL OUTPUT — producing normally and
+  unable to offload — against only four short of ingredients. Import was
+  clean (654/654 ghosts revived), power fine (1 pole network), no kit
+  errors. So:*
+  - *Not a sim-kit artifact: the kit fed the layout and the machines ran.*
+  - ***Not a KC3 trip.** KC3 fires when the topology or the model is
+    wrong. `full_output` means production works and the OFFLOAD PATH is
+    blocked, which is an incomplete integration in unfinished Phase 2
+    code, not evidence against the DI shape. Recording this distinction
+    because the raw numbers (0.00/s, -100%) look identical to a KC3 trip
+    and would have justified killing the row shape on a misreading.*
+
+  *Where the blockage is, from the same run: `copper-plate` produces
+  1.27/s then stalls and `copper-cable` produces 0.00/s, so the cable
+  machines never receive copper-plate. The cell's belts carry `di-row:`
+  segment ids rather than the `row:...:belt-in:<item>` ids ordinary rows
+  use, so the tap-off almost certainly never joins them to the bus —
+  consistent with the belts being stamped by the cell rather than by the
+  row templates. **That is the first thing to fix next session**, and it
+  is a wiring gap, not a design fault.*
