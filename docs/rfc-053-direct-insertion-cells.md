@@ -421,10 +421,40 @@ caveat.
    reachable producers, the sandwich shape is wrong for the game's own
    ratios — stop and reconsider the topology, do not "mostly" feed
    consumers.
-2. **Face contention.** If the consumer's remaining face cannot carry
-   its non-DI flows (iron in + EC out) within its tile budget at
-   **≤ L2** `inserter_capacity` (i.e. the cell is only feasible at max
-   research), the topology is under-scoped — stop.
+2. **Face contention. ✅ EVALUATED 2026-07-25 — PASSES, with zero
+   margin.** If the consumer's remaining face cannot carry its non-DI
+   flows (iron in + EC out) within its tile budget at **≤ L2**
+   `inserter_capacity` (i.e. the cell is only feasible at max research),
+   the topology is under-scoped — stop. Measured against the real rate
+   tables (`kc2_face_contention` in `tests/e2e.rs`), AM3 canonical,
+   2.5/s each way, 3-wide face:
+
+   | side | inserter | rate @L2 | needed | columns |
+   |---|---|---|---|---|
+   | near (reach-1) | fast | 4.62/s | 2.5/s | **1** |
+   | far (reach-2) | long-handed | **2.40/s** | 2.5/s | **2** |
+   | | | | | **3 of 3 → PASSES** |
+
+   The criterion does not fire, but every column is consumed. The bind
+   is structural rather than a research shortfall: long-handed is the
+   only reach-2 inserter (I8a) and its belt-drop rate is 2.40/s at L2
+   rising only to 3.20/s at L7, so max research buys back exactly one
+   column and no more. Swapping which item takes the near belt is
+   symmetric (both flows are 2.5/s), so 1 + 2 is the budget either way.
+
+   **Consequences Phase 2 must design around, not discover later:** a
+   Phase 2 cell has **no spare face column**, so any consumer with a
+   third flow (second output, third input) does not fit and must refuse;
+   and pipe placement — which KC6 re-scoped INTO this phase — needs face
+   tiles this budget does not have, so fluid-touching consumers will
+   need a different face plan rather than this one extended.
+
+   *Incidental finding, flagged not folded:* `bulk-inserter`'s belt-drop
+   rate is flat 2.40/s across every research level AND every belt tier,
+   while its machine-feed rate scales 2.40 → 4.80 → 14.40. That makes
+   bulk strictly dominated for output faces. It may be correct, but
+   Phase 2's allocator will lean on this ladder and the asymmetry should
+   be verified before it does.
 
    **2b. Tier-cap degradation.** `max_inserter_tier` is a hard user cap,
    orthogonal to research level. If, at the engine defaults

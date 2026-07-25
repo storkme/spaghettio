@@ -8219,3 +8219,62 @@ fn di_cell_coverage_sweep() {
         println!("{item:<22} {rate:>6}  {ncoup:>9} {cells:>8} {bridges:>8}  {verdict}");
     }
 }
+
+/// RFC-053 **KC2 evaluation** — face contention for the Phase 2 cell.
+///
+/// A row-layout machine has two usable faces. A cell spends the NORTH face
+/// on the DI band, so every remaining flow must fit on the SOUTH face. For
+/// `copper-cable → electronic-circuit` that is iron-plate IN and
+/// electronic-circuit OUT, sharing one 3-wide face.
+///
+/// KC2 fires if those flows cannot be carried at **≤ L2** inserter-capacity
+/// research — i.e. if the cell is only feasible at max research.
+///
+/// The RFC's proposed geometry is mixed-reach: a reach-1 inserter picks
+/// iron off the NEAR belt, and a long-handed one steps OVER that belt to
+/// drop EC on the FAR belt. So the output side is constrained to
+/// long-handed (I8a: the only reach-2 inserter), which is the binding
+/// constraint and the whole reason this criterion exists.
+#[test]
+#[ignore]
+fn kc2_face_contention() {
+    use spaghettio_core::common::{belt_drop_rate, machine_feed_rate, QualityTier};
+    // AM3 canonical: 1 iron + 3 cable -> 1 EC at 2.5 crafts/s.
+    const IRON_IN: f64 = 2.5;
+    const EC_OUT: f64 = 2.5;
+    let q = QualityTier::Normal;
+
+    println!("KC2: consumer south face must carry iron IN {IRON_IN}/s + EC OUT {EC_OUT}/s");
+    println!();
+    println!("{:<22} {:>8} {:>8} {:>8}   {}", "inserter", "L0", "L2", "L7", "role");
+    for name in ["inserter", "long-handed-inserter", "fast-inserter", "bulk-inserter", "stack-inserter"] {
+        let f: Vec<String> = [0u8, 2, 7].iter()
+            .map(|&l| format!("{:.2}", machine_feed_rate(name, q, l)))
+            .collect();
+        println!("{name:<22} {:>8} {:>8} {:>8}   belt->machine (iron in)", f[0], f[1], f[2]);
+    }
+    println!();
+    for belt in ["transport-belt", "fast-transport-belt", "express-transport-belt"] {
+        for name in ["long-handed-inserter", "fast-inserter", "bulk-inserter", "stack-inserter"] {
+            let d: Vec<String> = [0u8, 2, 7].iter()
+                .map(|&l| format!("{:.2}", belt_drop_rate(name, q, 1, l, belt)))
+                .collect();
+            println!("{name:<22} {:>8} {:>8} {:>8}   machine->{belt} (EC out)", d[0], d[1], d[2]);
+        }
+        println!();
+    }
+
+    // The verdict the criterion actually asks for.
+    let far_out_l2 = belt_drop_rate("long-handed-inserter", q, 1, 2, "express-transport-belt");
+    let near_in_l2 = machine_feed_rate("fast-inserter", q, 2);
+    println!("--- KC2 verdict at L2, 3-wide face ---");
+    println!("  near (reach-1) iron in : fast-inserter {near_in_l2:.2}/s vs {IRON_IN}/s needed -> {}",
+        if near_in_l2 + 1e-9 >= IRON_IN { "OK with 1" } else { "needs >1" });
+    println!("  far  (reach-2) EC out  : long-handed  {far_out_l2:.2}/s vs {EC_OUT}/s needed -> {}",
+        if far_out_l2 + 1e-9 >= EC_OUT { "OK with 1" } else { "needs >1" });
+    let n_far = (EC_OUT / far_out_l2).ceil() as usize;
+    let n_near = (IRON_IN / near_in_l2).ceil() as usize;
+    println!("  columns required: {n_near} near + {n_far} far = {} of 3 available -> {}",
+        n_near + n_far,
+        if n_near + n_far <= 3 { "KC2 PASSES" } else { "KC2 FIRES" });
+}
