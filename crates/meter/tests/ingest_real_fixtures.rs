@@ -180,6 +180,65 @@ fn ingests_every_generated_fixture() {
     }
 }
 
+/// The topology rules must cope with **real** factories, not just the
+/// hand-built cases in `network.rs`'s unit tests.
+///
+/// Every `TopologyNote` is something the builder could not model — an
+/// unpaired underground, an orphan splitter half, a belt loop with no
+/// principled update order. Each is a place the simulation would get a
+/// rate wrong. Asserting zero across the whole generated corpus is what
+/// turns "the rules look right" into "the rules handle 3,754 tiles of
+/// engine output".
+#[test]
+fn topology_builds_cleanly_on_every_fixture() {
+    let dir = tmp_dir();
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        eprintln!("skipping: {dir:?} does not exist");
+        return;
+    };
+
+    let mut checked = 0;
+    let mut problems = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|e| e != "bp") {
+            continue;
+        }
+        let Ok(bp) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(ents) = blueprint_in::decode(&bp) else {
+            continue; // decode failures are the other test's business
+        };
+        let net = spaghettio_meter::NetworkBuilder::build(&ents);
+        checked += 1;
+
+        let label = path.file_stem().unwrap().to_string_lossy().to_string();
+        if !net.notes.is_empty() {
+            problems.push(format!("{label}: {:?}", net.notes));
+        }
+        // A network where most tiles link nowhere is a broken network that
+        // would still report "no notes".
+        let linked = net.tiles.iter().filter(|t| t.downstream.is_some()).count();
+        if net.len() > 20 && linked * 10 < net.len() * 9 {
+            problems.push(format!(
+                "{label}: only {linked}/{} tiles link downstream",
+                net.len()
+            ));
+        }
+    }
+
+    assert!(
+        problems.is_empty(),
+        "topology problems on {} fixture(s):\n{}",
+        problems.len(),
+        problems.join("\n")
+    );
+    if checked == 0 {
+        eprintln!("skipping: no .bp fixtures generated");
+    }
+}
+
 /// Guard against the skips above going vacuous: if the fixture directory
 /// exists at all, it must contain readable blueprints.
 #[test]
