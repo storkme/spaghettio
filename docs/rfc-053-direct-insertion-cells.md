@@ -449,12 +449,18 @@ caveat.
    tiles this budget does not have, so fluid-touching consumers will
    need a different face plan rather than this one extended.
 
-   *Incidental finding, flagged not folded:* `bulk-inserter`'s belt-drop
-   rate is flat 2.40/s across every research level AND every belt tier,
-   while its machine-feed rate scales 2.40 → 4.80 → 14.40. That makes
-   bulk strictly dominated for output faces. It may be correct, but
-   Phase 2's allocator will lean on this ladder and the asymmetry should
-   be verified before it does.
+   *Incidental finding, raised and then CLEARED:* `bulk-inserter`'s
+   belt-drop rate is flat 2.40/s across every research level and belt
+   tier, while its machine-feed rate scales 2.40 → 4.80 → 14.40. That
+   looked like a modelling gap Phase 2's allocator might trip over.
+   It is not — `belt_drop_rate`'s own doc states it: *"bulk inserters:
+   always flat — the engine never places one"*, i.e. a deliberate
+   simplification for an entity that only ever arrives by parsing
+   community blueprints. It also cannot affect this phase twice over:
+   bulk is reach-1, so it is structurally excluded from the binding
+   far/reach-2 column, and on the near side stack dominates it (6.38/s
+   vs 2.40/s at L2). Recorded because "verify the load-bearing number"
+   was the right instinct even though the answer was benign.
 
    **2b. Tier-cap degradation.** `max_inserter_tier` is a hard user cap,
    orthogonal to research level. If, at the engine defaults
