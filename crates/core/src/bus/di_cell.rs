@@ -885,10 +885,13 @@ impl RowCellPlan {
         self.edges.iter().map(|&(_, _, f)| f).fold(0.0, f64::max)
     }
 
-    pub fn width(&self, machine_w: i32) -> i32 {
-        match self.xs.last() {
-            Some(&last) => last + machine_w,
-            None => 0,
+    /// Total x-extent. Takes BOTH widths because a cell may mix machine
+    /// footprints (a foundry is 5x5 against an assembler's 3x3), so the
+    /// last machine's width depends on its role.
+    pub fn width(&self, producer_w: i32, consumer_w: i32) -> i32 {
+        match (self.xs.last(), self.sequence.last()) {
+            (Some(&last), Some(&is_p)) => last + if is_p { producer_w } else { consumer_w },
+            _ => 0,
         }
     }
 }
@@ -911,9 +914,10 @@ pub fn plan_row_straddle(
     consumer_count: usize,
     producer_rate: f64,
     consumer_rate: f64,
-    machine_w: i32,
+    producer_w: i32,
+    consumer_w: i32,
 ) -> Option<RowCellPlan> {
-    if producer_count == 0 || consumer_count == 0 || machine_w <= 0 {
+    if producer_count == 0 || consumer_count == 0 || producer_w <= 0 || consumer_w <= 0 {
         return None;
     }
     let usable = producer_rate.is_finite()
@@ -982,8 +986,15 @@ pub fn plan_row_straddle(
         return None;
     }
 
-    let pitch = machine_w + 1;
-    let xs: Vec<i32> = (0..sequence.len()).map(|k| k as i32 * pitch).collect();
+    // Per-machine pitch: each machine's own width plus the 1-tile gap that
+    // holds its coupling inserter. A uniform pitch would overlap machines
+    // whenever the two roles have different footprints.
+    let mut xs: Vec<i32> = Vec::with_capacity(sequence.len());
+    let mut cursor = 0i32;
+    for &is_p in &sequence {
+        xs.push(cursor);
+        cursor += if is_p { producer_w } else { consumer_w } + 1;
+    }
 
     let mut edges = Vec::new();
     for (j, feeders) in per_consumer.iter().enumerate() {
@@ -1010,7 +1021,7 @@ mod row_straddle_tests {
     /// in 1-D the same way it does for the stacked cell.
     #[test]
     fn canonical_cable_to_ec_row_matches_the_hand_derivation() {
-        let p = plan_row_straddle(6, 4, 5.0, 7.5, 3).expect("6:4 must arrange");
+        let p = plan_row_straddle(6, 4, 5.0, 7.5, 3, 3).expect("6:4 must arrange");
         let seq: String = p
             .sequence
             .iter()
@@ -1020,7 +1031,7 @@ mod row_straddle_tests {
         assert_eq!(p.sequence.len(), 10);
         // Pitch 4 = 3-wide machine + the 1-tile coupling gap.
         assert_eq!(p.xs, vec![0, 4, 8, 12, 16, 20, 24, 28, 32, 36]);
-        assert_eq!(p.width(3), 39);
+        assert_eq!(p.width(3, 3), 39);
     }
 
     /// The defining property: every coupling is between physically
@@ -1029,7 +1040,7 @@ mod row_straddle_tests {
     #[test]
     fn every_edge_couples_adjacent_machines() {
         for (pc, cc, pr, cr) in [(6, 4, 5.0, 7.5), (4, 4, 2.5, 2.5), (2, 1, 3.0, 6.0)] {
-            let p = plan_row_straddle(pc, cc, pr, cr, 3).expect("must arrange");
+            let p = plan_row_straddle(pc, cc, pr, cr, 3, 3).expect("must arrange");
             for &(ps, cs, _) in &p.edges {
                 assert_eq!(ps.abs_diff(cs), 1, "edge {ps}->{cs} is not adjacent in {p:?}");
                 assert!(p.sequence[ps], "edge source must be a producer");
@@ -1043,7 +1054,7 @@ mod row_straddle_tests {
     #[test]
     fn flow_is_conserved_per_machine() {
         let (pr, cr) = (5.0, 7.5);
-        let p = plan_row_straddle(6, 4, pr, cr, 3).unwrap();
+        let p = plan_row_straddle(6, 4, pr, cr, 3, 3).unwrap();
         for (slot, &is_p) in p.sequence.iter().enumerate() {
             let moved: f64 = p
                 .edges
@@ -1064,7 +1075,7 @@ mod row_straddle_tests {
     /// stack inserter covers at zero research (12.0/s).
     #[test]
     fn required_rate_is_the_busiest_single_edge() {
-        let p = plan_row_straddle(6, 4, 5.0, 7.5, 3).unwrap();
+        let p = plan_row_straddle(6, 4, 5.0, 7.5, 3, 3).unwrap();
         assert_eq!(p.required_rate(), 5.0);
     }
 
@@ -1072,19 +1083,19 @@ mod row_straddle_tests {
     #[test]
     fn out_of_scope_shapes_are_refused() {
         // Unbalanced flow.
-        assert!(plan_row_straddle(6, 4, 5.0, 9.0, 3).is_none());
+        assert!(plan_row_straddle(6, 4, 5.0, 9.0, 3, 3).is_none());
         // A consumer needing three producers has only two neighbours.
-        assert!(plan_row_straddle(9, 3, 1.0, 3.0, 3).is_none());
+        assert!(plan_row_straddle(9, 3, 1.0, 3.0, 3, 3).is_none());
         // Degenerate inputs.
-        assert!(plan_row_straddle(0, 4, 5.0, 7.5, 3).is_none());
-        assert!(plan_row_straddle(6, 4, f64::NAN, 7.5, 3).is_none());
-        assert!(plan_row_straddle(6, 4, 5.0, 7.5, 0).is_none());
+        assert!(plan_row_straddle(0, 4, 5.0, 7.5, 3, 3).is_none());
+        assert!(plan_row_straddle(6, 4, f64::NAN, 7.5, 3, 3).is_none());
+        assert!(plan_row_straddle(6, 4, 5.0, 7.5, 0, 0).is_none());
     }
 
     /// 1:1 pairing (the furnace→furnace shape) interleaves strictly.
     #[test]
     fn one_to_one_interleaves() {
-        let p = plan_row_straddle(4, 4, 2.5, 2.5, 3).unwrap();
+        let p = plan_row_straddle(4, 4, 2.5, 2.5, 3, 3).unwrap();
         let seq: String = p.sequence.iter().map(|&x| if x { 'P' } else { 'C' }).collect();
         assert_eq!(seq, "PCPCPCPC");
         assert_eq!(p.edges.len(), 4, "1:1 needs exactly one edge per pair");
@@ -1162,17 +1173,26 @@ pub struct RowCellSpec<'a> {
 /// Couplers sit in the gap columns BETWEEN machines, at reach 1 — the
 /// property that makes this DI at all. Returns `None` if the coupler
 /// cannot carry the busiest edge, rather than emitting an under-fed row.
+#[allow(clippy::too_many_arguments)]
 pub fn stamp_row_cell(
     plan: &RowCellPlan,
     spec: &RowCellSpec<'_>,
     x0: i32,
     y0: i32,
-    machine_w: i32,
-    machine_h: i32,
+    producer_w: i32,
+    producer_h: i32,
+    consumer_w: i32,
+    consumer_h: i32,
 ) -> Option<RowCellLayout> {
-    if machine_w <= 0 || machine_h <= 0 {
+    if producer_w <= 0 || producer_h <= 0 || consumer_w <= 0 || consumer_h <= 0 {
         return None;
     }
+    // Machines are BOTTOM-ALIGNED so both roles share one south face row.
+    // Top-aligning them would leave a shorter machine's south face two
+    // tiles above the face row, unreachable by its own feed and output
+    // inserters. Bottom-alignment also guarantees the roles overlap on
+    // the bottom row, which is where the coupling inserters sit.
+    let max_h = producer_h.max(consumer_h);
     if plan.required_rate() > spec.coupler_rate + 1e-9 {
         return None;
     }
@@ -1192,11 +1212,13 @@ pub fn stamp_row_cell(
     let p_belt_y = y0;
     let p_feed_y = y0 + 1;
     let machine_y = y0 + 2;
-    let face_y = machine_y + machine_h;
+    let face_y = machine_y + max_h;
+    // Row-relative top of each role once bottom-aligned.
+    let top_of = |is_p: bool| machine_y + (max_h - if is_p { producer_h } else { consumer_h });
     let c_belt_y = face_y + 1;
     let output_belt_y = face_y + 2;
     let x_min = x0;
-    let x_max = x0 + plan.width(machine_w) - 1;
+    let x_max = x0 + plan.width(producer_w, consumer_w) - 1;
     let seg = format!("di-row:{}:{}", spec.item, spec.consumer_recipe);
     let mut ents = Vec::new();
     let mut fluid_ports: Vec<(String, i32, i32)> = Vec::new();
@@ -1222,7 +1244,7 @@ pub fn stamp_row_cell(
 
     // Columns available on a face, innermost first so single-inserter
     // faces keep the natural centre-ish position.
-    let cols = |n: usize| -> Vec<i32> { (0..machine_w).take(n).collect() };
+    let cols = |w: i32, n: usize| -> Vec<i32> { (0..w).take(n).collect() };
 
     for (k, &is_producer) in plan.sequence.iter().enumerate() {
         let mx = x0 + plan.xs[k];
@@ -1235,10 +1257,11 @@ pub fn stamp_row_cell(
             (true, Some(_)) => crate::fluid_ports::north_input_orientation(spec.producer_entity),
             _ => (false, EntityDirection::North),
         };
+        let my = top_of(is_producer);
         ents.push(PlacedEntity {
             name: if is_producer { spec.producer_entity } else { spec.consumer_entity }.to_string(),
             x: mx,
-            y: machine_y,
+            y: my,
             direction: m_dir,
             mirror: m_mirror,
             recipe: Some(
@@ -1252,11 +1275,11 @@ pub fn stamp_row_cell(
                 // Record the machine's REAL north input ports as tap points.
                 for dx in crate::fluid_ports::north_input_dxs(spec.producer_entity, m_mirror, m_dir)
                 {
-                    fluid_ports.push((fluid_item.to_string(), mx + dx, p_feed_y));
+                    fluid_ports.push((fluid_item.to_string(), mx + dx, my - 1));
                 }
             } else {
                 // North face, reach-1: picks the belt above, drops into the machine.
-                for dx in cols(spec.producer_feed_count.max(1)) {
+                for dx in cols(producer_w, spec.producer_feed_count.max(1)) {
                     ents.push(PlacedEntity {
                         name: spec.producer_input.2.to_string(),
                         x: mx + dx,
@@ -1274,7 +1297,7 @@ pub fn stamp_row_cell(
             // the high ones, so they never contend for a tile.
             let nf = spec.consumer_feed_count.max(1);
             let no = spec.out_count.max(1);
-            if nf + no > machine_w as usize {
+            if nf + no > consumer_w as usize {
                 return None;
             }
             for dx in 0..nf as i32 {
@@ -1307,11 +1330,12 @@ pub fn stamp_row_cell(
     // unaffected: they have no fluid box, so the run forms no connection
     // over their columns.
     if let Some((fluid_item, pipe)) = spec.producer_fluid {
+        let pipe_y = top_of(true) - 1;
         for x in x_min..=x_max {
             ents.push(PlacedEntity {
                 name: pipe.to_string(),
                 x,
-                y: p_feed_y,
+                y: pipe_y,
                 direction: EntityDirection::North,
                 carries: Some(fluid_item.to_string()),
                 segment_id: Some(seg.clone()),
@@ -1322,14 +1346,16 @@ pub fn stamp_row_cell(
 
     for &(ps, cs, _) in &plan.edges {
         let (gap_x, dir) = if cs == ps + 1 {
-            (x0 + plan.xs[ps] + machine_w, EntityDirection::East)
+            (x0 + plan.xs[ps] + producer_w, EntityDirection::East)
         } else {
-            (x0 + plan.xs[cs] + machine_w, EntityDirection::West)
+            (x0 + plan.xs[cs] + consumer_w, EntityDirection::West)
         };
         ents.push(PlacedEntity {
             name: spec.coupler.to_string(),
+            // Bottom row: the only row both roles are guaranteed to occupy
+            // once bottom-aligned, so the coupler reaches both.
+            y: face_y - 1,
             x: gap_x,
-            y: machine_y + machine_h / 2,
             direction: dir,
             carries: Some(spec.item.to_string()),
             segment_id: Some(seg.clone()),
@@ -1337,7 +1363,8 @@ pub fn stamp_row_cell(
         });
     }
 
-    let fluid_port_ys = if spec.producer_fluid.is_some() { vec![p_feed_y] } else { Vec::new() };
+    let fluid_port_ys =
+        if spec.producer_fluid.is_some() { vec![top_of(true) - 1] } else { Vec::new() };
     Some(RowCellLayout {
         entities: ents,
         input_belt_ys: if spec.producer_fluid.is_some() {
@@ -1382,8 +1409,8 @@ mod row_stamp_tests {
     }
 
     fn stamped() -> (RowCellPlan, RowCellLayout) {
-        let plan = plan_row_straddle(6, 4, 5.0, 7.5, 3).unwrap();
-        let l = stamp_row_cell(&plan, &spec(), 0, 0, 3, 3).unwrap();
+        let plan = plan_row_straddle(6, 4, 5.0, 7.5, 3, 3).unwrap();
+        let l = stamp_row_cell(&plan, &spec(), 0, 0, 3, 3, 3, 3).unwrap();
         (plan, l)
     }
 
@@ -1500,11 +1527,12 @@ mod row_stamp_tests {
     /// fluid-on-both-sides).
     #[test]
     fn fluid_producer_gets_a_pipe_run_on_a_free_north_face() {
-        let plan = plan_row_straddle(4, 4, 2.5, 2.5, 3).unwrap();
+        let plan = plan_row_straddle(4, 4, 2.5, 2.5, 5, 3).unwrap();
         let mut sp = spec();
         sp.producer_recipe = "casting-copper-cable";
+        sp.producer_entity = "foundry";
         sp.producer_fluid = Some(("molten-copper", "pipe"));
-        let l = stamp_row_cell(&plan, &sp, 0, 0, 3, 3).expect("fluid cell must stamp");
+        let l = stamp_row_cell(&plan, &sp, 0, 0, 5, 5, 3, 3).expect("fluid cell must stamp");
 
         // No belt for the producer's input, and no feed inserters for it.
         assert!(
@@ -1537,10 +1565,10 @@ mod row_stamp_tests {
     /// Under-rate couplers refuse rather than under-feed.
     #[test]
     fn under_rate_coupler_refuses() {
-        let plan = plan_row_straddle(6, 4, 5.0, 7.5, 3).unwrap();
+        let plan = plan_row_straddle(6, 4, 5.0, 7.5, 3, 3).unwrap();
         let mut s = spec();
         s.coupler = "inserter";
         s.coupler_rate = 0.84;
-        assert!(stamp_row_cell(&plan, &s, 0, 0, 3, 3).is_none());
+        assert!(stamp_row_cell(&plan, &s, 0, 0, 3, 3, 3, 3).is_none());
     }
 }

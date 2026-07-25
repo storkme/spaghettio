@@ -1536,3 +1536,31 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   and later shown to do nothing. Both were caught by an experiment that
   took minutes (force the flag false; attempt an end-to-end build). The
   cheap experiment beat the careful argument every time it was run.*
+
+- *2026-07-25 — **Heterogeneous machine footprints landed; `casting-* → EC`
+  is STILL blocked, by a third prerequisite.** The row cell now paces x by
+  each machine's own width and **bottom-aligns** the two roles so they
+  share one south face row (top-aligning would leave a shorter machine's
+  south face two tiles above the face row, unreachable by its own feed and
+  output inserters). Couplers sit on the bottom row — the only row both
+  roles are guaranteed to occupy. `row_cell_eligible` no longer requires
+  equal dims; the STACKED cell still does, its straddle being derived
+  from a single machine width. Unit-tested with a real 5×5 foundry beside
+  a 3×3 assembler.*
+
+  ***But the pair still refuses, on RATIO.*** *A foundry emits 8.0
+  cable/s and an EC machine wants 7.5/s — a **16:15** ratio whose
+  smallest integer solution is 15 producers : 16 consumers, i.e. 31
+  machines emitting 40/s, which no single output lane carries (express
+  caps at 22.5/s). Machine counts snap to integers, so at any smaller
+  rate supply and demand disagree and `plan_row_straddle` correctly
+  refuses. **`casting-* → EC` therefore needs ratio tolerance too** —
+  either a straddle that admits partial-utilisation machines, or
+  multi-lane output.*
+
+  ***Running tally for this pair: three prerequisites, found one at a
+  time, each only by building.*** *Pipes (done) → footprints (done) →
+  ratio tolerance (open). Each was invisible until the one before it was
+  cleared. Worth stating plainly in case a fourth is hiding behind the
+  third: the corpus tells us what shape to build, but it does not tell us
+  what our own engine will refuse, and only an end-to-end attempt does.*

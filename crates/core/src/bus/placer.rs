@@ -1776,13 +1776,15 @@ fn pair_is_arrangeable(producer: &MachineSpec, consumer: &MachineSpec, item: &st
         (s as usize).max(1)
     };
     let (pc, cc) = (snap(producer.count), snap(consumer.count));
-    let (mw, _) = machine_dims(&consumer.entity);
+    let (cw, _) = machine_dims(&consumer.entity);
+    let (pw, _) = machine_dims(&producer.entity);
+    let mw = cw;
     let Some(pr) = producer.outputs.iter().find(|f| f.item == item) else { return false };
     let Some(cr) = consumer.inputs.iter().find(|f| f.item == item) else { return false };
     let pr = pr.rate * utilization_for(producer);
     let cr = cr.rate * utilization_for(consumer);
     if row {
-        crate::bus::di_cell::plan_row_straddle(pc, cc, pr, cr, mw as i32).is_some()
+        crate::bus::di_cell::plan_row_straddle(pc, cc, pr, cr, pw as i32, cw as i32).is_some()
     } else {
         crate::bus::di_cell::plan_straddle(pc, cc, pr, cr, mw as i32).is_some()
     }
@@ -2125,7 +2127,11 @@ fn row_cell_eligible(producer: &MachineSpec, consumer: &MachineSpec, item: &str)
     if p_in.first().is_some_and(|p| *p == c_other) {
         return false;
     }
-    machine_dims(&producer.entity) == machine_dims(&consumer.entity)
+    // Footprints may DIFFER — the row cell bottom-aligns the two roles and
+    // paces x by each machine's own width, so a 5x5 foundry beside a 3x3
+    // assembler is fine. (The stacked cell still requires equal dims: its
+    // straddle geometry is derived from a single machine width.)
+    true
 }
 
 /// Build a Phase 2 horizontal row cell, or `None` to fall back.
@@ -2150,14 +2156,18 @@ fn try_build_row_cell(
         (s as usize).max(1)
     };
     let (p_count, c_count) = (snap(producer.count), snap(consumer.count));
-    let (mw, mh) = machine_dims(&consumer.entity);
-    let (mw, mh) = (mw as i32, mh as i32);
+    // Per-role footprints: a cell may mix them (foundry 5x5 against an
+    // assembler's 3x3), so nothing here may assume one machine size.
+    let (pmw, pmh) = machine_dims(&producer.entity);
+    let (cmw, cmh) = machine_dims(&consumer.entity);
+    let (pmw, pmh, cmw, cmh) = (pmw as i32, pmh as i32, cmw as i32, cmh as i32);
+    let mw = cmw;
     let p_util = utilization_for(producer);
     let c_util = utilization_for(consumer);
 
     let producer_rate = producer.outputs.iter().find(|f| f.item == item)?.rate * p_util;
     let consumer_rate = consumer.inputs.iter().find(|f| f.item == item)?.rate * c_util;
-    let plan = plan_row_straddle(p_count, c_count, producer_rate, consumer_rate, mw)?;
+    let plan = plan_row_straddle(p_count, c_count, producer_rate, consumer_rate, pmw, cmw)?;
 
     // Coupler sits in a 1-tile gap, so reach-1 is a constraint (I8a).
     let coupler = size_side(plan.required_rate(), Reach::Near, 0, max_inserter_tier, quality, level);
@@ -2252,8 +2262,10 @@ fn try_build_row_cell(
         },
         bus_width,
         y_cursor,
-        mw,
-        mh,
+        pmw,
+        pmh,
+        cmw,
+        cmh,
     )?;
 
     // Fused spec: producer's belt-fed input FIRST, then the consumer's —
