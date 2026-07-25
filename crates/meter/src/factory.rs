@@ -110,7 +110,21 @@ pub struct Factory {
     /// Cumulative items reaching a sink.
     delivered: FxHashMap<u16, u64>,
     pub notes: Vec<String>,
+    /// `(tick, total delivered)` sampled every [`CHECKPOINT_TICKS`] since
+    /// the last counter reset. Feeds the convergence test in [`Self::report`].
+    checkpoints: Vec<(u64, u64)>,
 }
+
+/// Convergence sampling cadence, matching `spaghettio-sim`'s 3600-tick
+/// (one game-minute) checkpoints so the two instruments' `converged`
+/// flags answer the same question.
+const CHECKPOINT_TICKS: u64 = 3600;
+
+/// A run is converged when the last [`CONVERGENCE_WINDOWS`] checkpoint
+/// deltas differ from their mean by less than this. 2% is the sim
+/// harness's own steady-state tolerance.
+const CONVERGENCE_TOLERANCE: f64 = 0.02;
+const CONVERGENCE_WINDOWS: usize = 3;
 
 impl Factory {
     pub fn build(bp: &str, manifest: Manifest) -> Result<Self, String> {
@@ -189,6 +203,13 @@ impl Factory {
         let mut inserters = Vec::new();
         for e in entities {
             let Some(kind) = InserterKind::from_entity_name(&e.name) else {
+                // Not modelled, and it MUST be said. `footprint_checked`'s
+                // generic `*-inserter` arm lets names this constructor does
+                // not know (burner and filter variants) through `decode`'s
+                // otherwise-hard unknown-entity gate, so a silent `continue`
+                // here under-reports throughput with an empty `notes` — the
+                // one failure mode a meter must never have.
+                notes.push(format!("{} at ({},{}) not modelled", e.name, e.x, e.y));
                 continue;
             };
             let reach = kind.reach();
@@ -238,6 +259,7 @@ impl Factory {
         }
 
         Ok(Factory {
+            checkpoints: Vec::new(),
             net,
             machines,
             inserters,
@@ -270,7 +292,26 @@ impl Factory {
     pub fn run_for(&mut self, ticks: u64) {
         for _ in 0..ticks {
             self.tick();
+            if self.ticks.is_multiple_of(CHECKPOINT_TICKS) {
+                let total = self.delivered.values().sum();
+                self.checkpoints.push((self.ticks, total));
+            }
         }
+    }
+
+    /// Has throughput stopped moving?
+    ///
+    /// Compares the last [`CONVERGENCE_WINDOWS`] per-checkpoint deltas
+    /// against their mean. Deliberately measured on **delivered**, not on
+    /// buffer levels: a factory filling its buffers has rising deltas and
+    /// must not read as converged, which is the artifact class
+    /// `sim-harness-forensics.md` records the real harness learning the
+    /// hard way.
+    ///
+    /// Too few checkpoints to judge is reported as NOT converged — the
+    /// honest direction for a field a caller may gate on.
+    fn detect_converged(&self) -> bool {
+        converged_from(&self.checkpoints)
     }
 
     fn tick_feeds(&mut self) {
@@ -387,6 +428,9 @@ impl Factory {
     pub fn reset_counters(&mut self) {
         self.crafted.clear();
         self.delivered.clear();
+        // Checkpoints describe the window we just discarded; keeping them
+        // would let a pre-warmup transient decide `converged`.
+        self.checkpoints.clear();
         for m in &mut self.machines {
             m.crafts = 0;
         }
@@ -430,7 +474,7 @@ impl Factory {
             delivered_per_s: rate(&self.delivered),
             planned_per_s: self.manifest.planned_rates.clone().into_iter().collect(),
             machine_census: self.census(),
-            converged: true,
+            converged: self.detect_converged(),
             boundary_refusals: self.feeds.iter().map(|f| f.refused).sum(),
             notes: self.notes.clone(),
         }
@@ -442,5 +486,76 @@ impl Factory {
         self.reset_counters();
         self.run_for(window);
         self.report()
+    }
+}
+
+/// Steady-state test over `(tick, cumulative delivered)` checkpoints.
+///
+/// Split out from [`Factory::detect_converged`] so the decision rule is
+/// testable without standing up a whole factory — the rule is the part
+/// that can be subtly wrong.
+fn converged_from(checkpoints: &[(u64, u64)]) -> bool {
+    if checkpoints.len() < CONVERGENCE_WINDOWS + 1 {
+        return false;
+    }
+    let tail = &checkpoints[checkpoints.len() - (CONVERGENCE_WINDOWS + 1)..];
+    let deltas: Vec<f64> = tail
+        .windows(2)
+        .map(|w| (w[1].1.saturating_sub(w[0].1)) as f64)
+        .collect();
+    let mean = deltas.iter().sum::<f64>() / deltas.len() as f64;
+    if mean <= 0.0 {
+        // Nothing delivered at all. Stable, but not a steady state any
+        // caller should treat as a converged measurement.
+        return false;
+    }
+    deltas
+        .iter()
+        .all(|d| (d - mean).abs() / mean < CONVERGENCE_TOLERANCE)
+}
+
+#[cfg(test)]
+mod convergence_tests {
+    use super::*;
+
+    fn ticks(counts: &[u64]) -> Vec<(u64, u64)> {
+        counts
+            .iter()
+            .enumerate()
+            .map(|(i, &c)| (i as u64 * CHECKPOINT_TICKS, c))
+            .collect()
+    }
+
+    #[test]
+    fn flat_delivery_is_converged() {
+        // +180 every window, exactly the shape a steady factory shows.
+        assert!(converged_from(&ticks(&[0, 180, 360, 540, 720])));
+    }
+
+    #[test]
+    fn a_filling_buffer_is_not_converged() {
+        // Rising deltas: 100, 140, 180, 220. This is THE artifact class
+        // the harness records learning the hard way — a transient that
+        // reads as production. It must not pass.
+        assert!(!converged_from(&ticks(&[0, 100, 240, 420, 640])));
+    }
+
+    #[test]
+    fn producing_nothing_is_not_converged() {
+        // Perfectly stable at zero. Stable is not the question.
+        assert!(!converged_from(&ticks(&[0, 0, 0, 0, 0])));
+    }
+
+    #[test]
+    fn too_few_checkpoints_is_not_converged() {
+        // Under-report honestly: no evidence is not evidence of steadiness.
+        assert!(!converged_from(&ticks(&[0, 180, 360])));
+        assert!(!converged_from(&[]));
+    }
+
+    #[test]
+    fn small_jitter_is_still_converged() {
+        // 180/181/179/180 — within the 2% tolerance.
+        assert!(converged_from(&ticks(&[0, 180, 361, 540, 720])));
     }
 }
