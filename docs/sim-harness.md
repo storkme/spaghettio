@@ -84,12 +84,22 @@ Knobs (defaults in parentheses):
   machine can't keep up.
 - `--ticks N` (derived) — hard ceiling tick, the **one** thing that
   force-finalizes a run that never stabilizes. Default is derived from
-  warmup + 4 worst-case measurement windows, rounded up to the 60-tick
-  cadence. An explicit value is **floored at viability**: a ceiling that
-  cannot fit three checkpoints makes convergence structurally impossible,
-  so `converged: false` would describe the budget rather than the factory
-  (#454).
-- `--timeout-secs N` (900) — wall-clock bound on the whole launch.
+  warmup + 8 worst-case measurement windows, rounded up to the 60-tick
+  cadence. (Worst case: at plan a window closes at its nominal length,
+  a quarter of the cap, so the budget is rarely spent — chem5 and usp2
+  converge on ~30–37% of it.) An explicit value is **floored at
+  viability**: a ceiling that cannot fit four checkpoints makes
+  convergence structurally impossible, so `converged: false` would
+  describe the budget rather than the factory (#454).
+- `--timeout-secs N` (derived, ≥900) — wall-clock bound on the whole
+  launch. This is a net for a hung or crashed server, **not** a second
+  tick budget: the scenario force-finalizes itself at the ceiling, and a
+  timeout firing first kills the server before anything is written,
+  turning a useful non-converged report into no report at all. The
+  default therefore scales with the tick budget (4× the time the budget
+  would take at the requested `--speed`, plus setup) — Factorio's tick
+  loop is effectively single-threaded, so a large factory or a busy
+  machine simply runs slower than asked.
 - `--out FILE` — write the full JSON artifact: `{report, raw_result,
   sim_state, run_params, game_version}`. This file is what `bless`,
   `check`, and the web overlay consume — always pass it for anything you

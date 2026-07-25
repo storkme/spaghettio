@@ -143,10 +143,9 @@ fn cmd_run(args: &[String]) -> Result<(), String> {
         .map(|s| s.parse().map_err(|_| format!("--speed must be an integer, got '{s}'")))
         .transpose()?
         .unwrap_or(16);
-    let timeout_secs: u64 = flag_value(args, "--timeout-secs")
+    let timeout_secs: Option<u64> = flag_value(args, "--timeout-secs")
         .map(|s| s.parse().map_err(|_| format!("--timeout-secs must be an integer, got '{s}'")))
-        .transpose()?
-        .unwrap_or(900);
+        .transpose()?;
     let out_path = flag_value(args, "--out");
 
     let install_dir = paths::resolve_existing_install()?;
@@ -165,12 +164,17 @@ fn cmd_run(args: &[String]) -> Result<(), String> {
         params = params.with_warmup(w);
     }
     let lua = scenario::build_control_lua(&manifest, &bp, &params);
+    // Derived AFTER params so the wall-clock net always clears the run's
+    // own tick budget — a timeout that fires first turns a non-converged
+    // report into no report at all (#464 review).
+    let timeout_secs =
+        timeout_secs.unwrap_or_else(|| scenario::default_timeout_secs(params.end_tick, params.speed));
 
     let run_dir = orchestrate::prepare_run_dir(&install_dir, &scenario_name)?;
     orchestrate::write_scenario(&run_dir, &scenario_name, &lua)?;
     println!(
-        "Launching scenario '{scenario_name}' (warmup={} window={} ceiling={} speed={})...",
-        params.warmup_ticks, params.window_ticks, params.end_tick, params.speed
+        "Launching scenario '{scenario_name}' (warmup={} window={} ceiling={} speed={} timeout={}s)...",
+        params.warmup_ticks, params.window_ticks, params.end_tick, params.speed, timeout_secs
     );
     let outcome = orchestrate::launch_and_wait(&install_dir, &run_dir, &scenario_name, timeout_secs)?;
 

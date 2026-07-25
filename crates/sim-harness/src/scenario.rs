@@ -157,6 +157,40 @@ fn round_up_60(t: u32) -> u32 {
     t.div_ceil(60) * 60
 }
 
+/// Floor on the derived wall-clock timeout — the previous fixed default,
+/// kept so small fixtures are unaffected.
+const MIN_TIMEOUT_SECS: u64 = 900;
+
+/// Fixed allowance for server start, blueprint import and ghost revival,
+/// none of which scale with the tick budget (48k ghosts is the worst
+/// case measured).
+const TIMEOUT_SETUP_SECS: u64 = 180;
+
+/// How far short of the requested `game.speed` a run is allowed to fall
+/// before the wall-clock net fires. Factorio's tick loop is effectively
+/// single-threaded, so a big factory or a loaded box simply runs slower
+/// than asked: a 48k-entity fixture was measured at ~290 ticks/s against
+/// a requested 960 (`--speed 16`), i.e. ~3.3x short. 4x covers that with
+/// margin.
+const TIMEOUT_SLACK_FACTOR: f64 = 4.0;
+
+/// Wall-clock safety net for a run, derived from its own tick budget.
+///
+/// This is a net for a hung or crashed server, NOT a second tick budget:
+/// the scenario force-finalizes itself at `end_tick`. A timeout that
+/// lands BEFORE the ceiling silently converts a non-converged report
+/// (useful — it carries the rates and the drift) into no report at all,
+/// because `launch_and_wait` returns `Err` and the server is killed
+/// before anything is written. It would land there precisely on the
+/// slow, underperforming runs this harness exists to measure, so the
+/// default must scale with the budget rather than sit at a constant
+/// (#464 review).
+pub fn default_timeout_secs(end_tick: u32, speed: u32) -> u64 {
+    let expected_secs = end_tick as f64 / (60.0 * speed.max(1) as f64);
+    let derived = (expected_secs * TIMEOUT_SLACK_FACTOR).ceil() as u64 + TIMEOUT_SETUP_SECS;
+    derived.max(MIN_TIMEOUT_SECS)
+}
+
 /// Parameters controlling one `run` invocation, independent of the
 /// manifest itself.
 #[derive(Debug, Clone)]
@@ -1135,6 +1169,33 @@ mod tests {
         assert!(lua.contains(&format!("local STABILITY_WINDOWS = {STABILITY_WINDOWS}")));
         assert!(lua.contains("if n >= STABILITY_WINDOWS + 1 then"));
         assert!(lua.contains("(hi - lo) / lo <= STABILITY_TOL"));
+    }
+
+    /// The default wall-clock net must clear the run's own tick budget,
+    /// or a slow run is killed before it can write the non-converged
+    /// report that is the whole point of measuring it (#464 review).
+    #[test]
+    fn default_timeout_always_clears_the_tick_budget() {
+        let m = fixture();
+        for warmup in [0, 3_600, 160_000, 480_000] {
+            for speed in [1, 8, 16, 64] {
+                let p = RunParams::defaults_for(&m, "t".into(), speed, None).with_warmup(warmup);
+                let timeout = default_timeout_secs(p.end_tick, p.speed);
+                let at_requested_speed = p.end_tick as f64 / (60.0 * speed as f64);
+                assert!(
+                    timeout as f64 >= at_requested_speed,
+                    "warmup={warmup} speed={speed}: timeout {timeout}s < {at_requested_speed:.0}s \
+                     needed to reach end_tick {} even at the REQUESTED speed",
+                    p.end_tick
+                );
+            }
+        }
+        // The usp2 case the review flagged: 447,960 ticks at speed 16 is
+        // 466s at the requested rate and ~1545s at the ~290 ticks/s that
+        // fixture actually achieves — the old fixed 900s fell between.
+        assert!(default_timeout_secs(447_960, 16) > 1_545);
+        // Small fixtures keep the previous default.
+        assert_eq!(default_timeout_secs(12_000, 16), MIN_TIMEOUT_SECS);
     }
 
     #[test]
