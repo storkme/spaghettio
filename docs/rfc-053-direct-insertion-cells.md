@@ -608,9 +608,22 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
         downstream consumer — lane planner, output merger, validators —
         from special-casing cells.
 
-      The sentinel remedy is therefore not needed, and the "confirm it
-      empirically" remedy would have confirmed a property that does not
-      hold; (2) intercept the producer/consumer spec pair
+      **What the audit does and does not establish.** It shows #447's
+      *argument* was insufficient — three sites are reachable by a path
+      `di_input` does not guard. It does **not** show the property
+      itself is false. In fact the property probably does hold today,
+      via a guard #447 never cited: the merger loops iterate
+      `output_items`, built from `solver_result.external_outputs`, and
+      `detect_di_couplings` only couples an item with **no surplus**, so
+      a coupled item is never an external output and the producer row is
+      never selected there. Both #447 remedies were therefore
+      *reasonable*; an empirical check would have been a valid way to
+      test the claim. The fused row is preferred not because they were
+      wrong-headed but because it **stops depending on the question**:
+      its correctness rests on the row owning a real belt, not on a
+      solver-side invariant ("coupled items never carry surplus") that
+      Phase 3 could plausibly relax; (2) intercept the producer/consumer
+      spec pair
       in `place_rows` — note this restructures the main placement loop
       (skipping a spec, custom `y_cursor` accounting, `module_id` and
       stacking-context threading), which is the highest-risk part of
@@ -783,16 +796,31 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   **11** bare `output_belt_y` reads killed that inference: three of them
   (`ghost_router.rs:3435/:3519/:3603`, the output merger) select rows by
   `rs.spec.outputs`, never touching a `BusLane`, so `di_input` cannot
-  protect them. Both remedies #447 proposed were aimed at the wrong
-  target — "confirm it empirically" would have confirmed a property that
-  is not true, and the invalid sentinel would have converted a silent
-  bug into a loud one without removing it. **Resolved instead by
+  protect them. **Corrected after review (#449):** the first draft of
+  this entry escalated that into "the property is false, so both #447
+  remedies were aimed at the wrong target" — an overclaim the audit does
+  not support. Reachability by an unguarded path is not the same as a
+  phantom value actually being read. The property probably *does* hold
+  today, via a guard #447 never cited: the merger iterates
+  `output_items`, built from `solver_result.external_outputs`, and
+  `detect_di_couplings` only couples items with **no surplus**, so a
+  coupled item never appears there. An empirical check would have been a
+  perfectly valid way to test it. What the audit actually establishes is
+  narrower and still worth having: #447's stated *argument* did not
+  cover all the read sites, and the real guard is a different, narrower
+  one than the entry claimed. **Resolved instead by
   design**: a cell emits ONE fused `RowSpan` (producer's inputs +
   consumer's outputs, cell's real output belt) rather than two, so no
   row with a phantom output belt exists to be read. Recorded because the
   general lesson is cheap and repeatable: an inference about a field's
   read-paths is only as good as an exhaustive grep for that field, and
-  #447's was a partial one.*
+  #447's was a partial one. The **second** lesson came from the review
+  bot catching this entry's first draft overclaiming — "incomplete
+  argument" was evidence-backed, "false property" was not, and the two
+  are easy to conflate when you have just found a gap in someone's
+  reasoning. The fused row's real virtue is that it needs neither
+  question settled: it depends on the row owning a real belt, not on a
+  solver-side invariant that Phase 3 could relax.*
 
 - *2026-07-25 — **Phase 1's wiring target is retargeted off the RFC's own
   worked example.** `electronic-circuit` has two solid inputs
