@@ -4,7 +4,7 @@ Runs an exported layout in a **real headless Factorio server** and reports
 planned vs measured per-item rates. This is the ground-truth check the
 validator can't give you: the prototype run found an inserter-direction
 export bug that deadlocked every factory the project had ever exported,
-invisible to all 34 validation checks. Design rationale, kill criteria,
+invisible to all 36 validation checks. Design rationale, kill criteria,
 and the decision log live in
 [`rfc-050-headless-sim-harness.md`](rfc-050-headless-sim-harness.md); this
 doc is the how-to.
