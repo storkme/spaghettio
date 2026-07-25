@@ -1453,3 +1453,28 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   existing `fluid_port_pipes` machinery before stamping: ports are
   prototype-fixed per direction, so a pipe run that merely LOOKS adjacent
   may not connect.*
+
+  ***Implementation notes for the pipe cut, so they need not be
+  rediscovered.*** *Do NOT derive port tiles by hand — a pipe run that
+  merely looks adjacent may not connect, because ports are
+  prototype-fixed per direction. Reuse the shared table-driven module the
+  existing row templates already use (`bus/templates.rs:35`,
+  `fluid_input_port_dx`):*
+  - *`fluid_ports::north_input_orientation(entity)` → `(mirror, dir)`.
+    **Place the producer machines at that orientation**, exactly as
+    `single_input_row` does, so the delivered pipe lands on a real port.*
+  - *`fluid_ports::north_input_dxs(entity, mirror, dir)` → the port
+    columns.*
+  - *Geometry: the pipe run must be **adjacent** to the machine row, i.e.
+    at `machine_y - 1` (the row that holds feed inserters for a
+    solid-input producer). The belt row above it is simply unused for an
+    all-fluid producer. Consumers sharing the row are unaffected — EC has
+    no fluid box, so a continuous pipe run passing over its columns forms
+    no connection.*
+  - *Lane-planner integration goes through `RowSpan.fluid_port_ys` and
+    `fluid_port_pipes`, NOT `input_belt_y`: `lane_planner` has a separate
+    fluid branch (`if !rs.fluid_port_ys.is_empty() { tap_ys.push(...) }`).
+    The fused spec must therefore carry the producer's fluid input as a
+    fluid `ItemFlow` and the row must populate those fields, or the
+    molten-copper lane will never be tapped — the same class of silent
+    starve that the iron-plate ordering bug produced.*
