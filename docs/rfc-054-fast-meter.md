@@ -992,3 +992,42 @@ the right thing moved.
   measurement, a dead branch and a loose allowlist. Different failure modes,
   and neither list is a subset of the other — which is a better argument for
   running both than for preferring either.*
+- *2026-07-25 — **Merged into a pending review check, and it cost four
+  findings.** The* `claude-review` *run on the final commit was still going at
+  25 minutes, past any signature in* `docs/review-bot.md` *(a completed review
+  is ~8 min). It was judged hung and PR #460 was merged with it pending. It
+  was not hung: it completed **success** and posted four inline findings
+  minutes later, against code that was by then on* `main`*.*
+
+  ***The reasoning was wrong in a specific way worth naming.*** *The evidence
+  said the run was **unusual** — longer than anything previously recorded. It
+  was read as saying the run was **dead**. Those are different claims, and the
+  supporting argument ("the delta since its last completed review is one
+  markdown file") was irrelevant: the bot reviews the **whole PR diff**, not
+  the incremental delta, so a fresh run always has all the code to look at.
+  The argument justified a conclusion it did not actually support.*
+
+  ***Finding 1, fixed here: `Machine::tick` assigned craft progress instead of
+  accumulating it.*** `self.progress = self.craft_ticks` *discards the
+  overshoot from the craft that just finished, quantising the effective period
+  to* `ceil(craft_ticks)` *— a 4.5-tick recipe runs a 5-tick cycle, −10%
+  throughput, silently.*
+
+  ***This is the same defect fixed in `inserter.rs` earlier in this same
+  RFC***, *whose comment already states the rule and names* `Lane::tick`,
+  `Source::tick` *and* `Chest::tick` *as following it.* `Machine` *was the one
+  place that did not. A repeated-mistake sweep after the inserter fix would
+  have found it; none was done. The lesson generalises past this instance:
+  **when a bug class is identified, grep for the class, not the instance.***
+
+  ***And the story does not hold.*** *Corpus is **byte-identical** after the
+  fix — every corpus recipe has integer* `craft_ticks` *(24/48/384/480 at AM3
+  speed 1.25; plates smelt at furnace speed 2.0 → 96), so the quantisation
+  never bites. It would have been convenient for this to be part of the KC1
+  gap. It is not. Fixed on merit; the explanation is tested and negative.*
+
+  *Remaining three from that run — U7 (sideload onto a UG **input** fills the
+  FAR lane, a documented "critical quirk", with no* `UgInput` *carve-out in*
+  `link_downstream`*), silently-dropped unrecognised inserters (no* `notes`
+  *entry, unlike every other skip path), and* `converged` *hardcoded true with
+  no detector — are open and tracked in this branch.*
