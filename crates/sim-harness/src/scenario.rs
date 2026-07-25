@@ -510,6 +510,7 @@ pub fn build_control_lua(manifest: &Manifest, bp: &str, params: &RunParams) -> S
     let _ = writeln!(out, "local WARMUP_TICKS = {}", params.warmup_ticks);
     let _ = writeln!(out, "local WINDOW_TICKS = {}", params.window_ticks);
     let _ = writeln!(out, "local WINDOW_ITEM_FLOOR = {WINDOW_ITEM_FLOOR}");
+    let _ = writeln!(out, "local WINDOW_MIN_TICKS = {MIN_WINDOW_TICKS}");
     let _ = writeln!(
         out,
         "local WINDOW_TICK_CAP = {}",
@@ -941,7 +942,11 @@ script.on_nth_tick(60, function(ev)
       local prev = storage.checkpoints[n]
       local d_items = produced - prev.produced
       local d_ticks = ev.tick - prev.tick
-      local by_items = d_items >= WINDOW_ITEM_FLOOR
+      -- A fast target hits 300 items in well under the nominal window, so
+      -- the item floor alone could close a window shorter than the
+      -- producer's burst cycle -- reintroducing snapshot aliasing, which
+      -- MIN_WINDOW_TICKS exists to prevent. Both floors must be met.
+      local by_items = d_items >= WINDOW_ITEM_FLOOR and d_ticks >= WINDOW_MIN_TICKS
       if by_items or d_ticks >= WINDOW_TICK_CAP then
         table.insert(storage.checkpoints, {tick = ev.tick, produced = produced,
           delivered = delivered, window_ticks = d_ticks, window_items = d_items,
@@ -1069,8 +1074,12 @@ mod tests {
             "local WINDOW_TICK_CAP = {}",
             window_tick_cap(params.window_ticks)
         )));
-        // Closes on the item floor, with the tick cap as the bound.
-        assert!(lua.contains("local by_items = d_items >= WINDOW_ITEM_FLOOR"));
+        // Closes on the item floor, with the tick cap as the bound — and
+        // never shorter than MIN_WINDOW_TICKS, or a fast target would
+        // reach 300 items inside its own burst cycle and alias.
+        assert!(lua.contains(&format!("local WINDOW_MIN_TICKS = {MIN_WINDOW_TICKS}")));
+        assert!(lua
+            .contains("local by_items = d_items >= WINDOW_ITEM_FLOOR and d_ticks >= WINDOW_MIN_TICKS"));
         assert!(lua.contains("if by_items or d_ticks >= WINDOW_TICK_CAP then"));
         // Measurement opens exactly at warmup, not at whatever absolute
         // multiple of the window length happens to fall after it.
