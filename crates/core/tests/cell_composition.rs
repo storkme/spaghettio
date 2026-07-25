@@ -265,34 +265,104 @@ fn probe_chain_autoplace() {
     }
 }
 
+/// The chain sim fixtures, as one source of truth: label, target,
+/// rate, external inputs, **the capacity the geometry is BLESSED at**,
+/// and the declared levels to export.
+///
+/// The blessed capacity is a property of the frozen measurement, not a
+/// knob: these entries were measured before #431 moved the engine
+/// default to L2, so their geometry is L0 and must stay L0 for the
+/// committed numbers to mean anything. Re-blessing is what changes it.
+type ChainFixtureConfig = (&'static str, &'static str, f64, &'static [&'static str], u8, &'static [u8]);
+const CHAIN_FIXTURE_CONFIGS: &[ChainFixtureConfig] = &[
+    ("chain-ac1", "advanced-circuit", 1.0,
+     &["iron-plate", "copper-plate", "plastic-bar"], 0, &[0]),
+    ("chain-ec15", "electronic-circuit", 15.0,
+     &["iron-plate", "copper-plate"], 0, &[1, 2, 3, 5, 7]),
+    ("chain-ec30", "electronic-circuit", 30.0,
+     &["iron-plate", "copper-plate"], 0, &[1, 2, 3, 5, 7]),
+    ("chain-mil5ore", "military-science-pack", 5.0,
+     &["iron-ore", "copper-ore", "stone", "coal"], 0, &[0, 2, 3, 7]),
+    ("chain-mil5plates", "military-science-pack", 5.0,
+     &["iron-plate", "copper-plate", "steel-plate", "stone-brick", "coal"], 0, &[0, 2]),
+];
+
+/// PERMANENT GATE: the geometry `export_chain_fixtures_for_sim`
+/// actually writes must match a registered hash.
+///
+/// `cell_registry_hashes_current` re-derives geometry through
+/// `compose_chain_with_capacity` and so stayed green while the
+/// exporter — a *separate* code path calling bare `compose_chain` —
+/// silently drifted to the ambient default after #431. Two paths to
+/// one artifact, one of them checked. This gate watches the path that
+/// produces the bytes the sim and the meter actually consume.
+#[test]
+fn chain_fixture_geometry_matches_registry() {
+    use spaghettio_core::bus::cells::chain::compose_chain_with_capacity;
+    use spaghettio_core::bus::cells::registry::{entries, geometry_hash};
+    // Direction matters: registry -> fixtures. Several fixtures share a
+    // (target, rate) key and only one is blessed (mil5 ore vs plates),
+    // so "every fixture is registered" is false by construction; the
+    // real invariant is that every registered geometry is still
+    // reproducible by the table the exporter writes from.
+    let mut checked = 0;
+    for e in entries() {
+        let candidates: Vec<(&str, String)> = CHAIN_FIXTURE_CONFIGS
+            .iter()
+            .filter(|(_, item, rate, _, _, _)| *item == e.target && (rate - e.rate).abs() < 1e-9)
+            .map(|&(label, item, rate, inputs, geo_cap, _)| {
+                let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
+                let sr = solver::solve_with_palette_exclusions_and_quality(
+                    item, rate, &inputs_set, &MachinePalette::default(),
+                    "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+                ).unwrap();
+                let l = compose_chain_with_capacity(&sr, geo_cap).unwrap();
+                (label, format!("{:016x}", geometry_hash(&l)))
+            })
+            .collect();
+        if candidates.is_empty() {
+            continue; // mega / non-chain registry entries: covered by cell_registry_hashes_current
+        }
+        checked += 1;
+        assert!(candidates.iter().any(|(_, h)| *h == e.geometry_hash),
+            "{}@{}: registered geometry {} is no longer produced by any chain fixture config \
+             at its blessed capacity (fresh: {:?}). The exporter would write a DIFFERENT \
+             factory under the same label, and every sim/meter number taken against this \
+             baseline would silently compare two layouts — re-bless deliberately, never ignore.",
+            e.target, e.rate, e.geometry_hash, candidates);
+    }
+    assert!(checked > 0, "gate matched no registry entries — it has stopped testing anything");
+}
+
 /// Artifact producers for the chain auto-placer's sim runs. Each
 /// fixture exports at one or more DECLARED inserter-capacity levels
-/// (the `-dN` suffix): the declaration changes zero geometry pre-#381,
-/// only the world the parity harness builds — the declaration package
-/// registers each geometry at the lowest level that measures at plan.
+/// (the `-dN` suffix), which selects the world the parity harness
+/// builds — NOT the geometry.
+///
+/// **Geometry is built at [`CHAIN_FIXTURE_CONFIGS`]'s blessed
+/// capacity, never at the ambient engine default.** Until #431 the
+/// chain path hardcoded L0, so `compose_chain` + a post-hoc
+/// `inserter_capacity = lvl` stamp changed only the declaration and
+/// the distinction did not exist. #431 moved the default to L2, which
+/// silently began exporting L2 geometry under an L0 label: a fixture
+/// whose inserters are placed for L2 bonuses but which the harness
+/// then runs in an L0 world. `chain-mil5plates-d0` measured −40.7%
+/// that way against a blessed −3.3%, and every meter-vs-Factorio
+/// comparison built on these fixtures was between two different
+/// factories. Re-derive from the shared table so this cannot drift
+/// from `cell_registry_hashes_current` again.
 #[test]
 #[ignore = "artifact producer"]
 fn export_chain_fixtures_for_sim() {
-    use spaghettio_core::bus::cells::chain::compose_chain;
-    for (label, item, rate, inputs, levels) in [
-        ("chain-ac1", "advanced-circuit", 1.0,
-         &["iron-plate", "copper-plate", "plastic-bar"][..], &[0u8][..]),
-        ("chain-ec15", "electronic-circuit", 15.0,
-         &["iron-plate", "copper-plate"][..], &[1, 2, 3, 5, 7][..]),
-        ("chain-ec30", "electronic-circuit", 30.0,
-         &["iron-plate", "copper-plate"][..], &[1, 2, 3, 5, 7][..]),
-        ("chain-mil5ore", "military-science-pack", 5.0,
-         &["iron-ore", "copper-ore", "stone", "coal"][..], &[0, 2, 3, 7][..]),
-        ("chain-mil5plates", "military-science-pack", 5.0,
-         &["iron-plate", "copper-plate", "steel-plate", "stone-brick", "coal"][..], &[0, 2][..]),
-    ] {
+    use spaghettio_core::bus::cells::chain::compose_chain_with_capacity;
+    for &(label, item, rate, inputs, geo_cap, levels) in CHAIN_FIXTURE_CONFIGS {
         let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
         let sr = solver::solve_with_palette_exclusions_and_quality(
             item, rate, &inputs_set, &MachinePalette::default(),
             "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
         ).unwrap();
         for &lvl in levels {
-            let mut l = compose_chain(&sr).unwrap();
+            let mut l = compose_chain_with_capacity(&sr, geo_cap).unwrap();
             l.inserter_capacity = lvl;
             let tag = format!("{label}-d{lvl}");
             let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(&l, &sr, &tag);
