@@ -1921,7 +1921,25 @@ fn try_build_cell(
     let out_total = out_flow.rate * c_util * c_count as f64;
     let in_stack = ctx.for_item(&in_flow.item);
     let out_stack = ctx.for_item(&out_flow.item);
-    let in_belt = belt_entity_for_rate_stacked(in_total, max_belt_tier, in_stack);
+    // A cell's input belt is a bus tap-off target exactly like any other
+    // row's — `fused_cell_spec` puts the producer's input in the fused
+    // row's `inputs` and `input_belt_y` is registered normally, so
+    // `lane_planner` taps it the same way. It must therefore take the
+    // TRUNK's tier via `row_input_belt`, not a tier sized to this cell's
+    // local demand: the trunk is sized for total demand across every
+    // consumer, and a locally-sized belt reintroduces the seam mismatch
+    // `row_input_belt`'s doc comment exists to prevent (fast belt feeding
+    // yellow, lane-throughput warnings, items backing up at the join).
+    let in_belt = row_input_belt(max_belt_tier);
+    // Inserters pick from BOTH lanes (I6), so the input side has the
+    // belt's full capacity available — unlike the single-lane output.
+    // `belt_entity_for_rate_stacked` saturates rather than failing, so
+    // without this the cell would silently ship an undersized belt at
+    // high rates instead of refusing; `plan_straddle` is scale-invariant
+    // in machine count and would never catch it.
+    if lane_capacity_stacked(in_belt, in_stack) * 2.0 + 1e-9 < in_total {
+        return None;
+    }
     // The cell's output belt is physically SINGLE-LANE: every output
     // inserter sits at the same y facing the same way, so all drops land
     // in the far lane (I5). Size it the way the ordinary single-lane path
@@ -3576,6 +3594,34 @@ mod tests {
             lane + 1e-9 >= out_total,
             "single-lane capacity {lane}/s must cover the cell's {out_total}/s on {}",
             belt.name
+        );
+    }
+
+    /// #450 review: the cell's input belt is a bus tap-off target like any
+    /// other row's, so it must take the TRUNK tier (`row_input_belt`), not
+    /// a tier sized to the cell's local demand — otherwise a fast trunk
+    /// joins a yellow row belt and items back up at the seam.
+    #[test]
+    fn di_cell_input_belt_matches_the_trunk_tier() {
+        let (producer, consumer) = cell_pair();
+        let machines = vec![consumer, producer];
+        let dep_order = vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()];
+        // Cap at express: local demand is ~2/s (yellow would "fit"), so a
+        // locally-sized belt would pick yellow and mismatch the trunk.
+        let (ents, spans, _, _) = place_rows(
+            &machines, &dep_order, 0, 0, Some("express-transport-belt"),
+            InserterTier::default(), QualityTier::Normal,
+            crate::common::DEFAULT_INSERTER_CAPACITY, None, None, RowLayout::default(),
+            true, &gear_cell_couplings(), &StackingCtx::unstacked(),
+        );
+        assert_eq!(spans.len(), 1, "guard: needs a fused cell to mean anything");
+        let in_y = spans[0].input_belt_y[0];
+        let belt = ents.iter()
+            .find(|e| e.y == in_y && e.name.contains("transport-belt"))
+            .expect("input belt");
+        assert_eq!(
+            belt.name, "express-transport-belt",
+            "input belt must match the trunk tier, not the cell's local rate"
         );
     }
 

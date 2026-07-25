@@ -979,3 +979,32 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   (`.count`, lane capacity, the module key, the warning list) — which is
   the failure mode this RFC's own verification protocol exists to catch,
   and which three of four green test runs did not surface.*
+
+- *2026-07-25 — **Two more #450 findings, one of them missed on the first
+  fold-in, plus a CI gap that made every green on that PR meaningless.**
+  (a) The cell's input belt was sized from the cell's LOCAL demand, but
+  it is a bus tap-off target like any other row's input — `lane_planner`
+  taps it identically — so it must take the trunk tier via
+  `row_input_belt`, whose doc comment exists precisely to prevent the
+  seam mismatch I reintroduced (fast trunk feeding a yellow row belt,
+  lane-throughput warnings, items backing up at the join). I fixed the
+  output belt in the first pass and did not notice the input belt had the
+  same class of bug. (b) Neither belt refused on capacity:
+  `belt_entity_for_rate_stacked` **saturates** rather than failing, and
+  `plan_straddle` is scale-invariant in machine count, so any pair
+  eligible at rate R stays eligible at 100R while the belts silently
+  under-carry. Both sides now refuse. (c) **`ci.yml` triggers on
+  `pull_request: branches: [main]`, which filters the PR's BASE branch —
+  so #450, stacked on #449, got `ci.yml runs: 0` for its entire life.**
+  The signal was subtle and worth recording: on a docs-only PR the rust
+  jobs show `SKIPPED` (the `changes` filter ran), whereas on #450 they
+  were **absent** — never scheduled — while the two workflows that
+  aren't base-filtered passed and made the checks list look plausible.
+  This affects any stacked PR in the repo; widening the trigger is a
+  workflow-file change and deliberately left for a reviewed PR of its
+  own, given #369's history of an installer silently reverting these
+  files. Also worth noting for the next session: the review bot
+  **skipped** its later passes ("Claude has already left review comments
+  on this PR"), so a green `claude-review` on the fixed SHA is not
+  evidence the fixes were reviewed — the CLAUDE.md warning applies to
+  re-reviews too, not just first passes.*
