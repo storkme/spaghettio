@@ -1302,5 +1302,26 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   segment ids rather than the `row:...:belt-in:<item>` ids ordinary rows
   use, so the tap-off almost certainly never joins them to the bus —
   consistent with the belts being stamped by the cell rather than by the
-  row templates. **That is the first thing to fix next session**, and it
-  is a wiring gap, not a design fault.*
+  row templates.*
+
+  ***That hypothesis is DISPROVEN — probe it before acting on it.*** *Both
+  cell input belts do have tap-offs joined to them:
+  `copper-plate` at y=10 (x=6..44) with `ghost:tap:copper-plate:3:10`
+  immediately west, and `iron-plate` at y=16 with
+  `ghost:tap:iron-plate:4:16`. The stamped geometry matches the design
+  exactly (`p_belt=10, feed=11, machines=12-14, face=15, c_belt=16,
+  out=17`). Feeding is not the problem.*
+
+  ***Current best candidate: the merger fix traded an overlap for a
+  gap.*** *The cell's output belt ends at **x=44**, but
+  `merge_x_cursor` now starts east of EVERY row, and the copper-plate row
+  is ~48 wide — so the merge column begins beyond the cell's output belt.
+  If that belt is not extended east to meet it, `electronic-circuit` has
+  nowhere to go, backs up, and cascades upstream into precisely the
+  observed `full_output: 46`. Next session: check whether
+  `merge_output_rows` extends a participating row's output belt east from
+  `output_belt_x_max` (ordinary rows must rely on this), and if it does,
+  why the cell row is excluded. Note the cell row is NARROWER than a
+  non-participating row, which is the same asymmetry that caused the
+  original overlap — the merger appears to assume the output row is
+  widest in more than one place.*

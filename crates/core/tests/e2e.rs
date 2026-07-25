@@ -8166,6 +8166,35 @@ fn di_cell_kc3_export() {
     });
     println!("validation issues: {warnings}");
 
+    if let Ok(rowy) = std::env::var("KC3_ROWY") {
+        let ry: i32 = rowy.parse().unwrap();
+        println!("--- row y={ry}, x=0..30 ---");
+        let mut v: Vec<_> = l.entities.iter().filter(|e| e.y == ry && e.x < 30).collect();
+        v.sort_by_key(|e| e.x);
+        for e in v {
+            println!("  ({},{}) {:<24} seg={:?}", e.x, e.y, e.name, e.segment_id);
+        }
+    }
+    if std::env::var("KC3_CELLBELTS").is_ok() {
+        use std::collections::BTreeMap;
+        let mut rows: BTreeMap<i32, (String, i32, i32)> = BTreeMap::new();
+        for e in l.entities.iter().filter(|e| {
+            e.segment_id.as_deref().is_some_and(|s| s.starts_with("di-row:"))
+                && e.name.contains("transport-belt")
+        }) {
+            let ent = rows.entry(e.y).or_insert((e.carries.clone().unwrap_or_default(), i32::MAX, i32::MIN));
+            ent.1 = ent.1.min(e.x);
+            ent.2 = ent.2.max(e.x);
+        }
+        for (y, (item, xmin, xmax)) in &rows {
+            // Anything immediately west of the cell belt's start?
+            let west: Vec<&str> = l.entities.iter()
+                .filter(|e| e.y == *y && e.x == xmin - 1)
+                .map(|e| e.segment_id.as_deref().unwrap_or("?"))
+                .collect();
+            println!("CELLBELT y={y} item={item} x={xmin}..{xmax}  west_neighbour={west:?}");
+        }
+    }
     if std::env::var("KC3_PROBE").is_ok() {
         let (px, y0, y1) = (46i32, 18i32, 28i32);
         println!("--- entities at x={px}, y={y0}..{y1} ---");
