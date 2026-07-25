@@ -11,7 +11,7 @@ use crate::common::{
     belt_entity_for_rate, belt_entity_for_rate_stacked, lane_capacity, lane_capacity_stacked,
     machine_dims, utilization_for, QualityTier, BELT_TIERS,
 };
-use crate::models::{EntityDirection, MachineSpec, PlacedEntity, SolverResult};
+use crate::models::{EntityDirection, ItemFlow, MachineSpec, PlacedEntity, SolverResult};
 
 /// Best available per-lane capacity across all belt tiers.
 fn max_lane_capacity() -> f64 {
@@ -1757,6 +1757,231 @@ fn stamp_di_bridge(
     entities
 }
 
+// ---- RFC-053 Phase 1: direct-insertion cells ----
+
+/// Is this producer/consumer pair a **Phase 1** DI cell?
+///
+/// A cell fuses both rows into ONE structure with the coupled item never
+/// touching a belt. Phase 1 deliberately serves only the simplest shape;
+/// anything else falls back to #432's bridge, and then to the bus.
+///
+/// Every gate here is load-bearing:
+///
+/// - **The consumer's only solid input is the coupled item.** A cell
+///   spends the consumer's north face on the DI band and its south face
+///   on the output inserter, so a second solid input has nowhere to land
+///   until Phase 2's face allocation. This is **not** redundant with the
+///   solver: `netflow::detect_di_couplings` gates on one-producer /
+///   one-consumer / no-external-supply / no-surplus / not-fluid and never
+///   inspects the consumer's input count, so it emits `copper-cable →
+///   electronic-circuit` (iron-plate + copper-cable) like any other pair.
+///   Building that cell would strand the iron feed entirely — a layout
+///   that validates clean and starves, the #383/#432 failure mode.
+/// - **The producer has exactly one solid output** (the coupled item) and
+///   **exactly one solid input**, which becomes the cell's belt-fed
+///   input. A second producer output would need a belt the fused row
+///   doesn't have.
+/// - **No fluids on either side** — pipe placement is Phase 2 (the KC6
+///   re-scope).
+/// - **Equal machine footprints.** `plan_straddle` reasons about a single
+///   `machine_w`, and the stamper stacks both rows on one x-grid.
+fn cell_eligible(producer: &MachineSpec, consumer: &MachineSpec, item: &str) -> bool {
+    if producer.voider || consumer.voider {
+        return false;
+    }
+    if !producer.self_loop.is_empty() || !consumer.self_loop.is_empty() {
+        return false;
+    }
+    let any_fluid = |s: &MachineSpec| s.inputs.iter().chain(&s.outputs).any(|f| f.is_fluid);
+    if any_fluid(producer) || any_fluid(consumer) {
+        return false;
+    }
+    let solids = |fs: &[ItemFlow]| -> Vec<String> {
+        fs.iter().filter(|f| !f.is_fluid).map(|f| f.item.clone()).collect()
+    };
+    let (p_in, p_out) = (solids(&producer.inputs), solids(&producer.outputs));
+    let (c_in, c_out) = (solids(&consumer.inputs), solids(&consumer.outputs));
+
+    p_out.len() == 1
+        && p_out[0] == item
+        && p_in.len() == 1
+        // THE Phase-1 gate — see the doc comment.
+        && c_in.len() == 1
+        && c_in[0] == item
+        && c_out.len() == 1
+        && machine_dims(&producer.entity) == machine_dims(&consumer.entity)
+}
+
+/// The `MachineSpec` a fused cell presents to the rest of the pipeline.
+///
+/// A cell is one structure that draws the PRODUCER's input off a belt and
+/// puts the CONSUMER's output onto a belt; the coupled item exists only
+/// inside it. So the fused spec carries the producer's inputs and the
+/// consumer's outputs — exactly what `lane_planner`, the output merger and
+/// the validators already know how to read, with no cell special-casing
+/// anywhere downstream.
+///
+/// This is also what dissolves the Phase-1c contract question from #447:
+/// because the producer never gets a row of its own, no `RowSpan` is ever
+/// built whose `output_belt_y` points at a belt that wasn't emitted. The
+/// single fused row owns a real output belt, so all 11 bare
+/// `output_belt_y` read sites — including the three output-merger ones
+/// that select rows by `spec.outputs` and never consult a `BusLane` — are
+/// correct by construction.
+///
+/// Rates are per-CONSUMER-machine, because the fused row's
+/// `machine_count` is the consumer count: the output belt must carry
+/// `consumer_count × consumer_rate`, and the input belt
+/// `producer_count × producer_input_rate`. Scaling the latter by
+/// `producer_count / consumer_count` keeps `rate × machine_count` right
+/// for both.
+fn fused_cell_spec(
+    producer: &MachineSpec,
+    consumer: &MachineSpec,
+    producer_count: usize,
+    consumer_count: usize,
+) -> MachineSpec {
+    let scale = producer_count as f64 / consumer_count.max(1) as f64;
+    MachineSpec {
+        entity: consumer.entity.clone(),
+        recipe: consumer.recipe.clone(),
+        self_loop: Vec::new(),
+        voider: false,
+        game_modules: consumer.game_modules.clone(),
+        count: consumer_count as f64,
+        inputs: producer
+            .inputs
+            .iter()
+            .map(|f| ItemFlow { rate: f.rate * scale, ..f.clone() })
+            .collect(),
+        outputs: consumer.outputs.clone(),
+    }
+}
+
+/// Try to emit a fused DI cell for an eligible pair.
+///
+/// `None` on any refusal — no straddle exists, the ladder can't cover the
+/// binding edge, the stamper rejects the geometry — and the caller then
+/// places both specs as ordinary rows, where the #432 bridge (and failing
+/// that, the bus) serves the coupling. Refusing is always safe; emitting
+/// an under-fed cell is not.
+#[allow(clippy::too_many_arguments)]
+fn try_build_cell(
+    producer: &MachineSpec,
+    consumer: &MachineSpec,
+    item: &str,
+    bus_width: i32,
+    y_cursor: i32,
+    max_belt_tier: Option<&str>,
+    max_inserter_tier: InserterTier,
+    quality: QualityTier,
+    level: u8,
+    ctx: &StackingCtx,
+) -> Option<(Vec<PlacedEntity>, RowSpan, i32)> {
+    use crate::bus::di_cell::{plan_straddle, stamp_di_cell_io, DiCellIo, DiCellSpec};
+    use crate::bus::inserter_ladder::{size_belt_drop_side, size_side, Reach};
+
+    let snap = |c: f64| -> usize {
+        let s = if (c - c.round()).abs() < 1e-9 { c.round() } else { c.ceil() };
+        (s as usize).max(1)
+    };
+    let (p_count, c_count) = (snap(producer.count), snap(consumer.count));
+    let (mw, mh) = machine_dims(&consumer.entity);
+    let (mw, mh) = (mw as i32, mh as i32);
+
+    let p_util = utilization_for(producer);
+    let c_util = utilization_for(consumer);
+    let producer_rate = producer.outputs.iter().find(|f| f.item == item)?.rate * p_util;
+    let consumer_rate = consumer.inputs.iter().find(|f| f.item == item)?.rate * c_util;
+
+    let plan = plan_straddle(p_count, c_count, producer_rate, consumer_rate, mw)?;
+
+    // Couple with the cheapest inserter covering the busiest edge's
+    // per-slot share. `Reach::Near` is a constraint, not a preference: the
+    // cell puts the two rows ONE tile apart, and long-handed reaches to
+    // exactly 2 (I8a), so it would pick straight past both machines.
+    let ins = size_side(plan.required_rate(), Reach::Near, 0, max_inserter_tier, quality, level);
+    let ins_rate = crate::common::machine_feed_rate(ins.entity, quality, level);
+
+    let in_flow = producer.inputs.iter().find(|f| !f.is_fluid)?;
+    let out_flow = consumer.outputs.iter().find(|f| !f.is_fluid)?;
+    let in_total = in_flow.rate * p_util * p_count as f64;
+    let out_total = out_flow.rate * c_util * c_count as f64;
+    let in_stack = ctx.for_item(&in_flow.item);
+    let out_stack = ctx.for_item(&out_flow.item);
+    let in_belt = belt_entity_for_rate_stacked(in_total, max_belt_tier, in_stack);
+    let out_belt = belt_entity_for_rate_stacked(out_total, max_belt_tier, out_stack);
+
+    // Feed and output faces get the machine's own spare columns, so a
+    // single-inserter face isn't an implicit throughput cap.
+    let budget = (mw.max(1) as usize) - 1;
+    let feed = size_side(in_flow.rate * p_util, Reach::Near, budget, max_inserter_tier, quality, level);
+    let drop = size_belt_drop_side(
+        out_flow.rate * c_util,
+        Reach::Near,
+        budget,
+        max_inserter_tier,
+        quality,
+        out_stack,
+        level,
+        out_belt,
+    );
+
+    let cell = stamp_di_cell_io(
+        &plan,
+        &DiCellSpec {
+            producer_entity: &producer.entity,
+            consumer_entity: &consumer.entity,
+            producer_recipe: &producer.recipe,
+            consumer_recipe: &consumer.recipe,
+            item,
+            inserter: ins.entity,
+            inserter_rate: ins_rate,
+        },
+        &DiCellIo {
+            input_item: &in_flow.item,
+            input_belt: in_belt,
+            feed_inserter: feed.entity,
+            output_item: &out_flow.item,
+            output_belt: out_belt,
+            out_inserter: drop.entity,
+        },
+        bus_width,
+        y_cursor,
+        mw,
+        mh,
+    )?;
+
+    let width = cell.x_max + 1;
+    let span = RowSpan {
+        y_start: cell.input_belt_y,
+        y_end: cell.output_belt_y + 1,
+        spec: fused_cell_spec(producer, consumer, p_count, c_count),
+        machine_count: c_count,
+        module_id: consumer.outputs.first().map(|o| o.module_id).unwrap_or(0),
+        input_belt_y: vec![cell.input_belt_y],
+        output_belt_y: cell.output_belt_y,
+        row_width: width,
+        fluid_port_ys: Vec::new(),
+        fluid_port_pipes: Vec::new(),
+        fluid_output_port_pipes: Vec::new(),
+        output_east: true,
+        output_belt_x_min: cell.x_min,
+        output_belt_x_max: cell.x_max,
+        horizontal_stack: None,
+        secondary_output_belt: None,
+        sorted_output_belts: Vec::new(),
+        // Deliberately empty, and NOT an oversight. `di_input` exists to
+        // tell the lane planner "this row consumes the item off a bridge,
+        // don't build it a bus lane". A cell needs no such marker: the
+        // fused spec's inputs are the PRODUCER's, so the coupled item
+        // appears in no row's inputs, and no row produces it either — the
+        // lane simply never comes into existence.
+        di_input: Vec::new(),
+    };
+    Some((cell.entities, span, width))
+}
+
 /// Place assembly rows stacked vertically.
 ///
 /// When a recipe needs more machines than a single belt can handle,
@@ -1829,7 +2054,50 @@ pub fn place_rows(
     // under-fed. See the multi-row refusal at the marking site below.
     let mut recipe_row_idxs: FxHashMap<&str, Vec<usize>> = FxHashMap::default();
 
+    // RFC-053 Phase 1: producer spec index → consumer spec index for pairs
+    // that can fuse into a DI cell. Precomputed so the producer half is
+    // recognisable when the loop reaches it — `order_specs` is a
+    // topological sort, so the producer is always the earlier of the two,
+    // though not necessarily adjacent.
+    //
+    // Both halves must be un-split (one `MachineSpec` each, one row each):
+    // a cell couples specific machines at specific x positions, so a
+    // producer spread over several rows would leave every row but one
+    // stranded. That is the same refusal the bridge makes for split
+    // producers, and it is Phase 3 work (the multi-band cell).
+    let mut cell_pairs: FxHashMap<usize, (usize, &str)> = FxHashMap::default();
+    if direct_insertion {
+        for (c_idx, c_spec) in ordered.iter().enumerate() {
+            let Some(couplings) = di_lookup.get(c_spec.recipe.as_str()) else {
+                continue;
+            };
+            // A consumer coupled on two items cannot be a Phase-1 cell:
+            // its second input has no free face.
+            let [(item, producer_recipe)] = couplings[..] else {
+                continue;
+            };
+            let same_recipe = |r: &str| ordered.iter().filter(|s| s.recipe == r).count();
+            if same_recipe(producer_recipe) != 1 || same_recipe(&c_spec.recipe) != 1 {
+                continue;
+            }
+            let Some(p_idx) = ordered.iter().position(|s| s.recipe == producer_recipe) else {
+                continue;
+            };
+            if p_idx >= c_idx || !cell_eligible(ordered[p_idx], c_spec, item) {
+                continue;
+            }
+            cell_pairs.insert(p_idx, (c_idx, item));
+        }
+    }
+    // Consumer specs already absorbed into a cell; skipped by the loop.
+    let mut fused_specs: FxHashSet<usize> = FxHashSet::default();
+
     for (spec_idx, spec) in ordered.iter().enumerate() {
+        // Before the inter-recipe gap, so an absorbed consumer leaves no
+        // phantom 2-tile hole where its row would have been.
+        if fused_specs.contains(&spec_idx) {
+            continue;
+        }
         // The inter-recipe gap is always present — for DI pairs, the gap
         // houses the bridge inserter that spans from the producer's output
         // belt to the consumer's input belt. Without the gap, the belts
@@ -1845,6 +2113,48 @@ pub fn place_rows(
         // a machine in most rows, and trips template assertions in others
         // (#277 utility-science-pack: 1.0000000000000002 advanced-oil-
         // processing → machine_count=2 → staggered-3-output panic).
+        // RFC-053 Phase 1: fuse an eligible pair into one cell row. On any
+        // refusal fall through to the normal path, where the #432 bridge
+        // (and failing that, the bus) still serves the coupling.
+        if let Some(&(c_idx, item)) = cell_pairs.get(&spec_idx) {
+            if let Some((cell_ents, span, width)) = try_build_cell(
+                spec,
+                ordered[c_idx],
+                item,
+                bus_width,
+                y_cursor,
+                max_belt_tier,
+                max_inserter_tier,
+                quality,
+                inserter_capacity,
+                ctx,
+            ) {
+                fused_specs.insert(c_idx);
+                max_width = max_width.max(width);
+                let row_idx = row_spans.len();
+                // Register under BOTH recipes: the cell is the producer's
+                // only placement, so a later consumer looking up the
+                // producer's rows must find this one rather than nothing.
+                recipe_row_idxs.entry(spec.recipe.as_str()).or_default().push(row_idx);
+                recipe_row_idxs
+                    .entry(ordered[c_idx].recipe.as_str())
+                    .or_default()
+                    .push(row_idx);
+                let y_end = span.y_end;
+                entities.extend(cell_ents);
+                row_spans.push(span);
+                y_cursor = y_end + extra_gaps.get(&row_idx).copied().unwrap_or(0);
+                continue;
+            }
+            crate::trace::emit(crate::trace::TraceEvent::GhostSpecFailed {
+                spec_key: format!("di-cell:{item}:refused"),
+                from_x: 0,
+                from_y: y_cursor,
+                to_x: 0,
+                to_y: y_cursor,
+            });
+        }
+
         let total_count = {
             let c = spec.count;
             let snapped = if (c - c.round()).abs() < 1e-9 { c.round() } else { c.ceil() };
@@ -2340,7 +2650,8 @@ mod tests {
 
     #[test]
     fn place_rows_two_recipes_ordered() {
-        let machines = vec![iron_gear_spec(), iron_plate_spec()];
+        let (producer, consumer) = cell_pair();
+        let machines = vec![consumer, producer];
         let dep_order = vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()];
         let (_, spans, _, _) = place_rows(&machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal, 0, None, None, RowLayout::default(), false, &[], &StackingCtx::unstacked());
         assert_eq!(spans.len(), 2);
@@ -3000,4 +3311,167 @@ mod tests {
         counts.sort();
         assert_eq!(counts, vec![5, 7], "both EC siblings must appear with their original counts");
     }
+    // ---- RFC-053 Phase 1: DI cells ----
+
+    /// Flow-BALANCED cell pair: 2 plate machines at 1.0/s feed 1 gear
+    /// machine at 2.0/s. The balance matters — `plan_straddle` refuses a
+    /// pair whose supply and demand disagree, so the shared
+    /// `iron_plate_spec`/`iron_gear_spec` helpers (1.0/s against 2.0/s)
+    /// cannot form a cell and would make these tests pass vacuously.
+    fn cell_pair() -> (MachineSpec, MachineSpec) {
+        let mut producer = iron_plate_spec();
+        producer.count = 2.0;
+        let consumer = iron_gear_spec();
+        (producer, consumer)
+    }
+
+    fn gear_cell_couplings() -> Vec<crate::models::DICoupling> {
+        vec![crate::models::DICoupling {
+            producer_recipe: "iron-plate".to_string(),
+            consumer_recipe: "iron-gear-wheel".to_string(),
+            item: "iron-plate".to_string(),
+            producer_count: 2.0,
+            consumer_count: 1.0,
+        }]
+    }
+
+    /// The defining property: an eligible pair collapses to ONE row, and
+    /// the coupled item never appears on a belt.
+    #[test]
+    fn di_cell_fuses_eligible_pair() {
+        let (producer, consumer) = cell_pair();
+        let machines = vec![consumer, producer];
+        let dep_order = vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()];
+        let (ents, spans, _, _) = place_rows(
+            &machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal,
+            crate::common::DEFAULT_INSERTER_CAPACITY, None, None, RowLayout::default(),
+            true, &gear_cell_couplings(), &StackingCtx::unstacked(),
+        );
+        assert_eq!(spans.len(), 1, "producer + consumer must fuse into one cell row, got {:?}",
+            spans.iter().map(|s| s.spec.recipe.as_str()).collect::<Vec<_>>());
+
+        // The fused spec is a composite machine: producer's input in,
+        // consumer's output out.
+        let sp = &spans[0];
+        assert_eq!(sp.spec.recipe, "iron-gear-wheel");
+        assert_eq!(sp.spec.inputs.iter().map(|f| f.item.as_str()).collect::<Vec<_>>(), vec!["iron-ore"]);
+        assert_eq!(sp.spec.outputs.iter().map(|f| f.item.as_str()).collect::<Vec<_>>(), vec!["iron-gear-wheel"]);
+
+        // No belt anywhere carries the coupled item — the whole point.
+        let belts: Vec<&PlacedEntity> = ents.iter()
+            .filter(|e| e.name.contains("transport-belt") || e.name.contains("underground-belt"))
+            .collect();
+        assert!(
+            !belts.iter().any(|e| e.carries.as_deref() == Some("iron-plate")),
+            "coupled item must never reach a belt; found {:?}",
+            belts.iter().filter(|e| e.carries.as_deref() == Some("iron-plate"))
+                 .map(|e| (e.x, e.y)).collect::<Vec<_>>()
+        );
+        // ...and it IS moved, by reach-1 inserters between the machines.
+        assert!(
+            ents.iter().any(|e| e.name.contains("inserter")
+                && e.carries.as_deref() == Some("iron-plate")),
+            "the cell must actually couple the item"
+        );
+    }
+
+    /// A cell's fused row owns a REAL output belt — this is what makes the
+    /// #447 contract question moot rather than merely unlikely to bite.
+    #[test]
+    fn di_cell_row_has_a_real_output_belt() {
+        let (producer, consumer) = cell_pair();
+        let machines = vec![consumer, producer];
+        let dep_order = vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()];
+        let (ents, spans, _, _) = place_rows(
+            &machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal,
+            crate::common::DEFAULT_INSERTER_CAPACITY, None, None, RowLayout::default(),
+            true, &gear_cell_couplings(), &StackingCtx::unstacked(),
+        );
+        assert_eq!(spans.len(), 1, "guard: this asserts nothing unless a cell was actually fused");
+        let y = spans[0].output_belt_y;
+        assert!(
+            ents.iter().any(|e| e.y == y && e.name.contains("transport-belt")),
+            "output_belt_y={y} must point at an emitted belt, not a phantom"
+        );
+    }
+
+    /// The Phase-1 gate. `detect_di_couplings` emits cable->EC without
+    /// looking at the consumer's input count, so the placer must refuse it:
+    /// EC's second solid input (iron-plate) has no free face in a cell, and
+    /// fusing anyway yields a layout that validates clean and starves.
+    #[test]
+    fn di_cell_refuses_multi_input_consumer() {
+        let cable = MachineSpec {
+            entity: "assembling-machine-2".to_string(),
+            recipe: "copper-cable".to_string(),
+            self_loop: vec![], voider: false, game_modules: Vec::new(),
+            count: 3.0,
+            inputs: vec![ItemFlow { item: "copper-plate".to_string(), rate: 2.5, is_fluid: false, module_id: 0 }],
+            outputs: vec![ItemFlow { item: "copper-cable".to_string(), rate: 5.0, is_fluid: false, module_id: 0 }],
+        };
+        let ec = MachineSpec {
+            entity: "assembling-machine-2".to_string(),
+            recipe: "electronic-circuit".to_string(),
+            self_loop: vec![], voider: false, game_modules: Vec::new(),
+            count: 2.0,
+            inputs: vec![
+                ItemFlow { item: "iron-plate".to_string(), rate: 2.5, is_fluid: false, module_id: 0 },
+                ItemFlow { item: "copper-cable".to_string(), rate: 7.5, is_fluid: false, module_id: 0 },
+            ],
+            outputs: vec![ItemFlow { item: "electronic-circuit".to_string(), rate: 2.5, is_fluid: false, module_id: 0 }],
+        };
+        assert!(
+            !cell_eligible(&cable, &ec, "copper-cable"),
+            "EC has two solid inputs — not a Phase 1 cell"
+        );
+        let machines = vec![ec, cable];
+        let dep_order = vec!["copper-cable".to_string(), "electronic-circuit".to_string()];
+        let couplings = vec![crate::models::DICoupling {
+            producer_recipe: "copper-cable".to_string(),
+            consumer_recipe: "electronic-circuit".to_string(),
+            item: "copper-cable".to_string(),
+            producer_count: 3.0,
+            consumer_count: 2.0,
+        }];
+        let (_, spans, _, _) = place_rows(
+            &machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal,
+            crate::common::DEFAULT_INSERTER_CAPACITY, None, None, RowLayout::default(),
+            true, &couplings, &StackingCtx::unstacked(),
+        );
+        // Row-splitting can push this past two rows; what matters is that
+        // the producer still owns a row of its own, i.e. nothing fused.
+        assert!(
+            spans.iter().any(|s| s.spec.recipe == "copper-cable"),
+            "producer must keep its own row (no fusion); got {:?}",
+            spans.iter().map(|s| s.spec.recipe.as_str()).collect::<Vec<_>>()
+        );
+    }
+
+    /// DI off is the default and must stay bit-identical: no fusion.
+    #[test]
+    fn di_cell_inert_when_direct_insertion_off() {
+        let (producer, consumer) = cell_pair();
+        let machines = vec![consumer, producer];
+        let dep_order = vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()];
+        let (_, spans, _, _) = place_rows(
+            &machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal,
+            crate::common::DEFAULT_INSERTER_CAPACITY, None, None, RowLayout::default(),
+            false, &gear_cell_couplings(), &StackingCtx::unstacked(),
+        );
+        assert_eq!(spans.len(), 2, "DI off must not fuse");
+    }
+
+    /// Fluids on either side are Phase 2 (the KC6 re-scope), not Phase 1.
+    #[test]
+    fn di_cell_refuses_fluid_touching_pair() {
+        let mut producer = iron_plate_spec();
+        producer.inputs.push(ItemFlow {
+            item: "water".to_string(), rate: 10.0, is_fluid: true, module_id: 0,
+        });
+        assert!(
+            !cell_eligible(&producer, &iron_gear_spec(), "iron-plate"),
+            "fluid-touching pairs are Phase 2"
+        );
+    }
+
 }
