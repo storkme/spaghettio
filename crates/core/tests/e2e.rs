@@ -8108,6 +8108,26 @@ fn di_cell_kc3_export() {
         .count();
     println!("di-cell entities: {cell_ents}   di-bridge entities: {bridge_ents}");
 
+    // KC3 is specifically about a layout that VALIDATES CLEAN yet
+    // under-delivers, so the warning list is part of the measurement,
+    // not a footnote — a warned layout would make the sim number
+    // uninterpretable against this criterion.
+    let warnings = spaghettio_core::validate::validate(
+        &l,
+        Some(&sr),
+        spaghettio_core::validate::LayoutStyle::Bus,
+    )
+    .map(|w| w.len())
+    .unwrap_or_else(|e| {
+        let errs = e.issues.iter().filter(|i| format!("{:?}", i.severity) == "Error").count();
+        println!("VALIDATION ERRORS: {errs}");
+        let mut by_cat: std::collections::BTreeMap<&str, usize> = Default::default();
+        for i in &e.issues { *by_cat.entry(i.category.as_str()).or_default() += 1; }
+        for (c, n) in &by_cat { println!("  {c}: {n}"); }
+        e.issues.len()
+    });
+    println!("validation issues: {warnings}");
+
     let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(&l, &sr, "di-cell-kc3");
     let tag = if di { "di_cell_kc3" } else { "di_cell_kc3_control" };
     std::fs::write(format!("/tmp/{tag}.bp"), &bp).expect("write bp");

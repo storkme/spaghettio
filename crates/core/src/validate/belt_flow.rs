@@ -1267,7 +1267,19 @@ pub fn check_output_belt_coverage(
             }
         }
 
-        if !has_output_belt {
+        // RFC-053: a DI-cell producer's output leaves by inserter into the
+        // consumer machine, never onto a belt. See `is_di_cell_entity`.
+        let served_by_di_cell = layout.entities.iter().any(|ins| {
+            is_inserter(&ins.name)
+                && super::is_di_cell_entity(ins.segment_id.as_deref())
+                && {
+                    let (dx, dy) = dir_to_vec(ins.direction);
+                    let reach = inserter_reach(&ins.name);
+                    my_tiles.contains(&(ins.x - dx * reach, ins.y - dy * reach))
+                }
+        });
+
+        if !has_output_belt && !served_by_di_cell {
             issues.push(ValidationIssue::with_pos(
                 Severity::Error,
                 "output-belt",

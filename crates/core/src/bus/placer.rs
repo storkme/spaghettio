@@ -1789,6 +1789,18 @@ fn cell_eligible(producer: &MachineSpec, consumer: &MachineSpec, item: &str) -> 
     if producer.voider || consumer.voider {
         return false;
     }
+    // Modules: refuse outright. The module post-pass in `layout.rs` keys
+    // loadouts by `(entity, recipe)` gathered from `row_spans`, and a
+    // fused cell contributes only the CONSUMER's recipe — the producer's
+    // recipe never appears, so producer machines (which do carry it) would
+    // get nothing stamped while the solver has already folded the module
+    // speed/productivity bonus into their machine count. That is a silent
+    // production shortfall, not a cosmetic gap, and matching loadouts
+    // wouldn't fix it because the key itself is missing. Honest refusal
+    // until module stamping can be keyed per-segment (Phase 2+).
+    if !producer.game_modules.is_empty() || !consumer.game_modules.is_empty() {
+        return false;
+    }
     if !producer.self_loop.is_empty() || !consumer.self_loop.is_empty() {
         return false;
     }
@@ -1910,22 +1922,43 @@ fn try_build_cell(
     let in_stack = ctx.for_item(&in_flow.item);
     let out_stack = ctx.for_item(&out_flow.item);
     let in_belt = belt_entity_for_rate_stacked(in_total, max_belt_tier, in_stack);
-    let out_belt = belt_entity_for_rate_stacked(out_total, max_belt_tier, out_stack);
+    // The cell's output belt is physically SINGLE-LANE: every output
+    // inserter sits at the same y facing the same way, so all drops land
+    // in the far lane (I5). Size it the way the ordinary single-lane path
+    // does — against `rate * 2.0`, i.e. "a belt whose LANE capacity covers
+    // the rate" — then verify. Sizing against `out_total` raw picks a belt
+    // with half the capacity actually available.
+    let out_belt = belt_entity_for_rate_stacked(out_total * 2.0, max_belt_tier, out_stack);
+    if lane_capacity_stacked(out_belt, out_stack) + 1e-9 < out_total {
+        // Too much output for one lane. The ordinary path would split the
+        // recipe across rows; a cell cannot (its machines are placed at
+        // `StraddlePlan` positions, and splitting needs the Phase 3
+        // multi-band shape). Refuse instead of shipping a belt that
+        // silently caps the cell.
+        return None;
+    }
 
-    // Feed and output faces get the machine's own spare columns, so a
-    // single-inserter face isn't an implicit throughput cap.
-    let budget = (mw.max(1) as usize) - 1;
-    let feed = size_side(in_flow.rate * p_util, Reach::Near, budget, max_inserter_tier, quality, level);
+    // Phase 1 stamps exactly ONE inserter per feed/output position —
+    // `DiCellIo` carries an entity name, not a count, so a `SidePlan`
+    // asking for more cannot be honoured. Size against a single slot and
+    // refuse when one inserter (or the ladder's best effort) can't cover
+    // the face, rather than discarding `count`/`shortfall` and quietly
+    // under-feeding. Multi-inserter faces need the stamper to take counts;
+    // that is Phase 2 work alongside face allocation.
+    let feed = size_side(in_flow.rate * p_util, Reach::Near, 0, max_inserter_tier, quality, level);
     let drop = size_belt_drop_side(
         out_flow.rate * c_util,
         Reach::Near,
-        budget,
+        0,
         max_inserter_tier,
         quality,
         out_stack,
         level,
         out_belt,
     );
+    if feed.count > 1 || drop.count > 1 || feed.shortfall.is_some() || drop.shortfall.is_some() {
+        return None;
+    }
 
     let cell = stamp_di_cell_io(
         &plan,
@@ -3471,6 +3504,78 @@ mod tests {
         assert!(
             !cell_eligible(&producer, &iron_gear_spec(), "iron-plate"),
             "fluid-touching pairs are Phase 2"
+        );
+    }
+
+    /// #450 review: a producer's module loadout would be silently dropped
+    /// (the module post-pass keys on `(entity, recipe)` from `row_spans`,
+    /// and a cell contributes only the consumer's recipe) while the solver
+    /// has already folded the bonus into machine counts. Refuse instead.
+    #[test]
+    fn di_cell_refuses_when_modules_are_present() {
+        let (mut producer, consumer) = cell_pair();
+        producer.game_modules = vec![crate::models::ModuleItem {
+            item: "productivity-module".to_string(),
+            count: 2,
+            quality: None,
+        }];
+        assert!(
+            !cell_eligible(&producer, &consumer, "iron-plate"),
+            "a module loadout the cell cannot stamp must refuse fusion"
+        );
+    }
+
+    /// #450 review: `SidePlan.count`/`.shortfall` were computed and
+    /// discarded, but `DiCellIo` carries an entity name and no count — so
+    /// a face needing 2+ inserters was stamped with one and silently
+    /// under-fed. Regular tier can't move 2.0/s in one hand, so this pair
+    /// must refuse rather than fuse.
+    #[test]
+    fn di_cell_refuses_when_a_face_needs_more_than_one_inserter() {
+        let (producer, consumer) = cell_pair();
+        let machines = vec![consumer, producer];
+        let dep_order = vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()];
+        let (_, spans, _, _) = place_rows(
+            &machines, &dep_order, 0, 0, None, InserterTier::Regular, QualityTier::Normal,
+            0, None, None, RowLayout::default(),
+            true, &gear_cell_couplings(), &StackingCtx::unstacked(),
+        );
+        assert_eq!(
+            spans.len(), 2,
+            "Regular tier at L0 cannot cover the feed face with one inserter — must refuse, \
+             not stamp one inserter and under-feed"
+        );
+    }
+
+    /// #450 review: the cell's output belt is physically single-lane (all
+    /// output inserters share a y and a facing, so every drop lands in the
+    /// far lane), so it must be sized against `rate * 2.0` like every other
+    /// single-lane row. Sizing against the raw rate picked a belt with half
+    /// the usable capacity.
+    #[test]
+    fn di_cell_output_belt_is_sized_for_a_single_lane() {
+        let (producer, consumer) = cell_pair();
+        let machines = vec![consumer, producer];
+        let dep_order = vec!["iron-plate".to_string(), "iron-gear-wheel".to_string()];
+        let (ents, spans, _, _) = place_rows(
+            &machines, &dep_order, 0, 0, None, InserterTier::default(), QualityTier::Normal,
+            crate::common::DEFAULT_INSERTER_CAPACITY, None, None, RowLayout::default(),
+            true, &gear_cell_couplings(), &StackingCtx::unstacked(),
+        );
+        assert_eq!(spans.len(), 1, "guard: needs a fused cell to mean anything");
+        let out_y = spans[0].output_belt_y;
+        let belt = ents.iter()
+            .find(|e| e.y == out_y && e.name.contains("transport-belt"))
+            .expect("output belt");
+        let out_total: f64 = spans[0].spec.outputs.iter()
+            .filter(|f| !f.is_fluid)
+            .map(|f| f.rate * spans[0].machine_count as f64)
+            .sum();
+        let lane = crate::common::lane_capacity_stacked(&belt.name, 1);
+        assert!(
+            lane + 1e-9 >= out_total,
+            "single-lane capacity {lane}/s must cover the cell's {out_total}/s on {}",
+            belt.name
         );
     }
 

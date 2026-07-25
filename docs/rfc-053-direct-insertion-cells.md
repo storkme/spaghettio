@@ -452,6 +452,32 @@ caveat.
    bus control to within 0.7pp produced / 0.0pp delivered. The
    criterion does not fire.
 
+   **The "validates clean" half was NOT true on the first pass, and
+   finding that out took a second look.** KC3 is a conjunction — a cell
+   that *validates clean* AND under-delivers — and the first measurement
+   only checked the throughput half. Running the validator afterwards
+   returned **16 `Error`s and 48 warnings**: every producer furnace
+   flagged `output-belt: no output inserter has a belt at its drop
+   position`, plus `inserter-throughput` crediting cell machines 0.00/s.
+   All false positives — the sim had already proved the shape moves
+   112% of plan — but a DI feature that buries the validator in false
+   errors is not shippable, and worse, real errors would have been
+   indistinguishable. Two distinct causes, both now fixed and both
+   inherent to the cell design rather than incidental:
+
+   - a cell producer has **no output belt at all** (its output leaves
+     through the band), so every "machine must have an output inserter
+     dropping onto a belt" test fails by construction;
+   - the fused `RowSpan` carries the producer's inputs, so
+     `resolve_row_spec` attributes the producer's input item to the
+     *consumer* machines — the check asked furnaces eating iron-plate to
+     account for iron-ore.
+
+   `validate::is_di_cell_entity` now exempts cell entities the way
+   `is_di_bridge_inserter` handles #432's bridges. **Post-fix: 0
+   validation issues, same 112% delivery.** So KC3's conjunction is
+   satisfied on both halves — but only after the gap was closed.
+
    **The control is the load-bearing part.** A single DI run showing
    +10.7% is uninterpretable: a solver rate-model artifact and a DI
    artifact are indistinguishable without it. Running the same target
@@ -926,3 +952,30 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   second face flow by construction) and KC5 (solver escalation bound).
   Orthogonal follow-up, deliberately NOT folded into this RFC: the ~10%
   electric-furnace steel rate discrepancy the control exposed.*
+
+- *2026-07-25 — **#450 review found three real bugs; a fourth was found
+  by closing my own verification gap.** The bot's findings, all
+  confirmed against the code before fixing rather than taken on trust:
+  **(1)** `fused_cell_spec` dropped the producer's module loadout — the
+  module post-pass keys `(entity, recipe)` off `row_spans`, and a cell
+  contributes only the consumer's recipe, so producer machines would get
+  no modules while the solver had already folded the bonus into their
+  count. Now refused outright (matching loadouts wouldn't help: the
+  *key* is missing). **(2)** `SidePlan.count`/`.shortfall` were computed
+  and discarded — `DiCellIo` carries an entity name and no count, so a
+  face needing two inserters got one and silently under-fed. Now sized
+  against a single slot and refused when that isn't enough; the comment
+  claiming "a single-inserter face isn't an implicit throughput cap"
+  asserted the exact opposite of the behaviour. **(3)** the cell's
+  output belt was sized against the raw combined rate although it is
+  physically single-lane (all output inserters share a y and a facing,
+  so every drop lands in the far lane) — a 2× over-estimate, and cells
+  never split by throughput the way ordinary rows do. Now sized at
+  `rate * 2.0` and refused when one lane can't carry it. **(4)** Mine:
+  the KC3 run measured throughput but never ran the validator, so
+  "validates clean" went unverified — and was false (16 errors). Fixed
+  via `is_di_cell_entity`. The through-line in all four is the same
+  shape of mistake — trusting a number that was never checked
+  (`.count`, lane capacity, the module key, the warning list) — which is
+  the failure mode this RFC's own verification protocol exists to catch,
+  and which three of four green test runs did not surface.*
