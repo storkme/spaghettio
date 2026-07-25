@@ -244,10 +244,15 @@ fn topology_builds_cleanly_on_every_fixture() {
     // Both mean the meter would get rates wrong *there*, which is exactly
     // why they are notes rather than silence. Allowlisted by fixture, not
     // globally — any NEW fixture with notes still fails.
+    //
+    // Matched on the full `label:` prefix, not a bare `starts_with(label)`:
+    // the loose form would silently allowlist any future fixture whose name
+    // *extends* an entry (`military-science-pack-large`), which is the
+    // opposite of "the list can only shrink".
     const KNOWN_OPEN: &[&str] = &["military-science-pack"];
     let unexpected: Vec<&String> = problems
         .iter()
-        .filter(|p| !KNOWN_OPEN.iter().any(|k| p.starts_with(k)))
+        .filter(|p| !KNOWN_OPEN.iter().any(|k| p.starts_with(&format!("{k}:"))))
         .collect();
     if !problems.is_empty() {
         println!("topology notes (incl. known-open):\n  {}", 

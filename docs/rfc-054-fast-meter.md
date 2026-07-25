@@ -563,6 +563,11 @@ the right thing moved.
   | chain-ec15 @d7 | −5.3% | −5.6% | 0.3pp |
   | chain-ec30 @d2 | −5.3% | −5.6% | 0.3pp |
 
+  *(**Superseded for the d1 row** by the 2026-07-25 correction at the end of
+  this log: d1 now reads −7.4%, Δ 0.6pp. The other three rows still hold.
+  Left as recorded rather than edited in place — this log is a history, and
+  the drift is the interesting part.)*
+
   ***KC2(b) is met on this family***: the meter reproduces the
   **level-invariance** unprogrammed — d2 through d7 sit flat at −5.6%
   while d1 is worse at −7.7%, the same shape #435 measured and the same
@@ -826,3 +831,46 @@ the right thing moved.
   mechanism from the unlinked-branch defect fixed here. Logistic at −68.3%
   is now a plausible-shaped failure rather than a total one, but it is still
   a failure.*
+- *2026-07-25 — **Session-side adversarial review (the CI bot abandoned
+  twice), and it caught a stale number in this very log.** PR #460's
+  `claude-review` run failed the silent-no-op guard on both attempts:
+  run 1 at 116s / 11 turns / $1.72 / 3 denials, run 2 at 21 turns — the
+  class-5/6 mid-review abandonment cluster in `docs/review-bot.md`, not a
+  code problem and not a conscious skip. Re-rolling twice was the documented
+  escape hatch; a third roll would have been superstition, so the review was
+  done session-side instead. Three findings, all in code this RFC added:*
+
+  ***1. A headline number in this log had gone stale, and nobody noticed.***
+  `chain-ec15 @d1` *was recorded at −7.7% in the PR-3 entry. It now measures
+  **−7.4%** — Δ against real Factorio is **0.6pp, not 0.3pp**, and the
+  RFC's "agrees to within ~0.4pp" becomes **0.3–0.6pp**. The drift happened
+  mid-branch (the I11 filtered-take fix or the splitter fix; both touched
+  the EC path) and was never re-measured, because each fix was verified
+  against the fixtures it was expected to move. The other three rows are
+  unchanged. Caught only by re-running the full corpus while checking
+  something else — which is the argument for the corpus replay being a
+  **test**, not an example you run when you remember to.*
+
+  ***2. `drain_sinks` carried two representations of one fact.*** *A `sinks:
+  FxHashSet<usize>` on `Factory` duplicated `BeltTile::is_sink`, and the
+  drain read `if sinks.is_empty() || sinks.contains(&tile)`. Both arms were
+  unreachable: `exited_log` is only ever appended from the two `is_sink`
+  arms in `BeltNetwork`, so every entry is already a declared boundary
+  output, and with no sinks the log stays empty. Harmless today, but the
+  `is_empty()` branch reads like a deliberate "count everything when the
+  manifest declares no outputs" fallback that a later reader would trust.
+  Removed the set; the drain now counts what left, with the invariant
+  stated. **Verified behaviour-preserving by measurement, not by argument**
+  — the whole corpus is byte-identical across the change, checked by
+  stashing and re-running rather than by reasoning about it.*
+
+  ***3. The known-open topology allowlist was looser than its own comment.***
+  `KNOWN_OPEN` *matched with a bare* `starts_with(label)`*, so a future
+  fixture named* `military-science-pack-large` *would have been silently
+  allowlisted — the opposite of the "this list can only shrink" property the
+  comment claims. Tightened to match the full* `label:` *prefix.*
+
+  *Worth stating plainly: an author reviewing their own diff is the weakest
+  form of the repo's adversarial-review rule, and finding #1 is precisely
+  the kind of thing an independent reviewer is better placed to catch. It
+  was found here by re-running the numbers, not by reading the code.*

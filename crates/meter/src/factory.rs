@@ -20,7 +20,7 @@
 //! learned that the hard way (`docs/sim-harness-forensics.md`), and a
 //! cheap meter that repeated the mistake would be worse than useless.
 
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use serde::Serialize;
 
 use crate::belt::ItemId;
@@ -105,8 +105,6 @@ pub struct Factory {
     pub items: ItemInterner,
     pub manifest: Manifest,
     pub ticks: u64,
-    /// Sink tiles, by tile id — the manifest's boundary outputs.
-    sinks: FxHashSet<usize>,
     /// Cumulative crafted counts, by item.
     crafted: FxHashMap<u16, u64>,
     /// Cumulative items reaching a sink.
@@ -227,11 +225,9 @@ impl Factory {
             }
         }
         let mut net = net;
-        let mut sinks = FxHashSet::default();
         for b in &manifest.boundary_outputs {
             match net.tile_at((b.x, b.y)) {
                 Some(t) => {
-                    sinks.insert(t);
                     net.tiles[t].is_sink = true;
                 }
                 None => notes.push(format!(
@@ -249,7 +245,6 @@ impl Factory {
             items,
             manifest,
             ticks: 0,
-            sinks,
             crafted: FxHashMap::default(),
             delivered: FxHashMap::default(),
             notes,
@@ -367,11 +362,21 @@ impl Factory {
         }
     }
 
+    /// Count everything that left the network this tick.
+    ///
+    /// No sink filter here, and deliberately: `exited_log` is only ever
+    /// appended to from the two `is_sink` arms in `BeltNetwork`, so every
+    /// entry is already a declared boundary output. An earlier version
+    /// re-checked membership against a separate `sinks` set, which read
+    /// like a meaningful filter — including an `if sinks.is_empty()`
+    /// fallback suggesting "count everything when the manifest declares no
+    /// outputs". Both were unreachable: with no sinks, nothing sets
+    /// `is_sink`, so `exited_log` stays empty. Two representations of one
+    /// fact that could drift apart, and a dead branch a later reader would
+    /// have trusted.
     fn drain_sinks(&mut self) {
-        for (tile, item) in self.net.exited_log.drain(..) {
-            if self.sinks.is_empty() || self.sinks.contains(&tile) {
-                *self.delivered.entry(item.0).or_insert(0) += 1;
-            }
+        for (_tile, item) in self.net.exited_log.drain(..) {
+            *self.delivered.entry(item.0).or_insert(0) += 1;
         }
     }
 
