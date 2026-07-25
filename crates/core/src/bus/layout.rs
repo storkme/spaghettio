@@ -2877,7 +2877,7 @@ mod tests {
             .iter()
             .filter(|e| {
                 e.carries.as_deref() == Some("copper-cable")
-                    && e.segment_id.as_deref().map_or(false, |s| {
+                    && e.segment_id.as_deref().is_some_and(|s| {
                         // Phase 2 serves this pair with a row cell; the
                         // bridge remains the fallback for pairs a cell
                         // cannot arrange.

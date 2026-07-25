@@ -8346,7 +8346,7 @@ fn di_cell_coverage_sweep() {
         ("electronic-circuit", &["iron-ore", "copper-ore"], 5.0),
         ("stone-brick", &["stone"], 5.0),
     ];
-    println!("{:<22} {:>6}  {:>9} {:>8} {:>8}  {}", "target", "rate", "couplings", "cells", "bridges", "verdict");
+    println!("{:<22} {:>6}  {:>9} {:>8} {:>8}  verdict", "target", "rate", "couplings", "cells", "bridges");
     for (item, ins, rate) in cases {
         let inputs: FxHashSet<String> = ins.iter().map(|s| s.to_string()).collect();
         let Ok(sr) = solver::solve(item, *rate, &inputs, "assembling-machine-2") else {
@@ -8405,7 +8405,7 @@ fn kc2_face_contention() {
 
     println!("KC2: consumer south face must carry iron IN {IRON_IN}/s + EC OUT {EC_OUT}/s");
     println!();
-    println!("{:<22} {:>8} {:>8} {:>8}   {}", "inserter", "L0", "L2", "L7", "role");
+    println!("{:<22} {:>8} {:>8} {:>8}   role", "inserter", "L0", "L2", "L7");
     for name in ["inserter", "long-handed-inserter", "fast-inserter", "bulk-inserter", "stack-inserter"] {
         let f: Vec<String> = [0u8, 2, 7].iter()
             .map(|&l| format!("{:.2}", machine_feed_rate(name, q, l)))
