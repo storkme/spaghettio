@@ -701,3 +701,58 @@ the right thing moved.
   fixture, and the next step is a tile-level dump of that row's belt
   occupancy rather than more model-building. Recorded here so a cold
   pick-up starts from the measurement, not from the theory.*
+- *2026-07-25 — **KC1 attribution, round 2: the leading hypothesis is
+  FALSIFIED.** Belt→machine inserter rate explains ~20pp of the 56pp
+  military gap and then plateaus. Something else binds.*
+
+  ***The hypothesis, and why it was the obvious one.*** *The grenade row
+  needs 10 coal per craft over 6.4 s = **1.5625 coal/s per machine**, fed
+  by exactly **one regular inserter** (the long-handed one on each machine
+  reaches past it to the iron belt). The meter rates a regular inserter at
+  I8's **0.84/s** — a 1.86× shortfall. And I8 states it is a
+  **chest-to-chest** figure and self-flags "actual throughput varies with
+  pickup/drop distance and belt speed", while RFC-049 Phase 2 **measured**
+  belt→machine intake and found `machine_feed_rate` credits it with
+  **1.04–2.27× margins** over the naive number. 1.86× sits squarely inside
+  that measured band. Everything lined up.*
+
+  ***The test, and the answer.*** *A throwaway env-gated multiplier on the
+  swing cycle (diagnostic only — reverted, never committed as a model):*
+
+  ```
+  swing ×1.0  → −59.6%     swing ×1.86 → −40.4%
+  swing ×1.5  → −41.8%     swing ×2.2  → −38.7%
+  ```
+
+  *It **plateaus near −39%**. At 2.2× — beyond the top of the measured
+  margin band — the deficit is still 36pp away from the real −3.3%.
+  Inserter swing rate is a real contributor and **not** the binding
+  constraint.*
+
+  *Recorded as a falsification rather than a fix because the arithmetic was
+  persuasive enough that it would have been easy to apply a
+  belt→machine correction, watch mil5plates improve 20pp, and call it
+  solved. The improvement is real and the explanation is still wrong. This
+  is the third time in this RFC that a plausible causal story attached to a
+  correct-looking change did not survive being checked (twice from the PR-1
+  review, once here) — the pattern is now worth naming as a standing habit
+  rather than a coincidence: **fix on merit, test the story separately.***
+
+  ***What is established about the residual:*** *the coal belt is
+  **fully compressed (4/4 both lanes) along its entire length**, with one
+  picker per machine, verified by a tile-level downstream walk
+  (`--example trace_belt`). Supply and topology are not the problem.
+  Machines starve with a monotone head→tail coal gradient (9,9,8,8,7,7,6,
+  6,5,5) while iron sits capped at 70/70. Faster inserters do not close it.
+  So the bind is in how much of a compressed belt one inserter can actually
+  claim — remaining suspects: `drop_onto_tile`'s far-lane placement via
+  `try_insert_anywhere`, and whether **I6** (pickup draws from BOTH lanes)
+  is being honoured in the take path when the first lane is exhausted.*
+
+  ***Tooling added en route***, both reusable: `--example attribute`
+  (per-recipe census, starved machines with have/need per ingredient,
+  boundary injection vs plan, inserter wiring census) and
+  `--example trace_belt` (walk a path downstream from a boundary feed,
+  per-tile lane occupancy, pickers/droppers/sinks annotated). These are the
+  meter's equivalent of `scripts/sim-capture-state.sh` and are how both
+  rounds of attribution were done.*
