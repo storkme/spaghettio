@@ -506,9 +506,18 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
     with 2/1 slot splits, `required_rate == 2.5/s`) — the construction
     was derived from flow-interval overlap and landed on the
     hand-derived geometry without being fitted to it.
-  - **1b — placer wiring** (remaining): suppress the coupled item's row
-    belts, place the two rows one tile apart, stamp reach-1 inserters
-    from the planned edges, and teach the lane planner to skip the item.
+  - **1b ✅ LANDED — cell stamping.** `bus::di_cell::stamp_di_cell`
+    turns a plan into placed machines and inserters: producers, a
+    **one-tile** inserter band, consumers. Pinned by the defining DI
+    property — every inserter picks from a producer machine tile and
+    drops into a consumer machine tile, at reach 1, with **no belt
+    emitted for the coupled item** (the same test `classify.rs` applies
+    when counting DI in community blueprints). Refuses rather than
+    under-feeding when the chosen inserter can't cover an edge within
+    the slots that edge owns.
+  - **1c — placer wiring** (remaining): call the planner/stamper from
+    `place_rows`, suppress the coupled item's row belts, and teach the
+    lane planner to skip the item.
 - **Phase 2 — face allocation, now including fluids (re-scoped by the
   KC6 trip).** The consumer's remaining flows on the opposite face,
   mixed reach (reach-2 stepping over a near belt), **plus pipe placement
@@ -629,3 +638,20 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   suite 863 lib + 61 e2e green, clippy clean. Remaining for Phase 1b is
   the placer wiring — belt suppression, 1-tile row gap, reach-1 inserter
   stamping from the planned edges, lane-planner skip.*
+
+- *2026-07-25 — **Phase 1b landed: `bus::di_cell::stamp_di_cell`.** Turns
+  a `StraddlePlan` into entities — producer row, ONE-tile inserter band,
+  consumer row (7 tiles for a 3-tall coupling, against ~13 for #432's
+  belt bridge). The test that matters asserts the defining DI property
+  directly: every stamped inserter is reach-1 and its pickup tile lands
+  on a PRODUCER machine while its drop tile lands on a CONSUMER machine,
+  and the cell emits **no belt at all** for the coupled item — the same
+  predicate `classify.rs` uses to count DI in community blueprints, so
+  passing it means the engine now emits the shape the corpus is full of.
+  Inserter counts follow the per-edge budget: 8 at stack tier (one per
+  edge, matching the Design section), 12 with fast at the L2 default (the
+  5.0/s edges take both their slots), and a REFUSAL below the cell's
+  required rate rather than an under-fed cell. 7 more unit tests (15 in
+  the module); 870 lib + 61 e2e green, clippy clean. Remaining: Phase 1c,
+  the placer wiring — nothing calls these functions yet, so engine
+  behaviour is still unchanged.*
