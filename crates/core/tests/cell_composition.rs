@@ -265,73 +265,151 @@ fn probe_chain_autoplace() {
     }
 }
 
-/// The chain sim fixtures, as one source of truth: label, target,
-/// rate, external inputs, **the capacity the geometry is BLESSED at**,
-/// and the declared levels to export.
+/// How a sim fixture's geometry is composed.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Compose {
+    /// `compose_chain_with_capacity` at the row's `geo_cap`.
+    Chain,
+    /// `compose_mega_calibrated` — inserter capacity is not a parameter
+    /// of that path, so `geo_cap` does not apply.
+    MegaCell,
+}
+
+/// **Every** sim fixture, as one source of truth.
 ///
-/// The blessed capacity is a property of the frozen measurement, not a
-/// knob: these entries were measured before #431 moved the engine
-/// default to L2, so their geometry is L0 and must stay L0 for the
-/// committed numbers to mean anything. Re-blessing is what changes it.
-type ChainFixtureConfig = (&'static str, &'static str, f64, &'static [&'static str], u8, &'static [u8]);
-const CHAIN_FIXTURE_CONFIGS: &[ChainFixtureConfig] = &[
-    ("chain-ac1", "advanced-circuit", 1.0,
-     &["iron-plate", "copper-plate", "plastic-bar"], 0, &[0]),
-    ("chain-ec15", "electronic-circuit", 15.0,
-     &["iron-plate", "copper-plate"], 0, &[1, 2, 3, 5, 7]),
-    ("chain-ec30", "electronic-circuit", 30.0,
-     &["iron-plate", "copper-plate"], 0, &[1, 2, 3, 5, 7]),
-    ("chain-mil5ore", "military-science-pack", 5.0,
-     &["iron-ore", "copper-ore", "stone", "coal"], 0, &[0, 2, 3, 7]),
-    ("chain-mil5plates", "military-science-pack", 5.0,
-     &["iron-plate", "copper-plate", "steel-plate", "stone-brick", "coal"], 0, &[0, 2]),
+/// `geo_cap` is the capacity the GEOMETRY is built at, and it is a
+/// property of the frozen measurement rather than a knob. Entries
+/// measured before #431 moved the engine default to L2 are L0 geometry
+/// and must stay L0 for their committed numbers to mean anything;
+/// `chem5` was blessed after the flip and is genuinely L2. Re-blessing
+/// is what changes a row, never an ambient default moving underneath it.
+///
+/// `levels` are the DECLARED `-dN` worlds to export, which select the
+/// harness world and not the geometry. Empty means the fixture exports
+/// once under its bare label.
+struct SimFixture {
+    label: &'static str,
+    target: &'static str,
+    rate: f64,
+    inputs: &'static [&'static str],
+    compose: Compose,
+    geo_cap: u8,
+    levels: &'static [u8],
+}
+
+const SIM_FIXTURES: &[SimFixture] = &[
+    SimFixture { label: "chain-ac1", target: "advanced-circuit", rate: 1.0,
+        inputs: &["iron-plate", "copper-plate", "plastic-bar"],
+        compose: Compose::Chain, geo_cap: 0, levels: &[0] },
+    SimFixture { label: "chain-ec15", target: "electronic-circuit", rate: 15.0,
+        inputs: &["iron-plate", "copper-plate"],
+        compose: Compose::Chain, geo_cap: 0, levels: &[1, 2, 3, 5, 7] },
+    SimFixture { label: "chain-ec30", target: "electronic-circuit", rate: 30.0,
+        inputs: &["iron-plate", "copper-plate"],
+        compose: Compose::Chain, geo_cap: 0, levels: &[1, 2, 3, 5, 7] },
+    SimFixture { label: "chain-mil5ore", target: "military-science-pack", rate: 5.0,
+        inputs: &["iron-ore", "copper-ore", "stone", "coal"],
+        compose: Compose::Chain, geo_cap: 0, levels: &[0, 2, 3, 7] },
+    SimFixture { label: "chain-mil5plates", target: "military-science-pack", rate: 5.0,
+        inputs: &["iron-plate", "copper-plate", "steel-plate", "stone-brick", "coal"],
+        compose: Compose::Chain, geo_cap: 0, levels: &[0, 2] },
+    // Mega chains. Same `compose_chain` path as the rows above, so they
+    // carried the identical ambient-default defect; they export once
+    // under a bare label rather than at declared levels.
+    SimFixture { label: "mega-chain-ac2raw", target: "advanced-circuit", rate: 2.0,
+        inputs: &["iron-ore", "copper-ore", "crude-oil", "water", "coal"],
+        compose: Compose::Chain, geo_cap: 0, levels: &[] },
+    SimFixture { label: "mega-chain-chem5raw", target: "chemical-science-pack", rate: 5.0,
+        inputs: &["iron-ore", "copper-ore", "crude-oil", "water", "coal",
+                  "iron-plate", "copper-plate", "steel-plate"],
+        compose: Compose::Chain, geo_cap: 2, levels: &[] },
+    // Not registry-blessed: their measurements live in #453 (USP@2,
+    // -57.0%) and #437 (PU@4, -27.3%), both recorded before #431. Pinned
+    // to L0 so those recorded numbers keep describing this geometry.
+    SimFixture { label: "mega-chain-usp2raw", target: "utility-science-pack", rate: 2.0,
+        inputs: &["iron-ore", "copper-ore", "crude-oil", "water", "coal", "stone"],
+        compose: Compose::Chain, geo_cap: 0, levels: &[] },
+    SimFixture { label: "mega-chain-pu4raw", target: "processing-unit", rate: 4.0,
+        inputs: &["iron-ore", "copper-ore", "crude-oil", "water", "coal"],
+        compose: Compose::Chain, geo_cap: 0, levels: &[] },
+    // Mega CELLS: a different composer, unaffected by the capacity
+    // default, but covered here so the gate has no blind spot.
+    SimFixture { label: "mega-plastic2", target: "plastic-bar", rate: 2.0,
+        inputs: &["crude-oil", "water", "coal"],
+        compose: Compose::MegaCell, geo_cap: 0, levels: &[] },
+    SimFixture { label: "mega-sulfur2", target: "sulfur", rate: 2.0,
+        inputs: &["crude-oil", "water"],
+        compose: Compose::MegaCell, geo_cap: 0, levels: &[] },
 ];
 
-/// PERMANENT GATE: the geometry `export_chain_fixtures_for_sim`
-/// actually writes must match a registered hash.
+impl SimFixture {
+    /// Compose this fixture's geometry exactly as its exporter does.
+    fn compose_layout(&self) -> spaghettio_core::models::LayoutResult {
+        let inputs: FxHashSet<String> = self.inputs.iter().map(|s| s.to_string()).collect();
+        match self.compose {
+            Compose::MegaCell => {
+                spaghettio_core::bus::cells::mega::compose_mega_calibrated(
+                    self.target, self.rate, self.inputs,
+                ).unwrap_or_else(|e| panic!("{}: mega cell must compose: {e}", self.label)).1
+            }
+            Compose::Chain => {
+                let sr = solver::solve_with_palette_exclusions_and_quality(
+                    self.target, self.rate, &inputs, &MachinePalette::default(),
+                    "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+                ).unwrap_or_else(|e| panic!("{}: must solve: {e:?}", self.label));
+                spaghettio_core::bus::cells::chain::compose_chain_with_capacity(&sr, self.geo_cap)
+                    .unwrap_or_else(|e| panic!("{}: chain must compose: {e}", self.label))
+            }
+        }
+    }
+
+    fn find(label: &str) -> &'static SimFixture {
+        SIM_FIXTURES.iter().find(|f| f.label == label)
+            .unwrap_or_else(|| panic!("no SIM_FIXTURES row for {label}"))
+    }
+}
+
+/// PERMANENT GATE: the geometry the sim fixture EXPORTERS actually write
+/// must match a registered hash.
 ///
 /// `cell_registry_hashes_current` re-derives geometry through
-/// `compose_chain_with_capacity` and so stayed green while the
-/// exporter — a *separate* code path calling bare `compose_chain` —
-/// silently drifted to the ambient default after #431. Two paths to
-/// one artifact, one of them checked. This gate watches the path that
-/// produces the bytes the sim and the meter actually consume.
+/// `compose_chain_with_capacity` and so stayed green while the exporters
+/// — a *separate* code path calling bare `compose_chain` — silently
+/// drifted to the ambient default after #431. Two paths to one artifact,
+/// one of them checked. This gate watches the path that produces the
+/// bytes the sim and the meter actually consume.
+///
+/// **Every registry entry must have a [`SIM_FIXTURES`] row.** There is no
+/// "no matching row, skip" arm on purpose: that arm is what let the four
+/// mega-chain exporters keep the identical defect after the first version
+/// of this gate landed, because a coverage gap was indistinguishable from
+/// a deliberate exclusion.
 #[test]
 fn chain_fixture_geometry_matches_registry() {
-    use spaghettio_core::bus::cells::chain::compose_chain_with_capacity;
     use spaghettio_core::bus::cells::registry::{entries, geometry_hash};
-    // Direction matters: registry -> fixtures. Several fixtures share a
-    // (target, rate) key and only one is blessed (mil5 ore vs plates),
-    // so "every fixture is registered" is false by construction; the
-    // real invariant is that every registered geometry is still
-    // reproducible by the table the exporter writes from.
-    let mut checked = 0;
+    // Direction is registry -> fixtures. Several fixtures share a
+    // (target, rate) key with only one blessed (mil5 ore vs plates), so
+    // "every fixture is registered" is false by construction; the real
+    // invariant is that every registered geometry is still reproducible
+    // by the table the exporters write from.
     for e in entries() {
-        let candidates: Vec<(&str, String)> = CHAIN_FIXTURE_CONFIGS
+        let candidates: Vec<(&str, String)> = SIM_FIXTURES
             .iter()
-            .filter(|(_, item, rate, _, _, _)| *item == e.target && (rate - e.rate).abs() < 1e-9)
-            .map(|&(label, item, rate, inputs, geo_cap, _)| {
-                let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
-                let sr = solver::solve_with_palette_exclusions_and_quality(
-                    item, rate, &inputs_set, &MachinePalette::default(),
-                    "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
-                ).unwrap();
-                let l = compose_chain_with_capacity(&sr, geo_cap).unwrap();
-                (label, format!("{:016x}", geometry_hash(&l)))
-            })
+            .filter(|f| f.target == e.target && (f.rate - e.rate).abs() < 1e-9)
+            .map(|f| (f.label, format!("{:016x}", geometry_hash(&f.compose_layout()))))
             .collect();
-        if candidates.is_empty() {
-            continue; // mega / non-chain registry entries: covered by cell_registry_hashes_current
-        }
-        checked += 1;
+        assert!(!candidates.is_empty(),
+            "{}@{}: registry entry has no SIM_FIXTURES row, so no gate covers the exporter \
+             that writes it — add the row. A silent skip here is exactly how the mega-chain \
+             exporters kept the ambient-default defect.",
+            e.target, e.rate);
         assert!(candidates.iter().any(|(_, h)| *h == e.geometry_hash),
-            "{}@{}: registered geometry {} is no longer produced by any chain fixture config \
-             at its blessed capacity (fresh: {:?}). The exporter would write a DIFFERENT \
-             factory under the same label, and every sim/meter number taken against this \
-             baseline would silently compare two layouts — re-bless deliberately, never ignore.",
+            "{}@{}: registered geometry {} is no longer produced by any sim fixture at its \
+             blessed capacity (fresh: {:?}). The exporter would write a DIFFERENT factory \
+             under the same label, and every sim/meter number taken against this baseline \
+             would silently compare two layouts — re-bless deliberately, never ignore.",
             e.target, e.rate, e.geometry_hash, candidates);
     }
-    assert!(checked > 0, "gate matched no registry entries — it has stopped testing anything");
 }
 
 /// Artifact producers for the chain auto-placer's sim runs. Each
@@ -354,15 +432,16 @@ fn chain_fixture_geometry_matches_registry() {
 #[test]
 #[ignore = "artifact producer"]
 fn export_chain_fixtures_for_sim() {
-    use spaghettio_core::bus::cells::chain::compose_chain_with_capacity;
-    for &(label, item, rate, inputs, geo_cap, levels) in CHAIN_FIXTURE_CONFIGS {
-        let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
-        let sr = solver::solve_with_palette_exclusions_and_quality(
-            item, rate, &inputs_set, &MachinePalette::default(),
-            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
-        ).unwrap();
-        for &lvl in levels {
-            let mut l = compose_chain_with_capacity(&sr, geo_cap).unwrap();
+    for f in SIM_FIXTURES.iter().filter(|f| !f.levels.is_empty()) {
+        let (label, sr) = (f.label, {
+            let inputs_set: FxHashSet<String> = f.inputs.iter().map(|s| s.to_string()).collect();
+            solver::solve_with_palette_exclusions_and_quality(
+                f.target, f.rate, &inputs_set, &MachinePalette::default(),
+                "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+            ).unwrap()
+        });
+        for &lvl in f.levels {
+            let mut l = f.compose_layout();
             l.inserter_capacity = lvl;
             let tag = format!("{label}-d{lvl}");
             let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(&l, &sr, &tag);
@@ -1173,7 +1252,6 @@ fn mega_chain_usp2_resolves_bus_failure() {
 #[test]
 #[ignore = "artifact producer"]
 fn export_mega_usp_for_sim() {
-    use spaghettio_core::bus::cells::chain::compose_chain;
     let inputs: FxHashSet<String> =
         ["iron-ore", "copper-ore", "crude-oil", "water", "coal", "stone"]
             .iter().map(|s| s.to_string()).collect();
@@ -1181,7 +1259,7 @@ fn export_mega_usp_for_sim() {
         "utility-science-pack", 2.0, &inputs, &MachinePalette::default(),
         "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
     ).unwrap();
-    let l = compose_chain(&sr).unwrap();
+    let l = SimFixture::find("mega-chain-usp2raw").compose_layout();
     let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(&l, &sr, "mega-chain-usp2raw");
     std::fs::create_dir_all("target/tmp").unwrap();
     std::fs::write("target/tmp/mega-chain-usp2raw.bp", &bp).unwrap();
@@ -1194,7 +1272,6 @@ fn export_mega_usp_for_sim() {
 #[test]
 #[ignore = "artifact producer"]
 fn export_mega_pu_for_sim() {
-    use spaghettio_core::bus::cells::chain::compose_chain;
     let inputs: FxHashSet<String> =
         ["iron-ore", "copper-ore", "crude-oil", "water", "coal"]
             .iter().map(|s| s.to_string()).collect();
@@ -1202,7 +1279,7 @@ fn export_mega_pu_for_sim() {
         "processing-unit", 4.0, &inputs, &MachinePalette::default(),
         "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
     ).unwrap();
-    let l = compose_chain(&sr).unwrap();
+    let l = SimFixture::find("mega-chain-pu4raw").compose_layout();
     let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(&l, &sr, "mega-chain-pu4raw");
     std::fs::create_dir_all("target/tmp").unwrap();
     std::fs::write("target/tmp/mega-chain-pu4raw.bp", &bp).unwrap();
@@ -1215,7 +1292,6 @@ fn export_mega_pu_for_sim() {
 #[test]
 #[ignore = "artifact producer"]
 fn export_mega_chem_for_sim() {
-    use spaghettio_core::bus::cells::chain::compose_chain;
     let inputs: FxHashSet<String> =
         ["iron-ore", "copper-ore", "crude-oil", "water", "coal",
          "iron-plate", "copper-plate", "steel-plate"]
@@ -1224,7 +1300,7 @@ fn export_mega_chem_for_sim() {
         "chemical-science-pack", 5.0, &inputs, &MachinePalette::default(),
         "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
     ).unwrap();
-    let l = compose_chain(&sr).unwrap();
+    let l = SimFixture::find("mega-chain-chem5raw").compose_layout();
     let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(&l, &sr, "mega-chain-chem5raw");
     std::fs::create_dir_all("target/tmp").unwrap();
     std::fs::write("target/tmp/mega-chain-chem5raw.bp", &bp).unwrap();
@@ -1237,7 +1313,6 @@ fn export_mega_chem_for_sim() {
 #[test]
 #[ignore = "artifact producer"]
 fn export_mega_chain_for_sim() {
-    use spaghettio_core::bus::cells::chain::compose_chain;
     let inputs: FxHashSet<String> =
         ["iron-ore", "copper-ore", "crude-oil", "water", "coal"]
             .iter().map(|s| s.to_string()).collect();
@@ -1245,7 +1320,7 @@ fn export_mega_chain_for_sim() {
         "advanced-circuit", 2.0, &inputs, &MachinePalette::default(),
         "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
     ).unwrap();
-    let l = compose_chain(&sr).unwrap();
+    let l = SimFixture::find("mega-chain-ac2raw").compose_layout();
     let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(&l, &sr, "mega-chain-ac2raw");
     std::fs::create_dir_all("target/tmp").unwrap();
     std::fs::write("target/tmp/mega-chain-ac2raw.bp", &bp).unwrap();
