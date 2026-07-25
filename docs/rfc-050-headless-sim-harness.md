@@ -421,3 +421,48 @@ design, so blessed measured baselines are **shareable** — keyed on
   (#383/#431) and #383's inserter attribution — the standing lesson being
   that a calibration inherits its instrument's bounds, so sweep the
   declared axis before believing a number is a property of the subject.*
+
+- *2026-07-25 — **verification of the #454 instrument fix, and a fourth
+  defect found by its own control run.** Re-measuring chem5 (the
+  registered PASS) with item-driven windows reproduced `produced 5.00/s
+  EXACT` — and its checkpoint series showed why that number was never a
+  steady state: `4.62 -> 4.92 -> 5.00/s`, a monotone ramp whose final
+  step (+1.63%) slipped under the 2% tolerance. The stability test
+  compared only the last two windows, and **a decelerating ramp always
+  eventually passes that**, at a point systematically short of its
+  asymptote; the measured span averaged 4.84/s. Convergence now compares
+  the trailing three window rates widest-vs-narrowest, which a ramp fails
+  (+8.3% for chem5) and noise passes. **Verified**: chem5 re-run under
+  the group rule takes 13 checkpoints instead of 4, converges at
+  drift +1.3%, and lands produced 5.08/s (+1.7%) delivered 5.15/s
+  (+3.1%) **PASS** — verdict preserved and within `check`'s 2% of the
+  blessed 5.07, so no re-blessing is needed. This also resolves the
+  residual it exposed: convergence gates on `produced` while the verdict
+  grades on `delivered`, and under the pairwise rule chem5 read 4.80
+  delivered (WARN) against a blessed 5.07 (PASS). The stricter test
+  settles both series together, so grading-on-an-ungated-series is
+  recorded as latent rather than fixed here.
+  **usp2 measured properly at last**: 4 checkpoints, full 300-item
+  windows auto-sized to 21,120 ticks (2.3x the planned-rate window,
+  because the factory runs at 43% of plan), none short-sampled, plateau
+  at 0.852/s — **utility-science-pack -57.4% FAIL**. The -57% survives
+  the instrument fix: the layout genuinely underperforms and that finding
+  was not an artifact. The **33% LDS swing** that motivated the issue
+  was, though, and by a third mechanism: with only one checkpoint,
+  `compute` falls to `window_start: None`, whose intermediate-rate
+  fallback is the **last two samples — a 20-second snapshot** (artifact
+  class 2, already known and already fixed for the normal path). All
+  three anomalies in #454's table now have a mechanism: a structurally
+  impossible convergence test, a ramp certified as steady state, and a
+  20-second snapshot printed as a rate.
+  **Deliberately not changed**: the reported rate stays the single
+  trailing window rather than the whole certified-flat group. Averaging
+  the group would use 900 items instead of 300 and cut quantization noise
+  by sqrt(3), but it shifts every measured number slightly and risks
+  flipping verdicts near thresholds — registry churn for a modest gain,
+  on a PR already carrying four fixes. Filed as followup rather than
+  folded in. Residual honestly stated: chem5 oscillates +/-5% window to
+  window even in steady state, so `converged` means "three consecutive
+  windows within 2%", and a fixture with real oscillation can report
+  anywhere in its band — `drift_pct` now declares that band instead of
+  hiding it.*

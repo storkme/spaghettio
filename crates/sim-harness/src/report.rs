@@ -89,8 +89,9 @@ pub struct MeasurementQuality {
     /// Every closed window's produced rate, oldest first — a monotone
     /// series is a ramp or a decay, not noise.
     pub window_rates: Vec<f64>,
-    /// Checkpoints taken. Fewer than 3 means the convergence test never
-    /// ran and `converged: false` says nothing about the factory (#454).
+    /// Checkpoints taken. Fewer than `STABILITY_WINDOWS + 1` means the
+    /// convergence test never ran and `converged: false` says nothing
+    /// about the factory (#454).
     pub checkpoints: usize,
 }
 
