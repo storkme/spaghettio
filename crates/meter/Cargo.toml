@@ -1,0 +1,28 @@
+[package]
+name = "spaghettio_meter"
+version = "0.1.0"
+edition = "2021"
+
+# RFC-054: the fast meter. A native item-level discrete simulator.
+#
+# INTEGRITY BOUNDARY (RFC-054 KC4). This crate depends on `spaghettio_core`
+# for DATA only — `blueprint_parser` (reading the exported artifact) and
+# `recipe_db` (ingredients, craft times, machine crafting speeds).
+#
+# It must NEVER import the engine's *derived rate model*:
+#   machine_feed_rate, belt_drop_rate, lane_capacity*, utilization_for,
+#   LANE_UTILIZATION, ROW_LANE_FACTOR_*
+#
+# Those are hand-calibrated estimates. Importing one would make the meter
+# reproduce the engine's belief instead of measuring, and its agreement
+# with the engine would be circular — the failure that made `carries`
+# labels worthless as ground truth (audit §3.3 #17) and that let the
+# backwards-inserter export bug survive behind three artifacts sharing one
+# convention. Enforced by `tests/kc4_independence.rs`.
+[dependencies]
+spaghettio_core = { path = "../core" }
+rustc-hash = "2"
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"
