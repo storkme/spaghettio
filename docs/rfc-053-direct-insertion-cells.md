@@ -434,11 +434,37 @@ caveat.
    a `Fast`-capped user cannot get a feasible cell at the **default**
    research level, DI is too fragile to ship default-on — it stays an
    opt-in strategy with an honest refusal, not a silent degradation.
-3. **Honest throughput.** If a DI cell validates clean but the sim
-   harness measures **< 98% of plan** on the canonical fixture, the
-   model is wrong and the checks are lying — stop everything. (This is
-   the #383 lesson: validator-clean concealed a real starve for weeks.)
-4. **Density premise. ✅ EVALUATED 2026-07-25 — PASSES.** Measured on
+3. **Honest throughput. ✅ EVALUATED 2026-07-25 — PASSES.** If a DI cell
+   validates clean but the sim harness measures **< 98% of plan** on the
+   canonical fixture, the model is wrong and the checks are lying — stop
+   everything. (This is the #383 lesson: validator-clean concealed a
+   real starve for weeks.) **Measured on a real cell** (`steel-plate@2/s`
+   from `iron-ore`, 16:16 furnace→furnace — the corpus's dominant DI
+   shape; the fixture is `di_cell_kc3_export` in `tests/e2e.rs`):
+
+   | | planned/s | produced/s | delivered/s | entities |
+   |---|---|---|---|---|
+   | **DI cell** | 2.00 | 2.21 (+10.7%) | 2.24 (+12.0%) | **213** |
+   | control (DI off) | 2.00 | 2.20 (+10.0%) | 2.24 (+12.0%) | 335 |
+
+   `converged=true`, 32/32 machines working, both runs. DI delivers
+   **112% of plan**, nowhere near the 98% floor, and matches its own
+   bus control to within 0.7pp produced / 0.0pp delivered. The
+   criterion does not fire.
+
+   **The control is the load-bearing part.** A single DI run showing
+   +10.7% is uninterpretable: a solver rate-model artifact and a DI
+   artifact are indistinguishable without it. Running the same target
+   with `direct_insertion: false` attributes the overshoot to the
+   *model*, not the topology — the engine under-predicts electric-furnace
+   steel output by ~10% in both. That discrepancy is real, pre-existing
+   and orthogonal to this RFC; it deserves its own issue rather than
+   being quietly absorbed here.
+4. **Density premise. ✅ EVALUATED 2026-07-25 — PASSES; re-confirmed
+   end-to-end.** The KC3 run above measures it on a whole solved layout
+   rather than a hand-derived cell: **213 entities against the bus
+   control's 335, a 36% reduction** at identical delivered throughput.
+   Original hand-derived evaluation follows. Measured on
    the canonical fixture (EC@10/s from plates, DI off) against the real
    engine: the bus places `copper-cable` at y1–7 and `electronic-circuit`
    at y10–17 with a `copper-cable` trunk lane at y7–9 — a **17-tile**
@@ -877,3 +903,26 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   the check was wrong" from the verification protocol, and worth the
   reminder that a green new test is evidence of nothing until you have
   seen it fail for the right reason.*
+
+- *2026-07-25 — **KC3 evaluated and PASSES; the RFC now survives every
+  kill criterion that is evaluable pre-Phase-2.** Sim-measured a real
+  cell built by the full solver→layout pipeline (`steel-plate@2/s` from
+  `iron-ore`, 16:16 furnace→furnace): 2.24/s delivered against 2.00/s
+  planned, `converged=true`, 32/32 machines working. The floor is 98%;
+  this is 112%. **Ran a DI-off control on the same target and that is the
+  finding worth keeping** — the control delivers *the same* 2.24/s
+  (+12.0%), so the overshoot is a solver rate-model artifact
+  (electric-furnace steel under-predicted by ~10%), not a property of
+  DI. Without the control the +10.7% would have been unattributable, and
+  the temptation to read it as "DI beats plan" would have been strong
+  and wrong. The same pair of runs re-confirms KC4 end-to-end at a scale
+  the hand-derived 7-vs-17 figure couldn't: **213 entities vs 335, −36%**,
+  at identical delivered throughput. Chose to run KC3 before starting
+  Phase 2 specifically because Phase 2 is the expensive phase and KC3 is
+  the criterion most able to invalidate the topology — evaluating it the
+  moment it became evaluable (which Phase 1c's landing made possible) is
+  the RFC's own kill-criterion discipline. Two gates remain open and both
+  are inherently Phase 2+: KC2 (face contention — a Phase 1 cell has no
+  second face flow by construction) and KC5 (solver escalation bound).
+  Orthogonal follow-up, deliberately NOT folded into this RFC: the ~10%
+  electric-furnace steel rate discrepancy the control exposed.*

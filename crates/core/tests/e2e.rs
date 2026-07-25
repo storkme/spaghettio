@@ -8061,3 +8061,60 @@ fn research_l7_thins_output_inserters_s4() {
         "the thinning must be SHARP (~3x observed): L0={l0} should be >= 3 x L7={l7}"
     );
 }
+
+/// RFC-053 **KC3 fixture** — export a DI-cell layout + manifest for the sim
+/// harness. Ignored: it writes artifacts and is driven by hand.
+///
+/// ```bash
+/// cargo test --manifest-path crates/core/Cargo.toml --test e2e -- \
+///     di_cell_kc3_export --exact --ignored --nocapture
+/// ```
+///
+/// Target is `iron-gear-wheel` from `iron-ore`, NOT the RFC's cable→EC
+/// worked example: EC has two solid inputs and is a Phase 2 shape (#449).
+/// Gears are the canonical single-solid-input consumer, so the coupling
+/// clears `cell_eligible`.
+#[test]
+#[ignore]
+fn di_cell_kc3_export() {
+    use spaghettio_core::bus::layout;
+    let inputs: FxHashSet<String> = ["iron-ore".to_string()].into_iter().collect();
+    let sr = solver::solve("steel-plate", 2.0, &inputs, "assembling-machine-2")
+        .expect("solve steel-plate from ore");
+    println!("machines:");
+    for m in &sr.machines {
+        println!("  {} x{:.2} on {} in={:?} out={:?}", m.recipe, m.count, m.entity,
+            m.inputs.iter().map(|f| (&f.item, f.rate)).collect::<Vec<_>>(),
+            m.outputs.iter().map(|f| (&f.item, f.rate)).collect::<Vec<_>>());
+    }
+    println!("di_couplings: {:?}", sr.di_couplings);
+
+    // DI on/off from the environment so the same fixture produces the
+    // KC3 measurement AND its control. Without the control an
+    // over-production figure can't be attributed: a solver rate-model
+    // artifact and a DI artifact look identical in a single run.
+    let di = std::env::var("SPAGHETTIO_KC3_DI").as_deref() != Ok("0");
+    let opts = layout::LayoutOptions {
+        direct_insertion: di,
+        max_belt_tier: Some("transport-belt".to_string()),
+        ..Default::default()
+    };
+    let l = layout::build_bus_layout(&sr, opts).expect("layout");
+    let cell_ents = l.entities.iter()
+        .filter(|e| e.segment_id.as_deref().is_some_and(|s| s.starts_with("di-cell:")))
+        .count();
+    let bridge_ents = l.entities.iter()
+        .filter(|e| e.segment_id.as_deref().is_some_and(|s| s.starts_with("di-bridge:")))
+        .count();
+    println!("di-cell entities: {cell_ents}   di-bridge entities: {bridge_ents}");
+
+    let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(&l, &sr, "di-cell-kc3");
+    let tag = if di { "di_cell_kc3" } else { "di_cell_kc3_control" };
+    std::fs::write(format!("/tmp/{tag}.bp"), &bp).expect("write bp");
+    std::fs::write(
+        format!("/tmp/{tag}.manifest.json"),
+        serde_json::to_string_pretty(&manifest).expect("manifest json"),
+    )
+    .expect("write manifest");
+    println!("wrote /tmp/{tag}.bp ({} bytes, di={di})", bp.len());
+}
