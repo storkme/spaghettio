@@ -1173,3 +1173,36 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   design. Checking that a drawing is physically possible says nothing
   about whether it is good or common. The corpus could have answered this
   at any point in the last three phases and was not asked.*
+
+- *2026-07-25 — **Phase 2 pivots to the horizontal row straddle, on
+  corpus evidence, and it BENDS LESS than the stacked cell rather than
+  more.** `plan_row_straddle` lands in `bus::di_cell`: producers and
+  consumers interleaved in ONE horizontal row, coupled by inserters in the
+  1-tile gaps between neighbours. Same flow-interval argument as
+  `plan_straddle`, applied in 1-D, with the extra constraint that a
+  consumer has only two horizontal neighbours — so a consumer needing
+  three producers is refused rather than approximated. It reproduces the
+  hand-derived canonical sequence `P C P C P P C P C P` for the 6:4
+  cable→EC ratio without being fitted to it.*
+
+  ***Why this is the better shape, and why it is cheaper:***
+  - *`required_rate() == 5.0/s` for cable→EC, because each edge owns
+    exactly one gap. A stack inserter moves **12.0/s at zero research**,
+    so the pair is feasible with no research at all — against the stacked
+    cell's face plan, which needed L2 and two long-handed inserters.*
+  - ***No reach-2 inserter anywhere.*** *The stacked cell's whole
+    difficulty was the consumer's spare face carrying two flows, forcing
+    a long-handed hop over the near belt at 2.40/s.*
+  - ***It reuses `place_rows` rather than replacing it.*** *A line of
+    machines with belts above and below is what the row templates already
+    emit; the delta is a mixed-recipe machine sequence plus inserters in
+    the gaps. The stacked cell needed a bespoke stamper. Per the standing
+    guidance — reuse where we can, extend where we must — this is the
+    cheaper extension AND the one the corpus endorses.*
+
+  *Consequence for the phase: the mixed-reach face row, the two-row face
+  budget, and KC2's margin all become moot for this shape, since the
+  consumer's remaining input and output sit on one face at reach-1 with
+  the opposite face free. They remain relevant only to the stacked
+  variant, which the corpus puts second (190 combined vs 177 for the top
+  single plan).*

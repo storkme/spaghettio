@@ -845,3 +845,248 @@ mod io_tests {
         assert!(cell.height() < 17, "KC4: cell must stay under the 17-tile bus baseline");
     }
 }
+
+// ---------------------------------------------------------------------------
+// RFC-053 Phase 2: horizontal row straddle (the corpus's dominant shape)
+// ---------------------------------------------------------------------------
+
+/// A producer/consumer sequence laid out in ONE horizontal row, coupled by
+/// inserters in the gaps between horizontally-adjacent machines.
+///
+/// This is the shape the corpus actually builds: `di-patterns faces` puts
+/// `DI@E+W | S:in1→belt S:out1→belt` at the top of the cable→EC face-plan
+/// distribution (177 of 2,039 consumers) — a consumer straddling two
+/// producers east and west, with its remaining input and its output both
+/// on ONE face, both reach-1, and the opposite face entirely free.
+///
+/// Why it is worth preferring over Phase 1's stacked cell: it needs no
+/// reach-2 inserter anywhere, it leaves a whole face free, and a row of
+/// machines with belts above and below is what `place_rows` already
+/// emits — so it reuses the existing row mechanism rather than replacing
+/// it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RowCellPlan {
+    /// Machines left to right. `true` = producer, `false` = consumer.
+    pub sequence: Vec<bool>,
+    /// x of each machine in `sequence`, at `machine_w + 1` pitch (the
+    /// 1-tile gap is where the coupling inserter goes).
+    pub xs: Vec<i32>,
+    /// `(sequence_idx_producer, sequence_idx_consumer, flow)`. Every edge
+    /// is between physically ADJACENT machines — that is the invariant the
+    /// arrangement exists to guarantee.
+    pub edges: Vec<(usize, usize, f64)>,
+}
+
+impl RowCellPlan {
+    /// Rate one coupling inserter must sustain, i.e. the busiest edge.
+    /// Each edge owns exactly one gap, so there is no slot division here —
+    /// unlike the stacked cell, where an edge can own several columns.
+    pub fn required_rate(&self) -> f64 {
+        self.edges.iter().map(|&(_, _, f)| f).fold(0.0, f64::max)
+    }
+
+    pub fn width(&self, machine_w: i32) -> i32 {
+        match self.xs.last() {
+            Some(&last) => last + machine_w,
+            None => 0,
+        }
+    }
+}
+
+/// Arrange `producer_count` producers and `consumer_count` consumers in a
+/// single row so that every consumer is physically adjacent to exactly the
+/// producers whose flow it takes.
+///
+/// Construction: producer `i` owns flow interval `[i·prod, (i+1)·prod)` and
+/// consumer `j` owns `[j·demand, (j+1)·demand)`; they share an edge where
+/// the intervals overlap (the same flow-interval argument `plan_straddle`
+/// uses). Ordering the machines by interval start and inserting each
+/// consumer between its producers makes every edge adjacent.
+///
+/// Returns `None` when the shape is out of scope rather than approximating
+/// it: unbalanced flow, or a consumer needing more than two producers (it
+/// has only two horizontal neighbours, so a third could not reach it).
+pub fn plan_row_straddle(
+    producer_count: usize,
+    consumer_count: usize,
+    producer_rate: f64,
+    consumer_rate: f64,
+    machine_w: i32,
+) -> Option<RowCellPlan> {
+    if producer_count == 0 || consumer_count == 0 || machine_w <= 0 {
+        return None;
+    }
+    let usable = producer_rate.is_finite()
+        && consumer_rate.is_finite()
+        && producer_rate > 0.0
+        && consumer_rate > 0.0;
+    if !usable {
+        return None;
+    }
+    let total_out = producer_rate * producer_count as f64;
+    let total_in = consumer_rate * consumer_count as f64;
+    let tol = 1e-6 * total_out.max(total_in).max(1.0);
+    if (total_out - total_in).abs() > tol {
+        return None;
+    }
+
+    // Flow-interval overlap → which producers feed each consumer.
+    let mut per_consumer: Vec<Vec<(usize, f64)>> = vec![Vec::new(); consumer_count];
+    for (j, slot) in per_consumer.iter_mut().enumerate() {
+        let (c_lo, c_hi) = (j as f64 * consumer_rate, (j + 1) as f64 * consumer_rate);
+        for i in 0..producer_count {
+            let (p_lo, p_hi) = (i as f64 * producer_rate, (i + 1) as f64 * producer_rate);
+            let flow = p_hi.min(c_hi) - p_lo.max(c_lo);
+            if flow > tol {
+                slot.push((i, flow));
+            }
+        }
+        // Only two horizontal neighbours exist, so a third producer could
+        // never physically reach this consumer. Refuse instead of
+        // silently under-feeding (Phase 3 / multi-band territory).
+        if slot.len() > 2 || slot.is_empty() {
+            return None;
+        }
+    }
+
+    // Emit left to right: walk producers in order, dropping each consumer
+    // in immediately after the FIRST producer that feeds it. A consumer
+    // fed by {i, i+1} therefore lands between them; one fed by {i} alone
+    // lands directly after it.
+    let mut sequence: Vec<bool> = Vec::new();
+    let mut prod_slot: Vec<usize> = vec![usize::MAX; producer_count];
+    let mut cons_slot: Vec<usize> = vec![usize::MAX; consumer_count];
+    let mut next_consumer = 0usize;
+    for (i, slot) in prod_slot.iter_mut().enumerate() {
+        *slot = sequence.len();
+        sequence.push(true);
+        while next_consumer < consumer_count {
+            let firsts = per_consumer[next_consumer][0].0;
+            let lasts = per_consumer[next_consumer].last().unwrap().0;
+            if firsts != i {
+                break;
+            }
+            // A consumer straddling {i, i+1} must wait until i+1 exists to
+            // its right; emitting it here places it between them, which is
+            // exactly what we want, so only the single-producer case needs
+            // the last-producer check.
+            if lasts > i + 1 {
+                return None;
+            }
+            cons_slot[next_consumer] = sequence.len();
+            sequence.push(false);
+            next_consumer += 1;
+        }
+    }
+    if next_consumer != consumer_count {
+        return None;
+    }
+
+    let pitch = machine_w + 1;
+    let xs: Vec<i32> = (0..sequence.len()).map(|k| k as i32 * pitch).collect();
+
+    let mut edges = Vec::new();
+    for (j, feeders) in per_consumer.iter().enumerate() {
+        let cs = cons_slot[j];
+        for &(i, flow) in feeders {
+            let ps = prod_slot[i];
+            // The invariant this whole construction exists to hold.
+            if cs.abs_diff(ps) != 1 {
+                return None;
+            }
+            edges.push((ps, cs, flow));
+        }
+    }
+    Some(RowCellPlan { sequence, xs, edges })
+}
+
+#[cfg(test)]
+mod row_straddle_tests {
+    use super::*;
+
+    /// The canonical cable→EC ratio, hand-derived independently in the RFC
+    /// as `P0 C0 P1 C1 P2 P3 C2 P4 C3 P5`. If the construction reproduces
+    /// that without being fitted to it, the flow-interval argument holds
+    /// in 1-D the same way it does for the stacked cell.
+    #[test]
+    fn canonical_cable_to_ec_row_matches_the_hand_derivation() {
+        let p = plan_row_straddle(6, 4, 5.0, 7.5, 3).expect("6:4 must arrange");
+        let seq: String = p
+            .sequence
+            .iter()
+            .map(|&is_p| if is_p { 'P' } else { 'C' })
+            .collect();
+        assert_eq!(seq, "PCPCPPCPCP", "sequence must match the hand derivation");
+        assert_eq!(p.sequence.len(), 10);
+        // Pitch 4 = 3-wide machine + the 1-tile coupling gap.
+        assert_eq!(p.xs, vec![0, 4, 8, 12, 16, 20, 24, 28, 32, 36]);
+        assert_eq!(p.width(3), 39);
+    }
+
+    /// The defining property: every coupling is between physically
+    /// ADJACENT machines. Without it the plan is unbuildable, since an
+    /// inserter only spans one gap.
+    #[test]
+    fn every_edge_couples_adjacent_machines() {
+        for (pc, cc, pr, cr) in [(6, 4, 5.0, 7.5), (4, 4, 2.5, 2.5), (2, 1, 3.0, 6.0)] {
+            let p = plan_row_straddle(pc, cc, pr, cr, 3).expect("must arrange");
+            for &(ps, cs, _) in &p.edges {
+                assert_eq!(ps.abs_diff(cs), 1, "edge {ps}->{cs} is not adjacent in {p:?}");
+                assert!(p.sequence[ps], "edge source must be a producer");
+                assert!(!p.sequence[cs], "edge target must be a consumer");
+            }
+        }
+    }
+
+    /// Conservation: every consumer receives exactly its demand, and every
+    /// producer's output is fully consumed.
+    #[test]
+    fn flow_is_conserved_per_machine() {
+        let (pr, cr) = (5.0, 7.5);
+        let p = plan_row_straddle(6, 4, pr, cr, 3).unwrap();
+        for (slot, &is_p) in p.sequence.iter().enumerate() {
+            let moved: f64 = p
+                .edges
+                .iter()
+                .filter(|&&(ps, cs, _)| if is_p { ps == slot } else { cs == slot })
+                .map(|&(_, _, f)| f)
+                .sum();
+            let want = if is_p { pr } else { cr };
+            assert!(
+                (moved - want).abs() < 1e-9,
+                "slot {slot} moves {moved}, wants {want}"
+            );
+        }
+    }
+
+    /// No reach-2 anywhere: each edge owns exactly one gap, so the busiest
+    /// edge IS the per-inserter rate. For cable→EC that is 5.0/s, which a
+    /// stack inserter covers at zero research (12.0/s).
+    #[test]
+    fn required_rate_is_the_busiest_single_edge() {
+        let p = plan_row_straddle(6, 4, 5.0, 7.5, 3).unwrap();
+        assert_eq!(p.required_rate(), 5.0);
+    }
+
+    /// Out-of-scope shapes refuse rather than approximate.
+    #[test]
+    fn out_of_scope_shapes_are_refused() {
+        // Unbalanced flow.
+        assert!(plan_row_straddle(6, 4, 5.0, 9.0, 3).is_none());
+        // A consumer needing three producers has only two neighbours.
+        assert!(plan_row_straddle(9, 3, 1.0, 3.0, 3).is_none());
+        // Degenerate inputs.
+        assert!(plan_row_straddle(0, 4, 5.0, 7.5, 3).is_none());
+        assert!(plan_row_straddle(6, 4, f64::NAN, 7.5, 3).is_none());
+        assert!(plan_row_straddle(6, 4, 5.0, 7.5, 0).is_none());
+    }
+
+    /// 1:1 pairing (the furnace→furnace shape) interleaves strictly.
+    #[test]
+    fn one_to_one_interleaves() {
+        let p = plan_row_straddle(4, 4, 2.5, 2.5, 3).unwrap();
+        let seq: String = p.sequence.iter().map(|&x| if x { 'P' } else { 'C' }).collect();
+        assert_eq!(seq, "PCPCPCPC");
+        assert_eq!(p.edges.len(), 4, "1:1 needs exactly one edge per pair");
+    }
+}
