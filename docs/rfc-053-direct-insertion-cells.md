@@ -1785,3 +1785,44 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   north face into the machine band, and its feed belt is a full-width run
   that cannot dodge into the producer's columns. No corpus pair wants it;
   the shipped ones are foundry(5)-over-assembler(3) and equal-height.*
+
+- *2026-07-25 — **Coverage audit: the remaining top-10 pairs, measured
+  rather than assumed. None of the four untested ones cell.** Asked
+  whether DI is "in a good place", the answer needed the four top-10
+  pairs I had never actually run. Every one refuses:*
+
+  | pair | instances | outcome | why |
+  |---|---|---|---|
+  | `copper-cable → advanced-circuit` | 360 | refused → bus | consumer has **3** solid inputs |
+  | `iron-stick → rail` | 351 | bridge | consumer has **3** solid inputs |
+  | `e-engine-unit → flying-robot-frame` | 318 | no coupling | consumer has **4** solid inputs |
+  | `copper-cable → space-platform-foundation` | 353 | bridge | **new finding, below** |
+
+  ***Cell coverage of the top-10 is 4,999 / 7,848 = 63.7%, and one pair
+  is 4,116 of that.*** *Strip `copper-cable → EC` out and the cell covers
+  11% of the remainder. The mechanism is verified where it applies; its
+  REACH is the open problem, and it is not evenly distributed.*
+
+  ***The single biggest lever is the consumer's face budget.*** *A row
+  cell gives the consumer exactly one belt-fed solid input (its south
+  face carries that plus the output). Three top-10 pairs — 1,029
+  instances — are blocked on nothing else, and a fourth (`engine-unit →
+  electric-engine-unit`, 547) is the same constraint on the PRODUCER's
+  north face. That is 1,576 instances behind one geometric limit, which
+  makes multi-input face allocation worth more than any remaining fluid
+  work.*
+
+  ***`space-platform-foundation` is a genuine straddle bug, not a face
+  limit.*** *It has exactly 2 solid inputs and balances exactly —
+  P4:C8, pr=5.0, cr=2.5, totals 20=20 — so each producer feeds precisely
+  two consumers and a valid arrangement exists: `C0 P0 C1 C2 P1 C3 …`,
+  every consumer adjacent to its one producer. `plan_row_straddle`
+  cannot emit it. Its loop walks producers and drains each one's
+  consumers AFTER it, so C0 and C1 both land right of P0 and the
+  adjacency invariant (`cs.abs_diff(ps) != 1`) correctly refuses what the
+  loop built. **The emission is one-sided; the geometry is not.** A
+  producer has a LEFT slot and a RIGHT slot, and 1:2 fan-out needs both.
+  This is the mirror of the consumers-outnumber-producers case and wants
+  the same fix: assign consumers to inter-producer slots rather than
+  appending them. 353 instances, and the smallest well-defined piece of
+  work left in this RFC.*
