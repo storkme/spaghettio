@@ -1033,3 +1033,31 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   was not obvious from any individual one. NB the sweep only varies
   `max_belt_tier` to characterise the ceiling — the engine must never
   auto-escalate tier, which stays a hard user-specified constraint.*
+
+- *2026-07-25 — **Phase 3 (multi-band) measured before building, and the
+  measurement argues against doing it next.** Extended `di-patterns` with
+  a `fan` subcommand — `Obs` previously carried only recipe names and
+  relative geometry, so fan-in/fan-out/chain were structurally
+  uncomputable; it now records the blueprint-member id and the two
+  machine indices. Corpus results:*
+
+  | shape | fan-in (producers per consumer) | chain (machine is both) |
+  |---|---|---|
+  | `electric-furnace → electric-furnace` (1,585) | **1 for all 1,585** | **0** |
+  | `copper-cable → electronic-circuit` (4,116) | 1 for 634, **2 for 1,405; max 2** | **0** |
+  | all pairs (16,507) | >2 for 237 of 11,536 consumers = **2.1%** | 1,674 / 21,622 = 7.7% |
+
+  *Three conclusions. **(1) `plan_straddle`'s existing ≤2 limit already
+  covers ~98% of real fan-in.** The RFC's stated Phase 3 motivation —
+  "multi-producer straddle for the corpus's awkward ratios" — is chasing
+  a 2.1% tail. **(2) Neither dominant shape uses stacked bands at all**
+  (chain = 0 for both); the 7.7% global figure lives in pairs nobody has
+  asked for. **(3) cable→EC needs exactly the 2-producer straddle Phase 1
+  already implements** — what blocks it is the second solid input, i.e.
+  Phase 2 face allocation, not the straddle. Separately, the Phase 1
+  ceiling measured earlier (`steel-plate@10` refusing on input-belt
+  capacity) is **not** a straddle problem either: it needs more than one
+  input belt feeding a cell, which multi-band does not address. So the
+  honest ordering is **Phase 2 before Phase 3**, and Phase 3's scope
+  should be rewritten around the fan-in belt limit rather than around
+  multi-producer straddle, which is largely already solved.*

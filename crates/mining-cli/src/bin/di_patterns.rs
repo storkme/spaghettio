@@ -24,7 +24,7 @@ use spaghettio_core::analysis;
 use spaghettio_core::common::{
     dir_to_vec, entity_size, inserter_reach, is_inserter, is_machine_entity,
 };
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeSet, BTreeMap, HashMap};
 
 /// One mined DI observation, canonicalized.
 struct Obs {
@@ -37,6 +37,15 @@ struct Obs {
     /// to the insertion axis — the "straddle" signature.
     lateral: i32,
     vertical: bool,
+    /// Blueprint-member id, unique across the corpus scan. Machine
+    /// indices are only meaningful within one member.
+    member: u32,
+    /// Index of the producer / consumer machine inside that member. These
+    /// are what make fan-in, fan-out and chain depth computable — without
+    /// them every observation is anonymous and only PAIRWISE geometry can
+    /// be reported (which is all the `geometry` subcommand ever needed).
+    p_idx: usize,
+    c_idx: usize,
 }
 
 fn mine(dir: &str) -> Vec<Obs> {
@@ -45,12 +54,14 @@ fn mine(dir: &str) -> Vec<Obs> {
         eprintln!("cannot read corpus dir: {dir}");
         return out;
     };
+    let mut member: u32 = 0;
     for ent in rd.flatten() {
         let Ok(txt) = std::fs::read_to_string(ent.path()) else { continue };
         let Ok(v) = serde_json::from_str::<serde_json::Value>(&txt) else { continue };
         let Some(bp) = v.get("blueprintString").and_then(|s| s.as_str()) else { continue };
         let Ok(analyses) = analysis::analyze_blueprint_string_any(bp) else { continue };
         for na in &analyses {
+            member += 1;
             let ents = &na.layout.entities;
             let mut occ: HashMap<(i32, i32), usize> = HashMap::new();
             for (i, m) in ents.iter().enumerate() {
@@ -98,6 +109,9 @@ fn mine(dir: &str) -> Vec<Obs> {
                     gap,
                     lateral,
                     vertical,
+                    member,
+                    p_idx: si,
+                    c_idx: di,
                 });
             }
         }
@@ -135,6 +149,64 @@ fn main() {
                     if *vert { "vertical" } else { "horizontal" }
                 );
             }
+        }
+        "fan" => {
+            // Multi-band evidence (RFC-053 Phase 3). Three questions the
+            // pairwise `geometry` view structurally cannot answer:
+            //   fan-out  — does one producer feed several consumers?
+            //   fan-in   — does one consumer draw from several producers?
+            //              (>2 is what `plan_straddle` refuses today)
+            //   chain    — is a machine BOTH a consumer and a producer?
+            //              that is the stacked-band shape itself.
+            let filter: Option<(String, String)> = match (args.get(3), args.get(4)) {
+                (Some(a), Some(b)) => Some((a.clone(), b.clone())),
+                _ => None,
+            };
+            let sel: Vec<&Obs> = obs
+                .iter()
+                .filter(|o| {
+                    filter
+                        .as_ref()
+                        .is_none_or(|(a, b)| &o.producer == a && &o.consumer == b)
+                })
+                .collect();
+            let mut fan_out: BTreeMap<(u32, usize), BTreeSet<usize>> = BTreeMap::new();
+            let mut fan_in: BTreeMap<(u32, usize), BTreeSet<usize>> = BTreeMap::new();
+            let mut is_producer: BTreeSet<(u32, usize)> = BTreeSet::new();
+            let mut is_consumer: BTreeSet<(u32, usize)> = BTreeSet::new();
+            for o in &sel {
+                fan_out.entry((o.member, o.p_idx)).or_default().insert(o.c_idx);
+                fan_in.entry((o.member, o.c_idx)).or_default().insert(o.p_idx);
+                is_producer.insert((o.member, o.p_idx));
+                is_consumer.insert((o.member, o.c_idx));
+            }
+            let hist = |m: &BTreeMap<(u32, usize), BTreeSet<usize>>| {
+                let mut h: BTreeMap<usize, usize> = BTreeMap::new();
+                for v in m.values() {
+                    *h.entry(v.len()).or_insert(0) += 1;
+                }
+                h
+            };
+            let label = filter
+                .as_ref()
+                .map(|(a, b)| format!("{a} -> {b}"))
+                .unwrap_or_else(|| "ALL pairs".into());
+            println!("fan analysis: {label}  ({} observations)", sel.len());
+            println!("  fan-OUT (consumers fed by one producer machine):");
+            for (k, n) in hist(&fan_out) {
+                println!("    {k} consumer(s): {n} producer machines");
+            }
+            println!("  fan-IN (producers feeding one consumer machine):");
+            for (k, n) in hist(&fan_in) {
+                println!("    {k} producer(s): {n} consumer machines");
+            }
+            let chained: Vec<_> = is_producer.intersection(&is_consumer).collect();
+            println!(
+                "  CHAIN: {} machines are both a DI producer and a DI consumer \
+                 (stacked bands) out of {} distinct machines",
+                chained.len(),
+                is_producer.union(&is_consumer).count()
+            );
         }
         _ => {
             let mut pairs: BTreeMap<(String, String), usize> = BTreeMap::new();
