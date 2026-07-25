@@ -150,6 +150,59 @@ fn main() {
                 );
             }
         }
+        "faces" => {
+            // RFC-053 Phase 2 evidence. The `geometry` view looks at a DI
+            // pair in isolation; this asks the question Phase 2 actually
+            // needs answered: for a machine that RECEIVES direct insertion,
+            // where does everything ELSE it touches live?
+            //
+            // Reported per consumer machine: the side the DI band arrives
+            // on, then every other inserter touching that machine — which
+            // side, reach, whether it feeds or drains the machine, and
+            // whether its far end is a belt or another machine.
+            //
+            // This is what tells us whether "second input belt below the
+            // consumers" (the RFC's hand-drawn sketch) is what people
+            // build, something rarer, or something nobody does.
+            let (want_p, want_c) = (
+                args.get(3).cloned().unwrap_or_else(|| "copper-cable".into()),
+                args.get(4).cloned().unwrap_or_else(|| "electronic-circuit".into()),
+            );
+            let plans = mine_faces(&dir, &want_p, &want_c);
+            let mut hist: BTreeMap<String, usize> = BTreeMap::new();
+            let mut side_hist: BTreeMap<String, usize> = BTreeMap::new();
+            let mut n = 0usize;
+            for fp in &plans {
+                n += 1;
+                hist.entry(fp.signature()).and_modify(|c| *c += 1).or_insert(1);
+                for f in &fp.others {
+                    *side_hist
+                        .entry(format!(
+                            "{} {} r{} -> {}",
+                            f.side,
+                            if f.into_machine { "IN " } else { "OUT" },
+                            f.reach,
+                            f.far_kind
+                        ))
+                        .or_insert(0) += 1;
+                }
+            }
+            println!("face plans for DI consumers of {want_p} -> {want_c}: {n} machines");
+            println!();
+            println!("  per-interface distribution (side is relative to the consumer machine):");
+            let mut sv: Vec<_> = side_hist.into_iter().collect();
+            sv.sort_by_key(|(_, c)| std::cmp::Reverse(*c));
+            for (k, c) in sv.iter().take(20) {
+                println!("    {c:>6}  {k}");
+            }
+            println!();
+            println!("  whole-machine face plans (DI side | other interfaces):");
+            let mut hv: Vec<_> = hist.into_iter().collect();
+            hv.sort_by_key(|(_, c)| std::cmp::Reverse(*c));
+            for (k, c) in hv.iter().take(20) {
+                println!("    {c:>6}  {k}");
+            }
+        }
         "fan" => {
             // Multi-band evidence (RFC-053 Phase 3). Three questions the
             // pairwise `geometry` view structurally cannot answer:
@@ -221,4 +274,164 @@ fn main() {
             }
         }
     }
+}
+
+
+/// One non-DI interface on a machine that receives direct insertion.
+struct Face {
+    /// Side of the CONSUMER machine this inserter sits on.
+    side: &'static str,
+    /// True when the inserter drops INTO the machine (an input).
+    into_machine: bool,
+    reach: i32,
+    /// What sits at the inserter's other end: belt, machine, or neither.
+    far_kind: &'static str,
+}
+
+struct FacePlan {
+    /// EVERY side DI arrives on. A single side would be wrong for the
+    /// majority case: the fan analysis shows 1,405 of 2,039 cable->EC
+    /// consumers straddle TWO producers, so they receive DI on two faces.
+    di_sides: Vec<&'static str>,
+    others: Vec<Face>,
+}
+
+impl FacePlan {
+    /// Canonical string so identical arrangements aggregate.
+    fn signature(&self) -> String {
+        let mut parts: Vec<String> = self
+            .others
+            .iter()
+            .map(|f| {
+                format!(
+                    "{}:{}{}->{}",
+                    f.side,
+                    if f.into_machine { "in" } else { "out" },
+                    f.reach,
+                    f.far_kind
+                )
+            })
+            .collect();
+        parts.sort();
+        let mut ds = self.di_sides.clone();
+        ds.sort_unstable();
+        ds.dedup();
+        format!("DI@{} | {}", ds.join("+"), parts.join(" "))
+    }
+}
+
+/// Which side of the machine box at `(mx,my,w,h)` the tile `(tx,ty)` lies on.
+fn side_of(mx: i32, my: i32, w: i32, h: i32, tx: i32, ty: i32) -> &'static str {
+    if ty < my {
+        "N"
+    } else if ty >= my + h {
+        "S"
+    } else if tx < mx {
+        "W"
+    } else if tx >= mx + w {
+        "E"
+    } else {
+        "?"
+    }
+}
+
+fn mine_faces(dir: &str, want_p: &str, want_c: &str) -> Vec<FacePlan> {
+    let mut out = Vec::new();
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return out;
+    };
+    for ent in rd.flatten() {
+        let Ok(txt) = std::fs::read_to_string(ent.path()) else { continue };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&txt) else { continue };
+        let Some(bp) = v.get("blueprintString").and_then(|s| s.as_str()) else { continue };
+        let Ok(analyses) = analysis::analyze_blueprint_string_any(bp) else { continue };
+        for na in &analyses {
+            let ents = &na.layout.entities;
+            let mut occ: HashMap<(i32, i32), usize> = HashMap::new();
+            let mut belt: HashMap<(i32, i32), ()> = HashMap::new();
+            for (i, m) in ents.iter().enumerate() {
+                if m.name.contains("transport-belt") || m.name.contains("underground-belt") {
+                    belt.insert((m.x, m.y), ());
+                }
+                if !is_machine_entity(&m.name) {
+                    continue;
+                }
+                let (w, h) = entity_size(&m.name);
+                for dx in 0..w as i32 {
+                    for dy in 0..h as i32 {
+                        occ.insert((m.x + dx, m.y + dy), i);
+                    }
+                }
+            }
+            // Consumer machine index -> the side its DI band arrives on.
+            let mut di_consumers: HashMap<usize, Vec<&'static str>> = HashMap::new();
+            for ins in ents {
+                if !is_inserter(&ins.name) {
+                    continue;
+                }
+                let (dx, dy) = dir_to_vec(ins.direction);
+                let r = inserter_reach(&ins.name);
+                let (Some(&di), Some(&si)) = (
+                    occ.get(&(ins.x + dx * r, ins.y + dy * r)),
+                    occ.get(&(ins.x - dx * r, ins.y - dy * r)),
+                ) else {
+                    continue;
+                };
+                if di == si {
+                    continue;
+                }
+                let (p, c) = (&ents[si], &ents[di]);
+                let pn = p.recipe.clone().unwrap_or_else(|| p.name.clone());
+                let cn = c.recipe.clone().unwrap_or_else(|| c.name.clone());
+                if pn != want_p || cn != want_c {
+                    continue;
+                }
+                let (cw, ch) = entity_size(&c.name);
+                di_consumers
+                    .entry(di)
+                    .or_default()
+                    .push(side_of(c.x, c.y, cw as i32, ch as i32, ins.x, ins.y));
+            }
+            // Second pass: every OTHER inserter touching those consumers.
+            for (&ci, di_sides) in &di_consumers {
+                let c = &ents[ci];
+                let (cw, ch) = entity_size(&c.name);
+                let mut others = Vec::new();
+                for ins in ents {
+                    if !is_inserter(&ins.name) {
+                        continue;
+                    }
+                    let (dx, dy) = dir_to_vec(ins.direction);
+                    let r = inserter_reach(&ins.name);
+                    let drop = (ins.x + dx * r, ins.y + dy * r);
+                    let pick = (ins.x - dx * r, ins.y - dy * r);
+                    let drops_in = occ.get(&drop) == Some(&ci);
+                    let picks_from = occ.get(&pick) == Some(&ci);
+                    if !drops_in && !picks_from {
+                        continue;
+                    }
+                    // Skip the DI band itself (both ends are machines).
+                    if occ.contains_key(&drop) && occ.contains_key(&pick) {
+                        continue;
+                    }
+                    let far = if drops_in { pick } else { drop };
+                    let far_kind = if belt.contains_key(&far) {
+                        "belt"
+                    } else if occ.contains_key(&far) {
+                        "machine"
+                    } else {
+                        "none"
+                    };
+                    others.push(Face {
+                        side: side_of(c.x, c.y, cw as i32, ch as i32, ins.x, ins.y),
+                        into_machine: drops_in,
+                        reach: r,
+                        far_kind,
+                    });
+                }
+                out.push(FacePlan { di_sides: di_sides.clone(), others });
+            }
+        }
+    }
+    out
 }

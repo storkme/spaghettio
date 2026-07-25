@@ -1131,3 +1131,45 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   across matching slots, which means editing that documented assumption in
   two files. Invisible in the canonical cable→EC case (copper-plate vs
   iron-plate are distinct), so it would have shipped and bitten later.*
+
+- *2026-07-25 — **Face allocation mined instead of drawn, and it overturns
+  two things this RFC asserted.** New `di-patterns faces` subcommand: for
+  every machine that RECEIVES direct insertion, report which sides the DI
+  arrives on and where all its other interfaces live (side, reach,
+  in/out, belt-or-machine at the far end). 2,039 cable→EC consumers.
+  Top whole-machine plans:*
+
+  | n | plan |
+  |---|---|
+  | **177** | `DI@E+W \| S:in1→belt S:out1→belt` |
+  | 110 | `DI@S \| N:in1 N:out1 N:out2 N:out2` |
+  | 80 | `DI@N \| S:in1 S:out1 S:out2 S:out2` |
+  | 68 | `DI@W \| N:in1 N:in1 S:out1 S:out1` |
+
+  ***(1) The dominant shape is a horizontal straddle in ONE row, not a
+  stacked cell.*** *The most common plan has the consumer between two
+  producers on its east and west faces, with its remaining input and its
+  output both on the south face and **both reach-1** — north entirely
+  free. That is `P C P C P` interleaved in a single row with ordinary
+  belts above and below, which is much closer to what `place_rows`
+  already does than the producer-row-above-consumer-row cell Phase 1
+  builds. The RFC's hand-drawn sketch (rows 2 and 3 above, 190 combined)
+  is real but is not what most people build.*
+
+  ***(2) KC2's "zero margin" was computed on a false premise.*** *That
+  evaluation assumed the consumer's spare face is ONE inserter row of 3
+  columns, and concluded 1 near + 2 far exactly fills it. But plans 2 and
+  3 carry **four** interfaces on a single face (`in1 out1 out2 out2`),
+  which three columns cannot hold. The resolution is that a reach-2
+  inserter can sit in the SECOND row out — at `y+h+1`, picking from the
+  machine at `y+h-1` and dropping at `y+h+3` — so the face is two rows
+  deep. KC2 still passes; its margin is simply wider than recorded, and
+  the "no spare column, so a third flow must refuse" consequence I drew
+  from it does not follow. Both the criterion's arithmetic and the Phase
+  2 geometry derived from it need redoing against the two-row face.*
+
+  *Method note, since this is the second time it has bitten: the sketch's
+  reach arithmetic was verified and that was mistaken for validating the
+  design. Checking that a drawing is physically possible says nothing
+  about whether it is good or common. The corpus could have answered this
+  at any point in the last three phases and was not asked.*
