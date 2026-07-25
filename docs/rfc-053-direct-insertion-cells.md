@@ -548,7 +548,18 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
     when counting DI in community blueprints). Refuses rather than
     under-feeding when the chosen inserter can't cover an edge within
     the slots that edge owns.
-  - **1c — placer wiring** (remaining, and the invasive step). Pick-up
+  - **1c ✅ LANDED — placer wiring. Phase 1 is COMPLETE.**
+    `place_rows` now fuses an eligible pair into one cell row via
+    `cell_eligible` → `try_build_cell` → `fused_cell_spec`. The engine
+    emits machine→inserter→machine DI for the first time. Inert by
+    default (`direct_insertion: false`), so no existing layout moved —
+    the cell path is covered by unit tests only until Phase 4 exposes
+    the flag. The notes below are kept as the record of how the step was
+    scoped; where they disagree with what shipped, what shipped wins
+    (notably: no new `RowKind` was needed — a fused `RowSpan` built
+    directly from `DiCellLayout` was enough).
+
+  - *Original 1c pick-up notes (superseded).* Pick-up
     notes, so this doesn't need re-deriving:
     - **Seam**: `bus::placer::place_rows`, the DI branch that currently
       calls `stamp_di_bridge` (search `is_di_consumer` / `di_lookup`).
@@ -814,3 +825,27 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   wiring rather than after — the RFC had carried the contradiction
   since the first draft because prose scope and worked example were
   never cross-checked.*
+
+- *2026-07-25 — **Phase 1c landed; Phase 1 is complete.** `place_rows`
+  fuses an eligible producer/consumer pair into a single cell row, so the
+  engine emits true machine→inserter→machine DI for the first time.
+  Three things worth carrying forward. **(a) The fused-row design made
+  the "invasive" step small.** The pick-up notes predicted a new
+  `RowKind` and a restructured placement loop; what it actually took was
+  a precomputed `cell_pairs` map, a skip-set for absorbed consumer specs,
+  and a `RowSpan` built straight from `DiCellLayout`. The reason is the
+  design choice, not luck: describing the cell as a composite machine
+  (producer's inputs, consumer's outputs) means nothing downstream has to
+  learn what a cell is. **(b) `cell_eligible` is load-bearing.** It is
+  the only thing standing between `detect_di_couplings`' cable→EC
+  coupling and a starving cell — the solver will keep emitting couplings
+  Phase 1 cannot serve, and that is fine as long as the placer refuses
+  them. **(c) A test passed vacuously and had to be caught by hand.**
+  `di_cell_row_has_a_real_output_belt` went green while no cell was being
+  built at all — the shared `iron_plate_spec`/`iron_gear_spec` helpers
+  are unbalanced (1.0/s against 2.0/s), `plan_straddle` rightly refused
+  them, and the assertion silently landed on an ordinary row. It now
+  guards on `spans.len() == 1` first. Textbook "zero warnings can mean
+  the check was wrong" from the verification protocol, and worth the
+  reminder that a green new test is evidence of nothing until you have
+  seen it fail for the right reason.*
