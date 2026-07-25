@@ -38,8 +38,8 @@ fn main() {
 
     println!("tracing {item_name} from {:?}\n", feed.1);
     println!(
-        "{:>4}  {:<10} {:<6} {:<8} {:>5} {:>5}  {:<9} {}",
-        "step", "pos", "dir", "kind", "L0", "L1", "lanemap", "note"
+        "{:>4}  {:<10} {:<6} {:<8} {:>5} {:>5}  {:<9} note",
+        "step", "pos", "dir", "kind", "L0", "L1", "lanemap"
     );
 
     // Inserters that pick from each tile, so drop-offs along the path show up.
