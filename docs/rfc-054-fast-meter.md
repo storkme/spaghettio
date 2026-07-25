@@ -507,3 +507,43 @@ the right thing moved.
   attached is not evidence for the story. The fix was applied on its own
   merits (it is what the game does); the story was checked separately and
   did not survive.*
+- *2026-07-25 — PR 1 review round 2 (bot, PR #458): one finding, valid,
+  applied — and again its **impact claim was falsified by measurement**.
+  Recording the pattern, not just the fix.*
+
+  *The finding: `InserterKind::hand_size` mis-transcribed I8b on both
+  branches. Bulk read `2,4,5,6,7,9,11,12` against I8b's
+  `2,3,4,5,6,8,10,12` (L1–L6 each over-credited by +1), and the non-bulk
+  closed form `1 + level.saturating_sub(2).min(2)` evaluated to
+  `1,1,1,2,3,3,3,3` against I8b's `1,1,2,2,2,2,2,3` (L2 under, L4–L6
+  over). Verified against `factorio-mechanics.md` directly before
+  applying. Both ladders are now **literal tables** — neither is
+  expressible as a clean closed form, and deriving them is what produced
+  the error. Transcribe, don't derive.*
+
+  *The test was the real failure. It asserted L0/L2/L7 only; the endpoints
+  happened to be correct, so it **pinned a mis-transcribed middle rather
+  than catching it** — and its one middle assertion
+  (`Stack.hand_size(2) == 9`) was itself the wrong value. Replaced with an
+  exhaustive level-by-level ladder assertion. Sampling a table is not
+  testing it, and this is the second constants-defect in two rounds that a
+  loose test let through (the first being the 5% tolerance over the cycle
+  timer).*
+
+  ***The load-bearing claim is FALSIFIED.*** *The reviewer argued the wrong
+  value changes the headline, since `RowFixture` runs at `capacity_level =
+  2` where stack should be 8 rather than 9. Re-running the sweep after the
+  correction gives byte-identical rates at every margin. The reason is
+  structural, not luck: a single belt tile holds at most **8** items (4
+  slots × 2 lanes), so `take_from_tile` caps any grab at 8 — hands of 8
+  and 9 saturate the same ceiling. The reviewer's supporting argument
+  (that 8 is where the BS3 S=4 belt-drop dip vanishes) also does not
+  apply here: the fixture runs unstacked at S=1, and BS3 governs drops
+  *onto belts*, whereas these inserters drop into consumers.*
+
+  *Pattern worth naming after two rounds: the bot's defect identification
+  has been accurate every time (three real bugs, all applied), and its
+  causal attribution to the headline finding has been wrong every time
+  (two for two). Both fixes were taken on their own merits; neither
+  explanation survived being checked. The non-monotonicity remains
+  unattributed and remains PR 2's first question.*

@@ -304,17 +304,30 @@ mod tests {
         assert!(ins.is_waiting_for_source());
     }
 
-    /// Capacity research raises the hand for bulk-class inserters and
-    /// barely moves the others (`factorio-mechanics.md` I8b).
+    /// The **full** research ladder, pinned level by level against
+    /// `factorio-mechanics.md` I8b.
+    ///
+    /// Deliberately exhaustive rather than endpoint-sampled. An earlier
+    /// version asserted only L0/L2/L7 and happened to pick endpoints that
+    /// were right, so it pinned a mis-transcribed middle instead of
+    /// catching it (review, PR #458): bulk read `2,4,5,6,7,9,11,12`
+    /// against I8b's `2,3,4,5,6,8,10,12`, and non-bulk `1,1,1,2,3,3,3,3`
+    /// against `1,1,2,2,2,2,2,3`. Sampling a table is not testing it.
     #[test]
-    fn capacity_research_scales_bulk_class_only() {
-        assert_eq!(InserterKind::Stack.hand_size(0), 6);
-        assert_eq!(InserterKind::Stack.hand_size(2), 9);
-        assert_eq!(InserterKind::Stack.hand_size(7), 16);
-        assert_eq!(InserterKind::Bulk.hand_size(0), 2);
-        assert_eq!(InserterKind::Bulk.hand_size(7), 12);
-        // Non-bulk barely moves: 1 -> 3 across the whole ladder.
-        assert_eq!(InserterKind::Fast.hand_size(0), 1);
-        assert_eq!(InserterKind::Fast.hand_size(7), 3);
+    fn hand_size_ladder_matches_mechanics_i8b() {
+        let ladder = |k: InserterKind| (0..=7).map(|l| k.hand_size(l)).collect::<Vec<_>>();
+
+        // bulk chain: +1 at L1-4, +2 at L5-7
+        assert_eq!(ladder(InserterKind::Bulk), vec![2, 3, 4, 5, 6, 8, 10, 12]);
+        // stack = bulk + 4 built-in
+        assert_eq!(ladder(InserterKind::Stack), vec![6, 7, 8, 9, 10, 12, 14, 16]);
+        // non-bulk: +1 at L2 and L7 only
+        for k in [
+            InserterKind::Regular,
+            InserterKind::LongHanded,
+            InserterKind::Fast,
+        ] {
+            assert_eq!(ladder(k), vec![1, 1, 2, 2, 2, 2, 2, 3], "{k:?}");
+        }
     }
 }

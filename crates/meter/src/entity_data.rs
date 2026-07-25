@@ -153,27 +153,40 @@ impl InserterKind {
     /// Hand size at a declared inserter-capacity research level (0–7).
     ///
     /// Schedule per `factorio-mechanics.md` **I8b** (RFC-049, pinned from
-    /// raw wikitext): bulk 2→12 across the ladder; stack = bulk + 4;
-    /// non-bulk 1→3. Only bulk-class inserters scale with capacity
-    /// research; regular/long-handed/fast take the small non-bulk chain.
+    /// raw wikitext). Both ladders are **literal tables**, not closed
+    /// forms: neither is expressible as a clean saturating expression, and
+    /// an earlier draft's arithmetic silently mis-transcribed both (review,
+    /// PR #458 — bulk over-credited at L1–L6, non-bulk wrong at L2 and
+    /// L4–L6). Transcribe, don't derive.
     pub fn hand_size(self, level: u8) -> u32 {
-        let level = level.min(7) as u32;
+        let level = level.min(7) as usize;
         match self {
-            // Non-bulk chain: 1 at L0..L2, then +1 at L3 and L4, capped 3.
             InserterKind::Regular | InserterKind::LongHanded | InserterKind::Fast => {
-                1 + level.saturating_sub(2).min(2)
+                NON_BULK_HAND_BY_LEVEL[level]
             }
-            // Bulk: 2 at L0, then +1 per level to 12 at L7 is the wiki
-            // schedule's shape (2,4,5,6,7,9,11,12 across L0..L7).
-            InserterKind::Bulk => BULK_HAND_BY_LEVEL[level as usize],
-            InserterKind::Stack => BULK_HAND_BY_LEVEL[level as usize] + 4,
+            InserterKind::Bulk => BULK_HAND_BY_LEVEL[level],
+            // Stack = bulk-class + 4 built-in (`stack_size_bonus: 4` in the
+            // entity prototype), giving I8b's 6,7,8,9,10,12,14,16.
+            InserterKind::Stack => BULK_HAND_BY_LEVEL[level] + 4,
         }
     }
 }
 
 /// Bulk-inserter hand size by inserter-capacity research level 0..=7.
-/// `factorio-mechanics.md` I8b. Stack inserters are this + 4.
-const BULK_HAND_BY_LEVEL: [u32; 8] = [2, 4, 5, 6, 7, 9, 11, 12];
+/// `factorio-mechanics.md` I8b: +1 at L1–4, +2 at L5–7.
+const BULK_HAND_BY_LEVEL: [u32; 8] = [2, 3, 4, 5, 6, 8, 10, 12];
+
+/// Regular / long-handed / fast hand size by research level 0..=7.
+/// `factorio-mechanics.md` I8b: +1 at L2 and L7 only.
+///
+/// **Known unmodelled**: I8b also notes Transport-belt-capacity-2 grants a
+/// further literal "non-bulk inserter capacity +1" → max 4, which the
+/// *engine* bundles at L7. That bundling is an engine modelling choice
+/// rather than a measured fact, so the meter takes the literal chain and
+/// leaves the extra +1 out. Candidate `docs/meter-divergence.md` entry;
+/// revisit against measurement in PR 2/3 rather than by inheriting the
+/// engine's decision.
+const NON_BULK_HAND_BY_LEVEL: [u32; 8] = [1, 1, 2, 2, 2, 2, 2, 3];
 
 #[cfg(test)]
 mod tests {
