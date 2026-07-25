@@ -1614,6 +1614,24 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   observable effect in a 3-row layout; recorded as a smell, not a
   finding.*
 
+  ***Round-trip: the corpus miner reads our own output back as DI.***
+  *Wrapping both exported blueprint strings in the corpus's
+  `{"blueprintString": …}` envelope and running
+  `di-patterns census` over them returns:*
+
+  ```
+  8 DI observations; top producer -> consumer pairs:
+        4  casting-copper-cable -> electronic-circuit
+        4  casting-iron -> electronic-circuit
+  ```
+
+  *This is worth more than the `di-row` segment counts used elsewhere in
+  this log: the miner re-derives DI from raw entity geometry — inserter
+  direction, reach, and machine occupancy — with no knowledge of our
+  `segment_id` labels. The same tool that told us which pairs were worth
+  building confirms we built them. Four couplings per pair is exactly the
+  P4:C4 straddle at 10/s.*
+
   *Above those rates the cell refuses honestly — the consumer's OTHER
   input (60/s of cable into 8 EC machines) exceeds an express belt's
   45/s. A DI-off control run confirms the refusal is not a regression:
