@@ -28,17 +28,28 @@ pub const TICKS_PER_SECOND: f64 = 60.0;
 /// Splitters are the one direction-dependent case (2 wide perpendicular to
 /// facing, 1 deep along it — mechanics **S1**); see [`footprint_oriented`].
 ///
+/// **Only call this once the name is known.** It falls back to 1×1, which
+/// is a lie for anything bigger — use [`footprint_checked`] to establish
+/// the name is modelled, then this for convenience. Both current callers
+/// do exactly that: `blueprint_in::decode` rejects unknown names up front,
+/// and `factory.rs` calls this behind an `is_crafting_machine` gate.
+///
+/// The doc used to claim, in bold, that unknown names were an error here —
+/// describing `footprint_checked`'s behaviour, not this function's. Nothing
+/// depended on the false version, but a future caller trusting it would
+/// have got the silent wrong-tile placement it warned about.
+pub fn footprint(name: &str) -> (u32, u32) {
+    footprint_checked(name).unwrap_or((1, 1))
+}
+
+/// Footprint, or `None` for an entity the meter does not know.
+///
 /// **Unknown names are an error, not a 1×1 default.** A wrong footprint
 /// puts an entity on the wrong tile, which silently corrupts every
 /// adjacency the simulation depends on — the meter would then measure a
 /// factory that isn't the one in the blueprint. This is the same argument
 /// as the audit's GAP 2 (unknown machines solving silently at speed 1.0):
 /// a loud refusal beats a plausible wrong number.
-pub fn footprint(name: &str) -> (u32, u32) {
-    footprint_checked(name).unwrap_or((1, 1))
-}
-
-/// Footprint, or `None` for an entity the meter does not know.
 pub fn footprint_checked(name: &str) -> Option<(u32, u32)> {
     let f = match name {
         // 1x1: belts, undergrounds, inserters, poles, pipes.

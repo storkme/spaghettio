@@ -947,3 +947,48 @@ the right thing moved.
   find a reachable panic, an inverted lane, a 143× over-credit, or a
   tautological assertion. That is the case for the independent reviewer,
   made concrete.*
+- *2026-07-25 — **Two more from the bot's next pass, and the first one is a
+  bug the previous round's fix introduced.** Both valid, both fixed.*
+
+  ***1. The expectation fix leaked one layer up.*** *Making* `Machine::products`
+  *fractional was right, but* `Factory::tick_machines` *credited* `crafted`
+  *by re-deriving from that same vector —* `*amount as u64` *— which
+  truncates 0.25 to 0 and loses a third of a 1.5. The machine's own carry
+  was correct, so* `produced_per_s` *and belt-delivered throughput, the two
+  halves of one* `MeterReport`*, would silently disagree. Exactly the defect
+  the carry was added to kill, reintroduced one level away from it, in the
+  same commit.*
+
+  *Fixed at the root rather than with a second accumulator:* `Machine::tick`
+  *now records* `emitted_this_tick` *— the whole units it actually pushed —
+  and the factory credits those. One carry, one source of truth.* `products`
+  ***is now private***, *so nothing outside* `machine.rs` *can re-derive
+  production from expectations again. Same move as the* `Option<usize>`
+  *fix: prefer making the mistake unrepresentable over fixing this instance
+  of it.*
+
+  ***The lesson is about the shape of the fix, not the arithmetic.*** *A
+  correct change to a data representation is not finished until every
+  consumer of that representation has been re-read. The compiler was no
+  help —* `f64 as u64` *is a legal lossy cast — and the corpus was no help
+  either, because every fixture's products are integers with probability
+  1.0, where the truncation is exact. Silent under the type system and
+  silent under the tests.*
+
+  ***2. A doc comment that described a different function.*** `footprint`'s
+  *docs claimed in bold that unknown names are an error, not a 1×1 default;
+  the body is* `footprint_checked(name).unwrap_or((1, 1))`*. The claim was
+  true of* `footprint_checked` *and false of the function carrying it.
+  Unreachable today — both callers gate on* `footprint_checked` *first — but
+  a future caller trusting the comment would have got exactly the silent
+  wrong-tile placement it warned about. The bold paragraph moved to the
+  function it actually describes;* `footprint` *now documents its fallback
+  honestly.*
+
+  ***Running tally for this PR: the bot has found six defects across two
+  completed runs, the session-side review three.*** *No overlap between the
+  two sets. The bot found the panic, the inverted lane, the over-credit, the
+  tautology, the truncation and the false doc; the self-review found a stale
+  measurement, a dead branch and a loose allowlist. Different failure modes,
+  and neither list is a subset of the other — which is a better argument for
+  running both than for preferring either.*

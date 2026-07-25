@@ -352,12 +352,14 @@ impl Factory {
 
     fn tick_machines(&mut self) {
         for m in &mut self.machines {
-            let before = m.crafts;
             m.tick();
-            if m.crafts > before {
-                for (id, amount) in &m.products {
-                    *self.crafted.entry(id.0).or_insert(0) += *amount as u64;
-                }
+            // Credit what the machine actually emitted, never a re-derivation
+            // from `products` — those are fractional expectations, and casting
+            // one to an integer here truncated 0.25 to 0 and 1.5 to 1 while
+            // the machine's own carry got it right, so `produced_per_s`
+            // disagreed with belt-delivered throughput in the same report.
+            for (id, n) in &m.emitted_this_tick {
+                *self.crafted.entry(*id).or_insert(0) += *n as u64;
             }
         }
     }

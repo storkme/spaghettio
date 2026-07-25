@@ -76,11 +76,30 @@ pub struct Machine {
     pub ingredients: Vec<(ItemId, u32)>,
     /// Products per craft, as **expected** amounts — fractional for
     /// probabilistic recipes. Whole units are emitted via `product_debt`.
-    pub products: Vec<(ItemId, f64)>,
+    ///
+    /// **Private on purpose.** Anything outside this module that derives
+    /// "what was produced" from these expectations needs its own carry and
+    /// will drift from the one here — which is precisely what happened:
+    /// `Factory` cast the expectation straight to `u64`, truncating 0.25 to
+    /// 0 while the machine's carry got it right, so two halves of one report
+    /// disagreed. Read [`Machine::emitted_this_tick`] instead; the mistake
+    /// is now unrepresentable rather than merely fixed.
+    products: Vec<(ItemId, f64)>,
     /// Ingredients on hand.
     pub input: FxHashMap<u16, u32>,
     /// Fractional carry per product, for probabilistic recipes.
     product_debt: FxHashMap<u16, f64>,
+    /// Whole units emitted into `output` by the most recent `tick`.
+    ///
+    /// **The single source of truth for "what was produced".** `products`
+    /// holds fractional *expectations*, so anything that re-derives
+    /// production from it needs its own carry and will drift from the
+    /// carry here. `Factory` credited `crafted` by casting the expectation
+    /// straight to `u64`, which truncated every sub-1 product to zero and
+    /// lost a third of a 1.5 — so `produced_per_s` and belt-delivered
+    /// throughput, two halves of one report, silently disagreed. Reading
+    /// the emitted units means there is only one accumulator.
+    pub emitted_this_tick: Vec<(u16, u32)>,
     /// Finished products awaiting an output inserter.
     pub output: FxHashMap<u16, u32>,
     /// Per-ingredient buffer ceiling.
@@ -155,6 +174,7 @@ impl Machine {
             ingredients,
             products,
             product_debt: FxHashMap::default(),
+            emitted_this_tick: Vec::new(),
             input: FxHashMap::default(),
             output: FxHashMap::default(),
             buffer_cap,
@@ -226,6 +246,7 @@ impl Machine {
 
     /// Advance one tick.
     pub fn tick(&mut self) {
+        self.emitted_this_tick.clear();
         // Fluid-fed machines cannot run in PR 3. They are held in a
         // shortage state rather than allowed to craft from nothing, so a
         // fluid chain under-reports honestly instead of over-reporting.
@@ -262,6 +283,7 @@ impl Machine {
                 if whole >= 1.0 {
                     *debt -= whole;
                     *self.output.entry(id.0).or_insert(0) += whole as u32;
+                    self.emitted_this_tick.push((id.0, whole as u32));
                 }
             }
             self.crafts += 1;
@@ -292,6 +314,7 @@ mod tests {
             ingredients: Vec::new(),
             products: vec![(id, 0.25)],
             product_debt: FxHashMap::default(),
+            emitted_this_tick: Vec::new(),
             input: FxHashMap::default(),
             output: FxHashMap::default(),
             buffer_cap: FxHashMap::default(),
