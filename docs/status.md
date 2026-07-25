@@ -173,10 +173,28 @@ and stays unregistered ([#437](https://github.com/storkme/spaghettio/issues/437)
 its original inserter attribution was disproven (the warnings are a
 validator utilization artifact on composed layouts — each of K=8
 replicas is charged the whole chain's demand), so the deficit is real
-but unattributed. USP@2 not yet re-measured. Tracked
+but unattributed. **USP@2 measured 2026-07-25: −57.2% FAIL**, converged
+and properly sampled on the post-#464 instrument (5 checkpoints, full
+300-item windows auto-sized to 21,240 ticks, group drift +0.4%);
+unregistered, tracked at
+[#453](https://github.com/storkme/spaghettio/issues/453). Tracked
 follow-ups: #383 (bound lift), #409 (landed independently), #423
 (pitch-1 splitter-passthrough). Full trail:
 [`rfc-052-oil-mega-cell.md`](rfc-052-oil-mega-cell.md) decision log.
+
+> **Instrument caveat on the numbers above** ([#454](https://github.com/storkme/spaghettio/issues/454)
+> / [#464](https://github.com/storkme/spaghettio/pull/464), 2026-07-25).
+> Every mega-cell rate measured before 2026-07-25 came from a harness
+> whose stability test **certified decelerating ramps as converged** —
+> it compared only the last two windows, which any flattening ramp
+> eventually passes, at a point short of its asymptote. chem5's blessed
+> "5.00/s EXACT" was such a point (its series: 4.62 → 4.92 → 5.00, span
+> mean 4.84). Re-measurement under the group rule holds the verdict
+> (5.08 produced / 5.15 delivered, **PASS**, within `check` tolerance of
+> the blessed entry), so chem5's registration stands. **PU@4's −27.3% has
+> NOT been re-measured** and should not be treated as a settled number
+> until it is. USP@2's −57.2% survived the fix across all three
+> instrument versions (−57.0 / −57.4 / −57.2), so that deficit is real.
 
 **`rfc-inserter-sizing.md` close-out (2026-07-13)**: bus inserters sized to
 planned per-machine throughput via a shared regular→fast→stack ladder
