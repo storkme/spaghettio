@@ -542,9 +542,15 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
       `[1,5,10,14]` — non-uniform gaps of 4/5/4), which no existing
       template can express. That is the concrete reason 1c needs a new
       `RowKind` rather than a parameter.
-    - **Order of work**: (1) `RowKind` + template that emits a cell band
-      via `stamp_di_cell`; (2) intercept the producer/consumer spec pair
-      in `place_rows`; (3) lane-planner skip for the coupled item —
+    - **Order of work**: (1) ✅ **cell emission is DONE** —
+      `stamp_di_cell_io` emits the complete sub-layout (input belt, feed
+      inserters, producers, DI band, consumers, output inserters, output
+      belt) and returns a `DiCellLayout` carrying `input_belt_y` /
+      `output_belt_y` / x-extent, i.e. exactly the fields a `RowSpan`
+      needs. What remains of this step is constructing the `RowSpan`
+      itself and hanging it off a `RowKind`; (2) intercept the
+      producer/consumer spec pair in `place_rows`; (3) lane-planner skip
+      for the coupled item —
       `di_input` already exists and is item-keyed, so reuse it rather
       than inventing a second mechanism; (4) fall back to the existing
       bridge, then the bus, whenever `plan_straddle` returns `None` or

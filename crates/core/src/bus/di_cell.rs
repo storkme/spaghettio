@@ -576,3 +576,272 @@ mod stamp_tests {
         }
     }
 }
+
+// ── full cell: I/O belts around the coupling ────────────────────────────────
+
+/// The belts and inserters that surround a cell's coupling: the producer's
+/// solid input arriving on a belt, and the consumer's product leaving on
+/// one. Phase 1's scope is deliberately narrow — the consumer's ONLY solid
+/// input is the directly-inserted item, so it needs no input belt at all,
+/// which is exactly what makes the cell tight.
+#[derive(Debug, Clone)]
+pub struct DiCellIo<'a> {
+    pub input_item: &'a str,
+    pub input_belt: &'a str,
+    /// Inserter carrying `input_item` from the input belt into a producer.
+    pub feed_inserter: &'a str,
+    pub output_item: &'a str,
+    pub output_belt: &'a str,
+    /// Inserter carrying `output_item` from a consumer onto the output belt.
+    pub out_inserter: &'a str,
+}
+
+/// A stamped cell plus the row geometry a caller needs to register it with
+/// the lane planner (`input_belt_y` for tap-off, `output_belt_y` for the
+/// bus, and the x-extent).
+#[derive(Debug, Clone)]
+pub struct DiCellLayout {
+    pub entities: Vec<PlacedEntity>,
+    pub input_belt_y: i32,
+    pub producer_y: i32,
+    pub band_y: i32,
+    pub consumer_y: i32,
+    pub output_belt_y: i32,
+    pub x_min: i32,
+    pub x_max: i32,
+}
+
+impl DiCellLayout {
+    pub fn height(&self) -> i32 {
+        self.output_belt_y - self.input_belt_y + 1
+    }
+}
+
+/// Stamp a complete DI cell: input belt, feed inserters, producers, the
+/// one-tile DI band, consumers, output inserters, output belt.
+///
+/// Vertical layout for `h`-tall machines (every inserter is reach-1 and
+/// faces south, so each picks from the band above it and drops into the
+/// band below):
+/// ```text
+///   y0            input belt        (flows east)
+///   y0+1          feed inserters    belt   → producer
+///   y0+2 ..       producer machines
+///   y0+2+h        DI band           producer → consumer
+///   y0+3+h ..     consumer machines
+///   y0+3+2h       output inserters  consumer → belt
+///   y0+4+2h       output belt       (flows east)
+/// ```
+///
+/// Returns `None` for the same reasons [`stamp_di_cell`] does.
+pub fn stamp_di_cell_io(
+    plan: &StraddlePlan,
+    spec: &DiCellSpec<'_>,
+    io: &DiCellIo<'_>,
+    x0: i32,
+    y0: i32,
+    machine_w: i32,
+    machine_h: i32,
+) -> Option<DiCellLayout> {
+    if machine_w <= 0 || machine_h <= 0 {
+        return None;
+    }
+    let input_belt_y = y0;
+    let feed_y = y0 + 1;
+    let producer_y = y0 + 2;
+    let coupling = stamp_di_cell(plan, spec, x0, producer_y, machine_h)?;
+    let band_y = producer_y + machine_h;
+    let consumer_y = band_y + 1;
+    let out_ins_y = consumer_y + machine_h;
+    let output_belt_y = out_ins_y + 1;
+
+    let x_min = x0;
+    let x_max = x0 + plan.width(machine_w) - 1;
+    let seg = format!("di-cell:{}:{}", spec.item, spec.consumer_recipe);
+
+    let mut ents = coupling;
+    // Belts span the whole cell so every machine on either row can be
+    // served, and so the lane planner sees one contiguous run per side.
+    for x in x_min..=x_max {
+        ents.push(PlacedEntity {
+            name: io.input_belt.to_string(),
+            x,
+            y: input_belt_y,
+            direction: EntityDirection::East,
+            carries: Some(io.input_item.to_string()),
+            segment_id: Some(format!("{seg}:belt-in:{}", io.input_item)),
+            ..Default::default()
+        });
+        ents.push(PlacedEntity {
+            name: io.output_belt.to_string(),
+            x,
+            y: output_belt_y,
+            direction: EntityDirection::East,
+            carries: Some(io.output_item.to_string()),
+            segment_id: Some(format!("{seg}:belt-out")),
+            ..Default::default()
+        });
+    }
+    // One feed inserter per producer and one output inserter per consumer,
+    // at the machine's middle column so a 1-wide machine still works.
+    let mid = machine_w / 2;
+    for &px in &plan.producer_xs {
+        ents.push(PlacedEntity {
+            name: io.feed_inserter.to_string(),
+            x: x0 + px + mid,
+            y: feed_y,
+            direction: EntityDirection::South,
+            carries: Some(io.input_item.to_string()),
+            segment_id: Some(format!("{seg}:inserter-in")),
+            ..Default::default()
+        });
+    }
+    for &cx in &plan.consumer_xs {
+        ents.push(PlacedEntity {
+            name: io.out_inserter.to_string(),
+            x: x0 + cx + mid,
+            y: out_ins_y,
+            direction: EntityDirection::South,
+            carries: Some(io.output_item.to_string()),
+            segment_id: Some(format!("{seg}:inserter-out")),
+            ..Default::default()
+        });
+    }
+
+    Some(DiCellLayout {
+        entities: ents,
+        input_belt_y,
+        producer_y,
+        band_y,
+        consumer_y,
+        output_belt_y,
+        x_min,
+        x_max,
+    })
+}
+
+#[cfg(test)]
+mod io_tests {
+    use super::*;
+    use crate::common::{dir_to_vec, entity_size, inserter_reach, machine_feed_rate, QualityTier};
+    use rustc_hash::{FxHashMap, FxHashSet};
+
+    fn build() -> DiCellLayout {
+        let plan = plan_straddle(6, 4, 5.0, 7.5, 3).unwrap();
+        let rate = machine_feed_rate("stack-inserter", QualityTier::Normal, 0);
+        let spec = DiCellSpec {
+            producer_entity: "assembling-machine-3",
+            consumer_entity: "assembling-machine-3",
+            producer_recipe: "copper-cable",
+            consumer_recipe: "electronic-circuit",
+            item: "copper-cable",
+            inserter: "stack-inserter",
+            inserter_rate: rate,
+        };
+        let io = DiCellIo {
+            input_item: "copper-plate",
+            input_belt: "transport-belt",
+            feed_inserter: "stack-inserter",
+            output_item: "electronic-circuit",
+            output_belt: "transport-belt",
+            out_inserter: "stack-inserter",
+        };
+        stamp_di_cell_io(&plan, &spec, &io, 0, 0, 3, 3).expect("full cell must stamp")
+    }
+
+    /// Every inserter in the cell must be reach-1 and connect the two
+    /// things it is meant to: belt→producer, producer→consumer,
+    /// consumer→belt. This is the whole cell's correctness in one test.
+    #[test]
+    fn every_inserter_connects_its_intended_pair() {
+        let cell = build();
+        let mut machine_role: FxHashMap<(i32, i32), &str> = FxHashMap::default();
+        for e in cell.entities.iter().filter(|e| e.name.starts_with("assembling")) {
+            let (w, h) = entity_size(&e.name);
+            let role = if e.recipe.as_deref() == Some("copper-cable") { "producer" } else { "consumer" };
+            for dx in 0..w as i32 {
+                for dy in 0..h as i32 {
+                    machine_role.insert((e.x + dx, e.y + dy), role);
+                }
+            }
+        }
+        let belt_at: FxHashMap<(i32, i32), &str> = cell
+            .entities
+            .iter()
+            .filter(|e| e.name.contains("transport-belt"))
+            .map(|e| ((e.x, e.y), e.carries.as_deref().unwrap_or("")))
+            .collect();
+
+        for ins in cell.entities.iter().filter(|e| e.name.contains("inserter")) {
+            let (dx, dy) = dir_to_vec(ins.direction);
+            let r = inserter_reach(&ins.name);
+            assert_eq!(r, 1, "cell inserters must be reach-1");
+            let pick = (ins.x - dx * r, ins.y - dy * r);
+            let drop = (ins.x + dx * r, ins.y + dy * r);
+            let seg = ins.segment_id.clone().unwrap_or_default();
+            if seg.ends_with(":inserter-in") {
+                assert_eq!(belt_at.get(&pick).copied(), Some("copper-plate"), "feed picks from input belt");
+                assert_eq!(machine_role.get(&drop).copied(), Some("producer"), "feed drops into producer");
+            } else if seg.ends_with(":inserter-out") {
+                assert_eq!(machine_role.get(&pick).copied(), Some("consumer"), "output picks from consumer");
+                assert_eq!(belt_at.get(&drop).copied(), Some("electronic-circuit"), "output drops on out belt");
+            } else {
+                assert_eq!(machine_role.get(&pick).copied(), Some("producer"), "DI picks from producer");
+                assert_eq!(machine_role.get(&drop).copied(), Some("consumer"), "DI drops into consumer");
+            }
+        }
+    }
+
+    /// No two entities may occupy the same tile (machines expanded).
+    #[test]
+    fn cell_has_no_overlaps() {
+        let cell = build();
+        let mut seen: FxHashSet<(i32, i32)> = FxHashSet::default();
+        for e in &cell.entities {
+            let (w, h) = if e.name.starts_with("assembling") { entity_size(&e.name) } else { (1, 1) };
+            for dx in 0..w as i32 {
+                for dy in 0..h as i32 {
+                    assert!(seen.insert((e.x + dx, e.y + dy)), "overlap at {:?} ({})", (e.x + dx, e.y + dy), e.name);
+                }
+            }
+        }
+    }
+
+    /// Both belts are contiguous runs flowing the same way — the lane
+    /// planner and the belt-connectivity check both rely on that.
+    #[test]
+    fn belts_are_contiguous_single_direction_runs() {
+        let cell = build();
+        for (y, item) in [(cell.input_belt_y, "copper-plate"), (cell.output_belt_y, "electronic-circuit")] {
+            let mut xs: Vec<i32> = cell
+                .entities
+                .iter()
+                .filter(|e| e.y == y && e.name.contains("transport-belt"))
+                .map(|e| {
+                    assert_eq!(e.direction, EntityDirection::East);
+                    assert_eq!(e.carries.as_deref(), Some(item));
+                    e.x
+                })
+                .collect();
+            xs.sort_unstable();
+            assert_eq!(xs.first().copied(), Some(cell.x_min));
+            assert_eq!(xs.last().copied(), Some(cell.x_max));
+            for w in xs.windows(2) {
+                assert_eq!(w[1] - w[0], 1, "belt run at y={y} has a hole");
+            }
+        }
+    }
+
+    /// The full cell — belts included — is 11 tiles for 3-tall machines,
+    /// against the bus's measured 17 for the same coupling (KC4).
+    #[test]
+    fn full_cell_is_shorter_than_the_bus_baseline() {
+        let cell = build();
+        assert_eq!(cell.height(), 11);
+        assert_eq!(
+            (cell.input_belt_y, cell.producer_y, cell.band_y, cell.consumer_y, cell.output_belt_y),
+            (0, 2, 5, 6, 10)
+        );
+        assert!(cell.height() < 17, "KC4: cell must stay under the 17-tile bus baseline");
+    }
+}
