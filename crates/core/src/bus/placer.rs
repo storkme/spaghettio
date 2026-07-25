@@ -2082,8 +2082,17 @@ fn row_cell_eligible(producer: &MachineSpec, consumer: &MachineSpec, item: &str)
     if !producer.game_modules.is_empty() || !consumer.game_modules.is_empty() {
         return false;
     }
+    // The CONSUMER must be entirely solid: its faces are already spent on
+    // the DI coupling, its belt-fed input and its output, so a pipe has
+    // nowhere to land. (That is the `electric-engine-unit` shape —
+    // lubricant on the consumer — and it is out of scope here.)
     let any_fluid = |s: &MachineSpec| s.inputs.iter().chain(&s.outputs).any(|f| f.is_fluid);
-    if any_fluid(producer) || any_fluid(consumer) {
+    if any_fluid(consumer) {
+        return false;
+    }
+    // A fluid-OUT producer would need a pipe on the face its coupling
+    // uses; only fluid IN is served.
+    if producer.outputs.iter().any(|f| f.is_fluid) {
         return false;
     }
     let solids = |fs: &[ItemFlow]| -> Vec<String> {
@@ -2091,7 +2100,15 @@ fn row_cell_eligible(producer: &MachineSpec, consumer: &MachineSpec, item: &str)
     };
     let (p_in, p_out) = (solids(&producer.inputs), solids(&producer.outputs));
     let (c_in, c_out) = (solids(&consumer.inputs), solids(&consumer.outputs));
-    if p_out.len() != 1 || p_out[0] != item || p_in.len() != 1 || c_out.len() != 1 {
+    let p_fluid_in = producer.inputs.iter().filter(|f| f.is_fluid).count();
+    // Either a single solid input (belt-fed, the original shape) or a
+    // single fluid input and NO solid input (`casting-copper-cable`,
+    // `casting-iron`, `solid-fuel-from-light-oil`). The all-fluid case is
+    // what frees the producer's north face for the pipe run; a producer
+    // with BOTH would need the belt and the pipe on the same face.
+    let producer_feed_ok =
+        (p_in.len() == 1 && p_fluid_in == 0) || (p_in.is_empty() && p_fluid_in == 1);
+    if p_out.len() != 1 || p_out[0] != item || !producer_feed_ok || c_out.len() != 1 {
         return false;
     }
     // Exactly two solid inputs: the coupled item plus one belt-fed other.
@@ -2105,7 +2122,7 @@ fn row_cell_eligible(producer: &MachineSpec, consumer: &MachineSpec, item: &str)
     // second belt would never be tapped and its machines would starve
     // silently. Refuse; see the RFC decision log.
     let c_other = c_in.iter().find(|i| *i != item).cloned().unwrap_or_default();
-    if c_other == p_in[0] {
+    if p_in.first().is_some_and(|p| *p == c_other) {
         return false;
     }
     machine_dims(&producer.entity) == machine_dims(&consumer.entity)
@@ -2149,11 +2166,14 @@ fn try_build_row_cell(
         return None;
     }
 
-    let p_in = producer.inputs.iter().find(|f| !f.is_fluid)?;
+    // `None` for an all-fluid producer, whose north face carries a pipe
+    // run instead of a belt (RFC-053 pipe cut).
+    let p_in = producer.inputs.iter().find(|f| !f.is_fluid);
+    let p_fluid = producer.inputs.iter().find(|f| f.is_fluid);
     let c_in = consumer.inputs.iter().find(|f| !f.is_fluid && f.item != item)?;
     let out = consumer.outputs.iter().find(|f| !f.is_fluid)?;
 
-    let p_total = p_in.rate * p_util * p_count as f64;
+    let p_total = p_in.map(|f| f.rate * p_util * p_count as f64).unwrap_or(0.0);
     let c_total = c_in.rate * c_util * c_count as f64;
     let out_total = out.rate * c_util * c_count as f64;
 
@@ -2162,7 +2182,7 @@ fn try_build_row_cell(
     // argument as every other row. Inserters pick from both lanes (I6),
     // so full belt capacity is available on the input side.
     let in_belt = row_input_belt(max_belt_tier);
-    let in_stack = ctx.for_item(&p_in.item);
+    let in_stack = p_in.map(|f| ctx.for_item(&f.item)).unwrap_or(1);
     let cap = lane_capacity_stacked(in_belt, in_stack) * 2.0;
     if cap + 1e-9 < p_total || cap + 1e-9 < c_total {
         return None;
@@ -2183,7 +2203,11 @@ fn try_build_row_cell(
     // I8a). Output therefore routinely needs TWO columns at L2, so give
     // these faces real column budgets instead of forcing one each.
     let budget = (mw.max(1) as usize).saturating_sub(1);
-    let p_feed = size_side(p_in.rate * p_util, Reach::Near, budget, max_inserter_tier, quality, level);
+    let p_feed = match p_in {
+        Some(f) => size_side(f.rate * p_util, Reach::Near, budget, max_inserter_tier, quality, level),
+        // No solid feed face to size — the pipe carries it.
+        None => crate::bus::inserter_ladder::SidePlan { entity: "inserter", count: 0, shortfall: None },
+    };
     let c_feed = size_side(c_in.rate * c_util, Reach::Near, budget, max_inserter_tier, quality, level);
     let drop = size_belt_drop_side(
         out.rate * c_util, Reach::Far, budget, max_inserter_tier, quality, out_stack, level, out_belt,
@@ -2207,7 +2231,11 @@ fn try_build_row_cell(
             item,
             coupler: coupler.entity,
             coupler_rate,
-            producer_input: (&p_in.item, in_belt, p_feed.entity),
+            producer_input: match p_in {
+                Some(f) => (f.item.as_str(), in_belt, p_feed.entity),
+                None => ("", in_belt, p_feed.entity),
+            },
+            producer_fluid: p_fluid.map(|f| (f.item.as_str(), "pipe")),
             consumer_input: (&c_in.item, in_belt, c_feed.entity),
             output_item: &out.item,
             output_belt: out_belt,
@@ -2235,10 +2263,26 @@ fn try_build_row_cell(
         voider: false,
         game_modules: Vec::new(),
         count: c_count as f64,
-        inputs: vec![
-            ItemFlow { item: p_in.item.clone(), rate: p_in.rate * scale, is_fluid: false, module_id: p_in.module_id },
-            ItemFlow { item: c_in.item.clone(), rate: c_in.rate, is_fluid: false, module_id: c_in.module_id },
-        ],
+        // Order MUST match the row's belt/port lists. The consumer's belt
+        // input comes FIRST when the producer is fluid-fed, because
+        // `input_belt_y` then holds only that one belt; the fluid is
+        // carried separately through `fluid_port_ys`/`fluid_port_pipes`,
+        // which `lane_planner` taps on its own branch.
+        inputs: match p_in {
+            Some(f) => vec![
+                ItemFlow { item: f.item.clone(), rate: f.rate * scale, is_fluid: false, module_id: f.module_id },
+                ItemFlow { item: c_in.item.clone(), rate: c_in.rate, is_fluid: false, module_id: c_in.module_id },
+            ],
+            None => vec![
+                ItemFlow { item: c_in.item.clone(), rate: c_in.rate, is_fluid: false, module_id: c_in.module_id },
+                ItemFlow {
+                    item: p_fluid.map(|f| f.item.clone()).unwrap_or_default(),
+                    rate: p_fluid.map(|f| f.rate * scale).unwrap_or(0.0),
+                    is_fluid: true,
+                    module_id: p_fluid.map(|f| f.module_id).unwrap_or(0),
+                },
+            ],
+        },
         outputs: consumer.outputs.clone(),
     };
     let width = cell.x_max + 1;
@@ -2251,8 +2295,8 @@ fn try_build_row_cell(
         input_belt_y: cell.input_belt_ys.clone(),
         output_belt_y: cell.output_belt_y,
         row_width: width,
-        fluid_port_ys: Vec::new(),
-        fluid_port_pipes: Vec::new(),
+        fluid_port_ys: cell.fluid_port_ys.clone(),
+        fluid_port_pipes: cell.fluid_port_pipes.clone(),
         fluid_output_port_pipes: Vec::new(),
         output_east: true,
         output_belt_x_min: cell.x_min,
