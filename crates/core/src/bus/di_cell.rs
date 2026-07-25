@@ -1145,7 +1145,18 @@ pub struct RowCellSpec<'a> {
     /// and inserters is free, and the pipe run goes exactly there. That is
     /// also why the corpus shows no canonical pipe face: no contention.
     pub producer_fluid: Option<(&'a str, &'a str)>,
-    pub consumer_input: (&'a str, &'a str, &'a str),
+    /// `(item, belt, feed_inserter)` for the consumer's belt-fed input, or
+    /// `None` when the coupled item is its ONLY solid ingredient
+    /// (`solid-fuel-from-light-oil → rocket-fuel`). Then its south face
+    /// carries the output alone and no inner belt is stamped.
+    pub consumer_input: Option<(&'a str, &'a str, &'a str)>,
+    /// `Some((fluid_item, pipe_entity))` when the CONSUMER also draws a
+    /// fluid. Only ever the same fluid the producer is piped: the cell
+    /// declares one set of tap points on one row and the lane planner
+    /// routes a single run to them, so both roles' north input ports are
+    /// registered against that one run. A second, different fluid would
+    /// need a second run on a face the cell does not have.
+    pub consumer_fluid: Option<(&'a str, &'a str)>,
     /// Inserters per machine face. The output face needs reach-2 (it steps
     /// over the consumer's input belt), and long-handed is the only
     /// reach-2 inserter (I8a) at 2.40/s at L2 — under the 2.5/s an EC
@@ -1216,7 +1227,12 @@ pub fn stamp_row_cell(
     // Row-relative top of each role once bottom-aligned.
     let top_of = |is_p: bool| machine_y + (max_h - if is_p { producer_h } else { consumer_h });
     let c_belt_y = face_y + 1;
-    let output_belt_y = face_y + 2;
+    // With no belt-fed consumer input that inner row is empty, so the
+    // output belt moves up into it. Worth doing rather than leaving a gap:
+    // it drops a row from the cell AND puts the output inserter at reach-1,
+    // off long-handed's 2.40/s ceiling — the constraint that forces two
+    // output columns in the ordinary shape.
+    let output_belt_y = if spec.consumer_input.is_some() { face_y + 2 } else { face_y + 1 };
     let x_min = x0;
     let x_max = x0 + plan.width(producer_w, consumer_w) - 1;
     let seg = format!("di-row:{}:{}", spec.item, spec.consumer_recipe);
@@ -1239,7 +1255,9 @@ pub fn stamp_row_cell(
     if spec.producer_fluid.is_none() {
         belt_run(&mut ents, p_belt_y, spec.producer_input.1, spec.producer_input.0);
     }
-    belt_run(&mut ents, c_belt_y, spec.consumer_input.1, spec.consumer_input.0);
+    if let Some((item, belt, _)) = spec.consumer_input {
+        belt_run(&mut ents, c_belt_y, belt, item);
+    }
     belt_run(&mut ents, output_belt_y, spec.output_belt, spec.output_item);
 
     // Columns available on a face, innermost first so single-inserter
@@ -1253,8 +1271,13 @@ pub fn stamp_row_cell(
         // tile that merely looks adjacent and carries nothing. Ports are
         // prototype-fixed per direction, so this is read from the shared
         // table rather than assumed.
-        let (m_mirror, m_dir) = match (is_producer, spec.producer_fluid) {
-            (true, Some(_)) => crate::fluid_ports::north_input_orientation(spec.producer_entity),
+        let (m_mirror, m_dir) = match is_producer {
+            true if spec.producer_fluid.is_some() => {
+                crate::fluid_ports::north_input_orientation(spec.producer_entity)
+            }
+            false if spec.consumer_fluid.is_some() => {
+                crate::fluid_ports::north_input_orientation(spec.consumer_entity)
+            }
             _ => (false, EntityDirection::North),
         };
         let my = top_of(is_producer);
@@ -1292,21 +1315,35 @@ pub fn stamp_row_cell(
                 }
             }
         } else {
+            // NOTE: a fluid-drawing consumer registers NO tap points of its
+            // own. Tested, not assumed: adding them changes nothing. The
+            // pipe run below is stamped across the whole cell width from
+            // the producer's side, so it is one connected network and the
+            // consumer's north ports are adjacent to it either way;
+            // `fluid_port_pipes` only tells the lane planner where to tap
+            // the bus INTO the cell, which the producer's ports already do.
+            // What IS load-bearing is the consumer's ORIENTATION above —
+            // eligibility admits it on the strength of having a north input
+            // port, so the stamp has to actually put it there.
+            //
             // South face shares one row: reach-1 feeds from the inner belt,
             // reach-2 outputs over it. Feed takes the low columns, output
-            // the high ones, so they never contend for a tile.
-            let nf = spec.consumer_feed_count.max(1);
+            // the high ones, so they never contend for a tile. A consumer
+            // whose only solid ingredient is the coupled one has no feed at
+            // all and gives the whole face to its output.
+            let nf = if spec.consumer_input.is_some() { spec.consumer_feed_count.max(1) } else { 0 };
             let no = spec.out_count.max(1);
             if nf + no > consumer_w as usize {
                 return None;
             }
             for dx in 0..nf as i32 {
+                let (item, _, inserter) = spec.consumer_input.expect("nf > 0 implies Some");
                 ents.push(PlacedEntity {
-                    name: spec.consumer_input.2.to_string(),
+                    name: inserter.to_string(),
                     x: mx + dx,
                     y: face_y,
                     direction: EntityDirection::North,
-                    carries: Some(spec.consumer_input.0.to_string()),
+                    carries: Some(item.to_string()),
                     segment_id: Some(seg.clone()),
                     ..Default::default()
                 });
@@ -1326,9 +1363,12 @@ pub fn stamp_row_cell(
     }
 
     // Continuous pipe run on the row ADJACENT to the machines, so it meets
-    // the north input ports recorded above. Consumers sharing the row are
-    // unaffected: they have no fluid box, so the run forms no connection
-    // over their columns.
+    // the north input ports recorded above. A consumer sharing the row
+    // either has no fluid box — the run forms no connection over its
+    // columns — or draws the SAME fluid, which is the only case
+    // `row_cell_eligible` admits, so joining that one network is exactly
+    // the intent. Different fluids on one run would cross-contaminate,
+    // which is why the gate is same-fluid rather than any-fluid.
     if let Some((fluid_item, pipe)) = spec.producer_fluid {
         let pipe_y = top_of(true) - 1;
         for x in x_min..=x_max {
@@ -1363,15 +1403,26 @@ pub fn stamp_row_cell(
         });
     }
 
-    let fluid_port_ys =
-        if spec.producer_fluid.is_some() { vec![top_of(true) - 1] } else { Vec::new() };
+    // Derived from the ports actually recorded, not from which role has a
+    // fluid: the two can only agree by accident, and a port declared on a
+    // row the lane planner is not told about would never be piped.
+    let mut fluid_port_ys: Vec<i32> = fluid_ports.iter().map(|&(_, _, y)| y).collect();
+    fluid_port_ys.sort_unstable();
+    fluid_port_ys.dedup();
+    // Parallel to the fused spec's solid-input order: producer's belt
+    // first when it has one, then the consumer's. Either may be absent,
+    // and both are when the producer is piped and the coupled item is the
+    // consumer's only solid ingredient.
+    let mut input_belt_ys = Vec::new();
+    if spec.producer_fluid.is_none() {
+        input_belt_ys.push(p_belt_y);
+    }
+    if spec.consumer_input.is_some() {
+        input_belt_ys.push(c_belt_y);
+    }
     Some(RowCellLayout {
         entities: ents,
-        input_belt_ys: if spec.producer_fluid.is_some() {
-            vec![c_belt_y]
-        } else {
-            vec![p_belt_y, c_belt_y]
-        },
+        input_belt_ys,
         fluid_port_ys,
         fluid_port_pipes: fluid_ports,
         machine_y,
@@ -1398,7 +1449,8 @@ mod row_stamp_tests {
             // Reach-1: the producer's belt is the NORTH face, adjacent.
             producer_input: ("copper-plate", "transport-belt", "fast-inserter"),
             producer_fluid: None,
-            consumer_input: ("iron-plate", "transport-belt", "fast-inserter"),
+            consumer_input: Some(("iron-plate", "transport-belt", "fast-inserter")),
+            consumer_fluid: None,
             output_item: "electronic-circuit",
             output_belt: "transport-belt",
             out_inserter: "long-handed-inserter",
@@ -1412,6 +1464,102 @@ mod row_stamp_tests {
         let plan = plan_row_straddle(6, 4, 5.0, 7.5, 3, 3).unwrap();
         let l = stamp_row_cell(&plan, &spec(), 0, 0, 3, 3, 3, 3).unwrap();
         (plan, l)
+    }
+
+    /// The shared-fluid shape: a piped producer whose consumer draws the
+    /// SAME fluid and takes no belt-fed solid at all
+    /// (`solid-fuel-from-light-oil → rocket-fuel`).
+    ///
+    /// Pinned as a unit test rather than end-to-end because the shape is
+    /// currently UNREACHABLE: the only corpus pair with it resolves to a
+    /// `biochamber`, which `cell_machines_are_powerable` refuses (burner,
+    /// fuel category `nutrients`, and nothing in the engine delivers
+    /// burner fuel). `chemical-plant` on both sides here stands in for the
+    /// geometry, which is what this test is about.
+    fn shared_fluid_spec() -> RowCellSpec<'static> {
+        RowCellSpec {
+            producer_entity: "chemical-plant",
+            consumer_entity: "chemical-plant",
+            producer_recipe: "solid-fuel-from-light-oil",
+            consumer_recipe: "rocket-fuel",
+            item: "solid-fuel",
+            coupler: "inserter",
+            coupler_rate: 12.0,
+            producer_input: ("", "transport-belt", "inserter"),
+            producer_fluid: Some(("light-oil", "pipe")),
+            // The coupling supplies every solid the consumer needs.
+            consumer_input: None,
+            consumer_fluid: Some(("light-oil", "pipe")),
+            output_item: "rocket-fuel",
+            output_belt: "transport-belt",
+            out_inserter: "inserter",
+            producer_feed_count: 0,
+            consumer_feed_count: 0,
+            out_count: 1,
+        }
+    }
+
+    /// With no belt-fed consumer input the inner row is empty, so the
+    /// output belt moves up into it and its inserter drops at reach-1.
+    /// Leaving the gap would cost a row AND pin the output to long-handed's
+    /// 2.40/s ceiling.
+    #[test]
+    fn coupling_fed_consumer_drops_the_inner_belt_row() {
+        let plan = plan_row_straddle(4, 4, 1.0, 1.0, 3, 3).unwrap();
+        let l = stamp_row_cell(&plan, &shared_fluid_spec(), 0, 0, 3, 3, 3, 3).unwrap();
+
+        // Face row is directly above the output belt: nothing between.
+        let face_y = l.machine_y + 3;
+        assert_eq!(l.output_belt_y, face_y + 1, "output belt sits against the face");
+        assert!(
+            l.input_belt_ys.is_empty(),
+            "a piped producer and a coupling-fed consumer tap no belt at all, got {:?}",
+            l.input_belt_ys
+        );
+        // Exactly one belt run — the output.
+        let belt_ys: std::collections::BTreeSet<i32> = l
+            .entities
+            .iter()
+            .filter(|e| e.name.ends_with("transport-belt"))
+            .map(|e| e.y)
+            .collect();
+        assert_eq!(
+            belt_ys.iter().copied().collect::<Vec<_>>(),
+            vec![l.output_belt_y],
+            "the only belt should be the output"
+        );
+    }
+
+    /// Equal heights are an eligibility precondition precisely so that
+    /// bottom-alignment lands BOTH roles' north faces on the pipe row the
+    /// producer's run occupies. Checked against real port geometry, not by
+    /// assuming the run's extent is enough.
+    #[test]
+    fn shared_fluid_run_reaches_both_roles_north_ports() {
+        let plan = plan_row_straddle(4, 4, 1.0, 1.0, 3, 3).unwrap();
+        let l = stamp_row_cell(&plan, &shared_fluid_spec(), 0, 0, 3, 3, 3, 3).unwrap();
+        let pipes: std::collections::HashSet<(i32, i32)> = l
+            .entities
+            .iter()
+            .filter(|e| e.name == "pipe")
+            .map(|e| (e.x, e.y))
+            .collect();
+        assert!(!pipes.is_empty(), "a piped producer must get a run");
+
+        let machines: Vec<_> =
+            l.entities.iter().filter(|e| e.name == "chemical-plant").collect();
+        assert_eq!(machines.len(), 8, "4 producers + 4 consumers");
+        let (mirror, dir) = crate::fluid_ports::north_input_orientation("chemical-plant");
+        let dxs = crate::fluid_ports::north_input_dxs("chemical-plant", mirror, dir);
+        assert!(!dxs.is_empty(), "chemical-plant must expose a north input port");
+        for m in &machines {
+            assert!(
+                dxs.iter().any(|dx| pipes.contains(&(m.x + dx, m.y - 1))),
+                "machine at ({},{}) has no pipe on any north port (dxs {dxs:?})",
+                m.x,
+                m.y
+            );
+        }
     }
 
     /// THE defining DI property, the same predicate `classify.rs` applies

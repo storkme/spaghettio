@@ -1820,6 +1820,9 @@ fn cell_eligible(producer: &MachineSpec, consumer: &MachineSpec, item: &str) -> 
     if producer.voider || consumer.voider {
         return false;
     }
+    if !cell_machines_are_powerable(producer, consumer) {
+        return false;
+    }
     // Modules: refuse outright. The module post-pass in `layout.rs` keys
     // loadouts by `(entity, recipe)` gathered from `row_spans`, and a
     // fused cell contributes only the CONSUMER's recipe — the producer's
@@ -2078,24 +2081,49 @@ fn row_cell_eligible(producer: &MachineSpec, consumer: &MachineSpec, item: &str)
     if producer.voider || consumer.voider {
         return false;
     }
+    if !cell_machines_are_powerable(producer, consumer) {
+        return false;
+    }
     if !producer.self_loop.is_empty() || !consumer.self_loop.is_empty() {
         return false;
     }
     if !producer.game_modules.is_empty() || !consumer.game_modules.is_empty() {
         return false;
     }
-    // The CONSUMER must be entirely solid: its faces are already spent on
-    // the DI coupling, its belt-fed input and its output, so a pipe has
-    // nowhere to land. (That is the `electric-engine-unit` shape —
-    // lubricant on the consumer — and it is out of scope here.)
-    let any_fluid = |s: &MachineSpec| s.inputs.iter().chain(&s.outputs).any(|f| f.is_fluid);
-    if any_fluid(consumer) {
+    // A fluid-OUT producer would need a pipe on the face its coupling
+    // uses; only fluid IN is served. Same for the consumer: its south face
+    // is spent on the output (and its feed, when it has one).
+    if producer.outputs.iter().any(|f| f.is_fluid) || consumer.outputs.iter().any(|f| f.is_fluid) {
         return false;
     }
-    // A fluid-OUT producer would need a pipe on the face its coupling
-    // uses; only fluid IN is served.
-    if producer.outputs.iter().any(|f| f.is_fluid) {
-        return false;
+    // A fluid-drawing CONSUMER is served ONLY by the run the producer is
+    // already piped — `solid-fuel-from-light-oil → rocket-fuel`, where
+    // both roles want light-oil. The cell declares one set of tap points
+    // on one row, so:
+    //   - exactly one fluid, and the same one the producer draws (two
+    //     different fluids on one run would cross-contaminate);
+    //   - equal machine HEIGHTS, because the row is bottom-aligned and the
+    //     pipe sits one tile above the PRODUCER's top — a shorter consumer
+    //     would sit below it with its ports out of reach;
+    //   - a real north input port on the consumer prototype, read from
+    //     `fluid_ports` rather than assumed.
+    // Anything else (a fluid the producer does not draw — the
+    // `electric-engine-unit` lubricant shape) stays out of scope.
+    let c_fluid_in: Vec<&str> =
+        consumer.inputs.iter().filter(|f| f.is_fluid).map(|f| f.item.as_str()).collect();
+    if !c_fluid_in.is_empty() {
+        let p_fluid_items: Vec<&str> =
+            producer.inputs.iter().filter(|f| f.is_fluid).map(|f| f.item.as_str()).collect();
+        if c_fluid_in.len() != 1 || p_fluid_items != c_fluid_in {
+            return false;
+        }
+        if machine_dims(&producer.entity).1 != machine_dims(&consumer.entity).1 {
+            return false;
+        }
+        let (mirror, dir) = crate::fluid_ports::north_input_orientation(&consumer.entity);
+        if crate::fluid_ports::north_input_dxs(&consumer.entity, mirror, dir).is_empty() {
+            return false;
+        }
     }
     let solids = |fs: &[ItemFlow]| -> Vec<String> {
         fs.iter().filter(|f| !f.is_fluid).map(|f| f.item.clone()).collect()
@@ -2113,8 +2141,12 @@ fn row_cell_eligible(producer: &MachineSpec, consumer: &MachineSpec, item: &str)
     if p_out.len() != 1 || p_out[0] != item || !producer_feed_ok || c_out.len() != 1 {
         return false;
     }
-    // Exactly two solid inputs: the coupled item plus one belt-fed other.
-    if c_in.len() != 2 || !c_in.iter().any(|i| i == item) {
+    // The coupled item, plus AT MOST one belt-fed other. Two is the
+    // ordinary shape (cable + iron into EC); one means the coupling
+    // supplies everything solid the consumer needs
+    // (`solid-fuel-from-light-oil → rocket-fuel`, whose other ingredient
+    // is the shared fluid), and its south face carries the output alone.
+    if !(1..=2).contains(&c_in.len()) || !c_in.iter().any(|i| i == item) {
         return false;
     }
     // The producer's belt-fed input and the consumer's must be DIFFERENT
@@ -2132,6 +2164,28 @@ fn row_cell_eligible(producer: &MachineSpec, consumer: &MachineSpec, item: &str)
     // assembler is fine. (The stacked cell still requires equal dims: its
     // straddle geometry is derived from a single machine width.)
     true
+}
+
+/// Both roles must run on grid power, because the cell has no way to fuel
+/// a burner.
+///
+/// Found by SIMULATING, not by reasoning: `solid-fuel-from-light-oil →
+/// rocket-fuel` builds a cell that validates 0 errors 0 warnings and then
+/// produces **literally nothing** — the solver picks `biochamber` for
+/// `rocket-fuel` (category `organic-or-assembling`), a burner whose fuel
+/// category is `nutrients`, and the sim reports `no_fuel: 8` with every
+/// upstream chemical plant backed up behind it.
+///
+/// The gap is engine-wide, not a cell property: nothing anywhere delivers
+/// burner fuel, and `validate::power` deliberately exempts biochambers
+/// from coverage without any check taking over the obligation. Refusing
+/// here is the narrow half of the fix — a cell that cannot run is worse
+/// than no cell, because it validates clean and lies. Delivering fuel (or
+/// steering machine selection away from burners) is the engine-wide half
+/// and is NOT attempted here.
+fn cell_machines_are_powerable(producer: &MachineSpec, consumer: &MachineSpec) -> bool {
+    crate::common::needs_electricity(&producer.entity)
+        && crate::common::needs_electricity(&consumer.entity)
 }
 
 /// Build a Phase 2 horizontal row cell, or `None` to fall back.
@@ -2180,11 +2234,14 @@ fn try_build_row_cell(
     // run instead of a belt (RFC-053 pipe cut).
     let p_in = producer.inputs.iter().find(|f| !f.is_fluid);
     let p_fluid = producer.inputs.iter().find(|f| f.is_fluid);
-    let c_in = consumer.inputs.iter().find(|f| !f.is_fluid && f.item != item)?;
+    // `None` when the coupled item is the consumer's ONLY solid
+    // ingredient — then it has no belt-fed input and no inner belt.
+    let c_in = consumer.inputs.iter().find(|f| !f.is_fluid && f.item != item);
+    let c_fluid = consumer.inputs.iter().find(|f| f.is_fluid);
     let out = consumer.outputs.iter().find(|f| !f.is_fluid)?;
 
     let p_total = p_in.map(|f| f.rate * p_util * p_count as f64).unwrap_or(0.0);
-    let c_total = c_in.rate * c_util * c_count as f64;
+    let c_total = c_in.map(|f| f.rate * c_util * c_count as f64).unwrap_or(0.0);
     let out_total = out.rate * c_util * c_count as f64;
 
     // Both input belts are bus tap-off targets, so they take the TRUNK
@@ -2199,7 +2256,9 @@ fn try_build_row_cell(
     let p_cap = p_in
         .map(|f| lane_capacity_stacked(in_belt, ctx.for_item(&f.item)) * 2.0)
         .unwrap_or(f64::INFINITY);
-    let c_cap = lane_capacity_stacked(in_belt, ctx.for_item(&c_in.item)) * 2.0;
+    let c_cap = c_in
+        .map(|f| lane_capacity_stacked(in_belt, ctx.for_item(&f.item)) * 2.0)
+        .unwrap_or(f64::INFINITY);
     if p_cap + 1e-9 < p_total || c_cap + 1e-9 < c_total {
         return None;
     }
@@ -2224,9 +2283,17 @@ fn try_build_row_cell(
         // No solid feed face to size — the pipe carries it.
         None => crate::bus::inserter_ladder::SidePlan { entity: "inserter", count: 0, shortfall: None },
     };
-    let c_feed = size_side(c_in.rate * c_util, Reach::Near, budget, max_inserter_tier, quality, level);
+    let c_feed = match c_in {
+        Some(f) => size_side(f.rate * c_util, Reach::Near, budget, max_inserter_tier, quality, level),
+        // Nothing belt-fed to size; the coupling supplies every solid.
+        None => crate::bus::inserter_ladder::SidePlan { entity: "inserter", count: 0, shortfall: None },
+    };
+    // Reach-2 only when the output inserter must step OVER the consumer's
+    // input belt. Without that belt the output belt sits directly below the
+    // face and reach-1 applies, which lifts the long-handed 2.40/s ceiling.
+    let out_reach = if c_in.is_some() { Reach::Far } else { Reach::Near };
     let drop = size_belt_drop_side(
-        out.rate * c_util, Reach::Far, budget, max_inserter_tier, quality, out_stack, level, out_belt,
+        out.rate * c_util, out_reach, budget, max_inserter_tier, quality, out_stack, level, out_belt,
     );
     if p_feed.shortfall.is_some() || c_feed.shortfall.is_some() || drop.shortfall.is_some() {
         return None;
@@ -2252,7 +2319,8 @@ fn try_build_row_cell(
                 None => ("", in_belt, p_feed.entity),
             },
             producer_fluid: p_fluid.map(|f| (f.item.as_str(), "pipe")),
-            consumer_input: (&c_in.item, in_belt, c_feed.entity),
+            consumer_input: c_in.map(|f| (f.item.as_str(), in_belt, c_feed.entity)),
+            consumer_fluid: c_fluid.map(|f| (f.item.as_str(), "pipe")),
             output_item: &out.item,
             output_belt: out_belt,
             out_inserter: drop.entity,
@@ -2281,31 +2349,66 @@ fn try_build_row_cell(
         voider: false,
         game_modules: Vec::new(),
         count: c_count as f64,
-        // Order MUST match the row's belt/port lists. The consumer's belt
-        // input comes FIRST when the producer is fluid-fed, because
-        // `input_belt_y` then holds only that one belt; the fluid is
-        // carried separately through `fluid_port_ys`/`fluid_port_pipes`,
-        // which `lane_planner` taps on its own branch.
-        inputs: match p_in {
-            Some(f) => vec![
-                ItemFlow { item: f.item.clone(), rate: f.rate * scale, is_fluid: false, module_id: f.module_id },
-                ItemFlow { item: c_in.item.clone(), rate: c_in.rate, is_fluid: false, module_id: c_in.module_id },
-            ],
-            None => vec![
-                ItemFlow { item: c_in.item.clone(), rate: c_in.rate, is_fluid: false, module_id: c_in.module_id },
-                ItemFlow {
-                    item: p_fluid.map(|f| f.item.clone()).unwrap_or_default(),
-                    rate: p_fluid.map(|f| f.rate * scale).unwrap_or(0.0),
+        // Order MUST match the row's belt/port lists: SOLIDS first, in the
+        // same order `input_belt_ys` records them (producer's belt, then
+        // the consumer's — either may be absent), because `lane_planner`
+        // and `ghost_router` both resolve tap-off by indexing solid inputs
+        // positionally. The fluid trails them; it is tapped on a separate
+        // branch through `fluid_port_ys`/`fluid_port_pipes`, so its
+        // position among the solids is immaterial but its RATE is not.
+        inputs: {
+            let mut v = Vec::new();
+            if let Some(f) = p_in {
+                v.push(ItemFlow {
+                    item: f.item.clone(),
+                    rate: f.rate * scale,
+                    is_fluid: false,
+                    module_id: f.module_id,
+                });
+            }
+            if let Some(f) = c_in {
+                v.push(ItemFlow {
+                    item: f.item.clone(),
+                    rate: f.rate,
+                    is_fluid: false,
+                    module_id: f.module_id,
+                });
+            }
+            // One entry per distinct fluid. When both roles draw the same
+            // one — the only case eligibility admits — their demands SUM.
+            // Nothing observably depends on this today (pipes have no tier,
+            // so the planned rate does not change the stamped geometry, and
+            // the sim manifest reads its feed rates from the SolverResult,
+            // not from here) — checked by forcing the consumer term to
+            // zero, which produced an identical layout. Kept anyway: the
+            // spec's job is to state what the row actually draws, and an
+            // understated demand is a lie waiting for its first reader.
+            if p_fluid.is_some() || c_fluid.is_some() {
+                let item = p_fluid.or(c_fluid).map(|f| f.item.clone()).unwrap_or_default();
+                let rate = p_fluid.map(|f| f.rate * scale).unwrap_or(0.0)
+                    + c_fluid.map(|f| f.rate).unwrap_or(0.0);
+                v.push(ItemFlow {
+                    item,
+                    rate,
                     is_fluid: true,
-                    module_id: p_fluid.map(|f| f.module_id).unwrap_or(0),
-                },
-            ],
+                    module_id: p_fluid.or(c_fluid).map(|f| f.module_id).unwrap_or(0),
+                });
+            }
+            v
         },
         outputs: consumer.outputs.clone(),
     };
     let width = cell.x_max + 1;
     let span = RowSpan {
-        y_start: cell.input_belt_ys[0],
+        // Falls back to the pipe row only when the cell taps no solid at
+        // all (piped producer, coupling-fed consumer) and so has no input
+        // belt to start from.
+        y_start: cell
+            .input_belt_ys
+            .first()
+            .copied()
+            .or_else(|| cell.fluid_port_ys.first().copied())
+            .unwrap_or(cell.machine_y),
         y_end: cell.output_belt_y + 1,
         spec: fused,
         machine_count: c_count,

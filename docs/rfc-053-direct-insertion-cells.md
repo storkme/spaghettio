@@ -1627,3 +1627,102 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   *The probe that overturned it took one file and one `cargo run`. When
   the engine refuses, print what the caller actually passes before
   reasoning about why.*
+
+- *2026-07-25 — **The fluid-CONSUMER shape is BUILT and currently
+  UNREACHABLE, and the sim is the only reason we know.**
+  `solid-fuel-from-light-oil → rocket-fuel` (652 instances, the corpus's
+  #2 DI pair) builds a row cell that validates **0 errors 0 warnings** at
+  0.25–2/s — and in a headless Factorio produces **literally nothing**:
+  `rocket-fuel planned 1.00, produced 0.00, −100.0%`, census `no_fuel: 8`
+  with all ten upstream chemical plants backed up behind the stall.*
+
+  ***The solver resolves `rocket-fuel` (category `organic-or-assembling`)
+  to a `biochamber`, which is burner-fuelled — fuel category
+  `nutrients` — and nothing anywhere in the engine delivers burner
+  fuel.*** *`validate::power` deliberately exempts biochambers from
+  coverage (correctly: they draw no grid power) and no check takes over
+  the obligation, so a burner row is invisible to every gate we have.
+  `recipe_db::category_machines` offers only `["biochamber"]` for
+  `organic-or-assembling`, ignoring the `-or-assembling` half of the name
+  — the same shape as `metallurgy-or-assembling` and
+  `cryogenics-or-assembling`. So there is no way to steer this pair onto
+  an assembler today.*
+
+  *Two fixes follow, and only the narrow one is taken here:
+  `cell_machines_are_powerable` now refuses a cell whose either role is
+  non-electric. **A cell that cannot run is worse than no cell, because
+  it validates clean and lies.** The engine-wide half — delivering burner
+  fuel, or honouring `-or-assembling` in machine selection — is NOT
+  attempted; it is a recipe-db/solver decision with blast radius well
+  beyond this RFC, and it wants its own issue.*
+
+  *This is the third time in this RFC that a mechanism has landed
+  correct-but-unreachable (pipe cut → footprints → this). The difference
+  is how it was caught: validation, unit tests and an entity census all
+  said yes. **Only the sim said no.** Zero validation errors means the
+  checks we wrote passed, not that the factory runs — and for a burner
+  machine we have not written any check at all.*
+
+  *What the shape itself achieves, kept and unit-tested against the day
+  it becomes reachable:*
+
+  *The scoping note said this shape was "genuinely harder" because the
+  consumer's south face already carries a solid input and the output, so
+  a pipe needs a face the cell does not have. Probing the pair first —
+  the discipline the previous entry was written to enforce — showed that
+  premise did not hold either:*
+
+  - *the consumer draws **light-oil**, the same fluid the producer is
+    already piped, so no second run is needed;*
+  - *chemical plant and biochamber are **both 3×3** with geometrically
+    identical fluid boxes (`fluid_ports` already models biochamber as
+    `CHEM`), so bottom-alignment puts both north faces on the pipe row
+    the producer's run already occupies;*
+  - *the coupled item is the consumer's **only** solid ingredient, so its
+    south face was never contended — it carries the output alone.*
+
+  *Eligibility is gated tightly on those three properties — one fluid,
+  the same fluid (different fluids on one run would cross-contaminate),
+  equal heights, and a real north port read from `fluid_ports` rather
+  than assumed.*
+
+  ***A fourth "fix" that did nothing, caught the same way as the merger
+  cursor.*** *The consumer originally registered its own fluid tap points
+  alongside the producer's. Forcing that off produced a **byte-identical
+  layout**: the pipe run is stamped across the full cell width from the
+  producer's side, so it is one connected network and the consumer's
+  north ports are adjacent to it either way — and `fluid_port_pipes` only
+  tells the lane planner where to tap the bus INTO the cell, which the
+  producer's ports already do. Deleted rather than shipped. What IS
+  load-bearing is applying `north_input_orientation` to the consumer:
+  eligibility admits it on the strength of having a north input port, so
+  the stamp has to actually put it there. The fused spec's fluid-rate SUM
+  is likewise unobserved today (pipes have no tier; the sim manifest
+  reads feed rates from the `SolverResult`) but was KEPT — a spec that
+  understates what its row draws is a lie waiting for its first reader,
+  which is a different thing from redundant code.*
+
+  ***A second shape fell out of it.*** *With no belt-fed consumer input
+  the inner belt row is empty, so the output belt moves up into it. That
+  drops a row AND puts the output drop at reach-1, off long-handed's
+  2.40/s ceiling — the constraint that forces two output columns in the
+  ordinary shape. It also removed a `belt-connectivity` error without an
+  exemption: the check looks only at an inserter's 4-neighbours, so a
+  long-handed drop across an empty row reads as "touches no belt". Fixing
+  the geometry was the honest fix; a second validator carve-out would
+  have hidden a real waste.*
+
+  ***The ratio limit is real, but it is alignment, not magnitude.*** *The
+  pair refuses above ~2/s: at P30:C23 the flow intervals put THREE
+  producers against one consumer, and a consumer has two horizontal
+  neighbours. P20:C15 — exactly 4:3 — is fine at any scale. So the row
+  cell's reach is bounded by whether the P:C ratio is a small-denominator
+  fraction, not by how large the counts are. This is the real form of the
+  "ratio tolerance" the retracted entry mis-stated, it does not touch the
+  casting pairs (1:1), and it is Phase 3 / multi-band territory.*
+
+  *`engine-unit → electric-engine-unit` (547) is NOT unlocked by this and
+  was not attempted. Its producer takes **three** solid inputs against
+  the row's one north belt, and its lubricant is a fluid the producer
+  does not draw — two independent blockers, either sufficient. Recorded
+  so the next reader does not re-derive it.*
