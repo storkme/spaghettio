@@ -140,6 +140,32 @@ feeds and the composed layout must pass the pipe-isolation validators
 
 ## Decision log
 
+- *2026-07-25 (#438) — **the parked registrations resolved: chem5 IN,
+  PU@4 OUT.** The close-out below made registration of chem5/PU4/USP2
+  conditional on "#383 lifting the smelter bound". #383 resolved (root
+  cause: an input-side long-handed bind at hand 1, cleared by #431's L2
+  default), so all three were re-measured at the L2 default on Factorio
+  2.0.77. Outcome is split, and the split is informative:
+  **chem5 PASSES at plan — 5.00/5.00 EXACT** (delivered 5.07/s, 172/172
+  machines working, converged) and is registered as the first
+  L2-blessed entry. It turns out chem5 never carried the #383 deficit
+  class at all; blocking it on #383 was over-cautious, not wrong.
+  **PU@4 FAILS at −27.3%** (2.91/4.00) and is NOT registered — the
+  registry takes measured PASS baselines only, so a failing fixture
+  stays out rather than entering as a warned entry. Filed as #437. Note
+  its first attribution (sulfur chem-plant output inserter COUNT) was
+  DISPROVEN on investigation: the chain replicates the mega block K=8,
+  so each replica's sulfur plant carries 0.25/s not 2.00/s, and all 64
+  inserter warnings are a validator artifact — `effective_rows` is empty
+  on composed layouts, so utilization falls back to `count/ceil(count)`
+  and every replica is charged the entire chain's demand. The −27.3% is
+  real but currently unattributed. **USP@2 not yet re-measured.**
+  Registering chem5 also required extending `cell_registry_hashes_current`,
+  which correctly refused the entry: that gate re-derived every chain
+  entry at a hardcoded L0, so the blessed capacity is now a per-config
+  field (pre-#431 entries are L0-geometry baselines; post-flip entries
+  are real L2 geometry).*
+
 - *2026-07-24 (#434) — `mega_chain_usp2_resolves_bus_failure` moved to
   `#[ignore]` (opt-in). This is a PERFORMANCE opt-out, not a weakening
   of the gate: the test still passes (re-verified opt-in, 0 errors),

@@ -32,7 +32,7 @@
     "harness_world": "nb=0 bulk=1, S=1 (post-#390 stacking parity)",
     "verdict": "PASS",
     "produced_per_s": 2.2,
-    "scenario": "spaghettio-sim mega-plastic2 (Factorio 2.0.76, 4/4 working, converged, delivered 2.20/s vs 2.00 planned; re-measured 2026-07-24 after the Phase-B joint fluid planner corrected the feed path — the prior geometry pinned a residual terminus bug)",
+    "scenario": "spaghettio-sim mega-plastic2 (Factorio 2.0.76, 4/4 working, converged, delivered 2.20/s vs 2.00 planned; re-measured 2026-07-24 after the Phase-B joint fluid planner corrected the feed path \u2014 the prior geometry pinned a residual terminus bug)",
     "date": "2026-07-24"
   },
   {
@@ -56,7 +56,7 @@
     "harness_world": "nb=0 bulk=1, S=1 (post-#390 stacking parity)",
     "verdict": "PASS",
     "produced_per_s": 2.01,
-    "scenario": "spaghettio-sim mega-chain-ac2raw (Factorio 2.0.76, 45/45 working, converged, delivered 2.00/s EXACT from fully raw inputs — the RFC-052 Phase B flagship: smelting cells + oil mega-cell + circuit cells in one composed chain)",
+    "scenario": "spaghettio-sim mega-chain-ac2raw (Factorio 2.0.76, 45/45 working, converged, delivered 2.00/s EXACT from fully raw inputs \u2014 the RFC-052 Phase B flagship: smelting cells + oil mega-cell + circuit cells in one composed chain)",
     "date": "2026-07-24"
   },
   {
@@ -68,7 +68,7 @@
     "harness_world": "nb=0 bulk=2, S=1",
     "verdict": "WARN",
     "produced_per_s": 13.8,
-    "known_residual": "produced -8.0% vs plan (13.80/15.00): EC-row yellow output-belt ceiling, priced at generation by row-output-lane-budget (13.0/s measured floor on yellow) + input-side inserter bound at declared L1 (capacity never reaches composed cells until #415) — #383 attribution, 2026-07-24",
+    "known_residual": "produced -8.0% vs plan (13.80/15.00): EC-row yellow output-belt ceiling, priced at generation by row-output-lane-budget (13.0/s measured floor on yellow) + input-side inserter bound at declared L1 (capacity never reaches composed cells until #415) \u2014 #383 attribution, 2026-07-24",
     "scenario": "spaghettio-sim chain-ec15-d1 (Factorio 2.0.76, 14/15 working +1 full-output, converged, produced 13.80/15.00; #383 re-measurement on post-#394/#381 main)",
     "date": "2026-07-24"
   },
@@ -81,7 +81,7 @@
     "harness_world": "nb=3 bulk=11, S=1",
     "verdict": "WARN",
     "produced_per_s": 14.2,
-    "known_residual": "produced -5.3% vs plan (14.20/15.00): EC-row yellow output-belt ceiling only (input bound cleared at L7 bonuses), priced at generation by row-output-lane-budget (13.0/s measured floor on yellow) — #383 attribution, 2026-07-24",
+    "known_residual": "produced -5.3% vs plan (14.20/15.00): EC-row yellow output-belt ceiling only (input bound cleared at L7 bonuses), priced at generation by row-output-lane-budget (13.0/s measured floor on yellow) \u2014 #383 attribution, 2026-07-24",
     "scenario": "spaghettio-sim chain-ec15-d7 (Factorio 2.0.76, converged, produced 14.20/15.00; #383 re-measurement on post-#394/#381 main)",
     "date": "2026-07-24"
   },
@@ -94,8 +94,20 @@
     "harness_world": "nb=0 bulk=2, S=1",
     "verdict": "WARN",
     "produced_per_s": 27.7,
-    "known_residual": "produced -7.7% vs plan (27.70/30.00): same EC-row output ceiling + declared-L1 input bound as chain-ec15 (K=2 copies of the same row class) — #383 attribution, 2026-07-24",
+    "known_residual": "produced -7.7% vs plan (27.70/30.00): same EC-row output ceiling + declared-L1 input bound as chain-ec15 (K=2 copies of the same row class) \u2014 #383 attribution, 2026-07-24",
     "scenario": "spaghettio-sim chain-ec30-d1 (Factorio 2.0.76, converged, produced 27.70/30.00; #383 re-measurement on post-#394/#381 main)",
+    "date": "2026-07-24"
+  },
+  {
+    "target": "chemical-science-pack",
+    "rate": 5.0,
+    "geometry_hash": "1cecb0e45320930a",
+    "declared_inserter_capacity": 2,
+    "declared_stacking": 1,
+    "harness_world": "nb=1 bulk=3, S=1 (declared L2 \u2014 the post-#431 engine default)",
+    "verdict": "PASS",
+    "produced_per_s": 5.0,
+    "scenario": "spaghettio-sim mega-chain-chem5raw (Factorio 2.0.77, 172/172 working, converged, produced 5.00/s EXACT at plan, delivered 5.07/s; RFC-052 Phase C mega-cell from raw ore + plate inputs (iron-ore/copper-ore/crude-oil/water/coal + iron-plate/copper-plate/steel-plate \u2014 NOT ore-only; see the chem5 config row in tests/cell_composition.rs) \u2014 refinery + plastic + sulfur fluid subgraph collapsed into one mega block, K=2 chain quantization. First registration at the L2 default; unblocked by #383's resolution, which RFC-052's close-out named as the gate.)",
     "date": "2026-07-24"
   }
 ]

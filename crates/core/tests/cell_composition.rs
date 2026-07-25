@@ -603,22 +603,36 @@ fn cell_registry_hashes_current() {
     // hash.
     // kind: "chain" re-derives via compose_chain; "mega" via the
     // RFC-052 uncropped mega-cell composer.
-    let configs: &[(&str, f64, &[&str], &str)] = &[
-        ("advanced-circuit", 1.0, &["iron-plate", "copper-plate", "plastic-bar"], "chain"),
-        ("electronic-circuit", 15.0, &["iron-plate", "copper-plate"], "chain"),
-        ("electronic-circuit", 30.0, &["iron-plate", "copper-plate"], "chain"),
-        ("military-science-pack", 5.0, &["iron-ore", "copper-ore", "stone", "coal"], "chain"),
-        ("military-science-pack", 5.0, &["iron-plate", "copper-plate", "steel-plate", "stone-brick", "coal"], "chain"),
-        ("plastic-bar", 2.0, &["crude-oil", "water", "coal"], "mega"),
-        ("sulfur", 2.0, &["crude-oil", "water"], "mega"),
-        ("advanced-circuit", 2.0, &["iron-ore", "copper-ore", "crude-oil", "water", "coal"], "chain"),
+    //
+    // The trailing `u8` is the CAPACITY THE GEOMETRY WAS BLESSED AT, and
+    // it is per-config for a reason (2026-07-24): entries blessed before
+    // the engine default moved to L2 (#431) are L0-GEOMETRY baselines —
+    // the chain path hardcoded L0 pre-#422, so e.g. ec15's d1 and d7
+    // entries share ONE hash, differing only in the harness WORLD
+    // (`declared_inserter_capacity`), not the built geometry. Those must
+    // still reproduce at L0. Entries blessed after the flip (chem5) are
+    // real L2 geometry and must reproduce at L2. Re-deriving everything
+    // at one capacity would falsely fail one group or the other.
+    let configs: &[(&str, f64, &[&str], &str, u8)] = &[
+        ("advanced-circuit", 1.0, &["iron-plate", "copper-plate", "plastic-bar"], "chain", 0),
+        ("electronic-circuit", 15.0, &["iron-plate", "copper-plate"], "chain", 0),
+        ("electronic-circuit", 30.0, &["iron-plate", "copper-plate"], "chain", 0),
+        ("military-science-pack", 5.0, &["iron-ore", "copper-ore", "stone", "coal"], "chain", 0),
+        ("military-science-pack", 5.0, &["iron-plate", "copper-plate", "steel-plate", "stone-brick", "coal"], "chain", 0),
+        ("plastic-bar", 2.0, &["crude-oil", "water", "coal"], "mega", 0),
+        ("sulfur", 2.0, &["crude-oil", "water"], "mega", 0),
+        ("advanced-circuit", 2.0, &["iron-ore", "copper-ore", "crude-oil", "water", "coal"], "chain", 0),
+        // First post-#431 registration: blessed at the L2 default.
+        ("chemical-science-pack", 5.0,
+         &["iron-ore", "copper-ore", "crude-oil", "water", "coal",
+           "iron-plate", "copper-plate", "steel-plate"], "chain", 2),
     ];
     assert!(!entries().is_empty(), "registry must not be empty");
     for e in entries() {
         let candidates: Vec<String> = configs
             .iter()
-            .filter(|(t, r, _, _)| *t == e.target && (r - e.rate).abs() < 1e-9)
-            .map(|(t, r, inputs, kind)| {
+            .filter(|(t, r, _, _, _)| *t == e.target && (r - e.rate).abs() < 1e-9)
+            .map(|(t, r, inputs, kind, blessed_capacity)| {
                 let l = match *kind {
                     "mega" => {
                         spaghettio_core::bus::cells::mega::compose_mega_calibrated(t, *r, inputs)
@@ -630,16 +644,10 @@ fn cell_registry_hashes_current() {
                             t, *r, &inputs_set, &MachinePalette::default(),
                             "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
                         ).unwrap();
-                        // Re-derive at explicit L0, NOT the engine default. Every
-                        // registry entry's geometry_hash is an L0-GEOMETRY baseline:
-                        // these fixtures were blessed when the chain path hardcoded
-                        // L0 (pre-#422), so d1 and d7 share one hash — the byte-
-                        // identical L0 geometry, differing only in the harness WORLD
-                        // (`declared_inserter_capacity`), not the built geometry. The
-                        // default moved to L2 (2026-07-24, #383); the L0 baselines
-                        // are unchanged, so reproduce at L0 to validate them. A future
-                        // entry blessed with non-L0 geometry will extend this gate.
-                        compose_chain_with_capacity(&sr, 0).unwrap()
+                        // Re-derive at the capacity this config was BLESSED at
+                        // (never the ambient engine default, which moves) — see
+                        // the per-config `u8` above for why the two groups differ.
+                        compose_chain_with_capacity(&sr, *blessed_capacity).unwrap()
                     }
                 };
                 format!("{:016x}", geometry_hash(&l))

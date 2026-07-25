@@ -165,10 +165,15 @@ multi-consumer export fans, and three latent engine-bug classes fixed
 (hop pair-destroyer ×2, tapoff release/retain hole). Bus-refusal wins
 gated at chem-pack@5, PU@4, USP@2 (each composes 0 errors where the
 bus hard-fails; USP@2 = 48k entities, the largest layout produced).
-Sim evidence: plastic/sulfur/AC-from-raw PASS and registered; PU@4
-and USP@2 measured end-to-end (deepest chains ever run — zero
-kit/fluid errors) with deficits attributed to the #383 smelter
-declared-bound class; they register when #383 lifts. Tracked
+Sim evidence (re-measured 2026-07-24 at the post-#431 L2 default):
+plastic/sulfur/AC-from-raw PASS and registered; **chem-pack@5 now
+PASSES at plan (5.00/5.00 exact, 172/172 working) and is REGISTERED**
+— it never carried the #383 deficit class. **PU@4 FAILS at −27.3%**
+and stays unregistered ([#437](https://github.com/storkme/spaghettio/issues/437));
+its original inserter attribution was disproven (the warnings are a
+validator utilization artifact on composed layouts — each of K=8
+replicas is charged the whole chain's demand), so the deficit is real
+but unattributed. USP@2 not yet re-measured. Tracked
 follow-ups: #383 (bound lift), #409 (landed independently), #423
 (pitch-1 splitter-passthrough). Full trail:
 [`rfc-052-oil-mega-cell.md`](rfc-052-oil-mega-cell.md) decision log.
