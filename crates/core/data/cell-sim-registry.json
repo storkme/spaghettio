@@ -107,7 +107,7 @@
     "harness_world": "nb=1 bulk=3, S=1 (declared L2 \u2014 the post-#431 engine default)",
     "verdict": "PASS",
     "produced_per_s": 5.0,
-    "scenario": "spaghettio-sim mega-chain-chem5raw (Factorio 2.0.77, 172/172 working, converged, produced 5.00/s EXACT at plan, delivered 5.07/s; RFC-052 Phase C mega-cell from fully raw inputs \u2014 refinery + plastic + sulfur fluid subgraph collapsed into one mega block, K=2 chain quantization. First registration at the L2 default; unblocked by #383's resolution, which RFC-052's close-out named as the gate.)",
+    "scenario": "spaghettio-sim mega-chain-chem5raw (Factorio 2.0.77, 172/172 working, converged, produced 5.00/s EXACT at plan, delivered 5.07/s; RFC-052 Phase C mega-cell from raw ore + plate inputs (iron-ore/copper-ore/crude-oil/water/coal + iron-plate/copper-plate/steel-plate \u2014 NOT ore-only; see the chem5 config row in tests/cell_composition.rs) \u2014 refinery + plastic + sulfur fluid subgraph collapsed into one mega block, K=2 chain quantization. First registration at the L2 default; unblocked by #383's resolution, which RFC-052's close-out named as the gate.)",
     "date": "2026-07-24"
   }
 ]
