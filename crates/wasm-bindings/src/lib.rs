@@ -106,7 +106,11 @@ fn layout_options(
             Some("off") => spaghettio_core::bus::cells::CellComposition::Off,
             _ => spaghettio_core::bus::cells::CellComposition::Candidate,
         },
-        ..Default::default()
+        // No `..Default::default()`: adding `direct_insertion` completed
+        // the field list, and a no-op struct update is a clippy error
+        // under the workspace's `-D warnings`. A field added to
+        // `LayoutOptions` later will fail to compile HERE, which is the
+        // right place to notice a new wasm-surface axis.
     }
 }
 
