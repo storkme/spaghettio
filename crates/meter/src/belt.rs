@@ -142,6 +142,11 @@ impl Lane {
     // granularity — deliberately one `Lane` type rather than two, since
     // duplicated state is this repo's named recurring hazard.
 
+    /// Read-only view of the raw slots, for diagnostics.
+    pub fn slots_debug(&self) -> &[Option<ItemId>] {
+        &self.slots
+    }
+
     /// The exit slot's contents, if any (the downstream end).
     pub fn peek_exit(&self) -> Option<ItemId> {
         self.slots.last().copied().flatten()

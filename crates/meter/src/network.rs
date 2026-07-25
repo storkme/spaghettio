@@ -366,9 +366,25 @@ impl NetworkBuilder {
 
             // A splitter covers two tiles perpendicular to its facing.
             let cells: Vec<(i32, i32)> = if is_splitter {
-                let (lx, ly) = left_of(e.direction).delta();
-                // Top-left plus the neighbour along the perpendicular axis.
-                vec![(e.x, e.y), (e.x - lx, e.y - ly)]
+                // `blueprint_in::decode` already resolved the ORIENTED
+                // footprint to a top-left corner, so the second cell is
+                // unconditionally +1 along the wide axis: (x+1,y) for a
+                // north/south splitter, (x,y+1) for east/west.
+                //
+                // An earlier version derived it from `left_of(direction)`,
+                // which flips sign between north and south — so SOUTH and
+                // WEST splitters claimed a cell one tile the wrong way,
+                // outside their own footprint, and never registered the
+                // tile they actually occupy. Bus trunks run **south**, so
+                // this silently unlinked tap-off branches across every bus
+                // layout: 11 orphan belt heads in `logistic-science-pack`,
+                // whose gear machine then read `iron-plate=0/2` forever
+                // while the far-side belts beside it were full.
+                if matches!(e.direction, Dir::North | Dir::South) {
+                    vec![(e.x, e.y), (e.x + 1, e.y)]
+                } else {
+                    vec![(e.x, e.y), (e.x, e.y + 1)]
+                }
             } else {
                 vec![(e.x, e.y)]
             };
@@ -606,6 +622,91 @@ mod tests {
             direction: dir,
             recipe: None,
             io_type: None,
+        }
+    }
+
+    fn splitter(x: i32, y: i32, dir: Dir) -> RawEntity {
+        RawEntity {
+            name: "splitter".into(),
+            x,
+            y,
+            direction: dir,
+            recipe: None,
+            io_type: None,
+        }
+    }
+
+    /// A splitter's two halves must be the tile it was decoded to plus the
+    /// next one along its **wide** axis, in every direction.
+    ///
+    /// This is the shape of a live bug (fixed 2026-07-25): the second cell
+    /// was derived from `left_of(direction)`, which flips sign between
+    /// north and south, so SOUTH and WEST splitters claimed a cell one tile
+    /// outside their own footprint. That tile then existed in the network
+    /// with no upstream, while the tile the splitter really occupied did
+    /// not exist at all — silently unlinking every downstream branch.
+    /// Bus trunks run south, so it hit essentially every bus layout.
+    ///
+    /// Asserted per-direction rather than on a single case, because the
+    /// bug was invisible on north/east and only appeared on the other two.
+    #[test]
+    fn splitter_claims_both_cells_of_its_own_footprint() {
+        for (dir, expected_second) in [
+            (Dir::North, (11, 5)),
+            (Dir::South, (11, 5)),
+            (Dir::East, (10, 6)),
+            (Dir::West, (10, 6)),
+        ] {
+            let net = NetworkBuilder::build(&[splitter(10, 5, dir)]);
+            assert_eq!(net.len(), 2, "{dir:?}: a splitter is two tiles");
+            assert!(
+                net.notes.is_empty(),
+                "{dir:?}: halves must pair — notes {:?}",
+                net.notes
+            );
+            let a = net.tile_at((10, 5)).expect("{dir:?}: top-left cell");
+            let b = net
+                .tile_at(expected_second)
+                .unwrap_or_else(|| panic!("{dir:?}: second cell at {expected_second:?}"));
+            match (net.tiles[a].kind, net.tiles[b].kind) {
+                (
+                    TileKind::Splitter { partner: pa, id: ia },
+                    TileKind::Splitter { partner: pb, id: ib },
+                ) => {
+                    assert_eq!(pa, b, "{dir:?}: partner links must be mutual");
+                    assert_eq!(pb, a, "{dir:?}: partner links must be mutual");
+                    assert_eq!(ia, ib, "{dir:?}: both halves share one splitter id");
+                }
+                other => panic!("{dir:?}: expected two splitter halves, got {other:?}"),
+            }
+        }
+    }
+
+    /// The behavioural consequence: a belt feeding a south-facing splitter
+    /// must reach it. Under the sign bug the splitter's real tile was
+    /// absent from the network, so the belt above it linked to nothing and
+    /// the branch below it became an orphan head with no upstream — items
+    /// stopped dead at the trunk.
+    #[test]
+    fn belt_links_through_a_south_facing_splitter() {
+        let ents = vec![
+            belt("transport-belt", 10, 4, Dir::South),
+            splitter(10, 5, Dir::South),
+            belt("transport-belt", 10, 6, Dir::South),
+            belt("transport-belt", 11, 6, Dir::South),
+        ];
+        let net = NetworkBuilder::build(&ents);
+        let feeder = net.tile_at((10, 4)).unwrap();
+        let half = net.tile_at((10, 5)).expect("splitter occupies its own tile");
+        assert_eq!(
+            net.tiles[feeder].downstream.map(|d| d.tile),
+            Some(half),
+            "the trunk belt must feed the splitter half beneath it"
+        );
+        for out in [(10, 6), (11, 6)] {
+            let id = net.tile_at(out).unwrap();
+            let fed = net.tiles.iter().any(|t| t.downstream.is_some_and(|d| d.tile == id));
+            assert!(fed, "belt at {out:?} must have an upstream feeder");
         }
     }
 

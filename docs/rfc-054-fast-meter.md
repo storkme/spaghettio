@@ -756,3 +756,73 @@ the right thing moved.
   per-tile lane occupancy, pickers/droppers/sinks annotated). These are the
   meter's equivalent of `scripts/sim-capture-state.sh` and are how both
   rounds of attribution were done.*
+- *2026-07-25 — **KC1 attribution, round 3: buffering exonerated, and a real
+  ingestion bug found underneath it.** The user's hypothesis — that the
+  starvation was an artifact of machine input buffering — was tested
+  directly and is **wrong**; chasing it nonetheless led to the defect.*
+
+  ***Buffering, tested and cleared.*** `DEFAULT_BUFFER_CRAFTS = 14` is a
+  stated approximation of Factorio's ingredient-slot cap, so it was a fair
+  suspect. *An env-gated override (diagnostic, reverted — same discipline as
+  the swing probe) swept it across 1, 2, 4, 14 and 40 crafts on
+  `logistic-science-pack`. Every value returned **−100.0%**, byte-identical.
+  A quantity that changes nothing across a 40× range is not the binding
+  constraint. Buffer depth governs how long a machine rides out a supply
+  gap; it cannot manufacture supply that never arrives.*
+
+  ***What the probe showed instead.*** *Dumping each starved machine's input
+  inserters with their pickup-tile contents split the population cleanly by
+  **reach**, not by item or by row:*
+
+  ```
+  iron-gear-wheel (15,31):
+    Fast       (16,30) <- belt (16,29)  occ 0/8  []            delivered 0
+  transport-belt (15,41):
+    LongHanded (15,40) <- belt (15,38)  occ 8/8  [iron-plate]  delivered 14
+    Regular    (17,40) <- belt (17,39)  occ 0/8  []            delivered 0
+  ```
+
+  *Every reach-2 pickup is saturated; every reach-1 pickup is empty for the
+  full 18,000 ticks. Reach-2 hands land on the **trunk**; reach-1 hands land
+  on the **tap-off branch** beside it. So the branches were never receiving
+  anything — an upstream-linkage question, not a rate question. An orphan-head
+  check (belt tiles with no upstream tile, no dropping inserter, and no
+  boundary feed) confirmed it: **11 of 519** tiles, clustered on the gear
+  machine.*
+
+  ***Root cause: splitter second-cell sign error in the network builder.***
+  *A splitter occupies two tiles. `NetworkBuilder` derived the second from
+  `left_of(direction).delta()`, which **flips sign between north and south**,
+  so SOUTH and WEST splitters registered a cell one tile outside their own
+  footprint — creating a phantom tile with no upstream while the tile the
+  splitter actually occupies never entered the network at all. Belts feeding
+  into it linked to nothing and everything downstream became an orphan head.
+  Bus trunks run **south**, so this silently unlinked tap-off branches across
+  essentially every bus layout, and was invisible on the cell-composition
+  fixtures (north/east) that the meter had been developed against. Fixed to
+  `(x+1,y)` / `(x,y+1)` off the decoded top-left, which is unconditional
+  because `blueprint_in::decode` already resolves the oriented footprint.*
+
+  ***Effect.*** `logistic-science-pack` **−100% → −68.3%**; `iron-gear-wheel`
+  0 → 1.08/1.50 crafts/s. *`gear10` (−0.1%) and `ec10` (−3.8%) are unchanged
+  to the digit, as expected — neither contains a south- or west-facing
+  splitter. So the fix is not a global rate shift dressed up as a repair.*
+
+  ***Pinned by two tests, not one.*** *A geometry test asserts both cells in
+  **all four directions** — a single-case test would have passed throughout
+  the bug's life, since north and east were always right. A behavioural test
+  asserts a belt links through a south-facing splitter and that both outputs
+  have upstream feeders, which is the shape the defect actually took.*
+
+  ***Standing habit held.*** *The user proposed buffering; it was tested
+  rather than assumed, and reported as falsified. Fourth instance in this RFC
+  of a plausible causal story failing its check — but the first where the
+  wrong theory still routed to the right defect, because testing it required
+  looking at the machines that were starving.*
+
+  ***KC1 remains tripped.*** *The military family is unmoved: mil5plates
+  −59.6%, mil5ore −64.0% against real −3.3% / −28.7%. Those layouts starve on
+  coal along a compressed trunk, which round 2 established is a different
+  mechanism from the unlinked-branch defect fixed here. Logistic at −68.3%
+  is now a plausible-shaped failure rather than a total one, but it is still
+  a failure.*

@@ -56,6 +56,49 @@ fn main() {
         println!("  {:<24} at {:?}  {}", m.recipe, m.pos, need.join(" "));
     }
 
+    // --- what feeds the starved machines ---------------------------------
+    println!("\ninput inserters of starved machines — pickup tile contents:");
+    let mut shown2 = 0;
+    for (mi, m) in f.machines.iter().enumerate() {
+        if m.state != MachineState::ItemIngredientShortage || shown2 >= 6 {
+            continue;
+        }
+        shown2 += 1;
+        println!("  {} at {:?}:", m.recipe, m.pos);
+        for w in &f.inserters {
+            if w.drop != Endpoint::Machine(mi) {
+                continue;
+            }
+            let what = match w.pickup {
+                Endpoint::Belt(t) => {
+                    let tile = &f.net.tiles[t];
+                    let mut items: Vec<String> = Vec::new();
+                    for lane in &tile.lanes {
+                        for it in lane.slots_debug().iter().flatten() {
+                            let n = f.items.name(*it).to_string();
+                            if !items.contains(&n) {
+                                items.push(n);
+                            }
+                        }
+                    }
+                    format!(
+                        "belt {:?} occ {}/{} carrying {:?}",
+                        tile.pos,
+                        tile.occupancy(),
+                        8,
+                        items
+                    )
+                }
+                Endpoint::Machine(o) => format!("machine {} at {:?}", f.machines[o].recipe, f.machines[o].pos),
+                Endpoint::Nothing => "NOTHING".to_string(),
+            };
+            println!(
+                "    {:?} inserter at {:?} <- {what}  (starved {} ticks, delivered {})",
+                w.core.kind, w.pos, w.core.starved_ticks, w.core.delivered
+            );
+        }
+    }
+
     // --- inserter wiring census ----------------------------------------
     let mut nothing_pick = 0;
     let mut nothing_drop = 0;
@@ -91,6 +134,39 @@ fn main() {
         starving.len(),
         f.inserters.len()
     );
+
+    // Which belt tiles have NO upstream feeder at all?
+    let mut has_upstream = vec![false; f.net.tiles.len()];
+    for t in &f.net.tiles {
+        if let Some(d) = t.downstream {
+            has_upstream[d.tile] = true;
+        }
+    }
+    // A tile is also fed if an inserter drops onto it.
+    for w in &f.inserters {
+        if let Endpoint::Belt(t) = w.drop {
+            has_upstream[t] = true;
+        }
+    }
+    for fd in &f.feeds {
+        has_upstream[fd.tile] = true;
+    }
+    let orphans: Vec<(i32, i32)> = f
+        .net
+        .tiles
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !has_upstream[*i])
+        .map(|(_, t)| t.pos)
+        .collect();
+    println!(
+        "\nbelt tiles with NO upstream feeder: {}/{}",
+        orphans.len(),
+        f.net.tiles.len()
+    );
+    for p in orphans.iter().take(12) {
+        println!("    orphan head {p:?}");
+    }
 
     println!("\nboundary feeds:");
     for feed in &f.feeds {
