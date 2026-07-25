@@ -267,7 +267,19 @@ impl Machine {
             for (id, amount) in &self.ingredients {
                 *self.input.get_mut(&id.0).unwrap() -= amount;
             }
-            self.progress = self.craft_ticks;
+            // ACCUMULATE, never assign. The previous craft ended with
+            // `progress` slightly below zero; that overshoot is the
+            // fractional part of the true period and must carry forward.
+            // Assigning discards it and quantises the effective period to
+            // `ceil(craft_ticks)` — a recipe at 4.5 ticks would run on a
+            // 5-tick cycle, −10% throughput, invisibly.
+            //
+            // Same discipline as `Lane::tick`, `Source::tick`,
+            // `Chest::tick` and `Inserter::cycle` — whose comment already
+            // named this rule. `Machine` was the one place not following
+            // it, which is exactly where a repeated-mistake audit should
+            // have looked and didn't.
+            self.progress += self.craft_ticks;
         }
         self.state = MachineState::Working;
         self.progress -= 1.0;
