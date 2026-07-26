@@ -276,3 +276,12 @@ and search budget.
   says they share one order for deterministic identical copies.
 - Which cell transforms are valuable enough to cache eagerly?
 
+## Decision log
+
+- **2026-07-26 — Phase 1 foundation implemented.** Added the shared
+  geometry-independent placement graph and candidate metrics in
+  `bus::cells::placement`. Consumer edges are weighted by total planned
+  demand, linear candidates report rate-weighted distance, maximum distance,
+  backward rate, weighted cuts, and estimated footprint, and the first
+  deterministic competitor performs best-improving adjacent swaps to a local
+  optimum. Tile routing remains unchanged.

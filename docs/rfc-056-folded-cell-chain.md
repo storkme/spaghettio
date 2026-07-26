@@ -242,3 +242,11 @@ Evidence against escalation:
   routing across rows? Duplication is out of scope here but should be measured.
 - Should K replicas be tiled in a grid after each replica is folded?
 
+## Decision log
+
+- **2026-07-26 — Phase 1 foundation implemented.** The shared placement
+  model can score contiguous multi-row layouts using Manhattan macro-centre
+  distance and explicit weighted inter-row cuts. The first RFC-056 competitor
+  evaluates every non-empty two-row split of a fixed order and compares
+  serpentine with same-direction rows deterministically. It is a fold
+  simulator only; no folded tile geometry is emitted yet.
