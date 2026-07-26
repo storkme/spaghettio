@@ -532,3 +532,21 @@ make either experimental composer a production default.
   materialisation, and the junction solver for remaining crossings. A small
   manifold adapter will own multi-terminal commodity nets and shared-trunk /
   `(n,m)` selection.
+
+- **2026-07-26 — Cross-layout `CompactIR` gate passed.** Solid production-edge
+  terminal coverage and manifold construction now pass on the four
+  representative layouts. With complete machine-plus-inserter islands
+  reserved, the alternating placement bound is:
+
+  | Fixture | islands | terminals | commodity manifolds | source bbox | compacted bbox | area delta |
+  |---|---:|---:|---:|---:|---:|---:|
+  | `mega-chain-usp2raw` | 495 | 1,149 | 20 | 2202×120 | 1715×57 | −63.0% |
+  | `mega-chain-chem5raw` | 184 | 582 | 13 | 817×34 | 607×23 | −49.7% |
+  | `mega-chain-pu4raw` | 640 | 1,416 | 11 | 2684×65 | 2239×33 | −57.6% |
+  | `chain-mil5ore` | 146 | 362 | 13 | 706×7 | 583×5 | −41.0% |
+
+  `build_manifold_nets` now materialises every island-relative terminal at a
+  proposed placement and joins it with external input/output terminals by
+  commodity. Every resulting manifold on these fixtures has at least one
+  producer/input and consumer/output. This is the typed input to the new
+  shared-trunk router; coordinates no longer depend on the source belt paths.

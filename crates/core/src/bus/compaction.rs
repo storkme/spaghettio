@@ -440,6 +440,113 @@ impl CompactIr {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ManifoldTerminal {
+    pub kind: RouteTerminalKind,
+    pub x: i32,
+    pub y: i32,
+    pub island_id: Option<usize>,
+    pub inserter_entity_index: Option<usize>,
+}
+
+/// One multi-terminal commodity-routing problem after island placement.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ManifoldNet {
+    pub item: String,
+    pub terminals: Vec<ManifoldTerminal>,
+}
+
+impl ManifoldNet {
+    pub fn producers(&self) -> impl Iterator<Item = &ManifoldTerminal> {
+        self.terminals.iter().filter(|terminal| {
+            matches!(
+                terminal.kind,
+                RouteTerminalKind::ProducerDrop | RouteTerminalKind::BoundaryInput
+            )
+        })
+    }
+
+    pub fn consumers(&self) -> impl Iterator<Item = &ManifoldTerminal> {
+        self.terminals.iter().filter(|terminal| {
+            matches!(
+                terminal.kind,
+                RouteTerminalKind::ConsumerPickup | RouteTerminalKind::BoundaryOutput
+            )
+        })
+    }
+}
+
+/// Materialise route terminals at a proposed island placement.
+///
+/// Machine terminals move with their islands. External boundaries remain
+/// relocatable interfaces at this stage: their source coordinates are kept as
+/// an incumbent, but the manifold renderer may move them to its perimeter.
+pub fn build_manifold_nets(
+    ir: &CompactIr,
+    placed_islands: &[RigidIsland],
+) -> Result<Vec<ManifoldNet>, String> {
+    if ir.islands.len() != placed_islands.len() {
+        return Err("CompactIR and placed island counts differ".into());
+    }
+    let mut by_item: BTreeMap<String, Vec<ManifoldTerminal>> = ir
+        .route_nets
+        .iter()
+        .map(|net| (net.item.clone(), Vec::new()))
+        .collect();
+
+    for (source, placed) in ir.islands.iter().zip(placed_islands) {
+        if source.id != placed.id || source.entity_indices != placed.entity_indices {
+            return Err(format!("island identity changed at {}", source.id));
+        }
+        for terminal in &source.terminals {
+            let Some(terminals) = by_item.get_mut(&terminal.item) else {
+                return Err(format!(
+                    "island {} terminal item {} has no route net",
+                    source.id, terminal.item
+                ));
+            };
+            terminals.push(ManifoldTerminal {
+                kind: terminal.kind,
+                x: placed.block.x + terminal.dx,
+                y: placed.block.y + terminal.dy,
+                island_id: Some(placed.id),
+                inserter_entity_index: Some(terminal.inserter_entity_index),
+            });
+        }
+    }
+
+    // Boundary terminals have no island-relative representation.
+    for net in &ir.route_nets {
+        let terminals = by_item.get_mut(&net.item).unwrap();
+        for terminal in &net.terminals {
+            if !matches!(
+                terminal.kind,
+                RouteTerminalKind::BoundaryInput | RouteTerminalKind::BoundaryOutput
+            ) {
+                continue;
+            }
+            terminals.push(ManifoldTerminal {
+                kind: terminal.kind,
+                x: terminal.x,
+                y: terminal.y,
+                island_id: None,
+                inserter_entity_index: None,
+            });
+        }
+    }
+
+    let mut result = Vec::with_capacity(by_item.len());
+    for (item, mut terminals) in by_item {
+        terminals.sort();
+        terminals.dedup();
+        if terminals.is_empty() {
+            return Err(format!("route net {item} has no terminals"));
+        }
+        result.push(ManifoldNet { item, terminals });
+    }
+    Ok(result)
+}
+
 fn entity_dims(name: &str, direction: EntityDirection) -> (i32, i32) {
     let (mut width, mut height) =
         oriented_splitter_dims(name, direction).unwrap_or_else(|| entity_size(name));
@@ -1085,6 +1192,17 @@ mod tests {
         assert_eq!(
             PlacedMachineSignature::from_layout(&layout),
             PlacedMachineSignature::from_layout(&moved),
+        );
+
+        let ir = CompactIr::from_layout(&layout);
+        let manifolds = build_manifold_nets(&ir, &placed).unwrap();
+        assert_eq!(manifolds.len(), 1);
+        assert_eq!(manifolds[0].item, "gear");
+        assert_eq!(manifolds[0].producers().count(), 1);
+        assert_eq!(manifolds[0].consumers().count(), 0);
+        assert_eq!(
+            (manifolds[0].terminals[0].x, manifolds[0].terminals[0].y),
+            (25, 14),
         );
     }
 }

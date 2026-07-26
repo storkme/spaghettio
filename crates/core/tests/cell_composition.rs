@@ -1396,8 +1396,10 @@ fn export_rfc055_factorio_candidates() {
 #[ignore = "RFC-057 coarse machine compaction potential"]
 fn rfc057_machine_constraint_baseline() {
     use spaghettio_core::bus::compaction::{
-        blocks_overlap, compact_axis, machine_blocks, occupied_bbox, CompactAxis,
-        PlacedMachineSignature, ProductionSignature,
+        blocks_overlap, build_manifold_nets, compact_axis, compact_island_axis,
+        extract_rigid_islands, extract_route_nets, machine_blocks, occupied_bbox,
+        CompactAxis, CompactIr, PlacedMachineSignature, ProductionSignature,
+        RouteTerminalKind,
     };
 
     for label in ["mega-chain-usp2raw", "mega-chain-chem5raw", "mega-chain-pu4raw", "chain-mil5ore"] {
@@ -1411,8 +1413,25 @@ fn rfc057_machine_constraint_baseline() {
         let layout = fixture.compose_layout();
         let production = ProductionSignature::from_solver(&sr).unwrap();
         let placed = PlacedMachineSignature::from_layout(&layout);
+        let nets = extract_route_nets(&layout);
+        let islands = extract_rigid_islands(&layout);
         assert!(!production.machines.is_empty());
         assert!(!placed.0.is_empty());
+        for edge in production.edges.iter().filter(|edge| !edge.is_fluid) {
+            assert!(nets.iter().any(|net| {
+                net.item == edge.item
+                    && net.terminals.iter().any(|terminal| {
+                        terminal.kind == RouteTerminalKind::ProducerDrop
+                            && terminal.recipe.as_ref().is_some_and(|recipe| {
+                                edge.producer_recipes.contains(recipe)
+                            })
+                    })
+                    && net.terminals.iter().any(|terminal| {
+                        terminal.kind == RouteTerminalKind::ConsumerPickup
+                            && terminal.recipe.as_deref() == Some(edge.consumer_recipe.as_str())
+                    })
+            }), "{label}: no route intent covers {edge:?}");
+        }
 
         let original = machine_blocks(&layout);
         let original_bbox = occupied_bbox(&original);
@@ -1433,6 +1452,41 @@ fn rfc057_machine_constraint_baseline() {
             "{label}: machines={} machine-bbox={}x{} -> {}x{} ({:+.1}%)",
             original.len(), original_bbox.0, original_bbox.1,
             compact_bbox.0, compact_bbox.1,
+            (after as f64 / before as f64 - 1.0) * 100.0,
+        );
+
+        let island_source = occupied_bbox(
+            &islands.iter().map(|island| island.block.clone()).collect::<Vec<_>>()
+        );
+        let mut island_compacted = islands.clone();
+        for _ in 0..8 {
+            island_compacted = compact_island_axis(&island_compacted, CompactAxis::X, 1);
+            island_compacted = compact_island_axis(&island_compacted, CompactAxis::Y, 1);
+        }
+        let island_after = occupied_bbox(
+            &island_compacted.iter().map(|island| island.block.clone()).collect::<Vec<_>>()
+        );
+        let ir = CompactIr { islands: islands.clone(), route_nets: nets.clone() };
+        let manifolds = build_manifold_nets(&ir, &island_compacted).unwrap();
+        for manifold in &manifolds {
+            assert!(
+                manifold.producers().next().is_some(),
+                "{label}: {} manifold has no producer/input",
+                manifold.item,
+            );
+            assert!(
+                manifold.consumers().next().is_some(),
+                "{label}: {} manifold has no consumer/output",
+                manifold.item,
+            );
+        }
+        let before = i64::from(island_source.0) * i64::from(island_source.1);
+        let after = i64::from(island_after.0) * i64::from(island_after.1);
+        println!(
+            "{label}: islands={} terminals={} manifolds={} island-bbox={}x{} -> {}x{} ({:+.1}%)",
+            islands.len(), islands.iter().map(|island| island.terminals.len()).sum::<usize>(),
+            manifolds.len(),
+            island_source.0, island_source.1, island_after.0, island_after.1,
             (after as f64 / before as f64 - 1.0) * 100.0,
         );
     }
