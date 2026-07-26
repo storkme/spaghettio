@@ -90,17 +90,20 @@ Setup, CLI usage, and the concurrency/lock rules live in
    compares the trailing three windows as a group; a `converged` run
    whose `drift_pct` is near the tolerance still deserves a longer
    `--warmup` before its number is blessed.
-5c. **A plateau certified as the asymptote** — the residual the group
-   rule does *not* remove, and the reason a `converged: true` on a deep
-   chain still deserves suspicion. Convergence means three consecutive
-   windows agreed; on a long chain that can be a **step on a staircase**
-   rather than the steady state. usp2 converged at 160k warmup on a
-   real 3-window plateau (0.852 → 0.852 → 0.856, spread 0.43%) and was
-   still climbing at 552k ticks (0.83 → 0.85 → 0.97). Signature: the
-   same fixture reading higher under a longer `--warmup`. Cure: for deep
-   chains, confirm a converged number with a steady-state probe at a
-   much longer warmup before blessing it; the intermediates-at-or-above-
-   plan tell from class 1 applies here too.
+5c. **A plateau certified as the asymptote** — a residual the group
+   rule reduces but cannot eliminate, since convergence only means three
+   consecutive windows agreed and on a long chain that *could* be a step
+   on a staircase. Kept as a standing caution rather than an observed
+   class: **the one candidate sighting did not reproduce.** A 3-window
+   480k-warmup probe of usp2 read 0.83 → 0.85 → 0.97 and looked like a
+   staircase, but a 9-window run at the blessed geometry stayed flat
+   across 47 game-minutes (mean 0.850/s, spread 2.9%, net trend −0.35%).
+   Three windows reporting `NOT CONVERGED` with +13.9% drift was the
+   instrument correctly refusing to answer — reading a trend into it was
+   over-reading. Cure regardless: on a deep chain, confirm a converged
+   number with a longer `--warmup` before blessing it, and prefer a run
+   with many windows over one with the bare minimum; the
+   intermediates-at-or-above-plan tell from class 1 applies here too.
 6. **A budget that cannot fit the test.** `--warmup` used to re-floor the
    tick ceiling at warmup + ONE window while convergence needs four
    checkpoints (three closed windows), so any warmup past the default

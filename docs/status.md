@@ -177,11 +177,13 @@ but unattributed. **USP@2 measured 2026-07-25: −57.2% FAIL**, converged
 and properly sampled on the post-#464 instrument (5 checkpoints, full
 300-item windows auto-sized to 21,240 ticks, group drift +0.4%);
 unregistered, tracked at
-[#453](https://github.com/storkme/spaghettio/issues/453). **The deficit
-is definite; its magnitude is not** — a 480k-warmup probe read
-0.83 → 0.85 → 0.97/s still rising (−51.5%, not converged), so the 160k
-convergence was a plateau on a longer staircase and −57% is a floor
-rather than the answer. Tracked
+[#453](https://github.com/storkme/spaghettio/issues/453). Re-measured
+at the **blessed L0 geometry** after [#466](https://github.com/storkme/spaghettio/pull/466)
+fixed the fixture exporter: −57.3% FAIL, converged over 9 windows flat
+across 47 game-minutes (mean 0.850/s, spread 2.9%, net trend −0.35%).
+Geometry made no difference — the pre-#466 L2-geometry fixture measured
+−57.2% in a matching L2 world, so that run was self-consistent rather
+than mixed-world, and both configurations perform identically. Tracked
 follow-ups: #383 (bound lift), #409 (landed independently), #423
 (pitch-1 splitter-passthrough). Full trail:
 [`rfc-052-oil-mega-cell.md`](rfc-052-oil-mega-cell.md) decision log.
@@ -198,10 +200,11 @@ follow-ups: #383 (bound lift), #409 (landed independently), #423
 > the blessed entry), so chem5's registration stands. **PU@4's −27.3% has
 > NOT been re-measured** and should not be treated as a settled number
 > until it is. USP@2's deficit reproduced across all three instrument
-> versions at the default warmup (−57.0 / −57.4 / −57.2) so it is real,
-> but a longer probe shows it still climbing — see the magnitude caveat
-> above. The group rule removes the *ramp* bias, not the possibility
-> that a converged plateau is a step on a staircase.
+> versions and at both geometries (−57.0 / −57.4 / −57.2 / −57.3), the
+> last of those on the post-#466 blessed fixture with 9 flat windows, so
+> the number is settled. An earlier reading that it was "still climbing"
+> came from a 3-window probe that itself reported NOT CONVERGED; it did
+> not reproduce and has been withdrawn.
 
 **`rfc-inserter-sizing.md` close-out (2026-07-13)**: bus inserters sized to
 planned per-machine throughput via a shared regular→fast→stack ladder
