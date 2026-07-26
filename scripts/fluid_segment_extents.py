@@ -23,6 +23,21 @@ def load(path):
     return (r.get("sim_state") or {}).get("pipes", [])
 
 
+def openings(name, direction):
+    """Which orthogonal deltas this entity can connect on, at the surface.
+
+    F1: a plain pipe opens on all four sides.
+    F5/F5a: a pipe-to-ground opens on ONE surface side only — the side its
+    (game-convention) direction points at. Its back and both perpendicular
+    sides are CLOSED, which is what keeps stacked multi-fluid trunk rows
+    isolated even though their tiles touch.
+    """
+    if name == "pipe-to-ground":
+        d = DELTA.get(direction)
+        return {d} if d else set()
+    return {(0, -1), (1, 0), (0, 1), (-1, 0)}
+
+
 def build(pipes):
     at = {}
     for p in pipes:
@@ -35,39 +50,44 @@ def build(pipes):
         adj[a].add(b)
         adj[b].add(a)
 
+    # Surface links, MUTUALLY consented. Both entities must open toward each
+    # other: `link` is symmetric, so testing only one end would let a plain
+    # pipe re-add a connection through a PTG's closed side and silently merge
+    # two independent segments.
     for pos, e in at.items():
-        x, y = pos
-        if e["name"] == "pipe-to-ground":
-            # F5: surface opening is the GAME direction (dump is game JSON).
-            d = DELTA.get(e["dir"])
-            if d:
-                s = (x + d[0], y + d[1])
-                if s in at:
-                    link(pos, s)  # F5a: only this side; perpendicular excluded
-        else:
-            for dx, dy in ((0, -1), (1, 0), (0, 1), (-1, 0)):
-                n = (x + dx, y + dy)
-                if n in at:
-                    link(pos, n)
+        opens = openings(e["name"], e["dir"])
+        for d in opens:
+            n = (pos[0] + d[0], pos[1] + d[1])
+            ne = at.get(n)
+            if not ne:
+                continue
+            back = (-d[0], -d[1])
+            if back in openings(ne["name"], ne["dir"]):
+                link(pos, n)
 
-    # F4: underground pairing — opposite facing, same axis, gap <= 9.
-    ptg = [(p, e) for p, e in at.items() if e["name"] == "pipe-to-ground"]
-    for pos, e in ptg:
+    # F4: underground pairing — opposite facing, same axis, entity-to-entity
+    # distance <= 10 (gap <= 9).
+    for pos, e in list(at.items()):
+        if e["name"] != "pipe-to-ground":
+            continue
         d = DELTA.get(e["dir"])
         if not d:
             continue
-        # underground side is opposite the surface opening
-        ux, uy = -d[0], -d[1]
-        for gap in range(1, 11):  # entity-to-entity <= 10 => gap <= 9
+        ux, uy = -d[0], -d[1]  # underground side is opposite the surface mouth
+        for gap in range(1, 11):
             cand = (pos[0] + ux * gap, pos[1] + uy * gap)
             ce = at.get(cand)
             if not ce:
                 continue
             if ce["name"] != "pipe-to-ground":
-                break  # something else occupies the axis
+                # Underground runs BENEATH surface entities — a plain pipe on
+                # the axis does not sever the pair, so keep searching.
+                continue
             cd = DELTA.get(ce["dir"])
-            if cd and (cd[0], cd[1]) == (d[0], d[1]):
-                continue  # same facing: not a pair, keep looking
+            if cd != (-d[0], -d[1]):
+                # Not opposite-facing: not our partner. Keep looking rather
+                # than breaking, or a perpendicular PTG hides the real one.
+                continue
             link(pos, cand)
             break
     return at, adj
@@ -101,7 +121,8 @@ def main(path):
     for c in comps:
         xs = [p[0] for p in c]
         ys = [p[1] for p in c]
-        dx, dy = max(xs) - min(xs), max(ys) - min(ys)
+        # Tile EXTENT, not coordinate span: x=0..320 is 321 tiles.
+        dx, dy = max(xs) - min(xs) + 1, max(ys) - min(ys) + 1
         fl = sorted({f[0] for p in c for f in at[p]["fluids"]})
         rows.append((len(c), dx, dy, fl, min(xs), max(xs)))
         if dx > 320 or dy > 320:

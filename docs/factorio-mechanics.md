@@ -196,54 +196,44 @@ Splitters compose into networks that route m input belts onto n output belts ("b
 - **F6.** Pipes and belts on the same tile are **not** possible (both occupy the full tile), but pipes and belts on adjacent tiles do not interfere. *(Pipes and belts can run in parallel on neighboring columns.)*
 - **F7.** Pipe-to-ground pairs allow fluid lines to cross under belt lines without interference (analogous to U4 for belts).
 
-### Fluid FLOW (Factorio 2.0 rewrite)
+### Fluid FLOW (Factorio 2.0)
 
-F1–F7 above are **topology only** — what connects to what. These rules cover
-how much fluid actually moves, which 2.0 changed fundamentally
-([FFF-416](https://factorio.com/blog/post/fff-416)). Added 2026-07-26 after
-the absence of any flow rule here nearly produced a 1.x-style per-pipe
-gradient model in the meter; the doc was silent, not wrong, and silence read
-as "model it the old way".
+F1–F7 are topology — what connects to what. These are the flow rules, which
+2.0 rewrote ([FFF-416](https://factorio.com/blog/post/fff-416)).
 
-- **F8. A pipe network is a single "segment" with uniform contents.** Fluid
+- **F8.** A pipe network is a single **segment with uniform contents**. Fluid
   pushed in anywhere is *immediately* available everywhere in the segment —
   no propagation delay, no pressure gradient, no per-pipe simulation.
-  *(Sim-corroborated 2026-07-26 on `mega-chain-usp2raw`: across 939 pipes
-  carrying fluid, each network showed 1–2 distinct fill levels — crude-oil
-  100/100 across 246 pipes, lubricant ~10/100 across 69. A 1.x gradient
-  would have shown a spread along the run.)*
-- **F9. Intra-segment throughput is NOT length-limited.** 1.x's
-  pipe-length-vs-throughput tables are **obsolete and must not be ported** —
-  within one segment, length costs nothing. A segment sitting uniformly
-  part-full is supply- or consumer-limited, not pipe-limited.
-- **F10. A segment whose extent exceeds 320×320 tiles (10×10 chunks) does
-  not flow AT ALL** until broken up by a pump. This is **binary, not a
-  falloff curve**: under the limit is free, over it is dead.
-  *(**Load-bearing for this project and currently unchecked**: composed
-  mega-chains span ~2,200 tiles and the engine emits **zero pumps** — see
-  `docs/status.md`. Nothing in the validator tests segment extent.)*
-- **F11. Pumps** move **1200/s** (a 10× nerf from 1.x; quality-scalable).
-  Their 2.0 roles are splitting an over-long segment (F10), forcing
-  directional flow, acting as a circuit-controlled valve, and train
-  loading — **not** the 1.x role of restoring throughput over distance
-  (F9).
-- **F12. Fluid box volumes** (2.0.77 prototypes): `pipe` **100**,
-  `pipe-to-ground` 100, machine fluid boxes (chemical plant, refinery)
-  **200** per box. Segment capacity is the sum over member entities.
-- **F13. A machine blocked on its OUTPUT fluid box stops crafting
-  entirely** — including for the products you *do* want. A recipe with
-  multiple outputs (oil cracking, and every `results`-plural recipe) needs
-  **every** output to have somewhere to go: a consumer, a surplus exit, or a
-  void. One unconsumed byproduct stalls the whole machine, and therefore
-  every downstream ingredient it also produces. *(This is the fluid analogue
-  of the solid `full_output` census state, and the reason a chain can be
-  arithmetically balanced and still deadlock.)*
+- **F9.** Intra-segment throughput is **not** length-limited. 1.x's
+  pipe-length-vs-throughput tables are obsolete and must not be ported.
+  *(A segment sitting uniformly part-full is supply- or consumer-limited,
+  never pipe-limited.)*
+- **F10.** A segment whose tile extent exceeds **320×320 (10×10 chunks)**
+  does not flow **at all** until broken up by a pump. Binary, not a falloff
+  curve. *(Nothing in the validator checks segment extent.)*
+- **F11.** **Pumps** move **1200/s** (10× nerf from 1.x; quality-scalable).
+  Their roles are splitting an over-long segment (F10), forcing directional
+  flow, circuit-controlled valving, and train loading — **not** the 1.x role
+  of restoring throughput over distance (F9).
+- **F12.** **Fluid box volumes**: `pipe` 100, `pipe-to-ground` 100, machine
+  fluid boxes (chemical plant, refinery) 200 per box. Segment capacity is
+  the sum over member entities.
+- **F13.** A machine blocked on its **output** fluid box stops crafting
+  **entirely** — including for the products you *do* want. A multi-output
+  recipe (oil processing, and every `results`-plural recipe) needs **every**
+  output to have somewhere to go: a consumer, a surplus exit, or a void. One
+  unconsumed byproduct stalls the whole machine and therefore every other
+  ingredient it also produces. *(The fluid analogue of the solid
+  `full_output` census state, and why a chain can be arithmetically balanced
+  and still deadlock.)*
+- **F14.** 2.0 has a tick-granularity ceiling on extremely high-throughput
+  single connections (order 10k+ fluid/s), revisited in 2.1. No recipe in
+  this project's corpus approaches it. *(Recorded so its absence elsewhere
+  is not mistaken for an oversight.)*
 
-**Stated non-goal:** 2.0 has a tick-granularity ceiling on extremely
-high-throughput recipes (order 10k+ fluid/s through one connection), which
-is being revisited in 2.1. Nothing in this project's corpus approaches it;
-it is recorded here only so a future reader does not mistake its absence for
-an oversight.
+Provenance for F8–F13, and the measurements behind them, are in RFC-054's
+decision log (2026-07-26); current defect status is in
+[`status.md`](status.md).
 
 ---
 
