@@ -1930,3 +1930,57 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   unaffected by this: three pairs (1,029 instances) want a consumer with
   three or more solid inputs, which is the face-allocation problem, not a
   straddle one.*
+
+- *2026-07-26 — **Investigation: the "3+ solid inputs" blocker, measured.
+  My own 1,029-instance figure was wrong; it is 351.** The coverage audit
+  said three top-10 pairs were "blocked on nothing else" than a consumer
+  needing 3+ solid inputs. Probing each pair individually — rather than
+  inferring from its recipe — gives a different answer for all three:*
+
+  | pair | instances | REAL blocker |
+  |---|---|---|
+  | `copper-cable → advanced-circuit` | 360 | **1:5 fan-out.** At 1/s the solve is P1:C5 (`pr=4.00`, `cr=0.80`) — one producer feeding five consumers, against a row's two neighbours. Face count is secondary; face allocation alone unlocks nothing here. |
+  | `iron-stick → rail` | 351 | **Face count, and only that.** P1:C1, straddle `PC`, `required_rate` 0.5–2.5/s, the two belt-fed solids (stone, steel-plate) at the same modest rates. |
+  | `electric-engine-unit → flying-robot-frame` | 318 | Three independent blockers: the consumer needs **3** belt-fed solids, the producer takes **2** solid inputs against the row's one north belt, and the producer's lubricant is a fluid the consumer does not share. Its straddle now passes (`CPCCPCC…`) thanks to the slot fix, so that is no longer among them. |
+
+  ***So face allocation is worth 351 instances, not 1,029.*** *Recorded
+  because the inflated figure was mine, it was quoted as the top priority
+  in this log and in #462's body, and it came from reading recipes instead
+  of running solves.*
+
+  ***What the corpus actually builds for 3-input consumers*** *(`di-patterns
+  faces`, 354 `advanced-circuit` machines and the `rail`/`flying-robot-frame`
+  sets):*
+
+  | pattern | evidence | usable in a row cell? |
+  |---|---|---|
+  | Two inserters on ONE face, both reach-1 → a single belt carrying TWO ingredients, one per physical lane | `27 DI@N \| N:out1 S:in1 S:in1` (rail); the dominant AC plan `62 DI@E \| W:in1 W:out2` has ONE belt inserter for TWO ingredients | **No** — `BusLane.item` is a single `String`. One item per lane is baked into the bus model. |
+  | reach-1 AND reach-2 on one face → two STACKED belt rows | `23 DI@S \| S:in1 S:in2 S:in2` (rail) | **Yes**, if the output moves to the opposite face |
+  | Inputs on BOTH faces | `93 DI@N \| N:in1 S:in1 S:out1` (FRF) | **No** — the north face is the producer's |
+
+  ***The headline finding is the first row: the corpus's most common answer
+  to "too many ingredients" is two items sharing one belt, and our bus
+  cannot express that at all.*** *That is a bus-wide feature with its own
+  RFC, not a DI-cell tweak — and it is the real reason `advanced-circuit`
+  looks the way it does in the corpus.*
+
+  *The reachable design, from the second row: give the cell six rows around
+  the machines instead of five —*
+
+  ```text
+  y0        consumer OUTPUT belt     (north, outer)
+  y1        producer input belt      (north, inner)
+  y2        producer feed  reach-1 ↓ y1   above producers
+            consumer out   reach-2 ↑ y0   above consumers
+  y3..      machines, bottom-aligned
+  face_y    consumer feed A reach-1 ↓ face_y+1
+            consumer feed B reach-2 ↓ face_y+2
+  face_y+1  consumer input belt A
+  face_y+2  consumer input belt B
+  ```
+
+  *Costs one row. The reach-2 output pick lands 2 tiles into the machine,
+  so it needs a machine ≥2 tall (every candidate is 3+). Output reach is
+  unchanged — it is already `Reach::Far` today. NOT YET IMPLEMENTED; this
+  entry is the evidence and the design, so the decision to build it is
+  taken on 351 instances rather than on 1,029.*
