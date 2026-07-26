@@ -2180,3 +2180,51 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   instance count by 3×, demoted a "finding" to a hypothesis, and turned a
   hand-waved prerequisite into a file:line change with a test to write
   first. Every one of those was cheaper found before building than after.*
+
+- *2026-07-26 — **`direct_insertion: true` as a blunt default is
+  REFUSED by measurement. Attempted on request, reverted the same
+  session.** The flip is one line; the case for it was wrong.*
+
+  *The argument was "inert where it does not apply, verified where it
+  does". The first half holds — every DI gate is a refusal, so a pair the
+  engine cannot serve is untouched. **The second half was the error.**
+  The five pairs were verified at SPECIFIC RATES. Defaulting DI on
+  applies it at every rate, to every pair that passes eligibility,
+  including combinations nobody has ever looked at.*
+
+  ***Measured, against a 100% green baseline on the same commit
+  (`487bc883`): 18/18 `cell_composition` and 64/64 `e2e` pass with DI
+  off; the flip breaks 8 of them.***
+
+  | test | with DI defaulted on |
+  |---|---|
+  | `tier4_advanced_circuit_from_ore_am2` | **5 validation ERRORS** — `unresolved-junction` at (15,134), (18,131), (18,134) |
+  | `tier2_electronic_circuit` | **1 `input-rate-delivery` warning** — and this is the FLAGSHIP DI pair |
+  | `tier2_electronic_circuit_splitter_stamp_regression` | fails |
+  | `stacking_fanin_wall_lift_ec6_yellow_legendary` | fails |
+  | `cell_candidate_composes_mil5_ore` | **no longer lays out at all** — `stone-brick 25.00/s exceeds per-lane capacity 22.50/s` |
+  | `cell_candidate_wins_mil5_plates_over_broken_native` | composed candidate no longer wins |
+  | `selection_tier_validation_never_leaks_trace_events` | leaked tier validations |
+  | `cell_candidate_resolves_ec15_refusal` | *premise inverted — DI RESOLVES a refusal the bus had. Arguably a win, but it moves the test's ground.* |
+
+  *The mechanism is not that DI is broken. It is that fusing a pair
+  changes the ROW STRUCTURE, and everything downstream — trunk lane
+  assignment, junction routing, per-lane capacity — is computed against
+  that structure. `mil5-ore` is the clearest: DI removes a row, the
+  stone-brick demand that was spread over two trunks lands on one, and
+  25/s does not fit a 22.5/s lane. **Nothing about the cell itself is
+  wrong; the layout around it is different and nobody checked those.***
+
+  ***The correct shape is already in this file, three lines above the
+  flag.*** *`cell_composition` faced exactly this and was flipped as
+  `Candidate`, not `On`: "the unbiased scorer picks composition only
+  where the bus path refuses or fails acceptance; every bus-successful
+  config is bit-identical (goldens gate this)." DI should follow that
+  precedent — **build the cell, validate it, and keep it only when it
+  does not make the layout worse** — rather than trusting eligibility to
+  imply a better outcome. That is a real piece of work, not a flag
+  change, and it is the honest price of turning DI on.*
+
+  *Recorded so the next person does not re-derive it: the one-line flip
+  is not a shortcut that was missed, it is a thing that was tried and
+  measured.*
