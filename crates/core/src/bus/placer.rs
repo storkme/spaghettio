@@ -2149,14 +2149,24 @@ fn row_cell_eligible(producer: &MachineSpec, consumer: &MachineSpec, item: &str)
     if !(1..=2).contains(&c_in.len()) || !c_in.iter().any(|i| i == item) {
         return false;
     }
-    // The producer's belt-fed input and the consumer's must be DIFFERENT
-    // items. Same item on both would put two entries for one item in the
-    // fused spec at two different y, and both `lane_planner` and
-    // `ghost_router` break on the FIRST matching solid input — so the
-    // second belt would never be tapped and its machines would starve
-    // silently. Refuse; see the RFC decision log.
-    let c_other = c_in.iter().find(|i| *i != item).cloned().unwrap_or_default();
-    if p_in.first().is_some_and(|p| *p == c_other) {
+    // Every solid input the fused spec carries must be a DISTINCT item.
+    // Two entries for one item at two different y starve silently: both
+    // `lane_planner` and `ghost_router` break on the FIRST matching solid
+    // input, so the second belt is built, never tapped, never fed — and
+    // nothing disagrees with anything, so no validator fires. See the RFC
+    // decision log.
+    //
+    // This is checked PAIRWISE over all of them, not just the first. The
+    // predecessor used `.find()` to pull the consumer's one non-coupled
+    // input, which was sufficient only while the face count permitted
+    // exactly one; at three inputs it silently skipped producer×(second
+    // other) and other×other. Pinned by
+    // `di_row_cell_refuses_every_same_item_collision`.
+    let c_others: Vec<&String> = c_in.iter().filter(|i| *i != item).collect();
+    if c_others.iter().enumerate().any(|(i, a)| c_others[i + 1..].contains(a)) {
+        return false;
+    }
+    if p_in.first().is_some_and(|p| c_others.iter().any(|o| *o == p)) {
         return false;
     }
     // WIDTHS may differ freely — the row paces x by each machine's own
@@ -3992,6 +4002,83 @@ mod tests {
                 .is_some_and(|s| s.starts_with("di-cell:"))),
             "a two-solid-input consumer must never be fused into a STACKED cell"
         );
+    }
+
+    /// A consumer with `item` coupled plus two belt-fed inputs `a` and `b`,
+    /// against a producer whose own belt-fed input is `p_in`. Used to probe
+    /// every same-item collision the three-input shape makes reachable.
+    fn three_input_pair(p_in: &str, a: &str, b: &str) -> (MachineSpec, MachineSpec) {
+        let flow = |item: &str, rate: f64| ItemFlow {
+            item: item.to_string(),
+            rate,
+            is_fluid: false,
+            module_id: 0,
+        };
+        let producer = MachineSpec {
+            entity: "assembling-machine-2".to_string(),
+            recipe: "iron-plate".to_string(),
+            self_loop: vec![],
+            voider: false,
+            game_modules: Vec::new(),
+            count: 2.0,
+            inputs: vec![flow(p_in, 1.0)],
+            outputs: vec![flow("iron-plate", 2.0)],
+        };
+        let consumer = MachineSpec {
+            entity: "assembling-machine-2".to_string(),
+            recipe: "three-input-thing".to_string(),
+            self_loop: vec![],
+            voider: false,
+            game_modules: Vec::new(),
+            count: 1.0,
+            inputs: vec![flow("iron-plate", 2.0), flow(a, 1.0), flow(b, 1.0)],
+            outputs: vec![flow("three-input-thing", 1.0)],
+        };
+        (producer, consumer)
+    }
+
+    /// **The prerequisite for relaxing the face count to three solid
+    /// inputs.** Two entries for one item at two different `y` in the fused
+    /// spec starve silently: both `lane_planner` and `ghost_router` `break`
+    /// on the FIRST matching solid input, so the second belt is built,
+    /// never tapped, never fed — and no validator disagrees with anything,
+    /// because nothing disagrees. Exactly the failure this RFC already hit
+    /// once on the producer/consumer axis.
+    ///
+    /// The old guard read the consumer's non-coupled inputs with `.find()`,
+    /// which returns only the FIRST — sufficient while two solid inputs
+    /// permitted exactly one non-coupled item, silently partial at three.
+    /// All three pairs must be checked.
+    ///
+    /// Written BEFORE relaxing the gate, where it passes vacuously on the
+    /// input count alone; it is the safety net for the relaxation, so it
+    /// must go on passing for the stated reason afterwards.
+    #[test]
+    fn di_row_cell_refuses_every_same_item_collision() {
+        // producer's belt input collides with the consumer's FIRST other
+        // input — the only pair the old `.find()` guard actually checked.
+        let (p, c) = three_input_pair("copper-plate", "copper-plate", "steel-plate");
+        assert!(
+            !row_cell_eligible(&p, &c, "iron-plate"),
+            "producer's belt input == consumer's first other input"
+        );
+        // ...with the SECOND. `.find()` never looked here.
+        let (p, c) = three_input_pair("steel-plate", "copper-plate", "steel-plate");
+        assert!(
+            !row_cell_eligible(&p, &c, "iron-plate"),
+            "producer's belt input == consumer's second other input"
+        );
+        // ...and the two consumer inputs with each other, which needs no
+        // producer collision at all to put two belts on one item.
+        let (p, c) = three_input_pair("copper-plate", "steel-plate", "steel-plate");
+        assert!(
+            !row_cell_eligible(&p, &c, "iron-plate"),
+            "consumer's two other inputs are the same item"
+        );
+        // Control: all four items distinct — refused today on the face
+        // count, and the case the relaxation is FOR.
+        let (p, c) = three_input_pair("copper-plate", "steel-plate", "plastic-bar");
+        let _ = row_cell_eligible(&p, &c, "iron-plate");
     }
 
     /// DI off is the default and must stay bit-identical: no fusion.
