@@ -664,7 +664,8 @@ distribution defect:
   further, so the options are consume it, void it, or size advanced-only
   against petroleum demand rather than mixing both paths.
 
-Not fixed: this is a solver/planner question (surplus sinks or recipe
+Tracked in [#476](https://github.com/storkme/spaghettio/issues/476). Not
+fixed: this is a solver/planner question (surplus sinks or recipe
 selection), and it corroborates "solver byproducts" as the top gap named in
 the July 2026 strategy review.
 
