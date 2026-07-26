@@ -357,7 +357,9 @@ pub fn solve_netflow_with_options(
     // retry removes at least one recipe, so the cap is just a backstop.
     let mut extra_excluded: FxHashSet<String> = FxHashSet::default();
     let mut last_refusal: Option<SolverError> = None;
-    for _ in 0..8 {
+    // Eight acyclic-fallback exclusions plus at most one free-mode oil-path
+    // exclusivity re-solve (#476).
+    for _ in 0..9 {
         match solve_attempt(
             target_item,
             target_rate,
@@ -370,7 +372,31 @@ pub fn solve_netflow_with_options(
             costs,
             options,
         ) {
-            Ok(r) => return Ok(r),
+            Ok(r) => {
+                // Physical recipe-path exclusivity (#476): mixing basic and
+                // advanced oil processing is arithmetically valid but can
+                // deadlock in-game. Advanced processing is forced whenever
+                // heavy oil is demanded; its petroleum-gas co-product then
+                // shares a network with basic processing. Whole placed
+                // refineries can fill that network, blocking advanced
+                // processing's entire multi-output recipe and starving
+                // heavy oil/lubricant.
+                //
+                // In free-selection mode, once the optimum proves advanced
+                // processing is required, re-solve without basic processing.
+                // The advanced-only plan makes unavoidable excess explicit
+                // in `surplus_outputs`, so the layout gives it a physical
+                // perimeter exit. Restricted compatibility mode remains the
+                // exact caller-requested recipe set.
+                let mixes_oil_paths = matches!(scope, RecipeScope::Free)
+                    && r.machines.iter().any(|m| m.recipe == "advanced-oil-processing")
+                    && r.machines.iter().any(|m| m.recipe == "basic-oil-processing");
+                if mixes_oil_paths {
+                    extra_excluded.insert("basic-oil-processing".to_string());
+                    continue;
+                }
+                return Ok(r);
+            }
             Err(AttemptError::Hard(e)) => return Err(e),
             Err(AttemptError::Cycle { refusal, excludable }) => match excludable {
                 Some(m) => {

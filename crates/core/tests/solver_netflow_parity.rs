@@ -466,6 +466,44 @@ fn golden_rocket_fuel_free_mode_zero_surplus() {
     assert!(recipes.contains(&"advanced-oil-processing"), "got {recipes:?}");
 }
 
+/// Regression for #476: lubricant forces advanced oil processing into the
+/// utility-science chain. Its unavoidable petroleum-gas co-product must
+/// displace basic oil processing rather than stack on top of it as an
+/// unroutable surplus that blocks the advanced refineries in-game.
+#[test]
+fn utility_science_credits_advanced_oil_petroleum_before_basic_oil() {
+    let inputs = set(&["iron-ore", "copper-ore", "crude-oil", "water", "coal", "stone"]);
+    let r = solve_netflow(
+        "utility-science-pack",
+        2.0,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        RecipeScope::Free,
+        &CostTable::default(),
+    )
+    .expect("utility science solves");
+
+    assert_conservation("utility-science-pack", 2.0, &r);
+    let recipes: Vec<&str> = r.machines.iter().map(|m| m.recipe.as_str()).collect();
+    assert!(recipes.contains(&"advanced-oil-processing"), "got {recipes:?}");
+    assert!(
+        !recipes.contains(&"basic-oil-processing"),
+        "advanced oil's petroleum must displace basic oil; got {recipes:?}"
+    );
+    assert!(
+        r.surplus_outputs.iter().all(|f| f.item != "petroleum-gas"),
+        "petroleum gas must be consumed, not stranded: {:?}",
+        r.surplus_outputs
+    );
+    assert!(
+        r.surplus_outputs.iter().any(|f| f.item == "heavy-oil" && f.is_fluid),
+        "advanced-only plan must expose unavoidable heavy-oil surplus for physical routing: {:?}",
+        r.surplus_outputs
+    );
+}
+
 /// Golden: rocket-fuel compat mode — byproduct crediting within the tree
 /// walk's own recipe set. AOP is pinned in by the walk's light-oil choice;
 /// its gas byproduct must offset basic-oil production (strictly fewer

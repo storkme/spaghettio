@@ -636,6 +636,11 @@ fn adapt_with_spacing(
             ..r.clone()
         })
         .collect();
+    let surplus_exits = l
+        .surplus_exits
+        .iter()
+        .map(|(item, x, y)| (item.clone(), *x, *y + margin))
+        .collect();
 
     let width = entities.iter().map(|e| e.x).max().unwrap_or(0) + 1;
     let height = entities.iter().map(|e| e.y).max().unwrap_or(0) + 1;
@@ -647,6 +652,7 @@ fn adapt_with_spacing(
         inserter_capacity: l.inserter_capacity,
         boundary_inputs: b_in,
         boundary_outputs: b_out,
+        surplus_exits,
         // The engine's warnings survive the adaptation — dropping them
         // hid the ships-uncovered power note during #400's diagnosis.
         warnings: l.warnings.clone(),
@@ -1009,9 +1015,9 @@ pub fn compose_mega_block(
             ..m.clone()
         })
         .collect();
-    let produced: FxHashSet<&str> = machines
+    let produced: FxHashSet<String> = machines
         .iter()
-        .flat_map(|m| m.outputs.iter().map(|o| o.item.as_str()))
+        .flat_map(|m| m.outputs.iter().map(|o| o.item.clone()))
         .collect();
     // External inputs of the SUBGRAPH at the scaled rate (per-machine
     // rates × scaled counts).
@@ -1045,7 +1051,20 @@ pub fn compose_mega_block(
                 module_id: 0,
             })
             .collect(),
-        surplus_outputs: Vec::new(),
+        // Preserve parent-declared surplus produced inside this collapsed
+        // fluid subgraph (#476). Dropping it here made the mega adapter
+        // erase the only signal that tells the bus to extend a fluid
+        // byproduct to the perimeter, yielding a validator-clean sublayout
+        // whose multi-output refinery deadlocked in-game.
+        surplus_outputs: sr
+            .surplus_outputs
+            .iter()
+            .filter(|f| produced.contains(f.item.as_str()))
+            .map(|f| crate::models::ItemFlow {
+                rate: f.rate * scale,
+                ..f.clone()
+            })
+            .collect(),
         dependency_order: sr
             .dependency_order
             .iter()

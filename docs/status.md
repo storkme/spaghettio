@@ -645,17 +645,15 @@ Consequences, and they are open:
   distinguish steady state from a large factory filling slowly and
   smoothly; a generous fixed warmup is currently the only defence.
 
-### Fluid byproducts stall multi-output machines (2026-07-26) — OPEN DEFECT
+### Fluid byproducts stall multi-output machines (2026-07-26) — FIXED IN CODE, RE-MEASUREMENT PENDING
 
 Mechanics **F13**: a machine blocked on **any** output fluid box stops
 crafting entirely, including the products that *are* wanted. Multi-output
 recipes therefore need every output to reach a consumer, a surplus exit, or
-a void. The solver credits byproducts in the LP; nothing guarantees the
-layout gives a *physical* sink to a surplus one.
+a void.
 
-Live in `mega-chain-usp2raw`, and it is a **third mechanism** distinct from
-#471 (serial splitter allocation) and from #453's steel-into-LDS
-distribution defect:
+Observed in `mega-chain-usp2raw`, distinct from #471's serial splitter
+allocation:
 
 - 21 `basic-oil-processing` refineries saturate the petroleum-gas network
   (100/100 across 276 pipes).
@@ -670,10 +668,23 @@ distribution defect:
   further, so the options are consume it, void it, or size advanced-only
   against petroleum demand rather than mixing both paths.
 
-Tracked in [#476](https://github.com/storkme/spaghettio/issues/476). Not
-fixed: this is a solver/planner question (surplus sinks or recipe
-selection), and it corroborates "solver byproducts" as the top gap named in
-the July 2026 strategy review.
+The initial diagnosis was incomplete: the LP *did* credit advanced oil's
+petroleum before sizing basic oil. The unsafe shape appeared at the
+fractional-plan → physical-layout boundary: a mixed 18.815-basic /
+2-advanced plan became 21 + 3 whole refineries across three replicas, whose
+combined petroleum capacity could saturate the network and block advanced
+processing.
+
+Fix [#476](https://github.com/storkme/spaghettio/issues/476): free recipe
+selection now treats the oil paths as exclusive. If advanced processing is
+required, the solver re-solves without basic processing; USP@2 becomes
+advanced-only and its unavoidable heavy-oil excess is explicit. The mega
+adapter now preserves that surplus through its sub-solve, boundary
+translation, and chain placement, producing an entity-verified heavy-oil
+perimeter pipe. The solver regression and the real ignored USP composition
+gate pass. Keep this entry open until a long Factorio re-measurement confirms
+the refinery/lubricant stall has disappeared and quantifies the remaining
+#471 deficit.
 
 ### F10 segment-extent limit: not currently breached, and unchecked
 
