@@ -63,8 +63,53 @@ const DIM_WARMUP_FACTOR: u32 = 32;
 const MIN_WINDOW_TICKS: u32 = 600;
 
 /// Expected item count per stability window (RFC: "windows sized so
-/// expected items >= ~300").
-const WINDOW_ITEM_FLOOR: f64 = 300.0;
+/// expected items >= ~300"). This is a floor on the ACHIEVED sample, not
+/// on a sample predicted from the planned rate — see `WINDOW_TICK_CAP_
+/// FACTOR` and the item-driven checkpoint loop in the generated Lua.
+pub const WINDOW_ITEM_FLOOR: f64 = 300.0;
+
+/// Hard cap on how long one window may stay open waiting for
+/// `WINDOW_ITEM_FLOOR` items, as a multiple of the planned-rate window
+/// length.
+///
+/// Windows used to be sized purely from the PLANNED rate and closed on a
+/// fixed tick count, so a factory at 40% of plan got 40% of the intended
+/// sample and the 2% agreement test became unreachable: **the worse a
+/// factory performed, the less measurable it became**, failing closed to
+/// NO DATA (#454). Windows now close on accumulated items instead, and
+/// this cap bounds the run for a factory so slow (below 1/4 of plan) that
+/// waiting for a full sample would blow the tick budget. A window closed
+/// by the cap is reported as short-sampled rather than silently folded
+/// into a verdict.
+const WINDOW_TICK_CAP_FACTOR: u32 = 4;
+
+/// Consecutive windows that must all agree before the run is called
+/// converged.
+///
+/// This was 2 — "the last step was small" — which a **decelerating ramp
+/// always eventually passes**, at a point systematically short of its
+/// asymptote. chem5 (a registered PASS) certified convergence on
+/// 4.62 -> 4.92 -> 5.00/s: monotone, still climbing, and the final +1.6%
+/// step slipped under the 2% tolerance. The trailing window then got
+/// reported as "5.00/s EXACT at plan" when the whole measured span
+/// averaged 4.84/s.
+///
+/// Three windows compared as a group (widest-vs-narrowest, not
+/// pairwise) rejects that: a ramp accumulates its steps across the span
+/// (+8.3% for chem5) while genuine noise cancels. This is also the
+/// answer to the second question in #454 — convergence `true` at 160k
+/// and `false` at 480k on identical geometry was one ramp measured at
+/// two points, not an unstable factory.
+pub const STABILITY_WINDOWS: u32 = 3;
+
+/// Checkpoints needed before the convergence test can run at all: one
+/// opening checkpoint plus `STABILITY_WINDOWS` closes. A tick ceiling
+/// that cannot fit them makes convergence *structurally* impossible —
+/// which is what `with_warmup` used to produce, re-flooring the ceiling
+/// at `warmup + ONE window`. Every `--warmup` override past the default
+/// ceiling therefore reported `converged: false` as a property of the
+/// harness, not of the factory (#454).
+const MIN_CHECKPOINTS: u32 = STABILITY_WINDOWS + 1;
 
 /// Two consecutive stability windows must agree within this fraction to
 /// call the run converged (RFC: "loop-until-stable ... within tolerance" —
@@ -79,8 +124,13 @@ pub fn default_warmup_ticks(width: i32, height: i32) -> u32 {
     round_up_60(raw)
 }
 
-/// Window length so `rate * window_seconds >= WINDOW_ITEM_FLOOR`, floored
-/// at `MIN_WINDOW_TICKS`, rounded to a multiple of 60.
+/// Nominal window length: how long `WINDOW_ITEM_FLOOR` items take **at
+/// plan**, floored at `MIN_WINDOW_TICKS`, rounded to a multiple of 60.
+///
+/// This is now only the *nominal* size — the scale from which the cap is
+/// derived and the unit the tick budget is expressed in. The window a run
+/// actually measures over closes on accumulated items (#454), so a
+/// factory below plan gets a longer window rather than a thinner sample.
 pub fn default_window_ticks(target_rate: f64) -> u32 {
     if target_rate <= 0.0 {
         return round_up_60(MIN_WINDOW_TICKS);
@@ -90,8 +140,55 @@ pub fn default_window_ticks(target_rate: f64) -> u32 {
     round_up_60(ticks.max(MIN_WINDOW_TICKS))
 }
 
+/// Longest a single window may stay open before closing short-sampled.
+pub fn window_tick_cap(window_ticks: u32) -> u32 {
+    window_ticks * WINDOW_TICK_CAP_FACTOR
+}
+
+/// Smallest ceiling that can still fit `MIN_CHECKPOINTS` checkpoints —
+/// one opening checkpoint at warmup plus `STABILITY_WINDOWS` worst-case
+/// (cap-length) windows. Below this the convergence test never runs and
+/// the verdict says nothing about the factory (#454).
+fn viable_end_tick(warmup: u32, window: u32) -> u32 {
+    round_up_60(warmup + window_tick_cap(window) * STABILITY_WINDOWS)
+}
+
 fn round_up_60(t: u32) -> u32 {
     t.div_ceil(60) * 60
+}
+
+/// Floor on the derived wall-clock timeout — the previous fixed default,
+/// kept so small fixtures are unaffected.
+const MIN_TIMEOUT_SECS: u64 = 900;
+
+/// Fixed allowance for server start, blueprint import and ghost revival,
+/// none of which scale with the tick budget (48k ghosts is the worst
+/// case measured).
+const TIMEOUT_SETUP_SECS: u64 = 180;
+
+/// How far short of the requested `game.speed` a run is allowed to fall
+/// before the wall-clock net fires. Factorio's tick loop is effectively
+/// single-threaded, so a big factory or a loaded box simply runs slower
+/// than asked: a 48k-entity fixture was measured at ~290 ticks/s against
+/// a requested 960 (`--speed 16`), i.e. ~3.3x short. 4x covers that with
+/// margin.
+const TIMEOUT_SLACK_FACTOR: f64 = 4.0;
+
+/// Wall-clock safety net for a run, derived from its own tick budget.
+///
+/// This is a net for a hung or crashed server, NOT a second tick budget:
+/// the scenario force-finalizes itself at `end_tick`. A timeout that
+/// lands BEFORE the ceiling silently converts a non-converged report
+/// (useful — it carries the rates and the drift) into no report at all,
+/// because `launch_and_wait` returns `Err` and the server is killed
+/// before anything is written. It would land there precisely on the
+/// slow, underperforming runs this harness exists to measure, so the
+/// default must scale with the budget rather than sit at a constant
+/// (#464 review).
+pub fn default_timeout_secs(end_tick: u32, speed: u32) -> u64 {
+    let expected_secs = end_tick as f64 / (60.0 * speed.max(1) as f64);
+    let derived = (expected_secs * TIMEOUT_SLACK_FACTOR).ceil() as u64 + TIMEOUT_SETUP_SECS;
+    derived.max(MIN_TIMEOUT_SECS)
 }
 
 /// Parameters controlling one `run` invocation, independent of the
@@ -120,11 +217,16 @@ impl RunParams {
         let warmup = default_warmup_ticks(manifest.dims[0], manifest.dims[1]);
         let target_rate = manifest.targets.first().map(|t| t.rate).unwrap_or(1.0);
         let window = default_window_ticks(target_rate);
-        // Ceiling must clear at least one warmup + one window, or the run
-        // can never take a first stability sample.
-        let default_ceiling = round_up_60(warmup + window * 4);
+        // Ceiling must clear warmup plus enough worst-case windows to run
+        // the convergence test with room to spare — a factory typically
+        // needs several windows before the trailing group goes flat, and
+        // at plan each window closes at its nominal length rather than
+        // the cap, so this budget is rarely spent. An explicit `--ticks`
+        // is still floored at viability, since a ceiling that cannot fit
+        // `MIN_CHECKPOINTS` reports non-convergence by construction.
+        let default_ceiling = round_up_60(warmup + window_tick_cap(window) * MIN_CHECKPOINTS * 2);
         RunParams {
-            end_tick: end_tick.unwrap_or(default_ceiling).max(warmup + window),
+            end_tick: end_tick.unwrap_or(default_ceiling).max(viable_end_tick(warmup, window)),
             speed,
             warmup_ticks: warmup,
             window_ticks: window,
@@ -144,11 +246,18 @@ impl RunParams {
     /// convergence — deep-chain fixtures "converge" while trunk and tap
     /// buffers are still filling — so steady-state probes need
     /// measurement to start long after that transient. Rounded up to the
-    /// tick handler's 60-tick cadence; the ceiling is re-floored so the
-    /// run can still take one stability sample.
+    /// tick handler's 60-tick cadence.
+    ///
+    /// The ceiling is re-floored to fit the whole convergence test, not
+    /// (as it was) a single window: `+ window` left room for exactly ONE
+    /// checkpoint where the test needs three, so every warmup override
+    /// past the default ceiling was guaranteed to report
+    /// `converged: false` regardless of the factory (#454).
     pub fn with_warmup(mut self, warmup: u32) -> RunParams {
         self.warmup_ticks = round_up_60(warmup);
-        self.end_tick = self.end_tick.max(self.warmup_ticks + self.window_ticks);
+        self.end_tick = self
+            .end_tick
+            .max(viable_end_tick(self.warmup_ticks, self.window_ticks));
         self
     }
 }
@@ -467,7 +576,15 @@ pub fn build_control_lua(manifest: &Manifest, bp: &str, params: &RunParams) -> S
     let _ = writeln!(out, "local END_TICK = {}", params.end_tick);
     let _ = writeln!(out, "local WARMUP_TICKS = {}", params.warmup_ticks);
     let _ = writeln!(out, "local WINDOW_TICKS = {}", params.window_ticks);
+    let _ = writeln!(out, "local WINDOW_ITEM_FLOOR = {WINDOW_ITEM_FLOOR}");
+    let _ = writeln!(out, "local WINDOW_MIN_TICKS = {MIN_WINDOW_TICKS}");
+    let _ = writeln!(
+        out,
+        "local WINDOW_TICK_CAP = {}",
+        window_tick_cap(params.window_ticks)
+    );
     let _ = writeln!(out, "local STABILITY_TOL = {STABILITY_TOLERANCE}");
+    let _ = writeln!(out, "local STABILITY_WINDOWS = {STABILITY_WINDOWS}");
     let _ = writeln!(out, "local LX0, LY0 = {}, {}", manifest.bbox_min[0], manifest.bbox_min[1]);
     let _ = writeln!(out, "local DIMS_X, DIMS_Y = {}, {}", manifest.dims[0], manifest.dims[1]);
     let _ = writeln!(out, "local INSERTER_CAPACITY = {}", manifest.inserter_capacity);
@@ -901,22 +1018,66 @@ script.on_nth_tick(60, function(ev)
       produced = produced, fed = storage.fed_total})
   end
 
-  if ev.tick >= WARMUP_TICKS and ev.tick % WINDOW_TICKS == 0 then
-    local cp = {tick = ev.tick, produced = produced_count(TARGET),
-      delivered = storage.drained_total[TARGET] or 0}
-    table.insert(storage.checkpoints, cp)
+  -- Stability checkpoints. A window closes when it has ACCUMULATED
+  -- WINDOW_ITEM_FLOOR items, or when it hits WINDOW_TICK_CAP -- item-
+  -- driven, not tick-driven (#454). Sizing windows from the planned rate
+  -- and closing them on a fixed tick count handed an underperforming
+  -- factory a proportionally undersized sample, so the further below plan
+  -- it ran the less measurable it became, failing closed to NO DATA.
+  --
+  -- The first checkpoint is taken exactly at WARMUP_TICKS (the handler's
+  -- own 60-tick cadence divides it) and opens window 1. Checkpoints used
+  -- to land on multiples of the window length in ABSOLUTE tick phase
+  -- instead, so measurement began at an arbitrary offset after warmup and
+  -- that offset moved with any --warmup override.
+  if ev.tick >= WARMUP_TICKS then
     local n = #storage.checkpoints
-    -- Need two consecutive WINDOW-length rates to compare (three
-    -- checkpoints: a->b is window 1, b->c is window 2) -- "loop-until-
-    -- stable", not a single retry.
-    if n >= 3 then
-      local a, b, c = storage.checkpoints[n - 2], storage.checkpoints[n - 1], storage.checkpoints[n]
-      local dt1, dt2 = (b.tick - a.tick) / 60, (c.tick - b.tick) / 60
-      local rate1 = dt1 > 0 and (b.produced - a.produced) / dt1 or 0
-      local rate2 = dt2 > 0 and (c.produced - b.produced) / dt2 or 0
-      if rate1 > 0 and math.abs(rate2 - rate1) / rate1 <= STABILITY_TOL then
-        finalize(s, true)
-        return
+    local produced = produced_count(TARGET)
+    local delivered = storage.drained_total[TARGET] or 0
+    if n == 0 then
+      table.insert(storage.checkpoints, {tick = ev.tick, produced = produced,
+        delivered = delivered, window_ticks = 0, window_items = 0, short_sampled = false})
+    else
+      local prev = storage.checkpoints[n]
+      local d_items = produced - prev.produced
+      local d_ticks = ev.tick - prev.tick
+      -- A fast target hits 300 items in well under the nominal window, so
+      -- the item floor alone could close a window shorter than the
+      -- producer's burst cycle -- reintroducing snapshot aliasing, which
+      -- MIN_WINDOW_TICKS exists to prevent. Both floors must be met.
+      local by_items = d_items >= WINDOW_ITEM_FLOOR and d_ticks >= WINDOW_MIN_TICKS
+      if by_items or d_ticks >= WINDOW_TICK_CAP then
+        table.insert(storage.checkpoints, {tick = ev.tick, produced = produced,
+          delivered = delivered, window_ticks = d_ticks, window_items = d_items,
+          short_sampled = not by_items})
+        n = n + 1
+        -- Convergence = the trailing STABILITY_WINDOWS window rates all
+        -- agree, compared widest-vs-narrowest rather than pairwise.
+        --
+        -- Comparing only the LAST TWO -- "the last step was small" -- is
+        -- passed by any decelerating ramp, and passes it BELOW the
+        -- asymptote: chem5 certified 4.62 -> 4.92 -> 5.00/s and reported
+        -- the last window as steady state. Across a span a ramp keeps
+        -- accumulating (+8.3% there) while real noise cancels, so the
+        -- group comparison rejects what the pairwise one waved through.
+        if n >= STABILITY_WINDOWS + 1 then
+          local lo, hi, ok = nil, nil, true
+          for i = n - STABILITY_WINDOWS + 1, n do
+            local a, b = storage.checkpoints[i - 1], storage.checkpoints[i]
+            local dt = (b.tick - a.tick) / 60
+            local r = dt > 0 and (b.produced - a.produced) / dt or 0
+            if r <= 0 then
+              ok = false
+              break
+            end
+            if lo == nil or r < lo then lo = r end
+            if hi == nil or r > hi then hi = r end
+          end
+          if ok and lo and lo > 0 and (hi - lo) / lo <= STABILITY_TOL then
+            finalize(s, true)
+            return
+          end
+        end
       end
     end
   end
@@ -984,7 +1145,100 @@ mod tests {
         }
         .with_warmup(216_001);
         assert_eq!(p.warmup_ticks, 216_060);
-        assert_eq!(p.end_tick, 216_060 + 1800);
+        // The ceiling must clear the whole convergence test, not one
+        // window: `+ window_ticks` left room for a single checkpoint
+        // where the test needs three, so a --warmup override reported
+        // `converged: false` by construction (#454).
+        assert_eq!(
+            p.end_tick,
+            216_060 + window_tick_cap(1800) * STABILITY_WINDOWS
+        );
+    }
+
+    /// #454 regression. `mega-chain-usp2raw --warmup 480000` finished
+    /// with exactly ONE checkpoint (`end_tick` 489,000 = warmup + one
+    /// 9,000-tick window) and reported `converged: false` — a verdict
+    /// about the tick budget that was read as a verdict about the
+    /// factory. Any warmup must leave room for `MIN_CHECKPOINTS`.
+    #[test]
+    fn ceiling_always_fits_the_convergence_test() {
+        let m = fixture();
+        for warmup in [0, 3_600, 160_000, 216_001, 480_000, 1_000_000] {
+            for explicit in [None, Some(1_000), Some(12_000)] {
+                let p = RunParams::defaults_for(&m, "t".into(), 16, explicit).with_warmup(warmup);
+                let measurable = p.end_tick - p.warmup_ticks;
+                let worst_case_windows = window_tick_cap(p.window_ticks) * STABILITY_WINDOWS;
+                assert!(
+                    measurable >= worst_case_windows,
+                    "warmup={warmup} explicit={explicit:?}: only {measurable} ticks after \
+                     warmup, need {worst_case_windows} to close {STABILITY_WINDOWS} windows"
+                );
+            }
+        }
+    }
+
+    /// The window the run measures over is chosen by accumulated items,
+    /// so a factory below plan gets a longer window rather than a thinner
+    /// sample. Pins the generated Lua's close condition (#454).
+    #[test]
+    fn checkpoints_close_on_items_not_on_absolute_tick_phase() {
+        let m = fixture();
+        let params = RunParams::defaults_for(&m, "test".into(), 16, Some(18000));
+        let lua = build_control_lua(&m, "0eNBPFAKE", &params);
+        assert!(lua.contains(&format!("local WINDOW_ITEM_FLOOR = {WINDOW_ITEM_FLOOR}")));
+        assert!(lua.contains(&format!(
+            "local WINDOW_TICK_CAP = {}",
+            window_tick_cap(params.window_ticks)
+        )));
+        // Closes on the item floor, with the tick cap as the bound — and
+        // never shorter than MIN_WINDOW_TICKS, or a fast target would
+        // reach 300 items inside its own burst cycle and alias.
+        assert!(lua.contains(&format!("local WINDOW_MIN_TICKS = {MIN_WINDOW_TICKS}")));
+        assert!(lua
+            .contains("local by_items = d_items >= WINDOW_ITEM_FLOOR and d_ticks >= WINDOW_MIN_TICKS"));
+        assert!(lua.contains("if by_items or d_ticks >= WINDOW_TICK_CAP then"));
+        // Measurement opens exactly at warmup, not at whatever absolute
+        // multiple of the window length happens to fall after it.
+        assert!(lua.contains("if ev.tick >= WARMUP_TICKS then"));
+        assert!(
+            !lua.contains("ev.tick % WINDOW_TICKS == 0"),
+            "absolute-phase checkpoint test still present"
+        );
+        // A capped window must be reportable as short-sampled.
+        assert!(lua.contains("short_sampled = not by_items"));
+        // Convergence compares a GROUP of windows widest-vs-narrowest,
+        // not the last pair — a decelerating ramp passes any
+        // last-step test once its slope flattens under tolerance.
+        assert!(lua.contains(&format!("local STABILITY_WINDOWS = {STABILITY_WINDOWS}")));
+        assert!(lua.contains("if n >= STABILITY_WINDOWS + 1 then"));
+        assert!(lua.contains("(hi - lo) / lo <= STABILITY_TOL"));
+    }
+
+    /// The default wall-clock net must clear the run's own tick budget,
+    /// or a slow run is killed before it can write the non-converged
+    /// report that is the whole point of measuring it (#464 review).
+    #[test]
+    fn default_timeout_always_clears_the_tick_budget() {
+        let m = fixture();
+        for warmup in [0, 3_600, 160_000, 480_000] {
+            for speed in [1, 8, 16, 64] {
+                let p = RunParams::defaults_for(&m, "t".into(), speed, None).with_warmup(warmup);
+                let timeout = default_timeout_secs(p.end_tick, p.speed);
+                let at_requested_speed = p.end_tick as f64 / (60.0 * speed as f64);
+                assert!(
+                    timeout as f64 >= at_requested_speed,
+                    "warmup={warmup} speed={speed}: timeout {timeout}s < {at_requested_speed:.0}s \
+                     needed to reach end_tick {} even at the REQUESTED speed",
+                    p.end_tick
+                );
+            }
+        }
+        // The usp2 case the review flagged: 447,960 ticks at speed 16 is
+        // 466s at the requested rate and ~1545s at the ~290 ticks/s that
+        // fixture actually achieves — the old fixed 900s fell between.
+        assert!(default_timeout_secs(447_960, 16) > 1_545);
+        // Small fixtures keep the previous default.
+        assert_eq!(default_timeout_secs(12_000, 16), MIN_TIMEOUT_SECS);
     }
 
     #[test]

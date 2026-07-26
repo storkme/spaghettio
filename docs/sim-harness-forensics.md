@@ -11,8 +11,10 @@ Setup, CLI usage, and the concurrency/lock rules live in
 
 - **Target item rates** (`measured_produced_rate` / `delivered` for the
   manifest target): Δ(cumulative production counter) over the **last
-  300-game-second checkpoint window**. `converged=true` means the last
-  two consecutive windows agreed within 2%.
+  checkpoint window**, which closes on 300 accumulated items rather than
+  on a fixed duration (#454), so its length varies with how the factory
+  is actually running. `converged=true` means the trailing **three**
+  window rates agreed as a group, widest vs narrowest, within 2%.
 - **Intermediate item rates**: measured over the **same trailing
   checkpoint window** as the target (since #362). Before that they were
   the last two 20-second samples — badly aliased for bursty producers (a
@@ -58,6 +60,57 @@ Setup, CLI usage, and the concurrency/lock rules live in
    plus depth-staggered rigs. **When a sim result shows wrong-item or
    inexplicable starvation signatures, suspect the kit before the
    layout.**
+4. **Underperformance-proportional undersampling** (#454, fixed
+   2026-07-25). Windows were sized from the *planned* rate and closed on
+   a fixed tick count, so a factory at 40% of plan got 40% of the
+   intended 300-item sample and the 2% agreement test became
+   unreachable — **the worse a factory performed, the less measurable it
+   became**, failing closed to NO DATA. Signature: `converged: false` or
+   NO DATA on exactly the fixtures that underperform, with the deficit
+   tracking layout *size* rather than any intervention you made. Cure:
+   windows now close on accumulated items; check the `measurement:` line
+   for `short_sampled` and the checkpoint count.
+5. **A transient reported as a steady state.** The reported rate is the
+   trailing window whether or not the run converged, so a
+   non-converged run publishes a point on a slope as a two-decimal
+   number. Signature: a monotone window-rate series — usp2-sup120
+   climbed 0.70 → 0.74 → 0.88 while usp2-shortrows decayed 0.86 → 0.80
+   → 0.72, and the two were compared against each other as if both were
+   settled. Cure: read the `NOT CONVERGED` line and its window-rate
+   series before believing any number; **never compare rates across
+   runs that did not converge.**
+5b. **A ramp certified as convergence** — the same artifact reaching
+   *converged* runs, and the nastier half. The stability test compared
+   only the last two windows, which any decelerating ramp passes once
+   its slope flattens under 2%, at a point short of its asymptote.
+   chem5 (registered PASS) was certified on 4.62 → 4.92 → 5.00/s and
+   published the trailing window as "5.00/s EXACT at plan" while the
+   measured span averaged 4.84/s. Signature: a monotone window-rate
+   series in a run marked `converged: true`. Cure: convergence now
+   compares the trailing three windows as a group; a `converged` run
+   whose `drift_pct` is near the tolerance still deserves a longer
+   `--warmup` before its number is blessed.
+5c. **A plateau certified as the asymptote** — a residual the group
+   rule reduces but cannot eliminate, since convergence only means three
+   consecutive windows agreed and on a long chain that *could* be a step
+   on a staircase. Kept as a standing caution rather than an observed
+   class: **the one candidate sighting did not reproduce.** A 3-window
+   480k-warmup probe of usp2 read 0.83 → 0.85 → 0.97 and looked like a
+   staircase, but a 9-window run at the blessed geometry stayed flat
+   across 47 game-minutes (mean 0.850/s, spread 2.9%, net trend −0.35%).
+   Three windows reporting `NOT CONVERGED` with +13.9% drift was the
+   instrument correctly refusing to answer — reading a trend into it was
+   over-reading. Cure regardless: on a deep chain, confirm a converged
+   number with a longer `--warmup` before blessing it, and prefer a run
+   with many windows over one with the bare minimum; the
+   intermediates-at-or-above-plan tell from class 1 applies here too.
+6. **A budget that cannot fit the test.** `--warmup` used to re-floor the
+   tick ceiling at warmup + ONE window while convergence needs four
+   checkpoints (three closed windows), so any warmup past the default
+   ceiling reported
+   `converged: false` by construction. Signature: fewer than 4
+   checkpoints, `final_tick` ≈ warmup + one window. Cure: fixed in
+   `viable_end_tick`; the report now warns when checkpoints < 4.
 
 ## The poison-plug mechanic (game truth, mechanics rule I11)
 

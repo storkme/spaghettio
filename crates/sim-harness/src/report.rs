@@ -64,6 +64,37 @@ impl serde::Serialize for Verdict {
     }
 }
 
+/// How much measurement the reported rates actually rest on.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct MeasurementQuality {
+    /// Length in ticks of the trailing window the rates were taken over.
+    pub window_ticks: u64,
+    /// Target items counted in that window. Compare against
+    /// `window_item_floor`; below it, the rate is quantization-noisy.
+    pub window_items: f64,
+    /// The sample size the stability tolerance was designed around.
+    pub window_item_floor: f64,
+    /// The window closed on the tick cap rather than on the item floor —
+    /// the factory is running far enough below plan that a full sample
+    /// would not fit the budget.
+    pub short_sampled: bool,
+    /// Spread (widest vs narrowest) across the trailing stability group
+    /// of window rates: the exact quantity the convergence test
+    /// thresholds. Small on a converged run; a large value means the
+    /// factory was still on a transient, so the reported rate is a point
+    /// on a slope rather than a steady state.
+    pub drift_pct: Option<f64>,
+    /// Signed slope across that same group — which way it was heading.
+    pub trend_pct: Option<f64>,
+    /// Every closed window's produced rate, oldest first — a monotone
+    /// series is a ramp or a decay, not noise.
+    pub window_rates: Vec<f64>,
+    /// Checkpoints taken. Fewer than `STABILITY_WINDOWS + 1` means the
+    /// convergence test never ran and `converged: false` says nothing
+    /// about the factory (#454).
+    pub checkpoints: usize,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Report {
     pub label: String,
@@ -76,6 +107,12 @@ pub struct Report {
     pub proxies_fulfilled: u64,
     pub converged: bool,
     pub final_tick: u64,
+    /// Measurement quality of the window the rates were actually taken
+    /// over (#454). Rates come from the trailing checkpoint pair, so a
+    /// thin or drifting sample used to be invisible: the report printed a
+    /// number to two decimals whether it rested on 300 items or 60, and
+    /// whether the series was flat or sliding 30% a window.
+    pub measurement: MeasurementQuality,
     pub fluid_fed: bool,
     pub uncalibrated_direction: bool,
     pub fluid_errors: BTreeMap<String, String>,
@@ -196,6 +233,58 @@ pub fn compute(manifest: &Manifest, result: &serde_json::Value) -> Report {
     let window_start = (checkpoint_series.len() >= 2)
         .then(|| checkpoint_series[checkpoint_series.len() - 2].0);
 
+    // Per-window produced rates, oldest first. Checkpoint 1 opens window
+    // 1 (zero length), so the series starts at the second checkpoint.
+    let window_rates: Vec<f64> = checkpoint_series
+        .windows(2)
+        .filter_map(|w| {
+            let dt = (w[1].0 - w[0].0) / 60.0;
+            (dt > 0.0).then(|| (w[1].1 - w[0].1) / dt)
+        })
+        .collect();
+    // The spread across the trailing stability group — the exact
+    // quantity the convergence test thresholds. Measured widest-vs-
+    // narrowest over `STABILITY_WINDOWS`, not as the last pairwise step,
+    // because a decelerating ramp's last step goes small while the group
+    // stays spread (#454).
+    let group = crate::scenario::STABILITY_WINDOWS as usize;
+    let drift_pct = (window_rates.len() >= group)
+        .then(|| {
+            let tail = &window_rates[window_rates.len() - group..];
+            let lo = tail.iter().copied().fold(f64::INFINITY, f64::min);
+            let hi = tail.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            (lo > 0.0).then_some((hi - lo) / lo * 100.0)
+        })
+        .flatten();
+    // Signed slope across the same group, so the printout can say which
+    // way an unconverged run was heading.
+    let trend_pct = (window_rates.len() >= group)
+        .then(|| {
+            let tail = &window_rates[window_rates.len() - group..];
+            (tail[0] > 0.0).then_some((tail[group - 1] - tail[0]) / tail[0] * 100.0)
+        })
+        .flatten();
+    let last_cp = checkpoints.last();
+    let measurement = MeasurementQuality {
+        window_ticks: last_cp
+            .and_then(|c| c.get("window_ticks"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0),
+        window_items: last_cp
+            .and_then(|c| c.get("window_items"))
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0),
+        window_item_floor: crate::scenario::WINDOW_ITEM_FLOOR,
+        short_sampled: last_cp
+            .and_then(|c| c.get("short_sampled"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        drift_pct,
+        trend_pct,
+        window_rates,
+        checkpoints: checkpoint_series.len(),
+    };
+
     let mut items = Vec::new();
     for (item, planned_rate) in &manifest.planned_rates {
         let is_target = target_items.contains(&item.as_str());
@@ -290,6 +379,7 @@ pub fn compute(manifest: &Manifest, result: &serde_json::Value) -> Report {
         proxies_fulfilled: get_u64(result, "proxies_fulfilled"),
         converged: get_bool(result, "converged"),
         final_tick: get_u64(result, "final_tick"),
+        measurement,
         fluid_fed: manifest.has_fluid_boundary(),
         uncalibrated_direction: manifest.has_uncalibrated_direction(),
         fluid_errors,
@@ -331,6 +421,57 @@ fn worst(a: Verdict, b: Verdict) -> Verdict {
     }
 }
 
+/// Print what the reported rates rest on, and name the ways they can be
+/// untrustworthy rather than leaving them to be inferred from a bare
+/// `converged=false` (#454).
+fn print_measurement(m: &MeasurementQuality, converged: bool) {
+    println!(
+        "measurement: window={}t {:.0} items (floor {:.0}), {} checkpoint(s){}",
+        m.window_ticks,
+        m.window_items,
+        m.window_item_floor,
+        m.checkpoints,
+        match m.drift_pct {
+            Some(d) => format!(", drift={d:+.1}%"),
+            None => String::new(),
+        }
+    );
+    let need = crate::scenario::STABILITY_WINDOWS as usize + 1;
+    if m.checkpoints < need {
+        println!(
+            "  WARNING: the convergence test needs {need} checkpoints and got {} — \
+             the tick ceiling could not fit it, so converged={converged} is a property \
+             of the budget, not the factory.",
+            m.checkpoints
+        );
+    }
+    if m.short_sampled {
+        println!(
+            "  WARNING: window closed on the tick cap with {:.0} of {:.0} items — \
+             the factory is running far below plan, so this rate is \
+             quantization-noisy.",
+            m.window_items, m.window_item_floor
+        );
+    }
+    if !converged && m.checkpoints >= need {
+        let trend: String = match m.trend_pct {
+            Some(t) if t.abs() >= 2.0 => format!(
+                " The series is still {} — {:+.1}% across the last {} windows.",
+                if t > 0.0 { "climbing" } else { "decaying" },
+                t,
+                crate::scenario::STABILITY_WINDOWS
+            ),
+            _ => String::new(),
+        };
+        let rates: Vec<String> = m.window_rates.iter().map(|r| format!("{r:.2}")).collect();
+        println!(
+            "  NOT CONVERGED: rates are a point on a transient, not a steady state.{trend} \
+             (window rates: {})",
+            rates.join(" -> ")
+        );
+    }
+}
+
 pub fn print_human(report: &Report) {
     println!("=== spaghettio-sim report: {} ===", report.label);
     println!(
@@ -349,6 +490,7 @@ pub fn print_human(report: &Report) {
         "run: final_tick={} converged={}",
         report.final_tick, report.converged
     );
+    print_measurement(&report.measurement, report.converged);
     println!(
         "layout: {} entities, stacking={} inserter_capacity={} (realized bonuses: nb={} bulk={})",
         report.entities,
@@ -473,6 +615,113 @@ mod tests {
         assert!((target.measured_delivered_rate.unwrap() - 9.8666666667).abs() < 1e-6);
         assert_eq!(target.verdict, Some(Verdict::Pass));
         assert_eq!(report.overall_verdict, Verdict::Pass);
+    }
+
+    /// #454: the reported rate is the trailing window, so a run that
+    /// never settled reports a point on a slope. The drift the
+    /// convergence test thresholds must reach the report, not be thrown
+    /// away with the verdict.
+    #[test]
+    fn measurement_quality_exposes_drift_and_sample_size() {
+        let m = fixture_manifest();
+        // usp2-sup120's real shape: a monotone ramp, 0.70 -> 0.74 -> 0.88
+        // over three 9000-tick windows, reported as "0.88/s" with nothing
+        // to say it was still climbing 19% a window.
+        let result = serde_json::json!({
+            "converged": false, "final_tick": 197_700,
+            "checkpoints": [
+                {"tick": 162_000, "produced": 1011.0, "delivered": 912.0,
+                 "window_ticks": 0, "window_items": 0.0, "short_sampled": false},
+                {"tick": 171_000, "produced": 1116.0, "delivered": 1024.0,
+                 "window_ticks": 9000, "window_items": 105.0, "short_sampled": true},
+                {"tick": 180_000, "produced": 1227.0, "delivered": 1144.0,
+                 "window_ticks": 9000, "window_items": 111.0, "short_sampled": true},
+                {"tick": 189_000, "produced": 1359.0, "delivered": 1248.0,
+                 "window_ticks": 9000, "window_items": 132.0, "short_sampled": true}
+            ],
+            "samples": []
+        });
+        let q = compute(&m, &result).measurement;
+        assert_eq!(q.checkpoints, 4);
+        assert_eq!(q.window_rates.len(), 3);
+        assert!((q.window_rates[0] - 0.70).abs() < 1e-9);
+        assert!((q.window_rates[2] - 0.88).abs() < 1e-9);
+        // Group spread (0.88-0.70)/0.70 = +25.7%, far outside the 2% the
+        // convergence test wants — the number is not a steady state.
+        // Note the last PAIRWISE step is only +18.9%, and on a flatter
+        // ramp it would fall under tolerance while the group stays
+        // spread: that is exactly the ramp chem5 was certified on.
+        assert!((q.drift_pct.unwrap() - 25.714_285_7).abs() < 1e-6);
+        assert!((q.trend_pct.unwrap() - 25.714_285_7).abs() < 1e-6);
+        // 132 items against a 300 floor: quantization-noisy.
+        assert!(q.short_sampled);
+        assert_eq!(q.window_items, 132.0);
+        assert_eq!(q.window_item_floor, crate::scenario::WINDOW_ITEM_FLOOR);
+    }
+
+    /// The ramp chem5 was actually certified on (#454), in real numbers:
+    /// 4.62 -> 4.92 -> 5.00/s produced. The final pairwise step is
+    /// +1.63%, under the 2% tolerance, so the old last-two-windows test
+    /// called it converged and reported the trailing window as
+    /// "5.00/s EXACT at plan" — while the measured span averaged 4.84/s.
+    /// Compared as a group the spread is +8.3%, correctly rejected.
+    #[test]
+    fn a_decelerating_ramp_is_not_mistaken_for_a_steady_state() {
+        let m = fixture_manifest();
+        let result = serde_json::json!({
+            "converged": true, "final_tick": 71_760,
+            "checkpoints": [
+                {"tick": 60_600, "produced": 4036.0, "delivered": 3792.0,
+                 "window_ticks": 0, "window_items": 0.0, "short_sampled": false},
+                {"tick": 64_500, "produced": 4336.0, "delivered": 4112.0,
+                 "window_ticks": 3900, "window_items": 300.0, "short_sampled": false},
+                {"tick": 68_160, "produced": 4636.0, "delivered": 4416.0,
+                 "window_ticks": 3660, "window_items": 300.0, "short_sampled": false},
+                {"tick": 71_760, "produced": 4936.0, "delivered": 4704.0,
+                 "window_ticks": 3600, "window_items": 300.0, "short_sampled": false}
+            ],
+            "samples": []
+        });
+        let q = compute(&m, &result).measurement;
+        let r = &q.window_rates;
+        assert_eq!(r.len(), 3);
+        // The last step alone looks settled...
+        let last_step = (r[2] - r[1]) / r[1] * 100.0;
+        assert!(last_step < 2.0, "last step was {last_step:.2}%");
+        // ...but the group has not stopped moving.
+        assert!(
+            q.drift_pct.unwrap() > 2.0,
+            "group spread was {:.2}%",
+            q.drift_pct.unwrap()
+        );
+        // 300/65 -> 300/61 -> 300/60 items-per-second: spread is exactly
+        // (5 - 60/13)/(60/13) = 5/60 = 8.333%.
+        assert!((q.drift_pct.unwrap() - 100.0 * 5.0 / 60.0).abs() < 1e-6);
+        assert!(q.trend_pct.unwrap() > 0.0, "the ramp was climbing");
+    }
+
+    /// A run whose ceiling could not fit the convergence test must be
+    /// distinguishable from a factory that genuinely refused to settle:
+    /// `mega-chain-usp2raw --warmup 480000` produced one checkpoint and a
+    /// bare `converged: false` (#454).
+    #[test]
+    fn single_checkpoint_run_is_visible_as_a_budget_failure() {
+        let m = fixture_manifest();
+        let result = serde_json::json!({
+            "converged": false, "final_tick": 489_000,
+            "checkpoints": [
+                {"tick": 486_000, "produced": 5574.0, "delivered": 5472.0,
+                 "window_ticks": 0, "window_items": 0.0, "short_sampled": false}
+            ],
+            "samples": []
+        });
+        let report = compute(&m, &result);
+        assert_eq!(report.measurement.checkpoints, 1);
+        assert!(report.measurement.window_rates.is_empty());
+        assert_eq!(report.measurement.drift_pct, None);
+        // One checkpoint cannot yield a rate at all -> NO DATA, which is
+        // correct, but the checkpoint count is what explains it.
+        assert_eq!(report.overall_verdict, Verdict::NoData);
     }
 
     #[test]

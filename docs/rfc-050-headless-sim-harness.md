@@ -388,3 +388,113 @@ design, so blessed measured baselines are **shareable** — keyed on
   the engine's layouts perform at plan everywhere the sim can currently
   measure.***
 
+
+- *2026-07-25 — **instrument fix: stability windows are item-driven, not
+  planned-rate-driven** (#454). Rev 2's "item-floored windows
+  (quantization at 1/s rates)" was implemented as a window sized from the
+  PLANNED rate and closed on a fixed tick count. That is only equivalent to
+  an item floor when the factory runs at plan: a factory at 40% of plan got
+  40% of the intended sample, so the 2% agreement test became unreachable and
+  **the worse a factory performed, the less measurable it became** — failing
+  closed to NO DATA rather than to a wide error bar. Two further defects sat
+  under it. (a) `with_warmup` re-floored the tick ceiling at `warmup + ONE
+  window` while the convergence test needs THREE checkpoints, so every
+  `--warmup` override past the default ceiling reported `converged: false`
+  structurally — `mega-chain-usp2raw --warmup 480000` finished with exactly
+  one checkpoint and that verdict was read as evidence about the layout.
+  (b) Checkpoints landed on multiples of the window length in ABSOLUTE tick
+  phase, so measurement began at an arbitrary offset after warmup that moved
+  with `--warmup`. **Resolution**: windows close on accumulated items bounded
+  by a 4x tick cap; ceilings floor at `viable_end_tick` (warmup + enough
+  worst-case windows to run the test); windows open exactly at warmup; and
+  reports carry a `measurement` block (window length, achieved items vs
+  floor, checkpoint count, and the group spread across the trailing three
+  window rates) that
+  prints a named warning for each way the number can be untrustworthy.
+  **Scope**: the reported rate is the trailing window whether or not the run
+  converged, so any non-converged run published a point on a transient as a
+  two-decimal steady-state number. The #453 usp2 fix comparison was exactly
+  that — sup120 climbing 0.70 -> 0.74 -> 0.88 while shortrows decayed 0.86 ->
+  0.80 -> 0.72 — so those four "refuted" candidate fixes were never actually
+  benchmarked. Converged runs are unaffected: at plan the item floor closes a
+  window at the same length the planned-rate formula chose. **Third
+  instrument artifact of this arc**, after the 13.0/s bridged floor
+  (#383/#431) and #383's inserter attribution — the standing lesson being
+  that a calibration inherits its instrument's bounds, so sweep the
+  declared axis before believing a number is a property of the subject.*
+
+- *2026-07-25 — **verification of the #454 instrument fix, and a fourth
+  defect found by its own control run.** Re-measuring chem5 (the
+  registered PASS) with item-driven windows reproduced `produced 5.00/s
+  EXACT` — and its checkpoint series showed why that number was never a
+  steady state: `4.62 -> 4.92 -> 5.00/s`, a monotone ramp whose final
+  step (+1.63%) slipped under the 2% tolerance. The stability test
+  compared only the last two windows, and **a decelerating ramp always
+  eventually passes that**, at a point systematically short of its
+  asymptote; the measured span averaged 4.84/s. Convergence now compares
+  the trailing three window rates widest-vs-narrowest, which a ramp fails
+  (+8.3% for chem5) and noise passes. **Verified**: chem5 re-run under
+  the group rule takes 13 checkpoints instead of 4, converges at
+  drift +1.3%, and lands produced 5.08/s (+1.7%) delivered 5.15/s
+  (+3.1%) **PASS** — verdict preserved and within `check`'s 2% of the
+  blessed 5.07, so no re-blessing is needed. This also resolves the
+  residual it exposed: convergence gates on `produced` while the verdict
+  grades on `delivered`, and under the pairwise rule chem5 read 4.80
+  delivered (WARN) against a blessed 5.07 (PASS). The stricter test
+  settles both series together, so grading-on-an-ungated-series is
+  recorded as latent rather than fixed here.
+  **usp2 measured properly at last**: 4 checkpoints, full 300-item
+  windows auto-sized to 21,120 ticks (2.3x the planned-rate window,
+  because the factory runs at 43% of plan), none short-sampled, plateau
+  at 0.852/s — **utility-science-pack -57.4% FAIL**. The -57% survives
+  the instrument fix: the layout genuinely underperforms and that finding
+  was not an artifact. The **33% LDS swing** that motivated the issue
+  was, though, and by a third mechanism: with only one checkpoint,
+  `compute` falls to `window_start: None`, whose intermediate-rate
+  fallback is the **last two samples — a 20-second snapshot** (artifact
+  class 2, already known and already fixed for the normal path). All
+  three anomalies in #454's table now have a mechanism: a structurally
+  impossible convergence test, a ramp certified as steady state, and a
+  20-second snapshot printed as a rate.
+  **Deliberately not changed**: the reported rate stays the single
+  trailing window rather than the whole certified-flat group. Averaging
+  the group would use 900 items instead of 300 and cut quantization noise
+  by sqrt(3), but it shifts every measured number slightly and risks
+  flipping verdicts near thresholds — registry churn for a modest gain,
+  on a PR already carrying four fixes. Filed as followup rather than
+  folded in. Residual honestly stated: chem5 oscillates +/-5% window to
+  window even in steady state, so `converged` means "three consecutive
+  windows within 2%", and a fixture with real oscillation can report
+  anywhere in its band — `drift_pct` now declares that band instead of
+  hiding it.*
+
+- *2026-07-25 — **two calls made mid-review on #464**, recorded here
+  because RFC-050 owns the harness and the Reference docs carry no
+  decision-log duty. (a) **The wall-clock timeout is now derived from the
+  tick budget** rather than fixed at 900s. The ceiling grew ~8x in that
+  PR while `--timeout-secs` did not, so a slow run would hit the wall
+  clock BEFORE its own ceiling — and `launch_and_wait` returns `Err` and
+  kills the server before anything is written, converting a useful
+  non-converged report into no report at all, on exactly the class of run
+  the PR existed to serve. usp2 concretely: 447,960 ticks is 466s at the
+  requested `--speed 16` and ~1545s at the ~290 ticks/s it achieves; 900s
+  fell between. `default_timeout_secs` now takes 4x the budget-at-
+  requested-speed plus a setup allowance, floored at the old 900s. The
+  4x rests on a measured assumption worth stating: Factorio's tick loop is
+  effectively single-threaded (a run uses ~1.05 cores, the main thread
+  carrying ~24x the CPU time of any worker), so a large factory or a busy
+  box simply runs short of the requested `game.speed`. The timeout is a
+  net for a hung server, never a second tick budget.
+  (b) **The group rule does not prove steady state.** A 480k-warmup probe
+  found usp2 still climbing (0.83 -> 0.85 -> 0.97/s) after it had
+  converged at 160k on a genuine 3-window plateau (0.852 -> 0.852 ->
+  0.856, spread 0.43%). So a converged plateau can be a **step on a
+  staircase** on a deep chain. This qualifies the entry above: USP@2's
+  deficit is real and reproducible at the default warmup, but -57% is a
+  floor rather than the answer, and the number is not settled. Recorded
+  as forensics artifact class 5c; the cure is the existing deep-chain
+  guidance — confirm a converged number with a much longer `--warmup`
+  before blessing it. It also strengthens the case for #465: if warmup
+  stops being a bounding-box guess and windows simply run until
+  genuinely flat, the staircase gets walked rather than missed by
+  whichever warmup was picked.*
