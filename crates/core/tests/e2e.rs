@@ -7798,10 +7798,16 @@ fn di_candidate_never_degrades_a_succeeding_bus_layout() {
         let on_l = layout::build_bus_layout(&sr, layout::LayoutOptions::default())
             .unwrap_or_else(|e| panic!("{item}@{rate}: DI default must not turn a success into a refusal: {e}"));
         let (off_c, on_c) = (counts(&off_l, &sr), counts(&on_l, &sr));
+        // COMPONENT-WISE, not `on_c <= off_c`. Tuple `Ord` is
+        // lexicographic: it compares the first differing field and stops,
+        // so `(0, 0, 12) <= (0, 1, 0)` holds and a 12-layout-warning
+        // regression would pass unnoticed because the validator warning
+        // count improved. Each channel is a floor, not a tiebreaker
+        // (review finding on #474 — the bug was here AND in `di_choice`).
         assert!(
-            on_c <= off_c,
-            "{item}@{rate}: DI degraded the layout — (errors, warnings, layout_warnings) \
-             went {off_c:?} -> {on_c:?}"
+            on_c.0 <= off_c.0 && on_c.1 <= off_c.1 && on_c.2 <= off_c.2,
+            "{item}@{rate}: DI degraded the layout on at least one channel — \
+             (errors, warnings, layout_warnings) went {off_c:?} -> {on_c:?}"
         );
     }
 }

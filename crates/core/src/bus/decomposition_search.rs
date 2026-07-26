@@ -676,11 +676,36 @@ fn classify_errors(layout: &LayoutResult, solver_result: &SolverResult) -> Error
 /// one false "0 errors 0 warnings" claim by reading only the validator
 /// (#462), and the layout channel is where ghost-router and
 /// missing-balancer problems surface.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+/// **Deliberately NOT `Ord`/`PartialOrd`.** A derived ordering is
+/// LEXICOGRAPHIC — it compares the first differing field and stops — so
+/// `(0 err, 0 warn, 12 layout_warn) < (0, 1, 0)` would be `true`, letting
+/// a 12-layout-warning regression win because the validator warning count
+/// improved. That silently turns the second and third channels into
+/// tiebreakers when they are meant to be protected floors, which is the
+/// opposite of this type's purpose (review finding on #474).
+///
+/// Use [`IssueCounts::strictly_better_than`] instead; it is component-wise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 struct IssueCounts {
     errors: usize,
     warnings: usize,
     layout_warnings: usize,
+}
+
+impl IssueCounts {
+    /// No worse on ANY channel — the floor each channel is meant to be.
+    fn no_worse_than(&self, other: &Self) -> bool {
+        self.errors <= other.errors
+            && self.warnings <= other.warnings
+            && self.layout_warnings <= other.layout_warnings
+    }
+
+    /// No worse anywhere AND better somewhere. Since `no_worse_than`
+    /// already pins every channel at `<=`, being unequal is exactly "at
+    /// least one channel is strictly better".
+    fn strictly_better_than(&self, other: &Self) -> bool {
+        self.no_worse_than(other) && self != other
+    }
 }
 
 fn count_issues(layout: &LayoutResult, solver_result: &SolverResult) -> IssueCounts {
@@ -1058,13 +1083,20 @@ pub fn select_best_decomposition(
         let di_counts = count_issues(di_layout, solver_result);
         let nat_counts = count_issues(nat_layout, solver_result);
         crate::trace::truncate_events(start);
-        let strictly_better_issues = di_counts < nat_counts;
+        // Component-wise, NOT lexicographic — see `IssueCounts`.
+        let strictly_better_issues = di_counts.strictly_better_than(&nat_counts);
         // Equal on every issue channel: DI must then be strictly denser
         // /smaller to displace native. `score` already folds density,
         // overproduction and entity count.
         let equal_issues_and_denser =
             di_counts == nat_counts && di_score.score > nat_score.score + 1e-9;
-        (strictly_better_issues || equal_issues_and_denser).then_some(DI_IDX)
+        // `accepted` is a hard constraint the issue channels do not see:
+        // it carries the `missing-balancer-template` gate, whose warnings
+        // live in `layout.warnings` but which the ranking treats as
+        // disqualifying rather than merely worse. An unaccepted DI layout
+        // must never displace an accepted native.
+        (di_score.accepted && (strictly_better_issues || equal_issues_and_denser))
+            .then_some(DI_IDX)
     });
 
     // Validation-tiered selection (#392), part 1: the per-candidate
@@ -1386,6 +1418,40 @@ mod tests {
         });
         // No external_outputs entries → no overproduction reported.
         assert!((compute_overproduction(&solver)).abs() < 1e-9);
+    }
+
+    /// The DI never-worse comparison must be COMPONENT-WISE. A derived
+    /// `Ord` on `IssueCounts` is lexicographic and would accept a large
+    /// regression on a later channel in exchange for a one-unit gain on
+    /// an earlier one — the review finding on #474, which was live in
+    /// both `di_choice` and the e2e gate.
+    #[test]
+    fn issue_counts_compare_component_wise_not_lexicographically() {
+        let c = |errors, warnings, layout_warnings| IssueCounts {
+            errors,
+            warnings,
+            layout_warnings,
+        };
+        // THE REGRESSION CASE: one fewer validator warning, twelve more
+        // layout warnings. Lexicographic order calls this an improvement.
+        let native = c(0, 1, 0);
+        let di = c(0, 0, 12);
+        assert!(
+            !di.strictly_better_than(&native),
+            "trading 1 validator warning for 12 layout warnings is not an improvement"
+        );
+        assert!(!di.no_worse_than(&native), "the layout channel is a floor, not a tiebreaker");
+        // Same shape one channel over: fewer errors must not buy warnings.
+        assert!(!c(0, 9, 0).strictly_better_than(&c(1, 0, 0)));
+
+        // Genuine improvements still register, on each channel alone...
+        assert!(c(0, 0, 0).strictly_better_than(&c(1, 0, 0)));
+        assert!(c(0, 0, 0).strictly_better_than(&c(0, 1, 0)));
+        assert!(c(0, 0, 0).strictly_better_than(&c(0, 0, 1)));
+        // ...and equality is NOT "strictly better", which is what makes
+        // ties fall through to native and stay bit-identical.
+        assert!(!c(0, 1, 2).strictly_better_than(&c(0, 1, 2)));
+        assert!(c(0, 1, 2).no_worse_than(&c(0, 1, 2)));
     }
 
     #[test]
