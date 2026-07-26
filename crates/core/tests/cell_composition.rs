@@ -1240,6 +1240,20 @@ fn mega_chain_usp2_resolves_bus_failure() {
         "flagship must exercise multi-export fan + chain-fed inputs"
     );
     let l = compose_chain(&sr).expect("USP@2 from raw must compose");
+    let heavy_exit = l
+        .surplus_exits
+        .iter()
+        .find(|(item, _, _)| item == "heavy-oil")
+        .expect("advanced-only oil plan must route heavy-oil surplus to the perimeter");
+    assert!(
+        l.entities.iter().any(|e| {
+            e.x == heavy_exit.1
+                && e.y == heavy_exit.2
+                && matches!(e.name.as_str(), "pipe" | "pipe-to-ground")
+                && e.carries.as_deref() == Some("heavy-oil")
+        }),
+        "heavy-oil surplus exit must name a physical matching pipe: {heavy_exit:?}"
+    );
     let issues = match validate::validate(&l, Some(&sr), LayoutStyle::Bus) {
         Ok(v) => v,
         Err(e) => e.issues,

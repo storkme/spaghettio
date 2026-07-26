@@ -800,6 +800,7 @@ pub fn compose_chain_with_capacity(
     let mut entities: Vec<PlacedEntity> = Vec::new();
     let mut b_in: Vec<BoundaryRecord> = Vec::new();
     let mut b_out: Vec<BoundaryRecord> = Vec::new();
+    let mut surplus_exits: Vec<(String, i32, i32)> = Vec::new();
     let mut placed: Vec<Placed> = Vec::new();
     let mut cursor = 0i32;
 
@@ -912,6 +913,12 @@ pub fn compose_chain_with_capacity(
             }
             let mega_drains = if is_mega {
                 let block = mega_block_cache.as_ref().expect("block cached");
+                surplus_exits.extend(
+                    block
+                        .surplus_exits
+                        .iter()
+                        .map(|(item, sx, sy)| (item.clone(), sx + x, sy + y_off)),
+                );
                 // Boundary feeds of the block become CHAIN boundary
                 // records at the placed offset; each drain head anchors
                 // one outgoing corridor.
@@ -1582,6 +1589,11 @@ pub fn compose_chain_with_capacity(
             b
         },
         boundary_outputs: b_out,
+        // Mega blocks own their internal fluid topology, including any
+        // physically routed byproduct relief exits. Preserve those records
+        // at chain coordinates so the top-level stranded-byproduct check
+        // can cross-check them against the translated pipe entities (#476).
+        surplus_exits,
         ..Default::default()
     })
 }

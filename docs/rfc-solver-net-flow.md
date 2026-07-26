@@ -730,3 +730,19 @@ independent follow-ups with their own gates.
   value-recovery design, PLUS solid-surplus perimeter routing (11+
   genuine surplus streams even without voiding). Layout-side RFC
   should start from that design decision, not from price tuning.*
+- *2026-07-26 — **#476 physical oil-path exclusivity.** A long
+  `mega-chain-usp2raw` simulation falsified the assumption that fractional
+  LP balance alone makes mixed oil paths physically safe: the optimum
+  correctly credited AOP petroleum but mixed 18.815 basic + 2 advanced
+  refineries; three-way composition placed 21 + 3 whole refineries, and the
+  petroleum network saturated, blocking AOP's whole multi-output recipe and
+  starving heavy oil/lubricant. Free mode now re-solves without
+  `basic-oil-processing` whenever its first optimum also requires
+  `advanced-oil-processing`; restricted compatibility mode remains literal.
+  USP@2 becomes advanced-only, with unavoidable heavy-oil excess declared
+  as surplus. The mega adapter had independently erased parent surplus at
+  three ownership boundaries (sub-solve, boundary translation, chain
+  placement); all three now preserve it. The opt-in real USP composition
+  gate asserts the recorded exit names a physical heavy-oil pipe and
+  validates clean. Long Factorio re-measurement remains the acceptance
+  oracle before closing #476.*
