@@ -185,7 +185,9 @@ and a sidebar checkbox — **still off by default**, since a pair the
 engine cannot serve as a cell falls back to the bridge and then the bus.
 **Fluid-fed PRODUCERS now ship too (2026-07-25, same PR)**: both
 `casting-*` → EC pairs (#3 at 544 instances and #4 at 339) build a row
-cell, validate **0 errors 0 warnings** across 2.5–20/s, and sim at
+cell, validate **0 errors 0 warnings** across 2.5–20/s (both channels —
+`validate()` AND `LayoutResult.warnings`; the latter carried a false-alarm
+fluid-branch warning until 2026-07-26), and sim at
 **101.3% delivered / 100.0% produced**. They needed three things, each
 found only by attempting an end-to-end build: the pipe cut, heterogeneous
 footprints (5×5 foundry beside a 3×3 assembler, bottom-aligned), and a

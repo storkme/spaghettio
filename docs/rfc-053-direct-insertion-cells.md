@@ -1598,6 +1598,14 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   | `casting-copper-cable → EC` | 544 | cell at 2.5–20/s, **0 errors 0 warnings** throughout | produced 100.0%, delivered **101.3%** — PASS |
   | `casting-iron → EC` | 339 | cell at 2.5–15/s, **0 errors 0 warnings** throughout | produced 100.0%, delivered **101.3%** — PASS |
 
+  > ***CORRECTED 2026-07-26.*** *Those "0 warnings" counts were `validate()`
+  > issues only. `LayoutResult.warnings` is a SEPARATE channel that every
+  > probe in this session ignored, and both pairs carried one entry on it
+  > (`fluid branch for molten-copper at y=4 could not bridge blocked tiles
+  > x=4..4`). The warning was a false alarm and is now fixed — see the
+  > 2026-07-26 entry — so the counts above are true as written TODAY, but
+  > they were not when first recorded.*
+
   *Both sim runs converged. They are the FIRST fixtures ever to exercise
   the harness's infinity-pipe fluid feed, which RFC-050 declares
   uncalibrated — worth stating, though the risk runs one way: an
@@ -1826,3 +1834,49 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   the same fix: assign consumers to inter-producer slots rather than
   appending them. 353 instances, and the smallest well-defined piece of
   work left in this RFC.*
+
+- *2026-07-26 — **`LayoutResult.warnings` is a second issue channel, and
+  every probe this session was blind to it.** The user's browser check
+  showed 2 warnings on the default UI path; no Rust probe could reproduce
+  them, through four rounds of chasing solver inputs and layout options,
+  because the probes all printed `validate()` output and the warnings live
+  on `LayoutResult.warnings`. The UI merges both into one panel, which is
+  why the discrepancy looked impossible.*
+
+  ***Correction to the record: the casting pairs were never "0/0".*** *Both
+  carried one layout warning apiece, and the claim reached this RFC, the
+  status ledger and #462's body before anyone noticed. Any future
+  "N errors N warnings" claim must state which channel it counted.*
+
+  ***The warning itself was a false alarm, and it predates DI.*** *A fluid
+  branch walking east meets the row cell's own molten-metal pipe run.
+  `is_blocked_tile` tests occupancy only, so a pipe authored by the placer
+  reads as an obstruction — when it is in fact the branch's DESTINATION,
+  since pipes merge with any adjacent pipe. The router declined to bridge,
+  warned, and a later pass covered the tile anyway. Confirmed benign four
+  ways before touching it: the network is one connected component, all
+  four foundry ports sit on it, `validate()` reports no fluid issues, and
+  the sim produced 100% of plan — a genuinely severed branch would have
+  starved the foundries to zero, exactly as the biochamber did.*
+
+  *`plastic-bar` from crude oil emits the same warning with
+  `direct_insertion: false`, so this is a `ghost_router` defect that
+  predates RFC-053 and was merely surfaced by it.*
+
+  *Fixed by suppressing the warning when EVERY tile of the blocked run is
+  a plain `pipe` carrying that branch's own fluid. Deliberately narrow on
+  both axes: `pipe-to-ground` still counts as an obstruction (it connects
+  on its surface side and through its tunnel, not on four faces), and a
+  foreign fluid's pipe still counts (an obstacle AND a mixing hazard).
+  Routing geometry is untouched — this code's comments record real scars
+  (#412's identity fix, PTG pair destruction) and the warning was
+  redundant with the fluid validator by its own admission ("the
+  fluid-network validator will flag it rather than us papering over it").*
+
+  *Pinned by `fluid_branch_meeting_its_own_pipe_is_not_a_blocked_tile`,
+  which asserts both halves — no layout warnings AND no fluid/pipe
+  validation issues, so suppression cannot hide a real defect. Canaried.
+  Its first draft asserted "all surface pipes form one connected
+  component" and FAILED correctly: `plastic-bar` runs several deliberately
+  isolated fluid networks, and a UG pair splits a run's surface tiles by
+  design. The over-assertion was mine; the code was right.*

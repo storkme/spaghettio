@@ -8211,6 +8211,72 @@ fn di_cell_output_belt_exemption_does_not_cover_the_consumer() {
     );
 }
 
+/// A fluid branch arriving at a pipe that already carries ITS OWN fluid is
+/// connected, not blocked — `is_blocked_tile` sees only occupancy, so an
+/// RFC-053 row cell's molten-metal run read as an obstruction and the
+/// router emitted `"could not bridge blocked tiles"` on a layout that was
+/// physically fine.
+///
+/// Checks both halves of the rule, because suppressing a warning is only
+/// safe if the real ones survive:
+///   1. the fluid pairs carry NO layout warnings, and their networks are
+///      genuinely one connected component reaching every machine port;
+///   2. `pipe-to-ground` is still treated as an obstruction (it connects
+///      on its surface side and through its tunnel, not on four faces).
+///
+/// Pre-fix this reported one warning per fluid layout — including
+/// `plastic-bar` from crude oil, which predates direct insertion.
+#[test]
+fn fluid_branch_meeting_its_own_pipe_is_not_a_blocked_tile() {
+    use spaghettio_core::bus::layout;
+
+    let cases: &[(&str, &[&str], f64, bool)] = &[
+        ("plastic-bar", &["coal", "crude-oil"], 2.0, false),
+        ("electronic-circuit", &["molten-copper", "iron-plate"], 10.0, true),
+        ("electronic-circuit", &["iron-plate"], 10.0, true),
+    ];
+    for (target, ins, rate, di) in cases {
+        let inputs: FxHashSet<String> = ins.iter().map(|s| s.to_string()).collect();
+        let sr = solver::solve(target, *rate, &inputs, "assembling-machine-3")
+            .unwrap_or_else(|e| panic!("solve {target}: {e:?}"));
+        let l = layout::build_bus_layout(
+            &sr,
+            layout::LayoutOptions {
+                direct_insertion: *di,
+                max_belt_tier: Some("express-transport-belt".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|e| panic!("layout {target}: {e:?}"));
+
+        assert!(
+            l.warnings.is_empty(),
+            "{target} {ins:?} di={di}: no layout warnings expected, got {:#?}",
+            l.warnings
+        );
+
+        // And the fluid network really is sound. NOT "all pipes form one
+        // component" — distinct fluids are deliberately isolated, and a UG
+        // pair legitimately splits a run's SURFACE tiles in two. Port
+        // connectivity and network isolation are exactly what the fluid
+        // checks own, which is the same argument that makes the router's
+        // warning redundant here.
+        let issues = match validate::validate(&l, Some(&sr), LayoutStyle::Bus) {
+            Ok(v) => v,
+            Err(e) => e.issues,
+        };
+        let fluid_issues: Vec<_> = issues
+            .iter()
+            .filter(|i| i.category.contains("fluid") || i.category.contains("pipe"))
+            .collect();
+        assert!(
+            fluid_issues.is_empty(),
+            "{target} {ins:?} di={di}: suppressing the router warning must not hide a \
+             real fluid defect, got {fluid_issues:#?}"
+        );
+    }
+}
+
 /// RFC-053 **KC3 fixture** — export a DI-cell layout + manifest for the sim
 /// harness. Ignored: it writes artifacts and is driven by hand.
 ///

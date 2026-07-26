@@ -1317,10 +1317,40 @@ pub fn route_bus_ghost(
                             // no landing spot within reach — leave the gap
                             // and say so; the fluid-network validator will
                             // flag it rather than us papering over it.
-                            warnings.push(format!(
-                                "fluid branch for {} at y={} could not bridge blocked tiles x={}..{}",
-                                lane.item, py, bx, run_end
-                            ));
+                            //
+                            // UNLESS the "blockers" are plain pipes already
+                            // carrying THIS fluid. `is_blocked_tile` sees
+                            // only occupancy, so a pipe run authored by
+                            // someone else — an RFC-053 row cell's own
+                            // molten-metal run is the common case — reads as
+                            // an obstacle when it is in fact the branch's
+                            // destination: pipes merge with any adjacent
+                            // pipe, so arriving at one IS the connection.
+                            // Warning there is a false alarm, and it fired
+                            // on every fluid DI layout plus `plastic-bar`
+                            // from crude oil (which predates DI entirely).
+                            //
+                            // Restricted to `"pipe"` on purpose:
+                            // `pipe-to-ground` connects on its surface side
+                            // and through its tunnel, NOT on all four faces,
+                            // so a PTG in the run is a real obstruction and
+                            // must still be reported. Same-item on purpose
+                            // too — a foreign fluid's pipe is an obstacle
+                            // AND a mixing hazard.
+                            let joins_same_fluid = (bx..=run_end).all(|gx| {
+                                row_entities.iter().chain(entities.iter()).any(|e| {
+                                    e.x == gx
+                                        && e.y == py
+                                        && e.name == "pipe"
+                                        && e.carries.as_deref() == Some(lane.item.as_str())
+                                })
+                            });
+                            if !joins_same_fluid {
+                                warnings.push(format!(
+                                    "fluid branch for {} at y={} could not bridge blocked tiles x={}..{}",
+                                    lane.item, py, bx, run_end
+                                ));
+                            }
                             bx = run_end + 1;
                         }
                     }
