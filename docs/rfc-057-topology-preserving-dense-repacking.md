@@ -705,3 +705,20 @@ make either experimental composer a production default.
   terminal appears exactly as a graph source and every consumer terminal as a
   graph sink on all four representative fixtures. The remaining renderer no
   longer needs to infer branch semantics from coordinates or debug metadata.
+
+- **2026-07-26 — Balancer nodes materialised.** Every graph node is now
+  stamped from the existing express `(2,1)` / `(1,2)` balancer templates.
+  Nodes are arranged by lane, role and tree level; capacity handoff belts are
+  stamped between merge/distribution halves. Hubs expand to their real
+  template footprint and relocate around production islands and earlier
+  hubs. Exhaustive footprint checks find no hub-entity overlap across:
+
+  | Fixture | balancer nodes | stamped hub entities |
+  |---|---:|---:|
+  | `mega-chain-usp2raw` | 1,105 | 4,476 |
+  | `mega-chain-chem5raw` | 568 | 2,300 |
+  | `mega-chain-pu4raw` | 1,388 | 5,612 |
+  | `chain-mil5ore` | 344 | 1,404 |
+
+  Terminal and inter-node graph edges are still unrouted; therefore these
+  stamps are not exported as factory candidates yet.

@@ -1398,12 +1398,12 @@ fn rfc057_machine_constraint_baseline() {
     use spaghettio_core::bus::compaction::{
         blocks_overlap, build_local_manifold_graph, build_manifold_nets, compact_axis, compact_island_axis,
         compact_transport_geometry, estimated_manifold_wirelength, extract_rigid_islands,
-        extract_route_nets, machine_blocks, occupied_bbox, place_recipe_clusters,
-        plan_local_manifolds, CompactAxis, CompactIr, PlacedMachineSignature,
-        ProductionSignature, RouteTerminalKind,
+        extract_route_nets, machine_blocks, occupied_bbox, place_local_manifold_nodes,
+        place_recipe_clusters, plan_local_manifolds, CompactAxis, CompactIr,
+        PlacedMachineSignature, ProductionSignature, RouteTerminalKind,
     };
     use spaghettio_core::common::is_belt_entity;
-    use spaghettio_core::density::score_density;
+    use spaghettio_core::density::{entity_footprint, score_density};
     use spaghettio_core::validate::{self, LayoutStyle, Severity};
 
     for label in ["mega-chain-usp2raw", "mega-chain-chem5raw", "mega-chain-pu4raw", "chain-mil5ore"] {
@@ -1481,6 +1481,21 @@ fn rfc057_machine_constraint_baseline() {
             .iter()
             .map(build_local_manifold_graph)
             .collect();
+        let placed_hubs = place_local_manifold_nodes(&clustered_islands, &local_graphs, 1);
+        let mut hub_tiles = FxHashSet::default();
+        for hub in &placed_hubs {
+            for entity in &hub.entities {
+                let (width, height) = entity_footprint(entity);
+                for x in entity.x..entity.x + width as i32 {
+                    for y in entity.y..entity.y + height as i32 {
+                        assert!(
+                            hub_tiles.insert((x, y)),
+                            "{label}: stamped hub entity overlap at ({x},{y})",
+                        );
+                    }
+                }
+            }
+        }
         let clustered_bbox = occupied_bbox(
             &clustered_islands
                 .iter()
@@ -1549,6 +1564,11 @@ fn rfc057_machine_constraint_baseline() {
             local_plans.iter().map(|plan| plan.belt_count).sum::<u32>(),
             local_plans.iter().filter(|plan| plan.all_mergers_stampable).count(),
             local_plans.iter().filter(|plan| plan.all_distributors_stampable).count(),
+        );
+        println!(
+            "{label}: stamped hub nodes={} entities={}",
+            placed_hubs.iter().map(|hub| hub.nodes.len()).sum::<usize>(),
+            placed_hubs.iter().map(|hub| hub.entities.len()).sum::<usize>(),
         );
         assert_eq!(local_plans.len(), clustered_manifolds.len());
         for ((plan, graph), manifold) in local_plans

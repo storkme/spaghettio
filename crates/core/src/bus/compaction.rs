@@ -11,7 +11,7 @@ use crate::common::{
     dir_to_vec, entity_size, inserter_reach, is_belt_entity, is_inserter, is_surface_belt,
     is_ug_belt, oriented_splitter_dims, ug_max_reach, ug_to_surface_tier, QualityTier,
 };
-use crate::models::{EntityDirection, LayoutResult, ModuleItem, SolverResult};
+use crate::models::{EntityDirection, LayoutResult, ModuleItem, PlacedEntity, SolverResult};
 
 const RATE_SCALE: f64 = 1_000_000_000.0;
 
@@ -1677,10 +1677,9 @@ pub fn build_local_manifold_graph(plan: &LocalManifoldPlan) -> LocalManifoldGrap
         }
 
         let consumer_count = group.consumers.len();
-        let mut distribute_frontier = vec![ManifoldEndpoint::LaneOutput(group.lane)];
-        let mut level = 0;
+        let mut distribute_frontier = vec![(ManifoldEndpoint::LaneOutput(group.lane), 0u32)];
         while distribute_frontier.len() < consumer_count {
-            let source = distribute_frontier.remove(0);
+            let (source, level) = distribute_frontier.remove(0);
             let node = nodes.len();
             nodes.push(ManifoldBalancerNode {
                 id: node,
@@ -1694,17 +1693,16 @@ pub fn build_local_manifold_graph(plan: &LocalManifoldPlan) -> LocalManifoldGrap
                 from: source,
                 to: ManifoldEndpoint::NodeInput { node, port: 0 },
             });
-            distribute_frontier.push(ManifoldEndpoint::NodeOutput { node, port: 0 });
-            distribute_frontier.push(ManifoldEndpoint::NodeOutput { node, port: 1 });
-            level += 1;
+            distribute_frontier.push((ManifoldEndpoint::NodeOutput { node, port: 0 }, level + 1));
+            distribute_frontier.push((ManifoldEndpoint::NodeOutput { node, port: 1 }, level + 1));
         }
-        distribute_frontier.sort();
+        distribute_frontier.sort_by(|a, b| a.0.cmp(&b.0));
         for (source, terminal) in distribute_frontier
             .into_iter()
             .zip(group.consumers.iter().cloned())
         {
             edges.push(ManifoldGraphEdge {
-                from: source,
+                from: source.0,
                 to: ManifoldEndpoint::Terminal(terminal),
             });
         }
@@ -1717,6 +1715,238 @@ pub fn build_local_manifold_graph(plan: &LocalManifoldPlan) -> LocalManifoldGrap
         nodes,
         edges,
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct PlacedManifoldNode {
+    pub node_id: usize,
+    pub origin: (i32, i32),
+    pub input_ports: Vec<(i32, i32)>,
+    pub output_ports: Vec<(i32, i32)>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PlacedLocalManifold {
+    pub item: String,
+    pub hub: CompactBlock,
+    pub nodes: Vec<PlacedManifoldNode>,
+    pub lane_inputs: Vec<(i32, i32)>,
+    pub lane_outputs: Vec<(i32, i32)>,
+    pub entities: Vec<PlacedEntity>,
+}
+
+/// Stamp all `(2,1)` / `(1,2)` nodes into collision-free local hubs.
+/// Inter-node and terminal edges remain explicit in [`LocalManifoldGraph`]
+/// for the negotiated router.
+pub fn place_local_manifold_nodes(
+    islands: &[RigidIsland],
+    graphs: &[LocalManifoldGraph],
+    clearance: i32,
+) -> Vec<PlacedLocalManifold> {
+    use crate::bus::balancer::{splitter_for_belt, underground_for_belt};
+    use crate::bus::balancer_library::balancer_templates;
+
+    let templates = balancer_templates();
+    let clearance = clearance.max(0);
+    let mut result: Vec<PlacedLocalManifold> = Vec::new();
+    for (graph_idx, graph) in graphs.iter().enumerate() {
+        let mut lane_widths = Vec::new();
+        let mut merge_levels = 0u32;
+        let mut distribute_levels = 0u32;
+        for lane in 0..graph.belt_count {
+            let max_level_width = graph
+                .nodes
+                .iter()
+                .filter(|node| node.lane == lane)
+                .fold(BTreeMap::<(u8, u32), usize>::new(), |mut counts, node| {
+                    let role = match node.role {
+                        BalancerNodeRole::Merge => 0,
+                        BalancerNodeRole::Distribute => 1,
+                    };
+                    *counts.entry((role, node.level)).or_default() += 1;
+                    counts
+                })
+                .into_values()
+                .max()
+                .unwrap_or(1);
+            lane_widths.push((max_level_width as i32 * 3).max(3));
+            merge_levels = merge_levels.max(
+                graph
+                    .nodes
+                    .iter()
+                    .filter(|node| node.lane == lane && node.role == BalancerNodeRole::Merge)
+                    .map(|node| node.level + 1)
+                    .max()
+                    .unwrap_or(0),
+            );
+            distribute_levels = distribute_levels.max(
+                graph
+                    .nodes
+                    .iter()
+                    .filter(|node| node.lane == lane && node.role == BalancerNodeRole::Distribute)
+                    .map(|node| node.level + 1)
+                    .max()
+                    .unwrap_or(0),
+            );
+        }
+        let width = lane_widths.iter().sum::<i32>()
+            + clearance * (lane_widths.len().saturating_sub(1) as i32);
+        let lane_y = merge_levels as i32 * 4;
+        let distribute_y = lane_y + 2;
+        let height = distribute_y + distribute_levels as i32 * 4 + 3;
+        let preferred_x = graph.hub.x + graph.hub.width / 2 - width / 2;
+        let preferred_y = graph.hub.y + graph.hub.height / 2 - height / 2;
+        let mut hub = None;
+        'radius: for radius in 0..=1024 {
+            for dx in -radius..=radius {
+                for dy in [-radius, radius] {
+                    let candidate = CompactBlock {
+                        id: graph_idx,
+                        x: preferred_x + dx,
+                        y: preferred_y + dy,
+                        width,
+                        height,
+                    };
+                    if placed_hub_is_free(&candidate, islands, &result, clearance) {
+                        hub = Some(candidate);
+                        break 'radius;
+                    }
+                }
+            }
+            for dy in (-radius + 1)..radius {
+                for dx in [-radius, radius] {
+                    let candidate = CompactBlock {
+                        id: graph_idx,
+                        x: preferred_x + dx,
+                        y: preferred_y + dy,
+                        width,
+                        height,
+                    };
+                    if placed_hub_is_free(&candidate, islands, &result, clearance) {
+                        hub = Some(candidate);
+                        break 'radius;
+                    }
+                }
+            }
+        }
+        let hub = hub.unwrap_or(CompactBlock {
+            id: graph_idx,
+            x: preferred_x,
+            y: preferred_y,
+            width,
+            height,
+        });
+
+        let mut lane_starts = Vec::new();
+        let mut cursor = hub.x;
+        for lane_width in &lane_widths {
+            lane_starts.push(cursor);
+            cursor += *lane_width + clearance;
+        }
+        let mut level_ordinals = BTreeMap::<(u32, u8, u32), i32>::new();
+        let mut placed_nodes = Vec::new();
+        let mut entities = Vec::new();
+        for node in &graph.nodes {
+            let role = match node.role {
+                BalancerNodeRole::Merge => 0,
+                BalancerNodeRole::Distribute => 1,
+            };
+            let ordinal = level_ordinals
+                .entry((node.lane, role, node.level))
+                .or_default();
+            let origin_x = lane_starts[node.lane as usize] + *ordinal * 3;
+            let origin_y = hub.y
+                + if node.role == BalancerNodeRole::Merge {
+                    node.level as i32 * 4
+                } else {
+                    distribute_y + node.level as i32 * 4
+                };
+            *ordinal += 1;
+            let template = templates
+                .get(&(node.n, node.m))
+                .expect("planned primitive balancer template missing");
+            let mut stamped = template.stamp(
+                origin_x,
+                origin_y,
+                "express-transport-belt",
+                splitter_for_belt("express-transport-belt"),
+                underground_for_belt("express-transport-belt"),
+                Some(&graph.item),
+            );
+            for entity in &mut stamped {
+                entity.segment_id = Some(format!(
+                    "compact-hub:{}:{}:{}",
+                    graph.item, node.lane, node.id
+                ));
+            }
+            entities.extend(stamped);
+            placed_nodes.push(PlacedManifoldNode {
+                node_id: node.id,
+                origin: (origin_x, origin_y),
+                input_ports: template
+                    .input_tiles
+                    .iter()
+                    .map(|&(x, y)| (origin_x + x, origin_y + y))
+                    .collect(),
+                output_ports: template
+                    .output_tiles
+                    .iter()
+                    .map(|&(x, y)| (origin_x + x, origin_y + y))
+                    .collect(),
+            });
+        }
+        placed_nodes.sort_by_key(|node| node.node_id);
+        let lane_inputs: Vec<_> = lane_starts
+            .iter()
+            .zip(&lane_widths)
+            .map(|(&x, &lane_width)| (x + lane_width / 2, hub.y + lane_y))
+            .collect();
+        let lane_outputs: Vec<_> = lane_inputs
+            .iter()
+            .map(|&(x, _)| (x, hub.y + distribute_y - 1))
+            .collect();
+        for (lane, (&input, &output)) in lane_inputs.iter().zip(&lane_outputs).enumerate() {
+            for y in input.1..=output.1 {
+                entities.push(PlacedEntity {
+                    name: "express-transport-belt".into(),
+                    x: input.0,
+                    y,
+                    direction: EntityDirection::South,
+                    carries: Some(graph.item.clone()),
+                    segment_id: Some(format!("compact-lane:{}:{lane}", graph.item)),
+                    ..Default::default()
+                });
+            }
+        }
+        result.push(PlacedLocalManifold {
+            item: graph.item.clone(),
+            hub,
+            nodes: placed_nodes,
+            lane_inputs,
+            lane_outputs,
+            entities,
+        });
+    }
+    result
+}
+
+fn placed_hub_is_free(
+    candidate: &CompactBlock,
+    islands: &[RigidIsland],
+    hubs: &[PlacedLocalManifold],
+    clearance: i32,
+) -> bool {
+    let expanded = CompactBlock {
+        id: candidate.id,
+        x: candidate.x - clearance,
+        y: candidate.y - clearance,
+        width: candidate.width + clearance * 2,
+        height: candidate.height + clearance * 2,
+    };
+    islands
+        .iter()
+        .all(|island| !blocks_overlap(&expanded, &island.block))
+        && hubs.iter().all(|hub| !blocks_overlap(&expanded, &hub.hub))
 }
 
 fn hub_is_free(
