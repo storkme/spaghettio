@@ -298,6 +298,46 @@ candidate with one named prerequisite (`row_cell_eligible`'s same-item
 guard uses `.find()`, which checks only one of the three pairs). **Not
 built; the decision is deliberately open.**
 
+**DI IS ON BY DEFAULT (2026-07-26)** as
+`DirectInsertion::Candidate` — but *not* as the one-line `true` flip,
+which was attempted the same day and **broke 8 tests against a 100%
+green baseline**: 5 hard validation errors on
+`tier4_advanced_circuit_from_ore_am2`, an `input-rate-delivery` warning
+on the flagship DI pair, and `mil5-ore` failing to lay out at all.
+Fusing a pair changes the ROW STRUCTURE, and trunk lanes, junction
+routing and per-lane capacity are computed against it; the five verified
+pairs had been verified *at specific rates*.
+
+So DI competes as a scored candidate: the native pass runs DI-free, and
+a scoped pairwise decision (mirroring `merge_tap_choice`) lets DI
+displace it only on a **strict** improvement across BOTH issue channels,
+ties to native. It cannot ride the generic soft score the way
+`cell-composed` does — composed density is always 1.5–3× worse so it
+loses by construction, whereas DI is typically *denser* and would win
+even where it regresses warnings.
+
+Measured change surface, 20 targets: **15 bit-identical, 5 flipped, 0
+regressed**, and every flip improves both size and issues —
+`space-platform-foundation@1` 2684→**1904** entities with 33 warnings→**0**,
+`steel-plate@5` 815→**527**, `electronic-circuit@15` 292→**272**.
+**All 5 sim PASS** (4 converged at/above plan; `steel-plate@5` passes but
+does not converge, oscillating 5.08–5.85 around a 5.00 plan). DI also
+resolves three configs the bus hard-refuses, and at EC@15 beats the
+cell-composed candidate that used to win — deleting a real ~5.3%
+`row-input-belt-margin` defect rather than tolerating it. Pinned by
+`di_candidate_never_degrades_a_succeeding_bus_layout`, demonstrated to
+have teeth. Runtime 1.23×, inside K-DS1-3's 1.5× budget.
+
+**Coverage stays structurally narrow, and eligibility is not the
+lever.** A machine has two neighbours, so a row cell needs producer and
+consumer counts within ~2× — most foundry→assembler pairs are nowhere
+near (`casting-iron-gear-wheel → engine-unit` is **1:32**). Of 10 probed
+targets, 7 build no cell at all, dominated by ratio rather than by faces,
+fluids or straddle. Widening eligibility further is not what raises
+coverage; Phase 3 multi-band is the only lever that attacks the ratio
+ceiling, and note the RFC deferred Phase 3 on a **fan-in** analysis while
+the measured ceiling is **fan-out**.
+
 Open against this RFC: modules refuse (the module post-pass keys
 `(entity, recipe)` off `row_spans` and a fused row contributes only the
 consumer's recipe); KC5 (solver escalation bound) is still unevaluated;
