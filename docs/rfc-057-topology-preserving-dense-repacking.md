@@ -455,3 +455,31 @@ rearrangement.
 
 RFC-057 supersedes RFC-055/056 as the density research direction. It does not
 make either experimental composer a production default.
+
+## Decision log
+
+- **2026-07-26 — Phase 1 signature and constraint baseline implemented.**
+  `ProductionSignature` canonically freezes machines, fixed-point rates,
+  item producer sets, consumers, external inputs, targets and surplus.
+  `PlacedMachineSignature` independently freezes the exact emitted machine
+  multiset while ignoring coordinates and entity ordering. Multiple oil
+  producers are represented explicitly rather than forced through the
+  single-producer assumption used by solid cell chains.
+
+  The first exact per-axis longest-path compactor preserves the relative
+  order of rectangles whose cross-axis footprints overlap. Eight alternating
+  X/Y passes over the current physical machine rectangles produced:
+
+  | Fixture | machines | source machine bbox | compacted bbox | area delta |
+  |---|---:|---:|---:|---:|
+  | `mega-chain-usp2raw` | 495 | 2202×118 | 1667×49 | −68.6% |
+  | `mega-chain-chem5raw` | 184 | 817×32 | 607×17 | −60.5% |
+  | `mega-chain-pu4raw` | 640 | 2684×63 | 2239×25 | −66.9% |
+  | `chain-mil5ore` | 146 | 706×5 | 583×3 | −50.5% |
+
+  Every resulting machine rectangle is pairwise non-overlapping. These are
+  coarse potential bounds, not factory candidates: inserters, route endpoints,
+  pipes, power and logistics have not yet been re-embedded. Their purpose is
+  to answer whether the source contains enough positional slack to justify
+  the router work. A 50–69% machine-bbox reduction says yes and clears that
+  continuation gate by a wide margin.

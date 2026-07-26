@@ -1392,6 +1392,52 @@ fn export_rfc055_factorio_candidates() {
     }
 }
 
+#[test]
+#[ignore = "RFC-057 coarse machine compaction potential"]
+fn rfc057_machine_constraint_baseline() {
+    use spaghettio_core::bus::compaction::{
+        blocks_overlap, compact_axis, machine_blocks, occupied_bbox, CompactAxis,
+        PlacedMachineSignature, ProductionSignature,
+    };
+
+    for label in ["mega-chain-usp2raw", "mega-chain-chem5raw", "mega-chain-pu4raw", "chain-mil5ore"] {
+        let fixture = SimFixture::find(label);
+        let inputs: FxHashSet<String> =
+            fixture.inputs.iter().map(|s| s.to_string()).collect();
+        let sr = solver::solve_with_palette_exclusions_and_quality(
+            fixture.target, fixture.rate, &inputs, &MachinePalette::default(),
+            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+        ).unwrap();
+        let layout = fixture.compose_layout();
+        let production = ProductionSignature::from_solver(&sr).unwrap();
+        let placed = PlacedMachineSignature::from_layout(&layout);
+        assert!(!production.machines.is_empty());
+        assert!(!placed.0.is_empty());
+
+        let original = machine_blocks(&layout);
+        let original_bbox = occupied_bbox(&original);
+        let mut compacted = original.clone();
+        for _ in 0..8 {
+            compacted = compact_axis(&compacted, CompactAxis::X, 1);
+            compacted = compact_axis(&compacted, CompactAxis::Y, 1);
+        }
+        for (i, a) in compacted.iter().enumerate() {
+            for b in &compacted[i + 1..] {
+                assert!(!blocks_overlap(a, b), "{label}: blocks {} and {} overlap", a.id, b.id);
+            }
+        }
+        let compact_bbox = occupied_bbox(&compacted);
+        let before = i64::from(original_bbox.0) * i64::from(original_bbox.1);
+        let after = i64::from(compact_bbox.0) * i64::from(compact_bbox.1);
+        println!(
+            "{label}: machines={} machine-bbox={}x{} -> {}x{} ({:+.1}%)",
+            original.len(), original_bbox.0, original_bbox.1,
+            compact_bbox.0, compact_bbox.1,
+            (after as f64 / before as f64 - 1.0) * 100.0,
+        );
+    }
+}
+
 /// Artifact producer for the increment-2 sim run.
 #[test]
 #[ignore = "artifact producer"]
