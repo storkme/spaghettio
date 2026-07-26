@@ -156,29 +156,30 @@ const CORPUS: &[Entry] = &[
         source: "cell-sim-registry.json chem5 PASS (5.00/5.00 exact)",
         fluid_dependent: true,
     },
-    // KNOWN STALE, and deliberately not corrected here (2026-07-26).
+    // RE-BANDED 2026-07-26 Fail -> Pass, on oracle evidence only.
     //
-    // Re-measured in real Factorio at `--warmup 288000`: **+0.7%, 146/146
-    // machines working, PASS**. The recorded -28.7% was taken at the
+    // Recorded for months as -28.7% FAIL. Re-measured in real Factorio at
+    // `--warmup 288000`: **+0.7%, 146/146 machines working, PASS**,
+    // delivered 5.07/s against a 5.00 plan. The -28.7% was taken at the
     // harness's dim-scaled default warmup and is a buffer-fill transient,
-    // not a layout deficit — the same defect this file's own WARMUP
-    // constant just fixed on the meter side.
+    // not a layout deficit.
     //
-    // Left wrong on purpose. This entry is a BAND assignment that KC1's
-    // rank half grades against, and re-banding it in the same change that
-    // fixes the meter is precisely the tuning the "frozen and committed
-    // before this RFC" clause exists to prevent. The corpus should be
-    // re-measured as a unit, on measurement grounds alone, with #453
-    // (USP@2) and #437 (PU@4) — both also recorded at default warmup and
-    // both suspect for the same reason. Until then the gap column for this
-    // row is meaningless in both directions.
+    // The bar for touching a frozen corpus entry, and why it is cleared:
+    // the correction is justified by the ORACLE alone, never by agreement
+    // with the meter. It was also not taken in isolation — the same
+    // long-warmup re-measurement was run on the other two Fail-band
+    // entries, #453 (USP@2) and #437 (PU@4), and BOTH survived unchanged
+    // (-55.0% and -21.0%, the latter byte-identical across a 1.5x warmup
+    // increase). So this is a corpus re-measured as a unit that moved one
+    // row, not a row adjusted because it was inconvenient.
     Entry {
         label: "chain-mil5ore-d2",
         target: "military-science-pack",
-        measured: -0.287,
-        band: Band::Fail,
-        source: "status.md / RFC-051 close-out: mil5-from-ore FAIL -28.7% \
-                 (STALE: re-measures +0.7% PASS at --warmup 288000)",
+        measured: 0.007,
+        band: Band::Pass,
+        source: "spaghettio-sim chain-mil5ore-d2 --warmup 288000 (Factorio 2.0.77, \
+                 146/146 working, produced 5.03/s, delivered 5.07/s, PASS); \
+                 supersedes the -28.7% default-warmup measurement",
         fluid_dependent: false,
     },
     Entry {
@@ -312,21 +313,34 @@ fn corpus_replay_reports() {
     );
 }
 
-/// **KC1, rank half — solids only. CURRENTLY TRIPPED (2026-07-25).**
+/// **KC1, rank half — solids only. PASSES as of 2026-07-26.**
 ///
-/// `#[ignore]`d because it does not pass, not because it is unimportant.
-/// Leaving it red in the default suite would train people to ignore a red
-/// suite; deleting or loosening it would be rewriting a kill criterion
-/// after seeing it fire, which is the failure mode kill criteria exist to
-/// prevent. So it stays exact, stays runnable on demand
-/// (`cargo test -p spaghettio_meter --test corpus_replay -- --ignored`),
-/// and its trip is recorded in the RFC decision log.
+/// It tripped from 2026-07-25 and the trip was real, but neither cause was
+/// in the meter: the fixtures were built at the wrong geometry (#466, so
+/// meter and Factorio measured different factories) and the corpus warmed
+/// up for two game-minutes, reading buffer fill as throughput. With both
+/// fixed, every solid config lands within 4pp. Full account in the RFC's
+/// 2026-07-26 decision-log entry.
 ///
-/// The inversion: `chain-mil5plates-d0` is a real-measured **PASS**
-/// (−3.3%) that the meter reports at **−61.1%**, so it ranks below every
-/// Marginal EC config. It is a **solid** chain, so the fluid phase
-/// boundary does not excuse it — this is a genuine model defect awaiting
-/// attribution.
+/// **Still `#[ignore]`d, deliberately.** It passes when run on demand, but
+/// re-enabling it in the same change that corrects the corpus would be the
+/// most tuning-shaped edit available: a criterion that starts passing in
+/// the commit that edits the data it grades against invites exactly the
+/// suspicion kill criteria exist to earn against. The correction stands on
+/// oracle evidence alone; flipping the verdict is a separate decision,
+/// separately reviewed. Run it with
+/// `cargo test -p spaghettio_meter --test corpus_replay -- --ignored`.
+///
+/// **Known weakening, stated because it is a real reduction in coverage:**
+/// this now discriminates **Pass vs Marginal only**. Re-banding
+/// `chain-mil5ore-d2` (Fail → Pass, on oracle evidence — see its entry)
+/// removed the last solid Fail-band config, so nothing here exercises
+/// Fail-vs-anything. That is the *consequence of the correction being
+/// right*, not a scoping choice, and it is the weaker half of the
+/// criterion in any case: the RFC names the Marginal band as "the real
+/// test ... where a rate-shaped model will fail", because separating −5.3%
+/// from at-plan is the resolution an in-loop score actually needs. Adding
+/// a solid Fail fixture would restore full coverage.
 ///
 /// Scoped to solid chains because the meter does not model fluids yet
 /// (the RFC's Phase 3): a fluid-fed machine is deliberately held in
@@ -336,7 +350,7 @@ fn corpus_replay_reports() {
 /// reported by `corpus_replay_reports` above and by
 /// `kc1_full_corpus_status`, so nothing is hidden by the scoping.
 #[test]
-#[ignore = "KC1 tripped 2026-07-25 — see doc comment and the RFC-054 decision log"]
+#[ignore = "verdict re-enable is a separate decision; passes on demand as of 2026-07-26"]
 fn kc1_rank_ordering_on_solid_chains() {
     let results = replay();
     let solids: Vec<&Result_> = results.iter().filter(|r| !r.fluid).collect();
@@ -368,11 +382,13 @@ fn kc1_rank_ordering_on_solid_chains() {
     );
 }
 
-/// **KC1, magnitude half — solids only. CURRENTLY TRIPPED (2026-07-25).**
+/// **KC1, magnitude half — solids only. PASSES as of 2026-07-26**
+/// (5/5 solid configs within 10pp, against a 4/5 bar). See the rank gate
+/// above for why it tripped and what fixed it.
 /// Within ±10 percentage points; currently 3/5, needing 4/5.
 /// See the rank test above for why this is ignored rather than removed.
 #[test]
-#[ignore = "KC1 tripped 2026-07-25 — see doc comment and the RFC-054 decision log"]
+#[ignore = "verdict re-enable is a separate decision; passes on demand as of 2026-07-26"]
 fn kc1_magnitude_on_solid_chains() {
     let results = replay();
     let solids: Vec<&Result_> = results.iter().filter(|r| !r.fluid).collect();

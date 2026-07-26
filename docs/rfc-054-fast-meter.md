@@ -270,7 +270,26 @@ because they already exist. In three bands:
 |---|---|---|
 | **PASS** (at plan) | 10 | gear10, automation, logistic, military, chem5@5, AC@1, AC@2, mil5-from-plates, sulfur@2, plastic@2 |
 | **MARGINAL** (−5% to −8%) | 3 | chain-ec15 @d1 (13.8/15), chain-ec15 @d7 (14.2/15), chain-ec30 (27.7/30) |
-| **FAIL** | 4 | ec10 @L0 (−50%), PU@4 (−27.3%, [#437](https://github.com/storkme/spaghettio/issues/437)), USP@2 (−57.0%, [#453](https://github.com/storkme/spaghettio/issues/453)), mil5-from-ore (−28.7%) |
+| **FAIL** | 4 → **3** | ec10 @L0 (−50%), PU@4 (−27.3%, [#437](https://github.com/storkme/spaghettio/issues/437)), USP@2 (−57.0%, [#453](https://github.com/storkme/spaghettio/issues/453)), ~~mil5-from-ore (−28.7%)~~ |
+
+> **Corpus correction, 2026-07-26.** `mil5-from-ore` moves **FAIL → PASS**.
+> Re-measured in real Factorio at `--warmup 288000`: **+0.7%, 146/146
+> machines working**. The −28.7% was taken at the harness's default warmup
+> and is a buffer-fill transient, not a layout deficit.
+>
+> Recorded here, in the criterion's own band table, rather than only in the
+> decision log — this table is the specification KC1's rank half grades
+> against, and a spec that disagrees with the code is worse than either.
+> The correction rests on the **oracle alone** and was not taken in
+> isolation: the other two FAIL-band entries were re-measured the same way
+> and both survived unchanged (USP@2 −55.0%, PU@4 −21.0%). One row moved
+> out of three re-measured.
+>
+> **Consequence:** no **solid** FAIL-band config remains, so the rank half
+> now discriminates PASS-vs-MARGINAL only. That is a genuine loss of
+> coverage following from the correction being right, and it is the weaker
+> half — this RFC names MARGINAL as "the real test". Restoring full
+> coverage needs a new solid FAIL fixture.
 
 **KC1 — discrimination first, magnitude second.** Replay the meter over
 the corpus.
