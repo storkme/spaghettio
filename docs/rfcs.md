@@ -66,5 +66,7 @@ backfill the status next time the doc is touched.
 | RFC-052 | 2026-07-23 | [`rfc-052-oil-mega-cell.md`](rfc-052-oil-mega-cell.md) | Design (circulated for review) |
 | RFC-053 | 2026-07-24 | [`rfc-053-direct-insertion-cells.md`](rfc-053-direct-insertion-cells.md) | Active — **Phases 0 + 1 + 2 landed**; engine emits fused DI cells (stacked and horizontal-row). Both TOP corpus pairs build, validate at 0 issues and sim at/above plan: `copper-cable → electronic-circuit` 101.3%, `electric-furnace → electric-furnace` 109.5%. KC1–KC4 evaluated and passing (KC6 fired → pipes re-scoped into Phase 2, still outstanding). Inert by default. Remaining: pipes/fluids, Phase 3 multi-band, Phase 4 wasm+UI. |
 | RFC-054 | 2026-07-25 | [`rfc-054-fast-meter.md`](rfc-054-fast-meter.md) | Design (circulated for review) |
+| RFC-055 | 2026-07-26 | [`rfc-055-compact-cell-chain.md`](rfc-055-compact-cell-chain.md) | Design — competes with RFC-056; #456 |
+| RFC-056 | 2026-07-26 | [`rfc-056-folded-cell-chain.md`](rfc-056-folded-cell-chain.md) | Design — competes with RFC-055; #456 |
 
-Next number: **RFC-055**.
+Next number: **RFC-057**.
