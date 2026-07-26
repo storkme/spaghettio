@@ -1397,9 +1397,9 @@ fn export_rfc055_factorio_candidates() {
 fn rfc057_machine_constraint_baseline() {
     use spaghettio_core::bus::compaction::{
         blocks_overlap, build_manifold_nets, compact_axis, compact_island_axis,
-        extract_rigid_islands, extract_route_nets, machine_blocks, occupied_bbox,
-        compact_transport_geometry, CompactAxis, CompactIr, PlacedMachineSignature,
-        ProductionSignature, RouteTerminalKind,
+        compact_transport_geometry, estimated_manifold_wirelength, extract_rigid_islands,
+        extract_route_nets, machine_blocks, occupied_bbox, place_recipe_clusters, CompactAxis,
+        CompactIr, PlacedMachineSignature, ProductionSignature, RouteTerminalKind,
     };
     use spaghettio_core::common::is_belt_entity;
     use spaghettio_core::density::score_density;
@@ -1473,6 +1473,24 @@ fn rfc057_machine_constraint_baseline() {
         assert_eq!(ir.islands, islands);
         assert_eq!(ir.route_nets, nets);
         let manifolds = build_manifold_nets(&ir, &island_compacted).unwrap();
+        let (clustered_islands, clusters) = place_recipe_clusters(&ir, 1);
+        let clustered_manifolds = build_manifold_nets(&ir, &clustered_islands).unwrap();
+        let clustered_bbox = occupied_bbox(
+            &clustered_islands
+                .iter()
+                .map(|island| island.block.clone())
+                .collect::<Vec<_>>(),
+        );
+        for (idx, island) in clustered_islands.iter().enumerate() {
+            for other in &clustered_islands[idx + 1..] {
+                assert!(
+                    !blocks_overlap(&island.block, &other.block),
+                    "{label}: clustered islands {} and {} overlap",
+                    island.id,
+                    other.id,
+                );
+            }
+        }
         let mut non_monotone = Vec::new();
         for manifold in &manifolds {
             assert!(
@@ -1512,6 +1530,12 @@ fn rfc057_machine_constraint_baseline() {
             "{label}: express manifold lanes total={} max={}",
             manifolds.iter().map(|manifold| manifold.required_belts(45.0)).sum::<u32>(),
             manifolds.iter().map(|manifold| manifold.required_belts(45.0)).max().unwrap_or(0),
+        );
+        println!(
+            "{label}: recipe clusters={} bbox={}x{}, weighted-wirelength={} -> {}",
+            clusters.len(), clustered_bbox.0, clustered_bbox.1,
+            estimated_manifold_wirelength(&manifolds),
+            estimated_manifold_wirelength(&clustered_manifolds),
         );
 
         let runnable = compact_transport_geometry(&layout);

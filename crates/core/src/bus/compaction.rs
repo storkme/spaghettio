@@ -1143,6 +1143,254 @@ pub fn build_manifold_nets(
     Ok(result)
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecipeClusterPlacement {
+    pub recipes: Vec<String>,
+    pub island_ids: Vec<usize>,
+    pub block: CompactBlock,
+}
+
+/// Repack rigid islands into recipe banks, then place those banks in 2D by
+/// solver-rate-weighted production adjacency. This is the first RFC-057
+/// placement that does not preserve incumbent row/corridor coordinates.
+pub fn place_recipe_clusters(
+    ir: &CompactIr,
+    clearance: i32,
+) -> (Vec<RigidIsland>, Vec<RecipeClusterPlacement>) {
+    let clearance = clearance.max(0);
+    let mut groups: BTreeMap<Vec<String>, Vec<usize>> = BTreeMap::new();
+    for island in &ir.islands {
+        groups
+            .entry(island.recipes.clone())
+            .or_default()
+            .push(island.id);
+    }
+
+    let mut islands = ir.islands.clone();
+    let mut clusters = Vec::new();
+    for (recipes, mut island_ids) in groups {
+        island_ids.sort_by_key(|&id| {
+            let block = &ir.islands[id].block;
+            std::cmp::Reverse((block.height, block.width, id))
+        });
+        let area: i64 = island_ids
+            .iter()
+            .map(|&id| {
+                let block = &ir.islands[id].block;
+                i64::from(block.width + clearance) * i64::from(block.height + clearance)
+            })
+            .sum();
+        let target_width = (area as f64).sqrt().ceil() as i32;
+        let mut x = 0;
+        let mut y = 0;
+        let mut row_height = 0;
+        let mut max_x = 0;
+        for &id in &island_ids {
+            let width = islands[id].block.width;
+            let height = islands[id].block.height;
+            if x > 0 && x + width > target_width {
+                x = 0;
+                y += row_height + clearance;
+                row_height = 0;
+            }
+            islands[id].block.x = x;
+            islands[id].block.y = y;
+            x += width + clearance;
+            row_height = row_height.max(height);
+            max_x = max_x.max(x - clearance);
+        }
+        let max_y = island_ids
+            .iter()
+            .map(|&id| islands[id].block.y + islands[id].block.height)
+            .max()
+            .unwrap_or(0);
+        let id = clusters.len();
+        clusters.push(RecipeClusterPlacement {
+            recipes,
+            island_ids,
+            block: CompactBlock {
+                id,
+                x: 0,
+                y: 0,
+                width: max_x,
+                height: max_y,
+            },
+        });
+    }
+
+    let mut cluster_of = vec![0usize; islands.len()];
+    for (cluster_idx, cluster) in clusters.iter().enumerate() {
+        for &island_id in &cluster.island_ids {
+            cluster_of[island_id] = cluster_idx;
+        }
+    }
+    let mut weights: BTreeMap<(usize, usize), i64> = BTreeMap::new();
+    let flow_rate: BTreeMap<&str, i64> = ir
+        .commodity_flows
+        .iter()
+        .map(|flow| (flow.item.as_str(), flow.rate))
+        .collect();
+    for net in &ir.route_nets {
+        let mut producers = Vec::new();
+        let mut consumers = Vec::new();
+        for island in &ir.islands {
+            for terminal in island
+                .terminals
+                .iter()
+                .filter(|terminal| terminal.item == net.item)
+            {
+                match terminal.kind {
+                    RouteTerminalKind::ProducerDrop => producers.push(cluster_of[island.id]),
+                    RouteTerminalKind::ConsumerPickup => consumers.push(cluster_of[island.id]),
+                    _ => {}
+                }
+            }
+        }
+        producers.sort_unstable();
+        producers.dedup();
+        consumers.sort_unstable();
+        consumers.dedup();
+        let rate = flow_rate.get(net.item.as_str()).copied().unwrap_or(1);
+        for &producer in &producers {
+            for &consumer in &consumers {
+                if producer == consumer {
+                    continue;
+                }
+                let edge = if producer < consumer {
+                    (producer, consumer)
+                } else {
+                    (consumer, producer)
+                };
+                *weights.entry(edge).or_default() += rate;
+            }
+        }
+    }
+
+    let mut degree = vec![0i64; clusters.len()];
+    for (&(a, b), &weight) in &weights {
+        degree[a] += weight;
+        degree[b] += weight;
+    }
+    let mut order: Vec<usize> = (0..clusters.len()).collect();
+    order.sort_by_key(|&idx| std::cmp::Reverse((degree[idx], clusters[idx].block.width, idx)));
+    let mut placed = Vec::<usize>::new();
+    for &cluster_idx in &order {
+        if placed.is_empty() {
+            clusters[cluster_idx].block.x = 0;
+            clusters[cluster_idx].block.y = 0;
+            placed.push(cluster_idx);
+            continue;
+        }
+        let mut candidates = Vec::new();
+        for &other_idx in &placed {
+            let other = &clusters[other_idx].block;
+            let block = &clusters[cluster_idx].block;
+            candidates.extend([
+                (other.x + other.width + clearance, other.y),
+                (other.x - block.width - clearance, other.y),
+                (other.x, other.y + other.height + clearance),
+                (other.x, other.y - block.height - clearance),
+            ]);
+        }
+        candidates.sort();
+        candidates.dedup();
+        let best = candidates
+            .into_iter()
+            .filter(|&(x, y)| {
+                let mut candidate = clusters[cluster_idx].block.clone();
+                candidate.x = x;
+                candidate.y = y;
+                placed
+                    .iter()
+                    .all(|&other| !blocks_overlap(&candidate, &clusters[other].block))
+            })
+            .min_by_key(|&(x, y)| {
+                let center_x = x + clusters[cluster_idx].block.width / 2;
+                let center_y = y + clusters[cluster_idx].block.height / 2;
+                let wire_cost: i128 = placed
+                    .iter()
+                    .map(|&other| {
+                        let key = if cluster_idx < other {
+                            (cluster_idx, other)
+                        } else {
+                            (other, cluster_idx)
+                        };
+                        let weight = weights.get(&key).copied().unwrap_or(0) as i128;
+                        let other_block = &clusters[other].block;
+                        let distance = (center_x - (other_block.x + other_block.width / 2)).abs()
+                            + (center_y - (other_block.y + other_block.height / 2)).abs();
+                        weight * i128::from(distance)
+                    })
+                    .sum();
+                (wire_cost, x.abs() + y.abs(), x, y)
+            })
+            .unwrap_or_else(|| {
+                let right = placed
+                    .iter()
+                    .map(|&idx| clusters[idx].block.x + clusters[idx].block.width)
+                    .max()
+                    .unwrap_or(0);
+                (right + clearance, 0)
+            });
+        clusters[cluster_idx].block.x = best.0;
+        clusters[cluster_idx].block.y = best.1;
+        placed.push(cluster_idx);
+    }
+
+    let min_x = clusters
+        .iter()
+        .map(|cluster| cluster.block.x)
+        .min()
+        .unwrap_or(0);
+    let min_y = clusters
+        .iter()
+        .map(|cluster| cluster.block.y)
+        .min()
+        .unwrap_or(0);
+    for cluster in &mut clusters {
+        cluster.block.x -= min_x;
+        cluster.block.y -= min_y;
+        for &island_id in &cluster.island_ids {
+            islands[island_id].block.x += cluster.block.x;
+            islands[island_id].block.y += cluster.block.y;
+        }
+    }
+    (islands, clusters)
+}
+
+pub fn estimated_manifold_wirelength(manifolds: &[ManifoldNet]) -> i128 {
+    manifolds
+        .iter()
+        .map(|net| {
+            let min_x = net
+                .terminals
+                .iter()
+                .map(|terminal| terminal.x)
+                .min()
+                .unwrap_or(0);
+            let max_x = net
+                .terminals
+                .iter()
+                .map(|terminal| terminal.x)
+                .max()
+                .unwrap_or(0);
+            let min_y = net
+                .terminals
+                .iter()
+                .map(|terminal| terminal.y)
+                .min()
+                .unwrap_or(0);
+            let max_y = net
+                .terminals
+                .iter()
+                .map(|terminal| terminal.y)
+                .max()
+                .unwrap_or(0);
+            i128::from(net.planned_rate.max(1)) * i128::from((max_x - min_x) + (max_y - min_y))
+        })
+        .sum()
+}
+
 fn entity_dims(name: &str, direction: EntityDirection) -> (i32, i32) {
     let (mut width, mut height) =
         oriented_splitter_dims(name, direction).unwrap_or_else(|| entity_size(name));

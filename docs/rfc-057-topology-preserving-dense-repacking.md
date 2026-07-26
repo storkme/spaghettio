@@ -663,3 +663,23 @@ make either experimental composer a production default.
   from 568×32 / 2,078 meter belt tiles to 552×32 / 2,024, while improving
   delivered science from 1.90/s to 1.93/s. Full validation remains the
   transactional admission gate.
+
+- **2026-07-26 — Topology-free recipe-cluster placement implemented.**
+  Rigid machine/inserter islands are now shelf-packed into recipe banks; the
+  banks are placed in 2D by solver-rate-weighted production adjacency.
+  Incumbent row order, corridor positions and segment provenance do not enter
+  the placement. Every resulting island rectangle is pairwise disjoint and
+  all manifold terminals move with its island.
+
+  | Fixture | recipe clusters | clustered rigid bbox | rate-weighted manifold span delta |
+  |---|---:|---:|---:|
+  | `mega-chain-usp2raw` | 22 | 195×110 | −54.1% |
+  | `mega-chain-chem5raw` | 10 | 109×83 | −40.2% |
+  | `mega-chain-pu4raw` | 10 | 163×173 | −63.9% |
+  | `chain-mil5ore` | 9 | 67×77 | −18.0% |
+
+  These are route-ready placements, not yet emitted factories. The result is
+  especially strong on the deep mixed fixtures: it replaces kilometre-wide
+  rows with compact 2D production geometry while also shortening the
+  rate-weighted commodity spans. The next phase must materialise those spans
+  as local flow-sized manifolds and refuse any candidate that cannot route.
