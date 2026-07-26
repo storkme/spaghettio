@@ -9,7 +9,7 @@
 //! orientation) were dropped in the lift; their findings live in the
 //! RFC-048 decision log.
 
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use spaghettio_core::bus::cells::compose::{compose_pairs_calibrated, compose_plastic_calibrated};
 use spaghettio_core::bus::cells::extract::{extract_cell, generate_cell_layout};
 use spaghettio_core::bus::layout;
@@ -1398,8 +1398,9 @@ fn rfc057_machine_constraint_baseline() {
     use spaghettio_core::bus::compaction::{
         blocks_overlap, build_local_manifold_graph, build_manifold_nets, compact_axis, compact_island_axis,
         compact_transport_geometry, estimated_manifold_wirelength, extract_rigid_islands,
-        extract_route_nets, machine_blocks, occupied_bbox, place_local_manifold_nodes,
-        place_recipe_clusters, plan_local_manifolds, CompactAxis, CompactIr,
+        extract_route_nets, machine_blocks, occupied_bbox,
+        place_distributed_local_manifold_nodes, place_recipe_clusters, plan_local_manifolds,
+        route_local_manifold_edges, CompactAxis, CompactIr,
         PlacedMachineSignature, ProductionSignature, RouteTerminalKind,
     };
     use spaghettio_core::common::is_belt_entity;
@@ -1481,7 +1482,53 @@ fn rfc057_machine_constraint_baseline() {
             .iter()
             .map(build_local_manifold_graph)
             .collect();
-        let placed_hubs = place_local_manifold_nodes(&clustered_islands, &local_graphs, 1);
+        let placed_hubs =
+            place_distributed_local_manifold_nodes(&clustered_islands, &local_graphs, 1)
+                .unwrap();
+        if label == "chain-mil5ore" {
+            let routed =
+                route_local_manifold_edges(&clustered_islands, &local_graphs, &placed_hubs)
+                    .unwrap();
+            let edge_count: usize = local_graphs.iter().map(|graph| graph.edges.len()).sum();
+            assert!(
+                routed.unroutable.is_empty(),
+                "{label}: {} manifold edges could not be routed",
+                routed.unroutable.len(),
+            );
+            assert_eq!(routed.routes.len(), edge_count);
+            assert!(routed.routes.iter().all(|route| route.path.len() >= 2));
+            let mut occupied_axes = FxHashMap::<(i32, i32), u8>::default();
+            let mut same_axis_tiles = 0usize;
+            let mut perpendicular_tiles = 0usize;
+            for route in &routed.routes {
+                let mut route_axes = FxHashMap::<(i32, i32), u8>::default();
+                for pair in route.path.windows(2) {
+                    let axis = if pair[0].0 == pair[1].0 { 1 } else { 2 };
+                    *route_axes.entry(pair[0]).or_default() |= axis;
+                    *route_axes.entry(pair[1]).or_default() |= axis;
+                }
+                for (tile, axis) in route_axes {
+                    if let Some(previous) = occupied_axes.get(&tile) {
+                        if previous & axis != 0 {
+                            same_axis_tiles += 1;
+                        } else {
+                            perpendicular_tiles += 1;
+                        }
+                    }
+                    *occupied_axes.entry(tile).or_default() |= axis;
+                }
+            }
+            println!(
+                "{label}: routed {} manifold edges, {} paths cross prior paths, \
+                 conflicts={same_axis_tiles} same-axis/{perpendicular_tiles} perpendicular tiles",
+                routed.routes.len(),
+                routed
+                    .routes
+                    .iter()
+                    .filter(|route| !route.crossings.is_empty())
+                    .count(),
+            );
+        }
         let mut hub_tiles = FxHashSet::default();
         for hub in &placed_hubs {
             for entity in &hub.entities {

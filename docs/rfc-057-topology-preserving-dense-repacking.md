@@ -722,3 +722,27 @@ make either experimental composer a production default.
 
   Terminal and inter-node graph edges are still unrouted; therefore these
   stamps are not exported as factory candidates yet.
+
+- **2026-07-26 — First negotiated manifold routing pass.** Every typed graph
+  edge can now be A*-routed around rigid islands and exact stamped hub
+  footprints; endpoints are resolved from terminal, balancer-port and
+  capacity-lane identities rather than inferred coordinates. Provisional
+  paths remain separate from entities and explicitly report crossings, so
+  unresolved ghost overlap cannot be exported as a valid factory.
+
+  The military fixture routed all 500 edges after replacing the binary-only
+  hierarchy with bounded direct `(n,1)` / `(1,m)` primitives. A fan-four
+  bound was materially better than either extreme: it reduced the military
+  hub from 1,404 to 1,059 entities, while fan ten grew it to 2,928 entities
+  because the throughput-unlimited 1→10 template is internally expensive.
+  Distributed placement now puts merger/distributor sub-hubs near the
+  terminals they serve and leaves only the capacity lanes at the commodity
+  median.
+
+  This is not yet a runnable candidate. On military science, 485 of 500
+  provisional paths touch an earlier path; the current best placement has
+  9,694 same-axis and 1,510 perpendicular conflicting tile claims.
+  Perpendicular crossings can be legalised with underground pairs, but
+  same-axis overlaps require negotiated rerouting or shared-segment graph
+  rewriting. The result rejects direct materialisation and makes crossing
+  legality the next admission gate.

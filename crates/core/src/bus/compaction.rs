@@ -7,6 +7,8 @@
 
 use std::collections::BTreeMap;
 
+use rustc_hash::{FxHashMap, FxHashSet};
+
 use crate::common::{
     dir_to_vec, entity_size, inserter_reach, is_belt_entity, is_inserter, is_surface_belt,
     is_ug_belt, oriented_splitter_dims, ug_max_reach, ug_to_surface_tier, QualityTier,
@@ -1557,14 +1559,21 @@ pub fn plan_local_manifolds(
     plans
 }
 
+const LOCAL_BALANCER_FAN: u32 = 4;
+
 fn merger_stages(mut inputs: u32) -> Vec<BalancerStage> {
     let mut stages = Vec::new();
     while inputs > 1 {
-        let copies = inputs / 2;
+        let fan = inputs.min(LOCAL_BALANCER_FAN);
+        let copies = inputs / fan;
         if copies > 0 {
-            stages.push(BalancerStage { n: 2, m: 1, copies });
+            stages.push(BalancerStage {
+                n: fan,
+                m: 1,
+                copies,
+            });
         }
-        inputs = copies + inputs % 2;
+        inputs = copies + inputs % fan;
     }
     stages
 }
@@ -1573,13 +1582,17 @@ fn distributor_stages(outputs: u32) -> Vec<BalancerStage> {
     if outputs <= 1 {
         return Vec::new();
     }
-    // Grow a possibly ragged binary tree to exactly the requested leaves.
+    // Grow a possibly ragged high-fanout tree to exactly the requested leaves.
     let mut stages = Vec::new();
     let mut leaves = 1;
     while leaves < outputs {
-        let copies = leaves.min(outputs - leaves);
-        stages.push(BalancerStage { n: 1, m: 2, copies });
-        leaves += copies;
+        let fan = (outputs - leaves + 1).min(LOCAL_BALANCER_FAN);
+        stages.push(BalancerStage {
+            n: 1,
+            m: fan,
+            copies: 1,
+        });
+        leaves += fan - 1;
     }
     stages
 }
@@ -1638,32 +1651,29 @@ pub fn build_local_manifold_graph(plan: &LocalManifoldPlan) -> LocalManifoldGrap
         let mut level = 0;
         while merge_frontier.len() > 1 {
             let mut next = Vec::new();
-            let mut chunks = merge_frontier.into_iter();
-            loop {
-                let Some(first) = chunks.next() else {
-                    break;
-                };
-                let Some(second) = chunks.next() else {
-                    next.push(first);
-                    break;
-                };
+            for chunk in merge_frontier.chunks(LOCAL_BALANCER_FAN as usize) {
+                if chunk.len() == 1 {
+                    next.push(chunk[0].clone());
+                    continue;
+                }
                 let node = nodes.len();
                 nodes.push(ManifoldBalancerNode {
                     id: node,
                     lane: group.lane,
                     role: BalancerNodeRole::Merge,
-                    n: 2,
+                    n: chunk.len() as u32,
                     m: 1,
                     level,
                 });
-                edges.push(ManifoldGraphEdge {
-                    from: first,
-                    to: ManifoldEndpoint::NodeInput { node, port: 0 },
-                });
-                edges.push(ManifoldGraphEdge {
-                    from: second,
-                    to: ManifoldEndpoint::NodeInput { node, port: 1 },
-                });
+                for (port, source) in chunk.iter().cloned().enumerate() {
+                    edges.push(ManifoldGraphEdge {
+                        from: source,
+                        to: ManifoldEndpoint::NodeInput {
+                            node,
+                            port: port as u32,
+                        },
+                    });
+                }
                 next.push(ManifoldEndpoint::NodeOutput { node, port: 0 });
             }
             merge_frontier = next;
@@ -1680,21 +1690,24 @@ pub fn build_local_manifold_graph(plan: &LocalManifoldPlan) -> LocalManifoldGrap
         let mut distribute_frontier = vec![(ManifoldEndpoint::LaneOutput(group.lane), 0u32)];
         while distribute_frontier.len() < consumer_count {
             let (source, level) = distribute_frontier.remove(0);
+            let fan = (consumer_count - distribute_frontier.len()).min(LOCAL_BALANCER_FAN as usize)
+                as u32;
             let node = nodes.len();
             nodes.push(ManifoldBalancerNode {
                 id: node,
                 lane: group.lane,
                 role: BalancerNodeRole::Distribute,
                 n: 1,
-                m: 2,
+                m: fan,
                 level,
             });
             edges.push(ManifoldGraphEdge {
                 from: source,
                 to: ManifoldEndpoint::NodeInput { node, port: 0 },
             });
-            distribute_frontier.push((ManifoldEndpoint::NodeOutput { node, port: 0 }, level + 1));
-            distribute_frontier.push((ManifoldEndpoint::NodeOutput { node, port: 1 }, level + 1));
+            for port in 0..fan {
+                distribute_frontier.push((ManifoldEndpoint::NodeOutput { node, port }, level + 1));
+            }
         }
         distribute_frontier.sort_by(|a, b| a.0.cmp(&b.0));
         for (source, terminal) in distribute_frontier
@@ -1735,7 +1748,206 @@ pub struct PlacedLocalManifold {
     pub entities: Vec<PlacedEntity>,
 }
 
-/// Stamp all `(2,1)` / `(1,2)` nodes into collision-free local hubs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RoutedManifoldEdge {
+    pub item: String,
+    pub edge: ManifoldGraphEdge,
+    /// Manhattan-adjacent tiles, including both graph endpoints.
+    pub path: Vec<(i32, i32)>,
+    /// Tiles already claimed by an earlier edge. These require a shared
+    /// segment, an underground crossing, or negotiated rerouting before the
+    /// path can be materialised.
+    pub crossings: Vec<(i32, i32)>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ManifoldRoutingResult {
+    pub routes: Vec<RoutedManifoldEdge>,
+    pub unroutable: Vec<(String, ManifoldGraphEdge)>,
+}
+
+/// Route every explicit edge in the local manifold graphs.
+///
+/// This is deliberately a topology result, not yet belt geometry: paths may
+/// overlap earlier paths and report those tiles as crossings. A later
+/// transactional materialiser must resolve each crossing before committing
+/// entities. Keeping this boundary explicit prevents provisional ghost belts
+/// from masquerading as a valid factory.
+pub fn route_local_manifold_edges(
+    islands: &[RigidIsland],
+    graphs: &[LocalManifoldGraph],
+    hubs: &[PlacedLocalManifold],
+) -> Result<ManifoldRoutingResult, String> {
+    use crate::astar::ghost_astar;
+
+    if graphs.len() != hubs.len() {
+        return Err(format!(
+            "manifold graph/hub count differs: {} != {}",
+            graphs.len(),
+            hubs.len()
+        ));
+    }
+
+    let mut points = Vec::new();
+    for island in islands {
+        points.push((island.block.x, island.block.y));
+        points.push((
+            island.block.x + island.block.width - 1,
+            island.block.y + island.block.height - 1,
+        ));
+    }
+    for hub in hubs {
+        points.push((hub.hub.x, hub.hub.y));
+        points.push((
+            hub.hub.x + hub.hub.width - 1,
+            hub.hub.y + hub.hub.height - 1,
+        ));
+    }
+    for (graph, hub) in graphs.iter().zip(hubs) {
+        if graph.item != hub.item {
+            return Err(format!(
+                "manifold graph/hub item differs: {} != {}",
+                graph.item, hub.item
+            ));
+        }
+        for edge in &graph.edges {
+            points.push(manifold_endpoint_point(&edge.from, hub)?);
+            points.push(manifold_endpoint_point(&edge.to, hub)?);
+        }
+    }
+    if points.is_empty() {
+        return Ok(ManifoldRoutingResult::default());
+    }
+
+    const PADDING: i32 = 8;
+    let min_x = points.iter().map(|point| point.0).min().unwrap() - PADDING;
+    let min_y = points.iter().map(|point| point.1).min().unwrap() - PADDING;
+    let max_x = points.iter().map(|point| point.0).max().unwrap() + PADDING;
+    let max_y = points.iter().map(|point| point.1).max().unwrap() + PADDING;
+    let shift = (-min_x, -min_y);
+    let width = max_x - min_x + 1;
+    let height = max_y - min_y + 1;
+    let shifted = |point: (i32, i32)| (point.0 + shift.0, point.1 + shift.1);
+
+    // Island blocks are conservative hard reservations: they include the
+    // machine/inserter geometry and the deliberately retained local space
+    // between them. Hub reservations use exact stamped entity footprints so
+    // paths can use the otherwise empty interior of a large hub block.
+    let mut hard = FxHashSet::default();
+    for island in islands {
+        for x in island.block.x..island.block.x + island.block.width {
+            for y in island.block.y..island.block.y + island.block.height {
+                hard.insert(shifted((x, y)));
+            }
+        }
+    }
+    for hub in hubs {
+        for entity in &hub.entities {
+            let (entity_width, entity_height) = entity_dims(&entity.name, entity.direction);
+            for x in entity.x..entity.x + entity_width {
+                for y in entity.y..entity.y + entity_height {
+                    hard.insert(shifted((x, y)));
+                }
+            }
+        }
+    }
+
+    let mut claimed = FxHashSet::default();
+    let mut axis_costs = FxHashMap::default();
+    let mut result = ManifoldRoutingResult::default();
+    for (graph, hub) in graphs.iter().zip(hubs) {
+        for edge in &graph.edges {
+            let start = manifold_endpoint_point(&edge.from, hub)?;
+            let goal = manifold_endpoint_point(&edge.to, hub)?;
+            let shifted_start = shifted(start);
+            let shifted_goal = shifted(goal);
+            let mut edge_hard = hard.clone();
+            edge_hard.remove(&shifted_start);
+            edge_hard.remove(&shifted_goal);
+            let Some((path, crossings)) = ghost_astar(
+                shifted_start,
+                shifted_goal,
+                &edge_hard,
+                &claimed,
+                width,
+                height,
+                2,
+                &axis_costs,
+            ) else {
+                result.unroutable.push((graph.item.clone(), edge.clone()));
+                continue;
+            };
+            let path: Vec<_> = path
+                .into_iter()
+                .map(|point| (point.0 - shift.0, point.1 - shift.1))
+                .collect();
+            let crossings: Vec<_> = crossings
+                .into_iter()
+                .map(|point| (point.0 - shift.0, point.1 - shift.1))
+                .collect();
+            claimed.extend(path.iter().copied().map(shifted));
+            // Prefer clean parallel channels and cheap perpendicular
+            // crossings over running along an already claimed belt. This is
+            // the first negotiated-routing pass: a later legalizer can turn
+            // an isolated perpendicular crossing into an underground pair,
+            // whereas a same-axis overlap cannot be materialised directly.
+            for pair in path.windows(2) {
+                let from = shifted(pair[0]);
+                let to = shifted(pair[1]);
+                let horizontal = pair[0].1 == pair[1].1;
+                for tile in [from, to] {
+                    let penalty = axis_costs.entry(tile).or_insert((0u32, 0u32));
+                    if horizontal {
+                        penalty.1 = penalty.1.max(4);
+                    } else {
+                        penalty.0 = penalty.0.max(4);
+                    }
+                }
+            }
+            result.routes.push(RoutedManifoldEdge {
+                item: graph.item.clone(),
+                edge: edge.clone(),
+                path,
+                crossings,
+            });
+        }
+    }
+    Ok(result)
+}
+
+fn manifold_endpoint_point(
+    endpoint: &ManifoldEndpoint,
+    hub: &PlacedLocalManifold,
+) -> Result<(i32, i32), String> {
+    match endpoint {
+        ManifoldEndpoint::Terminal(terminal) => Ok((terminal.x, terminal.y)),
+        ManifoldEndpoint::NodeInput { node, port } => hub
+            .nodes
+            .get(*node)
+            .and_then(|placed| placed.input_ports.get(*port as usize))
+            .copied()
+            .ok_or_else(|| format!("{} node {node} input port {port} is missing", hub.item)),
+        ManifoldEndpoint::NodeOutput { node, port } => hub
+            .nodes
+            .get(*node)
+            .and_then(|placed| placed.output_ports.get(*port as usize))
+            .copied()
+            .ok_or_else(|| format!("{} node {node} output port {port} is missing", hub.item)),
+        ManifoldEndpoint::LaneInput(lane) => hub
+            .lane_inputs
+            .get(*lane as usize)
+            .copied()
+            .ok_or_else(|| format!("{} lane {lane} input is missing", hub.item)),
+        ManifoldEndpoint::LaneOutput(lane) => hub
+            .lane_outputs
+            .get(*lane as usize)
+            .copied()
+            .ok_or_else(|| format!("{} lane {lane} output is missing", hub.item)),
+    }
+}
+
+/// Stamp the largest available `(n,1)` / `(1,m)` nodes into collision-free
+/// local hubs.
 /// Inter-node and terminal edges remain explicit in [`LocalManifoldGraph`]
 /// for the negotiated router.
 pub fn place_local_manifold_nodes(
@@ -1750,50 +1962,55 @@ pub fn place_local_manifold_nodes(
     let clearance = clearance.max(0);
     let mut result: Vec<PlacedLocalManifold> = Vec::new();
     for (graph_idx, graph) in graphs.iter().enumerate() {
+        let mut level_dims = BTreeMap::<(u32, u8, u32), (i32, i32)>::new();
+        for node in &graph.nodes {
+            let role = match node.role {
+                BalancerNodeRole::Merge => 0,
+                BalancerNodeRole::Distribute => 1,
+            };
+            let template = templates
+                .get(&(node.n, node.m))
+                .expect("planned local balancer template missing");
+            let dims = level_dims.entry((node.lane, role, node.level)).or_default();
+            if dims.0 > 0 {
+                dims.0 += clearance;
+            }
+            dims.0 += template.width as i32;
+            dims.1 = dims.1.max(template.height as i32);
+        }
         let mut lane_widths = Vec::new();
-        let mut merge_levels = 0u32;
-        let mut distribute_levels = 0u32;
+        let mut merge_height = 0;
+        let mut distribute_height = 0;
         for lane in 0..graph.belt_count {
-            let max_level_width = graph
-                .nodes
-                .iter()
-                .filter(|node| node.lane == lane)
-                .fold(BTreeMap::<(u8, u32), usize>::new(), |mut counts, node| {
-                    let role = match node.role {
-                        BalancerNodeRole::Merge => 0,
-                        BalancerNodeRole::Distribute => 1,
-                    };
-                    *counts.entry((role, node.level)).or_default() += 1;
-                    counts
-                })
-                .into_values()
-                .max()
-                .unwrap_or(1);
-            lane_widths.push((max_level_width as i32 * 3).max(3));
-            merge_levels = merge_levels.max(
-                graph
-                    .nodes
+            lane_widths.push(
+                level_dims
                     .iter()
-                    .filter(|node| node.lane == lane && node.role == BalancerNodeRole::Merge)
-                    .map(|node| node.level + 1)
+                    .filter(|((node_lane, _, _), _)| *node_lane == lane)
+                    .map(|(_, dims)| dims.0)
                     .max()
-                    .unwrap_or(0),
+                    .unwrap_or(1)
+                    .max(1),
             );
-            distribute_levels = distribute_levels.max(
-                graph
-                    .nodes
+            let role_height = |role: u8| {
+                let levels: Vec<_> = level_dims
                     .iter()
-                    .filter(|node| node.lane == lane && node.role == BalancerNodeRole::Distribute)
-                    .map(|node| node.level + 1)
-                    .max()
-                    .unwrap_or(0),
-            );
+                    .filter(|((node_lane, node_role, _), _)| {
+                        *node_lane == lane && *node_role == role
+                    })
+                    .map(|((_, _, level), (_, height))| (*level, *height))
+                    .collect();
+                let count = levels.len();
+                levels.into_iter().map(|(_, height)| height).sum::<i32>()
+                    + clearance * count.saturating_sub(1) as i32
+            };
+            merge_height = merge_height.max(role_height(0));
+            distribute_height = distribute_height.max(role_height(1));
         }
         let width = lane_widths.iter().sum::<i32>()
             + clearance * (lane_widths.len().saturating_sub(1) as i32);
-        let lane_y = merge_levels as i32 * 4;
+        let lane_y = merge_height;
         let distribute_y = lane_y + 2;
-        let height = distribute_y + distribute_levels as i32 * 4 + 3;
+        let height = distribute_y + distribute_height.max(1);
         let preferred_x = graph.hub.x + graph.hub.width / 2 - width / 2;
         let preferred_y = graph.hub.y + graph.hub.height / 2 - height / 2;
         let mut hub = None;
@@ -1843,7 +2060,7 @@ pub fn place_local_manifold_nodes(
             lane_starts.push(cursor);
             cursor += *lane_width + clearance;
         }
-        let mut level_ordinals = BTreeMap::<(u32, u8, u32), i32>::new();
+        let mut level_x_offsets = BTreeMap::<(u32, u8, u32), i32>::new();
         let mut placed_nodes = Vec::new();
         let mut entities = Vec::new();
         for node in &graph.nodes {
@@ -1851,20 +2068,33 @@ pub fn place_local_manifold_nodes(
                 BalancerNodeRole::Merge => 0,
                 BalancerNodeRole::Distribute => 1,
             };
-            let ordinal = level_ordinals
-                .entry((node.lane, role, node.level))
-                .or_default();
-            let origin_x = lane_starts[node.lane as usize] + *ordinal * 3;
-            let origin_y = hub.y
-                + if node.role == BalancerNodeRole::Merge {
-                    node.level as i32 * 4
-                } else {
-                    distribute_y + node.level as i32 * 4
-                };
-            *ordinal += 1;
             let template = templates
                 .get(&(node.n, node.m))
-                .expect("planned primitive balancer template missing");
+                .expect("planned local balancer template missing");
+            let x_offset = level_x_offsets
+                .entry((node.lane, role, node.level))
+                .or_default();
+            let origin_x = lane_starts[node.lane as usize] + *x_offset;
+            let origin_y = hub.y
+                + if node.role == BalancerNodeRole::Merge {
+                    level_dims
+                        .iter()
+                        .filter(|((lane, node_role, level), _)| {
+                            *lane == node.lane && *node_role == role && *level < node.level
+                        })
+                        .map(|(_, (_, height))| *height + clearance)
+                        .sum::<i32>()
+                } else {
+                    distribute_y
+                        + level_dims
+                            .iter()
+                            .filter(|((lane, node_role, level), _)| {
+                                *lane == node.lane && *node_role == role && *level < node.level
+                            })
+                            .map(|(_, (_, height))| *height + clearance)
+                            .sum::<i32>()
+                };
+            *x_offset += template.width as i32 + clearance;
             let mut stamped = template.stamp(
                 origin_x,
                 origin_y,
@@ -1928,6 +2158,288 @@ pub fn place_local_manifold_nodes(
         });
     }
     result
+}
+
+/// Place manifold primitives near the terminals they aggregate instead of in
+/// one commodity-wide rectangle. Leaf mergers sit near their producer group;
+/// distributors sit near the consumers reachable from their outputs. Only
+/// the capacity lanes remain at the commodity median.
+pub fn place_distributed_local_manifold_nodes(
+    islands: &[RigidIsland],
+    graphs: &[LocalManifoldGraph],
+    clearance: i32,
+) -> Result<Vec<PlacedLocalManifold>, String> {
+    use crate::bus::balancer::{splitter_for_belt, underground_for_belt};
+    use crate::bus::balancer_library::balancer_templates;
+
+    let templates = balancer_templates();
+    let clearance = clearance.max(0);
+    let mut reserved: Vec<CompactBlock> =
+        islands.iter().map(|island| island.block.clone()).collect();
+    let mut result = Vec::new();
+    for (graph_idx, graph) in graphs.iter().enumerate() {
+        let reservation_start = reserved.len();
+        let terminals: Vec<_> = graph
+            .edges
+            .iter()
+            .flat_map(|edge| [&edge.from, &edge.to])
+            .filter_map(|endpoint| match endpoint {
+                ManifoldEndpoint::Terminal(terminal) => Some((terminal.x, terminal.y)),
+                _ => None,
+            })
+            .collect();
+        let median = coordinate_median(&terminals);
+        let lane_width = graph.belt_count.max(1) as i32;
+        let lane_block = nearest_free_block(
+            CompactBlock {
+                id: graph_idx,
+                x: median.0 - lane_width / 2,
+                y: median.1 - 1,
+                width: lane_width,
+                height: 2,
+            },
+            &reserved,
+            clearance,
+            1024,
+        )
+        .ok_or_else(|| format!("{} has no collision-free lane block", graph.item))?;
+        reserved.push(lane_block.clone());
+        let lane_inputs: Vec<_> = (0..graph.belt_count)
+            .map(|lane| (lane_block.x + lane as i32, lane_block.y))
+            .collect();
+        let lane_outputs: Vec<_> = lane_inputs.iter().map(|&(x, y)| (x, y + 1)).collect();
+        let mut entities = Vec::new();
+        for (lane, (&input, &output)) in lane_inputs.iter().zip(&lane_outputs).enumerate() {
+            for y in input.1..=output.1 {
+                entities.push(PlacedEntity {
+                    name: "express-transport-belt".into(),
+                    x: input.0,
+                    y,
+                    direction: EntityDirection::South,
+                    carries: Some(graph.item.clone()),
+                    segment_id: Some(format!("compact-lane:{}:{lane}", graph.item)),
+                    ..Default::default()
+                });
+            }
+        }
+
+        let mut placed_nodes: Vec<PlacedManifoldNode> = Vec::new();
+        for node in &graph.nodes {
+            let template = templates
+                .get(&(node.n, node.m))
+                .ok_or_else(|| format!("missing local template ({},{})", node.n, node.m))?;
+            let desired_points = match node.role {
+                BalancerNodeRole::Merge => graph
+                    .edges
+                    .iter()
+                    .filter_map(|edge| match &edge.to {
+                        ManifoldEndpoint::NodeInput { node: target, .. } if *target == node.id => {
+                            partial_endpoint_point(
+                                &edge.from,
+                                &placed_nodes,
+                                &lane_inputs,
+                                &lane_outputs,
+                            )
+                        }
+                        _ => None,
+                    })
+                    .collect(),
+                BalancerNodeRole::Distribute => descendant_terminal_points(graph, node.id),
+            };
+            let center = if desired_points.is_empty() {
+                median
+            } else {
+                coordinate_median(&desired_points)
+            };
+            let block = nearest_free_block(
+                CompactBlock {
+                    id: node.id,
+                    x: center.0 - template.width as i32 / 2,
+                    y: center.1 - template.height as i32 / 2,
+                    width: template.width as i32,
+                    height: template.height as i32,
+                },
+                &reserved,
+                clearance,
+                1024,
+            )
+            .ok_or_else(|| {
+                format!(
+                    "{} node {} ({},{}) has no collision-free placement",
+                    graph.item, node.id, node.n, node.m
+                )
+            })?;
+            reserved.push(block.clone());
+            let mut stamped = template.stamp(
+                block.x,
+                block.y,
+                "express-transport-belt",
+                splitter_for_belt("express-transport-belt"),
+                underground_for_belt("express-transport-belt"),
+                Some(&graph.item),
+            );
+            for entity in &mut stamped {
+                entity.segment_id = Some(format!(
+                    "compact-hub:{}:{}:{}",
+                    graph.item, node.lane, node.id
+                ));
+            }
+            entities.extend(stamped);
+            placed_nodes.push(PlacedManifoldNode {
+                node_id: node.id,
+                origin: (block.x, block.y),
+                input_ports: template
+                    .input_tiles
+                    .iter()
+                    .map(|&(x, y)| (block.x + x, block.y + y))
+                    .collect(),
+                output_ports: template
+                    .output_tiles
+                    .iter()
+                    .map(|&(x, y)| (block.x + x, block.y + y))
+                    .collect(),
+            });
+        }
+        placed_nodes.sort_by_key(|node| node.node_id);
+        let manifold_blocks = &reserved[reservation_start..];
+        let min_x = manifold_blocks.iter().map(|block| block.x).min().unwrap();
+        let min_y = manifold_blocks.iter().map(|block| block.y).min().unwrap();
+        let max_x = manifold_blocks
+            .iter()
+            .map(|block| block.x + block.width)
+            .max()
+            .unwrap();
+        let max_y = manifold_blocks
+            .iter()
+            .map(|block| block.y + block.height)
+            .max()
+            .unwrap();
+        result.push(PlacedLocalManifold {
+            item: graph.item.clone(),
+            hub: CompactBlock {
+                id: graph_idx,
+                x: min_x,
+                y: min_y,
+                width: max_x - min_x,
+                height: max_y - min_y,
+            },
+            nodes: placed_nodes,
+            lane_inputs,
+            lane_outputs,
+            entities,
+        });
+    }
+    Ok(result)
+}
+
+fn partial_endpoint_point(
+    endpoint: &ManifoldEndpoint,
+    nodes: &[PlacedManifoldNode],
+    lane_inputs: &[(i32, i32)],
+    lane_outputs: &[(i32, i32)],
+) -> Option<(i32, i32)> {
+    match endpoint {
+        ManifoldEndpoint::Terminal(terminal) => Some((terminal.x, terminal.y)),
+        ManifoldEndpoint::NodeInput { node, port } => nodes
+            .get(*node)
+            .and_then(|placed| placed.input_ports.get(*port as usize))
+            .copied(),
+        ManifoldEndpoint::NodeOutput { node, port } => nodes
+            .get(*node)
+            .and_then(|placed| placed.output_ports.get(*port as usize))
+            .copied(),
+        ManifoldEndpoint::LaneInput(lane) => lane_inputs.get(*lane as usize).copied(),
+        ManifoldEndpoint::LaneOutput(lane) => lane_outputs.get(*lane as usize).copied(),
+    }
+}
+
+fn descendant_terminal_points(graph: &LocalManifoldGraph, node: usize) -> Vec<(i32, i32)> {
+    let mut frontier: Vec<_> = graph
+        .nodes
+        .get(node)
+        .into_iter()
+        .flat_map(|placed| {
+            (0..placed.m).map(move |port| ManifoldEndpoint::NodeOutput { node, port })
+        })
+        .collect();
+    let mut visited = Vec::new();
+    let mut terminals = Vec::new();
+    while let Some(endpoint) = frontier.pop() {
+        if visited.contains(&endpoint) {
+            continue;
+        }
+        visited.push(endpoint.clone());
+        for edge in graph.edges.iter().filter(|edge| edge.from == endpoint) {
+            match &edge.to {
+                ManifoldEndpoint::Terminal(terminal) => terminals.push((terminal.x, terminal.y)),
+                ManifoldEndpoint::NodeInput { node, .. } => {
+                    if let Some(next) = graph.nodes.get(*node) {
+                        frontier.extend(
+                            (0..next.m)
+                                .map(|port| ManifoldEndpoint::NodeOutput { node: *node, port }),
+                        );
+                    }
+                }
+                _ => frontier.push(edge.to.clone()),
+            }
+        }
+    }
+    terminals
+}
+
+fn coordinate_median(points: &[(i32, i32)]) -> (i32, i32) {
+    if points.is_empty() {
+        return (0, 0);
+    }
+    let mut xs: Vec<_> = points.iter().map(|point| point.0).collect();
+    let mut ys: Vec<_> = points.iter().map(|point| point.1).collect();
+    xs.sort_unstable();
+    ys.sort_unstable();
+    (xs[xs.len() / 2], ys[ys.len() / 2])
+}
+
+fn nearest_free_block(
+    preferred: CompactBlock,
+    reserved: &[CompactBlock],
+    clearance: i32,
+    max_radius: i32,
+) -> Option<CompactBlock> {
+    for radius in 0..=max_radius {
+        for dx in -radius..=radius {
+            for dy in [-radius, radius] {
+                let mut candidate = preferred.clone();
+                candidate.x += dx;
+                candidate.y += dy;
+                if block_clears_all(&candidate, reserved, clearance) {
+                    return Some(candidate);
+                }
+            }
+        }
+        for dy in (-radius + 1)..radius {
+            for dx in [-radius, radius] {
+                let mut candidate = preferred.clone();
+                candidate.x += dx;
+                candidate.y += dy;
+                if block_clears_all(&candidate, reserved, clearance) {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn block_clears_all(block: &CompactBlock, reserved: &[CompactBlock], clearance: i32) -> bool {
+    let expanded = CompactBlock {
+        id: block.id,
+        x: block.x - clearance,
+        y: block.y - clearance,
+        width: block.width + clearance * 2,
+        height: block.height + clearance * 2,
+    };
+    reserved
+        .iter()
+        .all(|other| !blocks_overlap(&expanded, other))
 }
 
 fn placed_hub_is_free(
@@ -2605,20 +3117,23 @@ mod tests {
     }
 
     #[test]
-    fn binary_balancer_hierarchies_cover_arbitrary_terminal_counts() {
+    fn bounded_balancer_hierarchies_cover_arbitrary_terminal_counts() {
         for count in 0..=129 {
             let mergers = merger_stages(count);
             let mut remaining = count;
             for stage in &mergers {
-                assert_eq!((stage.n, stage.m), (2, 1));
-                remaining = remaining - stage.copies * 2 + stage.copies;
+                assert_eq!(stage.m, 1);
+                assert!((2..=LOCAL_BALANCER_FAN).contains(&stage.n));
+                remaining = remaining - stage.copies * stage.n + stage.copies * stage.m;
             }
             assert_eq!(remaining, count.min(1));
 
             let distributors = distributor_stages(count);
-            let leaves = distributors
-                .iter()
-                .fold(1u32, |leaves, stage| leaves + stage.copies);
+            let leaves = distributors.iter().fold(1u32, |leaves, stage| {
+                assert_eq!(stage.n, 1);
+                assert!((2..=LOCAL_BALANCER_FAN).contains(&stage.m));
+                leaves - stage.copies * stage.n + stage.copies * stage.m
+            });
             assert_eq!(leaves, count.max(1));
             assert!(mergers
                 .iter()
