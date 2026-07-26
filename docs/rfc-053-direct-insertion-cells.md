@@ -1880,3 +1880,53 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   component" and FAILED correctly: `plastic-bar` runs several deliberately
   isolated fluid networks, and a UG pair splits a run's surface tiles by
   design. The over-assertion was mine; the code was right.*
+
+- *2026-07-26 — **The straddle emission was one-sided; now it is
+  slot-based, and `copper-cable → space-platform-foundation` ships.**
+  353 corpus instances, the pair the previous entry named as the smallest
+  well-defined piece of work left.*
+
+  *The defect, restated precisely: `plan_row_straddle` walked producers and
+  appended each one's consumers immediately AFTER it. Every producer has
+  TWO neighbours, so the gap between `P_i` and `P_{i+1}` holds up to two
+  consumers, one hugging each side — an append-only walk can only ever
+  fill the right. SPF balances exactly (4 producers at 5.0/s, 8 consumers
+  at 2.5/s, one producer feeding two consumers), and the loop built
+  `P0 C0 C1 …` where `C1` touched no producer at all. The adjacency
+  invariant then correctly refused what the loop had built: the geometry
+  was always feasible, the CONSTRUCTION could not express it.*
+
+  *Replaced with explicit slot assignment — each producer has a left slot
+  and a right slot; a consumer fed by both `P_i` and `P_{i+1}` takes the
+  whole gap and marks it shared. The one subtlety worth keeping: a
+  single-fed consumer takes the LEFT slot only when its producer must hold
+  two and this is its first. Preferring left unconditionally would have
+  flipped 1:1 rows from `PCPCPC…` to `CPCPCP…` and rewritten the
+  sim-verified furnace pair for no reason; preferring right unconditionally
+  reproduces the original bug.*
+
+  *Measured against `origin/main` rather than assumed:*
+
+  | case | before | after |
+  |---|---|---|
+  | `space-platform-foundation` @1/s | `cell=0`, 30×18, **4 warnings** | `cell=181`, 53×11, **0/0** |
+  | `space-platform-foundation` @2/s | `cell=0`, 54×18, **8 warnings** | `cell=365`, 101×11, **0/0** |
+  | `copper-cable → EC` @10/s | `cell=153`, 77×27 | identical |
+  | `casting-copper-cable → EC` @10/s | `cell=141`, 45×13 | identical |
+  | `steel-plate` from ore @5/s | `cell=440`, 125×14 | identical |
+
+  *`steel-plate` @10/s is `cell=0` in BOTH — pre-existing, not a
+  regression. Checked by restoring the old file and re-running, because
+  "the tests still pass" would not have distinguished the two.*
+
+  ***Sim: PASS.*** *`space-platform-foundation` @2/s produced **2.01/s
+  against 2.00 planned (+0.3%)**, delivered 1.97 (−1.3%, i.e. 98.7% —
+  above the goal's 98% bar), converged, **24/24 machines working** with
+  nothing starved or backed up. That makes FIVE corpus pairs satisfying
+  all three clauses of the goal.*
+
+  *Above 2/s the pair falls back to the bus and still validates clean, so
+  the ceiling is graceful. The remaining top-10 blocker is unchanged and
+  unaffected by this: three pairs (1,029 instances) want a consumer with
+  three or more solid inputs, which is the face-allocation problem, not a
+  straddle one.*
