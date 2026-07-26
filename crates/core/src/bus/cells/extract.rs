@@ -57,6 +57,9 @@ pub fn generate_cell_layout_with_capacity(
     // overflow the moment the default flipped).
     let opts = layout::LayoutOptions {
         cell_composition: super::CellComposition::Off,
+        // Same recursion guard, for the same reason: a `Candidate` DI
+        // default would spawn a DI candidate inside every cell sub-solve.
+        direct_insertion: crate::bus::di_cell::DirectInsertion::Off,
         inserter_capacity,
         ..Default::default()
     };

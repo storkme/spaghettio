@@ -8117,7 +8117,7 @@ fn di_row_cell_fluid_fed_producer_validates_clean() {
     let layout = layout::build_bus_layout(
         &sr,
         layout::LayoutOptions {
-            direct_insertion: true,
+            direct_insertion: spaghettio_core::bus::di_cell::DirectInsertion::Forced,
             max_belt_tier: Some("express-transport-belt".into()),
             ..Default::default()
         },
@@ -8168,7 +8168,7 @@ fn di_cell_output_belt_exemption_does_not_cover_the_consumer() {
     let mut layout = layout::build_bus_layout(
         &sr,
         layout::LayoutOptions {
-            direct_insertion: true,
+            direct_insertion: spaghettio_core::bus::di_cell::DirectInsertion::Forced,
             max_belt_tier: Some("express-transport-belt".into()),
             ..Default::default()
         },
@@ -8242,7 +8242,7 @@ fn fluid_branch_meeting_its_own_pipe_is_not_a_blocked_tile() {
         let l = layout::build_bus_layout(
             &sr,
             layout::LayoutOptions {
-                direct_insertion: *di,
+                direct_insertion: spaghettio_core::bus::di_cell::DirectInsertion::forced(*di),
                 max_belt_tier: Some("express-transport-belt".into()),
                 ..Default::default()
             },
@@ -8319,7 +8319,7 @@ fn di_cell_kc3_export() {
     // artifact and a DI artifact look identical in a single run.
     let di = std::env::var("SPAGHETTIO_KC3_DI").as_deref() != Ok("0");
     let opts = layout::LayoutOptions {
-        direct_insertion: di,
+        direct_insertion: spaghettio_core::bus::di_cell::DirectInsertion::forced(di),
         max_belt_tier: Some(
             std::env::var("KC3_BELT").unwrap_or_else(|_| "transport-belt".into()),
         ),
@@ -8485,7 +8485,7 @@ fn di_cell_coverage_sweep() {
         };
         let ncoup = sr.di_couplings.len();
         let opts = layout::LayoutOptions {
-            direct_insertion: true,
+            direct_insertion: spaghettio_core::bus::di_cell::DirectInsertion::Forced,
             max_belt_tier: Some(
                 std::env::var("SWEEP_BELT").unwrap_or_else(|_| "transport-belt".into()),
             ),

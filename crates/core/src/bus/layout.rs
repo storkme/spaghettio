@@ -125,14 +125,17 @@ pub struct LayoutOptions {
     /// `CellComposedCandidate` in the decomposition search). Nothing
     /// reads this in Phase A; it exists so options plumbing is stable.
     pub cell_composition: crate::bus::cells::CellComposition,
-    /// Direct-insertion layout (RFC decomposition-search Phase 3):
-    /// when `true`, the placer co-locates producer↔consumer pairs
-    /// flagged by the solver's `di_couplings` — placing them adjacent
-    /// (no inter-row gap) so the ghost router's trunk segment is
-    /// minimal. Default `false` (byte-identical to pre-DI layouts).
-    /// The solver always populates `di_couplings`; this flag only
-    /// controls whether the placer acts on them.
-    pub direct_insertion: bool,
+    /// Direct-insertion mode (RFC-053). The placer co-locates
+    /// producer↔consumer pairs flagged by the solver's `di_couplings`,
+    /// placing them adjacent with no belt for the coupled item.
+    ///
+    /// Default `Candidate`: the native pass runs DI-FREE and a separate
+    /// candidate builds the DI variant, which may only win on a strict
+    /// quality improvement. See [`crate::bus::di_cell::DirectInsertion`]
+    /// for why a bare `true` is not safe — it was tried and measured.
+    /// The solver always populates `di_couplings`; this only controls
+    /// whether the placer acts on them.
+    pub direct_insertion: crate::bus::di_cell::DirectInsertion,
     /// RFC-057 topology-preserving post-layout compaction. Experimental and
     /// default off, so the normal pipeline remains byte-identical.
     pub compact_layout: bool,
@@ -164,7 +167,12 @@ impl Default for LayoutOptions {
             // fails acceptance; every bus-successful config is
             // bit-identical (goldens gate this).
             cell_composition: crate::bus::cells::CellComposition::Candidate,
-            direct_insertion: false,
+            // FLIPPED to Candidate 2026-07-26 (RFC-053, user-approved).
+            // NOT to `Forced`: that was tried the same session and broke
+            // 8 tests against a green baseline. Under `Candidate` the
+            // native pass is DI-free, so every layout DI does not
+            // strictly improve stays bit-identical.
+            direct_insertion: crate::bus::di_cell::DirectInsertion::Candidate,
             compact_layout: false,
         }
     }
@@ -708,7 +716,7 @@ fn layout_pass(
         Some(&final_output_items),
         retry_extra_gaps,
         opts.row_layout,
-        opts.direct_insertion,
+        opts.direct_insertion.placer_acts(),
         &solver_result.di_couplings,
         &stacking_ctx,
     );
@@ -770,7 +778,7 @@ fn layout_pass(
                 Some(&final_output_items),
                 Some(&merged_gaps),
                 opts.row_layout,
-                opts.direct_insertion,
+                opts.direct_insertion.placer_acts(),
                 &solver_result.di_couplings,
                 &stacking_ctx,
             );
@@ -3194,7 +3202,7 @@ mod tests {
         );
 
         let opts = LayoutOptions {
-            direct_insertion: true,
+            direct_insertion: crate::bus::di_cell::DirectInsertion::Forced,
             ..Default::default()
         };
         let layout = build_bus_layout(&sr, opts).expect("layout should succeed");
@@ -3358,7 +3366,7 @@ mod tests {
             let layout = build_bus_layout(
                 &sr,
                 LayoutOptions {
-                    direct_insertion: true,
+                    direct_insertion: crate::bus::di_cell::DirectInsertion::Forced,
                     inserter_capacity: level,
                     ..Default::default()
                 },

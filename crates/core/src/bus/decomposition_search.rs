@@ -794,7 +794,11 @@ pub fn select_best_decomposition(
     // eligibility-gated, and catch_unwind — the composer's internal
     // asserts must degrade to the bus candidates, never abort the solve.
     let try_cells = opts.cell_composition == crate::bus::cells::CellComposition::Candidate
-        && !opts.direct_insertion // DI needs both rows in one place_rows call
+        // DI needs both rows in one place_rows call. Only `Forced`
+        // actually puts DI in the native pass, so `Candidate` leaves
+        // cell-composition free to compete as its own candidate — the
+        // two are alternatives, not exclusions.
+        && opts.direct_insertion != crate::bus::di_cell::DirectInsertion::Forced
         && opts
             .max_belt_tier
             .as_deref()
