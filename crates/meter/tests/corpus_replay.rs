@@ -31,7 +31,27 @@ use std::path::PathBuf;
 
 use spaghettio_meter::{Factory, Manifest};
 
-const WARMUP: u64 = 60 * 60 * 2;
+/// Warmup before measurement starts.
+///
+/// **Was 2 game-minutes, and that was measuring transients as rates.** A
+/// 46-machine chain with deep ingredient buffers is nowhere near steady
+/// state by then: `chain-mil5plates-d0` reads −38.4% at 2 minutes, −10.2%
+/// at 5, and +0.7% once actually converged. The entire "military family"
+/// deficit that tripped KC1 was buffer fill being read as throughput.
+///
+/// 80 game-minutes, and the margin is deliberate. `chain-mil5ore-d2` (146
+/// machines, the largest fixture) reads −13.8% at a 40-minute warmup and
+/// −1.3% at 80 — **while reporting `converged: true` at 40**. So the
+/// convergence detector is not sufficient on its own here: three
+/// consecutive 1-minute windows within 2% cannot distinguish steady state
+/// from a large factory filling slowly and smoothly, which is the same
+/// limitation `RunParams::with_warmup` documents for the real harness.
+///
+/// The flag is therefore a floor, not a ceiling: it reliably catches
+/// "obviously still filling", and a generous fixed warmup covers the rest.
+/// Runtime is not a reason to shave it — the whole corpus replays in
+/// seconds.
+const WARMUP: u64 = 60 * 60 * 80;
 const WINDOW: u64 = 60 * 60 * 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -136,12 +156,29 @@ const CORPUS: &[Entry] = &[
         source: "cell-sim-registry.json chem5 PASS (5.00/5.00 exact)",
         fluid_dependent: true,
     },
+    // KNOWN STALE, and deliberately not corrected here (2026-07-26).
+    //
+    // Re-measured in real Factorio at `--warmup 288000`: **+0.7%, 146/146
+    // machines working, PASS**. The recorded -28.7% was taken at the
+    // harness's dim-scaled default warmup and is a buffer-fill transient,
+    // not a layout deficit — the same defect this file's own WARMUP
+    // constant just fixed on the meter side.
+    //
+    // Left wrong on purpose. This entry is a BAND assignment that KC1's
+    // rank half grades against, and re-banding it in the same change that
+    // fixes the meter is precisely the tuning the "frozen and committed
+    // before this RFC" clause exists to prevent. The corpus should be
+    // re-measured as a unit, on measurement grounds alone, with #453
+    // (USP@2) and #437 (PU@4) — both also recorded at default warmup and
+    // both suspect for the same reason. Until then the gap column for this
+    // row is meaningless in both directions.
     Entry {
         label: "chain-mil5ore-d2",
         target: "military-science-pack",
         measured: -0.287,
         band: Band::Fail,
-        source: "status.md / RFC-051 close-out: mil5-from-ore FAIL -28.7%",
+        source: "status.md / RFC-051 close-out: mil5-from-ore FAIL -28.7% \
+                 (STALE: re-measures +0.7% PASS at --warmup 288000)",
         fluid_dependent: false,
     },
     Entry {
@@ -170,6 +207,10 @@ struct Result_ {
     meter: f64,
     /// Absolute gap in percentage points.
     gap_pp: f64,
+    /// Did the run reach steady state? An unconverged row's `meter` is a
+    /// transient, not a rate, and comparing it to `real` is meaningless —
+    /// which is exactly how KC1 came to be graded against buffer fill.
+    converged: bool,
 }
 
 fn tmp_dir() -> PathBuf {
@@ -215,6 +256,7 @@ fn replay() -> Vec<Result_> {
             real: e.measured,
             meter,
             gap_pp: (meter - e.measured).abs() * 100.0,
+            converged: report.converged,
         });
     }
     out
@@ -232,17 +274,18 @@ fn corpus_replay_reports() {
     }
 
     println!(
-        "\n{:<24} {:>8} {:>9} {:>9} {:>8}  fluid?",
-        "config", "band", "real", "meter", "gap pp"
+        "\n{:<24} {:>8} {:>9} {:>9} {:>8} {:>10}  fluid?",
+        "config", "band", "real", "meter", "gap pp", "converged"
     );
     for r in &results {
         println!(
-            "{:<24} {:>8?} {:>8.1}% {:>8.1}% {:>8.1}  {}",
+            "{:<24} {:>8?} {:>8.1}% {:>8.1}% {:>8.1} {:>10}  {}",
             r.label,
             r.band,
             r.real * 100.0,
             r.meter * 100.0,
             r.gap_pp,
+            if r.converged { "yes" } else { "NO" },
             if r.fluid { "fluid" } else { "" }
         );
     }
@@ -251,6 +294,21 @@ fn corpus_replay_reports() {
         "\n{} configs replayed ({} solid-only)",
         results.len(),
         solids.len()
+    );
+
+    // A solid config that has not reached steady state is not a
+    // measurement, and reporting one as if it were is the defect that
+    // tripped KC1 for a day. Loud, and named, rather than a silent row.
+    let stalled: Vec<&str> = solids
+        .iter()
+        .filter(|r| !r.converged)
+        .map(|r| r.label)
+        .collect();
+    assert!(
+        stalled.is_empty(),
+        "solid configs did not reach steady state within WARMUP: {stalled:?}. \
+         Their `meter` values are buffer-fill transients, not rates — raise \
+         WARMUP rather than comparing them to anything."
     );
 }
 

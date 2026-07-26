@@ -1031,3 +1031,135 @@ the right thing moved.
   `link_downstream`*), silently-dropped unrecognised inserters (no* `notes`
   *entry, unlike every other skip path), and* `converged` *hardcoded true with
   no detector — are open and tracked in this branch.*
+- *2026-07-26 — **KC1's trip is EXPLAINED, and neither cause was in the
+  meter. Both were in how it was measured.** Two independent defects, each
+  sufficient on its own to produce the observed failure; between them they
+  account for the entire military gap and invalidate the earlier
+  attribution work. This entry supersedes attribution rounds 1–3.*
+
+  ***Cause 1: the corpus fixtures were built at the wrong geometry.***
+  `export_chain_fixtures_for_sim` *composed via bare* `compose_chain(&sr)`
+  *— the ambient engine default — then stamped* `inserter_capacity = lvl`
+  *afterwards, which sets only the DECLARED harness world. Until #431 the
+  chain path hardcoded L0, so the stamp was the whole story and the code
+  was correct; its doc comment said so ("the declaration changes zero
+  geometry pre-#381"). #431 moved the default to L2 on 2026-07-24, one day
+  before these fixtures were regenerated for this RFC, and silently began
+  exporting **L2 geometry under an L0 label**: inserters placed for L2
+  capacity bonuses, then run by the harness in an L0 world.*
+
+  *Measured on* `chain-mil5plates-d0`*, same manifest, same tech state
+  (`nb=0 bulk=1, S=1`), both Factorio 2.0.76 and 2.0.77:*
+
+  | geometry | entities | real Factorio |
+  |---|---|---|
+  | L2 (what was exported) | 1180 | −40.7% FAIL, 29/46 working |
+  | L0 (blessed) | 1182 | **−3.3% PASS, 46/46 working** |
+
+  ***So KC1 compared meter-on-fixture-A against Factorio-on-fixture-B.***
+  *The comparison was never apples-to-apples — which invalidates the
+  celebrated agreements as much as the failure. The EC family's "0.3–0.6pp"
+  was between two different factories and was **coincidence, not
+  evidence**. All five chain fixtures were affected; the L0 hashes are the
+  registered ones in every case. Fixed in #466, with a gate
+  (`chain_fixture_geometry_matches_registry`) watching the exporter path
+  rather than the composer path —* `cell_registry_hashes_current` *stayed
+  green throughout precisely because it re-derives through a different code
+  path than the one writing the bytes. Two paths to one artifact, one of
+  them checked.*
+
+  ***The baselines were never stale.*** *An earlier reading of this session
+  was that the −3.3% baseline no longer reproduced. It reproduces exactly —
+  46/46 working, delivered 5.00/s — once the fixture is built correctly.
+  Recorded because the wrong conclusion was stated before it was checked.*
+
+  ***Cause 2: the measurements had not converged.*** *With the fixture
+  corrected, the military gap narrowed to ~35pp and moved to a new place:
+  four tail machines on the MSP row starved of piercing-rounds-magazine.
+  That is the #448 signature and it was tempting to treat as the real
+  defect. It is not. Sweeping warmup on* `chain-mil5plates-d0`*:*
+
+  | warmup | meter | converged |
+  |---|---|---|
+  | 2 game-min (the corpus default) | −38.4% | false |
+  | 5 | −10.2% | false |
+  | 10 | −1.1% | **true** |
+  | 20 / 40 / 80 | +0.7% | true |
+
+  ***The corpus replay warms up for two game-minutes.*** *A 46-machine
+  chain with deep ingredient buffers is nowhere near steady state by then.
+  The whole military deficit was a buffer-fill transient being read as a
+  rate.*
+
+  ***And the same is true of real Factorio.*** `chain-mil5ore-d2` *is
+  recorded in this RFC's own frozen corpus as a **FAIL at −28.7%**. Re-run
+  unchanged at* `--warmup 288000` *(80 game-minutes) it measures **+0.7%,
+  146/146 machines working, PASS**. The layout was never broken. This is
+  not a meter problem at all — it is a **corpus problem**, and the corpus
+  is the thing KC1 grades against.*
+
+  ***Corrected KC1 table, both instruments converged:***
+
+  | config | real | meter | gap |
+  |---|---|---|---|
+  | chain-ec15-d1 | −8.0% | −12.0% | 4.0pp |
+  | chain-ec15-d2 | −6.0% | −5.6% | 0.4pp |
+  | chain-ec15-d7 | −5.3% | −5.6% | 0.3pp |
+  | chain-ec30-d2 | −5.3% | −5.6% | 0.3pp |
+  | chain-mil5plates-d0 | −3.3% | +0.7% | 4.0pp |
+  | chain-mil5ore-d2 | **+0.7%** (was −28.7%) | −1.3% | 2.0pp |
+  | chain-ac1-d0 | −0.3% | +0.6% | 0.9pp |
+
+  *Every solid config within ~4pp against a ±10pp bar. The instrument was
+  in far better shape than its own kill criterion suggested.*
+
+  ***What this falsifies, explicitly, because these are recorded above as
+  findings:***
+  - *Attribution rounds 1–3 (coal belt supply, inserter swing rate, machine
+    input buffering, belt→machine rate model, `I6`/`drop_onto_tile`) were
+    **all chasing a fixture artifact**. On correct geometry the grenade row
+    does not starve at all: 16/16 working, −0.2%. The four falsified
+    hypotheses were falsified against a factory that was not the one being
+    compared to.*
+  - *The PR-3 entry attributes `chain-ac1-d0`'s −42.8% to the disclosed
+    **fluid limitation** — "honest under-report, resolves when fluids
+    land". **Wrong.** At convergence it reads +0.6%, essentially at plan.
+    That was a plausible narrative attached to an unexamined number.*
+  - *The four review findings fixed in #467 (craft accumulation, U7 far
+    lane, silent inserter drops, dead `converged`) move **nothing** on the
+    corpus. All four were latent. None was the gap.*
+
+  ***KC1 is NOT hereby declared passed.*** *The magnitude half now looks
+  comfortable, but the rank half grades against band assignments that are
+  themselves wrong —* `chain-mil5ore` *is recorded FAIL and is a PASS. A
+  criterion cannot be evaluated against a corpus with entries in the wrong
+  band, and re-banding the corpus after seeing the meter's answers is
+  exactly the tuning KC1's "frozen and committed before this RFC" clause
+  exists to prevent. **The corpus must be re-measured at adequate warmup,
+  by the oracle, before KC1 is re-evaluated** — and that re-measurement has
+  to be justified on measurement grounds alone, never by reference to what
+  the meter says.* [#453](https://github.com/storkme/spaghettio/issues/453)
+  *(USP@2, −57.0%) and* [#437](https://github.com/storkme/spaghettio/issues/437)
+  *(PU@4, −27.3%) are the next candidates; #453 calls its residual the
+  single highest-value unknown left in the composition path, and it may
+  simply be an unconverged measurement.*
+
+  ***The instrument that caught it did not exist that morning.***
+  `converged` *was hardcoded* `true` *with no detector — bot finding #4 on
+  #460, which read as a tidy-up. Implementing it honestly (measured on
+  delivered, not buffers; zero throughput is not converged; too few samples
+  is not converged) is what made the transient visible, and it flags false
+  at exactly the warmups where the number was lying. **The field that was
+  always true was hiding the reason the RFC's headline criterion failed.***
+
+  ***The generalisable lesson, and it is not the one the earlier entries
+  were converging on.*** *This log already names a standing habit — "fix on
+  merit, test the story separately" — after four hypotheses failed their
+  checks. That habit was being applied correctly and still did not help,
+  because every one of those tests was run against a mis-generated fixture
+  at a warmup too short to mean anything. **Testing a story carefully is
+  worthless if the instrument's inputs are unvalidated.** The unexamined
+  assumption was never a mechanism; it was "these two numbers describe the
+  same factory, and both have finished settling". Neither was true, and
+  neither was ever checked, through three rounds of increasingly careful
+  work.*
