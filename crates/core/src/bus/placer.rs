@@ -2146,7 +2146,24 @@ fn row_cell_eligible(producer: &MachineSpec, consumer: &MachineSpec, item: &str)
     // supplies everything solid the consumer needs
     // (`solid-fuel-from-light-oil → rocket-fuel`, whose other ingredient
     // is the shared fluid), and its south face carries the output alone.
-    if !(1..=2).contains(&c_in.len()) || !c_in.iter().any(|i| i == item) {
+    // The coupled item, plus AT MOST two belt-fed others.
+    //   1 — the coupling supplies everything solid
+    //       (`solid-fuel-from-light-oil -> rocket-fuel`, whose other
+    //       ingredient is the shared fluid); south face carries the output
+    //       alone.
+    //   2 — the ordinary shape (cable + iron into EC).
+    //   3 — `iron-stick -> rail` (stone + steel-plate alongside the stick).
+    //       The third input lands on the north face ABOVE the producer's
+    //       belt; see `stamp_row_cell`, which enforces the geometry this
+    //       needs and refuses when it cannot hold.
+    if !(1..=3).contains(&c_in.len()) || !c_in.iter().any(|i| i == item) {
+        return false;
+    }
+    // A third solid input needs a free north face for its belt and a free
+    // feed row for its reach-2 inserters — both of which a piped producer
+    // has already spent (its pipe run occupies the feed row). No corpus
+    // pair wants both at once.
+    if c_in.len() == 3 && p_fluid_in > 0 {
         return false;
     }
     // Every solid input the fused spec carries must be a DISTINCT item.
@@ -2166,7 +2183,7 @@ fn row_cell_eligible(producer: &MachineSpec, consumer: &MachineSpec, item: &str)
     if c_others.iter().enumerate().any(|(i, a)| c_others[i + 1..].contains(a)) {
         return false;
     }
-    if p_in.first().is_some_and(|p| c_others.iter().any(|o| *o == p)) {
+    if p_in.first().is_some_and(|p| c_others.contains(&p)) {
         return false;
     }
     // WIDTHS may differ freely — the row paces x by each machine's own
@@ -2257,9 +2274,23 @@ fn try_build_row_cell(
     // run instead of a belt (RFC-053 pipe cut).
     let p_in = producer.inputs.iter().find(|f| !f.is_fluid);
     let p_fluid = producer.inputs.iter().find(|f| f.is_fluid);
-    // `None` when the coupled item is the consumer's ONLY solid
-    // ingredient — then it has no belt-fed input and no inner belt.
-    let c_in = consumer.inputs.iter().find(|f| !f.is_fluid && f.item != item);
+    // The consumer's belt-fed inputs — everything solid that the coupling
+    // does not already supply. Empty when the coupled item is its ONLY
+    // solid ingredient (then it has no belt-fed input and no inner belt);
+    // eligibility caps it at two.
+    //
+    // The BUSIER one takes the south face, which is reach-1: long-handed
+    // is the only reach-2 inserter (I8a) and it is the slower hand, so
+    // giving it the lighter flow is what keeps the column counts down.
+    // Ties break on item name, so the assignment is deterministic rather
+    // than dependent on solver input order.
+    let mut c_solids: Vec<&ItemFlow> =
+        consumer.inputs.iter().filter(|f| !f.is_fluid && f.item != item).collect();
+    c_solids.sort_by(|a, b| {
+        b.rate.partial_cmp(&a.rate).unwrap_or(std::cmp::Ordering::Equal).then(a.item.cmp(&b.item))
+    });
+    let c_in = c_solids.first().copied();
+    let c_in_b = c_solids.get(1).copied();
     let c_fluid = consumer.inputs.iter().find(|f| f.is_fluid);
     let out = consumer.outputs.iter().find(|f| !f.is_fluid)?;
 
@@ -2283,6 +2314,13 @@ fn try_build_row_cell(
         .map(|f| lane_capacity_stacked(in_belt, ctx.for_item(&f.item)) * 2.0)
         .unwrap_or(f64::INFINITY);
     if p_cap + 1e-9 < p_total || c_cap + 1e-9 < c_total {
+        return None;
+    }
+    let b_total = c_in_b.map(|f| f.rate * c_util * c_count as f64).unwrap_or(0.0);
+    let b_cap = c_in_b
+        .map(|f| lane_capacity_stacked(in_belt, ctx.for_item(&f.item)) * 2.0)
+        .unwrap_or(f64::INFINITY);
+    if b_cap + 1e-9 < b_total {
         return None;
     }
     // The output belt is single-lane (every output inserter shares a y and
@@ -2322,6 +2360,15 @@ fn try_build_row_cell(
     // Reach-2 only when the output inserter must step OVER the consumer's
     // input belt. Without that belt the output belt sits directly below the
     // face and reach-1 applies, which lifts the long-handed 2.40/s ceiling.
+    // B's face is reach-2 unconditionally: its belt is the OUTER north row,
+    // so its inserter always swings over the producer's belt.
+    let c_feed_b = match c_in_b {
+        Some(f) => size_side(f.rate * c_util, Reach::Far, c_budget, max_inserter_tier, quality, level),
+        None => crate::bus::inserter_ladder::SidePlan { entity: "inserter", count: 0, shortfall: None },
+    };
+    if c_feed_b.shortfall.is_some() || c_feed_b.count > cmw.max(1) as usize {
+        return None;
+    }
     let out_reach = if c_in.is_some() { Reach::Far } else { Reach::Near };
     let drop = size_belt_drop_side(
         out.rate * c_util, out_reach, c_budget, max_inserter_tier, quality, out_stack, level, out_belt,
@@ -2353,11 +2400,13 @@ fn try_build_row_cell(
             producer_fluid: p_fluid.map(|f| (f.item.as_str(), "pipe")),
             consumer_input: c_in.map(|f| (f.item.as_str(), in_belt, c_feed.entity)),
             consumer_fluid: c_fluid.map(|f| (f.item.as_str(), "pipe")),
+            consumer_input_b: c_in_b.map(|f| (f.item.as_str(), in_belt, c_feed_b.entity)),
             output_item: &out.item,
             output_belt: out_belt,
             out_inserter: drop.entity,
             producer_feed_count: p_feed.count,
             consumer_feed_count: c_feed.count,
+            consumer_feed_b_count: c_feed_b.count,
             out_count: drop.count,
         },
         bus_width,
@@ -2399,6 +2448,17 @@ fn try_build_row_cell(
                 });
             }
             if let Some(f) = c_in {
+                v.push(ItemFlow {
+                    item: f.item.clone(),
+                    rate: f.rate,
+                    is_fluid: false,
+                    module_id: f.module_id,
+                });
+            }
+            // LAST, matching `input_belt_ys`, which appends B's row last
+            // for the same reason: the two lists are paired by index, and
+            // appending leaves every existing index untouched.
+            if let Some(f) = c_in_b {
                 v.push(ItemFlow {
                     item: f.item.clone(),
                     rate: f.rate,
@@ -4079,6 +4139,111 @@ mod tests {
         // count, and the case the relaxation is FOR.
         let (p, c) = three_input_pair("copper-plate", "steel-plate", "plastic-bar");
         let _ = row_cell_eligible(&p, &c, "iron-plate");
+    }
+
+    /// The three-solid-input row cell, checked at TILE level rather than
+    /// by "it returned `Some`". The shape is `iron-stick -> rail`: the
+    /// consumer wants stone and steel-plate alongside the coupled stick.
+    ///
+    /// What must hold, and each is a way the design could have been wrong:
+    ///   - belt B is the OUTER north row, one above the producer's belt;
+    ///   - B's feed inserter is reach-2 (long-handed) and sits on the
+    ///     PRODUCER's feed row, over a CONSUMER column — sharing that row
+    ///     without colliding is the whole reason the design fits;
+    ///   - its drop tile lands INSIDE the consumer's body. This is the one
+    ///     the reach arithmetic can get silently wrong: the inserter drops
+    ///     two tiles south of itself, and bottom-alignment can push a
+    ///     shorter consumer's top below that.
+    #[test]
+    fn di_row_cell_places_a_third_input_on_the_outer_north_row() {
+        let flow = |item: &str, rate: f64| ItemFlow {
+            item: item.to_string(),
+            rate,
+            is_fluid: false,
+            module_id: 0,
+        };
+        let producer = MachineSpec {
+            entity: "assembling-machine-2".to_string(),
+            recipe: "iron-stick".to_string(),
+            self_loop: vec![], voider: false, game_modules: Vec::new(),
+            count: 1.0,
+            inputs: vec![flow("iron-plate", 1.0)],
+            outputs: vec![flow("iron-stick", 2.0)],
+        };
+        let consumer = MachineSpec {
+            entity: "assembling-machine-2".to_string(),
+            recipe: "rail".to_string(),
+            self_loop: vec![], voider: false, game_modules: Vec::new(),
+            count: 1.0,
+            inputs: vec![flow("iron-stick", 2.0), flow("stone", 2.0), flow("steel-plate", 1.0)],
+            outputs: vec![flow("rail", 2.0)],
+        };
+        assert!(
+            row_cell_eligible(&producer, &consumer, "iron-stick"),
+            "three distinct solid inputs on an equal-height pair is the target shape"
+        );
+        let cell = try_build_row_cell(
+            &producer, &consumer, "iron-stick", 0, 0, None,
+            InserterTier::default(), QualityTier::Normal,
+            crate::common::DEFAULT_INSERTER_CAPACITY, &StackingCtx::unstacked(),
+        )
+        .expect("the three-input row cell must build");
+        let (cell_ents, span, _) = cell;
+
+        // Three input belts, and the spec's solid inputs must agree with
+        // them INDEX for INDEX — the positional contract both `lane_planner`
+        // and `ghost_router` rely on. A mismatch here is the silent
+        // starvation class: every belt built, the wrong one tapped.
+        let belts = &span.input_belt_y;
+        assert_eq!(belts.len(), 3, "producer's belt, consumer's A, consumer's B");
+        let solids: Vec<&str> =
+            span.spec.inputs.iter().filter(|f| !f.is_fluid).map(|f| f.item.as_str()).collect();
+        assert_eq!(solids.len(), 3, "fused spec carries all three solids");
+        for (i, &y) in belts.iter().enumerate() {
+            let carried: Vec<&str> = cell_ents
+                .iter()
+                .filter(|e| e.y == y && e.name.ends_with("transport-belt"))
+                .filter_map(|e| e.carries.as_deref())
+                .collect();
+            assert!(
+                carried.iter().all(|c| *c == solids[i]),
+                "belt row {i} at y={y} must carry {}, found {:?}",
+                solids[i],
+                carried
+            );
+        }
+        // B's row is the outermost: strictly above every other input belt,
+        // and the topmost row the cell occupies.
+        let b_y = belts[2];
+        assert!(b_y < belts[0] && b_y < belts[1], "B is the OUTER north row, got {belts:?}");
+        assert_eq!(b_y, span.y_start, "the cell's top must follow B's belt up");
+
+        // B's feed inserter: reach-2, on the producer's feed row, dropping
+        // inside the consumer.
+        let b_item = solids[2];
+        let feeds: Vec<_> =
+            cell_ents.iter().filter(|e| e.carries.as_deref() == Some(b_item) && e.name.contains("inserter")).collect();
+        assert!(!feeds.is_empty(), "B must have a feed inserter");
+        let machine_tiles: std::collections::HashSet<(i32, i32)> = cell_ents
+            .iter()
+            .filter(|e| e.recipe.as_deref() == Some("rail"))
+            .flat_map(|e| {
+                let (w, h) = machine_dims(&e.name);
+                let (w, h) = (w as i32, h as i32);
+                (0..w).flat_map(move |dx| (0..h).map(move |dy| (e.x + dx, e.y + dy)))
+            })
+            .collect();
+        for f in &feeds {
+            assert_eq!(f.name, "long-handed-inserter", "B steps over the producer's belt");
+            assert_eq!(f.y, b_y + 2, "B's feed shares the producer's feed row");
+            assert_eq!(f.y - 2, b_y, "picks from B's belt");
+            assert!(
+                machine_tiles.contains(&(f.x, f.y + 2)),
+                "B's drop tile ({}, {}) must be inside a rail machine",
+                f.x,
+                f.y + 2
+            );
+        }
     }
 
     /// DI off is the default and must stay bit-identical: no fusion.
