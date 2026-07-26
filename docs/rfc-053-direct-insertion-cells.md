@@ -2129,3 +2129,54 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   disturbs pole banding. This entry exists so those are established BEFORE
   someone starts stamping, which is the lesson the rejected design just
   taught at zero cost.*
+
+- *2026-07-26 — **The north-input-B candidate SURVIVES adversarial review
+  on all three risks, with one named prerequisite. This is the design to
+  build if 3-input consumers are ever wanted.** Verdicts reproduced
+  independently where load-bearing:*
+
+  | risk | verdict | evidence |
+  |---|---|---|
+  | positional `input_belt_ys` at N=3 | **WORKS** | `lane_planner.rs:1288-1296` and `ghost_router.rs:161-169` both zip solids against `input_belt_y` by index with a length guard — no 2-slot cap. `RowKind::TripleInput`/`QuadInput` already ship 3–4 entries through this exact lookup. |
+  | two north input belts | **WORKS** | `RowKind::QuadInput` already stacks **three** belts north (verified in its doc comment). Its fourth moves south for **reach**, not north-face capacity — and the mechanism it uses for the third ("UG gaps so a long-handed inserter can sit on the belt row and reach two tiles further north") is precisely the candidate's reach-2 hop. |
+  | `y_top` shifting up | **WORKS** | `y_top` is `ents.iter().map(|e| e.y).min()` — self-healing. Pole banding scans ACTUAL entities (`layout.rs:928-948`, `machine_top` at 977), not `y_start` offsets. |
+
+  ***THE PREREQUISITE, and it is not optional: extend the same-item guard
+  before relaxing the face count.*** *`row_cell_eligible`
+  (`placer.rs:2158-2160`) currently reads:*
+
+  ```rust
+  let c_other = c_in.iter().find(|i| *i != item).cloned().unwrap_or_default();
+  if p_in.first().is_some_and(|p| *p == c_other) { return false; }
+  ```
+
+  *`.find()` returns only the FIRST non-coupled consumer item — sufficient
+  while `c_in.len() <= 2` permits exactly one. With belt-A AND belt-B it
+  silently skips producer×(the other one) and A×B entirely. Relaxing the
+  face count without extending this to all three pairs reproduces, by
+  omission and on a new axis, the exact silent-starvation failure this RFC
+  already found once: both `lane_planner` and `ghost_router` `break` on the
+  first item match, so a duplicate leaves the second belt built, never
+  tapped, never fed — **and there is no disagreement for any check to
+  catch.** Confirmed there is no `debug_assert` or validator covering it.*
+
+  *Write the test FIRST — `producer == A`, `producer == B`, `A == B`, each
+  must refuse — confirm it passes vacuously today (`c_in.len() <= 2` makes
+  the third case unreachable), then relax the gate. None of the target
+  pairs collide today (rail: stone/steel-plate; FRF:
+  battery/steel-plate/EC), which is exactly what makes this the kind of
+  trap that ships and bites later.*
+
+  ***Status: NOT BUILT, and the decision is deliberately left open.***
+  *What it buys is `iron-stick → rail` — 351 instances, and only at the
+  rates where the straddle independently balances (2 of 12 sampled). The
+  two designs cost the same single extra row; this one has no
+  architectural rework hiding in it, where the rejected north-output one
+  had an entire `output_merger` rewrite. That asymmetry, not the instance
+  count, is the reason this is the candidate.*
+
+  ***Process note worth keeping:*** *two adversarial passes cost a fraction
+  of an implementation and killed one design outright, corrected an
+  instance count by 3×, demoted a "finding" to a hypothesis, and turned a
+  hand-waved prerequisite into a file:line change with a test to write
+  first. Every one of those was cheaper found before building than after.*
