@@ -18,8 +18,8 @@ fn main() {
     println!("chain-ec15 shape: {CONSUMERS} consumers x {DEMAND}/s on express (45.0 nominal)");
     println!("stack inserters, capacity L2, smooth boundary supply\n");
     println!(
-        "{:>7}  {:>8}  {:<44}  {:<28}  {}",
-        "margin", "supply/s", "consumption/s (head->tail)", "buffer", "starved ticks"
+        "{:>7}  {:>8}  {:<44}  {:<28}  starved ticks",
+        "margin", "supply/s", "consumption/s (head->tail)", "buffer"
     );
 
     for margin in [1.0, 1.02, 1.05, 1.10, 1.25, 1.50] {

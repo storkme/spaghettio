@@ -20,9 +20,15 @@ edition = "2021"
 # backwards-inserter export bug survive behind three artifacts sharing one
 # convention. Enforced by `tests/kc4_independence.rs`.
 [dependencies]
+# Recipe DATA only (ingredients, craft times, machine crafting speeds).
+# NOTE: the meter deliberately does NOT use `blueprint_parser` — it decodes
+# the blueprint itself. See `src/blueprint_in.rs` for why: the parser
+# un-flips inserter directions into the *engine's* drop-side convention,
+# and inheriting that interpretation is precisely the #348 failure this
+# crate exists to be independent of.
 spaghettio_core = { path = "../core" }
 rustc-hash = "2"
 serde = { version = "1", features = ["derive"] }
-
-[dev-dependencies]
 serde_json = "1"
+base64 = "0.22"
+flate2 = "1"
