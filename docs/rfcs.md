@@ -64,7 +64,7 @@ backfill the status next time the doc is touched.
 | RFC-050 | 2026-07-22 | [`rfc-050-headless-sim-harness.md`](rfc-050-headless-sim-harness.md) | Complete (fluid feed CALIBRATED via #364 — first fluid factory PASS; fluid-pack sweep + #345 re-measure open) |
 | RFC-051 | 2026-07-22 | [`rfc-051-cell-composition-integration.md`](rfc-051-cell-composition-integration.md) | Complete — default Candidate; sim registry; K-quantization (corridor-cap); EC-row re-measure waits on #381 |
 | RFC-052 | 2026-07-23 | [`rfc-052-oil-mega-cell.md`](rfc-052-oil-mega-cell.md) | Design (circulated for review) |
-| RFC-053 | 2026-07-24 | [`rfc-053-direct-insertion-cells.md`](rfc-053-direct-insertion-cells.md) | Active — Phase 0 complete (KC1 passed; KC6 fired → pipes re-scoped into Phase 2). #432 merged; Phase 1 ready. |
+| RFC-053 | 2026-07-24 | [`rfc-053-direct-insertion-cells.md`](rfc-053-direct-insertion-cells.md) | Active — **Phases 0 + 1 + 2 landed**; engine emits fused DI cells (stacked and horizontal-row). Both TOP corpus pairs build, validate at 0 issues and sim at/above plan: `copper-cable → electronic-circuit` 101.3%, `electric-furnace → electric-furnace` 109.5%. KC1–KC4 evaluated and passing (KC6 fired → pipes re-scoped into Phase 2, still outstanding). Inert by default. Remaining: pipes/fluids, Phase 3 multi-band, Phase 4 wasm+UI. |
 | RFC-054 | 2026-07-25 | [`rfc-054-fast-meter.md`](rfc-054-fast-meter.md) | Design (circulated for review) |
 
 Next number: **RFC-055**.

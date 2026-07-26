@@ -25,6 +25,7 @@ fn main() -> ExitCode {
         Some("check-data") => cmd_check_data(&args[1..]),
         Some("bless") => cmd_bless(&args[1..]),
         Some("check") => cmd_check(&args[1..]),
+        Some("serve") => cmd_serve(&args[1..]),
         Some("--help") | Some("-h") | None => {
             print_help();
             return ExitCode::SUCCESS;
@@ -49,6 +50,8 @@ USAGE:
   spaghettio-sim fetch [--force]
   spaghettio-sim run --bp <file> --manifest <file> [--ticks N] [--speed N]
                       [--warmup N] [--out report.json] [--timeout-secs N]
+  spaghettio-sim serve --bp <file> --manifest <file> [--port 34197] [--speed 1]
+                        [--warmup N]
   spaghettio-sim check-data
   spaghettio-sim bless --report <report.json> --baselines <dir> [--label <name>]
   spaghettio-sim check --report <report.json> --baselines <dir> [--tolerance 0.02]
@@ -202,6 +205,77 @@ fn cmd_run(args: &[String]) -> Result<(), String> {
     println!("(factorio log: {:?})", outcome.log_path);
 
     Ok(())
+}
+
+/// Run a fixture as a live, joinable Factorio server so a human can look
+/// at it in a client.
+///
+/// The repo's verification protocol requires eyeballing a layout, not just
+/// measuring it — a zero-warning layout that visibly has disconnected
+/// belts is a validator bug, not a success. `run` cannot serve that: it
+/// races at `game.speed = 16` and tears the world down the moment it has
+/// its number.
+///
+/// Differences from `run`, all deliberate:
+/// - `--speed 1` by default: real time, so a human can watch items move.
+/// - A **fixed** port (34197, Factorio's default), because someone has to
+///   type it into a client. `run` uses an ephemeral port for concurrency.
+/// - No tick ceiling: the scenario's end tick is pushed far out so the
+///   world does not finalize and stop while being inspected.
+/// - The scratch run dir is left in place for the same reason.
+///
+/// The client's version must match the server's install exactly.
+fn cmd_serve(args: &[String]) -> Result<(), String> {
+    let bp_path = flag_value(args, "--bp").ok_or("serve requires --bp <file>")?;
+    let manifest_path = flag_value(args, "--manifest").ok_or("serve requires --manifest <file>")?;
+    let port: u16 = flag_value(args, "--port")
+        .map(|s| s.parse().map_err(|_| format!("--port must be an integer, got '{s}'")))
+        .transpose()?
+        .unwrap_or(34197);
+    let speed: u32 = flag_value(args, "--speed")
+        .map(|s| s.parse().map_err(|_| format!("--speed must be an integer, got '{s}'")))
+        .transpose()?
+        .unwrap_or(1);
+    let warmup: Option<u32> = flag_value(args, "--warmup")
+        .map(|s| s.parse().map_err(|_| format!("--warmup must be an integer, got '{s}'")))
+        .transpose()?;
+
+    let install_dir = paths::resolve_existing_install()?;
+    let bp = std::fs::read_to_string(bp_path)
+        .map_err(|e| format!("reading blueprint file {bp_path}: {e}"))?
+        .trim()
+        .to_string();
+    let manifest_str = std::fs::read_to_string(manifest_path)
+        .map_err(|e| format!("reading manifest file {manifest_path}: {e}"))?;
+    let manifest = manifest::Manifest::from_str(&manifest_str)?;
+
+    let scenario_name = sanitize_scenario_name(&manifest.label);
+    // Roughly a week of game time at 60 UPS: far enough out that the
+    // scenario never finalizes mid-inspection, without being a special
+    // case in the scenario itself.
+    const NO_CEILING: u32 = 36_000_000;
+    let mut params =
+        scenario::RunParams::defaults_for(&manifest, scenario_name.clone(), speed, Some(NO_CEILING))
+            .with_operator_qol();
+    if let Some(w) = warmup {
+        params = params.with_warmup(w);
+    }
+    let lua = scenario::build_control_lua(&manifest, &bp, &params);
+
+    let run_dir = orchestrate::prepare_run_dir(&install_dir, &scenario_name)?;
+    orchestrate::write_scenario(&run_dir, &scenario_name, &lua)?;
+
+    println!("=== spaghettio-sim serve: {} ===", manifest.label);
+    println!("install : {}", install_dir.display());
+    println!("scenario: {scenario_name} (speed {speed}x, no tick ceiling)");
+    println!("run dir : {} (kept)", run_dir.display());
+    println!();
+    println!("Connect a Factorio client of the SAME version via");
+    println!("  Multiplayer -> Connect to address -> <host>:{port}");
+    println!("Ctrl-C to stop the server.");
+    println!();
+
+    orchestrate::launch_server(&install_dir, &run_dir, &scenario_name, port)
 }
 
 fn cmd_check_data(_args: &[String]) -> Result<(), String> {

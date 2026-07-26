@@ -274,7 +274,7 @@ function allProducerMachines(): string[] {
   return machinesCache;
 }
 
-function buildLayout(result: SolverResult, maxBeltTier?: string, strategy?: string, rowLayout?: string, maxInserterTier?: string, quality?: string, wireMode?: string, stacking?: string, inserterCapacity?: string): Promise<LayoutResult> {
+function buildLayout(result: SolverResult, maxBeltTier?: string, strategy?: string, rowLayout?: string, maxInserterTier?: string, quality?: string, wireMode?: string, stacking?: string, inserterCapacity?: string, directInsertion?: boolean): Promise<LayoutResult> {
   return call<LayoutResult>({
     method: "layout",
     result,
@@ -286,10 +286,11 @@ function buildLayout(result: SolverResult, maxBeltTier?: string, strategy?: stri
     wireMode: wireMode ?? null,
     stacking: stacking ?? null,
     inserterCapacity: inserterCapacity ?? null,
+    directInsertion: directInsertion ?? false,
   });
 }
 
-function buildLayoutTraced(result: SolverResult, maxBeltTier?: string, strategy?: string, rowLayout?: string, maxInserterTier?: string, quality?: string, wireMode?: string, stacking?: string, inserterCapacity?: string): Promise<LayoutResult> {
+function buildLayoutTraced(result: SolverResult, maxBeltTier?: string, strategy?: string, rowLayout?: string, maxInserterTier?: string, quality?: string, wireMode?: string, stacking?: string, inserterCapacity?: string, directInsertion?: boolean): Promise<LayoutResult> {
   return call<LayoutResult>({
     method: "layoutTraced",
     result,
@@ -301,6 +302,7 @@ function buildLayoutTraced(result: SolverResult, maxBeltTier?: string, strategy?
     wireMode: wireMode ?? null,
     stacking: stacking ?? null,
     inserterCapacity: inserterCapacity ?? null,
+    directInsertion: directInsertion ?? false,
   });
 }
 
@@ -330,6 +332,7 @@ async function buildLayoutStreaming(
   wireMode: string | undefined,
   stacking: string | undefined,
   inserterCapacity: string | undefined,
+  directInsertion: boolean | undefined,
   onEvent: (evt: TraceEvent) => void,
 ): Promise<LayoutResult> {
   if (activeStreamingId !== null) {
@@ -366,6 +369,7 @@ async function buildLayoutStreaming(
       wireMode: wireMode ?? null,
       stacking: stacking ?? null,
       inserterCapacity: inserterCapacity ?? null,
+    directInsertion: directInsertion ?? false,
       traceLogs,
     });
   });

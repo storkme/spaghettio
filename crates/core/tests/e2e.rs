@@ -8081,3 +8081,489 @@ fn research_l7_thins_output_inserters_s4() {
         "the thinning must be SHARP (~3x observed): L0={l0} should be >= 3 x L7={l7}"
     );
 }
+
+/// RFC-053 — a **fluid-fed producer** in a row cell: `casting-copper-cable`
+/// (molten copper in, cable out, on a 5×5 foundry) direct-inserting into a
+/// 3×3 assembler making `electronic-circuit`. The corpus's #3 DI pair, 544
+/// instances, and the pair that exercises all three of the Phase 2
+/// extensions at once: the pipe cut, heterogeneous footprints, and the
+/// `belt-connectivity` exemption for a machine whose only route out is a
+/// coupling inserter.
+///
+/// Guards a false positive that made this pair unbuildable: the foundry
+/// takes its ingredients through a pipe and hands its product straight to
+/// its neighbour, so no inserter of its ever touches a belt, and
+/// `check_belt_connectivity` used to call that an error.
+///
+/// Not a DI-vs-bus comparison on purpose. Off the cell this pair does not
+/// lay out at all today (the bus leaves the foundry with no adjacent
+/// inserter and no pipe), but that is a pre-existing bus gap — asserting on
+/// it here would make this test fail the day someone fixes it.
+#[test]
+fn di_row_cell_fluid_fed_producer_validates_clean() {
+    use spaghettio_core::bus::layout;
+    let inputs: FxHashSet<String> = ["molten-copper", "iron-plate"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let sr = solver::solve("electronic-circuit", 10.0, &inputs, "assembling-machine-3")
+        .expect("solve EC from molten copper");
+    assert!(
+        sr.machines.iter().any(|m| m.recipe == "casting-copper-cable"),
+        "scenario must actually route cable through the foundry, got {:?}",
+        sr.machines.iter().map(|m| &m.recipe).collect::<Vec<_>>()
+    );
+
+    let layout = layout::build_bus_layout(
+        &sr,
+        layout::LayoutOptions {
+            direct_insertion: true,
+            max_belt_tier: Some("express-transport-belt".into()),
+            ..Default::default()
+        },
+    )
+    .expect("layout must build");
+
+    let in_cell = |e: &spaghettio_core::models::PlacedEntity| {
+        e.segment_id.as_deref().is_some_and(|s| s.starts_with("di-row:"))
+    };
+    let foundries = layout.entities.iter().filter(|e| in_cell(e) && e.name == "foundry").count();
+    let assemblers = layout
+        .entities
+        .iter()
+        .filter(|e| in_cell(e) && e.name == "assembling-machine-3")
+        .count();
+    assert_eq!(foundries, 4, "all four foundries belong to the cell");
+    assert_eq!(assemblers, 4, "all four assemblers belong to the cell");
+
+    let issues = match validate::validate(&layout, Some(&sr), LayoutStyle::Bus) {
+        Ok(v) => v,
+        Err(e) => e.issues,
+    };
+    assert!(
+        issues.is_empty(),
+        "fluid-fed row cell must validate clean, got {:#?}",
+        issues
+    );
+}
+
+/// RFC-053 — the DI-cell exemption from `output-belt` must cover the
+/// PRODUCER only. The cell tags every entity it stamps, including the
+/// consumer's own output inserter, which picks from inside its machine
+/// exactly like a coupler does — so a pick-side-only test silently
+/// disabled the check for consumers too, and a cell with a broken output
+/// belt would have validated clean.
+///
+/// Deletes the cell's output belt and asserts the consumer is flagged.
+/// With the pick-side-only predicate this produced ZERO issues.
+#[test]
+fn di_cell_output_belt_exemption_does_not_cover_the_consumer() {
+    use spaghettio_core::bus::layout;
+    let inputs: FxHashSet<String> = ["molten-copper", "iron-plate"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let sr = solver::solve("electronic-circuit", 10.0, &inputs, "assembling-machine-3")
+        .expect("solve EC from molten copper");
+    let mut layout = layout::build_bus_layout(
+        &sr,
+        layout::LayoutOptions {
+            direct_insertion: true,
+            max_belt_tier: Some("express-transport-belt".into()),
+            ..Default::default()
+        },
+    )
+    .expect("layout must build");
+
+    // Sanity: intact, the cell is clean.
+    assert!(
+        validate::validate(&layout, Some(&sr), LayoutStyle::Bus).is_ok_and(|v| v.is_empty()),
+        "intact cell should validate clean"
+    );
+
+    // The consumer's output belt is the cell's bottom-most belt row.
+    let out_y = layout
+        .entities
+        .iter()
+        .filter(|e| {
+            e.segment_id.as_deref().is_some_and(|s| s.starts_with("di-row:"))
+                && e.name.ends_with("transport-belt")
+        })
+        .map(|e| e.y)
+        .max()
+        .expect("cell must have belts");
+    let before = layout.entities.len();
+    layout.entities.retain(|e| {
+        !(e.y == out_y
+            && e.name.ends_with("transport-belt")
+            && e.segment_id.as_deref().is_some_and(|s| s.starts_with("di-row:")))
+    });
+    assert!(layout.entities.len() < before, "test must actually remove the output belt");
+
+    let issues = match validate::validate(&layout, Some(&sr), LayoutStyle::Bus) {
+        Ok(v) => v,
+        Err(e) => e.issues,
+    };
+    assert!(
+        issues.iter().any(|i| i.category == "output-belt"),
+        "a DI-cell consumer with no output belt must be flagged, got {:#?}",
+        issues.iter().map(|i| &i.category).collect::<Vec<_>>()
+    );
+}
+
+/// A fluid branch arriving at a pipe that already carries ITS OWN fluid is
+/// connected, not blocked — `is_blocked_tile` sees only occupancy, so an
+/// RFC-053 row cell's molten-metal run read as an obstruction and the
+/// router emitted `"could not bridge blocked tiles"` on a layout that was
+/// physically fine.
+///
+/// Checks both halves of the rule, because suppressing a warning is only
+/// safe if the real ones survive:
+///   1. the fluid pairs carry NO layout warnings, and their networks are
+///      genuinely one connected component reaching every machine port;
+///   2. `pipe-to-ground` is still treated as an obstruction (it connects
+///      on its surface side and through its tunnel, not on four faces).
+///
+/// Pre-fix this reported one warning per fluid layout — including
+/// `plastic-bar` from crude oil, which predates direct insertion.
+#[test]
+fn fluid_branch_meeting_its_own_pipe_is_not_a_blocked_tile() {
+    use spaghettio_core::bus::layout;
+
+    let cases: &[(&str, &[&str], f64, bool)] = &[
+        ("plastic-bar", &["coal", "crude-oil"], 2.0, false),
+        ("electronic-circuit", &["molten-copper", "iron-plate"], 10.0, true),
+        ("electronic-circuit", &["iron-plate"], 10.0, true),
+    ];
+    for (target, ins, rate, di) in cases {
+        let inputs: FxHashSet<String> = ins.iter().map(|s| s.to_string()).collect();
+        let sr = solver::solve(target, *rate, &inputs, "assembling-machine-3")
+            .unwrap_or_else(|e| panic!("solve {target}: {e:?}"));
+        let l = layout::build_bus_layout(
+            &sr,
+            layout::LayoutOptions {
+                direct_insertion: *di,
+                max_belt_tier: Some("express-transport-belt".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|e| panic!("layout {target}: {e:?}"));
+
+        assert!(
+            l.warnings.is_empty(),
+            "{target} {ins:?} di={di}: no layout warnings expected, got {:#?}",
+            l.warnings
+        );
+
+        // And the fluid network really is sound. NOT "all pipes form one
+        // component" — distinct fluids are deliberately isolated, and a UG
+        // pair legitimately splits a run's SURFACE tiles in two. Port
+        // connectivity and network isolation are exactly what the fluid
+        // checks own, which is the same argument that makes the router's
+        // warning redundant here.
+        let issues = match validate::validate(&l, Some(&sr), LayoutStyle::Bus) {
+            Ok(v) => v,
+            Err(e) => e.issues,
+        };
+        let fluid_issues: Vec<_> = issues
+            .iter()
+            .filter(|i| i.category.contains("fluid") || i.category.contains("pipe"))
+            .collect();
+        assert!(
+            fluid_issues.is_empty(),
+            "{target} {ins:?} di={di}: suppressing the router warning must not hide a \
+             real fluid defect, got {fluid_issues:#?}"
+        );
+    }
+}
+
+/// RFC-053 **KC3 fixture** — export a DI-cell layout + manifest for the sim
+/// harness. Ignored: it writes artifacts and is driven by hand.
+///
+/// ```bash
+/// cargo test --manifest-path crates/core/Cargo.toml --test e2e -- \
+///     di_cell_kc3_export --exact --ignored --nocapture
+/// ```
+///
+/// Target is `steel-plate` from `iron-ore` (16:16 furnace→furnace), NOT
+/// the RFC's cable→EC worked example: EC has two solid inputs and is a
+/// Phase 2 shape (#449). Furnace pairs are the corpus's dominant DI shape
+/// (1,585 instances) and balance exactly 1:1, so the coupling clears both
+/// `cell_eligible` and `plan_straddle`.
+///
+/// `iron-gear-wheel` from ore was the first target tried and does NOT
+/// work: a gear machine needs ~4.8 furnaces, so the straddle exceeds 2
+/// and `plan_straddle` refuses it (Phase 3 territory).
+#[test]
+#[ignore]
+fn di_cell_kc3_export() {
+    use spaghettio_core::bus::layout;
+    let target = std::env::var("KC3_ITEM").unwrap_or_else(|_| "steel-plate".into());
+    let rate: f64 = std::env::var("KC3_RATE").ok().and_then(|r| r.parse().ok()).unwrap_or(2.0);
+    let inputs: FxHashSet<String> = std::env::var("KC3_INPUTS")
+        .unwrap_or_else(|_| "iron-ore".into())
+        .split(',').map(|s| s.to_string()).collect();
+    let sr = solver::solve(&target, rate, &inputs, "assembling-machine-3")
+        .unwrap_or_else(|e| panic!("solve {target}: {e:?}"));
+    println!("machines:");
+    for m in &sr.machines {
+        println!("  {} x{:.2} on {} in={:?} out={:?}", m.recipe, m.count, m.entity,
+            m.inputs.iter().map(|f| (&f.item, f.rate)).collect::<Vec<_>>(),
+            m.outputs.iter().map(|f| (&f.item, f.rate)).collect::<Vec<_>>());
+    }
+    println!("di_couplings: {:?}", sr.di_couplings);
+
+    // DI on/off from the environment so the same fixture produces the
+    // KC3 measurement AND its control. Without the control an
+    // over-production figure can't be attributed: a solver rate-model
+    // artifact and a DI artifact look identical in a single run.
+    let di = std::env::var("SPAGHETTIO_KC3_DI").as_deref() != Ok("0");
+    let opts = layout::LayoutOptions {
+        direct_insertion: di,
+        max_belt_tier: Some(
+            std::env::var("KC3_BELT").unwrap_or_else(|_| "transport-belt".into()),
+        ),
+        ..Default::default()
+    };
+    let l = layout::build_bus_layout(&sr, opts).expect("layout");
+    let cell_ents = l.entities.iter()
+        .filter(|e| e.segment_id.as_deref().is_some_and(|s| s.starts_with("di-cell:")))
+        .count();
+    let row_ents = l.entities.iter()
+        .filter(|e| e.segment_id.as_deref().is_some_and(|s| s.starts_with("di-row:")))
+        .count();
+    println!("di-row entities: {row_ents}");
+    let bridge_ents = l.entities.iter()
+        .filter(|e| e.segment_id.as_deref().is_some_and(|s| s.starts_with("di-bridge:")))
+        .count();
+    println!("di-cell entities: {cell_ents}   di-bridge entities: {bridge_ents}");
+
+    // KC3 is specifically about a layout that VALIDATES CLEAN yet
+    // under-delivers, so the warning list is part of the measurement,
+    // not a footnote — a warned layout would make the sim number
+    // uninterpretable against this criterion.
+    let warnings = spaghettio_core::validate::validate(
+        &l,
+        Some(&sr),
+        spaghettio_core::validate::LayoutStyle::Bus,
+    )
+    .map(|w| w.len())
+    .unwrap_or_else(|e| {
+        let errs = e.issues.iter().filter(|i| format!("{:?}", i.severity) == "Error").count();
+        println!("VALIDATION ERRORS: {errs}");
+        let mut by_cat: std::collections::BTreeMap<&str, usize> = Default::default();
+        for i in &e.issues { *by_cat.entry(i.category.as_str()).or_default() += 1; }
+        for (c, n) in &by_cat { println!("  {c}: {n}"); }
+        for i in e.issues.iter().filter(|i| format!("{:?}", i.severity) == "Error").take(6) {
+            println!("  ERR {}: {}", i.category, i.message);
+        }
+        e.issues.len()
+    });
+    println!("validation issues: {warnings}");
+
+    if let Ok(rowy) = std::env::var("KC3_ROWY") {
+        let ry: i32 = rowy.parse().unwrap();
+        println!("--- row y={ry}, x=0..30 ---");
+        let mut v: Vec<_> = l.entities.iter().filter(|e| e.y == ry && e.x < 30).collect();
+        v.sort_by_key(|e| e.x);
+        for e in v {
+            println!("  ({},{}) {:<24} seg={:?}", e.x, e.y, e.name, e.segment_id);
+        }
+    }
+    if std::env::var("KC3_CELLBELTS").is_ok() {
+        use std::collections::BTreeMap;
+        let mut rows: BTreeMap<i32, (String, i32, i32)> = BTreeMap::new();
+        for e in l.entities.iter().filter(|e| {
+            e.segment_id.as_deref().is_some_and(|s| s.starts_with("di-row:"))
+                && e.name.contains("transport-belt")
+        }) {
+            let ent = rows.entry(e.y).or_insert((e.carries.clone().unwrap_or_default(), i32::MAX, i32::MIN));
+            ent.1 = ent.1.min(e.x);
+            ent.2 = ent.2.max(e.x);
+        }
+        for (y, (item, xmin, xmax)) in &rows {
+            // Anything immediately west of the cell belt's start?
+            let west: Vec<&str> = l.entities.iter()
+                .filter(|e| e.y == *y && e.x == xmin - 1)
+                .map(|e| e.segment_id.as_deref().unwrap_or("?"))
+                .collect();
+            let east: Vec<String> = l.entities.iter()
+                .filter(|e| e.y == *y && e.x > *xmax && e.x <= *xmax + 4)
+                .map(|e| format!("x{}:{}", e.x, e.segment_id.as_deref().unwrap_or("?")))
+                .collect();
+            println!("CELLBELT y={y} item={item} x={xmin}..{xmax}  west={west:?} east={east:?}");
+        }
+    }
+    if std::env::var("KC3_FACE").is_ok() {
+        for y in 14..=17 {
+            let v: Vec<String> = l.entities.iter()
+                .filter(|e| e.y == y && e.segment_id.as_deref().is_some_and(|s| s.starts_with("di-row:")))
+                .map(|e| format!("x{}:{}:{}", e.x, e.name, e.carries.clone().unwrap_or_default()))
+                .collect();
+            println!("FACE y={y} n={} {:?}", v.len(), &v[..v.len().min(8)]);
+        }
+    }
+    if std::env::var("KC3_TILE").is_ok() {
+        for (x, y) in [(4,16),(5,16),(6,16),(7,16),(8,16)] {
+            for e in l.entities.iter().filter(|e| e.x == x && e.y == y) {
+                println!("TILE ({x},{y}) {:<24} dir={:?} seg={:?}", e.name, e.direction, e.segment_id);
+            }
+        }
+    }
+    if std::env::var("KC3_TRUNK").is_ok() {
+        use std::collections::BTreeMap;
+        let mut segs: BTreeMap<String, (i32,i32,i32,i32,usize)> = BTreeMap::new();
+        for e in &l.entities {
+            let Some(sg) = e.segment_id.as_deref() else { continue };
+            if !(sg.contains("iron-plate") || sg.contains("copper-plate")) { continue }
+            let en = segs.entry(sg.to_string()).or_insert((i32::MAX,i32::MIN,i32::MAX,i32::MIN,0));
+            en.0 = en.0.min(e.x); en.1 = en.1.max(e.x);
+            en.2 = en.2.min(e.y); en.3 = en.3.max(e.y); en.4 += 1;
+        }
+        for (k,(x0,x1,y0,y1,n)) in &segs {
+            println!("SEG {k:<44} n={n:<4} x={x0}..{x1} y={y0}..{y1}");
+        }
+    }
+    if std::env::var("KC3_PROBE").is_ok() {
+        let (px, y0, y1) = (46i32, 18i32, 28i32);
+        println!("--- entities at x={px}, y={y0}..{y1} ---");
+        let mut rows: Vec<_> = l.entities.iter()
+            .filter(|e| e.x == px && e.y >= y0 && e.y <= y1)
+            .collect();
+        rows.sort_by_key(|e| e.y);
+        for e in rows {
+            println!("  ({},{}) {:<26} seg={:?} carries={:?}",
+                e.x, e.y, e.name, e.segment_id, e.carries);
+        }
+    }
+
+    let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(&l, &sr, "di-cell-kc3");
+    let tag = if di { "di_cell_kc3" } else { "di_cell_kc3_control" };
+    std::fs::write(format!("/tmp/{tag}.bp"), &bp).expect("write bp");
+    std::fs::write(
+        format!("/tmp/{tag}.manifest.json"),
+        serde_json::to_string_pretty(&manifest).expect("manifest json"),
+    )
+    .expect("write manifest");
+    println!("wrote /tmp/{tag}.bp ({} bytes, di={di})", bp.len());
+}
+
+/// RFC-053 Phase 1 **coverage sweep** — how often does an eligible
+/// coupling actually become a cell, rather than being refused into the
+/// bridge/bus fallback? Phase 1 added five refusal gates (modules,
+/// multi-inserter faces, both belt capacities, eligibility); if they
+/// collectively refuse nearly everything, "Phase 1 complete" is hollow.
+/// Ignored — reporting tool, not an assertion.
+///
+/// ```bash
+/// cargo test --manifest-path crates/core/Cargo.toml --test e2e -- \
+///     di_cell_coverage_sweep --exact --ignored --nocapture
+/// ```
+#[test]
+#[ignore]
+fn di_cell_coverage_sweep() {
+    use spaghettio_core::bus::layout;
+    let cases: &[(&str, &[&str], f64)] = &[
+        ("steel-plate", &["iron-ore"], 1.0),
+        ("steel-plate", &["iron-ore"], 2.0),
+        ("steel-plate", &["iron-ore"], 5.0),
+        ("steel-plate", &["iron-ore"], 10.0),
+        ("steel-plate", &["iron-ore"], 20.0),
+        ("iron-gear-wheel", &["iron-ore"], 5.0),
+        ("iron-stick", &["iron-ore"], 5.0),
+        ("pipe", &["iron-ore"], 5.0),
+        ("copper-cable", &["copper-ore"], 5.0),
+        ("electronic-circuit", &["iron-ore", "copper-ore"], 5.0),
+        ("stone-brick", &["stone"], 5.0),
+    ];
+    println!("{:<22} {:>6}  {:>9} {:>8} {:>8}  verdict", "target", "rate", "couplings", "cells", "bridges");
+    for (item, ins, rate) in cases {
+        let inputs: FxHashSet<String> = ins.iter().map(|s| s.to_string()).collect();
+        let Ok(sr) = solver::solve(item, *rate, &inputs, "assembling-machine-2") else {
+            println!("{item:<22} {rate:>6}  {:>9} {:>8} {:>8}  SOLVER-REFUSED", "-", "-", "-");
+            continue;
+        };
+        let ncoup = sr.di_couplings.len();
+        let opts = layout::LayoutOptions {
+            direct_insertion: true,
+            max_belt_tier: Some(
+                std::env::var("SWEEP_BELT").unwrap_or_else(|_| "transport-belt".into()),
+            ),
+            ..Default::default()
+        };
+        let Ok(l) = layout::build_bus_layout(&sr, opts) else {
+            println!("{item:<22} {rate:>6}  {ncoup:>9} {:>8} {:>8}  LAYOUT-REFUSED", "-", "-");
+            continue;
+        };
+        let cells = l.entities.iter()
+            .filter_map(|e| e.segment_id.as_deref())
+            .filter(|s| s.starts_with("di-cell:") || s.starts_with("di-row:"))
+            .count();
+        let bridges = l.entities.iter()
+            .filter_map(|e| e.segment_id.as_deref())
+            .filter(|s| s.starts_with("di-bridge:"))
+            .count();
+        let verdict = if cells > 0 { "CELL" } else if bridges > 0 { "bridge" }
+            else if ncoup > 0 { "refused -> bus" } else { "no coupling" };
+        println!("{item:<22} {rate:>6}  {ncoup:>9} {cells:>8} {bridges:>8}  {verdict}");
+    }
+}
+
+/// RFC-053 **KC2 evaluation** — face contention for the Phase 2 cell.
+///
+/// A row-layout machine has two usable faces. A cell spends the NORTH face
+/// on the DI band, so every remaining flow must fit on the SOUTH face. For
+/// `copper-cable → electronic-circuit` that is iron-plate IN and
+/// electronic-circuit OUT, sharing one 3-wide face.
+///
+/// KC2 fires if those flows cannot be carried at **≤ L2** inserter-capacity
+/// research — i.e. if the cell is only feasible at max research.
+///
+/// The RFC's proposed geometry is mixed-reach: a reach-1 inserter picks
+/// iron off the NEAR belt, and a long-handed one steps OVER that belt to
+/// drop EC on the FAR belt. So the output side is constrained to
+/// long-handed (I8a: the only reach-2 inserter), which is the binding
+/// constraint and the whole reason this criterion exists.
+#[test]
+#[ignore]
+fn kc2_face_contention() {
+    use spaghettio_core::common::{belt_drop_rate, machine_feed_rate, QualityTier};
+    // AM3 canonical: 1 iron + 3 cable -> 1 EC at 2.5 crafts/s.
+    const IRON_IN: f64 = 2.5;
+    const EC_OUT: f64 = 2.5;
+    let q = QualityTier::Normal;
+
+    println!("KC2: consumer south face must carry iron IN {IRON_IN}/s + EC OUT {EC_OUT}/s");
+    println!();
+    println!("{:<22} {:>8} {:>8} {:>8}   role", "inserter", "L0", "L2", "L7");
+    for name in ["inserter", "long-handed-inserter", "fast-inserter", "bulk-inserter", "stack-inserter"] {
+        let f: Vec<String> = [0u8, 2, 7].iter()
+            .map(|&l| format!("{:.2}", machine_feed_rate(name, q, l)))
+            .collect();
+        println!("{name:<22} {:>8} {:>8} {:>8}   belt->machine (iron in)", f[0], f[1], f[2]);
+    }
+    println!();
+    for belt in ["transport-belt", "fast-transport-belt", "express-transport-belt"] {
+        for name in ["long-handed-inserter", "fast-inserter", "bulk-inserter", "stack-inserter"] {
+            let d: Vec<String> = [0u8, 2, 7].iter()
+                .map(|&l| format!("{:.2}", belt_drop_rate(name, q, 1, l, belt)))
+                .collect();
+            println!("{name:<22} {:>8} {:>8} {:>8}   machine->{belt} (EC out)", d[0], d[1], d[2]);
+        }
+        println!();
+    }
+
+    // The verdict the criterion actually asks for.
+    let far_out_l2 = belt_drop_rate("long-handed-inserter", q, 1, 2, "express-transport-belt");
+    let near_in_l2 = machine_feed_rate("fast-inserter", q, 2);
+    println!("--- KC2 verdict at L2, 3-wide face ---");
+    println!("  near (reach-1) iron in : fast-inserter {near_in_l2:.2}/s vs {IRON_IN}/s needed -> {}",
+        if near_in_l2 + 1e-9 >= IRON_IN { "OK with 1" } else { "needs >1" });
+    println!("  far  (reach-2) EC out  : long-handed  {far_out_l2:.2}/s vs {EC_OUT}/s needed -> {}",
+        if far_out_l2 + 1e-9 >= EC_OUT { "OK with 1" } else { "needs >1" });
+    let n_far = (EC_OUT / far_out_l2).ceil() as usize;
+    let n_near = (IRON_IN / near_in_l2).ceil() as usize;
+    println!("  columns required: {n_near} near + {n_far} far = {} of 3 available -> {}",
+        n_near + n_far,
+        if n_near + n_far <= 3 { "KC2 PASSES" } else { "KC2 FIRES" });
+}

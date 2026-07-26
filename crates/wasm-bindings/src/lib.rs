@@ -36,6 +36,13 @@ fn layout_options(
     stacking: Option<u8>,
     inserter_capacity: Option<u8>,
     cell_composition: Option<String>,
+    // RFC-053 direct insertion: fuse a coupled producer/consumer pair into
+    // ONE row coupled by inserters, with no belt for the coupled item.
+    // Defaults to false — pairs the engine cannot serve as a cell fall back
+    // to the DI bridge and then to the bus, so enabling it never makes a
+    // layout worse, but it stays opt-in until coverage is wider (fluids and
+    // modules still refuse).
+    direct_insertion: Option<bool>,
 ) -> LayoutOptions {
     let strategy = match strategy.as_deref() {
         // `partitioned-per-consumer` is the deprecated P1 string; the
@@ -78,6 +85,7 @@ fn layout_options(
         // decomposition search (`MergeTapCandidate`), never requested by the
         // web UI — always default-off at the public boundary.
         merge_tap: false,
+        direct_insertion: direct_insertion.unwrap_or(false),
         // Phase C: set only by the mega-block sub-solve internally,
         // never at the public boundary.
         splitter_tap_spacers: false,
@@ -98,7 +106,11 @@ fn layout_options(
             Some("off") => spaghettio_core::bus::cells::CellComposition::Off,
             _ => spaghettio_core::bus::cells::CellComposition::Candidate,
         },
-        ..Default::default()
+        // No `..Default::default()`: adding `direct_insertion` completed
+        // the field list, and a no-op struct update is a clippy error
+        // under the workspace's `-D warnings`. A field added to
+        // `LayoutOptions` later will fail to compile HERE, which is the
+        // right place to notice a new wasm-surface axis.
     }
 }
 
@@ -278,10 +290,11 @@ pub fn layout(
     stacking: Option<u8>,
     inserter_capacity: Option<u8>,
     cell_composition: Option<String>,
+    direct_insertion: Option<bool>,
 ) -> Result<LayoutResult, JsError> {
     build_bus_layout(
         &solver_result,
-        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking, inserter_capacity, cell_composition),
+        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking, inserter_capacity, cell_composition, direct_insertion),
     )
     .map_err(|e| JsError::new(&e))
 }
@@ -303,10 +316,11 @@ pub fn layout_traced(
     stacking: Option<u8>,
     inserter_capacity: Option<u8>,
     cell_composition: Option<String>,
+    direct_insertion: Option<bool>,
 ) -> Result<LayoutResult, JsError> {
     spaghettio_core::bus::layout::build_bus_layout_traced(
         &solver_result,
-        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking, inserter_capacity, cell_composition),
+        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking, inserter_capacity, cell_composition, direct_insertion),
     )
     .map_err(|e| JsError::new(&e))
 }
@@ -372,6 +386,7 @@ pub fn layout_streaming(
     stacking: Option<u8>,
     inserter_capacity: Option<u8>,
     cell_composition: Option<String>,
+    direct_insertion: Option<bool>,
     emit: &js_sys::Function,
 ) -> Result<LayoutResult, JsError> {
     let emit = emit.clone();
@@ -385,7 +400,7 @@ pub fn layout_streaming(
     });
     spaghettio_core::bus::layout::build_bus_layout_streaming(
         &solver_result,
-        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking, inserter_capacity, cell_composition),
+        layout_options(max_belt_tier, strategy, row_layout, max_inserter_tier, quality, wire_mode, stacking, inserter_capacity, cell_composition, direct_insertion),
         on_event,
     )
     .map_err(|e| JsError::new(&e))
