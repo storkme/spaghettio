@@ -540,3 +540,37 @@ for intermediates (trailing-window). The kit now self-audits
 (`kit_errors` ⇒ verdict NO DATA); measurement semantics + forensic playbook:
 [`sim-harness-forensics.md`](sim-harness-forensics.md). Baselines re-blessed
 clean-kit; a parity re-bless (post-#378 tech-state keying) is in flight.
+
+### Default warmup is too short for deep chains (2026-07-26)
+
+The buffer-fill artifact class above is **not closed** — the `--warmup`
+escape hatch exists, but the *default* does not reflect it, and recorded
+numbers taken at the default have been wrong in the same direction.
+
+`chain-mil5ore-d2` is recorded across this repo as a **FAIL at −28.7%**
+(RFC-054's calibration corpus, RFC-051 close-out). Re-run unchanged at
+`--warmup 288000` (80 game-minutes) it measures **+0.7%, 146/146 machines
+working, PASS**. Nothing about the layout changed; the measurement started
+before the factory finished filling. The native meter shows the same shape
+on `chain-mil5plates-d0`: −38.4% at a 2-minute warmup, +0.7% converged.
+
+Consequences, and they are open:
+
+- **Any recorded deficit taken at the default warmup on a multi-stage chain
+  is unproven.** Sweep warmup and watch the number: a real deficit is flat,
+  a transient is not
+  (`cargo run -p spaghettio_meter --example warmup_sweep -- <label>`).
+- **Suspect, not yet re-measured**:
+  [#453](https://github.com/storkme/spaghettio/issues/453) (USP@2, −57.0%,
+  described there as the single highest-value unknown left in the
+  composition path) and
+  [#437](https://github.com/storkme/spaghettio/issues/437) (PU@4, −27.3%).
+- **RFC-054's KC1 cannot be re-evaluated until the corpus is re-measured**,
+  because its rank half grades against band assignments that are now known
+  to contain at least one error. Re-banding must be justified by the oracle
+  alone, never by agreement with the meter.
+- **Convergence detection is a floor, not a ceiling.** Both instruments
+  report converged for `chain-mil5ore-d2` at a 40-minute warmup, where it
+  still reads −13.8% against a settled −1.3%. Stability windows cannot
+  distinguish steady state from a large factory filling slowly and
+  smoothly; a generous fixed warmup is currently the only defence.

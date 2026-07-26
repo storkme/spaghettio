@@ -174,6 +174,74 @@ fn read_json(path: &Path) -> Result<serde_json::Value, String> {
     serde_json::from_str(&s).map_err(|e| format!("parsing {path:?} as JSON: {e}"))
 }
 
+/// Launch a scenario as a **live, joinable server** and block until the
+/// child exits (or the operator kills it).
+///
+/// This is the human-eyeball counterpart to [`launch_and_wait`]: no
+/// polling, no teardown, no result file. The repo's verification protocol
+/// is explicit that a zero-warning layout which visibly has disconnected
+/// belts is a validator bug and not a success, and until now there was no
+/// way to *look* at a fixture — only to measure it.
+///
+/// The port is fixed rather than ephemeral because a human has to type it
+/// into a client. Factorio's default is 34197.
+pub fn launch_server(
+    install_dir: &Path,
+    run_dir: &Path,
+    scenario_name: &str,
+    port: u16,
+) -> Result<(), String> {
+    let binary = paths::factorio_binary_path(install_dir);
+    // A serve-only settings copy with commands enabled for everyone, so
+    // the operator can use /editor and /c without an admin list (there is
+    // no stable username to put in one). Written into the run dir rather
+    // than mutating the shared measurement settings in the install.
+    let settings = write_serve_settings(install_dir, run_dir)?;
+
+    let mut child: Child = Command::new(&binary)
+        .current_dir(install_dir)
+        .arg("--config")
+        .arg(run_dir.join("config.ini"))
+        .arg("--start-server-load-scenario")
+        .arg(scenario_name)
+        .arg("--server-settings")
+        .arg(&settings)
+        .arg("--port")
+        .arg(port.to_string())
+        // Inherit stdio: the operator wants to watch the server log.
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .map_err(|e| format!("failed to launch {binary:?}: {e}"))?;
+
+    let status = child.wait().map_err(|e| format!("waiting on factorio: {e}"))?;
+    // A server the operator Ctrl-C's is a normal end, not a failure.
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("factorio exited with {status}"))
+    }
+}
+
+/// Copy the harness server settings, enabling commands, into the run dir.
+///
+/// Measurement runs keep `allow_commands: "admins-only"` — a stray console
+/// command during a measurement would silently invalidate it. `serve` is
+/// for a human poking at the world, so commands are the point.
+fn write_serve_settings(install_dir: &Path, run_dir: &Path) -> Result<PathBuf, String> {
+    let base = paths::server_settings_path(install_dir);
+    let raw = std::fs::read_to_string(&base)
+        .map_err(|e| format!("reading server settings {base:?}: {e}"))?;
+    let mut v: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| format!("parsing server settings: {e}"))?;
+    v["allow_commands"] = serde_json::Value::String("true".into());
+    v["name"] = serde_json::Value::String("spaghettio serve (inspection)".into());
+    let path = run_dir.join("serve-server-settings.json");
+    std::fs::write(&path, serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?)
+        .map_err(|e| format!("writing {path:?}: {e}"))?;
+    Ok(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
