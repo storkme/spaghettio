@@ -644,3 +644,12 @@ make either experimental composer a production default.
   compaction system. It does not yet implement topology-free local manifolds,
   rotations or annealed island reordering; those remain the higher-risk
   competitors for the occupied-tile gate.
+
+- **2026-07-26 — Normal pipeline integration.** `LayoutOptions` now exposes
+  `compact_layout`, default `false`. When explicitly enabled,
+  `build_bus_layout` runs the validated RFC-057 fixed point on the winning
+  decomposition before returning it; candidate decompositions themselves
+  remain uncompacted so selection scoring and retry logic are unchanged.
+  A focused end-to-end test proves the default path is inert, the option
+  preserves the exact placed-machine signature, never increases either
+  dimension and returns a fully valid layout.

@@ -133,6 +133,9 @@ pub struct LayoutOptions {
     /// The solver always populates `di_couplings`; this flag only
     /// controls whether the placer acts on them.
     pub direct_insertion: bool,
+    /// RFC-057 topology-preserving post-layout compaction. Experimental and
+    /// default off, so the normal pipeline remains byte-identical.
+    pub compact_layout: bool,
 }
 
 impl Default for LayoutOptions {
@@ -162,6 +165,7 @@ impl Default for LayoutOptions {
             // bit-identical (goldens gate this).
             cell_composition: crate::bus::cells::CellComposition::Candidate,
             direct_insertion: false,
+            compact_layout: false,
         }
     }
 }
@@ -205,7 +209,17 @@ pub fn build_bus_layout(
             opts.stacking, opts.max_inserter_tier
         ));
     }
-    crate::bus::decomposition_search::select_best_decomposition(solver_result, opts)
+    let compact_layout = opts.compact_layout;
+    let result =
+        crate::bus::decomposition_search::select_best_decomposition(solver_result, opts)?;
+    if compact_layout {
+        Ok(crate::bus::compaction::compact_validated_geometry(
+            &result,
+            solver_result,
+        ))
+    } else {
+        Ok(result)
+    }
 }
 
 /// Today's `build_bus_layout` body — the retry orchestrator that
@@ -2841,6 +2855,55 @@ mod tests {
     /// `inserter-direction` (which would otherwise flag them as touching no
     /// machine) nor `belt-flow-reachability` (which would otherwise call the
     /// producer's bridge-consumed output belt a dead-end) fires on them.
+    #[test]
+    fn compact_layout_option_is_explicit_and_validated() {
+        let inputs: FxHashSet<String> =
+            ["iron-plate"].iter().map(|item| item.to_string()).collect();
+        let sr = crate::solver::solve_with_exclusions(
+            "iron-gear-wheel",
+            5.0,
+            &inputs,
+            "assembling-machine-3",
+            &FxHashSet::default(),
+        )
+        .expect("solve iron gears");
+        let base_opts = LayoutOptions {
+            cell_composition: crate::bus::cells::CellComposition::Off,
+            ..Default::default()
+        };
+        let control =
+            build_bus_layout(&sr, base_opts.clone()).expect("control layout should succeed");
+        let compacted = build_bus_layout(
+            &sr,
+            LayoutOptions {
+                compact_layout: true,
+                ..base_opts
+            },
+        )
+        .expect("compacted layout should succeed");
+
+        assert_eq!(
+            crate::bus::compaction::PlacedMachineSignature::from_layout(&control),
+            crate::bus::compaction::PlacedMachineSignature::from_layout(&compacted),
+        );
+        assert!(compacted.width <= control.width);
+        assert!(compacted.height <= control.height);
+        let issues = match crate::validate::validate(
+            &compacted,
+            Some(&sr),
+            crate::validate::LayoutStyle::Bus,
+        ) {
+            Ok(issues) => issues,
+            Err(error) => error.issues,
+        };
+        assert!(
+            issues
+                .iter()
+                .all(|issue| issue.severity != crate::validate::Severity::Error),
+            "compacted option emitted errors: {issues:?}",
+        );
+    }
+
     #[test]
     fn di_full_pipeline_ec_from_plates() {
         let inputs: FxHashSet<String> =
