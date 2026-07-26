@@ -1002,6 +1002,15 @@ pub fn plan_row_straddle(
             // makes 1:1 rows still emit `PCPCPC…` rather than `CPCPCP…`
             // and leaves every shipped layout byte-identical.
             let needs_both = adjacent[lo] >= 2 && left[lo].is_none() && right[lo].is_none();
+            // The `shared[lo - 1]` half is DEFENSIVE and currently
+            // unreachable: the flow intervals hand consumers over in strict
+            // left-to-right order, so a straddle that claims `left[lo]`
+            // always lands before any single-fed consumer of `lo` could
+            // want it — an instrumented fuzz saw the condition true 497,747
+            // times in 2M trials and load-bearing in ZERO of them. Kept
+            // rather than deleted because it costs nothing and the ordering
+            // invariant it leans on is not locally obvious; flagged so the
+            // next reader does not mistake it for live logic.
             if needs_both && !(lo > 0 && shared[lo - 1]) {
                 left[lo] = Some(j);
             } else if right[lo].is_none() {
@@ -1268,13 +1277,20 @@ pub struct RowCellSpec<'a> {
 /// Stamp a horizontal row cell with its belts.
 ///
 /// ```text
-///   y0                  producer input belt   (outer, reach-2 feed)
-///   y1                  consumer input belt   (inner, reach-1 feed)
-///   y2                  feed inserters
-///   y3 .. y3+h-1        machines, interleaved P/C at plan.xs
-///   y3+h                output inserters
-///   y3+h+1              output belt
+///   y0                  producer input belt, or the PIPE run when the
+///                       producer is fluid-fed
+///   y1                  producer feed inserters, reach-1 (none when piped)
+///   y2 .. y2+h-1        machines, interleaved P/C at plan.xs,
+///                       BOTTOM-aligned so both roles share a south face
+///   y2+h                face row: consumer feed reach-1 + output reach-2
+///   y2+h+1              consumer input belt (absent when the coupling
+///                       supplies every solid the consumer needs)
+///   y2+h+2              output belt — moves up to y2+h+1, at reach-1,
+///                       when there is no consumer input belt to step over
 /// ```
+///
+/// The in-body comment beside `p_belt_y` is the authority on the exact
+/// rows; this sketch is the shape.
 ///
 /// Couplers sit in the gap columns BETWEEN machines, at reach 1 — the
 /// property that makes this DI at all. Returns `None` if the coupler

@@ -1940,8 +1940,8 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   | pair | instances | REAL blocker |
   |---|---|---|
   | `copper-cable → advanced-circuit` | 360 | **1:5 fan-out.** At 1/s the solve is P1:C5 (`pr=4.00`, `cr=0.80`) — one producer feeding five consumers, against a row's two neighbours. Face count is secondary; face allocation alone unlocks nothing here. |
-  | `iron-stick → rail` | 351 | **Face count, and only that.** P1:C1, straddle `PC`, `required_rate` 0.5–2.5/s, the two belt-fed solids (stone, steel-plate) at the same modest rates. |
-  | `electric-engine-unit → flying-robot-frame` | 318 | Three independent blockers: the consumer needs **3** belt-fed solids, the producer takes **2** solid inputs against the row's one north belt, and the producer's lubricant is a fluid the consumer does not share. Its straddle now passes (`CPCCPCC…`) thanks to the slot fix, so that is no longer among them. |
+  | `iron-stick → rail` | 351 | **Face count is the only ELIGIBILITY blocker** — a `row_cell_eligible` copy with the face gate removed returns OK at every rate tried. But `plan_row_straddle` independently balances at only 2 of 12 sampled rates (5/s, 10/s); elsewhere `snap()`'s machine-count rounding leaves supply and demand unequal (at 1/s: P1:C1, 3.0 vs 1.5). So face allocation makes rail *possible*, not *universal* — it would cell at the rates where the straddle already balances. |
+  | `electric-engine-unit → flying-robot-frame` | 318 | Three independent RECIPE facts, each of which must be fixed: the consumer needs **3** belt-fed solids, the producer takes **2** solid inputs against the row's one north belt, and the producer's lubricant is a fluid the consumer does not share. (They cash out as only TWO code-level gates — the last two both fail through `producer_feed_ok`.) Its straddle now passes (`CPCCPCC…`) thanks to the slot fix, so that is no longer among them. |
 
   ***So face allocation is worth 351 instances, not 1,029.*** *Recorded
   because the inflated figure was mine, it was quoted as the top priority
@@ -1958,11 +1958,24 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   | reach-1 AND reach-2 on one face → two STACKED belt rows | `23 DI@S \| S:in1 S:in2 S:in2` (rail) | **Yes**, if the output moves to the opposite face |
   | Inputs on BOTH faces | `93 DI@N \| N:in1 S:in1 S:out1` (FRF) | **No** — the north face is the producer's |
 
-  ***The headline finding is the first row: the corpus's most common answer
-  to "too many ingredients" is two items sharing one belt, and our bus
-  cannot express that at all.*** *That is a bus-wide feature with its own
-  RFC, not a DI-cell tweak — and it is the real reason `advanced-circuit`
-  looks the way it does in the corpus.*
+  ***The lane-mixing reading of the first row is UNPROVEN — treat it as a
+  hypothesis, not a finding.*** *An adversarial review pushed back on it
+  and was right to. The miner's raw numbers reproduce exactly, and it is
+  NOT undercounting — `inserter_reach` handles every corpus inserter name,
+  and a manual 6-tile entity dump around five sampled consumers found
+  nothing touching their N/S faces. But **blueprint export does not encode
+  belt CONTENTS**, only entity placement, so nothing in static corpus data
+  can distinguish "one inserter feeding two ingredients off two lanes"
+  from "the second ingredient is simply absent because the scraped
+  blueprint is incomplete" — a common defect in mega-factory collections.
+  A backward belt-network trace was attempted and defeated by a single
+  ~4,000-tile connected bus component; settling it needs
+  direction/splitter/lane-aware flow tracing that does not exist yet.*
+
+  *So: our bus genuinely cannot express two items per belt (claim 5 below
+  is solid), but whether that is what the corpus DOES here is not
+  established. **The six-row design below does not rest on it** — its
+  justification is row-budget arithmetic, which stands on its own.*
 
   *The reachable design, from the second row: give the cell six rows around
   the machines instead of five —*
@@ -1981,6 +1994,17 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
 
   *Costs one row. The reach-2 output pick lands 2 tiles into the machine,
   so it needs a machine ≥2 tall (every candidate is 3+). Output reach is
-  unchanged — it is already `Reach::Far` today. NOT YET IMPLEMENTED; this
-  entry is the evidence and the design, so the decision to build it is
-  taken on 351 instances rather than on 1,029.*
+  unchanged — it is already `Reach::Far` today. Producer-feed and
+  consumer-output inserters share row `y2` over DISJOINT x-ranges, so they
+  do not collide.*
+
+  ***Open integration question the reach arithmetic cannot settle:*** *the
+  design moves the output belt from the south face to the north/outer one,
+  and `RowSpan.output_belt_y` has ~11 bare read sites across `lane_planner`
+  and `ghost_router`. Whether any of them assume the output is SOUTH of
+  the machines is unchecked. That is the first thing to establish if this
+  is built — it is a bigger risk than the stamping itself.*
+
+  *NOT YET IMPLEMENTED; this entry is the evidence and the design, so the
+  decision to build it is taken on 351 rate-limited instances rather than
+  on 1,029.*
