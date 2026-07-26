@@ -483,3 +483,21 @@ make either experimental composer a production default.
   to answer whether the source contains enough positional slack to justify
   the router work. A 50–69% machine-bbox reduction says yes and clears that
   continuation gate by a wide margin.
+
+- **2026-07-26 — First runnable post-pass and route-intent extraction.**
+  Global empty-column stripping preserves every entity, remaps functional
+  boundaries and only shortens horizontal underground spans. On
+  `chain-mil5ore` it validates cleanly and reduces 720×34 to 712×34 (1.1%),
+  confirming that whitespace removal alone is safe but immaterial.
+
+  The fast meter measured the source and stripped artifacts identically:
+  1.73/s military science produced, 1.28/s delivered, the same per-item
+  rates, 136 working / 10 ingredient-short machines and 68,748 boundary
+  refusals. Each 18,000-tick measurement took 0.40s.
+
+  Route-intent extraction now groups physical belt provenance into commodity
+  nets by `(item, capacity replica)` rather than by debug segment. The latter
+  was falsified immediately: one real copper-plate delivery spans row, fan and
+  corridor segment IDs. The corrected extractor finds 39 replaceable solid
+  route nets on `chain-mil5ore`, and every solved solid production edge has
+  both a producer-drop and consumer-pickup terminal in at least one net.

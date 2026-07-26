@@ -7,7 +7,10 @@
 
 use std::collections::BTreeMap;
 
-use crate::common::{entity_size, oriented_splitter_dims, QualityTier};
+use crate::common::{
+    dir_to_vec, entity_size, inserter_reach, is_belt_entity, is_inserter,
+    oriented_splitter_dims, QualityTier,
+};
 use crate::models::{EntityDirection, LayoutResult, ModuleItem, SolverResult};
 
 const RATE_SCALE: f64 = 1_000_000_000.0;
@@ -303,6 +306,242 @@ pub fn blocks_overlap(a: &CompactBlock, b: &CompactBlock) -> bool {
         && b.y < a.y + a.height
 }
 
+/// Remove globally empty tile columns while preserving entity order and
+/// shortening horizontal underground spans. This is the first runnable
+/// constraint-compaction baseline: it never deletes or rotates an entity.
+///
+/// The result deliberately drops region/trace metadata because their
+/// coordinate-rich solver provenance describes the source embedding, not the
+/// compacted artifact. Functional boundary/effective-row records are remapped.
+pub fn strip_empty_columns(layout: &LayoutResult) -> LayoutResult {
+    if layout.width <= 0 {
+        return layout.clone();
+    }
+    let mut occupied = vec![false; layout.width as usize];
+    for entity in &layout.entities {
+        let (mut width, mut height) = oriented_splitter_dims(&entity.name, entity.direction)
+            .unwrap_or_else(|| entity_size(&entity.name));
+        if matches!(entity.direction, EntityDirection::East | EntityDirection::West)
+            && width != height
+            && oriented_splitter_dims(&entity.name, entity.direction).is_none()
+        {
+            std::mem::swap(&mut width, &mut height);
+        }
+        let _ = height;
+        for x in entity.x.max(0)..(entity.x + width as i32).min(layout.width) {
+            occupied[x as usize] = true;
+        }
+    }
+    for boundary in layout
+        .boundary_inputs
+        .iter()
+        .chain(layout.boundary_outputs.iter())
+    {
+        if (0..layout.width).contains(&boundary.x) {
+            occupied[boundary.x as usize] = true;
+        }
+    }
+    for (_, x, _) in &layout.surplus_exits {
+        if (0..layout.width).contains(x) {
+            occupied[*x as usize] = true;
+        }
+    }
+
+    let mut removed_before = vec![0i32; layout.width as usize + 1];
+    for x in 0..layout.width as usize {
+        removed_before[x + 1] = removed_before[x] + i32::from(!occupied[x]);
+    }
+    let remap_x = |x: i32| -> i32 {
+        if x <= 0 {
+            x
+        } else if x >= layout.width {
+            x - removed_before[layout.width as usize]
+        } else {
+            x - removed_before[x as usize]
+        }
+    };
+
+    let mut compacted = layout.clone();
+    for entity in &mut compacted.entities {
+        entity.x = remap_x(entity.x);
+    }
+    for boundary in compacted
+        .boundary_inputs
+        .iter_mut()
+        .chain(compacted.boundary_outputs.iter_mut())
+    {
+        boundary.x = remap_x(boundary.x);
+    }
+    for (_, x, _) in &mut compacted.surplus_exits {
+        *x = remap_x(*x);
+    }
+    compacted.width -= removed_before[layout.width as usize];
+    compacted.regions.clear();
+    compacted.trace = None;
+    compacted
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RouteTerminalKind {
+    ProducerDrop,
+    ConsumerPickup,
+    BoundaryInput,
+    BoundaryOutput,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct RouteTerminal {
+    pub kind: RouteTerminalKind,
+    pub x: i32,
+    pub y: i32,
+    pub recipe: Option<String>,
+}
+
+/// Replaceable logistics net recovered from the current embedding.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RouteNet {
+    pub item: String,
+    pub copy: Option<u32>,
+    pub segments: Vec<String>,
+    pub entity_indices: Vec<usize>,
+    pub terminals: Vec<RouteTerminal>,
+}
+
+/// Recover belt nets and their machine/boundary terminals from a validated
+/// layout. This is routing intent for rubber-band re-embedding, not part of
+/// the production invariant: later phases may merge or split these nets while
+/// preserving [`ProductionSignature`].
+pub fn extract_route_nets(layout: &LayoutResult) -> Vec<RouteNet> {
+    let mut nets: Vec<RouteNet> = Vec::new();
+    let mut net_by_key: BTreeMap<(String, Option<u32>), usize> = BTreeMap::new();
+    let mut entity_net: BTreeMap<usize, usize> = BTreeMap::new();
+
+    for (entity_idx, entity) in layout.entities.iter().enumerate() {
+        if !is_belt_entity(&entity.name) {
+            continue;
+        }
+        let Some(segment) = entity.segment_id.clone() else {
+            continue;
+        };
+        let Some(item) = entity.carries.clone() else {
+            continue;
+        };
+        let copy = segment_copy(&segment);
+        let key = (item.clone(), copy);
+        let net_idx = *net_by_key.entry(key).or_insert_with(|| {
+            let idx = nets.len();
+            nets.push(RouteNet {
+                item,
+                copy,
+                segments: Vec::new(),
+                entity_indices: Vec::new(),
+                terminals: Vec::new(),
+            });
+            idx
+        });
+        if !nets[net_idx].segments.contains(&segment) {
+            nets[net_idx].segments.push(segment);
+        }
+        nets[net_idx].entity_indices.push(entity_idx);
+        entity_net.insert(entity_idx, net_idx);
+    }
+
+    let mut machine_at: BTreeMap<(i32, i32), String> = BTreeMap::new();
+    for entity in &layout.entities {
+        let Some(recipe) = entity.recipe.as_ref() else {
+            continue;
+        };
+        let (mut width, mut height) = entity_size(&entity.name);
+        if matches!(entity.direction, EntityDirection::East | EntityDirection::West)
+            && width != height
+        {
+            std::mem::swap(&mut width, &mut height);
+        }
+        for x in entity.x..entity.x + width as i32 {
+            for y in entity.y..entity.y + height as i32 {
+                machine_at.insert((x, y), recipe.clone());
+            }
+        }
+    }
+
+    // Map every surface tile occupied by a belt-like entity to its net. A
+    // splitter has a two-tile footprint and an inserter may address either
+    // half.
+    let mut belt_net_at: BTreeMap<(i32, i32), usize> = BTreeMap::new();
+    for (&entity_idx, &net_idx) in &entity_net {
+        let entity = &layout.entities[entity_idx];
+        let (width, height) = oriented_splitter_dims(&entity.name, entity.direction)
+            .unwrap_or((1, 1));
+        for x in entity.x..entity.x + width as i32 {
+            for y in entity.y..entity.y + height as i32 {
+                belt_net_at.insert((x, y), net_idx);
+            }
+        }
+    }
+
+    for inserter in layout.entities.iter().filter(|e| is_inserter(&e.name)) {
+        let (dx, dy) = dir_to_vec(inserter.direction);
+        let reach = inserter_reach(&inserter.name);
+        let pickup = (inserter.x - dx * reach, inserter.y - dy * reach);
+        let drop = (inserter.x + dx * reach, inserter.y + dy * reach);
+        if let (Some(&net_idx), Some(recipe)) =
+            (belt_net_at.get(&drop), machine_at.get(&pickup))
+        {
+            nets[net_idx].terminals.push(RouteTerminal {
+                kind: RouteTerminalKind::ProducerDrop,
+                x: drop.0,
+                y: drop.1,
+                recipe: Some(recipe.clone()),
+            });
+        }
+        if let (Some(&net_idx), Some(recipe)) =
+            (belt_net_at.get(&pickup), machine_at.get(&drop))
+        {
+            nets[net_idx].terminals.push(RouteTerminal {
+                kind: RouteTerminalKind::ConsumerPickup,
+                x: pickup.0,
+                y: pickup.1,
+                recipe: Some(recipe.clone()),
+            });
+        }
+    }
+
+    for (kind, boundaries) in [
+        (RouteTerminalKind::BoundaryInput, &layout.boundary_inputs),
+        (RouteTerminalKind::BoundaryOutput, &layout.boundary_outputs),
+    ] {
+        for boundary in boundaries {
+            if let Some(&net_idx) = belt_net_at.get(&(boundary.x, boundary.y)) {
+                nets[net_idx].terminals.push(RouteTerminal {
+                    kind,
+                    x: boundary.x,
+                    y: boundary.y,
+                    recipe: None,
+                });
+            }
+        }
+    }
+
+    for net in &mut nets {
+        net.entity_indices.sort_unstable();
+        net.segments.sort();
+        net.terminals.sort();
+        net.terminals.dedup();
+    }
+    nets.sort_by(|a, b| (&a.item, a.copy).cmp(&(&b.item, b.copy)));
+    nets
+}
+
+fn segment_copy(segment: &str) -> Option<u32> {
+    let (_, suffix) = segment.rsplit_once('#')?;
+    let digits: String = suffix.chars().take_while(char::is_ascii_digit).collect();
+    if digits.is_empty() {
+        None
+    } else {
+        digits.parse().ok()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -390,6 +629,86 @@ mod tests {
         assert_eq!(
             PlacedMachineSignature::from_layout(&a),
             PlacedMachineSignature::from_layout(&b)
+        );
+    }
+
+    #[test]
+    fn empty_column_strip_preserves_entities_and_shortens_geometry() {
+        let mut layout = LayoutResult {
+            width: 6,
+            height: 1,
+            entities: vec![
+                crate::models::PlacedEntity {
+                    name: "express-underground-belt".into(),
+                    x: 0,
+                    direction: EntityDirection::East,
+                    io_type: Some("input".into()),
+                    ..Default::default()
+                },
+                crate::models::PlacedEntity {
+                    name: "express-underground-belt".into(),
+                    x: 5,
+                    direction: EntityDirection::East,
+                    io_type: Some("output".into()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let signature = PlacedMachineSignature::from_layout(&layout);
+        let compacted = strip_empty_columns(&layout);
+        assert_eq!(compacted.width, 2);
+        assert_eq!(compacted.entities[0].x, 0);
+        assert_eq!(compacted.entities[1].x, 1);
+        assert_eq!(PlacedMachineSignature::from_layout(&compacted), signature);
+        layout.entities.reverse();
+        assert_eq!(strip_empty_columns(&layout).width, 2);
+    }
+
+    #[test]
+    fn route_net_extraction_finds_machine_endpoints() {
+        let layout = LayoutResult {
+            entities: vec![
+                crate::models::PlacedEntity {
+                    name: "assembling-machine-3".into(),
+                    x: 0,
+                    y: 0,
+                    recipe: Some("plate".into()),
+                    ..Default::default()
+                },
+                crate::models::PlacedEntity {
+                    name: "inserter".into(),
+                    x: 1,
+                    y: 3,
+                    direction: EntityDirection::South,
+                    ..Default::default()
+                },
+                crate::models::PlacedEntity {
+                    name: "transport-belt".into(),
+                    x: 1,
+                    y: 4,
+                    direction: EntityDirection::East,
+                    carries: Some("plate".into()),
+                    segment_id: Some("corr:plate".into()),
+                    ..Default::default()
+                },
+            ],
+            width: 3,
+            height: 5,
+            ..Default::default()
+        };
+        let nets = extract_route_nets(&layout);
+        assert_eq!(nets.len(), 1);
+        assert_eq!(nets[0].item, "plate");
+        assert_eq!(nets[0].segments, vec!["corr:plate"]);
+        assert_eq!(
+            nets[0].terminals,
+            vec![RouteTerminal {
+                kind: RouteTerminalKind::ProducerDrop,
+                x: 1,
+                y: 4,
+                recipe: Some("plate".into()),
+            }]
         );
     }
 }

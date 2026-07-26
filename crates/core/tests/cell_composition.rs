@@ -1438,6 +1438,74 @@ fn rfc057_machine_constraint_baseline() {
     }
 }
 
+#[test]
+#[ignore = "RFC-057 runnable whitespace-compaction baseline"]
+fn rfc057_strip_empty_columns_mil5ore() {
+    use spaghettio_core::bus::compaction::{
+        extract_route_nets, strip_empty_columns, PlacedMachineSignature,
+        ProductionSignature, RouteTerminalKind,
+    };
+    use spaghettio_core::validate::{self, LayoutStyle, Severity};
+
+    let fixture = SimFixture::find("chain-mil5ore");
+    let inputs: FxHashSet<String> =
+        fixture.inputs.iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        fixture.target, fixture.rate, &inputs, &MachinePalette::default(),
+        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+    ).unwrap();
+    let source = fixture.compose_layout();
+    let compacted = strip_empty_columns(&source);
+    let production = ProductionSignature::from_solver(&sr).unwrap();
+    let nets = extract_route_nets(&source);
+    for edge in production.edges.iter().filter(|edge| !edge.is_fluid) {
+        assert!(nets.iter().any(|net| {
+            net.item == edge.item
+                && net.terminals.iter().any(|terminal| {
+                    terminal.kind == RouteTerminalKind::ProducerDrop
+                        && terminal.recipe.as_ref().is_some_and(|recipe| {
+                            edge.producer_recipes.contains(recipe)
+                        })
+                })
+                && net.terminals.iter().any(|terminal| {
+                    terminal.kind == RouteTerminalKind::ConsumerPickup
+                        && terminal.recipe.as_deref() == Some(edge.consumer_recipe.as_str())
+                })
+        }), "no extracted route net covers edge {edge:?}");
+    }
+    assert_eq!(
+        PlacedMachineSignature::from_layout(&source),
+        PlacedMachineSignature::from_layout(&compacted),
+    );
+    let issues = match validate::validate(&compacted, Some(&sr), LayoutStyle::Bus) {
+        Ok(v) => v,
+        Err(e) => e.issues,
+    };
+    let errors: Vec<_> = issues.iter()
+        .filter(|issue| issue.severity == Severity::Error)
+        .collect();
+    assert!(errors.is_empty(), "stripped candidate errors: {errors:?}");
+    std::fs::create_dir_all("target/tmp").unwrap();
+    for (label, layout) in [
+        ("rfc057-mil5ore-control", &source),
+        ("rfc057-mil5ore-strip", &compacted),
+    ] {
+        let (bp, manifest) =
+            spaghettio_core::blueprint::export_with_manifest(layout, &sr, label);
+        std::fs::write(format!("target/tmp/{label}.bp"), bp).unwrap();
+        std::fs::write(
+            format!("target/tmp/{label}.manifest.json"),
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        ).unwrap();
+    }
+    println!(
+        "chain-mil5ore: {}x{} -> {}x{}; entities={}",
+        source.width, source.height, compacted.width, compacted.height,
+        compacted.entities.len(),
+    );
+    println!("extracted {} replaceable route nets", nets.len());
+}
+
 /// Artifact producer for the increment-2 sim run.
 #[test]
 #[ignore = "artifact producer"]
