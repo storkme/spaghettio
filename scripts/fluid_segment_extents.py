@@ -11,11 +11,14 @@ Rules honoured:
   F5  a `pipe-to-ground` has ONE surface side + one underground side
   F5a a PTG's perpendicular sides do NOT connect
   F4  PTGs pair underground, opposite facing, same axis, gap <= 9
+  F10 pumps split segments; storage-tank connections use its 3x3 footprint
 """
 import json, sys, collections
 
 # Blueprint-JSON direction (what the dump carries): 0=N,4=E,8=S,12=W.
 DELTA = {0: (0, -1), 4: (1, 0), 8: (0, 1), 12: (-1, 0)}
+CARDINALS = set(DELTA.values())
+SEGMENT_ENTITIES = {"pipe", "pipe-to-ground", "infinity-pipe", "storage-tank"}
 
 
 def load(path):
@@ -23,25 +26,50 @@ def load(path):
     return (r.get("sim_state") or {}).get("pipes", [])
 
 
-def openings(name, direction):
-    """Which orthogonal deltas this entity can connect on, at the surface.
+def connection_deltas(name, direction, neighbour_name):
+    """Offsets to centres this entity can connect to at the surface.
 
     F1: a plain pipe opens on all four sides.
     F5/F5a: a pipe-to-ground opens on ONE surface side only — the side its
     (game-convention) direction points at. Its back and both perpendicular
     sides are CLOSED, which is what keeps stacked multi-fluid trunk rows
     isolated even though their tiles touch.
+    A storage tank is 3x3: a one-tile entity adjacent to its edge is two
+    centre coordinates away, and two edge-adjacent tanks are three apart.
     """
     if name == "pipe-to-ground":
         d = DELTA.get(direction)
-        return {d} if d else set()
-    return {(0, -1), (1, 0), (0, 1), (-1, 0)}
+        if not d:
+            return set()
+        distance = 2 if neighbour_name == "storage-tank" else 1
+        return {(d[0] * distance, d[1] * distance)}
+    if name in {"pipe", "infinity-pipe"}:
+        distance = 2 if neighbour_name == "storage-tank" else 1
+    elif name == "storage-tank":
+        distance = 3 if neighbour_name == "storage-tank" else 2
+    else:
+        raise ValueError(f"unsupported pipe-class entity: {name}")
+    return {(dx * distance, dy * distance) for dx, dy in CARDINALS}
+
+
+def footprint_bounds(pos, name):
+    """Inclusive tile bounds; storage tanks occupy 3x3, all others 1x1."""
+    x, y = pos
+    radius = 1 if name == "storage-tank" else 0
+    return x - radius, x + radius, y - radius, y + radius
 
 
 def build(pipes):
     at = {}
     for p in pipes:
         x, y, name, direction, fluids = p[0], p[1], p[2], p[3], p[4] or []
+        # A pump has separate input and output fluid boxes and is the boundary
+        # between two F10 segments. It must not become a graph node joining
+        # those segments (or a bogus isolated segment) in this topology.
+        if name == "pump":
+            continue
+        if name not in SEGMENT_ENTITIES:
+            raise ValueError(f"unsupported pipe-class entity in dump: {name}")
         at[(x, y)] = {"name": name, "dir": direction, "fluids": fluids}
 
     adj = collections.defaultdict(set)
@@ -55,15 +83,15 @@ def build(pipes):
     # pipe re-add a connection through a PTG's closed side and silently merge
     # two independent segments.
     for pos, e in at.items():
-        opens = openings(e["name"], e["dir"])
-        for d in opens:
-            n = (pos[0] + d[0], pos[1] + d[1])
-            ne = at.get(n)
-            if not ne:
-                continue
-            back = (-d[0], -d[1])
-            if back in openings(ne["name"], ne["dir"]):
-                link(pos, n)
+        for neighbour_name in SEGMENT_ENTITIES:
+            for d in connection_deltas(e["name"], e["dir"], neighbour_name):
+                n = (pos[0] + d[0], pos[1] + d[1])
+                ne = at.get(n)
+                if not ne or ne["name"] != neighbour_name:
+                    continue
+                back = (-d[0], -d[1])
+                if back in connection_deltas(ne["name"], ne["dir"], e["name"]):
+                    link(pos, n)
 
     # F4: underground pairing — opposite facing, same axis, entity-to-entity
     # distance <= 10 (gap <= 9).
@@ -119,8 +147,9 @@ def main(path):
     over = []
     rows = []
     for c in comps:
-        xs = [p[0] for p in c]
-        ys = [p[1] for p in c]
+        bounds = [footprint_bounds(p, at[p]["name"]) for p in c]
+        xs = [x for x0, x1, _, _ in bounds for x in (x0, x1)]
+        ys = [y for _, _, y0, y1 in bounds for y in (y0, y1)]
         # Tile EXTENT, not coordinate span: x=0..320 is 321 tiles.
         dx, dy = max(xs) - min(xs) + 1, max(ys) - min(ys) + 1
         fl = sorted({f[0] for p in c for f in at[p]["fluids"]})
