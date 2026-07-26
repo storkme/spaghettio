@@ -106,6 +106,10 @@ pub struct RunParams {
     pub warmup_ticks: u32,
     pub window_ticks: u32,
     pub scenario_name: String,
+    /// `serve` only: reveal the map and speed the operator up on join.
+    /// Never set for measurement runs — it changes force bonuses, and a
+    /// measurement must run in the world the fixture declares.
+    pub operator_qol: bool,
 }
 
 impl RunParams {
@@ -125,7 +129,14 @@ impl RunParams {
             warmup_ticks: warmup,
             window_ticks: window,
             scenario_name,
+            operator_qol: false,
         }
+    }
+
+    /// Enable the human-inspection conveniences (`serve`).
+    pub fn with_operator_qol(mut self) -> RunParams {
+        self.operator_qol = true;
+        self
     }
 
     /// Override the dim-scaled warmup (`--warmup`). The 2% stability
@@ -492,7 +503,38 @@ script.on_event(defines.events.on_player_joined_game, function(ev)
     p.teleport({0, 0}, s)
     game.print("[spaghettio-sim] teleported " .. p.name .. " to the lab surface")
   end
-end)
+"#,
+    );
+
+    // `serve` only, and it must live INSIDE the handler above: a second
+    // `script.on_event` for the same event REPLACES the first, which
+    // would silently drop the lab-surface teleport and strand the player
+    // on nauvis looking at empty terrain.
+    if params.operator_qol {
+        out.push_str(
+            r#"  if p and s then
+    -- Chart the whole paste plus a margin so the map opens usable rather
+    -- than black. storage.offx/offy is where the blueprint actually
+    -- landed; chart `s`, the lab surface, not wherever the player spawned.
+    local m = 64
+    p.force.chart(s, {{storage.offx - m, storage.offy - m},
+                      {storage.offx + DIMS_X + m, storage.offy + DIMS_Y + m}})
+    p.force.character_running_speed_modifier = 5
+    p.force.character_reach_distance_bonus = 24
+    p.force.character_build_distance_bonus = 24
+    p.force.character_resource_reach_distance_bonus = 24
+    p.print("spaghettio serve: map charted, 6x run speed, +24 reach.")
+    p.print("  /editor          free camera, no character (best for inspecting)")
+    p.print("  /c game.speed=4  fast-forward to steady state")
+    p.print("layout spans (" .. storage.offx .. "," .. storage.offy .. ") to ("
+            .. (storage.offx + DIMS_X) .. "," .. (storage.offy + DIMS_Y) .. ")")
+  end
+"#,
+        );
+    }
+
+    out.push_str(
+        r#"end)
 
 script.on_init(function()
   storage.eeis, storage.feeds, storage.fed_total = {}, {}, {}
@@ -938,6 +980,7 @@ mod tests {
             warmup_ticks: 3600,
             window_ticks: 1800,
             scenario_name: "t".into(),
+            operator_qol: false,
         }
         .with_warmup(216_001);
         assert_eq!(p.warmup_ticks, 216_060);
@@ -1149,6 +1192,46 @@ mod tests {
         assert!(lua.contains("HARNESS_DONE"));
         assert!(lua.contains("local PLANNED_ITEMS ="));
         assert!(lua.contains("\"iron-gear-wheel\"") && lua.contains("\"iron-ore\""));
+    }
+
+    /// The operator conveniences must never leak into a measurement:
+    /// they set force bonuses, and a measurement has to run in the world
+    /// its fixture declares (the #370 tech-state parity argument).
+    ///
+    /// The QoL must also live INSIDE the existing join handler. A second
+    /// `script.on_event` for the same event replaces the first, which
+    /// would drop the lab-surface teleport and strand the player on
+    /// nauvis — so this asserts there is still exactly ONE registration
+    /// and that the teleport survives.
+    #[test]
+    fn operator_qol_is_serve_only_and_keeps_the_teleport() {
+        let m = fixture();
+        let plain = RunParams::defaults_for(&m, "t".into(), 16, Some(18000));
+        assert!(!plain.operator_qol, "measurement runs must default to no QoL");
+        let plain_lua = build_control_lua(&m, "0eNBPFAKE", &plain);
+        assert!(
+            !plain_lua.contains("character_running_speed_modifier"),
+            "a measurement scenario must not touch force bonuses"
+        );
+        assert!(!plain_lua.contains("chart("), "a measurement must not chart the map");
+
+        let served = RunParams::defaults_for(&m, "t".into(), 1, Some(18000)).with_operator_qol();
+        let served_lua = build_control_lua(&m, "0eNBPFAKE", &served);
+        assert!(served_lua.contains("character_running_speed_modifier"));
+        assert!(served_lua.contains("chart("), "serve must chart the paste area");
+
+        // Exactly one handler, in both modes, and the teleport intact.
+        for (label, lua) in [("measure", &plain_lua), ("serve", &served_lua)] {
+            assert_eq!(
+                lua.matches("defines.events.on_player_joined_game").count(),
+                1,
+                "{label}: a second on_player_joined_game registration would REPLACE the first"
+            );
+            assert!(
+                lua.contains("teleported "),
+                "{label}: the lab-surface teleport must survive"
+            );
+        }
     }
 
     #[test]
