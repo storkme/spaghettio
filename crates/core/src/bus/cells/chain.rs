@@ -801,11 +801,29 @@ fn compose_chain_with_capacity_and_order(
         let initial: Vec<usize> = (0..specs.len()).collect();
         let control_metrics = graph.score_linear(&initial, CORRIDOR_GAP, 0.25)?;
         let candidate = graph.best_linear(&initial, CORRIDOR_GAP, 0.25)?;
+        let fold = graph.best_two_row_fold(
+            &candidate.order, CORRIDOR_GAP, 24, 0.25, 2.0, true)?;
+        let mut best_fold_critical = i32::MAX;
+        for end in 1..candidate.order.len() {
+            for serpentine in [false, true] {
+                let metrics = graph.score_folded(
+                    &candidate.order, &[end, candidate.order.len()],
+                    CORRIDOR_GAP, 24, 0.25, serpentine)?;
+                best_fold_critical = best_fold_critical.min(metrics.critical_path_distance);
+            }
+        }
         let original = specs.clone();
         specs = candidate.order.iter().map(|&idx| original[idx].clone()).collect();
-        eprintln!("RFC-055 estimated distance: {:.1} -> {:.1}; order: {:?}",
+        eprintln!("RFC placement estimates: control={:.1}/crit{} linear={:.1}/crit{} fold2={:.1}/crit{} best-fold-crit={} cut={:.1} serpentine={}; order: {:?}",
             control_metrics.rate_weighted_distance,
+            control_metrics.critical_path_distance,
             candidate.metrics.rate_weighted_distance,
+            candidate.metrics.critical_path_distance,
+            fold.metrics.rate_weighted_distance,
+            fold.metrics.critical_path_distance,
+            best_fold_critical,
+            fold.metrics.weighted_cut_sum,
+            fold.serpentine,
             specs.iter().map(|s| s.recipe.as_str()).collect::<Vec<_>>());
     }
 
@@ -1575,7 +1593,9 @@ fn compose_chain_with_capacity_and_order(
                     let down_demand = lane_demand[(pi + 1) % n];
                     let legacy_lane_down = placed[pi + 1].vlane_base
                         + *lane_next.get(&(pi + 1)).unwrap_or(&0) * lane_step(down_demand);
-                    let (drop_x, drop_top) = if router.is_row_stampable(by, bx, legacy_lane_down - 1) {
+                    let (drop_x, drop_top) = if legacy_lane_down < lane_up
+                        && router.is_row_stampable(by, bx, legacy_lane_down - 1)
+                    {
                         let lane_down = alloc_lane(&mut lane_next, pi + 1, placed[pi + 1].vlane_base, lane_step(down_demand));
                         router.hrow(&mut entities, by, bx, lane_down - 1, &out_item,
                             "express-transport-belt", "express-underground-belt", &seg);

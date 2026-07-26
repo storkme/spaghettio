@@ -467,9 +467,9 @@ fn golden_rocket_fuel_free_mode_zero_surplus() {
 }
 
 /// Regression for #476: lubricant forces advanced oil processing into the
-/// utility-science chain. Its unavoidable petroleum-gas co-product must
-/// displace basic oil processing rather than stack on top of it as an
-/// unroutable surplus that blocks the advanced refineries in-game.
+/// utility-science chain. Its co-products must displace basic oil
+/// processing and be fully consumed by ordinary recipes; vanilla Factorio
+/// has no ordinary fluid void.
 #[test]
 fn utility_science_credits_advanced_oil_petroleum_before_basic_oil() {
     let inputs = set(&["iron-ore", "copper-ore", "crude-oil", "water", "coal", "stone"]);
@@ -493,14 +493,13 @@ fn utility_science_credits_advanced_oil_petroleum_before_basic_oil() {
         "advanced oil's petroleum must displace basic oil; got {recipes:?}"
     );
     assert!(
-        r.surplus_outputs.iter().all(|f| f.item != "petroleum-gas"),
-        "petroleum gas must be consumed, not stranded: {:?}",
+        r.surplus_outputs.iter().all(|f| !f.is_fluid),
+        "all fluid co-products must be consumed, not stranded: {:?}",
         r.surplus_outputs
     );
     assert!(
-        r.surplus_outputs.iter().any(|f| f.item == "heavy-oil" && f.is_fluid),
-        "advanced-only plan must expose unavoidable heavy-oil surplus for physical routing: {:?}",
-        r.surplus_outputs
+        recipes.contains(&"heavy-oil-cracking"),
+        "heavy-oil excess must be consumed by a real recipe; got {recipes:?}"
     );
 }
 

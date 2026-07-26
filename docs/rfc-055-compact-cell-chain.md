@@ -1,6 +1,6 @@
 # RFC-055: Compact cell chains — flow-weighted ordering and validated orientation
 
-Status: Design  
+Status: Experiment complete — selected over RFC-056
 Tracking: #456  
 Competes with: RFC-056
 
@@ -257,6 +257,46 @@ RFC-056 reuses:
 RFC-055 ships independently if it clears its gates. RFC-056 is accepted only
 if folding materially outperforms RFC-055 after controlling for orientation
 and search budget.
+
+## Decision — 2026-07-26
+
+The bounded linear-order experiment is the winner of the RFC-055/RFC-056
+comparison. This is an architecture selection, not production enablement:
+the implementation remains on the local speculative branch and the current
+composer remains the default.
+
+The experiment added deterministic best-improving relocation plus adjacent
+swap search and made the existing chain router order-independent for
+westbound fan branches and compact adjacent fan-outs. Complete routed compact
+layouts validate at zero errors across the four acceptance fixtures.
+
+All figures below use real extracted-cell dimensions. Belt counts include
+transport belts, underground belts, and splitters; corridor counts include
+entities whose segment is a chain corridor.
+
+| Fixture | weighted distance | critical path | belts | corridor entities |
+|---|---:|---:|---:|---:|
+| `usp2raw` | 46,461 → 30,908 (−33.5%) | 3,254 → 2,233 (−31.4%) | 43,041 → 46,704 (+8.5%) | 37,383 → 41,478 (+11.0%) |
+| `chem5raw` | 24,950 → 20,875 (−16.3%) | 589 → 513 (−12.9%) | 9,744 → 8,720 (−10.5%) | 6,420 → 5,296 (−17.5%) |
+| `pu4raw` | 57,293 → 34,598 (−39.6%) | 3,000 → 422 (−85.9%) | 22,824 → 20,512 (−10.1%) | 16,320 → 14,176 (−13.1%) |
+| `mil5ore` | 4,728 → 3,175 (−32.8%) | 261 → 243 (−6.9%) | 3,642 → 3,012 (−17.3%) | 2,442 → 1,748 (−28.4%) |
+
+The primary USP weighted-distance gate and its alternate critical-path gate
+both clear. Three of four fixtures also use fewer belts; USP is the exception,
+because supporting its many westbound edges requires more bypass rows. This
+is why the result selects the linear architecture but does not yet justify
+making it the production default.
+
+A long-warmup Factorio control run for `chem5raw` delivered 4.03/s against
+5.0/s planned and remained non-converged (4.03–4.47/s recent windows). The
+matching compact run was stopped at the user's request, along with further
+Factorio testing. Consequently the Factorio and time-to-90% acceptance gates
+are explicitly **not adjudicated** here; production promotion requires a
+separate implementation/verification phase.
+
+Validated rotated cell variants were not needed by the winning candidate and
+remain future search-space expansion. No unchecked entity rotation was
+introduced.
 
 ## Phases
 

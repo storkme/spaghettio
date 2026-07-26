@@ -39,6 +39,7 @@ pub struct PlacementGraph {
 pub struct PlacementMetrics {
     pub rate_weighted_distance: f64,
     pub max_edge_distance: i32,
+    pub critical_path_distance: i32,
     pub backward_rate: f64,
     pub weighted_cut_sum: f64,
     pub max_weighted_cut: f64,
@@ -158,6 +159,8 @@ impl PlacementGraph {
                 metrics.backward_rate += edge.rate;
             }
         }
+        metrics.critical_path_distance =
+            self.longest_path_distance(|idx| (centre_x[idx], 0));
 
         // Weighted cut: total rate crossing every boundary between adjacent
         // order positions. This is both a congestion estimate for RFC-055 and
@@ -255,6 +258,7 @@ impl PlacementGraph {
                 metrics.backward_rate += edge.rate;
             }
         }
+        metrics.critical_path_distance = self.longest_path_distance(|idx| centres[idx]);
 
         // Row boundaries are the cuts RFC-056 must carry through inter-row
         // trunks. Preserve both total and worst weighted cut explicitly.
@@ -445,6 +449,29 @@ impl PlacementGraph {
             }
         }
         Ok(())
+    }
+
+    /// Longest transported-distance path through the macro DAG. Sources begin
+    /// at zero; repeated relaxation avoids depending on placement order.
+    fn longest_path_distance(&self, centre: impl Fn(usize) -> (i32, i32)) -> i32 {
+        let mut distance = vec![0i32; self.nodes.len()];
+        for _ in 0..self.nodes.len() {
+            let mut changed = false;
+            for edge in &self.edges {
+                let (px, py) = centre(edge.producer);
+                let (cx, cy) = centre(edge.consumer);
+                let step = (cx - px).abs() + (cy - py).abs();
+                let candidate = distance[edge.producer].saturating_add(step);
+                if candidate > distance[edge.consumer] {
+                    distance[edge.consumer] = candidate;
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        distance.into_iter().max().unwrap_or(0)
     }
 }
 

@@ -1312,6 +1312,86 @@ fn rfc055_compact_usp_real_geometry() {
         compact.width, compact.height, compact.entities.len());
 }
 
+#[test]
+#[ignore = "RFC-055 acceptance-corpus experiment"]
+fn rfc055_compact_acceptance_corpus() {
+    use spaghettio_core::bus::cells::chain::{compose_chain_compact, compose_chain_with_capacity};
+    use spaghettio_core::validate::{self, LayoutStyle, Severity};
+
+    for (label, target, rate, raw) in [
+        ("usp2raw", "utility-science-pack", 2.0,
+            &["iron-ore", "copper-ore", "crude-oil", "water", "coal", "stone"][..]),
+        ("chem5raw", "chemical-science-pack", 5.0,
+            &["iron-ore", "copper-ore", "crude-oil", "water", "coal"][..]),
+        ("pu4raw", "processing-unit", 4.0,
+            &["iron-ore", "copper-ore", "crude-oil", "water", "coal"][..]),
+        ("mil5ore", "military-science-pack", 5.0,
+            &["iron-ore", "copper-ore", "stone", "coal"][..]),
+    ] {
+        let inputs: FxHashSet<String> = raw.iter().map(|s| s.to_string()).collect();
+        let sr = solver::solve_with_palette_exclusions_and_quality(
+            target, rate, &inputs, &MachinePalette::default(),
+            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+        ).unwrap();
+        let control = compose_chain_with_capacity(&sr, 0)
+            .unwrap_or_else(|e| panic!("{label} control: {e}"));
+        let compact = compose_chain_compact(&sr, 0)
+            .unwrap_or_else(|e| panic!("{label} compact: {e}"));
+        let issues = match validate::validate(&compact, Some(&sr), LayoutStyle::Bus) {
+            Ok(v) => v,
+            Err(e) => e.issues,
+        };
+        let errors = issues.iter().filter(|i| i.severity == Severity::Error).count();
+        assert_eq!(errors, 0, "{label} compact has errors: {issues:?}");
+        let belts = |l: &spaghettio_core::models::LayoutResult| l.entities.iter()
+            .filter(|e| e.name.contains("transport-belt") || e.name.contains("splitter"))
+            .count();
+        let corridors = |l: &spaghettio_core::models::LayoutResult| l.entities.iter()
+            .filter(|e| e.segment_id.as_deref().is_some_and(|s| s.starts_with("corr:")))
+            .count();
+        println!("{label}: control={}x{} entities={} belts={} corr={} compact={}x{} entities={} belts={} corr={}",
+            control.width, control.height, control.entities.len(), belts(&control), corridors(&control),
+            compact.width, compact.height, compact.entities.len(), belts(&compact), corridors(&compact));
+    }
+}
+
+#[test]
+#[ignore = "RFC-055 Factorio artifact producer"]
+fn export_rfc055_factorio_candidates() {
+    use spaghettio_core::blueprint::export_with_manifest;
+    use spaghettio_core::bus::cells::chain::{compose_chain_compact, compose_chain_with_capacity};
+
+    std::fs::create_dir_all("target/tmp/rfc055").unwrap();
+    for (label, target, rate, raw) in [
+        ("usp2raw", "utility-science-pack", 2.0,
+            &["iron-ore", "copper-ore", "crude-oil", "water", "coal", "stone"][..]),
+        ("chem5raw", "chemical-science-pack", 5.0,
+            &["iron-ore", "copper-ore", "crude-oil", "water", "coal"][..]),
+        ("pu4raw", "processing-unit", 4.0,
+            &["iron-ore", "copper-ore", "crude-oil", "water", "coal"][..]),
+    ] {
+        let inputs: FxHashSet<String> = raw.iter().map(|s| s.to_string()).collect();
+        let sr = solver::solve_with_palette_exclusions_and_quality(
+            target, rate, &inputs, &MachinePalette::default(),
+            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+        ).unwrap();
+        for (variant, layout) in [
+            ("control", compose_chain_with_capacity(&sr, 0).unwrap()),
+            ("compact", compose_chain_compact(&sr, 0).unwrap()),
+        ] {
+            let artifact = format!("rfc055-{label}-{variant}");
+            let (bp, manifest) = export_with_manifest(&layout, &sr, &artifact);
+            std::fs::write(format!("target/tmp/rfc055/{artifact}.bp"), bp).unwrap();
+            std::fs::write(
+                format!("target/tmp/rfc055/{artifact}.manifest.json"),
+                serde_json::to_string_pretty(&manifest).unwrap(),
+            ).unwrap();
+            println!("wrote {artifact}: {}x{}, {} entities",
+                layout.width, layout.height, layout.entities.len());
+        }
+    }
+}
+
 /// Artifact producer for the increment-2 sim run.
 #[test]
 #[ignore = "artifact producer"]
