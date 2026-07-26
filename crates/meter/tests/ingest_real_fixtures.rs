@@ -55,9 +55,22 @@ fn ingests_chain_ec15() {
         .filter(|e| BeltTier::from_entity_name(&e.name).is_some())
         .count();
 
-    assert_eq!(ents.len(), 292, "entity count changed: {}", ents.len());
+    // 290, not the 292 originally pinned here. That 292 was recorded from a
+    // fixture built at the ambient L2 default while labelled `-d1`; #466
+    // corrected the exporter to build at the capacity the geometry is
+    // BLESSED at, and 290 is the entity count of registry geometry
+    // `cde5f2fcb0f5ef21` — the one real Factorio's 13.8/s measurement was
+    // taken against. The pin moved because the fixture was wrong, not
+    // because the ingestion changed.
+    assert_eq!(ents.len(), 290, "entity count changed: {}", ents.len());
     assert_eq!(machines, 15, "expected 15 assembling machines");
-    assert_eq!(inserters, 42, "expected 42 inserters");
+    // 41, not 42, for the same reason as the entity count above: L0 geometry
+    // provisions one fewer inserter than the L2 build that was mistakenly
+    // pinned. Machine count is unchanged at 15 — the capacity level moves
+    // how machines are FED, not how many there are, which is the whole
+    // reason a geometry/world mismatch under-provisions rather than
+    // visibly breaking.
+    assert_eq!(inserters, 41, "expected 41 inserters");
     assert!(belts > 150, "expected the bulk to be belt-like, got {belts}");
 
     // Every crafting machine must carry a recipe — a machine without one

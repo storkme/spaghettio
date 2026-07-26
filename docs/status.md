@@ -392,8 +392,14 @@ deficit is two things: a research-bound input component that L2 clears,
 plus a **level-invariant ~5.3% structural residual that is neither
 research-reachable nor the row's output belt — currently unattributed
 and, since the recalibration, unwarned** ([#435](https://github.com/storkme/spaghettio/issues/435)). Entries stay WARN with the
-corrected attribution; they do not graduate to at-plan. mil5-from-ore FAILs flat at −28.7% (firearm rows' inserter
-COUNT) and stays unregistered. Full trail:
+corrected attribution; they do not graduate to at-plan. ~~mil5-from-ore
+FAILs flat at −28.7% (firearm rows' inserter COUNT) and stays
+unregistered.~~ **RETRACTED 2026-07-26** — both the number and its stated
+cause. The same fixture measures **+0.7%, 146/146 machines working, PASS**
+at `--warmup 288000`; the −28.7% was a buffer-fill transient, so there was
+no inserter-count defect to attribute. See §"Default warmup is too short
+for deep chains" below. Registration still pending a corpus-wide
+re-measure, which must be justified by the oracle alone. Full trail:
 [`rfc-051-cell-composition-integration.md`](rfc-051-cell-composition-integration.md).
 
 **`rfc-048-cell-composition.md` Phase-1 close-out (2026-07-22, PR #365)**:
