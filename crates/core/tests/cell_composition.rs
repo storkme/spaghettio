@@ -1398,10 +1398,11 @@ fn rfc057_machine_constraint_baseline() {
     use spaghettio_core::bus::compaction::{
         blocks_overlap, build_manifold_nets, compact_axis, compact_island_axis,
         extract_rigid_islands, extract_route_nets, machine_blocks, occupied_bbox,
-        strip_empty_columns, undergroundify_straight_belts, CompactAxis, CompactIr,
-        PlacedMachineSignature, ProductionSignature, RouteTerminalKind,
+        compact_transport_geometry, CompactAxis, CompactIr, PlacedMachineSignature,
+        ProductionSignature, RouteTerminalKind,
     };
     use spaghettio_core::common::is_belt_entity;
+    use spaghettio_core::density::score_density;
     use spaghettio_core::validate::{self, LayoutStyle, Severity};
 
     for label in ["mega-chain-usp2raw", "mega-chain-chem5raw", "mega-chain-pu4raw", "chain-mil5ore"] {
@@ -1513,8 +1514,7 @@ fn rfc057_machine_constraint_baseline() {
             manifolds.iter().map(|manifold| manifold.required_belts(45.0)).max().unwrap_or(0),
         );
 
-        let runnable =
-            strip_empty_columns(&undergroundify_straight_belts(&layout));
+        let runnable = compact_transport_geometry(&layout);
         assert_eq!(
             PlacedMachineSignature::from_layout(&runnable),
             placed,
@@ -1529,6 +1529,11 @@ fn rfc057_machine_constraint_baseline() {
             .filter(|issue| issue.severity == Severity::Error)
             .collect();
         assert!(errors.is_empty(), "{label}: runnable post-pass errors: {errors:?}");
+        let underground_warnings = issues.iter()
+            .filter(|issue| {
+                issue.severity != Severity::Error && issue.category == "underground-belt"
+            })
+            .count();
         let source_belts = layout.entities.iter()
             .filter(|entity| is_belt_entity(&entity.name))
             .count();
@@ -1541,6 +1546,20 @@ fn rfc057_machine_constraint_baseline() {
             source_belts, compact_belts,
             (compact_belts as f64 / source_belts as f64 - 1.0) * 100.0,
         );
+        println!("{label}: underground warnings={underground_warnings}");
+        let source_density = score_density(&layout, (1, 1));
+        let compact_density = score_density(&runnable, (1, 1));
+        println!(
+            "{label}: occupied tiles={} -> {} ({:+.1}%), content area={} -> {}",
+            source_density.filled_tiles,
+            compact_density.filled_tiles,
+            (compact_density.filled_tiles as f64 / source_density.filled_tiles as f64 - 1.0)
+                * 100.0,
+            u64::from(source_density.content_bbox_width)
+                * u64::from(source_density.content_bbox_height),
+            u64::from(compact_density.content_bbox_width)
+                * u64::from(compact_density.content_bbox_height),
+        );
     }
 }
 
@@ -1549,8 +1568,8 @@ fn rfc057_machine_constraint_baseline() {
 fn rfc057_strip_empty_columns_mil5ore() {
     use spaghettio_core::bus::compaction::{
         compact_island_axis, extract_rigid_islands, extract_route_nets, occupied_bbox,
-        strip_empty_columns, undergroundify_straight_belts, CompactAxis,
-        PlacedMachineSignature, ProductionSignature, RouteTerminalKind,
+        compact_transport_geometry, strip_empty_columns, CompactAxis, PlacedMachineSignature,
+        ProductionSignature, RouteTerminalKind,
     };
     use spaghettio_core::common::is_belt_entity;
     use spaghettio_core::validate::{self, LayoutStyle, Severity};
@@ -1564,8 +1583,7 @@ fn rfc057_strip_empty_columns_mil5ore() {
     ).unwrap();
     let source = fixture.compose_layout();
     let compacted = strip_empty_columns(&source);
-    let underground_compacted =
-        strip_empty_columns(&undergroundify_straight_belts(&source));
+    let underground_compacted = compact_transport_geometry(&source);
     let production = ProductionSignature::from_solver(&sr).unwrap();
     let nets = extract_route_nets(&source);
     let islands = extract_rigid_islands(&source);
@@ -1664,6 +1682,44 @@ fn rfc057_strip_empty_columns_mil5ore() {
         println!(
             "  net {}: segments={} entities={} terminals={}",
             net.item, net.segments.len(), net.entity_indices.len(), net.terminals.len(),
+        );
+    }
+}
+
+#[test]
+#[ignore = "RFC-057 compacted artifact producer"]
+fn export_rfc057_compacted_candidates() {
+    use spaghettio_core::bus::compaction::compact_transport_geometry;
+
+    std::fs::create_dir_all("target/tmp").unwrap();
+    for fixture_label in [
+        "mega-chain-chem5raw",
+        "mega-chain-pu4raw",
+        "mega-chain-usp2raw",
+    ] {
+        let fixture = SimFixture::find(fixture_label);
+        let inputs: FxHashSet<String> =
+            fixture.inputs.iter().map(|item| item.to_string()).collect();
+        let sr = solver::solve_with_palette_exclusions_and_quality(
+            fixture.target, fixture.rate, &inputs, &MachinePalette::default(),
+            "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+        ).unwrap();
+        let control = fixture.compose_layout();
+        let compacted = compact_transport_geometry(&control);
+        for (variant, layout) in [("control", &control), ("compact", &compacted)] {
+            let label = format!("rfc057-{fixture_label}-{variant}");
+            let (bp, manifest) =
+                spaghettio_core::blueprint::export_with_manifest(layout, &sr, &label);
+            std::fs::write(format!("target/tmp/{label}.bp"), bp).unwrap();
+            std::fs::write(
+                format!("target/tmp/{label}.manifest.json"),
+                serde_json::to_string_pretty(&manifest).unwrap(),
+            ).unwrap();
+        }
+        println!(
+            "{fixture_label}: {}x{} / {} entities -> {}x{} / {} entities",
+            control.width, control.height, control.entities.len(),
+            compacted.width, compacted.height, compacted.entities.len(),
         );
     }
 }

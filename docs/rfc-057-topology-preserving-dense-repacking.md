@@ -587,3 +587,32 @@ make either experimental composer a production default.
   estimates of 20,269 tiles for military science and 146,773 for USP because
   every inserter was dragged to a distant global band. The active router uses
   local, flow-sized manifolds interleaved with their production clusters.
+
+- **2026-07-26 — Axis-symmetric transport fixed point.** The runnable
+  compactor now undergrounds both horizontal and vertical straight runs,
+  strips empty rows as well as columns, and repeats to a fixed point. The
+  expanded candidates retain exact machine signatures, have no underground
+  pairing warnings and validate cleanly:
+
+  | Fixture | belt delta | occupied-tile delta |
+  |---|---:|---:|
+  | `mega-chain-usp2raw` | −63.8% | −54.0% |
+  | `mega-chain-chem5raw` | −36.8% | −20.5% |
+  | `mega-chain-pu4raw` | −55.7% | −38.8% |
+  | `chain-mil5ore` | −41.2% | −27.0% |
+
+  This clears the 35% belt gate on chemistry and processing units. USP also
+  clears the 40% occupied-tile gate; PU is close. Chemistry and military
+  science demonstrate why route-entity reduction alone is not completion:
+  immutable machines/inserters dominate their remaining filled tiles, and
+  local island placement must remove more interfaces.
+
+  The updated military candidate meters at 2.13/s produced and 1.91/s
+  delivered versus the control's 1.73/s and 1.28/s. Processing units improve
+  electronic circuits from 64.27/s to 91.20/s at the standard window.
+  Chemistry's standard-window cable rate falls from 38.29/s to 27.64/s, but
+  neither artifact has a meaningful long-window chemistry result: without
+  fluid-boundary simulation both eventually fill downstream buffers and
+  report zero cable/EC production. This is a meter capability boundary, not
+  evidence of a steady-state loss; chemistry requires Factorio adjudication
+  once the candidate is otherwise final.

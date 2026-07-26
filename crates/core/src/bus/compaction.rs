@@ -368,17 +368,87 @@ pub fn strip_empty_columns(layout: &LayoutResult) -> LayoutResult {
     for (_, x, _) in &mut compacted.surplus_exits {
         *x = remap_x(*x);
     }
-    // Column removal can collapse a valid underground pair to adjacent
-    // entities. Factorio requires at least one hidden tile; at distance one
-    // the equivalent topology is two ordinary surface belts.
-    let entity_at: BTreeMap<(i32, i32), usize> = compacted
+    // Coordinate removal can collapse a valid underground pair to adjacent
+    // entities. At distance one the equivalent topology is surface belts.
+    normalize_adjacent_undergrounds(&mut compacted);
+    compacted.width -= removed_before[layout.width as usize];
+    compacted.regions.clear();
+    compacted.trace = None;
+    compacted
+}
+
+/// Row-axis counterpart of [`strip_empty_columns`].
+pub fn strip_empty_rows(layout: &LayoutResult) -> LayoutResult {
+    if layout.height <= 0 {
+        return layout.clone();
+    }
+    let mut occupied = vec![false; layout.height as usize];
+    for entity in &layout.entities {
+        let (width, height) = entity_dims(&entity.name, entity.direction);
+        let _ = width;
+        for y in entity.y.max(0)..(entity.y + height).min(layout.height) {
+            occupied[y as usize] = true;
+        }
+    }
+    for boundary in layout
+        .boundary_inputs
+        .iter()
+        .chain(layout.boundary_outputs.iter())
+    {
+        if (0..layout.height).contains(&boundary.y) {
+            occupied[boundary.y as usize] = true;
+        }
+    }
+    for (_, _, y) in &layout.surplus_exits {
+        if (0..layout.height).contains(y) {
+            occupied[*y as usize] = true;
+        }
+    }
+
+    let mut removed_before = vec![0i32; layout.height as usize + 1];
+    for y in 0..layout.height as usize {
+        removed_before[y + 1] = removed_before[y] + i32::from(!occupied[y]);
+    }
+    let remap_y = |y: i32| -> i32 {
+        if y <= 0 {
+            y
+        } else if y >= layout.height {
+            y - removed_before[layout.height as usize]
+        } else {
+            y - removed_before[y as usize]
+        }
+    };
+
+    let mut compacted = layout.clone();
+    for entity in &mut compacted.entities {
+        entity.y = remap_y(entity.y);
+    }
+    for boundary in compacted
+        .boundary_inputs
+        .iter_mut()
+        .chain(compacted.boundary_outputs.iter_mut())
+    {
+        boundary.y = remap_y(boundary.y);
+    }
+    for (_, _, y) in &mut compacted.surplus_exits {
+        *y = remap_y(*y);
+    }
+    normalize_adjacent_undergrounds(&mut compacted);
+    compacted.height -= removed_before[layout.height as usize];
+    compacted.regions.clear();
+    compacted.trace = None;
+    compacted
+}
+
+fn normalize_adjacent_undergrounds(layout: &mut LayoutResult) {
+    let entity_at: BTreeMap<(i32, i32), usize> = layout
         .entities
         .iter()
         .enumerate()
         .map(|(idx, entity)| ((entity.x, entity.y), idx))
         .collect();
     let mut surface_pairs = Vec::new();
-    for (idx, entity) in compacted.entities.iter().enumerate() {
+    for (idx, entity) in layout.entities.iter().enumerate() {
         if !is_ug_belt(&entity.name) || entity.io_type.as_deref() != Some("input") {
             continue;
         }
@@ -386,7 +456,7 @@ pub fn strip_empty_columns(layout: &LayoutResult) -> LayoutResult {
         let Some(&output_idx) = entity_at.get(&(entity.x + dx, entity.y + dy)) else {
             continue;
         };
-        let output = &compacted.entities[output_idx];
+        let output = &layout.entities[output_idx];
         if output.name == entity.name
             && output.direction == entity.direction
             && output.io_type.as_deref() == Some("output")
@@ -396,25 +466,44 @@ pub fn strip_empty_columns(layout: &LayoutResult) -> LayoutResult {
     }
     for (input_idx, output_idx) in surface_pairs {
         for idx in [input_idx, output_idx] {
-            let entity = &mut compacted.entities[idx];
+            let entity = &mut layout.entities[idx];
             entity.name = ug_to_surface_tier(&entity.name).to_string();
             entity.io_type = None;
         }
     }
-    compacted.width -= removed_before[layout.width as usize];
-    compacted.regions.clear();
-    compacted.trace = None;
-    compacted
 }
 
-/// Replace safe uninterrupted horizontal surface-belt spans with maximal
+/// Run the safe transport compactor to a small fixed point.
+pub fn compact_transport_geometry(layout: &LayoutResult) -> LayoutResult {
+    let mut current = layout.clone();
+    for _ in 0..3 {
+        let next = strip_empty_rows(&strip_empty_columns(&undergroundify_straight_belts(
+            &current,
+        )));
+        if next.width == current.width
+            && next.height == current.height
+            && next.entities.len() == current.entities.len()
+        {
+            return next;
+        }
+        current = next;
+    }
+    current
+}
+
+/// Replace safe uninterrupted straight surface-belt spans with maximal
 /// underground hops. Tiles addressed by inserters or boundaries are retained
 /// on the surface. Segment, item, tier and direction boundaries split runs.
 pub fn undergroundify_straight_belts(layout: &LayoutResult) -> LayoutResult {
     use crate::bus::balancer::underground_for_belt;
     use std::collections::BTreeSet;
 
-    let mut protected = BTreeSet::new();
+    let mut protected_horizontal = BTreeSet::new();
+    let mut protected_vertical = BTreeSet::new();
+    let mut protect_both = |tile| {
+        protected_horizontal.insert(tile);
+        protected_vertical.insert(tile);
+    };
     for inserter in layout
         .entities
         .iter()
@@ -422,22 +511,24 @@ pub fn undergroundify_straight_belts(layout: &LayoutResult) -> LayoutResult {
     {
         let (dx, dy) = dir_to_vec(inserter.direction);
         let reach = inserter_reach(&inserter.name);
-        protected.insert((inserter.x - dx * reach, inserter.y - dy * reach));
-        protected.insert((inserter.x + dx * reach, inserter.y + dy * reach));
+        protect_both((inserter.x - dx * reach, inserter.y - dy * reach));
+        protect_both((inserter.x + dx * reach, inserter.y + dy * reach));
     }
     for boundary in layout
         .boundary_inputs
         .iter()
         .chain(layout.boundary_outputs.iter())
     {
-        protected.insert((boundary.x, boundary.y));
+        protect_both((boundary.x, boundary.y));
     }
     for (_, x, y) in &layout.surplus_exits {
-        protected.insert((*x, *y));
+        protect_both((*x, *y));
     }
+    drop(protect_both);
 
-    // A perpendicular belt feeding a horizontal tile is a side-load/turn
-    // junction. Splitters and existing undergrounds reserve their vicinity.
+    // A perpendicular belt feeding a straight tile is a side-load/turn
+    // junction. Splitters and existing undergrounds reserve their vicinity
+    // on both axes.
     for entity in layout
         .entities
         .iter()
@@ -445,48 +536,68 @@ pub fn undergroundify_straight_belts(layout: &LayoutResult) -> LayoutResult {
     {
         let (dx, dy) = dir_to_vec(entity.direction);
         if dx == 0 {
-            protected.insert((entity.x + dx, entity.y + dy));
+            protected_horizontal.insert((entity.x + dx, entity.y + dy));
+        } else {
+            protected_vertical.insert((entity.x + dx, entity.y + dy));
         }
         if !is_surface_belt(&entity.name) {
             for x in entity.x - 1..=entity.x + 2 {
                 for y in entity.y - 1..=entity.y + 2 {
-                    protected.insert((x, y));
+                    protected_horizontal.insert((x, y));
+                    protected_vertical.insert((x, y));
                 }
             }
         }
     }
 
-    type RunKey = (i32, bool, String, Option<String>, Option<String>);
+    // (horizontal, positive direction, fixed cross-axis coordinate, ...)
+    type RunKey = (bool, bool, i32, String, Option<String>, Option<String>);
     let mut runs: BTreeMap<RunKey, Vec<(i32, usize)>> = BTreeMap::new();
     for (idx, entity) in layout.entities.iter().enumerate() {
-        if !is_surface_belt(&entity.name)
-            || !matches!(
-                entity.direction,
-                EntityDirection::East | EntityDirection::West
-            )
-            || protected.contains(&(entity.x, entity.y))
-        {
+        if !is_surface_belt(&entity.name) {
             continue;
         }
+        let horizontal = matches!(
+            entity.direction,
+            EntityDirection::East | EntityDirection::West
+        );
+        let protected = if horizontal {
+            &protected_horizontal
+        } else {
+            &protected_vertical
+        };
+        if protected.contains(&(entity.x, entity.y)) {
+            continue;
+        }
+        let positive = matches!(
+            entity.direction,
+            EntityDirection::East | EntityDirection::South
+        );
+        let (fixed, coordinate) = if horizontal {
+            (entity.y, entity.x)
+        } else {
+            (entity.x, entity.y)
+        };
         runs.entry((
-            entity.y,
-            entity.direction == EntityDirection::East,
+            horizontal,
+            positive,
+            fixed,
             entity.name.clone(),
             entity.carries.clone(),
             entity.segment_id.clone(),
         ))
         .or_default()
-        .push((entity.x, idx));
+        .push((coordinate, idx));
     }
 
     let mut remove = vec![false; layout.entities.len()];
     let mut replacements = BTreeMap::new();
-    for ((_, eastbound, belt_name, _, _), mut tiles) in runs {
-        tiles.sort_by_key(|(x, _)| *x);
-        if !eastbound {
+    for ((_, positive, _, belt_name, _, _), mut tiles) in runs {
+        tiles.sort_by_key(|(coordinate, _)| *coordinate);
+        if !positive {
             tiles.reverse();
         }
-        let step = if eastbound { 1 } else { -1 };
+        let step = if positive { 1 } else { -1 };
         let mut run_start = 0;
         while run_start < tiles.len() {
             let mut run_end = run_start + 1;
@@ -1345,6 +1456,35 @@ mod tests {
         assert_eq!(compacted.entities[0].io_type.as_deref(), Some("input"));
         assert_eq!(compacted.entities[1].x, 9);
         assert_eq!(compacted.entities[1].io_type.as_deref(), Some("output"));
+    }
+
+    #[test]
+    fn vertical_belts_and_empty_rows_compact_symmetrically() {
+        let layout = LayoutResult {
+            width: 1,
+            height: 10,
+            entities: (0..10)
+                .map(|y| crate::models::PlacedEntity {
+                    name: "express-transport-belt".into(),
+                    y,
+                    direction: EntityDirection::South,
+                    carries: Some("plate".into()),
+                    segment_id: Some("test".into()),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let underground = undergroundify_straight_belts(&layout);
+        assert_eq!(underground.entities.len(), 2);
+        assert_eq!(underground.entities[0].name, "express-underground-belt");
+        assert_eq!(underground.entities[1].y, 9);
+        let compacted = strip_empty_rows(&underground);
+        assert_eq!(compacted.height, 2);
+        assert!(compacted
+            .entities
+            .iter()
+            .all(|entity| entity.name == "express-transport-belt"));
     }
 
     #[test]
