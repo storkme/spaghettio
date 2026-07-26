@@ -644,3 +644,46 @@ Consequences, and they are open:
   still reads −13.8% against a settled −1.3%. Stability windows cannot
   distinguish steady state from a large factory filling slowly and
   smoothly; a generous fixed warmup is currently the only defence.
+
+### Fluid byproducts stall multi-output machines (2026-07-26) — OPEN DEFECT
+
+Mechanics **F13**: a machine blocked on **any** output fluid box stops
+crafting entirely, including the products that *are* wanted. Multi-output
+recipes therefore need every output to reach a consumer, a surplus exit, or
+a void. The solver credits byproducts in the LP; nothing guarantees the
+layout gives a *physical* sink to a surplus one.
+
+Live in `mega-chain-usp2raw`, and it is a **third mechanism** distinct from
+#471 (serial splitter allocation) and from #453's steel-into-LDS
+distribution defect:
+
+- 21 `basic-oil-processing` refineries saturate the petroleum-gas network
+  (100/100 across 276 pipes).
+- The 3 `advanced-oil-processing` refineries must also push petroleum-gas
+  into that full network, so they block — **11 of 24 refineries read
+  `full_output`**.
+- Blocked, they produce no **heavy-oil**, of which they are the only source.
+  Heavy-oil and light-oil appear on **zero pipes** factory-wide.
+- The lubricant plants sit in `fluid_ingredient_shortage` holding 5 units;
+  lubricant runs at ~10/100 and #453 records it at **−18.5%**.
+- `surplus_exits` is empty. Petroleum-gas is terminal and cannot be cracked
+  further, so the options are consume it, void it, or size advanced-only
+  against petroleum demand rather than mixing both paths.
+
+Tracked in [#476](https://github.com/storkme/spaghettio/issues/476). Not
+fixed: this is a solver/planner question (surplus sinks or recipe
+selection), and it corroborates "solver byproducts" as the top gap named in
+the July 2026 strategy review.
+
+### F10 segment-extent limit: not currently breached, and unchecked
+
+Mechanics **F10**: a fluid segment whose tile extent exceeds 320×320 does
+not flow at all. Composed mega-chains span ~2,200 tiles and the engine emits
+**zero pumps**, so this looked like a candidate failure mode. It is not, at
+present: real segments in `mega-chain-usp2raw` top out at **49×109 tiles**
+(21 segments, none over the limit), because PTG runs break the trunks up.
+
+**The validator has no segment-extent check**, so this is a latent risk
+rather than a live defect — a future layout with longer uninterrupted fluid
+runs would fail silently and totally. `scripts/fluid_segment_extents.py`
+computes segments from a sim-state dump if it needs re-checking.

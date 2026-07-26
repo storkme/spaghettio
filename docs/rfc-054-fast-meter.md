@@ -1182,3 +1182,73 @@ the right thing moved.
   same factory, and both have finished settling". Neither was true, and
   neither was ever checked, through three rounds of increasingly careful
   work.*
+- *2026-07-26 — **Phase 3 scoped: fluids are far cheaper than this RFC
+  assumed, because Factorio 2.0 already did the hard part.** Recorded here
+  because it changes the phasing economics, and because the measurements
+  behind mechanics rules F8–F13 belong in a decision log rather than in the
+  reference doc that now states them.*
+
+  ***The model.*** *2.0's fluid rewrite (FFF-416) replaced per-pipe flow with
+  **segments**: a connected network has uniform contents and no
+  length-dependent throughput. Corroborated rather than cited — across 939
+  fluid-carrying pipes in* `mega-chain-usp2raw`*, every network showed 1–2
+  distinct fill levels (crude-oil 100/100 across 246 pipes; lubricant
+  ~10/100 across 69). A 1.x gradient would have spread along the run.*
+
+  ***Consequence for the meter.*** *Belts needed a cellular automaton because
+  that is where belt physics lives — discrete slots, per-tick advancement,
+  gaps that do not heal. Fluids need connected components plus one scalar per
+  component:* `(fluid, amount, capacity = sum of member fluid_box volumes)`*.
+  Machines drain and fill their segment. **The work is topology, not
+  dynamics** — F1 adjacency, F4 underground pairing, F5a's closed
+  perpendicular sides — and the crate already has an analogous tile-graph
+  builder for belts. Hundreds of LOC, not a phase.*
+
+  ***A near-miss worth recording.*** `factorio-mechanics.md` *documented
+  fluid topology (F1–F7) and said nothing about flow. That silence nearly
+  produced a 1.x per-pipe gradient model: the doc was not wrong, it was
+  quiet, and quiet read as "model it the old way". F8–F14 now close that gap.
+  A reference doc that is silent on the load-bearing question is a trap, not
+  a neutral omission.*
+
+  ***F10 settled, and it is not a live defect.*** *A segment over 320×320
+  tiles does not flow at all. Mega-chains span ~2,200 tiles and the engine
+  emits zero pumps, so this looked like a candidate total-failure mode. Real
+  segments top out at **49×109 tiles** (21 in* `usp2raw`*, none over) because
+  PTG runs break the trunks up. The validator still has no extent check, so
+  it is latent rather than current.*
+
+  ***Two of my own intermediate claims were wrong, and both are instructive.***
+  *(1) An extent check that bounded boxes **per fluid name** reported
+  ~1,500-tile spans and looked alarming; K-replicated layouts carry one fluid
+  in several independent networks, so merging by name overstated extent ~30×.
+  The counter-signal was available and ignored — the factory produces at 45%
+  of plan, and a dead segment gives 0%. (2) The first connected-component
+  script reported three segments carrying four fluids each, which would be an
+  F3 violation. It was the script: linking a plain pipe to all four
+  neighbours re-added connections through a PTG's closed side, because* `link`
+  *is symmetric and only one end was tested. Settled by the observation that
+  **zero individual pipes hold two fluids** — the game had 21 clean networks,
+  the script had 12 dirty ones. Fixed by requiring **mutual** consent between
+  neighbours; the corrected run reports 0 multi-fluid segments, which is the
+  physically coherent answer and validates the fix.*
+
+  ***And a real defect, found by the user from in-game experience rather than
+  from any measurement.*** *Mechanics **F13**: a machine blocked on any one
+  output fluid box stops crafting entirely. In* `usp2raw`*, 21
+  basic-oil-processing refineries saturate the petroleum-gas network; the 3
+  advanced-oil-processing refineries must also push petroleum-gas into it,
+  block (11 of 24 refineries read* `full_output`*), and therefore produce no
+  heavy-oil — of which they are the only source. Heavy-oil and light-oil
+  appear on zero pipes; the lubricant plants starve holding 5 units;
+  lubricant runs at ~10% and #453 records −18.5%.* `surplus_exits` *is
+  empty. **The LP balances the byproduct arithmetically while the physical
+  byproduct has nowhere to go** — a distinct failure class from both #471
+  (serial splitter allocation) and #453's steel distribution defect. Three
+  independent mechanisms in one fixture.*
+
+  *Worth naming: every number needed to find this had been measured hours
+  earlier and was read as a demand cascade. It took a question about a
+  mechanic someone had hit while playing the game to make the refinery
+  statuses mean anything. The instrument produced the data; domain knowledge
+  produced the finding.*
