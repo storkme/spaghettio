@@ -1568,8 +1568,8 @@ fn rfc057_machine_constraint_baseline() {
 fn rfc057_strip_empty_columns_mil5ore() {
     use spaghettio_core::bus::compaction::{
         compact_island_axis, extract_rigid_islands, extract_route_nets, occupied_bbox,
-        compact_transport_geometry, strip_empty_columns, CompactAxis, PlacedMachineSignature,
-        ProductionSignature, RouteTerminalKind,
+        compact_transport_geometry, compact_validated_geometry, strip_empty_columns,
+        CompactAxis, PlacedMachineSignature, ProductionSignature, RouteTerminalKind,
     };
     use spaghettio_core::common::is_belt_entity;
     use spaghettio_core::validate::{self, LayoutStyle, Severity};
@@ -1584,6 +1584,7 @@ fn rfc057_strip_empty_columns_mil5ore() {
     let source = fixture.compose_layout();
     let compacted = strip_empty_columns(&source);
     let underground_compacted = compact_transport_geometry(&source);
+    let cut_compacted = compact_validated_geometry(&source, &sr);
     let production = ProductionSignature::from_solver(&sr).unwrap();
     let nets = extract_route_nets(&source);
     let islands = extract_rigid_islands(&source);
@@ -1610,9 +1611,14 @@ fn rfc057_strip_empty_columns_mil5ore() {
         PlacedMachineSignature::from_layout(&source),
         PlacedMachineSignature::from_layout(&underground_compacted),
     );
+    assert_eq!(
+        PlacedMachineSignature::from_layout(&source),
+        PlacedMachineSignature::from_layout(&cut_compacted),
+    );
     for (label, candidate) in [
         ("stripped", &compacted),
         ("underground-compacted", &underground_compacted),
+        ("cut-compacted", &cut_compacted),
     ] {
         let issues = match validate::validate(candidate, Some(&sr), LayoutStyle::Bus) {
             Ok(v) => v,
@@ -1628,6 +1634,7 @@ fn rfc057_strip_empty_columns_mil5ore() {
         ("rfc057-mil5ore-control", &source),
         ("rfc057-mil5ore-strip", &compacted),
         ("rfc057-mil5ore-underground", &underground_compacted),
+        ("rfc057-mil5ore-cut", &cut_compacted),
     ] {
         let (bp, manifest) =
             spaghettio_core::blueprint::export_with_manifest(layout, &sr, label);
@@ -1653,6 +1660,10 @@ fn rfc057_strip_empty_columns_mil5ore() {
         underground_compacted.width, underground_compacted.height,
         underground_compacted.entities.len(), underground_belts,
         (underground_belts as f64 / source_belts as f64 - 1.0) * 100.0,
+    );
+    println!(
+        "validated-cut candidate: {}x{} entities={}",
+        cut_compacted.width, cut_compacted.height, cut_compacted.entities.len(),
     );
     println!("extracted {} replaceable route nets", nets.len());
     println!(
@@ -1689,7 +1700,7 @@ fn rfc057_strip_empty_columns_mil5ore() {
 #[test]
 #[ignore = "RFC-057 compacted artifact producer"]
 fn export_rfc057_compacted_candidates() {
-    use spaghettio_core::bus::compaction::compact_transport_geometry;
+    use spaghettio_core::bus::compaction::compact_validated_geometry;
 
     std::fs::create_dir_all("target/tmp").unwrap();
     for fixture_label in [
@@ -1705,7 +1716,7 @@ fn export_rfc057_compacted_candidates() {
             "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
         ).unwrap();
         let control = fixture.compose_layout();
-        let compacted = compact_transport_geometry(&control);
+        let compacted = compact_validated_geometry(&control, &sr);
         for (variant, layout) in [("control", &control), ("compact", &compacted)] {
             let label = format!("rfc057-{fixture_label}-{variant}");
             let (bp, manifest) =

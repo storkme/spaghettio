@@ -1,6 +1,6 @@
 # RFC-057: Topology-preserving dense factory repacking
 
-Registry: [`rfcs.md`](rfcs.md). Status: **Design**.
+Registry: [`rfcs.md`](rfcs.md). Status: **Active prototype**.
 
 ## Summary
 
@@ -616,3 +616,31 @@ make either experimental composer a production default.
   report zero cable/EC production. This is a meter capability boundary, not
   evidence of a steady-state loss; chemistry requires Factorio adjudication
   once the candidate is otherwise final.
+
+- **2026-07-26 — Transactional X/Y coordinate compaction implemented.**
+  After transport resynthesis, the compactor now attempts occupied coordinate
+  cuts on both axes. A cut shifts the entire downstream half-plane, coalesces
+  only physically equivalent seam belts, refuses multi-tile footprint
+  collisions, recomputes the authoritative copper-wire graph and commits only
+  if full layout validation remains error-free. X and Y alternate to a fixed
+  point.
+
+  Final validated geometry on the representative artifacts is:
+
+  | Fixture | source | compacted | entity count |
+  |---|---:|---:|---:|
+  | `mega-chain-usp2raw` | 2214×193 | 1966×192 | 47,875 → 19,443 |
+  | `mega-chain-chem5raw` | 834×56 | 710×55 | 5,707 → 4,078 |
+  | `mega-chain-pu4raw` | 2704×90 | 2397×87 | 27,634 → 14,530 |
+  | `chain-mil5ore` | 720×34 | 568×32 | 4,550 → 2,846 |
+
+  Military science remains meter-stable after the extra coordinate cuts:
+  2.16/s produced and 1.90/s delivered versus 2.13/s and 1.91/s for the
+  transport-only incumbent, with 2,078 meter belt tiles versus 3,754 in the
+  control. The cut search therefore adds real footprint reduction without
+  undoing the transport gain.
+
+  This lands the deterministic, explainable #456 baseline as a working
+  compaction system. It does not yet implement topology-free local manifolds,
+  rotations or annealed island reordering; those remain the higher-risk
+  competitors for the occupied-tile gate.

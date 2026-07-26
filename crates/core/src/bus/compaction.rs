@@ -491,6 +491,252 @@ pub fn compact_transport_geometry(layout: &LayoutResult) -> LayoutResult {
     current
 }
 
+/// Transactionally delete vertical coordinate cuts while preserving a fully
+/// valid factory. This is the exact #456-style post-pass baseline: everything
+/// on the right of a cut moves together, equivalent seam belts coalesce, and
+/// the move is committed only when full validation remains error-free.
+pub fn compact_validated_columns(
+    layout: &LayoutResult,
+    solver: &SolverResult,
+    max_commits: usize,
+) -> LayoutResult {
+    use crate::validate::{self, LayoutStyle, Severity};
+
+    let mut current = compact_transport_geometry(layout);
+    let mut commits = 0;
+    let mut cut = 1;
+    while cut < current.width && commits < max_commits {
+        let Some(candidate) = collapse_vertical_cut(&current, cut) else {
+            cut += 1;
+            continue;
+        };
+        let issues = match validate::validate(&candidate, Some(solver), LayoutStyle::Bus) {
+            Ok(issues) => issues,
+            Err(error) => error.issues,
+        };
+        if issues.iter().any(|issue| issue.severity == Severity::Error) {
+            cut += 1;
+            continue;
+        }
+        current = candidate;
+        commits += 1;
+        // Retry the same coordinate: several redundant columns may be
+        // adjacent, and accepting a move changes every later cut.
+    }
+    current
+}
+
+/// Row-axis transactional coordinate compactor.
+pub fn compact_validated_rows(
+    layout: &LayoutResult,
+    solver: &SolverResult,
+    max_commits: usize,
+) -> LayoutResult {
+    use crate::validate::{self, LayoutStyle, Severity};
+
+    let mut current = compact_transport_geometry(layout);
+    let mut commits = 0;
+    let mut cut = 1;
+    while cut < current.height && commits < max_commits {
+        let Some(candidate) = collapse_horizontal_cut(&current, cut) else {
+            cut += 1;
+            continue;
+        };
+        let issues = match validate::validate(&candidate, Some(solver), LayoutStyle::Bus) {
+            Ok(issues) => issues,
+            Err(error) => error.issues,
+        };
+        if issues.iter().any(|issue| issue.severity == Severity::Error) {
+            cut += 1;
+            continue;
+        }
+        current = candidate;
+        commits += 1;
+    }
+    current
+}
+
+/// Full safe compaction entry point: transport resynthesis followed by
+/// alternating validated X/Y coordinate cuts to a small fixed point.
+pub fn compact_validated_geometry(layout: &LayoutResult, solver: &SolverResult) -> LayoutResult {
+    let mut current = compact_transport_geometry(layout);
+    for _ in 0..3 {
+        let columns = compact_validated_columns(&current, solver, usize::MAX);
+        let next = compact_validated_rows(&columns, solver, usize::MAX);
+        if next.width == current.width
+            && next.height == current.height
+            && next.entities.len() == current.entities.len()
+        {
+            return next;
+        }
+        current = next;
+    }
+    current
+}
+
+fn collapse_vertical_cut(layout: &LayoutResult, cut: i32) -> Option<LayoutResult> {
+    if cut <= 0 || cut >= layout.width {
+        return None;
+    }
+    // A cut may not pass through the interior of a multi-tile footprint.
+    if layout.entities.iter().any(|entity| {
+        let (width, _) = entity_dims(&entity.name, entity.direction);
+        entity.x < cut && entity.x + width > cut
+    }) {
+        return None;
+    }
+
+    let mut candidate = layout.clone();
+    for entity in &mut candidate.entities {
+        if entity.x >= cut {
+            entity.x -= 1;
+        }
+    }
+    for boundary in candidate
+        .boundary_inputs
+        .iter_mut()
+        .chain(candidate.boundary_outputs.iter_mut())
+    {
+        if boundary.x >= cut {
+            boundary.x -= 1;
+        }
+    }
+    for (_, x, _) in &mut candidate.surplus_exits {
+        if *x >= cut {
+            *x -= 1;
+        }
+    }
+
+    // Coalesce the one expected seam collision: two consecutive tiles of the
+    // same surfaced route. All other footprint collisions refuse the cut.
+    let mut anchor_at: BTreeMap<(i32, i32), usize> = BTreeMap::new();
+    let mut remove = vec![false; candidate.entities.len()];
+    for (idx, entity) in candidate.entities.iter().enumerate() {
+        if let Some(&other_idx) = anchor_at.get(&(entity.x, entity.y)) {
+            let other = &candidate.entities[other_idx];
+            if is_surface_belt(&entity.name)
+                && is_surface_belt(&other.name)
+                && entity.name == other.name
+                && entity.direction == other.direction
+                && entity.carries == other.carries
+                && entity.segment_id == other.segment_id
+            {
+                remove[idx] = true;
+                continue;
+            }
+            return None;
+        }
+        anchor_at.insert((entity.x, entity.y), idx);
+    }
+    candidate.entities = candidate
+        .entities
+        .into_iter()
+        .enumerate()
+        .filter_map(|(idx, entity)| (!remove[idx]).then_some(entity))
+        .collect();
+
+    let mut occupied = BTreeMap::new();
+    for (idx, entity) in candidate.entities.iter().enumerate() {
+        let (width, height) = entity_dims(&entity.name, entity.direction);
+        for x in entity.x..entity.x + width {
+            for y in entity.y..entity.y + height {
+                if occupied.insert((x, y), idx).is_some() {
+                    return None;
+                }
+            }
+        }
+    }
+    candidate.width -= 1;
+    candidate.regions.clear();
+    candidate.trace = None;
+    normalize_adjacent_undergrounds(&mut candidate);
+    candidate.power_wires = Some(crate::power_wires::compute_pole_wires(
+        &candidate.entities,
+        candidate.wire_mode,
+    ));
+    Some(candidate)
+}
+
+fn collapse_horizontal_cut(layout: &LayoutResult, cut: i32) -> Option<LayoutResult> {
+    if cut <= 0 || cut >= layout.height {
+        return None;
+    }
+    if layout.entities.iter().any(|entity| {
+        let (_, height) = entity_dims(&entity.name, entity.direction);
+        entity.y < cut && entity.y + height > cut
+    }) {
+        return None;
+    }
+
+    let mut candidate = layout.clone();
+    for entity in &mut candidate.entities {
+        if entity.y >= cut {
+            entity.y -= 1;
+        }
+    }
+    for boundary in candidate
+        .boundary_inputs
+        .iter_mut()
+        .chain(candidate.boundary_outputs.iter_mut())
+    {
+        if boundary.y >= cut {
+            boundary.y -= 1;
+        }
+    }
+    for (_, _, y) in &mut candidate.surplus_exits {
+        if *y >= cut {
+            *y -= 1;
+        }
+    }
+
+    let mut anchor_at: BTreeMap<(i32, i32), usize> = BTreeMap::new();
+    let mut remove = vec![false; candidate.entities.len()];
+    for (idx, entity) in candidate.entities.iter().enumerate() {
+        if let Some(&other_idx) = anchor_at.get(&(entity.x, entity.y)) {
+            let other = &candidate.entities[other_idx];
+            if is_surface_belt(&entity.name)
+                && is_surface_belt(&other.name)
+                && entity.name == other.name
+                && entity.direction == other.direction
+                && entity.carries == other.carries
+                && entity.segment_id == other.segment_id
+            {
+                remove[idx] = true;
+                continue;
+            }
+            return None;
+        }
+        anchor_at.insert((entity.x, entity.y), idx);
+    }
+    candidate.entities = candidate
+        .entities
+        .into_iter()
+        .enumerate()
+        .filter_map(|(idx, entity)| (!remove[idx]).then_some(entity))
+        .collect();
+
+    let mut occupied = BTreeMap::new();
+    for (idx, entity) in candidate.entities.iter().enumerate() {
+        let (width, height) = entity_dims(&entity.name, entity.direction);
+        for x in entity.x..entity.x + width {
+            for y in entity.y..entity.y + height {
+                if occupied.insert((x, y), idx).is_some() {
+                    return None;
+                }
+            }
+        }
+    }
+    candidate.height -= 1;
+    candidate.regions.clear();
+    candidate.trace = None;
+    normalize_adjacent_undergrounds(&mut candidate);
+    candidate.power_wires = Some(crate::power_wires::compute_pole_wires(
+        &candidate.entities,
+        candidate.wire_mode,
+    ));
+    Some(candidate)
+}
+
 /// Replace safe uninterrupted straight surface-belt spans with maximal
 /// underground hops. Tiles addressed by inserters or boundaries are retained
 /// on the surface. Segment, item, tier and direction boundaries split runs.
@@ -1485,6 +1731,52 @@ mod tests {
             .entities
             .iter()
             .all(|entity| entity.name == "express-transport-belt"));
+    }
+
+    #[test]
+    fn vertical_cut_coalesces_equivalent_seam_belts() {
+        let belt = |x| crate::models::PlacedEntity {
+            name: "transport-belt".into(),
+            x,
+            direction: EntityDirection::East,
+            carries: Some("plate".into()),
+            segment_id: Some("route".into()),
+            ..Default::default()
+        };
+        let layout = LayoutResult {
+            width: 4,
+            height: 1,
+            entities: vec![belt(0), belt(1), belt(3)],
+            ..Default::default()
+        };
+        let collapsed = collapse_vertical_cut(&layout, 1).unwrap();
+        assert_eq!(collapsed.width, 3);
+        assert_eq!(collapsed.entities.len(), 2);
+        assert_eq!(collapsed.entities[0].x, 0);
+        assert_eq!(collapsed.entities[1].x, 2);
+    }
+
+    #[test]
+    fn horizontal_cut_coalesces_equivalent_seam_belts() {
+        let belt = |y| crate::models::PlacedEntity {
+            name: "transport-belt".into(),
+            y,
+            direction: EntityDirection::South,
+            carries: Some("plate".into()),
+            segment_id: Some("route".into()),
+            ..Default::default()
+        };
+        let layout = LayoutResult {
+            width: 1,
+            height: 4,
+            entities: vec![belt(0), belt(1), belt(3)],
+            ..Default::default()
+        };
+        let collapsed = collapse_horizontal_cut(&layout, 1).unwrap();
+        assert_eq!(collapsed.height, 3);
+        assert_eq!(collapsed.entities.len(), 2);
+        assert_eq!(collapsed.entities[0].y, 0);
+        assert_eq!(collapsed.entities[1].y, 2);
     }
 
     #[test]

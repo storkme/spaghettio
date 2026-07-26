@@ -68,6 +68,6 @@ backfill the status next time the doc is touched.
 | RFC-054 | 2026-07-25 | [`rfc-054-fast-meter.md`](rfc-054-fast-meter.md) | Design (circulated for review) |
 | RFC-055 | 2026-07-26 | [`rfc-055-compact-cell-chain.md`](rfc-055-compact-cell-chain.md) | Design — competes with RFC-056; #456 |
 | RFC-056 | 2026-07-26 | [`rfc-056-folded-cell-chain.md`](rfc-056-folded-cell-chain.md) | Design — competes with RFC-055; #456 |
-| RFC-057 | 2026-07-26 | [`rfc-057-topology-preserving-dense-repacking.md`](rfc-057-topology-preserving-dense-repacking.md) | Design |
+| RFC-057 | 2026-07-26 | [`rfc-057-topology-preserving-dense-repacking.md`](rfc-057-topology-preserving-dense-repacking.md) | Active |
 
 Next number: **RFC-058**.
