@@ -522,3 +522,13 @@ make either experimental composer a production default.
   Applying a proposed island placement is transactional and preserves the
   exact placed-machine signature; incumbent belts are explicitly left for
   rip-up/reroute rather than silently translated.
+
+- **2026-07-26 — Existing-router reuse boundary identified.** The current
+  `route_bus_ghost` entry point is coupled to `BusLane`, `RowSpan`, pre-stamped
+  south-flowing trunks and output-row mergers, so treating dense islands as
+  synthetic bus rows would reintroduce the architecture this RFC is trying to
+  escape. RFC-057 will instead reuse its lower-level proven pieces:
+  `ghost_astar` for negotiated paths, `render_path` for underground
+  materialisation, and the junction solver for remaining crossings. A small
+  manifold adapter will own multi-terminal commodity nets and shared-trunk /
+  `(n,m)` selection.
