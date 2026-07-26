@@ -153,7 +153,8 @@ items against the 300 floor, checkpoint count, and the drift across the
 stability group — plus an explicit warning for each way the number
 can mislead:
 
-- **fewer than 3 checkpoints** — the convergence test never ran;
+- **fewer than 4 checkpoints** (`STABILITY_WINDOWS + 1` — three closed
+  windows plus the one that opens them) — the convergence test never ran;
   `converged` describes the tick budget, not the factory.
 - **`short_sampled`** — the window hit the tick cap without filling,
   so the rate is quantization-noisy.

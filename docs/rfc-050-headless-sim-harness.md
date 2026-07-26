@@ -408,7 +408,8 @@ design, so blessed measured baselines are **shareable** — keyed on
   by a 4x tick cap; ceilings floor at `viable_end_tick` (warmup + enough
   worst-case windows to run the test); windows open exactly at warmup; and
   reports carry a `measurement` block (window length, achieved items vs
-  floor, checkpoint count, drift between the last two window rates) that
+  floor, checkpoint count, and the group spread across the trailing three
+  window rates) that
   prints a named warning for each way the number can be untrustworthy.
   **Scope**: the reported rate is the trailing window whether or not the run
   converged, so any non-converged run published a point on a transient as a
@@ -466,3 +467,34 @@ design, so blessed measured baselines are **shareable** — keyed on
   windows within 2%", and a fixture with real oscillation can report
   anywhere in its band — `drift_pct` now declares that band instead of
   hiding it.*
+
+- *2026-07-25 — **two calls made mid-review on #464**, recorded here
+  because RFC-050 owns the harness and the Reference docs carry no
+  decision-log duty. (a) **The wall-clock timeout is now derived from the
+  tick budget** rather than fixed at 900s. The ceiling grew ~8x in that
+  PR while `--timeout-secs` did not, so a slow run would hit the wall
+  clock BEFORE its own ceiling — and `launch_and_wait` returns `Err` and
+  kills the server before anything is written, converting a useful
+  non-converged report into no report at all, on exactly the class of run
+  the PR existed to serve. usp2 concretely: 447,960 ticks is 466s at the
+  requested `--speed 16` and ~1545s at the ~290 ticks/s it achieves; 900s
+  fell between. `default_timeout_secs` now takes 4x the budget-at-
+  requested-speed plus a setup allowance, floored at the old 900s. The
+  4x rests on a measured assumption worth stating: Factorio's tick loop is
+  effectively single-threaded (a run uses ~1.05 cores, the main thread
+  carrying ~24x the CPU time of any worker), so a large factory or a busy
+  box simply runs short of the requested `game.speed`. The timeout is a
+  net for a hung server, never a second tick budget.
+  (b) **The group rule does not prove steady state.** A 480k-warmup probe
+  found usp2 still climbing (0.83 -> 0.85 -> 0.97/s) after it had
+  converged at 160k on a genuine 3-window plateau (0.852 -> 0.852 ->
+  0.856, spread 0.43%). So a converged plateau can be a **step on a
+  staircase** on a deep chain. This qualifies the entry above: USP@2's
+  deficit is real and reproducible at the default warmup, but -57% is a
+  floor rather than the answer, and the number is not settled. Recorded
+  as forensics artifact class 5c; the cure is the existing deep-chain
+  guidance — confirm a converged number with a much longer `--warmup`
+  before blessing it. It also strengthens the case for #465: if warmup
+  stops being a bounding-box guess and windows simply run until
+  genuinely flat, the staircase gets walked rather than missed by
+  whichever warmup was picked.*

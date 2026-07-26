@@ -11,8 +11,10 @@ Setup, CLI usage, and the concurrency/lock rules live in
 
 - **Target item rates** (`measured_produced_rate` / `delivered` for the
   manifest target): Δ(cumulative production counter) over the **last
-  300-game-second checkpoint window**. `converged=true` means the last
-  two consecutive windows agreed within 2%.
+  checkpoint window**, which closes on 300 accumulated items rather than
+  on a fixed duration (#454), so its length varies with how the factory
+  is actually running. `converged=true` means the trailing **three**
+  window rates agreed as a group, widest vs narrowest, within 2%.
 - **Intermediate item rates**: measured over the **same trailing
   checkpoint window** as the target (since #362). Before that they were
   the last two 20-second samples — badly aliased for bursty producers (a
@@ -100,11 +102,12 @@ Setup, CLI usage, and the concurrency/lock rules live in
    much longer warmup before blessing it; the intermediates-at-or-above-
    plan tell from class 1 applies here too.
 6. **A budget that cannot fit the test.** `--warmup` used to re-floor the
-   tick ceiling at warmup + ONE window while convergence needs three
-   checkpoints, so any warmup past the default ceiling reported
-   `converged: false` by construction. Signature: fewer than 3
+   tick ceiling at warmup + ONE window while convergence needs four
+   checkpoints (three closed windows), so any warmup past the default
+   ceiling reported
+   `converged: false` by construction. Signature: fewer than 4
    checkpoints, `final_tick` ≈ warmup + one window. Cure: fixed in
-   `viable_end_tick`; the report now warns when checkpoints < 3.
+   `viable_end_tick`; the report now warns when checkpoints < 4.
 
 ## The poison-plug mechanic (game truth, mechanics rule I11)
 
