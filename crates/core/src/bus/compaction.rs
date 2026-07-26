@@ -1734,6 +1734,7 @@ pub fn build_local_manifold_graph(plan: &LocalManifoldPlan) -> LocalManifoldGrap
 pub struct PlacedManifoldNode {
     pub node_id: usize,
     pub origin: (i32, i32),
+    pub direction: EntityDirection,
     pub input_ports: Vec<(i32, i32)>,
     pub output_ports: Vec<(i32, i32)>,
 }
@@ -1766,6 +1767,99 @@ pub struct ManifoldRoutingResult {
     pub unroutable: Vec<(String, ManifoldGraphEdge)>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LegalizedManifoldRoute {
+    pub item: String,
+    pub edge: ManifoldGraphEdge,
+    /// Adjacent surface steps plus legal underground jumps.
+    pub path: Vec<(i32, i32)>,
+    /// Surface tiles still claimed by an earlier route.
+    pub unresolved_tiles: Vec<(i32, i32)>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ManifoldLegalizationResult {
+    pub routes: Vec<LegalizedManifoldRoute>,
+    pub unresolved_routes: usize,
+    pub unresolved_tiles: usize,
+    pub underground_spans: usize,
+}
+
+/// Convert a fully legalised route set into belt entities.
+///
+/// Fixed node/lane endpoint belts are already present in the stamped hubs and
+/// are omitted here. Any unresolved surface claim rejects the whole
+/// transaction.
+pub fn materialize_legalized_manifold_routes(
+    routes: &[LegalizedManifoldRoute],
+) -> Result<Vec<PlacedEntity>, String> {
+    use crate::bus::trunk_renderer::render_path;
+
+    let unresolved_routes = routes
+        .iter()
+        .filter(|route| !route.unresolved_tiles.is_empty())
+        .count();
+    if unresolved_routes > 0 {
+        return Err(format!(
+            "{unresolved_routes} manifold routes still contain surface conflicts"
+        ));
+    }
+
+    let mut entities = Vec::new();
+    let mut occupied = FxHashSet::default();
+    for (route_idx, route) in routes.iter().enumerate() {
+        if route.path.len() < 2 {
+            return Err(format!(
+                "manifold route {route_idx} has fewer than two points"
+            ));
+        }
+        let direction = path_exit_direction(&route.path)
+            .ok_or_else(|| format!("manifold route {route_idx} has no cardinal exit direction"))?;
+        let mut rendered = render_path(
+            &route.path,
+            &route.item,
+            "express-transport-belt",
+            direction,
+            Some(format!("compact-route:{}:{route_idx}", route.item)),
+            None,
+        );
+        let omit_start =
+            endpoint_has_fixed_port_direction(&route.edge.from).then_some(route.path[0]);
+        let omit_end = endpoint_has_fixed_port_direction(&route.edge.to)
+            .then_some(*route.path.last().unwrap());
+        rendered.retain(|entity| {
+            Some((entity.x, entity.y)) != omit_start && Some((entity.x, entity.y)) != omit_end
+        });
+        for entity in &rendered {
+            let (width, height) = entity_dims(&entity.name, entity.direction);
+            for x in entity.x..entity.x + width {
+                for y in entity.y..entity.y + height {
+                    if !occupied.insert((x, y)) {
+                        return Err(format!("materialized manifold routes overlap at ({x},{y})"));
+                    }
+                }
+            }
+        }
+        entities.extend(rendered);
+    }
+    Ok(entities)
+}
+
+fn path_exit_direction(path: &[(i32, i32)]) -> Option<EntityDirection> {
+    for pair in path.windows(2).rev() {
+        let dx = (pair[1].0 - pair[0].0).signum();
+        let dy = (pair[1].1 - pair[0].1).signum();
+        match (dx, dy) {
+            (1, 0) => return Some(EntityDirection::East),
+            (-1, 0) => return Some(EntityDirection::West),
+            (0, 1) => return Some(EntityDirection::South),
+            (0, -1) => return Some(EntityDirection::North),
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Route every explicit edge in the local manifold graphs.
 ///
 /// This is deliberately a topology result, not yet belt geometry: paths may
@@ -1778,8 +1872,6 @@ pub fn route_local_manifold_edges(
     graphs: &[LocalManifoldGraph],
     hubs: &[PlacedLocalManifold],
 ) -> Result<ManifoldRoutingResult, String> {
-    use crate::astar::ghost_astar;
-
     if graphs.len() != hubs.len() {
         return Err(format!(
             "manifold graph/hub count differs: {} != {}",
@@ -1851,68 +1943,395 @@ pub fn route_local_manifold_edges(
             }
         }
     }
-
-    let mut claimed = FxHashSet::default();
-    let mut axis_costs = FxHashMap::default();
-    let mut result = ManifoldRoutingResult::default();
+    let mut exclusive_hard = hard.clone();
+    // Keep every terminal and fixed-port access socket available until its
+    // own edge is routed. Underground interiors may pass beneath these
+    // reservations, but no unrelated surface endpoint may consume them.
     for (graph, hub) in graphs.iter().zip(hubs) {
         for edge in &graph.edges {
-            let start = manifold_endpoint_point(&edge.from, hub)?;
-            let goal = manifold_endpoint_point(&edge.to, hub)?;
-            let shifted_start = shifted(start);
-            let shifted_goal = shifted(goal);
-            let mut edge_hard = hard.clone();
-            edge_hard.remove(&shifted_start);
-            edge_hard.remove(&shifted_goal);
-            let Some((path, crossings)) = ghost_astar(
-                shifted_start,
-                shifted_goal,
-                &edge_hard,
-                &claimed,
-                width,
-                height,
-                2,
-                &axis_costs,
-            ) else {
-                result.unroutable.push((graph.item.clone(), edge.clone()));
-                continue;
-            };
-            let path: Vec<_> = path
-                .into_iter()
-                .map(|point| (point.0 - shift.0, point.1 - shift.1))
-                .collect();
-            let crossings: Vec<_> = crossings
-                .into_iter()
-                .map(|point| (point.0 - shift.0, point.1 - shift.1))
-                .collect();
-            claimed.extend(path.iter().copied().map(shifted));
-            // Prefer clean parallel channels and cheap perpendicular
-            // crossings over running along an already claimed belt. This is
-            // the first negotiated-routing pass: a later legalizer can turn
-            // an isolated perpendicular crossing into an underground pair,
-            // whereas a same-axis overlap cannot be materialised directly.
-            for pair in path.windows(2) {
-                let from = shifted(pair[0]);
-                let to = shifted(pair[1]);
-                let horizontal = pair[0].1 == pair[1].1;
-                for tile in [from, to] {
-                    let penalty = axis_costs.entry(tile).or_insert((0u32, 0u32));
-                    if horizontal {
-                        penalty.1 = penalty.1.max(4);
-                    } else {
-                        penalty.0 = penalty.0.max(4);
-                    }
-                }
+            for (endpoint, output_side) in [(&edge.from, true), (&edge.to, false)] {
+                let socket = manifold_endpoint_socket(endpoint, hub, output_side)?;
+                exclusive_hard.insert(shifted(socket));
             }
-            result.routes.push(RoutedManifoldEdge {
-                item: graph.item.clone(),
-                edge: edge.clone(),
-                path,
-                crossings,
-            });
         }
     }
+    let mut claimed = FxHashSet::default();
+    let mut result = ManifoldRoutingResult::default();
+    let mut tasks = Vec::new();
+    for (graph_idx, graph) in graphs.iter().enumerate() {
+        for edge in &graph.edges {
+            let hub = &hubs[graph_idx];
+            let start = manifold_endpoint_point(&edge.from, hub)?;
+            let goal = manifold_endpoint_point(&edge.to, hub)?;
+            let span = (start.0 - goal.0).abs() + (start.1 - goal.1).abs();
+            tasks.push((span, graph_idx, edge));
+        }
+    }
+    tasks.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(b.2)));
+    let mut fallback = Vec::new();
+    for &(_, graph_idx, edge) in &tasks {
+        let graph = &graphs[graph_idx];
+        let hub = &hubs[graph_idx];
+        let start = manifold_endpoint_point(&edge.from, hub)?;
+        let goal = manifold_endpoint_point(&edge.to, hub)?;
+        // Library balancers and capacity lanes are SOUTH-oriented.
+        // Route from the tile immediately below an output and into the
+        // tile immediately above an input; the stamped endpoint belt then
+        // supplies the final directed step. Terminals are newly emitted
+        // belts and therefore impose no pre-existing direction.
+        let route_start = manifold_endpoint_socket(&edge.from, hub, true)?;
+        let route_goal = manifold_endpoint_socket(&edge.to, hub, false)?;
+        let shifted_start = shifted(route_start);
+        let shifted_goal = shifted(route_goal);
+        let mut edge_hard = exclusive_hard.clone();
+        edge_hard.remove(&shifted_start);
+        edge_hard.remove(&shifted_goal);
+        let Some(path) = compact_belt_astar(
+            shifted_start,
+            shifted_goal,
+            &edge_hard,
+            &claimed,
+            width,
+            height,
+        ) else {
+            fallback.push((graph_idx, edge));
+            continue;
+        };
+        let mut path: Vec<_> = path
+            .into_iter()
+            .map(|point| (point.0 - shift.0, point.1 - shift.1))
+            .collect();
+        if route_start != start {
+            path.insert(0, start);
+        }
+        if route_goal != goal {
+            path.push(goal);
+        }
+        let crossings = Vec::new();
+        let claim_start = usize::from(route_start != start);
+        let claim_end = path.len() - usize::from(route_goal != goal);
+        claimed.extend(path[claim_start..claim_end].iter().copied().map(shifted));
+        result.routes.push(RoutedManifoldEdge {
+            item: graph.item.clone(),
+            edge: edge.clone(),
+            path,
+            crossings,
+        });
+    }
+    let mut retry_hard = hard.clone();
+    for &(graph_idx, edge) in &fallback {
+        let hub = &hubs[graph_idx];
+        retry_hard.insert(shifted(manifold_endpoint_socket(&edge.from, hub, true)?));
+        retry_hard.insert(shifted(manifold_endpoint_socket(&edge.to, hub, false)?));
+    }
+    let mut ghost_fallback = Vec::new();
+    for (graph_idx, edge) in fallback {
+        let graph = &graphs[graph_idx];
+        let hub = &hubs[graph_idx];
+        let start = manifold_endpoint_point(&edge.from, hub)?;
+        let goal = manifold_endpoint_point(&edge.to, hub)?;
+        let route_start = manifold_endpoint_socket(&edge.from, hub, true)?;
+        let route_goal = manifold_endpoint_socket(&edge.to, hub, false)?;
+        let shifted_start = shifted(route_start);
+        let shifted_goal = shifted(route_goal);
+        let mut edge_hard = retry_hard.clone();
+        edge_hard.remove(&shifted_start);
+        edge_hard.remove(&shifted_goal);
+        let Some(path) = compact_belt_astar(
+            shifted_start,
+            shifted_goal,
+            &edge_hard,
+            &claimed,
+            width,
+            height,
+        ) else {
+            ghost_fallback.push((graph_idx, edge));
+            continue;
+        };
+        let mut path: Vec<_> = path
+            .into_iter()
+            .map(|point| (point.0 - shift.0, point.1 - shift.1))
+            .collect();
+        if route_start != start {
+            path.insert(0, start);
+        }
+        if route_goal != goal {
+            path.push(goal);
+        }
+        let claim_start = usize::from(route_start != start);
+        let claim_end = path.len() - usize::from(route_goal != goal);
+        claimed.extend(path[claim_start..claim_end].iter().copied().map(shifted));
+        result.routes.push(RoutedManifoldEdge {
+            item: graph.item.clone(),
+            edge: edge.clone(),
+            path,
+            crossings: Vec::new(),
+        });
+    }
+    // Preserve progress from the exclusive underground-aware pass, then use
+    // ghost paths only for the residual edges. These routes remain explicit
+    // legalization work instead of causing the entire candidate to vanish.
+    let axis_costs = FxHashMap::default();
+    for (graph_idx, edge) in ghost_fallback {
+        let graph = &graphs[graph_idx];
+        let hub = &hubs[graph_idx];
+        let start = manifold_endpoint_point(&edge.from, hub)?;
+        let goal = manifold_endpoint_point(&edge.to, hub)?;
+        let route_start = manifold_endpoint_socket(&edge.from, hub, true)?;
+        let route_goal = manifold_endpoint_socket(&edge.to, hub, false)?;
+        let shifted_start = shifted(route_start);
+        let shifted_goal = shifted(route_goal);
+        let mut edge_hard = hard.clone();
+        edge_hard.remove(&shifted_start);
+        edge_hard.remove(&shifted_goal);
+        let Some((path, crossings)) = crate::astar::ghost_astar(
+            shifted_start,
+            shifted_goal,
+            &edge_hard,
+            &claimed,
+            width,
+            height,
+            2,
+            &axis_costs,
+        ) else {
+            result.unroutable.push((graph.item.clone(), edge.clone()));
+            continue;
+        };
+        let mut path: Vec<_> = path
+            .into_iter()
+            .map(|point| (point.0 - shift.0, point.1 - shift.1))
+            .collect();
+        if route_start != start {
+            path.insert(0, start);
+        }
+        if route_goal != goal {
+            path.push(goal);
+        }
+        let crossings: Vec<_> = crossings
+            .into_iter()
+            .map(|point| (point.0 - shift.0, point.1 - shift.1))
+            .collect();
+        let claim_start = usize::from(route_start != start);
+        let claim_end = path.len() - usize::from(route_goal != goal);
+        claimed.extend(path[claim_start..claim_end].iter().copied().map(shifted));
+        result.routes.push(RoutedManifoldEdge {
+            item: graph.item.clone(),
+            edge: edge.clone(),
+            path,
+            crossings,
+        });
+    }
     Ok(result)
+}
+
+/// Entity-cost A* for dense solid routing.
+///
+/// Surface moves require a free destination. Underground moves may cross any
+/// hard or previously routed interior tile, but their endpoints must be free.
+/// A jump costs two entities regardless of distance, so the search naturally
+/// prefers maximal legal underground spans without a separate compression
+/// pass.
+fn compact_belt_astar(
+    start: (i32, i32),
+    goal: (i32, i32),
+    hard: &FxHashSet<(i32, i32)>,
+    occupied: &FxHashSet<(i32, i32)>,
+    width: i32,
+    height: i32,
+) -> Option<Vec<(i32, i32)>> {
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
+
+    #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+    struct State {
+        x: i32,
+        y: i32,
+        dir: i8,
+    }
+
+    const DIRECTIONS: [(i32, i32, i8); 4] = [(1, 0, 0), (0, 1, 1), (-1, 0, 2), (0, -1, 3)];
+    if occupied.contains(&start) || occupied.contains(&goal) {
+        return None;
+    }
+    let start_state = State {
+        x: start.0,
+        y: start.1,
+        dir: -1,
+    };
+    let mut queue = BinaryHeap::new();
+    let mut distance: FxHashMap<State, u32> = FxHashMap::default();
+    let mut parent: FxHashMap<State, State> = FxHashMap::default();
+    let max_jump = ug_max_reach("express-transport-belt") as i32 + 1;
+    let axis_lower_bound = |distance: i32| {
+        let distance = distance.unsigned_abs();
+        let full = distance / max_jump as u32;
+        let remainder = distance % max_jump as u32;
+        full * 2
+            + match remainder {
+                0 => 0,
+                1 => 1,
+                _ => 2,
+            }
+    };
+    let heuristic =
+        |point: (i32, i32)| axis_lower_bound(goal.0 - point.0) + axis_lower_bound(goal.1 - point.1);
+    queue.push(Reverse((heuristic(start), 0u32, start_state)));
+    distance.insert(start_state, 0u32);
+
+    while let Some(Reverse((_, cost, state))) = queue.pop() {
+        if cost != distance.get(&state).copied().unwrap_or(u32::MAX) {
+            continue;
+        }
+        if (state.x, state.y) == goal {
+            let mut path = vec![goal];
+            let mut cursor = state;
+            while let Some(&previous) = parent.get(&cursor) {
+                path.push((previous.x, previous.y));
+                cursor = previous;
+            }
+            path.reverse();
+            return Some(path);
+        }
+        for &(dx, dy, dir) in &DIRECTIONS {
+            let turn_cost = u32::from(state.dir != -1 && state.dir != dir) * 2;
+            for jump in 1..=max_jump {
+                // A distance-two underground pair is never cheaper than two
+                // surface belts. Keep it available only when the intervening
+                // tile is blocked.
+                if jump == 2 {
+                    let middle = (state.x + dx, state.y + dy);
+                    if !hard.contains(&middle) && !occupied.contains(&middle) {
+                        continue;
+                    }
+                }
+                let next = (state.x + dx * jump, state.y + dy * jump);
+                if next.0 < 0 || next.0 >= width || next.1 < 0 || next.1 >= height {
+                    break;
+                }
+                if occupied.contains(&next) || (next != goal && hard.contains(&next)) {
+                    continue;
+                }
+                let entity_cost = if jump == 1 { 1 } else { 2 };
+                let next_cost = cost + entity_cost + turn_cost;
+                let next_state = State {
+                    x: next.0,
+                    y: next.1,
+                    dir,
+                };
+                if next_cost < distance.get(&next_state).copied().unwrap_or(u32::MAX) {
+                    distance.insert(next_state, next_cost);
+                    parent.insert(next_state, state);
+                    queue.push(Reverse((
+                        next_cost + heuristic(next),
+                        next_cost,
+                        next_state,
+                    )));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Hide bounded conflicting runs beneath earlier routes.
+///
+/// Express underground belts may bridge at most eight hidden tiles, so their
+/// endpoints may be nine tiles apart. This pass greedily replaces a straight
+/// adjacent subpath with such a jump whenever its interior contains an
+/// already claimed surface tile and both endpoints remain free. Fixed
+/// balancer/lane ports cannot themselves become underground endpoints.
+///
+/// Residual overlaps remain explicit and make the candidate non-exportable.
+pub fn legalize_manifold_routes(routes: &[RoutedManifoldEdge]) -> ManifoldLegalizationResult {
+    let max_distance = ug_max_reach("express-transport-belt") as usize + 1;
+    let mut occupied = FxHashSet::default();
+    let mut result = ManifoldLegalizationResult::default();
+    for route in routes {
+        if route.path.is_empty() {
+            result.unresolved_routes += 1;
+            result.routes.push(LegalizedManifoldRoute {
+                item: route.item.clone(),
+                edge: route.edge.clone(),
+                path: Vec::new(),
+                unresolved_tiles: Vec::new(),
+            });
+            continue;
+        }
+        let source_fixed = endpoint_has_fixed_port_direction(&route.edge.from);
+        let target_fixed = endpoint_has_fixed_port_direction(&route.edge.to);
+        let mut path = Vec::with_capacity(route.path.len());
+        let mut i = 0;
+        path.push(route.path[0]);
+        while i + 1 < route.path.len() {
+            let mut jump = None;
+            let max_j = (i + max_distance).min(route.path.len() - 1);
+            for j in ((i + 2)..=max_j).rev() {
+                if (i == 0 && source_fixed) || (j + 1 == route.path.len() && target_fixed) {
+                    continue;
+                }
+                if occupied.contains(&route.path[i]) || occupied.contains(&route.path[j]) {
+                    continue;
+                }
+                let Some(step) = straight_adjacent_step(&route.path[i..=j]) else {
+                    continue;
+                };
+                if step == (0, 0) {
+                    continue;
+                }
+                if route.path[i + 1..j]
+                    .iter()
+                    .any(|tile| occupied.contains(tile))
+                {
+                    jump = Some(j);
+                    break;
+                }
+            }
+            if let Some(j) = jump {
+                path.push(route.path[j]);
+                result.underground_spans += 1;
+                i = j;
+            } else {
+                i += 1;
+                path.push(route.path[i]);
+            }
+        }
+
+        let claim_start = usize::from(source_fixed);
+        let claim_end = path.len() - usize::from(target_fixed);
+        let unresolved_tiles: Vec<_> = path[claim_start..claim_end]
+            .iter()
+            .copied()
+            .filter(|tile| occupied.contains(tile))
+            .collect();
+        if !unresolved_tiles.is_empty() {
+            result.unresolved_routes += 1;
+            result.unresolved_tiles += unresolved_tiles.len();
+        }
+        occupied.extend(path[claim_start..claim_end].iter().copied());
+        result.routes.push(LegalizedManifoldRoute {
+            item: route.item.clone(),
+            edge: route.edge.clone(),
+            path,
+            unresolved_tiles,
+        });
+    }
+    result
+}
+
+fn straight_adjacent_step(path: &[(i32, i32)]) -> Option<(i32, i32)> {
+    let first = *path.first()?;
+    let second = *path.get(1)?;
+    let step = (second.0 - first.0, second.1 - first.1);
+    if step.0.abs() + step.1.abs() != 1 {
+        return None;
+    }
+    path.windows(2)
+        .all(|pair| (pair[1].0 - pair[0].0, pair[1].1 - pair[0].1) == step)
+        .then_some(step)
+}
+
+fn endpoint_has_fixed_port_direction(endpoint: &ManifoldEndpoint) -> bool {
+    !matches!(endpoint, ManifoldEndpoint::Terminal(_))
 }
 
 fn manifold_endpoint_point(
@@ -1943,6 +2362,29 @@ fn manifold_endpoint_point(
             .get(*lane as usize)
             .copied()
             .ok_or_else(|| format!("{} lane {lane} output is missing", hub.item)),
+    }
+}
+
+fn manifold_endpoint_socket(
+    endpoint: &ManifoldEndpoint,
+    hub: &PlacedLocalManifold,
+    output_side: bool,
+) -> Result<(i32, i32), String> {
+    let point = manifold_endpoint_point(endpoint, hub)?;
+    let direction = match endpoint {
+        ManifoldEndpoint::Terminal(_) => return Ok(point),
+        ManifoldEndpoint::NodeInput { node, .. } | ManifoldEndpoint::NodeOutput { node, .. } => hub
+            .nodes
+            .get(*node)
+            .map(|placed| placed.direction)
+            .ok_or_else(|| format!("{} node {node} direction is missing", hub.item))?,
+        ManifoldEndpoint::LaneInput(_) | ManifoldEndpoint::LaneOutput(_) => EntityDirection::South,
+    };
+    let (dx, dy) = dir_to_vec(direction);
+    if output_side {
+        Ok((point.0 + dx, point.1 + dy))
+    } else {
+        Ok((point.0 - dx, point.1 - dy))
     }
 }
 
@@ -2113,6 +2555,7 @@ pub fn place_local_manifold_nodes(
             placed_nodes.push(PlacedManifoldNode {
                 node_id: node.id,
                 origin: (origin_x, origin_y),
+                direction: EntityDirection::South,
                 input_ports: template
                     .input_tiles
                     .iter()
@@ -2169,7 +2612,6 @@ pub fn place_distributed_local_manifold_nodes(
     graphs: &[LocalManifoldGraph],
     clearance: i32,
 ) -> Result<Vec<PlacedLocalManifold>, String> {
-    use crate::bus::balancer::{splitter_for_belt, underground_for_belt};
     use crate::bus::balancer_library::balancer_templates;
 
     let templates = balancer_templates();
@@ -2251,13 +2693,23 @@ pub fn place_distributed_local_manifold_nodes(
             } else {
                 coordinate_median(&desired_points)
             };
+            let (flow_from, flow_to) = match node.role {
+                BalancerNodeRole::Merge => (center, lane_inputs[node.lane as usize]),
+                BalancerNodeRole::Distribute => (lane_outputs[node.lane as usize], center),
+            };
+            let direction = preferred_cardinal_direction(flow_from, flow_to);
+            let (template_width, template_height) = rotated_template_dimensions(
+                template.width as i32,
+                template.height as i32,
+                direction,
+            );
             let block = nearest_free_block(
                 CompactBlock {
                     id: node.id,
-                    x: center.0 - template.width as i32 / 2,
-                    y: center.1 - template.height as i32 / 2,
-                    width: template.width as i32,
-                    height: template.height as i32,
+                    x: center.0 - template_width / 2,
+                    y: center.1 - template_height / 2,
+                    width: template_width,
+                    height: template_height,
                 },
                 &reserved,
                 clearance,
@@ -2270,14 +2722,8 @@ pub fn place_distributed_local_manifold_nodes(
                 )
             })?;
             reserved.push(block.clone());
-            let mut stamped = template.stamp(
-                block.x,
-                block.y,
-                "express-transport-belt",
-                splitter_for_belt("express-transport-belt"),
-                underground_for_belt("express-transport-belt"),
-                Some(&graph.item),
-            );
+            let (mut stamped, input_ports, output_ports) =
+                stamp_rotated_balancer(template, block.x, block.y, direction, &graph.item);
             for entity in &mut stamped {
                 entity.segment_id = Some(format!(
                     "compact-hub:{}:{}:{}",
@@ -2288,16 +2734,9 @@ pub fn place_distributed_local_manifold_nodes(
             placed_nodes.push(PlacedManifoldNode {
                 node_id: node.id,
                 origin: (block.x, block.y),
-                input_ports: template
-                    .input_tiles
-                    .iter()
-                    .map(|&(x, y)| (block.x + x, block.y + y))
-                    .collect(),
-                output_ports: template
-                    .output_tiles
-                    .iter()
-                    .map(|&(x, y)| (block.x + x, block.y + y))
-                    .collect(),
+                direction,
+                input_ports,
+                output_ports,
             });
         }
         placed_nodes.sort_by_key(|node| node.node_id);
@@ -2330,6 +2769,108 @@ pub fn place_distributed_local_manifold_nodes(
         });
     }
     Ok(result)
+}
+
+fn preferred_cardinal_direction(from: (i32, i32), to: (i32, i32)) -> EntityDirection {
+    let dx = to.0 - from.0;
+    let dy = to.1 - from.1;
+    if dx.abs() > dy.abs() {
+        if dx >= 0 {
+            EntityDirection::East
+        } else {
+            EntityDirection::West
+        }
+    } else if dy < 0 {
+        EntityDirection::North
+    } else {
+        EntityDirection::South
+    }
+}
+
+fn rotated_template_dimensions(width: i32, height: i32, direction: EntityDirection) -> (i32, i32) {
+    if matches!(direction, EntityDirection::East | EntityDirection::West) {
+        (height, width)
+    } else {
+        (width, height)
+    }
+}
+
+fn rotate_template_tile(
+    point: (i32, i32),
+    width: i32,
+    height: i32,
+    direction: EntityDirection,
+) -> (i32, i32) {
+    match direction {
+        EntityDirection::South => point,
+        EntityDirection::North => (width - 1 - point.0, height - 1 - point.1),
+        EntityDirection::East => (point.1, width - 1 - point.0),
+        EntityDirection::West => (height - 1 - point.1, point.0),
+    }
+}
+
+fn rotate_template_direction(direction: EntityDirection, flow: EntityDirection) -> EntityDirection {
+    let value = direction as u8;
+    let rotated = match flow {
+        EntityDirection::South => value,
+        EntityDirection::North => (value + 8) % 16,
+        EntityDirection::East => (value + 12) % 16,
+        EntityDirection::West => (value + 4) % 16,
+    };
+    match rotated {
+        0 => EntityDirection::North,
+        4 => EntityDirection::East,
+        8 => EntityDirection::South,
+        12 => EntityDirection::West,
+        _ => unreachable!("cardinal rotation produced {rotated}"),
+    }
+}
+
+fn stamp_rotated_balancer(
+    template: &crate::bus::balancer_library::BalancerTemplate,
+    origin_x: i32,
+    origin_y: i32,
+    direction: EntityDirection,
+    item: &str,
+) -> (Vec<PlacedEntity>, Vec<(i32, i32)>, Vec<(i32, i32)>) {
+    use crate::bus::balancer::{splitter_for_belt, underground_for_belt};
+
+    let width = template.width as i32;
+    let height = template.height as i32;
+    let mut entities = template.stamp(
+        0,
+        0,
+        "express-transport-belt",
+        splitter_for_belt("express-transport-belt"),
+        underground_for_belt("express-transport-belt"),
+        Some(item),
+    );
+    for entity in &mut entities {
+        let (entity_width, entity_height) = entity_dims(&entity.name, entity.direction);
+        let mut rotated_tiles = Vec::new();
+        for x in entity.x..entity.x + entity_width {
+            for y in entity.y..entity.y + entity_height {
+                rotated_tiles.push(rotate_template_tile((x, y), width, height, direction));
+            }
+        }
+        entity.x = origin_x + rotated_tiles.iter().map(|tile| tile.0).min().unwrap();
+        entity.y = origin_y + rotated_tiles.iter().map(|tile| tile.1).min().unwrap();
+        entity.direction = rotate_template_direction(entity.direction, direction);
+    }
+    let rotate_ports = |ports: &[(i32, i32)]| {
+        ports
+            .iter()
+            .map(|&point| {
+                let point = rotate_template_tile(point, width, height, direction);
+                (origin_x + point.0, origin_y + point.1)
+            })
+            .collect()
+    };
+    (
+        entities,
+        rotate_ports(template.input_tiles),
+        rotate_ports(template.output_tiles),
+    )
 }
 
 fn partial_endpoint_point(
@@ -3139,6 +3680,71 @@ mod tests {
                 .iter()
                 .chain(distributors.iter())
                 .all(|stage| crate::bus::balancer::shape_is_stampable(stage.n, stage.m)));
+        }
+    }
+
+    #[test]
+    fn legalized_manifold_routes_materialize_underground_jumps() {
+        let terminal = |x| {
+            ManifoldEndpoint::Terminal(ManifoldTerminal {
+                kind: RouteTerminalKind::ProducerDrop,
+                x,
+                y: 0,
+                island_id: None,
+                inserter_entity_index: None,
+            })
+        };
+        let routes = vec![LegalizedManifoldRoute {
+            item: "iron-plate".into(),
+            edge: ManifoldGraphEdge {
+                from: terminal(0),
+                to: terminal(6),
+            },
+            path: vec![(0, 0), (6, 0)],
+            unresolved_tiles: Vec::new(),
+        }];
+        let entities = materialize_legalized_manifold_routes(&routes).unwrap();
+        assert_eq!(entities.len(), 2);
+        assert!(entities.iter().all(|entity| is_ug_belt(&entity.name)));
+        assert_eq!(entities[0].io_type.as_deref(), Some("input"));
+        assert_eq!(entities[1].io_type.as_deref(), Some("output"));
+    }
+
+    #[test]
+    fn unresolved_manifold_routes_are_not_materialized() {
+        let terminal = ManifoldEndpoint::Terminal(ManifoldTerminal {
+            kind: RouteTerminalKind::ProducerDrop,
+            x: 0,
+            y: 0,
+            island_id: None,
+            inserter_entity_index: None,
+        });
+        let routes = vec![LegalizedManifoldRoute {
+            item: "iron-plate".into(),
+            edge: ManifoldGraphEdge {
+                from: terminal.clone(),
+                to: terminal,
+            },
+            path: vec![(0, 0), (1, 0)],
+            unresolved_tiles: vec![(1, 0)],
+        }];
+        assert!(materialize_legalized_manifold_routes(&routes).is_err());
+    }
+
+    #[test]
+    fn balancer_rotation_preserves_ports_and_footprint() {
+        let template = crate::bus::balancer_library::balancer_templates()
+            .get(&(2, 1))
+            .unwrap();
+        let (entities, mut inputs, outputs) =
+            stamp_rotated_balancer(template, 10, 20, EntityDirection::East, "iron-plate");
+        inputs.sort();
+        assert_eq!(inputs, vec![(10, 20), (10, 21)]);
+        assert_eq!(outputs, vec![(12, 20)]);
+        for entity in entities {
+            let (width, height) = entity_dims(&entity.name, entity.direction);
+            assert!(entity.x >= 10 && entity.x + width <= 13);
+            assert!(entity.y >= 20 && entity.y + height <= 22);
         }
     }
 

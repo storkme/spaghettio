@@ -1400,6 +1400,7 @@ fn rfc057_machine_constraint_baseline() {
         compact_transport_geometry, estimated_manifold_wirelength, extract_rigid_islands,
         extract_route_nets, machine_blocks, occupied_bbox,
         place_distributed_local_manifold_nodes, place_recipe_clusters, plan_local_manifolds,
+        legalize_manifold_routes, materialize_legalized_manifold_routes,
         route_local_manifold_edges, CompactAxis, CompactIr,
         PlacedMachineSignature, ProductionSignature, RouteTerminalKind,
     };
@@ -1483,7 +1484,7 @@ fn rfc057_machine_constraint_baseline() {
             .map(build_local_manifold_graph)
             .collect();
         let placed_hubs =
-            place_distributed_local_manifold_nodes(&clustered_islands, &local_graphs, 1)
+            place_distributed_local_manifold_nodes(&clustered_islands, &local_graphs, 3)
                 .unwrap();
         if label == "chain-mil5ore" {
             let routed =
@@ -1497,6 +1498,47 @@ fn rfc057_machine_constraint_baseline() {
             );
             assert_eq!(routed.routes.len(), edge_count);
             assert!(routed.routes.iter().all(|route| route.path.len() >= 2));
+            let legalized = legalize_manifold_routes(&routed.routes);
+            assert_eq!(legalized.routes.len(), routed.routes.len());
+            if legalized.unresolved_routes == 0 {
+                assert!(materialize_legalized_manifold_routes(&legalized.routes).is_ok());
+            } else {
+                assert!(materialize_legalized_manifold_routes(&legalized.routes).is_err());
+            }
+            let mut crossed_merge_edges = 0usize;
+            let mut crossed_distribute_edges = 0usize;
+            for route in routed.routes.iter().filter(|route| !route.crossings.is_empty()) {
+                let graph = local_graphs
+                    .iter()
+                    .find(|graph| graph.item == route.item)
+                    .unwrap();
+                let touches_role = |endpoint: &spaghettio_core::bus::compaction::ManifoldEndpoint,
+                                    role| match endpoint {
+                    spaghettio_core::bus::compaction::ManifoldEndpoint::NodeInput { node, .. }
+                    | spaghettio_core::bus::compaction::ManifoldEndpoint::NodeOutput { node, .. } => {
+                        graph.nodes[*node].role == role
+                    }
+                    _ => false,
+                };
+                if touches_role(
+                    &route.edge.from,
+                    spaghettio_core::bus::compaction::BalancerNodeRole::Merge,
+                ) || touches_role(
+                    &route.edge.to,
+                    spaghettio_core::bus::compaction::BalancerNodeRole::Merge,
+                ) {
+                    crossed_merge_edges += 1;
+                }
+                if touches_role(
+                    &route.edge.from,
+                    spaghettio_core::bus::compaction::BalancerNodeRole::Distribute,
+                ) || touches_role(
+                    &route.edge.to,
+                    spaghettio_core::bus::compaction::BalancerNodeRole::Distribute,
+                ) {
+                    crossed_distribute_edges += 1;
+                }
+            }
             let mut occupied_axes = FxHashMap::<(i32, i32), u8>::default();
             let mut same_axis_tiles = 0usize;
             let mut perpendicular_tiles = 0usize;
@@ -1520,13 +1562,18 @@ fn rfc057_machine_constraint_baseline() {
             }
             println!(
                 "{label}: routed {} manifold edges, {} paths cross prior paths, \
-                 conflicts={same_axis_tiles} same-axis/{perpendicular_tiles} perpendicular tiles",
+                 conflicts={same_axis_tiles} same-axis/{perpendicular_tiles} perpendicular tiles; \
+                 legalization={} UG spans, {} residual routes/{} tiles; \
+                 crossed roles={crossed_merge_edges} merge/{crossed_distribute_edges} distribute",
                 routed.routes.len(),
                 routed
                     .routes
                     .iter()
                     .filter(|route| !route.crossings.is_empty())
                     .count(),
+                legalized.underground_spans,
+                legalized.unresolved_routes,
+                legalized.unresolved_tiles,
             );
         }
         let mut hub_tiles = FxHashSet::default();

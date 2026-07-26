@@ -746,3 +746,32 @@ make either experimental composer a production default.
   same-axis overlaps require negotiated rerouting or shared-segment graph
   rewriting. The result rejects direct materialisation and makes crossing
   legality the next admission gate.
+
+- **2026-07-26 — Underground-aware routing and rotation competitor.** The
+  router now searches surface steps and express-underground jumps together.
+  Machinery and prior route entities block underground endpoints but not
+  their interiors, so going beneath a machine or belt is a first-class
+  routing decision rather than a post-pass accident. Fixed balancer ports
+  reserve direction-correct access sockets; a second pass releases unused
+  sockets after successful routes commit.
+
+  Local `(n,m)` templates may now rotate north/east/south/west with
+  footprint-correct splitter geometry, rotated ports and entity directions.
+  Nodes select the cardinal direction from their aggregate source toward
+  their capacity lane or descendant consumers. Three tiles of sub-hub
+  clearance was the measured routing optimum on military science; larger
+  clearances lengthened paths without reducing the residual.
+
+  On the military fixture all 500 graph edges still receive paths, but only
+  about 95 now require ghost fallback. Raw conflicting claims fell from
+  11,437 tiles in the adjacent-step router to roughly 2,300; bounded
+  underground legalization leaves roughly 1,200 residual tiles, an
+  approximately 90% reduction. An admissible underground entity-distance
+  heuristic also reduces this routing experiment from roughly 21 seconds to
+  13 seconds.
+
+  A strict materializer now emits surface/underground entities only when
+  every route has zero unresolved claims, omits already stamped fixed-port
+  belts and collision-checks all emitted footprints. The current military
+  result correctly fails that gate. Residual negotiated rip-up/reroute is
+  therefore still required before blueprint export or meter testing.
