@@ -147,11 +147,80 @@ unweighted where its rationale was demand (solids-only actually covers
 **69.4%** of top-10 instances, and the dominant pair is fully solid).
 Resolution was the criterion's own prescribed action — **re-scope, not
 reprieve**: pipes moved out of Non-goals into required Phase 2 scope.
-Phases 1–4 remain; **Phase 1 is blocked on #432** (`DICoupling` and
-`direct_insertion` do not exist on `main`). Recorded data gap:
-`electric-furnace → electric-furnace` is the 2nd-commonest DI pair
-(1,585) but is invisible to recipe-keyed analysis — furnaces carry no
-explicit recipe.
+Recorded data gap: `electric-furnace → electric-furnace` is the
+2nd-commonest DI pair (1,585) but is invisible to recipe-keyed analysis
+— furnaces carry no explicit recipe.
+
+**`rfc-053` Phase 1 COMPLETE (2026-07-25, PR #452 — RFC still ACTIVE,
+Phases 2–4 remain)**: `place_rows` fuses an eligible producer/consumer
+pair into ONE cell row, so the engine emits true
+machine→inserter→machine DI for the first time. **Inert by default**
+(`direct_insertion: false`) — no existing layout moved. Three more kill
+criteria evaluated, all passing: **KC3 (honest throughput)** —
+sim-measured 2.24/s delivered against 2.00/s planned (112%), 0
+validation issues, 32/32 machines working, *with a DI-off control on the
+same target* that delivers the identical 2.24/s, attributing the +12%
+overshoot to a solver rate-model artifact rather than to DI; **KC4
+(density)** re-confirmed end-to-end at 213 entities vs the bus control's
+335 (−36%); **KC2 (face contention)** — passes at L2 but with **zero
+margin**, 1 near + 2 far = 3 of 3 columns, which constrains Phase 2's
+design. Coverage measured rather than assumed: 4 of 11 real targets
+build cells, every refusal with a named cause, and the ceiling is a
+**fan-in belt limit** (one belt cannot feed a high-rate cell), not a DI
+limit.
+
+**`rfc-053` Phases 2 + 4 landed (2026-07-25, PR #459)**: the
+horizontal ROW cell — producers and consumers interleaved in one row,
+coupled east/west in the 1-tile gaps — chosen on corpus evidence
+(`di-patterns faces`: the dominant real shape is `DI@E+W | S:in1 S:out1`,
+both remaining flows on one face at reach-1, opposite face free). It
+needs **no reach-2 inserter and no research** (stack moves 12.0/s at L0
+against a 5.0/s requirement) and reuses `place_rows` rather than
+replacing it. **Both TOP corpus DI pairs now build, validate at 0 issues
+and sim at/above plan**: `copper-cable → electronic-circuit` (#1, 4,116
+instances) 101.3% delivered, 50/50 machines working;
+`electric-furnace → electric-furnace` (#2, 1,585) 109.5%, 32/32. Phase 4
+threads `direct_insertion` through wasm, the worker, URL state (`di=1`)
+and a sidebar checkbox — **still off by default**, since a pair the
+engine cannot serve as a cell falls back to the bridge and then the bus.
+**Fluid-fed PRODUCERS now ship too (2026-07-25, same PR)**: both
+`casting-*` → EC pairs (#3 at 544 instances and #4 at 339) build a row
+cell, validate **0 errors 0 warnings** across 2.5–20/s (both channels —
+`validate()` AND `LayoutResult.warnings`; the latter carried a false-alarm
+fluid-branch warning until 2026-07-26), and sim at
+**101.3% delivered / 100.0% produced**. They needed three things, each
+found only by attempting an end-to-end build: the pipe cut, heterogeneous
+footprints (5×5 foundry beside a 3×3 assembler, bottom-aligned), and a
+`belt-connectivity` exemption — a piped producer hands its product
+straight to its neighbour, so no inserter of its ever touches a belt.
+Without the cell neither pair lays out at all today, so this is the only
+path by which a fluid-fed producer works. A fourth prerequisite ("ratio
+tolerance") was **claimed and then disproved**: it came from feeding
+`plan_row_straddle` raw per-machine rates, where the caller passes
+utilization-scaled ones.
+
+The fluid-drawing CONSUMER shape is **built but unreachable**, and the
+sim is the only reason we know:
+`solid-fuel-from-light-oil → rocket-fuel` (652 instances) produced a
+cell validating 0/0 that made **literally nothing** — the solver
+resolves `rocket-fuel` to a burner `biochamber` and nothing in the
+engine delivers burner fuel. `cell_machines_are_powerable` now refuses
+non-electric roles; the engine-wide gap is **issue #461**.
+
+Open against this RFC: modules refuse (the module post-pass keys
+`(entity, recipe)` off `row_spans` and a fused row contributes only the
+consumer's recipe); KC5 (solver escalation bound) is still unevaluated;
+and the row cell's rate ceiling is bounded by ratio **alignment** — at
+P30:C23 the flow intervals put three producers against one consumer,
+while P20:C15 (exactly 4:3) is fine at any scale.
+
+Corpus `fan` analysis redirected Phase 3: fan-in >2 is only 2.1%
+of the corpus and neither dominant shape uses stacked bands, so
+multi-band is a small tail and **Phase 2 (face allocation) should come
+first**. Open tracking items: the ~10% electric-furnace steel rate
+under-prediction the KC3 control exposed (orthogonal to this RFC), and
+`ci.yml`'s `pull_request: branches: [main]` base filter, which silently
+gives any **stacked PR zero CI**.
 
 **`rfc-052-oil-mega-cell.md` close-out (2026-07-24, Phases A/B/C —
 PRs #401/#403/#405/#408/#411/#421)**: fluid subgraphs compose as

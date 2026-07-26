@@ -220,6 +220,28 @@ pub(crate) fn is_di_bridge_inserter(seg: Option<&str>) -> bool {
     seg.is_some_and(|s| s.starts_with("di-bridge:"))
 }
 
+/// A direct-insertion **cell** inserter (RFC-053 Phase 1): machine-to-machine
+/// by design. The placer tags every entity of a fused cell
+/// `di-cell:<item>:<consumer_recipe>` (see `bus::di_cell::stamp_di_cell_io`).
+///
+/// The distinction that matters to the checks below: a cell's PRODUCER has
+/// **no output belt at all** — its output leaves through the one-tile band
+/// straight into the consumer machine. Every "machine must have an output
+/// inserter dropping onto a belt" test therefore flags a cell producer as a
+/// hard error unless it recognises this tag, and the item-throughput tests
+/// see 0.00/s moved because they only credit belt-bound hands. Those are
+/// false alarms, not defects — `bus::di_cell`'s own invariants (every band
+/// inserter picks from a producer tile and drops into a consumer tile, at
+/// reach 1, with no belt for the coupled item) own the cell's correctness,
+/// and RFC-053 KC3 sim-measured the shape at 112% of plan.
+pub(crate) fn is_di_cell_entity(seg: Option<&str>) -> bool {
+    // `di-cell:` is the Phase 1 stacked cell, `di-row:` the Phase 2
+    // horizontal row cell. Both couple machine-to-machine and both leave
+    // their producers without a belt-bound output hand, so both need the
+    // same exemptions.
+    seg.is_some_and(|s| s.starts_with("di-cell:") || s.starts_with("di-row:"))
+}
+
 /// Resolve the exact `MachineSpec` sibling the layout pipeline placed at `y`
 /// for `recipe`, preferring `layout.effective_rows`'s position attribution
 /// over a recipe-name lookup — partition siblings share a recipe name but

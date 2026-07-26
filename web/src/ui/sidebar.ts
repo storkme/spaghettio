@@ -583,6 +583,21 @@ export function renderSidebar(
   });
   targetBody.appendChild(makeField("Inserter research", inserterCapacitySelect));
 
+  // RFC-053 direct insertion. Off by default: a coupled pair the engine
+  // cannot serve as a cell falls back to the DI bridge and then to the
+  // bus, so turning this on never makes a layout worse — but coverage is
+  // still narrow (fluid-touching and module-bearing pairs refuse), so it
+  // stays opt-in rather than becoming the default.
+  const directInsertionCb = document.createElement("input");
+  directInsertionCb.type = "checkbox";
+  directInsertionCb.className = "sb-checkbox";
+  directInsertionCb.title =
+    "Direct insertion (RFC-053): couple a producer straight into its consumer " +
+    "with inserters, so the shared item never touches a belt. Denser, and it " +
+    "lifts the belt-interface throughput ceiling. Pairs that cannot be served " +
+    "this way fall back to the bus automatically.";
+  targetBody.appendChild(makeField("Direct insertion", directInsertionCb));
+
   // Layout strategy. Phase 0b of `rfc-modular-production` shipped the
   // dropdown; the surviving `partitioned-decomposed` variant produces
   // strictly ≤ Pooled errors on every case in the corpus. The deprecated
@@ -820,6 +835,7 @@ export function renderSidebar(
   if (urlState.wireMode) wireModeSelect.value = urlState.wireMode;
   if (urlState.stacking) stackingSelect.value = urlState.stacking;
   if (urlState.inserterCapacity) inserterCapacitySelect.value = urlState.inserterCapacity;
+  directInsertionCb.checked = urlState.directInsertion === true;
   // Restore custom inputs from URL
   for (const item of urlState.customInputs) {
     if (itemSet.has(item) && !defaultInputSet.has(item) && !customInputs.includes(item)) {
@@ -895,6 +911,7 @@ export function renderSidebar(
       wireMode: wireModeSelect.value || null,
       stacking: stackingSelect.value || null,
       inserterCapacity: inserterCapacitySelect.value || null,
+      directInsertion: directInsertionCb.checked,
       modules: modulesValue(),
       customInputs,
     });
@@ -969,8 +986,9 @@ export function renderSidebar(
       const wireMode = wireModeSelect.value || undefined;
       const stacking = stackingSelect.value || undefined;
       const inserterCapacity = inserterCapacitySelect.value || undefined;
+      const directInsertion = directInsertionCb.checked;
       const onEvent = callbacks.startStreaming();
-      layout = await engine.buildLayoutStreaming(result, maxTier, strategy, rowLayout, maxInserterTier, quality, wireMode, stacking, inserterCapacity, onEvent);
+      layout = await engine.buildLayoutStreaming(result, maxTier, strategy, rowLayout, maxInserterTier, quality, wireMode, stacking, inserterCapacity, directInsertion, onEvent);
     } catch (err) {
       if (gen !== solveGeneration) return;
       const errDiv = document.createElement("div");
@@ -1007,6 +1025,7 @@ export function renderSidebar(
   rowLayoutSelect.addEventListener("change", scheduleAutoSolve);
   inserterTierSelect.addEventListener("change", scheduleAutoSolve);
   qualitySelect.addEventListener("change", scheduleAutoSolve);
+  directInsertionCb.addEventListener("change", scheduleAutoSolve);
   modulesSelect.addEventListener("change", scheduleAutoSolve);
   moduleQualitySelect.addEventListener("change", scheduleAutoSolve);
   wireModeSelect.addEventListener("change", scheduleAutoSolve);

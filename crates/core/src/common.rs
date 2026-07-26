@@ -879,6 +879,27 @@ pub fn fluid_only_recipes(solver: Option<&SolverResult>) -> FxHashSet<String> {
     out
 }
 
+/// Collect the set of recipes whose INPUTS are all fluids, but which still
+/// have a solid output — `casting-copper-cable` (molten copper in, cable
+/// out) is the canonical case.
+///
+/// Distinct from [`fluid_only_recipes`], which also requires the outputs to
+/// be fluids. A machine running one of these has nothing to receive over a
+/// belt, so any belt it does touch is there for its product alone. Inside a
+/// direct-insertion cell it ships that product through a coupling inserter
+/// and touches no belt at all (RFC-053 pipe cut).
+pub fn fluid_input_only_recipes(solver: Option<&SolverResult>) -> FxHashSet<String> {
+    let mut out = rustc_hash::FxHashSet::default();
+    if let Some(sr) = solver {
+        for spec in &sr.machines {
+            if !spec.inputs.is_empty() && spec.inputs.iter().all(|f| f.is_fluid) {
+                out.insert(spec.recipe.clone());
+            }
+        }
+    }
+    out
+}
+
 /// Pick the cheapest belt tier whose throughput is `>= rate`.
 ///
 /// If `max_tier` is `Some(name)`, never select a higher tier than that.

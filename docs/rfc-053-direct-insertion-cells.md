@@ -421,10 +421,46 @@ caveat.
    reachable producers, the sandwich shape is wrong for the game's own
    ratios — stop and reconsider the topology, do not "mostly" feed
    consumers.
-2. **Face contention.** If the consumer's remaining face cannot carry
-   its non-DI flows (iron in + EC out) within its tile budget at
-   **≤ L2** `inserter_capacity` (i.e. the cell is only feasible at max
-   research), the topology is under-scoped — stop.
+2. **Face contention. ✅ EVALUATED 2026-07-25 — PASSES, with zero
+   margin.** If the consumer's remaining face cannot carry its non-DI
+   flows (iron in + EC out) within its tile budget at **≤ L2**
+   `inserter_capacity` (i.e. the cell is only feasible at max research),
+   the topology is under-scoped — stop. Measured against the real rate
+   tables (`kc2_face_contention` in `tests/e2e.rs`), AM3 canonical,
+   2.5/s each way, 3-wide face:
+
+   | side | inserter | rate @L2 | needed | columns |
+   |---|---|---|---|---|
+   | near (reach-1) | fast | 4.62/s | 2.5/s | **1** |
+   | far (reach-2) | long-handed | **2.40/s** | 2.5/s | **2** |
+   | | | | | **3 of 3 → PASSES** |
+
+   The criterion does not fire, but every column is consumed. The bind
+   is structural rather than a research shortfall: long-handed is the
+   only reach-2 inserter (I8a) and its belt-drop rate is 2.40/s at L2
+   rising only to 3.20/s at L7, so max research buys back exactly one
+   column and no more. Swapping which item takes the near belt is
+   symmetric (both flows are 2.5/s), so 1 + 2 is the budget either way.
+
+   **Consequences Phase 2 must design around, not discover later:** a
+   Phase 2 cell has **no spare face column**, so any consumer with a
+   third flow (second output, third input) does not fit and must refuse;
+   and pipe placement — which KC6 re-scoped INTO this phase — needs face
+   tiles this budget does not have, so fluid-touching consumers will
+   need a different face plan rather than this one extended.
+
+   *Incidental finding, raised and then CLEARED:* `bulk-inserter`'s
+   belt-drop rate is flat 2.40/s across every research level and belt
+   tier, while its machine-feed rate scales 2.40 → 4.80 → 14.40. That
+   looked like a modelling gap Phase 2's allocator might trip over.
+   It is not — `belt_drop_rate`'s own doc states it: *"bulk inserters:
+   always flat — the engine never places one"*, i.e. a deliberate
+   simplification for an entity that only ever arrives by parsing
+   community blueprints. It also cannot affect this phase twice over:
+   bulk is reach-1, so it is structurally excluded from the binding
+   far/reach-2 column, and on the near side stack dominates it (6.38/s
+   vs 2.40/s at L2). Recorded because "verify the load-bearing number"
+   was the right instinct even though the answer was benign.
 
    **2b. Tier-cap degradation.** `max_inserter_tier` is a hard user cap,
    orthogonal to research level. If, at the engine defaults
@@ -434,11 +470,63 @@ caveat.
    a `Fast`-capped user cannot get a feasible cell at the **default**
    research level, DI is too fragile to ship default-on — it stays an
    opt-in strategy with an honest refusal, not a silent degradation.
-3. **Honest throughput.** If a DI cell validates clean but the sim
-   harness measures **< 98% of plan** on the canonical fixture, the
-   model is wrong and the checks are lying — stop everything. (This is
-   the #383 lesson: validator-clean concealed a real starve for weeks.)
-4. **Density premise. ✅ EVALUATED 2026-07-25 — PASSES.** Measured on
+3. **Honest throughput. ✅ EVALUATED 2026-07-25 — PASSES.** If a DI cell
+   validates clean but the sim harness measures **< 98% of plan** on the
+   canonical fixture, the model is wrong and the checks are lying — stop
+   everything. (This is the #383 lesson: validator-clean concealed a
+   real starve for weeks.) **Measured on a real cell** (`steel-plate@2/s`
+   from `iron-ore`, 16:16 furnace→furnace — the corpus's dominant DI
+   shape; the fixture is `di_cell_kc3_export` in `tests/e2e.rs`):
+
+   | | planned/s | produced/s | delivered/s | entities |
+   |---|---|---|---|---|
+   | **DI cell** | 2.00 | 2.21 (+10.7%) | 2.24 (+12.0%) | **213** |
+   | control (DI off) | 2.00 | 2.20 (+10.0%) | 2.24 (+12.0%) | 335 |
+
+   `converged=true`, 32/32 machines working, both runs. DI delivers
+   **112% of plan**, nowhere near the 98% floor, and matches its own
+   bus control to within 0.7pp produced / 0.0pp delivered. The
+   criterion does not fire.
+
+   **The "validates clean" half was NOT true on the first pass, and
+   finding that out took a second look.** KC3 is a conjunction — a cell
+   that *validates clean* AND under-delivers — and the first measurement
+   only checked the throughput half. Running the validator afterwards
+   returned **16 `Error`s and 48 warnings**: every producer furnace
+   flagged `output-belt: no output inserter has a belt at its drop
+   position`, plus `inserter-throughput` crediting cell machines 0.00/s.
+   All false positives — the sim had already proved the shape moves
+   112% of plan — but a DI feature that buries the validator in false
+   errors is not shippable, and worse, real errors would have been
+   indistinguishable. Two distinct causes, both now fixed and both
+   inherent to the cell design rather than incidental:
+
+   - a cell producer has **no output belt at all** (its output leaves
+     through the band), so every "machine must have an output inserter
+     dropping onto a belt" test fails by construction;
+   - the fused `RowSpan` carries the producer's inputs, so
+     `resolve_row_spec` attributes the producer's input item to the
+     *consumer* machines — the check asked furnaces eating iron-plate to
+     account for iron-ore.
+
+   `validate::is_di_cell_entity` now exempts cell entities the way
+   `is_di_bridge_inserter` handles #432's bridges. **Post-fix: 0
+   validation issues, same 112% delivery.** So KC3's conjunction is
+   satisfied on both halves — but only after the gap was closed.
+
+   **The control is the load-bearing part.** A single DI run showing
+   +10.7% is uninterpretable: a solver rate-model artifact and a DI
+   artifact are indistinguishable without it. Running the same target
+   with `direct_insertion: false` attributes the overshoot to the
+   *model*, not the topology — the engine under-predicts electric-furnace
+   steel output by ~10% in both. That discrepancy is real, pre-existing
+   and orthogonal to this RFC; it deserves its own issue rather than
+   being quietly absorbed here.
+4. **Density premise. ✅ EVALUATED 2026-07-25 — PASSES; re-confirmed
+   end-to-end.** The KC3 run above measures it on a whole solved layout
+   rather than a hand-derived cell: **213 entities against the bus
+   control's 335, a 36% reduction** at identical delivered throughput.
+   Original hand-derived evaluation follows. Measured on
    the canonical fixture (EC@10/s from plates, DI off) against the real
    engine: the bus places `copper-cable` at y1–7 and `electronic-circuit`
    at y10–17 with a `copper-cable` trunk lane at y7–9 — a **17-tile**
@@ -548,7 +636,18 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
     when counting DI in community blueprints). Refuses rather than
     under-feeding when the chosen inserter can't cover an edge within
     the slots that edge owns.
-  - **1c — placer wiring** (remaining, and the invasive step). Pick-up
+  - **1c ✅ LANDED — placer wiring. Phase 1 is COMPLETE.**
+    `place_rows` now fuses an eligible pair into one cell row via
+    `cell_eligible` → `try_build_cell` → `fused_cell_spec`. The engine
+    emits machine→inserter→machine DI for the first time. Inert by
+    default (`direct_insertion: false`), so no existing layout moved —
+    the cell path is covered by unit tests only until Phase 4 exposes
+    the flag. The notes below are kept as the record of how the step was
+    scoped; where they disagree with what shipped, what shipped wins
+    (notably: no new `RowKind` was needed — a fused `RowSpan` built
+    directly from `DiCellLayout` was enough).
+
+  - *Original 1c pick-up notes (superseded).* Pick-up
     notes, so this doesn't need re-deriving:
     - **Seam**: `bus::placer::place_rows`, the DI branch that currently
       calls `stamp_di_bridge` (search `is_di_consumer` / `di_lookup`).
@@ -842,3 +941,942 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   wiring rather than after — the RFC had carried the contradiction
   since the first draft because prose scope and worked example were
   never cross-checked.*
+
+- *2026-07-25 — **Phase 1c landed; Phase 1 is complete.** `place_rows`
+  fuses an eligible producer/consumer pair into a single cell row, so the
+  engine emits true machine→inserter→machine DI for the first time.
+  Three things worth carrying forward. **(a) The fused-row design made
+  the "invasive" step small.** The pick-up notes predicted a new
+  `RowKind` and a restructured placement loop; what it actually took was
+  a precomputed `cell_pairs` map, a skip-set for absorbed consumer specs,
+  and a `RowSpan` built straight from `DiCellLayout`. The reason is the
+  design choice, not luck: describing the cell as a composite machine
+  (producer's inputs, consumer's outputs) means nothing downstream has to
+  learn what a cell is. **(b) `cell_eligible` is load-bearing.** It is
+  the only thing standing between `detect_di_couplings`' cable→EC
+  coupling and a starving cell — the solver will keep emitting couplings
+  Phase 1 cannot serve, and that is fine as long as the placer refuses
+  them. **(c) A test passed vacuously and had to be caught by hand.**
+  `di_cell_row_has_a_real_output_belt` went green while no cell was being
+  built at all — the shared `iron_plate_spec`/`iron_gear_spec` helpers
+  are unbalanced (1.0/s against 2.0/s), `plan_straddle` rightly refused
+  them, and the assertion silently landed on an ordinary row. It now
+  guards on `spans.len() == 1` first. Textbook "zero warnings can mean
+  the check was wrong" from the verification protocol, and worth the
+  reminder that a green new test is evidence of nothing until you have
+  seen it fail for the right reason.*
+
+- *2026-07-25 — **KC3 evaluated and PASSES; the RFC now survives every
+  kill criterion that is evaluable pre-Phase-2.** Sim-measured a real
+  cell built by the full solver→layout pipeline (`steel-plate@2/s` from
+  `iron-ore`, 16:16 furnace→furnace): 2.24/s delivered against 2.00/s
+  planned, `converged=true`, 32/32 machines working. The floor is 98%;
+  this is 112%. **Ran a DI-off control on the same target and that is the
+  finding worth keeping** — the control delivers *the same* 2.24/s
+  (+12.0%), so the overshoot is a solver rate-model artifact
+  (electric-furnace steel under-predicted by ~10%), not a property of
+  DI. Without the control the +10.7% would have been unattributable, and
+  the temptation to read it as "DI beats plan" would have been strong
+  and wrong. The same pair of runs re-confirms KC4 end-to-end at a scale
+  the hand-derived 7-vs-17 figure couldn't: **213 entities vs 335, −36%**,
+  at identical delivered throughput. Chose to run KC3 before starting
+  Phase 2 specifically because Phase 2 is the expensive phase and KC3 is
+  the criterion most able to invalidate the topology — evaluating it the
+  moment it became evaluable (which Phase 1c's landing made possible) is
+  the RFC's own kill-criterion discipline. Two gates remain open and both
+  are inherently Phase 2+: KC2 (face contention — a Phase 1 cell has no
+  second face flow by construction) and KC5 (solver escalation bound).
+  Orthogonal follow-up, deliberately NOT folded into this RFC: the ~10%
+  electric-furnace steel rate discrepancy the control exposed.*
+
+- *2026-07-25 — **#450 review found three real bugs; a fourth was found
+  by closing my own verification gap.** The bot's findings, all
+  confirmed against the code before fixing rather than taken on trust:
+  **(1)** `fused_cell_spec` dropped the producer's module loadout — the
+  module post-pass keys `(entity, recipe)` off `row_spans`, and a cell
+  contributes only the consumer's recipe, so producer machines would get
+  no modules while the solver had already folded the bonus into their
+  count. Now refused outright (matching loadouts wouldn't help: the
+  *key* is missing). **(2)** `SidePlan.count`/`.shortfall` were computed
+  and discarded — `DiCellIo` carries an entity name and no count, so a
+  face needing two inserters got one and silently under-fed. Now sized
+  against a single slot and refused when that isn't enough; the comment
+  claiming "a single-inserter face isn't an implicit throughput cap"
+  asserted the exact opposite of the behaviour. **(3)** the cell's
+  output belt was sized against the raw combined rate although it is
+  physically single-lane (all output inserters share a y and a facing,
+  so every drop lands in the far lane) — a 2× over-estimate, and cells
+  never split by throughput the way ordinary rows do. Now sized at
+  `rate * 2.0` and refused when one lane can't carry it. **(4)** Mine:
+  the KC3 run measured throughput but never ran the validator, so
+  "validates clean" went unverified — and was false (16 errors). Fixed
+  via `is_di_cell_entity`. The through-line in all four is the same
+  shape of mistake — trusting a number that was never checked
+  (`.count`, lane capacity, the module key, the warning list) — which is
+  the failure mode this RFC's own verification protocol exists to catch,
+  and which three of four green test runs did not surface.*
+
+- *2026-07-25 — **Two more #450 findings, one of them missed on the first
+  fold-in, plus a CI gap that made every green on that PR meaningless.**
+  (a) The cell's input belt was sized from the cell's LOCAL demand, but
+  it is a bus tap-off target like any other row's input — `lane_planner`
+  taps it identically — so it must take the trunk tier via
+  `row_input_belt`, whose doc comment exists precisely to prevent the
+  seam mismatch I reintroduced (fast trunk feeding a yellow row belt,
+  lane-throughput warnings, items backing up at the join). I fixed the
+  output belt in the first pass and did not notice the input belt had the
+  same class of bug. (b) Neither belt refused on capacity:
+  `belt_entity_for_rate_stacked` **saturates** rather than failing, and
+  `plan_straddle` is scale-invariant in machine count, so any pair
+  eligible at rate R stays eligible at 100R while the belts silently
+  under-carry. Both sides now refuse. (c) **`ci.yml` triggers on
+  `pull_request: branches: [main]`, which filters the PR's BASE branch —
+  so #450, stacked on #449, got `ci.yml runs: 0` for its entire life.**
+  The signal was subtle and worth recording: on a docs-only PR the rust
+  jobs show `SKIPPED` (the `changes` filter ran), whereas on #450 they
+  were **absent** — never scheduled — while the two workflows that
+  aren't base-filtered passed and made the checks list look plausible.
+  This affects any stacked PR in the repo; widening the trigger is a
+  workflow-file change and deliberately left for a reviewed PR of its
+  own, given #369's history of an installer silently reverting these
+  files. Also worth noting for the next session: the review bot
+  **skipped** its later passes ("Claude has already left review comments
+  on this PR"), so a green `claude-review` on the fixed SHA is not
+  evidence the fixes were reviewed — the CLAUDE.md warning applies to
+  re-reviews too, not just first passes.*
+
+- *2026-07-25 — **Phase 1 coverage measured, so "Phase 1 complete" isn't
+  taken on faith.** Five refusal gates landed during the #450 review
+  fold-in; if they collectively refuse almost everything, the phase is
+  hollow. `di_cell_coverage_sweep` (ignored, in `tests/e2e.rs`) reports
+  cell-vs-fallback across 11 real targets. At yellow: **4 build cells**
+  (`steel-plate` at 1 and 2/s, `iron-stick`, `pipe`, `copper-cable`),
+  and every refusal has an explicable cause rather than a silent one —
+  `electronic-circuit` is Phase 2 (two solid inputs), `iron-gear-wheel`
+  is out on ratio (~4.8 furnaces per gear machine, straddle > 2),
+  `stone-brick` yields no coupling at all, and the high-rate
+  `steel-plate` cases hit belt capacity. **The capacity refusals track
+  real belt limits, verified by re-sweeping at each tier**:
+  `steel-plate@5` needs 25/s of iron-plate, so it refuses on yellow
+  (15/s) and builds on red (30/s); `steel-plate@10` needs 50/s and
+  refuses even on express (45/s), which is correct — one belt cannot
+  feed it. That last case is the real Phase 1 ceiling and it is a
+  **fan-in** limit, not a DI limit: the ordinary path would split the
+  recipe across rows, and a cell cannot (its machines sit at
+  `StraddlePlan` positions), so high-rate couplings need the Phase 3
+  multi-band cell. Recorded as a measurement rather than a guess because
+  the gates were added under review pressure and their aggregate effect
+  was not obvious from any individual one. NB the sweep only varies
+  `max_belt_tier` to characterise the ceiling — the engine must never
+  auto-escalate tier, which stays a hard user-specified constraint.*
+
+- *2026-07-25 — **Phase 3 (multi-band) measured before building, and the
+  measurement argues against doing it next.** Extended `di-patterns` with
+  a `fan` subcommand — `Obs` previously carried only recipe names and
+  relative geometry, so fan-in/fan-out/chain were structurally
+  uncomputable; it now records the blueprint-member id and the two
+  machine indices. Corpus results:*
+
+  | shape | fan-in (producers per consumer) | chain (machine is both) |
+  |---|---|---|
+  | `electric-furnace → electric-furnace` (1,585) | **1 for all 1,585** | **0** |
+  | `copper-cable → electronic-circuit` (4,116) | 1 for 634, **2 for 1,405; max 2** | **0** |
+  | all pairs (16,507) | >2 for 237 of 11,536 consumers = **2.1%** | 1,674 / 21,622 = 7.7% |
+
+  *Three conclusions. **(1) `plan_straddle`'s existing ≤2 limit already
+  covers ~98% of real fan-in.** The RFC's stated Phase 3 motivation —
+  "multi-producer straddle for the corpus's awkward ratios" — is chasing
+  a 2.1% tail. **(2) Neither dominant shape uses stacked bands at all**
+  (chain = 0 for both); the 7.7% global figure lives in pairs nobody has
+  asked for. **(3) cable→EC needs exactly the 2-producer straddle Phase 1
+  already implements** — what blocks it is the second solid input, i.e.
+  Phase 2 face allocation, not the straddle. Separately, the Phase 1
+  ceiling measured earlier (`steel-plate@10` refusing on input-belt
+  capacity) is **not** a straddle problem either: it needs more than one
+  input belt feeding a cell, which multi-band does not address. So the
+  honest ordering is **Phase 2 before Phase 3**, and Phase 3's scope
+  should be rewritten around the fan-in belt limit rather than around
+  multi-producer straddle, which is largely already solved.*
+
+- *2026-07-25 — **Phase 2's input-belt contract, checked before building:
+  one question discharged, one sharpened, one found.** The Phase 2 cell
+  puts a second input belt (iron-plate) BELOW its consumers, a shape no
+  existing row template produces, so the worry was that something derives
+  tap-off position from row geometry rather than reading it. **It does
+  not.** Both consumers — `lane_planner.rs:1292` and
+  `ghost_router.rs:163` — use the identical form: filter `spec.inputs` to
+  non-fluid, enumerate, match on item, then read `input_belt_y[idx]`
+  literally. No `y_start` arithmetic, no "first belt row", no comparison
+  against machine y. An input belt below its machines is fine.*
+
+  *So the whole contract reduces to: **`input_belt_y[i]` is the belt for
+  the i-th non-fluid entry of `spec.inputs`, in spec order.** Violating it
+  makes BOTH consumers wrong identically, so they agree with each other
+  and yield a self-consistent wrong layout — there is no disagreement for
+  a check to catch.*
+
+  ***The trap the grep actually found.*** *Both consumers `break` on the
+  first item match, and `ghost_router` documents the assumption inline:
+  "assumes one input slot per item per recipe." A Phase 2 fused spec is
+  producer's inputs + consumer's non-coupled inputs, and nothing prevents
+  those being the SAME item (producer eats iron-plate, consumer also eats
+  iron-plate). Then `spec.inputs` holds two iron-plate entries at
+  different y, both consumers match the first and break, and **the second
+  belt is never tapped** — built, never fed, machines starve, and no lane
+  is ever routed to it to warn about. Merging the two is not available:
+  they sit at different y by construction (one above the producers, one
+  below the consumers). Phase 2 must therefore either refuse such a pair
+  outright — the Phase 1-style honest answer, and the default unless
+  measurement says the shape matters — or teach tap-off resolution to sum
+  across matching slots, which means editing that documented assumption in
+  two files. Invisible in the canonical cable→EC case (copper-plate vs
+  iron-plate are distinct), so it would have shipped and bitten later.*
+
+- *2026-07-25 — **Face allocation mined instead of drawn, and it overturns
+  two things this RFC asserted.** New `di-patterns faces` subcommand: for
+  every machine that RECEIVES direct insertion, report which sides the DI
+  arrives on and where all its other interfaces live (side, reach,
+  in/out, belt-or-machine at the far end). 2,039 cable→EC consumers.
+  Top whole-machine plans:*
+
+  | n | plan |
+  |---|---|
+  | **177** | `DI@E+W \| S:in1→belt S:out1→belt` |
+  | 110 | `DI@S \| N:in1 N:out1 N:out2 N:out2` |
+  | 80 | `DI@N \| S:in1 S:out1 S:out2 S:out2` |
+  | 68 | `DI@W \| N:in1 N:in1 S:out1 S:out1` |
+
+  ***(1) The dominant shape is a horizontal straddle in ONE row, not a
+  stacked cell.*** *The most common plan has the consumer between two
+  producers on its east and west faces, with its remaining input and its
+  output both on the south face and **both reach-1** — north entirely
+  free. That is `P C P C P` interleaved in a single row with ordinary
+  belts above and below, which is much closer to what `place_rows`
+  already does than the producer-row-above-consumer-row cell Phase 1
+  builds. The RFC's hand-drawn sketch (rows 2 and 3 above, 190 combined)
+  is real but is not what most people build.*
+
+  ***(2) KC2's "zero margin" was computed on a false premise.*** *That
+  evaluation assumed the consumer's spare face is ONE inserter row of 3
+  columns, and concluded 1 near + 2 far exactly fills it. But plans 2 and
+  3 carry **four** interfaces on a single face (`in1 out1 out2 out2`),
+  which three columns cannot hold. The resolution is that a reach-2
+  inserter can sit in the SECOND row out — at `y+h+1`, picking from the
+  machine at `y+h-1` and dropping at `y+h+3` — so the face is two rows
+  deep. KC2 still passes; its margin is simply wider than recorded, and
+  the "no spare column, so a third flow must refuse" consequence I drew
+  from it does not follow. Both the criterion's arithmetic and the Phase
+  2 geometry derived from it need redoing against the two-row face.*
+
+  *Method note, since this is the second time it has bitten: the sketch's
+  reach arithmetic was verified and that was mistaken for validating the
+  design. Checking that a drawing is physically possible says nothing
+  about whether it is good or common. The corpus could have answered this
+  at any point in the last three phases and was not asked.*
+
+- *2026-07-25 — **Phase 2 pivots to the horizontal row straddle, on
+  corpus evidence, and it BENDS LESS than the stacked cell rather than
+  more.** `plan_row_straddle` lands in `bus::di_cell`: producers and
+  consumers interleaved in ONE horizontal row, coupled by inserters in the
+  1-tile gaps between neighbours. Same flow-interval argument as
+  `plan_straddle`, applied in 1-D, with the extra constraint that a
+  consumer has only two horizontal neighbours — so a consumer needing
+  three producers is refused rather than approximated. It reproduces the
+  hand-derived canonical sequence `P C P C P P C P C P` for the 6:4
+  cable→EC ratio without being fitted to it.*
+
+  ***Why this is the better shape, and why it is cheaper:***
+  - *`required_rate() == 5.0/s` for cable→EC, because each edge owns
+    exactly one gap. A stack inserter moves **12.0/s at zero research**,
+    so the pair is feasible with no research at all — against the stacked
+    cell's face plan, which needed L2 and two long-handed inserters.*
+  - ***No reach-2 inserter anywhere.*** *The stacked cell's whole
+    difficulty was the consumer's spare face carrying two flows, forcing
+    a long-handed hop over the near belt at 2.40/s.*
+  - ***It reuses `place_rows` rather than replacing it.*** *A line of
+    machines with belts above and below is what the row templates already
+    emit; the delta is a mixed-recipe machine sequence plus inserters in
+    the gaps. The stacked cell needed a bespoke stamper. Per the standing
+    guidance — reuse where we can, extend where we must — this is the
+    cheaper extension AND the one the corpus endorses.*
+
+  *Consequence for the phase: the mixed-reach face row, the two-row face
+  budget, and KC2's margin all become moot for this shape, since the
+  consumer's remaining input and output sit on one face at reach-1 with
+  the opposite face free. They remain relevant only to the stacked
+  variant, which the corpus puts second (190 combined vs 177 for the top
+  single plan).*
+
+- *2026-07-25 — **Phase 2 row cell builds cable→EC end to end; 9
+  validation errors remain, and they are OURS.** `stamp_row_cell` +
+  `try_build_row_cell` produce a horizontal row cell for
+  `copper-cable → electronic-circuit` at 10/s from ore (153 `di-row`
+  entities, express belts) — the corpus's #1 DI pair, and the first time
+  the engine has used DI for it. **Not merged**: on
+  `wip/rfc053-phase2-row-cell`, off #452's branch, which stays green.*
+
+  ***The control run is the load-bearing datum.*** *The identical target
+  with `direct_insertion: false` validates at **0 issues**, so all 9
+  errors are caused by the row cell rather than being pre-existing. No
+  need to re-establish that next session.*
+
+  *Blocking error, diagnosed: a vertical `fast-transport-belt` at x=46 is
+  routed through occupied tiles at y=20–25, colliding with an
+  `electric-furnace` (from the copper-plate producer row) and with cell
+  entities. The row cell is ~39 tiles wide at pitch `machine_w + 1`,
+  wider than any ordinary row, and something in lane/return routing is
+  not respecting occupancy across that span. Ruled out already: the
+  `input_belt_y` ordering contract holds (fused inputs are
+  `[copper-plate, iron-plate]`, belts are `[y0, face_y+1]`, matching).*
+
+  *Four bugs fixed reaching this point, each a silent mis-build:
+  `cell_pairs` required exactly one coupling per consumer, excluding
+  `electronic-circuit` (coupled on two items) entirely; claiming a pair
+  on eligibility alone let the unbuildable 16:4 `iron-plate → EC`
+  coupling block the workable `copper-cable → EC` one; the build path
+  called `try_build_cell` unconditionally, bypassing the gate that stops
+  a two-solid-input consumer being fused into a STACKED cell; and the
+  producer's feed was reach-2, reintroducing long-handed's 2.40/s ceiling
+  that the row shape exists to avoid.*
+
+  *Also outstanding: 2 of the new `row_stamp` tests still assert the
+  pre-rework geometry, and `di_bridge_feeds_cable_only_at_high_research`
+  is a genuine regression — cable→EC now forms a row cell where that test
+  pins bridge behaviour. Decide whether it should assert the row cell or
+  pin DI off.*
+
+- *2026-07-25 — **A latent output-merger bug, found by the row cell; and
+  a KC3-CANDIDATE TRIP that needs sim forensics before it can be
+  called.** Two things, one good and one that must not be waved through.*
+
+  ***(1) `merge_x_cursor` never honoured its own stated invariant for
+  single-output layouts.*** *The comment says "Start east of EVERY row
+  (not just the participating ones) so south columns never clip a wider
+  foreign row" — but only the `output_items.len() > 1` branch did that;
+  the single-item branch started at `0` and let `merge_output_rows`
+  derive its start from the participating rows alone. Safe only while
+  the output-producing row is also the widest, which is true of ordinary
+  layouts and false for a row cell: at EC@10/s the cell is `bus+39` wide
+  against the iron-plate row's `bus+48`, so the merger drove a column
+  straight through it — 7 `entity-overlap` errors, plus knock-on
+  reachability and isolation failures. Fixed by applying the max
+  unconditionally. **Verified pre-existing, not introduced**: the same
+  target with `direct_insertion: false` validated at 0 issues, and the
+  fix adds no new test failures (895 pass, same 5 known ones). This bug
+  was reachable before RFC-053 by any layout whose final row is narrower
+  than an intermediate one; the row cell just made it easy to hit.*
+
+  ***(2) cable→EC now VALIDATES CLEAN but SIMS AT ZERO.*** *After the
+  merger fix the layout has **no validation errors** (8 warnings), so
+  goal clause (b) holds. The sim says: `electronic-circuit` 0.00/s
+  against 10.00/s planned, `converged=false`, and at a 60,000-tick
+  warmup it degrades to "NO DATA" with every item at 0.00 — including
+  `copper-plate` and `iron-plate`, which come from ORDINARY rows, not
+  cells. **This is the exact shape KC3 exists to catch** ("validates
+  clean but the sim measures < 98% — the model is wrong and the checks
+  are lying"). It is NOT yet a confirmed trip: universal zeros plus
+  "NO DATA" plus starved non-cell rows is also the documented signature
+  of a sim-KIT problem (`docs/sim-harness-forensics.md`; audit
+  `kit_errors` and the chest census before blaming geometry). Those two
+  diagnoses have opposite consequences — one kills the Phase 2 shape,
+  the other is a harness artifact — so the forensics must be run before
+  either is recorded as fact.*
+
+  ***Forensics run; it is NEITHER.*** *The machine census settles it:
+  **`full_output: 46`, `item_ingredient_shortage: 4`**. Forty-six
+  machines are backed up with a FULL OUTPUT — producing normally and
+  unable to offload — against only four short of ingredients. Import was
+  clean (654/654 ghosts revived), power fine (1 pole network), no kit
+  errors. So:*
+  - *Not a sim-kit artifact: the kit fed the layout and the machines ran.*
+  - ***Not a KC3 trip.** KC3 fires when the topology or the model is
+    wrong. `full_output` means production works and the OFFLOAD PATH is
+    blocked, which is an incomplete integration in unfinished Phase 2
+    code, not evidence against the DI shape. Recording this distinction
+    because the raw numbers (0.00/s, -100%) look identical to a KC3 trip
+    and would have justified killing the row shape on a misreading.*
+
+  *Where the blockage is, from the same run: `copper-plate` produces
+  1.27/s then stalls and `copper-cable` produces 0.00/s, so the cable
+  machines never receive copper-plate. The cell's belts carry `di-row:`
+  segment ids rather than the `row:...:belt-in:<item>` ids ordinary rows
+  use, so the tap-off almost certainly never joins them to the bus —
+  consistent with the belts being stamped by the cell rather than by the
+  row templates.*
+
+  ***That hypothesis is DISPROVEN — probe it before acting on it.*** *Both
+  cell input belts do have tap-offs joined to them:
+  `copper-plate` at y=10 (x=6..44) with `ghost:tap:copper-plate:3:10`
+  immediately west, and `iron-plate` at y=16 with
+  `ghost:tap:iron-plate:4:16`. The stamped geometry matches the design
+  exactly (`p_belt=10, feed=11, machines=12-14, face=15, c_belt=16,
+  out=17`). Feeding is not the problem.*
+
+  ***Current best candidate: the merger fix traded an overlap for a
+  gap.*** *The cell's output belt ends at **x=44**, but
+  `merge_x_cursor` now starts east of EVERY row, and the copper-plate row
+  is ~48 wide — so the merge column begins beyond the cell's output belt.
+  If that belt is not extended east to meet it, `electronic-circuit` has
+  nowhere to go, backs up, and cascades upstream into precisely the
+  observed `full_output: 46`. Next session: check whether
+  `merge_output_rows` extends a participating row's output belt east from
+  `output_belt_x_max` (ordinary rows must rely on this), and if it does,
+  why the cell row is excluded.*
+
+  ***That is disproven too.*** *The EC output belt (y=17, x=6..44) IS
+  joined east to the merger at x=45..48 (`merger:electronic-circuit`).
+  Both inputs are tapped and the output is merged; the cell is fully
+  connected on all three belts.*
+
+  ***The census localises it exactly, and it is the Phase 2 input.***
+  *50 machines: 40 furnaces + 6 cable + 4 EC. `full_output: 46` = the 40
+  furnaces plus the 6 cable machines; `item_ingredient_shortage: 4` =
+  exactly the 4 EC machines. So the EC machines cannot craft for want of
+  an ingredient; their coupled cable input then fills, the couplers
+  stall, the cable machines back up, and the backpressure reaches the
+  furnaces. Copper-cable arrives by DI and its couplers are stalled
+  BECAUSE EC cannot consume — so the missing ingredient is **iron-plate,
+  the consumer's belt-fed second input**. That is precisely the flow
+  Phase 2 exists to add and that Phase 1 never had to serve, so the
+  defect is in the new south-face plan (consumer feed at `face_y`,
+  reach-1, picking the belt at `face_y+1`), not in the coupling, the
+  taps, or the merge. **Start there next session: verify a consumer feed
+  inserter exists per consumer and actually picks iron-plate off y=16.**
+  Three hypotheses have now been proposed and two killed by probing —
+  probe this one before changing anything.*
+
+  ***Probed; the face is correct too — fourth hypothesis eliminated.***
+  *y=15 holds 12 inserters, exactly 4 consumers x (1 `fast-inserter`
+  carrying iron-plate + 2 `long-handed-inserter` carrying EC), at the
+  consumer x-positions 10/18/30/38, with the iron-plate belt at y=16 and
+  the EC belt at y=17 beneath them. Reach arithmetic verified for all
+  three roles.*
+
+  ***Conclusion after four eliminations: the cell is STRUCTURALLY SOUND
+  and the defect is DYNAMIC.*** *Taps connected, output merged, face
+  inserters present and correctly placed — so this is not a placement
+  bug. It is a flow problem: iron-plate is most likely never arriving on
+  y=16 even though the tap SEGMENT exists at x=5. The next probe is
+  whether that tap connects to its trunk at the FAR (west) end, and
+  whether the iron-plate trunk is routed at all — note the iron-plate
+  furnaces are themselves at `full_output`, which is consistent with
+  their output having nowhere to go rather than with a full belt
+  downstream. Do not change placement code: four structural hypotheses
+  have now been proposed and all four killed by probing, which is
+  itself the finding — the remaining fault is in routing/flow, not
+  geometry.*
+
+- *2026-07-25 — **PHASE 2 WORKS: both top corpus DI pairs now build,
+  validate clean and sim at or above plan.** The root cause of the EC
+  starve was ORDERING, not geometry — the fifth hypothesis after four
+  structural ones were probed to destruction. A fused cell consumes the
+  union of both halves' belt-fed inputs, so it must be placed where all
+  of them are available: at the CONSUMER's slot in the topological order,
+  not the producer's. Emitting at the producer's slot put the cell north
+  of its own iron-plate supply (iron's row landed at y=22 against the
+  cell at y=10–17), breaking the lanes-run-south invariant; the router
+  could only answer with a 1-entity "return path", iron never arrived,
+  the EC machines were ingredient-short and the whole chain backed up.*
+
+  | pair | uses DI | validates | sim delivered |
+  |---|---|---|---|
+  | `copper-cable → electronic-circuit` (#1, 4,116) | 153 `di-row` | **0 issues** | **101.3%**, 50/50 working |
+  | `electric-furnace → electric-furnace` (#2, 1,585) | 176 `di-cell` | **0 issues** | **109.5%**, 32/32 working |
+
+  *Two further bugs fell out of that fix and are worth keeping: skipping
+  the producer lazily was too late (it sorts earlier, so it had already
+  been placed — its own output belt was stamped over the cell's
+  iron-plate belt), so `fused_specs` is pre-populated from `cell_pairs`;
+  and pre-populating made an unbuildable claim FATAL, because the
+  producer would be skipped while the cell then refused, dropping its
+  production silently — so selection now does a trial build at `y=0`
+  (every refusal is y-independent) and only claims pairs that will
+  actually build.*
+
+  ***Followup, deliberately narrowed not dropped:*** *the `merge_x_cursor`
+  fix is scoped to layouts containing a fused cell row. The unconditional
+  form is the more principled reading of the invariant its own comment
+  states, but it regressed `mega_chain_ac_from_raw_zero_issues`, and
+  diagnosing why mega chains depend on the old cursor was out of scope.
+  Scoping keeps every pre-existing layout bit-identical. **The
+  unconditional form remains the right long-term fix** once that
+  interaction is understood.*
+
+  *Method note: five hypotheses, four disproven by probing before any
+  code changed. The four eliminations (taps connected, output merged,
+  face inserters correct, geometry sound) are what made the fifth
+  findable — each had been committed to this log as a diagnosis and then
+  retracted. Probing before fixing was the whole difference.*
+
+- *2026-07-25 — **Pipe scope (the KC6 re-scope) measured, and it is much
+  smaller than feared.** New `di-patterns fluid` subcommand reports, per
+  DI machine, which sides carry an adjacent pipe. Two representative
+  pairs:*
+
+  | pair | producer | consumer |
+  |---|---|---|
+  | `casting-copper-cable → EC` (592 machines) | piped: S 85, E 58, W 53, N 25 | **NO PIPE ×298** |
+  | `engine-unit → electric-engine-unit` (1,094) | **NO PIPE ×440** | piped: S 128, W 125, N 84 |
+
+  ***Three findings.*** *(1) **Only ONE machine per pair is
+  fluid-touching**, and cleanly so — the other never has a pipe.
+  Inserters cannot move fluid, so the coupled item is always solid by
+  construction; the fluid is a SIDE input. (2) **There is no canonical
+  pipe face** — all four sides occur with comparable frequency, so the
+  engine is free to choose rather than having to match a convention.
+  (3) Decisively, from `recipes.json`: `casting-copper-cable`
+  (molten-copper → copper-cable), `casting-iron` (molten-iron →
+  iron-plate) and `solid-fuel-from-light-oil` (light-oil → solid-fuel)
+  all take **only a fluid** and emit a solid.*
+
+  ***Consequence: the fluid producer has NO solid input, so its north
+  face — where a solid producer's feed belt and inserters sit — is
+  entirely free, and the pipe goes exactly where the belt would have
+  been.*** *That explains finding (2): there is no contention to force a
+  canonical face. The change is therefore small and local: relax
+  `row_cell_eligible`/`cell_eligible` to admit a producer whose inputs
+  are all fluid, and have the stampers emit a pipe run adjacent to the
+  machine row instead of a belt + feed inserters.*
+
+  *Coverage: **1,535 corpus instances** across three top-12 pairs, and
+  they split across BOTH cell variants — `casting-* → EC` is a ROW cell
+  (EC has two solid inputs) while `solid-fuel-from-light-oil →
+  rocket-fuel` is a STACKED cell (rocket-fuel's only solid input is
+  solid-fuel). Both stampers need the treatment.*
+
+  ***Out of scope for that first cut, deliberately:*** *the mirror shape,
+  a fluid-touching CONSUMER (`electric-engine-unit` = engine-unit +
+  electronic-circuit + lubricant, 547 instances). Its south face already
+  carries a solid input and the output, so a pipe needs a face the row
+  cell does not have spare — genuinely harder, and worth doing only after
+  the easy 1,535 land. Verify the exact fluid-port tile against the
+  existing `fluid_port_pipes` machinery before stamping: ports are
+  prototype-fixed per direction, so a pipe run that merely LOOKS adjacent
+  may not connect.*
+
+  ***Implementation notes for the pipe cut, so they need not be
+  rediscovered.*** *Do NOT derive port tiles by hand — a pipe run that
+  merely looks adjacent may not connect, because ports are
+  prototype-fixed per direction. Reuse the shared table-driven module the
+  existing row templates already use (`bus/templates.rs:35`,
+  `fluid_input_port_dx`):*
+  - *`fluid_ports::north_input_orientation(entity)` → `(mirror, dir)`.
+    **Place the producer machines at that orientation**, exactly as
+    `single_input_row` does, so the delivered pipe lands on a real port.*
+  - *`fluid_ports::north_input_dxs(entity, mirror, dir)` → the port
+    columns.*
+  - *Geometry: the pipe run must be **adjacent** to the machine row, i.e.
+    at `machine_y - 1` (the row that holds feed inserters for a
+    solid-input producer). The belt row above it is simply unused for an
+    all-fluid producer. Consumers sharing the row are unaffected — EC has
+    no fluid box, so a continuous pipe run passing over its columns forms
+    no connection.*
+  - *Lane-planner integration goes through `RowSpan.fluid_port_ys` and
+    `fluid_port_pipes`, NOT `input_belt_y`: `lane_planner` has a separate
+    fluid branch (`if !rs.fluid_port_ys.is_empty() { tap_ys.push(...) }`).
+    The fused spec must therefore carry the producer's fluid input as a
+    fluid `ItemFlow` and the row must populate those fields, or the
+    molten-copper lane will never be tapped — the same class of silent
+    starve that the iron-plate ordering bug produced.*
+
+- *2026-07-25 — **CORRECTION: the pipe cut is built and unit-tested, and
+  it unlocks NOTHING yet. The scoping above was wrong.*** *The stamper and
+  eligibility changes landed (`fluid_producer_gets_a_pipe_run_on_a_free_north_face`
+  pins the geometry), but every pair the pipe analysis claimed is blocked
+  by a DIFFERENT prerequisite — found only by attempting an end-to-end
+  build:*
+
+  | pair | real blocker |
+  |---|---|
+  | `casting-copper-cable → EC` (544) | **foundry is 5×5, assembler 3×3** — heterogeneous footprints. `row_cell_eligible` requires equal dims because `plan_row_straddle` takes a single `machine_w`. |
+  | `casting-iron → EC` (339) | same |
+  | `solid-fuel-from-light-oil → rocket-fuel` (652) | **fluid on BOTH sides** — `rocket-fuel` takes light-oil as well as solid-fuel, so it is the fluid-CONSUMER shape that was explicitly scoped out. |
+
+  *What went wrong, recorded because it is a repeatable mistake: the
+  mining measured pipe ADJACENCY and recipe INPUTS, and both answers were
+  correct. It never checked machine FOOTPRINTS, and it checked
+  `electric-engine-unit`'s fluid needs (correctly excluding it) while not
+  checking `rocket-fuel`'s. **Measuring the thing you thought of is not
+  the same as measuring the thing that blocks you** — a build attempt
+  found in minutes what three rounds of corpus mining had missed.*
+
+  ***The real prerequisite for fluid DI is heterogeneous machine
+  footprints, not pipes.*** *Two of the three pairs need only that; the
+  third additionally needs the fluid-consumer face plan. The pipe code is
+  kept rather than reverted because it is small, correct and pinned by a
+  test — but it is honestly unreachable today, and **anyone picking this
+  up should do footprints first**.*
+
+- *2026-07-25 — **The `merge_x_cursor` "fix" was treating a symptom and is
+  REVERTED.** #459's review found that `cell_rows_present` inspected
+  `route_bus_ghost`'s own local entity accumulator — router-authored
+  segments only — so it could never see placer-authored cell entities and
+  the branch never fired. Tested rather than argued: forcing it `false`
+  leaves BOTH pairs at 0 validation issues. The overlap it was written to
+  cure was a symptom of the ORDERING bug (cell emitted at the producer's
+  slot instead of the consumer's); once ordering was fixed the merger
+  change became inert. Reverted to the original, which also retires the
+  "narrowed followup" recorded earlier — there is nothing to narrow.*
+
+  *The underlying observation still stands and is now the ONLY claim
+  made: `merge_x_cursor`'s comment says it starts east of every row, but
+  only the multi-output branch implements that. No layout is known to hit
+  it. Left alone deliberately — the unconditional form regressed
+  `mega_chain_ac_from_raw_zero_issues`, and a fix with no reproducing
+  case is not worth that risk.*
+
+  *Also from the same review: the row cell's input-belt capacity check
+  derived its stacking factor from the PRODUCER's item and then gated the
+  CONSUMER's belt with it, although `row_cell_eligible` guarantees the
+  two items differ and `StackingCtx::for_item` is item-keyed. Now checked
+  per item.*
+
+  *Lesson worth keeping: two of this session's "fixes" — the merger
+  cursor and the first pipe scoping — were confidently reasoned, landed,
+  and later shown to do nothing. Both were caught by an experiment that
+  took minutes (force the flag false; attempt an end-to-end build). The
+  cheap experiment beat the careful argument every time it was run.*
+
+- *2026-07-25 — **Heterogeneous machine footprints landed; `casting-* → EC`
+  is STILL blocked, by a third prerequisite.** The row cell now paces x by
+  each machine's own width and **bottom-aligns** the two roles so they
+  share one south face row (top-aligning would leave a shorter machine's
+  south face two tiles above the face row, unreachable by its own feed and
+  output inserters). Couplers sit on the bottom row — the only row both
+  roles are guaranteed to occupy. `row_cell_eligible` no longer requires
+  equal dims; the STACKED cell still does, its straddle being derived
+  from a single machine width. Unit-tested with a real 5×5 foundry beside
+  a 3×3 assembler.*
+
+  ***But the pair still refuses, on RATIO.*** *A foundry emits 8.0
+  cable/s and an EC machine wants 7.5/s — a **16:15** ratio whose
+  smallest integer solution is 15 producers : 16 consumers, i.e. 31
+  machines emitting 40/s, which no single output lane carries (express
+  caps at 22.5/s). Machine counts snap to integers, so at any smaller
+  rate supply and demand disagree and `plan_row_straddle` correctly
+  refuses. **`casting-* → EC` therefore needs ratio tolerance too** —
+  either a straddle that admits partial-utilisation machines, or
+  multi-lane output.*
+
+  ***Running tally for this pair: three prerequisites, found one at a
+  time, each only by building.*** *Pipes (done) → footprints (done) →
+  ratio tolerance (open). Each was invisible until the one before it was
+  cleared. Worth stating plainly in case a fourth is hiding behind the
+  third: the corpus tells us what shape to build, but it does not tell us
+  what our own engine will refuse, and only an end-to-end attempt does.*
+
+  > **RETRACTED 2026-07-25 (same day).** *The ratio claim above is wrong,
+  > and the "run the experiment" lesson it was written to illustrate is
+  > exactly what it failed to do. See the next entry.*
+
+- *2026-07-25 — **There was no ratio prerequisite. `casting-* → EC` was
+  blocked on a validator false positive, and both pairs now build and
+  validate clean.** The entry above computed the straddle from the raw
+  per-machine rates — a foundry's 8.0 cable/s against an assembler's
+  7.5/s, hence the 16:15 arithmetic. That is not what the caller passes.
+  `try_build_row_cell` scales both rates by `utilization_for`, and
+  utilization is precisely the fraction that makes a fractional machine
+  count integral: 8.0 × 0.9375 = 7.5. The pair lands exactly 1:1 at every
+  rate, and `plan_row_straddle` has always accepted it.*
+
+  *The real blocker was `check_belt_connectivity`. A fluid-fed producer
+  in a row cell takes its ingredients through a pipe and hands its
+  product straight to the neighbouring machine, so no inserter of its
+  ever touches a belt — which the check reported as
+  `"no inserter connects to a belt"`, one error per foundry, at every
+  rate. `fluid_only_recipes` did not cover it: `casting-copper-cable` has
+  a fluid input but a SOLID output. Added `fluid_input_only_recipes` and
+  a deliberately narrow exemption — the machine must be in a DI cell,
+  have an adjacent COUPLER (proof its product has a route), and have no
+  solid ingredient (nothing a belt would have had to deliver) — so a cell
+  machine that fails to get a real belt is still caught. Pinned by
+  `di_row_cell_fluid_fed_producer_validates_clean`, which was canaried:
+  it fails with the exemption forced off.*
+
+  | pair | corpus | result | sim @10/s |
+  |---|---|---|---|
+  | `casting-copper-cable → EC` | 544 | cell at 2.5–20/s, **0 errors 0 warnings** throughout | produced 100.0%, delivered **101.3%** — PASS |
+  | `casting-iron → EC` | 339 | cell at 2.5–15/s, **0 errors 0 warnings** throughout | produced 100.0%, delivered **101.3%** — PASS |
+
+  > ***CORRECTED 2026-07-26.*** *Those "0 warnings" counts were `validate()`
+  > issues only. `LayoutResult.warnings` is a SEPARATE channel that every
+  > probe in this session ignored, and both pairs carried one entry on it
+  > (`fluid branch for molten-copper at y=4 could not bridge blocked tiles
+  > x=4..4`). The warning was a false alarm and is now fixed — see the
+  > 2026-07-26 entry — so the counts above are true as written TODAY, but
+  > they were not when first recorded.*
+
+  *Both sim runs converged. They are the FIRST fixtures ever to exercise
+  the harness's infinity-pipe fluid feed, which RFC-050 declares
+  uncalibrated — worth stating, though the risk runs one way: an
+  uncalibrated feed could under-supply and show a false FAILURE, it
+  cannot inflate EC output past what the cell's own belts and inserters
+  carry, and produced matched planned exactly in both runs.*
+
+  *Also checked, because a cell alone in a layout proves little: with a
+  smelting row placed alongside (`iron-ore` instead of `iron-plate` as
+  the external input) both rates still validate 0/0. The cell's
+  `RowSpan.y_start` is taken from `input_belt_ys[0]`, which for a
+  fluid-fed producer is the CONSUMER's belt — below the machines and
+  below the pipe row, so the span understates the cell's extent. No
+  observable effect in a 3-row layout; recorded as a smell, not a
+  finding.*
+
+  ***Round-trip: the corpus miner reads our own output back as DI.***
+  *Wrapping both exported blueprint strings in the corpus's
+  `{"blueprintString": …}` envelope and running
+  `di-patterns census` over them returns:*
+
+  ```
+  8 DI observations; top producer -> consumer pairs:
+        4  casting-copper-cable -> electronic-circuit
+        4  casting-iron -> electronic-circuit
+  ```
+
+  *This is worth more than the `di-row` segment counts used elsewhere in
+  this log: the miner re-derives DI from raw entity geometry — inserter
+  direction, reach, and machine occupancy — with no knowledge of our
+  `segment_id` labels. The same tool that told us which pairs were worth
+  building confirms we built them. Four couplings per pair is exactly the
+  P4:C4 straddle at 10/s.*
+
+  *Above those rates the cell refuses honestly — the consumer's OTHER
+  input (60/s of cable into 8 EC machines) exceeds an express belt's
+  45/s. A DI-off control run confirms the refusal is not a regression:
+  without the cell neither pair lays out at all today (4–32 errors, the
+  foundry left with no adjacent inserter and no pipe), so the cell is
+  currently the only path by which a fluid-fed producer works at all.*
+
+  ***The lesson from the retracted entry stands, sharpened: I wrote
+  "cheap experiments beat careful arguments" and then, in the very next
+  paragraph, blocked a 544-instance pair on an argument I never ran.***
+  *The probe that overturned it took one file and one `cargo run`. When
+  the engine refuses, print what the caller actually passes before
+  reasoning about why.*
+
+- *2026-07-25 — **The fluid-CONSUMER shape is BUILT and currently
+  UNREACHABLE, and the sim is the only reason we know.**
+  `solid-fuel-from-light-oil → rocket-fuel` (652 instances, the corpus's
+  #2 DI pair) builds a row cell that validates **0 errors 0 warnings** at
+  0.25–2/s — and in a headless Factorio produces **literally nothing**:
+  `rocket-fuel planned 1.00, produced 0.00, −100.0%`, census `no_fuel: 8`
+  with all ten upstream chemical plants backed up behind the stall.*
+
+  ***The solver resolves `rocket-fuel` (category `organic-or-assembling`)
+  to a `biochamber`, which is burner-fuelled — fuel category
+  `nutrients` — and nothing anywhere in the engine delivers burner
+  fuel.*** *`validate::power` deliberately exempts biochambers from
+  coverage (correctly: they draw no grid power) and no check takes over
+  the obligation, so a burner row is invisible to every gate we have.
+  `recipe_db::category_machines` offers only `["biochamber"]` for
+  `organic-or-assembling`, ignoring the `-or-assembling` half of the name
+  — the same shape as `metallurgy-or-assembling` and
+  `cryogenics-or-assembling`. So there is no way to steer this pair onto
+  an assembler today.*
+
+  *Two fixes follow, and only the narrow one is taken here:
+  `cell_machines_are_powerable` now refuses a cell whose either role is
+  non-electric. **A cell that cannot run is worse than no cell, because
+  it validates clean and lies.** The engine-wide half — delivering burner
+  fuel, or honouring `-or-assembling` in machine selection — is NOT
+  attempted; it is a recipe-db/solver decision with blast radius well
+  beyond this RFC, and it wants its own issue.*
+
+  *This is the third time in this RFC that a mechanism has landed
+  correct-but-unreachable (pipe cut → footprints → this). The difference
+  is how it was caught: validation, unit tests and an entity census all
+  said yes. **Only the sim said no.** Zero validation errors means the
+  checks we wrote passed, not that the factory runs — and for a burner
+  machine we have not written any check at all.*
+
+  *What the shape itself achieves, kept and unit-tested against the day
+  it becomes reachable:*
+
+  *The scoping note said this shape was "genuinely harder" because the
+  consumer's south face already carries a solid input and the output, so
+  a pipe needs a face the cell does not have. Probing the pair first —
+  the discipline the previous entry was written to enforce — showed that
+  premise did not hold either:*
+
+  - *the consumer draws **light-oil**, the same fluid the producer is
+    already piped, so no second run is needed;*
+  - *chemical plant and biochamber are **both 3×3** with geometrically
+    identical fluid boxes (`fluid_ports` already models biochamber as
+    `CHEM`), so bottom-alignment puts both north faces on the pipe row
+    the producer's run already occupies;*
+  - *the coupled item is the consumer's **only** solid ingredient, so its
+    south face was never contended — it carries the output alone.*
+
+  *Eligibility is gated tightly on those three properties — one fluid,
+  the same fluid (different fluids on one run would cross-contaminate),
+  equal heights, and a real north port read from `fluid_ports` rather
+  than assumed.*
+
+  ***A fourth "fix" that did nothing, caught the same way as the merger
+  cursor.*** *The consumer originally registered its own fluid tap points
+  alongside the producer's. Forcing that off produced a **byte-identical
+  layout**: the pipe run is stamped across the full cell width from the
+  producer's side, so it is one connected network and the consumer's
+  north ports are adjacent to it either way — and `fluid_port_pipes` only
+  tells the lane planner where to tap the bus INTO the cell, which the
+  producer's ports already do. Deleted rather than shipped. What IS
+  load-bearing is applying `north_input_orientation` to the consumer:
+  eligibility admits it on the strength of having a north input port, so
+  the stamp has to actually put it there. The fused spec's fluid-rate SUM
+  is likewise unobserved today (pipes have no tier; the sim manifest
+  reads feed rates from the `SolverResult`) but was KEPT — a spec that
+  understates what its row draws is a lie waiting for its first reader,
+  which is a different thing from redundant code.*
+
+  ***A second shape fell out of it.*** *With no belt-fed consumer input
+  the inner belt row is empty, so the output belt moves up into it. That
+  drops a row AND puts the output drop at reach-1, off long-handed's
+  2.40/s ceiling — the constraint that forces two output columns in the
+  ordinary shape. It also removed a `belt-connectivity` error without an
+  exemption: the check looks only at an inserter's 4-neighbours, so a
+  long-handed drop across an empty row reads as "touches no belt". Fixing
+  the geometry was the honest fix; a second validator carve-out would
+  have hidden a real waste.*
+
+  ***The ratio limit is real, but it is alignment, not magnitude.*** *The
+  pair refuses above ~2/s: at P30:C23 the flow intervals put THREE
+  producers against one consumer, and a consumer has two horizontal
+  neighbours. P20:C15 — exactly 4:3 — is fine at any scale. So the row
+  cell's reach is bounded by whether the P:C ratio is a small-denominator
+  fraction, not by how large the counts are. This is the real form of the
+  "ratio tolerance" the retracted entry mis-stated, it does not touch the
+  casting pairs (1:1), and it is Phase 3 / multi-band territory.*
+
+  *`engine-unit → electric-engine-unit` (547) is NOT unlocked by this and
+  was not attempted. Its producer takes **three** solid inputs against
+  the row's one north belt, and its lubricant is a fluid the producer
+  does not draw — two independent blockers, either sufficient. Recorded
+  so the next reader does not re-derive it.*
+
+- *2026-07-25 — **#462 review: four findings, all real, all folded in.**
+  The bot skipped the fresh PR on its first attempt (`num_turns: 2`, no
+  comments) — most likely because the PR body I wrote said "#459 was
+  reviewed at `03df0eb1`" and "Prior review thread", which reads to a
+  duplication gate as ALREADY REVIEWED. Rewording it to state plainly
+  that the PR had never been reviewed produced a full review. Worth
+  knowing: **how you describe a PR can suppress its own review.***
+
+  | finding | verdict |
+  |---|---|
+  | `y_start` below the cell's true top | real — my `.or_else()` fallback was dead code |
+  | producer feed budgeted against the CONSUMER's width | real — wrong in both directions once footprints differ |
+  | producer shorter than consumer breaks feed + pipe rows | real — dormant, but eligibility advertised it |
+  | a comment describing a fix that isn't in the code | real — I reverted `merge_x_cursor` and left its comment |
+
+  ***The `y_start` finding is the one that stings.*** *I had already
+  noticed it, written it into this log as "a smell, not a finding", and
+  moved on — on the strength of a 3-row layout validating 0/0. That was
+  not evidence: the consumers the reviewer named (row attribution in
+  `layout.rs`, pole banding) were never what I checked. The fallback I
+  did write turned out never to execute, because `input_belt_ys` is
+  non-empty for the shipped shape. **Recording a suspicion is not the
+  same as testing it, and a validator pass is not a test of a value
+  nothing validates.***
+
+  *Fixed by giving `RowCellLayout` a `y_top` measured over the stamped
+  entities, so the span cannot disagree with the geometry. Canaried
+  old-vs-new across four configurations: **byte-identical layouts, same
+  pole positions, same hash** — old `y_start` was 11, new is 4, and
+  nothing currently consults the difference. Kept regardless, on the same
+  ground as the fluid-rate sum: a `RowSpan` whose `y_start` sits below
+  its own machines is wrong data in a shared struct, and the next reader
+  will not know that. Pinned by
+  `y_top_is_the_pipe_row_when_the_producer_is_piped`.*
+
+  *The producer-shorter-than-consumer case is fixed by REFUSING it rather
+  than inventing geometry: bottom-alignment pushes a shorter producer's
+  north face into the machine band, and its feed belt is a full-width run
+  that cannot dodge into the producer's columns. No corpus pair wants it;
+  the shipped ones are foundry(5)-over-assembler(3) and equal-height.*
+
+- *2026-07-25 — **Coverage audit: the remaining top-10 pairs, measured
+  rather than assumed. None of the four untested ones cell.** Asked
+  whether DI is "in a good place", the answer needed the four top-10
+  pairs I had never actually run. Every one refuses:*
+
+  | pair | instances | outcome | why |
+  |---|---|---|---|
+  | `copper-cable → advanced-circuit` | 360 | refused → bus | consumer has **3** solid inputs |
+  | `iron-stick → rail` | 351 | bridge | consumer has **3** solid inputs |
+  | `e-engine-unit → flying-robot-frame` | 318 | no coupling | consumer has **4** solid inputs |
+  | `copper-cable → space-platform-foundation` | 353 | bridge | **new finding, below** |
+
+  ***Cell coverage of the top-10 is 4,999 / 7,848 = 63.7%, and one pair
+  is 4,116 of that.*** *Strip `copper-cable → EC` out and the cell covers
+  11% of the remainder. The mechanism is verified where it applies; its
+  REACH is the open problem, and it is not evenly distributed.*
+
+  ***The single biggest lever is the consumer's face budget.*** *A row
+  cell gives the consumer exactly one belt-fed solid input (its south
+  face carries that plus the output). Three top-10 pairs — 1,029
+  instances — are blocked on nothing else, and a fourth (`engine-unit →
+  electric-engine-unit`, 547) is the same constraint on the PRODUCER's
+  north face. That is 1,576 instances behind one geometric limit, which
+  makes multi-input face allocation worth more than any remaining fluid
+  work.*
+
+  ***`space-platform-foundation` is a genuine straddle bug, not a face
+  limit.*** *It has exactly 2 solid inputs and balances exactly —
+  P4:C8, pr=5.0, cr=2.5, totals 20=20 — so each producer feeds precisely
+  two consumers and a valid arrangement exists: `C0 P0 C1 C2 P1 C3 …`,
+  every consumer adjacent to its one producer. `plan_row_straddle`
+  cannot emit it. Its loop walks producers and drains each one's
+  consumers AFTER it, so C0 and C1 both land right of P0 and the
+  adjacency invariant (`cs.abs_diff(ps) != 1`) correctly refuses what the
+  loop built. **The emission is one-sided; the geometry is not.** A
+  producer has a LEFT slot and a RIGHT slot, and 1:2 fan-out needs both.
+  This is the mirror of the consumers-outnumber-producers case and wants
+  the same fix: assign consumers to inter-producer slots rather than
+  appending them. 353 instances, and the smallest well-defined piece of
+  work left in this RFC.*
+
+- *2026-07-26 — **`LayoutResult.warnings` is a second issue channel, and
+  every probe this session was blind to it.** The user's browser check
+  showed 2 warnings on the default UI path; no Rust probe could reproduce
+  them, through four rounds of chasing solver inputs and layout options,
+  because the probes all printed `validate()` output and the warnings live
+  on `LayoutResult.warnings`. The UI merges both into one panel, which is
+  why the discrepancy looked impossible.*
+
+  ***Correction to the record: the casting pairs were never "0/0".*** *Both
+  carried one layout warning apiece, and the claim reached this RFC, the
+  status ledger and #462's body before anyone noticed. Any future
+  "N errors N warnings" claim must state which channel it counted.*
+
+  ***The warning itself was a false alarm, and it predates DI.*** *A fluid
+  branch walking east meets the row cell's own molten-metal pipe run.
+  `is_blocked_tile` tests occupancy only, so a pipe authored by the placer
+  reads as an obstruction — when it is in fact the branch's DESTINATION,
+  since pipes merge with any adjacent pipe. The router declined to bridge,
+  warned, and a later pass covered the tile anyway. Confirmed benign four
+  ways before touching it: the network is one connected component, all
+  four foundry ports sit on it, `validate()` reports no fluid issues, and
+  the sim produced 100% of plan — a genuinely severed branch would have
+  starved the foundries to zero, exactly as the biochamber did.*
+
+  *`plastic-bar` from crude oil emits the same warning with
+  `direct_insertion: false`, so this is a `ghost_router` defect that
+  predates RFC-053 and was merely surfaced by it.*
+
+  *Fixed by suppressing the warning when EVERY tile of the blocked run is
+  a plain `pipe` carrying that branch's own fluid. Deliberately narrow on
+  both axes: `pipe-to-ground` still counts as an obstruction (it connects
+  on its surface side and through its tunnel, not on four faces), and a
+  foreign fluid's pipe still counts (an obstacle AND a mixing hazard).
+  Routing geometry is untouched — this code's comments record real scars
+  (#412's identity fix, PTG pair destruction) and the warning was
+  redundant with the fluid validator by its own admission ("the
+  fluid-network validator will flag it rather than us papering over it").*
+
+  *Pinned by `fluid_branch_meeting_its_own_pipe_is_not_a_blocked_tile`,
+  which asserts both halves — no layout warnings AND no fluid/pipe
+  validation issues, so suppression cannot hide a real defect. Canaried.
+  Its first draft asserted "all surface pipes form one connected
+  component" and FAILED correctly: `plastic-bar` runs several deliberately
+  isolated fluid networks, and a UG pair splits a run's surface tiles by
+  design. The over-assertion was mine; the code was right.*

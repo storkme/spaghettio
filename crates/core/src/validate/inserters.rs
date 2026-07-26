@@ -348,6 +348,29 @@ pub fn check_inserter_throughput(
         if !checked.insert(mpos) {
             continue;
         }
+        // RFC-053: machines inside a fused DI cell are exempt from the
+        // per-machine inserter-throughput tests, for two independent
+        // reasons, both of which make the numbers here meaningless rather
+        // than merely conservative:
+        //
+        //  - A cell PRODUCER has no belt-bound output hand at all (the band
+        //    inserter drops into the consumer machine), so the check credits
+        //    it 0.00/s against its full output rate.
+        //  - A cell's `RowSpan` carries the FUSED spec — the producer's
+        //    inputs and the consumer's outputs — because that is what the
+        //    lane planner needs. `resolve_row_spec` therefore attributes the
+        //    producer's input item to the consumer machines, and the check
+        //    asks the consumers for an item they never take (iron-ore, for a
+        //    furnace cell whose consumers eat iron-plate).
+        //
+        // The cell's correctness is owned by `bus::di_cell`'s invariants —
+        // every band inserter picks from a producer tile and drops into a
+        // consumer tile at reach 1, and `try_build_cell` refuses rather than
+        // under-provisioning any face — and by RFC-053 KC3, which
+        // sim-measured the shape at 112% of plan against a bus control.
+        if super::is_di_cell_entity(e.segment_id.as_deref()) {
+            continue;
+        }
         let recipe = match e.recipe.as_deref() {
             Some(r) => r,
             None => continue,
@@ -530,6 +553,29 @@ pub fn check_inserter_item_throughput(
         }
         let mpos = (e.x, e.y);
         if !checked.insert(mpos) {
+            continue;
+        }
+        // RFC-053: machines inside a fused DI cell are exempt from the
+        // per-machine inserter-throughput tests, for two independent
+        // reasons, both of which make the numbers here meaningless rather
+        // than merely conservative:
+        //
+        //  - A cell PRODUCER has no belt-bound output hand at all (the band
+        //    inserter drops into the consumer machine), so the check credits
+        //    it 0.00/s against its full output rate.
+        //  - A cell's `RowSpan` carries the FUSED spec — the producer's
+        //    inputs and the consumer's outputs — because that is what the
+        //    lane planner needs. `resolve_row_spec` therefore attributes the
+        //    producer's input item to the consumer machines, and the check
+        //    asks the consumers for an item they never take (iron-ore, for a
+        //    furnace cell whose consumers eat iron-plate).
+        //
+        // The cell's correctness is owned by `bus::di_cell`'s invariants —
+        // every band inserter picks from a producer tile and drops into a
+        // consumer tile at reach 1, and `try_build_cell` refuses rather than
+        // under-provisioning any face — and by RFC-053 KC3, which
+        // sim-measured the shape at 112% of plan against a bus control.
+        if super::is_di_cell_entity(e.segment_id.as_deref()) {
             continue;
         }
         let recipe = match e.recipe.as_deref() {

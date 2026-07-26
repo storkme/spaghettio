@@ -45,6 +45,13 @@ export interface FormState {
    * `docs/rfc-049-inserter-capacity-research.md` and the 2026-07-24 #383
    * default change. */
   inserterCapacity: string | null;
+  /** RFC-053 direct insertion: fuse a coupled producer/consumer pair into
+   * one row joined by inserters, with no belt for the coupled item.
+   * `false` (absent from the URL) is the engine default. Pairs that
+   * cannot be served as a cell fall back to the DI bridge and then to the
+   * bus, so enabling this never makes a layout worse — it is opt-in only
+   * because coverage is still narrow (fluids and modules refuse). */
+  directInsertion: boolean;
   /** Global module policy, compact form `<kind><tier><quality?>` —
    * `s`peed / `p`roductivity, tier 1–3, optional module-quality initial
    * (`u`/`r`/`e`/`l`), e.g. "s2", "p3l". null = no modules (today's
@@ -221,6 +228,9 @@ const STACKING_EXTRAS_KEY = "st";
 // one (nothing forces you to notice a swapped pair of letters). `ir=`
 // ("inserter research") sidesteps it entirely.
 const INSERTER_CAPACITY_EXTRAS_KEY = "ir";
+/** RFC-053 direct insertion. Present-and-"1" means on; absent means off,
+ * so existing bookmarked URLs keep their exact current layouts. */
+const DIRECT_INSERTION_EXTRAS_KEY = "di";
 
 function slugToCode(slug: string): string {
   // Fall back to the slug itself if it's not in the table — keeps
@@ -324,6 +334,7 @@ function readHashState(): FormState | null {
   const irShort = extras.get(INSERTER_CAPACITY_EXTRAS_KEY);
   const inserterCapacity =
     irShort && (KNOWN_INSERTER_CAPACITY as readonly string[]).includes(irShort) ? irShort : null;
+  const directInsertion = extras.get(DIRECT_INSERTION_EXTRAS_KEY) === "1";
   const mShort = extras.get("m");
   const modules = mShort && MODULES_RE.test(mShort) ? mShort : null;
   const ciRaw = extras.get("ci");
@@ -349,7 +360,7 @@ function readHashState(): FormState | null {
     machines[category] = slug;
   }
 
-  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, quality, wireMode, stacking, inserterCapacity, modules, customInputs };
+  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, quality, wireMode, stacking, inserterCapacity, directInsertion, modules, customInputs };
 }
 
 function readQueryState(): FormState {
@@ -406,12 +417,13 @@ function readQueryState(): FormState {
     rawInserterCapacity && (KNOWN_INSERTER_CAPACITY as readonly string[]).includes(rawInserterCapacity)
       ? rawInserterCapacity
       : null;
+  const directInsertion = params.get("direct_insertion") === "1";
   const rawModules = params.get("modules");
   const modules = rawModules && MODULES_RE.test(rawModules) ? rawModules : null;
   const ciParam = params.get("ci");
   const customInputs = ciParam ? ciParam.split(",").filter((s) => s.length > 0) : [];
 
-  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, quality, wireMode, stacking, inserterCapacity, modules, customInputs };
+  return { item, rate, machines, inputs, belt, strategy, rowLayout, inserterTier, quality, wireMode, stacking, inserterCapacity, directInsertion, modules, customInputs };
 }
 
 export function readUrlState(): FormState {
@@ -493,6 +505,9 @@ function formatHashState(state: FormState): string {
     (KNOWN_INSERTER_CAPACITY as readonly string[]).includes(state.inserterCapacity)
   ) {
     extras.set(INSERTER_CAPACITY_EXTRAS_KEY, state.inserterCapacity);
+  }
+  if (state.directInsertion) {
+    extras.set(DIRECT_INSERTION_EXTRAS_KEY, "1");
   }
   if (state.modules && MODULES_RE.test(state.modules)) {
     extras.set("m", state.modules);

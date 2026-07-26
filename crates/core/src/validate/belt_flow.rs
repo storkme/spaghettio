@@ -310,12 +310,21 @@ pub fn check_belt_connectivity(
     let mut issues = Vec::new();
 
     let fluid_only = fluid_only_recipes(solver);
+    let fluid_fed = crate::common::fluid_input_only_recipes(solver);
     let belt_tiles = build_belt_tile_set(&layout.entities);
     let ug_pairs = build_ug_pairs(layout);
     let inserter_positions: FxHashSet<(i32, i32)> = layout
         .entities
         .iter()
         .filter(|e| is_inserter(&e.name))
+        .map(|e| (e.x, e.y))
+        .collect();
+    // Inserters that belong to a direct-insertion cell. An adjacent one is
+    // proof a machine's product has somewhere to go without a belt.
+    let coupler_positions: FxHashSet<(i32, i32)> = layout
+        .entities
+        .iter()
+        .filter(|e| is_inserter(&e.name) && super::is_di_cell_entity(e.segment_id.as_deref()))
         .map(|e| (e.x, e.y))
         .collect();
 
@@ -363,6 +372,20 @@ pub fn check_belt_connectivity(
                     adjacent_inserters.push(pos);
                 }
             }
+        }
+
+        // A fluid-fed producer inside a direct-insertion cell takes its
+        // ingredients through a pipe and hands its solid product straight
+        // to the neighbouring machine, so no inserter of its ever touches a
+        // belt (RFC-053 pipe cut). Deliberately narrow: it needs a coupler
+        // adjacent (proof the product has a route) AND no solid ingredient
+        // (nothing left that a belt would have had to deliver), so a cell
+        // machine that fails to get a real belt is still caught.
+        if crate::validate::is_di_cell_entity(e.segment_id.as_deref())
+            && e.recipe.as_deref().is_some_and(|r| fluid_fed.contains(r))
+            && adjacent_inserters.iter().any(|p| coupler_positions.contains(p))
+        {
+            continue;
         }
 
         // Check if any inserter has a belt on its non-machine side
@@ -1267,7 +1290,27 @@ pub fn check_output_belt_coverage(
             }
         }
 
-        if !has_output_belt {
+        // RFC-053: a DI-cell producer's output leaves by inserter into the
+        // consumer machine, never onto a belt. See `is_di_cell_entity`.
+        // Both ends are tested. Picking from this machine is not enough:
+        // the cell tags EVERY entity it stamps, including the consumer's
+        // own output inserter, which also picks from inside its machine —
+        // but drops onto a real belt and must stay under this check.
+        // Requiring the drop tile to be a machine too is what distinguishes
+        // a coupler from an ordinary output inserter living in a cell.
+        let served_by_di_cell = layout.entities.iter().any(|ins| {
+            is_inserter(&ins.name)
+                && super::is_di_cell_entity(ins.segment_id.as_deref())
+                && {
+                    let (dx, dy) = dir_to_vec(ins.direction);
+                    let reach = inserter_reach(&ins.name);
+                    let pick = (ins.x - dx * reach, ins.y - dy * reach);
+                    let drop = (ins.x + dx * reach, ins.y + dy * reach);
+                    my_tiles.contains(&pick) && machine_tiles_set.contains(&drop)
+                }
+        });
+
+        if !has_output_belt && !served_by_di_cell {
             issues.push(ValidationIssue::with_pos(
                 Severity::Error,
                 "output-belt",

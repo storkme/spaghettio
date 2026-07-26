@@ -1317,10 +1317,40 @@ pub fn route_bus_ghost(
                             // no landing spot within reach — leave the gap
                             // and say so; the fluid-network validator will
                             // flag it rather than us papering over it.
-                            warnings.push(format!(
-                                "fluid branch for {} at y={} could not bridge blocked tiles x={}..{}",
-                                lane.item, py, bx, run_end
-                            ));
+                            //
+                            // UNLESS the "blockers" are plain pipes already
+                            // carrying THIS fluid. `is_blocked_tile` sees
+                            // only occupancy, so a pipe run authored by
+                            // someone else — an RFC-053 row cell's own
+                            // molten-metal run is the common case — reads as
+                            // an obstacle when it is in fact the branch's
+                            // destination: pipes merge with any adjacent
+                            // pipe, so arriving at one IS the connection.
+                            // Warning there is a false alarm, and it fired
+                            // on every fluid DI layout plus `plastic-bar`
+                            // from crude oil (which predates DI entirely).
+                            //
+                            // Restricted to `"pipe"` on purpose:
+                            // `pipe-to-ground` connects on its surface side
+                            // and through its tunnel, NOT on all four faces,
+                            // so a PTG in the run is a real obstruction and
+                            // must still be reported. Same-item on purpose
+                            // too — a foreign fluid's pipe is an obstacle
+                            // AND a mixing hazard.
+                            let joins_same_fluid = (bx..=run_end).all(|gx| {
+                                row_entities.iter().chain(entities.iter()).any(|e| {
+                                    e.x == gx
+                                        && e.y == py
+                                        && e.name == "pipe"
+                                        && e.carries.as_deref() == Some(lane.item.as_str())
+                                })
+                            });
+                            if !joins_same_fluid {
+                                warnings.push(format!(
+                                    "fluid branch for {} at y={} could not bridge blocked tiles x={}..{}",
+                                    lane.item, py, bx, run_end
+                                ));
+                            }
                             bx = run_end + 1;
                         }
                     }
@@ -3406,6 +3436,21 @@ pub fn route_bus_ghost(
     // ones) so south columns never clip a wider foreign row, and record
     // placed column x-positions so later items' east extension runs can
     // UG-hop across them.
+    // NOTE: the single-item path deliberately still starts at 0, and the
+    // invariant stated above is therefore only enforced on the multi-item
+    // branch. RFC-053 tried widening it unconditionally for row cells —
+    // which are narrower than the rows they sit among (at EC@10/s the cell
+    // is `bus+39` against the iron-plate row's `bus+48`) — on the theory
+    // that the merger was driving a column through the cell. Two things
+    // killed it: the unconditional form regressed
+    // `mega_chain_ac_from_raw_zero_issues`, and the cell-scoped form never
+    // fired at all (it tested this function's own local `entities`
+    // accumulator, which never holds placer-authored row entities). The
+    // overlap it was chasing turned out to be a symptom of emitting the
+    // fused cell at the producer's slot instead of the consumer's; fixing
+    // that ordering removed the overlaps with this branch untouched. Do
+    // not re-derive the "fix" without first reproducing an overlap that
+    // the ordering fix does not already cover.
     let mut merge_x_cursor: i32 = if output_items.len() > 1 {
         row_spans.iter().map(|rs| rs.row_width).max().unwrap_or(0) + 1
     } else {
