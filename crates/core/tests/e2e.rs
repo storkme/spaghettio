@@ -1196,30 +1196,64 @@ fn tier2_electronic_circuit_20s_from_ore() {
 // path returns far sooner, but the solve still runs.
 #[ntest::timeout(30000)]
 fn tier2_electronic_circuit_splitter_stamp_regression() {
+    use spaghettio_core::bus::di_cell::DirectInsertion;
     let inputs: FxHashSet<String> = ["iron-plate", "copper-plate"]
         .iter()
         .map(|s| s.to_string())
         .collect();
-    let outcome = run_e2e(
-        "tier2_electronic_circuit_splitter_stamp_regression",
-        "electronic-circuit",
-        10.0,
-        "assembling-machine-1",
-        Some("fast-transport-belt"),
-        &inputs,
-    );
-    let err = match outcome {
+    let sr = solver::solve("electronic-circuit", 10.0, &inputs, "assembling-machine-1")
+        .unwrap_or_else(|e| panic!("solve: {e:?}"));
+    let opts = |di| layout::LayoutOptions {
+        max_belt_tier: Some("fast-transport-belt".to_string()),
+        direct_insertion: di,
+        ..Default::default()
+    };
+
+    // The refusal this test exists for is a BELT-capacity refusal, so it
+    // is asserted with DI Off — the arm where copper-cable is actually on
+    // a belt. Checked explicitly rather than relying on the default, the
+    // same discipline `cell_candidate_composes_mil5_ore` uses: if this
+    // arm ever stops refusing, the fixture has stopped testing what it
+    // claims and belongs on the bus ladder instead.
+    let err = match layout::build_bus_layout(&sr, opts(DirectInsertion::Off)) {
         Err(e) => e,
         Ok(_) => panic!(
-            "EC@10/s AM1 fast belts must refuse (RFC-047 Leg B late sideload \
-             check): copper-cable 30/s on a single sideload-fed red trunk \
-             overloads one lane to 22/s > 15/s red per-lane cap, but it built"
+            "EC@10/s AM1 fast belts must refuse with DI Off (RFC-047 Leg B \
+             late sideload check): copper-cable 30/s on a single \
+             sideload-fed red trunk overloads one lane to 22/s > 15/s red \
+             per-lane cap, but it built"
         ),
     };
     assert!(
         err.contains("lane-aware delivery") && err.contains("copper-cable"),
         "expected the RFC-047 named lane-aware refusal for copper-cable, got: {err}"
     );
+
+    // RFC-053: under the default (`Candidate`) DI RESOLVES this refusal,
+    // and legitimately so — the refusal is that copper-cable overloads a
+    // lane, and DI takes copper-cable off the belts entirely. Verified
+    // here rather than asserted: zero belts carrying the coupled item,
+    // and clean on BOTH issue channels.
+    let l = layout::build_bus_layout(&sr, opts(DirectInsertion::Candidate))
+        .unwrap_or_else(|e| panic!("DI must resolve the cable-lane refusal: {e}"));
+    let cable_belts = l
+        .entities
+        .iter()
+        .filter(|e| e.name.ends_with("transport-belt") && e.carries.as_deref() == Some("copper-cable"))
+        .count();
+    assert_eq!(cable_belts, 0, "DI resolves this by removing copper-cable from the belts");
+    let issues = spaghettio_core::validate::validate(
+        &l,
+        Some(&sr),
+        spaghettio_core::validate::LayoutStyle::Bus,
+    )
+    .unwrap_or_else(|e| panic!("DI layout must validate: {e}"));
+    assert!(
+        issues.iter().all(|i| i.severity != Severity::Error),
+        "DI layout must be error-free: {:?}",
+        issues.iter().filter(|i| i.severity == Severity::Error).collect::<Vec<_>>()
+    );
+    assert!(l.warnings.is_empty(), "second channel too: {:?}", l.warnings);
 }
 
 // ---------------------------------------------------------------------------
@@ -7703,6 +7737,75 @@ fn stacking_ec_60s_red_one_belt_headline() {
     );
 }
 
+/// **PERMANENT GATE (RFC-053).** The never-worse contract: turning DI on
+/// may never degrade a layout the bus already produces.
+///
+/// This is the whole safety argument for the `Candidate` default, and it
+/// needs a structural pin rather than an empirical one. `cell-composed`
+/// can ride the generic soft score because composed density is always
+/// 1.5–3x WORSE, so it loses by construction. **DI has no such margin** —
+/// it removes roughly a third of the entities and is typically denser, so
+/// it would win a density-dominated ranking even on layouts where it
+/// regresses warnings. That is precisely what defaulting DI to a bare
+/// `true` did (2026-07-26): 8 tests broke, including 5 hard validation
+/// errors on `tier4_advanced_circuit_from_ore_am2` and an
+/// `input-rate-delivery` warning on the flagship DI pair.
+///
+/// So the guarantee lives in `decomposition_search::di_choice`: DI must
+/// be STRICTLY better on issue counts (validator errors, validator
+/// warnings, and `LayoutResult.warnings` — both channels, because
+/// reading only the validator already produced one false "0/0" claim in
+/// #462), and ties go to native so the layout stays bit-identical.
+///
+/// If this test fails, DI is winning something it should not.
+#[test]
+fn di_candidate_never_degrades_a_succeeding_bus_layout() {
+    use spaghettio_core::bus::di_cell::DirectInsertion;
+    let counts = |l: &spaghettio_core::models::LayoutResult, sr: &_| -> (usize, usize, usize) {
+        let issues = spaghettio_core::validate::validate(
+            l,
+            Some(sr),
+            spaghettio_core::validate::LayoutStyle::Bus,
+        )
+        .unwrap_or_else(|e| e.issues);
+        (
+            issues.iter().filter(|i| i.severity == Severity::Error).count(),
+            issues.iter().filter(|i| i.severity == Severity::Warning).count(),
+            l.warnings.len(),
+        )
+    };
+    for (item, rate, ins) in [
+        ("iron-gear-wheel", 10.0, &["iron-plate"][..]),
+        ("electronic-circuit", 10.0, &["iron-plate", "copper-plate"][..]),
+        ("electronic-circuit", 2.0, &["iron-plate", "copper-plate"][..]),
+        ("steel-plate", 5.0, &["iron-ore"][..]),
+        ("advanced-circuit", 2.0, &["iron-plate", "copper-plate", "plastic-bar"][..]),
+    ] {
+        let inputs: FxHashSet<String> = ins.iter().map(|s| s.to_string()).collect();
+        let Ok(sr) = solver::solve(item, rate, &inputs, "assembling-machine-3") else {
+            continue;
+        };
+        let off = layout::build_bus_layout(
+            &sr,
+            layout::LayoutOptions {
+                direct_insertion: DirectInsertion::Off,
+                ..Default::default()
+            },
+        );
+        // Only bus-SUCCEEDING configs constrain this contract; where the
+        // bus refuses, DI resolving it is the additive win.
+        let Ok(off_l) = off else { continue };
+        let on_l = layout::build_bus_layout(&sr, layout::LayoutOptions::default())
+            .unwrap_or_else(|e| panic!("{item}@{rate}: DI default must not turn a success into a refusal: {e}"));
+        let (off_c, on_c) = (counts(&off_l, &sr), counts(&on_l, &sr));
+        assert!(
+            on_c <= off_c,
+            "{item}@{rate}: DI degraded the layout — (errors, warnings, layout_warnings) \
+             went {off_c:?} -> {on_c:?}"
+        );
+    }
+}
+
 /// RFC-047 Leg B/C lift differential (#312's exact repro config; see
 /// `quality_differential_ec_normal_vs_legendary`): EC@6/s legendary on
 /// yellow belts. copper-cable is 25/s (2 legendary AM3 machines @12.5/s)
@@ -7760,10 +7863,23 @@ fn stacking_fanin_wall_lift_ec6_yellow_legendary() {
     };
 
     // S=1: the fan-in wall holds — 25/s cable > 15/s full yellow.
-    let s1 = layout::build_bus_layout(&sr, opts_with(1));
+    //
+    // Asserted with DI Off. The wall is a BELT-capacity wall, so it only
+    // means anything on the arm where copper-cable is on a belt; under
+    // the default (`Candidate`) DI resolves it by taking cable off the
+    // belts entirely, which is a real capability gain rather than the
+    // wall failing (RFC-053 — verified separately: 0 errors, 0 belts
+    // carrying copper-cable).
+    let s1 = layout::build_bus_layout(
+        &sr,
+        layout::LayoutOptions {
+            direct_insertion: spaghettio_core::bus::di_cell::DirectInsertion::Off,
+            ..opts_with(1)
+        },
+    );
     assert!(
         s1.is_err(),
-        "S=1 must hit #312's fan-in refusal (25/s cable > 15/s full yellow)"
+        "S=1 must hit #312's fan-in refusal with DI Off (25/s cable > 15/s full yellow)"
     );
 
     // S=2: same config lays out physically valid end to end.
