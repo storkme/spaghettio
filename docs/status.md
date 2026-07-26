@@ -479,7 +479,13 @@ sweep first, and it would move geometry everywhere.
 NOT caught: the `chain-mil5ore` and `mega-chain-pu4raw` tail-starvation
 instances — their belts sit at 5.5% and 27% utilization, so whatever
 starves those rows is a different binding constraint and is still
-unattributed.
+unattributed. **(2026-07-26: `chain-mil5ore` is struck from this list —
+it was never starving. Re-measured at `--warmup 288000` it runs at
+**+0.7%, 146/146 machines working**; the −28.7% was a buffer-fill
+transient. `mega-chain-pu4raw` stands, and was independently re-measured
+at the same long warmup: −21.0%, byte-identical to its default-warmup
+run, so it is genuinely bound by something. See §"Default warmup is too
+short for deep chains".)**
 
 **`rfc-047-lane-aware-tap-delivery.md` close-out (2026-07-22)**: made
 delivery **lane-aware** so belt stacking raises rate CEILINGS, not just
