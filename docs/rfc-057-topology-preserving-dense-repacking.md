@@ -697,3 +697,11 @@ make either experimental composer a production default.
   their terminal medians and reserve collision-free rectangles against both
   production islands and previously placed hubs. Rendering must now stamp
   these nodes and route their explicit inter-stage/terminal edges.
+
+- **2026-07-26 — Explicit local-manifold flow graphs.** Hierarchy plans now
+  expand into typed graph nodes and edges: producer terminal → `(2,1)` input,
+  merger output → next merger, root → capacity lane, lane → `(1,2)` input,
+  distributor output → next distributor/consumer terminal. Every producer
+  terminal appears exactly as a graph source and every consumer terminal as a
+  graph sink on all four representative fixtures. The remaining renderer no
+  longer needs to infer branch semantics from coordinates or debug metadata.

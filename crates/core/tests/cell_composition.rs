@@ -1396,7 +1396,7 @@ fn export_rfc055_factorio_candidates() {
 #[ignore = "RFC-057 coarse machine compaction potential"]
 fn rfc057_machine_constraint_baseline() {
     use spaghettio_core::bus::compaction::{
-        blocks_overlap, build_manifold_nets, compact_axis, compact_island_axis,
+        blocks_overlap, build_local_manifold_graph, build_manifold_nets, compact_axis, compact_island_axis,
         compact_transport_geometry, estimated_manifold_wirelength, extract_rigid_islands,
         extract_route_nets, machine_blocks, occupied_bbox, place_recipe_clusters,
         plan_local_manifolds, CompactAxis, CompactIr, PlacedMachineSignature,
@@ -1477,6 +1477,10 @@ fn rfc057_machine_constraint_baseline() {
         let (clustered_islands, clusters) = place_recipe_clusters(&ir, 1);
         let clustered_manifolds = build_manifold_nets(&ir, &clustered_islands).unwrap();
         let local_plans = plan_local_manifolds(&clustered_islands, &clustered_manifolds, 1);
+        let local_graphs: Vec<_> = local_plans
+            .iter()
+            .map(build_local_manifold_graph)
+            .collect();
         let clustered_bbox = occupied_bbox(
             &clustered_islands
                 .iter()
@@ -1547,7 +1551,11 @@ fn rfc057_machine_constraint_baseline() {
             local_plans.iter().filter(|plan| plan.all_distributors_stampable).count(),
         );
         assert_eq!(local_plans.len(), clustered_manifolds.len());
-        for (plan, manifold) in local_plans.iter().zip(&clustered_manifolds) {
+        for ((plan, graph), manifold) in local_plans
+            .iter()
+            .zip(&local_graphs)
+            .zip(&clustered_manifolds)
+        {
             assert!(plan.all_mergers_stampable, "{label}: {} merger hierarchy not stampable", plan.item);
             assert!(plan.all_distributors_stampable, "{label}: {} distributor hierarchy not stampable", plan.item);
             assert_eq!(
@@ -1558,6 +1566,22 @@ fn rfc057_machine_constraint_baseline() {
                 plan.lane_groups.iter().map(|group| group.consumers.len()).sum::<usize>(),
                 manifold.consumers().count(),
             );
+            for terminal in manifold.producers() {
+                assert!(graph.edges.iter().any(|edge| {
+                    edge.from
+                        == spaghettio_core::bus::compaction::ManifoldEndpoint::Terminal(
+                            terminal.clone(),
+                        )
+                }));
+            }
+            for terminal in manifold.consumers() {
+                assert!(graph.edges.iter().any(|edge| {
+                    edge.to
+                        == spaghettio_core::bus::compaction::ManifoldEndpoint::Terminal(
+                            terminal.clone(),
+                        )
+                }));
+            }
         }
 
         let runnable = compact_transport_geometry(&layout);

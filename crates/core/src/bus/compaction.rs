@@ -1584,6 +1584,141 @@ fn distributor_stages(outputs: u32) -> Vec<BalancerStage> {
     stages
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ManifoldEndpoint {
+    Terminal(ManifoldTerminal),
+    NodeInput { node: usize, port: u32 },
+    NodeOutput { node: usize, port: u32 },
+    LaneInput(u32),
+    LaneOutput(u32),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BalancerNodeRole {
+    Merge,
+    Distribute,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ManifoldBalancerNode {
+    pub id: usize,
+    pub lane: u32,
+    pub role: BalancerNodeRole,
+    pub n: u32,
+    pub m: u32,
+    pub level: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ManifoldGraphEdge {
+    pub from: ManifoldEndpoint,
+    pub to: ManifoldEndpoint,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalManifoldGraph {
+    pub item: String,
+    pub belt_count: u32,
+    pub hub: CompactBlock,
+    pub nodes: Vec<ManifoldBalancerNode>,
+    pub edges: Vec<ManifoldGraphEdge>,
+}
+
+/// Expand a local manifold plan into exact balancer ports and routing edges.
+pub fn build_local_manifold_graph(plan: &LocalManifoldPlan) -> LocalManifoldGraph {
+    let mut nodes = Vec::new();
+    let mut edges = Vec::new();
+    for group in &plan.lane_groups {
+        let mut merge_frontier: Vec<_> = group
+            .producers
+            .iter()
+            .cloned()
+            .map(ManifoldEndpoint::Terminal)
+            .collect();
+        let mut level = 0;
+        while merge_frontier.len() > 1 {
+            let mut next = Vec::new();
+            let mut chunks = merge_frontier.into_iter();
+            loop {
+                let Some(first) = chunks.next() else {
+                    break;
+                };
+                let Some(second) = chunks.next() else {
+                    next.push(first);
+                    break;
+                };
+                let node = nodes.len();
+                nodes.push(ManifoldBalancerNode {
+                    id: node,
+                    lane: group.lane,
+                    role: BalancerNodeRole::Merge,
+                    n: 2,
+                    m: 1,
+                    level,
+                });
+                edges.push(ManifoldGraphEdge {
+                    from: first,
+                    to: ManifoldEndpoint::NodeInput { node, port: 0 },
+                });
+                edges.push(ManifoldGraphEdge {
+                    from: second,
+                    to: ManifoldEndpoint::NodeInput { node, port: 1 },
+                });
+                next.push(ManifoldEndpoint::NodeOutput { node, port: 0 });
+            }
+            merge_frontier = next;
+            level += 1;
+        }
+        if let Some(root) = merge_frontier.pop() {
+            edges.push(ManifoldGraphEdge {
+                from: root,
+                to: ManifoldEndpoint::LaneInput(group.lane),
+            });
+        }
+
+        let consumer_count = group.consumers.len();
+        let mut distribute_frontier = vec![ManifoldEndpoint::LaneOutput(group.lane)];
+        let mut level = 0;
+        while distribute_frontier.len() < consumer_count {
+            let source = distribute_frontier.remove(0);
+            let node = nodes.len();
+            nodes.push(ManifoldBalancerNode {
+                id: node,
+                lane: group.lane,
+                role: BalancerNodeRole::Distribute,
+                n: 1,
+                m: 2,
+                level,
+            });
+            edges.push(ManifoldGraphEdge {
+                from: source,
+                to: ManifoldEndpoint::NodeInput { node, port: 0 },
+            });
+            distribute_frontier.push(ManifoldEndpoint::NodeOutput { node, port: 0 });
+            distribute_frontier.push(ManifoldEndpoint::NodeOutput { node, port: 1 });
+            level += 1;
+        }
+        distribute_frontier.sort();
+        for (source, terminal) in distribute_frontier
+            .into_iter()
+            .zip(group.consumers.iter().cloned())
+        {
+            edges.push(ManifoldGraphEdge {
+                from: source,
+                to: ManifoldEndpoint::Terminal(terminal),
+            });
+        }
+    }
+    edges.sort();
+    LocalManifoldGraph {
+        item: plan.item.clone(),
+        belt_count: plan.belt_count,
+        hub: plan.hub.clone(),
+        nodes,
+        edges,
+    }
+}
+
 fn hub_is_free(
     candidate: &CompactBlock,
     islands: &[RigidIsland],
