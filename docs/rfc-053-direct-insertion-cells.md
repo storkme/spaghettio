@@ -2008,3 +2008,124 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   *NOT YET IMPLEMENTED; this entry is the evidence and the design, so the
   decision to build it is taken on 351 rate-limited instances rather than
   on 1,029.*
+
+- *2026-07-26 — **The six-row design above is REJECTED. Moving a row's
+  output belt north is not a stamping change, it is an
+  `output_merger` rework.** A second adversarial pass answered the
+  integration question the reach arithmetic could not, and the answer
+  kills the design as scoped.*
+
+  - *`bus/output_merger.rs`'s own header states the assumption:
+    "merges the east-flowing output belts of rows producing the same
+    final product into a single **south-facing splitter chain at the
+    bottom-right of the layout**." Its core loop is
+    `for y in out_y..merge_start_y` — a Rust range, so a northward
+    `out_y` either drives a merge column **straight down through the
+    cell's own machines** and every row below, or (if
+    `merge_start_y <= out_y`) produces **no column at all**, silently.
+    Verified by reading both the header and the loop directly.*
+  - *All three mergers — primary target, D2a/D2b solid surplus, voider —
+    feed that one south-column function. There is no north-side variant.*
+  - *`lane_planner` compounds it: `bal_y = last_sideload_y + 1` and
+    `family_source_y = balancer_y_start + 1` both place things one row
+    BELOW an output belt, so a northward output puts a balancer inside
+    the cell's own machine rows.*
+  - ***South-side output is 100% universal today — no precedent to lean
+    on.*** *Even `RowKind::QuadInput`, which needs a fourth input belt,
+    stacks the extra INPUT onto the south face rather than moving the
+    output. So this would be a new geometry class for the whole engine.*
+  - *The validators are the one clean part: both `check_output_belt_coverage`
+    copies derive everything from `dir_to_vec(ins.direction)` and are
+    direction-agnostic. A north-facing output inserter validates identically.*
+
+  ***The candidate that replaces it: add the second consumer input on the
+  NORTH face, and leave the output where it is.*** *Same +1 row, but the
+  row is added at the TOP and `output_belt_y` stays the row's southern
+  maximum, so `output_merger` and the balancer arithmetic are untouched:*
+
+  ```text
+  y-1       consumer input belt B    (north, outer)   ← the new row
+  y0        producer input belt      (north, inner)
+  y1        producer feed   reach-1 ↓ y0   above producers
+            consumer feed B reach-2 ↑ y-1  above consumers
+  y2..      machines, bottom-aligned
+  face_y    consumer feed A reach-1 ↓ face_y+1
+            consumer output reach-2 ↓ face_y+2      (unchanged)
+  face_y+1  consumer input belt A                   (unchanged)
+  face_y+2  output belt                             (unchanged)
+  ```
+
+  *A north-facing inserter at `y1` picks at `y1+2 = y3` (inside a 3-tall
+  machine) and drops at `y1-2 = y-1` — reach-2, the same long-handed hop
+  the output already uses. Producer-feed and consumer-feed-B share row
+  `y1` over disjoint x-ranges.*
+
+  ***UNVERIFIED — recorded as a candidate, not a plan.*** *Before building
+  it, check: (1) `input_belt_ys` is consumed POSITIONALLY by both
+  `lane_planner` and `ghost_router`, so a third solid input has to be
+  ordered consistently in the fused spec — the same trap that produced the
+  silent-starvation bug earlier in this RFC; (2) whether anything assumes
+  a row has at most ONE north input belt; (3) whether `y_top` moving up
+  disturbs pole banding. This entry exists so those are established BEFORE
+  someone starts stamping, which is the lesson the rejected design just
+  taught at zero cost.*
+
+- *2026-07-26 — **The six-row design above is REJECTED. Moving a row's
+  output belt north is not a stamping change, it is an
+  `output_merger` rework.** A second adversarial pass answered the
+  integration question the reach arithmetic could not, and the answer
+  kills the design as scoped.*
+
+  - *`bus/output_merger.rs`'s own header states the assumption:
+    "merges the east-flowing output belts of rows producing the same
+    final product into a single **south-facing splitter chain at the
+    bottom-right of the layout**." Its core loop walks
+    `out_y` up to `merge_start_y` — a Rust range, so a northward
+    `out_y` either drives a merge column **straight down through the
+    cell's own machines** and every row below, or (when
+    `merge_start_y` is not greater than `out_y`) produces **no column at
+    all**, silently. Verified by reading both the header and the loop.*
+  - *All three mergers — primary target, D2a/D2b solid surplus, voider —
+    feed that one south-column function. There is no north-side variant.*
+  - *`lane_planner` compounds it: the lane balancer sits one row BELOW the
+    southmost producer's output, and `family_source_y` chains off that, so
+    a northward output puts a balancer inside the cell's own machine rows.*
+  - ***South-side output is 100% universal today — no precedent to lean
+    on.*** *Even `RowKind::QuadInput`, which needs a fourth input belt,
+    stacks the extra INPUT onto the south face rather than moving the
+    output. This would be a new geometry class for the whole engine.*
+  - *The validators are the one clean part: both `check_output_belt_coverage`
+    copies derive everything from `dir_to_vec(ins.direction)` and are
+    direction-agnostic. A north-facing output inserter validates identically.*
+
+  ***The candidate that replaces it: add the second consumer input on the
+  NORTH face, and leave the output where it is.*** *Same one extra row, but
+  it is added at the TOP and `output_belt_y` stays the row's southern
+  maximum, so `output_merger` and the balancer arithmetic are untouched:*
+
+  ```text
+  y-1       consumer input belt B    (north, outer)   <- the new row
+  y0        producer input belt      (north, inner)
+  y1        producer feed   reach-1 down to y0    above producers
+            consumer feed B reach-2 up to y-1     above consumers
+  y2..      machines, bottom-aligned
+  face_y    consumer feed A reach-1 down to face_y+1
+            consumer output reach-2 down to face_y+2   (unchanged)
+  face_y+1  consumer input belt A                      (unchanged)
+  face_y+2  output belt                                (unchanged)
+  ```
+
+  *A north-facing inserter at `y1` picks two tiles south (inside a 3-tall
+  machine) and drops two tiles north at `y-1` — reach-2, the same
+  long-handed hop the output already uses. Producer-feed and
+  consumer-feed-B share row `y1` over disjoint x-ranges.*
+
+  ***UNVERIFIED — recorded as a candidate, not a plan.*** *Before building
+  it, check: (1) `input_belt_ys` is consumed POSITIONALLY by both
+  `lane_planner` and `ghost_router`, so a third solid input has to be
+  ordered consistently in the fused spec — the same trap that produced the
+  silent-starvation bug earlier in this RFC; (2) whether anything assumes
+  a row has at most ONE north input belt; (3) whether `y_top` moving up
+  disturbs pole banding. This entry exists so those are established BEFORE
+  someone starts stamping, which is the lesson the rejected design just
+  taught at zero cost.*
