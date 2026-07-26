@@ -653,3 +653,13 @@ make either experimental composer a production default.
   A focused end-to-end test proves the default path is inert, the option
   preserves the exact placed-machine signature, never increases either
   dimension and returns a fully valid layout.
+
+- **2026-07-26 — Debug-segment identity removed from seam constraints.**
+  Coordinate cuts may now coalesce surface belts when item, tier and
+  direction agree even if the incumbent `segment_id` differs. Segment IDs
+  describe row/corridor provenance, not independent production topology; the
+  earlier equality guard unnecessarily preserved those interfaces. On
+  military science this topology-free seam move reduces the final candidate
+  from 568×32 / 2,078 meter belt tiles to 552×32 / 2,024, while improving
+  delivered science from 1.90/s to 1.93/s. Full validation remains the
+  transactional admission gate.

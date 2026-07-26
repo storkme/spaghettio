@@ -619,7 +619,6 @@ fn collapse_vertical_cut(layout: &LayoutResult, cut: i32) -> Option<LayoutResult
                 && entity.name == other.name
                 && entity.direction == other.direction
                 && entity.carries == other.carries
-                && entity.segment_id == other.segment_id
             {
                 remove[idx] = true;
                 continue;
@@ -699,7 +698,6 @@ fn collapse_horizontal_cut(layout: &LayoutResult, cut: i32) -> Option<LayoutResu
                 && entity.name == other.name
                 && entity.direction == other.direction
                 && entity.carries == other.carries
-                && entity.segment_id == other.segment_id
             {
                 remove[idx] = true;
                 continue;
@@ -1735,18 +1733,18 @@ mod tests {
 
     #[test]
     fn vertical_cut_coalesces_equivalent_seam_belts() {
-        let belt = |x| crate::models::PlacedEntity {
+        let belt = |x, segment: &str| crate::models::PlacedEntity {
             name: "transport-belt".into(),
             x,
             direction: EntityDirection::East,
             carries: Some("plate".into()),
-            segment_id: Some("route".into()),
+            segment_id: Some(segment.into()),
             ..Default::default()
         };
         let layout = LayoutResult {
             width: 4,
             height: 1,
-            entities: vec![belt(0), belt(1), belt(3)],
+            entities: vec![belt(0, "row"), belt(1, "corridor"), belt(3, "tail")],
             ..Default::default()
         };
         let collapsed = collapse_vertical_cut(&layout, 1).unwrap();
