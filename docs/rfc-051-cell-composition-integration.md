@@ -315,6 +315,18 @@ follow-ups.
   entries; re-measure when #394/#381 land (every hash trips then by
   design).*
 
+  *(**The mil5-ore claim in this entry is RETRACTED — 2026-07-26.** Both
+  the number and its attribution. The same fixture measures **+0.7%,
+  146/146 machines working, PASS** at `--warmup 288000`: the −28.7% was a
+  buffer-fill transient measured before the factory finished filling, so
+  there was no inserter-count bound to attribute and #381 is not implicated.
+  "FAILs flat at every level" was the tell and was read as evidence of a
+  structural bound — a deficit invariant under research is equally the
+  signature of a measurement that never reached steady state. Left in place
+  rather than edited, per this log's own convention; see `status.md`
+  §"Default warmup is too short for deep chains" and RFC-054's 2026-07-26
+  entry.)*
+
 - *2026-07-23 — Validation-tiered selection (#392; SHARED SCORING
   MACHINERY — logged per the kill-3(b) rule). `accepted` never ran the
   full validator, so an error-laden native could outscore a clean
