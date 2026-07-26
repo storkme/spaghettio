@@ -401,7 +401,6 @@ pub struct RouteTerminal {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RouteNet {
     pub item: String,
-    pub copy: Option<u32>,
     pub segments: Vec<String>,
     pub entity_indices: Vec<usize>,
     pub terminals: Vec<RouteTerminal>,
@@ -413,7 +412,7 @@ pub struct RouteNet {
 /// preserving [`ProductionSignature`].
 pub fn extract_route_nets(layout: &LayoutResult) -> Vec<RouteNet> {
     let mut nets: Vec<RouteNet> = Vec::new();
-    let mut net_by_key: BTreeMap<(String, Option<u32>), usize> = BTreeMap::new();
+    let mut net_by_item: BTreeMap<String, usize> = BTreeMap::new();
     let mut entity_net: BTreeMap<usize, usize> = BTreeMap::new();
 
     for (entity_idx, entity) in layout.entities.iter().enumerate() {
@@ -426,13 +425,10 @@ pub fn extract_route_nets(layout: &LayoutResult) -> Vec<RouteNet> {
         let Some(item) = entity.carries.clone() else {
             continue;
         };
-        let copy = segment_copy(&segment);
-        let key = (item.clone(), copy);
-        let net_idx = *net_by_key.entry(key).or_insert_with(|| {
+        let net_idx = *net_by_item.entry(item.clone()).or_insert_with(|| {
             let idx = nets.len();
             nets.push(RouteNet {
                 item,
-                copy,
                 segments: Vec::new(),
                 entity_indices: Vec::new(),
                 terminals: Vec::new(),
@@ -528,18 +524,8 @@ pub fn extract_route_nets(layout: &LayoutResult) -> Vec<RouteNet> {
         net.terminals.sort();
         net.terminals.dedup();
     }
-    nets.sort_by(|a, b| (&a.item, a.copy).cmp(&(&b.item, b.copy)));
+    nets.sort_by(|a, b| a.item.cmp(&b.item));
     nets
-}
-
-fn segment_copy(segment: &str) -> Option<u32> {
-    let (_, suffix) = segment.rsplit_once('#')?;
-    let digits: String = suffix.chars().take_while(char::is_ascii_digit).collect();
-    if digits.is_empty() {
-        None
-    } else {
-        digits.parse().ok()
-    }
 }
 
 #[cfg(test)]

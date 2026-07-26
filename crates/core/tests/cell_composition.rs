@@ -1504,6 +1504,12 @@ fn rfc057_strip_empty_columns_mil5ore() {
         compacted.entities.len(),
     );
     println!("extracted {} replaceable route nets", nets.len());
+    for net in nets.iter().take(12) {
+        println!(
+            "  net {}: segments={} entities={} terminals={}",
+            net.item, net.segments.len(), net.entity_indices.len(), net.terminals.len(),
+        );
+    }
 }
 
 /// Artifact producer for the increment-2 sim run.

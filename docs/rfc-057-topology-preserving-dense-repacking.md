@@ -496,8 +496,11 @@ make either experimental composer a production default.
   refusals. Each 18,000-tick measurement took 0.40s.
 
   Route-intent extraction now groups physical belt provenance into commodity
-  nets by `(item, capacity replica)` rather than by debug segment. The latter
-  was falsified immediately: one real copper-plate delivery spans row, fan and
-  corridor segment IDs. The corrected extractor finds 39 replaceable solid
-  route nets on `chain-mil5ore`, and every solved solid production edge has
-  both a producer-drop and consumer-pickup terminal in at least one net.
+  nets by item rather than by debug segment. Segment identity was falsified
+  immediately: one real copper-plate delivery spans row, fan and corridor
+  IDs. Capacity-copy suffixes were also rejected as net identity because
+  corridors carry them while the row segments containing machine terminals
+  do not. The corrected extractor permits the new router to repartition
+  logistics capacity without changing production. It recovers 13 commodity
+  nets on `chain-mil5ore` and proves every solved solid production edge has
+  producer-drop and consumer-pickup terminals.
