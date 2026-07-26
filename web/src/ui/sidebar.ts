@@ -583,19 +583,26 @@ export function renderSidebar(
   });
   targetBody.appendChild(makeField("Inserter research", inserterCapacitySelect));
 
-  // RFC-053 direct insertion. Off by default: a coupled pair the engine
-  // cannot serve as a cell falls back to the DI bridge and then to the
-  // bus, so turning this on never makes a layout worse — but coverage is
-  // still narrow (fluid-touching and module-bearing pairs refuse), so it
-  // stays opt-in rather than becoming the default.
+  // RFC-053 direct insertion. Since the 2026-07-26 flip the engine
+  // default is `Candidate` — DI is ALREADY competing on every layout and
+  // wins wherever it is strictly better, so leaving this unchecked no
+  // longer means "no DI".
+  //
+  // Checking it FORCES DI into the native pass instead, bypassing the
+  // never-worse comparison. That is an A/B-debugging control, not the
+  // recommended setting: a forced DI layout can be worse than the one
+  // the engine would have picked (a bare `true` default broke 8 tests).
   const directInsertionCb = document.createElement("input");
   directInsertionCb.type = "checkbox";
   directInsertionCb.className = "sb-checkbox";
   directInsertionCb.title =
-    "Direct insertion (RFC-053): couple a producer straight into its consumer " +
-    "with inserters, so the shared item never touches a belt. Denser, and it " +
-    "lifts the belt-interface throughput ceiling. Pairs that cannot be served " +
-    "this way fall back to the bus automatically.";
+    "FORCE direct insertion (RFC-053). DI couples a producer straight into " +
+    "its consumer with inserters, so the shared item never touches a belt — " +
+    "denser, and it lifts the belt-interface throughput ceiling. Leave this " +
+    "UNCHECKED for normal use: the engine already tries DI on every layout " +
+    "and keeps it wherever it is strictly better. Checking this skips that " +
+    "safety comparison and can produce a worse layout; it exists for A/B " +
+    "debugging.";
   targetBody.appendChild(makeField("Direct insertion", directInsertionCb));
 
   // Layout strategy. Phase 0b of `rfc-modular-production` shipped the
