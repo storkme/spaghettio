@@ -97,10 +97,90 @@ Knobs (defaults in parentheses):
   still filling (intermediates at or above plan are the tell). One game
   hour (`--warmup 216000`) settled the #357 fixtures.
 
+  > **The default warmup is too short for deep chains, and this has
+  > produced wrong numbers that were recorded as layout defects.**
+  > Measured 2026-07-26: `chain-mil5ore-d2` is recorded in RFC-054's
+  > calibration corpus as a **FAIL at −28.7%**. Re-run unchanged at
+  > `--warmup 288000` (80 game-minutes) it measures **+0.7%, 146/146
+  > machines working, PASS**. Nothing about the layout changed; the
+  > original measurement simply started before the factory finished
+  > filling. `chain-mil5plates-d0` shows the same shape — the native
+  > meter reads −38.4% at a 2-minute warmup and +0.7% once converged.
+  >
+  > Practical rule: **for any chain with more than a couple of stages,
+  > treat a deficit measured at the default warmup as unproven until
+  > re-run with a long one.** Sweep warmup and watch the number move; a
+  > real deficit is flat against warmup, a transient is not. Deep chains
+  > have needed 40–80 game-minutes, far above the dim-scaled default.
+  >
+  > This is not a hypothetical concern about precision: it is the reason
+  > RFC-054's KC1 appeared to fail, and it puts a question mark over
+  > every recorded deficit taken at the default — see
+  > [#453](https://github.com/storkme/spaghettio/issues/453) and
+  > [#437](https://github.com/storkme/spaghettio/issues/437).
+
 Reading and debugging the resulting numbers — what each rate actually
 measures, the known measurement-artifact classes, and the forensic
 playbook (per-lane belt dumps, machine inventories, kit chest census) —
 is covered in [`sim-harness-forensics.md`](sim-harness-forensics.md).
+
+## Serving a fixture live (`serve`) — looking at it with your eyes
+
+`run` races at `game.speed = 16` and tears the world down the moment it
+has its number, so it cannot answer "what does this actually look like".
+`serve` hosts the same scenario as a **joinable multiplayer server** at
+real time, with no tick ceiling, and does not exit until you stop it.
+
+```bash
+cargo run --release -p spaghettio_sim_harness -- serve \
+    --bp  crates/core/target/tmp/chain-mil5plates-d0.bp \
+    --manifest crates/core/target/tmp/chain-mil5plates-d0.manifest.json
+```
+
+Then in a Factorio client: **Multiplayer → Connect to address**.
+
+Knobs: `--port N` (**34197**, Factorio's default — fixed, not ephemeral,
+because a human has to type it), `--speed N` (**1**), `--warmup N`.
+
+### Connecting: the three things that will bite you
+
+1. **The client version must match the server install exactly.** The
+   install is pinned (`paths::PINNED_VERSION`); check with
+   `~/.cache/spaghettio-sim/factorio-<ver>/bin/x64/factorio --version`.
+   Point at a different install with `SPAGHETTIO_FACTORIO_DIR` if your
+   client is on an older build. A mismatch simply refuses to connect.
+2. **On WSL2, connect to the VM's IP, not `localhost`.** WSL2 forwards
+   *TCP* to localhost but not *UDP*, and Factorio multiplayer is UDP.
+   Get it with `ip -4 addr show eth0` — e.g. `172.31.66.164:34197`. The
+   address changes when WSL restarts, so re-check rather than
+   remembering it.
+3. **Nothing is discoverable.** The server is not advertised on LAN or
+   public (the harness settings set both false), so it will never show
+   up in the server browser — always use *Connect to address*.
+
+### What you get on join
+
+`serve` sets these on player join; measurement runs never do, because
+they change force bonuses and a measurement must run in the world its
+fixture declares:
+
+- The whole paste **charted** with a 64-tile margin, so the map opens
+  usable instead of black, plus a printed line giving the layout's world
+  bounds.
+- **6× running speed** and **+24 reach** — a bus layout is a couple of
+  hundred tiles wide and walking it is the bottleneck.
+- **Commands enabled for everyone** (`allow_commands: true`), written to
+  a per-run settings copy rather than mutating the shared measurement
+  settings. So no admin list is needed for:
+  - `/editor` — free camera, no character. The best way to inspect a
+    large layout; sweep it without walking.
+  - `/c game.speed = 4` — fast-forward to steady state, then back to 1.
+    Useful because deep chains take **tens of game-minutes** to converge
+    (see the warmup warning above) — at 1× you are watching the
+    buffer-fill transient, not the steady state.
+
+The scratch run dir is kept rather than cleaned up, so the scenario and
+its `script-output/` survive for inspection afterwards.
 
 ## Reading the report
 
