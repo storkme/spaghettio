@@ -8147,6 +8147,70 @@ fn di_row_cell_fluid_fed_producer_validates_clean() {
     );
 }
 
+/// RFC-053 — the DI-cell exemption from `output-belt` must cover the
+/// PRODUCER only. The cell tags every entity it stamps, including the
+/// consumer's own output inserter, which picks from inside its machine
+/// exactly like a coupler does — so a pick-side-only test silently
+/// disabled the check for consumers too, and a cell with a broken output
+/// belt would have validated clean.
+///
+/// Deletes the cell's output belt and asserts the consumer is flagged.
+/// With the pick-side-only predicate this produced ZERO issues.
+#[test]
+fn di_cell_output_belt_exemption_does_not_cover_the_consumer() {
+    use spaghettio_core::bus::layout;
+    let inputs: FxHashSet<String> = ["molten-copper", "iron-plate"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let sr = solver::solve("electronic-circuit", 10.0, &inputs, "assembling-machine-3")
+        .expect("solve EC from molten copper");
+    let mut layout = layout::build_bus_layout(
+        &sr,
+        layout::LayoutOptions {
+            direct_insertion: true,
+            max_belt_tier: Some("express-transport-belt".into()),
+            ..Default::default()
+        },
+    )
+    .expect("layout must build");
+
+    // Sanity: intact, the cell is clean.
+    assert!(
+        validate::validate(&layout, Some(&sr), LayoutStyle::Bus).is_ok_and(|v| v.is_empty()),
+        "intact cell should validate clean"
+    );
+
+    // The consumer's output belt is the cell's bottom-most belt row.
+    let out_y = layout
+        .entities
+        .iter()
+        .filter(|e| {
+            e.segment_id.as_deref().is_some_and(|s| s.starts_with("di-row:"))
+                && e.name.ends_with("transport-belt")
+        })
+        .map(|e| e.y)
+        .max()
+        .expect("cell must have belts");
+    let before = layout.entities.len();
+    layout.entities.retain(|e| {
+        !(e.y == out_y
+            && e.name.ends_with("transport-belt")
+            && e.segment_id.as_deref().is_some_and(|s| s.starts_with("di-row:")))
+    });
+    assert!(layout.entities.len() < before, "test must actually remove the output belt");
+
+    let issues = match validate::validate(&layout, Some(&sr), LayoutStyle::Bus) {
+        Ok(v) => v,
+        Err(e) => e.issues,
+    };
+    assert!(
+        issues.iter().any(|i| i.category == "output-belt"),
+        "a DI-cell consumer with no output belt must be flagged, got {:#?}",
+        issues.iter().map(|i| &i.category).collect::<Vec<_>>()
+    );
+}
+
 /// RFC-053 **KC3 fixture** — export a DI-cell layout + manifest for the sim
 /// harness. Ignored: it writes artifacts and is driven by hand.
 ///

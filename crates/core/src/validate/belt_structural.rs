@@ -814,13 +814,20 @@ pub fn check_output_belt_coverage(
         // RFC-053: a DI-cell producer has no output belt BY DESIGN — the
         // band inserter carries its output straight into the consumer
         // machine, so the belt-drop test above can never be satisfied.
+        //
+        // Both ends are tested, for the reason spelled out in
+        // `belt_flow.rs`'s copy: the cell tags the consumer's own output
+        // inserter too, and that one picks from inside its machine but
+        // drops onto a belt. Only a machine→MACHINE hop is a coupler.
         let served_by_di_cell = layout.entities.iter().any(|ins| {
             is_inserter(&ins.name)
                 && super::is_di_cell_entity(ins.segment_id.as_deref())
                 && {
                     let dv = dir_to_vec(ins.direction);
                     let reach = inserter_reach(&ins.name);
-                    my_tiles.contains(&(ins.x - dv.0 * reach, ins.y - dv.1 * reach))
+                    let pick = (ins.x - dv.0 * reach, ins.y - dv.1 * reach);
+                    let drop = (ins.x + dv.0 * reach, ins.y + dv.1 * reach);
+                    my_tiles.contains(&pick) && machine_tiles.contains(&drop)
                 }
         });
 

@@ -1292,13 +1292,21 @@ pub fn check_output_belt_coverage(
 
         // RFC-053: a DI-cell producer's output leaves by inserter into the
         // consumer machine, never onto a belt. See `is_di_cell_entity`.
+        // Both ends are tested. Picking from this machine is not enough:
+        // the cell tags EVERY entity it stamps, including the consumer's
+        // own output inserter, which also picks from inside its machine —
+        // but drops onto a real belt and must stay under this check.
+        // Requiring the drop tile to be a machine too is what distinguishes
+        // a coupler from an ordinary output inserter living in a cell.
         let served_by_di_cell = layout.entities.iter().any(|ins| {
             is_inserter(&ins.name)
                 && super::is_di_cell_entity(ins.segment_id.as_deref())
                 && {
                     let (dx, dy) = dir_to_vec(ins.direction);
                     let reach = inserter_reach(&ins.name);
-                    my_tiles.contains(&(ins.x - dx * reach, ins.y - dy * reach))
+                    let pick = (ins.x - dx * reach, ins.y - dy * reach);
+                    let drop = (ins.x + dx * reach, ins.y + dy * reach);
+                    my_tiles.contains(&pick) && machine_tiles_set.contains(&drop)
                 }
         });
 
