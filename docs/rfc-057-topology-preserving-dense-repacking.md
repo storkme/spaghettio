@@ -550,3 +550,40 @@ make either experimental composer a production default.
   commodity. Every resulting manifold on these fixtures has at least one
   producer/input and consumer/output. This is the typed input to the new
   shared-trunk router; coordinates no longer depend on the source belt paths.
+
+- **2026-07-26 — Flow-sized manifolds and first runnable belt compactor.**
+  `CompactIR` now carries exact fixed-point commodity flow requirements from
+  the solver. The representative express-belt requirements are only 28 total
+  lanes (maximum three for one item) on USP, 14 (maximum two) on chemistry,
+  30 (maximum eight) on processing units and 14 (maximum two) on military
+  science. This disproves “one route per inserter” as the manifold shape:
+  hundreds of terminals must aggregate into a small number of capacity lanes
+  through local `(n,m)` structures.
+
+  A conservative runnable post-pass now replaces uninterrupted horizontal
+  surface-belt spans with maximal legal underground pairs, protects
+  inserter/boundary/junction tiles, normalises pairs collapsed to adjacency
+  during coordinate stripping, and then removes globally empty columns.
+  Every representative candidate preserves the exact placed-machine
+  signature and passes full structural validation:
+
+  | Fixture | source → compacted | belt entities | belt delta |
+  |---|---:|---:|---:|
+  | `mega-chain-usp2raw` | 2214×193 → 2166×193 | 44,031 → 28,998 | −34.1% |
+  | `mega-chain-chem5raw` | 834×56 → 800×56 | 4,202 → 3,182 | −24.3% |
+  | `mega-chain-pu4raw` | 2704×90 → 2624×90 | 23,128 → 15,504 | −33.0% |
+  | `chain-mil5ore` | 720×34 → 670×34 | 3,750 → 2,308 | −38.5% |
+
+  The fast meter measured the military-science control at 1.73/s produced
+  and 1.28/s delivered. The underground candidate improved that to 2.18/s
+  produced and 1.79/s delivered while reducing meter wall time from 0.35s to
+  0.24s. Thus the first real candidate clears the 35% belt gate and improves,
+  rather than trades away, throughput. Chemistry and processing units remain
+  below the RFC's 35% gate, so this primitive is retained as a strong
+  incumbent but does not complete RFC-057.
+
+  A competing global-band sketch was rejected before implementation: placing
+  one commodity trunk band below all compacted islands produced coarse route
+  estimates of 20,269 tiles for military science and 146,773 for USP because
+  every inserter was dragged to a distant global band. The active router uses
+  local, flow-sized manifolds interleaved with their production clusters.

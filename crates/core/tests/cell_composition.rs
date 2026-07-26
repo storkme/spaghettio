@@ -1398,9 +1398,11 @@ fn rfc057_machine_constraint_baseline() {
     use spaghettio_core::bus::compaction::{
         blocks_overlap, build_manifold_nets, compact_axis, compact_island_axis,
         extract_rigid_islands, extract_route_nets, machine_blocks, occupied_bbox,
-        CompactAxis, CompactIr, PlacedMachineSignature, ProductionSignature,
-        RouteTerminalKind,
+        strip_empty_columns, undergroundify_straight_belts, CompactAxis, CompactIr,
+        PlacedMachineSignature, ProductionSignature, RouteTerminalKind,
     };
+    use spaghettio_core::common::is_belt_entity;
+    use spaghettio_core::validate::{self, LayoutStyle, Severity};
 
     for label in ["mega-chain-usp2raw", "mega-chain-chem5raw", "mega-chain-pu4raw", "chain-mil5ore"] {
         let fixture = SimFixture::find(label);
@@ -1466,8 +1468,11 @@ fn rfc057_machine_constraint_baseline() {
         let island_after = occupied_bbox(
             &island_compacted.iter().map(|island| island.block.clone()).collect::<Vec<_>>()
         );
-        let ir = CompactIr { islands: islands.clone(), route_nets: nets.clone() };
+        let ir = CompactIr::from_source(&layout, &sr);
+        assert_eq!(ir.islands, islands);
+        assert_eq!(ir.route_nets, nets);
         let manifolds = build_manifold_nets(&ir, &island_compacted).unwrap();
+        let mut non_monotone = Vec::new();
         for manifold in &manifolds {
             assert!(
                 manifold.producers().next().is_some(),
@@ -1479,6 +1484,18 @@ fn rfc057_machine_constraint_baseline() {
                 "{label}: {} manifold has no consumer/output",
                 manifold.item,
             );
+            assert!(manifold.planned_rate > 0, "{label}: {} has no planned rate", manifold.item);
+            let producer_max = manifold.producers()
+                .filter(|terminal| terminal.island_id.is_some())
+                .map(|terminal| terminal.x)
+                .max();
+            let consumer_min = manifold.consumers()
+                .filter(|terminal| terminal.island_id.is_some())
+                .map(|terminal| terminal.x)
+                .min();
+            if producer_max.zip(consumer_min).is_some_and(|(p, c)| p > c) {
+                non_monotone.push(manifold.item.clone());
+            }
         }
         let before = i64::from(island_source.0) * i64::from(island_source.1);
         let after = i64::from(island_after.0) * i64::from(island_after.1);
@@ -1489,6 +1506,41 @@ fn rfc057_machine_constraint_baseline() {
             island_source.0, island_source.1, island_after.0, island_after.1,
             (after as f64 / before as f64 - 1.0) * 100.0,
         );
+        println!("{label}: non-monotone manifolds={non_monotone:?}");
+        println!(
+            "{label}: express manifold lanes total={} max={}",
+            manifolds.iter().map(|manifold| manifold.required_belts(45.0)).sum::<u32>(),
+            manifolds.iter().map(|manifold| manifold.required_belts(45.0)).max().unwrap_or(0),
+        );
+
+        let runnable =
+            strip_empty_columns(&undergroundify_straight_belts(&layout));
+        assert_eq!(
+            PlacedMachineSignature::from_layout(&runnable),
+            placed,
+            "{label}: runnable post-pass changed machines",
+        );
+        let issues = match validate::validate(&runnable, Some(&sr), LayoutStyle::Bus) {
+            Ok(issues) => issues,
+            Err(error) => error.issues,
+        };
+        let errors: Vec<_> = issues
+            .iter()
+            .filter(|issue| issue.severity == Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "{label}: runnable post-pass errors: {errors:?}");
+        let source_belts = layout.entities.iter()
+            .filter(|entity| is_belt_entity(&entity.name))
+            .count();
+        let compact_belts = runnable.entities.iter()
+            .filter(|entity| is_belt_entity(&entity.name))
+            .count();
+        println!(
+            "{label}: runnable={}x{} -> {}x{}, belts={} -> {} ({:+.1}%)",
+            layout.width, layout.height, runnable.width, runnable.height,
+            source_belts, compact_belts,
+            (compact_belts as f64 / source_belts as f64 - 1.0) * 100.0,
+        );
     }
 }
 
@@ -1497,9 +1549,10 @@ fn rfc057_machine_constraint_baseline() {
 fn rfc057_strip_empty_columns_mil5ore() {
     use spaghettio_core::bus::compaction::{
         compact_island_axis, extract_rigid_islands, extract_route_nets, occupied_bbox,
-        strip_empty_columns, CompactAxis, PlacedMachineSignature, ProductionSignature,
-        RouteTerminalKind,
+        strip_empty_columns, undergroundify_straight_belts, CompactAxis,
+        PlacedMachineSignature, ProductionSignature, RouteTerminalKind,
     };
+    use spaghettio_core::common::is_belt_entity;
     use spaghettio_core::validate::{self, LayoutStyle, Severity};
 
     let fixture = SimFixture::find("chain-mil5ore");
@@ -1511,6 +1564,8 @@ fn rfc057_strip_empty_columns_mil5ore() {
     ).unwrap();
     let source = fixture.compose_layout();
     let compacted = strip_empty_columns(&source);
+    let underground_compacted =
+        strip_empty_columns(&undergroundify_straight_belts(&source));
     let production = ProductionSignature::from_solver(&sr).unwrap();
     let nets = extract_route_nets(&source);
     let islands = extract_rigid_islands(&source);
@@ -1533,18 +1588,28 @@ fn rfc057_strip_empty_columns_mil5ore() {
         PlacedMachineSignature::from_layout(&source),
         PlacedMachineSignature::from_layout(&compacted),
     );
-    let issues = match validate::validate(&compacted, Some(&sr), LayoutStyle::Bus) {
-        Ok(v) => v,
-        Err(e) => e.issues,
-    };
-    let errors: Vec<_> = issues.iter()
-        .filter(|issue| issue.severity == Severity::Error)
-        .collect();
-    assert!(errors.is_empty(), "stripped candidate errors: {errors:?}");
+    assert_eq!(
+        PlacedMachineSignature::from_layout(&source),
+        PlacedMachineSignature::from_layout(&underground_compacted),
+    );
+    for (label, candidate) in [
+        ("stripped", &compacted),
+        ("underground-compacted", &underground_compacted),
+    ] {
+        let issues = match validate::validate(candidate, Some(&sr), LayoutStyle::Bus) {
+            Ok(v) => v,
+            Err(e) => e.issues,
+        };
+        let errors: Vec<_> = issues.iter()
+            .filter(|issue| issue.severity == Severity::Error)
+            .collect();
+        assert!(errors.is_empty(), "{label} candidate errors: {errors:?}");
+    }
     std::fs::create_dir_all("target/tmp").unwrap();
     for (label, layout) in [
         ("rfc057-mil5ore-control", &source),
         ("rfc057-mil5ore-strip", &compacted),
+        ("rfc057-mil5ore-underground", &underground_compacted),
     ] {
         let (bp, manifest) =
             spaghettio_core::blueprint::export_with_manifest(layout, &sr, label);
@@ -1558,6 +1623,18 @@ fn rfc057_strip_empty_columns_mil5ore() {
         "chain-mil5ore: {}x{} -> {}x{}; entities={}",
         source.width, source.height, compacted.width, compacted.height,
         compacted.entities.len(),
+    );
+    let source_belts = source.entities.iter()
+        .filter(|entity| is_belt_entity(&entity.name))
+        .count();
+    let underground_belts = underground_compacted.entities.iter()
+        .filter(|entity| is_belt_entity(&entity.name))
+        .count();
+    println!(
+        "underground candidate: {}x{} entities={} belts={} ({:+.1}% belts)",
+        underground_compacted.width, underground_compacted.height,
+        underground_compacted.entities.len(), underground_belts,
+        (underground_belts as f64 / source_belts as f64 - 1.0) * 100.0,
     );
     println!("extracted {} replaceable route nets", nets.len());
     println!(

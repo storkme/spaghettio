@@ -8,8 +8,8 @@
 use std::collections::BTreeMap;
 
 use crate::common::{
-    dir_to_vec, entity_size, inserter_reach, is_belt_entity, is_inserter, oriented_splitter_dims,
-    QualityTier,
+    dir_to_vec, entity_size, inserter_reach, is_belt_entity, is_inserter, is_surface_belt,
+    is_ug_belt, oriented_splitter_dims, ug_max_reach, ug_to_surface_tier, QualityTier,
 };
 use crate::models::{EntityDirection, LayoutResult, ModuleItem, SolverResult};
 
@@ -368,10 +368,183 @@ pub fn strip_empty_columns(layout: &LayoutResult) -> LayoutResult {
     for (_, x, _) in &mut compacted.surplus_exits {
         *x = remap_x(*x);
     }
+    // Column removal can collapse a valid underground pair to adjacent
+    // entities. Factorio requires at least one hidden tile; at distance one
+    // the equivalent topology is two ordinary surface belts.
+    let entity_at: BTreeMap<(i32, i32), usize> = compacted
+        .entities
+        .iter()
+        .enumerate()
+        .map(|(idx, entity)| ((entity.x, entity.y), idx))
+        .collect();
+    let mut surface_pairs = Vec::new();
+    for (idx, entity) in compacted.entities.iter().enumerate() {
+        if !is_ug_belt(&entity.name) || entity.io_type.as_deref() != Some("input") {
+            continue;
+        }
+        let (dx, dy) = dir_to_vec(entity.direction);
+        let Some(&output_idx) = entity_at.get(&(entity.x + dx, entity.y + dy)) else {
+            continue;
+        };
+        let output = &compacted.entities[output_idx];
+        if output.name == entity.name
+            && output.direction == entity.direction
+            && output.io_type.as_deref() == Some("output")
+        {
+            surface_pairs.push((idx, output_idx));
+        }
+    }
+    for (input_idx, output_idx) in surface_pairs {
+        for idx in [input_idx, output_idx] {
+            let entity = &mut compacted.entities[idx];
+            entity.name = ug_to_surface_tier(&entity.name).to_string();
+            entity.io_type = None;
+        }
+    }
     compacted.width -= removed_before[layout.width as usize];
     compacted.regions.clear();
     compacted.trace = None;
     compacted
+}
+
+/// Replace safe uninterrupted horizontal surface-belt spans with maximal
+/// underground hops. Tiles addressed by inserters or boundaries are retained
+/// on the surface. Segment, item, tier and direction boundaries split runs.
+pub fn undergroundify_straight_belts(layout: &LayoutResult) -> LayoutResult {
+    use crate::bus::balancer::underground_for_belt;
+    use std::collections::BTreeSet;
+
+    let mut protected = BTreeSet::new();
+    for inserter in layout
+        .entities
+        .iter()
+        .filter(|entity| is_inserter(&entity.name))
+    {
+        let (dx, dy) = dir_to_vec(inserter.direction);
+        let reach = inserter_reach(&inserter.name);
+        protected.insert((inserter.x - dx * reach, inserter.y - dy * reach));
+        protected.insert((inserter.x + dx * reach, inserter.y + dy * reach));
+    }
+    for boundary in layout
+        .boundary_inputs
+        .iter()
+        .chain(layout.boundary_outputs.iter())
+    {
+        protected.insert((boundary.x, boundary.y));
+    }
+    for (_, x, y) in &layout.surplus_exits {
+        protected.insert((*x, *y));
+    }
+
+    // A perpendicular belt feeding a horizontal tile is a side-load/turn
+    // junction. Splitters and existing undergrounds reserve their vicinity.
+    for entity in layout
+        .entities
+        .iter()
+        .filter(|entity| is_belt_entity(&entity.name))
+    {
+        let (dx, dy) = dir_to_vec(entity.direction);
+        if dx == 0 {
+            protected.insert((entity.x + dx, entity.y + dy));
+        }
+        if !is_surface_belt(&entity.name) {
+            for x in entity.x - 1..=entity.x + 2 {
+                for y in entity.y - 1..=entity.y + 2 {
+                    protected.insert((x, y));
+                }
+            }
+        }
+    }
+
+    type RunKey = (i32, bool, String, Option<String>, Option<String>);
+    let mut runs: BTreeMap<RunKey, Vec<(i32, usize)>> = BTreeMap::new();
+    for (idx, entity) in layout.entities.iter().enumerate() {
+        if !is_surface_belt(&entity.name)
+            || !matches!(
+                entity.direction,
+                EntityDirection::East | EntityDirection::West
+            )
+            || protected.contains(&(entity.x, entity.y))
+        {
+            continue;
+        }
+        runs.entry((
+            entity.y,
+            entity.direction == EntityDirection::East,
+            entity.name.clone(),
+            entity.carries.clone(),
+            entity.segment_id.clone(),
+        ))
+        .or_default()
+        .push((entity.x, idx));
+    }
+
+    let mut remove = vec![false; layout.entities.len()];
+    let mut replacements = BTreeMap::new();
+    for ((_, eastbound, belt_name, _, _), mut tiles) in runs {
+        tiles.sort_by_key(|(x, _)| *x);
+        if !eastbound {
+            tiles.reverse();
+        }
+        let step = if eastbound { 1 } else { -1 };
+        let mut run_start = 0;
+        while run_start < tiles.len() {
+            let mut run_end = run_start + 1;
+            while run_end < tiles.len() && tiles[run_end].0 - tiles[run_end - 1].0 == step {
+                run_end += 1;
+            }
+            let run = &tiles[run_start..run_end];
+            if run.len() < 4 {
+                run_start = run_end;
+                continue;
+            }
+            let max_distance = ug_max_reach(&belt_name) as usize + 1;
+            let mut start = 0;
+            while run.len() - start >= 4 {
+                let end = (start + max_distance).min(run.len() - 1);
+                if end - start < 3 {
+                    break;
+                }
+                let start_idx = run[start].1;
+                let end_idx = run[end].1;
+                let mut entrance = layout.entities[start_idx].clone();
+                entrance.name = underground_for_belt(&belt_name).to_string();
+                entrance.io_type = Some("input".into());
+                let mut exit = layout.entities[end_idx].clone();
+                exit.name = underground_for_belt(&belt_name).to_string();
+                exit.io_type = Some("output".into());
+                replacements.insert(start_idx, entrance);
+                replacements.insert(end_idx, exit);
+                for &(_, idx) in &run[start + 1..end] {
+                    remove[idx] = true;
+                }
+                start = end + 1;
+            }
+            run_start = run_end;
+        }
+    }
+
+    let mut result = layout.clone();
+    result.entities = layout
+        .entities
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, entity)| {
+            if remove[idx] {
+                None
+            } else {
+                Some(
+                    replacements
+                        .get(&idx)
+                        .cloned()
+                        .unwrap_or_else(|| entity.clone()),
+                )
+            }
+        })
+        .collect();
+    result.regions.clear();
+    result.trace = None;
+    result
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -429,6 +602,7 @@ pub struct IslandTerminal {
 pub struct CompactIr {
     pub islands: Vec<RigidIsland>,
     pub route_nets: Vec<RouteNet>,
+    pub commodity_flows: Vec<CommodityFlow>,
 }
 
 impl CompactIr {
@@ -436,8 +610,52 @@ impl CompactIr {
         Self {
             islands: extract_rigid_islands(layout),
             route_nets: extract_route_nets(layout),
+            commodity_flows: Vec::new(),
         }
     }
+
+    pub fn from_source(layout: &LayoutResult, solver: &SolverResult) -> Self {
+        Self {
+            islands: extract_rigid_islands(layout),
+            route_nets: extract_route_nets(layout),
+            commodity_flows: commodity_flows(solver),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CommodityFlow {
+    pub item: String,
+    pub rate: i64,
+    pub is_fluid: bool,
+}
+
+fn commodity_flows(solver: &SolverResult) -> Vec<CommodityFlow> {
+    let mut totals: BTreeMap<String, (f64, f64, bool)> = BTreeMap::new();
+    for machine in &solver.machines {
+        for input in &machine.inputs {
+            let total = totals
+                .entry(input.item.clone())
+                .or_insert((0.0, 0.0, input.is_fluid));
+            total.0 += input.rate * machine.count;
+            total.2 |= input.is_fluid;
+        }
+        for output in &machine.outputs {
+            let total = totals
+                .entry(output.item.clone())
+                .or_insert((0.0, 0.0, output.is_fluid));
+            total.1 += output.rate * machine.count;
+            total.2 |= output.is_fluid;
+        }
+    }
+    totals
+        .into_iter()
+        .map(|(item, (consumed, produced, is_fluid))| CommodityFlow {
+            item,
+            rate: fixed_rate(consumed.max(produced)),
+            is_fluid,
+        })
+        .collect()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -453,10 +671,20 @@ pub struct ManifoldTerminal {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ManifoldNet {
     pub item: String,
+    pub planned_rate: i64,
     pub terminals: Vec<ManifoldTerminal>,
 }
 
 impl ManifoldNet {
+    pub fn required_belts(&self, belt_capacity: f64) -> u32 {
+        if self.planned_rate <= 0 || belt_capacity <= 0.0 {
+            return 1;
+        }
+        ((self.planned_rate as f64 / RATE_SCALE) / belt_capacity)
+            .ceil()
+            .max(1.0) as u32
+    }
+
     pub fn producers(&self) -> impl Iterator<Item = &ManifoldTerminal> {
         self.terminals.iter().filter(|terminal| {
             matches!(
@@ -492,6 +720,12 @@ pub fn build_manifold_nets(
         .route_nets
         .iter()
         .map(|net| (net.item.clone(), Vec::new()))
+        .collect();
+    let planned_rate_by_item: BTreeMap<_, _> = ir
+        .commodity_flows
+        .iter()
+        .filter(|flow| !flow.is_fluid)
+        .map(|flow| (flow.item.as_str(), flow.rate))
         .collect();
 
     for (source, placed) in ir.islands.iter().zip(placed_islands) {
@@ -542,7 +776,14 @@ pub fn build_manifold_nets(
         if terminals.is_empty() {
             return Err(format!("route net {item} has no terminals"));
         }
-        result.push(ManifoldNet { item, terminals });
+        result.push(ManifoldNet {
+            planned_rate: planned_rate_by_item
+                .get(item.as_str())
+                .copied()
+                .unwrap_or(0),
+            item,
+            terminals,
+        });
     }
     Ok(result)
 }
@@ -1079,6 +1320,31 @@ mod tests {
         assert_eq!(PlacedMachineSignature::from_layout(&compacted), signature);
         layout.entities.reverse();
         assert_eq!(strip_empty_columns(&layout).width, 2);
+    }
+
+    #[test]
+    fn straight_belts_become_maximal_underground_hops() {
+        let layout = LayoutResult {
+            width: 10,
+            height: 1,
+            entities: (0..10)
+                .map(|x| crate::models::PlacedEntity {
+                    name: "express-transport-belt".into(),
+                    x,
+                    direction: EntityDirection::East,
+                    carries: Some("plate".into()),
+                    segment_id: Some("test".into()),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let compacted = undergroundify_straight_belts(&layout);
+        assert_eq!(compacted.entities.len(), 2);
+        assert_eq!(compacted.entities[0].name, "express-underground-belt");
+        assert_eq!(compacted.entities[0].io_type.as_deref(), Some("input"));
+        assert_eq!(compacted.entities[1].x, 9);
+        assert_eq!(compacted.entities[1].io_type.as_deref(), Some("output"));
     }
 
     #[test]
