@@ -1391,6 +1391,220 @@ pub fn estimated_manifold_wirelength(manifolds: &[ManifoldNet]) -> i128 {
         .sum()
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ManifoldLaneGroup {
+    pub lane: u32,
+    pub producers: Vec<ManifoldTerminal>,
+    pub consumers: Vec<ManifoldTerminal>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BalancerStage {
+    pub n: u32,
+    pub m: u32,
+    pub copies: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalManifoldPlan {
+    pub item: String,
+    pub planned_rate: i64,
+    pub belt_count: u32,
+    pub hub: CompactBlock,
+    pub lane_groups: Vec<ManifoldLaneGroup>,
+    pub producer_stages: Vec<Vec<BalancerStage>>,
+    pub consumer_stages: Vec<Vec<BalancerStage>>,
+    pub all_mergers_stampable: bool,
+    pub all_distributors_stampable: bool,
+}
+
+/// Plan one local, capacity-sized hub per solid commodity. Machine terminals
+/// are partitioned evenly across the minimum number of express belts; each
+/// lane receives an `(producers,1)` merger and `(1,consumers)` distributor.
+///
+/// Hubs are reserved near the terminal median and shifted to the nearest
+/// collision-free tile. Rendering the merger trees and branch routes is a
+/// separate transactional phase.
+pub fn plan_local_manifolds(
+    islands: &[RigidIsland],
+    manifolds: &[ManifoldNet],
+    clearance: i32,
+) -> Vec<LocalManifoldPlan> {
+    let clearance = clearance.max(0);
+    let mut plans = Vec::new();
+    for (plan_id, manifold) in manifolds.iter().enumerate() {
+        let belt_count = manifold.required_belts(45.0).max(1);
+        let mut producers: Vec<_> = manifold.producers().cloned().collect();
+        let mut consumers: Vec<_> = manifold.consumers().cloned().collect();
+        producers.sort_by_key(|terminal| (terminal.x, terminal.y, terminal.kind));
+        consumers.sort_by_key(|terminal| (terminal.x, terminal.y, terminal.kind));
+        let mut lane_groups: Vec<_> = (0..belt_count)
+            .map(|lane| ManifoldLaneGroup {
+                lane,
+                producers: Vec::new(),
+                consumers: Vec::new(),
+            })
+            .collect();
+        for (idx, terminal) in producers.into_iter().enumerate() {
+            lane_groups[idx % belt_count as usize]
+                .producers
+                .push(terminal);
+        }
+        for (idx, terminal) in consumers.into_iter().enumerate() {
+            lane_groups[idx % belt_count as usize]
+                .consumers
+                .push(terminal);
+        }
+
+        let mut xs: Vec<_> = manifold
+            .terminals
+            .iter()
+            .map(|terminal| terminal.x)
+            .collect();
+        let mut ys: Vec<_> = manifold
+            .terminals
+            .iter()
+            .map(|terminal| terminal.y)
+            .collect();
+        xs.sort_unstable();
+        ys.sort_unstable();
+        let center_x = xs.get(xs.len() / 2).copied().unwrap_or(0);
+        let center_y = ys.get(ys.len() / 2).copied().unwrap_or(0);
+        let max_group = lane_groups
+            .iter()
+            .map(|group| group.producers.len().max(group.consumers.len()))
+            .max()
+            .unwrap_or(1) as i32;
+        let depth = if max_group <= 1 {
+            1
+        } else {
+            (max_group as f64).log2().ceil() as i32 + 1
+        };
+        let width = (belt_count as i32 * 3).max(3);
+        let height = (depth * 2 + 1).max(3);
+        let base_x = center_x - width / 2;
+        let base_y = center_y - height / 2;
+        let mut chosen = None;
+        'radius: for radius in 0..=512 {
+            for dx in -radius..=radius {
+                for dy in [-radius, radius] {
+                    let candidate = CompactBlock {
+                        id: plan_id,
+                        x: base_x + dx,
+                        y: base_y + dy,
+                        width,
+                        height,
+                    };
+                    if hub_is_free(&candidate, islands, &plans, clearance) {
+                        chosen = Some(candidate);
+                        break 'radius;
+                    }
+                }
+            }
+            for dy in (-radius + 1)..radius {
+                for dx in [-radius, radius] {
+                    let candidate = CompactBlock {
+                        id: plan_id,
+                        x: base_x + dx,
+                        y: base_y + dy,
+                        width,
+                        height,
+                    };
+                    if hub_is_free(&candidate, islands, &plans, clearance) {
+                        chosen = Some(candidate);
+                        break 'radius;
+                    }
+                }
+            }
+        }
+        let hub = chosen.unwrap_or(CompactBlock {
+            id: plan_id,
+            x: base_x,
+            y: base_y,
+            width,
+            height,
+        });
+        let all_mergers_stampable = lane_groups.iter().all(|group| {
+            merger_stages(group.producers.len() as u32)
+                .iter()
+                .all(|stage| crate::bus::balancer::shape_is_stampable(stage.n, stage.m))
+        });
+        let all_distributors_stampable = lane_groups.iter().all(|group| {
+            distributor_stages(group.consumers.len() as u32)
+                .iter()
+                .all(|stage| crate::bus::balancer::shape_is_stampable(stage.n, stage.m))
+        });
+        let producer_stages = lane_groups
+            .iter()
+            .map(|group| merger_stages(group.producers.len() as u32))
+            .collect();
+        let consumer_stages = lane_groups
+            .iter()
+            .map(|group| distributor_stages(group.consumers.len() as u32))
+            .collect();
+        plans.push(LocalManifoldPlan {
+            item: manifold.item.clone(),
+            planned_rate: manifold.planned_rate,
+            belt_count,
+            hub,
+            lane_groups,
+            producer_stages,
+            consumer_stages,
+            all_mergers_stampable,
+            all_distributors_stampable,
+        });
+    }
+    plans
+}
+
+fn merger_stages(mut inputs: u32) -> Vec<BalancerStage> {
+    let mut stages = Vec::new();
+    while inputs > 1 {
+        let copies = inputs / 2;
+        if copies > 0 {
+            stages.push(BalancerStage { n: 2, m: 1, copies });
+        }
+        inputs = copies + inputs % 2;
+    }
+    stages
+}
+
+fn distributor_stages(outputs: u32) -> Vec<BalancerStage> {
+    if outputs <= 1 {
+        return Vec::new();
+    }
+    // Grow a possibly ragged binary tree to exactly the requested leaves.
+    let mut stages = Vec::new();
+    let mut leaves = 1;
+    while leaves < outputs {
+        let copies = leaves.min(outputs - leaves);
+        stages.push(BalancerStage { n: 1, m: 2, copies });
+        leaves += copies;
+    }
+    stages
+}
+
+fn hub_is_free(
+    candidate: &CompactBlock,
+    islands: &[RigidIsland],
+    plans: &[LocalManifoldPlan],
+    clearance: i32,
+) -> bool {
+    let expanded = CompactBlock {
+        id: candidate.id,
+        x: candidate.x - clearance,
+        y: candidate.y - clearance,
+        width: candidate.width + clearance * 2,
+        height: candidate.height + clearance * 2,
+    };
+    islands
+        .iter()
+        .all(|island| !blocks_overlap(&expanded, &island.block))
+        && plans
+            .iter()
+            .all(|plan| !blocks_overlap(&expanded, &plan.hub))
+}
+
 fn entity_dims(name: &str, direction: EntityDirection) -> (i32, i32) {
     let (mut width, mut height) =
         oriented_splitter_dims(name, direction).unwrap_or_else(|| entity_size(name));
@@ -2023,6 +2237,29 @@ mod tests {
         assert_eq!(collapsed.entities.len(), 2);
         assert_eq!(collapsed.entities[0].y, 0);
         assert_eq!(collapsed.entities[1].y, 2);
+    }
+
+    #[test]
+    fn binary_balancer_hierarchies_cover_arbitrary_terminal_counts() {
+        for count in 0..=129 {
+            let mergers = merger_stages(count);
+            let mut remaining = count;
+            for stage in &mergers {
+                assert_eq!((stage.n, stage.m), (2, 1));
+                remaining = remaining - stage.copies * 2 + stage.copies;
+            }
+            assert_eq!(remaining, count.min(1));
+
+            let distributors = distributor_stages(count);
+            let leaves = distributors
+                .iter()
+                .fold(1u32, |leaves, stage| leaves + stage.copies);
+            assert_eq!(leaves, count.max(1));
+            assert!(mergers
+                .iter()
+                .chain(distributors.iter())
+                .all(|stage| crate::bus::balancer::shape_is_stampable(stage.n, stage.m)));
+        }
     }
 
     #[test]

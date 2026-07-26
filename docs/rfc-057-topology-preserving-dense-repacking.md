@@ -683,3 +683,17 @@ make either experimental composer a production default.
   rows with compact 2D production geometry while also shortening the
   rate-weighted commodity spans. The next phase must materialise those spans
   as local flow-sized manifolds and refuse any candidate that cannot route.
+
+- **2026-07-26 — Local manifold capacity and hierarchy planning.** Each
+  commodity now receives the minimum number of express capacity lanes from
+  its exact solver rate (28 total on USP, 14 chemistry, 30 processing units,
+  14 military science). Producer and consumer terminals are distributed
+  evenly across those lanes. Each lane is reduced through a ragged binary
+  `(2,1)` merger tree and expanded through an exact-leaf `(1,2)` distributor
+  tree, avoiding the unavailable giant `(n,1)` / `(1,m)` templates.
+
+  All producer and consumer hierarchies for all four representative fixtures
+  decompose entirely into stampable library primitives. Hubs are placed near
+  their terminal medians and reserve collision-free rectangles against both
+  production islands and previously placed hubs. Rendering must now stamp
+  these nodes and route their explicit inter-stage/terminal edges.

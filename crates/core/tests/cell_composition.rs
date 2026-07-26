@@ -1398,8 +1398,9 @@ fn rfc057_machine_constraint_baseline() {
     use spaghettio_core::bus::compaction::{
         blocks_overlap, build_manifold_nets, compact_axis, compact_island_axis,
         compact_transport_geometry, estimated_manifold_wirelength, extract_rigid_islands,
-        extract_route_nets, machine_blocks, occupied_bbox, place_recipe_clusters, CompactAxis,
-        CompactIr, PlacedMachineSignature, ProductionSignature, RouteTerminalKind,
+        extract_route_nets, machine_blocks, occupied_bbox, place_recipe_clusters,
+        plan_local_manifolds, CompactAxis, CompactIr, PlacedMachineSignature,
+        ProductionSignature, RouteTerminalKind,
     };
     use spaghettio_core::common::is_belt_entity;
     use spaghettio_core::density::score_density;
@@ -1475,6 +1476,7 @@ fn rfc057_machine_constraint_baseline() {
         let manifolds = build_manifold_nets(&ir, &island_compacted).unwrap();
         let (clustered_islands, clusters) = place_recipe_clusters(&ir, 1);
         let clustered_manifolds = build_manifold_nets(&ir, &clustered_islands).unwrap();
+        let local_plans = plan_local_manifolds(&clustered_islands, &clustered_manifolds, 1);
         let clustered_bbox = occupied_bbox(
             &clustered_islands
                 .iter()
@@ -1537,6 +1539,26 @@ fn rfc057_machine_constraint_baseline() {
             estimated_manifold_wirelength(&manifolds),
             estimated_manifold_wirelength(&clustered_manifolds),
         );
+        println!(
+            "{label}: local hubs={} lanes={} merger-ready={} distributor-ready={}",
+            local_plans.len(),
+            local_plans.iter().map(|plan| plan.belt_count).sum::<u32>(),
+            local_plans.iter().filter(|plan| plan.all_mergers_stampable).count(),
+            local_plans.iter().filter(|plan| plan.all_distributors_stampable).count(),
+        );
+        assert_eq!(local_plans.len(), clustered_manifolds.len());
+        for (plan, manifold) in local_plans.iter().zip(&clustered_manifolds) {
+            assert!(plan.all_mergers_stampable, "{label}: {} merger hierarchy not stampable", plan.item);
+            assert!(plan.all_distributors_stampable, "{label}: {} distributor hierarchy not stampable", plan.item);
+            assert_eq!(
+                plan.lane_groups.iter().map(|group| group.producers.len()).sum::<usize>(),
+                manifold.producers().count(),
+            );
+            assert_eq!(
+                plan.lane_groups.iter().map(|group| group.consumers.len()).sum::<usize>(),
+                manifold.consumers().count(),
+            );
+        }
 
         let runnable = compact_transport_geometry(&layout);
         assert_eq!(
