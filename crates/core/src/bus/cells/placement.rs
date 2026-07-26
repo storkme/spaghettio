@@ -311,6 +311,75 @@ impl PlacementGraph {
         Ok(LinearCandidate { order, metrics })
     }
 
+    /// Deterministic best-improving single-node relocation. This explores a
+    /// materially wider neighbourhood than adjacent swaps while remaining
+    /// cheap for the small macro graphs used by cell chains.
+    pub fn improve_relocate(
+        &self,
+        initial: &[usize],
+        gap: i32,
+        fluid_weight: f64,
+    ) -> Result<LinearCandidate, String> {
+        self.validate_order(initial)?;
+        let mut order = initial.to_vec();
+        let mut metrics = self.score_linear(&order, gap, fluid_weight)?;
+        loop {
+            let mut best: Option<(Vec<usize>, PlacementMetrics)> = None;
+            for from in 0..order.len() {
+                for to in 0..order.len() {
+                    if from == to {
+                        continue;
+                    }
+                    let mut candidate_order = order.clone();
+                    let node = candidate_order.remove(from);
+                    candidate_order.insert(to, node);
+                    let candidate = self.score_linear(&candidate_order, gap, fluid_weight)?;
+                    if candidate.rate_weighted_distance + 1e-9
+                        < best.as_ref().map_or(metrics.rate_weighted_distance, |(_, m)| {
+                            m.rate_weighted_distance
+                        })
+                    {
+                        best = Some((candidate_order, candidate));
+                    }
+                }
+            }
+            let Some((improved_order, improved_metrics)) = best else {
+                break;
+            };
+            order = improved_order;
+            metrics = improved_metrics;
+        }
+        Ok(LinearCandidate { order, metrics })
+    }
+
+    /// RFC-055 bounded deterministic competitor set: improve the supplied
+    /// control and its reverse with both relocation and adjacent-swap
+    /// neighbourhoods, then return the lowest weighted-distance result.
+    pub fn best_linear(
+        &self,
+        control: &[usize],
+        gap: i32,
+        fluid_weight: f64,
+    ) -> Result<LinearCandidate, String> {
+        self.validate_order(control)?;
+        let mut starts = vec![control.to_vec()];
+        let mut reverse = control.to_vec();
+        reverse.reverse();
+        starts.push(reverse);
+        let mut best: Option<LinearCandidate> = None;
+        for start in starts {
+            let relocated = self.improve_relocate(&start, gap, fluid_weight)?;
+            let candidate = self.improve_adjacent(&relocated.order, gap, fluid_weight)?;
+            if best.as_ref().is_none_or(|current| {
+                candidate.metrics.rate_weighted_distance + 1e-9
+                    < current.metrics.rate_weighted_distance
+            }) {
+                best = Some(candidate);
+            }
+        }
+        Ok(best.expect("two deterministic starts"))
+    }
+
     /// Exact RFC-056 two-row baseline for a fixed logical order. Every
     /// non-empty contiguous split is evaluated in serpentine mode and,
     /// optionally, with both rows facing the same direction.
@@ -486,6 +555,17 @@ mod tests {
         let b = g.improve_adjacent(&initial, 2, 0.25).unwrap();
         assert_eq!(a, b);
         assert!(a.metrics.rate_weighted_distance <= before.rate_weighted_distance);
+    }
+
+    #[test]
+    fn relocation_search_is_deterministic_and_beats_control() {
+        let g = fixture();
+        let initial = [0, 3, 1, 2];
+        let before = g.score_linear(&initial, 2, 0.25).unwrap();
+        let a = g.best_linear(&initial, 2, 0.25).unwrap();
+        let b = g.best_linear(&initial, 2, 0.25).unwrap();
+        assert_eq!(a, b);
+        assert!(a.metrics.rate_weighted_distance < before.rate_weighted_distance);
     }
 
     #[test]

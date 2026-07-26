@@ -1282,6 +1282,36 @@ fn export_mega_usp_for_sim() {
     println!("wrote mega-chain-usp2raw.bp ({} in / {} out)", l.boundary_inputs.len(), l.boundary_outputs.len());
 }
 
+/// RFC-055 real-geometry experiment. Kept opt-in while compact ordering is
+/// speculative; unlike the placement estimator, this composes and validates
+/// both complete routed factories.
+#[test]
+#[ignore = "RFC-055 compact-order experiment"]
+fn rfc055_compact_usp_real_geometry() {
+    use spaghettio_core::bus::cells::chain::{compose_chain_compact, compose_chain_with_capacity};
+    use spaghettio_core::validate::{self, LayoutStyle, Severity};
+
+    let inputs: FxHashSet<String> =
+        ["iron-ore", "copper-ore", "crude-oil", "water", "coal", "stone"]
+            .iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        "utility-science-pack", 2.0, &inputs, &MachinePalette::default(),
+        "assembling-machine-3", &FxHashSet::default(), QualityTier::Normal,
+    ).unwrap();
+    let control = compose_chain_with_capacity(&sr, 0).expect("control composes");
+    let compact = compose_chain_compact(&sr, 0).expect("compact composes");
+    let issues = match validate::validate(&compact, Some(&sr), LayoutStyle::Bus) {
+        Ok(v) => v,
+        Err(e) => e.issues,
+    };
+    let errors: Vec<_> = issues.iter()
+        .filter(|i| i.severity == Severity::Error).collect();
+    assert!(errors.is_empty(), "compact USP errors: {errors:?}");
+    println!("control={}x{} entities={} compact={}x{} entities={}",
+        control.width, control.height, control.entities.len(),
+        compact.width, compact.height, compact.entities.len());
+}
+
 /// Artifact producer for the increment-2 sim run.
 #[test]
 #[ignore = "artifact producer"]
