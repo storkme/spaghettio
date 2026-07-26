@@ -1880,3 +1880,303 @@ Per the layout-engine protocol in [`CLAUDE.md`](../CLAUDE.md#verification-protoc
   component" and FAILED correctly: `plastic-bar` runs several deliberately
   isolated fluid networks, and a UG pair splits a run's surface tiles by
   design. The over-assertion was mine; the code was right.*
+
+- *2026-07-26 — **The straddle emission was one-sided; now it is
+  slot-based, and `copper-cable → space-platform-foundation` ships.**
+  353 corpus instances, the pair the previous entry named as the smallest
+  well-defined piece of work left.*
+
+  *The defect, restated precisely: `plan_row_straddle` walked producers and
+  appended each one's consumers immediately AFTER it. Every producer has
+  TWO neighbours, so the gap between `P_i` and `P_{i+1}` holds up to two
+  consumers, one hugging each side — an append-only walk can only ever
+  fill the right. SPF balances exactly (4 producers at 5.0/s, 8 consumers
+  at 2.5/s, one producer feeding two consumers), and the loop built
+  `P0 C0 C1 …` where `C1` touched no producer at all. The adjacency
+  invariant then correctly refused what the loop had built: the geometry
+  was always feasible, the CONSTRUCTION could not express it.*
+
+  *Replaced with explicit slot assignment — each producer has a left slot
+  and a right slot; a consumer fed by both `P_i` and `P_{i+1}` takes the
+  whole gap and marks it shared. The one subtlety worth keeping: a
+  single-fed consumer takes the LEFT slot only when its producer must hold
+  two and this is its first. Preferring left unconditionally would have
+  flipped 1:1 rows from `PCPCPC…` to `CPCPCP…` and rewritten the
+  sim-verified furnace pair for no reason; preferring right unconditionally
+  reproduces the original bug.*
+
+  *Measured against `origin/main` rather than assumed:*
+
+  | case | before | after |
+  |---|---|---|
+  | `space-platform-foundation` @1/s | `cell=0`, 30×18, **4 warnings** | `cell=181`, 53×11, **0/0** |
+  | `space-platform-foundation` @2/s | `cell=0`, 54×18, **8 warnings** | `cell=365`, 101×11, **0/0** |
+  | `copper-cable → EC` @10/s | `cell=153`, 77×27 | identical |
+  | `casting-copper-cable → EC` @10/s | `cell=141`, 45×13 | identical |
+  | `steel-plate` from ore @5/s | `cell=440`, 125×14 | identical |
+
+  *`steel-plate` @10/s is `cell=0` in BOTH — pre-existing, not a
+  regression. Checked by restoring the old file and re-running, because
+  "the tests still pass" would not have distinguished the two.*
+
+  ***Sim: PASS.*** *`space-platform-foundation` @2/s produced **2.01/s
+  against 2.00 planned (+0.3%)**, delivered 1.97 (−1.3%, i.e. 98.7% —
+  above the goal's 98% bar), converged, **24/24 machines working** with
+  nothing starved or backed up. That makes FIVE corpus pairs satisfying
+  all three clauses of the goal.*
+
+  *Above 2/s the pair falls back to the bus and still validates clean, so
+  the ceiling is graceful. The remaining top-10 blocker is unchanged and
+  unaffected by this: three pairs (1,029 instances) want a consumer with
+  three or more solid inputs, which is the face-allocation problem, not a
+  straddle one.*
+
+- *2026-07-26 — **Investigation: the "3+ solid inputs" blocker, measured.
+  My own 1,029-instance figure was wrong; it is 351.** The coverage audit
+  said three top-10 pairs were "blocked on nothing else" than a consumer
+  needing 3+ solid inputs. Probing each pair individually — rather than
+  inferring from its recipe — gives a different answer for all three:*
+
+  | pair | instances | REAL blocker |
+  |---|---|---|
+  | `copper-cable → advanced-circuit` | 360 | **1:5 fan-out.** At 1/s the solve is P1:C5 (`pr=4.00`, `cr=0.80`) — one producer feeding five consumers, against a row's two neighbours. Face count is secondary; face allocation alone unlocks nothing here. |
+  | `iron-stick → rail` | 351 | **Face count is the only ELIGIBILITY blocker** — a `row_cell_eligible` copy with the face gate removed returns OK at every rate tried. But `plan_row_straddle` independently balances at only 2 of 12 sampled rates (5/s, 10/s); elsewhere `snap()`'s machine-count rounding leaves supply and demand unequal (at 1/s: P1:C1, 3.0 vs 1.5). So face allocation makes rail *possible*, not *universal* — it would cell at the rates where the straddle already balances. |
+  | `electric-engine-unit → flying-robot-frame` | 318 | Three independent RECIPE facts, each of which must be fixed: the consumer needs **3** belt-fed solids, the producer takes **2** solid inputs against the row's one north belt, and the producer's lubricant is a fluid the consumer does not share. (They cash out as only TWO code-level gates — the last two both fail through `producer_feed_ok`.) Its straddle now passes (`CPCCPCC…`) thanks to the slot fix, so that is no longer among them. |
+
+  ***So face allocation is worth 351 instances, not 1,029.*** *Recorded
+  because the inflated figure was mine, it was quoted as the top priority
+  in this log and in #462's body, and it came from reading recipes instead
+  of running solves.*
+
+  ***What the corpus actually builds for 3-input consumers*** *(`di-patterns
+  faces`, 354 `advanced-circuit` machines and the `rail`/`flying-robot-frame`
+  sets):*
+
+  | pattern | evidence | usable in a row cell? |
+  |---|---|---|
+  | Two inserters on ONE face, both reach-1 → a single belt carrying TWO ingredients, one per physical lane | `27 DI@N \| N:out1 S:in1 S:in1` (rail); the dominant AC plan `62 DI@E \| W:in1 W:out2` has ONE belt inserter for TWO ingredients | **No** — `BusLane.item` is a single `String`. One item per lane is baked into the bus model. |
+  | reach-1 AND reach-2 on one face → two STACKED belt rows | `23 DI@S \| S:in1 S:in2 S:in2` (rail) | **Yes**, if the output moves to the opposite face |
+  | Inputs on BOTH faces | `93 DI@N \| N:in1 S:in1 S:out1` (FRF) | **No** — the north face is the producer's |
+
+  ***The lane-mixing reading of the first row is UNPROVEN — treat it as a
+  hypothesis, not a finding.*** *An adversarial review pushed back on it
+  and was right to. The miner's raw numbers reproduce exactly, and it is
+  NOT undercounting — `inserter_reach` handles every corpus inserter name,
+  and a manual 6-tile entity dump around five sampled consumers found
+  nothing touching their N/S faces. But **blueprint export does not encode
+  belt CONTENTS**, only entity placement, so nothing in static corpus data
+  can distinguish "one inserter feeding two ingredients off two lanes"
+  from "the second ingredient is simply absent because the scraped
+  blueprint is incomplete" — a common defect in mega-factory collections.
+  A backward belt-network trace was attempted and defeated by a single
+  ~4,000-tile connected bus component; settling it needs
+  direction/splitter/lane-aware flow tracing that does not exist yet.*
+
+  *So: our bus genuinely cannot express two items per belt (claim 5 below
+  is solid), but whether that is what the corpus DOES here is not
+  established. **The six-row design below does not rest on it** — its
+  justification is row-budget arithmetic, which stands on its own.*
+
+  *The reachable design, from the second row: give the cell six rows around
+  the machines instead of five —*
+
+  ```text
+  y0        consumer OUTPUT belt     (north, outer)
+  y1        producer input belt      (north, inner)
+  y2        producer feed  reach-1 ↓ y1   above producers
+            consumer out   reach-2 ↑ y0   above consumers
+  y3..      machines, bottom-aligned
+  face_y    consumer feed A reach-1 ↓ face_y+1
+            consumer feed B reach-2 ↓ face_y+2
+  face_y+1  consumer input belt A
+  face_y+2  consumer input belt B
+  ```
+
+  *Costs one row. The reach-2 output pick lands 2 tiles into the machine,
+  so it needs a machine ≥2 tall (every candidate is 3+). Output reach is
+  unchanged — it is already `Reach::Far` today. Producer-feed and
+  consumer-output inserters share row `y2` over DISJOINT x-ranges, so they
+  do not collide.*
+
+  ***Open integration question the reach arithmetic cannot settle:*** *the
+  design moves the output belt from the south face to the north/outer one,
+  and `RowSpan.output_belt_y` has ~11 bare read sites across `lane_planner`
+  and `ghost_router`. Whether any of them assume the output is SOUTH of
+  the machines is unchecked. That is the first thing to establish if this
+  is built — it is a bigger risk than the stamping itself.*
+
+  *NOT YET IMPLEMENTED; this entry is the evidence and the design, so the
+  decision to build it is taken on 351 rate-limited instances rather than
+  on 1,029.*
+
+- *2026-07-26 — **The six-row design above is REJECTED. Moving a row's
+  output belt north is not a stamping change, it is an
+  `output_merger` rework.** A second adversarial pass answered the
+  integration question the reach arithmetic could not, and the answer
+  kills the design as scoped.*
+
+  - *`bus/output_merger.rs`'s own header states the assumption:
+    "merges the east-flowing output belts of rows producing the same
+    final product into a single **south-facing splitter chain at the
+    bottom-right of the layout**." Its core loop is
+    `for y in out_y..merge_start_y` — a Rust range, so a northward
+    `out_y` either drives a merge column **straight down through the
+    cell's own machines** and every row below, or (if
+    `merge_start_y <= out_y`) produces **no column at all**, silently.
+    Verified by reading both the header and the loop directly.*
+  - *All three mergers — primary target, D2a/D2b solid surplus, voider —
+    feed that one south-column function. There is no north-side variant.*
+  - *`lane_planner` compounds it: `bal_y = last_sideload_y + 1` and
+    `family_source_y = balancer_y_start + 1` both place things one row
+    BELOW an output belt, so a northward output puts a balancer inside
+    the cell's own machine rows.*
+  - ***South-side output is 100% universal today — no precedent to lean
+    on.*** *Even `RowKind::QuadInput`, which needs a fourth input belt,
+    stacks the extra INPUT onto the south face rather than moving the
+    output. So this would be a new geometry class for the whole engine.*
+  - *The validators are the one clean part: both `check_output_belt_coverage`
+    copies derive everything from `dir_to_vec(ins.direction)` and are
+    direction-agnostic. A north-facing output inserter validates identically.*
+
+  ***The candidate that replaces it: add the second consumer input on the
+  NORTH face, and leave the output where it is.*** *Same +1 row, but the
+  row is added at the TOP and `output_belt_y` stays the row's southern
+  maximum, so `output_merger` and the balancer arithmetic are untouched:*
+
+  ```text
+  y-1       consumer input belt B    (north, outer)   ← the new row
+  y0        producer input belt      (north, inner)
+  y1        producer feed   reach-1 ↓ y0   above producers
+            consumer feed B reach-2 ↑ y-1  above consumers
+  y2..      machines, bottom-aligned
+  face_y    consumer feed A reach-1 ↓ face_y+1
+            consumer output reach-2 ↓ face_y+2      (unchanged)
+  face_y+1  consumer input belt A                   (unchanged)
+  face_y+2  output belt                             (unchanged)
+  ```
+
+  *A north-facing inserter at `y1` picks at `y1+2 = y3` (inside a 3-tall
+  machine) and drops at `y1-2 = y-1` — reach-2, the same long-handed hop
+  the output already uses. Producer-feed and consumer-feed-B share row
+  `y1` over disjoint x-ranges.*
+
+  ***UNVERIFIED — recorded as a candidate, not a plan.*** *Before building
+  it, check: (1) `input_belt_ys` is consumed POSITIONALLY by both
+  `lane_planner` and `ghost_router`, so a third solid input has to be
+  ordered consistently in the fused spec — the same trap that produced the
+  silent-starvation bug earlier in this RFC; (2) whether anything assumes
+  a row has at most ONE north input belt; (3) whether `y_top` moving up
+  disturbs pole banding. This entry exists so those are established BEFORE
+  someone starts stamping, which is the lesson the rejected design just
+  taught at zero cost.*
+
+- *2026-07-26 — **The six-row design above is REJECTED. Moving a row's
+  output belt north is not a stamping change, it is an
+  `output_merger` rework.** A second adversarial pass answered the
+  integration question the reach arithmetic could not, and the answer
+  kills the design as scoped.*
+
+  - *`bus/output_merger.rs`'s own header states the assumption:
+    "merges the east-flowing output belts of rows producing the same
+    final product into a single **south-facing splitter chain at the
+    bottom-right of the layout**." Its core loop walks
+    `out_y` up to `merge_start_y` — a Rust range, so a northward
+    `out_y` either drives a merge column **straight down through the
+    cell's own machines** and every row below, or (when
+    `merge_start_y` is not greater than `out_y`) produces **no column at
+    all**, silently. Verified by reading both the header and the loop.*
+  - *All three mergers — primary target, D2a/D2b solid surplus, voider —
+    feed that one south-column function. There is no north-side variant.*
+  - *`lane_planner` compounds it: the lane balancer sits one row BELOW the
+    southmost producer's output, and `family_source_y` chains off that, so
+    a northward output puts a balancer inside the cell's own machine rows.*
+  - ***South-side output is 100% universal today — no precedent to lean
+    on.*** *Even `RowKind::QuadInput`, which needs a fourth input belt,
+    stacks the extra INPUT onto the south face rather than moving the
+    output. This would be a new geometry class for the whole engine.*
+  - *The validators are the one clean part: both `check_output_belt_coverage`
+    copies derive everything from `dir_to_vec(ins.direction)` and are
+    direction-agnostic. A north-facing output inserter validates identically.*
+
+  ***The candidate that replaces it: add the second consumer input on the
+  NORTH face, and leave the output where it is.*** *Same one extra row, but
+  it is added at the TOP and `output_belt_y` stays the row's southern
+  maximum, so `output_merger` and the balancer arithmetic are untouched:*
+
+  ```text
+  y-1       consumer input belt B    (north, outer)   <- the new row
+  y0        producer input belt      (north, inner)
+  y1        producer feed   reach-1 down to y0    above producers
+            consumer feed B reach-2 up to y-1     above consumers
+  y2..      machines, bottom-aligned
+  face_y    consumer feed A reach-1 down to face_y+1
+            consumer output reach-2 down to face_y+2   (unchanged)
+  face_y+1  consumer input belt A                      (unchanged)
+  face_y+2  output belt                                (unchanged)
+  ```
+
+  *A north-facing inserter at `y1` picks two tiles south (inside a 3-tall
+  machine) and drops two tiles north at `y-1` — reach-2, the same
+  long-handed hop the output already uses. Producer-feed and
+  consumer-feed-B share row `y1` over disjoint x-ranges.*
+
+  ***UNVERIFIED — recorded as a candidate, not a plan.*** *Before building
+  it, check: (1) `input_belt_ys` is consumed POSITIONALLY by both
+  `lane_planner` and `ghost_router`, so a third solid input has to be
+  ordered consistently in the fused spec — the same trap that produced the
+  silent-starvation bug earlier in this RFC; (2) whether anything assumes
+  a row has at most ONE north input belt; (3) whether `y_top` moving up
+  disturbs pole banding. This entry exists so those are established BEFORE
+  someone starts stamping, which is the lesson the rejected design just
+  taught at zero cost.*
+
+- *2026-07-26 — **The north-input-B candidate SURVIVES adversarial review
+  on all three risks, with one named prerequisite. This is the design to
+  build if 3-input consumers are ever wanted.** Verdicts reproduced
+  independently where load-bearing:*
+
+  | risk | verdict | evidence |
+  |---|---|---|
+  | positional `input_belt_ys` at N=3 | **WORKS** | `lane_planner.rs:1288-1296` and `ghost_router.rs:161-169` both zip solids against `input_belt_y` by index with a length guard — no 2-slot cap. `RowKind::TripleInput`/`QuadInput` already ship 3–4 entries through this exact lookup. |
+  | two north input belts | **WORKS** | `RowKind::QuadInput` already stacks **three** belts north (verified in its doc comment). Its fourth moves south for **reach**, not north-face capacity — and the mechanism it uses for the third ("UG gaps so a long-handed inserter can sit on the belt row and reach two tiles further north") is precisely the candidate's reach-2 hop. |
+  | `y_top` shifting up | **WORKS** | `y_top` is `ents.iter().map(|e| e.y).min()` — self-healing. Pole banding scans ACTUAL entities (`layout.rs:928-948`, `machine_top` at 977), not `y_start` offsets. |
+
+  ***THE PREREQUISITE, and it is not optional: extend the same-item guard
+  before relaxing the face count.*** *`row_cell_eligible`
+  (`placer.rs:2158-2160`) currently reads:*
+
+  ```rust
+  let c_other = c_in.iter().find(|i| *i != item).cloned().unwrap_or_default();
+  if p_in.first().is_some_and(|p| *p == c_other) { return false; }
+  ```
+
+  *`.find()` returns only the FIRST non-coupled consumer item — sufficient
+  while `c_in.len() <= 2` permits exactly one. With belt-A AND belt-B it
+  silently skips producer×(the other one) and A×B entirely. Relaxing the
+  face count without extending this to all three pairs reproduces, by
+  omission and on a new axis, the exact silent-starvation failure this RFC
+  already found once: both `lane_planner` and `ghost_router` `break` on the
+  first item match, so a duplicate leaves the second belt built, never
+  tapped, never fed — **and there is no disagreement for any check to
+  catch.** Confirmed there is no `debug_assert` or validator covering it.*
+
+  *Write the test FIRST — `producer == A`, `producer == B`, `A == B`, each
+  must refuse — confirm it passes vacuously today (`c_in.len() <= 2` makes
+  the third case unreachable), then relax the gate. None of the target
+  pairs collide today (rail: stone/steel-plate; FRF:
+  battery/steel-plate/EC), which is exactly what makes this the kind of
+  trap that ships and bites later.*
+
+  ***Status: NOT BUILT, and the decision is deliberately left open.***
+  *What it buys is `iron-stick → rail` — 351 instances, and only at the
+  rates where the straddle independently balances (2 of 12 sampled). The
+  two designs cost the same single extra row; this one has no
+  architectural rework hiding in it, where the rejected north-output one
+  had an entire `output_merger` rewrite. That asymmetry, not the instance
+  count, is the reason this is the candidate.*
+
+  ***Process note worth keeping:*** *two adversarial passes cost a fraction
+  of an implementation and killed one design outright, corrected an
+  instance count by 3×, demoted a "finding" to a hypothesis, and turned a
+  hand-waved prerequisite into a file:line change with a test to write
+  first. Every one of those was cheaper found before building than after.*

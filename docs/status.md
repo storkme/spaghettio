@@ -207,6 +207,36 @@ resolves `rocket-fuel` to a burner `biochamber` and nothing in the
 engine delivers burner fuel. `cell_machines_are_powerable` now refuses
 non-electric roles; the engine-wide gap is **issue #461**.
 
+**A FIFTH corpus pair (2026-07-26, PR #470)**: slot-based straddle
+emission. `plan_row_straddle` could only place a consumer on a producer's
+**right**, but every producer has two neighbours, so the gap between
+`P_i` and `P_{i+1}` holds up to two consumers. `copper-cable →
+space-platform-foundation` (353 instances) balances *exactly* — 4
+producers at 5.0/s against 8 consumers at 2.5/s — and a valid
+arrangement always existed (`C0 P0 C1 C2 P1 C3 …`); the append-only walk
+simply could not express it, then the adjacency invariant correctly
+refused what it had built. **The geometry was feasible the whole time.**
+Each producer now gets an explicit left and right slot, a
+doubly-fed consumer taking the whole gap. SPF goes `cell=0` + 4 warnings
+→ `cell=181`, **0 errors 0 warnings**, and sims **PASS at 98.7%
+delivered, 24/24 machines working**. Measured against `origin/main` by
+restoring the old file, since a green suite cannot distinguish a
+regression from a pre-existing refusal; the three sim-verified pairs
+above are byte-identical after.
+
+The next blocker is **face allocation, not straddle**: consumers with
+three or more solid inputs. Measured by probing solves rather than
+inferred from recipes — **351 instances, not the 1,029 first claimed**
+(`iron-stick → rail` alone; the other two candidate pairs are blocked
+upstream for unrelated reasons). Two designs were reviewed before
+building either: moving a row's output belt north is **rejected** —
+`output_merger` assumes a south-facing chain universally, so it is a
+rework, not a stamping change — while adding the second consumer input
+on the **north** face survives review and is recorded in the RFC as a
+candidate with one named prerequisite (`row_cell_eligible`'s same-item
+guard uses `.find()`, which checks only one of the three pairs). **Not
+built; the decision is deliberately open.**
+
 Open against this RFC: modules refuse (the module post-pass keys
 `(entity, recipe)` off `row_spans` and a fused row contributes only the
 consumer's recipe); KC5 (solver escalation bound) is still unevaluated;
