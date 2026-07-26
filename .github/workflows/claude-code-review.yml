@@ -6,6 +6,10 @@ on:
 
 jobs:
   claude-review:
+    # Temporarily disabled by user request (2026-07-26). Keep the workflow
+    # and job name in place so branch-protection/check wiring remains stable;
+    # remove this condition to re-enable automated reviews.
+    if: ${{ false }}
     runs-on: ubuntu-latest
     # `pull-requests`/`issues` must be WRITE: the review agent posts its
     # findings as a PR review + inline/summary comments. The stock template
