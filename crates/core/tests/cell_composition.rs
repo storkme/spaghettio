@@ -1442,8 +1442,9 @@ fn rfc057_machine_constraint_baseline() {
 #[ignore = "RFC-057 runnable whitespace-compaction baseline"]
 fn rfc057_strip_empty_columns_mil5ore() {
     use spaghettio_core::bus::compaction::{
-        extract_route_nets, strip_empty_columns, PlacedMachineSignature,
-        ProductionSignature, RouteTerminalKind,
+        compact_island_axis, extract_rigid_islands, extract_route_nets, occupied_bbox,
+        strip_empty_columns, CompactAxis, PlacedMachineSignature, ProductionSignature,
+        RouteTerminalKind,
     };
     use spaghettio_core::validate::{self, LayoutStyle, Severity};
 
@@ -1458,6 +1459,7 @@ fn rfc057_strip_empty_columns_mil5ore() {
     let compacted = strip_empty_columns(&source);
     let production = ProductionSignature::from_solver(&sr).unwrap();
     let nets = extract_route_nets(&source);
+    let islands = extract_rigid_islands(&source);
     for edge in production.edges.iter().filter(|edge| !edge.is_fluid) {
         assert!(nets.iter().any(|net| {
             net.item == edge.item
@@ -1504,6 +1506,29 @@ fn rfc057_strip_empty_columns_mil5ore() {
         compacted.entities.len(),
     );
     println!("extracted {} replaceable route nets", nets.len());
+    println!(
+        "extracted {} rigid production islands: entities={} terminals={} largest={}",
+        islands.len(),
+        islands.iter().map(|island| island.entity_indices.len()).sum::<usize>(),
+        islands.iter().map(|island| island.terminals.len()).sum::<usize>(),
+        islands.iter().map(|island| island.entity_indices.len()).max().unwrap_or(0),
+    );
+    let source_island_bbox = occupied_bbox(
+        &islands.iter().map(|island| island.block.clone()).collect::<Vec<_>>()
+    );
+    let mut placed_islands = islands.clone();
+    for _ in 0..8 {
+        placed_islands = compact_island_axis(&placed_islands, CompactAxis::X, 1);
+        placed_islands = compact_island_axis(&placed_islands, CompactAxis::Y, 1);
+    }
+    let placed_island_bbox = occupied_bbox(
+        &placed_islands.iter().map(|island| island.block.clone()).collect::<Vec<_>>()
+    );
+    println!(
+        "rigid-island bbox: {}x{} -> {}x{}",
+        source_island_bbox.0, source_island_bbox.1,
+        placed_island_bbox.0, placed_island_bbox.1,
+    );
     for net in nets.iter().take(12) {
         println!(
             "  net {}: segments={} entities={} terminals={}",

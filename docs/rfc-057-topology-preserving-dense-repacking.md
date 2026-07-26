@@ -504,3 +504,21 @@ make either experimental composer a production default.
   logistics capacity without changing production. It recovers 13 commodity
   nets on `chain-mil5ore` and proves every solved solid production edge has
   producer-drop and consumer-pickup terminals.
+
+- **2026-07-26 — Rigid production islands extracted.** `CompactIR` now
+  separates movable production islands from replaceable commodity routes.
+  Each recipe-bearing machine retains every inserter that touches it. An
+  inserter whose two ends touch machines unions them into one island, so
+  direct insertion remains physical geometry rather than being accidentally
+  converted into a belt edge. Belt-facing inserters expose item-labelled,
+  island-relative pickup/drop terminals for the new router.
+
+  `chain-mil5ore` yields 146 islands containing 508 machines/inserters and
+  362 route terminals; the largest island contains five entities. Its rigid
+  machine-plus-inserter bbox compacts from 706×7 to 583×5 under the existing
+  alternating constraint pass (41.0% less bbox area). This is still a routing
+  bound, not a runnable candidate, but unlike the earlier machine-only bound
+  it reserves the complete inserter geometry the router must serve.
+  Applying a proposed island placement is transactional and preserves the
+  exact placed-machine signature; incumbent belts are explicitly left for
+  rip-up/reroute rather than silently translated.

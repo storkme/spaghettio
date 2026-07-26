@@ -8,8 +8,8 @@
 use std::collections::BTreeMap;
 
 use crate::common::{
-    dir_to_vec, entity_size, inserter_reach, is_belt_entity, is_inserter,
-    oriented_splitter_dims, QualityTier,
+    dir_to_vec, entity_size, inserter_reach, is_belt_entity, is_inserter, oriented_splitter_dims,
+    QualityTier,
 };
 use crate::models::{EntityDirection, LayoutResult, ModuleItem, SolverResult};
 
@@ -119,8 +119,7 @@ fn canonical_modules(modules: &[ModuleItem]) -> Vec<(String, u32, Option<Quality
         .map(|module| (module.item.clone(), module.count, module.quality))
         .collect();
     result.sort_by(|a, b| {
-        (&a.0, a.1, a.2.map(|q| q.level()))
-            .cmp(&(&b.0, b.1, b.2.map(|q| q.level())))
+        (&a.0, a.1, a.2.map(|q| q.level())).cmp(&(&b.0, b.1, b.2.map(|q| q.level())))
     });
     result
 }
@@ -210,12 +209,7 @@ impl CompactBlock {
                 other.y,
                 other.y + other.height,
             ),
-            CompactAxis::Y => (
-                self.x,
-                self.x + self.width,
-                other.x,
-                other.x + other.width,
-            ),
+            CompactAxis::Y => (self.x, self.x + self.width, other.x, other.x + other.width),
         };
         a0 < b1 && b0 < a1
     }
@@ -233,8 +227,10 @@ pub fn machine_blocks(layout: &LayoutResult) -> Vec<CompactBlock> {
             entity.recipe.as_ref()?;
             let (mut width, mut height) = oriented_splitter_dims(&entity.name, entity.direction)
                 .unwrap_or_else(|| entity_size(&entity.name));
-            if matches!(entity.direction, EntityDirection::East | EntityDirection::West)
-                && width != height
+            if matches!(
+                entity.direction,
+                EntityDirection::East | EntityDirection::West
+            ) && width != height
                 && oriented_splitter_dims(&entity.name, entity.direction).is_none()
             {
                 std::mem::swap(&mut width, &mut height);
@@ -267,9 +263,7 @@ pub fn compact_axis(
         for &previous in &order[..position] {
             if blocks[previous].overlaps_cross_axis(&blocks[idx], axis) {
                 lower_bound = lower_bound.max(
-                    coordinate[previous]
-                        + blocks[previous].axis_size(axis)
-                        + clearance.max(0),
+                    coordinate[previous] + blocks[previous].axis_size(axis) + clearance.max(0),
                 );
             }
         }
@@ -300,10 +294,7 @@ pub fn occupied_bbox(blocks: &[CompactBlock]) -> (i32, i32) {
 }
 
 pub fn blocks_overlap(a: &CompactBlock, b: &CompactBlock) -> bool {
-    a.x < b.x + b.width
-        && b.x < a.x + a.width
-        && a.y < b.y + b.height
-        && b.y < a.y + a.height
+    a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
 }
 
 /// Remove globally empty tile columns while preserving entity order and
@@ -321,8 +312,10 @@ pub fn strip_empty_columns(layout: &LayoutResult) -> LayoutResult {
     for entity in &layout.entities {
         let (mut width, mut height) = oriented_splitter_dims(&entity.name, entity.direction)
             .unwrap_or_else(|| entity_size(&entity.name));
-        if matches!(entity.direction, EntityDirection::East | EntityDirection::West)
-            && width != height
+        if matches!(
+            entity.direction,
+            EntityDirection::East | EntityDirection::West
+        ) && width != height
             && oriented_splitter_dims(&entity.name, entity.direction).is_none()
         {
             std::mem::swap(&mut width, &mut height);
@@ -406,6 +399,314 @@ pub struct RouteNet {
     pub terminals: Vec<RouteTerminal>,
 }
 
+/// A machine or direct-insertion cluster that must move as one unit.
+///
+/// `entity_indices` contains recipe-bearing machines and every inserter that
+/// touches one of them. An inserter touching two machines unions those
+/// machines into the same island, preserving direct insertion exactly.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RigidIsland {
+    pub id: usize,
+    pub entity_indices: Vec<usize>,
+    pub recipes: Vec<String>,
+    pub block: CompactBlock,
+    pub terminals: Vec<IslandTerminal>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct IslandTerminal {
+    pub item: String,
+    pub kind: RouteTerminalKind,
+    /// Belt contact relative to the island block's top-left corner.
+    pub dx: i32,
+    pub dy: i32,
+    /// Inserter entity that establishes this terminal.
+    pub inserter_entity_index: usize,
+}
+
+/// The geometry/logistics split consumed by the RFC-057 search.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompactIr {
+    pub islands: Vec<RigidIsland>,
+    pub route_nets: Vec<RouteNet>,
+}
+
+impl CompactIr {
+    pub fn from_layout(layout: &LayoutResult) -> Self {
+        Self {
+            islands: extract_rigid_islands(layout),
+            route_nets: extract_route_nets(layout),
+        }
+    }
+}
+
+fn entity_dims(name: &str, direction: EntityDirection) -> (i32, i32) {
+    let (mut width, mut height) =
+        oriented_splitter_dims(name, direction).unwrap_or_else(|| entity_size(name));
+    if matches!(direction, EntityDirection::East | EntityDirection::West)
+        && width != height
+        && oriented_splitter_dims(name, direction).is_none()
+    {
+        std::mem::swap(&mut width, &mut height);
+    }
+    (width as i32, height as i32)
+}
+
+/// Recover the rigid production islands used by RFC-057's placement search.
+///
+/// Belt routes and power are intentionally excluded. Their contacts are
+/// recorded as relative terminals so they can be regenerated after an island
+/// moves. Direct machine-to-machine inserters are retained inside an island
+/// and create no route terminal.
+pub fn extract_rigid_islands(layout: &LayoutResult) -> Vec<RigidIsland> {
+    let machine_indices: Vec<usize> = layout
+        .entities
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, entity)| entity.recipe.as_ref().map(|_| idx))
+        .collect();
+    let mut machine_ordinal = BTreeMap::new();
+    let mut machine_at = BTreeMap::new();
+    for (ordinal, &entity_idx) in machine_indices.iter().enumerate() {
+        machine_ordinal.insert(entity_idx, ordinal);
+        let entity = &layout.entities[entity_idx];
+        let (width, height) = entity_dims(&entity.name, entity.direction);
+        for x in entity.x..entity.x + width {
+            for y in entity.y..entity.y + height {
+                machine_at.insert((x, y), entity_idx);
+            }
+        }
+    }
+
+    let mut parent: Vec<usize> = (0..machine_indices.len()).collect();
+    fn root(parent: &mut [usize], mut node: usize) -> usize {
+        while parent[node] != node {
+            parent[node] = parent[parent[node]];
+            node = parent[node];
+        }
+        node
+    }
+    fn union(parent: &mut [usize], a: usize, b: usize) {
+        let ra = root(parent, a);
+        let rb = root(parent, b);
+        if ra != rb {
+            parent[rb] = ra;
+        }
+    }
+
+    struct InserterContact {
+        entity_idx: usize,
+        pickup: (i32, i32),
+        drop: (i32, i32),
+        pickup_machine: Option<usize>,
+        drop_machine: Option<usize>,
+    }
+    let mut contacts = Vec::new();
+    for (entity_idx, inserter) in layout.entities.iter().enumerate() {
+        if !is_inserter(&inserter.name) {
+            continue;
+        }
+        let (dx, dy) = dir_to_vec(inserter.direction);
+        let reach = inserter_reach(&inserter.name);
+        let pickup = (inserter.x - dx * reach, inserter.y - dy * reach);
+        let drop = (inserter.x + dx * reach, inserter.y + dy * reach);
+        let pickup_machine = machine_at.get(&pickup).copied();
+        let drop_machine = machine_at.get(&drop).copied();
+        if let (Some(a), Some(b)) = (pickup_machine, drop_machine) {
+            union(&mut parent, machine_ordinal[&a], machine_ordinal[&b]);
+        }
+        if pickup_machine.is_some() || drop_machine.is_some() {
+            contacts.push(InserterContact {
+                entity_idx,
+                pickup,
+                drop,
+                pickup_machine,
+                drop_machine,
+            });
+        }
+    }
+
+    let mut belt_item_at = BTreeMap::new();
+    for entity in &layout.entities {
+        if !is_belt_entity(&entity.name) {
+            continue;
+        }
+        let Some(item) = entity.carries.as_ref() else {
+            continue;
+        };
+        let (width, height) = entity_dims(&entity.name, entity.direction);
+        for x in entity.x..entity.x + width {
+            for y in entity.y..entity.y + height {
+                belt_item_at.insert((x, y), item.clone());
+            }
+        }
+    }
+
+    let mut groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for (ordinal, &entity_idx) in machine_indices.iter().enumerate() {
+        let group = root(&mut parent, ordinal);
+        groups.entry(group).or_default().push(entity_idx);
+    }
+
+    let mut islands = Vec::new();
+    for machine_entities in groups.into_values() {
+        let mut entity_indices = machine_entities.clone();
+        let mut terminals = Vec::new();
+        for contact in &contacts {
+            let belongs = contact
+                .pickup_machine
+                .into_iter()
+                .chain(contact.drop_machine)
+                .any(|idx| machine_entities.contains(&idx));
+            if !belongs {
+                continue;
+            }
+            entity_indices.push(contact.entity_idx);
+            // Both ends on machines means direct insertion, already captured
+            // by the rigid geometry.
+            if contact.pickup_machine.is_some() && contact.drop_machine.is_some() {
+                continue;
+            }
+            if contact.pickup_machine.is_some() {
+                if let Some(item) = belt_item_at.get(&contact.drop) {
+                    terminals.push((
+                        item.clone(),
+                        RouteTerminalKind::ProducerDrop,
+                        contact.drop,
+                        contact.entity_idx,
+                    ));
+                }
+            } else if contact.drop_machine.is_some() {
+                if let Some(item) = belt_item_at.get(&contact.pickup) {
+                    terminals.push((
+                        item.clone(),
+                        RouteTerminalKind::ConsumerPickup,
+                        contact.pickup,
+                        contact.entity_idx,
+                    ));
+                }
+            }
+        }
+        entity_indices.sort_unstable();
+        entity_indices.dedup();
+
+        let min_x = entity_indices
+            .iter()
+            .map(|&idx| layout.entities[idx].x)
+            .min()
+            .unwrap();
+        let min_y = entity_indices
+            .iter()
+            .map(|&idx| layout.entities[idx].y)
+            .min()
+            .unwrap();
+        let max_x = entity_indices
+            .iter()
+            .map(|&idx| {
+                let entity = &layout.entities[idx];
+                entity.x + entity_dims(&entity.name, entity.direction).0
+            })
+            .max()
+            .unwrap();
+        let max_y = entity_indices
+            .iter()
+            .map(|&idx| {
+                let entity = &layout.entities[idx];
+                entity.y + entity_dims(&entity.name, entity.direction).1
+            })
+            .max()
+            .unwrap();
+        let mut recipes: Vec<_> = machine_entities
+            .iter()
+            .filter_map(|&idx| layout.entities[idx].recipe.clone())
+            .collect();
+        recipes.sort();
+        terminals.sort();
+        let terminals = terminals
+            .into_iter()
+            .map(
+                |(item, kind, point, inserter_entity_index)| IslandTerminal {
+                    item,
+                    kind,
+                    dx: point.0 - min_x,
+                    dy: point.1 - min_y,
+                    inserter_entity_index,
+                },
+            )
+            .collect();
+        let id = islands.len();
+        islands.push(RigidIsland {
+            id,
+            entity_indices,
+            recipes,
+            block: CompactBlock {
+                id,
+                x: min_x,
+                y: min_y,
+                width: max_x - min_x,
+                height: max_y - min_y,
+            },
+            terminals,
+        });
+    }
+    islands
+}
+
+/// Compact rigid islands along one axis and carry their relative terminals
+/// with them. This only computes a placement; it does not retain or reroute
+/// the incumbent belts.
+pub fn compact_island_axis(
+    islands: &[RigidIsland],
+    axis: CompactAxis,
+    clearance: i32,
+) -> Vec<RigidIsland> {
+    let blocks: Vec<_> = islands.iter().map(|island| island.block.clone()).collect();
+    let compacted = compact_axis(&blocks, axis, clearance);
+    islands
+        .iter()
+        .zip(compacted)
+        .map(|(island, block)| {
+            let mut moved = island.clone();
+            moved.block = block;
+            moved
+        })
+        .collect()
+}
+
+/// Apply an island placement to its rigid entities. Replaceable logistics is
+/// left untouched; callers must rip it up and reroute before validating the
+/// result as a factory.
+pub fn apply_island_placement(
+    layout: &LayoutResult,
+    source_islands: &[RigidIsland],
+    placed_islands: &[RigidIsland],
+) -> Result<LayoutResult, String> {
+    if source_islands.len() != placed_islands.len() {
+        return Err("source and placed island counts differ".into());
+    }
+    let mut result = layout.clone();
+    for (source, placed) in source_islands.iter().zip(placed_islands) {
+        if source.id != placed.id || source.entity_indices != placed.entity_indices {
+            return Err(format!("island identity changed at {}", source.id));
+        }
+        let dx = placed.block.x - source.block.x;
+        let dy = placed.block.y - source.block.y;
+        for &entity_idx in &source.entity_indices {
+            let Some(entity) = result.entities.get_mut(entity_idx) else {
+                return Err(format!(
+                    "island {} entity {entity_idx} is missing",
+                    source.id
+                ));
+            };
+            entity.x += dx;
+            entity.y += dy;
+        }
+    }
+    result.regions.clear();
+    result.trace = None;
+    Ok(result)
+}
+
 /// Recover belt nets and their machine/boundary terminals from a validated
 /// layout. This is routing intent for rubber-band re-embedding, not part of
 /// the production invariant: later phases may merge or split these nets while
@@ -448,8 +749,10 @@ pub fn extract_route_nets(layout: &LayoutResult) -> Vec<RouteNet> {
             continue;
         };
         let (mut width, mut height) = entity_size(&entity.name);
-        if matches!(entity.direction, EntityDirection::East | EntityDirection::West)
-            && width != height
+        if matches!(
+            entity.direction,
+            EntityDirection::East | EntityDirection::West
+        ) && width != height
         {
             std::mem::swap(&mut width, &mut height);
         }
@@ -466,8 +769,8 @@ pub fn extract_route_nets(layout: &LayoutResult) -> Vec<RouteNet> {
     let mut belt_net_at: BTreeMap<(i32, i32), usize> = BTreeMap::new();
     for (&entity_idx, &net_idx) in &entity_net {
         let entity = &layout.entities[entity_idx];
-        let (width, height) = oriented_splitter_dims(&entity.name, entity.direction)
-            .unwrap_or((1, 1));
+        let (width, height) =
+            oriented_splitter_dims(&entity.name, entity.direction).unwrap_or((1, 1));
         for x in entity.x..entity.x + width as i32 {
             for y in entity.y..entity.y + height as i32 {
                 belt_net_at.insert((x, y), net_idx);
@@ -480,9 +783,7 @@ pub fn extract_route_nets(layout: &LayoutResult) -> Vec<RouteNet> {
         let reach = inserter_reach(&inserter.name);
         let pickup = (inserter.x - dx * reach, inserter.y - dy * reach);
         let drop = (inserter.x + dx * reach, inserter.y + dy * reach);
-        if let (Some(&net_idx), Some(recipe)) =
-            (belt_net_at.get(&drop), machine_at.get(&pickup))
-        {
+        if let (Some(&net_idx), Some(recipe)) = (belt_net_at.get(&drop), machine_at.get(&pickup)) {
             nets[net_idx].terminals.push(RouteTerminal {
                 kind: RouteTerminalKind::ProducerDrop,
                 x: drop.0,
@@ -490,9 +791,7 @@ pub fn extract_route_nets(layout: &LayoutResult) -> Vec<RouteNet> {
                 recipe: Some(recipe.clone()),
             });
         }
-        if let (Some(&net_idx), Some(recipe)) =
-            (belt_net_at.get(&pickup), machine_at.get(&drop))
-        {
+        if let (Some(&net_idx), Some(recipe)) = (belt_net_at.get(&pickup), machine_at.get(&drop)) {
             nets[net_idx].terminals.push(RouteTerminal {
                 kind: RouteTerminalKind::ConsumerPickup,
                 x: pickup.0,
@@ -579,9 +878,27 @@ mod tests {
     #[test]
     fn x_compaction_is_exact_for_fixed_overlap_order() {
         let blocks = vec![
-            CompactBlock { id: 0, x: 10, y: 0, width: 3, height: 3 },
-            CompactBlock { id: 1, x: 30, y: 1, width: 4, height: 2 },
-            CompactBlock { id: 2, x: 50, y: 8, width: 5, height: 2 },
+            CompactBlock {
+                id: 0,
+                x: 10,
+                y: 0,
+                width: 3,
+                height: 3,
+            },
+            CompactBlock {
+                id: 1,
+                x: 30,
+                y: 1,
+                width: 4,
+                height: 2,
+            },
+            CompactBlock {
+                id: 2,
+                x: 50,
+                y: 8,
+                width: 5,
+                height: 2,
+            },
         ];
         let compacted = compact_axis(&blocks, CompactAxis::X, 1);
         assert_eq!(compacted[0].x, 0);
@@ -607,11 +924,17 @@ mod tests {
             y: 3,
             ..Default::default()
         };
-        let a = LayoutResult { entities: vec![machine.clone(), belt.clone()], ..Default::default() };
+        let a = LayoutResult {
+            entities: vec![machine.clone(), belt.clone()],
+            ..Default::default()
+        };
         let mut moved = machine;
         moved.x = -7;
         moved.y = 4;
-        let b = LayoutResult { entities: vec![belt, moved], ..Default::default() };
+        let b = LayoutResult {
+            entities: vec![belt, moved],
+            ..Default::default()
+        };
         assert_eq!(
             PlacedMachineSignature::from_layout(&a),
             PlacedMachineSignature::from_layout(&b)
@@ -695,6 +1018,73 @@ mod tests {
                 y: 4,
                 recipe: Some("plate".into()),
             }]
+        );
+    }
+
+    #[test]
+    fn rigid_islands_bind_direct_insertion_and_expose_belt_terminals() {
+        let machine = |x, recipe: &str| crate::models::PlacedEntity {
+            name: "assembling-machine-3".into(),
+            x,
+            y: 0,
+            recipe: Some(recipe.into()),
+            ..Default::default()
+        };
+        let layout = LayoutResult {
+            entities: vec![
+                machine(0, "producer"),
+                machine(4, "consumer"),
+                crate::models::PlacedEntity {
+                    name: "inserter".into(),
+                    x: 3,
+                    y: 1,
+                    direction: EntityDirection::East,
+                    ..Default::default()
+                },
+                crate::models::PlacedEntity {
+                    name: "inserter".into(),
+                    x: 5,
+                    y: 3,
+                    direction: EntityDirection::South,
+                    ..Default::default()
+                },
+                crate::models::PlacedEntity {
+                    name: "transport-belt".into(),
+                    x: 5,
+                    y: 4,
+                    carries: Some("gear".into()),
+                    segment_id: Some("gear".into()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let islands = extract_rigid_islands(&layout);
+        assert_eq!(islands.len(), 1);
+        assert_eq!(islands[0].recipes, vec!["consumer", "producer"]);
+        assert_eq!(islands[0].entity_indices, vec![0, 1, 2, 3]);
+        assert_eq!(
+            islands[0].terminals,
+            vec![IslandTerminal {
+                item: "gear".into(),
+                kind: RouteTerminalKind::ProducerDrop,
+                dx: 5,
+                dy: 4,
+                inserter_entity_index: 3,
+            }]
+        );
+
+        let mut placed = islands.clone();
+        placed[0].block.x = 20;
+        placed[0].block.y = 10;
+        let moved = apply_island_placement(&layout, &islands, &placed).unwrap();
+        assert_eq!((moved.entities[0].x, moved.entities[0].y), (20, 10));
+        assert_eq!((moved.entities[3].x, moved.entities[3].y), (25, 13));
+        // Replaceable belt routing is deliberately not translated.
+        assert_eq!((moved.entities[4].x, moved.entities[4].y), (5, 4));
+        assert_eq!(
+            PlacedMachineSignature::from_layout(&layout),
+            PlacedMachineSignature::from_layout(&moved),
         );
     }
 }
