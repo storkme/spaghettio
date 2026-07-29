@@ -4561,8 +4561,8 @@ pub enum FoldRefusal {
     /// conflicting tile — without it the cause is indistinguishable from any
     /// other refusal and the fix is guesswork.
     JunctionBlocked { at: (i32, i32) },
-    /// Two exits carrying different items would have to share one gap lane.
-    ExitLaneConflict,
+    /// Two gap lanes would have to share a tile. Carries the tile.
+    ExitLaneConflict { at: (i32, i32) },
     /// A U-turn corner gained a second feeder, demoting a both-lane turn to a
     /// single-lane sideload (`docs/factorio-mechanics.md` B8 vs B11).
     CornerNotATurn,
@@ -4631,12 +4631,63 @@ pub fn fold_snake(
     }
 
     let h = layout.height;
-    let gap = 2;
 
     let mut bounds = vec![0];
     bounds.extend_from_slice(folds);
     bounds.push(layout.width);
     let n_segs = bounds.len() - 1;
+
+    // Gap height is sized from lane demand, not fixed at 2.
+    //
+    // A gap carries the belts that cross between the segments either side of
+    // it, and two DIFFERENT items cannot share a lane — merging them onto one
+    // belt is the corruption this pass exists to avoid. So the gap needs one
+    // row per distinct item, and a fixed two-row gap silently capped every
+    // layout at one item per side.
+    //
+    // Segment parity decides what each gap carries. An exit is a bottom-edge
+    // belt in the source, which an unrotated segment keeps at its bottom (into
+    // the gap below) and a rotated one carries to its top (into the gap
+    // above); an input is a top-edge belt, mirrored. Consecutive segments
+    // alternate, so a gap carries either two exit sets or two input sets,
+    // never a mix.
+    //
+    // One height for every gap rather than a per-gap vector: it wastes a few
+    // rows on the lighter gaps and keeps the segment offset a plain multiple
+    // of `h + gap`, which the transform, junction and boundary passes all
+    // depend on.
+    let edge_items = |seg: usize, row: i32, dir: EntityDirection| -> std::collections::BTreeSet<String> {
+        let (lo, hi) = (bounds[seg], bounds[seg + 1]);
+        layout
+            .entities
+            .iter()
+            .filter(|e| {
+                e.y == row
+                    && e.x >= lo
+                    && e.x < hi
+                    && e.direction == dir
+                    && is_surface_belt(&e.name)
+            })
+            .filter_map(|e| e.carries.clone())
+            .collect()
+    };
+    let gap = {
+        let mut widest = 2;
+        for k in 0..n_segs.saturating_sub(1) {
+            // Even gaps take both neighbours' exits (source bottom row,
+            // facing South); odd gaps take both neighbours' inputs (source top
+            // row, facing South into the factory).
+            let (row, dir) = if k % 2 == 0 {
+                (h - 1, EntityDirection::South)
+            } else {
+                (0, EntityDirection::South)
+            };
+            let mut items = edge_items(k, row, dir);
+            items.extend(edge_items(k + 1, row, dir));
+            widest = widest.max(items.len() as i32 + 1);
+        }
+        widest
+    };
 
     // 1. Replace straddling UG pairs with surface belts.
     let entities = replace_straddling_ug_pairs(&layout.entities, folds);
@@ -4858,106 +4909,259 @@ pub fn fold_snake(
     // the old tile means the factory produces into a spot nothing drains —
     // every producer upstream then backs up and the whole line stalls.
     let mut exit_moved: BTreeMap<(i32, i32), ((i32, i32), EntityDirection)> = BTreeMap::new();
+    // Same, for inputs the fold moved off the boundary.
+    let mut input_moved: BTreeMap<(i32, i32), ((i32, i32), EntityDirection)> = BTreeMap::new();
 
-    // 5. Give the layout's original exits somewhere to go.
+    // 5. Carry the layout's edge belts across the gaps they now land in.
     //
     // A belt on the source layout's bottom edge facing South deposited
     // outside the bounding box — an exit. After folding it deposits into an
     // inter-segment gap instead, and a gap row is interior, so the exit
-    // becomes a dead end. Rotation means each gap collects exits from both
-    // sides: the segment above contributes South-facing belts on its last
-    // row, and the rotated segment below contributes North-facing belts on
-    // its first row.
+    // becomes a dead end. Rotation means each gap collects from both sides:
+    // the segment above contributes South-facing belts on its last row, the
+    // rotated segment below North-facing belts on its first.
     //
-    // Each exit is carried along its own gap row to the nearer vertical edge,
-    // where it once again deposits outside the box. The two sources get
-    // separate rows so they cannot collide. Two exits carrying *different*
-    // items that would share a row refuse the fold rather than silently
-    // merging into one belt — the failure this replaces.
+    // Each distinct ITEM gets its own lane. Sharing a lane between two items
+    // merges them onto one belt, which is the corruption this pass exists to
+    // prevent; previously that was refused, capping every gap at one item per
+    // side.
+    //
+    // Lane assignment order is load-bearing. A lane runs from its exit column
+    // to the bounding-box edge, so lane j occupies `[edge, x_j]`. An exit
+    // whose lane is not the adjacent row must descend to it through the rows
+    // above, at its own column. Assigning lanes in ASCENDING order of exit
+    // column makes every such descent free: j < i implies x_j < x_i, so lane
+    // j — which stops at x_j — never covers the column x_i descends through.
+    // Any other order blocks descents (measured: descending order blocks 10
+    // of 5 exits' descents, arbitrary 5).
     for k in 0..n_segs - 1 {
         let gap_top = (k as i32) * (h + gap) + h;
-        let gap_bot = gap_top + 1;
 
-        for (row, src_y, want_dir) in [
-            (gap_top, gap_top - 1, EntityDirection::South),
-            (gap_bot, gap_bot + 1, EntityDirection::North),
+        // Which side a lane leaves by is forced, not a preference. Only fold
+        // `k`'s own U-turns span gap `k`, and fold `k` puts its junction
+        // columns on the right when `k` is even, so the opposite side is the
+        // one guaranteed clear of vertical runs in these rows.
+        let to_left = k % 2 == 0;
+        let run_dir = if to_left {
+            EntityDirection::West
+        } else {
+            EntityDirection::East
+        };
+
+        // Collect this gap's crossings from both sides, in the folded frame.
+        let mut crossings: Vec<(i32, i32, EntityDirection, String, Option<String>)> = Vec::new();
+        for (src_y, want_dir) in [
+            (gap_top - 1, EntityDirection::South),
+            (gap_top + gap, EntityDirection::North),
         ] {
-            let exits: Vec<(i32, String, Option<String>)> = folded
-                .iter()
-                .filter(|e| {
-                    e.y == src_y && e.direction == want_dir && is_surface_belt(&e.name)
-                })
-                .map(|e| (e.x, e.name.clone(), e.carries.clone()))
-                .collect();
-
-            // item claimed per tile on this row, so a conflict is detectable.
-            let mut claimed: BTreeMap<i32, Option<String>> = BTreeMap::new();
-            let _ = &exit_moved;
-            let mut pending: Vec<PlacedEntity> = Vec::new();
-            // Where each exit now finishes, so its boundary record can follow.
-            let mut termini: Vec<((i32, i32), (i32, i32), EntityDirection)> = Vec::new();
-            for (x, name, carries) in &exits {
-                // Only true segment content can be an exit. A U-turn's
-                // vertical run passes through these same rows at a junction
-                // column outside the segment range; treating one as an exit
-                // used to start the run beyond its own stop value, which then
-                // never terminated.
-                if *x < 0 || *x >= max_seg_w {
+            for e in folded.iter().filter(|e| {
+                e.y == src_y && e.direction == want_dir && is_surface_belt(&e.name)
+            }) {
+                // A U-turn's vertical run passes through these rows at a
+                // junction column outside the segment range; it is not an exit.
+                if e.x < 0 || e.x >= max_seg_w {
                     continue;
                 }
-                // Which side an exit leaves by is forced, not a preference.
-                // Only fold `k`'s own U-turns span gap `k` — junctions k-1 and
-                // k+1 cross the gaps either side of it — and fold `k` puts its
-                // junction columns on the right when `k` is even. So the
-                // opposite side is the one guaranteed clear of vertical runs
-                // in this row.
-                let to_left = k % 2 == 0;
-                let dir = if to_left {
-                    EntityDirection::West
+                crossings.push((e.x, src_y, want_dir, e.name.clone(), e.carries.clone()));
+            }
+        }
+        if crossings.is_empty() {
+            continue;
+        }
+
+        // One lane per item; lanes ordered by the leftmost column that item
+        // must descend at, so the descent-freedom argument above holds.
+        let mut by_item: BTreeMap<Option<String>, Vec<(i32, i32, EntityDirection, String)>> =
+            BTreeMap::new();
+        for (x, src_y, dir, name, carries) in crossings {
+            by_item.entry(carries).or_default().push((x, src_y, dir, name));
+        }
+        let mut lanes: Vec<(Option<String>, Vec<(i32, i32, EntityDirection, String)>)> =
+            by_item.into_iter().collect();
+        lanes.sort_by_key(|(_, members)| members.iter().map(|m| m.0).min().unwrap_or(0));
+        if lanes.len() as i32 > gap {
+            return Err(FoldRefusal::ExitLaneConflict { at: (-1, gap_top) });
+        }
+
+        for (lane_idx, (carries, members)) in lanes.into_iter().enumerate() {
+            let row = gap_top + lane_idx as i32;
+            let belt = members[0].3.clone();
+
+            // Descend each member from its source row to (but NOT onto) this
+            // lane: the lane row is owned by the horizontal run below, which
+            // must face the run direction. Stamping the descent direction
+            // there left a South-facing belt sitting on a West-flowing lane,
+            // dead-ending immediately. For an adjacent lane the range is
+            // empty and the source belt feeds the lane directly.
+            for &(x, src_y, dir, ref name) in &members {
+                let (from, to) = if src_y < row {
+                    (src_y + 1, row - 1)
                 } else {
-                    EntityDirection::East
+                    (row + 1, src_y - 1)
                 };
-                // Run to the layout's eventual edge, not the segment's. The
-                // junction columns extend the bounding box past the segment
-                // range, so a run that stopped at the segment edge ended
-                // *inside* the finished factory and dead-ended there.
-                let (lo, hi) = if to_left {
-                    (edge_min_x, *x)
-                } else {
-                    (*x, edge_max_x)
-                };
-                for cx in lo..=hi {
-                    match claimed.get(&cx) {
-                        Some(existing) if existing != carries => {
-                            return Err(FoldRefusal::ExitLaneConflict)
-                        }
-                        _ => {}
+                for y in from..=to {
+                    if !occupied.insert((x, y)) {
+                        return Err(FoldRefusal::ExitLaneConflict { at: (x, y) });
                     }
-                    claimed.insert(cx, carries.clone());
-                    if occupied.contains(&(cx, row)) {
-                        // Skipping the tile would leave the run with a hole
-                        // and the upstream half dead-ending into it.
-                        return Err(FoldRefusal::ExitLaneConflict);
-                    }
-                    {
-                        occupied.insert((cx, row));
-                        pending.push(PlacedEntity {
-                            name: name.clone(),
-                            x: cx,
-                            y: row,
-                            direction: dir,
-                            carries: carries.clone(),
-                            ..Default::default()
-                        });
-                    }
+                    folded.push(PlacedEntity {
+                        name: name.clone(),
+                        x,
+                        y,
+                        direction: dir,
+                        carries: carries.clone(),
+                        ..Default::default()
+                    });
                 }
-                let term_x = if to_left { lo } else { hi };
-                termini.push(((*x, src_y), (term_x, row), dir));
             }
-            for (from, to, dir) in termini {
-                exit_moved.insert(from, (to, dir));
+
+            // Run the lane to the bounding-box edge. Members of the same lane
+            // carry the same item, so overlapping spans merge legitimately.
+            let far = members.iter().map(|m| m.0).max().unwrap_or(0);
+            let near = members.iter().map(|m| m.0).min().unwrap_or(0);
+            let (lo, hi) = if to_left {
+                (edge_min_x, far)
+            } else {
+                (near, edge_max_x)
+            };
+            for cx in lo..=hi {
+                if occupied.contains(&(cx, row)) {
+                    continue; // already this lane's own belt
+                }
+                occupied.insert((cx, row));
+                folded.push(PlacedEntity {
+                    name: belt.clone(),
+                    x: cx,
+                    y: row,
+                    direction: run_dir,
+                    carries: carries.clone(),
+                    ..Default::default()
+                });
             }
-            folded.extend(pending);
+            let term_x = if to_left { lo } else { hi };
+            for &(x, src_y, _, _) in &members {
+                exit_moved.insert((x, src_y), ((term_x, row), run_dir));
+            }
+        }
+    }
+
+
+    // 5b. Feed the inputs that folding moved off the bounding box.
+    //
+    // Mirror of the exit pass. A top-edge belt facing into the factory is fed
+    // from OUTSIDE the box, so it only works on an edge. Segment parity puts
+    // it there for a single fold — segment 0 keeps its inputs at the top,
+    // segment 1 rotates them to the bottom — but from two folds up they land
+    // on interior gap rows with nothing able to supply them, which is what
+    // `InputStranded` refuses.
+    //
+    // Same structure as the exits, reversed: a lane runs from the bounding-box
+    // edge to the input's column, then climbs to the tile that feeds it. Lane
+    // order is by column again, for the same descent-freedom reason.
+    for k in 0..n_segs - 1 {
+        let gap_top = (k as i32) * (h + gap) + h;
+        let to_left = k % 2 == 0;
+        let run_dir = if to_left {
+            EntityDirection::East
+        } else {
+            EntityDirection::West
+        };
+
+        // An input belt adjacent to this gap, facing away from it, is one the
+        // gap must supply.
+        let mut needs: Vec<(i32, i32, EntityDirection, String, Option<String>)> = Vec::new();
+        for (src_y, want_dir) in [
+            (gap_top - 1, EntityDirection::North),
+            (gap_top + gap, EntityDirection::South),
+        ] {
+            for e in folded.iter().filter(|e| {
+                e.y == src_y && e.direction == want_dir && is_surface_belt(&e.name)
+            }) {
+                if e.x < 0 || e.x >= max_seg_w {
+                    continue;
+                }
+                needs.push((e.x, src_y, want_dir, e.name.clone(), e.carries.clone()));
+            }
+        }
+        if needs.is_empty() {
+            continue;
+        }
+
+        let mut by_item: BTreeMap<Option<String>, Vec<(i32, i32, EntityDirection, String)>> =
+            BTreeMap::new();
+        for (x, src_y, dir, name, carries) in needs {
+            by_item.entry(carries).or_default().push((x, src_y, dir, name));
+        }
+        // One column per item per gap: a lane serving two columns would have
+        // to split, which needs a splitter this pass does not synthesize.
+        if by_item.values().any(|m| m.len() > 1) {
+            return Err(FoldRefusal::InputStranded {
+                at: (bounds[k + 1], 0),
+            });
+        }
+        let mut lanes: Vec<(Option<String>, Vec<(i32, i32, EntityDirection, String)>)> =
+            by_item.into_iter().collect();
+        // Lane order, and it inverts relative to the exit pass.
+        //
+        // Inputs fill from the FAR side of the gap, so lane 0 takes the
+        // deepest row and therefore the longest climb, crossing every other
+        // lane's row at its own column. That climb is free only if no crossed
+        // lane covers that column. A lane running left spans `[edge, x]`, so
+        // it covers every column at or below its own — meaning the deepest
+        // lane must own the LARGEST column. Running right the span is
+        // `[x, edge]` and the test inverts.
+        //
+        // Getting this backwards is not a validation error at the gap; it is
+        // two items' belts on one tile several rows away.
+        if to_left {
+            lanes.sort_by_key(|(_, m)| std::cmp::Reverse(m[0].0));
+        } else {
+            lanes.sort_by_key(|(_, m)| m[0].0);
+        }
+        if lanes.len() as i32 > gap {
+            return Err(FoldRefusal::ExitLaneConflict { at: (-1, gap_top) });
+        }
+
+        for (lane_idx, (carries, members)) in lanes.into_iter().enumerate() {
+            // Fill from the far side so a lane never crosses a shallower one.
+            let row = gap_top + gap - 1 - lane_idx as i32;
+            let (x, src_y, dir, name) = members[0].clone();
+
+            // Lane from the box edge to the input's column.
+            let (lo, hi) = if to_left { (edge_min_x, x) } else { (x, edge_max_x) };
+            for cx in lo..=hi {
+                if !occupied.insert((cx, row)) {
+                    return Err(FoldRefusal::ExitLaneConflict { at: (cx, row) });
+                }
+                folded.push(PlacedEntity {
+                    name: name.clone(),
+                    x: cx,
+                    y: row,
+                    direction: run_dir,
+                    carries: carries.clone(),
+                    ..Default::default()
+                });
+            }
+            // Climb from the lane to the tile that feeds the input belt,
+            // facing the way the input flows.
+            let (from, to) = if src_y < row {
+                (src_y + 1, row - 1)
+            } else {
+                (row + 1, src_y - 1)
+            };
+            for y in from..=to {
+                if !occupied.insert((x, y)) {
+                    return Err(FoldRefusal::ExitLaneConflict { at: (x, y) });
+                }
+                folded.push(PlacedEntity {
+                    name: name.clone(),
+                    x,
+                    y,
+                    direction: dir,
+                    carries: carries.clone(),
+                    ..Default::default()
+                });
+            }
+            input_moved.insert((x, src_y), ((if to_left { lo } else { hi }, row), run_dir));
         }
     }
 
@@ -5145,8 +5349,13 @@ pub fn fold_snake(
                     (h - 1 - b.y) + (seg as i32) * (h + gap),
                 )
             };
+            // On the box edge it is fed from outside, as in the source. Off
+            // the edge it is fed by the gap-lane pass above — but only if
+            // that pass actually reached it, which it records. Anything
+            // neither on an edge nor supplied really is stranded.
             let on_edge = nx <= lo_x || nx >= hi_x || ny <= lo_y || ny >= hi_y;
-            if !on_edge {
+            let supplied = input_moved.keys().any(|&(mx, my)| (mx, my) == (nx, ny));
+            if !on_edge && !supplied {
                 return Err(FoldRefusal::InputStranded { at: (b.x, b.y) });
             }
         }
@@ -5266,8 +5475,22 @@ pub fn fold_snake(
         }
     };
     for b in &mut result.boundary_inputs {
-        b.direction = fold_dir(b.x, b.direction);
-        (b.x, b.y) = fold_point(b.x, b.y);
+        let folded_dir = fold_dir(b.x, b.direction);
+        let (fx, fy) = fold_point(b.x, b.y);
+        // An input the gap-lane pass rerouted is now fed at the lane's edge
+        // terminus, so its record has to move there — the same reasoning that
+        // made a stale `boundary_outputs` record produce 0.00/s.
+        match input_moved.get(&(fx - x_shift, fy)) {
+            Some(((tx, ty), tdir)) => {
+                b.x = tx + x_shift;
+                b.y = *ty;
+                b.direction = *tdir;
+            }
+            None => {
+                b.direction = folded_dir;
+                (b.x, b.y) = (fx, fy);
+            }
+        }
     }
     for b in &mut result.boundary_outputs {
         let folded_dir = fold_dir(b.x, b.direction);
