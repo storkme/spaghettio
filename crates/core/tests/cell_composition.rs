@@ -3475,21 +3475,20 @@ fn fold_routing_headroom_for(label: &str) {
     }
 }
 
-/// Fold search: try different numbers of folds and positions on the
-/// compacted mil5-ore layout, validate each, report the squarest valid.
+/// Export the compacted control and its folded counterpart for the sim
+/// harness. Belt lane semantics are the thing folding is most likely to
+/// break — a corner that is a 90° turn carries both lanes, one that has
+/// become a sideload carries one — and only Factorio adjudicates that.
 #[test]
-#[ignore = "exploration probe — fold search"]
-fn probe_fold_search_mil5() {
+#[ignore = "sim export — run spaghettio-sim against the written artifacts"]
+fn export_fold_pair_for_sim() {
     use spaghettio_core::bus::compaction::{compact_validated_geometry, fold_snake};
-    use spaghettio_core::validate::{self, LayoutStyle, Severity};
 
-    let inputs: FxHashSet<String> = ["iron-ore", "copper-ore", "stone", "coal"]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
+    let fixture = SimFixture::find("chain-mil5ore");
+    let inputs: FxHashSet<String> = fixture.inputs.iter().map(|s| s.to_string()).collect();
     let sr = solver::solve_with_palette_exclusions_and_quality(
-        "military-science-pack",
-        5.0,
+        fixture.target,
+        fixture.rate,
         &inputs,
         &MachinePalette::default(),
         "assembling-machine-3",
@@ -3497,265 +3496,219 @@ fn probe_fold_search_mil5() {
         QualityTier::Normal,
     )
     .unwrap();
+    let compact = compact_validated_geometry(&fixture.compose_layout(), &sr);
+    let folded =
+        fold_snake(&compact, &[compact.width / 2]).expect("midpoint fold must succeed");
 
-    let bus = layout::build_bus_layout(&sr, layout::LayoutOptions::default())
-        .expect("mil5-ore must compose");
-    let compact = compact_validated_geometry(&bus, &sr);
+    std::fs::create_dir_all("target/tmp").unwrap();
+    for (tag, l) in [("mil5-compact", &compact), ("mil5-fold1", &folded)] {
+        let (bp, manifest) = spaghettio_core::blueprint::export_with_manifest(l, &sr, tag);
+        std::fs::write(format!("target/tmp/{tag}.bp"), &bp).unwrap();
+        std::fs::write(
+            format!("target/tmp/{tag}.manifest.json"),
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+        println!(
+            "wrote target/tmp/{tag}.bp — {}x{}, {} entities, {} in / {} out",
+            l.width,
+            l.height,
+            l.entities.len(),
+            l.boundary_inputs.len(),
+            l.boundary_outputs.len(),
+        );
+    }
+}
+
+/// What is actually blocking a fold? Fold `chain-mil5ore` at its midpoint
+/// and group every validation issue by category, rather than sampling the
+/// first few as the fold search does.
+#[test]
+#[ignore = "exploration probe — fold error breakdown"]
+fn probe_fold_error_breakdown_mil5() {
+    use spaghettio_core::bus::compaction::{compact_validated_geometry, fold_snake};
+    use spaghettio_core::validate::{self, LayoutStyle, Severity};
+    use std::collections::BTreeMap;
+
+    let fixture = SimFixture::find("chain-mil5ore");
+    let inputs: FxHashSet<String> = fixture.inputs.iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        fixture.target,
+        fixture.rate,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap();
+    let compact = compact_validated_geometry(&fixture.compose_layout(), &sr);
     println!(
-        "compact baseline: {}x{} = {} tiles, {} entities",
+        "compact baseline: {}x{}, {} entities",
         compact.width,
         compact.height,
-        compact.width * compact.height,
-        compact.entities.len(),
+        compact.entities.len()
     );
-    // Diag: show South-facing belts near x=274
-    for e in compact.entities.iter() {
-        if e.x == 274 && e.direction == spaghettio_core::models::EntityDirection::South {
-            println!("  DIAG: South belt at (274,{}) name={}", e.y, e.name);
-        }
-    }
-    // Show max y
-    let max_y = compact.entities.iter().map(|e| e.y).max().unwrap_or(0);
-    println!("  DIAG: max_y={max_y} height={}", compact.height);
-    // Check what's at (274, 32) in the original — should be nothing
-    let at_274_32: Vec<_> = compact
-        .entities
-        .iter()
-        .filter(|e| e.x == 274 && e.y == 32)
-        .collect();
-    println!("  DIAG: entities at (274,32): {}", at_274_32.len());
-    // Validate the compact baseline
-    let base_issues = validate::validate(&compact, Some(&sr), LayoutStyle::Bus).unwrap();
-    let base_errors = base_issues
-        .iter()
-        .filter(|i| i.severity == Severity::Error)
-        .count();
-    println!("  DIAG: compact baseline errors={base_errors}");
 
-    // DIAG: check what's at (158,8) in original compact
-    for e in compact.entities.iter() {
-        if e.x == 158 && e.y == 8 {
-            println!(
-                "  DIAG: orig(158,8): name={} dir={:?} io={:?}",
-                e.name, e.direction, e.io_type
-            );
-        }
+    // Control: whatever the compacted source already warns about is not
+    // something folding introduced.
+    let base = validate::validate(&compact, Some(&sr), LayoutStyle::Bus).unwrap();
+    let mut base_cat: BTreeMap<String, usize> = BTreeMap::new();
+    for i in &base {
+        *base_cat.entry(i.category.clone()).or_default() += 1;
     }
+    println!("  unfolded control: {} issues {:?}", base.len(), base_cat);
 
-    // DIAG: check UG belts at x=139 (fold boundary for f=140)
-    for e in compact.entities.iter() {
-        if e.x == 139 && e.y == 15 && spaghettio_core::common::is_ug_belt(&e.name) {
+    println!(
+        "legal fold columns: {} of {}",
+        spaghettio_core::bus::compaction::legal_fold_columns(&compact).len(),
+        compact.width - 1
+    );
+
+    // The validated search: only folds that match the control's issue
+    // profile are admitted.
+    match spaghettio_core::bus::compaction::search_snake_fold(&compact, &sr, 5) {
+        Some(found) => {
+            let l = &found.layout;
             println!(
-                "  DIAG: UG at (139,15): name={} dir={:?} io={:?}",
-                e.name, e.direction, e.io_type
+                "\nSEARCH WINNER: folds={:?} -> {}x{} (aspect {:.2}), {} entities                  [source {}x{} aspect {:.2}, {} entities]",
+                found.folds,
+                l.width,
+                l.height,
+                l.width.max(l.height) as f64 / l.width.min(l.height) as f64,
+                l.entities.len(),
+                compact.width,
+                compact.height,
+                compact.width as f64 / compact.height as f64,
+                compact.entities.len(),
             );
-        }
-    }
-    // Check what's at x=140..143, y=15 (search range for express)
-    for x in 140..=148 {
-        for e in compact.entities.iter() {
-            if e.x == x && e.y == 15 && spaghettio_core::common::is_ug_belt(&e.name) {
-                println!(
-                    "  DIAG: UG at ({x},15): name={} dir={:?} io={:?}",
-                    e.name, e.direction, e.io_type
-                );
+            let mut why: BTreeMap<String, usize> = BTreeMap::new();
+            for (_, reason) in &found.refusals {
+                *why.entry(format!("{reason:?}").split(' ').next().unwrap().to_string())
+                    .or_default() += 1;
             }
+            println!("  refusals during search: {why:?}");
         }
+        None => println!("\nSEARCH: no fold preserved the control issue profile"),
     }
 
-    let w = compact.width;
-    let mut best: Option<(i32, i32, usize, Vec<i32>)> = None;
-
-    // First: exhaustive 1-fold search to find all valid fold positions.
-    println!("\n--- Exhaustive 1-fold search ---");
-    for f in 1..w {
-        let folds = vec![f];
-        let Some(folded) = fold_snake(&compact, &folds) else {
-            continue;
+    let ladder: Vec<Vec<i32>> = (1..=5)
+        .filter_map(|k| spaghettio_core::bus::compaction::even_legal_folds(&compact, k, 30))
+        .collect();
+    for folds in ladder {
+        println!("\n=== folds={folds:?} ===");
+        let folded = match fold_snake(&compact, &folds) {
+            Ok(f) => f,
+            Err(reason) => {
+                println!("  fold_snake refused: {reason:?}");
+                continue;
+            }
         };
+        println!(
+            "  folded: {}x{}, {} entities",
+            folded.width,
+            folded.height,
+            folded.entities.len()
+        );
         let issues = match validate::validate(&folded, Some(&sr), LayoutStyle::Bus) {
             Ok(v) => v,
-            Err(_) => continue,
-        };
-        let errors = issues
-            .iter()
-            .filter(|i| i.severity == Severity::Error)
-            .count();
-        if errors == 0 {
-            let area = folded.width * folded.height;
-            let aspect = if folded.height > folded.width {
-                folded.height as f64 / folded.width as f64
-            } else {
-                folded.width as f64 / folded.height as f64
-            };
-            println!(
-                "  f={f}: {}x{} = {} tiles, {} entities, aspect={:.2}",
-                folded.width,
-                folded.height,
-                area,
-                folded.entities.len(),
-                aspect,
-            );
-            let best_aspect = best
-                .as_ref()
-                .map(|b| {
-                    if b.1 > b.0 {
-                        b.1 as f64 / b.0 as f64
+            Err(e) => {
+                // A hard refusal carries its findings in the message body.
+                let msg = format!("{e}");
+                let mut by_kind: BTreeMap<String, usize> = BTreeMap::new();
+                for line in msg.lines().skip(1) {
+                    let kind = if line.contains("has no receiver") {
+                        "dead-end belt"
+                    } else if line.contains("but feeds into") {
+                        "item mismatch on feed"
+                    } else if line.contains("overlap") {
+                        "entity overlap"
                     } else {
-                        b.0 as f64 / b.1 as f64
-                    }
-                })
-                .unwrap_or(f64::MAX);
-            if aspect < best_aspect {
-                best = Some((
-                    folded.width,
-                    folded.height,
-                    folded.entities.len(),
-                    folds.clone(),
-                ));
-            }
-        }
-    }
-
-    for n_folds in 2..=4u32 {
-        let ideal: Vec<i32> = (1..=n_folds)
-            .map(|i| w * i as i32 / (n_folds + 1) as i32)
-            .collect();
-        println!("\n--- {n_folds} folds: ideal positions {ideal:?} ---");
-
-        let max_tries = 1000u32;
-        let mut tried = 0u32;
-
-        // Try fold positions near the ideal, plus all valid columns.
-        let mut candidates: Vec<Vec<i32>> = Vec::new();
-        // Single-delta search around ideal.
-        for delta in -30..=30 {
-            let folds: Vec<i32> = ideal.iter().map(|&p| p + delta).collect();
-            let valid =
-                folds.iter().all(|&f| f > 0 && f < w) && folds.windows(2).all(|w| w[1] > w[0]);
-            if valid {
-                candidates.push(folds);
-            }
-        }
-
-        // Filter to pairs with reasonable segment widths (≥50 tiles each).
-        let reasonable: Vec<Vec<i32>> = candidates
-            .into_iter()
-            .filter(|folds| {
-                let mut bounds = vec![0];
-                bounds.extend(folds);
-                bounds.push(w);
-                bounds.windows(2).all(|b| b[1] - b[0] >= 30)
-            })
-            .collect();
-        println!(
-            "  {n_folds}-fold: {} reasonable candidates",
-            reasonable.len()
-        );
-        for folds in &reasonable {
-            tried += 1;
-            if tried > max_tries {
-                break;
-            }
-            let Some(folded) = fold_snake(&compact, folds) else {
-                if tried <= 10 {
-                    println!("  folds={folds:?}: fold_snake None (multi-tile entity cut?)");
+                        "other"
+                    };
+                    *by_kind.entry(kind.to_string()).or_default() += 1;
                 }
-                continue;
-            };
-            let issues = match validate::validate(&folded, Some(&sr), LayoutStyle::Bus) {
-                Ok(v) => v,
-                Err(e) => {
-                    if tried <= 10 {
-                        let msg = format!("{e}");
-                        let first = msg.lines().next().unwrap_or("");
-                        println!("  folds={folds:?}: validate Err: {first}");
-                        for line in msg.lines().skip(1).take(15) {
-                            println!("    {line}");
-                        }
-                    }
-                    if folds == &vec![158_i32, 341] {
-                        for e in folded.entities.iter().filter(|e| e.x == 158 && e.y == 8) {
+                println!("  REFUSED, {} findings:", msg.lines().count() - 1);
+                for (kind, n) in &by_kind {
+                    println!("    {n:>5}  {kind}");
+                }
+                for line in msg.lines().skip(1).take(4) {
+                    println!("    e.g. {}", line.trim());
+                }
+                // Dump the neighbourhood of the first reported coordinate so
+                // the cause is visible instead of inferred.
+                if let Some(coord) = msg
+                    .lines()
+                    .skip(1)
+                    .find_map(|l| l.split(" at (").nth(1))
+                    .and_then(|rest| rest.split(')').next())
+                {
+                    let nums: Vec<i32> = coord
+                        .split(',')
+                        .filter_map(|n| n.trim().parse().ok())
+                        .collect();
+                    if let [ex, ey] = nums[..] {
+                        println!("    --- around ({ex},{ey}) ---");
+                        let mut near: Vec<_> = folded
+                            .entities
+                            .iter()
+                            .filter(|e| (e.x - ex).abs() <= 3 && (e.y - ey).abs() <= 3)
+                            .collect();
+                        near.sort_by_key(|e| (e.y, e.x));
+                        for e in near {
                             println!(
-                                "    DIAG(158,8): name={} dir={:?} io={:?}",
-                                e.name, e.direction, e.io_type
+                                "      ({},{}) {} dir={:?} io={:?} carries={:?}",
+                                e.x, e.y, e.name, e.direction, e.io_type, e.carries
                             );
                         }
-                        for e in folded.entities.iter().filter(|e| e.x == 157 && e.y == 8) {
-                            println!("    DIAG(157,8): name={} dir={:?}", e.name, e.direction);
-                        }
                     }
-                    continue;
                 }
-            };
-            let errors = issues
-                .iter()
-                .filter(|i| i.severity == Severity::Error)
-                .count();
-            let area = folded.width * folded.height;
-            let aspect = if folded.height > folded.width {
-                folded.height as f64 / folded.width as f64
-            } else {
-                folded.width as f64 / folded.height as f64
-            };
-
-            if errors == 0 {
-                let tag = if aspect < 1.5 { " SQUARE" } else { "" };
-                println!(
-                    "  folds={folds:?}: {}x{} = {} tiles, {} entities, aspect={:.2}{tag}",
-                    folded.width,
-                    folded.height,
-                    area,
-                    folded.entities.len(),
-                    aspect,
-                );
-                let best_aspect = best
-                    .as_ref()
-                    .map(|b| {
-                        if b.1 > b.0 {
-                            b.1 as f64 / b.0 as f64
-                        } else {
-                            b.0 as f64 / b.1 as f64
-                        }
-                    })
-                    .unwrap_or(f64::MAX);
-                let best_area = best
-                    .as_ref()
-                    .map(|b| (b.0 * b.1) as i64)
-                    .unwrap_or(i64::MAX);
-                let better = best.is_none()
-                    || aspect < best_aspect
-                    || (aspect < 1.5 && (area as i64) < best_area);
-                if better {
-                    best = Some((
-                        folded.width,
-                        folded.height,
-                        folded.entities.len(),
-                        folds.clone(),
-                    ));
-                }
-            } else if tried <= 3 || folds == &vec![158_i32, 341] {
-                for i in issues.iter().take(3) {
-                    println!("    [{:?}] {}", i.severity, i.message);
-                }
-                if folds == &vec![158_i32, 341] {
-                    for e in folded.entities.iter().filter(|e| e.x == 158 && e.y == 8) {
-                        println!("    DIAG(158,8): name={} dir={:?}", e.name, e.direction);
+                continue;
+            }
+        };
+        let mut by_cat: BTreeMap<(String, String), usize> = BTreeMap::new();
+        for i in &issues {
+            *by_cat
+                .entry((format!("{:?}", i.severity), i.category.clone()))
+                .or_default() += 1;
+        }
+        println!("  {} issues:", issues.len());
+        for ((sev, cat), n) in &by_cat {
+            println!("    {n:>5}  [{sev}] {cat}");
+        }
+        if let Some(w) = issues
+            .iter()
+            .find(|i| i.category == "belt-flow-reachability")
+        {
+            if let Some(coord) = w.message.split(" at (").nth(1).and_then(|r| r.split(')').next()) {
+                let nums: Vec<i32> = coord
+                    .split(',')
+                    .filter_map(|n| n.trim().parse().ok())
+                    .collect();
+                if let [ex, ey] = nums[..] {
+                    println!("    --- feed side of ({ex},{ey}) ---");
+                    let mut near: Vec<_> = folded
+                        .entities
+                        .iter()
+                        .filter(|e| (e.x - ex).abs() <= 4 && (e.y - ey).abs() <= 4)
+                        .collect();
+                    near.sort_by_key(|e| (e.y, e.x));
+                    for e in near {
+                        println!(
+                            "      ({},{}) {} dir={:?} io={:?} carries={:?}",
+                            e.x, e.y, e.name, e.direction, e.io_type, e.carries
+                        );
                     }
                 }
             }
         }
-    }
-
-    if let Some((w, h, n, folds)) = best {
-        println!(
-            "\n=== BEST: folds={folds:?} -> {}x{} = {} tiles, {} entities ===",
-            w,
-            h,
-            w * h,
-            n,
-        );
-    } else {
-        println!("\n=== No valid fold found ===");
+        let mut shown: BTreeMap<String, usize> = BTreeMap::new();
+        for i in &issues {
+            let n = shown.entry(i.category.clone()).or_default();
+            if *n < 2 {
+                println!("    e.g. [{}] {}", i.category, i.message);
+            }
+            *n += 1;
+        }
     }
 }

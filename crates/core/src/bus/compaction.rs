@@ -3881,12 +3881,23 @@ mod tests {
 // RFC-057 Phase 2: snake-fold transform
 // ---------------------------------------------------------------------------
 
-/// Mirror an `EntityDirection` across the X axis (East ↔ West, N/S unchanged).
-fn mirror_x_direction(dir: EntityDirection) -> EntityDirection {
+/// Rotate an `EntityDirection` by 180° (East ↔ West, North ↔ South).
+///
+/// Alternate fold segments are rotated, not reflected. A reflection in X
+/// alone is chirality-flipping: it swaps a splitter's left/right input and
+/// output priorities and invalidates the Space Age fluid-box `mirror` flag,
+/// neither of which the transform compensates for. Composing the X mirror
+/// with a Y mirror gives a 180° rotation, which is a rigid motion — every
+/// entity keeps its handedness. It is also the transform the routing
+/// measurement prefers by a wide margin (RFC-057 decision log, 2026-07-29):
+/// reflecting in X alone leaves each segment's trunk `height + gap` from the
+/// next one's, where rotating brings them together.
+fn rotate_180_direction(dir: EntityDirection) -> EntityDirection {
     match dir {
         EntityDirection::East => EntityDirection::West,
         EntityDirection::West => EntityDirection::East,
-        _ => dir,
+        EntityDirection::North => EntityDirection::South,
+        EntityDirection::South => EntityDirection::North,
     }
 }
 
@@ -3970,16 +3981,17 @@ fn replace_straddling_ug_pairs(entities: &[PlacedEntity], folds: &[i32]) -> Vec<
             if let Some(&out_idx) = ug_at.get(&(look_x, entity.y)) {
                 let out = &entities[out_idx];
                 if to_surface.contains(&out_idx) && out.io_type.as_deref() == Some("output") {
-                    // Fill in surface belts between entrance and exit,
-                    // but only on the same side of the fold as the entrance.
+                    // Fill the WHOLE span, both sides of the fold. Filling
+                    // only the entrance side left the exit tile an orphan
+                    // with a gap before it — an unfed belt on one side and a
+                    // dead end on the other. The fold's junction pass is what
+                    // severs the run; it needs a continuous surface belt on
+                    // each side to attach to, which means every tile between
+                    // entrance and exit must exist first.
                     let surface = ug_to_surface_tier(&entity.name);
                     for fill_x in 1..step {
                         let fx = entity.x + dx * fill_x;
-                        // Don't fill past any fold boundary.
-                        let same_side = folds
-                            .iter()
-                            .all(|&f| (entity.x < f && fx < f) || (entity.x >= f && fx >= f));
-                        if same_side && !existing.contains(&(fx, entity.y)) {
+                        if !existing.contains(&(fx, entity.y)) {
                             result.push(PlacedEntity {
                                 name: surface.to_string(),
                                 x: fx,
@@ -3999,33 +4011,57 @@ fn replace_straddling_ug_pairs(entities: &[PlacedEntity], folds: &[i32]) -> Vec<
     result
 }
 
-/// Helper: find surface belts at a given folded X going a specific direction.
-fn belts_at_x_going(
-    entities: &[PlacedEntity],
-    x: i32,
-    dir: EntityDirection,
-) -> Vec<(i32, String, Option<String>)> {
-    entities
-        .iter()
-        .filter(|e| e.x == x && e.direction == dir && is_surface_belt(&e.name))
-        .map(|e| (e.y, e.name.clone(), e.carries.clone()))
-        .collect()
+/// One severed belt run that a fold junction has to reconnect.
+struct UturnRequest {
+    /// Tile the upstream belt deposits into — the connector's first tile.
+    start: (i32, i32),
+    from_dir: EntityDirection,
+    /// Tile that feeds the downstream belt — the connector's last tile.
+    end: (i32, i32),
+    to_dir: EntityDirection,
+    belt: String,
+    carries: Option<String>,
 }
 
-/// Place a vertical U-turn chain at column `jx` connecting a belt at
-/// `(edge_x, y_top)` going `from_dir` to a belt at `(edge_x, y_bot)` going
-/// `to_dir`.
+/// Place a vertical U-turn chain at column `jx` joining two severed belt ends.
+///
+/// `start` is the first tile the connector must occupy — the tile the
+/// upstream belt deposits into — and `end` is the last, the tile that feeds
+/// the downstream belt. The two are independent: under the 180° segment
+/// rotation the downstream end lands at a different column *and* a different
+/// row than the upstream end, so a single shared `edge_x`/row (as an earlier
+/// version assumed) is only correct when consecutive segments happen to be
+/// the same width. When they are not, the connector either stops short in
+/// empty space — a dead-end belt — or runs into the next segment's body and
+/// sideloads into a belt carrying a different item.
+///
+/// `occupied` tracks anchor tiles so the connector can skip tiles that are
+/// already taken without rescanning the entity list; a linear scan per tile
+/// made an exhaustive fold search quadratic and unusably slow.
 fn place_uturn(
     entities: &mut Vec<PlacedEntity>,
+    occupied: &mut FxHashSet<(i32, i32)>,
+    corners: &mut Vec<(i32, i32)>,
     jx: i32,
-    edge_x: i32,
-    y_top: i32,
-    y_bot: i32,
-    from_dir: EntityDirection,
-    to_dir: EntityDirection,
-    belt_name: &str,
-    carries: &Option<String>,
-) {
+    request: &UturnRequest,
+) -> Result<(), (i32, i32)> {
+    let UturnRequest {
+        start,
+        from_dir,
+        end,
+        to_dir,
+        belt: belt_name,
+        carries,
+    } = request;
+    let (from_dir, to_dir) = (*from_dir, *to_dir);
+    let belt_name = belt_name.as_str();
+    let (start_x, y_top) = *start;
+    let (end_x, y_bot) = *end;
+
+    // Build the whole connector first, commit only if every tile it needs is
+    // free. A partially stamped U-turn that discovers a conflict halfway is
+    // worse than no U-turn: it leaves a belt run ending in mid air.
+    let mut planned: Vec<PlacedEntity> = Vec::new();
     // belt_name is a surface belt name (e.g. "express-transport-belt").
     let surface_name = belt_name;
     let ug_name = match belt_name {
@@ -4036,17 +4072,13 @@ fn place_uturn(
     };
     let max_reach = ug_max_reach(surface_name) as i32;
 
-    // Horizontal connector belts from edge_x to jx at y_top.
-    // The belt at (edge_x, y_top) going from_dir deposits at edge_x ± 1.
-    // We need belts from there to jx to carry items to the U-turn.
-    let (step_x, end_x) = if jx > edge_x {
-        (1, jx) // fill from edge_x+1 to jx-1 going East
-    } else {
-        (-1, jx) // fill from edge_x-1 to jx+1 going West
-    };
-    for x in (edge_x + step_x)..end_x {
-        if !entities.iter().any(|e| e.x == x && e.y == y_top) {
-            entities.push(PlacedEntity {
+    // Top leg: from the tile the upstream belt deposits into, out to the
+    // junction column, travelling in the upstream belt's direction.
+    let top_step = if jx >= start_x { 1 } else { -1 };
+    let mut x = start_x;
+    while x != jx {
+        {
+            planned.push(PlacedEntity {
                 name: surface_name.to_string(),
                 x,
                 y: y_top,
@@ -4055,86 +4087,98 @@ fn place_uturn(
                 ..Default::default()
             });
         }
+        x += top_step;
     }
 
-    // Belt at (jx, y_top) going South — receives from the horizontal belt.
-    entities.push(PlacedEntity {
+    // The vertical run may go either way: a belt crossing the fold westward
+    // travels from the LOWER segment back up to the upper one.
+    let (vdir, vstep) = if y_bot >= y_top {
+        (EntityDirection::South, 1)
+    } else {
+        (EntityDirection::North, -1)
+    };
+
+    // Corner at the top of the run — receives from the horizontal leg.
+    planned.push(PlacedEntity {
         name: surface_name.to_string(),
         x: jx,
         y: y_top,
-        direction: EntityDirection::South,
+        direction: vdir,
         carries: carries.clone(),
         ..Default::default()
     });
 
-    // Vertical chain from y_top+1 to y_bot-1.
-    let mut cy = y_top + 1;
-    while cy < y_bot {
-        let remaining = y_bot - cy;
-        if remaining >= 2 && remaining - 1 <= max_reach {
-            entities.push(PlacedEntity {
+    // Vertical chain between the two corners, undergrounding where it can.
+    let mut cy = y_top + vstep;
+    while cy != y_bot {
+        let remaining = (y_bot - cy).abs();
+        // `remaining == 2` would put the entrance and exit on adjacent tiles:
+        // nothing travels underground, and the validator reads it as two
+        // unpaired halves plus a one-tile belt loop. Needs a tile between.
+        if remaining >= 3 && remaining - 1 <= max_reach {
+            planned.push(PlacedEntity {
                 name: ug_name.to_string(),
                 x: jx,
                 y: cy,
-                direction: EntityDirection::South,
+                direction: vdir,
                 io_type: Some("input".into()),
                 carries: carries.clone(),
                 ..Default::default()
             });
-            entities.push(PlacedEntity {
+            planned.push(PlacedEntity {
                 name: ug_name.to_string(),
                 x: jx,
-                y: cy + remaining - 1,
-                direction: EntityDirection::South,
+                y: cy + vstep * (remaining - 1),
+                direction: vdir,
                 io_type: Some("output".into()),
                 carries: carries.clone(),
                 ..Default::default()
             });
-            cy += remaining;
+            cy += vstep * remaining;
         } else if remaining > max_reach + 1 {
-            entities.push(PlacedEntity {
+            planned.push(PlacedEntity {
                 name: ug_name.to_string(),
                 x: jx,
                 y: cy,
-                direction: EntityDirection::South,
+                direction: vdir,
                 io_type: Some("input".into()),
                 carries: carries.clone(),
                 ..Default::default()
             });
-            entities.push(PlacedEntity {
+            planned.push(PlacedEntity {
                 name: ug_name.to_string(),
                 x: jx,
-                y: cy + max_reach,
-                direction: EntityDirection::South,
+                y: cy + vstep * max_reach,
+                direction: vdir,
                 io_type: Some("output".into()),
                 carries: carries.clone(),
                 ..Default::default()
             });
-            cy += max_reach + 1;
-            entities.push(PlacedEntity {
+            cy += vstep * (max_reach + 1);
+            planned.push(PlacedEntity {
                 name: surface_name.to_string(),
                 x: jx,
                 y: cy,
-                direction: EntityDirection::South,
+                direction: vdir,
                 carries: carries.clone(),
                 ..Default::default()
             });
-            cy += 1;
+            cy += vstep;
         } else {
-            entities.push(PlacedEntity {
+            planned.push(PlacedEntity {
                 name: surface_name.to_string(),
                 x: jx,
                 y: cy,
-                direction: EntityDirection::South,
+                direction: vdir,
                 carries: carries.clone(),
                 ..Default::default()
             });
-            cy += 1;
+            cy += vstep;
         }
     }
 
     // Belt at (jx, y_bot) going to_dir — receives from South chain.
-    entities.push(PlacedEntity {
+    planned.push(PlacedEntity {
         name: surface_name.to_string(),
         x: jx,
         y: y_bot,
@@ -4143,28 +4187,23 @@ fn place_uturn(
         ..Default::default()
     });
 
-    // Horizontal connector belts from jx to edge_x at y_bot.
-    // The U-turn belt at (jx, y_bot) going to_dir deposits at jx ± 1.
-    // We need belts from there to edge_x to carry items back to the segment.
-    if edge_x > jx {
-        // edge_x is to the right: fill from jx+1 to edge_x-1 going to_dir.
-        for x in (jx + 1)..edge_x {
-            if !entities.iter().any(|e| e.x == x && e.y == y_bot) {
-                entities.push(PlacedEntity {
-                    name: surface_name.to_string(),
-                    x,
-                    y: y_bot,
-                    direction: to_dir,
-                    carries: carries.clone(),
-                    ..Default::default()
-                });
-            }
-        }
-    } else {
-        // edge_x is to the left: fill from jx-1 down to edge_x+1 going to_dir.
-        for x in (edge_x + 1)..jx {
-            if !entities.iter().any(|e| e.x == x && e.y == y_bot) {
-                entities.push(PlacedEntity {
+    // Bottom leg: from the junction column back to the tile that feeds the
+    // downstream belt, inclusive, travelling in the downstream direction.
+    //
+    // Expressed as a bounded range on purpose. A step-and-test loop here had
+    // no terminating case when `end_x == jx` — the corner already feeds the
+    // downstream belt, so there is no leg — and ran away allocating until the
+    // OOM killer took the process (and, being a global OOM, whatever else was
+    // running alongside it).
+    if end_x != jx {
+        let (lo, hi) = if end_x > jx {
+            (jx + 1, end_x)
+        } else {
+            (end_x, jx - 1)
+        };
+        for x in lo..=hi {
+            {
+                planned.push(PlacedEntity {
                     name: surface_name.to_string(),
                     x,
                     y: y_bot,
@@ -4175,6 +4214,246 @@ fn place_uturn(
             }
         }
     }
+
+    // Commit only if the connector is entirely clear. Reserving every tile —
+    // corners and vertical run included, not just the horizontal legs —
+    // is what makes a later chain's leg unable to stamp over this run.
+    if let Some(clash) = planned
+        .iter()
+        .find(|e| occupied.contains(&(e.x, e.y)))
+        .map(|e| (e.x, e.y))
+    {
+        return Err(clash);
+    }
+    for e in &planned {
+        occupied.insert((e.x, e.y));
+    }
+    corners.push((jx, y_top));
+    corners.push((jx, y_bot));
+    entities.extend(planned);
+    Ok(())
+}
+
+/// A fold that validated no worse than the layout it came from.
+pub struct FoldOutcome {
+    pub folds: Vec<i32>,
+    pub layout: LayoutResult,
+    /// Refusal reasons encountered while searching, for diagnosis.
+    pub refusals: Vec<(Vec<i32>, FoldRefusal)>,
+}
+
+/// Search for the squarest snake fold that does not break the factory.
+///
+/// Geometric legality is necessary but nowhere near sufficient: a fold column
+/// can be perfectly cuttable and still sever a belt run whose reconnection
+/// the junction pass does not see, and the symptom then shows up as a starved
+/// machine somewhere else entirely. Rather than try to make every column
+/// work, this admits a candidate only when it validates no worse than the
+/// source — same issue categories, same counts. Anything that introduces a
+/// new warning is rejected, whatever its geometry.
+///
+/// The comparison is against the source's own issue profile, not against
+/// zero, because the source is itself allowed to carry known warnings.
+pub fn search_snake_fold(
+    layout: &LayoutResult,
+    solver: &SolverResult,
+    max_folds: usize,
+) -> Option<FoldOutcome> {
+    use crate::validate::{self, LayoutStyle};
+
+    let profile = |l: &LayoutResult| -> Option<BTreeMap<String, usize>> {
+        let issues = validate::validate(l, Some(solver), LayoutStyle::Bus).ok()?;
+        let mut by_cat: BTreeMap<String, usize> = BTreeMap::new();
+        for i in &issues {
+            *by_cat.entry(i.category.clone()).or_default() += 1;
+        }
+        Some(by_cat)
+    };
+    let baseline = profile(layout)?;
+
+    let legal = legal_fold_columns(layout);
+    if legal.is_empty() {
+        return None;
+    }
+    let snap = |target: i32| -> Option<i32> {
+        legal.iter().copied().min_by_key(|&f| (f - target).abs())
+    };
+
+    let mut best: Option<(i64, Vec<i32>, LayoutResult)> = None;
+    let mut refusals = Vec::new();
+
+    for k in 1..=max_folds {
+        // Slide the whole comb of fold lines, snapping each tooth to the
+        // nearest legal column. Cheap, and it explores the seams that matter
+        // without a combinatorial blow-up over independent columns.
+        for delta in -24..=24 {
+            let mut folds: Vec<i32> = Vec::with_capacity(k);
+            for i in 1..=k {
+                let target = layout.width * i as i32 / (k + 1) as i32 + delta;
+                let Some(f) = snap(target) else { continue };
+                folds.push(f);
+            }
+            folds.dedup();
+            if folds.len() != k {
+                continue;
+            }
+            let mut bounds = vec![0];
+            bounds.extend_from_slice(&folds);
+            bounds.push(layout.width);
+            if bounds.windows(2).any(|b| b[1] - b[0] < 24) {
+                continue;
+            }
+
+            let folded = match fold_snake(layout, &folds) {
+                Ok(f) => f,
+                Err(reason) => {
+                    refusals.push((folds.clone(), reason));
+                    continue;
+                }
+            };
+            let Some(got) = profile(&folded) else {
+                continue;
+            };
+            // No new category, and no category worse than the source.
+            if got
+                .iter()
+                .any(|(cat, n)| baseline.get(cat).copied().unwrap_or(0) < *n)
+            {
+                continue;
+            }
+
+            // Prefer square, then small. Aspect in tenths keeps the ordering
+            // integral and therefore deterministic.
+            let (w, h) = (folded.width.max(1) as i64, folded.height.max(1) as i64);
+            let aspect10 = (w.max(h) * 10) / w.min(h);
+            let score = aspect10 * 1_000_000 + w * h;
+            if best.as_ref().is_none_or(|(bs, _, _)| score < *bs) {
+                best = Some((score, folds, folded));
+            }
+        }
+    }
+
+    best.map(|(_, folds, layout)| FoldOutcome {
+        folds,
+        layout,
+        refusals,
+    })
+}
+
+/// Columns a fold may legally cut, i.e. those that pass between entities
+/// rather than through one.
+///
+/// Multi-fold candidates picked at arithmetic fractions of the width are
+/// almost always rejected: on a dense layout most columns land inside some
+/// machine's footprint. Choosing fold lines from the entity-free seams
+/// instead turns "k evenly spaced folds" from a near-certain refusal into a
+/// short search.
+/// A fold may only cut things the junction pass can put back — that is,
+/// surface belt runs. Everything else it severs stays severed, and the
+/// symptom is not a geometry error but a starved machine several tiles away
+/// ("items can't reach input", "delivers 0.0/s").
+///
+/// So a column is blocked when it would split:
+/// - a multi-tile entity's footprint;
+/// - an inserter's pickup→drop span, which carries items across the column
+///   with no belt to reconnect;
+/// - a splitter's input or output adjacency — a splitter is not a surface
+///   belt, so a run entering or leaving one is invisible to the crossing
+///   detector;
+/// - a pipe-to-pipe adjacency, since fluid networks are connected by contact
+///   and a cut silently isolates a segment.
+pub fn legal_fold_columns(layout: &LayoutResult) -> Vec<i32> {
+    let mut blocked = vec![false; (layout.width.max(0) + 2) as usize];
+    let mut block_span = |lo: i32, hi: i32| {
+        // A column f splits [lo, hi] when lo < f <= hi.
+        for f in (lo + 1)..=hi {
+            if f > 0 && f < layout.width {
+                blocked[f as usize] = true;
+            }
+        }
+    };
+
+    let is_pipe = |name: &str| name.starts_with("pipe");
+    let pipe_at: FxHashSet<(i32, i32)> = layout
+        .entities
+        .iter()
+        .filter(|e| is_pipe(&e.name))
+        .map(|e| (e.x, e.y))
+        .collect();
+
+    for entity in &layout.entities {
+        let (w, _) = entity_dims(&entity.name, entity.direction);
+        block_span(entity.x, entity.x + w - 1);
+
+        if is_inserter(&entity.name) {
+            let (dx, _) = dir_to_vec(entity.direction);
+            if dx != 0 {
+                let reach = inserter_reach(&entity.name);
+                let a = entity.x - dx * reach;
+                let b = entity.x + dx * reach;
+                block_span(a.min(b), a.max(b));
+            }
+        }
+
+        if crate::common::is_splitter(&entity.name) {
+            // Whichever way it faces, its feed and its output sit on the
+            // columns either side of its own footprint.
+            block_span(entity.x - 1, entity.x + w);
+        }
+
+        if is_pipe(&entity.name) && pipe_at.contains(&(entity.x + 1, entity.y)) {
+            block_span(entity.x, entity.x + 1);
+        }
+    }
+
+    (1..layout.width)
+        .filter(|&f| !blocked[f as usize])
+        .collect()
+}
+
+/// Pick `k` legal fold columns as near as possible to evenly spaced targets,
+/// keeping them strictly increasing and at least `min_seg` apart.
+pub fn even_legal_folds(layout: &LayoutResult, k: usize, min_seg: i32) -> Option<Vec<i32>> {
+    let legal = legal_fold_columns(layout);
+    if legal.is_empty() {
+        return None;
+    }
+    let mut chosen: Vec<i32> = Vec::with_capacity(k);
+    for i in 1..=k {
+        let target = layout.width * i as i32 / (k + 1) as i32;
+        let lower = chosen.last().map(|f| f + min_seg).unwrap_or(min_seg);
+        let pick = legal
+            .iter()
+            .copied()
+            .filter(|&f| f >= lower && layout.width - f >= min_seg)
+            .min_by_key(|&f| (f - target).abs())?;
+        chosen.push(pick);
+    }
+    Some(chosen)
+}
+
+/// Why a fold could not be produced. Every refusal is a distinct physical
+/// cause, and lumping them into a bare `None` made the common ones invisible:
+/// a fold rejected for cutting a machine and one rejected for an unroutable
+/// junction need completely different responses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FoldRefusal {
+    /// Fold columns were empty, out of order, or outside the layout.
+    BadFoldColumns,
+    /// A fold column passes through a multi-tile entity's interior.
+    CutsEntity,
+    /// A severed belt run's reconnection collided with geometry already
+    /// placed, so no U-turn could be routed for it. Carries the first
+    /// conflicting tile — without it the cause is indistinguishable from any
+    /// other refusal and the fix is guesswork.
+    JunctionBlocked { at: (i32, i32) },
+    /// Two exits carrying different items would have to share one gap lane.
+    ExitLaneConflict,
+    /// A U-turn corner gained a second feeder, demoting a both-lane turn to a
+    /// single-lane sideload (`docs/factorio-mechanics.md` B8 vs B11).
+    CornerNotATurn,
+    /// Reconnection produced implausibly many entities — a runaway backstop.
+    EntityExplosion,
 }
 
 /// Snake-fold a layout at the given fold columns.
@@ -4186,25 +4465,28 @@ fn place_uturn(
 ///
 /// Returns `None` if any fold column cuts through a multi-tile entity
 /// interior or the folds are out of order.
-pub fn fold_snake(layout: &LayoutResult, folds: &[i32]) -> Option<LayoutResult> {
+pub fn fold_snake(
+    layout: &LayoutResult,
+    folds: &[i32],
+) -> Result<LayoutResult, FoldRefusal> {
     if folds.is_empty() {
-        return Some(layout.clone());
+        return Ok(layout.clone());
     }
     for w in folds.windows(2) {
         if w[0] >= w[1] {
-            return None;
+            return Err(FoldRefusal::BadFoldColumns);
         }
     }
     for &f in folds {
         if f <= 0 || f >= layout.width {
-            return None;
+            return Err(FoldRefusal::BadFoldColumns);
         }
     }
     for &f in folds {
         for entity in &layout.entities {
             let (w, _) = entity_dims(&entity.name, entity.direction);
             if entity.x < f && entity.x + w > f {
-                return None;
+                return Err(FoldRefusal::CutsEntity);
             }
         }
     }
@@ -4228,20 +4510,33 @@ pub fn fold_snake(layout: &LayoutResult, folds: &[i32]) -> Option<LayoutResult> 
         .max()
         .unwrap_or(0);
 
-    // 3. Transform every entity.
+    // 3. Transform every entity. Odd segments are rotated 180°, not mirrored
+    // in X — see `rotate_180_direction`. Because a 180° rotation does not
+    // change an entity's bounding box, the same `(w, h)` serves both axes.
+    let seg_of = |x: i32| (0..n_segs).find(|&k| x >= bounds[k] && x < bounds[k + 1]);
+    let transform = |e: &PlacedEntity| -> Option<(i32, i32, EntityDirection)> {
+        let seg = seg_of(e.x)?;
+        let (w, hh) = entity_dims(&e.name, e.direction);
+        if seg % 2 == 0 {
+            Some((
+                e.x - bounds[seg],
+                e.y + (seg as i32) * (h + gap),
+                e.direction,
+            ))
+        } else {
+            Some((
+                bounds[seg + 1] - w - e.x,
+                (h - hh - e.y) + (seg as i32) * (h + gap),
+                rotate_180_direction(e.direction),
+            ))
+        }
+    };
+
     let mut folded: Vec<PlacedEntity> = Vec::with_capacity(entities.len());
     for entity in &entities {
-        let seg = (0..n_segs).find(|&k| entity.x >= bounds[k] && entity.x < bounds[k + 1]);
-        let Some(seg) = seg else { continue };
-        let (new_x, new_dir) = if seg % 2 == 0 {
-            (entity.x - bounds[seg], entity.direction)
-        } else {
-            let (w, _) = entity_dims(&entity.name, entity.direction);
-            let nx = bounds[seg + 1] - w - entity.x;
-            (nx, mirror_x_direction(entity.direction))
+        let Some((new_x, new_y, new_dir)) = transform(entity) else {
+            continue;
         };
-        let new_y = entity.y + (seg as i32) * (h + gap);
-
         let mut e = entity.clone();
         e.x = new_x;
         e.y = new_y;
@@ -4249,91 +4544,313 @@ pub fn fold_snake(layout: &LayoutResult, folds: &[i32]) -> Option<LayoutResult> 
         folded.push(e);
     }
 
-    // 4. Place U-turns at each fold junction.
-    //
-    // Junctions are placed OUTSIDE the segment range: East→West folds use
-    // x = max_seg_w + 2*i (right side), West→East folds use x = -1 - 2*i
-    // (left side), where i is the chain index (staggered to avoid overlap).
-    for k in 0..n_segs - 1 {
-        let seg_w_k = bounds[k + 1] - bounds[k];
-        let y_top_base = (k as i32) * (h + gap);
-        let y_bot_base = ((k + 1) as i32) * (h + gap);
-
-        if k % 2 == 0 {
-            let edge_x = seg_w_k - 1;
-            let cut_belts = belts_at_x_going(&folded, edge_x, EntityDirection::East);
-            for (i, (y, name, carries)) in cut_belts.iter().enumerate() {
-                if *y < y_top_base || *y >= y_top_base + h {
-                    continue;
-                }
-                let jx = max_seg_w + (i as i32) * 2;
-                let y_bot = y - y_top_base + y_bot_base;
-                place_uturn(
-                    &mut folded,
-                    jx,
-                    edge_x,
-                    *y,
-                    y_bot,
-                    EntityDirection::East,
-                    EntityDirection::West,
-                    name,
-                    carries,
-                );
+    // Anchor-tile occupancy, kept in step with `folded` so the reconnection
+    // and exit passes can test a tile in O(1).
+    let mut occupied: FxHashSet<(i32, i32)> = FxHashSet::default();
+    for e in &folded {
+        let (w, hh) = entity_dims(&e.name, e.direction);
+        for dx in 0..w.max(1) {
+            for dy in 0..hh.max(1) {
+                occupied.insert((e.x + dx, e.y + dy));
             }
-        } else {
-            let edge_x = 0;
-            let cut_belts = belts_at_x_going(&folded, edge_x, EntityDirection::West);
-            for (i, (y, name, carries)) in cut_belts.iter().enumerate() {
-                if *y < y_top_base || *y >= y_top_base + h {
-                    continue;
+        }
+    }
+    // Every U-turn corner tile, checked for lane integrity once all junction
+    // and exit geometry is down.
+    let mut corners: Vec<(i32, i32)> = Vec::new();
+
+    // 4. Reconnect every belt run the folds severed.
+    //
+    // Crossings are identified in the ORIGINAL coordinate frame — a surface
+    // belt at `f-1` flowing East into `f`, or at `f` flowing West into `f-1`
+    // — and only then mapped through the transform. Scanning the *folded*
+    // frame for belts at a segment edge (as an earlier version did) cannot
+    // tell which severed end pairs with which, and silently assumed the two
+    // ends kept the same row and column.
+    //
+    // Junction columns sit outside the segment range, staggered so chains do
+    // not collide: right of the widest segment for even folds, left of zero
+    // for odd ones.
+    // Every belt entity, not just surface ones. A run crossing a fold may
+    // have an underground half on either side — an exit feeding the fold
+    // column, or an entrance receiving from it — and those are exactly as
+    // severed as a surface belt. Matching only surface belts left them
+    // unreconnected, which shows up not as a geometry error but as a starved
+    // machine downstream ("items can't reach input").
+    //
+    // Straddling pairs are already surface belts by this point, so a
+    // remaining underground half never spans the column itself.
+    let belt_at: BTreeMap<(i32, i32), &PlacedEntity> = entities
+        .iter()
+        .filter(|e| is_belt_entity(&e.name))
+        .map(|e| ((e.x, e.y), e))
+        .collect();
+    // An underground entrance swallows items; it cannot be a run's upstream
+    // side. It is a perfectly good downstream side, since a straight feed
+    // into an entrance carries both lanes.
+    let feeds_forward =
+        |e: &PlacedEntity| !(is_ug_belt(&e.name) && e.io_type.as_deref() == Some("input"));
+
+    for k in 0..n_segs - 1 {
+        let f = bounds[k + 1];
+        let mut crossings: Vec<UturnRequest> = Vec::new();
+        for y in 0..h {
+            // East crossing: (f-1) feeds (f). West crossing: (f) feeds (f-1).
+            let (up, down) = match (belt_at.get(&(f - 1, y)), belt_at.get(&(f, y))) {
+                (Some(left), Some(right))
+                    if left.direction == EntityDirection::East && feeds_forward(left) =>
+                {
+                    (*left, *right)
                 }
-                let jx = -1 - (i as i32) * 2;
-                let y_bot = y - y_top_base + y_bot_base;
-                place_uturn(
-                    &mut folded,
-                    jx,
-                    edge_x,
-                    *y,
-                    y_bot,
-                    EntityDirection::West,
-                    EntityDirection::East,
-                    name,
-                    carries,
-                );
+                (Some(left), Some(right))
+                    if right.direction == EntityDirection::West && feeds_forward(right) =>
+                {
+                    (*right, *left)
+                }
+                _ => continue,
+            };
+
+            let (Some((ux, uy, udir)), Some((dx_, dy_, ddir))) = (transform(up), transform(down))
+            else {
+                continue;
+            };
+            let (uvx, uvy) = dir_to_vec(udir);
+            let (dvx, dvy) = dir_to_vec(ddir);
+            // First tile of the connector is what the upstream belt feeds;
+            // last tile is what feeds the downstream belt.
+            let belt = if is_ug_belt(&up.name) {
+                ug_to_surface_tier(&up.name).to_string()
+            } else {
+                up.name.clone()
+            };
+            crossings.push(UturnRequest {
+                start: (ux + uvx, uy + uvy),
+                from_dir: udir,
+                end: (dx_ - dvx, dy_ - dvy),
+                to_dir: ddir,
+                belt,
+                carries: up.carries.clone(),
+            });
+        }
+
+        // Junction-column assignment order is what keeps chains from crossing
+        // each other, and it is not free choice.
+        //
+        // Chain `j`'s horizontal legs sweep every column between the segment
+        // edge and `jx_j`, so a leg runs over chain `i`'s vertical column
+        // exactly when `jx_j` is further out than `jx_i` and one of `j`'s two
+        // rows falls inside the row span `i`'s vertical run occupies. Ordering
+        // the chains so their spans NEST — narrowest nearest the segment,
+        // each subsequent span enclosing all the ones before it — makes that
+        // unsatisfiable, because an enclosing span's endpoints are by
+        // definition outside every span it contains.
+        //
+        // Sorting by landing row would do the same job if every connector ran
+        // downward, but west-flowing crossings run *upward* (their upstream
+        // end is in the lower segment), so row order mixes two orientations
+        // and the nesting silently breaks. Span width is orientation-free.
+        //
+        // Getting this wrong is not a validation error at the junction; it is
+        // a belt stamped on top of an underground run several tiles away.
+        crossings.sort_by_key(|c| {
+            let (lo, hi) = if c.start.1 <= c.end.1 {
+                (c.start.1, c.end.1)
+            } else {
+                (c.end.1, c.start.1)
+            };
+            (hi - lo, lo)
+        });
+
+        // Slot 0 sits one column clear of the segment: a connector's own
+        // start/end tiles land on the column immediately outside the segment
+        // edge, so a junction column there would collide with them.
+        let mut slot = 0i32;
+        for request in &crossings {
+            let mut clash = (0, 0);
+            let mut placed = false;
+            // Nesting should make the first slot fit. The retry covers spans
+            // that genuinely cannot nest (mixed-orientation crossings at the
+            // same junction) rather than refusing the whole fold for one.
+            for attempt in 0..32 {
+                let s = slot + attempt;
+                let jx = if k % 2 == 0 {
+                    max_seg_w + 1 + s * 2
+                } else {
+                    -2 - s * 2
+                };
+                match place_uturn(&mut folded, &mut occupied, &mut corners, jx, request) {
+                    Ok(()) => {
+                        slot = s + 1;
+                        placed = true;
+                        break;
+                    }
+                    Err(at) => clash = at,
+                }
+            }
+            if !placed {
+                return Err(FoldRefusal::JunctionBlocked { at: clash });
             }
         }
     }
 
-    // 5. Bridge gap for dead-end South belts at segment boundaries.
+    // Extent after all junction geometry is down — the exits below have to
+    // reach these edges to actually leave the finished bounding box.
+    let edge_min_x = folded.iter().map(|e| e.x).min().unwrap_or(0);
+    let edge_max_x = folded.iter().map(|e| e.x).max().unwrap_or(0);
+
+    // 5. Give the layout's original exits somewhere to go.
     //
-    // Belts at the bottom edge of a segment (y = seg_end - 1) going South
-    // deposited outside the layout in the original. After folding, they
-    // deposit into the gap. Place a belt going East at the gap row to
-    // redirect items along the gap (avoids item-mismatch with whatever
-    // is at the same x in the next segment).
+    // A belt on the source layout's bottom edge facing South deposited
+    // outside the bounding box — an exit. After folding it deposits into an
+    // inter-segment gap instead, and a gap row is interior, so the exit
+    // becomes a dead end. Rotation means each gap collects exits from both
+    // sides: the segment above contributes South-facing belts on its last
+    // row, and the rotated segment below contributes North-facing belts on
+    // its first row.
+    //
+    // Each exit is carried along its own gap row to the nearer vertical edge,
+    // where it once again deposits outside the box. The two sources get
+    // separate rows so they cannot collide. Two exits carrying *different*
+    // items that would share a row refuse the fold rather than silently
+    // merging into one belt — the failure this replaces.
     for k in 0..n_segs - 1 {
-        let seg_end_y = (k as i32) * (h + gap) + h; // first gap row
-                                                    // Find surface belts at y = seg_end_y - 1 going South.
-        let edge_belts: Vec<(i32, String, Option<String>)> = folded
+        let gap_top = (k as i32) * (h + gap) + h;
+        let gap_bot = gap_top + 1;
+
+        for (row, src_y, want_dir) in [
+            (gap_top, gap_top - 1, EntityDirection::South),
+            (gap_bot, gap_bot + 1, EntityDirection::North),
+        ] {
+            let exits: Vec<(i32, String, Option<String>)> = folded
+                .iter()
+                .filter(|e| {
+                    e.y == src_y && e.direction == want_dir && is_surface_belt(&e.name)
+                })
+                .map(|e| (e.x, e.name.clone(), e.carries.clone()))
+                .collect();
+
+            // item claimed per tile on this row, so a conflict is detectable.
+            let mut claimed: BTreeMap<i32, Option<String>> = BTreeMap::new();
+            let mut pending: Vec<PlacedEntity> = Vec::new();
+            for (x, name, carries) in &exits {
+                // Only true segment content can be an exit. A U-turn's
+                // vertical run passes through these same rows at a junction
+                // column outside the segment range; treating one as an exit
+                // used to start the run beyond its own stop value, which then
+                // never terminated.
+                if *x < 0 || *x >= max_seg_w {
+                    continue;
+                }
+                // Which side an exit leaves by is forced, not a preference.
+                // Only fold `k`'s own U-turns span gap `k` — junctions k-1 and
+                // k+1 cross the gaps either side of it — and fold `k` puts its
+                // junction columns on the right when `k` is even. So the
+                // opposite side is the one guaranteed clear of vertical runs
+                // in this row.
+                let to_left = k % 2 == 0;
+                let dir = if to_left {
+                    EntityDirection::West
+                } else {
+                    EntityDirection::East
+                };
+                // Run to the layout's eventual edge, not the segment's. The
+                // junction columns extend the bounding box past the segment
+                // range, so a run that stopped at the segment edge ended
+                // *inside* the finished factory and dead-ended there.
+                let (lo, hi) = if to_left {
+                    (edge_min_x, *x)
+                } else {
+                    (*x, edge_max_x)
+                };
+                for cx in lo..=hi {
+                    match claimed.get(&cx) {
+                        Some(existing) if existing != carries => {
+                            return Err(FoldRefusal::ExitLaneConflict)
+                        }
+                        _ => {}
+                    }
+                    claimed.insert(cx, carries.clone());
+                    if occupied.contains(&(cx, row)) {
+                        // Skipping the tile would leave the run with a hole
+                        // and the upstream half dead-ending into it.
+                        return Err(FoldRefusal::ExitLaneConflict);
+                    }
+                    {
+                        occupied.insert((cx, row));
+                        pending.push(PlacedEntity {
+                            name: name.clone(),
+                            x: cx,
+                            y: row,
+                            direction: dir,
+                            carries: carries.clone(),
+                            ..Default::default()
+                        });
+                    }
+                }
+            }
+            folded.extend(pending);
+        }
+    }
+
+    // 5a. Runaway backstop.
+    //
+    // A fold rearranges a fixed entity set and adds reconnection geometry; it
+    // has no business more than doubling the entity count. Two unbounded
+    // reconnection loops once allocated until the OOM killer fired, and
+    // because that OOM was global it took down unrelated processes with it.
+    // The loops are ranges now, but a cheap absolute ceiling means the next
+    // bug in here refuses a fold instead of taking out the machine.
+    if folded.len() > entities.len() * 2 + 1024 {
+        return Err(FoldRefusal::EntityExplosion);
+    }
+
+    // 5b. Lane integrity at every U-turn corner.
+    //
+    // A corner whose only input is perpendicular is a 90° TURN and carries
+    // both lanes (`docs/factorio-mechanics.md` B11). A corner that also has a
+    // straight input — or a second perpendicular one — is a SIDELOAD (B8) and
+    // fills one lane only, halving the run's throughput and merging whatever
+    // the second feeder carries.
+    //
+    // Nothing in the geometry guarantees the difference: one U-turn's
+    // horizontal leg can cross another's vertical run. Where that run is
+    // underground the leg passes over it harmlessly, but at a surface tile or
+    // a UG endpoint the leg becomes a second input and silently downgrades
+    // the turn. Refuse the fold rather than emit a layout whose belt
+    // behaviour differs from the source it claims to preserve.
+    {
+        let belt_at: BTreeMap<(i32, i32), &PlacedEntity> = folded
             .iter()
-            .filter(|e| {
-                e.y == seg_end_y - 1
-                    && e.direction == EntityDirection::South
-                    && is_surface_belt(&e.name)
-            })
-            .map(|e| (e.x, e.name.clone(), e.carries.clone()))
+            .filter(|e| is_belt_entity(&e.name))
+            .map(|e| ((e.x, e.y), e))
             .collect();
-        for (x, name, carries) in &edge_belts {
-            // Place a belt going East at (x, seg_end_y) to redirect.
-            if !folded.iter().any(|e| e.x == *x && e.y == seg_end_y) {
-                folded.push(PlacedEntity {
-                    name: name.clone(),
-                    x: *x,
-                    y: seg_end_y,
-                    direction: EntityDirection::East,
-                    carries: carries.clone(),
-                    ..Default::default()
-                });
+        for &(cx, cy) in &corners {
+            let corner = belt_at
+                .get(&(cx, cy))
+                .ok_or(FoldRefusal::CornerNotATurn)?;
+            let mut straight = 0usize;
+            let mut perpendicular = 0usize;
+            for (nx, ny) in [(cx - 1, cy), (cx + 1, cy), (cx, cy - 1), (cx, cy + 1)] {
+                let Some(n) = belt_at.get(&(nx, ny)) else {
+                    continue;
+                };
+                // A UG entrance swallows items; it never feeds a neighbour.
+                if is_ug_belt(&n.name) && n.io_type.as_deref() == Some("input") {
+                    continue;
+                }
+                let (dx, dy) = dir_to_vec(n.direction);
+                if (nx + dx, ny + dy) != (cx, cy) {
+                    continue;
+                }
+                if n.direction == corner.direction {
+                    straight += 1;
+                } else {
+                    perpendicular += 1;
+                }
+            }
+            // Exactly one perpendicular feeder and nothing else is a turn.
+            if straight > 0 || perpendicular != 1 {
+                return Err(FoldRefusal::CornerNotATurn);
             }
         }
     }
@@ -4364,14 +4881,41 @@ pub fn fold_snake(layout: &LayoutResult, folds: &[i32]) -> Option<LayoutResult> 
         &result.entities,
         result.wire_mode,
     ));
+    // Boundary records and surplus exits are coordinates into the layout and
+    // must go through the fold like everything else. Shifting only their X
+    // (as an earlier version did) left every one of them pointing at an
+    // unrelated tile the moment any segment rotated, which the boundary and
+    // input-rate-delivery checks then reported against the wrong geometry.
+    let fold_point = |x: i32, y: i32| -> (i32, i32) {
+        // Boundary tiles may sit one past the right edge; clamp into the last
+        // segment so an output terminal folds with the machinery feeding it.
+        let seg = seg_of(x).unwrap_or(n_segs - 1);
+        let (nx, ny) = if seg % 2 == 0 {
+            (x - bounds[seg], y + (seg as i32) * (h + gap))
+        } else {
+            (
+                bounds[seg + 1] - 1 - x,
+                (h - 1 - y) + (seg as i32) * (h + gap),
+            )
+        };
+        (nx + x_shift, ny)
+    };
+    let fold_dir = |x: i32, d: EntityDirection| -> EntityDirection {
+        match seg_of(x) {
+            Some(seg) if seg % 2 == 1 => rotate_180_direction(d),
+            _ => d,
+        }
+    };
     for b in &mut result.boundary_inputs {
-        b.x += x_shift;
+        b.direction = fold_dir(b.x, b.direction);
+        (b.x, b.y) = fold_point(b.x, b.y);
     }
     for b in &mut result.boundary_outputs {
-        b.x += x_shift;
+        b.direction = fold_dir(b.x, b.direction);
+        (b.x, b.y) = fold_point(b.x, b.y);
     }
-    for (_, x, _) in &mut result.surplus_exits {
-        *x += x_shift;
+    for (_, x, y) in &mut result.surplus_exits {
+        (*x, *y) = fold_point(*x, *y);
     }
-    Some(result)
+    Ok(result)
 }
