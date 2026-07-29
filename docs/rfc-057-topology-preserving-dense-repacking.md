@@ -835,3 +835,56 @@ make either experimental composer a production default.
   validate today. The gap-bridge step also chains unrelated bottom-edge belts
   into one shared line, and straddling underground pairs are refilled only on
   the entrance side.
+
+- **2026-07-29 — Single fold repaired and measured in Factorio; validation
+  found to give a false pass.** The prototype's defects above are fixed and
+  `chain-mil5ore` now folds from 552×32 (17.25:1) to 276×66 (4.18:1) with an
+  issue profile identical to the unfolded control. Factorio agrees: 5.00/s
+  military science averaged over a stable window, **146 of 146 machines
+  working — the control's exact census**.
+
+  The decisive finding is a **validator blind spot**. An earlier version of
+  that same fold validated at exact control parity and produced *nothing* in
+  Factorio: 0.00/s, 36 of 146 machines working, 110 with `full_output`, rates
+  decaying 1.80 → 2.05 → 1.22 → 0.10 → 0.00. `chain-mil5ore` emits science on
+  its bottom edge facing south; folding puts that edge against an
+  inter-segment gap, so the exit belt is rerouted along a gap lane to the
+  bounding box — but the `boundary_outputs` *record* stayed on the machine's
+  folded tile. Output was produced into a tile nothing drained, every producer
+  upstream backed up, and the line stalled. Validation checks geometry and
+  never asks whether a boundary record still describes where output arrives,
+  so it passed a factory that cannot run. **Any transform that relocates a
+  boundary must move its record, and geometry-only validation cannot be the
+  admission gate for one.**
+
+  The transform changes that mattered, in rough order of impact:
+
+  | Change | Why it was wrong before |
+  |---|---|
+  | 180° rotation, not X mirror | A reflection flips chirality: swaps splitter left/right priorities, invalidates fluid-box `mirror`. The rotation also composes with the U-turn's two right turns so lane handedness survives (B11). |
+  | Fold boundary records | Only X was shifted, so every record pointed at an unrelated tile once a segment moved. |
+  | Reconnect underground halves | Matching only surface belts left runs severed; the symptom was a starved machine elsewhere, not a junction error. Took a 3-fold from 91 issues to 3. |
+  | Nest junction spans | A leg crosses an earlier chain's vertical run only if further out AND its rows fall inside that span. Ordering by span width (not landing row — west crossings run upward) makes it unsatisfiable. |
+  | Exits to the real bbox edge | Runs stopped at the segment edge, which junction columns had since made interior. |
+
+  Refusals are now typed (`FoldRefusal`) rather than a bare `None`, which had
+  made the common causes indistinguishable and every fix guesswork. Corners
+  are checked to be single-feeder turns rather than sideloads (B8 vs B11);
+  fold columns may not sever inserter reach, splitter adjacency or pipe
+  contact; a continuity invariant refuses any fold where a belt that handed
+  off, or was fed, no longer is. `search_snake_fold` admits a candidate only
+  when it validates no worse than its source.
+
+  Two unbounded reconnection loops allocated ~20 GB each until the OOM killer
+  fired; because that OOM was global it killed unrelated processes, including
+  the editor session, four times. Bounded ranges plus an entity-count backstop
+  now; long-running probes are worth running under
+  `systemd-run --user --scope -p MemoryMax=8G`.
+
+  **Multi-fold remains unproven.** Three folds reach 152×132 (1.15:1) with two
+  residual `belt-flow-reachability` warnings, and two folds 211×100 with 45.
+  Given that a two-warning margin has already concealed a total failure once,
+  multi-fold is not claimed to work on validator evidence; it needs the same
+  Factorio adjudication the single fold just received. This does not change
+  the 2026-07-29 refusal of folding as a *density* lever — the ~20% routing
+  ceiling stands, and the single fold costs 277 entities (2820 → 3097).
