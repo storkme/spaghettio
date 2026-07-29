@@ -5130,6 +5130,17 @@ pub fn fold_snake(
             let (lo, hi) = if to_left { (edge_min_x, x) } else { (x, edge_max_x) };
             for cx in lo..=hi {
                 if !occupied.insert((cx, row)) {
+                    if std::env::var("SPAGHETTIO_FOLD_DEBUG").is_ok() {
+                        let owner = folded
+                            .iter()
+                            .find(|e| e.x == cx && e.y == row)
+                            .map(|e| format!("{} dir={:?} carries={:?}", e.name, e.direction, e.carries));
+                        eprintln!(
+                            "input lane clash: gap_top={gap_top} gap={gap} lane={lane_idx} \
+                             row={row} at ({cx},{row}) item={carries:?} span=[{lo},{hi}] \
+                             occupied by {owner:?}"
+                        );
+                    }
                     return Err(FoldRefusal::ExitLaneConflict { at: (cx, row) });
                 }
                 folded.push(PlacedEntity {
