@@ -3713,6 +3713,47 @@ fn probe_pole_connectivity_census() {
         ) else { continue };
         let base = fixture.compose_layout();
         let compact = compact_validated_geometry(&base, &sr);
+        // `disconnected_poles` counts "unreachable from pole[0]", which is a
+        // poor progress metric: merging two components that both exclude
+        // pole[0] leaves the count unchanged while ADDING the bridge, so real
+        // repair can read as regression. Component count is the honest one.
+        let components = |l: &spaghettio_core::models::LayoutResult| -> usize {
+            let poles: Vec<(f64, f64, f64)> = l
+                .entities
+                .iter()
+                .filter_map(|e| {
+                    spaghettio_core::power_wires::wire_reach(
+                        &e.name,
+                        e.quality.unwrap_or_default(),
+                    )
+                    .map(|r| {
+                        let (cx, cy) = spaghettio_core::power_wires::pole_center(&e.name, e.x, e.y);
+                        (cx, cy, r)
+                    })
+                })
+                .collect();
+            let n = poles.len();
+            let mut parent: Vec<usize> = (0..n).collect();
+            fn find(p: &mut [usize], mut x: usize) -> usize {
+                while p[x] != x { p[x] = p[p[x]]; x = p[x]; }
+                x
+            }
+            for i in 0..n {
+                for j in (i + 1)..n {
+                    let (ax, ay, ar) = poles[i];
+                    let (bx, by, br) = poles[j];
+                    let (dx, dy) = (ax - bx, ay - by);
+                    let reach = ar.min(br);
+                    if dx * dx + dy * dy <= reach * reach {
+                        let (ri, rj) = (find(&mut parent, i), find(&mut parent, j));
+                        if ri != rj { parent[ri] = rj; }
+                    }
+                }
+            }
+            let mut roots = std::collections::BTreeSet::new();
+            for i in 0..n { let r = find(&mut parent, i); roots.insert(r); }
+            roots.len()
+        };
         let count = |l: &spaghettio_core::models::LayoutResult| {
             let n = l.entities.iter()
                 .filter(|e| e.name.ends_with("electric-pole") || e.name == "substation")
@@ -3726,9 +3767,12 @@ fn probe_pole_connectivity_census() {
         let added = spaghettio_core::bus::layout::repair_pole_network(&mut repaired);
         let (rn, rd) = count(&repaired);
         println!(
-            "{label:<22} composed {bd:>3}/{bn:<4}   compacted {cd:>3}/{cn:<4}   \
-             after repair {rd:>3}/{rn:<4} (+{added} bridges)",
+            "{label:<22} composed {bd:>4}/{bn:<4} in {:>4} networks   \
+             after repair {rd:>4}/{rn:<4} in {:>4} networks (+{added} bridges)",
+            components(&base),
+            components(&repaired),
         );
+        let _ = (cd, cn);
     }
 }
 
