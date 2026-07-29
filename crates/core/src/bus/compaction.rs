@@ -5371,6 +5371,12 @@ pub fn fold_snake(
             // neither on an edge nor supplied really is stranded.
             let on_edge = nx <= lo_x || nx >= hi_x || ny <= lo_y || ny >= hi_y;
             let supplied = input_moved.keys().any(|&(mx, my)| (mx, my) == (nx, ny));
+            if std::env::var("SPAGHETTIO_FOLD_DEBUG").is_ok() {
+                eprintln!(
+                    "input check: ({nx},{ny}) on_edge={on_edge} supplied={supplied} \
+                     bbox=[{lo_x}..{hi_x}]x[{lo_y}..{hi_y}]"
+                );
+            }
             if !on_edge && !supplied {
                 return Err(FoldRefusal::InputStranded { at: (b.x, b.y) });
             }
