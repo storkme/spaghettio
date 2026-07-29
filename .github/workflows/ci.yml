@@ -12,7 +12,11 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Superseding a PR push is fine — only the latest head matters. Superseding a
+  # push to main is not: every commit on main is a state someone can check out,
+  # and a cancelled run leaves it unverified while the run list still reads
+  # "success" from whichever doc-only merge landed next.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   changes:
