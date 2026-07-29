@@ -1217,7 +1217,7 @@ pub fn check_row_input_belt_margin(
 /// real layouts never place two unrelated rows' tiles edge-adjacent,
 /// while a row's own main line and its midpoint sideload bridge (one
 /// tile off-axis, touching the main line directly) always are.
-fn cluster_tiles_by_adjacency(positions: &[(i32, i32)]) -> Vec<usize> {
+pub(crate) fn cluster_tiles_by_adjacency(positions: &[(i32, i32)]) -> Vec<usize> {
     let index: FxHashMap<(i32, i32), usize> =
         positions.iter().enumerate().map(|(i, &p)| (p, i)).collect();
     let mut component = vec![usize::MAX; positions.len()];

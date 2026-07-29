@@ -168,20 +168,60 @@ pub fn check_sushi_saturation(
 ) -> Vec<ValidationIssue> {
     let mut issues = Vec::new();
 
-    // Group sushi belt tiles by segment id; record the belt entity (tier).
-    let mut seg_belt: FxHashMap<&str, &str> = FxHashMap::default();
+    // Group sushi belt tiles into PHYSICAL runs, not by segment id.
+    //
+    // `templates::scrap_recycling_row` tags every sushi belt
+    // `row:{recipe}:sushi:{item}` — keyed on recipe and item with no row
+    // index — and `place_rows` splits any recipe whose machine count exceeds
+    // `max_per_row` into several physical rows, each getting that identical
+    // string. Keying a map on it therefore collapsed N separate belts into
+    // one arbitrary entry (`or_insert` keeps whichever was seen first) and
+    // compared the recipe's WHOLE output against that single belt's capacity:
+    // two rows each at 60% of their own belt read as 120% of one, while an
+    // asymmetric split could stay silent on a row that was genuinely jammed.
+    // Either way the issue count never reflected how many rows were affected.
+    //
+    // `check_row_output_lane_budget` and `check_row_input_belt_margin` hit
+    // this same collision and solve it by clustering tiles by adjacency; this
+    // now matches them.
+    let mut sushi_tiles: Vec<(i32, i32)> = Vec::new();
+    let mut sushi_meta: Vec<(&str, &str)> = Vec::new(); // (segment, belt entity)
     for e in &layout.entities {
         if !is_belt_entity(&e.name) {
             continue;
         }
         if let Some(seg) = e.segment_id.as_deref() {
             if seg.contains(SUSHI_MARKER) {
-                seg_belt.entry(seg).or_insert(e.name.as_str());
+                sushi_tiles.push((e.x, e.y));
+                sushi_meta.push((seg, e.name.as_str()));
             }
         }
     }
+    let cluster_of = crate::validate::inserters::cluster_tiles_by_adjacency(&sushi_tiles);
+    // One entry per physical run: its segment, its slowest belt tier (the
+    // real constraint), and how many machine-equivalents it serves.
+    let mut runs: FxHashMap<usize, (&str, &str)> = FxHashMap::default();
+    for (i, &(seg, belt)) in sushi_meta.iter().enumerate() {
+        let c = cluster_of[i];
+        runs.entry(c)
+            .and_modify(|(_, b)| {
+                if belt_throughput(belt) < belt_throughput(b) {
+                    *b = belt;
+                }
+            })
+            .or_insert((seg, belt));
+    }
+    // Recipe-wide output is shared across that recipe's physical runs.
+    let mut runs_per_recipe: FxHashMap<&str, f64> = FxHashMap::default();
+    for (seg, _) in runs.values() {
+        if let Some(r) = seg.strip_prefix("row:").and_then(|rest| {
+            rest.find(":sushi").map(|i| &rest[..i])
+        }) {
+            *runs_per_recipe.entry(r).or_insert(0.0) += 1.0;
+        }
+    }
 
-    for (seg, belt) in &seg_belt {
+    for (seg, belt) in runs.values() {
         // segment_id shape: `row:{recipe}:sushi:{item}` — recover the recipe.
         let recipe = seg.strip_prefix("row:").and_then(|rest| {
             rest.find(":sushi").map(|i| &rest[..i])
@@ -194,6 +234,9 @@ pub fn check_sushi_saturation(
             .filter(|m| m.recipe == recipe)
             .flat_map(|m| m.outputs.iter().filter(|o| !o.is_fluid).map(move |o| o.rate * m.count))
             .sum();
+        // Each physical run carries its share of the recipe's output.
+        let share = runs_per_recipe.get(recipe).copied().unwrap_or(1.0).max(1.0);
+        let total = total / share;
         let cap = belt_throughput(belt);
         if total > cap + 1e-6 {
             issues.push(ValidationIssue::new(
@@ -240,6 +283,78 @@ mod tests {
             ..Default::default()
         }
     }
+    /// Two PHYSICAL sushi runs that share one segment string — what
+    /// `place_rows` produces whenever a scrap-recycling recipe needs more
+    /// machines than one row can carry.
+    ///
+    /// Each run carries half the recipe's output and each is within its own
+    /// belt's capacity, so nothing is jammed. Keying on the segment id
+    /// collapsed both into one entry and compared the recipe's WHOLE output
+    /// against a single belt, reporting a jam that does not exist.
+    #[test]
+    fn split_rows_are_judged_per_physical_run() {
+        let solver = SolverResult {
+            machines: vec![MachineSpec {
+                recipe: "scrap-recycling".into(),
+                count: 8.0,
+                outputs: vec![ItemFlow {
+                    item: "iron-plate".into(),
+                    // 8 x 1.5 = 12/s recipe-wide, 6/s per run.
+                    rate: 1.5,
+                    is_fluid: false,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        // Yellow belt: 15/s. Each run at 6/s is fine; 12/s against one belt
+        // would also be fine, so make the belts red-tier-free and the total
+        // large enough that only the collapsed comparison could trip.
+        let mut entities = Vec::new();
+        for x in 0..4 {
+            entities.push(sushi_belt(x, 0, EntityDirection::East));
+        }
+        // Second run, far away — a separate physical belt, same segment id.
+        for x in 0..4 {
+            entities.push(sushi_belt(x, 40, EntityDirection::East));
+        }
+        let layout = LayoutResult { entities, width: 10, height: 50, ..Default::default() };
+
+        let issues = check_sushi_saturation(&layout, &solver);
+        assert!(
+            issues.is_empty(),
+            "two runs at 6/s each on a 15/s belt are not saturated: {issues:?}"
+        );
+    }
+
+    /// The converse: a genuinely over-capacity run must still be reported, so
+    /// the per-run split cannot silently excuse a real jam.
+    #[test]
+    fn a_genuinely_saturated_run_is_still_reported() {
+        let solver = SolverResult {
+            machines: vec![MachineSpec {
+                recipe: "scrap-recycling".into(),
+                count: 8.0,
+                // 8 x 4.0 = 32/s recipe-wide, 32/s on the single run.
+                outputs: vec![ItemFlow {
+                    item: "iron-plate".into(),
+                    rate: 4.0,
+                    is_fluid: false,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let entities: Vec<PlacedEntity> =
+            (0..4).map(|x| sushi_belt(x, 0, EntityDirection::East)).collect();
+        let layout = LayoutResult { entities, width: 10, height: 10, ..Default::default() };
+        let issues = check_sushi_saturation(&layout, &solver);
+        assert_eq!(issues.len(), 1, "32/s on one 15/s belt must report: {issues:?}");
+        assert_eq!(issues[0].category, "sushi-saturation");
+    }
+
     fn plain_belt(x: i32, y: i32, dir: EntityDirection, item: &str) -> PlacedEntity {
         PlacedEntity {
             name: "transport-belt".into(),
