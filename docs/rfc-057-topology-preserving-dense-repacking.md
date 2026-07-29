@@ -843,6 +843,27 @@ make either experimental composer a production default.
   military science averaged over a stable window, **146 of 146 machines
   working — the control's exact census**.
 
+  **CORRECTION (2026-07-29, later the same day): the parity claim above is
+  wrong.** Adversarial review found the fold takes `chain-mil5ore` from **2
+  disconnected power poles to 89**, and both sides reported `{"power": 1}`
+  because `check_pole_network_connectivity` packed the magnitude into message
+  text while `search_snake_fold` compares issue *counts*. The Factorio run did
+  not catch it either: the harness creates one electric energy interface **per
+  pole network**, so it energised both islands and reported 146/146 machines
+  working. A player pasting that blueprint gets two dead halves.
+
+  The throughput result stands — 5.00/s produced, machine census matched — but
+  the layout's own power graph was never verified by it. **A green sim says
+  nothing about a blueprint's internal wire connectivity.** The check now emits
+  one issue per unreachable pole, and with that the mil5 fold is correctly
+  REFUSED. Folding genuinely fragments the power network; it only looked like
+  parity because nothing could see it.
+
+  `replace_poles` was additionally skipping `repair_pole_connectivity`, which
+  `build_bus_layout` always runs. Calling it is necessary but not sufficient: it
+  adds zero bridges here, because compaction has removed precisely the free
+  tiles a bridge pole needs. That is the open problem.
+
   The decisive finding is a **validator blind spot**. An earlier version of
   that same fold validated at exact control parity and produced *nothing* in
   Factorio: 0.00/s, 36 of 146 machines working, 110 with `full_output`, rates

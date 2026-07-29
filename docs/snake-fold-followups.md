@@ -1,7 +1,9 @@
 # Snake-fold followups
 
-**Status (2026-07-29):** single fold works and is Factorio-verified on
-`chain-mil5ore`. Multi-fold and three of the four corpus fixtures do not
+**Status (2026-07-29):** single fold is verified for **throughput** on
+`chain-mil5ore` and **refused** on power — it fragments the pole network
+(2 disconnected poles to 89). See "The second trap" below before trusting any
+result in this document. Multi-fold and three of the four corpus fixtures do not
 fold; the causes below are diagnosed, not guessed. Owning design doc:
 [`rfc-057-topology-preserving-dense-repacking.md`](rfc-057-topology-preserving-dense-repacking.md),
 whose decision log carries the measurements.
@@ -10,9 +12,21 @@ Folding is a **shape** transform, not a density one — RFC-057 refused it as a
 density lever on a measured ~20% routing ceiling. Its value is turning a
 kilometre-wide ribbon into something a human can place and inspect.
 
+## The second trap: a green sim proves nothing about power
+
+The harness creates one electric energy interface **per pole network**, so it
+energises every disconnected island it finds and reports every machine working.
+The mil5 fold measured 146/146 machines and PASS while splitting the factory
+into two power islands a player would paste as two dead halves.
+
+Between this and the boundary-record trap below, the rule for this transform
+is: **validator-clean and sim-green are each necessary and neither is
+sufficient.** Check the specific invariant you care about.
+
 ## What works
 
-`chain-mil5ore`, compacted, single fold at the midpoint:
+Throughput only — see the status line. `chain-mil5ore`, compacted, single fold
+at the midpoint:
 
 | | geometry | aspect | produced | delivered | machines | verdict |
 |---|---|---|---|---:|---:|---:|
@@ -104,7 +118,26 @@ row, and come back. An attempt that allocated lanes without solving the
 crossing regressed the verified single fold and was reverted; do not repeat it
 without the jog.
 
-### 3. Lower-confidence items
+### 3. Power network fragments across the fold (blocks the verified case)
+
+`replace_poles` places poles well but the two folded segments end up as
+separate networks: 89 of 174 poles unreachable from the first. The pipeline's
+own `repair_pole_connectivity` is now called (it was being skipped) and adds
+**zero** bridges — a compacted layout has had exactly the free tiles a bridge
+pole needs removed. Options, none tried: reserve bridge columns during folding,
+allow the repair to displace a belt tile, or run the fold before compaction
+rather than after.
+
+Adversarial review also raised two it could not exercise:
+
+- `replace_poles` passes an empty substation-target list, while
+  `build_bus_layout` computes real ones for deep interior geometry — precisely
+  what densification produces. Not exercised by mil5, which has no substations.
+- `InputStranded`'s edge test accepts any bounding-box edge, and is correct only
+  by coincidence of the current junction-column scheme. Adaptive gap sizing
+  (item 1) would invalidate that coincidence.
+
+### 4. Lower-confidence items
 
 - The continuity invariant (`RunSevered`) false-positived twice on splitter
   footprints — a 180° rotation swaps which physical tile the anchor names. It
