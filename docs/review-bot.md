@@ -9,8 +9,14 @@ changes.
 
 - [`.github/workflows/claude-code-review.yml`](../.github/workflows/claude-code-review.yml)
   — runs on every PR event (opened / synchronize / ready_for_review /
-  reopened): checkout → `anthropics/claude-code-action@v1` running the
-  `code-review` plugin → transcript artifact upload → silent-no-op guard.
+  reopened / edited): checkout → `anthropics/claude-code-action@v1` running
+  the `code-review` plugin → transcript artifact upload → silent-no-op guard.
+  Runs are debounced per PR (`concurrency` + `cancel-in-progress`): a review
+  costs 8–11 minutes, and a run against a superseded head is spend the guard
+  ignores anyway, since it enforces coverage on the *current* head.
+  `edited` runs are the description-only re-check (class 7 below) — they take
+  the cheap path in the prompt and are carved out of the guard, because a body
+  edit produces no new SHA whose coverage could be at stake.
 - **The plugin** (`code-review@claude-code-plugins`, from the
   anthropics/claude-code marketplace) is a multi-subagent orchestration:
   a haiku gate (skip closed / draft / trivial / already-reviewed PRs) → a
@@ -84,8 +90,10 @@ semantics below).
 
 ## Failure-class history
 
-Six classes, each individually sufficient to produce the same symptom —
-green check, nothing posted:
+Classes 1–6 share one symptom — green check, nothing posted — and each is
+individually sufficient to produce it. Classes 7–8, below the table, are a
+different family: the review runs and posts, but its findings can't be closed
+or don't land.
 
 | # | Cause | Symptom signature | Fixed |
 |---|-------|-------------------|-------|
@@ -96,9 +104,77 @@ green check, nothing posted:
 | 5 | Shape-sensitive denial starvation — the allowlist admits plain `gh pr/issue` commands but denies improvised *shapes* (env prefixes `GH_PAGER= gh …`, command substitution `$(…)`, `cd … &&` chains, `gh api`); enough denials and the orchestrator abandons mid-review without posting. Stochastic per run, worse on large PRs (more context wanted → more improvised commands). Diagnosed 2026-07-24 on PR #389 (two consecutive silent no-ops; PR #405 succeeded through 31 denials the same day) | mid-cost, mid-duration run: more than a gate-skip, far less than a full review; see signature table below | prompt hardening + guard step (introduced with this doc) |
 | 6 | Async-wait abandonment — the plugin orchestrator fans out its reviewer subagents, then parks via `ScheduleWakeup` to "wait" for them; in a one-shot headless run the wakeup never fires and the session ends mid-wait. First caught live by the guard 2026-07-24 on PR #416 — transcript artifact showed 26 tool calls, near-zero denials, 4 parallel reviewers spawned, `ScheduleWakeup(180s)` then end at 10 turns/$1.08 with nothing posted. NOT a denial problem: the class-5 prompt note was propagating into every subagent and reads worked fine | mid-cost short run like class 5, but transcript shows `ScheduleWakeup` + spawned agents with unconsumed results | prompt note extended: one-shot/headless, never park, consume subagent results synchronously |
 
+### Failure class 7: findings against the PR body can never be closed (2026-07-29)
+
+The bot files real findings about the PR *description* — a missing
+`## Models / contracts touched` section, a body claim the diff contradicts
+(#494's description repeated a census error that had already been fixed in the
+shipped doc). Fixing one means editing the description, which pushes no commit,
+so no `synchronize` fires, no re-review runs, and nothing ever records the fix.
+Worse than inert: on #493 the next round's summary reported the template
+finding as "already on record and unchanged" — by then it had been fixed.
+
+The workflow now takes `edited` events. Because that also fires on title and
+base-branch edits, the job's `if` admits only body and base changes, and the
+prompt splits them: a body edit gets a cheap description-only re-check that
+re-reads the body, re-checks *only* body-scoped findings, and posts one short
+comment saying which are resolved and which still stand; a base change gets a
+full review, because it silently rewrites the diff.
+
+### Failure class 8: repeat findings restated at constant volume (2026-07-29)
+
+Not a silence — the opposite. The template finding on #493 was raised in three
+consecutive rounds, each time in identical non-inline form at the bottom of a
+summary. The bot tracked the repetition and said so, but a third airing read
+exactly like a first and the check passed either way. The author fixed every
+inline finding across all three rounds and stepped over the repeated one twice.
+
+A finding that survived a round of attention is *stronger* evidence than a
+fresh one, and the prompt now says so: unaddressed findings from prior rounds
+lead the comment on a `**Unaddressed from N prior round(s):**` line, ahead of
+anything new.
+
+A related, smaller correction in the same change: claims about mutable tracker
+state get scoped to when the reviewer looked. The bot correctly reasoned "#490
+is open, so #7 isn't fixed" — #491 merged an hour later and inverted the
+remedy. Such claims are now written "as of this review, …" with a note on what
+would change the conclusion.
+
 Validation history: planted-bug canary #330 (2026-07-21) — first-ever bot
 comment correctly flagged the bug inline with a committable fix; canary
 #368 re-validated after the installer overwrite was restored in #369.
+
+## Merge-time gating (the review is advisory)
+
+**`main` has no branch protection.** `claude-review` is therefore a check
+nobody has to wait for: a PR sitting at `mergeStateStatus=UNSTABLE` with the
+review still running merges cleanly. The guard makes a *finished* run's silence
+loud; it can do nothing about a run that never finished.
+
+That came within one wrong comparison of mattering on 2026-07-29. A session
+polled merge readiness with a hand-rolled loop testing
+`mergeStateStatus != "PENDING"`. GitHub reports a running check as
+`IN_PROGRESS` and the PR as `UNSTABLE`, so the loop exited immediately every
+time and reported "checks done" while an 11-minute review was still going.
+#494 would have merged with zero review coverage and been reported as reviewed.
+
+Two independent mitigations, only one of them applied:
+
+- **Applied** — [`scripts/review-gate.sh`](../scripts/review-gate.sh)
+  `wait <pr>` blocks until the check reaches `status == "COMPLETED"` and exits
+  non-zero on any conclusion that isn't a pass. Use it rather than hand-rolling
+  a poll; the trap is that the obvious-looking sentinel values (`PENDING`,
+  `""`) are not states this API ever reports for a running check, so testing
+  for their absence always succeeds.
+- **Not applied, needs a human call** — `scripts/review-gate.sh require` makes
+  `claude-review` a required status check on `main`. This is the change that
+  actually makes a merge wait. It is deliberately manual: the repo has *no*
+  protection today, so this introduces it, and to bind at all it needs
+  `enforce_admins: true` (with it false, every session using the owner's token
+  bypasses it and the gate is theatre). That form also blocks direct pushes to
+  `main` for everyone, and if the review cannot run at all — rotated secret,
+  action outage — nothing merges until protection is loosened. Real cost, real
+  benefit; `unrequire` reverses it in one command.
 
 ## Forensics playbook
 

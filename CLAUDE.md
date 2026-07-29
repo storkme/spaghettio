@@ -68,7 +68,14 @@ For full build commands (WASM rebuild, release builds), see [`docs/build-systems
   Live trap: re-running `/install-github-app` overwrites the repaired
   workflow files with the stock template — diff them against main before
   merging its PR. Failure-class history and forensics playbook:
-  [`docs/review-bot.md`](docs/review-bot.md). Local adversarial review (an
+  [`docs/review-bot.md`](docs/review-bot.md).
+  **Nothing blocks a merge while the review is still running** — `main` is
+  unprotected, so waiting is the merger's job. Use
+  `scripts/review-gate.sh wait <pr>`, never a hand-rolled poll: a running
+  check reports `IN_PROGRESS` (and the PR `UNSTABLE`), so the obvious
+  `!= "PENDING"` test passes instantly and merges mid-review.
+  Findings against the PR *description* are re-checked on body edits, so fix
+  them in the body and let the cheap `edited` run confirm them closed. Local adversarial review (an
   independent agent that re-runs gates and probes the claims) is the
   fallback when a PR isn't in play — and it remains **required in addition
   to the bot** for layout-engine or validator-semantics changes: the bot
