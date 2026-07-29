@@ -3148,6 +3148,333 @@ fn probe_mil5_errors() {
     }
 }
 
+/// Manhattan MST over a terminal set — an obstacle-free lower bound on the
+/// belt tiles a perfect shared-trunk router would need for one commodity.
+/// Prim's, O(n²); nets here are tens of terminals, not thousands.
+fn manhattan_mst_cost(points: &[(i32, i32)]) -> i64 {
+    if points.len() < 2 {
+        return 0;
+    }
+    let n = points.len();
+    let mut in_tree = vec![false; n];
+    let mut best = vec![i64::MAX; n];
+    best[0] = 0;
+    let mut total = 0i64;
+    for _ in 0..n {
+        let mut pick = usize::MAX;
+        for i in 0..n {
+            if !in_tree[i] && (pick == usize::MAX || best[i] < best[pick]) {
+                pick = i;
+            }
+        }
+        in_tree[pick] = true;
+        total += best[pick];
+        let (px, py) = points[pick];
+        for i in 0..n {
+            if in_tree[i] {
+                continue;
+            }
+            let (qx, qy) = points[i];
+            let d = i64::from((px - qx).abs()) + i64::from((py - qy).abs());
+            if d < best[i] {
+                best[i] = d;
+            }
+        }
+    }
+    total
+}
+
+/// Map a point through the snake-fold coordinate transform.
+///
+/// `bounds` is the fold partition (`[0, f1, .., fk, width]`). Even segments
+/// keep their X orientation, odd segments mirror; each segment drops by
+/// `height + gap`. This is `fold_snake`'s transform with the U-turn and
+/// reconnection machinery removed — geometry only.
+///
+/// `y_mirror` additionally flips odd segments vertically. `fold_snake` does
+/// not do this, and it should matter: an X-only fold puts the *bottom* edge
+/// of segment k against the *top* edge of segment k+1, so structures that sat
+/// at the same height in the ribbon (a trunk, say) end up `height + gap`
+/// apart. Flipping alternate segments in Y makes them meet instead — which is
+/// what a two-sided main bus actually looks like.
+fn fold_point(
+    x: i32,
+    y: i32,
+    bounds: &[i32],
+    height: i32,
+    gap: i32,
+    y_mirror: bool,
+) -> (i32, i32) {
+    let n_segs = bounds.len() - 1;
+    let seg = (0..n_segs)
+        .find(|&k| x >= bounds[k] && x < bounds[k + 1])
+        .unwrap_or(n_segs - 1);
+    let odd = seg % 2 == 1;
+    let nx = if odd {
+        bounds[seg + 1] - 1 - x
+    } else {
+        x - bounds[seg]
+    };
+    let local_y = if odd && y_mirror { height - 1 - y } else { y };
+    (nx, local_y + (seg as i32) * (height + gap))
+}
+
+/// Does folding actually shorten the *routing problem*?
+///
+/// `probe_fold_search_mil5` measures fold-as-implemented, which can only add
+/// entities (it preserves every belt and adds U-turns). That says nothing
+/// about fold-as-a-stage followed by a re-router. This probe removes the
+/// reconnection machinery entirely and asks the prior question: under a pure
+/// fold coordinate transform, does the idealized cost of connecting each
+/// commodity's terminals go down?
+///
+/// The metric is the sum over commodity nets of the Manhattan MST over that
+/// net's terminals. It ignores obstacles, so it is a *lower bound* on what a
+/// real router achieves — but it is measured identically before and after,
+/// so the ratio is the honest screen. If MST does not improve, no downstream
+/// shortcut search can pay for the fold.
+///
+/// Run over the whole RFC-057 corpus, because the fold's cost is fixed
+/// (`height + gap` of vertical separation per fold) while its benefit scales
+/// with width — so the answer should depend on aspect ratio, and mil5 is the
+/// thinnest fixture of the four.
+#[test]
+#[ignore = "exploration probe — fold routing headroom"]
+fn probe_fold_routing_headroom() {
+    for label in [
+        "chain-mil5ore",
+        "mega-chain-chem5raw",
+        "mega-chain-pu4raw",
+        "mega-chain-usp2raw",
+    ] {
+        println!("\n========== {label} ==========");
+        fold_routing_headroom_for(label);
+    }
+}
+
+fn fold_routing_headroom_for(label: &str) {
+    use spaghettio_core::bus::compaction::{
+        build_manifold_nets, compact_validated_geometry, CompactIr, RouteTerminalKind,
+    };
+
+    let fixture = SimFixture::find(label);
+    let inputs: FxHashSet<String> = fixture.inputs.iter().map(|s| s.to_string()).collect();
+    let sr = solver::solve_with_palette_exclusions_and_quality(
+        fixture.target,
+        fixture.rate,
+        &inputs,
+        &MachinePalette::default(),
+        "assembling-machine-3",
+        &FxHashSet::default(),
+        QualityTier::Normal,
+    )
+    .unwrap();
+
+    let bus = fixture.compose_layout();
+    let compact = compact_validated_geometry(&bus, &sr);
+    let belt_entities = compact
+        .entities
+        .iter()
+        .filter(|e| spaghettio_core::common::is_belt_entity(&e.name))
+        .count();
+    println!(
+        "compact baseline: {}x{} = {} tiles, {} entities ({} belts)",
+        compact.width,
+        compact.height,
+        compact.width * compact.height,
+        compact.entities.len(),
+        belt_entities,
+    );
+
+    // One net extraction, then two coordinate mappings — the terminal set is
+    // identical in both cases, so the comparison is apples-to-apples.
+    let ir = CompactIr::from_source(&compact, &sr);
+    let nets = build_manifold_nets(&ir, &ir.islands).expect("identity placement must build nets");
+
+    let w = compact.width;
+    let h = compact.height;
+    let gap = 2;
+
+    // Two metrics, because they fail in opposite directions.
+    //
+    // MST forces every terminal of a commodity into ONE tree. Real delivery
+    // is a forest: smelter bank A feeds the consumers beside A and never
+    // connects to bank B. That is why MST here exceeds the actual belt count
+    // — it pays for inter-cluster links the factory never builds. Folding
+    // shortens exactly those links, so MST alone would flatter the result.
+    //
+    // `nearest-source` is the honest one: for every consuming terminal, the
+    // distance to the closest producing terminal of that item. It is
+    // forest-shaped like real delivery, and it measures the thing the
+    // shortcut hypothesis actually claims — that folding puts consumers
+    // nearer their producers.
+    let cost_at = |bounds: &[i32], y_mirror: bool| -> (i64, i64, i64, i32, i32) {
+        let mut mst_total = 0i64;
+        let mut near_total = 0i64;
+        let mut near_weighted = 0i64;
+        let (mut max_x, mut max_y) = (0i32, 0i32);
+        for net in &nets {
+            let mut all = Vec::with_capacity(net.terminals.len());
+            let mut sources = Vec::new();
+            let mut sinks = Vec::new();
+            for t in &net.terminals {
+                let p = fold_point(t.x, t.y, bounds, h, gap, y_mirror);
+                max_x = max_x.max(p.0);
+                max_y = max_y.max(p.1);
+                all.push(p);
+                match t.kind {
+                    RouteTerminalKind::ProducerDrop | RouteTerminalKind::BoundaryInput => {
+                        sources.push(p)
+                    }
+                    RouteTerminalKind::ConsumerPickup | RouteTerminalKind::BoundaryOutput => {
+                        sinks.push(p)
+                    }
+                }
+            }
+            mst_total += manhattan_mst_cost(&all);
+
+            let mut net_near = 0i64;
+            for &(sx, sy) in &sinks {
+                let closest = sources
+                    .iter()
+                    .map(|&(px, py)| i64::from((sx - px).abs()) + i64::from((sy - py).abs()))
+                    .min();
+                if let Some(d) = closest {
+                    net_near += d;
+                }
+            }
+            near_total += net_near;
+            // planned_rate is fixed-point; scale down so the weighted total
+            // stays readable rather than exact.
+            near_weighted += net_near * net.planned_rate.max(1) / 1000;
+        }
+        (mst_total, near_total, near_weighted, max_x + 1, max_y + 1)
+    };
+
+    let flat: Vec<i32> = vec![0, w];
+    let (base_mst, base_near, base_weighted, base_w, base_h) = cost_at(&flat, false);
+    let terminal_count: usize = nets.iter().map(|net| net.terminals.len()).sum();
+    println!(
+        "unfolded: MST={base_mst}  nearest-source={base_near}  \
+         rate-weighted={base_weighted}  terminal-bbox={base_w}x{base_h}"
+    );
+    println!(
+        "  ({} nets, {terminal_count} terminals, {belt_entities} actual belts)",
+        nets.len()
+    );
+
+    for y_mirror in [false, true] {
+        println!(
+            "\n--- even folds ({}) ---",
+            if y_mirror {
+                "X-mirror + Y-mirror on odd segments"
+            } else {
+                "X-mirror only — what fold_snake does"
+            }
+        );
+        for k in 1..=6usize {
+            let mut bounds = vec![0];
+            for i in 1..=k {
+                bounds.push(w * i as i32 / (k + 1) as i32);
+            }
+            bounds.push(w);
+            let (mst, near, weighted, fw, fh) = cost_at(&bounds, y_mirror);
+            println!(
+                "  {k} fold(s): MST {:+.1}%  nearest-source {:+.1}%  \
+                 rate-weighted {:+.1}%  bbox={fw}x{fh} aspect={:.2}",
+                (mst as f64 / base_mst as f64 - 1.0) * 100.0,
+                (near as f64 / base_near as f64 - 1.0) * 100.0,
+                (weighted as f64 / base_weighted as f64 - 1.0) * 100.0,
+                if fh > fw {
+                    fh as f64 / fw as f64
+                } else {
+                    fw as f64 / fh as f64
+                },
+            );
+        }
+    }
+
+    // Even splits are an arbitrary choice of fold line, and the erratic
+    // rate-weighted numbers above look like the consequence: a fold that
+    // happens to cut between a high-rate producer and its consumer pays for
+    // that pair, one that lands in a quiet seam does not. Choosing fold
+    // columns to minimise the rate-weighted cost is the fair test of the
+    // idea. Greedy, because this is a screen and not the final placer.
+    // Rate-weighted nearest-source only — no MST. The greedy sweep evaluates
+    // this thousands of times and MST is O(n²) per net, which is unaffordable
+    // on the 1,000-plus-terminal fixtures.
+    let weighted_only = |bounds: &[i32], y_mirror: bool| -> i64 {
+        let mut total = 0i64;
+        for net in &nets {
+            let mut sources = Vec::new();
+            let mut sinks = Vec::new();
+            for t in &net.terminals {
+                let p = fold_point(t.x, t.y, bounds, h, gap, y_mirror);
+                match t.kind {
+                    RouteTerminalKind::ProducerDrop | RouteTerminalKind::BoundaryInput => {
+                        sources.push(p)
+                    }
+                    RouteTerminalKind::ConsumerPickup | RouteTerminalKind::BoundaryOutput => {
+                        sinks.push(p)
+                    }
+                }
+            }
+            let mut net_near = 0i64;
+            for &(sx, sy) in &sinks {
+                if let Some(d) = sources
+                    .iter()
+                    .map(|&(px, py)| i64::from((sx - px).abs()) + i64::from((sy - py).abs()))
+                    .min()
+                {
+                    net_near += d;
+                }
+            }
+            total += net_near * net.planned_rate.max(1) / 1000;
+        }
+        total
+    };
+
+    println!("\n--- greedily placed folds (best of X-only / X+Y mirror) ---");
+    // ~40 candidate columns regardless of fixture width, so the sweep costs
+    // the same on a 550-wide layout and a 2,400-wide one.
+    let step = ((w / 40).max(4)) as usize;
+    for k in 1..=4usize {
+        let mut chosen: Vec<i32> = Vec::new();
+        let mut best_cost = base_weighted;
+        let mut best_mirror = false;
+        for _ in 0..k {
+            let mut round: Option<(i64, i32, bool)> = None;
+            for f in (10..w - 10).step_by(step) {
+                if chosen.contains(&f) {
+                    continue;
+                }
+                let mut trial = chosen.clone();
+                trial.push(f);
+                trial.sort();
+                let mut bounds = vec![0];
+                bounds.extend_from_slice(&trial);
+                bounds.push(w);
+                for y_mirror in [false, true] {
+                    let weighted = weighted_only(&bounds, y_mirror);
+                    if round.is_none() || weighted < round.unwrap().0 {
+                        round = Some((weighted, f, y_mirror));
+                    }
+                }
+            }
+            let Some((cost, f, mirror)) = round else { break };
+            chosen.push(f);
+            chosen.sort();
+            best_cost = cost;
+            best_mirror = mirror;
+        }
+        println!(
+            "  {k} fold(s) at {chosen:?}{}: rate-weighted {:+.1}%",
+            if best_mirror { " (Y-mirrored)" } else { "" },
+            (best_cost as f64 / base_weighted as f64 - 1.0) * 100.0,
+        );
+    }
+}
+
 /// Fold search: try different numbers of folds and positions on the
 /// compacted mil5-ore layout, validate each, report the squarest valid.
 #[test]

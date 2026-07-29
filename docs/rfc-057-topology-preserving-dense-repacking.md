@@ -775,3 +775,63 @@ make either experimental composer a production default.
   belts and collision-checks all emitted footprints. The current military
   result correctly fails that gate. Residual negotiated rip-up/reroute is
   therefore still required before blueprint export or meter testing.
+
+- **2026-07-29 — Snake folding measured; ~20% routing ceiling, and the
+  transform in the tree is the wrong one.** An unlanded `fold_snake`
+  prototype (Strategy C) snake-folds the validated Strategy-A output to trade
+  a kilometre-wide ribbon for a squarer factory. Measuring fold-as-implemented
+  is not the right test — it preserves every entity and adds U-turns, so it
+  can only grow occupied tiles. The question that decides the direction is
+  whether folding makes the *routing problem* easier, which a later shortcut
+  pass could then collect.
+
+  `probe_fold_routing_headroom` answers it directly: extract commodity nets
+  once, then apply the fold as a pure coordinate transform with no
+  reconnection, and compare idealized routing cost before and after. Two
+  metrics, because they fail in opposite directions. Per-commodity MST was
+  rejected as the headline number — it exceeds the actual belt count (4,897
+  vs 2,020 on military science) because it forces one tree per item where
+  real delivery is a forest of local clusters, and folding shortens exactly
+  the inter-cluster links a factory never builds. The reported metric is
+  rate-weighted nearest-source: for each consuming terminal, distance to the
+  nearest producer of that item, weighted by planned rate.
+
+  | Fixture | compacted | X-mirror only | + Y-mirror | greedy fold positions |
+  |---|---:|---:|---:|---:|
+  | `chain-mil5ore` | 552×32 | −11.6% | −17.3% | −15.0% |
+  | `mega-chain-chem5raw` | 700×55 | −14.1% | −20.7% | −22.6% |
+  | `mega-chain-pu4raw` | 2381×87 | −0.9% | −18.9% | −18.9% |
+  | `mega-chain-usp2raw` | 1939×192 | −4.6% | −19.0% | −19.9% |
+
+  Two findings. First, `fold_snake`'s transform is wrong: mirroring only in X
+  puts one segment's bottom edge against the next segment's top edge, so
+  structures that shared a height in the ribbon end up `height + gap` apart.
+  Mirroring alternate segments in Y as well makes them meet — the two-sided
+  main bus — and that is the difference between −0.9% and −18.9% on the
+  deepest fixture. Second, ~20% is a firm ceiling: it survives both mirror
+  variants, 1–6 folds, even splits, and fold positions chosen greedily to
+  minimise rate-weighted cost. Because the metric is obstacle-free, ~20% is
+  an *upper* bound on what a perfect post-fold shortcut router could collect
+  from folding; a real router realizes less.
+
+  **Decision: folding is refused as a density lever and retained as a shape
+  transform.** The 35%-belt / 40%-tile gates in this RFC cannot be reached
+  from a 20% ceiling, and 10–20% is the band this RFC already declares a
+  rejection. But the shape result is large and independent — `pu4raw` goes
+  from 2381×87 (27:1) to 476×443 (1.07:1), `usp2raw` from 1939×192 to
+  646×580 — and on three of four fixtures the near-square fold count is also
+  where the ~19–21% routing gain lands. A kilometres-wide ribbon is not a
+  factory anyone builds; that is worth having on its own terms, under gates
+  about buildability rather than density. Any continuation belongs in its own
+  RFC with those gates, not under RFC-057's.
+
+  Prerequisites for that continuation, diagnosed but not fixed: `fold_snake`
+  reconnects an even-indexed fold's U-turn at `seg_w_k - 1` when the
+  X-mirrored continuation belt is at `seg_w_{k+1} - 1`, so the connector
+  overshoots into empty space (dead-end belts) or lands inside the next
+  segment and sideloads into a belt carrying a different item. Extra entities
+  scale with the width mismatch — +1 at exactly equal halves, +446 at a 74-
+  tile mismatch — and only 4 of 549 single folds and 0 of 61 multi-folds
+  validate today. The gap-bridge step also chains unrelated bottom-edge belts
+  into one shared line, and straddling underground pairs are refilled only on
+  the entrance side.
