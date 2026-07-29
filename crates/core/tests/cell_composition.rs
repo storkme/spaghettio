@@ -3550,7 +3550,13 @@ fn probe_fold_corpus() {
         let compact = compact_validated_geometry(&fixture.compose_layout(), &sr);
         let src_aspect = compact.width as f64 / compact.height as f64;
 
-        match search_snake_fold(&compact, &sr, 4) {
+        let search = search_snake_fold(&compact, &sr, 4);
+        let mut why: BTreeMap<String, usize> = BTreeMap::new();
+        for (_, r) in &search.refusals {
+            *why.entry(format!("{r:?}").split(' ').next().unwrap().into())
+                .or_default() += 1;
+        }
+        match &search.best {
             Some(found) => {
                 let l = &found.layout;
                 let asp = l.width.max(l.height) as f64 / l.width.min(l.height) as f64;
@@ -3566,17 +3572,24 @@ fn probe_fold_corpus() {
                     asp,
                     l.entities.len(),
                 );
-                let mut why: BTreeMap<String, usize> = BTreeMap::new();
-                for (_, r) in &found.refusals {
-                    *why.entry(format!("{r:?}").split(' ').next().unwrap().into())
-                        .or_default() += 1;
-                }
-                println!("   refusals: {why:?}");
+                println!(
+                    "   legal columns={}, refusals={why:?}, rejected-by-validation={}",
+                    search.legal_columns, search.rejected_by_validation
+                );
             }
-            None => println!(
-                "{label}: {}x{} ({:.1}:1) -> NO function-preserving fold",
-                compact.width, compact.height, src_aspect
-            ),
+            None => {
+                println!(
+                    "{label}: {}x{} ({:.1}:1) -> NO function-preserving fold",
+                    compact.width, compact.height, src_aspect
+                );
+                println!(
+                    "   legal columns={} of {}, refusals={why:?}, \
+                     rejected-by-validation={}",
+                    search.legal_columns,
+                    compact.width - 1,
+                    search.rejected_by_validation
+                );
+            }
         }
     }
 }
@@ -3661,7 +3674,8 @@ fn probe_fold_error_breakdown_mil5() {
 
     // The validated search: only folds that match the control's issue
     // profile are admitted.
-    match spaghettio_core::bus::compaction::search_snake_fold(&compact, &sr, 5) {
+    let search5 = spaghettio_core::bus::compaction::search_snake_fold(&compact, &sr, 5);
+    match &search5.best {
         Some(found) => {
             let l = &found.layout;
             println!(
@@ -3677,7 +3691,7 @@ fn probe_fold_error_breakdown_mil5() {
                 compact.entities.len(),
             );
             let mut why: BTreeMap<String, usize> = BTreeMap::new();
-            for (_, reason) in &found.refusals {
+            for (_, reason) in &search5.refusals {
                 *why.entry(format!("{reason:?}").split(' ').next().unwrap().to_string())
                     .or_default() += 1;
             }

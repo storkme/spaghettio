@@ -4238,8 +4238,20 @@ fn place_uturn(
 pub struct FoldOutcome {
     pub folds: Vec<i32>,
     pub layout: LayoutResult,
-    /// Refusal reasons encountered while searching, for diagnosis.
+}
+
+/// Outcome of a fold search, including why candidates were turned away.
+///
+/// The refusal mix is the useful half when nothing is found: "no fold" is
+/// not actionable, whereas "every candidate stranded an input" or "there were
+/// no legal columns to begin with" says exactly which constraint is binding.
+pub struct FoldSearch {
+    pub best: Option<FoldOutcome>,
+    pub legal_columns: usize,
+    /// Candidates the folder refused, by cause.
     pub refusals: Vec<(Vec<i32>, FoldRefusal)>,
+    /// Candidates that folded but validated worse than the source.
+    pub rejected_by_validation: usize,
 }
 
 /// Search for the squarest snake fold that does not break the factory.
@@ -4258,7 +4270,7 @@ pub fn search_snake_fold(
     layout: &LayoutResult,
     solver: &SolverResult,
     max_folds: usize,
-) -> Option<FoldOutcome> {
+) -> FoldSearch {
     use crate::validate::{self, LayoutStyle};
 
     let profile = |l: &LayoutResult| -> Option<BTreeMap<String, usize>> {
@@ -4269,18 +4281,26 @@ pub fn search_snake_fold(
         }
         Some(by_cat)
     };
-    let baseline = profile(layout)?;
+    let mut out = FoldSearch {
+        best: None,
+        legal_columns: 0,
+        refusals: Vec::new(),
+        rejected_by_validation: 0,
+    };
+    let Some(baseline) = profile(layout) else {
+        return out;
+    };
 
     let legal = legal_fold_columns(layout);
+    out.legal_columns = legal.len();
     if legal.is_empty() {
-        return None;
+        return out;
     }
     let snap = |target: i32| -> Option<i32> {
         legal.iter().copied().min_by_key(|&f| (f - target).abs())
     };
 
     let mut best: Option<(i64, Vec<i32>, LayoutResult)> = None;
-    let mut refusals = Vec::new();
 
     for k in 1..=max_folds {
         // Slide the whole comb of fold lines, snapping each tooth to the
@@ -4307,7 +4327,7 @@ pub fn search_snake_fold(
             let folded = match fold_snake(layout, &folds) {
                 Ok(f) => f,
                 Err(reason) => {
-                    refusals.push((folds.clone(), reason));
+                    out.refusals.push((folds.clone(), reason));
                     continue;
                 }
             };
@@ -4319,6 +4339,7 @@ pub fn search_snake_fold(
                 .iter()
                 .any(|(cat, n)| baseline.get(cat).copied().unwrap_or(0) < *n)
             {
+                out.rejected_by_validation += 1;
                 continue;
             }
 
@@ -4333,11 +4354,8 @@ pub fn search_snake_fold(
         }
     }
 
-    best.map(|(_, folds, layout)| FoldOutcome {
-        folds,
-        layout,
-        refusals,
-    })
+    out.best = best.map(|(_, folds, layout)| FoldOutcome { folds, layout });
+    out
 }
 
 /// Columns a fold may legally cut, i.e. those that pass between entities
