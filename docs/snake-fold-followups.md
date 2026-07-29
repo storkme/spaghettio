@@ -63,7 +63,7 @@ believing a fold.
 
 ## Open work
 
-### 1. Multi-fold: one crossing left (`ExitLaneConflict` at a shared column)
+### 1. Multi-fold: one crossing left (an INPUT lane at a shared column)
 
 Branch: `feat/multifold-gap-lanes`. `InputStranded` is **resolved**; what is
 left is a single, well-specified crossing.
@@ -98,7 +98,12 @@ no assignment order avoids it.
 
 **Fix shape:** an underground dive where two lanes share a column — the
 standard belt-weaving technique (`factorio-mechanics.md` B12), which this pass
-does not yet synthesize. Reward: 3-fold reaches roughly 152×132 (1.15:1) on
+does not yet synthesize.
+
+Note the clash surfaces under the `ExitLaneConflict` refusal even though it is
+an *input*-side collision: the input feed pass reuses that variant. A misnomer
+that sends the reader to the wrong pass — renamed to `GapLaneConflict` on the
+work branch. Reward: 3-fold reaches roughly 152×132 (1.15:1) on
 mil5.
 
 **Do not** retry a lane allocation that ignores the crossing. One was tried
@@ -107,9 +112,9 @@ reverted.
 
 ### 2. Three of four corpus fixtures find no fold
 
-Superseded in part by (1): `ExitLaneConflict` was the dominant refusal and the
-per-item lanes address it. Re-run `probe_fold_corpus` on the branch before
-trusting the table below, which predates that work.
+Superseded in part by (1), which addresses both refusal classes with per-item
+lanes. Re-run `probe_fold_corpus` on the branch before trusting the table
+below, which predates that work.
 
 `search_snake_fold` reports legal-column count, refusals by cause, and
 validation rejections for the not-found path — read those before theorising.
@@ -126,8 +131,13 @@ Measured across the corpus (`probe_fold_corpus`, before per-item lanes):
 Two things fall out and still hold. Legal columns are 40–50% everywhere, so
 column legality is **never** the binding constraint — the pipe-adjacency
 hypothesis for chem was wrong. And `pu4raw` records **zero** `InputStranded`,
-failing on `ExitLaneConflict` alone, which is why that was the highest-value
-fix and why (1) went after it first.
+failing on `ExitLaneConflict` alone — the one fixture where a single class
+blocks everything, which is why the exit side was tackled first.
+
+By raw count `InputStranded` is the larger refusal on three of the four
+fixtures (121 vs 21, 132 vs 22, 107 vs 46); only `pu4raw` inverts that. "Fix
+the exits first" was a judgement about `pu4raw` being unblockable any other
+way, not a claim that exits dominated the corpus.
 
 ### 3. ~~Power network fragments across the fold~~ — DONE (2026-07-29)
 
