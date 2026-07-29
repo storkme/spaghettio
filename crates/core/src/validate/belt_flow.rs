@@ -801,29 +801,65 @@ pub fn check_belt_network_topology(
         let starts_set: FxHashSet<(i32, i32)> = belt_starts.iter().copied().collect();
         let full_network = bfs_belt_reach(&starts_set, &item_belt_tiles, Some(&ug_pairs));
 
-        // Check connectivity
+        // Check connectivity.
+        //
+        // One positioned issue per disconnected network, not one issue naming
+        // a count. An aggregate is invisible to any consumer comparing issue
+        // counts by category: `{"belt-topology": 1}` reads the same whether an
+        // item's belts are in two fragments or twenty. The identical shape in
+        // `check_pole_network_connectivity` let a layout transform go from 2
+        // to 89 disconnected poles and pass its admission gate as "no worse
+        // than source", shipping a factory that pasted as two dead halves.
+        //
+        // Networks are also grouped properly rather than measured from
+        // `belt_starts[0]`. That element is the arbitrary first entry of a Vec
+        // built off hash iteration order, so "unreachable from it" is not a
+        // stable magnitude — the same flaw in `power_wires::disconnected_poles`
+        // made a genuine repair (49 components down to 11) report as a
+        // regression, because merging components that exclude element 0 adds
+        // nodes still unreachable from element 0.
         if belt_starts.len() > 1 {
-            let first_set: FxHashSet<(i32, i32)> =
-                std::iter::once(belt_starts[0]).collect();
-            let first_network = bfs_belt_reach(&first_set, &item_belt_tiles, Some(&ug_pairs));
-            let unreachable: Vec<(i32, i32)> = belt_starts[1..]
-                .iter()
-                .filter(|&&bt| !first_network.contains(&bt))
-                .copied()
-                .collect();
-            if !unreachable.is_empty() {
-                issues.push(ValidationIssue::new(
-                    Severity::Error,
-                    "belt-topology",
-                    format!(
-                        "{} {}: {} disconnected belt networks for {} machines \
-                         (should be a single connected network)",
-                        item,
-                        direction,
-                        unreachable.len() + 1,
-                        machine_list.len()
-                    ),
-                ));
+            // Partition the starts into connected components.
+            let mut components: Vec<Vec<(i32, i32)>> = Vec::new();
+            let mut assigned: FxHashSet<(i32, i32)> = FxHashSet::default();
+            for &start in belt_starts.iter() {
+                if assigned.contains(&start) {
+                    continue;
+                }
+                let seed: FxHashSet<(i32, i32)> = std::iter::once(start).collect();
+                let reach = bfs_belt_reach(&seed, &item_belt_tiles, Some(&ug_pairs));
+                let mut member: Vec<(i32, i32)> = belt_starts
+                    .iter()
+                    .filter(|&&bt| bt == start || reach.contains(&bt))
+                    .copied()
+                    .collect();
+                member.sort();
+                for &m in &member {
+                    assigned.insert(m);
+                }
+                components.push(member);
+            }
+            if components.len() > 1 {
+                // Deterministic order regardless of hash iteration.
+                components.sort();
+                let total = components.len();
+                for (n, member) in components.iter().enumerate() {
+                    let anchor = member[0];
+                    issues.push(ValidationIssue::with_pos(
+                        Severity::Error,
+                        "belt-topology",
+                        format!(
+                            "{item} {direction}: belt network {}/{total} is isolated \
+                             ({} feed point(s), serving {} machine(s)) — should be a \
+                             single connected network",
+                            n + 1,
+                            member.len(),
+                            machine_list.len()
+                        ),
+                        anchor.0,
+                        anchor.1,
+                    ));
+                }
                 return;
             }
         }
