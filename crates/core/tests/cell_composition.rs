@@ -3520,6 +3520,102 @@ fn export_fold_pair_for_sim() {
     }
 }
 
+/// Does the fold work on BUS layouts, not just cell chains?
+///
+/// Every fold measurement so far has been on `compose_chain_*` output — the
+/// cell architecture. The only wired-up consumer of this module,
+/// `LayoutOptions::compact_layout`, sits on the bus path, so bus layouts are
+/// the case with a real caller and no evidence.
+#[test]
+#[ignore = "exploration probe — fold search over bus layouts"]
+fn probe_fold_bus_layouts() {
+    use spaghettio_core::bus::compaction::{compact_validated_geometry, search_snake_fold};
+    use spaghettio_core::validate::{self, LayoutStyle};
+    use std::collections::BTreeMap;
+
+    let cases: &[(&str, &str, f64, &[&str], &str)] = &[
+        ("gear15-ore", "iron-gear-wheel", 15.0, &["iron-ore"], "assembling-machine-2"),
+        ("ec10-ore", "electronic-circuit", 10.0, &["iron-ore", "copper-ore"], "assembling-machine-1"),
+        ("ec15-plate", "electronic-circuit", 15.0, &["iron-plate", "copper-plate"], "assembling-machine-2"),
+        ("belt5-ore", "transport-belt", 5.0, &["iron-ore"], "assembling-machine-2"),
+        ("insert3-ore", "inserter", 3.0, &["iron-ore", "copper-ore"], "assembling-machine-2"),
+        ("sci2-ore", "logistic-science-pack", 2.0, &["iron-ore", "copper-ore"], "assembling-machine-2"),
+    ];
+
+    for (label, item, rate, inputs, machine) in cases {
+        let inputs_set: FxHashSet<String> = inputs.iter().map(|s| s.to_string()).collect();
+        let Ok(sr) = solver::solve_with_palette_exclusions_and_quality(
+            item,
+            *rate,
+            &inputs_set,
+            &MachinePalette::default(),
+            machine,
+            &FxHashSet::default(),
+            QualityTier::Normal,
+        ) else {
+            println!("{label}: solver refused");
+            continue;
+        };
+        let Ok(bus) = layout::build_bus_layout(&sr, layout::LayoutOptions::default()) else {
+            println!("{label}: bus layout refused");
+            continue;
+        };
+        let compact = compact_validated_geometry(&bus, &sr);
+        let asp = compact.width.max(compact.height) as f64 / compact.width.min(compact.height) as f64;
+
+        let search = search_snake_fold(&compact, &sr, 3);
+        let mut why: BTreeMap<String, usize> = BTreeMap::new();
+        for (_, r) in &search.refusals {
+            *why.entry(format!("{r:?}").split(' ').next().unwrap().into()).or_default() += 1;
+        }
+        match &search.best {
+            Some(found) => {
+                let l = &found.layout;
+                let fasp = l.width.max(l.height) as f64 / l.width.min(l.height) as f64;
+                println!(
+                    "{label}: bus {}x{} ({asp:.1}:1, {} ent) -> folds={:?} {}x{} ({fasp:.2}:1, {} ent)",
+                    compact.width, compact.height, compact.entities.len(),
+                    found.folds, l.width, l.height, l.entities.len(),
+                );
+            }
+            None => {
+                println!(
+                    "{label}: bus {}x{} ({asp:.1}:1) -> NO fold | legal={} refusals={why:?} rejected={}",
+                    compact.width, compact.height, search.legal_columns,
+                    search.rejected_by_validation
+                );
+                // A candidate that folds but validates worse is a different
+                // animal from one that refuses; show what it broke.
+                if search.rejected_by_validation > 0 {
+                    let legal = spaghettio_core::bus::compaction::legal_fold_columns(&compact);
+                    let mid = legal
+                        .iter()
+                        .copied()
+                        .min_by_key(|f| (f - compact.width / 2).abs());
+                    if let Some(f) = mid {
+                        if let Ok(folded) =
+                            spaghettio_core::bus::compaction::fold_snake(&compact, &[f])
+                        {
+                            let prof = |l: &spaghettio_core::models::LayoutResult| {
+                                let mut m: BTreeMap<String, usize> = BTreeMap::new();
+                                if let Ok(v) = validate::validate(l, Some(&sr), LayoutStyle::Bus) {
+                                    for i in &v {
+                                        *m.entry(i.category.clone()).or_default() += 1;
+                                    }
+                                }
+                                m
+                            };
+                            let (a, b) = (prof(&compact), prof(&folded));
+                            println!("     control={a:?}");
+                            println!("     fold@{f}={b:?}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Does the fold generalise beyond the fixture it was developed on?
 /// Runs the validated search over the whole RFC-057 corpus and reports what
 /// each fixture yields, plus why candidates were refused.

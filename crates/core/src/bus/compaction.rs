@@ -4480,6 +4480,79 @@ pub enum FoldRefusal {
     InputStranded { at: (i32, i32) },
 }
 
+/// Re-place power poles for a layout whose geometry has moved.
+///
+/// Poles are the one thing a fold cannot carry along. `build_bus_layout`
+/// places them LAST, after routing, precisely because their positions depend
+/// on final geometry; translating the originals leaves a network that is
+/// correct nowhere — segments end up tens of tiles apart and the copper-wire
+/// graph fragments into islands. That shows up as `power` warnings on a fold
+/// whose belts are all perfect, which is what blocked most bus fixtures.
+///
+/// Strips existing poles, rebuilds the coverage subjects and occupancy from
+/// what remains, and runs the same placement the pipeline uses.
+fn replace_poles(layout: &LayoutResult) -> LayoutResult {
+    use crate::common::{is_inserter, is_machine_entity};
+
+    let mut kept: Vec<PlacedEntity> = layout
+        .entities
+        .iter()
+        .filter(|e| !e.name.ends_with("electric-pole") && e.name != "substation")
+        .cloned()
+        .collect();
+
+    let mut machines: Vec<(i32, i32, i32)> = Vec::new();
+    let mut inserters: Vec<(i32, i32)> = Vec::new();
+    let mut occupied: FxHashSet<(i32, i32)> = FxHashSet::default();
+    for ent in &kept {
+        if is_machine_entity(&ent.name) {
+            let (mw, mh) = crate::common::machine_dims(&ent.name);
+            let (mw, mh) = (mw as i32, mh as i32);
+            for dx in 0..mw {
+                for dy in 0..mh {
+                    occupied.insert((ent.x + dx, ent.y + dy));
+                }
+            }
+            machines.push((ent.x + mw / 2, ent.y, mh));
+        } else {
+            occupied.insert((ent.x, ent.y));
+            if is_inserter(&ent.name) {
+                inserters.push((ent.x, ent.y));
+            }
+            if crate::common::is_splitter(&ent.name) {
+                let (sx, sy) = crate::common::splitter_second_tile(ent);
+                occupied.insert((sx, sy));
+            }
+        }
+    }
+
+    let (poles, _uncovered) = crate::bus::layout::place_poles(
+        &machines,
+        &inserters,
+        &occupied,
+        &[],
+        // Quality is per-entity here; take it from a machine, since pole
+        // supply radius scales with it.
+        layout
+            .entities
+            .iter()
+            .find(|e| crate::common::is_machine_entity(&e.name))
+            .and_then(|e| e.quality)
+            .unwrap_or_default(),
+    );
+    kept.extend(poles);
+
+    let mut out = LayoutResult {
+        entities: kept,
+        ..layout.clone()
+    };
+    out.power_wires = Some(crate::power_wires::compute_pole_wires(
+        &out.entities,
+        out.wire_mode,
+    ));
+    out
+}
+
 /// Snake-fold a layout at the given fold columns.
 ///
 /// The layout is divided into `folds.len() + 1` vertical segments.  Even
@@ -5095,10 +5168,8 @@ pub fn fold_snake(
     };
     result.regions.clear();
     result.trace = None;
-    result.power_wires = Some(crate::power_wires::compute_pole_wires(
-        &result.entities,
-        result.wire_mode,
-    ));
+    // Poles must be re-placed, not carried: see `replace_poles`.
+    result = replace_poles(&result);
     // Boundary records and surplus exits are coordinates into the layout and
     // must go through the fold like everything else. Shifting only their X
     // (as an earlier version did) left every one of them pointing at an

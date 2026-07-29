@@ -462,7 +462,7 @@ struct SubstationBand {
 /// rows (inclusive); `inserters` is the deep input-inserter band of the row
 /// below, which the substation's supply must cover under the exact continuous
 /// check.
-struct SubstationTarget {
+pub(crate) struct SubstationTarget {
     band_y0: i32,
     band_y1: i32,
     inserters: Vec<(i32, i32)>,
@@ -1650,7 +1650,7 @@ fn place_unified_band_line(
 /// NEITHER a substation NOR a medium pole could reach (the `give_up` set),
 /// the reactive substation pass's trigger; a final `repair_pole_connectivity` bridges any disconnected pole
 /// clusters.
-fn place_poles(
+pub(crate) fn place_poles(
     machines: &[(i32, i32, i32)],
     inserters: &[(i32, i32)],
     occupied: &FxHashSet<(i32, i32)>,
