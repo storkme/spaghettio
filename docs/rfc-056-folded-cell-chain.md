@@ -1,6 +1,6 @@
 # RFC-056: Folded cell chains — cut-aware multi-row macro placement
 
-Status: Design  
+Status: Experiment complete — rejected in favour of RFC-055
 Tracking: #456  
 Competes with: RFC-055
 
@@ -242,3 +242,34 @@ Evidence against escalation:
   routing across rows? Duplication is out of scope here but should be measured.
 - Should K replicas be tiled in a grid after each replica is folded?
 
+## Decision log
+
+- **2026-07-26 — Phase 1 foundation implemented.** The shared placement
+  model can score contiguous multi-row layouts using Manhattan macro-centre
+  distance and explicit weighted inter-row cuts. The first RFC-056 competitor
+  evaluates every non-empty two-row split of a fixed order and compares
+  serpentine with same-direction rows deterministically. It is a fold
+  simulator only; no folded tile geometry is emitted yet.
+- **2026-07-26 — Rejected at the admission gate.** Using the winning
+  RFC-055 order and real extracted-cell dimensions, the exact two-row search
+  evaluated every non-empty cut in both same-direction and serpentine modes.
+  Results relative to RFC-055 were:
+
+  | Fixture | RFC-055 weighted distance | best two-row | delta | critical-path delta |
+  |---|---:|---:|---:|---:|
+  | `usp2raw` | 30,908 | 30,060 | −2.7% | +51.0% |
+  | `chem5raw` | 20,875 | 17,625 | −15.6% | −40.4% |
+  | `pu4raw` | 34,598 | 38,434 | +11.1% | +78.7% |
+  | `mil5ore` | 3,175 | 3,156 | −0.6% | −22.6% |
+
+  Only chemistry clears the material-improvement threshold. USP gains almost
+  nothing in the primary metric while its critical path becomes much longer,
+  and processing units regress in both metrics. Optimizing cuts solely for
+  critical path does not produce a second qualifying deep fixture.
+
+  RFC-056 therefore does not earn the physical-composer phases. Implementing
+  row trunks, rotated variants, and multi-row power corridors would add
+  architecture and routing complexity without satisfying the RFC's own
+  prerequisite evidence. RFC-055 is selected; general 2D placement remains a
+  possible later RFC if a different constraint model provides stronger
+  evidence.

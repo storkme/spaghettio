@@ -653,6 +653,29 @@ pub fn compose_chain_with_capacity(
     sr: &SolverResult,
     inserter_capacity: u8,
 ) -> Result<LayoutResult, String> {
+    compose_chain_with_capacity_and_order(sr, inserter_capacity, ChainOrder::Current)
+}
+
+/// RFC-055 experimental entry point. Uses the production cell generator and
+/// router, changing only the macro order selected before slot placement.
+pub fn compose_chain_compact(
+    sr: &SolverResult,
+    inserter_capacity: u8,
+) -> Result<LayoutResult, String> {
+    compose_chain_with_capacity_and_order(sr, inserter_capacity, ChainOrder::Compact)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ChainOrder {
+    Current,
+    Compact,
+}
+
+fn compose_chain_with_capacity_and_order(
+    sr: &SolverResult,
+    inserter_capacity: u8,
+    chain_order: ChainOrder,
+) -> Result<LayoutResult, String> {
     chain_eligible(sr)?;
     let kq = required_copies(sr);
     let scale = 1.0 / kq as f64;
@@ -755,6 +778,54 @@ pub fn compose_chain_with_capacity(
         Some(&i) => (0, std::cmp::Reverse(i)),
         None => (1, std::cmp::Reverse(usize::MAX)),
     });
+    if chain_order == ChainOrder::Compact {
+        let mut dimensions = FxHashMap::default();
+        for spec in &specs {
+            let (width, height) = if spec.recipe.starts_with(MEGA_PREFIX) {
+                let plan = mega_plan.as_ref().expect("mega spec implies plan");
+                let (_, block) = super::mega::compose_mega_block(sr, plan, scale)?;
+                (block.width, block.height)
+            } else {
+                let out = spec.outputs.first()
+                    .ok_or_else(|| format!("cells: {} has no output", spec.recipe))?;
+                let rate = out.rate * spec.count * scale;
+                let inputs: Vec<&str> = spec.inputs.iter().map(|i| i.item.as_str()).collect();
+                let (_, layout) = super::extract::generate_cell_layout_with_capacity(
+                    &out.item, rate, &inputs, inserter_capacity);
+                let cell = extract_cell(&layout);
+                (cell.width, cell.height)
+            };
+            dimensions.insert(spec.recipe.clone(), (width, height));
+        }
+        let graph = super::placement::PlacementGraph::from_specs(&specs, &dimensions)?;
+        let initial: Vec<usize> = (0..specs.len()).collect();
+        let control_metrics = graph.score_linear(&initial, CORRIDOR_GAP, 0.25)?;
+        let candidate = graph.best_linear(&initial, CORRIDOR_GAP, 0.25)?;
+        let fold = graph.best_two_row_fold(
+            &candidate.order, CORRIDOR_GAP, 24, 0.25, 2.0, true)?;
+        let mut best_fold_critical = i32::MAX;
+        for end in 1..candidate.order.len() {
+            for serpentine in [false, true] {
+                let metrics = graph.score_folded(
+                    &candidate.order, &[end, candidate.order.len()],
+                    CORRIDOR_GAP, 24, 0.25, serpentine)?;
+                best_fold_critical = best_fold_critical.min(metrics.critical_path_distance);
+            }
+        }
+        let original = specs.clone();
+        specs = candidate.order.iter().map(|&idx| original[idx].clone()).collect();
+        eprintln!("RFC placement estimates: control={:.1}/crit{} linear={:.1}/crit{} fold2={:.1}/crit{} best-fold-crit={} cut={:.1} serpentine={}; order: {:?}",
+            control_metrics.rate_weighted_distance,
+            control_metrics.critical_path_distance,
+            candidate.metrics.rate_weighted_distance,
+            candidate.metrics.critical_path_distance,
+            fold.metrics.rate_weighted_distance,
+            fold.metrics.critical_path_distance,
+            best_fold_critical,
+            fold.metrics.weighted_cut_sum,
+            fold.serpentine,
+            specs.iter().map(|s| s.recipe.as_str()).collect::<Vec<_>>());
+    }
 
     // Per-slot vertical-lane demand, from the bypass edge list (an edge
     // p→c descends in slot p+1 and ascends in slot c; sizing by the
@@ -787,7 +858,13 @@ pub fn compose_chain_with_capacity(
                     }
                     continue;
                 }
-                if ci != pi && c.inputs.iter().any(|i| i.item == o.item) && ci != pi + 1 {
+                let consumes = ci != pi && c.inputs.iter().any(|i| i.item == o.item);
+                let fan_size = specs.iter()
+                    .filter(|cc| cc.inputs.iter().any(|i| i.item == o.item))
+                    .count();
+                let needs_bypass = ci != pi + 1
+                    || (chain_order == ChainOrder::Compact && fan_size >= 2);
+                if consumes && needs_bypass {
                     if pi + 1 < n {
                         lane_demand[pi + 1] += 1;
                     }
@@ -1029,12 +1106,19 @@ pub fn compose_chain_with_capacity(
                 if pi_mega { &m.outputs } else { &m.outputs[..1] };
             outs.iter()
                 .map(|o| {
+                    let fan_size = specs.iter()
+                        .enumerate()
+                        .filter(|(ci, c)| {
+                            *ci != pi && c.inputs.iter().any(|i| i.item == o.item)
+                        })
+                        .count();
                     let edges = specs
                         .iter()
                         .enumerate()
                         .filter(|(ci, c)| {
                             *ci != pi
-                                && (pi_mega || *ci != pi + 1)
+                                && (pi_mega || *ci != pi + 1
+                                    || (chain_order == ChainOrder::Compact && fan_size >= 2))
                                 && c.inputs.iter().any(|i| i.item == o.item)
                                 && cell_cache[*ci]
                                     .ports
@@ -1421,7 +1505,19 @@ pub fn compose_chain_with_capacity(
             fx += 2;
         }
         // Pass-through (or the only) branch.
-        branch_origins.push((if n_branches > 1 { fx - 1 } else { pass_x }, run_y));
+        branch_origins.push((
+            if n_branches > 1 {
+                // The legacy dependency order never sends two fan
+                // branches west, so it can begin at the splitters'
+                // shared output column. A compact order can; advance
+                // to the first genuinely free tile so each branch has
+                // a distinct descent column.
+                if chain_order == ChainOrder::Compact { fx } else { fx - 1 }
+            } else {
+                pass_x
+            },
+            run_y,
+        ));
 
         // Route each branch. Adjacent-east consumer: port-row corridor
         // (with a vertical jog on the consumer slot's first lane if the
@@ -1436,7 +1532,9 @@ pub fn compose_chain_with_capacity(
             let (tx, ty) = port_abs(port, c.x, c.y_off);
             let (bx, by) = branch_origins[bi];
             let seg = format!("corr:{}:{}", p.seg, c.seg);
-            if *ci == pi + 1 {
+            if *ci == pi + 1
+                && (chain_order == ChainOrder::Current || consumers.len() == 1)
+            {
                 if by == ty {
                     router.hrow(&mut entities, ty, bx, tx - 1, &out_item,
                         "express-transport-belt", "express-underground-belt", &seg);
@@ -1459,7 +1557,6 @@ pub fn compose_chain_with_capacity(
                 // In-copy by construction: the last slot of a copy is
                 // always the sink (dependency order), which has no
                 // consumers and never reaches this branch.
-                debug_assert_eq!(placed[pi + 1].copy, p.copy, "bypass descent lane must stay in-copy");
                 let up_demand = lane_demand[*ci % n];
                 let lane_up = alloc_lane(&mut lane_next, *ci, c.vlane_base, lane_step(up_demand));
                 let row = bypass_idx.entry(p.copy).or_insert(0);
@@ -1469,7 +1566,8 @@ pub fn compose_chain_with_capacity(
                     // WESTWARD consumer: the reversed-dependency
                     // placement can put an item's consumer west of its
                     // producer (shared inputs pulled in at different
-                    // depths). Descend in-gap, run west along the
+                    // depths). Compact fan origins are allocated on
+                    // distinct columns, so descend in-gap, run west along the
                     // bypass row, corner north into the consumer's
                     // strip lane; the ascent + port approach below are
                     // position-relative and shared with the eastward
@@ -1482,6 +1580,8 @@ pub fn compose_chain_with_capacity(
                         "express-transport-belt", "express-underground-belt", &seg);
                     router.corner_north(&mut entities, lane_up, by_y, &out_item, "express-transport-belt", &seg);
                 } else {
+                    debug_assert_eq!(placed[pi + 1].copy, p.copy,
+                        "bypass descent lane must stay in-copy");
                     // Descent: legacy path runs east on the branch row
                     // to a lane in the NEXT slot's strip. When that row
                     // segment is already occupied (sibling fan-out
@@ -1493,7 +1593,9 @@ pub fn compose_chain_with_capacity(
                     let down_demand = lane_demand[(pi + 1) % n];
                     let legacy_lane_down = placed[pi + 1].vlane_base
                         + *lane_next.get(&(pi + 1)).unwrap_or(&0) * lane_step(down_demand);
-                    let (drop_x, drop_top) = if router.is_row_stampable(by, bx, legacy_lane_down - 1) {
+                    let (drop_x, drop_top) = if legacy_lane_down < lane_up
+                        && router.is_row_stampable(by, bx, legacy_lane_down - 1)
+                    {
                         let lane_down = alloc_lane(&mut lane_next, pi + 1, placed[pi + 1].vlane_base, lane_step(down_demand));
                         router.hrow(&mut entities, by, bx, lane_down - 1, &out_item,
                             "express-transport-belt", "express-underground-belt", &seg);
@@ -1558,24 +1660,33 @@ pub fn compose_chain_with_capacity(
         }
     }
     let width = entities.iter().map(|e| e.x).max().unwrap_or(0) + 1;
+    // Spanning pole line. The step is measured from the LAST POLE ACTUALLY
+    // PLACED, not from an absolute grid: pitch 8 against wire reach 9 leaves
+    // exactly one tile of slack, so a pole nudged forward past congestion put
+    // itself out of reach of its predecessor and silently broke the chain it
+    // was nudging to preserve (nudged gap 12, or 16 when no free tile was
+    // found at all — both > 9). Advancing from the last placement keeps every
+    // consecutive gap within reach regardless of how far a nudge travelled.
+    let mut last_x: Option<i32> = None;
     let mut px = 1;
     while px < width {
-        for nudge in 0..5 {
-            let x = px + nudge;
-            if !occupied.contains(&(x, band_bottom)) {
-                entities.push(PlacedEntity {
-                    name: "medium-electric-pole".into(), x, y: band_bottom,
-                    direction: EntityDirection::North,
-                    segment_id: Some("pole".into()), ..Default::default()
-                });
-                break;
-            }
+        let placed_at = (0..5).map(|n| px + n).find(|&x| {
+            x < width + 4 && !occupied.contains(&(x, band_bottom))
+        });
+        if let Some(x) = placed_at {
+            occupied.insert((x, band_bottom));
+            entities.push(PlacedEntity {
+                name: "medium-electric-pole".into(), x, y: band_bottom,
+                direction: EntityDirection::North,
+                segment_id: Some("pole".into()), ..Default::default()
+            });
+            last_x = Some(x);
         }
-        px += 8;
+        px = last_x.map_or(px + 8, |x| x + 8);
     }
 
     let height = (entities.iter().map(|e| e.y).max().unwrap_or(0) + 1).max(band_bottom + 2);
-    Ok(LayoutResult {
+    let mut composed = LayoutResult {
         entities,
         width,
         height,
@@ -1595,5 +1706,12 @@ pub fn compose_chain_with_capacity(
         // can cross-check them against the translated pipe entities (#476).
         surplus_exits,
         ..Default::default()
-    })
+    };
+    // Heuristic pole placement leaves islands, which is why
+    // `build_bus_layout` follows its own placement with this repair.
+    // Composition never did, and shipped layouts whose power network was in
+    // as many as 41 pieces — every machine covered, most of them unreachable
+    // from any single power source. Additive: bridge poles only.
+    crate::bus::layout::repair_pole_network(&mut composed);
+    Ok(composed)
 }

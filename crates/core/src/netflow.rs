@@ -88,6 +88,10 @@ pub struct NetflowOptions {
     /// and reachability guard exemptions documented at their call sites.
     /// Requires `allow_recycling` to have any candidates to exempt.
     pub allow_voiding: bool,
+    /// Require every produced fluid to be consumed by the plan. Enabled
+    /// internally for the advanced-oil retry because vanilla Factorio has no
+    /// ordinary fluid void.
+    pub disallow_fluid_surplus: bool,
     /// Build quality of the machines being planned
     /// (`docs/rfc-build-quality.md` Phase 1). Scales every column's
     /// crafting speed via [`effective_crafting_speed`] — `Normal`
@@ -356,6 +360,7 @@ pub fn solve_netflow_with_options(
     // uranium-processing excluded) still refuse with a typed error. Each
     // retry removes at least one recipe, so the cap is just a backstop.
     let mut extra_excluded: FxHashSet<String> = FxHashSet::default();
+    let mut attempt_options = *options;
     let mut last_refusal: Option<SolverError> = None;
     // Eight acyclic-fallback exclusions plus at most one free-mode oil-path
     // exclusivity re-solve (#476).
@@ -370,7 +375,7 @@ pub fn solve_netflow_with_options(
             &extra_excluded,
             scope,
             costs,
-            options,
+            &attempt_options,
         ) {
             Ok(r) => {
                 // Physical recipe-path exclusivity (#476): mixing basic and
@@ -388,11 +393,19 @@ pub fn solve_netflow_with_options(
                 // in `surplus_outputs`, so the layout gives it a physical
                 // perimeter exit. Restricted compatibility mode remains the
                 // exact caller-requested recipe set.
-                let mixes_oil_paths = matches!(scope, RecipeScope::Free)
-                    && r.machines.iter().any(|m| m.recipe == "advanced-oil-processing")
-                    && r.machines.iter().any(|m| m.recipe == "basic-oil-processing");
-                if mixes_oil_paths {
-                    extra_excluded.insert("basic-oil-processing".to_string());
+                let has_advanced =
+                    r.machines.iter().any(|m| m.recipe == "advanced-oil-processing");
+                let has_basic =
+                    r.machines.iter().any(|m| m.recipe == "basic-oil-processing");
+                let has_fluid_surplus = r.surplus_outputs.iter().any(|f| f.is_fluid);
+                let needs_oil_physical_retry = matches!(scope, RecipeScope::Free)
+                    && has_advanced
+                    && (has_basic || has_fluid_surplus);
+                if needs_oil_physical_retry {
+                    if has_basic {
+                        extra_excluded.insert("basic-oil-processing".to_string());
+                    }
+                    attempt_options.disallow_fluid_surplus = true;
                     continue;
                 }
                 return Ok(r);
@@ -739,7 +752,12 @@ fn solve_attempt(
     let o_vars: Vec<Option<Variable>> = (0..items.len())
         .map(|i| {
             if has_producer[i] {
-                Some(problem.add_var(costs.eps_surplus, (0.0, f64::INFINITY)))
+                let upper = if options.disallow_fluid_surplus && items.is_fluid[i] {
+                    0.0
+                } else {
+                    f64::INFINITY
+                };
+                Some(problem.add_var(costs.eps_surplus, (0.0, upper)))
             } else {
                 None
             }

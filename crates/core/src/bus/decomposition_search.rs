@@ -309,6 +309,7 @@ impl DecompositionCandidate for ModuleSizeSplit {
             cell_composition: opts.cell_composition,
             splitter_tap_spacers: opts.splitter_tap_spacers,
             direct_insertion: opts.direct_insertion,
+            compact_layout: false,
         };
         run_layout_with_retry(&transformed, &inner_opts)
     }

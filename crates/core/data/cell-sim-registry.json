@@ -101,13 +101,13 @@
   {
     "target": "chemical-science-pack",
     "rate": 5.0,
-    "geometry_hash": "1cecb0e45320930a",
+    "geometry_hash": "b4bf67f82e324b51",
     "declared_inserter_capacity": 2,
     "declared_stacking": 1,
     "harness_world": "nb=1 bulk=3, S=1 (declared L2 \u2014 the post-#431 engine default)",
     "verdict": "PASS",
     "produced_per_s": 5.0,
-    "scenario": "spaghettio-sim mega-chain-chem5raw (Factorio 2.0.77, 172/172 working, converged, produced 5.00/s EXACT at plan, delivered 5.07/s; RFC-052 Phase C mega-cell from raw ore + plate inputs (iron-ore/copper-ore/crude-oil/water/coal + iron-plate/copper-plate/steel-plate \u2014 NOT ore-only; see the chem5 config row in tests/cell_composition.rs) \u2014 refinery + plastic + sulfur fluid subgraph collapsed into one mega block, K=2 chain quantization. First registration at the L2 default; unblocked by #383's resolution, which RFC-052's close-out named as the gate.)",
-    "date": "2026-07-24"
+    "scenario": "spaghettio-sim chem5-rebless (Factorio 2.0.77, 216k-tick warmup, 177 working, produced 5.00/s EXACT at plan, delivered 5.07/s; power: 1 pole network). RE-BLESSED after the chain composer's pole fix: its spanning pole line stepped by 8 on an absolute grid against wire reach 9, so any forward nudge past congestion orphaned the pole behind it, and composition never ran the connectivity repair that build_bus_layout has always run. This fixture composed with its power network in 17 pieces; it now composes as ONE. Geometry differs from the 2026-07-24 pin by added bridge poles only \u2014 no machine, recipe or belt changed \u2014 and was re-measured rather than re-hashed, since the pin carries a sim-verified claim. Convergence flag reads false at the tick ceiling, but the window series oscillates around plan (5.08/4.84/4.75/5.00/5.22/5.15/5.00/5.08/4.62/5.00/5.00) rather than trending; produced is exact at plan. Fluid boundaries remain UNCALIBRATED (RFC-050 Phase 1), as at first registration.",
+    "date": "2026-07-29"
   }
 ]

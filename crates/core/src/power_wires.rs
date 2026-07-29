@@ -236,7 +236,17 @@ pub fn wires_for(layout: &LayoutResult) -> Cow<'_, [(u32, u32)]> {
 /// electric network. `wires` are index pairs into `entities` (as produced by
 /// [`compute_pole_wires`] or parsed from a blueprint). Non-pole entities and
 /// out-of-range endpoints are ignored defensively.
-pub fn count_disconnected_poles(entities: &[PlacedEntity], wires: &[(u32, u32)]) -> usize {
+/// Tiles of every pole that cannot reach the main pole network.
+///
+/// Returns positions rather than a bare count so callers can report one issue
+/// per pole. A single aggregate issue carrying the number in its message text
+/// is invisible to anything that compares issue *counts* — which is how a fold
+/// that took a layout from 2 disconnected poles to 89 passed an admission gate
+/// as "no worse than source".
+pub fn disconnected_poles(
+    entities: &[PlacedEntity],
+    wires: &[(u32, u32)],
+) -> Vec<(i32, i32)> {
     let pole_idxs: Vec<usize> = entities
         .iter()
         .enumerate()
@@ -244,7 +254,7 @@ pub fn count_disconnected_poles(entities: &[PlacedEntity], wires: &[(u32, u32)])
         .map(|(i, _)| i)
         .collect();
     if pole_idxs.len() <= 1 {
-        return 0;
+        return Vec::new();
     }
 
     // Union-find over pole entity indices.
@@ -272,7 +282,14 @@ pub fn count_disconnected_poles(entities: &[PlacedEntity], wires: &[(u32, u32)])
     pole_idxs
         .iter()
         .filter(|&&i| find(&mut parent, i) != root0)
-        .count()
+        .map(|&i| (entities[i].x, entities[i].y))
+        .collect()
+}
+
+/// How many poles cannot reach the main network. Thin wrapper over
+/// [`disconnected_poles`] for callers that only need the magnitude.
+pub fn count_disconnected_poles(entities: &[PlacedEntity], wires: &[(u32, u32)]) -> usize {
+    disconnected_poles(entities, wires).len()
 }
 
 #[cfg(test)]

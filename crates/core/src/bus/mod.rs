@@ -27,6 +27,7 @@
 
 pub mod balancer;
 pub mod cells;
+pub mod compaction;
 pub mod balancer_classify;
 pub mod balancer_generate;
 pub mod balancer_library;

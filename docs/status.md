@@ -127,6 +127,30 @@ budgets — utility@2/s FAIL×2 is the most reachable new fix target.
 
 ## Recent RFC close-outs
 
+**`rfc-057-topology-preserving-dense-repacking.md` snake fold (2026-07-29,
+PR #481 — RFC ACTIVE, not closed)**: a single fold is Factorio-verified.
+`chain-mil5ore` goes 552x32 (17.25:1) to 276x66 (4.18:1) at **5.00/s produced
+with 146 of 146 machines working** — the unfolded control's exact census, both
+runs converged at `--warmup 216000`, and the folded artifact measures **one
+pole network** — the whole factory on a single grid. Getting there needed three
+fixes that only made sense together: the cell composer's pole repair (the
+source network was itself in pieces), the de-aggregated connectivity check
+(2 and 89 unreachable poles both reported as one warning), and repairing the
+fold's seams rather than re-placing every pole. Standing lesson from the
+detour: the sim harness energises every pole network it finds, so a green sim
+is not evidence about a blueprint's own wire graph — check that separately. Bus layouts fold too: `gear15-ore` reaches
+55x65 (1.18:1) on **three** folds. Folding stays refused as a *density* lever
+(measured routing headroom ~20%); its value is shape, since a 2,381-tile-wide
+ribbon is not a factory anyone builds. Reachable only from tests — deliberately
+not wired to a `LayoutOptions` flag yet.
+
+Carries a **validator finding that outlives the fold**: an earlier version
+validated at exact control parity and produced 0.00/s in Factorio, because a
+relocated output belt left its `boundary_outputs` record behind. Geometry-only
+validation cannot certify a transform that moves a boundary. Fixed separately in
+PR #482. Open blockers and measured refusal causes:
+[`snake-fold-followups.md`](snake-fold-followups.md).
+
 **`rfc-053-direct-insertion-cells.md` Phase 0 (2026-07-25, PR #436 —
 RFC ACTIVE, not closed)**: machine→inserter→machine DI, the topology
 #429 asked for and the corpus overwhelmingly builds. Evidence is now

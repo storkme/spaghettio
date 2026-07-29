@@ -133,6 +133,9 @@ pub struct LayoutOptions {
     /// The solver always populates `di_couplings`; this flag only
     /// controls whether the placer acts on them.
     pub direct_insertion: bool,
+    /// RFC-057 topology-preserving post-layout compaction. Experimental and
+    /// default off, so the normal pipeline remains byte-identical.
+    pub compact_layout: bool,
 }
 
 impl Default for LayoutOptions {
@@ -162,6 +165,7 @@ impl Default for LayoutOptions {
             // bit-identical (goldens gate this).
             cell_composition: crate::bus::cells::CellComposition::Candidate,
             direct_insertion: false,
+            compact_layout: false,
         }
     }
 }
@@ -205,7 +209,17 @@ pub fn build_bus_layout(
             opts.stacking, opts.max_inserter_tier
         ));
     }
-    crate::bus::decomposition_search::select_best_decomposition(solver_result, opts)
+    let compact_layout = opts.compact_layout;
+    let result =
+        crate::bus::decomposition_search::select_best_decomposition(solver_result, opts)?;
+    if compact_layout {
+        Ok(crate::bus::compaction::compact_validated_geometry(
+            &result,
+            solver_result,
+        ))
+    } else {
+        Ok(result)
+    }
 }
 
 /// Today's `build_bus_layout` body — the retry orchestrator that
@@ -448,7 +462,7 @@ struct SubstationBand {
 /// rows (inclusive); `inserters` is the deep input-inserter band of the row
 /// below, which the substation's supply must cover under the exact continuous
 /// check.
-struct SubstationTarget {
+pub(crate) struct SubstationTarget {
     band_y0: i32,
     band_y1: i32,
     inserters: Vec<(i32, i32)>,
@@ -1636,7 +1650,7 @@ fn place_unified_band_line(
 /// NEITHER a substation NOR a medium pole could reach (the `give_up` set),
 /// the reactive substation pass's trigger; a final `repair_pole_connectivity` bridges any disconnected pole
 /// clusters.
-fn place_poles(
+pub(crate) fn place_poles(
     machines: &[(i32, i32, i32)],
     inserters: &[(i32, i32)],
     occupied: &FxHashSet<(i32, i32)>,
@@ -1950,7 +1964,62 @@ fn place_poles(
 /// every pole, so post-stamp `compute_pole_wires` (which reads per-entity
 /// `quality`) sees exactly the graph repair reasoned about. At legendary the
 /// medium reach is 19, so repair neither mis-clusters nor over-bridges.
-fn repair_pole_connectivity(
+/// Bridge a layout's pole network until every pole reaches the others.
+///
+/// `build_bus_layout` runs this after placement because heuristic pole
+/// placement leaves islands; cell composition stamps its own poles and never
+/// did, which is why composed layouts can ship with most of their network
+/// unreachable. Public so any producer of a `LayoutResult` can close that gap.
+///
+/// Adds bridge poles only — never moves or removes existing ones — and
+/// recomputes the wire graph. Returns how many bridges it added.
+pub fn repair_pole_network(layout: &mut LayoutResult) -> usize {
+    let is_pole_ent = |e: &PlacedEntity| {
+        e.name.ends_with("electric-pole") || e.name == "substation"
+    };
+    let quality = layout
+        .entities
+        .iter()
+        .find(|e| is_machine_entity(&e.name))
+        .and_then(|e| e.quality)
+        .unwrap_or_default();
+
+    // `repair_pole_connectivity` treats every element it is handed as a wire
+    // node, so it takes a poles-only vec.
+    let mut poles: Vec<PlacedEntity> =
+        layout.entities.iter().filter(|e| is_pole_ent(e)).cloned().collect();
+    if poles.len() <= 1 {
+        return 0;
+    }
+    layout.entities.retain(|e| !is_pole_ent(e));
+
+    let mut occupied: FxHashSet<(i32, i32)> = FxHashSet::default();
+    for e in &layout.entities {
+        let (w, h) = crate::common::entity_size(&e.name);
+        for dx in 0..w as i32 {
+            for dy in 0..h as i32 {
+                occupied.insert((e.x + dx, e.y + dy));
+            }
+        }
+    }
+    let placed: FxHashSet<(i32, i32)> = poles.iter().map(|e| (e.x, e.y)).collect();
+    for tile in &placed {
+        occupied.insert(*tile);
+    }
+
+    let before = poles.len();
+    repair_pole_connectivity(&mut poles, &placed, &occupied, quality);
+    let added = poles.len() - before;
+
+    layout.entities.extend(poles);
+    layout.power_wires = Some(crate::power_wires::compute_pole_wires(
+        &layout.entities,
+        layout.wire_mode,
+    ));
+    added
+}
+
+pub(crate) fn repair_pole_connectivity(
     entities: &mut Vec<PlacedEntity>,
     placed: &FxHashSet<(i32, i32)>,
     occupied: &FxHashSet<(i32, i32)>,
@@ -1977,7 +2046,16 @@ fn repair_pole_connectivity(
         all_occupied.insert(p);
     }
 
-    for _ in 0..20 {
+    // Bridge budget. Scaled to the problem rather than fixed at 20: a
+    // pathological layout (mega-chain-pu4raw composes with 1192 of 1202 poles
+    // isolated) exhausted a flat 20 and returned quietly, leaving the caller
+    // to believe the network was repaired. Still bounded — this is a repair,
+    // not a placer — but it now reports when it gives up rather than
+    // truncating in silence.
+    let budget = 20.max(entities.len() / 4);
+    let mut spent = 0usize;
+    for _ in 0..budget {
+        spent += 1;
         let n = entities.len();
         if n <= 1 {
             return;
@@ -2089,6 +2167,15 @@ fn repair_pole_connectivity(
         entities.push(make_pole(p.0, p.1));
         all_occupied.insert(p);
     }
+
+    // Budget exhausted with components still separate. Say so: the caller
+    // otherwise cannot distinguish "repaired" from "gave up", and a layout
+    // whose power network is still in pieces looks identical to a fixed one
+    // from here.
+    crate::trace::emit(crate::trace::TraceEvent::PolesPlaced {
+        count: spent,
+        strategy: "repair-budget-exhausted".to_string(),
+    });
 }
 
 
@@ -2841,6 +2928,55 @@ mod tests {
     /// `inserter-direction` (which would otherwise flag them as touching no
     /// machine) nor `belt-flow-reachability` (which would otherwise call the
     /// producer's bridge-consumed output belt a dead-end) fires on them.
+    #[test]
+    fn compact_layout_option_is_explicit_and_validated() {
+        let inputs: FxHashSet<String> =
+            ["iron-plate"].iter().map(|item| item.to_string()).collect();
+        let sr = crate::solver::solve_with_exclusions(
+            "iron-gear-wheel",
+            5.0,
+            &inputs,
+            "assembling-machine-3",
+            &FxHashSet::default(),
+        )
+        .expect("solve iron gears");
+        let base_opts = LayoutOptions {
+            cell_composition: crate::bus::cells::CellComposition::Off,
+            ..Default::default()
+        };
+        let control =
+            build_bus_layout(&sr, base_opts.clone()).expect("control layout should succeed");
+        let compacted = build_bus_layout(
+            &sr,
+            LayoutOptions {
+                compact_layout: true,
+                ..base_opts
+            },
+        )
+        .expect("compacted layout should succeed");
+
+        assert_eq!(
+            crate::bus::compaction::PlacedMachineSignature::from_layout(&control),
+            crate::bus::compaction::PlacedMachineSignature::from_layout(&compacted),
+        );
+        assert!(compacted.width <= control.width);
+        assert!(compacted.height <= control.height);
+        let issues = match crate::validate::validate(
+            &compacted,
+            Some(&sr),
+            crate::validate::LayoutStyle::Bus,
+        ) {
+            Ok(issues) => issues,
+            Err(error) => error.issues,
+        };
+        assert!(
+            issues
+                .iter()
+                .all(|issue| issue.severity != crate::validate::Severity::Error),
+            "compacted option emitted errors: {issues:?}",
+        );
+    }
+
     #[test]
     fn di_full_pipeline_ec_from_plates() {
         let inputs: FxHashSet<String> =

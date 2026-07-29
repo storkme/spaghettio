@@ -16,11 +16,20 @@ use std::time::Instant;
 
 use spaghettio_meter::{Factory, Manifest};
 
-const WARMUP: u64 = 60 * 60 * 2; // 2 game-minutes
-const WINDOW: u64 = 60 * 60 * 3; // 3 game-minutes
+const DEFAULT_WARMUP: u64 = 60 * 60 * 2; // 2 game-minutes
+const DEFAULT_WINDOW: u64 = 60 * 60 * 3; // 3 game-minutes
 
 fn main() {
-    let want = std::env::args().nth(1);
+    let args: Vec<String> = std::env::args().collect();
+    let want = args.get(1).cloned();
+    let warmup = args
+        .get(2)
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(DEFAULT_WARMUP);
+    let window = args
+        .get(3)
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(DEFAULT_WINDOW);
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../core/target/tmp");
     let Ok(entries) = std::fs::read_dir(&dir) else {
         eprintln!("no fixtures at {dir:?} — generate them first (see module docs)");
@@ -59,7 +68,7 @@ fn main() {
             }
         };
         let entities = f.net.len() + f.machines.len() + f.inserters.len();
-        let report = f.measure(WARMUP, WINDOW);
+        let report = f.measure(warmup, window);
         let wall = started.elapsed();
 
         println!(
@@ -68,7 +77,7 @@ fn main() {
             f.machines.len(),
             f.inserters.len(),
             wall.as_secs_f64(),
-            WARMUP + WINDOW
+            warmup + window
         );
         let _ = entities;
 
@@ -87,7 +96,10 @@ fn main() {
             .collect();
         rows.sort_by(|a, b| a.3.partial_cmp(&b.3).unwrap_or(std::cmp::Ordering::Equal));
 
-        println!("  {:<26} {:>9} {:>9} {:>8}", "item", "planned/s", "meter/s", "d%");
+        println!(
+            "  {:<26} {:>9} {:>9} {:>8}",
+            "item", "planned/s", "meter/s", "d%"
+        );
         for (item, planned, got, delta) in &rows {
             println!("  {item:<26} {planned:>9.2} {got:>9.2} {delta:>7.1}%");
         }
