@@ -83,6 +83,15 @@ per side, which is what capped every layout at one item each way:
   side inverts — it fills from the far side and climbs the other way, so the
   deepest row needs the largest column.
 
+`InputStranded` no longer fires on any multi-fold — **verified rather than
+inferred**, because "the check went quiet" is not evidence on its own, and item
+5 below predicted that adaptive gap sizing would invalidate the edge test this
+check relies on. Instrumenting every evaluation across the fold ladder: 504
+input checks, of which **82 are interior** (`on_edge=false`) and **all 82 are
+`supplied=true`** — the same 82. The interior branch still fires, and those
+cases pass because the feed pass genuinely supplies them, not because the test
+stopped discriminating. `SPAGHETTIO_FOLD_DEBUG=1` reproduces it.
+
 **The remaining blocker**, measured rather than assumed:
 
 ```
@@ -182,8 +191,13 @@ Adversarial review also raised two it could not exercise:
   `build_bus_layout` computes real ones for deep interior geometry — precisely
   what densification produces. Not exercised by mil5, which has no substations.
 - `InputStranded`'s edge test accepts any bounding-box edge, and is correct only
-  by coincidence of the current junction-column scheme. Adaptive gap sizing
-  (item 1) would invalidate that coincidence.
+  by coincidence of the current junction-column scheme. This predicted that
+  adaptive gap sizing (item 1) would invalidate that coincidence. **Tested when
+  that landed: it did not** — 82 interior inputs are still detected as interior,
+  every one supplied. Gap height is vertical; the edge test's fragility is
+  horizontal (junction columns), so adaptive sizing does not touch it. The
+  looseness itself remains a latent risk: re-run that measurement if
+  junction-column *placement* ever changes.
 
 ### 5. Lower-confidence items
 
