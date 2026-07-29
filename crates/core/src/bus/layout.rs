@@ -2136,8 +2136,38 @@ pub(crate) fn repair_pole_connectivity(
         // medium pole at top-left `p` (center via `pole_center`, reach medium),
         // so it wires to an endpoint iff their center distance ≤ min(medium,
         // endpoint reach) — the exact test `power_wires` will apply.
+        // Two seeds, tried in order, and the order matters for reasons
+        // beyond correctness.
+        //
+        // The midpoint is the original seed and works whenever the gap is at
+        // most `2 * reach`. Beyond that it sits further from either endpoint
+        // than a pole there could wire to, and the scan fails however wide its
+        // radius: measured on `mega-chain-usp2raw`, closest pair 40.3 tiles
+        // apart against reach 9, midpoint 20 from each end, repair gave up
+        // with 11 components still separate.
+        //
+        // Stepping `reach` from `pa` toward `pb` lands inside `pa`'s wire
+        // range by construction, so each iteration extends that component one
+        // reach-length closer and the loop walks a chain across an arbitrarily
+        // wide gap.
+        //
+        // The fallback is tried SECOND, and only when the midpoint scan finds
+        // nothing, so every layout the old seeding already handled keeps
+        // byte-identical geometry. Seeding from the endpoint unconditionally
+        // also works, but it perturbs pole positions corpus-wide and would
+        // invalidate three sim-verified registry pins to fix one fixture.
         let mid = ((pa.0 + pb.0) / 2, (pa.1 + pb.1) / 2);
+        let stepped = {
+            let (dx, dy) = (pb.0 - pa.0, pb.1 - pa.1);
+            let gap = (((dx * dx + dy * dy) as f64).sqrt()).max(1.0);
+            let step = medium_reach.min(gap / 2.0);
+            (
+                pa.0 + ((dx as f64) * step / gap).round() as i32,
+                pa.1 + ((dy as f64) * step / gap).round() as i32,
+            )
+        };
         let mut bridge: Option<(i32, i32)> = None;
+        for mid in [mid, stepped] {
         'scan: for r in 0i32..=scan_radius {
             for dy in -r..=r {
                 for dx in -r..=r {
@@ -2162,8 +2192,29 @@ pub(crate) fn repair_pole_connectivity(
                 }
             }
         }
+        if bridge.is_some() {
+            break;
+        }
+        }
 
-        let Some(p) = bridge else { return };
+        let Some(p) = bridge else {
+            if std::env::var("SPAGHETTIO_POWER_DEBUG").is_ok() {
+                let (ax, ay, _) = nodes[ia];
+                let (bx, by, _) = nodes[ib];
+                let gap = ((ax - bx).powi(2) + (ay - by).powi(2)).sqrt();
+                eprintln!(
+                    "repair gave up: {} components left, closest pair {:?}..{:?} gap {:.1} \
+                     (reach {:.1}, scan radius {scan_radius}) — no free tile within reach \
+                     of either endpoint",
+                    by_comp.len(),
+                    pa,
+                    pb,
+                    gap,
+                    medium_reach,
+                );
+            }
+            return;
+        };
         entities.push(make_pole(p.0, p.1));
         all_occupied.insert(p);
     }
