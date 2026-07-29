@@ -4457,6 +4457,9 @@ pub enum FoldRefusal {
     /// A belt run that continued in the source now dead-ends. Carries the
     /// source tile whose hand-off was lost.
     RunSevered { at: (i32, i32) },
+    /// A boundary input landed on an interior row, where nothing outside the
+    /// factory can feed it.
+    InputStranded { at: (i32, i32) },
 }
 
 /// Snake-fold a layout at the given fold columns.
@@ -4957,6 +4960,47 @@ pub fn fold_snake(
         }
         if let Some((at, _)) = severed.first() {
             return Err(FoldRefusal::RunSevered { at: *at });
+        }
+    }
+
+    // 5d. A boundary input must stay on the boundary.
+    //
+    // Inputs are fed from outside the bounding box, so they only work on an
+    // edge. Segment parity decides where they land: an unrotated segment
+    // keeps its inputs on its top row, a rotated one carries them to its
+    // bottom row, and in both cases that row is interior for every segment
+    // except the outermost. A single fold is fine — segment 0's inputs stay
+    // at the top, segment 1's rotate to the layout's bottom — but from two
+    // folds up, inputs land on gap rows with nothing able to supply them.
+    //
+    // Supplying them means routing a feed lane per item along a two-row gap
+    // that already carries the exits, which is a channel-routing problem this
+    // pass does not solve. Refuse rather than emit a factory whose inputs are
+    // stranded: the failure is otherwise silent, showing up as starved
+    // machines rather than as anything wrong at the boundary.
+    {
+        let (lo_x, hi_x) = (
+            folded.iter().map(|e| e.x).min().unwrap_or(0),
+            folded.iter().map(|e| e.x).max().unwrap_or(0),
+        );
+        let (lo_y, hi_y) = (
+            folded.iter().map(|e| e.y).min().unwrap_or(0),
+            folded.iter().map(|e| e.y).max().unwrap_or(0),
+        );
+        for b in &layout.boundary_inputs {
+            let seg = seg_of(b.x).unwrap_or(n_segs - 1);
+            let (nx, ny) = if seg % 2 == 0 {
+                (b.x - bounds[seg], b.y + (seg as i32) * (h + gap))
+            } else {
+                (
+                    bounds[seg + 1] - 1 - b.x,
+                    (h - 1 - b.y) + (seg as i32) * (h + gap),
+                )
+            };
+            let on_edge = nx <= lo_x || nx >= hi_x || ny <= lo_y || ny >= hi_y;
+            if !on_edge {
+                return Err(FoldRefusal::InputStranded { at: (b.x, b.y) });
+            }
         }
     }
 
