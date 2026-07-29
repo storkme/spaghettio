@@ -770,7 +770,10 @@ pub fn undergroundify_straight_belts(layout: &LayoutResult) -> LayoutResult {
     for (_, x, y) in &layout.surplus_exits {
         protect_both((*x, *y));
     }
-    drop(protect_both);
+    // `protect_both` mutably borrows both sets; NLL ends that borrow here at
+    // its last use, so the sets are free for the direct inserts below. (An
+    // explicit `drop` would be a `clippy::drop_non_drop` error — a closure
+    // does not implement `Drop`.)
 
     // A perpendicular belt feeding a straight tile is a side-load/turn
     // junction. Splitters and existing undergrounds reserve their vicinity

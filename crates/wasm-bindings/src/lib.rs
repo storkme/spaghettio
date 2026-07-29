@@ -106,6 +106,11 @@ fn layout_options(
             Some("off") => spaghettio_core::bus::cells::CellComposition::Off,
             _ => spaghettio_core::bus::cells::CellComposition::Candidate,
         },
+        // RFC-057 post-layout compaction: experimental, and deliberately not
+        // reachable from the web surface yet. It is an opt-in post-pass over
+        // an already-validated layout, so exposing it is a UI decision, not a
+        // fallback-semantics one — hard-false until that decision is made.
+        compact_layout: false,
         // No `..Default::default()`: adding `direct_insertion` completed
         // the field list, and a no-op struct update is a clippy error
         // under the workspace's `-D warnings`. A field added to
