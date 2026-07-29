@@ -3520,6 +3520,67 @@ fn export_fold_pair_for_sim() {
     }
 }
 
+/// Does the fold generalise beyond the fixture it was developed on?
+/// Runs the validated search over the whole RFC-057 corpus and reports what
+/// each fixture yields, plus why candidates were refused.
+#[test]
+#[ignore = "exploration probe — fold search across the corpus"]
+fn probe_fold_corpus() {
+    use spaghettio_core::bus::compaction::{compact_validated_geometry, search_snake_fold};
+    use std::collections::BTreeMap;
+
+    for label in [
+        "chain-mil5ore",
+        "mega-chain-chem5raw",
+        "mega-chain-pu4raw",
+        "mega-chain-usp2raw",
+    ] {
+        let fixture = SimFixture::find(label);
+        let inputs: FxHashSet<String> = fixture.inputs.iter().map(|s| s.to_string()).collect();
+        let sr = solver::solve_with_palette_exclusions_and_quality(
+            fixture.target,
+            fixture.rate,
+            &inputs,
+            &MachinePalette::default(),
+            "assembling-machine-3",
+            &FxHashSet::default(),
+            QualityTier::Normal,
+        )
+        .unwrap();
+        let compact = compact_validated_geometry(&fixture.compose_layout(), &sr);
+        let src_aspect = compact.width as f64 / compact.height as f64;
+
+        match search_snake_fold(&compact, &sr, 4) {
+            Some(found) => {
+                let l = &found.layout;
+                let asp = l.width.max(l.height) as f64 / l.width.min(l.height) as f64;
+                println!(
+                    "{label}: {}x{} ({:.1}:1, {} ent) -> folds={:?} {}x{} ({:.2}:1, {} ent)",
+                    compact.width,
+                    compact.height,
+                    src_aspect,
+                    compact.entities.len(),
+                    found.folds,
+                    l.width,
+                    l.height,
+                    asp,
+                    l.entities.len(),
+                );
+                let mut why: BTreeMap<String, usize> = BTreeMap::new();
+                for (_, r) in &found.refusals {
+                    *why.entry(format!("{r:?}").split(' ').next().unwrap().into())
+                        .or_default() += 1;
+                }
+                println!("   refusals: {why:?}");
+            }
+            None => println!(
+                "{label}: {}x{} ({:.1}:1) -> NO function-preserving fold",
+                compact.width, compact.height, src_aspect
+            ),
+        }
+    }
+}
+
 /// What is actually blocking a fold? Fold `chain-mil5ore` at its midpoint
 /// and group every validation issue by category, rather than sampling the
 /// first few as the fold search does.
@@ -3527,7 +3588,7 @@ fn export_fold_pair_for_sim() {
 #[ignore = "exploration probe — fold error breakdown"]
 fn probe_fold_error_breakdown_mil5() {
     use spaghettio_core::bus::compaction::{compact_validated_geometry, fold_snake};
-    use spaghettio_core::validate::{self, LayoutStyle, Severity};
+    use spaghettio_core::validate::{self, LayoutStyle};
     use std::collections::BTreeMap;
 
     let fixture = SimFixture::find("chain-mil5ore");
