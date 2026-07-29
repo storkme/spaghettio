@@ -2198,6 +2198,16 @@ pub(crate) fn repair_pole_connectivity(
         }
 
         let Some(p) = bridge else {
+            // Trace unconditionally, matching the budget-exhausted path
+            // below. This is the COMMON give-up — wide or obstructed gaps —
+            // and leaving it visible only under an env var meant the snapshot
+            // debugger and e2e diagnostics saw a repair that quietly did
+            // nothing. `CLAUDE.md` treats trace events as the reliable signal
+            // for confirming a failure mode; this one had none.
+            crate::trace::emit(crate::trace::TraceEvent::PolesPlaced {
+                count: by_comp.len(),
+                strategy: "repair-no-bridge-tile".to_string(),
+            });
             if std::env::var("SPAGHETTIO_POWER_DEBUG").is_ok() {
                 let (ax, ay, _) = nodes[ia];
                 let (bx, by, _) = nodes[ib];
