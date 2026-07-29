@@ -3721,9 +3721,13 @@ fn probe_pole_connectivity_census() {
         };
         let (bn, bd) = count(&base);
         let (cn, cd) = count(&compact);
+        // Can the pipeline's own repair close the gap on composed output?
+        let mut repaired = base.clone();
+        let added = spaghettio_core::bus::layout::repair_pole_network(&mut repaired);
+        let (rn, rd) = count(&repaired);
         println!(
-            "{label:<22} composed {bd:>3}/{bn:<4} disconnected   compacted {cd:>3}/{cn:<4}{}",
-            if cd > bd { "   <-- COMPACTION MADE IT WORSE" } else { "" }
+            "{label:<22} composed {bd:>3}/{bn:<4}   compacted {cd:>3}/{cn:<4}   \
+             after repair {rd:>3}/{rn:<4} (+{added} bridges)",
         );
     }
 }

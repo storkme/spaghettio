@@ -1964,6 +1964,61 @@ pub(crate) fn place_poles(
 /// every pole, so post-stamp `compute_pole_wires` (which reads per-entity
 /// `quality`) sees exactly the graph repair reasoned about. At legendary the
 /// medium reach is 19, so repair neither mis-clusters nor over-bridges.
+/// Bridge a layout's pole network until every pole reaches the others.
+///
+/// `build_bus_layout` runs this after placement because heuristic pole
+/// placement leaves islands; cell composition stamps its own poles and never
+/// did, which is why composed layouts can ship with most of their network
+/// unreachable. Public so any producer of a `LayoutResult` can close that gap.
+///
+/// Adds bridge poles only — never moves or removes existing ones — and
+/// recomputes the wire graph. Returns how many bridges it added.
+pub fn repair_pole_network(layout: &mut LayoutResult) -> usize {
+    let is_pole_ent = |e: &PlacedEntity| {
+        e.name.ends_with("electric-pole") || e.name == "substation"
+    };
+    let quality = layout
+        .entities
+        .iter()
+        .find(|e| is_machine_entity(&e.name))
+        .and_then(|e| e.quality)
+        .unwrap_or_default();
+
+    // `repair_pole_connectivity` treats every element it is handed as a wire
+    // node, so it takes a poles-only vec.
+    let mut poles: Vec<PlacedEntity> =
+        layout.entities.iter().filter(|e| is_pole_ent(e)).cloned().collect();
+    if poles.len() <= 1 {
+        return 0;
+    }
+    layout.entities.retain(|e| !is_pole_ent(e));
+
+    let mut occupied: FxHashSet<(i32, i32)> = FxHashSet::default();
+    for e in &layout.entities {
+        let (w, h) = crate::common::entity_size(&e.name);
+        for dx in 0..w as i32 {
+            for dy in 0..h as i32 {
+                occupied.insert((e.x + dx, e.y + dy));
+            }
+        }
+    }
+    let placed: FxHashSet<(i32, i32)> = poles.iter().map(|e| (e.x, e.y)).collect();
+    for tile in &placed {
+        occupied.insert(*tile);
+    }
+
+    let before = poles.len();
+    repair_pole_connectivity(&mut poles, &placed, &occupied, quality);
+    let added = poles.len() - before;
+
+    layout.entities.extend(poles);
+    layout.power_wires = Some(crate::power_wires::compute_pole_wires(
+        &layout.entities,
+        layout.wire_mode,
+    ));
+    added
+}
+
 pub(crate) fn repair_pole_connectivity(
     entities: &mut Vec<PlacedEntity>,
     placed: &FxHashSet<(i32, i32)>,
@@ -1991,7 +2046,16 @@ pub(crate) fn repair_pole_connectivity(
         all_occupied.insert(p);
     }
 
-    for _ in 0..20 {
+    // Bridge budget. Scaled to the problem rather than fixed at 20: a
+    // pathological layout (mega-chain-pu4raw composes with 1192 of 1202 poles
+    // isolated) exhausted a flat 20 and returned quietly, leaving the caller
+    // to believe the network was repaired. Still bounded — this is a repair,
+    // not a placer — but it now reports when it gives up rather than
+    // truncating in silence.
+    let budget = 20.max(entities.len() / 4);
+    let mut spent = 0usize;
+    for _ in 0..budget {
+        spent += 1;
         let n = entities.len();
         if n <= 1 {
             return;
@@ -2103,6 +2167,15 @@ pub(crate) fn repair_pole_connectivity(
         entities.push(make_pole(p.0, p.1));
         all_occupied.insert(p);
     }
+
+    // Budget exhausted with components still separate. Say so: the caller
+    // otherwise cannot distinguish "repaired" from "gave up", and a layout
+    // whose power network is still in pieces looks identical to a fixed one
+    // from here.
+    crate::trace::emit(crate::trace::TraceEvent::PolesPlaced {
+        count: spent,
+        strategy: "repair-budget-exhausted".to_string(),
+    });
 }
 
 
