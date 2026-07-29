@@ -3887,6 +3887,9 @@ fn probe_fold_error_breakdown_mil5() {
         *base_cat.entry(i.category.clone()).or_default() += 1;
     }
     println!("  unfolded control: {} issues {:?}", base.len(), base_cat);
+    for i in &base {
+        println!("      control: [{}] {}", i.category, i.message);
+    }
 
     println!(
         "legal fold columns: {} of {}",

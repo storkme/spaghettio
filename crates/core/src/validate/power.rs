@@ -40,18 +40,28 @@ use crate::validate::{Severity, ValidationIssue};
 /// it). Returns a single `Warning` when any pole is unreachable.
 pub fn check_pole_network_connectivity(layout: &LayoutResult) -> Vec<ValidationIssue> {
     let wires = crate::power_wires::wires_for(layout);
-    let disconnected = crate::power_wires::count_disconnected_poles(&layout.entities, &wires);
-    if disconnected == 0 {
-        return vec![];
-    }
+    let disconnected = crate::power_wires::disconnected_poles(&layout.entities, &wires);
 
-    vec![ValidationIssue::new(
-        Severity::Warning,
-        "power",
-        format!(
-            "{disconnected} power pole(s) are not connected to the main pole network via copper wire"
-        ),
-    )]
+    // One issue per pole, not one issue naming a count. An aggregate issue is
+    // invisible to any consumer that compares issue counts: a layout transform
+    // took this from 2 disconnected poles to 89 and its admission gate saw
+    // `{"power": 1}` on both sides, admitting a factory that pastes as two
+    // unpowered islands. `check_power_coverage` below is already per-entity;
+    // this now matches it.
+    disconnected
+        .into_iter()
+        .map(|(x, y)| {
+            ValidationIssue::with_pos(
+                Severity::Warning,
+                "power",
+                format!(
+                    "Power pole at ({x},{y}) is not connected to the main pole network via copper wire"
+                ),
+                x,
+                y,
+            )
+        })
+        .collect()
 }
 
 /// Check that every electric entity is within a power pole's supply area.
@@ -505,12 +515,34 @@ mod tests {
     }
 
     #[test]
-    fn disconnected_cluster_reports_warning() {
+    fn disconnected_cluster_reports_one_issue_per_pole() {
         // Two groups: poles at x=0 and x=20 (dist=20 > reach=9)
         let lr = layout(vec![pole(0, 0), pole(0, 8), pole(20, 0), pole(20, 8)]);
         let issues = check_pole_network_connectivity(&lr);
-        assert_eq!(issues.len(), 1);
-        assert!(issues[0].message.contains("2 power pole(s)"));
+        // One issue PER unreachable pole, not one issue naming a count. A
+        // count buried in message text is invisible to any consumer that
+        // compares issue counts, which let a layout transform go from 2
+        // unreachable poles to 89 while its gate saw both as "one power
+        // warning" and admitted a factory that pastes as two dead islands.
+        assert_eq!(issues.len(), 2, "both poles in the far cluster: {issues:?}");
+        assert!(issues.iter().all(|i| i.severity == Severity::Warning));
+        // Positions are carried so the issue is actionable, not just countable.
+        let mut located: Vec<_> = issues.iter().map(|i| (i.x, i.y)).collect();
+        located.sort();
+        assert_eq!(located, vec![(Some(20), Some(0)), (Some(20), Some(8))]);
+    }
+
+    /// The magnitude must actually scale — the property the old aggregate
+    /// shape silently lacked.
+    #[test]
+    fn issue_count_tracks_number_of_unreachable_poles() {
+        let far = |n: i32| (0..n).map(|k| pole(20, k * 8)).collect::<Vec<_>>();
+        for n in [1, 3, 5] {
+            let mut poles = vec![pole(0, 0)];
+            poles.extend(far(n));
+            let issues = check_pole_network_connectivity(&layout(poles));
+            assert_eq!(issues.len(), n as usize, "n={n}: {issues:?}");
+        }
     }
 
     #[test]

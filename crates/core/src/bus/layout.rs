@@ -1964,7 +1964,7 @@ pub(crate) fn place_poles(
 /// every pole, so post-stamp `compute_pole_wires` (which reads per-entity
 /// `quality`) sees exactly the graph repair reasoned about. At legendary the
 /// medium reach is 19, so repair neither mis-clusters nor over-bridges.
-fn repair_pole_connectivity(
+pub(crate) fn repair_pole_connectivity(
     entities: &mut Vec<PlacedEntity>,
     placed: &FxHashSet<(i32, i32)>,
     occupied: &FxHashSet<(i32, i32)>,
