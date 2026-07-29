@@ -66,6 +66,22 @@ jobs:
             already reviewed), do not end silently — post a one-line
             `gh pr comment` stating the skip and the reason. A silent
             end is indistinguishable from a crash and fails the check.
+            — Re-review rule: "I already reviewed this PR" is NOT a valid
+            skip when new commits have landed since. This job fires on
+            every push, and the guard below only checks that the PR has
+            SOME review in its lifetime, so a skip here means the new
+            commits get no review at all — which is exactly how a PR that
+            was reviewed at its third commit merged at its ninth (#481,
+            2026-07-29: four real bugs found, then six further commits
+            including the fixes for those bugs went unreviewed). When
+            ${{ github.event.action }} is `synchronize`, review the
+            commits from ${{ github.event.before }} to
+            ${{ github.event.after }} — focus there, judge them in the
+            context of the whole PR, and say in your comment which range
+            you reviewed. Re-check that earlier findings were actually
+            addressed rather than assuming. Only the triviality gate
+            (genuinely no substantive change in the range) justifies a
+            skip, and it still needs the one-line comment.
           # Model pinned rather than left to the action's default: review
           # quality and cost both depend on it, and an unpinned default can
           # move under us without any change to this file.
