@@ -48,11 +48,20 @@ pub fn check_pole_network_connectivity(layout: &LayoutResult) -> Vec<ValidationI
     // `{"power": 1}` on both sides, admitting a factory that pastes as two
     // unpowered islands. `check_power_coverage` below is already per-entity;
     // this now matches it.
+    //
+    // ERROR, not warning. A pole outside the main network is not a quality
+    // nit: everything it supplies is dead unless the player notices and runs
+    // a wire. The blueprint does not work as emitted. It was a warning while
+    // the engine routinely produced fragmented networks — cell composition
+    // shipped `mega-chain-pu4raw` in 41 pieces — so an error would have
+    // reddened everything. Those are fixed: all four cell fixtures and all
+    // eight measured bus layouts now emit a single connected network, which
+    // is what makes this affordable.
     disconnected
         .into_iter()
         .map(|(x, y)| {
             ValidationIssue::with_pos(
-                Severity::Warning,
+                Severity::Error,
                 "power",
                 format!(
                     "Power pole at ({x},{y}) is not connected to the main pole network via copper wire"
@@ -501,7 +510,7 @@ mod tests {
         let lr = layout(vec![pole(0, 0), pole(10, 0)]);
         let issues = check_pole_network_connectivity(&lr);
         assert_eq!(issues.len(), 1);
-        assert_eq!(issues[0].severity, Severity::Warning);
+        assert_eq!(issues[0].severity, Severity::Error);
         assert_eq!(issues[0].category, "power");
         assert!(issues[0].message.contains("not connected"));
     }
@@ -525,7 +534,7 @@ mod tests {
         // unreachable poles to 89 while its gate saw both as "one power
         // warning" and admitted a factory that pastes as two dead islands.
         assert_eq!(issues.len(), 2, "both poles in the far cluster: {issues:?}");
-        assert!(issues.iter().all(|i| i.severity == Severity::Warning));
+        assert!(issues.iter().all(|i| i.severity == Severity::Error));
         // Positions are carried so the issue is actionable, not just countable.
         let mut located: Vec<_> = issues.iter().map(|i| (i.x, i.y)).collect();
         located.sort();
